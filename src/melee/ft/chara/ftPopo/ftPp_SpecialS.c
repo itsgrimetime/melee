@@ -846,8 +846,7 @@ void ftPp_SpecialAirHiThrow_0_IASA(Fighter_GObj* gobj) {}
 
 void ftPp_SpecialHi_80121DA0(Fighter_GObj* gobj)
 {
-    Fighter_ChangeMotionState(gobj, 0x15C, 0,
-        ftPp_Init_804D9860, ftPp_Init_804D9880, ftPp_Init_804D9860, NULL);
+    Fighter_ChangeMotionState(gobj, 0x15C, 0, 0, 1.0f, 0.0f, NULL);
 }
 /// #ftPp_SpecialHi_80121DD8
 
