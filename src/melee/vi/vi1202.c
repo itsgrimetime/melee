@@ -101,4 +101,24 @@ void un_80321CE8(void)
     }
     data->x28 = -1;
 }
+<<<<<<< HEAD
 >>>>>>> 26d502ade (Match un_80321CE8 (vi1202.c))
+=======
+
+extern char mpLib_80458868[];
+
+bool un_80322258(float arg)
+{
+    f32 val2c = *(f32*)((char*)Fighter_804D6500 + 0x2c);
+    f32 val18 = *(f32*)(mpLib_80458868 + 0x18);
+    f32 val1c;
+    if (arg >= val2c + val18) {
+        val1c = *(f32*)(mpLib_80458868 + 0x1c);
+        if (arg > val1c - val2c) {
+            return TRUE;
+        }
+        return FALSE;
+    }
+    return TRUE;
+}
+>>>>>>> 4d05d7090 (Partial match un_80322258 (vi1202.c) - 80.6% fuzzy)
