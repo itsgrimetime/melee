@@ -877,28 +877,12 @@ void un_80311788(void)
 
 void un_80312018_OnFrame(void)
 {
-    TyModeState* state = (TyModeState*) un_804A284C;
-
-    if (state->x4 != 0) {
+    if (M2C_FIELD(un_804A284C, s8*, 4) != 0) {
         un_80311F5C();
         gm_801A4B60();
     }
 }
-void un_80312050(void)
-{
-    Point3d interest;
-    Point3d sp98;
-    Mtx viewMtx;
-    Vec3 up;
-    Vec3 left;
-    Vec3 eye;
-    Vec3 scaled;
-    HSD_CObj* cobj;
-    TyViewData* data;
-    volatile f32* wgpipe_f32;
-    u8 color_ff;
-    u8 color_00;
-    f32 fz, fy, fx;
+/// #un_80312050
 
     data = un_804D6E6C;
     cobj = HSD_CObjGetCurrent();
