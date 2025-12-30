@@ -19,7 +19,7 @@ struct vi1202_UnkStruct {
     /* 0x04 */ s32 x4;
     /* 0x08 */ f32 x8;
     /* 0x0C */ s32 xC;
-    /* 0x10 */ void* x10;
+    /* 0x10 */ s32 x10;
     /* 0x14 */ s32 x14;
     /* 0x18 */ s32 x18;
     /* 0x1C */ s32 x1C;
