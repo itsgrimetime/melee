@@ -14,7 +14,7 @@
 #include "lb/lbaudio_ax.h"
 #include "vi.h"
 
-typedef struct {
+struct vi1202_UnkStruct {
     /* 0x00 */ s32 x0;
     /* 0x04 */ s32 x4;
     /* 0x08 */ f32 x8;
@@ -27,7 +27,7 @@ typedef struct {
     /* 0x24 */ s32 x24;
     /* 0x28 */ s32 x28;
     /* 0x2C */ s32 x2C;
-} vi1202_UnkStruct;
+};
 
 void un_8032110C(HSD_GObj* gobj)
 {
