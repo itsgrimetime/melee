@@ -74,7 +74,7 @@ typedef struct BgFlashData2 {
 void fn_800204C8(void)
 {
     f64 temp;
-    BgFlashData2* data = (BgFlashData2*) &lbl_80433658;
+    BgFlashData2* data = (BgFlashData2*)&lbl_80433658;
     s32 mode = data->state & 0x7F;
 
     if (mode == 5) {
@@ -93,14 +93,14 @@ void fn_800204C8(void)
 
 case_0_1_2:
     fn_8001FC08();
-    data->xC = (s32) data->x10;
-    data->xD = (s32) data->x14;
-    data->xE = (s32) data->x18;
-    data->xF = (s32) data->x1C;
+    data->xC = (s32)data->x10;
+    data->xD = (s32)data->x14;
+    data->xE = (s32)data->x18;
+    data->xF = (s32)data->x1C;
     return;
 
 case_3_4:
-    if ((s32) data->x30 == 0) {
+    if ((s32)data->x30 == 0) {
         s32* pX;
         s32* pY;
         s32 i;
