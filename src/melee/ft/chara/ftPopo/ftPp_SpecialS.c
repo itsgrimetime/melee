@@ -31,11 +31,11 @@
 #include <melee/lb/lb_00B0.h>
 #include <melee/lb/lbvector.h>
 
-/* 121AC8 */ static void ftPp_SpecialHiThrow_0_IASA(Fighter_GObj* gobj);
-/* 121ACC */ static void ftPp_SpecialAirHiThrow_0_IASA(Fighter_GObj* gobj);
-/* 121EB0 */ static void ftPp_SpecialHiStart_1_IASA(Fighter_GObj* gobj);
-/* 121EB4 */ static void ftPp_SpecialAirHiStart_1_IASA(Fighter_GObj* gobj);
-/* 1221B0 */ static void ftPp_SpecialAirHiThrow_1_IASA(Fighter_GObj* gobj);
+/* 121AC8 */ void ftPp_SpecialHiThrow_0_IASA(Fighter_GObj* gobj);
+/* 121ACC */ void ftPp_SpecialAirHiThrow_0_IASA(Fighter_GObj* gobj);
+/* 121EB0 */ void ftPp_SpecialHiStart_1_IASA(Fighter_GObj* gobj);
+/* 121EB4 */ void ftPp_SpecialAirHiStart_1_IASA(Fighter_GObj* gobj);
+/* 1221B0 */ void ftPp_SpecialAirHiThrow_1_IASA(Fighter_GObj* gobj);
 /* 12248C */ static void ftPp_SpecialHiThrow2_IASA(Fighter_GObj* gobj);
 /* 122490 */ static void ftPp_SpecialAirHiThrow2_IASA(Fighter_GObj* gobj);
 /* 122B0C */ static void ftPp_SpecialLw_IASA(Fighter_GObj* gobj);
