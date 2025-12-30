@@ -24,8 +24,6 @@ void un_803218E0_OnFrame(void)
 {
     vi_8031CAAC();
 }
-<<<<<<< HEAD
-=======
 
 extern char un_804A2F08[];
 extern vi1202_UnkStruct* un_804D7050;
@@ -101,9 +99,6 @@ void un_80321CE8(void)
     }
     data->x28 = -1;
 }
-<<<<<<< HEAD
->>>>>>> 26d502ade (Match un_80321CE8 (vi1202.c))
-=======
 
 extern char mpLib_80458868[];
 
@@ -121,9 +116,6 @@ bool un_80322258(float arg)
     }
     return TRUE;
 }
-<<<<<<< HEAD
->>>>>>> 4d05d7090 (Partial match un_80322258 (vi1202.c) - 80.6% fuzzy)
-=======
 
 s32 un_80322298(float arg)
 {
@@ -162,4 +154,3 @@ ret_zero:
     }
     un_8032201C(arg0, cat);
 }
->>>>>>> c96846b3a (vi1202.c: Match un_80322298 and un_80322598)
