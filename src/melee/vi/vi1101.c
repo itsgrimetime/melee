@@ -7,8 +7,6 @@
 #include "lb/lbshadow.h"
 #include "vi.h"
 
-extern u8 un_804D5B08;
-
 /// #un_8031F294
 
 /// #fn_8031F548

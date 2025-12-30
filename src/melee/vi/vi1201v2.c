@@ -1,4 +1,4 @@
-#include "vi/vi1201v2.h"
+#include "vi/vi1201v2.static.h"
 
 #include <baselib/cobj.h>
 #include <baselib/gobj.h>
@@ -10,10 +10,6 @@
 #include "lb/lbshadow.h"
 #include "mn/mnmain.h"
 #include "vi.h"
-
-extern HSD_GObj* un_804D7030;
-extern HSD_GObj* un_804D7034;
-extern u8 un_804D7028;
 
 void un_803204C0(HSD_GObj* gobj)
 {

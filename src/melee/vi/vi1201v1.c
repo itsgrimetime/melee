@@ -10,10 +10,6 @@
 #include "lb/lb_00F9.h"
 #include "vi.h"
 
-extern u8 un_804D6FFC;
-extern u8 un_804D6FFD;
-extern s32 un_804D6FF8;
-
 void un_8031F990(HSD_GObj* gobj)
 {
     HSD_JObjAnimAll(GET_JOBJ(gobj));
