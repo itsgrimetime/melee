@@ -552,11 +552,9 @@ void Toy_RemoveUserData(void* ptr)
 
 void un_80306D14(void)
 {
-    TyModeState* state = (TyModeState*) un_804A284C;
-
-    if (state->x0 == 1) {
+    if (M2C_FIELD(un_804A284C, s8*, 0) == 1) {
         lbAudioAx_800237A8(0xAA, 0x7F, 0x40);
-    } else if (state->x0 == 2) {
+    } else if (M2C_FIELD(un_804A284C, s8*, 0) == 2) {
         lbAudioAx_800237A8(0xAB, 0x7F, 0x40);
     }
 }
