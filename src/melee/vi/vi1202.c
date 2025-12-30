@@ -1,5 +1,7 @@
 #include "vi/vi1202.h"
 
+#include <m2c_macros.h>
+
 #include <baselib/aobj.h>
 #include <baselib/cobj.h>
 #include <baselib/gobj.h>
