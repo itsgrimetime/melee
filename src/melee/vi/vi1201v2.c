@@ -53,8 +53,8 @@ void un_803208F0(HSD_GObj* gobj)
         HSD_SetEraseColor(colors[0], colors[1], colors[2], colors[3]);
         HSD_CObjEraseScreen(GET_COBJ(gobj), 1, 0, 1);
         vi_8031CA04(gobj);
-        *(s32*)((char*)gobj + 0x24) = 0x881;
-        *(s32*)((char*)gobj + 0x20) = 0;
+        M2C_FIELD(gobj, s32*, 0x24) = 0x881;
+        M2C_FIELD(gobj, s32*, 0x20) = 0;
         HSD_GObj_80390ED0(gobj, 7);
         HSD_CObjEndCurrent();
     }

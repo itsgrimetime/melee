@@ -77,9 +77,9 @@ void un_80321950(vi1202_UnkStruct* s)
     s->x4 = 0x10000;
     s->x8 = 1.0F;
     s->xC = 0;
-    s->x10 = *(s32*)((char*)Fighter_804D6500 + 0x20);
+    s->x10 = M2C_FIELD(Fighter_804D6500, s32*, 0x20);
     s->x14 = 0x83D60;
-    s->x18 = *(s32*)((char*)Fighter_804D6500 + 0x28);
+    s->x18 = M2C_FIELD(Fighter_804D6500, s32*, 0x28);
     s->x1C = 0;
     s->x20 = 0;
     s->x24 = 0;
@@ -111,10 +111,10 @@ void un_80321C70(void)
     vi1202_UnkStruct* data = un_804D7050;
     void* fighter = Fighter_804D6500;
     s32 x18 = data->x18;
-    if (x18 >= *(s32*)((char*)fighter + 0x28)) {
+    if (x18 >= M2C_FIELD(fighter, s32*, 0x28)) {
         return;
     }
-    if (x18 >= *(s32*)((char*)fighter + 0x24)) {
+    if (x18 >= M2C_FIELD(fighter, s32*, 0x24)) {
         data->x1C = 1;
     }
 }
@@ -139,11 +139,11 @@ extern char mpLib_80458868[];
 
 bool un_80322258(float arg)
 {
-    f32 val2c = *(f32*)((char*)Fighter_804D6500 + 0x2c);
-    f32 val18 = *(f32*)(mpLib_80458868 + 0x18);
+    f32 val2c = M2C_FIELD(Fighter_804D6500, f32*, 0x2c);
+    f32 val18 = M2C_FIELD(mpLib_80458868, f32*, 0x18);
     f32 val1c;
     if (arg >= val2c + val18) {
-        val1c = *(f32*)(mpLib_80458868 + 0x1c);
+        val1c = M2C_FIELD(mpLib_80458868, f32*, 0x1c);
         if (arg > val1c - val2c) {
             return true;
         }
@@ -155,13 +155,13 @@ bool un_80322258(float arg)
 s32 un_80322298(float arg)
 {
     void* fighter = Fighter_804D6500;
-    if (arg >= *(f32*)((char*)fighter + 0x8)) {
+    if (arg >= M2C_FIELD(fighter, f32*, 0x8)) {
         return 3;
     }
-    if (arg >= *(f32*)((char*)fighter + 0x4)) {
+    if (arg >= M2C_FIELD(fighter, f32*, 0x4)) {
         return 2;
     }
-    if (arg >= *(f32*)((char*)fighter + 0x0)) {
+    if (arg >= M2C_FIELD(fighter, f32*, 0x0)) {
         return 1;
     }
     return 0;
@@ -169,20 +169,20 @@ s32 un_80322298(float arg)
 
 int un_80322598(int arg0, float arg1)
 {
-    f32 val14 = *(f32*)(mpLib_80458868 + 0x14);
+    f32 val14 = M2C_FIELD(mpLib_80458868, f32*, 0x14);
     s32 cat;
     void* fighter;
     if (arg1 >= val14) {
         goto ret_zero;
     }
     fighter = Fighter_804D6500;
-    if (arg1 < *(f32*)((char*)fighter + 0x38) + val14) {
+    if (arg1 < M2C_FIELD(fighter, f32*, 0x38) + val14) {
 ret_zero:
         return 0;
     }
-    if (arg1 > *(f32*)((char*)fighter + 0x30) + val14) {
+    if (arg1 > M2C_FIELD(fighter, f32*, 0x30) + val14) {
         cat = 3;
-    } else if (arg1 > *(f32*)((char*)fighter + 0x34) + val14) {
+    } else if (arg1 > M2C_FIELD(fighter, f32*, 0x34) + val14) {
         cat = 2;
     } else {
         cat = 1;
