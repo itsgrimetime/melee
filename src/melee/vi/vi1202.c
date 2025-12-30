@@ -777,6 +777,17 @@ check:
     }
 }
 
+void un_80322314(void)
+{
+    vi1202_UnkStruct* data = un_804D7050;
+    void* fighter = Fighter_804D6500;
+    if (data->x18 >= *(s32*)((char*)fighter + 0x28)) {
+        return;
+    }
+    data->x1C = 1;
+    data->x20 = 1;
+}
+
 int un_80322598(int arg0, float arg1)
 {
     f32 val14 = M2C_FIELD(mpLib_80458868, f32*, 0x14);
