@@ -2,9 +2,12 @@
 
 #include <baselib/cobj.h>
 #include <baselib/gobj.h>
+#include <baselib/gobjplink.h>
+#include <baselib/gobjproc.h>
 #include <baselib/jobj.h>
 
 #include "lb/lb_00B0.h"
+#include "lb/lbshadow.h"
 #include "mn/mnmain.h"
 #include "vi.h"
 
