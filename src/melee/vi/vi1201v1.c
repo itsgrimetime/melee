@@ -1,64 +1,17 @@
 #include "vi/vi1201v1.h"
 
-#include "vi.h"
-
-#include "baselib/forward.h"
-
-#include "cm/camera.h"
-#include "ef/efasync.h"
-#include "ef/eflib.h"
-#include "ef/efsync.h"
-#include "ft/ft_0C31.h"
-#include "ft/ftdemo.h"
-#include "gm/gm_1601.h"
-#include "gm/gm_unsplit.h"
-#include "gr/ground.h"
-#include "gr/stage.h"
-#include "it/item.h"
-#include "lb/lb_00B0.h"
-#include "lb/lb_00F9.h"
-#include "lb/lbarchive.h"
-#include "lb/lbaudio_ax.h"
-#include "lb/lbshadow.h"
-#include "mn/mnmain.h"
-#include "mp/mpcoll.h"
-#include "pl/player.h"
-#include "sc/types.h"
-#include "ty/toy.h"
-#include "ty/tylist.h"
-
-#include "vi/forward.h"
-
 #include <baselib/aobj.h>
 #include <baselib/cobj.h>
-#include <baselib/fog.h>
 #include <baselib/gobj.h>
-#include <baselib/gobjgxlink.h>
-#include <baselib/gobjobject.h>
-#include <baselib/gobjplink.h>
-#include <baselib/gobjproc.h>
 #include <baselib/jobj.h>
-#include <baselib/lobj.h>
 
-/* 4D6FE0 */ static SceneDesc* un_804D6FE0;
-/* 4D6FE4 */ static SceneDesc* un_804D6FE4;
-/* 4D6FE8 */ static HSD_Archive* un_804D6FE8;
-/* 4D6FEC */ static HSD_Joint* un_804D6FEC;
-/* 4D6FF0 */ static HSD_JObj* un_804D6FF0;
-/* 4D6FF4 */ static GXColor un_804D6FF4;
-/* 4D6FF8 */ static s32 un_804D6FF8;
-/* 4D6FFC */ static u8 un_804D6FFC;
-/* 4D6FFD */ static u8 un_804D6FFD;
-/* 4D7000 */ static void* un_804D7000;
-static un_804D7004_t un_804D7004;
+#include "gm/gm_unsplit.h"
+#include "lb/lb_00F9.h"
+#include "vi.h"
 
-Vec3 player_spawn = { 0.0f, 0.0f, 0.0f };
-
-void un_8031F980(int arg0, int arg1)
-{
-    M2C_FIELD(&un_804D7004, u8*, 0) = arg0;
-    M2C_FIELD(&un_804D7004, u8*, 1) = arg1;
-}
+extern u8 un_804D6FFC;
+extern u8 un_804D6FFD;
+extern s32 un_804D6FF8;
 
 void un_8031F990(HSD_GObj* gobj)
 {
@@ -91,54 +44,14 @@ void un_8031F9D8(CharacterKind char_index, int costume_id)
     lbAudioAx_80027648();
 }
 
-void fn_8031FAA8(HSD_GObj* gobj)
-{
-    HSD_JObj* jobj;
-    Vec3 pos;
-    f32 scale_x;
-    f32 scale_y;
-    HSD_JObj* child;
-    PAD_STACK(4);
-
-    HSD_JObjAnimAll(gobj->hsd_obj);
-    jobj = gobj->hsd_obj;
-    if (mn_8022F298(jobj) != 120.0f) {
-        return;
-    }
-    lb_80011E24(jobj, &child, 1, -1);
-    jobj = child;
-    HSD_JObjGetTranslation2(jobj, &pos);
-    scale_x = 0.0f;
-    scale_y = 1.0f;
-
-    efSync_Spawn(0x42B, gobj, &pos, &scale_x, &scale_y, 0x00FFFFFF,
-                 0x00808080);
-    lbAudioAx_800237A8(0x61, 0x7F, 0x40);
-}
-void fn_8031FB90(HSD_GObj* gobj)
-{
-    GXColor* colors;
-    char pad[8];
-    if (un_804D7000 != NULL) {
-        lbShadow_8000F38C(0);
-    }
-    if (HSD_CObjSetCurrent(GET_COBJ(gobj)) != 0) {
-        colors = (GXColor*) &un_804D6FF4;
-        HSD_SetEraseColor(colors->r, colors->g, colors->b, colors->a);
-        HSD_CObjEraseScreen(GET_COBJ(gobj), 1, 0, 1);
-        vi_8031CA04(gobj);
-        gobj->gxlink_prios = 0x881;
-        HSD_GObj_80390ED0(gobj, 7);
-        HSD_CObjEndCurrent();
-    }
-}
+/// #fn_8031FB90
 
 void fn_8031FC30(HSD_GObj* gobj)
 {
     HSD_CObj* cobj = GET_COBJ(gobj);
     HSD_CObjAnim(cobj);
     if (cobj->aobj->curr_frame == 1.0F) {
-        vi_8031C9B4(0xD, 0);
+        vi_8031C9B4(0xd, 0);
     }
     if (cobj->aobj->curr_frame == 30.0F) {
         un_8031F9D8(un_804D6FFC, un_804D6FFD);
@@ -151,7 +64,7 @@ void fn_8031FC30(HSD_GObj* gobj)
 
 void fn_8031FCBC(HSD_GObj* gobj)
 {
-    if ((f32) un_804D6FF8 >= 30.0F) {
+    if ((f32)un_804D6FF8 >= 30.0F) {
         HSD_GObjPLink_80390228(gobj);
     } else {
         un_804D6FF8 = un_804D6FF8 + 1;

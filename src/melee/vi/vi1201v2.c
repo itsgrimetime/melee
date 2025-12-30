@@ -1,36 +1,13 @@
 #include "vi/vi1201v2.h"
 
-#include "vi.h"
-
-#include "cm/camera.h"
-#include "ft/ftdemo.h"
-#include "gm/gm_1601.h"
-#include "gm/gm_unsplit.h"
-#include "gr/ground.h"
-#include "gr/stage.h"
-#include "it/item.h"
-#include "lb/lb_00F9.h"
-#include "lb/lbaudio_ax.h"
-#include "lb/lbshadow.h"
-#include "mn/mnmain.h"
-#include "mp/mpcoll.h"
-#include "pl/player.h"
-#include "sc/types.h"
-
-#include "vi/forward.h"
-
-#include <baselib/aobj.h>
 #include <baselib/cobj.h>
 #include <baselib/fog.h>
 #include <baselib/gobj.h>
-#include <baselib/gobjgxlink.h>
-#include <baselib/gobjobject.h>
-#include <baselib/gobjplink.h>
-#include <baselib/gobjproc.h>
 #include <baselib/jobj.h>
 
-Vec3 un_804002F8 = { 0.0f, 0.0f, 0.0f };
-Vec3 un_80400304 = { 0.0f, 0.0f, 0.0f };
+#include "lb/lb_00B0.h"
+#include "mn/mnmain.h"
+#include "vi.h"
 
 static SceneDesc* un_804D7010;
 static HSD_Archive* un_804D7018;
@@ -168,27 +145,6 @@ void un_803208F0(HSD_GObj* gobj)
         HSD_GObj_80390ED0(gobj, 7);
         HSD_CObjEndCurrent();
     }
-}
-
-void un_80320984(HSD_GObj* gobj)
-{
-    HSD_CObj* cobj = GET_COBJ(gobj);
-    HSD_CObjAnim(cobj);
-    if (cobj->aobj->curr_frame == 130.0F || cobj->aobj->curr_frame == 190.0F) {
-        vi_8031C9B4(0xD, 0);
-    }
-    if (cobj->aobj->curr_frame == 251.0F) {
-        vi_8031C9B4(1, 0xDB);
-    }
-    if (cobj->aobj->curr_frame == cobj->aobj->end_frame) {
-        lb_800145F4();
-        gm_801A4B60();
-    }
-}
-
-void fn_80320A1C(HSD_GObj* gobj)
-{
-    HSD_FogInterpretAnim(gobj->hsd_obj);
 }
 
 void un_803210EC_OnFrame(void)
