@@ -612,20 +612,12 @@ void ftCo_ItemScopeAirStart_Coll(Fighter_GObj* gobj)
 
 void ftCo_ItemScopeRapid_IASA(Fighter_GObj* gobj)
 {
-    Fighter* fp = GET_FIGHTER(gobj);
-    if (fp->input.x668 & HSD_PAD_A) {
-        *(s32*) ((u8*) fp + 0x2340) = *(s32*) ((u8*) p_ftCommonData + 0x5BC);
+    Fighter* fp = gobj->user_data;
+    if (fp->input.x668 & 0x100) {
+        *(s32*)((u8*)fp + 0x2340) = (s32)p_ftCommonData->x5BC;
     }
 }
-
-void ftCo_ItemScopeAirRapid_IASA(Fighter_GObj* gobj)
-{
-    Fighter* fp = *(Fighter**) ((u8*) gobj + 0x2C);
-
-    if (fp->input.x668 & HSD_PAD_A) {
-        *(s32*) ((u8*) fp + 0x2340) = *(s32*) ((u8*) p_ftCommonData + 0x5BC);
-    }
-}
+/// #ftCo_ItemScopeAirRapid_IASA
 
 void ftCo_ItemScopeRapid_Phys(Fighter_GObj* gobj)
 {
