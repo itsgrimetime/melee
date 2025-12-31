@@ -95,6 +95,7 @@
 /* 0DAADC */ static void fn_800DAADC(Fighter_GObj* arg0, Fighter_GObj* arg1);
 /* 0DA8E4 */ static void fn_800DA8E4(Fighter_GObj*, Fighter_GObj*, FtMotionId);
 /* 0DAC78 */ static void fn_800DAC78(Fighter_GObj*, Vec3*);
+/* 0DAECC */ void fn_800DAECC(Fighter_GObj* gobj);
 
 void fn_800D9CE8(Fighter_GObj* gobj)
 {
@@ -1480,7 +1481,9 @@ void ftCo_CapturePulledHi_Coll(Fighter_GObj* gobj)
     }
 }
 
-static void fn_800DAECC(Fighter_GObj* gobj)
+static void fn_800DAEEC(Fighter_GObj* gobj);
+
+void fn_800DAECC(Fighter_GObj* gobj)
 {
     fn_800DAEEC(gobj);
 }
