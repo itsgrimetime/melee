@@ -1238,14 +1238,18 @@ return_null:
     return NULL;
 }
 
-HSD_GObj* lbAudioAx_800263E8(float f1, HSD_GObj* arg1, int sfx_id, int arg3,
-                             int arg4, int arg5, int arg6, int arg7, int arg8,
-                             int arg9, int arg10)
+bool lbAudioAx_800264E4(void* data)
 {
-    void* userdata;
-    HSD_GObj* gobj;
-    SoundParams params;
-
+    u8* inner;
+    if (data != NULL) {
+        inner = *(u8**)((u8*)data + 0x2C);
+        if (inner == NULL) {
+            return -1;
+        }
+        return *(s32*)(inner + 0x30);
+    }
+    return -1;
+}
 bool lbAudioAx_80026510(HSD_GObj* arg0)
 {
     HSD_GObj* next;
