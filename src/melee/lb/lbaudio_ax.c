@@ -886,7 +886,7 @@ int fn_800250A0(int arg0, int arg1, int arg2, int arg3)
 
 bool fn_800251EC(HSD_GObj* gobj)
 {
-    lbAudioAx_UserData* ud;
+    void* user_data;
     s32 pad1;
     s32 pad2;
     f32 cam_left;
@@ -905,8 +905,8 @@ bool fn_800251EC(HSD_GObj* gobj)
         goto ret_true;
     }
 
-    ud = gobj->user_data;
-    if (ud == NULL) {
+    user_data = gobj->user_data;
+    if (user_data == NULL) {
         goto ret_true;
     }
 
@@ -918,12 +918,12 @@ bool fn_800251EC(HSD_GObj* gobj)
     if (gobj->user_data == NULL) {
         goto set_flag;
     }
-    entity = ((lbAudioAx_UserData*) gobj->user_data)->entity;
+    entity = *(HSD_GObj**)((u8*)gobj->user_data + 0x08);
     if (entity == NULL) {
         goto set_flag;
     }
 
-    type = *(u16*) entity;
+    type = *(u16*)entity;
     switch (type) {
     case 4:
         ftLib_80086644(entity, &pos);
@@ -964,12 +964,12 @@ check_flag:
     }
 
     if (cam_center < pos.x) {
-        val = ud->pan_right;
+        val = *(s32*)((u8*)user_data + 0x28);
         if (!(val > 0x40)) {
             goto store_pan;
         }
         ratio = (pos.x - cam_center) / (cam_right - cam_center);
-        temp = (f32) (val - 0x40) * ratio;
+        temp = (f32)(val - 0x40) * ratio;
         if (temp < 0.0f) {
             temp = -temp;
         }
@@ -978,12 +978,12 @@ check_flag:
         if (!(cam_center > pos.x)) {
             goto store_pan;
         }
-        val = ud->pan_left;
+        val = *(s32*)((u8*)user_data + 0x24);
         if (!(val < 0x40)) {
             goto store_pan;
         }
         ratio = (cam_center - pos.x) / (cam_center - cam_left);
-        temp = (f32) (0x40 - val) * ratio;
+        temp = (f32)(0x40 - val) * ratio;
         if (temp < 0.0f) {
             temp = -temp;
         }
@@ -991,7 +991,7 @@ check_flag:
     }
 
 store_pan:
-    ud->x2C.pan = (s32) pan;
+    *(s32*)((u8*)user_data + 0x2C) = (s32)pan;
     return false;
 
 ret_true:
