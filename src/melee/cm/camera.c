@@ -1799,12 +1799,28 @@ void Camera_8002C010(f32 farg0, f32 farg1)
 }
 
 /// #Camera_8002C1A8
+void Camera_8002C1A8(void)
+{
+    NOT_IMPLEMENTED;
+}
 
 /// #Camera_8002C5B4
+void Camera_8002C5B4(void* arg0)
+{
+    NOT_IMPLEMENTED;
+}
 
 /// #Camera_8002C908
+void Camera_8002C908(void* arg0)
+{
+    NOT_IMPLEMENTED;
+}
 
 /// #Camera_8002CB0C
+void Camera_8002CB0C(CameraBounds* arg0)
+{
+    NOT_IMPLEMENTED;
+}
 
 void Camera_8002CDDC(void* unused)
 {
@@ -1988,9 +2004,18 @@ fallback_path:
         }
     }
 }
+
 /// #Camera_8002D318
+void Camera_8002D318(void* arg0)
+{
+    NOT_IMPLEMENTED;
+}
 
 /// #Camera_8002D85C
+void Camera_8002D85C(void* arg0)
+{
+    NOT_IMPLEMENTED;
+}
 
 void Camera_8002DDC4(void* arg0)
 {
@@ -2108,8 +2133,16 @@ s32 Camera_8002E158(f32* arg0, f32 farg0, f32 farg1, f32 farg2)
 }
 
 /// #Camera_8002E234
+s32 Camera_8002E234(void)
+{
+    NOT_IMPLEMENTED;
+}
 
 /// #Camera_8002E490
+void Camera_8002E490(void* arg0)
+{
+    NOT_IMPLEMENTED;
+}
 
 void Camera_8002E6FC(int arg0)
 {
@@ -2354,8 +2387,16 @@ void Camera_8002EEC8(f32 fov)
 }
 
 /// #Camera_8002EF14
+void Camera_8002EF14(void)
+{
+    NOT_IMPLEMENTED;
+}
 
 /// #Camera_8002F0E4
+void Camera_8002F0E4(s32 arg0)
+{
+    NOT_IMPLEMENTED;
+}
 
 bool Camera_8002F260(void)
 {
@@ -2429,6 +2470,10 @@ s32 fn_8002F488(Vec4* arg0)
 }
 
 /// #Camera_8002F4D4
+void Camera_8002F4D4(s8 arg0, s8 arg1, s32 arg2)
+{
+    NOT_IMPLEMENTED;
+}
 
 void Camera_8002F73C(s8 arg0, s8 arg1)
 {
@@ -2809,8 +2854,16 @@ Point3d* Camera_8003019C(void)
 }
 
 /// #fn_800301D0
+void fn_800301D0(HSD_GObj* gobj, int arg1)
+{
+    NOT_IMPLEMENTED;
+}
 
 /// #Camera_800304E0
+void Camera_800304E0(HSD_GObj* gobj)
+{
+    NOT_IMPLEMENTED;
+}
 
 void Camera_80030688(void)
 {
@@ -3254,3 +3307,7 @@ void Camera_80031328(HSD_GObj* arg0, s32 arg2, s32 arg3)
 }
 
 /// #Camera_800313E0
+void Camera_800313E0(HSD_GObj* gobj, u64 flags)
+{
+    NOT_IMPLEMENTED;
+}
