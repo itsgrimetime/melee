@@ -278,8 +278,13 @@ void itBombhei_UnkMotion6_Phys(Item_GObj* gobj)
 
 /// #fn_8028007C
 
-/// #itBombhei_UnkMotion6_Coll
-
+bool itBombhei_UnkMotion6_Coll(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
+    ip->xDD4_itemVar.bombhei.xE0C = ip->x40_vel;
+    it_8026E414(gobj, fn_8028007C);
+    return false;
+}
 /// #it_3F14_Logic6_Thrown
 
 /// #itBombhei_UnkMotion10_Anim
