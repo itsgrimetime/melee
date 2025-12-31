@@ -900,8 +900,12 @@ void ftCo_CatchPull_IASA(Fighter_GObj* gobj) {}
 
 void ftCo_CatchPull_Phys(Fighter_GObj* gobj)
 {
-    ftCo_Catch_Phys(gobj);
+    Fighter* fp = gobj->user_data;
+    ftCommon_ApplyFrictionGround(fp, p_ftCommonData->x64 * fp->co_attrs.gr_friction);
+    ftCommon_ApplyGroundMovement(gobj);
 }
+
+static void fn_800DA004(Fighter_GObj* gobj);
 
 void ftCo_CatchPull_Coll(Fighter_GObj* gobj)
 {
