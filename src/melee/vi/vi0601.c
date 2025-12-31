@@ -26,8 +26,8 @@
 #include <baselib/lobj.h>
 #include <baselib/wobj.h>
 
-static SceneDesc* un_804D6FB0;
-static GXColor erase_colors_vi0601;
+GXColor erase_colors_vi0601 = { 0, 0, 0, 0 };
+static f32 un_804DE0A8;
 
 void vi_8031E6CC_OnFrame(void)
 {
@@ -70,55 +70,17 @@ void fn_8031E800(HSD_GObj* gobj)
     f32 scale;
 
     jobj = GET_JOBJ(gobj);
-    if (jobj == NULL) {
-        child = NULL;
-    } else {
+    if (jobj != NULL) {
         child = jobj->child;
+    } else {
+        child = NULL;
     }
+    HSD_ASSERT(875, child);
 
-    scale = 0.65f * HSD_JObjGetScaleX(child);
+    scale = un_804DE0A8 * child->scale.x;
     HSD_JObjSetScaleX(child, scale);
     HSD_JObjSetScaleY(child, scale);
     HSD_JObjSetScaleZ(child, scale);
-}
-
-void un_8031E9B8(void)
-{
-    HSD_JObj* child;
-    HSD_GObj* gobj;
-    HSD_JObj* jobj;
-    s32 i;
-    char pad[8];
-
-    gobj = GObj_Create(0xE, 0xF, 0);
-    jobj = HSD_JObjLoadJoint((*un_804D6FB0->models)->joint);
-    HSD_GObjObject_80390A70(gobj, HSD_GObj_804D7849, jobj);
-    GObj_SetupGXLink(gobj, HSD_GObj_JObjCallback, 0xB, 0);
-    gm_8016895C(jobj, *un_804D6FB0->models, 0);
-    HSD_JObjReqAnimAll(jobj, 0.0f);
-    HSD_JObjAnimAll(jobj);
-    HSD_GObjProc_8038FD54(gobj, vi_8031E6EC, 0x17);
-
-    i = 0;
-    while (un_804D6FB0->models[i] != NULL) {
-        if ((u32) (i - 1) <= 2) {
-            if ((gobj = grCorneria_801E1BF0())->hsd_obj == NULL) {
-                child = NULL;
-            } else {
-                child = ((HSD_JObj*) gobj->hsd_obj)->child;
-            }
-            HSD_GObjProc_8038FD54(gobj, fn_8031E800, 2);
-            gm_8016895C(child, un_804D6FB0->models[i], 0);
-            HSD_JObjReqAnimAll(child, 0.0f);
-            HSD_JObjAnimAll(child);
-        }
-        i++;
-    }
-
-    lbAudioAx_80026F2C(0x18);
-    lbAudioAx_8002702C(8, (u64) 8 << 32);
-    lbAudioAx_80027168();
-    lbAudioAx_80027648();
 }
 
 void vi0601_RunFrame(HSD_GObj* gobj)
