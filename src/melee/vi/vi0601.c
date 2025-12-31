@@ -4,10 +4,10 @@
 #include "ef/efasync.h"
 #include "ef/eflib.h"
 #include "gm/gm_unsplit.h"
-#include "gr/grcorneria.h"
 #include "gr/ground.h"
 #include "gr/stage.h"
 #include "it/item.h"
+#include "lb/lb_00B0.h"
 #include "lb/lb_00F9.h"
 #include "lb/lbarchive.h"
 #include "lb/lbaudio_ax.h"
@@ -26,8 +26,15 @@
 #include <baselib/lobj.h>
 #include <baselib/wobj.h>
 
-GXColor erase_colors_vi0601 = { 0, 0, 0, 0 };
+extern GXColor erase_colors_vi0601;
+extern SceneDesc* un_804D6FB0;
+
+// .data section 0x80400108 - 0x80400128
+char un_80400108[] = "ViWait0601";
+char un_80400114[] = "ViWait0601_scene";
+
 static f32 un_804DE0A8;
+static f32 un_804DE0AC;
 
 void vi_8031E6CC_OnFrame(void)
 {
@@ -83,6 +90,11 @@ void fn_8031E800(HSD_GObj* gobj)
     HSD_JObjSetScaleZ(child, scale);
 }
 
+void un_8031E9B8(void)
+{
+    NOT_IMPLEMENTED;
+}
+
 void vi0601_RunFrame(HSD_GObj* gobj)
 {
     HSD_CObj* cobj;
@@ -103,9 +115,8 @@ void vi0601_RunFrame(HSD_GObj* gobj)
 
 void un_8031EBBC_OnEnter(void* unused)
 {
-    HSD_CObj* cobj;
     HSD_GObj* gobj;
-    HSD_GObj* gobj2;
+    HSD_CObj* cobj;
     HSD_LObj* lobj;
 
     lbAudioAx_800236DC();
@@ -114,15 +125,14 @@ void un_8031EBBC_OnEnter(void* unused)
     lbAudioAx_80023F28(0x57);
     lbAudioAx_80024E50(1);
 
-    lbArchive_LoadSymbols("Vi0601.dat", &un_804D6FB0, "visual0601Scene", NULL);
+    lbArchive_LoadSymbols(un_80400108, &un_804D6FB0, un_80400114, NULL);
 
     gobj = GObj_Create(0x13, 0x14, 0);
-    cobj =
-        lb_80013B14((HSD_CameraDescPerspective*) un_804D6FB0->cameras->desc);
+    cobj = lb_80013B14((HSD_CameraDescPerspective*)un_804D6FB0->cameras->desc);
     HSD_GObjObject_80390A70(gobj, HSD_GObj_804D784B, cobj);
     GObj_SetupGXLinkMax(gobj, vi0601_CameraCallback, 2);
     HSD_CObjAddAnim(cobj, un_804D6FB0->cameras->anims[0]);
-    HSD_CObjReqAnim(cobj, 0.0f);
+    HSD_CObjReqAnim(cobj, un_804DE0AC);
     HSD_CObjAnim(cobj);
     HSD_GObjProc_8038FD54(gobj, vi0601_RunFrame, 0);
 
@@ -139,10 +149,10 @@ void un_8031EBBC_OnEnter(void* unused)
     erase_colors_vi0601 = Camera_80030758();
     un_8031E9B8();
 
-    gobj2 = GObj_Create(0xB, 3, 0);
+    gobj = GObj_Create(0xb, 3, 0);
     lobj = lb_80011AC4(un_804D6FB0->lights);
-    HSD_GObjObject_80390A70(gobj2, HSD_GObj_804D784A, lobj);
-    GObj_SetupGXLink(gobj2, HSD_GObj_LObjCallback, 0, 0);
+    HSD_GObjObject_80390A70(gobj, HSD_GObj_804D784A, lobj);
+    GObj_SetupGXLink(gobj, HSD_GObj_LObjCallback, 0, 0);
 
     Player_InitAllPlayers();
     lbAudioAx_80024E50(0);
