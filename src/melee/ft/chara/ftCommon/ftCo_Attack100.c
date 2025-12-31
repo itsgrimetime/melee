@@ -47,6 +47,7 @@
 #include <melee/ft/chara/ftCommon/ftCo_SpecialS.h>
 #include <melee/ft/chara/ftCommon/ftpickupitem.h>
 #include <melee/ft/chara/ftGameWatch/ftGw_Attack100.h>
+#include <melee/ft/chara/ftKirby/ftKb_Init.h>
 #include <melee/ft/chara/ftYoshi/ftYs_Init.h>
 #include <melee/ft/ft_0877.h>
 #include <melee/ft/ft_0881.h>
@@ -71,6 +72,8 @@
 #include <melee/pl/plstale.h>
 
 /* 0D8BFC */ static void fn_800D8BFC(Fighter_GObj* arg0);
+/* 0D949C */ static void fn_800D949C(Fighter_GObj* gobj);
+/* 0D9C64 */ static void fn_800D9C64(Fighter_GObj* gobj);
 /* 0D9CE8 */ static void fn_800D9CE8(Fighter_GObj* arg0);
 /* 0DA054 */ void fn_800DA054(Fighter_GObj* gobj);
 /* 0DAADC */ static void fn_800DAADC(Fighter_GObj* arg0, Fighter_GObj* arg1);
@@ -746,6 +749,8 @@ void ftCo_ItemScopeEnd_Coll(Fighter_GObj* gobj)
     ft_800841B8(gobj, fn_800D8838);
 }
 
+static void fn_800D87C0(Fighter_GObj* gobj);
+
 void ftCo_ItemScopeAirEnd_Coll(Fighter_GObj* gobj)
 {
     ft_80082C74(gobj, fn_800D87C0);
@@ -845,7 +850,13 @@ void ftCo_Catch_Coll(Fighter_GObj* gobj)
     ft_800841B8(gobj, fn_800D8E30);
 }
 
-/// #fn_800D8E30
+void fn_800D8E30(Fighter_GObj* gobj)
+{
+    PAD_STACK(8);
+    fn_800D949C(gobj);
+    fn_800D9C64(gobj);
+    ftCo_Fall_Enter(gobj);
+}
 
 void ftCo_CatchDash_Coll(Fighter_GObj* gobj)
 {
