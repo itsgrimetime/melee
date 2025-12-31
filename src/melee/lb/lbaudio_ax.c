@@ -1105,98 +1105,9 @@ bool fn_80025CBC(HSD_GObj* gobj)
 end:
     return false;
 }
-/// #fn_80025E38
-
-    end_frame = ud->end_frame;
-    current_frame = ud->current_frame;
-    target = ud->pan_right;
-    current = ud->pan_left;
-
-    if (current_frame > end_frame) {
-        current_frame = end_frame;
-    }
-
-    if (current != target) {
-        if (current < target) {
-            f_result = (f32) current +
-                       ((f32) current_frame * ((f32) target - (f32) current)) /
-                           (f32) end_frame;
-        } else {
-            f_result = (f32) target +
-                       ((f32) current_frame * ((f32) current - (f32) target)) /
-                           (f32) end_frame;
-        }
-        if (f_result < 0.0f) {
-            f_result = 0.0f;
-        }
-        if (f_result > 127.0f) {
-            f_result = 127.0f;
-        }
-        result = (s32) f_result;
-    } else {
-        result = 0x40;
-    }
-
-    ud->x2C.pan = result;
-end:
-    return false;
-}
-bool fn_80025CBC(HSD_GObj* gobj)
-{
-    lbAudioAx_UserData* ud;
-    s32 target;
-    s32 current;
-    s32 end_frame;
-    s32 current_frame;
-    s32 result;
-    f32 f_result;
-
-    if (gobj == NULL) {
-        goto end;
-    }
-
-    ud = gobj->user_data;
-    if (ud == NULL) {
-        goto end;
-    }
-
-    end_frame = ud->end_frame;
-    current_frame = ud->current_frame;
-    target = ud->pan_right;
-    current = ud->pan_left;
-
-    if (current_frame > end_frame) {
-        current_frame = end_frame;
-    }
-
-    if (current != target) {
-        if (current < target) {
-            f_result = (f32) current +
-                       ((f32) current_frame * ((f32) target - (f32) current)) /
-                           (f32) end_frame;
-        } else {
-            f_result = (f32) target +
-                       ((f32) current_frame * ((f32) current - (f32) target)) /
-                           (f32) end_frame;
-        }
-        if (f_result < 0.0f) {
-            f_result = 0.0f;
-        }
-        if (f_result > 127.0f) {
-            f_result = 127.0f;
-        }
-        result = (s32) f_result;
-    } else {
-        result = 0x40;
-    }
-
-    ud->x2C.pan = 0x7F - result;
-end:
-    return false;
-}
 bool fn_80025E38(HSD_GObj* gobj)
 {
-    lbAudioAx_UserData* ud;
+    void* user_data;
     s32 end_frame;
     s32 current_frame;
     s32 end_val;
@@ -1208,41 +1119,41 @@ bool fn_80025E38(HSD_GObj* gobj)
         goto end;
     }
 
-    ud = gobj->user_data;
-    if (ud == NULL) {
+    user_data = gobj->user_data;
+    if (user_data == NULL) {
         goto end;
     }
 
-    current_frame = ud->current_frame;
-    end_frame = ud->end_frame;
+    current_frame = *(s32*)((u8*)user_data + 0x34);
+    end_frame = *(s32*)((u8*)user_data + 0x38);
 
     if (current_frame > end_frame) {
         goto set_7f;
     }
 
-    start_val = ud->start_val;
-    end_val = ud->end_val;
+    start_val = *(s32*)((u8*)user_data + 0x18);
+    end_val = *(s32*)((u8*)user_data + 0x1C);
 
     if (start_val < end_val) {
-        diff = (f32) end_val - (f32) start_val;
+        diff = (f32)end_val - (f32)start_val;
         if (diff < 0.0f) {
             diff = -diff;
         }
-        ratio = (f32) current_frame / (f32) end_frame;
-        ud->x20 = start_val + (s32) (ratio * diff);
+        ratio = (f32)current_frame / (f32)end_frame;
+        *(s32*)((u8*)user_data + 0x20) = start_val + (s32)(ratio * diff);
         goto end;
     }
 
-    diff = (f32) end_val - (f32) start_val;
+    diff = (f32)end_val - (f32)start_val;
     if (diff < 0.0f) {
         diff = -diff;
     }
-    ratio = (f32) current_frame / (f32) end_frame;
-    ud->x20 = end_val - (s32) (ratio * diff);
+    ratio = (f32)current_frame / (f32)end_frame;
+    *(s32*)((u8*)user_data + 0x20) = end_val - (s32)(ratio * diff);
     goto end;
 
 set_7f:
-    ud->x20 = 0x7F;
+    *(s32*)((u8*)user_data + 0x20) = 0x7F;
 
 end:
     return false;
