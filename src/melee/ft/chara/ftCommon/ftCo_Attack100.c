@@ -1257,18 +1257,15 @@ void ftCo_CatchCut_Anim(Fighter_GObj* gobj)
 
 void ftCo_CatchCut_IASA(Fighter_GObj* gobj) {}
 
-void ftCo_CatchCut_Phys(Fighter_GObj* gobj)
-{
-    Fighter* fp = GET_FIGHTER(gobj);
+void ftCo_CatchCut_Phys(Fighter_GObj* gobj) {
+    Fighter* fp = gobj->user_data;
     if (fp->ground_or_air == GA_Ground) {
-        ftCommon_ApplyFrictionGround(fp, p_ftCommonData->x64 *
-                                             fp->co_attrs.gr_friction);
+        ftCommon_ApplyFrictionGround(fp, *(float*)&p_ftCommonData->x64 * fp->co_attrs.gr_friction);
         ftCommon_ApplyGroundMovement(gobj);
-        return;
+    } else {
+        ft_80084DB0(gobj);
     }
-    ft_80084DB0(gobj);
 }
-
 /// #ftCo_CatchCut_Coll
 
 /// #ftCo_800DA824
