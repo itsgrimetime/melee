@@ -1218,15 +1218,12 @@ void ftCo_CatchAttack_Anim(Fighter_GObj* gobj)
 
 void ftCo_CatchAttack_IASA(Fighter_GObj* gobj) {}
 
-void ftCo_CatchAttack_Phys(Fighter_GObj* gobj)
-{
-    ftCo_Catch_Phys(gobj);
+void ftCo_CatchAttack_Phys(Fighter_GObj* gobj) {
+    Fighter* fp = gobj->user_data;
+    ftCommon_ApplyFrictionGround(fp, *(float*)&p_ftCommonData->x64 * fp->co_attrs.gr_friction);
+    ftCommon_ApplyGroundMovement(gobj);
 }
-
-void ftCo_CatchAttack_Coll(Fighter_GObj* gobj)
-{
-    ft_800841B8(gobj, fn_800DA618);
-}
+/// #ftCo_CatchAttack_Coll
 
 void fn_800DA618(Fighter_GObj* gobj)
 {
