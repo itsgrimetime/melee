@@ -15,8 +15,8 @@
 /* 321900 */ void un_80321900(void);
 /* 321950 */ void un_80321950(void* s);
 /* 3219AC */ void fn_803219AC(HSD_GObj* gobj);
-/* 321A00 */ UNK_RET un_80321A00(UNK_PARAMS);
-/* 321AF4 */ UNK_RET un_80321AF4(UNK_PARAMS);
+/* 321A00 */ void un_80321A00(HSD_GObj*);
+/* 321AF4 */ void un_80321AF4(HSD_GObj*);
 /* 321BF8 */ UNK_RET un_80321BF8(UNK_PARAMS);
 /* 321C28 */ void un_80321C28(void);
 /* 321C70 */ void un_80321C70(void);
