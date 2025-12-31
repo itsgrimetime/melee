@@ -823,8 +823,7 @@ HSD_Generator* efLib_8005CB34(s32 arg0, Vec3* arg_vec3, f32 arg2)
 
     generator = hsd_8039F05C(0, (arg0 / 1000), arg0);
     if (generator != NULL) {
-        psAppSRT = generator->appsrt;
-        if (psAppSRT == NULL) {
+        if ((psAppSRT = generator->appsrt) == NULL) {
             psAppSRT = psAddGeneratorAppSRT_begin(generator, 1);
         }
         if (psAppSRT == NULL) {
@@ -833,7 +832,9 @@ HSD_Generator* efLib_8005CB34(s32 arg0, Vec3* arg_vec3, f32 arg2)
         }
     }
     if (generator != NULL) {
-        generator->appsrt->translate = *arg_vec3;
+        generator->appsrt->translate.x = arg_vec3->x;
+        generator->appsrt->translate.y = arg_vec3->y;
+        generator->appsrt->translate.z = arg_vec3->z;
         if (arg2 < 0.0f) {
             generator->kind |= 0x40000;
             generator->appsrt->rot.y = -M_PI_2;
