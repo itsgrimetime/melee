@@ -829,10 +829,8 @@ void ftCo_CatchDash_IASA(Fighter_GObj* gobj) {}
 
 void ftCo_Catch_Phys(Fighter_GObj* gobj)
 {
-    Fighter* fp = GET_FIGHTER(gobj);
-
-    ftCommon_ApplyFrictionGround(fp, p_ftCommonData->x64 *
-                                         fp->co_attrs.gr_friction);
+    Fighter* fp = gobj->user_data;
+    ftCommon_ApplyFrictionGround(fp, p_ftCommonData->x64 * fp->co_attrs.gr_friction);
     ftCommon_ApplyGroundMovement(gobj);
 }
 
