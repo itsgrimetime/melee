@@ -367,27 +367,7 @@ void* lbDvd_GetPreloadedArchive(ssize_t entry_num)
             lbArchive_InitializeDAT((HSD_Archive*) entry->archive->addr,
                                     (u8*) entry->raw_data->addr, entry->size);
             break;
-
-        case 3:
-            efAsync_8006730C((HSD_Archive*) entry->archive->addr,
-                             (u8*) entry->raw_data->addr, entry->size,
-                             entry->effect_index);
-            break;
-
-        case 4:
-            grDatFiles_801C5FC0((HSD_Archive*) entry->archive->addr,
-                                entry->raw_data->addr, entry->size);
-            break;
-
-        default:
-            __assert(__FILE__, 864, "0");
-            break;
         }
-
-        entry->load_state = 2;
-    }
-    if (entry->archive) {
-        return (HSD_Archive*) entry->archive->addr;
     }
     return (void*) entry->raw_data->addr;
 }
