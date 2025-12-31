@@ -24,7 +24,6 @@ void itDosei_UnkMotion0_Phys(Item_GObj* gobj) {}
 
 bool itDosei_UnkMotion0_Coll(Item_GObj* gobj)
 {
-    PAD_STACK(8);
     it_8026D62C(gobj, (HSD_GObjEvent) it_80282074);
     it_80276CB8(gobj);
     return false;
@@ -57,9 +56,14 @@ bool itDosei_UnkMotion1_Anim(Item_GObj* gobj)
 
 void itDosei_UnkMotion1_Phys(Item_GObj* gobj)
 {
-    Item* ip = GET_ITEM(gobj);
-    itDoseiAttributes* attr =
-        (itDoseiAttributes*) ip->xC4_article_data->x4_specialAttributes;
+    Item* ip = gobj->user_data;
+    f32* ap = ip->xC4_article_data->x4_specialAttributes;
+    f32 vel = ap[2] * ip->x5D0_animFrameSpeed;
+    if (vel < 0.0f) {
+        vel = -vel;
+    }
+    ip->x40_vel.x = ip->facing_dir * vel;
+}
 
     ip->x40_vel.x = ip->facing_dir * ABS(attr->unk8 * ip->x5D0_animFrameSpeed);
 }
@@ -238,7 +242,6 @@ void itDosei_UnkMotion7_Phys(Item_GObj* gobj) {}
 
 bool itDosei_UnkMotion7_Coll(Item_GObj* gobj)
 {
-    PAD_STACK(8);
     it_8026D62C(gobj, it_80282BFC);
     it_80276CB8(gobj);
     return false;
