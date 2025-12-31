@@ -221,7 +221,6 @@ bool itBombhei_UnkMotion3_Coll(Item_GObj* gobj)
     it_80276CB8(gobj);
     return false;
 }
-
 /// #it_8027EE04
 
 /// #itBombhei_UnkMotion2_Anim
