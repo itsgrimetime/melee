@@ -1390,16 +1390,19 @@ void efLib_8005E1D8(Effect* effect)
 
 void efLib_8005E2B4(Effect* effect)
 {
-    HSD_JObj* eff_jobj;
+    f64 temp_d;
     f32 rotate_y;
-    PAD_STACK(0xC);
+    HSD_JObj* eff_jobj;
+    Fighter* fighter;
 
+    fighter = GET_FIGHTER(effect->parent_gobj);
     eff_jobj = GET_JOBJ(effect->gobj);
-    if (GET_FIGHTER(effect->parent_gobj->user_data)->facing_dir < 0.0f) {
-        rotate_y = -M_PI_2; // needs to load as a double/f64?
+    if (fighter->facing_dir < 0.0f) {
+        temp_d = -M_PI_2;
     } else {
-        rotate_y = M_PI_2; // needs to load as a double/f64?
+        temp_d = M_PI_2;
     }
+    rotate_y = temp_d;
     HSD_JObjSetRotationY(eff_jobj, rotate_y);
 }
 
