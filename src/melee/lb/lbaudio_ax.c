@@ -1500,37 +1500,7 @@ u64 lbAudioAx_80026F2C(s32 arg0)
     return mask;
 }
 
-    if (arg0 & 1) {
-        mask += 0x0048000000000003ULL;
-    }
-
-    if (arg0 & 2) {
-        mask += 0x000000000000003CULL;
-    }
-
-    if (arg0 & 4) {
-        mask += 0x00800003FFFFFFC0ULL;
-    }
-
-    if (arg0 & 8) {
-        mask += 0x0023FFFC00000000ULL;
-    }
-
-    if (arg0 & 16) {
-        mask += 0x0014000000000000ULL;
-    }
-
-    arr = lbl_804337C4;
-    for (i = 0; i < 0x37; i++) {
-        if ((mask & 1) != 0) {
-            *arr = -1;
-        }
-        mask >>= 1;
-        arr++;
-    }
-
-    return mask;
-}
+extern int lbl_804337C4[0x38];
 
 void lbAudioAx_8002702C(s32 flags, u64 base_val)
 {
@@ -1538,22 +1508,22 @@ void lbAudioAx_8002702C(s32 flags, u64 base_val)
     s32 i;
     u64 mask;
 
-    mask = base_val + 3 + ((u64) 0x480000 << 32);
+    mask = base_val + 3 + ((u64)0x480000 << 32);
 
     if (flags & 1) {
-        result += 3 + ((u64) 0x480000 << 32);
+        result += 3 + ((u64)0x480000 << 32);
     }
     if (flags & 2) {
         result += 0x3C;
     }
     if (flags & 4) {
-        result += (u32) -64 + ((u64) 0x800003 << 32);
+        result += (u32)-64 + ((u64)0x800003 << 32);
     }
     if (flags & 8) {
-        result += ((u64) 0x23FFFC << 32);
+        result += ((u64)0x23FFFC << 32);
     }
     if (flags & 16) {
-        result += ((u64) 0x140000 << 32);
+        result += ((u64)0x140000 << 32);
     }
 
     for (i = 0; i < 0x37; i++) {
