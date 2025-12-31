@@ -90,7 +90,7 @@ void fn_80023254(s32 arg0)
     int local_arr[0x38];
     int* arr_b44;
     int* local_ptr;
-    s8(*arr_5d0)[4];
+    s8 (*arr_5d0)[4];
     int (*arr_4e4)[2];
     int count;
     int j;
@@ -130,15 +130,14 @@ void fn_80023254(s32 arg0)
         j = 0;
 
         do {
-            if (arg0 != (s8) (*arr_5d0)[2]) {
+            if (arg0 != (s8)(*arr_5d0)[2]) {
                 goto next;
             }
             if (*local_ptr != 0) {
                 goto next;
             }
 
-            if ((u32) offsets_arr_803BC4E4[*arr_b44][0] >= (u32) (*arr_4e4)[0])
-            {
+            if ((u32)offsets_arr_803BC4E4[*arr_b44][0] >= (u32)(*arr_4e4)[0]) {
                 goto next;
             }
 
