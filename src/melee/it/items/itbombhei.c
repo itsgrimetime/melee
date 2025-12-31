@@ -291,11 +291,11 @@ bool itBombhei_UnkMotion6_Coll(Item_GObj* gobj)
 
 void itBombhei_UnkMotion10_Phys(Item_GObj* gobj)
 {
-    ItemAttr* attr = ((Item*) gobj->user_data)->xCC_item_attr;
-    it_80272860(gobj, attr->x10_fall_speed, attr->x14_fall_speed_max);
+    Item* ip = gobj->user_data;
+    ItemAttr* attrs = ip->xCC_item_attr;
+    it_80272860(gobj, attrs->x10_fall_speed, attrs->x14_fall_speed_max);
     it_80274658(gobj, it_804D6D28->x68_float);
 }
-
 /// #fn_80280974
 
 /// #itBombhei_UnkMotion10_Coll
