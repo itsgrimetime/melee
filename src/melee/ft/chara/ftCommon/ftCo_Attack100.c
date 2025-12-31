@@ -1166,9 +1166,15 @@ void ftCo_CatchWait_Coll(Fighter_GObj* gobj)
 
 void fn_800DA440(Fighter_GObj* gobj)
 {
-    fn_800DA004(gobj);
-}
+    Fighter* fp = gobj->user_data;
+    Fighter_GObj* victim = fp->victim_gobj;
 
+    PAD_STACK(8);
+
+    ftCo_800DC920(gobj, victim);
+    ftCo_Fall_Enter(gobj);
+    ftCo_Fall_Enter(victim);
+}
 void fn_800DA490(Fighter_GObj* gobj)
 {
     GET_FIGHTER(gobj)->take_dmg_cb = NULL;
