@@ -3,6 +3,7 @@
 #include <baselib/aobj.h>
 #include <baselib/cobj.h>
 #include <baselib/gobj.h>
+#include <baselib/gobjplink.h>
 #include <baselib/jobj.h>
 
 #include "gm/gm_unsplit.h"
