@@ -93,26 +93,8 @@
 /* 0DA4A0 */ static void fn_800DA4A0(Fighter_GObj* gobj);
 /* 0DA4C0 */ static bool fn_800DA4C0(Fighter_GObj* gobj);
 /* 0DAADC */ static void fn_800DAADC(Fighter_GObj* arg0, Fighter_GObj* arg1);
-/* 0DAECC */ static void fn_800DAECC(Fighter_GObj* gobj);
-/* 0DAEEC */ void fn_800DAEEC(Fighter_GObj* gobj);
-/* 0DB230 */ static void fn_800DB230(Fighter_GObj* gobj);
-/* 0DBBF8 */ void fn_800DBBF8(Fighter_GObj* gobj);
-
-extern f32 ftCo_804D90D0; // 0.0f
-extern f32 ftCo_804D90D4; // Decrement value
-extern f64 ftCo_804D90D8; // Increment value (Double)
-
-typedef struct {
-    u8 pad_1A4C[0x1A4C];
-    f32 x1A4C; // 0x1A4C
-    u8 pad_1A58[0x1A58 - 0x1A50];
-    void* x1A58; // 0x1A58
-    u8 pad_2340[0x2340 - 0x1A5C];
-    f32 x2340; // 0x2340
-    f32 x2344; // 0x2344
-    s32 x2348; // 0x2348
-    u8 x234C;  // 0x234C
-} FighterOverlay;
+/* 0DA8E4 */ static void fn_800DA8E4(Fighter_GObj*, Fighter_GObj*, FtMotionId);
+/* 0DAC78 */ static void fn_800DAC78(Fighter_GObj*, Vec3*);
 
 void fn_800D9CE8(Fighter_GObj* gobj)
 {
