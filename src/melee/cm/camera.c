@@ -3653,7 +3653,7 @@ void Camera_80030E44(enum_t arg0, Vec3* arg1)
     case 1:
         pgobj = &camera->xA0;
         if (camera->xA0 == NULL) {
-            *pgobj = (HSD_GObj*) grLib_801C9CEC(arg0);
+            *pgobj = (HSD_GObj*)grLib_801C9CEC(arg0);
         }
         result = 10;
         break;
