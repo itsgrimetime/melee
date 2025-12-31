@@ -1194,7 +1194,7 @@ void ftCo_CatchPull_Coll(Fighter_GObj* gobj)
 
 void fn_800DA004(Fighter_GObj* gobj)
 {
-    Fighter* fp = GET_FIGHTER(gobj);
+    Fighter* fp = gobj->user_data;
     Fighter_GObj* victim = fp->victim_gobj;
     ftCo_800DC920(gobj, victim);
     ftCo_Fall_Enter(gobj);
