@@ -1606,9 +1606,14 @@ void ftCo_CaptureWaitHi_Phys(Fighter_GObj* gobj)
 }
 #pragma pop
 
+static void fn_800DBAC4(Fighter_GObj* gobj);
+
 void ftCo_CaptureWaitHi_Coll(Fighter_GObj* gobj)
 {
-    ftCo_CapturePulledHi_Coll(gobj);
+    Fighter* fp = gobj->user_data;
+    if (!fp->x2226_b2) {
+        ft_80083C00(gobj, fn_800DBAC4);
+    }
 }
 
 void fn_800DBAC4(Fighter_GObj* gobj)
@@ -1632,9 +1637,14 @@ void ftCo_CaptureWaitLw_IASA(Fighter_GObj* gobj)
 
 /// #ftCo_CaptureWaitLw_Phys
 
+static void fn_800DBED4(Fighter_GObj* gobj);
+
 void ftCo_CaptureWaitLw_Coll(Fighter_GObj* gobj)
 {
-    ftCo_CapturePulledLw_Coll(gobj);
+    Fighter* fp = gobj->user_data;
+    if (!fp->x2226_b2) {
+        ft_8008403C(gobj, fn_800DBED4);
+    }
 }
 
 /// #fn_800DBED4
