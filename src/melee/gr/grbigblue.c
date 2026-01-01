@@ -2,6 +2,7 @@
 
 #include <platform.h>
 
+#include "gr/stage.h"
 #include "grmaterial.h"
 #include "grdisplay.h"
 #include "gr/inlines.h"
@@ -225,8 +226,17 @@ void grBigBlue_801E855C(Ground_GObj* arg) {}
 
 /// #grBigBlue_801E8B84
 
-/// #grBigBlue_801E8D04
-
+void grBigBlue_801E8D04(void)
+{
+    f32 bottom;
+    f32 left;
+    f32 right;
+    
+    right = Stage_GetCamBoundsRightOffset();
+    left = Stage_GetCamBoundsLeftOffset();
+    bottom = Stage_GetCamBoundsBottomOffset();
+    grBigBlue_801E8B84(Stage_GetCamBoundsTopOffset(), bottom, left, right);
+}
 /// #grBigBlue_801E8D64
 
 bool grBigBlue_801E93D0(Ground_GObj* arg)
