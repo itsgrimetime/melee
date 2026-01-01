@@ -63,10 +63,8 @@ void it_3F14_Logic2_Dropped(Item_GObj* gobj)
 
 void it_80287F20(Item_GObj* gobj)
 {
-    PAD_STACK(16);
     it_8026B3A8(gobj);
-    Item_80268E5C(gobj, 3,
-                  ITEM_HIT_PRESERVE | ITEM_DROP_UPDATE | ITEM_UNK_0x1);
+    Item_80268E5C(gobj, 3, 0x15);
 }
 
 /// #itTaru_UnkMotion3_Anim
