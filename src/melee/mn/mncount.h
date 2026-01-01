@@ -28,7 +28,7 @@
 /* 2514B8 */ void fn_802514B8(HSD_GObj* gobj);
 /* 2514D8 */ UNK_RET fn_802514D8(UNK_PARAMS);
 /* 251640 */ UNK_RET fn_80251640(UNK_PARAMS);
-/* 2517E0 */ UNK_RET mnCount_802517E0(UNK_PARAMS);
+/* 2517E0 */ void mnCount_802517E0(void* data);
 /* 25186C */ void mnCount_8025186C(void);
 
 #endif
