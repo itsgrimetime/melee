@@ -1123,7 +1123,13 @@ bool fn_800D952C(Fighter_GObj* gobj)
 
 /// #fn_800D9930
 
-/// #fn_800D9C64
+void fn_800D9C64(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    if (fp->kind == 0xD) {
+        it_802B7B84(*(HSD_GObj**)((u8*)fp + 0x223C));
+    }
+}
 
 /// #ftCo_800D9C98
 
@@ -1556,42 +1562,34 @@ static void fn_800DB5D8(Fighter_GObj* gobj)
 
 void ftCo_CaptureWaitHi_Anim(Fighter_GObj* gobj)
 {
-    u8 _[8];
-    Fighter* fp;
-    FighterOverlay* fp_ovl;
-    f32 dec;
-    f32 zero;
-    fp = GET_FIGHTER(gobj);
-    fp_ovl = (FighterOverlay*) fp;
-    fp_ovl->x2340 = (f32) ((f64) fp_ovl->x2340 + ftCo_804D90D8);
-    fp_ovl->x1A4C -= *(f32*) ((u8*) p_ftCommonData + 0x3A4);
-    fp_ovl->x2348 =
-        ftCommon_GrabMash(fp, *(f32*) ((u8*) p_ftCommonData + 0x3A8));
-    if (fp_ovl->x1A4C <= ftCo_804D90D0) {
-        ftCo_800DA698(fp_ovl->x1A58, 0);
-        if (fp_ovl->x234C != 0 || fn_800DC044(gobj)) {
+    Fighter* fp = gobj->user_data;
+
+    *(float*)((u8*)fp + 0x2340) = (float)(*(float*)((u8*)fp + 0x2340) + 1.0);
+    fp->grab_timer -= p_ftCommonData->grab_timer_decrement;
+    *(s32*)((u8*)fp + 0x2348) = ftCommon_GrabMash(fp, p_ftCommonData->x3A8);
+
+    if (fp->grab_timer <= 0.0f) {
+        ftCo_800DA698(fp->victim_gobj, 0);
+        if (*((u8*)fp + 0x234C) != 0 || fn_800DC044(gobj)) {
             fn_800DC070(gobj);
-            return;
+        } else {
+            ftCo_CaptureCut_Enter(gobj);
         }
-
-        ftCo_CaptureCut_Enter(gobj);
-        return;
-    }
-
-    zero = ftCo_804D90D0;
-    if (fp_ovl->x2344 != zero) {
-        dec = ftCo_804D90D4;
-        fp_ovl->x2344 -= dec;
-        if (fp_ovl->x2344 <= zero && fp_ovl->x2348 == 0) {
-            ftAnim_SetAnimRate(gobj, dec);
-            fp_ovl->x2344 = ftCo_804D90D0;
+    } else {
+        float x4 = *(float*)((u8*)fp + 0x2344);
+        if (x4 != 0.0f) {
+            x4 -= 1.0f;
+            *(float*)((u8*)fp + 0x2344) = x4;
+            if (x4 <= 0.0f && *(s32*)((u8*)fp + 0x2348) == 0) {
+                ftAnim_SetAnimRate(gobj, 0);
+                *(float*)((u8*)fp + 0x2344) = 0.0f;
+            }
         }
-    }
-
-    if (*(volatile f32*) &fp_ovl->x2344 <= ftCo_804D90D0 && fp_ovl->x2348 != 0)
-    {
-        fp_ovl->x2344 = *(f32*) ((u8*) p_ftCommonData + 0x3B0);
-        ftAnim_SetAnimRate(gobj, *(f32*) ((u8*) p_ftCommonData + 0x3B4));
+        x4 = *(float*)((u8*)fp + 0x2344);
+        if (x4 <= 0.0f && *(s32*)((u8*)fp + 0x2348) != 0) {
+            *(float*)((u8*)fp + 0x2344) = p_ftCommonData->x3B0;
+            ftAnim_SetAnimRate(gobj, p_ftCommonData->shouldered_anim_rate);
+        }
     }
 }
 
