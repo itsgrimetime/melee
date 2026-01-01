@@ -1131,7 +1131,18 @@ void fn_800D9C64(Fighter_GObj* gobj)
     }
 }
 
-/// #ftCo_800D9C98
+void ftCo_800D9C98(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    Item_GObj* item = *(Item_GObj**)((u8*)fp + 0x223C);
+    if (item != NULL) {
+        it_802B7B84(item);
+        *(s32*)((u8*)fp + 0x223C) = 0;
+    }
+    *(s32*)((u8*)fp + 0x21E4) = 0;
+    *(s32*)((u8*)fp + 0x21F0) = 0;
+    *(s32*)((u8*)fp + 0x21DC) = 0;
+}
 
 /// #ftCo_CatchPull_Anim
 
@@ -1618,7 +1629,9 @@ void ftCo_CaptureWaitHi_Coll(Fighter_GObj* gobj)
     }
 }
 
-void fn_800DBAC4(Fighter_GObj* gobj)
+static void fn_800DBBF8(Fighter_GObj* gobj);
+
+static void fn_800DBAC4(Fighter_GObj* gobj)
 {
     fn_800DBBF8(gobj);
 }
@@ -1651,16 +1664,31 @@ void ftCo_CaptureWaitLw_Coll(Fighter_GObj* gobj)
 
 /// #fn_800DBED4
 
-/// #fn_800DC014
+void fn_800DC014(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    if (*(float*)((u8*)fp + 0x2340) < p_ftCommonData->x3AC) {
+        if (fp->input.x668 & 0xC00) {
+            *((u8*)fp + 0x234C) = 1;
+        }
+    }
+}
 
-/// #fn_800DC044
+bool fn_800DC044(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    if (fp->input.lstick.y >= p_ftCommonData->tap_jump_threshold) {
+        return true;
+    }
+    return false;
+}
 
 /// #fn_800DC070
 
 void ftCo_CaptureJump_Anim(Fighter_GObj* gobj)
 {
-    Fighter* fp = GET_FIGHTER(gobj);
-    fp->mv.co.buryjump.x0 += 1;
+    Fighter* fp = gobj->user_data;
+    *(float*)((u8*)fp + 0x2340) += 1.0f;
     if (!ftAnim_IsFramesRemaining(gobj)) {
         ftCo_Fall_Enter(gobj);
     }
@@ -1671,7 +1699,6 @@ void ftCo_CaptureJump_Anim(Fighter_GObj* gobj)
 void ftCo_CaptureJump_Phys(Fighter_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
-    PAD_STACK(8);
     ftCommon_Fall(fp, fp->co_attrs.grav, fp->co_attrs.terminal_vel);
     ftCommon_8007D268(fp);
 }
