@@ -23,7 +23,7 @@ void itTaru_UnkMotion0_Phys(Item_GObj* gobj) {}
 void it_80287D0C(Item_GObj* gobj)
 {
     it_8026B3A8(gobj);
-    Item_80268E5C(gobj, 1, ITEM_ANIM_UPDATE);
+    Item_80268E5C(gobj, 1, 2);
 }
 
 bool itTaru_UnkMotion1_Anim(Item_GObj* gobj)
