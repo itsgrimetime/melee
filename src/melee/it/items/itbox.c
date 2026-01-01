@@ -51,7 +51,17 @@ bool it_80286340(Item_GObj* gobj, s32 arg1, s32 arg2, s32 arg3, s32 arg4)
 
 /// #it_802863BC
 
-/// #fn_80286480
+void fn_80286480(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
+    f32 zero;
+    it_8026B390(gobj);
+    zero = 0.0f;
+    ip->x40_vel.z = zero;
+    ip->x40_vel.y = zero;
+    ip->x40_vel.x = zero;
+    Item_80268E5C(gobj, 0, ITEM_ANIM_UPDATE);
+}
 
 bool itBox_UnkMotion0_Anim(Item_GObj* gobj)
 {

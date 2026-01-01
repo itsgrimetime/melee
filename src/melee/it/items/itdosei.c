@@ -197,6 +197,7 @@ bool itDosei_UnkMotion5_Anim(Item_GObj* gobj)
 {
     return false;
 }
+
 void itDosei_UnkMotion5_Phys(Item_GObj* gobj)
 {
     Item* ip = gobj->user_data;
@@ -267,6 +268,17 @@ bool itDosei_UnkMotion7_Coll(Item_GObj* gobj)
 void itDosei_UnkMotion9_Phys(Item_GObj* gobj) {}
 
 /// #itDosei_UnkMotion9_Coll
+
+bool itDosei_UnkMotion10_Anim(Item_GObj* gobj)
+{
+    f32 speed;
+    Item* ip = gobj->user_data;
+    ip->xDD4_itemVar.dosei.xDE4 = ip->pos;
+    speed = 1.0f;
+    ip->x5D0_animFrameSpeed = speed;
+    lb_8000BA0C(gobj->hsd_obj, speed);
+    return false;
+}
 
 void itDosei_UnkMotion10_Phys(Item_GObj* gobj) {}
 
