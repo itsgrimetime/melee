@@ -162,13 +162,14 @@ void itDosei_UnkMotion2_Phys(Item_GObj* gobj) {}
 
 void it_80282074(Item_GObj* gobj)
 {
-    Item* ip = GET_ITEM(gobj);
-    HSD_JObj* jobj;
+    f32 frame_speed;
+    Item* ip = gobj->user_data;
+
     Item_80268E5C(gobj, 3, 3);
-    jobj = gobj->hsd_obj;
-    ip->x5D0_animFrameSpeed = 1.0F;
-    lb_8000BA0C(jobj, 1.0F);
-    ip->owner = NULL;
+    frame_speed = it_804DC870;
+    ip->x5D0_animFrameSpeed = frame_speed;
+    lb_8000BA0C(gobj->hsd_obj, frame_speed);
+    M2C_FIELD(ip, s32*, 0x518) = 0;
 }
 
 bool itDosei_UnkMotion3_Anim(Item_GObj* gobj)
