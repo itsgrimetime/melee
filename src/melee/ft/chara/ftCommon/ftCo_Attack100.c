@@ -1496,7 +1496,7 @@ static bool fn_800DAD18(Fighter_GObj* gobj)
 
 void ftCo_CapturePulledHi_Coll(Fighter_GObj* gobj)
 {
-    Fighter* fp = GET_FIGHTER(gobj);
+    Fighter* fp = gobj->user_data;
     if (!fp->x2226_b2) {
         ft_80083C00(gobj, fn_800DAECC);
     }
@@ -1517,9 +1517,11 @@ void ftCo_CapturePulledLw_IASA(Fighter_GObj* gobj) {}
 
 /// #ftCo_CapturePulledLw_Phys
 
+static void fn_800DB230(Fighter_GObj* gobj);
+
 void ftCo_CapturePulledLw_Coll(Fighter_GObj* gobj)
 {
-    Fighter* fp = GET_FIGHTER(gobj);
+    Fighter* fp = gobj->user_data;
     if (!fp->x2226_b2) {
         ft_8008403C(gobj, fn_800DB230);
     }
