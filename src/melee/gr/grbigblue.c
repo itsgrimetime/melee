@@ -315,13 +315,12 @@ DynamicsDesc* grBigBlue_801EFC0C(enum_t arg)
     return false;
 }
 
-bool grBigBlue_801EFC14(Vec3* a, int b, HSD_JObj* jobj)
+bool grBigBlue_801EFC14(Vec3* v, int unused, HSD_JObj* jobj)
 {
-    Vec3 vec;
-    lb_8000B1CC(jobj, NULL, &vec);
-    if (a->y > vec.y) {
+    Vec3 pos;
+    lb_8000B1CC(jobj, NULL, &pos);
+    if (v->y > pos.y) {
         return true;
-    } else {
-        return false;
     }
+    return false;
 }
