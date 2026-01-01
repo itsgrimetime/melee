@@ -4,15 +4,12 @@
 #include <platform.h>
 
 #include "it/inlines.h"
+#include "it/item.h"
+#include "it/it_26B1.h"
 #include "it/it_266F.h"
 #include "it/it_26B1.h"
 #include "it/it_2725.h"
 #include "lb/lb_00B0.h"
-
-#include <math.h>
-
-// Explicit declaration for external function
-extern void Item_80268E5C(Item_GObj* gobj, int arg1, int arg2);
 
 /// #it_3F14_Logic7_Spawned
 
