@@ -1222,8 +1222,26 @@ void ftCh_RockCrushDown_IASA(HSD_GObj* gobj)
     }
 }
 
-/// #ftCh_RockCrushDown_Phys
-
+void ftCh_RockCrushDown_Phys(HSD_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    ftMasterHand_SpecialAttrs* attrs = fp->ft_data->ext_attr;
+    f32 temp_f2;
+    
+    ft_80085134(gobj);
+    
+    temp_f2 = fp->mv.mh.unk0.x0 - 1.0f;
+    fp->mv.mh.unk0.x0 = temp_f2;
+    
+    if (temp_f2 > (f32)*(s32*)&attrs->x40_pos.z || 
+        (temp_f2 = fp->mv.mh.unk0.x0, temp_f2 < 0.0f)) {
+        fp->self_vel.x = 0.0f;
+    } else {
+        ftBossLib_8015C010(gobj, attrs->x40_pos.y);
+    }
+    
+    ftBossLib_8015C190(gobj);
+}
 void ftCh_RockCrushDown_Coll(HSD_GObj* gobj) {}
 
 void fn_801582D8(Fighter_GObj* gobj)
@@ -1804,14 +1822,14 @@ void ftCh_Wait1_1_Phys(HSD_GObj* gobj)
     Fighter* fp = gobj->user_data;
     f32 new_val = fp->mv.mh.unk0.x0 - 1.0f;
     fp->mv.mh.unk0.x0 = new_val;
-    
+
     if (new_val > 0.0f) {
         ftMasterHand_SpecialAttrs* da = fp->ft_data->ext_attr;
         ftBossLib_8015BF74(gobj, da->xDC);
     } else {
         fp->self_vel.x = 0.0f;
     }
-    
+
     ftBossLib_8015C190(gobj);
 }
 void ftCh_Wait1_1_Coll(HSD_GObj* gobj) {}
