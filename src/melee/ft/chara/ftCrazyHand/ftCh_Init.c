@@ -7,6 +7,7 @@
 
 #include "baselib/forward.h"
 
+#include "ft/chara/ftCommon/ftCo_CaptureCut.h"
 #include "ft/fighter.h"
 #include "ft/ft_081B.h"
 #include "ft/ftbosslib.h"
@@ -62,6 +63,8 @@
 /* static */ void ftCh_Init_80156918(void);
 /* static */ void ftCh_Init_80156948(void);
 /* static */ void fn_8015AAC8(Fighter_GObj* gobj);
+/* static */ void ftCh_TagFail_Anim(Fighter_GObj* gobj);
+/* static */ void ftCh_GrabUnk1_8015B800(Fighter_GObj* gobj);
 
 MotionState ftCh_Init_MotionStateTable[ftCh_MS_SelfCount] = {
     {
@@ -1589,7 +1592,14 @@ void ftCh_TagGrab_Coll(HSD_GObj* gobj) {}
 
 /// #ftCh_GrabUnk1_8015B174
 
-/// #ftCh_TagFail_Anim
+void ftCh_TagFail_Anim(Fighter_GObj* gobj)
+{
+    if (ftAnim_IsFramesRemaining(gobj) == 0) {
+        Fighter* fp = gobj->user_data;
+        fp->fv.mh.x2258 = ftMh_MS_Wait1_0;
+        ftCh_GrabUnk1_8015BC88(gobj);
+    }
+}
 
 void ftCh_TagFail_IASA(HSD_GObj* gobj)
 {
@@ -1629,7 +1639,13 @@ void ftCo_CaptureDamageCrazyHand_Coll(HSD_GObj* gobj) {}
 
 /// #ftCh_GrabUnk1_8015B778
 
-/// #ftCh_GrabUnk1_8015B800
+void ftCh_GrabUnk1_8015B800(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    fp->x221E_b7 = false;
+    fp->facing_dir = -fp->facing_dir;
+    ftCo_CaptureCut_Enter(gobj);
+}
 
 void ftCo_CaptureWaitCrazyHand_Anim(HSD_GObj* gobj) {}
 
