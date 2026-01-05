@@ -1616,8 +1616,32 @@ void ftCh_Init_80159670(Fighter_GObj* gobj)
     fp->cmd_vars[0] = 0;
 }
 
-/// #ftCh_BackAirplane3_Anim
-
+void ftCh_BackAirplane3_Anim(HSD_GObj* gobj)
+{
+    Fighter* fp;
+    HSD_GObj* victim_gobj;
+    s32 unused[2];
+    
+    fp = gobj->user_data;
+    
+    if (fp->cmd_vars[0] != 0) {
+        HSD_GObj* temp;
+        fp->cmd_vars[0] = 0;
+        ftCh_GrabUnk1_8015B850(fp->victim_gobj, 0x153);
+        temp = fp->victim_gobj;
+        if (temp != NULL) {
+            victim_gobj = temp;
+            ftCommon_8007E2F4(fp, 0);
+            ftCo_800DE2A8(gobj, victim_gobj);
+            ftCo_800DE7C0(victim_gobj, 0, 0);
+        }
+        fp->mv.mh.unk0.x20 = 0;
+    }
+    
+    if (ftAnim_IsFramesRemaining(gobj) == 0) {
+        ftCh_GrabUnk1_8015BC88(gobj);
+    }
+}
 void ftCh_BackAirplane3_IASA(HSD_GObj* gobj)
 {
     Fighter* ft = GET_FIGHTER(gobj);
@@ -2018,12 +2042,12 @@ void ftCh_TagApplaud_Anim(HSD_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
     f32 timer = fp->mv.mh.unk0.x24 -= 1.0f;
-    
+
     if (timer <= 0.0f && fp->cmd_vars[0] != 0) {
         ftCh_GrabUnk1_8015B800(fp->victim_gobj);
         fp->cmd_vars[0] = 0;
     }
-    
+
     if (ftAnim_IsFramesRemaining(gobj) == 0) {
         ftCh_GrabUnk1_8015BC88(gobj);
     }
