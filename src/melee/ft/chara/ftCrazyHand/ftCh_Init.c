@@ -827,8 +827,37 @@ void ftCh_Damage_Coll(HSD_GObj* gobj) {}
 
 /// #ftCh_Init_80157170
 
-/// #ftCh_Damage2_Anim
-
+void ftCh_Damage2_Anim(HSD_GObj* gobj)
+{
+    s32 unused;
+    f32 floor_x;
+    s32 unused2[2];
+    Fighter* fp;
+    ftMasterHand_SpecialAttrs* attrs;
+    
+    if (ftAnim_IsFramesRemaining(gobj) == 0) {
+        fp = gobj->user_data;
+        mpFloorGetRight(0, &floor_x);
+        
+        if (fp->cur_pos.x > floor_x) {
+            ftCh_Init_8015737C(gobj);
+        } else {
+            f32 zero;
+            f32 rate;
+            fp = gobj->user_data;
+            attrs = fp->ft_data->ext_attr;
+            
+            fp->mv.mh.unk0.xC.x = fp->cur_pos.x - *(f32*)&attrs->x28;
+            fp->mv.mh.unk0.xC.y = *(f32*)&attrs->x24;
+            zero = 0.0f;
+            fp->mv.mh.unk0.xC.z = zero;
+            rate = 2.0f;
+            Fighter_ChangeMotionState(gobj, 0x159, 0, zero, rate, zero, NULL);
+            ftAnim_8006EBA4(gobj);
+            ft_PlaySFX(fp, 0x4E207, 0x7F, 0x40);
+        }
+    }
+}
 void ftCh_Damage2_IASA(HSD_GObj* gobj)
 {
     Fighter* ft = GET_FIGHTER(gobj);
@@ -1643,16 +1672,16 @@ void fn_80159908(HSD_GObj* gobj)
     ftMasterHand_SpecialAttrs* attrs = fp->ft_data->ext_attr;
     f32 zero = 0.0f;
     f32 half = 0.5f;
-    
+
     Fighter_ChangeMotionState(gobj, 0x174, 0, zero, half, zero, NULL);
     ftAnim_8006EBA4(gobj);
-    
-    fp->mv.mh.unk0.x0 = (f32)attrs->xF0;
-    
+
+    fp->mv.mh.unk0.x0 = (f32) attrs->xF0;
+
     ftBossLib_8015C208(gobj, &temp_pos);
     fp->cur_pos.x = temp_pos.x;
-    fp->cur_pos.y = *(f32*)&attrs->xEC;
-    
+    fp->cur_pos.y = *(f32*) &attrs->xEC;
+
     fp->self_vel.z = 0.0f;
     fp->self_vel.y = 0.0f;
     fp->self_vel.x = 0.0f;
