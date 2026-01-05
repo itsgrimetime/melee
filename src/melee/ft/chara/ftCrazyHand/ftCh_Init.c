@@ -2175,12 +2175,12 @@ void ftCh_GrabUnk1_8015AC50(HSD_GObj* gobj)
     ftMasterHand_SpecialAttrs* attrs = fp->ft_data->ext_attr;
     f32 zero = 0.0f;
     f32 one = 1.0f;
-    
+
     Fighter_ChangeMotionState(gobj, 0x16E, 0, zero, one, zero, NULL);
     ftAnim_8006EBA4(gobj);
-    
-    fp->mv.mh.unk0.xC.x = *(f32*)&attrs->x18;
-    fp->mv.mh.unk0.xC.y = *(f32*)&attrs->x1C;
+
+    fp->mv.mh.unk0.xC.x = *(f32*) &attrs->x18;
+    fp->mv.mh.unk0.xC.y = *(f32*) &attrs->x1C;
     fp->mv.mh.unk0.xC.z = 0.0f;
 }
 void ftCh_FingerGun2_Anim(HSD_GObj* gobj)
@@ -2360,7 +2360,31 @@ void ftCh_TagCancel_Coll(Fighter_GObj* gobj)
     }
 }
 
-/// #ftCh_GrabUnk1_8015BC88
+void ftCh_Init_80156198(HSD_GObj* gobj);
+
+void ftCh_GrabUnk1_8015BC88(HSD_GObj* gobj)
+{
+    Vec3 pos;
+    s32 unused[4];
+    Fighter* fp = gobj->user_data;
+    ftMasterHand_SpecialAttrs* attrs = fp->ft_data->ext_attr;
+
+    fp->mv.mh.unk0.x20 = 0;
+    pos.x = *(f32*)&attrs->x18;
+    pos.y = *(f32*)&attrs->x1C;
+    pos.z = 0.0f;
+    fp->fv.ch.x2258 = 0x184;
+
+    fp = gobj->user_data;
+    if (fp->fv.ch.x2258 == 0x156) {
+        ftCh_GrabUnk1_8015B998(gobj);
+    } else {
+        ftCh_GrabUnk1_8015B8FC(gobj);
+    }
+
+    fp->mv.mh.unk0.x4 = ftCh_Init_80156198;
+    fp->mv.mh.unk0.xC = pos;
+}
 
 struct {
     enum_t asids[18];
