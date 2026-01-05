@@ -425,7 +425,7 @@ M2C_UNK ftCo_800D72A0(Fighter* fp)
     s32 motion_id;
     s32 x30;
     struct Fighter_x2D0_t* x2D0 = fp->x2D0;
-    
+
     x2C = x2D0->x2C;
     if (x2C != -1) {
         motion_id = fp->motion_id;
@@ -583,7 +583,7 @@ void ftCo_ItemScopeAirStart_Coll(Fighter_GObj* gobj)
 void fn_800D7BDC(Fighter_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
-    Fighter_ChangeMotionState(gobj, fn_800D769C(fp, ftCo_MS_ItemScopeRapid), 
+    Fighter_ChangeMotionState(gobj, fn_800D769C(fp, ftCo_MS_ItemScopeRapid),
                               Ft_MF_SkipAttackCount, 0.0F, 1.0F, 0.0F, NULL);
     fp->mv.co.common.x0 = (int)p_ftCommonData->x5BC;
     fp->accessory4_cb = fn_800D80F4;
@@ -1203,6 +1203,8 @@ void fn_800DA1D8(Fighter_GObj* gobj)
     fn_800DB6C8(fp->victim_gobj);
 }
 
+#pragma push
+#pragma dont_inline on
 void fn_800DA2B0(Fighter_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
@@ -1211,6 +1213,7 @@ void fn_800DA2B0(Fighter_GObj* gobj)
     fp->take_dmg_cb = fn_800DA490;
     ftCommon_8007E2F4(fp, 0x1FF);
 }
+#pragma pop
 
 void ftCo_CatchWait_Anim(Fighter_GObj* gobj) {}
 
@@ -1347,7 +1350,7 @@ void ftCo_CatchCut_Phys(Fighter_GObj* gobj) {
 void ftCo_CatchCut_Coll(Fighter_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
-    
+
     if (fp->ground_or_air == GA_Ground) {
         ft_80084104(gobj);
     } else {
@@ -1544,6 +1547,8 @@ static void fn_800DB5D8(Fighter_GObj* gobj)
 
 /// #fn_800DB790
 
+#pragma push
+#pragma dont_inline on
 void fn_800DB8A4(Fighter_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
@@ -1551,6 +1556,7 @@ void fn_800DB8A4(Fighter_GObj* gobj)
     fp->grab_timer -= p_ftCommonData->grab_timer_decrement;
     *(s32*)((u8*)fp + 0x2348) = ftCommon_GrabMash(fp, p_ftCommonData->x3A8);
 }
+#pragma pop
 
 void ftCo_CaptureWaitHi_Anim(Fighter_GObj* gobj)
 {
