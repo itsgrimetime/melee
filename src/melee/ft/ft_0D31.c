@@ -28,6 +28,7 @@
 #include <melee/ft/chara/ftCommon/ftCo_AttackS4.h>
 #include <melee/ft/chara/ftCommon/ftCo_DamageIce.h>
 #include <melee/ft/chara/ftCommon/ftCo_Escape.h>
+#include <melee/ft/chara/ftCommon/ftCo_Fall.h>
 #include <melee/ft/chara/ftCommon/ftCo_FallSpecial.h>
 #include <melee/ft/chara/ftCommon/ftCo_Guard.h>
 #include <melee/ft/chara/ftCommon/ftCo_Lift.h>
@@ -38,6 +39,7 @@
 #include <melee/ft/ft_0CDD.h>
 #include <melee/ft/ftcamera.h>
 #include <melee/ft/ftchangeparam.h>
+#include <melee/ft/ftcoll.h>
 #include <melee/ft/ftlib.h>
 #include <melee/ft/ftmaterial.h>
 #include <melee/ft/ftmetal.h>
@@ -46,6 +48,7 @@
 #include <melee/it/item.h>
 #include <melee/it/items/it_2E5A.h>
 #include <melee/it/items/itkinoko.h>
+#include <melee/lb/lbvector.h>
 #include <melee/mp/mpcoll.h>
 #include <melee/pl/pl_040D.h>
 #include <melee/pl/player.h>
@@ -377,8 +380,29 @@ void ftCo_800D40B8(Fighter_GObj* gobj)
     fp->mv.co.unk_deadup.x68 = 0;
 }
 
-/// #ftCo_800D41C4
+void ftCo_800D41C4(Fighter_GObj* gobj)
+{
+    u8 _[8];
+    int* temp_r31;
+    Fighter* temp_r30;
+    Fighter* temp_r28;
 
+    temp_r28 = GET_FIGHTER(gobj);
+    temp_r28->x2227_b6 = true;
+    temp_r30 = GET_FIGHTER(gobj);
+    temp_r31 = &p_ftCommonData->x504;
+    ftCo_800D331C(gobj);
+    temp_r30->mv.co.unk_deadup.x40 = *temp_r31;
+    temp_r30->mv.co.unk_deadup.x44 = 0.0F;
+    Fighter_ChangeMotionState(gobj, 5, 0, 0.0F, 1.0F, 0.0F, NULL);
+    ftCo_800D40B8_inline(gobj);
+    ftCommon_8007EFC0(temp_r30, true);
+    ft_800881D8(temp_r30, temp_r30->ft_data->x4C_sfx->xC, 127, 64);
+    pl_8003DF44(temp_r30->player_id, temp_r30->x221F_b4);
+    ftCo_80090AC0(temp_r28);
+    ftCommon_8007EBAC(temp_r28, true, false);
+    temp_r28->mv.co.unk_deadup.x68 = 1;
+}
 /// #ftCo_DeadUpStar_Anim
 
 void ftCo_DeadUpStar_Cam(Fighter_GObj* gobj)
@@ -409,10 +433,51 @@ void ftCo_800D47B8(Fighter_GObj* gobj)
 
 /// #ftCo_DeadUpFall_Anim
 
-/// #ftCo_DeadUpFall_Phys
+void ftCo_DeadUpFall_Phys(Fighter_GObj* gobj)
+{
+    void* co;
+    Fighter* fp = gobj->user_data;
+    s32 state = M2C_FIELD(fp, s32*, 0x2344);
+    co = (void*)((u8*)p_ftCommonData + 0x520);
+    
+    switch (state) {
+    case 1:
+        if (!fp->x2222_b6 || ftAnim_80070FD0(fp) != 0) {
+            lbVector_Lerp((Vec3*)((u8*)co + 0x18), (Vec3*)((u8*)co + 0x24),
+                          (Vec3*)((u8*)fp + 0x2350),
+                          M2C_FIELD(fp, float*, 0x234C));
+        }
+        break;
+    case 2:
+        break;
+    case 3:
+        ftCommon_Fall(fp, M2C_FIELD(co, float*, 0x34), M2C_FIELD(co, float*, 0x38));
+        lbVector_Add((Vec3*)((u8*)fp + 0x235C), &fp->self_vel);
+        if (!fp->x2222_b6 || ftAnim_80070FD0(fp) != 0) {
+            lbVector_Add((Vec3*)((u8*)fp + 0x2350), (Vec3*)((u8*)fp + 0x235C));
+            M2C_FIELD(fp, float*, 0x235C) = 0.0f;
+            M2C_FIELD(fp, float*, 0x2360) = 0.0f;
+            M2C_FIELD(fp, float*, 0x2364) = 0.0f;
+        }
+        break;
+    }
+}
+static void fn_800D4DD4(Fighter_GObj* gobj)
+{
+    u8 _pad[8];
+    Fighter* fp = gobj->user_data;
 
-/// #fn_800D4DD4
-
+    if (M2C_FIELD(fp, s32*, 0x2344) != 3) {
+        goto end;
+    }
+    {
+        f32 bottom = Stage_GetCamBoundsBottomOffset();
+        if (fp->cur_pos.y < bottom) {
+            ftCommon_8007E2FC(gobj);
+        }
+    }
+end:;
+}
 void ftCo_DeadUpFall_Cam(Fighter_GObj* gobj)
 {
     ftCamera_80076320(gobj);
@@ -463,8 +528,15 @@ void ftCo_800D4F24(Fighter_GObj* gobj, int index)
 
 /// #ftCo_800D4FF4
 
-/// #ftCo_Rebirth_Anim
-
+void ftCo_Rebirth_Anim(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    ftCo_8008A7A8(gobj, fp->ft_data->x24);
+    fp->mv.co.unk_deadup.x40--;
+    if (fp->mv.co.unk_deadup.x40 == 0) {
+        ftCo_800D5600(gobj);
+    }
+}
 void ftCo_Rebirth_IASA(Fighter_GObj* gobj) {}
 
 float const ftCo_804D8FC8 = 0.0f;
