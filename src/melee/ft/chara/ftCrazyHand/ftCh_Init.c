@@ -1456,13 +1456,13 @@ void ftCh_FingerGun1_Anim(HSD_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
     f32 timer = fp->mv.mh.unk0.x24 -= 1.0f;
-    
+
     if (timer <= 0.0f && fp->cmd_vars[0] != 0) {
         ftCh_GrabUnk1_8015B800(fp->victim_gobj);
         fp->mv.mh.unk0.x20 = 0;
         fp->cmd_vars[0] = 0;
     }
-    
+
     if (ftAnim_IsFramesRemaining(gobj) == 0) {
         ftCh_GrabUnk1_8015BC88(gobj);
     }
@@ -1635,8 +1635,28 @@ void ftCh_BackCrush_Phys(HSD_GObj* gobj)
 
 void ftCh_BackCrush_Coll(HSD_GObj* gobj) {}
 
-/// #fn_80159908
-
+void fn_80159908(HSD_GObj* gobj)
+{
+    Vec3 temp_pos;
+    s32 unused;
+    Fighter* fp = gobj->user_data;
+    ftMasterHand_SpecialAttrs* attrs = fp->ft_data->ext_attr;
+    f32 zero = 0.0f;
+    f32 half = 0.5f;
+    
+    Fighter_ChangeMotionState(gobj, 0x174, 0, zero, half, zero, NULL);
+    ftAnim_8006EBA4(gobj);
+    
+    fp->mv.mh.unk0.x0 = (f32)attrs->xF0;
+    
+    ftBossLib_8015C208(gobj, &temp_pos);
+    fp->cur_pos.x = temp_pos.x;
+    fp->cur_pos.y = *(f32*)&attrs->xEC;
+    
+    fp->self_vel.z = 0.0f;
+    fp->self_vel.y = 0.0f;
+    fp->self_vel.x = 0.0f;
+}
 void ftCh_BackDisappear_Anim(HSD_GObj* gobj)
 {
     if (ftAnim_IsFramesRemaining(gobj) == 0) {
