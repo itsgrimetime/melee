@@ -2326,7 +2326,7 @@ void ftCh_GrabUnk1_8015B8FC(HSD_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
     s32 state = fp->fv.ch.x2258;
-    
+
     if (state == 0x155 || state == 0x184) {
         f32 anim_frame = fp->cur_anim_frame;
         f32 one = 1.0f;
@@ -2338,11 +2338,28 @@ void ftCh_GrabUnk1_8015B8FC(HSD_GObj* gobj)
         Fighter_ChangeMotionState(gobj, 0x184, 0, zero, one, zero, NULL);
         ftAnim_8006EBA4(gobj);
     }
-    
+
     fp->fv.ch.x2258 = 0x184;
 }
-/// #ftCh_GrabUnk1_8015B998
-
+void ftCh_GrabUnk1_8015B998(HSD_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    s32 state = fp->fv.ch.x2258;
+    
+    if (state == 0x156 || state == 0x185) {
+        f32 anim_frame = fp->cur_anim_frame;
+        f32 one = 1.0f;
+        f32 zero = 0.0f;
+        Fighter_ChangeMotionState(gobj, 0x185, 0, anim_frame, one, zero, NULL);
+    } else {
+        f32 zero = 0.0f;
+        f32 one = 1.0f;
+        Fighter_ChangeMotionState(gobj, 0x185, 0, zero, one, zero, NULL);
+        ftAnim_8006EBA4(gobj);
+    }
+    
+    fp->fv.ch.x2258 = 0x185;
+}
 /// #ftCh_GrabUnk1_8015BA34
 
 void ftCh_TagCancel_Anim(HSD_GObj* gobj)
