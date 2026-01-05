@@ -834,11 +834,11 @@ void ftCh_Damage2_Anim(HSD_GObj* gobj)
     s32 unused2[2];
     Fighter* fp;
     ftMasterHand_SpecialAttrs* attrs;
-    
+
     if (ftAnim_IsFramesRemaining(gobj) == 0) {
         fp = gobj->user_data;
         mpFloorGetRight(0, &floor_x);
-        
+
         if (fp->cur_pos.x > floor_x) {
             ftCh_Init_8015737C(gobj);
         } else {
@@ -846,9 +846,9 @@ void ftCh_Damage2_Anim(HSD_GObj* gobj)
             f32 rate;
             fp = gobj->user_data;
             attrs = fp->ft_data->ext_attr;
-            
-            fp->mv.mh.unk0.xC.x = fp->cur_pos.x - *(f32*)&attrs->x28;
-            fp->mv.mh.unk0.xC.y = *(f32*)&attrs->x24;
+
+            fp->mv.mh.unk0.xC.x = fp->cur_pos.x - *(f32*) &attrs->x28;
+            fp->mv.mh.unk0.xC.y = *(f32*) &attrs->x24;
             zero = 0.0f;
             fp->mv.mh.unk0.xC.z = zero;
             rate = 2.0f;
@@ -1869,8 +1869,27 @@ void ftCh_Init_8015A3F4(Fighter_GObj* gobj)
     ftAnim_8006EBA4(gobj);
 }
 
-/// #ftCh_Squeeze_Anim
-
+void ftCh_Squeeze_Anim(HSD_GObj* gobj)
+{
+    Fighter* fp;
+    s32 unused[2];
+    
+    fp = gobj->user_data;
+    
+    if (fp->cmd_vars[1] != 0) {
+        ftBossLib_8015C5F8(gobj);
+        fp->cmd_vars[1] = 0;
+    }
+    
+    if (ftBossLib_8015C2E0() != 0 || ftBossLib_8015C358() != 0 ||
+        ftAnim_IsFramesRemaining(gobj) == 0)
+    {
+        fp = gobj->user_data;
+        Fighter_UnkSetFlag_8006CFBC(gobj);
+        fp->x1A5C = 0;
+        ftCh_GrabUnk1_8015BC88(gobj);
+    }
+}
 void ftCh_Squeeze_IASA(HSD_GObj* gobj)
 {
     Fighter* ft = GET_FIGHTER(gobj);
