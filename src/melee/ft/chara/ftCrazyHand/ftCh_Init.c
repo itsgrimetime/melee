@@ -67,6 +67,8 @@
 /* static */ void ftCh_TagFail_Anim(Fighter_GObj* gobj);
 /* static */ void ftCh_GrabUnk1_8015B800(Fighter_GObj* gobj);
 /* static */ void ftCh_GrabUnk1_8015A888(Fighter_GObj* gobj);
+/* static */ void fn_8015746C(Fighter_GObj* gobj);
+/* static */ void fn_8015755C(Fighter_GObj* gobj);
 
 MotionState ftCh_Init_MotionStateTable[ftCh_MS_SelfCount] = {
     {
@@ -826,7 +828,11 @@ void ftCh_WaitSweep_IASA(HSD_GObj* gobj)
 
 void ftCh_WaitSweep_Coll(HSD_GObj* gobj) {}
 
-/// #fn_8015746C
+void fn_8015746C(Fighter_GObj* gobj)
+{
+    Fighter_ChangeMotionState(gobj, ftMh_MS_SweepLoop, 0, 0, 1.0f, 1.0f, NULL);
+    ftAnim_8006EBA4(gobj);
+}
 
 void ftCh_SweepLoop_Anim(HSD_GObj* gobj)
 {
@@ -850,7 +856,11 @@ void ftCh_SweepLoop_Phys(HSD_GObj* gobj)
 
 void ftCh_SweepLoop_Coll(HSD_GObj* gobj) {}
 
-/// #fn_8015755C
+void fn_8015755C(Fighter_GObj* gobj)
+{
+    Fighter_ChangeMotionState(gobj, ftMh_MS_SweepWait, 0, 0, 1.0f, 1.0f, NULL);
+    ftAnim_8006EBA4(gobj);
+}
 
 void ftCh_SweepWait_Anim(HSD_GObj* gobj)
 {
