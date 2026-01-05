@@ -775,6 +775,7 @@ static void fn_800D54A4(Fighter_GObj* gobj)
 
 void fn_800D55B4(Fighter_GObj* gobj)
 {
+    u8 _pad[8];
     Fighter* fp = gobj->user_data;
     HSD_GObj* other_gobj = Player_GetEntityAtIndex(fp->player_id, 0);
     Fighter* other_fp = other_gobj->user_data;
