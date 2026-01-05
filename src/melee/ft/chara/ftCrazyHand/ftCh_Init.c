@@ -884,7 +884,13 @@ void ftCh_Slap_IASA(HSD_GObj* gobj)
     }
 }
 
-/// #ftCh_Slap_Phys
+void ftCh_Slap_Phys(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    ftMasterHand_SpecialAttrs* da = fp->ft_data->ext_attr;
+    ft_80085134(gobj);
+    fp->self_vel.x += da->x40_pos.x;
+}
 
 /// #fn_801577B4
 
@@ -943,7 +949,14 @@ void ftCh_WalkWait_IASA(HSD_GObj* gobj)
     }
 }
 
-/// #ftCh_WalkWait_Phys
+void ftCh_WalkWait_Phys(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    ftMasterHand_SpecialAttrs* da = fp->ft_data->ext_attr;
+    ft_80085134(gobj);
+    ftBossLib_8015C010(gobj, da->x68);
+    ftBossLib_8015C190(gobj);
+}
 
 void ftCh_WalkWait_Coll(HSD_GObj* gobj) {}
 
