@@ -81,6 +81,11 @@
 /* static */ void ftCh_GrabUnk1_8015AC50(HSD_GObj* gobj);
 /* static */ void ftCh_BackDisappear_Phys(Fighter_GObj* gobj);
 /* static */ void ftCh_TagCancel_Coll(Fighter_GObj* gobj);
+/* static */ void ftCh_BackPunch_Phys(Fighter_GObj* gobj);
+/* static */ void ftCh_FingerGun1_Phys(Fighter_GObj* gobj);
+/* static */ void ftCh_FingerGun2_Anim(HSD_GObj* gobj);
+/* static */ void ftCh_Init_801592D4(HSD_GObj* gobj);
+/* static */ void ftCh_Init_80158F34(HSD_GObj* gobj);
 
 MotionState ftCh_Init_MotionStateTable[ftCh_MS_SelfCount] = {
     {
@@ -1260,6 +1265,14 @@ void ftCh_BackPunch_IASA(HSD_GObj* gobj)
 
 /// #ftCh_BackPunch_Phys
 
+void ftCh_BackPunch_Phys(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    ftCrazyHand_DatAttrs* da = fp->ft_data->ext_attr;
+    ft_80085134(gobj);
+    ftBossLib_8015BE40(gobj, &fp->mv.mh.unk0.xC, &fp->mv.mh.unk0.x18, da->x14, *(float*)&da->x10);
+}
+
 void ftCh_BackPunch_Coll(HSD_GObj* gobj) {}
 
 /// #ftCh_Init_80159098
@@ -1275,6 +1288,14 @@ void ftCh_FingerGun1_IASA(HSD_GObj* gobj)
 }
 
 /// #ftCh_FingerGun1_Phys
+
+void ftCh_FingerGun1_Phys(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    ftCrazyHand_DatAttrs* da = fp->ft_data->ext_attr;
+    ft_80085134(gobj);
+    ftBossLib_8015BE40(gobj, &fp->mv.mh.unk0.xC, &fp->mv.mh.unk0.x18, da->x14, *(float*)&da->x10);
+}
 
 void ftCh_FingerGun1_Coll(Fighter_GObj* gobj)
 {
@@ -1667,6 +1688,18 @@ void ftCh_TagRockPaper_Coll(HSD_GObj* gobj) {}
 /// #ftCh_GrabUnk1_8015AC50
 
 /// #ftCh_FingerGun2_Anim
+
+void ftCh_FingerGun2_Anim(HSD_GObj* gobj)
+{
+    if (ftAnim_IsFramesRemaining(gobj) == 0) {
+        Fighter* fp = GET_FIGHTER(gobj);
+        if (fp->mv.mh.unk0.x20 == 1) {
+            ftCh_Init_801592D4(gobj);
+        } else {
+            ftCh_Init_80158F34(gobj);
+        }
+    }
+}
 
 void ftCh_FingerGun2_IASA(HSD_GObj* gobj)
 {
