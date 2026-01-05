@@ -10,6 +10,7 @@
 #include "ft/chara/ftCommon/ftCo_CaptureCut.h"
 #include "ft/fighter.h"
 #include "ft/ft_081B.h"
+#include "ft/ftanim.h"
 #include "ft/ftbosslib.h"
 #include "ft/ftcamera.h"
 #include "ft/inlines.h"
@@ -65,6 +66,7 @@
 /* static */ void fn_8015AAC8(Fighter_GObj* gobj);
 /* static */ void ftCh_TagFail_Anim(Fighter_GObj* gobj);
 /* static */ void ftCh_GrabUnk1_8015B800(Fighter_GObj* gobj);
+/* static */ void ftCh_GrabUnk1_8015A888(Fighter_GObj* gobj);
 
 MotionState ftCh_Init_MotionStateTable[ftCh_MS_SelfCount] = {
     {
@@ -1494,7 +1496,11 @@ void ftCh_Fail_Phys(HSD_GObj* gobj)
 
 void ftCh_Fail_Coll(HSD_GObj* gobj) {}
 
-/// #ftCh_GrabUnk1_8015A888
+void ftCh_GrabUnk1_8015A888(Fighter_GObj* gobj)
+{
+    Fighter_ChangeMotionState(gobj, ftMh_MS_TagCrush, 0, 0, 1.0f, 1.0f, NULL);
+    ftAnim_8006EBA4(gobj);
+}
 
 void ftCh_TagCrush_Anim(HSD_GObj* gobj)
 {
