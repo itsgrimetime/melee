@@ -6,6 +6,7 @@
 #include "gr/stage.h"
 #include "gr/grzakogenerator.h"
 #include "gr/inlines.h"
+#include "mp/mplib.h"
 
 #include <baselib/aobj.h>
 #include <baselib/gobj.h>
