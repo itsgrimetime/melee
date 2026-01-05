@@ -1352,7 +1352,12 @@ void ftCh_Cancel_IASA(HSD_GObj* gobj)
     }
 }
 
-/// #ftCh_Cancel_Phys
+void ftCh_Cancel_Phys(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    ftMasterHand_SpecialAttrs* da = fp->ft_data->ext_attr;
+    ftBossLib_8015BF74(gobj, da->xDC);
+}
 
 void ftCh_Cancel_Coll(HSD_GObj* gobj) {}
 
@@ -1565,7 +1570,13 @@ void ftCh_TagGrab_IASA(HSD_GObj* gobj)
     }
 }
 
-/// #ftCh_TagGrab_Phys
+void ftCh_TagGrab_Phys(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    ftMasterHand_SpecialAttrs* da = fp->ft_data->ext_attr;
+    fp->self_vel.y += da->x12C_pos.y;
+    fp->self_vel.z += da->x134_pos.y;
+}
 
 void ftCh_TagGrab_Coll(HSD_GObj* gobj) {}
 
