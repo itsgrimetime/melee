@@ -1481,7 +1481,13 @@ void ftCh_BackAirplane1_Coll(Fighter_GObj* gobj)
     }
 }
 
-/// #ftCh_Init_801594D4
+void ftCh_Init_801594D4(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    Fighter_ChangeMotionState(gobj, 0x170, 0, 0.0f, 1.0f, 0.0f, NULL);
+    ftAnim_8006EBA4(gobj);
+    fp->cmd_vars[0] = 0;
+}
 
 /// #ftCh_BackAirplane2_Anim
 
@@ -1500,7 +1506,13 @@ void ftCh_BackAirplane2_Phys(HSD_GObj* gobj)
 
 void ftCh_BackAirplane2_Coll(HSD_GObj* gobj) {}
 
-/// #ftCh_Init_80159670
+void ftCh_Init_80159670(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    Fighter_ChangeMotionState(gobj, 0x171, 0, 0.0f, 1.0f, 0.0f, NULL);
+    ftAnim_8006EBA4(gobj);
+    fp->cmd_vars[0] = 0;
+}
 
 /// #ftCh_BackAirplane3_Anim
 
@@ -1519,7 +1531,13 @@ void ftCh_BackAirplane3_Phys(HSD_GObj* gobj)
 
 void ftCh_BackAirplane3_Coll(HSD_GObj* gobj) {}
 
-/// #ftCh_Init_801597F0
+void ftCh_Init_801597F0(Fighter_GObj* gobj, HSD_GObjEvent callback)
+{
+    Fighter* fp = gobj->user_data;
+    Fighter_ChangeMotionState(gobj, 0x173, 0, 0.0f, 1.0f, 0.0f, NULL);
+    ftAnim_8006EBA4(gobj);
+    fp->mv.mh.unk0.x4 = callback;
+}
 
 void ftCh_BackCrush_Anim(HSD_GObj* gobj)
 {
@@ -1964,7 +1982,16 @@ void ftCh_TagFail_Coll(HSD_GObj* gobj) {}
 
 /// #fn_8015B2C0
 
-/// #fn_8015B4EC
+bool fn_8015B4EC(Vec3* out_pos)
+{
+    HSD_GObj* gobj = ftBossLib_8015C3E8(0x1C);
+    if (gobj != NULL) {
+        Fighter* fp = gobj->user_data;
+        lb_8000B1CC(fp->parts[5].joint, 0, out_pos);
+        return true;
+    }
+    return false;
+}
 
 /// #fn_8015B548
 
