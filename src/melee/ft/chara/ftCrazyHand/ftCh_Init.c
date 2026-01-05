@@ -1310,7 +1310,16 @@ void ftCh_FingerBeamLoop_IASA(HSD_GObj* gobj)
 
 void ftCh_FingerBeamLoop_Coll(HSD_GObj* gobj) {}
 
-/// #ftCh_Init_80158DFC
+/* static */ void fn_8015B548(Fighter_GObj* gobj);
+
+void ftCh_Init_80158DFC(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    Fighter_ChangeMotionState(gobj, 0x16B, 0, 0.0f, 1.0f, 0.0f, NULL);
+    ftAnim_8006EBA4(gobj);
+    ftCommon_8007E2D0(fp, 0x100, fn_80159288, NULL, fn_8015B548);
+    fp->mv.mh.unk0.x20 = 0;
+}
 
 void ftCh_FingerBeamEnd_Anim(HSD_GObj* gobj)
 {
@@ -1338,7 +1347,16 @@ void ftCh_FingerBeamEnd_Phys(HSD_GObj* gobj)
 
 void ftCh_FingerBeamEnd_Coll(HSD_GObj* gobj) {}
 
-/// #ftCh_Init_80158F34
+void ftCh_Init_80158F34(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    ftMasterHand_SpecialAttrs* da = fp->ft_data->ext_attr;
+    Fighter_ChangeMotionState(gobj, 0x172, 0, 0.0f, 1.0f, 0.0f, NULL);
+    ftAnim_8006EBA4(gobj);
+    fp->mv.mh.unk0.xC.x = *(float*)&da->x18;
+    fp->mv.mh.unk0.xC.y = *(float*)&da->x1C;
+    fp->mv.mh.unk0.xC.z = 0.0f;
+}
 
 void ftCh_BackPunch_Anim(HSD_GObj* gobj)
 {
@@ -1366,7 +1384,21 @@ void ftCh_BackPunch_Phys(Fighter_GObj* gobj)
 
 void ftCh_BackPunch_Coll(HSD_GObj* gobj) {}
 
-/// #ftCh_Init_80159098
+void ftCh_Init_80159098(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    ftMasterHand_SpecialAttrs* da = fp->ft_data->ext_attr;
+    Fighter_ChangeMotionState(gobj, 0x16C, 0, 0.0f, 1.0f, 0.0f, NULL);
+    ftAnim_8006EBA4(gobj);
+    fp->mv.mh.unk0.x24 = da->xD8;
+    fp->cmd_vars[0] = 1;
+    fp->self_vel.x = 0.0f;
+    fp->self_vel.y = 0.0f;
+    fp->self_vel.z = 0.0f;
+    fp->mv.mh.unk0.xC.x = *(float*)&da->x18;
+    fp->mv.mh.unk0.xC.y = *(float*)&da->x1C;
+    fp->mv.mh.unk0.xC.z = 0.0f;
+}
 
 /// #ftCh_FingerGun1_Anim
 
