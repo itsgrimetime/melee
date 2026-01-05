@@ -1222,7 +1222,23 @@ void ftCh_Init_801583E4(Fighter_GObj* gobj)
     fp->cmd_vars[0] = 1;
 }
 
-/// #ftCh_Poke1_Anim
+/* static */ void ftCh_Init_8015868C(Fighter_GObj* gobj);
+
+void ftCh_Poke1_Anim(HSD_GObj* gobj)
+{
+    if (ftAnim_IsFramesRemaining(gobj) == 0) {
+        Fighter* fp = gobj->user_data;
+        ftCh_Init_8015868C(gobj);
+        it_802F046C((Item_GObj*) fp->mv.mh.dmg0.x28);
+        it_802F046C((Item_GObj*) fp->mv.mh.dmg0.x2C);
+        it_802F046C((Item_GObj*) fp->mv.mh.dmg0.x30);
+        it_802F046C(fp->mv.mh.dmg0.x34);
+        fp->mv.mh.dmg0.x28 = 0;
+        fp->mv.mh.dmg0.x2C = 0;
+        fp->mv.mh.dmg0.x30 = 0;
+        fp->mv.mh.dmg0.x34 = 0;
+    }
+}
 
 void ftCh_Poke1_IASA(HSD_GObj* gobj)
 {
@@ -1461,7 +1477,25 @@ void fn_80159288(Fighter_GObj* gobj)
 
 /// #ftCh_Init_801592D4
 
-/// #ftCh_BackAirplane1_Anim
+/* static */ void ftCh_Init_801594D4(Fighter_GObj* gobj);
+/* static */ void ftCh_Init_80159670(Fighter_GObj* gobj);
+
+void ftCh_BackAirplane1_Anim(HSD_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    if (fp->cmd_vars[1] != 0) {
+        ftBossLib_8015C5F8(gobj);
+        fp->cmd_vars[1] = 0;
+    }
+    if (ftAnim_IsFramesRemaining(gobj) == 0) {
+        fp = gobj->user_data;
+        if (fp->fv.ch.x2250 == 0x170) {
+            ftCh_Init_801594D4(gobj);
+        } else {
+            ftCh_Init_80159670(gobj);
+        }
+    }
+}
 
 void ftCh_BackAirplane1_IASA(HSD_GObj* gobj)
 {
@@ -1720,7 +1754,17 @@ void ftCh_Init_8015A2B0(Fighter_GObj* gobj)
     ftAnim_8006EBA4(gobj);
 }
 
-/// #ftCh_Squeezing1_Anim
+void ftCh_Squeezing1_Anim(HSD_GObj* gobj)
+{
+    if (ftBossLib_8015C2E0() != 0 || ftBossLib_8015C358() != 0 ||
+        ftAnim_IsFramesRemaining(gobj) == 0)
+    {
+        Fighter* fp = gobj->user_data;
+        Fighter_UnkSetFlag_8006CFBC(gobj);
+        fp->x1A5C = 0;
+        ftCh_GrabUnk1_8015BC88(gobj);
+    }
+}
 
 void ftCh_Squeezing1_IASA(HSD_GObj* gobj)
 {
