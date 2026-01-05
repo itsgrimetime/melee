@@ -1176,8 +1176,20 @@ void ftCh_Drill_Phys(HSD_GObj* gobj)
 }
 void ftCh_Drill_Coll(HSD_GObj* gobj) {}
 
-/// #ftCh_Init_80157DF8
-
+void ftCh_Init_80157DF8(HSD_GObj* gobj)
+{
+    s32 unused[2];
+    Fighter* fp = gobj->user_data;
+    f32 zero = 0.0f;
+    f32 one = 1.0f;
+    ftMasterHand_SpecialAttrs* attrs = fp->ft_data->ext_attr;
+    
+    Fighter_ChangeMotionState(gobj, 0x163, 0, zero, one, zero, NULL);
+    ftAnim_8006EBA4(gobj);
+    
+    fp->mv.mh.unk0.x0 = (f32)(*(s32*)&attrs->x58 + HSD_Randi(*(s32*)&attrs->x50.y - *(s32*)&attrs->x58));
+    *(f32*)&fp->mv.mh.unk0.x4 = 0.0f;
+}
 /// #ftCh_RockCrushUp_Anim
 
 void ftCh_RockCrushWait_Anim(HSD_GObj* gobj)
@@ -1871,11 +1883,11 @@ void ftCh_Init_8015A030(HSD_GObj* gobj)
     f32 zero = 0.0f;
     f32 one = 1.0f;
     ftMasterHand_SpecialAttrs* attrs = fp->ft_data->ext_attr;
-    
+
     Fighter_ChangeMotionState(gobj, 0x177, 0, zero, one, zero, NULL);
     ftAnim_8006EBA4(gobj);
     ftBossLib_8015C208(gobj, &stack_vec);
-    
+
     fp->cur_pos.x = stack_vec.x;
     fp->cur_pos.y = attrs->xE0;
     fp->self_vel.z = 0.0f;
