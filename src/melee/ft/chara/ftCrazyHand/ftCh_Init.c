@@ -8,6 +8,7 @@
 #include "baselib/forward.h"
 
 #include "ft/chara/ftCommon/ftCo_CaptureCut.h"
+#include "ft/chara/ftCommon/ftCo_Thrown.h"
 #include "ft/fighter.h"
 #include "ft/ft_081B.h"
 #include "ft/ftanim.h"
@@ -26,6 +27,7 @@
 #include <dolphin/mtx.h>
 
 /* static */ void fn_8015B2C0(HSD_GObj*);
+/* static */ void ftCh_GrabUnk1_8015B850(HSD_GObj*, int);
 /* static */ void ftCh_Init_801566B4(void);
 /* static */ void ftCh_Init_80156A5C(void);
 /* static */ void ftCh_Init_80156688(void);
@@ -2400,8 +2402,26 @@ void ftCo_CaptureWaitCrazyHand_Phys(HSD_GObj* gobj) {}
 
 void ftCo_CaptureWaitCrazyHand_Coll(HSD_GObj* gobj) {}
 
-/// #ftCh_GrabUnk1_8015B850
+void ftCh_GrabUnk1_8015B850(HSD_GObj* gobj, int unused_state)
+{
+    s32 unused[4];
+    Fighter* fp = gobj->user_data;
+    HSD_GObj* victim_gobj = fp->victim_gobj;
+    Fighter* victim_fp = victim_gobj->user_data;
+    s32 flag = 0;
 
+    fp->facing_dir = victim_fp->facing_dir;
+    *(s32*) &fp->mv.mh.unk0.x0 = flag;
+    {
+        f32 zero = 0.0f;
+        f32 one = 1.0f;
+        Fighter_ChangeMotionState(gobj, 0x153, 0, zero, one, zero, NULL);
+    }
+    fp->invisible = flag;
+    fp->accessory1_cb = ftCo_800DE508;
+    ftCommon_8007E2F4(fp, 0x1FF);
+    ftAnim_8006EBA4(gobj);
+}
 void ftCo_ThrownCrazyHand_Anim(HSD_GObj* gobj) {}
 
 void ftCo_ThrownCrazyHand_IASA(HSD_GObj* gobj) {}
