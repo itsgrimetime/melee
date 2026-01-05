@@ -25,6 +25,7 @@
 #include <common_structs.h>
 #include <dolphin/mtx.h>
 
+/* static */ void fn_8015B2C0(HSD_GObj*);
 /* static */ void ftCh_Init_801566B4(void);
 /* static */ void ftCh_Init_80156A5C(void);
 /* static */ void ftCh_Init_80156688(void);
@@ -733,15 +734,23 @@ void ftCh_Init_LoadSpecialAttrs(HSD_GObj* gobj)
 }
 
 /* static */ void ftCh_Init_80156310(HSD_GObj* gobj);
-/* static */ void ftCh_GrabUnk1_8015B174(HSD_GObj* gobj);
-
-void ftCh_Init_80155FCC(HSD_GObj* gobj)
+void ftCh_GrabUnk1_8015B174(HSD_GObj* gobj)
 {
-    if (Stage_80225194() == 0xFB) {
-        ftCh_Init_80156310(gobj);
-    } else {
-        ftCh_GrabUnk1_8015B174(gobj);
-    }
+    Fighter* fp = gobj->user_data;
+    f32 zero = 0.0f;
+    f32 one = 1.0f;
+    ftMasterHand_SpecialAttrs* attrs = fp->ft_data->ext_attr;
+
+    Fighter_ChangeMotionState(gobj, 0x183, 0, zero, one, zero, NULL);
+    ftAnim_8006EBA4(gobj);
+
+    fp->cur_pos.x = *(f32*) &attrs->x18;
+    fp->cur_pos.y = *(f32*) &attrs->x1C;
+    fp->cur_pos.z = 0.0f;
+    fp->accessory4_cb = fn_8015B2C0;
+    *(s32*) &fp->mv.mh.unk0.x0 = 0;
+    ft_800881D8(fp, 0x4E202, 0x7F, 0x40);
+    ftBossLib_8015C09C(gobj, 1.0f);
 }
 
 void ftCh_Init_80156014(HSD_GObj* gobj) {}
@@ -1183,12 +1192,14 @@ void ftCh_Init_80157DF8(HSD_GObj* gobj)
     f32 zero = 0.0f;
     f32 one = 1.0f;
     ftMasterHand_SpecialAttrs* attrs = fp->ft_data->ext_attr;
-    
+
     Fighter_ChangeMotionState(gobj, 0x163, 0, zero, one, zero, NULL);
     ftAnim_8006EBA4(gobj);
-    
-    fp->mv.mh.unk0.x0 = (f32)(*(s32*)&attrs->x58 + HSD_Randi(*(s32*)&attrs->x50.y - *(s32*)&attrs->x58));
-    *(f32*)&fp->mv.mh.unk0.x4 = 0.0f;
+
+    fp->mv.mh.unk0.x0 =
+        (f32) (*(s32*) &attrs->x58 +
+               HSD_Randi(*(s32*) &attrs->x50.y - *(s32*) &attrs->x58));
+    *(f32*) &fp->mv.mh.unk0.x4 = 0.0f;
 }
 /// #ftCh_RockCrushUp_Anim
 
@@ -2316,8 +2327,6 @@ void ftCh_TagGrab_Phys(Fighter_GObj* gobj)
 }
 
 void ftCh_TagGrab_Coll(HSD_GObj* gobj) {}
-
-/// #ftCh_GrabUnk1_8015B174
 
 void ftCh_TagFail_Anim(Fighter_GObj* gobj)
 {
