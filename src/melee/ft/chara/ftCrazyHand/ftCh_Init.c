@@ -1677,7 +1677,18 @@ void ftCh_Cancel_Phys(Fighter_GObj* gobj)
 
 void ftCh_Cancel_Coll(HSD_GObj* gobj) {}
 
-/// #ftCh_Init_8015A184
+void ftCh_Init_8015A184(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    ftMasterHand_SpecialAttrs* da = fp->ft_data->ext_attr;
+    Fighter_ChangeMotionState(gobj, 0x178, 0, 0.0f, 1.0f, 0.0f, NULL);
+    ftAnim_8006EBA4(gobj);
+    fp->cur_pos.x = da->xE4;
+    fp->cur_pos.y = da->xE8;
+    fp->self_vel.z = 0.0f;
+    fp->self_vel.y = 0.0f;
+    fp->self_vel.x = 0.0f;
+}
 
 void ftCh_Squeezing0_Anim(HSD_GObj* gobj)
 {
