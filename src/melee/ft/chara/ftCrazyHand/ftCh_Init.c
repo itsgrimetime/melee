@@ -1191,7 +1191,15 @@ void ftCh_FingerGun1_IASA(HSD_GObj* gobj)
 
 /// #ftCh_FingerGun1_Phys
 
-/// #ftCh_FingerGun1_Coll
+void ftCh_FingerGun1_Coll(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    if (fp->mv.mh.unk0.x18 == 0.0f) {
+        fp->self_vel.z = 0.0f;
+        fp->self_vel.y = 0.0f;
+        fp->self_vel.x = 0.0f;
+    }
+}
 
 /// #fn_80159288
 
@@ -1209,7 +1217,15 @@ void ftCh_BackAirplane1_IASA(HSD_GObj* gobj)
 
 /// #ftCh_BackAirplane1_Phys
 
-/// #ftCh_BackAirplane1_Coll
+void ftCh_BackAirplane1_Coll(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    if (fp->mv.mh.unk0.x18 == 0.0f) {
+        fp->self_vel.z = 0.0f;
+        fp->self_vel.y = 0.0f;
+        fp->self_vel.x = 0.0f;
+    }
+}
 
 /// #ftCh_Init_801594D4
 
@@ -1491,7 +1507,15 @@ void ftCh_TagApplaud_IASA(HSD_GObj* gobj)
 
 /// #ftCh_TagApplaud_Phys
 
-/// #ftCh_TagApplaud_Coll
+void ftCh_TagApplaud_Coll(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    if (fp->mv.mh.unk0.x18 == 0.0f) {
+        fp->self_vel.z = 0.0f;
+        fp->self_vel.y = 0.0f;
+        fp->self_vel.x = 0.0f;
+    }
+}
 
 /// #fn_8015AAC8
 
