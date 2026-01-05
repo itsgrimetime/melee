@@ -76,6 +76,11 @@
 /* static */ void fn_80159288(Fighter_GObj* gobj);
 /* static */ void ftCh_Init_80159F40(Fighter_GObj* gobj);
 /* static */ void ftCh_GrabUnk1_8015ABD0(Fighter_GObj* gobj);
+/* static */ void ftCh_Init_80157B58(Fighter_GObj* gobj);
+/* static */ void ftCh_FingerBeamEnd_Anim(HSD_GObj* gobj);
+/* static */ void ftCh_GrabUnk1_8015AC50(HSD_GObj* gobj);
+/* static */ void ftCh_BackDisappear_Phys(Fighter_GObj* gobj);
+/* static */ void ftCh_TagCancel_Coll(Fighter_GObj* gobj);
 
 MotionState ftCh_Init_MotionStateTable[ftCh_MS_SelfCount] = {
     {
@@ -1005,6 +1010,14 @@ void ftCh_WalkWait_Coll(HSD_GObj* gobj) {}
 
 /// #ftCh_Init_80157B58
 
+void ftCh_Init_80157B58(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    fp->self_vel.x = 0.0f;
+    Fighter_ChangeMotionState(gobj, ftMh_MS_WalkShoot, 0, 0, 0.0f, 1.0f, NULL);
+    ftAnim_8006EBA4(gobj);
+}
+
 void ftCh_WalkShoot_Anim(HSD_GObj* gobj)
 {
     if (ftAnim_IsFramesRemaining(gobj) == 0) {
@@ -1202,6 +1215,17 @@ void ftCh_FingerBeamLoop_Coll(HSD_GObj* gobj) {}
 
 /// #ftCh_FingerBeamEnd_Anim
 
+void ftCh_FingerBeamEnd_Anim(HSD_GObj* gobj)
+{
+    if (ftAnim_IsFramesRemaining(gobj) == 0) {
+        Fighter* fp = GET_FIGHTER(gobj);
+        fp->self_vel.z = 0.0f;
+        fp->self_vel.y = 0.0f;
+        fp->self_vel.x = 0.0f;
+        ftCh_GrabUnk1_8015AC50(gobj);
+    }
+}
+
 void ftCh_FingerBeamEnd_IASA(HSD_GObj* gobj)
 {
     Fighter* ft = GET_FIGHTER(gobj);
@@ -1369,6 +1393,19 @@ void ftCh_BackDisappear_IASA(HSD_GObj* gobj)
 }
 
 /// #ftCh_BackDisappear_Phys
+
+void ftCh_BackDisappear_Phys(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    float new_val = fp->mv.mh.unk0.x0 - 1.0f;
+    fp->mv.mh.unk0.x0 = new_val;
+    if (new_val > 0.0f) {
+        ftMasterHand_SpecialAttrs* da = fp->ft_data->ext_attr;
+        ftBossLib_8015BF74(gobj, da->xDC);
+    } else {
+        fp->self_vel.x = 0.0f;
+    }
+}
 
 void ftCh_BackDisappear_Coll(HSD_GObj* gobj) {}
 
@@ -1753,6 +1790,19 @@ void ftCo_ThrownCrazyHand_Coll(HSD_GObj* gobj) {}
 /// #ftCh_TagCancel_Phys
 
 /// #ftCh_TagCancel_Coll
+
+void ftCh_TagCancel_Coll(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    if (fp->mv.mh.unk0.x18 == 0.0f) {
+        fp->self_vel.z = 0.0f;
+        fp->self_vel.y = 0.0f;
+        fp->self_vel.x = 0.0f;
+        if (fp->mv.mh.unk0.x4 != NULL) {
+            fp->mv.mh.unk0.x4(gobj);
+        }
+    }
+}
 
 /// #ftCh_GrabUnk1_8015BC88
 
