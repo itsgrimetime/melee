@@ -1211,7 +1211,16 @@ void ftCh_PaperCrush_Phys(HSD_GObj* gobj)
 
 void ftCh_PaperCrush_Coll(HSD_GObj* gobj) {}
 
-/// #ftCh_Init_801583E4
+/* static */ void fn_80158534(HSD_GObj* gobj);
+
+void ftCh_Init_801583E4(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    Fighter_ChangeMotionState(gobj, 0x167, 0, 0.0f, 1.0f, 0.0f, NULL);
+    ftAnim_8006EBA4(gobj);
+    fp->accessory4_cb = fn_80158534;
+    fp->cmd_vars[0] = 1;
+}
 
 /// #ftCh_Poke1_Anim
 
@@ -1692,7 +1701,13 @@ void ftCh_Squeezing0_Phys(HSD_GObj* gobj)
 
 void ftCh_Squeezing0_Coll(HSD_GObj* gobj) {}
 
-/// #ftCh_Init_8015A2B0
+void ftCh_Init_8015A2B0(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    fp->x1A5C = ftBossLib_8015C3E8(0x1B);
+    Fighter_ChangeMotionState(gobj, 0x179, 0, 0.0f, 1.0f, 0.0f, NULL);
+    ftAnim_8006EBA4(gobj);
+}
 
 /// #ftCh_Squeezing1_Anim
 
@@ -1711,7 +1726,14 @@ void ftCh_Squeezing1_Phys(HSD_GObj* gobj)
 
 void ftCh_Squeezing1_Coll(HSD_GObj* gobj) {}
 
-/// #ftCh_Init_8015A3F4
+void ftCh_Init_8015A3F4(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    fp->cmd_vars[1] = 0;
+    fp->x1A5C = ftBossLib_8015C3E8(0x1B);
+    Fighter_ChangeMotionState(gobj, 0x17A, 0, 0.0f, 1.0f, 0.0f, NULL);
+    ftAnim_8006EBA4(gobj);
+}
 
 /// #ftCh_Squeeze_Anim
 
