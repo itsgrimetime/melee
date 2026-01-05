@@ -7,6 +7,7 @@
 
 #include "baselib/forward.h"
 
+#include "ft/fighter.h"
 #include "ft/ft_081B.h"
 #include "ft/ftbosslib.h"
 #include "ft/ftcamera.h"
@@ -60,6 +61,7 @@
 /* static */ void ftCh_Init_801568E8(void);
 /* static */ void ftCh_Init_80156918(void);
 /* static */ void ftCh_Init_80156948(void);
+/* static */ void fn_8015AAC8(Fighter_GObj* gobj);
 
 MotionState ftCh_Init_MotionStateTable[ftCh_MS_SelfCount] = {
     {
@@ -1522,7 +1524,12 @@ void ftCh_TagApplaud_Coll(Fighter_GObj* gobj)
     }
 }
 
-/// #fn_8015AAC8
+void fn_8015AAC8(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    Fighter_ChangeMotionState(gobj, ftMh_MS_TagRockPaper, 0,
+                              fp->cur_anim_frame, 1.0f, 0.0f, NULL);
+}
 
 /// #ftCh_TagRockPaper_Anim
 
