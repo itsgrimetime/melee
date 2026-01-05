@@ -1969,14 +1969,14 @@ void ftCh_Throw_Anim(HSD_GObj* gobj)
 {
     Fighter* fp;
     s32 unused[2];
-    
+
     fp = gobj->user_data;
-    
+
     if (fp->cmd_vars[1] != 0) {
         ftBossLib_8015C5F8(gobj);
         fp->cmd_vars[1] = 0;
     }
-    
+
     if (ftBossLib_8015C2E0() != 0 || ftBossLib_8015C358() != 0 ||
         ftAnim_IsFramesRemaining(gobj) == 0)
     {
@@ -2155,8 +2155,20 @@ void ftCh_TagRockPaper_Phys(HSD_GObj* gobj) {}
 
 void ftCh_TagRockPaper_Coll(HSD_GObj* gobj) {}
 
-/// #ftCh_GrabUnk1_8015ABD0
-
+void ftCh_GrabUnk1_8015ABD0(HSD_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    ftMasterHand_SpecialAttrs* attrs = fp->ft_data->ext_attr;
+    f32 zero = 0.0f;
+    f32 one = 1.0f;
+    
+    Fighter_ChangeMotionState(gobj, 0x16D, 0, zero, one, zero, NULL);
+    ftAnim_8006EBA4(gobj);
+    
+    fp->mv.mh.unk0.xC.x = attrs->xCC_pos.y;
+    fp->mv.mh.unk0.xC.y = attrs->xD4;
+    fp->mv.mh.unk0.xC.z = 0.0f;
+}
 /// #ftCh_GrabUnk1_8015AC50
 
 void ftCh_FingerGun2_Anim(HSD_GObj* gobj)
