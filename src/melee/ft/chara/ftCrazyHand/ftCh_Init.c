@@ -787,7 +787,11 @@ void ftCh_Entry_Phys(HSD_GObj* gobj)
 
 void ftCh_Entry_Coll(HSD_GObj* gobj) {}
 
-/// #fn_80157080
+void fn_80157080(Fighter_GObj* gobj)
+{
+    Fighter_ChangeMotionState(gobj, 0x158, 0, 0.0f, 1.0f, 0.0f, NULL);
+    ftAnim_8006EBA4(gobj);
+}
 
 void ftCh_Damage_Anim(HSD_GObj* gobj)
 {
@@ -1088,7 +1092,13 @@ void ftCh_WalkShoot_Phys(HSD_GObj* gobj)
 
 void ftCh_WalkShoot_Coll(HSD_GObj* gobj) {}
 
-/// #fn_80157C50
+void fn_80157C50(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    Fighter_ChangeMotionState(gobj, 0x162, 0, 0.0f, 1.0f, 0.0f, NULL);
+    ftAnim_8006EBA4(gobj);
+    fp->mv.mh.unk0.x0 = 0.0f;
+}
 
 void ftCh_Drill_Anim(HSD_GObj* gobj)
 {
@@ -1132,7 +1142,13 @@ void ftCh_RockCrushUp_IASA(HSD_GObj* gobj)
 
 void ftCh_RockCrushUp_Coll(HSD_GObj* gobj) {}
 
-/// #fn_80158144
+void fn_80158144(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    Fighter_ChangeMotionState(gobj, 0x165, 0, 0.0f, 1.0f, 0.0f, NULL);
+    ftAnim_8006EBA4(gobj);
+    fp->mv.mh.unk0.x0 = 107.0f;
+}
 
 void ftCh_RockCrushDown_Anim(HSD_GObj* gobj)
 {
@@ -1153,7 +1169,15 @@ void ftCh_RockCrushDown_IASA(HSD_GObj* gobj)
 
 void ftCh_RockCrushDown_Coll(HSD_GObj* gobj) {}
 
-/// #fn_801582D8
+void fn_801582D8(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    Fighter_ChangeMotionState(gobj, 0x166, 0, 0.0f, 1.0f, 0.0f, NULL);
+    ftAnim_8006EBA4(gobj);
+    fp->mv.mh.unk0.x38 = -1;
+    fp->mv.mh.unk0.x3C = -1;
+    fp->mv.mh.unk0.x40 = -1;
+}
 
 void ftCh_PaperCrush_Anim(HSD_GObj* gobj)
 {
@@ -1233,7 +1257,18 @@ void ftCh_Poke2_Phys(HSD_GObj* gobj)
 
 void ftCh_Poke2_Coll(HSD_GObj* gobj) {}
 
-/// #fn_801587B0
+/* static */ void fn_801588B8(Fighter_GObj* gobj);
+
+void fn_801587B0(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    Fighter_ChangeMotionState(gobj, 0x169, 0, 0.0f, 1.0f, 0.0f, NULL);
+    fp->cmd_vars[0] = 0;
+    fp->cmd_vars[1] = 0;
+    fp->cmd_vars[2] = 0;
+    fp->cmd_vars[3] = 0;
+    fp->accessory4_cb = fn_801588B8;
+}
 
 void ftCh_FingerBeamStart_Anim(HSD_GObj* gobj)
 {
