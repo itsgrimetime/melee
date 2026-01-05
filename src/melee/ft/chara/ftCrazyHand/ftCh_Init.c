@@ -918,7 +918,13 @@ void ftCh_SweepWait_Phys(HSD_GObj* gobj)
 
 void ftCh_SweepWait_Coll(HSD_GObj* gobj) {}
 
-/// #ftCh_Init_8015764C
+void ftCh_Init_8015764C(Fighter_GObj* gobj)
+{
+    Fighter* fp = GET_FIGHTER(gobj);
+    Fighter_ChangeMotionState(gobj, 0x15D, 0, 0.0f, 1.0f, 0.0f, NULL);
+    ftAnim_8006EBA4(gobj);
+    fp->accessory4_cb = fn_801577B4;
+}
 
 void ftCh_Slap_Anim(HSD_GObj* gobj)
 {
@@ -1192,7 +1198,18 @@ void ftCh_Poke1_Coll(HSD_GObj* gobj) {}
 
 /// #fn_80158534
 
-/// #ftCh_Init_8015868C
+void ftCh_Init_8015868C(Fighter_GObj* gobj)
+{
+    Fighter* fp = GET_FIGHTER(gobj);
+    Fighter_ChangeMotionState(gobj, 0x168, 0, 0.0f, 1.0f, 0.0f, NULL);
+    ftAnim_8006EBA4(gobj);
+    lbAudioAx_800236B8(fp->mv.mh.unk0.x38);
+    lbAudioAx_800236B8(fp->mv.mh.unk0.x3C);
+    lbAudioAx_800236B8(fp->mv.mh.unk0.x40);
+    fp->mv.mh.unk0.x38 = -1;
+    fp->mv.mh.unk0.x3C = -1;
+    fp->mv.mh.unk0.x40 = -1;
+}
 
 void ftCh_Poke2_Anim(HSD_GObj* gobj)
 {
