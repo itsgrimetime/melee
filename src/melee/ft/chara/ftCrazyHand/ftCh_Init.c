@@ -1227,19 +1227,20 @@ void ftCh_RockCrushDown_Phys(HSD_GObj* gobj)
     Fighter* fp = gobj->user_data;
     ftMasterHand_SpecialAttrs* attrs = fp->ft_data->ext_attr;
     f32 temp_f2;
-    
+
     ft_80085134(gobj);
-    
+
     temp_f2 = fp->mv.mh.unk0.x0 - 1.0f;
     fp->mv.mh.unk0.x0 = temp_f2;
-    
-    if (temp_f2 > (f32)*(s32*)&attrs->x40_pos.z || 
-        (temp_f2 = fp->mv.mh.unk0.x0, temp_f2 < 0.0f)) {
+
+    if (temp_f2 > (f32) * (s32*) &attrs->x40_pos.z ||
+        (temp_f2 = fp->mv.mh.unk0.x0, temp_f2 < 0.0f))
+    {
         fp->self_vel.x = 0.0f;
     } else {
         ftBossLib_8015C010(gobj, attrs->x40_pos.y);
     }
-    
+
     ftBossLib_8015C190(gobj);
 }
 void ftCh_RockCrushDown_Coll(HSD_GObj* gobj) {}
@@ -1862,8 +1863,25 @@ void ftCh_Grab_Phys(HSD_GObj* gobj)
 
 void ftCh_Grab_Coll(HSD_GObj* gobj) {}
 
-/// #ftCh_Init_8015A030
-
+void ftCh_Init_8015A030(HSD_GObj* gobj)
+{
+    Vec3 stack_vec;
+    s32 unused;
+    Fighter* fp = gobj->user_data;
+    f32 zero = 0.0f;
+    f32 one = 1.0f;
+    ftMasterHand_SpecialAttrs* attrs = fp->ft_data->ext_attr;
+    
+    Fighter_ChangeMotionState(gobj, 0x177, 0, zero, one, zero, NULL);
+    ftAnim_8006EBA4(gobj);
+    ftBossLib_8015C208(gobj, &stack_vec);
+    
+    fp->cur_pos.x = stack_vec.x;
+    fp->cur_pos.y = attrs->xE0;
+    fp->self_vel.z = 0.0f;
+    fp->self_vel.y = 0.0f;
+    fp->self_vel.x = 0.0f;
+}
 void ftCh_Cancel_Anim(HSD_GObj* gobj)
 {
     if (ftAnim_IsFramesRemaining(gobj) == 0) {
