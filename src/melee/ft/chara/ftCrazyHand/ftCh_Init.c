@@ -732,7 +732,17 @@ void ftCh_Init_LoadSpecialAttrs(HSD_GObj* gobj)
     COPY_ATTRS(gobj, ftCrazyHand_DatAttrs);
 }
 
-/// #ftCh_Init_80155FCC
+/* static */ void ftCh_Init_80156310(HSD_GObj* gobj);
+/* static */ void ftCh_GrabUnk1_8015B174(HSD_GObj* gobj);
+
+void ftCh_Init_80155FCC(HSD_GObj* gobj)
+{
+    if (Stage_80225194() == 0xFB) {
+        ftCh_Init_80156310(gobj);
+    } else {
+        ftCh_GrabUnk1_8015B174(gobj);
+    }
+}
 
 void ftCh_Init_80156014(HSD_GObj* gobj) {}
 
@@ -1353,8 +1363,8 @@ void ftCh_Init_80158F34(Fighter_GObj* gobj)
     ftMasterHand_SpecialAttrs* da = fp->ft_data->ext_attr;
     Fighter_ChangeMotionState(gobj, 0x172, 0, 0.0f, 1.0f, 0.0f, NULL);
     ftAnim_8006EBA4(gobj);
-    fp->mv.mh.unk0.xC.x = *(float*)&da->x18;
-    fp->mv.mh.unk0.xC.y = *(float*)&da->x1C;
+    fp->mv.mh.unk0.xC.x = *(float*) &da->x18;
+    fp->mv.mh.unk0.xC.y = *(float*) &da->x1C;
     fp->mv.mh.unk0.xC.z = 0.0f;
 }
 
@@ -1395,8 +1405,8 @@ void ftCh_Init_80159098(Fighter_GObj* gobj)
     fp->self_vel.x = 0.0f;
     fp->self_vel.y = 0.0f;
     fp->self_vel.z = 0.0f;
-    fp->mv.mh.unk0.xC.x = *(float*)&da->x18;
-    fp->mv.mh.unk0.xC.y = *(float*)&da->x1C;
+    fp->mv.mh.unk0.xC.x = *(float*) &da->x18;
+    fp->mv.mh.unk0.xC.y = *(float*) &da->x1C;
     fp->mv.mh.unk0.xC.z = 0.0f;
 }
 
