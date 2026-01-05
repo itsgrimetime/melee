@@ -2161,16 +2161,28 @@ void ftCh_GrabUnk1_8015ABD0(HSD_GObj* gobj)
     ftMasterHand_SpecialAttrs* attrs = fp->ft_data->ext_attr;
     f32 zero = 0.0f;
     f32 one = 1.0f;
-    
+
     Fighter_ChangeMotionState(gobj, 0x16D, 0, zero, one, zero, NULL);
     ftAnim_8006EBA4(gobj);
-    
+
     fp->mv.mh.unk0.xC.x = attrs->xCC_pos.y;
     fp->mv.mh.unk0.xC.y = attrs->xD4;
     fp->mv.mh.unk0.xC.z = 0.0f;
 }
-/// #ftCh_GrabUnk1_8015AC50
-
+void ftCh_GrabUnk1_8015AC50(HSD_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    ftMasterHand_SpecialAttrs* attrs = fp->ft_data->ext_attr;
+    f32 zero = 0.0f;
+    f32 one = 1.0f;
+    
+    Fighter_ChangeMotionState(gobj, 0x16E, 0, zero, one, zero, NULL);
+    ftAnim_8006EBA4(gobj);
+    
+    fp->mv.mh.unk0.xC.x = *(f32*)&attrs->x18;
+    fp->mv.mh.unk0.xC.y = *(f32*)&attrs->x1C;
+    fp->mv.mh.unk0.xC.z = 0.0f;
+}
 void ftCh_FingerGun2_Anim(HSD_GObj* gobj)
 {
     if (ftAnim_IsFramesRemaining(gobj) == 0) {
