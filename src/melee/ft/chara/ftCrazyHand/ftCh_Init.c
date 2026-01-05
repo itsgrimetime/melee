@@ -1331,8 +1331,25 @@ void ftCh_FingerBeamStart_Coll(HSD_GObj* gobj) {}
 
 /// #ftCh_Init_80158B3C
 
-/// #ftCh_FingerBeamLoop_Anim
+/* static */ void ftCh_Init_80158DFC(Fighter_GObj* gobj);
 
+void ftCh_FingerBeamLoop_Anim(HSD_GObj* gobj)
+{
+    Fighter* fp;
+    s32 unused;
+
+    fp = gobj->user_data;
+    if (--fp->mv.mh.unk0.x8 == 0) {
+        ftAnim_SetAnimRate(gobj, 1.0f);
+        ftCh_Init_80158DFC(gobj);
+    }
+    if (ftAnim_IsFramesRemaining(gobj) == 0) {
+        f32 zero = 0.0f;
+        f32 one = 1.0f;
+        Fighter_ChangeMotionState(gobj, 0x16A, 0, zero, one, zero, NULL);
+        ftAnim_8006EBA4(gobj);
+    }
+}
 void ftCh_FingerBeamLoop_IASA(HSD_GObj* gobj)
 {
     Fighter* ft = GET_FIGHTER(gobj);
@@ -1435,8 +1452,21 @@ void ftCh_Init_80159098(Fighter_GObj* gobj)
     fp->mv.mh.unk0.xC.z = 0.0f;
 }
 
-/// #ftCh_FingerGun1_Anim
-
+void ftCh_FingerGun1_Anim(HSD_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    f32 timer = fp->mv.mh.unk0.x24 -= 1.0f;
+    
+    if (timer <= 0.0f && fp->cmd_vars[0] != 0) {
+        ftCh_GrabUnk1_8015B800(fp->victim_gobj);
+        fp->mv.mh.unk0.x20 = 0;
+        fp->cmd_vars[0] = 0;
+    }
+    
+    if (ftAnim_IsFramesRemaining(gobj) == 0) {
+        ftCh_GrabUnk1_8015BC88(gobj);
+    }
+}
 void ftCh_FingerGun1_IASA(HSD_GObj* gobj)
 {
     Fighter* ft = GET_FIGHTER(gobj);
