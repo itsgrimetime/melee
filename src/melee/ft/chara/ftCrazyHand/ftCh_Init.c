@@ -1159,18 +1159,19 @@ void ftCh_Drill_Phys(HSD_GObj* gobj)
     f32 mv_val;
     Fighter* fp = gobj->user_data;
     ftMasterHand_SpecialAttrs* attrs = fp->ft_data->ext_attr;
-    
+
     ft_80085134(gobj);
-    
+
     mv_val = fp->mv.mh.unk0.x0 += 1.0f;
-    
-    if (mv_val > (f32)attrs->x74 && 
-        (mv_val = fp->mv.mh.unk0.x0, mv_val < (f32)*(s32*)&attrs->x78)) {
-        ftBossLib_8015C010(gobj, *(float*)&attrs->x7C);
+
+    if (mv_val > (f32) attrs->x74 &&
+        (mv_val = fp->mv.mh.unk0.x0, mv_val < (f32) * (s32*) &attrs->x78))
+    {
+        ftBossLib_8015C010(gobj, *(float*) &attrs->x7C);
     } else {
         fp->self_vel.x = 0.0f;
     }
-    
+
     ftBossLib_8015C190(gobj);
 }
 void ftCh_Drill_Coll(HSD_GObj* gobj) {}
@@ -1798,8 +1799,21 @@ void ftCh_Wait1_1_IASA(HSD_GObj* gobj)
     }
 }
 
-/// #ftCh_Wait1_1_Phys
-
+void ftCh_Wait1_1_Phys(HSD_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    f32 new_val = fp->mv.mh.unk0.x0 - 1.0f;
+    fp->mv.mh.unk0.x0 = new_val;
+    
+    if (new_val > 0.0f) {
+        ftMasterHand_SpecialAttrs* da = fp->ft_data->ext_attr;
+        ftBossLib_8015BF74(gobj, da->xDC);
+    } else {
+        fp->self_vel.x = 0.0f;
+    }
+    
+    ftBossLib_8015C190(gobj);
+}
 void ftCh_Wait1_1_Coll(HSD_GObj* gobj) {}
 
 void ftCh_Init_80159F40(Fighter_GObj* gobj)
