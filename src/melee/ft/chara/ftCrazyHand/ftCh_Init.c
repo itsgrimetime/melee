@@ -2322,8 +2322,25 @@ void ftCo_ThrownCrazyHand_Phys(HSD_GObj* gobj) {}
 
 void ftCo_ThrownCrazyHand_Coll(HSD_GObj* gobj) {}
 
-/// #ftCh_GrabUnk1_8015B8FC
-
+void ftCh_GrabUnk1_8015B8FC(HSD_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    s32 state = fp->fv.ch.x2258;
+    
+    if (state == 0x155 || state == 0x184) {
+        f32 anim_frame = fp->cur_anim_frame;
+        f32 one = 1.0f;
+        f32 zero = 0.0f;
+        Fighter_ChangeMotionState(gobj, 0x184, 0, anim_frame, one, zero, NULL);
+    } else {
+        f32 zero = 0.0f;
+        f32 one = 1.0f;
+        Fighter_ChangeMotionState(gobj, 0x184, 0, zero, one, zero, NULL);
+        ftAnim_8006EBA4(gobj);
+    }
+    
+    fp->fv.ch.x2258 = 0x184;
+}
 /// #ftCh_GrabUnk1_8015B998
 
 /// #ftCh_GrabUnk1_8015BA34
@@ -2370,8 +2387,8 @@ void ftCh_GrabUnk1_8015BC88(HSD_GObj* gobj)
     ftMasterHand_SpecialAttrs* attrs = fp->ft_data->ext_attr;
 
     fp->mv.mh.unk0.x20 = 0;
-    pos.x = *(f32*)&attrs->x18;
-    pos.y = *(f32*)&attrs->x1C;
+    pos.x = *(f32*) &attrs->x18;
+    pos.y = *(f32*) &attrs->x1C;
     pos.z = 0.0f;
     fp->fv.ch.x2258 = 0x184;
 
