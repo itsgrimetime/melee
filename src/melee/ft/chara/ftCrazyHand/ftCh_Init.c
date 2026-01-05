@@ -1597,9 +1597,9 @@ void ftCh_BackAirplane2_Anim(HSD_GObj* gobj)
     HSD_GObj* victim_gobj;
     Fighter* victim_fp;
     s32 unused[2];
-    
+
     fp = gobj->user_data;
-    
+
     if (fp->cmd_vars[0] != 0) {
         HSD_GObj* temp;
         fp->cmd_vars[0] = 0;
@@ -1615,7 +1615,7 @@ void ftCh_BackAirplane2_Anim(HSD_GObj* gobj)
         }
         fp->mv.mh.unk0.x20 = 0;
     }
-    
+
     if (ftAnim_IsFramesRemaining(gobj) == 0) {
         ftCh_GrabUnk1_8015BC88(gobj);
     }
@@ -1965,8 +1965,27 @@ void ftCh_Init_8015A560(Fighter_GObj* gobj)
     ftAnim_8006EBA4(gobj);
 }
 
-/// #ftCh_Throw_Anim
-
+void ftCh_Throw_Anim(HSD_GObj* gobj)
+{
+    Fighter* fp;
+    s32 unused[2];
+    
+    fp = gobj->user_data;
+    
+    if (fp->cmd_vars[1] != 0) {
+        ftBossLib_8015C5F8(gobj);
+        fp->cmd_vars[1] = 0;
+    }
+    
+    if (ftBossLib_8015C2E0() != 0 || ftBossLib_8015C358() != 0 ||
+        ftAnim_IsFramesRemaining(gobj) == 0)
+    {
+        fp = gobj->user_data;
+        Fighter_UnkSetFlag_8006CFBC(gobj);
+        fp->x1A5C = 0;
+        ftCh_GrabUnk1_8015BC88(gobj);
+    }
+}
 void ftCh_Throw_IASA(HSD_GObj* gobj)
 {
     Fighter* ft = GET_FIGHTER(gobj);
