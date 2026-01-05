@@ -1154,8 +1154,25 @@ void ftCh_Drill_IASA(HSD_GObj* gobj)
     }
 }
 
-/// #ftCh_Drill_Phys
-
+void ftCh_Drill_Phys(HSD_GObj* gobj)
+{
+    f32 mv_val;
+    Fighter* fp = gobj->user_data;
+    ftMasterHand_SpecialAttrs* attrs = fp->ft_data->ext_attr;
+    
+    ft_80085134(gobj);
+    
+    mv_val = fp->mv.mh.unk0.x0 += 1.0f;
+    
+    if (mv_val > (f32)attrs->x74 && 
+        (mv_val = fp->mv.mh.unk0.x0, mv_val < (f32)*(s32*)&attrs->x78)) {
+        ftBossLib_8015C010(gobj, *(float*)&attrs->x7C);
+    } else {
+        fp->self_vel.x = 0.0f;
+    }
+    
+    ftBossLib_8015C190(gobj);
+}
 void ftCh_Drill_Coll(HSD_GObj* gobj) {}
 
 /// #ftCh_Init_80157DF8
@@ -2345,7 +2362,7 @@ void ftCh_GrabUnk1_8015B998(HSD_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
     s32 state = fp->fv.ch.x2258;
-    
+
     if (state == 0x156 || state == 0x185) {
         f32 anim_frame = fp->cur_anim_frame;
         f32 one = 1.0f;
@@ -2357,7 +2374,7 @@ void ftCh_GrabUnk1_8015B998(HSD_GObj* gobj)
         Fighter_ChangeMotionState(gobj, 0x185, 0, zero, one, zero, NULL);
         ftAnim_8006EBA4(gobj);
     }
-    
+
     fp->fv.ch.x2258 = 0x185;
 }
 /// #ftCh_GrabUnk1_8015BA34
