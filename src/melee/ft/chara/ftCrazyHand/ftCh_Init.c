@@ -929,7 +929,15 @@ void ftCh_Slap_Phys(Fighter_GObj* gobj)
     fp->self_vel.x += da->x40_pos.x;
 }
 
-/// #fn_801577B4
+void fn_801577B4(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    ftMasterHand_SpecialAttrs* da = fp->ft_data->ext_attr;
+    if (fp->cur_pos.x > da->x3C) {
+        fp->self_vel.x = 0.0f;
+        ftCh_Init_801577F8(gobj);
+    }
+}
 
 void ftCh_Init_801577F8(Fighter_GObj* gobj)
 {
@@ -965,7 +973,15 @@ void fn_801578E8(Fighter_GObj* gobj)
     ftAnim_8006EBA4(gobj);
 }
 
-/// #ftCh_WalkLoop_Anim
+void ftCh_WalkLoop_Anim(HSD_GObj* gobj)
+{
+    if (ftAnim_IsFramesRemaining(gobj) == 0) {
+        Fighter* fp = GET_FIGHTER(gobj);
+        ftMasterHand_SpecialAttrs* da = fp->ft_data->ext_attr;
+        ftCh_Init_801579F4(gobj);
+        fp->mv.mh.unk0.x8 = *(s32*)&da->x64;
+    }
+}
 
 void ftCh_WalkLoop_IASA(HSD_GObj* gobj)
 {
