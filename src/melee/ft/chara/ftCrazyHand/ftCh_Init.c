@@ -69,6 +69,13 @@
 /* static */ void ftCh_GrabUnk1_8015A888(Fighter_GObj* gobj);
 /* static */ void fn_8015746C(Fighter_GObj* gobj);
 /* static */ void fn_8015755C(Fighter_GObj* gobj);
+/* static */ void ftCh_Init_8015737C(Fighter_GObj* gobj);
+/* static */ void ftCh_Init_801577F8(Fighter_GObj* gobj);
+/* static */ void fn_801578E8(Fighter_GObj* gobj);
+/* static */ void ftCh_Init_801579F4(Fighter_GObj* gobj);
+/* static */ void fn_80159288(Fighter_GObj* gobj);
+/* static */ void ftCh_Init_80159F40(Fighter_GObj* gobj);
+/* static */ void ftCh_GrabUnk1_8015ABD0(Fighter_GObj* gobj);
 
 MotionState ftCh_Init_MotionStateTable[ftCh_MS_SelfCount] = {
     {
@@ -806,6 +813,12 @@ void ftCh_Damage2_Coll(HSD_GObj* gobj) {}
 
 /// #ftCh_Init_8015737C
 
+void ftCh_Init_8015737C(Fighter_GObj* gobj)
+{
+    Fighter_ChangeMotionState(gobj, ftMh_MS_WaitSweep, 0, 0, 1.0f, 1.0f, NULL);
+    ftAnim_8006EBA4(gobj);
+}
+
 void ftCh_WaitSweep_Anim(HSD_GObj* gobj)
 {
     if (ftAnim_IsFramesRemaining(gobj) == 0) {
@@ -908,6 +921,12 @@ void ftCh_Slap_Phys(Fighter_GObj* gobj)
 
 /// #ftCh_Init_801577F8
 
+void ftCh_Init_801577F8(Fighter_GObj* gobj)
+{
+    Fighter_ChangeMotionState(gobj, ftMh_MS_Walk2, 0, 0, 1.0f, 1.0f, NULL);
+    ftAnim_8006EBA4(gobj);
+}
+
 void ftCh_Walk2_Anim(HSD_GObj* gobj)
 {
     if (ftAnim_IsFramesRemaining(gobj) == 0) {
@@ -932,6 +951,12 @@ void ftCh_Slap_Coll(HSD_GObj* gobj) {}
 
 /// #fn_801578E8
 
+void fn_801578E8(Fighter_GObj* gobj)
+{
+    Fighter_ChangeMotionState(gobj, ftMh_MS_WalkLoop, 0, 0, 1.0f, 1.0f, NULL);
+    ftAnim_8006EBA4(gobj);
+}
+
 /// #ftCh_WalkLoop_Anim
 
 void ftCh_WalkLoop_IASA(HSD_GObj* gobj)
@@ -950,6 +975,12 @@ void ftCh_WalkLoop_Phys(HSD_GObj* gobj)
 void ftCh_WalkLoop_Coll(HSD_GObj* gobj) {}
 
 /// #ftCh_Init_801579F4
+
+void ftCh_Init_801579F4(Fighter_GObj* gobj)
+{
+    Fighter_ChangeMotionState(gobj, ftMh_MS_WalkWait, 0, 0, 1.0f, 1.0f, NULL);
+    ftAnim_8006EBA4(gobj);
+}
 
 /// #ftCh_WalkWait_Anim
 
@@ -1233,6 +1264,17 @@ void ftCh_FingerGun1_Coll(Fighter_GObj* gobj)
 
 /// #fn_80159288
 
+void fn_80159288(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    fp->self_vel.z = 0.0f;
+    fp->self_vel.y = 0.0f;
+    fp->self_vel.x = 0.0f;
+    fp->mv.mh.unk0.x20 = 1;
+    fp->x221E_b6 = false;
+    ftCh_GrabUnk1_8015ABD0(gobj);
+}
+
 /// #ftCh_Init_801592D4
 
 /// #ftCh_BackAirplane1_Anim
@@ -1347,6 +1389,12 @@ void ftCh_Wait1_1_IASA(HSD_GObj* gobj)
 void ftCh_Wait1_1_Coll(HSD_GObj* gobj) {}
 
 /// #ftCh_Init_80159F40
+
+void ftCh_Init_80159F40(Fighter_GObj* gobj)
+{
+    Fighter_ChangeMotionState(gobj, ftMh_MS_Grab, 0, 0, 1.0f, 1.0f, NULL);
+    ftAnim_8006EBA4(gobj);
+}
 
 void ftCh_Grab_Anim(HSD_GObj* gobj)
 {
