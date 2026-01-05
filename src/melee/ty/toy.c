@@ -8,9 +8,12 @@
 #include "gm/gm_1601.h" // for gm_801677E8
 #include "gm/gm_16AE.h"
 #include "gm/gm_1A3F.h"
+#include "gm/gm_1A45.h"
 #include "gm/gmmain_lib.h"
 #include "if/textlib.h"
 #include "lb/lb_00B0.h"
+#include "lb/lbarchive.h"
+#include "lb/lbaudio_ax.h"
 #include "mn/mnsoundtest.h"
 
 #include "ty/forward.h"
@@ -157,8 +160,14 @@ void Toy_RemoveUserData(void* ptr)
     HSD_Free(ptr);
 }
 
-/// #un_80306D14
-
+void un_80306D14(void)
+{
+    if (M2C_FIELD(un_804A284C, s8*, 0) == 1) {
+        lbAudioAx_800237A8(0xAA, 0x7F, 0x40);
+    } else if (M2C_FIELD(un_804A284C, s8*, 0) == 2) {
+        lbAudioAx_800237A8(0xAB, 0x7F, 0x40);
+    }
+}
 /// #un_80306D70
 
 /// #un_80306EEC
@@ -240,8 +249,13 @@ void un_803102C4(s8 arg0)
 
 /// #un_80311F5C
 
-/// #un_80312018_OnFrame
-
+void un_80312018_OnFrame(void)
+{
+    if (M2C_FIELD(un_804A284C, s8*, 4) != 0) {
+        un_80311F5C();
+        gm_801A4B60();
+    }
+}
 /// #un_80312050
 
 void un_803122D0_OnInit(void)

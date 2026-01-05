@@ -4,12 +4,13 @@
 
 #include <placeholder.h>
 
+#include "ef/efasync.h"
 #include "ef/eflib.h"
 #include "ef/efsync.h"
+#include "ft/chara/ftCommon/ftCo_FallSpecial.h"
 #include "ft/chara/ftCommon/ftCo_Jump.h"
 #include "ft/chara/ftCommon/ftCo_KneeBend.h"
 #include "ft/chara/ftCommon/ftCo_Wait.h"
-#include "ft/chara/ftCommon/ftCo_FallSpecial.h"
 #include "ft/fighter.h"
 
 #include "ft/forward.h"
@@ -59,6 +60,8 @@
 #include <baselib/gobj.h>
 #include <baselib/random.h>
 #include <MSL/math.h>
+
+void ftAnim_80070458_proto(Fighter* fp, struct KirbyFV_x44_t*, int);
 
 MotionState ftKb_Init_MotionStateTable[ftKb_MS_SelfCount] = {
     {
@@ -3156,9 +3159,12 @@ void ftKb_Init_OnItemPickup(HSD_GObj* gobj, bool arg1)
     }
 }
 
-void ftKb_Init_OnItemInvisible(HSD_GObj* gobj)
+void ftKb_Init_OnItemInvisible(Fighter_GObj* gobj)
 {
-    Fighter_OnItemInvisible(gobj, 1);
+    Fighter* fp = GET_FIGHTER(gobj);
+    if (it_8026B2B4(fp->item_gobj) == 0) {
+        ftAnim_80070CC4(gobj, 1);
+    }
 }
 
 void ftKb_Init_OnItemVisible(HSD_GObj* gobj)
@@ -3196,17 +3202,23 @@ void ftKb_Init_OnKnockbackExit(HSD_GObj* gobj)
     Fighter_OnKnockbackExit(gobj, 1);
 }
 
-void ftKb_Init_UnkDemoCallbacks0(int arg0, int* arg1, int* arg2)
+void ftKb_Init_UnkDemoCallbacks0(int kind, int* out1, int* out2)
 {
-    if (arg0 != 14) {
-        if (arg0 < 14 && arg0 >= 11) {
-            *arg1 = 14;
-            *arg2 = 16;
-        }
-    } else {
-        *arg2 = 17;
-        *arg1 = 17;
+    if (kind == 14) {
+        goto case14;
     }
+    if (kind >= 14) {
+        return;
+    }
+    if (kind < 11) {
+        return;
+    }
+    *out1 = 14;
+    *out2 = 16;
+    return;
+case14:
+    *out2 = 17;
+    *out1 = 17;
 }
 
 char* ftKb_Init_GetMotionFileString(enum_t arg0)
@@ -3268,8 +3280,13 @@ void ftKb_Init_UnkCallbackPairs0_0(Fighter_GObj* gobj)
     }
 }
 
-/// #ftKb_Init_UnkCallbackPairs0_1
-
+void ftKb_Init_UnkCallbackPairs0_1(Fighter_GObj* gobj, int arg1, float arg2)
+{
+    Fighter* fp = GET_FIGHTER(gobj);
+    if (fp->fv.kb.hat.x14.data != NULL && fp->fv.kb.hat.jobj == NULL) {
+        ftAnim_80070458_proto(fp, &fp->fv.kb.x44, arg1);
+    }
+}
 void ftKb_SpecialN_800EFA40(HSD_GObj* gobj)
 {
     Fighter* fp = GET_FIGHTER(gobj);
@@ -3804,8 +3821,16 @@ void ftKb_SpecialN_800F13F0(Fighter_GObj* gobj)
 
 /// #ftKb_SpecialN_Enter
 
-/// #ftKb_SpecialAirN_Enter
-
+void ftKb_SpecialAirN_Enter(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    FighterKind kind = fp->fv.kb.hat.kind;
+    if (ftKb_Init_803C9E54[kind] != NULL) {
+        ftKb_Init_803C9E54[kind](gobj);
+    } else {
+        ftKb_SpecialN_800F6070(gobj);
+    }
+}
 /// #ftKb_SpecialN_800F16D0
 
 /// #ftKb_SpecialN_800F190C
@@ -3872,8 +3897,14 @@ s32 ftKb_SpecialN_800F1CD8(HSD_GObj* gobj)
 
 /// #ftKb_SpecialN_800F1DAC
 
-/// #ftKb_SpecialN_800F1F1C
+void ftKb_SpecialN_800F1F1C(Fighter_GObj* gobj, Vec3* arg1)
+{
+    Fighter* fp = GET_FIGHTER(gobj);
 
+    if (fp->kind == FTKIND_KIRBY) {
+        efAsync_Spawn(gobj, &fp->x60C, 2, 0x49E, fp->parts->joint, arg1);
+    }
+}
 /// #ftKb_SpecialN_800F1F68
 
 void fn_800F1FDC(Fighter_GObj* gobj)

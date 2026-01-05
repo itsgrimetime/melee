@@ -3,6 +3,7 @@
 #include <placeholder.h>
 #include <platform.h>
 
+#include "gr/grkongo.h"
 #include "it/inlines.h"
 #include "it/it_26B1.h"
 #include "it/it_266F.h"
@@ -11,9 +12,23 @@
 
 /// #it_80286088
 
-/// #it_3F14_Logic1_Spawned
+void it_3F14_Logic1_Spawned(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
+    ip->xDCE_flag.b7 = 0;
+    ip->xDD4_itemVar.box.xDD4 = 0;
+    ip->xDD4_itemVar.box.xDDC = NULL;
+    it_8028655C(gobj);
+}
 
-/// #it_3F14_Logic1_Destroyed
+void it_3F14_Logic1_Destroyed(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
+    if (ip->xDD4_itemVar.box.xDDC != NULL) {
+        grKongo_801D8058(ip->xDD4_itemVar.box.xDDC);
+        ip->xDD4_itemVar.box.xDDC = NULL;
+    }
+}
 
 /// #it_80286248
 
@@ -21,15 +36,41 @@
 
 /// #it_802863BC
 
-/// #fn_80286480
+void fn_80286480(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
+    f32 zero;
+    it_8026B390(gobj);
+    zero = 0.0f;
+    ip->x40_vel.z = zero;
+    ip->x40_vel.y = zero;
+    ip->x40_vel.x = zero;
+    Item_80268E5C(gobj, 0, ITEM_ANIM_UPDATE);
+}
 
-/// #itBox_UnkMotion0_Anim
+bool itBox_UnkMotion0_Anim(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
+    if (ip->xD44_lifeTimer <= 0.0f) {
+        it_802787B4(gobj, 0x421);
+    }
+    return false;
+}
 
 void itBox_UnkMotion0_Phys(Item_GObj* gobj) {}
 
-/// #itBox_UnkMotion0_Coll
+bool itBox_UnkMotion0_Coll(Item_GObj* gobj)
+{
+    it_8026D62C(gobj, it_8028655C);
+    it_80276CB8(gobj);
+    return false;
+}
 
-/// #it_8028655C
+void it_8028655C(Item_GObj* gobj)
+{
+    it_8026B3A8(gobj);
+    Item_80268E5C(gobj, 1, ITEM_ANIM_UPDATE);
+}
 
 bool itBox_UnkMotion4_Anim(Item_GObj* gobj)
 {
@@ -62,7 +103,13 @@ void it_3F14_Logic1_Thrown(Item_GObj* gobj)
     Item_80268E5C(gobj, 3, ITEM_ANIM_UPDATE | ITEM_DROP_UPDATE);
 }
 
-/// #itBox_UnkMotion4_Phys
+void itBox_UnkMotion4_Phys(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
+    ItemAttr* attrs = ip->xCC_item_attr;
+    it_80272860(gobj, attrs->x10_fall_speed, attrs->x14_fall_speed_max);
+    it_80274658(gobj, it_804D6D28->x68_float);
+}
 
 /// #itBox_UnkMotion3_Coll
 

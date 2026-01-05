@@ -26,7 +26,7 @@
 /* 1DDAC4 */ void grCorneria_801DDAC4(Ground_GObj*);
 /* 1DDCE8 */ bool grCorneria_801DDCE8(Ground_GObj*);
 /* 1DDCF0 */ UNK_RET grCorneria_801DDCF0(UNK_PARAMS);
-/* 1DDD4C */ UNK_RET grCorneria_801DDD4C(UNK_PARAMS);
+/* 1DDD4C */ void grCorneria_801DDD4C(Vec3* pos);
 /* 1DDDA8 */ UNK_RET grCorneria_801DDDA8(UNK_PARAMS);
 /* 1DDE88 */ UNK_RET grCorneria_801DDE88(UNK_PARAMS);
 /* 1DE024 */ void grCorneria_801DE024(Ground_GObj*);
@@ -92,8 +92,8 @@
 /* 1E2CE8 */ bool grCorneria_801E2CE8(void);
 /* 1E2D14 */ bool grCorneria_801E2D14(void);
 /* 1E2D90 */ bool grCorneria_801E2D90(enum_t);
-/* 1E2E50 */ UNK_RET grCorneria_801E2E50(UNK_PARAMS);
-/* 1E2EA0 */ UNK_RET grCorneria_801E2EA0(UNK_PARAMS);
+/* 1E2E50 */ bool grCorneria_801E2E50(enum_t);
+/* 1E2EA0 */ float grCorneria_801E2EA0(void);
 /* 1E2EE4 */ DynamicsDesc* grCorneria_801E2EE4(enum_t);
 /* 1E2EEC */ bool grCorneria_801E2EEC(Vec3* v, int arg1, HSD_JObj* jobj);
 /* 1E2FCC */ float grCorneria_801E2FCC(void);

@@ -8,6 +8,7 @@
 #include "baselib/random.h"
 #include "cm/camera.h"
 #include "ef/efsync.h"
+#include "gr/grdatfiles.h"
 #include "gr/grdisplay.h"
 #include "gr/grlib.h"
 #include "gr/grmaterial.h"
@@ -22,6 +23,7 @@
 #include "lb/lb_00B0.h"
 #include "mp/mplib.h"
 
+#include <m2c_macros.h>
 #include <baselib/gobj.h>
 #include <baselib/jobj.h>
 
@@ -108,7 +110,10 @@ StageData grIm_803E4800 = {
     3,
 };
 
-const float grIm_804DB574 = 0.0;
+const float grIm_804DB574 = 0.0F;
+const float grIm_804DB5B0 = -1.0F;
+const float grIm_804DB5B4 = 1.0F;
+const float grIm_804DB5B8 = 6.0F;
 
 void grIceMt_801F6868(bool id) {}
 
@@ -629,6 +634,13 @@ bool grIceMt_801F85BC(Ground_GObj* param1)
 }
 
 /// #grIceMt_801F85C4
+void grIceMt_801F85C4(Ground_GObj* gobj)
+{
+    Ground* gp = gobj->user_data;
+    grIceMt_801F929C((HSD_GObj*)&gp->gv.icemt.xF4[5]);
+    grIceMt_801F98A8(gobj);
+    Ground_801C2FE0(gobj);
+}
 
 /// #grIceMt_801F8608
 void grIceMt_801F8608(Ground_GObj* arg0)
@@ -683,7 +695,19 @@ void grIceMt_801F87C8(Ground_GObj* param1)
     return;
 }
 
-/// #grIceMt_801F87FC
+/// @todo Rename: This is callback3 (destroy) for row 5 in grIm_803E4718.
+/// Destroys HSD_GObj* stored in icemt.xF4[1-5].
+void grIceMt_801F87FC(Ground_GObj* gobj)
+{
+    Ground* gp = gobj->user_data;
+    int i;
+    for (i = 0; i < 5; i++) {
+        HSD_GObj* temp;
+        if ((temp = gp->gv.icemt.xF4[i + 1]) != NULL) {
+            grMaterial_801C8CDC(temp);
+        }
+    }
+}
 
 /// #grIceMt_801F8850
 void grIceMt_801F8850(Ground_GObj* arg0)
@@ -783,7 +807,63 @@ void fn_801F8C64(Item_GObj* gobj, Ground* u1, Vec3* u2, HSD_GObj* u3, f32 u4)
     Camera_80030E44(2, &pos);
 }
 
-/// #grIceMt_801F8CDC
+/// @brief Creates material items and attaches them to Entity05 platform JObjs.
+/// @param gobj The Entity05 Ground_GObj
+/// @param joint_indices Array of joint indices to get parent JObjs from
+/// @param count Number of items to create (max 20)
+/// @param output_array Array to store created Item_GObj pointers
+void grIceMt_801F8CDC(Ground_GObj* gobj, s16* joint_indices, int count,
+                      HSD_GObj** output_array)
+{
+    Ground* gp = gobj->user_data;
+    UnkArchiveStruct* archive;
+    void* jobj_desc;
+    HSD_JObj* parent_jobjs[20];
+    HSD_JObj* parent_jobj;
+    HSD_JObj* child_jobj;
+    Item_GObj* item;
+    int i;
+    u8 unused[24];
+
+    archive = grDatFiles_801C6324();
+    jobj_desc = M2C_FIELD(archive->unk4->unk8, void**, 0x16C);
+
+    if (count > 20) {
+        __assert((char*) grIm_803E4068 + 0x690, 0x7D4,
+                 (char*) grIm_803E4068 + 0x7F0);
+    }
+
+    for (i = 0; i < count; i++) {
+        parent_jobjs[i] = Ground_801C3FA4(gobj, joint_indices[i]);
+    }
+
+    for (i = 0; i < count; i++) {
+        parent_jobj = parent_jobjs[i];
+        if (parent_jobj == NULL) {
+            __assert((char*) grIm_803E4068 + 0x690, 0x7E3,
+                     (char*) grIm_803E4068 + 0x810);
+        }
+
+        child_jobj = HSD_JObjLoadJoint(jobj_desc);
+        if (child_jobj == NULL) {
+            __assert((char*) grIm_803E4068 + 0x690, 0x7E6,
+                     (char*) grIm_803E4068 + 0x81C);
+        }
+
+        HSD_JObjAddChild(parent_jobj, child_jobj);
+
+        item = grMaterial_801C8CFC(8, 0, gp, parent_jobj, NULL, fn_801F8C64,
+                                   NULL);
+        if (item != NULL) {
+            grMaterial_801C8DE0(item, grIm_804DB574, grIm_804DB5B0,
+                                grIm_804DB574, grIm_804DB574, grIm_804DB5B4,
+                                grIm_804DB574, grIm_804DB5B8);
+            grMaterial_801C8E08(item);
+            grMaterial_801C8E68(item, 0);
+        }
+        output_array[i] = item;
+    }
+}
 
 /// #fn_801F8E58
 
@@ -936,7 +1016,81 @@ int grIceMt_801F98A8(HSD_GObj* param1)
     return 0;
 }
 
-/// #grIceMt_801F993C
+/// File-local type for grIm_803E4068 (actual layout is 12-byte struct)
+typedef struct IceMtRowData_local {
+    s32 id;
+    f32 x4;
+    f32 x8;
+} IceMtRowData_local;
+
+#define ROWS ((IceMtRowData_local*) grIm_803E4068)
+
+f32 grIceMt_801F993C(s32 row_id1, s32 row_id2)
+{
+    f32 scroll_base;
+    IceMtRowData_local* rows = ROWS;
+    u32 idx1;
+    s32 id1 = row_id1;
+    s32 id2 = row_id2;
+    IceMtRowData_local* ptr;
+
+    scroll_base = Ground_801C0498();
+
+    idx1 = 0;
+    if (id1 != rows[0].id) {
+        ptr = &rows[1];
+        idx1 = 1;
+        if (id1 != rows[1].id) {
+            idx1 = 2;
+            if (id1 != (++ptr)->id) {
+                idx1 = 3;
+                if (id1 != (++ptr)->id) {
+                    idx1 = 4;
+                    if (id1 != (++ptr)->id) {
+                        idx1 = 5;
+                        if (id1 != ptr[1].id) {
+                            idx1 = 6;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (idx1 >= 6) {
+        __assert("gricemt.c", 0xA9D, "<ICEMT_FIELD_MAX>");
+    }
+
+    {
+        u32 idx2 = 0;
+        if (id2 != rows[0].id) {
+            ptr = &rows[1];
+            idx2 = 1;
+            if (id2 != rows[1].id) {
+                idx2 = 2;
+                if (id2 != (++ptr)->id) {
+                    idx2 = 3;
+                    if (id2 != (++ptr)->id) {
+                        idx2 = 4;
+                        if (id2 != (++ptr)->id) {
+                            idx2 = 5;
+                            if (id2 != ptr[1].id) {
+                                idx2 = 6;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (idx2 >= 6) {
+            __assert("gricemt.c", 0xAA2, "<ICEMT_FIELD_MAX>");
+        }
+
+        return grIm_804D69F4->x40 + scroll_base * rows[idx2].x4 -
+               scroll_base * rows[idx1].x8;
+    }
+}
 
 /// #grIceMt_801F9ACC
 // void grIceMt_801F9ACC() {

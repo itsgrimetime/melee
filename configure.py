@@ -142,7 +142,14 @@ parser.add_argument(
     "--require-protos",
     dest="require_protos",
     action="store_true",
-    help="require function prototypes",
+    default=True,
+    help="require function prototypes (default: enabled)",
+)
+parser.add_argument(
+    "--no-require-protos",
+    dest="require_protos",
+    action="store_false",
+    help="disable function prototype requirement",
 )
 parser.add_argument(
     "--non-matching",
@@ -1310,8 +1317,8 @@ config.libs = [
             Object(NonMatching, "melee/vi/vi0401.c"),
             Object(NonMatching, "melee/vi/vi0402.c"),
             Object(NonMatching, "melee/vi/vi0501.c"),
-            Object(NonMatching, "melee/vi/vi0502.c"),
-            Object(NonMatching, "melee/vi/vi0601.c"),
+            Object(Matching, "melee/vi/vi0502.c"),
+            Object(Matching, "melee/vi/vi0601.c"),
             Object(NonMatching, "melee/vi/vi0801.c"),
             Object(NonMatching, "melee/vi/vi1101.c"),
             Object(NonMatching, "melee/vi/vi1201v1.c"),

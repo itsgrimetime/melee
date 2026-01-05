@@ -8,7 +8,7 @@
 /* 3204C0 */ void un_803204C0(HSD_GObj*);
 /* 3204E4 */ void un_803204E4(HSD_GObj*);
 /* 320508 */ UNK_RET un_80320508(UNK_PARAMS);
-/* 3205F4 */ UNK_RET un_803205F4(UNK_PARAMS);
+/* 3205F4 */ void un_803205F4(void);
 /* 32074C */ void un_8032074C(HSD_GObj*);
 /* 3207C4 */ UNK_RET un_803207C4(UNK_PARAMS);
 /* 3208F0 */ void un_803208F0(HSD_GObj*);
