@@ -1873,14 +1873,14 @@ void ftCh_Squeeze_Anim(HSD_GObj* gobj)
 {
     Fighter* fp;
     s32 unused[2];
-    
+
     fp = gobj->user_data;
-    
+
     if (fp->cmd_vars[1] != 0) {
         ftBossLib_8015C5F8(gobj);
         fp->cmd_vars[1] = 0;
     }
-    
+
     if (ftBossLib_8015C2E0() != 0 || ftBossLib_8015C358() != 0 ||
         ftAnim_IsFramesRemaining(gobj) == 0)
     {
@@ -2014,8 +2014,20 @@ void ftCh_TagCrush_Phys(HSD_GObj* gobj)
 
 void ftCh_TagCrush_Coll(HSD_GObj* gobj) {}
 
-/// #ftCh_TagApplaud_Anim
-
+void ftCh_TagApplaud_Anim(HSD_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    f32 timer = fp->mv.mh.unk0.x24 -= 1.0f;
+    
+    if (timer <= 0.0f && fp->cmd_vars[0] != 0) {
+        ftCh_GrabUnk1_8015B800(fp->victim_gobj);
+        fp->cmd_vars[0] = 0;
+    }
+    
+    if (ftAnim_IsFramesRemaining(gobj) == 0) {
+        ftCh_GrabUnk1_8015BC88(gobj);
+    }
+}
 void ftCh_TagApplaud_IASA(HSD_GObj* gobj)
 {
     Fighter* ft = GET_FIGHTER(gobj);
