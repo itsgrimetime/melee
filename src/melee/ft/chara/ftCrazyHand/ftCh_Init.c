@@ -1830,8 +1830,15 @@ void ftCo_CaptureCrazyHand_Coll(HSD_GObj* gobj) {}
 
 /// #ftCh_GrabUnk1_8015B670
 
-/// #ftCo_CaptureDamageCrazyHand_Anim
-
+void ftCo_CaptureDamageCrazyHand_Anim(HSD_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    ftCommon_GrabMash(fp, p_ftCommonData->x3A8);
+    if (fp->grab_timer <= ftCh_Init_804DA1D8) {
+        ftCh_GrabUnk1_8015B778(gobj);
+        ftCh_Init_80159098(fp->victim_gobj);
+    }
+}
 void ftCo_CaptureDamageCrazyHand_IASA(HSD_GObj* gobj) {}
 
 void ftCo_CaptureDamageCrazyHand_Phys(HSD_GObj* gobj) {}
