@@ -1712,7 +1712,14 @@ void ftCh_Squeeze_Phys(HSD_GObj* gobj)
 
 void ftCh_Squeeze_Coll(HSD_GObj* gobj) {}
 
-/// #ftCh_Init_8015A560
+void ftCh_Init_8015A560(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    fp->cmd_vars[1] = 0;
+    fp->x1A5C = ftBossLib_8015C3E8(0x1B);
+    Fighter_ChangeMotionState(gobj, 0x17B, 0, 0.0f, 1.0f, 0.0f, NULL);
+    ftAnim_8006EBA4(gobj);
+}
 
 /// #ftCh_Throw_Anim
 
