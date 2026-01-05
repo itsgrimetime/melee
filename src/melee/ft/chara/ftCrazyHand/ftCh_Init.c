@@ -825,8 +825,6 @@ void ftCh_Damage2_IASA(HSD_GObj* gobj)
 
 void ftCh_Damage2_Coll(HSD_GObj* gobj) {}
 
-/// #ftCh_Init_8015737C
-
 void ftCh_Init_8015737C(Fighter_GObj* gobj)
 {
     Fighter_ChangeMotionState(gobj, ftMh_MS_WaitSweep, 0, 0, 1.0f, 1.0f, NULL);
@@ -933,8 +931,6 @@ void ftCh_Slap_Phys(Fighter_GObj* gobj)
 
 /// #fn_801577B4
 
-/// #ftCh_Init_801577F8
-
 void ftCh_Init_801577F8(Fighter_GObj* gobj)
 {
     Fighter_ChangeMotionState(gobj, ftMh_MS_Walk2, 0, 0, 1.0f, 1.0f, NULL);
@@ -963,8 +959,6 @@ void ftCh_Walk2_Phys(HSD_GObj* gobj)
 
 void ftCh_Slap_Coll(HSD_GObj* gobj) {}
 
-/// #fn_801578E8
-
 void fn_801578E8(Fighter_GObj* gobj)
 {
     Fighter_ChangeMotionState(gobj, ftMh_MS_WalkLoop, 0, 0, 1.0f, 1.0f, NULL);
@@ -987,8 +981,6 @@ void ftCh_WalkLoop_Phys(HSD_GObj* gobj)
 }
 
 void ftCh_WalkLoop_Coll(HSD_GObj* gobj) {}
-
-/// #ftCh_Init_801579F4
 
 void ftCh_Init_801579F4(Fighter_GObj* gobj)
 {
@@ -1016,8 +1008,6 @@ void ftCh_WalkWait_Phys(Fighter_GObj* gobj)
 }
 
 void ftCh_WalkWait_Coll(HSD_GObj* gobj) {}
-
-/// #ftCh_Init_80157B58
 
 void ftCh_Init_80157B58(Fighter_GObj* gobj)
 {
@@ -1222,8 +1212,6 @@ void ftCh_FingerBeamLoop_Coll(HSD_GObj* gobj) {}
 
 /// #ftCh_Init_80158DFC
 
-/// #ftCh_FingerBeamEnd_Anim
-
 void ftCh_FingerBeamEnd_Anim(HSD_GObj* gobj)
 {
     if (ftAnim_IsFramesRemaining(gobj) == 0) {
@@ -1267,8 +1255,6 @@ void ftCh_BackPunch_IASA(HSD_GObj* gobj)
     }
 }
 
-/// #ftCh_BackPunch_Phys
-
 void ftCh_BackPunch_Phys(Fighter_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
@@ -1292,8 +1278,6 @@ void ftCh_FingerGun1_IASA(HSD_GObj* gobj)
     }
 }
 
-/// #ftCh_FingerGun1_Phys
-
 void ftCh_FingerGun1_Phys(Fighter_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
@@ -1312,8 +1296,6 @@ void ftCh_FingerGun1_Coll(Fighter_GObj* gobj)
         fp->self_vel.x = 0.0f;
     }
 }
-
-/// #fn_80159288
 
 void fn_80159288(Fighter_GObj* gobj)
 {
@@ -1337,8 +1319,6 @@ void ftCh_BackAirplane1_IASA(HSD_GObj* gobj)
         ftBossLib_8015BD20(gobj);
     }
 }
-
-/// #ftCh_BackAirplane1_Phys
 
 void ftCh_BackAirplane1_Phys(Fighter_GObj* gobj)
 {
@@ -1428,8 +1408,6 @@ void ftCh_BackDisappear_IASA(HSD_GObj* gobj)
     }
 }
 
-/// #ftCh_BackDisappear_Phys
-
 void ftCh_BackDisappear_Phys(Fighter_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
@@ -1460,8 +1438,6 @@ void ftCh_Wait1_1_IASA(HSD_GObj* gobj)
 /// #ftCh_Wait1_1_Phys
 
 void ftCh_Wait1_1_Coll(HSD_GObj* gobj) {}
-
-/// #ftCh_Init_80159F40
 
 void ftCh_Init_80159F40(Fighter_GObj* gobj)
 {
@@ -1665,8 +1641,6 @@ void ftCh_TagApplaud_IASA(HSD_GObj* gobj)
     }
 }
 
-/// #ftCh_TagApplaud_Phys
-
 void ftCh_TagApplaud_Phys(Fighter_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
@@ -1711,8 +1685,6 @@ void ftCh_TagRockPaper_Coll(HSD_GObj* gobj) {}
 
 /// #ftCh_GrabUnk1_8015AC50
 
-/// #ftCh_FingerGun2_Anim
-
 void ftCh_FingerGun2_Anim(HSD_GObj* gobj)
 {
     if (ftAnim_IsFramesRemaining(gobj) == 0) {
@@ -1732,8 +1704,6 @@ void ftCh_FingerGun2_IASA(HSD_GObj* gobj)
         ftBossLib_8015BD20(gobj);
     }
 }
-
-/// #ftCh_FingerGun2_Phys
 
 void ftCh_FingerGun2_Phys(Fighter_GObj* gobj)
 {
@@ -1853,8 +1823,6 @@ void ftCo_ThrownCrazyHand_Coll(HSD_GObj* gobj) {}
 
 /// #ftCh_TagCancel_Anim
 
-/// #ftCh_TagCancel_Phys
-
 void ftCh_TagCancel_Phys(Fighter_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
@@ -1863,8 +1831,6 @@ void ftCh_TagCancel_Phys(Fighter_GObj* gobj)
     ftBossLib_8015BE40(gobj, &fp->mv.mh.unk0.xC, &fp->mv.mh.unk0.x18, da->x14,
                        *(float*) &da->x10);
 }
-
-/// #ftCh_TagCancel_Coll
 
 void ftCh_TagCancel_Coll(Fighter_GObj* gobj)
 {
