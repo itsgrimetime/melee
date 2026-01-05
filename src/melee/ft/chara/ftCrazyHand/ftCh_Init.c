@@ -10,6 +10,8 @@
 #include "ft/chara/ftCommon/ftCo_CaptureCut.h"
 #include "ft/chara/ftCommon/ftCo_Thrown.h"
 #include "ft/fighter.h"
+#include "ft/ft_0877.h"
+#include "ft/ft_0881.h"
 #include "ft/ft_081B.h"
 #include "ft/ftanim.h"
 #include "ft/ftbosslib.h"
@@ -21,6 +23,8 @@
 
 #include "ftMasterHand/types.h"
 #include "it/it_26B1.h"
+#include "it/items/itmasterhandlaser.h"
+#include "mp/mplib.h"
 #include "pl/player.h"
 
 #include <common_structs.h>
@@ -294,16 +298,16 @@ void ftCh_Damage_Coll(HSD_GObj* gobj) {}
 void ftCh_Damage2_Anim(HSD_GObj* gobj)
 {
     s32 unused;
-    f32 floor_x;
+    Vec3 floor_pos;
     s32 unused2[2];
     Fighter* fp;
     ftMasterHand_SpecialAttrs* attrs;
 
     if (ftAnim_IsFramesRemaining(gobj) == 0) {
         fp = gobj->user_data;
-        mpFloorGetRight(0, &floor_x);
+        mpFloorGetRight(0, &floor_pos);
 
-        if (fp->cur_pos.x > floor_x) {
+        if (fp->cur_pos.x > floor_pos.x) {
             ftCh_Init_8015737C(gobj);
         } else {
             f32 zero;
