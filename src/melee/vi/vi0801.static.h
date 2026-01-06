@@ -7,6 +7,8 @@
 
 #include "sc/types.h"
 
+#include <dolphin/gx/GXStruct.h>
+
 /* 4D6FB8 */ extern SceneDesc* un_804D6FB8;
 /* 4D6FBC */ extern GXColor un_804D6FBC;
 /* 4A2EA8 */ extern char un_804A2EA8[];
