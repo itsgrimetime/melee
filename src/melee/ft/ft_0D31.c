@@ -1038,14 +1038,12 @@ void ftCo_RebirthWait_Phys(Fighter_GObj* gobj)
     }
 }
 
-static void fn_800D5A30(Fighter_GObj* gobj);
-
 void ftCo_RebirthWait_Coll(Fighter_GObj* gobj)
 {
     ft_80083844(gobj, fn_800D5A30);
 }
 
-static void fn_800D5A30(Fighter_GObj* gobj)
+void fn_800D5A30(Fighter_GObj* gobj)
 {
     ftColl_8007B7A4(gobj, (int)p_ftCommonData->x5D8);
     ft_8008A2BC(gobj);
