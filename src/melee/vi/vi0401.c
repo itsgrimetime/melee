@@ -8,6 +8,9 @@
 
 #include "cm/camera.h"
 #include "ft/ftdemo.h"
+#include "gm/gm_17C0.h"
+#include "gm/gm_1A36.h"
+#include "gm/gm_1A45.h"
 #include "gm/gm_unsplit.h"
 #include "gr/ground.h"
 #include "gr/stage.h"
@@ -19,7 +22,6 @@
 
 #include <baselib/aobj.h>
 #include <baselib/cobj.h>
-#include <baselib/debug.h>
 #include <baselib/gobj.h>
 #include <baselib/jobj.h>
 
@@ -57,7 +59,6 @@ void un_8031D030(CharacterKind char_kind, int costume)
     Player_SetSlottype(0, Gm_PKind_Demo);
     Player_SetFacingDirection(0, 1.0f);
 
-    HSD_ASSERT(60, un_804D6F58 != NULL);
     pos.x = un_804D6F58->x38.x;
     pos.y = un_804D6F58->x38.y;
     pos.z = un_804D6F58->x38.z;
@@ -106,12 +107,17 @@ static void vi0401_8031D23C(HSD_GObj* gobj)
     }
 }
 
+static void fn_8031D168(HSD_GObj* gobj)
+{
+    HSD_JObjAnimAll(GET_JOBJ(gobj));
+}
+
+/// #un_8031D288_OnEnter
+
 void un_8031D698_OnFrame(void)
 {
-    u64 buttons;
-    gm_8017E430();
-    buttons = gm_801A36A0(0);
-    if ((buttons & 0x1000ULL) != 0) {
+    u64 result = gm_801A36A0(gm_8017E430());
+    if ((result & 0x1000) != 0) {
         lb_800145F4();
         gm_801A4B60();
     }
