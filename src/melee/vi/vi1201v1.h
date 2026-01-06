@@ -14,7 +14,7 @@
 /* 31F9B4 */ void un_8031F9B4(HSD_GObj*);
 /* 31F9D8 */ void un_8031F9D8(u8, u8);
 /* 31FAA8 */ void fn_8031FAA8(HSD_GObj*);
-/* 31FB90 */ void fn_8031FB90(HSD_GObj*, int);
+/* 31FB90 */ void fn_8031FB90(HSD_GObj*);
 /* 31FC30 */ void fn_8031FC30(HSD_GObj*);
 /* 31FCBC */ void fn_8031FCBC(HSD_GObj*);
 /* 31FD18 */ void un_8031FD18_OnEnter(void* arg);

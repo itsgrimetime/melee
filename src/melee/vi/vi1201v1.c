@@ -97,20 +97,20 @@ void un_8031F9D8(u8 char_index, u8 costume_id)
     lbAudioAx_80027648();
 }
 
-void fn_8031FB90(HSD_GObj* gobj, int unused)
+void fn_8031FB90(HSD_GObj* gobj)
 {
-    u8* colors;
+    GXColor* colors;
     char pad[8];
     if (un_804D7000 != NULL) {
         lbShadow_8000F38C(0);
     }
     if (HSD_CObjSetCurrent(GET_COBJ(gobj)) != 0) {
-        colors = (u8*)&un_804D6FF4;
-        HSD_SetEraseColor(colors[0], colors[1], colors[2], colors[3]);
+        colors = (GXColor*) &un_804D6FF4;
+        HSD_SetEraseColor(colors->r, colors->g, colors->b, colors->a);
         HSD_CObjEraseScreen(GET_COBJ(gobj), 1, 0, 1);
         vi_8031CA04(gobj);
-        gobj->gxlink_prios = 0x881;
-        *(s32*)((char*)gobj + 0x20) = 0;
+        M2C_FIELD(gobj, s32*, 0x24) = 0x881;
+        M2C_FIELD(gobj, s32*, 0x20) = 0;
         HSD_GObj_80390ED0(gobj, 7);
         HSD_CObjEndCurrent();
     }
