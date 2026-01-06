@@ -1,12 +1,8 @@
-#include "vi/vi1202.h"
-
 #include "vi.h"
 
-#include "baselib/forward.h"
+#include "vi/vi1202.static.h"
 
-#include "ef/efasync.h"
-#include "ef/eflib.h"
-#include "ft/ft_0C31.h"
+#include "ft/fighter.h"
 #include "ft/ftlib.h"
 #include "gm/gm_1601.h"
 #include "gm/gm_unsplit.h"
@@ -23,7 +19,6 @@
 #include <baselib/aobj.h>
 #include <baselib/cobj.h>
 #include <baselib/gobj.h>
-#include <baselib/gobjgxlink.h>
 #include <baselib/gobjobject.h>
 #include <baselib/gobjproc.h>
 #include <baselib/jobj.h>
@@ -70,13 +65,13 @@ void un_80321178(void)
     HSD_JObj* jobj;
 
     i = 0;
-    while ((un_804D7040->models)[i] != NULL) {
+    while (((void**) (*un_804D7040))[i] != NULL) {
         gobj = GObj_Create(0xE, 0xF, 0);
-        jobj = HSD_JObjLoadJoint((un_804D7040->models)[i]->joint);
+        jobj = HSD_JObjLoadJoint(*(void**) ((void**) (*un_804D7040))[i]);
         HSD_GObjObject_80390A70(gobj, HSD_GObj_804D7849, jobj);
         GObj_SetupGXLink(gobj, HSD_GObj_JObjCallback, 0xB, 0);
-        gm_8016895C(jobj, (un_804D7040->models)[i], 0);
-        HSD_JObjReqAnimAll(jobj, 0.0f);
+        gm_8016895C(jobj, (DynamicModelDesc*) ((void**) (*un_804D7040))[i], 0);
+        HSD_JObjReqAnimAll(jobj, un_804DE140);
         HSD_JObjAnimAll(jobj);
         HSD_GObjProc_8038FD54(gobj, un_80321154, 0x17);
         lb_80011E24(jobj, &un_804D704C, 2, -1);
@@ -88,7 +83,7 @@ void un_80321178(void)
     lbAudioAx_80027648();
 }
 
-void vi1202_RunFrame(HSD_GObj* gobj)
+void un_80321294(HSD_GObj* gobj)
 {
     HSD_CObj* cobj = GET_COBJ(gobj);
     HSD_CObjAnim(cobj);
@@ -621,17 +616,16 @@ void un_80322178(int arg)
 bool un_80322258(float arg)
 {
     f32 val2c = gCrowdConfig->horiz_margin;
-
-    if (arg < val2c + M2C_FIELD(mpLib_80458868, f32*, 0x18)) {
-        goto ret_true;
+    f32 val18 = M2C_FIELD(mpLib_80458868, f32*, 0x18);
+    f32 val1c;
+    if (arg >= val2c + val18) {
+        val1c = M2C_FIELD(mpLib_80458868, f32*, 0x1C);
+        if (arg > val1c - val2c) {
+            return true;
+        }
+        return false;
     }
-    if (!(arg > M2C_FIELD(mpLib_80458868, f32*, 0x1C) - val2c)) {
-        goto ret_false;
-    }
-ret_true:
-    return 1;
-ret_false:
-    return 0;
+    return true;
 }
 
 s32 un_80322298(float arg)
