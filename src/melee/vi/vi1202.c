@@ -1,9 +1,10 @@
-#include "vi/vi1202.h"
-
 #include "vi.h"
+
+#include "vi/vi1202.static.h"
 
 #include "ft/fighter.h"
 #include "ft/ftlib.h"
+#include "gm/gm_1601.h"
 #include "gm/gm_unsplit.h"
 #include "lb/lb_00F9.h"
 #include "lb/lbaudio_ax.h"
@@ -11,6 +12,7 @@
 #include <baselib/aobj.h>
 #include <baselib/cobj.h>
 #include <baselib/gobj.h>
+#include <baselib/gobjobject.h>
 #include <baselib/gobjproc.h>
 #include <baselib/jobj.h>
 
@@ -42,6 +44,31 @@ void un_80321130(HSD_GObj* gobj)
 void un_80321154(HSD_GObj* gobj)
 {
     HSD_JObjAnimAll(GET_JOBJ(gobj));
+}
+
+void un_80321178(void)
+{
+    s32 i;
+    HSD_GObj* gobj;
+    HSD_JObj* jobj;
+
+    i = 0;
+    while (((void**) (*un_804D7040))[i] != NULL) {
+        gobj = GObj_Create(0xE, 0xF, 0);
+        jobj = HSD_JObjLoadJoint(*(void**) ((void**) (*un_804D7040))[i]);
+        HSD_GObjObject_80390A70(gobj, HSD_GObj_804D7849, jobj);
+        GObj_SetupGXLink(gobj, HSD_GObj_JObjCallback, 0xB, 0);
+        gm_8016895C(jobj, (DynamicModelDesc*) ((void**) (*un_804D7040))[i], 0);
+        HSD_JObjReqAnimAll(jobj, un_804DE140);
+        HSD_JObjAnimAll(jobj);
+        HSD_GObjProc_8038FD54(gobj, un_80321154, 0x17);
+        lb_80011E24(jobj, &un_804D704C, 2, -1);
+        i++;
+    }
+    lbAudioAx_80026F2C(0x18);
+    lbAudioAx_8002702C(8, 0x0020000000000000ULL);
+    lbAudioAx_80027168();
+    lbAudioAx_80027648();
 }
 
 void un_80321294(HSD_GObj* gobj)
@@ -319,13 +346,13 @@ bool un_80322258(float arg)
     f32 val18 = M2C_FIELD(mpLib_80458868, f32*, 0x18);
     f32 val1c;
     if (arg >= val2c + val18) {
-        val1c = M2C_FIELD(mpLib_80458868, f32*, 0x1c);
+        val1c = M2C_FIELD(mpLib_80458868, f32*, 0x1C);
         if (arg > val1c - val2c) {
-            return TRUE;
+            return true;
         }
-        return FALSE;
+        return false;
     }
-    return TRUE;
+    return true;
 }
 
 s32 un_80322298(float arg)
