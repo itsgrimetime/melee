@@ -412,8 +412,40 @@ void un_803114E8(void)
 }
 /// #un_80311680
 
-/// #un_80311788
+void un_80311788(void)
+{
+    s32 color;
+    char buf[0x48];
+    f32 f31, f30, f29, f28, f27;
 
+    un_804D6E9C = DevText_Create(1, 0x21C, 0x82, 0xA, 7, un_804A26C4);
+
+    if (un_804D6E9C == NULL) {
+        OSReport(un_803FE7E4, un_804D6E9C, un_804D6E9C);
+    } else {
+        HSD_GObj* gobj = DevText_GetGObj();
+        color = un_804DDE18;
+        DevText_Show(gobj, un_804D6E9C);
+        DevText_HideCursor(un_804D6E9C);
+        DevText_80302AC0(un_804D6E9C);
+        DevText_SetBGColor(un_804D6E9C, *(GXColor*) &color);
+        DevText_SetScale(un_804D6E9C, un_804DDE10, un_804DDE14);
+        DevText_Erase(un_804D6E9C);
+        DevText_SetCursorXY(un_804D6E9C, 0, 0);
+
+        f27 = un_803060BC(un_804D6EDC[M2C_FIELD(un_804D6EE0, s16*, 0x154)], 5);
+        f28 = un_803060BC(un_804D6EDC[M2C_FIELD(un_804D6EE0, s16*, 0x154)], 4);
+        f29 = un_803060BC(un_804D6EDC[M2C_FIELD(un_804D6EE0, s16*, 0x154)], 3);
+        f30 = un_803060BC(un_804D6EDC[M2C_FIELD(un_804D6EE0, s16*, 0x154)], 2);
+        f31 = un_803060BC(un_804D6EDC[M2C_FIELD(un_804D6EE0, s16*, 0x154)], 1);
+
+        sprintf(
+            buf, un_803FE2A4,
+            un_803060BC(un_804D6EDC[M2C_FIELD(un_804D6EE0, s16*, 0x154)], 0),
+            f31, f30, f29, f28, f27);
+        DevText_Print(un_804D6E9C, buf);
+    }
+}
 /// #un_80311960
 
 /// #un_80311AB0_OnEnter

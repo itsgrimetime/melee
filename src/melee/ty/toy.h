@@ -74,7 +74,7 @@
 /* 310B48 */ UNK_RET un_80310B48(UNK_PARAMS);
 /* 3114E8 */ void un_803114E8(void);
 /* 311680 */ UNK_RET un_80311680(UNK_PARAMS);
-/* 311788 */ UNK_RET un_80311788(UNK_PARAMS);
+/* 311788 */ void un_80311788(void);
 /* 311960 */ void un_80311960(void);
 /* 311AB0 */ void un_80311AB0_OnEnter(UNK_T);
 /* 311F5C */ UNK_RET un_80311F5C(UNK_PARAMS);
@@ -112,5 +112,13 @@
 /* 4DDE0C */ extern s32 un_804DDE0C;
 /* 4DDE10 */ extern f32 un_804DDE10;
 /* 4DDE14 */ extern f32 un_804DDE14;
+
+/* un_80311788 externs */
+/* 3FE2A4 */ extern char un_803FE2A4[];
+/* 3FE7E4 */ extern char un_803FE7E4[];
+/* 4A26C4 */ extern char un_804A26C4[];
+/* 4D6E9C */ extern DevText* un_804D6E9C;
+/* 4D6EE0 */ extern void* un_804D6EE0;
+/* 4DDE18 */ extern s32 un_804DDE18;
 
 #endif
