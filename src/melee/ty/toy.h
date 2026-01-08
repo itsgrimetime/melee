@@ -129,4 +129,8 @@
 /* 4DDE1C */ extern f32 un_804DDE1C;
 /* 4DDE20 */ extern f32 un_804DDE20;
 
+/* un_803053C4 externs */
+/* 4D6EB4 */ extern s16* un_804D6EB4;
+/* 4DDCD0 */ extern f64 un_804DDCD0;
+
 #endif
