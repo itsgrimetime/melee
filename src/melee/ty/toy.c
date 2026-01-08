@@ -3,7 +3,6 @@
 #include "baselib/cobj.h"
 #include "baselib/controller.h"
 #include "baselib/displayfunc.h"
-#include "baselib/fog.h"
 #include "baselib/gobj.h"
 #include "baselib/gobjproc.h"
 #include "baselib/jobj.h"
@@ -60,6 +59,114 @@ void un_803053C4(s32 targetValue, s32 count, s32 flag)
     s32 i;
     s32 found;
     u16 val;
+
+    if (flag != 0) {
+        while (count != 0) {
+            trophyId = 0;
+            i = 0;
+
+            while (trophyId < 0x125) {
+                list = un_804D6EB4;
+
+                if (lbLang_IsSettingUS()) {
+                    while (*list != -1) {
+                        if (*list == trophyId) {
+                            found = 0;
+                            goto check_found;
+                        }
+                        list++;
+                    }
+                }
+                found = 1;
+
+            check_found:
+                if (found != 0) {
+                    if ((f32) targetValue == un_803060BC(trophyId, 6)) {
+                        if (HSD_Randi(2) == 0) {
+                            if (gm_8016B498() || (u8) gm_801A4310() == 0xC) {
+                                ptr = &un_804A284C[5];
+                            } else {
+                                ptr = gmMainLib_8015CC78();
+                            }
+
+                            if ((u8) * (u16*) ((u8*) ptr + i) == 0) {
+                                Trophy_SetUnlockState((s16) trophyId,
+                                                      HSD_Randi(0xFE) + 1);
+
+                                if (gm_8016B498() || (u8) gm_801A4310() == 0xC)
+                                {
+                                    ptr = &un_804A284C[5];
+                                } else {
+                                    ptr = gmMainLib_8015CC78();
+                                }
+
+                                ptr = (u16*) ((u8*) ptr + i);
+                                val = *ptr;
+                                count = count - 1;
+                                val ^= 0x8000;
+                                *ptr = val;
+
+                                if (count == 0) {
+                                    goto done;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                trophyId++;
+                i += 2;
+            }
+        }
+    } else {
+        trophyId = 0;
+        i = 0;
+
+        while (trophyId < 0x125) {
+            list = un_804D6EB4;
+
+            if (lbLang_IsSettingUS()) {
+                while (*list != -1) {
+                    if (*list == trophyId) {
+                        found = 0;
+                        goto check_found2;
+                    }
+                    list++;
+                }
+            }
+            found = 1;
+
+        check_found2:
+            if (found != 0) {
+                if ((f32) targetValue == un_803060BC(trophyId, 6)) {
+                    Trophy_SetUnlockState((s16) trophyId, HSD_Randi(0xFE) + 1);
+
+                    if (gm_8016B498() || (u8) gm_801A4310() == 0xC) {
+                        ptr = &un_804A284C[5];
+                    } else {
+                        ptr = gmMainLib_8015CC78();
+                    }
+
+                    ptr = (u16*) ((u8*) ptr + i);
+                    val = *ptr;
+                    count = count - 1;
+                    val ^= 0x8000;
+                    *ptr = val;
+
+                    if (count == 0) {
+                        goto done;
+                    }
+                }
+            }
+
+            trophyId++;
+            i += 2;
+        }
+    }
+
+done:
+    return;
+}
 
     if (flag != 0) {
         while (count != 0) {
@@ -416,6 +523,84 @@ after_lang_flag:
         return (float) us_ptr->x04;
     }
 }
+/// #un_803062BC
+
+    // Search JP table
+    while (jp_ptr->id != -1) {
+        if (jp_ptr->id == trophyId) {
+            found_jp = 1;
+            break;
+        }
+        jp_ptr++;
+    }
+
+    // Check language settings
+    if (lbLang_IsSettingJP()) {
+        if (lbLang_IsSavedLanguageUS()) {
+            goto set_lang_flag;
+        }
+    }
+    if (lbLang_IsSettingUS()) {
+        if (lbLang_IsSavedLanguageJP()) {
+            goto set_lang_flag;
+        }
+    }
+    goto after_lang_flag;
+
+set_lang_flag:
+    lang_flag = 1;
+
+after_lang_flag:
+
+    // Search US table
+    us_ptr = un_804D6EC4;
+    while (us_ptr->id != -1) {
+        if (us_ptr->id == trophyId) {
+            break;
+        }
+        us_ptr++;
+    }
+
+    // Switch on field index
+    switch (field) {
+    case 0:
+        if (lang_flag && found_jp) {
+            return jp_ptr->x08;
+        }
+        return us_ptr->x08;
+    case 1:
+        if (lang_flag && found_jp) {
+            return jp_ptr->x0C;
+        }
+        return us_ptr->x0C;
+    case 2:
+        if (lang_flag && found_jp) {
+            return jp_ptr->x10;
+        }
+        return us_ptr->x10;
+    case 3:
+        if (lang_flag && found_jp) {
+            return jp_ptr->x14;
+        }
+        return us_ptr->x14;
+    case 4:
+        if (lang_flag && found_jp) {
+            return jp_ptr->x18;
+        }
+        return us_ptr->x18;
+    case 5:
+        if (lang_flag && found_jp) {
+            return jp_ptr->x1C;
+        }
+        return us_ptr->x1C;
+    case 6:
+        return (float) us_ptr->x20;
+    case 7:
+        return (float) us_ptr->x21;
+    case 8:
+        return (float) us_ptr->x04;
+    }
+}
 s16 un_803062BC(s32 trophyId)
 {
     s16* table = un_804D6EDC;
@@ -552,11 +737,9 @@ void Toy_RemoveUserData(void* ptr)
 
 void un_80306D14(void)
 {
-    TyModeState* state = (TyModeState*) un_804A284C;
-
-    if (state->x0 == 1) {
+    if (M2C_FIELD(un_804A284C, s8*, 0) == 1) {
         lbAudioAx_800237A8(0xAA, 0x7F, 0x40);
-    } else if (state->x0 == 2) {
+    } else if (M2C_FIELD(un_804A284C, s8*, 0) == 2) {
         lbAudioAx_800237A8(0xAB, 0x7F, 0x40);
     }
 }
@@ -690,14 +873,8 @@ void un_803102C4(s8 arg0)
     ((TyViewData*) un_804D6E6C)->x4 = arg0;
 }
 
-void un_803102D0(void)
-{
-    if (un_804D6ECC == NULL) {
-        un_804D6ECC = lbArchive_LoadSymbols(str_TyDataf_dat, &un_804D6EA8,
-                                            str_tyModelFileTbl, &un_804D6EA4,
-                                            str_tyModelFileUsTbl, NULL);
-    }
-}
+/// #un_803102D0
+
 /// #un_80310324
 
 /// #un_80310660
@@ -800,7 +977,7 @@ void un_803114E8(void)
     un_804D6E98 = DevText_Create(1, 0x28, 0x28, 0xE, 9, un_804A2750);
 
     if (un_804D6E98 != NULL) {
-        HSD_GObj* gobj = DevText_GetGObj();
+        struct HSD_GObj* gobj = DevText_GetGObj();
         color = un_804DDE0C;
         DevText_Show(gobj, un_804D6E98);
         DevText_HideCursor(un_804D6E98);
@@ -829,7 +1006,7 @@ void un_803114E8(void)
         HSD_GObjProc_8038FD54(*data, (void (*)(HSD_GObj*)) un_80310B48, 0);
         HSD_GObj_80390CD4(*data);
     } else {
-        OSReport(un_803FE7C0);
+        OSReport(un_803FE7C0, un_804D6E98, un_804D6E98);
     }
 }
 /// #un_80311680
@@ -855,18 +1032,16 @@ void un_80311788(void)
         DevText_Erase(un_804D6E9C);
         DevText_SetCursorXY(un_804D6E9C, 0, 0);
 
-        {
-            TyDisplayData* display = un_804D6EE0;
-            f27 = un_803060BC(un_804D6EDC[display->selectedIdx], 5);
-            f28 = un_803060BC(un_804D6EDC[display->selectedIdx], 4);
-            f29 = un_803060BC(un_804D6EDC[display->selectedIdx], 3);
-            f30 = un_803060BC(un_804D6EDC[display->selectedIdx], 2);
-            f31 = un_803060BC(un_804D6EDC[display->selectedIdx], 1);
+        f27 = un_803060BC(un_804D6EDC[M2C_FIELD(un_804D6EE0, s16*, 0x154)], 5);
+        f28 = un_803060BC(un_804D6EDC[M2C_FIELD(un_804D6EE0, s16*, 0x154)], 4);
+        f29 = un_803060BC(un_804D6EDC[M2C_FIELD(un_804D6EE0, s16*, 0x154)], 3);
+        f30 = un_803060BC(un_804D6EDC[M2C_FIELD(un_804D6EE0, s16*, 0x154)], 2);
+        f31 = un_803060BC(un_804D6EDC[M2C_FIELD(un_804D6EE0, s16*, 0x154)], 1);
 
-            sprintf(buf, un_803FE2A4,
-                    un_803060BC(un_804D6EDC[display->selectedIdx], 0), f31,
-                    f30, f29, f28, f27);
-        }
+        sprintf(
+            buf, un_803FE2A4,
+            un_803060BC(un_804D6EDC[M2C_FIELD(un_804D6EE0, s16*, 0x154)], 0),
+            f31, f30, f29, f28, f27);
         DevText_Print(un_804D6E9C, buf);
     }
 }
@@ -878,19 +1053,31 @@ void un_80311788(void)
 
 void un_80312018_OnFrame(void)
 {
-    TyModeState* state = (TyModeState*) un_804A284C;
-
-    if (state->x4 != 0) {
+    if (M2C_FIELD(un_804A284C, s8*, 4) != 0) {
         un_80311F5C();
         gm_801A4B60();
     }
 }
-/// #un_80312050
+void un_80312050(void)
+{
+    Point3d interest;
+    Point3d sp98;
+    Mtx viewMtx;
+    Vec3 up;
+    Vec3 left;
+    Vec3 eye;
+    Vec3 scaled;
+    HSD_CObj* cobj;
+    void* data;
+    volatile f32* wgpipe_f32;
+    u8 color_ff;
+    u8 color_00;
+    f32 fz, fy, fx;
 
     data = un_804D6E6C;
     cobj = HSD_CObjGetCurrent();
 
-    if (data->x4 == 0) {
+    if ((s8) ((u8*) data)[4] == 0) {
         HSD_CObjGetInterest(cobj, &interest);
         HSD_CObjGetLeftVector(cobj, &left);
         HSD_CObjGetUpVector(cobj, &up);
@@ -1013,52 +1200,63 @@ void un_8031234C(s32 arg0)
 {
     u16* saveData;
     u16* stateData;
-    char* toy = (char*) un_804A26B8;
+    Toy* toy = (Toy*) &un_804A26B8;
     u16* srcPtr;
     u16* dstPtr;
     s32 i;
-    u16* ptr;
     s32 j;
+    s32 category;
+    u16* ptr;
 
     saveData = gmMainLib_8015CC78();
     stateData = gmMainLib_8015CC84();
 
     if (arg0 != 0) {
-        s32 category;
+        /* Load from toy save */
         dstPtr = saveData;
-        srcPtr = (u16*) (toy + 0x194);
-        for (i = 0x125; i != 0; i--) {
-            u16 flags = srcPtr[5];
+        srcPtr = (u16*) ((u8*) toy + 0x194);
+        i = 0x125;
+        do {
+            u16 flags = M2C_FIELD(srcPtr, u16*, 0xA);
             if (flags & 0x8000) {
                 *dstPtr |= 0x8000;
             }
-            *dstPtr = (u8) srcPtr[5] + (*dstPtr & 0xFF00);
-            srcPtr++;
-            dstPtr++;
-        }
+            {
+                u16 temp = M2C_FIELD(srcPtr, u16*, 0xA);
+                srcPtr++;
+                *dstPtr = (u8) temp + (*dstPtr & 0xFF00);
+                dstPtr++;
+            }
+            i--;
+        } while (i != 0);
 
-        *stateData = *(u16*) (toy + 0x19A);
+        *stateData = toy->x19A;
 
-        for (category = 0; category < 9; category++) {
+        category = 0;
+        do {
             if ((u32) category > 1U && category != 8 && category != 3 &&
                 (*stateData & (1 << category)))
             {
                 ptr = saveData;
-                for (j = 0; j < 0x125; j++) {
+                j = 0;
+                do {
                     f32 result = un_803060BC(j, 6);
                     if ((f32) category == result) {
                         *ptr |= 0x4000;
                     }
+                    j++;
                     ptr++;
-                }
+                } while (j < 0x125);
             }
-        }
+            category++;
+        } while (category < 9);
 
-        *gmMainLib_8015CC90() = *(s16*) (toy + 0x3EC);
+        *gmMainLib_8015CC90() = M2C_FIELD(toy, s16*, 0x3EC);
     } else {
-        *(u16*) (toy + 0x19A) = *stateData;
-        *(u16*) (toy + 0x19C) = 0;
-        memcpy(toy + 0x19E, saveData, 0x24A);
-        *(s16*) (toy + 0x3EC) = *gmMainLib_8015CC90();
+        /* Save to toy save */
+        toy->x19A = *stateData;
+        M2C_FIELD(toy, u16*, 0x19C) = 0;
+        memcpy((u8*) toy + 0x19E, saveData, 0x24A);
+        M2C_FIELD(toy, s16*, 0x3EC) = *gmMainLib_8015CC90();
     }
 }
