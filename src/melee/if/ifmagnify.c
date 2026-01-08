@@ -1,10 +1,13 @@
 #include "ifmagnify.h"
 
+#include "gr/ground.h"
 #include "if/ifall.h"
 #include "lb/lb_00B0.h"
 #include "lb/lbarchive.h"
 
 #include <baselib/gobjplink.h>
+
+/* 4DDB60 */ extern int ifMagnify_804DDB60;
 
 ifMagnify ifMagnify_804A1DE0;
 
@@ -47,7 +50,39 @@ void ifMagnify_802FC750(void)
     }
 }
 
-/// #ifMagnify_802FC7C0
+void ifMagnify_802FC7C0(ifMagnify* magnify)
+{
+    volatile int default_val = ifMagnify_804DDB60;
+    GXColor* result;
+
+    result = Ground_801C0604();
+    if (result != NULL) {
+        magnify->x4 = *(int*) result;
+    } else {
+        magnify->x4 = default_val;
+    }
+
+    result = Ground_801C0618();
+    if (result != NULL) {
+        magnify->x8 = *(int*) result;
+    } else {
+        magnify->x8 = default_val;
+    }
+
+    result = Ground_801C062C();
+    if (result != NULL) {
+        magnify->xC = *(int*) result;
+    } else {
+        magnify->xC = default_val;
+    }
+
+    result = Ground_801C0640();
+    if (result != NULL) {
+        magnify->x10 = *(int*) result;
+    } else {
+        magnify->x10 = default_val;
+    }
+}
 
 void ifMagnify_802FC870(void)
 {
