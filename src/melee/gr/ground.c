@@ -2996,17 +2996,7 @@ int Ground_801C5940(void)
     return vals[randi(out_idx)];
 }
 
-void Ground_801C5A28(void)
-{
-    un_803124BC();
-    un_8031234C(0);
-    un_80305918(0, 0, 1);
-}
-
-void Ground_801C5A60(void)
-{
-    un_8031234C(1);
-}
+/// #Ground_801C5A28
 
 void Ground_801C5A84(s32 arg0)
 {

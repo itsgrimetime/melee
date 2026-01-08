@@ -449,4 +449,67 @@ void un_803122D0_OnInit(void)
     *(u8*) &userData->x194 = 1;
 }
 
-/// #un_8031234C
+void un_8031234C(s32 arg0)
+{
+    u16* saveData;
+    u16* stateData;
+    Toy* toy = (Toy*) &un_804A26B8;
+    u16* srcPtr;
+    u16* dstPtr;
+    s32 i;
+    s32 j;
+    s32 category;
+    u16* ptr;
+
+    saveData = gmMainLib_8015CC78();
+    stateData = gmMainLib_8015CC84();
+
+    if (arg0 != 0) {
+        /* Load from toy save */
+        dstPtr = saveData;
+        srcPtr = (u16*) ((u8*) toy + 0x194);
+        i = 0x125;
+        do {
+            u16 flags = M2C_FIELD(srcPtr, u16*, 0xA);
+            if (flags & 0x8000) {
+                *dstPtr |= 0x8000;
+            }
+            {
+                u16 temp = M2C_FIELD(srcPtr, u16*, 0xA);
+                srcPtr++;
+                *dstPtr = (u8) temp + (*dstPtr & 0xFF00);
+                dstPtr++;
+            }
+            i--;
+        } while (i != 0);
+
+        *stateData = toy->x19A;
+
+        category = 0;
+        do {
+            if ((u32) category > 1U && category != 8 && category != 3 &&
+                (*stateData & (1 << category)))
+            {
+                ptr = saveData;
+                j = 0;
+                do {
+                    f32 result = un_803060BC(j, 6);
+                    if ((f32) category == result) {
+                        *ptr |= 0x4000;
+                    }
+                    j++;
+                    ptr++;
+                } while (j < 0x125);
+            }
+            category++;
+        } while (category < 9);
+
+        *gmMainLib_8015CC90() = M2C_FIELD(toy, s16*, 0x3EC);
+    } else {
+        /* Save to toy save */
+        toy->x19A = *stateData;
+        M2C_FIELD(toy, u16*, 0x19C) = 0;
+        memcpy((u8*) toy + 0x19E, saveData, 0x24A);
+        M2C_FIELD(toy, s16*, 0x3EC) = *gmMainLib_8015CC90();
+    }
+}
