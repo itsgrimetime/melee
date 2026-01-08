@@ -184,10 +184,10 @@ void un_8031FD18_OnEnter(void* arg)
 
     un_804D6FE8 = lbArchive_LoadSymbols(un_80400258 + 0x34, &un_804D6FE0,
                                         un_80400258 + 0x44, NULL);
-    lbArchive_LoadSymbols(un_80400258 + 0x58, &un_804D6FEC,
-                          un_80400258 + 0x64, NULL);
-    lbArchive_LoadSymbols(un_80400258 + 0x80, &un_804D6FE4,
-                          un_80400258 + 0x90, NULL);
+    lbArchive_LoadSymbols(un_80400258 + 0x58, &un_804D6FEC, un_80400258 + 0x64,
+                          NULL);
+    lbArchive_LoadSymbols(un_80400258 + 0x80, &un_804D6FE4, un_80400258 + 0x90,
+                          NULL);
     un_803124BC();
     un_804D6FE8 = lbArchive_LoadSymbols(gm_80160438(char_index), NULL);
 

@@ -95,7 +95,8 @@ void un_8031EE84(void)
         j = 0;
         do {
             if (i == un_80400128[j][0]) {
-                lb_80011E24(jobj, (HSD_JObj**)&un_804A2EA8[j * 4], un_80400128[j][1], -1);
+                lb_80011E24(jobj, (HSD_JObj**) &un_804A2EA8[j * 4],
+                            un_80400128[j][1], -1);
             }
             j++;
         } while (j < 0x17);
