@@ -48,7 +48,7 @@ void un_8031EE84(void)
 
 void fn_8031EFE4(HSD_GObj* gobj)
 {
-    HSD_CObj* cobj = GET_COBJ(gobj);
+    HSD_CObj* cobj = gobj->hsd_obj;
     HSD_CObjAnim(cobj);
     if (cobj->aobj->curr_frame == 1.0F || cobj->aobj->curr_frame == 30.0F) {
         vi_8031C9B4(0xC, 0);
