@@ -54,7 +54,7 @@
 /* 308250 */ UNK_RET un_80308250(UNK_PARAMS);
 /* 3082F8 */ UNK_RET un_803082F8(UNK_PARAMS);
 /* 308328 */ UNK_RET un_80308328(UNK_PARAMS);
-/* 308354 */ UNK_RET un_80308354(UNK_PARAMS);
+/* 308354 */ s16 un_80308354(s16 idx);
 /* 3083D8 */ void un_803083D8(void*, s32);
 /* 3084A0 */ UNK_RET un_803084A0(UNK_PARAMS);
 /* 3087F4 */ UNK_RET un_803087F4(UNK_PARAMS);
@@ -133,5 +133,10 @@
 /* un_803053C4 externs */
 /* 4D6EB4 */ extern s16* un_804D6EB4;
 /* 4DDCD0 */ extern f64 un_804DDCD0;
+
+/* un_80308354 externs */
+/* 3FE474 */ extern char un_803FE474[];
+/* 4D5A48 */ extern char un_804D5A48[];
+/* 4D5A50 */ extern char un_804D5A50[];
 
 #endif

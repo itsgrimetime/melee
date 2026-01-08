@@ -725,6 +725,15 @@ s16 un_80308354(s16 idx)
     target = un_804D6EDC[idx];
     entry = un_804D6EC4;
 
+s16 un_80308354(s16 idx)
+{
+    s32 i;
+    s16 target;
+    TrophyData* entry;
+
+    target = un_804D6EDC[idx];
+    entry = un_804D6EC4;
+
     for (i = 0; i < 0x125; i++) {
         if (target == entry->id) {
             break;
