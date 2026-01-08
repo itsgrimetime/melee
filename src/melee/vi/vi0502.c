@@ -56,11 +56,12 @@ static f32 un_804DE0A0;
 static HSD_Archive* un_804D6F94;
 static HSD_GObj* kirby_gobj;
 
-void vi0502_8031E124(CharacterKind player_kind, s8 player_costume,
-                     s8 kirby_costume)
+void vi0502_8031E124(CharacterKind player_kind, int player_costume,
+                     int kirby_costume)
 {
     HSD_JObj* jobj;
     VecMtxPtr pmtx;
+    char pad[56];
 
     Camera_80028B9C(6);
     lb_8000FCDC();
