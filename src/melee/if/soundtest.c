@@ -106,6 +106,10 @@
 /* 4D6DF0 */ extern s32 un_804D6DF0;
 /* 4D6DF4 */ extern s32 un_804D6DF4;
 
+// .sdata (extern)
+/* 4D5908 */ extern s32 un_804D5908;
+/* 4D590C */ extern s32 un_804D590C;
+
 // .sdata2 (extern)
 /* 4DDC48 */ extern float un_804DDC48;
 
@@ -746,9 +750,29 @@ bool un_80300FEC(bool update_scene)
     return false;
 }
 
-/// #un_80301028
+int un_80301028(int arg0)
+{
+    if (arg0 == 1) {
+        struct gmm_x0_528_t* ptr = gmMainLib_8015CDD4();
+        ptr->x5 = un_804D5908 - 1;
+        lbAudioAx_80024030(1);
+        gm_801A42F8(4);
+        gm_801A4B60();
+    }
+    return 0;
+}
 
-/// #un_80301074
+int un_80301074(int arg0)
+{
+    if (arg0 == 1) {
+        struct gmm_x0_528_t* ptr = gmMainLib_8015CDC8();
+        ptr->x5 = un_804D590C - 1;
+        lbAudioAx_80024030(1);
+        gm_801A42F8(3);
+        gm_801A4B60();
+    }
+    return 0;
+}
 
 /// #un_803010C0
 
