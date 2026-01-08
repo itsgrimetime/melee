@@ -28,7 +28,6 @@
 
 #include "ty/tylist.h"
 #include "ty/types.h"
-#include "ty/tylist.h"
 
 #include <melee/if/textlib.h>
 #include <MSL/math.h> // for ABS
