@@ -3,13 +3,14 @@
 
 #include <placeholder.h>
 #include <platform.h>
+
 #include "baselib/forward.h"
 #include "if/forward.h"
 
 /* 2F7288 */ s32 fn_802F7288(HSD_GObj*, Element_803F9628*);
 /* 2F73C4 */ void if_802F73C4(HSD_GObj*);
 /* 2F74D0 */ void if_802F74D0(HSD_GObj*);
-/* 2F75D4 */ UNK_RET fn_802F75D4(UNK_PARAMS);
+/* 2F75D4 */ void fn_802F75D4(HSD_GObj*);
 /* 2F7670 */ UNK_RET fn_802F7670(UNK_PARAMS);
 /* 2F770C */ UNK_RET fn_802F770C(UNK_PARAMS);
 /* 2F77F8 */ HSD_GObj* fn_802F77F8(HSD_GObj*, u8, s32);
