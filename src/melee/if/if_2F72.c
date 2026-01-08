@@ -365,6 +365,41 @@ void if_802F7C30(s32 slot)
     }
 }
 
+void if_802F7D08(s32 slot)
+{
+    void** base = lbl_804A1340;
+    s32 idx;
+    void** entry;
+    s32 ret = gm_8016AEC8();
+    HSD_GObj* result;
+
+    if (ret == -2) {
+        idx = (u8) slot << 1;
+        entry = base + idx;
+        result = fn_802F77F8(*++entry, (u8) slot, 0);
+        base[idx + 1] = result;
+        if (base[idx + 1] != NULL) {
+            HSD_GObjProc_8038FD54(*entry, (HSD_GObjEvent) fn_802F7994, 0x11);
+        }
+    } else if (ret == -1) {
+        idx = (u8) slot << 1;
+        entry = base + idx;
+        result = fn_802F77F8(*++entry, (u8) slot, 1);
+        base[idx + 1] = result;
+        if (base[idx + 1] != NULL) {
+            HSD_GObjProc_8038FD54(*entry, (HSD_GObjEvent) fn_802F7994, 0x11);
+        }
+    } else {
+        idx = (u8) slot << 1;
+        entry = base + idx;
+        result = fn_802F77F8(*++entry, (u8) slot, 1);
+        base[idx + 1] = result;
+        if (base[idx + 1] != NULL) {
+            HSD_GObjProc_8038FD54(*entry, (HSD_GObjEvent) fn_802F75D4, 0x11);
+        }
+    }
+}
+
 void if_802F7E24(void)
 {
     memzero(lbl_804A1340, 0x34);
