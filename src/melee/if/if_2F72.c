@@ -5,7 +5,6 @@
 #include "if/ifall.h"
 #include "if/ifstatus.h"
 #include "if/types.h"
-
 #include "lb/lb_00B0.h"
 #include "lb/lbarchive.h"
 #include "lb/lbaudio_ax.h"
@@ -50,6 +49,41 @@ found:
             }
             entry->x0 = NULL;
             HSD_GObjPLink_80390228(gobj);
+        }
+    }
+}
+
+void if_802F74D0(HSD_GObj* gobj)
+{
+    Element_803F9628* const entries = ifStatus_803F9628;
+    Element_803F9628* entry;
+    s32 i;
+    Element_803F9628* curr;
+    s32 idx;
+
+    curr = entries;
+    for (i = 0; i < 8; curr++, i++) {
+        if (curr->x0 == gobj) {
+            entry = &entries[i];
+            goto found;
+        }
+    }
+    entry = NULL;
+
+found:
+    idx = ((u8*) entry - (u8*) entries) / sizeof(Element_803F9628);
+    if (entry != NULL && !entry->x12.x2) {
+        if (entry->x18 != NULL) {
+            entry->x18(idx);
+        }
+        entry->x12.x2 = 1;
+    }
+    if (entry != NULL) {
+        if (fn_802F7288(gobj, entry) == 0) {
+            if (entry->x1C != NULL) {
+                entry->x1C(idx);
+            }
+            entry->x1C = NULL;
         }
     }
 }
