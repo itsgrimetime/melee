@@ -445,7 +445,7 @@ s16 un_803062BC(s32 trophyId)
 void un_803068E0(HSD_GObj* gobj)
 {
     HSD_CObj* cobj = M2C_FIELD(gobj, HSD_CObj**, 0x28);
-    
+
     if (HSD_CObjSetCurrent(cobj) != 0) {
         HSD_GObj_80390ED0(gobj, 7);
         HSD_CObjEndCurrent();
