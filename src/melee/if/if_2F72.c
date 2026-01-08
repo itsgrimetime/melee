@@ -3,8 +3,6 @@
 #include "gm/gm_1601.h"
 #include "gm/gm_16AE.h"
 #include "if/ifall.h"
-#include "if/ifstatus.h"
-#include "if/types.h"
 #include "lb/lb_00B0.h"
 #include "lb/lbarchive.h"
 #include "lb/lbaudio_ax.h"
@@ -15,11 +13,6 @@
 #include <baselib/gobjproc.h>
 #include <baselib/gobjplink.h>
 #include <baselib/gobjproc.h>
-#include <baselib/jobj.h>
-
-// Orphaned data strings from original ROM
-static char lbl_803F9780[] = "ScInfStc_scene_models";
-static char lbl_803F9798[] = "translate";
 
 static void* lbl_804A1340[13];
 
@@ -31,12 +24,12 @@ void if_802F7BB4(s32 player_idx)
     void** entry;
 
     base = lbl_804A1340;
-    idx = (u8)player_idx;
+    idx = (u8) player_idx;
     offset = idx << 1;
     entry = base + offset;
     (base + offset)[1] = fn_802F77F8(*++entry, idx, 1);
     if ((base + offset)[1] != NULL) {
-        HSD_GObjProc_8038FD54(*entry, (HSD_GObjEvent)fn_802F75D4, 0x11);
+        HSD_GObjProc_8038FD54(*entry, (HSD_GObjEvent) fn_802F75D4, 0x11);
     }
 }
 
