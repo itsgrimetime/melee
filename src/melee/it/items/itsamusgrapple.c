@@ -122,7 +122,13 @@ void it_802BA9B8(Item_GObj* gobj)
     it_802A2428(gobj);
 }
 
-/// #it_802BAA08
+void it_802BAA08(Item_GObj* gobj)
+{
+    Item* ip = GET_ITEM(gobj);
+    Item_80268E5C((HSD_GObj*) gobj, 2, ITEM_ANIM_UPDATE);
+    ftColl_8007AFF8(ip->xDD4_itemVar.samusgrapple.x8);
+    it_802A2428(gobj);
+}
 
 void it_802BAA58(Item_GObj* gobj)
 {
@@ -131,7 +137,13 @@ void it_802BAA58(Item_GObj* gobj)
     it_802A2428(gobj);
 }
 
-/// #it_802BAA94
+void it_802BAA94(Item_GObj* gobj)
+{
+    Item* ip = GET_ITEM(gobj);
+    Item_80268E5C((HSD_GObj*) gobj, 5, ITEM_ANIM_UPDATE);
+    ftColl_8007AFF8(ip->xDD4_itemVar.samusgrapple.x8);
+    it_802A2428(gobj);
+}
 
 /// #it_802BAAE4
 
