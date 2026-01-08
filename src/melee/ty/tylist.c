@@ -28,12 +28,13 @@ typedef struct TyListArg {
     /* 0x00 */ void* x0;
     /* 0x04 */ void* x4;
     /* 0x08 */ void* x8;
-    /* 0x0C */ void* xC;
+    /* 0x0C */ HSD_JObj* xC;
     /* 0x10 */ HSD_JObj* x10;
-    /* 0x14 */ void* x14;
+    /* 0x14 */ HSD_JObj* x14;
     /* 0x18 */ u8 pad_18[0x26 - 0x18];
     /* 0x26 */ s16 idx;
-    /* 0x28 */ u8 pad_28[0x30 - 0x28];
+    /* 0x28 */ u8 pad_28[0x2C - 0x28];
+    /* 0x2C */ float x2C;
     /* 0x30 */ float x30;
 } TyListArg;
 
@@ -204,8 +205,95 @@ void un_80312834(char* buf, u32 num)
 
 /// #un_80312BAC
 
-/// #un_80312E88
+void un_80312E88(TyListArg* arg, float delta)
+{
+    TyListArg* ptr;
+    HSD_JObj* jobj;
+    char* data;
+    s32 i;
+    PAD_STACK(8);
 
+    arg->x30 = arg->x30 + delta;
+
+    if (un_804DDE4C == delta) {
+        arg->x30 = arg->x2C;
+    } else if (delta < un_804DDE48) {
+        if (arg->x30 < arg->x2C) {
+            arg->x30 = arg->x2C;
+        }
+    } else {
+        if (arg->x30 > arg->x2C) {
+            arg->x30 = arg->x2C;
+        }
+    }
+
+    ptr = arg;
+    data = un_804A2AC0;
+    i = 0;
+loop:
+    if ((jobj = M2C_FIELD(ptr, HSD_JObj**, 0xC)) == NULL) goto next;
+    if (i == 2) goto next;
+    {
+        float pos = arg->x30;
+        if (jobj == NULL) {
+            __assert(&un_804D5A78, 0x3B3, &un_804D5A80);
+        }
+        jobj->translate.y = pos;
+    }
+
+    if ((jobj->flags & 0x02000000) == 0) {
+        if (jobj == NULL) goto skip_dirty;
+        if (jobj == NULL) {
+            __assert(&un_804D5A78, 0x234, &un_804D5A80);
+        }
+        {
+            u32 flags = jobj->flags;
+            s32 skip = 0;
+            if ((flags & 0x800000) == 0 && (flags & 0x40)) {
+                skip = 1;
+            }
+            if (skip == 0) {
+                HSD_JObjSetMtxDirtySub(jobj);
+            }
+        }
+    }
+skip_dirty:
+
+    if (arg->idx == un_80304870() - 1) {
+        float pos;
+        jobj = *(HSD_JObj**)(data + 0x28C);
+        pos = arg->x30;
+        if (jobj == NULL) {
+            __assert(&un_804D5A78, 0x3B3, &un_804D5A80);
+        }
+        jobj->translate.y = pos;
+
+        if ((jobj->flags & 0x02000000) == 0) {
+            if (jobj == NULL) goto next;
+            if (jobj == NULL) {
+                __assert(&un_804D5A78, 0x234, &un_804D5A80);
+            }
+            {
+                u32 flags = jobj->flags;
+                s32 skip = 0;
+                if ((flags & 0x800000) == 0 && (flags & 0x40)) {
+                    skip = 1;
+                }
+                if (skip == 0) {
+                    HSD_JObjSetMtxDirtySub(jobj);
+                }
+            }
+        }
+    }
+
+next:
+    i = i + 1;
+    ptr = (TyListArg*)((s8*)ptr + 4);
+    if (i < 3) goto loop;
+
+    un_80312904(arg, 0x63);
+    un_80313464(arg);
+}
 /// #un_8031305C
 
 void un_80313358(void* arg1, s8 arg2, s8 arg3, s8 arg4)
@@ -329,59 +417,59 @@ void un_803148E4(s32 arg0)
 
     if (un_80304870() != 0) {
         if (arg0 != 0) {
-            un_804A284C[0x12A] = *(s16*)(data + 0x298);
-            un_804A284C[0x12B] = un_804D6EDC[*(s16*)(data + 0x298)];
-            ((u8*)un_804A284C)[1] = *(u8*)(data + 0x29B);
-            ((u8*)un_804A284C)[2] = *(u8*)(data + 0x29C);
-            ((u8*)un_804A284C)[3] = *(u8*)(ptr1 + 0xC);
+            un_804A284C[0x12A] = *(s16*) (data + 0x298);
+            un_804A284C[0x12B] = un_804D6EDC[*(s16*) (data + 0x298)];
+            ((u8*) un_804A284C)[1] = *(u8*) (data + 0x29B);
+            ((u8*) un_804A284C)[2] = *(u8*) (data + 0x29C);
+            ((u8*) un_804A284C)[3] = *(u8*) (ptr1 + 0xC);
         } else {
             if (un_80304870() != 0) {
-                s16 val = un_804D6EDC[*(s16*)(data + 0x298)];
+                s16 val = un_804D6EDC[*(s16*) (data + 0x298)];
                 un_803067BC(0, 0);
-                *(u16*)(data + 0x298) = un_803062BC(val);
+                *(u16*) (data + 0x298) = un_803062BC(val);
             }
-            un_804A284C[0x12A] = *(s16*)(data + 0x298);
-            un_804A284C[0x12B] = un_804D6EDC[*(s16*)(data + 0x298)];
-            ((u8*)un_804A284C)[1] = 0;
-            ((u8*)un_804A284C)[2] = 0;
-            ((u8*)un_804A284C)[3] = 0;
+            un_804A284C[0x12A] = *(s16*) (data + 0x298);
+            un_804A284C[0x12B] = un_804D6EDC[*(s16*) (data + 0x298)];
+            ((u8*) un_804A284C)[1] = 0;
+            ((u8*) un_804A284C)[2] = 0;
+            ((u8*) un_804A284C)[3] = 0;
         }
 
-        if (un_80304924(un_804D6EDC[*(s16*)(data + 0x298)]) != 0) {
-            un_80304988(un_804D6EDC[*(s16*)(data + 0x298)]);
+        if (un_80304924(un_804D6EDC[*(s16*) (data + 0x298)]) != 0) {
+            un_80304988(un_804D6EDC[*(s16*) (data + 0x298)]);
         }
     }
 
-    if (*(void**)(data + 0x27C) != NULL) {
+    if (*(void**) (data + 0x27C) != NULL) {
         if (arg0 != 0) {
-            HSD_GObjPLink_80390228(*(HSD_GObj**)(data + 0x27C));
+            HSD_GObjPLink_80390228(*(HSD_GObj**) (data + 0x27C));
         }
-        *(void**)(data + 0x27C) = NULL;
+        *(void**) (data + 0x27C) = NULL;
     }
 
     if (arg0 != 0) {
         HSD_SisLib_803A5E70();
     }
 
-    if (*(void**)archive != NULL) {
+    if (*(void**) archive != NULL) {
         if (arg0 != 0) {
-            HSD_GObjPLink_80390228(*(HSD_GObj**)archive);
+            HSD_GObjPLink_80390228(*(HSD_GObj**) archive);
         }
-        *(void**)archive = NULL;
+        *(void**) archive = NULL;
     }
 
-    if (*(void**)ptr2 != NULL && arg0 != 0) {
-        HSD_GObjPLink_80390228(*(HSD_GObj**)ptr2);
+    if (*(void**) ptr2 != NULL && arg0 != 0) {
+        HSD_GObjPLink_80390228(*(HSD_GObj**) ptr2);
     }
 
-    if (*(void**)ptr1 != NULL) {
-        HSD_GObjProc_8038FED4(*(HSD_GObj**)ptr1);
+    if (*(void**) ptr1 != NULL) {
+        HSD_GObjProc_8038FED4(*(HSD_GObj**) ptr1);
         if (arg0 != 0) {
-            HSD_GObjPLink_80390228(*(HSD_GObj**)ptr1);
+            HSD_GObjPLink_80390228(*(HSD_GObj**) ptr1);
         }
     }
 
-    if (*(void**)(ptr1 + 4) != NULL && arg0 != 0) {
-        HSD_GObjPLink_80390228(*(HSD_GObj**)(ptr1 + 4));
+    if (*(void**) (ptr1 + 4) != NULL && arg0 != 0) {
+        HSD_GObjPLink_80390228(*(HSD_GObj**) (ptr1 + 4));
     }
 }
