@@ -93,13 +93,12 @@ void fn_8031E800(HSD_GObj* gobj)
 
 void un_8031E9B8(void)
 {
-    s32 i;
     HSD_JObj* child;
-    HSD_JObj* jobj;
     HSD_GObj* gobj;
+    HSD_JObj* jobj;
+    s32 i;
     char pad[8];
 
-    /* First model (index 0) */
     gobj = GObj_Create(0xE, 0xF, 0);
     jobj = HSD_JObjLoadJoint((*un_804D6FB0->models)->joint);
     HSD_GObjObject_80390A70(gobj, HSD_GObj_804D7849, jobj);
@@ -109,12 +108,10 @@ void un_8031E9B8(void)
     HSD_JObjAnimAll(jobj);
     HSD_GObjProc_8038FD54(gobj, vi_8031E6EC, 0x17);
 
-    /* Loop through additional models */
     i = 0;
     while (un_804D6FB0->models[i] != NULL) {
         if ((u32) (i - 1) <= 2) {
-            gobj = grCorneria_801E1BF0();
-            if (gobj->hsd_obj == NULL) {
+            if ((gobj = grCorneria_801E1BF0())->hsd_obj == NULL) {
                 child = NULL;
             } else {
                 child = ((HSD_JObj*) gobj->hsd_obj)->child;
