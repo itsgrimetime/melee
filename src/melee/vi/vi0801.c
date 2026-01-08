@@ -31,9 +31,42 @@
 char un_804001E0[] = "ViWait0801";
 char un_804001EC[] = "ViWait0801_scene";
 
-static void un_8031ED70(HSD_GObj* gobj, int unused)
+typedef struct vi_GObj {
+    u8 pad0[0x20];
+    s32 x20;
+    s32 x24;
+    void* hsd_obj;
+} vi_GObj;
+
+static void un_8031ED70(vi_GObj* gobj, int unused)
 {
-    NOT_IMPLEMENTED;
+    GXColor* colors;
+    s32 zero;
+    s32 prio;
+
+    if (HSD_CObjSetCurrent(gobj->hsd_obj) != 0) {
+        colors = &un_804D6FBC;
+        HSD_SetEraseColor(colors->r, colors->g, colors->b, colors->a);
+        HSD_CObjEraseScreen(gobj->hsd_obj, 1, 0, 1);
+        Camera_800310A0(2);
+        gobj->x24 = 9;
+        zero = 0;
+        gobj->x20 = zero;
+        HSD_GObj_80390ED0((HSD_GObj*) gobj, 7);
+        Camera_800310A0(1);
+        prio = 8;
+        gobj->x24 = prio;
+        gobj->x20 = zero;
+        HSD_GObj_80390ED0((HSD_GObj*) gobj, 7);
+        Camera_800310A0(0);
+        gobj->x24 = prio;
+        gobj->x20 = zero;
+        HSD_GObj_80390ED0((HSD_GObj*) gobj, 7);
+        gobj->x24 = 0x8A1;
+        gobj->x20 = zero;
+        HSD_GObj_80390ED0((HSD_GObj*) gobj, 7);
+        HSD_CObjEndCurrent();
+    }
 }
 
 void un_8031EE60(HSD_GObj* gobj)
