@@ -158,8 +158,8 @@ void vi0502_RunFrame(HSD_GObj* gobj)
 
 void un_8031E444_OnEnter(void* arg)
 {
-    u8* input = arg;
     CharacterKind char_kind;
+    u8* input = arg;
     HSD_GObj* gobj;
     HSD_CObj* cobj;
     HSD_Fog* fog;
@@ -209,5 +209,5 @@ void un_8031E444_OnEnter(void* arg)
         HSD_GObjProc_8038FD54(gobj, vi0502_8031E304, 0x17);
     }
 
-    vi0502_8031E124(input[0], input[1], input[3]);
+    vi0502_8031E124(input[0], input[1], input[2]);
 }
