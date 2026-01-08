@@ -92,6 +92,8 @@
 /* 4D6DC0 */ static int un_804D6DC0;
 
 // .sbss (extern)
+/* 4D6DC8 */ extern u8 un_804D6DC8;
+/* 4D6DD0 */ extern float un_804D6DD0;
 /* 4D6DDC */ extern s32 un_804D6DDC;
 /* 4D6DE0 */ extern s32 un_804D6DE0;
 /* 4D6DE4 */ extern s32 un_804D6DE4;
@@ -99,6 +101,9 @@
 /* 4D6DEC */ extern s32 un_804D6DEC;
 /* 4D6DF0 */ extern s32 un_804D6DF0;
 /* 4D6DF4 */ extern s32 un_804D6DF4;
+
+// .sdata2 (extern)
+/* 4DDC48 */ extern float un_804DDC48;
 
 void un_802FF7DC(void)
 {
@@ -653,7 +658,24 @@ int un_80300D78(int arg0)
 }
 #pragma dont_inline reset
 
-/// #fn_80300DE0
+void fn_80300DE0(int arg0)
+{
+    s32* ptr;
+
+    ptr = gmMainLib_8015D06C(un_804D6DC8);
+    switch (arg0) {
+    case 0:
+        lbAudioAx_80024030(0);
+        un_80304334(un_80302DF0());
+        break;
+    case 6:
+        lbAudioAx_80024030(1);
+        *ptr = (u32) (un_804DDC48 * un_804D6DD0);
+        gm_801A42F8(1);
+        gm_801A4B60();
+        break;
+    }
+}
 
 /// #un_80300E74
 
