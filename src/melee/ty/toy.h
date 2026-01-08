@@ -133,4 +133,12 @@
 /* 4D6EB4 */ extern s16* un_804D6EB4;
 /* 4DDCD0 */ extern f64 un_804DDCD0;
 
+/* un_803102D0 externs */
+/* 4D6ECC */ extern void* un_804D6ECC;
+/* 4D6EA8 */ extern void* un_804D6EA8;
+/* 4D6EA4 */ extern void* un_804D6EA4;
+/* 3FE770 */ extern char str_TyDataf_dat[];
+/* 3FE77C */ extern char str_tyModelFileTbl[];
+/* 3FE78C */ extern char str_tyModelFileUsTbl[];
+
 #endif
