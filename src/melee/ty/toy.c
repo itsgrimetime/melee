@@ -414,7 +414,7 @@ s16 un_803062BC(s32 trophyId)
         table++;
     }
 
-    return (s16)i;
+    return (s16) i;
 }
 /// #un_803062EC
 
@@ -585,8 +585,10 @@ void un_80307F64(s32 arg0, s32 arg1)
 
 /// #un_803082F8
 
-/// #un_80308328
-
+void un_80308328(s32 arg0)
+{
+    un_803063D4((s16) arg0, 2, 0x128);
+}
 s16 un_80308354(s16 idx)
 {
     s32 i;
