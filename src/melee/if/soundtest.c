@@ -1406,13 +1406,13 @@ int un_80301C80(int arg0)
 void un_80301CE0(int arg0)
 {
     switch (arg0) {
-    case 1:
-        un_802FFCD0(4, un_803FA258.x144);
-        break;
     case 6:
         lbAudioAx_80024030(1);
         gm_SetScenePendingMinor(0xB);
         gm_801A4B60();
+        break;
+    case 1:
+        un_802FFCD0(4, un_803FA258.x144);
         break;
     }
 }
