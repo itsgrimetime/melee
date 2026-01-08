@@ -16,6 +16,7 @@ typedef struct {
 } TyListData;
 
 extern u8 un_804A2AA8[];
+extern char un_804A2AC0[];
 extern void* un_804D6ED0;
 extern void* un_804D6EC4;
 extern void* un_804D6EC0;
@@ -28,6 +29,9 @@ extern void* un_804D6ECC;
 extern void* un_804D6EA8;
 extern void* un_804D6EA4;
 extern void* un_804D6EC8;
+extern void* un_804D6ED8;
+extern s16 un_804D6EDC[];
+extern char* un_804D5A8C;
 
 /// #un_803124BC
 
