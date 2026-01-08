@@ -646,16 +646,6 @@ s16 un_80308354(s16 idx)
     s16 target;
     TrophyData* entry;
 
-void un_80308328(s32 arg0)
-{
-    un_803063D4((s16) arg0, 2, 0x128);
-}
-s16 un_80308354(s16 idx)
-{
-    s32 i;
-    s16 target;
-    TrophyData* entry;
-
     target = un_804D6EDC[idx];
     entry = un_804D6EC4;
 
