@@ -98,14 +98,6 @@
 /* 3FBFFC */ static u8 un_803FBFFC[0xC0];
 /* 3FC0FC */ static u8 un_803FC0FC[0xC0];
 /* 3FC22C */ static u8 un_803FC22C[0x1F4];
-/* 3FC63C */ static u8 un_803FC63C[0x80];
-/* 3FCA40 */ static u8 un_803FCA40[0x1A0];
-/* 3FCC38 */ static u8 un_803FCC38[0xC0];
-/* 3FCE4C */ static u8 un_803FCE4C[0xE0];
-/* 3FD064 */ static u8 un_803FD064[0x1C0];
-/* 3FD310 */ static u8 un_803FD310[0x1A0];
-/* 3FDAF8 */ static u8 un_803FDAF8[0x80];
-/* 3FDB9C */ static u8 un_803FDB9C[0x84];
 
 // .sdata
 /* 4D5850 */ static int un_804D5850 = 0x7F;
