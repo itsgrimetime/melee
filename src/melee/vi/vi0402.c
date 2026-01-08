@@ -82,8 +82,7 @@ void un_8031D858_OnEnter(void* arg0)
     lbArchive_LoadSymbols("Vi0402.dat", &un_804D6F68, "visual0402Scene", NULL);
 
     light_gobj = GObj_Create(0xB, 0x3, 0);
-    HSD_GObjObject_80390A70(light_gobj, HSD_GObj_804D784A,
-                            lb_80011AC4(un_804D6F68->lights));
+    HSD_GObjObject_80390A70(light_gobj, HSD_GObj_804D784A, lb_80011AC4(un_804D6F68->lights));
     GObj_SetupGXLink(light_gobj, HSD_GObj_LObjCallback, 0, 0);
 
     cam_gobj = GObj_Create(0x13, 0x14, 0);
