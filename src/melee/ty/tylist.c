@@ -13,7 +13,6 @@
 #include <baselib/controller.h>
 #include <baselib/displayfunc.h>
 #include <baselib/fog.h>
-#include <baselib/gobj.h>
 #include <baselib/gobjgxlink.h>
 #include <baselib/gobjobject.h>
 #include <baselib/gobjplink.h>
@@ -41,18 +40,6 @@ typedef struct TyListArg {
 } TyListArg;
 
 extern u8 un_804A2AA8[];
-extern void* un_804D6ED0;
-extern void* un_804D6EC4;
-extern void* un_804D6EC0;
-extern void* un_804D6EBC;
-extern void* un_804D6EB8;
-extern void* un_804D6EB4;
-extern void* un_804D6EB0;
-extern void* un_804D6EAC;
-extern void* un_804D6ECC;
-extern void* un_804D6EA8;
-extern void* un_804D6EA4;
-extern void* un_804D6EC8;
 
 void un_803124BC(void)
 {
