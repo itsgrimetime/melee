@@ -87,7 +87,8 @@
 /* 3FC828 */ static u8 un_803FC828[0xA0];
 /* 3FC8C8 */ static u8 un_803FC8C8[0x168];
 /* 3FCA40 */ static u8 un_803FCA40[0x1A0];
-/* 3FCC38 */ static u8 un_803FCC38[0xC0];
+/* 3FCC38 */ static u8 un_803FCC38[0xFC];
+/* 3FCD34 */ static u8 un_803FCD34[0x118];
 /* 3FCE4C */ static u8 un_803FCE4C[0xE0];
 /* 3FD064 */ static u8 un_803FD064[0x1C0];
 /* 3FD310 */ static u8 un_803FD310[0x1A0];
