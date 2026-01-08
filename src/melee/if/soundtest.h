@@ -80,9 +80,9 @@
 /* 300FEC */ bool un_80300FEC(bool);
 /* 301028 */ int un_80301028(int);
 /* 301074 */ int un_80301074(int);
-/* 3010C0 */ UNK_RET un_803010C0(UNK_PARAMS);
-/* 30110C */ int fn_8030110C(int);
-/* 3011EC */ void fn_803011EC(int);
+/* 3010C0 */ int un_803010C0(int);
+/* 30110C */ UNK_RET fn_8030110C(UNK_PARAMS);
+/* 3011EC */ UNK_RET fn_803011EC(UNK_PARAMS);
 /* 301280 */ UNK_RET un_80301280(UNK_PARAMS);
 /* 3012D4 */ UNK_RET un_803012D4(UNK_PARAMS);
 /* 301328 */ bool un_80301328(bool);
