@@ -10,8 +10,6 @@
 
 #include <dolphin/mtx.h>
 
-#include <baselib/forward.h>
-
 /* Located at un_804A26B8 + 0x3F0 */
 typedef struct ToyAnimState {
     /* 0x00 */ struct HSD_GObj* gobj;

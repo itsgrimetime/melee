@@ -4,7 +4,6 @@
 #include <placeholder.h>
 
 #include "ft/forward.h"
-#include "if/forward.h"
 
 #include "gm/types.h"
 
@@ -103,5 +102,15 @@
 /* 4D6E98 */ extern DevText* un_804D6E98;
 /* 3FE7A0 */ extern char un_803FE7A0[];
 /* 3FE7B0 */ extern char un_803FE7B0[];
+
+/* un_803114E8 externs */
+/* 3FE7C0 */ extern char un_803FE7C0[];
+/* 4A2750 */ extern char un_804A2750[];
+/* 4D5A40 */ extern s32 un_804D5A40;
+/* 4D5A44 */ extern s32 un_804D5A44;
+/* 4D6E5C */ extern void** un_804D6E5C;
+/* 4DDE0C */ extern s32 un_804DDE0C;
+/* 4DDE10 */ extern f32 un_804DDE10;
+/* 4DDE14 */ extern f32 un_804DDE14;
 
 #endif
