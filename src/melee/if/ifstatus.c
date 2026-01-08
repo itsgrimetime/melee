@@ -41,7 +41,7 @@ typedef struct UnkX {
 
 /* 2F491C */ static void ifStatus_PercentOnDeathAnimationThink(UnkX* value,
                                                                s32, s32);
-/* 3F9628 */ static Element_803F9628 ifStatus_803F9628[8] = {
+/* 3F9628 */ Element_803F9628 ifStatus_803F9628[8] = {
     { NULL, 0, if_802F74D0, 0x7C860U, 0x08000000U, 0, 0, 0, 0, 0 },
     { NULL, 0, if_802F73C4, 0xC351U, 0, 0, 0, 0, 0, 0 },
     { NULL, 0, if_802F74D0, 0x7C85EU, 0, 0, 0, 0, 0, 0 },
