@@ -7,7 +7,7 @@
 
 #include "gm/types.h"
 
-#include "if/forward.h"
+#include <baselib/forward.h>
 
 /* 305058 */ s32 un_80305058(s32, s32, s32, f32);
 /* 3053C4 */ void un_803053C4(s32, s32, s32);
@@ -34,8 +34,8 @@
 /* 306B18 */ HSD_GObjProc* un_80306B18(HSD_GObj* gobj, s32 anim_frame,
                                        s32 val1, s32 val2);
 /* 306BB8 */ void un_80306BB8(HSD_GObj* gobj);
-/* 306C5C */ void un_80306C5C(void* arg0);
-/* 306CF4 */ void Toy_RemoveUserData(void* ptr);
+/* 306C5C */ UNK_RET un_80306C5C(UNK_PARAMS);
+/* 306CF4 */ void Toy_RemoveUserData(void*);
 /* 306D14 */ void un_80306D14(void);
 /* 306D70 */ UNK_RET un_80306D70(UNK_PARAMS);
 /* 306EEC */ void* un_80306EEC(HSD_JObj*, s32);
@@ -83,8 +83,24 @@
 /* 3122D0 */ void un_803122D0_OnInit(void);
 /* 31234C */ void un_8031234C(s32);
 
-/* 4D6E54 */ extern s32 un_804D6E54;
+/* 3FDD18 */ extern char un_803FDD18[];
+/* 3FE770 */ extern char str_TyDataf_dat[];
+/* 3FE77C */ extern char str_tyModelFileTbl[];
+/* 3FE78C */ extern char str_tyModelFileUsTbl[];
+/* 4A2AA8 */ extern u8 un_804A2AA8[];
 /* 4D6E6C */ extern void* un_804D6E6C;
+/* 4D6EA4 */ extern void* un_804D6EA4;
+/* 4D6EA8 */ extern void* un_804D6EA8;
+/* 4D6EAC */ extern void* un_804D6EAC;
+/* 4D6EB0 */ extern void* un_804D6EB0;
+/* 4D6EB4 */ extern short* un_804D6EB4;
+/* 4D6EB8 */ extern void* un_804D6EB8;
+/* 4D6EBC */ extern void* un_804D6EBC;
+/* 4D6EC0 */ extern void* un_804D6EC0;
+/* 4D6EC4 */ extern void* un_804D6EC4;
+/* 4D6EC8 */ extern void* un_804D6EC8;
+/* 4D6ECC */ extern HSD_Archive* un_804D6ECC;
+/* 4D6ED0 */ extern void* un_804D6ED0;
 /* 4D6EF4 */ extern struct un_804D6EF4_t* un_804D6EF4;
 
 /* 4A2AC0 */ extern char un_804A2AC0[];
