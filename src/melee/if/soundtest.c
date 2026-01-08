@@ -109,6 +109,7 @@
 // .sdata (extern)
 /* 4D5908 */ extern s32 un_804D5908;
 /* 4D590C */ extern s32 un_804D590C;
+/* 4D5910 */ extern s32 un_804D5910;
 
 // .sdata2 (extern)
 /* 4DDC48 */ extern float un_804DDC48;
@@ -774,7 +775,17 @@ int un_80301074(int arg0)
     return 0;
 }
 
-/// #un_803010C0
+int un_803010C0(int arg0)
+{
+    if (arg0 == 1) {
+        struct gmm_x0_528_t* ptr = gmMainLib_8015CDE0();
+        ptr->x5 = un_804D5910 - 1;
+        lbAudioAx_80024030(1);
+        gm_801A42F8(5);
+        gm_801A4B60();
+    }
+    return 0;
+}
 
 /// #fn_8030110C
 
