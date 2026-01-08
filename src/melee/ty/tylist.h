@@ -25,5 +25,6 @@ struct TyListArg;
 /* 3FDD18 */ extern char un_803FDD18[];
 /* 3FE8F0 */ extern char un_803FE8F0[];
 /* 3FE8FC */ extern char un_803FE8FC[];
+/* 4D6EC8 */ extern void* un_804D6EC8;
 
 #endif
