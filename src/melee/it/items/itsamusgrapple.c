@@ -169,7 +169,7 @@ void it_802BABB8(Item_GObj* gobj)
     Item_80268E5C((HSD_GObj*) gobj, 8, ITEM_ANIM_UPDATE);
     it_802A2428(gobj);
 
-    M2C_FIELD(fp, float*, 0x2344) = (f32)M2C_FIELD(ext_attr, s32*, 0xD0);
+    M2C_FIELD(fp, float*, 0x2344) = (f32) M2C_FIELD(ext_attr, s32*, 0xD0);
 }
 
 void it_802BAC3C(Fighter_GObj* gobj)
@@ -198,4 +198,11 @@ void it_802BAC80(Fighter_GObj* gobj)
 
 /// #it_802BACC4
 
-/// #it_2725_Logic53_EvtUnk
+void it_2725_Logic53_EvtUnk(Item_GObj* gobj, Item_GObj* other)
+{
+    Item* ip = GET_ITEM(gobj);
+    it_8026B894(gobj, other);
+    if (ip->xDD4_itemVar.samusgrapple.x8 == (HSD_GObj*) other) {
+        ip->xDD4_itemVar.samusgrapple.x8 = NULL;
+    }
+}
