@@ -346,7 +346,114 @@ void un_80313464(TyListArg* arg)
                                un_804DDE60, arg->x30, un_804DDE48);
     }
 }
-/// #un_80313508
+HSD_JObj* un_80313508(void* parent, void* symbol, float x, float y, float z)
+{
+    HSD_JObj* jobj;
+    void* archive;
+    void* joint;
+    PAD_STACK(8);
+
+    archive = un_804D6ED8;
+    joint = HSD_ArchiveGetPublicAddress(M2C_FIELD(archive, void**, 0x50), symbol);
+
+    if (joint == NULL) {
+        OSPanic(un_803FE8F0, 0x337, un_803FE8FC);
+        return NULL;
+    }
+
+    jobj = HSD_JObjLoadJoint(joint);
+
+    if (x != un_804DDE48 || y != un_804DDE48 || z != un_804DDE48) {
+        // Set X
+        if (jobj == NULL) {
+            __assert(&un_804D5A78, 0x3A4, &un_804D5A80);
+        }
+        jobj->translate.x = x;
+
+        if ((jobj->flags & 0x02000000) == 0) {
+            if (jobj == NULL) goto skip_x;
+            if (jobj == NULL) {
+                __assert(&un_804D5A78, 0x234, &un_804D5A80);
+            }
+            {
+                u32 flags = jobj->flags;
+                s32 skip = 0;
+                if ((flags & 0x800000) == 0 && (flags & 0x40)) {
+                    skip = 1;
+                }
+                if (skip == 0) {
+                    HSD_JObjSetMtxDirtySub(jobj);
+                }
+            }
+        }
+    skip_x:
+
+        // Set Y
+        if (jobj == NULL) {
+            __assert(&un_804D5A78, 0x3B3, &un_804D5A80);
+        }
+        jobj->translate.y = y;
+
+        if ((jobj->flags & 0x02000000) == 0) {
+            if (jobj == NULL) goto skip_y;
+            if (jobj == NULL) {
+                __assert(&un_804D5A78, 0x234, &un_804D5A80);
+            }
+            {
+                u32 flags = jobj->flags;
+                s32 skip = 0;
+                if ((flags & 0x800000) == 0 && (flags & 0x40)) {
+                    skip = 1;
+                }
+                if (skip == 0) {
+                    HSD_JObjSetMtxDirtySub(jobj);
+                }
+            }
+        }
+    skip_y:
+
+        // Set Z
+        if (jobj == NULL) {
+            __assert(&un_804D5A78, 0x3C2, &un_804D5A80);
+        }
+        jobj->translate.z = z;
+
+        if ((jobj->flags & 0x02000000) == 0) {
+            if (jobj == NULL) goto skip_z;
+            if (jobj == NULL) {
+                __assert(&un_804D5A78, 0x234, &un_804D5A80);
+            }
+            {
+                u32 flags = jobj->flags;
+                s32 skip = 0;
+                if ((flags & 0x800000) == 0 && (flags & 0x40)) {
+                    skip = 1;
+                }
+                if (skip == 0) {
+                    HSD_JObjSetMtxDirtySub(jobj);
+                }
+            }
+        }
+    skip_z:;
+    }
+
+    if (parent != NULL) {
+        HSD_JObj* parentJobj = M2C_FIELD(parent, HSD_JObj**, 0x28);
+        HSD_JObj* child;
+        HSD_JObjAddChild(parentJobj, jobj);
+        child = parentJobj->child;
+        while (child->next != NULL) {
+            child = child->next;
+        }
+    } else {
+        HSD_GObj* gobj;
+        gobj = GObj_Create(6, 7, 0);
+        HSD_GObjObject_80390A70(gobj, (u8)HSD_GObj_804D7849, jobj);
+        GObj_SetupGXLink(gobj, HSD_GObj_JObjCallback, 0x39, 0);
+    }
+
+    return jobj;
+}
 
 /// #un_80313774
 
