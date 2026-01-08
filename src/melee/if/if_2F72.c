@@ -1,5 +1,6 @@
 #include "if_2F72.h"
 
+#include "gm/gm_1601.h"
 #include "gm/gm_16AE.h"
 #include "if/ifall.h"
 #include "if/ifstatus.h"
@@ -16,8 +17,6 @@
 #include <baselib/gobjplink.h>
 #include <baselib/gobjproc.h>
 #include <baselib/jobj.h>
-
-#include "gm/gm_1601.h"
 
 static void* lbl_804A1340[13];
 
@@ -227,6 +226,72 @@ HSD_GObj* fn_802F77F8(HSD_GObj* gobj, u8 slot, s32 arg2)
 
 end:
     return new_gobj;
+}
+
+void fn_802F7994(HSD_GObj* gobj)
+{
+    HSD_JObj* jobj;
+    void** base = lbl_804A1340;
+    void** ptr;
+    s32 slot;
+    void* cmp;
+    f32 frame;
+
+    jobj = gobj->hsd_obj;
+    frame = lbGetJObjCurrFrame(jobj);
+
+    if (base[1] == gobj) {
+        slot = 0;
+    } else {
+        ptr = base + 2;
+        cmp = base[3];
+        if (cmp == gobj) {
+            slot = 1;
+        } else {
+            cmp = ptr[3];
+            ptr += 2;
+            if (cmp == gobj) {
+                slot = 2;
+            } else {
+                cmp = ptr[3];
+                ptr += 2;
+                if (cmp == gobj) {
+                    slot = 3;
+                } else {
+                    cmp = ptr[3];
+                    ptr += 2;
+                    if (cmp == gobj) {
+                        slot = 4;
+                    } else {
+                        cmp = ptr[3];
+                        if (cmp == gobj) {
+                            slot = 5;
+                        } else {
+                            slot = -1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (slot >= 0) {
+        if (frame > 0.0f && base[slot * 2 + 2] == NULL) {
+            s32 idx = (u8) slot << 3;
+            void** entry = base + idx;
+            base[idx + 2] = fn_802F77F8(*++entry, (u8) slot, 1);
+            if (base[idx + 2] != NULL) {
+                HSD_GObjProc_8038FD54(*entry, (HSD_GObjEvent) fn_802F7670,
+                                      0x11);
+            }
+        }
+        if (lb_8000B09C(jobj) == 0) {
+            base[slot * 2 + 1] = NULL;
+            HSD_GObjPLink_80390228(gobj);
+        } else {
+            HSD_JObjAnimAll(jobj);
+        }
+    }
 }
 
 void if_802F7AF8(s32 slot)
