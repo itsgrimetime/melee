@@ -9,6 +9,7 @@
 #include "baselib/gobj.h"
 #include "baselib/gobjproc.h"
 #include "baselib/jobj.h"
+#include "baselib/lobj.h"
 #include "baselib/memory.h"
 #include "baselib/random.h"
 #include "baselib/state.h"
@@ -497,7 +498,39 @@ void un_80306BB8(HSD_GObj* gobj)
     }
 }
 
-/// #un_80306C5C
+void un_80306C5C(void* arg0)
+{
+    s32 idx;
+    s32 offset;
+    void* base;
+    void* data;
+    u8* table;
+    void* lobj;
+    void* next;
+    void* unused1;
+    void* unused2;
+
+    idx = 0;
+    offset = idx * 0xC;
+    base = un_804D6ED4;
+    data = M2C_FIELD(base, void**, 0x4);
+    table = (u8*)base + offset;
+    lobj = M2C_FIELD(data, void**, 0x28);
+
+    while (lobj != NULL) {
+        HSD_LObjSetPosition(lobj, (Vec3*)(table + 0x1C));
+        HSD_LObjSetInterest(lobj, (Vec3*)(table + 0x7C));
+        table += 0xC;
+        if (lobj == NULL) {
+            next = NULL;
+        } else {
+            next = M2C_FIELD(lobj, void**, 0xC);
+        }
+        lobj = next;
+    }
+
+    HSD_LObjAnimAll(M2C_FIELD(arg0, void**, 0x28));
+}
 
 void Toy_RemoveUserData(void* ptr)
 {
