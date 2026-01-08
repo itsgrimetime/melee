@@ -204,9 +204,9 @@ void un_80312834(char* buf, u32 num)
 
 /// #un_80312BAC
 
-void un_80312E88(TyListArg* arg, float delta)
+void un_80312E88(struct TyListArg* arg, float delta)
 {
-    TyListArg* ptr;
+    struct TyListArg* ptr;
     HSD_JObj* jobj;
     char* data;
     s32 i;
@@ -286,12 +286,9 @@ skip_dirty:
     }
 
 next:
-    i = i + 1;
-    ptr = (TyListArg*)((s8*)ptr + 4);
+    i++;
+    ptr = (struct TyListArg*)((char*)ptr + 4);
     if (i < 3) goto loop;
-
-    un_80312904(arg, 0x63);
-    un_80313464(arg);
 }
 /// #un_8031305C
 
