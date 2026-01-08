@@ -304,8 +304,8 @@ void un_80321AF4(HSD_GObj* gobj)
             if (ftLib_8008731C(cur) == 0) {
                 ftLib_80086644(cur, &pos);
 
-                if (pos.y < gCrowdConfig->blastzone_y_offset +
-                                *(f32*)(mpLib + 0x14))
+                if (pos.y <
+                    gCrowdConfig->blastzone_y_offset + *(f32*) (mpLib + 0x14))
                 {
                     data->x24 = data->x24 + 1;
                 } else {
