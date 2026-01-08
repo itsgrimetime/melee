@@ -13,6 +13,7 @@
 #include <baselib/fog.h>
 #include <baselib/gobj.h>
 #include <baselib/gobjplink.h>
+#include <baselib/fog.h>
 #include <baselib/jobj.h>
 
 static SceneDesc* un_804D7010;
