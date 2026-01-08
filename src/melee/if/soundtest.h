@@ -110,7 +110,7 @@
 /* 301A64 */ int un_80301A64(int arg0);
 /* 301AD4 */ int un_80301AD4(int arg0);
 /* 301B48 */ int un_80301B48(int);
-/* 301BA8 */ void un_80301BA8(UNK_T);
+/* 301BA8 */ void un_80301BA8(void* out);
 /* 301C64 */ void un_80301C64(un_80301C64_t*);
 /* 301C80 */ int un_80301C80(int);
 /* 301CE0 */ void un_80301CE0(int);

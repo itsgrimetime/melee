@@ -59,7 +59,20 @@
     int x28;
     int x2C;
     int x30;
-    u8 _pad34[0xF8];
+    u8 _pad34[0xC4];
+    int xF8;
+    int xFC;
+    int x100;
+    int x104;
+    int x108;
+    int x10C;
+    int x110;
+    int x114;
+    int x118;
+    int x11C;
+    int x120;
+    int x124;
+    int x128;
     int x12C;
     int x130;
     u8 _pad134[0x4];
@@ -1250,93 +1263,6 @@ int un_80301964(int arg0)
         do {
             result = lb_8001B6F8();
         } while (result == 0xB);
-
-        if (result == 0 && lbSnap_8001DE8C(un_804D6E04) != 0) {
-            HSD_GObj* gobj;
-            HSD_SObj_803A477C_t* sobj;
-
-            if (un_804D6E08 != NULL) {
-                HSD_GObjPLink_80390228(un_804D6E08);
-            }
-
-            gobj = GObj_Create(0xE, 0xF, 0);
-            GObj_SetupGXLink(gobj, HSD_SObjLib_803A49E0, 0x12, 0);
-            un_803FD274 = un_804D6E04;
-            sobj =
-                HSD_SObjLib_803A477C(gobj, (s32) un_804D5990, 0, 0, 0x80, 0);
-            sobj->x10 = un_804DDC4C;
-            sobj->x14 = un_804DDC50;
-            sobj->x40 |= 2;
-            un_804D6E08 = gobj;
-        }
-    }
-
-    return 0;
-}
-
-int un_80301A64(int arg0)
-{
-    s32 result;
-
-    if (arg0 != 1) {
-        return 0;
-    }
-
-    OSReport(un_803FD29C);
-    result = lbSnap_8001D5FC(0, un_804D6E10);
-    if (result != 0xB) {
-        return 0;
-    }
-
-    do {
-        result = lb_8001B6F8();
-    } while (result == 0xB);
-
-    if (result == 0) {
-        lbSnap_8001D40C(0);
-    }
-    return 0;
-}
-
-int un_80301AD4(int arg0)
-{
-    s32 result;
-
-    if (arg0 != 1) {
-        return 0;
-    }
-
-    OSReport(un_803FD2AC);
-    result = lbSnap_8001D7B0(0, un_804D6E14, un_804D6E10);
-    if (result != 0xB) {
-        return 0;
-    }
-
-    do {
-        result = lb_8001B6F8();
-    } while (result == 0xB);
-
-    if (result == 0) {
-        lbSnap_8001D40C(0);
-    }
-    return 0;
-}
-
-int un_80301B48(int arg0)
-{
-    switch (arg0) {
-    case 0:
-        lbAudioAx_80024030(0);
-        un_80304334(un_80302DF0());
-        break;
-    case 6:
-        lbAudioAx_80024030(1);
-        gm_SetScenePendingMinor(6);
-        gm_801A4B60();
-        break;
-    }
-    return 0;
-}
 
         if (result == 0 && lbSnap_8001DE8C(un_804D6E04) != 0) {
             HSD_GObj* gobj;
