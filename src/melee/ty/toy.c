@@ -8,7 +8,6 @@
 #include "baselib/jobj.h"
 #include "baselib/lobj.h"
 #include "baselib/memory.h"
-#include "baselib/random.h"
 #include "baselib/state.h"
 #include "gm/gm_1601.h" // for gm_801677E8
 #include "gm/gm_16AE.h"
