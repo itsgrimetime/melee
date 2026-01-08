@@ -1192,14 +1192,15 @@ int un_80301734(int arg0)
 
 int un_8030178C(int arg0)
 {
-    if (arg0 == 1) {
-        OSReport(un_803FD24C);
-        {
-            s32 result = lb_8001C8BC();
-            OSReport(un_803FD230, result);
-            if (result == 0) {
-                lb_8001CBAC(0);
-            }
+    if (arg0 != 1) {
+        return 0;
+    }
+    OSReport(un_803FD24C);
+    {
+        s32 result = lb_8001C8BC();
+        OSReport(un_803FD230, result);
+        if (result == 0) {
+            lb_8001CBAC(0);
         }
     }
     return 0;
@@ -1207,48 +1208,52 @@ int un_8030178C(int arg0)
 
 int un_80301800(int arg0)
 {
-    if (arg0 == 1) {
-        OSReport(un_804D5980);
-        lb_8001CE00();
+    if (arg0 != 1) {
+        return 0;
     }
+    OSReport(un_804D5980);
+    lb_8001CE00();
     return 0;
 }
 
 int un_80301840(int arg0)
 {
-    if (arg0 == 1) {
-        OSReport(un_804D5988);
-        {
-            s32 result = lb_8001CBBC();
-            gmMainLib_8015FA34(result);
-            if (result == 0 || result == 2) {
-                lb_8001CBAC(0);
-            }
-            OSReport(un_803FD230, result);
+    if (arg0 != 1) {
+        return 0;
+    }
+    OSReport(un_804D5988);
+    {
+        s32 result = lb_8001CBBC();
+        gmMainLib_8015FA34(result);
+        if (result == 0 || result == 2) {
+            lb_8001CBAC(0);
         }
+        OSReport(un_803FD230, result);
     }
     return 0;
 }
 
 int un_803018BC(int arg0)
 {
-    if (arg0 == 1) {
-        OSReport(un_803FD258);
-        {
-            s32 result = lb_8001CC4C();
-            OSReport(un_803FD230, result);
-        }
-        lb_8001CBAC(4);
+    if (arg0 != 1) {
+        return 0;
     }
+    OSReport(un_803FD258);
+    {
+        s32 result = lb_8001CC4C();
+        OSReport(un_803FD230, result);
+    }
+    lb_8001CBAC(4);
     return 0;
 }
 
 int un_8030191C(int arg0)
 {
-    if (arg0 == 1) {
-        OSReport(un_803FD264);
-        lbSnap_8001D40C(0);
+    if (arg0 != 1) {
+        return 0;
     }
+    OSReport(un_803FD264);
+    lbSnap_8001D40C(0);
     return 0;
 }
 
