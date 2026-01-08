@@ -112,6 +112,29 @@ void fn_802F75D4(HSD_GObj* gobj)
     }
 }
 
+void fn_802F7670(HSD_GObj* gobj)
+{
+    HSD_JObj* jobj = gobj->hsd_obj;
+    void** base;
+    void** data;
+    s32 i;
+
+    if (lb_8000B09C(jobj) == 0) {
+        base = lbl_804A1340;
+        data = base;
+        for (i = 0; i < 6; data += 2, i++) {
+            if (data[2] == gobj) {
+                base[i * 2 + 2] = NULL;
+                goto done;
+            }
+        }
+    done:
+        HSD_GObjPLink_80390228(gobj);
+    } else {
+        HSD_JObjAnimAll(jobj);
+    }
+}
+
 void if_802F7BB4(s32 player_idx)
 {
     void** base;
