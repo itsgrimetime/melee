@@ -81,7 +81,7 @@ void un_8031F9D8(CharacterKind char_index, int costume_id)
     Player_80036F34(0, 1);
     un_804D7000 = Player_GetEntity(0);
     lbAudioAx_80026F2C(0x18);
-    lbAudioAx_8002702C(0x8, (u64)0x20 << 48);
+    lbAudioAx_8002702C(0x8, (u64) 0x20 << 48);
     lbAudioAx_80027168();
     lbAudioAx_80027648();
 }
@@ -163,15 +163,14 @@ void un_8031FD18_OnEnter(void* arg)
     u8 char_index;
     HSD_CObj* cobj;
     HSD_GObj* gobj;
-    char* str_table;
     HSD_JObj* jobj;
     HSD_JObj* child;
     HSD_Fog* fog;
     HSD_LObj* lobj;
     f32 scale;
+    char pad[24];
 
     un_804D6FFC = input[0];
-    str_table = un_80400258;
     un_804D6FFD = input[1];
     un_804D7000 = (void*)i;
 
@@ -183,12 +182,12 @@ void un_8031FD18_OnEnter(void* arg)
 
     char_index = input[0];
 
-    un_804D6FE8 = lbArchive_LoadSymbols(str_table + 0x34, &un_804D6FE0,
-                                        str_table + 0x44, NULL);
-    lbArchive_LoadSymbols(str_table + 0x58, &un_804D6FEC,
-                          str_table + 0x64, NULL);
-    lbArchive_LoadSymbols(str_table + 0x80, &un_804D6FE4,
-                          str_table + 0x90, NULL);
+    un_804D6FE8 = lbArchive_LoadSymbols(un_80400258 + 0x34, &un_804D6FE0,
+                                        un_80400258 + 0x44, NULL);
+    lbArchive_LoadSymbols(un_80400258 + 0x58, &un_804D6FEC,
+                          un_80400258 + 0x64, NULL);
+    lbArchive_LoadSymbols(un_80400258 + 0x80, &un_804D6FE4,
+                          un_80400258 + 0x90, NULL);
     un_803124BC();
     un_804D6FE8 = lbArchive_LoadSymbols(gm_80160438(char_index), NULL);
 
