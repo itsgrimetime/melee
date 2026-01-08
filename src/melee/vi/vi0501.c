@@ -1,17 +1,23 @@
 #include "vi0501.h"
 
+#include "cm/camera.h"
 #include "ef/efasync.h"
 #include "ef/eflib.h"
+#include "ft/ftdemo.h"
 #include "gm/gm_1601.h"
 #include "gm/gm_1A36.h"
 #include "gm/gm_1A45.h"
+#include "gr/grlib.h"
+#include "gr/ground.h"
+#include "gr/stage.h"
+#include "it/item.h"
+#include "lb/lb_00B0.h"
 #include "lb/lb_00F9.h"
 #include "lb/lbarchive.h"
 #include "lb/lbaudio_ax.h"
 #include "lb/lbshadow.h"
-#include "mn/mnmain.h"
-#include "sc/types.h"
-#include "vi/types.h"
+#include "mp/mpcoll.h"
+#include "pl/player.h"
 #include "vi/vi.h"
 
 #include <dolphin/gx.h>
@@ -22,6 +28,7 @@
 #include <baselib/gobjgxlink.h>
 #include <baselib/gobjobject.h>
 #include <baselib/gobjproc.h>
+#include <baselib/jobj.h>
 #include <baselib/wobj.h>
 
 static SceneDesc* un_804D6F70;
@@ -48,8 +55,86 @@ char un_804000C0[] = "ScVi";
 
 void mn_8022EAE0(HSD_GObj*);
 
-/// #un_8031D9F8
+void un_8031D9F8(CharacterKind char_kind, int costume, int spawn_mode,
+                 int spawn_indices)
+{
+    u8* indices = (u8*)spawn_indices;
+    void* gr_result;
+    HSD_GObj* entity;
+    HSD_JObj* jobj;
+    s32 i;
+    f32 scale;
+    Vec3 pos;
+    char pad[24];
 
+    Camera_80028B9C(6);
+    lb_8000FCDC();
+    mpColl_80041C78();
+    Ground_801C0378(0x40);
+    Stage_802251E8(0x11, 0);
+    Item_80266FA8();
+    Item_80266FCC();
+    un_804D6F80 = Ground_801C0498();
+    Ground_801C04BC(un_804DE064);
+    Stage_8022524C();
+    Stage_8022532C(0x11, 0);
+
+    ftDemo_ObjAllocInit();
+    Player_InitAllPlayers();
+
+    Player_80036E20(char_kind, un_804D6F78, 3);
+    Player_SetPlayerCharacter(0, char_kind);
+    Player_SetCostumeId(0, costume);
+    Player_SetPlayerId(0, 0);
+    Player_SetSlottype(0, 2);
+    Player_SetFacingDirection(0, un_804DE068);
+    Player_80032768(0, &un_804000A8);
+    Player_80036F34(0, 8);
+
+    gr_result = grLib_801C9A10();
+    scale = un_804DE060;
+
+    for (i = 1; i < 4; i++) {
+        Player_80036E20(4, un_804D6F74, 6);
+        Player_80031DA8(indices[i - 1], spawn_mode);
+        Player_SetFlagsBit1(i);
+        Player_SetPlayerCharacter(i, 4);
+        Player_SetCostumeId(i, spawn_mode);
+        Player_SetPlayerId(i, 0);
+        Player_SetSlottype(i, 2);
+        Player_SetFacingDirection(i, un_804DE068);
+        Player_80032768(i, &un_804000A8);
+        Player_SetUnk4D(i, indices[i - 1]);
+        Player_80036F34(i, i + 10);
+
+        entity = Player_GetEntity(i);
+        un_804A2E98[i - 1] = entity;
+
+        jobj = GET_JOBJ(un_804A2E98[i - 1]);
+        HSD_JObjReqAnimAll(jobj, un_804DE06C);
+        HSD_JObjAnimAll(jobj);
+
+        jobj = GET_JOBJ(un_804A2E98[i - 1]);
+        HSD_ASSERT(0x69, jobj != NULL);
+
+        pos.x = jobj->translate.x;
+        pos.y = jobj->translate.y;
+        pos.z = jobj->translate.z;
+        pos.x = pos.x * (scale * un_804D6F80);
+        pos.y = pos.y * (scale * un_804D6F80);
+        pos.z = pos.z * (scale * un_804D6F80);
+        ((Vec3*)((u8*)gr_result + 0xC))[i - 1].x = pos.x;
+        ((Vec3*)((u8*)gr_result + 0xC))[i - 1].y = pos.y;
+        ((Vec3*)((u8*)gr_result + 0xC))[i - 1].z = pos.z;
+
+        HSD_JObjReqAnimAll(jobj, un_804DE070);
+    }
+
+    lbAudioAx_80026F2C(0x1C);
+    lbAudioAx_8002702C(0xC, 0x80004000ULL);
+    lbAudioAx_80027168();
+    lbAudioAx_80027648();
+}
 void vi_8031DC80(HSD_GObj* gobj, int unused)
 {
     PAD_STACK(8);
@@ -110,7 +195,8 @@ void un_8031DE58_OnEnter(void* arg)
 
     char_index = input[0];
 
-    un_804D6F74 = lbArchive_LoadSymbols(un_804000B4, &un_804D6F70, un_804000C0, NULL);
+    un_804D6F74 =
+        lbArchive_LoadSymbols(un_804000B4, &un_804D6F70, un_804000C0, NULL);
     un_804D6F78 = lbArchive_LoadSymbols(viGetCharAnimByIndex(char_index), NULL);
 
     fog_gobj = GObj_Create(0xb, 3, 0);
