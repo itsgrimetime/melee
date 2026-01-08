@@ -40,6 +40,15 @@
 /* 3FA090 */ static int un_803FA090;
 /* 3FA09C */ static float un_803FA09C;
 /* 3FA0B0 */ static int un_803FA0B0;
+/* 3FA128 */ static struct {
+    u8 _pad0[0x220];
+    u16 x220;
+    u8 _pad222[0x2];
+    u8 x224;
+    u8 x225;
+    u8 x226;
+    u8 x227;
+} un_803FA128;
 /* 3FA258 */ static struct {
     int x0;
     int x4;
@@ -50,7 +59,10 @@
     int x28;
     int x2C;
     int x30;
-    u8 _pad34[0x104];
+    u8 _pad34[0xF8];
+    int x12C;
+    int x130;
+    u8 _pad134[0x4];
     void* x138;
     u8 _pad13C[0x8];
     u8 x144[0x44];
@@ -110,7 +122,7 @@
 /* 4D6DC0 */ static int un_804D6DC0;
 
 // .sbss (extern)
-/* 4D6DC8 */ extern u8 un_804D6DC8;
+/* 4D6DC8 */ extern s32 un_804D6DC8;
 /* 4D6DCC */ extern s32 un_804D6DCC;
 /* 4D6DD0 */ extern float un_804D6DD0;
 /* 4D6DD8 */ extern s32 un_804D6DD8;
@@ -134,6 +146,9 @@
 /* 4D5978 */ extern char un_804D5978[];
 /* 4D5980 */ extern char un_804D5980[];
 /* 4D5988 */ extern char un_804D5988[];
+
+// .bss (extern)
+/* 45A6C0 */ extern u8 gmMainLib_8045A6C0[];
 
 // .sdata2 (extern)
 /* 4DDC48 */ extern float un_804DDC48;
@@ -318,7 +333,17 @@ bool un_802FFEA4(bool update_scene)
     return false;
 }
 
-/// #un_802FFEE0
+void un_802FFEE0(s32* arg0)
+{
+#define ST_MIN(a, b) ((a) < (b) ? (a) : (b))
+    u16 val = ST_MIN((u16) un_803FA258.x12C, 0x3E);
+#undef ST_MIN
+
+    ((u16*) arg0)[0] = val;
+    ((u16*) arg0)[1] = (u16) un_803FA258.x130;
+    arg0[1] = 0x98967F;
+    arg0[2] = 0;
+}
 
 /// #un_802FFF2C
 
@@ -370,13 +395,53 @@ bool un_803002FC(bool update_scene)
     return false;
 }
 
-/// #un_80300338
+s32 un_80300338(void)
+{
+    u8* src = &gmMainLib_8045A6C0[un_803FA128.x220 + 0x1868];
+    un_803FA128.x224 = src[0];
+    un_803FA128.x225 = src[1];
+    un_803FA128.x226 = src[2];
+    un_803FA128.x227 = src[3];
+    return 0;
+}
 
-/// #un_80300378
+s32 un_80300378(void)
+{
+    u8* src;
+    un_803FA128.x220 &= 0xFFFE;
+    src = &gmMainLib_8045A6C0[un_803FA128.x220 + 0x1868];
+    un_803FA128.x224 = src[0];
+    un_803FA128.x225 = src[1];
+    un_803FA128.x226 = src[2];
+    un_803FA128.x227 = src[3];
+    return 0;
+}
 
-/// #un_803003C4
+s32 un_803003C4(void)
+{
+    u8* src;
+    un_803FA128.x220 &= 0xFFFC;
+    src = &gmMainLib_8045A6C0[un_803FA128.x220 + 0x1868];
+    un_803FA128.x224 = src[0];
+    un_803FA128.x225 = src[1];
+    un_803FA128.x226 = src[2];
+    un_803FA128.x227 = src[3];
+    return 0;
+}
 
-/// #un_80300410
+s32 un_80300410(s32 arg0)
+{
+    if (arg0 == 1) {
+        u8* dst;
+        lbAudioAx_80024030(1);
+        dst = &gmMainLib_8045A6C0[un_803FA128.x220 + 0x1868];
+        dst[0] = un_803FA128.x224;
+        dst[1] = un_803FA128.x225;
+        dst[2] = un_803FA128.x226;
+        dst[3] = un_803FA128.x227;
+    }
+    return 0;
+}
 
 // these will try to inline un_802FFD94 otherwise
 #pragma push
@@ -554,7 +619,23 @@ bool un_803009A4(bool update_scene)
     return false;
 }
 
-/// #un_803009E0
+s32 un_803009E0(void)
+{
+    switch (un_804D6DD8) {
+    case 2: {
+        u32 val = (u32) *gmMainLib_8015D06C((u8) un_804D6DC8);
+        un_804D6DD0 = (float) (val / 100U);
+        break;
+    }
+    case 3: {
+        s32 result = gmMainLib_8015D48C((u8) un_804D6DC8);
+        gmMainLib_8015D4E8((u8) un_804D6DC8, result);
+        un_804D6DCC = result;
+        break;
+    }
+    }
+    return 0;
+}
 
 int un_80300A88(void)
 {

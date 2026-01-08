@@ -24,7 +24,7 @@
 /* 2FFE0C */ int fn_802FFE0C(int);
 /* 2FFE6C */ bool fn_802FFE6C(bool);
 /* 2FFEA4 */ bool un_802FFEA4(bool);
-/* 2FFEE0 */ void un_802FFEE0(UNK_T);
+/* 2FFEE0 */ void un_802FFEE0(s32*);
 /* 2FFF2C */ void un_802FFF2C(StartMeleeData*);
 /* 3001DC */ bool un_803001DC(bool);
 /* 300218 */ int un_80300218(void);
@@ -32,9 +32,9 @@
 /* 300290 */ int un_80300290(int);
 /* 3002FC */ bool un_803002FC(bool);
 /* 300338 */ s32 un_80300338(void);
-/* 300378 */ UNK_RET un_80300378(UNK_PARAMS);
-/* 3003C4 */ UNK_RET un_803003C4(UNK_PARAMS);
-/* 300410 */ UNK_RET un_80300410(UNK_PARAMS);
+/* 300378 */ s32 un_80300378(void);
+/* 3003C4 */ s32 un_803003C4(void);
+/* 300410 */ s32 un_80300410(s32 arg0);
 /* 300480 */ int un_80300480(int);
 /* 3004B4 */ int un_803004B4(int);
 /* 3004E8 */ int un_803004E8(int arg0);
@@ -61,7 +61,7 @@
 /* 300934 */ int un_80300934(int);
 /* 300968 */ bool un_80300968(bool);
 /* 3009A4 */ bool un_803009A4(bool);
-/* 3009E0 */ UNK_RET un_803009E0(UNK_PARAMS);
+/* 3009E0 */ s32 un_803009E0(void);
 /* 300A88 */ int un_80300A88(void);
 /* 300AB8 */ bool un_80300AB8(bool);
 /* 300AF4 */ bool un_80300AF4(int);
