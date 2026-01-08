@@ -34,7 +34,7 @@
 /* 306B18 */ HSD_GObjProc* un_80306B18(HSD_GObj* gobj, s32 anim_frame,
                                        s32 val1, s32 val2);
 /* 306BB8 */ void un_80306BB8(HSD_GObj* gobj);
-/* 306C5C */ UNK_RET un_80306C5C(UNK_PARAMS);
+/* 306C5C */ void un_80306C5C(void* arg0);
 /* 306CF4 */ void Toy_RemoveUserData(void* ptr);
 /* 306D14 */ void un_80306D14(void);
 /* 306D70 */ void un_80306D70(s32);
@@ -91,6 +91,7 @@
 /* 4D6EDC */ extern s16* un_804D6EDC;
 /* 3FE8D0 */ extern char un_803FE8D0[];
 /* 3FE880 */ extern char un_803FE880[];
+/* 4D6ED4 */ extern void* un_804D6ED4;
 /* 4D6ED8 */ extern void* un_804D6ED8;
 /* 4D5A8C */ extern char un_804D5A8C[];
 /* 4DDE60 */ extern float un_804DDE60;

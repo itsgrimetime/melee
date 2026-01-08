@@ -517,34 +517,34 @@ void un_80306C5C(void* arg0)
 {
     s32 idx;
     s32 offset;
-    TyLightData* base;
-    HSD_GObj* data;
+    void* base;
+    void* data;
     u8* table;
-    HSD_LObj* lobj;
-    HSD_LObj* next;
+    void* lobj;
+    void* next;
     void* unused1;
     void* unused2;
 
     idx = 0;
     offset = idx * 0xC;
     base = un_804D6ED4;
-    data = base->gobj;
-    table = (u8*) base + offset;
-    lobj = data->hsd_obj;
+    data = M2C_FIELD(base, void**, 0x4);
+    table = (u8*)base + offset;
+    lobj = M2C_FIELD(data, void**, 0x28);
 
     while (lobj != NULL) {
-        HSD_LObjSetPosition(lobj, (Vec3*) (table + 0x1C));
-        HSD_LObjSetInterest(lobj, (Vec3*) (table + 0x7C));
+        HSD_LObjSetPosition(lobj, (Vec3*)(table + 0x1C));
+        HSD_LObjSetInterest(lobj, (Vec3*)(table + 0x7C));
         table += 0xC;
         if (lobj == NULL) {
             next = NULL;
         } else {
-            next = lobj->next;
+            next = M2C_FIELD(lobj, void**, 0xC);
         }
         lobj = next;
     }
 
-    HSD_LObjAnimAll(((HSD_GObj*) arg0)->hsd_obj);
+    HSD_LObjAnimAll(M2C_FIELD(arg0, void**, 0x28));
 }
 
 void Toy_RemoveUserData(void* ptr)
