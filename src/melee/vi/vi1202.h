@@ -23,7 +23,7 @@ typedef struct CrowdConfig {
     /* 0x0C */ f32 angle_min;
     /* 0x10 */ f32 angle_max;
     /* 0x14 */ f32 angle_mult;
-    /* 0x18 */ u8 pad18[0x1C - 0x18];
+    /* 0x18 */ f32 x18;
     /* 0x1C */ s32 x1C;
     /// Cheer/gasp timing limits
     /* 0x20 */ s32 cheer_limit;

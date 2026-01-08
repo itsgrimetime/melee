@@ -8,8 +8,8 @@
 #include "gm/gm_unsplit.h"
 #include "lb/lb_00F9.h"
 #include "lb/lbaudio_ax.h"
-#include "pl/plbonuslib.h"
 #include "pl/player.h"
+#include "pl/plbonuslib.h"
 
 #include <baselib/aobj.h>
 #include <baselib/cobj.h>
@@ -191,13 +191,16 @@ void un_80321C70(void)
 {
     vi1202_UnkStruct* data = un_804D7050;
     CrowdConfig* vdata = gCrowdConfig;
-    s32 x18 = data->x18;
+    s32 x18;
+
+    x18 = data->x18;
     if (x18 >= vdata->max_gasp_count) {
         return;
     }
-    if (x18 >= vdata->x24) {
-        data->x1C = 1;
+    if (x18 < vdata->x24) {
+        return;
     }
+    data->x1C = 1;
 }
 
 void un_80321CA4(s32 arg)
@@ -468,6 +471,65 @@ void un_80322314(void)
     }
     data->x1C = 1;
     data->x20 = 1;
+}
+
+void un_8032233C(int arg0, int arg1)
+{
+    vi1202_UnkStruct* data = un_804D7050;
+    HSD_GObj* gobj0;
+    f32 kb_mag;
+    s32 cat;
+
+    gobj0 = ftLib_8008741C(arg0);
+    kb_mag = ftLib_80087454(ftLib_8008741C(arg1));
+
+    if (kb_mag >= gCrowdConfig->kb_threshold_high) {
+        cat = 3;
+    } else if (kb_mag >= gCrowdConfig->kb_threshold_mid) {
+        cat = 2;
+    } else if (kb_mag >= gCrowdConfig->kb_threshold_low) {
+        cat = 1;
+    } else {
+        cat = 0;
+    }
+
+    if (cat == 0) {
+        return;
+    }
+
+    if (gobj0 != NULL) {
+        if (ftLib_80087454(gobj0) >= un_804DE150) {
+            un_80321D30(arg0, kb_mag);
+            return;
+        }
+    }
+
+    if ((u32) data->x0 == (u32) arg0) {
+        if ((f32) data->x4 < gCrowdConfig->x18) {
+            f32 max = data->x8;
+            if (kb_mag > max) {
+                max = kb_mag;
+            }
+            un_80321D30(arg0, max);
+            return;
+        }
+    }
+
+    switch (cat) {
+    case 3:
+        un_80321CA4(0x144);
+        break;
+    case 2:
+        un_80321CA4(0x145);
+        break;
+    case 1:
+        un_80321CA4(0x146);
+        break;
+    }
+
+    if (cat == 3 || (cat == 2 && (u32) data->xC == (u32) arg1)) {
+        un_80321C70();
+    }
 }
 
 bool un_803224DC(s32 spawn_id, f32 pos_x, f32 kb_mag)
