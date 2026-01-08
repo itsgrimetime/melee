@@ -6,10 +6,9 @@
 #include <placeholder.h>
 
 #include "ty/forward.h" // IWYU pragma: export
+#include <baselib/forward.h>
 
 #include <dolphin/mtx.h>
-
-#include <baselib/forward.h>
 
 /* Located at un_804A26B8 + 0x3F0 */
 typedef struct ToyAnimState {

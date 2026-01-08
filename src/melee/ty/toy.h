@@ -4,9 +4,10 @@
 #include <placeholder.h>
 
 #include "ft/forward.h"
-#include "if/forward.h"
 
 #include "gm/types.h"
+
+#include "if/forward.h"
 
 /* 305058 */ s32 un_80305058(s32, s32, s32, f32);
 /* 3053C4 */ UNK_RET un_803053C4(UNK_PARAMS);
@@ -71,7 +72,7 @@
 /* 310660 */ UNK_RET un_80310660(UNK_PARAMS);
 /* 3109A0 */ void un_803109A0(s32, s32, s32);
 /* 310B48 */ UNK_RET un_80310B48(UNK_PARAMS);
-/* 3114E8 */ UNK_RET un_803114E8(UNK_PARAMS);
+/* 3114E8 */ void un_803114E8(void);
 /* 311680 */ UNK_RET un_80311680(UNK_PARAMS);
 /* 311788 */ UNK_RET un_80311788(UNK_PARAMS);
 /* 311960 */ void un_80311960(void);
@@ -101,5 +102,15 @@
 /* 4D6E98 */ extern DevText* un_804D6E98;
 /* 3FE7A0 */ extern char un_803FE7A0[];
 /* 3FE7B0 */ extern char un_803FE7B0[];
+
+/* un_803114E8 externs */
+/* 3FE7C0 */ extern char un_803FE7C0[];
+/* 4A2750 */ extern char un_804A2750[];
+/* 4D5A40 */ extern s32 un_804D5A40;
+/* 4D5A44 */ extern s32 un_804D5A44;
+/* 4D6E5C */ extern void** un_804D6E5C;
+/* 4DDE0C */ extern s32 un_804DDE0C;
+/* 4DDE10 */ extern f32 un_804DDE10;
+/* 4DDE14 */ extern f32 un_804DDE14;
 
 #endif
