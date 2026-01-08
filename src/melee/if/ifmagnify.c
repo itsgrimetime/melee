@@ -82,21 +82,6 @@ void ifMagnify_802FC870(void)
     ifMagnify_802FC618();
 }
 
-void ifMagnify_802FC870(void)
-{
-    s32 i;
-
-    memzero(&ifMagnify_804A1DE0, 0x74);
-    ifMagnify_802FC7C0(&ifMagnify_804A1DE0);
-    lbArchive_LoadSections(*ifAll_802F3690(), (void**) &ifMagnify_804A1DE0,
-                           ifMagnify_804D57E8, 0);
-
-    for (i = 0; i < 6; i++) {
-        ifMagnify_802FC3C0(i);
-    }
-    ifMagnify_802FC618();
-}
-
 void ifMagnify_802FC8E8(void)
 {
     ifMagnify_804A1DE0.player[0].state.ignore_offscreen = 1;
