@@ -113,7 +113,7 @@
 /* 301BA8 */ void un_80301BA8(UNK_T);
 /* 301C64 */ void un_80301C64(un_80301C64_t*);
 /* 301C80 */ int un_80301C80(int);
-/* 301CE0 */ UNK_RET un_80301CE0(UNK_PARAMS);
+/* 301CE0 */ void un_80301CE0(int);
 /* 301D40 */ bool un_80301D40(bool);
 /* 301D7C */ int un_80301D7C(int);
 /* 301DCC */ bool un_80301DCC(bool);

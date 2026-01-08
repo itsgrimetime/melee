@@ -52,7 +52,8 @@
     int x30;
     u8 _pad34[0x104];
     void* x138;
-    u8 _pad13C[0x4C];
+    u8 _pad13C[0x8];
+    u8 x144[0x44];
     s32 x188;
 } un_803FA258;
 /* 3FA348 */ static u16 un_803FA348;
@@ -1191,7 +1192,19 @@ int un_80301C80(int arg0)
     return 0;
 }
 
-/// #un_80301CE0
+void un_80301CE0(int arg0)
+{
+    switch (arg0) {
+    case 1:
+        un_802FFCD0(4, un_803FA258.x144);
+        break;
+    case 6:
+        lbAudioAx_80024030(1);
+        gm_SetScenePendingMinor(0xB);
+        gm_801A4B60();
+        break;
+    }
+}
 
 bool un_80301D40(bool update_scene)
 {
