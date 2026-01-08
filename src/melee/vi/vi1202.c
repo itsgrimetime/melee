@@ -184,8 +184,8 @@ void un_80321AF4(HSD_GObj* gobj)
             if (ftLib_8008731C(cur) == 0) {
                 ftLib_80086644(cur, &pos);
 
-                if (pos.y < gCrowdConfig->blastzone_y_offset +
-                                *(f32*) (mpLib + 0x14))
+                if (pos.y <
+                    gCrowdConfig->blastzone_y_offset + *(f32*) (mpLib + 0x14))
                 {
                     data->x24 = data->x24 + 1;
                 } else {
@@ -402,34 +402,40 @@ bool un_803224DC(s32 spawn_id, f32 pos_x, f32 kb_mag)
     CrowdConfig* vdata = gCrowdConfig;
     s32 cat;
     s32 out_of_bounds;
+    s32 tmp_cat;
 
     if (kb_mag >= vdata->kb_threshold_high) {
-        cat = 3;
+        tmp_cat = 3;
     } else if (kb_mag >= vdata->kb_threshold_mid) {
-        cat = 2;
+        tmp_cat = 2;
     } else if (kb_mag >= vdata->kb_threshold_low) {
-        cat = 1;
+        tmp_cat = 1;
     } else {
-        cat = 0;
+        tmp_cat = 0;
     }
 
     {
+        char* mp = mpLib_80458868;
         f32 val2c = vdata->horiz_margin;
-        f32 val18 = M2C_FIELD(mpLib_80458868, f32*, 0x18);
+        f32 val18 = *(f32*) (mp + 0x18);
         f32 val1c;
 
-        if (pos_x < val2c + val18) {
-            out_of_bounds = 1;
-        } else {
-            val1c = M2C_FIELD(mpLib_80458868, f32*, 0x1C);
-            if (pos_x > val1c - val2c) {
-                out_of_bounds = 1;
-            } else {
-                out_of_bounds = 0;
-            }
-        }
-    }
+        cat = tmp_cat;
 
+        if (pos_x < val2c + val18) {
+            goto oob;
+        }
+        val1c = *(f32*) (mp + 0x1C);
+        if (!(pos_x > val1c - val2c)) {
+            goto inb;
+        }
+    oob:
+        out_of_bounds = 1;
+        goto check;
+    inb:
+        out_of_bounds = 0;
+    }
+check:
     if (out_of_bounds != 0) {
         un_8032201C(spawn_id, cat);
     } else {
