@@ -42,8 +42,6 @@ typedef struct TyListArg {
 
 extern u8 un_804A2AA8[];
 extern void* un_804D6ED0;
-extern void* un_804D6EC4;
-extern void* un_804D6EC0;
 extern void* un_804D6EBC;
 extern void* un_804D6EB8;
 extern void* un_804D6EB4;
