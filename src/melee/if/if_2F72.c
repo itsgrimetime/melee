@@ -7,6 +7,7 @@
 #include "if/types.h"
 #include "lb/lb_00B0.h"
 #include "lb/lbarchive.h"
+#include "lb/lbaudio_ax.h"
 #include "gm/gm_16AE.h"
 #include "pl/player.h"
 
@@ -17,6 +18,38 @@
 #include <baselib/jobj.h>
 
 static void* lbl_804A1340[13];
+
+s32 fn_802F7288(HSD_GObj* gobj, Element_803F9628* entry)
+{
+    HSD_JObj* jobj = gobj->hsd_obj;
+    f32 frame = lbGetJObjCurrFrame(jobj);
+    s32 unused;
+
+    HSD_JObjAnimAll(jobj);
+
+    if (!entry->x12.x0) {
+        if (frame >= (f32) entry->x10) {
+            if ((s32) entry->x20 >= 0) {
+                lbAudioAx_800237A8(entry->x20, 127, 64);
+                entry->x12.x0 = 1;
+            } else if ((s32) entry->xC >= 0) {
+                lbAudioAx_800237A8(entry->xC, 127, 64);
+                entry->x12.x0 = 1;
+            }
+        }
+    }
+
+    if (!entry->x12.x1) {
+        if (frame >= (f32) entry->x11) {
+            if ((s32) entry->x24 >= 0) {
+                lbAudioAx_800237A8(entry->x24, 127, 64);
+                entry->x12.x1 = 1;
+            }
+        }
+    }
+
+    return lb_8000B09C(jobj);
+}
 
 void if_802F73C4(HSD_GObj* gobj)
 {
