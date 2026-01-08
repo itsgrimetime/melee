@@ -54,7 +54,7 @@
 /* 2BAAE4 */ void it_802BAAE4(HSD_GObj*, Vec3*, float facing_dir);
 /* 2BAB40 */ void it_802BAB40(Item_GObj* gobj);
 /* 2BAB7C */ void it_802BAB7C(Item_GObj* gobj);
-/* 2BABB8 */ UNK_RET it_802BABB8(UNK_PARAMS);
+/* 2BABB8 */ void it_802BABB8(Item_GObj* gobj);
 /* 2BAC3C */ void it_802BAC3C(Fighter_GObj* gobj);
 /* 2BAC80 */ void it_802BAC80(Fighter_GObj* gobj);
 /* 2BACC4 */ void it_802BACC4(Fighter_GObj* gobj);
