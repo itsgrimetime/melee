@@ -6,9 +6,27 @@
 #include "lb/lbarchive.h"
 
 #include <baselib/gobj.h>
+#include <baselib/gobjproc.h>
 #include <baselib/gobjplink.h>
 
 static void* lbl_804A1340[13];
+
+void if_802F7BB4(s32 player_idx)
+{
+    void** base;
+    u8 idx;
+    s32 offset;
+    void** entry;
+
+    base = lbl_804A1340;
+    idx = (u8)player_idx;
+    offset = idx << 1;
+    entry = base + offset;
+    (base + offset)[1] = fn_802F77F8(*++entry, idx, 1);
+    if ((base + offset)[1] != NULL) {
+        HSD_GObjProc_8038FD54(*entry, (HSD_GObjEvent)fn_802F75D4, 0x11);
+    }
+}
 
 void if_802F7E24(void)
 {
