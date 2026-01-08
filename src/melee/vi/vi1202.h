@@ -53,7 +53,7 @@ typedef struct CrowdConfig {
 /* 321950 */ void un_80321950(vi1202_UnkStruct*);
 /* 3219AC */ void fn_803219AC(HSD_GObj*);
 /* 321A00 */ void un_80321A00(HSD_GObj*);
-/* 321AF4 */ void un_80321AF4(HSD_GObj*);
+/* 321AF4 */ void un_80321AF4(HSD_GObj* gobj);
 /* 321BF8 */ void un_80321BF8(int);
 /* 321C28 */ void un_80321C28(void);
 /* 321C70 */ void un_80321C70(void);
