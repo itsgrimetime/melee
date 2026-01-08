@@ -5,7 +5,6 @@
 #include "ty/toy.h"
 
 #include <m2c_macros.h>
-
 #include <baselib/cobj.h>
 #include <baselib/displayfunc.h>
 #include <baselib/fog.h>
@@ -104,7 +103,35 @@ void un_80312834(char* buf, u32 num)
 
 /// #un_8031305C
 
-/// #un_80313358
+void un_80313358(void* arg1, s8 arg2, s8 arg3, s8 arg4)
+{
+    u8* ptr = arg1;
+    int i;
+
+    if (arg2 != -1) {
+        *(u8*)(ptr + 0x29E) = arg2;
+        *(u8*)(ptr + 0x2A1) = arg4;
+    }
+
+    *(u8*)(ptr + 0x29F) = arg3;
+    *(float*)(ptr + 0x2A4) = *(float*)(ptr + 0x2A8) / (float)arg3;
+
+    if (*(s8*)(ptr + 0x2A1) == 0) {
+        for (i = 0; i < *(s8*)(ptr + 0x29A); i++) {
+            void** entry = (void**)(ptr + i * 0x34);
+            u8* sub = entry[0];
+            *(float*)(ptr + i * 0x34 + 0x2C) = *(float*)(sub + 0x30);
+            un_80312904(entry, *(u8*)(ptr + 0x29A) + 1);
+        }
+    } else {
+        for (i = 0; i < *(s8*)(ptr + 0x29A); i++) {
+            void** entry = (void**)(ptr + i * 0x34);
+            u8* sub = entry[1];
+            *(float*)(ptr + i * 0x34 + 0x2C) = *(float*)(sub + 0x30);
+            un_80312904(entry, *(u8*)(ptr + 0x29A) + 1);
+        }
+    }
+}
 
 void un_80313464(TyListArg* arg)
 {
