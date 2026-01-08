@@ -530,8 +530,10 @@ void un_803068E0(HSD_GObj* gobj)
         HSD_FogSet(NULL);
     }
 }
-/// #un_80306930
-
+void un_80306930(void* arg)
+{
+    HSD_FogSet(M2C_FIELD(arg, HSD_Fog**, 0x28));
+}
 /// #un_80306954
 
 void un_80306A0C(void* arg0)
