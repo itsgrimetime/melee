@@ -11,8 +11,8 @@
 /* Local version of UnkStageDat_x8_t with proper fields */
 typedef struct grFZeroCar_StageDatEntry {
     struct HSD_Joint* unk0;
-    s32* unk4; /* HSD_AnimJoint** */
-    s32* unk8; /* HSD_MatAnimJoint** */
+    HSD_AnimJoint** unk4;
+    HSD_MatAnimJoint** unk8;
     u8 rest[0x34 - 0xC];
 } grFZeroCar_StageDatEntry;
 
