@@ -11,6 +11,7 @@
 #include "baselib/state.h"
 #include "gm/gm_1601.h" // for gm_801677E8
 #include "gm/gm_16AE.h"
+#include "gm/gm_16F1.h" // for gm_80172C44
 #include "gm/gm_1A3F.h"
 #include "gm/gm_1A45.h"
 #include "gm/gmmain_lib.h"
@@ -151,7 +152,110 @@ done:
     return;
 }
 
-/// #Trophy_SetUnlockState
+void Trophy_SetUnlockState(enum_t trophyId, bool addValue)
+{
+    s32 newCount;
+    s32 byteOffset;
+    s16 idx;
+    s16 count;
+    Toy* toy = (Toy*) &un_804A26B8;
+    u16* table;
+    s32 newVal;
+    u16* ptr;
+    u16* statePtr;
+    u16 temp;
+
+    if (gm_8016B498() || (u8) gm_801A4310() == 0xC) {
+        table = toy->trophyTable;
+    } else {
+        table = gmMainLib_8015CC78();
+    }
+
+    idx = (s16) trophyId;
+    byteOffset = idx * 2;
+
+    if ((u8) * (u16*) ((u8*) table + byteOffset) == 0) {
+        if (gm_8016B498() || (u8) gm_801A4310() == 0xC) {
+            table = toy->trophyTable;
+        } else {
+            table = gmMainLib_8015CC78();
+        }
+        table = (u16*) ((u8*) table + byteOffset);
+        temp = *table;
+        temp ^= 0x8000;
+        *table = temp;
+
+        if (gm_8016B498() || (u8) gm_801A4310() == 0xC) {
+            newCount = toy->trophyCount + 1;
+        } else {
+            newCount = *gmMainLib_8015CC90() + 1;
+        }
+        if (gm_8016B498() || (u8) gm_801A4310() == 0xC) {
+            toy->trophyCount = (s16) newCount;
+        } else {
+            *gmMainLib_8015CC90() = (s16) newCount;
+        }
+    }
+
+    if (gm_8016B498() || (u8) gm_801A4310() == 0xC) {
+        table = toy->trophyTable;
+    } else {
+        table = gmMainLib_8015CC78();
+    }
+
+    if ((s32) (addValue + (u8) * (u16*) ((u8*) table + byteOffset)) <= 0xFF) {
+        if (gm_8016B498() || (u8) gm_801A4310() == 0xC) {
+            table = toy->trophyTable;
+        } else {
+            table = gmMainLib_8015CC78();
+        }
+        newVal = addValue + (u8) * (u16*) ((u8*) table + byteOffset);
+        if (gm_8016B498() || (u8) gm_801A4310() == 0xC) {
+            table = toy->trophyTable;
+        } else {
+            table = gmMainLib_8015CC78();
+        }
+        ptr = (u16*) ((u8*) table + byteOffset);
+        *ptr = newVal + (*ptr & 0xFF00);
+    } else {
+        if (gm_8016B498() || (u8) gm_801A4310() == 0xC) {
+            table = toy->trophyTable;
+        } else {
+            table = gmMainLib_8015CC78();
+        }
+        ptr = (u16*) ((u8*) table + byteOffset);
+        *ptr = (*ptr & 0xFF00) + 0xFF;
+    }
+
+    if (gm_8016B498() || (u8) gm_801A4310() == 0xC) {
+        statePtr = &toy->x19A;
+        *statePtr = toy->x19A | toy->x19C;
+    } else {
+        statePtr = gmMainLib_8015CC84();
+    }
+
+    if (!(*statePtr & 0x80)) {
+        if (gm_8016B498() || (u8) gm_801A4310() == 0xC) {
+            count = toy->trophyCount;
+        } else {
+            count = *gmMainLib_8015CC90();
+        }
+        if (count >= 0xFA) {
+            toy->x194 = 2;
+            un_80305918(7, 0, 0);
+        }
+    }
+
+    un_80304D30();
+
+    if ((s16) trophyId == 0xA5 && gm_80164430(0x14U) == 0) {
+        gm_80164504(0x14U);
+    }
+
+    if ((s32) un_803060BC((s32) (s16) trophyId, 6) == 1) {
+        gm_80172C44((s16) trophyId);
+    }
+}
 
 /// #un_80305918
 
