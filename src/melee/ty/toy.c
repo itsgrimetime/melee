@@ -1,5 +1,7 @@
 #include "toy.h"
 
+#include "m2c_macros.h"
+
 #include "baselib/cobj.h"
 #include "baselib/controller.h"
 #include "baselib/displayfunc.h"
@@ -29,8 +31,6 @@
 
 #include "ty/tylist.h"
 #include "ty/types.h"
-
-#include "m2c_macros.h"
 
 #include <melee/if/textlib.h>
 #include <MSL/math.h> // for ABS
@@ -520,19 +520,17 @@ s16 un_803062BC(s32 trophyId)
 
 /// #un_803067BC
 
-s32 un_803068E0(HSD_GObj* gobj)
+void un_803068E0(HSD_GObj* gobj)
 {
-    if (HSD_CObjSetCurrent(gobj->hsd_obj) != 0) {
+    HSD_CObj* cobj = M2C_FIELD(gobj, HSD_CObj**, 0x28);
+
+    if (HSD_CObjSetCurrent(cobj) != 0) {
         HSD_GObj_80390ED0(gobj, 7);
         HSD_CObjEndCurrent();
         HSD_FogSet(NULL);
     }
 }
-
-void un_80306930(HSD_GObj* gobj, int unused)
-{
-    HSD_FogSet(gobj->hsd_obj);
-}
+/// #un_80306930
 
 /// #un_80306954
 
