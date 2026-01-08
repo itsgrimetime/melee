@@ -10,7 +10,6 @@
 #include "lb/lbaudio_ax.h"
 #include "lb/lbcardgame.h"
 #include "lb/lbcardnew.h"
-#include "lb/lbsnap.h"
 #include "lb/lblanguage.h"
 #include "lb/lbsnap.h"
 #include "ty/toy.h"
@@ -62,8 +61,7 @@
     int x30;
     u8 _pad34[0x104];
     void* x138;
-    u8 _pad13C[0x8];
-    u8 x144[0x44];
+    u8 _pad13C[0x4C];
     s32 x188;
 } un_803FA258;
 /* 3FA348 */ static u16 un_803FA348;
