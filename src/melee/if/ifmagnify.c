@@ -1,10 +1,13 @@
 #include "ifmagnify.h"
 
+#include "gr/ground.h"
 #include "if/ifall.h"
 #include "lb/lb_00B0.h"
 #include "lb/lbarchive.h"
 
 #include <baselib/gobjplink.h>
+
+/* 4DDB60 */ extern int ifMagnify_804DDB60;
 
 ifMagnify ifMagnify_804A1DE0;
 
@@ -56,14 +59,37 @@ void ifMagnify_802FC750(void)
     }
 }
 
-    ptr = (u8*) base;
-    offset = 0;
-    for (i = 0; i < 6; ptr += 0x10, offset += 0x10, i++) {
-        if (*(HSD_GObj**) (ptr + 0x14) != NULL) {
-            gobj_ptr = (HSD_GObj**) ((u8*) base + offset + 0x14);
-            HSD_GObjPLink_80390228(*gobj_ptr);
-            *gobj_ptr = NULL;
-        }
+void ifMagnify_802FC7C0(ifMagnify* magnify)
+{
+    volatile int default_val = ifMagnify_804DDB60;
+    GXColor* result;
+
+    result = Ground_801C0604();
+    if (result != NULL) {
+        magnify->x4 = *(int*) result;
+    } else {
+        magnify->x4 = default_val;
+    }
+
+    result = Ground_801C0618();
+    if (result != NULL) {
+        magnify->x8 = *(int*) result;
+    } else {
+        magnify->x8 = default_val;
+    }
+
+    result = Ground_801C062C();
+    if (result != NULL) {
+        magnify->xC = *(int*) result;
+    } else {
+        magnify->xC = default_val;
+    }
+
+    result = Ground_801C0640();
+    if (result != NULL) {
+        magnify->x10 = *(int*) result;
+    } else {
+        magnify->x10 = default_val;
     }
 }
 
