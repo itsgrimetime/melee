@@ -154,8 +154,7 @@ void un_8031F07C_OnEnter(void* unused)
     lbArchive_LoadSymbols(un_804001E0, &un_804D6FB8, un_804001EC, NULL);
 
     gobj = GObj_Create(0x13, 0x14, 0);
-    cobj =
-        lb_80013B14((HSD_CameraDescPerspective*) un_804D6FB8->cameras->desc);
+    cobj = lb_80013B14((HSD_CameraDescPerspective*) un_804D6FB8->cameras->desc);
     HSD_GObjObject_80390A70(gobj, HSD_GObj_804D784B, cobj);
     GObj_SetupGXLinkMax(gobj, (void (*)(HSD_GObj*, int)) un_8031ED70, 8);
     HSD_CObjAddAnim(cobj, un_804D6FB8->cameras->anims[0]);
