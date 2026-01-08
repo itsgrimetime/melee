@@ -1,6 +1,8 @@
 #include "tylist.h"
 
+#include "if/textlib.h"
 #include "lb/lb_00B0.h"
+#include "ty/toy.h"
 
 #include <baselib/cobj.h>
 #include <baselib/displayfunc.h>
@@ -14,6 +16,19 @@ typedef struct {
     u8 pad[0x28];
     HSD_CObj* cobj;
 } TyListData;
+
+typedef struct TyListArg {
+    /* 0x00 */ void* x0;
+    /* 0x04 */ void* x4;
+    /* 0x08 */ void* x8;
+    /* 0x0C */ void* xC;
+    /* 0x10 */ HSD_JObj* x10;
+    /* 0x14 */ void* x14;
+    /* 0x18 */ u8 pad_18[0x26 - 0x18];
+    /* 0x26 */ s16 idx;
+    /* 0x28 */ u8 pad_28[0x30 - 0x28];
+    /* 0x30 */ float x30;
+} TyListArg;
 
 extern u8 un_804A2AA8[];
 extern void* un_804D6ED0;
@@ -62,8 +77,26 @@ void un_803127D4(void)
 
 /// #un_80313358
 
-/// #un_80313464
+void un_80313464(TyListArg* arg)
+{
+    char* data = un_804A2AC0;
+    s32 val;
+    PAD_STACK(24);
 
+    val = un_804D6EDC[arg->idx];
+
+    un_803083D8(arg->x14, val);
+
+    if (arg->x10 != NULL) {
+        HSD_JObjUnref(arg->x10);
+        arg->x10 = NULL;
+    }
+
+    if (un_80304924(val) != 0) {
+        arg->x10 = un_80313508(*(void**)(data + 0x27C), un_803FE8D0,
+                               un_804DDE60, arg->x30, un_804DDE48);
+    }
+}
 /// #un_80313508
 
 /// #un_80313774
