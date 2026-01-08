@@ -112,12 +112,12 @@ void un_8031E9B8(void)
     /* Loop through additional models */
     i = 0;
     while (un_804D6FB0->models[i] != NULL) {
-        if ((u32)(i - 1) <= 2) {
+        if ((u32) (i - 1) <= 2) {
             gobj = grCorneria_801E1BF0();
             if (gobj->hsd_obj == NULL) {
                 child = NULL;
             } else {
-                child = ((HSD_JObj*)gobj->hsd_obj)->child;
+                child = ((HSD_JObj*) gobj->hsd_obj)->child;
             }
             HSD_GObjProc_8038FD54(gobj, fn_8031E800, 2);
             gm_8016895C(child, un_804D6FB0->models[i], 0);
@@ -128,7 +128,7 @@ void un_8031E9B8(void)
     }
 
     lbAudioAx_80026F2C(0x18);
-    lbAudioAx_8002702C(8, (u64)8 << 32);
+    lbAudioAx_8002702C(8, (u64) 8 << 32);
     lbAudioAx_80027168();
     lbAudioAx_80027648();
 }

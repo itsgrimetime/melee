@@ -1,15 +1,6 @@
-#include "vi/vi1201v1.static.h"
+#include "vi.h"
 
-#include <baselib/aobj.h>
-#include <baselib/cobj.h>
-#include <baselib/fog.h>
-#include <baselib/gobj.h>
-#include <baselib/gobjgxlink.h>
-#include <baselib/gobjobject.h>
-#include <baselib/gobjplink.h>
-#include <baselib/gobjproc.h>
-#include <baselib/jobj.h>
-#include <baselib/lobj.h>
+#include "vi/vi1201v1.static.h"
 
 #include "cm/camera.h"
 #include "ef/efasync.h"
@@ -17,7 +8,6 @@
 #include "ef/efsync.h"
 #include "ft/ft_0C31.h"
 #include "ft/ftdemo.h"
-#include "pl/player.h"
 #include "gm/gm_1601.h"
 #include "gm/gm_unsplit.h"
 #include "gr/ground.h"
@@ -30,10 +20,21 @@
 #include "lb/lbshadow.h"
 #include "mn/mnmain.h"
 #include "mp/mpcoll.h"
+#include "pl/player.h"
 #include "sc/types.h"
 #include "ty/toy.h"
 #include "ty/tylist.h"
-#include "vi.h"
+
+#include <baselib/aobj.h>
+#include <baselib/cobj.h>
+#include <baselib/fog.h>
+#include <baselib/gobj.h>
+#include <baselib/gobjgxlink.h>
+#include <baselib/gobjobject.h>
+#include <baselib/gobjplink.h>
+#include <baselib/gobjproc.h>
+#include <baselib/jobj.h>
+#include <baselib/lobj.h>
 
 // .data section 0x80400258 - 0x80400xxx
 char un_80400258[0x100];
@@ -91,7 +92,7 @@ void fn_8031FAA8(HSD_GObj* gobj)
     f32 scale_y;
     HSD_JObj* child;
     char pad[4];
-    
+
     HSD_JObjAnimAll(gobj->hsd_obj);
     jobj = gobj->hsd_obj;
     if (mn_8022F298(jobj) != un_804DE104) {
@@ -100,12 +101,13 @@ void fn_8031FAA8(HSD_GObj* gobj)
     lb_80011E24(jobj, &child, 1, -1);
     jobj = child;
     HSD_ASSERT(0x3D3, jobj);
-    
+
     pos = jobj->translate;
     scale_x = un_804DE100;
     scale_y = un_804DE0FC;
-    
-    efSync_Spawn(0x42B, gobj, &pos, &scale_x, &scale_y, 0x00FFFFFF, 0x00808080);
+
+    efSync_Spawn(0x42B, gobj, &pos, &scale_x, &scale_y, 0x00FFFFFF,
+                 0x00808080);
     lbAudioAx_800237A8(0x61, 0x7F, 0x40);
 }
 void fn_8031FB90(HSD_GObj* gobj)
