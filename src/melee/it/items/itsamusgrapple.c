@@ -127,8 +127,12 @@ void it_802BAA58(Item_GObj* gobj)
 
 /// #it_802BAAE4
 
-/// #it_802BAB40
-
+void it_802BAB40(Item_GObj* gobj)
+{
+    PAD_STACK(16);
+    Item_80268E5C((HSD_GObj*) gobj, 6, ITEM_ANIM_UPDATE);
+    it_802A2428(gobj);
+}
 /// #it_802BAB7C
 
 /// #it_802BABB8
