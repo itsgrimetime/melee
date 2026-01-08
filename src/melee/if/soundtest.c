@@ -39,7 +39,14 @@
 /* 3FA258 */ static struct {
     int x0;
     int x4;
-    u8 _pad[0x130];
+    int x8;
+    int xC;
+    int x10;
+    u8 _pad14[0x14];
+    int x28;
+    int x2C;
+    int x30;
+    u8 _pad34[0x104];
     void* x138;
 } un_803FA258;
 /* 3FA348 */ static u16 un_803FA348;
@@ -514,9 +521,35 @@ bool un_80300AB8(bool update_scene)
     return false;
 }
 
-/// #un_80300AF4
+bool un_80300AF4(int arg0)
+{
+    if (arg0 == 1) {
+        lbAudioAx_80024030(1);
+        un_803FA258.x8 = 0x3F;
+        un_803FA258.x10 = 0xE;
+        un_803FA258.x28 = 3;
+        un_803FA258.x2C = 3;
+        un_803FA258.x30 = 3;
+        gm_SetScenePendingMinor(4);
+        gm_801A4B60();
+    }
+    return false;
+}
 
-/// #un_80300B58
+bool un_80300B58(int arg0)
+{
+    if (arg0 == 1) {
+        lbAudioAx_80024030(1);
+        un_803FA258.x8 = 0x3B;
+        un_803FA258.x10 = 0x2;
+        un_803FA258.x28 = 3;
+        un_803FA258.x2C = 3;
+        un_803FA258.x30 = 3;
+        gm_SetScenePendingMinor(4);
+        gm_801A4B60();
+    }
+    return false;
+}
 
 bool un_80300BBC(bool update_scene)
 {

@@ -64,8 +64,8 @@
 /* 3009E0 */ UNK_RET un_803009E0(UNK_PARAMS);
 /* 300A88 */ UNK_RET un_80300A88(UNK_PARAMS);
 /* 300AB8 */ bool un_80300AB8(bool);
-/* 300AF4 */ UNK_RET un_80300AF4(UNK_PARAMS);
-/* 300B58 */ UNK_RET un_80300B58(UNK_PARAMS);
+/* 300AF4 */ bool un_80300AF4(int);
+/* 300B58 */ bool un_80300B58(int);
 /* 300BBC */ bool un_80300BBC(bool);
 /* 300BF8 */ bool un_80300BF8(bool);
 /* 300C3C */ bool un_80300C3C(bool);
