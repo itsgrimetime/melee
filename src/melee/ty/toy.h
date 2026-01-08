@@ -10,7 +10,7 @@
 #include "if/forward.h"
 
 /* 305058 */ s32 un_80305058(s32, s32, s32, f32);
-/* 3053C4 */ UNK_RET un_803053C4(UNK_PARAMS);
+/* 3053C4 */ void un_803053C4(s32, s32, s32);
 /* 30562C */ void Trophy_SetUnlockState(enum_t, bool);
 /* 305918 */ void un_80305918(s32, s32, s32);
 /* 305B88 */ s32 un_80305B88(void);
@@ -128,5 +128,9 @@
 /* un_80312050 externs */
 /* 4DDE1C */ extern f32 un_804DDE1C;
 /* 4DDE20 */ extern f32 un_804DDE20;
+
+/* un_803053C4 externs */
+/* 4D6EB4 */ extern s16* un_804D6EB4;
+/* 4DDCD0 */ extern f64 un_804DDCD0;
 
 #endif
