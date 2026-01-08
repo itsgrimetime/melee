@@ -27,6 +27,19 @@ typedef struct itSamusGrapple_Node {
     /* +0x1D0 */ HSD_GObj* gobj;
 } itSamusGrapple_Node;
 
+typedef struct itSamusGrapple_Segment {
+    /* +0x00 */ struct itSamusGrapple_Segment* next;
+    /* +0x04 */ char pad4[0x10];
+    /* +0x14 */ Vec3 pos;
+    /* +0x20 */ char pad20[0xC];
+    /* +0x2C */ u8 flags;
+} itSamusGrapple_Segment;
+
+typedef struct itSamusGrapple_Attr {
+    /* +0x00 */ char pad0[0x38];
+    /* +0x38 */ f32 max_length;
+} itSamusGrapple_Attr;
+
 void it_802B7B84(Item_GObj* gobj)
 {
     itSamusGrapple_Node* node;
@@ -148,7 +161,42 @@ void itSamusgrapple_UnkMotion8_Phys(Item_GObj* gobj)
 
 /// #it_802BA194
 
-/// #it_802BA2D8
+bool it_802BA2D8(void* list_ptr, Vec3* pos, void* attr_ptr, float length)
+{
+    itSamusGrapple_Segment* current;
+    itSamusGrapple_Segment* next;
+    Vec3 sp18;
+    s32 flag;
+    itSamusGrapple_Attr* attr = attr_ptr;
+    f32 dist;
+
+    current = list_ptr;
+    next = *(itSamusGrapple_Segment**) list_ptr;
+
+    while (next != NULL && !((current->flags >> 7) & 1)) {
+        current = next;
+        next = next->next;
+    }
+
+    dist = it_802A3C98(&current->pos, pos, &sp18);
+
+    flag = 0;
+    while (next != NULL && length > dist) {
+        current->flags = (u8) ((current->flags & ~0x80) | (flag << 7));
+        dist = it_802A3C98(&next->pos, pos, &sp18);
+        current = next;
+        next = next->next;
+    }
+
+    dist = dist - length;
+    if (dist > attr->max_length) {
+        dist = attr->max_length;
+    }
+
+    it_802B900C(current, pos, attr, dist);
+
+    return next == NULL;
+}
 
 /// #it_802BA3BC
 
@@ -166,6 +214,7 @@ void it_2725_Logic53_PickedUp(Item_GObj* gobj)
 void it_802BA9B8(Item_GObj* gobj)
 {
     Item* ip = GET_ITEM(gobj);
+    PAD_STACK(8);
     Item_80268E5C((HSD_GObj*) gobj, 3, ITEM_ANIM_UPDATE);
     ftColl_8007AFF8(ip->xDD4_itemVar.samusgrapple.x8);
     it_802A2428(gobj);
@@ -174,6 +223,7 @@ void it_802BA9B8(Item_GObj* gobj)
 void it_802BAA08(Item_GObj* gobj)
 {
     Item* ip = GET_ITEM(gobj);
+    PAD_STACK(8);
     Item_80268E5C((HSD_GObj*) gobj, 2, ITEM_ANIM_UPDATE);
     ftColl_8007AFF8(ip->xDD4_itemVar.samusgrapple.x8);
     it_802A2428(gobj);
@@ -189,6 +239,7 @@ void it_802BAA58(Item_GObj* gobj)
 void it_802BAA94(Item_GObj* gobj)
 {
     Item* ip = GET_ITEM(gobj);
+    PAD_STACK(8);
     Item_80268E5C((HSD_GObj*) gobj, 5, ITEM_ANIM_UPDATE);
     ftColl_8007AFF8(ip->xDD4_itemVar.samusgrapple.x8);
     it_802A2428(gobj);
@@ -220,6 +271,7 @@ void it_802BABB8(Item_GObj* gobj)
     Fighter* fp = ip->owner->user_data;
     ftData* ft_data = fp->ft_data;
     void* ext_attr = ft_data->ext_attr;
+    PAD_STACK(16);
 
     Item_80268E5C((HSD_GObj*) gobj, 8, ITEM_ANIM_UPDATE);
     it_802A2428(gobj);
@@ -242,9 +294,10 @@ void it_802BAC3C(Fighter_GObj* gobj)
 void it_802BAC80(Fighter_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
-    Item_GObj* item = fp->fv.ss.x223C;
-    if (item != NULL) {
-        Item* ip = GET_ITEM(item);
+    Item_GObj* item;
+
+    if ((item = fp->fv.ss.x223C) != NULL) {
+        Item* ip = item->user_data;
         if (ip->xDD4_itemVar.samusgrapple.unk_10 != NULL) {
             ip->xDD4_itemVar.samusgrapple.unk_10(item);
         }

@@ -35,7 +35,8 @@
 /* 2B8D24 */ void itSamusgrapple_UnkMotion7_Phys(Item_GObj* gobj);
 /* 2B8D38 */ void fn_802B8D38(Item_GObj* gobj);
 /* 2B8FF8 */ void itSamusgrapple_UnkMotion8_Phys(Item_GObj* gobj);
-/* 2B900C */ void it_802B900C(void* segment, Vec3* pos, void* attr, float length);
+/* 2B900C */ void it_802B900C(void* segment, Vec3* pos, void* attr,
+                              float length);
 /* 2B91C4 */ void it_802B91C4(void* segment, Vec3* pos, void* attr);
 /* 2B9328 */ void it_802B9328(Item* ip, Vec3* pos, void* attr, Fighter* fp);
 /* 2B99A0 */ void it_802B99A0(Item* ip, Vec3* pos, void* attr, Fighter* fp);
@@ -43,7 +44,8 @@
 /* 2B9FD4 */ void it_802B9FD4(Item* ip, Vec3* pos, void* attr, Fighter* fp);
 /* 2BA194 */ void it_802BA194(void* segment, Vec3* pos, void* attr);
 /* 2BA2D8 */ bool it_802BA2D8(void* list, Vec3* pos, void* attr, float length);
-/* 2BA3BC */ void it_802BA3BC(void* segment, Vec3* pos, void* attr, float length);
+/* 2BA3BC */ void it_802BA3BC(void* segment, Vec3* pos, void* attr,
+                              float length);
 /* 2BA5DC */ void it_802BA5DC(void* list, Vec3* pos, void* attr, Fighter* fp);
 /* 2BA760 */ bool it_802BA760(void* list, Vec3* pos, void* attr, Fighter* fp);
 /* 2BA97C */ void it_2725_Logic53_PickedUp(Item_GObj*);
