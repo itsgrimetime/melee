@@ -65,8 +65,10 @@ void un_8031F9B4(HSD_GObj* gobj)
     HSD_JObjAnimAll(GET_JOBJ(gobj));
 }
 
-void un_8031F9D8(u8 char_index, u8 costume_id)
+void un_8031F9D8(CharacterKind char_index, int costume_id)
 {
+    char pad[16];
+
     ftDemo_ObjAllocInit();
     Player_InitAllPlayers();
     Player_80036E20(char_index, un_804D6FE8, 0);
@@ -79,7 +81,7 @@ void un_8031F9D8(u8 char_index, u8 costume_id)
     Player_80036F34(0, 1);
     un_804D7000 = Player_GetEntity(0);
     lbAudioAx_80026F2C(0x18);
-    lbAudioAx_8002702C(0x8, (u64)0x20 << 32);
+    lbAudioAx_8002702C(0x8, (u64)0x20 << 48);
     lbAudioAx_80027168();
     lbAudioAx_80027648();
 }
