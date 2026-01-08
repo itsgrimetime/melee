@@ -5,6 +5,7 @@
 #include "if/types.h"
 #include "lb/lb_00B0.h"
 #include "lb/lbarchive.h"
+#include "gm/gm_16AE.h"
 #include "pl/player.h"
 
 #include <baselib/gobj.h>
@@ -172,6 +173,33 @@ void if_802F7BB4(s32 player_idx)
     (base + offset)[1] = fn_802F77F8(*++entry, idx, 1);
     if ((base + offset)[1] != NULL) {
         HSD_GObjProc_8038FD54(*entry, (HSD_GObjEvent)fn_802F75D4, 0x11);
+    }
+}
+
+void if_802F7C30(s32 slot)
+{
+    void** base = lbl_804A1340;
+    s32 idx;
+    void** entry;
+    s32 ret = gm_8016AEC8();
+    HSD_GObj* result;
+
+    if (ret == -2) {
+        idx = (u8) slot << 1;
+        entry = base + idx;
+        result = fn_802F77F8(*++entry, (u8) slot, 0);
+        base[idx + 1] = result;
+        if (base[idx + 1] != NULL) {
+            HSD_GObjProc_8038FD54(*entry, (HSD_GObjEvent) fn_802F75D4, 0x11);
+        }
+    } else if (ret == -1) {
+        idx = (u8) slot << 1;
+        entry = base + idx;
+        result = fn_802F77F8(*++entry, (u8) slot, 1);
+        base[idx + 1] = result;
+        if (base[idx + 1] != NULL) {
+            HSD_GObjProc_8038FD54(*entry, (HSD_GObjEvent) fn_802F75D4, 0x11);
+        }
     }
 }
 
