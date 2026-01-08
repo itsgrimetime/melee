@@ -14,7 +14,7 @@
 /* 2F7670 */ void fn_802F7670(HSD_GObj*);
 /* 2F770C */ void fn_802F770C(HSD_GObj*, int);
 /* 2F77F8 */ HSD_GObj* fn_802F77F8(HSD_GObj*, u8, s32);
-/* 2F7994 */ UNK_RET fn_802F7994(UNK_PARAMS);
+/* 2F7994 */ void fn_802F7994(HSD_GObj*);
 /* 2F7AF8 */ void if_802F7AF8(s32);
 /* 2F7BB4 */ void if_802F7BB4(s32);
 /* 2F7C30 */ void if_802F7C30(s32);
