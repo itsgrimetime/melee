@@ -1,12 +1,19 @@
-#include "vi/vi1201v2.h"
+#include "vi/vi1201v2.static.h"
 
 #include "vi.h"
 
+#include "cm/camera.h"
+#include "ft/ftdemo.h"
 #include "gm/gm_unsplit.h"
+#include "gr/ground.h"
+#include "gr/stage.h"
+#include "it/item.h"
 #include "lb/lb_00B0.h"
 #include "lb/lb_00F9.h"
 #include "lb/lbshadow.h"
 #include "mn/mnmain.h"
+#include "mp/mpcoll.h"
+#include "pl/player.h"
 
 #include <baselib/aobj.h>
 #include <baselib/cobj.h>
@@ -27,6 +34,30 @@ void un_803204C0(HSD_GObj* gobj)
 void un_803204E4(HSD_GObj* gobj)
 {
     HSD_JObjAnimAll(GET_JOBJ(gobj));
+}
+
+void un_80320508(CharacterKind char_kind, int costume)
+{
+    Camera_80028B9C(6);
+    lb_8000FCDC();
+    mpColl_80041C78();
+    Ground_801C0378(0x40);
+    Stage_802251E8(0x20, 0);
+    Item_80266FA8();
+    Item_80266FCC();
+    Stage_8022524C();
+    Stage_8022532C(0x20, 0x1A);
+    ftDemo_ObjAllocInit();
+    Player_InitAllPlayers();
+    Player_80036E20(char_kind, un_804D7018, 3);
+    Player_SetPlayerCharacter(0, char_kind);
+    Player_SetCostumeId(0, costume);
+    Player_SetPlayerId(0, 0);
+    Player_SetSlottype(0, 2);
+    Player_SetFacingDirection(0, un_804DE120);
+    Player_80032768(0, &un_804002F8);
+    Player_80036F34(0, 8);
+    Player_SetPlayerAndEntityFacingDirection(0, un_804DE124);
 }
 
 void un_8032074C(HSD_GObj* gobj)
