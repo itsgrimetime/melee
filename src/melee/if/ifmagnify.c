@@ -1,5 +1,7 @@
 #include "ifmagnify.h"
 
+#include <baselib/gobjplink.h>
+
 ifMagnify ifMagnify_804A1DE0;
 
 s32 ifMagnify_802FB6E8(s32 slot)
@@ -22,7 +24,24 @@ void ifMagnify_802FC3BC(void) {}
 
 /// #ifMagnify_802FC618
 
-/// #ifMagnify_802FC750
+void ifMagnify_802FC750(void)
+{
+    ifMagnify* base = &ifMagnify_804A1DE0;
+    s32 i;
+    u8* ptr;
+    s32 offset;
+    HSD_GObj** gobj_ptr;
+
+    ptr = (u8*) base;
+    offset = 0;
+    for (i = 0; i < 6; ptr += 0x10, offset += 0x10, i++) {
+        if (*(HSD_GObj**) (ptr + 0x14) != NULL) {
+            gobj_ptr = (HSD_GObj**) ((u8*) base + offset + 0x14);
+            HSD_GObjPLink_80390228(*gobj_ptr);
+            *gobj_ptr = NULL;
+        }
+    }
+}
 
 /// #ifMagnify_802FC7C0
 
