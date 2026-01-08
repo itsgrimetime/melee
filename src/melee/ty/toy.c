@@ -402,8 +402,20 @@ after_lang_flag:
         return (float) us_ptr->x04;
     }
 }
-/// #un_803062BC
+s16 un_803062BC(s32 trophyId)
+{
+    s16* table = un_804D6EDC;
+    s32 i;
 
+    for (i = 0; i < 0x125; i++) {
+        if (trophyId == *table) {
+            break;
+        }
+        table++;
+    }
+
+    return (s16)i;
+}
 /// #un_803062EC
 
 /// #un_803063D4
