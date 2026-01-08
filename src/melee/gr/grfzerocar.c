@@ -5,8 +5,8 @@
 #include "gr/ground.h"
 #include "lb/lb_00F9.h"
 
-#include <baselib/jobj.h>
 #include <dolphin/mtx.h>
+#include <baselib/jobj.h>
 
 /* Local version of UnkStageDat_x8_t with proper fields */
 typedef struct grFZeroCar_StageDatEntry {
@@ -19,7 +19,8 @@ typedef struct grFZeroCar_StageDatEntry {
 /* Helper macro to get hsd_obj from gobj at offset 0x28 */
 #define GOBJ_HSD_OBJ(gobj) (*(HSD_JObj**) ((u8*) (gobj) + 0x28))
 
-void grFZeroCar_801CAFBC(HSD_GObj* gobj, s16* car_ids, s16 stage_id, s32 free_old)
+void grFZeroCar_801CAFBC(HSD_GObj* gobj, s16* car_ids, s16 stage_id,
+                         s32 free_old)
 {
     HSD_JObj* root_jobj;
     HSD_JObj* child_jobj;
@@ -179,11 +180,15 @@ void grFZeroCar_801CAFBC(HSD_GObj* gobj, s16* car_ids, s16 stage_id, s32 free_ol
             HSD_ASSERT(0x5F, archive);
             temp_jobj = Ground_801C13D0(stage_id, 0);
             if (temp_jobj != NULL) {
-                entry = (grFZeroCar_StageDatEntry*)&archive->unk4->unk8[stage_id];
+                entry =
+                    (grFZeroCar_StageDatEntry*) &archive->unk4->unk8[stage_id];
                 if (entry->unk4 != NULL && entry->unk8 != NULL) {
                     grAnime_801C6C0C(temp_jobj, *entry->unk4, *entry->unk8, 0);
-                    HSD_JObjReqAnimAllByFlags(temp_jobj, 0x497, grFZeroCar_804DADB8);
-                    HSD_ForeachAnim(temp_jobj, JOBJ_TYPE, 0x76A4, HSD_AObjSetRate, AOBJ_ARG_AF, grFZeroCar_804DADC0);
+                    HSD_JObjReqAnimAllByFlags(temp_jobj, 0x497,
+                                              grFZeroCar_804DADB8);
+                    HSD_ForeachAnim(temp_jobj, JOBJ_TYPE, 0x76A4,
+                                    HSD_AObjSetRate, AOBJ_ARG_AF,
+                                    grFZeroCar_804DADC0);
                 }
                 HSD_JObjAddChild(car_jobj0, temp_jobj);
             }
@@ -197,11 +202,15 @@ void grFZeroCar_801CAFBC(HSD_GObj* gobj, s16* car_ids, s16 stage_id, s32 free_ol
             HSD_ASSERT(0x5F, archive);
             temp_jobj = Ground_801C13D0(stage_id, 0);
             if (temp_jobj != NULL) {
-                entry = (grFZeroCar_StageDatEntry*)&archive->unk4->unk8[stage_id];
+                entry =
+                    (grFZeroCar_StageDatEntry*) &archive->unk4->unk8[stage_id];
                 if (entry->unk4 != NULL && entry->unk8 != NULL) {
                     grAnime_801C6C0C(temp_jobj, *entry->unk4, *entry->unk8, 0);
-                    HSD_JObjReqAnimAllByFlags(temp_jobj, 0x497, grFZeroCar_804DADB8);
-                    HSD_ForeachAnim(temp_jobj, JOBJ_TYPE, 0x76A4, HSD_AObjSetRate, AOBJ_ARG_AF, grFZeroCar_804DADC0);
+                    HSD_JObjReqAnimAllByFlags(temp_jobj, 0x497,
+                                              grFZeroCar_804DADB8);
+                    HSD_ForeachAnim(temp_jobj, JOBJ_TYPE, 0x76A4,
+                                    HSD_AObjSetRate, AOBJ_ARG_AF,
+                                    grFZeroCar_804DADC0);
                 }
                 HSD_JObjAddChild(car_jobj1, temp_jobj);
             }
@@ -215,11 +224,15 @@ void grFZeroCar_801CAFBC(HSD_GObj* gobj, s16* car_ids, s16 stage_id, s32 free_ol
             HSD_ASSERT(0x5F, archive);
             temp_jobj = Ground_801C13D0(stage_id, 0);
             if (temp_jobj != NULL) {
-                entry = (grFZeroCar_StageDatEntry*)&archive->unk4->unk8[stage_id];
+                entry =
+                    (grFZeroCar_StageDatEntry*) &archive->unk4->unk8[stage_id];
                 if (entry->unk4 != NULL && entry->unk8 != NULL) {
                     grAnime_801C6C0C(temp_jobj, *entry->unk4, *entry->unk8, 0);
-                    HSD_JObjReqAnimAllByFlags(temp_jobj, 0x497, grFZeroCar_804DADB8);
-                    HSD_ForeachAnim(temp_jobj, JOBJ_TYPE, 0x76A4, HSD_AObjSetRate, AOBJ_ARG_AF, grFZeroCar_804DADC0);
+                    HSD_JObjReqAnimAllByFlags(temp_jobj, 0x497,
+                                              grFZeroCar_804DADB8);
+                    HSD_ForeachAnim(temp_jobj, JOBJ_TYPE, 0x76A4,
+                                    HSD_AObjSetRate, AOBJ_ARG_AF,
+                                    grFZeroCar_804DADC0);
                 }
                 HSD_JObjAddChild(car_jobj2, temp_jobj);
             }
@@ -233,11 +246,15 @@ void grFZeroCar_801CAFBC(HSD_GObj* gobj, s16* car_ids, s16 stage_id, s32 free_ol
             HSD_ASSERT(0x5F, archive);
             temp_jobj = Ground_801C13D0(stage_id, 0);
             if (temp_jobj != NULL) {
-                entry = (grFZeroCar_StageDatEntry*)&archive->unk4->unk8[stage_id];
+                entry =
+                    (grFZeroCar_StageDatEntry*) &archive->unk4->unk8[stage_id];
                 if (entry->unk4 != NULL && entry->unk8 != NULL) {
                     grAnime_801C6C0C(temp_jobj, *entry->unk4, *entry->unk8, 0);
-                    HSD_JObjReqAnimAllByFlags(temp_jobj, 0x497, grFZeroCar_804DADB8);
-                    HSD_ForeachAnim(temp_jobj, JOBJ_TYPE, 0x76A4, HSD_AObjSetRate, AOBJ_ARG_AF, grFZeroCar_804DADC0);
+                    HSD_JObjReqAnimAllByFlags(temp_jobj, 0x497,
+                                              grFZeroCar_804DADB8);
+                    HSD_ForeachAnim(temp_jobj, JOBJ_TYPE, 0x76A4,
+                                    HSD_AObjSetRate, AOBJ_ARG_AF,
+                                    grFZeroCar_804DADC0);
                 }
                 HSD_JObjAddChild(car_jobj3, temp_jobj);
             }
