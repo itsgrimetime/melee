@@ -113,4 +113,12 @@
 /* 4DDE10 */ extern f32 un_804DDE10;
 /* 4DDE14 */ extern f32 un_804DDE14;
 
+/* un_80311788 externs */
+/* 3FE2A4 */ extern char un_803FE2A4[];
+/* 3FE7E4 */ extern char un_803FE7E4[];
+/* 4A26C4 */ extern char un_804A26C4[];
+/* 4D6E9C */ extern DevText* un_804D6E9C;
+/* 4D6EE0 */ extern void* un_804D6EE0;
+/* 4DDE18 */ extern s32 un_804DDE18;
+
 #endif
