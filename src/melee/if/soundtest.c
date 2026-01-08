@@ -122,6 +122,10 @@
 /* 4D6DF0 */ extern s32 un_804D6DF0;
 /* 4D6DF4 */ extern s32 un_804D6DF4;
 
+// .sdata (extern)
+/* 4D5908 */ extern s32 un_804D5908;
+/* 4D590C */ extern s32 un_804D590C;
+
 // .sdata2 (extern)
 /* 4DDC48 */ extern float un_804DDC48;
 

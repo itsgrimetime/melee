@@ -78,8 +78,8 @@
 /* 300F3C */ int un_80300F3C(int);
 /* 300F98 */ s32 un_80300F98(s32 arg0);
 /* 300FEC */ bool un_80300FEC(bool);
-/* 301028 */ UNK_RET un_80301028(UNK_PARAMS);
-/* 301074 */ UNK_RET un_80301074(UNK_PARAMS);
+/* 301028 */ int un_80301028(int);
+/* 301074 */ int un_80301074(int);
 /* 3010C0 */ UNK_RET un_803010C0(UNK_PARAMS);
 /* 30110C */ int fn_8030110C(int);
 /* 3011EC */ void fn_803011EC(int);
