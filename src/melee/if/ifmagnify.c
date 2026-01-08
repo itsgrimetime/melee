@@ -3,10 +3,18 @@
 #include "gr/ground.h"
 #include "if/ifall.h"
 #include "lb/lb_00B0.h"
+#include "lb/lb_00F9.h"
 #include "lb/lbarchive.h"
 
+#include <baselib/cobj.h>
+#include <baselib/gobj.h>
+#include <baselib/gobjgxlink.h>
+#include <baselib/gobjobject.h>
 #include <baselib/gobjplink.h>
+#include <baselib/tobj.h>
 
+/* 3F97E8 */ extern HSD_CameraDescPerspective ifMagnify_803F97E8;
+/* 4DDB4C */ extern f32 ifMagnify_804DDB4C;
 /* 4DDB60 */ extern int ifMagnify_804DDB60;
 
 ifMagnify ifMagnify_804A1DE0;
@@ -39,6 +47,26 @@ void ifMagnify_802FC618(void)
     f32 half_width;
     int pad;
     HSD_RectS16 viewport;
+
+    gobj = GObj_Create(14, 15, 0);
+    cobj = lb_80013B14(&ifMagnify_803F97E8);
+    HSD_GObjObject_80390A70(gobj, HSD_GObj_804D784B, cobj);
+    GObj_SetupGXLinkMax(gobj, (GObj_RenderFunc) ifMagnify_802FBBDC, 0);
+    gobj->gxlink_prios = 0x10;
+
+    idesc = *(HSD_ImageDesc**) (player0 + 8);
+    half_height = ifMagnify_804DDB4C * idesc->height;
+    half_width = ifMagnify_804DDB4C * idesc->width;
+    HSD_CObjSetOrtho(cobj, half_height, -half_height, -half_width, half_width);
+
+    viewport.xmin = 0;
+    viewport.xmax = (*(HSD_ImageDesc**) (player0 + 8))->width;
+    viewport.ymin = 0;
+    viewport.ymax = (*(HSD_ImageDesc**) (player0 + 8))->height;
+    HSD_CObjSetViewport(cobj, &viewport);
+    HSD_CObjSetScissorx4(cobj, (u16) viewport.xmin, (u16) viewport.xmax,
+                         (u16) viewport.ymin, (u16) viewport.ymax);
+}
 
 void ifMagnify_802FC750(void)
 {
