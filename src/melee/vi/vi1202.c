@@ -286,51 +286,6 @@ void fn_803219AC(HSD_GObj* gobj)
     un_80321AF4(gobj);
 }
 
-void un_80321A00(HSD_GObj* gobj)
-{
-    s32 zero;
-    vi1202_UnkStruct* data = un_804D7050;
-    CrowdConfig* vdata = gCrowdConfig;
-
-    if (data->x18 >= vdata->max_gasp_count) {
-        if (data->x10 < vdata->cheer_limit) {
-            data->x10 = data->x10 + 1;
-        }
-        return;
-    }
-
-    if (lbAudioAx_80023710(data->x2C) != 0) {
-        return;
-    }
-    data->x18 = data->x18 + 1;
-
-    if (data->x18 < gCrowdConfig->max_gasp_count) {
-        if (data->x1C != 0) {
-            zero = 0;
-            data->x1C = zero;
-            data->x10 = zero;
-            data->x18 = gCrowdConfig->max_gasp_count;
-            un_80321C28();
-            if (data->x20 != 0) {
-                un_80321CA4(0x144);
-                data->x20 = zero;
-            }
-        } else {
-            un_80321BF8(data->x14);
-        }
-    } else {
-        data->x10 = 0;
-        un_80321C28();
-        un_80321CA4(0x140);
-    }
-}
-
-void un_80321BF8(int arg0)
-{
-    vi1202_UnkStruct* data = un_804D7050;
-    data->x2C = lbAudioAx_800240B4(arg0);
-}
-
 void un_80321AF4(HSD_GObj* gobj)
 {
     char* mpLib = mpLib_80458868;
@@ -349,8 +304,8 @@ void un_80321AF4(HSD_GObj* gobj)
             if (ftLib_8008731C(cur) == 0) {
                 ftLib_80086644(cur, &pos);
 
-                if (pos.y <
-                    gCrowdConfig->blastzone_y_offset + *(f32*) (mpLib + 0x14))
+                if (pos.y < gCrowdConfig->blastzone_y_offset +
+                                *(f32*)(mpLib + 0x14))
                 {
                     data->x24 = data->x24 + 1;
                 } else {
@@ -372,6 +327,12 @@ void un_80321AF4(HSD_GObj* gobj)
             }
         }
     }
+}
+
+void un_80321BF8(int arg0)
+{
+    vi1202_UnkStruct* data = un_804D7050;
+    data->x2C = lbAudioAx_800240B4(arg0);
 }
 
 void un_80321C28(void)
