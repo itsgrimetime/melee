@@ -573,8 +573,29 @@ void un_80307F64(s32 arg0, s32 arg1)
 
 /// #un_80308328
 
-/// #un_80308354
+s16 un_80308354(s16 idx)
+{
+    s32 i;
+    s16 target;
+    TrophyData* entry;
 
+    target = un_804D6EDC[idx];
+    entry = un_804D6EC4;
+
+    for (i = 0; i < 0x125; i++) {
+        if (target == entry->id) {
+            break;
+        }
+        entry++;
+    }
+
+    if (i == 0x125) {
+        OSReport(un_803FE474);
+        __assert(un_804D5A48, 0xC2A, un_804D5A50);
+    }
+
+    return target;
+}
 /// #un_803083D8
 
 /// #un_803084A0
