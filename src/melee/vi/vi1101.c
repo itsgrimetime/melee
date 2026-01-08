@@ -21,7 +21,7 @@ static void fn_8031F56C(HSD_GObj* gobj)
 {
     HSD_CObj* cobj;
     char pad[8];
-
+    
     lbShadow_8000F38C(0);
     cobj = gobj->hsd_obj;
     if (HSD_CObjSetCurrent(cobj) != 0) {
