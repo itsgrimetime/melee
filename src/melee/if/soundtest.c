@@ -110,6 +110,7 @@
 
 // .sbss (extern)
 /* 4D6DC8 */ extern u8 un_804D6DC8;
+/* 4D6DCC */ extern s32 un_804D6DCC;
 /* 4D6DD0 */ extern float un_804D6DD0;
 /* 4D6DD8 */ extern s32 un_804D6DD8;
 /* 4D6DDC */ extern s32 un_804D6DDC;
@@ -783,7 +784,8 @@ int un_80300E74(int arg0)
 }
 #pragma dont_inline reset
 
-    ptr = gmMainLib_8015D06C(un_804D6DC8);
+void fn_80300ED0(int arg0)
+{
     switch (arg0) {
     case 0:
         lbAudioAx_80024030(0);
@@ -791,7 +793,7 @@ int un_80300E74(int arg0)
         break;
     case 6:
         lbAudioAx_80024030(1);
-        *ptr = (u32) (un_804DDC48 * un_804D6DD0);
+        gmMainLib_8015D4E8(un_804D6DC8, un_804D6DCC);
         gm_801A42F8(1);
         gm_801A4B60();
         break;

@@ -74,7 +74,7 @@
 /* 300D78 */ int un_80300D78(int);
 /* 300DE0 */ void fn_80300DE0(int);
 /* 300E74 */ int un_80300E74(int);
-/* 300ED0 */ UNK_RET fn_80300ED0(UNK_PARAMS);
+/* 300ED0 */ void fn_80300ED0(int);
 /* 300F3C */ UNK_RET un_80300F3C(UNK_PARAMS);
 /* 300F98 */ s32 un_80300F98(s32 arg0);
 /* 300FEC */ bool un_80300FEC(bool);
