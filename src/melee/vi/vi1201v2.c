@@ -10,6 +10,7 @@
 
 #include <baselib/aobj.h>
 #include <baselib/cobj.h>
+#include <baselib/fog.h>
 #include <baselib/gobj.h>
 #include <baselib/gobjplink.h>
 #include <baselib/jobj.h>
@@ -77,6 +78,11 @@ void un_80320984(HSD_GObj* gobj)
         lb_800145F4();
         gm_801A4B60();
     }
+}
+
+void fn_80320A1C(HSD_GObj* gobj)
+{
+    HSD_FogInterpretAnim(gobj->hsd_obj);
 }
 
 void un_803210EC_OnFrame(void)

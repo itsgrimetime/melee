@@ -39,6 +39,7 @@ extern SceneDesc* un_804D6F30;
 extern GXColor erase_colors_vi0102;
 extern HSD_Archive* un_804D6F38;
 static un_804D6F60_t un_804D6F60;
+static f32 un_804DE048;
 
 void vi0102_8031CB00(int mario_costume, int luigi_costume)
 {
@@ -93,15 +94,15 @@ void vi0102_CameraCallback(HSD_GObj* gobj, int unused)
     vi_RunCamera(gobj, (u8*) &erase_colors_vi0102, 0x881);
 }
 
-void vi0102_RunFrame(HSD_GObj* gobj)
+static void vi0102_RunFrame(HSD_GObj* gobj)
 {
     HSD_CObj* cobj;
 
-    cobj = GET_COBJ(gobj);
+    cobj = gobj->hsd_obj;
     HSD_CObjAnim(cobj);
 
-    if (190.0f == cobj->eyepos->aobj->curr_frame) {
-        vi_8031C9B4(33, 0);
+    if (un_804DE048 == cobj->eyepos->aobj->curr_frame) {
+        vi_8031C9B4(0x21, 0);
     }
     if (cobj->eyepos->aobj->curr_frame == cobj->eyepos->aobj->end_frame) {
         lb_800145F4();

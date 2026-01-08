@@ -4,6 +4,7 @@
 #include "ef/efasync.h"
 #include "ef/eflib.h"
 #include "gm/gm_unsplit.h"
+#include "gr/grcorneria.h"
 #include "gr/ground.h"
 #include "gr/stage.h"
 #include "it/item.h"
@@ -92,7 +93,44 @@ void fn_8031E800(HSD_GObj* gobj)
 
 void un_8031E9B8(void)
 {
-    NOT_IMPLEMENTED;
+    s32 i;
+    HSD_JObj* child;
+    HSD_JObj* jobj;
+    HSD_GObj* gobj;
+    char pad[8];
+
+    /* First model (index 0) */
+    gobj = GObj_Create(0xE, 0xF, 0);
+    jobj = HSD_JObjLoadJoint((*un_804D6FB0->models)->joint);
+    HSD_GObjObject_80390A70(gobj, HSD_GObj_804D7849, jobj);
+    GObj_SetupGXLink(gobj, HSD_GObj_JObjCallback, 0xB, 0);
+    gm_8016895C(jobj, *un_804D6FB0->models, 0);
+    HSD_JObjReqAnimAll(jobj, un_804DE0AC);
+    HSD_JObjAnimAll(jobj);
+    HSD_GObjProc_8038FD54(gobj, vi_8031E6EC, 0x17);
+
+    /* Loop through additional models */
+    i = 0;
+    while (un_804D6FB0->models[i] != NULL) {
+        if ((u32) (i - 1) <= 2) {
+            gobj = grCorneria_801E1BF0();
+            if (gobj->hsd_obj == NULL) {
+                child = NULL;
+            } else {
+                child = ((HSD_JObj*) gobj->hsd_obj)->child;
+            }
+            HSD_GObjProc_8038FD54(gobj, fn_8031E800, 2);
+            gm_8016895C(child, un_804D6FB0->models[i], 0);
+            HSD_JObjReqAnimAll(child, un_804DE0AC);
+            HSD_JObjAnimAll(child);
+        }
+        i++;
+    }
+
+    lbAudioAx_80026F2C(0x18);
+    lbAudioAx_8002702C(8, (u64) 8 << 32);
+    lbAudioAx_80027168();
+    lbAudioAx_80027648();
 }
 
 void vi0601_RunFrame(HSD_GObj* gobj)
@@ -115,8 +153,8 @@ void vi0601_RunFrame(HSD_GObj* gobj)
 
 void un_8031EBBC_OnEnter(void* unused)
 {
-    HSD_GObj* gobj;
     HSD_CObj* cobj;
+    HSD_GObj* gobj;
     HSD_LObj* lobj;
 
     lbAudioAx_800236DC();
@@ -149,7 +187,7 @@ void un_8031EBBC_OnEnter(void* unused)
     erase_colors_vi0601 = Camera_80030758();
     un_8031E9B8();
 
-    gobj = GObj_Create(0xb, 3, 0);
+    gobj = GObj_Create(0xB, 3, 0);
     lobj = lb_80011AC4(un_804D6FB0->lights);
     HSD_GObjObject_80390A70(gobj, HSD_GObj_804D784A, lobj);
     GObj_SetupGXLink(gobj, HSD_GObj_LObjCallback, 0, 0);
