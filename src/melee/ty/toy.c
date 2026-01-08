@@ -445,7 +445,7 @@ s16 un_803062BC(s32 trophyId)
 void un_803068E0(HSD_GObj* gobj)
 {
     HSD_CObj* cobj = M2C_FIELD(gobj, HSD_CObj**, 0x28);
-
+    
     if (HSD_CObjSetCurrent(cobj) != 0) {
         HSD_GObj_80390ED0(gobj, 7);
         HSD_CObjEndCurrent();
@@ -1024,7 +1024,7 @@ void un_8031234C(s32 arg0)
 {
     u16* saveData;
     u16* stateData;
-    char* toy = (char*)un_804A26B8;
+    char* toy = (char*) un_804A26B8;
     u16* srcPtr;
     u16* dstPtr;
     s32 i;
@@ -1037,26 +1037,27 @@ void un_8031234C(s32 arg0)
     if (arg0 != 0) {
         s32 category;
         dstPtr = saveData;
-        srcPtr = (u16*)(toy + 0x194);
+        srcPtr = (u16*) (toy + 0x194);
         for (i = 0x125; i != 0; i--) {
             u16 flags = srcPtr[5];
             if (flags & 0x8000) {
                 *dstPtr |= 0x8000;
             }
-            *dstPtr = (u8)srcPtr[5] + (*dstPtr & 0xFF00);
+            *dstPtr = (u8) srcPtr[5] + (*dstPtr & 0xFF00);
             srcPtr++;
             dstPtr++;
         }
 
-        *stateData = *(u16*)(toy + 0x19A);
+        *stateData = *(u16*) (toy + 0x19A);
 
         for (category = 0; category < 9; category++) {
-            if ((u32)category > 1U && category != 8 && category != 3 &&
-                (*stateData & (1 << category))) {
+            if ((u32) category > 1U && category != 8 && category != 3 &&
+                (*stateData & (1 << category)))
+            {
                 ptr = saveData;
                 for (j = 0; j < 0x125; j++) {
                     f32 result = un_803060BC(j, 6);
-                    if ((f32)category == result) {
+                    if ((f32) category == result) {
                         *ptr |= 0x4000;
                     }
                     ptr++;
@@ -1064,11 +1065,11 @@ void un_8031234C(s32 arg0)
             }
         }
 
-        *gmMainLib_8015CC90() = *(s16*)(toy + 0x3EC);
+        *gmMainLib_8015CC90() = *(s16*) (toy + 0x3EC);
     } else {
-        *(u16*)(toy + 0x19A) = *stateData;
-        *(u16*)(toy + 0x19C) = 0;
+        *(u16*) (toy + 0x19A) = *stateData;
+        *(u16*) (toy + 0x19C) = 0;
         memcpy(toy + 0x19E, saveData, 0x24A);
-        *(s16*)(toy + 0x3EC) = *gmMainLib_8015CC90();
+        *(s16*) (toy + 0x3EC) = *gmMainLib_8015CC90();
     }
 }
