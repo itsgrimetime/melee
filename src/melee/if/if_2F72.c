@@ -1,6 +1,5 @@
 #include "if_2F72.h"
 
-#include "gm/gm_1601.h"
 #include "gm/gm_16AE.h"
 #include "if/ifall.h"
 #include "if/ifstatus.h"
@@ -8,14 +7,17 @@
 #include "lb/lb_00B0.h"
 #include "lb/lbarchive.h"
 #include "lb/lbaudio_ax.h"
-#include "gm/gm_16AE.h"
 #include "pl/player.h"
 
 #include <baselib/debug.h>
 #include <baselib/gobj.h>
+#include <baselib/gobjgxlink.h>
+#include <baselib/gobjobject.h>
 #include <baselib/gobjplink.h>
 #include <baselib/gobjproc.h>
 #include <baselib/jobj.h>
+
+#include "gm/gm_1601.h"
 
 static void* lbl_804A1340[13];
 
@@ -166,6 +168,65 @@ void fn_802F7670(HSD_GObj* gobj)
     } else {
         HSD_JObjAnimAll(jobj);
     }
+}
+
+HSD_GObj* fn_802F77F8(HSD_GObj* gobj, u8 slot, s32 arg2)
+{
+    void** base = lbl_804A1340;
+    HSD_GObj* new_gobj = gobj;
+    s32 arg2_copy = arg2;
+    HSD_JObj* jobj;
+    Vec3* pos;
+
+    if (base[0] == NULL) {
+        return NULL;
+    }
+
+    if (new_gobj != NULL) {
+        HSD_GObjPLink_80390228(new_gobj);
+    }
+
+    new_gobj = GObj_Create(14, 15, 0);
+    if (new_gobj == NULL) {
+        goto end;
+    }
+
+    jobj = HSD_JObjLoadJoint(*(*(HSD_Joint***) base[0]));
+    if (jobj == NULL) {
+        HSD_GObjPLink_80390228(new_gobj);
+        new_gobj = NULL;
+        goto end;
+    }
+
+    HSD_GObjObject_80390A70(new_gobj, HSD_GObj_804D7849, jobj);
+    GObj_SetupGXLink(new_gobj, fn_802F770C, 11, 0);
+    gm_8016895C(jobj, *(DynamicModelDesc**) base[0], (u8) arg2_copy);
+    HSD_JObjReqAnimAll(jobj, 0.0f);
+    HSD_JObjAnimAll(jobj);
+
+    pos = ifAll_802F3424(slot);
+    HSD_ASSERT(0x394, jobj != NULL);
+    HSD_ASSERT(0x395, pos != NULL);
+
+    jobj->translate = *pos;
+
+    if (!(jobj->flags & 0x02000000)) {
+        s32 is_dirty;
+        u32 flags;
+
+        HSD_ASSERT(0x234, jobj != NULL);
+        flags = jobj->flags;
+        is_dirty = 0;
+        if (!(flags & 0x00800000) && (flags & 0x40)) {
+            is_dirty = 1;
+        }
+        if (is_dirty == 0) {
+            HSD_JObjSetMtxDirtySub(jobj);
+        }
+    }
+
+end:
+    return new_gobj;
 }
 
 void if_802F7AF8(s32 slot)
