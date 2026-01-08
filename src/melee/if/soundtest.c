@@ -107,6 +107,7 @@
 /* 3FD264 */ extern char un_803FD264[];
 /* 3FD274 */ extern void* un_803FD274;
 /* 3FD28C */ extern char un_803FD28C[];
+/* 3FD29C */ extern char un_803FD29C[];
 
 // .sdata
 /* 4D5850 */ static int un_804D5850 = 0x7F;
@@ -141,6 +142,7 @@
 /* 4D6E04 */ extern void* un_804D6E04;
 /* 4D6E08 */ extern HSD_GObj* un_804D6E08;
 /* 4D6E0C */ extern s32 un_804D6E0C;
+/* 4D6E10 */ extern s32 un_804D6E10;
 
 // .sdata (extern)
 /* 4D5908 */ extern s32 un_804D5908;
@@ -1270,11 +1272,29 @@ int un_80301964(int arg0)
     return 0;
 }
 
-int un_80301964(int arg0)
+int un_80301A64(int arg0)
 {
+    s32 result;
+
     if (arg0 != 1) {
         return 0;
     }
+
+    OSReport(un_803FD29C);
+    result = lbSnap_8001D5FC(0, un_804D6E10);
+    if (result != 0xB) {
+        return 0;
+    }
+
+    do {
+        result = lb_8001B6F8();
+    } while (result == 0xB);
+
+    if (result == 0) {
+        lbSnap_8001D40C(0);
+    }
+    return 0;
+}
 
     OSReport(un_803FD28C);
 

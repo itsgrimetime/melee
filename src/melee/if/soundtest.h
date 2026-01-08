@@ -107,7 +107,7 @@
 /* 3018BC */ int un_803018BC(int);
 /* 30191C */ int un_8030191C(int);
 /* 301964 */ int un_80301964(int arg0);
-/* 301A64 */ UNK_RET un_80301A64(UNK_PARAMS);
+/* 301A64 */ int un_80301A64(int arg0);
 /* 301AD4 */ UNK_RET un_80301AD4(UNK_PARAMS);
 /* 301B48 */ int un_80301B48(int);
 /* 301BA8 */ void un_80301BA8(UNK_T);
