@@ -23,14 +23,14 @@ static void fn_8031F56C(HSD_GObj* gobj)
     char pad[8];
 
     lbShadow_8000F38C(0);
-    if (HSD_CObjSetCurrent(GET_COBJ(gobj)) != 0) {
-        colors = (u8*) &un_804D5B08;
+    cobj = gobj->hsd_obj;
+    if (HSD_CObjSetCurrent(cobj) != 0) {
+        u8* colors = (u8*) &un_804D5B08;
         HSD_SetEraseColor(colors[0], colors[1], colors[2], colors[3]);
         cobj = gobj->hsd_obj;
         HSD_CObjEraseScreen(cobj, 1, 0, 1);
         vi_8031CA04(gobj);
         gobj->gxlink_prios = 0x281;
-        *(s32*)((char*)gobj + 0x20) = 0;
         HSD_GObj_80390ED0(gobj, 7);
         HSD_CObjEndCurrent();
     }
