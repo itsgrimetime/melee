@@ -169,6 +169,53 @@ void fn_802F7670(HSD_GObj* gobj)
     }
 }
 
+void fn_802F770C(HSD_GObj* gobj, int callback)
+{
+    HudIndex* status = ifStatus_802F4910();
+    void** ptr = lbl_804A1340;
+    s32 slot;
+    void* temp;
+
+    if (ptr[1] == gobj) {
+        slot = 0;
+    } else {
+        ptr += 2;
+        temp = ptr[1];
+        if (temp == gobj) {
+            slot = 1;
+        } else {
+            temp = ptr[3];
+            ptr += 2;
+            if (temp == gobj) {
+                slot = 2;
+            } else {
+                temp = ptr[3];
+                ptr += 2;
+                if (temp == gobj) {
+                    slot = 3;
+                } else {
+                    temp = ptr[3];
+                    ptr += 2;
+                    if (temp == gobj) {
+                        slot = 4;
+                    } else {
+                        temp = ptr[3];
+                        if (temp == gobj) {
+                            slot = 5;
+                        } else {
+                            slot = -1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (!((((u8*) status)[slot * 100 + 16] >> 3) & 1)) {
+        HSD_GObj_JObjCallback(gobj, callback);
+    }
+}
+
 HSD_GObj* fn_802F77F8(HSD_GObj* gobj, u8 slot, s32 arg2)
 {
     void** base = lbl_804A1340;
