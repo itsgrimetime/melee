@@ -145,7 +145,13 @@ void it_802BAA94(Item_GObj* gobj)
     it_802A2428(gobj);
 }
 
-/// #it_802BAAE4
+void it_802BAAE4(HSD_GObj* gobj, Vec3* pos, float facing_dir)
+{
+    Item* ip = GET_ITEM(gobj);
+    ip->xDD4_itemVar.samusgrapple.x0->pos = *pos;
+    Item_80268E5C(gobj, 1, ITEM_ANIM_UPDATE);
+    it_802A2428((Item_GObj*) gobj);
+}
 
 void it_802BAB40(Item_GObj* gobj)
 {
