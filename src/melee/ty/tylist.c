@@ -16,6 +16,8 @@
 #include <baselib/gobj.h>
 #include <baselib/gobjgxlink.h>
 #include <baselib/gobjobject.h>
+#include <baselib/gobjplink.h>
+#include <baselib/gobjproc.h>
 #include <baselib/sislib.h>
 #include <baselib/video.h>
 
