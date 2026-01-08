@@ -70,7 +70,7 @@
 /* 300BF8 */ bool un_80300BF8(bool);
 /* 300C3C */ bool un_80300C3C(bool);
 /* 300C80 */ bool un_80300C80(int);
-/* 300CC8 */ UNK_RET fn_80300CC8(UNK_PARAMS);
+/* 300CC8 */ void fn_80300CC8(int);
 /* 300D78 */ UNK_RET un_80300D78(UNK_PARAMS);
 /* 300DE0 */ UNK_RET fn_80300DE0(UNK_PARAMS);
 /* 300E74 */ UNK_RET un_80300E74(UNK_PARAMS);
