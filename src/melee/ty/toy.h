@@ -45,7 +45,7 @@
 /* 3078E4 */ UNK_RET un_803078E4(UNK_PARAMS);
 /* 307BA0 */ UNK_RET un_80307BA0(UNK_PARAMS);
 /* 307E84 */ UNK_RET fn_80307E84(UNK_PARAMS);
-/* 307F64 */ UNK_RET un_80307F64(UNK_PARAMS);
+/* 307F64 */ void un_80307F64(s32, s32);
 /* 30813C */ char*
     un_8030813C(s16, enum MajorSceneKind); /// TODO :: fill out the struct that
                                            /// this uses/returns
@@ -56,9 +56,9 @@
 /* 3083D8 */ void un_803083D8(void*, s32);
 /* 3084A0 */ UNK_RET un_803084A0(UNK_PARAMS);
 /* 3087F4 */ UNK_RET un_803087F4(UNK_PARAMS);
-/* 308DC8 */ UNK_RET un_80308DC8(UNK_PARAMS);
+/* 308DC8 */ void un_80308DC8(HSD_CObj*);
 /* 308F04 */ UNK_RET un_80308F04(UNK_PARAMS);
-/* 309338 */ UNK_RET un_80309338(UNK_PARAMS);
+/* 309338 */ f32 un_80309338(Point3d*, s32);
 /* 309404 */ UNK_RET fn_80309404(UNK_PARAMS);
 /* 30B530 */ UNK_RET fn_8030B530(UNK_PARAMS);
 /* 30E110 */ UNK_RET fn_8030E110(UNK_PARAMS);

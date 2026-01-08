@@ -19,6 +19,7 @@
 #include "ty/forward.h"
 
 #include "ty/types.h"
+#include "ty/tylist.h"
 
 #include <melee/if/textlib.h>
 #include <MSL/math.h> // for ABS
@@ -188,8 +189,53 @@ void un_80306D14(void)
 
 /// #fn_80307E84
 
-/// #un_80307F64
+void un_80307F64(s32 arg0, s32 arg1)
+{
+    s8 idx;
+    char* data;
+    ToyAnimState* state;
+    HSD_JObj* jobj1;
+    HSD_JObj* jobj2;
 
+    state = (ToyAnimState*) ((u8*) un_804A26B8 + 0x3F0);
+    data = un_803FDD18;
+    idx = state->x0E;
+    jobj1 = state->jobj[idx];
+    jobj2 = state->jobj[idx ^ 1];
+
+    if (state->x0F == 0) {
+        if (arg1 != 0) {
+            if (arg0 != state->x11) {
+                HSD_JObjRemoveAnimAll(jobj1);
+                HSD_JObjRemoveAnimAll(jobj2);
+                state->x11 = arg0;
+                state->x10 = arg0;
+                if (arg0 == 1) {
+                    un_80306A48(jobj1, 0, data + 0x438, 0, un_804D6EC8, 0);
+                    un_80306A48(jobj2, 0, data + 0x438, 0, un_804D6EC8, 0);
+                } else {
+                    un_80306A48(jobj1, 0, data + 0x4C8, 0, un_804D6EC8, 0);
+                    un_80306A48(jobj2, 0, data + 0x4C8, 0, un_804D6EC8, 0);
+                }
+                state->x0F = 0xA;
+                HSD_GObjProc_8038FD54(state->gobj,
+                                      (void (*)(HSD_GObj*)) fn_80307E84, 0);
+                HSD_GObj_80390CD4(state->gobj);
+            }
+        } else {
+            if (arg0 == 1) {
+                un_80306A48(jobj1, 0, data + 0x438, 0, un_804D6EC8, 0xA);
+                un_80306A48(jobj2, 0, data + 0x438, 0, un_804D6EC8, 0xA);
+            } else {
+                un_80306A48(jobj1, 0, data + 0x4C8, 0, un_804D6EC8, 0xA);
+                un_80306A48(jobj2, 0, data + 0x4C8, 0, un_804D6EC8, 0xA);
+            }
+            HSD_JObjRemoveAnimAll(jobj1);
+            HSD_JObjRemoveAnimAll(jobj2);
+            state->x0F = 0;
+        }
+    }
+}
 /// #un_8030813C
 
 /// #un_80308250
