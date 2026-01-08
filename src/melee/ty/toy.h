@@ -20,14 +20,14 @@
 /* 305EB4 */ UNK_RET un_80305EB4(UNK_PARAMS);
 /* 305FB8 */ UNK_RET un_80305FB8(UNK_PARAMS);
 /* 3060BC */ float un_803060BC(int, int);
-/* 3062BC */ s16 un_803062BC(s32 trophyId);
+/* 3062BC */ s16 un_803062BC(s16);
 /* 3062EC */ UNK_RET un_803062EC(UNK_PARAMS);
 /* 3063D4 */ void un_803063D4(s16, s32, s32);
 /* 3064B8 */ s16 un_803064B8(s16, s8);
 /* 30663C */ UNK_RET un_8030663C(UNK_PARAMS);
 /* 3067BC */ void un_803067BC(s32, s32);
-/* 3068E0 */ s32 un_803068E0(HSD_GObj* gobj);
-/* 306930 */ void un_80306930(HSD_GObj*, int);
+/* 3068E0 */ UNK_RET un_803068E0(UNK_PARAMS);
+/* 306930 */ UNK_RET un_80306930(UNK_PARAMS);
 /* 306954 */ UNK_RET un_80306954(UNK_PARAMS);
 /* 306A0C */ void un_80306A0C(void* arg0);
 /* 306A48 */ void un_80306A48(HSD_JObj*, s32, char*, s32, void*, s32);
@@ -94,6 +94,9 @@
 /* 4D6ED8 */ extern void* un_804D6ED8;
 /* 4D5A8C */ extern char un_804D5A8C[];
 /* 4DDE60 */ extern float un_804DDE60;
+/* 4DDE4C */ extern float un_804DDE4C;
 /* 4DDE48 */ extern float un_804DDE48;
+/* 4D5A78 */ extern char un_804D5A78;
+/* 4D5A80 */ extern char un_804D5A80;
 
 #endif

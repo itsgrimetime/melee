@@ -17,12 +17,14 @@ struct TyListState;
 /* 313358 */ void un_80313358(void* arg1, s8 arg2, s8 arg3, s8 arg4);
 struct TyListArg;
 /* 313464 */ void un_80313464(struct TyListArg* arg);
-/* 313508 */ HSD_JObj* un_80313508(void*, void*, float, float, float);
+/* 313508 */ HSD_JObj* un_80313508(void* parent, void* symbol, float x, float y, float z);
 /* 313774 */ void un_80313774(void);
 /* 314504 */ void fn_80314504(HSD_GObj* gobj);
 /* 3147C4 */ void un_803147C4(void);
 /* 31457C */ void un_8031457C(void);
 
 /* 3FDD18 */ extern char un_803FDD18[];
+/* 3FE8F0 */ extern char un_803FE8F0[];
+/* 3FE8FC */ extern char un_803FE8FC[];
 
 #endif
