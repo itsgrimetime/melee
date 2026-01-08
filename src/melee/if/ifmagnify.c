@@ -64,9 +64,25 @@ void ifMagnify_802FC870(void)
     ifMagnify_802FC618();
 }
 
-/// #ifMagnify_802FC8E8
+void ifMagnify_802FC8E8(void)
+{
+    ifMagnify_804A1DE0.player[0].state.ignore_offscreen = 1;
+    ifMagnify_804A1DE0.player[1].state.ignore_offscreen = 1;
+    ifMagnify_804A1DE0.player[2].state.ignore_offscreen = 1;
+    ifMagnify_804A1DE0.player[3].state.ignore_offscreen = 1;
+    ifMagnify_804A1DE0.player[4].state.ignore_offscreen = 1;
+    ifMagnify_804A1DE0.player[5].state.ignore_offscreen = 1;
+}
 
-/// #ifMagnify_802FC940
+void ifMagnify_802FC940(void)
+{
+    ifMagnify_804A1DE0.player[0].state.ignore_offscreen = 0;
+    ifMagnify_804A1DE0.player[1].state.ignore_offscreen = 0;
+    ifMagnify_804A1DE0.player[2].state.ignore_offscreen = 0;
+    ifMagnify_804A1DE0.player[3].state.ignore_offscreen = 0;
+    ifMagnify_804A1DE0.player[4].state.ignore_offscreen = 0;
+    ifMagnify_804A1DE0.player[5].state.ignore_offscreen = 0;
+}
 
 bool ifMagnify_802FC998(s32 ply_slot)
 {
