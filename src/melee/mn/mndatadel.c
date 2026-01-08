@@ -2,6 +2,16 @@
 #include "mn/mndatadel.static.h"
 #include "placeholder.h"
 #include "baselib/gobj.h"
+#include "baselib/gobjuserdata.h"
+#include "baselib/memory.h"
+#include "gm/gm_1601.h"
+#include "gm/gm_16F1.h"
+#include "gm/gm_1A3F.h"
+#include "gm/gmmain_lib.h"
+#include "lb/lbarchive.h"
+#include "lb/lbaudio_ax.h"
+#include "lb/lbcardgame.h"
+#include "ty/toy.h"
 #include "baselib/gobjgxlink.h"
 #include "baselib/gobjobject.h"
 #include "baselib/gobjplink.h"
@@ -40,8 +50,9 @@ void mnDataDel_8024E940(void)
     found = 0;
     i = 0;
     do {
-        gm_801641CC((u8) i);
-        if (gm_80164430() != 0 && (u8) gm_80164250((u16) i) != 0) {
+        if (gm_80164430(gm_801641CC((u8) i)) != 0 &&
+            (u8) gm_80164250((u16) i) != 0)
+        {
             found = 1;
             break;
         }
@@ -721,7 +732,7 @@ void mnDataDel_80250170(void)
     mn_804A04F0.cur_menu = 0x18;
     mn_804A04F0.hovered_selection = 0;
     mnDataDel_804D6C6C = NULL;
-    lbArchive_LoadSections(mn_804D6BB8, model, (char*) data + 0xA0,
+    lbArchive_LoadSections(mn_804D6BB8, (void**) model, (char*) data + 0xA0,
                            &model->animjoint, (char*) data + 0xB8,
                            &model->matanim_joint, (char*) data + 0xD4,
                            &model->shapeanim_joint);
