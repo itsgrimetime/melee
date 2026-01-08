@@ -451,7 +451,9 @@ typedef struct itSamusBomb_ItemVars {
 } itSamusBomb_ItemVars;
 
 typedef struct itSamusGrapple_ItemVars {
-    /*  +0 +DD4 */ char pad_0[0x10];
+    /*  +0 +DD4 */ char pad_0[0x8];
+    /*  +8 +DDC */ HSD_GObj* x8;
+    /*  +C +DE0 */ char pad_C[0x4];
     /* +10 +DE4 */ void (*unk_10)(Item_GObj* gobj);
 } itSamusGrapple_ItemVars;
 
