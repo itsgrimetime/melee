@@ -78,7 +78,7 @@ void un_8031D030(CharacterKind char_kind, int costume)
     Player_80036F34(0, 8);
 
     lbAudioAx_80026F2C(0x18);
-    lbAudioAx_8002702C(8, (u64)0x100 << 32);
+    lbAudioAx_8002702C(8, (u64) 0x100 << 32);
     lbAudioAx_80027168();
     lbAudioAx_80027648();
     lbAudioAx_80024634(0x88);
