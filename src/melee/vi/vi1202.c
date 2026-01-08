@@ -616,11 +616,11 @@ void un_80322178(int arg)
 bool un_80322258(float arg)
 {
     f32 val2c = gCrowdConfig->horiz_margin;
-    
-    if (arg < val2c + *(f32*)(mpLib_80458868 + 0x18)) {
+
+    if (arg < val2c + *(f32*) (mpLib_80458868 + 0x18)) {
         goto ret_true;
     }
-    if (!(arg > *(f32*)(mpLib_80458868 + 0x1C) - val2c)) {
+    if (!(arg > *(f32*) (mpLib_80458868 + 0x1C) - val2c)) {
         goto ret_false;
     }
 ret_true:
