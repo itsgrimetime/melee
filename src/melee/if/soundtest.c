@@ -67,6 +67,7 @@
 /* 3FC0FC */ static u8 un_803FC0FC[0xC0];
 /* 3FC22C */ static u8 un_803FC22C[0x1F4];
 /* 3FC63C */ static u8 un_803FC63C[0x80];
+/* 3FC70C */ static u8 un_803FC70C[0x320];
 /* 3FCA40 */ static u8 un_803FCA40[0x1A0];
 /* 3FCC38 */ static u8 un_803FCC38[0xC0];
 /* 3FCE4C */ static u8 un_803FCE4C[0xE0];
@@ -96,6 +97,7 @@
 /* 4D6DE4 */ extern s32 un_804D6DE4;
 /* 4D6DE8 */ extern s32 un_804D6DE8;
 /* 4D6DEC */ extern s32 un_804D6DEC;
+/* 4D6DF0 */ extern s32 un_804D6DF0;
 /* 4D6DF4 */ extern s32 un_804D6DF4;
 
 void un_802FF7DC(void)
@@ -636,7 +638,20 @@ void fn_80300CC8(int arg0)
     }
 }
 
-/// #un_80300D78
+#pragma dont_inline on
+int un_80300D78(int arg0)
+{
+    if (arg0 == 1) {
+        lbAudioAx_80024030(1);
+        un_804D6DE0 = un_804D6DF0;
+        un_804D6DE4 = un_804D6DF0;
+        un_804D6DE8 = un_804D6DF0;
+        un_804D6DEC = un_804D6DF0;
+        un_802FFD94(arg0, &un_803FC70C, fn_80300CC8);
+    }
+    return 0;
+}
+#pragma dont_inline reset
 
 /// #fn_80300DE0
 
