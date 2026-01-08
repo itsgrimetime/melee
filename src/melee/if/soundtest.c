@@ -59,7 +59,20 @@
     int x28;
     int x2C;
     int x30;
-    u8 _pad34[0xF8];
+    u8 _pad34[0xC4];
+    int xF8;
+    int xFC;
+    int x100;
+    int x104;
+    int x108;
+    int x10C;
+    int x110;
+    int x114;
+    int x118;
+    int x11C;
+    int x120;
+    int x124;
+    int x128;
     int x12C;
     int x130;
     u8 _pad134[0x4];
@@ -1338,7 +1351,35 @@ int un_80301B48(int arg0)
     return 0;
 }
 
-/// #un_80301BA8
+void un_80301BA8(void* arg0)
+{
+    u8* out = arg0;
+    *(s32*) (out + 0x0) = un_803FA258.x104;
+    *(s32*) (out + 0x4) = un_803FA258.x108;
+    out[0xA] = (u8) un_803FA258.x100;
+    out[0xB] = (u8) un_803FA258.x10C;
+    out[0xC] = (u8) un_803FA258.x11C;
+    out[0x8] = 0;
+    out[0x9] = 0x78;
+    out[0xD] = (u8) un_803FA258.x110;
+    out[0x19] = (u8) un_803FA258.xF8;
+    out[0xE] = (u8) un_803FA258.x114;
+    out[0x1A] = (u8) un_803FA258.xF8;
+    out[0xF] = (u8) un_803FA258.x118;
+    out[0x1B] = (u8) un_803FA258.xF8;
+    out[0x10] = (u8) un_803FA258.x120;
+    out[0x1C] = (u8) un_803FA258.xFC;
+    out[0x11] = (u8) un_803FA258.x124;
+    out[0x1D] = (u8) un_803FA258.xFC;
+    out[0x12] = (u8) un_803FA258.x128;
+    out[0x1E] = (u8) un_803FA258.xFC;
+    out[0x13] = 0;
+    out[0x14] = 0;
+    out[0x15] = 0;
+    out[0x16] = 0;
+    out[0x17] = 0;
+    out[0x18] = 0;
+}
 
 void un_80301C64(un_80301C64_t* arg0)
 {
