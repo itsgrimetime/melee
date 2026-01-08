@@ -5,16 +5,13 @@
 #include "ty/toy.h"
 
 #include <m2c_macros.h>
-#include <baselib/archive.h>
+
 #include <baselib/cobj.h>
 #include <baselib/controller.h>
 #include <baselib/displayfunc.h>
 #include <baselib/fog.h>
 #include <baselib/gobj.h>
 #include <baselib/gobjgxlink.h>
-#include <baselib/gobjobject.h>
-#include <baselib/gobjplink.h>
-#include <baselib/gobjproc.h>
 #include <baselib/sislib.h>
 #include <baselib/video.h>
 
@@ -174,10 +171,9 @@ void un_803127D4(void)
     memzero(un_804A2AA8, 0x14);
 }
 
-/// Formats a number into a string buffer using digit glyphs from the font.
 void un_80312834(char* buf, u32 num)
 {
-    u8* lookup = ((SisFontData*) HSD_SisLib_804D1124[0])->digits;
+    u8* lookup = M2C_FIELD(HSD_SisLib_804D1124[0], u8**, 0x4E8);
     u32 idx;
     u32 original = num;
 
@@ -199,9 +195,9 @@ void un_80312834(char* buf, u32 num)
     }
 
     idx = num * 2;
-    *buf++ = lookup[idx];
-    *buf++ = lookup[idx + 1];
-    *buf = 0;
+    *buf = lookup[idx];
+    *(buf + 1) = lookup[idx + 1];
+    *(buf + 2) = 0;
 }
 
 /// #un_80312904
@@ -329,7 +325,7 @@ void un_80313464(TyListArg* arg)
     }
 
     if (un_80304924(val) != 0) {
-        arg->x10 = un_80313508(*(void**)(data + 0x27C), un_803FE8D0,
+        arg->x10 = un_80313508(*(void**) (data + 0x27C), un_803FE8D0,
                                un_804DDE60, arg->x30, un_804DDE48);
     }
 }
