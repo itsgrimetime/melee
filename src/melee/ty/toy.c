@@ -789,11 +789,11 @@ found:
 void un_803114E8(void)
 {
     s32 color;
-    s32 pad[0x20]; /* Force larger stack frame */
+    s32 pad[0x20];  /* Force larger stack frame */
     void** data;
     s32 i;
 
-    (void) pad;
+    (void)pad;
 
     un_804D6E5C = HSD_MemAlloc(0x18);
     data = un_804D6E5C;
@@ -801,19 +801,19 @@ void un_803114E8(void)
     un_804D6E98 = DevText_Create(1, 0x28, 0x28, 0xE, 9, un_804A2750);
 
     if (un_804D6E98 != NULL) {
-        struct HSD_GObj* gobj = DevText_GetGObj();
+        HSD_GObj* gobj = DevText_GetGObj();
         color = un_804DDE0C;
         DevText_Show(gobj, un_804D6E98);
         DevText_HideCursor(un_804D6E98);
         DevText_80302AC0(un_804D6E98);
-        DevText_SetBGColor(un_804D6E98, *(GXColor*) &color);
+        DevText_SetBGColor(un_804D6E98, *(GXColor*)&color);
         DevText_SetScale(un_804D6E98, un_804DDE10, un_804DDE14);
         DevText_Erase(un_804D6E98);
         DevText_SetCursorXY(un_804D6E98, 0, 0);
         DevText_StoreColorIndex(un_804D6E98, 0);
-        DevText_SetTextColor(un_804D6E98, *(GXColor*) &un_804D5A40);
+        DevText_SetTextColor(un_804D6E98, *(GXColor*)&un_804D5A40);
         DevText_StoreColorIndex(un_804D6E98, 1);
-        DevText_SetTextColor(un_804D6E98, *(GXColor*) &un_804D5A44);
+        DevText_SetTextColor(un_804D6E98, *(GXColor*)&un_804D5A44);
 
         i = 0;
         do {
@@ -827,10 +827,10 @@ void un_803114E8(void)
 
         memzero(data, 0x18);
         *data = GObj_Create(0, 0, 0);
-        HSD_GObjProc_8038FD54(*data, (void (*)(HSD_GObj*)) un_80310B48, 0);
+        HSD_GObjProc_8038FD54(*data, (void (*)(HSD_GObj*))un_80310B48, 0);
         HSD_GObj_80390CD4(*data);
     } else {
-        OSReport(un_803FE7C0, un_804D6E98, un_804D6E98);
+        OSReport(un_803FE7C0);
     }
 }
 /// #un_80311680
