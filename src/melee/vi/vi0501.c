@@ -58,7 +58,7 @@ void mn_8022EAE0(HSD_GObj*);
 void un_8031D9F8(CharacterKind char_kind, int costume, int spawn_mode,
                  int spawn_indices)
 {
-    u8* indices = (u8*)spawn_indices;
+    u8* indices = (u8*) spawn_indices;
     void* gr_result;
     HSD_GObj* entity;
     HSD_JObj* jobj;
@@ -123,9 +123,9 @@ void un_8031D9F8(CharacterKind char_kind, int costume, int spawn_mode,
         pos.x = pos.x * (scale * un_804D6F80);
         pos.y = pos.y * (scale * un_804D6F80);
         pos.z = pos.z * (scale * un_804D6F80);
-        ((Vec3*)((u8*)gr_result + 0xC))[i - 1].x = pos.x;
-        ((Vec3*)((u8*)gr_result + 0xC))[i - 1].y = pos.y;
-        ((Vec3*)((u8*)gr_result + 0xC))[i - 1].z = pos.z;
+        ((Vec3*) ((u8*) gr_result + 0xC))[i - 1].x = pos.x;
+        ((Vec3*) ((u8*) gr_result + 0xC))[i - 1].y = pos.y;
+        ((Vec3*) ((u8*) gr_result + 0xC))[i - 1].z = pos.z;
 
         HSD_JObjReqAnimAll(jobj, un_804DE070);
     }
