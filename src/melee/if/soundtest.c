@@ -99,29 +99,13 @@
 /* 3FC0FC */ static u8 un_803FC0FC[0xC0];
 /* 3FC22C */ static u8 un_803FC22C[0x1F4];
 /* 3FC63C */ static u8 un_803FC63C[0x80];
-/* 3FC70C */ static u8 un_803FC70C[0x11C];
-/* 3FC828 */ static u8 un_803FC828[0xA0];
-/* 3FC8C8 */ static u8 un_803FC8C8[0x168];
 /* 3FCA40 */ static u8 un_803FCA40[0x1A0];
-/* 3FCC38 */ static u8 un_803FCC38[0xFC];
-/* 3FCD34 */ static u8 un_803FCD34[0x118];
+/* 3FCC38 */ static u8 un_803FCC38[0xC0];
 /* 3FCE4C */ static u8 un_803FCE4C[0xE0];
 /* 3FD064 */ static u8 un_803FD064[0x1C0];
-/* 3FD310 */ static u8 un_803FD310[0x27C];
-/* 3FD58C */ static u8 un_803FD58C[0x2D8];
-/* 3FD864 */ static u8 un_803FD864[0x294];
+/* 3FD310 */ static u8 un_803FD310[0x1A0];
 /* 3FDAF8 */ static u8 un_803FDAF8[0x80];
 /* 3FDB9C */ static u8 un_803FDB9C[0x84];
-/* 3FD224 */ extern char un_803FD224[];
-/* 3FD230 */ extern char un_803FD230[];
-/* 3FD23C */ extern char un_803FD23C[];
-/* 3FD24C */ extern char un_803FD24C[];
-/* 3FD258 */ extern char un_803FD258[];
-/* 3FD264 */ extern char un_803FD264[];
-/* 3FD274 */ extern void* un_803FD274;
-/* 3FD28C */ extern char un_803FD28C[];
-/* 3FD29C */ extern char un_803FD29C[];
-/* 3FD2AC */ extern char un_803FD2AC[];
 
 // .sdata
 /* 4D5850 */ static int un_804D5850 = 0x7F;
@@ -559,14 +543,14 @@ int un_80300724(int arg0)
 void un_80300758(int arg0)
 {
     if (arg0 == 1) {
-        un_802FFCD0(4, (u8*) &un_803FA258 + 0x10);
+        un_802FFCD0(4, (u8*)&un_803FA258 + 0x10);
     }
 }
 
 void un_80300790(int arg0)
 {
     if (arg0 == 1) {
-        un_802FFCD0(4, (u8*) &un_803FA258 + 0x24);
+        un_802FFCD0(4, (u8*)&un_803FA258 + 0x24);
     }
 }
 
