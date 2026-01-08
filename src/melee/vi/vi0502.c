@@ -57,18 +57,12 @@ static GXColor erase_colors_vi0502;
 static HSD_GObj* kirby_gobj;
 static ViCharaDesc* un_804D6FA8;
 
-void un_8031E110(int arg0, int arg1, int arg2)
-{
-    un_804D6FA8->p1_char_index = arg0;
-    un_804D6FA8->p1_costume_index = arg1;
-    un_804D6FA8->p2_costume_index = arg2;
-}
-
 void vi0502_8031E124(CharacterKind player_kind, int player_costume,
                      int kirby_costume)
 {
     HSD_JObj* jobj;
     VecMtxPtr pmtx;
+    char pad[56];
 
     Camera_80028B9C(6);
     lb_8000FCDC();
