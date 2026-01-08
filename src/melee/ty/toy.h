@@ -121,4 +121,8 @@
 /* 4D6EE0 */ extern void* un_804D6EE0;
 /* 4DDE18 */ extern s32 un_804DDE18;
 
+/* un_803060BC externs */
+/* 4D6EC0 */ extern struct TrophyData* un_804D6EC0;
+/* 4D6EC4 */ extern struct TrophyData* un_804D6EC4;
+
 #endif
