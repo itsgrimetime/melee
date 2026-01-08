@@ -42,6 +42,10 @@ void un_8031D9E4(int arg0, int arg1, int arg2)
     desc->p2_costume_index = arg2;
 }
 
+// .data section 0x804000B4 - 0x804000D0
+char un_804000B4[] = "ViIntro.dat";
+char un_804000C0[] = "ScVi";
+
 void mn_8022EAE0(HSD_GObj*);
 
 /// #un_8031D9F8
@@ -89,16 +93,16 @@ void fn_8031DD14(HSD_GObj* gobj)
 void un_8031DE58_OnEnter(void* arg)
 {
     u8* input = arg;
-    s32 i;
     u8 char_index;
-    HSD_GObj* fog_gobj;
-    HSD_GObj* light_gobj;
-    HSD_GObj* camera_gobj;
-    HSD_GObj* model_gobj;
     HSD_Fog* fog;
+    HSD_GObj* fog_gobj;
     HSD_LObj* lobj;
+    HSD_GObj* light_gobj;
     HSD_CObj* cobj;
+    HSD_GObj* camera_gobj;
     HSD_JObj* jobj;
+    HSD_GObj* model_gobj;
+    s32 i;
 
     lbAudioAx_800236DC();
     efLib_8005B4B8();
@@ -106,7 +110,7 @@ void un_8031DE58_OnEnter(void* arg)
 
     char_index = input[0];
 
-    un_804D6F74 = lbArchive_LoadSymbols("ViIntro.dat", &un_804D6F70, "ScVi", NULL);
+    un_804D6F74 = lbArchive_LoadSymbols(un_804000B4, &un_804D6F70, un_804000C0, NULL);
     un_804D6F78 = lbArchive_LoadSymbols(viGetCharAnimByIndex(char_index), NULL);
 
     fog_gobj = GObj_Create(0xb, 3, 0);
