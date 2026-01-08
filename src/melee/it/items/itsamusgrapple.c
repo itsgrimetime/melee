@@ -159,7 +159,18 @@ void it_802BAB7C(Item_GObj* gobj)
     Item_80268E5C((HSD_GObj*) gobj, 7, ITEM_ANIM_UPDATE);
     it_802A2428(gobj);
 }
-/// #it_802BABB8
+void it_802BABB8(Item_GObj* gobj)
+{
+    Item* ip = GET_ITEM(gobj);
+    Fighter* fp = ip->owner->user_data;
+    ftData* ft_data = fp->ft_data;
+    void* ext_attr = ft_data->ext_attr;
+
+    Item_80268E5C((HSD_GObj*) gobj, 8, ITEM_ANIM_UPDATE);
+    it_802A2428(gobj);
+
+    M2C_FIELD(fp, float*, 0x2344) = (f32)M2C_FIELD(ext_attr, s32*, 0xD0);
+}
 
 void it_802BAC3C(Fighter_GObj* gobj)
 {
