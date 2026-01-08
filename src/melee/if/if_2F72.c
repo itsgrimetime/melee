@@ -14,6 +14,7 @@
 #include <baselib/gobj.h>
 #include <baselib/gobjplink.h>
 #include <baselib/gobjproc.h>
+#include <baselib/jobj.h>
 
 static void* lbl_804A1340[13];
 
@@ -85,6 +86,29 @@ found:
             }
             entry->x1C = NULL;
         }
+    }
+}
+
+void fn_802F75D4(HSD_GObj* gobj)
+{
+    HSD_JObj* jobj = gobj->hsd_obj;
+    void** base;
+    void** data;
+    s32 i;
+
+    if (lb_8000B09C(jobj) == 0) {
+        base = lbl_804A1340;
+        data = base;
+        for (i = 0; i < 6; data += 2, i++) {
+            if (data[1] == gobj) {
+                base[i * 2 + 1] = NULL;
+                goto done;
+            }
+        }
+    done:
+        HSD_GObjPLink_80390228(gobj);
+    } else {
+        HSD_JObjAnimAll(jobj);
     }
 }
 
