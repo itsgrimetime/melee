@@ -11,6 +11,7 @@
 #include "it/item.h"
 #include "lb/lb_00B0.h"
 #include "lb/lb_00F9.h"
+#include "lb/lbaudio_ax.h"
 #include "lb/lbshadow.h"
 #include "mn/mnmain.h"
 #include "mp/mpcoll.h"
@@ -70,6 +71,35 @@ void un_80320508(CharacterKind char_kind, int costume)
     Player_80032768(0, &un_804002F8);
     Player_80036F34(0, 8);
     Player_SetPlayerAndEntityFacingDirection(0, un_804DE124);
+}
+
+void un_803205F4(void)
+{
+    HSD_JObj* jobj;
+    HSD_GObj* gobj;
+
+    gobj = GObj_Create(0xE, 0xF, 0);
+    jobj = HSD_JObjLoadJoint(un_804D7010->models[1]->joint);
+    HSD_GObjObject_80390A70(gobj, HSD_GObj_804D7849, jobj);
+    GObj_SetupGXLink(gobj, HSD_GObj_JObjCallback, 0xB, 0);
+    gm_8016895C(jobj, un_804D7010->models[1], 0);
+    HSD_JObjReqAnimAll(jobj, un_804DE128);
+    HSD_GObjProc_8038FD54(gobj, mn_8022EAE0, 0);
+
+    Player_80036E20(0x1D, un_804D701C, 8);
+    Player_SetPlayerCharacter(1, 0x1D);
+    Player_SetCostumeId(1, 0);
+    Player_SetPlayerId(1, 0);
+    Player_SetSlottype(1, 2);
+    Player_SetFacingDirection(1, un_804DE120);
+    Player_80032768(1, &un_80400304);
+    Player_80036F34(1, 0xF);
+    Player_SetScale(1, un_804DE11C / Player_80032BB0(1));
+
+    lbAudioAx_80026F2C(0x18);
+    lbAudioAx_8002702C(8, 0x0020000000000000ULL);
+    lbAudioAx_80027168();
+    lbAudioAx_80027648();
 }
 
 void un_8032074C(HSD_GObj* gobj)
