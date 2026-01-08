@@ -90,6 +90,10 @@
 /* 4D6DBC */ static int un_804D6DBC;
 /* 4D6DC0 */ static int un_804D6DC0;
 
+// .sbss (extern)
+/* 4D6DDC */ extern s32 un_804D6DDC;
+/* 4D6DF4 */ extern s32 un_804D6DF4;
+
 void un_802FF7DC(void)
 {
     lbArchive_LoadSymbols("SmSt.dat", &un_804D6DA8, "smSoundTestLoadData", 0);
@@ -587,7 +591,17 @@ bool un_80300C3C(bool update_scene)
     return false;
 }
 
-/// #un_80300C80
+bool un_80300C80(int arg0)
+{
+    if (arg0 == 1) {
+        int* ptr = gmMainLib_8015CCF0();
+        *ptr = un_804D6DDC * 10;
+        un_803124BC();
+        gm_801A42F8(1);
+        gm_801A4B60();
+    }
+    return false;
+}
 
 /// #fn_80300CC8
 
@@ -600,8 +614,6 @@ bool un_80300C3C(bool update_scene)
 /// #fn_80300ED0
 
 /// #un_80300F3C
-
-extern s32 un_804D6DF4;
 
 s32 un_80300F98(s32 arg0)
 {
