@@ -2,6 +2,7 @@
 
 #include "itlinkhookshot.h"
 
+#include "ft/inlines.h"
 #include "it/inlines.h"
 #include "it/it_26B1.h"
 #include "it/item.h"
@@ -142,7 +143,17 @@ void it_802BAB7C(Item_GObj* gobj)
 }
 /// #it_802BABB8
 
-/// #it_802BAC3C
+void it_802BAC3C(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    if (fp->fv.ss.x223C != NULL) {
+        it_802B7B84(fp->fv.ss.x223C);
+    } else {
+        fp->accessory2_cb = NULL;
+        fp->death1_cb = NULL;
+        fp->accessory3_cb = NULL;
+    }
+}
 
 /// #it_802BAC80
 
