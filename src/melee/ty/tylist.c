@@ -147,9 +147,9 @@ void un_8031263C(void)
     un_804A284C[3] |= 4;
 
     if (un_804D6ECC == NULL) {
-        un_804D6ECC = lbArchive_LoadSymbols(
-            strs + 0xA58, &un_804D6EA8, strs + 0xA64, &un_804D6EA4,
-            strs + 0xA74, NULL);
+        un_804D6ECC =
+            lbArchive_LoadSymbols(strs + 0xA58, &un_804D6EA8, strs + 0xA64,
+                                  &un_804D6EA4, strs + 0xA74, NULL);
     }
 
     un_8031234C(0);
@@ -416,98 +416,69 @@ void un_803147C4(void)
     HSD_PadRenewStatus();
 }
 
-    memzero(&state->gobj_2AC, 0x18);
-    un_8031457C();
-    memzero(&state->gobj_2C4, 0x14);
-
-    archive = un_804D6ED8;
-
-    if (archive->data == NULL) {
-        OSReport(strs + 0x14C);
-        OSPanic(strs + 0x70, 0x636, un_804D5A8C);
-    }
-
-    {
-        HSD_JObj* jobj =
-            HSD_ArchiveGetPublicAddress(archive->data, strs + 0x170);
-        if (jobj != NULL) {
-            state->gobj_2C4 = GObj_Create(2, 3, 0);
-            HSD_GObjObject_80390A70(state->gobj_2C4, (u8) HSD_GObj_804D784A,
-                                    un_80306EEC(jobj, 0));
-            GObj_SetupGXLink(state->gobj_2C4, HSD_GObj_LObjCallback, 0x34, 0);
-        }
-    }
-
-    un_80307470(0);
-    if (un_80304870() != 0) {
-        memzero(state, 0x2AC);
-        un_80313774();
-    }
-    HSD_PadRenewStatus();
-}
-
 void un_803148E4(s32 arg0)
 {
-    TyListState* state = (TyListState*) un_804A2AC0;
-    TyModeState* mode = (TyModeState*) un_804A284C;
-    TyArchiveData* archive = un_804D6ED8;
+    char* data = un_804A2AC0;
+    char* ptr1 = data + 0x2AC;
+    void* archive = un_804D6ED8;
+    char* ptr2 = data + 0x2C4;
     PAD_STACK(8);
 
     if (un_80304870() != 0) {
         if (arg0 != 0) {
-            un_804A284C[0x12A] = state->selectedIdx;
-            un_804A284C[0x12B] = un_804D6EDC[state->selectedIdx];
-            mode->x1 = state->x29B;
-            mode->x2 = state->x29C;
-            mode->x3 = state->x2B8;
+            un_804A284C[0x12A] = *(s16*)(data + 0x298);
+            un_804A284C[0x12B] = un_804D6EDC[*(s16*)(data + 0x298)];
+            ((u8*)un_804A284C)[1] = *(u8*)(data + 0x29B);
+            ((u8*)un_804A284C)[2] = *(u8*)(data + 0x29C);
+            ((u8*)un_804A284C)[3] = *(u8*)(ptr1 + 0xC);
         } else {
             if (un_80304870() != 0) {
-                s16 val = un_804D6EDC[state->selectedIdx];
+                s16 val = un_804D6EDC[*(s16*)(data + 0x298)];
                 un_803067BC(0, 0);
-                state->selectedIdx = un_803062BC(val);
+                *(u16*)(data + 0x298) = un_803062BC(val);
             }
-            un_804A284C[0x12A] = state->selectedIdx;
-            un_804A284C[0x12B] = un_804D6EDC[state->selectedIdx];
-            mode->x1 = 0;
-            mode->x2 = 0;
-            mode->x3 = 0;
+            un_804A284C[0x12A] = *(s16*)(data + 0x298);
+            un_804A284C[0x12B] = un_804D6EDC[*(s16*)(data + 0x298)];
+            ((u8*)un_804A284C)[1] = 0;
+            ((u8*)un_804A284C)[2] = 0;
+            ((u8*)un_804A284C)[3] = 0;
         }
 
-        if (un_80304924(un_804D6EDC[state->selectedIdx]) != 0) {
-            un_80304988(un_804D6EDC[state->selectedIdx]);
+        if (un_80304924(un_804D6EDC[*(s16*)(data + 0x298)]) != 0) {
+            un_80304988(un_804D6EDC[*(s16*)(data + 0x298)]);
         }
     }
 
-    if (state->gobj != NULL) {
+    if (*(void**)(data + 0x27C) != NULL) {
         if (arg0 != 0) {
-            HSD_GObjPLink_80390228(state->gobj);
+            HSD_GObjPLink_80390228(*(HSD_GObj**)(data + 0x27C));
         }
-        state->gobj = NULL;
+        *(void**)(data + 0x27C) = NULL;
     }
 
     if (arg0 != 0) {
         HSD_SisLib_803A5E70();
     }
 
-    if (archive->gobj != NULL) {
+    if (*(void**)archive != NULL) {
         if (arg0 != 0) {
-            HSD_GObjPLink_80390228(archive->gobj);
+            HSD_GObjPLink_80390228(*(HSD_GObj**)archive);
         }
-        archive->gobj = NULL;
+        *(void**)archive = NULL;
     }
 
-    if (state->gobj_2C4 != NULL && arg0 != 0) {
-        HSD_GObjPLink_80390228(state->gobj_2C4);
+    if (*(void**)ptr2 != NULL && arg0 != 0) {
+        HSD_GObjPLink_80390228(*(HSD_GObj**)ptr2);
     }
 
-    if (state->gobj_2AC != NULL) {
-        HSD_GObjProc_8038FED4(state->gobj_2AC);
+    if (*(void**)ptr1 != NULL) {
+        HSD_GObjProc_8038FED4(*(HSD_GObj**)ptr1);
         if (arg0 != 0) {
-            HSD_GObjPLink_80390228(state->gobj_2AC);
+            HSD_GObjPLink_80390228(*(HSD_GObj**)ptr1);
         }
     }
 
-    if (state->gobj_2B0 != NULL && arg0 != 0) {
-        HSD_GObjPLink_80390228(state->gobj_2B0);
+    if (*(void**)(ptr1 + 4) != NULL && arg0 != 0) {
+        HSD_GObjPLink_80390228(*(HSD_GObj**)(ptr1 + 4));
     }
 }
