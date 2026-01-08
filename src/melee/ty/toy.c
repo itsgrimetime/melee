@@ -583,8 +583,11 @@ void un_80307F64(s32 arg0, s32 arg1)
 
 /// #un_80308250
 
-/// #un_803082F8
-
+void un_803082F8(s16 idx)
+{
+    s32 trophyId = un_80308354(idx);
+    un_803063D4((s16) trophyId, 2, 0x128);
+}
 void un_80308328(s32 arg0)
 {
     un_803063D4((s16) arg0, 2, 0x128);

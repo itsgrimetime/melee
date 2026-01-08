@@ -52,7 +52,7 @@
     un_8030813C(s16, enum MajorSceneKind); /// TODO :: fill out the struct that
                                            /// this uses/returns
 /* 308250 */ UNK_RET un_80308250(UNK_PARAMS);
-/* 3082F8 */ UNK_RET un_803082F8(UNK_PARAMS);
+/* 3082F8 */ void un_803082F8(s16 idx);
 /* 308328 */ void un_80308328(s32 arg0);
 /* 308354 */ s16 un_80308354(s16 idx);
 /* 3083D8 */ void un_803083D8(void*, s32);
