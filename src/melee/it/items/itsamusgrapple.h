@@ -47,7 +47,7 @@
 /* 2BA5DC */ UNK_RET it_802BA5DC(UNK_PARAMS);
 /* 2BA760 */ UNK_RET it_802BA760(UNK_PARAMS);
 /* 2BA97C */ void it_2725_Logic53_PickedUp(Item_GObj*);
-/* 2BA9B8 */ UNK_RET it_802BA9B8(UNK_PARAMS);
+/* 2BA9B8 */ void it_802BA9B8(Item_GObj* gobj);
 /* 2BAA08 */ UNK_RET it_802BAA08(UNK_PARAMS);
 /* 2BAA58 */ void it_802BAA58(Item_GObj* gobj);
 /* 2BAA94 */ void it_802BAA94(HSD_GObj* gobj);
