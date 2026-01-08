@@ -115,8 +115,8 @@ void vi0601_RunFrame(HSD_GObj* gobj)
 
 void un_8031EBBC_OnEnter(void* unused)
 {
-    HSD_GObj* gobj;
     HSD_CObj* cobj;
+    HSD_GObj* gobj;
     HSD_LObj* lobj;
 
     lbAudioAx_800236DC();
@@ -149,7 +149,7 @@ void un_8031EBBC_OnEnter(void* unused)
     erase_colors_vi0601 = Camera_80030758();
     un_8031E9B8();
 
-    gobj = GObj_Create(0xb, 3, 0);
+    gobj = GObj_Create(0xB, 3, 0);
     lobj = lb_80011AC4(un_804D6FB0->lights);
     HSD_GObjObject_80390A70(gobj, HSD_GObj_804D784A, lobj);
     GObj_SetupGXLink(gobj, HSD_GObj_LObjCallback, 0, 0);
