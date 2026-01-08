@@ -18,8 +18,8 @@
 
 #include "ty/forward.h"
 
-#include "ty/types.h"
 #include "ty/tylist.h"
+#include "ty/types.h"
 
 #include <melee/if/textlib.h>
 #include <MSL/math.h> // for ABS
@@ -279,8 +279,87 @@ void un_803102C4(s8 arg0)
 
 /// #un_80310660
 
-/// #un_803109A0
+void un_803109A0(s32 arg0, s32 arg1, s32 arg2)
+{
+    ToyEntry table[9];
+    char buf[16];
+    s32 idx;
+    s32* src;
+    s32* dst;
+    s32 i;
 
+    /* Copy table from un_803B8910 to stack */
+    src = un_803B8910 - 2;
+    dst = (s32*) table - 2;
+    i = 9;
+    do {
+        s32 a, b;
+        a = *++src;
+        ++src;
+        b = *src;
+        *++dst = a;
+        ++dst;
+        *dst = b;
+    } while (--i > 0);
+
+    /* Search for matching entry using pointer walk */
+    {
+        ToyEntry* p = table - 1;
+        idx = 0;
+        if (arg0 == (++p)->id) {
+            goto found;
+        }
+        idx = 1;
+        if (arg0 == (++p)->id) {
+            goto found;
+        }
+        idx = 2;
+        if (arg0 == (++p)->id) {
+            goto found;
+        }
+        idx = 3;
+        if (arg0 == (++p)->id) {
+            goto found;
+        }
+        idx = 4;
+        if (arg0 == (++p)->id) {
+            goto found;
+        }
+        idx = 5;
+        if (arg0 == (++p)->id) {
+            goto found;
+        }
+        idx = 6;
+        if (arg0 == (++p)->id) {
+            goto found;
+        }
+        idx = 7;
+        if (arg0 == (++p)->id) {
+            goto found;
+        }
+        idx = 8;
+        if (arg0 == (++p)->id) {
+            goto found;
+        }
+        idx = 9;
+    }
+
+found:
+    if (arg2 != 0) {
+        DevText_StoreColorIndex(un_804D6E98, 1);
+    } else {
+        DevText_StoreColorIndex(un_804D6E98, 0);
+    }
+
+    if (arg0 == 8) {
+        s32 ret = un_80304B94(arg0);
+        sprintf(buf, un_803FE7A0, table[idx].value_byte, arg1, ret);
+    } else {
+        s32 ret = un_80304B94(arg0);
+        sprintf(buf, un_803FE7B0, table[idx].value_byte, arg1, ret);
+    }
+    DevText_Printf(un_804D6E98, buf);
+}
 /// #un_80310B48
 
 /// #un_803114E8
