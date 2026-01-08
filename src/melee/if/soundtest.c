@@ -264,8 +264,8 @@ int un_802FFBAC(int arg0)
             lbAudioAx_80024E50(x);
         } else {
             lbAudioAx_80023F28(un_804D6DB8);
-            un_804D6DC0 = 0;
             un_804D585C = un_804D6DB8;
+            un_804D6DC0 = 0;
         }
     } else if (arg0 == 0) {
         lbAudioAx_800236DC();
