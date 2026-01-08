@@ -76,7 +76,49 @@ void un_8031EE60(HSD_GObj* gobj)
 
 void un_8031EE84(void)
 {
-    NOT_IMPLEMENTED;
+    s32 j;
+    HSD_JObj* jobj;
+    HSD_GObj* gobj;
+    s32* table_ptr;
+    char* arr_ptr;
+    s32 i;
+    s32 idx;
+    void** data;
+
+    i = 0;
+    idx = i << 2;
+    while ((data = *(void***)un_804D6FB8), data[idx >> 2] != NULL) {
+        gobj = GObj_Create(0xE, 0xF, 0);
+        data = *(void***)un_804D6FB8;
+        jobj = HSD_JObjLoadJoint(*(void**)data[idx >> 2]);
+        HSD_GObjObject_80390A70(gobj, HSD_GObj_804D7849, jobj);
+        GObj_SetupGXLink(gobj, HSD_GObj_JObjCallback, 0xB, 0);
+        data = *(void***)un_804D6FB8;
+        gm_8016895C(jobj, data[idx >> 2], 0);
+        HSD_JObjReqAnimAll(jobj, 0.0F);
+        HSD_JObjAnimAll(jobj);
+        HSD_GObjProc_8038FD54(gobj, un_8031EE60, 0x17);
+
+        j = 0;
+        arr_ptr = &un_804A2EA8[j << 2];
+        table_ptr = un_80400128[0];
+        do {
+            if (i == table_ptr[0]) {
+                lb_80011E24(jobj, (HSD_JObj**) arr_ptr, table_ptr[1], -1);
+            }
+            j++;
+            table_ptr += 2;
+            arr_ptr += 4;
+        } while (j < 0x17);
+
+        idx += 4;
+        i++;
+    }
+
+    lbAudioAx_80026F2C(0x18);
+    lbAudioAx_8002702C(8, 0x200000000000ULL);
+    lbAudioAx_80027168();
+    lbAudioAx_80027648();
 }
 
 void fn_8031EFE4(HSD_GObj* gobj)
