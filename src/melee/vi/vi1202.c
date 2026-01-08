@@ -185,7 +185,7 @@ void un_80321AF4(HSD_GObj* gobj)
                 ftLib_80086644(cur, &pos);
 
                 if (pos.y < gCrowdConfig->blastzone_y_offset +
-                                M2C_FIELD(mpLib, f32*, 0x14))
+                                *(f32*) (mpLib + 0x14))
                 {
                     data->x24 = data->x24 + 1;
                 } else {
