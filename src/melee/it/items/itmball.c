@@ -152,9 +152,9 @@ void it_3F14_Logic34_EnteredAir(Item_GObj* gobj)
     Item_80268E5C(gobj, 4, ITEM_ANIM_UPDATE);
 
     if (ip->x88.x + (ip->x40_vel.x + ip->x7C.x) >= 0.0f) {
-        facing = -1.0f;
-    } else {
         facing = 1.0f;
+    } else {
+        facing = -1.0f;
     }
     ip->facing_dir = facing;
 
