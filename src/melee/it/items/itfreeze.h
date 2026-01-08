@@ -8,11 +8,11 @@
 #include "it/items/types.h"
 
 /* 28EB88 */ UNK_RET it_8028EB88(UNK_PARAMS);
-/* 28EC98 */ UNK_RET it_8028EC98(UNK_PARAMS);
+/* 28EC98 */ void it_8028EC98(Item_GObj* gobj, f32 arg_f1);
 /* 28ECE0 */ void it_8028ECE0(Item_GObj* gobj);
 /* 28ECF0 */ Item* it_8028ECF0(Item_GObj* gobj, Vec3* v);
-/* 28ED10 */ void it_3F14_Logic17_Destroyed(Item_GObj*);
-/* 28ED50 */ void it_3F14_Logic17_Spawned(Item_GObj*);
+/* 28ED10 */ void it_3F14_Logic17_Destroyed(Item_GObj* gobj);
+/* 28ED50 */ void it_3F14_Logic17_Spawned(Item_GObj* gobj);
 /* 28EDBC */ UNK_RET it_8028EDBC(Item_GObj* gobj);
 /* 28EF34 */ void it_8028EF34(Item_GObj* gobj);
 /* 28EF88 */ bool itFreeze_UnkMotion0_Anim(Item_GObj* gobj);
@@ -39,13 +39,13 @@
 /* 28F4AC */ bool itFreeze_UnkMotion4_Anim(Item_GObj* gobj);
 /* 28F4B4 */ void itFreeze_UnkMotion4_Phys(Item_GObj* gobj);
 /* 28F560 */ bool itFreeze_UnkMotion4_Coll(Item_GObj* gobj);
-/* 28F7C8 */ UNK_RET it_8028F7C8(UNK_PARAMS);
+/* 28F7C8 */ void it_8028F7C8(Item_GObj* gobj);
 /* 28F828 */ bool itFreeze_UnkMotion5_Anim(Item_GObj* gobj);
 /* 28F830 */ void itFreeze_UnkMotion5_Phys(Item_GObj* gobj);
 /* 28F834 */ bool itFreeze_UnkMotion5_Coll(Item_GObj* gobj);
 /* 28F8C4 */ void it_3F14_Logic17_EvtUnk(Item_GObj*, Item_GObj*);
 /* 28F8E4 */ void it_8028F8E4(Item_GObj*);
-/* 28F968 */ void it_8028F968(Item_GObj*);
+/* 28F968 */ void it_8028F968(Item_GObj* gobj);
 /* 28F9B8 */ void it_8028F9B8(Item_GObj*);
 /* 3F5D28 */ extern ItemStateTable it_803F5D28[];
 

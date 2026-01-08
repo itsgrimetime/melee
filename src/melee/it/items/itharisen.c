@@ -9,8 +9,16 @@
 #include "it/it_2725.h"
 #include "it/item.h"
 
-/// #it_802927E8
-
+void it_802927E8(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
+    HSD_JObj* jobj = gobj->hsd_obj;
+    f32* spec_attrs = ip->xC4_article_data->x4_specialAttributes;
+    ItemAttr* attrs = ip->xCC_item_attr;
+    f32 scale = spec_attrs[0] * attrs->x60_scale;
+    ip->scl = scale;
+    it_80272F7C(jobj, scale);
+}
 void it_8029282C(Item_GObj* gobj)
 {
     Item* ip = GET_ITEM(gobj);
@@ -134,13 +142,17 @@ bool itHarisen_UnkMotion7_Coll(Item_GObj* gobj)
 
 bool it_3F14_Logic24_DmgDealt(Item_GObj* gobj)
 {
-    Item* ip = GET_ITEM(gobj);
-    if (ip->msid == 7 || ip->msid == 8) {
-        itColl_BounceOffVictim(gobj);
+    Item* ip = gobj->user_data;
+    s32 state = M2C_FIELD(ip, s32*, 0x24);
+    if (state != 7) {
+        if (state != 8) {
+            goto skip;
+        }
     }
+    itColl_BounceOffVictim(gobj);
+skip:
     return false;
 }
-
 void it_3F14_Logic24_EnteredAir(Item_GObj* gobj)
 {
     Item_80268E5C(gobj, 9, ITEM_ANIM_UPDATE);
@@ -161,9 +173,17 @@ bool itHarisen_UnkMotion9_Coll(Item_GObj* gobj)
 
 bool it_3F14_Logic24_Clanked(Item_GObj* gobj)
 {
-    return it_3F14_Logic24_DmgDealt(gobj);
+    Item* ip = gobj->user_data;
+    s32 state = M2C_FIELD(ip, s32*, 0x24);
+    if (state != 7) {
+        if (state != 8) {
+            goto skip;
+        }
+    }
+    itColl_BounceOffVictim(gobj);
+skip:
+    return false;
 }
-
 bool it_3F14_Logic24_Reflected(Item_GObj* gobj)
 {
     return it_80273030(gobj);
@@ -171,9 +191,17 @@ bool it_3F14_Logic24_Reflected(Item_GObj* gobj)
 
 bool it_3F14_Logic24_HitShield(Item_GObj* gobj)
 {
-    return it_3F14_Logic24_DmgDealt(gobj);
+    Item* ip = gobj->user_data;
+    s32 state = M2C_FIELD(ip, s32*, 0x24);
+    if (state != 7) {
+        if (state != 8) {
+            goto skip;
+        }
+    }
+    itColl_BounceOffVictim(gobj);
+skip:
+    return false;
 }
-
 bool it_3F14_Logic24_ShieldBounced(Item_GObj* gobj)
 {
     return itColl_BounceOffShield(gobj);
