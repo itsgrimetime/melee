@@ -105,6 +105,8 @@
 /* 3FD24C */ extern char un_803FD24C[];
 /* 3FD258 */ extern char un_803FD258[];
 /* 3FD264 */ extern char un_803FD264[];
+/* 3FD274 */ extern void* un_803FD274;
+/* 3FD28C */ extern char un_803FD28C[];
 
 // .sdata
 /* 4D5850 */ static int un_804D5850 = 0x7F;
@@ -137,7 +139,8 @@
 /* 4D6DFC */ extern s32 un_804D6DFC;
 /* 4D6E00 */ extern s32 un_804D6E00;
 /* 4D6E04 */ extern void* un_804D6E04;
-/* 4D6E08 */ extern s32 un_804D6E08;
+/* 4D6E08 */ extern HSD_GObj* un_804D6E08;
+/* 4D6E0C */ extern s32 un_804D6E0C;
 
 // .sdata (extern)
 /* 4D5908 */ extern s32 un_804D5908;
@@ -146,12 +149,15 @@
 /* 4D5978 */ extern char un_804D5978[];
 /* 4D5980 */ extern char un_804D5980[];
 /* 4D5988 */ extern char un_804D5988[];
+/* 4D5990 */ extern char un_804D5990[];
 
 // .bss (extern)
 /* 45A6C0 */ extern u8 gmMainLib_8045A6C0[];
 
 // .sdata2 (extern)
 /* 4DDC48 */ extern float un_804DDC48;
+/* 4DDC4C */ extern float un_804DDC4C;
+/* 4DDC50 */ extern float un_804DDC50;
 
 void un_802FF7DC(void)
 {
@@ -1227,13 +1233,40 @@ int un_8030191C(int arg0)
     return 0;
 }
 
-int un_8030191C(int arg0)
+int un_80301964(int arg0)
 {
     if (arg0 != 1) {
         return 0;
     }
-    OSReport(un_803FD264);
-    lbSnap_8001D40C(0);
+
+    OSReport(un_803FD28C);
+
+    if (lbSnap_8001E058(0, un_804D6E0C) == 0xB) {
+        s32 result;
+        do {
+            result = lb_8001B6F8();
+        } while (result == 0xB);
+
+        if (result == 0 && lbSnap_8001DE8C(un_804D6E04) != 0) {
+            HSD_GObj* gobj;
+            HSD_SObj_803A477C_t* sobj;
+
+            if (un_804D6E08 != NULL) {
+                HSD_GObjPLink_80390228(un_804D6E08);
+            }
+
+            gobj = GObj_Create(0xE, 0xF, 0);
+            GObj_SetupGXLink(gobj, HSD_SObjLib_803A49E0, 0x12, 0);
+            un_803FD274 = un_804D6E04;
+            sobj =
+                HSD_SObjLib_803A477C(gobj, (s32) un_804D5990, 0, 0, 0x80, 0);
+            sobj->x10 = un_804DDC4C;
+            sobj->x14 = un_804DDC50;
+            sobj->x40 |= 2;
+            un_804D6E08 = gobj;
+        }
+    }
+
     return 0;
 }
 
