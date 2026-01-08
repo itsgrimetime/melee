@@ -2,13 +2,13 @@
 
 #include "itlinkhookshot.h"
 
-#include <baselib/gobjplink.h>
-
 #include "ft/ftcoll.h"
 #include "ft/inlines.h"
 #include "it/inlines.h"
 #include "it/it_26B1.h"
 #include "it/item.h"
+
+#include <baselib/gobjplink.h>
 
 void it_2725_Logic53_Spawned(Item_GObj* gobj)
 {
