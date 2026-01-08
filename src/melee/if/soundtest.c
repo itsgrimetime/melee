@@ -59,7 +59,10 @@
     int x28;
     int x2C;
     int x30;
-    u8 _pad34[0x104];
+    u8 _pad34[0xF8];
+    int x12C;
+    int x130;
+    u8 _pad134[0x4];
     void* x138;
     u8 _pad13C[0x8];
     u8 x144[0x44];
@@ -119,7 +122,7 @@
 /* 4D6DC0 */ static int un_804D6DC0;
 
 // .sbss (extern)
-/* 4D6DC8 */ extern u8 un_804D6DC8;
+/* 4D6DC8 */ extern s32 un_804D6DC8;
 /* 4D6DCC */ extern s32 un_804D6DCC;
 /* 4D6DD0 */ extern float un_804D6DD0;
 /* 4D6DD8 */ extern s32 un_804D6DD8;
@@ -143,6 +146,9 @@
 /* 4D5978 */ extern char un_804D5978[];
 /* 4D5980 */ extern char un_804D5980[];
 /* 4D5988 */ extern char un_804D5988[];
+
+// .bss (extern)
+/* 45A6C0 */ extern u8 gmMainLib_8045A6C0[];
 
 // .sdata2 (extern)
 /* 4DDC48 */ extern float un_804DDC48;

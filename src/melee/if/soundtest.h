@@ -61,7 +61,7 @@
 /* 300934 */ int un_80300934(int);
 /* 300968 */ bool un_80300968(bool);
 /* 3009A4 */ bool un_803009A4(bool);
-/* 3009E0 */ UNK_RET un_803009E0(UNK_PARAMS);
+/* 3009E0 */ s32 un_803009E0(void);
 /* 300A88 */ int un_80300A88(void);
 /* 300AB8 */ bool un_80300AB8(bool);
 /* 300AF4 */ bool un_80300AF4(int);
