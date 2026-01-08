@@ -2,6 +2,8 @@
 
 #include "itlinkhookshot.h"
 
+#include <baselib/gobjplink.h>
+
 #include "ft/ftcoll.h"
 #include "ft/inlines.h"
 #include "it/inlines.h"
@@ -19,7 +21,54 @@ void it_2725_Logic53_Spawned(Item_GObj* gobj)
 
 /// #it_802B75FC
 
-/// #it_802B7B84
+typedef struct itSamusGrapple_Node {
+    /* +0x00 */ void* pad0;
+    /* +0x04 */ struct itSamusGrapple_Node* next;
+    /* +0x08 */ char pad8[0x1C8];
+    /* +0x1D0 */ HSD_GObj* gobj;
+} itSamusGrapple_Node;
+
+void it_802B7B84(Item_GObj* gobj)
+{
+    itSamusGrapple_Node* node;
+    Fighter* fp;
+    Item* ip;
+    HSD_GObj* fighter_gobj;
+    PAD_STACK(8);
+
+    if (gobj == NULL) {
+        return;
+    }
+
+    ip = gobj->user_data;
+    if (ip == NULL) {
+        return;
+    }
+
+    fighter_gobj = M2C_FIELD(ip, HSD_GObj**, 0xDDC);
+    if (fighter_gobj == NULL) {
+        return;
+    }
+
+    fp = fighter_gobj->user_data;
+    if (fp == NULL) {
+        return;
+    }
+
+    M2C_FIELD(ip, void**, 0xDE4) = NULL;
+    fp->fv.ss.x223C = NULL;
+    fp->accessory2_cb = NULL;
+    fp->death1_cb = NULL;
+    fp->accessory3_cb = NULL;
+
+    for (node = M2C_FIELD(ip, itSamusGrapple_Node**, 0xDD4); node != NULL;) {
+        HSD_GObj* to_plink = node->gobj;
+        node = node->next;
+        HSD_GObjPLink_80390228(to_plink);
+    }
+
+    Item_8026A8EC(gobj);
+}
 
 /// #it_802B7C18
 
