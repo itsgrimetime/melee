@@ -248,7 +248,7 @@ int un_802FFB58(int arg0)
 {
     if (arg0 == 1) {
         lbAudioAx_80023694();
-        lbAudioAx_80023B24(un_804D6DA8[un_804D6DB4]);
+        lbAudioAx_80023B24(((int**) un_804D6DA8)[5][un_804D6DB4]);
     } else if (arg0 == 0) {
         lbAudioAx_80023694();
     }
