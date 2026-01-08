@@ -51,7 +51,6 @@ extern void* un_804D6EA8;
 extern void* un_804D6EA4;
 extern void* un_804D6EC8;
 
-
 void un_803124BC(void)
 {
     char* strs = un_803FDD18;
@@ -108,8 +107,53 @@ check:
     un_804A284C[3] |= 4;
 }
 
-/// #un_8031263C
+void un_8031263C(void)
+{
+    char* strs = un_803FDD18;
+    s32 i;
+    u16* table1;
+    u16* table2;
 
+    ((u8*) un_804A284C)[4] = 0;
+    table1 = (u16*) gmMainLib_8015CC78();
+    table2 = (u16*) gmMainLib_8015CC84();
+
+    if (un_804D6ED0 == NULL) {
+        char* archiveName;
+        if (lbLang_IsSavedLanguageJP()) {
+            archiveName = strs + 0x608;
+        } else {
+            archiveName = strs + 0x614;
+        }
+        un_804D6ED0 = lbArchive_LoadSymbols(
+            archiveName, &un_804D6EC4, strs + 0x9DC, &un_804D6EC0,
+            strs + 0x9EC, &un_804D6EBC, strs + 0x9FC, &un_804D6EB8,
+            strs + 0xA0C, &un_804D6EB4, strs + 0xA20, &un_804D6EB0,
+            strs + 0xA30, &un_804D6EAC, strs + 0xA44, NULL);
+    }
+
+    i = 0;
+    do {
+        if (un_80304CC8(i) != 0) {
+            if ((s32) un_803060BC(i, 6) == 2) {
+                *table1 |= 0x4000;
+            }
+        }
+        i++;
+        table1++;
+    } while (i < 0x125);
+
+    *table2 |= 4;
+    un_804A284C[3] |= 4;
+
+    if (un_804D6ECC == NULL) {
+        un_804D6ECC = lbArchive_LoadSymbols(
+            strs + 0xA58, &un_804D6EA8, strs + 0xA64, &un_804D6EA4,
+            strs + 0xA74, NULL);
+    }
+
+    un_8031234C(0);
+}
 void un_803127D4(void)
 {
     un_804D6ED0 = NULL;
