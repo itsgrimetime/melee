@@ -143,6 +143,7 @@ void un_8031F07C_OnEnter(void* unused)
     HSD_GObj* gobj;
     struct HSD_Fog* fog;
     HSD_LObj* lobj;
+    HSD_GObj* gobj2;
 
     lbAudioAx_800236DC();
     efLib_8005B4B8();
@@ -180,10 +181,10 @@ void un_8031F07C_OnEnter(void* unused)
     GObj_SetupGXLink(gobj, HSD_GObj_FogCallback, 0, 0);
     un_804D6FBC = fog->color;
 
-    gobj = GObj_Create(0xB, 3, 0);
+    gobj2 = GObj_Create(0xB, 3, 0);
     lobj = lb_80011AC4(un_804D6FB8->lights);
-    HSD_GObjObject_80390A70(gobj, (u8) HSD_GObj_804D784A, lobj);
-    GObj_SetupGXLink(gobj, HSD_GObj_LObjCallback, 0, 0);
+    HSD_GObjObject_80390A70(gobj2, (u8) HSD_GObj_804D784A, lobj);
+    GObj_SetupGXLink(gobj2, HSD_GObj_LObjCallback, 0, 0);
 
     grBigBlueRoute_8020DAB4(un_804A2EA8, un_804DE0D0, 0x17);
 

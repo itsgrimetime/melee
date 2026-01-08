@@ -13,7 +13,7 @@
 /* 3207C4 */ UNK_RET un_803207C4(UNK_PARAMS);
 /* 3208F0 */ void un_803208F0(HSD_GObj*);
 /* 320984 */ void un_80320984(HSD_GObj*);
-/* 320A1C */ UNK_RET fn_80320A1C(UNK_PARAMS);
+/* 320A1C */ void fn_80320A1C(HSD_GObj*);
 /* 320A40 */ void un_80320A40_OnEnter(UNK_T);
 /* 3210EC */ void un_803210EC_OnFrame(void);
 
