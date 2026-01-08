@@ -10,11 +10,8 @@
 #include "lb/lb_00F9.h"
 #include "lb/lbarchive.h"
 #include "lb/lbaudio_ax.h"
-#include "pl/player.h"
 #include "pl/plbonuslib.h"
-#include "sc/types.h"
-#include "ty/toy.h"
-#include "ty/tylist.h"
+#include "pl/player.h"
 
 #include <baselib/aobj.h>
 #include <baselib/cobj.h>
@@ -450,7 +447,61 @@ void un_80321D30(int arg0, f32 arg1)
         }
     }
 }
-/// #un_80321EBC
+bool un_80321EBC(int arg0, f32 arg1)
+{
+    vi1202_UnkStruct* data = un_804D7050;
+    HSD_GObj* gobj;
+    s32 port;
+
+    gobj = ftLib_8008741C(arg0);
+    if (gobj == NULL) {
+        return 0;
+    }
+
+    port = ftLib_800874BC(gobj);
+    if (Player_8003248C(ftLib_80086BE0(gobj), port) == 1) {
+        return 0;
+    }
+
+    if (ftLib_80087120(gobj) < gCrowdConfig->x1C) {
+        return 0;
+    }
+    if (data->x10 < gCrowdConfig->cheer_limit) {
+        return 0;
+    }
+    if ((u32) data->xC == (u32) arg0) {
+        return 0;
+    }
+
+    data->x14 = ftLib_8008746C(gobj);
+    if ((u32) (data->x14 - 0x83D60) == 0) {
+        return 0;
+    }
+
+    {
+        vi1202_UnkStruct* data2 = un_804D7050;
+        s32 sfx;
+        if (lbAudioAx_80023710(data2->x2C) != 0) {
+            lbAudioAx_800236B8(data2->x2C);
+        }
+        data2->x2C = -1;
+        if (un_80322298(arg1) == 3) {
+            sfx = 0x140;
+        } else {
+            sfx = 0x141;
+        }
+        un_804D7050->x2C = lbAudioAx_800240B4(sfx);
+    }
+
+    data->xC = arg0;
+    data->x18 = 0;
+
+    port = ftLib_800874BC(gobj);
+    data->x10 = port;
+    pl_8003FDA0(ftLib_80086BE0(gobj), port);
+
+    return 1;
+}
 
 void un_8032201C(int arg0, s32 cat)
 {
