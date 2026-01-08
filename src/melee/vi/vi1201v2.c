@@ -1,9 +1,10 @@
-#include "vi/vi1201v2.static.h"
-
 #include "vi.h"
+
+#include "vi/vi1201v2.static.h"
 
 #include "cm/camera.h"
 #include "ft/ftdemo.h"
+#include "gm/gm_1601.h"
 #include "gm/gm_unsplit.h"
 #include "gr/ground.h"
 #include "gr/stage.h"
@@ -19,7 +20,10 @@
 #include <baselib/cobj.h>
 #include <baselib/fog.h>
 #include <baselib/gobj.h>
+#include <baselib/gobjgxlink.h>
+#include <baselib/gobjobject.h>
 #include <baselib/gobjplink.h>
+#include <baselib/gobjproc.h>
 #include <baselib/jobj.h>
 
 static SceneDesc* un_804D7010;
@@ -99,7 +103,7 @@ void un_803207C4(void)
             HSD_GObjObject_80390A70(gobj, HSD_GObj_804D7849, jobj);
             GObj_SetupGXLink(gobj, HSD_GObj_JObjCallback, 0xB, 0);
             gm_8016895C(jobj, un_804D7010->models[i], 0);
-            HSD_JObjReqAnimAll(jobj, 0.0f);
+            HSD_JObjReqAnimAll(jobj, un_804DE124);
             HSD_JObjAnimAll(jobj);
             if (i == 0) {
                 HSD_GObjProc_8038FD54(gobj, un_8032074C, 0);

@@ -5,10 +5,15 @@
 
 #include <placeholder.h>
 
+#include "sc/types.h"
+
 #include <baselib/archive.h>
+#include <baselib/jobj.h>
 
 /* 4002F8 */ extern Vec3 un_804002F8;
+/* 4D7010 */ extern SceneDesc* un_804D7010;
 /* 4D7018 */ extern HSD_Archive* un_804D7018;
+/* 4D7024 */ extern HSD_JObj* un_804D7024;
 /* 4DE120 */ static f32 un_804DE120;
 /* 4DE124 */ static f32 un_804DE124;
 
