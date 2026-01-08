@@ -32,17 +32,12 @@
 #include <baselib/gobjproc.h>
 #include <baselib/wobj.h>
 
-static SceneDesc* un_804D6F30;
-static GXColor erase_colors_vi0102;
-static HSD_Archive* un_804D6F38;
-
-Vec3 initial_pos = { 0.0f, 0.0f, 0.0f };
-
 extern SceneDesc* un_804D6F30;
 extern GXColor erase_colors_vi0102;
 extern HSD_Archive* un_804D6F38;
 static un_804D6F60_t un_804D6F60;
 static f32 un_804DE048;
+static Vec3 initial_pos = { 0, 0, 0 };
 
 void vi0102_8031CB00(int mario_costume, int luigi_costume)
 {
