@@ -75,7 +75,9 @@
 /* 3FCD34 */ static u8 un_803FCD34[0x118];
 /* 3FCE4C */ static u8 un_803FCE4C[0xE0];
 /* 3FD064 */ static u8 un_803FD064[0x1C0];
-/* 3FD310 */ static u8 un_803FD310[0x1A0];
+/* 3FD310 */ static u8 un_803FD310[0x27C];
+/* 3FD58C */ static u8 un_803FD58C[0x2D8];
+/* 3FD864 */ static u8 un_803FD864[0x294];
 /* 3FDAF8 */ static u8 un_803FDAF8[0x80];
 /* 3FDB9C */ static u8 un_803FDB9C[0x84];
 
@@ -847,9 +849,19 @@ bool un_803013B0(bool update_scene)
     return false;
 }
 
-/// #un_803013EC
+#pragma dont_inline on
+int un_803013EC(int arg0)
+{
+    un_802FFD94(arg0, &un_803FD58C, un_80301B48);
+    return 0;
+}
 
-/// #un_80301420
+int un_80301420(int arg0)
+{
+    un_802FFD94(arg0, &un_803FD864, un_80301C80);
+    return 0;
+}
+#pragma dont_inline reset
 
 bool un_80301454(bool update_scene)
 {
