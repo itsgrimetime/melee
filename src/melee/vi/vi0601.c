@@ -36,6 +36,9 @@ char un_80400114[] = "ViWait0601_scene";
 
 static f32 un_804DE0A8;
 static f32 un_804DE0AC;
+static f32 un_804DE0B0;
+static f32 un_804DE0B4;
+static f32 un_804DE0B8;
 
 void vi_8031E6CC_OnFrame(void)
 {
@@ -189,11 +192,12 @@ void vi0601_RunFrame(HSD_GObj* gobj)
 {
     HSD_CObj* cobj;
 
-    cobj = GET_COBJ(gobj);
+    cobj = gobj->hsd_obj;
     HSD_CObjAnim(cobj);
 
-    if (537.0f == cobj->aobj->curr_frame || 559.0f == cobj->aobj->curr_frame ||
-        580.0f == cobj->aobj->curr_frame)
+    if (un_804DE0B0 == cobj->aobj->curr_frame ||
+        un_804DE0B4 == cobj->aobj->curr_frame ||
+        un_804DE0B8 == cobj->aobj->curr_frame)
     {
         vi_8031C9B4(0x23, 0);
     }
