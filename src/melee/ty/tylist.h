@@ -23,4 +23,6 @@ struct TyListArg;
 /* 3147C4 */ void un_803147C4(void);
 /* 31457C */ void un_8031457C(void);
 
+/* 3FDD18 */ extern char un_803FDD18[];
+
 #endif

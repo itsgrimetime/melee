@@ -1,7 +1,10 @@
 #include "tylist.h"
 
+#include "gm/gmmain_lib.h"
 #include "if/textlib.h"
 #include "lb/lb_00B0.h"
+#include "lb/lbarchive.h"
+#include "lb/lblanguage.h"
 #include "ty/toy.h"
 
 #include <m2c_macros.h>
@@ -48,11 +51,62 @@ extern void* un_804D6EA8;
 extern void* un_804D6EA4;
 extern void* un_804D6EC8;
 
-typedef struct {
-    HSD_GObj* gobj;
-    u8 pad[0x4C];
-    void* data;
-} TyArchiveData;
+
+void un_803124BC(void)
+{
+    char* strs = un_803FDD18;
+    u16* table1;
+    s16* list;
+    u16* table2;
+    s32 i;
+
+    table1 = (u16*) gmMainLib_8015CC78();
+    table2 = (u16*) gmMainLib_8015CC84();
+
+    if (un_804D6ED0 == NULL) {
+        char* archiveName;
+        if (lbLang_IsSavedLanguageJP()) {
+            archiveName = strs + 0x608;
+        } else {
+            archiveName = strs + 0x614;
+        }
+        un_804D6ED0 = lbArchive_LoadSymbols(
+            archiveName, &un_804D6EC4, strs + 0x9DC, &un_804D6EC0,
+            strs + 0x9EC, &un_804D6EBC, strs + 0x9FC, &un_804D6EB8,
+            strs + 0xA0C, &un_804D6EB4, strs + 0xA20, &un_804D6EB0,
+            strs + 0xA30, &un_804D6EAC, strs + 0xA44, NULL);
+    }
+
+    i = 0;
+loop: {
+    s32 skip;
+    s16 val;
+
+    list = un_804D6EB4;
+    if (lbLang_IsSettingUS()) {
+        while ((val = *list) != -1) {
+            if (val == i) {
+                skip = 0;
+                goto check;
+            }
+            list++;
+        }
+    }
+    skip = 1;
+check:
+    if (skip != 0 && (s32) un_803060BC(i, 6) == 2) {
+        *table1 |= 0x4000;
+    }
+}
+    i++;
+    table1++;
+    if (i < 0x125) {
+        goto loop;
+    }
+
+    *table2 |= 4;
+    un_804A284C[3] |= 4;
+}
 
 void un_803124BC(void)
 {
