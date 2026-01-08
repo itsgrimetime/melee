@@ -343,8 +343,8 @@ void un_80321AF4(HSD_GObj* gobj)
             if (ftLib_8008731C(cur) == 0) {
                 ftLib_80086644(cur, &pos);
 
-                if (pos.y < gCrowdConfig->blastzone_y_offset +
-                                *(f32*) (mpLib + 0x14))
+                if (pos.y <
+                    gCrowdConfig->blastzone_y_offset + *(f32*) (mpLib + 0x14))
                 {
                     data->x24 = data->x24 + 1;
                 } else {
@@ -674,67 +674,6 @@ void un_80322314(void)
 
 void un_8032233C(u32 arg0, u32 arg1)
 {
-    s32 cat;
-    vi1202_UnkStruct* data = un_804D7050;
-    HSD_GObj* gobj;
-    f32 kb_mag;
-    PAD_STACK(8);
-
-    gobj = ftLib_8008741C(arg0);
-    kb_mag = ftLib_80087454(ftLib_8008741C(arg1));
-
-    if (kb_mag >= gCrowdConfig->kb_threshold_high) {
-        cat = 3;
-    } else if (kb_mag >= gCrowdConfig->kb_threshold_mid) {
-        cat = 2;
-    } else if (kb_mag >= gCrowdConfig->kb_threshold_low) {
-        cat = 1;
-    } else {
-        cat = 0;
-    }
-
-    if (cat == 0) {
-        return;
-    }
-
-    if (gobj != NULL) {
-        if (ftLib_80087454(gobj) >= 3.0f) {
-            un_80321D30(arg0, kb_mag);
-            goto end;
-        }
-    }
-
-    if (data->x0 == arg0) {
-        if ((f32) data->x4 < gCrowdConfig->x18) {
-            un_80321D30(arg0, kb_mag > data->x8 ? kb_mag : data->x8);
-            goto end;
-        }
-    }
-
-    switch (cat) {
-    case 3:
-        un_80321CA4(0x144);
-        break;
-    case 2:
-        un_80321CA4(0x145);
-        break;
-    case 1:
-        un_80321CA4(0x146);
-        break;
-    }
-
-    if (cat == 3 || (cat == 2 && data->xC == arg1)) {
-        un_80321C70();
-    }
-end:
-    data->x4 = 0;
-    data->x0 = arg0;
-    data->x8 = kb_mag;
-}
-
-bool un_803224DC(s32 spawn_id, f32 pos_x, f32 kb_mag)
-{
-    CrowdConfig* vdata = gCrowdConfig;
     s32 cat;
     s32 out_of_bounds;
     s32 tmp_cat;
