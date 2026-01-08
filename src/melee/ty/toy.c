@@ -3,6 +3,7 @@
 #include "baselib/cobj.h"
 #include "baselib/controller.h"
 #include "baselib/displayfunc.h"
+#include "baselib/fog.h"
 #include "baselib/gobj.h"
 #include "baselib/gobjproc.h"
 #include "baselib/jobj.h"
@@ -28,6 +29,8 @@
 
 #include "ty/tylist.h"
 #include "ty/types.h"
+
+#include "m2c_macros.h"
 
 #include <melee/if/textlib.h>
 #include <MSL/math.h> // for ABS
@@ -535,7 +538,7 @@ void un_80306930(HSD_GObj* gobj, int unused)
 
 void un_80306A0C(void* arg0)
 {
-    HSD_Fog* fog = ((HSD_GObj*) arg0)->hsd_obj;
+    HSD_Fog* fog = M2C_FIELD(arg0, HSD_Fog**, 0x28);
 
     if (un_804D6E54 == 0) {
         HSD_FogSet(NULL);
