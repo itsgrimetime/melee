@@ -108,6 +108,10 @@
 
 // .sbss (extern)
 /* 4D6DDC */ extern s32 un_804D6DDC;
+/* 4D6DE0 */ extern s32 un_804D6DE0;
+/* 4D6DE4 */ extern s32 un_804D6DE4;
+/* 4D6DE8 */ extern s32 un_804D6DE8;
+/* 4D6DEC */ extern s32 un_804D6DEC;
 /* 4D6DF4 */ extern s32 un_804D6DF4;
 
 void un_802FF7DC(void)
@@ -700,6 +704,29 @@ void fn_80300CC8(int arg0)
     int* r29;
     int* r30;
     int* r31;
+
+    switch (arg0) {
+    case 0:
+        lbAudioAx_80024030(0);
+        un_80304334(un_80302DF0());
+        break;
+    case 6:
+        lbAudioAx_80024030(1);
+        r29 = gmMainLib_8015CD2C();
+        r30 = gmMainLib_8015CD38();
+        r31 = gmMainLib_8015CD44();
+        {
+            int* ptr = gmMainLib_8015CD50();
+            *r29 = un_804D6DE0;
+            *r30 = un_804D6DE4;
+            *r31 = un_804D6DE8;
+            *ptr = un_804D6DEC;
+        }
+        gm_801A42F8(1);
+        gm_801A4B60();
+        break;
+    }
+}
 
     switch (arg0) {
     case 0:
