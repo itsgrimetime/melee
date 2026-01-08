@@ -162,9 +162,11 @@ void Toy_RemoveUserData(void* ptr)
 
 void un_80306D14(void)
 {
-    if (M2C_FIELD(un_804A284C, s8*, 0) == 1) {
+    TyModeState* state = (TyModeState*) un_804A284C;
+
+    if (state->x0 == 1) {
         lbAudioAx_800237A8(0xAA, 0x7F, 0x40);
-    } else if (M2C_FIELD(un_804A284C, s8*, 0) == 2) {
+    } else if (state->x0 == 2) {
         lbAudioAx_800237A8(0xAB, 0x7F, 0x40);
     }
 }
@@ -227,8 +229,14 @@ void un_803102C4(s8 arg0)
     M2C_FIELD(un_804D6E6C, s8*, 4) = arg0;
 }
 
-/// #un_803102D0
-
+void un_803102D0(void)
+{
+    if (un_804D6ECC == NULL) {
+        un_804D6ECC = lbArchive_LoadSymbols(str_TyDataf_dat, &un_804D6EA8,
+                                            str_tyModelFileTbl, &un_804D6EA4,
+                                            str_tyModelFileUsTbl, NULL);
+    }
+}
 /// #un_80310324
 
 /// #un_80310660
@@ -251,7 +259,9 @@ void un_803102C4(s8 arg0)
 
 void un_80312018_OnFrame(void)
 {
-    if (M2C_FIELD(un_804A284C, s8*, 4) != 0) {
+    TyModeState* state = (TyModeState*) un_804A284C;
+
+    if (state->x4 != 0) {
         un_80311F5C();
         gm_801A4B60();
     }
