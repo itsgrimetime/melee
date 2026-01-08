@@ -15,6 +15,7 @@
 #include "lb/lb_00B0.h"
 #include "lb/lbarchive.h"
 #include "lb/lbaudio_ax.h"
+#include "lb/lblanguage.h"
 #include "mn/mnsoundtest.h"
 
 #include "ty/forward.h"
@@ -88,8 +89,93 @@ float un_80305DB0(void)
 
 /// #un_80305FB8
 
-/// #un_803060BC
+float un_803060BC(int trophyId, int field)
+{
+    TrophyData* jp_ptr;
+    TrophyData* us_ptr;
+    s32 lang_flag;
+    s32 found_jp;
 
+    lang_flag = 0;
+    found_jp = 0;
+    jp_ptr = un_804D6EC0;
+
+    // Search JP table
+    while (jp_ptr->id != -1) {
+        if (jp_ptr->id == trophyId) {
+            found_jp = 1;
+            break;
+        }
+        jp_ptr++;
+    }
+
+    // Check language settings
+    if (lbLang_IsSettingJP()) {
+        if (lbLang_IsSavedLanguageUS()) {
+            goto set_lang_flag;
+        }
+    }
+    if (lbLang_IsSettingUS()) {
+        if (lbLang_IsSavedLanguageJP()) {
+            goto set_lang_flag;
+        }
+    }
+    goto after_lang_flag;
+
+set_lang_flag:
+    lang_flag = 1;
+
+after_lang_flag:
+
+    // Search US table
+    us_ptr = un_804D6EC4;
+    while (us_ptr->id != -1) {
+        if (us_ptr->id == trophyId) {
+            break;
+        }
+        us_ptr++;
+    }
+
+    // Switch on field index
+    switch (field) {
+    case 0:
+        if (lang_flag && found_jp) {
+            return jp_ptr->x08;
+        }
+        return us_ptr->x08;
+    case 1:
+        if (lang_flag && found_jp) {
+            return jp_ptr->x0C;
+        }
+        return us_ptr->x0C;
+    case 2:
+        if (lang_flag && found_jp) {
+            return jp_ptr->x10;
+        }
+        return us_ptr->x10;
+    case 3:
+        if (lang_flag && found_jp) {
+            return jp_ptr->x14;
+        }
+        return us_ptr->x14;
+    case 4:
+        if (lang_flag && found_jp) {
+            return jp_ptr->x18;
+        }
+        return us_ptr->x18;
+    case 5:
+        if (lang_flag && found_jp) {
+            return jp_ptr->x1C;
+        }
+        return us_ptr->x1C;
+    case 6:
+        return (float) us_ptr->x20;
+    case 7:
+        return (float) us_ptr->x21;
+    case 8:
+        return (float) us_ptr->x04;
+    }
+}
 /// #un_803062BC
 
 /// #un_803062EC
