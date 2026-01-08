@@ -10,9 +10,9 @@
 
 #include <baselib/aobj.h>
 #include <baselib/cobj.h>
+#include <baselib/fog.h>
 #include <baselib/gobj.h>
 #include <baselib/gobjplink.h>
-#include <baselib/fog.h>
 #include <baselib/jobj.h>
 
 extern HSD_GObj* un_804D7030;
