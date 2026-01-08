@@ -3,6 +3,7 @@
 #include "baselib/cobj.h"
 #include "baselib/controller.h"
 #include "baselib/displayfunc.h"
+#include "baselib/fog.h"
 #include "baselib/gobj.h"
 #include "baselib/gobjproc.h"
 #include "baselib/jobj.h"
@@ -27,6 +28,8 @@
 
 #include "ty/tylist.h"
 #include "ty/types.h"
+
+#include "m2c_macros.h"
 
 #include <melee/if/textlib.h>
 #include <MSL/math.h> // for ABS
@@ -417,8 +420,16 @@ after_lang_flag:
 
 /// #un_80306954
 
-/// #un_80306A0C
+void un_80306A0C(void* arg0)
+{
+    HSD_Fog* fog = M2C_FIELD(arg0, HSD_Fog**, 0x28);
 
+    if (un_804D6E54 == 0) {
+        HSD_FogSet(NULL);
+    } else {
+        HSD_FogSet(fog);
+    }
+}
 /// #un_80306A48
 
 HSD_GObjProc* un_80306B18(HSD_GObj* gobj, s32 anim_frame, s32 val1, s32 val2)

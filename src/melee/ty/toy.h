@@ -29,7 +29,7 @@
 /* 3068E0 */ UNK_RET un_803068E0(UNK_PARAMS);
 /* 306930 */ UNK_RET un_80306930(UNK_PARAMS);
 /* 306954 */ UNK_RET un_80306954(UNK_PARAMS);
-/* 306A0C */ UNK_RET un_80306A0C(UNK_PARAMS);
+/* 306A0C */ void un_80306A0C(void* arg0);
 /* 306A48 */ void un_80306A48(HSD_JObj*, s32, char*, s32, void*, s32);
 /* 306B18 */ HSD_GObjProc* un_80306B18(HSD_GObj* gobj, s32 anim_frame,
                                        s32 val1, s32 val2);
@@ -83,6 +83,7 @@
 /* 3122D0 */ void un_803122D0_OnInit(void);
 /* 31234C */ void un_8031234C(s32);
 
+/* 4D6E54 */ extern s32 un_804D6E54;
 /* 4D6E6C */ extern void* un_804D6E6C;
 /* 4D6EF4 */ extern struct un_804D6EF4_t* un_804D6EF4;
 
