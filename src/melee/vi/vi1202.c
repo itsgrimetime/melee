@@ -166,6 +166,12 @@ void un_80321A00(HSD_GObj* gobj)
     }
 }
 
+void un_80321BF8(int arg0)
+{
+    vi1202_UnkStruct* data = un_804D7050;
+    data->x2C = lbAudioAx_800240B4(arg0);
+}
+
 void un_80321AF4(HSD_GObj* gobj)
 {
     char* mpLib = mpLib_80458868;
@@ -207,12 +213,6 @@ void un_80321AF4(HSD_GObj* gobj)
             }
         }
     }
-}
-
-void un_80321BF8(int arg0)
-{
-    vi1202_UnkStruct* data = un_804D7050;
-    data->x2C = lbAudioAx_800240B4(arg0);
 }
 
 void un_80321C28(void)
