@@ -6,30 +6,11 @@
 #include "baselib/gobjobject.h"
 #include "baselib/gobjplink.h"
 #include "baselib/gobjproc.h"
-#include "baselib/gobjuserdata.h"
 #include "baselib/jobj.h"
-#include "baselib/memory.h"
-#include "baselib/sislib.h"
-#include "gm/gm_16F1.h"
-#include "gm/gm_1A3F.h"
-#include "gm/gmmain_lib.h"
 #include "lb/lb_00F9.h"
-#include "lb/lbarchive.h"
-#include "lb/lbaudio_ax.h"
-#include "lb/lbcardgame.h"
 #include "lb/lblanguage.h"
 #include "mn/mnmain.h"
 #include "sc/types.h"
-#include "ty/toy.h"
-
-/* Local declarations for gm_1601 functions with correct signatures */
-void gm_801647D0(void);
-u16 gm_801641CC(u8);
-s32 gm_80164430(void);
-s32 gm_80164250(u16);
-void gm_801641E4(u8 stage, u8 enable);
-void gm_801603B0(void);
-void gm_8016505C(void);
 
 void mnDataDel_8024E940(void)
 {
@@ -206,10 +187,10 @@ void fn_8024ECCC(HSD_GObj* gobj)
                 } else {
                     sis_id = 319;
                 }
-                text = HSD_SisLib_803A5ACC(0, 1, menu_data->x64, menu_data->x68, menu_data->x6C, 250.0f, 5.0f);
+                text = HSD_SisLib_803A5ACC(0, 1, menu_data->x64, menu_data->x68, menu_data->x6C, mnDataDel_804DC1C8, mnDataDel_804DC1CC);
                 mnDataDel_804D6C6C = text;
-                text->font_size.x = 0.05f;
-                text->font_size.y = 0.05f;
+                text->font_size.x = mnDataDel_804DC1D0;
+                text->font_size.y = mnDataDel_804DC1D0;
                 text->default_alignment = 1;
                 HSD_SisLib_803A6368(text, sis_id);
             }
@@ -219,11 +200,11 @@ void fn_8024ECCC(HSD_GObj* gobj)
             lb_80011E24(root, &cursor_yes, WARN_JOINT_CURSOR_YES, -1);
             lb_80011E24(root, &cursor_no, WARN_JOINT_CURSOR_NO, -1);
             if ((s32) cursor_idx != 0) {
-                HSD_JObjReqAnimAll(cursor_yes, 1.0f);
-                HSD_JObjReqAnimAll(cursor_no, 0.0f);
+                HSD_JObjReqAnimAll(cursor_yes, mnDataDel_804DC1A8);
+                HSD_JObjReqAnimAll(cursor_no, mnDataDel_804DC1AC);
             } else {
-                HSD_JObjReqAnimAll(cursor_yes, 0.0f);
-                HSD_JObjReqAnimAll(cursor_no, 1.0f);
+                HSD_JObjReqAnimAll(cursor_yes, mnDataDel_804DC1AC);
+                HSD_JObjReqAnimAll(cursor_no, mnDataDel_804DC1A8);
             }
             HSD_JObjAnimAll(cursor_yes);
             HSD_JObjAnimAll(cursor_no);
@@ -550,7 +531,7 @@ void fn_8024F840(HSD_GObj* arg0)
         data2 = mnDataDel_804D6C68->user_data;
         mnDataDel_8024EBC8((HSD_JObj*) mn_80231634(data2->x10[((s32*)&menu_data->x3C)[data->x0]]), data->x0, 1);
         data = mnDataDel_804D6C68->user_data;
-        text = *(HSD_Text**) &data->pad[7];
+        text = (HSD_Text*) data->pad[7];
         if (text != NULL) {
             HSD_SisLib_803A5CC4(text);
         }
@@ -574,7 +555,7 @@ void fn_8024F840(HSD_GObj* arg0)
         data2 = mnDataDel_804D6C68->user_data;
         mnDataDel_8024EBC8((HSD_JObj*) mn_80231634(data2->x10[((s32*)&menu_data->x3C)[data->x0]]), data->x0, 1);
         data = mnDataDel_804D6C68->user_data;
-        text = *(HSD_Text**) &data->pad[7];
+        text = (HSD_Text*) data->pad[7];
         if (text != NULL) {
             HSD_SisLib_803A5CC4(text);
         }
@@ -694,7 +675,10 @@ void mnDataDel_8024FE4C(u8 arg0)
     HSD_JObjReqAnimAll(root, mnDataDel_804DC1AC);
     HSD_JObjAnimAll(root);
     data = (struct MnDataDelUserData*) HSD_MemAlloc(0x30);
-    HSD_ASSERT(0x402, data != NULL);
+    if (data == NULL) {
+        OSReport("error");
+        __assert("file", 0x402, "assert");
+    }
     data->x0 = arg0;
     data->x1 = 0;
     data->x2 = 0;
@@ -737,7 +721,7 @@ void mnDataDel_80250170(void)
     mn_804A04F0.cur_menu = 0x18;
     mn_804A04F0.hovered_selection = 0;
     mnDataDel_804D6C6C = NULL;
-    lbArchive_LoadSections(mn_804D6BB8, (void**) model, (char*) data + 0xA0,
+    lbArchive_LoadSections(mn_804D6BB8, model, (char*) data + 0xA0,
                            &model->animjoint, (char*) data + 0xB8,
                            &model->matanim_joint, (char*) data + 0xD4,
                            &model->shapeanim_joint);

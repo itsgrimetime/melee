@@ -2,7 +2,6 @@
 #define MELEE_MN_SNAP_H
 
 #include <placeholder.h>
-#include <sysdolphin/baselib/forward.h>
 
 /* 253184 */ UNK_RET mnSnap_80253184(UNK_PARAMS);
 /* 25329C */ UNK_RET mnSnap_8025329C(UNK_PARAMS);
@@ -10,10 +9,10 @@
 /* 253964 */ UNK_RET mnSnap_80253964(UNK_PARAMS);
 /* 253AE4 */ UNK_RET mnSnap_80253AE4(UNK_PARAMS);
 /* 253BE0 */ UNK_RET mnSnap_80253BE0(UNK_PARAMS);
-/* 253DB4 */ void fn_80253DB4(HSD_GObj* gobj, int arg1);
-/* 253DE8 */ void fn_80253DE8(HSD_GObj* gobj, int arg1);
-/* 253E1C */ void fn_80253E1C(HSD_GObj* gobj, int arg1);
-/* 253E5C */ void fn_80253E5C(HSD_GObj* gobj, int arg1);
+/* 253DB4 */ UNK_RET fn_80253DB4(UNK_PARAMS);
+/* 253DE8 */ UNK_RET fn_80253DE8(UNK_PARAMS);
+/* 253E1C */ UNK_RET fn_80253E1C(UNK_PARAMS);
+/* 253E5C */ UNK_RET fn_80253E5C(UNK_PARAMS);
 /* 253E90 */ UNK_RET mnSnap_80253E90(UNK_PARAMS);
 /* 253F60 */ UNK_RET mnSnap_80253F60(UNK_PARAMS);
 /* 254014 */ UNK_RET mnSnap_80254014(UNK_PARAMS);
