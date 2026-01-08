@@ -10,6 +10,7 @@
 #include "lb/lbaudio_ax.h"
 #include "lb/lbcardgame.h"
 #include "lb/lbcardnew.h"
+#include "lb/lbsnap.h"
 #include "lb/lblanguage.h"
 #include "lb/lbsnap.h"
 #include "ty/toy.h"
@@ -96,6 +97,12 @@
 /* 3FD864 */ static u8 un_803FD864[0x294];
 /* 3FDAF8 */ static u8 un_803FDAF8[0x80];
 /* 3FDB9C */ static u8 un_803FDB9C[0x84];
+/* 3FD224 */ extern char un_803FD224[];
+/* 3FD230 */ extern char un_803FD230[];
+/* 3FD23C */ extern char un_803FD23C[];
+/* 3FD24C */ extern char un_803FD24C[];
+/* 3FD258 */ extern char un_803FD258[];
+/* 3FD264 */ extern char un_803FD264[];
 
 // .sdata
 /* 4D5850 */ static int un_804D5850 = 0x7F;
@@ -124,11 +131,19 @@
 /* 4D6DEC */ extern s32 un_804D6DEC;
 /* 4D6DF0 */ extern s32 un_804D6DF0;
 /* 4D6DF4 */ extern s32 un_804D6DF4;
+/* 4D6DF8 */ extern s32 un_804D6DF8;
+/* 4D6DFC */ extern s32 un_804D6DFC;
+/* 4D6E00 */ extern s32 un_804D6E00;
+/* 4D6E04 */ extern void* un_804D6E04;
+/* 4D6E08 */ extern s32 un_804D6E08;
 
 // .sdata (extern)
 /* 4D5908 */ extern s32 un_804D5908;
 /* 4D590C */ extern s32 un_804D590C;
 /* 4D5910 */ extern s32 un_804D5910;
+/* 4D5978 */ extern char un_804D5978[];
+/* 4D5980 */ extern char un_804D5980[];
+/* 4D5988 */ extern char un_804D5988[];
 
 // .sdata2 (extern)
 /* 4DDC48 */ extern float un_804DDC48;
@@ -1123,41 +1138,38 @@ int un_80301634(void)
 
 int un_803016D8(int arg0)
 {
-    if (arg0 != 1) {
-        return 0;
-    }
-    OSReport(un_803FD224);
-    {
-        s32 result = lb_8001B8C8(0);
-        OSReport(un_803FD230, result);
+    if (arg0 == 1) {
+        OSReport(un_803FD224);
+        {
+            s32 result = lb_8001B8C8(0);
+            OSReport(un_803FD230, result);
+        }
     }
     return 0;
 }
 
 int un_80301734(int arg0)
 {
-    if (arg0 != 1) {
-        return 0;
-    }
-    OSReport(un_803FD23C);
-    {
-        s32 result = lb_8001C87C();
-        OSReport(un_803FD230, result);
+    if (arg0 == 1) {
+        OSReport(un_803FD23C);
+        {
+            s32 result = lb_8001C87C();
+            OSReport(un_803FD230, result);
+        }
     }
     return 0;
 }
 
 int un_8030178C(int arg0)
 {
-    if (arg0 != 1) {
-        return 0;
-    }
-    OSReport(un_803FD24C);
-    {
-        s32 result = lb_8001C8BC();
-        OSReport(un_803FD230, result);
-        if (result == 0) {
-            lb_8001CBAC(0);
+    if (arg0 == 1) {
+        OSReport(un_803FD24C);
+        {
+            s32 result = lb_8001C8BC();
+            OSReport(un_803FD230, result);
+            if (result == 0) {
+                lb_8001CBAC(0);
+            }
         }
     }
     return 0;
@@ -1165,42 +1177,48 @@ int un_8030178C(int arg0)
 
 int un_80301800(int arg0)
 {
-    if (arg0 != 1) {
-        return 0;
+    if (arg0 == 1) {
+        OSReport(un_804D5980);
+        lb_8001CE00();
     }
-    OSReport(un_804D5980);
-    lb_8001CE00();
     return 0;
 }
 
 int un_80301840(int arg0)
 {
-    if (arg0 != 1) {
-        return 0;
-    }
-    OSReport(un_804D5988);
-    {
-        s32 result = lb_8001CBBC();
-        gmMainLib_8015FA34(result);
-        if (result == 0 || result == 2) {
-            lb_8001CBAC(0);
+    if (arg0 == 1) {
+        OSReport(un_804D5988);
+        {
+            s32 result = lb_8001CBBC();
+            gmMainLib_8015FA34(result);
+            if (result == 0 || result == 2) {
+                lb_8001CBAC(0);
+            }
+            OSReport(un_803FD230, result);
         }
-        OSReport(un_803FD230, result);
     }
     return 0;
 }
 
 int un_803018BC(int arg0)
 {
-    if (arg0 != 1) {
-        return 0;
+    if (arg0 == 1) {
+        OSReport(un_803FD258);
+        {
+            s32 result = lb_8001CC4C();
+            OSReport(un_803FD230, result);
+        }
+        lb_8001CBAC(4);
     }
-    OSReport(un_803FD258);
-    {
-        s32 result = lb_8001CC4C();
-        OSReport(un_803FD230, result);
+    return 0;
+}
+
+int un_8030191C(int arg0)
+{
+    if (arg0 == 1) {
+        OSReport(un_803FD264);
+        lbSnap_8001D40C(0);
     }
-    lb_8001CBAC(4);
     return 0;
 }
 
@@ -1222,11 +1240,21 @@ int un_80301964(int arg0)
 
     OSReport(un_803FD28C);
 
-    if (lbSnap_8001E058(0, un_804D6E0C) == 0xB) {
-        s32 result;
-        do {
-            result = lb_8001B6F8();
-        } while (result == 0xB);
+int un_80301B48(int arg0)
+{
+    switch (arg0) {
+    case 0:
+        lbAudioAx_80024030(0);
+        un_80304334(un_80302DF0());
+        break;
+    case 6:
+        lbAudioAx_80024030(1);
+        gm_SetScenePendingMinor(6);
+        gm_801A4B60();
+        break;
+    }
+    return 0;
+}
 
         if (result == 0 && lbSnap_8001DE8C(un_804D6E04) != 0) {
             HSD_GObj* gobj;
