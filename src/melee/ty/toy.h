@@ -22,7 +22,7 @@
 /* 3060BC */ float un_803060BC(int, int);
 /* 3062BC */ s16 un_803062BC(s32 trophyId);
 /* 3062EC */ UNK_RET un_803062EC(UNK_PARAMS);
-/* 3063D4 */ UNK_RET un_803063D4(UNK_PARAMS);
+/* 3063D4 */ void un_803063D4(s16, s32, s32);
 /* 3064B8 */ s16 un_803064B8(s16, s8);
 /* 30663C */ UNK_RET un_8030663C(UNK_PARAMS);
 /* 3067BC */ void un_803067BC(s32, s32);
@@ -53,7 +53,7 @@
                                            /// this uses/returns
 /* 308250 */ UNK_RET un_80308250(UNK_PARAMS);
 /* 3082F8 */ UNK_RET un_803082F8(UNK_PARAMS);
-/* 308328 */ UNK_RET un_80308328(UNK_PARAMS);
+/* 308328 */ void un_80308328(s32 arg0);
 /* 308354 */ s16 un_80308354(s16 idx);
 /* 3083D8 */ void un_803083D8(void*, s32);
 /* 3084A0 */ UNK_RET un_803084A0(UNK_PARAMS);
