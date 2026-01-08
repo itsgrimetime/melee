@@ -1,9 +1,5 @@
 #include "ifmagnify.h"
 
-#include "if/ifall.h"
-#include "lb/lb_00B0.h"
-#include "lb/lbarchive.h"
-
 #include <baselib/gobjplink.h>
 
 ifMagnify ifMagnify_804A1DE0;
@@ -44,6 +40,17 @@ void ifMagnify_802FC750(void)
     u8* ptr;
     s32 offset;
     HSD_GObj** gobj_ptr;
+
+    ptr = (u8*) base;
+    offset = 0;
+    for (i = 0; i < 6; ptr += 0x10, offset += 0x10, i++) {
+        if (*(HSD_GObj**) (ptr + 0x14) != NULL) {
+            gobj_ptr = (HSD_GObj**) ((u8*) base + offset + 0x14);
+            HSD_GObjPLink_80390228(*gobj_ptr);
+            *gobj_ptr = NULL;
+        }
+    }
+}
 
     ptr = (u8*) base;
     offset = 0;
