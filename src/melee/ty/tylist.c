@@ -5,12 +5,14 @@
 #include "ty/toy.h"
 
 #include <m2c_macros.h>
+#include <baselib/archive.h>
 #include <baselib/cobj.h>
 #include <baselib/controller.h>
 #include <baselib/displayfunc.h>
 #include <baselib/fog.h>
 #include <baselib/gobj.h>
 #include <baselib/gobjgxlink.h>
+#include <baselib/gobjobject.h>
 #include <baselib/sislib.h>
 #include <baselib/video.h>
 
@@ -310,26 +312,26 @@ void un_80313358(void* arg1, s8 arg2, s8 arg3, s8 arg4)
     int i;
 
     if (arg2 != -1) {
-        *(u8*)(ptr + 0x29E) = arg2;
-        *(u8*)(ptr + 0x2A1) = arg4;
+        *(u8*) (ptr + 0x29E) = arg2;
+        *(u8*) (ptr + 0x2A1) = arg4;
     }
 
-    *(u8*)(ptr + 0x29F) = arg3;
-    *(float*)(ptr + 0x2A4) = *(float*)(ptr + 0x2A8) / (float)arg3;
+    *(u8*) (ptr + 0x29F) = arg3;
+    *(float*) (ptr + 0x2A4) = *(float*) (ptr + 0x2A8) / (float) arg3;
 
-    if (*(s8*)(ptr + 0x2A1) == 0) {
-        for (i = 0; i < *(s8*)(ptr + 0x29A); i++) {
-            void** entry = (void**)(ptr + i * 0x34);
+    if (*(s8*) (ptr + 0x2A1) == 0) {
+        for (i = 0; i < *(s8*) (ptr + 0x29A); i++) {
+            void** entry = (void**) (ptr + i * 0x34);
             u8* sub = entry[0];
-            *(float*)(ptr + i * 0x34 + 0x2C) = *(float*)(sub + 0x30);
-            un_80312904(entry, *(u8*)(ptr + 0x29A) + 1);
+            *(float*) (ptr + i * 0x34 + 0x2C) = *(float*) (sub + 0x30);
+            un_80312904(entry, *(u8*) (ptr + 0x29A) + 1);
         }
     } else {
-        for (i = 0; i < *(s8*)(ptr + 0x29A); i++) {
-            void** entry = (void**)(ptr + i * 0x34);
+        for (i = 0; i < *(s8*) (ptr + 0x29A); i++) {
+            void** entry = (void**) (ptr + i * 0x34);
             u8* sub = entry[1];
-            *(float*)(ptr + i * 0x34 + 0x2C) = *(float*)(sub + 0x30);
-            un_80312904(entry, *(u8*)(ptr + 0x29A) + 1);
+            *(float*) (ptr + i * 0x34 + 0x2C) = *(float*) (sub + 0x30);
+            un_80312904(entry, *(u8*) (ptr + 0x29A) + 1);
         }
     }
 }
@@ -379,10 +381,41 @@ void fn_80314504(HSD_GObj* gobj)
 
 void un_803147C4(void)
 {
-    TyListState* state = (TyListState*) un_804A2AC0;
+    char* data = un_804A2AC0;
     char* strs = un_803FE880;
-    TyArchiveData* archive;
+    void* archive;
+    HSD_GObj** gobj_ptr;
+    HSD_JObj* jobj;
     PAD_STACK(8);
+
+    memzero(data + 0x2AC, 0x18);
+    un_8031457C();
+    memzero(data + 0x2C4, 0x14);
+
+    archive = un_804D6ED8;
+    gobj_ptr = (HSD_GObj**) (data + 0x2C4);
+
+    if (M2C_FIELD(archive, void**, 0x50) == NULL) {
+        OSReport(strs + 0x14C);
+        OSPanic(strs + 0x70, 0x636, un_804D5A8C);
+    }
+
+    jobj = HSD_ArchiveGetPublicAddress(M2C_FIELD(archive, void**, 0x50),
+                                       strs + 0x170);
+    if (jobj != NULL) {
+        *gobj_ptr = GObj_Create(2, 3, 0);
+        HSD_GObjObject_80390A70(*gobj_ptr, (u8) HSD_GObj_804D784A,
+                                un_80306EEC(jobj, 0));
+        GObj_SetupGXLink(*gobj_ptr, HSD_GObj_LObjCallback, 0x34, 0);
+    }
+
+    un_80307470(0);
+    if (un_80304870() != 0) {
+        memzero(data, 0x2AC);
+        un_80313774();
+    }
+    HSD_PadRenewStatus();
+}
 
     memzero(&state->gobj_2AC, 0x18);
     un_8031457C();
