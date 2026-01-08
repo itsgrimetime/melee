@@ -7,7 +7,6 @@
 #include "if/types.h"
 #include "lb/lb_00B0.h"
 #include "lb/lbarchive.h"
-#include "lb/lbaudio_ax.h"
 #include "pl/player.h"
 
 #include <baselib/debug.h>
@@ -132,6 +131,33 @@ void fn_802F7670(HSD_GObj* gobj)
         HSD_GObjPLink_80390228(gobj);
     } else {
         HSD_JObjAnimAll(jobj);
+    }
+}
+
+void if_802F7AF8(s32 slot)
+{
+    s32 idx;
+    void** entry;
+    void** base1;
+    void** base = lbl_804A1340;
+    s32 slot2 = Player_80036428(slot);
+    HSD_GObj* result;
+
+    idx = (u8) slot << 1;
+    entry = base + idx;
+    result = fn_802F77F8(*++entry, (u8) slot, 1);
+    base1 = &base[1];
+    base1[idx] = result;
+    if (base1[idx] != NULL) {
+        HSD_GObjProc_8038FD54(*entry, (HSD_GObjEvent) fn_802F75D4, 0x11);
+    }
+
+    idx = (u8) slot2 << 1;
+    entry = base + idx;
+    result = fn_802F77F8(*++entry, (u8) slot2, 2);
+    base1[idx] = result;
+    if (base1[idx] != NULL) {
+        HSD_GObjProc_8038FD54(*entry, (HSD_GObjEvent) fn_802F75D4, 0x11);
     }
 }
 
