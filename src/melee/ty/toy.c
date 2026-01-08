@@ -789,11 +789,11 @@ found:
 void un_803114E8(void)
 {
     s32 color;
-    s32 pad[0x20];  /* Force larger stack frame */
+    s32 pad[0x20]; /* Force larger stack frame */
     void** data;
     s32 i;
 
-    (void)pad;
+    (void) pad;
 
     un_804D6E5C = HSD_MemAlloc(0x18);
     data = un_804D6E5C;
@@ -806,14 +806,14 @@ void un_803114E8(void)
         DevText_Show(gobj, un_804D6E98);
         DevText_HideCursor(un_804D6E98);
         DevText_80302AC0(un_804D6E98);
-        DevText_SetBGColor(un_804D6E98, *(GXColor*)&color);
+        DevText_SetBGColor(un_804D6E98, *(GXColor*) &color);
         DevText_SetScale(un_804D6E98, un_804DDE10, un_804DDE14);
         DevText_Erase(un_804D6E98);
         DevText_SetCursorXY(un_804D6E98, 0, 0);
         DevText_StoreColorIndex(un_804D6E98, 0);
-        DevText_SetTextColor(un_804D6E98, *(GXColor*)&un_804D5A40);
+        DevText_SetTextColor(un_804D6E98, *(GXColor*) &un_804D5A40);
         DevText_StoreColorIndex(un_804D6E98, 1);
-        DevText_SetTextColor(un_804D6E98, *(GXColor*)&un_804D5A44);
+        DevText_SetTextColor(un_804D6E98, *(GXColor*) &un_804D5A44);
 
         i = 0;
         do {
@@ -827,7 +827,7 @@ void un_803114E8(void)
 
         memzero(data, 0x18);
         *data = GObj_Create(0, 0, 0);
-        HSD_GObjProc_8038FD54(*data, (void (*)(HSD_GObj*))un_80310B48, 0);
+        HSD_GObjProc_8038FD54(*data, (void (*)(HSD_GObj*)) un_80310B48, 0);
         HSD_GObj_80390CD4(*data);
     } else {
         OSReport(un_803FE7C0);
@@ -1024,63 +1024,51 @@ void un_8031234C(s32 arg0)
 {
     u16* saveData;
     u16* stateData;
-    Toy* toy = (Toy*) &un_804A26B8;
+    char* toy = (char*)un_804A26B8;
     u16* srcPtr;
     u16* dstPtr;
     s32 i;
-    s32 j;
-    s32 category;
     u16* ptr;
+    s32 j;
 
     saveData = gmMainLib_8015CC78();
     stateData = gmMainLib_8015CC84();
 
     if (arg0 != 0) {
-        /* Load from toy save */
+        s32 category;
         dstPtr = saveData;
-        srcPtr = (u16*) ((u8*) toy + 0x194);
-        i = 0x125;
-        do {
-            u16 flags = M2C_FIELD(srcPtr, u16*, 0xA);
+        srcPtr = (u16*)(toy + 0x194);
+        for (i = 0x125; i != 0; i--) {
+            u16 flags = srcPtr[5];
             if (flags & 0x8000) {
                 *dstPtr |= 0x8000;
             }
-            {
-                u16 temp = M2C_FIELD(srcPtr, u16*, 0xA);
-                srcPtr++;
-                *dstPtr = (u8) temp + (*dstPtr & 0xFF00);
-                dstPtr++;
-            }
-            i--;
-        } while (i != 0);
+            *dstPtr = (u8)srcPtr[5] + (*dstPtr & 0xFF00);
+            srcPtr++;
+            dstPtr++;
+        }
 
-        *stateData = toy->x19A;
+        *stateData = *(u16*)(toy + 0x19A);
 
-        category = 0;
-        do {
-            if ((u32) category > 1U && category != 8 && category != 3 &&
-                (*stateData & (1 << category)))
-            {
+        for (category = 0; category < 9; category++) {
+            if ((u32)category > 1U && category != 8 && category != 3 &&
+                (*stateData & (1 << category))) {
                 ptr = saveData;
-                j = 0;
-                do {
+                for (j = 0; j < 0x125; j++) {
                     f32 result = un_803060BC(j, 6);
-                    if ((f32) category == result) {
+                    if ((f32)category == result) {
                         *ptr |= 0x4000;
                     }
-                    j++;
                     ptr++;
-                } while (j < 0x125);
+                }
             }
-            category++;
-        } while (category < 9);
+        }
 
-        *gmMainLib_8015CC90() = M2C_FIELD(toy, s16*, 0x3EC);
+        *gmMainLib_8015CC90() = *(s16*)(toy + 0x3EC);
     } else {
-        /* Save to toy save */
-        toy->x19A = *stateData;
-        M2C_FIELD(toy, u16*, 0x19C) = 0;
-        memcpy((u8*) toy + 0x19E, saveData, 0x24A);
-        M2C_FIELD(toy, s16*, 0x3EC) = *gmMainLib_8015CC90();
+        *(u16*)(toy + 0x19A) = *stateData;
+        *(u16*)(toy + 0x19C) = 0;
+        memcpy(toy + 0x19E, saveData, 0x24A);
+        *(s16*)(toy + 0x3EC) = *gmMainLib_8015CC90();
     }
 }
