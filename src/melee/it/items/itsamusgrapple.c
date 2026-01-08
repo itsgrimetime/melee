@@ -155,7 +155,17 @@ void it_802BAC3C(Fighter_GObj* gobj)
     }
 }
 
-/// #it_802BAC80
+void it_802BAC80(Fighter_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    Item_GObj* item = fp->fv.ss.x223C;
+    if (item != NULL) {
+        Item* ip = GET_ITEM(item);
+        if (ip->xDD4_itemVar.samusgrapple.unk_10 != NULL) {
+            ip->xDD4_itemVar.samusgrapple.unk_10(item);
+        }
+    }
+}
 
 /// #it_802BACC4
 
