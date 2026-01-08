@@ -1,12 +1,8 @@
 #include "tylist.h"
 
-#include "gm/gmmain_lib.h"
 #include "if/textlib.h"
 #include "lb/lb_00B0.h"
-#include "lb/lbarchive.h"
-#include "lb/lblanguage.h"
 #include "ty/toy.h"
-#include "ty/types.h"
 
 #include <m2c_macros.h>
 #include <baselib/archive.h>
@@ -27,10 +23,32 @@ typedef struct {
     HSD_CObj* cobj;
 } TyListData;
 
-typedef struct {
-    u8 pad[0x4E8];
-    u8* digits;
-} SisFontData;
+typedef struct TyListArg {
+    /* 0x00 */ void* x0;
+    /* 0x04 */ void* x4;
+    /* 0x08 */ void* x8;
+    /* 0x0C */ void* xC;
+    /* 0x10 */ HSD_JObj* x10;
+    /* 0x14 */ void* x14;
+    /* 0x18 */ u8 pad_18[0x26 - 0x18];
+    /* 0x26 */ s16 idx;
+    /* 0x28 */ u8 pad_28[0x30 - 0x28];
+    /* 0x30 */ float x30;
+} TyListArg;
+
+extern u8 un_804A2AA8[];
+extern void* un_804D6ED0;
+extern void* un_804D6EC4;
+extern void* un_804D6EC0;
+extern void* un_804D6EBC;
+extern void* un_804D6EB8;
+extern void* un_804D6EB4;
+extern void* un_804D6EB0;
+extern void* un_804D6EAC;
+extern void* un_804D6ECC;
+extern void* un_804D6EA8;
+extern void* un_804D6EA4;
+extern void* un_804D6EC8;
 
 typedef struct {
     HSD_GObj* gobj;
@@ -295,31 +313,6 @@ void un_80313358(TyListState* state, s8 arg2, s8 arg3, s8 arg4)
 {
     int i;
 
-    if (arg2 != -1) {
-        state->x29E = arg2;
-        state->x2A1 = arg4;
-    }
-
-    state->x29F = arg3;
-    state->x2A4 = state->x2A8 / (float) arg3;
-
-    if (state->x2A1 == 0) {
-        for (i = 0; i < state->entryCount; i++) {
-            TyListArg* entry = &state->entries[i];
-            TyListArg* sub = entry->x0;
-            entry->x2C = sub->x30;
-            un_80312904(entry, state->entryCount + 1);
-        }
-    } else {
-        for (i = 0; i < state->entryCount; i++) {
-            TyListArg* entry = &state->entries[i];
-            TyListArg* sub = entry->x4;
-            entry->x2C = sub->x30;
-            un_80312904(entry, state->entryCount + 1);
-        }
-    }
-}
-
 void un_80313464(TyListArg* arg)
 {
     char* data = un_804A2AC0;
@@ -336,124 +329,11 @@ void un_80313464(TyListArg* arg)
     }
 
     if (un_80304924(val) != 0) {
-        arg->x10 = un_80313508(((TyListState*) data)->gobj, un_803FE8D0,
+        arg->x10 = un_80313508(*(void**)(data + 0x27C), un_803FE8D0,
                                un_804DDE60, arg->x30, un_804DDE48);
     }
 }
-HSD_JObj* un_80313508(void* parent, void* symbol, float x, float y, float z)
-{
-    HSD_JObj* jobj;
-    TyArchiveData* archive;
-    void* joint;
-    PAD_STACK(8);
-
-    archive = un_804D6ED8;
-    joint = HSD_ArchiveGetPublicAddress(archive->data, symbol);
-
-    if (joint == NULL) {
-        OSPanic(un_803FE8F0, 0x337, un_803FE8FC);
-        return NULL;
-    }
-
-    jobj = HSD_JObjLoadJoint(joint);
-
-    if (x != un_804DDE48 || y != un_804DDE48 || z != un_804DDE48) {
-        // Set X
-        if (jobj == NULL) {
-            __assert(&un_804D5A78, 0x3A4, &un_804D5A80);
-        }
-        jobj->translate.x = x;
-
-        if ((jobj->flags & 0x02000000) == 0) {
-            if (jobj == NULL) {
-                goto skip_x;
-            }
-            if (jobj == NULL) {
-                __assert(&un_804D5A78, 0x234, &un_804D5A80);
-            }
-            {
-                u32 flags = jobj->flags;
-                s32 skip = 0;
-                if ((flags & 0x800000) == 0 && (flags & 0x40)) {
-                    skip = 1;
-                }
-                if (skip == 0) {
-                    HSD_JObjSetMtxDirtySub(jobj);
-                }
-            }
-        }
-    skip_x:
-
-        // Set Y
-        if (jobj == NULL) {
-            __assert(&un_804D5A78, 0x3B3, &un_804D5A80);
-        }
-        jobj->translate.y = y;
-
-        if ((jobj->flags & 0x02000000) == 0) {
-            if (jobj == NULL) {
-                goto skip_y;
-            }
-            if (jobj == NULL) {
-                __assert(&un_804D5A78, 0x234, &un_804D5A80);
-            }
-            {
-                u32 flags = jobj->flags;
-                s32 skip = 0;
-                if ((flags & 0x800000) == 0 && (flags & 0x40)) {
-                    skip = 1;
-                }
-                if (skip == 0) {
-                    HSD_JObjSetMtxDirtySub(jobj);
-                }
-            }
-        }
-    skip_y:
-
-        // Set Z
-        if (jobj == NULL) {
-            __assert(&un_804D5A78, 0x3C2, &un_804D5A80);
-        }
-        jobj->translate.z = z;
-
-        if ((jobj->flags & 0x02000000) == 0) {
-            if (jobj == NULL) {
-                goto skip_z;
-            }
-            if (jobj == NULL) {
-                __assert(&un_804D5A78, 0x234, &un_804D5A80);
-            }
-            {
-                u32 flags = jobj->flags;
-                s32 skip = 0;
-                if ((flags & 0x800000) == 0 && (flags & 0x40)) {
-                    skip = 1;
-                }
-                if (skip == 0) {
-                    HSD_JObjSetMtxDirtySub(jobj);
-                }
-            }
-        }
-    skip_z:;
-    }
-
-    if (parent != NULL) {
-        HSD_JObj* parentJobj = ((HSD_GObj*) parent)->hsd_obj;
-        HSD_JObj* child;
-        HSD_JObjAddChild(parentJobj, jobj);
-        child = parentJobj->child;
-        while (child->next != NULL) {
-            child = child->next;
-        }
-    } else {
-        HSD_GObj* gobj;
-        gobj = GObj_Create(6, 7, 0);
-        HSD_GObjObject_80390A70(gobj, (u8) HSD_GObj_804D7849, jobj);
-        GObj_SetupGXLink(gobj, HSD_GObj_JObjCallback, 0x39, 0);
-    }
-
-    return jobj;
-}
+/// #un_80313508
 
 /// #un_80313774
 

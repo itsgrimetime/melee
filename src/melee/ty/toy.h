@@ -52,9 +52,9 @@
     un_8030813C(s16, enum MajorSceneKind); /// TODO :: fill out the struct that
                                            /// this uses/returns
 /* 308250 */ UNK_RET un_80308250(UNK_PARAMS);
-/* 3082F8 */ void un_803082F8(s16 idx);
-/* 308328 */ void un_80308328(s32 arg0);
-/* 308354 */ s16 un_80308354(s16 idx);
+/* 3082F8 */ UNK_RET un_803082F8(UNK_PARAMS);
+/* 308328 */ UNK_RET un_80308328(UNK_PARAMS);
+/* 308354 */ UNK_RET un_80308354(UNK_PARAMS);
 /* 3083D8 */ void un_803083D8(void*, s32);
 /* 3084A0 */ UNK_RET un_803084A0(UNK_PARAMS);
 /* 3087F4 */ UNK_RET un_803087F4(UNK_PARAMS);
@@ -90,62 +90,7 @@
 /* 4A2AC0 */ extern char un_804A2AC0[];
 /* 4D6EDC */ extern s16* un_804D6EDC;
 /* 3FE8D0 */ extern char un_803FE8D0[];
-/* 3FE880 */ extern char un_803FE880[];
-/* 4D6ED4 */ extern void* un_804D6ED4;
-/* 4D6ED8 */ extern void* un_804D6ED8;
-/* 4D5A8C */ extern char un_804D5A8C[];
 /* 4DDE60 */ extern float un_804DDE60;
-/* 4DDE4C */ extern float un_804DDE4C;
 /* 4DDE48 */ extern float un_804DDE48;
-/* 4D5A78 */ extern char un_804D5A78;
-/* 4D5A80 */ extern char un_804D5A80;
-
-/* 3B8910 */ extern s32 un_803B8910[18];
-/* 4D6E98 */ extern DevText* un_804D6E98;
-/* 3FE7A0 */ extern char un_803FE7A0[];
-/* 3FE7B0 */ extern char un_803FE7B0[];
-
-/* un_803114E8 externs */
-/* 3FE7C0 */ extern char un_803FE7C0[];
-/* 4A2750 */ extern char un_804A2750[];
-/* 4D5A40 */ extern s32 un_804D5A40;
-/* 4D5A44 */ extern s32 un_804D5A44;
-/* 4D6E5C */ extern void** un_804D6E5C;
-/* 4DDE0C */ extern s32 un_804DDE0C;
-/* 4DDE10 */ extern f32 un_804DDE10;
-/* 4DDE14 */ extern f32 un_804DDE14;
-
-/* un_80311788 externs */
-/* 3FE2A4 */ extern char un_803FE2A4[];
-/* 3FE7E4 */ extern char un_803FE7E4[];
-/* 4A26C4 */ extern char un_804A26C4[];
-/* 4D6E9C */ extern DevText* un_804D6E9C;
-/* 4D6EE0 */ extern void* un_804D6EE0;
-/* 4DDE18 */ extern s32 un_804DDE18;
-
-/* un_803060BC externs */
-/* 4D6EC0 */ extern struct TrophyData* un_804D6EC0;
-/* 4D6EC4 */ extern struct TrophyData* un_804D6EC4;
-
-/* un_80312050 externs */
-/* 4DDE1C */ extern f32 un_804DDE1C;
-/* 4DDE20 */ extern f32 un_804DDE20;
-
-/* un_803053C4 externs */
-/* 4D6EB4 */ extern s16* un_804D6EB4;
-/* 4DDCD0 */ extern f64 un_804DDCD0;
-
-/* un_80308354 externs */
-/* 3FE474 */ extern char un_803FE474[];
-/* 4D5A48 */ extern char un_804D5A48[];
-/* 4D5A50 */ extern char un_804D5A50[];
-
-/* un_803102D0 externs */
-/* 4D6ECC */ extern void* un_804D6ECC;
-/* 4D6EA8 */ extern void* un_804D6EA8;
-/* 4D6EA4 */ extern void* un_804D6EA4;
-/* 3FE878 */ extern char str_TyDataf_dat[];
-/* 3FE8C0 */ extern char str_tyModelFileTbl[];
-/* 3FE8CC */ extern char str_tyModelFileUsTbl[];
 
 #endif
