@@ -79,7 +79,7 @@
 /* 311AB0 */ void un_80311AB0_OnEnter(UNK_T);
 /* 311F5C */ UNK_RET un_80311F5C(UNK_PARAMS);
 /* 312018 */ void un_80312018_OnFrame(void);
-/* 312050 */ UNK_RET un_80312050(UNK_PARAMS);
+/* 312050 */ void un_80312050(void);
 /* 3122D0 */ void un_803122D0_OnInit(void);
 /* 31234C */ void un_8031234C(s32);
 
@@ -124,5 +124,9 @@
 /* un_803060BC externs */
 /* 4D6EC0 */ extern struct TrophyData* un_804D6EC0;
 /* 4D6EC4 */ extern struct TrophyData* un_804D6EC4;
+
+/* un_80312050 externs */
+/* 4DDE1C */ extern f32 un_804DDE1C;
+/* 4DDE20 */ extern f32 un_804DDE20;
 
 #endif

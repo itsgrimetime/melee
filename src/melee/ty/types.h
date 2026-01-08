@@ -32,18 +32,18 @@ typedef struct ToyEntry {
 
 /* Used by un_803060BC for trophy data lookup. 0x24 bytes per entry. */
 typedef struct TrophyData {
-    s32 id;       /* 0x00 - trophy ID, -1 for end sentinel */
-    s32 x04;      /* 0x04 - category (case 8) */
-    f32 x08;      /* 0x08 - field 0 */
-    f32 x0C;      /* 0x0C - field 1 */
-    f32 x10;      /* 0x10 - field 2 */
-    f32 x14;      /* 0x14 - field 3 */
-    f32 x18;      /* 0x18 - field 4 */
-    f32 x1C;      /* 0x1C - field 5 */
-    s8 x20;       /* 0x20 - field 6 */
-    s8 x21;       /* 0x21 - field 7 */
-    s8 x22;       /* 0x22 - padding */
-    s8 x23;       /* 0x23 - padding */
+    s32 id;  /* 0x00 - trophy ID, -1 for end sentinel */
+    s32 x04; /* 0x04 - category (case 8) */
+    f32 x08; /* 0x08 - field 0 */
+    f32 x0C; /* 0x0C - field 1 */
+    f32 x10; /* 0x10 - field 2 */
+    f32 x14; /* 0x14 - field 3 */
+    f32 x18; /* 0x18 - field 4 */
+    f32 x1C; /* 0x1C - field 5 */
+    s8 x20;  /* 0x20 - field 6 */
+    s8 x21;  /* 0x21 - field 7 */
+    s8 x22;  /* 0x22 - padding */
+    s8 x23;  /* 0x23 - padding */
 } TrophyData;
 
 struct Toy {

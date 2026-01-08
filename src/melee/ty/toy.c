@@ -1,10 +1,13 @@
 #include "toy.h"
 
+#include "baselib/cobj.h"
 #include "baselib/controller.h"
+#include "baselib/displayfunc.h"
 #include "baselib/gobj.h"
 #include "baselib/gobjproc.h"
 #include "baselib/jobj.h"
 #include "baselib/memory.h"
+#include "baselib/state.h"
 #include "gm/gm_1601.h" // for gm_801677E8
 #include "gm/gm_16AE.h"
 #include "gm/gm_1A3F.h"
@@ -545,8 +548,124 @@ void un_80312018_OnFrame(void)
         gm_801A4B60();
     }
 }
-/// #un_80312050
+void un_80312050(void)
+{
+    Point3d interest;
+    Point3d sp98;
+    Mtx viewMtx;
+    Vec3 up;
+    Vec3 left;
+    Vec3 eye;
+    Vec3 scaled;
+    HSD_CObj* cobj;
+    void* data;
+    volatile f32* wgpipe_f32;
+    u8 color_ff;
+    u8 color_00;
+    f32 fz, fy, fx;
 
+    data = un_804D6E6C;
+    cobj = HSD_CObjGetCurrent();
+
+    if ((s8) ((u8*) data)[4] == 0) {
+        HSD_CObjGetInterest(cobj, &interest);
+        HSD_CObjGetLeftVector(cobj, &left);
+        HSD_CObjGetUpVector(cobj, &up);
+        HSD_CObjGetEyeVector(cobj, &eye);
+
+        HSD_StateInitDirect(0, 2);
+        HSD_SetupRenderMode(2);
+
+        HSD_CObjGetViewingMtx(cobj, viewMtx);
+        GXLoadPosMtxImm(viewMtx, 0);
+
+        HSD_StateSetLineWidth(6, 5);
+        GXBegin(GX_LINES, GX_VTXFMT0, 6);
+
+        PSVECScale(&left, &scaled, un_804DDE1C);
+        PSVECAdd(&scaled, &interest, &sp98);
+
+        fz = sp98.z;
+        wgpipe_f32 = (volatile f32*) 0xCC008000;
+        fy = sp98.y;
+        color_ff = 0xFF;
+        fx = sp98.x;
+        color_00 = 0;
+
+        *wgpipe_f32 = fx;
+        *wgpipe_f32 = fy;
+        *wgpipe_f32 = fz;
+        *(volatile u8*) wgpipe_f32 = color_ff;
+        *(volatile u8*) wgpipe_f32 = color_00;
+        *(volatile u8*) wgpipe_f32 = color_00;
+        *(volatile u8*) wgpipe_f32 = color_ff;
+
+        PSVECScale(&left, &scaled, un_804DDE20);
+        PSVECAdd(&scaled, &interest, &sp98);
+        fz = sp98.z;
+        fy = sp98.y;
+        fx = sp98.x;
+        *wgpipe_f32 = fx;
+        *wgpipe_f32 = fy;
+        *wgpipe_f32 = fz;
+        *(volatile u8*) wgpipe_f32 = color_ff;
+        *(volatile u8*) wgpipe_f32 = color_00;
+        *(volatile u8*) wgpipe_f32 = color_00;
+        *(volatile u8*) wgpipe_f32 = color_ff;
+
+        PSVECScale(&up, &scaled, un_804DDE1C);
+        PSVECAdd(&scaled, &interest, &sp98);
+        fz = sp98.z;
+        fy = sp98.y;
+        fx = sp98.x;
+        *wgpipe_f32 = fx;
+        *wgpipe_f32 = fy;
+        *wgpipe_f32 = fz;
+        *(volatile u8*) wgpipe_f32 = color_00;
+        *(volatile u8*) wgpipe_f32 = color_ff;
+        *(volatile u8*) wgpipe_f32 = color_00;
+        *(volatile u8*) wgpipe_f32 = color_ff;
+
+        PSVECScale(&up, &scaled, un_804DDE20);
+        PSVECAdd(&scaled, &interest, &sp98);
+        fz = sp98.z;
+        fy = sp98.y;
+        fx = sp98.x;
+        *wgpipe_f32 = fx;
+        *wgpipe_f32 = fy;
+        *wgpipe_f32 = fz;
+        *(volatile u8*) wgpipe_f32 = color_00;
+        *(volatile u8*) wgpipe_f32 = color_ff;
+        *(volatile u8*) wgpipe_f32 = color_00;
+        *(volatile u8*) wgpipe_f32 = color_ff;
+
+        PSVECScale(&eye, &scaled, un_804DDE1C);
+        PSVECAdd(&scaled, &interest, &sp98);
+        fz = sp98.z;
+        fy = sp98.y;
+        fx = sp98.x;
+        *wgpipe_f32 = fx;
+        *wgpipe_f32 = fy;
+        *wgpipe_f32 = fz;
+        *(volatile u8*) wgpipe_f32 = color_00;
+        *(volatile u8*) wgpipe_f32 = color_00;
+        *(volatile u8*) wgpipe_f32 = color_ff;
+        *(volatile u8*) wgpipe_f32 = color_ff;
+
+        PSVECScale(&eye, &scaled, un_804DDE20);
+        PSVECAdd(&scaled, &interest, &sp98);
+        fz = sp98.z;
+        fy = sp98.y;
+        fx = sp98.x;
+        *wgpipe_f32 = fx;
+        *wgpipe_f32 = fy;
+        *wgpipe_f32 = fz;
+        *(volatile u8*) wgpipe_f32 = color_00;
+        *(volatile u8*) wgpipe_f32 = color_00;
+        *(volatile u8*) wgpipe_f32 = color_ff;
+        *(volatile u8*) wgpipe_f32 = color_ff;
+    }
+}
 void un_803122D0_OnInit(void)
 {
     Toy* userData = (Toy*) &un_804A26B8;
