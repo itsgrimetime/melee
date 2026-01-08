@@ -62,7 +62,7 @@
 /* 300968 */ bool un_80300968(bool);
 /* 3009A4 */ bool un_803009A4(bool);
 /* 3009E0 */ UNK_RET un_803009E0(UNK_PARAMS);
-/* 300A88 */ UNK_RET un_80300A88(UNK_PARAMS);
+/* 300A88 */ int un_80300A88(void);
 /* 300AB8 */ bool un_80300AB8(bool);
 /* 300AF4 */ bool un_80300AF4(int);
 /* 300B58 */ bool un_80300B58(int);
@@ -115,7 +115,7 @@
 /* 301C80 */ int un_80301C80(int);
 /* 301CE0 */ UNK_RET un_80301CE0(UNK_PARAMS);
 /* 301D40 */ bool un_80301D40(bool);
-/* 301D7C */ UNK_RET un_80301D7C(UNK_PARAMS);
+/* 301D7C */ int un_80301D7C(int);
 /* 301DCC */ bool un_80301DCC(bool);
 /* 301E08 */ bool un_80301E08(bool);
 

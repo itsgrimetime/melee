@@ -10,8 +10,8 @@
 #include "lb/lbaudio_ax.h"
 #include "lb/lbcardgame.h"
 #include "lb/lbcardnew.h"
-#include "lb/lbsnap.h"
 #include "lb/lblanguage.h"
+#include "lb/lbsnap.h"
 #include "ty/toy.h"
 #include "ty/tylist.h"
 
@@ -52,6 +52,8 @@
     int x30;
     u8 _pad34[0x104];
     void* x138;
+    u8 _pad13C[0x4C];
+    s32 x188;
 } un_803FA258;
 /* 3FA348 */ static u16 un_803FA348;
 /* 3FA34C */ static u8 un_803FA34C;
@@ -553,7 +555,17 @@ bool un_803009A4(bool update_scene)
 
 /// #un_803009E0
 
-/// #un_80300A88
+int un_80300A88(void)
+{
+    switch (un_804D6DD8) {
+    case 3:
+        if (un_804D6DCC >= 1) {
+            un_804D6DCC = 1;
+        }
+        break;
+    }
+    return 0;
+}
 
 bool un_80300AB8(bool update_scene)
 {
@@ -1192,7 +1204,16 @@ bool un_80301D40(bool update_scene)
     return false;
 }
 
-/// #un_80301D7C
+int un_80301D7C(int arg0)
+{
+    if (arg0 == 1) {
+        lbAudioAx_80024030(1);
+        gm_801BEB74(un_803FA258.x188 - 1);
+        gm_801A42F8(0x2B);
+        gm_801A4B60();
+    }
+    return 0;
+}
 
 bool un_80301DCC(bool update_scene)
 {
