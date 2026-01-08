@@ -10,11 +10,11 @@
 /* 2FB8C0 */ UNK_RET ifMagnify_802FB8C0(UNK_PARAMS);
 /* 2FBBDC */ UNK_RET ifMagnify_802FBBDC(UNK_PARAMS);
 /* 2FC3BC */ void ifMagnify_802FC3BC(void);
-/* 2FC3C0 */ UNK_RET ifMagnify_802FC3C0(UNK_PARAMS);
-/* 2FC618 */ UNK_RET ifMagnify_802FC618(UNK_PARAMS);
+/* 2FC3C0 */ void ifMagnify_802FC3C0(s32 slot);
+/* 2FC618 */ void ifMagnify_802FC618(void);
 /* 2FC750 */ void ifMagnify_802FC750(void);
-/* 2FC7C0 */ UNK_RET ifMagnify_802FC7C0(UNK_PARAMS);
-/* 2FC870 */ UNK_RET ifMagnify_802FC870(UNK_PARAMS);
+/* 2FC7C0 */ void ifMagnify_802FC7C0(ifMagnify* magnify);
+/* 2FC870 */ void ifMagnify_802FC870(void);
 /* 2FC8E8 */ UNK_RET ifMagnify_802FC8E8(UNK_PARAMS);
 /* 2FC940 */ UNK_RET ifMagnify_802FC940(UNK_PARAMS);
 /* 2FC998 */ bool ifMagnify_802FC998(s32 ply_slot);

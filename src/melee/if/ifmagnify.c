@@ -1,5 +1,9 @@
 #include "ifmagnify.h"
 
+#include "if/ifall.h"
+#include "lb/lb_00B0.h"
+#include "lb/lbarchive.h"
+
 #include <baselib/gobjplink.h>
 
 ifMagnify ifMagnify_804A1DE0;
@@ -63,10 +67,20 @@ void ifMagnify_802FC750(void)
     }
 }
 
-    idesc = *(HSD_ImageDesc**) (player0 + 8);
-    half_height = ifMagnify_804DDB4C * idesc->height;
-    half_width = ifMagnify_804DDB4C * idesc->width;
-    HSD_CObjSetOrtho(cobj, half_height, -half_height, -half_width, half_width);
+void ifMagnify_802FC870(void)
+{
+    s32 i;
+
+    memzero(&ifMagnify_804A1DE0, 0x74);
+    ifMagnify_802FC7C0(&ifMagnify_804A1DE0);
+    lbArchive_LoadSections(*ifAll_802F3690(), (void**) &ifMagnify_804A1DE0,
+                           ifMagnify_804D57E8, 0);
+
+    for (i = 0; i < 6; i++) {
+        ifMagnify_802FC3C0(i);
+    }
+    ifMagnify_802FC618();
+}
 
 void ifMagnify_802FC870(void)
 {
