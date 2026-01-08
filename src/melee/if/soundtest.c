@@ -1179,12 +1179,13 @@ int un_803016D8(int arg0)
 
 int un_80301734(int arg0)
 {
-    if (arg0 == 1) {
-        OSReport(un_803FD23C);
-        {
-            s32 result = lb_8001C87C();
-            OSReport(un_803FD230, result);
-        }
+    if (arg0 != 1) {
+        return 0;
+    }
+    OSReport(un_803FD23C);
+    {
+        s32 result = lb_8001C87C();
+        OSReport(un_803FD230, result);
     }
     return 0;
 }
