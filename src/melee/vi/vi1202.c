@@ -615,23 +615,18 @@ void un_80322178(int arg)
 
 bool un_80322258(float arg)
 {
-    CrowdConfig* vdata = gCrowdConfig;
-    char* mp = mpLib_80458868;
-    f32 val2c = vdata->horiz_margin;
-    f32 val18 = *(f32*) (mp + 0x18);
-    if (arg < val2c + val18) {
+    f32 val2c = gCrowdConfig->horiz_margin;
+    
+    if (arg < val2c + *(f32*)(mpLib_80458868 + 0x18)) {
         goto ret_true;
     }
-    {
-        f32 val1c = *(f32*) (mp + 0x1C);
-        if (!(arg > val1c - val2c)) {
-            goto ret_false;
-        }
+    if (!(arg > *(f32*)(mpLib_80458868 + 0x1C) - val2c)) {
+        goto ret_false;
     }
 ret_true:
-    return true;
+    return 1;
 ret_false:
-    return false;
+    return 0;
 }
 
 s32 un_80322298(float arg)
