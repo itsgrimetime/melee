@@ -32,9 +32,9 @@
 /* 300290 */ int un_80300290(int);
 /* 3002FC */ bool un_803002FC(bool);
 /* 300338 */ s32 un_80300338(void);
-/* 300378 */ UNK_RET un_80300378(UNK_PARAMS);
-/* 3003C4 */ UNK_RET un_803003C4(UNK_PARAMS);
-/* 300410 */ UNK_RET un_80300410(UNK_PARAMS);
+/* 300378 */ s32 un_80300378(void);
+/* 3003C4 */ s32 un_803003C4(void);
+/* 300410 */ s32 un_80300410(s32 arg0);
 /* 300480 */ int un_80300480(int);
 /* 3004B4 */ int un_803004B4(int);
 /* 3004E8 */ int un_803004E8(int arg0);
@@ -61,8 +61,8 @@
 /* 300934 */ int un_80300934(int);
 /* 300968 */ bool un_80300968(bool);
 /* 3009A4 */ bool un_803009A4(bool);
-/* 3009E0 */ UNK_RET un_803009E0(UNK_PARAMS);
-/* 300A88 */ UNK_RET un_80300A88(UNK_PARAMS);
+/* 3009E0 */ s32 un_803009E0(void);
+/* 300A88 */ int un_80300A88(void);
 /* 300AB8 */ bool un_80300AB8(bool);
 /* 300AF4 */ UNK_RET un_80300AF4(UNK_PARAMS);
 /* 300B58 */ UNK_RET un_80300B58(UNK_PARAMS);
@@ -81,8 +81,8 @@
 /* 301028 */ UNK_RET un_80301028(UNK_PARAMS);
 /* 301074 */ UNK_RET un_80301074(UNK_PARAMS);
 /* 3010C0 */ UNK_RET un_803010C0(UNK_PARAMS);
-/* 30110C */ UNK_RET fn_8030110C(UNK_PARAMS);
-/* 3011EC */ UNK_RET fn_803011EC(UNK_PARAMS);
+/* 30110C */ int fn_8030110C(int);
+/* 3011EC */ void fn_803011EC(int);
 /* 301280 */ UNK_RET un_80301280(UNK_PARAMS);
 /* 3012D4 */ UNK_RET un_803012D4(UNK_PARAMS);
 /* 301328 */ bool un_80301328(bool);
