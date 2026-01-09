@@ -36,9 +36,6 @@ char un_80400114[] = "ViWait0601_scene";
 
 static f32 un_804DE0A8;
 static f32 un_804DE0AC;
-static f32 un_804DE0B0;
-static f32 un_804DE0B4;
-static f32 un_804DE0B8;
 
 void vi_8031E6CC_OnFrame(void)
 {
@@ -79,74 +76,19 @@ void fn_8031E800(HSD_GObj* gobj)
     HSD_JObj* jobj;
     HSD_JObj* child;
     f32 scale;
-    char pad[8];
 
-    jobj = gobj->hsd_obj;
-    if (jobj == NULL) {
-        child = NULL;
-    } else {
+    jobj = GET_JOBJ(gobj);
+    if (jobj != NULL) {
         child = jobj->child;
+    } else {
+        child = NULL;
     }
     HSD_ASSERT(875, child);
 
     scale = un_804DE0A8 * child->scale.x;
-
-    /* HSD_JObjSetScaleX inline */
-    HSD_ASSERT(776, child);
-    child->scale.x = scale;
-    if (!(child->flags & JOBJ_MTX_INDEP_SRT)) {
-        if (child != NULL) {
-            s32 result;
-            u32 flags;
-            HSD_ASSERT(564, child);
-            flags = child->flags;
-            result = 0;
-            if (!(flags & JOBJ_USER_DEF_MTX) && (flags & JOBJ_MTX_DIRTY)) {
-                result = 1;
-            }
-            if (!result) {
-                HSD_JObjSetMtxDirtySub(child);
-            }
-        }
-    }
-
-    /* HSD_JObjSetScaleY inline */
-    HSD_ASSERT(791, child);
-    child->scale.y = scale;
-    if (!(child->flags & JOBJ_MTX_INDEP_SRT)) {
-        if (child != NULL) {
-            s32 result;
-            u32 flags;
-            HSD_ASSERT(564, child);
-            flags = child->flags;
-            result = 0;
-            if (!(flags & JOBJ_USER_DEF_MTX) && (flags & JOBJ_MTX_DIRTY)) {
-                result = 1;
-            }
-            if (!result) {
-                HSD_JObjSetMtxDirtySub(child);
-            }
-        }
-    }
-
-    /* HSD_JObjSetScaleZ inline */
-    HSD_ASSERT(806, child);
-    child->scale.z = scale;
-    if (!(child->flags & JOBJ_MTX_INDEP_SRT)) {
-        if (child != NULL) {
-            s32 result;
-            u32 flags;
-            HSD_ASSERT(564, child);
-            flags = child->flags;
-            result = 0;
-            if (!(flags & JOBJ_USER_DEF_MTX) && (flags & JOBJ_MTX_DIRTY)) {
-                result = 1;
-            }
-            if (!result) {
-                HSD_JObjSetMtxDirtySub(child);
-            }
-        }
-    }
+    HSD_JObjSetScaleX(child, scale);
+    HSD_JObjSetScaleY(child, scale);
+    HSD_JObjSetScaleZ(child, scale);
 }
 
 void un_8031E9B8(void)
@@ -192,12 +134,11 @@ void vi0601_RunFrame(HSD_GObj* gobj)
 {
     HSD_CObj* cobj;
 
-    cobj = gobj->hsd_obj;
+    cobj = GET_COBJ(gobj);
     HSD_CObjAnim(cobj);
 
-    if (un_804DE0B0 == cobj->aobj->curr_frame ||
-        un_804DE0B4 == cobj->aobj->curr_frame ||
-        un_804DE0B8 == cobj->aobj->curr_frame)
+    if (537.0f == cobj->aobj->curr_frame || 559.0f == cobj->aobj->curr_frame ||
+        580.0f == cobj->aobj->curr_frame)
     {
         vi_8031C9B4(0x23, 0);
     }
