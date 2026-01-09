@@ -88,7 +88,7 @@ void un_8031EE84(void)
         HSD_GObjObject_80390A70(gobj, HSD_GObj_804D7849, jobj);
         GObj_SetupGXLink(gobj, HSD_GObj_JObjCallback, 0xB, 0);
         gm_8016895C(jobj, un_804D6FB8->models[i], 0);
-        HSD_JObjReqAnimAll(jobj, un_804DE0C0);
+        HSD_JObjReqAnimAll(jobj, 0.0F);
         HSD_JObjAnimAll(jobj);
         HSD_GObjProc_8038FD54(gobj, un_8031EE60, 0x17);
 
