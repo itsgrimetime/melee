@@ -78,7 +78,7 @@ void it_3F14_Logic18_Spawned(Item_GObj* arg0)
     Item* ip = GET_ITEM(arg0);
     itFoodsAttributes* attr = ip->xC4_article_data->x4_specialAttributes;
     s32 rand = HSD_Randi(*(s32*) ip->xC4_article_data->x4_specialAttributes);
-    PAD_STACK(8);
+    PAD_STACK(12);
     ip->xDD4_itemVar.foods.heal_amount = attr[rand].x8;
     ip->xDD4_itemVar.foods.x0 = rand;
     it_80273318(arg0, attr[rand].x4, rand);
