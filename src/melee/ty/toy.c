@@ -675,7 +675,14 @@ void un_803102C4(s8 arg0)
     M2C_FIELD(un_804D6E6C, s8*, 4) = arg0;
 }
 
-/// #un_803102D0
+void un_803102D0(void)
+{
+    if (un_804D6ECC == NULL) {
+        un_804D6ECC = lbArchive_LoadSymbols(str_TyDataf_dat, &un_804D6EA8,
+                                            str_tyModelFileTbl, &un_804D6EA4,
+                                            str_tyModelFileUsTbl, NULL);
+    }
+}
 
 /// #un_80310324
 
