@@ -2,9 +2,6 @@
 
 #include "it/inlines.h"
 #include "it/it_26B1.h"
-#include "it/types.h"
-
-#include <baselib/gobj.h>
 
 int it_802B1DEC(Item_GObj* arg0)
 {
@@ -66,9 +63,9 @@ bool it_2725_Logic39_Absorbed(Item_GObj* arg0)
 
 void it_2725_Logic39_EvtUnk(Item_GObj* gobj, Item_GObj* ref_gobj)
 {
-    Item* ip = GET_ITEM(gobj);
-    if (ip->xDD4_itemVar.pikachuthunder.x38 == ref_gobj) {
-        ip->xDD4_itemVar.pikachuthunder.x38 = NULL;
+    Item* ip = gobj->user_data;
+    if (M2C_FIELD(ip, Item_GObj**, 0xE0C) == ref_gobj) {
+        M2C_FIELD(ip, Item_GObj**, 0xE0C) = NULL;
     }
     it_8026B894(gobj, ref_gobj);
 }

@@ -52,7 +52,7 @@ typedef struct itDoseiAttributes {
 /* 282C54 */ bool itDosei_UnkMotion8_Anim(Item_GObj* gobj);
 /* 282C78 */ void itDosei_UnkMotion8_Phys(Item_GObj* gobj);
 /* 282CA8 */ bool itDosei_UnkMotion8_Coll(Item_GObj* gobj);
-/* 282CD4 */ void fn_80282CD4(Item_GObj*);
+/* 282CD4 */ void fn_80282CD4(Item_GObj* gobj);
 /* 282D48 */ bool itDosei_UnkMotion7_Anim(Item_GObj* gobj);
 /* 282DA0 */ void itDosei_UnkMotion7_Phys(Item_GObj* gobj);
 /* 282DA4 */ bool itDosei_UnkMotion7_Coll(Item_GObj* gobj);

@@ -5,6 +5,12 @@
 #include "it/it_2725.h"
 #include "it/item.h"
 
+typedef struct {
+    u8 b567 : 3;
+    u8 b4 : 1;
+    u8 b0123 : 4;
+} ByteBits;
+
 /// #it_80295ED4
 
 /// #it_80295F38
@@ -43,7 +49,6 @@ void it_80296694(Item_GObj* gobj)
     Item_80268E5C(gobj, 1, ITEM_ANIM_UPDATE);
     it_8026B3A8(gobj);
 }
-
 /// #itTarucann_UnkMotion1_Anim
 
 void itTarucann_UnkMotion1_Phys(Item_GObj* gobj)
@@ -57,8 +62,18 @@ void itTarucann_UnkMotion1_Phys(Item_GObj* gobj)
 
 /// #it_3F14_Logic5_PickedUp
 
-/// #itTarucann_UnkMotion2_Anim
-
+bool itTarucann_UnkMotion2_Anim(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
+    if (M2C_FIELD(ip, void**, 0xDF4) == NULL) {
+        ByteBits* bits = (ByteBits*) &M2C_FIELD(ip, u8*, 0xDCC);
+        bits->b4 = 1;
+    } else {
+        ByteBits* bits = (ByteBits*) &M2C_FIELD(ip, u8*, 0xDCC);
+        bits->b4 = 0;
+    }
+    return false;
+}
 void itTarucann_UnkMotion2_Phys(Item_GObj* gobj) {}
 
 /// #it_3F14_Logic5_Dropped

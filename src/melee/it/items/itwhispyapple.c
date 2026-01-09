@@ -377,7 +377,6 @@ bool it_802EEED8(Item_GObj* gobj)
     itColl_BounceOffVictim(gobj);
     return false;
 }
-
 bool it_802EEF10(Item_GObj* gobj)
 {
     return it_80273030(gobj);
