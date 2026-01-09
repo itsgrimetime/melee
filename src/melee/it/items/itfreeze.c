@@ -202,8 +202,27 @@ bool it_3F14_Logic17_DmgReceived(Item_GObj* arg0)
     return true;
 }
 
-/// #it_8028F434
+void it_8028F434(Item_GObj* gobj, f32 val, s32 arg)
+{
+    s32 unused[2];
+    Item* ip = gobj->user_data;
+    f32 zero = it_804DCA70;
 
+    ip->x40_vel.z = zero;
+    ip->x40_vel.y = zero;
+    ip->x40_vel.x = zero;
+
+    if (val < zero) {
+        val = -val;
+    }
+
+    M2C_FIELD(ip, f32*, 0xDE8) = val;
+    M2C_FIELD(ip, s32*, 0xDF0) = arg;
+
+    it_8026B390(gobj);
+    it_802762B0(ip);
+    Item_80268E5C(gobj, 4, ITEM_ANIM_UPDATE);
+}
 bool itFreeze_UnkMotion4_Anim(Item_GObj* gobj)
 {
     return false;

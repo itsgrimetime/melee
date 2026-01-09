@@ -167,8 +167,14 @@ bool it_3F14_Logic4_DmgDealt(Item_GObj* gobj)
     }
     return false;
 }
-/// #it_3F14_Logic4_Clanked
-
+bool it_3F14_Logic4_Clanked(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
+    if (M2C_FIELD(ip, s32*, 0xDD4) == 0) {
+        it_80289B50(gobj, 0);
+    }
+    return false;
+}
 bool it_3F14_Logic4_HitShield(Item_GObj* gobj)
 {
     Item* ip = gobj->user_data;
@@ -185,8 +191,25 @@ bool it_3F14_Logic4_Reflected(Item_GObj* gobj)
     }
     return false;
 }
-/// #it_3F14_Logic4_DmgReceived
+bool it_3F14_Logic4_DmgReceived(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
+    s32* attrs = ip->xC4_article_data->x4_specialAttributes;
+    PAD_STACK(8);
 
+    if (M2C_FIELD(ip, s32*, 0xDD4) == 0) {
+        s32 dmg = ip->xC9C;
+        if ((f32) (u32) (dmg ^ 0x80000000) >= ((f32*) attrs)[8]) {
+            if (it_8028A114(gobj, attrs[1], attrs[0], attrs[2], attrs[3]) != 0)
+            {
+                it_8028A544(gobj);
+            } else {
+                it_8028AC74(gobj);
+            }
+        }
+    }
+    return false;
+}
 void it_3F14_Logic4_EvtUnk(Item_GObj* gobj, Item_GObj* ref_gobj)
 {
     it_8026B894(gobj, ref_gobj);

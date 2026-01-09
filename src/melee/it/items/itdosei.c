@@ -112,13 +112,10 @@ void itDosei_UnkMotion2_Phys(Item_GObj* gobj) {}
 
 void it_80282074(Item_GObj* gobj)
 {
-    f32 frame_speed;
     Item* ip = gobj->user_data;
 
     Item_80268E5C(gobj, 3, 3);
-    frame_speed = it_804DC870;
-    ip->x5D0_animFrameSpeed = frame_speed;
-    lb_8000BA0C(gobj->hsd_obj, frame_speed);
+    lb_8000BA0C(gobj->hsd_obj, ip->x5D0_animFrameSpeed = it_804DC870);
     M2C_FIELD(ip, s32*, 0x518) = 0;
 }
 
@@ -168,7 +165,19 @@ void itDosei_UnkMotion5_Phys(Item_GObj* gobj)
     it_80274658(gobj, it_804D6D28->x68_float);
 }
 
-/// #it_3F14_Logic7_EnteredAir
+void it_3F14_Logic7_EnteredAir(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
+    s32 msid;
+    if (ip->xDC8_word.flags.x19 == 0) {
+        msid = 10;
+    } else {
+        msid = 6;
+    }
+    Item_80268E5C(gobj, msid, 3);
+    lb_8000BA0C(gobj->hsd_obj, ip->x5D0_animFrameSpeed = it_804DC870);
+    M2C_FIELD(ip, s32*, 0x518) = 0;
+}
 
 bool itDosei_UnkMotion6_Anim(Item_GObj* gobj)
 {
@@ -189,13 +198,10 @@ bool itDosei_UnkMotion6_Coll(Item_GObj* gobj)
 
 void it_80282BFC(Item_GObj* gobj)
 {
-    f32 frame_speed;
     Item* ip = gobj->user_data;
 
     Item_80268E5C(gobj, 8, 3);
-    frame_speed = it_804DC870;
-    ip->x5D0_animFrameSpeed = frame_speed;
-    lb_8000BA0C(gobj->hsd_obj, frame_speed);
+    lb_8000BA0C(gobj->hsd_obj, ip->x5D0_animFrameSpeed = it_804DC870);
     M2C_FIELD(ip, s32*, 0x518) = 0;
 }
 
@@ -221,7 +227,6 @@ bool itDosei_UnkMotion8_Coll(Item_GObj* gobj)
 
 void fn_80282CD4(Item_GObj* gobj)
 {
-    f32 frame_speed;
     Item* ip = gobj->user_data;
 
     ip->x40_vel.z = it_804DC878;
@@ -229,9 +234,7 @@ void fn_80282CD4(Item_GObj* gobj)
     ip->x40_vel.x = it_804DC878;
     it_802762B0(ip);
     Item_80268E5C(gobj, 7, 3);
-    frame_speed = it_804DC870;
-    ip->x5D0_animFrameSpeed = frame_speed;
-    lb_8000BA0C(gobj->hsd_obj, frame_speed);
+    lb_8000BA0C(gobj->hsd_obj, ip->x5D0_animFrameSpeed = it_804DC870);
     M2C_FIELD(ip, s32*, 0x518) = 0;
 }
 

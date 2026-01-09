@@ -49,10 +49,10 @@
 /* 28AE98 */ void itKusudama_UnkMotion8_Phys(Item_GObj* gobj);
 /* 28AE9C */ bool itKusudama_UnkMotion8_Coll(Item_GObj* gobj);
 /* 28AEA4 */ bool it_3F14_Logic4_DmgDealt(Item_GObj* gobj);
-/* 28AF1C */ bool it_3F14_Logic4_Clanked(Item_GObj*);
+/* 28AF1C */ bool it_3F14_Logic4_Clanked(Item_GObj* gobj);
 /* 28AF54 */ bool it_3F14_Logic4_HitShield(Item_GObj* gobj);
 /* 28AF8C */ bool it_3F14_Logic4_Reflected(Item_GObj* gobj);
-/* 28AFC4 */ bool it_3F14_Logic4_DmgReceived(Item_GObj*);
+/* 28AFC4 */ bool it_3F14_Logic4_DmgReceived(Item_GObj* gobj);
 /* 28B06C */ void it_3F14_Logic4_EvtUnk(Item_GObj*, Item_GObj*);
 /* 3F59F8 */ extern ItemStateTable it_803F59F8[];
 

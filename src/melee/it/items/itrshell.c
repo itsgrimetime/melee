@@ -13,6 +13,11 @@
 extern f32 it_804DCA50;
 extern f32 it_804DCA54;
 
+typedef struct {
+    u8 b1234567 : 7;
+    u8 b0 : 1;
+} ByteBits;
+
 /// #it_8028CFE0
 
 /// #it_8028D090
@@ -205,8 +210,13 @@ bool itRshell_UnkMotion6_Coll(Item_GObj* gobj)
     return false;
 }
 
-/// #it_3F14_Logic15_EnteredAir
-
+void it_3F14_Logic15_EnteredAir(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
+    ByteBits* bits = (ByteBits*) &M2C_FIELD(ip, u8*, 0xDCB);
+    bits->b0 = 1;
+    Item_80268E5C(gobj, 7, 2);
+}
 bool itRshell_UnkMotion7_Anim(Item_GObj* gobj)
 {
     return false;

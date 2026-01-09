@@ -3,6 +3,7 @@
 #include "it/inlines.h"
 #include "it/it_26B1.h"
 #include "it/it_2725.h"
+#include "it/item.h"
 
 /// #it_802CE710
 
@@ -41,11 +42,26 @@ bool itUnknown_UnkMotion2_Anim(Item_GObj* gobj)
     return false;
 }
 
-void itUnknown_UnkMotion2_Phys(Item_GObj* gobj) {}
+void efLib_PauseAll(HSD_GObj* gobj);
+void efLib_ResumeAll(HSD_GObj* gobj);
+
+void itUnknown_UnkMotion2_Phys(Item_GObj* gobj)
+{
+    s32 unused[2];
+    if (it_8027A09C(gobj) != 0) {
+        Item* ip;
+        it_80273454(gobj);
+        ip = gobj->user_data;
+        ip->x40_vel.y = ((f32*) ip->xC4_article_data->x4_specialAttributes)[2];
+        Item_80268E5C(gobj, 0, 2);
+        ip->entered_hitlag = efLib_PauseAll;
+        ip->exited_hitlag = efLib_ResumeAll;
+    }
+}
 
 bool itUnknown_UnkMotion2_Coll(Item_GObj* gobj)
 {
-    return false;
+    return it_8027A118(gobj, (HSD_GObjEvent) it_802CE7CC);
 }
 
 /// #it_802CED54

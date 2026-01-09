@@ -92,8 +92,13 @@ bool itLeadead_UnkMotion8_Anim(Item_GObj* gobj)
 
 /// #itLeadead_UnkMotion8_Coll
 
-/// #it_802E9A00
-
+void it_802E9A00(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
+    M2C_FIELD(ip, s32*, 0xE1C) = 0;
+    M2C_FIELD(ip, s32*, 0xE18) = 0;
+    Item_80268E5C(gobj, 9, ITEM_ANIM_UPDATE);
+}
 /// #itLeadead_UnkMotion9_Anim
 
 void itLeadead_UnkMotion9_Phys(Item_GObj* gobj) {}

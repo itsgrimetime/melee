@@ -1,10 +1,11 @@
 #include "itwstar.h"
 
-#include "it/it_26B1.h"
-#include "it/it_266F.h"
-#include "it/item.h"
+#include "ef/eflib.h"
 #include "it/inlines.h"
+#include "it/it_266F.h"
+#include "it/it_26B1.h"
 #include "it/it_2725.h"
+#include "it/item.h"
 
 /// #it_80294364
 
@@ -61,8 +62,11 @@ bool itWstar_UnkMotion3_Anim(Item_GObj* gobj)
     return false;
 }
 
-/// #it_3F14_Logic29_Dropped
-
+void it_3F14_Logic29_Dropped(Item_GObj* gobj)
+{
+    Item_80268E5C(gobj, 1, 6);
+    efLib_DestroyAll(gobj);
+}
 /// #it_802947CC
 
 /// #itWstar_UnkMotion5_Anim
