@@ -1,16 +1,21 @@
 #include "toy.h"
 
+#include "m2c_macros.h"
+
 #include "baselib/cobj.h"
 #include "baselib/controller.h"
 #include "baselib/displayfunc.h"
+#include "baselib/fog.h"
 #include "baselib/gobj.h"
 #include "baselib/gobjproc.h"
 #include "baselib/jobj.h"
+#include "baselib/lobj.h"
 #include "baselib/memory.h"
 #include "baselib/random.h"
 #include "baselib/state.h"
 #include "gm/gm_1601.h" // for gm_801677E8
 #include "gm/gm_16AE.h"
+#include "gm/gm_16F1.h" // for gm_80172C44
 #include "gm/gm_1A3F.h"
 #include "gm/gm_1A45.h"
 #include "gm/gmmain_lib.h"
@@ -151,7 +156,110 @@ done:
     return;
 }
 
-/// #Trophy_SetUnlockState
+void Trophy_SetUnlockState(enum_t trophyId, bool addValue)
+{
+    s32 newCount;
+    s32 byteOffset;
+    s16 idx;
+    s16 count;
+    Toy* toy = (Toy*) &un_804A26B8;
+    u16* table;
+    s32 newVal;
+    u16* ptr;
+    u16* statePtr;
+    u16 temp;
+
+    if (gm_8016B498() || (u8) gm_801A4310() == 0xC) {
+        table = toy->trophyTable;
+    } else {
+        table = gmMainLib_8015CC78();
+    }
+
+    idx = (s16) trophyId;
+    byteOffset = idx * 2;
+
+    if ((u8) * (u16*) ((u8*) table + byteOffset) == 0) {
+        if (gm_8016B498() || (u8) gm_801A4310() == 0xC) {
+            table = toy->trophyTable;
+        } else {
+            table = gmMainLib_8015CC78();
+        }
+        table = (u16*) ((u8*) table + byteOffset);
+        temp = *table;
+        temp ^= 0x8000;
+        *table = temp;
+
+        if (gm_8016B498() || (u8) gm_801A4310() == 0xC) {
+            newCount = toy->trophyCount + 1;
+        } else {
+            newCount = *gmMainLib_8015CC90() + 1;
+        }
+        if (gm_8016B498() || (u8) gm_801A4310() == 0xC) {
+            toy->trophyCount = (s16) newCount;
+        } else {
+            *gmMainLib_8015CC90() = (s16) newCount;
+        }
+    }
+
+    if (gm_8016B498() || (u8) gm_801A4310() == 0xC) {
+        table = toy->trophyTable;
+    } else {
+        table = gmMainLib_8015CC78();
+    }
+
+    if ((s32) (addValue + (u8) * (u16*) ((u8*) table + byteOffset)) <= 0xFF) {
+        if (gm_8016B498() || (u8) gm_801A4310() == 0xC) {
+            table = toy->trophyTable;
+        } else {
+            table = gmMainLib_8015CC78();
+        }
+        newVal = addValue + (u8) * (u16*) ((u8*) table + byteOffset);
+        if (gm_8016B498() || (u8) gm_801A4310() == 0xC) {
+            table = toy->trophyTable;
+        } else {
+            table = gmMainLib_8015CC78();
+        }
+        ptr = (u16*) ((u8*) table + byteOffset);
+        *ptr = newVal + (*ptr & 0xFF00);
+    } else {
+        if (gm_8016B498() || (u8) gm_801A4310() == 0xC) {
+            table = toy->trophyTable;
+        } else {
+            table = gmMainLib_8015CC78();
+        }
+        ptr = (u16*) ((u8*) table + byteOffset);
+        *ptr = (*ptr & 0xFF00) + 0xFF;
+    }
+
+    if (gm_8016B498() || (u8) gm_801A4310() == 0xC) {
+        statePtr = &toy->x19A;
+        *statePtr = toy->x19A | toy->x19C;
+    } else {
+        statePtr = gmMainLib_8015CC84();
+    }
+
+    if (!(*statePtr & 0x80)) {
+        if (gm_8016B498() || (u8) gm_801A4310() == 0xC) {
+            count = toy->trophyCount;
+        } else {
+            count = *gmMainLib_8015CC90();
+        }
+        if (count >= 0xFA) {
+            toy->x194 = 2;
+            un_80305918(7, 0, 0);
+        }
+    }
+
+    un_80304D30();
+
+    if ((s16) trophyId == 0xA5 && gm_80164430(0x14U) == 0) {
+        gm_80164504(0x14U);
+    }
+
+    if ((s32) un_803060BC((s32) (s16) trophyId, 6) == 1) {
+        gm_80172C44((s16) trophyId);
+    }
+}
 
 /// #un_80305918
 
@@ -295,8 +403,20 @@ after_lang_flag:
         return (float) us_ptr->x04;
     }
 }
-/// #un_803062BC
+s16 un_803062BC(s32 trophyId)
+{
+    s16* table = un_804D6EDC;
+    s32 i;
 
+    for (i = 0; i < 0x125; i++) {
+        if (trophyId == *table) {
+            break;
+        }
+        table++;
+    }
+
+    return (s16) i;
+}
 /// #un_803062EC
 
 /// #un_803063D4
@@ -307,14 +427,32 @@ after_lang_flag:
 
 /// #un_803067BC
 
-/// #un_803068E0
+void un_803068E0(HSD_GObj* gobj)
+{
+    HSD_CObj* cobj = M2C_FIELD(gobj, HSD_CObj**, 0x28);
 
-/// #un_80306930
-
+    if (HSD_CObjSetCurrent(cobj) != 0) {
+        HSD_GObj_80390ED0(gobj, 7);
+        HSD_CObjEndCurrent();
+        HSD_FogSet(NULL);
+    }
+}
+void un_80306930(void* arg)
+{
+    HSD_FogSet(M2C_FIELD(arg, HSD_Fog**, 0x28));
+}
 /// #un_80306954
 
-/// #un_80306A0C
+void un_80306A0C(void* arg0)
+{
+    HSD_Fog* fog = M2C_FIELD(arg0, HSD_Fog**, 0x28);
 
+    if (un_804D6E54 == 0) {
+        HSD_FogSet(NULL);
+    } else {
+        HSD_FogSet(fog);
+    }
+}
 /// #un_80306A48
 
 HSD_GObjProc* un_80306B18(HSD_GObj* gobj, s32 anim_frame, s32 val1, s32 val2)
@@ -360,7 +498,39 @@ void un_80306BB8(HSD_GObj* gobj)
     }
 }
 
-/// #un_80306C5C
+void un_80306C5C(void* arg0)
+{
+    s32 idx;
+    s32 offset;
+    void* base;
+    void* data;
+    u8* table;
+    void* lobj;
+    void* next;
+    void* unused1;
+    void* unused2;
+
+    idx = 0;
+    offset = idx * 0xC;
+    base = un_804D6ED4;
+    data = M2C_FIELD(base, void**, 0x4);
+    table = (u8*) base + offset;
+    lobj = M2C_FIELD(data, void**, 0x28);
+
+    while (lobj != NULL) {
+        HSD_LObjSetPosition(lobj, (Vec3*) (table + 0x1C));
+        HSD_LObjSetInterest(lobj, (Vec3*) (table + 0x7C));
+        table += 0xC;
+        if (lobj == NULL) {
+            next = NULL;
+        } else {
+            next = M2C_FIELD(lobj, void**, 0xC);
+        }
+        lobj = next;
+    }
+
+    HSD_LObjAnimAll(M2C_FIELD(arg0, void**, 0x28));
+}
 
 void Toy_RemoveUserData(void* ptr)
 {
@@ -446,12 +616,38 @@ void un_80307F64(s32 arg0, s32 arg1)
 
 /// #un_80308250
 
-/// #un_803082F8
+void un_803082F8(s16 idx)
+{
+    s32 trophyId = un_80308354(idx);
+    un_803063D4((s16) trophyId, 2, 0x128);
+}
+void un_80308328(s32 arg0)
+{
+    un_803063D4((s16) arg0, 2, 0x128);
+}
+s16 un_80308354(s16 idx)
+{
+    s32 i;
+    s16 target;
+    TrophyData* entry;
 
-/// #un_80308328
+    target = un_804D6EDC[idx];
+    entry = un_804D6EC4;
 
-/// #un_80308354
+    for (i = 0; i < 0x125; i++) {
+        if (target == entry->id) {
+            break;
+        }
+        entry++;
+    }
 
+    if (i == 0x125) {
+        OSReport(un_803FE474);
+        __assert(un_804D5A48, 0xC2A, un_804D5A50);
+    }
+
+    return target;
+}
 /// #un_803083D8
 
 /// #un_803084A0
@@ -479,14 +675,7 @@ void un_803102C4(s8 arg0)
     M2C_FIELD(un_804D6E6C, s8*, 4) = arg0;
 }
 
-void un_803102D0(void)
-{
-    if (un_804D6ECC == NULL) {
-        un_804D6ECC = lbArchive_LoadSymbols(str_TyDataf_dat, &un_804D6EA8,
-                                            str_tyModelFileTbl, &un_804D6EA4,
-                                            str_tyModelFileUsTbl, NULL);
-    }
-}
+/// #un_803102D0
 
 /// #un_80310324
 
@@ -590,7 +779,7 @@ void un_803114E8(void)
     un_804D6E98 = DevText_Create(1, 0x28, 0x28, 0xE, 9, un_804A2750);
 
     if (un_804D6E98 != NULL) {
-        struct HSD_GObj* gobj = DevText_GetGObj();
+        HSD_GObj* gobj = DevText_GetGObj();
         color = un_804DDE0C;
         DevText_Show(gobj, un_804D6E98);
         DevText_HideCursor(un_804D6E98);
@@ -619,7 +808,7 @@ void un_803114E8(void)
         HSD_GObjProc_8038FD54(*data, (void (*)(HSD_GObj*)) un_80310B48, 0);
         HSD_GObj_80390CD4(*data);
     } else {
-        OSReport(un_803FE7C0, un_804D6E98, un_804D6E98);
+        OSReport(un_803FE7C0);
     }
 }
 /// #un_80311680
@@ -813,63 +1002,52 @@ void un_8031234C(s32 arg0)
 {
     u16* saveData;
     u16* stateData;
-    Toy* toy = (Toy*) &un_804A26B8;
+    char* toy = (char*) un_804A26B8;
     u16* srcPtr;
     u16* dstPtr;
     s32 i;
-    s32 j;
-    s32 category;
     u16* ptr;
+    s32 j;
 
     saveData = gmMainLib_8015CC78();
     stateData = gmMainLib_8015CC84();
 
     if (arg0 != 0) {
-        /* Load from toy save */
+        s32 category;
         dstPtr = saveData;
-        srcPtr = (u16*) ((u8*) toy + 0x194);
-        i = 0x125;
-        do {
-            u16 flags = M2C_FIELD(srcPtr, u16*, 0xA);
+        srcPtr = (u16*) (toy + 0x194);
+        for (i = 0x125; i != 0; i--) {
+            u16 flags = srcPtr[5];
             if (flags & 0x8000) {
                 *dstPtr |= 0x8000;
             }
-            {
-                u16 temp = M2C_FIELD(srcPtr, u16*, 0xA);
-                srcPtr++;
-                *dstPtr = (u8) temp + (*dstPtr & 0xFF00);
-                dstPtr++;
-            }
-            i--;
-        } while (i != 0);
+            *dstPtr = (u8) srcPtr[5] + (*dstPtr & 0xFF00);
+            srcPtr++;
+            dstPtr++;
+        }
 
-        *stateData = toy->x19A;
+        *stateData = *(u16*) (toy + 0x19A);
 
-        category = 0;
-        do {
+        for (category = 0; category < 9; category++) {
             if ((u32) category > 1U && category != 8 && category != 3 &&
                 (*stateData & (1 << category)))
             {
                 ptr = saveData;
-                j = 0;
-                do {
+                for (j = 0; j < 0x125; j++) {
                     f32 result = un_803060BC(j, 6);
                     if ((f32) category == result) {
                         *ptr |= 0x4000;
                     }
-                    j++;
                     ptr++;
-                } while (j < 0x125);
+                }
             }
-            category++;
-        } while (category < 9);
+        }
 
-        *gmMainLib_8015CC90() = M2C_FIELD(toy, s16*, 0x3EC);
+        *gmMainLib_8015CC90() = *(s16*) (toy + 0x3EC);
     } else {
-        /* Save to toy save */
-        toy->x19A = *stateData;
-        M2C_FIELD(toy, u16*, 0x19C) = 0;
-        memcpy((u8*) toy + 0x19E, saveData, 0x24A);
-        M2C_FIELD(toy, s16*, 0x3EC) = *gmMainLib_8015CC90();
+        *(u16*) (toy + 0x19A) = *stateData;
+        *(u16*) (toy + 0x19C) = 0;
+        memcpy(toy + 0x19E, saveData, 0x24A);
+        *(s16*) (toy + 0x3EC) = *gmMainLib_8015CC90();
     }
 }

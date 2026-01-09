@@ -20,21 +20,21 @@
 /* 305EB4 */ UNK_RET un_80305EB4(UNK_PARAMS);
 /* 305FB8 */ UNK_RET un_80305FB8(UNK_PARAMS);
 /* 3060BC */ float un_803060BC(int, int);
-/* 3062BC */ s16 un_803062BC(s16);
+/* 3062BC */ s16 un_803062BC(s32 trophyId);
 /* 3062EC */ UNK_RET un_803062EC(UNK_PARAMS);
-/* 3063D4 */ UNK_RET un_803063D4(UNK_PARAMS);
+/* 3063D4 */ void un_803063D4(s16, s32, s32);
 /* 3064B8 */ s16 un_803064B8(s16, s8);
 /* 30663C */ UNK_RET un_8030663C(UNK_PARAMS);
 /* 3067BC */ void un_803067BC(s32, s32);
-/* 3068E0 */ UNK_RET un_803068E0(UNK_PARAMS);
-/* 306930 */ UNK_RET un_80306930(UNK_PARAMS);
+/* 3068E0 */ void un_803068E0(HSD_GObj* gobj);
+/* 306930 */ void un_80306930(void* arg);
 /* 306954 */ UNK_RET un_80306954(UNK_PARAMS);
-/* 306A0C */ UNK_RET un_80306A0C(UNK_PARAMS);
+/* 306A0C */ void un_80306A0C(void* arg0);
 /* 306A48 */ void un_80306A48(HSD_JObj*, s32, char*, s32, void*, s32);
 /* 306B18 */ HSD_GObjProc* un_80306B18(HSD_GObj* gobj, s32 anim_frame,
                                        s32 val1, s32 val2);
 /* 306BB8 */ void un_80306BB8(HSD_GObj* gobj);
-/* 306C5C */ UNK_RET un_80306C5C(UNK_PARAMS);
+/* 306C5C */ void un_80306C5C(void* arg0);
 /* 306CF4 */ void Toy_RemoveUserData(void* ptr);
 /* 306D14 */ void un_80306D14(void);
 /* 306D70 */ void un_80306D70(s32);
@@ -52,9 +52,9 @@
     un_8030813C(s16, enum MajorSceneKind); /// TODO :: fill out the struct that
                                            /// this uses/returns
 /* 308250 */ UNK_RET un_80308250(UNK_PARAMS);
-/* 3082F8 */ UNK_RET un_803082F8(UNK_PARAMS);
-/* 308328 */ UNK_RET un_80308328(UNK_PARAMS);
-/* 308354 */ UNK_RET un_80308354(UNK_PARAMS);
+/* 3082F8 */ void un_803082F8(s16 idx);
+/* 308328 */ void un_80308328(s32 arg0);
+/* 308354 */ s16 un_80308354(s16 idx);
 /* 3083D8 */ void un_803083D8(void*, s32);
 /* 3084A0 */ UNK_RET un_803084A0(UNK_PARAMS);
 /* 3087F4 */ UNK_RET un_803087F4(UNK_PARAMS);
@@ -83,6 +83,7 @@
 /* 3122D0 */ void un_803122D0_OnInit(void);
 /* 31234C */ void un_8031234C(s32);
 
+/* 4D6E54 */ extern s32 un_804D6E54;
 /* 4D6E6C */ extern void* un_804D6E6C;
 /* 4D6EF4 */ extern struct un_804D6EF4_t* un_804D6EF4;
 
@@ -90,6 +91,7 @@
 /* 4D6EDC */ extern s16* un_804D6EDC;
 /* 3FE8D0 */ extern char un_803FE8D0[];
 /* 3FE880 */ extern char un_803FE880[];
+/* 4D6ED4 */ extern void* un_804D6ED4;
 /* 4D6ED8 */ extern void* un_804D6ED8;
 /* 4D5A8C */ extern char un_804D5A8C[];
 /* 4DDE60 */ extern float un_804DDE60;
@@ -133,12 +135,9 @@
 /* 4D6EB4 */ extern s16* un_804D6EB4;
 /* 4DDCD0 */ extern f64 un_804DDCD0;
 
-/* un_803102D0 externs */
-/* 4D6ECC */ extern void* un_804D6ECC;
-/* 4D6EA8 */ extern void* un_804D6EA8;
-/* 4D6EA4 */ extern void* un_804D6EA4;
-/* 3FE770 */ extern char str_TyDataf_dat[];
-/* 3FE77C */ extern char str_tyModelFileTbl[];
-/* 3FE78C */ extern char str_tyModelFileUsTbl[];
+/* un_80308354 externs */
+/* 3FE474 */ extern char un_803FE474[];
+/* 4D5A48 */ extern char un_804D5A48[];
+/* 4D5A50 */ extern char un_804D5A50[];
 
 #endif
