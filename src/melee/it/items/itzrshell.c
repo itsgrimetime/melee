@@ -78,6 +78,11 @@ bool it_2725_Logic12_DmgReceived(Item_GObj* gobj)
     return it_2725_Logic11_DmgReceived(gobj);
 }
 
+bool it_2725_Logic12_Reflected(Item_GObj* gobj)
+{
+    return it_2725_Logic11_Reflected(gobj);
+}
+
 bool it_2725_Logic12_Clanked(Item_GObj* gobj)
 {
     return it_2725_Logic11_Clanked(gobj);
@@ -91,11 +96,6 @@ bool it_2725_Logic12_HitShield(Item_GObj* gobj)
 bool it_2725_Logic12_ShieldBounced(Item_GObj* gobj)
 {
     return it_2725_Logic11_ShieldBounced(gobj);
-}
-
-bool it_2725_Logic12_Reflected(Item_GObj* gobj)
-{
-    return it_2725_Logic11_Reflected(gobj);
 }
 
 void it_802E0468(Item_GObj* gobj, HSD_GObj* ref_gobj)
