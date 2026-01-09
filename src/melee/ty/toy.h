@@ -140,4 +140,12 @@
 /* 4D5A48 */ extern char un_804D5A48[];
 /* 4D5A50 */ extern char un_804D5A50[];
 
+/* un_803102D0 externs */
+/* 4D6ECC */ extern void* un_804D6ECC;
+/* 4D6EA8 */ extern void* un_804D6EA8;
+/* 4D6EA4 */ extern void* un_804D6EA4;
+/* 3FE878 */ extern char str_TyDataf_dat[];
+/* 3FE8C0 */ extern char str_tyModelFileTbl[];
+/* 3FE8CC */ extern char str_tyModelFileUsTbl[];
+
 #endif
