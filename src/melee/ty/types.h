@@ -57,6 +57,10 @@ struct Toy {
     /* +194 */ s32 x194;
     /* +198 */ char pad_198[0x19A - 0x198];
     /* +19A */ u16 x19A;
+    /* +19C */ u16 x19C;
+    /* +19E */ u16 trophyTable[0x125]; /* Trophy unlock states (0x24A bytes) */
+    /* +3E8 */ char pad_3E8[0x3EC - 0x3E8];
+    /* +3EC */ s16 trophyCount;
 };
 
 #endif
