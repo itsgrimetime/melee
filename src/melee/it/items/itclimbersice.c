@@ -4,10 +4,12 @@
 #include <platform.h>
 
 #include "it/forward.h"
-#include "it/item.h"
-#include "it/it_266F.h"
-#include "it/it_2725.h"
+
 #include "it/inlines.h"
+#include "it/it_266F.h"
+#include "it/it_26B1.h"
+#include "it/it_2725.h"
+#include "it/item.h"
 
 /* 2C23D4 */ static bool itClimbersblizzard_UnkMotion0_Coll(Item_GObj* gobj);
 
@@ -24,8 +26,15 @@ void it_802C17DC(Item_GObj* gobj)
 
 /// #it_802C1854
 
-/// #it_802C1950
-
+void it_802C1950(Item_GObj* gobj)
+{
+    f32 zero = it_804DD1D8;
+    Item* ip = M2C_FIELD(gobj, Item**, 0x2C);
+    M2C_FIELD(ip, f32*, 0x48) = zero;
+    M2C_FIELD(ip, f32*, 0x44) = zero;
+    M2C_FIELD(ip, f32*, 0x40) = zero;
+    Item_80268E5C(gobj, 0, 2);
+}
 /// #itClimbersice_UnkMotion0_Anim
 
 void itClimbersice_UnkMotion0_Phys(Item_GObj* gobj) {}
@@ -114,4 +123,11 @@ bool it_2725_Logic90_ShieldBounced(Item_GObj* gobj)
     return itColl_BounceOffShield(gobj);
 }
 
-/// #it_2725_Logic90_EvtUnk
+void it_2725_Logic90_EvtUnk(Item_GObj* gobj, Item_GObj* ref_gobj)
+{
+    Item* ip = gobj->user_data;
+    if (M2C_FIELD(ip, Item_GObj**, 0xDD4) == ref_gobj) {
+        M2C_FIELD(ip, Item_GObj**, 0xDD4) = NULL;
+    }
+    it_8026B894(gobj, ref_gobj);
+}

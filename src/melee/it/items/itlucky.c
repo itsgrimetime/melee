@@ -100,8 +100,15 @@ void it_802D56F0(Item_GObj* gobj, Item_GObj* ref_gobj)
 
 /// #it_802D582C
 
-/// #it_802D5884
-
+bool it_802D5884(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
+    ip->xD44_lifeTimer -= it_804DD50C;
+    if (ip->xD44_lifeTimer <= it_804DD500) {
+        return true;
+    }
+    return false;
+}
 void it_802D58BC(Item_GObj* gobj) {}
 
 bool it_802D58C0(Item_GObj* gobj)
@@ -115,8 +122,15 @@ void it_802D58EC(HSD_GObj* gobj)
     Item_80268E5C(gobj, 1, ITEM_ANIM_UPDATE);
 }
 
-/// #itLucky_UnkMotion3_Anim
-
+bool itLucky_UnkMotion3_Anim(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
+    ip->xD44_lifeTimer -= it_804DD50C;
+    if (ip->xD44_lifeTimer <= it_804DD500) {
+        return true;
+    }
+    return false;
+}
 void itLucky_UnkMotion3_Phys(Item_GObj* gobj)
 {
     Item* ip = GET_ITEM(gobj);
@@ -152,8 +166,15 @@ void it_2725_Logic44_EnteredAir(Item_GObj* gobj)
     Item_80268E5C(gobj, 4, ITEM_ANIM_UPDATE);
 }
 
-/// #it_802D5A2C
-
+bool it_802D5A2C(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
+    ip->xD44_lifeTimer -= it_804DD50C;
+    if (ip->xD44_lifeTimer <= it_804DD500) {
+        return true;
+    }
+    return false;
+}
 void it_802D5A64(Item_GObj* gobj) {}
 
 bool it_802D5A68(Item_GObj* gobj)

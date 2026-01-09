@@ -87,8 +87,15 @@ void it_802D6DDC(HSD_GObj* gobj)
     Item_80268E5C(gobj, 2, ITEM_UNK_0x1);
 }
 
-/// #itMaril_UnkMotion2_Anim
-
+bool itMaril_UnkMotion2_Anim(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
+    ip->xD44_lifeTimer -= it_804DD560;
+    if (ip->xD44_lifeTimer <= it_804DD564) {
+        return true;
+    }
+    return false;
+}
 void itMaril_UnkMotion2_Phys(Item_GObj* gobj)
 {
     Item* ip = GET_ITEM(gobj);
@@ -102,8 +109,15 @@ bool itMaril_UnkMotion2_Coll(Item_GObj* gobj)
     return false;
 }
 
-/// #itMaril_UnkMotion3_Anim
-
+bool itMaril_UnkMotion3_Anim(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
+    ip->xD44_lifeTimer -= it_804DD560;
+    if (ip->xD44_lifeTimer <= it_804DD564) {
+        return true;
+    }
+    return false;
+}
 void itMaril_UnkMotion3_Phys(Item_GObj* gobj)
 {
     Item* ip = GET_ITEM(gobj);

@@ -99,8 +99,12 @@ bool it_802EEED0(Item_GObj* item_gobj)
     return true;
 }
 
-/// #it_802EEED8
-
+bool it_802EEED8(Item_GObj* gobj)
+{
+    it_802725D4(gobj);
+    itColl_BounceOffVictim(gobj);
+    return false;
+}
 bool it_802EEF10(Item_GObj* gobj)
 {
     return it_80273030(gobj);
