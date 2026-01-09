@@ -112,8 +112,15 @@ void it_802881B4(Item_GObj* gobj)
     it_802881FC(gobj);
 }
 
-/// #it_802881FC
-
+void it_802881FC(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
+    PAD_STACK(8);
+    ip->x40_vel.x = M2C_FIELD(ip, f32*, 0xDE4);
+    ip->x40_vel.y = 0.0f;
+    it_8026B3A8(gobj);
+    Item_80268E5C(gobj, 5, 2);
+}
 /// #itTaru_UnkMotion5_Anim
 
 void itTaru_UnkMotion5_Phys(Item_GObj* gobj)

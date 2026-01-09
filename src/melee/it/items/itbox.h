@@ -9,7 +9,7 @@
 /* 2861CC */ void it_3F14_Logic1_Spawned(Item_GObj*);
 /* 286208 */ void it_3F14_Logic1_Destroyed(Item_GObj*);
 /* 286248 */ UNK_RET it_80286248(UNK_PARAMS);
-/* 286340 */ UNK_RET it_80286340(UNK_PARAMS);
+/* 286340 */ bool it_80286340(Item_GObj* gobj, s32 a, s32 b, s32 c, s32 d);
 /* 2863BC */ UNK_RET it_802863BC(UNK_PARAMS);
 /* 286480 */ void fn_80286480(Item_GObj*);
 /* 2864D8 */ bool itBox_UnkMotion0_Anim(Item_GObj* gobj);
@@ -45,11 +45,11 @@
 /* 28704C */ void itBox_UnkMotion5_Phys(Item_GObj* gobj);
 /* 287050 */ bool itBox_UnkMotion5_Coll(Item_GObj* gobj);
 /* 287084 */ void it_3F14_Logic1_EvtUnk(Item_GObj*, Item_GObj*);
-/* 2870A4 */ UNK_RET it_802870A4(UNK_PARAMS);
+/* 2870A4 */ void it_802870A4(Item_GObj* gobj);
 /* 287104 */ bool itBox_UnkMotion8_Anim(Item_GObj* gobj);
 /* 28710C */ void itBox_UnkMotion8_Phys(Item_GObj* gobj);
 /* 287334 */ bool itBox_UnkMotion8_Coll(Item_GObj* gobj);
-/* 28733C */ UNK_RET it_8028733C(UNK_PARAMS);
+/* 28733C */ void it_8028733C(Item_GObj* gobj);
 /* 3F5850 */ extern ItemStateTable it_803F5850[];
 
 #endif

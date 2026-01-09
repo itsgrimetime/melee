@@ -187,8 +187,14 @@ void it_3F14_Logic1_EvtUnk(Item_GObj* gobj, Item_GObj* ref_gobj)
     it_8026B894(gobj, ref_gobj);
 }
 
-/// #it_802870A4
-
+void it_802870A4(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
+    it_802762B0(ip);
+    it_8026B3A8(gobj);
+    Item_80268E5C(gobj, 8, ITEM_ANIM_UPDATE);
+    ip->on_accessory = it_8028733C;
+}
 bool itBox_UnkMotion8_Anim(Item_GObj* gobj)
 {
     return false;
