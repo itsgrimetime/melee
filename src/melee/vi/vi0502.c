@@ -152,13 +152,13 @@ void vi0502_RunFrame(HSD_GObj* gobj)
 
 void un_8031E444_OnEnter(void* arg)
 {
-    CharacterKind char_kind;
     u8* input = arg;
     HSD_GObj* gobj;
     HSD_CObj* cobj;
     HSD_Fog* fog;
     HSD_LObj* lobj;
     HSD_JObj* jobj;
+    CharacterKind char_kind;
     s32 i;
 
     lbAudioAx_800236DC();
