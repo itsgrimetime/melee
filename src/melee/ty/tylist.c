@@ -195,9 +195,9 @@ void un_80312834(char* buf, u32 num)
     }
 
     idx = num * 2;
-    *buf = lookup[idx];
-    *(buf + 1) = lookup[idx + 1];
-    *(buf + 2) = 0;
+    *buf++ = lookup[idx];
+    *buf++ = lookup[idx + 1];
+    *buf = 0;
 }
 
 /// #un_80312904
@@ -287,8 +287,10 @@ skip_dirty:
 
 next:
     i = i + 1;
-    ptr = (TyListArg*)((s8*)ptr + 4);
-    if (i < 3) goto loop;
+    ptr = (TyListArg*) ((s8*) ptr + 4);
+    if (i < 3) {
+        goto loop;
+    }
 
     un_80312904(arg, 0x63);
     un_80313464(arg);
