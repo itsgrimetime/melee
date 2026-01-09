@@ -36,6 +36,9 @@ char un_80400114[] = "ViWait0601_scene";
 
 static f32 un_804DE0A8;
 static f32 un_804DE0AC;
+static f32 un_804DE0B0;
+static f32 un_804DE0B4;
+static f32 un_804DE0B8;
 
 void vi_8031E6CC_OnFrame(void)
 {
@@ -76,30 +79,84 @@ void fn_8031E800(HSD_GObj* gobj)
     HSD_JObj* jobj;
     HSD_JObj* child;
     f32 scale;
+    char pad[8];
 
-    jobj = GET_JOBJ(gobj);
-    if (jobj != NULL) {
-        child = jobj->child;
-    } else {
+    jobj = gobj->hsd_obj;
+    if (jobj == NULL) {
         child = NULL;
+    } else {
+        child = jobj->child;
     }
     HSD_ASSERT(875, child);
 
     scale = un_804DE0A8 * child->scale.x;
-    HSD_JObjSetScaleX(child, scale);
-    HSD_JObjSetScaleY(child, scale);
-    HSD_JObjSetScaleZ(child, scale);
+
+    /* HSD_JObjSetScaleX inline */
+    HSD_ASSERT(776, child);
+    child->scale.x = scale;
+    if (!(child->flags & JOBJ_MTX_INDEP_SRT)) {
+        if (child != NULL) {
+            s32 result;
+            u32 flags;
+            HSD_ASSERT(564, child);
+            flags = child->flags;
+            result = 0;
+            if (!(flags & JOBJ_USER_DEF_MTX) && (flags & JOBJ_MTX_DIRTY)) {
+                result = 1;
+            }
+            if (!result) {
+                HSD_JObjSetMtxDirtySub(child);
+            }
+        }
+    }
+
+    /* HSD_JObjSetScaleY inline */
+    HSD_ASSERT(791, child);
+    child->scale.y = scale;
+    if (!(child->flags & JOBJ_MTX_INDEP_SRT)) {
+        if (child != NULL) {
+            s32 result;
+            u32 flags;
+            HSD_ASSERT(564, child);
+            flags = child->flags;
+            result = 0;
+            if (!(flags & JOBJ_USER_DEF_MTX) && (flags & JOBJ_MTX_DIRTY)) {
+                result = 1;
+            }
+            if (!result) {
+                HSD_JObjSetMtxDirtySub(child);
+            }
+        }
+    }
+
+    /* HSD_JObjSetScaleZ inline */
+    HSD_ASSERT(806, child);
+    child->scale.z = scale;
+    if (!(child->flags & JOBJ_MTX_INDEP_SRT)) {
+        if (child != NULL) {
+            s32 result;
+            u32 flags;
+            HSD_ASSERT(564, child);
+            flags = child->flags;
+            result = 0;
+            if (!(flags & JOBJ_USER_DEF_MTX) && (flags & JOBJ_MTX_DIRTY)) {
+                result = 1;
+            }
+            if (!result) {
+                HSD_JObjSetMtxDirtySub(child);
+            }
+        }
+    }
 }
 
 void un_8031E9B8(void)
 {
-    s32 i;
     HSD_JObj* child;
-    HSD_JObj* jobj;
     HSD_GObj* gobj;
+    HSD_JObj* jobj;
+    s32 i;
     char pad[8];
 
-    /* First model (index 0) */
     gobj = GObj_Create(0xE, 0xF, 0);
     jobj = HSD_JObjLoadJoint((*un_804D6FB0->models)->joint);
     HSD_GObjObject_80390A70(gobj, HSD_GObj_804D7849, jobj);
@@ -109,12 +166,10 @@ void un_8031E9B8(void)
     HSD_JObjAnimAll(jobj);
     HSD_GObjProc_8038FD54(gobj, vi_8031E6EC, 0x17);
 
-    /* Loop through additional models */
     i = 0;
     while (un_804D6FB0->models[i] != NULL) {
         if ((u32) (i - 1) <= 2) {
-            gobj = grCorneria_801E1BF0();
-            if (gobj->hsd_obj == NULL) {
+            if ((gobj = grCorneria_801E1BF0())->hsd_obj == NULL) {
                 child = NULL;
             } else {
                 child = ((HSD_JObj*) gobj->hsd_obj)->child;
@@ -137,11 +192,12 @@ void vi0601_RunFrame(HSD_GObj* gobj)
 {
     HSD_CObj* cobj;
 
-    cobj = GET_COBJ(gobj);
+    cobj = gobj->hsd_obj;
     HSD_CObjAnim(cobj);
 
-    if (537.0f == cobj->aobj->curr_frame || 559.0f == cobj->aobj->curr_frame ||
-        580.0f == cobj->aobj->curr_frame)
+    if (un_804DE0B0 == cobj->aobj->curr_frame ||
+        un_804DE0B4 == cobj->aobj->curr_frame ||
+        un_804DE0B8 == cobj->aobj->curr_frame)
     {
         vi_8031C9B4(0x23, 0);
     }
@@ -166,7 +222,8 @@ void un_8031EBBC_OnEnter(void* unused)
     lbArchive_LoadSymbols(un_80400108, &un_804D6FB0, un_80400114, NULL);
 
     gobj = GObj_Create(0x13, 0x14, 0);
-    cobj = lb_80013B14((HSD_CameraDescPerspective*)un_804D6FB0->cameras->desc);
+    cobj =
+        lb_80013B14((HSD_CameraDescPerspective*) un_804D6FB0->cameras->desc);
     HSD_GObjObject_80390A70(gobj, HSD_GObj_804D784B, cobj);
     GObj_SetupGXLinkMax(gobj, vi0601_CameraCallback, 2);
     HSD_CObjAddAnim(cobj, un_804D6FB0->cameras->anims[0]);

@@ -56,11 +56,12 @@ static f32 un_804DE0A0;
 static HSD_Archive* un_804D6F94;
 static HSD_GObj* kirby_gobj;
 
-void vi0502_8031E124(CharacterKind player_kind, s8 player_costume,
-                     s8 kirby_costume)
+void vi0502_8031E124(CharacterKind player_kind, int player_costume,
+                     int kirby_costume)
 {
     HSD_JObj* jobj;
     VecMtxPtr pmtx;
+    char pad[56];
 
     Camera_80028B9C(6);
     lb_8000FCDC();
@@ -150,13 +151,13 @@ void vi0502_RunFrame(HSD_GObj* gobj)
 
 void un_8031E444_OnEnter(void* arg)
 {
+    CharacterKind char_kind;
     u8* input = arg;
     HSD_GObj* gobj;
     HSD_CObj* cobj;
     HSD_Fog* fog;
     HSD_LObj* lobj;
     HSD_JObj* jobj;
-    CharacterKind char_kind;
     s32 i;
 
     lbAudioAx_800236DC();
@@ -201,5 +202,5 @@ void un_8031E444_OnEnter(void* arg)
         HSD_GObjProc_8038FD54(gobj, vi0502_8031E304, 0x17);
     }
 
-    vi0502_8031E124(input[0], input[1], input[3]);
+    vi0502_8031E124(input[0], input[1], input[2]);
 }
