@@ -103,7 +103,8 @@ void un_8031DE58_OnEnter(void* arg)
 
     char_index = input[0];
 
-    un_804D6F74 = lbArchive_LoadSymbols("ViIntro.dat", &un_804D6F70, "ScVi", NULL);
+    un_804D6F74 =
+        lbArchive_LoadSymbols("ViIntro.dat", &un_804D6F70, "ScVi", NULL);
     un_804D6F78 = lbArchive_LoadSymbols(viGetCharAnimByIndex(char_index), NULL);
 
     fog_gobj = GObj_Create(0xb, 3, 0);

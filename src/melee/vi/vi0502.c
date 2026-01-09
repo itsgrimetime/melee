@@ -57,12 +57,11 @@ static GXColor erase_colors_vi0502;
 static HSD_GObj* kirby_gobj;
 static ViCharaDesc* un_804D6FA8;
 
-void vi0502_8031E124(CharacterKind player_kind, int player_costume,
-                     int kirby_costume)
+void vi0502_8031E124(CharacterKind player_kind, s8 player_costume,
+                     s8 kirby_costume)
 {
     HSD_JObj* jobj;
     VecMtxPtr pmtx;
-    char pad[56];
 
     Camera_80028B9C(6);
     lb_8000FCDC();
@@ -158,7 +157,6 @@ void un_8031E444_OnEnter(void* arg)
     HSD_Fog* fog;
     HSD_LObj* lobj;
     HSD_JObj* jobj;
-    char* str_table = un_804000D0;
     CharacterKind char_kind;
     s32 i;
 
@@ -168,10 +166,10 @@ void un_8031E444_OnEnter(void* arg)
 
     char_kind = input[0];
 
-    un_804D6F9C = lbArchive_LoadSymbols(str_table + 0xC, &un_804D6F90,
-                                        str_table + 0x18, NULL);
+    un_804D6F9C = lbArchive_LoadSymbols(un_804000D0 + 0xC, &un_804D6F90,
+                                        un_804000D0 + 0x18, NULL);
     un_804D6F94 = lbArchive_LoadSymbols(viGetCharAnimByIndex(char_kind), NULL);
-    un_804D6F98 = lbArchive_LoadSymbols(str_table + 0x28, NULL);
+    un_804D6F98 = lbArchive_LoadSymbols(un_804000D0 + 0x28, NULL);
 
     gobj = GObj_Create(0xb, 3, 0);
     fog = HSD_FogLoadDesc(un_804D6F90->fogs->desc);
@@ -204,5 +202,5 @@ void un_8031E444_OnEnter(void* arg)
         HSD_GObjProc_8038FD54(gobj, vi0502_8031E304, 0x17);
     }
 
-    vi0502_8031E124(input[0], input[1], input[2]);
+    vi0502_8031E124(input[0], input[1], input[3]);
 }
