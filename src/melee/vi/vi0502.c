@@ -158,6 +158,7 @@ void un_8031E444_OnEnter(void* arg)
     HSD_Fog* fog;
     HSD_LObj* lobj;
     HSD_JObj* jobj;
+    char* str_table = un_804000D0;
     CharacterKind char_kind;
     s32 i;
 
@@ -167,10 +168,10 @@ void un_8031E444_OnEnter(void* arg)
 
     char_kind = input[0];
 
-    un_804D6F9C = lbArchive_LoadSymbols(un_804000D0 + 0xC, &un_804D6F90,
-                                        un_804000D0 + 0x18, NULL);
+    un_804D6F9C = lbArchive_LoadSymbols(str_table + 0xC, &un_804D6F90,
+                                        str_table + 0x18, NULL);
     un_804D6F94 = lbArchive_LoadSymbols(viGetCharAnimByIndex(char_kind), NULL);
-    un_804D6F98 = lbArchive_LoadSymbols(un_804000D0 + 0x28, NULL);
+    un_804D6F98 = lbArchive_LoadSymbols(str_table + 0x28, NULL);
 
     gobj = GObj_Create(0xb, 3, 0);
     fog = HSD_FogLoadDesc(un_804D6F90->fogs->desc);
