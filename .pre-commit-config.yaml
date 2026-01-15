@@ -12,4 +12,5 @@ repos:
     language: python
     pass_filenames: false
     always_run: true
-    description: Prevents fork-specific files from being committed to upstream PRs
+    stages: [pre-push]
+    description: Blocks pushing fork-specific files to doldecomp/melee upstream
