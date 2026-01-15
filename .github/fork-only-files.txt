@@ -8,11 +8,14 @@
 .claude/
 CLAUDE.md
 permuter_settings.toml
+docs/comparison-lukechampine-approach.md
+
+# Fork-specific tooling
+tools/melee-agent/
 tools/analyze_pr_feedback.py
 tools/fetch_pr_feedback.py
 tools/verify_client.py
-docs/comparison-lukechampine-approach.md
+tools/check-fork-files.py
 
 # This file itself
 .github/fork-only-files.txt
-.github/workflows/check-fork-files.yml
