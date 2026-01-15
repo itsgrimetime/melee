@@ -61,14 +61,6 @@ melee-agent complete mark <func> <slug> <pct>  # Record completion
 melee-agent stub check <func>         # Check if stub exists
 melee-agent stub add <func>           # Add missing stub marker
 
-# Worktree management (subdirectory-based isolation)
-melee-agent worktree list             # List subdirectory worktrees
-melee-agent worktree status lb        # Status for specific subdirectory
-melee-agent worktree lock lb          # Lock subdirectory for agent
-melee-agent worktree unlock lb        # Unlock subdirectory
-melee-agent worktree prune --force    # Clean up merged worktrees
-melee-agent worktree collect -s lb    # Collect commits from subdirectory into PR branch
-
 # Sync to production decomp.me
 melee-agent sync auth                 # Configure cf_clearance cookie
 melee-agent sync list --author <name> # List scratches to sync
@@ -103,21 +95,12 @@ DECOMP_AGENT_ID=agent-1                   # Optional: manual agent isolation
 ## Workflow
 
 1. **Find function**: `extract list` or user-specified
-2. **Claim it**: `claim add <func> --source-file <path>` (locks subdirectory worktree)
+2. **Claim it**: `claim add <func>`
 3. **Create scratch**: `extract get <func> --create-scratch`
 4. **Read source**: Check `melee/src/` for existing code + context
 5. **Iterate**: Write to `/tmp/decomp_<slug>.c`, `scratch compile <slug> -s /tmp/decomp_<slug>.c`
 6. **Finish at 95%+**: `workflow finish <func> <slug>` (commits + records in one step)
 7. **Check progress**: `state status` to see all tracked functions by category
-
-### Subdirectory Worktrees
-
-Each source subdirectory gets its own isolated worktree:
-- `melee-worktrees/dir-lb/` for `src/melee/lb/` files
-- `melee-worktrees/dir-ft-chara-ftFox/` for Fox character files
-- etc.
-
-This enables easy merges since commits to different subdirectories rarely conflict.
 
 ## Skills
 
@@ -137,37 +120,17 @@ When a session runs out of context and gets summarized, **CRITICAL state must be
 
 ### Must Preserve in Summary
 
-1. **Current worktree path** - e.g., `melee-worktrees/dir-ty/`
-2. **Current branch** - e.g., `subdirs/ty`
-3. **Active function being worked on** - e.g., `un_803083D8`
-4. **Active scratch slug** - e.g., `xYz12`
-5. **Module/subdirectory** - e.g., `ty`
+1. **Active function being worked on** - e.g., `un_803083D8`
+2. **Active scratch slug** - e.g., `xYz12`
+3. **Module/subdirectory** - e.g., `ty`
 
 ### After Context Reset
 
-Immediately after resuming from a summary, verify your location:
+Immediately after resuming from a summary, check your active claims:
 
 ```bash
-# Check which worktree you're in
-pwd
-git branch --show-current
-
-# If not in the expected worktree, navigate there
-cd /Users/mike/code/melee-decomp/melee-worktrees/dir-<module>/
-```
-
-**Common mistake**: After context reset, agents check `git branch` from the project root (`melee-decomp/`) instead of their worktree, see the wrong branch, and start working in the wrong location.
-
-### Worktree State Recovery
-
-If you've lost track of your worktree:
-
-```bash
-# List all worktrees and their branches
-melee-agent worktree list
-
-# Check what functions were recently committed where
-melee-agent state status --category committed
+melee-agent claim list                     # Shows your active claims
+melee-agent state status --category committed  # Check what functions were recently committed
 ```
 
 ## Notes

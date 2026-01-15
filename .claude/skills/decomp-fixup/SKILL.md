@@ -36,7 +36,7 @@ melee-agent state status <function_name>
 ### Step 1: Run the Build
 
 ```bash
-cd <worktree> && python configure.py && ninja
+cd melee && python configure.py && ninja
 ```
 
 The build requires function prototypes by default (same as CI). Common error types:
@@ -68,8 +68,8 @@ Example paths:
 When you change a function's signature, find and fix all callers:
 
 ```bash
-grep -r "function_name" <worktree>/src/melee/
-grep -r "function_name" <worktree>/include/melee/
+grep -r "function_name" melee/src/melee/
+grep -r "function_name" melee/include/melee/
 ```
 
 ## Common Fixes
@@ -167,18 +167,18 @@ float x1898;
 
 ```bash
 # 1. Check build error
-cd <worktree> && ninja 2>&1 | head -50
+cd melee && ninja 2>&1 | head -50
 
 # 2. Find header location
-grep -r "function_name" <worktree>/include/
+grep -r "function_name" melee/include/
 
 # 3. Find implementation
-grep -r "function_name" <worktree>/src/melee/
+grep -r "function_name" melee/src/melee/
 
 # 4. Compare signatures and fix header
 
 # 5. Find and fix callers if signature changed
-grep -r "function_name(" <worktree>/src/melee/
+grep -r "function_name(" melee/src/melee/
 
 # 6. Rebuild and verify
 ninja
@@ -188,7 +188,7 @@ ninja
 
 ```bash
 # 1. Get full error list
-cd <worktree> && python configure.py && ninja 2>&1 | tee build_errors.txt
+cd melee && python configure.py && ninja 2>&1 | tee build_errors.txt
 
 # 2. Categorize errors
 grep "conflicting types" build_errors.txt
@@ -204,9 +204,9 @@ After fixing build issues:
 
 ```bash
 # Verify build passes
-cd <worktree> && python configure.py && ninja
+cd melee && python configure.py && ninja
 
-# Commit the fix (in the worktree)
+# Commit the fix
 git add -A
 git commit -m "Fix build: update <function> signature in header"
 ```
@@ -228,7 +228,7 @@ git commit -m "Fix build: update <function> signature in header"
 
 1. **Fixing implementation instead of header** - If match is 100%, don't touch the .c file
 2. **Forgetting callers** - One signature change can break many files
-3. **Wrong worktree** - Make sure you're in the right subdirectory worktree
+3. **Wrong directory** - Make sure you're working in the melee repo
 4. **Partial fixes** - Don't commit until ALL errors are resolved
 5. **Changing matched code** - Only fix headers/callers, not the matched implementation
 
@@ -258,6 +258,6 @@ Common types in Melee:
 |-------|----------|
 | Can't find header | Check `include/melee/<module>/forward.h` |
 | Multiple declarations | Search all `.h` files, update all of them |
-| Caller in different worktree | Note the file, fix when you work on that subdirectory |
+| Caller in different file | Note the file and fix it along with your current changes |
 | Circular dependency | May need forward declaration |
 | Build still fails after fix | Run `ninja -t clean && ninja` for full rebuild |
