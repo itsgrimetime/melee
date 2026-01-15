@@ -101,7 +101,7 @@ melee-agent scratch decompile <slug> -o /tmp/f.c  # Save to file
 melee-agent scratch decompile <slug> --no-context # Skip context (faster but less accurate)
 ```
 
-Then read the source file in `melee/src/` for context. Look for:
+Then read the source file in `src/melee/` for context. Look for:
 - Function signature and local struct definitions (must include these!)
 - Nearby functions for coding patterns
 
@@ -458,7 +458,7 @@ melee-agent extract list --min-match 0 --max-match 0.50 --sort score --show-scor
 
 # Claim the function (source file auto-detected)
 melee-agent claim add lbColl_80008440
-# → Auto-detected source file: melee/lb/lbcollision.c
+# → Auto-detected source file: src/melee/lb/lbcollision.c
 # → Claimed: lbColl_80008440
 # → Subdirectory: lb
 

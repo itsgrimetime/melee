@@ -36,7 +36,7 @@ melee-agent state status <function_name>
 ### Step 1: Run the Build
 
 ```bash
-cd melee && python configure.py && ninja
+python configure.py && ninja
 ```
 
 The build requires function prototypes by default (same as CI). Common error types:
@@ -54,22 +54,22 @@ The build requires function prototypes by default (same as CI). Common error typ
 
 Function headers are typically in:
 ```
-melee/include/melee/<module>/forward.h   # Forward declarations
-melee/include/melee/<module>/<file>.h    # Full declarations
+include/melee/<module>/forward.h   # Forward declarations
+include/melee/<module>/<file>.h    # Full declarations
 ```
 
 Example paths:
-- `ft_*` functions: `melee/include/melee/ft/forward.h` or `melee/include/melee/ft/ftcommon.h`
-- `lb*` functions: `melee/include/melee/lb/forward.h`
-- `gr*` functions: `melee/include/melee/gr/forward.h`
+- `ft_*` functions: `include/melee/ft/forward.h` or `include/melee/ft/ftcommon.h`
+- `lb*` functions: `include/melee/lb/forward.h`
+- `gr*` functions: `include/melee/gr/forward.h`
 
 ### Step 3: Find Callers
 
 When you change a function's signature, find and fix all callers:
 
 ```bash
-grep -r "function_name" melee/src/melee/
-grep -r "function_name" melee/include/melee/
+grep -r "function_name" src/melee/
+grep -r "function_name" include/melee/
 ```
 
 ## Common Fixes
@@ -167,18 +167,18 @@ float x1898;
 
 ```bash
 # 1. Check build error
-cd melee && ninja 2>&1 | head -50
+ninja 2>&1 | head -50
 
 # 2. Find header location
-grep -r "function_name" melee/include/
+grep -r "function_name" include/
 
 # 3. Find implementation
-grep -r "function_name" melee/src/melee/
+grep -r "function_name" src/melee/
 
 # 4. Compare signatures and fix header
 
 # 5. Find and fix callers if signature changed
-grep -r "function_name(" melee/src/melee/
+grep -r "function_name(" src/melee/
 
 # 6. Rebuild and verify
 ninja
@@ -188,7 +188,7 @@ ninja
 
 ```bash
 # 1. Get full error list
-cd melee && python configure.py && ninja 2>&1 | tee build_errors.txt
+python configure.py && ninja 2>&1 | tee build_errors.txt
 
 # 2. Categorize errors
 grep "conflicting types" build_errors.txt
@@ -204,7 +204,7 @@ After fixing build issues:
 
 ```bash
 # Verify build passes
-cd melee && python configure.py && ninja
+python configure.py && ninja
 
 # Commit the fix
 git add -A
