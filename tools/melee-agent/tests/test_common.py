@@ -2,86 +2,14 @@
 
 These tests focus on behavior rather than implementation details,
 making them resilient to refactoring. They test:
-1. Path parsing and subdirectory key generation
-2. PR URL/number parsing
-3. Function categorization logic
-4. Context file resolution
-5. Compiler detection
-6. Melee root resolution
+1. PR URL/number parsing
+2. Function categorization logic
+3. Context file resolution
+4. Compiler detection
 """
 
 import pytest
 from pathlib import Path
-
-
-class TestSubdirectoryKeyParsing:
-    """Tests for get_subdirectory_key - maps file paths to worktree keys.
-
-    This is critical for the worktree isolation system. The function must
-    handle various path formats that might come from different sources.
-    """
-
-    @pytest.fixture
-    def get_subdirectory_key(self):
-        from src.cli._common import get_subdirectory_key
-        return get_subdirectory_key
-
-    # Character files get their own worktree
-    @pytest.mark.parametrize("path,expected", [
-        ("ft/chara/ftFox/ftFx_SpecialHi.c", "ft-chara-ftFox"),
-        ("ft/chara/ftMario/ftMr_Attack.c", "ft-chara-ftMario"),
-        ("ft/chara/ftCommon/ftCo_Attack100.c", "ft-chara-ftCommon"),
-    ])
-    def test_character_files_get_own_worktree(self, get_subdirectory_key, path, expected):
-        """Each character directory under ft/chara/ gets its own worktree."""
-        assert get_subdirectory_key(path) == expected
-
-    # Top-level modules use module name as key
-    @pytest.mark.parametrize("path,expected", [
-        ("lb/lbcollision.c", "lb"),
-        ("gr/grbigblue.c", "gr"),
-        ("it/item.c", "it"),
-        ("gm/gmmain.c", "gm"),
-        ("cm/camera.c", "cm"),
-    ])
-    def test_toplevel_modules(self, get_subdirectory_key, path, expected):
-        """Top-level module files use the module directory as key."""
-        assert get_subdirectory_key(path) == expected
-
-    # Items get separate worktree from main it/
-    def test_items_subdirectory_separate(self, get_subdirectory_key):
-        """it/items/ is separate from it/ to isolate item-specific work."""
-        assert get_subdirectory_key("it/items/itkinoko.c") == "it-items"
-        assert get_subdirectory_key("it/item.c") == "it"
-
-    # Various path prefix formats should all work
-    @pytest.mark.parametrize("path", [
-        "ft/chara/ftFox/ftFx_SpecialHi.c",           # relative to src/melee/
-        "melee/ft/chara/ftFox/ftFx_SpecialHi.c",     # melee repo relative
-        "src/melee/ft/chara/ftFox/ftFx_SpecialHi.c", # src-prefixed
-        "melee/src/melee/ft/chara/ftFox/ftFx_SpecialHi.c",  # full project path
-    ])
-    def test_handles_various_path_formats(self, get_subdirectory_key, path):
-        """All path formats should normalize to the same key."""
-        assert get_subdirectory_key(path) == "ft-chara-ftFox"
-
-    def test_root_level_files(self, get_subdirectory_key):
-        """Files at root level should return 'root'."""
-        assert get_subdirectory_key("main.c") == "root"
-
-
-class TestWorktreeNaming:
-    """Tests for worktree path generation."""
-
-    @pytest.fixture
-    def get_worktree_name(self):
-        from src.cli._common import get_worktree_name_for_subdirectory
-        return get_worktree_name_for_subdirectory
-
-    def test_worktree_name_format(self, get_worktree_name):
-        """Worktree names should have 'dir-' prefix."""
-        assert get_worktree_name("lb") == "dir-lb"
-        assert get_worktree_name("ft-chara-ftFox") == "dir-ft-chara-ftFox"
 
 
 class TestPRInfoExtraction:
@@ -257,9 +185,8 @@ class TestContextFileResolution:
     """Tests for get_context_file - finds the right .ctx file for a source.
 
     The context file lookup has a fallback chain:
-    1. Per-file .ctx in worktree build dir
-    2. Per-file .ctx in main melee build dir
-    3. Legacy consolidated ctx.c
+    1. Per-file .ctx in build dir
+    2. Legacy consolidated ctx.c
     """
 
     @pytest.fixture
@@ -405,141 +332,3 @@ build build/GALE01/src/melee/lb/lbcollision.o: mwcc_sjis
         result2 = get_compiler("src/melee/lb/lbcollision.c", melee_root)
 
         assert result1 == result2
-
-
-class TestMeleeRootResolution:
-    """Tests for resolve_melee_root - finds the right melee directory.
-
-    This is critical for worktree isolation - commands must operate
-    in the correct worktree based on the file being modified.
-    """
-
-    @pytest.fixture
-    def resolve_melee_root(self):
-        from src.cli._common import resolve_melee_root
-        return resolve_melee_root
-
-    @pytest.fixture
-    def default_melee_root(self):
-        from src.cli._common import DEFAULT_MELEE_ROOT
-        return DEFAULT_MELEE_ROOT
-
-    def test_explicit_path_returned_as_is(self, resolve_melee_root, tmp_path):
-        """Explicitly provided melee_root should be returned unchanged."""
-        explicit_path = tmp_path / "my_melee"
-
-        result = resolve_melee_root(explicit_path)
-
-        assert result == explicit_path
-
-    def test_none_falls_back_to_default(self, resolve_melee_root, default_melee_root, monkeypatch):
-        """None melee_root should fall back to default."""
-        # Ensure we're not in a worktree
-        monkeypatch.chdir("/tmp")
-
-        result = resolve_melee_root(None)
-
-        assert result == default_melee_root
-
-    def test_target_file_triggers_worktree_lookup(self, resolve_melee_root, monkeypatch, tmp_path):
-        """Providing target_file should use subdirectory worktree."""
-        # This test verifies the behavior exists, even if we can't fully test
-        # the worktree creation without more setup
-        monkeypatch.chdir("/tmp")
-
-        # When target_file is provided, it should try to find/create a worktree
-        # The exact behavior depends on get_worktree_for_file which has side effects
-        # so we just verify the function accepts the parameter
-        try:
-            result = resolve_melee_root(None, target_file="melee/lb/lbcollision.c")
-            # If it succeeds, result should be a Path
-            assert isinstance(result, Path)
-        except Exception:
-            # If it fails (no git setup), that's expected in test environment
-            pass
-
-
-class TestSourceFileFromClaim:
-    """Tests for get_source_file_from_claim - looks up claimed source files.
-
-    When committing, we need to know which source file a function belongs to
-    so we can use the correct subdirectory worktree.
-    """
-
-    @pytest.fixture
-    def get_source_file_from_claim(self):
-        from src.cli._common import get_source_file_from_claim
-        return get_source_file_from_claim
-
-    def test_returns_none_when_no_claims_file(self, get_source_file_from_claim, tmp_path, monkeypatch):
-        """Should return None if claims file doesn't exist."""
-        # Ensure claims file doesn't exist
-        import os
-        if os.path.exists("/tmp/decomp_claims.json"):
-            os.remove("/tmp/decomp_claims.json")
-
-        result = get_source_file_from_claim("some_func")
-
-        assert result is None
-
-    def test_returns_source_file_for_claimed_function(self, get_source_file_from_claim, tmp_path):
-        """Should return source file from valid claim."""
-        import json
-        import time
-
-        claims = {
-            "my_func": {
-                "source_file": "melee/lb/lbcollision.c",
-                "timestamp": time.time(),  # Fresh claim
-            }
-        }
-
-        claims_file = Path("/tmp/decomp_claims.json")
-        claims_file.write_text(json.dumps(claims))
-
-        try:
-            result = get_source_file_from_claim("my_func")
-            assert result == "melee/lb/lbcollision.c"
-        finally:
-            claims_file.unlink(missing_ok=True)
-
-    def test_returns_none_for_expired_claim(self, get_source_file_from_claim):
-        """Should return None if claim has expired."""
-        import json
-
-        claims = {
-            "old_func": {
-                "source_file": "melee/lb/lbcollision.c",
-                "timestamp": 0,  # Very old timestamp
-            }
-        }
-
-        claims_file = Path("/tmp/decomp_claims.json")
-        claims_file.write_text(json.dumps(claims))
-
-        try:
-            result = get_source_file_from_claim("old_func")
-            assert result is None  # Expired
-        finally:
-            claims_file.unlink(missing_ok=True)
-
-    def test_returns_none_for_unclaimed_function(self, get_source_file_from_claim):
-        """Should return None if function isn't in claims."""
-        import json
-        import time
-
-        claims = {
-            "other_func": {
-                "source_file": "melee/ft/fighter.c",
-                "timestamp": time.time(),
-            }
-        }
-
-        claims_file = Path("/tmp/decomp_claims.json")
-        claims_file.write_text(json.dumps(claims))
-
-        try:
-            result = get_source_file_from_claim("not_claimed_func")
-            assert result is None
-        finally:
-            claims_file.unlink(missing_ok=True)

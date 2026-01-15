@@ -32,7 +32,6 @@ from .audit import audit_app
 from .hook import hook_app
 from .struct import struct_app
 from .stub import stub_app
-from .worktree import worktree_app
 from .workflow import workflow_app
 from .state import state_app
 from .analytics import analytics_app
@@ -64,7 +63,6 @@ app.add_typer(audit_app, name="audit")
 app.add_typer(hook_app, name="hook")
 app.add_typer(struct_app, name="struct")
 app.add_typer(stub_app, name="stub")
-app.add_typer(worktree_app, name="worktree")
 app.add_typer(workflow_app, name="workflow")
 app.add_typer(state_app, name="state")
 app.add_typer(analytics_app, name="analytics")
