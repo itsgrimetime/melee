@@ -127,7 +127,7 @@ dbg = DolphinDebugger()
 dbg.connect()
 
 # Load symbols (31k+ from decomp)
-dbg.load_symbols(Path("melee/config/GALE01/symbols.txt"))
+dbg.load_symbols(Path("config/GALE01/symbols.txt"))
 
 # Memory operations
 game_id = dbg.read_bytes(0x80000000, 6)  # b'GALE01'

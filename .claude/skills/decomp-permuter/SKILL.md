@@ -25,27 +25,21 @@ The decomp-permuter is located at `~/code/decomp-permuter`.
 
 ## Quick Start (import.py)
 
-The melee-decomp project has `permuter_settings.toml` in the root directory. Copy it to melee before using import.py:
+The project has `permuter_settings.toml` in the root directory.
 
 ```bash
-# Copy permuter settings to melee (required before import.py)
-cp ~/code/melee-decomp/permuter_settings.toml ~/code/melee-decomp/melee/
-
 cd ~/code/decomp-permuter
 
 # Import with explicit assembly file and function name
 ./import.py \
-  ~/code/melee-decomp/melee/src/melee/path/to/file.c \
-  ~/code/melee-decomp/melee/build/GALE01/asm/melee/path/to/file.s \
+  /path/to/melee/src/melee/path/to/file.c \
+  /path/to/melee/build/GALE01/asm/melee/path/to/file.s \
   --function <func_name> \
   --no-prune  # Avoid pycparser round-trip issues
 
-# Run the permuter
-cd ~/code/melee-decomp/melee
+# Run the permuter from the melee repo root
+cd /path/to/melee
 ~/code/decomp-permuter/permuter.py nonmatchings/<func_name> -j4
-
-# Clean up when done (don't commit permuter_settings.toml to melee)
-rm ~/code/melee-decomp/melee/permuter_settings.toml
 ```
 
 **IMPORTANT:** The `--no-prune` flag is recommended to avoid pycparser creating duplicate struct definitions.
@@ -66,8 +60,8 @@ A minimal 100-line base.c is faster and more reliable.
 ### Step 1: Create the function directory
 
 ```bash
-mkdir -p ~/code/melee-decomp/melee/nonmatchings/<func_name>
-cd ~/code/melee-decomp/melee/nonmatchings/<func_name>
+mkdir -p nonmatchings/<func_name>
+cd nonmatchings/<func_name>
 ```
 
 ### Step 2: Create settings.toml
@@ -91,7 +85,8 @@ cat > compile.sh << 'COMPILE_EOF'
 #!/usr/bin/env bash
 INPUT="$(realpath "$1")"
 OUTPUT="$(realpath "$3")"
-cd /Users/mike/code/melee-decomp/melee
+MELEE_ROOT="$(git rev-parse --show-toplevel)"
+cd "$MELEE_ROOT"
 wine build/compilers/GC/1.2.5n/mwcceppc.exe \
     -Cpp_exceptions off -proc gekko -fp hard -fp_contract on -O4,p \
     -enum int -nodefaults -inline auto -c \
@@ -158,10 +153,10 @@ void <func_name>(HSD_GObj* gobj)
 Copy the target assembly from the build output, adding the macros.inc prelude:
 
 ```bash
-ASM_FILE=~/code/melee-decomp/melee/build/GALE01/asm/melee/path/to/file.s
+ASM_FILE=build/GALE01/asm/melee/path/to/file.s
 
 # Copy the macros prelude
-cat ~/code/melee-decomp/melee/build/GALE01/include/macros.inc > target.s
+cat build/GALE01/include/macros.inc > target.s
 
 # Extract just the target function (.fn ... .endfn block)
 # Find the function and copy from .fn to .endfn
@@ -175,7 +170,7 @@ sed -n '/\.fn <func_name>/,/\.endfn <func_name>/p' "$ASM_FILE" >> target.s
 ```bash
 /opt/devkitpro/devkitPPC/bin/powerpc-eabi-as \
   -mgekko \
-  -I ~/code/melee-decomp/melee/build/GALE01/include \
+  -I ../../build/GALE01/include \
   target.s \
   -o target.o
 ```
@@ -185,8 +180,7 @@ sed -n '/\.fn <func_name>/,/\.endfn <func_name>/p' "$ASM_FILE" >> target.s
 ## Running the Permuter
 
 ```bash
-# Run from the melee directory (where nonmatchings/ was created)
-cd ~/code/melee-decomp/melee
+# Run from the repo root (where nonmatchings/ was created)
 
 # Basic run with 4 threads (recommended)
 ~/code/decomp-permuter/permuter.py nonmatchings/<func_name> -j4
@@ -312,7 +306,7 @@ After the permuter finds improvements:
 
 ```bash
 # 1. Check the best result
-cat ~/code/melee-decomp/melee/nonmatchings/<func_name>/output-*/diff.diff | head -30
+cat nonmatchings/<func_name>/output-*/diff.diff | head -30
 
 # 2. Copy the improved source, extracting just the function
 # The source.c contains full type defs - extract only the function body
@@ -334,7 +328,7 @@ melee-agent workflow finish <func_name> <slug>
 After finishing, clean up the nonmatchings directory:
 
 ```bash
-rm -rf ~/code/melee-decomp/melee/nonmatchings/<func_name>
+rm -rf nonmatchings/<func_name>
 ```
 
 ## Reference
@@ -343,4 +337,4 @@ rm -rf ~/code/melee-decomp/melee/nonmatchings/<func_name>
 - Documentation: `~/code/decomp-permuter/README.md`
 - Manual setup: `~/code/decomp-permuter/USAGE.md`
 - Default weights: `~/code/decomp-permuter/default_weights.toml`
-- Melee permuter settings: `~/code/melee-decomp/permuter_settings.toml`
+- Melee permuter settings: `permuter_settings.toml` (in repo root)
