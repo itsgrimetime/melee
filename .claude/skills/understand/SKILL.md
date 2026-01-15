@@ -33,7 +33,6 @@ This skill supports three target types:
 
 **Key points:**
 - Source file is **auto-detected** when you claim a function
-- Work in the `melee/` directory
 - Claims prevent conflicts with other agents
 
 ## Workflow
@@ -49,7 +48,7 @@ melee-agent claim add <func_name>
 **For files/modules:** Claim any function in the file:
 ```bash
 # Find a function in the target file
-grep "^void\|^s32" melee/src/melee/<module>/<file>.c | head -1
+grep "^void\|^s32" src/melee/<module>/<file>.c | head -1
 melee-agent claim add <any_func_in_file>
 ```
 
@@ -68,7 +67,7 @@ melee-agent extract get <func_name>
 melee-agent scratch get <slug>
 ```
 
-**For files:** Read from `melee/src/melee/<module>/`.
+**For files:** Read from `src/melee/<module>/`.
 
 **For structs:**
 ```bash
@@ -83,7 +82,7 @@ melee-agent struct offset 0x50
 
 **Find callers** (who calls this function?):
 ```bash
-grep -rn "func_name(" melee/src/melee/
+grep -rn "func_name(" src/melee/
 ```
 
 **Find callees** (what does this function call?):
@@ -91,8 +90,8 @@ Read the function body and note all function calls.
 
 **Find struct usages**:
 ```bash
-grep -rn "StructName" melee/src/melee/
-grep -rn "->field_name" melee/src/melee/
+grep -rn "StructName" src/melee/
+grep -rn "->field_name" src/melee/
 ```
 
 ### Step 3: Analyze Patterns
@@ -142,13 +141,11 @@ Look up Melee game information to aid naming:
 
 ### Step 7: Apply Changes
 
-Work in the `melee/` directory.
-
-**Source files** (`melee/src/melee/<module>/*.c`):
+**Source files** (`src/melee/<module>/*.c`):
 - Rename functions, variables, parameters
 - Add documentation comments
 
-**Header files** (`melee/include/melee/<module>/*.h` or local `types.h`):
+**Header files** (`include/melee/<module>/*.h` or local `types.h`):
 - Update function declarations
 - Rename struct fields
 - Add field documentation
@@ -175,7 +172,7 @@ struct FighterData {
 
 After making changes, ensure the build still works:
 ```bash
-cd melee && ninja
+ninja
 ```
 
 If renaming causes issues, update all references before committing.
@@ -198,7 +195,6 @@ This review step catches assumptions before they become part of the codebase.
 
 **Commit your documentation changes:**
 ```bash
-cd melee
 git add -A
 git commit -m "docs(<module>): document <func_name> - <brief description>"
 ```
@@ -547,11 +543,11 @@ melee-agent extract get ftCo_8007E3B0
 # Shows function metadata, any existing scratch
 
 # Step 3: Read the function
-cat melee/src/melee/ft/chara/ftCommon/ftCo_Guard.c
+cat src/melee/ft/chara/ftCommon/ftCo_Guard.c
 # See function accesses shield-related fields
 
 # Step 4: Find callers
-grep -rn "ftCo_8007E3B0" melee/src/melee/
+grep -rn "ftCo_8007E3B0" src/melee/
 # Found: Called during shield damage calculation
 
 # Step 5: Research game mechanics
@@ -561,12 +557,12 @@ grep -rn "ftCo_8007E3B0" melee/src/melee/
 # ftCo_8007E3B0 → ftCo_Shield_CalcDamage
 
 # Step 7: Apply changes
-# - Edit melee/src/melee/ft/chara/ftCommon/ftCo_Guard.c
+# - Edit src/melee/ft/chara/ftCommon/ftCo_Guard.c
 # - Update header declaration
 # - Add @brief documentation
 
 # Step 8: Verify build
-cd melee && ninja
+ninja
 # Build passes!
 
 # Step 9: Commit and record

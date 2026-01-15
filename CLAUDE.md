@@ -5,20 +5,14 @@ Reverse-engineering Super Smash Bros. Melee (GameCube) to matching C code using 
 ## Architecture
 
 ```
-melee-decomp/
-├── melee/                    # Symlink to ~/code/melee (main decompilation repo)
-│   ├── src/melee/            # Decompiled C source files
-│   ├── config/GALE01/        # Build config
-│   └── tools/                # Build tools (ninja, dtk)
-├── src/
-│   ├── cli.py                # Main CLI (melee-agent)
-│   ├── client/               # decomp.me API client
-│   ├── commit/               # Commit workflow (apply matches to repo)
-│   └── extractor/            # Extract functions from melee repo
-├── decomp-me-mcp/            # MCP server for Claude integration
-├── decomp.me/                # Self-hosted decomp.me (submodule)
-├── docker/                   # Docker setup for local instance
-└── config/                   # Project config (slug maps, etc.)
+melee/
+├── src/melee/              # Decompiled C source files
+├── include/melee/          # Header files
+├── config/GALE01/          # Build config and symbols
+├── build/                  # Build output (asm, obj files)
+├── tools/                  # Build tools (ninja, dtk)
+├── .claude/skills/         # Claude Code skills for decompilation
+└── docs/                   # Documentation
 ```
 
 ## Key Files
@@ -27,6 +21,9 @@ melee-decomp/
 |----------|---------|
 | `~/.config/decomp-me/agent_state.db` | SQLite database (primary state storage) |
 | `~/.config/decomp-me/` | Persistent config (cookies, tokens) |
+| `config/GALE01/symbols.txt` | Symbol definitions |
+| `src/melee/` | Decompiled C source |
+| `include/melee/` | Header files |
 
 ## CLI Commands
 
@@ -97,7 +94,7 @@ DECOMP_AGENT_ID=agent-1                   # Optional: manual agent isolation
 1. **Find function**: `extract list` or user-specified
 2. **Claim it**: `claim add <func>`
 3. **Create scratch**: `extract get <func> --create-scratch`
-4. **Read source**: Check `melee/src/` for existing code + context
+4. **Read source**: Check `src/melee/` for existing code + context
 5. **Iterate**: Write to `/tmp/decomp_<slug>.c`, `scratch compile <slug> -s /tmp/decomp_<slug>.c`
 6. **Finish at 95%+**: `workflow finish <func> <slug>` (commits + records in one step)
 7. **Check progress**: `state status` to see all tracked functions by category
@@ -110,8 +107,7 @@ DECOMP_AGENT_ID=agent-1                   # Optional: manual agent isolation
 ## Build
 
 ```bash
-cd melee && python configure.py && ninja  # Build melee
-docker compose -f docker/docker-compose.yml up -d  # Local decomp.me
+python configure.py && ninja  # Build melee
 ```
 
 ## Context Summarization (Critical for Long Sessions)
