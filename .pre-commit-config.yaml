@@ -3,3 +3,14 @@ repos:
   rev: v18.1.8
   hooks:
   - id: clang-format
+
+- repo: local
+  hooks:
+  - id: check-fork-files
+    name: Check for fork-only files
+    entry: python tools/check-fork-files.py
+    language: python
+    pass_filenames: false
+    always_run: true
+    stages: [pre-push]
+    description: Blocks pushing fork-specific files to doldecomp/melee upstream
