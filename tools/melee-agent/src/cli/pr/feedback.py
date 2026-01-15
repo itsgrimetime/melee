@@ -134,7 +134,7 @@ def _feedback_single_pr(repo: str, pr_number: int, include_logs: bool, output_js
 
     # Checks
     console.print(f"\n[bold]Checks:[/bold] {len(passed_checks)} passed, {len(failed_checks)} failed, {len(pending_checks)} pending")
-    
+
     if failed_checks:
         console.print("\n[red]Failed checks:[/red]")
         for check in failed_checks:

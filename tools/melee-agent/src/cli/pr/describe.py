@@ -309,7 +309,7 @@ def describe_command(
     """
     if melee_root is None:
         melee_root = _detect_melee_root_from_cwd()
-    
+
     if not melee_root.exists():
         console.print(f"[red]Melee root not found: {melee_root}[/red]")
         raise typer.Exit(1)
@@ -413,7 +413,7 @@ def describe_command(
     for f in improved:
         from_str = f"{f['from_pct']:.0f}%" if f['from_pct'] > 0 else "-"
         to_str = f"[green]{f['to_pct']:.0f}%[/green]" if f['to_pct'] >= 100 else f"{f['to_pct']:.0f}%"
-        
+
         if include_links:
             url = _get_production_scratch_url(f["function"], slug_map)
             link = url.split("/")[-1] if url else "-"
