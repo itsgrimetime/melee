@@ -1,0 +1,18 @@
+# Files specific to itsgrimetime/melee fork
+# These should NEVER be included in PRs to doldecomp/melee
+#
+# Used by:
+#   - pre-commit hook (tools/check-fork-files.py)
+#   - CI workflow (.github/workflows/check-fork-files.yml)
+
+.claude/
+CLAUDE.md
+permuter_settings.toml
+tools/analyze_pr_feedback.py
+tools/fetch_pr_feedback.py
+tools/verify_client.py
+docs/comparison-lukechampine-approach.md
+
+# This file itself
+.github/fork-only-files.txt
+.github/workflows/check-fork-files.yml
