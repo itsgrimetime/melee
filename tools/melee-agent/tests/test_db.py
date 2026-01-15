@@ -10,14 +10,16 @@ These tests use an in-memory database to avoid filesystem side effects.
 """
 
 import time
-import pytest
 from pathlib import Path
+
+import pytest
 
 
 @pytest.fixture
 def db(tmp_path):
     """Create a fresh database for each test."""
     from src.db import StateDB, reset_db
+
     # Reset any global DB instance that may have been initialized by other tests
     reset_db()
     db_path = tmp_path / "test_state.db"
@@ -250,9 +252,7 @@ class TestMatchScoring:
 
         # Check history was recorded
         with db.connection() as conn:
-            cursor = conn.execute(
-                "SELECT * FROM match_history WHERE scratch_slug = ?", ("ABC123",)
-            )
+            cursor = conn.execute("SELECT * FROM match_history WHERE scratch_slug = ?", ("ABC123",))
             history = cursor.fetchall()
 
         assert len(history) == 1
@@ -266,10 +266,7 @@ class TestMatchScoring:
         db.record_match_score("ABC123", 25, 100)  # 75% match (lower score = better)
 
         with db.connection() as conn:
-            cursor = conn.execute(
-                "SELECT * FROM match_history WHERE scratch_slug = ? ORDER BY timestamp",
-                ("ABC123",)
-            )
+            cursor = conn.execute("SELECT * FROM match_history WHERE scratch_slug = ? ORDER BY timestamp", ("ABC123",))
             history = cursor.fetchall()
 
         assert len(history) == 2
@@ -282,10 +279,7 @@ class TestMatchScoring:
         db.record_match_score("ABC123", 50, 100)  # Same score
 
         with db.connection() as conn:
-            cursor = conn.execute(
-                "SELECT COUNT(*) as count FROM match_history WHERE scratch_slug = ?",
-                ("ABC123",)
-            )
+            cursor = conn.execute("SELECT COUNT(*) as count FROM match_history WHERE scratch_slug = ?", ("ABC123",))
             count = cursor.fetchone()["count"]
 
         assert count == 1
@@ -294,17 +288,10 @@ class TestMatchScoring:
         """Recording score with worktree info should store it."""
         db.upsert_scratch("ABC123", "local", "http://localhost:8000")
 
-        db.record_match_score(
-            "ABC123", 50, 100,
-            worktree_path="/path/to/worktree",
-            branch="subdirs/lb"
-        )
+        db.record_match_score("ABC123", 50, 100, worktree_path="/path/to/worktree", branch="subdirs/lb")
 
         with db.connection() as conn:
-            cursor = conn.execute(
-                "SELECT worktree_path, branch FROM match_history WHERE scratch_slug = ?",
-                ("ABC123",)
-            )
+            cursor = conn.execute("SELECT worktree_path, branch FROM match_history WHERE scratch_slug = ?", ("ABC123",))
             row = cursor.fetchone()
 
         assert row["worktree_path"] == "/path/to/worktree"
@@ -318,10 +305,7 @@ class TestMatchScoring:
         db.record_match_score("ABC123", 50, 100)
 
         with db.connection() as conn:
-            cursor = conn.execute(
-                "SELECT worktree_path, branch FROM match_history WHERE scratch_slug = ?",
-                ("ABC123",)
-            )
+            cursor = conn.execute("SELECT worktree_path, branch FROM match_history WHERE scratch_slug = ?", ("ABC123",))
             row = cursor.fetchone()
 
         assert row["worktree_path"] is None
@@ -340,8 +324,7 @@ class TestMatchScoring:
 
         with db.connection() as conn:
             cursor = conn.execute(
-                "SELECT branch FROM match_history WHERE scratch_slug = ? ORDER BY timestamp",
-                ("ABC123",)
+                "SELECT branch FROM match_history WHERE scratch_slug = ? ORDER BY timestamp", ("ABC123",)
             )
             branches = [row["branch"] for row in cursor.fetchall()]
 
@@ -376,9 +359,7 @@ class TestAuditLog:
         db.add_claim("my_func", "agent-1")
 
         with db.connection() as conn:
-            cursor = conn.execute(
-                "SELECT * FROM audit_log WHERE action = 'created' AND entity_type = 'claim'"
-            )
+            cursor = conn.execute("SELECT * FROM audit_log WHERE action = 'created' AND entity_type = 'claim'")
             entries = cursor.fetchall()
 
         assert len(entries) >= 1
@@ -483,10 +464,12 @@ class TestAddressTracking:
         db.upsert_function("func2")
         db.upsert_function("func3")
 
-        updated = db.bulk_update_addresses({
-            "func1": "0x80003100",
-            "func2": "0x80003200",
-        })
+        updated = db.bulk_update_addresses(
+            {
+                "func1": "0x80003100",
+                "func2": "0x80003200",
+            }
+        )
 
         assert updated == 2
 
@@ -503,20 +486,24 @@ class TestAddressTracking:
         """Should not count already-set addresses as updates."""
         db.upsert_function("func1", canonical_address="0x80003100")
 
-        updated = db.bulk_update_addresses({
-            "func1": "0x80003100",  # Already set
-        })
+        updated = db.bulk_update_addresses(
+            {
+                "func1": "0x80003100",  # Already set
+            }
+        )
 
         assert updated == 0
 
     def test_merge_function_records_both_exist(self, db):
         """Should merge old record into new, preserving data."""
-        db.upsert_function("old_func",
+        db.upsert_function(
+            "old_func",
             local_scratch_slug="ABC123",
             match_percent=95.0,
             status="matched",
         )
-        db.upsert_function("new_func",
+        db.upsert_function(
+            "new_func",
             match_percent=100.0,
             status="matched",
         )
@@ -555,6 +542,7 @@ class TestSchemaMigration:
         # Create a v7 database manually
         db_path = tmp_path / "v7_db.db"
         import sqlite3
+
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
 
@@ -571,7 +559,9 @@ class TestSchemaMigration:
         """)
         conn.execute("CREATE TABLE db_meta (key TEXT PRIMARY KEY, value TEXT)")
         conn.execute("INSERT INTO db_meta (key, value) VALUES ('schema_version', '7')")
-        conn.execute("INSERT INTO match_history (scratch_slug, score, max_score, match_percent) VALUES ('test', 50, 100, 50.0)")
+        conn.execute(
+            "INSERT INTO match_history (scratch_slug, score, max_score, match_percent) VALUES ('test', 50, 100, 50.0)"
+        )
         conn.commit()
         conn.close()
 
@@ -621,10 +611,7 @@ class TestDatabaseIntegrity:
         # Try to do something that will fail inside a transaction
         try:
             with db.transaction() as conn:
-                conn.execute(
-                    "DELETE FROM claims WHERE function_name = ?",
-                    ("my_func",)
-                )
+                conn.execute("DELETE FROM claims WHERE function_name = ?", ("my_func",))
                 # Force an error
                 raise ValueError("Simulated error")
         except ValueError:

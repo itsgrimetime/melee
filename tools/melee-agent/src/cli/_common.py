@@ -53,6 +53,17 @@ LOCAL_API_CACHE_FILE = DECOMP_CONFIG_DIR / "local_api_cache.json"
 # Project paths
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 DEFAULT_MELEE_ROOT = PROJECT_ROOT / "melee"
+MELEE_WORKTREES_DIR = PROJECT_ROOT / "melee-worktrees"
+
+
+def get_agent_melee_root() -> Path:
+    """Get the melee root for the current agent.
+
+    Returns:
+        Path to the melee repository root
+    """
+    return DEFAULT_MELEE_ROOT
+
 
 # decomp.me instances
 PRODUCTION_DECOMP_ME = "https://decomp.me"
@@ -81,7 +92,7 @@ def get_compiler_for_source(source_file: str, melee_root: Path) -> str:
     """Get the decomp.me compiler ID for a source file by parsing build.ninja."""
     build_ninja = melee_root / "build.ninja"
     if not build_ninja.exists():
-        console.print(f"[yellow]build.ninja not found, using default compiler[/yellow]")
+        console.print("[yellow]build.ninja not found, using default compiler[/yellow]")
         return DEFAULT_DECOMP_COMPILER
 
     if source_file.startswith("src/"):
@@ -91,7 +102,7 @@ def get_compiler_for_source(source_file: str, melee_root: Path) -> str:
 
     try:
         content = build_ninja.read_text()
-        lines = content.split('\n')
+        lines = content.split("\n")
 
         comment_path = source_rel
         if comment_path.startswith("src/"):
@@ -99,19 +110,19 @@ def get_compiler_for_source(source_file: str, melee_root: Path) -> str:
 
         in_target = False
         for line in lines:
-            if line.startswith(f'# {comment_path}:'):
+            if line.startswith(f"# {comment_path}:"):
                 in_target = True
                 continue
 
             if in_target:
-                if line.startswith('  mw_version = '):
-                    mw_version = line.split('=', 1)[1].strip()
+                if line.startswith("  mw_version = "):
+                    mw_version = line.split("=", 1)[1].strip()
                     if mw_version in GC_TO_DECOMP_COMPILER:
                         return GC_TO_DECOMP_COMPILER[mw_version]
                     else:
                         console.print(f"[yellow]Unknown compiler version {mw_version}, using default[/yellow]")
                         return DEFAULT_DECOMP_COMPILER
-                elif line.startswith('# ') and ':' in line:
+                elif line.startswith("# ") and ":" in line:
                     break
 
     except Exception as e:
@@ -126,33 +137,31 @@ def get_compiler_for_source(source_file: str, melee_root: Path) -> str:
 
 # From api_helpers.py
 from .api_helpers import (
+    LOCAL_API_CACHE_TTL,
+    LOCAL_DECOMP_CANDIDATES,
     _probe_url,
     detect_local_api_url,
     get_local_api_url,
-    LOCAL_DECOMP_CANDIDATES,
-    LOCAL_API_CACHE_TTL,
 )
 
 # From storage.py
 from .storage import (
-    load_completed_functions,
-    save_completed_functions,
-    load_slug_map,
-    save_slug_map,
-    load_all_tracking_data,
     get_context_file,
+    load_all_tracking_data,
+    load_completed_functions,
+    load_slug_map,
+    save_completed_functions,
+    save_slug_map,
 )
 
 # From tracking.py
 from .tracking import (
-    load_match_history,
-    save_match_history,
-    record_match_score,
-    get_match_history,
     format_match_history,
+    get_match_history,
+    load_match_history,
+    record_match_score,
+    save_match_history,
 )
-
-
 
 # =============================================================================
 # PR Helpers
@@ -165,11 +174,11 @@ def extract_pr_info(pr_input: str, default_repo: str = DEFAULT_PR_REPO) -> tuple
     """Extract repo and PR number from URL or PR number."""
     pr_input = pr_input.strip()
 
-    match = re.match(r'https?://github\.com/([^/]+/[^/]+)/pull/(\d+)', pr_input)
+    match = re.match(r"https?://github\.com/([^/]+/[^/]+)/pull/(\d+)", pr_input)
     if match:
         return match.group(1), int(match.group(2))
 
-    match = re.match(r'([^/]+/[^#]+)#(\d+)', pr_input)
+    match = re.match(r"([^/]+/[^#]+)#(\d+)", pr_input)
     if match:
         return match.group(1), int(match.group(2))
 
@@ -183,9 +192,19 @@ def get_pr_status_from_gh(repo: str, pr_number: int) -> dict:
     """Get PR status using gh CLI."""
     try:
         result = subprocess.run(
-            ["gh", "pr", "view", str(pr_number), "--repo", repo, "--json",
-             "state,isDraft,title,mergeable,reviewDecision"],
-            capture_output=True, text=True, check=True
+            [
+                "gh",
+                "pr",
+                "view",
+                str(pr_number),
+                "--repo",
+                repo,
+                "--json",
+                "state,isDraft,title,mergeable,reviewDecision",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
         )
         return json.loads(result.stdout)
     except (subprocess.CalledProcessError, json.JSONDecodeError, FileNotFoundError):
@@ -269,10 +288,12 @@ def categorize_functions(data: dict, check_pr_status: bool = False) -> dict:
 # Database Integration (Non-Blocking Wrappers)
 # =============================================================================
 
+
 def get_state_db():
     """Get the state database instance."""
     try:
         from src.db import get_db
+
         return get_db()
     except Exception as e:
         console.print(f"[dim]Note: State database unavailable: {e}[/dim]")
@@ -421,3 +442,40 @@ def renew_claim_on_activity(function_name: str, agent_id: str | None = None) -> 
     except (TimeoutError, Exception):
         # Non-blocking - don't fail if lock unavailable
         return False
+
+
+def resolve_melee_root(melee_root: Path | None = None, target_file: str | None = None) -> Path:
+    """Resolve the melee repository root path.
+
+    Args:
+        melee_root: Explicit melee root path (optional)
+        target_file: Target file path (unused, for API compatibility)
+
+    Returns:
+        Path to the melee repository root
+    """
+    if melee_root is not None:
+        return Path(melee_root)
+    return DEFAULT_MELEE_ROOT
+
+
+def get_source_file_from_claim(function_name: str) -> str | None:
+    """Get the source file path for a claimed function.
+
+    Args:
+        function_name: Name of the function
+
+    Returns:
+        Source file path or None if not found
+    """
+    from .utils import load_json_safe
+
+    claims_path = Path(DECOMP_CLAIMS_FILE)
+    if not claims_path.exists():
+        return None
+
+    claims = load_json_safe(claims_path)
+    claim = claims.get(function_name)
+    if claim:
+        return claim.get("source_file")
+    return None

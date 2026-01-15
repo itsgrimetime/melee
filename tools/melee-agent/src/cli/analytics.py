@@ -7,17 +7,18 @@ from pathlib import Path
 from typing import Annotated, Optional
 
 import typer
-from rich.table import Table
-from rich.panel import Panel
 from rich import box
+from rich.panel import Panel
+from rich.table import Table
+
+from src.analytics import DecompAnalyzer
 
 from ._common import console
-from src.analytics import DecompAnalyzer
 
 analytics_app = typer.Typer(help="Analyze decomp agent performance from session logs")
 
 
-def _format_duration(td: Optional[timedelta]) -> str:
+def _format_duration(td: timedelta | None) -> str:
     """Format a timedelta as human-readable string."""
     if td is None:
         return "-"
@@ -35,34 +36,28 @@ def _format_duration(td: Optional[timedelta]) -> str:
 def _format_pct(value: float) -> str:
     """Format a percentage."""
     if value >= 0.95:
-        return f"[green]{value*100:.1f}%[/green]"
+        return f"[green]{value * 100:.1f}%[/green]"
     elif value >= 0.8:
-        return f"[yellow]{value*100:.1f}%[/yellow]"
+        return f"[yellow]{value * 100:.1f}%[/yellow]"
     else:
-        return f"[red]{value*100:.1f}%[/red]"
+        return f"[red]{value * 100:.1f}%[/red]"
 
 
 def _format_number(value: float) -> str:
     """Format a number with K/M suffixes."""
     if value >= 1_000_000:
-        return f"{value/1_000_000:.1f}M"
+        return f"{value / 1_000_000:.1f}M"
     elif value >= 1_000:
-        return f"{value/1_000:.1f}K"
+        return f"{value / 1_000:.1f}K"
     else:
         return f"{value:.0f}"
 
 
 @analytics_app.command("summary")
 def analytics_summary(
-    since_days: Annotated[
-        int, typer.Option("--since", "-s", help="Analyze sessions from last N days")
-    ] = 30,
-    project: Annotated[
-        str, typer.Option("--project", "-p", help="Project filter")
-    ] = "melee-decomp",
-    output_json: Annotated[
-        bool, typer.Option("--json", help="Output as JSON")
-    ] = False,
+    since_days: Annotated[int, typer.Option("--since", "-s", help="Analyze sessions from last N days")] = 30,
+    project: Annotated[str, typer.Option("--project", "-p", help="Project filter")] = "melee-decomp",
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
     """Show summary metrics for decomp agent performance.
 
@@ -86,42 +81,51 @@ def analytics_summary(
     metrics = analyzer.compute_aggregate_metrics()
 
     if output_json:
-        print(json.dumps({
-            "total_sessions": metrics.total_sessions,
-            "total_functions_attempted": metrics.total_functions_attempted,
-            "total_functions_completed": metrics.total_functions_completed,
-            "success_rates": {
-                "overall": metrics.overall_success_rate,
-                "commit": metrics.commit_success_rate,
-                "worktree_correct": metrics.worktree_correct_rate,
-                "build_first_try": metrics.build_first_try_rate,
-                "dry_run_usage": metrics.dry_run_usage_rate,
-            },
-            "efficiency": {
-                "avg_tokens_per_function": metrics.avg_tokens_per_function,
-                "avg_turns_per_function": metrics.avg_turns_per_function,
-                "avg_iterations_per_function": metrics.avg_iterations_per_function,
-                "avg_duration_minutes": metrics.avg_duration_per_function.total_seconds() / 60 if metrics.avg_duration_per_function else None,
-            },
-            "errors": {
-                "total": metrics.total_errors,
-                "per_function": metrics.errors_per_function,
-                "by_category": metrics.errors_by_category,
-            },
-            "match_progression": {
-                "avg_initial": metrics.avg_initial_match,
-                "avg_final": metrics.avg_final_match,
-                "thrashing_rate": metrics.thrashing_rate,
-            },
-        }, indent=2))
+        print(
+            json.dumps(
+                {
+                    "total_sessions": metrics.total_sessions,
+                    "total_functions_attempted": metrics.total_functions_attempted,
+                    "total_functions_completed": metrics.total_functions_completed,
+                    "success_rates": {
+                        "overall": metrics.overall_success_rate,
+                        "commit": metrics.commit_success_rate,
+                        "worktree_correct": metrics.worktree_correct_rate,
+                        "build_first_try": metrics.build_first_try_rate,
+                        "dry_run_usage": metrics.dry_run_usage_rate,
+                    },
+                    "efficiency": {
+                        "avg_tokens_per_function": metrics.avg_tokens_per_function,
+                        "avg_turns_per_function": metrics.avg_turns_per_function,
+                        "avg_iterations_per_function": metrics.avg_iterations_per_function,
+                        "avg_duration_minutes": metrics.avg_duration_per_function.total_seconds() / 60
+                        if metrics.avg_duration_per_function
+                        else None,
+                    },
+                    "errors": {
+                        "total": metrics.total_errors,
+                        "per_function": metrics.errors_per_function,
+                        "by_category": metrics.errors_by_category,
+                    },
+                    "match_progression": {
+                        "avg_initial": metrics.avg_initial_match,
+                        "avg_final": metrics.avg_final_match,
+                        "thrashing_rate": metrics.thrashing_rate,
+                    },
+                },
+                indent=2,
+            )
+        )
         return
 
     # Header
-    console.print(Panel.fit(
-        f"[bold]Decomp Agent Performance Summary[/bold]\n"
-        f"[dim]{metrics.total_sessions} sessions, {since_days} days, project: {project}[/dim]",
-        border_style="cyan"
-    ))
+    console.print(
+        Panel.fit(
+            f"[bold]Decomp Agent Performance Summary[/bold]\n"
+            f"[dim]{metrics.total_sessions} sessions, {since_days} days, project: {project}[/dim]",
+            border_style="cyan",
+        )
+    )
 
     # Success Rates
     console.print("\n[bold cyan]Success Rates[/bold cyan]")
@@ -133,22 +137,18 @@ def analytics_summary(
     table.add_row(
         "Functions completed",
         f"[bold]{metrics.total_functions_completed}[/bold] / {metrics.total_functions_attempted}",
-        _format_pct(metrics.overall_success_rate) if metrics.total_functions_attempted > 0 else "-"
+        _format_pct(metrics.overall_success_rate) if metrics.total_functions_attempted > 0 else "-",
     )
     table.add_row(
         "Build passed first try",
         _format_pct(metrics.build_first_try_rate),
-        f"of {metrics.total_functions_attempted} attempts"
+        f"of {metrics.total_functions_attempted} attempts",
     )
-    table.add_row(
-        "Used --dry-run",
-        _format_pct(metrics.dry_run_usage_rate),
-        "before committing"
-    )
+    table.add_row("Used --dry-run", _format_pct(metrics.dry_run_usage_rate), "before committing")
     table.add_row(
         "Worktree used correctly",
         _format_pct(metrics.worktree_correct_rate) if metrics.worktree_correct_rate > 0 else "[dim]N/A[/dim]",
-        "no main repo commits"
+        "no main repo commits",
     )
     console.print(table)
 
@@ -162,22 +162,20 @@ def analytics_summary(
     table.add_row(
         "Tokens per function",
         f"[bold]{_format_number(metrics.avg_tokens_per_function)}[/bold]",
-        f"total: {_format_number(sum(metrics.tokens_distribution))}"
+        f"total: {_format_number(sum(metrics.tokens_distribution))}",
     )
     table.add_row(
         "Turns per function",
         f"[bold]{metrics.avg_turns_per_function:.1f}[/bold]",
-        f"total: {sum(metrics.turns_distribution)}"
+        f"total: {sum(metrics.turns_distribution)}",
     )
     table.add_row(
-        "Compile iterations",
-        f"[bold]{metrics.avg_iterations_per_function:.1f}[/bold]",
-        "scratch compile calls"
+        "Compile iterations", f"[bold]{metrics.avg_iterations_per_function:.1f}[/bold]", "scratch compile calls"
     )
     table.add_row(
         "Duration per function",
         f"[bold]{_format_duration(metrics.avg_duration_per_function)}[/bold]",
-        "wall clock time"
+        "wall clock time",
     )
     console.print(table)
 
@@ -189,19 +187,13 @@ def analytics_summary(
     table.add_column("Per Function", justify="right")
 
     table.add_row(
-        "[bold]Total errors[/bold]",
-        f"[bold]{metrics.total_errors}[/bold]",
-        f"{metrics.errors_per_function:.2f}"
+        "[bold]Total errors[/bold]", f"[bold]{metrics.total_errors}[/bold]", f"{metrics.errors_per_function:.2f}"
     )
 
     for category, count in sorted(metrics.errors_by_category.items(), key=lambda x: -x[1]):
         per_func = count / metrics.total_functions_attempted if metrics.total_functions_attempted > 0 else 0
         color = "red" if category in ("build_failure", "server_error") else "yellow"
-        table.add_row(
-            f"  [{color}]{category}[/{color}]",
-            str(count),
-            f"{per_func:.2f}"
-        )
+        table.add_row(f"  [{color}]{category}[/{color}]", str(count), f"{per_func:.2f}")
     console.print(table)
 
     # Match Progression
@@ -212,19 +204,18 @@ def analytics_summary(
 
     table.add_row("Average initial match", f"{metrics.avg_initial_match:.1f}%")
     table.add_row("Average final match", f"[bold]{metrics.avg_final_match:.1f}%[/bold]")
-    table.add_row(
-        "Improvement",
-        f"[green]+{metrics.avg_final_match - metrics.avg_initial_match:.1f}%[/green]"
-    )
+    table.add_row("Improvement", f"[green]+{metrics.avg_final_match - metrics.avg_initial_match:.1f}%[/green]")
     table.add_row(
         "Thrashing rate",
-        f"[yellow]{metrics.thrashing_rate*100:.1f}%[/yellow]" if metrics.thrashing_rate > 0.1 else f"{metrics.thrashing_rate*100:.1f}%"
+        f"[yellow]{metrics.thrashing_rate * 100:.1f}%[/yellow]"
+        if metrics.thrashing_rate > 0.1
+        else f"{metrics.thrashing_rate * 100:.1f}%",
     )
     console.print(table)
 
     # Distribution hints
     if metrics.final_match_distribution:
-        console.print(f"\n[dim]Final match distribution:[/dim]")
+        console.print("\n[dim]Final match distribution:[/dim]")
         below_95 = sum(1 for m in metrics.final_match_distribution if m < 95)
         at_95_99 = sum(1 for m in metrics.final_match_distribution if 95 <= m < 100)
         at_100 = sum(1 for m in metrics.final_match_distribution if m >= 100)
@@ -233,18 +224,10 @@ def analytics_summary(
 
 @analytics_app.command("sessions")
 def analytics_sessions(
-    since_days: Annotated[
-        int, typer.Option("--since", "-s", help="Analyze sessions from last N days")
-    ] = 30,
-    project: Annotated[
-        str, typer.Option("--project", "-p", help="Project filter")
-    ] = "melee-decomp",
-    limit: Annotated[
-        int, typer.Option("--limit", "-n", help="Maximum sessions to show")
-    ] = 20,
-    output_json: Annotated[
-        bool, typer.Option("--json", help="Output as JSON")
-    ] = False,
+    since_days: Annotated[int, typer.Option("--since", "-s", help="Analyze sessions from last N days")] = 30,
+    project: Annotated[str, typer.Option("--project", "-p", help="Project filter")] = "melee-decomp",
+    limit: Annotated[int, typer.Option("--limit", "-n", help="Maximum sessions to show")] = 20,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
     """List analyzed decomp sessions with per-session metrics."""
     analyzer = DecompAnalyzer(project_filter=project)
@@ -261,16 +244,18 @@ def analytics_sessions(
     if output_json:
         output = []
         for s in sessions:
-            output.append({
-                "session_id": s.session_id[:8],
-                "started_at": s.started_at.isoformat() if s.started_at else None,
-                "duration_minutes": s.duration.total_seconds() / 60 if s.duration else None,
-                "functions_attempted": s.functions_attempted,
-                "functions_completed": s.functions_completed,
-                "success_rate": s.success_rate,
-                "total_tokens": s.total_input_tokens + s.total_output_tokens,
-                "total_turns": s.total_turns,
-            })
+            output.append(
+                {
+                    "session_id": s.session_id[:8],
+                    "started_at": s.started_at.isoformat() if s.started_at else None,
+                    "duration_minutes": s.duration.total_seconds() / 60 if s.duration else None,
+                    "functions_attempted": s.functions_attempted,
+                    "functions_completed": s.functions_completed,
+                    "success_rate": s.success_rate,
+                    "total_tokens": s.total_input_tokens + s.total_output_tokens,
+                    "total_turns": s.total_turns,
+                }
+            )
         print(json.dumps(output, indent=2))
         return
 
@@ -309,24 +294,12 @@ def analytics_sessions(
 
 @analytics_app.command("functions")
 def analytics_functions(
-    since_days: Annotated[
-        int, typer.Option("--since", "-s", help="Analyze sessions from last N days")
-    ] = 30,
-    project: Annotated[
-        str, typer.Option("--project", "-p", help="Project filter")
-    ] = "melee-decomp",
-    committed_only: Annotated[
-        bool, typer.Option("--committed", help="Only show committed functions")
-    ] = False,
-    failed_only: Annotated[
-        bool, typer.Option("--failed", help="Only show abandoned/failed functions")
-    ] = False,
-    limit: Annotated[
-        int, typer.Option("--limit", "-n", help="Maximum functions to show")
-    ] = 50,
-    output_json: Annotated[
-        bool, typer.Option("--json", help="Output as JSON")
-    ] = False,
+    since_days: Annotated[int, typer.Option("--since", "-s", help="Analyze sessions from last N days")] = 30,
+    project: Annotated[str, typer.Option("--project", "-p", help="Project filter")] = "melee-decomp",
+    committed_only: Annotated[bool, typer.Option("--committed", help="Only show committed functions")] = False,
+    failed_only: Annotated[bool, typer.Option("--failed", help="Only show abandoned/failed functions")] = False,
+    limit: Annotated[int, typer.Option("--limit", "-n", help="Maximum functions to show")] = 50,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
     """List individual function attempts with detailed metrics."""
     analyzer = DecompAnalyzer(project_filter=project)
@@ -336,9 +309,9 @@ def analytics_functions(
 
     # Apply filters
     if committed_only:
-        details = [d for d in details if d['committed']]
+        details = [d for d in details if d["committed"]]
     if failed_only:
-        details = [d for d in details if not d['committed'] and d['iterations'] > 0]
+        details = [d for d in details if not d["committed"] and d["iterations"] > 0]
 
     details = details[:limit]
 
@@ -363,25 +336,25 @@ def analytics_functions(
     table.add_column("Duration")
 
     for func in details:
-        status = "[green]committed[/green]" if func['committed'] else "[dim]abandoned[/dim]"
+        status = "[green]committed[/green]" if func["committed"] else "[dim]abandoned[/dim]"
 
-        match_str = f"{func['final_match']:.0f}%" if func['final_match'] else "-"
-        if func['final_match'] and func['final_match'] >= 95:
+        match_str = f"{func['final_match']:.0f}%" if func["final_match"] else "-"
+        if func["final_match"] and func["final_match"] >= 95:
             match_str = f"[green]{match_str}[/green]"
 
-        errors_str = str(func['errors']) if func['errors'] else "-"
-        if func['errors'] > 0:
+        errors_str = str(func["errors"]) if func["errors"] else "-"
+        if func["errors"] > 0:
             errors_str = f"[red]{errors_str}[/red]"
 
-        duration_str = f"{func['duration_mins']:.0f}m" if func['duration_mins'] else "-"
+        duration_str = f"{func['duration_mins']:.0f}m" if func["duration_mins"] else "-"
 
         table.add_row(
-            func['function'][:25],
-            func['session_id'],
+            func["function"][:25],
+            func["session_id"],
             status,
             match_str,
-            str(func['iterations']),
-            _format_number(func['tokens']),
+            str(func["iterations"]),
+            _format_number(func["tokens"]),
             errors_str,
             duration_str,
         )
@@ -391,18 +364,10 @@ def analytics_functions(
 
 @analytics_app.command("errors")
 def analytics_errors(
-    since_days: Annotated[
-        int, typer.Option("--since", "-s", help="Analyze sessions from last N days")
-    ] = 30,
-    project: Annotated[
-        str, typer.Option("--project", "-p", help="Project filter")
-    ] = "melee-decomp",
-    category: Annotated[
-        Optional[str], typer.Option("--category", "-c", help="Filter by error category")
-    ] = None,
-    output_json: Annotated[
-        bool, typer.Option("--json", help="Output as JSON")
-    ] = False,
+    since_days: Annotated[int, typer.Option("--since", "-s", help="Analyze sessions from last N days")] = 30,
+    project: Annotated[str, typer.Option("--project", "-p", help="Project filter")] = "melee-decomp",
+    category: Annotated[str | None, typer.Option("--category", "-c", help="Filter by error category")] = None,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
     """Show detailed error breakdown with examples.
 
@@ -425,17 +390,19 @@ def analytics_errors(
     for session in analyzer.sessions:
         for func in session.functions:
             for error in func.errors:
-                all_errors.append({
-                    'session_id': session.session_id[:8],
-                    'function': func.function_name,
-                    'category': error.category.value,
-                    'message': error.message[:100],
-                    'timestamp': error.timestamp.isoformat() if error.timestamp else None,
-                })
+                all_errors.append(
+                    {
+                        "session_id": session.session_id[:8],
+                        "function": func.function_name,
+                        "category": error.category.value,
+                        "message": error.message[:100],
+                        "timestamp": error.timestamp.isoformat() if error.timestamp else None,
+                    }
+                )
 
     # Filter by category
     if category:
-        all_errors = [e for e in all_errors if e['category'] == category]
+        all_errors = [e for e in all_errors if e["category"] == category]
 
     if output_json:
         print(json.dumps(all_errors, indent=2))
@@ -448,7 +415,7 @@ def analytics_errors(
     # Group by category
     by_category: dict[str, list] = {}
     for error in all_errors:
-        cat = error['category']
+        cat = error["category"]
         if cat not in by_category:
             by_category[cat] = []
         by_category[cat].append(error)
@@ -462,8 +429,8 @@ def analytics_errors(
         # Show examples
         for error in errors[:3]:
             console.print(f"  [dim]{error['session_id']}[/dim] {error['function']}")
-            if error['message']:
-                msg = error['message'][:80].replace('\n', ' ')
+            if error["message"]:
+                msg = error["message"][:80].replace("\n", " ")
                 console.print(f"    [dim]{msg}[/dim]")
         if len(errors) > 3:
             console.print(f"  [dim]... and {len(errors) - 3} more[/dim]")
@@ -472,15 +439,9 @@ def analytics_errors(
 
 @analytics_app.command("export")
 def analytics_export(
-    output_file: Annotated[
-        Path, typer.Argument(help="Output file path")
-    ] = Path("decomp_analytics.json"),
-    since_days: Annotated[
-        int, typer.Option("--since", "-s", help="Analyze sessions from last N days")
-    ] = 30,
-    project: Annotated[
-        str, typer.Option("--project", "-p", help="Project filter")
-    ] = "melee-decomp",
+    output_file: Annotated[Path, typer.Argument(help="Output file path")] = Path("decomp_analytics.json"),
+    since_days: Annotated[int, typer.Option("--since", "-s", help="Analyze sessions from last N days")] = 30,
+    project: Annotated[str, typer.Option("--project", "-p", help="Project filter")] = "melee-decomp",
 ):
     """Export full analytics data to JSON for external analysis."""
     analyzer = DecompAnalyzer(project_filter=project)
@@ -505,7 +466,9 @@ def analytics_export(
             "avg_tokens_per_function": metrics.avg_tokens_per_function,
             "avg_turns_per_function": metrics.avg_turns_per_function,
             "avg_iterations_per_function": metrics.avg_iterations_per_function,
-            "avg_duration_seconds": metrics.avg_duration_per_function.total_seconds() if metrics.avg_duration_per_function else None,
+            "avg_duration_seconds": metrics.avg_duration_per_function.total_seconds()
+            if metrics.avg_duration_per_function
+            else None,
             "total_errors": metrics.total_errors,
             "errors_per_function": metrics.errors_per_function,
             "errors_by_category": metrics.errors_by_category,
@@ -537,7 +500,7 @@ def analytics_export(
         ],
     }
 
-    with open(output_file, 'w') as f:
+    with open(output_file, "w") as f:
         json.dump(export_data, f, indent=2)
 
     console.print(f"[green]Exported to:[/green] {output_file}")
@@ -547,24 +510,14 @@ def analytics_export(
 
 @analytics_app.command("trends")
 def analytics_trends(
-    since_days: Annotated[
-        int, typer.Option("--since", "-s", help="Analyze sessions from last N days")
-    ] = 30,
-    project: Annotated[
-        str, typer.Option("--project", "-p", help="Project filter")
-    ] = "melee-decomp",
+    since_days: Annotated[int, typer.Option("--since", "-s", help="Analyze sessions from last N days")] = 30,
+    project: Annotated[str, typer.Option("--project", "-p", help="Project filter")] = "melee-decomp",
     metric: Annotated[
         str, typer.Option("--metric", "-m", help="Metric to plot: success, tokens, errors, match, all")
     ] = "all",
-    granularity: Annotated[
-        str, typer.Option("--granularity", "-g", help="Time granularity: day, week")
-    ] = "day",
-    width: Annotated[
-        int, typer.Option("--width", "-w", help="Chart width in characters")
-    ] = 80,
-    height: Annotated[
-        int, typer.Option("--height", help="Chart height in characters")
-    ] = 15,
+    granularity: Annotated[str, typer.Option("--granularity", "-g", help="Time granularity: day, week")] = "day",
+    width: Annotated[int, typer.Option("--width", "-w", help="Chart width in characters")] = 80,
+    height: Annotated[int, typer.Option("--height", help="Chart height in characters")] = 15,
 ):
     """Show trends of key metrics over time with TUI graphs.
 
@@ -599,54 +552,62 @@ def analytics_trends(
     for session in sessions:
         for func in session.functions:
             if func.started_at:
-                function_data.append({
-                    'timestamp': func.started_at,
-                    'committed': func.committed,
-                    'tokens': func.input_tokens + func.output_tokens,
-                    'errors': len(func.errors),
-                    'final_match': func.final_match_pct or 0,
-                    'iterations': func.compile_count,
-                })
+                function_data.append(
+                    {
+                        "timestamp": func.started_at,
+                        "committed": func.committed,
+                        "tokens": func.input_tokens + func.output_tokens,
+                        "errors": len(func.errors),
+                        "final_match": func.final_match_pct or 0,
+                        "iterations": func.compile_count,
+                    }
+                )
 
     if not function_data:
         console.print("[yellow]No function attempts with timestamps found[/yellow]")
         return
 
     # Sort by timestamp
-    function_data.sort(key=lambda x: x['timestamp'])
+    function_data.sort(key=lambda x: x["timestamp"])
 
     # Determine time buckets
     if granularity == "week":
+
         def get_bucket(dt: datetime) -> str:
             # Get start of week (Monday)
             start = dt - timedelta(days=dt.weekday())
             return start.strftime("%m/%d")
+
         bucket_label = "Week of"
     else:  # day
+
         def get_bucket(dt: datetime) -> str:
             return dt.strftime("%m/%d")
+
         bucket_label = "Date"
 
     # Aggregate data by time bucket
-    buckets: dict[str, dict] = defaultdict(lambda: {
-        'attempted': 0,
-        'completed': 0,
-        'total_tokens': 0,
-        'total_errors': 0,
-        'total_match': 0,
-        'match_count': 0,
-    })
+    buckets: dict[str, dict] = defaultdict(
+        lambda: {
+            "attempted": 0,
+            "completed": 0,
+            "total_tokens": 0,
+            "total_errors": 0,
+            "total_match": 0,
+            "match_count": 0,
+        }
+    )
 
     for func in function_data:
-        bucket = get_bucket(func['timestamp'])
-        buckets[bucket]['attempted'] += 1
-        if func['committed']:
-            buckets[bucket]['completed'] += 1
-        buckets[bucket]['total_tokens'] += func['tokens']
-        buckets[bucket]['total_errors'] += func['errors']
-        if func['final_match'] > 0:
-            buckets[bucket]['total_match'] += func['final_match']
-            buckets[bucket]['match_count'] += 1
+        bucket = get_bucket(func["timestamp"])
+        buckets[bucket]["attempted"] += 1
+        if func["committed"]:
+            buckets[bucket]["completed"] += 1
+        buckets[bucket]["total_tokens"] += func["tokens"]
+        buckets[bucket]["total_errors"] += func["errors"]
+        if func["final_match"] > 0:
+            buckets[bucket]["total_match"] += func["final_match"]
+            buckets[bucket]["match_count"] += 1
 
     # Sort buckets by date
     sorted_buckets = sorted(buckets.items(), key=lambda x: x[0])
@@ -667,23 +628,23 @@ def analytics_trends(
 
     for d in data:
         # Success rate
-        rate = (d['completed'] / d['attempted'] * 100) if d['attempted'] > 0 else 0
+        rate = (d["completed"] / d["attempted"] * 100) if d["attempted"] > 0 else 0
         success_rates.append(rate)
 
         # Average tokens (in thousands)
-        avg_tok = (d['total_tokens'] / d['attempted'] / 1000) if d['attempted'] > 0 else 0
+        avg_tok = (d["total_tokens"] / d["attempted"] / 1000) if d["attempted"] > 0 else 0
         avg_tokens.append(avg_tok)
 
         # Error count
-        error_counts.append(d['total_errors'])
+        error_counts.append(d["total_errors"])
 
         # Average match %
-        avg_match = (d['total_match'] / d['match_count']) if d['match_count'] > 0 else 0
+        avg_match = (d["total_match"] / d["match_count"]) if d["match_count"] > 0 else 0
         avg_matches.append(avg_match)
 
         # Counts
-        attempted_counts.append(d['attempted'])
-        completed_counts.append(d['completed'])
+        attempted_counts.append(d["attempted"])
+        completed_counts.append(d["completed"])
 
     # Configure plotext - use numeric x-axis with string labels
     plt.theme("pro")
@@ -726,7 +687,7 @@ def analytics_trends(
                 smoothed = []
                 for i in range(len(avg_tokens)):
                     start = max(0, i - window + 1)
-                    smoothed.append(sum(avg_tokens[start:i+1]) / (i - start + 1))
+                    smoothed.append(sum(avg_tokens[start : i + 1]) / (i - start + 1))
                 plt.plot(x_indices, smoothed, label="Trend", color="yellow", marker="dot")
 
         elif m == "errors":
@@ -759,20 +720,22 @@ def analytics_trends(
         print()  # Spacing between charts
 
     # Summary statistics
-    console.print(Panel.fit(
-        f"[bold]Trend Summary[/bold]\n"
-        f"[dim]Period: {dates[0]} to {dates[-1]} ({len(dates)} {granularity}s)[/dim]\n\n"
-        f"Functions: {sum(attempted_counts)} attempted, {sum(completed_counts)} completed\n"
-        f"Success rate: {sum(completed_counts)/sum(attempted_counts)*100:.1f}% overall\n"
-        f"Avg tokens: {sum(d['total_tokens'] for d in data)/sum(attempted_counts)/1000:.1f}K per function\n"
-        f"Total errors: {sum(error_counts)}",
-        border_style="cyan"
-    ))
+    console.print(
+        Panel.fit(
+            f"[bold]Trend Summary[/bold]\n"
+            f"[dim]Period: {dates[0]} to {dates[-1]} ({len(dates)} {granularity}s)[/dim]\n\n"
+            f"Functions: {sum(attempted_counts)} attempted, {sum(completed_counts)} completed\n"
+            f"Success rate: {sum(completed_counts) / sum(attempted_counts) * 100:.1f}% overall\n"
+            f"Avg tokens: {sum(d['total_tokens'] for d in data) / sum(attempted_counts) / 1000:.1f}K per function\n"
+            f"Total errors: {sum(error_counts)}",
+            border_style="cyan",
+        )
+    )
 
     # Show trend direction
     if len(success_rates) >= 3:
-        first_half = sum(success_rates[:len(success_rates)//2]) / (len(success_rates)//2)
-        second_half = sum(success_rates[len(success_rates)//2:]) / (len(success_rates) - len(success_rates)//2)
+        first_half = sum(success_rates[: len(success_rates) // 2]) / (len(success_rates) // 2)
+        second_half = sum(success_rates[len(success_rates) // 2 :]) / (len(success_rates) - len(success_rates) // 2)
         trend = second_half - first_half
 
         if trend > 5:

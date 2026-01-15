@@ -7,6 +7,7 @@ fuzzy match percentages and other metadata.
 import json
 from pathlib import Path
 from typing import Optional
+
 from .models import FunctionMatch
 
 
@@ -49,7 +50,7 @@ class ReportParser:
                 "You may need to build the project first with: ninja build/GALE01/report.json"
             )
 
-        with open(self.report_path, "r", encoding="utf-8") as f:
+        with open(self.report_path, encoding="utf-8") as f:
             return json.load(f)
 
     def get_function_matches(self) -> dict[str, FunctionMatch]:
@@ -96,13 +97,14 @@ class ReportParser:
 
         return function_matches
 
-    def get_report_age_seconds(self) -> Optional[float]:
+    def get_report_age_seconds(self) -> float | None:
         """Get the age of report.json in seconds.
 
         Returns:
             Age in seconds, or None if file doesn't exist
         """
         import time
+
         if not self.report_path.exists():
             return None
         return time.time() - self.report_path.stat().st_mtime
@@ -151,7 +153,7 @@ class ReportParser:
 
         return matches
 
-    def _parse_function_data(self, func_data: dict) -> Optional[FunctionMatch]:
+    def _parse_function_data(self, func_data: dict) -> FunctionMatch | None:
         """
         Parse function data into a FunctionMatch object.
 
@@ -206,7 +208,7 @@ class ReportParser:
             address=address_hex,
         )
 
-    def get_function_match(self, function_name: str) -> Optional[FunctionMatch]:
+    def get_function_match(self, function_name: str) -> FunctionMatch | None:
         """
         Get match data for a specific function.
 
@@ -246,13 +248,11 @@ class ReportParser:
         if stats["total_functions"] == 0:
             function_matches = self.get_function_matches()
             stats["total_functions"] = len(function_matches)
-            stats["matched_functions"] = sum(
-                1 for m in function_matches.values() if m.fuzzy_match_percent >= 100.0
-            )
+            stats["matched_functions"] = sum(1 for m in function_matches.values() if m.fuzzy_match_percent >= 100.0)
             if function_matches:
-                stats["average_match"] = sum(
-                    m.fuzzy_match_percent for m in function_matches.values()
-                ) / len(function_matches)
+                stats["average_match"] = sum(m.fuzzy_match_percent for m in function_matches.values()) / len(
+                    function_matches
+                )
 
         return stats
 

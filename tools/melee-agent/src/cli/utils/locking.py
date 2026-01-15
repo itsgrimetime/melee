@@ -44,7 +44,7 @@ def file_lock(
 
     lock_type = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
 
-    with open(lock_path, "r") as lock_file:
+    with open(lock_path) as lock_file:
         start_time = time.monotonic()
         while True:
             try:

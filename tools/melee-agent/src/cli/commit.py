@@ -10,15 +10,25 @@ from typing import Annotated, Optional
 import typer
 from rich.console import Console
 
-from ._common import console, DEFAULT_MELEE_ROOT, DECOMP_CONFIG_DIR, get_local_api_url, resolve_melee_root, AGENT_ID, db_upsert_function, get_source_file_from_claim
-from .complete import _load_completed, _save_completed, _get_current_branch
 from src.commit.diagnostics import (
     analyze_commit_error,
     check_header_sync,
-    format_signature_mismatch,
     find_callers,
     format_caller_updates_needed,
+    format_signature_mismatch,
 )
+
+from ._common import (
+    AGENT_ID,
+    DECOMP_CONFIG_DIR,
+    DEFAULT_MELEE_ROOT,
+    console,
+    db_upsert_function,
+    get_local_api_url,
+    get_source_file_from_claim,
+    resolve_melee_root,
+)
+from .complete import _get_current_branch, _load_completed, _save_completed
 
 commit_app = typer.Typer(help="Commit matched functions and create PRs")
 
@@ -28,20 +38,17 @@ def commit_apply(
     function_name: Annotated[str, typer.Argument(help="Name of the matched function")],
     scratch_slug: Annotated[str, typer.Argument(help="Decomp.me scratch slug")],
     melee_root: Annotated[
-        Optional[Path], typer.Option("--melee-root", "-m", help="Path to melee submodule (auto-detects agent worktree if not specified)")
+        Path | None,
+        typer.Option(
+            "--melee-root", "-m", help="Path to melee submodule (auto-detects agent worktree if not specified)"
+        ),
     ] = None,
-    api_url: Annotated[
-        Optional[str], typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")
-    ] = None,
-    create_pr: Annotated[
-        bool, typer.Option("--pr", help="Create a PR after committing")
-    ] = False,
+    api_url: Annotated[str | None, typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")] = None,
+    create_pr: Annotated[bool, typer.Option("--pr", help="Create a PR after committing")] = False,
     full_code: Annotated[
         bool, typer.Option("--full-code", help="Use full scratch code (including struct defs)")
     ] = False,
-    dry_run: Annotated[
-        bool, typer.Option("--dry-run", help="Show what would be changed without applying")
-    ] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be changed without applying")] = False,
 ):
     """Apply a matched function to the melee project.
 
@@ -62,12 +69,12 @@ def commit_apply(
 
     # Warn if committing to main repo instead of worktree
     if AGENT_ID and source_file and "melee-worktrees" not in str(melee_root):
-        console.print(f"[yellow]Warning: Committing to main melee repo, not subdirectory worktree[/yellow]")
+        console.print("[yellow]Warning: Committing to main melee repo, not subdirectory worktree[/yellow]")
         console.print(f"[dim]Expected worktree for: {source_file}[/dim]")
     from src.client import DecompMeAPIClient
     from src.commit import auto_detect_and_commit
     from src.commit.configure import get_file_path_from_function
-    from src.commit.update import validate_function_code, _extract_function_from_code
+    from src.commit.update import _extract_function_from_code, validate_function_code
 
     async def apply():
         async with DecompMeAPIClient(base_url=api_url) as client:
@@ -120,7 +127,7 @@ def commit_apply(
 
                 # Show code preview (markup=False to preserve brackets like [t0])
                 console.print(f"\n[bold]Code to insert ({len(source_code)} chars):[/bold]")
-                preview_lines = source_code.split('\n')
+                preview_lines = source_code.split("\n")
                 if len(preview_lines) > 20:
                     for line in preview_lines[:10]:
                         console.print(f"  {line}", markup=False)
@@ -134,32 +141,32 @@ def commit_apply(
                 # Test compilation by temporarily applying and reverting
                 console.print("\n[bold]Testing compilation...[/bold]")
                 full_path = melee_root / "src" / file_path
-                original_content = full_path.read_text(encoding='utf-8')
+                original_content = full_path.read_text(encoding="utf-8")
 
                 try:
                     # Temporarily apply the change
                     from src.commit.update import update_source_file
+
                     success = await update_source_file(
-                        file_path, function_name, source_code, melee_root,
-                        extract_function_only=False  # Already extracted above
+                        file_path,
+                        function_name,
+                        source_code,
+                        melee_root,
+                        extract_function_only=False,  # Already extracted above
                     )
                     if not success:
                         console.print("[red]Failed to apply code (validation or insertion error)[/red]")
-                        console.print(f"[yellow]If the function stub is missing, run: melee-agent stub add {function_name}[/yellow]")
+                        console.print(
+                            f"[yellow]If the function stub is missing, run: melee-agent stub add {function_name}[/yellow]"
+                        )
                         raise typer.Exit(1)
 
                     # Try to compile
                     # Run configure.py first
-                    subprocess.run(
-                        ["python", "configure.py"],
-                        cwd=melee_root, capture_output=True
-                    )
+                    subprocess.run(["python", "configure.py"], cwd=melee_root, capture_output=True)
                     # Compile the object file
-                    obj_path = f"build/GALE01/src/{file_path}".replace('.c', '.o')
-                    result = subprocess.run(
-                        ["ninja", obj_path],
-                        cwd=melee_root, capture_output=True, text=True
-                    )
+                    obj_path = f"build/GALE01/src/{file_path}".replace(".c", ".o")
+                    result = subprocess.run(["ninja", obj_path], cwd=melee_root, capture_output=True, text=True)
 
                     if result.returncode == 0:
                         console.print("[green]✓ Compilation successful[/green]")
@@ -179,7 +186,7 @@ def commit_apply(
 
                 finally:
                     # Always revert to original
-                    full_path.write_text(original_content, encoding='utf-8')
+                    full_path.write_text(original_content, encoding="utf-8")
                     console.print("[dim]Reverted test changes[/dim]")
 
                 console.print("\n[green bold]Dry run complete - all checks passed![/green bold]")
@@ -224,7 +231,7 @@ def commit_apply(
         match_percent=match_pct,
         local_scratch_slug=scratch_slug,
         is_committed=True,
-        status='committed',
+        status="committed",
         branch=branch,
         worktree_path=str(melee_root),
         pr_url=pr_url,
@@ -260,7 +267,7 @@ def commit_format(
 def commit_check_callers(
     function_name: Annotated[str, typer.Argument(help="Name of the function to find callers for")],
     melee_root: Annotated[
-        Optional[Path], typer.Option("--melee-root", "-m", help="Path to melee submodule (auto-detects agent worktree)")
+        Path | None, typer.Option("--melee-root", "-m", help="Path to melee submodule (auto-detects agent worktree)")
     ] = None,
 ):
     """Find all callers of a function in the codebase.
@@ -285,6 +292,7 @@ def commit_check_callers(
     console.print(f"[cyan]Found {len(callers)} call site(s):[/cyan]\n")
 
     from rich.table import Table
+
     table = Table(show_header=True, header_style="bold")
     table.add_column("File", style="cyan")
     table.add_column("Line", justify="right")

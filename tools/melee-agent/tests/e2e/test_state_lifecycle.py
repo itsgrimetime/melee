@@ -39,12 +39,7 @@ class TestStateTransitions:
         temp_db.add_claim("TestFunc", "agent-1")
 
         # Simulate starting work (match < 95%)
-        temp_db.upsert_function(
-            "TestFunc",
-            agent_id="agent-1",
-            status="in_progress",
-            match_percent=50.0
-        )
+        temp_db.upsert_function("TestFunc", agent_id="agent-1", status="in_progress", match_percent=50.0)
 
         func = temp_db.get_function("TestFunc")
         assert func["status"] == "in_progress"
@@ -56,12 +51,7 @@ class TestStateTransitions:
         temp_db.add_claim("TestFunc", "agent-1")
 
         # Simulate achieving match
-        temp_db.upsert_function(
-            "TestFunc",
-            agent_id="agent-1",
-            status="matched",
-            match_percent=98.5
-        )
+        temp_db.upsert_function("TestFunc", agent_id="agent-1", status="matched", match_percent=98.5)
 
         func = temp_db.get_function("TestFunc")
         assert func["status"] == "matched"
@@ -71,13 +61,7 @@ class TestStateTransitions:
         """Committing code transitions to committed status."""
         temp_db.upsert_function("TestFunc", status="matched", match_percent=100.0)
 
-        temp_db.upsert_function(
-            "TestFunc",
-            status="committed",
-            is_committed=True,
-            commit_hash="abc123",
-            branch="main"
-        )
+        temp_db.upsert_function("TestFunc", status="committed", is_committed=True, commit_hash="abc123", branch="main")
 
         func = temp_db.get_function("TestFunc")
         assert func["status"] == "committed"
@@ -86,18 +70,14 @@ class TestStateTransitions:
 
     def test_pr_link_transitions_to_in_review(self, temp_db):
         """Linking a PR transitions to in_review status."""
-        temp_db.upsert_function(
-            "TestFunc",
-            status="committed",
-            is_committed=True
-        )
+        temp_db.upsert_function("TestFunc", status="committed", is_committed=True)
 
         temp_db.upsert_function(
             "TestFunc",
             status="in_review",
             pr_url="https://github.com/example/repo/pull/123",
             pr_number=123,
-            pr_state="OPEN"
+            pr_state="OPEN",
         )
 
         func = temp_db.get_function("TestFunc")
@@ -108,17 +88,10 @@ class TestStateTransitions:
     def test_pr_merge_transitions_to_merged(self, temp_db):
         """PR merge transitions to merged status."""
         temp_db.upsert_function(
-            "TestFunc",
-            status="in_review",
-            pr_url="https://github.com/example/repo/pull/123",
-            pr_state="OPEN"
+            "TestFunc", status="in_review", pr_url="https://github.com/example/repo/pull/123", pr_state="OPEN"
         )
 
-        temp_db.upsert_function(
-            "TestFunc",
-            status="merged",
-            pr_state="MERGED"
-        )
+        temp_db.upsert_function("TestFunc", status="merged", pr_state="MERGED")
 
         func = temp_db.get_function("TestFunc")
         assert func["status"] == "merged"
@@ -143,30 +116,17 @@ class TestFullLifecycle:
 
         # 3. Start working (in_progress)
         temp_db.upsert_function(
-            func_name,
-            agent_id="agent-1",
-            status="in_progress",
-            match_percent=30.0,
-            local_scratch_slug="test-scratch-1"
+            func_name, agent_id="agent-1", status="in_progress", match_percent=30.0, local_scratch_slug="test-scratch-1"
         )
         assert temp_db.get_function(func_name)["status"] == "in_progress"
 
         # 4. Achieve match
-        temp_db.upsert_function(
-            func_name,
-            agent_id="agent-1",
-            status="matched",
-            match_percent=100.0
-        )
+        temp_db.upsert_function(func_name, agent_id="agent-1", status="matched", match_percent=100.0)
         assert temp_db.get_function(func_name)["status"] == "matched"
 
         # 5. Commit
         temp_db.upsert_function(
-            func_name,
-            status="committed",
-            is_committed=True,
-            commit_hash="def456",
-            build_status="passing"
+            func_name, status="committed", is_committed=True, commit_hash="def456", build_status="passing"
         )
         func = temp_db.get_function(func_name)
         assert func["status"] == "committed"
@@ -178,16 +138,12 @@ class TestFullLifecycle:
             status="in_review",
             pr_url="https://github.com/example/repo/pull/42",
             pr_number=42,
-            pr_state="OPEN"
+            pr_state="OPEN",
         )
         assert temp_db.get_function(func_name)["status"] == "in_review"
 
         # 7. Merge
-        temp_db.upsert_function(
-            func_name,
-            status="merged",
-            pr_state="MERGED"
-        )
+        temp_db.upsert_function(func_name, status="merged", pr_state="MERGED")
         final = temp_db.get_function(func_name)
         assert final["status"] == "merged"
         assert final["pr_state"] == "MERGED"
@@ -209,12 +165,7 @@ class TestStatusConsistency:
 
     def test_committed_has_hash(self, temp_db):
         """Committed status should have commit hash."""
-        temp_db.upsert_function(
-            "TestFunc",
-            status="committed",
-            is_committed=True,
-            commit_hash="abc123"
-        )
+        temp_db.upsert_function("TestFunc", status="committed", is_committed=True, commit_hash="abc123")
 
         func = temp_db.get_function("TestFunc")
         assert func["is_committed"] == 1
@@ -227,7 +178,7 @@ class TestStatusConsistency:
             status="in_review",
             pr_url="https://github.com/example/repo/pull/1",
             pr_number=1,
-            pr_state="OPEN"
+            pr_state="OPEN",
         )
 
         func = temp_db.get_function("TestFunc")
@@ -237,11 +188,7 @@ class TestStatusConsistency:
 
     def test_matched_has_high_percent(self, temp_db):
         """Matched status should have high match percentage."""
-        temp_db.upsert_function(
-            "TestFunc",
-            status="matched",
-            match_percent=98.5
-        )
+        temp_db.upsert_function("TestFunc", status="matched", match_percent=98.5)
 
         func = temp_db.get_function("TestFunc")
         assert func["match_percent"] >= 95.0
@@ -253,11 +200,7 @@ class TestBranchProgress:
     def test_track_progress_on_branch(self, temp_db):
         """Can track match progress per branch."""
         temp_db.upsert_branch_progress(
-            "TestFunc",
-            branch="feature-1",
-            scratch_slug="scratch-1",
-            match_percent=75.0,
-            agent_id="agent-1"
+            "TestFunc", branch="feature-1", scratch_slug="scratch-1", match_percent=75.0, agent_id="agent-1"
         )
 
         progress = temp_db.get_branch_progress("TestFunc")
@@ -267,18 +210,8 @@ class TestBranchProgress:
 
     def test_multiple_branches_independent(self, temp_db):
         """Different branches can have different match states."""
-        temp_db.upsert_branch_progress(
-            "TestFunc",
-            branch="feature-1",
-            match_percent=50.0,
-            agent_id="agent-1"
-        )
-        temp_db.upsert_branch_progress(
-            "TestFunc",
-            branch="feature-2",
-            match_percent=80.0,
-            agent_id="agent-2"
-        )
+        temp_db.upsert_branch_progress("TestFunc", branch="feature-1", match_percent=50.0, agent_id="agent-1")
+        temp_db.upsert_branch_progress("TestFunc", branch="feature-2", match_percent=80.0, agent_id="agent-2")
 
         progress = temp_db.get_branch_progress("TestFunc")
         assert len(progress) == 2
@@ -301,11 +234,7 @@ class TestBranchProgress:
     def test_committed_branch_tracked(self, temp_db):
         """Committed state is tracked per branch."""
         temp_db.upsert_branch_progress(
-            "TestFunc",
-            branch="main",
-            match_percent=100.0,
-            is_committed=True,
-            commit_hash="abc123"
+            "TestFunc", branch="main", match_percent=100.0, is_committed=True, commit_hash="abc123"
         )
 
         progress = temp_db.get_best_branch_progress("TestFunc")

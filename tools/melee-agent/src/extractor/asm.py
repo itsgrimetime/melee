@@ -18,11 +18,11 @@ class AsmExtractor:
         self.melee_root = Path(melee_root)
         self.asm_dir = self.melee_root / "build" / "GALE01" / "asm"
         # Cache for file contents to avoid repeated disk reads
-        self._file_cache: dict[str, Optional[str]] = {}
+        self._file_cache: dict[str, str | None] = {}
         # Cache for functions-per-file index
-        self._functions_index: Optional[dict[str, list[str]]] = None
+        self._functions_index: dict[str, list[str]] | None = None
 
-    def get_asm_for_file(self, source_file: str) -> Optional[str]:
+    def get_asm_for_file(self, source_file: str) -> str | None:
         """
         Get the complete assembly for a source file.
 
@@ -45,7 +45,7 @@ class AsmExtractor:
             return None
 
         try:
-            with open(asm_path, "r", encoding="utf-8") as f:
+            with open(asm_path, encoding="utf-8") as f:
                 content = f.read()
                 self._file_cache[source_file] = content
                 return content
@@ -53,9 +53,7 @@ class AsmExtractor:
             self._file_cache[source_file] = None
             return None
 
-    def get_asm_for_function(
-        self, source_file: str, function_name: str
-    ) -> Optional[str]:
+    def get_asm_for_function(self, source_file: str, function_name: str) -> str | None:
         """
         Extract assembly for a specific function from an ASM file.
 
@@ -72,9 +70,7 @@ class AsmExtractor:
 
         return self._extract_function_from_asm(asm_content, function_name)
 
-    def _extract_function_from_asm(
-        self, asm_content: str, function_name: str
-    ) -> Optional[str]:
+    def _extract_function_from_asm(self, asm_content: str, function_name: str) -> str | None:
         """
         Extract a specific function from ASM content.
 
@@ -231,9 +227,7 @@ class AsmExtractor:
         return result
 
 
-async def extract_asm_for_function(
-    melee_root: Path, source_file: str, function_name: str
-) -> Optional[str]:
+async def extract_asm_for_function(melee_root: Path, source_file: str, function_name: str) -> str | None:
     """
     Async wrapper for extracting function assembly.
 

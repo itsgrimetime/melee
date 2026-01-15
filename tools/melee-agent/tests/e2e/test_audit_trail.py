@@ -68,7 +68,7 @@ class TestAuditLogging:
             instance="local",
             base_url="http://localhost:8000",
             function_name="TestFunc",
-            agent_id="agent-1"
+            agent_id="agent-1",
         )
 
         history = temp_db.get_history(entity_type="scratch", entity_id="test-scratch")
@@ -192,10 +192,7 @@ class TestBranchProgressAudit:
     def test_branch_progress_logged(self, temp_db):
         """Branch progress changes are logged."""
         temp_db.upsert_branch_progress(
-            function_name="TestFunc",
-            branch="feature-1",
-            match_percent=50.0,
-            agent_id="agent-1"
+            function_name="TestFunc", branch="feature-1", match_percent=50.0, agent_id="agent-1"
         )
 
         history = temp_db.get_history(entity_type="branch_progress")
@@ -234,10 +231,7 @@ class TestAuditIntegrity:
         """Audit entries preserve any metadata."""
         # Direct audit log call with metadata
         temp_db.log_audit(
-            entity_type="test",
-            entity_id="test-1",
-            action="test_action",
-            metadata={"extra": "info", "count": 42}
+            entity_type="test", entity_id="test-1", action="test_action", metadata={"extra": "info", "count": 42}
         )
 
         history = temp_db.get_history(entity_type="test")

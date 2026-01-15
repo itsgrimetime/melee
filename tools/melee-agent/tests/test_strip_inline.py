@@ -8,7 +8,8 @@ removes inline function bodies while preserving:
 """
 
 import pytest
-from src.cli.extract import _count_braces, _strip_inline_functions, _strip_target_function, _strip_all_function_bodies
+
+from src.cli.extract import _count_braces, _strip_all_function_bodies, _strip_inline_functions, _strip_target_function
 
 
 class TestCountBraces:
@@ -815,11 +816,10 @@ static inline s32 ftGetKind(Fighter* fp) {
         assert "return fp->kind" not in result
         assert "s32 ftGetKind" in result
         # Check that static was removed from the ftGetKind declaration
-        lines_with_ftGetKind = [l for l in result.split('\n') if 'ftGetKind' in l]
+        lines_with_ftGetKind = [l for l in result.split("\n") if "ftGetKind" in l]
         for line in lines_with_ftGetKind:
-            if 'body stripped' in line:
-                assert 'static' not in line.split('/*')[0], \
-                    f"'static' should be removed from declaration: {line}"
+            if "body stripped" in line:
+                assert "static" not in line.split("/*")[0], f"'static' should be removed from declaration: {line}"
 
     def test_nested_struct_in_struct(self):
         """Nested struct definitions should be preserved."""
@@ -878,16 +878,18 @@ void caller(Fighter* fp) {
         # Option A: Function is commented out entirely
         # Option B: 'static' is removed, leaving just the declaration
         # Option C: Function is completely removed
-        lines = result.split('\n')
+        lines = result.split("\n")
         for line in lines:
             stripped = line.strip()
             # If there's a static declaration ending with ;, it must be followed by body or commented
-            if stripped.startswith('static') and stripped.endswith(';'):
+            if stripped.startswith("static") and stripped.endswith(";"):
                 # This is the problematic pattern - static declaration without body
                 # Check if it's inside a comment
-                if '/*' not in line or line.index('/*') > line.index('static'):
-                    pytest.fail(f"Found static declaration without body: {stripped}\n"
-                               "MWCC requires static functions to have bodies in the same TU.")
+                if "/*" not in line or line.index("/*") > line.index("static"):
+                    pytest.fail(
+                        f"Found static declaration without body: {stripped}\n"
+                        "MWCC requires static functions to have bodies in the same TU."
+                    )
 
     def test_static_inline_stripped_completely_or_extern(self):
         """Static inline functions should not leave bare 'static' declarations.
@@ -904,14 +906,16 @@ void caller(Fighter* fp) {
 
         # Should not have "static void helper" as a standalone declaration
         # because static forward declarations are not portable C89
-        if 'static void helper' in result and ';' in result:
+        if "static void helper" in result and ";" in result:
             # Check if it's a valid pattern (e.g., inside comment or has body)
-            if '/* body stripped' in result or '// body stripped' in result:
+            if "/* body stripped" in result or "// body stripped" in result:
                 # It's using the current (problematic) format
                 # This test documents the required fix
-                pytest.fail("Static inline stripped to 'static void helper();' which "
-                           "may cause '{' expected error in MWCC. "
-                           "Should be commented out or made extern.")
+                pytest.fail(
+                    "Static inline stripped to 'static void helper();' which "
+                    "may cause '{' expected error in MWCC. "
+                    "Should be commented out or made extern."
+                )
 
     def test_non_static_inline_can_be_declaration(self):
         """Non-static inline functions can be forward declared safely."""

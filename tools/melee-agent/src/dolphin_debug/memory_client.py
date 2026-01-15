@@ -6,7 +6,8 @@ Works on ARM Mac when Dolphin is signed with debug entitlements.
 """
 
 import struct
-from typing import Optional, List
+from typing import List, Optional
+
 import dolphin_memory_engine as dme
 
 

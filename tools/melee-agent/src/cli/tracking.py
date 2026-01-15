@@ -21,7 +21,6 @@ _history_suffix = f"_{AGENT_ID}" if AGENT_ID else ""
 MATCH_HISTORY_FILE = DECOMP_CONFIG_DIR / f"match_history{_history_suffix}.json"
 
 
-
 # =============================================================================
 # Match History Tracking
 # =============================================================================
@@ -35,9 +34,9 @@ def load_match_history() -> dict:
     if not MATCH_HISTORY_FILE.exists():
         return {}
     try:
-        with open(MATCH_HISTORY_FILE, "r") as f:
+        with open(MATCH_HISTORY_FILE) as f:
             return json.load(f)
-    except (json.JSONDecodeError, IOError):
+    except (OSError, json.JSONDecodeError):
         return {}
 
 

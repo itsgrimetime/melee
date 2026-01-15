@@ -4,10 +4,7 @@ import re
 from pathlib import Path
 
 
-async def update_configure_py(
-    file_path: str,
-    melee_root: Path
-) -> bool:
+async def update_configure_py(file_path: str, melee_root: Path) -> bool:
     """Change NonMatching to Matching for this file in configure.py.
 
     Args:
@@ -25,24 +22,18 @@ async def update_configure_py(
             return False
 
         # Read the current configure.py content
-        content = configure_path.read_text(encoding='utf-8')
+        content = configure_path.read_text(encoding="utf-8")
 
         # Create the pattern to find the NonMatching entry
         # Match: Object(NonMatching, "path/to/file.c")
         # We need to escape special regex characters in the file path
         escaped_path = re.escape(file_path)
-        pattern = re.compile(
-            rf'Object\(NonMatching,\s*["\']({escaped_path})["\']',
-            re.MULTILINE
-        )
+        pattern = re.compile(rf'Object\(NonMatching,\s*["\']({escaped_path})["\']', re.MULTILINE)
 
         match = pattern.search(content)
         if not match:
             # Check if it's already marked as Matching
-            matching_pattern = re.compile(
-                rf'Object\(Matching,\s*["\']({escaped_path})["\']',
-                re.MULTILINE
-            )
+            matching_pattern = re.compile(rf'Object\(Matching,\s*["\']({escaped_path})["\']', re.MULTILINE)
             if matching_pattern.search(content):
                 print(f"File '{file_path}' is already marked as Matching in configure.py")
                 return True
@@ -54,7 +45,7 @@ async def update_configure_py(
         new_content = pattern.sub(r'Object(Matching, "\1"', content)
 
         # Write the updated content back
-        configure_path.write_text(new_content, encoding='utf-8')
+        configure_path.write_text(new_content, encoding="utf-8")
 
         print(f"Successfully changed '{file_path}' from NonMatching to Matching in configure.py")
         return True
@@ -64,10 +55,7 @@ async def update_configure_py(
         return False
 
 
-async def should_mark_as_matching(
-    file_path: str,
-    melee_root: Path
-) -> tuple[bool, str]:
+async def should_mark_as_matching(file_path: str, melee_root: Path) -> tuple[bool, str]:
     """Check if a file should be marked as Matching in configure.py.
 
     A file should only transition from NonMatching to Matching when ALL
@@ -84,14 +72,14 @@ async def should_mark_as_matching(
         - (False, reason) if not all functions are matched, with explanation
     """
     try:
+        from .report import ReportParser
         from .splits import SplitsParser
         from .symbols import SymbolParser
-        from .report import ReportParser
     except ImportError:
         # Fall back to extractor module
+        from src.extractor.report import ReportParser
         from src.extractor.splits import SplitsParser
         from src.extractor.symbols import SymbolParser
-        from src.extractor.report import ReportParser
 
     try:
         # Get all symbols
@@ -134,10 +122,7 @@ async def should_mark_as_matching(
         return False, f"Error checking file status: {e}"
 
 
-async def get_file_path_from_function(
-    function_name: str,
-    melee_root: Path
-) -> str | None:
+async def get_file_path_from_function(function_name: str, melee_root: Path) -> str | None:
     """Find the file path containing a specific function.
 
     This searches through the melee source directory to find which file
@@ -161,23 +146,19 @@ async def get_file_path_from_function(
         # Use a simple grep-like search
         for c_file in src_dir.rglob("*.c"):
             try:
-                content = c_file.read_text(encoding='utf-8')
+                content = c_file.read_text(encoding="utf-8")
 
                 # Look for function definition
                 # Pattern matches function definitions like:
                 # - void FunctionName(
                 # - static s32 FunctionName(
                 definition_pattern = re.compile(
-                    rf'^\s*(?:static\s+)?(?:inline\s+)?[\w\*\s]+\s+{re.escape(function_name)}\s*\(',
-                    re.MULTILINE
+                    rf"^\s*(?:static\s+)?(?:inline\s+)?[\w\*\s]+\s+{re.escape(function_name)}\s*\(", re.MULTILINE
                 )
 
                 # Also look for stub markers like:
                 # /// #FunctionName
-                stub_pattern = re.compile(
-                    rf'^///\s*#\s*{re.escape(function_name)}\s*$',
-                    re.MULTILINE
-                )
+                stub_pattern = re.compile(rf"^///\s*#\s*{re.escape(function_name)}\s*$", re.MULTILINE)
 
                 if definition_pattern.search(content) or stub_pattern.search(content):
                     # Return path relative to src directory

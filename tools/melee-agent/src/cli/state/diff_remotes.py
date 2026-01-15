@@ -8,8 +8,9 @@ from typing import Annotated, Optional
 import typer
 from rich.table import Table
 
-from .._common import console, ensure_dol_in_worktree
 from src.db import get_db
+
+from .._common import console, ensure_dol_in_worktree
 
 
 def _run_git(args: list[str], cwd: Path) -> tuple[int, str, str]:
@@ -85,8 +86,8 @@ def _build_ref_and_get_all_functions(repo_path: Path, ref: str, clean: bool = Fa
 
     Returns a dict mapping function name to match percentage.
     """
-    import shutil
     import json
+    import shutil
 
     # Create worktree in a temp-like location
     safe_ref = ref.replace("/", "-").replace("\\", "-")
@@ -120,12 +121,14 @@ def _build_ref_and_get_all_functions(repo_path: Path, ref: str, clean: bool = Fa
                                 functions[name] = match_pct
                     return functions
                 except (json.JSONDecodeError, OSError):
-                    console.print(f"[dim]Cached report.json is invalid, rebuilding...[/dim]")
+                    console.print("[dim]Cached report.json is invalid, rebuilding...[/dim]")
             else:
-                console.print(f"[dim]Worktree exists but no report.json, rebuilding...[/dim]")
+                console.print("[dim]Worktree exists but no report.json, rebuilding...[/dim]")
         else:
             # Worktree exists but at wrong commit - remove it
-            console.print(f"[dim]Worktree out of date ({current_commit[:8] if current_commit else 'unknown'} vs {target_commit[:8]}), recreating...[/dim]")
+            console.print(
+                f"[dim]Worktree out of date ({current_commit[:8] if current_commit else 'unknown'} vs {target_commit[:8]}), recreating...[/dim]"
+            )
             _run_git(["worktree", "remove", "--force", str(worktree_path)], repo_path)
             if worktree_path.exists():
                 shutil.rmtree(worktree_path)
@@ -164,12 +167,12 @@ def _build_ref_and_get_all_functions(repo_path: Path, ref: str, clean: bool = Fa
     if result.returncode != 0:
         console.print(f"[red]configure.py failed for {ref} (exit code {result.returncode}):[/red]")
         if result.stdout.strip():
-            console.print(f"[dim]stdout:[/dim]")
-            for line in result.stdout.strip().split('\n')[-20:]:
+            console.print("[dim]stdout:[/dim]")
+            for line in result.stdout.strip().split("\n")[-20:]:
                 console.print(f"  {line}")
         if result.stderr.strip():
-            console.print(f"[dim]stderr:[/dim]")
-            for line in result.stderr.strip().split('\n')[-20:]:
+            console.print("[dim]stderr:[/dim]")
+            for line in result.stderr.strip().split("\n")[-20:]:
                 console.print(f"  [red]{line}[/red]")
         return {}
 
@@ -185,12 +188,12 @@ def _build_ref_and_get_all_functions(repo_path: Path, ref: str, clean: bool = Fa
         console.print(f"[red]ninja build failed for {ref} (exit code {result.returncode}):[/red]")
         # Show last lines of both stdout and stderr
         if result.stdout.strip():
-            console.print(f"[dim]stdout (last 20 lines):[/dim]")
-            for line in result.stdout.strip().split('\n')[-20:]:
+            console.print("[dim]stdout (last 20 lines):[/dim]")
+            for line in result.stdout.strip().split("\n")[-20:]:
                 console.print(f"  {line}")
         if result.stderr.strip():
-            console.print(f"[dim]stderr (last 20 lines):[/dim]")
-            for line in result.stderr.strip().split('\n')[-20:]:
+            console.print("[dim]stderr (last 20 lines):[/dim]")
+            for line in result.stderr.strip().split("\n")[-20:]:
                 console.print(f"  [red]{line}[/red]")
         return {}
 
@@ -198,7 +201,7 @@ def _build_ref_and_get_all_functions(repo_path: Path, ref: str, clean: bool = Fa
 
     # Read report.json from the worktree
     if not report_path.exists():
-        console.print(f"[red]report.json not found after build[/red]")
+        console.print("[red]report.json not found after build[/red]")
         return {}
 
     with open(report_path) as f:
@@ -235,7 +238,7 @@ def _get_matched_functions_from_source(repo_path: Path, ref: str) -> set[str]:
     if ret != 0:
         return set()
 
-    c_files = [f for f in stdout.strip().split('\n') if f.endswith('.c')]
+    c_files = [f for f in stdout.strip().split("\n") if f.endswith(".c")]
 
     matched_functions = set()
 
@@ -246,21 +249,18 @@ def _get_matched_functions_from_source(repo_path: Path, ref: str) -> set[str]:
     # - fn_80XXXXXX, prefix_80XXXXXX (address-based)
     # - CamelCase names
     func_def_pattern = re.compile(
-        r'^(?!.*\basm\b)'  # Negative lookahead: not an asm function
-        r'(?:static\s+)?'  # Optional static
-        r'(?:inline\s+)?'  # Optional inline
-        r'(?:const\s+)?'   # Optional const
-        r'[\w\s\*]+?'      # Return type (words, spaces, pointers)
-        r'\b(\w+)\s*\('    # Function name followed by (
-        r'[^;]*$',         # Not a declaration (no semicolon at end)
-        re.MULTILINE
+        r"^(?!.*\basm\b)"  # Negative lookahead: not an asm function
+        r"(?:static\s+)?"  # Optional static
+        r"(?:inline\s+)?"  # Optional inline
+        r"(?:const\s+)?"  # Optional const
+        r"[\w\s\*]+?"  # Return type (words, spaces, pointers)
+        r"\b(\w+)\s*\("  # Function name followed by (
+        r"[^;]*$",  # Not a declaration (no semicolon at end)
+        re.MULTILINE,
     )
 
     # Also match asm functions to exclude them explicitly
-    asm_func_pattern = re.compile(
-        r'^\s*asm\s+[\w\s\*]+?\b(\w+)\s*\(',
-        re.MULTILINE
-    )
+    asm_func_pattern = re.compile(r"^\s*asm\s+[\w\s\*]+?\b(\w+)\s*\(", re.MULTILINE)
 
     for c_file in c_files:
         ret, content, _ = _run_git(["show", f"{ref}:{c_file}"], repo_path)
@@ -272,25 +272,25 @@ def _get_matched_functions_from_source(repo_path: Path, ref: str) -> set[str]:
 
         # Find function definitions that look like implementations
         # (have opening brace on same or next line)
-        lines = content.split('\n')
+        lines = content.split("\n")
         i = 0
         while i < len(lines):
             line = lines[i]
 
             # Skip asm functions
-            if re.match(r'^\s*asm\s+', line):
+            if re.match(r"^\s*asm\s+", line):
                 i += 1
                 continue
 
             # Look for function definition pattern
             # Must have return type, name, and opening paren
             match = re.match(
-                r'^(?:static\s+)?(?:inline\s+)?(?:const\s+)?'
-                r'(?:unsigned\s+|signed\s+)?'
-                r'(?:void|int|s8|s16|s32|u8|u16|u32|f32|f64|bool|char|'
-                r'[A-Z]\w*\s*\**)\s+'  # Common types or CamelCase types
-                r'(\w+)\s*\([^;]*$',   # Function name + ( + not ending in ;
-                line
+                r"^(?:static\s+)?(?:inline\s+)?(?:const\s+)?"
+                r"(?:unsigned\s+|signed\s+)?"
+                r"(?:void|int|s8|s16|s32|u8|u16|u32|f32|f64|bool|char|"
+                r"[A-Z]\w*\s*\**)\s+"  # Common types or CamelCase types
+                r"(\w+)\s*\([^;]*$",  # Function name + ( + not ending in ;
+                line,
             )
 
             if match:
@@ -299,16 +299,16 @@ def _get_matched_functions_from_source(repo_path: Path, ref: str) -> set[str]:
                 # Look at current line and next few lines
                 has_body = False
                 for j in range(i, min(i + 3, len(lines))):
-                    if '{' in lines[j]:
+                    if "{" in lines[j]:
                         has_body = True
                         break
-                    if ';' in lines[j]:
+                    if ";" in lines[j]:
                         # It's a declaration, not definition
                         break
 
                 if has_body and func_name not in asm_funcs:
                     # Filter out common non-function matches
-                    if not func_name.startswith(('if', 'while', 'for', 'switch', 'return')):
+                    if not func_name.startswith(("if", "while", "for", "switch", "return")):
                         matched_functions.add(func_name)
 
             i += 1
@@ -317,33 +317,30 @@ def _get_matched_functions_from_source(repo_path: Path, ref: str) -> set[str]:
 
 
 def diff_remotes_command(
-    repo_path: Annotated[
-        Optional[Path], typer.Option("--repo", "-r", help="Path to melee repo")
-    ] = None,
-    origin: Annotated[
-        str, typer.Option("--origin", help="Origin remote/branch")
-    ] = "origin/master",
-    upstream: Annotated[
-        str, typer.Option("--upstream", help="Upstream remote/branch")
-    ] = "upstream/master",
+    repo_path: Annotated[Path | None, typer.Option("--repo", "-r", help="Path to melee repo")] = None,
+    origin: Annotated[str, typer.Option("--origin", help="Origin remote/branch")] = "origin/master",
+    upstream: Annotated[str, typer.Option("--upstream", help="Upstream remote/branch")] = "upstream/master",
     build: Annotated[
-        bool, typer.Option("--build/--no-build", help="Build both refs in worktrees for accurate report.json comparison (slow)")
+        bool,
+        typer.Option(
+            "--build/--no-build", help="Build both refs in worktrees for accurate report.json comparison (slow)"
+        ),
     ] = False,
     clean: Annotated[
         bool, typer.Option("--clean/--no-clean", help="Force rebuild by removing cached worktrees (only with --build)")
     ] = False,
     regressions: Annotated[
-        bool, typer.Option("--regressions/--no-regressions", help="Show functions where origin has lower match %% than upstream (requires --build)")
+        bool,
+        typer.Option(
+            "--regressions/--no-regressions",
+            help="Show functions where origin has lower match %% than upstream (requires --build)",
+        ),
     ] = False,
     update_status: Annotated[
         bool, typer.Option("--update-status/--no-update-status", help="Update DB status for matched functions")
     ] = False,
-    limit: Annotated[
-        int, typer.Option("--limit", "-n", help="Limit output rows")
-    ] = 50,
-    verbose: Annotated[
-        bool, typer.Option("--verbose", "-v", help="Show detailed output")
-    ] = False,
+    limit: Annotated[int, typer.Option("--limit", "-n", help="Limit output rows")] = 50,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show detailed output")] = False,
 ):
     """Show functions that differ between origin and upstream.
 
@@ -385,12 +382,12 @@ def diff_remotes_command(
     db = get_db()
 
     # Fetch latest from remotes
-    console.print(f"[dim]Fetching from remotes...[/dim]")
+    console.print("[dim]Fetching from remotes...[/dim]")
     _run_git(["fetch", "origin"], repo_path)
     _run_git(["fetch", "upstream"], repo_path)
 
     # Get local functions from report.json (most accurate)
-    console.print(f"[dim]Reading local report.json...[/dim]")
+    console.print("[dim]Reading local report.json...[/dim]")
     local_funcs = _get_100_percent_functions_from_report(repo_path)
     if not local_funcs:
         console.print("[yellow]Could not read report.json. Run 'ninja' to build first.[/yellow]")
@@ -403,11 +400,11 @@ def diff_remotes_command(
 
     if build:
         # Build both refs in worktrees for accurate comparison
-        console.print(f"\n[bold]Building both refs for accurate comparison...[/bold]")
+        console.print("\n[bold]Building both refs for accurate comparison...[/bold]")
         if not clean:
-            console.print(f"[dim]Using cached worktrees if available (use --clean to force rebuild)[/dim]\n")
+            console.print("[dim]Using cached worktrees if available (use --clean to force rebuild)[/dim]\n")
         else:
-            console.print(f"[yellow]Forcing fresh builds (--clean)[/yellow]\n")
+            console.print("[yellow]Forcing fresh builds (--clean)[/yellow]\n")
 
         # Build origin - get all functions for regression detection
         console.print(f"[bold cyan]═══ Building {origin} ═══[/bold cyan]")
@@ -458,7 +455,7 @@ def diff_remotes_command(
                 """,
                 list(origin_only),
             )
-            db_funcs = {row['function_name']: dict(row) for row in cursor.fetchall()}
+            db_funcs = {row["function_name"]: dict(row) for row in cursor.fetchall()}
         else:
             db_funcs = {}
 
@@ -473,8 +470,8 @@ def diff_remotes_command(
         sorted_funcs = sorted(origin_only)
         for func_name in sorted_funcs[:limit]:
             db_info = db_funcs.get(func_name, {})
-            match_pct = db_info.get('match_percent', 0) or 0
-            status = db_info.get('status', '-')
+            match_pct = db_info.get("match_percent", 0) or 0
+            status = db_info.get("status", "-")
             in_db = "✓" if db_info else "-"
             table.add_row(
                 func_name,
@@ -505,7 +502,7 @@ def diff_remotes_command(
                 regressed.append((func_name, origin_pct, upstream_pct))
 
         if regressed:
-            console.print(f"\n[bold red]Regressions (origin % < upstream %):[/bold red]")
+            console.print("\n[bold red]Regressions (origin % < upstream %):[/bold red]")
             console.print(f"[red]{len(regressed)} functions[/red]")
 
             # Sort by largest regression first
@@ -531,11 +528,11 @@ def diff_remotes_command(
 
             console.print(table)
         else:
-            console.print(f"\n[green]No regressions found![/green]")
+            console.print("\n[green]No regressions found![/green]")
 
     # Update status if requested
     if update_status and origin_only:
-        console.print(f"\n[dim]Updating status for functions in origin only...[/dim]")
+        console.print("\n[dim]Updating status for functions in origin only...[/dim]")
         updated = 0
 
         with db.transaction() as conn:
@@ -556,7 +553,7 @@ def diff_remotes_command(
             console.print("[dim]No status updates needed[/dim]")
 
     # Summary
-    console.print(f"\n[bold]Summary:[/bold]")
+    console.print("\n[bold]Summary:[/bold]")
     console.print(f"  In {origin} only:   {len(origin_only)}")
     console.print(f"  In {upstream} only: {len(upstream_only)}")
     console.print(f"  Tracked in DB:      {len(db_funcs)}/{len(origin_only)}")
@@ -564,10 +561,11 @@ def diff_remotes_command(
     # Add regression count to summary if we computed it
     if regressions and origin_all_funcs and upstream_all_funcs:
         regression_count = sum(
-            1 for func_name, upstream_pct in upstream_all_funcs.items()
+            1
+            for func_name, upstream_pct in upstream_all_funcs.items()
             if origin_all_funcs.get(func_name, 0) < upstream_pct
         )
         if regression_count > 0:
             console.print(f"  [red]Regressions:       {regression_count}[/red]")
         else:
-            console.print(f"  [green]Regressions:       0[/green]")
+            console.print("  [green]Regressions:       0[/green]")

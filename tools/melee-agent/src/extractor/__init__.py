@@ -4,24 +4,24 @@ This module extracts unmatched functions from the melee decompilation project,
 including their assembly code, context, and match status.
 """
 
+from .asm import AsmExtractor, extract_asm_for_function
+from .context import ContextGenerator, generate_context
+from .extractor import (
+    FunctionExtractor,
+    extract_function,
+    extract_unmatched_functions,
+)
 from .models import (
-    ObjectStatus,
-    FunctionSymbol,
-    FunctionMatch,
-    FunctionInfo,
     ExtractionResult,
+    FunctionInfo,
+    FunctionMatch,
+    FunctionSymbol,
+    ObjectStatus,
 )
 from .parser import ConfigureParser, parse_configure
 from .report import ReportParser, parse_report
-from .context import ContextGenerator, generate_context
-from .symbols import SymbolParser, parse_symbols
-from .asm import AsmExtractor, extract_asm_for_function
 from .splits import SplitsParser, parse_splits
-from .extractor import (
-    FunctionExtractor,
-    extract_unmatched_functions,
-    extract_function,
-)
+from .symbols import SymbolParser, parse_symbols
 
 __all__ = [
     # Models

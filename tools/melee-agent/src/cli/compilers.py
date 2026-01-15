@@ -12,15 +12,9 @@ from ._common import console, get_local_api_url
 
 
 def list_compilers(
-    platform: Annotated[
-        Optional[str], typer.Argument(help="Filter by platform (e.g., gc_wii)")
-    ] = None,
-    api_url: Annotated[
-        Optional[str], typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")
-    ] = None,
-    output_json: Annotated[
-        bool, typer.Option("--json", help="Output as JSON")
-    ] = False,
+    platform: Annotated[str | None, typer.Argument(help="Filter by platform (e.g., gc_wii)")] = None,
+    api_url: Annotated[str | None, typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")] = None,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
     """List available compilers."""
     api_url = api_url or get_local_api_url()

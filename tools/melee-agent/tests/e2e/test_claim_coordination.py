@@ -160,7 +160,7 @@ class TestClaimExpiry:
                 INSERT INTO claims (function_name, agent_id, claimed_at, expires_at)
                 VALUES (?, ?, ?, ?)
                 """,
-                ("TestFunc", "agent-1", now - 7200, now - 3600)  # Expired 1 hour ago
+                ("TestFunc", "agent-1", now - 7200, now - 3600),  # Expired 1 hour ago
             )
 
         # New agent should be able to claim
@@ -183,7 +183,7 @@ class TestClaimExpiry:
                 INSERT INTO claims (function_name, agent_id, claimed_at, expires_at)
                 VALUES (?, ?, ?, ?)
                 """,
-                ("TestFunc", "agent-1", now - 7200, now - 3600)
+                ("TestFunc", "agent-1", now - 7200, now - 3600),
             )
 
         claims = temp_db.get_active_claims()
@@ -214,12 +214,7 @@ class TestClaimList:
 
     def test_list_includes_match_info(self, temp_db):
         """Claims include function match info."""
-        temp_db.upsert_function(
-            "TestFunc",
-            status="unclaimed",
-            match_percent=75.5,
-            local_scratch_slug="test-scratch"
-        )
+        temp_db.upsert_function("TestFunc", status="unclaimed", match_percent=75.5, local_scratch_slug="test-scratch")
         temp_db.add_claim("TestFunc", "agent-1")
 
         claims = temp_db.get_active_claims()

@@ -26,14 +26,13 @@ PRODUCTION_DECOMP_ME = "https://decomp.me"
 # Can be overridden via .env file with LOCAL_DECOMP_CANDIDATES (comma-separated)
 DEFAULT_LOCAL_CANDIDATES = [
     "http://nzxt-discord.local",  # Home network hostname
-    "http://10.200.0.1",          # WireGuard VPN
-    "http://localhost:8000",      # Local dev server
+    "http://10.200.0.1",  # WireGuard VPN
+    "http://localhost:8000",  # Local dev server
 ]
 
 _env_candidates = os.environ.get("LOCAL_DECOMP_CANDIDATES", "")
 LOCAL_DECOMP_CANDIDATES = (
-    [url.strip() for url in _env_candidates.split(",") if url.strip()]
-    if _env_candidates else DEFAULT_LOCAL_CANDIDATES
+    [url.strip() for url in _env_candidates.split(",") if url.strip()] if _env_candidates else DEFAULT_LOCAL_CANDIDATES
 )
 
 # Cache for detected local URL (valid for 1 hour)
@@ -81,7 +80,7 @@ def detect_local_api_url(force_probe: bool = False) -> str | None:
                 # Verify cached URL still works
                 if _probe_url(cached_url, timeout=1.0):
                     return cached_url
-        except (json.JSONDecodeError, IOError):
+        except (OSError, json.JSONDecodeError):
             pass
 
     # Probe candidates
@@ -91,7 +90,7 @@ def detect_local_api_url(force_probe: bool = False) -> str | None:
             try:
                 with open(LOCAL_API_CACHE_FILE, "w") as f:
                     json.dump({"url": url, "cached_at": time.time()}, f)
-            except IOError:
+            except OSError:
                 pass
             return url
 

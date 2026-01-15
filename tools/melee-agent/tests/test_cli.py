@@ -4,13 +4,13 @@ These tests verify CLI commands work correctly and handle errors properly.
 Run with: pytest tests/test_cli.py -v
 """
 
-import pytest
 from pathlib import Path
-from typer.testing import CliRunner
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.cli import app
+import pytest
+from typer.testing import CliRunner
 
+from src.cli import app
 
 # Use typer's CliRunner for testing
 runner = CliRunner()
@@ -48,20 +48,13 @@ class TestExtractCommands:
 
     def test_extract_list_with_invalid_path(self):
         """Test extract list with invalid melee root."""
-        result = runner.invoke(app, [
-            "extract", "list",
-            "--melee-root", "/nonexistent/path"
-        ])
+        result = runner.invoke(app, ["extract", "list", "--melee-root", "/nonexistent/path"])
         # Should fail with file not found or similar error
         assert result.exit_code != 0
 
     def test_extract_list_basic(self, melee_root_exists):
         """Test basic extract list command."""
-        result = runner.invoke(app, [
-            "extract", "list",
-            "--melee-root", str(melee_root_exists),
-            "--limit", "5"
-        ])
+        result = runner.invoke(app, ["extract", "list", "--melee-root", str(melee_root_exists), "--limit", "5"])
 
         # Should succeed or fail gracefully
         if result.exit_code == 0:
@@ -70,27 +63,34 @@ class TestExtractCommands:
 
     def test_extract_list_with_filters(self, melee_root_exists):
         """Test extract list with filtering options."""
-        result = runner.invoke(app, [
-            "extract", "list",
-            "--melee-root", str(melee_root_exists),
-            "--min-match", "0.5",
-            "--max-match", "0.9",
-            "--min-size", "50",
-            "--max-size", "500",
-            "--limit", "3"
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "extract",
+                "list",
+                "--melee-root",
+                str(melee_root_exists),
+                "--min-match",
+                "0.5",
+                "--max-match",
+                "0.9",
+                "--min-size",
+                "50",
+                "--max-size",
+                "500",
+                "--limit",
+                "3",
+            ],
+        )
 
         # Should run without crashing
         assert result.exit_code == 0 or "not found" in result.stdout.lower()
 
     def test_extract_list_with_file_filter(self, melee_root_exists):
         """Test extract list with --file filter option."""
-        result = runner.invoke(app, [
-            "extract", "list",
-            "--melee-root", str(melee_root_exists),
-            "--file", "lb/",
-            "--limit", "5"
-        ])
+        result = runner.invoke(
+            app, ["extract", "list", "--melee-root", str(melee_root_exists), "--file", "lb/", "--limit", "5"]
+        )
 
         # Should run without crashing
         assert result.exit_code == 0
@@ -113,13 +113,20 @@ class TestExtractCommands:
 
     def test_extract_list_show_excluded(self, melee_root_exists):
         """Test extract list with --show-excluded flag."""
-        result = runner.invoke(app, [
-            "extract", "list",
-            "--melee-root", str(melee_root_exists),
-            "--module", "lb",
-            "--limit", "3",
-            "--show-excluded"
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "extract",
+                "list",
+                "--melee-root",
+                str(melee_root_exists),
+                "--module",
+                "lb",
+                "--limit",
+                "3",
+                "--show-excluded",
+            ],
+        )
 
         # Should run without crashing
         assert result.exit_code == 0
@@ -132,11 +139,7 @@ class TestExtractCommands:
         This is a regression test for the bug where extract list would exclude
         ALL functions in the database, not just those with status='merged'.
         """
-        result = runner.invoke(app, [
-            "extract", "list",
-            "--melee-root", str(melee_root_exists),
-            "--limit", "5"
-        ])
+        result = runner.invoke(app, ["extract", "list", "--melee-root", str(melee_root_exists), "--limit", "5"])
 
         # Should succeed
         assert result.exit_code == 0
@@ -146,12 +149,9 @@ class TestExtractCommands:
 
     def test_extract_list_include_completed_flag(self, melee_root_exists):
         """Test that --include-completed includes merged functions."""
-        result = runner.invoke(app, [
-            "extract", "list",
-            "--melee-root", str(melee_root_exists),
-            "--include-completed",
-            "--limit", "5"
-        ])
+        result = runner.invoke(
+            app, ["extract", "list", "--melee-root", str(melee_root_exists), "--include-completed", "--limit", "5"]
+        )
 
         # Should succeed
         assert result.exit_code == 0
@@ -170,11 +170,7 @@ class TestExtractCommands:
 
     def test_extract_files_basic(self, melee_root_exists):
         """Test basic extract files command."""
-        result = runner.invoke(app, [
-            "extract", "files",
-            "--melee-root", str(melee_root_exists),
-            "--limit", "5"
-        ])
+        result = runner.invoke(app, ["extract", "files", "--melee-root", str(melee_root_exists), "--limit", "5"])
 
         # Should succeed
         assert result.exit_code == 0
@@ -188,12 +184,9 @@ class TestExtractCommands:
 
     def test_extract_files_with_module_filter(self, melee_root_exists):
         """Test extract files with module filter."""
-        result = runner.invoke(app, [
-            "extract", "files",
-            "--melee-root", str(melee_root_exists),
-            "--module", "lb",
-            "--limit", "5"
-        ])
+        result = runner.invoke(
+            app, ["extract", "files", "--melee-root", str(melee_root_exists), "--module", "lb", "--limit", "5"]
+        )
 
         # Should succeed
         assert result.exit_code == 0
@@ -202,12 +195,9 @@ class TestExtractCommands:
 
     def test_extract_files_with_status_filter(self, melee_root_exists):
         """Test extract files with status filter."""
-        result = runner.invoke(app, [
-            "extract", "files",
-            "--melee-root", str(melee_root_exists),
-            "--status", "NonMatching",
-            "--limit", "5"
-        ])
+        result = runner.invoke(
+            app, ["extract", "files", "--melee-root", str(melee_root_exists), "--status", "NonMatching", "--limit", "5"]
+        )
 
         # Should succeed
         assert result.exit_code == 0
@@ -216,12 +206,9 @@ class TestExtractCommands:
 
     def test_extract_files_sort_by_unmatched(self, melee_root_exists):
         """Test extract files sorted by unmatched count."""
-        result = runner.invoke(app, [
-            "extract", "files",
-            "--melee-root", str(melee_root_exists),
-            "--sort", "unmatched",
-            "--limit", "5"
-        ])
+        result = runner.invoke(
+            app, ["extract", "files", "--melee-root", str(melee_root_exists), "--sort", "unmatched", "--limit", "5"]
+        )
 
         # Should succeed
         assert result.exit_code == 0
@@ -229,12 +216,9 @@ class TestExtractCommands:
 
     def test_extract_files_sort_by_match(self, melee_root_exists):
         """Test extract files sorted by match percentage."""
-        result = runner.invoke(app, [
-            "extract", "files",
-            "--melee-root", str(melee_root_exists),
-            "--sort", "match",
-            "--limit", "5"
-        ])
+        result = runner.invoke(
+            app, ["extract", "files", "--melee-root", str(melee_root_exists), "--sort", "match", "--limit", "5"]
+        )
 
         # Should succeed
         assert result.exit_code == 0
@@ -250,11 +234,9 @@ class TestExtractCommands:
 
     def test_extract_get_nonexistent_function(self, melee_root_exists):
         """Test extracting a function that doesn't exist."""
-        result = runner.invoke(app, [
-            "extract", "get",
-            "NonExistentFunction12345",
-            "--melee-root", str(melee_root_exists)
-        ])
+        result = runner.invoke(
+            app, ["extract", "get", "NonExistentFunction12345", "--melee-root", str(melee_root_exists)]
+        )
 
         # Should fail with function not found
         assert result.exit_code == 1
@@ -265,12 +247,9 @@ class TestExtractCommands:
         output_file = tmp_path / "output.s"
 
         # Try with memset which should exist
-        result = runner.invoke(app, [
-            "extract", "get",
-            "memset",
-            "--melee-root", str(melee_root_exists),
-            "--output", str(output_file)
-        ])
+        result = runner.invoke(
+            app, ["extract", "get", "memset", "--melee-root", str(melee_root_exists), "--output", str(output_file)]
+        )
 
         # If function exists, output file should be created
         if result.exit_code == 0:
@@ -395,21 +374,25 @@ class TestErrorHandling:
 
     def test_invalid_option_value(self):
         """Test command with invalid option value."""
-        result = runner.invoke(app, [
-            "extract", "list",
-            "--min-match", "invalid"
-        ])
+        result = runner.invoke(app, ["extract", "list", "--min-match", "invalid"])
         # Should fail due to invalid float
         assert result.exit_code != 0
 
     def test_conflicting_options(self, melee_root_exists):
         """Test command with conflicting options."""
-        result = runner.invoke(app, [
-            "extract", "list",
-            "--melee-root", str(melee_root_exists),
-            "--min-match", "0.9",
-            "--max-match", "0.1"  # max < min
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "extract",
+                "list",
+                "--melee-root",
+                str(melee_root_exists),
+                "--min-match",
+                "0.9",
+                "--max-match",
+                "0.1",  # max < min
+            ],
+        )
 
         # Should run but return no results
         if result.exit_code == 0:
@@ -423,19 +406,11 @@ class TestCommandIntegration:
     def test_extract_list_then_get(self, melee_root_exists):
         """Test listing functions then extracting one."""
         # First, list functions
-        list_result = runner.invoke(app, [
-            "extract", "list",
-            "--melee-root", str(melee_root_exists),
-            "--limit", "1"
-        ])
+        list_result = runner.invoke(app, ["extract", "list", "--melee-root", str(melee_root_exists), "--limit", "1"])
 
         # If list succeeded, try to extract memset (should exist)
         if list_result.exit_code == 0:
-            get_result = runner.invoke(app, [
-                "extract", "get",
-                "memset",
-                "--melee-root", str(melee_root_exists)
-            ])
+            get_result = runner.invoke(app, ["extract", "get", "memset", "--melee-root", str(melee_root_exists)])
 
             # Should either succeed or gracefully fail
             assert get_result.exit_code in [0, 1]
@@ -446,10 +421,7 @@ class TestCommandIntegration:
         melee_root = tmp_path / "melee"
         melee_root.mkdir()
 
-        result = runner.invoke(app, [
-            "commit", "format",
-            "--melee-root", str(melee_root)
-        ])
+        result = runner.invoke(app, ["commit", "format", "--melee-root", str(melee_root)])
 
         # Should fail gracefully (no git repo or clang-format not available)
         assert result.exit_code in [0, 1]
@@ -486,11 +458,7 @@ class TestOutputFormatting:
 
     def test_table_output_format(self, melee_root_exists):
         """Test that table output is properly formatted."""
-        result = runner.invoke(app, [
-            "extract", "list",
-            "--melee-root", str(melee_root_exists),
-            "--limit", "1"
-        ])
+        result = runner.invoke(app, ["extract", "list", "--melee-root", str(melee_root_exists), "--limit", "1"])
 
         if result.exit_code == 0 and "Unmatched Functions" in result.stdout:
             # Check for table headers
@@ -500,11 +468,7 @@ class TestOutputFormatting:
 
     def test_error_message_format(self):
         """Test that error messages are user-friendly."""
-        result = runner.invoke(app, [
-            "extract", "get",
-            "NonExistentFunc",
-            "--melee-root", "/nonexistent"
-        ])
+        result = runner.invoke(app, ["extract", "get", "NonExistentFunc", "--melee-root", "/nonexistent"])
 
         # Should have clear error message
         assert result.exit_code != 0
@@ -518,11 +482,7 @@ class TestAsyncCommands:
     @pytest.mark.asyncio
     async def test_extract_list_async(self, melee_root_exists):
         """Test that extract list works with async operations."""
-        result = runner.invoke(app, [
-            "extract", "list",
-            "--melee-root", str(melee_root_exists),
-            "--limit", "1"
-        ])
+        result = runner.invoke(app, ["extract", "list", "--melee-root", str(melee_root_exists), "--limit", "1"])
 
         # Should complete without hanging
         assert result.exit_code in [0, 1]
@@ -530,11 +490,7 @@ class TestAsyncCommands:
     @pytest.mark.asyncio
     async def test_extract_get_async(self, melee_root_exists):
         """Test that extract get works with async operations."""
-        result = runner.invoke(app, [
-            "extract", "get",
-            "memset",
-            "--melee-root", str(melee_root_exists)
-        ])
+        result = runner.invoke(app, ["extract", "get", "memset", "--melee-root", str(melee_root_exists)])
 
         # Should complete without hanging
         assert result.exit_code in [0, 1]

@@ -97,9 +97,7 @@ class ScratchManager:
         if not source_code:
             scratch = await self.client.get_scratch(scratch.slug)
 
-        logger.info(
-            f"Created scratch {scratch.slug} - Score: {scratch.score}/{scratch.max_score}"
-        )
+        logger.info(f"Created scratch {scratch.slug} - Score: {scratch.score}/{scratch.max_score}")
         return scratch
 
     async def iterate(

@@ -2,7 +2,8 @@
 """Example usage of the function extractor module."""
 
 from pathlib import Path
-from extractor import FunctionExtractor, ConfigureParser, SymbolParser
+
+from extractor import ConfigureParser, FunctionExtractor, SymbolParser
 
 
 def main():
@@ -30,7 +31,7 @@ def main():
     print(f"NonMatching: {len(non_matching)}")
     print(f"Equivalent: {len(equivalent)}")
 
-    print(f"\nFirst 5 NonMatching objects:")
+    print("\nFirst 5 NonMatching objects:")
     for obj in non_matching[:5]:
         print(f"  - {obj.file_path} (lib: {obj.lib})")
 
@@ -43,7 +44,7 @@ def main():
     symbols = symbol_parser.parse_symbols()
     print(f"Total function symbols: {len(symbols)}")
 
-    print(f"\nFirst 5 functions:")
+    print("\nFirst 5 functions:")
     for name, symbol in list(symbols.items())[:5]:
         print(f"  - {symbol.name} @ {symbol.address} ({symbol.size_bytes} bytes)")
 
@@ -65,7 +66,7 @@ def main():
         func_info = extractor.extract_function(
             func_name,
             include_asm=True,
-            include_context=False  # Skip context for speed
+            include_context=False,  # Skip context for speed
         )
         if func_info:
             print(f"\nFunction: {func_info.name}")
@@ -76,8 +77,8 @@ def main():
             print(f"  Status: {func_info.object_status}")
             print(f"  Section: {func_info.section}")
             if func_info.asm:
-                asm_lines = func_info.asm.split('\n')
-                print(f"  Assembly (first 5 lines):")
+                asm_lines = func_info.asm.split("\n")
+                print("  Assembly (first 5 lines):")
                 for line in asm_lines[:5]:
                     print(f"    {line}")
             break
@@ -94,11 +95,11 @@ def main():
 
     result = extractor.extract_unmatched_functions(
         include_asm=False,  # Skip ASM for speed
-        include_context=False  # Skip context for speed
+        include_context=False,  # Skip context for speed
     )
 
     print(f"\nTotal unmatched functions: {result.unmatched_functions}")
-    print(f"\nFirst 10 unmatched functions:")
+    print("\nFirst 10 unmatched functions:")
     for func in result.functions[:10]:
         print(f"  - {func.name:<30} @ {func.address} ({func.match_percent:.1f}% match)")
         print(f"    File: {func.file_path}")

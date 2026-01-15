@@ -323,11 +323,11 @@ ORDER BY fbp.function_name, fbp.match_percent DESC;
 """
 
 INITIAL_META = [
-    ('schema_version', str(SCHEMA_VERSION)),
-    ('created_at', None),  # Will use SQL default
-    ('last_full_rebuild', None),
-    ('last_git_sync', None),
-    ('last_api_sync', None),
+    ("schema_version", str(SCHEMA_VERSION)),
+    ("created_at", None),  # Will use SQL default
+    ("last_full_rebuild", None),
+    ("last_git_sync", None),
+    ("last_api_sync", None),
 ]
 
 

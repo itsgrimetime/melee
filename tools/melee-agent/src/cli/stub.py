@@ -2,18 +2,18 @@
 
 import re
 from pathlib import Path
-from typing import Annotated, Optional, Tuple, List
+from typing import Annotated, List, Optional, Tuple
 
 import typer
 
-from ._common import console, DEFAULT_MELEE_ROOT
-from src.extractor import SymbolParser, SplitsParser
+from src.extractor import SplitsParser, SymbolParser
 
+from ._common import DEFAULT_MELEE_ROOT, console
 
 stub_app = typer.Typer(help="Manage stub markers in source files")
 
 
-def _extract_address_from_name(function_name: str) -> Optional[int]:
+def _extract_address_from_name(function_name: str) -> int | None:
     """Extract hex address from function name if present.
 
     Function names often end with their address, e.g.:
@@ -25,13 +25,13 @@ def _extract_address_from_name(function_name: str) -> Optional[int]:
         Integer address if found, None otherwise.
     """
     # Pattern: underscore followed by 8 hex digits at end of name
-    match = re.search(r'_([0-9A-Fa-f]{8})$', function_name)
+    match = re.search(r"_([0-9A-Fa-f]{8})$", function_name)
     if match:
         return int(match.group(1), 16)
     return None
 
 
-def _get_function_address(function_name: str, melee_root: Path) -> Optional[int]:
+def _get_function_address(function_name: str, melee_root: Path) -> int | None:
     """Get the address of a function.
 
     First tries to extract from function name, then falls back to symbols.txt.
@@ -56,7 +56,7 @@ def _get_function_address(function_name: str, melee_root: Path) -> Optional[int]
     return None
 
 
-def _get_source_file_for_address(address: int, melee_root: Path) -> Optional[str]:
+def _get_source_file_for_address(address: int, melee_root: Path) -> str | None:
     """Find the source file that contains a function address.
 
     Uses splits.txt to map addresses to source files.
@@ -71,26 +71,21 @@ def _get_source_file_for_address(address: int, melee_root: Path) -> Optional[str
         return None
 
 
-def _find_existing_stub_or_function(
-    content: str,
-    function_name: str
-) -> Optional[Tuple[int, str]]:
+def _find_existing_stub_or_function(content: str, function_name: str) -> tuple[int, str] | None:
     """Check if function already exists in file (as stub or definition).
 
     Returns:
         Tuple of (line_number, type) where type is "stub" or "definition",
         or None if not found.
     """
-    lines = content.split('\n')
+    lines = content.split("\n")
 
     # Check for stub marker
-    stub_pattern = re.compile(rf'^///\s*#\s*{re.escape(function_name)}\s*$')
+    stub_pattern = re.compile(rf"^///\s*#\s*{re.escape(function_name)}\s*$")
 
     # Check for function definition
     # Pattern matches things like: void func_name( or s32 func_name(
-    def_pattern = re.compile(
-        rf'^\s*(?:static\s+)?(?:inline\s+)?[\w\*\s]+\s+{re.escape(function_name)}\s*\('
-    )
+    def_pattern = re.compile(rf"^\s*(?:static\s+)?(?:inline\s+)?[\w\*\s]+\s+{re.escape(function_name)}\s*\(")
 
     for i, line in enumerate(lines):
         if stub_pattern.match(line):
@@ -101,27 +96,22 @@ def _find_existing_stub_or_function(
     return None
 
 
-def _parse_stubs_and_functions(
-    content: str,
-    melee_root: Path
-) -> List[Tuple[int, int, str, str]]:
+def _parse_stubs_and_functions(content: str, melee_root: Path) -> list[tuple[int, int, str, str]]:
     """Parse all stubs and function definitions from file content.
 
     Returns:
         List of (line_number, address, type, name) tuples, sorted by address.
         type is "stub" or "definition"
     """
-    lines = content.split('\n')
+    lines = content.split("\n")
     items = []
 
     # Pattern for stub markers: /// #function_name
-    stub_pattern = re.compile(r'^///\s*#\s*(\w+)\s*$')
+    stub_pattern = re.compile(r"^///\s*#\s*(\w+)\s*$")
 
     # Pattern for function definitions (simplified - we just need the name)
     # Matches: return_type function_name(
-    func_pattern = re.compile(
-        r'^(?:static\s+)?(?:inline\s+)?[\w\*]+\s+(\w+)\s*\('
-    )
+    func_pattern = re.compile(r"^(?:static\s+)?(?:inline\s+)?[\w\*]+\s+(\w+)\s*\(")
 
     for i, line in enumerate(lines):
         # Check for stub
@@ -146,11 +136,7 @@ def _parse_stubs_and_functions(
     return items
 
 
-def _find_insertion_line(
-    content: str,
-    target_address: int,
-    melee_root: Path
-) -> Tuple[int, str]:
+def _find_insertion_line(content: str, target_address: int, melee_root: Path) -> tuple[int, str]:
     """Find the line number where a stub should be inserted.
 
     Stubs and functions should be in address order. This finds the correct
@@ -165,10 +151,10 @@ def _find_insertion_line(
     if not items:
         # No existing stubs or functions with addresses
         # Insert after includes (find last #include line or start of file)
-        lines = content.split('\n')
+        lines = content.split("\n")
         last_include_line = 0
         for i, line in enumerate(lines):
-            if line.startswith('#include'):
+            if line.startswith("#include"):
                 last_include_line = i + 1
 
         # Insert after includes with a blank line
@@ -186,7 +172,7 @@ def _find_insertion_line(
     last_line, last_addr, last_type, last_name = items[-1]
 
     # Find the end of the last item
-    lines = content.split('\n')
+    lines = content.split("\n")
     if last_type == "stub":
         # Stub is a single line, insert after it
         insert_line = last_line + 1
@@ -196,9 +182,9 @@ def _find_insertion_line(
         in_function = False
         for i in range(last_line - 1, len(lines)):
             line = lines[i]
-            brace_count += line.count('{')
-            brace_count -= line.count('}')
-            if '{' in line:
+            brace_count += line.count("{")
+            brace_count -= line.count("}")
+            if "{" in line:
                 in_function = True
             if in_function and brace_count == 0:
                 insert_line = i + 2  # After closing brace + blank line
@@ -222,7 +208,7 @@ def _insert_stub_at_line(content: str, line_num: int, function_name: str) -> str
     Returns:
         Modified file content with stub inserted.
     """
-    lines = content.split('\n')
+    lines = content.split("\n")
     stub_line = f"/// #{function_name}"
 
     # Adjust for 0-indexed list
@@ -239,28 +225,28 @@ def _insert_stub_at_line(content: str, line_num: int, function_name: str) -> str
     if insert_idx > 0:
         prev_line = lines[insert_idx - 1].strip()
         # Need blank before if previous line is not blank and not a stub
-        if prev_line and not prev_line.startswith('/// #'):
+        if prev_line and not prev_line.startswith("/// #"):
             needs_blank_before = True
 
     if insert_idx < len(lines):
         next_line = lines[insert_idx].strip()
         # Need blank after if next line is not blank and not a stub
-        if next_line and not next_line.startswith('/// #'):
+        if next_line and not next_line.startswith("/// #"):
             needs_blank_after = True
 
     # Build the insertion
     insertion = []
     if needs_blank_before:
-        insertion.append('')
+        insertion.append("")
     insertion.append(stub_line)
     if needs_blank_after:
-        insertion.append('')
+        insertion.append("")
 
     # Insert lines
     for i, new_line in enumerate(insertion):
         lines.insert(insert_idx + i, new_line)
 
-    return '\n'.join(lines)
+    return "\n".join(lines)
 
 
 @stub_app.command("add")
@@ -269,9 +255,7 @@ def stub_add(
     melee_root: Annotated[
         Path, typer.Option("--melee-root", "-m", help="Path to melee submodule")
     ] = DEFAULT_MELEE_ROOT,
-    dry_run: Annotated[
-        bool, typer.Option("--dry-run", help="Show what would be done without modifying files")
-    ] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be done without modifying files")] = False,
 ):
     """Add a stub marker for a function in the correct source file.
 
@@ -312,7 +296,7 @@ def stub_add(
         console.print(f"[red]Source file not found: {full_path}[/red]")
         raise typer.Exit(1)
 
-    content = full_path.read_text(encoding='utf-8')
+    content = full_path.read_text(encoding="utf-8")
 
     # Check if function already exists
     existing = _find_existing_stub_or_function(content, function_name)
@@ -325,7 +309,7 @@ def stub_add(
     insert_line, context = _find_insertion_line(content, address, melee_root)
 
     if dry_run:
-        console.print(f"\n[bold cyan]DRY RUN[/bold cyan] - No changes will be made\n")
+        console.print("\n[bold cyan]DRY RUN[/bold cyan] - No changes will be made\n")
         console.print(f"Would add stub marker for [cyan]{function_name}[/cyan]")
         console.print(f"  File: [green]{source_file}[/green]")
         console.print(f"  Line: {insert_line} ({context})")
@@ -336,13 +320,13 @@ def stub_add(
     new_content = _insert_stub_at_line(content, insert_line, function_name)
 
     # Write file
-    full_path.write_text(new_content, encoding='utf-8')
+    full_path.write_text(new_content, encoding="utf-8")
 
     # Calculate actual line (may shift due to blank line insertions)
     # Re-read to find actual line number
-    new_content = full_path.read_text(encoding='utf-8')
+    new_content = full_path.read_text(encoding="utf-8")
     actual_line = None
-    for i, line in enumerate(new_content.split('\n')):
+    for i, line in enumerate(new_content.split("\n")):
         if line.strip() == f"/// #{function_name}":
             actual_line = i + 1
             break
@@ -352,15 +336,11 @@ def stub_add(
 
 @stub_app.command("list")
 def stub_list(
-    source_file: Annotated[
-        Optional[str], typer.Argument(help="Source file path (relative to src/)")
-    ] = None,
+    source_file: Annotated[str | None, typer.Argument(help="Source file path (relative to src/)")] = None,
     melee_root: Annotated[
         Path, typer.Option("--melee-root", "-m", help="Path to melee submodule")
     ] = DEFAULT_MELEE_ROOT,
-    limit: Annotated[
-        int, typer.Option("--limit", "-n", help="Maximum number of results")
-    ] = 50,
+    limit: Annotated[int, typer.Option("--limit", "-n", help="Maximum number of results")] = 50,
 ):
     """List stub markers in source files.
 
@@ -380,7 +360,7 @@ def stub_list(
             console.print(f"[red]Source file not found: {full_path}[/red]")
             raise typer.Exit(1)
 
-        content = full_path.read_text(encoding='utf-8')
+        content = full_path.read_text(encoding="utf-8")
         items = _parse_stubs_and_functions(content, melee_root)
 
         stubs = [(line, addr, name) for line, addr, item_type, name in items if item_type == "stub"]
@@ -405,9 +385,7 @@ def stub_list(
         import subprocess
 
         result = subprocess.run(
-            ["grep", "-r", "-n", "^/// #", "--include=*.c", "."],
-            cwd=melee_root / "src",
-            capture_output=True, text=True
+            ["grep", "-r", "-n", "^/// #", "--include=*.c", "."], cwd=melee_root / "src", capture_output=True, text=True
         )
 
         if not result.stdout.strip():
@@ -419,13 +397,13 @@ def stub_list(
         table.add_column("Line", style="dim")
         table.add_column("Function", style="cyan")
 
-        lines = result.stdout.strip().split('\n')
+        lines = result.stdout.strip().split("\n")
         count = 0
         for line in lines:
             if count >= limit:
                 break
             # Parse: ./path/file.c:123:/// #func_name
-            match = re.match(r'^\./(.+):(\d+):///\s*#\s*(\w+)', line)
+            match = re.match(r"^\./(.+):(\d+):///\s*#\s*(\w+)", line)
             if match:
                 file_path, line_num, func_name = match.groups()
                 table.add_row(file_path, line_num, func_name)
@@ -474,7 +452,7 @@ def stub_check(
         console.print(f"[red]Source file not found: {full_path}[/red]")
         raise typer.Exit(1)
 
-    content = full_path.read_text(encoding='utf-8')
+    content = full_path.read_text(encoding="utf-8")
 
     # Check if function exists
     existing = _find_existing_stub_or_function(content, function_name)

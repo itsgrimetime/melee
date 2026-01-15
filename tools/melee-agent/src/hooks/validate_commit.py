@@ -24,7 +24,6 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-
 # Default timeout for validation (5 minutes)
 DEFAULT_VALIDATION_TIMEOUT = 300
 
@@ -40,11 +39,12 @@ def _timeout_handler(signum, frame):
     print("    - Skip slow checks: --skip-regressions")
     sys.exit(124)  # Standard timeout exit code
 
+
 # Try to import tree-sitter based analyzer for better detection
 try:
     from src.hooks.c_analyzer import (
-        analyze_diff_additions,
         TREE_SITTER_AVAILABLE,
+        analyze_diff_additions,
     )
 except ImportError:
     TREE_SITTER_AVAILABLE = False
@@ -52,17 +52,17 @@ except ImportError:
 
 # Local decomp.me server URL patterns (private subnets, loopback, .local domains)
 LOCAL_URL_PATTERNS = [
-    r'https?://[^/]*\.local[:/]',                              # .local domains
-    r'https?://localhost[:/]',                                  # localhost
-    r'https?://127\.\d{1,3}\.\d{1,3}\.\d{1,3}[:/]',            # 127.x.x.x (loopback)
-    r'https?://10\.\d{1,3}\.\d{1,3}\.\d{1,3}[:/]',             # 10.x.x.x (Class A private)
-    r'https?://172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}[:/]', # 172.16-31.x.x (Class B private)
-    r'https?://192\.168\.\d{1,3}\.\d{1,3}[:/]',                # 192.168.x.x (Class C private)
+    r"https?://[^/]*\.local[:/]",  # .local domains
+    r"https?://localhost[:/]",  # localhost
+    r"https?://127\.\d{1,3}\.\d{1,3}\.\d{1,3}[:/]",  # 127.x.x.x (loopback)
+    r"https?://10\.\d{1,3}\.\d{1,3}\.\d{1,3}[:/]",  # 10.x.x.x (Class A private)
+    r"https?://172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}[:/]",  # 172.16-31.x.x (Class B private)
+    r"https?://192\.168\.\d{1,3}\.\d{1,3}[:/]",  # 192.168.x.x (Class C private)
 ]
-LOCAL_URL_REGEX = re.compile('|'.join(LOCAL_URL_PATTERNS))
+LOCAL_URL_REGEX = re.compile("|".join(LOCAL_URL_PATTERNS))
 
 # Pattern to extract slug from a decomp.me URL
-SCRATCH_URL_PATTERN = re.compile(r'https?://[^/]+/scratch/([a-zA-Z0-9]+)')
+SCRATCH_URL_PATTERN = re.compile(r"https?://[^/]+/scratch/([a-zA-Z0-9]+)")
 
 # Project paths
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -77,15 +77,14 @@ def get_slug_mapping() -> dict[str, str]:
     """
     try:
         from src.db import get_db
+
         db = get_db()
 
         mapping = {}
         with db.connection() as conn:
-            cursor = conn.execute(
-                "SELECT local_slug, production_slug FROM sync_state"
-            )
+            cursor = conn.execute("SELECT local_slug, production_slug FROM sync_state")
             for row in cursor.fetchall():
-                mapping[row['local_slug']] = row['production_slug']
+                mapping[row["local_slug"]] = row["production_slug"]
         return mapping
     except Exception:
         return {}
@@ -98,7 +97,7 @@ COMPILE_COMMANDS = MELEE_ROOT / "compile_commands.json"
 class ValidationError:
     """A validation error or warning."""
 
-    def __init__(self, message: str, file: Optional[str] = None, line: Optional[int] = None, fixable: bool = False):
+    def __init__(self, message: str, file: str | None = None, line: int | None = None, fixable: bool = False):
         self.message = message
         self.file = file
         self.line = line
@@ -150,7 +149,7 @@ class CheckResult:
 class CommitValidator:
     """Validates a commit against project guidelines."""
 
-    def __init__(self, melee_root: Path = MELEE_ROOT, worktree_path: Optional[str] = None):
+    def __init__(self, melee_root: Path = MELEE_ROOT, worktree_path: str | None = None):
         self.melee_root = melee_root
         self.worktree_path = Path(worktree_path) if worktree_path else None
         self.errors: list[ValidationError] = []
@@ -167,9 +166,7 @@ class CommitValidator:
 
         try:
             result = subprocess.run(
-                ["git", "diff", "--cached", "--name-only"],
-                capture_output=True, text=True, check=True,
-                cwd=git_cwd
+                ["git", "diff", "--cached", "--name-only"], capture_output=True, text=True, check=True, cwd=git_cwd
             )
             files = result.stdout.strip().split("\n") if result.stdout.strip() else []
 
@@ -193,9 +190,7 @@ class CommitValidator:
 
         try:
             result = subprocess.run(
-                ["git", "diff", "--cached", actual_path],
-                capture_output=True, text=True, check=True,
-                cwd=git_cwd
+                ["git", "diff", "--cached", actual_path], capture_output=True, text=True, check=True, cwd=git_cwd
             )
             return result.stdout
         except subprocess.CalledProcessError:
@@ -218,10 +213,10 @@ class CommitValidator:
                 if file_path and args:
                     # Normalize to relative path from melee root
                     if file_path.startswith(str(MELEE_ROOT)):
-                        rel_path = file_path[len(str(MELEE_ROOT)) + 1:]
+                        rel_path = file_path[len(str(MELEE_ROOT)) + 1 :]
                         file_args[rel_path] = args
             return file_args
-        except (json.JSONDecodeError, IOError):
+        except (OSError, json.JSONDecodeError):
             return {}
 
     def validate_implicit_declarations(self) -> None:
@@ -246,8 +241,10 @@ class CommitValidator:
             try:
                 result = subprocess.run(
                     ["git", "diff", "--cached", "--name-only"],
-                    capture_output=True, text=True, check=True,
-                    cwd=MELEE_ROOT
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    cwd=MELEE_ROOT,
                 )
                 submodule_files = result.stdout.strip().split("\n") if result.stdout.strip() else []
                 for f in submodule_files:
@@ -263,17 +260,13 @@ class CommitValidator:
         try:
             subprocess.run(["clang", "--version"], capture_output=True, check=True)
         except (FileNotFoundError, subprocess.CalledProcessError):
-            self.warnings.append(ValidationError(
-                "clang not found - skipping implicit declaration check"
-            ))
+            self.warnings.append(ValidationError("clang not found - skipping implicit declaration check"))
             return
 
         # Load compile commands for proper include paths
         compile_commands = self._load_compile_commands()
         if not compile_commands:
-            self.warnings.append(ValidationError(
-                "compile_commands.json not found - run 'ninja' in melee/ first"
-            ))
+            self.warnings.append(ValidationError("compile_commands.json not found - run 'ninja' in melee/ first"))
             return
 
         for c_file in c_files:
@@ -294,7 +287,8 @@ class CommitValidator:
             # Build clang command for syntax check only
             # Filter to just include paths and defines, add our warning flags
             clang_args = [
-                "clang", "-fsyntax-only",
+                "clang",
+                "-fsyntax-only",
                 "-Werror=implicit-function-declaration",
                 "-Werror=typedef-redefinition",
             ]
@@ -311,12 +305,7 @@ class CommitValidator:
             clang_args.append(str(MELEE_ROOT / src_path))
 
             # Run clang
-            result = subprocess.run(
-                clang_args,
-                capture_output=True,
-                text=True,
-                cwd=MELEE_ROOT
-            )
+            result = subprocess.run(clang_args, capture_output=True, text=True, cwd=MELEE_ROOT)
 
             # Parse errors from stderr
             if result.returncode != 0:
@@ -332,11 +321,7 @@ class CommitValidator:
                             # Make path relative
                             if str(MELEE_ROOT) in file_path:
                                 file_path = "melee/" + file_path.split(str(MELEE_ROOT) + "/")[1]
-                            self.errors.append(ValidationError(
-                                message,
-                                file_path,
-                                line_num
-                            ))
+                            self.errors.append(ValidationError(message, file_path, line_num))
 
     def validate_symbols_txt(self) -> None:
         """Check if symbols.txt needs updating for new function names."""
@@ -358,8 +343,8 @@ class CommitValidator:
             for line in diff.split("\n"):
                 if line.startswith("+") and not line.startswith("+++"):
                     # Pattern for function definition start
-                    if re.search(r'^[\+]\s*(?:static\s+)?(?:inline\s+)?(?:\w+\s+)+(\w+)\s*\([^)]*\)\s*\{?', line):
-                        func_match = re.search(r'(\w+)\s*\([^)]*\)', line)
+                    if re.search(r"^[\+]\s*(?:static\s+)?(?:inline\s+)?(?:\w+\s+)+(\w+)\s*\([^)]*\)\s*\{?", line):
+                        func_match = re.search(r"(\w+)\s*\([^)]*\)", line)
                         if func_match:
                             func_name = func_match.group(1)
                             # Skip common non-function matches
@@ -372,10 +357,9 @@ class CommitValidator:
                 symbols_content = SYMBOLS_FILE.read_text()
                 missing = [f for f in new_functions if f not in symbols_content]
                 if missing:
-                    self.errors.append(ValidationError(
-                        f"New functions need symbols.txt update: {missing[:5]}",
-                        str(SYMBOLS_FILE)
-                    ))
+                    self.errors.append(
+                        ValidationError(f"New functions need symbols.txt update: {missing[:5]}", str(SYMBOLS_FILE))
+                    )
 
     def validate_coding_style(self) -> None:
         """Check CONTRIBUTING.md coding guidelines and doldecomp/melee PR review standards.
@@ -399,12 +383,14 @@ class CommitValidator:
             if TREE_SITTER_AVAILABLE and analyze_diff_additions is not None:
                 issues = analyze_diff_additions(diff)
                 for issue in issues:
-                    self.errors.append(ValidationError(
-                        f"{issue.message}: {issue.snippet}" +
-                        (f" ({issue.suggestion})" if issue.suggestion else ""),
-                        c_file,
-                        issue.line
-                    ))
+                    self.errors.append(
+                        ValidationError(
+                            f"{issue.message}: {issue.snippet}"
+                            + (f" ({issue.suggestion})" if issue.suggestion else ""),
+                            c_file,
+                            issue.line,
+                        )
+                    )
             else:
                 # Fallback to regex-based detection
                 self._validate_coding_style_regex(c_file, diff)
@@ -415,7 +401,7 @@ class CommitValidator:
         for line in diff.split("\n"):
             # Track line numbers in the new file
             if line.startswith("@@"):
-                match = re.search(r'\+(\d+)', line)
+                match = re.search(r"\+(\d+)", line)
                 if match:
                     line_num = int(match.group(1)) - 1
                 continue
@@ -431,41 +417,43 @@ class CommitValidator:
 
                 # Check for TRUE/FALSE instead of true/false
                 # PR feedback: "Use `true` and `false`, not `TRUE` and `FALSE`"
-                if re.search(r'\bTRUE\b', content):
-                    self.errors.append(ValidationError(
-                        "Use 'true' not 'TRUE' (lowercase boolean literals required)",
-                        c_file, line_num
-                    ))
-                if re.search(r'\bFALSE\b', content):
-                    self.errors.append(ValidationError(
-                        "Use 'false' not 'FALSE' (lowercase boolean literals required)",
-                        c_file, line_num
-                    ))
+                if re.search(r"\bTRUE\b", content):
+                    self.errors.append(
+                        ValidationError("Use 'true' not 'TRUE' (lowercase boolean literals required)", c_file, line_num)
+                    )
+                if re.search(r"\bFALSE\b", content):
+                    self.errors.append(
+                        ValidationError(
+                            "Use 'false' not 'FALSE' (lowercase boolean literals required)", c_file, line_num
+                        )
+                    )
 
                 # Check for floating point literals without F suffix
                 # Pattern: number with decimal but no F/L suffix
-                float_matches = re.findall(r'\b\d+\.\d+(?![FLfl\w])\b', content)
+                float_matches = re.findall(r"\b\d+\.\d+(?![FLfl\w])\b", content)
                 for fm in float_matches:
                     # Skip if in a comment
                     if "//" in content:
                         comment_start = content.index("//")
                         if content.index(fm) > comment_start:
                             continue
-                    self.errors.append(ValidationError(
-                        f"Float literal '{fm}' missing F suffix (use {fm}F for f32)",
-                        c_file, line_num
-                    ))
+                    self.errors.append(
+                        ValidationError(f"Float literal '{fm}' missing F suffix (use {fm}F for f32)", c_file, line_num)
+                    )
 
                 # Check for lowercase hex (0xabc instead of 0xABC)
-                hex_matches = re.findall(r'0x[0-9a-fA-F]+', content)
+                hex_matches = re.findall(r"0x[0-9a-fA-F]+", content)
                 for hm in hex_matches:
                     # Only flag if there are lowercase letters in hex digits
                     hex_part = hm[2:]  # Remove 0x prefix
                     if any(c.islower() and c.isalpha() for c in hex_part):
-                        self.errors.append(ValidationError(
-                            f"Hex literal '{hm}' should use uppercase (e.g., 0x{hex_part.upper()})",
-                            c_file, line_num
-                        ))
+                        self.errors.append(
+                            ValidationError(
+                                f"Hex literal '{hm}' should use uppercase (e.g., 0x{hex_part.upper()})",
+                                c_file,
+                                line_num,
+                            )
+                        )
                         break  # Only report once per line
 
                 # Check for raw struct pointer arithmetic (PR feedback)
@@ -475,17 +463,19 @@ class CommitValidator:
                 #   *(u32*)((u8*)cmd->u + 8)
                 #   *((type*)(ptr + offset))
                 ptr_arith_match = re.search(
-                    r'\*\s*\(([^)]+\*)\)\s*\(\s*\(([^)]+\*)\)\s*([^+]+)\s*\+\s*([^)]+)\)',
-                    content
+                    r"\*\s*\(([^)]+\*)\)\s*\(\s*\(([^)]+\*)\)\s*([^+]+)\s*\+\s*([^)]+)\)", content
                 )
                 if ptr_arith_match:
                     cast_type = ptr_arith_match.group(1).strip()
                     ptr_expr = ptr_arith_match.group(3).strip()
                     offset = ptr_arith_match.group(4).strip()
-                    self.errors.append(ValidationError(
-                        f"Raw pointer arithmetic for struct access - use M2C_FIELD({ptr_expr}, {offset}, {cast_type}) instead",
-                        c_file, line_num
-                    ))
+                    self.errors.append(
+                        ValidationError(
+                            f"Raw pointer arithmetic for struct access - use M2C_FIELD({ptr_expr}, {offset}, {cast_type}) instead",
+                            c_file,
+                            line_num,
+                        )
+                    )
 
             elif not line.startswith("-"):
                 line_num += 1
@@ -516,9 +506,7 @@ class CommitValidator:
         try:
             # Run clang-format on staged files (formats working tree)
             format_result = subprocess.run(
-                ["git", "clang-format", "HEAD", "--"] + actual_files,
-                capture_output=True, text=True,
-                cwd=git_cwd
+                ["git", "clang-format", "HEAD", "--"] + actual_files, capture_output=True, text=True, cwd=git_cwd
             )
 
             # Check if any files were modified
@@ -526,20 +514,15 @@ class CommitValidator:
                 output = format_result.stdout.strip()
                 if output and "clang-format did not modify" not in output.lower():
                     # Re-stage the formatted files
-                    subprocess.run(
-                        ["git", "add"] + actual_files,
-                        capture_output=True,
-                        cwd=git_cwd
-                    )
+                    subprocess.run(["git", "add"] + actual_files, capture_output=True, cwd=git_cwd)
                     # Count formatted files from output
-                    formatted_count = len([
-                        line for line in output.split("\n")
-                        if line.strip() and "changed" in line.lower()
-                    ])
+                    formatted_count = len(
+                        [line for line in output.split("\n") if line.strip() and "changed" in line.lower()]
+                    )
                     if formatted_count > 0:
-                        self.warnings.append(ValidationError(
-                            f"Auto-formatted {formatted_count} file(s) with clang-format"
-                        ))
+                        self.warnings.append(
+                            ValidationError(f"Auto-formatted {formatted_count} file(s) with clang-format")
+                        )
         except FileNotFoundError:
             # git-clang-format not installed - skip silently
             pass
@@ -563,10 +546,7 @@ class CommitValidator:
         for f in staged_files:
             for pattern in forbidden_patterns:
                 if f.endswith(pattern):
-                    self.errors.append(ValidationError(
-                        f"File should not be modified: {f} - revert this change",
-                        f
-                    ))
+                    self.errors.append(ValidationError(f"File should not be modified: {f} - revert this change", f))
                     break
 
     def validate_conflict_markers(self) -> None:
@@ -586,9 +566,7 @@ class CommitValidator:
             # Get the staged content
             try:
                 result = subprocess.run(
-                    ["git", "show", f":{actual_path}"],
-                    capture_output=True, text=True, check=True,
-                    cwd=git_cwd
+                    ["git", "show", f":{actual_path}"], capture_output=True, text=True, check=True, cwd=git_cwd
                 )
                 content = result.stdout
             except subprocess.CalledProcessError:
@@ -599,10 +577,7 @@ class CommitValidator:
             for i, line in enumerate(content.split("\n"), 1):
                 for marker in markers:
                     if line.strip().startswith(marker):
-                        self.errors.append(ValidationError(
-                            f"Merge conflict marker found: {marker}",
-                            code_file, i
-                        ))
+                        self.errors.append(ValidationError(f"Merge conflict marker found: {marker}", code_file, i))
 
     def validate_header_signatures(self) -> None:
         """Check that header declarations match implementations.
@@ -628,9 +603,7 @@ class CommitValidator:
             # Get the staged content
             try:
                 result = subprocess.run(
-                    ["git", "show", f":{actual_path}"],
-                    capture_output=True, text=True, check=True,
-                    cwd=git_cwd
+                    ["git", "show", f":{actual_path}"], capture_output=True, text=True, check=True, cwd=git_cwd
                 )
                 c_content = result.stdout
             except subprocess.CalledProcessError:
@@ -638,10 +611,7 @@ class CommitValidator:
 
             # Find function implementations (non-static, at start of line)
             # Pattern: type name(params) { or type name(params)\n{
-            func_pattern = re.compile(
-                r'^(?!static\s)(\w+(?:\s*\*)?)\s+(\w+)\s*\(([^)]*)\)\s*(?:\{|$)',
-                re.MULTILINE
-            )
+            func_pattern = re.compile(r"^(?!static\s)(\w+(?:\s*\*)?)\s+(\w+)\s*\(([^)]*)\)\s*(?:\{|$)", re.MULTILINE)
 
             implementations = {}
             for match in func_pattern.finditer(c_content):
@@ -653,10 +623,7 @@ class CommitValidator:
                 if func_name in ("main", "if", "while", "for", "switch"):
                     continue
 
-                implementations[func_name] = {
-                    "return_type": return_type,
-                    "params": params
-                }
+                implementations[func_name] = {"return_type": return_type, "params": params}
 
             if not implementations:
                 continue
@@ -671,9 +638,7 @@ class CommitValidator:
             header_content = None
             try:
                 result = subprocess.run(
-                    ["git", "show", f":{actual_header_path}"],
-                    capture_output=True, text=True, check=True,
-                    cwd=git_cwd
+                    ["git", "show", f":{actual_header_path}"], capture_output=True, text=True, check=True, cwd=git_cwd
                 )
                 header_content = result.stdout
             except subprocess.CalledProcessError:
@@ -693,8 +658,8 @@ class CommitValidator:
                 # Look for the function in the header
                 # Pattern: matches declarations like "/* addr */ UNK_RET name(UNK_PARAMS);"
                 decl_pattern = re.compile(
-                    rf'(/\*[^*]*\*/\s*)?(UNK_RET|{re.escape(impl["return_type"])})\s+{re.escape(func_name)}\s*\(([^)]*)\)\s*;',
-                    re.MULTILINE
+                    rf"(/\*[^*]*\*/\s*)?(UNK_RET|{re.escape(impl['return_type'])})\s+{re.escape(func_name)}\s*\(([^)]*)\)\s*;",
+                    re.MULTILINE,
                 )
 
                 match = decl_pattern.search(header_content)
@@ -707,12 +672,14 @@ class CommitValidator:
                     impl_has_concrete = impl["return_type"] != "UNK_RET" and impl["params"] != "UNK_PARAMS"
 
                     if has_unk and impl_has_concrete:
-                        self.errors.append(ValidationError(
-                            f"Header signature mismatch: {func_name} declared as "
-                            f"'{header_return} {func_name}({header_params})' in header "
-                            f"but implemented as '{impl['return_type']} {func_name}({impl['params']})'",
-                            header_file
-                        ))
+                        self.errors.append(
+                            ValidationError(
+                                f"Header signature mismatch: {func_name} declared as "
+                                f"'{header_return} {func_name}({header_params})' in header "
+                                f"but implemented as '{impl['return_type']} {func_name}({impl['params']})'",
+                                header_file,
+                            )
+                        )
 
     def validate_extern_declarations(self) -> None:
         """Check for unnecessary file-scope extern declarations.
@@ -734,7 +701,7 @@ class CommitValidator:
             line_num = 0
             for line in diff.split("\n"):
                 if line.startswith("@@"):
-                    match = re.search(r'\+(\d+)', line)
+                    match = re.search(r"\+(\d+)", line)
                     if match:
                         line_num = int(match.group(1)) - 1
                     continue
@@ -745,13 +712,14 @@ class CommitValidator:
 
                     # Check for new extern declarations at file scope
                     # Pattern: extern Type symbol_name; (not in function)
-                    if re.match(r'^extern\s+(?:static\s+)?\w+[\w\s\*]*\s+\w+\s*[;\[]', content):
+                    if re.match(r"^extern\s+(?:static\s+)?\w+[\w\s\*]*\s+\w+\s*[;\[]", content):
                         # Skip if it's a function declaration (has parentheses)
-                        if '(' not in content:
-                            self.errors.append(ValidationError(
-                                "New extern declaration - include proper header instead",
-                                c_file, line_num
-                            ))
+                        if "(" not in content:
+                            self.errors.append(
+                                ValidationError(
+                                    "New extern declaration - include proper header instead", c_file, line_num
+                                )
+                            )
 
                 elif not line.startswith("-"):
                     line_num += 1
@@ -787,15 +755,19 @@ class CommitValidator:
             for line in diff.split("\n"):
                 if line.startswith("-") and not line.startswith("---"):
                     # Look for descriptive symbol names being removed
-                    names = re.findall(r'\b([A-Z][a-zA-Z0-9_]*(?:Table|State|Data|Info|List|Array)[a-zA-Z0-9_]*)\b', line)
+                    names = re.findall(
+                        r"\b([A-Z][a-zA-Z0-9_]*(?:Table|State|Data|Info|List|Array)[a-zA-Z0-9_]*)\b", line
+                    )
                     removed_descriptive.update(names)
 
                 elif line.startswith("+") and not line.startswith("+++"):
                     # Track descriptive names on added lines (to exclude reformatting)
-                    names = re.findall(r'\b([A-Z][a-zA-Z0-9_]*(?:Table|State|Data|Info|List|Array)[a-zA-Z0-9_]*)\b', line)
+                    names = re.findall(
+                        r"\b([A-Z][a-zA-Z0-9_]*(?:Table|State|Data|Info|List|Array)[a-zA-Z0-9_]*)\b", line
+                    )
                     added_descriptive.update(names)
                     # Look for address-based names being added
-                    addr_names = re.findall(r'\b((?:fn|it|ft|gr|lb|gm|if|mp|vi)_[0-9A-Fa-f]{8})\b', line)
+                    addr_names = re.findall(r"\b((?:fn|it|ft|gr|lb|gm|if|mp|vi)_[0-9A-Fa-f]{8})\b", line)
                     added_address.update(addr_names)
 
             # Only flag if descriptive names were ACTUALLY removed (not just reformatted)
@@ -804,11 +776,13 @@ class CommitValidator:
 
             # Only error if we actually removed descriptive names AND added address-based names
             if actually_removed and added_address:
-                self.errors.append(ValidationError(
-                    f"Bad rename: removed descriptive names {list(actually_removed)[:3]}, "
-                    f"added address-based names {list(added_address)[:3]} - keep descriptive names",
-                    code_file
-                ))
+                self.errors.append(
+                    ValidationError(
+                        f"Bad rename: removed descriptive names {list(actually_removed)[:3]}, "
+                        f"added address-based names {list(added_address)[:3]} - keep descriptive names",
+                        code_file,
+                    )
+                )
 
     def validate_local_urls_in_commits(self) -> None:
         """Check for local decomp.me URLs in pending commit messages.
@@ -835,8 +809,10 @@ class CommitValidator:
         try:
             result = subprocess.run(
                 ["git", "log", "--oneline", "upstream/master..HEAD", "--format=%H %s", "-n", "5"],
-                capture_output=True, text=True, check=True,
-                cwd=self.melee_root
+                capture_output=True,
+                text=True,
+                check=True,
+                cwd=self.melee_root,
             )
             commits = result.stdout.strip().split("\n") if result.stdout.strip() else []
         except subprocess.CalledProcessError:
@@ -863,8 +839,10 @@ class CommitValidator:
             try:
                 result = subprocess.run(
                     ["git", "log", "-1", "--format=%B", parts[0]],
-                    capture_output=True, text=True, check=True,
-                    cwd=self.melee_root
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    cwd=self.melee_root,
                 )
                 full_message = result.stdout
             except subprocess.CalledProcessError:
@@ -883,16 +861,20 @@ class CommitValidator:
                 # Use warnings instead of errors since these are historical commits
                 # that can't be changed without rewriting history
                 if unmapped_slugs:
-                    self.warnings.append(ValidationError(
-                        f"Commit {commit_hash} has local scratch URL(s) without production mapping: {unmapped_slugs}. "
-                        f"Run 'melee-agent sync production' before pushing.",
-                    ))
+                    self.warnings.append(
+                        ValidationError(
+                            f"Commit {commit_hash} has local scratch URL(s) without production mapping: {unmapped_slugs}. "
+                            f"Run 'melee-agent sync production' before pushing.",
+                        )
+                    )
                 else:
                     # Has mapping but URL not replaced
-                    self.warnings.append(ValidationError(
-                        f"Commit {commit_hash} has local scratch URL(s) - consider amending to use production URLs. "
-                        f"Local slugs found: {local_urls}",
-                    ))
+                    self.warnings.append(
+                        ValidationError(
+                            f"Commit {commit_hash} has local scratch URL(s) - consider amending to use production URLs. "
+                            f"Local slugs found: {local_urls}",
+                        )
+                    )
 
     def validate_match_regressions(self) -> None:
         """Check for match percentage regressions after building.
@@ -903,8 +885,9 @@ class CommitValidator:
         staged_files = self._get_staged_files()
 
         # Only run if there are staged changes to melee source or symbols
-        melee_changes = [f for f in staged_files
-                         if f.startswith("melee/src/") or f == "melee/config/GALE01/symbols.txt"]
+        melee_changes = [
+            f for f in staged_files if f.startswith("melee/src/") or f == "melee/config/GALE01/symbols.txt"
+        ]
         if not melee_changes:
             return
 
@@ -912,18 +895,16 @@ class CommitValidator:
 
         # Load current report (pre-build state)
         if not report_file.exists():
-            self.warnings.append(ValidationError(
-                "No report.json found - run 'ninja' first to enable regression detection"
-            ))
+            self.warnings.append(
+                ValidationError("No report.json found - run 'ninja' first to enable regression detection")
+            )
             return
 
         try:
             with open(report_file) as f:
                 old_report = json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
-            self.warnings.append(ValidationError(
-                f"Failed to load report.json: {e}"
-            ))
+        except (OSError, json.JSONDecodeError) as e:
+            self.warnings.append(ValidationError(f"Failed to load report.json: {e}"))
             return
 
         # Build mapping of function -> match percentage
@@ -942,32 +923,24 @@ class CommitValidator:
                 capture_output=True,
                 text=True,
                 cwd=self.melee_root,
-                timeout=300  # 5 minute timeout
+                timeout=300,  # 5 minute timeout
             )
             if result.returncode != 0:
-                self.warnings.append(ValidationError(
-                    "Build failed - cannot check for regressions"
-                ))
+                self.warnings.append(ValidationError("Build failed - cannot check for regressions"))
                 return
         except subprocess.TimeoutExpired:
-            self.warnings.append(ValidationError(
-                "Build timed out - cannot check for regressions"
-            ))
+            self.warnings.append(ValidationError("Build timed out - cannot check for regressions"))
             return
         except FileNotFoundError:
-            self.warnings.append(ValidationError(
-                "ninja not found - cannot check for regressions"
-            ))
+            self.warnings.append(ValidationError("ninja not found - cannot check for regressions"))
             return
 
         # Load new report
         try:
             with open(report_file) as f:
                 new_report = json.load(f)
-        except (json.JSONDecodeError, IOError):
-            self.warnings.append(ValidationError(
-                "Failed to load report.json after build"
-            ))
+        except (OSError, json.JSONDecodeError):
+            self.warnings.append(ValidationError("Failed to load report.json after build"))
             return
 
         # Compare and find regressions
@@ -984,21 +957,17 @@ class CommitValidator:
                     if old_pct is not None and old_pct > 0:
                         if new_pct is None or new_pct < old_pct:
                             new_display = f"{new_pct:.1f}%" if new_pct else "0%"
-                            regressions.append(
-                                f"{name}: {old_pct:.1f}% → {new_display}"
-                            )
+                            regressions.append(f"{name}: {old_pct:.1f}% → {new_display}")
 
         if regressions:
             for reg in regressions[:5]:  # Limit to first 5
-                self.errors.append(ValidationError(
-                    f"Match regression: {reg}"
-                ))
+                self.errors.append(ValidationError(f"Match regression: {reg}"))
             if len(regressions) > 5:
-                self.errors.append(ValidationError(
-                    f"... and {len(regressions) - 5} more regressions"
-                ))
+                self.errors.append(ValidationError(f"... and {len(regressions) - 5} more regressions"))
 
-    def run(self, skip_regressions: bool = False) -> tuple[list[ValidationError], list[ValidationError], list[CheckResult]]:
+    def run(
+        self, skip_regressions: bool = False
+    ) -> tuple[list[ValidationError], list[ValidationError], list[CheckResult]]:
         """Run all validations.
 
         Args:
@@ -1033,30 +1002,20 @@ class CommitValidator:
 
         # Run checks with appropriate conditions
         run_check("Forbidden files", self.validate_forbidden_files)
-        run_check("Conflict markers", self.validate_conflict_markers,
-                  bool(code_files), "no C/H files")
-        run_check("Header signatures", self.validate_header_signatures,
-                  bool(c_files), "no C files")
-        run_check("Implicit declarations", self.validate_implicit_declarations,
-                  bool(c_files), "no C files")
-        run_check("Symbols.txt", self.validate_symbols_txt,
-                  bool(c_files), "no C files")
-        run_check("Coding style", self.validate_coding_style,
-                  bool(code_files), "no C/H files")
-        run_check("Extern declarations", self.validate_extern_declarations,
-                  bool(c_files), "no C files")
-        run_check("Symbol renames", self.validate_symbol_renames,
-                  bool(code_files), "no C/H files")
-        run_check("Local URLs", self.validate_local_urls_in_commits,
-                  bool(melee_changes), "no melee changes")
-        run_check("clang-format", self.validate_clang_format,
-                  bool(code_files), "no C/H files")
+        run_check("Conflict markers", self.validate_conflict_markers, bool(code_files), "no C/H files")
+        run_check("Header signatures", self.validate_header_signatures, bool(c_files), "no C files")
+        run_check("Implicit declarations", self.validate_implicit_declarations, bool(c_files), "no C files")
+        run_check("Symbols.txt", self.validate_symbols_txt, bool(c_files), "no C files")
+        run_check("Coding style", self.validate_coding_style, bool(code_files), "no C/H files")
+        run_check("Extern declarations", self.validate_extern_declarations, bool(c_files), "no C files")
+        run_check("Symbol renames", self.validate_symbol_renames, bool(code_files), "no C/H files")
+        run_check("Local URLs", self.validate_local_urls_in_commits, bool(melee_changes), "no melee changes")
+        run_check("clang-format", self.validate_clang_format, bool(code_files), "no C/H files")
 
         if skip_regressions:
             check_results.append(CheckResult("Match regressions", "skipped", detail="--skip-regressions"))
         else:
-            run_check("Match regressions", self.validate_match_regressions,
-                      bool(melee_changes), "no melee changes")
+            run_check("Match regressions", self.validate_match_regressions, bool(melee_changes), "no melee changes")
 
         return self.errors, self.warnings, check_results
 
@@ -1065,18 +1024,26 @@ def main():
     parser = argparse.ArgumentParser(description="Validate commit against project guidelines")
     parser.add_argument("--fix", action="store_true", help="Attempt to fix issues")
     parser.add_argument("--verbose", "-v", action="store_true", help="Show all warnings")
-    parser.add_argument("--skip-regressions", action="store_true",
-                        help="Skip build and regression check (faster but less thorough)")
-    parser.add_argument("--quiet", "-q", action="store_true",
-                        help="Only show errors, not check status")
-    parser.add_argument("--worktree", type=str, default=None,
-                        help="Path to the git worktree (for running git commands in correct context)")
-    parser.add_argument("--timeout", type=int, default=DEFAULT_VALIDATION_TIMEOUT,
-                        help=f"Timeout in seconds (default: {DEFAULT_VALIDATION_TIMEOUT})")
+    parser.add_argument(
+        "--skip-regressions", action="store_true", help="Skip build and regression check (faster but less thorough)"
+    )
+    parser.add_argument("--quiet", "-q", action="store_true", help="Only show errors, not check status")
+    parser.add_argument(
+        "--worktree",
+        type=str,
+        default=None,
+        help="Path to the git worktree (for running git commands in correct context)",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=DEFAULT_VALIDATION_TIMEOUT,
+        help=f"Timeout in seconds (default: {DEFAULT_VALIDATION_TIMEOUT})",
+    )
     args = parser.parse_args()
 
     # Set up timeout signal handler (Unix only)
-    if hasattr(signal, 'SIGALRM') and args.timeout > 0:
+    if hasattr(signal, "SIGALRM") and args.timeout > 0:
         signal.signal(signal.SIGALRM, _timeout_handler)
         signal.alarm(args.timeout)
 
@@ -1130,7 +1097,7 @@ def main():
         print("\033[32m✓ Validation passed\033[0m")
 
     # Cancel the alarm on successful completion
-    if hasattr(signal, 'SIGALRM'):
+    if hasattr(signal, "SIGALRM"):
         signal.alarm(0)
 
     sys.exit(0)
