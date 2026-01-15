@@ -12,13 +12,10 @@ from typing import Annotated, Optional
 import typer
 from rich.console import Console
 
-from ._common import console, DEFAULT_MELEE_ROOT, get_local_api_url, resolve_melee_root, AGENT_ID, get_source_file_from_claim, db_upsert_function
+from ._common import console, DEFAULT_MELEE_ROOT, get_local_api_url, AGENT_ID, db_upsert_function
 from .complete import _load_completed, _save_completed, _get_current_branch
 
 workflow_app = typer.Typer(help="High-level workflow commands (recommended)")
-
-
-MAX_BROKEN_BUILDS_PER_WORKTREE = 3  # Block new --force commits after this many
 
 
 @workflow_app.command("finish")
@@ -26,7 +23,7 @@ def workflow_finish(
     function_name: Annotated[str, typer.Argument(help="Name of the matched function")],
     scratch_slug: Annotated[str, typer.Argument(help="Decomp.me scratch slug")],
     melee_root: Annotated[
-        Optional[Path], typer.Option("--melee-root", "-m", help="Path to melee submodule (auto-detects agent worktree)")
+        Optional[Path], typer.Option("--melee-root", "-m", help="Path to melee repo")
     ] = None,
     api_url: Annotated[
         Optional[str], typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")
@@ -68,9 +65,6 @@ def workflow_finish(
     Use --force --diagnosis "..." to skip build validation when the build is broken
     due to header mismatches or other issues that require fixes outside this function.
     The diagnosis is stored and visible in 'state status <func>'.
-
-    Automatically uses the agent's worktree to keep work isolated from other
-    parallel agents. Use --melee-root to override.
     """
     # Validate --force requires --diagnosis
     if force and not diagnosis:
@@ -79,54 +73,18 @@ def workflow_finish(
         raise typer.Exit(1)
     api_url = api_url or get_local_api_url()
 
-    # Look up source file from claim to use the correct subdirectory worktree
-    source_file = get_source_file_from_claim(function_name)
-    claim_source = "claim"
-
-    # If claim is missing/expired, try to infer source file from function name
-    if not source_file:
-        try:
-            from src.extractor import FunctionExtractor
-            extractor = FunctionExtractor(DEFAULT_MELEE_ROOT)
-            func_info = extractor.extract_function(function_name)
-            if func_info and func_info.file_path:
-                source_file = func_info.file_path
-                claim_source = "auto-detected"
-                console.print(f"[yellow]Note: Claim expired or missing, auto-detected source file[/yellow]")
-                console.print(f"[dim]Source: {source_file}[/dim]")
-        except Exception:
-            pass  # Fall through to melee_root resolution
-
-    melee_root = resolve_melee_root(melee_root, target_file=source_file)
-
-    # Show worktree state for clarity (helps after context resets)
-    if source_file:
-        from .worktree_utils import get_subdirectory_key, get_subdirectory_worktree_path
-        subdir_key = get_subdirectory_key(source_file)
-        expected_worktree = get_subdirectory_worktree_path(subdir_key)
-        console.print(f"[dim]Worktree: {melee_root}[/dim]")
-        console.print(f"[dim]Source file: {source_file} ({claim_source})[/dim]")
-
-        # Warn if not using the expected worktree
-        if str(melee_root) != str(expected_worktree) and "melee-worktrees" not in str(melee_root):
-            console.print(f"[yellow]Warning: Working in main repo, not subdirectory worktree[/yellow]")
-            console.print(f"[yellow]Expected: {expected_worktree}[/yellow]")
-            console.print(f"[dim]Tip: Run 'cd {expected_worktree}' to work in the correct worktree[/dim]")
-    elif not source_file:
-        console.print(f"[yellow]Warning: Could not determine source file for {function_name}[/yellow]")
-        console.print(f"[dim]Using: {melee_root}[/dim]")
-        console.print(f"[dim]Tip: Re-claim the function to ensure correct worktree routing[/dim]")
-
-    # Check worktree health when using --force
-    if force:
-        from src.db import get_db
-        db = get_db()
-        broken_count, broken_funcs = db.get_worktree_broken_count(str(melee_root))
-        if broken_count >= MAX_BROKEN_BUILDS_PER_WORKTREE:
-            console.print(f"[red]Cannot use --force: worktree already has {broken_count} broken builds[/red]")
-            console.print(f"[dim]Functions needing fixes: {', '.join(broken_funcs)}[/dim]")
-            console.print(f"\n[yellow]Run /decomp-fixup to fix these before adding more broken commits.[/yellow]")
+    # Determine melee root
+    if melee_root is None:
+        # Check if we're in a melee repo
+        if (Path.cwd() / "config" / "GALE01").exists():
+            melee_root = Path.cwd()
+        elif DEFAULT_MELEE_ROOT.exists():
+            melee_root = DEFAULT_MELEE_ROOT
+        else:
+            console.print("[red]Could not find melee repo. Use --melee-root to specify.[/red]")
             raise typer.Exit(1)
+
+    console.print(f"[dim]Using melee root: {melee_root}[/dim]")
 
     from src.client import DecompMeAPIClient
     from src.commit import auto_detect_and_commit
@@ -316,7 +274,6 @@ def workflow_finish(
         build_status='broken' if not build_passed else 'passing',
         build_diagnosis=diagnosis if not build_passed else None,
         branch=branch,
-        worktree_path=str(melee_root),
         notes=notes or "completed via workflow finish",
     )
     console.print(f"  Recorded as committed on {branch}")

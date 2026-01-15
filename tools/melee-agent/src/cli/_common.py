@@ -32,31 +32,20 @@ def get_base_dol_path() -> Path | None:
 
 def ensure_dol_in_worktree(worktree_path: Path) -> bool:
     """Ensure the base DOL exists in a worktree. Returns True if successful."""
-    import shutil
-
     dol_dst = worktree_path / "orig" / "GALE01" / "sys" / "main.dol"
     if dol_dst.exists():
         return True
 
-    # Try central location first
+    # Try central location
     if BASE_DOL_PATH.exists():
         dol_dst.parent.mkdir(parents=True, exist_ok=True)
         dol_dst.symlink_to(BASE_DOL_PATH)
         return True
 
-    # Fallback: search existing worktrees
-    if MELEE_WORKTREES_DIR.exists():
-        for wt in MELEE_WORKTREES_DIR.iterdir():
-            dol_src = wt / "orig" / "GALE01" / "sys" / "main.dol"
-            if dol_src.exists() and not dol_src.is_symlink():
-                dol_dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(dol_src, dol_dst)
-                return True
-
     return False
 
 
-# Get agent ID for worktree AND session isolation
+# Get agent ID for session isolation
 AGENT_ID = _get_agent_id()
 PRODUCTION_COOKIES_FILE = DECOMP_CONFIG_DIR / "production_cookies.json"
 LOCAL_API_CACHE_FILE = DECOMP_CONFIG_DIR / "local_api_cache.json"
@@ -64,7 +53,6 @@ LOCAL_API_CACHE_FILE = DECOMP_CONFIG_DIR / "local_api_cache.json"
 # Project paths
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 DEFAULT_MELEE_ROOT = PROJECT_ROOT / "melee"
-MELEE_WORKTREES_DIR = PROJECT_ROOT / "melee-worktrees"
 
 # decomp.me instances
 PRODUCTION_DECOMP_ME = "https://decomp.me"
@@ -164,22 +152,6 @@ from .tracking import (
     format_match_history,
 )
 
-# From worktree_utils.py
-from .worktree_utils import (
-    get_subdirectory_key,
-    get_worktree_name_for_subdirectory,
-    get_subdirectory_worktree_path,
-    get_subdirectory_worktree,
-    get_worktree_for_file,
-    get_agent_melee_root,
-    get_agent_context_file,
-    resolve_melee_root,
-    get_source_file_from_claim,
-    db_upsert_subdirectory,
-    db_lock_subdirectory,
-    db_unlock_subdirectory,
-    db_get_subdirectory_lock,
-)
 
 
 # =============================================================================
@@ -441,11 +413,6 @@ def renew_claim_on_activity(function_name: str, agent_id: str | None = None) -> 
             # Save updated claims
             with open(claims_path, "w") as f:
                 json.dump(claims, f, indent=2)
-
-            # Also renew subdirectory lock if applicable
-            subdir_key = claim.get("subdirectory")
-            if subdir_key:
-                db_lock_subdirectory(subdir_key, agent_id)
 
             # Renew in database too
             db_add_claim(function_name, agent_id)
