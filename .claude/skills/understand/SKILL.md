@@ -29,21 +29,11 @@ This skill supports three target types:
 | `/understand <file_path>` | Analyze all functions in a file or module |
 | `/understand <StructName>` | Analyze struct field usage and naming |
 
-## Subdirectory Worktrees
-
-The project uses **subdirectory-based worktrees** for parallel agent work, just like `/decomp`. Each source subdirectory gets its own isolated worktree.
-
-**Worktree mapping:**
-```
-melee/src/melee/lb/*.c     → melee-worktrees/dir-lb/
-melee/src/melee/gr/*.c     → melee-worktrees/dir-gr/
-melee/src/melee/ft/chara/ftFox/*.c → melee-worktrees/dir-ft-chara-ftFox/
-```
+## Claiming
 
 **Key points:**
 - Source file is **auto-detected** when you claim a function
-- Work in the worktree, not the main `melee/` directory
-- Commits stay isolated until collected via `/collect-for-pr`
+- Work in the `melee/` directory
 - Claims prevent conflicts with other agents
 
 ## Workflow
@@ -54,11 +44,9 @@ melee/src/melee/ft/chara/ftFox/*.c → melee-worktrees/dir-ft-chara-ftFox/
 ```bash
 melee-agent claim add <func_name>
 # → Auto-detects source file
-# → Locks the subdirectory worktree
-# → Shows worktree path to use
 ```
 
-**For files/modules:** Claim any function in the file to lock the subdirectory:
+**For files/modules:** Claim any function in the file:
 ```bash
 # Find a function in the target file
 grep "^void\|^s32" melee/src/melee/<module>/<file>.c | head -1
@@ -80,7 +68,7 @@ melee-agent extract get <func_name>
 melee-agent scratch get <slug>
 ```
 
-**For files:** Read from the worktree path shown after claiming.
+**For files:** Read from `melee/src/melee/<module>/`.
 
 **For structs:**
 ```bash
@@ -152,15 +140,15 @@ Look up Melee game information to aid naming:
 - Replace `unk<offset>` or `x<offset>` only when purpose is known
 - Example: `unk45` → `costume_id` if you can verify it stores costume
 
-### Step 7: Apply Changes (in Worktree)
+### Step 7: Apply Changes
 
-Work in the **worktree directory** shown when you claimed (e.g., `melee-worktrees/dir-lb/`).
+Work in the `melee/` directory.
 
-**Source files** (`<worktree>/src/melee/<module>/*.c`):
+**Source files** (`melee/src/melee/<module>/*.c`):
 - Rename functions, variables, parameters
 - Add documentation comments
 
-**Header files** (`<worktree>/include/melee/<module>/*.h` or local `types.h`):
+**Header files** (`melee/include/melee/<module>/*.h` or local `types.h`):
 - Update function declarations
 - Rename struct fields
 - Add field documentation
@@ -185,9 +173,9 @@ struct FighterData {
 
 ### Step 8: Verify Build
 
-After making changes, ensure the build still works in the worktree:
+After making changes, ensure the build still works:
 ```bash
-cd <worktree> && ninja
+cd melee && ninja
 ```
 
 If renaming causes issues, update all references before committing.
@@ -210,7 +198,7 @@ This review step catches assumptions before they become part of the codebase.
 
 **Commit your documentation changes:**
 ```bash
-cd <worktree>
+cd melee
 git add -A
 git commit -m "docs(<module>): document <func_name> - <brief description>"
 ```
@@ -228,14 +216,6 @@ melee-agent complete document <func_name> --status partial
 ```
 
 This automatically releases any claim and tracks the function as documented.
-
-### Step 10: Batch into PR
-
-Documentation changes are collected with other worktree commits:
-```bash
-melee-agent worktree list --commits  # See pending commits
-# Use /collect-for-pr when ready to batch into a PR
-```
 
 ## Naming Conventions Reference
 
@@ -411,16 +391,15 @@ This helps identify what module a function belongs to based on its address.
 
 ## What NOT to Do
 
-1. **Don't work in the main `melee/` directory** - Always use the worktree path after claiming
-2. **Don't skip claiming** - Other agents may conflict with your work
-3. **Don't rename without evidence** - Cross-references or game knowledge must support the name
-4. **Don't copy from other decomp projects** - Their names may be wrong
-5. **Don't break the build** - Always verify with `ninja` in the worktree
-6. **Don't rename matched code carelessly** - Matched functions have verified behavior
-7. **Don't guess struct types** - Use `unk`/`x` prefix if uncertain
-8. **Don't change parameter types on matched functions** - Type changes can break assembly matches
-9. **Don't remove useful address comments** - Keep `/* 0D7268 */` style comments
-10. **Don't write superficial @brief comments** - If you only know mechanics, use `@todo` instead
+1. **Don't skip claiming** - Other agents may conflict with your work
+2. **Don't rename without evidence** - Cross-references or game knowledge must support the name
+3. **Don't copy from other decomp projects** - Their names may be wrong
+4. **Don't break the build** - Always verify with `ninja`
+5. **Don't rename matched code carelessly** - Matched functions have verified behavior
+6. **Don't guess struct types** - Use `unk`/`x` prefix if uncertain
+7. **Don't change parameter types on matched functions** - Type changes can break assembly matches
+8. **Don't remove useful address comments** - Keep `/* 0D7268 */` style comments
+9. **Don't write superficial @brief comments** - If you only know mechanics, use `@todo` instead
 
 ## Conservative Documentation Principle
 
@@ -531,14 +510,12 @@ Only rename `fn_XXXXXXXX` when the purpose is clear from the code:
 | Issue | Solution |
 |-------|----------|
 | Claim fails (already claimed) | Pick a different function or wait for release |
-| Can't find worktree path | Run `melee-agent worktree list` to see all worktrees |
 | Can't determine function purpose | Find more callers, trace data flow backward |
 | Field offset unclear | Use `melee-agent struct offset 0xXX` |
 | Naming conflicts with existing code | Check module conventions first |
 | Build breaks after rename | Update all references with grep |
 | Unsure if name is correct | Keep `@todo` comment explaining uncertainty |
 | Function does multiple things | Name by primary purpose, document others |
-| Changes in wrong directory | Move changes to worktree, don't commit in main repo |
 
 ## Checking Progress
 
@@ -549,7 +526,6 @@ melee-agent state status                        # All tracked functions
 melee-agent state status --category documented  # Only documented functions
 melee-agent state status --category undocumented  # Functions needing docs
 melee-agent state status <func_name>            # Check specific function
-melee-agent worktree list --commits             # Pending commits in worktrees
 ```
 
 **Documentation status values:**
@@ -565,14 +541,13 @@ melee-agent worktree list --commits             # Pending commits in worktrees
 # Step 1: Claim the function
 melee-agent claim add ftCo_8007E3B0
 # → Auto-detected source: ft/chara/ftCommon/ftCo_Guard.c
-# → Worktree: melee-worktrees/dir-ft-chara-ftCommon/
 
 # Step 2: Get function info
 melee-agent extract get ftCo_8007E3B0
 # Shows function metadata, any existing scratch
 
-# Step 3: Read the function (in worktree)
-cat melee-worktrees/dir-ft-chara-ftCommon/src/melee/ft/chara/ftCommon/ftCo_Guard.c
+# Step 3: Read the function
+cat melee/src/melee/ft/chara/ftCommon/ftCo_Guard.c
 # See function accesses shield-related fields
 
 # Step 4: Find callers
@@ -585,27 +560,22 @@ grep -rn "ftCo_8007E3B0" melee/src/melee/
 # Step 6: Propose name
 # ftCo_8007E3B0 → ftCo_Shield_CalcDamage
 
-# Step 7: Apply changes (in worktree!)
-# - Edit melee-worktrees/dir-ft-chara-ftCommon/src/melee/ft/chara/ftCommon/ftCo_Guard.c
+# Step 7: Apply changes
+# - Edit melee/src/melee/ft/chara/ftCommon/ftCo_Guard.c
 # - Update header declaration
 # - Add @brief documentation
 
 # Step 8: Verify build
-cd melee-worktrees/dir-ft-chara-ftCommon && ninja
+cd melee && ninja
 # Build passes!
 
 # Step 9: Commit and record
 git add -A
 git commit -m "docs(ft): document ftCo_8007E3B0 as ftCo_Shield_CalcDamage"
 melee-agent complete document ftCo_8007E3B0
-
-# Step 10: Check status
-melee-agent worktree list --commits
-# Shows: 1 commit pending in dir-ft-chara-ftCommon
 ```
 
 ## Integration with Other Skills
 
 - **After `/understand`**: If you discover type issues during documentation, use `/decomp-fixup` to fix headers
 - **Before `/decomp`**: Use `/understand` first to gain context before attempting to match
-- **With `/collect-for-pr`**: Documentation improvements can be batched into PRs

@@ -7,23 +7,7 @@ description: Match decompiled C code to original PowerPC assembly for Super Smas
 
 You are an expert at matching C source code to PowerPC assembly for the Melee decompilation project. Your goal is to achieve byte-for-byte identical compilation output.
 
-## Subdirectory Worktrees
-
-The project uses **subdirectory-based worktrees** for parallel agent work. Each source subdirectory gets its own isolated worktree, which enables easy merges since commits to different subdirectories rarely conflict.
-
-**Worktree mapping:**
-```
-melee/src/melee/lb/*.c     → melee-worktrees/dir-lb/
-melee/src/melee/gr/*.c     → melee-worktrees/dir-gr/
-melee/src/melee/ft/chara/ftFox/*.c → melee-worktrees/dir-ft-chara-ftFox/
-melee/src/melee/ft/chara/ftCommon/*.c → melee-worktrees/dir-ft-chara-ftCommon/
-```
-
-**Key points:**
-- Source file is **auto-detected** when you claim a function (no flags needed)
-- The worktree is created automatically when needed
-- Commits stay isolated until collected via `melee-agent worktree collect`
-- Local decomp.me server is **auto-detected** (no env vars needed)
+## Claiming Functions
 
 **Claiming a function:**
 ```bash
@@ -31,50 +15,39 @@ melee/src/melee/ft/chara/ftCommon/*.c → melee-worktrees/dir-ft-chara-ftCommon/
 melee-agent claim add lbColl_80008440
 ```
 
-**High-contention zone:** `ft/chara/ftCommon/` contains 123 behavior files used by ALL characters. Subdirectory locks expire after 30 minutes to prevent blocking.
+**Key points:**
+- Source file is **auto-detected** when you claim a function (no flags needed)
+- Local decomp.me server is **auto-detected** (no env vars needed)
+- Claims prevent conflicts with other agents working on the same function
 
 **Do NOT:**
-- Create branches directly in `melee/` - use subdirectory worktrees
 - Manually specify `--melee-root` - if you think you need to, stop and ask the user for confirmation, stating your justification
-- Work on functions in locked subdirectories owned by other agents
 
-## Worktree State Tracking (CRITICAL)
+## Session State Tracking
 
-**Track your worktree state throughout the session.** After every context reset or when resuming work:
+**Track your session state throughout the session.** After every context reset or when resuming work:
 
 ```bash
-# Verify you're in the correct worktree
-pwd                        # Should be melee-worktrees/dir-<module>/
-git branch --show-current  # Should be subdirs/<module>
-```
-
-**Current session state to remember:**
-- **Worktree path**: `melee-worktrees/dir-{module}/`
-- **Branch**: `subdirs/{module}`
-- **Active function**: (the one you claimed)
-- **Active scratch**: (the slug you're iterating on)
-
-**If you're unsure of your location:**
-```bash
-melee-agent worktree list          # Shows all worktrees
 melee-agent claim list             # Shows your active claims
 ```
 
-**Common mistake after context reset:** Running `git branch` from the project root instead of the worktree, seeing the wrong branch, then committing to the wrong location. Always `cd` to your worktree first.
+**Current session state to remember:**
+- **Active function**: (the one you claimed)
+- **Active scratch**: (the slug you're iterating on)
 
 ## Workflow
 
 ### Step 0: Automatic Build Validation
 
 When you first run a `melee-agent` command, the system automatically:
-1. Validates your worktree builds successfully
+1. Validates the build is successful
 2. If the build fails, shows the errors (your uncommitted changes are preserved)
 3. Caches the validation result for 30 minutes
 
 You'll see messages like:
 - `[dim]Running build validation (this may take a minute)...[/dim]`
-- `[green]Worktree build OK[/green]` - you're good to go
-- `[yellow]Worktree build has errors - fix before committing[/yellow]` - fix the errors shown
+- `[green]Build OK[/green]` - you're good to go
+- `[yellow]Build has errors - fix before committing[/yellow]` - fix the errors shown
 
 **If build has errors:** Use `/decomp-fixup` skill to diagnose and fix them.
 
@@ -177,14 +150,6 @@ History: 45% → 71.5% → 85%  # Shows your progress over iterations
 
 **Threshold:** Any improvement over the starting match %. Progress is progress.
 
-**BEFORE committing, verify your location:**
-```bash
-pwd                        # Must be melee-worktrees/dir-<module>/
-git branch --show-current  # Must be subdirs/<module>
-```
-
-If you're in the wrong directory, `cd` to the correct worktree first. The pre-commit hook will catch this, but it's better to verify upfront.
-
 **Use the workflow command:**
 ```bash
 melee-agent workflow finish <function_name> <slug>
@@ -207,7 +172,6 @@ The `--force` flag:
 - Requires `--diagnosis` to explain why the build is broken
 - Stores the diagnosis in the database (visible in `state status`)
 - Marks the function as `committed_needs_fix`
-- Worktrees with 3+ broken builds block new claims to prevent pile-up
 
 **CRITICAL: Commit Requirements**
 
@@ -377,7 +341,7 @@ melee-agent scratch compile <slug> -r              # Compile with refreshed cont
 ```
 
 Use these when:
-- You've fixed a header signature in your worktree
+- You've fixed a header signature
 - You've updated struct definitions
 - Context is stale after pulling upstream changes
 
@@ -497,7 +461,6 @@ melee-agent claim add lbColl_80008440
 # → Auto-detected source file: melee/lb/lbcollision.c
 # → Claimed: lbColl_80008440
 # → Subdirectory: lb
-# → Worktree will be at: melee-worktrees/dir-lb/
 
 # Create scratch with full context
 melee-agent extract get lbColl_80008440 --create-scratch
@@ -516,9 +479,6 @@ melee-agent scratch search-context xYz12 "CollData" "HSD_GObj"
 
 # Improved the match, FINISH THE FUNCTION (commits + records)
 melee-agent workflow finish lbColl_80008440 xYz12
-
-# Check subdirectory worktree status
-melee-agent worktree list
 ```
 
 ## Checking Your Progress
@@ -567,14 +527,14 @@ melee-agent state urls <func_name>        # Show all URLs (scratch, PR)
 | Struct field not visible in context | Use `M2C_FIELD(ptr, offset, type)` macro for raw offset access |
 | Build fails after matching | Use `/decomp-fixup` skill to fix header/caller issues, or `--force --diagnosis` |
 | Header has UNK_RET/UNK_PARAMS | Use `/decomp-fixup` skill to update signatures |
-| Can't claim function | Worktree may have 3+ broken builds - run `/decomp-fixup` first |
+| Can't claim function | Function may already be claimed - check `melee-agent claim list` |
 | Context outdated after header fix | `melee-agent scratch update-context <slug>` to rebuild from repo |
 
 **NonMatching files:** You CAN work on functions in NonMatching files. The build uses original .dol for linking, so builds always pass. Match % is tracked per-function.
 
 **Header signature bugs:** If assembly shows parameter usage (e.g., `cmpwi r3, 1`) but header declares `void func(void)`:
 1. Use `/decomp-fixup` skill for guidance on fixing headers
-2. Fix the header in your worktree
+2. Fix the header in the melee repo
 3. Update the scratch context: `melee-agent scratch update-context <slug>` (rebuilds from repo)
 
 ## Server Unreachable

@@ -15,9 +15,7 @@ A comparison of the Claude skills and tooling between [lukechampine/melee](https
 
 | Aspect | lukechampine's | Ours |
 |--------|----------------|------|
-| **Isolation** | None (single-agent workflow) | Subdirectory worktrees (`melee-worktrees/dir-lb/`, etc.) |
 | **Locking** | Not present | `melee-agent claim add/release` system |
-| **PR batching** | Not mentioned | `/collect-for-pr` skill for batching commits |
 | **Agent tracking** | None | `melee-agent state agents` shows active agents |
 
 ## Skill Comparison
@@ -31,14 +29,13 @@ A comparison of the Claude skills and tooling between [lukechampine/melee](https
 5. **mismatch-db** - Pattern database for common assembly mismatches
 6. **opseq** - Opcode sequence search to find similar functions
 
-### Our Skills (6 total)
+### Our Skills (5 total)
 
 1. **decomp** - Full matching workflow with server integration
 2. **decomp-fixup** - Build issue resolution (headers, signatures)
 3. **decomp-permuter** - Automated code variation search for 95%+ matches
 4. **understand** - Naming/documentation for reverse engineering
-5. **collect-for-pr** - PR batching from worktrees
-6. **melee-debug** - Dolphin runtime debugging (experimental)
+5. **melee-debug** - Dolphin runtime debugging (experimental)
 
 ## Notable Unique Features
 
@@ -51,7 +48,6 @@ A comparison of the Claude skills and tooling between [lukechampine/melee](https
 
 ### We have that lukechampine doesn't
 
-- **Worktree isolation**: Enables parallel agent work on different subdirectories without conflicts.
 - **decomp-permuter**: Automated brute-force search for 95%+ stuck matches using decomp-permuter tool.
 - **melee-debug**: Runtime debugging via Dolphin emulator for verification.
 - **Server-based scratches**: Persistent scratches with history tracking, context management, and sync to production decomp.me.
@@ -71,7 +67,6 @@ A comparison of the Claude skills and tooling between [lukechampine/melee](https
 
 - Server-centric with decomp.me as the source of truth
 - Rich state tracking enables multi-agent orchestration
-- Worktree isolation enables parallel development
 - More complex infrastructure but supports team/agent coordination
 
 ## Knowledge Management
@@ -92,7 +87,7 @@ Provides reference materials (symbol maps, struct docs, character IDs) that isn'
 
 lukechampine's approach is **leaner and more self-contained** - good for single-agent work with useful domain-specific knowledge bases (mismatch-db, item-decomp, opseq). The opseq tool for finding similar functions is particularly clever.
 
-Our approach is **more infrastructure-heavy but coordination-aware** - designed for parallel agent work with worktree isolation, claims, state tracking, and PR batching. The decomp-permuter and melee-debug skills add capabilities for stuck matches and runtime verification.
+Our approach is **more infrastructure-heavy but coordination-aware** - designed for organized work with claims, state tracking, and PR batching. The decomp-permuter and melee-debug skills add capabilities for stuck matches and runtime verification.
 
 ## Ideas to Potentially Adopt
 
