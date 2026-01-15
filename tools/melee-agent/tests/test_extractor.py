@@ -4,22 +4,22 @@ These tests use real files from the melee submodule to test parsing and extracti
 Run with: pytest tests/test_extractor.py -v
 """
 
-import pytest
 from pathlib import Path
+
+import pytest
 
 from src.extractor import (
     ConfigureParser,
-    SymbolParser,
-    SplitsParser,
     FunctionExtractor,
-    parse_configure,
-    parse_symbols,
-    parse_splits,
-    extract_unmatched_functions,
+    SplitsParser,
+    SymbolParser,
     extract_function,
+    extract_unmatched_functions,
+    parse_configure,
+    parse_splits,
+    parse_symbols,
 )
-from src.extractor.models import ObjectStatus, FunctionSymbol
-
+from src.extractor.models import FunctionSymbol, ObjectStatus
 
 # Path to the melee submodule
 MELEE_ROOT = Path(__file__).parent.parent / "melee"
@@ -126,10 +126,10 @@ class TestConfigureParser:
     def test_parse_matching_for_status(self, melee_root):
         """Test parsing MatchingFor status (treated as Matching)."""
         parser = ConfigureParser(melee_root)
-        content = '''
+        content = """
 MeleeLib("test")
 Object(MatchingFor(version="GALE01"), "test/file.c")
-'''
+"""
         objects = parser._extract_objects_from_content(content)
         assert len(objects) == 1
         assert objects[0].status == "Matching"
@@ -363,11 +363,7 @@ class TestFunctionExtractor:
             func_name = next(iter(symbols.keys()))
 
             # Extract without ASM or context for speed
-            func_info = extractor.extract_function(
-                func_name,
-                include_asm=False,
-                include_context=False
-            )
+            func_info = extractor.extract_function(func_name, include_asm=False, include_context=False)
 
             if func_info:  # May not find if function not in a configured object
                 assert func_info.name == func_name
@@ -406,11 +402,7 @@ class TestFunctionExtractor:
     async def test_async_extract_unmatched_functions(self, melee_root):
         """Test async extraction of unmatched functions."""
         # Extract without ASM/context for speed
-        result = await extract_unmatched_functions(
-            melee_root,
-            include_asm=False,
-            include_context=False
-        )
+        result = await extract_unmatched_functions(melee_root, include_asm=False, include_context=False)
 
         # Should have some statistics
         assert result.total_functions >= 0
@@ -429,12 +421,7 @@ class TestFunctionExtractor:
 
         if symbols:
             func_name = next(iter(symbols.keys()))
-            func_info = await extract_function(
-                melee_root,
-                func_name,
-                include_asm=False,
-                include_context=False
-            )
+            func_info = await extract_function(melee_root, func_name, include_asm=False, include_context=False)
 
             # May or may not find depending on configuration
             if func_info:
@@ -447,6 +434,7 @@ class TestReportParser:
     def test_init(self, melee_root):
         """Test parser initialization."""
         from src.extractor.report import ReportParser
+
         parser = ReportParser(melee_root)
         assert parser.melee_root == melee_root
         assert parser.report_path == melee_root / "build" / "GALE01" / "report.json"
@@ -454,6 +442,7 @@ class TestReportParser:
     def test_get_function_matches(self, melee_root):
         """Test getting function match data."""
         from src.extractor.report import ReportParser
+
         parser = ReportParser(melee_root)
 
         try:
@@ -472,6 +461,7 @@ class TestReportParser:
     def test_function_match_has_address(self, melee_root):
         """Test that FunctionMatch includes address from virtual_address."""
         from src.extractor.report import ReportParser
+
         parser = ReportParser(melee_root)
 
         try:
@@ -491,6 +481,7 @@ class TestReportParser:
     def test_get_function_match_single(self, melee_root):
         """Test getting match data for a single function."""
         from src.extractor.report import ReportParser
+
         parser = ReportParser(melee_root)
 
         try:
@@ -507,6 +498,7 @@ class TestReportParser:
     def test_get_overall_stats(self, melee_root):
         """Test getting overall match statistics."""
         from src.extractor.report import ReportParser
+
         parser = ReportParser(melee_root)
 
         try:

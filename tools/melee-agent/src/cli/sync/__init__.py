@@ -2,11 +2,11 @@
 
 import typer
 
-from .auth import auth_command, status_command, clear_command
+from .auth import auth_command, clear_command, status_command
+from .fix_ownership import fix_ownership_command
 from .list_cmd import list_command, slugs_command
 from .production import production_command
-from .fix_ownership import fix_ownership_command
-from .validate import validate_command, dedup_command, find_duplicates_command
+from .validate import dedup_command, find_duplicates_command, validate_command
 
 sync_app = typer.Typer(help="Sync scratches to production decomp.me")
 

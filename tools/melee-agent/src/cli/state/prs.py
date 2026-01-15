@@ -6,21 +6,18 @@ from typing import Annotated
 
 import typer
 
+from src.db import get_db
+
 from .._common import (
     console,
     extract_pr_info,
     get_pr_status_from_gh,
 )
-from src.db import get_db
 
 
 def prs_command(
-    check_github: Annotated[
-        bool, typer.Option("--check", "-c", help="Query GitHub for live status")
-    ] = False,
-    output_json: Annotated[
-        bool, typer.Option("--json", help="Output as JSON")
-    ] = False,
+    check_github: Annotated[bool, typer.Option("--check", "-c", help="Query GitHub for live status")] = False,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
     """Show all PRs and their associated functions.
 
@@ -132,12 +129,8 @@ def prs_command(
 
 
 def refresh_prs_command(
-    dry_run: Annotated[
-        bool, typer.Option("--dry-run", help="Show what would be updated")
-    ] = False,
-    verbose: Annotated[
-        bool, typer.Option("--verbose", "-v", help="Show detailed output")
-    ] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be updated")] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show detailed output")] = False,
 ):
     """Refresh PR states from GitHub.
 
@@ -198,11 +191,14 @@ def refresh_prs_command(
         # Update all functions with this PR
         if not dry_run:
             with db.connection() as conn:
-                conn.execute("""
+                conn.execute(
+                    """
                     UPDATE functions
                     SET pr_state = ?, updated_at = ?
                     WHERE pr_url = ?
-                """, (new_state, time.time(), pr_url))
+                """,
+                    (new_state, time.time(), pr_url),
+                )
 
         updated += 1
         old_display = old_state or "None"
@@ -213,7 +209,7 @@ def refresh_prs_command(
         else:
             console.print(f"  PR #{pr_num}: {old_display} -> [cyan]{new_state}[/cyan]")
 
-    console.print(f"\n[bold]Summary:[/bold]")
+    console.print("\n[bold]Summary:[/bold]")
     console.print(f"  Updated: {updated}")
     console.print(f"  Unchanged: {unchanged}")
     if errors:

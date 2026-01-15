@@ -19,9 +19,8 @@ import sys
 import time
 from pathlib import Path
 
-from .rsp_client import GDBClient
 from .launcher import DolphinLauncher, find_melee_iso
-
+from .rsp_client import GDBClient
 
 # Known Melee memory addresses (NTSC 1.02 - GALE01)
 # Reference: https://github.com/project-slippi/slippi-ssbm-asm
@@ -204,7 +203,7 @@ def interactive_mode(client: GDBClient):
                         row = "  "
                         for j in range(4):
                             if i + j < len(regs["gpr"]):
-                                row += f"r{i+j:2d}=0x{regs['gpr'][i+j]:08X}  "
+                                row += f"r{i + j:2d}=0x{regs['gpr'][i + j]:08X}  "
                         print(row)
                 else:
                     print("  (failed to read registers)")
@@ -215,24 +214,16 @@ def interactive_mode(client: GDBClient):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Dolphin GDB stub debugging POC for Melee"
-    )
+    parser = argparse.ArgumentParser(description="Dolphin GDB stub debugging POC for Melee")
     parser.add_argument("--iso", help="Path to Melee ISO/GCM file")
     parser.add_argument(
         "--connect-only",
         action="store_true",
         help="Only connect to existing Dolphin instance",
     )
-    parser.add_argument(
-        "--port", type=int, default=9090, help="GDB stub port (default: 9090)"
-    )
-    parser.add_argument(
-        "--headless", action="store_true", help="Run Dolphin in headless mode"
-    )
-    parser.add_argument(
-        "--interactive", "-i", action="store_true", help="Enter interactive mode"
-    )
+    parser.add_argument("--port", type=int, default=9090, help="GDB stub port (default: 9090)")
+    parser.add_argument("--headless", action="store_true", help="Run Dolphin in headless mode")
+    parser.add_argument("--interactive", "-i", action="store_true", help="Enter interactive mode")
     args = parser.parse_args()
 
     launcher = None

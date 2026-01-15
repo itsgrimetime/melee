@@ -12,10 +12,11 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Callable, Optional
 
 try:
     import dolphin_memory_engine as dme
+
     HAS_DME = True
 except ImportError:
     HAS_DME = False
@@ -23,6 +24,7 @@ except ImportError:
 
 class ConnectionMode(Enum):
     """Connection mode for the debugger."""
+
     GDB = "gdb"
     MEMORY_ENGINE = "memory"
     AUTO = "auto"
@@ -31,16 +33,18 @@ class ConnectionMode(Enum):
 @dataclass
 class Breakpoint:
     """Represents a breakpoint."""
+
     address: int
     enabled: bool = True
     hit_count: int = 0
-    condition: Optional[str] = None
-    symbol: Optional[str] = None
+    condition: str | None = None
+    symbol: str | None = None
 
 
 @dataclass
 class Symbol:
     """Represents a symbol from the decomp."""
+
     name: str
     address: int
     size: int = 0
@@ -71,7 +75,7 @@ class DolphinDebugger:
         self.gdb_port = gdb_port
 
         # Connection state
-        self._gdb_sock: Optional[socket.socket] = None
+        self._gdb_sock: socket.socket | None = None
         self._dme_hooked = False
         self._connected = False
 
@@ -81,7 +85,7 @@ class DolphinDebugger:
         self.symbols_by_addr: dict[int, Symbol] = {}
 
         # Callbacks
-        self.on_breakpoint_hit: Optional[Callable[[int], None]] = None
+        self.on_breakpoint_hit: Callable[[int], None] | None = None
 
     @property
     def is_connected(self) -> bool:
@@ -129,7 +133,7 @@ class DolphinDebugger:
             self._gdb_sock.connect((self.gdb_host, self.gdb_port))
             self._connected = True
             return True
-        except (socket.error, socket.timeout):
+        except (TimeoutError, OSError):
             self._gdb_sock = None
             return False
 
@@ -170,22 +174,22 @@ class DolphinDebugger:
     def _gdb_checksum(self, data: bytes) -> int:
         return sum(data) % 256
 
-    def _gdb_send(self, cmd: str) -> Optional[str]:
+    def _gdb_send(self, cmd: str) -> str | None:
         """Send GDB command and get response."""
         if not self._gdb_sock:
             return None
 
-        payload = cmd.encode('ascii')
+        payload = cmd.encode("ascii")
         checksum = self._gdb_checksum(payload)
         packet = b"$" + payload + b"#" + f"{checksum:02x}".encode()
 
         try:
             self._gdb_sock.sendall(packet)
             return self._gdb_recv()
-        except socket.error:
+        except OSError:
             return None
 
-    def _gdb_recv(self, timeout: float = 2.0) -> Optional[str]:
+    def _gdb_recv(self, timeout: float = 2.0) -> str | None:
         """Receive GDB response."""
         if not self._gdb_sock:
             return None
@@ -209,14 +213,14 @@ class DolphinDebugger:
             if b"$" in data and b"#" in data:
                 start = data.find(b"$") + 1
                 end = data.find(b"#")
-                return data[start:end].decode('ascii', errors='replace')
-        except socket.timeout:
+                return data[start:end].decode("ascii", errors="replace")
+        except TimeoutError:
             pass
         return None
 
     # === Memory Operations ===
 
-    def read_bytes(self, address: int, length: int) -> Optional[bytes]:
+    def read_bytes(self, address: int, length: int) -> bytes | None:
         """Read raw bytes from memory."""
         # Prefer memory engine for speed
         if self.has_memory_engine:
@@ -228,22 +232,22 @@ class DolphinDebugger:
         # Fall back to GDB
         if self.has_gdb:
             resp = self._gdb_send(f"m{address:x},{length:x}")
-            if resp and not resp.startswith('E'):
+            if resp and not resp.startswith("E"):
                 try:
                     return bytes.fromhex(resp)
                 except ValueError:
                     pass
         return None
 
-    def read_u8(self, address: int) -> Optional[int]:
+    def read_u8(self, address: int) -> int | None:
         data = self.read_bytes(address, 1)
         return data[0] if data else None
 
-    def read_u16(self, address: int) -> Optional[int]:
+    def read_u16(self, address: int) -> int | None:
         data = self.read_bytes(address, 2)
         return struct.unpack(">H", data)[0] if data else None
 
-    def read_u32(self, address: int) -> Optional[int]:
+    def read_u32(self, address: int) -> int | None:
         # Prefer memory engine
         if self.has_memory_engine:
             try:
@@ -253,11 +257,11 @@ class DolphinDebugger:
         data = self.read_bytes(address, 4)
         return struct.unpack(">I", data)[0] if data else None
 
-    def read_s32(self, address: int) -> Optional[int]:
+    def read_s32(self, address: int) -> int | None:
         data = self.read_bytes(address, 4)
         return struct.unpack(">i", data)[0] if data else None
 
-    def read_f32(self, address: int) -> Optional[float]:
+    def read_f32(self, address: int) -> float | None:
         if self.has_memory_engine:
             try:
                 return dme.read_float(address)
@@ -266,7 +270,7 @@ class DolphinDebugger:
         data = self.read_bytes(address, 4)
         return struct.unpack(">f", data)[0] if data else None
 
-    def read_string(self, address: int, max_len: int = 256) -> Optional[str]:
+    def read_string(self, address: int, max_len: int = 256) -> str | None:
         """Read null-terminated string."""
         chars = []
         for i in range(max_len):
@@ -312,17 +316,14 @@ class DolphinDebugger:
 
     # === Breakpoint Operations (GDB only) ===
 
-    def set_breakpoint(self, address: int, symbol: Optional[str] = None) -> bool:
+    def set_breakpoint(self, address: int, symbol: str | None = None) -> bool:
         """Set a code breakpoint."""
         if not self.has_gdb:
             return False
 
         resp = self._gdb_send(f"Z0,{address:x},4")
         if resp == "OK":
-            self.breakpoints[address] = Breakpoint(
-                address=address,
-                symbol=symbol or self.get_symbol_at(address)
-            )
+            self.breakpoints[address] = Breakpoint(address=address, symbol=symbol or self.get_symbol_at(address))
             return True
         return False
 
@@ -356,7 +357,7 @@ class DolphinDebugger:
 
     # === Execution Control (GDB only) ===
 
-    def continue_execution(self) -> Optional[str]:
+    def continue_execution(self) -> str | None:
         """Continue execution. Returns stop reason when target stops."""
         if not self.has_gdb:
             return None
@@ -365,7 +366,7 @@ class DolphinDebugger:
         # This blocks until target stops
         return self._gdb_recv(timeout=60.0)
 
-    def step(self) -> Optional[str]:
+    def step(self) -> str | None:
         """Single-step one instruction."""
         if not self.has_gdb:
             return None
@@ -383,7 +384,7 @@ class DolphinDebugger:
 
     # === Register Operations (GDB only) ===
 
-    def read_registers(self) -> Optional[dict]:
+    def read_registers(self) -> dict | None:
         """Read all CPU registers."""
         if not self.has_gdb:
             return None
@@ -401,12 +402,12 @@ class DolphinDebugger:
         # 32 GPRs, 4 bytes each
         for i in range(32):
             if len(data) >= (i + 1) * 4:
-                val = struct.unpack(">I", data[i*4:(i+1)*4])[0]
+                val = struct.unpack(">I", data[i * 4 : (i + 1) * 4])[0]
                 regs["gpr"].append(val)
 
         return regs
 
-    def read_pc(self) -> Optional[int]:
+    def read_pc(self) -> int | None:
         """Read program counter."""
         regs = self.read_registers()
         # PC location varies by stub implementation
@@ -423,14 +424,14 @@ class DolphinDebugger:
         with open(symbols_path) as f:
             for line in f:
                 # Parse: name = .section:0xADDRESS; // type:function size:0xSIZE
-                match = re.match(r'(\w+)\s*=\s*\.[^:]+:(0x[0-9A-Fa-f]+)', line)
+                match = re.match(r"(\w+)\s*=\s*\.[^:]+:(0x[0-9A-Fa-f]+)", line)
                 if match:
                     name = match.group(1)
                     addr = int(match.group(2), 16)
 
                     # Determine type and size
                     sym_type = "function" if "type:function" in line else "object"
-                    size_match = re.search(r'size:(0x[0-9A-Fa-f]+)', line)
+                    size_match = re.search(r"size:(0x[0-9A-Fa-f]+)", line)
                     size = int(size_match.group(1), 16) if size_match else 0
 
                     sym = Symbol(name=name, address=addr, size=size, sym_type=sym_type)
@@ -440,16 +441,16 @@ class DolphinDebugger:
 
         return count
 
-    def get_symbol(self, name: str) -> Optional[Symbol]:
+    def get_symbol(self, name: str) -> Symbol | None:
         """Get symbol by name."""
         return self.symbols.get(name)
 
-    def get_symbol_at(self, address: int) -> Optional[str]:
+    def get_symbol_at(self, address: int) -> str | None:
         """Get symbol name at address."""
         sym = self.symbols_by_addr.get(address)
         return sym.name if sym else None
 
-    def resolve_address(self, name_or_addr: str) -> Optional[int]:
+    def resolve_address(self, name_or_addr: str) -> int | None:
         """Resolve a symbol name or hex address to an address."""
         # Try as hex first
         if name_or_addr.startswith("0x"):
@@ -473,12 +474,12 @@ class DolphinDebugger:
 
     # === Melee-Specific Helpers ===
 
-    def get_game_id(self) -> Optional[str]:
+    def get_game_id(self) -> str | None:
         """Get the game ID (should be GALE01 for Melee NTSC 1.02)."""
         data = self.read_bytes(0x80000000, 6)
-        return data.decode('ascii') if data else None
+        return data.decode("ascii") if data else None
 
-    def get_frame_count(self) -> Optional[int]:
+    def get_frame_count(self) -> int | None:
         """Get the current frame counter."""
         return self.read_u32(0x80479D60)
 

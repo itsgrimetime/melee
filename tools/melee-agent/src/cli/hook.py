@@ -6,22 +6,17 @@ from typing import Annotated
 
 import typer
 
-from ._common import console, DEFAULT_MELEE_ROOT
+from ._common import DEFAULT_MELEE_ROOT, console
 
 hook_app = typer.Typer(help="Git hook management and commit validation")
 
 
 @hook_app.command("validate")
 def hook_validate(
-    fix: Annotated[
-        bool, typer.Option("--fix", help="Attempt to fix issues automatically")
-    ] = False,
-    verbose: Annotated[
-        bool, typer.Option("--verbose", "-v", help="Show all warnings")
-    ] = False,
+    fix: Annotated[bool, typer.Option("--fix", help="Attempt to fix issues automatically")] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show all warnings")] = False,
     skip_regressions: Annotated[
-        bool, typer.Option("--skip-regressions",
-                           help="Skip build and regression check (faster)")
+        bool, typer.Option("--skip-regressions", help="Skip build and regression check (faster)")
     ] = False,
 ):
     """Validate staged changes against project guidelines.
@@ -114,9 +109,7 @@ def _get_melee_hooks_dir(project_root: Path) -> Path | None:
 
 @hook_app.command("install")
 def hook_install(
-    force: Annotated[
-        bool, typer.Option("--force", "-f", help="Overwrite existing hooks")
-    ] = False,
+    force: Annotated[bool, typer.Option("--force", "-f", help="Overwrite existing hooks")] = False,
 ):
     """Install git pre-commit hooks for validation.
 
@@ -158,7 +151,7 @@ exit 0
 
     repo_pre_commit.write_text(repo_hook_content)
     repo_pre_commit.chmod(repo_pre_commit.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    console.print(f"[green]✓ Installed melee-decomp pre-commit hook[/green]")
+    console.print("[green]✓ Installed melee-decomp pre-commit hook[/green]")
 
     # 2. Install hook for melee repo
     melee_hooks_dir = _get_melee_hooks_dir(project_root)
@@ -198,7 +191,7 @@ exit $EXIT_CODE
 
     melee_pre_commit.write_text(melee_hook_content)
     melee_pre_commit.chmod(melee_pre_commit.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    console.print(f"[green]✓ Installed melee repo pre-commit hook[/green]")
+    console.print("[green]✓ Installed melee repo pre-commit hook[/green]")
 
 
 @hook_app.command("uninstall")

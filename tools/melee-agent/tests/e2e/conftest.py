@@ -23,7 +23,6 @@ from typer.testing import CliRunner
 from src.cli import app
 from src.db import StateDB, reset_db
 
-
 # =============================================================================
 # Database Fixtures
 # =============================================================================
@@ -50,8 +49,8 @@ def temp_db(tmp_path, monkeypatch):
     monkeypatch.setenv("DECOMP_CONFIG_DIR", str(config_dir))
 
     # Patch the get_db function to return our test instance
-    with patch('src.db.get_db', return_value=test_db):
-        with patch('src.db._db', test_db):
+    with patch("src.db.get_db", return_value=test_db):
+        with patch("src.db._db", test_db):
             yield test_db
 
     # Cleanup
@@ -85,7 +84,7 @@ def temp_melee_repo(tmp_path):
     config_dir.mkdir(parents=True)
 
     # Create sample C file with test functions
-    (src_dir / "lbcommand.c").write_text('''
+    (src_dir / "lbcommand.c").write_text("""
 #include "lb/types.h"
 
 void TestFunction(void) {
@@ -100,21 +99,21 @@ void ThirdFunction(int a, int b) {
     int result = a + b;
     return;
 }
-''')
+""")
 
     # Create another subdirectory for testing isolation
     ft_dir = melee_root / "src" / "melee" / "ft" / "chara" / "ftFox"
     ft_dir.mkdir(parents=True)
-    (ft_dir / "ftFx_SpecialHi.c").write_text('''
+    (ft_dir / "ftFx_SpecialHi.c").write_text("""
 #include "ft/forward.h"
 
 void ftFx_SpecialHi_Enter(void) {
     // Fox Up-B entry
 }
-''')
+""")
 
     # Create configure.py
-    (melee_root / "configure.py").write_text('''
+    (melee_root / "configure.py").write_text("""
 # Test configure file
 
 MeleeLib("lb (Library)")
@@ -122,39 +121,32 @@ Object(NonMatching, "melee/lb/lbcommand.c")
 
 MeleeLib("ft (Fighters)")
 Object(NonMatching, "melee/ft/chara/ftFox/ftFx_SpecialHi.c")
-''')
+""")
 
     # Create minimal symbols.txt
-    (config_dir / "symbols.txt").write_text('''
+    (config_dir / "symbols.txt").write_text("""
 TestFunction = .text:0x80005940; // type:function size:0x30
 AnotherFunction = .text:0x80005970; // type:function size:0x20
 ThirdFunction = .text:0x80005990; // type:function size:0x40
 ftFx_SpecialHi_Enter = .text:0x800B1000; // type:function size:0x100
-''')
+""")
 
     # Create minimal splits.txt
-    (config_dir / "splits.txt").write_text('''
+    (config_dir / "splits.txt").write_text("""
 melee/lb/lbcommand.c:
     .text       start:0x80005940 end:0x800059D0
 
 melee/ft/chara/ftFox/ftFx_SpecialHi.c:
     .text       start:0x800B1000 end:0x800B1100
-''')
+""")
 
     # Initialize git repo
-    git_env = {
-        **os.environ,
-        "GIT_AUTHOR_NAME": "Test",
-        "GIT_AUTHOR_EMAIL": "test@test.com",
-        "GIT_COMMITTER_NAME": "Test",
-        "GIT_COMMITTER_EMAIL": "test@test.com",
-    }
     subprocess.run(["git", "init"], cwd=melee_root, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=melee_root, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=melee_root, capture_output=True, check=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=melee_root, capture_output=True, check=True)
     subprocess.run(["git", "add", "."], cwd=melee_root, capture_output=True, check=True)
-    subprocess.run(
-        ["git", "commit", "-m", "Initial commit"],
-        cwd=melee_root, capture_output=True, check=True, env=git_env
-    )
+    subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=melee_root, capture_output=True, check=True)
 
     yield melee_root
 
@@ -207,7 +199,7 @@ def mock_decomp_server():
     def get_scratch(request):
         # Extract slug from URL path
         path = str(request.url.path)
-        match = re.search(r'/scratch/([^/]+)/?$', path)
+        match = re.search(r"/scratch/([^/]+)/?$", path)
         if not match:
             return httpx.Response(404, json={"error": "Not found"})
         slug = match.group(1)
@@ -219,7 +211,7 @@ def mock_decomp_server():
     def compile_scratch(request):
         # Extract slug from URL path
         path = str(request.url.path)
-        match = re.search(r'/scratch/([^/]+)/compile/?$', path)
+        match = re.search(r"/scratch/([^/]+)/compile/?$", path)
         if not match:
             return httpx.Response(404, json={"error": "Not found"})
         slug = match.group(1)
@@ -233,16 +225,19 @@ def mock_decomp_server():
             scratches[slug]["source_code"] = data["source_code"]
 
         scratch = scratches[slug]
-        return httpx.Response(200, json={
-            "success": True,
-            "compiler_output": "",
-            "diff_output": {
-                "current_score": scratch["score"],
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "compiler_output": "",
+                "diff_output": {
+                    "current_score": scratch["score"],
+                    "max_score": scratch["max_score"],
+                },
+                "score": scratch["score"],
                 "max_score": scratch["max_score"],
             },
-            "score": scratch["score"],
-            "max_score": scratch["max_score"],
-        })
+        )
 
     def set_match(slug: str, score: int, max_score: int = 100):
         """Helper to manually set match score for testing."""
@@ -256,13 +251,9 @@ def mock_decomp_server():
         # Route patterns - use route() instead of add()
         respx_mock.post(url__regex=r".*/api/scratch/?$").mock(side_effect=create_scratch)
         respx_mock.get(url__regex=r".*/api/scratch/[^/]+/?$").mock(side_effect=get_scratch)
-        respx_mock.post(url__regex=r".*/api/scratch/[^/]+/compile/?$").mock(
-            side_effect=compile_scratch
-        )
+        respx_mock.post(url__regex=r".*/api/scratch/[^/]+/compile/?$").mock(side_effect=compile_scratch)
         # Health check endpoint
-        respx_mock.get(url__regex=r".*/api/?$").mock(
-            return_value=httpx.Response(200, json={"status": "ok"})
-        )
+        respx_mock.get(url__regex=r".*/api/?$").mock(return_value=httpx.Response(200, json={"status": "ok"}))
 
         yield {
             "scratches": scratches,
@@ -312,7 +303,7 @@ def cli_runner():
 
     Returns a function that invokes the CLI app with given arguments.
     """
-    runner = CliRunner(mix_stderr=False)
+    runner = CliRunner()
 
     def run(*args, catch_exceptions=True, env=None, **kwargs):
         """Run a CLI command.
@@ -326,13 +317,7 @@ def cli_runner():
         Returns:
             CliRunner Result object
         """
-        return runner.invoke(
-            app,
-            list(args),
-            catch_exceptions=catch_exceptions,
-            env=env,
-            **kwargs
-        )
+        return runner.invoke(app, list(args), catch_exceptions=catch_exceptions, env=env, **kwargs)
 
     return run
 
@@ -348,10 +333,10 @@ def cli_with_db(cli_runner, temp_db, tmp_path, monkeypatch):
     config_dir.mkdir(exist_ok=True)
 
     # Patch CLI module constants
-    monkeypatch.setattr('src.cli._common.DECOMP_CONFIG_DIR', config_dir)
+    monkeypatch.setattr("src.cli._common.DECOMP_CONFIG_DIR", config_dir)
 
     def run(*args, agent_id="test-agent", **kwargs):
-        env = kwargs.pop('env', {}) or {}
+        env = kwargs.pop("env", {}) or {}
         env["DECOMP_AGENT_ID"] = agent_id
         return cli_runner(*args, env=env, **kwargs)
 

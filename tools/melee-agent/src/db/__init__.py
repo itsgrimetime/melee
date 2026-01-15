@@ -48,33 +48,23 @@ class StateDB:
         """Initialize database schema if needed."""
         with self.connection() as conn:
             # Check if db_meta table exists
-            cursor = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='db_meta'"
-            )
+            cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='db_meta'")
             if not cursor.fetchone():
                 # First time - create schema
                 conn.executescript(SCHEMA_SQL)
                 # Insert initial metadata
                 for key, value in INITIAL_META:
                     if value is None:
-                        conn.execute(
-                            "INSERT INTO db_meta (key) VALUES (?)",
-                            (key,)
-                        )
+                        conn.execute("INSERT INTO db_meta (key) VALUES (?)", (key,))
                     else:
-                        conn.execute(
-                            "INSERT INTO db_meta (key, value) VALUES (?, ?)",
-                            (key, value)
-                        )
+                        conn.execute("INSERT INTO db_meta (key, value) VALUES (?, ?)", (key, value))
             else:
                 # Check for schema migrations
                 self._run_migrations(conn)
 
     def _run_migrations(self, conn: sqlite3.Connection) -> None:
         """Run any pending schema migrations."""
-        cursor = conn.execute(
-            "SELECT value FROM db_meta WHERE key = 'schema_version'"
-        )
+        cursor = conn.execute("SELECT value FROM db_meta WHERE key = 'schema_version'")
         row = cursor.fetchone()
         current_version = int(row[0]) if row else 0
 
@@ -85,9 +75,8 @@ class StateDB:
 
         if current_version < SCHEMA_VERSION:
             conn.execute(
-                "UPDATE db_meta SET value = ?, updated_at = unixepoch('now', 'subsec') "
-                "WHERE key = 'schema_version'",
-                (str(SCHEMA_VERSION),)
+                "UPDATE db_meta SET value = ?, updated_at = unixepoch('now', 'subsec') WHERE key = 'schema_version'",
+                (str(SCHEMA_VERSION),),
             )
 
     @contextmanager
@@ -97,7 +86,7 @@ class StateDB:
         Connections are reused within the same thread for efficiency.
         Uses autocommit mode by default.
         """
-        if not hasattr(_local, 'connection') or _local.connection is None:
+        if not hasattr(_local, "connection") or _local.connection is None:
             _local.connection = sqlite3.connect(
                 str(self.db_path),
                 check_same_thread=False,
@@ -124,7 +113,7 @@ class StateDB:
 
     def close(self) -> None:
         """Close the thread-local connection."""
-        if hasattr(_local, 'connection') and _local.connection is not None:
+        if hasattr(_local, "connection") and _local.connection is not None:
             _local.connection.close()
             _local.connection = None
 
@@ -168,7 +157,7 @@ class StateDB:
                     json.dumps(old_value) if old_value else None,
                     json.dumps(new_value) if new_value else None,
                     json.dumps(metadata) if metadata else None,
-                )
+                ),
             )
 
     # =========================================================================
@@ -196,23 +185,17 @@ class StateDB:
 
         with self.transaction() as conn:
             # Check for existing claim
-            cursor = conn.execute(
-                "SELECT agent_id, expires_at FROM claims WHERE function_name = ?",
-                (function_name,)
-            )
+            cursor = conn.execute("SELECT agent_id, expires_at FROM claims WHERE function_name = ?", (function_name,))
             existing = cursor.fetchone()
 
             if existing:
-                if existing['expires_at'] > now:
-                    if existing['agent_id'] == agent_id:
+                if existing["expires_at"] > now:
+                    if existing["agent_id"] == agent_id:
                         return False, f"Already claimed by you ({agent_id})"
                     return False, f"Claimed by {existing['agent_id']}"
                 else:
                     # Expired claim, remove it
-                    conn.execute(
-                        "DELETE FROM claims WHERE function_name = ?",
-                        (function_name,)
-                    )
+                    conn.execute("DELETE FROM claims WHERE function_name = ?", (function_name,))
 
             # Add new claim
             conn.execute(
@@ -220,7 +203,7 @@ class StateDB:
                 INSERT INTO claims (function_name, agent_id, claimed_at, expires_at)
                 VALUES (?, ?, ?, ?)
                 """,
-                (function_name, agent_id, now, expires_at)
+                (function_name, agent_id, now, expires_at),
             )
 
             # Update function status
@@ -234,13 +217,15 @@ class StateDB:
                     claimed_at = excluded.claimed_at,
                     updated_at = excluded.updated_at
                 """,
-                (function_name, agent_id, now, now)
+                (function_name, agent_id, now, now),
             )
 
             self.log_audit(
-                'claim', function_name, 'created',
+                "claim",
+                function_name,
+                "created",
                 agent_id=agent_id,
-                new_value={'agent_id': agent_id, 'expires_at': expires_at}
+                new_value={"agent_id": agent_id, "expires_at": expires_at},
             )
 
         return True, None
@@ -257,22 +242,16 @@ class StateDB:
         """
         with self.transaction() as conn:
             # Get current claim for audit
-            cursor = conn.execute(
-                "SELECT agent_id, claimed_at FROM claims WHERE function_name = ?",
-                (function_name,)
-            )
+            cursor = conn.execute("SELECT agent_id, claimed_at FROM claims WHERE function_name = ?", (function_name,))
             existing = cursor.fetchone()
 
             if not existing:
                 return False
 
-            if agent_id and existing['agent_id'] != agent_id:
+            if agent_id and existing["agent_id"] != agent_id:
                 return False  # Not owned by this agent
 
-            conn.execute(
-                "DELETE FROM claims WHERE function_name = ?",
-                (function_name,)
-            )
+            conn.execute("DELETE FROM claims WHERE function_name = ?", (function_name,))
 
             # Update function status (only if currently claimed)
             conn.execute(
@@ -280,13 +259,15 @@ class StateDB:
                 UPDATE functions SET status = 'unclaimed', updated_at = ?
                 WHERE function_name = ? AND status = 'claimed'
                 """,
-                (time.time(), function_name)
+                (time.time(), function_name),
             )
 
             self.log_audit(
-                'claim', function_name, 'released',
-                agent_id=existing['agent_id'],
-                old_value={'agent_id': existing['agent_id']}
+                "claim",
+                function_name,
+                "released",
+                agent_id=existing["agent_id"],
+                old_value={"agent_id": existing["agent_id"]},
             )
 
         return True
@@ -322,64 +303,54 @@ class StateDB:
             **fields: Fields to update (match_percent, status, etc.)
         """
         now = time.time()
-        fields['updated_at'] = now
+        fields["updated_at"] = now
 
         with self.transaction() as conn:
             # Get current state for audit
-            cursor = conn.execute(
-                "SELECT * FROM functions WHERE function_name = ?",
-                (function_name,)
-            )
+            cursor = conn.execute("SELECT * FROM functions WHERE function_name = ?", (function_name,))
             old_row = cursor.fetchone()
             old_value = dict(old_row) if old_row else None
 
             # Build upsert query
             field_names = list(fields.keys())
-            placeholders = ', '.join(['?'] * len(fields))
-            updates = ', '.join([f"{f} = excluded.{f}" for f in field_names])
+            placeholders = ", ".join(["?"] * len(fields))
+            updates = ", ".join([f"{f} = excluded.{f}" for f in field_names])
 
             conn.execute(
                 f"""
-                INSERT INTO functions (function_name, {', '.join(field_names)})
+                INSERT INTO functions (function_name, {", ".join(field_names)})
                 VALUES (?, {placeholders})
                 ON CONFLICT(function_name) DO UPDATE SET {updates}
                 """,
-                (function_name, *fields.values())
+                (function_name, *fields.values()),
             )
 
             self.log_audit(
-                'function', function_name,
-                'updated' if old_value else 'created',
+                "function",
+                function_name,
+                "updated" if old_value else "created",
                 agent_id=agent_id,
                 old_value=old_value,
-                new_value={'function_name': function_name, **fields}
+                new_value={"function_name": function_name, **fields},
             )
 
     def get_function(self, function_name: str) -> dict | None:
         """Get a function record by name."""
         with self.connection() as conn:
-            cursor = conn.execute(
-                "SELECT * FROM functions WHERE function_name = ?",
-                (function_name,)
-            )
+            cursor = conn.execute("SELECT * FROM functions WHERE function_name = ?", (function_name,))
             row = cursor.fetchone()
             return dict(row) if row else None
 
     def get_functions_by_status(self, status: str) -> list[dict]:
         """Get all functions with a given status."""
         with self.connection() as conn:
-            cursor = conn.execute(
-                "SELECT * FROM functions WHERE status = ? ORDER BY updated_at DESC",
-                (status,)
-            )
+            cursor = conn.execute("SELECT * FROM functions WHERE status = ? ORDER BY updated_at DESC", (status,))
             return [dict(row) for row in cursor.fetchall()]
 
     def get_uncommitted_matches(self) -> list[dict]:
         """Get functions that are 95%+ matched but not committed."""
         with self.connection() as conn:
-            cursor = conn.execute(
-                "SELECT * FROM v_uncommitted_matches ORDER BY match_percent DESC"
-            )
+            cursor = conn.execute("SELECT * FROM v_uncommitted_matches ORDER BY match_percent DESC")
             return [dict(row) for row in cursor.fetchall()]
 
     # =========================================================================
@@ -401,10 +372,7 @@ class StateDB:
             return None
 
         with self.connection() as conn:
-            cursor = conn.execute(
-                "SELECT * FROM functions WHERE canonical_address = ?",
-                (normalized,)
-            )
+            cursor = conn.execute("SELECT * FROM functions WHERE canonical_address = ?", (normalized,))
             row = cursor.fetchone()
             return dict(row) if row else None
 
@@ -473,17 +441,19 @@ class StateDB:
                     new_name = COALESCE(excluded.new_name, new_name),
                     source = excluded.source
                 """,
-                (normalized, old_name, new_name, source)
+                (normalized, old_name, new_name, source),
             )
 
             self.log_audit(
-                'alias', old_name, 'recorded',
+                "alias",
+                old_name,
+                "recorded",
                 new_value={
-                    'canonical_address': normalized,
-                    'old_name': old_name,
-                    'new_name': new_name,
-                    'source': source,
-                }
+                    "canonical_address": normalized,
+                    "old_name": old_name,
+                    "new_name": new_name,
+                    "source": source,
+                },
             )
 
     def get_aliases_for_address(self, address: str) -> list[dict]:
@@ -507,7 +477,7 @@ class StateDB:
                 WHERE canonical_address = ?
                 ORDER BY renamed_at DESC
                 """,
-                (normalized,)
+                (normalized,),
             )
             return [dict(row) for row in cursor.fetchall()]
 
@@ -574,17 +544,13 @@ class StateDB:
                     SET canonical_address = ?, updated_at = ?
                     WHERE function_name = ? AND (canonical_address IS NULL OR canonical_address != ?)
                     """,
-                    (normalized, now, func_name, normalized)
+                    (normalized, now, func_name, normalized),
                 )
                 if cursor.rowcount > 0:
                     updated += 1
 
             if updated > 0:
-                self.log_audit(
-                    'bulk_update', 'addresses', 'updated',
-                    agent_id=agent_id,
-                    metadata={'count': updated}
-                )
+                self.log_audit("bulk_update", "addresses", "updated", agent_id=agent_id, metadata={"count": updated})
 
         return updated
 
@@ -615,11 +581,8 @@ class StateDB:
 
         with self.transaction() as conn:
             # Get both records
-            cursor = conn.execute(
-                "SELECT * FROM functions WHERE function_name IN (?, ?)",
-                (old_name, new_name)
-            )
-            rows = {row['function_name']: dict(row) for row in cursor.fetchall()}
+            cursor = conn.execute("SELECT * FROM functions WHERE function_name IN (?, ?)", (old_name, new_name))
+            rows = {row["function_name"]: dict(row) for row in cursor.fetchall()}
 
             old_record = rows.get(old_name)
             new_record = rows.get(new_name)
@@ -628,16 +591,21 @@ class StateDB:
                 return False  # Nothing to merge from
 
             # Record the alias
-            self.record_function_alias(normalized, old_name, new_name, source='report_sync')
+            self.record_function_alias(normalized, old_name, new_name, source="report_sync")
 
             # If new record exists, merge valuable data from old into new
             if new_record:
                 # Fields to preserve from old record if new record doesn't have them
                 merge_fields = [
-                    'local_scratch_slug', 'production_scratch_slug',
-                    'commit_hash', 'branch', 'worktree_path',
-                    'pr_url', 'pr_number', 'pr_state',
-                    'notes',
+                    "local_scratch_slug",
+                    "production_scratch_slug",
+                    "commit_hash",
+                    "branch",
+                    "worktree_path",
+                    "pr_url",
+                    "pr_number",
+                    "pr_state",
+                    "notes",
                 ]
 
                 updates = []
@@ -652,24 +620,23 @@ class StateDB:
                     conn.execute(
                         f"""
                         UPDATE functions
-                        SET {', '.join(updates)}, updated_at = ?, canonical_address = ?
+                        SET {", ".join(updates)}, updated_at = ?, canonical_address = ?
                         WHERE function_name = ?
                         """,
-                        params
+                        params,
                     )
 
                 # Delete the old record
-                conn.execute(
-                    "DELETE FROM functions WHERE function_name = ?",
-                    (old_name,)
-                )
+                conn.execute("DELETE FROM functions WHERE function_name = ?", (old_name,))
 
                 self.log_audit(
-                    'function', old_name, 'merged',
+                    "function",
+                    old_name,
+                    "merged",
                     agent_id=agent_id,
                     old_value=old_record,
-                    new_value={'merged_into': new_name},
-                    metadata={'canonical_address': normalized}
+                    new_value={"merged_into": new_name},
+                    metadata={"canonical_address": normalized},
                 )
 
             else:
@@ -699,19 +666,18 @@ class StateDB:
                         local_scratch_verified_at, production_scratch_verified_at, git_verified_at
                     FROM functions WHERE function_name = ?
                     """,
-                    (new_name, normalized, time.time(), old_name)
+                    (new_name, normalized, time.time(), old_name),
                 )
-                conn.execute(
-                    "DELETE FROM functions WHERE function_name = ?",
-                    (old_name,)
-                )
+                conn.execute("DELETE FROM functions WHERE function_name = ?", (old_name,))
 
                 self.log_audit(
-                    'function', old_name, 'renamed',
+                    "function",
+                    old_name,
+                    "renamed",
                     agent_id=agent_id,
                     old_value=old_record,
-                    new_value={'new_name': new_name},
-                    metadata={'canonical_address': normalized}
+                    new_value={"new_name": new_name},
+                    metadata={"canonical_address": normalized},
                 )
 
         return True
@@ -739,37 +705,31 @@ class StateDB:
         """
         with self.transaction() as conn:
             # Get current state for audit
-            cursor = conn.execute(
-                "SELECT * FROM scratches WHERE slug = ?",
-                (slug,)
-            )
+            cursor = conn.execute("SELECT * FROM scratches WHERE slug = ?", (slug,))
             old_row = cursor.fetchone()
             old_value = dict(old_row) if old_row else None
 
-            all_fields = {
-                'instance': instance,
-                'base_url': base_url,
-                **fields
-            }
+            all_fields = {"instance": instance, "base_url": base_url, **fields}
             field_names = list(all_fields.keys())
-            placeholders = ', '.join(['?'] * len(all_fields))
-            updates = ', '.join([f"{f} = excluded.{f}" for f in field_names])
+            placeholders = ", ".join(["?"] * len(all_fields))
+            updates = ", ".join([f"{f} = excluded.{f}" for f in field_names])
 
             conn.execute(
                 f"""
-                INSERT INTO scratches (slug, {', '.join(field_names)})
+                INSERT INTO scratches (slug, {", ".join(field_names)})
                 VALUES (?, {placeholders})
                 ON CONFLICT(slug) DO UPDATE SET {updates}
                 """,
-                (slug, *all_fields.values())
+                (slug, *all_fields.values()),
             )
 
             self.log_audit(
-                'scratch', slug,
-                'updated' if old_value else 'created',
+                "scratch",
+                slug,
+                "updated" if old_value else "created",
                 agent_id=agent_id,
                 old_value=old_value,
-                new_value={'slug': slug, **all_fields}
+                new_value={"slug": slug, **all_fields},
             )
 
     def record_match_score(
@@ -789,9 +749,7 @@ class StateDB:
             worktree_path: Path to the worktree where work was done
             branch: Git branch name where work was done
         """
-        match_percent = 100.0 if score == 0 else (
-            (1.0 - score / max_score) * 100 if max_score > 0 else 0.0
-        )
+        match_percent = 100.0 if score == 0 else ((1.0 - score / max_score) * 100 if max_score > 0 else 0.0)
 
         with self.connection() as conn:
             # Check if this is a duplicate of the last entry
@@ -801,10 +759,10 @@ class StateDB:
                 WHERE scratch_slug = ?
                 ORDER BY timestamp DESC LIMIT 1
                 """,
-                (scratch_slug,)
+                (scratch_slug,),
             )
             last = cursor.fetchone()
-            if last and last['score'] == score and last['max_score'] == max_score:
+            if last and last["score"] == score and last["max_score"] == max_score:
                 return  # No change, skip
 
             conn.execute(
@@ -812,7 +770,7 @@ class StateDB:
                 INSERT INTO match_history (scratch_slug, score, max_score, match_percent, worktree_path, branch)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (scratch_slug, score, max_score, match_percent, worktree_path, branch)
+                (scratch_slug, score, max_score, match_percent, worktree_path, branch),
             )
 
             # Update scratch record
@@ -822,7 +780,7 @@ class StateDB:
                        last_compiled_at = unixepoch('now', 'subsec')
                 WHERE slug = ?
                 """,
-                (score, max_score, match_percent, scratch_slug)
+                (score, max_score, match_percent, scratch_slug),
             )
 
     # =========================================================================
@@ -850,8 +808,7 @@ class StateDB:
         with self.transaction() as conn:
             # Check if record exists
             cursor = conn.execute(
-                "SELECT * FROM function_branch_progress WHERE function_name = ? AND branch = ?",
-                (function_name, branch)
+                "SELECT * FROM function_branch_progress WHERE function_name = ? AND branch = ?", (function_name, branch)
             )
             old_row = cursor.fetchone()
             old_value = dict(old_row) if old_row else None
@@ -873,21 +830,33 @@ class StateDB:
                     commit_hash = COALESCE(excluded.commit_hash, commit_hash),
                     updated_at = excluded.updated_at
                 """,
-                (function_name, branch, scratch_slug, match_percent, score, max_score,
-                 agent_id, worktree_path, is_committed, commit_hash, now)
+                (
+                    function_name,
+                    branch,
+                    scratch_slug,
+                    match_percent,
+                    score,
+                    max_score,
+                    agent_id,
+                    worktree_path,
+                    is_committed,
+                    commit_hash,
+                    now,
+                ),
             )
 
             self.log_audit(
-                'branch_progress', f"{function_name}@{branch}",
-                'updated' if old_value else 'created',
+                "branch_progress",
+                f"{function_name}@{branch}",
+                "updated" if old_value else "created",
                 agent_id=agent_id,
                 old_value=old_value,
                 new_value={
-                    'function_name': function_name,
-                    'branch': branch,
-                    'match_percent': match_percent,
-                    'is_committed': is_committed,
-                }
+                    "function_name": function_name,
+                    "branch": branch,
+                    "match_percent": match_percent,
+                    "is_committed": is_committed,
+                },
             )
 
     def get_branch_progress(self, function_name: str) -> list[dict]:
@@ -899,7 +868,7 @@ class StateDB:
                 WHERE function_name = ?
                 ORDER BY match_percent DESC
                 """,
-                (function_name,)
+                (function_name,),
             )
             return [dict(row) for row in cursor.fetchall()]
 
@@ -913,7 +882,7 @@ class StateDB:
                 ORDER BY match_percent DESC
                 LIMIT 1
                 """,
-                (function_name,)
+                (function_name,),
             )
             row = cursor.fetchone()
             return dict(row) if row else None
@@ -940,15 +909,13 @@ class StateDB:
                     branch_name = COALESCE(excluded.branch_name, branch_name),
                     last_active_at = excluded.last_active_at
                 """,
-                (agent_id, worktree_path, branch_name, now)
+                (agent_id, worktree_path, branch_name, now),
             )
 
     def get_agent_summary(self) -> list[dict]:
         """Get summary of all agents and their work."""
         with self.connection() as conn:
-            cursor = conn.execute(
-                "SELECT * FROM v_agent_summary ORDER BY last_active_at DESC"
-            )
+            cursor = conn.execute("SELECT * FROM v_agent_summary ORDER BY last_active_at DESC")
             return [dict(row) for row in cursor.fetchall()]
 
     # =========================================================================
@@ -987,19 +954,20 @@ class StateDB:
                                      ELSE locked_at END,
                     updated_at = excluded.updated_at
                 """,
-                (subdirectory_key, worktree_path, branch_name, locked_by_agent,
-                 now if locked_by_agent else None, now)
+                (subdirectory_key, worktree_path, branch_name, locked_by_agent, now if locked_by_agent else None, now),
             )
 
             self.log_audit(
-                'subdirectory', subdirectory_key, 'upserted',
+                "subdirectory",
+                subdirectory_key,
+                "upserted",
                 agent_id=locked_by_agent,
                 new_value={
-                    'subdirectory_key': subdirectory_key,
-                    'worktree_path': worktree_path,
-                    'branch_name': branch_name,
-                    'locked_by_agent': locked_by_agent,
-                }
+                    "subdirectory_key": subdirectory_key,
+                    "worktree_path": worktree_path,
+                    "branch_name": branch_name,
+                    "locked_by_agent": locked_by_agent,
+                },
             )
 
     def lock_subdirectory(
@@ -1029,13 +997,13 @@ class StateDB:
                 FROM subdirectory_allocations
                 WHERE subdirectory_key = ?
                 """,
-                (subdirectory_key,)
+                (subdirectory_key,),
             )
             row = cursor.fetchone()
 
             if row:
-                current_lock = row['locked_by_agent']
-                lock_expires = row['lock_expires_at']
+                current_lock = row["locked_by_agent"]
+                lock_expires = row["lock_expires_at"]
 
                 if current_lock:
                     # Check if lock has expired
@@ -1048,7 +1016,7 @@ class StateDB:
                                 SET lock_expires_at = ?, updated_at = ?
                                 WHERE subdirectory_key = ?
                                 """,
-                                (expires_at, now, subdirectory_key)
+                                (expires_at, now, subdirectory_key),
                             )
                             return True, None
                         else:
@@ -1068,7 +1036,7 @@ class StateDB:
                     lock_expires_at = excluded.lock_expires_at,
                     updated_at = excluded.updated_at
                 """,
-                (subdirectory_key, agent_id, now, expires_at, now)
+                (subdirectory_key, agent_id, now, expires_at, now),
             )
 
             # Also record assignment
@@ -1078,13 +1046,15 @@ class StateDB:
                 VALUES (?, ?)
                 ON CONFLICT DO NOTHING
                 """,
-                (agent_id, subdirectory_key)
+                (agent_id, subdirectory_key),
             )
 
             self.log_audit(
-                'subdirectory', subdirectory_key, 'locked',
+                "subdirectory",
+                subdirectory_key,
+                "locked",
                 agent_id=agent_id,
-                new_value={'locked_by': agent_id, 'expires_at': expires_at}
+                new_value={"locked_by": agent_id, "expires_at": expires_at},
             )
 
         return True, None
@@ -1112,10 +1082,10 @@ class StateDB:
                     SELECT locked_by_agent FROM subdirectory_allocations
                     WHERE subdirectory_key = ?
                     """,
-                    (subdirectory_key,)
+                    (subdirectory_key,),
                 )
                 row = cursor.fetchone()
-                if row and row['locked_by_agent'] != agent_id:
+                if row and row["locked_by_agent"] != agent_id:
                     return False  # Not owned by this agent
 
             conn.execute(
@@ -1125,13 +1095,10 @@ class StateDB:
                     updated_at = ?
                 WHERE subdirectory_key = ?
                 """,
-                (now, subdirectory_key)
+                (now, subdirectory_key),
             )
 
-            self.log_audit(
-                'subdirectory', subdirectory_key, 'unlocked',
-                agent_id=agent_id
-            )
+            self.log_audit("subdirectory", subdirectory_key, "unlocked", agent_id=agent_id)
 
         return True
 
@@ -1149,7 +1116,7 @@ class StateDB:
                 FROM subdirectory_allocations
                 WHERE subdirectory_key = ?
                 """,
-                (subdirectory_key,)
+                (subdirectory_key,),
             )
             row = cursor.fetchone()
             if not row:
@@ -1159,9 +1126,9 @@ class StateDB:
             now = time.time()
 
             # Check if lock is expired
-            if result['lock_expires_at'] and result['lock_expires_at'] <= now:
-                result['locked_by_agent'] = None
-                result['lock_expired'] = True
+            if result["lock_expires_at"] and result["lock_expires_at"] <= now:
+                result["locked_by_agent"] = None
+                result["lock_expired"] = True
 
             return result
 
@@ -1185,9 +1152,9 @@ class StateDB:
                 WHERE agent_id = ?
                 ORDER BY assigned_at DESC
                 """,
-                (agent_id,)
+                (agent_id,),
             )
-            return [row['subdirectory_key'] for row in cursor.fetchall()]
+            return [row["subdirectory_key"] for row in cursor.fetchall()]
 
     def increment_pending_commits(self, subdirectory_key: str) -> None:
         """Increment the pending commits count for a subdirectory."""
@@ -1200,7 +1167,7 @@ class StateDB:
                     updated_at = unixepoch('now', 'subsec')
                 WHERE subdirectory_key = ?
                 """,
-                (subdirectory_key,)
+                (subdirectory_key,),
             )
 
     def reset_pending_commits(self, subdirectory_key: str) -> None:
@@ -1212,7 +1179,7 @@ class StateDB:
                 SET pending_commits = 0, updated_at = unixepoch('now', 'subsec')
                 WHERE subdirectory_key = ?
                 """,
-                (subdirectory_key,)
+                (subdirectory_key,),
             )
 
     # =========================================================================
@@ -1233,7 +1200,7 @@ class StateDB:
                     (local_slug, production_slug, function_name, synced_at)
                 VALUES (?, ?, ?, unixepoch('now', 'subsec'))
                 """,
-                (local_slug, production_slug, function_name)
+                (local_slug, production_slug, function_name),
             )
 
             # Update function if we know which one
@@ -1243,7 +1210,7 @@ class StateDB:
                     UPDATE functions SET production_scratch_slug = ?, updated_at = ?
                     WHERE function_name = ?
                     """,
-                    (production_slug, time.time(), function_name)
+                    (production_slug, time.time(), function_name),
                 )
 
     # =========================================================================
@@ -1266,7 +1233,7 @@ class StateDB:
                 WHERE hours_stale >= ?
                 ORDER BY hours_stale DESC
                 """,
-                (hours_threshold,)
+                (hours_threshold,),
             )
             return [dict(row) for row in cursor.fetchall()]
 
@@ -1309,7 +1276,7 @@ class StateDB:
             for row in cursor.fetchall():
                 entry = dict(row)
                 # Parse JSON fields
-                for field in ('old_value', 'new_value', 'metadata'):
+                for field in ("old_value", "new_value", "metadata"):
                     if entry.get(field):
                         try:
                             entry[field] = json.loads(entry[field])
@@ -1325,12 +1292,9 @@ class StateDB:
     def get_meta(self, key: str) -> str | None:
         """Get a metadata value."""
         with self.connection() as conn:
-            cursor = conn.execute(
-                "SELECT value FROM db_meta WHERE key = ?",
-                (key,)
-            )
+            cursor = conn.execute("SELECT value FROM db_meta WHERE key = ?", (key,))
             row = cursor.fetchone()
-            return row['value'] if row else None
+            return row["value"] if row else None
 
     def set_meta(self, key: str, value: str) -> None:
         """Set a metadata value."""
@@ -1343,7 +1307,7 @@ class StateDB:
                     value = excluded.value,
                     updated_at = excluded.updated_at
                 """,
-                (key, value)
+                (key, value),
             )
 
     # =========================================================================
@@ -1367,9 +1331,9 @@ class StateDB:
                   AND build_status = 'broken'
                 ORDER BY updated_at DESC
                 """,
-                (worktree_path,)
+                (worktree_path,),
             )
-            functions = [row['function_name'] for row in cursor.fetchall()]
+            functions = [row["function_name"] for row in cursor.fetchall()]
             return len(functions), functions
 
     def get_subdirectory_broken_count(self, subdirectory_key: str) -> tuple[int, list[str]]:
@@ -1393,9 +1357,9 @@ class StateDB:
                   AND build_status = 'broken'
                 ORDER BY updated_at DESC
                 """,
-                (path_pattern, f"%dir-{subdirectory_key}%")
+                (path_pattern, f"%dir-{subdirectory_key}%"),
             )
-            functions = [row['function_name'] for row in cursor.fetchall()]
+            functions = [row["function_name"] for row in cursor.fetchall()]
             return len(functions), functions
 
     def get_all_broken_builds(self) -> dict[str, list[str]]:
@@ -1415,10 +1379,10 @@ class StateDB:
             )
             result: dict[str, list[str]] = {}
             for row in cursor.fetchall():
-                wt = row['worktree_path']
+                wt = row["worktree_path"]
                 if wt not in result:
                     result[wt] = []
-                result[wt].append(row['function_name'])
+                result[wt].append(row["function_name"])
             return result
 
 

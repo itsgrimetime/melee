@@ -20,7 +20,7 @@ class TestScratchCreate:
                 "compiler": "mwcc_247_92",
                 "platform": "gc_wii",
                 "source_code": "void TestFunction(void) {}",
-            }
+            },
         )
 
         assert response.status_code == 200
@@ -34,10 +34,7 @@ class TestScratchCreate:
         import httpx
 
         # Create
-        create_resp = httpx.post(
-            f"{mock_decomp_server['base_url']}/api/scratch",
-            json={"name": "TestFunction"}
-        )
+        create_resp = httpx.post(f"{mock_decomp_server['base_url']}/api/scratch", json={"name": "TestFunction"})
         slug = create_resp.json()["slug"]
 
         # Verify stored
@@ -53,10 +50,7 @@ class TestScratchGet:
         import httpx
 
         # Create
-        create_resp = httpx.post(
-            f"{mock_decomp_server['base_url']}/api/scratch",
-            json={"name": "TestFunction"}
-        )
+        create_resp = httpx.post(f"{mock_decomp_server['base_url']}/api/scratch", json={"name": "TestFunction"})
         slug = create_resp.json()["slug"]
 
         # Get
@@ -71,9 +65,7 @@ class TestScratchGet:
         """Getting nonexistent scratch returns 404."""
         import httpx
 
-        response = httpx.get(
-            f"{mock_decomp_server['base_url']}/api/scratch/nonexistent-slug"
-        )
+        response = httpx.get(f"{mock_decomp_server['base_url']}/api/scratch/nonexistent-slug")
 
         assert response.status_code == 404
 
@@ -87,15 +79,13 @@ class TestScratchCompile:
 
         # Create
         create_resp = httpx.post(
-            f"{mock_decomp_server['base_url']}/api/scratch",
-            json={"name": "TestFunction", "source_code": "// original"}
+            f"{mock_decomp_server['base_url']}/api/scratch", json={"name": "TestFunction", "source_code": "// original"}
         )
         slug = create_resp.json()["slug"]
 
         # Compile with new source
         compile_resp = httpx.post(
-            f"{mock_decomp_server['base_url']}/api/scratch/{slug}/compile",
-            json={"source_code": "// updated code"}
+            f"{mock_decomp_server['base_url']}/api/scratch/{slug}/compile", json={"source_code": "// updated code"}
         )
 
         assert compile_resp.status_code == 200
@@ -106,16 +96,13 @@ class TestScratchCompile:
         import httpx
 
         # Create
-        create_resp = httpx.post(
-            f"{mock_decomp_server['base_url']}/api/scratch",
-            json={"name": "TestFunction"}
-        )
+        create_resp = httpx.post(f"{mock_decomp_server['base_url']}/api/scratch", json={"name": "TestFunction"})
         slug = create_resp.json()["slug"]
 
         # Compile
         compile_resp = httpx.post(
             f"{mock_decomp_server['base_url']}/api/scratch/{slug}/compile",
-            json={"source_code": "void TestFunction(void) {}"}
+            json={"source_code": "void TestFunction(void) {}"},
         )
 
         data = compile_resp.json()
@@ -127,10 +114,7 @@ class TestScratchCompile:
         import httpx
 
         # Create
-        create_resp = httpx.post(
-            f"{mock_decomp_server['base_url']}/api/scratch",
-            json={"name": "TestFunction"}
-        )
+        create_resp = httpx.post(f"{mock_decomp_server['base_url']}/api/scratch", json={"name": "TestFunction"})
         slug = create_resp.json()["slug"]
 
         # Use helper to set perfect match
@@ -153,14 +137,11 @@ class TestDatabaseScratchTracking:
             base_url="http://localhost:8000",
             function_name="TestFunction",
             score=50,
-            max_score=100
+            max_score=100,
         )
 
         with temp_db.connection() as conn:
-            cursor = conn.execute(
-                "SELECT * FROM scratches WHERE slug = ?",
-                ("test-scratch-1",)
-            )
+            cursor = conn.execute("SELECT * FROM scratches WHERE slug = ?", ("test-scratch-1",))
             scratch = dict(cursor.fetchone())
 
         assert scratch["slug"] == "test-scratch-1"
@@ -169,17 +150,10 @@ class TestDatabaseScratchTracking:
 
     def test_scratch_links_to_function(self, temp_db):
         """Scratch can be linked to a function."""
-        temp_db.upsert_function(
-            "TestFunction",
-            status="in_progress",
-            local_scratch_slug="test-scratch-1"
-        )
+        temp_db.upsert_function("TestFunction", status="in_progress", local_scratch_slug="test-scratch-1")
 
         temp_db.upsert_scratch(
-            slug="test-scratch-1",
-            instance="local",
-            base_url="http://localhost:8000",
-            function_name="TestFunction"
+            slug="test-scratch-1", instance="local", base_url="http://localhost:8000", function_name="TestFunction"
         )
 
         func = temp_db.get_function("TestFunction")
@@ -191,17 +165,13 @@ class TestMatchHistory:
 
     def test_record_multiple_scores(self, temp_db):
         """Can record multiple match scores over time."""
-        temp_db.upsert_scratch(
-            slug="test-scratch",
-            instance="local",
-            base_url="http://localhost:8000"
-        )
+        temp_db.upsert_scratch(slug="test-scratch", instance="local", base_url="http://localhost:8000")
 
         # Record improving scores
         temp_db.record_match_score("test-scratch", score=100, max_score=100)  # 0%
-        temp_db.record_match_score("test-scratch", score=50, max_score=100)   # 50%
-        temp_db.record_match_score("test-scratch", score=10, max_score=100)   # 90%
-        temp_db.record_match_score("test-scratch", score=0, max_score=100)    # 100%
+        temp_db.record_match_score("test-scratch", score=50, max_score=100)  # 50%
+        temp_db.record_match_score("test-scratch", score=10, max_score=100)  # 90%
+        temp_db.record_match_score("test-scratch", score=0, max_score=100)  # 100%
 
         with temp_db.connection() as conn:
             cursor = conn.execute(
@@ -210,7 +180,7 @@ class TestMatchHistory:
                 WHERE scratch_slug = ?
                 ORDER BY timestamp
                 """,
-                ("test-scratch",)
+                ("test-scratch",),
             )
             history = [dict(row) for row in cursor.fetchall()]
 
@@ -221,18 +191,13 @@ class TestMatchHistory:
 
     def test_score_updates_scratch_record(self, temp_db):
         """Recording score updates the scratch record."""
-        temp_db.upsert_scratch(
-            slug="test-scratch",
-            instance="local",
-            base_url="http://localhost:8000"
-        )
+        temp_db.upsert_scratch(slug="test-scratch", instance="local", base_url="http://localhost:8000")
 
         temp_db.record_match_score("test-scratch", score=25, max_score=100)
 
         with temp_db.connection() as conn:
             cursor = conn.execute(
-                "SELECT score, max_score, match_percent FROM scratches WHERE slug = ?",
-                ("test-scratch",)
+                "SELECT score, max_score, match_percent FROM scratches WHERE slug = ?", ("test-scratch",)
             )
             scratch = dict(cursor.fetchone())
 
@@ -242,20 +207,13 @@ class TestMatchHistory:
 
     def test_duplicate_scores_not_recorded(self, temp_db):
         """Same score recorded twice only creates one history entry."""
-        temp_db.upsert_scratch(
-            slug="test-scratch",
-            instance="local",
-            base_url="http://localhost:8000"
-        )
+        temp_db.upsert_scratch(slug="test-scratch", instance="local", base_url="http://localhost:8000")
 
         temp_db.record_match_score("test-scratch", score=50, max_score=100)
         temp_db.record_match_score("test-scratch", score=50, max_score=100)  # Duplicate
 
         with temp_db.connection() as conn:
-            cursor = conn.execute(
-                "SELECT COUNT(*) as cnt FROM match_history WHERE scratch_slug = ?",
-                ("test-scratch",)
-            )
+            cursor = conn.execute("SELECT COUNT(*) as cnt FROM match_history WHERE scratch_slug = ?", ("test-scratch",))
             count = cursor.fetchone()["cnt"]
 
         assert count == 1
@@ -266,17 +224,10 @@ class TestSyncState:
 
     def test_record_sync(self, temp_db):
         """Can record a sync between local and production."""
-        temp_db.record_sync(
-            local_slug="local-scratch",
-            production_slug="prod-scratch",
-            function_name="TestFunction"
-        )
+        temp_db.record_sync(local_slug="local-scratch", production_slug="prod-scratch", function_name="TestFunction")
 
         with temp_db.connection() as conn:
-            cursor = conn.execute(
-                "SELECT * FROM sync_state WHERE local_slug = ?",
-                ("local-scratch",)
-            )
+            cursor = conn.execute("SELECT * FROM sync_state WHERE local_slug = ?", ("local-scratch",))
             sync = dict(cursor.fetchone())
 
         assert sync["production_slug"] == "prod-scratch"
@@ -286,11 +237,7 @@ class TestSyncState:
         """Recording sync updates function's production slug."""
         temp_db.upsert_function("TestFunction", status="in_progress")
 
-        temp_db.record_sync(
-            local_slug="local-scratch",
-            production_slug="prod-scratch",
-            function_name="TestFunction"
-        )
+        temp_db.record_sync(local_slug="local-scratch", production_slug="prod-scratch", function_name="TestFunction")
 
         func = temp_db.get_function("TestFunction")
         assert func["production_scratch_slug"] == "prod-scratch"

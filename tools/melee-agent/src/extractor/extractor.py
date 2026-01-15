@@ -2,13 +2,14 @@
 
 from pathlib import Path
 from typing import Optional
-from .models import FunctionInfo, ExtractionResult
-from .parser import ConfigureParser
-from .report import ReportParser
-from .symbols import SymbolParser
+
 from .asm import AsmExtractor
 from .context import ContextGenerator
+from .models import ExtractionResult, FunctionInfo
+from .parser import ConfigureParser
+from .report import ReportParser
 from .splits import SplitsParser
+from .symbols import SymbolParser
 
 
 class FunctionExtractor:
@@ -30,7 +31,7 @@ class FunctionExtractor:
         self.splits_parser = SplitsParser(melee_root)
 
         # Cache for function name to source file mapping
-        self._function_to_file_cache: Optional[dict[str, str]] = None
+        self._function_to_file_cache: dict[str, str] | None = None
 
     def extract_all_functions(
         self,
@@ -157,7 +158,7 @@ class FunctionExtractor:
         function_name: str,
         include_asm: bool = True,
         include_context: bool = True,
-    ) -> Optional[FunctionInfo]:
+    ) -> FunctionInfo | None:
         """
         Extract information for a specific function.
 
@@ -275,9 +276,7 @@ class FunctionExtractor:
         self._function_to_file_cache = function_to_file
         return function_to_file
 
-    def _find_source_file_for_function(
-        self, function_name: str, object_map: dict
-    ) -> Optional[str]:
+    def _find_source_file_for_function(self, function_name: str, object_map: dict) -> str | None:
         """
         Find the source file that contains a function.
 
@@ -322,7 +321,7 @@ async def extract_function(
     function_name: str,
     include_asm: bool = True,
     include_context: bool = True,
-) -> Optional[FunctionInfo]:
+) -> FunctionInfo | None:
     """
     Async wrapper for extracting a specific function.
 

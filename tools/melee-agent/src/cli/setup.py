@@ -6,7 +6,7 @@ from typing import Annotated
 
 import typer
 
-from ._common import console, BASE_DOL_PATH, DECOMP_CONFIG_DIR, MELEE_WORKTREES_DIR
+from ._common import BASE_DOL_PATH, DECOMP_CONFIG_DIR, MELEE_WORKTREES_DIR, console
 
 setup_app = typer.Typer(
     name="setup",
@@ -42,10 +42,10 @@ def setup_dol(
             console.print(f"[green]DOL is configured:[/green] {BASE_DOL_PATH}")
             console.print(f"[dim]Size: {size:,} bytes[/dim]")
         else:
-            console.print(f"[yellow]DOL not configured[/yellow]")
-            console.print(f"\nTo configure, run one of:")
-            console.print(f"  melee-agent setup dol /path/to/main.dol")
-            console.print(f"  melee-agent setup dol --auto")
+            console.print("[yellow]DOL not configured[/yellow]")
+            console.print("\nTo configure, run one of:")
+            console.print("  melee-agent setup dol /path/to/main.dol")
+            console.print("  melee-agent setup dol --auto")
         return
 
     # Auto-detect from worktrees
@@ -95,9 +95,9 @@ def setup_dol(
     console.print(f"[dim]Copying to {BASE_DOL_PATH}...[/dim]")
     shutil.copy2(path, BASE_DOL_PATH)
 
-    console.print(f"[green]DOL registered successfully![/green]")
+    console.print("[green]DOL registered successfully![/green]")
     console.print(f"[dim]Location: {BASE_DOL_PATH}[/dim]")
-    console.print(f"\nNew worktrees will automatically use this DOL.")
+    console.print("\nNew worktrees will automatically use this DOL.")
 
 
 @setup_app.command("status")
@@ -110,8 +110,8 @@ def setup_status():
         size = BASE_DOL_PATH.stat().st_size
         console.print(f"[green]Base DOL:[/green] {BASE_DOL_PATH} ({size:,} bytes)")
     else:
-        console.print(f"[yellow]Base DOL:[/yellow] Not configured")
-        console.print(f"  Run: melee-agent setup dol --auto")
+        console.print("[yellow]Base DOL:[/yellow] Not configured")
+        console.print("  Run: melee-agent setup dol --auto")
 
     # Config dir
     console.print(f"\n[dim]Config directory: {DECOMP_CONFIG_DIR}[/dim]")

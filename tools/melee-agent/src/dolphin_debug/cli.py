@@ -27,9 +27,8 @@ import sys
 import time
 from pathlib import Path
 
-from .debugger import DolphinDebugger, ConnectionMode
 from . import daemon as dbg_daemon
-
+from .debugger import ConnectionMode, DolphinDebugger
 
 # Default paths
 DEFAULT_ISO = Path.home() / "Downloads/ssbm_v1.02_original.iso"
@@ -135,7 +134,7 @@ class MeleeDebugCLI:
 
         print(f"Connecting ({mode} mode)...")
         if self.dbg.connect(timeout=5.0):
-            print(f"Connected!")
+            print("Connected!")
             if self.dbg.has_gdb:
                 print("  GDB stub: active")
             if self.dbg.has_memory_engine:
@@ -169,27 +168,28 @@ class MeleeDebugCLI:
         if fmt == "hex":
             # Hex dump format
             for i in range(0, len(data), 16):
-                chunk = data[i:i+16]
+                chunk = data[i : i + 16]
                 hex_part = " ".join(f"{b:02X}" for b in chunk)
                 ascii_part = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
-                print(f"  {addr+i:08X}  {hex_part:<48}  {ascii_part}")
+                print(f"  {addr + i:08X}  {hex_part:<48}  {ascii_part}")
 
         elif fmt == "u32":
             for i in range(0, len(data), 4):
                 if i + 4 <= len(data):
-                    val = int.from_bytes(data[i:i+4], 'big')
-                    print(f"  {addr+i:08X}: 0x{val:08X} ({val})")
+                    val = int.from_bytes(data[i : i + 4], "big")
+                    print(f"  {addr + i:08X}: 0x{val:08X} ({val})")
 
         elif fmt == "f32":
             import struct
+
             for i in range(0, len(data), 4):
                 if i + 4 <= len(data):
-                    val = struct.unpack(">f", data[i:i+4])[0]
-                    print(f"  {addr+i:08X}: {val:.6f}")
+                    val = struct.unpack(">f", data[i : i + 4])[0]
+                    print(f"  {addr + i:08X}: {val:.6f}")
 
         elif fmt == "string":
             s = self.dbg.read_string(addr, count)
-            print(f"  \"{s}\"")
+            print(f'  "{s}"')
 
         return 0
 
@@ -232,11 +232,7 @@ class MeleeDebugCLI:
         """Set or remove a breakpoint."""
         # Use daemon if available (preferred for persistent connections)
         if self._use_daemon():
-            result = self._daemon.send({
-                "action": "break",
-                "address": address,
-                "remove": remove
-            })
+            result = self._daemon.send({"action": "break", "address": address, "remove": remove})
             if result.get("success"):
                 data = result.get("data", {})
                 if remove:
@@ -331,9 +327,9 @@ class MeleeDebugCLI:
         for i in range(count):
             result = self.dbg.step()
             if result:
-                print(f"Step {i+1}: {result}")
+                print(f"Step {i + 1}: {result}")
             else:
-                print(f"Step {i+1}: (no response)")
+                print(f"Step {i + 1}: (no response)")
 
         return 0
 
@@ -401,7 +397,7 @@ class MeleeDebugCLI:
                     line = "  "
                     for j in range(4):
                         if i + j < len(gprs):
-                            line += f"r{i+j:2d}=0x{gprs[i+j]:08X}  "
+                            line += f"r{i + j:2d}=0x{gprs[i + j]:08X}  "
                     print(line)
                 return 0
             else:
@@ -426,7 +422,7 @@ class MeleeDebugCLI:
             line = "  "
             for j in range(4):
                 if i + j < len(gprs):
-                    line += f"r{i+j:2d}=0x{gprs[i+j]:08X}  "
+                    line += f"r{i + j:2d}=0x{gprs[i + j]:08X}  "
             print(line)
 
         return 0
@@ -481,7 +477,7 @@ class MeleeDebugCLI:
                 return 1
 
         print("  Mode: direct (one-shot)")
-        print(f"  Daemon: not running (use 'daemon start' for persistent debugging)")
+        print("  Daemon: not running (use 'daemon start' for persistent debugging)")
         print(f"  Connected: {self.dbg.is_connected}")
         print(f"  GDB stub: {'active' if self.dbg.has_gdb else 'inactive'}")
         print(f"  Memory engine: {'active' if self.dbg.has_memory_engine else 'inactive'}")

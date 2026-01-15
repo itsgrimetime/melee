@@ -14,20 +14,20 @@ import typer
 from rich.table import Table
 
 from ._common import (
-    console,
-    DEFAULT_MELEE_ROOT,
+    AGENT_ID,
     DECOMP_CONFIG_DIR,
-    get_context_file,
-    detect_local_api_url,
-    get_local_api_url,
-    record_match_score,
-    format_match_history,
-    db_upsert_scratch,
+    DEFAULT_MELEE_ROOT,
+    console,
     db_record_match_score,
     db_upsert_function,
+    db_upsert_scratch,
+    detect_local_api_url,
+    format_match_history,
     get_compiler_for_source,
+    get_context_file,
+    get_local_api_url,
+    record_match_score,
     renew_claim_on_activity,
-    AGENT_ID,
 )
 from .complete import _get_current_branch
 from .utils import file_lock, load_json_safe
@@ -35,8 +35,7 @@ from .utils import file_lock, load_json_safe
 # Shared scratch tokens file - all agents use the same file
 # Tokens are keyed by scratch slug, so no conflicts between agents
 DECOMP_SCRATCH_TOKENS_FILE = os.environ.get(
-    "DECOMP_SCRATCH_TOKENS_FILE",
-    str(DECOMP_CONFIG_DIR / "scratch_tokens.json")
+    "DECOMP_SCRATCH_TOKENS_FILE", str(DECOMP_CONFIG_DIR / "scratch_tokens.json")
 )
 
 # Lock file for token operations
@@ -55,6 +54,7 @@ def _get_context_file(source_file: str | None = None) -> Path:
     if _context_env:
         return Path(_context_env)
     return get_context_file(source_file=source_file)
+
 
 scratch_app = typer.Typer(help="Manage decomp.me scratches")
 
@@ -156,12 +156,8 @@ def scratch_create(
     melee_root: Annotated[
         Path, typer.Option("--melee-root", "-m", help="Path to melee submodule")
     ] = DEFAULT_MELEE_ROOT,
-    api_url: Annotated[
-        Optional[str], typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")
-    ] = None,
-    context_file: Annotated[
-        Optional[Path], typer.Option("--context", "-c", help="Path to context file")
-    ] = None,
+    api_url: Annotated[str | None, typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")] = None,
+    context_file: Annotated[Path | None, typer.Option("--context", "-c", help="Path to context file")] = None,
     auto_decompile: Annotated[
         bool, typer.Option("--decompile", "-d", help="Run m2c decompiler for initial code (recommended)")
     ] = True,
@@ -186,6 +182,7 @@ def scratch_create(
 
     # Always rebuild context to pick up header changes
     import subprocess
+
     # Build the context file - need relative path from melee_root
     try:
         ctx_relative = ctx_path.relative_to(melee_root)
@@ -214,17 +211,17 @@ def scratch_create(
             timeout=120,
         )
         if result.returncode != 0:
-            console.print(f"[red]Failed to build context file:[/red]")
+            console.print("[red]Failed to build context file:[/red]")
             console.print(result.stderr or result.stdout)
             raise typer.Exit(1)
         # Only show message if ninja actually did something
         if "no work to do" not in result.stdout.lower():
-            console.print(f"[green]Built context file[/green]")
+            console.print("[green]Built context file[/green]")
     except subprocess.TimeoutExpired:
-        console.print(f"[red]Timeout building context file[/red]")
+        console.print("[red]Timeout building context file[/red]")
         raise typer.Exit(1)
     except FileNotFoundError:
-        console.print(f"[red]ninja not found - please install it[/red]")
+        console.print("[red]ninja not found - please install it[/red]")
         raise typer.Exit(1)
 
     if not ctx_path.exists():
@@ -236,37 +233,37 @@ def scratch_create(
 
     # Strip function definition (but keep declaration) to avoid redefinition errors
     if function_name in melee_context:
-        lines = melee_context.split('\n')
+        lines = melee_context.split("\n")
         filtered = []
         in_func = False
         depth = 0
         for line in lines:
-            if not in_func and function_name in line and '(' in line:
+            if not in_func and function_name in line and "(" in line:
                 s = line.strip()
                 # Skip comments, control flow
-                if s.startswith('//') or s.startswith('if') or s.startswith('while'):
+                if s.startswith("//") or s.startswith("if") or s.startswith("while"):
                     filtered.append(line)
                     continue
                 # Keep declarations (prototypes) - they end with );
-                if s.endswith(';'):
+                if s.endswith(";"):
                     filtered.append(line)
                     continue
                 # This is a function definition
                 in_func = True
-                depth = line.count('{') - line.count('}')
-                filtered.append(f'// {function_name} definition stripped')
-                if '{' not in line:
+                depth = line.count("{") - line.count("}")
+                filtered.append(f"// {function_name} definition stripped")
+                if "{" not in line:
                     depth = 0
                 elif depth <= 0:
                     in_func = False
                 continue
             if in_func:
-                depth += line.count('{') - line.count('}')
+                depth += line.count("{") - line.count("}")
                 if depth <= 0:
                     in_func = False
                 continue
             filtered.append(line)
-        melee_context = '\n'.join(filtered)
+        melee_context = "\n".join(filtered)
         console.print(f"[dim]Stripped {function_name} definition from context[/dim]")
 
     # Detect correct compiler for this source file
@@ -274,7 +271,6 @@ def scratch_create(
     console.print(f"[dim]Using compiler: {compiler}[/dim]")
 
     async def create():
-
         async with DecompMeAPIClient(base_url=api_url) as client:
             from src.client import ScratchCreate
 
@@ -286,7 +282,9 @@ def scratch_create(
                 preprocessed, success = _preprocess_context(melee_context)
                 if success and preprocessed != melee_context:
                     decompile_context = preprocessed
-                    console.print(f"[dim]Preprocessed context for m2c ({len(melee_context):,} → {len(preprocessed):,} bytes)[/dim]")
+                    console.print(
+                        f"[dim]Preprocessed context for m2c ({len(melee_context):,} → {len(preprocessed):,} bytes)[/dim]"
+                    )
 
             # Build scratch params - omit source_code to trigger auto-decompilation
             scratch_params = ScratchCreate(
@@ -309,7 +307,7 @@ def scratch_create(
                 _save_scratch_token(scratch.slug, scratch.claim_token)
                 try:
                     await client.claim_scratch(scratch.slug, scratch.claim_token)
-                    console.print(f"[dim]Claimed ownership of scratch[/dim]")
+                    console.print("[dim]Claimed ownership of scratch[/dim]")
                 except Exception as e:
                     console.print(f"[yellow]Warning: Could not claim scratch: {e}[/yellow]")
 
@@ -321,9 +319,10 @@ def scratch_create(
             # - Assert macro expansions cause type mismatches
             if auto_decompile and decompile_context != melee_context:
                 from src.client import ScratchUpdate
+
                 try:
                     await client.update_scratch(scratch.slug, ScratchUpdate(context=melee_context))
-                    console.print(f"[dim]Restored original context for MWCC[/dim]")
+                    console.print("[dim]Restored original context for MWCC[/dim]")
                 except Exception as e:
                     console.print(f"[yellow]Warning: Could not restore context: {e}[/yellow]")
 
@@ -335,7 +334,7 @@ def scratch_create(
     # Write to state database (non-blocking)
     db_upsert_scratch(
         scratch.slug,
-        instance='local',
+        instance="local",
         base_url=api_url,
         function_name=function_name,
         claim_token=scratch.claim_token,
@@ -343,7 +342,7 @@ def scratch_create(
     db_upsert_function(
         function_name,
         local_scratch_slug=scratch.slug,
-        status='in_progress',
+        status="in_progress",
     )
 
 
@@ -362,7 +361,7 @@ def _format_diff_output(diff_output, max_lines: int = 0) -> None:
         console.print("[dim]No diff rows available[/dim]")
         return
 
-    console.print(f"\n[bold]Instruction Diff:[/bold] (target | current)\n")
+    console.print("\n[bold]Instruction Diff:[/bold] (target | current)\n")
 
     diff_count = 0
     shown = 0
@@ -407,10 +406,15 @@ def _format_diff_output(diff_output, max_lines: int = 0) -> None:
 def scratch_compile(
     slug: Annotated[str, typer.Argument(help="Scratch slug/ID")],
     source_file: Annotated[
-        Optional[Path], typer.Option("--source", "-s", help="Update source from file before compiling")
+        Path | None, typer.Option("--source", "-s", help="Update source from file before compiling")
     ] = None,
     code: Annotated[
-        Optional[str], typer.Option("--code", "-c", help="Update source from inline code before compiling (WARNING: may have shell escaping issues, prefer --source or --stdin)")
+        str | None,
+        typer.Option(
+            "--code",
+            "-c",
+            help="Update source from inline code before compiling (WARNING: may have shell escaping issues, prefer --source or --stdin)",
+        ),
     ] = None,
     from_stdin: Annotated[
         bool, typer.Option("--stdin", help="Read source code from stdin (avoids shell escaping issues)")
@@ -421,15 +425,9 @@ def scratch_compile(
     melee_root: Annotated[
         Path, typer.Option("--melee-root", "-m", help="Path to melee submodule (for --refresh-context)")
     ] = DEFAULT_MELEE_ROOT,
-    api_url: Annotated[
-        Optional[str], typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")
-    ] = None,
-    show_diff: Annotated[
-        bool, typer.Option("--diff", "-d", help="Show instruction diff")
-    ] = False,
-    max_lines: Annotated[
-        int, typer.Option("--max-lines", "-n", help="Max diff lines to show (0=all)")
-    ] = 100,
+    api_url: Annotated[str | None, typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")] = None,
+    show_diff: Annotated[bool, typer.Option("--diff", "-d", help="Show instruction diff")] = False,
+    max_lines: Annotated[int, typer.Option("--max-lines", "-n", help="Max diff lines to show (0=all)")] = 100,
 ):
     """Compile a scratch and show the diff.
 
@@ -441,7 +439,7 @@ def scratch_compile(
     If --refresh-context is provided, rebuilds the context file from the repo before compiling.
     """
     api_url = api_url or get_local_api_url()
-    from src.client import DecompMeAPIClient, ScratchUpdate, DecompMeAPIError
+    from src.client import DecompMeAPIClient, DecompMeAPIError, ScratchUpdate
 
     # Validate mutually exclusive options
     options_count = sum([source_file is not None, code is not None, from_stdin])
@@ -458,11 +456,12 @@ def scratch_compile(
         source_code = source_file.read_text()
     elif from_stdin:
         import sys
+
         source_code = sys.stdin.read()
     elif code is not None:
         # Fix common shell escaping issues from --code flag
         # Bash history expansion can turn ! into \!
-        source_code = code.replace(r'\!', '!').replace(r'\=', '=')
+        source_code = code.replace(r"\!", "!").replace(r"\=", "=")
 
     async def compile_scratch():
         async with DecompMeAPIClient(base_url=api_url) as client:
@@ -483,17 +482,19 @@ def scratch_compile(
                 # Try to find source file from database
                 src_file = None
                 from src.db import get_db
+
                 try:
                     db = get_db()
                     func_info = db.get_function(func_name)
-                    if func_info and func_info.get('source_file'):
-                        src_file = func_info['source_file']
+                    if func_info and func_info.get("source_file"):
+                        src_file = func_info["source_file"]
                 except Exception:
                     pass
 
                 # If not in DB, try extractor
                 if not src_file:
                     from src.extractor import extract_function
+
                     try:
                         func = await extract_function(melee_root, func_name)
                         if func and func.file_path:
@@ -538,7 +539,8 @@ def scratch_compile(
 
     if result.success:
         match_pct = (
-            100.0 if result.diff_output.current_score == 0
+            100.0
+            if result.diff_output.current_score == 0
             else (1.0 - result.diff_output.current_score / result.diff_output.max_score) * 100
         )
 
@@ -558,7 +560,7 @@ def scratch_compile(
             branch=current_branch,
         )
 
-        console.print(f"[green]Compiled successfully![/green]")
+        console.print("[green]Compiled successfully![/green]")
         console.print(f"Match: {match_pct:.1f}%")
         console.print(f"Score: {result.diff_output.current_score}/{result.diff_output.max_score}")
 
@@ -570,11 +572,10 @@ def scratch_compile(
         # Renew claim to prevent expiry during long sessions
         try:
             from src.db import get_db
+
             db = get_db()
             # Query function name from scratches table
-            cursor = db.conn.execute(
-                "SELECT function_name FROM scratches WHERE slug = ?", (slug,)
-            )
+            cursor = db.conn.execute("SELECT function_name FROM scratches WHERE slug = ?", (slug,))
             row = cursor.fetchone()
             if row and row[0]:
                 renew_claim_on_activity(row[0])
@@ -584,7 +585,7 @@ def scratch_compile(
         if show_diff and result.diff_output:
             _format_diff_output(result.diff_output, max_lines)
     else:
-        console.print(f"[red]Compilation failed[/red]")
+        console.print("[red]Compilation failed[/red]")
         console.print(result.compiler_output)
 
 
@@ -592,13 +593,11 @@ def scratch_compile(
 def scratch_update(
     slug: Annotated[str, typer.Argument(help="Scratch slug/ID")],
     source_file: Annotated[Path, typer.Argument(help="Path to C source file")],
-    api_url: Annotated[
-        Optional[str], typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")
-    ] = None,
+    api_url: Annotated[str | None, typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")] = None,
 ):
     """Update a scratch's source code from a file."""
     api_url = api_url or get_local_api_url()
-    from src.client import DecompMeAPIClient, ScratchUpdate, DecompMeAPIError
+    from src.client import DecompMeAPIClient, DecompMeAPIError, ScratchUpdate
 
     source_code = source_file.read_text()
 
@@ -629,7 +628,8 @@ def scratch_update(
 
     if result.success and result.diff_output:
         match_pct = (
-            100.0 if result.diff_output.current_score == 0
+            100.0
+            if result.diff_output.current_score == 0
             else (1.0 - result.diff_output.current_score / result.diff_output.max_score) * 100
         )
 
@@ -643,36 +643,24 @@ def scratch_update(
         if history_str:
             console.print(f"[dim]History: {history_str}[/dim]")
     else:
-        console.print(f"[yellow]Updated but compilation failed[/yellow]")
+        console.print("[yellow]Updated but compilation failed[/yellow]")
 
 
 @scratch_app.command("get")
 def scratch_get(
     slug: Annotated[str, typer.Argument(help="Scratch slug/ID or URL")],
-    api_url: Annotated[
-        Optional[str], typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")
-    ] = None,
+    api_url: Annotated[str | None, typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")] = None,
     output_file: Annotated[
-        Optional[Path], typer.Option("--output", "-o", help="Write source code to file (full, not truncated)")
+        Path | None, typer.Option("--output", "-o", help="Write source code to file (full, not truncated)")
     ] = None,
-    output_json: Annotated[
-        bool, typer.Option("--json", help="Output as JSON")
-    ] = False,
-    show_diff: Annotated[
-        bool, typer.Option("--diff", "-d", help="Show instruction diff")
-    ] = False,
-    max_lines: Annotated[
-        int, typer.Option("--max-lines", "-n", help="Max diff lines to show (0=all)")
-    ] = 100,
-    show_context: Annotated[
-        bool, typer.Option("--context", "-c", help="Show context instead of source code")
-    ] = False,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
+    show_diff: Annotated[bool, typer.Option("--diff", "-d", help="Show instruction diff")] = False,
+    max_lines: Annotated[int, typer.Option("--max-lines", "-n", help="Max diff lines to show (0=all)")] = 100,
+    show_context: Annotated[bool, typer.Option("--context", "-c", help="Show context instead of source code")] = False,
     grep_context: Annotated[
-        Optional[str], typer.Option("--grep", "-g", help="Search context for pattern (implies --context)")
+        str | None, typer.Option("--grep", "-g", help="Search context for pattern (implies --context)")
     ] = None,
-    context_lines: Annotated[
-        int, typer.Option("-C", help="Context lines around grep matches")
-    ] = 3,
+    context_lines: Annotated[int, typer.Option("-C", help="Context lines around grep matches")] = 3,
 ):
     """Get full scratch information.
 
@@ -713,7 +701,9 @@ def scratch_get(
             "compiler": scratch.compiler,
             "score": scratch.score,
             "max_score": scratch.max_score,
-            "match_percent": ((scratch.max_score - scratch.score) / scratch.max_score * 100) if scratch.max_score > 0 else 0,
+            "match_percent": ((scratch.max_score - scratch.score) / scratch.max_score * 100)
+            if scratch.max_score > 0
+            else 0,
             "source_code": scratch.source_code,
         }
         if show_context:
@@ -760,7 +750,9 @@ def scratch_get(
                 ctx_display = scratch.context[:5000] if len(scratch.context) > 5000 else scratch.context
                 console.print(ctx_display, markup=False)
                 if len(scratch.context) > 5000:
-                    console.print(f"\n[dim]... truncated ({len(scratch.context) - 5000:,} more bytes, use --grep to search)[/dim]")
+                    console.print(
+                        f"\n[dim]... truncated ({len(scratch.context) - 5000:,} more bytes, use --grep to search)[/dim]"
+                    )
         else:
             # Write to file if requested
             if output_file:
@@ -768,12 +760,14 @@ def scratch_get(
                 console.print(f"\n[green]Wrote source code to:[/green] {output_file}")
                 console.print(f"[dim]{len(scratch.source_code):,} bytes[/dim]")
             else:
-                console.print(f"\n[bold]Source Code:[/bold]")
+                console.print("\n[bold]Source Code:[/bold]")
                 # Use markup=False to prevent Rich from interpreting brackets like [t0] as tags
                 source_display = scratch.source_code[:2000] if len(scratch.source_code) > 2000 else scratch.source_code
                 console.print(source_display, markup=False)
                 if len(scratch.source_code) > 2000:
-                    console.print(f"\n[dim]... truncated ({len(scratch.source_code) - 2000:,} more bytes, use -o to save full file)[/dim]")
+                    console.print(
+                        f"\n[dim]... truncated ({len(scratch.source_code) - 2000:,} more bytes, use -o to save full file)[/dim]"
+                    )
 
     if show_diff and diff_output:
         _format_diff_output(diff_output, max_lines)
@@ -781,19 +775,11 @@ def scratch_get(
 
 @scratch_app.command("search")
 def scratch_search(
-    query: Annotated[Optional[str], typer.Argument(help="Search query")] = None,
-    platform: Annotated[
-        Optional[str], typer.Option("--platform", "-p", help="Filter by platform")
-    ] = None,
-    limit: Annotated[
-        int, typer.Option("--limit", "-n", help="Maximum results")
-    ] = 10,
-    api_url: Annotated[
-        Optional[str], typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")
-    ] = None,
-    output_json: Annotated[
-        bool, typer.Option("--json", help="Output as JSON")
-    ] = False,
+    query: Annotated[str | None, typer.Argument(help="Search query")] = None,
+    platform: Annotated[str | None, typer.Option("--platform", "-p", help="Filter by platform")] = None,
+    limit: Annotated[int, typer.Option("--limit", "-n", help="Maximum results")] = 10,
+    api_url: Annotated[str | None, typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")] = None,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
     """Search for scratches on decomp.me."""
     api_url = api_url or get_local_api_url()
@@ -839,7 +825,7 @@ def _strip_static_assert(context: str) -> str:
     """
     import re
 
-    if '_Static_assert' not in context:
+    if "_Static_assert" not in context:
         return context
 
     # Match _Static_assert(...); including multi-line variants
@@ -847,7 +833,7 @@ def _strip_static_assert(context: str) -> str:
     # - Nested parentheses in the expression
     # - String literals that may span lines (with "" continuation)
     # - Whitespace variations
-    lines = context.split('\n')
+    lines = context.split("\n")
     result_lines = []
     in_static_assert = False
     paren_depth = 0
@@ -856,44 +842,44 @@ def _strip_static_assert(context: str) -> str:
         if not in_static_assert:
             # Check if this line starts a _Static_assert
             stripped = line.lstrip()
-            if stripped.startswith('_Static_assert'):
+            if stripped.startswith("_Static_assert"):
                 in_static_assert = True
                 # Count parentheses to track nesting
                 paren_depth = 0
                 for char in line:
-                    if char == '(':
+                    if char == "(":
                         paren_depth += 1
-                    elif char == ')':
+                    elif char == ")":
                         paren_depth -= 1
 
                 # Check if statement ends on this line
-                if paren_depth == 0 and ';' in line[line.find('_Static_assert'):]:
+                if paren_depth == 0 and ";" in line[line.find("_Static_assert") :]:
                     in_static_assert = False
                     # Skip this line entirely (or add a comment)
-                    result_lines.append(f'/* {stripped.rstrip()} - removed for m2c */')
+                    result_lines.append(f"/* {stripped.rstrip()} - removed for m2c */")
                 else:
                     # Multi-line, start skipping
-                    result_lines.append(f'/* _Static_assert removed for m2c:')
+                    result_lines.append("/* _Static_assert removed for m2c:")
                 continue
             else:
                 result_lines.append(line)
         else:
             # Inside a multi-line _Static_assert
             for char in line:
-                if char == '(':
+                if char == "(":
                     paren_depth += 1
-                elif char == ')':
+                elif char == ")":
                     paren_depth -= 1
 
-            if paren_depth <= 0 and ';' in line:
+            if paren_depth <= 0 and ";" in line:
                 # End of _Static_assert
                 in_static_assert = False
-                result_lines.append(f'   {line.strip()} */')
+                result_lines.append(f"   {line.strip()} */")
             else:
                 # Still inside, add as comment
-                result_lines.append(f'   {line.strip()}')
+                result_lines.append(f"   {line.strip()}")
 
-    return '\n'.join(result_lines)
+    return "\n".join(result_lines)
 
 
 def _preprocess_context(context: str) -> tuple[str, bool]:
@@ -920,18 +906,18 @@ def _preprocess_context(context: str) -> tuple[str, bool]:
         return context, True
 
     # Check if context has preprocessor directives
-    has_directives = any(line.strip().startswith('#') for line in context.split('\n'))
+    has_directives = any(line.strip().startswith("#") for line in context.split("\n"))
 
     if has_directives:
         try:
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.c', delete=False) as f:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".c", delete=False) as f:
                 f.write(context)
                 temp_path = f.name
 
             # Run gcc -E to preprocess (expand macros, remove directives)
             # -P removes line markers, -nostdinc avoids system headers
             result = subprocess.run(
-                ['gcc', '-E', '-P', '-nostdinc', '-x', 'c', temp_path],
+                ["gcc", "-E", "-P", "-nostdinc", "-x", "c", temp_path],
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -939,6 +925,7 @@ def _preprocess_context(context: str) -> tuple[str, bool]:
 
             # Clean up temp file
             import os
+
             os.unlink(temp_path)
 
             if result.returncode == 0:
@@ -958,15 +945,9 @@ def _preprocess_context(context: str) -> tuple[str, bool]:
 @scratch_app.command("decompile")
 def scratch_decompile(
     slug: Annotated[str, typer.Argument(help="Scratch slug/ID or URL")],
-    api_url: Annotated[
-        Optional[str], typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")
-    ] = None,
-    output_file: Annotated[
-        Optional[Path], typer.Option("--output", "-o", help="Write decompiled code to file")
-    ] = None,
-    apply: Annotated[
-        bool, typer.Option("--apply", "-a", help="Apply decompiled code to scratch source")
-    ] = False,
+    api_url: Annotated[str | None, typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")] = None,
+    output_file: Annotated[Path | None, typer.Option("--output", "-o", help="Write decompiled code to file")] = None,
+    apply: Annotated[bool, typer.Option("--apply", "-a", help="Apply decompiled code to scratch source")] = False,
     show_source: Annotated[
         bool, typer.Option("--show", "-s", help="Show the decompiled code (default if no -o or -a)")
     ] = False,
@@ -999,7 +980,7 @@ def scratch_decompile(
         melee-agent scratch decompile abc123 --no-context
     """
     api_url = api_url or get_local_api_url()
-    from src.client import DecompMeAPIClient, ScratchUpdate, DecompMeAPIError
+    from src.client import DecompMeAPIClient, DecompMeAPIError, ScratchUpdate
 
     # Extract slug from URL if needed
     if slug.startswith("http"):
@@ -1022,15 +1003,17 @@ def scratch_decompile(
             decompile_context = None
             if no_context:
                 decompile_context = ""
-                console.print(f"[dim]Decompiling without context[/dim]")
+                console.print("[dim]Decompiling without context[/dim]")
             elif scratch.context:
                 # Preprocess context to remove preprocessor directives
                 preprocessed, success = _preprocess_context(scratch.context)
                 if success and preprocessed != scratch.context:
                     decompile_context = preprocessed
-                    console.print(f"[dim]Preprocessed context ({len(scratch.context):,} → {len(preprocessed):,} bytes)[/dim]")
+                    console.print(
+                        f"[dim]Preprocessed context ({len(scratch.context):,} → {len(preprocessed):,} bytes)[/dim]"
+                    )
                 elif not success:
-                    console.print(f"[yellow]Warning: Context preprocessing failed, using raw context[/yellow]")
+                    console.print("[yellow]Warning: Context preprocessing failed, using raw context[/yellow]")
 
             # Run decompilation with preprocessed context
             result = await client.decompile_scratch(slug, context=decompile_context)
@@ -1061,11 +1044,11 @@ def scratch_decompile(
         console.print(f"[green]Wrote to:[/green] {output_file}")
 
     if apply:
-        console.print(f"[green]Applied to scratch source code[/green]")
+        console.print("[green]Applied to scratch source code[/green]")
         console.print(f"[dim]Compile to see match: melee-agent scratch compile {slug}[/dim]")
 
     if show_source:
-        console.print(f"\n[bold]Decompiled Code:[/bold]")
+        console.print("\n[bold]Decompiled Code:[/bold]")
         console.print(decompiled, markup=False)
 
 
@@ -1075,7 +1058,7 @@ def scratch_search_context(
     patterns: Annotated[list[str], typer.Argument(help="Regex pattern(s) to search for")],
     context_lines: Annotated[int, typer.Option("--context", "-C", help="Context lines")] = 3,
     max_results: Annotated[int, typer.Option("--max", "-n", help="Maximum matches per pattern")] = 10,
-    api_url: Annotated[Optional[str], typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")] = None,
+    api_url: Annotated[str | None, typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")] = None,
 ):
     """Search through a scratch's context for patterns.
 
@@ -1146,6 +1129,7 @@ async def _build_fresh_context(
         Tuple of (context_content, context_path) or (None, None) if failed
     """
     import subprocess
+
     from src.cli.extract import _strip_target_function
 
     # Determine context file path
@@ -1177,17 +1161,17 @@ async def _build_fresh_context(
             timeout=120,
         )
         if result.returncode != 0:
-            console.print(f"[red]Failed to build context file:[/red]")
+            console.print("[red]Failed to build context file:[/red]")
             console.print(result.stderr or result.stdout)
             return None, None
         # Only show message if ninja actually did something
         if "no work to do" not in result.stdout.lower():
-            console.print(f"[dim]Built context file[/dim]")
+            console.print("[dim]Built context file[/dim]")
     except subprocess.TimeoutExpired:
-        console.print(f"[red]Timeout building context file[/red]")
+        console.print("[red]Timeout building context file[/red]")
         return None, None
     except FileNotFoundError:
-        console.print(f"[red]ninja not found - please install it[/red]")
+        console.print("[red]ninja not found - please install it[/red]")
         return None, None
 
     if not ctx_path.exists():
@@ -1210,20 +1194,16 @@ async def _build_fresh_context(
 def scratch_update_context(
     slug: Annotated[str, typer.Argument(help="Scratch slug/ID or URL")],
     source_file: Annotated[
-        Optional[Path], typer.Option("--source", "-s", help="Source file path (e.g., melee/ft/ftcoll.c)")
+        Path | None, typer.Option("--source", "-s", help="Source file path (e.g., melee/ft/ftcoll.c)")
     ] = None,
     context_file: Annotated[
-        Optional[Path], typer.Option("--context-file", "-f", help="Use context from this file instead of building")
+        Path | None, typer.Option("--context-file", "-f", help="Use context from this file instead of building")
     ] = None,
     melee_root: Annotated[
         Path, typer.Option("--melee-root", "-m", help="Path to melee submodule")
     ] = DEFAULT_MELEE_ROOT,
-    api_url: Annotated[
-        Optional[str], typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")
-    ] = None,
-    compile_after: Annotated[
-        bool, typer.Option("--compile", "-c", help="Compile after updating context")
-    ] = False,
+    api_url: Annotated[str | None, typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")] = None,
+    compile_after: Annotated[bool, typer.Option("--compile", "-c", help="Compile after updating context")] = False,
 ):
     """Update a scratch's context from the repo.
 
@@ -1244,7 +1224,7 @@ def scratch_update_context(
         melee-agent scratch update-context abc123 --compile
     """
     api_url = api_url or get_local_api_url()
-    from src.client import DecompMeAPIClient, ScratchUpdate, DecompMeAPIError
+    from src.client import DecompMeAPIClient, DecompMeAPIError, ScratchUpdate
 
     # Extract slug from URL if needed
     if slug.startswith("http"):
@@ -1268,11 +1248,12 @@ def scratch_update_context(
             # If not specified, try to find from database
             if not src_file:
                 from src.db import get_db
+
                 try:
                     db = get_db()
                     func_info = db.get_function(func_name)
-                    if func_info and func_info.get('source_file'):
-                        src_file = func_info['source_file']
+                    if func_info and func_info.get("source_file"):
+                        src_file = func_info["source_file"]
                         console.print(f"[dim]Found source file in DB: {src_file}[/dim]")
                 except Exception:
                     pass  # DB lookup failed, will try without source file
@@ -1280,6 +1261,7 @@ def scratch_update_context(
             # If still not found, try to find from extractor
             if not src_file:
                 from src.extractor import extract_function
+
                 try:
                     func = await extract_function(melee_root, func_name)
                     if func and func.file_path:
@@ -1294,6 +1276,7 @@ def scratch_update_context(
                     console.print(f"[red]Context file not found: {context_file}[/red]")
                     raise typer.Exit(1)
                 from src.cli.extract import _strip_target_function
+
                 context = context_file.read_text()
                 console.print(f"[dim]Loaded {len(context):,} bytes from {context_file.name}[/dim]")
                 if func_name in context:
@@ -1329,13 +1312,14 @@ def scratch_update_context(
                 result = await client.compile_scratch(slug)
                 if result.success and result.diff_output:
                     match_pct = (
-                        100.0 if result.diff_output.current_score == 0
+                        100.0
+                        if result.diff_output.current_score == 0
                         else (1.0 - result.diff_output.current_score / result.diff_output.max_score) * 100
                     )
                     console.print(f"Match: {match_pct:.1f}%")
                     record_match_score(slug, result.diff_output.current_score, result.diff_output.max_score)
                 elif not result.success:
-                    console.print(f"[red]Compilation failed[/red]")
+                    console.print("[red]Compilation failed[/red]")
                     console.print(result.compiler_output)
 
             return scratch
@@ -1347,11 +1331,9 @@ def scratch_update_context(
 def scratch_sync_from_repo(
     function_name: Annotated[str, typer.Argument(help="Function name to sync")],
     melee_root: Annotated[
-        Optional[Path], typer.Option("--melee-root", "-m", help="Path to melee submodule")
+        Path | None, typer.Option("--melee-root", "-m", help="Path to melee submodule")
     ] = DEFAULT_MELEE_ROOT,
-    api_url: Annotated[
-        Optional[str], typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")
-    ] = None,
+    api_url: Annotated[str | None, typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")] = None,
 ):
     """Update a scratch's source code from the repo.
 
@@ -1362,9 +1344,10 @@ def scratch_sync_from_repo(
     Example: melee-agent scratch sync-from-repo ft_8008A1FC
     """
     api_url = api_url or get_local_api_url()
-    from src.client import DecompMeAPIClient, ScratchUpdate, DecompMeAPIError
+    from src.client import DecompMeAPIClient, DecompMeAPIError, ScratchUpdate
     from src.commit.configure import get_file_path_from_function
     from src.commit.update import _extract_function_from_code
+
     from ._common import load_completed_functions
 
     # Look up the scratch slug from the DB
@@ -1375,7 +1358,7 @@ def scratch_sync_from_repo(
         raise typer.Exit(1)
 
     func_info = completed[function_name]
-    slug = func_info.get('scratch_slug')
+    slug = func_info.get("scratch_slug")
     if not slug:
         console.print(f"[red]No local scratch found for '{function_name}'[/red]")
         console.print("[dim]Use 'melee-agent extract get --create-scratch' to create one first[/dim]")
@@ -1398,7 +1381,7 @@ def scratch_sync_from_repo(
         console.print(f"[dim]Found in: src/{file_path}[/dim]")
 
         # Read and extract the function
-        source_content = full_path.read_text(encoding='utf-8')
+        source_content = full_path.read_text(encoding="utf-8")
         function_code = _extract_function_from_code(source_content, function_name)
 
         if not function_code:
@@ -1409,49 +1392,51 @@ def scratch_sync_from_repo(
         console.print(f"[dim]Extracted {len(function_code)} bytes of code[/dim]")
 
         # Load fresh context and strip the function definition from it
-        ctx_path = melee_root / "build" / "GALE01" / "src" / file_path.replace('.c', '.ctx')
+        ctx_path = melee_root / "build" / "GALE01" / "src" / file_path.replace(".c", ".ctx")
         fresh_context = None
         if ctx_path.exists():
-            fresh_context = ctx_path.read_text(encoding='utf-8')
+            fresh_context = ctx_path.read_text(encoding="utf-8")
             original_len = len(fresh_context)
 
             # Strip function definition (but keep declaration) to avoid redefinition
             if function_name in fresh_context:
-                lines = fresh_context.split('\n')
+                lines = fresh_context.split("\n")
                 filtered_lines = []
                 in_function = False
                 brace_depth = 0
                 for line in lines:
-                    if not in_function and function_name in line and '(' in line:
+                    if not in_function and function_name in line and "(" in line:
                         s = line.strip()
                         # Skip comments, control flow, and declarations (end with ;)
-                        if s.startswith('//') or s.startswith('if') or s.startswith('while'):
+                        if s.startswith("//") or s.startswith("if") or s.startswith("while"):
                             filtered_lines.append(line)
                             continue
                         # Keep declarations (prototypes) - they end with );
-                        if s.endswith(';'):
+                        if s.endswith(";"):
                             filtered_lines.append(line)
                             continue
                         # This is a function definition
                         in_function = True
-                        brace_depth = line.count('{') - line.count('}')
-                        filtered_lines.append(f'// {function_name} definition stripped')
+                        brace_depth = line.count("{") - line.count("}")
+                        filtered_lines.append(f"// {function_name} definition stripped")
                         # If no brace on this line, wait for it
-                        if '{' not in line:
+                        if "{" not in line:
                             brace_depth = 0
                         elif brace_depth <= 0:
                             in_function = False
                         continue
                     if in_function:
-                        brace_depth += line.count('{') - line.count('}')
+                        brace_depth += line.count("{") - line.count("}")
                         if brace_depth <= 0:
                             in_function = False
                         continue
                     filtered_lines.append(line)
-                fresh_context = '\n'.join(filtered_lines)
+                fresh_context = "\n".join(filtered_lines)
 
             stripped_bytes = original_len - len(fresh_context)
-            console.print(f"[dim]Loaded fresh context ({len(fresh_context):,} bytes, stripped {stripped_bytes:,})[/dim]")
+            console.print(
+                f"[dim]Loaded fresh context ({len(fresh_context):,} bytes, stripped {stripped_bytes:,})[/dim]"
+            )
         else:
             console.print(f"[yellow]Context file not found: {ctx_path}[/yellow]")
             console.print(f"[dim]Run 'ninja {ctx_path.relative_to(melee_root)}' to generate[/dim]")
@@ -1486,7 +1471,8 @@ def scratch_sync_from_repo(
 
     if result.success and result.diff_output:
         match_pct = (
-            100.0 if result.diff_output.current_score == 0
+            100.0
+            if result.diff_output.current_score == 0
             else (1.0 - result.diff_output.current_score / result.diff_output.max_score) * 100
         )
 
@@ -1497,13 +1483,14 @@ def scratch_sync_from_repo(
         db_upsert_function(
             function_name,
             match_percent=match_pct,
-            status='matched' if match_pct >= 95 else 'in_progress',
+            status="matched" if match_pct >= 95 else "in_progress",
         )
 
         # Record branch-specific progress for recovery/traceability
         branch = _get_current_branch(melee_root)
         if branch:
             from src.db import get_db
+
             try:
                 db = get_db()
                 db.upsert_branch_progress(
@@ -1523,4 +1510,4 @@ def scratch_sync_from_repo(
         if match_pct >= 100:
             console.print("[green]Function is now 100% - ready to sync to production[/green]")
     else:
-        console.print(f"[yellow]Updated but compilation failed[/yellow]")
+        console.print("[yellow]Updated but compilation failed[/yellow]")

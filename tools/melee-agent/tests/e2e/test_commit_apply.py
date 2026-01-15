@@ -15,12 +15,7 @@ class TestGitRepoFixture:
 
     def test_repo_has_initial_commit(self, temp_melee_repo):
         """Temp repo has an initial commit."""
-        result = subprocess.run(
-            ["git", "log", "--oneline", "-1"],
-            cwd=temp_melee_repo,
-            capture_output=True,
-            text=True
-        )
+        result = subprocess.run(["git", "log", "--oneline", "-1"], cwd=temp_melee_repo, capture_output=True, text=True)
 
         assert result.returncode == 0
         assert "Initial commit" in result.stdout
@@ -52,17 +47,14 @@ class TestGitOperations:
             ["git", "checkout", "-b", "test-branch"],
             cwd=temp_melee_repo,
             capture_output=True,
-            env={**os.environ, **git_env}
+            env={**os.environ, **git_env},
         )
 
         assert result.returncode == 0
 
         # Verify we're on new branch
         result = subprocess.run(
-            ["git", "branch", "--show-current"],
-            cwd=temp_melee_repo,
-            capture_output=True,
-            text=True
+            ["git", "branch", "--show-current"], cwd=temp_melee_repo, capture_output=True, text=True
         )
         assert result.stdout.strip() == "test-branch"
 
@@ -79,18 +71,13 @@ class TestGitOperations:
             ["git", "commit", "-m", "Test commit"],
             cwd=temp_melee_repo,
             capture_output=True,
-            env={**os.environ, **git_env}
+            env={**os.environ, **git_env},
         )
 
         assert result.returncode == 0
 
         # Verify commit exists
-        result = subprocess.run(
-            ["git", "log", "--oneline", "-1"],
-            cwd=temp_melee_repo,
-            capture_output=True,
-            text=True
-        )
+        result = subprocess.run(["git", "log", "--oneline", "-1"], cwd=temp_melee_repo, capture_output=True, text=True)
         assert "Test commit" in result.stdout
 
     def test_changes_are_isolated(self, temp_melee_repo, git_env):
@@ -136,8 +123,7 @@ class TestSourceFileUpdates:
 
         # Replace NonMatching with Matching for lbcommand.c
         new_content = content.replace(
-            'Object(NonMatching, "melee/lb/lbcommand.c")',
-            'Object(Matching, "melee/lb/lbcommand.c")'
+            'Object(NonMatching, "melee/lb/lbcommand.c")', 'Object(Matching, "melee/lb/lbcommand.c")'
         )
         configure.write_text(new_content)
 
@@ -169,17 +155,14 @@ class TestCommitCreation:
             ["git", "commit", "-m", "Match TestFunction"],
             cwd=temp_melee_repo,
             capture_output=True,
-            env={**os.environ, **git_env}
+            env={**os.environ, **git_env},
         )
 
         assert result.returncode == 0
 
         # Verify commit
         log_result = subprocess.run(
-            ["git", "log", "--oneline", "-1"],
-            cwd=temp_melee_repo,
-            capture_output=True,
-            text=True
+            ["git", "log", "--oneline", "-1"], cwd=temp_melee_repo, capture_output=True, text=True
         )
         assert "Match TestFunction" in log_result.stdout
 
@@ -195,10 +178,7 @@ class TestCommitCreation:
         # Commit
         subprocess.run(["git", "add", "."], cwd=temp_melee_repo, check=True)
         subprocess.run(
-            ["git", "commit", "-m", "Match function"],
-            cwd=temp_melee_repo,
-            env={**os.environ, **git_env},
-            check=True
+            ["git", "commit", "-m", "Match function"], cwd=temp_melee_repo, env={**os.environ, **git_env}, check=True
         )
 
         # Check what files were in the commit
@@ -206,7 +186,7 @@ class TestCommitCreation:
             ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"],
             cwd=temp_melee_repo,
             capture_output=True,
-            text=True
+            text=True,
         )
 
         files = result.stdout.strip().split("\n")
@@ -223,24 +203,14 @@ class TestDryRun:
         lb_file.write_text(lb_file.read_text() + "\n// Modified\n")
 
         # Check status (simulating dry run)
-        result = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=temp_melee_repo,
-            capture_output=True,
-            text=True
-        )
+        result = subprocess.run(["git", "status", "--porcelain"], cwd=temp_melee_repo, capture_output=True, text=True)
 
         assert "lbcommand.c" in result.stdout
 
     def test_dry_run_does_not_commit(self, temp_melee_repo):
         """Dry run doesn't create any commits."""
         # Get current commit hash
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=temp_melee_repo,
-            capture_output=True,
-            text=True
-        )
+        result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=temp_melee_repo, capture_output=True, text=True)
         original_hash = result.stdout.strip()
 
         # Modify file but don't commit (simulating dry run)
@@ -248,12 +218,7 @@ class TestDryRun:
         lb_file.write_text(lb_file.read_text() + "\n// Modified\n")
 
         # Verify no new commits
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=temp_melee_repo,
-            capture_output=True,
-            text=True
-        )
+        result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=temp_melee_repo, capture_output=True, text=True)
         assert result.stdout.strip() == original_hash
 
 
@@ -262,19 +227,11 @@ class TestDatabaseIntegration:
 
     def test_commit_updates_function_status(self, temp_db):
         """Committing updates function status in database."""
-        temp_db.upsert_function(
-            "TestFunction",
-            status="matched",
-            match_percent=100.0
-        )
+        temp_db.upsert_function("TestFunction", status="matched", match_percent=100.0)
 
         # Simulate commit
         temp_db.upsert_function(
-            "TestFunction",
-            status="committed",
-            is_committed=True,
-            commit_hash="abc123def",
-            build_status="passing"
+            "TestFunction", status="committed", is_committed=True, commit_hash="abc123def", build_status="passing"
         )
 
         func = temp_db.get_function("TestFunction")
@@ -293,11 +250,7 @@ class TestDatabaseIntegration:
         assert len(claims) == 1
 
         # Simulate successful commit
-        temp_db.upsert_function(
-            "TestFunction",
-            status="committed",
-            is_committed=True
-        )
+        temp_db.upsert_function("TestFunction", status="committed", is_committed=True)
         temp_db.release_claim("TestFunction", "agent-1")
 
         # After commit, claim released

@@ -14,7 +14,7 @@ class TestStatusConsistency:
         temp_db.upsert_function(
             "TestFunc",
             status="committed",
-            is_committed=False  # Inconsistent!
+            is_committed=False,  # Inconsistent!
         )
 
         func = temp_db.get_function("TestFunc")
@@ -28,16 +28,13 @@ class TestStatusConsistency:
         temp_db.upsert_function(
             "TestFunc",
             status="in_progress",
-            is_committed=True  # Inconsistent!
+            is_committed=True,  # Inconsistent!
         )
 
         func = temp_db.get_function("TestFunc")
 
         # Should detect this inconsistency
-        is_inconsistent = (
-            func["is_committed"] == 1 and
-            func["status"] not in ("committed", "in_review", "merged")
-        )
+        is_inconsistent = func["is_committed"] == 1 and func["status"] not in ("committed", "in_review", "merged")
         assert is_inconsistent
 
     def test_detect_merged_without_pr(self, temp_db):
@@ -46,7 +43,7 @@ class TestStatusConsistency:
             "TestFunc",
             status="merged",
             pr_url=None,  # Missing!
-            pr_state=None
+            pr_state=None,
         )
 
         func = temp_db.get_function("TestFunc")
@@ -60,7 +57,7 @@ class TestStatusConsistency:
         temp_db.upsert_function(
             "TestFunc",
             status="matched",
-            match_percent=50.0  # Too low for matched!
+            match_percent=50.0,  # Too low for matched!
         )
 
         func = temp_db.get_function("TestFunc")
@@ -75,11 +72,7 @@ class TestFixStatusInconsistencies:
 
     def test_fix_committed_status(self, temp_db):
         """Can fix committed status inconsistency."""
-        temp_db.upsert_function(
-            "TestFunc",
-            status="matched",
-            is_committed=True
-        )
+        temp_db.upsert_function("TestFunc", status="matched", is_committed=True)
 
         # Fix: update status to match is_committed
         temp_db.upsert_function("TestFunc", status="committed")
@@ -89,11 +82,7 @@ class TestFixStatusInconsistencies:
 
     def test_fix_is_committed_flag(self, temp_db):
         """Can fix is_committed flag."""
-        temp_db.upsert_function(
-            "TestFunc",
-            status="committed",
-            is_committed=False
-        )
+        temp_db.upsert_function("TestFunc", status="committed", is_committed=False)
 
         # Fix: set is_committed to True
         temp_db.upsert_function("TestFunc", is_committed=True)
@@ -111,16 +100,13 @@ class TestMissingScratchLinks:
             "TestFunc",
             status="in_progress",
             match_percent=50.0,
-            local_scratch_slug=None  # Missing!
+            local_scratch_slug=None,  # Missing!
         )
 
         func = temp_db.get_function("TestFunc")
 
         # Should detect: has progress but no scratch
-        is_missing = (
-            func["match_percent"] > 0 and
-            not func.get("local_scratch_slug")
-        )
+        is_missing = func["match_percent"] > 0 and not func.get("local_scratch_slug")
         assert is_missing
 
     def test_detect_missing_production_scratch(self, temp_db):
@@ -129,7 +115,7 @@ class TestMissingScratchLinks:
             "TestFunc",
             status="committed",
             local_scratch_slug="local-slug",
-            production_scratch_slug=None  # Maybe missing
+            production_scratch_slug=None,  # Maybe missing
         )
 
         # This might be intentional (not synced yet)
@@ -146,16 +132,13 @@ class TestPRStateConsistency:
             status="in_review",
             pr_url="https://github.com/owner/repo/pull/123",
             pr_state="OPEN",
-            pr_number=123
+            pr_number=123,
         )
 
         func = temp_db.get_function("TestFunc")
 
         # Has PR but might need refresh
-        needs_refresh = (
-            func["pr_url"] is not None and
-            func.get("git_verified_at") is None
-        )
+        needs_refresh = func["pr_url"] is not None and func.get("git_verified_at") is None
         # This would be flagged for refresh
 
     def test_detect_pr_without_url(self, temp_db):
@@ -164,7 +147,7 @@ class TestPRStateConsistency:
             "TestFunc",
             status="in_review",
             pr_number=123,
-            pr_url=None  # Missing!
+            pr_url=None,  # Missing!
         )
 
         func = temp_db.get_function("TestFunc")
@@ -178,18 +161,8 @@ class TestUncommittedMatches:
 
     def test_find_uncommitted_100_percent(self, temp_db):
         """Find 100% matched functions not committed."""
-        temp_db.upsert_function(
-            "Func1",
-            status="matched",
-            match_percent=100.0,
-            is_committed=False
-        )
-        temp_db.upsert_function(
-            "Func2",
-            status="committed",
-            match_percent=100.0,
-            is_committed=True
-        )
+        temp_db.upsert_function("Func1", status="matched", match_percent=100.0, is_committed=False)
+        temp_db.upsert_function("Func2", status="committed", match_percent=100.0, is_committed=True)
 
         uncommitted = temp_db.get_uncommitted_matches()
 
@@ -270,30 +243,30 @@ class TestCommittedNeedsFixStatus:
         func = temp_db.get_function("BrokenFunc")
 
         # Simulate what validate's status consistency check does
-        status = func.get('status')
-        is_committed = func.get('is_committed', False)
-        build_status = func.get('build_status')
-        pr_state = func.get('pr_state')
+        status = func.get("status")
+        is_committed = func.get("is_committed", False)
+        build_status = func.get("build_status")
+        pr_state = func.get("pr_state")
 
         # The correct expected status when is_committed=True AND build_status='broken'
         # should be 'committed_needs_fix', not 'committed'
-        if pr_state == 'MERGED':
-            expected_status = 'merged'
-        elif pr_state == 'OPEN':
-            expected_status = 'in_review'
+        if pr_state == "MERGED":
+            expected_status = "merged"
+        elif pr_state == "OPEN":
+            expected_status = "in_review"
         elif is_committed:
             # BUG WAS HERE: old code just did expected_status = 'committed'
             # Correct logic must check build_status
-            if build_status == 'broken':
-                expected_status = 'committed_needs_fix'
+            if build_status == "broken":
+                expected_status = "committed_needs_fix"
             else:
-                expected_status = 'committed'
+                expected_status = "committed"
         else:
-            expected_status = 'matched'
+            expected_status = "matched"
 
         # Status should already be correct - no "fix" needed
         assert status == expected_status
-        assert status == 'committed_needs_fix'
+        assert status == "committed_needs_fix"
 
     def test_category_needs_fix_filter(self, temp_db):
         """--category needs_fix should find functions with build_status='broken'."""
@@ -332,7 +305,7 @@ class TestCommittedNeedsFixStatus:
                 SELECT function_name FROM functions
                 WHERE build_status = 'broken' AND is_committed = TRUE
             """)
-            needs_fix = [row['function_name'] for row in cursor.fetchall()]
+            needs_fix = [row["function_name"] for row in cursor.fetchall()]
 
         assert len(needs_fix) == 2
         assert "BrokenFunc1" in needs_fix
@@ -373,10 +346,7 @@ class TestCommittedNeedsFixStatus:
         func = temp_db.get_function("BuggyFunc")
 
         # Detect the inconsistency
-        is_inconsistent = (
-            func["status"] == "committed" and
-            func["build_status"] == "broken"
-        )
+        is_inconsistent = func["status"] == "committed" and func["build_status"] == "broken"
 
         # This state IS inconsistent and should be flagged/fixed
         assert is_inconsistent, "status='committed' with build_status='broken' is inconsistent"
@@ -426,8 +396,7 @@ class TestStateValidateCliCommand:
         # Check status was preserved
         func = temp_db.get_function("BrokenFunc")
         assert func["status"] == "committed_needs_fix", (
-            f"Expected 'committed_needs_fix' but got '{func['status']}'. "
-            f"Output: {result.output}"
+            f"Expected 'committed_needs_fix' but got '{func['status']}'. Output: {result.output}"
         )
 
     def test_validate_detects_wrong_status_for_broken_build(self, cli_with_db, temp_db):
@@ -484,7 +453,7 @@ class TestStateCategoryFilter:
         # Should include broken func, not healthy func
         assert result.exit_code == 0
         assert "BrokenFunc" in result.output, f"Expected 'BrokenFunc' in output: {result.output}"
-        assert "HealthyFunc" not in result.output, f"Did not expect 'HealthyFunc' in output"
+        assert "HealthyFunc" not in result.output, "Did not expect 'HealthyFunc' in output"
 
 
 class TestClaimValidation:
@@ -495,13 +464,14 @@ class TestClaimValidation:
         # Add claim for nonexistent function
         with temp_db.connection() as conn:
             import time
+
             now = time.time()
             conn.execute(
                 """
                 INSERT INTO claims (function_name, agent_id, claimed_at, expires_at)
                 VALUES (?, ?, ?, ?)
                 """,
-                ("NonexistentFunc", "agent-1", now, now + 3600)
+                ("NonexistentFunc", "agent-1", now, now + 3600),
             )
 
         claims = temp_db.get_active_claims()
@@ -525,7 +495,7 @@ class TestClaimValidation:
                 INSERT INTO claims (function_name, agent_id, claimed_at, expires_at)
                 VALUES (?, ?, ?, ?)
                 """,
-                ("OldFunc", "agent-1", now - 7200, now - 3600)
+                ("OldFunc", "agent-1", now - 7200, now - 3600),
             )
 
         # Active claims should not include expired
@@ -576,17 +546,13 @@ class TestSubdirectoryValidation:
                      locked_by_agent, locked_at, lock_expires_at, updated_at)
                 VALUES (?, '', '', ?, ?, ?, ?)
                 """,
-                ("lb", "agent-1", now - 7200, now - 3600, now)
+                ("lb", "agent-1", now - 7200, now - 3600, now),
             )
 
         lock = temp_db.get_subdirectory_lock("lb")
 
         # Should be detected as expired
-        is_expired = (
-            lock and
-            lock.get("lock_expires_at") and
-            lock["lock_expires_at"] < time.time()
-        )
+        is_expired = lock and lock.get("lock_expires_at") and lock["lock_expires_at"] < time.time()
         assert is_expired or lock.get("lock_expired")
 
     def test_detect_orphaned_worktrees(self, temp_db):

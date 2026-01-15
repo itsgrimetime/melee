@@ -7,11 +7,7 @@ from typing import Optional
 
 
 async def create_pr(
-    function_name: str,
-    scratch_url: str,
-    files_changed: list[str],
-    melee_root: Path,
-    base_branch: str = "main"
+    function_name: str, scratch_url: str, files_changed: list[str], melee_root: Path, base_branch: str = "main"
 ) -> str | None:
     """Create branch, commit, and open PR. Returns PR URL.
 
@@ -39,10 +35,7 @@ async def create_pr(
         checkout_cmd = ["git", "checkout", "-b", branch_name]
 
         process = await asyncio.create_subprocess_exec(
-            *checkout_cmd,
-            cwd=str(melee_root),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            *checkout_cmd, cwd=str(melee_root), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
 
         stdout, stderr = await process.communicate()
@@ -57,7 +50,7 @@ async def create_pr(
                     *checkout_existing,
                     cwd=str(melee_root),
                     stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
+                    stderr=asyncio.subprocess.PIPE,
                 )
                 await process.communicate()
             else:
@@ -72,7 +65,7 @@ Matched function {function_name} from decomp.me.
 decomp.me scratch: {scratch_url}
 
 Files changed:
-{chr(10).join(f'- {f}' for f in files_changed)}
+{chr(10).join(f"- {f}" for f in files_changed)}
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
@@ -83,10 +76,7 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"""
         commit_cmd = ["git", "commit", "-m", commit_message]
 
         process = await asyncio.create_subprocess_exec(
-            *commit_cmd,
-            cwd=str(melee_root),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            *commit_cmd, cwd=str(melee_root), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
 
         stdout, stderr = await process.communicate()
@@ -99,14 +89,11 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"""
         print(f"Commit created: {stdout.decode()}")
 
         # Push the branch
-        print(f"Pushing branch to remote...")
+        print("Pushing branch to remote...")
         push_cmd = ["git", "push", "-u", "origin", branch_name]
 
         process = await asyncio.create_subprocess_exec(
-            *push_cmd,
-            cwd=str(melee_root),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            *push_cmd, cwd=str(melee_root), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
 
         stdout, stderr = await process.communicate()
@@ -136,18 +123,10 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"""
 
         # Create PR using gh CLI
         print("Creating pull request...")
-        gh_cmd = [
-            "gh", "pr", "create",
-            "--title", pr_title,
-            "--body", pr_body,
-            "--base", base_branch
-        ]
+        gh_cmd = ["gh", "pr", "create", "--title", pr_title, "--body", pr_body, "--base", base_branch]
 
         process = await asyncio.create_subprocess_exec(
-            *gh_cmd,
-            cwd=str(melee_root),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            *gh_cmd, cwd=str(melee_root), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
 
         stdout, stderr = await process.communicate()
@@ -184,10 +163,7 @@ async def get_remote_url(melee_root: Path) -> str | None:
         cmd = ["git", "remote", "get-url", "origin"]
 
         process = await asyncio.create_subprocess_exec(
-            *cmd,
-            cwd=str(melee_root),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            *cmd, cwd=str(melee_root), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
 
         stdout, stderr = await process.communicate()
@@ -201,10 +177,7 @@ async def get_remote_url(melee_root: Path) -> str | None:
         return None
 
 
-async def check_branch_exists(
-    branch_name: str,
-    melee_root: Path
-) -> bool:
+async def check_branch_exists(branch_name: str, melee_root: Path) -> bool:
     """Check if a branch exists locally.
 
     Args:
@@ -218,10 +191,7 @@ async def check_branch_exists(
         cmd = ["git", "rev-parse", "--verify", branch_name]
 
         process = await asyncio.create_subprocess_exec(
-            *cmd,
-            cwd=str(melee_root),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            *cmd, cwd=str(melee_root), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
 
         await process.communicate()
@@ -232,10 +202,7 @@ async def check_branch_exists(
         return False
 
 
-async def switch_to_branch(
-    branch_name: str,
-    melee_root: Path
-) -> bool:
+async def switch_to_branch(branch_name: str, melee_root: Path) -> bool:
     """Switch to a specific branch.
 
     Args:
@@ -249,10 +216,7 @@ async def switch_to_branch(
         cmd = ["git", "checkout", branch_name]
 
         process = await asyncio.create_subprocess_exec(
-            *cmd,
-            cwd=str(melee_root),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            *cmd, cwd=str(melee_root), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
 
         stdout, stderr = await process.communicate()

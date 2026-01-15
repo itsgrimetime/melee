@@ -20,7 +20,7 @@ from typing import Optional
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.dolphin_debug import DolphinDebugger, ConnectionMode
+from src.dolphin_debug import ConnectionMode, DolphinDebugger
 
 # Daemon config
 SOCKET_PATH = Path("/tmp/dolphin_debug.sock")
@@ -32,9 +32,9 @@ class DebugDaemon:
     """Daemon that maintains GDB connection and serves commands."""
 
     def __init__(self):
-        self.dbg: Optional[DolphinDebugger] = None
+        self.dbg: DolphinDebugger | None = None
         self.running = False
-        self.server_socket: Optional[socket.socket] = None
+        self.server_socket: socket.socket | None = None
 
     def connect_to_dolphin(self, timeout: float = 30.0) -> bool:
         """Connect to Dolphin GDB stub."""
@@ -97,9 +97,11 @@ class DebugDaemon:
                         result["data"] = data.hex()
                     elif fmt == "u32":
                         import struct
+
                         result["data"] = struct.unpack(">I", data[:4])[0]
                     elif fmt == "f32":
                         import struct
+
                         result["data"] = struct.unpack(">f", data[:4])[0]
                     else:
                         result["data"] = list(data)
@@ -273,7 +275,7 @@ class DebugDaemon:
                 conn, _ = self.server_socket.accept()
                 # Handle in thread to not block
                 threading.Thread(target=self.handle_client, args=(conn,), daemon=True).start()
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError:
                 break

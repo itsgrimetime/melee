@@ -5,26 +5,20 @@ from typing import Annotated
 
 import typer
 
-from .._common import console, load_slug_map, extract_pr_info
+from .._common import console, extract_pr_info, load_slug_map
 from ._helpers import (
-    get_extended_pr_info,
     extract_functions_from_commits,
-    validate_pr_description,
-    get_pr_checks,
     get_decomp_dev_report,
+    get_extended_pr_info,
+    get_pr_checks,
+    validate_pr_description,
 )
 
 
 def check_command(
-    pr_refs: Annotated[
-        list[str], typer.Argument(help="PR number(s) or URL(s) to check (defaults to doldecomp/melee)")
-    ],
-    validate: Annotated[
-        bool, typer.Option("--validate", "-v", help="Validate PR description")
-    ] = True,
-    output_json: Annotated[
-        bool, typer.Option("--json", help="Output as JSON")
-    ] = False,
+    pr_refs: Annotated[list[str], typer.Argument(help="PR number(s) or URL(s) to check (defaults to doldecomp/melee)")],
+    validate: Annotated[bool, typer.Option("--validate", "-v", help="Validate PR description")] = True,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
     """Check PR status and validate description.
 
@@ -44,7 +38,9 @@ def check_command(
         repo, pr_number = extract_pr_info(pr_ref)
         if not pr_number:
             console.print(f"[red]Invalid PR reference: {pr_ref}[/red]")
-            console.print("[dim]Expected: PR number (e.g., 2049) or URL (e.g., https://github.com/owner/repo/pull/123)[/dim]")
+            console.print(
+                "[dim]Expected: PR number (e.g., 2049) or URL (e.g., https://github.com/owner/repo/pull/123)[/dim]"
+            )
             raise typer.Exit(1)
 
         result = _check_single_pr(repo, pr_number, pr_ref, validate, output_json)
@@ -87,9 +83,9 @@ def _check_single_pr(repo: str, pr_number: int, pr_ref: str, validate: bool, out
 
     # Get CI checks
     checks = get_pr_checks(repo, pr_number)
-    failed_checks = [c for c in checks if c.get('conclusion') == 'failure']
-    pending_checks = [c for c in checks if c.get('state', '').upper() in ('PENDING', 'IN_PROGRESS', 'QUEUED')]
-    passed_checks = [c for c in checks if c.get('conclusion') == 'success']
+    failed_checks = [c for c in checks if c.get("conclusion") == "failure"]
+    pending_checks = [c for c in checks if c.get("state", "").upper() in ("PENDING", "IN_PROGRESS", "QUEUED")]
+    passed_checks = [c for c in checks if c.get("conclusion") == "success"]
 
     # Get decomp report
     decomp_report = get_decomp_dev_report(repo, pr_number)
@@ -119,7 +115,7 @@ def _check_single_pr(repo: str, pr_number: int, pr_ref: str, validate: bool, out
             "passed": len(passed_checks),
             "failed": len(failed_checks),
             "pending": len(pending_checks),
-            "failed_names": [c.get('name') for c in failed_checks],
+            "failed_names": [c.get("name") for c in failed_checks],
         },
         "decomp_report": decomp_report,
     }
@@ -150,12 +146,14 @@ def _check_single_pr(repo: str, pr_number: int, pr_ref: str, validate: bool, out
         console.print(f"Mergeable: {mergeable}")
 
     # Branches
-    console.print(f"\n[bold]Branches:[/bold]")
+    console.print("\n[bold]Branches:[/bold]")
     console.print(f"  Base: {base_branch}")
     console.print(f"  Head: {head_branch}")
 
     # CI Checks
-    console.print(f"\n[bold]CI Checks:[/bold] {len(passed_checks)} passed, {len(failed_checks)} failed, {len(pending_checks)} pending")
+    console.print(
+        f"\n[bold]CI Checks:[/bold] {len(passed_checks)} passed, {len(failed_checks)} failed, {len(pending_checks)} pending"
+    )
     if failed_checks:
         console.print("[red]Failed:[/red]")
         for check in failed_checks[:5]:
@@ -176,22 +174,24 @@ def _check_single_pr(repo: str, pr_number: int, pr_ref: str, validate: bool, out
 
     # Decomp report
     if decomp_report:
-        console.print(f"\n[bold]decomp.dev Report:[/bold]")
-        delta_bytes = decomp_report.get('delta_bytes', 0)
+        console.print("\n[bold]decomp.dev Report:[/bold]")
+        delta_bytes = decomp_report.get("delta_bytes", 0)
         if delta_bytes is not None:
-            completion = decomp_report.get('completion_percent', 0)
-            delta_pct = decomp_report.get('delta_percent', 0)
+            completion = decomp_report.get("completion_percent", 0)
+            delta_pct = decomp_report.get("delta_percent", 0)
             if delta_bytes > 0:
-                console.print(f"  [green]Matched: {completion:.2f}% (+{delta_pct:.2f}%, +{delta_bytes:,} bytes)[/green]")
+                console.print(
+                    f"  [green]Matched: {completion:.2f}% (+{delta_pct:.2f}%, +{delta_bytes:,} bytes)[/green]"
+                )
             elif delta_bytes < 0:
                 console.print(f"  [red]Matched: {completion:.2f}% ({delta_pct:.2f}%, {delta_bytes:,} bytes)[/red]")
             else:
                 console.print(f"  Matched: {completion:.2f}%")
 
-            broken = decomp_report.get('broken_matches_count', 0)
-            regressions = decomp_report.get('regressions_count', 0)
-            new_matches = decomp_report.get('new_matches_count', 0)
-            improvements = decomp_report.get('improvements_count', 0)
+            broken = decomp_report.get("broken_matches_count", 0)
+            regressions = decomp_report.get("regressions_count", 0)
+            new_matches = decomp_report.get("new_matches_count", 0)
+            improvements = decomp_report.get("improvements_count", 0)
 
             if broken > 0:
                 console.print(f"  [bold red]💔 {broken} broken match{'es' if broken > 1 else ''}[/bold red]")
@@ -208,6 +208,6 @@ def _check_single_pr(repo: str, pr_number: int, pr_ref: str, validate: bool, out
         for warning in warnings:
             console.print(f"  [yellow]• {warning}[/yellow]")
     elif validate:
-        console.print(f"\n[green]✓ Description looks good[/green]")
+        console.print("\n[green]✓ Description looks good[/green]")
 
     return None

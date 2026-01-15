@@ -151,21 +151,9 @@ class TestBrokenBuilds:
 
     def test_get_worktree_broken_count(self, temp_db):
         """Can count broken builds per worktree."""
-        temp_db.upsert_function(
-            "Func1",
-            worktree_path="/wt/lb",
-            build_status="broken"
-        )
-        temp_db.upsert_function(
-            "Func2",
-            worktree_path="/wt/lb",
-            build_status="broken"
-        )
-        temp_db.upsert_function(
-            "Func3",
-            worktree_path="/wt/lb",
-            build_status="passing"
-        )
+        temp_db.upsert_function("Func1", worktree_path="/wt/lb", build_status="broken")
+        temp_db.upsert_function("Func2", worktree_path="/wt/lb", build_status="broken")
+        temp_db.upsert_function("Func3", worktree_path="/wt/lb", build_status="passing")
 
         count, names = temp_db.get_worktree_broken_count("/wt/lb")
 
@@ -226,14 +214,11 @@ class TestScratchOperations:
             base_url="http://localhost:8000",
             function_name="TestFunc",
             score=50,
-            max_score=100
+            max_score=100,
         )
 
         with temp_db.connection() as conn:
-            cursor = conn.execute(
-                "SELECT * FROM scratches WHERE slug = ?",
-                ("test-scratch-1",)
-            )
+            cursor = conn.execute("SELECT * FROM scratches WHERE slug = ?", ("test-scratch-1",))
             scratch = cursor.fetchone()
 
         assert scratch is not None
@@ -242,11 +227,7 @@ class TestScratchOperations:
 
     def test_record_match_score(self, temp_db):
         """Can record match score history."""
-        temp_db.upsert_scratch(
-            slug="test-scratch",
-            instance="local",
-            base_url="http://localhost:8000"
-        )
+        temp_db.upsert_scratch(slug="test-scratch", instance="local", base_url="http://localhost:8000")
 
         temp_db.record_match_score("test-scratch", score=50, max_score=100)
         temp_db.record_match_score("test-scratch", score=25, max_score=100)
@@ -254,8 +235,7 @@ class TestScratchOperations:
 
         with temp_db.connection() as conn:
             cursor = conn.execute(
-                "SELECT * FROM match_history WHERE scratch_slug = ? ORDER BY timestamp",
-                ("test-scratch",)
+                "SELECT * FROM match_history WHERE scratch_slug = ? ORDER BY timestamp", ("test-scratch",)
             )
             history = cursor.fetchall()
 
@@ -266,20 +246,13 @@ class TestScratchOperations:
 
     def test_record_match_score_skips_duplicates(self, temp_db):
         """Recording same score twice doesn't create duplicate."""
-        temp_db.upsert_scratch(
-            slug="test-scratch",
-            instance="local",
-            base_url="http://localhost:8000"
-        )
+        temp_db.upsert_scratch(slug="test-scratch", instance="local", base_url="http://localhost:8000")
 
         temp_db.record_match_score("test-scratch", score=50, max_score=100)
         temp_db.record_match_score("test-scratch", score=50, max_score=100)  # Duplicate
 
         with temp_db.connection() as conn:
-            cursor = conn.execute(
-                "SELECT COUNT(*) as cnt FROM match_history WHERE scratch_slug = ?",
-                ("test-scratch",)
-            )
+            cursor = conn.execute("SELECT COUNT(*) as cnt FROM match_history WHERE scratch_slug = ?", ("test-scratch",))
             count = cursor.fetchone()["cnt"]
 
         assert count == 1  # Only one entry, not two

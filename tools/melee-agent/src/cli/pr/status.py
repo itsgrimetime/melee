@@ -8,16 +8,14 @@ from rich.table import Table
 
 from .._common import (
     console,
-    load_completed_functions,
     extract_pr_info,
     get_pr_status_from_gh,
+    load_completed_functions,
 )
 
 
 def status_command(
-    check_github: Annotated[
-        bool, typer.Option("--check", "-c", help="Check actual PR status via gh CLI")
-    ] = False,
+    check_github: Annotated[bool, typer.Option("--check", "-c", help="Check actual PR status via gh CLI")] = False,
 ):
     """Show PR status summary for all tracked functions."""
     completed = load_completed_functions()
@@ -94,15 +92,9 @@ def status_command(
 
 
 def list_command(
-    pr_url: Annotated[
-        Optional[str], typer.Argument(help="Filter by PR URL (optional)")
-    ] = None,
-    no_pr: Annotated[
-        bool, typer.Option("--no-pr", help="Show only functions without a PR")
-    ] = False,
-    output_json: Annotated[
-        bool, typer.Option("--json", help="Output as JSON")
-    ] = False,
+    pr_url: Annotated[str | None, typer.Argument(help="Filter by PR URL (optional)")] = None,
+    no_pr: Annotated[bool, typer.Option("--no-pr", help="Show only functions without a PR")] = False,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
     """List functions by PR association."""
     completed = load_completed_functions()
@@ -118,13 +110,15 @@ def list_command(
         if not no_pr and not pr_url and not func_pr:
             continue
 
-        results.append({
-            "function": func,
-            "match_percent": info.get("match_percent", 0),
-            "pr_url": func_pr,
-            "pr_number": info.get("pr_number", 0),
-            "scratch_slug": info.get("scratch_slug", ""),
-        })
+        results.append(
+            {
+                "function": func,
+                "match_percent": info.get("match_percent", 0),
+                "pr_url": func_pr,
+                "pr_number": info.get("pr_number", 0),
+                "scratch_slug": info.get("scratch_slug", ""),
+            }
+        )
 
     results.sort(key=lambda x: -x["match_percent"])
 
@@ -139,7 +133,7 @@ def list_command(
             console.print("[dim]No matching functions[/dim]")
         return
 
-    table = Table(title="Functions" + (f" for PR" if pr_url else " without PR" if no_pr else ""))
+    table = Table(title="Functions" + (" for PR" if pr_url else " without PR" if no_pr else ""))
     table.add_column("Function", style="cyan")
     table.add_column("Match %", justify="right")
     table.add_column("PR #", justify="right")
@@ -150,7 +144,7 @@ def list_command(
             r["function"],
             f"{r['match_percent']:.1f}%",
             str(r["pr_number"]) if r["pr_number"] else "-",
-            r["scratch_slug"] or "-"
+            r["scratch_slug"] or "-",
         )
 
     console.print(table)

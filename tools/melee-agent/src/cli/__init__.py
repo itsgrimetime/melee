@@ -19,30 +19,30 @@ load_dotenv(Path(__file__).parent.parent.parent / ".env")
 
 import typer
 
-# Import sub-apps from modules
-from .extract import extract_app
-from .scratch import scratch_app
-from .claim import claim_app
-from .complete import complete_app
-from .commit import commit_app
-from .docker import docker_app
-from .sync import sync_app
-from .pr import pr_app
-from .audit import audit_app
-from .hook import hook_app
-from .struct import struct_app
-from .stub import stub_app
-from .workflow import workflow_app
-from .state import state_app
-from .analytics import analytics_app
-from .setup import setup_app
-from .compilers import list_compilers
-
 # Import common utilities for backward compatibility
 from ._common import (
-    console,
     DEFAULT_MELEE_ROOT,
+    console,
 )
+from .analytics import analytics_app
+from .audit import audit_app
+from .claim import claim_app
+from .commit import commit_app
+from .compilers import list_compilers
+from .complete import complete_app
+from .docker import docker_app
+
+# Import sub-apps from modules
+from .extract import extract_app
+from .hook import hook_app
+from .pr import pr_app
+from .scratch import scratch_app
+from .setup import setup_app
+from .state import state_app
+from .struct import struct_app
+from .stub import stub_app
+from .sync import sync_app
+from .workflow import workflow_app
 
 # Create main app
 app = typer.Typer(

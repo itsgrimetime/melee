@@ -28,12 +28,7 @@ class TestFailedCommitRecovery:
 
     def test_failed_commit_preserves_match(self, temp_db):
         """Failed commit preserves the match percentage."""
-        temp_db.upsert_function(
-            "TestFunc",
-            status="matched",
-            match_percent=100.0,
-            local_scratch_slug="test-scratch"
-        )
+        temp_db.upsert_function("TestFunc", status="matched", match_percent=100.0, local_scratch_slug="test-scratch")
 
         # Even after claim release, match info preserved
         func = temp_db.get_function("TestFunc")
@@ -43,18 +38,12 @@ class TestFailedCommitRecovery:
     def test_failed_commit_keeps_scratch(self, temp_db):
         """Failed commit preserves scratch information."""
         temp_db.upsert_scratch(
-            slug="test-scratch",
-            instance="local",
-            base_url="http://localhost:8000",
-            function_name="TestFunc"
+            slug="test-scratch", instance="local", base_url="http://localhost:8000", function_name="TestFunc"
         )
 
         # Scratch should still exist after failed commit
         with temp_db.connection() as conn:
-            cursor = conn.execute(
-                "SELECT * FROM scratches WHERE slug = ?",
-                ("test-scratch",)
-            )
+            cursor = conn.execute("SELECT * FROM scratches WHERE slug = ?", ("test-scratch",))
             scratch = cursor.fetchone()
 
         assert scratch is not None
@@ -70,7 +59,7 @@ class TestBrokenBuildRecovery:
             status="committed",
             is_committed=True,
             build_status="broken",
-            build_diagnosis="Missing header declaration"
+            build_diagnosis="Missing header declaration",
         )
 
         func = temp_db.get_function("TestFunc")
@@ -83,11 +72,7 @@ class TestBrokenBuildRecovery:
 
         # Add multiple broken functions
         for i in range(4):
-            temp_db.upsert_function(
-                f"Func{i}",
-                worktree_path=worktree,
-                build_status="broken"
-            )
+            temp_db.upsert_function(f"Func{i}", worktree_path=worktree, build_status="broken")
 
         count, names = temp_db.get_worktree_broken_count(worktree)
         assert count == 4
@@ -96,18 +81,10 @@ class TestBrokenBuildRecovery:
 
     def test_fixing_broken_build_updates_status(self, temp_db):
         """Fixing a broken build updates the status."""
-        temp_db.upsert_function(
-            "TestFunc",
-            status="committed",
-            build_status="broken"
-        )
+        temp_db.upsert_function("TestFunc", status="committed", build_status="broken")
 
         # Fix the build
-        temp_db.upsert_function(
-            "TestFunc",
-            build_status="passing",
-            build_diagnosis=None
-        )
+        temp_db.upsert_function("TestFunc", build_status="passing", build_diagnosis=None)
 
         func = temp_db.get_function("TestFunc")
         assert func["build_status"] == "passing"
@@ -118,12 +95,7 @@ class TestCompilationErrors:
 
     def test_compilation_error_preserves_progress(self, temp_db):
         """Compilation error preserves match progress."""
-        temp_db.upsert_function(
-            "TestFunc",
-            status="in_progress",
-            match_percent=75.0,
-            local_scratch_slug="test-scratch"
-        )
+        temp_db.upsert_function("TestFunc", status="in_progress", match_percent=75.0, local_scratch_slug="test-scratch")
 
         # Compilation fails but progress saved
         func = temp_db.get_function("TestFunc")
@@ -132,10 +104,7 @@ class TestCompilationErrors:
     def test_can_retry_after_error(self, temp_db):
         """Can retry compilation after error."""
         temp_db.upsert_scratch(
-            slug="test-scratch",
-            instance="local",
-            base_url="http://localhost:8000",
-            function_name="TestFunc"
+            slug="test-scratch", instance="local", base_url="http://localhost:8000", function_name="TestFunc"
         )
 
         # First attempt - error
@@ -147,8 +116,7 @@ class TestCompilationErrors:
         # Check history shows both attempts
         with temp_db.connection() as conn:
             cursor = conn.execute(
-                "SELECT * FROM match_history WHERE scratch_slug = ? ORDER BY timestamp",
-                ("test-scratch",)
+                "SELECT * FROM match_history WHERE scratch_slug = ? ORDER BY timestamp", ("test-scratch",)
             )
             history = cursor.fetchall()
 
@@ -170,7 +138,7 @@ class TestClaimRecovery:
                 INSERT INTO claims (function_name, agent_id, claimed_at, expires_at)
                 VALUES (?, ?, ?, ?)
                 """,
-                ("TestFunc", "agent-1", now - 7200, now - 3600)
+                ("TestFunc", "agent-1", now - 7200, now - 3600),
             )
 
         # New agent can claim
@@ -202,7 +170,7 @@ class TestLockRecovery:
                      locked_by_agent, locked_at, lock_expires_at, updated_at)
                 VALUES (?, '', '', ?, ?, ?, ?)
                 """,
-                ("lb", "agent-1", now - 3600, now - 1800, now)
+                ("lb", "agent-1", now - 3600, now - 1800, now),
             )
 
         success, _ = temp_db.lock_subdirectory("lb", "agent-2")
@@ -231,24 +199,18 @@ class TestStateValidationRecovery:
         temp_db.upsert_function(
             "TestFunc",
             status="matched",
-            is_committed=True  # Inconsistent!
+            is_committed=True,  # Inconsistent!
         )
 
         func = temp_db.get_function("TestFunc")
 
         # Detection: status doesn't match is_committed
-        is_inconsistent = (
-            func["status"] == "matched" and func["is_committed"] == 1
-        )
+        is_inconsistent = func["status"] == "matched" and func["is_committed"] == 1
         assert is_inconsistent is True
 
     def test_can_fix_status_mismatch(self, temp_db):
         """Can fix detected status mismatches."""
-        temp_db.upsert_function(
-            "TestFunc",
-            status="matched",
-            is_committed=True
-        )
+        temp_db.upsert_function("TestFunc", status="matched", is_committed=True)
 
         # Fix the inconsistency
         temp_db.upsert_function("TestFunc", status="committed")
@@ -264,10 +226,7 @@ class TestBranchProgressRecovery:
     def test_progress_preserved_across_sessions(self, temp_db):
         """Branch progress is preserved across sessions."""
         temp_db.upsert_branch_progress(
-            function_name="TestFunc",
-            branch="feature",
-            match_percent=75.0,
-            scratch_slug="scratch-1"
+            function_name="TestFunc", branch="feature", match_percent=75.0, scratch_slug="scratch-1"
         )
 
         # Simulate session restart by just re-reading
@@ -290,17 +249,8 @@ class TestBranchProgressRecovery:
 
     def test_committed_branch_takes_priority(self, temp_db):
         """Committed branch is recognizable for recovery."""
-        temp_db.upsert_branch_progress(
-            "TestFunc", "main",
-            match_percent=100.0,
-            is_committed=True,
-            commit_hash="abc123"
-        )
-        temp_db.upsert_branch_progress(
-            "TestFunc", "feature",
-            match_percent=95.0,
-            is_committed=False
-        )
+        temp_db.upsert_branch_progress("TestFunc", "main", match_percent=100.0, is_committed=True, commit_hash="abc123")
+        temp_db.upsert_branch_progress("TestFunc", "feature", match_percent=95.0, is_committed=False)
 
         # Can find the committed one
         all_progress = temp_db.get_branch_progress("TestFunc")

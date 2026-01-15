@@ -82,7 +82,7 @@ class ContextGenerator:
                 return self._import_c_file(inc_path)
 
         # File not found - return a comment
-        return f'/* Failed to locate {include_file} */\n'
+        return f"/* Failed to locate {include_file} */\n"
 
     def _import_c_file(self, file_path: Path) -> str:
         """
@@ -116,7 +116,7 @@ class ContextGenerator:
                 with open(file_path) as f:
                     lines = list(f)
             except Exception:
-                return f'/* Failed to read {rel_path_str} */\n'
+                return f"/* Failed to read {rel_path_str} */\n"
 
         return self._process_file(rel_path_str, lines, file_path)
 
@@ -163,7 +163,7 @@ class ContextGenerator:
 
         return out_text
 
-    def generate_context_using_tool(self, source_file: str) -> Optional[str]:
+    def generate_context_using_tool(self, source_file: str) -> str | None:
         """
         Generate context using the project's decompctx.py tool.
 
@@ -195,7 +195,8 @@ class ContextGenerator:
                 "python3",
                 str(decompctx_tool),
                 str(source_path),
-                "-o", "/dev/stdout",
+                "-o",
+                "/dev/stdout",
             ] + include_args
 
             result = subprocess.run(

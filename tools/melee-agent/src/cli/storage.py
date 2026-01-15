@@ -32,6 +32,7 @@ def load_completed_functions() -> dict:
     Returns a dict compatible with the old JSON format for backward compatibility.
     """
     from src.db import get_db
+
     db = get_db()
 
     result = {}
@@ -63,6 +64,7 @@ def save_completed_functions(data: dict) -> None:
     SQLite handles concurrency natively, so no file locking is needed.
     """
     from src.db import get_db
+
     db = get_db()
 
     for func_name, info in data.items():
@@ -88,6 +90,7 @@ def load_slug_map() -> dict:
     {production_slug: {local_slug, function, match_percent, synced_at}}
     """
     from src.db import get_db
+
     db = get_db()
 
     result = {}
@@ -114,6 +117,7 @@ def save_slug_map(data: dict) -> None:
     Accepts a dict keyed by production_slug for backward compatibility.
     """
     from src.db import get_db
+
     db = get_db()
 
     for prod_slug, info in data.items():
@@ -142,9 +146,9 @@ def load_all_tracking_data(melee_root: Path) -> dict:
     synced_file = PRODUCTION_COOKIES_FILE.parent / "synced_scratches.json"
     if synced_file.exists():
         try:
-            with open(synced_file, "r") as f:
+            with open(synced_file) as f:
                 data["synced"] = json.load(f)
-        except (json.JSONDecodeError, IOError):
+        except (OSError, json.JSONDecodeError):
             pass
 
     return data

@@ -6,8 +6,8 @@ import random
 from pathlib import Path
 
 from .._common import (
-    console,
     PRODUCTION_COOKIES_FILE,
+    console,
 )
 
 # Rate limiting configuration for production API
@@ -40,7 +40,7 @@ async def rate_limited_request(client, method: str, url: str, max_retries: int =
 
         if response.status_code == 429:
             # Rate limited - check for Retry-After header
-            retry_after = response.headers.get('Retry-After')
+            retry_after = response.headers.get("Retry-After")
             if retry_after:
                 try:
                     wait_time = float(retry_after)
@@ -50,7 +50,9 @@ async def rate_limited_request(client, method: str, url: str, max_retries: int =
                 wait_time = delay * RATE_LIMIT_BACKOFF_FACTOR
 
             if attempt < max_retries:
-                console.print(f"[yellow]Rate limited (429). Waiting {wait_time:.1f}s before retry {attempt + 1}/{max_retries}...[/yellow]")
+                console.print(
+                    f"[yellow]Rate limited (429). Waiting {wait_time:.1f}s before retry {attempt + 1}/{max_retries}...[/yellow]"
+                )
                 await asyncio.sleep(wait_time)
                 delay = wait_time * RATE_LIMIT_BACKOFF_FACTOR  # Increase delay for next attempt
                 continue
@@ -71,14 +73,14 @@ def load_production_cookies() -> dict[str, str]:
     if not PRODUCTION_COOKIES_FILE.exists():
         return {}
     try:
-        with open(PRODUCTION_COOKIES_FILE, 'r') as f:
+        with open(PRODUCTION_COOKIES_FILE) as f:
             return json.load(f)
-    except (json.JSONDecodeError, IOError):
+    except (OSError, json.JSONDecodeError):
         return {}
 
 
 def save_production_cookies(cookies: dict[str, str]) -> None:
     """Save production cookies to cache file."""
     PRODUCTION_COOKIES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(PRODUCTION_COOKIES_FILE, 'w') as f:
+    with open(PRODUCTION_COOKIES_FILE, "w") as f:
         json.dump(cookies, f, indent=2)

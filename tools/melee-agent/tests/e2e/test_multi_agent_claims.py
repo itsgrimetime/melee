@@ -134,7 +134,7 @@ class TestLockExpiry:
                      locked_by_agent, locked_at, lock_expires_at, updated_at)
                 VALUES (?, '', '', ?, ?, ?, ?)
                 """,
-                ("lb", "agent-1", now - 3600, now - 1800, now)  # Expired 30 min ago
+                ("lb", "agent-1", now - 3600, now - 1800, now),  # Expired 30 min ago
             )
 
         # New agent should be able to lock
@@ -154,7 +154,7 @@ class TestLockExpiry:
                      locked_by_agent, locked_at, lock_expires_at, updated_at)
                 VALUES (?, '', '', ?, ?, ?, ?)
                 """,
-                ("lb", "agent-1", now - 3600, now - 1800, now)
+                ("lb", "agent-1", now - 3600, now - 1800, now),
             )
 
         lock_info = temp_db.get_subdirectory_lock("lb")
@@ -186,12 +186,7 @@ class TestAgentHandoff:
 
     def test_handoff_preserves_progress(self, temp_db):
         """Handoff preserves match progress."""
-        temp_db.upsert_function(
-            "TestFunc",
-            status="in_progress",
-            match_percent=75.0,
-            local_scratch_slug="scratch-1"
-        )
+        temp_db.upsert_function("TestFunc", status="in_progress", match_percent=75.0, local_scratch_slug="scratch-1")
         temp_db.add_claim("TestFunc", "agent-1")
 
         # Agent 1 releases

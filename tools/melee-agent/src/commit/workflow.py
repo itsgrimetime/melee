@@ -8,11 +8,11 @@ import asyncio
 from pathlib import Path
 from typing import Optional
 
-from .update import update_source_file
-from .configure import update_configure_py, get_file_path_from_function, should_mark_as_matching
+from .configure import get_file_path_from_function, should_mark_as_matching, update_configure_py
+from .diagnostics import analyze_commit_error
 from .format import format_files, verify_clang_format_available
 from .pr import create_pr, switch_to_branch
-from .diagnostics import analyze_commit_error
+from .update import update_source_file
 
 
 class CommitWorkflow:
@@ -36,7 +36,7 @@ class CommitWorkflow:
         scratch_url: str,
         create_pull_request: bool = True,
         extract_function_only: bool = False,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Execute the complete workflow to commit a matched function.
 
         This performs all necessary steps:
@@ -60,15 +60,14 @@ class CommitWorkflow:
         Returns:
             PR URL if successful and create_pull_request is True, None otherwise
         """
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"Starting commit workflow for function: {function_name}")
-        print(f"{'='*60}\n")
+        print(f"{'=' * 60}\n")
 
         # Step 1: Update source file
         print("[1/6] Updating source file...")
         if not await update_source_file(
-            file_path, function_name, new_code, self.melee_root,
-            extract_function_only=extract_function_only
+            file_path, function_name, new_code, self.melee_root, extract_function_only=extract_function_only
         ):
             print("❌ Failed to update source file")
             return None
@@ -79,7 +78,7 @@ class CommitWorkflow:
         print("[2/6] Verifying file compiles...")
         compiles, error_msg, full_output = await self._verify_file_compiles(file_path)
         if not compiles:
-            print(f"❌ File does not compile after update:")
+            print("❌ File does not compile after update:")
             # Show diagnostics with suggestions
             diagnostic = analyze_commit_error(
                 full_output,
@@ -115,7 +114,7 @@ class CommitWorkflow:
             print("⚠ Warning: git clang-format not available, skipping formatting")
         else:
             # Only format the C source file
-            c_files = [f for f in self.files_changed if f.endswith('.c')]
+            c_files = [f for f in self.files_changed if f.endswith(".c")]
             if c_files:
                 if not await format_files(c_files, self.melee_root):
                     print("⚠ Warning: Formatting failed, but continuing...")
@@ -131,17 +130,12 @@ class CommitWorkflow:
         # Step 6: Create PR (if requested) or commit directly
         if create_pull_request:
             print("[6/6] Creating pull request...")
-            pr_url = await create_pr(
-                function_name,
-                scratch_url,
-                self.files_changed,
-                self.melee_root
-            )
+            pr_url = await create_pr(function_name, scratch_url, self.files_changed, self.melee_root)
             if pr_url:
                 print(f"✓ Pull request created: {pr_url}\n")
-                print(f"\n{'='*60}")
-                print(f"✓ Workflow completed successfully!")
-                print(f"{'='*60}\n")
+                print(f"\n{'=' * 60}")
+                print("✓ Workflow completed successfully!")
+                print(f"{'=' * 60}\n")
                 return pr_url
             else:
                 print("❌ Failed to create pull request")
@@ -153,10 +147,10 @@ class CommitWorkflow:
                 print("✓ Git commit created\n")
             else:
                 print("⚠ Warning: Failed to create git commit, changes remain uncommitted")
-            print(f"\n{'='*60}")
-            print(f"✓ Workflow completed successfully!")
+            print(f"\n{'=' * 60}")
+            print("✓ Workflow completed successfully!")
             print(f"Files changed: {', '.join(self.files_changed)}")
-            print(f"{'='*60}\n")
+            print(f"{'=' * 60}\n")
             return None
 
     async def _verify_file_compiles(self, file_path: str) -> tuple[bool, str, str]:
@@ -170,12 +164,13 @@ class CommitWorkflow:
             error_message is empty on success, full_output is for diagnostics.
         """
         # Convert .c to .o for the object file target
-        obj_path = f"build/GALE01/src/{file_path}".replace('.c', '.o')
+        obj_path = f"build/GALE01/src/{file_path}".replace(".c", ".o")
 
         try:
             # First run configure.py to ensure build files are up to date
             proc = await asyncio.create_subprocess_exec(
-                "python", "configure.py",
+                "python",
+                "configure.py",
                 cwd=self.melee_root,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -184,7 +179,8 @@ class CommitWorkflow:
 
             # Now compile just the one object file
             proc = await asyncio.create_subprocess_exec(
-                "ninja", obj_path,
+                "ninja",
+                obj_path,
                 cwd=self.melee_root,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -198,22 +194,26 @@ class CommitWorkflow:
                 error_output = stderr.decode() if stderr else stdout.decode() if stdout else "Unknown error"
                 # Look for the actual compiler error
                 # MWCC format: "Error: ^^^^" marker followed by actual message on next line
-                lines = error_output.split('\n')
+                lines = error_output.split("\n")
                 error_lines = []
                 for i, line in enumerate(lines):
-                    if 'Error:' in line or 'error:' in line.lower():
+                    if "Error:" in line or "error:" in line.lower():
                         error_lines.append(line)
                         # Include subsequent lines until we hit another marker or empty line
                         # These contain the actual error description
                         for j in range(i + 1, min(i + 3, len(lines))):
                             next_line = lines[j].strip()
                             # Stop if we hit another error marker, file marker, or dashes
-                            if not next_line or next_line.startswith('#   Error:') or \
-                               next_line.startswith('#   File:') or next_line.startswith('---'):
+                            if (
+                                not next_line
+                                or next_line.startswith("#   Error:")
+                                or next_line.startswith("#   File:")
+                                or next_line.startswith("---")
+                            ):
                                 break
                             error_lines.append(lines[j])
                 if error_lines:
-                    return False, '\n'.join(error_lines[:10]), error_output
+                    return False, "\n".join(error_lines[:10]), error_output
                 return False, error_output[:500], error_output
 
         except FileNotFoundError:
@@ -232,7 +232,11 @@ class CommitWorkflow:
         """
         try:
             proc = await asyncio.create_subprocess_exec(
-                "git", "checkout", "HEAD", "--", file_path,
+                "git",
+                "checkout",
+                "HEAD",
+                "--",
+                file_path,
                 cwd=self.melee_root,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -247,7 +251,8 @@ class CommitWorkflow:
         """Regenerate the progress report (report.json) via ninja."""
         try:
             proc = await asyncio.create_subprocess_exec(
-                "ninja", "build/GALE01/report.json",
+                "ninja",
+                "build/GALE01/report.json",
                 cwd=self.melee_root,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -269,9 +274,7 @@ class CommitWorkflow:
             print(f"⚠ Warning: Could not regenerate report: {e}")
             return False
 
-    async def _create_git_commit(
-        self, function_name: str, scratch_url: str, match_percent: float = 100.0
-    ) -> bool:
+    async def _create_git_commit(self, function_name: str, scratch_url: str, match_percent: float = 100.0) -> bool:
         """Create a git commit for the matched function.
 
         Args:
@@ -285,7 +288,9 @@ class CommitWorkflow:
         try:
             # First, check if there are any changes to commit
             proc = await asyncio.create_subprocess_exec(
-                "git", "status", "--porcelain",
+                "git",
+                "status",
+                "--porcelain",
                 cwd=self.melee_root,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -298,7 +303,9 @@ class CommitWorkflow:
 
             # Add the changed files
             proc = await asyncio.create_subprocess_exec(
-                "git", "add", *self.files_changed,
+                "git",
+                "add",
+                *self.files_changed,
                 cwd=self.melee_root,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -318,7 +325,10 @@ class CommitWorkflow:
             commit_msg = f"Match {function_name} ({pct_str})\n\nScratch: {scratch_url}"
 
             proc = await asyncio.create_subprocess_exec(
-                "git", "commit", "-m", commit_msg,
+                "git",
+                "commit",
+                "-m",
+                commit_msg,
                 cwd=self.melee_root,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -345,7 +355,7 @@ async def auto_detect_and_commit(
     melee_root: Path,
     create_pull_request: bool = True,
     extract_function_only: bool = False,
-) -> Optional[str]:
+) -> str | None:
     """Auto-detect the file containing a function and commit it.
 
     This is a convenience function that automatically finds the file

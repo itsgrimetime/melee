@@ -9,6 +9,7 @@ from typing import Optional
 @dataclass
 class CompilerError:
     """Structured representation of a compiler error."""
+
     file_path: str = ""
     line_number: int = 0
     column: int = 0
@@ -21,8 +22,9 @@ class CompilerError:
 @dataclass
 class DiagnosticResult:
     """Complete diagnostic result for build failures."""
+
     errors: list[CompilerError] = field(default_factory=list)
-    header_mismatch: Optional[dict] = None
+    header_mismatch: dict | None = None
     undefined_symbols: list[tuple[str, str]] = field(default_factory=list)  # (symbol, suggested_header)
     linker_errors: list[str] = field(default_factory=list)
     suggestions: list[str] = field(default_factory=list)
@@ -44,7 +46,6 @@ TYPE_TO_HEADER = {
     "HSD_WObj": "<baselib/wobj.h>",
     "HSD_Pad": "<baselib/pad.h>",
     "HSD_Archive": "<baselib/archive.h>",
-
     # Melee fighter types
     "Fighter": "<melee/ft/forward.h>",
     "Fighter_GObj": "<melee/ft/forward.h>",
@@ -54,23 +55,19 @@ TYPE_TO_HEADER = {
     "FtCmd2": "<melee/ft/ftcmd.h>",
     "CommandInfo": "<melee/ft/ftcmd.h>",
     "ftCmd_Acmd": "<melee/ft/ftcmd.h>",
-
     # Melee item types
     "Item": "<melee/it/forward.h>",
     "Item_GObj": "<melee/it/forward.h>",
     "ItemData": "<melee/it/itdata.h>",
-
     # Melee lb types
     "ColorOverlay": "<melee/lb/lb_00F9.h>",
     "lb_UnkAnimStruct": "<melee/lb/lb_00F9.h>",
-
     # Common math types
     "Vec2": "<dolphin/mtx/mtxtypes.h>",
     "Vec3": "<dolphin/mtx/mtxtypes.h>",
     "Mtx": "<dolphin/mtx/mtxtypes.h>",
     "Mtx44": "<dolphin/mtx/mtxtypes.h>",
     "Quaternion": "<dolphin/mtx/mtxtypes.h>",
-
     # Primitive types
     "s8": "<platform.h>",
     "s16": "<platform.h>",
@@ -84,14 +81,12 @@ TYPE_TO_HEADER = {
     "f64": "<platform.h>",
     "BOOL": "<platform.h>",
     "bool8_t": "<platform.h>",
-
     # Dolphin types
     "GXColor": "<dolphin/gx/GXStruct.h>",
     "GXTexObj": "<dolphin/gx/GXTexture.h>",
     "OSAlarm": "<dolphin/os/OSAlarm.h>",
     "OSContext": "<dolphin/os/OSContext.h>",
     "OSThread": "<dolphin/os/OSThread.h>",
-
     # Common structs
     "CollData": "<melee/ft/ftcoll.h>",
     "HitCapsule": "<melee/ft/ftcoll.h>",
@@ -135,10 +130,7 @@ MWCC_LINE_PATTERN = re.compile(r"#\s*(\d+):\s*(.+?)(?:\s*$|\n)", re.MULTILINE)
 MWCC_ERROR_MARKER = re.compile(r"#\s*Error:\s*(\^+)", re.MULTILINE)
 
 # Pattern for clang/gcc style errors (file:line:col: error: message)
-CLANG_ERROR_PATTERN = re.compile(
-    r"([^\s:]+):(\d+):(\d+):\s*(error|warning):\s*(.+?)(?:\n|$)",
-    re.MULTILINE
-)
+CLANG_ERROR_PATTERN = re.compile(r"([^\s:]+):(\d+):(\d+):\s*(error|warning):\s*(.+?)(?:\n|$)", re.MULTILINE)
 
 
 def parse_mwcc_errors(error_output: str) -> list[CompilerError]:
@@ -163,7 +155,7 @@ def parse_mwcc_errors(error_output: str) -> list[CompilerError]:
     current_line = 0
     current_context = ""
 
-    lines = error_output.split('\n')
+    lines = error_output.split("\n")
     i = 0
     while i < len(lines):
         line = lines[i]
@@ -188,28 +180,30 @@ def parse_mwcc_errors(error_output: str) -> list[CompilerError]:
         if error_marker_match:
             # Next line should be the error message
             error_msg = ""
-            column = line.find('^') - line.find(':') if '^' in line else 0
+            column = line.find("^") - line.find(":") if "^" in line else 0
 
             # Look ahead for error message
             if i + 1 < len(lines):
                 next_line = lines[i + 1].strip()
                 # Skip lines that are just markers or comments
-                if next_line and not next_line.startswith('#   Error:') and not next_line.startswith('---'):
+                if next_line and not next_line.startswith("#   Error:") and not next_line.startswith("---"):
                     # Remove leading "# " if present
-                    if next_line.startswith('#'):
+                    if next_line.startswith("#"):
                         next_line = next_line[1:].strip()
                     error_msg = next_line
 
             if current_file and error_msg:
-                errors.append(CompilerError(
-                    file_path=current_file,
-                    line_number=current_line,
-                    column=max(0, column),
-                    error_type="error",
-                    message=error_msg,
-                    context_line=current_context,
-                    raw_output=f"{line}\n{error_msg}" if error_msg else line,
-                ))
+                errors.append(
+                    CompilerError(
+                        file_path=current_file,
+                        line_number=current_line,
+                        column=max(0, column),
+                        error_type="error",
+                        message=error_msg,
+                        context_line=current_context,
+                        raw_output=f"{line}\n{error_msg}" if error_msg else line,
+                    )
+                )
             i += 1
             continue
 
@@ -217,15 +211,17 @@ def parse_mwcc_errors(error_output: str) -> list[CompilerError]:
 
     # Also try clang/gcc style parsing as fallback
     for match in CLANG_ERROR_PATTERN.finditer(error_output):
-        errors.append(CompilerError(
-            file_path=match.group(1),
-            line_number=int(match.group(2)),
-            column=int(match.group(3)),
-            error_type=match.group(4),
-            message=match.group(5),
-            context_line="",
-            raw_output=match.group(0),
-        ))
+        errors.append(
+            CompilerError(
+                file_path=match.group(1),
+                line_number=int(match.group(2)),
+                column=int(match.group(3)),
+                error_type=match.group(4),
+                message=match.group(5),
+                context_line="",
+                raw_output=match.group(0),
+            )
+        )
 
     return errors
 
@@ -246,7 +242,7 @@ def extract_linker_errors(error_output: str) -> list[str]:
     return list(symbols)
 
 
-def find_header_for_function(function_name: str, melee_root: Path) -> Optional[str]:
+def find_header_for_function(function_name: str, melee_root: Path) -> str | None:
     """Find which header declares a given function.
 
     Args:
@@ -267,8 +263,8 @@ def find_header_for_function(function_name: str, melee_root: Path) -> Optional[s
             timeout=10,
         )
 
-        for line in result.stdout.strip().split('\n'):
-            if line.endswith('.h'):
+        for line in result.stdout.strip().split("\n"):
+            if line.endswith(".h"):
                 # Return relative path from src/
                 if "/src/" in line:
                     return line.split("/src/", 1)[1]
@@ -280,7 +276,7 @@ def find_header_for_function(function_name: str, melee_root: Path) -> Optional[s
     return None
 
 
-def get_header_line_number(header_path: Path, function_name: str) -> Optional[int]:
+def get_header_line_number(header_path: Path, function_name: str) -> int | None:
     """Get the line number where a function is declared in a header.
 
     Args:
@@ -295,10 +291,10 @@ def get_header_line_number(header_path: Path, function_name: str) -> Optional[in
 
     try:
         content = header_path.read_text()
-        lines = content.split('\n')
+        lines = content.split("\n")
 
         for i, line in enumerate(lines, 1):
-            if function_name in line and '(' in line and ';' in line:
+            if function_name in line and "(" in line and ";" in line:
                 return i
     except Exception:
         pass
@@ -343,7 +339,7 @@ def suggest_includes(error_output: str) -> list[tuple[str, str]]:
     return suggestions
 
 
-def format_diagnostic_message(error_output: str) -> Optional[str]:
+def format_diagnostic_message(error_output: str) -> str | None:
     """Format a helpful diagnostic message for compilation errors.
 
     Returns None if no suggestions available.
@@ -374,7 +370,7 @@ def format_diagnostic_message(error_output: str) -> Optional[str]:
         lines.append("\n[bold cyan]Signature conflicts:[/bold cyan]")
         for func in conflicts:
             lines.append(f"  [yellow]Check:[/yellow] {func}() signature in header vs scratch")
-            lines.append(f"       [dim]May need to update header declaration[/dim]")
+            lines.append("       [dim]May need to update header declaration[/dim]")
 
     return "\n".join(lines)
 
@@ -382,9 +378,9 @@ def format_diagnostic_message(error_output: str) -> Optional[str]:
 def analyze_commit_error(
     error_output: str,
     file_path: str,
-    melee_root: Optional[Path] = None,
-    function_name: Optional[str] = None,
-    source_code: Optional[str] = None,
+    melee_root: Path | None = None,
+    function_name: str | None = None,
+    source_code: str | None = None,
 ) -> str:
     """Provide comprehensive analysis of a commit compilation error.
 
@@ -429,15 +425,19 @@ def analyze_commit_error(
             lines.append(f"\n  [dim]... and {len(parsed_errors) - 5} more errors[/dim]")
     else:
         # Fallback to raw extraction if structured parsing fails
-        output_lines = error_output.split('\n')
+        output_lines = error_output.split("\n")
         error_lines = []
         for i, line in enumerate(output_lines):
-            if 'error:' in line.lower() or 'Error:' in line:
+            if "error:" in line.lower() or "Error:" in line:
                 error_lines.append(line)
                 for j in range(i + 1, min(i + 3, len(output_lines))):
                     next_line = output_lines[j]
-                    if not next_line.strip() or '#   Error:' in next_line or \
-                       '#   File:' in next_line or next_line.startswith('---'):
+                    if (
+                        not next_line.strip()
+                        or "#   Error:" in next_line
+                        or "#   File:" in next_line
+                        or next_line.startswith("---")
+                    ):
                         break
                     error_lines.append(next_line)
 
@@ -459,7 +459,7 @@ def analyze_commit_error(
                 if header:
                     lines.append(f"    [dim]Declared in: {header}[/dim]")
                 else:
-                    lines.append(f"    [dim]No declaration found - may need to add to header[/dim]")
+                    lines.append("    [dim]No declaration found - may need to add to header[/dim]")
 
         if len(linker_symbols) > 10:
             lines.append(f"  [dim]... and {len(linker_symbols) - 10} more[/dim]")
@@ -532,7 +532,8 @@ def analyze_commit_error(
 # Header Signature Sync Detection
 # =============================================================================
 
-def extract_function_signature(code: str, function_name: str) -> Optional[str]:
+
+def extract_function_signature(code: str, function_name: str) -> str | None:
     """Extract the function signature from source code.
 
     Args:
@@ -544,10 +545,7 @@ def extract_function_signature(code: str, function_name: str) -> Optional[str]:
     """
     # Pattern to match function definition (not just declaration)
     # Handles: return_type [modifiers] func_name(params)
-    pattern = re.compile(
-        rf'^([^\n{{;]*?)\s*\b{re.escape(function_name)}\s*\(([^)]*)\)\s*\{{',
-        re.MULTILINE
-    )
+    pattern = re.compile(rf"^([^\n{{;]*?)\s*\b{re.escape(function_name)}\s*\(([^)]*)\)\s*\{{", re.MULTILINE)
 
     match = pattern.search(code)
     if not match:
@@ -557,12 +555,12 @@ def extract_function_signature(code: str, function_name: str) -> Optional[str]:
     params = match.group(2).strip()
 
     # Clean up return type (remove 'static', 'inline', etc. for comparison)
-    return_type = re.sub(r'\b(static|inline)\s+', '', return_type).strip()
+    return_type = re.sub(r"\b(static|inline)\s+", "", return_type).strip()
 
     return f"{return_type} {function_name}({params})"
 
 
-def extract_header_declaration(header_path: Path, function_name: str) -> Optional[str]:
+def extract_header_declaration(header_path: Path, function_name: str) -> str | None:
     """Extract function declaration from a header file.
 
     Args:
@@ -580,8 +578,7 @@ def extract_header_declaration(header_path: Path, function_name: str) -> Optiona
     # Pattern for function declaration in header
     # Handles: /* addr */ return_type func_name(params);
     pattern = re.compile(
-        rf'(?:/\*[^*]*\*/\s*)?([^\n;{{]*?)\s*\b{re.escape(function_name)}\s*\(([^)]*)\)\s*;',
-        re.MULTILINE
+        rf"(?:/\*[^*]*\*/\s*)?([^\n;{{]*?)\s*\b{re.escape(function_name)}\s*\(([^)]*)\)\s*;", re.MULTILINE
     )
 
     match = pattern.search(content)
@@ -592,7 +589,7 @@ def extract_header_declaration(header_path: Path, function_name: str) -> Optiona
     params = match.group(2).strip()
 
     # Clean up return type
-    return_type = re.sub(r'\b(extern)\s+', '', return_type).strip()
+    return_type = re.sub(r"\b(extern)\s+", "", return_type).strip()
 
     return f"{return_type} {function_name}({params})"
 
@@ -602,12 +599,12 @@ def normalize_signature(sig: str) -> str:
     if not sig:
         return ""
     # Remove comments
-    sig = re.sub(r'/\*[^*]*\*/', '', sig)
+    sig = re.sub(r"/\*[^*]*\*/", "", sig)
     # Normalize whitespace
-    sig = ' '.join(sig.split())
+    sig = " ".join(sig.split())
     # Remove parameter names (keep just types)
     # This is a simplified version - handles common cases
-    sig = re.sub(r'(\w+)\s+\w+\s*([,)])', r'\1\2', sig)
+    sig = re.sub(r"(\w+)\s+\w+\s*([,)])", r"\1\2", sig)
     return sig
 
 
@@ -644,28 +641,23 @@ def compare_signatures(scratch_sig: str, header_sig: str) -> dict:
         result["issues"].append("Header uses UNK_RET/UNK_PARAMS placeholder - needs update")
 
     # Different return types
-    scratch_ret = scratch_sig.split('(')[0].rsplit(None, 1)[0] if '(' in scratch_sig else ""
-    header_ret = header_sig.split('(')[0].rsplit(None, 1)[0] if '(' in header_sig else ""
+    scratch_ret = scratch_sig.split("(")[0].rsplit(None, 1)[0] if "(" in scratch_sig else ""
+    header_ret = header_sig.split("(")[0].rsplit(None, 1)[0] if "(" in header_sig else ""
     if scratch_ret != header_ret:
         result["issues"].append(f"Return type: scratch='{scratch_ret}' vs header='{header_ret}'")
 
     # Different parameter count
-    scratch_params = scratch_sig.split('(')[1].rstrip(')') if '(' in scratch_sig else ""
-    header_params = header_sig.split('(')[1].rstrip(')') if '(' in header_sig else ""
-    scratch_count = len([p for p in scratch_params.split(',') if p.strip()]) if scratch_params else 0
-    header_count = len([p for p in header_params.split(',') if p.strip()]) if header_params else 0
+    scratch_params = scratch_sig.split("(")[1].rstrip(")") if "(" in scratch_sig else ""
+    header_params = header_sig.split("(")[1].rstrip(")") if "(" in header_sig else ""
+    scratch_count = len([p for p in scratch_params.split(",") if p.strip()]) if scratch_params else 0
+    header_count = len([p for p in header_params.split(",") if p.strip()]) if header_params else 0
     if scratch_count != header_count:
         result["issues"].append(f"Parameter count: scratch={scratch_count} vs header={header_count}")
 
     return result
 
 
-def check_header_sync(
-    source_code: str,
-    function_name: str,
-    melee_root: Path,
-    file_path: str
-) -> Optional[dict]:
+def check_header_sync(source_code: str, function_name: str, melee_root: Path, file_path: str) -> dict | None:
     """Check if function signature in scratch matches header declaration.
 
     Args:
@@ -681,10 +673,10 @@ def check_header_sync(
     scratch_sig = extract_function_signature(source_code, function_name)
 
     # Find corresponding header file
-    header_path = melee_root / "src" / file_path.replace('.c', '.h')
+    header_path = melee_root / "src" / file_path.replace(".c", ".h")
     if not header_path.exists():
         # Try include directory
-        header_path = melee_root / "include" / file_path.replace('.c', '.h')
+        header_path = melee_root / "include" / file_path.replace(".c", ".h")
 
     if not header_path.exists():
         return None
@@ -700,7 +692,7 @@ def check_header_sync(
     return result
 
 
-def format_signature_mismatch(comparison: dict, function_name: Optional[str] = None) -> str:
+def format_signature_mismatch(comparison: dict, function_name: str | None = None) -> str:
     """Format a signature mismatch as a helpful message.
 
     Args:
@@ -720,7 +712,7 @@ def format_signature_mismatch(comparison: dict, function_name: Optional[str] = N
             lines.append(f"    - {issue}")
 
     # Show header location with line number if possible
-    header_path = comparison.get('header_path')
+    header_path = comparison.get("header_path")
     if header_path:
         line_num = None
         if function_name:
@@ -739,6 +731,7 @@ def format_signature_mismatch(comparison: dict, function_name: Optional[str] = N
 # =============================================================================
 # Caller Detection and Fixing
 # =============================================================================
+
 
 def find_callers(function_name: str, melee_root: Path) -> list[dict]:
     """Find all call sites for a function in the codebase.
@@ -768,34 +761,36 @@ def find_callers(function_name: str, melee_root: Path) -> list[dict]:
             timeout=30,
         )
 
-        for line in result.stdout.strip().split('\n'):
+        for line in result.stdout.strip().split("\n"):
             if not line:
                 continue
 
             # Parse grep output: file:line:content
-            parts = line.split(':', 2)
+            parts = line.split(":", 2)
             if len(parts) < 3:
                 continue
 
             file_path, line_num, content = parts[0], parts[1], parts[2]
 
             # Skip the function definition itself
-            if re.search(rf'^\s*(static\s+)?[\w\s\*]+\s+{re.escape(function_name)}\s*\([^)]*\)\s*\{{?\s*$', content):
+            if re.search(rf"^\s*(static\s+)?[\w\s\*]+\s+{re.escape(function_name)}\s*\([^)]*\)\s*\{{?\s*$", content):
                 continue
 
             # Skip header declarations
-            if file_path.endswith('.h'):
+            if file_path.endswith(".h"):
                 continue
 
             # Skip comments
-            if content.strip().startswith('//') or content.strip().startswith('/*'):
+            if content.strip().startswith("//") or content.strip().startswith("/*"):
                 continue
 
-            callers.append({
-                "file": file_path,
-                "line": int(line_num),
-                "content": content.strip(),
-            })
+            callers.append(
+                {
+                    "file": file_path,
+                    "line": int(line_num),
+                    "content": content.strip(),
+                }
+            )
 
     except (subprocess.TimeoutExpired, subprocess.SubprocessError):
         pass
@@ -804,10 +799,7 @@ def find_callers(function_name: str, melee_root: Path) -> list[dict]:
 
 
 def check_callers_need_update(
-    function_name: str,
-    old_param_count: int,
-    new_param_count: int,
-    melee_root: Path
+    function_name: str, old_param_count: int, new_param_count: int, melee_root: Path
 ) -> list[dict]:
     """Check if callers need to be updated due to signature change.
 
@@ -832,14 +824,14 @@ def check_callers_need_update(
 
         # Try to count arguments in the call
         # This is a simplified check - looks for function_name(...) and counts commas
-        match = re.search(rf'{re.escape(function_name)}\s*\(([^)]*)\)', content)
+        match = re.search(rf"{re.escape(function_name)}\s*\(([^)]*)\)", content)
         if match:
             args_str = match.group(1).strip()
             if args_str == "":
                 arg_count = 0
             else:
                 # Count arguments (simplified - doesn't handle nested parens perfectly)
-                arg_count = args_str.count(',') + 1
+                arg_count = args_str.count(",") + 1
 
             if arg_count < new_param_count:
                 caller["current_args"] = arg_count
@@ -876,7 +868,7 @@ def format_caller_updates_needed(callers: list[dict], function_name: str) -> str
     return "\n".join(lines)
 
 
-def get_header_fix_suggestion(comparison: dict) -> Optional[str]:
+def get_header_fix_suggestion(comparison: dict) -> str | None:
     """Generate exact fix for header file.
 
     Args:

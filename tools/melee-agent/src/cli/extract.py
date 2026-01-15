@@ -10,23 +10,27 @@ import typer
 from rich.table import Table
 
 from ._common import (
-    console,
-    DEFAULT_MELEE_ROOT,
-    get_context_file,
-    resolve_melee_root,
-    detect_local_api_url,
     AGENT_ID,
+    DEFAULT_MELEE_ROOT,
+    console,
     db_upsert_function,
     db_upsert_scratch,
+    detect_local_api_url,
     get_compiler_for_source,
+    get_context_file,
+    resolve_melee_root,
 )
 
 # Try to import tree-sitter based functions for better accuracy
 try:
     from src.hooks.c_analyzer import (
-        strip_function_bodies as _ts_strip_function_bodies,
-        strip_target_function as _ts_strip_target_function,
         TREE_SITTER_AVAILABLE,
+    )
+    from src.hooks.c_analyzer import (
+        strip_function_bodies as _ts_strip_function_bodies,
+    )
+    from src.hooks.c_analyzer import (
+        strip_target_function as _ts_strip_target_function,
     )
 except ImportError:
     TREE_SITTER_AVAILABLE = False
@@ -56,7 +60,7 @@ def _count_braces(line: str) -> tuple[int, int]:
         Tuple of (open_count, close_count)
     """
     # Remove // comments
-    comment_pos = line.find('//')
+    comment_pos = line.find("//")
     if comment_pos != -1:
         line = line[:comment_pos]
 
@@ -68,21 +72,21 @@ def _count_braces(line: str) -> tuple[int, int]:
     while i < len(line):
         c = line[i]
         if in_string:
-            if c == '\\' and i + 1 < len(line):
+            if c == "\\" and i + 1 < len(line):
                 i += 2  # Skip escaped character
                 continue
             if c == string_char:
                 in_string = False
         else:
-            if c in '"\'':
+            if c in "\"'":
                 in_string = True
                 string_char = c
             else:
                 result.append(c)
         i += 1
 
-    cleaned = ''.join(result)
-    return cleaned.count('{'), cleaned.count('}')
+    cleaned = "".join(result)
+    return cleaned.count("{"), cleaned.count("}")
 
 
 def _strip_inline_functions(context: str) -> tuple[str, int]:
@@ -96,7 +100,7 @@ def _strip_inline_functions(context: str) -> tuple[str, int]:
     """
     import re
 
-    lines = context.split('\n')
+    lines = context.split("\n")
     filtered = []
     in_inline = False
     depth = 0
@@ -104,7 +108,7 @@ def _strip_inline_functions(context: str) -> tuple[str, int]:
     signature_lines = []
 
     # Pattern to detect inline function definitions (not declarations ending with ;)
-    inline_pattern = re.compile(r'^(?:static\s+)?inline\s+')
+    inline_pattern = re.compile(r"^(?:static\s+)?inline\s+")
 
     for line in lines:
         stripped = line.strip()
@@ -113,7 +117,7 @@ def _strip_inline_functions(context: str) -> tuple[str, int]:
             # Check if this line starts an inline function definition
             if inline_pattern.match(stripped):
                 # Skip if it's just a declaration (ends with ;)
-                if stripped.endswith(';'):
+                if stripped.endswith(";"):
                     filtered.append(line)
                     continue
 
@@ -127,12 +131,12 @@ def _strip_inline_functions(context: str) -> tuple[str, int]:
                 # If opening brace is on this line, we have the full signature
                 if open_braces > 0:
                     # Extract signature up to the brace
-                    sig = stripped[:stripped.find('{')].rstrip()
+                    sig = stripped[: stripped.find("{")].rstrip()
                     # Remove 'inline' and 'static' keywords - static declarations without
                     # bodies cause MWCC to expect '{', and inline is invalid in C89 without body
-                    sig = re.sub(r'\bstatic\s+', '', sig)
-                    sig = re.sub(r'\binline\s+', '', sig)
-                    filtered.append(sig + ';  // body stripped')
+                    sig = re.sub(r"\bstatic\s+", "", sig)
+                    sig = re.sub(r"\binline\s+", "", sig)
+                    filtered.append(sig + ";  // body stripped")
                     signature_lines = []
 
                     if depth <= 0:
@@ -142,18 +146,18 @@ def _strip_inline_functions(context: str) -> tuple[str, int]:
         if in_inline:
             # Still collecting signature or skipping body
             open_braces, close_braces = _count_braces(line)
-            if depth == 0 and '{' not in ''.join(signature_lines):
+            if depth == 0 and "{" not in "".join(signature_lines):
                 # Still in multi-line signature
                 signature_lines.append(stripped)
                 if open_braces > 0:
                     # Found the opening brace - emit declaration
-                    full_sig = ' '.join(signature_lines)
-                    sig = full_sig[:full_sig.find('{')].rstrip()
+                    full_sig = " ".join(signature_lines)
+                    sig = full_sig[: full_sig.find("{")].rstrip()
                     # Remove 'inline' and 'static' keywords - static declarations without
                     # bodies cause MWCC to expect '{', and inline is invalid in C89 without body
-                    sig = re.sub(r'\bstatic\s+', '', sig)
-                    sig = re.sub(r'\binline\s+', '', sig)
-                    filtered.append(sig + ';  // body stripped')
+                    sig = re.sub(r"\bstatic\s+", "", sig)
+                    sig = re.sub(r"\binline\s+", "", sig)
+                    filtered.append(sig + ";  // body stripped")
                     signature_lines = []
                     depth = open_braces - close_braces
                     if depth <= 0:
@@ -167,7 +171,7 @@ def _strip_inline_functions(context: str) -> tuple[str, int]:
 
         filtered.append(line)
 
-    return '\n'.join(filtered), stripped_count
+    return "\n".join(filtered), stripped_count
 
 
 def _strip_all_function_bodies(context: str, keep_functions: set[str] | None = None) -> tuple[str, int]:
@@ -207,7 +211,7 @@ def _strip_all_function_bodies_regex(context: str, keep_functions: set[str] | No
     if keep_functions is None:
         keep_functions = set()
 
-    lines = context.split('\n')
+    lines = context.split("\n")
     filtered = []
     in_func = False
     in_signature = False
@@ -223,12 +227,12 @@ def _strip_all_function_bodies_regex(context: str, keep_functions: set[str] | No
     # - Does NOT end with ; (that would be a declaration)
     # Matches: "void func(", "static int foo(", "struct X* bar(", etc.
     func_def_pattern = re.compile(
-        r'^(?:static\s+)?(?:inline\s+)?'  # optional static/inline
-        r'(?:(?:const\s+)?'  # optional const
-        r'(?:struct\s+\w+\s*\*?|union\s+\w+\s*\*?|enum\s+\w+|'  # struct/union/enum types
-        r'unsigned\s+\w+|signed\s+\w+|'  # unsigned/signed types
-        r'\w+)\s*\**\s+)'  # other types with optional pointer
-        r'(\w+)\s*\('  # function name and opening paren
+        r"^(?:static\s+)?(?:inline\s+)?"  # optional static/inline
+        r"(?:(?:const\s+)?"  # optional const
+        r"(?:struct\s+\w+\s*\*?|union\s+\w+\s*\*?|enum\s+\w+|"  # struct/union/enum types
+        r"unsigned\s+\w+|signed\s+\w+|"  # unsigned/signed types
+        r"\w+)\s*\**\s+)"  # other types with optional pointer
+        r"(\w+)\s*\("  # function name and opening paren
     )
 
     for line in lines:
@@ -237,7 +241,7 @@ def _strip_all_function_bodies_regex(context: str, keep_functions: set[str] | No
         if not in_func and not in_signature:
             # Check if this is a function definition
             match = func_def_pattern.match(stripped)
-            if match and not stripped.endswith(';'):
+            if match and not stripped.endswith(";"):
                 func_name = match.group(1)
 
                 # Skip if this function should be kept
@@ -247,7 +251,7 @@ def _strip_all_function_bodies_regex(context: str, keep_functions: set[str] | No
 
                 # Skip if line looks like a declaration or forward ref
                 # (ends with ); after possible multi-line)
-                if stripped.endswith(');'):
+                if stripped.endswith(");"):
                     filtered.append(line)
                     continue
 
@@ -260,12 +264,12 @@ def _strip_all_function_bodies_regex(context: str, keep_functions: set[str] | No
                 open_braces, close_braces = _count_braces(line)
                 if open_braces > 0:
                     # Found the opening brace - emit declaration and enter body
-                    sig = stripped[:stripped.find('{')].rstrip()
+                    sig = stripped[: stripped.find("{")].rstrip()
                     # Remove 'inline' and 'static' keywords - static declarations without
                     # bodies cause MWCC to expect '{', and inline is invalid in C89 without body
-                    sig = re.sub(r'\bstatic\s+', '', sig)
-                    sig = re.sub(r'\binline\s+', '', sig)
-                    filtered.append(sig + ';  /* body stripped: auto-inline prevention */')
+                    sig = re.sub(r"\bstatic\s+", "", sig)
+                    sig = re.sub(r"\binline\s+", "", sig)
+                    filtered.append(sig + ";  /* body stripped: auto-inline prevention */")
                     in_signature = False
                     in_func = True
                     depth = open_braces - close_braces
@@ -281,17 +285,17 @@ def _strip_all_function_bodies_regex(context: str, keep_functions: set[str] | No
             open_braces, close_braces = _count_braces(line)
             if open_braces > 0:
                 # Found the opening brace - emit declaration
-                full_sig = ' '.join(signature_lines)
-                sig_end = full_sig.find('{')
+                full_sig = " ".join(signature_lines)
+                sig_end = full_sig.find("{")
                 if sig_end > 0:
                     sig = full_sig[:sig_end].rstrip()
                 else:
                     sig = full_sig.rstrip()
                 # Remove 'inline' and 'static' keywords - static declarations without
                 # bodies cause MWCC to expect '{', and inline is invalid in C89 without body
-                sig = re.sub(r'\bstatic\s+', '', sig)
-                sig = re.sub(r'\binline\s+', '', sig)
-                filtered.append(sig + ';  /* body stripped: auto-inline prevention */')
+                sig = re.sub(r"\bstatic\s+", "", sig)
+                sig = re.sub(r"\binline\s+", "", sig)
+                filtered.append(sig + ";  /* body stripped: auto-inline prevention */")
                 in_signature = False
                 in_func = True
                 depth = open_braces - close_braces
@@ -312,7 +316,7 @@ def _strip_all_function_bodies_regex(context: str, keep_functions: set[str] | No
 
         filtered.append(line)
 
-    return '\n'.join(filtered), stripped_count
+    return "\n".join(filtered), stripped_count
 
 
 def _strip_target_function(context: str, func_name: str) -> str:
@@ -340,21 +344,21 @@ def _strip_target_function(context: str, func_name: str) -> str:
     if TREE_SITTER_AVAILABLE and _ts_strip_target_function is not None:
         return _ts_strip_target_function(context, func_name)
 
-    lines = context.split('\n')
+    lines = context.split("\n")
     filtered = []
     in_func = False
     in_signature = False  # True when we've seen the function name but not yet the opening {
     depth = 0
 
     for line in lines:
-        if not in_func and not in_signature and func_name in line and '(' in line:
+        if not in_func and not in_signature and func_name in line and "(" in line:
             s = line.strip()
             # Skip comments, control flow
-            if s.startswith('//') or s.startswith('if') or s.startswith('while'):
+            if s.startswith("//") or s.startswith("if") or s.startswith("while"):
                 filtered.append(line)
                 continue
             # Keep declarations (prototypes) - they end with );
-            if s.endswith(';'):
+            if s.endswith(";"):
                 filtered.append(line)
                 continue
             # Check if this is a function CALL vs DEFINITION
@@ -370,11 +374,11 @@ def _strip_target_function(context: str, func_name: str) -> str:
                     continue
                 # If it's inside a block, after operator, or in a call, it's not a definition
                 # { = inside function body, ( = inside call/condition, etc.
-                if before_func.endswith(('=', ',', '(', '{', '!', '&', '|', '?', ':', ';')):
+                if before_func.endswith(("=", ",", "(", "{", "!", "&", "|", "?", ":", ";")):
                     filtered.append(line)
                     continue
                 # If it ends with a keyword/operator, it's likely a call context
-                if before_func.endswith(('return', 'case')):
+                if before_func.endswith(("return", "case")):
                     filtered.append(line)
                     continue
             elif func_pos == 0:
@@ -382,7 +386,7 @@ def _strip_target_function(context: str, func_name: str) -> str:
                 filtered.append(line)
                 continue
             # This is a function definition (has return type before name)
-            filtered.append(f'// {func_name} definition stripped')
+            filtered.append(f"// {func_name} definition stripped")
             open_b, close_b = _count_braces(line)
             if open_b > 0:
                 # Opening brace on same line - we're in the body
@@ -414,7 +418,7 @@ def _strip_target_function(context: str, func_name: str) -> str:
             continue
         filtered.append(line)
 
-    return '\n'.join(filtered)
+    return "\n".join(filtered)
 
 
 extract_app = typer.Typer(help="Extract and list unmatched functions")
@@ -439,7 +443,7 @@ def _compute_recommendation_score(func) -> float:
     elif func.size_bytes <= 300:
         score += 10  # Good medium
     elif func.size_bytes <= 500:
-        score += 0   # Acceptable
+        score += 0  # Acceptable
     elif func.size_bytes <= 800:
         score -= 10  # Getting complex
     else:
@@ -451,7 +455,7 @@ def _compute_recommendation_score(func) -> float:
     elif func.current_match < 0.30:
         score += 10  # Good candidate
     elif func.current_match < 0.50:
-        score += 5   # Some work done
+        score += 5  # Some work done
     elif func.current_match >= 0.95:
         score -= 40  # Already nearly done, likely stuck
 
@@ -462,7 +466,7 @@ def _compute_recommendation_score(func) -> float:
     elif "/gr/" in path:
         score += 10  # Ground - good patterns
     elif "/it/" in path:
-        score += 5   # Item - reasonable
+        score += 5  # Item - reasonable
     elif "/mn/" in path or "/db/" in path:
         score -= 10  # Menu/Debug - less common
 
@@ -472,46 +476,34 @@ def _compute_recommendation_score(func) -> float:
 @extract_app.command("list")
 def extract_list(
     melee_root: Annotated[
-        Optional[Path], typer.Option("--melee-root", "-m", help="Path to melee submodule (auto-detects agent worktree)")
+        Path | None, typer.Option("--melee-root", "-m", help="Path to melee submodule (auto-detects agent worktree)")
     ] = None,
-    min_match: Annotated[
-        float, typer.Option("--min-match", help="Minimum match percentage")
-    ] = 0.0,
-    max_match: Annotated[
-        float, typer.Option("--max-match", help="Maximum match percentage")
-    ] = 0.99,
-    min_size: Annotated[
-        int, typer.Option("--min-size", help="Minimum function size in bytes")
-    ] = 0,
-    max_size: Annotated[
-        int, typer.Option("--max-size", help="Maximum function size in bytes")
-    ] = 10000,
-    limit: Annotated[
-        int, typer.Option("--limit", "-n", help="Maximum number of results")
-    ] = 20,
+    min_match: Annotated[float, typer.Option("--min-match", help="Minimum match percentage")] = 0.0,
+    max_match: Annotated[float, typer.Option("--max-match", help="Maximum match percentage")] = 0.99,
+    min_size: Annotated[int, typer.Option("--min-size", help="Minimum function size in bytes")] = 0,
+    max_size: Annotated[int, typer.Option("--max-size", help="Maximum function size in bytes")] = 10000,
+    limit: Annotated[int, typer.Option("--limit", "-n", help="Maximum number of results")] = 20,
     include_completed: Annotated[
         bool, typer.Option("--include-completed", help="Include already-completed functions")
     ] = False,
     matching_only: Annotated[
-        bool, typer.Option("--matching-only", "--committable", help="Only show functions in Matching files (can be committed)")
+        bool,
+        typer.Option(
+            "--matching-only", "--committable", help="Only show functions in Matching files (can be committed)"
+        ),
     ] = False,
     show_status: Annotated[
         bool, typer.Option("--show-status", help="Show object status column (Matching/NonMatching)")
     ] = False,
-    module: Annotated[
-        Optional[str], typer.Option("--module", help="Filter by module path (e.g., ft, lb, gr, it)")
-    ] = None,
-    sort_by: Annotated[
-        str, typer.Option("--sort", help="Sort by: score (recommended), size, match")
-    ] = "score",
-    show_score: Annotated[
-        bool, typer.Option("--show-score", help="Show recommendation score column")
-    ] = False,
+    module: Annotated[str | None, typer.Option("--module", help="Filter by module path (e.g., ft, lb, gr, it)")] = None,
+    sort_by: Annotated[str, typer.Option("--sort", help="Sort by: score (recommended), size, match")] = "score",
+    show_score: Annotated[bool, typer.Option("--show-score", help="Show recommendation score column")] = False,
     exclude_subdir: Annotated[
-        Optional[list[str]], typer.Option("--exclude-subdir", help="Exclude functions in these subdirectories (can be repeated)")
+        list[str] | None,
+        typer.Option("--exclude-subdir", help="Exclude functions in these subdirectories (can be repeated)"),
     ] = None,
     file_filter: Annotated[
-        Optional[str], typer.Option("--file", "-f", help="Filter by filename (partial match, e.g., 'lbfile.c' or 'lb/')")
+        str | None, typer.Option("--file", "-f", help="Filter by filename (partial match, e.g., 'lbfile.c' or 'lb/')")
     ] = None,
     show_excluded: Annotated[
         bool, typer.Option("--show-excluded", help="Show diagnostic info about excluded functions")
@@ -544,10 +536,14 @@ def extract_list(
     # Check if report.json exists and warn if stale
     report_parser = ReportParser(melee_root)
     if not (melee_root / "build" / "GALE01" / "report.json").exists():
-        console.print("[yellow]Warning: report.json not found. Run 'ninja build/GALE01/report.json' to generate it.[/yellow]")
+        console.print(
+            "[yellow]Warning: report.json not found. Run 'ninja build/GALE01/report.json' to generate it.[/yellow]"
+        )
     elif report_parser.is_report_stale(max_age_hours=168):  # 1 week
         age_hours = report_parser.get_report_age_seconds() / 3600
-        console.print(f"[dim]Note: report.json is {age_hours:.0f}h old. Run 'ninja build/GALE01/report.json' to refresh.[/dim]")
+        console.print(
+            f"[dim]Note: report.json is {age_hours:.0f}h old. Run 'ninja build/GALE01/report.json' to refresh.[/dim]"
+        )
 
     # Don't load ASM for listing - it's not needed and adds significant overhead
     result = asyncio.run(extract_unmatched_functions(melee_root, include_asm=False))
@@ -558,6 +554,7 @@ def extract_list(
     merged = set()
     if not include_completed:
         from src.db import get_db
+
         db = get_db()
         with db.connection() as conn:
             cursor = conn.execute("""
@@ -587,7 +584,8 @@ def extract_list(
 
     # Filter functions
     functions = [
-        f for f in result.functions
+        f
+        for f in result.functions
         if min_match <= f.current_match <= max_match
         and min_size <= f.size_bytes <= max_size
         and f.name not in merged
@@ -645,12 +643,15 @@ def extract_list(
     module_msg = f", {module}/ only" if module else ""
     subdir_msg = f", excluding {', '.join(exclude_subdir)}" if exclude_subdir else ""
     file_msg = f", file='{file_filter}'" if file_filter else ""
-    console.print(f"\n[dim]Found {len(functions)} functions (from {result.total_functions} total{excluded_msg}{matching_msg}{module_msg}{subdir_msg}{file_msg})[/dim]")
+    console.print(
+        f"\n[dim]Found {len(functions)} functions (from {result.total_functions} total{excluded_msg}{matching_msg}{module_msg}{subdir_msg}{file_msg})[/dim]"
+    )
 
     # Warn if no results but filters might be hiding functions
     if len(functions) == 0 and result.total_functions > 0:
         # Check if there are non-merged functions in the DB that might be incorrectly hiding results
         from src.db import get_db
+
         db = get_db()
         with db.connection() as conn:
             # Check for functions in range that have DB status but aren't merged
@@ -660,11 +661,14 @@ def extract_list(
             """)
             tracked_count = cursor.fetchone()[0]
             if tracked_count > 0:
-                console.print(f"[yellow]Note: {tracked_count} functions are tracked in DB (not merged). Use 'melee-agent state status' to review.[/yellow]")
+                console.print(
+                    f"[yellow]Note: {tracked_count} functions are tracked in DB (not merged). Use 'melee-agent state status' to review.[/yellow]"
+                )
 
     # Show detailed exclusion diagnostics if requested
     if show_excluded:
         from src.db import get_db
+
         db = get_db()
 
         console.print("\n[bold]Exclusion Diagnostics:[/bold]")
@@ -703,7 +707,9 @@ def extract_list(
                 continue
 
         if excluded_by_match > 0:
-            console.print(f"  Match range ({min_match*100:.0f}%-{max_match*100:.0f}%): [yellow]{excluded_by_match}[/yellow] excluded")
+            console.print(
+                f"  Match range ({min_match * 100:.0f}%-{max_match * 100:.0f}%): [yellow]{excluded_by_match}[/yellow] excluded"
+            )
         if excluded_by_size > 0:
             console.print(f"  Size range ({min_size}-{max_size}): [yellow]{excluded_by_size}[/yellow] excluded")
         if excluded_by_merged > 0:
@@ -720,14 +726,17 @@ def extract_list(
         # Show functions in DB that match the module but aren't merged
         if module:
             with db.connection() as conn:
-                cursor = conn.execute("""
+                cursor = conn.execute(
+                    """
                     SELECT function_name, match_percent, status
                     FROM functions
                     WHERE source_file_path LIKE ?
                     AND status != 'merged'
                     ORDER BY match_percent DESC
                     LIMIT 10
-                """, (f"%/{module}/%",))
+                """,
+                    (f"%/{module}/%",),
+                )
                 rows = cursor.fetchall()
                 if rows:
                     console.print(f"\n  [bold]DB-tracked functions in {module}/ (not merged):[/bold]")
@@ -773,9 +782,9 @@ def _get_db_file_stats(func_to_file: dict[str, str]) -> dict[str, dict]:
             stats[file_path]["total"] += 1
 
             # Categorize by status
-            if status in ('in_progress', 'matched'):
+            if status in ("in_progress", "matched"):
                 stats[file_path]["pending"] += 1
-            elif status in ('committed', 'committed_needs_fix', 'in_review'):
+            elif status in ("committed", "committed_needs_fix", "in_review"):
                 stats[file_path]["committed"] += 1
 
     return stats
@@ -784,23 +793,15 @@ def _get_db_file_stats(func_to_file: dict[str, str]) -> dict[str, dict]:
 @extract_app.command("files")
 def extract_files(
     melee_root: Annotated[
-        Optional[Path], typer.Option("--melee-root", "-m", help="Path to melee submodule (auto-detects agent worktree)")
+        Path | None, typer.Option("--melee-root", "-m", help="Path to melee submodule (auto-detects agent worktree)")
     ] = None,
-    module: Annotated[
-        Optional[str], typer.Option("--module", help="Filter by module path (e.g., ft, lb, gr, it)")
-    ] = None,
+    module: Annotated[str | None, typer.Option("--module", help="Filter by module path (e.g., ft, lb, gr, it)")] = None,
     status_filter: Annotated[
-        Optional[str], typer.Option("--status", "-s", help="Filter by status: Matching, NonMatching, Equivalent")
+        str | None, typer.Option("--status", "-s", help="Filter by status: Matching, NonMatching, Equivalent")
     ] = None,
-    sort_by: Annotated[
-        str, typer.Option("--sort", help="Sort by: name, match, unmatched, total, pending")
-    ] = "name",
-    limit: Annotated[
-        int, typer.Option("--limit", "-n", help="Maximum number of results (0 for all)")
-    ] = 0,
-    show_complete: Annotated[
-        bool, typer.Option("--show-complete", help="Show files that are 100% matched")
-    ] = False,
+    sort_by: Annotated[str, typer.Option("--sort", help="Sort by: name, match, unmatched, total, pending")] = "name",
+    limit: Annotated[int, typer.Option("--limit", "-n", help="Maximum number of results (0 for all)")] = 0,
+    show_complete: Annotated[bool, typer.Option("--show-complete", help="Show files that are 100% matched")] = False,
     show_db: Annotated[
         bool, typer.Option("--show-db/--no-db", help="Show state DB columns (Pending/Committed work)")
     ] = True,
@@ -839,14 +840,16 @@ def extract_files(
     db_stats = _get_db_file_stats(func_to_file) if show_db else {}
 
     # Group functions by file
-    file_stats: dict[str, dict] = defaultdict(lambda: {
-        "total": 0,
-        "matched": 0,
-        "unmatched": 0,
-        "status": "Unknown",
-        "lib": None,
-        "match_sum": 0.0,
-    })
+    file_stats: dict[str, dict] = defaultdict(
+        lambda: {
+            "total": 0,
+            "matched": 0,
+            "unmatched": 0,
+            "status": "Unknown",
+            "lib": None,
+            "match_sum": 0.0,
+        }
+    )
 
     for func in result.functions:
         stats = file_stats[func.file_path]
@@ -872,18 +875,20 @@ def extract_files(
         pending = db_file_stats.get("pending", 0)
         committed = db_file_stats.get("committed", 0)
 
-        files.append({
-            "file_path": file_path,
-            "status": stats["status"],
-            "lib": stats["lib"],
-            "total": stats["total"],
-            "matched": stats["matched"],
-            "unmatched": stats["unmatched"],
-            "avg_score": avg_score,
-            "done_pct": done_pct,
-            "pending": pending,
-            "committed": committed,
-        })
+        files.append(
+            {
+                "file_path": file_path,
+                "status": stats["status"],
+                "lib": stats["lib"],
+                "total": stats["total"],
+                "matched": stats["matched"],
+                "unmatched": stats["unmatched"],
+                "avg_score": avg_score,
+                "done_pct": done_pct,
+                "pending": pending,
+                "committed": committed,
+            }
+        )
 
     # Apply filters
     if module:
@@ -917,13 +922,13 @@ def extract_files(
     table.add_column("File", style="cyan")
     table.add_column("Status", style="yellow")
     table.add_column("Done", justify="right")  # % of functions fully matched
-    table.add_column("Avg", justify="right")   # Average match score
+    table.add_column("Avg", justify="right")  # Average match score
     table.add_column("Matched", justify="right", style="green")
     table.add_column("Unmatched", justify="right", style="red")
     table.add_column("Total", justify="right")
     if show_db:
         table.add_column("Pend", justify="right", style="magenta")  # Pending scratches
-        table.add_column("Commit", justify="right", style="blue")   # Committed in worktrees
+        table.add_column("Commit", justify="right", style="blue")  # Committed in worktrees
 
     for f in files:
         # Color done percentage based on progress
@@ -984,32 +989,35 @@ def extract_files(
         if total_pending > 0 or total_committed > 0:
             db_msg = f" | DB: {total_pending} pending, {total_committed} committed"
 
-    console.print(f"\n[dim]{total_files} files{filter_str}: {total_matched}/{total_funcs} functions matched ({overall_pct:.1f}%), {total_unmatched} remaining{db_msg}[/dim]")
+    console.print(
+        f"\n[dim]{total_files} files{filter_str}: {total_matched}/{total_funcs} functions matched ({overall_pct:.1f}%), {total_unmatched} remaining{db_msg}[/dim]"
+    )
 
 
 @extract_app.command("get")
 def extract_get(
     function_name: Annotated[str, typer.Argument(help="Name of the function to extract")],
     melee_root: Annotated[
-        Optional[Path], typer.Option("--melee-root", "-m", help="Path to melee submodule (auto-detects agent worktree)")
+        Path | None, typer.Option("--melee-root", "-m", help="Path to melee submodule (auto-detects agent worktree)")
     ] = None,
-    output: Annotated[
-        Optional[Path], typer.Option("--output", "-o", help="Output file for ASM")
-    ] = None,
-    full: Annotated[
-        bool, typer.Option("--full", "-f", help="Show full assembly (no truncation)")
-    ] = False,
-    create_scratch: Annotated[
-        bool, typer.Option("--create-scratch", "-s", help="Create a decomp.me scratch")
-    ] = False,
+    output: Annotated[Path | None, typer.Option("--output", "-o", help="Output file for ASM")] = None,
+    full: Annotated[bool, typer.Option("--full", "-f", help="Show full assembly (no truncation)")] = False,
+    create_scratch: Annotated[bool, typer.Option("--create-scratch", "-s", help="Create a decomp.me scratch")] = False,
     api_url: Annotated[
-        Optional[str], typer.Option("--api-url", help="Decomp.me API URL (auto-detected if not provided)")
+        str | None, typer.Option("--api-url", help="Decomp.me API URL (auto-detected if not provided)")
     ] = None,
     strip_inline: Annotated[
-        bool, typer.Option("--strip-inline/--no-strip-inline", help="Strip inline function bodies from context (reduces pollution)")
+        bool,
+        typer.Option(
+            "--strip-inline/--no-strip-inline", help="Strip inline function bodies from context (reduces pollution)"
+        ),
     ] = True,
     strip_all_bodies: Annotated[
-        bool, typer.Option("--strip-all-bodies/--no-strip-all-bodies", help="Strip ALL function bodies from context (prevents -inline auto issues)")
+        bool,
+        typer.Option(
+            "--strip-all-bodies/--no-strip-all-bodies",
+            help="Strip ALL function bodies from context (prevents -inline auto issues)",
+        ),
     ] = False,
     auto_decompile: Annotated[
         bool, typer.Option("--decompile", "-d", help="Run m2c decompiler for initial code when creating scratch")
@@ -1087,6 +1095,7 @@ def extract_get(
 
         # Always rebuild context to pick up header changes
         import subprocess
+
         # Build the context file - need relative path from melee_root
         try:
             ctx_relative = ctx_path.relative_to(melee_root)
@@ -1114,17 +1123,17 @@ def extract_get(
                 timeout=120,
             )
             if result.returncode != 0:
-                console.print(f"[red]Failed to build context file:[/red]")
+                console.print("[red]Failed to build context file:[/red]")
                 console.print(result.stderr or result.stdout)
                 raise typer.Exit(1)
             # Only show message if ninja actually did something
             if "no work to do" not in result.stdout.lower():
-                console.print(f"[green]Built context file[/green]")
+                console.print("[green]Built context file[/green]")
         except subprocess.TimeoutExpired:
-            console.print(f"[red]Timeout building context file[/red]")
+            console.print("[red]Timeout building context file[/red]")
             raise typer.Exit(1)
         except FileNotFoundError:
-            console.print(f"[red]ninja not found - please install it[/red]")
+            console.print("[red]ninja not found - please install it[/red]")
             raise typer.Exit(1)
 
         if not ctx_path.exists():
@@ -1157,9 +1166,10 @@ def extract_get(
 
         async def find_or_create():
             from src.client import DecompMeAPIClient, ScratchCreate, ScratchUpdate
+
             async with DecompMeAPIClient(base_url=api_url) as client:
                 # First, search for existing scratches with this function name
-                console.print(f"[dim]Searching for existing scratches...[/dim]")
+                console.print("[dim]Searching for existing scratches...[/dim]")
                 existing = await client.list_scratches(search=func.name, page_size=20)
 
                 # Filter to exact name matches and find the best one
@@ -1189,10 +1199,13 @@ def extract_get(
 
                 # If we found a good existing scratch, fork it to continue
                 if best_scratch and best_match_pct > 0:
-                    console.print(f"[green]Found existing scratch at {best_match_pct:.1f}% - forking to continue[/green]")
+                    console.print(
+                        f"[green]Found existing scratch at {best_match_pct:.1f}% - forking to continue[/green]"
+                    )
                     scratch = await client.fork_scratch(best_scratch.slug)
                     if scratch.claim_token:
                         from src.cli.scratch import _save_scratch_token
+
                         _save_scratch_token(scratch.slug, scratch.claim_token)
                         try:
                             await client.claim_scratch(scratch.slug, scratch.claim_token)
@@ -1201,13 +1214,13 @@ def extract_get(
                     # Update forked scratch with fresh context from local build
                     try:
                         await client.update_scratch(scratch.slug, ScratchUpdate(context=melee_context))
-                        console.print(f"[dim]Updated forked scratch with fresh context[/dim]")
+                        console.print("[dim]Updated forked scratch with fresh context[/dim]")
                     except Exception as e:
                         console.print(f"[yellow]Warning: Could not update context: {e}[/yellow]")
                     return scratch, best_match_pct
 
                 # No existing scratch found - create new
-                console.print(f"[dim]No existing scratches found, creating new...[/dim]")
+                console.print("[dim]No existing scratches found, creating new...[/dim]")
 
                 # If auto-decompiling, preprocess context to remove preprocessor directives
                 # that m2c can't handle. Use preprocessed for decompilation, but restore
@@ -1215,10 +1228,13 @@ def extract_get(
                 decompile_context = melee_context
                 if auto_decompile and melee_context:
                     from src.cli.scratch import _preprocess_context
+
                     preprocessed, success = _preprocess_context(melee_context)
                     if success and preprocessed != melee_context:
                         decompile_context = preprocessed
-                        console.print(f"[dim]Preprocessed context for m2c ({len(melee_context):,} → {len(preprocessed):,} bytes)[/dim]")
+                        console.print(
+                            f"[dim]Preprocessed context for m2c ({len(melee_context):,} → {len(preprocessed):,} bytes)[/dim]"
+                        )
 
                 # Build scratch params - omit source_code to trigger auto-decompilation
                 scratch_params = ScratchCreate(
@@ -1234,17 +1250,18 @@ def extract_get(
                 if not auto_decompile:
                     scratch_params.source_code = "// TODO: Decompile this function\n"
                 else:
-                    console.print(f"[dim]Running m2c decompiler for initial code...[/dim]")
+                    console.print("[dim]Running m2c decompiler for initial code...[/dim]")
 
                 scratch = await client.create_scratch(scratch_params)
 
                 # Claim ownership first (needed for subsequent updates)
                 if scratch.claim_token:
                     from src.cli.scratch import _save_scratch_token
+
                     _save_scratch_token(scratch.slug, scratch.claim_token)
                     try:
                         await client.claim_scratch(scratch.slug, scratch.claim_token)
-                        console.print(f"[dim]Claimed ownership of scratch[/dim]")
+                        console.print("[dim]Claimed ownership of scratch[/dim]")
                     except Exception as e:
                         console.print(f"[yellow]Warning: Could not claim scratch: {e}[/yellow]")
 
@@ -1257,7 +1274,7 @@ def extract_get(
                 if auto_decompile and decompile_context != melee_context:
                     try:
                         await client.update_scratch(scratch.slug, ScratchUpdate(context=melee_context))
-                        console.print(f"[dim]Restored original context for MWCC[/dim]")
+                        console.print("[dim]Restored original context for MWCC[/dim]")
                     except Exception as e:
                         console.print(f"[yellow]Warning: Could not restore context: {e}[/yellow]")
 
@@ -1272,7 +1289,7 @@ def extract_get(
         # Write to state database (non-blocking)
         db_upsert_scratch(
             scratch.slug,
-            instance='local',
+            instance="local",
             base_url=api_url,
             function_name=func.name,
             claim_token=scratch.claim_token,
@@ -1280,11 +1297,11 @@ def extract_get(
         )
         # Determine status based on match percentage
         if starting_pct >= 95:
-            status = 'matched'
+            status = "matched"
         elif starting_pct > 0:
-            status = 'in_progress'
+            status = "in_progress"
         else:
-            status = 'in_progress'
+            status = "in_progress"
         db_upsert_function(
             func.name,
             local_scratch_slug=scratch.slug,

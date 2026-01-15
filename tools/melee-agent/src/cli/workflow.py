@@ -12,8 +12,8 @@ from typing import Annotated, Optional
 import typer
 from rich.console import Console
 
-from ._common import console, DEFAULT_MELEE_ROOT, get_local_api_url, AGENT_ID, db_upsert_function
-from .complete import _load_completed, _save_completed, _get_current_branch
+from ._common import AGENT_ID, DEFAULT_MELEE_ROOT, console, db_upsert_function, get_local_api_url
+from .complete import _get_current_branch, _load_completed, _save_completed
 
 workflow_app = typer.Typer(help="High-level workflow commands (recommended)")
 
@@ -22,26 +22,18 @@ workflow_app = typer.Typer(help="High-level workflow commands (recommended)")
 def workflow_finish(
     function_name: Annotated[str, typer.Argument(help="Name of the matched function")],
     scratch_slug: Annotated[str, typer.Argument(help="Decomp.me scratch slug")],
-    melee_root: Annotated[
-        Optional[Path], typer.Option("--melee-root", "-m", help="Path to melee repo")
-    ] = None,
-    api_url: Annotated[
-        Optional[str], typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")
-    ] = None,
+    melee_root: Annotated[Path | None, typer.Option("--melee-root", "-m", help="Path to melee repo")] = None,
+    api_url: Annotated[str | None, typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")] = None,
     full_code: Annotated[
         bool, typer.Option("--full-code", help="Use full scratch code (including struct defs)")
     ] = False,
     dry_run: Annotated[
         bool, typer.Option("--dry-run", help="Test without committing (runs verification only)")
     ] = False,
-    notes: Annotated[
-        Optional[str], typer.Option("--notes", help="Additional notes to record")
-    ] = None,
-    force: Annotated[
-        bool, typer.Option("--force", help="Skip build validation (requires --diagnosis)")
-    ] = False,
+    notes: Annotated[str | None, typer.Option("--notes", help="Additional notes to record")] = None,
+    force: Annotated[bool, typer.Option("--force", help="Skip build validation (requires --diagnosis)")] = False,
     diagnosis: Annotated[
-        Optional[str], typer.Option("--diagnosis", help="Required with --force: explain why build is broken")
+        str | None, typer.Option("--diagnosis", help="Required with --force: explain why build is broken")
     ] = None,
 ):
     """Finish a matched function: commit to repo AND record as completed.
@@ -86,19 +78,20 @@ def workflow_finish(
 
     console.print(f"[dim]Using melee root: {melee_root}[/dim]")
 
+    import subprocess
+
     from src.client import DecompMeAPIClient
     from src.commit import auto_detect_and_commit
     from src.commit.configure import get_file_path_from_function
-    from src.commit.update import validate_function_code, _extract_function_from_code
     from src.commit.diagnostics import (
         analyze_commit_error,
-        check_header_sync,
-        format_signature_mismatch,
         check_callers_need_update,
+        check_header_sync,
         format_caller_updates_needed,
+        format_signature_mismatch,
         get_header_fix_suggestion,
     )
-    import subprocess
+    from src.commit.update import _extract_function_from_code, validate_function_code
 
     async def finish():
         async with DecompMeAPIClient(base_url=api_url) as client:
@@ -169,20 +162,20 @@ def workflow_finish(
             build_passed = True  # Track for later
             if force:
                 console.print("\n[bold]Step 3:[/bold] Skipping compilation (--force)...")
-                console.print(f"  [yellow]Build will be marked as broken[/yellow]")
+                console.print("  [yellow]Build will be marked as broken[/yellow]")
                 console.print(f"  [dim]Diagnosis: {diagnosis}[/dim]")
                 build_passed = False
             else:
                 console.print("\n[bold]Step 3:[/bold] Testing compilation...")
 
             full_path = melee_root / "src" / file_path
-            original_content = full_path.read_text(encoding='utf-8')
+            original_content = full_path.read_text(encoding="utf-8")
 
             try:
                 from src.commit.update import update_source_file
+
                 success = await update_source_file(
-                    file_path, function_name, source_code, melee_root,
-                    extract_function_only=False
+                    file_path, function_name, source_code, melee_root, extract_function_only=False
                 )
                 if not success:
                     console.print("  [red]Failed to apply code[/red]")
@@ -191,10 +184,8 @@ def workflow_finish(
                 if not force:
                     # Configure and compile
                     subprocess.run(["python", "configure.py"], cwd=melee_root, capture_output=True)
-                    obj_path = f"build/GALE01/src/{file_path}".replace('.c', '.o')
-                    result = subprocess.run(
-                        ["ninja", obj_path], cwd=melee_root, capture_output=True, text=True
-                    )
+                    obj_path = f"build/GALE01/src/{file_path}".replace(".c", ".o")
+                    result = subprocess.run(["ninja", obj_path], cwd=melee_root, capture_output=True, text=True)
 
                     if result.returncode != 0:
                         console.print("  [red]Compilation failed:[/red]")
@@ -215,7 +206,7 @@ def workflow_finish(
             finally:
                 # Revert for dry-run, keep for actual commit
                 if dry_run:
-                    full_path.write_text(original_content, encoding='utf-8')
+                    full_path.write_text(original_content, encoding="utf-8")
 
             if dry_run:
                 console.print("\n[bold cyan]DRY RUN COMPLETE[/bold cyan]")
@@ -230,7 +221,7 @@ def workflow_finish(
             console.print("\n[bold]Step 4:[/bold] Committing to git...")
 
             # Redo the apply properly through the workflow
-            full_path.write_text(original_content, encoding='utf-8')  # Revert first
+            full_path.write_text(original_content, encoding="utf-8")  # Revert first
             scratch_url = f"{api_url}/scratch/{scratch_slug}"
             pr_url = await auto_detect_and_commit(
                 function_name=function_name,
@@ -270,8 +261,8 @@ def workflow_finish(
         match_percent=match_pct,
         local_scratch_slug=scratch_slug,
         is_committed=True,
-        status='committed_needs_fix' if not build_passed else 'committed',
-        build_status='broken' if not build_passed else 'passing',
+        status="committed_needs_fix" if not build_passed else "committed",
+        build_status="broken" if not build_passed else "passing",
         build_diagnosis=diagnosis if not build_passed else None,
         branch=branch,
         notes=notes or "completed via workflow finish",
@@ -280,6 +271,7 @@ def workflow_finish(
 
     # Release claim
     from .claim import _release_claim
+
     _release_claim(function_name)
 
     # Summary
@@ -288,20 +280,20 @@ def workflow_finish(
         console.print(f"[bold green]Successfully finished {function_name}![/bold green]")
         console.print(f"  Match: {match_pct:.1f}%")
         console.print(f"  Branch: {branch}")
-        console.print(f"  Status: [green]Committed[/green]")
+        console.print("  Status: [green]Committed[/green]")
     else:
         console.print(f"[bold yellow]Committed {function_name} with broken build[/bold yellow]")
         console.print(f"  Match: {match_pct:.1f}%")
         console.print(f"  Branch: {branch}")
-        console.print(f"  Status: [yellow]Committed (needs fix)[/yellow]")
+        console.print("  Status: [yellow]Committed (needs fix)[/yellow]")
         console.print(f"  Diagnosis: {diagnosis}")
-        console.print(f"\n[dim]Run /decomp-fixup to resolve build issues[/dim]")
+        console.print("\n[dim]Run /decomp-fixup to resolve build issues[/dim]")
     console.print("=" * 50)
 
 
 @workflow_app.command("status")
 def workflow_status(
-    function_name: Annotated[Optional[str], typer.Argument(help="Function name (optional)")] = None,
+    function_name: Annotated[str | None, typer.Argument(help="Function name (optional)")] = None,
 ):
     """Check the workflow status of a function or show uncommitted work.
 
@@ -325,16 +317,19 @@ def workflow_status(
         console.print(f"  Notes: {info.get('notes', '-')}")
 
         if info.get("committed"):
-            console.print(f"  Status: [green]Committed[/green]")
+            console.print("  Status: [green]Committed[/green]")
         else:
-            console.print(f"  Status: [red]NOT COMMITTED[/red]")
-            console.print(f"\n[yellow]This function is recorded but NOT in the repository![/yellow]")
-            console.print(f"Run: [cyan]melee-agent workflow finish {function_name} {info.get('scratch_slug', '<slug>')}[/cyan]")
+            console.print("  Status: [red]NOT COMMITTED[/red]")
+            console.print("\n[yellow]This function is recorded but NOT in the repository![/yellow]")
+            console.print(
+                f"Run: [cyan]melee-agent workflow finish {function_name} {info.get('scratch_slug', '<slug>')}[/cyan]"
+            )
         return
 
     # Show all uncommitted work
     uncommitted = {
-        name: info for name, info in completed.items()
+        name: info
+        for name, info in completed.items()
         if not info.get("committed") and info.get("match_percent", 0) >= 95.0
     }
 
@@ -346,6 +341,7 @@ def workflow_status(
     console.print(f"\n[bold red]WARNING: {len(uncommitted)} functions matched but NOT committed![/bold red]\n")
 
     from rich.table import Table
+
     table = Table(title="Uncommitted Functions (95%+)")
     table.add_column("Function", style="cyan")
     table.add_column("Match %", justify="right")

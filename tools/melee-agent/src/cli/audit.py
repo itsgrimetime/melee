@@ -13,11 +13,11 @@ import typer
 from rich.table import Table
 
 from ._common import (
-    console,
     DEFAULT_MELEE_ROOT,
+    console,
+    db_upsert_function,
     load_completed_functions,
     save_completed_functions,
-    db_upsert_function,
 )
 
 audit_app = typer.Typer(help="Audit and recover tracked work")
@@ -27,9 +27,11 @@ audit_app = typer.Typer(help="Audit and recover tracked work")
 # Duplicate detection utilities
 # ============================================================================
 
+
 @dataclass
 class MatchCommit:
     """A commit that matches a function."""
+
     commit_hash: str
     function_name: str
     match_percent: float
@@ -42,6 +44,7 @@ class MatchCommit:
 @dataclass
 class FunctionDuplicateInfo:
     """Information about duplicates for a single function."""
+
     function_name: str
     commits: list[MatchCommit] = field(default_factory=list)
 
@@ -58,7 +61,7 @@ class FunctionDuplicateInfo:
         return any(c.is_in_upstream for c in self.commits)
 
     @property
-    def upstream_commit(self) -> Optional[MatchCommit]:
+    def upstream_commit(self) -> MatchCommit | None:
         for c in self.commits:
             if c.is_in_upstream:
                 return c
@@ -80,12 +83,50 @@ def _is_valid_function_name(name: str) -> bool:
     """
     # Common words that appear in commit messages but aren't functions
     common_words = {
-        'some', 'all', 'most', 'several', 'the', 'and', 'or', 'a', 'an',
-        'many', 'few', 'various', 'multiple', 'other', 'more', 'less',
-        'functions', 'function', 'match', 'matched', 'matching', 'matches',
-        'pass', 'ongoing', 'partially', 'modules', 'module', 'file', 'files',
-        'this', 'that', 'these', 'those', 'with', 'from', 'into', 'onto',
-        'work', 'works', 'working', 'wip', 'done', 'complete', 'completed',
+        "some",
+        "all",
+        "most",
+        "several",
+        "the",
+        "and",
+        "or",
+        "a",
+        "an",
+        "many",
+        "few",
+        "various",
+        "multiple",
+        "other",
+        "more",
+        "less",
+        "functions",
+        "function",
+        "match",
+        "matched",
+        "matching",
+        "matches",
+        "pass",
+        "ongoing",
+        "partially",
+        "modules",
+        "module",
+        "file",
+        "files",
+        "this",
+        "that",
+        "these",
+        "those",
+        "with",
+        "from",
+        "into",
+        "onto",
+        "work",
+        "works",
+        "working",
+        "wip",
+        "done",
+        "complete",
+        "completed",
     }
 
     name_lower = name.lower()
@@ -93,15 +134,15 @@ def _is_valid_function_name(name: str) -> bool:
         return False
 
     # Must have at least one of: underscore, or look like a hex address, or valid prefix
-    if '_' in name:
+    if "_" in name:
         return True
 
     # Check for hex-address-like patterns (e.g., 80012345)
-    if re.match(r'^[0-9a-fA-F]{6,8}$', name):
+    if re.match(r"^[0-9a-fA-F]{6,8}$", name):
         return True
 
     # Check for known Melee function prefixes
-    valid_prefixes = ('ft', 'fn', 'gr', 'it', 'lb', 'hsd', 'gm', 'if', 'mn', 'db', 'vi', 'pl')
+    valid_prefixes = ("ft", "fn", "gr", "it", "lb", "hsd", "gm", "if", "mn", "db", "vi", "pl")
     if name_lower.startswith(valid_prefixes):
         return True
 
@@ -122,14 +163,14 @@ def _parse_function_from_commit_message(subject: str) -> list[tuple[str, float]]
             results.append((func, pct))
 
     # Pattern: "Match func_name (100%)" or "Match func_name (95.5%)"
-    pattern1 = re.compile(r'Match\s+(\w+)\s*\((\d+(?:\.\d+)?)%\)')
+    pattern1 = re.compile(r"Match\s+(\w+)\s*\((\d+(?:\.\d+)?)%\)")
     for match in pattern1.finditer(subject):
         func = match.group(1)
         pct = float(match.group(2))
         add_if_valid(func, pct)
 
     # Pattern: "Match func1 and func2 (98.1%)" - multiple functions
-    pattern2 = re.compile(r'Match\s+(\w+)\s+and\s+(\w+)\s*\((\d+(?:\.\d+)?)%\)')
+    pattern2 = re.compile(r"Match\s+(\w+)\s+and\s+(\w+)\s*\((\d+(?:\.\d+)?)%\)")
     for match in pattern2.finditer(subject):
         pct = float(match.group(3))
         add_if_valid(match.group(1), pct)
@@ -137,7 +178,7 @@ def _parse_function_from_commit_message(subject: str) -> list[tuple[str, float]]
 
     # Pattern: "Match func_name" without percentage (assume 100%)
     if not results:
-        pattern3 = re.compile(r'^[a-f0-9]+\s+Match\s+(\w+)(?:\s|$)')
+        pattern3 = re.compile(r"^[a-f0-9]+\s+Match\s+(\w+)(?:\s|$)")
         match = pattern3.match(subject)
         if match:
             add_if_valid(match.group(1), 100.0)
@@ -156,7 +197,7 @@ def _get_upstream_commits(melee_root: Path) -> set[str]:
             timeout=30,
         )
         if result.returncode == 0:
-            return set(result.stdout.strip().split('\n'))
+            return set(result.stdout.strip().split("\n"))
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
     return set()
@@ -172,12 +213,7 @@ def _get_all_match_commits(melee_root: Path) -> dict[str, FunctionDuplicateInfo]
     # Get all Match commits from all branches
     try:
         result = subprocess.run(
-            [
-                "git", "log", "--all", "--oneline",
-                "--format=%h|%s|%D|%ci",
-                "--grep=Match",
-                "--", "src/melee/*.c"
-            ],
+            ["git", "log", "--all", "--oneline", "--format=%h|%s|%D|%ci", "--grep=Match", "--", "src/melee/*.c"],
             cwd=melee_root,
             capture_output=True,
             text=True,
@@ -207,17 +243,17 @@ def _get_all_match_commits(melee_root: Path) -> dict[str, FunctionDuplicateInfo]
             timeout=10,
         )
         if br_result.returncode == 0:
-            for line in br_result.stdout.strip().split('\n'):
+            for line in br_result.stdout.strip().split("\n"):
                 if line:
-                    parts = line.split(' ', 1)
+                    parts = line.split(" ", 1)
                     if len(parts) == 2:
                         branch_heads[parts[0]] = parts[1]
 
-        for line in result.stdout.strip().split('\n'):
-            if not line or '|' not in line:
+        for line in result.stdout.strip().split("\n"):
+            if not line or "|" not in line:
                 continue
 
-            parts = line.split('|')
+            parts = line.split("|")
             if len(parts) < 4:
                 continue
 
@@ -231,13 +267,13 @@ def _get_all_match_commits(melee_root: Path) -> dict[str, FunctionDuplicateInfo]
             branch = "unknown"
             if refs:
                 # Parse refs like "HEAD -> branch, origin/branch, tag: v1.0"
-                for ref in refs.split(','):
+                for ref in refs.split(","):
                     ref = ref.strip()
-                    if '->' in ref:
-                        ref = ref.split('->')[1].strip()
-                    if ref.startswith('origin/'):
+                    if "->" in ref:
+                        ref = ref.split("->")[1].strip()
+                    if ref.startswith("origin/"):
                         ref = ref[7:]
-                    if ref and not ref.startswith('tag:'):
+                    if ref and not ref.startswith("tag:"):
                         branch = ref
                         break
 
@@ -252,10 +288,10 @@ def _get_all_match_commits(melee_root: Path) -> dict[str, FunctionDuplicateInfo]
                     timeout=10,
                 )
                 if check_result.returncode == 0 and check_result.stdout.strip():
-                    branches = check_result.stdout.strip().split('\n')
+                    branches = check_result.stdout.strip().split("\n")
                     # Prefer agent branches
                     for b in branches:
-                        if b.startswith('agent/'):
+                        if b.startswith("agent/"):
                             branch = b
                             break
                     if branch == "unknown" and branches:
@@ -273,15 +309,17 @@ def _get_all_match_commits(melee_root: Path) -> dict[str, FunctionDuplicateInfo]
                 # Check if we already have this exact commit
                 existing_hashes = {c.commit_hash for c in functions[func_name].commits}
                 if commit_hash not in existing_hashes:
-                    functions[func_name].commits.append(MatchCommit(
-                        commit_hash=commit_hash,
-                        function_name=func_name,
-                        match_percent=match_pct,
-                        branch=branch,
-                        is_in_upstream=is_upstream,
-                        commit_date=commit_date,
-                        subject=subject,
-                    ))
+                    functions[func_name].commits.append(
+                        MatchCommit(
+                            commit_hash=commit_hash,
+                            function_name=func_name,
+                            match_percent=match_pct,
+                            branch=branch,
+                            is_in_upstream=is_upstream,
+                            commit_date=commit_date,
+                            subject=subject,
+                        )
+                    )
 
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
         console.print(f"[yellow]Warning: {e}[/yellow]")
@@ -294,18 +332,12 @@ def audit_duplicates(
     melee_root: Annotated[
         Path, typer.Option("--melee-root", "-m", help="Path to melee submodule")
     ] = DEFAULT_MELEE_ROOT,
-    show_all: Annotated[
-        bool, typer.Option("--all", "-a", help="Show all functions, not just duplicates")
-    ] = False,
+    show_all: Annotated[bool, typer.Option("--all", "-a", help="Show all functions, not just duplicates")] = False,
     show_safe: Annotated[
         bool, typer.Option("--safe", "-s", help="Show duplicates that are safe to ignore (already in upstream)")
     ] = False,
-    output_json: Annotated[
-        bool, typer.Option("--json", help="Output as JSON")
-    ] = False,
-    verbose: Annotated[
-        bool, typer.Option("--verbose", "-v", help="Show detailed commit info")
-    ] = False,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show detailed commit info")] = False,
 ):
     """Find duplicate function matches across branches and worktrees.
 
@@ -339,8 +371,8 @@ def audit_duplicates(
     # Categorize duplicates
     conflicts: list[FunctionDuplicateInfo] = []  # Multiple pending branches
     redundant: list[FunctionDuplicateInfo] = []  # Pending but already upstream
-    safe: list[FunctionDuplicateInfo] = []       # All in upstream
-    unique: list[FunctionDuplicateInfo] = []     # Only one commit
+    safe: list[FunctionDuplicateInfo] = []  # All in upstream
+    unique: list[FunctionDuplicateInfo] = []  # Only one commit
 
     for func_info in functions.values():
         if not func_info.is_duplicate:
@@ -402,32 +434,12 @@ def audit_duplicates(
     summary.add_column("Count", justify="right")
     summary.add_column("Description")
 
-    summary.add_row(
-        "[red]Conflicts[/red]",
-        str(len(conflicts)),
-        "Multiple pending branches - needs resolution"
-    )
-    summary.add_row(
-        "[yellow]Redundant[/yellow]",
-        str(len(redundant)),
-        "Pending work already in upstream"
-    )
+    summary.add_row("[red]Conflicts[/red]", str(len(conflicts)), "Multiple pending branches - needs resolution")
+    summary.add_row("[yellow]Redundant[/yellow]", str(len(redundant)), "Pending work already in upstream")
     if show_safe:
-        summary.add_row(
-            "[green]Safe[/green]",
-            str(len(safe)),
-            "Historical duplicates (all merged)"
-        )
-    summary.add_row(
-        "[dim]Unique[/dim]",
-        str(len(unique)),
-        "Single commit per function"
-    )
-    summary.add_row(
-        "[bold]Total[/bold]",
-        str(len(functions)),
-        "Total matched functions found"
-    )
+        summary.add_row("[green]Safe[/green]", str(len(safe)), "Historical duplicates (all merged)")
+    summary.add_row("[dim]Unique[/dim]", str(len(unique)), "Single commit per function")
+    summary.add_row("[bold]Total[/bold]", str(len(functions)), "Total matched functions found")
 
     console.print(summary)
     console.print()
@@ -518,7 +530,6 @@ def audit_duplicates(
         console.print("Run with --json to get machine-readable output for scripting")
 
 
-
 # NOTE: The following commands have been moved to 'melee-agent state':
 #   - audit status  -> state status
 #   - audit recover -> state status --category matched
@@ -530,12 +541,19 @@ def _list_github_prs(repo: str, author: str, state: str, limit: int) -> list[dic
     """List PRs from GitHub using gh CLI."""
     try:
         cmd = [
-            "gh", "pr", "list",
-            "--repo", repo,
-            "--author", author,
-            "--state", state,
-            "--limit", str(limit),
-            "--json", "number,title,body,state,mergedAt,url"
+            "gh",
+            "pr",
+            "list",
+            "--repo",
+            repo,
+            "--author",
+            author,
+            "--state",
+            state,
+            "--limit",
+            str(limit),
+            "--json",
+            "number,title,body,state,mergedAt,url",
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         if result.returncode != 0:
@@ -583,67 +601,61 @@ def _extract_functions_from_pr(pr: dict, repo: str = "doldecomp/melee") -> list[
     if diff:
         # Pattern 1: Look for removed stub comments (most reliable indicator of a match)
         # Format: -/// #func_name or -// #func_name
-        for match in re.finditer(r'^-\s*///?\s*#(\w+)', diff, re.MULTILINE):
+        for match in re.finditer(r"^-\s*///?\s*#(\w+)", diff, re.MULTILINE):
             func_name = match.group(1)
-            if func_name not in seen and '_' in func_name:
+            if func_name not in seen and "_" in func_name:
                 seen.add(func_name)
-                functions.append({
-                    "function": func_name,
-                    "match_percent": 100.0,  # Stub removed = matched
-                })
+                functions.append(
+                    {
+                        "function": func_name,
+                        "match_percent": 100.0,  # Stub removed = matched
+                    }
+                )
 
         # Pattern 2: Look for added C function definitions in .c files
         # Must be in a C file context (after diff --git a/.../*.c)
         # Function names must match melee patterns: prefix_address or camelCase_name
         # Only match lines with C-style return types, not Python def
-        c_types = r'(?:void|s8|s16|s32|s64|u8|u16|u32|u64|f32|f64|int|char|float|double|bool|BOOL|size_t|UNK_T|HSD_\w+|Fighter\w*|Item\w*|Ground\w*|\w+_t\*?)'
-        for match in re.finditer(rf'^\+\s*{c_types}\s+(\w+_\w+)\s*\(', diff, re.MULTILINE):
+        c_types = r"(?:void|s8|s16|s32|s64|u8|u16|u32|u64|f32|f64|int|char|float|double|bool|BOOL|size_t|UNK_T|HSD_\w+|Fighter\w*|Item\w*|Ground\w*|\w+_t\*?)"
+        for match in re.finditer(rf"^\+\s*{c_types}\s+(\w+_\w+)\s*\(", diff, re.MULTILINE):
             func_name = match.group(1)
             # Melee function names: lowercase prefix + underscore + hex OR CamelCase_name
-            if func_name not in seen and re.match(r'^[a-z]+[A-Z_]', func_name):
+            if func_name not in seen and re.match(r"^[a-z]+[A-Z_]", func_name):
                 seen.add(func_name)
-                functions.append({
-                    "function": func_name,
-                    "match_percent": 100.0,
-                })
+                functions.append(
+                    {
+                        "function": func_name,
+                        "match_percent": 100.0,
+                    }
+                )
 
     # Fallback: Parse PR body for explicit percentages
     body = pr.get("body", "") or ""
     if body:
         # Pattern: func_name (100%) or func_name (95.5%)
-        for match in re.finditer(r'(\w+_\w+)\s*\((\d+(?:\.\d+)?%)\)', body):
+        for match in re.finditer(r"(\w+_\w+)\s*\((\d+(?:\.\d+)?%)\)", body):
             func_name = match.group(1)
-            pct_str = match.group(2).rstrip('%')
+            pct_str = match.group(2).rstrip("%")
             if func_name not in seen:
                 seen.add(func_name)
-                functions.append({
-                    "function": func_name,
-                    "match_percent": float(pct_str),
-                })
+                functions.append(
+                    {
+                        "function": func_name,
+                        "match_percent": float(pct_str),
+                    }
+                )
 
     return functions
 
 
 @audit_app.command("discover-prs")
 def audit_discover_prs(
-    author: Annotated[
-        str, typer.Option("--author", "-a", help="GitHub username to search for")
-    ] = "itsgrimetime",
-    repo: Annotated[
-        str, typer.Option("--repo", "-r", help="GitHub repository")
-    ] = "doldecomp/melee",
-    state: Annotated[
-        str, typer.Option("--state", "-s", help="PR state: open, merged, closed, all")
-    ] = "all",
-    limit: Annotated[
-        int, typer.Option("--limit", "-n", help="Maximum PRs to scan")
-    ] = 50,
-    dry_run: Annotated[
-        bool, typer.Option("--dry-run", help="Show what would be linked")
-    ] = False,
-    output_json: Annotated[
-        bool, typer.Option("--json", help="Output as JSON")
-    ] = False,
+    author: Annotated[str, typer.Option("--author", "-a", help="GitHub username to search for")] = "itsgrimetime",
+    repo: Annotated[str, typer.Option("--repo", "-r", help="GitHub repository")] = "doldecomp/melee",
+    state: Annotated[str, typer.Option("--state", "-s", help="PR state: open, merged, closed, all")] = "all",
+    limit: Annotated[int, typer.Option("--limit", "-n", help="Maximum PRs to scan")] = 50,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be linked")] = False,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
     """Discover functions from GitHub PRs and link them.
 
@@ -652,7 +664,7 @@ def audit_discover_prs(
 
     Example: melee-agent audit discover-prs --author itsgrimetime --state merged
     """
-    console.print(f"[bold]Scanning GitHub PRs[/bold]")
+    console.print("[bold]Scanning GitHub PRs[/bold]")
     console.print(f"  Repo: {repo}")
     console.print(f"  Author: {author}")
     console.print(f"  State: {state}")
@@ -679,8 +691,8 @@ def audit_discover_prs(
     console.print(f"Found {len(all_prs)} PRs\n")
 
     completed = load_completed_functions()
-    results = []          # PRs with updates (for display)
-    all_discovered = []   # All PRs with functions (for JSON)
+    results = []  # PRs with updates (for display)
+    all_discovered = []  # All PRs with functions (for JSON)
     total_linked = 0
     total_updated = 0
 
@@ -752,21 +764,25 @@ def audit_discover_prs(
             all_funcs_in_pr.append(func_entry)
 
         # Track all discovered PRs with functions
-        all_discovered.append({
-            "pr_number": pr_number,
-            "pr_url": pr_url,
-            "pr_title": pr.get("title", ""),
-            "state": actual_pr_state,
-            "functions": all_funcs_in_pr,
-        })
-
-        if linked_funcs:
-            results.append({
+        all_discovered.append(
+            {
                 "pr_number": pr_number,
                 "pr_url": pr_url,
+                "pr_title": pr.get("title", ""),
                 "state": actual_pr_state,
-                "functions": linked_funcs,
-            })
+                "functions": all_funcs_in_pr,
+            }
+        )
+
+        if linked_funcs:
+            results.append(
+                {
+                    "pr_number": pr_number,
+                    "pr_url": pr_url,
+                    "state": actual_pr_state,
+                    "functions": linked_funcs,
+                }
+            )
 
     if output_json:
         print(json.dumps(all_discovered, indent=2))
@@ -783,7 +799,7 @@ def audit_discover_prs(
                 console.print(f"    [dim]... and {len(r['functions']) - 5} more[/dim]")
             console.print()
 
-    console.print(f"[bold]Summary:[/bold]")
+    console.print("[bold]Summary:[/bold]")
     console.print(f"  PRs scanned: {len(all_prs)}")
     console.print(f"  Functions newly linked: {total_linked}")
     console.print(f"  PR states updated: {total_updated}")
@@ -795,17 +811,15 @@ def audit_discover_prs(
         for func_name, info in completed.items():
             if info.get("pr_url"):
                 update_fields = {
-                    'pr_url': info.get("pr_url"),
-                    'pr_number': info.get("pr_number"),
-                    'pr_state': info.get("pr_state"),
+                    "pr_url": info.get("pr_url"),
+                    "pr_number": info.get("pr_number"),
+                    "pr_state": info.get("pr_state"),
                 }
                 # Only set status to merged when PR is merged; don't clear status otherwise
                 if info.get("pr_state") == "MERGED":
-                    update_fields['status'] = 'merged'
+                    update_fields["status"] = "merged"
                 db_upsert_function(func_name, **update_fields)
 
-        console.print(f"\n[green]Saved changes to state database[/green]")
+        console.print("\n[green]Saved changes to state database[/green]")
     elif dry_run:
-        console.print(f"\n[cyan](dry run - no changes saved)[/cyan]")
-
-
+        console.print("\n[cyan](dry run - no changes saved)[/cyan]")

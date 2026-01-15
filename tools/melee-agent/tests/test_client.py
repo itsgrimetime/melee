@@ -7,6 +7,7 @@ Run with: pytest tests/test_client.py -v
 
 import pytest
 
+from src.cli._common import detect_local_api_url
 from src.client import (
     CompileRequest,
     DecompMeAPIClient,
@@ -16,8 +17,6 @@ from src.client import (
     ScratchManager,
     ScratchUpdate,
 )
-from src.cli._common import detect_local_api_url
-
 
 # Simple test assembly for a function that returns 0
 TEST_ASM = """

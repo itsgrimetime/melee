@@ -6,24 +6,20 @@ from typing import Annotated
 import typer
 
 from .._common import (
-    console,
     DEFAULT_MELEE_ROOT,
+    categorize_functions,
+    console,
+    db_upsert_function,
+    extract_pr_info,
+    load_all_tracking_data,
     load_completed_functions,
     save_completed_functions,
-    load_all_tracking_data,
-    categorize_functions,
-    extract_pr_info,
-    db_upsert_function,
 )
 
 
 def link_command(
-    pr_url: Annotated[
-        str, typer.Argument(help="GitHub PR URL")
-    ],
-    functions: Annotated[
-        list[str], typer.Argument(help="Function names to link")
-    ],
+    pr_url: Annotated[str, typer.Argument(help="GitHub PR URL")],
+    functions: Annotated[list[str], typer.Argument(help="Function names to link")],
 ):
     """Link functions to a GitHub PR.
 
@@ -52,7 +48,7 @@ def link_command(
         save_completed_functions(completed)
         # Also update state database
         for func in linked:
-            db_upsert_function(func, pr_url=pr_url, pr_number=pr_number, status='in_review')
+            db_upsert_function(func, pr_url=pr_url, pr_number=pr_number, status="in_review")
         console.print(f"[green]Linked {len(linked)} functions to PR #{pr_number}[/green]")
         for func in linked:
             console.print(f"  {func}")
@@ -64,9 +60,7 @@ def link_command(
 
 
 def link_batch_command(
-    pr_url: Annotated[
-        str, typer.Argument(help="GitHub PR URL")
-    ],
+    pr_url: Annotated[str, typer.Argument(help="GitHub PR URL")],
     category: Annotated[
         str, typer.Option("--category", "-c", help="Link all functions in category: complete, synced")
     ] = "complete",
@@ -113,14 +107,12 @@ def link_batch_command(
     save_completed_functions(completed)
     # Also update state database
     for func in linked_funcs:
-        db_upsert_function(func, pr_url=pr_url, pr_number=pr_number, status='in_review')
+        db_upsert_function(func, pr_url=pr_url, pr_number=pr_number, status="in_review")
     console.print(f"[green]Linked {linked} functions to PR #{pr_number}[/green]")
 
 
 def unlink_command(
-    functions: Annotated[
-        list[str], typer.Argument(help="Function names to unlink")
-    ],
+    functions: Annotated[list[str], typer.Argument(help="Function names to unlink")],
 ):
     """Remove PR association from functions."""
     completed = load_completed_functions()

@@ -15,7 +15,7 @@ from typing import Iterator
 
 try:
     import tree_sitter_c as tsc
-    from tree_sitter import Language, Parser, Node
+    from tree_sitter import Language, Node, Parser
 
     C_LANGUAGE = Language(tsc.language())
     TREE_SITTER_AVAILABLE = True
@@ -211,9 +211,7 @@ def detect_pointer_arithmetic(source_code: str) -> list[CodeIssue]:
                     if index:
                         index_text = _get_node_text(index, source_bytes)
                         # Flag if index looks like a struct offset (hex or large number)
-                        if "0x" in index_text.lower() or (
-                            index_text.isdigit() and int(index_text) > 32
-                        ):
+                        if "0x" in index_text.lower() or (index_text.isdigit() and int(index_text) > 32):
                             snippet = _get_node_text(node, source_bytes)
                             issues.append(
                                 CodeIssue(
@@ -297,7 +295,7 @@ def detect_float_without_suffix(source_code: str) -> list[CodeIssue]:
         # Check for float literals (contains decimal point)
         if "." in text and not text.lower().startswith("0x"):
             # Check if it has F/f/L/l suffix
-            if not text[-1].lower() in ("f", "l"):
+            if text[-1].lower() not in ("f", "l"):
                 issues.append(
                     CodeIssue(
                         message="Float literal missing F suffix",
@@ -435,8 +433,9 @@ def strip_function_bodies(
         # - inline: invalid without body in C89
         # - static: MWCC expects a body after static declarations
         import re
-        func_decl = re.sub(r'\bstatic\s+', '', func_decl)
-        func_decl = re.sub(r'\binline\s+', '', func_decl)
+
+        func_decl = re.sub(r"\bstatic\s+", "", func_decl)
+        func_decl = re.sub(r"\binline\s+", "", func_decl)
 
         # Add semicolon and comment (match regex version format)
         replacement = func_decl + ";  /* body stripped: auto-inline prevention */"

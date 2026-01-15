@@ -20,6 +20,7 @@ class TestExtractText:
     @pytest.fixture
     def extract_text(self):
         from src.cli.scratch import _extract_text
+
         return _extract_text
 
     def test_string_passthrough(self, extract_text):
@@ -102,8 +103,7 @@ class TestScratchTokenPaths:
         from src.cli.scratch import DECOMP_SCRATCH_TOKENS_FILE
 
         # Should be in a config directory, not cwd
-        assert "decomp" in str(DECOMP_SCRATCH_TOKENS_FILE).lower() or \
-               ".config" in str(DECOMP_SCRATCH_TOKENS_FILE)
+        assert "decomp" in str(DECOMP_SCRATCH_TOKENS_FILE).lower() or ".config" in str(DECOMP_SCRATCH_TOKENS_FILE)
 
 
 class TestScratchCreateValidation:
@@ -184,6 +184,7 @@ class TestPreprocessContext:
     @pytest.fixture
     def preprocess_context(self):
         from src.cli.scratch import _preprocess_context
+
         return _preprocess_context
 
     def test_empty_context_passthrough(self, preprocess_context):
@@ -261,8 +262,9 @@ extern void foo(Point* p);
         if "_Static_assert" in result:
             comment_start = result.find("/*")
             static_assert_pos = result.find("_Static_assert")
-            assert comment_start != -1 and comment_start < static_assert_pos, \
+            assert comment_start != -1 and comment_start < static_assert_pos, (
                 f"_Static_assert should be removed or commented out, but found at position {static_assert_pos}"
+            )
         # But the rest of the code should remain
         assert "typedef struct" in result
         assert "extern void foo" in result
@@ -284,8 +286,9 @@ void other_func(void);
         if "_Static_assert" in result:
             comment_start = result.find("/*")
             static_assert_pos = result.find("_Static_assert")
-            assert comment_start != -1 and comment_start < static_assert_pos, \
+            assert comment_start != -1 and comment_start < static_assert_pos, (
                 f"_Static_assert should be removed or commented out, but found at position {static_assert_pos}"
+            )
         assert "void other_func" in result
 
 
@@ -407,6 +410,7 @@ class TestContextStrippingIntegration:
     def test_strip_target_function_import(self):
         """Verify _strip_target_function can be imported from extract module."""
         from src.cli.extract import _strip_target_function
+
         assert callable(_strip_target_function)
 
     def test_strip_function_basic(self):

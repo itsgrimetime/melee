@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Annotated, Optional
 
 import typer
-from rich.table import Table
 from rich.panel import Panel
+from rich.table import Table
 
 from ._common import console, get_agent_melee_root, get_local_api_url
 
@@ -49,9 +49,9 @@ def _parse_struct_fields(content: str, struct_name: str) -> list[dict]:
 
     # Find matching closing brace
     for i, char in enumerate(content[start:], start):
-        if char == '{':
+        if char == "{":
             brace_count += 1
-        elif char == '}':
+        elif char == "}":
             brace_count -= 1
             if brace_count == 0:
                 end = i
@@ -61,7 +61,9 @@ def _parse_struct_fields(content: str, struct_name: str) -> list[dict]:
 
     # Parse field lines with offset comments
     # Matches: /* fp+XXXX */ or /* +XXXX */ followed by type and name
-    field_pattern = r'/\*\s*(?:fp\+)?([0-9A-Fa-fx]+)(?::(\d+))?\s*\*/\s*([^;]+?)\s*([a-zA-Z_][a-zA-Z0-9_]*(?:\[[^\]]*\])?)\s*;'
+    field_pattern = (
+        r"/\*\s*(?:fp\+)?([0-9A-Fa-fx]+)(?::(\d+))?\s*\*/\s*([^;]+?)\s*([a-zA-Z_][a-zA-Z0-9_]*(?:\[[^\]]*\])?)\s*;"
+    )
 
     for match in re.finditer(field_pattern, struct_content):
         offset_str = match.group(1)
@@ -71,7 +73,7 @@ def _parse_struct_fields(content: str, struct_name: str) -> list[dict]:
 
         # Parse offset (hex or decimal)
         try:
-            if offset_str.lower().startswith('0x'):
+            if offset_str.lower().startswith("0x"):
                 offset = int(offset_str, 16)
             else:
                 offset = int(offset_str, 16)  # Assume hex if no prefix
@@ -90,7 +92,7 @@ def _parse_struct_fields(content: str, struct_name: str) -> list[dict]:
     return sorted(fields, key=lambda f: (f["offset"], f["bit_offset"] or 0))
 
 
-def _find_struct_in_files(melee_root: Path, struct_name: str) -> tuple[Optional[Path], Optional[str]]:
+def _find_struct_in_files(melee_root: Path, struct_name: str) -> tuple[Path | None, str | None]:
     """Find which file contains a struct definition."""
     # Check known locations first
     if struct_name in STRUCT_FILES:
@@ -127,11 +129,9 @@ def _find_struct_in_files(melee_root: Path, struct_name: str) -> tuple[Optional[
 def struct_show(
     struct_name: Annotated[str, typer.Argument(help="Name of the struct (e.g., Fighter, Item, dmg)")],
     offset: Annotated[
-        Optional[str], typer.Option("--offset", "-o", help="Filter to fields near this offset (hex)")
+        str | None, typer.Option("--offset", "-o", help="Filter to fields near this offset (hex)")
     ] = None,
-    search: Annotated[
-        Optional[str], typer.Option("--search", "-s", help="Search for field by name pattern")
-    ] = None,
+    search: Annotated[str | None, typer.Option("--search", "-s", help="Search for field by name pattern")] = None,
 ):
     """Show struct layout with field offsets.
 
@@ -172,7 +172,7 @@ def struct_show(
         fields = [f for f in fields if pattern.search(f["name"]) or pattern.search(f["type"])]
 
     if not fields:
-        console.print(f"[yellow]No matching fields found[/yellow]")
+        console.print("[yellow]No matching fields found[/yellow]")
         raise typer.Exit(0)
 
     # Build table
@@ -203,9 +203,7 @@ def struct_show(
 
 @struct_app.command("issues")
 def struct_issues(
-    struct_filter: Annotated[
-        Optional[str], typer.Argument(help="Filter issues by struct name")
-    ] = None,
+    struct_filter: Annotated[str | None, typer.Argument(help="Filter issues by struct name")] = None,
 ):
     """Show known type issues in struct definitions.
 
@@ -243,9 +241,7 @@ def struct_issues(
 @struct_app.command("offset")
 def struct_offset(
     offset: Annotated[str, typer.Argument(help="Offset to look up (hex, e.g., 0x1898)")],
-    struct_name: Annotated[
-        str, typer.Option("--struct", "-s", help="Struct to search in")
-    ] = "Fighter",
+    struct_name: Annotated[str, typer.Option("--struct", "-s", help="Struct to search in")] = "Fighter",
 ):
     """Look up what field is at a specific offset.
 
@@ -301,7 +297,7 @@ def struct_offset(
 
         # If it's a nested struct, suggest looking there
         if "struct" in containing_field["type"] or containing_field["type"].startswith("Vec"):
-            console.print(f"\n[dim]This is a nested type. Check the inner struct layout.[/dim]")
+            console.print("\n[dim]This is a nested type. Check the inner struct layout.[/dim]")
     else:
         console.print(f"[red]Offset 0x{target:X} not found in {struct_name}[/red]")
         if fields:
@@ -314,51 +310,47 @@ KNOWN_CALLBACKS = {
         "signature": "void (*FtCmd2)(Fighter_GObj* gobj, CommandInfo* cmd, int arg2)",
         "header": "<melee/ft/ftcmd.h>",
         "description": "Command interpreter callback for fighter actions",
-        "example": "static void my_callback(Fighter_GObj* gobj, CommandInfo* cmd, int arg2) {}"
+        "example": "static void my_callback(Fighter_GObj* gobj, CommandInfo* cmd, int arg2) {}",
     },
     "HSD_GObjEvent": {
         "signature": "void (*HSD_GObjEvent)(HSD_GObj* gobj)",
         "header": "<baselib/gobj.h>",
         "description": "Generic gobj event callback",
-        "example": "static void my_event(HSD_GObj* gobj) {}"
+        "example": "static void my_event(HSD_GObj* gobj) {}",
     },
     "HSD_GObjPredicate": {
         "signature": "bool (*HSD_GObjPredicate)(HSD_GObj* gobj)",
         "header": "<baselib/gobj.h>",
         "description": "Gobj predicate for filtering",
-        "example": "static bool my_predicate(HSD_GObj* gobj) { return TRUE; }"
+        "example": "static bool my_predicate(HSD_GObj* gobj) { return TRUE; }",
     },
     "GObj_RenderFunc": {
         "signature": "void (*GObj_RenderFunc)(HSD_GObj* gobj, int code)",
         "header": "<baselib/gobj.h>",
         "description": "Render function callback",
-        "example": "static void my_render(HSD_GObj* gobj, int code) {}"
+        "example": "static void my_render(HSD_GObj* gobj, int code) {}",
     },
     "HSD_UserDataEvent": {
         "signature": "void (*HSD_UserDataEvent)(void* user_data)",
         "header": "<baselib/gobj.h>",
         "description": "User data cleanup callback",
-        "example": "static void my_cleanup(void* user_data) {}"
+        "example": "static void my_cleanup(void* user_data) {}",
     },
     "ftCo_Callback": {
         "signature": "void (*ftCo_Callback)(HSD_GObj* gobj)",
         "header": "<melee/ft/ftcommon.h>",
         "description": "Common fighter callback",
-        "example": "static void my_callback(HSD_GObj* gobj) {}"
+        "example": "static void my_callback(HSD_GObj* gobj) {}",
     },
 }
 
 
 @struct_app.command("callback")
 def struct_callback(
-    name: Annotated[Optional[str], typer.Argument(help="Callback type name (e.g., FtCmd2)")] = None,
-    search: Annotated[
-        Optional[str], typer.Option("--search", "-s", help="Search for callback by pattern")
-    ] = None,
-    slug: Annotated[
-        Optional[str], typer.Option("--slug", help="Search scratch context for callback type")
-    ] = None,
-    api_url: Annotated[Optional[str], typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")] = None,
+    name: Annotated[str | None, typer.Argument(help="Callback type name (e.g., FtCmd2)")] = None,
+    search: Annotated[str | None, typer.Option("--search", "-s", help="Search for callback by pattern")] = None,
+    slug: Annotated[str | None, typer.Option("--slug", help="Search scratch context for callback type")] = None,
+    api_url: Annotated[str | None, typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")] = None,
 ):
     """Look up callback function signatures.
 
@@ -385,7 +377,7 @@ def struct_callback(
         scratch = asyncio.run(get())
 
         # Search for the function declaration
-        pattern = re.compile(rf'\b{re.escape(search)}\s*\([^)]+\)', re.IGNORECASE)
+        pattern = re.compile(rf"\b{re.escape(search)}\s*\([^)]+\)", re.IGNORECASE)
         for match in pattern.finditer(scratch.context):
             # Get surrounding context
             start = max(0, match.start() - 100)
@@ -404,7 +396,7 @@ def struct_callback(
                     console.print(f"\n[bold green]Callback parameter: {cb_name}[/bold green]")
                     console.print(f"  Signature: [cyan]{cb_info['signature']}[/cyan]")
                     console.print(f"  Header: [yellow]{cb_info['header']}[/yellow]")
-                    console.print(f"\n  [dim]Example:[/dim]")
+                    console.print("\n  [dim]Example:[/dim]")
                     console.print(f"  [green]{cb_info['example']}[/green]")
             console.print()
         return
@@ -435,7 +427,7 @@ def struct_callback(
             console.print(f"  Signature: [green]{cb_info['signature']}[/green]")
             console.print(f"  Header: [yellow]{cb_info['header']}[/yellow]")
             console.print(f"  {cb_info['description']}")
-            console.print(f"\n  [dim]Example:[/dim]")
+            console.print("\n  [dim]Example:[/dim]")
             console.print(f"  [green]{cb_info['example']}[/green]")
         return
 
@@ -452,6 +444,6 @@ def struct_callback(
     console.print(f"  Signature: [green]{cb_info['signature']}[/green]")
     console.print(f"  Header: [yellow]{cb_info['header']}[/yellow]")
     console.print(f"  {cb_info['description']}")
-    console.print(f"\n[bold]Example implementation:[/bold]")
+    console.print("\n[bold]Example implementation:[/bold]")
     console.print(f"[green]{cb_info['example']}[/green]")
     console.print(f"\n[dim]Include {cb_info['header']} to use this type.[/dim]")

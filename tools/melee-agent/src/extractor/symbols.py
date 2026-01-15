@@ -3,6 +3,7 @@
 import re
 from pathlib import Path
 from typing import Optional
+
 from .models import FunctionSymbol
 
 
@@ -22,7 +23,7 @@ class SymbolParser:
         # Pattern to match function symbols
         # Example: memset = .init:0x80003100; // type:function size:0x30 scope:global
         self.function_pattern = re.compile(
-            r'^(\w+)\s*=\s*\.?(\w+):0x([0-9A-Fa-f]+);\s*//.*type:function(?:\s+size:0x([0-9A-Fa-f]+))?(?:\s+scope:(\w+))?'
+            r"^(\w+)\s*=\s*\.?(\w+):0x([0-9A-Fa-f]+);\s*//.*type:function(?:\s+size:0x([0-9A-Fa-f]+))?(?:\s+scope:(\w+))?"
         )
 
     def parse_symbols(self) -> dict[str, FunctionSymbol]:
@@ -37,7 +38,7 @@ class SymbolParser:
 
         symbols = {}
 
-        with open(self.symbols_path, "r", encoding="utf-8") as f:
+        with open(self.symbols_path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#"):
@@ -71,7 +72,7 @@ class SymbolParser:
 
         return symbols
 
-    def get_function_symbol(self, function_name: str) -> Optional[FunctionSymbol]:
+    def get_function_symbol(self, function_name: str) -> FunctionSymbol | None:
         """
         Get symbol information for a specific function.
 
@@ -84,9 +85,7 @@ class SymbolParser:
         symbols = self.parse_symbols()
         return symbols.get(function_name)
 
-    def get_functions_in_range(
-        self, start_addr: int, end_addr: int
-    ) -> list[FunctionSymbol]:
+    def get_functions_in_range(self, start_addr: int, end_addr: int) -> list[FunctionSymbol]:
         """
         Get all functions within an address range.
 

@@ -7,18 +7,15 @@ from typing import Annotated
 import typer
 from rich.table import Table
 
+from src.db import get_db
+
 from .._common import console
 from ._helpers import format_age, format_datetime
-from src.db import get_db
 
 
 def agents_command(
-    show_inactive: Annotated[
-        bool, typer.Option("--inactive", "-i", help="Show inactive agents")
-    ] = False,
-    output_json: Annotated[
-        bool, typer.Option("--json", help="Output as JSON")
-    ] = False,
+    show_inactive: Annotated[bool, typer.Option("--inactive", "-i", help="Show inactive agents")] = False,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
     """Show active agents and their work."""
     db = get_db()
@@ -27,7 +24,7 @@ def agents_command(
     # Filter inactive unless requested
     if not show_inactive:
         one_hour_ago = time.time() - 3600
-        agents = [a for a in agents if (a.get('last_active_at') or 0) > one_hour_ago]
+        agents = [a for a in agents if (a.get("last_active_at") or 0) > one_hour_ago]
 
     if output_json:
         print(json.dumps(agents, indent=2, default=str))
@@ -45,28 +42,24 @@ def agents_command(
     table.add_column("Last Active", style="dim")
 
     for agent in agents:
-        worktree = agent.get('worktree_path', '-')
+        worktree = agent.get("worktree_path", "-")
         if worktree and len(worktree) > 30:
             worktree = "..." + worktree[-27:]
 
         table.add_row(
-            agent.get('agent_id', '?'),
-            worktree or '-',
-            str(agent.get('active_claims', 0)),
-            str(agent.get('committed_functions', 0)),
-            format_age(agent.get('last_active_at')),
+            agent.get("agent_id", "?"),
+            worktree or "-",
+            str(agent.get("active_claims", 0)),
+            str(agent.get("committed_functions", 0)),
+            format_age(agent.get("last_active_at")),
         )
 
     console.print(table)
 
 
 def stale_command(
-    hours: Annotated[
-        float, typer.Option("--hours", "-h", help="Staleness threshold in hours")
-    ] = 1.0,
-    output_json: Annotated[
-        bool, typer.Option("--json", help="Output as JSON")
-    ] = False,
+    hours: Annotated[float, typer.Option("--hours", "-h", help="Staleness threshold in hours")] = 1.0,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
     """Show data that may be stale and needs verification."""
     db = get_db()
@@ -87,7 +80,7 @@ def stale_command(
     table.add_column("Hours Stale", justify="right")
 
     for entry in stale_data:
-        hours_stale = entry.get('hours_stale', 0)
+        hours_stale = entry.get("hours_stale", 0)
         stale_str = f"{hours_stale:.1f}h"
         if hours_stale > 24:
             stale_str = f"[red]{stale_str}[/red]"
@@ -95,11 +88,11 @@ def stale_command(
             stale_str = f"[yellow]{stale_str}[/yellow]"
 
         table.add_row(
-            entry.get('function_name', '?'),
-            entry.get('stale_type', '?'),
-            format_datetime(entry.get('last_verified')),
+            entry.get("function_name", "?"),
+            entry.get("stale_type", "?"),
+            format_datetime(entry.get("last_verified")),
             stale_str,
         )
 
     console.print(table)
-    console.print(f"\n[dim]Run: melee-agent state validate --fix[/dim]")
+    console.print("\n[dim]Run: melee-agent state validate --fix[/dim]")

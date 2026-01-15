@@ -7,10 +7,11 @@ from typing import Optional, Tuple
 
 class CodeValidationError(Exception):
     """Raised when code validation fails."""
+
     pass
 
 
-def validate_function_code(code: str, function_name: str) -> Tuple[bool, str]:
+def validate_function_code(code: str, function_name: str) -> tuple[bool, str]:
     """Validate that code represents a complete, well-formed function.
 
     Checks:
@@ -32,29 +33,26 @@ def validate_function_code(code: str, function_name: str) -> Tuple[bool, str]:
         return False, "Code is empty"
 
     # Check for balanced braces
-    open_braces = code.count('{')
-    close_braces = code.count('}')
+    open_braces = code.count("{")
+    close_braces = code.count("}")
     if open_braces != close_braces:
         return False, f"Unbalanced braces: {open_braces} '{{' vs {close_braces} '}}'"
 
     # Check that target function is present
-    func_pattern = re.compile(
-        rf'\b{re.escape(function_name)}\s*\([^)]*\)\s*\{{',
-        re.MULTILINE
-    )
+    func_pattern = re.compile(rf"\b{re.escape(function_name)}\s*\([^)]*\)\s*\{{", re.MULTILINE)
     if not func_pattern.search(code):
         return False, f"Function '{function_name}' not found in code"
 
     # Check for signs of mid-statement insertion
     # Code shouldn't start with operators, closing braces, or statements like 'case' or 'break'
     bad_starts = [
-        (r'^\s*[+\-*/&|^%]=', "Code starts with assignment operator"),
-        (r'^\s*\}', "Code starts with closing brace"),
-        (r'^\s*case\s+', "Code starts with 'case' (mid-switch insertion)"),
-        (r'^\s*break\s*;', "Code starts with 'break'"),
-        (r'^\s*default\s*:', "Code starts with 'default' (mid-switch insertion)"),
-        (r'^\s*else\s*[{\n]', "Code starts with 'else' (mid-if insertion)"),
-        (r'^\s*\)', "Code starts with closing parenthesis"),
+        (r"^\s*[+\-*/&|^%]=", "Code starts with assignment operator"),
+        (r"^\s*\}", "Code starts with closing brace"),
+        (r"^\s*case\s+", "Code starts with 'case' (mid-switch insertion)"),
+        (r"^\s*break\s*;", "Code starts with 'break'"),
+        (r"^\s*default\s*:", "Code starts with 'default' (mid-switch insertion)"),
+        (r"^\s*else\s*[{\n]", "Code starts with 'else' (mid-if insertion)"),
+        (r"^\s*\)", "Code starts with closing parenthesis"),
     ]
 
     for pattern, msg in bad_starts:
@@ -64,8 +62,7 @@ def validate_function_code(code: str, function_name: str) -> Tuple[bool, str]:
     # Count function definitions (rough heuristic)
     # Pattern: something that looks like "type name(params) {"
     func_def_pattern = re.compile(
-        r'(?:^|\n)\s*(?:static\s+)?(?:inline\s+)?(?:\w+\s+)+\w+\s*\([^)]*\)\s*\{',
-        re.MULTILINE
+        r"(?:^|\n)\s*(?:static\s+)?(?:inline\s+)?(?:\w+\s+)+\w+\s*\([^)]*\)\s*\{", re.MULTILINE
     )
     func_defs = func_def_pattern.findall(code)
     if len(func_defs) > 1:
@@ -75,7 +72,7 @@ def validate_function_code(code: str, function_name: str) -> Tuple[bool, str]:
     return True, ""
 
 
-def _extract_function_from_code(code: str, function_name: str) -> Optional[str]:
+def _extract_function_from_code(code: str, function_name: str) -> str | None:
     """Extract just the target function from code that may contain helper definitions.
 
     Args:
@@ -87,10 +84,7 @@ def _extract_function_from_code(code: str, function_name: str) -> Optional[str]:
     """
     # Pattern to find the function definition
     # Match: return_type function_name(params) {
-    func_pattern = re.compile(
-        rf'^([^\n]*?)\s+{re.escape(function_name)}\s*\([^)]*\)[^{{]*\{{',
-        re.MULTILINE
-    )
+    func_pattern = re.compile(rf"^([^\n]*?)\s+{re.escape(function_name)}\s*\([^)]*\)[^{{]*\{{", re.MULTILINE)
 
     match = func_pattern.search(code)
     if not match:
@@ -104,10 +98,10 @@ def _extract_function_from_code(code: str, function_name: str) -> Optional[str]:
     in_function = False
 
     for i in range(match.end() - 1, len(code)):
-        if code[i] == '{':
+        if code[i] == "{":
             brace_count += 1
             in_function = True
-        elif code[i] == '}':
+        elif code[i] == "}":
             brace_count -= 1
             if in_function and brace_count == 0:
                 func_end = i + 1
@@ -151,13 +145,10 @@ async def update_source_file(
             return False
 
         # Read the current file content
-        content = full_path.read_text(encoding='utf-8')
+        content = full_path.read_text(encoding="utf-8")
 
         # First, try to find stub marker (/// #FunctionName)
-        stub_pattern = re.compile(
-            rf'^///\s*#\s*{re.escape(function_name)}\s*$',
-            re.MULTILINE
-        )
+        stub_pattern = re.compile(rf"^///\s*#\s*{re.escape(function_name)}\s*$", re.MULTILINE)
         stub_match = stub_pattern.search(content)
 
         if stub_match:
@@ -173,8 +164,7 @@ async def update_source_file(
             # - static inline bool FunctionName(args)
             # - s32 FunctionName(args)
             function_pattern = re.compile(
-                rf'^([^\n]*?)\s+{re.escape(function_name)}\s*\([^)]*\)[^{{]*\{{',
-                re.MULTILINE
+                rf"^([^\n]*?)\s+{re.escape(function_name)}\s*\([^)]*\)[^{{]*\{{", re.MULTILINE
             )
 
             match = function_pattern.search(content)
@@ -191,10 +181,10 @@ async def update_source_file(
             in_function = False
 
             for i in range(match.end() - 1, len(content)):
-                if content[i] == '{':
+                if content[i] == "{":
                     brace_count += 1
                     in_function = True
-                elif content[i] == '}':
+                elif content[i] == "}":
                     brace_count -= 1
                     if in_function and brace_count == 0:
                         func_end = i + 1
@@ -235,7 +225,7 @@ async def update_source_file(
         new_content = content[:func_start] + code_to_insert + content[func_end:]
 
         # Write the updated content back
-        full_path.write_text(new_content, encoding='utf-8')
+        full_path.write_text(new_content, encoding="utf-8")
 
         print(f"Successfully updated function '{function_name}' in {file_path}")
         return True
@@ -243,5 +233,3 @@ async def update_source_file(
     except Exception as e:
         print(f"Error updating source file: {e}")
         return False
-
-

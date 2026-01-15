@@ -20,33 +20,17 @@ class TestWorkflowFinishHappyPath:
 
         # 2. Create scratch and track progress
         temp_db.upsert_scratch(
-            slug="test-scratch",
-            instance="local",
-            base_url="http://localhost:8000",
-            function_name=func_name
+            slug="test-scratch", instance="local", base_url="http://localhost:8000", function_name=func_name
         )
-        temp_db.upsert_function(
-            func_name,
-            status="in_progress",
-            local_scratch_slug="test-scratch",
-            match_percent=50.0
-        )
+        temp_db.upsert_function(func_name, status="in_progress", local_scratch_slug="test-scratch", match_percent=50.0)
 
         # 3. Achieve match
         temp_db.record_match_score("test-scratch", score=0, max_score=100)
-        temp_db.upsert_function(
-            func_name,
-            status="matched",
-            match_percent=100.0
-        )
+        temp_db.upsert_function(func_name, status="matched", match_percent=100.0)
 
         # 4. Commit
         temp_db.upsert_function(
-            func_name,
-            status="committed",
-            is_committed=True,
-            commit_hash="abc123",
-            build_status="passing"
+            func_name, status="committed", is_committed=True, commit_hash="abc123", build_status="passing"
         )
 
         # 5. Release claim
@@ -96,11 +80,7 @@ class TestWorkflowFinishReleasesClaim:
         temp_db.add_claim("TestFunc", "agent-1")
 
         # Finish workflow
-        temp_db.upsert_function(
-            "TestFunc",
-            status="committed",
-            is_committed=True
-        )
+        temp_db.upsert_function("TestFunc", status="committed", is_committed=True)
         temp_db.release_claim("TestFunc", "agent-1")
 
         claims = temp_db.get_active_claims()
@@ -122,33 +102,21 @@ class TestWorkflowRecordsDatabase:
 
     def test_finish_sets_commit_hash(self, temp_db):
         """Finishing sets the commit hash."""
-        temp_db.upsert_function(
-            "TestFunc",
-            status="committed",
-            commit_hash="abc123def456"
-        )
+        temp_db.upsert_function("TestFunc", status="committed", commit_hash="abc123def456")
 
         func = temp_db.get_function("TestFunc")
         assert func["commit_hash"] == "abc123def456"
 
     def test_finish_sets_build_status(self, temp_db):
         """Finishing sets build status."""
-        temp_db.upsert_function(
-            "TestFunc",
-            status="committed",
-            build_status="passing"
-        )
+        temp_db.upsert_function("TestFunc", status="committed", build_status="passing")
 
         func = temp_db.get_function("TestFunc")
         assert func["build_status"] == "passing"
 
     def test_finish_sets_branch(self, temp_db):
         """Finishing records the branch name."""
-        temp_db.upsert_function(
-            "TestFunc",
-            status="committed",
-            branch="feature-branch"
-        )
+        temp_db.upsert_function("TestFunc", status="committed", branch="feature-branch")
 
         func = temp_db.get_function("TestFunc")
         assert func["branch"] == "feature-branch"
@@ -156,11 +124,7 @@ class TestWorkflowRecordsDatabase:
     def test_finish_updates_branch_progress(self, temp_db):
         """Finishing updates branch progress."""
         temp_db.upsert_branch_progress(
-            function_name="TestFunc",
-            branch="feature",
-            match_percent=100.0,
-            is_committed=True,
-            commit_hash="abc123"
+            function_name="TestFunc", branch="feature", match_percent=100.0, is_committed=True, commit_hash="abc123"
         )
 
         progress = temp_db.get_best_branch_progress("TestFunc")
@@ -201,7 +165,7 @@ class TestWorkflowWithForce:
             status="committed",
             is_committed=True,
             build_status="broken",
-            build_diagnosis="Caller ftCommon_800D1234 needs signature update"
+            build_diagnosis="Caller ftCommon_800D1234 needs signature update",
         )
 
         func = temp_db.get_function("TestFunc")
@@ -210,12 +174,7 @@ class TestWorkflowWithForce:
 
     def test_force_allows_broken_build(self, temp_db):
         """Force allows committing with broken build."""
-        temp_db.upsert_function(
-            "TestFunc",
-            status="committed",
-            is_committed=True,
-            build_status="broken"
-        )
+        temp_db.upsert_function("TestFunc", status="committed", is_committed=True, build_status="broken")
 
         func = temp_db.get_function("TestFunc")
         assert func["status"] == "committed"
@@ -227,22 +186,14 @@ class TestWorkflowWithSubdirectory:
 
     def test_workflow_tracks_worktree(self, temp_db):
         """Workflow tracks which worktree was used."""
-        temp_db.upsert_function(
-            "TestFunc",
-            status="committed",
-            worktree_path="/path/to/melee-worktrees/dir-lb"
-        )
+        temp_db.upsert_function("TestFunc", status="committed", worktree_path="/path/to/melee-worktrees/dir-lb")
 
         func = temp_db.get_function("TestFunc")
         assert func["worktree_path"] == "/path/to/melee-worktrees/dir-lb"
 
     def test_workflow_tracks_source_file(self, temp_db):
         """Workflow tracks the source file path."""
-        temp_db.upsert_function(
-            "TestFunc",
-            status="committed",
-            source_file_path="melee/lb/lbcommand.c"
-        )
+        temp_db.upsert_function("TestFunc", status="committed", source_file_path="melee/lb/lbcommand.c")
 
         func = temp_db.get_function("TestFunc")
         assert func["source_file_path"] == "melee/lb/lbcommand.c"
@@ -255,8 +206,7 @@ class TestWorkflowWithSubdirectory:
 
         with temp_db.connection() as conn:
             cursor = conn.execute(
-                "SELECT pending_commits FROM subdirectory_allocations WHERE subdirectory_key = ?",
-                ("lb",)
+                "SELECT pending_commits FROM subdirectory_allocations WHERE subdirectory_key = ?", ("lb",)
             )
             row = cursor.fetchone()
 
@@ -269,12 +219,7 @@ class TestMultipleFunctionsWorkflow:
     def test_multiple_functions_same_subdirectory(self, temp_db):
         """Can complete multiple functions in same subdirectory."""
         for i in range(3):
-            temp_db.upsert_function(
-                f"Func{i}",
-                status="committed",
-                is_committed=True,
-                worktree_path="/path/wt-lb"
-            )
+            temp_db.upsert_function(f"Func{i}", status="committed", is_committed=True, worktree_path="/path/wt-lb")
 
         # All should be committed
         committed = temp_db.get_functions_by_status("committed")

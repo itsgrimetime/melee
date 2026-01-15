@@ -4,17 +4,18 @@ These tests use temporary files and mock git operations to test the commit workf
 Run with: pytest tests/test_commit.py -v
 """
 
-import pytest
-import tempfile
 import shutil
+import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from src.commit import (
     CommitWorkflow,
-    update_source_file,
-    update_configure_py,
     format_files,
+    update_configure_py,
+    update_source_file,
     verify_clang_format_available,
 )
 
@@ -76,12 +77,7 @@ class TestUpdateSourceFile:
     return;
 }"""
 
-        result = await update_source_file(
-            file_path,
-            function_name,
-            new_code,
-            temp_melee_root
-        )
+        result = await update_source_file(file_path, function_name, new_code, temp_melee_root)
 
         assert result is True
 
@@ -106,12 +102,7 @@ class TestUpdateSourceFile:
     }
 }"""
 
-        result = await update_source_file(
-            file_path,
-            function_name,
-            new_code,
-            temp_melee_root
-        )
+        result = await update_source_file(file_path, function_name, new_code, temp_melee_root)
 
         assert result is True
 
@@ -128,12 +119,7 @@ class TestUpdateSourceFile:
         function_name = "NonExistentFunction"
         new_code = "void NonExistentFunction(void) {}"
 
-        result = await update_source_file(
-            file_path,
-            function_name,
-            new_code,
-            temp_melee_root
-        )
+        result = await update_source_file(file_path, function_name, new_code, temp_melee_root)
 
         assert result is False
 
@@ -144,12 +130,7 @@ class TestUpdateSourceFile:
         function_name = "TestFunction"
         new_code = "void TestFunction(void) {}"
 
-        result = await update_source_file(
-            file_path,
-            function_name,
-            new_code,
-            temp_melee_root
-        )
+        result = await update_source_file(file_path, function_name, new_code, temp_melee_root)
 
         assert result is False
 
@@ -198,7 +179,7 @@ class TestFormatFiles:
     @pytest.mark.asyncio
     async def test_verify_clang_format_unavailable(self):
         """Test verifying clang-format when it's not available."""
-        with patch('asyncio.create_subprocess_exec') as mock_exec:
+        with patch("asyncio.create_subprocess_exec") as mock_exec:
             # Simulate clang-format not found
             mock_exec.side_effect = FileNotFoundError()
 
@@ -208,7 +189,7 @@ class TestFormatFiles:
     @pytest.mark.asyncio
     async def test_verify_clang_format_available(self):
         """Test verifying clang-format when it's available."""
-        with patch('asyncio.create_subprocess_exec') as mock_exec:
+        with patch("asyncio.create_subprocess_exec") as mock_exec:
             # Create mock process
             mock_process = AsyncMock()
             mock_process.communicate.return_value = (b"git-clang-format version 14.0.0", b"")
@@ -229,7 +210,7 @@ class TestFormatFiles:
         """Test formatting files with mocked git commands."""
         files = ["src/melee/lb/lbcommand.c"]
 
-        with patch('asyncio.create_subprocess_exec') as mock_exec:
+        with patch("asyncio.create_subprocess_exec") as mock_exec:
             # Create mock process
             mock_process = AsyncMock()
             mock_process.communicate.return_value = (b"", b"")
@@ -247,7 +228,7 @@ class TestFormatFiles:
         """Test formatting when git returns an error."""
         files = ["src/melee/lb/lbcommand.c"]
 
-        with patch('asyncio.create_subprocess_exec') as mock_exec:
+        with patch("asyncio.create_subprocess_exec") as mock_exec:
             # Create mock process that fails
             mock_process = AsyncMock()
             mock_process.communicate.return_value = (b"", b"Error: git failed")
@@ -277,17 +258,19 @@ class TestCommitWorkflow:
             return True
 
         # Mock the format verification, compilation check, and configure.py update
-        with patch('src.commit.workflow.verify_clang_format_available', return_value=False), \
-             patch.object(workflow, '_verify_file_compiles', return_value=(True, "", "")), \
-             patch('src.commit.workflow.update_configure_py', return_value=True), \
-             patch.object(workflow, '_regenerate_report', mock_regenerate):
+        with (
+            patch("src.commit.workflow.verify_clang_format_available", return_value=False),
+            patch.object(workflow, "_verify_file_compiles", return_value=(True, "", "")),
+            patch("src.commit.workflow.update_configure_py", return_value=True),
+            patch.object(workflow, "_regenerate_report", mock_regenerate),
+        ):
             result = await workflow.execute(
                 function_name="TestFunction",
                 file_path="melee/lb/lbcommand.c",
                 new_code="void TestFunction(void) { return; }",
                 scratch_id="test123",
                 scratch_url="http://decomp.me/scratch/test123",
-                create_pull_request=False
+                create_pull_request=False,
             )
 
         # Should succeed without PR (returns None when create_pull_request=False)
@@ -306,19 +289,20 @@ class TestCommitWorkflow:
         async def mock_regenerate():
             return True
 
-        with patch('src.commit.workflow.verify_clang_format_available', return_value=False), \
-             patch.object(workflow, '_verify_file_compiles', return_value=(True, "", "")), \
-             patch('src.commit.workflow.update_configure_py', return_value=True), \
-             patch.object(workflow, '_regenerate_report', mock_regenerate), \
-             patch('src.commit.workflow.create_pr', return_value="https://github.com/test/pr/1"):
-
+        with (
+            patch("src.commit.workflow.verify_clang_format_available", return_value=False),
+            patch.object(workflow, "_verify_file_compiles", return_value=(True, "", "")),
+            patch("src.commit.workflow.update_configure_py", return_value=True),
+            patch.object(workflow, "_regenerate_report", mock_regenerate),
+            patch("src.commit.workflow.create_pr", return_value="https://github.com/test/pr/1"),
+        ):
             result = await workflow.execute(
                 function_name="TestFunction",
                 file_path="melee/lb/lbcommand.c",
                 new_code="void TestFunction(void) { return; }",
                 scratch_id="test123",
                 scratch_url="http://decomp.me/scratch/test123",
-                create_pull_request=True
+                create_pull_request=True,
             )
 
         # Should return PR URL
@@ -336,7 +320,7 @@ class TestCommitWorkflow:
             new_code="void NonExistentFunction(void) {}",
             scratch_id="test123",
             scratch_url="http://decomp.me/scratch/test123",
-            create_pull_request=False
+            create_pull_request=False,
         )
 
         # Should fail
@@ -352,18 +336,12 @@ class TestIntegration:
         """Test the complete commit workflow pipeline."""
         # Step 1: Update source file
         result = await update_source_file(
-            "melee/lb/lbcommand.c",
-            "TestFunction",
-            "void TestFunction(void) { /* matched */ }",
-            temp_melee_root
+            "melee/lb/lbcommand.c", "TestFunction", "void TestFunction(void) { /* matched */ }", temp_melee_root
         )
         assert result is True
 
         # Step 2: Update configure.py
-        result = await update_configure_py(
-            "melee/lb/lbcommand.c",
-            temp_melee_root
-        )
+        result = await update_configure_py("melee/lb/lbcommand.c", temp_melee_root)
         assert result is True
 
         # Verify all changes
@@ -378,14 +356,14 @@ class TestIntegration:
         """Test that running workflow twice is idempotent."""
         workflow1 = CommitWorkflow(temp_melee_root)
 
-        with patch('src.commit.workflow.verify_clang_format_available', return_value=False):
+        with patch("src.commit.workflow.verify_clang_format_available", return_value=False):
             result1 = await workflow1.execute(
                 function_name="TestFunction",
                 file_path="melee/lb/lbcommand.c",
                 new_code="void TestFunction(void) { return; }",
                 scratch_id="test123",
                 scratch_url="http://decomp.me/scratch/test123",
-                create_pull_request=False
+                create_pull_request=False,
             )
 
         assert result1 is None
@@ -393,14 +371,14 @@ class TestIntegration:
         # Run again
         workflow2 = CommitWorkflow(temp_melee_root)
 
-        with patch('src.commit.workflow.verify_clang_format_available', return_value=False):
+        with patch("src.commit.workflow.verify_clang_format_available", return_value=False):
             result2 = await workflow2.execute(
                 function_name="TestFunction",
                 file_path="melee/lb/lbcommand.c",
                 new_code="void TestFunction(void) { return; }",
                 scratch_id="test123",
                 scratch_url="http://decomp.me/scratch/test123",
-                create_pull_request=False
+                create_pull_request=False,
             )
 
         # Should still succeed (idempotent)
@@ -410,6 +388,7 @@ class TestIntegration:
 # =============================================================================
 # Unit Tests for Pure Functions
 # =============================================================================
+
 
 class TestFunctionCodeValidation:
     """Tests for validate_function_code - ensures code is valid before commit.
@@ -423,6 +402,7 @@ class TestFunctionCodeValidation:
     @pytest.fixture
     def validate(self):
         from src.commit.update import validate_function_code
+
         return validate_function_code
 
     def test_valid_simple_function(self, validate):
@@ -495,6 +475,7 @@ class TestMWCCErrorParsing:
     @pytest.fixture
     def parse_errors(self):
         from src.commit.diagnostics import parse_mwcc_errors
+
         return parse_mwcc_errors
 
     def test_parses_clang_style_error(self, parse_errors):
@@ -527,6 +508,7 @@ class TestLinkerErrorExtraction:
     @pytest.fixture
     def extract_errors(self):
         from src.commit.diagnostics import extract_linker_errors
+
         return extract_linker_errors
 
     def test_returns_list(self, extract_errors):
@@ -541,6 +523,7 @@ class TestSignatureNormalization:
     @pytest.fixture
     def normalize(self):
         from src.commit.diagnostics import normalize_signature
+
         return normalize_signature
 
     def test_removes_extra_whitespace(self, normalize):
@@ -565,6 +548,7 @@ class TestSignatureComparison:
     @pytest.fixture
     def compare(self):
         from src.commit.diagnostics import compare_signatures
+
         return compare_signatures
 
     def test_identical_signatures_match(self, compare):
@@ -582,6 +566,7 @@ class TestFunctionExtraction:
     @pytest.fixture
     def extract_function(self):
         from src.commit.update import _extract_function_from_code
+
         return _extract_function_from_code
 
     def test_extracts_single_function(self, extract_function):
@@ -611,6 +596,7 @@ class TestUndefinedIdentifierExtraction:
     @pytest.fixture
     def extract_undefined(self):
         from src.commit.diagnostics import extract_undefined_identifiers
+
         return extract_undefined_identifiers
 
     def test_extracts_undefined_identifier(self, extract_undefined):

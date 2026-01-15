@@ -43,6 +43,7 @@ def find_best_local_scratch(function_name: str) -> tuple[str | None, float]:
     Returns (slug, match_percent) of the best scratch, or (None, 0) if not found.
     """
     from src.client import DecompMeAPIClient
+
     from .._common import get_local_api_url
 
     async def search():
