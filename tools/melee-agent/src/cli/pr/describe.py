@@ -12,11 +12,11 @@ from rich.panel import Panel
 from rich.table import Table
 
 from .._common import (
-    console,
     DEFAULT_MELEE_ROOT,
     PRODUCTION_DECOMP_ME,
-    load_slug_map,
+    console,
     get_agent_melee_root,
+    load_slug_map,
 )
 
 # Constants
@@ -31,9 +31,7 @@ def _get_production_scratch_url(func_name: str, slug_map: dict) -> str | None:
     return None
 
 
-def _run_objdiff_changes(
-    objdiff_cli: Path, base_report: Path, current_report: Path
-) -> dict | None:
+def _run_objdiff_changes(objdiff_cli: Path, base_report: Path, current_report: Path) -> dict | None:
     """Run objdiff-cli report changes and return parsed JSON."""
     if not objdiff_cli.exists():
         console.print(f"[red]objdiff-cli not found at {objdiff_cli}[/red]")
@@ -46,7 +44,8 @@ def _run_objdiff_changes(
                 str(objdiff_cli),
                 "report",
                 "changes",
-                "-f", "json",
+                "-f",
+                "json",
                 str(base_report),
                 str(current_report),
             ],
@@ -81,12 +80,14 @@ def _parse_objdiff_changes(changes: dict) -> list[dict]:
             to_pct = to_info.get("fuzzy_match_percent", 0) or 0
 
             if to_pct > from_pct:
-                results.append({
-                    "function": name,
-                    "from_pct": from_pct,
-                    "to_pct": to_pct,
-                    "unit": unit_name,
-                })
+                results.append(
+                    {
+                        "function": name,
+                        "from_pct": from_pct,
+                        "to_pct": to_pct,
+                        "unit": unit_name,
+                    }
+                )
 
     results.sort(key=lambda x: (-x["to_pct"], x["function"]))
     return results
@@ -109,17 +110,19 @@ def _get_modified_functions_from_diff(repo_path: Path, base_ref: str = "upstream
         return modified_funcs
 
     # Method 1: Extract from hunk context (@@ ... @@ function_name)
-    hunk_pattern = re.compile(r'^@@ .* @@ (\w+)\(', re.MULTILINE)
+    hunk_pattern = re.compile(r"^@@ .* @@ (\w+)\(", re.MULTILINE)
     for match in hunk_pattern.finditer(diff_output):
         func_name = match.group(1)
-        if '_' in func_name and not func_name.startswith('_'):
+        if "_" in func_name and not func_name.startswith("_"):
             modified_funcs.add(func_name)
 
     # Method 2: Look for added function definitions
-    added_def_pattern = re.compile(r'^\+\s*(?:static\s+)?(?:inline\s+)?(?:\w+\s+)+(\w+)\s*\([^)]*\)\s*\{?\s*$', re.MULTILINE)
+    added_def_pattern = re.compile(
+        r"^\+\s*(?:static\s+)?(?:inline\s+)?(?:\w+\s+)+(\w+)\s*\([^)]*\)\s*\{?\s*$", re.MULTILINE
+    )
     for match in added_def_pattern.finditer(diff_output):
         func_name = match.group(1)
-        if '_' in func_name and not func_name.startswith('_') and func_name not in ('if', 'while', 'for', 'switch'):
+        if "_" in func_name and not func_name.startswith("_") and func_name not in ("if", "while", "for", "switch"):
             modified_funcs.add(func_name)
 
     return modified_funcs
@@ -152,7 +155,7 @@ def _check_upstream_status(melee_root: Path) -> tuple[str, bool, int]:
 
     try:
         result = subprocess.run(
-            ["git", "rev-list", "--count", f"upstream/master..HEAD"],
+            ["git", "rev-list", "--count", "upstream/master..HEAD"],
             cwd=melee_root,
             capture_output=True,
             text=True,
@@ -179,6 +182,7 @@ def _check_upstream_status(melee_root: Path) -> tuple[str, bool, int]:
 def _get_cached_baseline_path(commit_hash: str) -> Path:
     """Get path to cached baseline report for a commit."""
     from .._common import DECOMP_CONFIG_DIR
+
     cache_dir = DECOMP_CONFIG_DIR / "baseline_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / f"report_{commit_hash[:12]}.json"
@@ -234,8 +238,9 @@ def _build_baseline_report(melee_root: Path, target_commit: str) -> Path | None:
         report_path = melee_root / "build" / "GALE01" / "report.json"
         if report_path.exists():
             import shutil
+
             shutil.copy(report_path, cache_path)
-            console.print(f"[green]Built and cached baseline report[/green]")
+            console.print("[green]Built and cached baseline report[/green]")
             return cache_path
         else:
             console.print("[yellow]Build succeeded but report.json not found[/yellow]")
@@ -277,15 +282,11 @@ def _detect_melee_root_from_cwd() -> Path:
 
 
 def describe_command(
-    melee_root: Annotated[
-        Optional[Path], typer.Option("--melee-root", "-m", help="Path to melee submodule")
-    ] = None,
+    melee_root: Annotated[Path | None, typer.Option("--melee-root", "-m", help="Path to melee submodule")] = None,
     output_format: Annotated[
         str, typer.Option("--format", "-f", help="Output format: table, markdown, json")
     ] = "table",
-    include_links: Annotated[
-        bool, typer.Option("--links/--no-links", help="Include decomp.me scratch links")
-    ] = True,
+    include_links: Annotated[bool, typer.Option("--links/--no-links", help="Include decomp.me scratch links")] = True,
     build_baseline: Annotated[
         bool, typer.Option("--build-baseline/--no-build-baseline", help="Build baseline if needed (slow)")
     ] = False,
@@ -397,7 +398,7 @@ def describe_command(
         for f in improved:
             url = _get_production_scratch_url(f["function"], slug_map) if include_links else None
             link = f"[link]({url})" if url else "-"
-            pct_str = f"{f['from_pct']:.0f}% → {f['to_pct']:.0f}%" if f['from_pct'] > 0 else f"{f['to_pct']:.0f}%"
+            pct_str = f"{f['from_pct']:.0f}% → {f['to_pct']:.0f}%" if f["from_pct"] > 0 else f"{f['to_pct']:.0f}%"
             console.print(f"| `{f['function']}` | {pct_str} | {f['unit']} | {link} |")
         return
 
@@ -411,8 +412,8 @@ def describe_command(
         table.add_column("Scratch", style="dim")
 
     for f in improved:
-        from_str = f"{f['from_pct']:.0f}%" if f['from_pct'] > 0 else "-"
-        to_str = f"[green]{f['to_pct']:.0f}%[/green]" if f['to_pct'] >= 100 else f"{f['to_pct']:.0f}%"
+        from_str = f"{f['from_pct']:.0f}%" if f["from_pct"] > 0 else "-"
+        to_str = f"[green]{f['to_pct']:.0f}%[/green]" if f["to_pct"] >= 100 else f"{f['to_pct']:.0f}%"
 
         if include_links:
             url = _get_production_scratch_url(f["function"], slug_map)
@@ -428,7 +429,7 @@ def describe_command(
     improved_matches = len([f for f in improved if f["from_pct"] > 0 and f["to_pct"] >= 100])
     partial = len([f for f in improved if f["to_pct"] < 100])
 
-    console.print(f"\n[bold]Summary:[/bold]")
+    console.print("\n[bold]Summary:[/bold]")
     if new_matches:
         console.print(f"  [green]New 100% matches: {new_matches}[/green]")
     if improved_matches:

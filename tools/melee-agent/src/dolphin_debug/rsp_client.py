@@ -16,7 +16,7 @@ class GDBClient:
     def __init__(self, host: str = "localhost", port: int = 9090):
         self.host = host
         self.port = port
-        self.sock: Optional[socket.socket] = None
+        self.sock: socket.socket | None = None
         self._no_ack_mode = False
 
     def connect(self, timeout: float = 10.0) -> bool:
@@ -30,7 +30,7 @@ class GDBClient:
             if ack == b"+":
                 pass  # Some stubs send initial ack
             return True
-        except (socket.error, socket.timeout) as e:
+        except (TimeoutError, OSError) as e:
             print(f"Connection failed: {e}")
             return False
 
@@ -39,7 +39,7 @@ class GDBClient:
         if self.sock:
             try:
                 self.sock.close()
-            except socket.error:
+            except OSError:
                 pass
             self.sock = None
 
@@ -65,11 +65,11 @@ class GDBClient:
                     print(f"Bad ack: {ack}")
                     return False
             return True
-        except socket.error as e:
+        except OSError as e:
             print(f"Send failed: {e}")
             return False
 
-    def _recv_packet(self, timeout: float = 5.0) -> Optional[str]:
+    def _recv_packet(self, timeout: float = 5.0) -> str | None:
         """Receive a packet, stripping framing and verifying checksum."""
         if not self.sock:
             return None
@@ -111,14 +111,14 @@ class GDBClient:
 
             return data.decode("ascii", errors="replace")
 
-        except socket.timeout:
+        except TimeoutError:
             print("Receive timeout")
             return None
-        except socket.error as e:
+        except OSError as e:
             print(f"Receive failed: {e}")
             return None
 
-    def _command(self, cmd: str, timeout: float = 5.0) -> Optional[str]:
+    def _command(self, cmd: str, timeout: float = 5.0) -> str | None:
         """Send a command and return the response."""
         if not self._send_packet(cmd):
             return None
@@ -126,7 +126,7 @@ class GDBClient:
 
     # High-level commands
 
-    def read_memory(self, address: int, length: int) -> Optional[bytes]:
+    def read_memory(self, address: int, length: int) -> bytes | None:
         """
         Read memory from the target.
 
@@ -150,28 +150,28 @@ class GDBClient:
             print(f"Invalid hex response: {response}")
             return None
 
-    def read_u32(self, address: int) -> Optional[int]:
+    def read_u32(self, address: int) -> int | None:
         """Read a 32-bit big-endian value (PowerPC native)."""
         data = self.read_memory(address, 4)
         if data is None:
             return None
         return struct.unpack(">I", data)[0]
 
-    def read_u16(self, address: int) -> Optional[int]:
+    def read_u16(self, address: int) -> int | None:
         """Read a 16-bit big-endian value."""
         data = self.read_memory(address, 2)
         if data is None:
             return None
         return struct.unpack(">H", data)[0]
 
-    def read_u8(self, address: int) -> Optional[int]:
+    def read_u8(self, address: int) -> int | None:
         """Read an 8-bit value."""
         data = self.read_memory(address, 1)
         if data is None:
             return None
         return data[0]
 
-    def read_f32(self, address: int) -> Optional[float]:
+    def read_f32(self, address: int) -> float | None:
         """Read a 32-bit big-endian float."""
         data = self.read_memory(address, 4)
         if data is None:
@@ -198,7 +198,7 @@ class GDBClient:
         """Write a 32-bit big-endian value."""
         return self.write_memory(address, struct.pack(">I", value))
 
-    def read_registers(self) -> Optional[dict]:
+    def read_registers(self) -> dict | None:
         """
         Read all CPU registers.
 
@@ -252,9 +252,7 @@ class GDBClient:
         response = self._command(f"z0,{address:x},{kind}")
         return response == "OK"
 
-    def set_watchpoint(
-        self, address: int, length: int, write: bool = True, read: bool = False
-    ) -> bool:
+    def set_watchpoint(self, address: int, length: int, write: bool = True, read: bool = False) -> bool:
         """
         Set a memory watchpoint.
 
@@ -276,9 +274,7 @@ class GDBClient:
         response = self._command(f"Z{wp_type},{address:x},{length}")
         return response == "OK"
 
-    def remove_watchpoint(
-        self, address: int, length: int, write: bool = True, read: bool = False
-    ) -> bool:
+    def remove_watchpoint(self, address: int, length: int, write: bool = True, read: bool = False) -> bool:
         """Remove a memory watchpoint."""
         if write and read:
             wp_type = "4"
@@ -292,7 +288,7 @@ class GDBClient:
         response = self._command(f"z{wp_type},{address:x},{length}")
         return response == "OK"
 
-    def continue_execution(self) -> Optional[str]:
+    def continue_execution(self) -> str | None:
         """
         Continue execution until breakpoint or signal.
 
@@ -300,7 +296,7 @@ class GDBClient:
         """
         return self._command("c", timeout=60.0)
 
-    def step(self) -> Optional[str]:
+    def step(self) -> str | None:
         """
         Single-step one instruction.
 
@@ -319,7 +315,7 @@ class GDBClient:
         try:
             self.sock.sendall(b"\x03")
             return True
-        except socket.error:
+        except OSError:
             return False
 
     def kill(self) -> bool:
@@ -327,15 +323,15 @@ class GDBClient:
         response = self._command("k")
         return response is not None
 
-    def query_supported(self) -> Optional[str]:
+    def query_supported(self) -> str | None:
         """Query supported features."""
         return self._command("qSupported")
 
-    def query_attached(self) -> Optional[str]:
+    def query_attached(self) -> str | None:
         """Query if attached to existing process."""
         return self._command("qAttached")
 
-    def get_stop_reason(self) -> Optional[str]:
+    def get_stop_reason(self) -> str | None:
         """Get the reason the target stopped."""
         return self._command("?")
 

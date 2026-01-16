@@ -12,13 +12,14 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from enum import Enum
 from pathlib import Path
 from typing import Optional
-from enum import Enum
 
 
 class WorkflowStage(Enum):
     """Stages in the decomp workflow."""
+
     CLAIM = "claim"
     CREATE_SCRATCH = "create_scratch"
     READ_CONTEXT = "read_context"
@@ -29,6 +30,7 @@ class WorkflowStage(Enum):
 
 class ErrorCategory(Enum):
     """Categories of errors encountered."""
+
     CLAIM_CONFLICT = "claim_conflict"
     SERVER_ERROR = "server_error"
     BUILD_FAILURE = "build_failure"
@@ -43,7 +45,8 @@ class ErrorCategory(Enum):
 @dataclass
 class MatchProgress:
     """A single match percentage observation."""
-    timestamp: Optional[datetime]
+
+    timestamp: datetime | None
     match_pct: float
     iteration: int
 
@@ -51,29 +54,31 @@ class MatchProgress:
 @dataclass
 class ErrorEvent:
     """An error encountered during the workflow."""
-    timestamp: Optional[datetime]
+
+    timestamp: datetime | None
     category: ErrorCategory
     message: str
-    tool_name: Optional[str] = None
+    tool_name: str | None = None
 
 
 @dataclass
 class FunctionAttempt:
     """Tracks work on a single function within a session."""
+
     function_name: str
-    slug: Optional[str] = None
+    slug: str | None = None
 
     # Timestamps
-    started_at: Optional[datetime] = None
-    finished_at: Optional[datetime] = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
 
     # Workflow progression
     stages_completed: list[WorkflowStage] = field(default_factory=list)
-    current_stage: Optional[WorkflowStage] = None
+    current_stage: WorkflowStage | None = None
 
     # Match progression
     match_history: list[MatchProgress] = field(default_factory=list)
-    final_match_pct: Optional[float] = None
+    final_match_pct: float | None = None
 
     # Iteration tracking
     compile_count: int = 0
@@ -101,7 +106,7 @@ class FunctionAttempt:
     header_fixes_needed: int = 0
 
     @property
-    def duration(self) -> Optional[timedelta]:
+    def duration(self) -> timedelta | None:
         if self.started_at and self.finished_at:
             return self.finished_at - self.started_at
         return None
@@ -128,7 +133,7 @@ class FunctionAttempt:
 
         for i in range(1, len(self.match_history)):
             curr = self.match_history[i].match_pct
-            prev = self.match_history[i-1].match_pct
+            prev = self.match_history[i - 1].match_pct
 
             if curr > prev:
                 direction = 1
@@ -147,13 +152,14 @@ class FunctionAttempt:
 @dataclass
 class DecompSession:
     """A session that used the /decomp skill."""
+
     session_id: str
     project: str
     session_path: Path
 
     # Timestamps
-    started_at: Optional[datetime] = None
-    ended_at: Optional[datetime] = None
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
 
     # Functions worked on
     functions: list[FunctionAttempt] = field(default_factory=list)
@@ -168,7 +174,7 @@ class DecompSession:
     tool_errors: dict[str, int] = field(default_factory=dict)
 
     @property
-    def duration(self) -> Optional[timedelta]:
+    def duration(self) -> timedelta | None:
         if self.started_at and self.ended_at:
             return self.ended_at - self.started_at
         return None
@@ -208,7 +214,7 @@ class AggregateMetrics:
     avg_tokens_per_function: float = 0.0
     avg_turns_per_function: float = 0.0
     avg_iterations_per_function: float = 0.0
-    avg_duration_per_function: Optional[timedelta] = None
+    avg_duration_per_function: timedelta | None = None
 
     # Error rates
     total_errors: int = 0
@@ -229,15 +235,15 @@ class AggregateMetrics:
 class DecompAnalyzer:
     """Analyzes decomp sessions from Claude Code conversation history."""
 
-    CLAUDE_DIR = Path.home() / '.claude'
-    PROJECTS_DIR = CLAUDE_DIR / 'projects'
+    CLAUDE_DIR = Path.home() / ".claude"
+    PROJECTS_DIR = CLAUDE_DIR / "projects"
 
     # Patterns for detecting decomp-related activity
-    DECOMP_SKILL_PATTERN = re.compile(r'/decomp\s+(\w+)?', re.IGNORECASE)
-    MELEE_AGENT_PATTERN = re.compile(r'melee-agent\s+(\w+)\s+(\w+)?')
-    MATCH_PCT_PATTERN = re.compile(r'Match:\s*([\d.]+)%')
-    MATCH_HISTORY_PATTERN = re.compile(r'History:\s*([\d.%\s→]+)')
-    SLUG_PATTERN = re.compile(r'[Ss]lug[:\s]+[`\']?(\w+)[`\']?|scratch[:\s]+[`\']?(\w+)[`\']?')
+    DECOMP_SKILL_PATTERN = re.compile(r"/decomp\s+(\w+)?", re.IGNORECASE)
+    MELEE_AGENT_PATTERN = re.compile(r"melee-agent\s+(\w+)\s+(\w+)?")
+    MATCH_PCT_PATTERN = re.compile(r"Match:\s*([\d.]+)%")
+    MATCH_HISTORY_PATTERN = re.compile(r"History:\s*([\d.%\s→]+)")
+    SLUG_PATTERN = re.compile(r"[Ss]lug[:\s]+[`\']?(\w+)[`\']?|scratch[:\s]+[`\']?(\w+)[`\']?")
 
     def __init__(self, project_filter: str = "melee-decomp"):
         self.project_filter = project_filter
@@ -250,7 +256,7 @@ class DecompAnalyzer:
 
         dirs = []
         for d in self.PROJECTS_DIR.iterdir():
-            if d.is_dir() and not d.name.startswith('.'):
+            if d.is_dir() and not d.name.startswith("."):
                 if self.project_filter.lower() in d.name.lower():
                     dirs.append(d)
         return sorted(dirs)
@@ -258,7 +264,7 @@ class DecompAnalyzer:
     def load_session(self, session_path: Path) -> list[dict]:
         """Load all entries from a session JSONL file."""
         entries = []
-        with open(session_path, 'r') as f:
+        with open(session_path) as f:
             for line in f:
                 line = line.strip()
                 if line:
@@ -271,35 +277,35 @@ class DecompAnalyzer:
     def is_decomp_session(self, entries: list[dict]) -> bool:
         """Check if a session involves decomp work."""
         for entry in entries:
-            if entry.get('type') == 'user':
-                msg = entry.get('message', {})
-                content = msg.get('content', '')
+            if entry.get("type") == "user":
+                msg = entry.get("message", {})
+                content = msg.get("content", "")
                 if isinstance(content, str):
                     # Check for /decomp skill invocation
                     if self.DECOMP_SKILL_PATTERN.search(content):
                         return True
                     # Check for melee-agent commands
-                    if 'melee-agent' in content.lower():
+                    if "melee-agent" in content.lower():
                         return True
 
-            if entry.get('type') == 'assistant':
-                msg = entry.get('message', {})
-                content = msg.get('content', [])
+            if entry.get("type") == "assistant":
+                msg = entry.get("message", {})
+                content = msg.get("content", [])
                 if isinstance(content, list):
                     for item in content:
-                        if isinstance(item, dict) and item.get('type') == 'tool_use':
-                            tool_input = item.get('input', {})
-                            cmd = tool_input.get('command', '')
-                            if 'melee-agent' in cmd:
+                        if isinstance(item, dict) and item.get("type") == "tool_use":
+                            tool_input = item.get("input", {})
+                            cmd = tool_input.get("command", "")
+                            if "melee-agent" in cmd:
                                 return True
         return False
 
-    def parse_timestamp(self, ts_str: Optional[str]) -> Optional[datetime]:
+    def parse_timestamp(self, ts_str: str | None) -> datetime | None:
         """Parse ISO timestamp string."""
         if not ts_str:
             return None
         try:
-            return datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+            return datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
         except (ValueError, TypeError):
             return None
 
@@ -309,53 +315,52 @@ class DecompAnalyzer:
         pending = {}  # tool_id -> tool info
 
         for entry in entries:
-            ts = self.parse_timestamp(entry.get('timestamp'))
+            ts = self.parse_timestamp(entry.get("timestamp"))
 
-            if entry.get('type') == 'assistant':
-                msg = entry.get('message', {})
-                content = msg.get('content', [])
-                usage = msg.get('usage', {})
+            if entry.get("type") == "assistant":
+                msg = entry.get("message", {})
+                content = msg.get("content", [])
+                usage = msg.get("usage", {})
 
                 if isinstance(content, list):
                     for item in content:
-                        if isinstance(item, dict) and item.get('type') == 'tool_use':
-                            tool_id = item.get('id', '')
+                        if isinstance(item, dict) and item.get("type") == "tool_use":
+                            tool_id = item.get("id", "")
                             pending[tool_id] = {
-                                'id': tool_id,
-                                'name': item.get('name', 'unknown'),
-                                'input': item.get('input', {}),
-                                'timestamp': ts,
-                                'result': None,
-                                'is_error': False,
-                                'input_tokens': usage.get('input_tokens', 0) +
-                                               usage.get('cache_read_input_tokens', 0),
-                                'output_tokens': usage.get('output_tokens', 0),
+                                "id": tool_id,
+                                "name": item.get("name", "unknown"),
+                                "input": item.get("input", {}),
+                                "timestamp": ts,
+                                "result": None,
+                                "is_error": False,
+                                "input_tokens": usage.get("input_tokens", 0) + usage.get("cache_read_input_tokens", 0),
+                                "output_tokens": usage.get("output_tokens", 0),
                             }
 
-            elif entry.get('type') == 'user':
-                msg = entry.get('message', {})
-                content = msg.get('content', [])
+            elif entry.get("type") == "user":
+                msg = entry.get("message", {})
+                content = msg.get("content", [])
 
                 if isinstance(content, list):
                     for item in content:
-                        if isinstance(item, dict) and item.get('type') == 'tool_result':
-                            tool_id = item.get('tool_use_id', '')
+                        if isinstance(item, dict) and item.get("type") == "tool_result":
+                            tool_id = item.get("tool_use_id", "")
                             if tool_id in pending:
                                 tool_info = pending.pop(tool_id)
-                                tool_info['result'] = item.get('content', '')
-                                tool_info['is_error'] = item.get('is_error', False)
+                                tool_info["result"] = item.get("content", "")
+                                tool_info["is_error"] = item.get("is_error", False)
                                 tools.append(tool_info)
 
         return tools
 
-    def analyze_session(self, session_path: Path) -> Optional[DecompSession]:
+    def analyze_session(self, session_path: Path) -> DecompSession | None:
         """Analyze a single session for decomp metrics."""
         entries = self.load_session(session_path)
 
         if not self.is_decomp_session(entries):
             return None
 
-        project_name = session_path.parent.name.replace('-Users-mike-code-', '')
+        project_name = session_path.parent.name.replace("-Users-mike-code-", "")
 
         session = DecompSession(
             session_id=session_path.stem,
@@ -365,7 +370,7 @@ class DecompAnalyzer:
 
         # Extract timestamps
         for entry in entries:
-            ts = self.parse_timestamp(entry.get('timestamp'))
+            ts = self.parse_timestamp(entry.get("timestamp"))
             if ts:
                 if session.started_at is None or ts < session.started_at:
                     session.started_at = ts
@@ -377,54 +382,56 @@ class DecompAnalyzer:
 
         # Count tool usage
         for tool in tool_calls:
-            name = tool['name']
+            name = tool["name"]
             session.tool_counts[name] = session.tool_counts.get(name, 0) + 1
-            if tool['is_error']:
+            if tool["is_error"]:
                 session.tool_errors[name] = session.tool_errors.get(name, 0) + 1
-            session.total_input_tokens += tool['input_tokens']
-            session.total_output_tokens += tool['output_tokens']
+            session.total_input_tokens += tool["input_tokens"]
+            session.total_output_tokens += tool["output_tokens"]
 
         # Count turns
-        session.total_turns = sum(1 for e in entries if e.get('type') in ('user', 'assistant'))
+        session.total_turns = sum(1 for e in entries if e.get("type") in ("user", "assistant"))
 
         # Parse function attempts from tool calls
-        current_function: Optional[FunctionAttempt] = None
+        current_function: FunctionAttempt | None = None
 
         for tool in tool_calls:
-            if tool['name'] == 'Bash':
-                cmd = tool.get('input', {}).get('command', '')
-                result = tool.get('result', '') or ''
+            if tool["name"] == "Bash":
+                cmd = tool.get("input", {}).get("command", "")
+                result = tool.get("result", "") or ""
 
                 # Detect melee-agent commands
-                if 'melee-agent' not in cmd:
+                if "melee-agent" not in cmd:
                     continue
 
                 # Claim command
-                if 'claim add' in cmd:
-                    match = re.search(r'claim add\s+(\w+)', cmd)
+                if "claim add" in cmd:
+                    match = re.search(r"claim add\s+(\w+)", cmd)
                     if match:
                         func_name = match.group(1)
                         # Start new function attempt
                         current_function = FunctionAttempt(
                             function_name=func_name,
-                            started_at=tool['timestamp'],
+                            started_at=tool["timestamp"],
                         )
                         current_function.stages_completed.append(WorkflowStage.CLAIM)
                         current_function.current_stage = WorkflowStage.CLAIM
                         session.functions.append(current_function)
 
                         # Check for claim conflict
-                        if 'already claimed' in result.lower() or 'conflict' in result.lower():
-                            current_function.errors.append(ErrorEvent(
-                                timestamp=tool['timestamp'],
-                                category=ErrorCategory.CLAIM_CONFLICT,
-                                message=result[:200],
-                                tool_name='Bash',
-                            ))
+                        if "already claimed" in result.lower() or "conflict" in result.lower():
+                            current_function.errors.append(
+                                ErrorEvent(
+                                    timestamp=tool["timestamp"],
+                                    category=ErrorCategory.CLAIM_CONFLICT,
+                                    message=result[:200],
+                                    tool_name="Bash",
+                                )
+                            )
 
                 # Extract get / create scratch
-                elif 'extract get' in cmd and '--create-scratch' in cmd:
-                    match = re.search(r'extract get\s+(\w+)', cmd)
+                elif "extract get" in cmd and "--create-scratch" in cmd:
+                    match = re.search(r"extract get\s+(\w+)", cmd)
                     if match:
                         func_name = match.group(1)
                         if current_function and current_function.function_name == func_name:
@@ -434,7 +441,7 @@ class DecompAnalyzer:
                             # Started working on function without explicit claim
                             current_function = FunctionAttempt(
                                 function_name=func_name,
-                                started_at=tool['timestamp'],
+                                started_at=tool["timestamp"],
                             )
                             current_function.stages_completed.append(WorkflowStage.CREATE_SCRATCH)
                             session.functions.append(current_function)
@@ -445,12 +452,12 @@ class DecompAnalyzer:
                             current_function.slug = slug_match.group(1) or slug_match.group(2)
 
                 # Scratch compile
-                elif 'scratch compile' in cmd:
+                elif "scratch compile" in cmd:
                     if current_function:
                         current_function.compile_count += 1
                         current_function.turn_count += 1
-                        current_function.input_tokens += tool['input_tokens']
-                        current_function.output_tokens += tool['output_tokens']
+                        current_function.input_tokens += tool["input_tokens"]
+                        current_function.output_tokens += tool["output_tokens"]
 
                         if WorkflowStage.ITERATE not in current_function.stages_completed:
                             current_function.stages_completed.append(WorkflowStage.ITERATE)
@@ -460,124 +467,136 @@ class DecompAnalyzer:
                         match_match = self.MATCH_PCT_PATTERN.search(result)
                         if match_match:
                             pct = float(match_match.group(1))
-                            current_function.match_history.append(MatchProgress(
-                                timestamp=tool['timestamp'],
-                                match_pct=pct,
-                                iteration=current_function.compile_count,
-                            ))
+                            current_function.match_history.append(
+                                MatchProgress(
+                                    timestamp=tool["timestamp"],
+                                    match_pct=pct,
+                                    iteration=current_function.compile_count,
+                                )
+                            )
                             current_function.final_match_pct = pct
 
                 # Context lookups
-                elif 'struct offset' in cmd or 'search-context' in cmd or 'struct show' in cmd:
+                elif "struct offset" in cmd or "search-context" in cmd or "struct show" in cmd:
                     if current_function:
                         current_function.context_lookups += 1
                         if WorkflowStage.READ_CONTEXT not in current_function.stages_completed:
                             current_function.stages_completed.append(WorkflowStage.READ_CONTEXT)
 
                 # Commit apply (with or without dry-run)
-                elif 'commit apply' in cmd:
+                elif "commit apply" in cmd:
                     if current_function:
-                        if '--dry-run' in cmd:
+                        if "--dry-run" in cmd:
                             current_function.dry_run_used = True
                         else:
                             current_function.stages_completed.append(WorkflowStage.COMMIT)
                             current_function.current_stage = WorkflowStage.COMMIT
 
                         # Check for build failures
-                        if tool['is_error'] or 'error' in result.lower():
-                            if 'proto' in result.lower() or 'prototype' in result.lower():
-                                current_function.errors.append(ErrorEvent(
-                                    timestamp=tool['timestamp'],
-                                    category=ErrorCategory.PROTO_MISMATCH,
-                                    message=result[:200],
-                                    tool_name='Bash',
-                                ))
+                        if tool["is_error"] or "error" in result.lower():
+                            if "proto" in result.lower() or "prototype" in result.lower():
+                                current_function.errors.append(
+                                    ErrorEvent(
+                                        timestamp=tool["timestamp"],
+                                        category=ErrorCategory.PROTO_MISMATCH,
+                                        message=result[:200],
+                                        tool_name="Bash",
+                                    )
+                                )
                                 current_function.build_passed_first_try = False
-                            elif 'undefined' in result.lower() or 'undeclared' in result.lower():
-                                current_function.errors.append(ErrorEvent(
-                                    timestamp=tool['timestamp'],
-                                    category=ErrorCategory.MISSING_CONTEXT,
-                                    message=result[:200],
-                                    tool_name='Bash',
-                                ))
+                            elif "undefined" in result.lower() or "undeclared" in result.lower():
+                                current_function.errors.append(
+                                    ErrorEvent(
+                                        timestamp=tool["timestamp"],
+                                        category=ErrorCategory.MISSING_CONTEXT,
+                                        message=result[:200],
+                                        tool_name="Bash",
+                                    )
+                                )
                                 current_function.build_passed_first_try = False
-                            elif 'syntax' in result.lower():
-                                current_function.errors.append(ErrorEvent(
-                                    timestamp=tool['timestamp'],
-                                    category=ErrorCategory.SYNTAX_ERROR,
-                                    message=result[:200],
-                                    tool_name='Bash',
-                                ))
+                            elif "syntax" in result.lower():
+                                current_function.errors.append(
+                                    ErrorEvent(
+                                        timestamp=tool["timestamp"],
+                                        category=ErrorCategory.SYNTAX_ERROR,
+                                        message=result[:200],
+                                        tool_name="Bash",
+                                    )
+                                )
                                 current_function.build_passed_first_try = False
 
                 # Workflow finish (combined commit + complete)
-                elif 'workflow finish' in cmd:
+                elif "workflow finish" in cmd:
                     if current_function:
                         current_function.dry_run_used = True  # workflow finish does dry-run internally
                         current_function.stages_completed.append(WorkflowStage.COMMIT)
                         current_function.stages_completed.append(WorkflowStage.COMPLETE)
                         current_function.current_stage = WorkflowStage.COMPLETE
 
-                        if 'success' in result.lower() or 'committed' in result.lower():
+                        if "success" in result.lower() or "committed" in result.lower():
                             current_function.committed = True
-                            current_function.finished_at = tool['timestamp']
-                        elif tool['is_error'] or 'error' in result.lower() or 'failed' in result.lower():
-                            current_function.errors.append(ErrorEvent(
-                                timestamp=tool['timestamp'],
-                                category=ErrorCategory.BUILD_FAILURE,
-                                message=result[:200],
-                                tool_name='Bash',
-                            ))
+                            current_function.finished_at = tool["timestamp"]
+                        elif tool["is_error"] or "error" in result.lower() or "failed" in result.lower():
+                            current_function.errors.append(
+                                ErrorEvent(
+                                    timestamp=tool["timestamp"],
+                                    category=ErrorCategory.BUILD_FAILURE,
+                                    message=result[:200],
+                                    tool_name="Bash",
+                                )
+                            )
 
                 # Complete mark
-                elif 'complete mark' in cmd:
+                elif "complete mark" in cmd:
                     if current_function:
                         current_function.stages_completed.append(WorkflowStage.COMPLETE)
-                        current_function.finished_at = tool['timestamp']
-                        if '--committed' in cmd:
+                        current_function.finished_at = tool["timestamp"]
+                        if "--committed" in cmd:
                             current_function.committed = True
 
                 # Stub add
-                elif 'stub add' in cmd:
+                elif "stub add" in cmd:
                     if current_function:
-                        current_function.errors.append(ErrorEvent(
-                            timestamp=tool['timestamp'],
-                            category=ErrorCategory.MISSING_STUB,
-                            message="Missing stub marker",
-                            tool_name='Bash',
-                        ))
+                        current_function.errors.append(
+                            ErrorEvent(
+                                timestamp=tool["timestamp"],
+                                category=ErrorCategory.MISSING_STUB,
+                                message="Missing stub marker",
+                                tool_name="Bash",
+                            )
+                        )
 
                 # Worktree usage detection
-                if 'worktree' in cmd or 'melee-worktrees' in result:
+                if "worktree" in cmd or "melee-worktrees" in result:
                     if current_function:
                         current_function.used_worktree = True
 
                 # Check for committing to main repo warning
-                if 'Warning: Committing to main melee repo' in result:
+                if "Warning: Committing to main melee repo" in result:
                     if current_function:
                         current_function.worktree_correct = False
 
                 # Server errors
-                if 'connection' in result.lower() or 'unreachable' in result.lower() or 'timeout' in result.lower():
+                if "connection" in result.lower() or "unreachable" in result.lower() or "timeout" in result.lower():
                     error = ErrorEvent(
-                        timestamp=tool['timestamp'],
+                        timestamp=tool["timestamp"],
                         category=ErrorCategory.SERVER_ERROR,
                         message=result[:200],
-                        tool_name='Bash',
+                        tool_name="Bash",
                     )
                     if current_function:
                         current_function.errors.append(error)
 
             # Read tool - context gathering
-            elif tool['name'] == 'Read':
-                file_path = tool.get('input', {}).get('file_path', '')
-                if current_function and 'melee/src' in file_path:
+            elif tool["name"] == "Read":
+                file_path = tool.get("input", {}).get("file_path", "")
+                if current_function and "melee/src" in file_path:
                     if WorkflowStage.READ_CONTEXT not in current_function.stages_completed:
                         current_function.stages_completed.append(WorkflowStage.READ_CONTEXT)
 
         return session
 
-    def analyze_all(self, since_days: Optional[int] = None, include_subagents: bool = True) -> list[DecompSession]:
+    def analyze_all(self, since_days: int | None = None, include_subagents: bool = True) -> list[DecompSession]:
         """Analyze all decomp sessions.
 
         Args:
@@ -591,9 +610,9 @@ class DecompAnalyzer:
             cutoff = datetime.now() - timedelta(days=since_days)
 
         for project_dir in self.find_project_dirs():
-            for session_file in project_dir.glob('*.jsonl'):
+            for session_file in project_dir.glob("*.jsonl"):
                 # Optionally skip subagent sessions
-                if not include_subagents and session_file.stem.startswith('agent-'):
+                if not include_subagents and session_file.stem.startswith("agent-"):
                     continue
 
                 try:
@@ -601,7 +620,11 @@ class DecompAnalyzer:
                     if session:
                         # Apply time filter
                         if cutoff and session.started_at:
-                            ts = session.started_at.replace(tzinfo=None) if session.started_at.tzinfo else session.started_at
+                            ts = (
+                                session.started_at.replace(tzinfo=None)
+                                if session.started_at.tzinfo
+                                else session.started_at
+                            )
                             if ts < cutoff:
                                 continue
                         self.sessions.append(session)
@@ -634,9 +657,13 @@ class DecompAnalyzer:
             worktree_users = [f for f in all_functions if f.used_worktree]
 
             if worktree_users:
-                metrics.worktree_correct_rate = sum(1 for f in worktree_users if f.worktree_correct) / len(worktree_users)
+                metrics.worktree_correct_rate = sum(1 for f in worktree_users if f.worktree_correct) / len(
+                    worktree_users
+                )
 
-            metrics.build_first_try_rate = sum(1 for f in all_functions if f.build_passed_first_try) / len(all_functions)
+            metrics.build_first_try_rate = sum(1 for f in all_functions if f.build_passed_first_try) / len(
+                all_functions
+            )
             metrics.dry_run_usage_rate = sum(1 for f in all_functions if f.dry_run_used) / len(all_functions)
 
         # Efficiency metrics
@@ -692,21 +719,23 @@ class DecompAnalyzer:
         details = []
         for session in self.sessions:
             for func in session.functions:
-                details.append({
-                    'session_id': session.session_id[:8],
-                    'function': func.function_name,
-                    'slug': func.slug,
-                    'committed': func.committed,
-                    'final_match': func.final_match_pct,
-                    'iterations': func.compile_count,
-                    'tokens': func.input_tokens + func.output_tokens,
-                    'turns': func.turn_count,
-                    'errors': len(func.errors),
-                    'error_types': [e.category.value for e in func.errors],
-                    'stages': [s.value for s in func.stages_completed],
-                    'duration_mins': func.duration.total_seconds() / 60 if func.duration else None,
-                    'thrashing': func.had_thrashing,
-                    'dry_run': func.dry_run_used,
-                    'worktree': func.used_worktree,
-                })
+                details.append(
+                    {
+                        "session_id": session.session_id[:8],
+                        "function": func.function_name,
+                        "slug": func.slug,
+                        "committed": func.committed,
+                        "final_match": func.final_match_pct,
+                        "iterations": func.compile_count,
+                        "tokens": func.input_tokens + func.output_tokens,
+                        "turns": func.turn_count,
+                        "errors": len(func.errors),
+                        "error_types": [e.category.value for e in func.errors],
+                        "stages": [s.value for s in func.stages_completed],
+                        "duration_mins": func.duration.total_seconds() / 60 if func.duration else None,
+                        "thrashing": func.had_thrashing,
+                        "dry_run": func.dry_run_used,
+                        "worktree": func.used_worktree,
+                    }
+                )
         return details

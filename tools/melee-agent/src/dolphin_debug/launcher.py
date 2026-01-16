@@ -2,10 +2,10 @@
 Dolphin emulator launcher with GDB stub support.
 """
 
+import configparser
 import os
 import subprocess
 import time
-import configparser
 from pathlib import Path
 from typing import Optional
 
@@ -19,15 +19,15 @@ class DolphinLauncher:
 
     def __init__(
         self,
-        dolphin_path: Optional[str] = None,
-        config_dir: Optional[Path] = None,
+        dolphin_path: str | None = None,
+        config_dir: Path | None = None,
         gdb_port: int = 9090,
     ):
         self.dolphin_path = dolphin_path or self.DEFAULT_DOLPHIN_APP
         self.config_dir = config_dir or self.DEFAULT_CONFIG_DIR
         self.gdb_port = gdb_port
-        self.process: Optional[subprocess.Popen] = None
-        self._original_config: Optional[str] = None
+        self.process: subprocess.Popen | None = None
+        self._original_config: str | None = None
 
     @property
     def dolphin_binary(self) -> str:
@@ -100,7 +100,7 @@ class DolphinLauncher:
         iso_path: str,
         headless: bool = False,
         wait_for_gdb: bool = True,
-        extra_args: Optional[list] = None,
+        extra_args: list | None = None,
     ) -> bool:
         """
         Launch Dolphin with the specified game.
@@ -173,7 +173,7 @@ class DolphinLauncher:
                 sock.connect(("localhost", self.gdb_port))
                 sock.close()
                 return True
-            except (socket.error, socket.timeout):
+            except (TimeoutError, OSError):
                 time.sleep(0.5)
 
         return False
@@ -207,7 +207,7 @@ class DolphinLauncher:
         return False
 
 
-def find_melee_iso() -> Optional[str]:
+def find_melee_iso() -> str | None:
     """
     Try to find a Melee ISO in common locations.
 

@@ -4,6 +4,7 @@ import ast
 import re
 from pathlib import Path
 from typing import Optional
+
 from .models import ObjectStatus
 
 
@@ -30,7 +31,7 @@ class ConfigureParser:
         if not self.configure_path.exists():
             raise FileNotFoundError(f"configure.py not found at {self.configure_path}")
 
-        with open(self.configure_path, "r", encoding="utf-8") as f:
+        with open(self.configure_path, encoding="utf-8") as f:
             content = f.read()
 
         return self._extract_objects_from_content(content)
@@ -93,7 +94,7 @@ class ConfigureParser:
 
         return objects
 
-    def get_object_status(self, file_path: str) -> Optional[ObjectStatus]:
+    def get_object_status(self, file_path: str) -> ObjectStatus | None:
         """
         Get the status of a specific object file.
 

@@ -2,13 +2,13 @@
 
 import typer
 
-from .status import status_command, urls_command, history_command
 from .agents import agents_command, stale_command
-from .validate import validate_command
-from .prs import prs_command, refresh_prs_command
-from .cleanup import cleanup_command, rebuild_command, export_command
-from .sync_report import populate_addresses_command, sync_report_command
+from .cleanup import cleanup_command, export_command, rebuild_command
 from .diff_remotes import diff_remotes_command
+from .prs import prs_command, refresh_prs_command
+from .status import history_command, status_command, urls_command
+from .sync_report import populate_addresses_command, sync_report_command
+from .validate import validate_command
 
 state_app = typer.Typer(help="Query and manage agent state database")
 

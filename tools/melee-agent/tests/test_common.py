@@ -8,8 +8,9 @@ making them resilient to refactoring. They test:
 4. Compiler detection
 """
 
-import pytest
 from pathlib import Path
+
+import pytest
 
 
 class TestPRInfoExtraction:
@@ -21,6 +22,7 @@ class TestPRInfoExtraction:
     @pytest.fixture
     def extract_pr_info(self):
         from src.cli._common import extract_pr_info
+
         return extract_pr_info
 
     def test_full_github_url(self, extract_pr_info):
@@ -69,6 +71,7 @@ class TestFunctionCategorization:
     @pytest.fixture
     def categorize_functions(self):
         from src.cli._common import categorize_functions
+
         return categorize_functions
 
     def _make_data(self, completed=None, slug_map=None, synced=None):
@@ -81,9 +84,9 @@ class TestFunctionCategorization:
 
     def test_high_match_with_pr_is_in_review(self, categorize_functions):
         """95%+ match with PR URL goes to in_review."""
-        data = self._make_data(completed={
-            "func1": {"match_percent": 98, "pr_url": "https://github.com/doldecomp/melee/pull/1"}
-        })
+        data = self._make_data(
+            completed={"func1": {"match_percent": 98, "pr_url": "https://github.com/doldecomp/melee/pull/1"}}
+        )
         result = categorize_functions(data, check_pr_status=False)
 
         assert len(result["in_review"]) == 1
@@ -91,9 +94,7 @@ class TestFunctionCategorization:
 
     def test_high_match_committed_no_pr(self, categorize_functions):
         """95%+ match that's committed but no PR goes to committed."""
-        data = self._make_data(completed={
-            "func1": {"match_percent": 95, "committed": True}
-        })
+        data = self._make_data(completed={"func1": {"match_percent": 95, "committed": True}})
         result = categorize_functions(data)
 
         assert len(result["committed"]) == 1
@@ -102,8 +103,7 @@ class TestFunctionCategorization:
     def test_high_match_synced_goes_to_ready(self, categorize_functions):
         """95%+ match that's synced to production goes to ready."""
         data = self._make_data(
-            completed={"func1": {"match_percent": 100, "scratch_slug": "ABC"}},
-            synced={"ABC": {"some": "data"}}
+            completed={"func1": {"match_percent": 100, "scratch_slug": "ABC"}}, synced={"ABC": {"some": "data"}}
         )
         result = categorize_functions(data)
 
@@ -112,9 +112,7 @@ class TestFunctionCategorization:
 
     def test_high_match_not_synced_is_lost(self, categorize_functions):
         """95%+ match not synced anywhere goes to lost_high_match."""
-        data = self._make_data(completed={
-            "func1": {"match_percent": 97}
-        })
+        data = self._make_data(completed={"func1": {"match_percent": 97}})
         result = categorize_functions(data)
 
         assert len(result["lost_high_match"]) == 1
@@ -122,10 +120,12 @@ class TestFunctionCategorization:
 
     def test_low_match_is_work_in_progress(self, categorize_functions):
         """<95% match goes to work_in_progress."""
-        data = self._make_data(completed={
-            "func1": {"match_percent": 50},
-            "func2": {"match_percent": 94},
-        })
+        data = self._make_data(
+            completed={
+                "func1": {"match_percent": 50},
+                "func2": {"match_percent": 94},
+            }
+        )
         result = categorize_functions(data)
 
         assert len(result["work_in_progress"]) == 2
@@ -135,9 +135,7 @@ class TestFunctionCategorization:
 
     def test_skips_upstream_functions(self, categorize_functions):
         """Functions marked as already_in_upstream should be skipped."""
-        data = self._make_data(completed={
-            "func1": {"match_percent": 100, "already_in_upstream": True}
-        })
+        data = self._make_data(completed={"func1": {"match_percent": 100, "already_in_upstream": True}})
         result = categorize_functions(data)
 
         # Should not appear in any category
@@ -148,11 +146,13 @@ class TestFunctionCategorization:
 
     def test_results_sorted_by_match_percent_descending(self, categorize_functions):
         """Each category should be sorted by match percentage, highest first."""
-        data = self._make_data(completed={
-            "func_low": {"match_percent": 30},
-            "func_mid": {"match_percent": 60},
-            "func_high": {"match_percent": 90},
-        })
+        data = self._make_data(
+            completed={
+                "func_low": {"match_percent": 30},
+                "func_mid": {"match_percent": 60},
+                "func_high": {"match_percent": 90},
+            }
+        )
         result = categorize_functions(data)
 
         wip = result["work_in_progress"]
@@ -163,8 +163,7 @@ class TestFunctionCategorization:
     def test_function_in_prod_slug_map_is_synced(self, categorize_functions):
         """Function appearing in slug_map (prod) counts as synced."""
         data = self._make_data(
-            completed={"func1": {"match_percent": 99}},
-            slug_map={"PROD_SLUG": {"function": "func1"}}
+            completed={"func1": {"match_percent": 99}}, slug_map={"PROD_SLUG": {"function": "func1"}}
         )
         result = categorize_functions(data)
 
@@ -176,8 +175,7 @@ class TestFunctionCategorization:
         data = self._make_data()
         result = categorize_functions(data)
 
-        expected_keys = {"merged", "in_review", "committed", "ready",
-                        "lost_high_match", "work_in_progress"}
+        expected_keys = {"merged", "in_review", "committed", "ready", "lost_high_match", "work_in_progress"}
         assert set(result.keys()) == expected_keys
 
 
@@ -192,6 +190,7 @@ class TestContextFileResolution:
     @pytest.fixture
     def get_context_file(self):
         from src.cli._common import get_context_file
+
         return get_context_file
 
     def test_per_file_ctx_path_format(self, get_context_file, tmp_path):
@@ -255,11 +254,13 @@ class TestCompilerDetection:
     @pytest.fixture
     def get_compiler(self):
         from src.cli._common import get_compiler_for_source
+
         return get_compiler_for_source
 
     @pytest.fixture
     def default_compiler(self):
         from src.cli._common import DEFAULT_DECOMP_COMPILER
+
         return DEFAULT_DECOMP_COMPILER
 
     def test_parses_mw_version_from_build_ninja(self, get_compiler, tmp_path):

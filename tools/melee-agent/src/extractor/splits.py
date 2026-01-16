@@ -20,7 +20,7 @@ class SplitsParser:
         self.splits_path = self.melee_root / "config" / "GALE01" / "splits.txt"
         self._file_ranges = None
         # Sorted interval index for O(log n) lookups: {section: [(start, end, file_path), ...]}
-        self._interval_index: Optional[dict[str, list[tuple[int, int, str]]]] = None
+        self._interval_index: dict[str, list[tuple[int, int, str]]] | None = None
 
     def parse_splits(self) -> dict[str, list[dict]]:
         """
@@ -45,14 +45,12 @@ class SplitsParser:
         current_file = None
 
         # Pattern for file header: "path/to/file.c:"
-        file_pattern = re.compile(r'^([^:]+\.c):$')
+        file_pattern = re.compile(r"^([^:]+\.c):$")
 
         # Pattern for section range: "	.section    start:0xADDRESS end:0xADDRESS"
-        range_pattern = re.compile(
-            r'^\s+\.?(\w+)\s+start:0x([0-9A-Fa-f]+)\s+end:0x([0-9A-Fa-f]+)'
-        )
+        range_pattern = re.compile(r"^\s+\.?(\w+)\s+start:0x([0-9A-Fa-f]+)\s+end:0x([0-9A-Fa-f]+)")
 
-        with open(self.splits_path, "r", encoding="utf-8") as f:
+        with open(self.splits_path, encoding="utf-8") as f:
             for line in f:
                 # Check for file header
                 file_match = file_pattern.match(line)
@@ -69,11 +67,13 @@ class SplitsParser:
                         start = int(range_match.group(2), 16)
                         end = int(range_match.group(3), 16)
 
-                        file_ranges[current_file].append({
-                            "section": section,
-                            "start": start,
-                            "end": end,
-                        })
+                        file_ranges[current_file].append(
+                            {
+                                "section": section,
+                                "start": start,
+                                "end": end,
+                            }
+                        )
 
         self._file_ranges = file_ranges
         return file_ranges
@@ -96,11 +96,7 @@ class SplitsParser:
                 section = range_info["section"]
                 if section not in index:
                     index[section] = []
-                index[section].append((
-                    range_info["start"],
-                    range_info["end"],
-                    file_path
-                ))
+                index[section].append((range_info["start"], range_info["end"], file_path))
 
         # Sort each section's intervals by start address
         for section in index:
@@ -109,7 +105,7 @@ class SplitsParser:
         self._interval_index = index
         return index
 
-    def get_file_for_address_fast(self, address: int, section: str = "text") -> Optional[str]:
+    def get_file_for_address_fast(self, address: int, section: str = "text") -> str | None:
         """
         Get the source file for an address using O(log n) binary search.
 
@@ -140,7 +136,7 @@ class SplitsParser:
 
         return None
 
-    def get_file_for_address(self, address: int) -> Optional[str]:
+    def get_file_for_address(self, address: int) -> str | None:
         """
         Get the source file that contains a given address.
 
@@ -159,9 +155,7 @@ class SplitsParser:
 
         return None
 
-    def get_file_for_function(
-        self, function_address: str, section: str = "text"
-    ) -> Optional[str]:
+    def get_file_for_function(self, function_address: str, section: str = "text") -> str | None:
         """
         Get the source file that contains a function using O(log n) lookup.
 
@@ -179,9 +173,7 @@ class SplitsParser:
 
         return self.get_file_for_address_fast(addr, section)
 
-    def get_functions_in_file(
-        self, source_file: str, symbols: dict
-    ) -> list[str]:
+    def get_functions_in_file(self, source_file: str, symbols: dict) -> list[str]:
         """
         Get all functions in a specific source file.
 
@@ -207,8 +199,7 @@ class SplitsParser:
 
             # Check if function is in any of the file's ranges
             for range_info in ranges:
-                if (range_info["section"] == symbol.section and
-                    range_info["start"] <= addr < range_info["end"]):
+                if range_info["section"] == symbol.section and range_info["start"] <= addr < range_info["end"]:
                     functions.append(func_name)
                     break
 

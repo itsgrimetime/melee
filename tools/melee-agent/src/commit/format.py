@@ -4,10 +4,7 @@ import asyncio
 from pathlib import Path
 
 
-async def format_files(
-    files: list[str],
-    melee_root: Path
-) -> bool:
+async def format_files(files: list[str], melee_root: Path) -> bool:
     """Run git clang-format on files.
 
     This runs `git clang-format` on the specified files to ensure they
@@ -33,10 +30,7 @@ async def format_files(
         stage_cmd = ["git", "add"] + abs_files
 
         process = await asyncio.create_subprocess_exec(
-            *stage_cmd,
-            cwd=str(melee_root),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            *stage_cmd, cwd=str(melee_root), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
 
         stdout, stderr = await process.communicate()
@@ -50,10 +44,7 @@ async def format_files(
         format_cmd = ["git", "clang-format"]
 
         process = await asyncio.create_subprocess_exec(
-            *format_cmd,
-            cwd=str(melee_root),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            *format_cmd, cwd=str(melee_root), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
 
         stdout, stderr = await process.communicate()
@@ -69,10 +60,7 @@ async def format_files(
         # Re-stage the formatted files
         print("Re-staging formatted files...")
         process = await asyncio.create_subprocess_exec(
-            *stage_cmd,
-            cwd=str(melee_root),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            *stage_cmd, cwd=str(melee_root), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
 
         stdout, stderr = await process.communicate()
@@ -100,9 +88,7 @@ async def verify_clang_format_available() -> bool:
     """
     try:
         process = await asyncio.create_subprocess_exec(
-            "git", "clang-format", "--version",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            "git", "clang-format", "--version", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
 
         stdout, stderr = await process.communicate()

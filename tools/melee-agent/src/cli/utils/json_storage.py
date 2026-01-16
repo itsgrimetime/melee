@@ -27,9 +27,9 @@ def load_json_safe(path: Path) -> dict[str, Any]:
         return {}
 
     try:
-        with open(path, "r") as f:
+        with open(path) as f:
             return json.load(f)
-    except (json.JSONDecodeError, IOError):
+    except (OSError, json.JSONDecodeError):
         return {}
 
 
@@ -59,8 +59,7 @@ def load_json_with_expiry(
     return {
         key: value
         for key, value in data.items()
-        if isinstance(value, dict)
-        and now - value.get(timestamp_field, 0) < timeout_seconds
+        if isinstance(value, dict) and now - value.get(timestamp_field, 0) < timeout_seconds
     }
 
 

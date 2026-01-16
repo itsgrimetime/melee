@@ -7,25 +7,18 @@ from typing import Annotated, Optional
 import typer
 from rich.table import Table
 
-from .._common import console
 from src.db import get_db
 from src.extractor.report import ReportParser
 from src.extractor.symbols import SymbolParser
 
+from .._common import console
+
 
 def populate_addresses_command(
-    melee_root: Annotated[
-        Optional[Path], typer.Option("--melee-root", "-r", help="Path to melee repo")
-    ] = None,
-    source: Annotated[
-        str, typer.Option("--source", "-s", help="Source: 'symbols' or 'report'")
-    ] = "symbols",
-    dry_run: Annotated[
-        bool, typer.Option("--dry-run/--no-dry-run", help="Preview without making changes")
-    ] = True,
-    verbose: Annotated[
-        bool, typer.Option("--verbose", "-v", help="Show detailed output")
-    ] = False,
+    melee_root: Annotated[Path | None, typer.Option("--melee-root", "-r", help="Path to melee repo")] = None,
+    source: Annotated[str, typer.Option("--source", "-s", help="Source: 'symbols' or 'report'")] = "symbols",
+    dry_run: Annotated[bool, typer.Option("--dry-run/--no-dry-run", help="Preview without making changes")] = True,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show detailed output")] = False,
 ):
     """Populate canonical_address for existing functions.
 
@@ -87,10 +80,8 @@ def populate_addresses_command(
 
     # Get current functions in database
     with db.connection() as conn:
-        cursor = conn.execute(
-            "SELECT function_name, canonical_address FROM functions"
-        )
-        db_functions = {row['function_name']: row['canonical_address'] for row in cursor.fetchall()}
+        cursor = conn.execute("SELECT function_name, canonical_address FROM functions")
+        db_functions = {row["function_name"]: row["canonical_address"] for row in cursor.fetchall()}
 
     # Find functions to update
     updates_needed = {}
@@ -135,27 +126,17 @@ def populate_addresses_command(
 
 
 def sync_report_command(
-    melee_root: Annotated[
-        Optional[Path], typer.Option("--melee-root", "-r", help="Path to melee repo")
-    ] = None,
-    source: Annotated[
-        str, typer.Option("--source", "-s", help="Source: 'local' or 'upstream'")
-    ] = "local",
+    melee_root: Annotated[Path | None, typer.Option("--melee-root", "-r", help="Path to melee repo")] = None,
+    source: Annotated[str, typer.Option("--source", "-s", help="Source: 'local' or 'upstream'")] = "local",
     detect_renames: Annotated[
         bool, typer.Option("--detect-renames/--no-detect-renames", help="Detect renamed functions via address")
     ] = True,
     update_status: Annotated[
         bool, typer.Option("--update-status/--no-update-status", help="Update function status based on match %")
     ] = True,
-    dry_run: Annotated[
-        bool, typer.Option("--dry-run/--no-dry-run", help="Preview without making changes")
-    ] = True,
-    verbose: Annotated[
-        bool, typer.Option("--verbose", "-v", help="Show detailed output")
-    ] = False,
-    output_json: Annotated[
-        bool, typer.Option("--json", help="Output as JSON")
-    ] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run/--no-dry-run", help="Preview without making changes")] = True,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show detailed output")] = False,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
     """Sync function match percentages from report.json.
 
@@ -216,22 +197,22 @@ def sync_report_command(
             FROM functions
             """
         )
-        db_functions = {row['function_name']: dict(row) for row in cursor.fetchall()}
+        db_functions = {row["function_name"]: dict(row) for row in cursor.fetchall()}
 
     # Build address-to-name lookup from database
     addr_to_name: dict[str, str] = {}
     for func_name, func_data in db_functions.items():
-        addr = func_data.get('canonical_address')
+        addr = func_data.get("canonical_address")
         if addr:
             addr_to_name[addr] = func_name
 
     # Track changes
     changes = {
-        'match_updates': [],       # (name, old_pct, new_pct)
-        'status_updates': [],      # (name, old_status, new_status)
-        'renames_detected': [],    # (old_name, new_name, address)
-        'new_functions': [],       # names not in DB
-        'missing_in_report': [],   # in DB but not in report
+        "match_updates": [],  # (name, old_pct, new_pct)
+        "status_updates": [],  # (name, old_status, new_status)
+        "renames_detected": [],  # (old_name, new_name, address)
+        "new_functions": [],  # names not in DB
+        "missing_in_report": [],  # in DB but not in report
     }
 
     # Process each function in report
@@ -244,32 +225,32 @@ def sync_report_command(
 
         if db_func:
             # Found by name - check for match % update
-            db_pct = db_func.get('match_percent', 0.0) or 0.0
+            db_pct = db_func.get("match_percent", 0.0) or 0.0
             if abs(db_pct - report_pct) > 0.01:  # Significant difference
-                changes['match_updates'].append((report_name, db_pct, report_pct))
+                changes["match_updates"].append((report_name, db_pct, report_pct))
 
             # Check status update
             if update_status:
-                current_status = db_func.get('status', 'unclaimed')
+                current_status = db_func.get("status", "unclaimed")
                 new_status = _determine_status(report_pct, current_status, db_func)
                 if new_status and new_status != current_status:
-                    changes['status_updates'].append((report_name, current_status, new_status))
+                    changes["status_updates"].append((report_name, current_status, new_status))
 
         elif detect_renames and report_addr:
             # Not found by name - try address lookup
             normalized_addr = db._normalize_address(report_addr)
             if normalized_addr and normalized_addr in addr_to_name:
                 old_name = addr_to_name[normalized_addr]
-                changes['renames_detected'].append((old_name, report_name, normalized_addr))
+                changes["renames_detected"].append((old_name, report_name, normalized_addr))
         else:
             # New function not in database
-            changes['new_functions'].append(report_name)
+            changes["new_functions"].append(report_name)
 
     # Find functions in DB but not in report
     report_names = set(report_matches.keys())
     for db_name in db_functions.keys():
         if db_name not in report_names:
-            changes['missing_in_report'].append(db_name)
+            changes["missing_in_report"].append(db_name)
 
     # Output results
     if output_json:
@@ -286,30 +267,32 @@ def sync_report_command(
 
     if verbose:
         # Show match updates
-        if changes['match_updates']:
+        if changes["match_updates"]:
             console.print("\n[bold]Match % Updates:[/bold]")
             table = Table()
             table.add_column("Function", style="cyan")
             table.add_column("Old %", style="yellow", justify="right")
             table.add_column("New %", style="green", justify="right")
 
-            for name, old_pct, new_pct in sorted(changes['match_updates'], key=lambda x: x[2] - x[1], reverse=True)[:20]:
+            for name, old_pct, new_pct in sorted(changes["match_updates"], key=lambda x: x[2] - x[1], reverse=True)[
+                :20
+            ]:
                 table.add_row(name, f"{old_pct:.1f}", f"{new_pct:.1f}")
 
-            if len(changes['match_updates']) > 20:
+            if len(changes["match_updates"]) > 20:
                 table.add_row("...", f"({len(changes['match_updates']) - 20} more)", "")
 
             console.print(table)
 
         # Show renames
-        if changes['renames_detected']:
+        if changes["renames_detected"]:
             console.print("\n[bold]Renames Detected:[/bold]")
             table = Table()
             table.add_column("Old Name", style="yellow")
             table.add_column("New Name", style="green")
             table.add_column("Address", style="dim")
 
-            for old_name, new_name, addr in changes['renames_detected'][:20]:
+            for old_name, new_name, addr in changes["renames_detected"][:20]:
                 table.add_row(old_name, new_name, addr)
 
             console.print(table)
@@ -321,39 +304,39 @@ def sync_report_command(
 
     # Apply changes
     now = time.time()
-    applied = {'match': 0, 'status': 0, 'renames': 0}
+    applied = {"match": 0, "status": 0, "renames": 0}
 
     with db.transaction() as conn:
         # Apply match % updates
-        for name, old_pct, new_pct in changes['match_updates']:
+        for name, old_pct, new_pct in changes["match_updates"]:
             conn.execute(
                 """
                 UPDATE functions
                 SET match_percent = ?, updated_at = ?
                 WHERE function_name = ?
                 """,
-                (new_pct, now, name)
+                (new_pct, now, name),
             )
-            applied['match'] += 1
+            applied["match"] += 1
 
         # Apply status updates
-        for name, old_status, new_status in changes['status_updates']:
+        for name, old_status, new_status in changes["status_updates"]:
             conn.execute(
                 """
                 UPDATE functions
                 SET status = ?, updated_at = ?
                 WHERE function_name = ?
                 """,
-                (new_status, now, name)
+                (new_status, now, name),
             )
-            applied['status'] += 1
+            applied["status"] += 1
 
     # Handle renames (needs merge logic)
-    for old_name, new_name, addr in changes['renames_detected']:
+    for old_name, new_name, addr in changes["renames_detected"]:
         if db.merge_function_records(old_name, new_name, addr):
-            applied['renames'] += 1
+            applied["renames"] += 1
 
-    console.print(f"\n[green]Applied changes:[/green]")
+    console.print("\n[green]Applied changes:[/green]")
     console.print(f"  Match % updates:  {applied['match']}")
     console.print(f"  Status updates:   {applied['status']}")
     console.print(f"  Renames merged:   {applied['renames']}")
@@ -363,7 +346,7 @@ def _determine_status(
     match_pct: float,
     current_status: str,
     func_data: dict,
-) -> Optional[str]:
+) -> str | None:
     """Determine the appropriate status based on match percentage.
 
     Args:
@@ -375,25 +358,25 @@ def _determine_status(
         New status or None if no change needed
     """
     # Don't downgrade merged/committed/in_review
-    protected_statuses = {'merged', 'committed', 'committed_needs_fix', 'in_review'}
+    protected_statuses = {"merged", "committed", "committed_needs_fix", "in_review"}
     if current_status in protected_statuses:
         # But if merged and match dropped significantly, something is wrong
-        if current_status == 'merged' and match_pct < 95:
+        if current_status == "merged" and match_pct < 95:
             return None  # Don't auto-change, needs manual review
         return None
 
     # Update based on match %
     if match_pct >= 100.0:
         # 100% match - might be merged
-        if func_data.get('pr_state') == 'MERGED':
-            return 'merged'
-        elif func_data.get('is_committed'):
-            return 'committed'
+        if func_data.get("pr_state") == "MERGED":
+            return "merged"
+        elif func_data.get("is_committed"):
+            return "committed"
         else:
-            return 'matched'
+            return "matched"
     elif match_pct >= 95.0:
-        return 'matched'
+        return "matched"
     elif match_pct > 0:
-        return 'in_progress'
+        return "in_progress"
     else:
-        return 'unclaimed'
+        return "unclaimed"

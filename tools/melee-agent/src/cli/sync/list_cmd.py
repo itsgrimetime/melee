@@ -10,12 +10,8 @@ from .._common import console, load_slug_map
 
 
 def list_command(
-    min_match: Annotated[
-        float, typer.Option("--min-match", help="Minimum match percentage to include")
-    ] = 0.0,
-    limit: Annotated[
-        int, typer.Option("--limit", "-n", help="Maximum entries to show")
-    ] = 50,
+    min_match: Annotated[float, typer.Option("--min-match", help="Minimum match percentage to include")] = 0.0,
+    limit: Annotated[int, typer.Option("--limit", "-n", help="Maximum entries to show")] = 50,
 ):
     """List functions that can be synced to production.
 
@@ -29,22 +25,27 @@ def list_command(
     with db.connection() as conn:
         # Filter by min_match, but always exclude 0% (no progress)
         effective_min = max(min_match, 0.01)
-        cursor = conn.execute("""
+        cursor = conn.execute(
+            """
             SELECT function_name, match_percent, local_scratch_slug, production_scratch_slug
             FROM functions
             WHERE match_percent >= ?
             AND local_scratch_slug IS NOT NULL
             ORDER BY match_percent DESC
             LIMIT ?
-        """, (effective_min, limit))
+        """,
+            (effective_min, limit),
+        )
 
         for row in cursor.fetchall():
-            entries.append({
-                'name': row['function_name'],
-                'match_pct': row['match_percent'] or 0,
-                'slug': row['local_scratch_slug'],
-                'synced': row['production_scratch_slug'] is not None,
-            })
+            entries.append(
+                {
+                    "name": row["function_name"],
+                    "match_pct": row["match_percent"] or 0,
+                    "slug": row["local_scratch_slug"],
+                    "synced": row["production_scratch_slug"] is not None,
+                }
+            )
 
     if not entries:
         console.print("[yellow]No matching functions found[/yellow]")
@@ -59,13 +60,13 @@ def list_command(
 
     synced_count = 0
     for entry in entries:
-        if entry['synced']:
+        if entry["synced"]:
             synced_count += 1
         table.add_row(
-            entry['name'],
+            entry["name"],
             f"{entry['match_pct']:.1f}%",
-            entry['slug'],
-            "[green]synced[/green]" if entry['synced'] else "[yellow]pending[/yellow]",
+            entry["slug"],
+            "[green]synced[/green]" if entry["synced"] else "[yellow]pending[/yellow]",
         )
 
     console.print(table)
@@ -74,9 +75,7 @@ def list_command(
 
 
 def slugs_command(
-    output_json: Annotated[
-        bool, typer.Option("--json", help="Output as JSON")
-    ] = False,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
     """Show the local->production slug mapping."""
     slug_map = load_slug_map()
@@ -95,11 +94,11 @@ def slugs_command(
         table.add_column("Function")
         table.add_column("Match %", justify="right")
 
-        for prod_slug, info in sorted(slug_map.items(), key=lambda x: x[1].get('function', '')):
+        for prod_slug, info in sorted(slug_map.items(), key=lambda x: x[1].get("function", "")):
             table.add_row(
                 prod_slug,
-                info.get('local_slug', '?'),
-                info.get('function', '?'),
+                info.get("local_slug", "?"),
+                info.get("function", "?"),
                 f"{info.get('match_percent', 0):.1f}%",
             )
 

@@ -11,10 +11,10 @@ from rich.table import Table
 
 from ._common import (
     AGENT_ID,
+    DEFAULT_MELEE_ROOT,
     console,
     db_add_claim,
     db_release_claim,
-    DEFAULT_MELEE_ROOT,
 )
 from .utils import file_lock, load_json_with_expiry
 
@@ -33,6 +33,7 @@ def _lookup_source_file(function_name: str) -> str | None:
     """
     try:
         from src.extractor import FunctionExtractor
+
         extractor = FunctionExtractor(DEFAULT_MELEE_ROOT)
         func_info = extractor.extract_function(function_name)
         if func_info and func_info.file_path:
@@ -40,6 +41,7 @@ def _lookup_source_file(function_name: str) -> str | None:
     except Exception:
         pass  # Silently fail - auto-detection is optional
     return None
+
 
 # Claims are SHARED and ephemeral (3-hour expiry) - ok in /tmp
 DECOMP_CLAIMS_FILE = os.environ.get("DECOMP_CLAIMS_FILE", "/tmp/decomp_claims.json")
@@ -73,15 +75,11 @@ def _save_claims(claims: dict[str, Any]) -> None:
 @claim_app.command("add")
 def claim_add(
     function_name: Annotated[str, typer.Argument(help="Function name to claim")],
-    agent_id: Annotated[
-        str, typer.Option("--agent-id", help="Agent identifier")
-    ] = AGENT_ID,
+    agent_id: Annotated[str, typer.Option("--agent-id", help="Agent identifier")] = AGENT_ID,
     source_file: Annotated[
         str | None, typer.Option("--source-file", "-f", "--source", help="Source file path (for tracking)")
     ] = None,
-    output_json: Annotated[
-        bool, typer.Option("--json", help="Output as JSON")
-    ] = False,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
     """Claim a function to prevent other agents from working on it."""
     # Auto-detect source file if not provided
@@ -103,13 +101,25 @@ def claim_add(
                 age_mins = (time.time() - existing["timestamp"]) / 60
                 is_self = existing_agent == agent_id
                 if output_json:
-                    print(json.dumps({"success": False, "error": "already_claimed", "by": existing_agent, "age_mins": age_mins, "is_self": is_self}))
+                    print(
+                        json.dumps(
+                            {
+                                "success": False,
+                                "error": "already_claimed",
+                                "by": existing_agent,
+                                "age_mins": age_mins,
+                                "is_self": is_self,
+                            }
+                        )
+                    )
                 else:
                     if is_self:
-                        console.print(f"[yellow]Already claimed by you ({agent_id}) {age_mins:.0f}m ago - claim still active[/yellow]")
+                        console.print(
+                            f"[yellow]Already claimed by you ({agent_id}) {age_mins:.0f}m ago - claim still active[/yellow]"
+                        )
                     else:
                         console.print(f"[red]CLAIMED BY ANOTHER AGENT: {existing_agent} ({age_mins:.0f}m ago)[/red]")
-                        console.print(f"[red]DO NOT WORK ON THIS FUNCTION - pick a different one[/red]")
+                        console.print("[red]DO NOT WORK ON THIS FUNCTION - pick a different one[/red]")
                 raise typer.Exit(1)
 
             claims[function_name] = {
@@ -177,9 +187,7 @@ def _release_claim(function_name: str) -> bool:
 @claim_app.command("release")
 def claim_release(
     function_name: Annotated[str, typer.Argument(help="Function name to release")],
-    output_json: Annotated[
-        bool, typer.Option("--json", help="Output as JSON")
-    ] = False,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
     """Release a claimed function."""
     try:
@@ -196,7 +204,7 @@ def claim_release(
         if output_json:
             print(json.dumps({"success": False, "error": "not_claimed"}))
         else:
-            console.print(f"[yellow]Function was not claimed[/yellow]")
+            console.print("[yellow]Function was not claimed[/yellow]")
         return
 
     if output_json:
@@ -207,9 +215,7 @@ def claim_release(
 
 @claim_app.command("list")
 def claim_list(
-    output_json: Annotated[
-        bool, typer.Option("--json", help="Output as JSON")
-    ] = False,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
     """List all currently claimed functions."""
     claims = _load_claims()
@@ -231,11 +237,6 @@ def claim_list(
         for name, info in sorted(claims.items()):
             age_mins = (now - info["timestamp"]) / 60
             remaining_mins = (DECOMP_CLAIM_TIMEOUT / 60) - age_mins
-            table.add_row(
-                name,
-                info.get("agent_id", "?"),
-                f"{age_mins:.0f}m",
-                f"{remaining_mins:.0f}m"
-            )
+            table.add_row(name, info.get("agent_id", "?"), f"{age_mins:.0f}m", f"{remaining_mins:.0f}m")
 
         console.print(table)

@@ -57,10 +57,7 @@ def _get_cookies_file() -> Path:
 
 
 # Per-agent cookies file - each agent maintains its own identity
-DECOMP_COOKIES_FILE = os.environ.get(
-    "DECOMP_COOKIES_FILE",
-    str(_get_cookies_file())
-)
+DECOMP_COOKIES_FILE = os.environ.get("DECOMP_COOKIES_FILE", str(_get_cookies_file()))
 
 # Lock file for cookie operations (shared - just prevents concurrent writes)
 _COOKIES_LOCK_FILE = DECOMP_CONFIG_DIR / "cookies.lock"
@@ -97,13 +94,13 @@ def _load_cookies() -> dict[str, str]:
         return {}
 
     try:
-        with open(cookies_path, 'r') as f:
+        with open(cookies_path) as f:
             fcntl.flock(f.fileno(), fcntl.LOCK_SH)  # Shared lock for reading
             try:
                 return json.load(f)
             finally:
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-    except (json.JSONDecodeError, IOError):
+    except (OSError, json.JSONDecodeError):
         return {}
 
 
@@ -126,29 +123,29 @@ def _save_cookies(cookies: dict[str, str], preserve_sessionid: bool = True) -> N
     lock_path = _COOKIES_LOCK_FILE
     lock_path.touch(exist_ok=True)
 
-    with open(lock_path, 'r') as lock_f:
+    with open(lock_path) as lock_f:
         fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)  # Exclusive lock
         try:
             # Read existing cookies first (merge, don't overwrite)
             existing = {}
             if cookies_path.exists():
                 try:
-                    with open(cookies_path, 'r') as f:
+                    with open(cookies_path) as f:
                         existing = json.load(f)
-                except (json.JSONDecodeError, IOError):
+                except (OSError, json.JSONDecodeError):
                     pass
 
             # Preserve existing sessionid to maintain shared identity
             # This check happens UNDER the lock to prevent race conditions
             if preserve_sessionid and "sessionid" in existing and "sessionid" in cookies:
-                logger.debug(f"Preserving existing sessionid (not overwriting)")
+                logger.debug("Preserving existing sessionid (not overwriting)")
                 del cookies["sessionid"]
 
             # Merge new cookies into existing
             existing.update(cookies)
 
             # Write atomically
-            with open(cookies_path, 'w') as f:
+            with open(cookies_path, "w") as f:
                 json.dump(existing, f, indent=2)
         finally:
             fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
@@ -202,6 +199,7 @@ class DecompMeAPIClient:
 
         # Determine domain from base_url (for local vs production)
         from urllib.parse import urlparse
+
         domain = urlparse(self.base_url).hostname or "decomp.me"
 
         if cf_clearance:
@@ -218,9 +216,7 @@ class DecompMeAPIClient:
             cookies=cookies,
         )
 
-    def _update_cookies_from_response(
-        self, response: httpx.Response, force_save_session: bool = False
-    ) -> None:
+    def _update_cookies_from_response(self, response: httpx.Response, force_save_session: bool = False) -> None:
         """Extract and persist session cookies from response.
 
         Args:
@@ -558,13 +554,15 @@ class DecompMeAPIClient:
         compilers_dict = data.get("compilers", {}) if isinstance(data, dict) else {}
         compilers = []
         for compiler_id, info in compilers_dict.items():
-            compilers.append(CompilerInfo(
-                id=compiler_id,
-                name=info.get("name", compiler_id),
-                platform=info.get("platform", "unknown"),
-                language=info.get("language", "c"),
-                **{k: v for k, v in info.items() if k not in ("name", "platform", "language")}
-            ))
+            compilers.append(
+                CompilerInfo(
+                    id=compiler_id,
+                    name=info.get("name", compiler_id),
+                    platform=info.get("platform", "unknown"),
+                    language=info.get("language", "c"),
+                    **{k: v for k, v in info.items() if k not in ("name", "platform", "language")},
+                )
+            )
         return compilers
 
     async def list_presets(self) -> list[PresetInfo]:

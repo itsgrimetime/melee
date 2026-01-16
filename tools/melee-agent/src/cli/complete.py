@@ -10,7 +10,7 @@ from typing import Annotated, Any, Optional
 import typer
 from rich.table import Table
 
-from ._common import console, db_upsert_function, db_release_claim
+from ._common import console, db_release_claim, db_upsert_function
 from .utils import file_lock, load_json_with_expiry, save_json_atomic
 
 # File paths
@@ -37,12 +37,14 @@ def _save_claims(claims: dict[str, Any]) -> None:
 def _load_completed() -> dict[str, Any]:
     """Load completed functions from database."""
     from ._common import load_completed_functions
+
     return load_completed_functions()
 
 
 def _save_completed(completed: dict[str, Any]) -> None:
     """Save completed functions to database."""
     from ._common import save_completed_functions
+
     save_completed_functions(completed)
 
 
@@ -69,18 +71,12 @@ def complete_mark(
     function_name: Annotated[str, typer.Argument(help="Function name")],
     scratch_slug: Annotated[str, typer.Argument(help="Decomp.me scratch slug")],
     match_percent: Annotated[float, typer.Argument(help="Match percentage achieved")],
-    committed: Annotated[
-        bool, typer.Option("--committed", help="Mark as committed to repo")
-    ] = False,
+    committed: Annotated[bool, typer.Option("--committed", help="Mark as committed to repo")] = False,
     branch: Annotated[
-        Optional[str], typer.Option("--branch", "-b", help="Git branch (auto-detected if not specified)")
+        str | None, typer.Option("--branch", "-b", help="Git branch (auto-detected if not specified)")
     ] = None,
-    notes: Annotated[
-        Optional[str], typer.Option("--notes", help="Additional notes")
-    ] = None,
-    output_json: Annotated[
-        bool, typer.Option("--json", help="Output as JSON")
-    ] = False,
+    notes: Annotated[str | None, typer.Option("--notes", help="Additional notes")] = None,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
     """Mark a function as completed/attempted."""
     # Auto-detect branch if not specified
@@ -99,7 +95,7 @@ def complete_mark(
     _save_completed(completed)
 
     # Also write to state database (non-blocking)
-    status = 'committed' if committed else ('matched' if match_percent >= 95 else 'in_progress')
+    status = "committed" if committed else ("matched" if match_percent >= 95 else "in_progress")
     db_upsert_function(
         function_name,
         match_percent=match_percent,
@@ -124,7 +120,9 @@ def complete_mark(
     db_release_claim(function_name)
 
     if output_json:
-        print(json.dumps({"success": True, "function": function_name, "match_percent": match_percent, "branch": branch}))
+        print(
+            json.dumps({"success": True, "function": function_name, "match_percent": match_percent, "branch": branch})
+        )
     else:
         status = "committed" if committed else "recorded"
         branch_info = f" on {branch}" if branch else ""
@@ -142,7 +140,9 @@ def complete_mark(
             console.print()
             console.print("[dim]Or use the two-step process:[/dim]")
             console.print(f"  [dim]melee-agent commit apply {function_name} <scratch_slug>[/dim]")
-            console.print(f"  [dim]melee-agent complete mark {function_name} <slug> {match_percent:.1f} --committed[/dim]")
+            console.print(
+                f"  [dim]melee-agent complete mark {function_name} <slug> {match_percent:.1f} --committed[/dim]"
+            )
             console.print()
 
 
@@ -152,12 +152,8 @@ def complete_document(
     status: Annotated[
         str, typer.Option("--status", "-s", help="Documentation status: partial or complete")
     ] = "complete",
-    notes: Annotated[
-        Optional[str], typer.Option("--notes", help="Documentation notes")
-    ] = None,
-    output_json: Annotated[
-        bool, typer.Option("--json", help="Output as JSON")
-    ] = False,
+    notes: Annotated[str | None, typer.Option("--notes", help="Documentation notes")] = None,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
     """Mark a function as documented (naming, comments, struct fields).
 
@@ -185,11 +181,15 @@ def complete_document(
     db_release_claim(function_name)
 
     if output_json:
-        print(json.dumps({
-            "success": True,
-            "function": function_name,
-            "documentation_status": status,
-        }))
+        print(
+            json.dumps(
+                {
+                    "success": True,
+                    "function": function_name,
+                    "documentation_status": status,
+                }
+            )
+        )
     else:
         status_str = "[green]complete[/green]" if status == "complete" else "[yellow]partial[/yellow]"
         console.print(f"[green]Documented:[/green] {function_name} ({status_str})")
@@ -199,21 +199,14 @@ def complete_document(
 
 @complete_app.command("list")
 def complete_list(
-    min_match: Annotated[
-        float, typer.Option("--min-match", help="Minimum match percentage")
-    ] = 0.0,
-    output_json: Annotated[
-        bool, typer.Option("--json", help="Output as JSON")
-    ] = False,
+    min_match: Annotated[float, typer.Option("--min-match", help="Minimum match percentage")] = 0.0,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
     """List all completed/attempted functions."""
     completed = _load_completed()
 
     # Filter by min_match
-    filtered = {
-        name: info for name, info in completed.items()
-        if info.get("match_percent", 0) >= min_match
-    }
+    filtered = {name: info for name, info in completed.items() if info.get("match_percent", 0) >= min_match}
 
     if output_json:
         print(json.dumps(filtered, indent=2))
