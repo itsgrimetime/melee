@@ -3,6 +3,8 @@
 
 #include <melee/ft/forward.h>
 #include <melee/it/forward.h>
+
+extern int ftCo_804D9024;
 void fn_800DAA40(Fighter_GObj*, Fighter_GObj*);
 
 /* 0D67C4 */ bool ftCo_800D67C4(Fighter*);
