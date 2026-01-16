@@ -19,6 +19,8 @@ load_dotenv(Path(__file__).parent.parent.parent / ".env")
 
 import typer
 
+from ..mismatch_db.cli import mismatch_app
+
 # Import common utilities for backward compatibility
 from ._common import (
     DEFAULT_MELEE_ROOT,
@@ -67,6 +69,7 @@ app.add_typer(workflow_app, name="workflow")
 app.add_typer(state_app, name="state")
 app.add_typer(analytics_app, name="analytics")
 app.add_typer(setup_app, name="setup")
+app.add_typer(mismatch_app, name="mismatch")
 
 # Register standalone commands
 app.command("compilers")(list_compilers)

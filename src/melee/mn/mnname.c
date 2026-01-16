@@ -148,10 +148,10 @@ s32 mnName_GetPageCount(void) {
     s32 count;
     s32 i;
     s32 rem;
-    
+
     count = 0;
     i = 0;
-    
+
     for (; i < 0x78; i++) {
         char* data;
         char first_char;
@@ -169,7 +169,7 @@ s32 mnName_GetPageCount(void) {
             count++;
         }
     }
-    
+
     if (count % 24 != 0) {
         rem = 1;
     } else {
@@ -182,11 +182,11 @@ s32 mnName_GetColumnCount(void) {
     s32 i;
     s32 rem;
     s32 zero;
-    
+
     count = 0;
     zero = count;
     i = zero;
-    
+
     for (; i < 0x78; i++) {
         char* data;
         char first_char;
@@ -204,7 +204,7 @@ s32 mnName_GetColumnCount(void) {
             count++;
         }
     }
-    
+
     if (count % 6 != 0) {
         rem = 1;
     } else {
@@ -254,15 +254,15 @@ void mnName_80238A04(s32 arg0, s32 arg1, s32 arg2) {
     f32* table = mnName_803ED538;
     s32 i;
     s32 jobj;
-    
+
     for (i = 0x18; i < 0x1B; i++) {
         jobj = mnName_802388D4((void*)arg0, (u8)i);
         HSD_JObjReqAnimAll((HSD_JObj*)jobj, mnName_80238964((void*)i, arg1, arg2));
         HSD_JObjAnimAll((HSD_JObj*)jobj);
     }
-    
+
     i = *(s32*)((u8*)arg0 + 0x14);
-    
+
     if ((u8)arg1 == 0x18) {
         if ((u8)arg2 != 0) {
             HSD_JObjReqAnimAll((HSD_JObj*)i, table[15]);
@@ -292,21 +292,21 @@ void mnName_80239EBC(void* arg0, f32 arg1) {
     if (arg0 == NULL) {
         __assert(mnName_804D4BF4, 947, mnName_804D4BFC);
     }
-    
+
     *(f32*)((u8*)arg0 + 0x3c) = arg1;
-    
+
     if ((*(u32*)((u8*)arg0 + 0x14) & 0x02000000) != 0) {
         return;
     }
-    
+
     if (arg0 == NULL) {
         return;
     }
-    
+
     if (arg0 == NULL) {
         __assert(mnName_804D4BF4, 564, mnName_804D4BFC);
     }
-    
+
     {
         BOOL cond;
         cond = FALSE;
@@ -324,21 +324,21 @@ void mnName_80239F5C(void* arg0, f32 arg1) {
     if (arg0 == NULL) {
         __assert(mnName_804D4BF4, 932, mnName_804D4BFC);
     }
-    
+
     *(f32*)((u8*)arg0 + 0x38) = arg1;
-    
+
     if ((*(u32*)((u8*)arg0 + 0x14) & 0x02000000) != 0) {
         return;
     }
-    
+
     if (arg0 == NULL) {
         return;
     }
-    
+
     if (arg0 == NULL) {
         __assert(mnName_804D4BF4, 564, mnName_804D4BFC);
     }
-    
+
     {
         BOOL cond;
         cond = FALSE;
@@ -394,7 +394,7 @@ void mnName_8023A058(HSD_GObj* gobj) {
         HSD_SisLib_803A5CC4(data->x3C);
         data->x3C = NULL;
     }
-    
+
     mnName_80239A24(gobj);
 }
 /// #fn_8023A0BC
