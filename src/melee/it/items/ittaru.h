@@ -48,5 +48,6 @@
 /* 288A98 */ bool it_3F14_Logic2_DmgReceived(Item_GObj*);
 /* 288C68 */ void it_3F14_Logic2_EvtUnk(Item_GObj*, Item_GObj*);
 /* 3F58E0 */ extern ItemStateTable it_803F58E0[];
+/* 4DC978 */ extern const f32 it_804DC978;
 
 #endif

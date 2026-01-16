@@ -11,9 +11,6 @@
 #include "it/it_2725.h"
 #include "it/item.h"
 
-extern f32 it_804DCA50;
-extern f32 it_804DCA54;
-
 typedef struct {
     u8 b1234567 : 7;
     u8 b0 : 1;

@@ -57,5 +57,7 @@
 /* 28E6C0 */ bool it_8028E6C0(Item_GObj* gobj);
 /* 28E718 */ void it_3F14_Logic15_EvtUnk(Item_GObj*, Item_GObj*);
 /* 3F5C48 */ extern ItemStateTable it_803F5C48[];
+/* 4DCA50 */ extern f32 it_804DCA50;
+/* 4DCA54 */ extern f32 it_804DCA54;
 
 #endif

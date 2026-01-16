@@ -1,23 +1,9 @@
 #ifndef GALE01_281164
 #define GALE01_281164
 
-#include <platform.h>
-
 #include "it/forward.h"
 
 #include "it/items/types.h"
-
-// Keep this if it is NOT defined in itCommonItems.h or similar.
-// If you get a redefinition error for this too, remove it.
-typedef struct itDoseiAttributes {
-    f32 unk0;
-    f32 unk4;
-    f32 unk8;
-} itDoseiAttributes;
-
-/* * NOTE: itDosei_ItemVars is removed from here because
- * it is defined in src/melee/it/itCommonItems.h
- */
 
 /* 281164 */ void it_3F14_Logic7_Spawned(Item_GObj*);
 /* 281390 */ void fn_80281390(Item_GObj*);
@@ -74,5 +60,9 @@ typedef struct itDoseiAttributes {
 /* 283AA4 */ bool it_3F14_Logic7_ShieldBounced(Item_GObj*);
 /* 283AC4 */ void it_3F14_Logic7_EvtUnk(Item_GObj*, Item_GObj*);
 /* 3F55D0 */ extern ItemStateTable it_803F55D0[];
+/* 3F56B8 */ extern s32 it_803F56B8[];
+/* 4DC870 */ extern const f32 it_804DC870;
+/* 4DC874 */ extern const f32 it_804DC874;
+/* 4DC878 */ extern const f32 it_804DC878;
 
 #endif

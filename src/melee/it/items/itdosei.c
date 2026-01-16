@@ -12,11 +12,6 @@
 
 #include <baselib/random.h>
 
-extern const f32 it_804DC874;
-extern const f32 it_804DC870;
-extern const f32 it_804DC878;
-extern s32 it_803F56B8[];
-
 /// #it_3F14_Logic7_Spawned
 
 void fn_80281390(Item_GObj* gobj)
@@ -63,7 +58,9 @@ bool itDosei_UnkMotion1_Anim(Item_GObj* gobj)
     ip = gobj->user_data;
     ip->xDD4_itemVar.dosei.xDE4 = ip->pos;
     ip2 = gobj->user_data;
-    frame_speed = it_804DC874 * (M2C_FIELD(ip2, f32*, 0x4CC) * ip2->facing_dir) + it_804DC870;
+    frame_speed =
+        it_804DC874 * (M2C_FIELD(ip2, f32*, 0x4CC) * ip2->facing_dir) +
+        it_804DC870;
     jobj = gobj->hsd_obj;
     ip->x5D0_animFrameSpeed = frame_speed;
     lb_8000BA0C(jobj, frame_speed);
@@ -84,8 +81,7 @@ void itDosei_UnkMotion1_Phys(Item_GObj* gobj)
     ip->x40_vel.x = ip->facing_dir * vel;
 }
 
-    ip->x40_vel.x = ip->facing_dir * ABS(attr->unk8 * ip->x5D0_animFrameSpeed);
-}
+/// #itDosei_UnkMotion1_Coll
 
 void it_80281C6C(Item_GObj* gobj)
 {
@@ -105,72 +101,7 @@ void it_80281C6C(Item_GObj* gobj)
     M2C_FIELD(ip, s32*, 0x518) = zero;
 }
 
-    temp_r31 = gobj->user_data;
-
-    if (it_8026D8A4(gobj, it_80281C6C)) {
-        if (it_80276308(gobj)) {
-            it_80281C6C(gobj);
-            return false;
-        }
-
-        {
-            Item* temp_r4 = gobj->user_data;
-            f32 var_f1 = M2C_FIELD(temp_r4, f32*, 0x4CC);
-
-            if (var_f1 < 0.0f) {
-                var_f1 = -var_f1;
-            }
-
-            if (var_f1 >= (f32) M_PI / 4) {
-                temp_r4->xD5C = 1;
-                temp_r4->xDC8_word.flags.x1F = true;
-            } else {
-                temp_r4->xD5C = 0;
-                temp_r4->xDC8_word.flags.x1F = false;
-            }
-        }
-
-        if (temp_r31->xD5C == 1) {
-            it_3F14_Logic7_EnteredAir(gobj);
-        } else {
-            it_80276CB8(gobj);
-        }
-    } else {
-        it_80282074(gobj);
-    }
-
-    return false;
-}
-
-void it_80281C6C(Item_GObj* gobj)
-{
-    // [0x1C] r29 = gobj, r30 = user_data (ip)
-    Item* ip = GET_ITEM(gobj);
-
-    // [0x10 & 0x24] r31 = 0;
-    ip->xDD4_itemVar.dosei.xDD8 = 0;
-
-    // [0x2C - 0x40] Copy xDE4 (Vec3) to pos
-    ip->pos = ip->xDD4_itemVar.dosei.xDE4;
-
-    ip->xDD4_itemVar.dosei.xDDC = 0.0F;
-    ip->x40_vel.x = 0.0F;
-
-    // [0x50] Call helper
-    it_802762B0(ip);
-
-    // [0x54] Call Item_80268E5C
-    Item_80268E5C(gobj, 2, 3);
-
-    {
-        HSD_JObj* jobj = gobj->hsd_obj;
-        ip->x5D0_animFrameSpeed = 1.0F;
-        lb_8000BA0C(jobj, 1.0F);
-    }
-
-    // [0x74] Clear owner (0x518)
-    ip->owner = NULL;
-}
+/// #itDosei_UnkMotion2_Anim
 
 void itDosei_UnkMotion2_Phys(Item_GObj* gobj) {}
 
@@ -351,18 +282,6 @@ void itDosei_UnkMotion10_Phys(Item_GObj* gobj) {}
 bool itDosei_UnkMotion10_Coll(Item_GObj* gobj)
 {
     it_8026E8C4(gobj, fn_80282CD4, it_80282BFC);
-    return false;
-}
-
-bool itDosei_UnkMotion10_Anim(Item_GObj* gobj)
-{
-    Item* ip;
-    HSD_JObj* jobj;
-    ip = gobj->user_data;
-    ip->xDD4_itemVar.dosei.xDE4 = ip->pos;
-    jobj = gobj->hsd_obj;
-    ip->x5D0_animFrameSpeed = 1.0F;
-    lb_8000BA0C(jobj, 1.0F);
     return false;
 }
 
