@@ -56,12 +56,35 @@ DEFAULT_MELEE_ROOT = PROJECT_ROOT / "melee"
 MELEE_WORKTREES_DIR = PROJECT_ROOT / "melee-worktrees"
 
 
-def get_agent_melee_root() -> Path:
+def get_agent_melee_root(**kwargs) -> Path:
     """Get the melee root for the current agent.
 
     Returns:
         Path to the melee repository root
     """
+    return DEFAULT_MELEE_ROOT
+
+
+def get_subdirectory_key(file_path: str) -> str:
+    """Map a file path to its subdirectory key (stub for non-worktree version)."""
+    path = Path(file_path)
+    parts = list(path.parent.parts)
+
+    # Strip common prefixes
+    if parts and parts[0] == "melee":
+        parts = parts[1:]
+    if parts and parts[0] == "src":
+        parts = parts[1:]
+    if parts and parts[0] == "melee":
+        parts = parts[1:]
+
+    if not parts:
+        return "root"
+    return parts[0]
+
+
+def get_worktree_for_file(file_path: str, **kwargs) -> Path:
+    """Get melee root for a file (stub - returns default melee root)."""
     return DEFAULT_MELEE_ROOT
 
 
