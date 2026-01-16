@@ -1,6 +1,7 @@
 #include "ftNs_SpecialLw.h"
 
 #include "ftNs_Init.h"
+#include "math.h"
 
 #include <platform.h>
 
@@ -182,7 +183,7 @@ void ftNs_SpecialAirLwStart_Phys(HSD_GObj* gobj)
         fp->mv.ns.speciallw.gravityDelay = gravity_timer - 1;
     } else {
         ftCommon_Fall(fp, ness_attr->x8C_PSI_MAGNET_FALL_ACCEL,
-                          da->terminal_vel);
+                      da->terminal_vel);
     }
 
     ftCommon_8007CF58(fp);
@@ -351,7 +352,7 @@ void ftNs_SpecialAirLwHold_Phys(HSD_GObj* gobj)
             fp->mv.ns.speciallw.gravityDelay = gravity_timer - 1;
         } else {
             ftCommon_Fall(fp, ness_attr->x8C_PSI_MAGNET_FALL_ACCEL,
-                              da->terminal_vel);
+                          da->terminal_vel);
         }
 
         ftCommon_8007CF58(fp);
@@ -474,10 +475,9 @@ static inline void getAttrStuff(HSD_GObj* arg0)
         temp_r30->cmd_vars[0] = 1;
         temp_r30->facing_dir = -temp_r30->facing_dir;
     }
-    ftParts_80075AF0(
-        temp_r30, 0,
-        -((0.01745329238474369f * (180.0f / temp_r31->x78_PSI_MAGNET_UNK1)) -
-          ftParts_80075F48(temp_r30, 0)));
+    ftPartSetRotY(temp_r30, 0,
+                  -((deg_to_rad * (180.0F / temp_r31->x78_PSI_MAGNET_UNK1)) -
+                    ftPartGetRotZ(temp_r30, 0)));
 }
 
 /// Ness's grounded PSI Magnet Turnaround Animation callback - _
@@ -576,7 +576,7 @@ void ftNs_SpecialAirLwTurn_Phys(
         fp->mv.ns.speciallw.gravityDelay = magnetTimer - 1;
     } else {
         ftCommon_Fall(fp, ness_attr->x8C_PSI_MAGNET_FALL_ACCEL,
-                          da->terminal_vel);
+                      da->terminal_vel);
     }
 
     ftCommon_8007CF58(fp);
@@ -841,7 +841,7 @@ void ftNs_SpecialAirLwHit_Phys(
         fp->mv.ns.speciallw.gravityDelay = temp_r3 - 1;
     } else {
         ftCommon_Fall(fp, attrs->x8C_PSI_MAGNET_FALL_ACCEL,
-                          attributes->terminal_vel);
+                      attributes->terminal_vel);
     }
 
     ftCommon_8007CF58(fp);
@@ -1024,7 +1024,7 @@ void ftNs_SpecialAirLwEnd_Phys(
         fp->mv.ns.speciallw.gravityDelay = gravity_timer - 1;
     } else {
         ftCommon_Fall(fp, attrs->x8C_PSI_MAGNET_FALL_ACCEL,
-                          attributes->terminal_vel);
+                      attributes->terminal_vel);
     }
 
     ftCommon_8007CF58(fp);

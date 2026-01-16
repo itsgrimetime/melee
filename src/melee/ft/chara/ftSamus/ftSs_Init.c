@@ -10,7 +10,6 @@
 #include "forward.h"
 
 #include "ft/ft_081B.h"
-#include "ftCommon/ftCo_Attack100.h"
 #include "ft/ftcamera.h"
 #include "ft/ftcolanim.h"
 #include "ft/ftcommon.h"
@@ -21,6 +20,7 @@
 #include "ftCommon/forward.h"
 
 #include "ftCommon/ftCo_AirCatch.h"
+#include "ftCommon/ftCo_Attack100.h"
 #include "it/it_26B1.h"
 #include "lb/lb_00B0.h"
 
@@ -346,7 +346,7 @@ void ftSs_Init_LoadSpecialAttrs(HSD_GObj* gobj)
 
 void ftSs_Init_80128770(HSD_AObj* gobj, float rate)
 {
-    if (gobj && !(HSD_AObjGetFlags(gobj) & 0x20000000)) {
+    if (gobj && !(HSD_AObjGetFlags(gobj) & AOBJ_LOOP)) {
         HSD_AObjSetRate(gobj, rate);
     }
 }

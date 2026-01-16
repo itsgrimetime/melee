@@ -27,7 +27,7 @@
 /* 023750 */ int fn_80023750(int, int, int, int, int);
 /* 0237A8 */ int lbAudioAx_800237A8(enum_t sfx_id, int sfx_vol, int sfx_pan);
 /* 023870 */ int lbAudioAx_80023870(int, int, int, int);
-/* 02392C */ UNK_RET lbAudioAx_8002392C(UNK_PARAMS);
+/* 02392C */ void lbAudioAx_8002392C(void);
 /* 023968 */ int lbAudioAx_80023968(int);
 /* 023A44 */ int lbAudioAx_80023A44(int, int);
 /* 023B24 */ f32 lbAudioAx_80023B24(s32);
@@ -57,7 +57,7 @@
 /* 024DC4 */ void lbAudioAx_80024DC4(int);
 /* 024E50 */ void lbAudioAx_80024E50(bool);
 /* 024E84 */ void lbAudioAx_80024E84(bool);
-/* 024F08 */ UNK_RET lbAudioAx_80024F08(UNK_PARAMS);
+/* 024F08 */ void lbAudioAx_80024F08(void);
 /* 024F6C */ void lbAudioAx_80024F6C(void);
 /* 024FDC */ void lbAudioAx_80024FDC(void);
 /* 024FF4 */ void lbAudioAx_80024FF4(void);
@@ -83,8 +83,8 @@
 /* 026510 */ bool lbAudioAx_80026510(HSD_GObj*);
 /* 0265C4 */ bool lbAudioAx_800265C4(HSD_GObj*, int sfx);
 /* 026650 */ UNK_RET fn_80026650(UNK_PARAMS);
-/* 0267B0 */ UNK_RET fn_800267B0(UNK_PARAMS);
-/* 0268B4 */ UNK_RET fn_800268B4(UNK_PARAMS);
+/* 0267B0 */ void fn_800267B0(void);
+/* 0268B4 */ void fn_800268B4(void);
 /* 0269AC */ UNK_RET fn_800269AC(UNK_PARAMS);
 /* 026C04 */ UNK_RET fn_80026C04(UNK_PARAMS);
 /* 026E58 */ bool fn_80026E58(int);
@@ -99,12 +99,12 @@
 /* 027AB0 */ void lbAudioAx_80027AB0(int);
 /* 027DBC */ void lbAudioAx_80027DBC(void);
 /* 027DF8 */ UNK_RET lbAudioAx_80027DF8(UNK_PARAMS);
-/* 02835C */ UNK_RET lbAudioAx_8002835C(UNK_PARAMS);
+/* 02835C */ void lbAudioAx_8002835C(void);
 /* 02838C */ void lbAudioAx_8002838C(void);
 /* 028690 */ UNK_RET lbAudioAx_80028690(UNK_PARAMS);
 /* 028B2C */ int lbAudioAx_80028B2C(void);
 /* 028B4C */ int lbAudioAx_80028B4C(void);
-/* 028B6C */ UNK_RET lbAudioAx_80028B6C(UNK_PARAMS);
-/* 028B90 */ UNK_RET lbAudioAx_80028B90(void);
+/* 028B6C */ void lbAudioAx_80028B6C(void);
+/* 028B90 */ void lbAudioAx_80028B90(void);
 
 #endif

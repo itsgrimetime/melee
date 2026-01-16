@@ -134,6 +134,25 @@ typedef struct {
     /* x108 */ HSD_GObj* owner;    // xE7C
 } itFoxBlaster_ItemVars;
 
+typedef struct itLeadead_ItemVars {
+    /* 0x00 */ u8 pad[0x18];
+    /* 0x18 */ s32 xDEC;
+    /* 0x1C */ u8 pad1b[0x1C];
+    /* 0x38 */ HSD_GObj* x38;
+    /* 0x3C */ f32 x3C;
+    /* 0x40 */ s32 xE14;
+    /* 0x44 */ s32 x44;
+    /* 0x48 */ s32 x48;
+    /* 0x4C */ s32 x4C;
+    /* 0x50 */ s32 x50;
+    /* 0x54 */ u8 pad3[8];
+    /* 0x5C */ s32 xE30_state;
+    /* 0x60 */ Vec3 xE34_a_offset;
+    /* 0x6C */ Vec3 xE40_b_offset;
+    /* 0x78 */ f32 xE4C_scale;
+    /* 0x7C */ itECB xE50;
+} itLeadead_ItemVars;
+
 typedef struct FoxBlasterAttr {
     /* +0 */ float x0;
     /* +4 */ float x4;
@@ -450,17 +469,9 @@ typedef struct itSamusBomb_ItemVars {
     /* +4 +DD8 */ s32 xDD8;
 } itSamusBomb_ItemVars;
 
-typedef struct itSamusGrapple_UnkStruct {
-    /* +0 */ char pad_0[0x8];
-    /* +8 */ Vec3 pos;
-} itSamusGrapple_UnkStruct;
-
 typedef struct itSamusGrapple_ItemVars {
-    /*  +0 +DD4 */ itSamusGrapple_UnkStruct* x0;
-    /*  +4 +DD8 */ char pad_4[0x4];
-    /*  +8 +DDC */ HSD_GObj* x8;
-    /*  +C +DE0 */ char pad_C[0x4];
-    /* +10 +DE4 */ void (*unk_10)(Item_GObj* gobj);
+    /*  +0 +DD4 */ char pad_0[0x10];
+    /* +10 +DE4 */ UNK_RET (*unk_10)(UNK_PARAMS);
 } itSamusGrapple_ItemVars;
 
 typedef struct itSeakNeedleThrown_ItemVars {

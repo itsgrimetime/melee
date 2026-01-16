@@ -11,7 +11,7 @@
 /* 287B28 */ bool itTaru_UnkMotion0_Anim(Item_GObj* gobj);
 /* 287B68 */ void itTaru_UnkMotion0_Phys(Item_GObj* gobj);
 /* 287B6C */ bool itTaru_UnkMotion0_Coll(Item_GObj* gobj);
-/* 287D0C */ void it_80287D0C(Item_GObj* gobj);
+/* 287D0C */ UNK_RET it_80287D0C(UNK_PARAMS);
 /* 287D48 */ bool itTaru_UnkMotion1_Anim(Item_GObj* gobj);
 /* 287D50 */ void itTaru_UnkMotion1_Phys(Item_GObj* gobj);
 /* 287D80 */ bool itTaru_UnkMotion1_Coll(Item_GObj* gobj);
@@ -25,7 +25,7 @@
 /* 287FE4 */ void itTaru_UnkMotion3_Phys(Item_GObj* gobj);
 /* 288030 */ bool itTaru_UnkMotion3_Coll(Item_GObj* gobj);
 /* 288194 */ void it_80288194(Item_GObj* gobj);
-/* 2881B4 */ void it_802881B4(Item_GObj* gobj);
+/* 2881B4 */ UNK_RET it_802881B4(UNK_PARAMS);
 /* 2881FC */ void it_802881FC(Item_GObj* gobj);
 /* 28824C */ bool itTaru_UnkMotion5_Anim(Item_GObj* gobj);
 /* 288308 */ void itTaru_UnkMotion5_Phys(Item_GObj* gobj);

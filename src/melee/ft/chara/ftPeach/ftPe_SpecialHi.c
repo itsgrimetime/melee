@@ -6,7 +6,6 @@
 
 #include "ft/fighter.h"
 #include "ft/ft_081B.h"
-#include "ftCommon/ftCo_Attack100.h"
 #include "ft/ftanim.h"
 #include "ft/ftcommon.h"
 #include "ft/ftparts.h"
@@ -14,6 +13,7 @@
 
 #include "ftCommon/forward.h"
 
+#include "ftCommon/ftCo_Attack100.h"
 #include "ftCommon/ftCo_FallSpecial.h"
 #include "ftCommon/ftCo_ItemParasolOpen.h"
 #include "ftCommon/ftCo_Landing.h"
@@ -246,7 +246,7 @@ void ftPe_SpecialHiStart_IASA(HSD_GObj* gobj)
     }
     if (ftCheckThrowB3(fp) && ABS(fp->input.lstick.x) > da->x78) {
         ftCommon_UpdateFacing(fp);
-        ftParts_80075AF0(fp, 0, M_PI_2 * fp->facing_dir);
+        ftPartSetRotY(fp, 0, M_PI_2 * fp->facing_dir);
     }
 }
 

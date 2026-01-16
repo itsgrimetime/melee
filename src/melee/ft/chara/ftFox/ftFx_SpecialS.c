@@ -5,12 +5,12 @@
 #include "ft/fighter.h"
 #include "ft/ft_081B.h"
 #include "ft/ft_0892.h"
-#include "ftCommon/ftCo_Attack100.h"
 #include "ft/ftanim.h"
 #include "ft/ftcliffcommon.h"
 #include "ft/ftcommon.h"
 #include "ft/ftparts.h"
 #include "ft/types.h"
+#include "ftCommon/ftCo_Attack100.h"
 #include "ftCommon/ftCo_Fall.h"
 #include "ftCommon/ftCo_FallSpecial.h"
 #include "ftCommon/ftCo_Landing.h"
@@ -350,7 +350,7 @@ static inline void ftFox_SpecialS_SetPhys(HSD_GObj* gobj)
     fp->mv.fx.SpecialS.blendFrames[2] = fp->mv.fx.SpecialS.blendFrames[1];
     fp->mv.fx.SpecialS.blendFrames[1] = fp->mv.fx.SpecialS.blendFrames[0];
 
-    fp->mv.fx.SpecialS.blendFrames[0] = ftParts_80075E78(fp, 0);
+    fp->mv.fx.SpecialS.blendFrames[0] = ftPartGetRotX(fp, 0);
 }
 
 // 0x800EA47C
@@ -444,7 +444,7 @@ inline void ftFox_SpecialS_SetVars(HSD_GObj* gobj)
     fp->mv.fx.SpecialS.ghostEffectPos[1] = fp->cur_pos;
     fp->mv.fx.SpecialS.ghostEffectPos[0] = fp->cur_pos;
 
-    var = ftParts_80075E78(fp, 0);
+    var = ftPartGetRotX(fp, 0);
 
     fp->mv.fx.SpecialS.blendFrames[3] = var;
     fp->mv.fx.SpecialS.blendFrames[2] = var;
@@ -547,7 +547,7 @@ void ftFx_SpecialAirSEnd_Phys(HSD_GObj* gobj)
         fp->mv.fx.SpecialS.gravityDelay--;
     } else {
         ftCommon_Fall(fp, da->x48_FOX_ILLUSION_TERMINAL_VELOCITY,
-                          ca->terminal_vel);
+                      ca->terminal_vel);
     }
     ftCommon_ApplyFrictionAir(fp, da->x40_FOX_ILLUSION_AIR_MUL_X);
     ftFox_SpecialS_SetPhys(gobj);

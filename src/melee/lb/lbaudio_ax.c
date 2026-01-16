@@ -1,15 +1,18 @@
 #include "lbaudio_ax.static.h"
 
 #include "baselib/forward.h"
-#include <m2c_macros.h>
 #include <melee/ft/forward.h>
 
+#include <m2c_macros.h>
 #include <baselib/axdriver.h>
 #include <baselib/gobjplink.h>
 #include <baselib/gobjproc.h>
 #include <baselib/gobjuserdata.h>
 #include <baselib/synth.h>
+#include <melee/cm/camera.h>
+#include <melee/ft/ftlib.h>
 #include <melee/gr/stage.h>
+#include <melee/it/it_26B1.h>
 #include <melee/lb/lbarchive.h>
 #include <melee/cm/camera.h>
 #include <melee/ft/ftlib.h>
@@ -21,16 +24,8 @@ extern s8 flags_arr_803BB800[0x62];
 typedef bool (*lbl_803BCA24_fn)(HSD_GObj*);
 
 lbl_803BCA24_fn lbl_803BCA24[] = {
-    fn_800251EC,
-    fn_800253D8,
-    fn_800256BC,
-    fn_800259A0,
-    fn_800259EC,
-    fn_80025A98,
-    fn_80025B44,
-    fn_80025CBC,
-    fn_80025E38,
-    fn_80025E38,
+    fn_800251EC, fn_800253D8, fn_800256BC, fn_800259A0, fn_800259EC,
+    fn_80025A98, fn_80025B44, fn_80025CBC, fn_80025E38, fn_80025E38,
 };
 
 int lbAudioAx_8002305C(int arg0, int arg1)
@@ -1302,14 +1297,14 @@ bool lbAudioAx_800265C4(HSD_GObj* arg0, int arg1)
 
     PAD_STACK(16);
 
-    gobj = M2C_FIELD(HSD_GObj_Entities, HSD_GObj**, 0xF8);
+    gobj = ((HSD_GObj**) HSD_GObj_Entities)[0x3E];
 
     while (gobj != NULL) {
-        int* user_data = gobj->user_data;
-        if (user_data != NULL) {
-            if ((u32)user_data[2] == (u32)arg0) {
-                if (user_data[12] != -1 && user_data[12] == arg1) {
-                    AXDriverKeyOff(user_data[12]);
+        lbAudioAx_UserData* ud = gobj->user_data;
+        if (ud != NULL) {
+            if (ud->entity == arg0) {
+                if (ud->voice_id != -1 && ud->voice_id == arg1) {
+                    AXDriverKeyOff(ud->voice_id);
                     if (gobj != NULL) {
                         HSD_GObjPLink_80390228(gobj);
                     }

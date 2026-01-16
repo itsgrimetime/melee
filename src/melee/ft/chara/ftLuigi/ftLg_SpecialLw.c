@@ -37,7 +37,7 @@
 void ftLg_SpecialLw_UpdateRot(HSD_GObj* gobj)
 {
     Fighter* fp = GET_FIGHTER(gobj);
-    ftParts_8007592C(fp, 0, 0.0f);
+    ftPartSetRotX(fp, 0, 0.0F);
 }
 
 static inline void ftLuigi_SpecialLw_SetVars(HSD_GObj* gobj)
@@ -242,7 +242,7 @@ void ftLg_SpecialAirLw_Phys(HSD_GObj* gobj)
         (fp->input.x668 & HSD_PAD_B))
     {
         ftCommon_Ascend(fp, attrs0->x8C_LUIGI_CYCLONE_TAP_Y_VEL_MAX,
-                          attrs0->x90_LUIGI_CYCLONE_TAP_GRAVITY);
+                        attrs0->x90_LUIGI_CYCLONE_TAP_GRAVITY);
     }
 
     ftCommon_FallBasic(fp);
@@ -279,13 +279,12 @@ static inline void ftLuigi_SpecialLw_UnkAngle(HSD_GObj* gobj)
     if (((u32) fp->cmd_vars[3] != 0U) &&
         ((s32) fp->mv.lg.SpecialLw.isUnkColl != false))
     {
-        ftParts_8007592C(fp, 0,
-                         fp->facing_dir *
-                             atan2f(fp->coll_data.floor.normal.x,
-                                    fp->coll_data.floor.normal.y));
+        ftPartSetRotX(fp, 0,
+                      fp->facing_dir * atan2f(fp->coll_data.floor.normal.x,
+                                              fp->coll_data.floor.normal.y));
         return;
     }
-    ftParts_8007592C(fp, 0, 0.0f);
+    ftPartSetRotX(fp, 0, 0.0F);
 }
 
 /// Luigi's grounded Cyclone Collision callback

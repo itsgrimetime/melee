@@ -1,10 +1,10 @@
 #include "ittincle.h"
 
 #include "it/inlines.h"
-#include "it/it_26B1.h"
-#include "it/item.h"
 #include "it/it_266F.h"
+#include "it/it_26B1.h"
 #include "it/it_2725.h"
+#include "it/item.h"
 
 /// #it_802EB5C8
 
@@ -44,13 +44,8 @@ bool itTincle_UnkMotion1_Anim(Item_GObj* gobj)
     return false;
 }
 
-void itTincle_UnkMotion1_Phys(Item_GObj* gobj)
-{
-    Item* ip = gobj->user_data;
-    if (M2C_FIELD(ip, f32*, 0x50) <= M2C_FIELD(ip, f32*, 0xE30)) {
-        it_802EBA00(gobj);
-    }
-}
+/// #itTincle_UnkMotion1_Phys
+
 bool itTincle_UnkMotion1_Coll(Item_GObj* gobj)
 {
     it_8026E414(gobj, it_802EBA00);
@@ -225,10 +220,4 @@ void it_802ECC98(Item_GObj* arg0, f32 arg1)
     GET_ITEM(arg0)->xDD4_itemVar.tincle.x54 = arg1;
 }
 
-void it_802ECCA4(Item_GObj* gobj, s32* msid_out, Vec3* pos_out)
-{
-    Item* ip = gobj->user_data;
-    *pos_out = ip->pos;
-    pos_out->y += M2C_FIELD(ip, f32*, 0xE24);
-    *msid_out = ip->msid;
-}
+/// #it_802ECCA4

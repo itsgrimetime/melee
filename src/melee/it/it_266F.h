@@ -26,7 +26,7 @@
 /* 26D324 */ bool it_8026D324(ItemKind);
 /* 26D3CC */ bool it_8026D3CC(void);
 /* 26D564 */ void it_8026D564(Item_GObj*);
-/* 26D5CC */ void it_8026D5CC(Item_GObj*);
+/* 26D5CC */ bool it_8026D5CC(Item_GObj*);
 /* 26D604 */ bool it_8026D604(Item_GObj*);
 /* 26D62C */ void it_8026D62C(Item_GObj*, HSD_GObjEvent);
 /* 26D6F4 */ void it_8026D6F4(Item_GObj*, HSD_GObjEvent);
@@ -37,7 +37,7 @@
 /* 26D9A0 */ bool it_8026D9A0(Item_GObj*);
 /* 26DA08 */ bool it_8026DA08(Item_GObj*);
 /* 26DA70 */ bool it_8026DA70(Item_GObj*);
-/* 26DAA8 */ bool it_8026DAA8(Item_GObj*);
+/* 26DAA8 */ s32 it_8026DAA8(Item_GObj*);
 /* 26DB40 */ bool it_8026DB40(Item_GObj*);
 /* 26DBC8 */ bool it_8026DBC8(Item_GObj*);
 /* 26DC24 */ bool it_8026DC24(Item_GObj*);
@@ -60,14 +60,16 @@
 /* 26E7E0 */ void it_8026E7E0(Item_GObj*, HSD_GObjEvent);
 /* 26E8C4 */ void it_8026E8C4(Item_GObj*, HSD_GObjEvent, HSD_GObjEvent);
 /* 26E9A4 */ bool it_8026E9A4(HSD_GObj*, Vec3*, Vec3*, Vec3*);
-/* 26EA20 */ bool it_8026EA20(HSD_GObj*, Vec3*, Vec3*, Vec3*, UNK_T*, u32* flags_out);
-/* 26EA9C */ bool it_8026EA9C(HSD_GObj*, Vec3*, Vec3*, Vec3*, int*, u32* flags_out, s32);
+/* 26EA20 */ bool it_8026EA20(HSD_GObj*, Vec3*, Vec3*, Vec3*, UNK_T*,
+                              u32* flags_out);
+/* 26EA9C */ bool it_8026EA9C(HSD_GObj*, Vec3*, Vec3*, Vec3*, int*,
+                              u32* flags_out, s32);
 /* 26EB18 */ void it_8026EB18(HSD_GObj*, s32, Vec3*);
 /* 26EBC8 */ void it_8026EBC8(HSD_GObj*, u16, u8*);
 /* 26EC54 */ void it_8026EC54(HSD_GObj*, u16, u8*);
 /* 26ECE0 */ bool it_8026ECE0(Item_GObj*, u32);
 /* 26EECC */ void it_8026EECC(HSD_GObj*, int);
-/* 26F3AC */ void it_8026F3AC(void);
+/* 26F3AC */ ItemKind it_8026F3AC(void);
 /* 26F3D4 */ void it_8026F3D4(Item_GObj*, struct it_8026F3D4_arg1_t*, s32,
                               s32);
 /* 26F53C */ void it_8026F53C(Item_GObj*, Vec3*, bool);

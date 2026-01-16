@@ -15,7 +15,6 @@
 #include "it/it_2725.h"
 #include "it/itCommonItems.h"
 #include "it/types.h"
-#include "mp/mpcoll.h"
 
 #include <dolphin/mtx.h>
 #include <melee/gr/ground.h>
@@ -143,28 +142,7 @@ bool it_3F14_Logic34_DmgDealt(Item_GObj* arg0)
     return 0;
 }
 
-void it_3F14_Logic34_EnteredAir(Item_GObj* gobj)
-{
-    Item* ip = GET_ITEM(gobj);
-    s32 dir;
-    f32 facing;
-
-    Item_80268E5C(gobj, 4, ITEM_ANIM_UPDATE);
-
-    if (ip->x88.x + (ip->x40_vel.x + ip->x7C.x) >= 0.0f) {
-        facing = -1.0f;
-    } else {
-        facing = 1.0f;
-    }
-    ip->facing_dir = facing;
-
-    if (ip->facing_dir == 1.0f) {
-        dir = -1;
-    } else {
-        dir = 1;
-    }
-    mpCollSetFacingDir(&ip->x378_itemColl, dir);
-}
+/// #it_3F14_Logic34_EnteredAir
 
 bool itMball_UnkMotion4_Anim(Item_GObj* gobj)
 {
@@ -236,32 +214,7 @@ bool itMball_UnkMotion5_Coll(Item_GObj* gobj)
     return false;
 }
 
-void it_80297E8C(Item_GObj* arg0)
-{
-    Item* item = GET_ITEM(arg0);
-    itMBallAttributes* spec_attrs =
-        item->xC4_article_data->x4_specialAttributes;
-    HSD_JObj* hsd_obj = arg0->hsd_obj;
-    PAD_STACK(8);
-
-    it_8026B3A8(arg0);
-    item->xDC8_word.flags.x1A = 0;
-    item->xD5C = 0;
-    item->x40_vel.z = 0.0f;
-    item->x40_vel.y = 0.0f;
-    item->x40_vel.x = 0.0f;
-    it_80274740(arg0);
-    if (!item->xDD4_itemVar.mball.b0) {
-        item->xD44_lifeTimer = spec_attrs->x0;
-        item->xDD4_itemVar.mball.b0 = true;
-        efAsync_Spawn(arg0, &GET_ITEM(arg0)->xBC0, 0U, 0x449U, hsd_obj);
-        Item_8026AE84(item, 0x10C, 0x7F, 0x40);
-        Item_80268E5C((HSD_GObj*) arg0, 6, ITEM_ANIM_UPDATE);
-    } else {
-        Item_80268E5C((HSD_GObj*) arg0, 6, ITEM_UNK_0x1);
-    }
-    item->on_accessory = it_80297DD8;
-}
+/// #it_80297E8C
 
 bool itMball_UnkMotion6_Anim(Item_GObj* gobj)
 {

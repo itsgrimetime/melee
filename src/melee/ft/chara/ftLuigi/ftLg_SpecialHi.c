@@ -9,11 +9,11 @@
 
 #include "ft/fighter.h"
 #include "ft/ft_081B.h"
-#include "ftCommon/ftCo_Attack100.h"
 #include "ft/ftanim.h"
 #include "ft/ftcommon.h"
 #include "ft/ftparts.h"
 #include "ft/types.h"
+#include "ftCommon/ftCo_Attack100.h"
 #include "ftCommon/ftCo_FallSpecial.h"
 #include "ftCommon/ftCo_Landing.h"
 
@@ -134,7 +134,7 @@ void ftLg_SpecialHi_IASA(HSD_GObj* gobj)
         }
         if (control > luigiAttrs->x58_LUIGI_SUPERJUMP_REVERSE_STICK_RANGE) {
             ftCommon_UpdateFacing(fp);
-            ftParts_80075AF0(fp, 0, (M_PI / 2) * fp->facing_dir);
+            ftPartSetRotY(fp, 0, M_PI_2 * fp->facing_dir);
         }
     }
 }
@@ -190,7 +190,7 @@ void ftLg_SpecialAirHi_IASA(HSD_GObj* gobj)
         }
         if (control > luigiAttrs->x58_LUIGI_SUPERJUMP_REVERSE_STICK_RANGE) {
             ftCommon_UpdateFacing(fp);
-            ftParts_80075AF0(fp, 0, (M_PI / 2) * fp->facing_dir);
+            ftPartSetRotY(fp, 0, M_PI_2 * fp->facing_dir);
         }
     }
 }
@@ -224,7 +224,7 @@ void ftLg_SpecialAirHi_Phys(HSD_GObj* gobj)
         return;
     }
     ftCommon_Fall(fp, luigiAttrs->x68_LUIGI_SUPERJUMP_GRAVITY_START,
-                      ca->terminal_vel);
+                  ca->terminal_vel);
     ftCommon_8007CF58(fp);
 }
 

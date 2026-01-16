@@ -216,8 +216,7 @@ void ftFx_SpecialAirLwStart_Phys(HSD_GObj* gobj)
     if (fp->mv.fx.SpecialLw.gravityDelay != 0) {
         fp->mv.fx.SpecialLw.gravityDelay--;
     } else {
-        ftCommon_Fall(fp, da->xAC_FOX_REFLECTOR_FALL_ACCEL,
-                          ca->terminal_vel);
+        ftCommon_Fall(fp, da->xAC_FOX_REFLECTOR_FALL_ACCEL, ca->terminal_vel);
     }
 
     ftCommon_8007CF58(fp);
@@ -369,8 +368,7 @@ static inline void ftFox_SpecialLw_InlinePhys(HSD_GObj* gobj)
     if (fp->mv.fx.SpecialLw.gravityDelay != 0) {
         fp->mv.fx.SpecialLw.gravityDelay--;
     } else {
-        ftCommon_Fall(fp, da->xAC_FOX_REFLECTOR_FALL_ACCEL,
-                          ca->terminal_vel);
+        ftCommon_Fall(fp, da->xAC_FOX_REFLECTOR_FALL_ACCEL, ca->terminal_vel);
     }
 
     ftCommon_8007CF58(fp);
@@ -472,9 +470,9 @@ static void ftFx_SpecialLw_Turn(HSD_GObj* gobj)
         fp->cmd_vars[0] = 1;
         fp->facing_dir = -fp->facing_dir;
     }
-    ftParts_80075AF0(fp, 0,
-                     -(180 / da->x9C_FOX_REFLECTOR_TURN_FRAMES * deg_to_rad -
-                       ftParts_80075F48(fp, 0)));
+    ftPartSetRotY(fp, 0,
+                  -((180 / da->x9C_FOX_REFLECTOR_TURN_FRAMES * deg_to_rad) -
+                    ftPartGetRotZ(fp, 0)));
 }
 #pragma pop
 
@@ -492,11 +490,9 @@ static inline void ftFox_SpecialLw_Turn_Inline(HSD_GObj* gobj)
         fp->facing_dir = -fp->facing_dir;
     }
 
-    /// @todo Degrees-to-radians constant.
-    ftParts_80075AF0(
-        fp, 0,
-        -((0.01745329238474369f * (180 / da->x9C_FOX_REFLECTOR_TURN_FRAMES)) -
-          ftParts_80075F48(fp, 0)));
+    ftPartSetRotY(fp, 0,
+                  -((deg_to_rad * (180 / da->x9C_FOX_REFLECTOR_TURN_FRAMES)) -
+                    ftPartGetRotZ(fp, 0)));
 }
 
 void ftFx_SpecialLwTurn_Anim(HSD_GObj* gobj)
@@ -575,8 +571,7 @@ void ftFx_SpecialAirLwTurn_Phys(HSD_GObj* gobj)
     if (fp->mv.fx.SpecialLw.gravityDelay != 0) {
         fp->mv.fx.SpecialLw.gravityDelay--;
     } else {
-        ftCommon_Fall(fp, da->xAC_FOX_REFLECTOR_FALL_ACCEL,
-                          ca->terminal_vel);
+        ftCommon_Fall(fp, da->xAC_FOX_REFLECTOR_FALL_ACCEL, ca->terminal_vel);
     }
 
     ftCommon_8007CF58(fp);
@@ -788,8 +783,7 @@ void ftFx_SpecialAirLwHit_Phys(HSD_GObj* gobj)
     if (fp->mv.fx.SpecialLw.gravityDelay != 0) {
         fp->mv.fx.SpecialLw.gravityDelay--;
     } else {
-        ftCommon_Fall(fp, da->xAC_FOX_REFLECTOR_FALL_ACCEL,
-                          ca->terminal_vel);
+        ftCommon_Fall(fp, da->xAC_FOX_REFLECTOR_FALL_ACCEL, ca->terminal_vel);
     }
 
     ftCommon_8007CF58(fp);
@@ -932,8 +926,7 @@ void ftFx_SpecialAirLwEnd_Phys(HSD_GObj* gobj)
     if (fp->mv.fx.SpecialLw.gravityDelay != 0) {
         fp->mv.fx.SpecialLw.gravityDelay--;
     } else {
-        ftCommon_Fall(fp, da->xAC_FOX_REFLECTOR_FALL_ACCEL,
-                          ca->terminal_vel);
+        ftCommon_Fall(fp, da->xAC_FOX_REFLECTOR_FALL_ACCEL, ca->terminal_vel);
     }
     ftCommon_8007CF58(fp);
 }

@@ -1,6 +1,9 @@
 #include "mn/mndatadel.h"
+
 #include "mn/mndatadel.static.h"
+
 #include "placeholder.h"
+
 #include "baselib/gobj.h"
 #include "baselib/gobjgxlink.h"
 #include "baselib/gobjobject.h"
@@ -258,7 +261,9 @@ void mnDataDel_8024EEC0(void)
     HSD_GObjObject_80390A70(wrn_modal, HSD_GObj_804D7849, root);
     GObj_SetupGXLink(wrn_modal, HSD_GObj_JObjCallback, 6U, 0x80U);
     HSD_GObjProc_8038FD54(wrn_modal, fn_8024ECCC, 0U);
-    HSD_JObjAddAnimAll(root, mnDataDel_804A0938.animjoint, mnDataDel_804A0938.matanim_joint, mnDataDel_804A0938.shapeanim_joint);
+    HSD_JObjAddAnimAll(root, mnDataDel_804A0938.animjoint,
+                       mnDataDel_804A0938.matanim_joint,
+                       mnDataDel_804A0938.shapeanim_joint);
     HSD_JObjReqAnimAll(root, mnDataDel_803EF8A0.start_frame);
     HSD_JObjAnimAll(root);
     // hide arrow and progress bar

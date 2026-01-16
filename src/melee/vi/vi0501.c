@@ -1,14 +1,14 @@
-#include "vi0501.static.h"
+#include "vi0501.h"
 
 #include "ef/efasync.h"
 #include "ef/eflib.h"
 #include "gm/gm_1601.h"
-#include "gm/gm_1A36.h"
 #include "gm/gm_1A45.h"
 #include "lb/lb_00F9.h"
 #include "lb/lbarchive.h"
 #include "lb/lbaudio_ax.h"
 #include "lb/lbshadow.h"
+#include "sc/types.h"
 #include "vi/vi.h"
 
 #include <dolphin/gx.h>
@@ -20,6 +20,10 @@
 #include <baselib/gobjobject.h>
 #include <baselib/gobjproc.h>
 #include <baselib/wobj.h>
+
+/* 4D6F70 */ extern SceneDesc* un_804D6F70;
+/* 4D6F74 */ extern HSD_Archive* un_804D6F74;
+/* 4D6F78 */ extern HSD_Archive* un_804D6F78;
 
 static GXColor erase_colors_vi0501;
 extern un_804D7004_t un_804D6FA8;
@@ -43,23 +47,23 @@ void fn_8031DD14(HSD_GObj* gobj)
     HSD_CObjAnim(cobj);
     frame = cobj->aobj->curr_frame;
 
-    if (un_804DE074 == frame || un_804DE078 == frame || un_804DE07C == frame) {
+    if (60.0f == frame || 70.0f == frame || 85.0f == frame) {
         vi_8031C9B4(0xC, 0);
         lbAudioAx_800237A8(0x222F9, 0x7F, 0x40);
 
-        if (un_804DE074 == cobj->aobj->curr_frame) {
+        if (60.0f == cobj->aobj->curr_frame) {
             lbAudioAx_800237A8(0x73, 0x7F, 0x40);
         }
-        if (un_804DE078 == cobj->aobj->curr_frame) {
+        if (70.0f == cobj->aobj->curr_frame) {
             lbAudioAx_800237A8(0x74, 0x7F, 0x40);
         }
-        if (un_804DE07C == cobj->aobj->curr_frame) {
+        if (85.0f == cobj->aobj->curr_frame) {
             lbAudioAx_800237A8(0x73, 0x7F, 0x40);
         }
     }
 
     frame = cobj->aobj->curr_frame;
-    if (un_804DE080 == frame || un_804DE084 == frame || un_804DE088 == frame) {
+    if (98.0f == frame || 108.0f == frame || 123.0f == frame) {
         lbAudioAx_800237A8(0x22308, 0x7F, 0x40);
     }
 
@@ -88,44 +92,46 @@ void un_8031DE58_OnEnter(void* arg)
 
     char_index = input[0];
 
-    un_804D6F74 =
-        lbArchive_LoadSymbols("ViIntro.dat", &un_804D6F70, "ScVi", NULL);
-    un_804D6F78 = lbArchive_LoadSymbols(viGetCharAnimByIndex(char_index), NULL);
+    un_804D6F74 = lbArchive_LoadSymbols("Vi0501.dat", &un_804D6F70,
+                                        "visual0501Scene", NULL);
+    un_804D6F78 =
+        lbArchive_LoadSymbols(viGetCharAnimByIndex(char_index), NULL);
 
-    fog_gobj = GObj_Create(0xb, 3, 0);
+    fog_gobj = GObj_Create(0xB, 3, 0);
     fog = HSD_FogLoadDesc(un_804D6F70->fogs->desc);
     HSD_GObjObject_80390A70(fog_gobj, HSD_GObj_804D7848, fog);
     GObj_SetupGXLink(fog_gobj, HSD_GObj_FogCallback, 0, 0);
     erase_colors_vi0501 = fog->color;
 
-    light_gobj = GObj_Create(0xb, 3, 0);
+    light_gobj = GObj_Create(0xB, 3, 0);
     lobj = lb_80011AC4(un_804D6F70->lights);
     HSD_GObjObject_80390A70(light_gobj, HSD_GObj_804D784A, lobj);
     GObj_SetupGXLink(light_gobj, HSD_GObj_LObjCallback, 0, 0);
 
     camera_gobj = GObj_Create(0x13, 0x14, 0);
-    cobj = lb_80013B14((HSD_CameraDescPerspective*) un_804D6F70->cameras->desc);
+    cobj =
+        lb_80013B14((HSD_CameraDescPerspective*) un_804D6F70->cameras->desc);
     HSD_GObjObject_80390A70(camera_gobj, HSD_GObj_804D784B, cobj);
     GObj_SetupGXLinkMax(camera_gobj, vi_8031DC80, 5);
     HSD_CObjAddAnim(cobj, un_804D6F70->cameras->anims[0]);
-    HSD_CObjReqAnim(cobj, un_804DE070);
+    HSD_CObjReqAnim(cobj, 0.0f);
     HSD_CObjAnim(cobj);
     HSD_GObjProc_8038FD54(camera_gobj, fn_8031DD14, 0);
 
     for (i = 0; un_804D6F70->models[i] != NULL; i++) {
-        model_gobj = GObj_Create(0xe, 0xf, 0);
+        model_gobj = GObj_Create(0xE, 0xF, 0);
         jobj = HSD_JObjLoadJoint(un_804D6F70->models[i]->joint);
         HSD_GObjObject_80390A70(model_gobj, HSD_GObj_804D7849, jobj);
         GObj_SetupGXLink(model_gobj, HSD_GObj_JObjCallback, 9, 0);
         gm_8016895C(jobj, un_804D6F70->models[i], 0);
-        HSD_JObjReqAnimAll(jobj, un_804DE070);
+        HSD_JObjReqAnimAll(jobj, 0.0f);
         HSD_JObjAnimAll(jobj);
         HSD_GObjProc_8038FD54(model_gobj, mn_8022EAE0, 0x17);
     }
 
-    un_8031D9F8(input[0], input[1], input[3], (int)&input[4]);
-    lbAudioAx_800237A8(0x20b, 0x7f, 0x40);
-    lbAudioAx_800237A8(0x20c, 0x7f, 0x40);
+    un_8031D9F8(input[0], input[1], input[3], (int) &input[4]);
+    lbAudioAx_800237A8(0x20B, 0x7F, 0x40);
+    lbAudioAx_800237A8(0x20C, 0x7F, 0x40);
 }
 
 void vi_8031E0F0_OnFrame(void)

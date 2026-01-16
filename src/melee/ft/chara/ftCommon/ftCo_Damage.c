@@ -27,7 +27,6 @@
 #include "ft/ft_0892.h"
 #include "ft/ft_0C31.h"
 #include "ft/ft_0C8C.h"
-#include "ftCommon/ftCo_Attack100.h"
 #include "ft/ft_0DF1.h"
 #include "ft/ftanim.h"
 #include "ft/ftchangeparam.h"
@@ -36,6 +35,7 @@
 #include "ft/ftcommon.h"
 #include "ft/ftparts.h"
 #include "ft/types.h"
+#include "ftCommon/ftCo_Attack100.h"
 #include "ftCommon/ftCo_CaptureCut.h"
 #include "ftCommon/ftCo_DamageScrew.h"
 #include "ftCommon/ftCo_Fall.h"
@@ -251,10 +251,9 @@ static void inlineA0(Fighter_GObj* gobj, float f1, float f2)
 static void inlineA1(Fighter_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
-    ftParts_8007592C(fp, ftParts_GetBoneIndex(fp, FtPart_XRotN),
-                     fp->facing_dir *
-                         atan2f(fp->self_vel.x + fp->x8c_kb_vel.x,
-                                fp->self_vel.y + fp->x8c_kb_vel.y));
+    ftPartSetRotX(fp, ftParts_GetBoneIndex(fp, FtPart_XRotN),
+                  fp->facing_dir * atan2f(fp->self_vel.x + fp->x8c_kb_vel.x,
+                                          fp->self_vel.y + fp->x8c_kb_vel.y));
 }
 
 void ftCo_8008DCE0(Fighter_GObj* gobj, int arg1, float facing_dir)
@@ -1154,7 +1153,7 @@ static void doFlyRoll(Fighter_GObj* gobj)
     float trajectory =
         fp->facing_dir * atan2f(fp->self_vel.x + fp->x8c_kb_vel.x,
                                 fp->self_vel.y + fp->x8c_kb_vel.y);
-    ftParts_8007592C(fp, ftParts_GetBoneIndex(fp, FtPart_XRotN), trajectory);
+    ftPartSetRotX(fp, ftParts_GetBoneIndex(fp, FtPart_XRotN), trajectory);
 }
 
 void ftCo_DamageFly_Phys(Fighter_GObj* gobj)

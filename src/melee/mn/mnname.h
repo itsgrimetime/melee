@@ -2,7 +2,6 @@
 #define GALE01_23749C
 
 #include <placeholder.h>
-#include <stdbool.h>
 
 #include <baselib/forward.h>
 
