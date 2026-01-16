@@ -1,8 +1,11 @@
 #include "mnvibration.h"
 
 #include "mnmain.h"
+#include "mnname.h"
 
 #include <sysdolphin/baselib/gobjplink.h>
+#include <sysdolphin/baselib/jobj.h>
+#include <sysdolphin/baselib/sislib.h>
 
 extern void* mnVibration_804D6C28;
 extern f32 mnVibration_803EECEC[2];
@@ -37,8 +40,62 @@ void fn_80248084(void* gobj) {
 
 /// #mnVibration_80248444
 
-/// #mnVibration_80248644
+void mnVibration_80248644(HSD_GObj* gobj)
+{
+    s32 i;
+    u8* data;
+    u8* ptr1;
+    u8* ptr2;
 
+    for (i = 0, data = gobj->user_data, ptr1 = data, ptr2 = data + (i << 2);
+         i < 8; i++, ptr1 += 4, ptr2 += 4)
+    {
+        if (*(HSD_Text**) (ptr1 + 0x70) != NULL) {
+            HSD_SisLib_803A5CC4(*(HSD_Text**) (ptr2 + 0x70));
+            *(void**) (ptr1 + 0x70) = NULL;
+        }
+    }
+
+    {
+        HSD_JObj* jobj = *(HSD_JObj**) (data + 0x50);
+        HSD_JObj* child;
+        if (jobj == NULL) {
+            child = NULL;
+        } else {
+            child = jobj->child;
+        }
+
+        if (child != NULL) {
+            if (jobj == NULL) {
+                jobj = NULL;
+            } else {
+                jobj = jobj->child;
+            }
+            HSD_JObjRemoveAll(jobj);
+        }
+    }
+
+    for (i = 0; i < 8; i++) {
+        u8 scroll_offset = *(data + 0x0A);
+        s32 name_count = GetNameCount();
+        u8 name_idx;
+
+        if (name_count < 8 && i >= name_count) {
+            name_idx = 0xFF;
+        } else {
+            s32 sum = scroll_offset + i;
+            if (name_count <= sum) {
+                name_idx = 0xFF;
+            } else {
+                name_idx = (u8) sum;
+            }
+        }
+
+        if ((s32) name_idx != 0xFF) {
+            mnVibration_80248444(gobj, name_idx, (u8) i);
+        }
+    }
+}
 void fn_80248748(HSD_GObj* gobj) {
     f32* table = mnVibration_803EECEC;
     void* data = *(void**)((u8*)gobj + 0x2C);
