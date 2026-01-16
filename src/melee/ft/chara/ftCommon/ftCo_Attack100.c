@@ -490,6 +490,8 @@ void ftCo_JumpAerialF1_Coll(Fighter_GObj* gobj)
     ft_80082F28(gobj);
 }
 
+#pragma push
+#pragma dont_inline on
 static FtMotionId fn_800D769C(Fighter* ft, FtMotionId msid)
 {
     if (ft->motion_id >= ftCo_MS_ItemScopeStartEmpty) {
@@ -497,6 +499,7 @@ static FtMotionId fn_800D769C(Fighter* ft, FtMotionId msid)
     }
     return msid;
 }
+#pragma pop
 
 /// #ft_800D76B8
 
@@ -509,37 +512,19 @@ void fn_800D7830(Fighter_GObj* gobj)
 
     ftCommon_8007D7FC(fp);
 
-    if (M2C_FIELD(fp, s32*, 0x10) >= 0xA6) {
+    if (M2C_FIELD_U(fp, s32*, 0x10) >= 0xA6) {
         motion = 0xA6;
     } else {
         motion = 0x9E;
     }
 
     Fighter_ChangeMotionState(gobj, motion, 0x0C4C5280,
-                              M2C_FIELD(fp, f32*, 0x894),
-                              M2C_FIELD(fp, f32*, 0x89C), 0.0f, NULL);
-    M2C_FIELD(fp, void**, 0x21DC) = fn_800D7938;
+                              M2C_FIELD_U(fp, f32*, 0x894),
+                              M2C_FIELD_U(fp, f32*, 0x89C), 0.0f, NULL);
+    M2C_FIELD_U(fp, void**, 0x21DC) = fn_800D7938;
 }
 
-void fn_800D78B0(Fighter_GObj* gobj)
-{
-    Fighter* fp = gobj->user_data;
-    s32 motion;
-
-    ftCommon_8007D5D4(fp);
-
-    if (fp->motion_id >= 0xA6) {
-        motion = 0xAA;
-    } else {
-        motion = 0xA2;
-    }
-
-    Fighter_ChangeMotionState(gobj, motion, 0x0C4C5280,
-                              M2C_FIELD(fp, f32*, 0x894),
-                              M2C_FIELD(fp, f32*, 0x89C), 0.0f, NULL);
-    ftCommon_ClampAirDrift(fp);
-    M2C_FIELD(fp, void**, 0x21DC) = fn_800D7938;
-}
+/// #fn_800D78B0
 
 void fn_800D7938(Fighter_GObj* gobj)
 {
@@ -547,7 +532,7 @@ void fn_800D7938(Fighter_GObj* gobj)
 
     if (fp->item_gobj != NULL) {
         s32 result =
-            it_80291DAC(fp->item_gobj, (s32) * (f32*) ((u8*) fp + 0x2340));
+            it_80291DAC(fp->item_gobj, (s32) M2C_FIELD_U(fp, f32*, 0x2340));
         if (result != -1) {
             it_80291F14(fp->item_gobj, result);
         }
@@ -558,7 +543,67 @@ void ftCo_ItemScopeStart_Anim(Fighter_GObj* gobj) {}
 
 void ftCo_ItemScopeAirStart_Anim(Fighter_GObj* gobj) {}
 
-/// #fn_800D79B4
+void fn_800D79B4(HSD_GObj* gobj, void (*cb_ground)(HSD_GObj*),
+                 void (*cb_air)(HSD_GObj*, int))
+{
+    Fighter* fp = GET_FIGHTER(gobj);
+    int item_val;
+    s32 stack_var;
+
+    // Define an overlay struct to force direct offset access (prevents address
+    // caching in r26/r27)
+    typedef struct {
+        u8 pad[0x2340];
+        f32 timer; // 0x2340
+        s32 flag;  // 0x2344
+    } FighterOverlay;
+    FighterOverlay* fp_ovl = (FighterOverlay*) fp;
+
+    if (fp->item_gobj == NULL) {
+        return;
+    }
+
+    // Access 0x2344 (Flag) via overlay
+    if (fp_ovl->flag == 0) {
+        // Access 0x65C (Input) via raw pointer to match ASM
+        if (M2C_FIELD_U(fp, u32*, 0x65C) & HSD_PAD_A) {
+            // Access 0x2340 (Timer) via overlay
+            fp_ovl->timer += *(f32*) &ftCo_804D9024;
+        }
+    }
+
+    if (!(M2C_FIELD_U(fp, u32*, 0x65C) & HSD_PAD_A)) {
+        fp_ovl->flag = 1;
+    }
+
+    // Timer to int conversion
+    stack_var = (s32) fp_ovl->timer;
+
+    item_val = it_80291DAC(fp->item_gobj, stack_var);
+
+    // Threshold check (Float vs Float)
+    if (fp_ovl->timer >= M2C_FIELD_U(p_ftCommonData, f32*, 0x5B8)) {
+        if (!ftAnim_IsFramesRemaining(gobj)) {
+            cb_air(gobj, item_val);
+        }
+    }
+
+    if (fp_ovl->flag == 0) {
+        return;
+    }
+
+    if (ftAnim_IsFramesRemaining(gobj)) {
+        return;
+    }
+
+    stack_var = (s32) fp_ovl->timer;
+
+    if (it_80291CF4(fp->item_gobj, stack_var) == 0) {
+        cb_ground(gobj);
+    } else {
+        cb_air(gobj, item_val);
+    }
+}
 
 void ftCo_ItemScopeStart_IASA(Fighter_GObj* gobj)
 {
@@ -605,7 +650,7 @@ void fn_800D7C60(Fighter_GObj* gobj)
     Fighter_ChangeMotionState(gobj, fn_800D769C(fp, 0xA3), 0x02000000, 0.0f,
                               1.0f, 0.0f, NULL);
     ftCommon_ClampAirDrift(fp);
-    M2C_FIELD(fp, s32*, 0x2340) = (s32) p_ftCommonData->x5BC;
+    M2C_FIELD_U(fp, s32*, 0x2340) = (s32) p_ftCommonData->x5BC;
     fp->accessory4_cb = fn_800D80F4;
     fp->take_dmg_cb = fn_800D8378;
 }
@@ -639,8 +684,8 @@ void ftCo_ItemScopeRapid_Anim(Fighter_GObj* gobj)
     {
         ft_800892A0(gobj);
         ft_80089824(gobj);
-        M2C_FIELD(fp, s32*, 0x2340) = M2C_FIELD(fp, s32*, 0x2340) - 1;
-        if (M2C_FIELD(fp, s32*, 0x2340) == 0) {
+        M2C_FIELD_U(fp, s32*, 0x2340) = M2C_FIELD_U(fp, s32*, 0x2340) - 1;
+        if (M2C_FIELD_U(fp, s32*, 0x2340) == 0) {
             fn_800D86E0(gobj);
         } else if (fp->item_gobj != NULL && it_8026B594(fp->item_gobj)) {
             fp = gobj->user_data;
@@ -667,8 +712,8 @@ void ftCo_ItemScopeAirRapid_Anim(Fighter_GObj* gobj)
     {
         ft_800892A0(gobj);
         ft_80089824(gobj);
-        M2C_FIELD(fp, s32*, 0x2340) = M2C_FIELD(fp, s32*, 0x2340) - 1;
-        if (M2C_FIELD(fp, s32*, 0x2340) == 0) {
+        M2C_FIELD_U(fp, s32*, 0x2340) = M2C_FIELD_U(fp, s32*, 0x2340) - 1;
+        if (M2C_FIELD_U(fp, s32*, 0x2340) == 0) {
             fn_800D874C(gobj);
         } else if (fp->item_gobj != NULL && it_8026B594(fp->item_gobj)) {
             fp = gobj->user_data;
@@ -690,14 +735,14 @@ void ftCo_ItemScopeRapid_IASA(Fighter_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
     if (fp->input.x668 & 0x100) {
-        M2C_FIELD(fp, s32*, 0x2340) = (s32) p_ftCommonData->x5BC;
+        M2C_FIELD_U(fp, s32*, 0x2340) = (s32) p_ftCommonData->x5BC;
     }
 }
 void ftCo_ItemScopeAirRapid_IASA(Fighter_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
     if (fp->input.x668 & 0x100) {
-        M2C_FIELD(fp, s32*, 0x2340) = (s32) p_ftCommonData->x5BC;
+        M2C_FIELD_U(fp, s32*, 0x2340) = (s32) p_ftCommonData->x5BC;
     }
 }
 void ftCo_ItemScopeRapid_Phys(Fighter_GObj* gobj)
@@ -735,7 +780,7 @@ void fn_800D8140(Fighter_GObj* gobj, int arg1)
     fp->throw_flags = 0;
     Fighter_ChangeMotionState(gobj, fn_800D769C(fp, 0xA0), 0, 0.0f, 1.0f, 0.0f,
                               NULL);
-    M2C_FIELD(fp, int*, 0x2340) = arg1;
+    M2C_FIELD_U(fp, int*, 0x2340) = arg1;
     fp->accessory4_cb = fn_800D86B8;
     fp->take_dmg_cb = fn_800D8378;
 }
@@ -747,7 +792,7 @@ void fn_800D81D0(Fighter_GObj* gobj, int arg1)
     Fighter_ChangeMotionState(gobj, fn_800D769C(fp, 0xA4), 0, 0.0f, 1.0f, 0.0f,
                               NULL);
     ftCommon_ClampAirDrift(fp);
-    M2C_FIELD(fp, int*, 0x2340) = arg1;
+    M2C_FIELD_U(fp, int*, 0x2340) = arg1;
     fp->accessory4_cb = fn_800D86B8;
     fp->take_dmg_cb = fn_800D8378;
 }
@@ -826,7 +871,7 @@ void ftCo_ItemScopeAirFire_Coll(Fighter_GObj* gobj)
 static void fn_800D86B8(Fighter_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
-    fn_800D84D4(gobj, M2C_FIELD(fp, s32*, 0x2340));
+    fn_800D84D4(gobj, M2C_FIELD_U(fp, s32*, 0x2340));
 }
 
 void fn_800D86E0(Fighter_GObj* gobj)
@@ -1086,17 +1131,17 @@ void fn_800D949C(Fighter_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
     if (fp->kind == 6 || fp->kind == 0x14) {
-        it_802A2B10(M2C_FIELD(fp, HSD_GObj**, 0x2238));
+        it_802A2B10(M2C_FIELD_U(fp, HSD_GObj**, 0x2238));
     }
 }
 
 void ftCo_800D94D8(Fighter_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
-    HSD_GObj* item = M2C_FIELD(fp, HSD_GObj**, 0x2238);
+    HSD_GObj* item = M2C_FIELD_U(fp, HSD_GObj**, 0x2238);
     if (item) {
         it_802A2B10(item);
-        M2C_FIELD(fp, u32*, 0x2238) = 0;
+        M2C_FIELD_U(fp, u32*, 0x2238) = 0;
     }
     ftLk_Init_BoomerangExists(gobj);
 }
@@ -1118,21 +1163,21 @@ void fn_800D9C64(Fighter_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
     if (fp->kind == 0xD) {
-        it_802B7B84(M2C_FIELD(fp, HSD_GObj**, 0x223C));
+        it_802B7B84(M2C_FIELD_U(fp, HSD_GObj**, 0x223C));
     }
 }
 
 void ftCo_800D9C98(Fighter_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
-    Item_GObj* item = M2C_FIELD(fp, Item_GObj**, 0x223C);
+    Item_GObj* item = M2C_FIELD_U(fp, Item_GObj**, 0x223C);
     if (item != NULL) {
         it_802B7B84(item);
-        M2C_FIELD(fp, s32*, 0x223C) = 0;
+        M2C_FIELD_U(fp, s32*, 0x223C) = 0;
     }
-    M2C_FIELD(fp, s32*, 0x21E4) = 0;
-    M2C_FIELD(fp, s32*, 0x21F0) = 0;
-    M2C_FIELD(fp, s32*, 0x21DC) = 0;
+    M2C_FIELD_U(fp, s32*, 0x21E4) = 0;
+    M2C_FIELD_U(fp, s32*, 0x21F0) = 0;
+    M2C_FIELD_U(fp, s32*, 0x21DC) = 0;
 }
 
 /// #ftCo_CatchPull_Anim
@@ -1179,7 +1224,7 @@ void fn_800DA054(Fighter_GObj* gobj)
         return;
     }
 
-    lb_8000B1CC(M2C_FIELD(fp, HSD_JObj**, 0x2358), NULL, &pos1);
+    lb_8000B1CC(M2C_FIELD_U(fp, HSD_JObj**, 0x2358), NULL, &pos1);
 
     {
         s32 bone_idx = ftParts_GetBoneIndex(victim_fp, 2);
@@ -1238,10 +1283,10 @@ void fn_800DA1D8(Fighter_GObj* gobj)
     fp->x221B_b7 = false;
 
     {
-        u8* ptr = M2C_FIELD(fp->ft_data, u8**, 0x8);
+        u8* ptr = M2C_FIELD_U(fp->ft_data, u8**, 0x8);
         u32* parts = (u32*) fp->parts;
         joint = (HSD_JObj*) parts[ptr[0x11] * 4];
-        M2C_FIELD(fp, HSD_JObj**, 0x2358) = joint;
+        M2C_FIELD_U(fp, HSD_JObj**, 0x2358) = joint;
     }
     efAsync_Spawn(gobj, &GET_FIGHTER(gobj)->x60C, 1, 0x41D, joint);
     ftCommon_8007EBAC(fp, 3, 0);
@@ -1483,7 +1528,7 @@ static void fn_800DAC78(Fighter_GObj* gobj, Vec3* result)
     s32 bone_idx;
     Fighter* fp = gobj->user_data;
     Fighter* victim_fp = fp->victim_gobj->user_data;
-    lb_8000B1CC(M2C_FIELD(victim_fp, HSD_JObj**, 0x2358), 0, &victim_pos);
+    lb_8000B1CC(M2C_FIELD_U(victim_fp, HSD_JObj**, 0x2358), 0, &victim_pos);
     bone_idx = ftParts_GetBoneIndex(fp, 2);
     lb_8000B1CC(fp->parts[bone_idx].joint, 0, &own_pos);
     result->x = victim_pos.x - own_pos.x;
@@ -1607,10 +1652,11 @@ static void fn_800DB5D8(Fighter_GObj* gobj)
 void fn_800DB8A4(Fighter_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
-    M2C_FIELD(fp, float*, 0x2340) =
-        (float) (M2C_FIELD(fp, float*, 0x2340) + 1.0F);
+    M2C_FIELD_U(fp, float*, 0x2340) =
+        (float) (M2C_FIELD_U(fp, float*, 0x2340) + 1.0F);
     fp->grab_timer -= p_ftCommonData->grab_timer_decrement;
-    M2C_FIELD(fp, s32*, 0x2348) = ftCommon_GrabMash(fp, p_ftCommonData->x3A8);
+    M2C_FIELD_U(fp, s32*, 0x2348) =
+        ftCommon_GrabMash(fp, p_ftCommonData->x3A8);
 }
 #pragma pop
 
@@ -1618,31 +1664,32 @@ void ftCo_CaptureWaitHi_Anim(Fighter_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
 
-    M2C_FIELD(fp, float*, 0x2340) =
-        (float) (M2C_FIELD(fp, float*, 0x2340) + 1.0F);
+    M2C_FIELD_U(fp, float*, 0x2340) =
+        (float) (M2C_FIELD_U(fp, float*, 0x2340) + 1.0F);
     fp->grab_timer -= p_ftCommonData->grab_timer_decrement;
-    M2C_FIELD(fp, s32*, 0x2348) = ftCommon_GrabMash(fp, p_ftCommonData->x3A8);
+    M2C_FIELD_U(fp, s32*, 0x2348) =
+        ftCommon_GrabMash(fp, p_ftCommonData->x3A8);
 
     if (fp->grab_timer <= 0.0f) {
         ftCo_800DA698(fp->victim_gobj, 0);
-        if (*((u8*) fp + 0x234C) != 0 || fn_800DC044(gobj)) {
+        if (M2C_FIELD_U(fp, u8*, 0x234C) != 0 || fn_800DC044(gobj)) {
             fn_800DC070(gobj);
         } else {
             ftCo_CaptureCut_Enter(gobj);
         }
     } else {
-        float x4 = M2C_FIELD(fp, float*, 0x2344);
+        float x4 = M2C_FIELD_U(fp, float*, 0x2344);
         if (x4 != 0.0f) {
             x4 -= 1.0f;
-            M2C_FIELD(fp, float*, 0x2344) = x4;
-            if (x4 <= 0.0f && M2C_FIELD(fp, s32*, 0x2348) == 0) {
+            M2C_FIELD_U(fp, float*, 0x2344) = x4;
+            if (x4 <= 0.0f && M2C_FIELD_U(fp, s32*, 0x2348) == 0) {
                 ftAnim_SetAnimRate(gobj, 0);
-                M2C_FIELD(fp, float*, 0x2344) = 0.0f;
+                M2C_FIELD_U(fp, float*, 0x2344) = 0.0f;
             }
         }
-        x4 = M2C_FIELD(fp, float*, 0x2344);
-        if (x4 <= 0.0f && M2C_FIELD(fp, s32*, 0x2348) != 0) {
-            M2C_FIELD(fp, float*, 0x2344) = p_ftCommonData->x3B0;
+        x4 = M2C_FIELD_U(fp, float*, 0x2344);
+        if (x4 <= 0.0f && M2C_FIELD_U(fp, s32*, 0x2348) != 0) {
+            M2C_FIELD_U(fp, float*, 0x2344) = p_ftCommonData->x3B0;
             ftAnim_SetAnimRate(gobj, p_ftCommonData->shouldered_anim_rate);
         }
     }
@@ -1709,9 +1756,9 @@ void ftCo_CaptureWaitLw_Coll(Fighter_GObj* gobj)
 void fn_800DC014(Fighter_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
-    if (M2C_FIELD(fp, float*, 0x2340) < p_ftCommonData->x3AC) {
+    if (M2C_FIELD_U(fp, float*, 0x2340) < p_ftCommonData->x3AC) {
         if (fp->input.x668 & 0xC00) {
-            *((u8*) fp + 0x234C) = 1;
+            M2C_FIELD_U(fp, u8*, 0x234C) = 1;
         }
     }
 }
@@ -1732,7 +1779,7 @@ void fn_800DC070(Fighter_GObj* gobj)
     ftCommon_8007D5D4(fp);
     fp->self_vel.x = -fp->facing_dir * p_ftCommonData->x374;
     fp->self_vel.y = p_ftCommonData->x378;
-    M2C_FIELD(fp, float*, 0x2340) = 0.0f;
+    M2C_FIELD_U(fp, float*, 0x2340) = 0.0f;
     ftCo_800DC920(victim_gobj, gobj);
     Fighter_ChangeMotionState(gobj, 0xE6, 0, 0.0f, 1.0f, 0.0f, NULL);
 }
@@ -1740,7 +1787,7 @@ void fn_800DC070(Fighter_GObj* gobj)
 void ftCo_CaptureJump_Anim(Fighter_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
-    M2C_FIELD(fp, float*, 0x2340) += 1.0f;
+    M2C_FIELD_U(fp, float*, 0x2340) += 1.0f;
     if (!ftAnim_IsFramesRemaining(gobj)) {
         ftCo_Fall_Enter(gobj);
     }
