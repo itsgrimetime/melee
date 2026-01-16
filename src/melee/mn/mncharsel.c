@@ -2,6 +2,8 @@
 
 #include "mncharsel.static.h"
 
+#include "types.h"
+
 #include <sysdolphin/baselib/aobj.h>
 #include <sysdolphin/baselib/fog.h>
 #include <sysdolphin/baselib/jobj.h>
@@ -67,11 +69,11 @@ void mnCharSel_8025BD30(void)
 
     match_type = mnCharSel_804D6CB0->match_type;
 
-    if (match_type == 1) {
+    if (match_type == VS_CAMERA) {
         HSD_SisLib_803A6530(0, 0x4A, 0x4F);
         return;
     }
-    if (match_type == 2) {
+    if (match_type == VS_STAMINA) {
         HSD_SisLib_803A6530(0, 0x4A, 0x50);
         return;
     }
@@ -140,15 +142,15 @@ void mnCharSel_8025BD30(void)
     }
 }
 
-static inline void inline1(HSD_Text* x, HSD_Text* y, int r6, int r7, int r8,
-                           int r31)
+static inline void drawTimeText(HSD_Text* x, HSD_Text* y, int hours,
+                                int minutes, int seconds, int microseconds)
 {
-    if (r6 == 0) {
-        HSD_SisLib_803A70A0(x, 0, "%02d:%02d", r7, r8);
-        HSD_SisLib_803A70A0(y, 0, "%02d", r31);
-    } else if (r6 < 0x64) {
-        HSD_SisLib_803A70A0(x, 0, "%d:%02d:%02d", r6, r7, r8);
-        HSD_SisLib_803A70A0(y, 0, "%02d", r31);
+    if (hours == 0) {
+        HSD_SisLib_803A70A0(x, 0, "%02d:%02d", minutes, seconds);
+        HSD_SisLib_803A70A0(y, 0, "%02d", microseconds);
+    } else if (hours < 100) {
+        HSD_SisLib_803A70A0(x, 0, "%d:%02d:%02d", hours, minutes, seconds);
+        HSD_SisLib_803A70A0(y, 0, "%02d", microseconds);
     } else {
         HSD_SisLib_803A70A0(x, 0, "99:59:59");
         HSD_SisLib_803A70A0(y, 0, "99");
@@ -194,7 +196,7 @@ void mnCharSel_8025C020(int arg0)
         }
     }
     switch (mnCharSel_804D6CB0->match_type) {
-    case 11:
+    case REG_CLASSIC:
         sp7C = inline3(0x42, *gmMainLib_8015D194(temp_r31));
         if (arg0 != 0) {
             HSD_JObjSetFlags(sp7C, JOBJ_HIDDEN);
@@ -211,7 +213,7 @@ void mnCharSel_8025C020(int arg0)
             HSD_JObjClearFlags(sp7C, JOBJ_HIDDEN);
         }
         break;
-    case 12:
+    case REG_ADVENTURE:
         sp7C = inline3(0x42, *gmMainLib_8015D2BC(temp_r31));
         if (arg0 != 0) {
             HSD_JObjSetFlags(sp7C, JOBJ_HIDDEN);
@@ -228,7 +230,7 @@ void mnCharSel_8025C020(int arg0)
             HSD_JObjClearFlags(sp7C, JOBJ_HIDDEN);
         }
         break;
-    case 13:
+    case REG_ALLSTAR:
         sp7C = inline3(0x42, *gmMainLib_8015D3E4(temp_r31));
         if (arg0 != 0) {
             HSD_JObjSetFlags(sp7C, JOBJ_HIDDEN);
@@ -245,7 +247,7 @@ void mnCharSel_8025C020(int arg0)
             HSD_JObjClearFlags(sp7C, JOBJ_HIDDEN);
         }
         break;
-    case 15:
+    case STADIUM_TARGET:
         if (arg0 == 0) {
             int temp_r29 = gm_8016332C(temp_r31);
             if (temp_r29 != -1U) {
@@ -258,14 +260,14 @@ void mnCharSel_8025C020(int arg0)
                 }
             } else {
                 gm_80163374(temp_r31, &sp7B, &sp7A, &sp79, &sp78);
-                inline1(mnCharSel_804D6CDC, mnCharSel_804D6CE0, sp7B, sp7A,
-                        sp79, sp78);
+                drawTimeText(mnCharSel_804D6CDC, mnCharSel_804D6CE0, sp7B,
+                             sp7A, sp79, sp78);
             }
         }
         lb_80011E24(mnCharSel_804D6CC8, &sp7C, 3, -1);
         if (gm_801634D4(&sp7B, &sp7A, &sp79, &sp78) != 0) {
-            inline1(mnCharSel_804D6CE4, mnCharSel_804D6CE8, sp7B, sp7A, sp79,
-                    sp78);
+            drawTimeText(mnCharSel_804D6CE4, mnCharSel_804D6CE8, sp7B, sp7A,
+                         sp79, sp78);
             HSD_JObjClearFlagsAll(sp7C, JOBJ_HIDDEN);
         } else {
             HSD_SisLib_803A70A0(mnCharSel_804D6CE4, 0, NULL);
@@ -273,7 +275,7 @@ void mnCharSel_8025C020(int arg0)
             HSD_JObjSetFlagsAll(sp7C, JOBJ_HIDDEN);
         }
         break;
-    case 16:
+    case STADIUM_HOMERUN:
         if (arg0 == 0) {
             if (lbLang_IsSavedLanguageJP()) {
                 HSD_SisLib_803A70A0(
@@ -303,20 +305,20 @@ void mnCharSel_8025C020(int arg0)
                                 gm_80163274(temp_r31));
         }
         break;
-    case 17:
+    case STADIUM_MULTIMAN_10:
         if (arg0 == 0) {
             if (gm_8016365C(temp_r31) != 0) {
                 show_kos(mnCharSel_804D6CDC, gm_80163690(temp_r31));
             } else {
                 gm_801636D8(temp_r31, &sp7B, &sp7A, &sp79, &sp78);
-                inline1(mnCharSel_804D6CDC, mnCharSel_804D6CE0, sp7B, sp7A,
-                        sp79, sp78);
+                drawTimeText(mnCharSel_804D6CDC, mnCharSel_804D6CE0, sp7B,
+                             sp7A, sp79, sp78);
             }
         }
         lb_80011E24(mnCharSel_804D6CC8, &sp7C, 3, -1);
         if (gm_80163838(&sp7B, &sp7A, &sp79, &sp78) != 0) {
-            inline1(mnCharSel_804D6CE4, mnCharSel_804D6CE8, sp7B, sp7A, sp79,
-                    sp78);
+            drawTimeText(mnCharSel_804D6CE4, mnCharSel_804D6CE8, sp7B, sp7A,
+                         sp79, sp78);
             HSD_JObjClearFlagsAll(sp7C, JOBJ_HIDDEN);
         } else {
             HSD_SisLib_803A70A0(mnCharSel_804D6CE4, 0, NULL);
@@ -324,20 +326,20 @@ void mnCharSel_8025C020(int arg0)
             HSD_JObjSetFlagsAll(sp7C, JOBJ_HIDDEN);
         }
         break;
-    case 18:
+    case STADIUM_MULTIMAN_100:
         if (arg0 == 0) {
             if (gm_801639C0(temp_r31) != 0) {
                 show_kos(mnCharSel_804D6CDC, gm_801639F4(temp_r31));
             } else {
                 gm_80163A3C(temp_r31, &sp7B, &sp7A, &sp79, &sp78);
-                inline1(mnCharSel_804D6CDC, mnCharSel_804D6CE0, sp7B, sp7A,
-                        sp79, sp78);
+                drawTimeText(mnCharSel_804D6CDC, mnCharSel_804D6CE0, sp7B,
+                             sp7A, sp79, sp78);
             }
         }
         lb_80011E24(mnCharSel_804D6CC8, &sp7C, 3, -1);
         if (gm_80163B9C(&sp7B, &sp7A, &sp79, &sp78) != 0) {
-            inline1(mnCharSel_804D6CE4, mnCharSel_804D6CE8, sp7B, sp7A, sp79,
-                    sp78);
+            drawTimeText(mnCharSel_804D6CE4, mnCharSel_804D6CE8, sp7B, sp7A,
+                         sp79, sp78);
             HSD_JObjClearFlagsAll(sp7C, JOBJ_HIDDEN);
         } else {
             HSD_SisLib_803A70A0(mnCharSel_804D6CE4, 0, NULL);
@@ -345,53 +347,53 @@ void mnCharSel_8025C020(int arg0)
             HSD_JObjSetFlagsAll(sp7C, JOBJ_HIDDEN);
         }
         break;
-    case 19:
+    case STADIUM_3_MIN_MELEE:
         if (arg0 == 0) {
             if (lbLang_IsSavedLanguageJP()) {
                 HSD_SisLib_803A70A0(mnCharSel_804D6CDC, 0, "%d 人抜き",
-                                    gm_80163DC4(temp_r31));
+                                    gm_Get3MinMultimanHighscore(temp_r31));
             } else {
                 HSD_SisLib_803A70A0(mnCharSel_804D6CDC, 0, "%d ＫＯｓ",
-                                    gm_80163DC4(temp_r31));
+                                    gm_Get3MinMultimanHighscore(temp_r31));
             }
         }
         if (lbLang_IsSavedLanguageJP()) {
             HSD_SisLib_803A70A0(mnCharSel_804D6CE4, 0, "%d 人抜き",
-                                gm_80163DE8());
+                                gm_Get3MinMultimanTotalHighscore());
         } else {
             HSD_SisLib_803A70A0(mnCharSel_804D6CE4, 0, "%d ＫＯｓ",
-                                gm_80163DE8());
+                                gm_Get3MinMultimanTotalHighscore());
         }
         break;
-    case 20:
+    case STADIUM_15_MIN_MELEE:
         if (!arg0) {
             if (lbLang_IsSavedLanguageJP()) {
                 HSD_SisLib_803A70A0(mnCharSel_804D6CDC, 0, "%d 人抜き",
-                                    gm_80163E3C(temp_r31));
+                                    gm_Get15MinMultimanHighscore(temp_r31));
             } else {
                 HSD_SisLib_803A70A0(mnCharSel_804D6CDC, 0, "%d ＫＯｓ",
-                                    gm_80163E3C(temp_r31));
+                                    gm_Get15MinMultimanHighscore(temp_r31));
             }
         }
         if (lbLang_IsSavedLanguageJP()) {
             HSD_SisLib_803A70A0(mnCharSel_804D6CE4, 0, "%d 人抜き",
-                                gm_80163E60());
+                                gm_Get15MinMultimanTotalHighscore());
         } else {
             HSD_SisLib_803A70A0(mnCharSel_804D6CE4, 0, "%d ＫＯｓ",
-                                gm_80163E60());
+                                gm_Get15MinMultimanTotalHighscore());
         }
         break;
-    case 21:
+    case STADIUM_ENDLESS_MELEE:
         if (!arg0) {
-            show_kos(mnCharSel_804D6CDC, gm_80163EB4(temp_r31));
+            show_kos(mnCharSel_804D6CDC, gm_GetEndlessHighscore(temp_r31));
         }
-        show_kos(mnCharSel_804D6CE4, gm_80163ED8());
+        show_kos(mnCharSel_804D6CE4, gm_GetEndlessTotalHighscore());
         break;
-    case 22:
+    case STADIUM_CRUEL_MELEE:
         if (!arg0) {
-            show_kos(mnCharSel_804D6CDC, gm_80163F2C(temp_r31));
+            show_kos(mnCharSel_804D6CDC, gm_GetCruelHighscore(temp_r31));
         }
-        show_kos(mnCharSel_804D6CE4, gm_80163F50());
+        show_kos(mnCharSel_804D6CE4, gm_GetCruelTotalHighscore());
         break;
     }
 }
@@ -414,15 +416,15 @@ void mnCharSel_8025D1C4(int arg0, int arg1)
     HSD_JObj* sp10;
 
     switch (css->match_type) {
-    case 0:
-    case 3:
-    case 4:
-    case 5:
-    case 6:
-    case 7:
-    case 8:
-    case 9:
-    case 10:
+    case VS_MELEE:
+    case VS_SUDDEN_DEATH:
+    case VS_GIANT:
+    case VS_TINY:
+    case VS_INVISIBLE:
+    case VS_FIXED_CAMERA:
+    case VS_SINGLE_BUTTON:
+    case VS_LIGHTNING:
+    case VS_SLOWMO:
         var_r0 = true;
         break;
     default:
@@ -502,14 +504,16 @@ void mnCharSel_8025D1C4(int arg0, int arg1)
                 temp_r30->text_color.a = 0xA0;
             }
             {
-                UNK_T tmp = HSD_SisLib_803A6478(temp_r31, &HSD_SisLib_804D1124[0][43].kerning->left);
+                UNK_T tmp = HSD_SisLib_803A6478(
+                    temp_r31, &HSD_SisLib_804D1124[0][43].kerning->left);
                 mnCharSel_8025BC20(tmp, temp_r29);
             }
             HSD_SisLib_803A6368(temp_r30, 0x56);
             temp_r30->sis_buffer = (SIS*) temp_r31;
             HSD_JObjSetFlags(sp10 = HSD_JObjGetChild(sp10), JOBJ_HIDDEN);
             HSD_JObjSetFlags(sp10 = HSD_JObjGetNext(sp10), JOBJ_HIDDEN);
-            HSD_JObjSetFlags(sp10 = HSD_JObjGetNext(HSD_JObjGetNext(sp10)), JOBJ_HIDDEN);
+            HSD_JObjSetFlags(sp10 = HSD_JObjGetNext(HSD_JObjGetNext(sp10)),
+                             JOBJ_HIDDEN);
             HSD_JObjSetFlags(sp10 = HSD_JObjGetNext(sp10), JOBJ_HIDDEN);
         }
     }
@@ -611,7 +615,7 @@ bool mnCharSel_8025DAA0(int door)
     int num_doors;
     int j;
 
-    if (mnCharSel_804D6CB0->match_type == 0x17) {
+    if (mnCharSel_804D6CB0->match_type == TRAINING_MODE) {
         num_doors = 2;
     } else {
         num_doors = mnCharSel_804D6CF5;
@@ -671,7 +675,7 @@ void mnCharSel_8025EE8C(u8 idx)
         HSD_ForeachAnim(sp14, JOBJ_TYPE, TOBJ_MASK, HSD_AObjStopAnim,
                         AOBJ_ARG_AOV, 0, 0);
         mnCharSel_8025DB34(0);
-        if (mnCharSel_804D6CB0->match_type == 0x17) {
+        if (mnCharSel_804D6CB0->match_type == TRAINING_MODE) {
             mnCharSel_8025DB34(1);
         }
     } else {
@@ -731,7 +735,7 @@ static inline bool isDuplicateCostume(int door)
     int j;
     CSSDoor* temp_r30 = &mnCharSel_803F0DFC.doors[door];
 
-    if (mnCharSel_804D6CB0->match_type == 0x17) {
+    if (mnCharSel_804D6CB0->match_type == TRAINING_MODE) {
         num_doors = 2;
     } else {
         num_doors = mnCharSel_804D6CF5;
@@ -874,7 +878,7 @@ static struct asdf {
 
 void mnCharSel_802669F4_OnFrame(void)
 {
-    int var_r0;
+    int num_slots;
     u8 temp_r0;
     struct GameCache* temp_r3;
     int i;
@@ -887,37 +891,50 @@ void mnCharSel_802669F4_OnFrame(void)
         if (mnCharSel_804D6CF5 == 1) {
             CSSData* css = mnCharSel_804D6CB0;
             temp_r0 = css->data.data.players[mnCharSel_804D6CF0].slot_type;
-            if (!(temp_r0 != 0 && temp_r0 != 1) && mnCharSel_804A0BD0[0]->x5 == 0) {
-                temp_r3->entries[0].char_id = css->data.data.players[mnCharSel_804D6CF0].c_kind;
-                temp_r3->entries[0].color = mnCharSel_804D6CB0->data.data.players[mnCharSel_804D6CF0].color;
+            if (!(temp_r0 != 0 && temp_r0 != 1) &&
+                mnCharSel_804A0BD0[0]->x5 == 0)
+            {
+                temp_r3->entries[0].char_id =
+                    css->data.data.players[mnCharSel_804D6CF0].c_kind;
+                temp_r3->entries[0].color =
+                    mnCharSel_804D6CB0->data.data.players[mnCharSel_804D6CF0]
+                        .color;
             } else {
-                temp_r3->entries[0].char_id = 0x21;
+                temp_r3->entries[0].char_id = CHKIND_NONE;
             }
             css = mnCharSel_804D6CB0;
             temp_r0 = css->data.data.players[mnCharSel_804D6CF1].slot_type;
             if (!(temp_r0 != 0 && temp_r0 != 1)) {
                 if (mnCharSel_804A0BD0[1]->x5 == 0) {
-                    temp_r3->entries[1].char_id = css->data.data.players[mnCharSel_804D6CF1].c_kind;
-                    temp_r3->entries[1].color = mnCharSel_804D6CB0->data.data.players[mnCharSel_804D6CF1].color;
+                    temp_r3->entries[1].char_id =
+                        css->data.data.players[mnCharSel_804D6CF1].c_kind;
+                    temp_r3->entries[1].color =
+                        mnCharSel_804D6CB0->data.data
+                            .players[mnCharSel_804D6CF1]
+                            .color;
                 } else {
-                    temp_r3->entries[1].char_id = 0x21;
+                    temp_r3->entries[1].char_id = CHKIND_NONE;
                 }
             }
         } else {
-            if (mnCharSel_804D6CB0->match_type == 1) {
-                var_r0 = 3;
+            if (mnCharSel_804D6CB0->match_type == VS_CAMERA) {
+                num_slots = 3;
             } else {
-                var_r0 = 4;
+                num_slots = 4;
             }
 
-            for (i = 0; i < var_r0; i++) {
+            for (i = 0; i < num_slots; i++) {
                 CSSData* css = mnCharSel_804D6CB0;
                 temp_r0 = css->data.data.players[i].slot_type;
-                if (!(temp_r0 != 0 && temp_r0 != 1) && mnCharSel_804A0BD0[i]->x5 == 0) {
-                    temp_r3->entries[i].char_id = css->data.data.players[i].c_kind;
-                    temp_r3->entries[i].color = mnCharSel_804D6CB0->data.data.players[i].color;
+                if (!(temp_r0 != 0 && temp_r0 != 1) &&
+                    mnCharSel_804A0BD0[i]->x5 == 0)
+                {
+                    temp_r3->entries[i].char_id =
+                        css->data.data.players[i].c_kind;
+                    temp_r3->entries[i].color =
+                        mnCharSel_804D6CB0->data.data.players[i].color;
                 } else {
-                    temp_r3->entries[i].char_id = 0x21;
+                    temp_r3->entries[i].char_id = CHKIND_NONE;
                 }
             }
         }
@@ -939,7 +956,9 @@ void mnCharSel_802669F4_OnFrame(void)
     switch (mnCharSel_804D6CF6) {
     case 1:
         for (i = 0; i < 4; i++) {
-            if (mnCharSel_803F0DFC.doors[i].p_kind != 3 && mnCharSel_804A0BD0[0]->x5 != 0) {
+            if (mnCharSel_803F0DFC.doors[i].p_kind != 3 &&
+                mnCharSel_804A0BD0[0]->x5 != 0)
+            {
                 mnCharSel_804D6CF6 = 0;
             }
         }
@@ -974,7 +993,7 @@ void mnCharSel_802669F4_OnFrame(void)
 
 void mnCharSel_80266D70_OnLeave(void* unused)
 {
-    int var_r28;
+    int num_slots;
     u64 tmp;
     CSSData* data;
     int i;
@@ -1013,12 +1032,12 @@ void mnCharSel_80266D70_OnLeave(void* unused)
                 data->data.data.players[mnCharSel_804D6CF1].c_kind);
         }
     } else {
-        if (mnCharSel_804D6CB0->match_type == 1) {
-            var_r28 = 3;
+        if (mnCharSel_804D6CB0->match_type == VS_CAMERA) {
+            num_slots = 3;
         } else {
-            var_r28 = 4;
+            num_slots = 4;
         }
-        for (i = 0; i < var_r28; i++) {
+        for (i = 0; i < num_slots; i++) {
             data = mnCharSel_804D6CB0;
             type = data->data.data.players[i].slot_type;
             if ((type == Gm_PKind_Human || type == Gm_PKind_Cpu) &&

@@ -29,7 +29,7 @@ static void updateRot(HSD_GObj* gobj)
     Fighter* fp;
     fp = GET_FIGHTER(gobj);
 
-    ftParts_8007592C(fp, 0, 0);
+    ftPartSetRotX(fp, 0, 0);
 }
 
 static void setGfx(HSD_GObj* gobj)
@@ -221,7 +221,7 @@ void ftMr_SpecialAirLw_Phys(HSD_GObj* gobj)
         ((u32) fp->cmd_vars[2] != 0U) && ((fp->input.x668 & HSD_PAD_B) != 0))
     {
         ftCommon_Ascend(fp, sa->speciallw.tap_y_vel_max,
-                          sa->speciallw.tap_grav);
+                        sa->speciallw.tap_grav);
     }
     ftCommon_FallBasic(fp);
     flt_var = sa->speciallw.air_momentum_x;
@@ -245,12 +245,11 @@ static void doColl(HSD_GObj* gobj)
     if ((fp->cmd_vars[3] != 0U) &&
         ((s32) (fp->mv.mr.SpecialLw.isUnkColl) != 0))
     {
-        ftParts_8007592C(fp, 0,
-                         fp->facing_dir *
-                             atan2f(fp->coll_data.floor.normal.x,
-                                    fp->coll_data.floor.normal.y));
+        ftPartSetRotX(fp, 0,
+                      fp->facing_dir * atan2f(fp->coll_data.floor.normal.x,
+                                              fp->coll_data.floor.normal.y));
     } else {
-        ftParts_8007592C(fp, 0, 0);
+        ftPartSetRotX(fp, 0, 0);
     }
 }
 

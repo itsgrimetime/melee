@@ -60,5 +60,9 @@
 /* 283AA4 */ bool it_3F14_Logic7_ShieldBounced(Item_GObj*);
 /* 283AC4 */ void it_3F14_Logic7_EvtUnk(Item_GObj*, Item_GObj*);
 /* 3F55D0 */ extern ItemStateTable it_803F55D0[];
+/* 3F56B8 */ extern s32 it_803F56B8[];
+/* 4DC870 */ extern const f32 it_804DC870;
+/* 4DC874 */ extern const f32 it_804DC874;
+/* 4DC878 */ extern const f32 it_804DC878;
 
 #endif

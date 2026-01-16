@@ -10,14 +10,19 @@
 #include <baselib/sislib.h>
 
 typedef struct {
-    u8 cursor; // @todo are these arbitrary variables the menus can use in any
-               // way?
+    u8 cursor;
     u8 unk1;
     u8 unk2;
     u8 unk3;
     HSD_Text* text;
 } Menu;
 // size 0x8
+
+struct CountEntry {
+    u8 id;
+    u8 pad[3];
+    u32 val;
+};
 
 #ifdef M2C
 typedef struct Menu_GObj Menu_GObj;
@@ -154,8 +159,8 @@ struct StartMeleeRules {
     u64 x20; // item mask
     int x28;
     float x2C;
-    float x30; // damage ratio
-    float x34; // game speed
+    float x30;         // damage ratio
+    float x34;         // game speed
     void (*x38)(int);  // on unpause callback
     void (*x3C)(int);  // on pause callback (conditional?)
     int (*x40)(void);  // on pause callback
@@ -188,6 +193,33 @@ struct VsModeData {
     /* +7 */ u8 unk_0x7;
     /* +8 */ StartMeleeData data;
 };
+
+typedef enum CSSMatchType {
+    VS_MELEE = 0x0,
+    VS_CAMERA = 0x1,
+    VS_STAMINA = 0x2,
+    VS_SUDDEN_DEATH = 0x3,
+    VS_GIANT = 0x4,
+    VS_TINY = 0x5,
+    VS_INVISIBLE = 0x6,
+    VS_FIXED_CAMERA = 0x7,
+    VS_SINGLE_BUTTON = 0x8,
+    VS_LIGHTNING = 0x9,
+    VS_SLOWMO = 0xA,
+    REG_CLASSIC = 0xB,
+    REG_ADVENTURE = 0xC,
+    REG_ALLSTAR = 0xD,
+    EVENT_MATCH = 0xE,
+    STADIUM_TARGET = 0xF,
+    STADIUM_HOMERUN = 0x10,
+    STADIUM_MULTIMAN_10 = 0x11,
+    STADIUM_MULTIMAN_100 = 0x12,
+    STADIUM_3_MIN_MELEE = 0x13,
+    STADIUM_15_MIN_MELEE = 0x14,
+    STADIUM_ENDLESS_MELEE = 0x15,
+    STADIUM_CRUEL_MELEE = 0x16,
+    TRAINING_MODE = 0x17
+} CSSMatchType;
 
 struct CSSData {
     u16 unk_0x0; ///< 1p port?
@@ -313,15 +345,15 @@ struct CSSTag {
 };
 
 struct CSSKOStar {
-    HSD_Text* text;         // 0x00
-    float x4;               // 0x04
-    u8 joint;               // 0x08
-    u8 joint2;              // 0x09
-    int xc;                 // 0x0C
-    int x10;                // 0x10
-    int x14;                // 0x14
-    int x18;                // 0x18
-    int x1c;                // 0x1C
+    HSD_Text* text; // 0x00
+    float x4;       // 0x04
+    u8 joint;       // 0x08
+    u8 joint2;      // 0x09
+    int xc;         // 0x0C
+    int x10;        // 0x10
+    int x14;        // 0x14
+    int x18;        // 0x18
+    int x1c;        // 0x1C
 };
 
 struct CSSDoorsData {
@@ -387,7 +419,7 @@ struct MenuKindData {
     AnimLoopSettings* anim_loop;
     float start_frame;
     u16* description_indices; ///< array of sis idx's for each selection
-    u8 selection_count; ///< number of options/cursors in the menu
+    u8 selection_count;       ///< number of options/cursors in the menu
     void (*think)(HSD_GObj*);
 };
 

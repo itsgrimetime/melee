@@ -1,6 +1,5 @@
 #include "itwstar.h"
 
-#include "ef/eflib.h"
 #include "it/inlines.h"
 #include "it/it_266F.h"
 #include "it/it_26B1.h"
@@ -62,11 +61,8 @@ bool itWstar_UnkMotion3_Anim(Item_GObj* gobj)
     return false;
 }
 
-void it_3F14_Logic29_Dropped(Item_GObj* gobj)
-{
-    Item_80268E5C(gobj, 1, 6);
-    efLib_DestroyAll(gobj);
-}
+/// #it_3F14_Logic29_Dropped
+
 /// #it_802947CC
 
 /// #itWstar_UnkMotion5_Anim

@@ -1,17 +1,15 @@
 #include "itrshell.h"
 
 #include "m2c_macros.h"
+
 #include <placeholder.h>
 #include <platform.h>
 
 #include "it/inlines.h"
-#include "it/it_26B1.h"
 #include "it/it_266F.h"
-#include "it/item.h"
+#include "it/it_26B1.h"
 #include "it/it_2725.h"
-
-extern f32 it_804DCA50;
-extern f32 it_804DCA54;
+#include "it/item.h"
 
 typedef struct {
     u8 b1234567 : 7;
@@ -54,9 +52,10 @@ void fn_8028D4A8(Item_GObj* gobj)
 
 f32 it_8028D56C(Item_GObj* gobj, f32 f1, f32 f2)
 {
-    itRshellAttributes* attrs = GET_ITEM(gobj)->xC4_article_data->x4_specialAttributes;
-    f32 f = (f1*-attrs->x14.x) + (-attrs->x14.y*f2);
-    return f*attrs->x14.z;
+    itRshellAttributes* attrs =
+        GET_ITEM(gobj)->xC4_article_data->x4_specialAttributes;
+    f32 f = (f1 * -attrs->x14.x) + (-attrs->x14.y * f2);
+    return f * attrs->x14.z;
 }
 
 /// #it_3F14_Logic15_Spawned

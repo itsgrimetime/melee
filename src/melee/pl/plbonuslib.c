@@ -956,7 +956,7 @@ void pl_8003FDA0(int arg0, int arg1)
     pl_80038788(arg0, 0x5B, 1);
 }
 
-void pl_8003FDC8(int arg0)
+void pl_8003FDC8(int arg0, int arg1)
 {
     pl_StaleMoveTableExt_t* temp_r3 = Player_GetStaleMoveTableIndexPtr2(arg0);
     temp_r3->xD70 += 1;
@@ -1329,12 +1329,14 @@ int pl_80040A54(int arg0)
 
 int pl_80040A78(int arg0)
 {
-    return Player_GetActionStats(arg0)->attacks.by_attack_counts[StatsAttack_Catch];
+    return Player_GetActionStats(arg0)
+        ->attacks.by_attack_counts[StatsAttack_Catch];
 }
 
 int pl_80040A9C(int arg0)
 {
-    u32* val = &Player_GetActionStats(arg0)->attacks.by_attack_counts[StatsAttack_DownAttackD];
+    u32* val = &Player_GetActionStats(arg0)
+                    ->attacks.by_attack_counts[StatsAttack_DownAttackD];
     int sum = 0;
     unsigned int cursor_i = 51;
     int ctr;

@@ -4,21 +4,13 @@
 #include <platform.h>
 
 #include "it/it_26B1.h"
-#include "it/item.h"
 
 /// #it_802AD478
 
 /// #it_802AD590
 
-void it_802AD6B8(Item_GObj* gobj)
-{
-    if (gobj != NULL) {
-        Item* ip = M2C_FIELD(gobj, Item**, 0x2C);
-        M2C_FIELD(ip, s32*, 0xDD4) = 0;
-        M2C_FIELD(ip, s32*, 0x518) = 0;
-        Item_8026A8EC(gobj);
-    }
-}
+/// #it_802AD6B8
+
 /// #it_2725_Logic58_PickedUp
 
 /// #itNessbat_UnkMotion0_Anim

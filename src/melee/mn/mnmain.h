@@ -3,6 +3,7 @@
 
 #include <placeholder.h>
 #include <platform.h>
+
 #include "gm/forward.h"
 #include "mn/forward.h"
 
@@ -85,29 +86,31 @@ typedef struct _MenuInputState {
 /* 22DD38 */ void mn_8022DD38_OnFrame(void);
 /* 22DDA8 */ void mn_8022DDA8_OnEnter(MenuEnterData*);
 /* 22E950 */ bool mn_8022E950(int);
-/* 22E978 */ void mn_8022E978(u8 item_idx, u8 enable); ///< set/unset item mask bit
+/* 22E978 */ void mn_8022E978(u8 item_idx,
+                              u8 enable); ///< set/unset item mask bit
 /* 22EA08 */ void mn_8022EA08(char* buf, u32 num);
 /* 22EA78 */ void mn_8022EA78(char* buf, int buf_end, u32 num);
 /* 22EAE0 */ void mn_8022EAE0(HSD_GObj*);
 /* 22EB04 */ void mn_8022EB04(void* user_data);
 /* 22EB24 */ s32 mn_8022EB24(s32, s32);
 /* 22EB78 */ s32 mn_8022EB78(s32);
-/* 22EBDC */ UNK_RET mn_8022EBDC(UNK_PARAMS);
+/* 22EBDC */ void mn_8022EBDC(void);
 /* 22EC18 */ float mn_8022EC18(HSD_JObj*, float*, HSD_TypeMask);
 /* 22ED6C */ float mn_8022ED6C(HSD_JObj*, AnimLoopSettings*);
-/* 22EE84 */ float mn_8022EE84(HSD_JObj* arg0, AnimLoopSettings* arg1, HSD_TypeMask arg2);
+/* 22EE84 */ float mn_8022EE84(HSD_JObj* arg0, AnimLoopSettings* arg1,
+                               HSD_TypeMask arg2);
 /* 22EFD8 */ float mn_8022EFD8(HSD_JObj*, AnimLoopSettings*);
 /* 22F0F0 */ void mn_8022F0F0(int);
 /* 22F138 */ void mn_8022F138(u16, u16);
 /* 22F1A8 */ void mn_8022F1A8(u16, u16);
 /* 22F218 */ bool mn_8022F218(void);
-/* 22F268 */ UNK_RET mn_8022F268(UNK_PARAMS);
+/* 22F268 */ void mn_8022F268(void);
 /* 22F298 */ f32 mn_8022F298(HSD_JObj*);
-/* 22F360 */ UNK_RET mn_8022F360(HSD_AObj*, void*, u32);
+/* 22F360 */ void mn_8022F360(HSD_AObj* aobj, void* obj, u32 arg2);
 /* 22F3D8 */ void mn_8022F3D8(HSD_JObj*, u8, HSD_TypeMask);
 /* 22F410 */ int mn_8022F410(float* x, float* target, float dx);
 /* 22F470 */ int mn_8022F470(int* x, int* target, int dx);
-/* 22F4CC */ UNK_RET mn_8022F4CC(UNK_PARAMS);
+/* 22F4CC */ void mn_8022F4CC(void);
 
 /* 4A04F0 */ extern MenuFlow mn_804A04F0;
 /* 4D6BB8 */ extern HSD_Archive* mn_804D6BB8;

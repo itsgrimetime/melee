@@ -9,8 +9,6 @@
 #include "it/item.h"
 #include "lb/lb_00B0.h"
 
-extern const f32 it_804DC978;
-
 /// #it_3F14_Logic2_Spawned
 
 /// #it_802874F0

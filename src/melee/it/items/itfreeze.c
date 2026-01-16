@@ -7,10 +7,6 @@
 #include "it/item.h"
 #include "it/items/itwhitebea.h"
 
-extern f32 it_804DCA70;
-extern f32 it_804DCA80;
-extern f32 it_804DCA84;
-
 typedef struct {
     u8 b567 : 3;
     u8 b4 : 1;

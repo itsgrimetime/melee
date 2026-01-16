@@ -1,5 +1,7 @@
 #include "ftmetal.h"
 
+#include <sysdolphin/baselib/gobj.h>
+#include <sysdolphin/baselib/id.h>
 #include <melee/ft/fighter.h>
 #include <melee/ft/ft_081B.h>
 #include <melee/ft/ftanim.h>
@@ -9,8 +11,6 @@
 #include <melee/ft/ftparts.h>
 #include <melee/ft/types.h>
 #include <melee/lb/lb_00B0.h>
-#include <sysdolphin/baselib/gobj.h>
-#include <sysdolphin/baselib/id.h>
 
 static s8 ftCo_804D3C90 = 0;
 
@@ -224,7 +224,7 @@ void ft_800C85B8(Fighter_GObj* gobj)
                         OSReport("fighter parts model dobj num over!\n");
                         __assert("ftmetal.c", 0xF8, "0");
                     }
-                    temp_r28->x2040[var_r26] = var_r24_2;
+                    temp_r28->x203C.data[var_r26] = var_r24_2;
                     {
                         HSD_MObj* mobj = var_r24_2->mobj;
                         if (mobj != NULL) {
@@ -246,5 +246,5 @@ void ft_800C85B8(Fighter_GObj* gobj)
             ftAnim_GetNextJointInTree(&sp20, &sp1C);
         }
     }
-    temp_r28->x203C = var_r26;
+    temp_r28->x203C.count = var_r26;
 }

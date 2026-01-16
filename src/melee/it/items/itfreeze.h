@@ -48,5 +48,8 @@
 /* 28F968 */ void it_8028F968(Item_GObj* gobj);
 /* 28F9B8 */ void it_8028F9B8(Item_GObj*);
 /* 3F5D28 */ extern ItemStateTable it_803F5D28[];
+/* 4DCA70 */ extern f32 it_804DCA70;
+/* 4DCA80 */ extern f32 it_804DCA80;
+/* 4DCA84 */ extern f32 it_804DCA84;
 
 #endif

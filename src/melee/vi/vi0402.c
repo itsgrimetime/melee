@@ -82,7 +82,8 @@ void un_8031D858_OnEnter(void* arg0)
     GObj_SetupGXLink(light_gobj, HSD_GObj_LObjCallback, 0, 0);
 
     cam_gobj = GObj_Create(0x13, 0x14, 0);
-    cobj = lb_80013B14((HSD_CameraDescPerspective*) un_804D6F68->cameras[0].desc);
+    cobj =
+        lb_80013B14((HSD_CameraDescPerspective*) un_804D6F68->cameras[0].desc);
     HSD_GObjObject_80390A70(cam_gobj, HSD_GObj_804D784B, cobj);
     GObj_SetupGXLinkMax(cam_gobj, HSD_GObj_803910D8, 8);
     cam_gobj->gxlink_prios = 0x89;
@@ -103,7 +104,7 @@ void vi_8031D9C4_OnFrame(void)
 
 void un_8031D9E4(int arg0, int arg1, int arg2)
 {
-    M2C_FIELD(&un_804D6F84, u8*, 0) = arg0;
-    M2C_FIELD(&un_804D6F84, u8*, 1) = arg1;
-    M2C_FIELD(&un_804D6F84, u8*, 3) = arg2;
+    un_804D6F84[0] = arg0;
+    un_804D6F84[1] = arg1;
+    un_804D6F84[3] = arg2;
 }

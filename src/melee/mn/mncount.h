@@ -1,7 +1,10 @@
-#ifndef MELEE_MN_COUNT_H
-#define MELEE_MN_COUNT_H
+#ifndef MELEE_MN_MNCOUNT_H
+#define MELEE_MN_MNCOUNT_H
 
 #include <placeholder.h>
+#include <platform.h>
+
+#include "mn/forward.h"
 
 /* 2502CC */ s32 mnCount_802502CC(s32 idx);
 /* 2502F0 */ s32 fn_802502F0(u8 arg);

@@ -89,10 +89,11 @@ s32 powi(s32 base, s32 exponent)
     if (exponent > 0) {
         exp_minus_8 = exponent - 8;
         if (exponent > 8) {
-            exp_minus_8 = (u32)(exp_minus_8 + 7) >> 3U;
+            exp_minus_8 = (u32) (exp_minus_8 + 7) >> 3U;
             if (exp_minus_8 > 0) {
                 do {
-                    result = result * base * base * base * base * base * base * base * base;
+                    result = result * base * base * base * base * base * base *
+                             base * base;
                     powers_done += 8;
                     exp_minus_8--;
                 } while (exp_minus_8 != 0);
@@ -170,13 +171,13 @@ s32 lb_8000D148(f32 point0_x, f32 point0_y, f32 point1_x, f32 point1_y,
 
     cross = (point0_x * point1_y) - cross;
     dist_squared_01 = (diff_01_x * diff_01_x) + (diff_01_y * diff_01_y);
-    
+
     if (dist_squared_01 < 0.00001f) {
         return 0;
     }
-    
+
     dist_01 = sqrtf(dist_squared_01);
-    
+
     {
         f32 var_f0 = (diff_01_y * point2_y) + (diff_01_x * point2_x);
         var_f0 = cross + var_f0;

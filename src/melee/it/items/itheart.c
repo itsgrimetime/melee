@@ -90,16 +90,12 @@ void it_3F14_Logic8_Spawned(Item_GObj* gobj)
 
 void it_3F14_Logic8_Destroyed(Item_GObj* gobj)
 {
-    s8* base;
-    s32 offset;
-    Item* ip = gobj->user_data;
+    Item* ip = GET_ITEM(gobj);
 
     if ((s8) ((((*(s8*) &ip->xDD4_itemVar.heart.xDD8.flags) & 0xC0) << 24) >>
               31))
     {
-        base = (s8*) &gm_80473A18;
-        offset = ip->xDD4_itemVar.heart.xDDC;
-        base[offset + 0x90] = 0;
+        ((s8*) &gm_80473A18 + ip->xDD4_itemVar.heart.xDDC)[0x90] = 0;
     }
 }
 

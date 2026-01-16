@@ -14,8 +14,12 @@
 
 typedef enum_t FtMotionId;
 typedef struct DObjList DObjList;
+typedef struct CostumeTObjList CostumeTObjList;
 typedef struct Fighter Fighter;
 typedef struct Fighter_804D653C_t Fighter_804D653C_t;
+typedef struct FtPartsVis FtPartsVis;
+typedef struct FtPartsVisLookup FtPartsVisLookup;
+typedef struct TempS TempS;
 typedef struct Fighter_x1670_t Fighter_x1670_t;
 typedef struct Fighter_CostumeStrings Fighter_CostumeStrings;
 typedef struct Fighter_DemoStrings Fighter_DemoStrings;
@@ -25,6 +29,9 @@ typedef struct UnkPlBonusBits UnkPlBonusBits;
 typedef struct ft_800898B4_t ft_800898B4_t;
 typedef struct ftCo_DatAttrs_xBC_t ftCo_DatAttrs_xBC_t;
 typedef struct ftCommonData ftCommonData;
+typedef struct ftData_x8 ftData_x8;
+typedef struct ftData_x8_x8 ftData_x8_x8;
+typedef struct FtPartsDesc FtPartsDesc;
 typedef struct ftData ftData;
 typedef struct ftData_UnkCountStruct ftData_UnkCountStruct;
 typedef struct ftLk_SpecialN_Vec3Group ftLk_SpecialN_Vec3Group;
@@ -141,13 +148,13 @@ typedef enum CharacterKind {
     CKIND_PLAYABLE_COUNT,
 
     /* 1A */ CKIND_MASTERH = CKIND_PLAYABLE_COUNT, // Master Hand (MasterH)
-    /* 1B */ CKIND_BOY,       // Male Wireframe (Boy)
-    /* 1C */ CKIND_GIRL,      // Female Wireframe (Girl)
-    /* 1D */ CKIND_GKOOPS,    // Giga Bowser (GKoops)
-    /* 1E */ CKIND_CREZYH,    // Crazy Hand (CrezyH)
-    /* 1F */ CHKIND_SANDBAG,  // Sandbag
-    /* 20 */ CHKIND_POPO,     // Popo
-    /* 21 */ CHKIND_NONE,     // None
+    /* 1B */ CKIND_BOY,                            // Male Wireframe (Boy)
+    /* 1C */ CKIND_GIRL,                           // Female Wireframe (Girl)
+    /* 1D */ CKIND_GKOOPS,                         // Giga Bowser (GKoops)
+    /* 1E */ CKIND_CREZYH,                         // Crazy Hand (CrezyH)
+    /* 1F */ CHKIND_SANDBAG,                       // Sandbag
+    /* 20 */ CHKIND_POPO,                          // Popo
+    /* 21 */ CHKIND_NONE,                          // None
     /* 22 */ CHKIND_MAX = CHKIND_NONE
 } CharacterKind;
 

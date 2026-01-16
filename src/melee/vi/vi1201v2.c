@@ -1,6 +1,6 @@
-#include "vi.h"
+#include "vi/vi1201v2.h"
 
-#include "vi/vi1201v2.static.h"
+#include "vi.h"
 
 #include "cm/camera.h"
 #include "ft/ftdemo.h"
@@ -9,13 +9,15 @@
 #include "gr/ground.h"
 #include "gr/stage.h"
 #include "it/item.h"
-#include "lb/lb_00B0.h"
 #include "lb/lb_00F9.h"
 #include "lb/lbaudio_ax.h"
 #include "lb/lbshadow.h"
 #include "mn/mnmain.h"
 #include "mp/mpcoll.h"
 #include "pl/player.h"
+#include "sc/types.h"
+
+#include "vi/forward.h"
 
 #include <baselib/aobj.h>
 #include <baselib/cobj.h>
@@ -27,9 +29,20 @@
 #include <baselib/gobjproc.h>
 #include <baselib/jobj.h>
 
-extern HSD_GObj* un_804D7030;
-extern HSD_GObj* un_804D7034;
-extern u8 un_804D7028;
+Vec3 un_804002F8 = { 0.0f, 0.0f, 0.0f };
+Vec3 un_80400304 = { 0.0f, 0.0f, 0.0f };
+
+static SceneDesc* un_804D7010;
+static HSD_Archive* un_804D7018;
+static HSD_Archive* un_804D701C;
+static HSD_JObj* un_804D7024;
+static un_804D7004_t un_804D7038;
+
+void un_803204B0(int arg0, int arg1)
+{
+    M2C_FIELD(&un_804D7038, u8*, 0) = arg0;
+    M2C_FIELD(&un_804D7038, u8*, 1) = arg1;
+}
 
 void un_803204C0(HSD_GObj* gobj)
 {
@@ -43,6 +56,8 @@ void un_803204E4(HSD_GObj* gobj)
 
 void un_80320508(CharacterKind char_kind, int costume)
 {
+    char pad[16];
+
     Camera_80028B9C(6);
     lb_8000FCDC();
     mpColl_80041C78();
@@ -59,23 +74,24 @@ void un_80320508(CharacterKind char_kind, int costume)
     Player_SetCostumeId(0, costume);
     Player_SetPlayerId(0, 0);
     Player_SetSlottype(0, 2);
-    Player_SetFacingDirection(0, un_804DE120);
+    Player_SetFacingDirection(0, -1.0f);
     Player_80032768(0, &un_804002F8);
     Player_80036F34(0, 8);
-    Player_SetPlayerAndEntityFacingDirection(0, un_804DE124);
+    Player_SetPlayerAndEntityFacingDirection(0, 0.0f);
 }
 
 void un_803205F4(void)
 {
-    HSD_JObj* jobj;
     HSD_GObj* gobj;
+    HSD_JObj* jobj;
+    char pad[16];
 
     gobj = GObj_Create(0xE, 0xF, 0);
     jobj = HSD_JObjLoadJoint(un_804D7010->models[1]->joint);
     HSD_GObjObject_80390A70(gobj, HSD_GObj_804D7849, jobj);
     GObj_SetupGXLink(gobj, HSD_GObj_JObjCallback, 0xB, 0);
     gm_8016895C(jobj, un_804D7010->models[1], 0);
-    HSD_JObjReqAnimAll(jobj, un_804DE128);
+    HSD_JObjReqAnimAll(jobj, 251.0f);
     HSD_GObjProc_8038FD54(gobj, mn_8022EAE0, 0);
 
     Player_80036E20(0x1D, un_804D701C, 8);
@@ -83,10 +99,10 @@ void un_803205F4(void)
     Player_SetCostumeId(1, 0);
     Player_SetPlayerId(1, 0);
     Player_SetSlottype(1, 2);
-    Player_SetFacingDirection(1, un_804DE120);
+    Player_SetFacingDirection(1, -1.0f);
     Player_80032768(1, &un_80400304);
     Player_80036F34(1, 0xF);
-    Player_SetScale(1, un_804DE11C / Player_80032BB0(1));
+    Player_SetScale(1, 1.0f / Player_80032BB0(1));
 
     lbAudioAx_80026F2C(0x18);
     lbAudioAx_8002702C(8, 0x0020000000000000ULL);
@@ -125,7 +141,7 @@ void un_803207C4(void)
             HSD_GObjObject_80390A70(gobj, HSD_GObj_804D7849, jobj);
             GObj_SetupGXLink(gobj, HSD_GObj_JObjCallback, 0xB, 0);
             gm_8016895C(jobj, un_804D7010->models[i], 0);
-            HSD_JObjReqAnimAll(jobj, un_804DE124);
+            HSD_JObjReqAnimAll(jobj, 0.0f);
             HSD_JObjAnimAll(jobj);
             if (i == 0) {
                 HSD_GObjProc_8038FD54(gobj, un_8032074C, 0);
@@ -148,8 +164,7 @@ void un_803208F0(HSD_GObj* gobj)
         HSD_SetEraseColor(colors[0], colors[1], colors[2], colors[3]);
         HSD_CObjEraseScreen(GET_COBJ(gobj), 1, 0, 1);
         vi_8031CA04(gobj);
-        *(s32*)((char*)gobj + 0x24) = 0x881;
-        *(s32*)((char*)gobj + 0x20) = 0;
+        gobj->gxlink_prios = 0x881;
         HSD_GObj_80390ED0(gobj, 7);
         HSD_CObjEndCurrent();
     }
@@ -159,11 +174,11 @@ void un_80320984(HSD_GObj* gobj)
 {
     HSD_CObj* cobj = GET_COBJ(gobj);
     HSD_CObjAnim(cobj);
-    if (cobj->aobj->curr_frame == 1.0F || cobj->aobj->curr_frame == 30.0F) {
-        vi_8031C9B4(0xd, 0);
+    if (cobj->aobj->curr_frame == 130.0F || cobj->aobj->curr_frame == 190.0F) {
+        vi_8031C9B4(0xD, 0);
     }
-    if (cobj->aobj->curr_frame == 60.0F) {
-        vi_8031C9B4(1, 0xdb);
+    if (cobj->aobj->curr_frame == 251.0F) {
+        vi_8031C9B4(1, 0xDB);
     }
     if (cobj->aobj->curr_frame == cobj->aobj->end_frame) {
         lb_800145F4();

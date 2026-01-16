@@ -12,11 +12,6 @@
 
 #include <baselib/random.h>
 
-extern const f32 it_804DC874;
-extern const f32 it_804DC870;
-extern const f32 it_804DC878;
-extern s32 it_803F56B8[];
-
 /// #it_3F14_Logic7_Spawned
 
 void fn_80281390(Item_GObj* gobj)
@@ -63,7 +58,9 @@ bool itDosei_UnkMotion1_Anim(Item_GObj* gobj)
     ip = gobj->user_data;
     ip->xDD4_itemVar.dosei.xDE4 = ip->pos;
     ip2 = gobj->user_data;
-    frame_speed = it_804DC874 * (M2C_FIELD(ip2, f32*, 0x4CC) * ip2->facing_dir) + it_804DC870;
+    frame_speed =
+        it_804DC874 * (M2C_FIELD(ip2, f32*, 0x4CC) * ip2->facing_dir) +
+        it_804DC870;
     jobj = gobj->hsd_obj;
     ip->x5D0_animFrameSpeed = frame_speed;
     lb_8000BA0C(jobj, frame_speed);
@@ -192,7 +189,8 @@ bool itDosei_UnkMotion6_Coll(Item_GObj* gobj)
 {
     Item* ip = gobj->user_data;
     ip->xDD4_itemVar.dosei.xDF8 = ip->x378_itemColl.floor.normal;
-    it_8026E8C4(gobj, (HSD_GObjEvent) fn_80281734, (HSD_GObjEvent) it_80282074);
+    it_8026E8C4(gobj, (HSD_GObjEvent) fn_80281734,
+                (HSD_GObjEvent) it_80282074);
     return false;
 }
 
