@@ -7,16 +7,29 @@
 #include "it/it_266F.h"
 #include "it/it_26B1.h"
 #include "it/it_2725.h"
+#include "it/item.h"
 #include "lb/lb_00B0.h"
 
-#include <math.h>
-
-// Explicit declaration for external function
-extern void Item_80268E5C(Item_GObj* gobj, int arg1, int arg2);
+#include <baselib/random.h>
 
 /// #it_3F14_Logic7_Spawned
 
-/// #fn_80281390
+void fn_80281390(Item_GObj* gobj)
+{
+    f32 frame_speed;
+    HSD_JObj* jobj;
+    Item* ip = gobj->user_data;
+
+    ip->x40_vel.z = 0.0f;
+    ip->x40_vel.y = 0.0f;
+    ip->x40_vel.x = 0.0f;
+    Item_80268E5C(gobj, 0, 3);
+    frame_speed = 1.0f;
+    jobj = gobj->hsd_obj;
+    ip->x5D0_animFrameSpeed = frame_speed;
+    lb_8000BA0C(jobj, frame_speed);
+    ip->owner = NULL;
+}
 
 /// #itDosei_UnkMotion0_Anim
 
@@ -41,11 +54,13 @@ bool itDosei_UnkMotion1_Anim(Item_GObj* gobj)
     f32 frame_speed;
     HSD_JObj* jobj;
     PAD_STACK(16);
+
     ip = gobj->user_data;
     ip->xDD4_itemVar.dosei.xDE4 = ip->pos;
     ip2 = gobj->user_data;
     frame_speed =
-        0.5F * (M2C_FIELD(ip2, f32*, 0x4CC) * ip2->facing_dir) + 1.0F;
+        it_804DC874 * (M2C_FIELD(ip2, f32*, 0x4CC) * ip2->facing_dir) +
+        it_804DC870;
     jobj = gobj->hsd_obj;
     ip->x5D0_animFrameSpeed = frame_speed;
     lb_8000BA0C(jobj, frame_speed);
@@ -57,84 +72,36 @@ bool itDosei_UnkMotion1_Anim(Item_GObj* gobj)
 
 void itDosei_UnkMotion1_Phys(Item_GObj* gobj)
 {
-    Item* ip = GET_ITEM(gobj);
-    itDoseiAttributes* attr =
-        (itDoseiAttributes*) ip->xC4_article_data->x4_specialAttributes;
-
-    ip->x40_vel.x = ip->facing_dir * ABS(attr->unk8 * ip->x5D0_animFrameSpeed);
-}
-
-bool itDosei_UnkMotion1_Coll(Item_GObj* gobj)
-{
-    s32 unused[2];
-    Item* temp_r31;
-
-    temp_r31 = gobj->user_data;
-
-    if (it_8026D8A4(gobj, it_80281C6C)) {
-        if (it_80276308(gobj)) {
-            it_80281C6C(gobj);
-            return false;
-        }
-
-        {
-            Item* temp_r4 = gobj->user_data;
-            f32 var_f1 = M2C_FIELD(temp_r4, f32*, 0x4CC);
-
-            if (var_f1 < 0.0f) {
-                var_f1 = -var_f1;
-            }
-
-            if (var_f1 >= (f32) M_PI / 4) {
-                temp_r4->xD5C = 1;
-                temp_r4->xDC8_word.flags.x1F = true;
-            } else {
-                temp_r4->xD5C = 0;
-                temp_r4->xDC8_word.flags.x1F = false;
-            }
-        }
-
-        if (temp_r31->xD5C == 1) {
-            it_3F14_Logic7_EnteredAir(gobj);
-        } else {
-            it_80276CB8(gobj);
-        }
-    } else {
-        it_80282074(gobj);
+    Item* ip = gobj->user_data;
+    f32* ap = ip->xC4_article_data->x4_specialAttributes;
+    f32 vel = ap[2] * ip->x5D0_animFrameSpeed;
+    if (vel < 0.0f) {
+        vel = -vel;
     }
-
-    return false;
+    ip->x40_vel.x = ip->facing_dir * vel;
 }
+
+/// #itDosei_UnkMotion1_Coll
 
 void it_80281C6C(Item_GObj* gobj)
 {
-    // [0x1C] r29 = gobj, r30 = user_data (ip)
-    Item* ip = GET_ITEM(gobj);
+    s32 zero = 0;
+    f32 frame_speed;
+    Item* ip = gobj->user_data;
 
-    // [0x10 & 0x24] r31 = 0;
-    ip->xDD4_itemVar.dosei.xDD8 = 0;
-
-    // [0x2C - 0x40] Copy xDE4 (Vec3) to pos
+    ip->xDD4_itemVar.dosei.xDD8 = zero;
     ip->pos = ip->xDD4_itemVar.dosei.xDE4;
-
-    ip->xDD4_itemVar.dosei.xDDC = 0.0F;
-    ip->x40_vel.x = 0.0F;
-
-    // [0x50] Call helper
+    M2C_FIELD(ip, f32*, 0xDDC) = it_804DC878;
+    ip->x40_vel.x = it_804DC878;
     it_802762B0(ip);
-
-    // [0x54] Call Item_80268E5C
     Item_80268E5C(gobj, 2, 3);
-
-    {
-        HSD_JObj* jobj = gobj->hsd_obj;
-        ip->x5D0_animFrameSpeed = 1.0F;
-        lb_8000BA0C(jobj, 1.0F);
-    }
-
-    // [0x74] Clear owner (0x518)
-    ip->owner = NULL;
+    frame_speed = it_804DC870;
+    ip->x5D0_animFrameSpeed = frame_speed;
+    lb_8000BA0C(gobj->hsd_obj, frame_speed);
+    M2C_FIELD(ip, s32*, 0x518) = zero;
 }
+
+/// #itDosei_UnkMotion2_Anim
 
 void itDosei_UnkMotion2_Phys(Item_GObj* gobj) {}
 
@@ -142,16 +109,22 @@ void itDosei_UnkMotion2_Phys(Item_GObj* gobj) {}
 
 void it_80282074(Item_GObj* gobj)
 {
-    Item* ip = GET_ITEM(gobj);
-    HSD_JObj* jobj;
+    Item* ip = gobj->user_data;
+
     Item_80268E5C(gobj, 3, 3);
-    jobj = gobj->hsd_obj;
-    ip->x5D0_animFrameSpeed = 1.0F;
-    lb_8000BA0C(jobj, 1.0F);
-    ip->owner = NULL;
+    lb_8000BA0C(gobj->hsd_obj, ip->x5D0_animFrameSpeed = it_804DC870);
+    M2C_FIELD(ip, s32*, 0x518) = 0;
 }
 
-/// #itDosei_UnkMotion3_Anim
+bool itDosei_UnkMotion3_Anim(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
+    ip->xDD4_itemVar.dosei.xDE4 = ip->pos;
+    if (it_80272C6C(gobj) == 0) {
+        Item_80268E5C(gobj, 3, ITEM_ANIM_UPDATE);
+    }
+    return false;
+}
 
 void itDosei_UnkMotion3_Phys(Item_GObj* gobj)
 {
@@ -180,6 +153,7 @@ bool itDosei_UnkMotion5_Anim(Item_GObj* gobj)
 {
     return false;
 }
+
 void itDosei_UnkMotion5_Phys(Item_GObj* gobj)
 {
     Item* ip = gobj->user_data;
@@ -188,7 +162,19 @@ void itDosei_UnkMotion5_Phys(Item_GObj* gobj)
     it_80274658(gobj, it_804D6D28->x68_float);
 }
 
-/// #it_3F14_Logic7_EnteredAir
+void it_3F14_Logic7_EnteredAir(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
+    s32 msid;
+    if (ip->xDC8_word.flags.x19 == 0) {
+        msid = 10;
+    } else {
+        msid = 6;
+    }
+    Item_80268E5C(gobj, msid, 3);
+    lb_8000BA0C(gobj->hsd_obj, ip->x5D0_animFrameSpeed = it_804DC870);
+    M2C_FIELD(ip, s32*, 0x518) = 0;
+}
 
 bool itDosei_UnkMotion6_Anim(Item_GObj* gobj)
 {
@@ -208,7 +194,14 @@ bool itDosei_UnkMotion6_Coll(Item_GObj* gobj)
     return false;
 }
 
-/// #it_80282BFC
+void it_80282BFC(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
+
+    Item_80268E5C(gobj, 8, 3);
+    lb_8000BA0C(gobj->hsd_obj, ip->x5D0_animFrameSpeed = it_804DC870);
+    M2C_FIELD(ip, s32*, 0x518) = 0;
+}
 
 bool itDosei_UnkMotion8_Anim(Item_GObj* gobj)
 {
@@ -230,15 +223,37 @@ bool itDosei_UnkMotion8_Coll(Item_GObj* gobj)
     return false;
 }
 
-/// #fn_80282CD4
+void fn_80282CD4(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
 
-/// #itDosei_UnkMotion7_Anim
+    ip->x40_vel.z = it_804DC878;
+    ip->x40_vel.y = it_804DC878;
+    ip->x40_vel.x = it_804DC878;
+    it_802762B0(ip);
+    Item_80268E5C(gobj, 7, 3);
+    lb_8000BA0C(gobj->hsd_obj, ip->x5D0_animFrameSpeed = it_804DC870);
+    M2C_FIELD(ip, s32*, 0x518) = 0;
+}
+
+bool itDosei_UnkMotion7_Anim(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
+    s32 timer;
+    ip->xDD4_itemVar.dosei.xDE4 = ip->pos;
+    timer = ip->xDD4_itemVar.dosei.xDD4;
+    if (timer > 0) {
+        ip->xDD4_itemVar.dosei.xDD4 = timer - 1;
+    } else {
+        it_80282DE4(gobj);
+    }
+    return false;
+}
 
 void itDosei_UnkMotion7_Phys(Item_GObj* gobj) {}
 
 bool itDosei_UnkMotion7_Coll(Item_GObj* gobj)
 {
-    PAD_STACK(8);
     it_8026D62C(gobj, it_80282BFC);
     it_80276CB8(gobj);
     return false;
@@ -252,6 +267,17 @@ void itDosei_UnkMotion9_Phys(Item_GObj* gobj) {}
 
 /// #itDosei_UnkMotion9_Coll
 
+bool itDosei_UnkMotion10_Anim(Item_GObj* gobj)
+{
+    f32 speed;
+    Item* ip = gobj->user_data;
+    ip->xDD4_itemVar.dosei.xDE4 = ip->pos;
+    speed = 1.0f;
+    ip->x5D0_animFrameSpeed = speed;
+    lb_8000BA0C(gobj->hsd_obj, speed);
+    return false;
+}
+
 void itDosei_UnkMotion10_Phys(Item_GObj* gobj) {}
 
 bool itDosei_UnkMotion10_Coll(Item_GObj* gobj)
@@ -260,21 +286,17 @@ bool itDosei_UnkMotion10_Coll(Item_GObj* gobj)
     return false;
 }
 
-bool itDosei_UnkMotion10_Anim(Item_GObj* gobj)
-{
-    Item* ip;
-    HSD_JObj* jobj;
-    ip = gobj->user_data;
-    ip->xDD4_itemVar.dosei.xDE4 = ip->pos;
-    jobj = gobj->hsd_obj;
-    ip->x5D0_animFrameSpeed = 1.0F;
-    lb_8000BA0C(jobj, 1.0F);
-    return false;
-}
-
 /// #it_3F14_Logic7_DmgReceived
 
-/// #itDosei_UnkMotion11_Anim
+bool itDosei_UnkMotion11_Anim(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
+    ip->xDD4_itemVar.dosei.xDE4 = ip->pos;
+    if (it_80272C6C(gobj) == 0) {
+        Item_80268E5C(gobj, 11, ITEM_ANIM_UPDATE);
+    }
+    return false;
+}
 
 void itDosei_UnkMotion11_Phys(Item_GObj* gobj)
 {
@@ -289,7 +311,19 @@ bool itDosei_UnkMotion11_Coll(Item_GObj* gobj)
     return false;
 }
 
-/// #it_3F14_Logic7_DmgDealt
+bool it_3F14_Logic7_DmgDealt(Item_GObj* gobj)
+{
+    Item* ip = gobj->user_data;
+    s32 rand = HSD_Randi(3);
+    s32 sfx_id = it_803F56B8[rand];
+
+    Item_8026AF0C(ip, sfx_id, 0x7F, 0x40);
+    if (ip->msid == 5) {
+        itColl_BounceOffVictim(gobj);
+        it_802725D4(gobj);
+    }
+    return false;
+}
 
 bool it_3F14_Logic7_Reflected(Item_GObj* gobj)
 {
