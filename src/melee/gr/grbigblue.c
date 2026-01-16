@@ -282,7 +282,7 @@ void grBigBlue_801E8D04(void)
     f32 bottom;
     f32 left;
     f32 right;
-    
+
     right = Stage_GetCamBoundsRightOffset();
     left = Stage_GetCamBoundsLeftOffset();
     bottom = Stage_GetCamBoundsBottomOffset();
