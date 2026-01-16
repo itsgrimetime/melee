@@ -9,8 +9,8 @@
 /* 248084 */ void fn_80248084(void* gobj);
 /* 2480B4 */ UNK_RET mnVibration_802480B4(UNK_PARAMS);
 /* 24829C */ UNK_RET mnVibration_8024829C(UNK_PARAMS);
-/* 248444 */ UNK_RET mnVibration_80248444(UNK_PARAMS);
-/* 248644 */ UNK_RET mnVibration_80248644(UNK_PARAMS);
+/* 248444 */ void mnVibration_80248444(HSD_GObj* gobj, u8 name_idx, u8 slot_idx);
+/* 248644 */ void mnVibration_80248644(HSD_GObj* gobj);
 /* 248748 */ void fn_80248748(HSD_GObj* gobj);
 /* 2487A8 */ UNK_RET fn_802487A8(UNK_PARAMS);
 /* 248A78 */ UNK_RET fn_80248A78(UNK_PARAMS);
