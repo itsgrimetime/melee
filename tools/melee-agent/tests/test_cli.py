@@ -4,6 +4,7 @@ These tests verify CLI commands work correctly and handle errors properly.
 Run with: pytest tests/test_cli.py -v
 """
 
+import re
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -13,8 +14,14 @@ from typer.testing import CliRunner
 from src.cli import app
 
 # Use typer's CliRunner for testing
-# Set NO_COLOR to disable ANSI escape codes in output (for reliable string matching)
-runner = CliRunner(env={"NO_COLOR": "1"})
+runner = CliRunner()
+
+
+def strip_ansi(text: str) -> str:
+    """Strip ANSI escape codes from text for reliable string matching."""
+    ansi_escape = re.compile(r"\x1b\[[0-9;]*m")
+    return ansi_escape.sub("", text)
+
 
 # Path to the melee submodule
 MELEE_ROOT = Path(__file__).parent.parent / "melee"
@@ -35,17 +42,17 @@ class TestExtractCommands:
         """Test extract command help output."""
         result = runner.invoke(app, ["extract", "--help"])
         assert result.exit_code == 0
-        assert "Extract and list unmatched functions" in result.stdout
+        assert "Extract and list unmatched functions" in strip_ansi(result.stdout)
 
     def test_extract_list_help(self):
         """Test extract list command help output."""
         result = runner.invoke(app, ["extract", "list", "--help"])
         assert result.exit_code == 0
-        assert "List unmatched functions" in result.stdout
-        assert "--melee-root" in result.stdout
-        assert "--min-match" in result.stdout
-        assert "--max-match" in result.stdout
-        assert "--limit" in result.stdout
+        assert "List unmatched functions" in strip_ansi(result.stdout)
+        assert "--melee-root" in strip_ansi(result.stdout)
+        assert "--min-match" in strip_ansi(result.stdout)
+        assert "--max-match" in strip_ansi(result.stdout)
+        assert "--limit" in strip_ansi(result.stdout)
 
     def test_extract_list_with_invalid_path(self):
         """Test extract list with invalid melee root."""
@@ -60,7 +67,7 @@ class TestExtractCommands:
         # Should succeed or fail gracefully
         if result.exit_code == 0:
             # If successful, should show a table
-            assert "Unmatched Functions" in result.stdout or "Found" in result.stdout
+            assert "Unmatched Functions" in strip_ansi(result.stdout) or "Found" in strip_ansi(result.stdout)
 
     def test_extract_list_with_filters(self, melee_root_exists):
         """Test extract list with filtering options."""
@@ -85,7 +92,7 @@ class TestExtractCommands:
         )
 
         # Should run without crashing
-        assert result.exit_code == 0 or "not found" in result.stdout.lower()
+        assert result.exit_code == 0 or "not found" in strip_ansi(result.stdout).lower()
 
     def test_extract_list_with_file_filter(self, melee_root_exists):
         """Test extract list with --file filter option."""
@@ -96,21 +103,21 @@ class TestExtractCommands:
         # Should run without crashing
         assert result.exit_code == 0
         # Should show file filter in output
-        assert "file='lb/'" in result.stdout
+        assert "file='lb/'" in strip_ansi(result.stdout)
 
     def test_extract_list_file_filter_help(self):
         """Test that --file option is documented."""
         result = runner.invoke(app, ["extract", "list", "--help"])
         assert result.exit_code == 0
-        assert "--file" in result.stdout or "-f" in result.stdout
-        assert "filename" in result.stdout.lower() or "filter" in result.stdout.lower()
+        assert "--file" in strip_ansi(result.stdout) or "-f" in strip_ansi(result.stdout)
+        assert "filename" in strip_ansi(result.stdout).lower() or "filter" in strip_ansi(result.stdout).lower()
 
     def test_extract_list_show_excluded_help(self):
         """Test that --show-excluded option is documented."""
         result = runner.invoke(app, ["extract", "list", "--help"])
         assert result.exit_code == 0
-        assert "--show-excluded" in result.stdout
-        assert "diagnostic" in result.stdout.lower() or "excluded" in result.stdout.lower()
+        assert "--show-excluded" in strip_ansi(result.stdout)
+        assert "diagnostic" in strip_ansi(result.stdout).lower() or "excluded" in strip_ansi(result.stdout).lower()
 
     def test_extract_list_show_excluded(self, melee_root_exists):
         """Test extract list with --show-excluded flag."""
@@ -132,7 +139,7 @@ class TestExtractCommands:
         # Should run without crashing
         assert result.exit_code == 0
         # Should show exclusion diagnostics section
-        assert "Exclusion Diagnostics" in result.stdout
+        assert "Exclusion Diagnostics" in strip_ansi(result.stdout)
 
     def test_extract_list_only_excludes_merged(self, melee_root_exists):
         """Test that extract list only excludes merged functions, not all tracked.
@@ -145,8 +152,8 @@ class TestExtractCommands:
         # Should succeed
         assert result.exit_code == 0
         # Summary should say "merged excluded" not "completed excluded"
-        if "excluded" in result.stdout:
-            assert "merged excluded" in result.stdout
+        if "excluded" in strip_ansi(result.stdout):
+            assert "merged excluded" in strip_ansi(result.stdout)
 
     def test_extract_list_include_completed_flag(self, melee_root_exists):
         """Test that --include-completed includes merged functions."""
@@ -157,17 +164,17 @@ class TestExtractCommands:
         # Should succeed
         assert result.exit_code == 0
         # Should NOT show "merged excluded" when include-completed is set
-        assert "merged excluded" not in result.stdout
+        assert "merged excluded" not in strip_ansi(result.stdout)
 
     def test_extract_files_help(self):
         """Test extract files command help output."""
         result = runner.invoke(app, ["extract", "files", "--help"])
         assert result.exit_code == 0
-        assert "List all source files" in result.stdout
-        assert "--module" in result.stdout
-        assert "--status" in result.stdout
-        assert "--sort" in result.stdout
-        assert "--limit" in result.stdout
+        assert "List all source files" in strip_ansi(result.stdout)
+        assert "--module" in strip_ansi(result.stdout)
+        assert "--status" in strip_ansi(result.stdout)
+        assert "--sort" in strip_ansi(result.stdout)
+        assert "--limit" in strip_ansi(result.stdout)
 
     def test_extract_files_basic(self, melee_root_exists):
         """Test basic extract files command."""
@@ -176,12 +183,12 @@ class TestExtractCommands:
         # Should succeed
         assert result.exit_code == 0
         # Should show table headers (some may be truncated due to terminal width)
-        assert "Source Files" in result.stdout
-        assert "File" in result.stdout
-        assert "Status" in result.stdout
-        assert "Done" in result.stdout  # Done % column
-        assert "Matched" in result.stdout
-        assert "Unmat" in result.stdout  # May be truncated to "Unmat…"
+        assert "Source Files" in strip_ansi(result.stdout)
+        assert "File" in strip_ansi(result.stdout)
+        assert "Status" in strip_ansi(result.stdout)
+        assert "Done" in strip_ansi(result.stdout)  # Done % column
+        assert "Matched" in strip_ansi(result.stdout)
+        assert "Unmat" in strip_ansi(result.stdout)  # May be truncated to "Unmat…"
 
     def test_extract_files_with_module_filter(self, melee_root_exists):
         """Test extract files with module filter."""
@@ -192,7 +199,7 @@ class TestExtractCommands:
         # Should succeed
         assert result.exit_code == 0
         # Should show module filter in summary
-        assert "module=lb" in result.stdout
+        assert "module=lb" in strip_ansi(result.stdout)
 
     def test_extract_files_with_status_filter(self, melee_root_exists):
         """Test extract files with status filter."""
@@ -203,7 +210,7 @@ class TestExtractCommands:
         # Should succeed
         assert result.exit_code == 0
         # Should show status filter in summary
-        assert "status=NonMatching" in result.stdout
+        assert "status=NonMatching" in strip_ansi(result.stdout)
 
     def test_extract_files_sort_by_unmatched(self, melee_root_exists):
         """Test extract files sorted by unmatched count."""
@@ -213,7 +220,7 @@ class TestExtractCommands:
 
         # Should succeed
         assert result.exit_code == 0
-        assert "Source Files" in result.stdout
+        assert "Source Files" in strip_ansi(result.stdout)
 
     def test_extract_files_sort_by_match(self, melee_root_exists):
         """Test extract files sorted by match percentage."""
@@ -223,15 +230,15 @@ class TestExtractCommands:
 
         # Should succeed
         assert result.exit_code == 0
-        assert "Source Files" in result.stdout
+        assert "Source Files" in strip_ansi(result.stdout)
 
     def test_extract_get_help(self):
         """Test extract get command help output."""
         result = runner.invoke(app, ["extract", "get", "--help"])
         assert result.exit_code == 0
-        assert "Extract a specific function" in result.stdout
-        assert "--melee-root" in result.stdout
-        assert "--output" in result.stdout
+        assert "Extract a specific function" in strip_ansi(result.stdout)
+        assert "--melee-root" in strip_ansi(result.stdout)
+        assert "--output" in strip_ansi(result.stdout)
 
     def test_extract_get_nonexistent_function(self, melee_root_exists):
         """Test extracting a function that doesn't exist."""
@@ -241,7 +248,7 @@ class TestExtractCommands:
 
         # Should fail with function not found
         assert result.exit_code == 1
-        assert "not found" in result.stdout
+        assert "not found" in strip_ansi(result.stdout)
 
     def test_extract_get_with_output(self, melee_root_exists, tmp_path):
         """Test extracting a function with output file."""
@@ -265,27 +272,27 @@ class TestScratchCommands:
         """Test scratch command help output."""
         result = runner.invoke(app, ["scratch", "--help"])
         assert result.exit_code == 0
-        assert "Manage decomp.me scratches" in result.stdout
+        assert "Manage decomp.me scratches" in strip_ansi(result.stdout)
 
     def test_scratch_create_help(self):
         """Test scratch create command help output."""
         result = runner.invoke(app, ["scratch", "create", "--help"])
         assert result.exit_code == 0
-        assert "Create a new scratch" in result.stdout
-        assert "--melee-root" in result.stdout
-        assert "--api-url" in result.stdout
+        assert "Create a new scratch" in strip_ansi(result.stdout)
+        assert "--melee-root" in strip_ansi(result.stdout)
+        assert "--api-url" in strip_ansi(result.stdout)
 
     def test_scratch_compile_help(self):
         """Test scratch compile command help output."""
         result = runner.invoke(app, ["scratch", "compile", "--help"])
         assert result.exit_code == 0
-        assert "Compile a scratch" in result.stdout
+        assert "Compile a scratch" in strip_ansi(result.stdout)
 
     def test_scratch_update_help(self):
         """Test scratch update command help output."""
         result = runner.invoke(app, ["scratch", "update", "--help"])
         assert result.exit_code == 0
-        assert "Update a scratch's source code" in result.stdout
+        assert "Update a scratch's source code" in strip_ansi(result.stdout)
 
 
 class TestCommitCommands:
@@ -295,23 +302,23 @@ class TestCommitCommands:
         """Test commit command help output."""
         result = runner.invoke(app, ["commit", "--help"])
         assert result.exit_code == 0
-        assert "Commit matched functions" in result.stdout
+        assert "Commit matched functions" in strip_ansi(result.stdout)
 
     def test_commit_apply_help(self):
         """Test commit apply command help output."""
         result = runner.invoke(app, ["commit", "apply", "--help"])
         assert result.exit_code == 0
-        assert "Apply a matched function" in result.stdout
-        assert "--melee-root" in result.stdout
-        assert "--api-url" in result.stdout
-        assert "--pr" in result.stdout
+        assert "Apply a matched function" in strip_ansi(result.stdout)
+        assert "--melee-root" in strip_ansi(result.stdout)
+        assert "--api-url" in strip_ansi(result.stdout)
+        assert "--pr" in strip_ansi(result.stdout)
 
     def test_commit_format_help(self):
         """Test commit format command help output."""
         result = runner.invoke(app, ["commit", "format", "--help"])
         assert result.exit_code == 0
-        assert "Run clang-format" in result.stdout
-        assert "--melee-root" in result.stdout
+        assert "Run clang-format" in strip_ansi(result.stdout)
+        assert "--melee-root" in strip_ansi(result.stdout)
 
 
 class TestDockerCommands:
@@ -321,27 +328,27 @@ class TestDockerCommands:
         """Test docker command help output."""
         result = runner.invoke(app, ["docker", "--help"])
         assert result.exit_code == 0
-        assert "Manage local decomp.me instance" in result.stdout
+        assert "Manage local decomp.me instance" in strip_ansi(result.stdout)
 
     def test_docker_up_help(self):
         """Test docker up command help output."""
         result = runner.invoke(app, ["docker", "up", "--help"])
         assert result.exit_code == 0
-        assert "Start local decomp.me instance" in result.stdout
-        assert "--port" in result.stdout
-        assert "--detach" in result.stdout
+        assert "Start local decomp.me instance" in strip_ansi(result.stdout)
+        assert "--port" in strip_ansi(result.stdout)
+        assert "--detach" in strip_ansi(result.stdout)
 
     def test_docker_down_help(self):
         """Test docker down command help output."""
         result = runner.invoke(app, ["docker", "down", "--help"])
         assert result.exit_code == 0
-        assert "Stop local decomp.me instance" in result.stdout
+        assert "Stop local decomp.me instance" in strip_ansi(result.stdout)
 
     def test_docker_status_help(self):
         """Test docker status command help output."""
         result = runner.invoke(app, ["docker", "status", "--help"])
         assert result.exit_code == 0
-        assert "Check status" in result.stdout
+        assert "Check status" in strip_ansi(result.stdout)
 
 
 class TestMainApp:
@@ -351,12 +358,12 @@ class TestMainApp:
         """Test main app help output."""
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
-        assert "Agent tooling for contributing to the Melee decompilation project" in result.stdout
-        assert "extract" in result.stdout
-        assert "scratch" in result.stdout
-        assert "match" in result.stdout
-        assert "commit" in result.stdout
-        assert "docker" in result.stdout
+        assert "Agent tooling for contributing to the Melee decompilation project" in strip_ansi(result.stdout)
+        assert "extract" in strip_ansi(result.stdout)
+        assert "scratch" in strip_ansi(result.stdout)
+        assert "match" in strip_ansi(result.stdout)
+        assert "commit" in strip_ansi(result.stdout)
+        assert "docker" in strip_ansi(result.stdout)
 
     def test_app_version(self):
         """Test that app runs without errors."""
@@ -398,7 +405,7 @@ class TestErrorHandling:
         # Should run but return no results
         if result.exit_code == 0:
             # Output should indicate no functions found
-            assert "0 functions" in result.stdout.lower() or "found 0" in result.stdout.lower()
+            assert "0 functions" in strip_ansi(result.stdout).lower() or "found 0" in strip_ansi(result.stdout).lower()
 
 
 class TestCommandIntegration:
@@ -436,22 +443,22 @@ class TestDefaultValues:
         result = runner.invoke(app, ["extract", "list", "--help"])
         assert result.exit_code == 0
         # Help should show default path
-        assert "melee" in result.stdout.lower()
+        assert "melee" in strip_ansi(result.stdout).lower()
 
     def test_default_api_url(self):
         """Test that API URL option is available."""
         result = runner.invoke(app, ["scratch", "create", "--help"])
         assert result.exit_code == 0
         # Help should show API URL option (auto-detected)
-        assert "--api-url" in result.stdout
-        assert "auto-detected" in result.stdout.lower()
+        assert "--api-url" in strip_ansi(result.stdout)
+        assert "auto-detected" in strip_ansi(result.stdout).lower()
 
     def test_default_limits(self):
         """Test that default limits are used."""
         result = runner.invoke(app, ["extract", "list", "--help"])
         assert result.exit_code == 0
         # Help should show default limit
-        assert "20" in result.stdout  # Default limit
+        assert "20" in strip_ansi(result.stdout)  # Default limit
 
 
 class TestOutputFormatting:
@@ -461,11 +468,11 @@ class TestOutputFormatting:
         """Test that table output is properly formatted."""
         result = runner.invoke(app, ["extract", "list", "--melee-root", str(melee_root_exists), "--limit", "1"])
 
-        if result.exit_code == 0 and "Unmatched Functions" in result.stdout:
+        if result.exit_code == 0 and "Unmatched Functions" in strip_ansi(result.stdout):
             # Check for table headers
-            assert "Name" in result.stdout
-            assert "File" in result.stdout
-            assert "Match" in result.stdout
+            assert "Name" in strip_ansi(result.stdout)
+            assert "File" in strip_ansi(result.stdout)
+            assert "Match" in strip_ansi(result.stdout)
 
     def test_error_message_format(self):
         """Test that error messages are user-friendly."""
