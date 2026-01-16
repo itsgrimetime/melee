@@ -13,7 +13,8 @@ from typer.testing import CliRunner
 from src.cli import app
 
 # Use typer's CliRunner for testing
-runner = CliRunner()
+# Set NO_COLOR to disable ANSI escape codes in output (for reliable string matching)
+runner = CliRunner(env={"NO_COLOR": "1"})
 
 # Path to the melee submodule
 MELEE_ROOT = Path(__file__).parent.parent / "melee"
