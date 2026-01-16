@@ -1,3 +1,6 @@
+# PowerPC reference PDFs (copyrighted, large)
+.claude/skills/ppc-ref/*.pdf
+
 # Generated
 *.m2c
 ctx.c
