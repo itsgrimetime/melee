@@ -52,8 +52,35 @@ LOCAL_API_CACHE_FILE = DECOMP_CONFIG_DIR / "local_api_cache.json"
 
 # Project paths
 PROJECT_ROOT = Path(__file__).parent.parent.parent
-DEFAULT_MELEE_ROOT = PROJECT_ROOT / "melee"
 MELEE_WORKTREES_DIR = PROJECT_ROOT / "melee-worktrees"
+
+
+def _detect_melee_root() -> Path:
+    """Detect the melee repository root.
+
+    Checks in order:
+    1. Current working directory (if it looks like a melee repo)
+    2. Parents of cwd (if we're in a subdirectory)
+
+    Returns:
+        Path to the melee repository root, or cwd as fallback
+    """
+    cwd = Path.cwd()
+
+    # Check if cwd is the melee root
+    if (cwd / "config" / "GALE01").exists():
+        return cwd
+
+    # Check parent directories
+    for parent in cwd.parents:
+        if (parent / "config" / "GALE01").exists():
+            return parent
+
+    # Fallback to cwd (commands will fail with helpful errors if not valid)
+    return cwd
+
+
+DEFAULT_MELEE_ROOT = _detect_melee_root()
 
 
 def get_agent_melee_root(**kwargs) -> Path:

@@ -15,9 +15,8 @@ from src.client.api import _get_agent_id
 DECOMP_CONFIG_DIR = Path.home() / ".config" / "decomp-me"
 DECOMP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
-# Project paths
-PROJECT_ROOT = Path(__file__).parent.parent.parent
-DEFAULT_MELEE_ROOT = PROJECT_ROOT / "melee"
+# Import DEFAULT_MELEE_ROOT from _common to avoid duplication
+from ._common import DEFAULT_MELEE_ROOT
 
 # Production cookies file (used for synced scratches path)
 PRODUCTION_COOKIES_FILE = DECOMP_CONFIG_DIR / "production_cookies.json"
