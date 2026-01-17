@@ -10,6 +10,7 @@ Usage:
     melee-agent <command>
 """
 
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -77,6 +78,13 @@ app.command("compilers")(list_compilers)
 
 def main():
     """Entry point for the CLI."""
+    if os.environ.get("CLAUDE_CODE_REMOTE", "").lower() == "true":
+        console.print(
+            "[yellow]Warning:[/yellow] melee-agent commands are not supported in remote environments.\n"
+            "The decomp.me server and related services are only accessible from local machines.",
+            style="yellow",
+        )
+        raise SystemExit(1)
     app()
 
 
