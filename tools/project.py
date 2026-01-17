@@ -271,12 +271,15 @@ class ProjectConfig:
 
     # Determines whether or not to use wibo as the compiler wrapper.
     def use_wibo(self) -> bool:
-        return (
-            self.wibo_tag is not None
-            and sys.platform == "linux"
-            and platform.machine() in ("i386", "x86_64")
-            and self.wrapper is None
-        )
+        if self.wibo_tag is None or self.wrapper is not None:
+            return False
+        # Linux requires x86 architecture
+        if sys.platform == "linux":
+            return platform.machine() in ("i386", "x86_64")
+        # macOS wibo is x86_64 but works on ARM via Rosetta 2
+        if sys.platform == "darwin":
+            return True
+        return False
 
 
 def is_windows() -> bool:
