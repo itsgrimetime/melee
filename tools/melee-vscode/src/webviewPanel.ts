@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { DiffResult, DiffLine } from './diffProvider';
+import { BranchArrow } from './asmParser';
 
 export class DiffPanel {
     public static currentPanel: DiffPanel | undefined;
@@ -62,7 +63,8 @@ export class DiffPanel {
     public setLoading(functionName: string) {
         this._currentFunction = functionName;
         this._panel.title = `ASM Diff: ${functionName}`;
-        this._panel.webview.html = this._getLoadingHtml(functionName);
+        // Send message to show loading overlay instead of replacing content
+        this._panel.webview.postMessage({ command: 'showLoading', functionName });
     }
 
     public setError(message: string) {
@@ -73,6 +75,10 @@ export class DiffPanel {
         this._currentFunction = result.functionName;
         this._panel.title = `ASM Diff: ${result.functionName} (${result.matchPercent}%)`;
         this._panel.webview.html = this._getDiffHtml(result);
+    }
+
+    public navigateDiff(direction: 'next' | 'prev') {
+        this._panel.webview.postMessage({ command: 'navigate', direction });
     }
 
     private _getLoadingHtml(functionName?: string): string {
@@ -115,7 +121,7 @@ export class DiffPanel {
         const statusClass = result.match ? 'match' : 'mismatch';
         const statusText = result.match ? 'MATCH' : 'MISMATCH';
 
-        const rowsHtml = result.diffLines.map((line, idx) => this._renderDiffRow(line, idx)).join('\n');
+        const rowsHtml = result.diffLines.map((line, idx) => this._renderDiffRow(line, idx, idx === 0)).join('\n');
 
         return `<!DOCTYPE html>
 <html lang="en">
@@ -134,15 +140,178 @@ export class DiffPanel {
     </div>
     <div class="diff-container">
         <div class="column-headers">
+            <div class="col-header line-num-header"></div>
+            <div class="col-header marker-header"></div>
+            <div class="col-header arrow-header"></div>
             <div class="col-header target-header">Target (Expected)</div>
+            <div class="col-header arrow-header"></div>
             <div class="col-header current-header">Current (Compiled)</div>
+        </div>
+        <div id="loading-overlay" class="loading-overlay" style="display: none;">
+            <div class="spinner"></div>
+            <span>Rebuilding...</span>
         </div>
         <div class="diff-rows">
             ${rowsHtml}
         </div>
+        <svg id="target-arrows" class="arrow-overlay target-side"></svg>
+        <svg id="current-arrows" class="arrow-overlay current-side"></svg>
     </div>
     <script>
+        const targetArrows = ${JSON.stringify(result.targetArrows || [])};
+        const currentArrows = ${JSON.stringify(result.currentArrows || [])};
+
+        function renderArrows() {
+            renderArrowSet('target-arrows', targetArrows, 'target-gutter');
+            renderArrowSet('current-arrows', currentArrows, 'current-gutter');
+        }
+
+        function renderArrowSet(svgId, arrows, gutterClass) {
+            const svg = document.getElementById(svgId);
+            if (!svg || arrows.length === 0) return;
+
+            const rows = document.querySelectorAll('.diff-rows .diff-row');
+            if (rows.length === 0) return;
+
+            const diffRows = document.querySelector('.diff-rows');
+            const rowHeight = rows[0].offsetHeight || 20;
+
+            // Find the first gutter element to get its position
+            const firstGutter = rows[0].querySelector('.' + gutterClass);
+            if (!firstGutter) return;
+
+            const gutterRect = firstGutter.getBoundingClientRect();
+            const containerRect = diffRows.getBoundingClientRect();
+
+            // Position SVG over the gutter column
+            const gutterLeft = gutterRect.left - containerRect.left;
+            const gutterWidth = 40;  // Arrow gutter width
+
+            svg.style.left = gutterLeft + 'px';
+            svg.setAttribute('width', gutterWidth);
+            svg.setAttribute('height', diffRows.scrollHeight);
+            svg.innerHTML = '';
+
+            // Assign lanes to arrows to avoid overlaps
+            const lanes = assignLanes(arrows);
+            const laneWidth = 6;
+            const maxLane = Math.max(...Object.values(lanes), 0);
+
+            arrows.forEach((arrow, idx) => {
+                const lane = lanes[idx];
+                const x = gutterWidth - 8 - lane * laneWidth;  // Start from right side
+
+                const fromY = (arrow.fromRow * rowHeight) + rowHeight / 2;
+                const toY = (arrow.toRow * rowHeight) + rowHeight / 2;
+
+                // Color based on type
+                let color = '#888';
+                if (arrow.direction === 'backward') {
+                    color = '#f14c4c';  // red for backward
+                } else if (arrow.type === 'call') {
+                    color = '#4ec9b0';  // cyan for calls
+                } else if (arrow.type === 'unconditional') {
+                    color = '#569cd6';  // blue for unconditional
+                } else {
+                    color = '#dcdcaa';  // yellow for conditional
+                }
+
+                // Draw the arrow as a bracket shape
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+
+                // Path: from row -> left -> vertical -> right -> to row
+                const startX = gutterWidth - 4;  // Near the code
+                const midX = x;
+
+                const d = \`M \${startX} \${fromY} H \${midX} V \${toY} H \${startX - 4}\`;
+
+                path.setAttribute('d', d);
+                path.setAttribute('stroke', color);
+                path.setAttribute('stroke-width', '1.5');
+                path.setAttribute('fill', 'none');
+                path.setAttribute('marker-end', \`url(#arrow-\${color.replace('#', '')})\`);
+                svg.appendChild(path);
+            });
+
+            // Add arrow markers
+            addArrowMarkers(svg);
+        }
+
+        function assignLanes(arrows) {
+            // Simple lane assignment - arrows that overlap get different lanes
+            const lanes = {};
+            const usedRanges = [];  // Array of {lane, min, max}
+
+            // Sort by span length (shorter arrows get inner lanes)
+            const sorted = arrows.map((a, i) => ({
+                idx: i,
+                span: Math.abs(a.toRow - a.fromRow)
+            })).sort((a, b) => a.span - b.span);
+
+            sorted.forEach(({ idx }) => {
+                const arrow = arrows[idx];
+                const min = Math.min(arrow.fromRow, arrow.toRow);
+                const max = Math.max(arrow.fromRow, arrow.toRow);
+
+                // Find a lane that doesn't overlap
+                let lane = 0;
+                while (true) {
+                    const conflict = usedRanges.find(r =>
+                        r.lane === lane && !(max < r.min || min > r.max)
+                    );
+                    if (!conflict) break;
+                    lane++;
+                }
+
+                lanes[idx] = lane;
+                usedRanges.push({ lane, min, max });
+            });
+
+            return lanes;
+        }
+
+        function addArrowMarkers(svg) {
+            const colors = ['888', 'f14c4c', '4ec9b0', '569cd6', 'dcdcaa'];
+            const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+
+            colors.forEach(color => {
+                const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+                marker.setAttribute('id', \`arrow-\${color}\`);
+                marker.setAttribute('markerWidth', '5');
+                marker.setAttribute('markerHeight', '5');
+                marker.setAttribute('refX', '4');
+                marker.setAttribute('refY', '2.5');
+                marker.setAttribute('orient', 'auto');
+
+                const polygon = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+                polygon.setAttribute('points', '0,0 5,2.5 0,5');
+                polygon.setAttribute('fill', \`#\${color}\`);
+                marker.appendChild(polygon);
+                defs.appendChild(marker);
+            });
+
+            svg.insertBefore(defs, svg.firstChild);
+        }
+
+        // Render arrows after DOM is ready
+        setTimeout(renderArrows, 100);
+
+        // Re-render on window resize
+        window.addEventListener('resize', () => setTimeout(renderArrows, 50));
+
+        // Handle scroll sync for arrows
+        document.querySelector('.diff-rows')?.addEventListener('scroll', () => {
+            const targetSvg = document.getElementById('target-arrows');
+            const currentSvg = document.getElementById('current-arrows');
+            const scrollTop = document.querySelector('.diff-rows').scrollTop;
+            if (targetSvg) targetSvg.style.transform = \`translateY(-\${scrollTop}px)\`;
+            if (currentSvg) currentSvg.style.transform = \`translateY(-\${scrollTop}px)\`;
+        });
+    </script>
+    <script>
         const vscode = acquireVsCodeApi();
+        let currentDiffIndex = -1;
+        const diffRows = Array.from(document.querySelectorAll('.diff-row.mismatch, .diff-row.target-only, .diff-row.current-only'));
 
         document.querySelectorAll('.diff-row').forEach(row => {
             row.addEventListener('click', () => {
@@ -155,31 +324,177 @@ export class DiffPanel {
             });
         });
 
-        // Sync scroll between columns
-        const container = document.querySelector('.diff-rows');
-        if (container) {
-            container.addEventListener('scroll', (e) => {
-                // Scroll sync is handled by CSS (single scrollable container)
-            });
+        // Handle messages from extension
+        window.addEventListener('message', event => {
+            const message = event.data;
+            if (message.command === 'navigate') {
+                navigateToDiff(message.direction);
+            } else if (message.command === 'showLoading') {
+                const overlay = document.getElementById('loading-overlay');
+                if (overlay) {
+                    overlay.style.display = 'flex';
+                }
+            } else if (message.command === 'hideLoading') {
+                const overlay = document.getElementById('loading-overlay');
+                if (overlay) {
+                    overlay.style.display = 'none';
+                }
+            }
+        });
+
+        function navigateToDiff(direction) {
+            if (diffRows.length === 0) return;
+
+            // Remove highlight from current
+            if (currentDiffIndex >= 0 && currentDiffIndex < diffRows.length) {
+                diffRows[currentDiffIndex].classList.remove('highlighted');
+            }
+
+            // Move to next/prev
+            if (direction === 'next') {
+                currentDiffIndex = (currentDiffIndex + 1) % diffRows.length;
+            } else {
+                currentDiffIndex = currentDiffIndex <= 0 ? diffRows.length - 1 : currentDiffIndex - 1;
+            }
+
+            // Highlight and scroll to new position
+            const row = diffRows[currentDiffIndex];
+            row.classList.add('highlighted');
+            row.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
+
+        // Keyboard navigation
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'n' || e.key === 'j') {
+                navigateToDiff('next');
+            } else if (e.key === 'p' || e.key === 'k') {
+                navigateToDiff('prev');
+            }
+        });
     </script>
 </body>
 </html>`;
     }
 
-    private _renderDiffRow(line: DiffLine, index: number): string {
+    private _renderDiffRow(line: DiffLine, index: number, isHeader: boolean): string {
         const statusClass = line.status;
-        const lineNum = index + 1;
+        const diffTypeClass = line.diffType ? `diff-${line.diffType}` : '';
 
-        // Highlight instruction parts
-        const targetHtml = this._highlightAsm(line.target);
-        const currentHtml = this._highlightAsm(line.current);
+        // Function header row (starts with <)
+        if (isHeader || line.target.trim().startsWith('<') || line.current.trim().startsWith('<')) {
+            const headerText = line.target.trim() || line.current.trim();
+            return `<div class="diff-row header-row" data-offset="-1">
+    <div class="line-num"></div>
+    <div class="marker-col"></div>
+    <div class="arrow-gutter target-gutter"></div>
+    <div class="target-col">${this._escapeHtml(headerText)}</div>
+    <div class="arrow-gutter current-gutter"></div>
+    <div class="current-col">${this._escapeHtml(headerText)}</div>
+</div>`;
+        }
 
-        return `<div class="diff-row ${statusClass}" data-line="${lineNum}">
-    <div class="line-num">${lineNum}</div>
+        // Calculate byte offset (each instruction is 4 bytes, skip header row)
+        const offset = (index - 1) * 4;  // -1 to account for header
+        const offsetHex = offset >= 0 ? `0x${offset.toString(16).toUpperCase().padStart(2, '0')}` : '';
+
+        // Get diff marker
+        let marker = '';
+        if (line.status === 'target-only') {
+            marker = '<span class="diff-marker marker-target">&gt;</span>';
+        } else if (line.status === 'current-only') {
+            marker = '<span class="diff-marker marker-current">&lt;</span>';
+        } else if (line.status === 'mismatch') {
+            switch (line.diffType) {
+                case 'r': marker = '<span class="diff-marker marker-reg">r</span>'; break;
+                case 'i': marker = '<span class="diff-marker marker-imm">i</span>'; break;
+                case 'o': marker = '<span class="diff-marker marker-op">o</span>'; break;
+                case 's': marker = '<span class="diff-marker marker-stack">s</span>'; break;
+                default: marker = '<span class="diff-marker marker-diff">|</span>';
+            }
+        }
+
+        // Strip hex bytes and show only mnemonic + operands
+        const targetAsm = this._stripHexBytes(line.target);
+        const currentAsm = this._stripHexBytes(line.current);
+
+        // Highlight with mismatch info
+        const targetHtml = this._highlightAsmWithDiff(targetAsm, line.targetParsed, line.mismatchedParts, 'target');
+        const currentHtml = this._highlightAsmWithDiff(currentAsm, line.currentParsed, line.mismatchedParts, 'current');
+
+        return `<div class="diff-row ${statusClass} ${diffTypeClass}" data-offset="${offset}">
+    <div class="line-num">${offsetHex}</div>
+    <div class="marker-col">${marker}</div>
+    <div class="arrow-gutter target-gutter"></div>
     <div class="target-col">${targetHtml}</div>
+    <div class="arrow-gutter current-gutter"></div>
     <div class="current-col">${currentHtml}</div>
 </div>`;
+    }
+
+    private _stripHexBytes(asm: string): string {
+        if (!asm) return '';
+        // Format is "  hex_bytes \t mnemonic operands" - extract just mnemonic + operands
+        const tabIdx = asm.indexOf('\t');
+        if (tabIdx !== -1) {
+            return asm.substring(tabIdx + 1).trim();
+        }
+        return asm.trim();
+    }
+
+    private _highlightAsmWithDiff(
+        asm: string,
+        parsed: any,
+        mismatchedParts: DiffLine['mismatchedParts'],
+        side: 'target' | 'current'
+    ): string {
+        if (!asm) return '&nbsp;';
+
+        // If no parsed info or no mismatches, use basic highlighting
+        if (!parsed || !mismatchedParts || mismatchedParts.length === 0) {
+            return this._highlightAsm(asm);
+        }
+
+        let html = this._escapeHtml(asm);
+
+        // Highlight mismatched mnemonic
+        const mnemonicMismatch = mismatchedParts.find(p => p.partType === 'mnemonic');
+        if (mnemonicMismatch) {
+            const val = side === 'target' ? mnemonicMismatch.targetValue : mnemonicMismatch.currentValue;
+            if (val) {
+                html = html.replace(
+                    new RegExp(`\\b${this._escapeRegex(val)}\\b`),
+                    `<span class="mismatch-highlight mnemonic">${val}</span>`
+                );
+            }
+        }
+
+        // Highlight mismatched operands
+        for (const p of mismatchedParts) {
+            if (p.partType === 'operand') {
+                const val = side === 'target' ? p.targetValue : p.currentValue;
+                if (val) {
+                    html = html.replace(
+                        new RegExp(`\\b${this._escapeRegex(val)}\\b`),
+                        `<span class="mismatch-highlight operand">${val}</span>`
+                    );
+                }
+            }
+        }
+
+        // Apply standard syntax highlighting to non-mismatched parts
+        // Registers (not already highlighted)
+        html = html.replace(/(?<!<[^>]*)\b(r\d{1,2}|f\d{1,2}|sp|lr|cr\d?)\b(?![^<]*>)/g,
+            '<span class="register">$1</span>');
+
+        // Hex numbers
+        html = html.replace(/(?<!<[^>]*)\b(0x[0-9a-fA-F]+|-?0x[0-9a-fA-F]+)\b(?![^<]*>)/g,
+            '<span class="hex">$1</span>');
+
+        return html;
+    }
+
+    private _escapeRegex(str: string): string {
+        return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 
     private _highlightAsm(asm: string): string {
@@ -303,8 +618,44 @@ body {
     background: var(--header-bg);
 }
 
-.col-header:first-child {
-    margin-left: 40px; /* Space for line numbers */
+.col-header.line-num-header {
+    width: 40px;
+    flex: none;
+}
+
+.col-header.marker-header {
+    width: 20px;
+    flex: none;
+}
+
+.col-header.arrow-header {
+    width: 40px;
+    flex: none;
+}
+
+.col-header.target-header,
+.col-header.current-header {
+    flex: 1;
+}
+
+/* Arrow gutter in rows */
+.arrow-gutter {
+    width: 40px;
+    flex: none;
+    position: relative;
+}
+
+/* SVG arrow overlay */
+.arrow-overlay {
+    position: absolute;
+    top: 0;
+    pointer-events: none;
+    overflow: visible;
+    z-index: 10;
+}
+
+.diff-container {
+    position: relative;
 }
 
 .col-header.target-header {
@@ -342,6 +693,99 @@ body {
 
 .diff-row.current-only {
     background: var(--current-only-bg);
+}
+
+.diff-row.highlighted {
+    outline: 2px solid var(--vscode-focusBorder);
+    outline-offset: -2px;
+}
+
+.diff-row.header-row {
+    background: var(--header-bg);
+    font-weight: bold;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.diff-row.header-row .target-col,
+.diff-row.header-row .current-col {
+    color: var(--vscode-symbolIcon-functionForeground, #dcdcaa);
+}
+
+/* Diff type specific backgrounds */
+.diff-row.diff-r { background: rgba(156, 220, 254, 0.15); }  /* register - blue */
+.diff-row.diff-i { background: rgba(181, 206, 168, 0.15); }  /* immediate - green */
+.diff-row.diff-o { background: rgba(220, 53, 69, 0.15); }    /* opcode - red */
+.diff-row.diff-s { background: rgba(255, 193, 7, 0.15); }    /* stack - yellow */
+
+/* Marker column */
+.marker-col {
+    width: 20px;
+    text-align: center;
+    font-weight: bold;
+    flex-shrink: 0;
+    font-size: 11px;
+}
+
+.diff-marker {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    line-height: 14px;
+    text-align: center;
+    border-radius: 2px;
+    font-size: 10px;
+}
+
+.marker-reg { background: #9cdcfe; color: #1e1e1e; }
+.marker-imm { background: #b5cea8; color: #1e1e1e; }
+.marker-op { background: #f14c4c; color: white; }
+.marker-stack { background: #cca700; color: #1e1e1e; }
+.marker-diff { background: #888; color: white; }
+.marker-target { background: #f14c4c; color: white; }
+.marker-current { background: #cca700; color: #1e1e1e; }
+
+/* Mismatch highlighting */
+.mismatch-highlight {
+    background: rgba(255, 255, 0, 0.3);
+    border-radius: 2px;
+    padding: 0 2px;
+}
+
+.mismatch-highlight.mnemonic {
+    background: rgba(241, 76, 76, 0.4);
+}
+
+.mismatch-highlight.operand {
+    background: rgba(255, 200, 0, 0.4);
+}
+
+/* Loading overlay */
+.loading-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.loading-overlay .spinner {
+    width: 24px;
+    height: 24px;
+    border: 2px solid var(--border-color);
+    border-top-color: var(--vscode-progressBar-background);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-right: 12px;
+}
+
+.loading-overlay span {
+    color: white;
+    font-size: 14px;
 }
 
 .line-num {

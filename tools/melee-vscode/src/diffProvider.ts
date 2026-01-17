@@ -1,11 +1,21 @@
 import * as cp from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
+import { buildEnhancedDiff, InstructionDiff, ParsedInstruction, BranchArrow } from './asmParser';
 
 export interface DiffLine {
     target: string;
     current: string;
     status: 'match' | 'mismatch' | 'target-only' | 'current-only';
+    diffType?: 'r' | 'i' | 'o' | 's';  // register, immediate, opcode, stack
+    mismatchedParts?: Array<{
+        partType: 'mnemonic' | 'operand';
+        targetValue: string;
+        currentValue: string;
+        operandIndex?: number;
+    }>;
+    targetParsed?: ParsedInstruction | null;
+    currentParsed?: ParsedInstruction | null;
 }
 
 export interface DiffResult {
@@ -15,6 +25,8 @@ export interface DiffResult {
     targetLines: string[];
     currentLines: string[];
     diffLines: DiffLine[];
+    targetArrows: BranchArrow[];
+    currentArrows: BranchArrow[];
     buildError?: string;
 }
 
@@ -48,11 +60,17 @@ export class DiffProvider {
         // First try the enhanced JSON output from checkdiff.py
         const checkdiffPath = path.join(this.workspaceRoot, 'tools', 'checkdiff.py');
 
+        console.log(`[melee-decomp] getDiff called for: ${functionName}`);
+        console.log(`[melee-decomp] workspaceRoot: ${this.workspaceRoot}`);
+        console.log(`[melee-decomp] checkdiffPath: ${checkdiffPath}`);
+
         return new Promise((resolve, reject) => {
             const proc = cp.spawn('python3', [checkdiffPath, functionName, '--format', 'json'], {
                 cwd: this.workspaceRoot,
                 env: { ...process.env }
             });
+
+            console.log(`[melee-decomp] Spawned process for ${functionName}`);
 
             let stdout = '';
             let stderr = '';
@@ -66,9 +84,17 @@ export class DiffProvider {
             });
 
             proc.on('close', (code) => {
+                console.log(`[melee-decomp] Process exited with code: ${code}`);
+                console.log(`[melee-decomp] stdout length: ${stdout.length}`);
+                console.log(`[melee-decomp] stderr length: ${stderr.length}`);
+                if (stderr) {
+                    console.log(`[melee-decomp] stderr: ${stderr.slice(0, 500)}`);
+                }
+
                 if (code !== 0) {
                     // Build or diff failed
                     const errorMsg = stderr || stdout || `checkdiff.py exited with code ${code}`;
+                    console.log(`[melee-decomp] Error: ${errorMsg.slice(0, 500)}`);
                     reject(new Error(errorMsg.trim()));
                     return;
                 }
@@ -76,6 +102,7 @@ export class DiffProvider {
                 // Try to find JSON in stdout (skip any non-JSON prefix)
                 const jsonMatch = stdout.match(/^\s*(\{[\s\S]*\})\s*$/);
                 if (!jsonMatch) {
+                    console.log(`[melee-decomp] No JSON match. stdout: ${stdout.slice(0, 200)}`);
                     reject(new Error(`No JSON found in output. stdout: ${stdout.slice(0, 200)}`));
                     return;
                 }
@@ -83,8 +110,10 @@ export class DiffProvider {
                 try {
                     const jsonData = JSON.parse(jsonMatch[1]);
                     const result = this.parseCheckdiffJson(jsonData, functionName);
+                    console.log(`[melee-decomp] Success! Match: ${result.match}, ${result.matchPercent}%`);
                     resolve(result);
                 } catch (e) {
+                    console.log(`[melee-decomp] JSON parse error: ${e}`);
                     reject(new Error(`Failed to parse checkdiff output: ${e}\nOutput: ${stdout.slice(0, 500)}`));
                 }
             });
@@ -171,7 +200,9 @@ export class DiffProvider {
             matchPercent,
             targetLines,
             currentLines,
-            diffLines
+            diffLines,
+            targetArrows: [],
+            currentArrows: []
         };
     }
 
@@ -181,35 +212,33 @@ export class DiffProvider {
         functionName: string,
         isMatch: boolean
     ): DiffResult {
-        const diffLines: DiffLine[] = [];
+        // Use enhanced diff parser for detailed comparison
+        const { diffs: enhancedDiffs, targetArrows, currentArrows } = buildEnhancedDiff(targetAsm, currentAsm);
 
-        // Simple line-by-line comparison
-        const maxLen = Math.max(targetAsm.length, currentAsm.length);
+        const diffLines: DiffLine[] = [];
         let matchCount = 0;
 
-        for (let i = 0; i < maxLen; i++) {
+        for (let i = 0; i < enhancedDiffs.length; i++) {
+            const ed = enhancedDiffs[i];
             const target = targetAsm[i] || '';
             const current = currentAsm[i] || '';
 
-            // Normalize for comparison (trim whitespace)
-            const targetNorm = target.trim();
-            const currentNorm = current.trim();
-
-            let status: DiffLine['status'];
-            if (!targetNorm && currentNorm) {
-                status = 'current-only';
-            } else if (targetNorm && !currentNorm) {
-                status = 'target-only';
-            } else if (targetNorm === currentNorm) {
-                status = 'match';
+            if (ed.status === 'match') {
                 matchCount++;
-            } else {
-                status = 'mismatch';
             }
 
-            diffLines.push({ target, current, status });
+            diffLines.push({
+                target,
+                current,
+                status: ed.status,
+                diffType: ed.diffType,
+                mismatchedParts: ed.mismatchedParts,
+                targetParsed: ed.target,
+                currentParsed: ed.current
+            });
         }
 
+        const maxLen = Math.max(targetAsm.length, currentAsm.length);
         const matchPercent = maxLen > 0 ? Math.round((matchCount / maxLen) * 100) : 100;
 
         return {
@@ -218,7 +247,9 @@ export class DiffProvider {
             matchPercent,
             targetLines: targetAsm,
             currentLines: currentAsm,
-            diffLines
+            diffLines,
+            targetArrows,
+            currentArrows
         };
     }
 
