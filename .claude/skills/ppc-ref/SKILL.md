@@ -14,7 +14,25 @@ Search multiple PPC reference manuals for instruction documentation. Use this wh
 
 ## Setup Required
 
-**PDF files must be obtained manually** (not included in repo due to copyright/size):
+**PDF files must be obtained manually** (not included in repo due to copyright/size).
+
+### Option 1: Bootstrap from Pre-signed URLs (Recommended for Remote)
+
+If PDFs are stored in secure cloud storage (S3, R2, etc.), use the bootstrap script:
+
+```bash
+# Set pre-signed URLs (NEVER commit these!)
+export PPC_REF_750CL_URL="https://your-bucket.../ppc_750cl.pdf?sig=..."
+export PPC_REF_CWG_URL="https://your-bucket.../powerpc-cwg.pdf?sig=..."
+export PPC_REF_MPC5XX_URL="https://your-bucket.../MPC5xxUG.pdf?sig=..."
+
+# Download and verify
+python tools/bootstrap_ppc_ref.py
+```
+
+The bootstrap script verifies SHA-1 hashes to ensure correct files.
+
+### Option 2: Manual Installation
 
 Place the following files in `.claude/skills/ppc-ref/`:
 
@@ -26,7 +44,9 @@ Place the following files in `.claude/skills/ppc-ref/`:
 
 The tool will not function without these reference PDFs.
 
-**Install pymupdf** (required for PDF parsing):
+### Install pymupdf
+
+Required for PDF parsing:
 ```bash
 pip install pymupdf
 ```

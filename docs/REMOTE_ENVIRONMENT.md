@@ -49,7 +49,7 @@ export DECOMP_AGENT_ID=remote-agent-1
 | `/decomp-permuter` | ❌ Limited | Needs local permuter install + build tools |
 | `/mismatch-db` | ✅ Full | Local database lookups |
 | `/opseq` | ⚠️ Partial | Search works; synthesis needs MWCC/Wine |
-| `/ppc-ref` | ❌ Not Supported | Requires manual PDF installation |
+| `/ppc-ref` | ⚠️ Needs Config | Requires PDF bootstrap (see below) |
 | `/melee-debug` | ❌ Not Supported | Requires Dolphin emulator |
 | `/understand` | ✅ Full | Documentation skill |
 | `/item-decomp` | ✅ Full | Documentation skill |
@@ -125,6 +125,34 @@ python configure.py && ninja
 
 The bootstrap script verifies the SHA-1 hash to ensure the correct file.
 
+### PowerPC Reference PDFs (`/ppc-ref`)
+
+The `/ppc-ref` skill requires PDF reference manuals. Use the bootstrap script with pre-signed URLs:
+
+```bash
+# Generate pre-signed URLs from your secure storage
+export PPC_REF_750CL_URL="https://your-bucket.../ppc_750cl.pdf?signature=..."
+export PPC_REF_CWG_URL="https://your-bucket.../powerpc-cwg.pdf?signature=..."
+export PPC_REF_MPC5XX_URL="https://your-bucket.../MPC5xxUG.pdf?signature=..."
+
+# Download and verify
+python tools/bootstrap_ppc_ref.py
+
+# Test it works
+python tools/ppc-ref.py sources
+python tools/ppc-ref.py instr lwz
+```
+
+**Required PDFs:**
+
+| File | Description | SHA-1 |
+|------|-------------|-------|
+| `ppc_750cl.pdf` | IBM PowerPC 750CL User's Manual | `0e701abd...` |
+| `powerpc-cwg.pdf` | IBM PowerPC Compiler Writer's Guide | `7c5e8412...` |
+| `MPC5xxUG.pdf` | CodeWarrior MPC5xx Targeting Manual | `f836aefd...` |
+
+PDFs are installed to `.claude/skills/ppc-ref/` by default. Override with `PPC_REF_DIR`.
+
 ### Build Tools
 
 For full functionality (compilation, opseq synthesis), the container needs:
@@ -185,16 +213,7 @@ Runtime debugging requires:
 
 This cannot be containerized in a practical way.
 
-### 2. PowerPC Reference PDFs (`/ppc-ref`)
-
-The PDFs are not included in the repository due to copyright/size:
-- `ppc_750cl.pdf` - IBM PowerPC 750CL User's Manual
-- `powerpc-cwg.pdf` - IBM Compiler Writer's Guide
-- `MPC5xxUG.pdf` - CodeWarrior Targeting Manual
-
-You must obtain these manually and place them in `.claude/skills/ppc-ref/`.
-
-### 3. Production Sync (`melee-agent sync production`)
+### 2. Production Sync (`melee-agent sync production`)
 
 Syncing to `https://decomp.me` requires a Cloudflare `cf_clearance` cookie obtained by solving a browser challenge. This cannot be automated.
 
@@ -226,6 +245,10 @@ Syncing to `https://decomp.me` requires a Cloudflare `cf_clearance` cookie obtai
 | `PPC_EABI_OBJDUMP` | No | Custom path to powerpc-eabi-objdump |
 | `MELEE_DOL_URL` | For build | Pre-signed URL to download main.dol (NEVER commit!) |
 | `MELEE_ORIG_DIR` | No | Override default orig/ directory |
+| `PPC_REF_750CL_URL` | For /ppc-ref | Pre-signed URL for ppc_750cl.pdf |
+| `PPC_REF_CWG_URL` | For /ppc-ref | Pre-signed URL for powerpc-cwg.pdf |
+| `PPC_REF_MPC5XX_URL` | For /ppc-ref | Pre-signed URL for MPC5xxUG.pdf |
+| `PPC_REF_DIR` | No | Override default PDF directory |
 
 ## Troubleshooting
 
