@@ -79,7 +79,25 @@ def sjiswrap_url(tag: str) -> str:
 
 def wibo_url(tag: str) -> str:
     repo = "https://github.com/decompals/wibo"
-    return f"{repo}/releases/download/{tag}/wibo"
+    # Version 1.0.0+ uses architecture-specific binaries
+    # Older versions (0.x) use just "wibo" for 32-bit
+    try:
+        major_version = int(tag.split(".")[0])
+    except (ValueError, IndexError):
+        major_version = 0
+
+    if major_version >= 1:
+        uname = platform.uname()
+        system = uname.system.lower()
+        arch = uname.machine.lower()
+        if arch == "amd64":
+            arch = "x86_64"
+        if system == "darwin":
+            return f"{repo}/releases/download/{tag}/wibo-macos"
+        else:
+            return f"{repo}/releases/download/{tag}/wibo-{arch}"
+    else:
+        return f"{repo}/releases/download/{tag}/wibo"
 
 
 TOOLS: Dict[str, Callable[[str], str]] = {
