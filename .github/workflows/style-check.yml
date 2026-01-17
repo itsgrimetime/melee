@@ -1,0 +1,110 @@
+name: "Style Check"
+
+permissions: read-all
+
+on:
+  pull_request_target:
+
+jobs:
+  style-check:
+    runs-on: ubuntu-22.04
+    if: "!contains(github.event.pull_request.title, '[skip style]')"
+    steps:
+    - name: Get list of changed files from PR
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        gh api \
+          repos/${{github.repository}}/pulls/${{github.event.number}}/files --paginate \
+          | jq '.[] | select(.status != "removed") | .filename' \
+          > "$HOME/changed_files"
+
+    - uses: actions/checkout@v4
+      with:
+        ref: refs/pull/${{github.event.pull_request.number}}/merge
+        fetch-depth: 2
+
+    - name: Get PR diff
+      run: |
+        git diff HEAD~1 > "$HOME/pr_diff"
+
+    - name: Check for /orig folder modifications
+      run: |
+        if grep -q '^"orig/' "$HOME/changed_files"; then
+          echo "::error::Do not modify files in /orig folder"
+          exit 1
+        fi
+
+    - name: Check for TRUE/FALSE usage
+      run: |
+        MATCHES=$(grep -E '^\+.*\b(TRUE|FALSE)\b' "$HOME/pr_diff" | grep -v '#define' | grep -v '^\+\+\+' || true)
+        if [ -n "$MATCHES" ]; then
+          echo "::warning::Use lowercase true/false instead of TRUE/FALSE"
+          echo "$MATCHES" | head -10
+        fi
+
+    - name: Check for s32/M2C_UNK usage
+      run: |
+        MATCHES=$(grep -E '^\+.*(\bs32\b|M2C_UNK)' "$HOME/pr_diff" | grep -v '^\+\+\+' || true)
+        if [ -n "$MATCHES" ]; then
+          echo "::notice::Consider using int instead of s32, UNK_T instead of M2C_UNK"
+          echo "$MATCHES" | head -10
+        fi
+
+    - name: Check for local extern declarations
+      run: |
+        # Check .c files only
+        C_FILES=$(cat "$HOME/changed_files" | tr -d '"' | grep '\.c$' || true)
+        if [ -n "$C_FILES" ]; then
+          MATCHES=$(grep -E '^\+\s*extern\s+' "$HOME/pr_diff" || true)
+          if [ -n "$MATCHES" ]; then
+            echo "::notice::Consider using header includes instead of local extern declarations"
+            echo "$MATCHES" | head -10
+          fi
+        fi
+
+    - name: Check for struct naming
+      run: |
+        MATCHES=$(grep -E '^\+.*struct\s+_\w+' "$HOME/pr_diff" | grep -v '^\+\+\+' || true)
+        if [ -n "$MATCHES" ]; then
+          echo "::warning::Don't prefix struct names with underscores"
+          echo "$MATCHES" | head -10
+        fi
+
+    - name: Check for .static.h includes in headers
+      run: |
+        H_FILES=$(cat "$HOME/changed_files" | tr -d '"' | grep '\.h$' || true)
+        if [ -n "$H_FILES" ]; then
+          MATCHES=$(grep -E '^\+.*#include.*\.static\.h' "$HOME/pr_diff" || true)
+          if [ -n "$MATCHES" ]; then
+            echo "::error::.static.h files should only be included from .c files"
+            exit 1
+          fi
+        fi
+
+    - name: Check for math function definitions
+      run: |
+        MATCHES=$(grep -E '^\+.*(extern|static).*\bsqrtf\b' "$HOME/pr_diff" | grep -v '^\+\+\+' || true)
+        if [ -n "$MATCHES" ]; then
+          echo "::error::Include <math_ppc.h> instead of defining math functions locally"
+          exit 1
+        fi
+
+    - name: Check for 0xFFFFFFFF usage
+      run: |
+        MATCHES=$(grep -E '^\+.*0xFFFFFFFF' "$HOME/pr_diff" | grep -v '^\+\+\+' || true)
+        if [ -n "$MATCHES" ]; then
+          echo "::notice::Consider using -1 instead of 0xFFFFFFFF (especially in ItemStateTable)"
+          echo "$MATCHES" | head -10
+        fi
+
+    - name: Summarize checks
+      if: always()
+      run: |
+        cat >> "$GITHUB_STEP_SUMMARY" << 'EOF'
+        ## Style Check Summary
+
+        This PR was checked against the [Melee Style Guide](docs/STYLE_GUIDE.md).
+
+        Style conventions are derived from maintainer feedback to help keep the codebase consistent.
+        EOF

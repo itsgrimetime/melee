@@ -19,6 +19,7 @@ class ReviewComment:
     pr_url: str
     comment_id: int
     author: str
+    author_association: str  # COLLABORATOR, MEMBER, OWNER, CONTRIBUTOR, etc.
     body: str
     path: str
     line: int | None
@@ -38,19 +39,27 @@ def run_gh(args: list[str]) -> dict | list:
     return json.loads(result.stdout)
 
 
-def get_user_prs(repo: str, author: str) -> list[dict]:
-    """Get all PRs by the specified author."""
-    print(f"Fetching PRs by {author} from {repo}...")
-
-    # Fetch all PRs (open and closed) by the author
-    prs = run_gh([
-        "pr", "list",
-        "--repo", repo,
-        "--author", author,
-        "--state", "all",
-        "--limit", "500",
-        "--json", "number,title,url,state,createdAt,mergedAt"
-    ])
+def get_user_prs(repo: str, author: str | None) -> list[dict]:
+    """Get all PRs by the specified author, or all PRs if author is None."""
+    if author:
+        print(f"Fetching PRs by {author} from {repo}...")
+        prs = run_gh([
+            "pr", "list",
+            "--repo", repo,
+            "--author", author,
+            "--state", "all",
+            "--limit", "500",
+            "--json", "number,title,url,state,createdAt,mergedAt,author"
+        ])
+    else:
+        print(f"Fetching ALL PRs from {repo}...")
+        prs = run_gh([
+            "pr", "list",
+            "--repo", repo,
+            "--state", "all",
+            "--limit", "1000",
+            "--json", "number,title,url,state,createdAt,mergedAt,author"
+        ])
 
     print(f"Found {len(prs)} PRs")
     return prs
@@ -77,8 +86,22 @@ def get_pr_issue_comments(repo: str, pr_number: int) -> list[dict]:
     return comments if isinstance(comments, list) else []
 
 
-def fetch_all_feedback(repo: str, author: str) -> list[ReviewComment]:
-    """Fetch all review comments from PRs by the author."""
+# Associations that indicate collaborator/maintainer status
+COLLABORATOR_ASSOCIATIONS = {"COLLABORATOR", "MEMBER", "OWNER"}
+
+
+def fetch_all_feedback(
+    repo: str,
+    author: str | None = None,
+    collaborators_only: bool = False
+) -> list[ReviewComment]:
+    """Fetch all review comments from PRs.
+
+    Args:
+        repo: Repository in owner/repo format
+        author: If specified, only fetch PRs by this author. If None, fetch all PRs.
+        collaborators_only: If True, only include comments from collaborators/members/owners
+    """
     prs = get_user_prs(repo, author)
     all_comments = []
 
@@ -86,6 +109,7 @@ def fetch_all_feedback(repo: str, author: str) -> list[ReviewComment]:
         pr_number = pr["number"]
         pr_title = pr["title"]
         pr_url = pr["url"]
+        pr_author = pr.get("author", {}).get("login", "").lower()
 
         print(f"  PR #{pr_number}: {pr_title[:50]}...")
 
@@ -93,8 +117,15 @@ def fetch_all_feedback(repo: str, author: str) -> list[ReviewComment]:
         review_comments = get_pr_review_comments(repo, pr_number)
 
         for c in review_comments:
+            comment_author = c.get("user", {}).get("login", "")
+            author_association = c.get("author_association", "NONE")
+
             # Skip comments by the PR author (self-comments)
-            if c.get("user", {}).get("login", "").lower() == author.lower():
+            if comment_author.lower() == pr_author:
+                continue
+
+            # Filter by collaborator status if requested
+            if collaborators_only and author_association not in COLLABORATOR_ASSOCIATIONS:
                 continue
 
             comment = ReviewComment(
@@ -102,7 +133,8 @@ def fetch_all_feedback(repo: str, author: str) -> list[ReviewComment]:
                 pr_title=pr_title,
                 pr_url=pr_url,
                 comment_id=c["id"],
-                author=c.get("user", {}).get("login", "unknown"),
+                author=comment_author or "unknown",
+                author_association=author_association,
                 body=c.get("body", ""),
                 path=c.get("path", ""),
                 line=c.get("line") or c.get("original_line"),
@@ -115,7 +147,13 @@ def fetch_all_feedback(repo: str, author: str) -> list[ReviewComment]:
         # Also get general PR comments
         issue_comments = get_pr_issue_comments(repo, pr_number)
         for c in issue_comments:
-            if c.get("user", {}).get("login", "").lower() == author.lower():
+            comment_author = c.get("user", {}).get("login", "")
+            author_association = c.get("author_association", "NONE")
+
+            if comment_author.lower() == pr_author:
+                continue
+
+            if collaborators_only and author_association not in COLLABORATOR_ASSOCIATIONS:
                 continue
 
             comment = ReviewComment(
@@ -123,7 +161,8 @@ def fetch_all_feedback(repo: str, author: str) -> list[ReviewComment]:
                 pr_title=pr_title,
                 pr_url=pr_url,
                 comment_id=c["id"],
-                author=c.get("user", {}).get("login", "unknown"),
+                author=comment_author or "unknown",
+                author_association=author_association,
                 body=c.get("body", ""),
                 path="",  # General comments don't have a path
                 line=None,
@@ -158,7 +197,7 @@ def format_comment_report(comments: list[ReviewComment]) -> str:
 
         for c in pr_comments:
             lines.append("-" * 60)
-            lines.append(f"**Reviewer:** {c.author}")
+            lines.append(f"**Reviewer:** {c.author} ({c.author_association})")
             lines.append(f"**Date:** {c.created_at[:10]}")
 
             if c.path:
@@ -189,6 +228,7 @@ def export_to_json(comments: list[ReviewComment], output_path: Path) -> None:
             "pr_url": c.pr_url,
             "comment_id": c.comment_id,
             "author": c.author,
+            "author_association": c.author_association,
             "body": c.body,
             "path": c.path,
             "line": c.line,
@@ -210,8 +250,8 @@ def main():
     )
     parser.add_argument(
         "--author", "-a",
-        default="itsgrimetime",
-        help="GitHub username to fetch PRs for (default: itsgrimetime)"
+        default=None,
+        help="GitHub username to fetch PRs for (default: all PRs)"
     )
     parser.add_argument(
         "--repo", "-r",
@@ -229,11 +269,20 @@ def main():
         type=Path,
         help="Also export raw data to JSON file"
     )
+    parser.add_argument(
+        "--collaborators-only", "-c",
+        action="store_true",
+        help="Only include comments from collaborators/members/owners"
+    )
 
     args = parser.parse_args()
 
     # Fetch all feedback
-    comments = fetch_all_feedback(args.repo, args.author)
+    comments = fetch_all_feedback(
+        args.repo,
+        author=args.author,
+        collaborators_only=args.collaborators_only
+    )
 
     if not comments:
         print("No review comments found!")
@@ -254,14 +303,17 @@ def main():
     print(f"\n=== Summary ===")
     print(f"Total reviewer comments: {len(comments)}")
 
-    # Count by reviewer
-    by_reviewer: dict[str, int] = {}
+    # Count by reviewer with their association
+    by_reviewer: dict[str, tuple[int, str]] = {}
     for c in comments:
-        by_reviewer[c.author] = by_reviewer.get(c.author, 0) + 1
+        if c.author not in by_reviewer:
+            by_reviewer[c.author] = (0, c.author_association)
+        count, assoc = by_reviewer[c.author]
+        by_reviewer[c.author] = (count + 1, assoc)
 
     print("\nComments by reviewer:")
-    for reviewer, count in sorted(by_reviewer.items(), key=lambda x: -x[1]):
-        print(f"  {reviewer}: {count}")
+    for reviewer, (count, assoc) in sorted(by_reviewer.items(), key=lambda x: -x[1][0]):
+        print(f"  {reviewer} ({assoc}): {count}")
 
 
 if __name__ == "__main__":
