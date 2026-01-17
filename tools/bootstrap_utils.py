@@ -84,6 +84,14 @@ def download_file(url: str, dest: Path, expected_sha1: str | None = None) -> boo
             print("  The URL may have expired. Generate a new pre-signed URL.", file=sys.stderr)
         elif e.code == 404:
             print("  File not found at the specified URL.", file=sys.stderr)
+        elif e.code == 503:
+            print("  Service temporarily unavailable. Possible causes:", file=sys.stderr)
+            print("    - Storage service is temporarily down", file=sys.stderr)
+            print("    - Pre-signed URL may have expired", file=sys.stderr)
+            print("    - Rate limiting or maintenance in progress", file=sys.stderr)
+            print("  Try again in a few minutes, or generate a new URL.", file=sys.stderr)
+        elif e.code >= 500:
+            print(f"  Server error. Try again later or generate a new URL.", file=sys.stderr)
         return False
     except urllib.error.URLError as e:
         print(f"\nError: {e.reason}", file=sys.stderr)
