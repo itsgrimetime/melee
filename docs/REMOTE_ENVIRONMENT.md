@@ -99,6 +99,32 @@ Downloaded binaries are cached in `~/.cache/melee-tools/`.
 
 You can also set the `PPC_EABI_OBJDUMP` environment variable to specify a custom objdump path.
 
+### Original Game Files (main.dol)
+
+The build requires `orig/GALE01/sys/main.dol` from the original game. Since this cannot be distributed, use the bootstrap script with a pre-signed URL:
+
+```bash
+# Generate a pre-signed URL from your secure storage (S3, R2, etc.)
+# URL should be time-limited (1 hour recommended)
+
+# Set the URL (NEVER commit this!)
+export MELEE_DOL_URL="https://your-bucket.../main.dol?signature=..."
+
+# Download and verify
+python tools/bootstrap_orig.py
+
+# Then build normally
+python configure.py && ninja
+```
+
+**Security requirements:**
+- Store main.dol in private cloud storage (S3, Cloudflare R2, GCS)
+- Generate time-limited pre-signed URLs (expire after 1 hour)
+- Pass URL via environment variable, NEVER commit to git
+- The `.gitignore` already excludes `.env` files and `orig/` contents
+
+The bootstrap script verifies the SHA-1 hash to ensure the correct file.
+
 ### Build Tools
 
 For full functionality (compilation, opseq synthesis), the container needs:
@@ -198,6 +224,8 @@ Syncing to `https://decomp.me` requires a Cloudflare `cf_clearance` cookie obtai
 | `CF_CLEARANCE` | For prod sync | Cloudflare cookie (browser auth required) |
 | `DECOMP_SESSION_ID` | No | decomp.me session cookie |
 | `PPC_EABI_OBJDUMP` | No | Custom path to powerpc-eabi-objdump |
+| `MELEE_DOL_URL` | For build | Pre-signed URL to download main.dol (NEVER commit!) |
+| `MELEE_ORIG_DIR` | No | Override default orig/ directory |
 
 ## Troubleshooting
 
