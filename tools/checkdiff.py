@@ -196,7 +196,7 @@ def main() -> int:
     result = subprocess.run(["ninja", our_obj], cwd=ROOT, capture_output=True, text=True)
     if result.returncode != 0:
         print("ninja failed:", file=sys.stderr)
-        print(result.stdout)
+        print(result.stdout, file=sys.stderr)
         print(result.stderr, file=sys.stderr)
         return 1
 

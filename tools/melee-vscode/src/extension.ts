@@ -1,9 +1,11 @@
 import * as vscode from 'vscode';
-import { DiffProvider } from './diffProvider';
+import { DiffProvider, DiffResult } from './diffProvider';
 import { DiffPanel } from './webviewPanel';
 import { CodeLensProvider } from './codeLensProvider';
 
 let diffProvider: DiffProvider;
+let statusBarItem: vscode.StatusBarItem;
+let lastDiffResult: DiffResult | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('Melee Decomp Diff extension activated');
@@ -16,6 +18,12 @@ export function activate(context: vscode.ExtensionContext) {
     }
 
     diffProvider = new DiffProvider(workspaceRoot);
+
+    // Create status bar item
+    statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+    statusBarItem.command = 'meleeDecomp.showDiff';
+    statusBarItem.tooltip = 'Click to show ASM diff';
+    context.subscriptions.push(statusBarItem);
 
     // Command: Show diff for function at cursor or prompt
     const showDiffCommand = vscode.commands.registerCommand('meleeDecomp.showDiff', async () => {
@@ -68,11 +76,35 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
+    // Navigation commands
+    const nextDiffCommand = vscode.commands.registerCommand('meleeDecomp.nextDiff', () => {
+        DiffPanel.currentPanel?.navigateDiff('next');
+    });
+
+    const prevDiffCommand = vscode.commands.registerCommand('meleeDecomp.prevDiff', () => {
+        DiffPanel.currentPanel?.navigateDiff('prev');
+    });
+
+    // Toggle watch mode command
+    const toggleWatchCommand = vscode.commands.registerCommand('meleeDecomp.toggleWatch', () => {
+        // Toggle watch mode indicator in status bar
+        if (statusBarItem.text.includes('$(eye)')) {
+            statusBarItem.text = statusBarItem.text.replace('$(eye) ', '');
+            vscode.window.showInformationMessage('ASM diff watch mode disabled');
+        } else {
+            statusBarItem.text = '$(eye) ' + statusBarItem.text;
+            vscode.window.showInformationMessage('ASM diff watch mode enabled');
+        }
+    });
+
     context.subscriptions.push(
         showDiffCommand,
         showDiffForFunctionCommand,
         codeLensDisposable,
-        saveWatcher
+        saveWatcher,
+        nextDiffCommand,
+        prevDiffCommand,
+        toggleWatchCommand
     );
 }
 
@@ -82,16 +114,37 @@ async function showDiffForFunction(functionName: string, context: vscode.Extensi
         DiffPanel.createOrShow(context.extensionUri);
         DiffPanel.currentPanel?.setLoading(functionName);
 
+        // Update status bar to show building
+        statusBarItem.text = '$(sync~spin) Building...';
+        statusBarItem.show();
+
         // Get diff data
         const diffResult = await diffProvider.getDiff(functionName);
+        lastDiffResult = diffResult;
 
         // Update panel
         DiffPanel.currentPanel?.updateDiff(diffResult);
+
+        // Update status bar with result
+        updateStatusBar(diffResult);
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         vscode.window.showErrorMessage(`Failed to get diff: ${message}`);
         DiffPanel.currentPanel?.setError(message);
+        statusBarItem.text = '$(error) Build failed';
+        statusBarItem.show();
     }
+}
+
+function updateStatusBar(result: DiffResult) {
+    const icon = result.match ? '$(check)' : '$(x)';
+    const color = result.match ? 'statusBarItem.warningForeground' : undefined;
+
+    statusBarItem.text = `${icon} ${result.functionName}: ${result.matchPercent}%`;
+    statusBarItem.backgroundColor = result.match
+        ? undefined
+        : new vscode.ThemeColor('statusBarItem.errorBackground');
+    statusBarItem.show();
 }
 
 function detectFunctionAtCursor(editor: vscode.TextEditor): string | undefined {
