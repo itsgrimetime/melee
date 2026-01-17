@@ -8,6 +8,20 @@ The melee-agent tooling was originally designed for local development with a sel
 
 ## Quick Start for Remote Environments
 
+### Step 1: Install melee-agent
+
+The `melee-agent` CLI tool must be installed before use:
+
+```bash
+# From the repository root
+pip install -e ./tools/melee-agent
+
+# Verify installation
+melee-agent --help
+```
+
+### Step 2: Set Environment Variables
+
 Set these environment variables before running any melee-agent commands:
 
 ```bash
@@ -21,12 +35,25 @@ export GITHUB_TOKEN=ghp_xxxxx
 export DECOMP_AGENT_ID=remote-agent-1
 ```
 
+### Step 3: Check Setup Status
+
+Verify your environment is configured correctly:
+
+```bash
+melee-agent setup status
+```
+
+This will show:
+- Whether main.dol is configured
+- Config directory location
+- Any missing dependencies
+
 ## Tool Compatibility Matrix
 
 | Tool/Command | Remote Support | Notes |
 |--------------|----------------|-------|
-| `extract list` | ✅ Full | Reads local build artifacts |
-| `extract get` | ✅ Full | Reads local build artifacts |
+| `extract list` | ✅ Full | Requires successful build first (report.json) |
+| `extract get` | ✅ Full | Requires successful build first (report.json) |
 | `scratch create` | ⚠️ Needs Config | Requires `DECOMP_API_BASE` |
 | `scratch compile` | ⚠️ Needs Config | Requires `DECOMP_API_BASE` |
 | `scratch get` | ⚠️ Needs Config | Requires `DECOMP_API_BASE` |
@@ -301,3 +328,51 @@ chmod +x ~/.cache/melee-tools/dtk
 ```
 
 Or place dtk in `tools/dtk` within the repo.
+
+### Bootstrap script returns HTTP 503
+
+If `bootstrap_orig.py` or `bootstrap_ppc_ref.py` returns HTTP 503:
+
+1. **Pre-signed URL may have expired** - Generate a new URL from your cloud storage
+2. **Storage service temporarily unavailable** - Retry after a few minutes
+3. **Network issues** - Check your container's internet connectivity
+
+The bootstrap scripts will show partial success if some files download successfully:
+```
+Bootstrap Summary:
+  Downloaded: 2
+  Failed: 1
+```
+
+You can re-run the script after fixing the issue - it will skip already-downloaded files.
+
+### "report.json not found" when running extract commands
+
+The `extract list` and `extract get` commands require a successful build:
+
+```bash
+# First, ensure main.dol is present
+ls orig/GALE01/sys/main.dol
+
+# Then build
+python configure.py
+ninja
+
+# Now extract commands will work
+melee-agent extract list --max-match 0.50
+```
+
+### Setup Commands
+
+Use `melee-agent setup` to diagnose configuration issues:
+
+```bash
+# Check overall status
+melee-agent setup status
+
+# Auto-configure main.dol from worktrees (if available)
+melee-agent setup dol --auto
+
+# Or manually specify location
+melee-agent setup dol /path/to/main.dol
+```

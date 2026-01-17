@@ -106,7 +106,8 @@ We use Python for our command line tooling. It is recommended that you use a [vi
 Coming soon.
 
 # Containers
-Coming soon.
+
+See [Remote Environment Support](../docs/REMOTE_ENVIRONMENT.md) for instructions on running the agent tools in Docker containers or other remote environments.
 
 # Diffing
 
