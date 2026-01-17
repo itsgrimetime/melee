@@ -1,0 +1,59 @@
+{
+  "name": "melee-decomp-diff",
+  "displayName": "Melee Decomp ASM Diff",
+  "description": "Shows side-by-side ASM diff for Melee decompilation",
+  "version": "0.0.1",
+  "publisher": "melee-decomp",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "workspaceContains:objdiff.json"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "meleeDecomp.showDiff",
+        "title": "Show ASM Diff",
+        "category": "Melee Decomp"
+      },
+      {
+        "command": "meleeDecomp.showDiffForFunction",
+        "title": "Show ASM Diff for Function",
+        "category": "Melee Decomp"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "meleeDecomp.showDiff",
+        "key": "ctrl+shift+d",
+        "mac": "cmd+shift+d",
+        "when": "editorLangId == c"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "meleeDecomp.showDiff",
+          "when": "editorLangId == c",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  }
+}
