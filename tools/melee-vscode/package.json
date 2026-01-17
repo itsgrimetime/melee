@@ -25,6 +25,21 @@
         "command": "meleeDecomp.showDiffForFunction",
         "title": "Show ASM Diff for Function",
         "category": "Melee Decomp"
+      },
+      {
+        "command": "meleeDecomp.nextDiff",
+        "title": "Next Difference",
+        "category": "Melee Decomp"
+      },
+      {
+        "command": "meleeDecomp.prevDiff",
+        "title": "Previous Difference",
+        "category": "Melee Decomp"
+      },
+      {
+        "command": "meleeDecomp.toggleWatch",
+        "title": "Toggle Watch Mode",
+        "category": "Melee Decomp"
       }
     ],
     "keybindings": [
@@ -33,6 +48,18 @@
         "key": "ctrl+shift+d",
         "mac": "cmd+shift+d",
         "when": "editorLangId == c"
+      },
+      {
+        "command": "meleeDecomp.nextDiff",
+        "key": "ctrl+]",
+        "mac": "cmd+]",
+        "when": "meleeDecompDiffPanelVisible"
+      },
+      {
+        "command": "meleeDecomp.prevDiff",
+        "key": "ctrl+[",
+        "mac": "cmd+[",
+        "when": "meleeDecompDiffPanelVisible"
       }
     ],
     "menus": {
