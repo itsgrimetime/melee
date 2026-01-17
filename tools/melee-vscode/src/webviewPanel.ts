@@ -205,8 +205,10 @@ export class DiffPanel {
                 const lane = lanes[idx];
                 const laneX = gutterWidth - 10 - lane * laneWidth;  // Lane position
 
-                const fromY = (arrow.fromRow * rowHeight) + rowHeight / 2;
-                const toY = (arrow.toRow * rowHeight) + rowHeight / 2;
+                // Center vertically in row, with small adjustment for padding/borders
+                const yOffset = -1;  // Nudge up slightly to better center
+                const fromY = (arrow.fromRow * rowHeight) + rowHeight / 2 + yOffset;
+                const toY = (arrow.toRow * rowHeight) + rowHeight / 2 + yOffset;
 
                 // Color based on type
                 let color = '#888';
