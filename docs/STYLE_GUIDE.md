@@ -314,8 +314,8 @@ typedef struct itMBall_ItemVars {
 ## Maintainer Credits
 
 This guide was compiled from feedback by:
-- ribbanya (145 comments)
-- r-burns (72 comments)
-- PsiLupan (11 comments)
-- sadkellz (7 comments)
-- wyatt-avilla (1 comment)
+- ribbanya
+- r-burns
+- PsiLupan
+- sadkellz
+- wyatt-avilla
