@@ -174,6 +174,7 @@ export class DiffPanel {
             if (rows.length === 0) return;
 
             const diffRows = document.querySelector('.diff-rows');
+            const diffContainer = document.querySelector('.diff-container');
             const rowHeight = rows[0].offsetHeight || 20;
 
             // Find the first gutter element to get its position
@@ -181,13 +182,16 @@ export class DiffPanel {
             if (!firstGutter) return;
 
             const gutterRect = firstGutter.getBoundingClientRect();
-            const containerRect = diffRows.getBoundingClientRect();
+            const containerRect = diffContainer.getBoundingClientRect();
+            const diffRowsRect = diffRows.getBoundingClientRect();
 
-            // Position SVG over the gutter column
+            // Position SVG over the gutter column, accounting for headers above diff-rows
             const gutterLeft = gutterRect.left - containerRect.left;
+            const topOffset = diffRowsRect.top - containerRect.top;
             const gutterWidth = 40;  // Arrow gutter width
 
             svg.style.left = gutterLeft + 'px';
+            svg.style.top = topOffset + 'px';
             svg.setAttribute('width', gutterWidth);
             svg.setAttribute('height', diffRows.scrollHeight);
             svg.innerHTML = '';
@@ -199,7 +203,7 @@ export class DiffPanel {
 
             arrows.forEach((arrow, idx) => {
                 const lane = lanes[idx];
-                const x = gutterWidth - 8 - lane * laneWidth;  // Start from right side
+                const laneX = gutterWidth - 10 - lane * laneWidth;  // Lane position
 
                 const fromY = (arrow.fromRow * rowHeight) + rowHeight / 2;
                 const toY = (arrow.toRow * rowHeight) + rowHeight / 2;
@@ -207,9 +211,7 @@ export class DiffPanel {
                 // Color based on type
                 let color = '#888';
                 if (arrow.direction === 'backward') {
-                    color = '#f14c4c';  // red for backward
-                } else if (arrow.type === 'call') {
-                    color = '#4ec9b0';  // cyan for calls
+                    color = '#f14c4c';  // red for backward (loops)
                 } else if (arrow.type === 'unconditional') {
                     color = '#569cd6';  // blue for unconditional
                 } else {
@@ -217,13 +219,14 @@ export class DiffPanel {
                 }
 
                 // Draw the arrow as a bracket shape
+                // Start at source row near code, go to lane, vertical to target, back to code
+                const codeEdge = gutterWidth - 2;  // Right edge near code
+
                 const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
 
-                // Path: from row -> left -> vertical -> right -> to row
-                const startX = gutterWidth - 4;  // Near the code
-                const midX = x;
-
-                const d = \`M \${startX} \${fromY} H \${midX} V \${toY} H \${startX - 4}\`;
+                // Path: source -> lane -> target -> code edge (with arrowhead)
+                // The final segment goes right to ensure arrowhead points toward code
+                const d = \`M \${codeEdge} \${fromY} H \${laneX} V \${toY} H \${codeEdge}\`;
 
                 path.setAttribute('d', d);
                 path.setAttribute('stroke', color);
@@ -231,6 +234,14 @@ export class DiffPanel {
                 path.setAttribute('fill', 'none');
                 path.setAttribute('marker-end', \`url(#arrow-\${color.replace('#', '')})\`);
                 svg.appendChild(path);
+
+                // Draw a small tick at the source row to indicate where the branch is
+                const tick = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                tick.setAttribute('cx', codeEdge);
+                tick.setAttribute('cy', fromY);
+                tick.setAttribute('r', '2');
+                tick.setAttribute('fill', color);
+                svg.appendChild(tick);
             });
 
             // Add arrow markers
