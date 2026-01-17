@@ -307,6 +307,8 @@ def main() -> int:
                 "reference_lines": len(ref_lines),
                 "current_lines": len(our_lines),
                 "match": ref_asm == our_asm,
+                "target_asm": ref_lines,
+                "current_asm": our_lines,
                 "diff": list(difflib.unified_diff(ref_lines, our_lines,
                     fromfile="expected", tofile="current", lineterm=""))
             }
