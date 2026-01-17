@@ -35,6 +35,7 @@ export DECOMP_AGENT_ID=remote-agent-1
 | `state status` | ✅ Full | Local SQLite operations |
 | `commit apply` | ✅ Full | Git operations |
 | `hook validate` | ✅ Full | Local file analysis |
+| `checkdiff.py` | ✅ Full | Auto-downloads dtk if needed |
 | `sync production` | ❌ Not Supported | Requires browser auth for Cloudflare |
 | `worktree collect` | ⚠️ Needs Auth | Requires `GITHUB_TOKEN` |
 | `pr feedback` | ⚠️ Needs Auth | Requires `GITHUB_TOKEN` |
@@ -85,6 +86,18 @@ export DECOMP_API_BASE=https://your-decomp-me-instance.com
    - Run decomp.me locally
    - Expose via Cloudflare Tunnel
    - Container connects to tunnel URL
+
+### checkdiff.py (Auto-Download Support)
+
+The `checkdiff.py` tool now automatically downloads the required disassembler if not found:
+
+1. First tries to find `powerpc-eabi-objdump` (devkitPPC)
+2. Falls back to `dtk` (decomp-toolkit) if objdump not found
+3. Auto-downloads `dtk` from GitHub releases if neither is available
+
+Downloaded binaries are cached in `~/.cache/melee-tools/`.
+
+You can also set the `PPC_EABI_OBJDUMP` environment variable to specify a custom objdump path.
 
 ### Build Tools
 
@@ -184,6 +197,7 @@ Syncing to `https://decomp.me` requires a Cloudflare `cf_clearance` cookie obtai
 | `GITHUB_TOKEN` | For PRs | GitHub personal access token |
 | `CF_CLEARANCE` | For prod sync | Cloudflare cookie (browser auth required) |
 | `DECOMP_SESSION_ID` | No | decomp.me session cookie |
+| `PPC_EABI_OBJDUMP` | No | Custom path to powerpc-eabi-objdump |
 
 ## Troubleshooting
 
@@ -224,3 +238,15 @@ export GITHUB_TOKEN=ghp_xxxxx
 # Or
 gh auth login --with-token < token.txt
 ```
+
+### checkdiff.py fails to download dtk
+
+If the auto-download fails (network restrictions, proxy issues), manually download:
+```bash
+# Download dtk for your platform
+curl -L https://github.com/encounter/decomp-toolkit/releases/download/v1.8.0/dtk-linux-x86_64 \
+  -o ~/.cache/melee-tools/dtk
+chmod +x ~/.cache/melee-tools/dtk
+```
+
+Or place dtk in `tools/dtk` within the repo.

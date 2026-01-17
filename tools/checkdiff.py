@@ -9,37 +9,140 @@ Usage:
 
 Automatically uses non-interactive mode when no TTY is detected (e.g., agents).
 
-Originally from: https://github.com/lukechampine/melee/tree/claude-skills
-Adapted for melee-decomp project structure where melee is a symlink.
+Remote environment support:
+  - Auto-downloads dtk (decomp-toolkit) if powerpc-eabi-objdump is not available
+  - Works in containers without devkitPPC installed
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import platform
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
+import urllib.request
 from pathlib import Path
 from typing import Optional
 
-# Support both standalone melee repo and melee-decomp structure
 SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent
-
-# Check if we're in melee-decomp (has melee symlink) or standalone melee
-if (PROJECT_ROOT / "melee" / "src" / "melee").exists():
-    ROOT = PROJECT_ROOT / "melee"
-else:
-    ROOT = PROJECT_ROOT
+ROOT = SCRIPT_DIR.parent  # tools/ is in repo root
 
 REPORT_PATH = ROOT / "build/GALE01/report.json"
 SRC_ROOT = ROOT / "src"
+
+# Tool paths
+TOOLS_CACHE_DIR = Path.home() / ".cache" / "melee-tools"
+DTK_VERSION = "v1.8.0"
 
 # Use our bundled objdiff-cli if available
 OBJDIFF_CLI = SCRIPT_DIR / "objdiff-cli"
 if not OBJDIFF_CLI.exists():
     OBJDIFF_CLI = "objdiff-cli"  # Fall back to PATH
+
+
+def get_dtk_download_url() -> str:
+    """Get the appropriate dtk download URL for this platform."""
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+
+    if system == "linux":
+        if machine in ("x86_64", "amd64"):
+            return f"https://github.com/encounter/decomp-toolkit/releases/download/{DTK_VERSION}/dtk-linux-x86_64"
+        elif machine in ("aarch64", "arm64"):
+            return f"https://github.com/encounter/decomp-toolkit/releases/download/{DTK_VERSION}/dtk-linux-aarch64"
+        elif machine in ("i686", "i386"):
+            return f"https://github.com/encounter/decomp-toolkit/releases/download/{DTK_VERSION}/dtk-linux-i686"
+    elif system == "darwin":
+        if machine in ("x86_64", "amd64"):
+            return f"https://github.com/encounter/decomp-toolkit/releases/download/{DTK_VERSION}/dtk-macos-x86_64"
+        elif machine in ("aarch64", "arm64"):
+            return f"https://github.com/encounter/decomp-toolkit/releases/download/{DTK_VERSION}/dtk-macos-arm64"
+    elif system == "windows":
+        return f"https://github.com/encounter/decomp-toolkit/releases/download/{DTK_VERSION}/dtk-windows-x86_64.exe"
+
+    raise RuntimeError(f"Unsupported platform: {system} {machine}")
+
+
+def download_dtk(dest: Path) -> Path:
+    """Download dtk binary to the specified path."""
+    url = get_dtk_download_url()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    print(f"Downloading dtk from {url}...", file=sys.stderr)
+    try:
+        urllib.request.urlretrieve(url, dest)
+        dest.chmod(0o755)
+        print(f"Downloaded dtk to {dest}", file=sys.stderr)
+        return dest
+    except Exception as e:
+        raise RuntimeError(f"Failed to download dtk: {e}")
+
+
+def find_objdump() -> Optional[Path]:
+    """Find powerpc-eabi-objdump in standard locations."""
+    candidates = [
+        Path("/opt/devkitpro/devkitPPC/bin/powerpc-eabi-objdump"),
+        Path.home() / "devkitPro" / "devkitPPC" / "bin" / "powerpc-eabi-objdump",
+    ]
+
+    # Check environment variable
+    if env_path := os.environ.get("PPC_EABI_OBJDUMP"):
+        candidates.insert(0, Path(env_path))
+
+    # Check PATH
+    if objdump_path := shutil.which("powerpc-eabi-objdump"):
+        candidates.insert(0, Path(objdump_path))
+
+    for path in candidates:
+        if path.exists() and os.access(path, os.X_OK):
+            return path
+
+    return None
+
+
+def find_dtk() -> Optional[Path]:
+    """Find dtk in standard locations or cache."""
+    candidates = [
+        SCRIPT_DIR / "dtk",
+        ROOT / "build" / "tools" / "dtk",
+        TOOLS_CACHE_DIR / "dtk",
+    ]
+
+    # Check PATH
+    if dtk_path := shutil.which("dtk"):
+        candidates.insert(0, Path(dtk_path))
+
+    for path in candidates:
+        if path.exists() and os.access(path, os.X_OK):
+            return path
+
+    return None
+
+
+def ensure_disassembler() -> tuple[str, Path]:
+    """
+    Ensure a disassembler is available, downloading if necessary.
+
+    Returns:
+        Tuple of (disassembler_type, path) where type is 'objdump' or 'dtk'
+    """
+    # Prefer objdump if available (faster, more common)
+    if objdump := find_objdump():
+        return ("objdump", objdump)
+
+    # Try dtk
+    if dtk := find_dtk():
+        return ("dtk", dtk)
+
+    # Download dtk as fallback
+    dtk_path = TOOLS_CACHE_DIR / "dtk"
+    download_dtk(dtk_path)
+    return ("dtk", dtk_path)
 
 
 def find_unit_for_function(func_name: str) -> Optional[str]:
@@ -99,15 +202,15 @@ def main() -> int:
 
     # diff
     if args.no_tty:
-        # Use objdump + diff for non-interactive output (works without TTY)
-        objdump = "/opt/devkitpro/devkitPPC/bin/powerpc-eabi-objdump"
-
+        # Use objdump or dtk + diff for non-interactive output (works without TTY)
         import re
 
-        def get_asm(obj_path: str, func: str, normalize: bool = True) -> str:
-            """Extract disassembly for a function from object file."""
+        disasm_type, disasm_path = ensure_disassembler()
+
+        def get_asm_with_objdump(obj_path: str, func: str, normalize: bool = True) -> str:
+            """Extract disassembly for a function using objdump."""
             result = subprocess.run(
-                [objdump, "-d", "-r", obj_path],
+                [str(disasm_path), "-d", "-r", obj_path],
                 cwd=ROOT, capture_output=True, text=True
             )
             lines = result.stdout.split("\n")
@@ -133,6 +236,54 @@ def main() -> int:
                     else:
                         output.append(line)
             return "\n".join(output)
+
+        def get_asm_with_dtk(obj_path: str, func: str, normalize: bool = True) -> str:
+            """Extract disassembly for a function using dtk."""
+            with tempfile.TemporaryDirectory() as tmpdir:
+                asm_file = Path(tmpdir) / "disasm.s"
+                result = subprocess.run(
+                    [str(disasm_path), "elf", "disasm", obj_path, str(asm_file)],
+                    cwd=ROOT, capture_output=True, text=True
+                )
+                if result.returncode != 0 or not asm_file.exists():
+                    return ""
+
+                asm_content = asm_file.read_text()
+
+            # Parse dtk output format to find the function
+            # dtk outputs standard GNU as format: "func_name:" followed by instructions
+            lines = asm_content.split("\n")
+            in_func = False
+            output = []
+
+            for line in lines:
+                # Function labels in dtk output are like "func_name:" at column 0
+                if line.startswith(f"{func}:"):
+                    in_func = True
+                    if normalize:
+                        output.append(f"<{func}>:")
+                    else:
+                        output.append(line)
+                elif in_func:
+                    # End of function: another label at column 0 or .global/.section directive
+                    if line and not line.startswith((" ", "\t")) and (line.endswith(":") or line.startswith(".")):
+                        break
+                    if normalize and line.strip():
+                        # dtk outputs like "  lwz r3, 0(r4)"
+                        # Normalize by stripping leading whitespace to consistent indent
+                        stripped = line.strip()
+                        if stripped and not stripped.startswith("."):  # Skip directives
+                            output.append(f"  {stripped}")
+                    elif line.strip():
+                        output.append(line)
+
+            return "\n".join(output)
+
+        # Choose the appropriate disassembly function
+        if disasm_type == "objdump":
+            get_asm = get_asm_with_objdump
+        else:
+            get_asm = get_asm_with_dtk
 
         ref_asm = get_asm(str(ROOT / ref_obj), func_name)
         our_asm = get_asm(str(ROOT / our_obj), func_name)
