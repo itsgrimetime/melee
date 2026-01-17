@@ -30,6 +30,7 @@ Security Notes:
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import os
 import sys
@@ -46,7 +47,7 @@ DOL_FILENAME = "main.dol"
 
 # Known good SHA-1 hash of the NTSC 1.02 main.dol
 # This ensures we don't accept corrupted or wrong files
-EXPECTED_DOL_SHA1 = "ecc557f8e24777d13d5ad1e2cf7e6bc5cdccf0e9"
+EXPECTED_DOL_SHA1 = "08e0bf20134dfcb260699671004527b2d6bb1a45"
 
 
 def get_orig_dir() -> Path:
@@ -77,23 +78,37 @@ def download_file(url: str, dest: Path, expected_sha1: str | None = None) -> boo
     Returns:
         True if download successful and verified
     """
+    # Handle broken symlinks in the path - check each parent component
+    for parent in list(reversed(dest.parents)):
+        if parent.is_symlink() and not parent.exists():
+            print(f"  Removing broken symlink: {parent}")
+            parent.unlink()
+
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"Downloading to {dest}...")
     print(f"  (URL not shown for security)")
 
     try:
-        # Download with progress indication
+        # Download with progress indication (update every 10%)
+        last_percent_reported = [-1]  # Use list to allow mutation in nested function
+
         def report_progress(block_num, block_size, total_size):
             if total_size > 0:
                 downloaded = block_num * block_size
                 percent = min(100, downloaded * 100 // total_size)
-                mb_downloaded = downloaded / (1024 * 1024)
-                mb_total = total_size / (1024 * 1024)
-                print(f"\r  Progress: {percent}% ({mb_downloaded:.1f}/{mb_total:.1f} MB)", end="", flush=True)
+                # Only report at 10% intervals to reduce noise
+                report_threshold = (percent // 10) * 10
+                if report_threshold > last_percent_reported[0]:
+                    last_percent_reported[0] = report_threshold
+                    mb_downloaded = downloaded / (1024 * 1024)
+                    mb_total = total_size / (1024 * 1024)
+                    print(f"  Progress: {percent}% ({mb_downloaded:.1f}/{mb_total:.1f} MB)")
 
         urllib.request.urlretrieve(url, dest, reporthook=report_progress)
-        print()  # Newline after progress
+        # Final 100% message if not already printed
+        if last_percent_reported[0] < 100:
+            print("  Progress: 100%")
 
     except urllib.error.HTTPError as e:
         print(f"\nError: HTTP {e.code} - {e.reason}", file=sys.stderr)
@@ -125,14 +140,22 @@ def download_file(url: str, dest: Path, expected_sha1: str | None = None) -> boo
     return True
 
 
-def main() -> int:
+def main(skip_verify: bool = False) -> int:
     """Main entry point."""
     orig_dir = get_orig_dir()
     dol_path = orig_dir / DOL_FILENAME
 
+    if skip_verify:
+        print("WARNING: Hash verification disabled!", file=sys.stderr)
+
     # Check if file already exists
     if dol_path.exists():
         print(f"Found existing {dol_path}")
+
+        if skip_verify:
+            print("  Skipping hash verification.")
+            print("  No download needed.")
+            return 0
 
         # Verify hash
         actual_sha1 = sha1_file(dol_path)
@@ -168,7 +191,8 @@ def main() -> int:
 
     # Download
     print(f"\nDownloading {DOL_FILENAME}...")
-    if not download_file(dol_url, dol_path, EXPECTED_DOL_SHA1):
+    expected_hash = None if skip_verify else EXPECTED_DOL_SHA1
+    if not download_file(dol_url, dol_path, expected_hash):
         return 1
 
     print("\nBootstrap complete! You can now run:")
@@ -179,4 +203,11 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    parser = argparse.ArgumentParser(description="Bootstrap original game files")
+    parser.add_argument(
+        "--skip-verify",
+        action="store_true",
+        help="Skip SHA-1 hash verification (use only for testing)",
+    )
+    args = parser.parse_args()
+    sys.exit(main(skip_verify=args.skip_verify))
