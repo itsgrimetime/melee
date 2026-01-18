@@ -495,23 +495,22 @@ export class DiffPanel {
             });
         }
 
-        // Add hover listeners to ASM columns
-        document.querySelectorAll('.target-col, .current-col').forEach(col => {
-            col.addEventListener('mouseenter', (e) => {
+        // Add hover listeners to mnemonic spans only
+        document.querySelectorAll('.mnemonic').forEach(mnemonicEl => {
+            mnemonicEl.addEventListener('mouseenter', (e) => {
                 cancelHide();
                 if (tooltipTimeout) {
                     clearTimeout(tooltipTimeout);
                 }
-                const text = col.textContent;
-                const mnemonic = extractMnemonic(text);
+                const mnemonic = mnemonicEl.textContent?.toLowerCase().replace(/[+-]$/, '');
                 if (mnemonic) {
                     tooltipTimeout = setTimeout(() => {
-                        showTooltip(col, mnemonic);
-                    }, 400);  // Delay before showing
+                        showTooltip(mnemonicEl, mnemonic);
+                    }, 300);  // Delay before showing
                 }
             });
 
-            col.addEventListener('mouseleave', () => {
+            mnemonicEl.addEventListener('mouseleave', () => {
                 if (tooltipTimeout) {
                     clearTimeout(tooltipTimeout);
                     tooltipTimeout = null;
@@ -630,6 +629,11 @@ export class DiffPanel {
         }
 
         // Apply standard syntax highlighting to non-mismatched parts
+        // Mnemonic (if not already highlighted as mismatched)
+        if (!mnemonicMismatch) {
+            html = html.replace(/^(\w+)/, '<span class="mnemonic">$1</span>');
+        }
+
         // Registers (not already highlighted)
         html = html.replace(/(?<!<[^>]*)\b(r\d{1,2}|f\d{1,2}|sp|lr|cr\d?)\b(?![^<]*>)/g,
             '<span class="register">$1</span>');
@@ -968,6 +972,7 @@ body {
 
 .mnemonic {
     color: var(--vscode-symbolIcon-keywordForeground, #569cd6);
+    cursor: help;
 }
 
 .label {
