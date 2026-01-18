@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { DiffResult, DiffLine } from './diffProvider';
 import { BranchArrow } from './asmParser';
+import { ppcInstructions } from './ppcReference';
 
 export class DiffPanel {
     public static currentPanel: DiffPanel | undefined;
@@ -74,7 +75,9 @@ export class DiffPanel {
     public updateDiff(result: DiffResult) {
         this._currentFunction = result.functionName;
         this._panel.title = `ASM Diff: ${result.functionName} (${result.matchPercent}%)`;
-        this._panel.webview.html = this._getDiffHtml(result);
+        // Add timestamp to force unique HTML and prevent VSCode caching
+        const html = this._getDiffHtml(result, Date.now());
+        this._panel.webview.html = html;
     }
 
     public navigateDiff(direction: 'next' | 'prev') {
@@ -117,13 +120,14 @@ export class DiffPanel {
 </html>`;
     }
 
-    private _getDiffHtml(result: DiffResult): string {
+    private _getDiffHtml(result: DiffResult, timestamp?: number): string {
         const statusClass = result.match ? 'match' : 'mismatch';
         const statusText = result.match ? 'MATCH' : 'MISMATCH';
 
         const rowsHtml = result.diffLines.map((line, idx) => this._renderDiffRow(line, idx, idx === 0)).join('\n');
 
         return `<!DOCTYPE html>
+<!-- timestamp: ${timestamp || 0} -->
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -141,9 +145,9 @@ export class DiffPanel {
     <div class="diff-container">
         <div class="column-headers">
             <div class="col-header line-num-header"></div>
-            <div class="col-header marker-header"></div>
             <div class="col-header arrow-header"></div>
             <div class="col-header target-header">Target (Expected)</div>
+            <div class="col-header marker-header"></div>
             <div class="col-header arrow-header"></div>
             <div class="col-header current-header">Current (Compiled)</div>
         </div>
@@ -385,6 +389,139 @@ export class DiffPanel {
             }
         });
     </script>
+    <div id="instruction-tooltip" class="instruction-tooltip"></div>
+    <script>
+        // PPC Instruction Reference
+        const ppcRef = ${JSON.stringify(ppcInstructions)};
+
+        let tooltipTimeout = null;
+
+        // Extract mnemonic from ASM text
+        function extractMnemonic(text) {
+            if (!text) return null;
+            const trimmed = text.trim();
+            // Skip labels
+            if (trimmed.startsWith('<') || trimmed.startsWith('R_')) return null;
+            // First word is the mnemonic
+            const match = trimmed.match(/^(\\S+)/);
+            if (match) {
+                // Remove trailing . or other suffixes for lookup
+                return match[1].toLowerCase().replace(/\\.$/, '');
+            }
+            return null;
+        }
+
+        // Show tooltip for instruction
+        function showTooltip(element, mnemonic) {
+            const tooltip = document.getElementById('instruction-tooltip');
+            const info = ppcRef[mnemonic] || ppcRef[mnemonic.replace(/[+-]$/, '')];
+            if (!info || !tooltip) return;
+
+            // Build tooltip content
+            let html = \`
+                <div class="tooltip-header">
+                    <span class="tooltip-mnemonic">\${info.mnemonic}</span>
+                    <span class="tooltip-name">\${info.name}</span>
+                </div>
+                <div class="tooltip-syntax">\${info.syntax}</div>
+                <div class="tooltip-desc">\${info.description}</div>
+            \`;
+
+            if (info.operation) {
+                html += \`<div class="tooltip-operation"><code>\${info.operation}</code></div>\`;
+            }
+
+            if (info.flags) {
+                html += \`<div class="tooltip-flags">Flags: \${info.flags}</div>\`;
+            }
+
+            html += \`<div class="tooltip-category">\${info.category}</div>\`;
+
+            tooltip.innerHTML = html;
+            tooltip.style.display = 'block';
+
+            // Position tooltip near element
+            const rect = element.getBoundingClientRect();
+            const containerRect = document.body.getBoundingClientRect();
+
+            let left = rect.left + 10;
+            let top = rect.bottom + 5;
+
+            // Keep tooltip in view
+            if (left + 350 > containerRect.right) {
+                left = containerRect.right - 360;
+            }
+            if (top + 200 > containerRect.bottom) {
+                top = rect.top - 200;
+            }
+
+            tooltip.style.left = left + 'px';
+            tooltip.style.top = top + 'px';
+        }
+
+        let hideTimeout = null;
+        let isOverTooltip = false;
+
+        function hideTooltip() {
+            const tooltip = document.getElementById('instruction-tooltip');
+            if (tooltip) tooltip.style.display = 'none';
+        }
+
+        function scheduleHide() {
+            // Don't hide if mouse is over tooltip
+            if (isOverTooltip) return;
+
+            hideTimeout = setTimeout(() => {
+                if (!isOverTooltip) {
+                    hideTooltip();
+                }
+            }, 100);
+        }
+
+        function cancelHide() {
+            if (hideTimeout) {
+                clearTimeout(hideTimeout);
+                hideTimeout = null;
+            }
+        }
+
+        // Keep tooltip visible when hovering over it
+        const tooltipEl = document.getElementById('instruction-tooltip');
+        if (tooltipEl) {
+            tooltipEl.addEventListener('mouseenter', () => {
+                isOverTooltip = true;
+                cancelHide();
+            });
+            tooltipEl.addEventListener('mouseleave', () => {
+                isOverTooltip = false;
+                scheduleHide();
+            });
+        }
+
+        // Add hover listeners to mnemonic spans only
+        document.querySelectorAll('.mnemonic').forEach(mnemonicEl => {
+            mnemonicEl.addEventListener('mouseenter', (e) => {
+                cancelHide();
+                if (tooltipTimeout) {
+                    clearTimeout(tooltipTimeout);
+                }
+                const mnemonic = mnemonicEl.textContent?.toLowerCase().replace(/[+-]$/, '');
+                if (mnemonic) {
+                    tooltipTimeout = setTimeout(() => {
+                        showTooltip(mnemonicEl, mnemonic);
+                    }, 300);  // Delay before showing
+                }
+            });
+
+            mnemonicEl.addEventListener('mouseleave', () => {
+                if (tooltipTimeout) {
+                    clearTimeout(tooltipTimeout);
+                    tooltipTimeout = null;
+                }
+                scheduleHide();
+            });
+        });
+    </script>
 </body>
 </html>`;
     }
@@ -398,9 +535,9 @@ export class DiffPanel {
             const headerText = line.target.trim() || line.current.trim();
             return `<div class="diff-row header-row" data-offset="-1">
     <div class="line-num"></div>
-    <div class="marker-col"></div>
     <div class="arrow-gutter target-gutter"></div>
     <div class="target-col">${this._escapeHtml(headerText)}</div>
+    <div class="marker-col"></div>
     <div class="arrow-gutter current-gutter"></div>
     <div class="current-col">${this._escapeHtml(headerText)}</div>
 </div>`;
@@ -420,7 +557,7 @@ export class DiffPanel {
             switch (line.diffType) {
                 case 'r': marker = '<span class="diff-marker marker-reg">r</span>'; break;
                 case 'i': marker = '<span class="diff-marker marker-imm">i</span>'; break;
-                case 'o': marker = '<span class="diff-marker marker-op">o</span>'; break;
+                case 'o': marker = '<span class="diff-marker marker-op">|</span>'; break;
                 case 's': marker = '<span class="diff-marker marker-stack">s</span>'; break;
                 default: marker = '<span class="diff-marker marker-diff">|</span>';
             }
@@ -436,9 +573,9 @@ export class DiffPanel {
 
         return `<div class="diff-row ${statusClass} ${diffTypeClass}" data-offset="${offset}">
     <div class="line-num">${offsetHex}</div>
-    <div class="marker-col">${marker}</div>
     <div class="arrow-gutter target-gutter"></div>
     <div class="target-col">${targetHtml}</div>
+    <div class="marker-col">${marker}</div>
     <div class="arrow-gutter current-gutter"></div>
     <div class="current-col">${currentHtml}</div>
 </div>`;
@@ -495,6 +632,11 @@ export class DiffPanel {
         }
 
         // Apply standard syntax highlighting to non-mismatched parts
+        // Mnemonic (if not already highlighted as mismatched)
+        if (!mnemonicMismatch) {
+            html = html.replace(/^(\w+)/, '<span class="mnemonic">$1</span>');
+        }
+
         // Registers (not already highlighted)
         html = html.replace(/(?<!<[^>]*)\b(r\d{1,2}|f\d{1,2}|sp|lr|cr\d?)\b(?![^<]*>)/g,
             '<span class="register">$1</span>');
@@ -672,7 +814,11 @@ body {
 }
 
 .col-header.target-header {
-    border-right: 1px solid var(--border-color);
+    /* No border - marker column provides the divider */
+}
+
+.col-header.marker-header {
+    border-left: 1px solid var(--border-color);
 }
 
 .diff-rows {
@@ -730,32 +876,27 @@ body {
 .diff-row.diff-o { background: rgba(220, 53, 69, 0.15); }    /* opcode - red */
 .diff-row.diff-s { background: rgba(255, 193, 7, 0.15); }    /* stack - yellow */
 
-/* Marker column */
+/* Marker column - between target and current */
 .marker-col {
-    width: 20px;
+    width: 16px;
     text-align: center;
     font-weight: bold;
     flex-shrink: 0;
-    font-size: 11px;
+    font-size: 12px;
+    border-left: 1px solid var(--border-color);
 }
 
 .diff-marker {
-    display: inline-block;
-    width: 14px;
-    height: 14px;
-    line-height: 14px;
-    text-align: center;
-    border-radius: 2px;
-    font-size: 10px;
+    font-weight: bold;
 }
 
-.marker-reg { background: #9cdcfe; color: #1e1e1e; }
-.marker-imm { background: #b5cea8; color: #1e1e1e; }
-.marker-op { background: #f14c4c; color: white; }
-.marker-stack { background: #cca700; color: #1e1e1e; }
-.marker-diff { background: #888; color: white; }
-.marker-target { background: #f14c4c; color: white; }
-.marker-current { background: #cca700; color: #1e1e1e; }
+.marker-reg { color: #9cdcfe; }   /* register - blue */
+.marker-imm { color: #b5cea8; }   /* immediate - green */
+.marker-op { color: #f14c4c; }    /* opcode - red */
+.marker-stack { color: #cca700; } /* stack - yellow */
+.marker-diff { color: #888; }     /* generic diff - gray */
+.marker-target { color: #f14c4c; } /* target only (>) - red */
+.marker-current { color: #cca700; } /* current only (<) - yellow */
 
 /* Mismatch highlighting */
 .mismatch-highlight {
@@ -820,7 +961,7 @@ body {
 }
 
 .target-col {
-    border-right: 1px solid var(--border-color);
+    /* No border - marker-col provides the divider */
 }
 
 /* Syntax highlighting */
@@ -834,6 +975,7 @@ body {
 
 .mnemonic {
     color: var(--vscode-symbolIcon-keywordForeground, #569cd6);
+    cursor: help;
 }
 
 .label {
@@ -880,6 +1022,83 @@ body {
     overflow-x: auto;
     white-space: pre-wrap;
     word-break: break-all;
+}
+
+/* Instruction tooltip */
+.instruction-tooltip {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    max-width: 400px;
+    padding: 12px;
+    background: var(--vscode-editorHoverWidget-background, #252526);
+    border: 1px solid var(--vscode-editorHoverWidget-border, #454545);
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.tooltip-header {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 6px;
+}
+
+.tooltip-mnemonic {
+    font-weight: bold;
+    font-size: 15px;
+    color: var(--vscode-symbolIcon-keywordForeground, #569cd6);
+}
+
+.tooltip-name {
+    color: var(--vscode-descriptionForeground, #888);
+    font-style: italic;
+}
+
+.tooltip-syntax {
+    font-family: var(--vscode-editor-font-family), monospace;
+    background: rgba(255, 255, 255, 0.05);
+    padding: 6px 8px;
+    border-radius: 3px;
+    margin-bottom: 8px;
+    color: var(--vscode-symbolIcon-functionForeground, #dcdcaa);
+}
+
+.tooltip-desc {
+    margin-bottom: 8px;
+    color: var(--fg-color);
+}
+
+.tooltip-operation {
+    font-family: var(--vscode-editor-font-family), monospace;
+    background: rgba(0, 100, 200, 0.1);
+    padding: 6px 8px;
+    border-radius: 3px;
+    margin-bottom: 8px;
+    border-left: 3px solid var(--vscode-symbolIcon-keywordForeground, #569cd6);
+}
+
+.tooltip-operation code {
+    color: var(--vscode-symbolIcon-variableForeground, #9cdcfe);
+}
+
+.tooltip-flags {
+    font-size: 11px;
+    color: var(--vscode-symbolIcon-constantForeground, #b5cea8);
+    margin-bottom: 6px;
+}
+
+.tooltip-category {
+    font-size: 10px;
+    text-transform: uppercase;
+    color: var(--vscode-descriptionForeground, #888);
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border-color);
 }
 </style>`;
     }

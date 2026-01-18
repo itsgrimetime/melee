@@ -6,6 +6,9 @@ import { CodeLensProvider } from './codeLensProvider';
 let diffProvider: DiffProvider;
 let statusBarItem: vscode.StatusBarItem;
 let lastDiffResult: DiffResult | undefined;
+let buildInProgress = false;
+let pendingBuildFunc: string | undefined;
+let saveDebounceTimer: NodeJS.Timeout | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('Melee Decomp Diff extension activated');
@@ -65,13 +68,23 @@ export function activate(context: vscode.ExtensionContext) {
         codeLensProvider
     );
 
-    // Watch for file saves to refresh diff
-    const saveWatcher = vscode.workspace.onDidSaveTextDocument(async (doc) => {
+    // Watch for file saves to refresh diff (with debounce)
+    const saveWatcher = vscode.workspace.onDidSaveTextDocument((doc) => {
         if (doc.languageId === 'c' && DiffPanel.currentPanel) {
-            // Re-run diff for current function
             const currentFunc = DiffPanel.currentPanel.currentFunction;
             if (currentFunc) {
-                await showDiffForFunction(currentFunc, context);
+                // Debounce rapid saves
+                if (saveDebounceTimer) {
+                    clearTimeout(saveDebounceTimer);
+                }
+                saveDebounceTimer = setTimeout(() => {
+                    // If a build is in progress, queue this one
+                    if (buildInProgress) {
+                        pendingBuildFunc = currentFunc;
+                        return;
+                    }
+                    showDiffForFunction(currentFunc, context);
+                }, 500);  // 500ms debounce
             }
         }
     });
@@ -109,6 +122,7 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 async function showDiffForFunction(functionName: string, context: vscode.ExtensionContext) {
+    buildInProgress = true;
     try {
         // Show loading state
         DiffPanel.createOrShow(context.extensionUri);
@@ -133,6 +147,14 @@ async function showDiffForFunction(functionName: string, context: vscode.Extensi
         DiffPanel.currentPanel?.setError(message);
         statusBarItem.text = '$(error) Build failed';
         statusBarItem.show();
+    } finally {
+        buildInProgress = false;
+        // Process any pending build
+        if (pendingBuildFunc) {
+            const nextFunc = pendingBuildFunc;
+            pendingBuildFunc = undefined;
+            showDiffForFunction(nextFunc, context);
+        }
     }
 }
 
