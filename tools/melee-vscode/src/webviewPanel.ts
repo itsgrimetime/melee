@@ -62,7 +62,6 @@ export class DiffPanel {
     }
 
     public setLoading(functionName: string) {
-        console.log(`[melee-decomp] setLoading called for ${functionName}`);
         this._currentFunction = functionName;
         this._panel.title = `ASM Diff: ${functionName}`;
         // Send message to show loading overlay instead of replacing content
@@ -74,15 +73,11 @@ export class DiffPanel {
     }
 
     public updateDiff(result: DiffResult) {
-        console.log(`[melee-decomp] updateDiff called for ${result.functionName}, ${result.matchPercent}%`);
         this._currentFunction = result.functionName;
         this._panel.title = `ASM Diff: ${result.functionName} (${result.matchPercent}%)`;
-        // Add timestamp to force unique HTML and prevent caching
-        const timestamp = Date.now();
-        const html = this._getDiffHtml(result, timestamp);
-        console.log(`[melee-decomp] Setting webview HTML (length: ${html.length}, ts: ${timestamp})`);
+        // Add timestamp to force unique HTML and prevent VSCode caching
+        const html = this._getDiffHtml(result, Date.now());
         this._panel.webview.html = html;
-        console.log(`[melee-decomp] Webview HTML set`);
     }
 
     public navigateDiff(direction: 'next' | 'prev') {

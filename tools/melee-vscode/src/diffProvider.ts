@@ -57,13 +57,7 @@ export class DiffProvider {
     }
 
     async getDiff(functionName: string): Promise<DiffResult> {
-        // First try the enhanced JSON output from checkdiff.py
         const checkdiffPath = path.join(this.workspaceRoot, 'tools', 'checkdiff.py');
-
-        console.log(`[melee-decomp] getDiff called for: ${functionName}`);
-        console.log(`[melee-decomp] workspaceRoot: ${this.workspaceRoot}`);
-        console.log(`[melee-decomp] checkdiffPath: ${checkdiffPath}`);
-
         const TIMEOUT_MS = 60000;  // 60 second timeout
 
         return new Promise((resolve, reject) => {
@@ -76,8 +70,6 @@ export class DiffProvider {
                 proc.kill();
                 reject(new Error(`checkdiff.py timed out after ${TIMEOUT_MS / 1000}s`));
             }, TIMEOUT_MS);
-
-            console.log(`[melee-decomp] Spawned process for ${functionName}`);
 
             let stdout = '';
             let stderr = '';
@@ -92,25 +84,16 @@ export class DiffProvider {
 
             proc.on('close', (code) => {
                 clearTimeout(timeout);
-                console.log(`[melee-decomp] Process exited with code: ${code}`);
-                console.log(`[melee-decomp] stdout length: ${stdout.length}`);
-                console.log(`[melee-decomp] stderr length: ${stderr.length}`);
-                if (stderr) {
-                    console.log(`[melee-decomp] stderr: ${stderr.slice(0, 500)}`);
-                }
 
                 if (code !== 0) {
-                    // Build or diff failed
                     const errorMsg = stderr || stdout || `checkdiff.py exited with code ${code}`;
-                    console.log(`[melee-decomp] Error: ${errorMsg.slice(0, 500)}`);
                     reject(new Error(errorMsg.trim()));
                     return;
                 }
 
-                // Try to find JSON in stdout (skip any non-JSON prefix)
+                // Try to find JSON in stdout
                 const jsonMatch = stdout.match(/^\s*(\{[\s\S]*\})\s*$/);
                 if (!jsonMatch) {
-                    console.log(`[melee-decomp] No JSON match. stdout: ${stdout.slice(0, 200)}`);
                     reject(new Error(`No JSON found in output. stdout: ${stdout.slice(0, 200)}`));
                     return;
                 }
@@ -118,10 +101,8 @@ export class DiffProvider {
                 try {
                     const jsonData = JSON.parse(jsonMatch[1]);
                     const result = this.parseCheckdiffJson(jsonData, functionName);
-                    console.log(`[melee-decomp] Success! Match: ${result.match}, ${result.matchPercent}%`);
                     resolve(result);
                 } catch (e) {
-                    console.log(`[melee-decomp] JSON parse error: ${e}`);
                     reject(new Error(`Failed to parse checkdiff output: ${e}\nOutput: ${stdout.slice(0, 500)}`));
                 }
             });
