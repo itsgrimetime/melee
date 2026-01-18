@@ -13,7 +13,7 @@
 /* 2DDB38 */ UNK_RET it_802DDB38(UNK_PARAMS);
 /* 2DDBE8 */ void it_802DDBE8(Item_GObj*);
 /* 2DDC8C */ void fn_802DDC8C(Item_GObj*);
-/* 2DDD38 */ void it_802DDD38(Item_GObj* gobj);
+/* 2DDD38 */ UNK_RET it_802DDD38(UNK_PARAMS);
 /* 2DDEB4 */ UNK_RET it_802DDEB4(Item_GObj*);
 /* 2DE040 */ void it_802DE040(Item_GObj*);
 /* 2DE0F0 */ void it_802DE0F0(Item_GObj*);
@@ -56,12 +56,12 @@
 /* 2DFB90 */ void itZrshell_UnkMotion10_Phys(Item_GObj*);
 /* 2DFBAC */ bool itZrshell_UnkMotion10_Coll(Item_GObj*);
 /* 2DFC34 */ bool it_2725_Logic11_DmgDealt(Item_GObj*);
-/* 2DFC58 */ bool it_2725_Logic11_DmgReceived(Item_GObj* gobj);
+/* 2DFC58 */ bool it_2725_Logic11_DmgReceived(Item_GObj*);
 /* 2DFC90 */ bool it_2725_Logic11_Reflected(Item_GObj*);
 /* 2DFCB0 */ bool it_2725_Logic11_Clanked(Item_GObj*);
 /* 2DFD60 */ bool it_2725_Logic11_HitShield(Item_GObj*);
 /* 2DFE40 */ bool it_2725_Logic11_ShieldBounced(Item_GObj*);
-/* 2DFE7C */ int fn_802DFE7C(Item_GObj* gobj);
+/* 2DFE7C */ s32 fn_802DFE7C(Item_GObj* gobj);
 /* 2DFED4 */ void it_802DFED4(Item_GObj*, Item_GObj*);
 /* 2DFEF4 */ void it_2725_Logic11_Destroyed(Item_GObj*);
 /* 2DFF14 */ UNK_RET it_802DFF14(UNK_PARAMS);

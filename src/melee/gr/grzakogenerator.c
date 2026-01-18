@@ -14,10 +14,7 @@
 
 /// #grZakoGenerator_801CACB8
 
-s32 fn_801CADBC(void)
-{
-    return grZakoGenerator_801CA8B4(0);
-}
+/// #fn_801CADBC
 
 s32 grZakoGenerator_801CADE0(void)
 {

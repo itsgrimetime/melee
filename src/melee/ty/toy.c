@@ -1,7 +1,5 @@
 #include "toy.h"
 
-#include "m2c_macros.h"
-
 #include "baselib/cobj.h"
 #include "baselib/controller.h"
 #include "baselib/displayfunc.h"
@@ -442,25 +440,25 @@ s16 un_803062BC(s32 trophyId)
 
 /// #un_803067BC
 
-void un_803068E0(HSD_GObj* gobj)
+s32 un_803068E0(HSD_GObj* gobj)
 {
-    HSD_CObj* cobj = M2C_FIELD(gobj, HSD_CObj**, 0x28);
-
-    if (HSD_CObjSetCurrent(cobj) != 0) {
+    if (HSD_CObjSetCurrent(gobj->hsd_obj) != 0) {
         HSD_GObj_80390ED0(gobj, 7);
         HSD_CObjEndCurrent();
         HSD_FogSet(NULL);
     }
 }
+
 void un_80306930(void* arg)
 {
-    HSD_FogSet(M2C_FIELD(arg, HSD_Fog**, 0x28));
+    HSD_FogSet(((HSD_GObj*) arg)->hsd_obj);
 }
+
 /// #un_80306954
 
 void un_80306A0C(void* arg0)
 {
-    HSD_Fog* fog = M2C_FIELD(arg0, HSD_Fog**, 0x28);
+    HSD_Fog* fog = ((HSD_GObj*) arg0)->hsd_obj;
 
     if (un_804D6E54 == 0) {
         HSD_FogSet(NULL);
@@ -517,20 +515,20 @@ void un_80306C5C(void* arg0)
 {
     s32 idx;
     s32 offset;
-    void* base;
-    void* data;
+    TyLightData* base;
+    HSD_GObj* data;
     u8* table;
-    void* lobj;
-    void* next;
+    HSD_LObj* lobj;
+    HSD_LObj* next;
     void* unused1;
     void* unused2;
 
     idx = 0;
     offset = idx * 0xC;
     base = un_804D6ED4;
-    data = M2C_FIELD(base, void**, 0x4);
+    data = base->gobj;
     table = (u8*) base + offset;
-    lobj = M2C_FIELD(data, void**, 0x28);
+    lobj = data->hsd_obj;
 
     while (lobj != NULL) {
         HSD_LObjSetPosition(lobj, (Vec3*) (table + 0x1C));
@@ -539,12 +537,12 @@ void un_80306C5C(void* arg0)
         if (lobj == NULL) {
             next = NULL;
         } else {
-            next = M2C_FIELD(lobj, void**, 0xC);
+            next = lobj->next;
         }
         lobj = next;
     }
 
-    HSD_LObjAnimAll(M2C_FIELD(arg0, void**, 0x28));
+    HSD_LObjAnimAll(((HSD_GObj*) arg0)->hsd_obj);
 }
 
 void Toy_RemoveUserData(void* ptr)
@@ -554,9 +552,11 @@ void Toy_RemoveUserData(void* ptr)
 
 void un_80306D14(void)
 {
-    if (M2C_FIELD(un_804A284C, s8*, 0) == 1) {
+    TyModeState* state = (TyModeState*) un_804A284C;
+
+    if (state->x0 == 1) {
         lbAudioAx_800237A8(0xAA, 0x7F, 0x40);
-    } else if (M2C_FIELD(un_804A284C, s8*, 0) == 2) {
+    } else if (state->x0 == 2) {
         lbAudioAx_800237A8(0xAB, 0x7F, 0x40);
     }
 }
@@ -856,16 +856,18 @@ void un_80311788(void)
         DevText_Erase(un_804D6E9C);
         DevText_SetCursorXY(un_804D6E9C, 0, 0);
 
-        f27 = un_803060BC(un_804D6EDC[M2C_FIELD(un_804D6EE0, s16*, 0x154)], 5);
-        f28 = un_803060BC(un_804D6EDC[M2C_FIELD(un_804D6EE0, s16*, 0x154)], 4);
-        f29 = un_803060BC(un_804D6EDC[M2C_FIELD(un_804D6EE0, s16*, 0x154)], 3);
-        f30 = un_803060BC(un_804D6EDC[M2C_FIELD(un_804D6EE0, s16*, 0x154)], 2);
-        f31 = un_803060BC(un_804D6EDC[M2C_FIELD(un_804D6EE0, s16*, 0x154)], 1);
+        {
+            TyDisplayData* display = un_804D6EE0;
+            f27 = un_803060BC(un_804D6EDC[display->selectedIdx], 5);
+            f28 = un_803060BC(un_804D6EDC[display->selectedIdx], 4);
+            f29 = un_803060BC(un_804D6EDC[display->selectedIdx], 3);
+            f30 = un_803060BC(un_804D6EDC[display->selectedIdx], 2);
+            f31 = un_803060BC(un_804D6EDC[display->selectedIdx], 1);
 
-        sprintf(
-            buf, un_803FE2A4,
-            un_803060BC(un_804D6EDC[M2C_FIELD(un_804D6EE0, s16*, 0x154)], 0),
-            f31, f30, f29, f28, f27);
+            sprintf(buf, un_803FE2A4,
+                    un_803060BC(un_804D6EDC[display->selectedIdx], 0), f31,
+                    f30, f29, f28, f27);
+        }
         DevText_Print(un_804D6E9C, buf);
     }
 }
@@ -877,7 +879,9 @@ void un_80311788(void)
 
 void un_80312018_OnFrame(void)
 {
-    if (M2C_FIELD(un_804A284C, s8*, 4) != 0) {
+    TyModeState* state = (TyModeState*) un_804A284C;
+
+    if (state->x4 != 0) {
         un_80311F5C();
         gm_801A4B60();
     }
@@ -892,7 +896,7 @@ void un_80312050(void)
     Vec3 eye;
     Vec3 scaled;
     HSD_CObj* cobj;
-    void* data;
+    TyViewData* data;
     volatile f32* wgpipe_f32;
     u8 color_ff;
     u8 color_00;
@@ -901,7 +905,7 @@ void un_80312050(void)
     data = un_804D6E6C;
     cobj = HSD_CObjGetCurrent();
 
-    if ((s8) ((u8*) data)[4] == 0) {
+    if (data->x4 == 0) {
         HSD_CObjGetInterest(cobj, &interest);
         HSD_CObjGetLeftVector(cobj, &left);
         HSD_CObjGetUpVector(cobj, &up);

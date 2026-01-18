@@ -1,7 +1,6 @@
 #include "itpikachuthunder.h"
 
 #include "it/inlines.h"
-#include "it/it_26B1.h"
 
 int it_802B1DEC(Item_GObj* arg0)
 {
@@ -25,15 +24,7 @@ s32 it_802B1FC8(Item_GObj* gobj)
 
 /// #it_802B211C
 
-bool itPikachuthunder_UnkMotion1_Anim(Item_GObj* gobj)
-{
-    Item* ip = gobj->user_data;
-    ip->xD44_lifeTimer--;
-    if (ip->xD44_lifeTimer <= 0.0f) {
-        return true;
-    }
-    return false;
-}
+/// #itPikachuthunder_UnkMotion1_Anim
 
 /// #itPikachuthunder_UnkMotion1_Coll
 
@@ -61,11 +52,4 @@ bool it_2725_Logic39_Absorbed(Item_GObj* arg0)
     return false;
 }
 
-void it_2725_Logic39_EvtUnk(Item_GObj* gobj, Item_GObj* ref_gobj)
-{
-    Item* ip = gobj->user_data;
-    if (M2C_FIELD(ip, Item_GObj**, 0xE0C) == ref_gobj) {
-        M2C_FIELD(ip, Item_GObj**, 0xE0C) = NULL;
-    }
-    it_8026B894(gobj, ref_gobj);
-}
+/// #it_2725_Logic39_EvtUnk

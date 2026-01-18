@@ -35,7 +35,7 @@
 /* 2EEEC4 */ void itWhispyapple_UnkMotion7_Phys(Item_GObj* gobj);
 /* 2EEEC8 */ bool itWhispyapple_UnkMotion7_Coll(Item_GObj*);
 /* 2EEED0 */ bool it_802EEED0(Item_GObj*);
-/* 2EEED8 */ bool it_802EEED8(Item_GObj* gobj);
+/* 2EEED8 */ bool it_802EEED8(Item_GObj*);
 /* 2EEF10 */ bool it_802EEF10(Item_GObj*);
 /* 2EEF30 */ bool it_802EEF30(Item_GObj*);
 /* 2EEF68 */ bool it_802EEF68(Item_GObj*);

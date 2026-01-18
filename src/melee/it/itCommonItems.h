@@ -102,7 +102,6 @@ typedef struct itBombHeiAttributes {
 typedef struct itBox_ItemVars {
     s32 xDD4;
     s32 xDD8;
-    Ground_GObj* xDDC;
 } itBox_ItemVars;
 
 typedef struct itDosei_ItemVars {
@@ -111,8 +110,8 @@ typedef struct itDosei_ItemVars {
     f32 xDDC;
     s32 xDE0;
     Vec3 xDE4;
-    s32 xDF0;
-    s32 xDF4;
+    f32 xDF0;
+    f32 xDF4;
     Vec3 xDF8;
 } itDosei_ItemVars;
 
@@ -311,9 +310,7 @@ typedef struct itWhispyAppleAttributes {
 } itWhispyAppleAttributes;
 
 typedef struct itFreeze_ItemVars {
-    /*  +0 */ s32 x0;
-    /*  +4 */ Vec3 x4;
-    /* +10 */ u8 pad[0xC];
+    /*  +0 */ char pad_0[0x1C];
     /* +1C */ Item_GObj* unk_1C;
     /* +20 */ UNK_T x20;
 } itFreeze_ItemVars;
@@ -344,11 +341,6 @@ typedef struct {
     }* x0;
     f32 x4;
 } itLikelikeAttributes;
-
-typedef struct itLikelike_ItemVars {
-    /*  +0 ip+DD4 */ char pad_0[0x18];
-    /* +18 ip+DEC */ s32 x18;
-} itLikelike_ItemVars;
 
 typedef struct {
     f32 x0;
@@ -947,9 +939,7 @@ typedef struct it_2E6A_ItemVars_1 {
 } it_2E6A_ItemVars_1;
 
 typedef struct itWhiteBea_ItemVars {
-    /*  +0 ip+DD4 */ char pad_0[0x18];
-    /* +18 ip+DEC */ s32 x18;
-    /* +1C ip+DF0 */ char pad_1C[0x4];
+    /*  +0 ip+DD4 */ char pad_0[0x20];
     /* +20 ip+DF4 */ UNK_T x20;
 } itWhiteBea_ItemVars;
 
@@ -1036,15 +1026,5 @@ typedef struct itOctarockAttributes {
     f32 x18;
     s16 x1C;
 } itOctarockAttributes;
-
-typedef struct itOldottosea_ItemVars {
-    /* 0x00 */ u8 pad[0x28];
-    /* 0x28 */ s32 x28;
-} itOldottosea_ItemVars;
-
-typedef struct itOldottoseaAttributes {
-    /* 0x00 */ s32* x0;
-    /* 0x04 */ f32 x4;
-} itOldottoseaAttributes;
 
 #endif

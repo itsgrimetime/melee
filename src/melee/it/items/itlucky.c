@@ -360,15 +360,25 @@ void it_2725_Logic44_Spawned(Item_GObj* gobj)
     it_802D58EC(gobj);
 }
 
+void it_802D582C(Item_GObj* gobj)
+{
+    Item* ip = GET_ITEM(gobj);
+    PAD_STACK(12);
+    it_8026B390(gobj);
+    ip->x40_vel.x = ip->x40_vel.y = ip->x40_vel.z = 0.0f;
+    Item_80268E5C(gobj, 0, ITEM_ANIM_UPDATE);
+}
+
 bool it_802D5884(Item_GObj* gobj)
 {
-    Item* ip = gobj->user_data;
-    ip->xD44_lifeTimer -= it_804DD50C;
-    if (ip->xD44_lifeTimer <= it_804DD500) {
+    Item* ip = GET_ITEM(gobj);
+    ip->xD44_lifeTimer -= 1.0f;
+    if (ip->xD44_lifeTimer <= 0.0f) {
         return true;
     }
     return false;
 }
+
 void it_802D58BC(Item_GObj* gobj) {}
 
 bool it_802D58C0(Item_GObj* gobj)
@@ -384,13 +394,9 @@ void it_802D58EC(HSD_GObj* gobj)
 
 bool itLucky_UnkMotion3_Anim(Item_GObj* gobj)
 {
-    Item* ip = gobj->user_data;
-    ip->xD44_lifeTimer -= it_804DD50C;
-    if (ip->xD44_lifeTimer <= it_804DD500) {
-        return true;
-    }
-    return false;
+    return it_802D5884(gobj);
 }
+
 void itLucky_UnkMotion3_Phys(Item_GObj* gobj)
 {
     Item* ip = GET_ITEM(gobj);
@@ -428,13 +434,9 @@ void it_2725_Logic44_EnteredAir(Item_GObj* gobj)
 
 bool it_802D5A2C(Item_GObj* gobj)
 {
-    Item* ip = gobj->user_data;
-    ip->xD44_lifeTimer -= it_804DD50C;
-    if (ip->xD44_lifeTimer <= it_804DD500) {
-        return true;
-    }
-    return false;
+    return it_802D5884(gobj);
 }
+
 void it_802D5A64(Item_GObj* gobj) {}
 
 bool it_802D5A68(Item_GObj* gobj)

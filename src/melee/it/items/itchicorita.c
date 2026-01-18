@@ -162,9 +162,12 @@ void it_802C989C(HSD_GObj* item_gobj)
     Item* item;
 
     item = item_gobj->user_data;
-    if (((flag32*)&item->xDBC_itcmd_var4)->flags.x0) {
+    // if (((u8) item->xDBC_itcmd_var4 >> 7U) & 1) {
+    // if ((((UnkFlagStruct*) item->xDBC_itcmd_var4)->u8 >> 7U) & 1) {
+    if (((flag32*) item->xDBC_itcmd_var4)->flags.x0) {
         it_802C9B20((Item_GObj*) item_gobj);
-        ((flag32*)&item->xDBC_itcmd_var4)->flags.x0 = 0;
+        // item->xDBC_itcmd_var4 &= ~0x80;
+        ((flag32*) item->xDBC_itcmd_var4)->flags.x0 = 0;
     }
 }
 

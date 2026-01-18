@@ -552,12 +552,35 @@ bool itLeadead_UnkMotion8_Coll(Item_GObj* gobj)
 
 void it_802E9A00(Item_GObj* gobj)
 {
-    Item* ip = gobj->user_data;
-    M2C_FIELD(ip, s32*, 0xE1C) = 0;
-    M2C_FIELD(ip, s32*, 0xE18) = 0;
+    Item* ip = GET_ITEM(gobj);
+    ip->xDD4_itemVar.leadead.x48 = 0;
+    ip->xDD4_itemVar.leadead.x44 = 0;
     Item_80268E5C(gobj, 9, ITEM_ANIM_UPDATE);
 }
-/// #itLeadead_UnkMotion9_Anim
+
+bool itLeadead_UnkMotion9_Anim(Item_GObj* gobj)
+{
+    Item* ip = GET_ITEM(gobj);
+    if (ip->xDD4_itemVar.leadead.x44 < 0x2E) {
+        it_802EA478(gobj, 2, 0);
+    } else if (ip->xDD4_itemVar.leadead.x44 < 0x57) {
+        it_802EA478(gobj, 3, 1);
+    } else if (ip->xDD4_itemVar.leadead.x44 < 0x82) {
+        it_802EA478(gobj, 3, 2);
+    } else if (ip->xDD4_itemVar.leadead.x44 < 0xAA) {
+        it_802EA478(gobj, 3, 3);
+    } else if (ip->xDD4_itemVar.leadead.x44 < 0x105) {
+        it_802EA478(gobj, 3, 4);
+    } else {
+        it_802EA478(gobj, 0, 0);
+    }
+    ip->xDD4_itemVar.leadead.x44++;
+    if (it_80272C6C(gobj) == 0) {
+        ip->xDD4_itemVar.leadead.x48 = 0xA;
+        it_802E8F24_inline(gobj);
+    }
+    return false;
+}
 
 void itLeadead_UnkMotion9_Phys(Item_GObj* gobj) {}
 

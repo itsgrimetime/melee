@@ -2,16 +2,15 @@
 #define MELEE_MN_VIBRATION_H
 
 #include <placeholder.h>
-#include <sysdolphin/baselib/forward.h>
 
-/* 2474C4 */ void* mnVibration_802474C4(s32 arg0);
+/* 2474C4 */ UNK_RET mnVibration_802474C4(UNK_PARAMS);
 /* 247510 */ UNK_RET fn_80247510(UNK_PARAMS);
-/* 248084 */ void fn_80248084(void* gobj);
+/* 248084 */ UNK_RET fn_80248084(UNK_PARAMS);
 /* 2480B4 */ UNK_RET mnVibration_802480B4(UNK_PARAMS);
 /* 24829C */ UNK_RET mnVibration_8024829C(UNK_PARAMS);
-/* 248444 */ void mnVibration_80248444(HSD_GObj* gobj, u8 name_idx, u8 slot_idx);
-/* 248644 */ void mnVibration_80248644(HSD_GObj* gobj);
-/* 248748 */ void fn_80248748(HSD_GObj* gobj);
+/* 248444 */ UNK_RET mnVibration_80248444(UNK_PARAMS);
+/* 248644 */ UNK_RET mnVibration_80248644(UNK_PARAMS);
+/* 248748 */ UNK_RET fn_80248748(UNK_PARAMS);
 /* 2487A8 */ UNK_RET fn_802487A8(UNK_PARAMS);
 /* 248A78 */ UNK_RET fn_80248A78(UNK_PARAMS);
 /* 248ED4 */ UNK_RET mnVibration_80248ED4(UNK_PARAMS);

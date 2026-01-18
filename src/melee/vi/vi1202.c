@@ -1,8 +1,12 @@
+#include "vi/vi1202.h"
+
 #include "vi.h"
 
-#include "vi/vi1202.static.h"
+#include "baselib/forward.h"
 
-#include "ft/fighter.h"
+#include "ef/efasync.h"
+#include "ef/eflib.h"
+#include "ft/ft_0C31.h"
 #include "ft/ftlib.h"
 #include "gm/gm_1601.h"
 #include "gm/gm_unsplit.h"
@@ -12,10 +16,14 @@
 #include "lb/lbaudio_ax.h"
 #include "pl/player.h"
 #include "pl/plbonuslib.h"
+#include "sc/types.h"
+#include "ty/toy.h"
+#include "ty/tylist.h"
 
 #include <baselib/aobj.h>
 #include <baselib/cobj.h>
 #include <baselib/gobj.h>
+#include <baselib/gobjgxlink.h>
 #include <baselib/gobjobject.h>
 #include <baselib/gobjproc.h>
 #include <baselib/jobj.h>
@@ -62,13 +70,13 @@ void un_80321178(void)
     HSD_JObj* jobj;
 
     i = 0;
-    while (((void**) (*un_804D7040))[i] != NULL) {
+    while ((un_804D7040->models)[i] != NULL) {
         gobj = GObj_Create(0xE, 0xF, 0);
-        jobj = HSD_JObjLoadJoint(*(void**) ((void**) (*un_804D7040))[i]);
+        jobj = HSD_JObjLoadJoint((un_804D7040->models)[i]->joint);
         HSD_GObjObject_80390A70(gobj, HSD_GObj_804D7849, jobj);
         GObj_SetupGXLink(gobj, HSD_GObj_JObjCallback, 0xB, 0);
-        gm_8016895C(jobj, (DynamicModelDesc*) ((void**) (*un_804D7040))[i], 0);
-        HSD_JObjReqAnimAll(jobj, un_804DE140);
+        gm_8016895C(jobj, (un_804D7040->models)[i], 0);
+        HSD_JObjReqAnimAll(jobj, 0.0f);
         HSD_JObjAnimAll(jobj);
         HSD_GObjProc_8038FD54(gobj, un_80321154, 0x17);
         lb_80011E24(jobj, &un_804D704C, 2, -1);
@@ -80,7 +88,7 @@ void un_80321178(void)
     lbAudioAx_80027648();
 }
 
-void un_80321294(HSD_GObj* gobj)
+void vi1202_RunFrame(HSD_GObj* gobj)
 {
     HSD_CObj* cobj = GET_COBJ(gobj);
     HSD_CObjAnim(cobj);
@@ -382,15 +390,29 @@ void un_80321C28(void)
 
 static void un_80321C70_inline(void)
 {
-    vi1202_UnkStruct* data = un_804D7050;
-    CrowdConfig* vdata = gCrowdConfig;
-    s32 x18;
+    vi1202_UnkStruct* data;
 
-    x18 = data->x18;
-    if (x18 >= vdata->max_gasp_count) {
+    data = un_804D7050;
+
+    if (data->x18 >= gCrowdConfig->max_gasp_count ||
+        data->x18 < gCrowdConfig->x24)
+    {
         return;
     }
-    if (x18 < vdata->x24) {
+    data->x1C = 1;
+}
+
+#pragma push
+#pragma dont_inline on
+void un_80321C70(void)
+{
+    vi1202_UnkStruct* data;
+
+    data = un_804D7050;
+
+    if (data->x18 >= gCrowdConfig->max_gasp_count ||
+        data->x18 < gCrowdConfig->x24)
+    {
         return;
     }
     data->x1C = 1;
@@ -413,122 +435,7 @@ void un_80321CE8(void)
     data->x28 = -1;
 }
 
-void un_80321D30(int arg0, f32 arg1)
-{
-    s32 cat;
-    vi1202_UnkStruct* data = un_804D7050;
-    cat = un_80322298(arg1);
-
-    if (cat >= 2) {
-        if (un_80321EBC(arg0, arg1) != 0) {
-            vi1202_UnkStruct* data2 = un_804D7050;
-            if (lbAudioAx_80023710(data2->x28) != 0) {
-                lbAudioAx_800236B8(data2->x28);
-            }
-            data2->x28 = -1;
-            return;
-        }
-    }
-
-    switch (cat) {
-    case 3: {
-        vi1202_UnkStruct* data2 = un_804D7050;
-        if (lbAudioAx_80023710(data2->x28) != 0) {
-            lbAudioAx_800236B8(data2->x28);
-        }
-        data2->x28 = -1;
-        data2->x28 = lbAudioAx_8002411C(0x140);
-        break;
-    }
-    case 2: {
-        vi1202_UnkStruct* data2 = un_804D7050;
-        if (lbAudioAx_80023710(data2->x28) != 0) {
-            lbAudioAx_800236B8(data2->x28);
-        }
-        data2->x28 = -1;
-        data2->x28 = lbAudioAx_8002411C(0x141);
-        break;
-    }
-    case 1: {
-        vi1202_UnkStruct* data2 = un_804D7050;
-        if (lbAudioAx_80023710(data2->x28) != 0) {
-            lbAudioAx_800236B8(data2->x28);
-        }
-        data2->x28 = -1;
-        data2->x28 = lbAudioAx_8002411C(0x142);
-        break;
-    }
-    }
-
-    if ((u32) arg0 != 0) {
-        if ((u32) data->xC == (u32) arg0) {
-            vi1202_UnkStruct* data3 = un_804D7050;
-            CrowdConfig* vdata = gCrowdConfig;
-            if (data3->x18 < vdata->max_gasp_count) {
-                if (data3->x18 >= vdata->x24) {
-                    data3->x1C = 1;
-                }
-            }
-        }
-    }
-}
-bool un_80321EBC(int arg0, f32 arg1)
-{
-    vi1202_UnkStruct* data = un_804D7050;
-    HSD_GObj* gobj;
-    s32 port;
-
-    gobj = ftLib_8008741C(arg0);
-    if (gobj == NULL) {
-        return 0;
-    }
-
-    port = ftLib_800874BC(gobj);
-    if (Player_8003248C(ftLib_80086BE0(gobj), port) == 1) {
-        return 0;
-    }
-
-    if (ftLib_80087120(gobj) < gCrowdConfig->x1C) {
-        return 0;
-    }
-    if (data->x10 < gCrowdConfig->cheer_limit) {
-        return 0;
-    }
-    if ((u32) data->xC == (u32) arg0) {
-        return 0;
-    }
-
-    data->x14 = ftLib_8008746C(gobj);
-    if ((u32) (data->x14 - 0x83D60) == 0) {
-        return 0;
-    }
-
-    {
-        vi1202_UnkStruct* data2 = un_804D7050;
-        s32 sfx;
-        if (lbAudioAx_80023710(data2->x2C) != 0) {
-            lbAudioAx_800236B8(data2->x2C);
-        }
-        data2->x2C = -1;
-        if (un_80322298(arg1) == 3) {
-            sfx = 0x140;
-        } else {
-            sfx = 0x141;
-        }
-        un_804D7050->x2C = lbAudioAx_800240B4(sfx);
-    }
-
-    data->xC = arg0;
-    data->x18 = 0;
-
-    port = ftLib_800874BC(gobj);
-    data->x10 = port;
-    pl_8003FDA0(ftLib_80086BE0(gobj), port);
-
-    return 1;
-}
-
-void un_8032201C(int arg0, s32 cat)
+static void un_80321CE8_caller(u32 arg0)
 {
     vi1202_UnkStruct* data = un_804D7050;
     if (lbAudioAx_80023710(data->x28) != 0) {
@@ -715,10 +622,10 @@ bool un_80322258(float arg)
 {
     f32 val2c = gCrowdConfig->horiz_margin;
 
-    if (arg < val2c + *(f32*) (mpLib_80458868 + 0x18)) {
+    if (arg < val2c + M2C_FIELD(mpLib_80458868, f32*, 0x18)) {
         goto ret_true;
     }
-    if (!(arg > *(f32*) (mpLib_80458868 + 0x1C) - val2c)) {
+    if (!(arg > M2C_FIELD(mpLib_80458868, f32*, 0x1C) - val2c)) {
         goto ret_false;
     }
 ret_true:
@@ -765,14 +672,15 @@ void un_80322314(void)
     data->x20 = 1;
 }
 
-void un_8032233C(int arg0, int arg1)
+void un_8032233C(u32 arg0, u32 arg1)
 {
-    vi1202_UnkStruct* data = un_804D7050;
-    HSD_GObj* gobj0;
-    f32 kb_mag;
     s32 cat;
+    vi1202_UnkStruct* data = un_804D7050;
+    HSD_GObj* gobj;
+    f32 kb_mag;
+    PAD_STACK(8);
 
-    gobj0 = ftLib_8008741C(arg0);
+    gobj = ftLib_8008741C(arg0);
     kb_mag = ftLib_80087454(ftLib_8008741C(arg1));
 
     if (kb_mag >= gCrowdConfig->kb_threshold_high) {
@@ -789,21 +697,17 @@ void un_8032233C(int arg0, int arg1)
         return;
     }
 
-    if (gobj0 != NULL) {
-        if (ftLib_80087454(gobj0) >= un_804DE150) {
+    if (gobj != NULL) {
+        if (ftLib_80087454(gobj) >= 3.0f) {
             un_80321D30(arg0, kb_mag);
-            return;
+            goto end;
         }
     }
 
-    if ((u32) data->x0 == (u32) arg0) {
+    if (data->x0 == arg0) {
         if ((f32) data->x4 < gCrowdConfig->x18) {
-            f32 max = data->x8;
-            if (kb_mag > max) {
-                max = kb_mag;
-            }
-            un_80321D30(arg0, max);
-            return;
+            un_80321D30(arg0, kb_mag > data->x8 ? kb_mag : data->x8);
+            goto end;
         }
     }
 
@@ -819,13 +723,18 @@ void un_8032233C(int arg0, int arg1)
         break;
     }
 
-    if (cat == 3 || (cat == 2 && (u32) data->xC == (u32) arg1)) {
+    if (cat == 3 || (cat == 2 && data->xC == arg1)) {
         un_80321C70();
     }
+end:
+    data->x4 = 0;
+    data->x0 = arg0;
+    data->x8 = kb_mag;
 }
 
 bool un_803224DC(s32 spawn_id, f32 pos_x, f32 kb_mag)
 {
+    CrowdConfig* vdata = gCrowdConfig;
     s32 cat;
     s32 out_of_bounds;
     s32 tmp_cat;
@@ -841,9 +750,8 @@ bool un_803224DC(s32 spawn_id, f32 pos_x, f32 kb_mag)
     }
 
     {
-        char* mp = mpLib_80458868;
         f32 val2c = vdata->horiz_margin;
-        f32 val18 = *(f32*) (mp + 0x18);
+        f32 val18 = M2C_FIELD(mpLib_80458868, f32*, 0x18);
         f32 val1c;
 
         cat = tmp_cat;
@@ -851,7 +759,7 @@ bool un_803224DC(s32 spawn_id, f32 pos_x, f32 kb_mag)
         if (pos_x < val2c + val18) {
             goto oob;
         }
-        val1c = *(f32*) (mp + 0x1C);
+        val1c = M2C_FIELD(mpLib_80458868, f32*, 0x1C);
         if (!(pos_x > val1c - val2c)) {
             goto inb;
         }

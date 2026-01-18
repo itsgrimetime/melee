@@ -26,7 +26,8 @@
 /* 05C3DC */ Effect* efLib_8005C3DC(u32, HSD_GObj*, HSD_JObj*);
 /* 05C5C4 */ Effect* efLib_8005C5C4(u32, HSD_GObj*, HSD_JObj*);
 /* 05C6F4 */ Effect* efLib_8005C6F4(u32, HSD_GObj*, void*);
-/* 05C814 */ Effect* efLib_8005C814(u32 arg0, HSD_GObj* arg_gobj, Vec3* arg_vec3);
+/* 05C814 */ Effect* efLib_8005C814(u32 arg0, HSD_GObj* arg_gobj,
+                                    Vec3* arg_vec3);
 /* 05C904 */ void fn_8005C904(HSD_GObj*, int);
 /* 05C9A4 */ void efLib_8005C9A4(HSD_GObj*);
 /* 05C9D0 */ void fn_8005C9D0(HSD_GObj*);

@@ -1197,66 +1197,34 @@ bool it_8026E32C(Item_GObj* item_gobj, HSD_GObjEvent arg1)
     return chk;
 }
 
-void it_8026E414(Item_GObj* item_gobj, HSD_GObjEvent arg1)
-{
-    CollData* coll;
-    Item* item;
-    bool chk;
-    PAD_STACK(32);
+void it_8026E414(Item_GObj* item_gobj, HSD_GObjEvent arg1) {
+    bool chk = it_8026DF34(item_gobj);
 
-    item = item_gobj->user_data;
-    coll = &item->x378_itemColl;
-    it_80276214(item_gobj);
-    chk = mpColl_800471F8(coll);
-    item->pos = coll->cur_pos;
-    if (chk) {
-        item->xC30 = coll->floor.index;
-    }
-    chk = chk | it_80276308(item_gobj);
-    chk = chk | it_802763E0(item_gobj);
-    {
-        s32 chk_copy = chk;
-        if (chk & 0xE) {
-            it_80276FC4(item_gobj, chk_copy);
-        }
+    chk |= it_80276308(item_gobj);
+    chk |= it_802763E0(item_gobj);
+    if (chk & 0xE) {
+        it_80276FC4(item_gobj, chk);
     }
     if (chk & 1) {
         it_80275DFC(item_gobj);
-        it_802762B0(item);
+        it_802762B0(item_gobj->user_data);
         arg1((HSD_GObj*) item_gobj);
     }
 }
 
-void it_8026E4D0(Item_GObj* item_gobj, HSD_GObjEvent arg1)
-{
-    CollData* coll;
-    Item* item;
-    HSD_JObj* item_jobj;
-    bool chk;
-    PAD_STACK(40);
+void it_8026E4D0(Item_GObj* item_gobj, HSD_GObjEvent arg1) {
+    bool chk = it_8026DF34(item_gobj);
 
-    item = item_gobj->user_data;
-    coll = &item->x378_itemColl;
-    it_80276214(item_gobj);
-    chk = mpColl_800471F8(coll);
-    item->pos = coll->cur_pos;
-    if (chk) {
-        item->xC30 = coll->floor.index;
-    }
-    chk = chk | it_80276308(item_gobj);
-    chk = chk | it_802763E0(item_gobj);
-    {
-        s32 chk_copy = chk;
-        if (chk & 0xE) {
-            it_80276FC4(item_gobj, chk_copy);
-        }
+    chk |= it_80276308(item_gobj);
+    chk |= it_802763E0(item_gobj);
+    if (chk & 0xE) {
+        it_80276FC4(item_gobj, chk);
     }
     if (chk & 1) {
-        item_jobj = item_gobj->hsd_obj;
         it_80275DFC(item_gobj);
-        it_802762B0(item);
+        it_802762B0(item_gobj->user_data);
         arg1((HSD_GObj*) item_gobj);
-        it_80272F7C(item_jobj, item->xCC_item_attr->x60_scale);
+        it_80272F7C(item_gobj->hsd_obj, item_gobj->user_data->xCC_item_attr->x60_scale);
     }
 }
 
@@ -1273,66 +1241,33 @@ void it_8026E5A0(Item_GObj* item_gobj, HSD_GObjEvent arg1) {
     }
 }
 
-void it_8026E664(Item_GObj* item_gobj, HSD_GObjEvent arg1)
-{
-    CollData* coll;
-    Item* item;
-    bool chk;
-    PAD_STACK(32);
+void it_8026E664(Item_GObj* item_gobj, HSD_GObjEvent arg1) {
+    bool chk = it_8026E058(item_gobj);
 
-    item = item_gobj->user_data;
-    coll = &item->x378_itemColl;
-    it_80276214(item_gobj);
-    chk = mpColl_800471F8(coll);
-    item->pos = coll->cur_pos;
     if (chk) {
-        item->xC30 = coll->floor.index;
-    }
-    chk = chk | it_80276308(item_gobj);
-    {
-        s32 chk_copy = chk;
-        if (chk & 0xD) {
-            if (chk & 0xC) {
-                it_80276FC4(item_gobj, chk_copy);
-            }
-            if (chk & 1) {
-                it_80275DFC(item_gobj);
-                it_802762B0(item);
-            }
-            arg1((HSD_GObj*) item_gobj);
+        if (chk & 0xC) {
+            it_80276FC4(item_gobj, chk);
         }
+        if (chk & 1) {
+            it_80275DFC(item_gobj);
+            it_802762B0(item_gobj->user_data);
+        }
+        arg1((HSD_GObj*) item_gobj);
     }
 }
 
-void it_8026E71C(Item_GObj* item_gobj, HSD_GObjEvent arg1)
-{
-    CollData* coll;
-    Item* item;
-    bool chk;
-    PAD_STACK(32);
+void it_8026E71C(Item_GObj* item_gobj, HSD_GObjEvent arg1) {
+    bool chk = it_8026DFB0(item_gobj);
 
-    item = item_gobj->user_data;
-    coll = &item->x378_itemColl;
-    it_80276214(item_gobj);
-    chk = mpColl_800471F8(coll);
-    item->pos = coll->cur_pos;
     if (chk) {
-        item->xC30 = coll->floor.index;
-    }
-    chk = chk | it_80276308(item_gobj);
-    chk = chk | it_802763E0(item_gobj);
-    {
-        s32 chk_copy = chk;
-        if (chk & 0xF) {
-            if (chk & 0xC) {
-                it_80276D9C(item_gobj, chk_copy);
-            }
-            if (chk & 1) {
-                it_80275DFC(item_gobj);
-                it_802762B0(item);
-            }
-            arg1((HSD_GObj*) item_gobj);
+        if (chk & 0xC) {
+            it_80276D9C(item_gobj, chk);
         }
+        if (chk & 1) {
+            it_80275DFC(item_gobj);
+            it_802762B0(item_gobj->user_data);
+        }
+        arg1((HSD_GObj*) item_gobj);
     }
 }
 
@@ -1433,7 +1368,7 @@ void it_8026E414(Item_GObj* item_gobj, HSD_GObjEvent arg1)
     CollData* coll;
     Item* item;
     bool chk;
-    PAD_STACK(32);
+    PAD_STACK(28);
 
     item = item_gobj->user_data;
     coll = &item->x378_itemColl;
@@ -1445,11 +1380,8 @@ void it_8026E414(Item_GObj* item_gobj, HSD_GObjEvent arg1)
     }
     chk = chk | it_80276308(item_gobj);
     chk = chk | it_802763E0(item_gobj);
-    {
-        s32 chk_copy = chk;
-        if (chk & 0xE) {
-            it_80276FC4(item_gobj, chk_copy);
-        }
+    if (chk & 0xE) {
+        it_80276FC4(item_gobj, chk);
     }
     if (chk & 1) {
         it_80275DFC(item_gobj);
@@ -1461,10 +1393,10 @@ void it_8026E414(Item_GObj* item_gobj, HSD_GObjEvent arg1)
 void it_8026E4D0(Item_GObj* item_gobj, HSD_GObjEvent arg1)
 {
     CollData* coll;
-    Item* item;
     HSD_JObj* item_jobj;
+    Item* item;
     bool chk;
-    PAD_STACK(40);
+    PAD_STACK(34);
 
     item = item_gobj->user_data;
     coll = &item->x378_itemColl;
@@ -1476,11 +1408,8 @@ void it_8026E4D0(Item_GObj* item_gobj, HSD_GObjEvent arg1)
     }
     chk = chk | it_80276308(item_gobj);
     chk = chk | it_802763E0(item_gobj);
-    {
-        s32 chk_copy = chk;
-        if (chk & 0xE) {
-            it_80276FC4(item_gobj, chk_copy);
-        }
+    if (chk & 0xE) {
+        it_80276FC4(item_gobj, chk);
     }
     if (chk & 1) {
         item_jobj = item_gobj->hsd_obj;
@@ -1525,7 +1454,7 @@ void it_8026E664(Item_GObj* item_gobj, HSD_GObjEvent arg1)
     CollData* coll;
     Item* item;
     bool chk;
-    PAD_STACK(32);
+    PAD_STACK(28);
 
     item = item_gobj->user_data;
     coll = &item->x378_itemColl;
@@ -1536,18 +1465,15 @@ void it_8026E664(Item_GObj* item_gobj, HSD_GObjEvent arg1)
         item->xC30 = coll->floor.index;
     }
     chk = chk | it_80276308(item_gobj);
-    {
-        s32 chk_copy = chk;
-        if (chk & 0xD) {
-            if (chk & 0xC) {
-                it_80276FC4(item_gobj, chk_copy);
-            }
-            if (chk & 1) {
-                it_80275DFC(item_gobj);
-                it_802762B0(item);
-            }
-            arg1((HSD_GObj*) item_gobj);
+    if (chk & 0xD) {
+        if (chk & 0xC) {
+            it_80276FC4(item_gobj, chk);
         }
+        if (chk & 1) {
+            it_80275DFC(item_gobj);
+            it_802762B0(item);
+        }
+        arg1((HSD_GObj*) item_gobj);
     }
 }
 
@@ -1556,7 +1482,7 @@ void it_8026E71C(Item_GObj* item_gobj, HSD_GObjEvent arg1)
     CollData* coll;
     Item* item;
     bool chk;
-    PAD_STACK(32);
+    PAD_STACK(28);
 
     item = item_gobj->user_data;
     coll = &item->x378_itemColl;
@@ -1568,18 +1494,15 @@ void it_8026E71C(Item_GObj* item_gobj, HSD_GObjEvent arg1)
     }
     chk = chk | it_80276308(item_gobj);
     chk = chk | it_802763E0(item_gobj);
-    {
-        s32 chk_copy = chk;
-        if (chk & 0xF) {
-            if (chk & 0xC) {
-                it_80276D9C(item_gobj, chk_copy);
-            }
-            if (chk & 1) {
-                it_80275DFC(item_gobj);
-                it_802762B0(item);
-            }
-            arg1((HSD_GObj*) item_gobj);
+    if (chk & 0xF) {
+        if (chk & 0xC) {
+            it_80276D9C(item_gobj, chk);
         }
+        if (chk & 1) {
+            it_80275DFC(item_gobj);
+            it_802762B0(item);
+        }
+        arg1((HSD_GObj*) item_gobj);
     }
 }
 
@@ -1667,10 +1590,10 @@ bool it_8026EA20(HSD_GObj* gobj, Vec3* arg1, Vec3* arg2, Vec3* arg3,
                  UNK_T* arg4, u32* flags_out)
 {
     Vec3 p;
-    u8 pad[4];
-    s32 pad2;
+    // PAD_STACK(4);
+    PAD_STACK(8);
 
-    if (mpCheckAllRemap(&p, (UNK_T)arg4, flags_out, arg3, -1, -1, arg1->x, arg1->y,
+    if (mpCheckAllRemap(&p, *arg4, flags_out, arg3, -1, -1, arg1->x, arg1->y,
                         arg2->x, arg2->y) == true)
     {
         *arg2 = p;

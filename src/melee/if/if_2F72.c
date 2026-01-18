@@ -18,6 +18,10 @@
 #include <baselib/gobjproc.h>
 #include <baselib/jobj.h>
 
+// Orphaned data strings from original ROM
+static char lbl_803F9780[] = "ScInfStc_scene_models";
+static char lbl_803F9798[] = "translate";
+
 static void* lbl_804A1340[13];
 
 s32 fn_802F7288(HSD_GObj* gobj, Element_803F9628* entry)
@@ -251,8 +255,12 @@ HSD_GObj* fn_802F77F8(HSD_GObj* gobj, u8 slot, s32 arg2)
     HSD_JObjAnimAll(jobj);
 
     pos = ifAll_802F3424(slot);
-    HSD_ASSERT(0x394, jobj != NULL);
-    HSD_ASSERT(0x395, pos != NULL);
+    if (jobj == NULL) {
+        __assert("jobj.h", 0x394, "jobj");
+    }
+    if (pos == NULL) {
+        __assert("jobj.h", 0x395, "jobj");
+    }
 
     jobj->translate = *pos;
 
@@ -260,7 +268,9 @@ HSD_GObj* fn_802F77F8(HSD_GObj* gobj, u8 slot, s32 arg2)
         s32 is_dirty;
         u32 flags;
 
-        HSD_ASSERT(0x234, jobj != NULL);
+        if (jobj == NULL) {
+            __assert("jobj.h", 0x234, "jobj");
+        }
         flags = jobj->flags;
         is_dirty = 0;
         if (!(flags & 0x00800000) && (flags & 0x40)) {
@@ -376,12 +386,12 @@ void if_802F7BB4(s32 player_idx)
     void** entry;
 
     base = lbl_804A1340;
-    idx = (u8)player_idx;
+    idx = (u8) player_idx;
     offset = idx << 1;
     entry = base + offset;
     (base + offset)[1] = fn_802F77F8(*++entry, idx, 1);
     if ((base + offset)[1] != NULL) {
-        HSD_GObjProc_8038FD54(*entry, (HSD_GObjEvent)fn_802F75D4, 0x11);
+        HSD_GObjProc_8038FD54(*entry, (HSD_GObjEvent) fn_802F75D4, 0x11);
     }
 }
 

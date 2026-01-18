@@ -8224,22 +8224,18 @@ void it_80278574(HSD_GObj* gobj, GXColor* arg1)
 
 #if 0
 // load ItCo.dat/usd ?
-void it_8027870C(void) {
-    void** data;
-    
-    if (lbLang_IsSettingUS()) {
-        lbArchive_80017040(0, it_803F1EE4, &it_804D6D20, it_803F1EF0, 0);
+void it_8027870C(s32 arg0) {
+    if (lbLang_IsSettingUS() != 0) {
+        lbArchive_80017040(0, &it_803F1EE4, &it_804D6D20, &it_803F1EF0, 0);
     } else {
-        lbArchive_80017040(0, it_803F1ED8, &it_804D6D20, it_803F1EF0, 0);
+        lbArchive_80017040(0, &it_803F1ED8, &it_804D6D20, &it_803F1EF0, 0);
     }
-    
-    data = it_804D6D20;
-    it_804D6D28 = data[0];
-    it_804D6D24 = data[1];
-    it_804D6D38 = data[2];
-    it_804D6D30 = data[3];
-    it_804D6D40 = data[4];
-    it_804D6D04 = data[5];
+    it_804D6D28 = it_804D6D20->unk0;
+    it_804D6D24 = it_804D6D20->unk4;
+    it_804D6D38 = it_804D6D20->unk8;
+    it_804D6D30 = it_804D6D20->unkC;
+    it_804D6D40 = it_804D6D20->unk10;
+    it_804D6D04 = it_804D6D20->unk14;
 }
 #endif
 
@@ -8938,8 +8934,9 @@ void it_8027978C(Item_GObj* item_gobj, CommandInfo* cmd)
 void it_80279888(Item_GObj* item_gobj, CommandInfo* cmd)
 {
     PAD_STACK(4);
-    it_80273598(item_gobj, cmd->u->unk33.unk0, cmd->u->unk33.unk1);
-    NEXT_CMD(cmd);
+    // it_80273598(item_gobj, ((u32) cmd->x8_bits->x0 >> 13U) & 0x1FFF,
+    // cmd->x8_bits->x2 & 0x1FFF);
+    // cmd->x8 = cmd->x8 + 4;
 }
 
 void it_802798D4(Item_GObj* item_gobj, CommandInfo* cmd)

@@ -11,18 +11,10 @@
 #include "stage.h"
 #include "types.h"
 
-#include "if/ifcoget.h"
-#include "if/ifstatus.h"
 #include "lb/lb_00B0.h"
-#include "mp/mplib.h"
 
 #include <baselib/gobj.h>
 #include <baselib/jobj.h>
-
-extern f32 grCn_804DB170;
-extern f32 grCn_804DB190;
-extern f32 grCn_804DB1E0;
-extern f32 grCn_804DB268;
 
 /// #grCorneria_801DCCFC
 
@@ -34,10 +26,7 @@ extern f32 grCn_804DB268;
 
 /// #grCorneria_801DD478
 
-void grCorneria_801DD508(void)
-{
-    grZakoGenerator_801CAE04(0);
-}
+/// #grCorneria_801DD508
 
 bool grCorneria_801DD52C(void)
 {
@@ -149,14 +138,7 @@ bool grCorneria_801DDCE8(Ground_GObj* arg)
 
 /// #grCorneria_801DDCF0
 
-void grCorneria_801DDD4C(Vec3* pos)
-{
-    Ground_GObj* gobj = Ground_801C2BA4(3);
-    Ground* gp = gobj->user_data;
-    pos->x = gp->gv.corneria.base_x + gp->gv.corneria.offset_x;
-    pos->y = gp->gv.corneria.base_y + gp->gv.corneria.offset_y.val;
-    pos->z = grCn_804DB170;
-}
+/// #grCorneria_801DDD4C
 
 /// #grCorneria_801DDDA8
 
@@ -362,10 +344,10 @@ bool grCorneria_801E0D28(Ground_GObj* arg)
 
 void grCorneria_801E0DE0(Ground_GObj* arg) {}
 
-void grCorneria_801E0DE4(Ground_GObj* gobj)
+s32 grCorneria_801E0DE4(Ground_GObj* gobj)
 {
     Ground* gr = GET_GROUND(gobj);
-    grCorneria_801E2550(gobj, &gr->gv.corneria);
+    return grCorneria_801E2550(gobj, &gr->gv.corneria);
 }
 
 bool grCorneria_801E0E0C(Ground_GObj* arg)
@@ -373,11 +355,7 @@ bool grCorneria_801E0E0C(Ground_GObj* arg)
     return false;
 }
 
-void grCorneria_801E0E14(Ground_GObj* gobj)
-{
-    Ground* gr = GET_GROUND(gobj);
-    grCorneria_801E277C(gobj, &gr->gv.corneria);
-}
+/// #grCorneria_801E0E14
 
 void grCorneria_801E0E3C(Ground_GObj* arg) {}
 
@@ -394,11 +372,7 @@ bool grCorneria_801E0F64(Ground_GObj* arg)
 
 /// #grCorneria_801E0F6C
 
-void grCorneria_801E1030(Ground_GObj* gobj)
-{
-    ifStatus_802F68F0();
-    un_802FF620();
-}
+/// #grCorneria_801E1030
 
 void grCorneria_801E1054(Ground_GObj* arg) {}
 
@@ -453,42 +427,14 @@ void fn_801E12D0(Item_GObj* gobj, Ground* gr) {}
 
 /// #grCorneria_801E2CE8
 
-bool grCorneria_801E2D14(void)
-{
-    if (stage_info.internal_stage_id == CORNERIA) {
-        if (Ground_801C2BA4(0xC) != NULL) {
-            return true;
-        }
-        return false;
-    }
-    if (stage_info.internal_stage_id == VENOM) {
-        if (Ground_801C2BA4(8) != NULL) {
-            return true;
-        }
-        return false;
-    }
-    return false;
-}
+/// #grCorneria_801E2D14
+
 /// #grCorneria_801E2D90
 
-bool grCorneria_801E2E50(enum_t arg)
-{
-    if (stage_info.internal_stage_id == CORNERIA && arg != -1 && mpJointFromLine(arg) == 4) {
-        return true;
-    }
-    return false;
-}
-float grCorneria_801E2EA0(void)
-{
-    Ground_GObj* gobj = Ground_801C2BA4(3);
-    if (gobj != NULL) {
-        Ground* gp = gobj->user_data;
-        if (gp != NULL) {
-            return gp->gv.corneria.xD0;
-        }
-    }
-    return grCn_804DB170;
-}
+/// #grCorneria_801E2E50
+
+/// #grCorneria_801E2EA0
+
 DynamicsDesc* grCorneria_801E2EE4(enum_t arg)
 {
     return NULL;
@@ -522,15 +468,4 @@ bool grCorneria_801E2EEC(Vec3* v, int arg1, HSD_JObj* jobj)
     return false;
 }
 
-float grCorneria_801E2FCC(void)
-{
-    Ground_GObj* gobj = Ground_801C2BA4(3);
-    if (gobj != NULL) {
-        Ground* gp = gobj->user_data;
-        if (gp != NULL) {
-            f32 scale = Ground_801C0498();
-            return grCn_804DB1E0 + (grCn_804DB190 * scale - gp->gv.corneria.xD0);
-        }
-    }
-    return grCn_804DB268;
-}
+/// #grCorneria_801E2FCC

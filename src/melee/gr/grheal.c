@@ -14,7 +14,6 @@
 
 #include "gr/forward.h"
 
-#include "gm/gm_1832.h"
 #include "gr/granime.h"
 #include "gr/grdisplay.h"
 #include "gr/ground.h"

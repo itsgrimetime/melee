@@ -20,7 +20,5 @@
 /* 1C83D0 */ bool grAnime_801C83D0(HSD_GObj*, bool, enum_t);
 /* 1C84A4 */ bool grAnime_801C84A4(HSD_GObj*, s32, s32);
 /* 1C8780 */ void grAnime_801C8780(HSD_GObj*, u32, u32, f32, f32);
-/* 1C6C0C */ void grAnime_801C6C0C(HSD_JObj*, HSD_AnimJoint*, HSD_MatAnimJoint*,
-                                   HSD_ShapeAnimJoint*);
 
 #endif

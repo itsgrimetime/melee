@@ -1,6 +1,5 @@
 #include "itwstar.h"
 
-#include "ef/eflib.h"
 #include "it/inlines.h"
 #include "it/it_266F.h"
 #include "it/it_26B1.h"
@@ -15,15 +14,7 @@
 
 /// #it_3F14_Logic29_Spawned
 
-void it_8029455C(Item_GObj* gobj)
-{
-    Item* ip = GET_ITEM(gobj);
-    ip->x40_vel.z = 0.0f;
-    ip->x40_vel.y = 0.0f;
-    ip->x40_vel.x = 0.0f;
-    it_8026B390(gobj);
-    Item_80268E5C(gobj, 0, ITEM_ANIM_UPDATE);
-}
+/// #it_8029455C
 
 bool itWstar_UnkMotion0_Anim(Item_GObj* gobj)
 {
@@ -70,11 +61,8 @@ bool itWstar_UnkMotion3_Anim(Item_GObj* gobj)
     return false;
 }
 
-void it_3F14_Logic29_Dropped(Item_GObj* gobj)
-{
-    Item_80268E5C(gobj, 1, 6);
-    efLib_DestroyAll(gobj);
-}
+/// #it_3F14_Logic29_Dropped
+
 /// #it_802947CC
 
 /// #itWstar_UnkMotion5_Anim

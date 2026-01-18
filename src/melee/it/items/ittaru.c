@@ -7,7 +7,6 @@
 #include "it/it_26B1.h"
 #include "it/it_2725.h"
 #include "it/item.h"
-#include "lb/lb_00B0.h"
 
 /// #it_3F14_Logic2_Spawned
 
@@ -15,24 +14,13 @@
 
 /// #it_80287690
 
-bool itTaru_UnkMotion0_Anim(Item_GObj* gobj)
-{
-    Item* ip = gobj->user_data;
-    if (ip->xD44_lifeTimer <= it_804DC978) {
-        it_802787B4(gobj, 0x421);
-    }
-    return false;
-}
+/// #itTaru_UnkMotion0_Anim
 
 void itTaru_UnkMotion0_Phys(Item_GObj* gobj) {}
 
 /// #itTaru_UnkMotion0_Coll
 
-void it_80287D0C(Item_GObj* gobj)
-{
-    it_8026B3A8(gobj);
-    Item_80268E5C(gobj, 1, 2);
-}
+/// #it_80287D0C
 
 bool itTaru_UnkMotion1_Anim(Item_GObj* gobj)
 {
@@ -67,32 +55,13 @@ void it_3F14_Logic2_Dropped(Item_GObj* gobj)
     it_80287F20(gobj);
 }
 
-void it_3F14_Logic2_Thrown(Item_GObj* gobj)
-{
-    Item* ip = gobj->user_data;
-    HSD_JObj* jobj = gobj->hsd_obj;
-    Article* article = ip->xC4_article_data;
-    lb_8000B804(jobj, article->x10_modelDesc->x0_joint);
-    it_8026B3A8(gobj);
-    Item_80268E5C(gobj, 3, 6);
-}
+/// #it_3F14_Logic2_Thrown
 
-void it_80287F20(Item_GObj* gobj)
-{
-    it_8026B3A8(gobj);
-    Item_80268E5C(gobj, 3, 0x15);
-}
+/// #it_80287F20
 
 /// #itTaru_UnkMotion3_Anim
 
-void itTaru_UnkMotion3_Phys(Item_GObj* gobj)
-{
-    Item* ip = GET_ITEM(gobj);
-    ItemAttr* attrs = ip->xCC_item_attr;
-    it_80272860(gobj, attrs->x10_fall_speed, attrs->x14_fall_speed_max);
-    it_802874F0(gobj);
-    it_80287690(gobj);
-}
+/// #itTaru_UnkMotion3_Phys
 
 /// #itTaru_UnkMotion3_Coll
 
@@ -101,24 +70,10 @@ void it_80288194(Item_GObj* gobj)
     it_802881FC(gobj);
 }
 
-void it_802881B4(Item_GObj* gobj)
-{
-    Item* ip = gobj->user_data;
-    HSD_JObj* jobj = gobj->hsd_obj;
-    Article* article = ip->xC4_article_data;
-    lb_8000B804(jobj, article->x10_modelDesc->x0_joint);
-    it_802881FC(gobj);
-}
+/// #it_802881B4
 
-void it_802881FC(Item_GObj* gobj)
-{
-    Item* ip = gobj->user_data;
-    PAD_STACK(8);
-    ip->x40_vel.x = M2C_FIELD(ip, f32*, 0xDE4);
-    ip->x40_vel.y = 0.0f;
-    it_8026B3A8(gobj);
-    Item_80268E5C(gobj, 5, 2);
-}
+/// #it_802881FC
+
 /// #itTaru_UnkMotion5_Anim
 
 void itTaru_UnkMotion5_Phys(Item_GObj* gobj)

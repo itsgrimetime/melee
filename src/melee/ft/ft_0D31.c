@@ -21,11 +21,7 @@
 
 #include <melee/cm/camera.h>
 #include <melee/ef/efsync.h>
-#include <melee/ft/chara/ftCommon/ftCo_AirCatch.h>
-#include <melee/ft/chara/ftCommon/ftCo_AppealS.h>
 #include <melee/ft/chara/ftCommon/ftCo_Attack1.h>
-#include <melee/ft/chara/ftCommon/ftCo_Attack100.h>
-#include <melee/ft/chara/ftCommon/ftCo_AttackAir.h>
 #include <melee/ft/chara/ftCommon/ftCo_AttackHi3.h>
 #include <melee/ft/chara/ftCommon/ftCo_AttackHi4.h>
 #include <melee/ft/chara/ftCommon/ftCo_AttackLw3.h>
@@ -34,34 +30,23 @@
 #include <melee/ft/chara/ftCommon/ftCo_AttackS4.h>
 #include <melee/ft/chara/ftCommon/ftCo_DamageIce.h>
 #include <melee/ft/chara/ftCommon/ftCo_Escape.h>
-#include <melee/ft/chara/ftCommon/ftCo_EscapeAir.h>
-#include <melee/ft/chara/ftCommon/ftCo_Fall.h>
 #include <melee/ft/chara/ftCommon/ftCo_FallSpecial.h>
 #include <melee/ft/chara/ftCommon/ftCo_Guard.h>
-#include <melee/ft/chara/ftCommon/ftCo_JumpAerial.h>
 #include <melee/ft/chara/ftCommon/ftCo_Lift.h>
-#include <melee/ft/chara/ftCommon/ftCo_SpecialAir.h>
 #include <melee/ft/chara/ftCommon/ftCo_SpecialS.h>
-#include <melee/ft/chara/ftCommon/ftCo_Squat.h>
-#include <melee/ft/chara/ftCommon/ftCo_Turn.h>
 #include <melee/ft/ft_0877.h>
 #include <melee/ft/ft_0881.h>
-#include <melee/ft/ft_0892.h>
 #include <melee/ft/ft_0CDD.h>
 #include <melee/ft/ftcamera.h>
 #include <melee/ft/ftchangeparam.h>
-#include <melee/ft/ftcoll.h>
 #include <melee/ft/ftlib.h>
 #include <melee/ft/ftmaterial.h>
 #include <melee/ft/ftmetal.h>
-#include <melee/ft/ftwalkcommon.h>
 #include <melee/gm/gm_unsplit.h>
 #include <melee/gr/stage.h>
 #include <melee/it/item.h>
 #include <melee/it/items/it_2E5A.h>
 #include <melee/it/items/itkinoko.h>
-#include <melee/lb/lbvector.h>
-#include <melee/mp/mpcoll.h>
 #include <melee/pl/pl_040D.h>
 #include <melee/pl/player.h>
 #include <melee/pl/plbonuslib.h>
@@ -323,88 +308,8 @@ void ftCo_DeadLeft_Anim(Fighter_GObj* gobj)
 
 void ftCo_DeadLeft_Cam(Fighter_GObj* gobj) {}
 
-void ftCo_800D3950(Fighter_GObj* gobj)
-{
-    Vec3 sp2C;
-    f32 sp24;
-    Fighter* temp_r27;
-    Fighter* temp_r27_2;
-    Fighter* temp_r28;
-    Fighter* temp_r28_3;
-    Fighter* temp_r31;
-    FtSFX* temp_r28_2;
-    f32 temp_f1;
-    f32 temp_f31;
-    s32 temp_r29;
-    s32 temp_r6;
-    s32 var_r3;
-    u8* temp_r8;
-    u8 temp_r3;
-    u8 temp_r4;
-    u8 temp_r5;
-    u8 temp_r7;
-    u8 temp_r8_2;
-    u8* temp_r9;
+/// #ftCo_800D3950
 
-    temp_r27 = gobj->user_data;
-    temp_r31 = temp_r27;
-    ftCo_800D331C(gobj);
-    temp_r27->mv.co.unk_800D3680.x40 = p_ftCommonData->x500;
-    Fighter_ChangeMotionState(gobj, 2, 0U, 0.0F, 1.0F, 0.0F, NULL);
-    temp_r28 = gobj->user_data;
-    if (temp_r28->x221D_b6) {
-        ft_800880D8(temp_r28);
-        temp_r28->x2004 = 0;
-    }
-    temp_r28->x2219_b1 = 1;
-    temp_r28->x221E_b1 = 1;
-    temp_r28->x221E_b2 = 1;
-    pl_8003DF44(temp_r27->player_id, temp_r27->x221F_b2);
-
-    temp_r27_2 = gobj->user_data;
-    temp_r28_2 = temp_r27_2->ft_data->x4C_sfx;
-    temp_r27_2->invisible = true;
-    temp_r27_2->x221F_b1 = 1;
-    Camera_80030E44(4, &temp_r27_2->cur_pos);
-    ftCo_800D35FC(temp_r27_2);
-    ftCo_800D34E0(gobj);
-    ft_80088C5C(gobj);
-    ftCo_800D38B8(temp_r27_2, temp_r28_2->x4);
-    ftCo_800D38B8(temp_r27_2, temp_r28_2->x8);
-
-    ft_PlaySFX(temp_r31, 0x89, 0x7F, 0x40);
-    ft_8008805C(temp_r31, 0x89);
-    sp2C = temp_r31->cur_pos;
-    temp_f31 = Stage_GetBlastZoneTopOffset();
-    temp_f1 = Stage_GetBlastZoneBottomOffset();
-    if (sp2C.y > temp_f31) {
-        sp2C.y = temp_f31;
-    }
-    if (sp2C.y < temp_f1) {
-        sp2C.y = temp_f1;
-    }
-    sp24 = 1.5707964f;
-    temp_r28_3 = gobj->user_data;
-    temp_r3 = Player_GetUnk45(temp_r28_3->player_id);
-    temp_r8 = &Fighter_804D650C[temp_r3];
-    temp_r9 = &Fighter_804D6508[temp_r3];
-    temp_r7 = temp_r8[0];
-    temp_r4 = temp_r9[0];
-    temp_r6 = ((temp_r8[1] << 8) & ~0xFF0000) | ((temp_r7 << 0x10) & 0xFF0000);
-    temp_r8_2 = temp_r8[2];
-    temp_r5 = temp_r9[2];
-    temp_r29 = temp_r5 | (((temp_r9[1] << 8) & ~0xFF0000) |
-                          ((temp_r4 << 0x10) & 0xFF0000));
-    if (gm_801693BC(temp_r28_3->player_id)) {
-        var_r3 = 0x42C;
-    } else {
-        var_r3 = 0x42B;
-    }
-    efSync_Spawn(var_r3, gobj, &sp2C, &sp24, &p_ftCommonData->x4F4,
-                 temp_r8_2 | temp_r6, temp_r29);
-    sp2C.x = Stage_GetBlastZoneRightOffset();
-    ftCo_800D4E50(temp_r31, &sp2C, 1, 0.0F);
-}
 void ftCo_DeadRight_Anim(Fighter_GObj* gobj)
 {
     Fighter* fp = GET_FIGHTER(gobj);
@@ -416,88 +321,8 @@ void ftCo_DeadRight_Anim(Fighter_GObj* gobj)
 
 void ftCo_DeadRight_Cam(Fighter_GObj* gobj) {}
 
-void ftCo_800D3BC8(Fighter_GObj* gobj)
-{
-    Vec3 sp2C;
-    f32 sp24;
-    Fighter* temp_r27;
-    Fighter* temp_r27_2;
-    Fighter* temp_r28;
-    Fighter* temp_r28_3;
-    Fighter* temp_r31;
-    FtSFX* temp_r28_2;
-    f32 temp_f1;
-    f32 temp_f31;
-    s32 temp_r29;
-    s32 temp_r6;
-    s32 var_r3;
-    u8* temp_r8;
-    u8 temp_r3;
-    u8 temp_r4;
-    u8 temp_r5;
-    u8 temp_r7;
-    u8 temp_r8_2;
-    u8* temp_r9;
+/// #ftCo_800D3BC8
 
-    temp_r27 = gobj->user_data;
-    temp_r31 = temp_r27;
-    ftCo_800D331C(gobj);
-    temp_r27->mv.co.unk_800D3680.x40 = p_ftCommonData->x500;
-    Fighter_ChangeMotionState(gobj, 0, 0U, 0.0F, 1.0F, 0.0F, NULL);
-    temp_r28 = gobj->user_data;
-    if (temp_r28->x221D_b6) {
-        ft_800880D8(temp_r28);
-        temp_r28->x2004 = 0;
-    }
-    temp_r28->x2219_b1 = 1;
-    temp_r28->x221E_b1 = 1;
-    temp_r28->x221E_b2 = 1;
-    pl_8003DF44(temp_r27->player_id, temp_r27->x221F_b2);
-
-    temp_r27_2 = gobj->user_data;
-    temp_r28_2 = temp_r27_2->ft_data->x4C_sfx;
-    temp_r27_2->invisible = true;
-    temp_r27_2->x221F_b1 = 1;
-    Camera_80030E44(4, &temp_r27_2->cur_pos);
-    ftCo_800D35FC(temp_r27_2);
-    ftCo_800D34E0(gobj);
-    ft_80088C5C(gobj);
-    ftCo_800D38B8(temp_r27_2, temp_r28_2->x4);
-    ftCo_800D38B8(temp_r27_2, temp_r28_2->x8);
-
-    ft_PlaySFX(temp_r31, 0x61, 0x7F, 0x40);
-    ft_8008805C(temp_r31, 0x61);
-    sp2C = temp_r31->cur_pos;
-    temp_f31 = Stage_GetBlastZoneTopOffset();
-    temp_f1 = Stage_GetBlastZoneBottomOffset();
-    if (sp2C.y > temp_f31) {
-        sp2C.y = temp_f31;
-    }
-    if (sp2C.y < temp_f1) {
-        sp2C.y = temp_f1;
-    }
-    sp24 = -1.5707964f;
-    temp_r28_3 = gobj->user_data;
-    temp_r3 = Player_GetUnk45(temp_r28_3->player_id);
-    temp_r8 = &Fighter_804D650C[temp_r3];
-    temp_r9 = &Fighter_804D6508[temp_r3];
-    temp_r7 = temp_r8[0];
-    temp_r4 = temp_r9[0];
-    temp_r6 = ((temp_r8[1] << 8) & ~0xFF0000) | ((temp_r7 << 0x10) & 0xFF0000);
-    temp_r8_2 = temp_r8[2];
-    temp_r5 = temp_r9[2];
-    temp_r29 = temp_r5 | (((temp_r9[1] << 8) & ~0xFF0000) |
-                          ((temp_r4 << 0x10) & 0xFF0000));
-    if (gm_801693BC(temp_r28_3->player_id)) {
-        var_r3 = 0x42C;
-    } else {
-        var_r3 = 0x42B;
-    }
-    efSync_Spawn(var_r3, gobj, &sp2C, &sp24, &p_ftCommonData->x4F4,
-                 temp_r8_2 | temp_r6, temp_r29);
-    sp2C.x = Stage_GetBlastZoneLeftOffset();
-    ftCo_800D4E50(temp_r31, &sp2C, 1, 0.0F);
-}
 void ftCo_DeadDown_Anim(Fighter_GObj* gobj)
 {
     Fighter* fp = GET_FIGHTER(gobj);
@@ -509,89 +334,8 @@ void ftCo_DeadDown_Anim(Fighter_GObj* gobj)
 
 void ftCo_DeadDown_Cam(Fighter_GObj* gobj) {}
 
-void ftCo_800D3E40(Fighter_GObj* gobj)
-{
-    u8 _[8];
-    Vec3 sp2C;
-    f32 sp24;
-    Fighter* fp;
-    Fighter* temp_r27_2;
-    Fighter* temp_r28;
-    Fighter* temp_r28_3;
-    Fighter* temp_r31;
-    FtSFX* temp_r28_2;
-    f32 temp_f1;
-    f32 temp_f31;
-    s32 temp_r29;
-    s32 temp_r6;
-    s32 var_r3;
-    u8* temp_r8;
-    u8 temp_r3;
-    u8 temp_r4;
-    u8 temp_r5;
-    u8 temp_r7;
-    u8 temp_r8_2;
-    u8* temp_r9;
+/// #ftCo_800D3E40
 
-    fp = gobj->user_data;
-    temp_r31 = fp;
-    ftCo_800D331C(gobj);
-    fp->mv.co.unk_800D3680.x40 = p_ftCommonData->x500;
-    Fighter_ChangeMotionState(gobj, 3, 0U, 0.0F, 1.0F, 0.0F, NULL);
-    temp_r28 = gobj->user_data;
-    if (temp_r28->x221D_b6) {
-        ft_800880D8(temp_r28);
-        temp_r28->x2004 = 0;
-    }
-    temp_r28->x2219_b1 = 1;
-    temp_r28->x221E_b1 = 1;
-    temp_r28->x221E_b2 = 1;
-    pl_8003DF44(fp->player_id, fp->x221F_b4);
-
-    temp_r27_2 = gobj->user_data;
-    temp_r28_2 = temp_r27_2->ft_data->x4C_sfx;
-    temp_r27_2->invisible = true;
-    temp_r27_2->x221F_b1 = 1;
-    Camera_80030E44(4, &temp_r27_2->cur_pos);
-    ftCo_800D35FC(temp_r27_2);
-    ftCo_800D34E0(gobj);
-    ft_80088C5C(gobj);
-    ftCo_800D38B8(temp_r27_2, temp_r28_2->x4);
-    ftCo_800D38B8(temp_r27_2, temp_r28_2->x8);
-
-    ft_PlaySFX(temp_r31, 0x61, 0x7F, 0x40);
-    ft_8008805C(temp_r31, 0x61);
-    sp2C = temp_r31->cur_pos;
-    temp_f31 = Stage_GetBlastZoneRightOffset();
-    temp_f1 = Stage_GetBlastZoneLeftOffset();
-    if (sp2C.x > temp_f31) {
-        sp2C.x = temp_f31;
-    }
-    if (sp2C.x < temp_f1) {
-        sp2C.x = temp_f1;
-    }
-    sp24 = 3.1415927f;
-    temp_r28_3 = gobj->user_data;
-    temp_r3 = Player_GetUnk45(temp_r28_3->player_id);
-    temp_r8 = &Fighter_804D650C[temp_r3];
-    temp_r9 = &Fighter_804D6508[temp_r3];
-    temp_r7 = temp_r8[0];
-    temp_r4 = temp_r9[0];
-    temp_r6 = ((temp_r8[1] << 8) & ~0xFF0000) | ((temp_r7 << 0x10) & 0xFF0000);
-    temp_r8_2 = temp_r8[2];
-    temp_r5 = temp_r9[2];
-    temp_r29 = temp_r5 | (((temp_r9[1] << 8) & ~0xFF0000) |
-                          ((temp_r4 << 0x10) & 0xFF0000));
-    if (gm_801693BC(temp_r28_3->player_id)) {
-        var_r3 = 0x42C;
-    } else {
-        var_r3 = 0x42B;
-    }
-    efSync_Spawn(var_r3, gobj, &sp2C, &sp24, &p_ftCommonData->x4F4,
-                 temp_r8_2 | temp_r6, temp_r29);
-    sp2C.y = Stage_GetBlastZoneTopOffset();
-    ftCo_800D4E50(temp_r31, &sp2C, 1, 0.0F);
-}
 void ftCo_DeadUp_Anim(Fighter_GObj* gobj)
 {
     Fighter* fp = GET_FIGHTER(gobj);
@@ -633,29 +377,8 @@ void ftCo_800D40B8(Fighter_GObj* gobj)
     fp->mv.co.unk_deadup.x68 = 0;
 }
 
-void ftCo_800D41C4(Fighter_GObj* gobj)
-{
-    u8 _[8];
-    int* temp_r31;
-    Fighter* temp_r30;
-    Fighter* temp_r28;
+/// #ftCo_800D41C4
 
-    temp_r28 = GET_FIGHTER(gobj);
-    temp_r28->x2227_b6 = true;
-    temp_r30 = GET_FIGHTER(gobj);
-    temp_r31 = &p_ftCommonData->x504;
-    ftCo_800D331C(gobj);
-    temp_r30->mv.co.unk_deadup.x40 = *temp_r31;
-    temp_r30->mv.co.unk_deadup.x44 = 0.0F;
-    Fighter_ChangeMotionState(gobj, 5, 0, 0.0F, 1.0F, 0.0F, NULL);
-    ftCo_800D40B8_inline(gobj);
-    ftCommon_8007EFC0(temp_r30, true);
-    ft_800881D8(temp_r30, temp_r30->ft_data->x4C_sfx->xC, 127, 64);
-    pl_8003DF44(temp_r30->player_id, temp_r30->x221F_b4);
-    ftCo_80090AC0(temp_r28);
-    ftCommon_8007EBAC(temp_r28, true, false);
-    temp_r28->mv.co.unk_deadup.x68 = 1;
-}
 /// #ftCo_DeadUpStar_Anim
 
 void ftCo_DeadUpStar_Cam(Fighter_GObj* gobj)
@@ -686,53 +409,10 @@ void ftCo_800D47B8(Fighter_GObj* gobj)
 
 /// #ftCo_DeadUpFall_Anim
 
-void ftCo_DeadUpFall_Phys(Fighter_GObj* gobj)
-{
-    void* co;
-    Fighter* fp = gobj->user_data;
-    s32 state = M2C_FIELD(fp, s32*, 0x2344);
-    co = (void*) ((u8*) p_ftCommonData + 0x520);
+/// #ftCo_DeadUpFall_Phys
 
-    switch (state) {
-    case 1:
-        if (!fp->x2222_b6 || ftAnim_80070FD0(fp) != 0) {
-            lbVector_Lerp((Vec3*) ((u8*) co + 0x18), (Vec3*) ((u8*) co + 0x24),
-                          (Vec3*) ((u8*) fp + 0x2350),
-                          M2C_FIELD(fp, float*, 0x234C));
-        }
-        break;
-    case 2:
-        break;
-    case 3:
-        ftCommon_Fall(fp, M2C_FIELD(co, float*, 0x34),
-                      M2C_FIELD(co, float*, 0x38));
-        lbVector_Add((Vec3*) ((u8*) fp + 0x235C), &fp->self_vel);
-        if (!fp->x2222_b6 || ftAnim_80070FD0(fp) != 0) {
-            lbVector_Add((Vec3*) ((u8*) fp + 0x2350),
-                         (Vec3*) ((u8*) fp + 0x235C));
-            M2C_FIELD(fp, float*, 0x235C) = 0.0f;
-            M2C_FIELD(fp, float*, 0x2360) = 0.0f;
-            M2C_FIELD(fp, float*, 0x2364) = 0.0f;
-        }
-        break;
-    }
-}
-static void fn_800D4DD4(Fighter_GObj* gobj)
-{
-    u8 _pad[8];
-    Fighter* fp = gobj->user_data;
+/// #fn_800D4DD4
 
-    if (M2C_FIELD(fp, s32*, 0x2344) != 3) {
-        goto end;
-    }
-    {
-        f32 bottom = Stage_GetCamBoundsBottomOffset();
-        if (fp->cur_pos.y < bottom) {
-            ftCommon_8007E2FC(gobj);
-        }
-    }
-end:;
-}
 void ftCo_DeadUpFall_Cam(Fighter_GObj* gobj)
 {
     ftCamera_80076320(gobj);
@@ -783,60 +463,12 @@ void ftCo_800D4F24(Fighter_GObj* gobj, int index)
 
 /// #ftCo_800D4FF4
 
-void ftCo_Rebirth_Anim(Fighter_GObj* gobj)
-{
-    Fighter* fp = gobj->user_data;
-    ftCo_8008A7A8(gobj, fp->ft_data->x24);
-    fp->mv.co.unk_deadup.x40--;
-    if (fp->mv.co.unk_deadup.x40 == 0) {
-        ftCo_800D5600(gobj);
-    }
-}
+/// #ftCo_Rebirth_Anim
+
 void ftCo_Rebirth_IASA(Fighter_GObj* gobj) {}
 
-float const ftCo_804D8FC8 = 0.0f;
-float const ftCo_804D8FCC = 1.0f;
+/// #ftCo_Rebirth_Phys
 
-void ftCo_Rebirth_Phys(Fighter_GObj* gobj)
-{
-    Vec3 sp30;
-    Vec3 sp24;
-    Vec3 sp18;
-    u8 _pad[12];
-    Fighter* fp;
-    s8 platform;
-    Fighter_GObj* other_gobj;
-    Fighter* other_fp;
-    f32 factor;
-
-    fp = gobj->user_data;
-    if (!fp->x221F_b4) {
-        platform = fp->smash_attrs.x2135;
-        if ((s8) platform != (s8) -1) {
-            Stage_80224E38(&sp18, (s8) platform);
-            Player_GetSomePos(fp->player_id, &sp24);
-            M2C_FIELD(&fp->mv.co.unk_deadup, float*, 0x44 - 0x40) =
-                sp18.x + sp24.x + fp->facing_dir * ftCommon_800804EC(fp);
-            M2C_FIELD(&fp->mv.co.unk_deadup, float*, 0x48 - 0x40) =
-                sp18.y + sp24.y;
-            M2C_FIELD(&fp->mv.co.unk_deadup, float*, 0x4C - 0x40) =
-                ftCo_804D8FC8;
-        }
-        ftCommon_8007F8B4(fp, &sp30);
-        factor = ftCo_804D8FCC / (f32) fp->mv.co.unk_deadup.x40;
-        fp->self_vel.x =
-            factor *
-            (M2C_FIELD(&fp->mv.co.unk_deadup, float*, 0x44 - 0x40) - sp30.x);
-        fp->self_vel.y =
-            factor *
-            (M2C_FIELD(&fp->mv.co.unk_deadup, float*, 0x48 - 0x40) - sp30.y);
-    } else {
-        other_gobj = Player_GetEntityAtIndex(fp->player_id, 0);
-        other_fp = other_gobj->user_data;
-        fp->self_vel.x = other_fp->self_vel.x;
-        fp->self_vel.y = other_fp->self_vel.y;
-    }
-}
 void ftCo_Rebirth_Coll(HSD_GObj* gobj)
 {
     Fighter* fp = GET_FIGHTER(gobj);
@@ -844,58 +476,10 @@ void ftCo_Rebirth_Coll(HSD_GObj* gobj)
         ft_80083DCC(gobj);
     }
 }
-static void fn_800D54A4(Fighter_GObj* gobj)
-{
-    Vec3 pos;
-    u8 _pad[8];
-    HSD_JObj* jobj;
-    Fighter* fp = gobj->user_data;
-    Fighter_GObj* other_gobj;
-    Fighter* other_fp;
-    s32 var;
-
-    other_gobj = Player_GetEntityAtIndex(fp->player_id, 1);
-    if (other_gobj != NULL) {
-        other_fp = other_gobj->user_data;
-        if (!other_fp->x221F_b3) {
-            if (other_fp->cur_pos.y > fp->cur_pos.y) {
-                fp->cur_pos.y = other_fp->cur_pos.y;
-            }
-        }
-    }
-
-    pos.x = fp->cur_pos.x - fp->facing_dir * ftCommon_800804EC(fp);
-    pos.y = fp->cur_pos.y;
-    pos.z = fp->cur_pos.z;
-
-    jobj = fp->x20A0_accessory;
-    if (jobj == NULL) {
-        __assert("ft_0D31.c", 0x394, "jobj");
-    }
-
-    *(u32*) &jobj->translate.x = *(u32*) &pos.x;
-    *(u32*) &jobj->translate.y = *(u32*) &pos.y;
-    *(u32*) &jobj->translate.z = *(u32*) &pos.z;
-
-    if (!(jobj->flags & 0x02000000)) {
-        if (jobj != NULL) {
-            if (jobj == NULL) {
-                __assert("ft_0D31.c", 0x234, "jobj");
-            }
-            var = 0;
-            if (!(jobj->flags & 0x800000) && (jobj->flags & 0x40)) {
-                var = 1;
-            }
-            if (var == 0) {
-                HSD_JObjSetMtxDirtySub(jobj);
-            }
-        }
-    }
-}
+/// #fn_800D54A4
 
 void fn_800D55B4(Fighter_GObj* gobj)
 {
-    u8 _pad[8];
     Fighter* fp = gobj->user_data;
     HSD_GObj* other_gobj = Player_GetEntityAtIndex(fp->player_id, 0);
     Fighter* other_fp = other_gobj->user_data;
@@ -903,166 +487,19 @@ void fn_800D55B4(Fighter_GObj* gobj)
         fp->cur_pos.y = other_fp->cur_pos.y;
     }
 }
+/// #ftCo_800D5600
 
-void ftCo_800D5600(Fighter_GObj* gobj)
-{
-    Fighter* fp = gobj->user_data;
+/// #ftCo_RebirthWait_Anim
 
-    mpColl_80043680(&fp->coll_data, &fp->cur_pos);
-    fp->self_vel.y = 0.0f;
-    fp->mv.co.unk_deadup.x40 = (int) p_ftCommonData->x5D4;
-    Fighter_ChangeMotionState(gobj, ftCo_MS_RebirthWait,
-                              Ft_MF_KeepGfx | Ft_MF_SkipColAnim |
-                                  Ft_MF_KeepAccessory | Ft_MF_SkipNametagVis,
-                              0.0f, 1.0f, 0.0f, NULL);
-    fp->x221E_b5 = true;
-    fp->x2219_b6 = true;
-    fp->x221E_b6 = true;
-    fp->x221D_b2 = true;
-    if (!fp->x221F_b4) {
-        fp->accessory1_cb = fn_800D54A4;
-    } else {
-        fp->accessory1_cb = fn_800D55B4;
-    }
-    if (fp->smash_attrs.x2135 != -1) {
-        mpColl_80043680(&fp->coll_data, &fp->cur_pos);
-    }
-}
+/// #ftCo_RebirthWait_IASA
 
-void ftCo_RebirthWait_Anim(Fighter_GObj* gobj)
-{
-    Fighter* fp = gobj->user_data;
+/// #ftCo_RebirthWait_Phys
 
-    ftCo_8008A7A8(gobj, fp->ft_data->x24);
-    fp->mv.co.unk_deadup.x40--;
-    if (fp->mv.co.unk_deadup.x40 == 0) {
-        ftColl_8007B7A4(gobj, (int)p_ftCommonData->x5D8);
-        ftCo_Fall_Enter(gobj);
-    }
-}
-
-void ftCo_RebirthWait_IASA(Fighter_GObj* gobj)
-{
-    Fighter* fp = gobj->user_data;
-    bool can_interrupt = false;
-    Fighter_GObj* other_gobj;
-    Fighter* other_fp;
-    u8 _pad[8];
-
-    if (!fp->x221F_b4) {
-        other_gobj = Player_GetEntityAtIndex(fp->player_id, 1);
-        if (other_gobj != NULL) {
-            other_fp = other_gobj->user_data;
-            if (!other_fp->x221F_b3 && ftLib_800873CC(other_gobj) == 0) {
-                can_interrupt = true;
-            }
-        }
-    } else {
-        other_gobj = Player_GetEntityAtIndex(fp->player_id, 0);
-        if (ftLib_800873CC(other_gobj) != 0) {
-            return;
-        }
-        can_interrupt = true;
-    }
-
-    if (ftCo_SpecialAir_CheckInput(gobj)) {
-        goto end;
-    }
-    if (ftCo_800D7100(gobj)) {
-        goto end;
-    }
-    if (ftCo_800C3B10(gobj)) {
-        goto end;
-    }
-    if (ftCo_80099A58(gobj)) {
-        goto end;
-    }
-    if (ftCo_AttackAir_CheckItemThrowInput(gobj)) {
-        goto end;
-    }
-    if (ftCo_800D705C(gobj)) {
-        goto end;
-    }
-    if (ftCo_800CB870(gobj)) {
-        goto end;
-    }
-    if (ftCo_80091A2C(gobj) || ftCo_800DE9B8(gobj) || fn_800D5F84(gobj) ||
-        ftCo_800C97A8(gobj) || ftWalkCommon_800DFC70(gobj) || can_interrupt)
-    {
-        ftCo_Fall_Enter(gobj);
-        goto end;
-    }
-    return;
-
-end:
-    ftColl_8007B7A4(gobj, (int) p_ftCommonData->x5D8);
-    pl_80040374(fp->player_id, fp->x221F_b4);
-}
-void ftCo_RebirthWait_Phys(Fighter_GObj* gobj)
-{
-    Vec3 sp30;
-    Vec3 sp24;
-    Vec3 sp18;
-    u8 _pad[12];
-    Fighter* fp = gobj->user_data;
-    u8 platform;
-    Fighter_GObj* other_gobj;
-    Fighter* other_fp;
-    f32 factor;
-
-    if (!fp->x221F_b4) {
-        platform = fp->smash_attrs.x2135;
-        if ((s8) platform != (s8) -1) {
-            Stage_80224E38(&sp18, (s8) platform);
-            Player_GetSomePos(fp->player_id, &sp24);
-            M2C_FIELD(&fp->mv.co.unk_deadup, float*, 0x44 - 0x40) =
-                sp18.x + sp24.x + fp->facing_dir * ftCommon_800804EC(fp);
-            M2C_FIELD(&fp->mv.co.unk_deadup, float*, 0x48 - 0x40) =
-                sp18.y + sp24.y;
-            M2C_FIELD(&fp->mv.co.unk_deadup, float*, 0x4C - 0x40) =
-                ftCo_804D8FC8;
-        }
-        ftCommon_8007F8B4(fp, &sp30);
-        factor = ftCo_804D8FCC / (f32) fp->mv.co.unk_deadup.x40;
-        fp->self_vel.x =
-            factor *
-            (M2C_FIELD(&fp->mv.co.unk_deadup, float*, 0x44 - 0x40) - sp30.x);
-        fp->self_vel.y =
-            factor *
-            (M2C_FIELD(&fp->mv.co.unk_deadup, float*, 0x48 - 0x40) - sp30.y);
-    } else {
-        other_gobj = Player_GetEntityAtIndex(fp->player_id, 0);
-        other_fp = other_gobj->user_data;
-        fp->self_vel.x = other_fp->self_vel.x;
-        fp->self_vel.y = other_fp->self_vel.y;
-    }
-}
-
-void ftCo_RebirthWait_Coll(Fighter_GObj* gobj)
-{
-    ft_80083844(gobj, fn_800D5A30);
-}
+/// #ftCo_RebirthWait_Coll
 
 void fn_800D5A30(Fighter_GObj* gobj)
 {
-    ftColl_8007B7A4(gobj, (int)p_ftCommonData->x5D8);
+    ftColl_8007B7A4(gobj, p_ftCommonData->x5D8);
     ft_8008A2BC(gobj);
 }
-
-void ftCo_Rebirth_Cam(Fighter_GObj* gobj)
-{
-    u8 _0[8];
-    Vec3 pos;
-    u8 _1[4];
-    Fighter* fp = gobj->user_data;
-    CmSubject* cam = fp->x890_cameraBox;
-
-    ftCamera_80076018((UnkFloat6_Camera*) fp->ft_data->x3C,
-                      (UnkFloat6_Camera*) &pos, fp->x34_scale.y);
-
-    cam->x10.x = *(float*) &fp->mv.co.unk_deadup.x44;
-    cam->x10.y = M2C_FIELD(&fp->mv.co.unk_deadup, float*, 0x48 - 0x40) + pos.x;
-    cam->x10.z = 0.0f;
-
-    ftLib_800866DC(gobj, &cam->x1C);
-}
+/// #ftCo_Rebirth_Cam

@@ -8,7 +8,7 @@
 
 /* 2AD478 */ HSD_GObj* it_802AD478(Item_GObj*, Vec3*, s32, float);
 /* 2AD590 */ Item_GObj* it_802AD590(Fighter_GObj*, Fighter_Part);
-/* 2AD6B8 */ void it_802AD6B8(Item_GObj* gobj);
+/* 2AD6B8 */ void it_802AD6B8(Item_GObj*);
 /* 2AD6F0 */ void it_2725_Logic58_PickedUp(Item_GObj*);
 /* 2AD768 */ bool itNessbat_UnkMotion0_Anim(Item_GObj* gobj);
 /* 2AD8D0 */ void itNessbat_UnkMotion0_Phys(Item_GObj* gobj);

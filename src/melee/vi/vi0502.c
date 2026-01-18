@@ -7,14 +7,11 @@
 #include "ft/forward.h"
 
 #include "ft/ftdemo.h"
-#include "gm/gm_17C0.h"
-#include "gm/gm_1A36.h"
 #include "gm/gm_unsplit.h"
 #include "gr/grlib.h"
 #include "gr/ground.h"
 #include "gr/stage.h"
 #include "it/item.h"
-#include "lb/lb_00B0.h"
 #include "lb/lb_00F9.h"
 #include "lb/lbarchive.h"
 #include "lb/lbaudio_ax.h"
@@ -22,6 +19,7 @@
 #include "mp/mpcoll.h"
 #include "pl/player.h"
 #include "sc/types.h"
+#include "vi/types.h"
 #include "vi/vi.h"
 
 #include <dolphin/gx.h>
@@ -38,18 +36,9 @@
 #include <baselib/mtx.h>
 #include <baselib/wobj.h>
 
-extern GXColor erase_colors_vi0502;
+Vec3 initial_pos = { 0, -3.0f, 0 };
 
-extern SceneDesc* un_804D6F90;
-extern HSD_Archive* un_804D6F9C;
-extern HSD_Archive* un_804D6F98;
-
-// .data section 0x804000D0 - 0x80400108 (size 0x38)
-char un_804000D0[0x38];
-
-Vec3 initial_pos = { 0, 0, 0 };
-
-static f32 un_804DE0A0;
+static SceneDesc* un_804D6F90;
 static HSD_Archive* un_804D6F94;
 static HSD_Archive* un_804D6F98;
 static HSD_Archive* un_804D6F9C;
@@ -57,8 +46,15 @@ static GXColor erase_colors_vi0502;
 static HSD_GObj* kirby_gobj;
 static ViCharaDesc* un_804D6FA8;
 
-void vi0502_8031E124(CharacterKind player_kind, s8 player_costume,
-                     s8 kirby_costume)
+void un_8031E110(int arg0, int arg1, int arg2)
+{
+    un_804D6FA8->p1_char_index = arg0;
+    un_804D6FA8->p1_costume_index = arg1;
+    un_804D6FA8->p2_costume_index = arg2;
+}
+
+void vi0502_8031E124(CharacterKind player_kind, int player_costume,
+                     int kirby_costume)
 {
     HSD_JObj* jobj;
     VecMtxPtr pmtx;
@@ -166,38 +162,39 @@ void un_8031E444_OnEnter(void* arg)
 
     char_kind = input[0];
 
-    un_804D6F9C = lbArchive_LoadSymbols(un_804000D0 + 0xC, &un_804D6F90,
-                                        un_804000D0 + 0x18, NULL);
+    un_804D6F9C = lbArchive_LoadSymbols("Vi0502.dat", &un_804D6F90,
+                                        "visual0502Scene", NULL);
     un_804D6F94 = lbArchive_LoadSymbols(viGetCharAnimByIndex(char_kind), NULL);
-    un_804D6F98 = lbArchive_LoadSymbols(un_804000D0 + 0x28, NULL);
+    un_804D6F98 = lbArchive_LoadSymbols("IrAls.dat", NULL);
 
-    gobj = GObj_Create(0xb, 3, 0);
+    gobj = GObj_Create(0xB, 3, 0);
     fog = HSD_FogLoadDesc(un_804D6F90->fogs->desc);
     HSD_GObjObject_80390A70(gobj, HSD_GObj_804D7848, fog);
     GObj_SetupGXLink(gobj, HSD_GObj_FogCallback, 0, 0);
-    *(GXColor*)&erase_colors_vi0502 = fog->color;
+    *(GXColor*) &erase_colors_vi0502 = fog->color;
 
-    gobj = GObj_Create(0xb, 3, 0);
+    gobj = GObj_Create(0xB, 3, 0);
     lobj = lb_80011AC4(un_804D6F90->lights);
     HSD_GObjObject_80390A70(gobj, HSD_GObj_804D784A, lobj);
     GObj_SetupGXLink(gobj, HSD_GObj_LObjCallback, 0, 0);
 
     gobj = GObj_Create(0x13, 0x14, 0);
-    cobj = lb_80013B14((HSD_CameraDescPerspective*)un_804D6F90->cameras->desc);
+    cobj =
+        lb_80013B14((HSD_CameraDescPerspective*) un_804D6F90->cameras->desc);
     HSD_GObjObject_80390A70(gobj, HSD_GObj_804D784B, cobj);
-    GObj_SetupGXLinkMax(gobj, (void(*)(HSD_GObj*, int))vi0502_8031E328, 5);
+    GObj_SetupGXLinkMax(gobj, (void (*)(HSD_GObj*, int)) vi0502_8031E328, 5);
     HSD_CObjAddAnim(cobj, un_804D6F90->cameras->anims[0]);
-    HSD_CObjReqAnim(cobj, un_804DE0A0);
+    HSD_CObjReqAnim(cobj, 0.0f);
     HSD_CObjAnim(cobj);
     HSD_GObjProc_8038FD54(gobj, vi0502_RunFrame, 0);
 
     for (i = 0; un_804D6F90->models[i] != NULL; i++) {
-        gobj = GObj_Create(0xe, 0xf, 0);
+        gobj = GObj_Create(0xE, 0xF, 0);
         jobj = HSD_JObjLoadJoint(un_804D6F90->models[i]->joint);
         HSD_GObjObject_80390A70(gobj, HSD_GObj_804D7849, jobj);
         GObj_SetupGXLink(gobj, HSD_GObj_JObjCallback, 9, 0);
         gm_8016895C(jobj, un_804D6F90->models[i], 0);
-        HSD_JObjReqAnimAll(jobj, un_804DE0A0);
+        HSD_JObjReqAnimAll(jobj, 0.0f);
         HSD_JObjAnimAll(jobj);
         HSD_GObjProc_8038FD54(gobj, vi0502_8031E304, 0x17);
     }

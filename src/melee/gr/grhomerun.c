@@ -6,7 +6,6 @@
 #include "gr/ground.h"
 #include "gr/grzakogenerator.h"
 #include "gr/inlines.h"
-#include "lb/lb_00B0.h"
 
 void grHomeRun_8021C750(bool arg) {}
 
@@ -72,13 +71,7 @@ bool grHomeRun_8021DF48(Ground_GObj* arg)
 
 /// #grHomeRun_8021DF50
 
-void grHomeRun_8021E008(Ground_GObj* gobj)
-{
-    Ground* gp = GET_GROUND(gobj);
-    if ((u32) gp->gv.unk.xC8 != 0) {
-        HSD_SisLib_803A5CC4((HSD_Text*) gp->gv.unk.xC8);
-    }
-}
+/// #grHomeRun_8021E008
 
 void grHomeRun_8021E038(Ground_GObj* gobj)
 {
@@ -104,13 +97,7 @@ bool grHomeRun_8021E0CC(Ground_GObj* arg)
 
 /// #grHomeRun_8021E0D4
 
-void grHomeRun_8021E18C(Ground_GObj* gobj)
-{
-    Ground* gp = GET_GROUND(gobj);
-    if ((u32) gp->gv.unk.xC8 != 0) {
-        HSD_SisLib_803A5CC4((HSD_Text*) gp->gv.unk.xC8);
-    }
-}
+/// #grHomeRun_8021E18C
 
 void grHomeRun_8021E1BC(Ground_GObj* gobj)
 {
@@ -136,13 +123,7 @@ bool grHomeRun_8021E250(Ground_GObj* arg)
 
 /// #grHomeRun_8021E258
 
-void grHomeRun_8021E310(Ground_GObj* gobj)
-{
-    Ground* gp = GET_GROUND(gobj);
-    if ((u32) gp->gv.unk.xC8 != 0) {
-        HSD_SisLib_803A5CC4((HSD_Text*) gp->gv.unk.xC8);
-    }
-}
+/// #grHomeRun_8021E310
 
 void grHomeRun_8021E340(Ground_GObj* gobj)
 {
@@ -168,13 +149,7 @@ bool grHomeRun_8021E3D4(Ground_GObj* arg)
 
 /// #grHomeRun_8021E3DC
 
-void grHomeRun_8021E494(Ground_GObj* gobj)
-{
-    Ground* gp = GET_GROUND(gobj);
-    if ((u32) gp->gv.unk.xC8 != 0) {
-        HSD_SisLib_803A5CC4((HSD_Text*) gp->gv.unk.xC8);
-    }
-}
+/// #grHomeRun_8021E494
 
 void grHomeRun_8021E4C4(Ground_GObj* gobj)
 {
@@ -254,16 +229,7 @@ DynamicsDesc* grHomeRun_8021EEB4(enum_t arg)
     return false;
 }
 
-bool grHomeRun_8021EEBC(Vec3* a, int b, HSD_JObj* jobj)
-{
-    Vec3 vec;
-    lb_8000B1CC(jobj, NULL, &vec);
-    if (a->y > vec.y) {
-        return true;
-    } else {
-        return false;
-    }
-}
+/// #grHomeRun_8021EEBC
 
 extern f32 grHr_804DBC94;
 

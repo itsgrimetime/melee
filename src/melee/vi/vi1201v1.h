@@ -3,8 +3,10 @@
 
 #include <placeholder.h>
 
-#include "ft/forward.h"
+#include "dolphin/gx/GXStruct.h"
 
+#include "ft/forward.h"
+#include "sc/forward.h"
 #include <baselib/forward.h>
 
 /* 31F980 */ void un_8031F980(int arg0, int arg1);

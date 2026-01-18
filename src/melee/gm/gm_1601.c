@@ -774,11 +774,7 @@ f32 fn_80160F58(u8 ckind)
 
 /// #fn_80162170
 
-s32 gm_801623A4(MatchEnd* arg0)
-{
-    fn_80162068();
-    return fn_80162170(arg0);
-}
+/// #gm_801623A4
 
 int gm_801623D8(void)
 {
@@ -898,10 +894,7 @@ void gm_80162B98(void)
     *temp_r3 = MAX(*temp_r3 + 1, -1);
 }
 
-int gm_80162BD8(u8 arg0)
-{
-    return *gmMainLib_8015D0C0(arg0);
-}
+/// #gm_80162BD8
 
 /// #fn_80162BFC
 
@@ -931,10 +924,7 @@ bool gm_80162D1C(void)
 
 /// #gm_80162D6C
 
-int gm_80162DD4(u8 i)
-{
-    return *gmMainLib_8015D1E8(i);
-}
+/// #gm_80162DD4
 
 /// #fn_80162DF8
 
@@ -964,10 +954,7 @@ bool gm_80162F18(void)
 
 /// #gm_80162F68
 
-int gm_80162FD0(u8 i)
-{
-    return *gmMainLib_8015D310(i);
-}
+/// #gm_80162FD0
 
 /// #fn_80162FF4
 
@@ -997,17 +984,11 @@ bool gm_80163114(void)
 
 /// #gm_80163164
 
-u32 gm_801631CC(u8 i)
-{
-    return *gmMainLib_8015D06C(i);
-}
+/// #gm_801631CC
 
 /// #gm_801631F0
 
-u16 gm_80163274(u8 i)
-{
-    return *gmMainLib_8015D7EC(i);
-}
+/// #gm_80163274
 
 /// #gm_80163298
 
@@ -1952,15 +1933,7 @@ void gm_8016895C(HSD_JObj* arg0, DynamicModelDesc* arg1, int idx)
     HSD_JObjAddAnimAll(arg0, anim, matanim, shapeanim);
 }
 
-void fn_801689E4(HSD_JObj* arg0, DynamicModelDesc* arg1, int idx)
-{
-    HSD_AnimJoint* anim = arg1->anims != NULL ? arg1->anims[idx] : NULL;
-    HSD_MatAnimJoint* matanim =
-        arg1->matanims != NULL ? arg1->matanims[idx] : NULL;
-    HSD_ShapeAnimJoint* shapeanim =
-        arg1->shapeanims != NULL ? arg1->shapeanims[idx] : NULL;
-    HSD_JObjAddAnimAll(arg0, anim, matanim, shapeanim);
-}
+/// #fn_801689E4
 
 /// #fn_80168A6C
 

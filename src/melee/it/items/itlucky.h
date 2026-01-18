@@ -53,7 +53,4 @@
 /* 3F8190 */ extern ItemStateTable it_803F8190[];
 /* 3F8200 */ extern ItemStateTable it_803F8200[];
 
-/* 4DD500 */ extern f32 it_804DD500;
-/* 4DD50C */ extern f32 it_804DD50C;
-
 #endif
