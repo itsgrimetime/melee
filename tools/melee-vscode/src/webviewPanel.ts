@@ -142,9 +142,9 @@ export class DiffPanel {
     <div class="diff-container">
         <div class="column-headers">
             <div class="col-header line-num-header"></div>
-            <div class="col-header marker-header"></div>
             <div class="col-header arrow-header"></div>
             <div class="col-header target-header">Target (Expected)</div>
+            <div class="col-header marker-header"></div>
             <div class="col-header arrow-header"></div>
             <div class="col-header current-header">Current (Compiled)</div>
         </div>
@@ -533,9 +533,9 @@ export class DiffPanel {
             const headerText = line.target.trim() || line.current.trim();
             return `<div class="diff-row header-row" data-offset="-1">
     <div class="line-num"></div>
-    <div class="marker-col"></div>
     <div class="arrow-gutter target-gutter"></div>
     <div class="target-col">${this._escapeHtml(headerText)}</div>
+    <div class="marker-col"></div>
     <div class="arrow-gutter current-gutter"></div>
     <div class="current-col">${this._escapeHtml(headerText)}</div>
 </div>`;
@@ -571,9 +571,9 @@ export class DiffPanel {
 
         return `<div class="diff-row ${statusClass} ${diffTypeClass}" data-offset="${offset}">
     <div class="line-num">${offsetHex}</div>
-    <div class="marker-col">${marker}</div>
     <div class="arrow-gutter target-gutter"></div>
     <div class="target-col">${targetHtml}</div>
+    <div class="marker-col">${marker}</div>
     <div class="arrow-gutter current-gutter"></div>
     <div class="current-col">${currentHtml}</div>
 </div>`;
@@ -807,7 +807,11 @@ body {
 }
 
 .col-header.target-header {
-    border-right: 1px solid var(--border-color);
+    /* No border - marker column provides the divider */
+}
+
+.col-header.marker-header {
+    border-left: 1px solid var(--border-color);
 }
 
 .diff-rows {
@@ -865,32 +869,27 @@ body {
 .diff-row.diff-o { background: rgba(220, 53, 69, 0.15); }    /* opcode - red */
 .diff-row.diff-s { background: rgba(255, 193, 7, 0.15); }    /* stack - yellow */
 
-/* Marker column */
+/* Marker column - between target and current */
 .marker-col {
-    width: 20px;
+    width: 16px;
     text-align: center;
     font-weight: bold;
     flex-shrink: 0;
-    font-size: 11px;
+    font-size: 12px;
+    border-left: 1px solid var(--border-color);
 }
 
 .diff-marker {
-    display: inline-block;
-    width: 14px;
-    height: 14px;
-    line-height: 14px;
-    text-align: center;
-    border-radius: 2px;
-    font-size: 10px;
+    font-weight: bold;
 }
 
-.marker-reg { background: #9cdcfe; color: #1e1e1e; }
-.marker-imm { background: #b5cea8; color: #1e1e1e; }
-.marker-op { background: #f14c4c; color: white; }
-.marker-stack { background: #cca700; color: #1e1e1e; }
-.marker-diff { background: #888; color: white; }
-.marker-target { background: #f14c4c; color: white; }
-.marker-current { background: #cca700; color: #1e1e1e; }
+.marker-reg { color: #9cdcfe; }   /* register - blue */
+.marker-imm { color: #b5cea8; }   /* immediate - green */
+.marker-op { color: #f14c4c; }    /* opcode - red */
+.marker-stack { color: #cca700; } /* stack - yellow */
+.marker-diff { color: #888; }     /* generic diff - gray */
+.marker-target { color: #f14c4c; } /* target only (>) - red */
+.marker-current { color: #cca700; } /* current only (<) - yellow */
 
 /* Mismatch highlighting */
 .mismatch-highlight {
@@ -955,7 +954,7 @@ body {
 }
 
 .target-col {
-    border-right: 1px solid var(--border-color);
+    /* No border - marker-col provides the divider */
 }
 
 /* Syntax highlighting */
