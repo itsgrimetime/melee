@@ -64,11 +64,18 @@ export class DiffProvider {
         console.log(`[melee-decomp] workspaceRoot: ${this.workspaceRoot}`);
         console.log(`[melee-decomp] checkdiffPath: ${checkdiffPath}`);
 
+        const TIMEOUT_MS = 60000;  // 60 second timeout
+
         return new Promise((resolve, reject) => {
             const proc = cp.spawn('python3', [checkdiffPath, functionName, '--format', 'json'], {
                 cwd: this.workspaceRoot,
                 env: { ...process.env }
             });
+
+            const timeout = setTimeout(() => {
+                proc.kill();
+                reject(new Error(`checkdiff.py timed out after ${TIMEOUT_MS / 1000}s`));
+            }, TIMEOUT_MS);
 
             console.log(`[melee-decomp] Spawned process for ${functionName}`);
 
@@ -84,6 +91,7 @@ export class DiffProvider {
             });
 
             proc.on('close', (code) => {
+                clearTimeout(timeout);
                 console.log(`[melee-decomp] Process exited with code: ${code}`);
                 console.log(`[melee-decomp] stdout length: ${stdout.length}`);
                 console.log(`[melee-decomp] stderr length: ${stderr.length}`);
@@ -119,6 +127,7 @@ export class DiffProvider {
             });
 
             proc.on('error', (err) => {
+                clearTimeout(timeout);
                 reject(new Error(`Failed to run checkdiff.py: ${err.message}`));
             });
         });
