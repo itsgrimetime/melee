@@ -69,22 +69,25 @@ export function activate(context: vscode.ExtensionContext) {
     );
 
     // Watch for file saves to refresh diff (with debounce)
-    const saveWatcher = vscode.workspace.onDidSaveTextDocument(async (doc) => {
+    const saveWatcher = vscode.workspace.onDidSaveTextDocument((doc) => {
         if (doc.languageId === 'c' && DiffPanel.currentPanel) {
             const currentFunc = DiffPanel.currentPanel.currentFunction;
             if (currentFunc) {
+                console.log(`[melee-decomp] File saved, scheduling rebuild for ${currentFunc}`);
                 // Debounce rapid saves
                 if (saveDebounceTimer) {
                     clearTimeout(saveDebounceTimer);
                 }
-                saveDebounceTimer = setTimeout(async () => {
+                saveDebounceTimer = setTimeout(() => {
+                    console.log(`[melee-decomp] Debounce complete, buildInProgress=${buildInProgress}`);
                     // If a build is in progress, queue this one
                     if (buildInProgress) {
                         pendingBuildFunc = currentFunc;
                         console.log(`[melee-decomp] Build in progress, queuing ${currentFunc}`);
                         return;
                     }
-                    await showDiffForFunction(currentFunc, context);
+                    // Don't await - let it run in the background
+                    showDiffForFunction(currentFunc, context);
                 }, 500);  // 500ms debounce
             }
         }
@@ -123,6 +126,7 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 async function showDiffForFunction(functionName: string, context: vscode.ExtensionContext) {
+    console.log(`[melee-decomp] showDiffForFunction starting for ${functionName}`);
     buildInProgress = true;
     try {
         // Show loading state
@@ -134,7 +138,9 @@ async function showDiffForFunction(functionName: string, context: vscode.Extensi
         statusBarItem.show();
 
         // Get diff data
+        console.log(`[melee-decomp] Calling getDiff for ${functionName}`);
         const diffResult = await diffProvider.getDiff(functionName);
+        console.log(`[melee-decomp] getDiff completed: ${diffResult.matchPercent}%`);
         lastDiffResult = diffResult;
 
         // Update panel
@@ -144,18 +150,20 @@ async function showDiffForFunction(functionName: string, context: vscode.Extensi
         updateStatusBar(diffResult);
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        console.log(`[melee-decomp] Error in showDiffForFunction: ${message}`);
         vscode.window.showErrorMessage(`Failed to get diff: ${message}`);
         DiffPanel.currentPanel?.setError(message);
         statusBarItem.text = '$(error) Build failed';
         statusBarItem.show();
     } finally {
+        console.log(`[melee-decomp] showDiffForFunction finished, setting buildInProgress=false`);
         buildInProgress = false;
         // Process any pending build
         if (pendingBuildFunc) {
             const nextFunc = pendingBuildFunc;
             pendingBuildFunc = undefined;
             console.log(`[melee-decomp] Processing pending build for ${nextFunc}`);
-            await showDiffForFunction(nextFunc, context);
+            showDiffForFunction(nextFunc, context);  // Don't await to avoid stack issues
         }
     }
 }
