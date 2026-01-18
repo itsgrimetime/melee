@@ -456,20 +456,58 @@ export class DiffPanel {
             tooltip.style.top = top + 'px';
         }
 
+        let hideTimeout = null;
+        let isOverTooltip = false;
+
         function hideTooltip() {
             const tooltip = document.getElementById('instruction-tooltip');
             if (tooltip) tooltip.style.display = 'none';
         }
 
+        function scheduleHide() {
+            // Don't hide if mouse is over tooltip
+            if (isOverTooltip) return;
+
+            hideTimeout = setTimeout(() => {
+                if (!isOverTooltip) {
+                    hideTooltip();
+                }
+            }, 100);
+        }
+
+        function cancelHide() {
+            if (hideTimeout) {
+                clearTimeout(hideTimeout);
+                hideTimeout = null;
+            }
+        }
+
+        // Keep tooltip visible when hovering over it
+        const tooltipEl = document.getElementById('instruction-tooltip');
+        if (tooltipEl) {
+            tooltipEl.addEventListener('mouseenter', () => {
+                isOverTooltip = true;
+                cancelHide();
+            });
+            tooltipEl.addEventListener('mouseleave', () => {
+                isOverTooltip = false;
+                scheduleHide();
+            });
+        }
+
         // Add hover listeners to ASM columns
         document.querySelectorAll('.target-col, .current-col').forEach(col => {
             col.addEventListener('mouseenter', (e) => {
+                cancelHide();
+                if (tooltipTimeout) {
+                    clearTimeout(tooltipTimeout);
+                }
                 const text = col.textContent;
                 const mnemonic = extractMnemonic(text);
                 if (mnemonic) {
                     tooltipTimeout = setTimeout(() => {
                         showTooltip(col, mnemonic);
-                    }, 300);  // Small delay before showing
+                    }, 400);  // Delay before showing
                 }
             });
 
@@ -478,7 +516,7 @@ export class DiffPanel {
                     clearTimeout(tooltipTimeout);
                     tooltipTimeout = null;
                 }
-                hideTooltip();
+                scheduleHide();
             });
         });
     </script>
