@@ -555,7 +555,7 @@ export class DiffPanel {
             switch (line.diffType) {
                 case 'r': marker = '<span class="diff-marker marker-reg">r</span>'; break;
                 case 'i': marker = '<span class="diff-marker marker-imm">i</span>'; break;
-                case 'o': marker = '<span class="diff-marker marker-op">o</span>'; break;
+                case 'o': marker = '<span class="diff-marker marker-op">|</span>'; break;
                 case 's': marker = '<span class="diff-marker marker-stack">s</span>'; break;
                 default: marker = '<span class="diff-marker marker-diff">|</span>';
             }
