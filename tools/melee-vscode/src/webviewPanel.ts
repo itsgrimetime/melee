@@ -77,8 +77,10 @@ export class DiffPanel {
         console.log(`[melee-decomp] updateDiff called for ${result.functionName}, ${result.matchPercent}%`);
         this._currentFunction = result.functionName;
         this._panel.title = `ASM Diff: ${result.functionName} (${result.matchPercent}%)`;
-        const html = this._getDiffHtml(result);
-        console.log(`[melee-decomp] Setting webview HTML (length: ${html.length})`);
+        // Add timestamp to force unique HTML and prevent caching
+        const timestamp = Date.now();
+        const html = this._getDiffHtml(result, timestamp);
+        console.log(`[melee-decomp] Setting webview HTML (length: ${html.length}, ts: ${timestamp})`);
         this._panel.webview.html = html;
         console.log(`[melee-decomp] Webview HTML set`);
     }
@@ -123,13 +125,14 @@ export class DiffPanel {
 </html>`;
     }
 
-    private _getDiffHtml(result: DiffResult): string {
+    private _getDiffHtml(result: DiffResult, timestamp?: number): string {
         const statusClass = result.match ? 'match' : 'mismatch';
         const statusText = result.match ? 'MATCH' : 'MISMATCH';
 
         const rowsHtml = result.diffLines.map((line, idx) => this._renderDiffRow(line, idx, idx === 0)).join('\n');
 
         return `<!DOCTYPE html>
+<!-- timestamp: ${timestamp || 0} -->
 <html lang="en">
 <head>
     <meta charset="UTF-8">
