@@ -386,11 +386,11 @@ export class DiffPanel {
             }
         });
     </script>
+    <div id="instruction-tooltip" class="instruction-tooltip"></div>
     <script>
         // PPC Instruction Reference
         const ppcRef = ${JSON.stringify(ppcInstructions)};
 
-        const tooltip = document.getElementById('instruction-tooltip');
         let tooltipTimeout = null;
 
         // Extract mnemonic from ASM text
@@ -410,8 +410,9 @@ export class DiffPanel {
 
         // Show tooltip for instruction
         function showTooltip(element, mnemonic) {
+            const tooltip = document.getElementById('instruction-tooltip');
             const info = ppcRef[mnemonic] || ppcRef[mnemonic.replace(/[+-]$/, '')];
-            if (!info) return;
+            if (!info || !tooltip) return;
 
             // Build tooltip content
             let html = \`
@@ -456,7 +457,8 @@ export class DiffPanel {
         }
 
         function hideTooltip() {
-            tooltip.style.display = 'none';
+            const tooltip = document.getElementById('instruction-tooltip');
+            if (tooltip) tooltip.style.display = 'none';
         }
 
         // Add hover listeners to ASM columns
@@ -480,7 +482,6 @@ export class DiffPanel {
             });
         });
     </script>
-    <div id="instruction-tooltip" class="instruction-tooltip"></div>
 </body>
 </html>`;
     }
