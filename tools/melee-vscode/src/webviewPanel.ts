@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { DiffResult, DiffLine } from './diffProvider';
 import { BranchArrow } from './asmParser';
+import { ppcInstructions } from './ppcReference';
 
 export class DiffPanel {
     public static currentPanel: DiffPanel | undefined;
@@ -385,6 +386,101 @@ export class DiffPanel {
             }
         });
     </script>
+    <script>
+        // PPC Instruction Reference
+        const ppcRef = ${JSON.stringify(ppcInstructions)};
+
+        const tooltip = document.getElementById('instruction-tooltip');
+        let tooltipTimeout = null;
+
+        // Extract mnemonic from ASM text
+        function extractMnemonic(text) {
+            if (!text) return null;
+            const trimmed = text.trim();
+            // Skip labels
+            if (trimmed.startsWith('<') || trimmed.startsWith('R_')) return null;
+            // First word is the mnemonic
+            const match = trimmed.match(/^(\\S+)/);
+            if (match) {
+                // Remove trailing . or other suffixes for lookup
+                return match[1].toLowerCase().replace(/\\.$/, '');
+            }
+            return null;
+        }
+
+        // Show tooltip for instruction
+        function showTooltip(element, mnemonic) {
+            const info = ppcRef[mnemonic] || ppcRef[mnemonic.replace(/[+-]$/, '')];
+            if (!info) return;
+
+            // Build tooltip content
+            let html = \`
+                <div class="tooltip-header">
+                    <span class="tooltip-mnemonic">\${info.mnemonic}</span>
+                    <span class="tooltip-name">\${info.name}</span>
+                </div>
+                <div class="tooltip-syntax">\${info.syntax}</div>
+                <div class="tooltip-desc">\${info.description}</div>
+            \`;
+
+            if (info.operation) {
+                html += \`<div class="tooltip-operation"><code>\${info.operation}</code></div>\`;
+            }
+
+            if (info.flags) {
+                html += \`<div class="tooltip-flags">Flags: \${info.flags}</div>\`;
+            }
+
+            html += \`<div class="tooltip-category">\${info.category}</div>\`;
+
+            tooltip.innerHTML = html;
+            tooltip.style.display = 'block';
+
+            // Position tooltip near element
+            const rect = element.getBoundingClientRect();
+            const containerRect = document.body.getBoundingClientRect();
+
+            let left = rect.left + 10;
+            let top = rect.bottom + 5;
+
+            // Keep tooltip in view
+            if (left + 350 > containerRect.right) {
+                left = containerRect.right - 360;
+            }
+            if (top + 200 > containerRect.bottom) {
+                top = rect.top - 200;
+            }
+
+            tooltip.style.left = left + 'px';
+            tooltip.style.top = top + 'px';
+        }
+
+        function hideTooltip() {
+            tooltip.style.display = 'none';
+        }
+
+        // Add hover listeners to ASM columns
+        document.querySelectorAll('.target-col, .current-col').forEach(col => {
+            col.addEventListener('mouseenter', (e) => {
+                const text = col.textContent;
+                const mnemonic = extractMnemonic(text);
+                if (mnemonic) {
+                    tooltipTimeout = setTimeout(() => {
+                        showTooltip(col, mnemonic);
+                    }, 300);  // Small delay before showing
+                }
+            });
+
+            col.addEventListener('mouseleave', () => {
+                if (tooltipTimeout) {
+                    clearTimeout(tooltipTimeout);
+                    tooltipTimeout = null;
+                }
+                hideTooltip();
+            });
+        });
+    </script>
+    <div id="instruction-tooltip" class="instruction-tooltip"></div>
 </body>
 </html>`;
     }
@@ -880,6 +976,83 @@ body {
     overflow-x: auto;
     white-space: pre-wrap;
     word-break: break-all;
+}
+
+/* Instruction tooltip */
+.instruction-tooltip {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    max-width: 400px;
+    padding: 12px;
+    background: var(--vscode-editorHoverWidget-background, #252526);
+    border: 1px solid var(--vscode-editorHoverWidget-border, #454545);
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.tooltip-header {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 6px;
+}
+
+.tooltip-mnemonic {
+    font-weight: bold;
+    font-size: 15px;
+    color: var(--vscode-symbolIcon-keywordForeground, #569cd6);
+}
+
+.tooltip-name {
+    color: var(--vscode-descriptionForeground, #888);
+    font-style: italic;
+}
+
+.tooltip-syntax {
+    font-family: var(--vscode-editor-font-family), monospace;
+    background: rgba(255, 255, 255, 0.05);
+    padding: 6px 8px;
+    border-radius: 3px;
+    margin-bottom: 8px;
+    color: var(--vscode-symbolIcon-functionForeground, #dcdcaa);
+}
+
+.tooltip-desc {
+    margin-bottom: 8px;
+    color: var(--fg-color);
+}
+
+.tooltip-operation {
+    font-family: var(--vscode-editor-font-family), monospace;
+    background: rgba(0, 100, 200, 0.1);
+    padding: 6px 8px;
+    border-radius: 3px;
+    margin-bottom: 8px;
+    border-left: 3px solid var(--vscode-symbolIcon-keywordForeground, #569cd6);
+}
+
+.tooltip-operation code {
+    color: var(--vscode-symbolIcon-variableForeground, #9cdcfe);
+}
+
+.tooltip-flags {
+    font-size: 11px;
+    color: var(--vscode-symbolIcon-constantForeground, #b5cea8);
+    margin-bottom: 6px;
+}
+
+.tooltip-category {
+    font-size: 10px;
+    text-transform: uppercase;
+    color: var(--vscode-descriptionForeground, #888);
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border-color);
 }
 </style>`;
     }
