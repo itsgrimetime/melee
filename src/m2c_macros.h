@@ -21,10 +21,6 @@ typedef s64 M2C_UNK64;
 #define M2C_FIELD(expr, type_ptr, offset)                                     \
     (*(type_ptr) ((s8*) (expr) + (offset)))
 
-/* Variant with unsigned byte cast (matches (u8*) pointer arithmetic) */
-#define M2C_FIELD_U(expr, type_ptr, offset)                                   \
-    (*(type_ptr) ((u8*) (expr) + (offset)))
-
 /* Bitwise (reinterpret) cast */
 #define M2C_BITWISE(type, expr) ((type) (expr))
 

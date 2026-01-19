@@ -8,21 +8,11 @@
 #include "baselib/gobjgxlink.h"
 #include "baselib/gobjproc.h"
 #include "baselib/jobj.h"
-#include "baselib/memory.h"
-#include "cm/camera.h"
-#include "gm/gm_1A45.h"
-#include "gr/grzakogenerator.h"
 #include "gr/inlines.h"
-#include "gr/stage.h"
 #include "gr/types.h"
 #include "lb/lb_00B0.h"
 #include "lb/lb_00F9.h"
-
-typedef struct {
-    char pad[0xC8];
-    void* xC8;
-    void* xCC;
-} BigBlueGround;
+#include "gr/grzakogenerator.h"
 
 u8 tmpPadData[168] = { 0 };
 
@@ -89,6 +79,7 @@ void grBigBlue_801E59CC(void)
 {
     grZakoGenerator_801CAE04(0);
 }
+
 bool grBigBlue_801E59F0(void)
 {
     return false;
@@ -151,18 +142,8 @@ void fn_801E6124(Ground_GObj* gobj)
     GET_GROUND(gobj)->gv.bigblue.x0_b0 = false;
 }
 
-void grBigBlue_801E613C(Ground_GObj* gobj)
-{
-    Ground* gp = gobj->user_data;
-    HSD_JObj* jobj = gobj->hsd_obj;
-    u8 _[16];
+/// #grBigBlue_801E613C
 
-    grAnime_801C8138((HSD_GObj*)gobj, gp->map_id, 0);
-    Ground_801C2ED0(jobj, gp->map_id);
-    grBigBlue_801EB004(gobj);
-    gp->gv.bigblue.x0_b0 = 1;
-    Ground_801C10B8(gobj, fn_801E6124);
-}
 bool grBigBlue_801E61BC(Ground_GObj* arg)
 {
     return false;
@@ -170,11 +151,12 @@ bool grBigBlue_801E61BC(Ground_GObj* arg)
 
 void grBigBlue_801E61C4(Ground_GObj* gobj)
 {
-    u8 _[16];
+    PAD_STACK(16);
     grBigBlue_801EBAF8(gobj);
     lb_800115F4();
     Ground_801C2FE0(gobj);
 }
+
 void grBigBlue_801E61FC(Ground_GObj* arg) {}
 
 void grBigBlue_801E6200(Ground_GObj* arg0)
@@ -241,19 +223,12 @@ bool grBigBlue_801E687C(Ground_GObj* arg)
 
 void grBigBlue_801E6884(Ground_GObj* gobj)
 {
-    grBigBlue_801EF424(gobj);
+    grBigBlue_801EF424();
     Ground_801C2FE0(gobj);
 }
-void grBigBlue_801E68B8(Ground_GObj* gobj)
-{
-    BigBlueGround* gp = gobj->user_data;
-    void* null_val = NULL;
 
-    HSD_Free(gp->xC8);
-    gp->xC8 = null_val;
-    HSD_Free(gp->xCC);
-    gp->xCC = null_val;
-}
+/// #grBigBlue_801E68B8
+
 /// #grBigBlue_801E6904
 
 bool grBigBlue_801E6C58(Ground_GObj* arg)
@@ -277,17 +252,8 @@ void grBigBlue_801E855C(Ground_GObj* arg) {}
 
 /// #grBigBlue_801E8B84
 
-void grBigBlue_801E8D04(void)
-{
-    f32 bottom;
-    f32 left;
-    f32 right;
+/// #grBigBlue_801E8D04
 
-    right = Stage_GetCamBoundsRightOffset();
-    left = Stage_GetCamBoundsLeftOffset();
-    bottom = Stage_GetCamBoundsBottomOffset();
-    grBigBlue_801E8B84(Stage_GetCamBoundsTopOffset(), bottom, left, right);
-}
 /// #grBigBlue_801E8D64
 
 bool grBigBlue_801E93D0(Ground_GObj* arg)
@@ -338,49 +304,24 @@ void grBigBlue_801EAB4C(Ground_GObj* arg) {}
 
 /// #fn_801EF60C
 
-extern f32 grBb_804DB3F0;
-extern f32 grBb_804DB2F4;
-
-void grBigBlue_801EF7D8(Vec3* pos)
-{
-    f32 temp;
-    Ground_GObj* gobj = Ground_801C2BA4(0x22);
-    if (gobj != NULL && gobj->user_data != NULL) {
-        pos->x = grBb_804DB3F0;
-        temp = grBb_804DB2F4;
-        pos->y = temp;
-        pos->z = temp;
-    } else {
-        temp = grBb_804DB2F4;
-        pos->z = temp;
-        pos->y = temp;
-        pos->x = temp;
-    }
-}
+/// #grBigBlue_801EF7D8
 
 /// #grBigBlue_801EF844
 
-void fn_801EFB9C(HSD_GObj* gobj, int idx)
-{
-    if (gm_801A45E8(1) == 0) {
-        if (gm_801A45E8(2) == 0) {
-            if (Camera_8003010C() == 0) {
-                grDisplay_801C5DB0(gobj, idx);
-            }
-        }
-    }
-}
+/// #fn_801EFB9C
+
 DynamicsDesc* grBigBlue_801EFC0C(enum_t arg)
 {
     return false;
 }
 
-bool grBigBlue_801EFC14(Vec3* v, int unused, HSD_JObj* jobj)
+bool grBigBlue_801EFC14(Vec3* a, int b, HSD_JObj* jobj)
 {
-    Vec3 pos;
-    lb_8000B1CC(jobj, NULL, &pos);
-    if (v->y > pos.y) {
+    Vec3 vec;
+    lb_8000B1CC(jobj, NULL, &vec);
+    if (a->y > vec.y) {
         return true;
+    } else {
+        return false;
     }
-    return false;
 }

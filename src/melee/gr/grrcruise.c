@@ -5,7 +5,6 @@
 #include <platform.h>
 
 #include "gr/grlib.h"
-#include "baselib/dobj.h"
 #include "gr/inlines.h"
 
 void grRCruise_801FF164(bool arg) {}
@@ -41,7 +40,12 @@ void grRCruise_801FF3E8(Ground_GObj* arg) {}
 
 void grRCruise_801FF3EC(Ground_GObj* arg) {}
 
-/// #grRCruise_801FF3F0
+void grRCruise_801FF3F0(Ground_GObj* gobj)
+{
+    Ground* gp = GET_GROUND(gobj);
+    grAnime_801C8138(gobj, gp->map_id, 0);
+    gp->x11_flags.b012 = 2;
+}
 
 bool grRCruise_801FF434(Ground_GObj* arg)
 {

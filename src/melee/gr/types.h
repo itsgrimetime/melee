@@ -296,14 +296,20 @@ struct grKraid_GroundVars {
 };
 
 struct grCorneria_GroundVars {
-    struct {
-        u8 b0 : 1;
-        u8 b1 : 1;
-    } xC4_flags;
+    union {
+        struct {
+            u8 b0 : 1;
+            u8 b1 : 1;
+        } flags;
+        u8 value;
+    } xC4;
     u8 xC5;
-    struct {
-        u8 b0 : 1;
-    } xC6_flags;
+    union {
+        struct {
+            u8 b0 : 1;
+        } flags;
+        u8 value;
+    } xC6;
     u8 xC7;
     u32 xC8;
     u32 xCC;
@@ -658,6 +664,10 @@ struct grBigBlue_GroundVars {
     /*  +0 gp+C4:0 */ u8 x0_b0 : 1;
 };
 
+struct grBigBlueRoute_GroundVars {
+    /* +0 gp+C4 */ HSD_GObj* xC4;
+};
+
 struct grPura_GroundVars {
     /*  +0 gp+C4:0 */ u16 xC4;
     /*  +0 gp+C4:0 */ s16 xC6;
@@ -765,6 +775,7 @@ struct Ground {
         union GroundVars {
             char pad_0[0x204 - 0xC4];
             struct grBigBlue_GroundVars bigblue;
+            struct grBigBlueRoute_GroundVars bigblueroute;
             struct grCorneria_GroundVars corneria;
             struct grGreatBay_GroundVars greatbay;
             struct grFigureGet_GroundVars figureget;

@@ -22,7 +22,9 @@ grMaterial_801C8D44(int arg0, int arg1, Ground* arg2, Vec3* arg3, int arg4,
 /* 1C8E48 */ static bool grMaterial_801C8E48(HSD_GObj* gobj);
 /* 1C8E74 */ static void grMaterial_801C8E74(void);
 /* 1C8EF8 */ static void fn_801C8EF8(HSD_MObj* mobj, u32 rendermode);
+/* 1C9490 */ void grMaterial_801C9490(HSD_JObj* jobj);
 /* 3E0A20 */ static HSD_MObjInfo grMaterial_803E0A20 = { 0 };
+/* 4D456C */ static ItCmd grMaterial_804D456C[1];
 
 static u32 data_section_pad[35] = { 0 };
 
@@ -242,7 +244,10 @@ void grMaterial_801C8E74(void)
 
 /// #grMaterial_801C92C0
 
-/// #grMaterial_801C9470
+void grMaterial_801C9470(HSD_JObj* jobj)
+{
+    grMaterial_801C9490(jobj);
+}
 
 /// #grMaterial_801C9490
 
@@ -297,37 +302,12 @@ void grMaterial_801C94D8(void* obj)
 
 /// #grMaterial_801C95C4
 
-typedef struct {
-    u8 _pad0[0x10];
-    /* 0x10:4 */ u8 x10_upper : 4;
-    /* 0x10:3 */ u8 x10_b3 : 1;
-    u8 x10_lower : 3;
-    u8 _pad1[0x40 - 0x11];
-    /* 0x40 */ s32 x40;
-    /* 0x44 */ s32 x44;
-    /* 0x48 */ s32 x48;
-    /* 0x4C */ s32 x4C;
-    u8 _pad2[0xBC - 0x50];
-    /* 0xBC:7 */ u8 xBC_b7 : 1;
-    /* 0xBC:6 */ u8 xBC_b6 : 1;
-    u8 xBC_rest : 6;
-} grMaterialData;
+/// #grMaterial_801C9604
 
-void grMaterial_801C9604(HSD_GObj* gobj, int arg1, int arg2)
+void fn_801C9664(Item_GObj* gobj, CommandInfo* cmd, int arg2)
 {
-    grMaterialData* gp = gobj->user_data;
-    u8 val;
-
-    gp->x44 = arg2;
-    gp->x48 = arg1;
-    gp->x40 = 0;
-    gp->x4C = 0;
-    val = gp->xBC_b6 = 0;
-    gp->xBC_b7 = val;
-    gp->x10_b3 = 0;
-    grMaterial_801C9698(gobj);
+    int idx = arg2 - 21;
+    grMaterial_804D456C[idx](gobj, cmd);
 }
-
-/// #fn_801C9664
 
 /// #grMaterial_801C9698

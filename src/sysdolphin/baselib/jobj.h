@@ -269,8 +269,6 @@ static inline void HSD_JObjSetRotation(HSD_JObj* jobj, Quaternion* rotate)
     }
 }
 
-#define HSD_JObjSetRotate HSD_JObjSetRotation
-
 static inline void HSD_JObjSetRotationX(HSD_JObj* jobj, f32 x)
 {
     HSD_ASSERT(639, jobj);
