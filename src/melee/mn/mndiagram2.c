@@ -51,6 +51,16 @@ typedef union {
     };
 } mnDiagram2_SortEntry;
 
+/* Local struct for mnDiagram2_80245AE4 */
+typedef struct {
+    /* 0x00 */ char x0[0x20];
+    /* 0x20 */ void* x20;
+    /* 0x24 */ char x24[0x34];
+    /* 0x58 */ HSD_Text* x58;
+    /* 0x5C */ HSD_Text* x5C;
+    /* 0x60 */ HSD_Text* x60[5];
+} mnDiagram2_AE4_UserData;
+
 bool mnDiagram2_80243A3C(u8 arg0)
 {
     switch (arg0) {
@@ -269,7 +279,7 @@ void mnDiagram2_80244C74(HSD_GObj* gobj, u8 start, u8 flag, u8 arg3)
     }
 
     i = 0;
-    idx = (u8)start;
+    idx = (u8) start;
     do {
         s32 val;
         if (idx >= limit) {
@@ -490,4 +500,49 @@ u8 mnDiagram2_8024589C(HSD_GObj* gobj, u8 type, u8 idx)
     return 0;
 }
 
-/// #mnDiagram2_80245AE4
+void mnDiagram2_80245AE4(HSD_GObj* gobj)
+{
+    mnDiagram2_AE4_UserData* data;
+    mnDiagram2_AE4_UserData* base;
+    mnDiagram2_AE4_UserData* ptr;
+    s32 i;
+    void* tmp;
+    HSD_JObj* jobj;
+
+    data = gobj->user_data;
+
+    if (data->x58 != NULL) {
+        HSD_SisLib_803A5CC4(data->x58);
+        data->x58 = NULL;
+    }
+
+    i = 0;
+    base = data;
+    ptr = (mnDiagram2_AE4_UserData*) ((u8*) data + (i << 2));
+
+    do {
+        if (base->x60[0] != NULL) {
+            HSD_SisLib_803A5CC4(ptr->x60[0]);
+            base->x60[0] = NULL;
+        }
+        i++;
+        base = (mnDiagram2_AE4_UserData*) ((u8*) base + 4);
+        ptr = (mnDiagram2_AE4_UserData*) ((u8*) ptr + 4);
+    } while (i < 5);
+
+    if (data->x5C != NULL) {
+        HSD_SisLib_803A5CC4(data->x5C);
+        data->x5C = NULL;
+    }
+
+    tmp = data->x20;
+    if (tmp == NULL) {
+        tmp = NULL;
+    } else {
+        tmp = *(void**) ((u8*) tmp + 0x10);
+    }
+    jobj = tmp;
+    if (jobj != NULL) {
+        HSD_JObjRemoveAll(jobj);
+    }
+}
