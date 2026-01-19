@@ -10,6 +10,9 @@ u8 mnDiagram_8023EA2C(s32);
 s32 mnDiagram_8023EA40_s(s32);
 s32 mnDiagram_8023EA2C_s(s32);
 #define mnDiagram_8023EA40(x) mnDiagram_8023EA40_s(x)
+
+/* For mnDiagram2_80243BBC - use _s version to avoid masking */
+#define mnDiagram_8023EA2C_BBC(x) mnDiagram_8023EA2C_s(x)
 s32 GetNameCount(void);
 extern void mnDiagram_8023F540(void);
 s32 mnDiagram_8023F578(s32, s32, void*);
@@ -32,6 +35,18 @@ bool mn_8022E950(s32);
 /* mnDiagram2 local data and callbacks */
 extern u8 mn_804A04F0[];
 void fn_80243D40(HSD_GObj*);
+
+/* Forward declarations for mnDiagram2_80243BBC */
+char* GetNameText(s32);
+void gm_80160B40(HSD_Text*, s32, s32);
+s32 gm_8016400C(s32);
+void lb_8000B1CC(s32, void*, f32*);
+HSD_JObj* mnDiagram_80242B38(u8, s32);
+
+extern void* mnDiagram2_803EEAD0;
+extern GXColor mnDiagram2_804D4FB8;
+extern f32 mnDiagram2_804DBFC8;
+extern f32 mnDiagram2_804DBFCC;
 
 /* Union for 64-bit sorting operations */
 typedef union {
@@ -151,8 +166,68 @@ void mnDiagram2_80243ADC(HSD_GObj* gobj)
         HSD_JObjRemoveAll(jobj);
     }
 }
-/// #mnDiagram2_80243BBC
-
+void mnDiagram2_80243BBC(HSD_GObj* gobj, u8 arg1, u8 arg2)
+{
+    Vec3 sp18;
+    s32 name;
+    HSD_Text* text;
+    mnDiagram2_UserData* data;
+    void* tmp;
+    HSD_JObj* jobj;
+    
+    data = gobj->user_data;
+    if (arg1 != 0) {
+        name = mnDiagram_8023EA40(arg2);
+    } else {
+        name = mnDiagram_8023EA2C(arg2);
+    }
+    
+    if (arg1 == 0) {
+        tmp = data->x18;
+        if (tmp == NULL) {
+            tmp = NULL;
+        } else {
+            tmp = *(void**)((u8*)tmp + 0x10);
+        }
+        jobj = tmp;
+        if (jobj != NULL) {
+            HSD_JObjRemoveAll(jobj);
+        }
+        HSD_JObjAddChild(data->x18, mnDiagram_80242B38((u8)name, 0));
+    }
+    
+    if (data->xC4 != NULL) {
+        HSD_SisLib_803A5CC4(data->xC4);
+    }
+    
+    text = HSD_SisLib_803A6754(0, 1);
+    data->xC4 = text;
+    
+    if (arg1 != 0) {
+        lb_8000B1CC(data->x24, &mnDiagram2_803EEAD0, &sp18.x);
+    } else {
+        lb_8000B1CC(data->x1C, &mnDiagram2_803EEAD0, &sp18.x);
+    }
+    
+    text->font_size.x = mnDiagram2_804DBFC8;
+    text->font_size.y = mnDiagram2_804DBFC8;
+    text->text_color = mnDiagram2_804D4FB8;
+    {
+        f32 y = sp18.y;
+        f32 z = sp18.z;
+        text->pos_x = sp18.x;
+        text->pos_y = -y;
+        text->pos_z = z;
+    }
+    text->default_alignment = 1;
+    
+    if (arg1 != 0) {
+        char* str = GetNameText(name);
+        HSD_SisLib_803A6B98(text, mnDiagram2_804DBFCC, mnDiagram2_804DBFCC, str);
+    } else {
+        gm_80160B40(text, gm_8016400C(name), 0);
+    }
+}
 s32 mnDiagram2_80244330(s32 arg0, HSD_GObj* type, u8 idx)
 {
     u8 typeVal;

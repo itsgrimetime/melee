@@ -23,7 +23,7 @@ typedef struct mnDiagram2_UserData {
 /* 243A84 */ bool mnDiagram2_80243A84(u8 arg0);
 /* 243AB4 */ bool mnDiagram2_80243AB4(u8 arg0);
 /* 243ADC */ void mnDiagram2_80243ADC(HSD_GObj* gobj);
-/* 243BBC */ void mnDiagram2_80243BBC(HSD_GObj*, u8, u8);
+/* 243BBC */ void mnDiagram2_80243BBC(HSD_GObj* gobj, u8 arg1, u8 arg2);
 /* 244330 */ s32 mnDiagram2_80244330(s32 arg0, HSD_GObj* type, u8 idx);
 /* 24469C */ void mnDiagram2_8024469C(HSD_GObj*, u8, u8, u8, u8);
 /* 244C74 */ void mnDiagram2_80244C74(HSD_GObj* gobj, u8 start, u8 flag, u8 arg3);
