@@ -3,3 +3,24 @@ repos:
   rev: v18.1.8
   hooks:
   - id: clang-format
+
+- repo: local
+  hooks:
+  - id: melee-style-check
+    name: Melee style check
+    entry: python tools/check-style.py
+    language: python
+    types: [c]
+    pass_filenames: true
+    description: >
+      Checks C/H files for style violations derived from doldecomp/melee
+      maintainer feedback. See docs/STYLE_GUIDE.md for details.
+
+  - id: check-fork-files
+    name: Check for fork-only files
+    entry: python tools/check-fork-files.py
+    language: python
+    pass_filenames: false
+    always_run: true
+    stages: [pre-push]
+    description: Blocks pushing fork-specific files to doldecomp/melee upstream
