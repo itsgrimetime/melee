@@ -179,7 +179,6 @@ export class DiffPanel {
 
             const diffRows = document.querySelector('.diff-rows');
             const diffContainer = document.querySelector('.diff-container');
-            const rowHeight = rows[0].offsetHeight || 20;
 
             // Find the first gutter element to get its position
             const firstGutter = rows[0].querySelector('.' + gutterClass);
@@ -200,6 +199,15 @@ export class DiffPanel {
             svg.setAttribute('height', diffRows.scrollHeight);
             svg.innerHTML = '';
 
+            // Pre-calculate the center Y position of each row relative to diffRows
+            const rowCenters = [];
+            for (let i = 0; i < rows.length; i++) {
+                const rowRect = rows[i].getBoundingClientRect();
+                // Center of row relative to the top of diffRows
+                const centerY = (rowRect.top - diffRowsRect.top) + (rowRect.height / 2);
+                rowCenters.push(centerY);
+            }
+
             // Assign lanes to arrows to avoid overlaps
             const lanes = assignLanes(arrows);
             const laneWidth = 6;
@@ -209,10 +217,9 @@ export class DiffPanel {
                 const lane = lanes[idx];
                 const laneX = gutterWidth - 10 - lane * laneWidth;  // Lane position
 
-                // Center vertically in row, with small adjustment for padding/borders
-                const yOffset = -1;  // Nudge up slightly to better center
-                const fromY = (arrow.fromRow * rowHeight) + rowHeight / 2 + yOffset;
-                const toY = (arrow.toRow * rowHeight) + rowHeight / 2 + yOffset;
+                // Get actual Y position from pre-calculated row centers
+                const fromY = rowCenters[arrow.fromRow] || 0;
+                const toY = rowCenters[arrow.toRow] || 0;
 
                 // Color based on type
                 let color = '#888';
