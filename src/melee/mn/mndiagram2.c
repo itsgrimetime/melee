@@ -7,6 +7,9 @@
 
 /* Forward declarations for mnDiagram functions */
 u8 mnDiagram_8023EA2C(s32);
+s32 mnDiagram_8023EA40_s(s32);
+s32 mnDiagram_8023EA2C_s(s32);
+#define mnDiagram_8023EA40(x) mnDiagram_8023EA40_s(x)
 s32 GetNameCount(void);
 extern void mnDiagram_8023F540(void);
 s32 mnDiagram_8023F578(s32, s32, void*);
@@ -246,8 +249,39 @@ s32 mnDiagram2_80244330(s32 arg0, HSD_GObj* type, u8 idx)
 
 /// #mnDiagram2_8024469C
 
-/// #mnDiagram2_80244C74
+void mnDiagram2_80244C74(HSD_GObj* gobj, u8 start, u8 flag, u8 arg3)
+{
+    s32 limit;
+    s32 idx;
+    s32 i;
+    u8 var_r28;
 
+    if (flag != 0) {
+        var_r28 = mnDiagram_8023EA40(arg3);
+    } else {
+        var_r28 = mnDiagram_8023EA2C(arg3);
+    }
+
+    if (flag != 0) {
+        limit = 0x18;
+    } else {
+        limit = 0x15;
+    }
+
+    i = 0;
+    idx = (u8)start;
+    do {
+        s32 val;
+        if (idx >= limit) {
+            val = idx - limit;
+        } else {
+            val = idx;
+        }
+        mnDiagram2_8024469C(gobj, flag, val, i, var_r28);
+        i++;
+        idx++;
+    } while (i < 10);
+}
 /// #mnDiagram2_80244D80
 
 /// #mnDiagram2_80245068
