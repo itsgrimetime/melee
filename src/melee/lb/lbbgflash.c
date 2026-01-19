@@ -41,6 +41,7 @@ extern BgFlashData lbl_80433658;
 extern s32 lbl_804D3840;
 extern s32 lbl_804D3844;
 extern s32 lbl_804D3848;
+extern HSD_GObj* lbl_804D63E0;
 
 typedef struct BgFlashData2 {
     u8 state;
@@ -72,7 +73,7 @@ typedef struct BgFlashData2 {
 void fn_800204C8(void)
 {
     f64 temp;
-    BgFlashData2* data = (BgFlashData2*) &lbl_80433658;
+    BgFlashData2* data = (BgFlashData2*)&lbl_80433658;
     s32 mode = data->state & 0x7F;
 
     if (mode == 5) {
@@ -91,14 +92,14 @@ void fn_800204C8(void)
 
 case_0_1_2:
     fn_8001FC08();
-    data->xC = (s32) data->x10;
-    data->xD = (s32) data->x14;
-    data->xE = (s32) data->x18;
-    data->xF = (s32) data->x1C;
+    data->xC = (s32)data->x10;
+    data->xD = (s32)data->x14;
+    data->xE = (s32)data->x18;
+    data->xF = (s32)data->x1C;
     return;
 
 case_3_4:
-    if ((s32) data->x30 == 0) {
+    if ((s32)data->x30 == 0) {
         s32* pX;
         s32* pY;
         s32 i;
@@ -170,12 +171,6 @@ void lbBgFlash_InitState(int* duration)
 
 f32 lbl_804D63D8;
 
-typedef struct {
-    char pad[0x2C];
-    void* x2C;
-} BgFlashGlobal;
-
-extern BgFlashGlobal* lbl_804D63E0;
 extern struct Fighter_804D653C_t* lbl_804D63DC;
 
 static void lbBgFlash_80021A10(f32 arg8)
@@ -191,9 +186,9 @@ static void fn_80021C18(HSD_GObj* gobj, CommandInfo* cmd, int arg2) {}
 
 void fn_80021C1C(void)
 {
-    HSD_GObj* gobj = (HSD_GObj*) lbl_804D63E0;
+    HSD_GObj* gobj = lbl_804D63E0;
     u8* user_data = gobj->user_data;
-    lb_80014498((ColorOverlay*) (user_data + 4));
+    lb_80014498((ColorOverlay*)(user_data + 4));
 }
 
 void lbBgFlash_80021C48(u32 arg0, u32 arg1)
@@ -201,7 +196,7 @@ void lbBgFlash_80021C48(u32 arg0, u32 arg1)
     struct {
         u8 unk0[4];
         ColorOverlay x4;
-    }* data = lbl_804D63E0->x2C;
+    }* data = lbl_804D63E0->user_data;
     lb_800144C8(&data->x4, lbl_804D63DC, arg0, arg1);
 }
 

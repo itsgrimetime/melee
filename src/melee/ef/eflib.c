@@ -239,13 +239,13 @@ void efLib_8005B780(HSD_GObj* gobj)
 
 void efLib_DestroyAll(HSD_GObj* arg_gobj)
 {
-    HSD_GObj* gobj_2;
-    HSD_GObj* gobj_3;
-    HSD_GObj* gobj_5;
-    HSD_GObj* gobj_4;
-    HSD_GObj* gobj_1;
     Effect* eff_1;
+    HSD_GObj* gobj_2;
+    HSD_GObj* gobj_1;
+    HSD_GObj* gobj_3;
     Effect* eff_2;
+    HSD_GObj* gobj_4;
+    HSD_GObj* gobj_5;
     PAD_STACK(48);
 
     {
@@ -891,8 +891,8 @@ HSD_Generator* efLib_8005CC84(s32 arg0, HSD_JObj* jobj)
 
 HSD_Generator* efLib_8005CD2C(s32 arg0, void* vlist, HSD_GObj* arg_gobj)
 {
-    Vec3 sp18;
     HSD_Generator* generator;
+    Vec3 sp18;
     HSD_JObj* jobj_1;
 
     generator = efLib_8005C_inline(arg0, va_arg(vlist, HSD_JObj*));
@@ -1364,7 +1364,7 @@ void efLib_8005E2B4(Effect* effect)
 void efLib_8005E3A0(Effect* arg_effect)
 {
     HSD_JObj* jobj_1;
-    f64 f32_1;
+    f32 f32_1;
     Fighter* fighter;
 
     fighter = GET_FIGHTER(arg_effect->parent_gobj);

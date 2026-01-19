@@ -10,6 +10,7 @@
 #include "gr/forward.h"
 
 #include "gr/grlib.h"
+#include "gr/granime.h"
 #include "gr/grmaterial.h"
 #include "gr/ground.h"
 #include "gr/grzakogenerator.h"
@@ -18,6 +19,33 @@
 
 #include <dolphin/mtx.h>
 #include <baselib/jobj.h>
+#include <baselib/random.h>
+
+typedef struct {
+    u8 _pad0[0x8];
+    s16 x08;
+    s16 x0A;
+    u8 _pad1[0x12C - 0xC];
+    s16 x12C[];
+} grCs_Unk;
+
+extern grCs_Unk* grCs_804D6970;
+
+typedef struct {
+    u8 _pad0[0x14];
+    s32 x14;
+    u8 _pad1[0xC4 - 0x18];
+    s32 xC4;
+    s16 xC8;
+    u8 _pad2[0xD4 - 0xCA];
+    s16 xD4;
+    s16 xD6;
+    s16 xD8;
+    s16 xDA;
+    s16 xDC;
+    u8 xDE_b7 : 1;
+    u8 xDE_rest : 7;
+} CastleGr;
 
 unkCastleCallback grCs_803B7F28[] = {
     grCastle_801D0550, grCastle_801D059C, grCastle_801D05E8,
@@ -81,8 +109,14 @@ bool grCastle_801CD8A0(Ground_GObj* gobj)
 
 /// #grCastle_801CD8A8
 
-/// #grCastle_801CD960
-
+void grCastle_801CD960(Ground_GObj* gobj)
+{
+    unkCastle* castle = gobj->user_data;
+    int i;
+    for (i = 0; i < 12; i++) {
+        grLib_801C9B6C((u8*)castle + i * 0x14 + 0xE0);
+    }
+}
 /// #fn_801CD9B4
 
 /// #grCastle_801CDA0C
@@ -98,7 +132,26 @@ void grCastle_801CDF50(Ground_GObj* gobj) {}
 
 /// #grCastle_801CDF54
 
-/// #grCastle_801CDFD8
+void grCastle_801CDFD8(Ground_GObj* gobj)
+{
+    CastleGr* castle = gobj->user_data;
+    s32 rnd;
+
+    castle->xDE_b7 = 1;
+
+    rnd = grCs_804D6970->x0A;
+    if (rnd != 0) {
+        rnd = HSD_Randi(rnd);
+    } else {
+        rnd = 0;
+    }
+
+    castle->xD4 = grCs_804D6970->x08 + rnd;
+    castle->xDC = -1;
+    castle->xDA = -1;
+    castle->xD8 = -1;
+    castle->xD6 = 0;
+}
 
 /// #grCastle_801CE054
 
@@ -119,7 +172,17 @@ bool grCastle_801CE3A4(Ground_GObj* gobj)
 
 void grCastle_801CE7E4(Ground_GObj* gobj) {}
 
-/// #grCastle_801CE7E8
+void grCastle_801CE7E8(Ground_GObj* gobj)
+{
+    CastleGr* castle = gobj->user_data;
+    HSD_JObj* jobj = gobj->hsd_obj;
+    s32 pad[2];
+
+    Ground_801C2ED0(jobj, castle->x14);
+    castle->xC4 = 0;
+    castle->xC8 = grCs_804D6970->x12C[castle->xC4];
+    grAnime_801C8138(gobj, castle->x14, castle->xC4);
+}
 
 bool grCastle_801CE858(Ground_GObj* gobj)
 {

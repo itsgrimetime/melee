@@ -1,6 +1,7 @@
 #include "ittomato.h"
 
 #include "baselib/jobj.h"
+#include "gm/gm_1832.h"
 #include "it/inlines.h"
 #include "it/it_266F.h"
 #include "it/it_26B1.h"
@@ -96,14 +97,13 @@ void it_3F14_Logic9_Spawned(Item_GObj* gobj)
 
 void it_3F14_Logic9_Destroyed(Item_GObj* gobj)
 {
-    Item* item = GET_ITEM(gobj);
-    // if ((((temp_r4->xDD4_itemVar.Egg.filler[4] << 0x18) & 0xC0000000) >>
-    //      0x1F) != 0)
-    // {
-    //     M2C_FIELD(
-    //         (&gm_80473A18 + M2C_BITWISE(s32,
-    //         temp_r4->xDD4_itemVar.star.x8)), s8*, 0x90) = 0;
-    // }
+    Item* ip = GET_ITEM(gobj);
+
+    if ((s8) ((((*(s8*) &ip->xDD4_itemVar.tomato.x4.flags) & 0xC0) << 24) >>
+              31))
+    {
+        ((s8*) &gm_80473A18 + ip->xDD4_itemVar.tomato.x8)[0x90] = 0;
+    }
 }
 
 void it_80284358(Item_GObj* gobj)

@@ -1,81 +1,114 @@
 #include "mnvibration.h"
 
-#include <sysdolphin/baselib/gobj.h>
-#include <sysdolphin/baselib/gobjproc.h>
-#include <melee/lb/lbarchive.h>
-#include <melee/mn/mnmain.h>
+#include "mnmain.h"
+#include "mnname.h"
 
-// --- Externs ---
-extern long HSD_GObj_804D783C;
+#include <sysdolphin/baselib/gobjplink.h>
+#include <sysdolphin/baselib/jobj.h>
+#include <sysdolphin/baselib/sislib.h>
 
-// --- Local Helper Structs ---
-typedef struct MnVibrationAssets {
-    void* SCl_Top_joint; // 0x00
-    u8 pad4[0xC];
-    void* Title_Top_joint;            // 0x10
-    void* Title_Top_animjoint;        // 0x14
-    void* Title_Top_matanim_joint;    // 0x18
-    void* Title_Top_shapeanim_joint;  // 0x1C
-    void* Option_Top_joint;           // 0x20
-    void* Option_Top_animjoint;       // 0x24
-    void* Option_Top_matanim_joint;   // 0x28
-    void* Option_Top_shapeanim_joint; // 0x2C
-    void* Panel_Top_joint;            // 0x30
-    void* Panel_Top_animjoint;        // 0x34
-    void* Panel_Top_matanim_joint;    // 0x38
-    void* Panel_Top_shapeanim_joint;  // 0x3C
-} MnVibrationAssets;
+extern void* mnVibration_804D6C28;
+extern f32 mnVibration_803EECEC[2];
 
-MnVibrationAssets mnVibration_804A0868;
-
-// --- Function Implementation ---
-
-void mnVibration_80249174(int arg0)
-{
-    HSD_GObj* gobj;
-    u8* gobj_flags_ptr;
-
-    mn_804D6BC8.cooldown = 5;
-    mn_804A04F0.prev_menu = mn_804A04F0.cur_menu;
-    mn_804A04F0.cur_menu = 19;
-    mn_804A04F0.hovered_selection = 0;
-
-    // Correct Order: Title -> SCl -> Option -> Panel
-    lbArchive_LoadSections(
-        mn_804D6BB8, &mnVibration_804A0868.Title_Top_joint,
-        "MnVibTitle_Top_joint", &mnVibration_804A0868.Title_Top_animjoint,
-        "MnVibTitle_Top_animjoint",
-        &mnVibration_804A0868.Title_Top_matanim_joint,
-        "MnVibTitle_Top_matanim_joint",
-        &mnVibration_804A0868.Title_Top_shapeanim_joint,
-        "MnVibTitle_Top_shapeanim_joint",
-
-        &mnVibration_804A0868.SCl_Top_joint, "MnVibSCl_Top_joint",
-
-        &mnVibration_804A0868.Option_Top_joint, "MnVibOption_Top_joint",
-        &mnVibration_804A0868.Option_Top_animjoint,
-        "MnVibOption_Top_animjoint",
-        &mnVibration_804A0868.Option_Top_matanim_joint,
-        "MnVibOption_Top_matanim_joint",
-        &mnVibration_804A0868.Option_Top_shapeanim_joint,
-        "MnVibOption_Top_shapeanim_joint",
-
-        &mnVibration_804A0868.Panel_Top_joint, "MnVibPanel_Top_joint",
-        &mnVibration_804A0868.Panel_Top_animjoint, "MnVibPanel_Top_animjoint",
-        &mnVibration_804A0868.Panel_Top_matanim_joint,
-        "MnVibPanel_Top_matanim_joint",
-        &mnVibration_804A0868.Panel_Top_shapeanim_joint,
-        "MnVibPanel_Top_shapeanim_joint",
-
-        NULL);
-
-    // Cast to function pointer taking an int to bypass header mismatch
-    ((void (*)(int)) mnVibration_80248ED4)(arg0);
-
-    gobj = GObj_Create(0, 1, 0x80);
-    HSD_GObjProc_8038FD54(gobj, (void (*)(HSD_GObj*)) fn_80247510, 0);
-
-    gobj_flags_ptr = (u8*) gobj + 0xD;
-    *gobj_flags_ptr =
-        (*gobj_flags_ptr & 0xCF) | ((HSD_GObj_804D783C << 4) & 0x30);
+void* mnVibration_802474C4(s32 arg0) {
+    void* node = *(void**)((u8*)*(void**)((u8*)mnVibration_804D6C28 + 0x2C) + 0x50);
+    if (node == NULL) {
+        node = NULL;
+    } else {
+        node = *(void**)((u8*)node + 0x10);
+    }
+    for (; arg0 > 0; arg0--) {
+        if (node == NULL) {
+            node = NULL;
+        } else {
+            node = *(void**)((u8*)node + 0x8);
+        }
+    }
+    return node;
 }
+/// #fn_80247510
+
+void fn_80248084(void* gobj) {
+    if (mn_804A04F0.cur_menu != 0x13) {
+        HSD_GObjPLink_80390228(gobj);
+    }
+}
+
+/// #mnVibration_802480B4
+
+/// #mnVibration_8024829C
+
+/// #mnVibration_80248444
+
+void mnVibration_80248644(HSD_GObj* gobj)
+{
+    s32 i;
+    u8* data;
+    u8* ptr1;
+    u8* ptr2;
+
+    for (i = 0, data = gobj->user_data, ptr1 = data, ptr2 = data + (i << 2);
+         i < 8; i++, ptr1 += 4, ptr2 += 4)
+    {
+        if (*(HSD_Text**) (ptr1 + 0x70) != NULL) {
+            HSD_SisLib_803A5CC4(*(HSD_Text**) (ptr2 + 0x70));
+            *(void**) (ptr1 + 0x70) = NULL;
+        }
+    }
+
+    {
+        HSD_JObj* jobj = *(HSD_JObj**) (data + 0x50);
+        HSD_JObj* child;
+        if (jobj == NULL) {
+            child = NULL;
+        } else {
+            child = jobj->child;
+        }
+
+        if (child != NULL) {
+            if (jobj == NULL) {
+                jobj = NULL;
+            } else {
+                jobj = jobj->child;
+            }
+            HSD_JObjRemoveAll(jobj);
+        }
+    }
+
+    for (i = 0; i < 8; i++) {
+        u8 scroll_offset = *(data + 0x0A);
+        s32 name_count = GetNameCount();
+        u8 name_idx;
+
+        if (name_count < 8 && i >= name_count) {
+            name_idx = 0xFF;
+        } else {
+            s32 sum = scroll_offset + i;
+            if (name_count <= sum) {
+                name_idx = 0xFF;
+            } else {
+                name_idx = (u8) sum;
+            }
+        }
+
+        if ((s32) name_idx != 0xFF) {
+            mnVibration_80248444(gobj, name_idx, (u8) i);
+        }
+    }
+}
+void fn_80248748(HSD_GObj* gobj) {
+    f32* table = mnVibration_803EECEC;
+    void* data = *(void**)((u8*)gobj + 0x2C);
+    void* jobj = *(void**)((u8*)data + 0x10);
+    f32 result = mn_8022ED6C(jobj, (AnimLoopSettings*) table);
+    if (result >= table[1]) {
+        HSD_GObjPLink_80390228(gobj);
+    }
+}
+/// #fn_802487A8
+
+/// #fn_80248A78
+
+/// #mnVibration_80248ED4
+
+/// #mnVibration_80249174

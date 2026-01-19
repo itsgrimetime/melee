@@ -1,189 +1,57 @@
 #include "mncount.h"
 
-#include "types.h"
+#include <melee/gm/gmmain_lib.h>
 
-#include "gm/gm_1601.h"
-#include "gm/gmmain_lib.h"
+s32 GetFighterTotalKOs(s32 slot);
 
-extern s32 GetFighterTotalKOs(s32);
-extern s32 GetFighterTotalFalls(s32);
-
-// --- Internal Structs ---
-
-typedef struct LocalFighterData {
-    char pad[0x54];
-    u32 unk54;
-} LocalFighterData;
-
-// --- Function Implementation ---
-
-inline bool mnCount_8025035C_inline(void)
-{
-    s32 i;
-    for (i = 0; i < 25; i++) {
-        LocalFighterData* fdata =
-            (LocalFighterData*) GetPersistentFighterData(i);
-        if (fdata->unk54 != 0) {
-            return false;
-        }
-    }
-    return true;
+s32 mnCount_802502CC(s32 idx) {
+    void* data = GetPersistentFighterData(idx);
+    return *(s32*)((u8*)data + 0x54);
 }
 
-int mnCount_8025035C(s32 skip_count, u32 (*get_val_func)(s8))
-{
-    PAD_STACK(4);
-    {
-        int i;
-        int j;
-        int best_idx;
-        CountEntry sp18[25];
-        CountEntry temp;
-        ssize_t const arr_size = ARRAY_SIZE(sp18);
-
-        if (mnCount_8025035C_inline()) {
-            return arr_size;
-        }
-
-        for (i = 0; i < arr_size; i++) {
-            sp18[i].id = i;
-            sp18[i].val = get_val_func((s8) i);
-        }
-
-        for (i = 0; i < arr_size; i++) {
-            best_idx = i;
-
-            for (j = i + 1; j < arr_size; j++) {
-                if (sp18[best_idx].val < sp18[j].val) {
-                    best_idx = j;
-                }
-            }
-
-            if (best_idx != i) {
-                temp = sp18[best_idx];
-                for (j = best_idx; j > i; j--) {
-                    sp18[j] = sp18[j - 1];
-                }
-                sp18[i] = temp;
-            }
-        }
-
-        for (i = 0; i < arr_size; i++) {
-            if (gm_80164840(gm_8016400C(sp18[i].id)) == 0) {
-                continue;
-            }
-
-            if (skip_count != 0) {
-                skip_count--;
-                j = i + 1;
-                while (j < arr_size) {
-                    if (gm_80164840(gm_8016400C(sp18[j].id)) != 0 &&
-                        get_val_func((s8) sp18[i].id) ==
-                            get_val_func((s8) sp18[j].id))
-                    {
-                        i++;
-                        if (skip_count != 0) {
-                            skip_count--;
-                        } else {
-                            return arr_size;
-                        }
-                    }
-                    j++;
-                }
-            } else {
-                for (j = i + 1; j < arr_size; j++) {
-                    if (gm_80164840(gm_8016400C(sp18[j].id)) == 0) {
-                        continue;
-                    }
-
-                    if (get_val_func((s8) sp18[i].id) ==
-                        get_val_func((s8) sp18[j].id))
-                    {
-                        return arr_size;
-                    }
-                }
-                return sp18[i].id;
-            }
-        }
-
-        return arr_size;
-    }
+s32 fn_802502F0(u8 arg) {
+    return GetFighterTotalKOs(arg);
 }
 
-s32 mnCount_8025072C(CountEntry* entries, s32 start_idx, s32 mode)
-{
+s32 GetFighterTotalFalls(s32 slot);
+
+s32 fn_80250314(u8 arg) {
+    return GetFighterTotalFalls(arg);
+}
+
+u16 fn_80250338(u8 arg) {
+    void* data = GetPersistentFighterData(arg);
+    return *(u16*)((u8*)data + 0x34);
+}
+
+u16 fn_8025069C(u8 arg) {
+    void* data = GetPersistentFighterData(arg);
+    return *(u16*)((u8*)data + 0x50);
+}
+
+u16 fn_802506C0(u8 arg) {
+    void* data = GetPersistentFighterData(arg);
+    return *(u16*)((u8*)data + 0x52);
+}
+
+s32 fn_802506E4(u8 arg) {
+    void* data = GetPersistentFighterData(arg);
+    return *(s32*)((u8*)data + 0x40);
+}
+
+s32 fn_80250708(u8 arg) {
+    void* data = GetPersistentFighterData(arg);
+    return *(s32*)((u8*)data + 0x44);
+}
+
+void mnCount_802517E0(void* data) {
     s32 i;
-    s32 best_idx = start_idx;
-    s32 found_tie = 0;
-    s32 is_invalid = 0;
-    s32 curr_stat, best_stat;
 
-    for (i = start_idx + 1; i < 25; i++) {
-        if (entries[i].val != entries[start_idx].val) {
-            break;
-        }
+    *(u8*)data = 0;
+    *(s32*)((u8*)data + 4) = 10;
 
-        curr_stat = GetFighterTotalKOs(entries[i].id);
-        best_stat = GetFighterTotalKOs(entries[best_idx].id);
-
-        if (mode == 0) {
-            if (curr_stat > best_stat) {
-                best_idx = i;
-            }
-        } else {
-            if (curr_stat < best_stat) {
-                best_idx = i;
-            }
-        }
-
-        curr_stat = GetFighterTotalKOs(entries[i].id);
-        best_stat = GetFighterTotalKOs(entries[best_idx].id);
-
-        if (curr_stat == best_stat) {
-            found_tie = 1;
-        }
+    for (i = 0; i < 10; i++) {
+        *(s32*)((u8*)data + 8 + i * 4) = 0;
+        *(s32*)((u8*)data + 0x30 + i * 4) = 0;
     }
-
-    if (found_tie == 0) {
-        return entries[best_idx].id;
-    }
-
-    for (i = start_idx + 1; i < 25; i++) {
-        if (i == best_idx) {
-            continue;
-        }
-
-        if (entries[i].val != entries[start_idx].val) {
-            break;
-        }
-
-        curr_stat = GetFighterTotalKOs(entries[i].id);
-        best_stat = GetFighterTotalKOs(entries[best_idx].id);
-        if (curr_stat != best_stat) {
-            continue;
-        }
-
-        curr_stat = GetFighterTotalFalls(entries[i].id);
-        best_stat = GetFighterTotalFalls(entries[best_idx].id);
-
-        if (curr_stat == best_stat) {
-            is_invalid = 1;
-            break;
-        }
-
-        if (mode == 0) {
-            if (curr_stat < best_stat) {
-                best_idx = i;
-            }
-        } else {
-            if (curr_stat > best_stat) {
-                best_idx = i;
-            }
-        }
-    }
-
-    if (is_invalid) {
-        return 25;
-    }
-    return entries[best_idx].id;
 }

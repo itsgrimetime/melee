@@ -12,9 +12,15 @@
 #include "types.h"
 
 #include "lb/lb_00B0.h"
+#include "mp/mplib.h"
 
 #include <baselib/gobj.h>
 #include <baselib/jobj.h>
+
+extern f32 grCn_804DB170;
+extern f32 grCn_804DB190;
+extern f32 grCn_804DB1E0;
+extern f32 grCn_804DB268;
 
 /// #grCorneria_801DCCFC
 
@@ -138,7 +144,14 @@ bool grCorneria_801DDCE8(Ground_GObj* arg)
 
 /// #grCorneria_801DDCF0
 
-/// #grCorneria_801DDD4C
+void grCorneria_801DDD4C(Vec3* pos)
+{
+    Ground_GObj* gobj = Ground_801C2BA4(3);
+    Ground* gp = gobj->user_data;
+    pos->x = gp->gv.corneria.base_x + gp->gv.corneria.offset_x;
+    pos->y = gp->gv.corneria.base_y + gp->gv.corneria.offset_y.val;
+    pos->z = grCn_804DB170;
+}
 
 /// #grCorneria_801DDDA8
 
@@ -427,14 +440,42 @@ void fn_801E12D0(Item_GObj* gobj, Ground* gr) {}
 
 /// #grCorneria_801E2CE8
 
-/// #grCorneria_801E2D14
-
+bool grCorneria_801E2D14(void)
+{
+    if (stage_info.internal_stage_id == CORNERIA) {
+        if (Ground_801C2BA4(0xC) != NULL) {
+            return true;
+        }
+        return false;
+    }
+    if (stage_info.internal_stage_id == VENOM) {
+        if (Ground_801C2BA4(8) != NULL) {
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
 /// #grCorneria_801E2D90
 
-/// #grCorneria_801E2E50
-
-/// #grCorneria_801E2EA0
-
+bool grCorneria_801E2E50(enum_t arg)
+{
+    if (stage_info.internal_stage_id == CORNERIA && arg != -1 && mpJointFromLine(arg) == 4) {
+        return true;
+    }
+    return false;
+}
+float grCorneria_801E2EA0(void)
+{
+    Ground_GObj* gobj = Ground_801C2BA4(3);
+    if (gobj != NULL) {
+        Ground* gp = gobj->user_data;
+        if (gp != NULL) {
+            return gp->gv.corneria.xD0;
+        }
+    }
+    return grCn_804DB170;
+}
 DynamicsDesc* grCorneria_801E2EE4(enum_t arg)
 {
     return NULL;
@@ -468,4 +509,15 @@ bool grCorneria_801E2EEC(Vec3* v, int arg1, HSD_JObj* jobj)
     return false;
 }
 
-/// #grCorneria_801E2FCC
+float grCorneria_801E2FCC(void)
+{
+    Ground_GObj* gobj = Ground_801C2BA4(3);
+    if (gobj != NULL) {
+        Ground* gp = gobj->user_data;
+        if (gp != NULL) {
+            f32 scale = Ground_801C0498();
+            return grCn_804DB1E0 + (grCn_804DB190 * scale - gp->gv.corneria.xD0);
+        }
+    }
+    return grCn_804DB268;
+}

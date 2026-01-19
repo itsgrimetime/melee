@@ -386,12 +386,12 @@ void if_802F7BB4(s32 player_idx)
     void** entry;
 
     base = lbl_804A1340;
-    idx = (u8) player_idx;
+    idx = (u8)player_idx;
     offset = idx << 1;
     entry = base + offset;
     (base + offset)[1] = fn_802F77F8(*++entry, idx, 1);
     if ((base + offset)[1] != NULL) {
-        HSD_GObjProc_8038FD54(*entry, (HSD_GObjEvent) fn_802F75D4, 0x11);
+        HSD_GObjProc_8038FD54(*entry, (HSD_GObjEvent)fn_802F75D4, 0x11);
     }
 }
 

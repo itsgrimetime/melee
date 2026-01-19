@@ -6,17 +6,16 @@
 
 #include "mn/forward.h"
 
-/* 2502CC */ UNK_RET mnCount_802502CC(UNK_PARAMS);
-/* 2502F0 */ UNK_RET fn_802502F0(UNK_PARAMS);
-/* 250314 */ UNK_RET fn_80250314(UNK_PARAMS);
-/* 250338 */ UNK_RET fn_80250338(UNK_PARAMS);
-/* 25035C */ int mnCount_8025035C(s32 skip_count, u32 (*get_val_func)(s8));
-/* 25069C */ UNK_RET fn_8025069C(UNK_PARAMS);
-/* 2506C0 */ UNK_RET fn_802506C0(UNK_PARAMS);
-/* 2506E4 */ UNK_RET fn_802506E4(UNK_PARAMS);
-/* 250708 */ UNK_RET fn_80250708(UNK_PARAMS);
-/* 25072C */ s32 mnCount_8025072C(CountEntry* entries, s32 start_idx,
-                                  s32 mode);
+/* 2502CC */ s32 mnCount_802502CC(s32 idx);
+/* 2502F0 */ s32 fn_802502F0(u8 arg);
+/* 250314 */ s32 fn_80250314(u8 arg);
+/* 250338 */ u16 fn_80250338(u8 arg);
+/* 25035C */ UNK_RET mnCount_8025035C(UNK_PARAMS);
+/* 25069C */ u16 fn_8025069C(u8 arg);
+/* 2506C0 */ u16 fn_802506C0(u8 arg);
+/* 2506E4 */ s32 fn_802506E4(u8 arg);
+/* 250708 */ s32 fn_80250708(u8 arg);
+/* 25072C */ UNK_RET mnCount_8025072C(UNK_PARAMS);
 /* 25092C */ UNK_RET mnCount_8025092C(UNK_PARAMS);
 /* 250C7C */ UNK_RET mnCount_80250C7C(UNK_PARAMS);
 /* 250DE4 */ UNK_RET mnCount_80250DE4(UNK_PARAMS);
@@ -26,7 +25,7 @@
 /* 2514B8 */ UNK_RET fn_802514B8(UNK_PARAMS);
 /* 2514D8 */ UNK_RET fn_802514D8(UNK_PARAMS);
 /* 251640 */ UNK_RET fn_80251640(UNK_PARAMS);
-/* 2517E0 */ UNK_RET mnCount_802517E0(UNK_PARAMS);
+/* 2517E0 */ void mnCount_802517E0(void* data);
 /* 25186C */ void mnCount_8025186C(void);
 
 #endif

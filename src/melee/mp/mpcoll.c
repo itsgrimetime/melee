@@ -4353,6 +4353,8 @@ bool mpColl_8004C750(CollData* coll)
     return inline3(coll, 2);
 }
 
+#pragma push
+#pragma dont_inline on
 void mpCollSqueezeHorizontal(CollData* coll, bool airborne, float left,
                              float right)
 {
@@ -4405,6 +4407,7 @@ void mpCollSqueezeVertical(CollData* coll, bool airborne, float top,
     coll->desired_ecb.right.y = coll->ecb.right.y;
     coll->x34_flags.b5 = false;
 }
+#pragma pop
 
 float mpColl_8004CA6C(CollData* coll)
 {

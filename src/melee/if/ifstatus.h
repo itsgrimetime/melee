@@ -5,9 +5,7 @@
 #include <platform.h>
 
 #include "if/forward.h"
-
 #include "if/types.h"
-
 #include <baselib/forward.h>
 
 /* 2F4910 */ HudIndex* ifStatus_802F4910(void);
