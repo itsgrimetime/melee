@@ -1,9 +1,9 @@
 {
-  "name": "melee-decomp-diff",
+  "name": "melee-diff",
   "displayName": "Melee Decomp ASM Diff",
   "description": "Shows side-by-side ASM diff for Melee decompilation",
   "version": "0.0.1",
-  "publisher": "melee-decomp",
+  "publisher": "melee",
   "engines": {
     "vscode": "^1.85.0"
   },

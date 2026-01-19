@@ -361,7 +361,7 @@ class TestBuildFreshContext:
         from pathlib import Path
 
         # Simulate the path calculation logic
-        melee_root = Path("/Users/mike/code/melee-decomp/melee")
+        melee_root = Path("/Users/mike/code/melee")
         ctx_path = melee_root / "build" / "GALE01" / "src" / "melee" / "ft" / "ftcoll.ctx"
 
         try:
@@ -377,8 +377,8 @@ class TestBuildFreshContext:
         from pathlib import Path
 
         # Worktree paths have a different structure
-        ctx_path = Path("/Users/mike/code/melee-decomp/melee-worktrees/dir-ft/build/GALE01/src/melee/ft/ftcoll.ctx")
-        melee_root = Path("/Users/mike/code/melee-decomp/melee")
+        ctx_path = Path("/Users/mike/code/melee-worktrees/dir-ft/build/GALE01/src/melee/ft/ftcoll.ctx")
+        melee_root = Path("/Users/mike/code/melee")
 
         # This should fail relative_to and fall back to worktree detection
         try:
@@ -396,7 +396,7 @@ class TestBuildFreshContext:
                     break
 
             assert ninja_cwd is not None
-            assert str(ninja_cwd) == "/Users/mike/code/melee-decomp/melee-worktrees/dir-ft"
+            assert str(ninja_cwd) == "/Users/mike/code/melee-worktrees/dir-ft"
             assert str(ctx_relative) == "build/GALE01/src/melee/ft/ftcoll.ctx"
 
 

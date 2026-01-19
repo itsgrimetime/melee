@@ -25,7 +25,7 @@ from src.dolphin_debug import ConnectionMode, DolphinDebugger
 # Daemon config
 SOCKET_PATH = Path("/tmp/dolphin_debug.sock")
 PID_FILE = Path("/tmp/dolphin_debug.pid")
-SYMBOLS_PATH = Path("/Users/mike/code/melee-decomp/melee/config/GALE01/symbols.txt")
+SYMBOLS_PATH = Path(__file__).parents[4] / "config" / "GALE01" / "symbols.txt"
 
 
 class DebugDaemon:

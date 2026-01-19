@@ -374,7 +374,7 @@ All modules have at least partial test coverage.
 
 ## Related Files
 
-### In melee-decomp-agent project:
+### In melee-agent project:
 - `/src/agent/` - Main agent logic
 - `/src/client/` - decomp.me client
 - `/src/extractor/` - Function extraction

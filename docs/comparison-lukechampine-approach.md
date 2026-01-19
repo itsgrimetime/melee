@@ -22,7 +22,7 @@ A comparison of the Claude skills and tooling between [lukechampine/melee](https
 
 ### lukechampine's Skills (6 total)
 
-1. **melee-decomp** - Core matching workflow with `decomp.py` + `checkdiff.py`
+1. **melee-decomp** - Core matching workflow with `decomp.py` + `checkdiff.py` (skill name)
 2. **decomp-progress** - Simple progress metrics via `ninja baseline/changes_all`
 3. **easy-funcs** - Function finder with byte-size and address filtering
 4. **item-decomp** - Domain knowledge for item code (ItemVars unions, attributes)

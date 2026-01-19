@@ -1,5 +1,5 @@
 [project]
-name = "melee-decomp-agent"
+name = "melee-agent"
 version = "0.1.0"
 description = "Agent tooling for contributing to the Melee decompilation project"
 requires-python = ">=3.11"

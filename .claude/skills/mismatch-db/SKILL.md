@@ -240,7 +240,7 @@ Our compiler typically places strings in `.rodata` or SDA, not adjacent to the s
 Use the `/opseq` skill to find already-matched functions with the same pattern:
 
 ```bash
-cd ~/code/melee && ~/code/melee-decomp/tools/table-typer opseq addi,crclr,bl,addi,addi,li,bl
+cd ~/code/melee && melee-agent opseq search addi,crclr,bl,addi,addi,li,bl
 ```
 
 This finds functions using the OSReport+assert pattern. Check their source to see how they achieved the match.

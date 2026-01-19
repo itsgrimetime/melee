@@ -77,9 +77,8 @@ def find_melee_root() -> Path | None:
     """Find the melee repository root."""
     # Try common locations
     candidates = [
-        Path(__file__).parents[2] / "melee",  # melee-decomp/melee
+        Path(__file__).parents[4],  # melee repo root (tools/melee-agent/src/opseq_synth -> melee)
         Path.home() / "code" / "melee",
-        Path.home() / "code" / "melee-decomp" / "melee",
     ]
 
     for path in candidates:

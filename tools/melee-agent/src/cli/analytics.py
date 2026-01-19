@@ -56,7 +56,7 @@ def _format_number(value: float) -> str:
 @analytics_app.command("summary")
 def analytics_summary(
     since_days: Annotated[int, typer.Option("--since", "-s", help="Analyze sessions from last N days")] = 30,
-    project: Annotated[str, typer.Option("--project", "-p", help="Project filter")] = "melee-decomp",
+    project: Annotated[str, typer.Option("--project", "-p", help="Project filter")] = "melee",
     output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
     """Show summary metrics for decomp agent performance.
@@ -225,7 +225,7 @@ def analytics_summary(
 @analytics_app.command("sessions")
 def analytics_sessions(
     since_days: Annotated[int, typer.Option("--since", "-s", help="Analyze sessions from last N days")] = 30,
-    project: Annotated[str, typer.Option("--project", "-p", help="Project filter")] = "melee-decomp",
+    project: Annotated[str, typer.Option("--project", "-p", help="Project filter")] = "melee",
     limit: Annotated[int, typer.Option("--limit", "-n", help="Maximum sessions to show")] = 20,
     output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
@@ -295,7 +295,7 @@ def analytics_sessions(
 @analytics_app.command("functions")
 def analytics_functions(
     since_days: Annotated[int, typer.Option("--since", "-s", help="Analyze sessions from last N days")] = 30,
-    project: Annotated[str, typer.Option("--project", "-p", help="Project filter")] = "melee-decomp",
+    project: Annotated[str, typer.Option("--project", "-p", help="Project filter")] = "melee",
     committed_only: Annotated[bool, typer.Option("--committed", help="Only show committed functions")] = False,
     failed_only: Annotated[bool, typer.Option("--failed", help="Only show abandoned/failed functions")] = False,
     limit: Annotated[int, typer.Option("--limit", "-n", help="Maximum functions to show")] = 50,
@@ -365,7 +365,7 @@ def analytics_functions(
 @analytics_app.command("errors")
 def analytics_errors(
     since_days: Annotated[int, typer.Option("--since", "-s", help="Analyze sessions from last N days")] = 30,
-    project: Annotated[str, typer.Option("--project", "-p", help="Project filter")] = "melee-decomp",
+    project: Annotated[str, typer.Option("--project", "-p", help="Project filter")] = "melee",
     category: Annotated[str | None, typer.Option("--category", "-c", help="Filter by error category")] = None,
     output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
@@ -441,7 +441,7 @@ def analytics_errors(
 def analytics_export(
     output_file: Annotated[Path, typer.Argument(help="Output file path")] = Path("decomp_analytics.json"),
     since_days: Annotated[int, typer.Option("--since", "-s", help="Analyze sessions from last N days")] = 30,
-    project: Annotated[str, typer.Option("--project", "-p", help="Project filter")] = "melee-decomp",
+    project: Annotated[str, typer.Option("--project", "-p", help="Project filter")] = "melee",
 ):
     """Export full analytics data to JSON for external analysis."""
     analyzer = DecompAnalyzer(project_filter=project)
@@ -511,7 +511,7 @@ def analytics_export(
 @analytics_app.command("trends")
 def analytics_trends(
     since_days: Annotated[int, typer.Option("--since", "-s", help="Analyze sessions from last N days")] = 30,
-    project: Annotated[str, typer.Option("--project", "-p", help="Project filter")] = "melee-decomp",
+    project: Annotated[str, typer.Option("--project", "-p", help="Project filter")] = "melee",
     metric: Annotated[
         str, typer.Option("--metric", "-m", help="Metric to plot: success, tokens, errors, match, all")
     ] = "all",

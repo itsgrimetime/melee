@@ -32,7 +32,7 @@ git clang-format --version
 
 ## Installation
 
-The Commit Manager is part of the melee-decomp-agent project. No separate installation needed.
+The Commit Manager is part of the melee-agent project. No separate installation needed.
 
 ```python
 # Import the module

@@ -245,7 +245,7 @@ class DecompAnalyzer:
     MATCH_HISTORY_PATTERN = re.compile(r"History:\s*([\d.%\s→]+)")
     SLUG_PATTERN = re.compile(r"[Ss]lug[:\s]+[`\']?(\w+)[`\']?|scratch[:\s]+[`\']?(\w+)[`\']?")
 
-    def __init__(self, project_filter: str = "melee-decomp"):
+    def __init__(self, project_filter: str = "melee"):
         self.project_filter = project_filter
         self.sessions: list[DecompSession] = []
 

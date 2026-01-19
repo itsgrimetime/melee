@@ -1,1 +1,1 @@
-"""Git hooks for melee-decomp validation."""
+"""Git hooks for melee validation."""

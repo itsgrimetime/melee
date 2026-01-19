@@ -114,17 +114,17 @@ def hook_install(
     """Install git pre-commit hooks for validation.
 
     Installs two hooks:
-    1. melee-decomp repo: Runs pytest tests, plus melee validation if melee changes
+    1. melee-agent repo: Runs pytest tests, plus melee validation if melee changes
     2. melee repo: Runs melee validation (shared by all worktrees)
     """
     project_root = Path(__file__).parent.parent.parent
 
-    # 1. Install hook for melee-decomp repo
+    # 1. Install hook for melee-agent repo
     repo_hooks_dir = project_root / ".git" / "hooks"
     repo_pre_commit = repo_hooks_dir / "pre-commit"
 
     repo_hook_content = f'''#!/bin/sh
-# Pre-commit hook for melee-decomp
+# Pre-commit hook for melee-agent
 # Installed by: melee-agent hook install
 
 cd "{project_root}"
@@ -151,7 +151,7 @@ exit 0
 
     repo_pre_commit.write_text(repo_hook_content)
     repo_pre_commit.chmod(repo_pre_commit.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    console.print("[green]✓ Installed melee-decomp pre-commit hook[/green]")
+    console.print("[green]✓ Installed melee-agent pre-commit hook[/green]")
 
     # 2. Install hook for melee repo
     melee_hooks_dir = _get_melee_hooks_dir(project_root)
@@ -200,16 +200,16 @@ def hook_uninstall():
     project_root = Path(__file__).parent.parent.parent
     removed_any = False
 
-    # 1. Remove melee-decomp repo hook
+    # 1. Remove melee-agent repo hook
     repo_pre_commit = project_root / ".git" / "hooks" / "pre-commit"
     if repo_pre_commit.exists():
         content = repo_pre_commit.read_text()
         if "melee-agent" in content or "validate_commit" in content:
             repo_pre_commit.unlink()
-            console.print("[green]✓ Removed melee-decomp pre-commit hook[/green]")
+            console.print("[green]✓ Removed melee-agent pre-commit hook[/green]")
             removed_any = True
         else:
-            console.print("[yellow]melee-decomp hook exists but wasn't installed by melee-agent[/yellow]")
+            console.print("[yellow]melee-agent hook exists but wasn't installed by melee-agent[/yellow]")
 
     # 2. Remove melee repo hook
     melee_hooks_dir = _get_melee_hooks_dir(project_root)

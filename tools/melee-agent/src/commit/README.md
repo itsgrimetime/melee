@@ -297,4 +297,4 @@ When modifying this module:
 
 ## License
 
-Part of the melee-decomp-agent project.
+Part of the melee-agent project.

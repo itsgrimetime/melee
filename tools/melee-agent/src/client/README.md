@@ -331,4 +331,4 @@ python examples/client_usage.py
 
 ## License
 
-Part of the melee-decomp-agent project.
+Part of the melee-agent project.

@@ -8,7 +8,7 @@ Usage:
 Example with union and void field types:
   tools/decomp.py it_802E1C4C --union-field Item_ItemVars:leadead --void-field-type Article.x4_specialAttributes:itLeadeadAttributes
 
-Adapted for melee-decomp project structure.
+Adapted for melee project structure.
 """
 
 import argparse
@@ -22,15 +22,9 @@ from typing import Optional, cast
 from elftools.elf.elffile import ELFFile
 from elftools.elf.sections import SymbolTableSection
 
-# Support both standalone melee repo and melee-decomp structure
+# Determine project root
 SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent
-
-# Check if we're in melee-decomp (has melee symlink) or standalone melee
-if (PROJECT_ROOT / "melee" / "src" / "melee").exists():
-    ROOT = PROJECT_ROOT / "melee"
-else:
-    ROOT = PROJECT_ROOT
+ROOT = SCRIPT_DIR.parent
 
 DTK_ROOT = ROOT / "build/GALE01"
 OBJ_ROOT = DTK_ROOT / "obj"
