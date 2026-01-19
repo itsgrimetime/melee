@@ -7,33 +7,13 @@ description: Match decompiled C code to original PowerPC assembly for Super Smas
 
 You are an expert at matching C source code to PowerPC assembly for the Melee decompilation project. Your goal is to achieve byte-for-byte identical compilation output.
 
-## Claiming Functions
-
-**Claiming a function:**
-```bash
-# Just claim the function - source file is auto-detected
-melee-agent claim add lbColl_80008440
-```
-
-**Key points:**
-- Source file is **auto-detected** when you claim a function (no flags needed)
-- Local decomp.me server is **auto-detected** (no env vars needed)
-- Claims prevent conflicts with other agents working on the same function
-
-**Do NOT:**
-- Manually specify `--melee-root` - if you think you need to, stop and ask the user for confirmation, stating your justification
-
 ## Session State Tracking
 
-**Track your session state throughout the session.** After every context reset or when resuming work:
+**Track your session state throughout the session.** After every context reset or when resuming work, remember:
 
-```bash
-melee-agent claim list             # Shows your active claims
-```
-
-**Current session state to remember:**
-- **Active function**: (the one you claimed)
+- **Active function**: (the one you're working on)
 - **Active scratch**: (the slug you're iterating on)
+- **Current match %**: (your progress)
 
 ## Workflow
 
@@ -51,11 +31,11 @@ You'll see messages like:
 
 **If build has errors:** Use `/decomp-fixup` skill to diagnose and fix them.
 
-### Step 1: Choose and Claim a Function
+### Step 1: Choose a Function
 
 **If user specifies a function:** Skip to Step 2.
 
-**Otherwise:** Find a good candidate and claim it:
+**Otherwise:** Find a good candidate:
 ```bash
 # Best: Use recommendation scoring (considers size, match%, module)
 melee-agent extract list --min-match 0 --max-match 0.50 --sort score --show-score
@@ -63,13 +43,7 @@ melee-agent extract list --min-match 0 --max-match 0.50 --sort score --show-scor
 # Filter by module for focused work
 melee-agent extract list --module lb --sort score --show-score
 melee-agent extract list --module ft --sort score --show-score
-
-melee-agent claim add <function_name>  # Claims expire after 3 hours
 ```
-
-> **CRITICAL:** Once you claim a function, you MUST work on THAT function until completion.
-> Do NOT switch to a different function mid-workflow. If `claim add` fails (function already claimed),
-> pick a different function from the list. The function you claim is the one you work on.
 
 **Prioritization:** The `--sort score` option ranks functions by:
 - **Size:** 50-300 bytes ideal (small enough to match, complex enough to matter)
@@ -146,32 +120,15 @@ History: 45% → 71.5% → 85%  # Shows your progress over iterations
 - **Time limit:** Don't spend more than 10 minutes on a single function
 - **Stop iterating:** Stuck with only `r`/`i` diffs, or same changes oscillating
 
-### Step 5: Commit (REQUIRED - DO NOT SKIP)
+### Step 5: Commit to Repository
 
 **Threshold:** Any improvement over the starting match %. Progress is progress.
 
-**Use the workflow command:**
-```bash
-melee-agent workflow finish <function_name> <slug>
-```
-
-This single command:
-1. Tests compilation with --dry-run
-2. Applies the code to the melee repo
-3. Records the function as committed
-4. Releases any claims
-
-**If build validation fails** due to header mismatches or caller issues:
-```bash
-# First, try to fix the issue (use /decomp-fixup skill)
-# If unfixable without broader changes, commit anyway with diagnosis:
-melee-agent workflow finish <function_name> <slug> --force --diagnosis "Header has UNK_RET but function returns void"
-```
-
-The `--force` flag:
-- Requires `--diagnosis` to explain why the build is broken
-- Stores the diagnosis in the database (visible in `state status`)
-- Marks the function as `committed_needs_fix`
+**Direct Edit workflow:**
+1. Edit the source file (`src/melee/<module>/<file>.c`) to add/update the function
+2. Edit the header file (`src/melee/<module>/<file>.h` or `include/melee/<module>/forward.h`) if signature changes
+3. Verify build: `python configure.py && ninja`
+4. Commit with descriptive message
 
 **CRITICAL: Commit Requirements**
 
@@ -183,7 +140,7 @@ Before committing, you MUST ensure:
 
 3. **No pointer arithmetic/magic numbers** - don't do things like `if (((u8*)&lbl_80472D28)[0x116] == 1) {`, if you find yourself needing to do this to get a 100% match, you should investigate and update the struct definition accordingly.
 
-**Build passes** - The `workflow finish` command validates this. If it fails due to header mismatches or caller issues, use the `/decomp-fixup` skill to resolve them.
+4. **Build passes** - Run `python configure.py && ninja` to verify. If it fails due to header mismatches or caller issues, use the `/decomp-fixup` skill to resolve them.
 
 ## Human Readability
 
@@ -456,18 +413,16 @@ Kirby's high count is due to copy abilities.
 melee-agent extract list --min-match 0 --max-match 0.50 --sort score --show-score --limit 10
 # Pick a function with high score (130+), reasonable size (50-300 bytes)
 
-# Claim the function (source file auto-detected)
-melee-agent claim add lbColl_80008440
-# → Auto-detected source file: src/melee/lb/lbcollision.c
-# → Claimed: lbColl_80008440
-# → Subdirectory: lb
-
 # Create scratch with full context
 melee-agent extract get lbColl_80008440 --create-scratch
 # → Created scratch `xYz12`
 
-# Read source file for context, then write and compile
-melee-agent scratch compile xYz12 -s /tmp/decomp_xYz12.c --diff
+# Read source file for context, then iterate using heredoc
+cat << 'EOF' | melee-agent scratch compile xYz12 --stdin --diff
+void lbColl_80008440(CollData* data) {
+    // your implementation
+}
+EOF
 # → 45% match, analyze diff, iterate...
 
 # If stuck, check for type issues
@@ -477,27 +432,25 @@ melee-agent struct offset 0x1898  # What field is at this offset?
 # Search for struct definitions in the scratch context
 melee-agent scratch search-context xYz12 "CollData" "HSD_GObj"
 
-# Improved the match, FINISH THE FUNCTION (commits + records)
-melee-agent workflow finish lbColl_80008440 xYz12
+# Once satisfied, edit the source file directly and verify build
+# Edit src/melee/lb/lbcollision.c with the matched code
+python configure.py && ninja
 ```
 
 ## Checking Your Progress
 
-Track function states across the pipeline:
+Track your match percentage using the scratch diff:
 
 ```bash
-melee-agent state status                  # Shows all tracked functions by category
-melee-agent state status --category matched   # Only 95%+ not yet committed
-melee-agent state status <func_name>      # Check specific function details
-melee-agent state urls <func_name>        # Show all URLs (scratch, PR)
+melee-agent scratch get <slug> --diff     # Shows current match % and instruction diff
+melee-agent scratch compile <slug> --diff # Shows match % after compile
 ```
 
-**Function statuses:**
-- `in_progress` - Being worked on (< 95% match)
-- `matched` - 95%+ match, ready to commit
-- `committed` - Code applied to repo
-- `in_review` - Has an open PR
-- `merged` - PR merged to main
+Check local build status:
+```bash
+python configure.py && ninja              # Verify build passes
+python tools/checkdiff.py <func_name>     # Detailed local diff comparison
+```
 
 ## What NOT to Do
 
@@ -505,10 +458,8 @@ melee-agent state urls <func_name>        # Show all URLs (scratch, PR)
 2. **Don't spend >10 minutes on one function** - commit your progress and move on
 3. **Don't ignore file-local types** - they must be included in source
 4. **Don't keep trying the same changes** - if reordering doesn't help after 3-4 attempts, the issue is likely context-related
-5. **Don't skip `workflow finish`** - just marking complete without committing loses your work!
-6. **Don't continue working if `claim add` fails** - pick a different function
-7. **Don't use raw curl/API calls** - use CLI tools like `scratch get --grep` or `scratch search-context`
-8. **Don't switch functions after claiming** - work on the EXACT function you claimed, not a different one
+5. **Don't forget to commit** - edit the source files and verify build when done
+6. **Don't use raw curl/API calls** - use CLI tools like `scratch get --grep` or `scratch search-context`
 
 ## Troubleshooting
 
@@ -518,16 +469,13 @@ melee-agent state urls <func_name>        # Show all URLs (scratch, PR)
 | Score drops dramatically | Reverted an inline expansion - try different approach |
 | Stuck at same score | Change had no codegen effect - try structural change |
 | Only `i` (offset) diffs | Usually fine - focus on `r` and instruction diffs |
-| Commit validation fails | Check braces balanced, function name present, not mid-statement |
-| Commit compile fails | Missing extern declarations or file-local types - use `--dry-run` first |
 | Missing stub marker | Run `melee-agent stub add <function_name>` to add it |
 | Stuck at 85-90% with extra conversion code | Likely type mismatch - run `melee-agent struct issues` and check for known issues |
 | Assembly uses `lfs` but code generates `lwz`+conversion | Field is float but header says int - use cast workaround |
 | Can't find struct offset | `melee-agent struct offset 0xXXX --struct StructName` |
 | Struct field not visible in context | Use `M2C_FIELD(ptr, offset, type)` macro for raw offset access |
-| Build fails after matching | Use `/decomp-fixup` skill to fix header/caller issues, or `--force --diagnosis` |
+| Build fails after matching | Use `/decomp-fixup` skill to fix header/caller issues |
 | Header has UNK_RET/UNK_PARAMS | Use `/decomp-fixup` skill to update signatures |
-| Can't claim function | Function may already be claimed - check `melee-agent claim list` |
 | Context outdated after header fix | `melee-agent scratch update-context <slug>` to rebuild from repo |
 
 **NonMatching files:** You CAN work on functions in NonMatching files. The build uses original .dol for linking, so builds always pass. Match % is tracked per-function.
@@ -563,13 +511,10 @@ melee-agent scratch compile --help    # Show all flags for compile
 | `scratch get` | `-g` | `--grep` | Search context for pattern |
 | `scratch update-context` | `-s` | `--source` | Source file for context |
 | `scratch update-context` | | `--compile` | Compile after updating |
-| `claim add` | `-f` | `--source-file` or `--source` | Source file (auto-detected) |
 | `extract list` | | `--module` | Filter by module (e.g., `lb`, `ft`) |
 | `extract list` | | `--sort score` | Sort by recommendation score |
 | `extract get` | | `--create-scratch` | Create scratch after extracting |
 | `extract get` | | `--full` | Show full output including ASM |
-| `workflow finish` | | `--force` | Commit even if build has issues |
-| `workflow finish` | | `--diagnosis` | Required with `--force` - explain why |
 
 ### Heredoc Pattern (Recommended)
 ```bash

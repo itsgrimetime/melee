@@ -30,50 +30,34 @@ melee/
 All operations via `python -m src.cli` or `melee-agent`:
 
 ```bash
-# Scratch operations
-melee-agent scratch create <func>     # Create scratch from melee repo (auto-decompiles)
-melee-agent scratch get <slug>        # Fetch scratch details
-melee-agent scratch compile <slug> -s <file>  # Update + compile in one step
-melee-agent scratch compile <slug>    # Compile and diff
-melee-agent scratch compile <slug> -r # Compile with refreshed context from repo
-melee-agent scratch decompile <slug>  # Re-run m2c decompiler on scratch
-melee-agent scratch update-context <slug>  # Rebuild context from repo headers
+# Scratch operations (primary workflow)
+melee-agent scratch compile <slug> --stdin --diff  # Compile from stdin (use with heredoc)
+melee-agent scratch compile <slug> -s <file>       # Compile from file
+melee-agent scratch compile <slug> -r              # Compile with refreshed context
+melee-agent scratch get <slug> --diff              # Show current diff
+melee-agent scratch get <slug> --context           # Show scratch context
+melee-agent scratch get <slug> --grep "pattern"   # Search context
+melee-agent scratch update-context <slug>          # Rebuild context from repo headers
+melee-agent scratch decompile <slug>               # Re-run m2c decompiler
 
 # Function discovery
-melee-agent extract list --max-match 0.50  # Find unmatched functions (excludes merged only)
-melee-agent extract list --module vi       # Filter by module
-melee-agent extract list --show-excluded   # Debug: show why functions are filtered
+melee-agent extract list --max-match 0.50  # Find unmatched functions
+melee-agent extract list --module mn       # Filter by module
 melee-agent extract get <func>             # Get ASM + metadata
+melee-agent extract get <func> --create-scratch  # Create scratch (preferred)
 
-# Commit workflow
-melee-agent commit apply <func> <slug>     # Apply match to repo
-melee-agent commit apply <func> <slug> --dry-run  # Preview first
+# Type/struct helpers
+melee-agent struct offset 0x1898           # What field is at offset?
+melee-agent struct show dmg --offset 0x1890  # Show fields near offset
+melee-agent struct issues                  # Show known type issues
 
-# Agent coordination
-melee-agent claim add <func>          # Claim before working
-melee-agent claim release <func>      # Release when done
-melee-agent complete mark <func> <slug> <pct>  # Record completion
+# Mismatch pattern database
+melee-agent mismatch search "pattern"      # Search known patterns
+melee-agent mismatch list                  # List all patterns
 
-# Stub management (for missing stub markers)
+# Stub management
 melee-agent stub check <func>         # Check if stub exists
 melee-agent stub add <func>           # Add missing stub marker
-
-# Sync to production decomp.me
-melee-agent sync auth                 # Configure cf_clearance cookie
-melee-agent sync list --author <name> # List scratches to sync
-melee-agent sync production           # Sync to https://decomp.me
-
-# State management (SQLite database)
-melee-agent state status              # Show tracked functions by category
-melee-agent state status <func>       # Show specific function details
-melee-agent state urls <func>         # Show all URLs (scratch, PR)
-melee-agent state history <func>      # Show audit history
-melee-agent state agents              # Show active agents and work
-melee-agent state stale               # Show data needing refresh
-melee-agent state validate --fix      # Validate DB against sources
-
-# Audit and discovery
-melee-agent audit discover-prs        # Link functions to merged PRs
 ```
 
 ## Environment
@@ -92,12 +76,18 @@ DECOMP_AGENT_ID=agent-1                   # Optional: manual agent isolation
 ## Workflow
 
 1. **Find function**: `extract list` or user-specified
-2. **Claim it**: `claim add <func>`
-3. **Create scratch**: `extract get <func> --create-scratch`
-4. **Read source**: Check `src/melee/` for existing code + context
-5. **Iterate**: Write to `/tmp/decomp_<slug>.c`, `scratch compile <slug> -s /tmp/decomp_<slug>.c`
-6. **Finish at 95%+**: `workflow finish <func> <slug>` (commits + records in one step)
-7. **Check progress**: `state status` to see all tracked functions by category
+2. **Create scratch**: `extract get <func> --create-scratch`
+3. **Read source**: Check `src/melee/` for existing code + context
+4. **Iterate**: Use heredoc pattern to compile:
+   ```bash
+   cat << 'EOF' | melee-agent scratch compile <slug> --stdin --diff
+   void func(s32 arg0) {
+       // your code here
+   }
+   EOF
+   ```
+5. **Commit to repo**: Edit source files directly (`.c` and `.h` files)
+6. **Verify**: `python configure.py && ninja` to confirm build passes
 
 ## Skills
 
@@ -112,22 +102,12 @@ python configure.py && ninja  # Build melee
 
 ## Context Summarization (Critical for Long Sessions)
 
-When a session runs out of context and gets summarized, **CRITICAL state must be preserved**:
+When a session runs out of context and gets summarized, **preserve this state**:
 
-### Must Preserve in Summary
-
-1. **Active function being worked on** - e.g., `un_803083D8`
+1. **Active function being worked on** - e.g., `mnDiagram2_80243A3C`
 2. **Active scratch slug** - e.g., `xYz12`
-3. **Module/subdirectory** - e.g., `ty`
-
-### After Context Reset
-
-Immediately after resuming from a summary, check your active claims:
-
-```bash
-melee-agent claim list                     # Shows your active claims
-melee-agent state status --category committed  # Check what functions were recently committed
-```
+3. **Module/subdirectory** - e.g., `mn`
+4. **Current match percentage** - e.g., `87.2%`
 
 ## Notes
 

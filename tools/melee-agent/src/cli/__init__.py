@@ -2,8 +2,8 @@
 CLI interface for the Melee Decomp Agent tooling.
 
 This package provides a modular CLI structure with separate modules for each
-command group: extract, scratch, claim, complete, commit, docker, sync, pr,
-audit, and hook.
+command group: extract, scratch, commit, docker, sync, pr, audit, hook, struct,
+stub, state, analytics, setup, and mismatch.
 
 Usage:
     python -m src.cli <command>
@@ -29,10 +29,8 @@ from ._common import (
 )
 from .analytics import analytics_app
 from .audit import audit_app
-from .claim import claim_app
 from .commit import commit_app
 from .compilers import list_compilers
-from .complete import complete_app
 from .docker import docker_app
 
 # Import sub-apps from modules
@@ -45,7 +43,6 @@ from .state import state_app
 from .struct import struct_app
 from .stub import stub_app
 from .sync import sync_app
-from .workflow import workflow_app
 
 # Create main app
 app = typer.Typer(
@@ -56,8 +53,6 @@ app = typer.Typer(
 # Register sub-apps
 app.add_typer(extract_app, name="extract")
 app.add_typer(scratch_app, name="scratch")
-app.add_typer(claim_app, name="claim")
-app.add_typer(complete_app, name="complete")
 app.add_typer(commit_app, name="commit")
 app.add_typer(docker_app, name="docker")
 app.add_typer(sync_app, name="sync")
@@ -66,7 +61,6 @@ app.add_typer(audit_app, name="audit")
 app.add_typer(hook_app, name="hook")
 app.add_typer(struct_app, name="struct")
 app.add_typer(stub_app, name="stub")
-app.add_typer(workflow_app, name="workflow")
 app.add_typer(state_app, name="state")
 app.add_typer(analytics_app, name="analytics")
 app.add_typer(setup_app, name="setup")
