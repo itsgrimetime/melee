@@ -108,8 +108,49 @@ bool mnDiagram2_80243AB4(u8 arg0)
     }
 }
 
-/// #mnDiagram2_80243ADC
+void mnDiagram2_80243ADC(HSD_GObj* gobj)
+{
+    s32 i;
+    mnDiagram2_UserData* data;
+    mnDiagram2_UserData* base;
+    mnDiagram2_UserData* ptr;
+    void* tmp;
+    HSD_JObj* jobj;
 
+    i = 0;
+    data = gobj->user_data;
+    base = data;
+    ptr = (mnDiagram2_UserData*) ((u8*) data + (i << 2));
+
+    do {
+        if (base->x4C[0] != NULL) {
+            HSD_SisLib_803A5CC4(ptr->x4C[0]);
+            base->x4C[0] = NULL;
+        }
+        if (base->x74[0] != NULL) {
+            HSD_SisLib_803A5CC4(ptr->x74[0]);
+            base->x74[0] = NULL;
+        }
+        if (base->x9C[0] != NULL) {
+            HSD_SisLib_803A5CC4(ptr->x9C[0]);
+            base->x9C[0] = NULL;
+        }
+        i++;
+        base = (mnDiagram2_UserData*) ((u8*) base + 4);
+        ptr = (mnDiagram2_UserData*) ((u8*) ptr + 4);
+    } while (i < 10);
+
+    tmp = data->x28;
+    if (tmp == NULL) {
+        tmp = NULL;
+    } else {
+        tmp = *(void**) ((u8*) tmp + 0x10);
+    }
+    jobj = tmp;
+    if (jobj != NULL) {
+        HSD_JObjRemoveAll(jobj);
+    }
+}
 /// #mnDiagram2_80243BBC
 
 s32 mnDiagram2_80244330(s32 arg0, HSD_GObj* type, u8 idx)
