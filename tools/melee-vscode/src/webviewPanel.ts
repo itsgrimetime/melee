@@ -657,23 +657,25 @@ export class DiffPanel {
 
         let html = this._escapeHtml(asm);
 
-        // Highlight registers (r0-r31, f0-f31, sp, lr, cr0-cr7)
-        html = html.replace(/\b(r\d{1,2}|f\d{1,2}|sp|lr|cr\d?)\b/g,
-            '<span class="register">$1</span>');
-
-        // Highlight hex numbers
-        html = html.replace(/\b(0x[0-9a-fA-F]+|-?0x[0-9a-fA-F]+)\b/g,
-            '<span class="hex">$1</span>');
-
-        // Highlight decimal numbers (but not in register names)
-        html = html.replace(/(?<![rf])\b(-?\d+)\b(?!\s*[:\(])/g,
-            '<span class="number">$1</span>');
+        // Highlight labels/symbols FIRST (before any span tags are added)
+        // After escaping, < becomes &lt; and > becomes &gt;
+        html = html.replace(/(&lt;[^&]+&gt;)/g, '<span class="label">$1</span>');
 
         // Highlight instruction mnemonics (first word on the line)
         html = html.replace(/^(\s*)(\w+)/, '$1<span class="mnemonic">$2</span>');
 
-        // Highlight labels/symbols
-        html = html.replace(/(<[^>]+>)/g, '<span class="label">$1</span>');
+        // Highlight registers (r0-r31, f0-f31, sp, lr, cr0-cr7)
+        // Use negative lookbehind/lookahead to avoid matching inside existing spans
+        html = html.replace(/(?<!<[^>]*)\b(r\d{1,2}|f\d{1,2}|sp|lr|cr\d?)\b(?![^<]*>)/g,
+            '<span class="register">$1</span>');
+
+        // Highlight hex numbers
+        html = html.replace(/(?<!<[^>]*)\b(0x[0-9a-fA-F]+|-?0x[0-9a-fA-F]+)\b(?![^<]*>)/g,
+            '<span class="hex">$1</span>');
+
+        // Highlight decimal numbers (but not in register names or inside spans)
+        html = html.replace(/(?<!<[^>]*)(?<![rf])\b(-?\d+)\b(?!\s*[:\(])(?![^<]*>)/g,
+            '<span class="number">$1</span>');
 
         return html;
     }

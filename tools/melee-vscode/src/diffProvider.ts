@@ -1,7 +1,7 @@
 import * as cp from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
-import { buildEnhancedDiff, InstructionDiff, ParsedInstruction, BranchArrow } from './asmParser';
+import { ParsedInstruction, BranchArrow, parseInstruction, compareInstructions, extractBranchArrows } from './asmParser';
 
 export interface DiffLine {
     target: string;
@@ -119,29 +119,132 @@ export class DiffProvider {
         reference_lines: number;
         current_lines: number;
         match: boolean;
+        fuzzy_match_percent?: number;
         diff: string[];
         target_asm?: string[];
         current_asm?: string[];
     }, functionName: string): DiffResult {
-        // Parse unified diff to extract side-by-side lines
+        // Always use unified diff for proper alignment
+        // Then enhance with parsed instruction data for syntax highlighting
+        return this.buildAlignedDiff(
+            data.diff,
+            functionName,
+            data.match,
+            data.reference_lines,
+            data.current_lines,
+            data.target_asm || [],
+            data.current_asm || [],
+            data.fuzzy_match_percent
+        );
+    }
+
+    /**
+     * Build a properly aligned side-by-side diff from unified diff format.
+     * This handles insertions, deletions, and changes correctly.
+     */
+    private buildAlignedDiff(
+        unifiedDiff: string[],
+        functionName: string,
+        isMatch: boolean,
+        referenceLines: number,
+        currentLines: number,
+        targetAsm: string[],
+        currentAsm: string[],
+        fuzzyMatchPercent?: number
+    ): DiffResult {
         const diffLines: DiffLine[] = [];
         const targetLines: string[] = [];
-        const currentLines: string[] = [];
+        const currentLines_: string[] = [];
 
-        // If we have raw ASM lines (enhanced output), use them
-        if (data.target_asm && data.current_asm) {
-            return this.buildSideBySideDiff(
-                data.target_asm,
-                data.current_asm,
-                functionName,
-                data.match
-            );
+        // Find the starting line from the @@ header
+        // Format: @@ -startLine,count +startLine,count @@
+        let diffStartLine = 1;
+        for (const line of unifiedDiff) {
+            const match = line.match(/^@@ -(\d+),?\d* \+(\d+),?\d* @@/);
+            if (match) {
+                diffStartLine = parseInt(match[1], 10);
+                break;
+            }
         }
 
-        // Otherwise, parse unified diff format
-        const unifiedDiff = data.diff;
-        let targetIdx = 0;
-        let currentIdx = 0;
+        // Add lines before the diff starts (these are matching lines not shown in diff)
+        // Lines are 1-indexed in diff format, but 0-indexed in arrays
+        for (let i = 0; i < diffStartLine - 1 && i < targetAsm.length && i < currentAsm.length; i++) {
+            const target = targetAsm[i];
+            const current = currentAsm[i];
+            targetLines.push(target);
+            currentLines_.push(current);
+
+            const instr = parseInstruction(target);
+            diffLines.push({
+                target,
+                current,
+                status: 'match',
+                targetParsed: instr,
+                currentParsed: instr
+            });
+        }
+
+        // Track line indices as we process the diff
+        let targetIdx = diffStartLine - 1;  // 0-indexed
+        let currentIdx = diffStartLine - 1;
+
+        // Collect consecutive +/- pairs to display as side-by-side changes
+        let pendingDeletes: string[] = [];
+        let pendingInserts: string[] = [];
+
+        const flushPending = () => {
+            // Pair up deletes and inserts as side-by-side changes
+            const maxLen = Math.max(pendingDeletes.length, pendingInserts.length);
+            for (let i = 0; i < maxLen; i++) {
+                const target = pendingDeletes[i] || '';
+                const current = pendingInserts[i] || '';
+
+                targetLines.push(target);
+                currentLines_.push(current);
+                if (pendingDeletes[i]) targetIdx++;
+                if (pendingInserts[i]) currentIdx++;
+
+                if (target && current) {
+                    // Both sides have content - compare them
+                    const targetInstr = parseInstruction(target);
+                    const currentInstr = parseInstruction(current);
+                    const comparison = compareInstructions(targetInstr, currentInstr);
+
+                    diffLines.push({
+                        target,
+                        current,
+                        status: comparison.status,
+                        diffType: comparison.diffType,
+                        mismatchedParts: comparison.mismatchedParts,
+                        targetParsed: comparison.target,
+                        currentParsed: comparison.current
+                    });
+                } else if (target) {
+                    // Only target (delete)
+                    const targetInstr = parseInstruction(target);
+                    diffLines.push({
+                        target,
+                        current: '',
+                        status: 'target-only',
+                        targetParsed: targetInstr,
+                        currentParsed: null
+                    });
+                } else {
+                    // Only current (insert)
+                    const currentInstr = parseInstruction(current);
+                    diffLines.push({
+                        target: '',
+                        current,
+                        status: 'current-only',
+                        targetParsed: null,
+                        currentParsed: currentInstr
+                    });
+                }
+            }
+            pendingDeletes = [];
+            pendingInserts = [];
+        };
 
         for (const line of unifiedDiff) {
             if (line.startsWith('---') || line.startsWith('+++') || line.startsWith('@@')) {
@@ -149,99 +252,89 @@ export class DiffProvider {
             }
 
             if (line.startsWith('-')) {
-                // Line only in target (expected)
-                const text = line.substring(1);
-                targetLines.push(text);
-                diffLines.push({
-                    target: text,
-                    current: '',
-                    status: 'target-only'
-                });
+                // Delete line - queue it
+                pendingDeletes.push(line.substring(1));
             } else if (line.startsWith('+')) {
-                // Line only in current
-                const text = line.substring(1);
-                currentLines.push(text);
-                diffLines.push({
-                    target: '',
-                    current: text,
-                    status: 'current-only'
-                });
+                // Insert line - queue it
+                pendingInserts.push(line.substring(1));
             } else if (line.startsWith(' ')) {
-                // Context line (matches)
+                // Context line - flush any pending changes first
+                flushPending();
+
                 const text = line.substring(1);
                 targetLines.push(text);
-                currentLines.push(text);
+                currentLines_.push(text);
+                targetIdx++;
+                currentIdx++;
+
+                const instr = parseInstruction(text);
                 diffLines.push({
                     target: text,
                     current: text,
-                    status: 'match'
+                    status: 'match',
+                    targetParsed: instr,
+                    currentParsed: instr
                 });
             }
         }
 
-        // Calculate match percentage from line counts
-        const totalLines = Math.max(data.reference_lines, data.current_lines);
-        const matchingLines = diffLines.filter(l => l.status === 'match').length;
-        const matchPercent = totalLines > 0 ? Math.round((matchingLines / totalLines) * 100) : 100;
+        // Flush any remaining pending changes
+        flushPending();
 
-        return {
-            functionName,
-            match: data.match,
-            matchPercent,
-            targetLines,
-            currentLines,
-            diffLines,
-            targetArrows: [],
-            currentArrows: []
-        };
-    }
+        // Add trailing lines after the diff (matching lines not shown in diff)
+        while (targetIdx < targetAsm.length && currentIdx < currentAsm.length) {
+            const target = targetAsm[targetIdx];
+            const current = currentAsm[currentIdx];
 
-    private buildSideBySideDiff(
-        targetAsm: string[],
-        currentAsm: string[],
-        functionName: string,
-        isMatch: boolean
-    ): DiffResult {
-        // Use enhanced diff parser for detailed comparison
-        const { diffs: enhancedDiffs, targetArrows, currentArrows } = buildEnhancedDiff(targetAsm, currentAsm);
+            // These should be matching lines
+            targetLines.push(target);
+            currentLines_.push(current);
+            targetIdx++;
+            currentIdx++;
 
-        const diffLines: DiffLine[] = [];
-        let matchCount = 0;
-
-        for (let i = 0; i < enhancedDiffs.length; i++) {
-            const ed = enhancedDiffs[i];
-            const target = targetAsm[i] || '';
-            const current = currentAsm[i] || '';
-
-            if (ed.status === 'match') {
-                matchCount++;
-            }
-
+            const instr = parseInstruction(target);
             diffLines.push({
                 target,
                 current,
-                status: ed.status,
-                diffType: ed.diffType,
-                mismatchedParts: ed.mismatchedParts,
-                targetParsed: ed.target,
-                currentParsed: ed.current
+                status: 'match',
+                targetParsed: instr,
+                currentParsed: instr
             });
         }
 
-        const maxLen = Math.max(targetAsm.length, currentAsm.length);
-        const matchPercent = maxLen > 0 ? Math.round((matchCount / maxLen) * 100) : 100;
+        // Use fuzzy match percent from report if available, otherwise calculate from exact matches
+        let matchPercent: number;
+        if (fuzzyMatchPercent !== undefined) {
+            matchPercent = Math.round(fuzzyMatchPercent);
+        } else {
+            // Calculate match percentage from actual instruction lines (excluding header/empty)
+            const instrLines = diffLines.filter(l =>
+                (l.target && !l.target.trim().startsWith('<')) ||
+                (l.current && !l.current.trim().startsWith('<'))
+            );
+            const matchingLines = instrLines.filter(l => l.status === 'match').length;
+            const totalInstrLines = Math.max(referenceLines, currentLines);
+            matchPercent = totalInstrLines > 0 ? Math.round((matchingLines / totalInstrLines) * 100) : 100;
+        }
+
+        // Extract branch arrows from the aligned lines
+        const targetInstrs = diffLines.map(d => d.targetParsed || null);
+        const currentInstrs = diffLines.map(d => d.currentParsed || null);
+        const targetArrows = extractBranchArrows(targetInstrs, 'target');
+        const currentArrows = extractBranchArrows(currentInstrs, 'current');
 
         return {
             functionName,
             match: isMatch,
             matchPercent,
-            targetLines: targetAsm,
-            currentLines: currentAsm,
+            targetLines,
+            currentLines: currentLines_,
             diffLines,
             targetArrows,
             currentArrows
         };
     }
+
 
     async getReport(): Promise<Report> {
         const reportPath = path.join(this.workspaceRoot, 'build', 'GALE01', 'report.json');

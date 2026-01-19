@@ -154,6 +154,16 @@ def find_unit_for_function(func_name: str) -> Optional[str]:
     return None
 
 
+def get_fuzzy_match_percent(func_name: str) -> Optional[float]:
+    """Get the fuzzy_match_percent for a function from report.json."""
+    with REPORT_PATH.open("r") as f:
+        for unit in json.load(f).get("units", []):
+            for function in unit.get("functions", []):
+                if function.get("name") == func_name:
+                    return function.get("fuzzy_match_percent")
+    return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("function", help="Function name")
@@ -302,11 +312,13 @@ def main() -> int:
 
         if args.format == "json":
             import json as json_mod
+            fuzzy_pct = get_fuzzy_match_percent(func_name)
             diff_data = {
                 "function": func_name,
                 "reference_lines": len(ref_lines),
                 "current_lines": len(our_lines),
                 "match": ref_asm == our_asm,
+                "fuzzy_match_percent": fuzzy_pct,
                 "target_asm": ref_lines,
                 "current_asm": our_lines,
                 "diff": list(difflib.unified_diff(ref_lines, our_lines,
