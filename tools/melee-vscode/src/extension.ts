@@ -162,7 +162,7 @@ function updateStatusBar(result: DiffResult) {
     const icon = result.match ? '$(check)' : '$(x)';
     const color = result.match ? 'statusBarItem.warningForeground' : undefined;
 
-    statusBarItem.text = `${icon} ${result.functionName}: ${result.matchPercent}%`;
+    statusBarItem.text = `${icon} ${result.functionName}: ${result.matchPercent.toFixed(2)}%`;
     statusBarItem.backgroundColor = result.match
         ? undefined
         : new vscode.ThemeColor('statusBarItem.errorBackground');

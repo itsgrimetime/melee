@@ -305,7 +305,7 @@ export class DiffProvider {
         // Use fuzzy match percent from report if available, otherwise calculate from exact matches
         let matchPercent: number;
         if (fuzzyMatchPercent !== undefined) {
-            matchPercent = Math.round(fuzzyMatchPercent);
+            matchPercent = fuzzyMatchPercent;
         } else {
             // Calculate match percentage from actual instruction lines (excluding header/empty)
             const instrLines = diffLines.filter(l =>
@@ -314,7 +314,7 @@ export class DiffProvider {
             );
             const matchingLines = instrLines.filter(l => l.status === 'match').length;
             const totalInstrLines = Math.max(referenceLines, currentLines);
-            matchPercent = totalInstrLines > 0 ? Math.round((matchingLines / totalInstrLines) * 100) : 100;
+            matchPercent = totalInstrLines > 0 ? (matchingLines / totalInstrLines) * 100 : 100;
         }
 
         // Extract branch arrows from the aligned lines

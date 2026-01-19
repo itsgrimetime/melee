@@ -66,7 +66,7 @@ export class CodeLensProvider implements vscode.CodeLensProvider {
             }
 
             const title = matchPercent !== undefined
-                ? `Show ASM Diff (${matchPercent.toFixed(0)}%)`
+                ? `Show ASM Diff (${matchPercent.toFixed(2)}%)`
                 : 'Show ASM Diff';
 
             const lens = new vscode.CodeLens(range, {

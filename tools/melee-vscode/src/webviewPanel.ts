@@ -74,7 +74,7 @@ export class DiffPanel {
 
     public updateDiff(result: DiffResult) {
         this._currentFunction = result.functionName;
-        this._panel.title = `ASM Diff: ${result.functionName} (${result.matchPercent}%)`;
+        this._panel.title = `ASM Diff: ${result.functionName} (${result.matchPercent.toFixed(2)}%)`;
         // Add timestamp to force unique HTML and prevent VSCode caching
         const html = this._getDiffHtml(result, Date.now());
         this._panel.webview.html = html;
@@ -139,7 +139,7 @@ export class DiffPanel {
     <div class="header">
         <div class="function-name">${this._escapeHtml(result.functionName)}</div>
         <div class="status ${statusClass}">
-            ${statusText} - ${result.matchPercent}%
+            ${statusText} - ${result.matchPercent.toFixed(2)}%
         </div>
     </div>
     <div class="diff-container">
