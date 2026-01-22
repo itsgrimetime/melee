@@ -2900,9 +2900,12 @@ void mn_8022DDA8_OnEnter(MenuEnterData* data)
     lb_8001CE00();
 }
 
-bool mn_8022E950(int arg0)
+/// @brief Checks if a fighter (by ckind) is unlocked.
+/// @param ckind Character kind ID
+/// @return true if fighter is unlocked
+bool mn_IsFighterUnlocked(int ckind)
 {
-    return gm_80164840(gm_8016400C(arg0));
+    return gm_80164840(gm_8016400C(ckind));
 }
 
 void mn_8022E978(u8 item_idx, u8 enable)
