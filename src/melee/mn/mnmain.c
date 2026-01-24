@@ -657,10 +657,10 @@ static char null_terminator[1] = "\0";
 
 void mn_8022EA08(char* buf, u32 num)
 {
-    int buf_end = mn_8022EB78(num);
+    int buf_end = mn_GetDigitCount(num);
     int i;
     for (i = 0; i < buf_end; i++) {
-        buf[buf_end - 1 - i] = mn_8022EB24(num, i) + 0x30;
+        buf[buf_end - 1 - i] = mn_GetDigitAt(num, i) + '0';
     }
     buf[buf_end] = null_terminator[0];
 }
@@ -669,17 +669,24 @@ void mn_8022EA78(char* buf, int buf_end, u32 num)
 {
     int i;
     for (i = 0; i < buf_end; i++) {
-        buf[buf_end - 1 - i] = mn_8022EB24(num, i) + 0x30;
+        buf[buf_end - 1 - i] = mn_GetDigitAt(num, i) + '0';
     }
     buf[buf_end] = null_terminator[0];
 }
 
-s32 mn_8022EB24(s32 arg0, s32 arg1)
+/// @brief Extracts a single digit from a number at a given position.
+/// @param num The number to extract from.
+/// @param position The digit position (0 = ones, 1 = tens, 2 = hundreds, etc.)
+/// @return The digit at the specified position (0-9).
+s32 mn_GetDigitAt(s32 num, s32 position)
 {
-    return (arg0 / powi(10, arg1)) % 10;
+    return (num / powi(10, position)) % 10;
 }
 
-s32 mn_8022EB78(s32 num)
+/// @brief Returns the number of digits in a number.
+/// @param num The number to count digits for.
+/// @return The number of digits (minimum 1 for zero).
+s32 mn_GetDigitCount(s32 num)
 {
     s32 count;
     if (num == 0) {
@@ -2912,9 +2919,12 @@ void mn_8022DDA8_OnEnter(MenuEnterData* data)
     lb_8001CE00();
 }
 
-bool mn_8022E950(int arg0)
+/// @brief Checks if a fighter (by ckind) is unlocked.
+/// @param ckind Character kind ID
+/// @return true if fighter is unlocked
+bool mn_IsFighterUnlocked(int ckind)
 {
-    return gm_80164840(gm_8016400C(arg0));
+    return gm_80164840(gm_8016400C(ckind));
 }
 
 void mn_8022E978(u8 item_idx, u8 enable)

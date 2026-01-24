@@ -1593,7 +1593,7 @@ bool gm_801677F8(int port, int arg1)
         if (GetRumbleSettingOfPort(port) != 0) {
             result = true;
         }
-    } else if (GetPersistentNameData(arg1)->x1A1 != 0) {
+    } else if (GetPersistentNameData(arg1)->rumble != 0) {
         result = true;
     }
     return result;
