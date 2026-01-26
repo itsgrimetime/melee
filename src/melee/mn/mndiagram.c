@@ -498,6 +498,19 @@ static inline int CountTiedFighters(int name, int min_fighter, u32 min_time)
 
 static inline int CheckAllZeroPlayTime(int name_idx)
 {
+    int i;
+    for (i = 0; i < 0x19; i++) {
+        if (GetPersistentNameData(name_idx)->play_time_by_fighter[i] != 0U) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/// @remarks u8 parameter requires different codegen than int version.
+/// The `int i = 0; int offset = i;` forces correct register allocation.
+static inline int CheckAllZeroPlayTime_u8(u8 name_idx)
+{
     int i = 0;
     int offset = i;
     while (1) {
@@ -589,24 +602,11 @@ int mnDiagram_GetRankedFighterForName(int rank, int name_idx,
 u8 mnDiagram_GetLeastPlayedFighter(u8 name_idx)
 {
     int i;
-    int result;
     int min_fighter;
     int count;
 
     // Check if all play times are zero
-    // i = 0;
-    for (i = 0;;) {
-        if (GetPersistentNameData(name_idx)->play_time_by_fighter[i]) {
-            result = 0;
-            break;
-        }
-        i++;
-        if (i >= 0x19) {
-            result = 1;
-            break;
-        }
-    }
-    if (result != 0) {
+    if (CheckAllZeroPlayTime_u8(name_idx) != 0) {
         return 0x19;
     }
 
