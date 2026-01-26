@@ -2031,7 +2031,7 @@ void mn_8022CA54(HSD_GObj* gp)
         switch ((RecordsMenuSelection) mn_804A04F0.hovered_selection) {
         case SEL_RECORDS_VS:
             lbAudioAx_80024030(1);
-            mnDiagram_802437E8(1, 1);
+            mnDiagram_Init(1, 1);
             HSD_GObjPLink_80390228(gp);
             return;
         case SEL_RECORDS_BONUS:
