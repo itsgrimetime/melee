@@ -1175,11 +1175,11 @@ void mnDiagram_802417D0(HSD_GObj* gobj)
     Diagram* data = gobj->user_data;
     char* base = (char*) mnDiagram_803EE728;
     HSD_JObj* jobj;
+    int i;
     u8* sorted = (u8*) &mnDiagram_804A0750;
-    s32 i;
     u8* ptr;
     u8* ptr2;
-    s32 count;
+    int count;
     HSD_JObj* jobj2;
     u8 result;
     PAD_STACK(8);
@@ -1191,25 +1191,14 @@ void mnDiagram_802417D0(HSD_GObj* gobj)
         // Name mode - check if 10 more names exist
         count = 10;
         i = (u8) data->name_cursor_pos;
-        ptr = sorted + i;
-        ptr = ptr + 0x1C;
-    loop1:
-        ptr2 = ptr;
-    loop2:
-        i++;
-        ptr2++;
-        ptr++;
-        if (i >= 0x78) {
-            result = 0x78;
-        } else if (GetNameText(*ptr2) == NULL) {
-            goto loop2;
-        } else {
-            count--;
-            if (count > 0) {
-                goto loop1;
+        do {
+            result = mnDiagram_GetNextNameIndex(i);
+            if (result == i) {
+                break;
             }
-            result = sorted[i + 0x1C];
-        }
+            i = result;
+            count--;
+        } while (count > 0);
         if ((u8) result != 0x78) {
             HSD_JObjClearFlagsAll(jobj, 0x10U);
         } else {
@@ -2201,7 +2190,7 @@ void mnDiagram_802437E8(s32 arg0, s32 arg1)
 
     mnDiagram_8023FA6C();
     mnDiagram_8023FC28();
-    mnDiagram_80243434((u8) arg1);
+    mnDiagram_80243434(arg1);
 
     proc = HSD_GObjProc_8038FD54(GObj_Create(0, 1, 0x80),
                                  (void (*)(HSD_GObj*)) mnDiagram_InputProc, 0);
