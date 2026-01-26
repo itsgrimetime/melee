@@ -271,20 +271,18 @@ static inline void mnDiagram2_RefreshStatRows(void)
 void mnDiagram2_HandleInput(HSD_GObj* gobj)
 {
     Diagram2* data;
+    u32 result;
     Diagram2* data2;
-    int result;
     u8 x46;
     u8 x47;
     u8 x48;
-    u8 var_r6;
     u8 var_r5;
-    u8 var_r28;
     u8 new_val;
+    PAD_STACK(40);
 
     data = mnDiagram2_804D6C18->user_data;
     result = mn_80229624(4);
     mn_804A04F0.buttons = result;
-    var_r28 = 0;
 
     if (result & 0x20) {
         lbAudioAx_80024030(0);
@@ -326,10 +324,7 @@ void mnDiagram2_HandleInput(HSD_GObj* gobj)
             return;
         }
         lbAudioAx_80024030(1);
-        if (data->is_name_mode == 0) {
-            var_r28 = 1;
-        }
-        data->is_name_mode = var_r28;
+        data->is_name_mode = (data->is_name_mode == 0) ? 1 : 0;
         if (data->is_name_mode == 0 && (s32) (data->scroll_offset + 10) > 0x15)
         {
             data->scroll_offset = 0;
