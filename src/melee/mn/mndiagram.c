@@ -1167,6 +1167,14 @@ void mnDiagram_80241730(void* arg0, int arg1, int arg2)
     }
 }
 
+/// @brief Updates directional arrow visibility based on scroll position.
+/// @details Runs every frame to show/hide the 4 navigation arrows:
+///          - jobjs[3] (Right): Visible if more columns exist to the right
+///          - jobjs[4] (Up): Visible if row_scroll > 0 (rows scrolled off top)
+///          - jobjs[5] (Left): Visible if col_scroll > 0 (columns scrolled off left)
+///          - jobjs[6] (Down): Visible if more rows exist below
+///          The cursor_pos fields store scroll offset as (col_scroll << 8 | row_scroll),
+///          not the cursor position within the visible grid.
 #pragma push
 #pragma dont_reuse_strings off
 void mnDiagram_802417D0(HSD_GObj* gobj)
@@ -1191,14 +1199,23 @@ void mnDiagram_802417D0(HSD_GObj* gobj)
         // Name mode - check if 10 more names exist
         count = 10;
         i = (u8) data->name_cursor_pos;
+        ptr = sorted + i;
+        ptr = ptr + 28;
         do {
-            result = mnDiagram_GetNextNameIndex(i);
-            if (result == i) {
-                break;
-            }
-            i = result;
+            ptr2 = ptr;
+            do {
+                i++;
+                ptr2++;
+                ptr++;
+                if (i >= 0x78) {
+                    result = 0x78;
+                    goto done_name;
+                }
+            } while (GetNameText(*ptr2) == NULL);
             count--;
         } while (count > 0);
+        result = sorted[i + 28];
+    done_name:
         if ((u8) result != 0x78) {
             HSD_JObjClearFlagsAll(jobj, 0x10U);
         } else {
@@ -1236,7 +1253,7 @@ void mnDiagram_802417D0(HSD_GObj* gobj)
         }
     }
 
-    // Left arrow (jobjs[4])
+    // Up arrow (jobjs[4]) - visible when row_scroll > 0 (rows scrolled off top)
     jobj2 = data->jobjs[4];
     mn_8022ED6C(jobj2, (AnimLoopSettings*) (base + 0x58));
     if (data->is_name_mode != 0) {
@@ -1250,7 +1267,7 @@ void mnDiagram_802417D0(HSD_GObj* gobj)
         HSD_JObjSetFlagsAll(jobj2, 0x10U);
     }
 
-    // Up arrow (jobjs[5])
+    // Left arrow (jobjs[5]) - visible when col_scroll > 0 (columns scrolled off left)
     jobj2 = data->jobjs[5];
     mn_8022ED6C(jobj2, (AnimLoopSettings*) (base + 0x58));
     if (data->is_name_mode != 0) {
@@ -1344,9 +1361,12 @@ void mnDiagram_ExitAnimProc(HSD_GObj* gobj)
     }
 }
 
-/// @brief Updates scroll arrow visibility based on entry count.
-/// @details Hides vertical arrows if count <= 7 (fits in visible rows).
-///          Hides horizontal arrows if count <= 10 (fits in visible columns).
+/// @brief Sets initial scroll arrow visibility based on total entry count.
+/// @details Called once after intro animation. Sets visibility for:
+///          - jobjs[7]/[8]: Hidden if count <= 7 (unknown visual elements)
+///          - jobjs[5]/[6]: Hidden if count <= 10 (left/down arrows)
+///          Note: jobjs[5]/[6] are also updated every frame by mnDiagram_802417D0
+///          based on scroll position, which overrides this initial setting.
 /// @param gobj The diagram GObj containing arrow JObjs in user_data.
 /// @param count Number of entries (fighters or names) to display.
 void mnDiagram_UpdateScrollArrowVisibility(void* gobj, int count)
