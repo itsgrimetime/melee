@@ -465,11 +465,11 @@ u8 mnDiagram_GetNextFighterIndex(s32 idx)
 
 /// @brief Gets play time for a specific fighter under a name tag.
 /// @param name_idx Name tag index.
-/// @param fighter_idx Fighter index (0-24).
+/// @param row_idx Fighter index (0-24).
 /// @return Play time in seconds for this fighter under this name.
-u32 mnDiagram_GetNamePlayTimeByFighter(int name_idx, int fighter_idx)
+u32 mnDiagram_GetNamePlayTimeByFighter(int name_idx, int row_idx)
 {
-    return GetPersistentNameData(name_idx)->play_time_by_fighter[fighter_idx];
+    return GetPersistentNameData(name_idx)->play_time_by_fighter[row_idx];
 }
 
 typedef struct RankEntry {
@@ -773,9 +773,8 @@ void mnDiagram_PopupInputProc(HSD_GObj* gobj)
     if (input & 0x20) {
         lbAudioAx_80024030(0);
         HSD_GObjProc_8038FE24(HSD_GObj_804D7838);
-        proc = HSD_GObjProc_8038FD54(gobj,
-                                     (void (*)(HSD_GObj*)) mnDiagram_InputProc,
-                                     0);
+        proc = HSD_GObjProc_8038FD54(
+            gobj, (void (*)(HSD_GObj*)) mnDiagram_InputProc, 0);
         proc->flags_3 = HSD_GObj_804D783C;
         HSD_GObjPLink_80390228(data->popup_gobj);
         data->popup_gobj = NULL;
@@ -784,28 +783,118 @@ void mnDiagram_PopupInputProc(HSD_GObj* gobj)
 
 void mnDiagram_InputProc(HSD_GObj* gobj)
 {
+    HSD_GObjProc* proc;
+    u8* base = (u8*) &mnDiagram_804A0750;
     Diagram* data = mnDiagram_804D6C10->user_data;
     u32 input = mn_80229624(4);
+    s32 is_name_mode = 0;
+    s32 row_idx;
+    s32 col_idx;
+    s32 count;
+    s32 new_pos;
+    u8* ptr;
+    u8* iter;
+    u8 result;
+    PAD_STACK(80);
+
+    mn_804A04F0.buttons = input;
 
     if (input & 0x10) {
+        // A button - open popup
         lbAudioAx_80024030(1);
         HSD_GObjProc_8038FE24(HSD_GObj_804D7838);
-        HSD_GObjProc_8038FD54(
+        proc = HSD_GObjProc_8038FD54(
             gobj, (void (*)(HSD_GObj*)) mnDiagram_PopupInputProc, 0);
+        proc->flags_3 = HSD_GObj_804D783C;
         if (data->is_name_mode != 0) {
-            u8 col_idx = (u8) data->name_cursor_pos;
-            u8 row_idx = data->name_cursor_pos >> 8;
-            mnDiagram_CreatePopup(col_idx, row_idx, 1);
+            // Name mode - find position in sorted names
+            row_idx = (u8) data->name_cursor_pos;
+            col_idx = (u8) mn_804A04F0.hovered_selection;
+            ptr = base + row_idx + 0x1C;
+            while (col_idx > 0) {
+                row_idx++;
+                ptr++;
+                if (row_idx >= 0x78) {
+                    col_idx = 0x78;
+                    goto name_col_done;
+                }
+                if (GetNameText(*ptr) != NULL) {
+                    col_idx--;
+                }
+            }
+            col_idx = base[row_idx + 0x1C];
+        name_col_done:
+            new_pos = (s32) mn_804A04F0.hovered_selection >> 8;
+            row_idx = (s32) data->name_cursor_pos >> 8;
+            ptr = base + row_idx + 0x1C;
+            while (new_pos > 0) {
+                row_idx++;
+                ptr++;
+                if (row_idx >= 0x78) {
+                    result = 0x78;
+                    goto name_row_done;
+                }
+                if (GetNameText(*ptr) != NULL) {
+                    new_pos--;
+                }
+            }
+            result = base[row_idx + 0x1C];
+        name_row_done:
+            mnDiagram_CreatePopup((u8) col_idx, result, 1);
         } else {
-            u8 col_idx = (u8) data->fighter_cursor_pos;
-            u8 row_idx = data->fighter_cursor_pos >> 8;
-            mnDiagram_CreatePopup(col_idx, row_idx, 0);
+            // Fighter mode - find position in sorted fighters
+            row_idx = (u8) data->fighter_cursor_pos;
+            col_idx = (u8) mn_804A04F0.hovered_selection;
+            ptr = base + row_idx;
+            while (col_idx >= 0) {
+                if (col_idx == 0) {
+                    result = base[row_idx];
+                    goto fighter_col_done;
+                }
+                iter = ptr;
+                row_idx++;
+                iter++;
+                ptr++;
+                if (row_idx >= 0x19) {
+                    result = 0x19;
+                    goto fighter_col_done;
+                }
+                if (mn_IsFighterUnlocked(*iter) != 0) {
+                    col_idx--;
+                }
+            }
+        fighter_col_done:
+            new_pos = (s32) mn_804A04F0.hovered_selection >> 8;
+            row_idx = (s32) data->fighter_cursor_pos >> 8;
+            ptr = base + row_idx;
+            while (new_pos >= 0) {
+                if (new_pos == 0) {
+                    col_idx = base[row_idx];
+                    goto fighter_row_done;
+                }
+                iter = ptr;
+                row_idx++;
+                iter++;
+                ptr++;
+                if (row_idx >= 0x19) {
+                    col_idx = 0x19;
+                    goto fighter_row_done;
+                }
+                if (mn_IsFighterUnlocked(*iter) != 0) {
+                    new_pos--;
+                }
+            }
+        fighter_row_done:
+            mnDiagram_CreatePopup(result, (u8) col_idx, 0);
         }
         return;
     }
+
     if (input & 0x20) {
+        // B button - exit menu
         lbAudioAx_80024030(0);
-        mn_804A04F0.entering_menu = 0;
+        mn_804A04F0.entering_menu = is_name_mode;
+        data = mnDiagram_804D6C10->user_data;
         gmMainLib_8015CC34()->xE = (u8) (data->fighter_cursor_pos >> 8);
         gmMainLib_8015CC34()->xF = (u8) data->fighter_cursor_pos;
         gmMainLib_8015CC34()->unk_x10 = (u8) (data->name_cursor_pos >> 8);
@@ -814,8 +903,11 @@ void mnDiagram_InputProc(HSD_GObj* gobj)
         mn_80229894(0x1C, 0, 3);
         return;
     }
+
     if (input & 0xC0) {
+        // L/R buttons - switch screens
         lbAudioAx_80024030(1);
+        data = mnDiagram_804D6C10->user_data;
         gmMainLib_8015CC34()->xE = (u8) (data->fighter_cursor_pos >> 8);
         gmMainLib_8015CC34()->xF = (u8) data->fighter_cursor_pos;
         gmMainLib_8015CC34()->unk_x10 = (u8) (data->name_cursor_pos >> 8);
@@ -829,46 +921,432 @@ void mnDiagram_InputProc(HSD_GObj* gobj)
         }
         return;
     }
+
     if (input & 0xC00) {
+        // Toggle name/fighter mode
         if (GetNameCount() == 0) {
             lbAudioAx_80024030(3);
             return;
         }
         lbAudioAx_80024030(1);
-        data->is_name_mode = (data->is_name_mode == 0) ? 1 : 0;
-        mnDiagram_UpdateScrollArrowVisibility(
-            mnDiagram_804D6C10, mnDiagram_CountUnlockedFighters());
+        if (data->is_name_mode == 0) {
+            is_name_mode = 1;
+        }
+        data->is_name_mode = is_name_mode;
         if (data->is_name_mode != 0) {
+            count = GetNameCount();
+            if ((u8) mn_804A04F0.hovered_selection >= count) {
+                mn_804A04F0.hovered_selection =
+                    (mn_804A04F0.hovered_selection & 0xFF00) | (u8) (count - 1);
+            }
+            if ((s32) mn_804A04F0.hovered_selection >> 8 >= count) {
+                mn_804A04F0.hovered_selection =
+                    ((count - 1) << 8) | ((u8) mn_804A04F0.hovered_selection);
+            }
+            mnDiagram_UpdateScrollArrowVisibility(mnDiagram_804D6C10, count);
             mnDiagram_UpdateGridDisplay(mnDiagram_804D6C10,
                                         (u8) data->name_cursor_pos,
                                         data->name_cursor_pos >> 8);
         } else {
+            count = 0;
+            for (col_idx = 0; col_idx < 0x19; col_idx++) {
+                if (mn_IsFighterUnlocked(col_idx) != 0) {
+                    count++;
+                }
+            }
+            if ((u8) mn_804A04F0.hovered_selection >= count) {
+                mn_804A04F0.hovered_selection =
+                    (mn_804A04F0.hovered_selection & 0xFF00) | (u8) (count - 1);
+            }
+            if ((s32) mn_804A04F0.hovered_selection >> 8 >= count) {
+                mn_804A04F0.hovered_selection =
+                    ((count - 1) << 8) | ((u8) mn_804A04F0.hovered_selection);
+            }
+            mnDiagram_UpdateScrollArrowVisibility(mnDiagram_804D6C10, count);
             mnDiagram_UpdateGridDisplay(mnDiagram_804D6C10,
                                         (u8) data->fighter_cursor_pos,
                                         data->fighter_cursor_pos >> 8);
         }
         return;
     }
+
     // D-pad navigation
     if (data->is_name_mode != 0) {
+        // Name mode navigation
+        count = GetNameCount();
         if (input & 1) {
-            lbAudioAx_80024030(2);
+            // Left
+            col_idx = (u8) mn_804A04F0.hovered_selection;
+            if (col_idx > 0) {
+                new_pos = col_idx - 1;
+                if (count > new_pos) {
+                    lbAudioAx_80024030(2);
+                    mn_804A04F0.hovered_selection =
+                        (mn_804A04F0.hovered_selection & 0xFF00) | (u8) new_pos;
+                    return;
+                }
+            }
+            if (count > 10) {
+                row_idx = (u8) data->name_cursor_pos;
+                new_pos = row_idx;
+                while (new_pos > 0) {
+                    new_pos--;
+                    if (GetNameText((u8) new_pos) != NULL) {
+                        break;
+                    }
+                    if (new_pos < 0) {
+                        new_pos = row_idx;
+                        break;
+                    }
+                }
+                if (row_idx != new_pos) {
+                    lbAudioAx_80024030(2);
+                    data->name_cursor_pos =
+                        (data->name_cursor_pos & 0xFF00) | (u8) new_pos;
+                    mnDiagram_UpdateGridDisplay(mnDiagram_804D6C10,
+                                                (u8) data->name_cursor_pos,
+                                                data->name_cursor_pos >> 8);
+                }
+            }
         } else if (input & 2) {
-            lbAudioAx_80024030(2);
+            // Right
+            col_idx = (u8) mn_804A04F0.hovered_selection;
+            if (col_idx < 9) {
+                new_pos = col_idx + 1;
+                if (count > new_pos) {
+                    lbAudioAx_80024030(2);
+                    mn_804A04F0.hovered_selection =
+                        (mn_804A04F0.hovered_selection & 0xFF00) | (u8) new_pos;
+                    return;
+                }
+            }
+            if (count > 10) {
+                row_idx = (u8) data->name_cursor_pos;
+                new_pos = row_idx;
+                while (new_pos < 0x78) {
+                    new_pos++;
+                    if (new_pos >= 0x78) {
+                        new_pos = row_idx;
+                        break;
+                    }
+                    if (GetNameText((u8) new_pos) != NULL) {
+                        break;
+                    }
+                }
+                result = (u8) new_pos;
+                if (row_idx != result) {
+                    // Check if we have enough items to scroll
+                    col_idx = 10;
+                    ptr = base + row_idx + 0x1C;
+                    while (col_idx > 0) {
+                        row_idx++;
+                        ptr++;
+                        if (row_idx >= 0x78) {
+                            result = 0x78;
+                            break;
+                        }
+                        if (GetNameText(*ptr) != NULL) {
+                            col_idx--;
+                            if (col_idx <= 0) {
+                                result = base[row_idx + 0x1C];
+                                break;
+                            }
+                        }
+                    }
+                    if (result != 0x78) {
+                        lbAudioAx_80024030(2);
+                        data->name_cursor_pos =
+                            (data->name_cursor_pos & 0xFF00) | (u8) new_pos;
+                        mnDiagram_UpdateGridDisplay(mnDiagram_804D6C10,
+                                                    (u8) data->name_cursor_pos,
+                                                    data->name_cursor_pos >> 8);
+                    }
+                }
+            }
         } else if (input & 4) {
-            lbAudioAx_80024030(2);
+            // Up
+            row_idx = (s32) mn_804A04F0.hovered_selection >> 8;
+            if (row_idx > 0) {
+                new_pos = row_idx - 1;
+                if (count > new_pos) {
+                    lbAudioAx_80024030(2);
+                    mn_804A04F0.hovered_selection =
+                        ((u8) mn_804A04F0.hovered_selection) | (new_pos << 8);
+                    return;
+                }
+            }
+            if (count > 7) {
+                row_idx = (s32) data->name_cursor_pos >> 8;
+                new_pos = row_idx;
+                while (new_pos > 0) {
+                    new_pos--;
+                    if (GetNameText((u8) new_pos) != NULL) {
+                        break;
+                    }
+                    if (new_pos < 0) {
+                        new_pos = row_idx;
+                        break;
+                    }
+                }
+                if (row_idx != new_pos) {
+                    lbAudioAx_80024030(2);
+                    data->name_cursor_pos =
+                        ((u8) data->name_cursor_pos) | ((u8) new_pos << 8);
+                    mnDiagram_UpdateGridDisplay(mnDiagram_804D6C10,
+                                                (u8) data->name_cursor_pos,
+                                                data->name_cursor_pos >> 8);
+                }
+            }
         } else if (input & 8) {
-            lbAudioAx_80024030(2);
+            // Down
+            row_idx = (s32) mn_804A04F0.hovered_selection >> 8;
+            if (row_idx < 6) {
+                new_pos = row_idx + 1;
+                if (count > new_pos) {
+                    lbAudioAx_80024030(2);
+                    mn_804A04F0.hovered_selection =
+                        ((u8) mn_804A04F0.hovered_selection) | (new_pos << 8);
+                    return;
+                }
+            }
+            if (count > 7) {
+                row_idx = (s32) data->name_cursor_pos >> 8;
+                new_pos = row_idx;
+                while (new_pos < 0x78) {
+                    new_pos++;
+                    if (new_pos >= 0x78) {
+                        new_pos = row_idx;
+                        break;
+                    }
+                    if (GetNameText((u8) new_pos) != NULL) {
+                        break;
+                    }
+                }
+                result = (u8) new_pos;
+                if (row_idx != result) {
+                    // Check boundary
+                    col_idx = 7;
+                    ptr = base + row_idx + 0x1C;
+                    while (col_idx > 0) {
+                        row_idx++;
+                        ptr++;
+                        if (row_idx >= 0x78) {
+                            result = 0x78;
+                            break;
+                        }
+                        if (GetNameText(*ptr) != NULL) {
+                            col_idx--;
+                            if (col_idx <= 0) {
+                                result = base[row_idx + 0x1C];
+                                break;
+                            }
+                        }
+                    }
+                    if (result != 0x78) {
+                        lbAudioAx_80024030(2);
+                        data->name_cursor_pos =
+                            ((u8) data->name_cursor_pos) | ((u8) new_pos << 8);
+                        mnDiagram_UpdateGridDisplay(mnDiagram_804D6C10,
+                                                    (u8) data->name_cursor_pos,
+                                                    data->name_cursor_pos >> 8);
+                    }
+                }
+            }
         }
     } else {
+        // Fighter mode navigation
+        count = 0;
+        for (col_idx = 0; col_idx < 0x19; col_idx++) {
+            if (mn_IsFighterUnlocked(col_idx) != 0) {
+                count++;
+            }
+        }
         if (input & 1) {
-            lbAudioAx_80024030(2);
+            // Left
+            col_idx = (u8) mn_804A04F0.hovered_selection;
+            if (col_idx > 0) {
+                new_pos = col_idx - 1;
+                if (count > new_pos) {
+                    lbAudioAx_80024030(2);
+                    mn_804A04F0.hovered_selection =
+                        (mn_804A04F0.hovered_selection & 0xFF00) | (u8) new_pos;
+                    return;
+                }
+            }
+            if (count > 10) {
+                row_idx = (u8) data->fighter_cursor_pos;
+                ptr = base + row_idx;
+                new_pos = row_idx;
+                while (new_pos > 0) {
+                    new_pos--;
+                    ptr--;
+                    if (mn_IsFighterUnlocked(*ptr) != 0) {
+                        break;
+                    }
+                    if (new_pos < 0) {
+                        new_pos = row_idx;
+                        break;
+                    }
+                }
+                if (row_idx != new_pos) {
+                    lbAudioAx_80024030(2);
+                    data->fighter_cursor_pos =
+                        (data->fighter_cursor_pos & 0xFF00) | (u8) new_pos;
+                    mnDiagram_UpdateGridDisplay(mnDiagram_804D6C10,
+                                                (u8) data->fighter_cursor_pos,
+                                                data->fighter_cursor_pos >> 8);
+                }
+            }
         } else if (input & 2) {
-            lbAudioAx_80024030(2);
+            // Right
+            col_idx = (u8) mn_804A04F0.hovered_selection;
+            if (col_idx < 9) {
+                new_pos = col_idx + 1;
+                if (count > new_pos) {
+                    lbAudioAx_80024030(2);
+                    mn_804A04F0.hovered_selection =
+                        (mn_804A04F0.hovered_selection & 0xFF00) | (u8) new_pos;
+                    return;
+                }
+            }
+            if (count > 10) {
+                row_idx = (u8) data->fighter_cursor_pos;
+                ptr = base + row_idx;
+                new_pos = row_idx;
+                while (new_pos < 0x19) {
+                    new_pos++;
+                    ptr++;
+                    if (new_pos >= 0x19) {
+                        new_pos = row_idx;
+                        break;
+                    }
+                    if (mn_IsFighterUnlocked(*ptr) != 0) {
+                        break;
+                    }
+                }
+                result = (u8) new_pos;
+                if (row_idx != result) {
+                    // Check boundary
+                    col_idx = 10;
+                    ptr = base + row_idx;
+                    while (col_idx > 0) {
+                        if (col_idx == 0) {
+                            result = base[row_idx];
+                            break;
+                        }
+                        row_idx++;
+                        ptr++;
+                        if (row_idx >= 0x19) {
+                            result = 0x19;
+                            break;
+                        }
+                        if (mn_IsFighterUnlocked(*ptr) != 0) {
+                            col_idx--;
+                        }
+                    }
+                    if (result != 0x19) {
+                        lbAudioAx_80024030(2);
+                        data->fighter_cursor_pos =
+                            (data->fighter_cursor_pos & 0xFF00) | (u8) new_pos;
+                        mnDiagram_UpdateGridDisplay(mnDiagram_804D6C10,
+                                                    (u8) data->fighter_cursor_pos,
+                                                    data->fighter_cursor_pos >> 8);
+                    }
+                }
+            }
         } else if (input & 4) {
-            lbAudioAx_80024030(2);
+            // Up
+            row_idx = (s32) mn_804A04F0.hovered_selection >> 8;
+            if (row_idx > 0) {
+                new_pos = row_idx - 1;
+                if (count > new_pos) {
+                    lbAudioAx_80024030(2);
+                    mn_804A04F0.hovered_selection =
+                        ((u8) mn_804A04F0.hovered_selection) | (new_pos << 8);
+                    return;
+                }
+            }
+            if (count > 7) {
+                row_idx = (s32) data->fighter_cursor_pos >> 8;
+                ptr = base + row_idx;
+                new_pos = row_idx;
+                while (new_pos > 0) {
+                    new_pos--;
+                    ptr--;
+                    if (mn_IsFighterUnlocked(*ptr) != 0) {
+                        break;
+                    }
+                    if (new_pos < 0) {
+                        new_pos = row_idx;
+                        break;
+                    }
+                }
+                if (row_idx != new_pos) {
+                    lbAudioAx_80024030(2);
+                    data->fighter_cursor_pos =
+                        ((u8) data->fighter_cursor_pos) | ((u8) new_pos << 8);
+                    mnDiagram_UpdateGridDisplay(mnDiagram_804D6C10,
+                                                (u8) data->fighter_cursor_pos,
+                                                data->fighter_cursor_pos >> 8);
+                }
+            }
         } else if (input & 8) {
-            lbAudioAx_80024030(2);
+            // Down
+            row_idx = (s32) mn_804A04F0.hovered_selection >> 8;
+            if (row_idx < 6) {
+                new_pos = row_idx + 1;
+                if (count > new_pos) {
+                    lbAudioAx_80024030(2);
+                    mn_804A04F0.hovered_selection =
+                        ((u8) mn_804A04F0.hovered_selection) | (new_pos << 8);
+                    return;
+                }
+            }
+            if (count > 7) {
+                row_idx = (s32) data->fighter_cursor_pos >> 8;
+                ptr = base + row_idx;
+                new_pos = row_idx;
+                while (new_pos < 0x19) {
+                    new_pos++;
+                    ptr++;
+                    if (new_pos >= 0x19) {
+                        new_pos = row_idx;
+                        break;
+                    }
+                    if (mn_IsFighterUnlocked(*ptr) != 0) {
+                        break;
+                    }
+                }
+                result = (u8) new_pos;
+                if (row_idx != result) {
+                    // Check boundary
+                    col_idx = 7;
+                    ptr = base + row_idx;
+                    while (col_idx > 0) {
+                        if (col_idx == 0) {
+                            result = base[row_idx];
+                            break;
+                        }
+                        row_idx++;
+                        ptr++;
+                        if (row_idx >= 0x19) {
+                            result = 0x19;
+                            break;
+                        }
+                        if (mn_IsFighterUnlocked(*ptr) != 0) {
+                            col_idx--;
+                        }
+                    }
+                    if (result != 0x19) {
+                        lbAudioAx_80024030(2);
+                        data->fighter_cursor_pos =
+                            ((u8) data->fighter_cursor_pos) | ((u8) new_pos << 8);
+                        mnDiagram_UpdateGridDisplay(mnDiagram_804D6C10,
+                                                    (u8) data->fighter_cursor_pos,
+                                                    data->fighter_cursor_pos >> 8);
+                    }
+                }
+            }
         }
     }
 }
@@ -1968,10 +2446,10 @@ void mnDiagram_DrawNameHeaders(void* gobj, s32 col_offset, s32 row_offset)
 }
 
 /// @brief Creates a fighter icon JObj.
-/// @param fighter_idx Fighter index (internal character ID).
+/// @param row_idx Fighter index (internal character ID).
 /// @param mode Animation mode (0 or 1).
 /// @return The created fighter icon JObj.
-HSD_JObj* mnDiagram_CreateFighterIcon(int fighter_idx, int mode)
+HSD_JObj* mnDiagram_CreateFighterIcon(int row_idx, int mode)
 {
     HSD_JObj* sp10;
     void** joint_data = mnDiagram_804A0804;
@@ -1988,7 +2466,7 @@ HSD_JObj* mnDiagram_CreateFighterIcon(int fighter_idx, int mode)
     HSD_JObjReqAnimAll(temp_r3, var_f1);
     HSD_JObjAnimAll(temp_r3);
     lb_80011E24(temp_r3, &sp10, 2, -1);
-    HSD_JObjReqAnimAll(sp10, fighter_idx);
+    HSD_JObjReqAnimAll(sp10, row_idx);
     HSD_JObjAnimAll(sp10);
     return temp_r3;
 }
