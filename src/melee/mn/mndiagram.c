@@ -507,8 +507,8 @@ static inline int CheckAllZeroPlayTime(int name_idx)
     return 1;
 }
 
-/// @remarks u8 parameter requires different codegen than int version.
-/// The `int i = 0; int offset = i;` forces correct register allocation.
+// todo: this has gotta be fake - but i couldn't get the
+// other one to work for both functions
 static inline int CheckAllZeroPlayTime_u8(u8 name_idx)
 {
     int i = 0;
@@ -763,13 +763,20 @@ int mnDiagram_CountUnlockedFighters(void)
 
 void mnDiagram_PopupInputProc(HSD_GObj* gobj)
 {
+    HSD_GObjProc* proc;
     Diagram* data = mnDiagram_804D6C10->user_data;
     u32 input = mn_80229624(4);
+    PAD_STACK(8);
+
+    mn_804A04F0.buttons = input;
+
     if (input & 0x20) {
         lbAudioAx_80024030(0);
         HSD_GObjProc_8038FE24(HSD_GObj_804D7838);
-        HSD_GObjProc_8038FD54(gobj, (void (*)(HSD_GObj*)) mnDiagram_InputProc,
-                              0);
+        proc = HSD_GObjProc_8038FD54(gobj,
+                                     (void (*)(HSD_GObj*)) mnDiagram_InputProc,
+                                     0);
+        proc->flags_3 = HSD_GObj_804D783C;
         HSD_GObjPLink_80390228(data->popup_gobj);
         data->popup_gobj = NULL;
     }
