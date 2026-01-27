@@ -89,7 +89,61 @@ DECOMP_AGENT_ID=agent-1                   # Optional: manual agent isolation
 5. **Commit to repo**: Edit source files directly (`.c` and `.h` files)
 6. **Verify**: `python configure.py && ninja` to confirm build passes
 
+## Git Workflow (Fork Management)
+
+This is a fork of `doldecomp/melee` with additional tooling. The workflow keeps decomp work separate from fork tooling.
+
+### Branch Structure
+```
+upstream/master ─────────────────────────► (canonical doldecomp/melee)
+      │
+      └── master (upstream + 1 tooling commit)
+              │
+              └── decomp work here
+                        │
+                        └── pr/* branches (fresh from upstream, for PRs)
+```
+
+### Key Principles
+1. **Master = upstream + tooling**: Always exactly one commit ahead of upstream
+2. **Decomp on master**: Work directly on master, commit freely
+3. **PR branches are fresh**: Created from `upstream/master`, not `master`
+4. **Reset, don't rebase**: After PR merges, reset master (saves WIP as patch)
+
+### Workflow Scripts
+
+```bash
+# Check current status (branches, pending changes, recommendations)
+./tools/workflow/status.sh
+
+# Sync master with upstream (after PR merges or to get new changes)
+./tools/workflow/sync-upstream.sh
+
+# Create clean PR branch from decomp changes
+./tools/workflow/create-pr.sh <branch-name>
+```
+
+### Common Operations
+
+**After finishing decomp work, prepare PR:**
+```bash
+./tools/workflow/status.sh              # Check what's ready
+./tools/workflow/create-pr.sh my-module # Create PR branch
+git push origin pr/my-module            # Push for review
+```
+
+**After your PR is merged upstream:**
+```bash
+./tools/workflow/sync-upstream.sh       # Reset master to upstream + tooling
+git branch -D pr/my-module              # Delete merged PR branch
+```
+
 ## Skills
+
+### Git Workflow
+- `/workflow` - General workflow management (status, branch organization)
+- `/prepare-pr` - Step-by-step PR preparation from decomp changes
+- `/sync-upstream` - Guided upstream synchronization after PR merges
 
 ### Decompilation Workflow
 - `/decomp [func]` - Local decompilation workflow: edit source files directly, use `tools/checkdiff.py` for diffs (recommended)
