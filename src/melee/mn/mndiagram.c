@@ -937,7 +937,8 @@ void mnDiagram_InputProc(HSD_GObj* gobj)
             count = GetNameCount();
             if ((u8) mn_804A04F0.hovered_selection >= count) {
                 mn_804A04F0.hovered_selection =
-                    (mn_804A04F0.hovered_selection & 0xFF00) | (u8) (count - 1);
+                    (mn_804A04F0.hovered_selection & 0xFF00) |
+                    (u8) (count - 1);
             }
             if ((s32) mn_804A04F0.hovered_selection >> 8 >= count) {
                 mn_804A04F0.hovered_selection =
@@ -956,7 +957,8 @@ void mnDiagram_InputProc(HSD_GObj* gobj)
             }
             if ((u8) mn_804A04F0.hovered_selection >= count) {
                 mn_804A04F0.hovered_selection =
-                    (mn_804A04F0.hovered_selection & 0xFF00) | (u8) (count - 1);
+                    (mn_804A04F0.hovered_selection & 0xFF00) |
+                    (u8) (count - 1);
             }
             if ((s32) mn_804A04F0.hovered_selection >> 8 >= count) {
                 mn_804A04F0.hovered_selection =
@@ -982,7 +984,8 @@ void mnDiagram_InputProc(HSD_GObj* gobj)
                 if (count > new_pos) {
                     lbAudioAx_80024030(2);
                     mn_804A04F0.hovered_selection =
-                        (mn_804A04F0.hovered_selection & 0xFF00) | (u8) new_pos;
+                        (mn_804A04F0.hovered_selection & 0xFF00) |
+                        (u8) new_pos;
                     return;
                 }
             }
@@ -1016,7 +1019,8 @@ void mnDiagram_InputProc(HSD_GObj* gobj)
                 if (count > new_pos) {
                     lbAudioAx_80024030(2);
                     mn_804A04F0.hovered_selection =
-                        (mn_804A04F0.hovered_selection & 0xFF00) | (u8) new_pos;
+                        (mn_804A04F0.hovered_selection & 0xFF00) |
+                        (u8) new_pos;
                     return;
                 }
             }
@@ -1057,9 +1061,9 @@ void mnDiagram_InputProc(HSD_GObj* gobj)
                         lbAudioAx_80024030(2);
                         data->name_cursor_pos =
                             (data->name_cursor_pos & 0xFF00) | (u8) new_pos;
-                        mnDiagram_UpdateGridDisplay(mnDiagram_804D6C10,
-                                                    (u8) data->name_cursor_pos,
-                                                    data->name_cursor_pos >> 8);
+                        mnDiagram_UpdateGridDisplay(
+                            mnDiagram_804D6C10, (u8) data->name_cursor_pos,
+                            data->name_cursor_pos >> 8);
                     }
                 }
             }
@@ -1146,9 +1150,9 @@ void mnDiagram_InputProc(HSD_GObj* gobj)
                         lbAudioAx_80024030(2);
                         data->name_cursor_pos =
                             ((u8) data->name_cursor_pos) | ((u8) new_pos << 8);
-                        mnDiagram_UpdateGridDisplay(mnDiagram_804D6C10,
-                                                    (u8) data->name_cursor_pos,
-                                                    data->name_cursor_pos >> 8);
+                        mnDiagram_UpdateGridDisplay(
+                            mnDiagram_804D6C10, (u8) data->name_cursor_pos,
+                            data->name_cursor_pos >> 8);
                     }
                 }
             }
@@ -1169,7 +1173,8 @@ void mnDiagram_InputProc(HSD_GObj* gobj)
                 if (count > new_pos) {
                     lbAudioAx_80024030(2);
                     mn_804A04F0.hovered_selection =
-                        (mn_804A04F0.hovered_selection & 0xFF00) | (u8) new_pos;
+                        (mn_804A04F0.hovered_selection & 0xFF00) |
+                        (u8) new_pos;
                     return;
                 }
             }
@@ -1205,7 +1210,8 @@ void mnDiagram_InputProc(HSD_GObj* gobj)
                 if (count > new_pos) {
                     lbAudioAx_80024030(2);
                     mn_804A04F0.hovered_selection =
-                        (mn_804A04F0.hovered_selection & 0xFF00) | (u8) new_pos;
+                        (mn_804A04F0.hovered_selection & 0xFF00) |
+                        (u8) new_pos;
                     return;
                 }
             }
@@ -1248,9 +1254,9 @@ void mnDiagram_InputProc(HSD_GObj* gobj)
                         lbAudioAx_80024030(2);
                         data->fighter_cursor_pos =
                             (data->fighter_cursor_pos & 0xFF00) | (u8) new_pos;
-                        mnDiagram_UpdateGridDisplay(mnDiagram_804D6C10,
-                                                    (u8) data->fighter_cursor_pos,
-                                                    data->fighter_cursor_pos >> 8);
+                        mnDiagram_UpdateGridDisplay(
+                            mnDiagram_804D6C10, (u8) data->fighter_cursor_pos,
+                            data->fighter_cursor_pos >> 8);
                     }
                 }
             }
@@ -1340,10 +1346,11 @@ void mnDiagram_InputProc(HSD_GObj* gobj)
                     if (result != 0x19) {
                         lbAudioAx_80024030(2);
                         data->fighter_cursor_pos =
-                            ((u8) data->fighter_cursor_pos) | ((u8) new_pos << 8);
-                        mnDiagram_UpdateGridDisplay(mnDiagram_804D6C10,
-                                                    (u8) data->fighter_cursor_pos,
-                                                    data->fighter_cursor_pos >> 8);
+                            ((u8) data->fighter_cursor_pos) |
+                            ((u8) new_pos << 8);
+                        mnDiagram_UpdateGridDisplay(
+                            mnDiagram_804D6C10, (u8) data->fighter_cursor_pos,
+                            data->fighter_cursor_pos >> 8);
                     }
                 }
             }
