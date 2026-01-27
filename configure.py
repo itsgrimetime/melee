@@ -142,7 +142,14 @@ parser.add_argument(
     "--require-protos",
     dest="require_protos",
     action="store_true",
-    help="require function prototypes",
+    default=True,
+    help="require function prototypes (default: enabled)",
+)
+parser.add_argument(
+    "--no-require-protos",
+    dest="require_protos",
+    action="store_false",
+    help="disable function prototype requirement",
 )
 parser.add_argument(
     "--non-matching",
@@ -185,7 +192,7 @@ config.compilers_tag = "20250520"
 config.dtk_tag = "v1.6.2"
 config.objdiff_tag = "v3.0.0"
 config.sjiswrap_tag = "v1.2.1"
-config.wibo_tag = "0.7.0"
+config.wibo_tag = "1.0.0"
 
 # Project
 config.config_path = Path("config") / config.version / "config.yml"
@@ -1308,7 +1315,7 @@ config.libs = [
             Object(Matching, "melee/vi/vi.c"),
             Object(Matching, "melee/vi/vi0102.c"),
             Object(NonMatching, "melee/vi/vi0401.c"),
-            Object(Matching, "melee/vi/vi0402.c"),
+            Object(NonMatching, "melee/vi/vi0402.c"),
             Object(NonMatching, "melee/vi/vi0501.c"),
             Object(NonMatching, "melee/vi/vi0502.c"),
             Object(Matching, "melee/vi/vi0601.c"),

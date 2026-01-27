@@ -1,4 +1,15 @@
 #!/usr/bin/env python3
+"""
+Local m2c decompilation with enhanced flags.
+
+Usage:
+  tools/decomp.py <function_name> [m2c_args...]
+
+Example with union and void field types:
+  tools/decomp.py it_802E1C4C --union-field Item_ItemVars:leadead --void-field-type Article.x4_specialAttributes:itLeadeadAttributes
+
+Adapted for melee project structure.
+"""
 
 import argparse
 import re
@@ -11,7 +22,10 @@ from typing import Optional, cast
 from elftools.elf.elffile import ELFFile
 from elftools.elf.sections import SymbolTableSection
 
-ROOT = Path(__file__).parents[1]
+# Determine project root
+SCRIPT_DIR = Path(__file__).resolve().parent
+ROOT = SCRIPT_DIR.parent
+
 DTK_ROOT = ROOT / "build/GALE01"
 OBJ_ROOT = DTK_ROOT / "obj"
 ASM_ROOT = DTK_ROOT / "asm"
@@ -154,14 +168,17 @@ def main() -> None:
             "--knr", "--pointer", "left",
             "--target",
             "ppc-mwcc-c",
-            "--context",
-            resolve_path(CTX_FILE),
-            *m2c_args,
-            resolve_path(asm_file),
         ]
 
-        if cast(bool, args.ctx):
-            gen_ctx()
+        # Only include context if it exists or we're generating it
+        use_ctx = cast(bool, args.ctx) and (CTX_FILE.exists() or M2CTX_SCRIPT.exists())
+        if use_ctx:
+            if not CTX_FILE.exists() and M2CTX_SCRIPT.exists():
+                gen_ctx()
+            if CTX_FILE.exists():
+                m2c_cmd.extend(["--context", resolve_path(CTX_FILE)])
+
+        m2c_cmd.extend([*m2c_args, resolve_path(asm_file)])
 
         output = run_cmd(m2c_cmd)
         if cast(bool, args.copy):

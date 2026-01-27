@@ -67,7 +67,7 @@ C code that's contributed to this codebase should have `clang-format` ran on it.
         ```
 
 ## <a name="functions"></a>Functions
-- Empty stub functions should use `{}` rather than `{ return; }`
+- Functions acting as just a stub, IE. do nothing, should have an explicit ```return``` rather than being empty
 
 ## <a name="conditionals"></a>Conditionals
 - Make NULL checks explicit
