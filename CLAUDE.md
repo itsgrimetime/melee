@@ -121,6 +121,12 @@ upstream/master ─────────────────────�
 
 # Create clean PR branch from decomp changes
 ./tools/workflow/create-pr.sh <branch-name>
+
+# Update existing PR branch with changes from master (without switching)
+./tools/workflow/update-pr.sh <pr-branch> [--amend]
+
+# Create worktree for longer PR iteration (has symlinked tooling)
+./tools/workflow/pr-worktree.sh create <pr-branch>
 ```
 
 ### Common Operations
@@ -136,6 +142,20 @@ git push origin pr/my-module            # Push for review
 ```bash
 ./tools/workflow/sync-upstream.sh       # Reset master to upstream + tooling
 git branch -D pr/my-module              # Delete merged PR branch
+```
+
+**Iterating on PR after feedback:**
+```bash
+# Option A: Quick updates (stay on master with tooling)
+# Make fixes on master, then apply to PR branch
+./tools/workflow/update-pr.sh pr/my-module
+git push origin pr/my-module --force-with-lease
+
+# Option B: Longer iteration (dedicated worktree with tooling)
+./tools/workflow/pr-worktree.sh create pr/my-module
+cd ../melee-pr
+# Work directly on PR branch with full tooling access
+# Commit and push as normal
 ```
 
 ## Skills

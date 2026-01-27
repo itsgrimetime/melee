@@ -48,13 +48,33 @@ Resets master to upstream/master and re-applies tooling. Saves any WIP work as a
 ```
 Creates a clean PR branch from upstream/master with only the src/config/include changes.
 
+### Update Existing PR Branch
+```bash
+./tools/workflow/update-pr.sh <pr-branch> [--amend]
+```
+Applies changes from current branch (master) to a PR branch without switching.
+Use `--amend` to amend the last commit instead of creating a new one.
+
+### Create PR Worktree (for longer iteration)
+```bash
+./tools/workflow/pr-worktree.sh create <pr-branch>  # Create worktree with tooling
+./tools/workflow/pr-worktree.sh status              # Check worktree status
+./tools/workflow/pr-worktree.sh delete              # Remove worktree
+```
+Creates a separate worktree at `../melee-pr` with symlinked tooling for PR iteration.
+
 Examples:
 ```bash
-# From current HEAD
+# Create new PR
 ./tools/workflow/create-pr.sh mndiagram-improvements
 
-# From a specific branch
-./tools/workflow/create-pr.sh mnvibration --from wip/mn-work
+# Quick iteration on PR (stay on master)
+./tools/workflow/update-pr.sh pr/mndiagram-improvements
+
+# Longer PR iteration (dedicated worktree)
+./tools/workflow/pr-worktree.sh create pr/mndiagram-improvements
+cd ../melee-pr
+# ... work with full tooling ...
 ```
 
 ## Workflow Procedures
