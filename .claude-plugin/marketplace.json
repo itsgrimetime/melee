@@ -1,0 +1,20 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "melee-decomp-local",
+  "description": "Local marketplace for Melee decompilation project plugins",
+  "owner": {
+    "name": "itsgrimetime"
+  },
+  "plugins": [
+    {
+      "name": "melee-decomp",
+      "description": "Decompilation workflow tools for Super Smash Bros. Melee. Provides skills for matching C code to PowerPC assembly, managing git workflows, debugging mismatches, and documenting reverse-engineered code.",
+      "version": "1.0.0",
+      "author": {
+        "name": "itsgrimetime"
+      },
+      "source": "./.claude-plugin/melee-decomp",
+      "category": "development"
+    }
+  ]
+}
