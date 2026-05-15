@@ -30,7 +30,25 @@ from pathlib import Path
 from typing import Optional
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-ROOT = SCRIPT_DIR.parent  # tools/ is in repo root
+
+
+def _is_repo_root(path: Path) -> bool:
+    return (
+        (path / "configure.py").is_file()
+        and (path / "src").is_dir()
+        and (path / "config/GALE01").is_dir()
+    )
+
+
+def _find_cwd_repo_root() -> Optional[Path]:
+    cwd = Path.cwd().resolve()
+    for path in (cwd, *cwd.parents):
+        if _is_repo_root(path):
+            return path
+    return None
+
+
+ROOT = _find_cwd_repo_root() or SCRIPT_DIR.parent  # tools/ is in repo root
 
 REPORT_PATH = ROOT / "build/GALE01/report.json"
 SRC_ROOT = ROOT / "src"
