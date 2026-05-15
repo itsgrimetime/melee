@@ -149,6 +149,7 @@ def find_wrapper_usages(wrapper_name: str, melee_root: Path) -> list[dict]:
     return search_codebase_for_pattern(wrapper_name, melee_root)
 
 
+@patterns_app.command("wrappers")
 @patterns_app.command("wrapper")
 def wrapper_search(
     pattern: Annotated[str, typer.Argument(help="Field access pattern to search for (e.g., 'gobj->user_data')")],
@@ -196,6 +197,7 @@ def wrapper_search(
                 rprint(f"  ... and {len(results) - 10} more")
 
 
+@patterns_app.command("anti-patterns")
 @patterns_app.command("anti-pattern")
 def check_anti_patterns(
     code: Annotated[Optional[str], typer.Argument(help="Code snippet to check (or 'list' to show all)")] = None,
@@ -546,6 +548,9 @@ def find_inline_candidates(file_path: Path) -> list[dict]:
     content = file_path.read_text()
     candidates = []
 
+    def match_lines(matches):
+        return [content[:m.start()].count('\n') + 1 for m in matches]
+
     # Count SisLib cleanup pattern occurrences
     sislib_pattern = r"if\s*\([^)]+\s*!=\s*NULL\)\s*\{[^}]*HSD_SisLib_803A5CC4[^}]*=\s*NULL[^}]*\}"
     sislib_matches = list(re.finditer(sislib_pattern, content, re.DOTALL))
@@ -553,7 +558,7 @@ def find_inline_candidates(file_path: Path) -> list[dict]:
         candidates.append({
             "type": "sislib-text-cleanup",
             "count": len(sislib_matches),
-            "lines": [content[:m.start()].count('\n') + 1 for m in sislib_matches[:5]],
+            "lines": match_lines(sislib_matches[:5]),
             "suggestion": INLINE_CANDIDATES["sislib-text-cleanup"]["suggested_inline"],
         })
 
@@ -564,7 +569,7 @@ def find_inline_candidates(file_path: Path) -> list[dict]:
         candidates.append({
             "type": "is-name-mode-conditional",
             "count": len(name_mode_matches),
-            "lines": [content[:m.start()].count('\n') + 1 for m in name_mode_matches],
+            "lines": match_lines(name_mode_matches),
             "suggestion": """\
 static inline u8 mnDiagram_GetEntityByIndex(u8 is_name_mode, u8 idx) {
     if (is_name_mode != 0) {
@@ -581,8 +586,34 @@ static inline u8 mnDiagram_GetEntityByIndex(u8 is_name_mode, u8 idx) {
         candidates.append({
             "type": "get-child-null-check",
             "count": len(child_matches),
-            "lines": [content[:m.start()].count('\n') + 1 for m in child_matches],
+            "lines": match_lines(child_matches),
             "suggestion": "Use HSD_JObjGetChild() or create custom getter inline",
+        })
+
+    jobj_wrappers = {
+        "child": "HSD_JObjGetChild(jobj)",
+        "next": "HSD_JObjGetNext(jobj)",
+        "parent": "HSD_JObjGetParent(jobj)",
+    }
+    for field, wrapper in jobj_wrappers.items():
+        direct_pattern = rf"\b\w+->\s*{field}\b"
+        direct_matches = list(re.finditer(direct_pattern, content))
+        if len(direct_matches) >= 3:
+            candidates.append({
+                "type": f"jobj-direct-{field}-access",
+                "count": len(direct_matches),
+                "lines": match_lines(direct_matches[:5]),
+                "suggestion": f"Repeated direct JObj `{field}` access often means use `{wrapper}` or a small local inline.",
+            })
+
+    tobj_pattern = r"\b\w+->\s*(?:next|tev|aobj|imagedesc)\b"
+    tobj_matches = list(re.finditer(tobj_pattern, content))
+    if len(tobj_matches) >= 4 and "HSD_TObj" in content:
+        candidates.append({
+            "type": "tobj-direct-access-chain",
+            "count": len(tobj_matches),
+            "lines": match_lines(tobj_matches[:5]),
+            "suggestion": "Repeated TObj field walks can hide a texture/animation helper inline; compare matched TObj setup functions.",
         })
 
     # Count direct gobj->user_data accesses
@@ -592,8 +623,65 @@ static inline u8 mnDiagram_GetEntityByIndex(u8 is_name_mode, u8 idx) {
         candidates.append({
             "type": "gobj-user-data",
             "count": len(userdata_matches),
-            "lines": [content[:m.start()].count('\n') + 1 for m in userdata_matches[:5]],
+            "lines": match_lines(userdata_matches[:5]),
             "suggestion": "Add GET_DIAGRAM2(gobj) macro to inlines.h",
+        })
+
+    pad_stack_matches = list(re.finditer(r"\bPAD_STACK\s*\([^)]*\)", content))
+    if len(pad_stack_matches) >= 2:
+        candidates.append({
+            "type": "pad-stack-heavy",
+            "count": len(pad_stack_matches),
+            "lines": match_lines(pad_stack_matches[:5]),
+            "suggestion": "Repeated PAD_STACK usually means missing inlines, locals, or by-value arguments; resolve those before adding more padding.",
+        })
+
+    axis_setter_matches = list(
+        re.finditer(r"\b\w+Set(?:Translate|Rotation|Scale)[XYZ]\s*\(", content)
+    )
+    if len(axis_setter_matches) >= 3:
+        candidates.append({
+            "type": "axis-setter-cluster",
+            "count": len(axis_setter_matches),
+            "lines": match_lines(axis_setter_matches[:5]),
+            "suggestion": "X/Y/Z setter clusters often come from vector setter helpers or repeated inline calls; compare matched axis setter wrappers.",
+        })
+
+    varargs_matches = list(re.finditer(r"\b(?:OSReport|OSPanic|__assert|HSD_ASSERT)\s*\(", content))
+    if len(varargs_matches) >= 3:
+        candidates.append({
+            "type": "varargs-helper-cluster",
+            "count": len(varargs_matches),
+            "lines": match_lines(varargs_matches[:5]),
+            "suggestion": "Repeated varargs/assert calls can affect stack layout; prefer inline literals and compare known assertion/report helper shapes.",
+        })
+
+    static_helpers = {
+        match.group(1)
+        for match in re.finditer(r"\bstatic\s+(?:inline\s+)?[\w\s\*]+?\s+(\w+)\s*\([^;]*\)\s*\{", content)
+    }
+    for helper in sorted(static_helpers):
+        helper_matches = []
+        for match in re.finditer(rf"\b{re.escape(helper)}\s*\(", content):
+            line_start = content.rfind("\n", 0, match.start()) + 1
+            if "static" in content[line_start : match.start()]:
+                continue
+            helper_matches.append(match)
+        if len(helper_matches) >= 3:
+            candidates.append({
+                "type": "local-helper-call-cluster",
+                "count": len(helper_matches),
+                "lines": match_lines(helper_matches[:5]),
+                "suggestion": f"Repeated calls to local helper `{helper}` may indicate an original static inline; try inline/noinline shape experiments before padding.",
+            })
+
+    vec3_matches = list(re.finditer(r"\bVec3\s+\w+", content))
+    if len(vec3_matches) >= 3:
+        candidates.append({
+            "type": "vec3-local-cluster",
+            "count": len(vec3_matches),
+            "lines": match_lines(vec3_matches[:5]),
+            "suggestion": "Multiple Vec3 locals often depend on declaration order or by-value helper inlines; compare stack layout before padding.",
         })
 
     return candidates
