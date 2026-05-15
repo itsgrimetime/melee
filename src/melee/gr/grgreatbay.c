@@ -519,8 +519,9 @@ void grGreatBay_801F545C(Ground_GObj* gobj)
 
 void grGreatBay_801F5460(Ground_GObj* gobj)
 {
-    HSD_JObj* jobj = gobj->hsd_obj;
-    Ground* gp = GET_GROUND(gobj);
+    Ground_GObj* ground_gobj = gobj;
+    HSD_JObj* jobj = ground_gobj->hsd_obj;
+    Ground* gp = ground_gobj->user_data;
 
     Ground_801C2ED0(jobj, gp->map_id);
     gp->xC_callback = NULL;
@@ -528,9 +529,9 @@ void grGreatBay_801F5460(Ground_GObj* gobj)
     mpJointListAdd(5);
     HSD_JObjSetTranslateX(jobj, 1000.0f);
     HSD_JObjSetTranslateY(jobj, 1000.0f);
-    Ground_801C2FE0(gobj);
+    Ground_801C2FE0(ground_gobj);
     mpLib_80057424(5);
-    gp->gv.greatbay4.xF0 = it_802ECA70(gobj);
+    gp->gv.greatbay4.xF0 = it_802ECA70(ground_gobj);
     gp->gv.greatbay4.xC4 = 0;
     gp->gv.greatbay4.xC8 = 0;
     gp->gv.greatbay4.xD0 = 0;
