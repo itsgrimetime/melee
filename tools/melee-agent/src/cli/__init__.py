@@ -43,6 +43,7 @@ from .state import state_app
 from .struct import struct_app
 from .stub import stub_app
 from .sync import sync_app
+from .tracking import attempts_app
 from .ghidra import ghidra_app
 from .patterns import patterns_app
 
@@ -65,6 +66,7 @@ app.add_typer(struct_app, name="struct")
 app.add_typer(stub_app, name="stub")
 app.add_typer(state_app, name="state")
 app.add_typer(analytics_app, name="analytics")
+app.add_typer(attempts_app, name="attempts")
 app.add_typer(setup_app, name="setup")
 app.add_typer(mismatch_app, name="mismatch")
 app.add_typer(ghidra_app, name="ghidra")

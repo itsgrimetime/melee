@@ -7,6 +7,7 @@ Scripts for managing the decomp workflow between fork and upstream.
 | Script | Purpose |
 |--------|---------|
 | `status.sh` | Show current workflow status |
+| `../worktree-doctor.py` | Check and repair local agent/tooling prerequisites |
 | `sync-upstream.sh` | Reset master to upstream + tooling |
 | `create-pr.sh` | Create clean PR branch from changes |
 | `update-pr.sh` | Apply changes from master to existing PR branch |
@@ -36,6 +37,15 @@ upstream/master ─────────────────────�
 ### Check Status
 ```bash
 ./tools/workflow/status.sh
+```
+
+### Check Agent Tooling
+```bash
+python tools/worktree-doctor.py
+
+# Apply safe local bootstrap fixes, such as restoring fork tooling files from
+# master or symlinking an existing base DOL into the current worktree.
+python tools/worktree-doctor.py --fix
 ```
 
 ### Sync with Upstream
@@ -102,6 +112,21 @@ The solution:
 - Reset master and re-apply tooling
 - Create PR branches fresh from upstream (no merge conflicts)
 - WIP work is saved as patches and re-applied cleanly
+
+## PR Cleanliness Boundaries
+
+Fork tooling is for local iteration. Upstream PR branches should contain only
+clean decompilation changes:
+
+- OK: `src/`, `config/`, `include/`, and documentation directly needed by the
+  upstreamable decomp change.
+- Not OK: local agent tooling, `.claude/`, `tools/checkdiff.py`,
+  `tools/workflow/`, local DOL symlinks, scratch databases, or generated build
+  output.
+- Use `./tools/workflow/create-pr.sh <name>` to package from `upstream/master`
+  and keep the tooling overlay out of the PR branch.
+- Use `./tools/workflow/update-pr.sh pr/<name>` to move source/config/include
+  fixes from a tooling-enabled worktree onto an existing clean PR branch.
 
 ## Skills
 

@@ -27,6 +27,20 @@ __pycache__
 .mypy_cache
 .cache/
 
+# Local agent runtime files. Repo-provided skills are intentionally trackable.
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/decomp/
+!.claude/skills/decomp/SKILL.md
+.codex/*
+!.codex/skills
+!.codex/skills/
+
+# Generated coverage output for repo-local melee-agent tooling.
+tools/melee-agent/.coverage
+tools/melee-agent/htmlcov/
+
 # Original files
 orig/*/*
 !orig/*/sys

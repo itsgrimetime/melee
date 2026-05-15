@@ -17,9 +17,11 @@ Remote environment support:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -163,6 +165,152 @@ def ensure_disassembler() -> tuple[str, Path]:
     return ("dtk", dtk_path)
 
 
+def acquire_checkdiff_lock(obj_path: str):
+    """Acquire a per-object lock for compile-producing checkdiff work."""
+    if os.environ.get("CHECKDIFF_NO_LOCK"):
+        return None
+
+    try:
+        import fcntl
+    except ImportError:
+        return None
+
+    lock_dir = Path(tempfile.gettempdir()) / "melee-checkdiff-locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha1(str((ROOT / obj_path).resolve()).encode()).hexdigest()[:12]
+    lock_path = lock_dir / f"{Path(obj_path).name}.{digest}.lock"
+    lock_file = lock_path.open("w")
+
+    try:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print(f"waiting for checkdiff lock: {Path(obj_path).name}", file=sys.stderr)
+        start = time.monotonic()
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        elapsed = time.monotonic() - start
+        print(f"acquired checkdiff lock after {elapsed:.1f}s", file=sys.stderr)
+
+    return lock_file
+
+
+def _asm_body(line: str) -> str:
+    if line.startswith("<"):
+        return line
+    if ":" in line:
+        line = line.split(":", 1)[1]
+    line = line.strip()
+    line = re.sub(r"^(?:[0-9a-fA-F]{2}\s+){4}", "", line)
+    line = re.sub(r"^[0-9a-fA-F]{8}\s+", "", line)
+    return line.strip()
+
+
+def _is_relocation_line(line: str) -> bool:
+    body = _asm_body(line)
+    return (
+        "R_PPC_" in body
+        or body.startswith(".reloc")
+        or "\t.reloc" in body
+    )
+
+
+def _strip_relocation_lines(lines: list[str]) -> list[str]:
+    return [line for line in lines if not _is_relocation_line(line)]
+
+
+def _mnemonics(lines: list[str]) -> list[str]:
+    result = []
+    for line in lines:
+        if line.startswith("<") or _is_relocation_line(line):
+            continue
+        body = _asm_body(line)
+        if not body:
+            continue
+        result.append(body.split(None, 1)[0])
+    return result
+
+
+def _call_targets(lines: list[str]) -> list[str]:
+    targets = []
+    for line in lines:
+        if _is_relocation_line(line):
+            continue
+        body = _asm_body(line)
+        parts = body.split(None, 1)
+        if not parts or parts[0] not in {"bl", "bctrl"}:
+            continue
+        targets.append(parts[1].strip() if len(parts) > 1 else parts[0])
+    return targets
+
+
+def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
+    """Best-effort classification to help agents avoid chasing false leads."""
+    if ref_lines == our_lines:
+        return {
+            "primary": "instruction-identical",
+            "reasons": ["normalized disassembly is identical"],
+        }
+
+    if _strip_relocation_lines(ref_lines) == _strip_relocation_lines(our_lines):
+        return {
+            "primary": "relocation-label-only",
+            "reasons": ["only relocation annotation lines differ"],
+        }
+
+    reasons = []
+    ref_mnemonics = _mnemonics(ref_lines)
+    our_mnemonics = _mnemonics(our_lines)
+    ref_calls = _call_targets(ref_lines)
+    our_calls = _call_targets(our_lines)
+
+    if len(ref_lines) != len(our_lines):
+        reasons.append(f"line count differs: expected {len(ref_lines)}, current {len(our_lines)}")
+
+    if ref_mnemonics == our_mnemonics:
+        reasons.append("opcode sequence matches; differences are operands, registers, labels, or offsets")
+        primary = "operand-register-or-offset"
+    else:
+        primary = "instruction-sequence"
+
+    if ref_calls != our_calls:
+        reasons.append("call shape differs; check prototypes, return types, and inline boundaries")
+        primary = "signature-type-mismatch"
+
+    paired = list(zip(ref_lines, our_lines))
+    stack_offset_diffs = 0
+    data_symbol_diffs = 0
+    likely_register_diffs = 0
+    for ref_line, our_line in paired:
+        if ref_line == our_line:
+            continue
+        ref_body = _asm_body(ref_line)
+        our_body = _asm_body(our_line)
+        if "(r1)" in ref_body and "(r1)" in our_body:
+            stack_offset_diffs += 1
+        if any(token in ref_body or token in our_body for token in ("@sda", ".sdata", ".data", ".bss", "R_PPC_")):
+            data_symbol_diffs += 1
+        if re.sub(r"\br(?:[0-9]|[12][0-9]|3[01])\b", "rN", ref_body) == re.sub(
+            r"\br(?:[0-9]|[12][0-9]|3[01])\b", "rN", our_body
+        ):
+            likely_register_diffs += 1
+
+    if stack_offset_diffs:
+        reasons.append(f"{stack_offset_diffs} differing paired lines reference stack slots")
+        primary = "stack-layout" if primary != "instruction-sequence" else primary
+    if data_symbol_diffs:
+        reasons.append(f"{data_symbol_diffs} differing paired lines reference data/symbol relocations")
+        if primary == "operand-register-or-offset":
+            primary = "data-symbol-or-relocation"
+    if likely_register_diffs:
+        reasons.append(f"{likely_register_diffs} differing paired lines look register-only after normalization")
+        if primary == "operand-register-or-offset":
+            primary = "register-allocation"
+
+    if not reasons:
+        reasons.append("differences require direct inspection")
+
+    return {"primary": primary, "reasons": reasons}
+
+
 def format_side_by_side(ref_lines: list[str], our_lines: list[str], width: int = 56) -> str:
     """Generate a side-by-side diff comparing expected (left) vs current (right)."""
     import difflib
@@ -256,6 +404,8 @@ def main() -> int:
         return 1
 
     c_file = SRC_ROOT / f"{obj_path}.c"
+    lock_handle = acquire_checkdiff_lock(obj_path)
+    _ = lock_handle  # Keep the lock file alive until process exit.
 
     # fix includes (optional - lukechampine's repo has this)
     fix_includes = ROOT / "tools" / "fix_includes.py"
@@ -404,6 +554,7 @@ def main() -> int:
         import difflib
         ref_lines = ref_asm.split("\n")
         our_lines = our_asm.split("\n")
+        classification = classify_asm_diff(ref_lines, our_lines)
 
         if args.format == "json":
             import json as json_mod
@@ -413,6 +564,7 @@ def main() -> int:
                 "reference_lines": len(ref_lines),
                 "current_lines": len(our_lines),
                 "match": ref_asm == our_asm,
+                "classification": classification,
                 "fuzzy_match_percent": fuzzy_pct,
                 "target_asm": ref_lines,
                 "current_asm": our_lines,
@@ -430,6 +582,9 @@ def main() -> int:
                 print(f"Function: {func_name}")
                 if fuzzy_pct is not None:
                     print(f"Match: {fuzzy_pct:.1f}%")
+                print(f"Classification: {classification['primary']}")
+                for reason in classification["reasons"]:
+                    print(f"  - {reason}")
                 print()
                 print(format_side_by_side(ref_lines, our_lines))
                 print(f"\n--- MISMATCH: {func_name} does not match ---")
