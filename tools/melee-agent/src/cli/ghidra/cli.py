@@ -24,7 +24,7 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 
-from .._common import console, get_agent_melee_root
+from .._common import console, get_agent_melee_root, get_base_dol_path
 from .detect import detect_ghidra_install
 from .project import ghidra_project_dir, GHIDRA_PROJECT_NAME, is_project_populated  # noqa: F401
 
@@ -92,21 +92,27 @@ def _get_project_path() -> Path:
 
 
 def _get_dol_path() -> Path:
-    """Get the DOL binary path."""
+    """Resolve the DOL binary.
+
+    Prefers the central config location (~/.config/decomp-me/orig/...),
+    then falls back to the canonical melee repo root's orig/ tree.
+    Worktrees usually do NOT have orig/ populated (gitignored).
+    """
+    central = get_base_dol_path()
+    if central is not None:
+        return central
+
     melee_root = get_agent_melee_root()
-    # Common locations for the DOL (check multiple potential roots)
-    roots_to_check = [melee_root, Path("/Users/mike/code/melee")]
-    candidates = []
-    for root in roots_to_check:
-        candidates.extend([
-            root / "baserom.dol",
-            root / "orig" / "GALE01" / "sys" / "main.dol",
-            root / "build" / "GALE01" / "main.dol",
-        ])
-    for path in candidates:
-        if path.exists():
-            return path
-    return candidates[0]  # Return first as default even if missing
+    for candidate in (
+        melee_root / "orig" / "GALE01" / "sys" / "main.dol",
+        melee_root / "baserom.dol",
+        melee_root / "build" / "GALE01" / "main.dol",
+    ):
+        if candidate.exists():
+            return candidate
+
+    # Return first candidate so the error message points somewhere useful
+    return melee_root / "orig" / "GALE01" / "sys" / "main.dol"
 
 
 @ghidra_app.command("status")
