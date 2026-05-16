@@ -1735,7 +1735,13 @@ void fn_80025FAC(HSD_GObj* gobj, void* userdata, void* params)
     SoundParams* sp = params;
     lbAudioAx_UserData* ud = userdata;
 
-    if (gobj == NULL || ud == NULL || sp == NULL) {
+    if (gobj == NULL) {
+        return;
+    }
+    if (sp == NULL) {
+        return;
+    }
+    if (ud == NULL) {
         return;
     }
 
