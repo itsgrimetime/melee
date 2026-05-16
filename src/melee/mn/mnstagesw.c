@@ -434,6 +434,7 @@ static void mnStageSw_80236548(HSD_GObj* gobj, u8 arg1, u8 arg2)
     HSD_JObj* sp44;
     HSD_JObj* jobj;
     HSD_JObj* temp;
+    HSD_JObj* cursor;
     MnStageSwData* data;
     f32 delta_y;
     f32 frame;
@@ -452,19 +453,20 @@ static void mnStageSw_80236548(HSD_GObj* gobj, u8 arg1, u8 arg2)
         HSD_JObjClearFlagsAll(sp44, JOBJ_HIDDEN);
         HSD_JObjReqAnimAll(sp44, frame);
         HSD_JObjAnimAll(sp44);
-        HSD_JObjClearFlagsAll(data->x28, JOBJ_HIDDEN);
+        cursor = data->x28;
+        HSD_JObjClearFlagsAll(cursor, JOBJ_HIDDEN);
         delta_y = HSD_JObjGetTranslationY(data->x30) -
                   HSD_JObjGetTranslationY(data->x2C);
         if (sel < 15) {
-            HSD_JObjSetTranslateX(data->x28,
+            HSD_JObjSetTranslateX(cursor,
                                   HSD_JObjGetTranslationX(data->x2C));
-            HSD_JObjSetTranslateY(data->x28,
+            HSD_JObjSetTranslateY(cursor,
                                   delta_y * (f32) sel +
                                       HSD_JObjGetTranslationY(data->x2C));
         } else {
-            HSD_JObjSetTranslateX(data->x28,
+            HSD_JObjSetTranslateX(cursor,
                                   HSD_JObjGetTranslationX(data->x34));
-            HSD_JObjSetTranslateY(data->x28,
+            HSD_JObjSetTranslateY(cursor,
                                   delta_y * (f32) (sel - 15) +
                                       HSD_JObjGetTranslationY(data->x2C));
         }
