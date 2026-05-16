@@ -9,6 +9,25 @@ from typing import Optional
 from .._common import PRODUCTION_DECOMP_ME, console, load_slug_map
 
 
+FORK_ONLY_PR_DESCRIPTION_PATTERNS = [
+    r"\blocal attempts? db\b",
+    r"\battempt ledger\b",
+    r"\battempts? ledger\b",
+    r"\bmelee-agent\b",
+    r"\btools/checkdiff\.py\b",
+    r"\btools/worktree-doctor\.py\b",
+    r"\btools/symbol-layout-analyzer\.py\b",
+    r"\bworktree doctor\b",
+    r"\bfork tooling\b",
+    r"\bfork-only tooling\b",
+    r"\b\.agents/",
+    r"\b\.claude/",
+    r"\b\.codex/",
+    r"\bregister-only local maxima\b",
+    r"\blocal maxima\b",
+]
+
+
 def get_extended_pr_info(repo: str, pr_number: int) -> dict | None:
     """Get extended PR info including body, commits, and base branch."""
     try:
@@ -72,6 +91,14 @@ def validate_pr_description(body: str, functions: list[str], slug_map: dict) -> 
     for pattern in local_patterns:
         if re.search(pattern, body or "", re.IGNORECASE):
             warnings.append("Contains local decomp.me URLs (should use https://decomp.me)")
+            break
+
+    for pattern in FORK_ONLY_PR_DESCRIPTION_PATTERNS:
+        if re.search(pattern, body or "", re.IGNORECASE):
+            warnings.append(
+                "Contains fork-only tooling or local agent-process details; "
+                "upstream PR descriptions should use upstream-visible language only"
+            )
             break
 
     # Check if functions from commits are mentioned in body

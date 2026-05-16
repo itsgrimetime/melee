@@ -58,3 +58,12 @@ Only commit natural, maintainable C:
 - Model hidden strings/data with named declarations or file-local structs.
 - Do not leave `PAD_STACK` unless alternatives have been checked and the reason is documented.
 - Verify with `python configure.py && ninja` before claiming repo-level success.
+
+When preparing upstream PR text: Do not mention fork-only tooling. Keep the
+description upstream-visible: talk about the functions, source/data layout,
+type fixes, and verification that reviewers can see in the branch. Do not cite
+local attempts DB entries, attempt ledgers, `melee-agent`, `tools/checkdiff.py`,
+worktree doctor output, Discord archive searches, or agent process notes. Turn
+private workflow notes into reviewable facts, such as "remaining functions are
+left unmatched" instead of "remaining functions are documented in the local
+attempts DB."

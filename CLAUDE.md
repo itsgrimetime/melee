@@ -138,6 +138,17 @@ upstream/master ─────────────────────�
 git push origin pr/my-module            # Push for review
 ```
 
+**PR description hygiene:**
+
+Do not mention fork-only tooling in upstream PR descriptions. Keep PR text
+upstream-visible: describe matched/improved functions, source structure,
+types, data layout, and verification. Do not mention local attempts DB,
+attempt ledgers, `melee-agent`, `tools/checkdiff.py`, worktree doctor output,
+Discord archive searches, or agent process notes. Convert local notes into
+reviewable facts, for example "Several remaining functions in this file are
+left unmatched" instead of "Remaining functions are documented in the local
+attempts DB."
+
 **After your PR is merged upstream:**
 ```bash
 ./tools/workflow/sync-upstream.sh       # Reset master to upstream + tooling
@@ -219,4 +230,5 @@ When a session runs out of context and gets summarized, **preserve this state**:
 - **Structure first, registers last** - Don't fix register allocation until the instruction sequence matches. Registers often "fall into place" when structure is correct; chasing registers early leads to local maxima.
 - **Match % can drop when correct** - Don't revert structurally correct changes just because match % dropped. A correct `bl` (function call) at 60% is better than incorrect inlined code at 85%. You can improve from correct structure.
 - **PAD_STACK is a last resort** - Stack mismatches usually mean missing inlines or variables, not "add padding." Investigate missing inline functions, local variables, or type differences before using PAD_STACK.
+- **Name hidden string/data offsets** - Do not leave `OSReport`/`__assert` strings or other data references as raw `base + offset` pointer math in PR code. If the bytes live inside a nearby data blob, model the blob with a file-local struct and reference the named field, or use another direct named string/data reference that preserves matching codegen.
 - **`int` vs `s32` for loop counters** - MWCC treats these differently for loop optimization. `s32` is typedef'd to `long`, and MWCC may apply different unrolling heuristics. If a simple loop doesn't match, try `int i` instead of `s32 i`.

@@ -74,3 +74,19 @@ def test_improvement_checklist_tracks_original_followups():
         "map/object layout evidence",
     ):
         assert required in text
+
+
+def test_pr_description_guidance_keeps_fork_tooling_out_of_upstream_text():
+    for path in (
+        "AGENTS.md",
+        ".agents/skills/decomp/SKILL.md",
+        ".claude-plugin/melee-decomp/skills/prepare-pr/SKILL.md",
+        "tools/workflow/README.md",
+    ):
+        text = read(path)
+        for required in (
+            "Do not mention fork-only tooling",
+            "upstream-visible",
+            "local attempts DB",
+        ):
+            assert required in text, f"{required!r} missing from {path}"

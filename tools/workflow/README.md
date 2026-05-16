@@ -127,6 +127,11 @@ clean decompilation changes:
   and keep the tooling overlay out of the PR branch.
 - Use `./tools/workflow/update-pr.sh pr/<name>` to move source/config/include
   fixes from a tooling-enabled worktree onto an existing clean PR branch.
+- Do not mention fork-only tooling in upstream PR descriptions. Keep PR text
+  upstream-visible: summarize the matched/improved functions, source/data
+  layout, type changes, and verification. Do not mention local attempts DB,
+  attempt ledgers, `melee-agent`, `tools/checkdiff.py`, worktree doctor output,
+  Discord archive searches, or agent process notes.
 
 ## Skills
 
