@@ -532,10 +532,9 @@ void mnVibration_80248444(HSD_GObj* arg0, u8 arg1, u8 arg2)
 
 void mnVibration_80248644(HSD_GObj* arg0)
 {
-    s32 i;
     MnVibrationData* data;
     MnVibrationData* ptr2;
-    s32 zero;
+    s32 i;
     HSD_JObj* jobj17;
     HSD_JObj* child;
     s32 j;
@@ -545,7 +544,6 @@ void mnVibration_80248644(HSD_GObj* arg0)
 
     i = 0;
     data = arg0->user_data;
-    zero = 0;
     ptr2 = data;
     do {
         if (ptr2->texts[0] != NULL) {
