@@ -37,6 +37,10 @@ DISCORD_SEARCH_CANDIDATES = [
 COMPILE_RULES = {"mwcc", "mwcc_sjis", "mwcc_extab", "mwcc_sjis_extab", "as"}
 STALE_GRACE_SECONDS = 1.0
 
+# Kept in sync with configure.py's config.wibo_tag; only used by --fix to
+# re-download the right wibo binary if the existing one is wrong arch.
+WIBO_DOWNLOAD_TAG = "1.0.0"
+
 
 @dataclass
 class CheckResult:
@@ -64,6 +68,7 @@ class Doctor:
         self.check_git_state()
         self.check_tooling_overlay()
         self.check_base_dol()
+        self.check_build_tools()
         self.check_cli_tools()
         self.check_knowledge_sources()
         self.check_stale_state()
@@ -139,6 +144,87 @@ class Doctor:
                 "base DOL missing and no shared copy was found",
                 "provide orig/GALE01/sys/main.dol or ~/.config/decomp-me/orig/GALE01/main.dol",
             )
+
+    def check_build_tools(self) -> None:
+        wibo = ROOT / "build" / "tools" / "wibo"
+        if not wibo.exists():
+            # download_tool.py will fetch on first ninja build; nothing to validate yet.
+            self.ok("build/tools/wibo not present yet (will download on first build)")
+            return
+        try:
+            with open(wibo, "rb") as f:
+                magic = f.read(4)
+        except OSError as exc:
+            self.warn(f"could not read build/tools/wibo: {exc}")
+            return
+        is_macho = magic in (
+            b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf",
+            b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe",
+        )
+        is_elf = magic == b"\x7fELF"
+        expected_macho = sys.platform == "darwin"
+        correct = is_macho if expected_macho else is_elf
+        if correct:
+            kind = "Mach-O" if is_macho else "ELF"
+            self.ok(f"build/tools/wibo arch is correct ({kind} for {sys.platform})")
+            return
+
+        kind_present = "Mach-O" if is_macho else ("ELF" if is_elf else "unknown")
+        kind_expected = "Mach-O" if expected_macho else "ELF"
+        if self.fix:
+            if self._redownload_wibo(wibo):
+                self.ok(
+                    f"refreshed build/tools/wibo ({kind_present} -> {kind_expected}, "
+                    f"tag {WIBO_DOWNLOAD_TAG})"
+                )
+                return
+            self.fail(
+                f"build/tools/wibo wrong arch ({kind_present}; expected {kind_expected}); --fix download failed",
+                f"manually download from https://github.com/decompals/wibo/releases/download/"
+                f"{WIBO_DOWNLOAD_TAG}/wibo-macos (or wibo-x86_64 on Linux)",
+            )
+            return
+        self.fail(
+            f"build/tools/wibo wrong arch ({kind_present}; expected {kind_expected} on {sys.platform})",
+            f"run {Path(__file__).name} --fix to re-download the right binary "
+            f"(decompals/wibo tag {WIBO_DOWNLOAD_TAG})",
+        )
+
+    def _redownload_wibo(self, wibo: Path) -> bool:
+        """Download the right wibo binary for this host.
+
+        Self-contained — does not depend on tools/download_tool.py (older
+        wip worktrees still ship the legacy URL that 404s on tag 1.0.0+).
+        """
+        import platform
+        import stat
+        import urllib.error
+        import urllib.request
+
+        machine = platform.machine().lower()
+        if machine == "amd64":
+            machine = "x86_64"
+        if sys.platform == "darwin":
+            asset = "wibo-macos"
+        else:
+            asset = f"wibo-{machine}"
+        url = f"https://github.com/decompals/wibo/releases/download/{WIBO_DOWNLOAD_TAG}/{asset}"
+
+        try:
+            wibo.unlink()
+        except OSError:
+            pass
+        wibo.parent.mkdir(parents=True, exist_ok=True)
+
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as response:
+                with open(wibo, "wb") as f:
+                    shutil.copyfileobj(response, f)
+        except (urllib.error.URLError, OSError):
+            return False
+        wibo.chmod(wibo.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        return wibo.exists() and wibo.stat().st_size > 0
 
     def check_cli_tools(self) -> None:
         checkdiff = ROOT / "tools" / "checkdiff.py"
@@ -395,10 +481,72 @@ def rel_to_root(path: Path, root: Path) -> str:
         return str(path)
 
 
+BANNER_TOOL_NAMES = {
+    "tools/checkdiff.py": "checkdiff",
+    "tools/decomp.py": "decomp",
+    "tools/workflow/status.sh": "workflow",
+    "tools/workflow/create-pr.sh": "workflow",
+    "tools/workflow/update-pr.sh": "workflow",
+    "tools/workflow/pr-worktree.sh": "workflow",
+}
+
+
+def collect_banner_tooling_status(root: Path) -> tuple[str, list[str]]:
+    """Derive banner-level tooling status from existence checks.
+
+    Returns ("ok"|"partial"|"broken", missing_short_names). "broken" means a
+    core tool (checkdiff.py) is absent; "partial" means some non-core tooling
+    is missing.
+    """
+    missing: list[str] = []
+    seen: set[str] = set()
+    for rel_path in TOOLING_FILES:
+        if (root / rel_path).exists():
+            continue
+        name = BANNER_TOOL_NAMES.get(rel_path, rel_path)
+        if name not in seen:
+            missing.append(name)
+            seen.add(name)
+
+    if shutil.which("melee-agent") is None and "melee-agent" not in seen:
+        missing.append("melee-agent")
+        seen.add("melee-agent")
+
+    if not missing:
+        return "ok", []
+    if not (root / "tools" / "checkdiff.py").exists():
+        return "broken", missing
+    return "partial", missing
+
+
+def banner_line(root: Path) -> str:
+    branch = run_git(["branch", "--show-current"], allow_fail=True).strip()
+    head = run_git(["rev-parse", "--short", "HEAD"], allow_fail=True).strip() or "?"
+    branch_str = branch if branch else f"detached@{head}"
+
+    status, missing = collect_banner_tooling_status(root)
+    if status == "ok":
+        tooling_str = "ok"
+    elif status == "broken":
+        tooling_str = "broken"
+    else:
+        tooling_str = f"partial:{','.join(missing)}"
+
+    return f"WORKTREE {root} | BRANCH {branch_str} | TOOLING {tooling_str}"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fix", action="store_true", help="Apply safe local bootstrap fixes")
+    parser.add_argument(
+        "--banner",
+        action="store_true",
+        help="Print a single-line worktree/branch/tooling status and exit 0",
+    )
     args = parser.parse_args()
+    if args.banner:
+        print(banner_line(ROOT))
+        return 0
     return Doctor(fix=args.fix).run()
 
 

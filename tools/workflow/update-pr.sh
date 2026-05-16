@@ -23,14 +23,9 @@ NC='\033[0m'
 # Parse arguments
 PR_BRANCH=""
 AMEND=false
-AUTO_YES=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --yes|-y)
-            AUTO_YES=true
-            shift
-            ;;
         --amend)
             AMEND=true
             shift
@@ -41,7 +36,6 @@ while [[ $# -gt 0 ]]; do
             echo "Updates a PR branch with current src/config/include changes."
             echo ""
             echo "Options:"
-            echo "  --yes, -y  Skip confirmation prompts (for automation)"
             echo "  --amend    Amend the last commit instead of creating new one"
             echo ""
             echo "Examples:"
@@ -102,13 +96,11 @@ echo -e "${CYAN}Changes to apply:${NC}"
 git diff --stat "$PR_BRANCH".."$CURRENT_BRANCH" -- src/ config/ include/
 echo ""
 
-if ! $AUTO_YES; then
-    read -p "Apply these changes to $PR_BRANCH? [y/N] " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo "Aborted."
-        exit 1
-    fi
+read -p "Apply these changes to $PR_BRANCH? [y/N] " -n 1 -r
+echo
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Aborted."
+    exit 1
 fi
 
 # Stash current state (in case we need to recover)
@@ -130,20 +122,14 @@ if $AMEND; then
     git commit --amend --no-edit
     echo -e "${GREEN}Amended commit on $PR_BRANCH${NC}"
 else
-    # Prompt for commit message (or use default in auto mode)
-    if $AUTO_YES; then
+    # Prompt for commit message
+    echo ""
+    echo "Enter commit message (or press enter for default):"
+    read -r COMMIT_MSG
+    if [[ -z "$COMMIT_MSG" ]]; then
         COMMIT_MSG="Update based on feedback
 
-Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"
-    else
-        echo ""
-        echo "Enter commit message (or press enter for default):"
-        read -r COMMIT_MSG
-        if [[ -z "$COMMIT_MSG" ]]; then
-            COMMIT_MSG="Update based on feedback
-
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
-        fi
     fi
     git commit -m "$COMMIT_MSG"
     echo -e "${GREEN}Created new commit on $PR_BRANCH${NC}"

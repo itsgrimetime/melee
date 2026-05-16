@@ -11,7 +11,8 @@ Scripts for managing the decomp workflow between fork and upstream.
 | `sync-upstream.sh` | Reset master to upstream + tooling |
 | `create-pr.sh` | Create clean PR branch from changes |
 | `update-pr.sh` | Apply changes from master to existing PR branch |
-| `pr-worktree.sh` | Create worktree with tooling for PR iteration |
+| `pr-worktree.sh` | Create worktree with tooling for `pr/*` or `wip/*` iteration |
+| `agent-prompt.sh` | Generate a `/loop` prompt for a decomp agent, given a branch name |
 
 ## The Workflow
 
@@ -100,6 +101,51 @@ cd ../melee
 ./tools/workflow/pr-worktree.sh delete
 ```
 
+### Long-Running WIP Worktree (per-agent isolation with overlay)
+```bash
+# Create an isolated worktree for an agent doing decomp work.
+# Branches from master, so the fork tooling overlay is inherited
+# directly via git checkout — no symlinks, no broken paths.
+./tools/workflow/pr-worktree.sh create wip/mn-cleanup
+# -> creates ../melee-wip-mn-cleanup on branch wip/mn-cleanup
+
+cd ../melee-wip-mn-cleanup
+# tools/checkdiff.py and melee-agent work directly here.
+# Commit decomp work freely on the wip/ branch.
+
+# Pull in later overlay updates from master:
+git fetch && git merge master
+
+# When done, hand off to a pr/* branch or clean up:
+./tools/workflow/pr-worktree.sh delete wip/mn-cleanup
+```
+
+The `pr/*` and `wip/*` modes differ in where the overlay comes from:
+
+| Mode | Branches from | Overlay source | Worktree path |
+|------|---------------|----------------|---------------|
+| `pr/*`  | `upstream/master` (via `create-pr.sh`) | Symlinks to main repo | `../melee-pr` |
+| `wip/*` | `master`                                | Tracked on the branch | `../melee-wip-<topic>` |
+
+For `wip/*`, master overlay changes don't reach existing worktrees until you
+`git merge master` inside each one — the overlay is real files, not a symlink.
+
+### Kick Off an Agent on a wip/ Branch
+```bash
+# See which wip/* and pr/* branches have worktrees ready for an agent
+./tools/workflow/agent-prompt.sh --list
+
+# Generate a /loop prompt for the agent
+./tools/workflow/agent-prompt.sh wip/lb-mthp
+
+# With a specific file scope (recommended when multiple agents share a module)
+./tools/workflow/agent-prompt.sh wip/lb-mthp 'lbmthp.{c,h,static.h} + lb_01F8.c'
+```
+
+Output goes to stdout — pipe to `pbcopy` on macOS to grab it for the agent
+session. The tool auto-detects the worktree path from the branch name and
+derives the module focus from the branch prefix (`wip/<module>-<topic>`).
+
 ## Why This Workflow?
 
 The main challenge is that:
@@ -127,6 +173,11 @@ clean decompilation changes:
   and keep the tooling overlay out of the PR branch.
 - Use `./tools/workflow/update-pr.sh pr/<name>` to move source/config/include
   fixes from a tooling-enabled worktree onto an existing clean PR branch.
+- Do not mention fork-only tooling in upstream PR descriptions. Keep PR text
+  upstream-visible: summarize the matched/improved functions, source/data
+  layout, type changes, and verification. Do not mention local attempts DB,
+  attempt ledgers, `melee-agent`, `tools/checkdiff.py`, worktree doctor output,
+  Discord archive searches, or agent process notes.
 
 ## Skills
 

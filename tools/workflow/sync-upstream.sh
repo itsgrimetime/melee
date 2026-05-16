@@ -31,7 +31,6 @@ fi
 TOOLING_PATHS=(
     "tools/"
     ".claude/"
-    ".claude-plugin/"
     "docs/"
     ".github/"
     ".vscode/"

@@ -25,14 +25,9 @@ NC='\033[0m'
 # Parse arguments
 PR_BRANCH=""
 SOURCE_BRANCH="HEAD"
-AUTO_YES=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --yes|-y)
-            AUTO_YES=true
-            shift
-            ;;
         --from)
             SOURCE_BRANCH="$2"
             shift 2
@@ -43,7 +38,6 @@ while [[ $# -gt 0 ]]; do
             echo "Creates a clean PR branch from decomp changes."
             echo ""
             echo "Options:"
-            echo "  --yes, -y        Skip confirmation prompts (for automation)"
             echo "  --from <branch>  Source branch for changes (default: HEAD)"
             echo ""
             echo "Examples:"
@@ -122,13 +116,11 @@ fi
 echo ""
 
 # Confirm
-if ! $AUTO_YES; then
-    read -p "Create PR branch $PR_BRANCH with these changes? [y/N] " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo "Aborted."
-        exit 1
-    fi
+read -p "Create PR branch $PR_BRANCH with these changes? [y/N] " -n 1 -r
+echo
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Aborted."
+    exit 1
 fi
 
 # Create the branch

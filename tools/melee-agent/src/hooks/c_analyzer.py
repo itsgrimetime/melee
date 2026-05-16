@@ -279,8 +279,42 @@ def detect_lowercase_hex(source_code: str) -> list[CodeIssue]:
     return issues
 
 
+_DOUBLE_TYPE_NAMES = {"f64", "double"}
+
+
+def _initializer_target_type(node: "Node", source: bytes) -> str | None:
+    """If `node` is the value of an init_declarator, return the declared type text.
+
+    Walks up the AST through wrappers (parenthesized_expression, cast_expression
+    used as an init value, etc.) until it finds an init_declarator, then reads
+    the type from the enclosing declaration. Returns None if the literal is not
+    a top-level initializer.
+    """
+    cur = node.parent
+    # Step through expression wrappers that don't change the initializer relationship.
+    while cur is not None and cur.type in (
+        "parenthesized_expression",
+        "unary_expression",  # e.g. -1.0
+    ):
+        cur = cur.parent
+    if cur is None or cur.type != "init_declarator":
+        return None
+    decl = cur.parent
+    if decl is None or decl.type != "declaration":
+        return None
+    type_node = decl.child_by_field_name("type")
+    if type_node is None:
+        return None
+    return _get_node_text(type_node, source).strip()
+
+
 def detect_float_without_suffix(source_code: str) -> list[CodeIssue]:
-    """Detect float literals missing the F suffix."""
+    """Detect float literals missing the F suffix.
+
+    Only flags literals in contexts where a 32-bit float is plausible. Literals
+    that initialize a declared `f64`/`double` variable are skipped — for those,
+    the unsuffixed form is the correct C spelling.
+    """
     parser = get_parser()
     if parser is None:
         return []
@@ -296,6 +330,11 @@ def detect_float_without_suffix(source_code: str) -> list[CodeIssue]:
         if "." in text and not text.lower().startswith("0x"):
             # Check if it has F/f/L/l suffix
             if text[-1].lower() not in ("f", "l"):
+                target_type = _initializer_target_type(node, source_bytes)
+                if target_type is not None and any(
+                    t in target_type for t in _DOUBLE_TYPE_NAMES
+                ):
+                    continue
                 issues.append(
                     CodeIssue(
                         message="Float literal missing F suffix",
