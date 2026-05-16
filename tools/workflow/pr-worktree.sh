@@ -1,19 +1,31 @@
 #!/bin/bash
-# pr-worktree.sh - Create or manage a worktree for PR iteration
+# pr-worktree.sh - Create or manage a worktree for PR or WIP iteration
 #
 # Usage:
-#   ./tools/workflow/pr-worktree.sh create <pr-branch>   # Create worktree with tooling
-#   ./tools/workflow/pr-worktree.sh delete               # Remove PR worktree
-#   ./tools/workflow/pr-worktree.sh status               # Show PR worktree status
+#   ./tools/workflow/pr-worktree.sh create <pr/topic|wip/topic>   # Create worktree
+#   ./tools/workflow/pr-worktree.sh delete [branch]               # Remove worktree
+#   ./tools/workflow/pr-worktree.sh status [branch]               # Show status
 #
-# This creates a worktree at ../melee-pr with symlinked tooling,
-# so you can iterate on PR branches with full agent support.
+# Two modes:
+#
+#   pr/<topic>   Worktree at ../melee-pr. Branch must already exist (typically
+#                created via ./tools/workflow/create-pr.sh, which branches
+#                from upstream/master). Fork tooling (.claude/, tools/, docs/,
+#                CLAUDE.md, etc.) is symlinked in from the main repo and
+#                excluded from git so the PR stays clean for upstream review.
+#                delete/status with no argument default to this worktree.
+#
+#   wip/<topic>  Worktree at ../melee-wip-<topic>. Branch is created from
+#                master if it doesn't exist, so the tooling overlay is
+#                inherited directly via git checkout — no symlinks needed.
+#                Use for long-running per-agent decomp work that needs full
+#                tooling access in an isolated tree. To pick up later master
+#                overlay updates, fetch and merge master into the wip branch.
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-PR_WORKTREE="$(dirname "$REPO_ROOT")/melee-pr"
 
 # Colors
 RED='\033[0;31m'
@@ -22,7 +34,8 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# Tooling paths to symlink (relative to repo root)
+# Tooling paths to symlink into pr/* worktrees (relative to repo root).
+# Not used for wip/* worktrees — those inherit the overlay from master.
 TOOLING_SYMLINKS=(
     ".claude"
     "tools"
@@ -32,7 +45,7 @@ TOOLING_SYMLINKS=(
     "AGENTS.md"
 )
 
-# Files to copy (can't be symlinks for various reasons)
+# Files to copy (can't be symlinks for various reasons).
 TOOLING_COPIES=(
     "configure.py"
     ".gitignore"
@@ -40,76 +53,116 @@ TOOLING_COPIES=(
     "permuter_settings.toml"
 )
 
+# Resolve a branch name to a worktree path + mode.
+# Sets globals WORKTREE_MODE ("pr"|"wip") and WORKTREE_PATH.
+resolve_worktree() {
+    local branch="$1"
+    case "$branch" in
+        pr/*)
+            WORKTREE_MODE="pr"
+            WORKTREE_PATH="$(dirname "$REPO_ROOT")/melee-pr"
+            ;;
+        wip/*)
+            WORKTREE_MODE="wip"
+            local topic="${branch#wip/}"
+            WORKTREE_PATH="$(dirname "$REPO_ROOT")/melee-wip-${topic}"
+            ;;
+        *)
+            echo -e "${RED}Error: branch must be pr/<topic> or wip/<topic> (got '$branch')${NC}"
+            exit 1
+            ;;
+    esac
+}
+
+mode_label() {
+    if [[ "$WORKTREE_MODE" == "pr" ]]; then echo "PR"; else echo "WIP"; fi
+}
+
 cmd_create() {
     local branch="$1"
 
     if [[ -z "$branch" ]]; then
         echo -e "${RED}Error: Branch name required${NC}"
-        echo "Usage: $0 create <pr-branch>"
+        echo "Usage: $0 create <pr/topic|wip/topic>"
         exit 1
     fi
 
-    # Ensure branch exists
-    if ! git show-ref --verify --quiet "refs/heads/$branch"; then
+    resolve_worktree "$branch"
+
+    local branch_exists=0
+    if git show-ref --verify --quiet "refs/heads/$branch"; then
+        branch_exists=1
+    fi
+
+    # pr/* must already exist (typically built by create-pr.sh from upstream/master).
+    if [[ "$WORKTREE_MODE" == "pr" ]] && [[ "$branch_exists" -eq 0 ]]; then
         echo -e "${RED}Error: Branch '$branch' does not exist${NC}"
+        echo "Use ./tools/workflow/create-pr.sh to create a PR branch first."
         exit 1
     fi
 
     # Check if worktree already exists
-    if [[ -d "$PR_WORKTREE" ]]; then
-        echo -e "${YELLOW}PR worktree already exists at $PR_WORKTREE${NC}"
-        echo "Current branch: $(cd "$PR_WORKTREE" && git branch --show-current)"
+    if [[ -d "$WORKTREE_PATH" ]]; then
+        echo -e "${YELLOW}Worktree already exists at $WORKTREE_PATH${NC}"
+        echo "Current branch: $(cd "$WORKTREE_PATH" && git branch --show-current)"
         echo ""
         read -p "Switch to $branch? [y/N] " -n 1 -r
         echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
-            cd "$PR_WORKTREE"
+            cd "$WORKTREE_PATH"
             git checkout "$branch"
             echo -e "${GREEN}Switched to $branch${NC}"
         fi
         return
     fi
 
-    echo "=== Creating PR Worktree ==="
+    echo "=== Creating $(mode_label) Worktree ==="
     echo ""
     echo "Branch: $branch"
-    echo "Location: $PR_WORKTREE"
+    echo "Location: $WORKTREE_PATH"
     echo ""
 
     # Create worktree
     cd "$REPO_ROOT"
-    git worktree add "$PR_WORKTREE" "$branch"
+    if [[ "$branch_exists" -eq 1 ]]; then
+        git worktree add "$WORKTREE_PATH" "$branch"
+    else
+        # wip/* branch doesn't exist — create from master so it inherits the overlay.
+        echo "Creating new branch '$branch' from master..."
+        git worktree add -b "$branch" "$WORKTREE_PATH" master
+    fi
 
-    # Create symlinks for tooling
-    echo "Setting up tooling symlinks..."
-    cd "$PR_WORKTREE"
+    cd "$WORKTREE_PATH"
 
-    for item in "${TOOLING_SYMLINKS[@]}"; do
-        if [[ -e "$REPO_ROOT/$item" ]]; then
-            ln -sf "$REPO_ROOT/$item" "$item"
-            echo "  Linked: $item"
+    if [[ "$WORKTREE_MODE" == "pr" ]]; then
+        # PR mode: branched from upstream/master, no tooling overlay present.
+        # Symlink overlay in from main repo and exclude it from git locally.
+        echo "Setting up tooling symlinks..."
+        for item in "${TOOLING_SYMLINKS[@]}"; do
+            if [[ -e "$REPO_ROOT/$item" ]] && [[ ! -e "$item" ]]; then
+                ln -sf "$REPO_ROOT/$item" "$item"
+                echo "  Linked: $item"
+            fi
+        done
+
+        for item in "${TOOLING_COPIES[@]}"; do
+            if [[ -e "$REPO_ROOT/$item" ]]; then
+                cp "$REPO_ROOT/$item" "$item"
+                echo "  Copied: $item"
+            fi
+        done
+
+        # Create .codex symlink (PR branches don't have .codex in their tree).
+        if [[ ! -e ".codex" ]]; then
+            mkdir -p .codex
+            ln -sf ../.claude/skills .codex/skills
         fi
-    done
 
-    # Copy files that need to be actual files
-    for item in "${TOOLING_COPIES[@]}"; do
-        if [[ -e "$REPO_ROOT/$item" ]]; then
-            cp "$REPO_ROOT/$item" "$item"
-            echo "  Copied: $item"
-        fi
-    done
-
-    # Create .codex symlink
-    mkdir -p .codex
-    ln -sf ../.claude/skills .codex/skills
-
-    # Add tooling to local exclude (so it doesn't show as untracked)
-    echo "Configuring local git exclude..."
-    mkdir -p .git
-    # Note: In a worktree, .git is a file pointing to the main repo
-    # We need to find the actual gitdir
-    GITDIR=$(cat .git | sed 's/gitdir: //')
-    cat >> "$GITDIR/info/exclude" << 'EOF'
+        # Add tooling to local exclude (so it doesn't show as untracked).
+        echo "Configuring local git exclude..."
+        # In a worktree, .git is a file pointing to the actual gitdir.
+        GITDIR=$(sed 's/gitdir: //' .git)
+        cat >> "$GITDIR/info/exclude" << 'EOF'
 # Symlinked tooling (not part of PR)
 .claude/
 tools/
@@ -123,38 +176,69 @@ configure.py
 decomp.yaml
 permuter_settings.toml
 EOF
+    else
+        # WIP mode: branched from master, tooling overlay is already in the tree.
+        # Symlinks would shadow real files; skip them. Still refresh the
+        # TOOLING_COPIES so per-worktree edits stay local to this branch.
+        echo "Tooling overlay inherited from master (no symlinks needed)."
+        for item in "${TOOLING_COPIES[@]}"; do
+            if [[ -e "$REPO_ROOT/$item" ]]; then
+                cp "$REPO_ROOT/$item" "$item"
+                echo "  Refreshed: $item"
+            fi
+        done
+    fi
 
     echo ""
-    echo -e "${GREEN}=== PR Worktree Ready ===${NC}"
+    echo -e "${GREEN}=== $(mode_label) Worktree Ready ===${NC}"
     echo ""
-    echo "Location: $PR_WORKTREE"
+    echo "Location: $WORKTREE_PATH"
     echo "Branch: $branch"
     echo ""
-    echo "Tooling is symlinked from main repo - changes there are shared."
-    echo "Only src/config/include changes will be committed to the PR."
+    if [[ "$WORKTREE_MODE" == "pr" ]]; then
+        echo "Tooling is symlinked from main repo - changes there are shared."
+        echo "Only src/config/include changes will be committed to the PR."
+    else
+        echo "Tooling overlay is tracked on master in this worktree."
+        echo "To pull in later overlay updates:"
+        echo "  cd $WORKTREE_PATH && git fetch && git merge master"
+    fi
     echo ""
-    echo "To work on PR:"
-    echo "  cd $PR_WORKTREE"
-    echo ""
-    echo "When done, return to main repo:"
-    echo "  cd $REPO_ROOT"
+    echo "To work in this worktree:"
+    echo "  cd $WORKTREE_PATH"
     echo ""
     echo "To remove worktree later:"
-    echo "  $0 delete"
+    echo "  $0 delete $branch"
+}
+
+# Resolve a (possibly empty) branch arg to a target worktree path.
+# Empty arg means the legacy ../melee-pr path (back-compat).
+target_worktree_path() {
+    local branch="$1"
+    if [[ -n "$branch" ]]; then
+        resolve_worktree "$branch"
+        echo "$WORKTREE_PATH"
+    else
+        echo "$(dirname "$REPO_ROOT")/melee-pr"
+    fi
 }
 
 cmd_delete() {
-    if [[ ! -d "$PR_WORKTREE" ]]; then
-        echo "No PR worktree found at $PR_WORKTREE"
+    local branch="${1:-}"
+    local worktree_path
+    worktree_path="$(target_worktree_path "$branch")"
+
+    if [[ ! -d "$worktree_path" ]]; then
+        echo "No worktree found at $worktree_path"
         exit 0
     fi
 
-    echo "=== Removing PR Worktree ==="
+    echo "=== Removing Worktree ==="
     echo ""
-    echo "Location: $PR_WORKTREE"
+    echo "Location: $worktree_path"
 
     # Check for uncommitted changes
-    cd "$PR_WORKTREE"
+    cd "$worktree_path"
     if ! git diff --quiet || ! git diff --cached --quiet; then
         echo -e "${YELLOW}Warning: Uncommitted changes in worktree${NC}"
         git status --short
@@ -168,23 +252,27 @@ cmd_delete() {
     fi
 
     cd "$REPO_ROOT"
-    git worktree remove "$PR_WORKTREE" --force
+    git worktree remove "$worktree_path" --force
 
-    echo -e "${GREEN}PR worktree removed${NC}"
+    echo -e "${GREEN}Worktree removed${NC}"
 }
 
 cmd_status() {
-    if [[ ! -d "$PR_WORKTREE" ]]; then
-        echo "No PR worktree exists."
-        echo "Create one with: $0 create <pr-branch>"
+    local branch="${1:-}"
+    local worktree_path
+    worktree_path="$(target_worktree_path "$branch")"
+
+    if [[ ! -d "$worktree_path" ]]; then
+        echo "No worktree exists at $worktree_path."
+        echo "Create one with: $0 create <pr/topic|wip/topic>"
         exit 0
     fi
 
-    echo "=== PR Worktree Status ==="
+    echo "=== Worktree Status ==="
     echo ""
-    echo "Location: $PR_WORKTREE"
+    echo "Location: $worktree_path"
 
-    cd "$PR_WORKTREE"
+    cd "$worktree_path"
     echo "Branch: $(git branch --show-current)"
     echo ""
 
@@ -207,18 +295,18 @@ case "${1:-status}" in
         cmd_create "$2"
         ;;
     delete|remove)
-        cmd_delete
+        cmd_delete "$2"
         ;;
     status)
-        cmd_status
+        cmd_status "$2"
         ;;
     *)
         echo "Usage: $0 <command> [args]"
         echo ""
         echo "Commands:"
-        echo "  create <branch>  Create PR worktree for branch"
-        echo "  delete           Remove PR worktree"
-        echo "  status           Show PR worktree status"
+        echo "  create <pr/topic|wip/topic>  Create worktree for branch"
+        echo "  delete [branch]              Remove worktree (defaults to ../melee-pr)"
+        echo "  status [branch]              Show worktree status"
         exit 1
         ;;
 esac

@@ -11,7 +11,7 @@ Scripts for managing the decomp workflow between fork and upstream.
 | `sync-upstream.sh` | Reset master to upstream + tooling |
 | `create-pr.sh` | Create clean PR branch from changes |
 | `update-pr.sh` | Apply changes from master to existing PR branch |
-| `pr-worktree.sh` | Create worktree with tooling for PR iteration |
+| `pr-worktree.sh` | Create worktree with tooling for `pr/*` or `wip/*` iteration |
 
 ## The Workflow
 
@@ -99,6 +99,35 @@ cd ../melee
 # Clean up worktree when PR is merged
 ./tools/workflow/pr-worktree.sh delete
 ```
+
+### Long-Running WIP Worktree (per-agent isolation with overlay)
+```bash
+# Create an isolated worktree for an agent doing decomp work.
+# Branches from master, so the fork tooling overlay is inherited
+# directly via git checkout — no symlinks, no broken paths.
+./tools/workflow/pr-worktree.sh create wip/mn-cleanup
+# -> creates ../melee-wip-mn-cleanup on branch wip/mn-cleanup
+
+cd ../melee-wip-mn-cleanup
+# tools/checkdiff.py and melee-agent work directly here.
+# Commit decomp work freely on the wip/ branch.
+
+# Pull in later overlay updates from master:
+git fetch && git merge master
+
+# When done, hand off to a pr/* branch or clean up:
+./tools/workflow/pr-worktree.sh delete wip/mn-cleanup
+```
+
+The `pr/*` and `wip/*` modes differ in where the overlay comes from:
+
+| Mode | Branches from | Overlay source | Worktree path |
+|------|---------------|----------------|---------------|
+| `pr/*`  | `upstream/master` (via `create-pr.sh`) | Symlinks to main repo | `../melee-pr` |
+| `wip/*` | `master`                                | Tracked on the branch | `../melee-wip-<topic>` |
+
+For `wip/*`, master overlay changes don't reach existing worktrees until you
+`git merge master` inside each one — the overlay is real files, not a symlink.
 
 ## Why This Workflow?
 
