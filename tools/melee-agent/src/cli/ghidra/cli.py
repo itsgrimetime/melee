@@ -381,20 +381,20 @@ def ghidra_xrefs(
     address: Annotated[str, typer.Argument(help="Address to find references to/from")],
     direction: Annotated[str, typer.Option("--dir", "-d", help="'to' (callers) or 'from' (callees)")] = "to",
 ):
-    """Find cross-references to or from an address.
-
-    Useful for understanding call graphs:
-    - 'to': Find all functions that call this address (callers)
-    - 'from': Find all functions called from this address (callees)
+    """Find callers (--dir to) or callees (--dir from) via the cache.
 
     Examples:
-        melee-agent ghidra xrefs 0x80243A3C          # Who calls this?
-        melee-agent ghidra xrefs 0x80243A3C --dir from  # What does this call?
+        melee-agent ghidra xrefs 0x80243A3C            # who calls this
+        melee-agent ghidra xrefs 0x80243A3C --dir from # what does this call
     """
-    if not _init_ghidra():
+    from .cache import CACHE_DB_PATH, get_callers, get_callees, get_function
+
+    if not CACHE_DB_PATH.exists():
+        console.print(
+            "[red]Cache not built.[/red] Run [cyan]melee-agent ghidra cache-build[/cyan]."
+        )
         raise typer.Exit(1)
 
-    # Normalize address
     addr_str = address.lower().replace("0x", "")
     try:
         addr_int = int(addr_str, 16)
@@ -406,76 +406,34 @@ def ghidra_xrefs(
         console.print(f"[red]Invalid direction:[/red] {direction} (use 'to' or 'from')")
         raise typer.Exit(1)
 
-    import pyghidra
+    func = get_function(CACHE_DB_PATH, addr_int)
+    label = func["name"] if func else f"0x{addr_int:08X}"
+    title = f"References {'to' if direction == 'to' else 'from'} {label}"
 
-    project_path = _get_project_path()
-    if not project_path.exists():
-        console.print("[red]No Ghidra project. Run:[/red] melee-agent ghidra setup")
-        raise typer.Exit(1)
+    table = Table(title=title)
+    table.add_column("Address", style="cyan")
+    table.add_column("Function", style="yellow")
+    table.add_column("Type", style="dim")
 
-    try:
-        from ghidra.util.task import TaskMonitor
+    if direction == "to":
+        for row in get_callers(CACHE_DB_PATH, addr_int):
+            table.add_row(
+                f"0x{row['from_addr']:08X}",
+                row["from_function"],
+                row["ref_type"],
+            )
+    else:
+        if func is None:
+            console.print(f"[yellow]No function at 0x{addr_int:08X}[/yellow]")
+            raise typer.Exit(1)
+        for row in get_callees(CACHE_DB_PATH, func["addr"]):
+            table.add_row(
+                f"0x{row['to_function_addr']:08X}",
+                row["to_function"],
+                row["ref_type"],
+            )
 
-        with pyghidra.open_project(str(project_path), GHIDRA_PROJECT_NAME) as project:
-            programs = list(project.getProjectData().getRootFolder().getFiles())
-            if not programs:
-                console.print("[red]No programs in project[/red]")
-                raise typer.Exit(1)
-
-            domain_file = programs[0]
-            program = domain_file.getDomainObject(project, False, False, TaskMonitor.DUMMY)
-
-            try:
-                addr_factory = program.getAddressFactory()
-                addr = addr_factory.getAddress(f"0x{addr_int:08x}")
-
-                func_mgr = program.getFunctionManager()
-                ref_mgr = program.getReferenceManager()
-
-                func = func_mgr.getFunctionContaining(addr)
-                func_name = func.getName() if func else f"0x{addr_int:08X}"
-
-                table = Table(title=f"References {'to' if direction == 'to' else 'from'} {func_name}")
-                table.add_column("Address", style="cyan")
-                table.add_column("Function", style="yellow")
-                table.add_column("Type", style="dim")
-
-                if direction == "to":
-                    # Find references TO this address
-                    refs = ref_mgr.getReferencesTo(addr)
-                    for ref in refs:
-                        from_addr = ref.getFromAddress()
-                        from_func = func_mgr.getFunctionContaining(from_addr)
-                        from_name = from_func.getName() if from_func else "unknown"
-                        ref_type = str(ref.getReferenceType())
-                        table.add_row(f"0x{from_addr}", from_name, ref_type)
-                else:
-                    # Find references FROM this function
-                    if func:
-                        body = func.getBody()
-                        addr_iter = body.getAddresses(True)
-                        seen = set()
-                        while addr_iter.hasNext():
-                            cur_addr = addr_iter.next()
-                            refs = ref_mgr.getReferencesFrom(cur_addr)
-                            for ref in refs:
-                                to_addr = ref.getToAddress()
-                                to_func = func_mgr.getFunctionContaining(to_addr)
-                                if to_func:
-                                    to_name = to_func.getName()
-                                    if to_name not in seen:
-                                        seen.add(to_name)
-                                        ref_type = str(ref.getReferenceType())
-                                        table.add_row(f"0x{to_addr}", to_name, ref_type)
-
-                console.print(table)
-
-            finally:
-                program.release(project)
-
-    except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(1)
+    console.print(table)
 
 
 @ghidra_app.command("strings")
