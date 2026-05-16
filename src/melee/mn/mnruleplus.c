@@ -294,6 +294,8 @@ inline void mn_80232660_inline(HSD_JObj* jobj)
     mn_8022ED6C(jobj, settings);
 }
 
+#pragma push
+#pragma auto_inline off
 void mn_80232660(HSD_GObj* gobj, HSD_JObj* jobj, u8 option)
 {
     PAD_STACK(8);
@@ -310,12 +312,13 @@ void mn_80232660(HSD_GObj* gobj, HSD_JObj* jobj, u8 option)
         return;
     }
 }
+#pragma pop
 
 void mn_802327A4(HSD_GObj* gobj, u32 arg1, u32 arg2)
 {
+    HSD_JObj* option_roots[6];
     u16 jobj_map[17];
     HSD_JObj* jobj_parts[17];
-    HSD_JObj* option_roots[6];
     MenuRulesPlusData* data = gobj->user_data;
     u8 num_options = mn_803EB6B0[15].selection_count;
     s32 i, j, vis_count;
@@ -924,11 +927,11 @@ HSD_GObj* mn_80233218(MenuState state)
     }
 
     {
-        HSD_Text* text = user_data->description;
+        HSD_Text* text;
         u8 desc_idx;
         confirmed = mn_804A04F0.confirmed_selection;
-        if (text != NULL) {
-            HSD_SisLib_803A5CC4(text);
+        if (user_data->description != NULL) {
+            HSD_SisLib_803A5CC4(user_data->description);
             user_data->description = NULL;
         }
         if ((s32) selected == 0 || (s32) selected == 5) {
