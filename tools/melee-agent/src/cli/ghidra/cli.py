@@ -441,108 +441,45 @@ def ghidra_strings(
     address: Annotated[str | None, typer.Argument(help="Function address to search in")] = None,
     pattern: Annotated[str | None, typer.Option("--pattern", "-p", help="Search for strings matching pattern")] = None,
 ):
-    """Find string references in a function or search all strings.
+    """Find string references in a function, or search all strings by pattern."""
+    from .cache import CACHE_DB_PATH, get_function, get_strings_for_function, search_strings
 
-    Examples:
-        melee-agent ghidra strings 0x80243A3C  # Strings referenced by function
-        melee-agent ghidra strings --pattern "error"  # Search all strings
-    """
-    if not _init_ghidra():
+    if not CACHE_DB_PATH.exists():
+        console.print("[red]Cache not built.[/red] Run [cyan]melee-agent ghidra cache-build[/cyan].")
         raise typer.Exit(1)
 
-    import pyghidra
+    if address:
+        addr_str = address.lower().replace("0x", "")
+        try:
+            addr_int = int(addr_str, 16)
+        except ValueError:
+            console.print(f"[red]Invalid address:[/red] {address}")
+            raise typer.Exit(1)
+        func = get_function(CACHE_DB_PATH, addr_int)
+        if func is None:
+            console.print(f"[yellow]No function at 0x{addr_int:08X}[/yellow]")
+            raise typer.Exit(1)
+        table = Table(title=f"Strings in {func['name']}")
+        table.add_column("String", style="green")
+        for s in get_strings_for_function(CACHE_DB_PATH, func["addr"]):
+            table.add_row(s[:120])
+        console.print(table)
+        return
 
-    project_path = _get_project_path()
-    if not project_path.exists():
-        console.print("[red]No Ghidra project. Run:[/red] melee-agent ghidra setup")
-        raise typer.Exit(1)
+    if pattern:
+        table = Table(title=f"Strings matching '{pattern}'")
+        table.add_column("Address", style="cyan")
+        table.add_column("String", style="green")
+        rows = search_strings(CACHE_DB_PATH, pattern, limit=50)
+        for r in rows:
+            table.add_row(f"0x{r['addr']:08X}", r["value"][:120])
+        console.print(table)
+        if len(rows) == 50:
+            console.print("[dim]Showing first 50 results[/dim]")
+        return
 
-    try:
-        from ghidra.util.task import TaskMonitor
-
-        with pyghidra.open_project(str(project_path), GHIDRA_PROJECT_NAME) as project:
-            programs = list(project.getProjectData().getRootFolder().getFiles())
-            if not programs:
-                console.print("[red]No programs in project[/red]")
-                raise typer.Exit(1)
-
-            domain_file = programs[0]
-            program = domain_file.getDomainObject(project, False, False, TaskMonitor.DUMMY)
-
-            try:
-                addr_factory = program.getAddressFactory()
-                func_mgr = program.getFunctionManager()
-                ref_mgr = program.getReferenceManager()
-                listing = program.getListing()
-
-                if address:
-                    # Find strings referenced by a specific function
-                    addr_str = address.lower().replace("0x", "")
-                    addr_int = int(addr_str, 16)
-                    addr = addr_factory.getAddress(f"0x{addr_int:08x}")
-
-                    func = func_mgr.getFunctionContaining(addr)
-                    if not func:
-                        console.print(f"[yellow]No function at 0x{addr_int:08X}[/yellow]")
-                        raise typer.Exit(1)
-
-                    table = Table(title=f"Strings in {func.getName()}")
-                    table.add_column("Address", style="cyan")
-                    table.add_column("String", style="green")
-
-                    body = func.getBody()
-                    addr_iter = body.getAddresses(True)
-                    seen = set()
-
-                    while addr_iter.hasNext():
-                        cur_addr = addr_iter.next()
-                        refs = ref_mgr.getReferencesFrom(cur_addr)
-                        for ref in refs:
-                            to_addr = ref.getToAddress()
-                            data = listing.getDataAt(to_addr)
-                            if data and data.hasStringValue():
-                                str_val = str(data.getValue())
-                                if str_val not in seen:
-                                    seen.add(str_val)
-                                    table.add_row(f"0x{to_addr}", str_val[:80])
-
-                    console.print(table)
-
-                elif pattern:
-                    # Search all strings for pattern
-                    import re
-                    regex = re.compile(pattern, re.IGNORECASE)
-
-                    table = Table(title=f"Strings matching '{pattern}'")
-                    table.add_column("Address", style="cyan")
-                    table.add_column("String", style="green")
-
-                    # Iterate through defined strings
-                    data_iter = listing.getDefinedData(True)
-                    count = 0
-                    max_results = 50
-
-                    for data in data_iter:
-                        if count >= max_results:
-                            break
-                        if data.hasStringValue():
-                            str_val = str(data.getValue())
-                            if regex.search(str_val):
-                                table.add_row(f"0x{data.getAddress()}", str_val[:80])
-                                count += 1
-
-                    console.print(table)
-                    if count >= max_results:
-                        console.print(f"[dim]Showing first {max_results} results[/dim]")
-                else:
-                    console.print("[yellow]Specify an address or --pattern[/yellow]")
-
-            finally:
-                program.release(project)
-
-    except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(1)
+    console.print("[yellow]Specify an address or --pattern[/yellow]")
+    raise typer.Exit(1)
 
 
 @ghidra_app.command("func")
