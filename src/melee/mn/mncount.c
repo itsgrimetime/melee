@@ -638,26 +638,29 @@ void fn_802514D8(HSD_GObj* gobj)
 {
     MnCountData* userdata = GET_MNCOUNT(gobj);
     HSD_GObjProc* proc;
+    int label_zero;
+    int value_zero;
+    int i;
     PAD_STACK(16);
     if (mn_804A04F0.cur_menu != MENU_KIND_RECORDS_MISC) {
         HSD_GObjProc_8038FE24(HSD_GObj_804D7838);
         proc = HSD_GObj_SetupProc(gobj, fn_802514B8, 0);
+        i = 0;
         proc->flags_3 = HSD_GObj_804D783C;
+        label_zero = i;
+        value_zero = i;
         {
-            // inline_free_text
-
             MnCountData* userdata2 = GET_MNCOUNT(gobj);
             MnCountData* userdata3 = userdata2;
-            int i;
 
-            for (i = 0; i < MNCOUNT_VISIBLE_ROWS; i++) {
+            for (; i < MNCOUNT_VISIBLE_ROWS; i++) {
                 if (userdata2->labels[i] != NULL) {
                     HSD_SisLib_803A5CC4(userdata3->labels[i]);
-                    userdata2->labels[i] = NULL;
+                    userdata2->labels[i] = (HSD_Text*) label_zero;
                 }
                 if (userdata2->values[i] != NULL) {
                     HSD_SisLib_803A5CC4(userdata3->values[i]);
-                    userdata2->values[i] = NULL;
+                    userdata2->values[i] = (HSD_Text*) value_zero;
                 }
             }
 
