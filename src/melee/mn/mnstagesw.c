@@ -65,7 +65,7 @@ extern StaticModelDesc MenMainCursorSs_Top;
 /* 235DC8 */ static void mnStageSw_80235DC8(u8* user_data, s32 buttons);
 /* 235F80 */ static void fn_80235F80(HSD_GObj* gobj);
 /* 236178 */ static void mnStageSw_80236178(HSD_GObj* gobj, u8 idx);
-/* 2364A0 */ static HSD_JObj* mnStageSw_802364A0(HSD_GObj* gobj, u8 idx);
+/* 2364A0 */ static HSD_JObj* mnStageSw_802364A0(MnStageSwData* data, u8 idx);
 /* 236548 */ static void mnStageSw_80236548(HSD_GObj* gobj, u8 arg1, u8 arg2);
 /* 236998 */ static void fn_80236998(HSD_GObj* gobj);
 /* 236CBC */ static HSD_GObj* mnStageSw_80236CBC(s8 arg0);
@@ -400,28 +400,28 @@ static void mnStageSw_80236178(HSD_GObj* gobj, u8 idx)
                       HSD_JObjGetTranslationY((HSD_JObj*) gobj->user_data));
     }
 }
-static HSD_JObj* mnStageSw_802364A0_noinline(HSD_GObj* gobj, u8 idx);
-static HSD_JObj* mnStageSw_802364A0_noinline(HSD_GObj* gobj, u8 idx)
+static HSD_JObj* mnStageSw_802364A0_noinline(MnStageSwData* data, u8 idx);
+static HSD_JObj* mnStageSw_802364A0_noinline(MnStageSwData* data, u8 idx)
 {
-    return mnStageSw_802364A0(gobj, idx);
+    return mnStageSw_802364A0(data, idx);
 }
 
 /// Get JObj for stage icon at given index
-/// Navigates JObj tree stored in gobj->user_data (idx < 15) or gobj->x34_unk
+/// Navigates JObj tree stored in data->x2C (idx < 15) or data->x34
 /// (idx >= 15)
-static HSD_JObj* mnStageSw_802364A0(HSD_GObj* gobj, u8 idx)
+static HSD_JObj* mnStageSw_802364A0(MnStageSwData* data, u8 idx)
 {
     HSD_JObj* jobj;
     u8 i;
 
     if (idx >= 15) {
-        jobj = HSD_JObjGetChild(gobj->x34_unk);
+        jobj = HSD_JObjGetChild(data->x34);
         for (i = 15; i < idx; i++) {
             jobj = HSD_JObjGetNext(jobj);
         }
         return jobj;
     }
-    jobj = HSD_JObjGetChild(gobj->user_data);
+    jobj = HSD_JObjGetChild(data->x2C);
     for (i = 0; i < idx; i++) {
         jobj = HSD_JObjGetNext(jobj);
     }
@@ -443,12 +443,12 @@ static void mnStageSw_80236548(HSD_GObj* gobj, u8 arg1, u8 arg2)
 
     data = gobj->user_data;
     if (arg1 != 0) {
-        jobj = mnStageSw_802364A0_noinline(gobj, data->x1);
+        jobj = mnStageSw_802364A0_noinline(data, data->x1);
         lb_80011E24(jobj, &sp44, 3, -1);
         HSD_JObjSetFlagsAll(sp44, JOBJ_HIDDEN);
         frame = mn_8022F298(sp44);
         sel = (u8) mn_804A04F0.hovered_selection;
-        jobj = mnStageSw_802364A0_noinline(gobj, sel);
+        jobj = mnStageSw_802364A0_noinline(data, sel);
         lb_80011E24(jobj, &sp44, 3, -1);
         HSD_JObjClearFlagsAll(sp44, JOBJ_HIDDEN);
         HSD_JObjReqAnimAll(sp44, frame);
@@ -458,14 +458,12 @@ static void mnStageSw_80236548(HSD_GObj* gobj, u8 arg1, u8 arg2)
         delta_y = HSD_JObjGetTranslationY(data->x30) -
                   HSD_JObjGetTranslationY(data->x2C);
         if (sel < 15) {
-            HSD_JObjSetTranslateX(cursor,
-                                  HSD_JObjGetTranslationX(data->x2C));
+            HSD_JObjSetTranslateX(cursor, HSD_JObjGetTranslationX(data->x2C));
             HSD_JObjSetTranslateY(cursor,
                                   delta_y * (f32) sel +
                                       HSD_JObjGetTranslationY(data->x2C));
         } else {
-            HSD_JObjSetTranslateX(cursor,
-                                  HSD_JObjGetTranslationX(data->x34));
+            HSD_JObjSetTranslateX(cursor, HSD_JObjGetTranslationX(data->x34));
             HSD_JObjSetTranslateY(cursor,
                                   delta_y * (f32) (sel - 15) +
                                       HSD_JObjGetTranslationY(data->x2C));
@@ -473,7 +471,7 @@ static void mnStageSw_80236548(HSD_GObj* gobj, u8 arg1, u8 arg2)
     }
     if (arg2 != 0) {
         sel = mn_804A04F0.confirmed_selection;
-        jobj = mnStageSw_802364A0_noinline(gobj,
+        jobj = mnStageSw_802364A0_noinline(data,
                                            (u8) mn_804A04F0.hovered_selection);
         lb_80011E24(jobj, &sp3C, 2, -1);
         HSD_JObjReqAnimAll(sp3C, sel);
@@ -484,7 +482,7 @@ static void mnStageSw_80236548(HSD_GObj* gobj, u8 arg1, u8 arg2)
     } else {
         hovered = data->x1;
     }
-    temp = mnStageSw_802364A0_noinline(gobj, (u8) hovered);
+    temp = mnStageSw_802364A0_noinline(data, (u8) hovered);
     lb_80011E24(temp, &sp44, 3, -1);
     mn_8022ED6C(sp44, mnStageSw_803ED488);
 }
@@ -565,7 +563,7 @@ static void fn_80236998(HSD_GObj* gobj)
                 HSD_JObjClearFlagsAll(data->x2C, JOBJ_HIDDEN);
                 HSD_JObjClearFlagsAll(data->x34, JOBJ_HIDDEN);
                 for (i = 0; i < NUM_STAGES; i++) {
-                    jobj = mnStageSw_802364A0_noinline(gobj, i);
+                    jobj = mnStageSw_802364A0_noinline(data, i);
                     if (i != data->x1) {
                         lb_80011E24(jobj, &child, 3, -1);
                         HSD_JObjSetFlagsAll(child, JOBJ_HIDDEN);
