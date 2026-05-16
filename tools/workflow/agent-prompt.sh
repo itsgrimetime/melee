@@ -154,8 +154,17 @@ melee-agent attempts record <fn> --outcome <kind> --note "..."  # log saturation
 
 ## Opening the PR (you're empowered to do it yourself)
 
-Don't open a PR that's only data-section refinement on a partially-matched TU
-(see rule above). Otherwise:
+Bar: substantial enough to be worth a maintainer's review cycle. Aim for
+multiple matches or one fn reaching 100% as part of moving a TU forward.
+Not OK as standalone PRs (per pr-scope-expectations memory):
+- Single partial-match nudge (one fn 89% → 95%, no 100%) — too thin.
+- Data-section-only refinement on a TU whose .text isn't fully matched.
+- Header tidies alone — fine bundled WITH matches, never the headline.
+
+If you only have one small win after a long iteration, keep it as a wip:
+commit and let the next session pile on before opening.
+
+When the bar is met:
 
   ./tools/workflow/create-pr.sh $MODULE-<short-topic>
   git push origin pr/$MODULE-<short-topic>
