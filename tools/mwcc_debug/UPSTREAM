@@ -1,0 +1,11 @@
+Upstream: https://github.com/Savestate2A03/mwcc_debug
+Author:   Rei El-Khouri (Savestate2A03)
+License:  None specified upstream; vendored here for internal melee-decomp tooling use only.
+          Do not redistribute. If PoC succeeds, contact author about licensing.
+
+Pinned commit: c18a6d7b3f0b2ad9a7865bfdde0e73260f56273d
+
+To update:
+  1. Re-run the download in Task 1 of docs/mwcc-debug-poc-plan.md with a new SHA.
+  2. Update this file with the new SHA.
+  3. Verify Makefile still produces a working DLL (Task 4).
