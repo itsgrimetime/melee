@@ -17,7 +17,11 @@ _SEARCH_PATHS: list[Path] = [
 
 
 def _is_valid_install(path: Path) -> bool:
-    return path.is_dir() and (path / "application.properties").is_file()
+    """A path is a valid Ghidra install if application.properties lives
+    either directly under it, or under a `Ghidra/` subdir (Homebrew layout)."""
+    if not path.is_dir():
+        return False
+    return (path / "application.properties").is_file() or (path / "Ghidra" / "application.properties").is_file()
 
 
 def _search_path(root: Path) -> Path | None:

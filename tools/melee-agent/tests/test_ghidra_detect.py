@@ -48,4 +48,21 @@ class TestDetectGhidraInstall:
         fake = tmp_path / "fake_ghidra"
         fake.mkdir()
         monkeypatch.setenv("GHIDRA_INSTALL_DIR", str(fake))
+        from src.cli.ghidra import detect as detect_mod
+        monkeypatch.setattr(detect_mod, "_SEARCH_PATHS", [])
         assert detect() is None
+
+    def test_finds_install_with_nested_ghidra_subdir(self, detect, tmp_path, monkeypatch):
+        """Homebrew layout: application.properties lives at <root>/libexec/Ghidra/."""
+        # Simulate the real homebrew layout
+        cellar = tmp_path / "Cellar" / "ghidra"
+        version = cellar / "12.0.1"
+        libexec = version / "libexec"
+        (libexec / "Ghidra").mkdir(parents=True)
+        (libexec / "Ghidra" / "application.properties").write_text("application.name=Ghidra\n")
+        # libexec itself does NOT have application.properties (that's the bug being fixed)
+        monkeypatch.delenv("GHIDRA_INSTALL_DIR", raising=False)
+        from src.cli.ghidra import detect as detect_mod
+        monkeypatch.setattr(detect_mod, "_SEARCH_PATHS", [cellar])
+        # Should detect libexec as the install dir (pyghidra accepts it)
+        assert detect() == libexec
