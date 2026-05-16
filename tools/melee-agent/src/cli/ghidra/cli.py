@@ -225,7 +225,7 @@ import must be done via the Ghidra GUI.
 
 [cyan]2.[/cyan] Create the project:
    File → New Project → Non-Shared Project
-   Location: [green]{project_path.parent}[/green]
+   Location: [green]{project_path}[/green]
    Name:     [green]{GHIDRA_PROJECT_NAME}[/green]
 
 [cyan]3.[/cyan] Import the DOL:
