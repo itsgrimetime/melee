@@ -1,168 +1,55 @@
 ---
 name: ghidra
-description: Use Ghidra decompiler for cross-references, type inference, and alternative decompilation views. Complements m2c workflow. Use when you need to find callers/callees, see Ghidra's type inference, or get a second opinion on complex functions.
+description: Use cached Ghidra-derived xrefs and string lookups (fast SQLite queries) for cross-reference discovery and string-based naming. Also offers live Ghidra decompile as a heavy fallback. Use when finding callers across the whole binary or naming functions from debug strings.
 ---
 
-# Ghidra Integration
+# Ghidra Integration (cache-backed)
 
-Ghidra provides an alternative decompiler view that complements the primary m2c workflow. It's particularly useful for:
+Two ways agents use Ghidra data, distinguished by cost:
 
-- **Cross-references**: Find who calls a function, or what a function calls
-- **Type inference**: See Ghidra's guesses at struct types and parameters
-- **Second opinion**: When m2c output is confusing, Ghidra may clarify
-- **String discovery**: Find debug strings and error messages in functions
+| Need | Command | Cost |
+|------|---------|------|
+| Who calls this function (anywhere in the binary)? | `melee-agent ghidra xrefs 0x80<addr>` | <1ms (cache) |
+| What does this function call? | `melee-agent ghidra xrefs 0x80<addr> --dir from` | <1ms |
+| What strings does this function reference? | `melee-agent ghidra strings 0x80<addr>` | <1ms |
+| Find functions that reference a string pattern. | `melee-agent ghidra strings --pattern XYZ` | <1ms |
+| Function metadata (name, size, caller/callee counts). | `melee-agent ghidra func 0x80<addr>` | <1ms |
+| Second-opinion decompilation. | `melee-agent ghidra decompile 0x80<addr>` | ~20s (JVM) |
 
-## Prerequisites
+The fast commands query a SQLite cache at `~/.config/decomp-me/ghidra.db`. The heavy `decompile` command boots a real Ghidra instance.
 
-Ghidra must be set up before use:
-
-```bash
-# Check status
-melee-agent ghidra status
-```
-
-If not set up, follow these steps:
-
-1. **Install Ghidra 12.0+** from https://ghidra-sre.org
-2. **Set environment variable**:
-   ```bash
-   export GHIDRA_INSTALL_DIR=/path/to/ghidra_12.0_PUBLIC
-   ```
-3. **Install pyghidra**:
-   ```bash
-   pip install pyghidra
-   ```
-4. **Install GameCube loader**:
-   - Download from https://github.com/Cuyler36/Ghidra-GameCube-Loader/releases
-   - In Ghidra: File → Install Extensions → + → select ZIP
-   - Restart Ghidra
-5. **Create project** (must be done via GUI due to loader bug):
-   - Open Ghidra GUI
-   - File → New Project → Non-Shared Project
-   - Location: `.ghidra_project/` in repo root
-   - Name: `melee`
-   - File → Import File → select `orig/GALE01/sys/main.dol`
-   - Wait for analysis (5-10 minutes)
-   - Close Ghidra
-6. **Link project**:
-   ```bash
-   melee-agent ghidra setup
-   ```
-
-## Commands
-
-### Decompile a Function
-
-Get Ghidra's decompilation of a function:
+## Setup (one-time)
 
 ```bash
-melee-agent ghidra decompile 0x80243A3C
-melee-agent ghidra decompile 80243A3C --raw  # No formatting
+melee-agent ghidra status         # check what's missing
+melee-agent ghidra setup          # guided GUI import (~5-10 min)
+melee-agent ghidra cache-build    # populate the cache (~minutes)
 ```
 
-**When to use:**
-- m2c output is confusing or incomplete
-- You want to see different variable names/types
-- Complex control flow needs a second opinion
+After this, agent-loop commands work without further setup.
 
-### Find Cross-References
+## When to use vs other tools
 
-Find who calls a function (callers):
-
-```bash
-melee-agent ghidra xrefs 0x80243A3C           # Who calls this?
-melee-agent ghidra xrefs 0x80243A3C --dir to  # Same (default)
-```
-
-Find what a function calls (callees):
-
-```bash
-melee-agent ghidra xrefs 0x80243A3C --dir from  # What does this call?
-```
-
-**When to use:**
-- Understanding call graphs
-- Finding all callers before changing a signature
-- Discovering related functions
-
-### Find Strings
-
-Find string references in a function:
-
-```bash
-melee-agent ghidra strings 0x80243A3C
-```
-
-Search for strings by pattern:
-
-```bash
-melee-agent ghidra strings --pattern "error"
-melee-agent ghidra strings --pattern "assert"
-```
-
-**When to use:**
-- Finding debug messages that reveal function purpose
-- Discovering error handling paths
-- Understanding what a function does from its strings
-
-### Get Function Info
-
-Get metadata about a function:
-
-```bash
-melee-agent ghidra func 0x80243A3C
-```
-
-Shows: name, entry point, size, calling convention, return type, parameters.
-
-**When to use:**
-- Quick overview of function signature
-- Checking Ghidra's inferred parameter types
-- Understanding function size/complexity
-
-## When to Use Ghidra vs m2c
-
-| Task | Use |
-|------|-----|
-| Initial decompilation | m2c (`tools/decomp.py`) |
-| Matching/iterating | m2c + checkdiff |
-| Finding callers | Ghidra xrefs |
-| Type confusion | Try both, compare |
-| Debug strings | Ghidra strings |
-| Call graph | Ghidra xrefs |
-| Complex control flow | Try both |
-
-## Example Workflow
-
-When stuck on a function:
-
-```bash
-# 1. Get Ghidra's view
-melee-agent ghidra decompile 0x80243A3C
-
-# 2. Find what it calls (might reveal purpose)
-melee-agent ghidra xrefs 0x80243A3C --dir from
-
-# 3. Find who calls it (context from callers)
-melee-agent ghidra xrefs 0x80243A3C
-
-# 4. Check for debug strings
-melee-agent ghidra strings 0x80243A3C
-```
+| Task | Preferred |
+|------|-----------|
+| Matching code → assembly | m2c + `tools/checkdiff.py` |
+| Finding callers (whole binary) | `ghidra xrefs --dir to` |
+| Finding callees | `ghidra xrefs --dir from` |
+| Naming an unknown function | `ghidra strings` (debug strings) + `/understand` |
+| Complex control flow, m2c output unclear | `ghidra decompile` (heavy) |
+| Patterns / register tricks | `/mismatch-db`, `/discord-knowledge` |
 
 ## Limitations
 
-- **Slower than m2c**: Ghidra startup takes time
-- **Different output**: Ghidra's C style differs from project conventions
-- **Type inference varies**: Ghidra may infer different (sometimes wrong) types
-- **Not for matching**: Use m2c + checkdiff for actual matching work
+- **Decompile is slow** — JVM startup is ~20s per call. Use sparingly.
+- **Cache is built once** — rebuild manually if the Ghidra project gets re-analyzed.
+- **Ghidra function names ≠ project symbol names** — the cache stores Ghidra's names; if our `symbols.txt` has renamed a function, look up by address, not by name.
 
 ## Troubleshooting
 
-| Issue | Solution |
-|-------|----------|
-| "GHIDRA_INSTALL_DIR not set" | Export the environment variable |
+| Symptom | Fix |
+|---------|-----|
+| "Cache not built" | `melee-agent ghidra cache-build` |
+| "Project is not populated" | `melee-agent ghidra setup` (manual GUI step) |
+| "Ghidra install not found" | `brew install ghidra` |
 | "pyghidra not installed" | `pip install pyghidra` |
-| "No Ghidra project" | Run `melee-agent ghidra setup` after GUI import |
-| "No function at address" | Run Ghidra analysis or check address |
-| Slow startup | Normal - Ghidra JVM takes time to initialize |
