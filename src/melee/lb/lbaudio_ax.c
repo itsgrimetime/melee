@@ -112,7 +112,7 @@ void fn_80023254(s32 arg0)
     int* shift_ptr;
     int i;
 
-    arr_b44 = lbl_80433710.x434;
+    arr_b44 = lbl_80433B44;
     local_ptr = local_arr;
     for (i = 0; i < 7; i++) {
         arr_b44[0] = 0x37;
@@ -135,7 +135,7 @@ void fn_80023254(s32 arg0)
         local_ptr += 8;
     }
 
-    arr_b44 = lbl_80433710.x434;
+    arr_b44 = lbl_80433B44;
 
     for (count = 0; count <= 0x37; count++) {
         local_ptr = local_arr;
@@ -157,7 +157,7 @@ void fn_80023254(s32 arg0)
             }
 
             if (count < 0x37) {
-                shift_ptr = &lbl_80433710.x434[0x37];
+                shift_ptr = &lbl_80433B44[0x37];
                 n = 0x37 - count;
 
                 if ((n >> 3) != 0) {
@@ -2034,8 +2034,8 @@ s32 fn_80026650(void)
 
     for (priority = 4; priority >= 0; priority--) {
         s8(*arr_5d0)[4] = s32_arr_803BB5D0;
-        int* arr_38a4 = lbl_80433710.x194;
-        int* arr_3984 = lbl_80433710.x274;
+        int* arr_38a4 = lbl_804338A4;
+        int* arr_3984 = lbl_80433984;
 
         for (i = 0; i < 0x37; i++) {
             if (priority == arr_5d0[i][1] && arr_38a4[i] == 1 &&
@@ -2420,8 +2420,8 @@ void lbAudioAx_80027168(void)
 
 s32 fn_80027488(void)
 {
-    int* a = lbl_80433710.x194;
-    int* b = lbl_80433710.x274;
+    int* a = lbl_804338A4;
+    int* b = lbl_80433984;
     int i;
 
     for (i = 0; i < 55; i++) {
@@ -2441,8 +2441,8 @@ s32 fn_80027488(void)
 
 void lbAudioAx_80027648(void)
 {
-    int* a = lbl_80433710.x194;
-    int* b = lbl_80433710.x274;
+    int* a = lbl_804338A4;
+    int* b = lbl_80433984;
     int i;
     s32 result = 0;
 
