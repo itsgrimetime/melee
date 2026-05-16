@@ -298,7 +298,7 @@ void fn_8022F538(HSD_GObj* arg0)
     }
 }
 
-void mn_8022FB88(u8 arg0, void* arg1)
+void mn_8022FB88(u8 arg0, struct mn_8022FB88_arg1_t* arg1)
 {
     struct mn_8022FB88_arg1_t* data = arg1;
     u8* sp14;
