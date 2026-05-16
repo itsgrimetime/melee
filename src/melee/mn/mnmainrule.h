@@ -40,7 +40,7 @@ struct mn_8022FB88_arg1_t;
 /* 22F538 */ void fn_8022F538(HSD_GObj*);
 /* 22FB88 */ void mn_8022FB88(u8, struct mn_8022FB88_arg1_t*);
 /* 22FD18 */ void mn_8022FD18(u8);
-/* 22FEC8 */ void mn_8022FEC8(HSD_GObj*, HSD_JObj*, u8, u8);
+/* 22FEC8 */ void mn_8022FEC8(struct mn_8022FB88_arg1_t*, HSD_JObj*, u8, u8);
 /* 230198 */ void mn_80230198(HSD_GObj*, HSD_JObj*, u8);
 /* 230274 */ void mn_80230274(HSD_GObj*, int, int);
 /* 2307F8 */ void mn_802307F8(struct mn_802307F8_t*, s32, s32);

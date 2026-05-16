@@ -403,7 +403,8 @@ void mn_8022FD18(u8 arg0)
     HSD_JObjAnimAll(jobj);
 }
 
-void mn_8022FEC8(HSD_GObj* arg0, HSD_JObj* arg1, u8 arg2, u8 arg3)
+void mn_8022FEC8(struct mn_8022FB88_arg1_t* arg0, HSD_JObj* arg1, u8 arg2,
+                 u8 arg3)
 {
     HSD_JObj* temp_r28;
     HSD_JObj* temp_r28_2;
@@ -417,7 +418,7 @@ void mn_8022FEC8(HSD_GObj* arg0, HSD_JObj* arg1, u8 arg2, u8 arg3)
     u8* base;
     PAD_STACK(24);
 
-    temp_r31 = arg0->user_data;
+    temp_r31 = arg0;
     base = mn_803EC600;
     switch (arg2) {
     case 1:
@@ -621,9 +622,9 @@ void mn_80230274(HSD_GObj* arg0, int arg1, int arg2)
     }
 
     if (arg2 != 0) {
-        mn_8022FEC8(arg0, data->x34[mn_804A04F0.hovered_selection].x0,
-                    mn_804A04F0.hovered_selection,
-                    mn_804A04F0.confirmed_selection);
+        mn_8022FEC8(
+            arg0->user_data, data->x34[mn_804A04F0.hovered_selection].x0,
+            mn_804A04F0.hovered_selection, mn_804A04F0.confirmed_selection);
     }
 
     for (i = 0; i < count; i++) {
