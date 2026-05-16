@@ -728,12 +728,37 @@ HSD_GObj* mn_80233218(MenuState state)
     GameRules* rules;
     PAD_STACK(16);
 
-    for (i = 0; i < 17; i++) {
-        jobj_map[i] = (u16) i;
-    }
-
     selected = (u8) mn_804A04F0.hovered_selection;
     num_options = mn_803EB6B0[15].selection_count;
+
+    jobj_map[0] = 0;
+    jobj_map[1] = 1;
+    jobj_map[2] = 2;
+    jobj_map[3] = 3;
+    jobj_map[4] = 4;
+    jobj_map[5] = 5;
+    jobj_map[6] = 6;
+    jobj_map[7] = 7;
+    jobj_map[8] = 8;
+    jobj_map[9] = 9;
+    jobj_map[10] = 10;
+    jobj_map[11] = 11;
+    jobj_map[12] = 12;
+    jobj_map[13] = 13;
+    jobj_map[14] = 14;
+    jobj_map[15] = 15;
+    {
+        u16 val = 0x10;
+        u16* p = jobj_map + 16;
+        s32 ctr = 17 - 16;
+        if (16 < 17) {
+            do {
+                *p = val;
+                p++;
+                val++;
+            } while (--ctr);
+        }
+    }
 
     gobj = GObj_Create(6, 7, 0x80);
     mn_804D6BE0 = gobj;
