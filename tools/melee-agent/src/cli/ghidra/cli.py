@@ -24,9 +24,9 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 
-from .._common import console, get_agent_melee_root, get_base_dol_path
+from .._common import console, DECOMP_CONFIG_DIR, get_agent_melee_root, get_base_dol_path
 from .detect import detect_ghidra_install
-from .project import ghidra_project_dir, GHIDRA_PROJECT_NAME, is_project_populated  # noqa: F401
+from .project import ghidra_project_dir, GHIDRA_PROJECT_NAME, is_project_populated
 
 ghidra_app = typer.Typer(help="Ghidra decompilation tools (alternative to m2c)")
 
@@ -117,45 +117,65 @@ def _get_dol_path() -> Path:
 
 @ghidra_app.command("status")
 def ghidra_status():
-    """Check Ghidra installation and project status."""
-    ok, msg = _check_ghidra_prereqs()
+    """Check Ghidra installation, project, and DOL availability."""
+    rows: list[tuple[str, str, str]] = []  # (state, label, detail)
 
-    if ok:
-        console.print(f"[green]✓[/green] {msg}")
+    # Install
+    install = detect_ghidra_install()
+    if install is not None:
+        rows.append(("ok", "Ghidra install", str(install)))
+        os.environ["GHIDRA_INSTALL_DIR"] = str(install)
     else:
-        console.print(f"[red]✗[/red] {msg}")
-        console.print("\n[bold]Setup Instructions:[/bold]")
-        console.print("""
-1. Download Ghidra 12.0+ from https://ghidra-sre.org
-2. Extract and set environment variable:
-   [cyan]export GHIDRA_INSTALL_DIR=/path/to/ghidra_12.0_PUBLIC[/cyan]
+        rows.append((
+            "fail", "Ghidra install",
+            "not found — install with 'brew install ghidra' or download from ghidra-sre.org"
+        ))
 
-3. Install pyghidra:
-   [cyan]pip install pyghidra[/cyan]
+    # pyghidra
+    try:
+        import pyghidra
+        rows.append(("ok", "pyghidra", getattr(pyghidra, "__version__", "installed")))
+    except ImportError:
+        rows.append(("fail", "pyghidra", "not installed — run 'pip install pyghidra'"))
 
-4. Install GameCube loader extension:
-   - Download from https://github.com/Cuyler36/Ghidra-GameCube-Loader/releases
-   - In Ghidra: File → Install Extensions → + → select ZIP
-   - Restart Ghidra
+    # DOL
+    dol = _get_dol_path()
+    if dol.exists():
+        rows.append(("ok", "DOL binary", str(dol)))
+    else:
+        rows.append(("fail", "DOL binary", f"not found at {dol}"))
 
-5. Create project:
-   [cyan]melee-agent ghidra setup[/cyan]
-""")
-        return
-
-    # Check project status
+    # Project
     project_path = _get_project_path()
-    if project_path.exists():
-        console.print(f"[green]✓[/green] Ghidra project: {project_path}")
+    gpr = project_path / f"{GHIDRA_PROJECT_NAME}.gpr"
+    if gpr.exists():
+        if is_project_populated(project_path):
+            rows.append(("ok", "Ghidra project", f"{project_path} (populated)"))
+        else:
+            rows.append((
+                "warn", "Ghidra project",
+                f"{project_path} (empty — DOL not imported; run 'melee-agent ghidra setup')"
+            ))
     else:
-        console.print(f"[yellow]![/yellow] No Ghidra project. Run: [cyan]melee-agent ghidra setup[/cyan]")
+        rows.append((
+            "warn", "Ghidra project",
+            f"missing at {project_path} — run 'melee-agent ghidra setup'"
+        ))
 
-    # Check DOL
-    dol_path = _get_dol_path()
-    if dol_path.exists():
-        console.print(f"[green]✓[/green] DOL binary: {dol_path}")
+    # Cache (will be populated in Phase 2)
+    cache_db = DECOMP_CONFIG_DIR / "ghidra.db"
+    if cache_db.exists():
+        size_mb = cache_db.stat().st_size / 1024 / 1024
+        rows.append(("ok", "Cache DB", f"{cache_db} ({size_mb:.1f} MB)"))
     else:
-        console.print(f"[yellow]![/yellow] DOL not found at: {dol_path}")
+        rows.append((
+            "warn", "Cache DB",
+            "not built — run 'melee-agent ghidra cache-build' for fast xrefs/strings"
+        ))
+
+    for state, label, detail in rows:
+        icon = {"ok": "[green]✓[/green]", "warn": "[yellow]![/yellow]", "fail": "[red]✗[/red]"}[state]
+        console.print(f"{icon} [bold]{label}[/bold]: {detail}")
 
 
 @ghidra_app.command("setup")
