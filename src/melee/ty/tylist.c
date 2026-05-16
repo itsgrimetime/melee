@@ -475,8 +475,8 @@ loop:
             __assert(&un_804D5A78, 0x234, &un_804D5A80);
         }
         {
-            u32 flags = jobj->flags;
             s32 skip = 0;
+            u32 flags = jobj->flags;
             if ((flags & 0x800000) == 0 && (flags & 0x40)) {
                 skip = 1;
             }

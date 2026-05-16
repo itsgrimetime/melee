@@ -63,6 +63,10 @@ extern s32 un_804D6F00;
 extern char un_803FE5E8[];
 extern void* un_804D6EF8;
 
+/* .sdata assert strings */
+char un_804D5A90[8] = "jobj.h";
+char un_804D5A98[8] = "jobj";
+
 /* .data string literals for tyfigupon.c */
 static char str_panel_joint[] = "ToyFigurePonPanel_Top_joint";
 static char str_bg_joint[] = "ToyFigurePonBg_Top_joint";
@@ -76,6 +80,9 @@ static char str_file[] = "tyfigupon.c";
 static u16 str_jobj_indices[] = {
     0x4, 0x2, 0x3, 0x5, 0x6, 0x7, 0x8, 0x9, 0xD, 0xA, 0xB, 0xC, 0xE,
 };
+/* Padding aligns str_err_bg to match original (jumptables + lbl original
+ * occupied this slot at offset 0xE0-0x150 in .data). */
+static u8 _pad_err_bg[140] = { 0 };
 static char str_err_bg[] = "*** BG data aren't being loaded!\n";
 static char str_panel_smash_matanim[] =
     "ToyFigurePonPanel_zsmash_matanim_joint";
@@ -102,14 +109,10 @@ static char str_par_matanim[] = "ToyFigurePonPar_Top_matanim_joint";
 static char str_par_shapeanim[] = "ToyFigurePonPar_Top_shapeanim_joint";
 static char str_err_panel[] = "*** Can not Load Panel Label(%s)\n";
 static char str_scene_lights[] = "ScMenFigure_scene_lights";
-static char str_sdtoy_jp[] = "SdToy.dat";
-static char str_sdtoy_data_jp[] = "SIS_ToyData";
-static char str_sdtoy_us[] = "SdToy.usd";
-static char str_sdtoy_data_us[] = "SIS_ToyData_E";
-static char str_nget_joint[] = "ToyFigurePonNget_Top_joint";
-static char str_nget_animjoint[] = "ToyFigurePonNget_Top_animjoint";
-static char str_nget_matanim[] = "ToyFigurePonNget_Top_matanim_joint";
-static char str_nget_shapeanim[] = "ToyFigurePonNget_Top_shapeanim_joint";
+
+/* Padding to align tyfigupon_cam_desc to offset 0x4EC in .data.
+ * Reduced from 180 because _pad_err_bg accounts for 140 bytes earlier. */
+static u8 _pad_to_cam_desc[40] = { 0 };
 
 static HSD_CameraDescPerspective tyfigupon_cam_desc = {
     NULL,
@@ -126,6 +129,15 @@ static HSD_CameraDescPerspective tyfigupon_cam_desc = {
     40.0f,
     1.2173333f,
 };
+
+static char str_sdtoy_jp[] = "SdToy.dat";
+static char str_sdtoy_data_jp[] = "SIS_ToyData";
+static char str_sdtoy_us[] = "SdToy.usd";
+static char str_sdtoy_data_us[] = "SIS_ToyData_E";
+static char str_nget_joint[] = "ToyFigurePonNget_Top_joint";
+static char str_nget_animjoint[] = "ToyFigurePonNget_Top_animjoint";
+static char str_nget_matanim[] = "ToyFigurePonNget_Top_matanim_joint";
+static char str_nget_shapeanim[] = "ToyFigurePonNget_Top_shapeanim_joint";
 
 typedef struct {
     u8 pad[0x4D];
@@ -217,10 +229,9 @@ void tyFigupon_80314BE4(HSD_GObj* gobj, int unused)
 
 void tyFigupon_80314C5C(HSD_GObj* gobj)
 {
-    // 3-way regswap (r29-r30-r31) to 100%
+    HSD_JObj* jobj = GET_JOBJ(gobj);
     Toy* tp1 = GET_TOY(gobj);
     struct un_804D6EF4_t* temp_r29 = un_804D6EF4;
-    HSD_JObj* jobj = GET_JOBJ(gobj);
     PAD_STACK(40);
     if (tp1 != NULL) {
         if (tp1->x8 % 30 == 0) {
@@ -691,8 +702,12 @@ void fn_80316170(HSD_GObj* arg0)
 {
     // Somehow get rid of 0x8 stackspace and fix a regswap for 100%
     ToyAnimState* aa8 = &un_804A2AA8;
-    f32 y = HSD_JObjGetTranslationY(GET_JOBJ(arg0));
-    TyFiguponUD* ud = HSD_GObjGetUserData(arg0);
+    HSD_JObj* tmp_jobj = GET_JOBJ(arg0);
+    f32 y;
+    TyFiguponUD* ud;
+    ((tmp_jobj) ? ((void) 0) : __assert(un_804D5A90, 1006, un_804D5A98));
+    y = tmp_jobj->translate.y;
+    ud = HSD_GObjGetUserData(arg0);
 
     if (ud != NULL) {
         if (y + ud->x44 <= -6.2f) {
@@ -888,7 +903,6 @@ void fn_80316C24(HSD_GObj* arg0)
     struct un_804D6EF4_t* ef4 = un_804D6EF4;
     TyFiguponData* data = un_804D6EF0;
     f32 var_f31;
-    s32 anim_frame;
     s32 sc;
 
     if (ef4->x5C != 0) {
@@ -927,7 +941,7 @@ void fn_80316C24(HSD_GObj* arg0)
         un_803153EC(ef4->x5E, 6, 2, 0, 0);
         {
             struct un_804D6EF4_t* ef4_2 = un_804D6EF4;
-            anim_frame = 2;
+            s32 anim_frame = 2;
             if (ef4_2->x5E == 0x14) {
                 anim_frame = 3;
             }
@@ -988,7 +1002,7 @@ void fn_80316C24(HSD_GObj* arg0)
             un_803153EC(ef4->x5E, 6, 2, 0, 0);
             {
                 struct un_804D6EF4_t* ef4_4 = un_804D6EF4;
-                anim_frame = 1;
+                s32 anim_frame = 1;
                 if (ef4_4->x5E == 0x14) {
                     anim_frame = 3;
                 }
@@ -1048,7 +1062,7 @@ void fn_80316C24(HSD_GObj* arg0)
                 un_803153EC(ef4->x5E, 6, 2, 0, 0);
                 {
                     struct un_804D6EF4_t* ef4_6 = un_804D6EF4;
-                    anim_frame = 2;
+                    s32 anim_frame = 2;
                     if (ef4_6->x5E == 0x14) {
                         anim_frame = 3;
                     }
@@ -1096,7 +1110,7 @@ void fn_80316C24(HSD_GObj* arg0)
                 un_803153EC(ef4->x5E, 6, 2, 0, 0);
                 {
                     struct un_804D6EF4_t* ef4_8 = un_804D6EF4;
-                    anim_frame = 1;
+                    s32 anim_frame = 1;
                     if (ef4_8->x5E == 0x14) {
                         anim_frame = 3;
                     }
@@ -1135,7 +1149,7 @@ void fn_80316C24(HSD_GObj* arg0)
             }
         } else {
             struct un_804D6EF4_t* ef4_10 = un_804D6EF4;
-            anim_frame = 0;
+            s32 anim_frame = 0;
             if (ef4_10->x5E == 0x14) {
                 anim_frame = 3;
             }

@@ -89,6 +89,14 @@ typedef struct {
 } tyUnkStruct;
 
 typedef struct {
+    /* 0x00 */ void* x0;
+    /* 0x04 */ void* x4;
+    /* 0x08 */ void* x8;
+    /* 0x0C */ void* xC;
+    /* 0x10 */ void* x10;
+} TyCleanupObj;
+
+typedef struct {
     /* 0x00 */ u8 pad[0x50];
     /* 0x50 */ HSD_Archive* x50;
 } tyUnkStruct2;
@@ -269,10 +277,15 @@ typedef struct TyUnk25 {
     s16 x154;
 } TyUnk25;
 
+typedef struct {
+    u8 pad[0x14];
+    void* x14;
+} Ty25Entry;
+
 s32 un_80305058(s32 arg0, s32 arg1, s32 arg2, f32 farg0)
 {
-    s32 new_arr[293];
     s32 obtained_arr[293];
+    s32 new_arr[293];
     s32 new_count;
     s32 obtained_count;
     s32 total;
@@ -282,7 +295,7 @@ s32 un_80305058(s32 arg0, s32 arg1, s32 arg2, f32 farg0)
     u16* flags;
     s32 skip;
 
-    PAD_STACK(24);
+    PAD_STACK(20);
 
     new_count = 0;
     obtained_count = 0;
@@ -374,12 +387,10 @@ s32 un_80305058(s32 arg0, s32 arg1, s32 arg2, f32 farg0)
                     flags = gmMainLib_8015CC78();
                 }
                 if ((u8) * (u16*) ((u8*) flags + byte_off) != 0) {
-                    obtained_arr[obtained_count] = trophy;
-                    obtained_count++;
+                    obtained_arr[obtained_count++] = trophy;
                 } else {
                 add_trophy:
-                    new_arr[new_count] = trophy;
-                    new_count++;
+                    new_arr[new_count++] = trophy;
                 }
                 total++;
             }
@@ -475,7 +486,7 @@ void un_803053C4(s32 targetValue, s32 count, s32 flag)
                                 *ptr = val;
 
                                 if (count == 0) {
-                                    goto done;
+                                    break;
                                 }
                             }
                         }
@@ -540,16 +551,20 @@ done:
 void Trophy_SetUnlockState(enum_t trophyId, bool addValue)
 {
     s32 newCount;
+    s32 oldCount;
     s32 byteOffset;
     s16 idx;
-    s16 count;
+    s32 count;
+    s32 stateFlag;
     Toy* toy = (Toy*) &un_804A26B8;
     u16* table;
     s32 newVal;
     u16* ptr;
     u16* statePtr;
     u16 temp;
-    PAD_STACK(8);
+    UNUSED u8 state_pad[8];
+    u16 state;
+    PAD_STACK(4);
 
     if (gm_8016B498() || (u8) gm_801A4310() == 0xC) {
         table = toy->trophyTable;
@@ -572,10 +587,11 @@ void Trophy_SetUnlockState(enum_t trophyId, bool addValue)
         *table = temp;
 
         if (gm_8016B498() || (u8) gm_801A4310() == 0xC) {
-            newCount = toy->trophyCount + 1;
+            oldCount = toy->trophyCount;
         } else {
-            newCount = *gmMainLib_8015CC90() + 1;
+            oldCount = *gmMainLib_8015CC90();
         }
+        newCount = oldCount + 1;
         if (gm_8016B498() || (u8) gm_801A4310() == 0xC) {
             toy->trophyCount = (s16) newCount;
         } else {
@@ -614,20 +630,25 @@ void Trophy_SetUnlockState(enum_t trophyId, bool addValue)
     }
 
     if (gm_8016B498() || (u8) gm_801A4310() == 0xC) {
-        statePtr = &toy->x19A;
-        *statePtr = toy->x19A | toy->x19C;
+        state = toy->x19A | toy->x19C;
+        statePtr = &state;
     } else {
         statePtr = gmMainLib_8015CC84();
     }
 
-    if (!(*statePtr & 0x80)) {
+    if (*statePtr & 0x80) {
+        stateFlag = 1;
+    } else {
+        stateFlag = 0;
+    }
+    if (stateFlag == 0) {
         if (gm_8016B498() || (u8) gm_801A4310() == 0xC) {
             count = toy->trophyCount;
         } else {
             count = *gmMainLib_8015CC90();
         }
         if (count >= 0xFA) {
-            toy->x194 = 2;
+            *(u8*) &toy->x194 = 2;
             un_80305918(7, 0, 0);
         }
     }
@@ -638,8 +659,8 @@ void Trophy_SetUnlockState(enum_t trophyId, bool addValue)
         gm_80164504(0x14U);
     }
 
-    if ((s32) un_803060BC((s32) (s16) trophyId, 6) == 1) {
-        gm_80172C44((s16) trophyId);
+    if ((s32) un_803060BC((s32) idx, 6) == 1) {
+        gm_80172C44(idx);
     }
 }
 
@@ -730,14 +751,12 @@ void un_80305918(s8 arg0, s32 arg1, s32 arg2)
 
     if (arg1 != 0) {
         if (arg2 != 0) {
-            u16* ptr5;
             u16 val4;
             s32 mask2;
-            ptr5 = (u16*) ((u8*) base + 0x19C);
-            val4 = *ptr5;
+            val4 = M2C_FIELD(base, u16*, 0x19C);
             mask2 = 1 << arg0;
             if (val4 & mask2) {
-                *ptr5 = (u16) (val4 ^ mask2);
+                M2C_FIELD(base, u16*, 0x19C) = (u16) (val4 ^ mask2);
             }
         } else {
             if (gm_8016B498() != 0 || (u8) gm_801A4310() == 0xC) {
@@ -770,7 +789,7 @@ s32 un_80305B88(void)
 {
     int i;
     u32 button;
-    PAD_STACK(4);
+    PAD_STACK(8);
 
     for (i = 0; i < 4; i++) {
         if ((button = HSD_PadCopyStatus[(u8) i].trigger)) {
@@ -1220,9 +1239,10 @@ void un_8030663C(void)
 void un_803067BC(s32 arg0, s32 arg1)
 {
     s32 i;
+    s16* table = un_804D6E64;
 
     if (arg1 == 0) {
-        s16* src = un_804D6E64 + arg0;
+        s16* src = table + arg0;
         i = 0;
         while (i < *gmMainLib_8015CC90()) {
             un_804D6EDC[i] = *src;
@@ -1233,12 +1253,12 @@ void un_803067BC(s32 arg0, s32 arg1)
     }
 
     {
-        s16 count;
+        s32 count;
         s16* src;
         s16* dest;
 
         count = *gmMainLib_8015CC90();
-        src = un_804D6E64 + arg0;
+        src = table + arg0;
         dest = un_804D6EDC + count;
         if (count != 0) {
             for (i = count; i != 0; i--) {
@@ -1463,7 +1483,7 @@ void un_80306D70(s32 arg0)
     if (sp14 != NULL) {
         *(HSD_GObj**) (data + 0x4) = GObj_Create(2, 1, 0);
         HSD_GObjObject_80390A70(*(HSD_GObj**) (data + 0x4), HSD_GObj_804D784A,
-                                un_80306EEC(sp14, (s32) &spC));
+                                un_80306EEC(sp14, &spC));
         GObj_SetupGXLink(*(HSD_GObj**) (data + 0x4), HSD_GObj_LObjCallback,
                          0x37, 0);
         if (spC != 0) {
@@ -1484,7 +1504,7 @@ static char un_804D5A54[] = "lobj.h";
 static char un_804D5A5C[] = "lobj";
 extern f32 un_804DDCD8;
 
-HSD_LObj* un_80306EEC(void* list_arg, s32 hasAnim_arg)
+HSD_LObj* un_80306EEC(void* list_arg, s32* hasAnim)
 {
     u8* base;
     HSD_LObj* prev;
@@ -1495,11 +1515,9 @@ HSD_LObj* un_80306EEC(void* list_arg, s32 hasAnim_arg)
     u8* animFlag;
     HSD_LObj* lobj;
     HSD_LightAnim** anims;
-    s32* hasAnim;
 
     PAD_STACK(8);
 
-    hasAnim = (s32*) hasAnim_arg;
     list = list_arg;
     prev = NULL;
     base = un_804D6ED4;
@@ -1698,6 +1716,7 @@ void un_80307470(s32 arg0)
     void* shapanim;
     void* joint;
     char* entry;
+    PAD_STACK(20);
 
     data = un_803FDD18;
     tg = un_804D6ED8;
@@ -1761,7 +1780,8 @@ void un_803075E8(s32 arg0)
     td = un_804D6ED8;
 
     if (td->archive == NULL) {
-        HSD_ASSERTREPORT(0xA41, NULL, "*** BG data aren\'t being loaded!\n");
+        OSReport(data + 0x6A0);
+        __assert(un_804D5A48, 0xA41, un_804D5A50);
     }
 
     if (td->gobj != NULL) {
@@ -1800,7 +1820,8 @@ void un_803075E8(s32 arg0)
                 HSD_GObj_80390CD4(td->gobj);
             }
         } else {
-            HSD_ASSERTREPORT(0xA75, NULL, "*** Can not Load Panel Label(%s)");
+            OSReport(data + 0x718, *ptr);
+            __assert(un_804D5A48, 0xA75, un_804D5A50);
         }
     } else if (td->x54 != 0) {
         tdjobj = ((ToyData*) un_804D6ED8)->x8->x28;
@@ -1855,12 +1876,13 @@ void un_803078E4(void)
 {
     tyLightData* data;
     char* table;
+    void* syms[7];
     PosArrayFull pos_en;
     PosArrayFull pos_jp;
+    s32 i;
     HSD_SObj* sobj;
     s32* jp_ptr;
     s32* en_ptr;
-    s32 i;
 
     table = un_803FDD18;
     data = un_804D6ED8;
@@ -1869,7 +1891,6 @@ void un_803078E4(void)
     pos_jp = un_803B889C;
 
     if (data->x58 == NULL) {
-        void* syms[7];
         void** sym_ptr;
         char* filename;
 
@@ -2045,17 +2066,19 @@ void un_80307F64(s32 arg0, s32 arg1)
 }
 extern char un_803FE454[0x1F];
 
-char* un_8030813C(s16 arg0, enum_t unused)
+char* un_8030813C(s32 arg0, enum_t unused)
 {
     char* ptr;
     s32 i;
     s32 found;
+    s32 cur;
     s32 id = arg0;
 
     found = 0;
 
     if (lbLang_IsSettingUS()) {
-        if (*(s32*) (ptr = un_804D6EA4) == id) {
+        cur = *(s32*) (ptr = un_804D6EA4);
+        if (cur == id) {
             found = 1;
         } else if (*(s32*) (ptr += 0x54) == id) {
             found = 1;
@@ -2091,6 +2114,7 @@ char* un_8030813C(s16 arg0, enum_t unused)
 
 void un_80308250(u8* arg0, s32 arg1, s32 arg2)
 {
+    char* un_8030813C(s16 arg0, enum_t unused);
     void* sym;
     char* ptr;
     ptr = un_8030813C(arg1, arg1);
@@ -2121,24 +2145,24 @@ void un_80308328(s32 arg0)
 s16 un_80308354(s16 idx)
 {
     s32 i;
-    s16 target;
+    s32 target;
     TrophyData* entry;
 
     target = un_804D6EDC[idx];
     entry = un_804D6EC4;
 
-    for (i = 0; i < 0x125; i++, entry++) {
+    for (i = 0; i < 0x125; entry++, i++) {
         if (target == entry->id) {
             break;
         }
     }
 
-    if (i != 0x125) {
+    if (i == 0x125) {
+        OSReport(un_803FE474);
+        __assert(un_804D5A48, 0xC2A, un_804D5A50);
+    } else {
         return target;
     }
-
-    OSReport(un_803FE474);
-    __assert(un_804D5A48, 0xC2A, un_804D5A50);
 }
 
 void un_803083D8(HSD_JObj* jobj, s32 arg1)
@@ -2172,15 +2196,17 @@ static s32 un_804DDCFC = 0xFFBA00FF;
 #pragma push
 #pragma peephole on
 
-void un_803084A0(s16 arg0)
+void un_803084A0(s32 arg0)
 {
     volatile s32 color;
     tyDispData* display;
     HSD_Text* text;
     s32 one;
+    s32 id;
 
     PAD_STACK(72);
 
+    id = arg0;
     display = un_804D6EE0;
     color = un_804DDCFC;
 
@@ -2192,7 +2218,7 @@ void un_803084A0(s16 arg0)
         text->default_fitting = one;
         text = display->x144;
         text->default_alignment = one;
-        text = display->x144;
+        text = *(HSD_Text* volatile*) &display->x144;
         *(s32*) &text->text_color = color;
         if (lbLang_IsSavedLanguageJP()) {
             text = display->x144;
@@ -2211,7 +2237,7 @@ void un_803084A0(s16 arg0)
             text->x34.y = 1.0F;
         }
     }
-    HSD_SisLib_803A6368(display->x144, un_803063D4(arg0, 2, 0x128));
+    HSD_SisLib_803A6368(display->x144, un_803063D4(id, 2, 0x128));
 
     if (display->x148 == NULL) {
         if (lbLang_IsSavedLanguageJP()) {
@@ -2235,7 +2261,7 @@ void un_803084A0(s16 arg0)
         text = display->x148;
         text->default_kerning = 1;
     }
-    HSD_SisLib_803A6368(display->x148, un_803063D4(arg0, 2, 0x374));
+    HSD_SisLib_803A6368(display->x148, un_803063D4(id, 2, 0x374));
 
     if (display->x14C == NULL) {
         if (lbLang_IsSavedLanguageJP()) {
@@ -2274,8 +2300,8 @@ void un_803084A0(s16 arg0)
         display->x14C->default_alignment = 0;
         display->x150->default_alignment = 0;
     }
-    HSD_SisLib_803A6368(display->x14C, un_803063D4(arg0, 0x128, 0x37A));
-    HSD_SisLib_803A6368(display->x150, un_803063D4(arg0, 0x24E, 0x380));
+    HSD_SisLib_803A6368(display->x14C, un_803063D4(id, 0x128, 0x37A));
+    HSD_SisLib_803A6368(display->x150, un_803063D4(id, 0x24E, 0x380));
 }
 
 #pragma pop
@@ -2461,7 +2487,7 @@ void un_80308F04(HSD_CObj* cobj)
     f32 left;
     ToyJObjNode* jobj;
 
-    PAD_STACK(64);
+    PAD_STACK(60);
 
     data = TOY_DATA;
     state = TOY_STATE;
@@ -2473,7 +2499,7 @@ void un_80308F04(HSD_CObj* cobj)
     left = HSD_CObjGetLeft(cobj);
 
     if (jobj_ptr == NULL) {
-        __assert("jobj.h", 0x378, "jobj");
+        __assert(un_804D5A64, 0x378, un_804D5A6C);
     }
 
     if (state->x61 == 1) {
@@ -5043,6 +5069,7 @@ void fn_8030E110(HSD_GObj* arg0)
 
 void un_8030FA50(void)
 {
+    UNUSED u8 framepad[16];
     Vec3 eye;
     Mtx mtx;
     HSD_GObj* gobj;
@@ -5051,7 +5078,7 @@ void un_8030FA50(void)
     HSD_CObj* cobj;
     void** state;
 
-    PAD_STACK(64);
+    PAD_STACK(48);
 
     str = un_803FDD18;
     {
@@ -5407,7 +5434,6 @@ void un_803102D0(void)
 
 void un_80310324(void)
 {
-    u8 _padA[8];
     char* toy;
     char* data;
     ToyGlobalsS_* tg;
@@ -5417,10 +5443,7 @@ void un_80310324(void)
     ToyGlobals4S_* tg5;
     ToyGlobals5S_* tg6;
     ToySubStructS_* sub;
-    s32 sp18;
-    s32 sp1C;
-    s32 sp20;
-    s32 sp24;
+    s32 sp[4];
     s32* ptr;
     s32 i;
     s32 one;
@@ -5432,7 +5455,7 @@ void un_80310324(void)
     u16* flags;
     f32 two;
 
-    PAD_STACK(8);
+    PAD_STACK(4);
 
     data = un_803FDD18;
     toy = (char*) un_804A26B8;
@@ -5448,7 +5471,7 @@ void un_80310324(void)
             str = data + 0x5F8;
         }
         tg->x50 =
-            lbArchive_LoadSymbols(str, &sp24, *(void**) (data + 0x188), NULL);
+            lbArchive_LoadSymbols(str, &sp[3], *(void**) (data + 0x188), NULL);
     }
 
     memzero(un_804D6E68, 0x64);
@@ -5460,14 +5483,14 @@ void un_80310324(void)
     tg2 = un_804D6ED8;
     if (tg2->x54 == NULL) {
         tg2->x54 = lbArchive_LoadSymbols(
-            data + 0x640, &sp18, *(void**) (data + 0x320), &sp1C,
-            *(void**) (data + 0x324), &sp20, *(void**) (data + 0x328), 0);
+            data + 0x640, &sp[0], *(void**) (data + 0x320), &sp[1],
+            *(void**) (data + 0x324), &sp[2], *(void**) (data + 0x328), 0);
 
         tg2->x8 = GObj_Create(4, 5, 0);
         GObj_SetupGXLink(tg2->x8, HSD_SObjLib_803A49E0, 0x32, 0);
 
         i = 0;
-        ptr = &sp18;
+        ptr = &sp[0];
         two = un_804DDCF0;
         one = 1;
         do {
@@ -5522,7 +5545,8 @@ void un_80310324(void)
                 flags = gmMainLib_8015CC78();
             }
 
-            flags[idx] ^= 0x8000;
+            flags += idx;
+            *flags ^= 0x8000;
         }
 
         tg6 = un_804D6EE0;
@@ -5561,11 +5585,11 @@ void un_80310660(s32 arg0)
     s32 arg;
     u8* state;
     void** ty31;
-    void* ty28;
+    TyCleanupObj* ty28;
     u8* ty27;
     void* ty26;
     TyUnk25* ty25;
-    void* ty30;
+    tyLightData* ty30;
 
     state = (u8*) un_804A26B8;
     arg = arg0;
@@ -5600,7 +5624,8 @@ void un_80310660(s32 arg0)
             } else {
                 ptr = gmMainLib_8015CC78();
             }
-            ptr[idx] ^= 0x8000;
+            ptr += idx;
+            *ptr ^= 0x8000;
         }
 
         *(s16*) (state + 0x3E8) = ty25->x154;
@@ -5608,7 +5633,7 @@ void un_80310660(s32 arg0)
     }
 
     if (arg != 0) {
-        void* loopPtr;
+        Ty25Entry* loopPtr;
         s32 count;
 
         HSD_SisLib_803A5E70();
@@ -5624,16 +5649,16 @@ void un_80310660(s32 arg0)
         }
 
         if (idx != 0) {
-            loopPtr = ty25;
+            loopPtr = (Ty25Entry*) ty25;
             count = 0;
             arg = 0;
             do {
-                if (M2C_FIELD(loopPtr, void**, 0x14) != NULL) {
-                    lbArchive_80016EFC(M2C_FIELD(loopPtr, void**, 0x14));
-                    M2C_FIELD(loopPtr, void**, 0x14) = (void*) arg;
+                if (loopPtr->x14 != NULL) {
+                    lbArchive_80016EFC(loopPtr->x14);
+                    loopPtr->x14 = (void*) arg;
                 }
                 count += 1;
-                loopPtr = (u8*) loopPtr + 0x18;
+                loopPtr += 1;
             } while (count < 0xD);
         }
 
@@ -5642,18 +5667,18 @@ void un_80310660(s32 arg0)
             un_804D6EC8 = NULL;
         }
 
-        if (M2C_FIELD(ty28, void**, 0xC) != NULL) {
-            lbArchive_80016EFC(M2C_FIELD(ty28, void**, 0xC));
-            M2C_FIELD(ty28, void**, 0xC) = NULL;
+        if (ty28->xC != NULL) {
+            lbArchive_80016EFC(ty28->xC);
+            ty28->xC = NULL;
         }
 
-        if (M2C_FIELD(ty30, void**, 0x58) != NULL) {
-            lbArchive_80016EFC(M2C_FIELD(ty30, void**, 0x58));
+        if (ty30->x58 != NULL) {
+            lbArchive_80016EFC(ty30->x58);
             arg = 0;
-            M2C_FIELD(ty30, void**, 0x58) = (void*) arg;
-            if (M2C_FIELD(ty30, void**, 0xC) != NULL) {
-                HSD_GObjPLink_80390228(M2C_FIELD(ty30, void**, 0xC));
-                M2C_FIELD(ty30, void**, 0xC) = (void*) arg;
+            ty30->x58 = (void*) arg;
+            if (ty30->x0C != NULL) {
+                HSD_GObjPLink_80390228(ty30->x0C);
+                ty30->x0C = (void*) arg;
             }
         }
 
@@ -5669,27 +5694,27 @@ void un_80310660(s32 arg0)
             *(void**) ty26 = NULL;
         }
 
-        if (*(void**) ty28 != NULL) {
-            HSD_GObjPLink_80390228(*(void**) ty28);
-            *(void**) ty28 = NULL;
-            M2C_FIELD(ty28, void**, 0x10) = NULL;
+        if (ty28->x0 != NULL) {
+            HSD_GObjPLink_80390228(ty28->x0);
+            ty28->x0 = NULL;
+            ty28->x10 = NULL;
         }
 
-        if (M2C_FIELD(ty28, void**, 0x4) != NULL) {
-            HSD_GObjProc_8038FED4(M2C_FIELD(ty28, void**, 0x4));
-            HSD_GObjPLink_80390228(M2C_FIELD(ty28, void**, 0x4));
-            M2C_FIELD(ty28, void**, 0x4) = NULL;
+        if (ty28->x4 != NULL) {
+            HSD_GObjProc_8038FED4(ty28->x4);
+            HSD_GObjPLink_80390228(ty28->x4);
+            ty28->x4 = NULL;
         }
 
-        if (M2C_FIELD(ty28, void**, 0x8) != NULL) {
-            HSD_GObjPLink_80390228(M2C_FIELD(ty28, void**, 0x8));
-            M2C_FIELD(ty28, void**, 0x8) = NULL;
+        if (ty28->x8 != NULL) {
+            HSD_GObjPLink_80390228(ty28->x8);
+            ty28->x8 = NULL;
             HSD_FogSet(NULL);
         }
 
-        if (M2C_FIELD(ty30, void**, 0xC) != NULL) {
-            HSD_GObjPLink_80390228(M2C_FIELD(ty30, void**, 0xC));
-            M2C_FIELD(ty30, void**, 0xC) = NULL;
+        if (ty30->x0C != NULL) {
+            HSD_GObjPLink_80390228(ty30->x0C);
+            ty30->x0C = NULL;
         }
 
         if (ty31[0] != NULL) {
@@ -5734,47 +5759,48 @@ void un_803109A0(s32 arg0, s32 arg1, s32 arg2)
     ToyTable table;
     char buf[16];
     s32 idx;
+    s32 target = arg0;
 
     /* Copy table from un_803B8910 to stack */
     table = *(ToyTable*) un_803B8910;
 
     /* Search for matching entry using pointer walk */
     {
-        ToyEntry* p = table.entries - 1;
+        ToyEntry* p = table.entries;
         idx = 0;
-        if (arg0 == (++p)->id) {
+        if (target == p->id) {
             goto found;
         }
         idx = 1;
-        if (arg0 == (++p)->id) {
+        if (target == (++p)->id) {
             goto found;
         }
         idx = 2;
-        if (arg0 == (++p)->id) {
+        if (target == (++p)->id) {
             goto found;
         }
         idx = 3;
-        if (arg0 == (++p)->id) {
+        if (target == (++p)->id) {
             goto found;
         }
         idx = 4;
-        if (arg0 == (++p)->id) {
+        if (target == (++p)->id) {
             goto found;
         }
         idx = 5;
-        if (arg0 == (++p)->id) {
+        if (target == (++p)->id) {
             goto found;
         }
         idx = 6;
-        if (arg0 == (++p)->id) {
+        if (target == (++p)->id) {
             goto found;
         }
         idx = 7;
-        if (arg0 == (++p)->id) {
+        if (target == (++p)->id) {
             goto found;
         }
         idx = 8;
-        if (arg0 == (++p)->id) {
+        if (target == (++p)->id) {
             goto found;
         }
         idx = 9;
@@ -5787,11 +5813,11 @@ found:
         DevText_StoreColorIndex(un_804D6E98, 0);
     }
 
-    if (arg0 == 8) {
-        s32 ret = un_80304B94(arg0);
+    if (target == 8) {
+        s32 ret = un_80304B94(target);
         sprintf(buf, un_803FE7A0, table.entries[idx].value_byte, arg1, ret);
     } else {
-        s32 ret = un_80304B94(arg0);
+        s32 ret = un_80304B94(target);
         sprintf(buf, un_803FE7B0, table.entries[idx].value_byte, arg1, ret);
     }
     DevText_Printf(un_804D6E98, buf);
@@ -6266,18 +6292,18 @@ void un_80311788(void)
 }
 void un_80311960(void)
 {
-    void* base;
+    u8* base;
     u16* save_data;
     s16* save_data2;
     int i;
 
-    base = un_804A26B8;
+    base = (u8*) un_804A26B8;
     save_data = gmMainLib_8015CC78();
     save_data2 = gmMainLib_8015CC84();
 
     for (i = 0; i < 0x125; i++) {
         save_data[i] = 0;
-        ((u16*) ((u8*) base + 0x194))[i] = 0;
+        ((u16*) (base + 0x194))[i + 5] = 0;
     }
 
     *save_data2 = 0;
@@ -6508,23 +6534,23 @@ void un_80312018_OnFrame(void)
 /* 91.8% match */
 void un_80312050(void)
 {
+    UNUSED u64 framepad;
     Vec3 interest;
     Vec3 sp98;
-    Vec3 result2;
-    Vec3 result3;
-    Vec3 result4;
+    UNUSED u8 highpad[16];
     Mtx viewMtx;
     Vec3 up;
     Vec3 left;
     Vec3 eye;
     Vec3 scaled;
+    UNUSED Vec3 pad;
     HSD_CObj* cobj;
     TyViewData* data;
     volatile f32* wgpipe_f32;
     u8 color_ff;
     u8 color_00;
     f32 fz, fy, fx;
-    PAD_STACK(40);
+    PAD_STACK(8);
 
     data = un_804D6E6C;
     cobj = HSD_CObjGetCurrent();
@@ -6563,10 +6589,10 @@ void un_80312050(void)
         *(volatile u8*) wgpipe_f32 = color_ff;
 
         PSVECScale(&left, &scaled, un_804DDE20);
-        PSVECAdd(&scaled, &interest, &result2);
-        fz = result2.z;
-        fy = result2.y;
-        fx = result2.x;
+        PSVECAdd(&scaled, &interest, &sp98);
+        fz = sp98.z;
+        fy = sp98.y;
+        fx = sp98.x;
         *wgpipe_f32 = fx;
         *wgpipe_f32 = fy;
         *wgpipe_f32 = fz;
@@ -6589,10 +6615,10 @@ void un_80312050(void)
         *(volatile u8*) wgpipe_f32 = color_ff;
 
         PSVECScale(&up, &scaled, un_804DDE20);
-        PSVECAdd(&scaled, &interest, &result3);
-        fz = result3.z;
-        fy = result3.y;
-        fx = result3.x;
+        PSVECAdd(&scaled, &interest, &sp98);
+        fz = sp98.z;
+        fy = sp98.y;
+        fx = sp98.x;
         *wgpipe_f32 = fx;
         *wgpipe_f32 = fy;
         *wgpipe_f32 = fz;
@@ -6615,10 +6641,10 @@ void un_80312050(void)
         *(volatile u8*) wgpipe_f32 = color_ff;
 
         PSVECScale(&eye, &scaled, un_804DDE20);
-        PSVECAdd(&scaled, &interest, &result4);
-        fz = result4.z;
-        fy = result4.y;
-        fx = result4.x;
+        PSVECAdd(&scaled, &interest, &sp98);
+        fz = sp98.z;
+        fy = sp98.y;
+        fx = sp98.x;
         *wgpipe_f32 = fx;
         *wgpipe_f32 = fy;
         *wgpipe_f32 = fz;

@@ -39,7 +39,7 @@
 /* 306CF4 */ void Toy_RemoveUserData(void* ptr);
 /* 306D14 */ void un_80306D14(void);
 /* 306D70 */ void un_80306D70(s32 arg0);
-/* 306EEC */ HSD_LObj* un_80306EEC(void*, s32);
+/* 306EEC */ HSD_LObj* un_80306EEC(void*, s32*);
 /* 307018 */ void un_80307018(void);
 /* 30715C */ void un_8030715C(f32, f32);
 /* 307470 */ void un_80307470(s32);
@@ -49,7 +49,7 @@
 /* 307BA0 */ HSD_JObj* un_80307BA0(HSD_JObj*, s16);
 /* 307E84 */ void fn_80307E84(HSD_GObj* gobj);
 /* 307F64 */ void un_80307F64(s32, s32);
-/* 30813C */ char* un_8030813C(s16 arg0,
+/* 30813C */ char* un_8030813C(s32 arg0,
                                enum_t unused); /// @todo :: fill out the struct
                                                /// that this uses/returns
 /* 308250 */ void un_80308250(u8* arg0, s32 arg1, s32 arg2);
@@ -57,7 +57,7 @@
 /* 308328 */ void un_80308328(s32 arg0);
 /* 308354 */ s16 un_80308354(s16 idx);
 /* 3083D8 */ void un_803083D8(HSD_JObj* jobj, s32 arg1);
-/* 3084A0 */ void un_803084A0(s16 arg0);
+/* 3084A0 */ void un_803084A0(s32 arg0);
 /* 3087F4 */ HSD_GObj* un_803087F4(void*);
 /* 308DC8 */ void un_80308DC8(HSD_CObj*);
 /* 308F04 */ void un_80308F04(HSD_CObj*);
@@ -141,6 +141,8 @@
 /* 3FE474 */ extern char un_803FE474[];
 /* 4D5A48 */ extern char un_804D5A48[6];
 /* 4D5A50 */ extern char un_804D5A50[2];
+/* 4D5A64 */ extern char un_804D5A64[7];
+/* 4D5A6C */ extern char un_804D5A6C[5];
 
 /* un_803102D0 externs */
 /* 4D6ECC */ extern void* un_804D6ECC;
