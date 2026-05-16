@@ -415,6 +415,7 @@ void mn_8022FEC8(HSD_GObj* arg0, HSD_JObj* arg1, u8 arg2, u8 arg3)
     struct mn_8022FEC8_jobj_ref_t* temp_r3;
     struct mn_8022FEC8_jobj_ref_t* temp_r3_2;
     u8* base;
+    PAD_STACK(24);
 
     temp_r31 = arg0->user_data;
     base = mn_803EC600;
@@ -454,6 +455,8 @@ void mn_8022FEC8(HSD_GObj* arg0, HSD_JObj* arg1, u8 arg2, u8 arg3)
     case 2:
     case 4:
         break;
+    case 5:
+    case 6:
     default:
         return;
     }
