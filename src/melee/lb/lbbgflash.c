@@ -491,7 +491,11 @@ void fn_80020AEC(HSD_JObj* jobj, Mtx out)
     HSD_JObj* cur;
     s32 i;
 
-    parent = jobj ? jobj->parent : NULL;
+    if (jobj != NULL) {
+        parent = jobj->parent;
+    } else {
+        parent = NULL;
+    }
 
     {
         MtxPtr jobj_mtx = HSD_JObjGetMtxPtr(jobj);
