@@ -25,6 +25,8 @@ from rich.syntax import Syntax
 from rich.table import Table
 
 from .._common import console, get_agent_melee_root
+from .detect import detect_ghidra_install
+from .project import ghidra_project_dir, GHIDRA_PROJECT_NAME, is_project_populated  # noqa: F401
 
 ghidra_app = typer.Typer(help="Ghidra decompilation tools (alternative to m2c)")
 
@@ -36,18 +38,25 @@ _program = None
 
 def _check_ghidra_prereqs() -> tuple[bool, str]:
     """Check if Ghidra prerequisites are met."""
-    ghidra_dir = os.environ.get("GHIDRA_INSTALL_DIR")
-    if not ghidra_dir:
-        return False, "GHIDRA_INSTALL_DIR environment variable not set"
+    install = detect_ghidra_install()
+    if install is None:
+        env_val = os.environ.get("GHIDRA_INSTALL_DIR")
+        if env_val:
+            return False, (
+                f"GHIDRA_INSTALL_DIR={env_val} is not a valid Ghidra install "
+                f"(no application.properties). Unset it or point at the libexec dir."
+            )
+        return False, (
+            "Ghidra not found. Install via 'brew install ghidra' or set "
+            "GHIDRA_INSTALL_DIR to the directory containing application.properties."
+        )
 
-    ghidra_path = Path(ghidra_dir)
-    if not ghidra_path.exists():
-        return False, f"Ghidra directory not found: {ghidra_dir}"
+    # Ensure pyghidra finds the install via env var
+    os.environ["GHIDRA_INSTALL_DIR"] = str(install)
 
-    # Check for pyghidra
     try:
-        import pyghidra
-        return True, f"Ghidra: {ghidra_dir}"
+        import pyghidra  # noqa: F401
+        return True, f"Ghidra: {install}"
     except ImportError:
         return False, "pyghidra not installed. Run: pip install pyghidra"
 
@@ -78,16 +87,8 @@ def _init_ghidra(project_path: Path | None = None):
 
 
 def _get_project_path() -> Path:
-    """Get the default Ghidra project path for this repo."""
-    # Check common locations
-    candidates = [
-        get_agent_melee_root() / ".ghidra_project",
-        Path("/tmp/ghidra_melee"),  # Fallback temp location
-    ]
-    for path in candidates:
-        if (path / "melee.gpr").exists():
-            return path
-    return candidates[0]  # Default
+    """Get the canonical Ghidra project directory."""
+    return ghidra_project_dir()
 
 
 def _get_dol_path() -> Path:
@@ -278,7 +279,7 @@ def ghidra_decompile(
         from ghidra.util.task import TaskMonitor
         from ghidra.app.decompiler import DecompInterface
 
-        with pyghidra.open_project(str(project_path), "melee") as project:
+        with pyghidra.open_project(str(project_path), GHIDRA_PROJECT_NAME) as project:
             # Get the program
             project_data = project.getProjectData()
             root_folder = project_data.getRootFolder()
@@ -375,7 +376,7 @@ def ghidra_xrefs(
     try:
         from ghidra.util.task import TaskMonitor
 
-        with pyghidra.open_project(str(project_path), "melee") as project:
+        with pyghidra.open_project(str(project_path), GHIDRA_PROJECT_NAME) as project:
             programs = list(project.getProjectData().getRootFolder().getFiles())
             if not programs:
                 console.print("[red]No programs in project[/red]")
@@ -461,7 +462,7 @@ def ghidra_strings(
     try:
         from ghidra.util.task import TaskMonitor
 
-        with pyghidra.open_project(str(project_path), "melee") as project:
+        with pyghidra.open_project(str(project_path), GHIDRA_PROJECT_NAME) as project:
             programs = list(project.getProjectData().getRootFolder().getFiles())
             if not programs:
                 console.print("[red]No programs in project[/red]")
@@ -578,7 +579,7 @@ def ghidra_func(
     try:
         from ghidra.util.task import TaskMonitor
 
-        with pyghidra.open_project(str(project_path), "melee") as project:
+        with pyghidra.open_project(str(project_path), GHIDRA_PROJECT_NAME) as project:
             programs = list(project.getProjectData().getRootFolder().getFiles())
             if not programs:
                 console.print("[red]No programs in project[/red]")
