@@ -189,7 +189,7 @@ cd ../melee-pr
 - `/discord-knowledge` - Search 6+ years of Discord knowledge for compiler tricks, matching techniques, and historical context
 - `/opseq` - Find similar already-matched functions by opcode sequence patterns
 - `/ppc-ref` - Look up PowerPC instruction documentation
-- `/ghidra` - Alternative decompiler view, cross-references (callers/callees), type inference
+- `/ghidra` - Cross-references (callers/callees) and debug-string lookups via cached SQLite queries (sub-ms). Heavy `ghidra decompile` is also available as a second-opinion fallback.
 
 ### Documentation & Understanding
 - `/understand [target]` - Document and name functions, structs, and fields after matching
