@@ -25,6 +25,7 @@ from rich.syntax import Syntax
 from rich.table import Table
 
 from .._common import console, DECOMP_CONFIG_DIR, get_agent_melee_root, get_base_dol_path
+from .cache import CACHE_DB_PATH, build_from_project
 from .detect import detect_ghidra_install
 from .project import ghidra_project_dir, GHIDRA_PROJECT_NAME, is_project_populated
 
@@ -240,6 +241,43 @@ import must be done via the Ghidra GUI.
 """,
         title="Manual Step Required",
     ))
+
+
+@ghidra_app.command("cache-build")
+def ghidra_cache_build(
+    force: bool = typer.Option(False, "--force", "-f", help="Rebuild even if cache exists"),
+):
+    """Build the SQLite cache from the Ghidra project (one-time, ~minutes).
+
+    Agents then query xrefs/strings/func against the cache without
+    starting Ghidra each time.
+    """
+    if CACHE_DB_PATH.exists() and not force:
+        console.print(
+            f"[yellow]Cache already exists at {CACHE_DB_PATH}.[/yellow] "
+            f"Use --force to rebuild."
+        )
+        raise typer.Exit(0)
+
+    if not _init_ghidra():
+        raise typer.Exit(1)
+
+    project_path = _get_project_path()
+    if not is_project_populated(project_path):
+        console.print(
+            f"[red]Project at {project_path} is not populated.[/red] "
+            f"Run 'melee-agent ghidra setup' first."
+        )
+        raise typer.Exit(1)
+
+    console.print(f"[dim]Building cache at {CACHE_DB_PATH} (this may take a few minutes)...[/dim]")
+    counts = build_from_project(CACHE_DB_PATH, project_path, GHIDRA_PROJECT_NAME)
+    console.print(
+        f"[green]✓[/green] Cache built: "
+        f"{counts['functions']} functions, "
+        f"{counts['xrefs']} xrefs, "
+        f"{counts['strings']} strings"
+    )
 
 
 @ghidra_app.command("decompile")

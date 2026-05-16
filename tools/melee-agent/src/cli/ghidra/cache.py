@@ -185,3 +185,95 @@ def search_strings(db_path: Path, pattern: str, limit: int = 50) -> list[dict]:
                 (like, limit),
             )
         ]
+
+
+def build_from_project(db_path: Path, project_dir: Path, project_name: str) -> dict[str, int]:
+    """Populate the cache from a Ghidra project.
+
+    Returns counts of inserted rows: {functions, xrefs, strings}.
+    Caller is responsible for ensuring pyghidra is initialized.
+    """
+    import pyghidra
+    from ghidra.util.task import TaskMonitor
+
+    init_schema(db_path)
+
+    counts = {"functions": 0, "xrefs": 0, "strings": 0}
+
+    with pyghidra.open_project(str(project_dir), project_name) as project:
+        files = list(project.getProjectData().getRootFolder().getFiles())
+        if not files:
+            raise RuntimeError(
+                f"Project at {project_dir} has no programs imported. "
+                f"Run 'melee-agent ghidra setup' first."
+            )
+
+        program = files[0].getDomainObject(project, False, False, TaskMonitor.DUMMY)
+        try:
+            func_mgr = program.getFunctionManager()
+            ref_mgr = program.getReferenceManager()
+            listing = program.getListing()
+
+            # Bulk inserts: open one connection, batch
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            with _connect(db_path) as conn:
+                conn.execute("DELETE FROM functions")
+                conn.execute("DELETE FROM xrefs")
+                conn.execute("DELETE FROM strings")
+
+                # Functions
+                for func in func_mgr.getFunctions(True):
+                    body = func.getBody()
+                    addr = int(func.getEntryPoint().getOffset())
+                    size = int(body.getNumAddresses())
+                    conn.execute(
+                        "INSERT OR REPLACE INTO functions(addr, name, size) VALUES (?, ?, ?)",
+                        (addr, str(func.getName()), size),
+                    )
+                    counts["functions"] += 1
+
+                # Strings (must be cached before xrefs so we know which xref targets are strings)
+                string_addrs: set[int] = set()
+                for data in listing.getDefinedData(True):
+                    if data.hasStringValue():
+                        addr = int(data.getAddress().getOffset())
+                        value = str(data.getValue())
+                        conn.execute(
+                            "INSERT OR REPLACE INTO strings(addr, value) VALUES (?, ?)",
+                            (addr, value),
+                        )
+                        string_addrs.add(addr)
+                        counts["strings"] += 1
+
+                # Xrefs (only CALL/DATA — skip flow-internal stuff)
+                # Iterate over functions, then over each function's body
+                for func in func_mgr.getFunctions(True):
+                    body = func.getBody()
+                    addr_iter = body.getAddresses(True)
+                    while addr_iter.hasNext():
+                        cur_addr = addr_iter.next()
+                        for ref in ref_mgr.getReferencesFrom(cur_addr):
+                            to_addr = int(ref.getToAddress().getOffset())
+                            ref_type = str(ref.getReferenceType())
+                            # Keep CALL references and DATA references to strings only
+                            if "CALL" in ref_type or to_addr in string_addrs:
+                                conn.execute(
+                                    "INSERT INTO xrefs(from_addr, to_addr, ref_type) VALUES (?, ?, ?)",
+                                    (int(cur_addr.getOffset()), to_addr, ref_type),
+                                )
+                                counts["xrefs"] += 1
+
+                # Mark cache as built
+                from datetime import datetime, timezone
+                conn.execute(
+                    "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+                    ("built_at", datetime.now(timezone.utc).isoformat()),
+                )
+                conn.execute(
+                    "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+                    ("program_name", str(program.getName())),
+                )
+        finally:
+            program.release(project)
+
+    return counts
