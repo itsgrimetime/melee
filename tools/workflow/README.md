@@ -12,6 +12,7 @@ Scripts for managing the decomp workflow between fork and upstream.
 | `create-pr.sh` | Create clean PR branch from changes |
 | `update-pr.sh` | Apply changes from master to existing PR branch |
 | `pr-worktree.sh` | Create worktree with tooling for `pr/*` or `wip/*` iteration |
+| `agent-prompt.sh` | Generate a `/loop` prompt for a decomp agent, given a branch name |
 
 ## The Workflow
 
@@ -128,6 +129,22 @@ The `pr/*` and `wip/*` modes differ in where the overlay comes from:
 
 For `wip/*`, master overlay changes don't reach existing worktrees until you
 `git merge master` inside each one — the overlay is real files, not a symlink.
+
+### Kick Off an Agent on a wip/ Branch
+```bash
+# See which wip/* and pr/* branches have worktrees ready for an agent
+./tools/workflow/agent-prompt.sh --list
+
+# Generate a /loop prompt for the agent
+./tools/workflow/agent-prompt.sh wip/lb-mthp
+
+# With a specific file scope (recommended when multiple agents share a module)
+./tools/workflow/agent-prompt.sh wip/lb-mthp 'lbmthp.{c,h,static.h} + lb_01F8.c'
+```
+
+Output goes to stdout — pipe to `pbcopy` on macOS to grab it for the agent
+session. The tool auto-detects the worktree path from the branch name and
+derives the module focus from the branch prefix (`wip/<module>-<topic>`).
 
 ## Why This Workflow?
 
