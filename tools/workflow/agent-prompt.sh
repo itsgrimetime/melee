@@ -153,12 +153,34 @@ the ASM line-by-line.
 ## When you have a coherent batch ready
 
 You decide when. Defaults: 1+ functions matched, build green, src-only changes.
-
-Quick path — build a clean PR branch and print the URL for me to open:
+You're empowered to open the PR yourself — no need to ask first.
 
   ./tools/workflow/create-pr.sh $MODULE-<short-topic>
   git push origin pr/$MODULE-<short-topic>
-  echo "PR: https://github.com/doldecomp/melee/compare/master...itsgrimetime:pr/$MODULE-<short-topic>?expand=1"
+  gh pr create --repo doldecomp/melee \\
+    --base master \\
+    --head itsgrimetime:pr/$MODULE-<short-topic> \\
+    --title "$MODULE: <one-line summary of what you matched>" \\
+    --body "\$(cat <<'EOF'
+## Summary
+
+<1-3 bullets on what changed and why>
+
+## Functions matched
+
+- fn_XXXXXXXX: 100%
+- ...
+
+## Files
+
+<list of src/include/config files touched>
+
+## Verification
+
+- \`python configure.py && ninja\` → green
+- <any notable match% improvements or behaviors>
+EOF
+)"
 
 PR text hygiene: describe matched functions, source layout, type changes,
 verification. Do NOT mention fork tooling (melee-agent, checkdiff.py,
