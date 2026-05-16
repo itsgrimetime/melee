@@ -486,17 +486,13 @@ def ghidra_strings(
 def ghidra_func(
     address: Annotated[str, typer.Argument(help="Address to get function info")],
 ):
-    """Get function metadata from Ghidra.
+    """Get function metadata from the cache (name, size, callers/callees count)."""
+    from .cache import CACHE_DB_PATH, get_function, get_callers, get_callees
 
-    Shows function name, signature, calling convention, and basic stats.
-
-    Examples:
-        melee-agent ghidra func 0x80243A3C
-    """
-    if not _init_ghidra():
+    if not CACHE_DB_PATH.exists():
+        console.print("[red]Cache not built.[/red] Run [cyan]melee-agent ghidra cache-build[/cyan].")
         raise typer.Exit(1)
 
-    # Normalize address
     addr_str = address.lower().replace("0x", "")
     try:
         addr_int = int(addr_str, 16)
@@ -504,70 +500,16 @@ def ghidra_func(
         console.print(f"[red]Invalid address:[/red] {address}")
         raise typer.Exit(1)
 
-    import pyghidra
-
-    project_path = _get_project_path()
-    if not project_path.exists():
-        console.print("[red]No Ghidra project. Run:[/red] melee-agent ghidra setup")
+    func = get_function(CACHE_DB_PATH, addr_int)
+    if func is None:
+        console.print(f"[yellow]No function at 0x{addr_int:08X}[/yellow]")
         raise typer.Exit(1)
 
-    try:
-        from ghidra.util.task import TaskMonitor
+    n_callers = len(get_callers(CACHE_DB_PATH, func["addr"]))
+    n_callees = len(get_callees(CACHE_DB_PATH, func["addr"]))
 
-        with pyghidra.open_project(str(project_path), GHIDRA_PROJECT_NAME) as project:
-            programs = list(project.getProjectData().getRootFolder().getFiles())
-            if not programs:
-                console.print("[red]No programs in project[/red]")
-                raise typer.Exit(1)
-
-            domain_file = programs[0]
-            program = domain_file.getDomainObject(project, False, False, TaskMonitor.DUMMY)
-
-            try:
-                addr_factory = program.getAddressFactory()
-                addr = addr_factory.getAddress(f"0x{addr_int:08x}")
-
-                func_mgr = program.getFunctionManager()
-                func = func_mgr.getFunctionContaining(addr)
-
-                if not func:
-                    console.print(f"[yellow]No function at 0x{addr_int:08X}[/yellow]")
-                    raise typer.Exit(1)
-
-                # Gather info
-                name = func.getName()
-                entry = func.getEntryPoint()
-                sig = func.getSignature()
-                calling_conv = func.getCallingConventionName()
-                body = func.getBody()
-                size = body.getNumAddresses()
-
-                # Parameter info
-                params = func.getParameters()
-                param_info = []
-                for p in params:
-                    param_info.append(f"{p.getDataType().getName()} {p.getName()}")
-
-                ret_type = func.getReturnType()
-
-                console.print(f"\n[bold cyan]{name}[/bold cyan]")
-                console.print(f"  Entry: [yellow]0x{entry}[/yellow]")
-                console.print(f"  Size: {size} bytes")
-                console.print(f"  Calling convention: {calling_conv}")
-                console.print(f"  Return type: [green]{ret_type.getName()}[/green]")
-
-                if param_info:
-                    console.print(f"  Parameters:")
-                    for p in param_info:
-                        console.print(f"    - [cyan]{p}[/cyan]")
-                else:
-                    console.print("  Parameters: (none)")
-
-                console.print(f"\n  Signature: [green]{sig}[/green]")
-
-            finally:
-                program.release(project)
-
-    except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(1)
+    console.print(f"\n[bold cyan]{func['name']}[/bold cyan]")
+    console.print(f"  Entry: [yellow]0x{func['addr']:08X}[/yellow]")
+    console.print(f"  Size:  {func['size']} bytes")
+    console.print(f"  Callers: {n_callers}")
+    console.print(f"  Callees: {n_callees}")
