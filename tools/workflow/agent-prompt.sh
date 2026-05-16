@@ -1,5 +1,5 @@
 #!/bin/bash
-# agent-prompt.sh - Generate a /loop prompt for a decomp agent
+# agent-prompt.sh - Generate a /goal prompt for a decomp agent
 #
 # Usage:
 #   ./tools/workflow/agent-prompt.sh <branch> [scope-description]
@@ -8,7 +8,13 @@
 #
 # Looks up the worktree checked out on <branch>, derives the module from
 # the branch name (wip/<module>[-<topic>] or pr/<module>[-<topic>]), and
-# prints a /loop prompt suitable for pasting into a decomp agent session.
+# prints a /goal prompt suitable for pasting into a decomp agent session.
+#
+# Output is kept under /goal's 4000-character limit by referencing repo
+# docs instead of duplicating their content. CLAUDE.md (a.k.a. AGENTS.md)
+# is auto-loaded by Claude Code at session start, so this prompt focuses
+# on per-agent specifics + the unique rules/conventions not already in
+# CLAUDE.md or docs/.
 #
 # Examples:
 #   ./tools/workflow/agent-prompt.sh wip/lb-mthp
@@ -100,117 +106,85 @@ esac
 
 # Default scope description if not provided.
 if [[ -z "$SCOPE_DESC" ]]; then
-    SCOPE_DESC="src/melee/$MODULE/ (be specific about which files — other agents may be on adjacent modules)"
+    SCOPE_DESC="src/melee/$MODULE/ (be specific; other agents work adjacent modules)"
+fi
+
+# Module-specific notes doc, if it exists.
+MODULE_NOTES_HINT=""
+if [[ -f "$MAIN_REPO/docs/${MODULE}-module-notes.md" ]]; then
+    MODULE_NOTES_HINT=", docs/${MODULE}-module-notes.md"
 fi
 
 cat << PROMPT
-/loop 20m
+You're on $BRANCH in $WORKTREE ($MODULE module).
+Focus: $SCOPE_DESC. Don't touch files outside scope.
 
-You're working in $WORKTREE on branch $BRANCH.
-Focus: $SCOPE_DESC. Avoid touching files outside that scope — other agents
-are working on adjacent modules.
+Read first: docs/parallel-agent-workflow.md (canonical agent flow) and
+.agents/skills/decomp/SKILL.md (matching workflow). Also:
+docs/mwcc-pattern-book.md, docs/agent-tool-manifest.md,
+docs/large-function-checkpoint.md${MODULE_NOTES_HINT}.
+CLAUDE.md is auto-loaded — covers CLI commands, branch model, PR hygiene.
 
-If anything looks unexpected at session start (renamed branches, rebased
-master, missing tooling), run worktree-doctor first.
-
-## Setup (first 60 seconds, every invocation)
+## Setup (60s)
 
 cd $WORKTREE
-python tools/worktree-doctor.py        # if red, --fix or investigate
+python tools/worktree-doctor.py --fix    # heal anything red
 git fetch --all --prune
-./tools/workflow/sync-hooks.sh         # pick up hook/overlay updates from master
+./tools/workflow/sync-hooks.sh           # pick up master overlay
 git status --short && git branch --show-current
 
-## Core loop (per function)
+## Core loop
 
-1. Pick next function in scope: melee-agent extract list --module $MODULE --max-match 0.5
-2. python tools/checkdiff.py <function>      # see current diff
-3. Edit src/melee/$MODULE/<file>.c
-4. ninja build/GALE01/src/melee/$MODULE/<file>.o
-5. python tools/checkdiff.py <function>      # re-check
+melee-agent extract list --module $MODULE --max-match 0.5    # find targets
+python tools/checkdiff.py <fn>                                # diff → edit → ninja → re-check
+melee-agent attempts record <fn> --outcome <kind> --note "..."  # log saturation
 
-Rules:
-- If match % drops, revert immediately — don't fix forward.
-- After 3 attempts with no improvement on the same fn: log via
-  melee-agent attempts record <fn> --outcome saturated --classification <kind> --note "..."
-  then move on.
-- After 10 total attempts on a function with no progress, fully document and skip;
-  come back only if you spot a similar pattern elsewhere.
-- When a fn hits 100%: commit to this branch with a descriptive message.
+## Rules (overrides/additions beyond the docs)
 
-## When stuck (use the tooling — don't spin)
+- Match % drop ≠ unviable, but unless you have reason to stack changes, revert.
+- 10 attempts on a fn with no progress → log + move on.
+- A pattern that works in one place often applies elsewhere in the TU — go
+  back and apply it even to functions you'd "moved on" from.
+- Commit per matched fn. Prepare for PR when the full TU (.text + data) is at 100%.
+- **Don't chase data-section matches before the TU's .text is fully matched.**
+  Named struct fields / float constants / unk_NN renames add ~zero reviewer
+  value until every function body is at 100%. Bundle that polish with the
+  final matches. Per ribbanya (project lead): "I just wouldn't bother in general."
+- Stuck? Missing inline(s) is the answer to ~75% of matches.
 
-- /mismatch-db search "<pattern>"         # known patterns + fixes
-- /discord-knowledge search "<term>"       # 6+ years of community knowledge
-- /opseq <function>                        # find similar matched functions
-- /ppc-ref <instruction>                   # instruction docs
-- melee-agent patterns inlines src/melee/$MODULE/<file>.c   # stubborn PAD_STACK usually = missing inline
-- /understand <fn>                         # name & document before re-attempting
+## Opening the PR (you're empowered to do it yourself)
 
-Slow-down move: step back from the ASM. Understand what the function actually
-DOES — callers, callees, intent. Replicate the high-level behavior in C, not
-the ASM line-by-line.
-
-## When you have a coherent batch ready
-
-You decide when. Defaults: 1+ functions matched, build green, src-only changes.
-You're empowered to open the PR yourself — no need to ask first.
+Don't open a PR that's only data-section refinement on a partially-matched TU
+(see rule above). Otherwise:
 
   ./tools/workflow/create-pr.sh $MODULE-<short-topic>
   git push origin pr/$MODULE-<short-topic>
-  gh pr create --repo doldecomp/melee \\
-    --base master \\
+  gh pr create --repo doldecomp/melee --base master \\
     --head itsgrimetime:pr/$MODULE-<short-topic> \\
-    --title "$MODULE: <one-line summary of what you matched>" \\
+    --title "$MODULE: <one-line summary>" \\
     --body "\$(cat <<'EOF'
 ## Summary
-
-<1-3 bullets on what changed and why>
+<1-3 bullets>
 
 ## Functions matched
-
 - fn_XXXXXXXX: 100%
-- ...
 
 ## Files
-
-<list of src/include/config files touched>
+<list>
 
 ## Verification
-
 - \`python configure.py && ninja\` → green
-- <any notable match% improvements or behaviors>
 EOF
 )"
 
-PR text hygiene: describe matched functions, source layout, type changes,
-verification. Do NOT mention fork tooling (melee-agent, checkdiff.py,
-attempts ledger, worktree-doctor) — upstream visibility only.
-See CLAUDE.md "PR description hygiene".
+PR text hygiene: no fork-tooling mentions. See CLAUDE.md "PR description hygiene".
 
-## Branch hygiene
+## Tooling fixes (separate flow)
 
-- Commit only matched, build-green work to this branch.
-- If you stop mid-batch, leave a "wip:" commit so the next session has clean handoff.
-- Do NOT commit fork tooling changes from this branch.
-
-## Tooling improvements (separate from decomp)
-
-If you want to improve fork tooling during decomp work:
-  cd $MAIN_REPO && git checkout master
-  <make tooling change>
-  git commit && git push origin master
-Then back in your worktree: git fetch && git merge master.
-Other agents should run ./tools/workflow/sync-hooks.sh to pick up hook updates.
-
-## Upstream sync
-
-We rebase from doldecomp/melee every few days. If master is >5 commits behind
-upstream, that's a signal — but coordinate before running sync-upstream.sh,
-it affects all agents.
+Fork tooling lives on master at $MAIN_REPO. Edit there, commit + push origin
+master, then run sync-hooks.sh in your worktree to pick it up.
 
 ## Cadence
 
-Don't end after 1-2 iterations. The heartbeat is a stall-prevention nudge,
-not a stop signal. Plan for 1-2 hours of continuous work per invocation.
+The heartbeat is anti-stall, not a stop signal. Plan for 1-2h continuous work.
 PROMPT
