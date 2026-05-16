@@ -24,7 +24,7 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 
-from ._common import console, get_agent_melee_root
+from .._common import console, get_agent_melee_root
 
 ghidra_app = typer.Typer(help="Ghidra decompilation tools (alternative to m2c)")
 
@@ -373,14 +373,16 @@ def ghidra_xrefs(
         raise typer.Exit(1)
 
     try:
+        from ghidra.util.task import TaskMonitor
+
         with pyghidra.open_project(str(project_path), "melee") as project:
-            programs = list(project.getRootFolder().getFiles())
+            programs = list(project.getProjectData().getRootFolder().getFiles())
             if not programs:
                 console.print("[red]No programs in project[/red]")
                 raise typer.Exit(1)
 
             domain_file = programs[0]
-            program = domain_file.getDomainObject()
+            program = domain_file.getDomainObject(project, False, False, TaskMonitor.DUMMY)
 
             try:
                 addr_factory = program.getAddressFactory()
@@ -457,14 +459,16 @@ def ghidra_strings(
         raise typer.Exit(1)
 
     try:
+        from ghidra.util.task import TaskMonitor
+
         with pyghidra.open_project(str(project_path), "melee") as project:
-            programs = list(project.getRootFolder().getFiles())
+            programs = list(project.getProjectData().getRootFolder().getFiles())
             if not programs:
                 console.print("[red]No programs in project[/red]")
                 raise typer.Exit(1)
 
             domain_file = programs[0]
-            program = domain_file.getDomainObject()
+            program = domain_file.getDomainObject(project, False, False, TaskMonitor.DUMMY)
 
             try:
                 addr_factory = program.getAddressFactory()
@@ -572,14 +576,16 @@ def ghidra_func(
         raise typer.Exit(1)
 
     try:
+        from ghidra.util.task import TaskMonitor
+
         with pyghidra.open_project(str(project_path), "melee") as project:
-            programs = list(project.getRootFolder().getFiles())
+            programs = list(project.getProjectData().getRootFolder().getFiles())
             if not programs:
                 console.print("[red]No programs in project[/red]")
                 raise typer.Exit(1)
 
             domain_file = programs[0]
-            program = domain_file.getDomainObject()
+            program = domain_file.getDomainObject(project, False, False, TaskMonitor.DUMMY)
 
             try:
                 addr_factory = program.getAddressFactory()
