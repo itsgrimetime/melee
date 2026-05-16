@@ -213,6 +213,19 @@ melee-agent complete document <func_name> --status partial
 
 This automatically releases any claim and tracks the function as documented.
 
+## Strings as naming signal
+
+`OSReport`, `__assert`, and other debug functions take string literals that often name the calling subsystem ("ftCo_LoadDatAttrs", "ItemDoUpdate", etc.). Use this:
+
+```bash
+melee-agent ghidra strings 0x80<address>      # strings in this function
+melee-agent ghidra strings --pattern XYZ      # find functions with XYZ in any string
+```
+
+A function that does `OSReport("fghter %d hit\n", ...)` is plausibly something like `Fighter_LogHit`. Combine with xref context to confirm before naming.
+
+If the cache is not built, run `melee-agent ghidra cache-build` once.
+
 ## Naming Conventions Reference
 
 | Element | Convention | Example |
