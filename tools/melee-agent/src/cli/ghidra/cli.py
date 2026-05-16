@@ -179,91 +179,67 @@ def ghidra_status():
 
 
 @ghidra_app.command("setup")
-def ghidra_setup(
-    project: Annotated[Path | None, typer.Option("--project", "-p", help="Path to existing Ghidra project (.gpr file)")] = None,
-):
-    """Link an existing Ghidra project for decompilation queries.
+def ghidra_setup():
+    """Guide one-time Ghidra project creation (manual GUI import).
 
-    The GameCube DOL loader has a bug that prevents headless import.
-    You must import the DOL via Ghidra GUI first, then link the project here.
-
-    Steps:
-        1. Open Ghidra GUI
-        2. File → New Project → Non-Shared Project
-        3. Set location to: .ghidra_project/ in repo root
-        4. Set name to: melee
-        5. File → Import File → select orig/GALE01/sys/main.dol
-        6. Let analysis complete (takes several minutes)
-        7. Close Ghidra
-        8. Run: melee-agent ghidra setup
-
-    Or link an existing project:
-        melee-agent ghidra setup --project /path/to/project.gpr
+    The GameCubeLoader has a headless-mode bug (DOLProgramBuilder pops an
+    OptionDialog) so the initial DOL import must happen via the Ghidra GUI.
+    This command:
+      1. Ensures the project directory exists
+      2. Prints exact GUI steps to follow
+      3. Validates the result
     """
-    project_path = _get_project_path()
+    install = detect_ghidra_install()
+    if install is None:
+        console.print("[red]Ghidra install not found.[/red] Run 'brew install ghidra' first.")
+        raise typer.Exit(1)
 
-    if project:
-        # Link to existing project
-        if not project.exists():
-            console.print(f"[red]Project not found:[/red] {project}")
-            raise typer.Exit(1)
-
-        # Copy or symlink the project
-        import shutil
-        if project_path.exists():
-            shutil.rmtree(project_path)
-        project_path.mkdir(parents=True, exist_ok=True)
-
-        # The .gpr file and .rep directory should be siblings
-        gpr_file = project if project.suffix == ".gpr" else None
-        if gpr_file:
-            proj_name = gpr_file.stem
-            proj_dir = gpr_file.parent
-            rep_dir = proj_dir / f"{proj_name}.rep"
-
-            if rep_dir.exists():
-                # Symlink both
-                (project_path / gpr_file.name).symlink_to(gpr_file)
-                (project_path / rep_dir.name).symlink_to(rep_dir)
-                console.print(f"[green]✓[/green] Linked project: {gpr_file}")
-            else:
-                console.print(f"[red]Project .rep directory not found:[/red] {rep_dir}")
-                raise typer.Exit(1)
-        return
-
-    # Check for expected project location
-    expected_gpr = project_path / "melee.gpr"
-    if expected_gpr.exists():
-        console.print(f"[green]✓[/green] Project found: {expected_gpr}")
-        console.print("[dim]Ready for decompilation queries[/dim]")
-        return
-
-    # Show setup instructions
     dol = _get_dol_path()
-    console.print("[yellow]No Ghidra project found.[/yellow]")
-    console.print("\n[bold]Manual Setup Required:[/bold]")
-    console.print("""
-The GameCube DOL loader cannot run in headless mode (GUI dialog bug).
-You must import the DOL via Ghidra GUI first:
+    if not dol.exists():
+        console.print(f"[red]DOL not found at {dol}.[/red]")
+        console.print("Place the GALE01 main.dol at ~/.config/decomp-me/orig/GALE01/main.dol")
+        raise typer.Exit(1)
 
-[cyan]1.[/cyan] Open Ghidra GUI:
-   [dim]ghidra &[/dim]
+    project_path = _get_project_path()
+    project_path.mkdir(parents=True, exist_ok=True)
 
-[cyan]2.[/cyan] Create new project:
+    expected_gpr = project_path / f"{GHIDRA_PROJECT_NAME}.gpr"
+
+    if expected_gpr.exists() and is_project_populated(project_path):
+        console.print(f"[green]✓[/green] Project already populated: {expected_gpr}")
+        return
+
+    ghidra_run = install.parent / "bin" / "ghidraRun"
+    if not ghidra_run.exists():
+        # Homebrew exposes ghidraRun at /opt/homebrew/bin/ghidraRun
+        ghidra_run = Path("/opt/homebrew/bin/ghidraRun")
+
+    console.print(Panel.fit(
+        f"""[bold]One-time Ghidra setup required[/bold]
+
+The GameCubeLoader has a headless-mode bug, so the initial DOL
+import must be done via the Ghidra GUI.
+
+[cyan]1.[/cyan] Launch Ghidra:
+   [dim]{ghidra_run} &[/dim]
+
+[cyan]2.[/cyan] Create the project:
    File → New Project → Non-Shared Project
-   Location: [green]{project_path}[/green]
-   Name: [green]melee[/green]
+   Location: [green]{project_path.parent}[/green]
+   Name:     [green]{GHIDRA_PROJECT_NAME}[/green]
 
-[cyan]3.[/cyan] Import DOL:
-   File → Import File
-   Select: [green]{dol}[/green]
-   Click OK on loader options
+[cyan]3.[/cyan] Import the DOL:
+   File → Import File → [green]{dol}[/green]
+   Loader: [green]Nintendo GameCube/Wii Binary[/green] (the GameCubeLoader extension)
+   Click [green]OK[/green] on the loader options dialog.
 
-[cyan]4.[/cyan] Wait for analysis (5-10 minutes)
+[cyan]4.[/cyan] Wait for analysis to complete (5-10 minutes).
 
-[cyan]5.[/cyan] Close Ghidra, then run:
+[cyan]5.[/cyan] Close Ghidra, then re-run this command to validate:
    [green]melee-agent ghidra setup[/green]
-""".format(project_path=project_path, dol=dol))
+""",
+        title="Manual Step Required",
+    ))
 
 
 @ghidra_app.command("decompile")
