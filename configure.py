@@ -1716,8 +1716,41 @@ config.progress_report_args = [
     # "--config functionRelocDiffs=data_value",
 ]
 
+def _purge_wrong_arch_wibo(config: ProjectConfig) -> None:
+    """Fork-only: drop build/tools/wibo if it's wrong arch for this host.
+
+    download_tool.py picks the correct wibo binary per platform, but once a
+    binary exists at build/tools/wibo, ninja won't redownload. The wrong-arch
+    binary can land there via cross-host worktree copies, stale state from a
+    prior platform, or an older download_tool.py that used the legacy URL.
+    Removing it lets the next build fetch a fresh one.
+    """
+    wibo = config.build_dir / "tools" / "wibo"
+    if not wibo.exists():
+        return
+    try:
+        with open(wibo, "rb") as f:
+            magic = f.read(4)
+    except OSError:
+        return
+    is_macho = magic in (
+        b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf",
+        b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe",
+    )
+    is_elf = magic == b"\x7fELF"
+    correct = is_macho if sys.platform == "darwin" else is_elf
+    if not correct:
+        kind = "Mach-O" if sys.platform == "darwin" else "ELF"
+        print(
+            f"warning: {wibo} is wrong arch (expected {kind} for {sys.platform}); "
+            "removing so it will be re-downloaded"
+        )
+        wibo.unlink()
+
+
 if args.mode == "configure":
     # Write build.ninja and objdiff.json
+    _purge_wrong_arch_wibo(config)
     generate_build(config)
 elif args.mode == "progress":
     # Print progress information
