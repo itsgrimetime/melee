@@ -19,7 +19,8 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MAIN_REPO="$(cd "$(dirname "$(git -C "$SCRIPT_DIR" rev-parse --git-common-dir)")" && pwd)"
+# git-common-dir returns a path relative to git's cwd; cd there first so dirname resolves correctly.
+MAIN_REPO="$(cd "$SCRIPT_DIR" && cd "$(git rev-parse --git-common-dir)/.." && pwd)"
 
 usage() {
     awk '
