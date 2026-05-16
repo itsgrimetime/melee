@@ -152,16 +152,16 @@ void fn_80249A1C(HSD_GObj* arg0)
     HSD_JObj* sp40;
     HSD_JObj* sp3C;
     HSD_JObj* sp34;
-    AnimLoopSettings sp28;
     HSD_JObj* sp20;
+    AnimLoopSettings sp28;
     HSD_JObj* temp_r3;
     f32 temp_f1;
     f32 var_f1;
     u8 temp_r4;
-    f32 arg8 = 0.0F; // this should be uninitialized
 
-    HSD_JObj* jobj = arg0->hsd_obj;
+    AnimLoopSettings* anims = mnSound_803EEED8;
     Menu* menu = GET_MENU(arg0);
+    HSD_JObj* jobj = arg0->hsd_obj;
     PAD_STACK(16);
     if ((u8) mn_804A04F0.cur_menu != 0x14) {
         HSD_GObjPLink_80390228(arg0);
@@ -184,22 +184,20 @@ void fn_80249A1C(HSD_GObj* arg0)
         } else {
             lb_80011E24(jobj, &sp34, 9, -1);
         }
-        arg8 = mn_8022EC18(sp34, &mnSound_803EEED8[0], 0x80);
+        mn_8022EC18(sp34, &anims[0], 0x80);
     }
-    lb_80011E24((HSD_JObj*) arg0->hsd_obj, &sp20, 6, -1, arg8);
+    lb_80011E24((HSD_JObj*) arg0->hsd_obj, &sp20, 6, -1);
     temp_f1 = mn_8022F298(sp20);
-    if ((mnSound_803EEED8[5].start_frame <= temp_f1) &&
-        ((temp_f1 <= mnSound_803EEED8[5].end_frame) != 0))
-    {
-        sp28 = mnSound_803EEED8[5];
+    if ((anims[5].start_frame <= temp_f1) && (temp_f1 <= anims[5].end_frame)) {
+        sp28 = anims[5];
     } else {
-        sp28 = mnSound_803EEED8[6];
+        sp28 = anims[6];
     }
     mn_8022ED6C(sp20, &sp28);
     lb_80011E24(jobj, &sp40, 0xE, -1);
-    mn_8022ED6C(sp40, &mnSound_803EEED8[menu->unk2 + 1]);
+    mn_8022ED6C(sp40, &anims[menu->unk2 + 1]);
     lb_80011E24(jobj, &sp3C, 0xB, -1);
-    mn_8022ED6C(sp3C, &mnSound_803EEED8[menu->unk1 + 4]);
+    mn_8022ED6C(sp3C, &anims[menu->unk1 + 4]);
 }
 
 void mnSound_80249C08(int unused)

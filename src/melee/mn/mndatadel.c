@@ -740,27 +740,27 @@ void mnDataDel_8024FE4C(u8 arg0)
 void mnDataDel_80250170(void)
 {
     HSD_GObjProc* proc;
+    HSD_Archive* archive;
+    StaticModelDesc* assets;
+    char* strings;
 
+    strings = (char*) &mnDataDel_803EF870;
+    assets = &mnDataDel_804A0918;
     mn_804D6BC8.cooldown = 5;
     mn_804A04F0.prev_menu = mn_804A04F0.cur_menu;
     mn_804A04F0.cur_menu = 0x18;
     mn_804A04F0.hovered_selection = 0;
     mnDataDel_804D6C6C = NULL;
+    archive = mn_804D6BB8;
     lbArchive_LoadSections(
-        mn_804D6BB8, (void**) &mnDataDel_804A0918.joint,
-        "MenMainConDl_Top_joint", &mnDataDel_804A0918.animjoint,
-        "MenMainConDl_Top_animjoint", &mnDataDel_804A0918.matanim_joint,
-        "MenMainConDl_Top_matanim_joint", &mnDataDel_804A0918.shapeanim_joint,
-        "MenMainConDl_Top_shapeanim_joint", &mnDataDel_804A0928.joint,
-        "MenMainCursorDl_Top_joint", &mnDataDel_804A0928.animjoint,
-        "MenMainCursorDl_Top_animjoint", &mnDataDel_804A0928.matanim_joint,
-        "MenMainCursorDl_Top_matanim_joint",
-        &mnDataDel_804A0928.shapeanim_joint,
-        "MenMainCursorDl_Top_shapeanim_joint", &mnDataDel_804A0938.joint,
-        "MenMainWarCmn_Top_joint", &mnDataDel_804A0938.animjoint,
-        "MenMainWarCmn_Top_animjoint", &mnDataDel_804A0938.matanim_joint,
-        "MenMainWarCmn_Top_matanim_joint", &mnDataDel_804A0938.shapeanim_joint,
-        "MenMainWarCmn_Top_shapeanim_joint", 0);
+        archive, &assets[0].joint, strings + 0xA0, &assets[0].animjoint,
+        strings + 0xB8, &assets[0].matanim_joint, strings + 0xD4,
+        &assets[0].shapeanim_joint, strings + 0xF4, &assets[1].joint,
+        strings + 0x118, &assets[1].animjoint, strings + 0x134,
+        &assets[1].matanim_joint, strings + 0x154, &assets[1].shapeanim_joint,
+        strings + 0x178, &assets[2].joint, strings + 0x19C,
+        &assets[2].animjoint, strings + 0x1B4, &assets[2].matanim_joint,
+        strings + 0x1D0, &assets[2].shapeanim_joint, strings + 0x1F0, 0);
     mnDataDel_8024FE4C(0U);
     proc = HSD_GObj_SetupProc(GObj_Create(0U, 1U, 0x80U), fn_8024F840, 0U);
     proc->flags_3 = HSD_GObj_804D783C;

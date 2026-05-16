@@ -207,6 +207,7 @@ void fn_80233E10(HSD_GObj* gobj)
 {
     MnItemSwData* data;
     u32 buttons;
+    u8* order;
     s32 i;
 
     PAD_STACK(0x20);
@@ -220,8 +221,9 @@ void fn_80233E10(HSD_GObj* gobj)
         sfxBack();
         mn_804A04F0.entering_menu = 0;
         data = (MnItemSwData*) mnItemSw_804D6BE8->user_data;
-        for (i = 0; i < 0x1F; i++) {
-            mn_8022E978(mnItemSw_803ED340.item_order[i], data->items[i]);
+        order = mnItemSw_803ED340.item_order;
+        for (i = 0; i < 0x1F; i++, order++) {
+            mn_8022E978(*order, data->items[i]);
         }
         gmMainLib_8015CC58()->item_freq = data->x21 - 1;
         lb_8001CE00();
@@ -244,8 +246,9 @@ void fn_80233E10(HSD_GObj* gobj)
             }
             mn_804A04F0.confirmed_selection = (u8) i;
             data = (MnItemSwData*) mnItemSw_804D6BE8->user_data;
-            for (i = 0; i < 0x1F; i++) {
-                mn_8022E978(mnItemSw_803ED340.item_order[i], data->items[i]);
+            order = mnItemSw_803ED340.item_order;
+            for (i = 0; i < 0x1F; i++, order++) {
+                mn_8022E978(*order, data->items[i]);
             }
             gmMainLib_8015CC58()->item_freq = data->x21 - 1;
             return;
@@ -254,8 +257,9 @@ void fn_80233E10(HSD_GObj* gobj)
         sfxForward();
         if ((s32) gm_801A4310() == 1) {
             data = (MnItemSwData*) mnItemSw_804D6BE8->user_data;
-            for (i = 0; i < 0x1F; i++) {
-                mn_8022E978(mnItemSw_803ED340.item_order[i], data->items[i]);
+            order = mnItemSw_803ED340.item_order;
+            for (i = 0; i < 0x1F; i++, order++) {
+                mn_8022E978(*order, data->items[i]);
             }
             gmMainLib_8015CC58()->item_freq = data->x21 - 1;
             lb_8001CE00();
@@ -263,8 +267,9 @@ void fn_80233E10(HSD_GObj* gobj)
             return;
         }
         data = (MnItemSwData*) mnItemSw_804D6BE8->user_data;
-        for (i = 0; i < 0x1F; i++) {
-            mn_8022E978(mnItemSw_803ED340.item_order[i], data->items[i]);
+        order = mnItemSw_803ED340.item_order;
+        for (i = 0; i < 0x1F; i++, order++) {
+            mn_8022E978(*order, data->items[i]);
         }
         gmMainLib_8015CC58()->item_freq = data->x21 - 1;
         lb_8001CE00();

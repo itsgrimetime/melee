@@ -765,8 +765,8 @@ static void mnCount_InitUserData_noinline(MnCountData* userdata)
 
 void mnCount_Create(void)
 {
-    HSD_GObj* gobj;
     MnCountData* userdata;
+    HSD_GObj* gobj;
     HSD_GObjProc* proc;
 
     mn_804D6BC8.cooldown = 5;

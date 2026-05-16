@@ -357,40 +357,48 @@ void mn_8022FB88(u8 arg0, void* arg1)
 
 void mn_8022FD18(u8 arg0)
 {
-    u16 sp14;
-    u8 sp10;
-    s32 spC;
+    UNUSED u8 pad[8];
+    struct {
+        s32 spC;
+        u8 sp10;
+        u8 pad_11[3];
+        u16 sp14;
+    } sp;
     HSD_JObj* jobj;
+    HSD_JObj** jobjs;
     struct mn_8022FB88_arg1_t* data;
-    s32 i;
+    struct mn_8022FB88_arg1_t* data2;
+    int i;
     u8* ptr;
     u8 val;
 
     data = mn_804D6BD0->user_data;
-    spC = mn_804DBE08;
-    sp14 = mn_804DBE04;
-    sp10 = mn_804DBE0C;
+    sp.spC = mn_804DBE08;
+    sp.sp14 = mn_804DBE04;
+    data2 = data;
+    sp.sp10 = mn_804DBE0C;
     if (arg0 != 0) {
-        for (i = 0, ptr = (u8*) &sp14; i < 2; i++) {
+        for (i = 0, ptr = (u8*) &sp.sp14; i < 2; i++) {
             HSD_JObjSetFlagsAll(data->x58[ptr[i]], 0x10U);
         }
-        for (i = 0, ptr = (u8*) &spC; i < 5; i++) {
-            HSD_JObjSetFlagsAll(data->x58[ptr[i]], 0x10U);
+        for (i = 0, ptr = (u8*) &sp.spC; i < 5; i++) {
+            HSD_JObjClearFlagsAll(data->x58[ptr[i]], 0x10U);
         }
-        mn_8022FB88(data->x3, data);
+        mn_8022FB88(data2->x3, data2);
         return;
     }
-    for (i = 0, ptr = (u8*) &sp14; i < 2; i++) {
+    for (i = 0, ptr = (u8*) &sp.sp14; i < 2; i++) {
+        HSD_JObjClearFlagsAll(data->x58[ptr[i]], 0x10U);
+    }
+    for (i = 0, ptr = (u8*) &sp.spC; i < 5; i++) {
         HSD_JObjSetFlagsAll(data->x58[ptr[i]], 0x10U);
     }
-    for (i = 0, ptr = (u8*) &spC; i < 5; i++) {
-        HSD_JObjSetFlagsAll(data->x58[ptr[i]], 0x10U);
-    }
+    jobjs = data->x58;
     val = data->x9;
-    jobj = data->x58[7];
+    jobj = jobjs[7];
     HSD_JObjReqAnimAll(jobj, (f32) (u8) (data->x9 / 10));
     HSD_JObjAnimAll(jobj);
-    jobj = data->x58[8];
+    jobj = jobjs[8];
     HSD_JObjReqAnimAll(jobj, (f32) (u8) (val % 10));
     HSD_JObjAnimAll(jobj);
 }

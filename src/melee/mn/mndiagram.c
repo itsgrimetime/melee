@@ -91,7 +91,7 @@ static s32 mnDiagram_804D4FA0 = 0xFF;
 /// @brief Gets the fighter ID at the given sorted index.
 /// @param idx Index into the sorted fighter list
 /// @return Fighter ID
-u8 mnDiagram_GetFighterByIndex(int idx)
+int mnDiagram_GetFighterByIndex(int idx)
 {
     return mnDiagram_804A0750.sorted_fighters[idx];
 }
@@ -99,7 +99,7 @@ u8 mnDiagram_GetFighterByIndex(int idx)
 /// @brief Gets the name ID at the given sorted index.
 /// @param idx Index into the sorted name list
 /// @return Name ID
-u8 mnDiagram_GetNameByIndex(int idx)
+int mnDiagram_GetNameByIndex(int idx)
 {
     return mnDiagram_804A076C.sorted_names[idx];
 }
@@ -666,31 +666,39 @@ void mnDiagram_8023FA6C(void)
     int i, j;
     u8* src = mnDiagram_803EE74C;
     u8* dst = mnDiagram_804A0750.sorted_fighters;
-    PAD_STACK(8);
+    u8 fighter;
+    PAD_STACK(16);
 
-    for (i = 0; i < 0x19; i++) {
+    for (i = 0; i < 0x19; i++, src++, dst++) {
         u32 total = 0;
-        dst[i] = src[i];
+        *dst = *src;
+        fighter = *src;
         for (j = 0; j < 0x19; j++) {
             if (mn_IsFighterUnlocked(j) != 0) {
-                total += GetPersistentFighterData(src[i])->fighter_kos[j];
+                total +=
+                    GetPersistentFighterData(fighter)->fighter_kos[(u8) j];
             }
         }
-        totals[src[i]] = total;
+        totals[*src] = total;
     }
 
-    for (i = 0; i < 0x19; i++) {
+    dst = mnDiagram_804A0750.sorted_fighters;
+    for (i = 0; i < 0x19; i++, dst++) {
         int max_idx = i;
-        for (j = i + 1; j < 0x19; j++) {
-            if ((mn_IsFighterUnlocked(dst[j]) != 0) &&
-                ((totals[dst[max_idx]] < totals[dst[j]]) ||
-                 (mn_IsFighterUnlocked(dst[max_idx]) == 0)))
+        u8* scan = &mnDiagram_804A0750.sorted_fighters[i + 1];
+        for (j = i + 1; j < 0x19; j++, scan++) {
+            if ((mn_IsFighterUnlocked(*scan) != 0) &&
+                ((totals[mnDiagram_804A0750.sorted_fighters[max_idx]] <
+                  totals[*scan]) ||
+                 ((mn_IsFighterUnlocked(
+                       mnDiagram_804A0750.sorted_fighters[max_idx]) == 0) &&
+                  (mn_IsFighterUnlocked(*scan) != 0))))
             {
                 max_idx = j;
             }
         }
         if (max_idx != i) {
-            u8* p = &dst[max_idx];
+            u8* p = &mnDiagram_804A0750.sorted_fighters[max_idx];
             int n = max_idx - i;
             u8 temp = *p;
             while (n > 0) {
@@ -698,7 +706,7 @@ void mnDiagram_8023FA6C(void)
                 p--;
                 n--;
             }
-            dst[i] = temp;
+            *dst = temp;
         }
     }
 }
@@ -708,31 +716,39 @@ void mnDiagram_8023FC28(void)
     u32 totals[0x78];
     int i, j;
     u8* dst = ((mnDiagram_Assets*) &mnDiagram_804A0750)->sorted_names;
-    PAD_STACK(16);
+    u32* total_p = totals;
+    PAD_STACK(8);
 
-    for (i = 0; i < 0x78; i++) {
+    for (i = 0; i < 0x78; i++, dst++, total_p++) {
         u32 total = 0;
-        dst[i] = (u8) i;
+        *dst = (u8) i;
         for (j = 0; j < 0x78; j++) {
             if (GetNameText((u8) j) != NULL) {
                 total += GetPersistentNameData((u8) i)->vs_kos[(u8) j];
             }
         }
-        totals[i] = total;
+        *total_p = total;
     }
 
-    for (i = 0; i < 0x78; i++) {
+    dst = ((mnDiagram_Assets*) &mnDiagram_804A0750)->sorted_names;
+    for (i = 0; i < 0x78; i++, dst++) {
         int max_idx = i;
-        for (j = i + 1; j < 0x78; j++) {
-            if ((GetNameText(dst[j]) != NULL) &&
-                ((totals[dst[max_idx]] < totals[dst[j]]) ||
-                 (GetNameText(dst[max_idx]) == NULL)))
+        u8* scan =
+            &((mnDiagram_Assets*) &mnDiagram_804A0750)->sorted_names[i + 1];
+        for (j = i + 1; j < 0x78; j++, scan++) {
+            if ((GetNameText(*scan) != NULL) &&
+                ((totals[((mnDiagram_Assets*) &mnDiagram_804A0750)
+                             ->sorted_names[max_idx]] < totals[*scan]) ||
+                 ((GetNameText(((mnDiagram_Assets*) &mnDiagram_804A0750)
+                                   ->sorted_names[max_idx]) == NULL) &&
+                  (GetNameText(*scan) != NULL))))
             {
                 max_idx = j;
             }
         }
         if (max_idx != i) {
-            u8* p = &dst[max_idx];
+            u8* p = &((mnDiagram_Assets*) &mnDiagram_804A0750)
+                         ->sorted_names[max_idx];
             int n = max_idx - i;
             u8 temp = *p;
             while (n > 0) {
@@ -740,7 +756,7 @@ void mnDiagram_8023FC28(void)
                 p--;
                 n--;
             }
-            dst[i] = temp;
+            *dst = temp;
         }
     }
 }

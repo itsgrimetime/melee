@@ -1,5 +1,7 @@
 #include "mnnamenew.h"
 
+#include "mn/mnnamenew.static.h"
+
 #include "baselib/debug.h"
 #include "dolphin/gx/GXStruct.h"
 #include "gm/gm_18A5.h"
@@ -28,7 +30,6 @@
 #include "sysdolphin/baselib/sislib.h"
 
 #include <dolphin/os.h>
-typedef char* GlyphRow[4];
 
 extern volatile char mnNameNew_NullCharacter;
 extern u8 mnNameNew_PortInUse;
@@ -39,7 +40,6 @@ extern u8 mn_804D6BB4;
 extern u8 mn_804D6BB5;
 extern u8 mnNameNew_804D4F7C[4];
 extern char mnNameNew_SpaceCharacter[2];
-extern GlyphRow* mnNameNew_803EDCE4;
 extern void* mnNameNew_804A06F0[];
 extern void* mnNameNew_804A0700[];
 extern void* mnNameNew_804A0710[];
@@ -53,16 +53,12 @@ extern HSD_CObjDesc* MenMain_cam;
 extern UNK_T MenMain_lights;
 extern HSD_FogDesc* MenMain_fog;
 
-static AnimLoopSettings mnNameNew_803EDA58[3] = {
+AnimLoopSettings mnNameNew_803EDA58[3] = {
     { 0.0f, 19.0f, -0.1f },
     { 20.0f, 39.0f, -0.1f },
     { 0.0f, 10.0f, -0.1f },
 };
 
-extern char** mnNameNew_803EDA8C;
-extern char** mnNameNew_803EDB54;
-extern char** mnNameNew_803EDC1C;
-extern GlyphRow* mnNameNew_803EE004;
 extern Vec3 mnNameNew_803EE324;
 
 static Vec3 mnNameNew_803EE330 = { -0.7f, 0.7f, 0.0f };
@@ -365,26 +361,26 @@ s32 mnNameNew_8023BAA8(NameNewEntry* arg0, s32 arg1, u8 arg2)
     return (s32) arg2;
 }
 
-s32 PickAutoName(HSD_GObj* arg0)
+void PickAutoName(HSD_GObj* arg0)
 {
     NameNewEntry* data;
-    u8* cur_text;
-    u8* text;
+    char* cur_text;
     u8** names;
-    u8** name_ptr;
     s32 count;
     s32 pick;
     s32 dup;
     s32 char_idx;
-    s32 name_idx;
+    char* text;
+    u8** name_ptr;
     u8 ch;
+    s32 name_idx;
     u8 tmp;
     s8 null_ch;
 
     PAD_STACK(48);
 
     data = arg0->user_data;
-    cur_text = (u8*) mnNameNew_CurrentNameText;
+    cur_text = mnNameNew_CurrentNameText;
 
     do {
         dup = 0;
@@ -415,13 +411,15 @@ s32 PickAutoName(HSD_GObj* arg0)
     name_idx = 0;
     char_idx = name_idx;
     cur_text[0] = mnNameNew_NullCharacter;
-    text = cur_text;
+    text = &cur_text[name_idx];
     cur_text[3] = mnNameNew_NullCharacter;
     cur_text[6] = mnNameNew_NullCharacter;
     cur_text[9] = mnNameNew_NullCharacter;
 
     name_ptr = &AutoNamesList[pick];
-    while ((s8) mnNameNew_NullCharacter != (s8) (ch = (*name_ptr)[char_idx])) {
+    while ((s8) (null_ch = mnNameNew_NullCharacter) !=
+           (s8) (ch = (*name_ptr)[char_idx]))
+    {
         text[0] = ch;
         text[1] = (*name_ptr)[char_idx + 1];
         text[2] = mnNameNew_NullCharacter;
@@ -430,7 +428,7 @@ s32 PickAutoName(HSD_GObj* arg0)
         text += 3;
     }
 
-    cur_text[name_idx * 3] = mnNameNew_NullCharacter;
+    cur_text[name_idx * 3] = null_ch;
 
     tmp = data->auto_history[0];
     data->auto_history[0] = (u8) pick;
@@ -441,8 +439,6 @@ s32 PickAutoName(HSD_GObj* arg0)
     ch = data->auto_history[3];
     data->auto_history[3] = tmp;
     data->auto_history[4] = ch;
-
-    return (s32) (s8) mnNameNew_NullCharacter;
 }
 
 bool NameContainsOnlySpaces(void)
@@ -466,15 +462,15 @@ bool NameContainsOnlySpaces(void)
 
 s32 WriteCharactersForNameAtIndex(u8 arg0, s32 arg1)
 {
-    s32 idx;
     struct NameTagData* nametag;
-    u8 ch;
-    u8* text;
-    u8* ptr;
+    s32 idx;
+    char ch;
+    char* text;
+    char* ptr;
     s32 ret;
 
     nametag = GetPersistentNameData((s32) arg0);
-    text = (u8*) mnNameNew_CurrentNameText;
+    text = mnNameNew_CurrentNameText;
     idx = 0;
     if ((s8) mnNameNew_NullCharacter != (s8) *text) {
         ptr = text;
@@ -524,8 +520,10 @@ char* AddCharacterToName(char* arg0, u8 arg1, u8 arg2, u8 arg3)
     char ch;
     char* var_r4;
     char** table;
+    char* base;
     u32 temp;
 
+    base = (char*) mnNameNew_803EDA58;
     if ((s32) arg3 != 2) {
         if (((((s32) (temp = arg3)) < ((unsigned short) 2)) & 0xFFFFFFFF) &&
             (((s32) ((unsigned long) arg3)) >= 0))
@@ -535,22 +533,24 @@ char* AddCharacterToName(char* arg0, u8 arg1, u8 arg2, u8 arg3)
 
             if ((u8) (arg1 - 0x30) <= 1U) {
                 if ((arg2 % 2) != 0) {
-                    table =
-                        AddCharacterToName_getGlyphs(mnNameNew_803EE004, arg1);
+                    table = AddCharacterToName_getGlyphs(
+                        (GlyphRow*) (base + 0x5AC), arg1);
                 } else {
-                    table =
-                        AddCharacterToName_getGlyphs(mnNameNew_803EDCE4, arg1);
+                    table = AddCharacterToName_getGlyphs(
+                        (GlyphRow*) (base + 0x28C), arg1);
                 }
             } else if ((arg3 == 0 && (arg2 % 2) == 0) ||
                        (arg3 == 1 && (arg2 % 2) != 0))
             {
-                table = AddCharacterToName_getGlyphs(mnNameNew_803EDCE4, arg1);
+                table = AddCharacterToName_getGlyphs(
+                    (GlyphRow*) (base + 0x28C), arg1);
             } else {
-                table = AddCharacterToName_getGlyphs(mnNameNew_803EE004, arg1);
+                table = AddCharacterToName_getGlyphs(
+                    (GlyphRow*) (base + 0x5AC), arg1);
             }
             var_r4 = arg0;
 
-            for (idx = mnNameNew_803EDC1C[arg1][1] * 0;
+            for (idx = ((char**) (base + 0x1C4))[arg1][1] * 0;
                  (null = (mnNameNew_NullCharacter & 0xFFFF) & 0xFFFF) !=
                  (ch = table[arg2 / 2][idx] & (0xFF & 0xFFu));
                  idx++)
@@ -561,9 +561,9 @@ char* AddCharacterToName(char* arg0, u8 arg1, u8 arg2, u8 arg3)
         }
         return arg0;
     }
-    arg0[0] = mnNameNew_803EDC1C[arg1][0];
-    arg0[1] = mnNameNew_803EDC1C[arg1][1];
-    arg0[2] = mnNameNew_803EDC1C[arg1][2];
+    arg0[0] = ((char**) (base + 0x1C4))[arg1][0];
+    arg0[1] = ((char**) (base + 0x1C4))[arg1][1];
+    arg0[2] = ((char**) (base + 0x1C4))[arg1][2];
     return arg0;
 }
 
@@ -1074,19 +1074,22 @@ static char mnNameNew_803EE708[] = "mnNameRefuseName";
 
 void mnNameNew_8023CE4C(void)
 {
-    GXColor sp20;
     Vec3 sp24;
+    GXColor sp20;
     NameNewEntry* data;
     HSD_JObj* jobj_a;
     HSD_JObj* jobj_b;
     HSD_Text* old_text;
     float y_minus;
+    f32 z;
     f32 char_spacing;
     f32 first_x;
-    u8* name_ptr;
     GXColor* sp20_ptr;
+    char* name_ptr;
     s32 i;
     HSD_Text* text;
+
+    PAD_STACK(4);
 
     data = ((HSD_GObj*) mnNameNew_804D6C08)->user_data;
     jobj_a = data->jobjs[14];
@@ -1098,14 +1101,14 @@ void mnNameNew_8023CE4C(void)
     }
     text = HSD_SisLib_803A6754(0, mn_804D6BB5);
     lb_8000B1CC(jobj_a, &mnNameNew_803EE330, &sp24);
-    name_ptr = (u8*) &mnNameNew_CurrentNameText;
+    name_ptr = mnNameNew_CurrentNameText;
     y_minus = -sp24.y;
+    z = sp24.z;
     text->pos_x = sp24.x;
     sp20_ptr = &sp20;
     text->pos_y = y_minus;
     i = 0;
-    text->pos_z = sp24.z;
-    text->pos_z = sp24.z;
+    text->pos_z = z;
     text->font_size.x = 0.04f;
     text->font_size.y = 0.05f;
     text->text_color = mnNameNew_804D4F6C;
@@ -1193,9 +1196,8 @@ void fn_8023D0F8(void* arg0)
 
 s32 mnNameNew_8023D130(GlyphVariantEntry* arg0, u8 arg1, u8 arg2, s32 arg3)
 {
-    u8 _padA[8];
-    Vec3 sp30;
     GXColor sp2C;
+    Vec3 sp30;
     HSD_JObj* jobj14;
     HSD_JObj* jobj18;
     HSD_JObj* jobj1C;
@@ -1207,19 +1209,27 @@ s32 mnNameNew_8023D130(GlyphVariantEntry* arg0, u8 arg1, u8 arg2, s32 arg3)
     f32 y_range;
     f32 font_x;
     f32 col_x;
+    f32 pos_x;
+    f32 pos_y;
+    f32 pos_z;
     s32 temp;
-    GlyphRow* table_upper;
-    GlyphRow* table_lower;
+    char** table_upper;
+    char** table_lower;
     GXColor* sp2C_ptr;
+    char* base;
 
-    jobj14 = arg0->jobjs[4];
+    base = (char*) mnNameNew_803EDA58;
     text = HSD_SisLib_803A6754(0, (s32) mn_804D6BB4);
+    jobj14 = arg0->jobjs[4];
     jobj18 = arg0->jobjs[5];
     jobj1C = arg0->jobjs[6];
-    lb_8000B1CC(jobj14, &mnNameNew_803EE324, &sp30);
-    text->pos_x = sp30.x;
-    text->pos_y = -sp30.y;
-    text->pos_z = sp30.z;
+    lb_8000B1CC(jobj14, (Vec3*) (base + 0x8CC), &sp30);
+    pos_y = -sp30.y;
+    pos_z = sp30.z;
+    pos_x = sp30.x;
+    text->pos_x = pos_x;
+    text->pos_y = pos_y;
+    text->pos_z = pos_z;
     text->font_size.x = 0.03f;
     text->font_size.y = 0.04f;
     text->text_color = mnNameNew_804D4F6C;
@@ -1227,22 +1237,22 @@ s32 mnNameNew_8023D130(GlyphVariantEntry* arg0, u8 arg1, u8 arg2, s32 arg3)
         HSD_JObjGetTranslationX(jobj18) - HSD_JObjGetTranslationX(jobj14);
     y_range =
         -(HSD_JObjGetTranslationY(jobj1C) - HSD_JObjGetTranslationY(jobj14));
-    temp = (arg3 * 4) & 0x3FC;
-    table_upper = &mnNameNew_803EE004[temp];
-    table_lower = &mnNameNew_803EDCE4[temp];
+    temp = ((u8) arg3) << 4;
+    table_upper = (char**) (base + 0x5AC + temp);
+    table_lower = (char**) (base + 0x28C + temp);
     sp2C_ptr = &sp2C;
     for (i = 0; i < (s32) arg1; i++) {
         if ((u8) (arg3 - 0x30) <= 1U) {
             if ((i % 2) != 0) {
-                str = (char*) table_upper[i / 2];
+                str = table_upper[i / 2];
             } else {
-                str = (char*) table_lower[i / 2];
+                str = table_lower[i / 2];
             }
         } else if ((arg2 == 0 && (i % 2) == 0) || (arg2 == 1 && (i % 2) != 0))
         {
-            str = (char*) table_lower[i / 2];
+            str = table_lower[i / 2];
         } else {
-            str = (char*) table_upper[i / 2];
+            str = table_upper[i / 2];
         }
         font_x = text->font_size.x;
         col_x = (f32) (i / 2) * x_range;
@@ -1347,31 +1357,33 @@ s32 mnNameNew_GlyphVariantSetup(NameNewEntry* arg0, u16 arg1, u8 arg2)
 
 s32 mnNameNew_8023DA08(NameNewEntry* arg0)
 {
-    s32 var_r29 = 1;
+    AnimLoopSettings* anim;
+    f32* end_frame;
+    NameNewEntry* data;
+    f32 frame;
+    s32 var_r29;
 
-    if (mn_8022ED6C(arg0->jobjs[12], &mnNameNew_803EDA58[2]) <
-        mnNameNew_803EDA58[2].end_frame)
-    {
+    data = arg0;
+    anim = mnNameNew_803EDA58;
+    var_r29 = 1;
+    frame = mn_8022ED6C(data->jobjs[12], &anim[2]);
+    end_frame = &anim[2].end_frame;
+    if (frame < *end_frame) {
         var_r29 = 0;
     }
-    if (mn_8022ED6C(arg0->jobjs[13], &mnNameNew_803EDA58[2]) <
-        mnNameNew_803EDA58[2].end_frame)
-    {
+    end_frame = &anim[2].end_frame;
+    if (mn_8022ED6C(data->jobjs[13], &anim[2]) < *end_frame) {
         var_r29 = 0;
     }
-    if (mn_8022EFD8(arg0->jobjs[4], mnNameNew_803EDA58) <
-        mnNameNew_803EDA58->end_frame)
-    {
+    end_frame = &anim->end_frame;
+    frame = mn_8022EFD8(data->jobjs[4], anim);
+    if (frame < *end_frame) {
         var_r29 = 0;
     }
-    if (mn_8022EFD8(arg0->jobjs[2], mnNameNew_803EDA58) <
-        mnNameNew_803EDA58->end_frame)
-    {
+    if (mn_8022EFD8(data->jobjs[2], anim) < *end_frame) {
         var_r29 = 0;
     }
-    if (mn_8022EFD8(arg0->jobjs[6], mnNameNew_803EDA58) <
-        mnNameNew_803EDA58->end_frame)
-    {
+    if (mn_8022EFD8(data->jobjs[6], anim) < *end_frame) {
         var_r29 = 0;
     }
     return var_r29;
@@ -1379,42 +1391,38 @@ s32 mnNameNew_8023DA08(NameNewEntry* arg0)
 
 void fn_8023DAEC(HSD_GObj* arg0)
 {
-    HSD_Text* text;
     s32 var_r30;
     NameNewEntry* data;
+    f32* end_frame;
+    f32 frame;
+    AnimLoopSettings* anim;
 
     PAD_STACK(8);
 
     data = arg0->user_data;
-    text = data->key_text;
-    if (text != NULL) {
-        HSD_SisLib_803A5CC4(text);
+    anim = mnNameNew_803EDA58;
+    if (data->key_text != NULL) {
+        HSD_SisLib_803A5CC4(data->key_text);
         data->key_text = NULL;
     }
-    text = data->name_disp_text;
-    if (text != NULL) {
-        HSD_SisLib_803A5CC4(text);
+    if (data->name_disp_text != NULL) {
+        HSD_SisLib_803A5CC4(data->name_disp_text);
         data->name_disp_text = NULL;
     }
-    text = data->desc_text;
-    if (text != NULL) {
-        HSD_SisLib_803A5CC4(text);
+    if (data->desc_text != NULL) {
+        HSD_SisLib_803A5CC4(data->desc_text);
         data->desc_text = NULL;
     }
     var_r30 = 1;
-    if (mn_8022EFD8(data->jobjs[4], &mnNameNew_803EDA58[1]) <
-        mnNameNew_803EDA58[1].end_frame)
-    {
+    frame = mn_8022EFD8(data->jobjs[4], &anim[1]);
+    end_frame = &anim[1].end_frame;
+    if (frame < *end_frame) {
         var_r30 = 0;
     }
-    if (mn_8022EFD8(data->jobjs[2], &mnNameNew_803EDA58[1]) <
-        mnNameNew_803EDA58[1].end_frame)
-    {
+    if (mn_8022EFD8(data->jobjs[2], &anim[1]) < *end_frame) {
         var_r30 = 0;
     }
-    if (mn_8022EFD8(data->jobjs[6], &mnNameNew_803EDA58[1]) <
-        mnNameNew_803EDA58[1].end_frame)
-    {
+    if (mn_8022EFD8(data->jobjs[6], &anim[1]) < *end_frame) {
         var_r30 = 0;
     }
     if (var_r30 != 0 || (u8) mn_804A04F0.x10 == 1) {
@@ -1528,19 +1536,22 @@ void fn_8023DBE8(HSD_GObj* arg0)
 
 void mnNameNew_8023E0D8(NameNewEntry* arg0)
 {
+    AnimLoopSettings* anim;
     HSD_JObj* jobj;
+    u16* jobj_ids;
     s32 i;
 
+    anim = mnNameNew_803EDA58;
     jobj = arg0->jobjs[12];
-    HSD_JObjReqAnim(jobj, mnNameNew_803EDA58[2].start_frame);
+    HSD_JObjReqAnim(jobj, anim[2].start_frame);
     HSD_JObjAnim(jobj);
 
     jobj = arg0->jobjs[13];
-    HSD_JObjReqAnim(jobj, mnNameNew_803EDA58[2].start_frame);
+    HSD_JObjReqAnim(jobj, anim[2].start_frame);
     HSD_JObjAnim(jobj);
 
     jobj = arg0->jobjs[4];
-    HSD_JObjReqAnim(jobj, mnNameNew_803EDA58[0].start_frame);
+    HSD_JObjReqAnim(jobj, anim[0].start_frame);
     HSD_JObjAnim(jobj);
 
     jobj = arg0->jobjs[5];
@@ -1548,7 +1559,7 @@ void mnNameNew_8023E0D8(NameNewEntry* arg0)
     HSD_JObjAnimAll(jobj);
 
     jobj = arg0->jobjs[2];
-    HSD_JObjReqAnim(jobj, mnNameNew_803EDA58[0].start_frame);
+    HSD_JObjReqAnim(jobj, anim[0].start_frame);
     HSD_JObjAnim(jobj);
 
     jobj = arg0->jobjs[5];
@@ -1556,12 +1567,13 @@ void mnNameNew_8023E0D8(NameNewEntry* arg0)
     HSD_JObjAnimAll(jobj);
 
     jobj = arg0->jobjs[6];
-    HSD_JObjReqAnim(jobj, mnNameNew_803EDA58[0].start_frame);
+    HSD_JObjReqAnim(jobj, anim[0].start_frame);
     HSD_JObjAnim(jobj);
 
+    jobj_ids = (u16*) ((char*) anim + 0x24);
     for (i = 0x32; i < 0x3A; i++) {
-        jobj = arg0->jobjs[mnNameNew_803EDA7C[i - 0x32]];
-        HSD_JObjReqAnimAll(jobj, (f32) (i == arg0->x1));
+        jobj = arg0->jobjs[jobj_ids[i - 0x32]];
+        HSD_JObjReqAnimAll(jobj, (f32) (arg0->x1 == i));
         HSD_JObjAnimAll(jobj);
     }
 }
@@ -1614,22 +1626,26 @@ void mnNameNew_8023E32C(s32 arg0)
     s32 k;
     f32 x_range;
     f32 y_range;
+    char* base;
+    void** setup;
 
     PAD_STACK(8);
 
+    base = (char*) mnNameNew_803EDA58;
+    setup = mnNameNew_804A06F0;
     gobj = GObj_Create(6U, 7U, 0x80U);
     mnNameNew_804D6C08 = gobj;
-    root_jobj = HSD_JObjLoadJoint(mnNameNew_804A06F0[0]);
+    root_jobj = HSD_JObjLoadJoint(setup[0]);
     HSD_GObjObject_80390A70(gobj, HSD_GObj_804D7849, root_jobj);
     GObj_SetupGXLink(gobj, HSD_GObj_JObjCallback, 4U, 0x80U);
     HSD_GObj_SetupProc(gobj, (HSD_GObjEvent) fn_8023DBE8, 0U);
-    HSD_JObjAddAnimAll(root_jobj, mnNameNew_804A06F0[1], mnNameNew_804A06F0[2],
-                       mnNameNew_804A06F0[3]);
+    HSD_JObjAddAnimAll(root_jobj, setup[1], setup[2], setup[3]);
     HSD_JObjReqAnimAll(root_jobj, 0.0f);
     HSD_JObjAnimAll(root_jobj);
     user_data = HSD_MemAlloc(0x6C);
     if (user_data == NULL) {
-        HSD_ASSERTREPORT(0x717U, user_data, "Can't get userdata\n");
+        OSReport(base + 0x904);
+        __assert(base + 0x91C, 0x717U, base + 0x928);
     }
     GObj_InitUserData(gobj, 0U, HSD_Free, user_data);
     InitNameEntryUIState(user_data, arg0);
@@ -1647,8 +1663,8 @@ void mnNameNew_8023E32C(s32 arg0)
                   HSD_JObjGetTranslationX(user_data->jobjs[16]);
         y_range = HSD_JObjGetTranslationY(user_data->jobjs[18]) -
                   HSD_JObjGetTranslationY(user_data->jobjs[16]);
-        mnName_80239F5C(key_jobj, x_range * (f32) (k / 5));
-        mnName_80239EBC(key_jobj, y_range * (f32) (k % 5));
+        mnName_80239F5C(key_jobj, x_range * (f32) ((u8) k / 5));
+        mnName_80239EBC(key_jobj, y_range * (f32) ((u8) k % 5));
         HSD_JObjAddChild(user_data->jobjs[16], key_jobj);
     }
     user_data->key_text =

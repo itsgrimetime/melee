@@ -5,8 +5,8 @@
 
 #include <baselib/forward.h>
 
-/* 23EA2C */ u8 mnDiagram_GetFighterByIndex(int idx);
-/* 23EA40 */ u8 mnDiagram_GetNameByIndex(int idx);
+/* 23EA2C */ int mnDiagram_GetFighterByIndex(int idx);
+/* 23EA40 */ int mnDiagram_GetNameByIndex(int idx);
 /* 23EA54 */ bool mnDiagram_IsDistanceOverflow(u32 distance);
 /* 23EAC4 */ u32 mnDiagram_ConvertDistanceForDisplay(u32 distance);
 /* 23EB84 */ s32 mnDiagram_GetHitPercentage(u8 is_name_mode, u8 player_index);

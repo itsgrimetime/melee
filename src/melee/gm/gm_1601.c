@@ -1698,9 +1698,9 @@ int fn_80163FA4(u8 arg0)
     return count;
 }
 
-u8 gm_8016400C(u8 ckind)
+u8 gm_8016400C(int ckind)
 {
-    return lbl_803B7888[ckind];
+    return lbl_803B7888[(u8) ckind];
 }
 
 u8 gm_80164024(u8 arg0)

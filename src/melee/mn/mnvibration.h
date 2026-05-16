@@ -26,7 +26,7 @@ extern SDATA char mnVibration_804D4FFC[];
 /* 2480B4 */ void mnVibration_802480B4(HSD_JObj* arg0, u8 arg1, u8 arg2);
 /* 24829C */ void mnVibration_8024829C(HSD_GObj* arg0);
 /* 248444 */ void mnVibration_80248444(HSD_GObj* arg0, u8 arg1, u8 arg2);
-/* 248644 */ s32 mnVibration_80248644(HSD_GObj* arg0);
+/* 248644 */ void mnVibration_80248644(HSD_GObj* arg0);
 /* 248748 */ void fn_80248748(HSD_GObj* gobj);
 /* 2487A8 */ void fn_802487A8(HSD_GObj* gobj);
 /* 248A78 */ void fn_80248A78(HSD_GObj*);
