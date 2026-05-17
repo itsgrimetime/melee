@@ -89,6 +89,15 @@ f32 mn_804D4B98 = 1.0f;
 static JObjIndices mn_804DBE40 = { 0x02030506 };
 static JObjIndices mn_804DBE48 = { 0x02030506 };
 
+/// @brief Clear a SisLib text pointer, destroying the text if non-NULL.
+static inline void SisLib_ClearText(HSD_Text** text)
+{
+    if (*text != NULL) {
+        HSD_SisLib_803A5CC4(*text);
+        *text = NULL;
+    }
+}
+
 /// @brief Get the description text index for a menu selection.
 static inline u8 mnRulePlus_GetDescIdx(u8 sel, u8 confirmed)
 {
@@ -552,20 +561,14 @@ void mn_80232D4C(HSD_GObj* gobj, u32 arg1, u32 arg2)
     switch ((s32) data->state) {
     case 2:
     case 4:
-        if (data->description != NULL) {
-            HSD_SisLib_803A5CC4(data->description);
-            data->description = NULL;
-        }
+        SisLib_ClearText(&data->description);
     case 5:
         return;
     case 3:
     case 1:
         if (data->description == NULL) {
             confirmed = mn_804A04F0.confirmed_selection;
-            if (data->description != NULL) {
-                HSD_SisLib_803A5CC4(data->description);
-                data->description = NULL;
-            }
+            SisLib_ClearText(&data->description);
             desc_idx = mnRulePlus_GetDescIdx(selection, confirmed);
             text = HSD_SisLib_803A5ACC(0, 1, mn_804DBE4C, mn_804DBE50,
                                        mn_804DBE54, mn_804DBE58, mn_804DBE5C);
@@ -579,12 +582,8 @@ void mn_80232D4C(HSD_GObj* gobj, u32 arg1, u32 arg2)
         if ((s32) arg1 != 0 ||
             ((s32) arg2 != 0 && selection != 0 && selection != 5))
         {
-            text = data->description;
             confirmed = mn_804A04F0.confirmed_selection;
-            if (text != NULL) {
-                HSD_SisLib_803A5CC4(text);
-                data->description = NULL;
-            }
+            SisLib_ClearText(&data->description);
             desc_idx = mnRulePlus_GetDescIdx(selection, confirmed);
             text = HSD_SisLib_803A5ACC(0, 1, mn_804DBE4C, mn_804DBE50,
                                        mn_804DBE54, mn_804DBE58, mn_804DBE5C);
@@ -963,10 +962,7 @@ HSD_GObj* mn_80233218(MenuState state)
         HSD_Text* text;
         u8 desc_idx;
         confirmed = mn_804A04F0.confirmed_selection;
-        if (user_data->description != NULL) {
-            HSD_SisLib_803A5CC4(user_data->description);
-            user_data->description = NULL;
-        }
+        SisLib_ClearText(&user_data->description);
         desc_idx = mnRulePlus_GetDescIdx(selected, confirmed);
         text = HSD_SisLib_803A5ACC(0, 1, mn_804DBE4C, mn_804DBE50, mn_804DBE54,
                                    mn_804DBE58, mn_804DBE5C);
