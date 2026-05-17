@@ -753,15 +753,10 @@ HSD_GObj* mn_80233218(MenuState state)
     jobj_map[14] = 14;
     jobj_map[15] = 15;
     {
-        u16 val = 0x10;
-        u16* p = jobj_map + 16;
-        s32 ctr = 17 - 16;
-        if (16 < 17) {
-            do {
-                *p = val;
-                p++;
-                val++;
-            } while (--ctr);
+        u16 val;
+        u16* p;
+        for (val = 16, p = jobj_map + 16; (s32) val < 17; val++, p++) {
+            *p = val;
         }
     }
 
