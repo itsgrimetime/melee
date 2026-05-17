@@ -17,12 +17,12 @@
 
 #undef HSD_ASSERT
 #define HSD_ASSERT(line, cond)                                                \
-    ((cond) ? ((void) 0) : __assert(un_804D5A54, line, un_804D5A5C))
+    ((cond) ? ((void) 0) : __assert(un_804D5A54, line, #cond))
 #include "baselib/lobj.h"
 
 #undef HSD_ASSERT
 #define HSD_ASSERT(line, cond)                                                \
-    ((cond) ? ((void) 0) : __assert(un_804D5A64, line, un_804D5A6C))
+    ((cond) ? ((void) 0) : __assert(un_804D5A64, line, #cond))
 #include "baselib/cobj.h"
 #include "baselib/controller.h"
 #include "baselib/displayfunc.h"

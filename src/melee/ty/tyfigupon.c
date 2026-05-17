@@ -1,14 +1,14 @@
-/* Override HSD_ASSERT to use named .sdata symbols before any header brings in
- * jobj.h's inlines.  This lets the chained asserts inside HSD_JObjSet*X /
- * HSD_JObjSetMtxDirty share a single pair of strings instead of generating
- * anonymous duplicates.  un_804D5A90 / un_804D5A98 are declared in
- * tyfigupon.h. */
+/* Override HSD_ASSERT to use the named .sdata file string but keep the
+ * literal stringified condition — most jobj.h inline asserts have a "jobj"
+ * cond which the compiler pools, but some (HSD_JObjSetRotationY etc.)
+ * have unique condition strings ("!(jobj->flags & JOBJ_USE_QUATERNION)")
+ * that the original places in .data.  Using #cond preserves those. */
 #include "tyfigupon.h"
 
 #include <baselib/debug.h>
 #undef HSD_ASSERT
 #define HSD_ASSERT(line, cond)                                                \
-    ((cond) ? ((void) 0) : __assert(un_804D5A90, line, un_804D5A98))
+    ((cond) ? ((void) 0) : __assert(un_804D5A90, line, #cond))
 
 #include "inlines.h"
 #include "math.h"

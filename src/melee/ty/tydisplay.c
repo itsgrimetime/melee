@@ -10,7 +10,7 @@
 #include <baselib/debug.h>
 #undef HSD_ASSERT
 #define HSD_ASSERT(line, cond)                                                \
-    ((cond) ? ((void) 0) : __assert(un_804D5AAC, line, un_804D5AB4))
+    ((cond) ? ((void) 0) : __assert(un_804D5AAC, line, #cond))
 #include <baselib/jobj.h>
 
 /* For tydisplay.c's own HSD_ASSERT call sites, route through the named
