@@ -5,6 +5,11 @@
 
 #include "baselib/forward.h"
 
+/* Named .sdata assert strings used by tyfigupon.c, exposed so the file can
+ * route its overridden HSD_ASSERT through them. */
+extern char un_804D5A90[8];
+extern char un_804D5A98[8];
+
 /* 314AA8 */ void tyFigupon_80314AA8(HSD_JObj*, char*, char*, char*);
 /* 314B54 */ s32 un_80314B54(void);
 /* 314BE4 */ void tyFigupon_80314BE4(HSD_GObj* gobj, int unused);
