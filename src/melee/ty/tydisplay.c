@@ -13,9 +13,13 @@
     ((cond) ? ((void) 0) : __assert(un_804D5AAC, line, un_804D5AB4))
 #include <baselib/jobj.h>
 
+/* For tydisplay.c's own HSD_ASSERT call sites, route through the named
+ * .data file string + .sdata condition string to avoid generating fresh
+ * anonymous duplicates ("tydisplay.c" and "0").  un_804D5AA8 / str_file
+ * are declared in tydisplay.h. */
 #undef HSD_ASSERT
 #define HSD_ASSERT(line, cond)                                                \
-    ((cond) ? ((void) 0) : __assert(__FILE__, line, #cond))
+    ((cond) ? ((void) 0) : __assert(str_file, line, un_804D5AA8))
 
 #include "db/db.h"
 #include "gm/gm_1A3F.h"
@@ -150,6 +154,27 @@ typedef struct TyDspConfig {
     /* 0x7C */ s32 x7C;
 } TyDspConfig;
 extern TyDspConfig* un_804D6F18;
+
+/* .data layout matching original tydisplay.c — the strings live as one
+ * contiguous block starting at un_803FEFF0; un_8031B460_OnEnter indexes
+ * into them via strbase + 0x18 / 0xA8 / 0xB8 / 0x18C etc.  Order, sizes,
+ * and trailing padding must match the original to keep addi offsets in
+ * the functions consistent. */
+char un_803FEFF0[] = "ToyDspPanel_Top_joint";            /* 22 bytes + 2 pad */
+static char str_bg_joint[] = "ToyDspBg_Top_joint";       /* 19 + 1 pad */
+static char str_stand_joint[] = "ToyDspStand_Top_joint"; /* 22 + 2 pad */
+static char str_fog[] = "ScMenDisplay_fog";              /* 17 + 3 pad */
+static char str_err_irregul[] =
+    "*** tyDisplay Atari Irregul!\n"; /* 30 + 2 pad */
+char str_file[] = "tydisplay.c";      /* 12 + 0 pad */
+static char str_err_scale[] = "*** tyDisplay Table Scale Irregul!\n"; /* 36 */
+static char str_archive_jp[] = "TyMnDisp.dat"; /* 13 + 3 pad */
+static char str_archive_us[] = "TyMnDisp.usd"; /* 13 + 3 pad */
+static char str_err_bg[] =
+    "*** BG data aren't being loaded!\n"; /* 34 + 2 pad */
+static char str_err_panel[] =
+    "*** Can not Load Panel Label(%s)\n";                     /* 34 + 2 pad */
+static char str_scene_lights[] = "ScMenDisplay_scene_lights"; /* 26 + 6 pad */
 
 void un_803182D4_OnFrame(void)
 {
@@ -418,7 +443,7 @@ void un_80318CB4(s32 arg0)
                         f32 dz = grid->pos[i].z - grid->pos[k].z;
                         f32 dist = sqrtf(dx * dx + dz * dz);
                         if (dist > 2.1474836e9f || dist < -2.1474836e9f) {
-                            OSReport("*** tyDisplay Atari Irregul!\n");
+                            OSReport(str_err_irregul);
                             HSD_ASSERT(0xC6, 0);
                         }
                         if ((s32) dist <= (s32) 8.0f) {
@@ -1010,7 +1035,7 @@ void un_80319EF0(void)
             }
         }
         if (scale > 2.1474836e9f || scale < -2.1474836e9f) {
-            OSReport("*** tyDisplay Table Scale Irregul!\n");
+            OSReport(str_err_scale);
             HSD_ASSERT(0x28C, 0);
         }
         if ((s32) scale != 0) {
@@ -1404,7 +1429,7 @@ void un_8031B1FC(void)
     } while (zero);
 
     if (ptr->archive == NULL) {
-        OSReport("*** BG data aren't being loaded!\n");
+        OSReport(str_err_bg);
         HSD_ASSERT(0x3FD, 0);
     }
 
@@ -1422,7 +1447,7 @@ void un_8031B1FC(void)
         ptr->gobj4 = NULL;
     }
 
-    joint = HSD_ArchiveGetPublicAddress(ptr->archive, "ToyDspBg_Top_joint");
+    joint = HSD_ArchiveGetPublicAddress(ptr->archive, str_bg_joint);
     if (joint != NULL) {
         ptr->gobj4 = GObj_Create(9, 9, zero);
         jobj = HSD_JObjLoadJoint(joint);
@@ -1432,7 +1457,7 @@ void un_8031B1FC(void)
         return;
     }
 
-    OSReport("*** Can not Load Panel Label(%s)\n", "ToyDspBg_Top_joint");
+    OSReport(str_err_panel, str_bg_joint);
     HSD_ASSERT(0x43E, 0);
 }
 
@@ -1453,12 +1478,11 @@ void un_8031B328(void)
     PAD_STACK(24);
 
     if ((temp3 = ptr)->archive == NULL) {
-        OSReport("*** BG data aren't being loaded!\n");
-        OSPanic(__FILE__, 0x459, "0");
+        OSReport(str_err_bg);
+        OSPanic(str_file, 0x459, un_804D5AC0);
     }
 
-    lightData = HSD_ArchiveGetPublicAddress(temp3->archive,
-                                            "ScMenDisplay_scene_lights");
+    lightData = HSD_ArchiveGetPublicAddress(temp3->archive, str_scene_lights);
     if (lightData != NULL) {
         scene->x00 = GObj_Create(2, 3, 0);
         lobj = un_80306EEC(lightData, 0);
@@ -1473,7 +1497,7 @@ void un_8031B328(void)
         HSD_LObjSetColor(lobj, *(GXColor*) &un_804DE018);
     }
 
-    fogDesc = HSD_ArchiveGetPublicAddress(temp3->archive, "ScMenDisplay_fog");
+    fogDesc = HSD_ArchiveGetPublicAddress(temp3->archive, str_fog);
     if (fogDesc != NULL) {
         scene->x08 = GObj_Create(3, 4, 0);
         HSD_GObjObject_80390A70(scene->x08, temp2 = HSD_GObj_804D7848,
@@ -1481,8 +1505,6 @@ void un_8031B328(void)
         GObj_SetupGXLink(scene->x08, un_80306930, 0x35, 0);
     }
 }
-
-static char un_803FEFF0[] = "ToyDspPanel_Top_joint";
 
 void un_8031B460_OnEnter(void* arg0)
 {
@@ -1979,8 +2001,10 @@ HSD_GObj* un_8031BC54(s32 arg0)
     return gobj;
 }
 
+char un_804D5AA8[2] = "0";
 char un_804D5AAC[7] = "jobj.h";
 char un_804D5AB4[5] = "jobj";
+char un_804D5AC0[8] = ""; /* empty-string sentinel for OSPanic msg arg */
 
 void un_8031BF34(s32 arg0)
 {

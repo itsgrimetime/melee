@@ -9,9 +9,15 @@
 struct HSD_GObj;
 struct HSD_JObj;
 
-/* Named .sdata assert strings used by tydisplay.c (jobj.h inline asserts). */
+/* Named .sdata assert strings used by tydisplay.c. */
+extern char un_804D5AA8[2]; /* "0" — file-local assert condition string */
 extern char un_804D5AAC[7];
 extern char un_804D5AB4[5];
+extern char un_804D5AC0[8]; /* empty string for OSPanic msg arg */
+
+/* tydisplay.c's named .data file-name string ("tydisplay.c"). Exposed so the
+ * macro override in the .c can route HSD_ASSERT through it. */
+extern char str_file[];
 
 typedef struct TySortElem {
     s32 key;
