@@ -92,13 +92,23 @@ static char str_coin_joint[] = "ToyFigurePonCoin_Top_joint";
 static char str_coin_animjoint[] = "ToyFigurePonCoin_Top_animjoint";
 static char str_coin_matanim[] = "ToyFigurePonCoin_Top_matanim_joint";
 static char str_coin_shapeanim[] = "ToyFigurePonCoin_Top_shapeanim_joint";
+/* Original layout uses jumptable_803FEAF0 (40 bytes) at .data:0xE0, then
+ * the lbl_803FEB18 block (36 bytes — "*** Not Get Figure!\n" + 4 align +
+ * "tyfigupon.c"), then jumptable_803FEB3C (36 bytes), then str_jobj_indices
+ * at 0x178.  We approximate by padding for the jumptables (compiler emits
+ * those at end of .data) and placing the lbl content explicitly so
+ * str_file lands at offset 0x120 — matching un_8031753C's addi r3,r31,288. */
+static u8 _pad_jumptable_803FEAF0[40] = { 0 };
+static char str_not_get_figure[24] = "*** Not Get Figure!\n";
 static char str_file[] = "tyfigupon.c";
+static u8 _pad_jumptable_803FEB3C[36] = { 0 };
+/* Assert condition string for HSD_JObjSetRotation* inline asserts — lives
+ * at the start of un_803FEB60 in the original.  Padded to 40 bytes so
+ * str_jobj_indices lands at offset 0x178. */
+static char str_jobj_use_quat[40] = "!(jobj->flags & JOBJ_USE_QUATERNION)";
 static u16 str_jobj_indices[] = {
     0x4, 0x2, 0x3, 0x5, 0x6, 0x7, 0x8, 0x9, 0xD, 0xA, 0xB, 0xC, 0xE,
 };
-/* Padding aligns str_err_bg to match original (jumptables + lbl original
- * occupied this slot at offset 0xE0-0x150 in .data). */
-static u8 _pad_err_bg[140] = { 0 };
 static char str_err_bg[] = "*** BG data aren't being loaded!\n";
 static char str_panel_smash_matanim[] =
     "ToyFigurePonPanel_zsmash_matanim_joint";
