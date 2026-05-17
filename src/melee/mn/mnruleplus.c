@@ -83,7 +83,6 @@ typedef union {
 
 f32 mn_804D4B98 = 1.0f;
 static JObjIndices mn_804DBE40 = { 0x02030506 };
-static volatile f32 mn_804DBE44 = 0.0f;
 static JObjIndices mn_804DBE48 = { 0x02030506 };
 
 /// @brief Copy rule values from menu data to the global game rules.
@@ -559,11 +558,10 @@ void mn_80232D4C(HSD_GObj* gobj, u32 arg1, u32 arg2)
             } else {
                 desc_idx = mn_803ED2E8.desc[selection][confirmed];
             }
-            text = HSD_SisLib_803A5ACC(0, 1, -9.5f, 8.0f, 17.0f, 364.68332f,
-                                       76.77544f);
+            text = HSD_SisLib_803A5ACC(0, 1, mn_804DBE4C, mn_804DBE50,
+                                       mn_804DBE54, mn_804DBE58, mn_804DBE5C);
             data->description = text;
-            text->font_size.x = 0.0521f;
-            text->font_size.y = 0.0521f;
+            text->font_size.y = text->font_size.x = mn_804DBE60;
             HSD_SisLib_803A6368(text, (s32) desc_idx);
             return;
         }
@@ -583,11 +581,10 @@ void mn_80232D4C(HSD_GObj* gobj, u32 arg1, u32 arg2)
             } else {
                 desc_idx = mn_803ED2E8.desc[selection][confirmed];
             }
-            text = HSD_SisLib_803A5ACC(0, 1, -9.5f, 8.0f, 17.0f, 364.68332f,
-                                       76.77544f);
+            text = HSD_SisLib_803A5ACC(0, 1, mn_804DBE4C, mn_804DBE50,
+                                       mn_804DBE54, mn_804DBE58, mn_804DBE5C);
             data->description = text;
-            text->font_size.x = 0.0521f;
-            text->font_size.y = 0.0521f;
+            text->font_size.y = text->font_size.x = mn_804DBE60;
             HSD_SisLib_803A6368(text, (s32) desc_idx);
         }
         break;
@@ -968,11 +965,10 @@ HSD_GObj* mn_80233218(MenuState state)
         } else {
             desc_idx = mn_803ED2E8.desc[selected][confirmed];
         }
-        text = HSD_SisLib_803A5ACC(0, 1, -9.5f, 8.0f, 17.0f, 364.68332f,
-                                   76.77544f);
+        text = HSD_SisLib_803A5ACC(0, 1, mn_804DBE4C, mn_804DBE50, mn_804DBE54,
+                                   mn_804DBE58, mn_804DBE5C);
         user_data->description = text;
-        text->font_size.x = 0.0521f;
-        text->font_size.y = 0.0521f;
+        text->font_size.y = text->font_size.x = mn_804DBE60;
         HSD_SisLib_803A6368(text, (s32) desc_idx);
     }
 

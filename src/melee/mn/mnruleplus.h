@@ -61,4 +61,12 @@ STATIC_ASSERT(sizeof(mn_803ED1D0_t) == 0xA0);
 /* 233218 */ HSD_GObj* mn_80233218(MenuState);
 /* 2339FC */ void mn_802339FC(void);
 
+extern f32 mn_804DBE44;
+extern f32 mn_804DBE4C;
+extern f32 mn_804DBE50;
+extern f32 mn_804DBE54;
+extern f32 mn_804DBE58;
+extern f32 mn_804DBE5C;
+extern f32 mn_804DBE60;
+
 #endif
