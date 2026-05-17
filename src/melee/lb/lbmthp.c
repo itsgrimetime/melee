@@ -125,8 +125,8 @@ s32 fn_8001EB14(THPDecComp* data, const char* path)
 s32 fn_8001EBF0(THPDecComp* data)
 {
     s32 size = 0;
-    u32 aligned_100;
     u32 unk_104_val;
+    u32 aligned_100;
     u32 width;
     u32 height;
     u32 wh;
