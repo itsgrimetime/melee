@@ -1,10 +1,10 @@
-#include <baselib/debug.h>
 #include "mnevent.h"
+
+#include <baselib/debug.h>
 
 #undef HSD_ASSERT
 #define HSD_ASSERT(line, cond)                                                \
-    ((cond) ? ((void) 0)                                                      \
-            : __assert(mnEvent_804D5030, line, mnEvent_804D5038))
+    ((cond) ? ((void) 0) : __assert(mnEvent_804D5030, line, mnEvent_804D5038))
 #include <baselib/jobj.h>
 #undef HSD_ASSERT
 #define HSD_ASSERT(line, cond)                                                \
