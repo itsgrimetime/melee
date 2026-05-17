@@ -975,7 +975,7 @@ static inline double inlineB0(void)
 
 void lb_800115F4(void)
 {
-    if (inlineB0() > 0.1) {
+    if (inlineB0() > lb_804D7BE8) {
         if (lb_804D63B4 > 0) {
             lb_804D63B4 = 2;
             return;
