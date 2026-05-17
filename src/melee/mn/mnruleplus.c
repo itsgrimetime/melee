@@ -76,9 +76,9 @@ struct {
     { 0x00, 0x00 },
 };
 
-static char mn_803ED308[0x18] = "Can't get user_data.\n";
-static char mn_803ED320[0x10] = "mnruleplus.c";
-static char mn_803ED330[0x10] = "user_data";
+char mn_803ED308[0x18] = "Can't get user_data.\n";
+char mn_803ED320[0x10] = "mnruleplus.c";
+char mn_803ED330[0x10] = "user_data";
 
 typedef union {
     s32 packed;
