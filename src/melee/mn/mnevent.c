@@ -1,15 +1,5 @@
 #include "mnevent.h"
 
-#include <baselib/debug.h>
-
-#undef HSD_ASSERT
-#define HSD_ASSERT(line, cond)                                                \
-    ((cond) ? ((void) 0) : __assert(mnEvent_804D5030, line, mnEvent_804D5038))
-#include <baselib/jobj.h>
-#undef HSD_ASSERT
-#define HSD_ASSERT(line, cond)                                                \
-    ((cond) ? ((void) 0) : __assert(__FILE__, line, #cond))
-
 #include "db/db.h"
 #include "gm/gm_1601.h"
 #include "gm/gm_1BA8.h"
@@ -21,12 +11,14 @@
 #include "mn/mnmain.h"
 #include "mn/types.h"
 
+#include <baselib/debug.h>
 #include <baselib/gobj.h>
 #include <baselib/gobjgxlink.h>
 #include <baselib/gobjobject.h>
 #include <baselib/gobjplink.h>
 #include <baselib/gobjproc.h>
 #include <baselib/gobjuserdata.h>
+#include <baselib/jobj.h>
 #include <baselib/memory.h>
 #include <baselib/sislib.h>
 

@@ -9,9 +9,6 @@
 #include <baselib/gobj.h>
 #include <baselib/sislib.h>
 
-extern char mnEvent_804D5030[7];
-extern char mnEvent_804D5038[5];
-
 typedef struct MnEventData {
     /* 0x00 */ u8 page;
     /* 0x01 */ u8 pad_01[3];
