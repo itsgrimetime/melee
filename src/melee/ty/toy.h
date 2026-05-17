@@ -141,6 +141,8 @@
 /* 3FE474 */ extern char un_803FE474[];
 /* 4D5A48 */ extern char un_804D5A48[6];
 /* 4D5A50 */ extern char un_804D5A50[2];
+/* 4D5A54 */ extern char un_804D5A54[7];
+/* 4D5A5C */ extern char un_804D5A5C[5];
 /* 4D5A64 */ extern char un_804D5A64[7];
 /* 4D5A6C */ extern char un_804D5A6C[5];
 

@@ -2,9 +2,29 @@
 
 #include "stddef.h"
 
+/* Override HSD_ASSERT before any inline asserts get baked in.  We need two
+ * different overrides because toy.c references both lobj.h and jobj.h inline
+ * asserts; they live in distinct named .sdata symbols (declared in toy.h). */
+#include "baselib/debug.h"
+
+/* Local HSD_ASSERTREPORT override so its __assert call also uses the named
+ * toy.c / "0" symbols instead of fresh anonymous strings. */
+#undef HSD_ASSERTREPORT
+#define HSD_ASSERTREPORT(line, cond, ...)                                     \
+    ((cond)                                                                   \
+         ? (void) 0                                                           \
+         : (OSReport(__VA_ARGS__), __assert(un_804D5A48, line, un_804D5A50)))
+
+#undef HSD_ASSERT
+#define HSD_ASSERT(line, cond)                                                \
+    ((cond) ? ((void) 0) : __assert(un_804D5A54, line, un_804D5A5C))
+#include "baselib/lobj.h"
+
+#undef HSD_ASSERT
+#define HSD_ASSERT(line, cond)                                                \
+    ((cond) ? ((void) 0) : __assert(un_804D5A64, line, un_804D5A6C))
 #include "baselib/cobj.h"
 #include "baselib/controller.h"
-#include "baselib/debug.h"
 #include "baselib/displayfunc.h"
 #include "baselib/fog.h"
 #include "baselib/gobj.h"
@@ -13,7 +33,6 @@
 #include "baselib/gobjplink.h"
 #include "baselib/gobjproc.h"
 #include "baselib/jobj.h"
-#include "baselib/lobj.h"
 #include "baselib/memory.h"
 #include "baselib/random.h"
 #include "baselib/sobjlib.h"
@@ -1495,13 +1514,13 @@ void un_80306D70(s32 arg0)
         entry = (TyLightEntry*) (base + arg0 * 0xC);
         idx = entry->xFC_idx;
         sym = (TyLightSymbol*) (base + idx * 8);
-        HSD_ASSERTREPORT(0x8CD, NULL, base + 0x64C, sym->xCC_name);
+        HSD_ASSERTREPORT(0x8CD, 0, base + 0x64C, sym->xCC_name);
     }
 }
 
-/* 96.3% match */
-static char un_804D5A54[] = "lobj.h";
-static char un_804D5A5C[] = "lobj";
+/* Definitions for the assert string symbols declared in toy.h. */
+char un_804D5A54[7] = "lobj.h";
+char un_804D5A5C[5] = "lobj";
 extern f32 un_804DDCD8;
 
 HSD_LObj* un_80306EEC(void* list_arg, s32* hasAnim)
@@ -1577,7 +1596,7 @@ void un_80307018(void)
     ptr2 = un_804D6ED4;
 
     if (ptr1->x50 == NULL) {
-        HSD_ASSERTREPORT(0x912, NULL, "*** BG data aren't being loaded!\n");
+        HSD_ASSERTREPORT(0x912, 0, "*** BG data aren't being loaded!\n");
     }
 
     jobj = HSD_ArchiveGetPublicAddress(ptr1->x50, un_803FE3DC);
