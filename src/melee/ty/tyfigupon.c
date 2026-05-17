@@ -77,6 +77,12 @@ extern void* un_804D6EF8;
 char un_804D5A90[8] = "jobj.h";
 char un_804D5A98[8] = "jobj";
 
+/* .sdata2 float constants used by fn_80316170 / un_80316420 / fn_803155C8.
+ * `volatile` prevents MWCC from constant-folding the symbol read, so the
+ * compiler emits an SDA21 load against the named symbol rather than spawning
+ * a fresh anonymous slot for each literal use. */
+volatile f32 un_804DDEA0 = 0.0f;
+
 /* .data string literals for tyfigupon.c */
 static char str_panel_joint[] = "ToyFigurePonPanel_Top_joint";
 static char str_bg_joint[] = "ToyFigurePonBg_Top_joint";
@@ -203,7 +209,7 @@ void tyFigupon_80314AA8(HSD_JObj* jobj, char* anim_str, char* matanim_str,
         sajoint = NULL;
     }
     HSD_JObjAddAnimAll(jobj, ajoint, majoint, sajoint);
-    HSD_JObjReqAnimAll(jobj, 0.0f);
+    HSD_JObjReqAnimAll(jobj, un_804DDEA0);
 }
 
 #pragma dont_inline on
@@ -245,7 +251,7 @@ void tyFigupon_80314C5C(HSD_GObj* gobj)
     PAD_STACK(40);
     if (tp1 != NULL) {
         if (tp1->x8 % 30 == 0) {
-            HSD_JObjReqAnimAll(jobj, 0.0f);
+            HSD_JObjReqAnimAll(jobj, un_804DDEA0);
         }
         HSD_JObjAnimAll(jobj);
         if (tp1->x8-- != 0) {
@@ -403,7 +409,7 @@ void fn_803155C8(void)
         if (ef4->x58 == 0) {
             data->x29 = 1;
             ef4->x58 = 0x14;
-            HSD_JObjReqAnimAll(jobj, 0.0f);
+            HSD_JObjReqAnimAll(jobj, un_804DDEA0);
             ef4->x5C = 3;
             gm_801678F8((s32) gm_801677F0(), 0x1E, 0);
             return;
@@ -618,7 +624,7 @@ void fn_80315C44(HSD_GObj* arg0)
                 GObj_SetupGXLink(gobj, HSD_GObj_JObjCallback, 0x3C, 0);
                 tyFigupon_80314AA8(jobj, str_coin_animjoint, str_coin_matanim,
                                    str_coin_shapeanim);
-                HSD_JObjReqAnimAll(jobj, 0.0f);
+                HSD_JObjReqAnimAll(jobj, un_804DDEA0);
                 HSD_JObjAnimAll(jobj);
                 HSD_JObjSetFlagsAll(jobj, 0x10);
                 HSD_GObj_SetupProc(gobj, tyFigupon_80314C5C, 0);
@@ -739,7 +745,7 @@ void fn_80316170(HSD_GObj* arg0)
         if (ud != NULL) {
             GObj_InitUserData(arg0, 0, Toy_RemoveUserData, ud);
         }
-        ud->x44 = 0.0f;
+        ud->x44 = un_804DDEA0;
     }
 }
 
@@ -1227,7 +1233,7 @@ void un_8031753C(void)
         HSD_JObjAddChild(ef4->jobjs[0], jobj);
         tyFigupon_80314AA8(jobj, str_coin_animjoint, str_coin_matanim,
                            str_coin_shapeanim);
-        HSD_JObjReqAnimAll(jobj, 0.0f);
+        HSD_JObjReqAnimAll(jobj, un_804DDEA0);
         HSD_JObjAnimAll(jobj);
 
         i = 0;
@@ -1249,7 +1255,7 @@ void un_8031753C(void)
             if (digit_ptr[i] != 0) {
                 HSD_JObjReqAnimAll(jobj, (f32) (50 - digit_ptr[i] * 5));
             } else {
-                HSD_JObjReqAnimAll(jobj, 0.0f);
+                HSD_JObjReqAnimAll(jobj, un_804DDEA0);
             }
             HSD_JObjAnimAll(jobj);
         }
@@ -1260,7 +1266,7 @@ void un_8031753C(void)
             HSD_JObjAddChild(ef4->jobjs[6 + i], jobj);
             tyFigupon_80314AA8(jobj, str_bet_animjoint, str_bet_matanim,
                                str_bet_shapeanim);
-            HSD_JObjReqAnimAll(jobj, 0.0f);
+            HSD_JObjReqAnimAll(jobj, un_804DDEA0);
             HSD_JObjAnimAll(jobj);
         }
 
@@ -1296,7 +1302,7 @@ void un_8031753C(void)
             HSD_JObjAddChild(ef4->jobjs[9 + i], jobj);
             tyFigupon_80314AA8(jobj, str_par_animjoint, str_par_matanim,
                                str_par_shapeanim);
-            HSD_JObjReqAnimAll(jobj, 0.0f);
+            HSD_JObjReqAnimAll(jobj, un_804DDEA0);
             HSD_JObjAnimAll(jobj);
         }
         return;
@@ -1468,7 +1474,7 @@ void un_80317D80_OnEnter(void* arg0)
     HSD_GObjObject_80390A70(data->x8, HSD_GObj_804D7849, jobj);
     tyFigupon_80314AA8(jobj, str_nget_animjoint, str_nget_matanim,
                        str_nget_shapeanim);
-    HSD_JObjReqAnimAll(jobj, 0.0f);
+    HSD_JObjReqAnimAll(jobj, un_804DDEA0);
     HSD_JObjAnimAll(jobj);
     HSD_JObjAddTranslationZ(jobj, 0.5f);
     ud = HSD_MemAlloc(0x58);
