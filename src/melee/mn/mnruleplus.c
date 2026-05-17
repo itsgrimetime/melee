@@ -584,7 +584,11 @@ void mn_80232D4C(HSD_GObj* gobj, u32 arg1, u32 arg2)
         {
             confirmed = mn_804A04F0.confirmed_selection;
             SisLib_ClearText(&data->description);
-            desc_idx = mnRulePlus_GetDescIdx(selection, confirmed);
+            if ((s32) selection == 0 || (s32) selection == 5) {
+                desc_idx = mn_803ED2E8.desc[selection][0];
+            } else {
+                desc_idx = mn_803ED2E8.desc[selection][confirmed];
+            }
             text = HSD_SisLib_803A5ACC(0, 1, mn_804DBE4C, mn_804DBE50,
                                        mn_804DBE54, mn_804DBE58, mn_804DBE5C);
             data->description = text;
