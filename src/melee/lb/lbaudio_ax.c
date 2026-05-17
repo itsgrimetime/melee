@@ -1695,14 +1695,14 @@ bool fn_80025E38(HSD_GObj* gobj)
 
                 if (start_val < end_val) {
                     diff = (f32) end_val - (f32) start_val;
-                    if (diff < 0.0f) {
+                    if (diff < lbl_804D7DDC) {
                         diff = -diff;
                     }
                     ratio = (f32) current_frame / (f32) end_frame;
                     ud->x20 = start_val + (s32) (ratio * diff);
                 } else {
                     diff = (f32) end_val - (f32) start_val;
-                    if (diff < 0.0f) {
+                    if (diff < lbl_804D7DDC) {
                         diff = -diff;
                     }
                     ratio = (f32) current_frame / (f32) end_frame;

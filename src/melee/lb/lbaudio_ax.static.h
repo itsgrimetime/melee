@@ -107,6 +107,8 @@ extern int lbl_80433984[0x38];
 extern int lbl_80433A64[0x38];
 extern int lbl_80433B44[0x38];
 
+extern float lbl_804D7DDC; /// 0.0f
+
 static struct {
     int** x0;
     int** x4;
