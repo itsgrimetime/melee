@@ -9,6 +9,10 @@
 struct HSD_GObj;
 struct HSD_JObj;
 
+/* Named .sdata assert strings used by tydisplay.c (jobj.h inline asserts). */
+extern char un_804D5AAC[7];
+extern char un_804D5AB4[5];
+
 typedef struct TySortElem {
     s32 key;
     f32 val;

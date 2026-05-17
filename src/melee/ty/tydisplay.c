@@ -2,6 +2,21 @@
 
 #include <placeholder.h>
 
+/* Override HSD_ASSERT before jobj.h is parsed so its inline expansions use
+ * the named .sdata symbols un_804D5AAC / un_804D5AB4 (declared in
+ * tydisplay.h) instead of generating anonymous "jobj.h" / "jobj" duplicates.
+ * Then restore the default so any HSD_ASSERT call inside tydisplay.c itself
+ * uses its own __FILE__. */
+#include <baselib/debug.h>
+#undef HSD_ASSERT
+#define HSD_ASSERT(line, cond)                                                \
+    ((cond) ? ((void) 0) : __assert(un_804D5AAC, line, un_804D5AB4))
+#include <baselib/jobj.h>
+
+#undef HSD_ASSERT
+#define HSD_ASSERT(line, cond)                                                \
+    ((cond) ? ((void) 0) : __assert(__FILE__, line, #cond))
+
 #include "db/db.h"
 #include "gm/gm_1A3F.h"
 #include "gm/gm_1A45.h"
@@ -23,14 +38,12 @@
 #include <dolphin/os.h>
 #include <baselib/archive.h>
 #include <baselib/cobj.h>
-#include <baselib/debug.h>
 #include <baselib/fog.h>
 #include <baselib/gobj.h>
 #include <baselib/gobjgxlink.h>
 #include <baselib/gobjobject.h>
 #include <baselib/gobjplink.h>
 #include <baselib/gobjproc.h>
-#include <baselib/jobj.h>
 #include <baselib/lobj.h>
 #include <baselib/memory.h>
 #include <baselib/random.h>
@@ -1966,8 +1979,8 @@ HSD_GObj* un_8031BC54(s32 arg0)
     return gobj;
 }
 
-static char un_804D5AAC[] = "jobj.h";
-static char un_804D5AB4[] = "jobj";
+char un_804D5AAC[7] = "jobj.h";
+char un_804D5AB4[5] = "jobj";
 
 void un_8031BF34(s32 arg0)
 {
