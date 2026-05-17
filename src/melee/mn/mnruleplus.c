@@ -81,8 +81,9 @@ typedef union {
     u8 idx[4];
 } JObjIndices;
 
+f32 mn_804D4B98 = 1.0f;
 static JObjIndices mn_804DBE40 = { 0x02030506 };
-static f32 mn_804DBE44 = 0.0f;
+static volatile f32 mn_804DBE44 = 0.0f;
 static JObjIndices mn_804DBE48 = { 0x02030506 };
 
 /// @brief Copy rule values from menu data to the global game rules.
@@ -243,7 +244,7 @@ void mn_802324E4(u8 time_limit, MenuRulesPlusData* data)
         for (i = 0; i < 4; i++) {
             HSD_JObjSetFlagsAll(jobjs[local_indices.idx[i]], 0x10U);
         }
-        HSD_JObjReqAnimAll(jobjs[4], 1.0f);
+        HSD_JObjReqAnimAll(jobjs[4], mn_804D4B98);
         HSD_JObjAnimAll(jobjs[4]);
         return;
     }
@@ -259,10 +260,10 @@ void mn_802324E4(u8 time_limit, MenuRulesPlusData* data)
     HSD_JObjReqAnimAll(jobj, (f32) (u8) (time_limit % 10));
     HSD_JObjAnimAll(jobj);
     jobj = jobjs[5];
-    HSD_JObjReqAnimAll(jobj, 0.0f);
+    HSD_JObjReqAnimAll(jobj, mn_804DBE44);
     HSD_JObjAnimAll(jobj);
     jobj = jobjs[6];
-    HSD_JObjReqAnimAll(jobj, 0.0f);
+    HSD_JObjReqAnimAll(jobj, mn_804DBE44);
     HSD_JObjAnimAll(jobj);
 }
 
