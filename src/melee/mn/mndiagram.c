@@ -587,32 +587,33 @@ int mnDiagram_GetRankedFighterForName(int rank, int name_idx,
     return 0x19;
 }
 
-u8 mnDiagram_GetLeastPlayedFighter(u8 name_idx)
+static inline int mnDiagram_AllPlayTimesZero(int name)
 {
     int i;
-    int name;
     int offset;
-    int result;
-    int min_fighter;
-    int count;
-
-    // Check if all play times are zero
     i = 0;
-    name = name_idx;
     offset = i;
     for (;;) {
         if (GetPersistentNameData(name)->play_time_by_fighter[i] != 0U) {
-            result = 0;
-            break;
+            return 0;
         }
         i++;
         offset += 4;
         if (i >= 0x19) {
-            result = 1;
-            break;
+            return 1;
         }
     }
-    if (result != 0) {
+}
+
+u8 mnDiagram_GetLeastPlayedFighter(u8 name_idx)
+{
+    int i;
+    int name;
+    int min_fighter;
+    int count;
+
+    name = name_idx;
+    if (mnDiagram_AllPlayTimesZero(name)) {
         return 0x19;
     }
 
