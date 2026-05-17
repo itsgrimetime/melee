@@ -1,5 +1,15 @@
 #include "mnvibration.h"
 
+#include <baselib/debug.h>
+#undef HSD_ASSERT
+#define HSD_ASSERT(line, cond)                                                \
+    ((cond) ? ((void) 0)                                                      \
+            : __assert(mnVibration_804D4FF4, line, mnVibration_804D4FFC))
+#include <baselib/jobj.h>
+#undef HSD_ASSERT
+#define HSD_ASSERT(line, cond)                                                \
+    ((cond) ? ((void) 0) : __assert(__FILE__, line, #cond))
+
 #include "ft/ft_0C31.h"
 #include "gm/gm_1A36.h"
 #include "gm/gmmain_lib.h"
@@ -20,7 +30,6 @@
 #include <baselib/gobjplink.h>
 #include <baselib/gobjproc.h>
 #include <baselib/gobjuserdata.h>
-#include <baselib/jobj.h>
 #include <baselib/memory.h>
 #include <baselib/sislib.h>
 
