@@ -2443,8 +2443,8 @@ s32 fn_80027488(void)
 
 void lbAudioAx_80027648(void)
 {
-    int* a = lbl_80433710.x194;
-    int* b = lbl_80433710.x274;
+    int* a = lbl_804338A4;
+    int* b = lbl_80433984;
     int i;
     s32 result = 0;
 
