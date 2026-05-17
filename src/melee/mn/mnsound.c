@@ -197,7 +197,7 @@ void fn_80249A1C(HSD_GObj* arg0)
     lb_80011E24(jobj, &sp40, 0xE, -1);
     mn_8022ED6C(sp40, &anims[menu->unk2 + 1]);
     lb_80011E24(jobj, &sp3C, 0xB, -1);
-    mn_8022ED6C(sp3C, &anims[menu->unk1 + 4]);
+    mn_8022ED6C(sp3C, &anims[menu->unk1 + 3]);
 }
 
 void mnSound_80249C08(int unused)
