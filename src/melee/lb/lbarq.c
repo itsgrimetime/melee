@@ -1,7 +1,10 @@
-#include "lbarq.h"
+#include "lbarq.static.h"
 
 #include <dolphin/os.h>
 #include <baselib/debug.h>
+
+#define LBARQ_ASSERT(line, cond, msg)                                          \
+    ((cond) ? ((void) 0) : __assert(lbArq_804D3778, line, msg))
 
 #pragma push
 #pragma dont_inline on
@@ -79,7 +82,7 @@ void lbArq_80014BD0(u32 source, void* dest, size_t length,
     intr = OSDisableInterrupts();
     rp = global->list[LB_ARQ_STATE_FREE];
     free_head = &global->list[LB_ARQ_STATE_FREE];
-    HSD_ASSERT(0x67, rp);
+    LBARQ_ASSERT(0x67, rp, lbArq_804D3780);
     *free_head = rp->next;
     rp->callback = callback;
     rp->callback_arg = callback_arg;
