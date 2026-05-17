@@ -197,6 +197,19 @@ void mnInfo_80251F04(MenuInfo_GObj* arg0, s32 arg1, u32 arg2)
 }
 #pragma pop
 
+static inline s32 mnInfo_CountUnlocked(void)
+{
+    s32 i;
+    s32 count = 0;
+
+    for (i = 0; i < 0x42; i++) {
+        if (mnInfo_80251A08(i) != 0) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
 void fn_80251FE4(void)
 {
     MenuInfo_GObj* gobj;
@@ -256,12 +269,7 @@ void fn_80251FE4(void)
             }
         }
     } else if (buttons & MenuInput_Down) {
-        count = 0;
-        for (i = 0; i < 0x42; i++) {
-            if (mnInfo_80251A08(i) != 0) {
-                count++;
-            }
-        }
+        count = mnInfo_CountUnlocked();
         if ((data->scroll_idx + 4) < count) {
             lbAudioAx_80024030(2);
             data->scroll_idx += 1;
@@ -294,19 +302,6 @@ void fn_80251FE4(void)
             }
         }
     }
-}
-
-static inline s32 mnInfo_CountUnlocked(void)
-{
-    s32 i;
-    s32 count = 0;
-
-    for (i = 0; i < 0x42; i++) {
-        if (mnInfo_80251A08(i) != 0) {
-            count += 1;
-        }
-    }
-    return count;
 }
 
 #pragma push
