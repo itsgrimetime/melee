@@ -154,13 +154,13 @@ s32 lb_8000D148(f32 point0_x, f32 point0_y, f32 point1_x, f32 point1_y,
 
         dist_01 = (diff_01_x * diff_01_x) + (diff_01_y * diff_01_y);
         cross = (point0_x * point1_y) - cross;
-        if (dist_01 < 0.00001f) {
+        if (dist_01 < lb_804D7AA0) {
             return 0;
         }
         dist_01 = sqrtf(dist_01);
 
         var_f0 = cross + ((diff_01_x * point2_x) + (diff_01_y * point2_y));
-        if (var_f0 < 0.0f) {
+        if (var_f0 < lb_804D7A88) {
             var_f0 = -var_f0;
         }
     }

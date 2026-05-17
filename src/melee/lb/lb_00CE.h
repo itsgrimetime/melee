@@ -11,4 +11,7 @@
 /* 00D008 */ float lb_8000D008(float, float);
 /* 00D148 */ s32 lb_8000D148(float, float, float, float, float, float, float);
 
+extern float lb_804D7A88; /// 0.0f
+extern float lb_804D7AA0; /// 0.00001f
+
 #endif
