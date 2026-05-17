@@ -315,6 +315,8 @@ void mn_80232660(HSD_GObj* gobj, HSD_JObj* jobj, u8 option)
 }
 #pragma pop
 
+#pragma push
+#pragma dont_inline on
 void mn_802327A4(HSD_GObj* gobj, u32 arg1, u32 arg2)
 {
     HSD_JObj* option_roots[6];
@@ -516,6 +518,7 @@ void mn_802327A4(HSD_GObj* gobj, u32 arg1, u32 arg2)
         i++;
     }
 }
+#pragma pop
 
 void mn_80232D4C(HSD_GObj* gobj, u32 arg1, u32 arg2)
 {
