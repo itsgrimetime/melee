@@ -86,8 +86,17 @@ typedef union {
 } JObjIndices;
 
 f32 mn_804D4B98 = 1.0f;
-static JObjIndices mn_804DBE40 = { 0x02030506 };
-static JObjIndices mn_804DBE48 = { 0x02030506 };
+volatile const f64 mn_804DBE38 = 4503599627370496.0;
+const JObjIndices mn_804DBE40 = { 0x02030506 };
+volatile f32 mn_804DBE44 = 0.0f;
+const JObjIndices mn_804DBE48 = { 0x02030506 };
+const f32 mn_804DBE4C = -9.5f;
+const f32 mn_804DBE50 = 8.0f;
+const f32 mn_804DBE54 = 17.0f;
+const f32 mn_804DBE58 = 364.68332f;
+const f32 mn_804DBE5C = 76.77544f;
+const f32 mn_804DBE60 = 0.0521f;
+volatile const f64 mn_804DBE68 = 4503599627370496.0;
 
 /// @brief Clear a SisLib text pointer, destroying the text if non-NULL.
 static inline void SisLib_ClearText(HSD_Text** text)
