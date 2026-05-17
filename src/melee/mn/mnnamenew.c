@@ -3,6 +3,15 @@
 #include "mn/mnnamenew.static.h"
 
 #include "baselib/debug.h"
+#undef HSD_ASSERT
+#define HSD_ASSERT(line, cond)                                                \
+    ((cond) ? ((void) 0)                                                      \
+            : __assert(mnNameNew_804D4F84, line, mnNameNew_804D4F8C))
+#include "sysdolphin/baselib/jobj.h"
+#undef HSD_ASSERT
+#define HSD_ASSERT(line, cond)                                                \
+    ((cond) ? ((void) 0) : __assert(__FILE__, line, #cond))
+
 #include "dolphin/gx/GXStruct.h"
 #include "gm/gm_18A5.h"
 #include "gm/gm_1A3F.h"
@@ -24,7 +33,6 @@
 #include "sysdolphin/baselib/gobjplink.h"
 #include "sysdolphin/baselib/gobjproc.h"
 #include "sysdolphin/baselib/gobjuserdata.h"
-#include "sysdolphin/baselib/jobj.h"
 #include "sysdolphin/baselib/memory.h"
 #include "sysdolphin/baselib/random.h"
 #include "sysdolphin/baselib/sislib.h"

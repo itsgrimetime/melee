@@ -15,4 +15,7 @@ extern char* mnNameNew_803EDB54[];
 extern char* mnNameNew_803EDC1C[];
 extern GlyphRow mnNameNew_803EE004[];
 
+extern char mnNameNew_804D4F84[7];
+extern char mnNameNew_804D4F8C[5];
+
 #endif
