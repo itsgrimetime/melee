@@ -89,6 +89,15 @@ f32 mn_804D4B98 = 1.0f;
 static JObjIndices mn_804DBE40 = { 0x02030506 };
 static JObjIndices mn_804DBE48 = { 0x02030506 };
 
+/// @brief Get the description text index for a menu selection.
+static inline u8 mnRulePlus_GetDescIdx(u8 sel, u8 confirmed)
+{
+    if ((s32) sel == 0 || (s32) sel == 5) {
+        return mn_803ED2E8.desc[sel][0];
+    }
+    return mn_803ED2E8.desc[sel][confirmed];
+}
+
 /// @brief Copy rule values from menu data to the global game rules.
 static inline void mnRulePlus_SaveRules(void)
 {
@@ -557,11 +566,7 @@ void mn_80232D4C(HSD_GObj* gobj, u32 arg1, u32 arg2)
                 HSD_SisLib_803A5CC4(data->description);
                 data->description = NULL;
             }
-            if ((s32) selection == 0 || (s32) selection == 5) {
-                desc_idx = mn_803ED2E8.desc[selection][0];
-            } else {
-                desc_idx = mn_803ED2E8.desc[selection][confirmed];
-            }
+            desc_idx = mnRulePlus_GetDescIdx(selection, confirmed);
             text = HSD_SisLib_803A5ACC(0, 1, mn_804DBE4C, mn_804DBE50,
                                        mn_804DBE54, mn_804DBE58, mn_804DBE5C);
             data->description = text;
@@ -580,11 +585,7 @@ void mn_80232D4C(HSD_GObj* gobj, u32 arg1, u32 arg2)
                 HSD_SisLib_803A5CC4(text);
                 data->description = NULL;
             }
-            if ((s32) selection == 0 || (s32) selection == 5) {
-                desc_idx = mn_803ED2E8.desc[selection][0];
-            } else {
-                desc_idx = mn_803ED2E8.desc[selection][confirmed];
-            }
+            desc_idx = mnRulePlus_GetDescIdx(selection, confirmed);
             text = HSD_SisLib_803A5ACC(0, 1, mn_804DBE4C, mn_804DBE50,
                                        mn_804DBE54, mn_804DBE58, mn_804DBE5C);
             data->description = text;
@@ -966,11 +967,7 @@ HSD_GObj* mn_80233218(MenuState state)
             HSD_SisLib_803A5CC4(user_data->description);
             user_data->description = NULL;
         }
-        if ((s32) selected == 0 || (s32) selected == 5) {
-            desc_idx = mn_803ED2E8.desc[selected][0];
-        } else {
-            desc_idx = mn_803ED2E8.desc[selected][confirmed];
-        }
+        desc_idx = mnRulePlus_GetDescIdx(selected, confirmed);
         text = HSD_SisLib_803A5ACC(0, 1, mn_804DBE4C, mn_804DBE50, mn_804DBE54,
                                    mn_804DBE58, mn_804DBE5C);
         user_data->description = text;
