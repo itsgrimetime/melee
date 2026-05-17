@@ -1363,15 +1363,16 @@ void mnName_8023A290(void)
     HSD_GObj* gobj;
     HSD_JObj* jobj;
     u8 sel;
+    MnNameArchive* assets;
 
+    assets = &mnName_804A06D0;
     gobj = GObj_Create(6U, 7U, 0x80U);
-    jobj = HSD_JObjLoadJoint(mnName_804A06D0.joint);
+    jobj = HSD_JObjLoadJoint(assets->joint);
     HSD_GObjObject_80390A70(gobj, HSD_GObj_804D7849, jobj);
     GObj_SetupGXLink(gobj, HSD_GObj_JObjCallback, 6U, 0x80U);
     HSD_GObj_SetupProc(gobj, fn_8023A0BC, 0U);
-    HSD_JObjAddAnimAll(jobj, mnName_804A06D0.anim_joint,
-                       mnName_804A06D0.matanim_joint,
-                       mnName_804A06D0.shapeanim_joint);
+    HSD_JObjAddAnimAll(jobj, assets->anim_joint, assets->matanim_joint,
+                       assets->shapeanim_joint);
     HSD_JObjReqAnimAll(jobj, mnName_803ED600[0]);
     HSD_JObjAnimAll(jobj);
     lb_80011E24(jobj, &sp28, 0xA, -1);
