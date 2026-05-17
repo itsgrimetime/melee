@@ -778,8 +778,9 @@ HSD_GObj* mn_80233218(MenuState state)
     HSD_JObjAnimAll(root_jobj);
 
     user_data = HSD_MemAlloc(sizeof(MenuRulesPlusData));
-    (user_data) ? (void) 0 : (OSReport(mn_803ED308),
-                              __assert(mn_803ED320, 0x3DFU, mn_803ED330));
+    (user_data)
+        ? (void) 0
+        : (OSReport(mn_803ED308), __assert(mn_803ED320, 0x3DFU, mn_803ED330));
 
     GObj_InitUserData(gobj, 0, HSD_Free, user_data);
     user_data->menu_kind = mn_804A04F0.cur_menu;
