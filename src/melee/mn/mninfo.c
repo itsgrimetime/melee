@@ -296,16 +296,28 @@ void fn_80251FE4(void)
     }
 }
 
+static inline s32 mnInfo_CountUnlocked(void)
+{
+    s32 i;
+    s32 count = 0;
+
+    for (i = 0; i < 0x42; i++) {
+        if (mnInfo_80251A08(i) != 0) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
 #pragma push
-#pragma dont_inline on
+#pragma auto_inline off
 void mnInfo_802522B8(HSD_GObj* gobj)
 {
     s32 count;
-    s32 i;
     MnInfoData* data;
     HSD_JObj* jobj;
     HSD_JObj* child;
-    PAD_STACK(12);
+    PAD_STACK(4);
 
     jobj = gobj->hsd_obj;
     data = gobj->user_data;
@@ -316,12 +328,7 @@ void mnInfo_802522B8(HSD_GObj* gobj)
         HSD_JObjSetFlagsAll(child, JOBJ_HIDDEN);
     }
     lb_80011E24(jobj, &child, 1, -1);
-    count = 0;
-    for (i = 0; i < 0x42; i++) {
-        if (mnInfo_80251A08(i) != 0) {
-            count++;
-        }
-    }
+    count = mnInfo_CountUnlocked();
 
     if ((data->scroll_idx + 4) < count) {
         HSD_JObjClearFlagsAll(child, JOBJ_HIDDEN);
