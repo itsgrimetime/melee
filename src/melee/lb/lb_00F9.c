@@ -95,9 +95,9 @@ void lb_8000F9F8(HSD_JObj* jobj)
 
 void lb_8000FA94(void)
 {
-    int i;
     struct DynamicsData* next;
     struct lb_80011A50_t* next2;
+    int i;
 
     for (i = 0; i < 0x140; i++) {
         lb_804D63A0->entries[i].desc.lb_unk0.jobj = NULL;
