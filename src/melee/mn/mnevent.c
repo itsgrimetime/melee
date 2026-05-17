@@ -1,4 +1,14 @@
+#include <baselib/debug.h>
 #include "mnevent.h"
+
+#undef HSD_ASSERT
+#define HSD_ASSERT(line, cond)                                                \
+    ((cond) ? ((void) 0)                                                      \
+            : __assert(mnEvent_804D5030, line, mnEvent_804D5038))
+#include <baselib/jobj.h>
+#undef HSD_ASSERT
+#define HSD_ASSERT(line, cond)                                                \
+    ((cond) ? ((void) 0) : __assert(__FILE__, line, #cond))
 
 #include "db/db.h"
 #include "gm/gm_1601.h"
@@ -11,34 +21,36 @@
 #include "mn/mnmain.h"
 #include "mn/types.h"
 
-#include <baselib/debug.h>
 #include <baselib/gobj.h>
 #include <baselib/gobjgxlink.h>
 #include <baselib/gobjobject.h>
 #include <baselib/gobjplink.h>
 #include <baselib/gobjproc.h>
 #include <baselib/gobjuserdata.h>
-#include <baselib/jobj.h>
 #include <baselib/memory.h>
 #include <baselib/sislib.h>
 
+static inline s32 mnEvent_CountUnlocked(void)
+{
+    s32 i;
+    s32 count = 0;
+
+    for (i = 0; i < 0x33; i++) {
+        if (gmMainLib_8015CEFC(i) != 0) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
 s32 mnEvent_8024CE74(void)
 {
-    int count = 0;
-    int i;
-    PAD_STACK(8);
+    s32 count;
 
     if (g_debugLevel > 2) {
         return 0x2A;
     }
-
-    count = 0;
-    for (i = 0; i < 0x33; i++) {
-        if (gmMainLib_8015CEFC(i)) {
-            count += 1;
-        }
-    }
-
+    count = mnEvent_CountUnlocked();
     if (count <= 5) {
         return 1;
     }

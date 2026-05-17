@@ -4,9 +4,12 @@
 #include <placeholder.h>
 
 #include <dolphin/mtx.h>
+#include <baselib/forward.h>
 #include <baselib/gobj.h>
-#include <baselib/jobj.h>
 #include <baselib/sislib.h>
+
+extern char mnEvent_804D5030[7];
+extern char mnEvent_804D5038[5];
 
 typedef struct MnEventData {
     /* 0x00 */ u8 page;
