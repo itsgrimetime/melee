@@ -1462,7 +1462,7 @@ void un_80317D80_OnEnter(void* arg0)
     ed4 = un_804D6ED4;
     if (ef4->archive == NULL) {
         OSReport(str_err_bg);
-        OSPanic(str_file, 0x627, "");
+        OSPanic(str_file, 0x627, &un_804D5AA4);
     }
     {
         void* temp =
