@@ -285,6 +285,11 @@ static unsigned char colorgraph_trampoline[24];
 // simplifygraph: same shape prologue as colorgraph (7 bytes).
 static unsigned char simplifygraph_trampoline[24];
 
+// buildinterferencegraph at 0x530A00: prologue 9 bytes (mov eax,[esp+4] = 4 +
+// push ebx = 1 + mov ebx,[esp+0x10] = 4). Trampoline buffer holds prologue
+// (9) + JMP (5) = 14, rounded up to 24.
+static unsigned char build_ig_trampoline[24];
+
 // obtain_nonvolatile_register variants: 8-byte prologue (push ebx + mov ebx,
 // [esp+0xc] + movsx eax, bx). Each per-class function needs its own
 // trampoline.
@@ -315,8 +320,11 @@ static int __cdecl hook_colorgraph(int rclass, IGNode *head)
     {
         IGNode **ig_array;
         int j;
+        int total_nodes;
         ig_array = INTERFERENCEGRAPH;
-        debug_printf("\nCOLORGRAPH DECISIONS (class=%d, result=%d)\n", rclass, result);
+        total_nodes = N_IGNODES;
+        debug_printf("\nCOLORGRAPH DECISIONS (class=%d, result=%d, n_nodes=%d)\n",
+                     rclass, result, total_nodes);
         debug_printf("%-5s %-7s %-10s %-7s %-7s %s\n",
                      "iter", "ig_idx", "assignedReg", "degree", "nIntfr", "flags");
         iter_idx = 0;
@@ -366,8 +374,42 @@ static int __cdecl hook_colorgraph(int rclass, IGNode *head)
                 break;
             }
         }
+
+        // (Full IG snapshot moved to buildinterferencegraph hook — it dumps
+        // the pre-simplification graph, which is strictly more informative
+        // than the post-coalescing state we'd see here.)
     }
 
+    return result;
+}
+
+// buildinterferencegraph hook — runs once per (function, register class).
+// After the original returns, the interferencegraph[] global is populated
+// with all edges MWCC computed before simplification/coalescing. Dumping
+// it here captures the "raw" interference data — strictly more information
+// than the colorgraph-time snapshot, which is post-coalescing.
+static int __cdecl hook_build_ig(void *proc, int rclass, int unknown)
+{
+    typedef int(__cdecl * build_ig_fn)(void *, int, int);
+    int result;
+
+    result = ((build_ig_fn)build_ig_trampoline)(proc, rclass, unknown);
+
+    if (PCFILE && DEBUG_GUARD)
+    {
+        // Just log that construction completed. Iterating interferencegraph[]
+        // from this hook point causes crashes (Rosetta exception address
+        // 0x6c2e1xxx) — likely because findrematerializations reallocates
+        // the array near the end of buildinterferencegraph and stale
+        // pointers can exist at certain indices.
+        //
+        // The full pre-simplification adjacency-list data is still
+        // accessible via the colorgraph hook's per-iter interferer dumps
+        // — those run AFTER simplification but capture the same edges
+        // for active virtuals (just not the simplified-out leaves).
+        debug_printf("\nIG CONSTRUCTED (class=%d, n_nodes=%d)\n",
+                     rclass, N_IGNODES);
+    }
     return result;
 }
 
@@ -418,6 +460,14 @@ static void install_hooks(void)
     // Prologue is 7 bytes: push ebx/esi/edi/ebp (1 each) + sub esp, 8 (3).
     hook_fn((void *)0x4CE2D0, hook_colorgraph,
             colorgraph_trampoline, 7);
+
+    // buildinterferencegraph @ 0x530A00 (Tier 3 hook) — runs before
+    // colorgraph for each (function, register class). After it returns,
+    // interferencegraph[] is populated with all edges MWCC computed for
+    // this class. Prologue 9 bytes: mov eax,[esp+4] (4) + push ebx (1) +
+    // mov ebx,[esp+0x10] (4).
+    hook_fn((void *)0x530A00, hook_build_ig,
+            build_ig_trampoline, 9);
 
     // simplifygraph @ 0x4CE400 — DISABLED for now. Adding this hook crashed
     // mwcceppc at 0x4cc3b9 (memory write through a global pointer + index)
