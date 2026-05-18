@@ -612,6 +612,7 @@ void fn_802487A8(HSD_GObj* gobj)
 {
     HSD_JObj* port_indicator;
     HSD_JObj* rumble_indicator;
+    u16* idx_ptr_chained;
     HSD_JObj* walker_a;
     s32 port_a;
     u16* idx_ptr;
@@ -667,7 +668,7 @@ void fn_802487A8(HSD_GObj* gobj)
     // Second loop: detect controller connect/disconnect transitions per
     // port, update data->x6[port] flag and refresh the corresponding
     // visual indicators. err is from HSD_PadCopyStatus[port].err byte.
-    idx_ptr = mnVibration_804D4FE8;
+    idx_ptr = (idx_ptr_chained = mnVibration_804D4FE8);
     do {
         err = *((u8*) ((u8*) HSD_PadCopyStatus + (u8) port_b * 0x44) + 0x41);
         port_a = port_b;
