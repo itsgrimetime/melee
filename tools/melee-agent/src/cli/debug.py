@@ -1873,3 +1873,225 @@ def triage_perm(
         print()
         print(f"Applied best candidate ({best.path.parent.name}) to "
               f"{target_path}. Verify with `git diff`.")
+
+
+@debug_app.command(name="stuck")
+def stuck(
+    function: Annotated[
+        str,
+        typer.Argument(help="Function name to diagnose"),
+    ],
+    target: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--target", "-t",
+            help="Optional target spec (YAML/JSON) for guide comparisons. "
+                 "If omitted, surfaces red-flag patterns without a specific "
+                 "target.",
+        ),
+    ] = None,
+    no_pcdump: Annotated[
+        bool,
+        typer.Option(
+            "--no-pcdump",
+            help="Skip the pcdump auto-generation step if the cache is "
+                 "missing. Use when you already know there's no pcdump and "
+                 "want a static-only digest.",
+        ),
+    ] = False,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit structured digest as JSON."),
+    ] = False,
+) -> None:
+    """One-shot diagnostic for a stuck function.
+
+    Composes analyze + guide + suggest-casts and recommends the next
+    workflow step. Replaces what used to be 4-5 separate commands.
+
+    Output sections (in order):
+      1. Function status — match%, TU, virtual count
+      2. Pcdump cache — fresh/stale/missing
+      3. Coloring summary — virtuals, SPILLED markers, pass info
+      4. Guidance issues — red-flag patterns from `debug guide`
+      5. Suspicious casts — HIGH+MEDIUM cast warnings
+      6. Next steps — ranked by cost/likelihood
+    """
+    melee_root = DEFAULT_MELEE_ROOT
+    unit = _find_unit_for_function(function, melee_root)
+    if unit is None:
+        typer.echo(
+            f"function '{function}' not found in report.json.\n"
+            f"Try `ninja build/GALE01/report.json` to regenerate, then retry.",
+            err=True,
+        )
+        raise typer.Exit(2)
+    src = melee_root / "src" / f"{unit}.c"
+    match_pct = _get_match_pct(function, melee_root)
+
+    # Pcdump status. If missing, try to generate (unless --no-pcdump).
+    entry = pcdump_cache.lookup(melee_root, unit)
+    pcdump_status: str
+    pcdump_path: Optional[Path] = None
+    if entry is None and not no_pcdump:
+        pcdump_status = "missing — would auto-generate (run `debug pcdump src/" + unit + ".c`)"
+    elif entry is None:
+        pcdump_status = "missing (--no-pcdump set, skipping)"
+    elif entry.fresh:
+        pcdump_status = f"fresh ({entry.path.name})"
+        pcdump_path = entry.path
+    else:
+        pcdump_status = f"stale (source modified after cache; regenerate for accuracy)"
+        pcdump_path = entry.path
+
+    # Collect digest data
+    digest: dict = {
+        "function": function,
+        "tu": str(src.relative_to(melee_root)),
+        "match_pct": match_pct,
+        "pcdump_status": pcdump_status,
+    }
+
+    coloring_summary: Optional[dict] = None
+    guidance_issues: list = []
+    cast_warnings_high_med: list = []
+
+    if pcdump_path is not None:
+        text = pcdump_path.read_text()
+        fns = parse_pcdump(text)
+        fn = next((f for f in fns if f.name == function), None)
+        if fn is not None:
+            infos = analyze_function(fn)
+            mapped = sum(1 for v in infos if v.physical is not None)
+            unmapped = sum(1 for v in infos if v.physical is None)
+            events_list = parse_hook_events(text)
+            events = find_function(events_list, function)
+            n_spilled = 0
+            if events is not None:
+                for sec in events.simplify_sections:
+                    n_spilled += sum(1 for e in sec.entries if e.spilled)
+            coloring_summary = {
+                "n_virtuals": len(infos),
+                "mapped": mapped,
+                "unmapped": unmapped,
+                "spilled": n_spilled,
+                "pre_pass": (fn.last_precolor_pass().name
+                             if fn.last_precolor_pass() else None),
+            }
+
+            # Guidance — empty target spec surfaces red-flag patterns
+            if target is not None:
+                spec = _load_target_spec(target)
+            else:
+                spec = {"virtuals": {}}
+            result = score_function(fn, spec, events=events)
+            suggestions = suggest(fn, result, events=events)
+            guidance_issues = [{
+                "virtual": s.virtual,
+                "category": s.category,
+                "severity": s.severity,
+                "description": s.description,
+                "patterns": s.patterns,
+            } for s in suggestions]
+
+    # Cast warnings — always run regardless of pcdump
+    if src.exists():
+        src_text = src.read_text()
+        warnings = audit_function_casts(src_text, function)
+        cast_warnings_high_med = [{
+            "line": w.line,
+            "call_target": w.call_target,
+            "arg_index": w.arg_index,
+            "cast_type": w.cast_type,
+            "inner_expr": w.inner_expr,
+            "severity": w.severity,
+            "reason": w.reason,
+        } for w in warnings if w.severity in ("high", "medium")]
+
+    # Next steps — ranked by cost
+    next_steps: list[str] = []
+    if any(w["severity"] == "high" for w in cast_warnings_high_med):
+        next_steps.append(
+            "[free, static] Drop suspicious casts surfaced by suggest-casts. "
+            "Run `melee-agent debug suggest-casts " + function + "` for "
+            "full details."
+        )
+    if coloring_summary and coloring_summary.get("spilled", 0) > 0:
+        next_steps.append(
+            "[medium] Try patterns from `debug pattern-catalog` that "
+            "address SPILLED markers: widen-u8-to-u32, alias-split."
+        )
+    next_steps.append(
+        "[~70sec] Run `melee-agent debug enumerate-decl-orders " + function +
+        "` — brute-forces the decl-order search space, finds 1-line wins."
+    )
+    next_steps.append(
+        "[minutes] Run `melee-agent debug ceiling " + function +
+        "` for a structural-ceiling verdict (combines force-phys + "
+        "enumerate-decl-orders)."
+    )
+    next_steps.append(
+        "[hours] As a last resort, run decomp-permuter and feed its "
+        "outputs through `debug triage-perm`."
+    )
+
+    digest["coloring_summary"] = coloring_summary
+    digest["guidance_issues"] = guidance_issues
+    digest["cast_warnings"] = cast_warnings_high_med
+    digest["next_steps"] = next_steps
+
+    if json_out:
+        print(json.dumps(digest, indent=2))
+        return
+
+    # Human-readable output
+    print(f"== Function status ==")
+    print(f"  {function}")
+    print(f"  TU:       {digest['tu']}")
+    if match_pct is not None:
+        print(f"  Match:    {match_pct:.2f}%")
+    else:
+        print(f"  Match:    (no entry in report.json)")
+    print()
+
+    print(f"== Pcdump cache ==")
+    print(f"  {pcdump_status}")
+    print()
+
+    if coloring_summary:
+        s = coloring_summary
+        print(f"== Coloring summary ==")
+        print(f"  Virtuals:    {s['n_virtuals']} ({s['mapped']} mapped, "
+              f"{s['unmapped']} unmapped)")
+        print(f"  Spilled:     {s['spilled']}")
+        print(f"  Pre-pass:    {s['pre_pass']}")
+        print()
+
+    if guidance_issues:
+        print(f"== Guidance issues ({len(guidance_issues)}) ==")
+        for issue in guidance_issues:
+            marker = {"high": "!!", "medium": "!", "low": "·"}.get(
+                issue["severity"], " ")
+            print(f"  {marker} [r{issue['virtual']} / {issue['category']}]")
+            print(f"     {issue['description']}")
+            if issue["patterns"]:
+                names = ", ".join(f"`{p}`" for p in issue["patterns"])
+                print(f"     Patterns: {names}")
+        print()
+    elif coloring_summary:
+        print(f"== Guidance issues ==")
+        print(f"  (none — pcdump available but no flagged issues. Provide "
+              f"--target to compare against a specific mapping.)")
+        print()
+
+    if cast_warnings_high_med:
+        print(f"== Suspicious casts ({len(cast_warnings_high_med)}) ==")
+        for w in cast_warnings_high_med:
+            marker = {"high": "!!", "medium": "!"}.get(w["severity"], " ")
+            print(f"  {marker} line {w['line']}: ({w['cast_type']}) "
+                  f"{w['inner_expr']} → {w['call_target']}")
+        print()
+
+    print(f"== Next steps (ranked by cost) ==")
+    for i, step in enumerate(next_steps, 1):
+        print(f"  {i}. {step}")
