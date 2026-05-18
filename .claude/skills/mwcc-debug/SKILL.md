@@ -179,6 +179,46 @@ in CP).
 For deep diagnosis of why scroll_offset-style variable splits happen,
 see [`docs/mwcc-allocator-mechanism-deep-dive.md`](../../docs/mwcc-allocator-mechanism-deep-dive.md).
 
+### Step 4: force a specific register mapping (Tier 5, hypothesis testing)
+
+When you suspect the matching ceiling is register-allocation only — and
+want to confirm before spending hours coaxing the C source — use
+`--force-phys` to override MWCC's allocator decisions and see whether
+the resulting `.text` matches the target.
+
+```bash
+# Force virtual #36 to physical r31
+melee-agent debug pcdump src/melee/mn/mnvibration.c \
+    --output /tmp/forced.txt \
+    --force-phys "36:31"
+
+# Multiple overrides at once
+melee-agent debug pcdump src/melee/mn/mnvibration.c \
+    --output /tmp/forced.txt \
+    --force-phys "36:31,50:27"
+```
+
+The format is `virtIdx:physReg[,virtIdx:physReg]*`. The DLL patches
+`IGNode->assignedReg` after colorgraph runs, so the override propagates
+through `rewritepcode` to the emitted instructions. Each override fires
+a `[FORCE_PHYS] virtual N: rX -> rY` event in the dump.
+
+**Interpretation:**
+- Forced ASM matches target → goal is reachable via C-source. Spend
+  time finding the C pattern that nudges the allocator there.
+- Forced ASM still doesn't match → the constraint isn't the allocator.
+  Look at instruction selection (earlier passes) or scheduling (later).
+
+**Caveats:**
+- Forcing two interfering virtuals to the same physical produces
+  incorrect code (data corruption). DLL-patched ASM is a
+  hypothesis-test artifact, NOT a real compiler output — never commit
+  source based on a forced result without confirming the real
+  compiler reproduces it from natural C.
+- Find virtual indices by inspecting the `COLORGRAPH DECISIONS` table
+  in an unforced dump first. The `ig_idx` column (positive values) is
+  the index you pass.
+
 The wrapper:
 1. SSHes to the remote with the relative .c path
 2. Remote: acquires a lock, `git pull --rebase` (so it sees current master), installs patched DLL, runs `mwcceppc.exe` with stock Melee flags

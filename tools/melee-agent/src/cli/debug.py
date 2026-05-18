@@ -101,6 +101,16 @@ def pcdump(
             help="Skip 'git pull' on the remote side (test stale code)",
         ),
     ] = False,
+    force_phys: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-phys",
+            help="Tier 5: bias the allocator. Format 'virtIdx:physReg[,...]'. "
+                 "E.g. '36:31' forces virtual 36 to physical r31. "
+                 "EXPERIMENTAL — may produce broken code if interferences "
+                 "are violated.",
+        ),
+    ] = None,
 ):
     """Dump MWCC's internal IR + codegen for a TU and emit pcdump.txt to stdout.
 
@@ -128,6 +138,14 @@ def pcdump(
     cmd_parts = [f"set MWCC_DEBUG_TIMEOUT_SECS={timeout}"]
     if no_pull:
         cmd_parts.append("set MWCC_DEBUG_NO_PULL=1")
+    if force_phys:
+        # Sanity-check format and pass through. The DLL parses it.
+        # Reject embedded quotes/spaces to keep the cmd-line safe.
+        if any(c in force_phys for c in '"\'; \t'):
+            raise typer.BadParameter(
+                "--force-phys must not contain quotes, semicolons, or whitespace"
+            )
+        cmd_parts.append(f"set MWCC_DEBUG_FORCE_PHYS={force_phys}")
     cmd_parts.append(
         f"powershell -NoProfile -ExecutionPolicy Bypass "
         f"-File {remote_script} {src_rel}"
