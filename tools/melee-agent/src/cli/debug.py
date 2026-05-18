@@ -24,10 +24,14 @@ import typer
 from ._common import DEFAULT_MELEE_ROOT, console
 from ..mwcc_debug import (
     analyze_function,
+    derive_target_from_function,
     find_function,
+    format_suggestions,
     parse_hook_events,
     parse_pcdump,
+    score_function,
     simulate_function,
+    suggest,
 )
 
 debug_app = typer.Typer(
@@ -667,3 +671,213 @@ def diff(
 
     if not any_change:
         print("\nNo coloring changes detected.")
+
+
+def _load_target_spec(path: Path) -> dict:
+    """Load a target spec from YAML or JSON.
+
+    Both are accepted; JSON is a strict subset so we can fall back to it
+    when PyYAML isn't installed. The spec shape is documented in
+    src/mwcc_debug/scoring.py.
+    """
+    text = path.read_text()
+    if path.suffix in (".yaml", ".yml"):
+        try:
+            import yaml  # type: ignore
+        except ImportError:
+            raise typer.BadParameter(
+                f"PyYAML not installed; convert {path} to JSON or "
+                f"`pip install PyYAML`"
+            )
+        return yaml.safe_load(text)
+    return json.loads(text)
+
+
+@debug_app.command()
+def score(
+    pcdump: Annotated[
+        Path,
+        typer.Argument(help="Path to pcdump.txt"),
+    ],
+    function: Annotated[
+        str,
+        typer.Option("--function", "-f", help="Function name to score"),
+    ],
+    target: Annotated[
+        Path,
+        typer.Option(
+            "--target", "-t",
+            help="Target spec file (YAML or JSON). See "
+                 "src/mwcc_debug/scoring.py for format.",
+        ),
+    ],
+    breakdown: Annotated[
+        bool,
+        typer.Option(
+            "--breakdown",
+            help="Print the score components in addition to the total.",
+        ),
+    ] = False,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit score as JSON."),
+    ] = False,
+) -> None:
+    """Tier 4: score a pcdump's coloring decisions against a target spec.
+
+    Lower scores are better (perfect match = 0). Designed to be called by
+    decomp-permuter as a custom scorer.
+    """
+    text = pcdump.read_text()
+    spec = _load_target_spec(target)
+    fns = parse_pcdump(text)
+    fn = next((f for f in fns if f.name == function), None)
+    if fn is None:
+        typer.echo(f"Function not found: {function}", err=True)
+        raise typer.Exit(1)
+
+    events_list = parse_hook_events(text)
+    events = find_function(events_list, function)
+
+    result = score_function(fn, spec, events=events)
+
+    if json_out:
+        print(json.dumps({
+            "function": function,
+            "score": result.total,
+            "matched": result.matched,
+            "targeted": result.targeted,
+            "virtual_distance": result.virtual_distance,
+            "spill_unexpected": result.spill_unexpected,
+            "spill_missing": result.spill_missing,
+            "interferer_distance": result.interferer_distance,
+        }))
+        return
+
+    if breakdown:
+        print(f"Function:           {function}")
+        print(f"Score:              {result.total:.2f}")
+        print(f"Matched:            {result.matched} / {result.targeted}")
+        print(f"Virtual penalty:    {result.virtual_penalty:.2f} "
+              f"({result.virtual_distance} wrong)")
+        print(f"Spill penalty:      {result.spill_penalty:.2f} "
+              f"(unexpected={len(result.spill_unexpected)} "
+              f"missing={len(result.spill_missing)})")
+        print(f"Interferer penalty: {result.interferer_penalty:.2f} "
+              f"(sum |Δdeg| = {result.interferer_distance})")
+    else:
+        print(f"{result.total:.2f}")
+
+
+@debug_app.command()
+def guide(
+    pcdump: Annotated[
+        Path,
+        typer.Argument(help="Path to pcdump.txt"),
+    ],
+    function: Annotated[
+        str,
+        typer.Option("--function", "-f", help="Function name to analyze"),
+    ],
+    target: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--target", "-t",
+            help="Target spec file (YAML or JSON). If omitted, all virtuals "
+                 "currently mapped to non-target physicals are shown.",
+        ),
+    ] = None,
+) -> None:
+    """Tier 4: human-readable diagnostic for stuck-function debugging.
+
+    Reports which virtuals are at the wrong physical, why (interference,
+    spill, iteration order), and suggests directions for C-source nudges.
+    Hints, not guarantees — interpret in source context.
+    """
+    text = pcdump.read_text()
+    fns = parse_pcdump(text)
+    fn = next((f for f in fns if f.name == function), None)
+    if fn is None:
+        typer.echo(f"Function not found: {function}", err=True)
+        raise typer.Exit(1)
+
+    events_list = parse_hook_events(text)
+    events = find_function(events_list, function)
+
+    if target is None:
+        # No target — score against an empty target spec, just to surface
+        # SPILLED markers and other red flags.
+        spec: dict = {"virtuals": {}}
+    else:
+        spec = _load_target_spec(target)
+
+    result = score_function(fn, spec, events=events)
+    suggestions = suggest(fn, result, events=events)
+
+    print(f"Function: {function}")
+    print(f"Targeted virtuals: {result.targeted}")
+    print(f"  Matched: {result.matched}")
+    print(f"  Wrong:   {result.virtual_distance}")
+    if result.spill_unexpected:
+        print(f"  Unexpected SPILLED: r{', r'.join(str(v) for v in result.spill_unexpected)}")
+    if result.spill_missing:
+        print(f"  Expected-but-missing SPILLED: r{', r'.join(str(v) for v in result.spill_missing)}")
+    print()
+    print("Suggestions (highest severity first):")
+    print(format_suggestions(suggestions))
+
+
+@debug_app.command(name="derive-target")
+def derive_target(
+    pcdump: Annotated[
+        Path,
+        typer.Argument(help="Path to pcdump.txt"),
+    ],
+    function: Annotated[
+        str,
+        typer.Option("--function", "-f", help="Function name to extract"),
+    ],
+    output_format: Annotated[
+        str,
+        typer.Option(
+            "--format",
+            help="Output format: yaml (default) or json.",
+            click_type=typer.Choice(["yaml", "json"], case_sensitive=False)
+            if False  # typer.Choice not available pre-0.12; fall back to str
+            else None,
+        ),
+    ] = "yaml",
+) -> None:
+    """Tier 4: extract the current virtual→physical mapping as a target spec.
+
+    Useful for capturing a known-good (or known-experimental) target to
+    use later as input to `score` or `guide`. Especially useful with
+    Tier 5 force-phys: force the desired mapping, run pcdump, capture
+    the result with this command, then save the spec and use it to
+    score subsequent natural-source attempts.
+    """
+    text = pcdump.read_text()
+    fns = parse_pcdump(text)
+    fn = next((f for f in fns if f.name == function), None)
+    if fn is None:
+        typer.echo(f"Function not found: {function}", err=True)
+        raise typer.Exit(1)
+
+    events_list = parse_hook_events(text)
+    events = find_function(events_list, function)
+
+    spec = derive_target_from_function(fn, events=events)
+
+    fmt = (output_format or "yaml").lower()
+    if fmt == "json":
+        print(json.dumps(spec, indent=2))
+    else:
+        # Render as YAML manually (avoid PyYAML dependency for output)
+        print(f"function: {spec['function']}")
+        print(f"virtuals:")
+        for v in sorted(spec["virtuals"]):
+            print(f"  {v}: {spec['virtuals'][v]}")
+        if spec.get("spilled"):
+            print(f"spilled:")
+            for v in spec["spilled"]:
+                print(f"  - {v}")

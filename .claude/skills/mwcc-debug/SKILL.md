@@ -230,6 +230,49 @@ a `[FORCE_PHYS] virtual N: rX -> rY` event in the dump.
   in an unforced dump first. The `ig_idx` column (positive values) is
   the index you pass.
 
+### Step 5: get actionable guidance (Tier 4, hypothesis → C-source)
+
+Once you've used Step 4 to confirm a target allocation is reachable,
+use `guide` to find out WHAT specifically blocks the natural source
+from getting there. Often this points straight at a single interfering
+virtual whose lifetime needs shrinking.
+
+```bash
+# Capture target from a forced run
+melee-agent debug derive-target /tmp/forced.txt -f mnVibration_80248644 \
+    --format json > /tmp/target.json
+
+# Score baseline against target
+melee-agent debug score /tmp/baseline.txt -f mnVibration_80248644 \
+    --target /tmp/target.json --breakdown
+
+# Get actionable suggestions
+melee-agent debug guide /tmp/baseline.txt -f mnVibration_80248644 \
+    --target /tmp/target.json
+```
+
+Example output:
+```
+Suggestions (highest severity first):
+  ! [r36 / interference] r36 wants r31 but r31 is taken by interfering
+    virtual(s) r51. Try: shrink the live range of r51 so they don't
+    overlap r36, or move r36's definition earlier so it's colored
+    before r51.
+```
+
+`guide` covers three blocker categories:
+- **interference**: target physical is taken by a known interferer →
+  shrink interferer's lifetime
+- **spill**: virtual is on the spill-candidate list → reduce its
+  interferer count
+- **rank**: no direct blocker, but iteration order pushed this virtual
+  to a lower slot → adjust other virtuals' lifetimes that consumed the
+  desired physical earlier
+
+The `score` command emits a single number for permuter integration
+(lower = better). Designed to be called from a custom permuter scorer
+wrapper that compiles candidates via SSH.
+
 The wrapper:
 1. SSHes to the remote with the relative .c path
 2. Remote: acquires a lock, `git pull --rebase` (so it sees current master), installs patched DLL, runs `mwcceppc.exe` with stock Melee flags

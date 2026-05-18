@@ -183,34 +183,57 @@ simplified-out leaves. Would require either:
 **Effort spent:** ~half-day, mostly RE work on mwcceppc.exe to find VAs and
 debugging the iteration crash.
 
-## Tier 4 — permuter integration
+## Tier 4 — permuter integration scoring + guidance (v1) — ✅ DONE
 
-[Decomp Permuter](https://github.com/simonlindholm/decomp-permuter) does
-randomized C-source mutation, recompiles, scores against target asm.
-It's the heavyweight tool people reach for when nothing else moves the
-needle (inspector's `GOAL.md` mentions 50,000+ iterations on
-`mpColl_80046904` without finding a beating local minimum).
+Implemented as scoring/guidance primitives that can be wrapped by
+upstream decomp-permuter, plus a standalone "guide" command for manual
+investigation.
 
-The permuter is random by design. With our pcdump output + analyze
-command, we could make it smarter — after each candidate, examine the
-dump to see whether the mutation moved any of:
-- A virtual register's live range (toward or away from the target)
-- The use count of a virtual that's at the wrong physical
-- The interference graph
+See [docs/mwcc-debug-tier4-permuter.md](mwcc-debug-tier4-permuter.md)
+for the full design + integration paths.
 
-A *guided* permuter that prefers mutations that affect the right
-virtuals would converge much faster than random. Likely needs a custom
-permuter scorer that incorporates the analyze output.
+**What v1 ships:**
 
-**What it unlocks:** systematically explorable "stuck at 99.8%" cases,
-rather than stochastic.
+- `melee-agent debug score <pcdump> -f FN -t target.{yaml,json}` — emits
+  a single floating-point score (lower = better) compatible with
+  permuter's `--scorer` convention. Combines:
+  - byte_penalty (% of virtuals at wrong physical)
+  - virtual_penalty (per-wrong-virtual)
+  - spill_penalty (unexpected SPILLED markers)
+  - interferer_penalty (degree-distance)
+- `melee-agent debug guide <pcdump> -f FN [-t target]` — human-readable
+  diagnostic listing wrong virtuals, blockers, spill warnings, and
+  suggested C-source nudges. Hints, not guarantees.
+- `melee-agent debug derive-target <pcdump> -f FN` — extracts the
+  current virtual→physical mapping as a target spec. Useful for
+  capturing known-good (matched sibling) or experimental (Tier 5
+  force-phys) targets.
 
-**Rough path:** much bigger build. Implement as either (a) a new scorer
-plugin for permuter that calls our analyze command, or (b) a separate
-guided-search tool that owns its own mutation loop. (b) is cleaner but
-re-implements a lot of permuter's machinery.
+**Verified on mnVibration_80248644:**
+- Forced r36 → r31 via Tier 5, captured target spec
+- Scored natural-source baseline against forced target
+- `guide` correctly identifies: "r36 wants r31 but r31 is taken by
+  interfering virtual r51. Try: shrink the live range of r51..."
+- This pinpoints exactly the scroll_offset-vs-cleanup-loop-NULL
+  interference the matching agent was investigating manually.
 
-**Effort:** week-plus, depending on how deep the integration goes.
+**What v1 doesn't do (deferred):**
+
+- Direct wrap-around of decomp-permuter — the scorer is callable from
+  outside but we haven't built the glue script that points permuter at
+  it. To use: write a small bash wrapper that takes a permuter
+  candidate's `.o`, generates a pcdump (via SSH), and calls our score.
+- Local pcdump generation (still requires SSH to nzxt-local).
+- Targeted-mutation library — the guidance suggests directions but
+  doesn't apply them automatically.
+- Per-byte assembly diffing — currently the "byte" component is a
+  synthetic stand-in based on the virtual mapping ratio.
+
+These deferred items would be a Tier 4 v2 / v3 if matching workflows
+warrant the investment.
+
+**Effort spent:** ~half-day for v1 (scoring + guidance + derive-target
++ tests). v2/v3 are explicit future work.
 
 ## Tier 5 — allocator biasing via env var — ✅ DONE
 
