@@ -895,7 +895,7 @@ void mnVibration_80248ED4(s32 arg0)
     GObj_SetupGXLink(gobj, HSD_GObj_JObjCallback, 4, 0x80);
     HSD_JObjAddAnimAll(jobj, assets->animjoint, assets->matanim,
                        assets->shapeanim);
-    HSD_JObjReqAnimAll(jobj, 0.0f);
+    HSD_JObjReqAnimAll(jobj, mnVibration_804DC030);
     data = HSD_MemAlloc(sizeof(MnVibrationData));
     if (data == NULL) {
         OSReport(strbase + 0x30);
@@ -905,10 +905,10 @@ void mnVibration_80248ED4(s32 arg0)
     data->x0[1] = 0;
     for (i = 0; i < 4; i++) {
         data->x0[i + 2] = 0;
-        data->x6[i] = (*((u8*) ((u8*) HSD_PadCopyStatus + (u8) i * 0x44) +
-                        0x41) != 0)
-                          ? 0
-                          : 1;
+        data->x6[i] =
+            (*((s8*) ((u8*) HSD_PadCopyStatus + (u8) i * 0x44) + 0x41) != 0)
+                ? 0
+                : 1;
     }
     data->scroll_offset = 0;
     data->texts[0] = NULL;
@@ -920,20 +920,21 @@ void mnVibration_80248ED4(s32 arg0)
     data->texts[6] = NULL;
     data->texts[7] = NULL;
     GObj_InitUserData(gobj, 0, HSD_Free, data);
-    i = 0;
-    do {
-        lb_80011E24(jobj, &data->jobjs[i], i, -1);
-        i += 1;
-    } while (i < 0x19);
+    {
+        s32 k = 0;
+        do {
+            lb_80011E24(jobj, &data->jobjs[k], k, -1);
+            k += 1;
+        } while (k < 0x19);
+    }
     HSD_JObjSetFlagsAll(data->jobjs[22], 0x10);
     HSD_JObjSetFlagsAll(data->jobjs[21], 0x10);
     HSD_JObjSetFlagsAll(data->jobjs[20], 0x10);
     HSD_JObjSetFlagsAll(data->jobjs[19], 0x10);
     HSD_GObj_SetupProc(gobj, (void (*)(HSD_GObj*)) fn_80248A78, 0);
     mnVibration_8024829C(gobj);
-    text = data->title_text;
-    if (text != NULL) {
-        HSD_SisLib_803A5CC4(text);
+    if (data->title_text != NULL) {
+        HSD_SisLib_803A5CC4(data->title_text);
     }
     text =
         HSD_SisLib_803A5ACC(0, 1, -9.5f, 9.1f, 17.0f, 364.68332f, 38.38772f);

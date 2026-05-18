@@ -16,6 +16,7 @@ typedef struct MnVibrationFloatData {
 
 extern MnVibrationFloatData mnVibration_803EECE0;
 extern f32 mnVibration_804DC020;
+extern f32 mnVibration_804DC030;
 extern Vec3 mnVibration_803EED04;
 extern SDATA char mnVibration_804D4FF4[];
 extern SDATA char mnVibration_804D4FFC[];
