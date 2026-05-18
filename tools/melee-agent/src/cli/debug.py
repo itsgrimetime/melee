@@ -20,6 +20,7 @@ from typing import Annotated, Optional
 import typer
 
 from ._common import DEFAULT_MELEE_ROOT, console
+from ..mwcc_debug import analyze_function, parse_pcdump
 
 debug_app = typer.Typer(
     help="Compiler introspection via remote Windows mwcc_debug DLL"
@@ -171,3 +172,128 @@ def pcdump(
         )
 
     raise typer.Exit(code=exit_code)
+
+
+@debug_app.command("analyze")
+def analyze(
+    dump: Annotated[
+        Path,
+        typer.Argument(
+            help="Path to a pcdump.txt produced by 'debug pcdump'"
+        ),
+    ],
+    function: Annotated[
+        Optional[str],
+        typer.Option(
+            "--function", "-f",
+            help="Show only this function (default: list all)",
+        ),
+    ] = None,
+    show_candidates: Annotated[
+        bool,
+        typer.Option(
+            "--candidates",
+            help="Show the set of physicals each virtual could have been "
+                 "assigned (based on interferer constraints).",
+        ),
+    ] = True,
+):
+    """Summarize a pcdump.txt: per-virtual register live ranges, use counts,
+    interferences, and 'could have been' candidate sets.
+
+    Without --function, lists all functions with brief summary. With --function,
+    prints a detailed coloring-decision table for that function — the kind of
+    output that tells you whether a register-cascade question is constrained
+    by interferences or is a free allocator choice.
+
+    The 'Candidates' column shows physicals not used by interfering virtuals.
+    If a virtual got a physical that's NOT the lowest-numbered candidate, that
+    asymmetry is the kind of allocator-preference question worth digging into.
+    """
+    if not dump.is_file():
+        raise typer.BadParameter(f"dump file not found: {dump}")
+
+    text = dump.read_text()
+    funcs = parse_pcdump(text)
+
+    if not funcs:
+        print(f"No functions found in {dump}", file=sys.stderr)
+        raise typer.Exit(code=1)
+
+    if function is None:
+        # List all functions, brief summary
+        print(f"Functions in {dump.name}:")
+        for fn in funcs:
+            n_passes = len(fn.passes)
+            has_color = fn.get_pass("AFTER REGISTER COLORING") is not None
+            color_note = "" if has_color else " (no coloring pass — truncated dump?)"
+            print(f"  {fn.name}: {n_passes} passes{color_note}")
+        return
+
+    # Find the requested function
+    target = next((fn for fn in funcs if fn.name == function), None)
+    if target is None:
+        avail = ", ".join(fn.name for fn in funcs)
+        raise typer.BadParameter(
+            f"function '{function}' not in dump. Available: {avail}"
+        )
+
+    if target.get_pass("AFTER REGISTER COLORING") is None:
+        print(
+            f"WARNING: {function} has no AFTER REGISTER COLORING pass — "
+            "dump may be truncated. Analysis skipped.",
+            file=sys.stderr,
+        )
+        raise typer.Exit(code=1)
+
+    pre = target.last_precolor_pass()
+    post = target.get_pass("AFTER REGISTER COLORING")
+    print(f"Function: {target.name}")
+    print(f"Pre-coloring pass: {pre.name if pre else '<none>'}")
+    print(f"Post-coloring pass: {post.name}")
+    print()
+
+    infos = analyze_function(target)
+    if not infos:
+        print("No virtual registers found (or pass alignment failed).")
+        return
+
+    # Column widths
+    print(f"{'Virtual':>8}  {'Phys':>5}  {'Class':<8}  {'Live[first..last]':<18}  {'Uses':>5}  Interferes")
+    print(f"{'-' * 8:>8}  {'-' * 5:>5}  {'-' * 8:<8}  {'-' * 18:<18}  {'-' * 5:>5}  ----------")
+    for info in infos:
+        phys = f"r{info.physical}" if info.physical is not None else "?"
+        live = f"{info.first_use}..{info.last_use}"
+        # Format interferes_with as a compact list
+        if info.interferes_with:
+            interferers = ",".join(f"r{v}" for v in sorted(info.interferes_with))
+        else:
+            interferers = "-"
+        print(
+            f"     r{info.virtual:<3}  {phys:>5}  {info.physical_class:<8}  "
+            f"{live:<18}  {info.use_count:>5}  {interferers}"
+        )
+
+    if show_candidates:
+        print()
+        print("Coloring decisions (expected: callee-save allocated top-down")
+        print("from r31, caller-save bottom-up from r3):")
+        for info in infos:
+            if info.physical is None or not info.candidates:
+                continue
+            cands = sorted(info.candidates)
+            choice = info.physical
+            # MWCC's allocator strategy: callee-save (r13-r31) top-down,
+            # caller-save (r3-r12) bottom-up. Flag if the choice doesn't
+            # match the expected strategy.
+            note = ""
+            if info.physical_class == "GPR-cs":
+                expected = max(cands)
+                if choice != expected:
+                    note = f"  ← NOT top (allocator usually picks r{expected} first)"
+            elif info.physical_class == "GPR":
+                expected = min(c for c in cands if 3 <= c <= 12)
+                if choice != expected:
+                    note = f"  ← NOT bottom (allocator usually picks r{expected} first)"
+            cand_str = "{" + ",".join(f"r{c}" for c in cands) + "}"
+            print(f"  r{info.virtual} → r{choice}.  Candidates: {cand_str}{note}")
