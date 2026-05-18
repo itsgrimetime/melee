@@ -87,3 +87,41 @@ Keeping the 99.8% baseline. The remaining gap is well-understood: MWCC's PCode-g
 Tier 6 (interactive allocator biasing or IR-level coalescenodes patch) would be needed to break this. Out of scope for now.
 
 This document captures the iteration loop so we don't re-tread the same ground. The new toolkit (especially `debug diff`) made these explorations 5-10x faster than they'd have been with checkdiff alone.
+
+## Follow-up: inline variants (May 2026)
+
+After the user requested "more inlines" (heavily used in decomp), tried wrapping pieces of mnVibration_80248644 in `static inline` helpers. All variants achieved scroll_offset → r31 ✓ but **traded the original 2-line r36 diff for a different register-cascade diff on j (6 lines):**
+
+| Variant | Match | scroll_offset | j | Notes |
+|---------|-------|---------------|---|-------|
+| baseline (no inline) | 99.8% | r27 (✗, expect r31) | r29 (✓) | 2-line diff |
+| `PopulateNameRows` (wrap entire j-loop) | 99.5% | r31 (✓) | r30 (✗, expect r29) | 6-line diff |
+| `GetNameSlot` (wrap name_idx computation, keep j outside) | 99.5% | r31 (✓) | r27 (✗, expect r29) | 6-line diff |
+| Two-level inline (`DoNameRow` → `GetNameSlot`) | 80.6% | — | — | `DoNameRow` becomes real call instead of inlining |
+| Pre-init `j = 0` before cleanup | 96.0% | — | — | Forces extra callee-save virtual (r25), stack +8 |
+
+### Why j cascades
+
+With the inline, scroll_offset's virtual (e.g. r44) gets colored EARLY because the inline body's IR shape changes simplification degree ordering. It reuses r31 from NULL (disjoint lives).
+
+j is then colored before the cleanup walkers (which now have lower degree). At j's coloring, only r31 is in the volatile-pool from dispense, and r44 holds it. So j must dispense a fresh callee → r30 in `PopulateNameRows` variant.
+
+In the `GetNameSlot` variant, the order shifts: cleanup walkers get colored first (r29, r30), then j picks "lowest set bit" of pool after exclusion of {r28 data, r31 scroll_offset}. Candidates = {r27, r29, r30}. Lowest = r27 → j picks r27.
+
+To force j → r29, j must interfere with the virtual at r27 (cleanup i, r36). Both pre-init `j = 0` (regresses) and "dummy use of j in cleanup" attempts disrupted other interferences.
+
+### Conclusion
+
+The expected r36 → r31 / r35 → r29 combo requires:
+- scroll_offset (r36) colored AFTER cleanup walkers but BEFORE j, with workingMask = {r31 reuse}
+- j (r35) colored AFTER scroll_offset, with workingMask = {r29 reuse} (i.e., cleanup i excluded)
+
+The first half needs scroll_offset to interfere with cleanup virtuals (extends backward). The second half needs j to interfere with cleanup i.
+
+Both halves require the j-loop and cleanup loop's virtuals to interfere structurally. From C source, this means either:
+1. Hoist a variable used in both loops (shared counter — but MWCC splits live ranges)
+2. Add cross-loop data flow (extra ASM)
+
+Neither preserves the current 99.5% structure. Tier 6 (allocator hook) remains the path to 100%.
+
+**Current best: 99.5%** with `mnVibration_GetNameSlot` static inline. Scroll_offset matches; j cascade is the new structural ceiling.
