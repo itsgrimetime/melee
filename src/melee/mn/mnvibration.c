@@ -646,7 +646,7 @@ void fn_802487A8(HSD_GObj* gobj)
         if (GetRumbleSettingOfPort(var_r24) != 0) {
             mn_8022EC18(sp44, &mnVibration_803EECF8, MOBJ_MASK);
         } else {
-            HSD_JObjReqAnimAll(sp44, 0.0f);
+            HSD_JObjReqAnimAll(sp44, mnVibration_804DC030);
             mn_8022F3D8(sp44, 0xFF, MOBJ_MASK);
             HSD_JObjAnimAll(sp44);
         }
