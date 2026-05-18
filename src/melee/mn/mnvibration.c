@@ -544,8 +544,8 @@ static inline void mnVibration_PopulateNameRows(MnVibrationData* data,
 {
     s32 j;
     s32 name_idx;
-    s32 count;
     u8 scroll_offset;
+    s32 count;
 
     for (j = 0; j < 8; j++) {
         scroll_offset = data->scroll_offset;
