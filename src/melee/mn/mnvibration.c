@@ -759,7 +759,6 @@ void fn_80248A78(HSD_GObj* arg0)
     HSD_JObj* jobj3;
     f32 spacing_pre;
     HSD_JObj* jobj4;
-    HSD_GObj* cursor_gobj;
     HSD_JObj* cursor_jobj;
     HSD_JObj* jobj17;
     HSD_JObj* jobj18;
@@ -769,6 +768,7 @@ void fn_80248A78(HSD_GObj* arg0)
     f32 temp_y;
     f32 temp_z;
     u8 cursor_row;
+    HSD_GObj* cursor_gobj;
     PAD_STACK(64);
 
     temp_r30 = arg0->user_data;
