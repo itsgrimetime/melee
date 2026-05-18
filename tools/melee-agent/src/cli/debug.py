@@ -726,18 +726,65 @@ def _load_target_spec(path: Path) -> dict:
     Both are accepted; JSON is a strict subset so we can fall back to it
     when PyYAML isn't installed. The spec shape is documented in
     src/mwcc_debug/scoring.py.
+
+    Validates the basic shape of the loaded spec and emits a helpful
+    error if it's malformed.
     """
+    if not path.exists():
+        typer.echo(f"target spec file not found: {path}", err=True)
+        typer.echo(
+            "Generate one with `melee-agent debug derive-target -f FN`.",
+            err=True,
+        )
+        raise typer.Exit(2)
     text = path.read_text()
-    if path.suffix in (".yaml", ".yml"):
-        try:
-            import yaml  # type: ignore
-        except ImportError:
-            raise typer.BadParameter(
-                f"PyYAML not installed; convert {path} to JSON or "
-                f"`pip install PyYAML`"
-            )
-        return yaml.safe_load(text)
-    return json.loads(text)
+    try:
+        if path.suffix in (".yaml", ".yml"):
+            try:
+                import yaml  # type: ignore
+            except ImportError:
+                typer.echo(
+                    f"PyYAML not installed but target file {path.name} "
+                    f"has YAML extension.\n"
+                    f"Either `pip install PyYAML` or convert the file to "
+                    f"JSON (use `derive-target --format json` to regenerate).",
+                    err=True,
+                )
+                raise typer.Exit(2)
+            spec = yaml.safe_load(text)
+        else:
+            spec = json.loads(text)
+    except json.JSONDecodeError as e:
+        typer.echo(
+            f"failed to parse {path} as JSON: {e}\n"
+            f"Expected shape:\n"
+            f'  {{ "function": "fn_name", "virtuals": {{"32": 26, ...}} }}',
+            err=True,
+        )
+        raise typer.Exit(2)
+    except Exception as e:
+        typer.echo(f"failed to parse target spec {path}: {e}", err=True)
+        raise typer.Exit(2)
+
+    # Basic shape validation
+    if not isinstance(spec, dict):
+        typer.echo(
+            f"target spec {path} must be an object/dict at top level, "
+            f"got {type(spec).__name__}.",
+            err=True,
+        )
+        raise typer.Exit(2)
+    if "virtuals" not in spec:
+        typer.echo(
+            f"target spec {path} is missing the 'virtuals' key.\n"
+            f"Expected shape:\n"
+            f'  {{ "function": "fn_name", "virtuals": {{"32": 26, ...}} }}\n'
+            f"Generate a valid one with `melee-agent debug derive-target "
+            f"-f FN`.",
+            err=True,
+        )
+        raise typer.Exit(2)
+    return spec
 
 
 @debug_app.command()
@@ -784,8 +831,7 @@ def score(
     fns = parse_pcdump(text)
     fn = next((f for f in fns if f.name == function), None)
     if fn is None:
-        typer.echo(f"Function not found: {function}", err=True)
-        raise typer.Exit(1)
+        _abort_function_not_in_dump(function, [f.name for f in fns])
 
     events_list = parse_hook_events(text)
     events = find_function(events_list, function)
@@ -854,8 +900,7 @@ def guide(
     fns = parse_pcdump(text)
     fn = next((f for f in fns if f.name == function), None)
     if fn is None:
-        typer.echo(f"Function not found: {function}", err=True)
-        raise typer.Exit(1)
+        _abort_function_not_in_dump(function, [f.name for f in fns])
 
     events_list = parse_hook_events(text)
     events = find_function(events_list, function)
@@ -921,8 +966,7 @@ def derive_target(
     fns = parse_pcdump(text)
     fn = next((f for f in fns if f.name == function), None)
     if fn is None:
-        typer.echo(f"Function not found: {function}", err=True)
-        raise typer.Exit(1)
+        _abort_function_not_in_dump(function, [f.name for f in fns])
 
     events_list = parse_hook_events(text)
     events = find_function(events_list, function)
@@ -956,6 +1000,75 @@ def _find_unit_for_function(func_name: str, melee_root: Path) -> Optional[str]:
                 if function.get("name") == func_name:
                     return unit.get("name", "").removeprefix("main/")
     return None
+
+
+def _extract_ninja_error(stdout: str, stderr: str, max_lines: int = 8) -> str:
+    """Pull the relevant error lines out of a ninja failure dump.
+
+    ninja's full output is mostly progress lines (`[N/M] ...`) that
+    aren't useful. The actual error lives in lines containing 'error:',
+    'FAILED:', or compiler diagnostics. Return at most `max_lines`.
+    """
+    lines = (stdout + "\n" + stderr).splitlines()
+    relevant = []
+    for line in lines:
+        s = line.strip()
+        if not s:
+            continue
+        if any(marker in s.lower() for marker in (
+            "error:", "failed:", "fatal:", "warning:",
+            "undefined reference", "implicit declaration",
+            "no such file", "cannot find",
+        )):
+            relevant.append(line)
+        elif s.startswith(("/", "src/", "include/", "tools/")) and ":" in s:
+            # File:line:col-style references — likely the diagnostic location
+            relevant.append(line)
+    if not relevant:
+        # Fall back to last few non-empty stderr lines
+        tail_stderr = [l for l in stderr.splitlines() if l.strip()][-max_lines:]
+        relevant = tail_stderr or ["(no error lines captured)"]
+    return "\n".join(relevant[:max_lines])
+
+
+def _suggest_similar_functions(target: str, available: list[str], n: int = 5) -> list[str]:
+    """Return up to `n` available function names that look similar to `target`.
+
+    Uses Python's difflib for fuzzy ranking. Common typos (e.g. wrong
+    case, missing underscore, trailing digit drift) are surfaced this way.
+    """
+    import difflib
+    return difflib.get_close_matches(target, available, n=n, cutoff=0.5)
+
+
+def _abort_function_not_in_dump(function: str, available_names: list[str]) -> None:
+    """Emit a rich error message + exit. Used by every command that
+    fails to find a function in a pcdump.
+    """
+    typer.echo(f"function '{function}' not found in pcdump.", err=True)
+    suggestions = _suggest_similar_functions(function, available_names)
+    if suggestions:
+        typer.echo("", err=True)
+        typer.echo("Did you mean one of these?", err=True)
+        for s in suggestions:
+            typer.echo(f"  - {s}", err=True)
+    else:
+        # No close matches — show a sample
+        typer.echo("", err=True)
+        sample = available_names[:8]
+        if sample:
+            typer.echo(f"Sample of {len(available_names)} functions in this dump:", err=True)
+            for s in sample:
+                typer.echo(f"  - {s}", err=True)
+            if len(available_names) > 8:
+                typer.echo(f"  ... +{len(available_names) - 8} more", err=True)
+    typer.echo("", err=True)
+    typer.echo(
+        "Hint: check spelling, or if the source changed since the cache "
+        "was generated, re-run `debug pcdump <c_file>`.",
+        err=True,
+    )
+    raise typer.Exit(3)
 
 
 def _resolve_pcdump_path(
@@ -997,11 +1110,26 @@ def _resolve_pcdump_path(
         raise typer.Exit(2)
     unit = _find_unit_for_function(function, melee_root)
     if unit is None:
-        typer.echo(
-            f"function '{function}' not found in report.json.\n"
-            f"Try `ninja build/GALE01/report.json` to regenerate, then retry.",
-            err=True,
-        )
+        # Suggest similar names from report.json
+        try:
+            report_path = melee_root / "build" / "GALE01" / "report.json"
+            if report_path.exists():
+                with report_path.open() as f:
+                    rdata = json.load(f)
+                all_names = [fn.get("name") for u in rdata.get("units", [])
+                             for fn in u.get("functions", []) if fn.get("name")]
+                suggestions = _suggest_similar_functions(function, all_names)
+            else:
+                suggestions = []
+        except Exception:
+            suggestions = []
+        msg = f"function '{function}' not found in report.json.\n"
+        if suggestions:
+            msg += "\nDid you mean one of these?\n"
+            for s in suggestions:
+                msg += f"  - {s}\n"
+        msg += "\nTry `ninja build/GALE01/report.json` to regenerate, then retry."
+        typer.echo(msg, err=True)
         raise typer.Exit(2)
     entry = pcdump_cache.lookup(melee_root, unit)
     if entry is None:
@@ -1122,11 +1250,47 @@ def verify_perm(
           else "Baseline match: (unknown)")
 
     candidate_text = candidate.read_text()
+    # Locate which side the function is missing in for a clearer message.
+    from ..mwcc_debug.source_patch import find_function as _find_fn
+    target_text = target_path.read_text()
+    cand_span = _find_fn(candidate_text, function)
+    target_span = _find_fn(target_text, function)
+    if cand_span is None and target_span is None:
+        typer.echo(
+            f"function '{function}' not found in EITHER candidate or target.\n"
+            f"  Candidate: {candidate}\n"
+            f"  Target:    {target_path}\n"
+            f"Maybe the function name is misspelled, or both sources were "
+            f"renamed.",
+            err=True,
+        )
+        raise typer.Exit(3)
+    if cand_span is None:
+        typer.echo(
+            f"function '{function}' is in target but NOT in candidate.\n"
+            f"  Candidate: {candidate}\n"
+            f"This usually means the permuter mutated a different function "
+            f"in the same TU. Check the candidate source manually:\n"
+            f"  grep -n '^[A-Za-z_][A-Za-z_0-9 *]*(' {candidate}",
+            err=True,
+        )
+        raise typer.Exit(3)
+    if target_span is None:
+        typer.echo(
+            f"function '{function}' is in candidate but NOT in target.\n"
+            f"  Target: {target_path}\n"
+            f"This usually means the function was renamed in the real tree, "
+            f"or doesn't exist yet. Verify with:\n"
+            f"  grep -n '{function}' {target_path}",
+            err=True,
+        )
+        raise typer.Exit(3)
     orig = transfer_candidate(candidate_text, target_path, function)
     if orig is None:
+        # Shouldn't happen if both spans are found, but defensive
         typer.echo(
-            f"failed to locate function '{function}' in candidate OR "
-            f"target — cannot transfer.",
+            f"unexpected error: both sides have the function but transfer "
+            f"failed. Please report this with the candidate path.",
             err=True,
         )
         raise typer.Exit(3)
@@ -1141,13 +1305,22 @@ def verify_perm(
             cwd=melee_root, capture_output=True, text=True,
         )
         if ninja_result.returncode != 0:
-            print("ninja failed:")
-            print(ninja_result.stdout)
-            print(ninja_result.stderr, file=sys.stderr)
             target_path.write_text(orig)
-            print("\nReverted source. Build error implies candidate doesn't "
-                  "compile cleanly in the real tree (often due to missing "
-                  "includes or preprocessor differences from permuter's base.c).")
+            err = _extract_ninja_error(ninja_result.stdout, ninja_result.stderr)
+            typer.echo(
+                f"ninja build failed (exit {ninja_result.returncode}). "
+                f"Relevant output:\n{err}\n\n"
+                f"Source reverted. The candidate doesn't compile in the real "
+                f"tree — typical causes:\n"
+                f"  - Permuter's base.c had macros expanded that the real "
+                f"tree relies on via #include\n"
+                f"  - Missing helper declarations\n"
+                f"  - Type mismatches in unrelated decls that the candidate "
+                f"introduced\n"
+                f"For the full unfiltered ninja output, re-run with the "
+                f"`ninja {obj_path}` command directly.",
+                err=True,
+            )
             raise typer.Exit(4)
 
         # Regenerate report.json for fresh fuzzy_match_percent.
