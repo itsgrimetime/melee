@@ -8,10 +8,15 @@ MWCC uses Chaitin-style graph coloring:
 
 1. **Compute** `workingMask = volatile-regs (r3..r12) − interferers' assigned regs`
 2. **If `workingMask` non-empty:** pick **lowest** set bit (i.e., lowest-numbered caller-save reg the virtual can use)
-3. **Else:** call `obtain_nonvolatile_register()`. **Dispense order: r27, r28, r29, r30, r31, then r26, r25, r24, ...** (NOT top-down from r31 as one might assume). Once dispensed, the chosen reg is **added to the volatile pool** and can be reused for subsequent non-interfering virtuals.
+3. **Else:** call `obtain_nonvolatile_register()`. **Dispense order: r31, r30, r29, r28, r27, then r26, r25, r24, ...** (top-down from r31). Once dispensed, the chosen reg is **added to the volatile pool** and can be reused for subsequent non-interfering virtuals.
 4. **If nonvolatile fails too:** spill.
 
 Note: `r0` is **excluded** from the normal volatile pool — it has special meaning in some PowerPC instructions and MWCC assigns it only as a scratch by the codegen, not the coloring pass.
+
+> **Verified via direct binary hook of `colorgraph` in mwcceppc.exe v1.2.5n
+> (Tier 2):** the dispense order is unambiguously top-down. The earlier
+> "r27 first" hypothesis was wrong — it came from misreading positional
+> alignment.
 
 ## Why this matters
 
@@ -67,29 +72,33 @@ The IGNode (interference-graph node) wraps a virtual register with:
 
 ## Concrete example: `mnVibration_80248644`
 
-This function has two loops that allocate distinct sets of virtuals:
+Verified via the colorgraph hook in v1.2.5n. The function has 17 virtuals
+across two loops. The first six virtuals to request a nonvolatile (in
+iteration order, captured by the binary hook) and what they got:
 
-**Cleanup loop** (processed early in coloring iteration):
-| Virtual | Live range | Crosses call? | workingMask result | Decision | Got |
-|---|---|---|---|---|---|
-| r38 | 2..14 | yes | empty (all callers killed) | `obtain_nonvolatile_register()` → idx 0 | r27 |
-| r39 | 1..34 | yes | empty | obtain → idx 1 | r28 |
-| r44 | 5..16 | yes | empty | obtain → idx 2 | r29 |
-| r45 | 4..15 | yes | empty | obtain → idx 3 | r30 |
-| r50 | 6..12 | yes | empty | obtain → idx 4 | r31 |
+| Iter | Virtual | Got | Why |
+|---|---|---|---|
+| 3 | r50 | r31 | 1st dispense — TOP of nonvolatile pool |
+| 7 | r45 | r30 | 2nd dispense |
+| 8 | r44 | r29 | 3rd dispense |
+| 13 | r39 | r28 | 4th dispense |
+| 14 | r38 | r27 | 5th dispense |
+| 20 | r32 | r26 | 6th — r32 has degree 16 (interferes with everything), processed last; by then r27..r31 are in the volatile pool but r32 interferes with all their holders, so the next dispense (r26) is needed |
 
-**J loop** (processed later, after cleanup-loop assignments are in the volatile pool):
-| Virtual | Interferes with | workingMask | Decision | Got |
-|---|---|---|---|---|
-| r36 | r38, r35, r39, r41, r42 | (still empty due to call-crossing) | obtain — but r27 reusable (r38 doesn't interfere with r36 in subsequent context) | r27 |
-| r35 | r32, r36, r39, r41, r42, r53, r54 | empty after interferers + call | obtain | r29 |
+The cleanup-loop pattern r38→r27, r39→r28, r44→r29, r45→r30, r50→r31 is
+NOT "ascending dispense" — it's the artifact of which virtual was processed
+in which iteration, combined with TOP-DOWN dispense (r31 → r30 → ... → r26).
 
-**r32** (special — lives entire function, interferes with everything):
-| Virtual | Live range | workingMask | Decision | Got |
-|---|---|---|---|---|
-| r32 | 0..52 | empty | obtain — by now r27..r31 in pool but r32 interferes with their holders. Next dispense returns r26. | r26 |
+**Where does r36 → r27 come from?** r36 doesn't interfere with r38 (whose
+live ranges don't overlap), so r36's workingMask later in iteration
+includes r27 (which is in the volatile pool from r38's earlier dispense).
+r36 ends up picking r27 from workingMask via the lowest-bit rule applied
+within callee-save regs in the pool.
 
-The earlier "callee-save top-down from r31" intuition was wrong: r27 is dispensed FIRST. The reason cleanup-loop virtuals look like r27→r28→r29→r30→r31 is that they're allocated in that strict sequence, not picked freely.
+**Why didn't r36 get r31 then?** r36 DOES interfere with whoever holds r31
+(specifically r50 — wait, our analyzer didn't show that interference;
+likely a defect in our positional alignment). The binary hook is the
+authoritative source for who interferes with whom.
 
 ## Using this in investigations
 

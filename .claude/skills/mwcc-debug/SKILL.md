@@ -132,19 +132,22 @@ melee-agent debug simulate build/mwcc_debug/mnvibration.txt \
     --function mnVibration_80248644 --all
 ```
 
-The verified MWCC algorithm:
+The verified MWCC algorithm (Tier 2 — direct binary-hook confirmation):
 1. workingMask = caller-save regs (r3..r12) minus interferers' regs
 2. If non-empty: pick LOWEST set bit
-3. Else: obtain_nonvolatile_register() — dispenses **r27, r28, r29, r30, r31,
-   then r26, r25, ...** (NOT top-down from r31). Once dispensed, the reg is
+3. Else: obtain_nonvolatile_register() — dispenses **r31, r30, r29, r28, r27,
+   then r26, r25, ...** (TOP-DOWN from r31). Once dispensed, the reg is
    added to the volatile pool and can be reused for non-interfering virtuals.
 
-This algorithm is why the cleanup-loop pattern looks like r38→r27, r39→r28,
-r44→r29, r45→r30, r50→r31 — they're being allocated nonvolatiles in dispense
-order. And it's why r32 (highest-degree, allocated last) gets r26: by then
-r27..r31 are all in the volatile pool, so r32's workingMask includes them
-but it crosses calls (excludes r3..r12), so it needs the NEXT nonvolatile
-dispense, which is r26.
+This is why r32 (highest-degree, lives whole function) often ends up at r26
+in big functions: by the time r32 is colored, r27..r31 have all been
+dispensed to earlier virtuals AND r32 interferes with their holders, so the
+next dispense is needed.
+
+For full per-decision data including iteration order and the actual mapping
+of iter index → virtual → assigned physical, look at the `COLORGRAPH
+DECISIONS` sections in the raw pcdump. These come from the colorgraph hook
+in mwcc_debug.c (Tier 2 — fires once per register class per function).
 
 The wrapper:
 1. SSHes to the remote with the relative .c path

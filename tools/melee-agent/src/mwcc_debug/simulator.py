@@ -64,10 +64,13 @@ N_REAL_GPR = 32
 # these positions interfere with caller-save registers.
 CALL_OPCODES = {"bl", "bctrl", "bclr", "bcctr", "blrl", "btctr"}
 
-# From empirical observation: obtain_nonvolatile_register starts at r27 and
-# ascends. After r31 is allocated, it presumably wraps to r26 and descends.
-# (See cleanup-loop pattern in mnVibration_80248644.)
-NONVOLATILE_ALLOC_ORDER = [27, 28, 29, 30, 31, 26, 25, 24, 23, 22, 21, 20,
+# CORRECTED from binary-hook data: obtain_nonvolatile_register dispenses
+# TOP-DOWN from r31 (NOT bottom-up from r27). The earlier "r27 first"
+# hypothesis was wrong — it came from misreading positional alignment.
+# Confirmed via mwcc_debug colorgraph hook on mnVibration_80248644:
+# iter 3 → r31, iter 7 → r30, iter 8 → r29, iter 13 → r28, iter 14 → r27,
+# iter 20 → r26.
+NONVOLATILE_ALLOC_ORDER = [31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20,
                             19, 18, 17, 16, 15, 14, 13]
 
 
