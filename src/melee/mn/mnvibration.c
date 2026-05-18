@@ -342,15 +342,16 @@ void fn_80247510(HSD_GObj* gobj)
                 }
             }
             if (name_idx != 0xFF) {
+                f32 dy;
                 lbAudioAx_80024030(2);
                 data->x0[1]--;
                 cursor_jobj = data->cursor_gobj->hsd_obj;
+                dy = HSD_JObjGetTranslationY(data->jobjs[18]) -
+                     HSD_JObjGetTranslationY(data->jobjs[17]);
                 HSD_JObjSetTranslateX(
                     cursor_jobj, HSD_JObjGetTranslationX(data->jobjs[17]));
                 HSD_JObjSetTranslateY(
-                    cursor_jobj, (HSD_JObjGetTranslationY(data->jobjs[18]) -
-                                  HSD_JObjGetTranslationY(data->jobjs[17])) *
-                                         (f32) data->x0[1] +
+                    cursor_jobj, dy * (f32) data->x0[1] +
                                      HSD_JObjGetTranslationY(data->jobjs[17]));
                 HSD_JObjSetTranslateZ(
                     cursor_jobj, HSD_JObjGetTranslationZ(data->jobjs[17]));
@@ -377,16 +378,18 @@ void fn_80247510(HSD_GObj* gobj)
                 }
             }
             if (name_idx != 0xFF) {
+                f32 dy;
                 lbAudioAx_80024030(2);
                 data->x0[1]++;
+                dy = (HSD_JObjGetTranslationY(data->jobjs[18]) -
+                      HSD_JObjGetTranslationY(data->jobjs[17])) *
+                     (f32) data->x0[1];
                 cursor_jobj = data->cursor_gobj->hsd_obj;
                 HSD_JObjSetTranslateX(
                     cursor_jobj, HSD_JObjGetTranslationX(data->jobjs[17]));
                 HSD_JObjSetTranslateY(
-                    cursor_jobj, (HSD_JObjGetTranslationY(data->jobjs[18]) -
-                                  HSD_JObjGetTranslationY(data->jobjs[17])) *
-                                         (f32) data->x0[1] +
-                                     HSD_JObjGetTranslationY(data->jobjs[17]));
+                    cursor_jobj,
+                    dy + HSD_JObjGetTranslationY(data->jobjs[17]));
                 HSD_JObjSetTranslateZ(
                     cursor_jobj, HSD_JObjGetTranslationZ(data->jobjs[17]));
             }
