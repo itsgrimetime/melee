@@ -89,16 +89,29 @@ The cleanup-loop pattern r38→r27, r39→r28, r44→r29, r45→r30, r50→r31 i
 NOT "ascending dispense" — it's the artifact of which virtual was processed
 in which iteration, combined with TOP-DOWN dispense (r31 → r30 → ... → r26).
 
-**Where does r36 → r27 come from?** r36 doesn't interfere with r38 (whose
-live ranges don't overlap), so r36's workingMask later in iteration
-includes r27 (which is in the volatile pool from r38's earlier dispense).
-r36 ends up picking r27 from workingMask via the lowest-bit rule applied
-within callee-save regs in the pool.
+**Where does r36 → r27 come from?** From the binary hook's interferer dump:
+r36's interferers are r0, r3–r12 (pre-assigned physicals), 32 (→r26), 35
+(→r29), 39 (→unassigned). r50 is **not** in the list (the earlier "r36↔r50
+interference" hypothesis was wrong). By iter 16 (r36's turn), the volatile
+pool already includes r27, r28, r29, r30, r31 from prior dispenses, so
+r36's workingMask = {r27, r28, r30, r31} (r26 and r29 excluded by
+interferers). Lowest-bit rule picks **r27**.
 
-**Why didn't r36 get r31 then?** r36 DOES interfere with whoever holds r31
-(specifically r50 — wait, our analyzer didn't show that interference;
-likely a defect in our positional alignment). The binary hook is the
-authoritative source for who interferes with whom.
+**To shift r36 → r31** the matching strategy is *not* "remove r50 from the
+interference graph" — it's to make r36 interfere with whoever holds r27,
+r28, r30, leaving r31 as the only option. A natural way: ensure a callee-save
+virtual is alive across the cleanup loop (taking r31), then dies before
+the j-loop, then `scroll_offset` is processed in a context where r27, r28,
+r30 are taken by interferers.
+
+The target ASM actually achieves this. `r31` in the target is initialized
+to 0 in the prologue (`li r31, 0x0`), used as the NULL store source in the
+cleanup loop (`stw r31, 0x70(r30)`), then *reloaded* with `scroll_offset`
+in the j-loop (`lbz r31, 0xa(r28)`). MWCC put both logical variables in
+r31 because their live ranges don't overlap. Our current C source has a
+`zero` variable declared but never *read* (the cleanup loop uses the `NULL`
+literal directly), so MWCC sees `zero` as dead and doesn't keep it in r31.
+Fix: use `zero` as the actual NULL-store source.
 
 ## Using this in investigations
 

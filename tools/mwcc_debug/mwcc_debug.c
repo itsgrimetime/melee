@@ -282,6 +282,21 @@ typedef struct IGNode
 // trampoline. trampoline buffer must hold prologue (7) + jump (5) = 12 bytes.
 static unsigned char colorgraph_trampoline[24];
 
+// simplifygraph: same shape prologue as colorgraph (7 bytes).
+static unsigned char simplifygraph_trampoline[24];
+
+// obtain_nonvolatile_register variants: 8-byte prologue (push ebx + mov ebx,
+// [esp+0xc] + movsx eax, bx). Each per-class function needs its own
+// trampoline.
+static unsigned char obtain_nv_gpr_trampoline[24];
+static unsigned char obtain_nv_fpr_trampoline[24];
+static unsigned char obtain_nv_crf_trampoline[24];
+
+// Per-class dispense counter — written by obtain_nv hooks, read for logging.
+static int dispense_counter_gpr = 0;
+static int dispense_counter_fpr = 0;
+static int dispense_counter_crf = 0;
+
 // hook @ 0x4CE2D0, colorgraph
 static int __cdecl hook_colorgraph(int rclass, IGNode *head)
 {
@@ -293,19 +308,57 @@ static int __cdecl hook_colorgraph(int rclass, IGNode *head)
     // Call original first — it does the actual coloring
     result = ((colorgraph_fn)colorgraph_trampoline)(rclass, head);
 
-    // Dump per-virtual decisions in iteration order
+    // Dump per-virtual decisions in iteration order. Now also walks the
+    // interferer array (node->array, arraySize entries of short indices)
+    // so agents can see exactly which other virtuals constrained the choice.
     if (PCFILE && DEBUG_GUARD)
     {
+        IGNode **ig_array;
+        int j;
+        ig_array = INTERFERENCEGRAPH;
         debug_printf("\nCOLORGRAPH DECISIONS (class=%d, result=%d)\n", rclass, result);
-        debug_printf("%-5s %-15s %-10s %-7s %-7s %s\n",
-                     "iter", "node@", "assignedReg", "degree", "nIntfr", "flags");
+        debug_printf("%-5s %-7s %-10s %-7s %-7s %s\n",
+                     "iter", "ig_idx", "assignedReg", "degree", "nIntfr", "flags");
         iter_idx = 0;
         for (node = head; node; node = node->next)
         {
-            debug_printf("%-5d 0x%08x      r%-9d %-7d %-7d 0x%02x%s\n",
-                         iter_idx, (uint32)node, (int)node->assignedReg,
+            // Find this node's index in interferencegraph[]. Linear scan;
+            // n_nodes is typically <100 so this is cheap.
+            int my_idx = -1;
+            int n = N_IGNODES;
+            if (n > 4096) n = 4096; // defensive cap
+            for (j = 0; j < n; j++)
+            {
+                if (ig_array[j] == node) { my_idx = j; break; }
+            }
+
+            debug_printf("%-5d %-7d r%-9d %-7d %-7d 0x%02x%s\n",
+                         iter_idx, my_idx, (int)node->assignedReg,
                          (int)node->degree, (int)node->arraySize, (int)node->flags,
                          (node->flags & IG_FLAG_SPILLED) ? "  SPILLED" : "");
+
+            // Dump interferer indices. Each entry in node->array is a short
+            // index into interferencegraph[]. We also resolve to the
+            // assignedReg of each interferer so agents can see what physicals
+            // were excluded from this node's workingMask.
+            if (node->arraySize > 0)
+            {
+                int n_intfr = node->arraySize;
+                if (n_intfr > 64) n_intfr = 64; // cap output to keep readable
+                debug_printf("      interferers:");
+                for (j = 0; j < n_intfr; j++)
+                {
+                    int idx = (int)node->array[j];
+                    int phys = -1;
+                    if (idx >= 0 && idx < N_IGNODES && ig_array[idx])
+                        phys = (int)ig_array[idx]->assignedReg;
+                    debug_printf(" %d=r%d", idx, phys);
+                }
+                if ((int)node->arraySize > n_intfr)
+                    debug_printf(" ...(%d more)", (int)node->arraySize - n_intfr);
+                debug_printf("\n");
+            }
+
             iter_idx++;
             if (iter_idx >= 1000) // safety cap against cyclic next-pointers
             {
@@ -317,6 +370,39 @@ static int __cdecl hook_colorgraph(int rclass, IGNode *head)
 
     return result;
 }
+
+// simplifygraph hook — captures the worklist construction.
+// Returns the head of the linked-list-of-virtuals-to-color. Argument is
+// the register class. We just log when it's called + the return head.
+static void *__cdecl hook_simplifygraph(int rclass, int n_nodes)
+{
+    typedef void *(__cdecl * simplifygraph_fn)(int, int);
+    void *head;
+
+    // Reset per-class dispense counters at the start of each pass — coloring
+    // for a fresh class starts a new dispense sequence.
+    if (rclass == 0) dispense_counter_gpr = 0;
+    else if (rclass == 1) dispense_counter_fpr = 0;
+    else dispense_counter_crf = 0;
+
+    head = ((simplifygraph_fn)simplifygraph_trampoline)(rclass, n_nodes);
+
+    if (PCFILE && DEBUG_GUARD)
+    {
+        debug_printf("\nSIMPLIFYGRAPH (class=%d n_nodes=%d) head=0x%08x\n",
+                     rclass, n_nodes, (uint32)head);
+    }
+    return head;
+}
+
+// obtain_nonvolatile_register hooks: TRIED, didn't work — likely a calling
+// convention mismatch (the disassembly suggests it reads [esp+0xc] which is
+// past 2 args, hinting at a non-__cdecl convention or different arg count).
+// Wrapping these with int(__cdecl)(int, int) corrupted state and produced
+// all-r-1 assignedReg in subsequent colorgraph runs. Skipping for now —
+// the dispense order is still derivable post-hoc from the colorgraph
+// linked-list walk (each "obtain" call corresponds to a node where the
+// inferred workingMask was empty).
 
 static void install_hooks(void)
 {
@@ -332,6 +418,18 @@ static void install_hooks(void)
     // Prologue is 7 bytes: push ebx/esi/edi/ebp (1 each) + sub esp, 8 (3).
     hook_fn((void *)0x4CE2D0, hook_colorgraph,
             colorgraph_trampoline, 7);
+
+    // simplifygraph @ 0x4CE400 — DISABLED for now. Adding this hook crashed
+    // mwcceppc at 0x4cc3b9 (memory write through a global pointer + index)
+    // — possibly the function does some non-prologue work before its 7-byte
+    // pure-prologue ends, or a relative branch elsewhere jumps mid-prologue.
+    // The colorgraph hook is enough for the headline use case.
+    //
+    // hook_fn((void *)0x4CE400, hook_simplifygraph,
+    //         simplifygraph_trampoline, 7);
+
+    // (obtain_nonvolatile_register hooks intentionally skipped — see comment
+    // above; calling-convention mismatch corrupted state.)
 }
 
 // debug output setup
