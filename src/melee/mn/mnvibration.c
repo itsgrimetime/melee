@@ -669,8 +669,7 @@ void fn_802487A8(HSD_GObj* gobj)
     // visual indicators. err is from HSD_PadCopyStatus[port].err byte.
     idx_ptr = mnVibration_804D4FE8;
     do {
-        err =
-            *((u8*) ((u8*) HSD_PadCopyStatus + (u8) port_b * 0x44) + 0x41);
+        err = *((u8*) ((u8*) HSD_PadCopyStatus + (u8) port_b * 0x44) + 0x41);
         port_a = port_b;
         if ((((s8) err != 0) && (data_bytes[port_a + 6] != 0)) ||
             (((s8) err == 0) && (data_bytes[port_a + 6] == 0)))
@@ -702,7 +701,8 @@ void fn_802487A8(HSD_GObj* gobj)
                         }
                     }
                 }
-                mnVibration_802480B4((HSD_JObj*) walker_b_set, port_a, 0);
+                walker_b_clear = walker_b_set;
+                mnVibration_802480B4((HSD_JObj*) walker_b_clear, port_a, 0);
                 data_bytes[port_a + 6] = 0;
             } else {
                 // Controller now connected: clear flag, reset rumble
@@ -721,10 +721,9 @@ void fn_802487A8(HSD_GObj* gobj)
                 port_b_alias = port_a;
                 {
                     HSD_JObj* root_jobj;
-                    root_jobj =
-                        ((MnVibrationData*) (gobj_user_data_alias =
-                                                 gobj->user_data))
-                            ->jobjs[23];
+                    root_jobj = ((MnVibrationData*) (gobj_user_data_alias =
+                                                         gobj->user_data))
+                                    ->jobjs[23];
                     if (root_jobj != NULL) {
                         walker_b_clear = root_jobj->child;
                     }
