@@ -772,7 +772,7 @@ void fn_80248A78(HSD_GObj* arg0)
     temp_r30 = arg0->user_data;
     frame = mn_8022ED6C(temp_r30->jobjs[1],
                         (AnimLoopSettings*) &mnVibration_803EECE0);
-    if (frame == 10.0f) {
+    if (mnVibration_804DC050 == frame) {
         jobj = ((MnVibrationData*) arg0->user_data)->jobjs[23];
         if (jobj == NULL) {
             jobj = NULL;
@@ -794,7 +794,7 @@ void fn_80248A78(HSD_GObj* arg0)
         if ((u8) temp_r30->x6[0] != 0) {
             HSD_JObjClearFlagsAll(temp_r30->jobjs[22], 0x10U);
         }
-    } else if (frame == 11.0f) {
+    } else if (mnVibration_804DC054 == frame) {
         jobj = ((MnVibrationData*) arg0->user_data)->jobjs[23];
         if (jobj == NULL) {
             jobj = NULL;
@@ -810,7 +810,7 @@ void fn_80248A78(HSD_GObj* arg0)
         if ((u8) temp_r30->x6[1] != 0) {
             HSD_JObjClearFlagsAll(temp_r30->jobjs[21], 0x10U);
         }
-    } else if (frame == 12.0f) {
+    } else if (mnVibration_804DC058 == frame) {
         jobj = ((MnVibrationData*) arg0->user_data)->jobjs[23];
         if (jobj == NULL) {
             jobj2 = NULL;
@@ -831,7 +831,7 @@ void fn_80248A78(HSD_GObj* arg0)
         if ((u8) temp_r30->x6[2] != 0) {
             HSD_JObjClearFlagsAll(temp_r30->jobjs[20], 0x10U);
         }
-    } else if (frame == 13.0f) {
+    } else if (mnVibration_804DC05C == frame) {
         jobj = ((MnVibrationData*) arg0->user_data)->jobjs[23];
         if (jobj == NULL) {
             jobj2 = NULL;
@@ -857,7 +857,7 @@ void fn_80248A78(HSD_GObj* arg0)
         if ((u8) temp_r30->x6[3] != 0) {
             HSD_JObjClearFlagsAll(temp_r30->jobjs[19], 0x10U);
         }
-    } else if (frame == 14.0f) {
+    } else if (mnVibration_804DC060 == frame) {
         if (GetNameCount() != 0) {
             MnVibrationData* data2;
             MnVibrationData* data3;
