@@ -549,26 +549,90 @@ static void __cdecl hook_propagateconstants(void)
     }
 }
 
-// simplifygraph hook — captures the worklist construction.
-// Returns the head of the linked-list-of-virtuals-to-color. Argument is
-// the register class. We just log when it's called + the return head.
-static void *__cdecl hook_simplifygraph(int rclass, int n_nodes)
+// simplifygraph hook (Tier 2.5) — captures the simplification order, the
+// per-node initial degrees, and which nodes got the "spilled" flag added by
+// simplifygraph itself.
+//
+// MWCC 1.2.5n signature (from RE of call sites + prologue at 0x4CE400):
+//   IGNode *simplifygraph(int rclass, int n_colors, int n_class_regs);
+//
+//   - rclass: register class id (0=GPR, 1=FPR, ...)
+//   - n_colors: number of colors available (=count of unallocated phys regs
+//     in the class, returned by the n_available helper just before this call)
+//   - n_class_regs: total physical regs in the class (typically 32 — comes
+//     from a per-class count global at [0x58849a] et al)
+//
+// The function:
+//   1. Iterates interferencegraph[] for the given class
+//   2. Finds nodes with degree < n_colors (Chaitin "trivially colorable")
+//   3. Removes them from the graph (decrements interferer degrees)
+//   4. When stuck, picks a "potential spill" by heuristic (degree-based here,
+//      not spill-cost — the 1.2.5n version is simpler than 7.0)
+//   5. Returns the head of the simplified linked list (popped LIFO into
+//      colorgraph; head = colored first)
+//
+// Snapshot strategy: BEFORE the trampoline call, we save per-node flags +
+// degree into a static array (indexed by ig_idx). AFTER the call, we walk
+// the returned linked list to surface the iteration order and diff against
+// the snapshot to identify spill markers.
+#define MAX_SIMPLIFY_SNAPSHOT 512
+
+static struct {
+    int16 degree_before;
+    uint8 flags_before;
+    uint8 _pad;
+} g_simplify_snapshot[MAX_SIMPLIFY_SNAPSHOT];
+static int g_simplify_snapshot_n = 0;
+
+static void *__cdecl hook_simplifygraph(int rclass, int n_colors, int n_class_regs)
 {
-    typedef void *(__cdecl * simplifygraph_fn)(int, int);
-    void *head;
+    typedef void *(__cdecl * simplifygraph_fn)(int, int, int);
+    IGNode *head;
+    IGNode *node;
+    int order_idx;
+    IGNode **ig;
+    int ig_n;
 
-    // Reset per-class dispense counters at the start of each pass — coloring
-    // for a fresh class starts a new dispense sequence.
-    if (rclass == 0) dispense_counter_gpr = 0;
-    else if (rclass == 1) dispense_counter_fpr = 0;
-    else dispense_counter_crf = 0;
-
-    head = ((simplifygraph_fn)simplifygraph_trampoline)(rclass, n_nodes);
+    head = (IGNode *)((simplifygraph_fn)simplifygraph_trampoline)(
+        rclass, n_colors, n_class_regs);
 
     if (PCFILE && DEBUG_GUARD)
     {
-        debug_printf("\nSIMPLIFYGRAPH (class=%d n_nodes=%d) head=0x%08x\n",
-                     rclass, n_nodes, (uint32)head);
+        // Read IG state AFTER simplifygraph returns. Reading before crashes
+        // (likely because INTERFERENCEGRAPH isn't reliably in shape for cross-
+        // function reads at function-start time — possibly find_remat
+        // realloc is still racing or the pointer is mid-update). After the
+        // trampoline call the IG is in its final state for this class.
+        ig = INTERFERENCEGRAPH;
+        ig_n = N_IGNODES;
+        if (ig_n > 1024) ig_n = 1024;
+        if (ig_n < 0) ig_n = 0;
+
+        debug_printf("\nSIMPLIFY GRAPH (class=%d, n_colors=%d, n_class_regs=%d)\n",
+                     rclass, n_colors, n_class_regs);
+        debug_printf("%-5s %-7s %-7s %-8s %-9s %s\n",
+                     "iter", "ig_idx", "degree", "arraySize", "flags", "notes");
+
+        order_idx = 0;
+        for (node = head; node; node = node->next)
+        {
+            int idx = -1;
+            int j;
+            const char *spill_note;
+            for (j = 0; j < ig_n; j++)
+            {
+                if (ig && ig[j] == node) { idx = j; break; }
+            }
+            spill_note = (node->flags & 0x08) ? "SPILLED" : "";
+            debug_printf("%-5d %-7d %-7d %-8d 0x%-7x %s\n",
+                         order_idx, idx,
+                         (int)node->degree,
+                         (int)node->arraySize,
+                         (int)node->flags,
+                         spill_note);
+            order_idx++;
+            if (order_idx > 256) break;
+        }
     }
     return head;
 }
@@ -611,14 +675,16 @@ static void install_hooks(void)
     hook_fn((void *)0x52B530, hook_propagateconstants,
             propagateconstants_trampoline, 14);
 
-    // simplifygraph @ 0x4CE400 — DISABLED for now. Adding this hook crashed
-    // mwcceppc at 0x4cc3b9 (memory write through a global pointer + index)
-    // — possibly the function does some non-prologue work before its 7-byte
-    // pure-prologue ends, or a relative branch elsewhere jumps mid-prologue.
-    // The colorgraph hook is enough for the headline use case.
-    //
-    // hook_fn((void *)0x4CE400, hook_simplifygraph,
-    //         simplifygraph_trampoline, 7);
+    // simplifygraph @ 0x4CE400 (Tier 2.5 hook) — runs between IG construction
+    // and colorgraph for each (function, register class) pair. Captures the
+    // simplification order and per-node {flags, degree} delta. Earlier attempt
+    // (with 2-arg signature) crashed because the real function takes 3 args:
+    // (class, n_colors, n_class_regs). The 7-byte prologue is
+    //   push ebx (1) + push esi (1) + push edi (1) + push ebp (1) +
+    //   sub esp, 0x10 (3)
+    // — same shape as colorgraph but a larger local-frame.
+    hook_fn((void *)0x4CE400, hook_simplifygraph,
+            simplifygraph_trampoline, 7);
 
     // (obtain_nonvolatile_register hooks intentionally skipped — see comment
     // above; calling-convention mismatch corrupted state.)
