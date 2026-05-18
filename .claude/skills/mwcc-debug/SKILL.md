@@ -85,12 +85,14 @@ ssh nzxt-local 'powershell -Command "
 
 ## Usage
 
+### Step 1: dump a TU
+
 ```bash
+# Save to a file (preferred — pcdump is 50KB–MB)
+melee-agent debug pcdump src/melee/lb/lbarq.c --output build/mwcc_debug/lbarq.txt
+
 # Stream pcdump to stdout (small TUs)
 melee-agent debug pcdump src/melee/lb/lbarq.c
-
-# Save to a file (preferred for normal TUs — output is 50KB–MB)
-melee-agent debug pcdump src/melee/lb/lbarq.c --output build/mwcc_debug/lbarq.txt
 
 # Longer timeout for big TUs
 melee-agent debug pcdump src/melee/mn/mnevent.c --timeout 180 --output build/mwcc_debug/mnevent.txt
@@ -98,6 +100,43 @@ melee-agent debug pcdump src/melee/mn/mnevent.c --timeout 180 --output build/mwc
 # Test stale code (skip git pull on remote)
 melee-agent debug pcdump src/melee/lb/lbarq.c --no-pull
 ```
+
+### Step 2: analyze a specific function
+
+The raw dump is verbose. The `analyze` command extracts per-virtual-register info
+(live ranges, use counts, interferences, candidate physicals) — much faster to
+reason about than scrolling through the pass dumps.
+
+```bash
+# List functions in the dump
+melee-agent debug analyze build/mwcc_debug/lbarq.txt
+
+# Detailed per-virtual-register table + coloring decisions for one function
+melee-agent debug analyze build/mwcc_debug/lbarq.txt --function lbArq_80014AC4
+```
+
+Output shows:
+
+```
+ Virtual   Phys  Class     Live[first..last]    Uses  Interferes
+--------  -----  --------  ------------------  -----  ----------
+     r35     r29  GPR-cs    12..47                  8  r34,r36,r37
+     r36     r27  GPR-cs    28..47                  4  r34,r35,r37
+     ...
+
+Coloring decisions (expected: callee-save allocated top-down
+from r31, caller-save bottom-up from r3):
+  r35 → r29.  Candidates: {r13..r31}  ← NOT top (allocator usually picks r31 first)
+  r36 → r27.  Candidates: {r13..r28,r30,r31}  ← NOT top (allocator usually picks r31 first)
+```
+
+When you see `← NOT top/bottom`, the allocator chose something other than its
+default-strategy pick — that's a real preference question worth digging into
+(maybe via /mwcc-inspect for the front-end view, or by re-arranging the C
+source to nudge the allocator).
+
+When the choice MATCHES the default strategy, the question shifts: "what
+constraint forced this virtual into a different class than expected?"
 
 The wrapper:
 1. SSHes to the remote with the relative .c path
