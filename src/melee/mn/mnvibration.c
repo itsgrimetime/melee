@@ -539,8 +539,8 @@ void mnVibration_80248444(HSD_GObj* arg0, u8 arg1, u8 arg2)
     HSD_JObjAddChild(data->jobjs[17], new_jobj);
 }
 
-static inline void mnVibration_PopulateNameRows(HSD_GObj* gobj,
-                                                MnVibrationData* data)
+static inline void mnVibration_PopulateNameRows(MnVibrationData* data,
+                                                HSD_GObj* gobj)
 {
     s32 j;
     s32 name_idx;
@@ -586,7 +586,7 @@ void mnVibration_80248644(HSD_GObj* arg0)
     if (child != NULL) {
         HSD_JObjRemoveAll(HSD_JObjGetChild(jobj17));
     }
-    mnVibration_PopulateNameRows(arg0, data);
+    mnVibration_PopulateNameRows(data, arg0);
 }
 
 static AnimLoopSettings mnVibration_803EECEC = { 50.0f, 70.0f, -0.1f };
