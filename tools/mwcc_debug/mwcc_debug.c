@@ -22,6 +22,7 @@ typedef int int32;
 
 // win32 api (kernel32)
 __declspec(dllimport) int __stdcall VirtualProtect(void *addr, uint32 size, uint32 newProtect, uint32 *oldProtect);
+__declspec(dllimport) uint32 __stdcall GetEnvironmentVariableA(const char *name, char *buf, uint32 size);
 
 #define PAGE_EXECUTE_READWRITE 0x40
 
@@ -277,6 +278,71 @@ typedef struct IGNode
 #define INTERFERENCEGRAPH (*(IGNode ***)0x587E3C)
 #define N_IGNODES (*(int *)0x587190)
 
+// ---------------------------------------------------------------------------
+// Tier 5 — allocator biasing via env var.
+//
+// MWCC_DEBUG_FORCE_PHYS="virtIdx:physReg[,virtIdx:physReg]*"
+//   Example: "36:31"          force virtual #36 to physical r31
+//   Example: "36:31,50:27"    force virtual #36 to r31 AND #50 to r27
+//
+// Applied in the colorgraph hook AFTER MWCC's normal coloring runs but
+// BEFORE rewritepcode emits the final instructions. The next pass sees
+// the patched assignedReg fields and uses them.
+//
+// Caveats (the user agrees to these by setting the env var):
+//   - Forcing two interfering virtuals to the same physical produces
+//     incorrect code (data corruption — multiple live values one reg).
+//   - Forcing across register classes (GPR vs FPR) likely crashes.
+//   - Used purely for matching investigations / hypothesis testing.
+#define MAX_OVERRIDES 32
+
+static struct {
+    int virtual_idx;
+    int physical;
+} g_overrides[MAX_OVERRIDES];
+static int g_n_overrides = 0;
+static int g_overrides_parsed = 0;
+
+static void parse_overrides_from_env(void)
+{
+    char buf[512];
+    uint32 len;
+    int i;
+    int cur_val;
+    int parsing_phys;
+    int saved_virt;
+
+    g_overrides_parsed = 1;
+    g_n_overrides = 0;
+
+    len = GetEnvironmentVariableA("MWCC_DEBUG_FORCE_PHYS", buf, sizeof(buf));
+    if (len == 0 || len >= sizeof(buf)) return;
+
+    // Tiny state machine: read digits into cur_val. ':' transitions to
+    // parsing physical (saved virtual). ',' or end commits the pair.
+    cur_val = 0;
+    parsing_phys = 0;
+    saved_virt = -1;
+    for (i = 0; i <= (int)len; i++) {
+        char c = (i == (int)len) ? '\0' : buf[i];
+        if (c >= '0' && c <= '9') {
+            cur_val = cur_val * 10 + (c - '0');
+        } else if (c == ':') {
+            saved_virt = cur_val;
+            cur_val = 0;
+            parsing_phys = 1;
+        } else if ((c == ',' || c == '\0') && parsing_phys && g_n_overrides < MAX_OVERRIDES) {
+            g_overrides[g_n_overrides].virtual_idx = saved_virt;
+            g_overrides[g_n_overrides].physical = cur_val;
+            g_n_overrides++;
+            cur_val = 0;
+            parsing_phys = 0;
+            saved_virt = -1;
+        }
+        // else: ignore whitespace and stray chars
+    }
+}
+
 // colorgraph's prologue is 7 bytes (push ebx/esi/edi/ebp + sub esp, 8). Using
 // 5 would split the sub esp, 8 (83 ec 08) mid-instruction and corrupt the
 // trampoline. trampoline buffer must hold prologue (7) + jump (5) = 12 bytes.
@@ -322,6 +388,40 @@ static int __cdecl hook_colorgraph(int rclass, IGNode *head)
 
     // Call original first — it does the actual coloring
     result = ((colorgraph_fn)colorgraph_trampoline)(rclass, head);
+
+    // Tier 5 — apply allocator overrides if any. Walks the worklist, for
+    // each node finds its ig_idx via INTERFERENCEGRAPH[] scan, and
+    // patches assignedReg if there's a matching override.
+    if (g_n_overrides > 0)
+    {
+        IGNode **ig = INTERFERENCEGRAPH;
+        int n = N_IGNODES;
+        if (n > 256) n = 256;
+        for (node = head; node; node = node->next)
+        {
+            int idx = -1;
+            int j, k;
+            for (j = 0; j < n; j++)
+            {
+                if (ig[j] == node) { idx = j; break; }
+            }
+            if (idx < 0) continue;
+            for (k = 0; k < g_n_overrides; k++)
+            {
+                if (g_overrides[k].virtual_idx == idx)
+                {
+                    int old_phys = (int)node->assignedReg;
+                    node->assignedReg = (int16)g_overrides[k].physical;
+                    if (PCFILE && DEBUG_GUARD)
+                    {
+                        debug_printf("\n[FORCE_PHYS] virtual %d: r%d -> r%d\n",
+                                     idx, old_phys, g_overrides[k].physical);
+                    }
+                    break;
+                }
+            }
+        }
+    }
 
     // Dump per-virtual decisions in iteration order. Now also walks the
     // interferer array (node->array, arraySize entries of short indices)
@@ -561,6 +661,7 @@ int __stdcall DllMain(void *hModule, uint32 reason, void *reserved)
         VirtualProtect((void *)0x42C8E1, 1, old, &old);
 
         DEBUG_GUARD = 1;
+        parse_overrides_from_env();
         install_hooks();
     }
     return 1;
