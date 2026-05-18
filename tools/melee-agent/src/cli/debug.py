@@ -10,6 +10,8 @@ See docs/mwcc-debug.md for one-time setup of the Windows side.
 
 from __future__ import annotations
 
+import dataclasses
+import json
 import os
 import shlex
 import subprocess
@@ -180,6 +182,53 @@ def pcdump(
     raise typer.Exit(code=exit_code)
 
 
+# PowerPC EABI register conventions for GPR. The first 8 args go in r3..r10;
+# return value is in r3. Floats use f1..f13 / f1 return. We only annotate
+# the GPR convention here — most matching investigations are GPR-bound.
+PPC_ABI_GPR = {
+    1: "SP",
+    2: "TOC",
+    3: "arg0 / ret",
+    4: "arg1",
+    5: "arg2",
+    6: "arg3",
+    7: "arg4",
+    8: "arg5",
+    9: "arg6",
+    10: "arg7",
+}
+
+
+def _abi_hint(physical: Optional[int]) -> str:
+    """Return a short ABI hint for a physical register, or empty string."""
+    if physical is None:
+        return ""
+    if physical == 0:
+        return "scratch"  # r0 has special semantics in some PPC instructions
+    if physical in PPC_ABI_GPR:
+        return PPC_ABI_GPR[physical]
+    if 11 <= physical <= 12:
+        return "caller-save"
+    if 13 <= physical <= 31:
+        return "callee-save"
+    return ""
+
+
+def _virtreg_to_dict(info) -> dict:
+    """Serialize a VirtualRegInfo for JSON output."""
+    return {
+        "virtual": info.virtual,
+        "physical": info.physical,
+        "physical_class": info.physical_class,
+        "abi_hint": _abi_hint(info.physical),
+        "first_use": info.first_use,
+        "last_use": info.last_use,
+        "use_count": info.use_count,
+        "interferes_with": sorted(info.interferes_with),
+        "candidates": sorted(info.candidates),
+    }
+
+
 @debug_app.command("analyze")
 def analyze(
     dump: Annotated[
@@ -203,6 +252,13 @@ def analyze(
                  "assigned (based on interferer constraints).",
         ),
     ] = True,
+    json_out: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help="Emit structured JSON instead of human-readable text.",
+        ),
+    ] = False,
 ):
     """Summarize a pcdump.txt: per-virtual register live ranges, use counts,
     interferences, and 'could have been' candidate sets.
@@ -228,6 +284,17 @@ def analyze(
 
     if function is None:
         # List all functions, brief summary
+        if json_out:
+            payload = [
+                {
+                    "name": fn.name,
+                    "n_passes": len(fn.passes),
+                    "has_coloring": fn.get_pass("AFTER REGISTER COLORING") is not None,
+                }
+                for fn in funcs
+            ]
+            print(json.dumps({"dump": str(dump), "functions": payload}, indent=2))
+            return
         print(f"Functions in {dump.name}:")
         for fn in funcs:
             n_passes = len(fn.passes)
@@ -254,22 +321,42 @@ def analyze(
 
     pre = target.last_precolor_pass()
     post = target.get_pass("AFTER REGISTER COLORING")
-    print(f"Function: {target.name}")
-    print(f"Pre-coloring pass: {pre.name if pre else '<none>'}")
-    print(f"Post-coloring pass: {post.name}")
-    print()
+    if not json_out:
+        print(f"Function: {target.name}")
+        print(f"Pre-coloring pass: {pre.name if pre else '<none>'}")
+        print(f"Post-coloring pass: {post.name}")
+        print()
 
     infos = analyze_function(target)
     if not infos:
+        if json_out:
+            print(json.dumps({"function": target.name, "virtuals": [], "warning": "no virtual registers found"}, indent=2))
+            return
         print("No virtual registers found (or pass alignment failed).")
         return
 
+    if json_out:
+        payload = {
+            "function": target.name,
+            "pre_coloring_pass": pre.name if pre else None,
+            "post_coloring_pass": post.name,
+            "virtuals": [_virtreg_to_dict(info) for info in infos],
+        }
+        print(json.dumps(payload, indent=2))
+        return
+
+    # PowerPC EABI reminder
+    print("ABI: r3=arg0/ret, r4=arg1, r5=arg2, ..., r10=arg7; "
+          "r13-r31=callee-save; r0=scratch.")
+    print()
+
     # Column widths
-    print(f"{'Virtual':>8}  {'Phys':>5}  {'Class':<8}  {'Live[first..last]':<18}  {'Uses':>5}  Interferes")
-    print(f"{'-' * 8:>8}  {'-' * 5:>5}  {'-' * 8:<8}  {'-' * 18:<18}  {'-' * 5:>5}  ----------")
+    print(f"{'Virtual':>8}  {'Phys':>5}  {'Class':<8}  {'ABI':<14}  {'Live[first..last]':<18}  {'Uses':>5}  Interferes")
+    print(f"{'-' * 8:>8}  {'-' * 5:>5}  {'-' * 8:<8}  {'-' * 14:<14}  {'-' * 18:<18}  {'-' * 5:>5}  ----------")
     for info in infos:
         phys = f"r{info.physical}" if info.physical is not None else "?"
         live = f"{info.first_use}..{info.last_use}"
+        abi = _abi_hint(info.physical)
         # Format interferes_with as a compact list
         if info.interferes_with:
             interferers = ",".join(f"r{v}" for v in sorted(info.interferes_with))
@@ -277,7 +364,7 @@ def analyze(
             interferers = "-"
         print(
             f"     r{info.virtual:<3}  {phys:>5}  {info.physical_class:<8}  "
-            f"{live:<18}  {info.use_count:>5}  {interferers}"
+            f"{abi:<14}  {live:<18}  {info.use_count:>5}  {interferers}"
         )
 
     if show_candidates:
@@ -298,7 +385,9 @@ def analyze(
                 continue
             cands = sorted(info.candidates)
             cand_str = "{" + ",".join(f"r{c}" for c in cands) + "}"
-            print(f"  r{info.virtual} → r{info.physical}.  Candidates: {cand_str}")
+            abi = _abi_hint(info.physical)
+            abi_note = f"  [{abi}]" if abi else ""
+            print(f"  r{info.virtual} → r{info.physical}{abi_note}.  Candidates: {cand_str}")
 
 
 @debug_app.command("simulate")
