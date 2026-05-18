@@ -290,6 +290,55 @@ selection, scheduling, etc) and the allocator isn't the problem.
 **Effort spent:** ~half-day, mostly cmd-line plumbing and env-var
 parsing in C. The IGNode patching itself is 5 lines.
 
+## Tier 7 — permuter session learnings + matching workflow tools — ✅ DONE
+
+Following the matching agent's permuter session that cracked
+`mnVibration_80248644` and `mnVibration_80248ED4` to 100%, five
+incremental commands address the specific friction points they
+flagged:
+
+**Tier 7a — `debug verify-perm`** (commit ea03c1e13)
+
+Apply a permuter candidate to the real source tree, run ninja +
+checkdiff, report match% delta. Removes the "permuter says score=1320
+but actual match% unchanged" cycle entirely. Reverts by default;
+`--keep` to apply.
+
+**Tier 7b — `debug enumerate-decl-orders`** (commit 60a7a1142)
+
+Brute-force the small declaration-order search space. Promote/demote/
+swap strategies cover ~3N candidates; full N! permutation refused for
+N>7. Would have found the mnVibration_80248644 `s32 j` move in ~10
+iterations vs permuter's 2000.
+
+**Tier 7c — pattern catalog + patternized guide** (commit 9e517f83e)
+
+Moves the seven recurring mutation patterns from the matching agent's
+session findings into `src/mwcc_debug/patterns.py` as structured
+entries. `debug guide` cites pattern names directly; new `debug
+pattern-catalog` command browses the catalog. Patterns: alias-split,
+widen-u8-to-u32, shrink-s32-to-u8, drop-variadic-cast, subexpr-extract,
+decl-order, chained-init.
+
+**Tier 7d — `debug suggest-casts`** (commit 4df91bc41)
+
+Static lint surfacing explicit casts in call-site arguments. Three-tier
+severity: HIGH when the cast's inner expression has a proven integer
+type (from local declarations/parameters), MEDIUM by heuristic
+(loop counter names, integer suffixes), LOW for general audit. Verified
+on `fn_80247510`: correctly flagged 5 `(f32) rumble_setting` casts
+(declared `u8`) as HIGH severity — the exact case the agent identified
+manually at 1.7% match% improvement.
+
+**Tier 7e — `debug triage-perm`** (commit pending)
+
+Batch-triage permuter session outputs. For each `output-NNNN-N/source.c`,
+applies the candidate to the real tree, builds, reads match%, ranks
+the results. `--apply-best` leaves the top transferring candidate
+in place. Per-candidate cost ~5-10sec; a 100-winner triage takes a
+few minutes. See [docs/mwcc-debug-permuter-integration.md](mwcc-debug-permuter-integration.md)
+for the integration model and v2/v3 sketches.
+
 ## Other small wins not worth their own tier
 
 Done (commits 81fbe074e, c3a26d82a):
@@ -299,9 +348,10 @@ Done (commits 81fbe074e, c3a26d82a):
 - ✅ **ABI annotation** in analyze — shows `r3 = arg0`, `r4 = arg1`
   etc. derived from function signature
 
-Still open:
-- **Live-range alignment improvements** — the current pre/post-pass
-  alignment is naive (skip-forward on opcode mismatch). Could use a
-  proper sequence-alignment algorithm (e.g. Smith-Waterman variant) to
-  recover more virtuals' live ranges from passes that re-order
-  instructions.
+Done (Tier 1b — commit 1b65af0f4):
+- ✅ **Live-range alignment improvements** — replaced greedy
+  skip-forward in `_align_block` with proper Needleman-Wunsch DP
+  alignment. Score function combines opcode match + physical reg
+  agreement; gap penalty allows multi-instruction insertions/deletions.
+  Unmapped virtuals on the test corpus dropped from 54 → 10 (~80%
+  reduction).

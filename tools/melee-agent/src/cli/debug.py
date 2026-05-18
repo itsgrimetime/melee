@@ -1521,3 +1521,218 @@ def suggest_casts(
                         print(f"     ASM arg loads: {kind_str}")
                     break
         print()
+
+
+@debug_app.command(name="triage-perm")
+def triage_perm(
+    perm_dir: Annotated[
+        Path,
+        typer.Argument(
+            help="Directory containing permuter output subdirs "
+                 "(output-NNNN-N/) each with a source.c.",
+        ),
+    ],
+    function: Annotated[
+        str,
+        typer.Option("--function", "-f", help="Function name to verify"),
+    ],
+    max_candidates: Annotated[
+        int,
+        typer.Option(
+            "--max-candidates",
+            help="Stop after evaluating this many candidates "
+                 "(0 = no limit).",
+        ),
+    ] = 0,
+    top_k: Annotated[
+        int,
+        typer.Option(
+            "--top",
+            help="Show the top K results in the summary.",
+        ),
+    ] = 5,
+    threshold: Annotated[
+        float,
+        typer.Option(
+            "--threshold",
+            help="Minimum improvement (percentage points) to consider a win.",
+        ),
+    ] = 0.1,
+    apply_best: Annotated[
+        bool,
+        typer.Option(
+            "--apply-best",
+            help="If the best transferring candidate clears --threshold, "
+                 "leave it applied. Default reverts at the end.",
+        ),
+    ] = False,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit results as JSON."),
+    ] = False,
+) -> None:
+    """Tier 7e: batch-triage decomp-permuter output candidates.
+
+    The matching agent's session noted that many permuter "winners"
+    (score=N where N < baseline) don't transfer to the real source tree
+    because permuter preprocesses base.c (header merging, macro
+    expansion). This command iterates each `output-*/source.c` in a
+    permuter run, applies the candidate to the real tree via the same
+    transfer logic as `verify-perm`, runs `ninja` + reads
+    fuzzy_match_percent, and produces a ranked list of which candidates
+    actually improve real-tree match%.
+
+    Per-candidate cost: ~5-10 seconds (one ninja + report.json). With
+    permuter generating ~100 winning candidates per session, total
+    triage time is typically a few minutes.
+
+    Designed as the v1 of permuter integration. v2 would be a permuter
+    `--external-scorer` patch that calls our scoring per-iteration
+    instead of per-winner.
+    """
+    melee_root = DEFAULT_MELEE_ROOT
+    if not perm_dir.is_dir():
+        typer.echo(f"not a directory: {perm_dir}", err=True)
+        raise typer.Exit(2)
+
+    unit = _find_unit_for_function(function, melee_root)
+    if unit is None:
+        typer.echo(f"function not found in report.json: {function}", err=True)
+        raise typer.Exit(2)
+    target_path = melee_root / "src" / f"{unit}.c"
+    if not target_path.exists():
+        typer.echo(f"target source not found: {target_path}", err=True)
+        raise typer.Exit(2)
+
+    # Locate candidate sources. Try the common permuter layouts:
+    #   <perm-dir>/output-NNNN-N/source.c     (default)
+    #   <perm-dir>/<anything>/source.c
+    candidate_paths: list[Path] = []
+    for entry in sorted(perm_dir.iterdir()):
+        if not entry.is_dir():
+            continue
+        src = entry / "source.c"
+        if src.exists():
+            candidate_paths.append(src)
+    if not candidate_paths:
+        # Fallback: maybe the perm-dir itself is one output (no subdirs)
+        direct_src = perm_dir / "source.c"
+        if direct_src.exists():
+            candidate_paths = [direct_src]
+    if not candidate_paths:
+        typer.echo(
+            f"no candidate sources found under {perm_dir}\n"
+            f"(expected output-NNNN-N/source.c or source.c)",
+            err=True,
+        )
+        raise typer.Exit(3)
+    if max_candidates > 0 and len(candidate_paths) > max_candidates:
+        candidate_paths = candidate_paths[:max_candidates]
+
+    baseline = _get_match_pct(function, melee_root) or 0.0
+    if not json_out:
+        print(f"Function: {function}")
+        print(f"Target:   {target_path}")
+        print(f"Baseline: {baseline:.2f}%")
+        print(f"Candidates: {len(candidate_paths)}")
+        print()
+
+    orig = target_path.read_text()
+
+    @dataclasses.dataclass
+    class Result:
+        path: Path
+        match_pct: Optional[float]
+        delta: Optional[float]
+        status: str  # "ok" / "no-function" / "build-failed"
+
+    results: list[Result] = []
+    best: Optional[Result] = None
+    try:
+        for i, cand in enumerate(candidate_paths, 1):
+            cand_text = cand.read_text()
+            orig_again = transfer_candidate(cand_text, target_path, function)
+            if orig_again is None:
+                results.append(Result(path=cand, match_pct=None,
+                                      delta=None, status="no-function"))
+                if not json_out:
+                    print(f"  [{i}/{len(candidate_paths)}] {cand.parent.name}: "
+                          f"function not in candidate")
+                continue
+            pct = _build_and_match(unit, function, melee_root)
+            # Always revert to original before next iter
+            target_path.write_text(orig)
+            if pct is None:
+                results.append(Result(path=cand, match_pct=None,
+                                      delta=None, status="build-failed"))
+                if not json_out:
+                    print(f"  [{i}/{len(candidate_paths)}] {cand.parent.name}: "
+                          f"BUILD FAILED")
+                continue
+            delta = pct - baseline
+            res = Result(path=cand, match_pct=pct, delta=delta, status="ok")
+            results.append(res)
+            tag = ""
+            if delta >= threshold:
+                tag = "  WIN"
+                if best is None or pct > best.match_pct:
+                    best = res
+            elif delta < 0:
+                tag = "  (worse)"
+            if not json_out:
+                print(f"  [{i}/{len(candidate_paths)}] {cand.parent.name}: "
+                      f"{pct:.2f}%  delta={delta:+.2f}%{tag}")
+    finally:
+        target_path.write_text(orig)
+        subprocess.run(
+            ["ninja", f"build/GALE01/src/{unit}.o",
+             "build/GALE01/report.json"],
+            cwd=melee_root, capture_output=True,
+        )
+
+    # Sort results: highest match% first, then by directory name as tiebreak
+    ok_results = [r for r in results if r.status == "ok"]
+    ok_results.sort(key=lambda r: (-(r.match_pct or 0), str(r.path)))
+
+    if json_out:
+        print(json.dumps({
+            "function": function,
+            "baseline_pct": baseline,
+            "best_pct": best.match_pct if best else None,
+            "best_path": str(best.path) if best else None,
+            "results": [{
+                "path": str(r.path),
+                "match_pct": r.match_pct,
+                "delta": r.delta,
+                "status": r.status,
+            } for r in results],
+        }, indent=2))
+        return
+
+    print()
+    print("=" * 70)
+    print(f"Top {min(top_k, len(ok_results))} candidates by real-tree match%:")
+    print("=" * 70)
+    for r in ok_results[:top_k]:
+        marker = "WIN" if r.delta >= threshold else "    "
+        print(f"  {marker}  {r.match_pct:.2f}%  ({r.delta:+.2f}%)  "
+              f"{r.path.parent.name}/source.c")
+
+    n_wins = sum(1 for r in ok_results if r.delta >= threshold)
+    n_build_failed = sum(1 for r in results if r.status == "build-failed")
+    n_no_fn = sum(1 for r in results if r.status == "no-function")
+    print()
+    print(f"Summary: {n_wins} winners (≥{threshold:.2f}% over baseline), "
+          f"{n_build_failed} build failures, {n_no_fn} missing function")
+
+    if apply_best and best is not None and best.delta >= threshold:
+        cand_text = best.path.read_text()
+        transfer_candidate(cand_text, target_path, function)
+        subprocess.run(
+            ["ninja", f"build/GALE01/src/{unit}.o",
+             "build/GALE01/report.json"],
+            cwd=melee_root, capture_output=True,
+        )
+        print()
+        print(f"Applied best candidate ({best.path.parent.name}) to "
+              f"{target_path}. Verify with `git diff`.")

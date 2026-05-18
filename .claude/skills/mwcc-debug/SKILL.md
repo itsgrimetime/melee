@@ -269,9 +269,48 @@ Suggestions (highest severity first):
   to a lower slot → adjust other virtuals' lifetimes that consumed the
   desired physical earlier
 
+`guide` also cites named **mutation patterns** from the catalog
+(`debug pattern-catalog`) — `alias-split`, `widen-u8-to-u32`,
+`drop-variadic-cast`, `decl-order`, etc. These are the recurring
+shapes the permuter rediscovers across stuck functions.
+
 The `score` command emits a single number for permuter integration
 (lower = better). Designed to be called from a custom permuter scorer
 wrapper that compiles candidates via SSH.
+
+### Step 6: matching workflow tools (Tier 7)
+
+After Tier 5/6 confirm the target is reachable, the matching workflow
+becomes "find the C-source change." Five Tier 7 commands automate the
+specific friction points the matching agent identified in their
+permuter sessions:
+
+```bash
+# Apply a permuter winner to the real source + verify match% improves
+melee-agent debug verify-perm output-1234/source.c -f my_fn
+melee-agent debug verify-perm output-1234/source.c -f my_fn --keep
+
+# Brute-force the decl-order search space (would find decl-reorder
+# wins in ~10 iterations, vs permuter's ~2000)
+melee-agent debug enumerate-decl-orders my_fn
+melee-agent debug enumerate-decl-orders my_fn --strategy all
+melee-agent debug enumerate-decl-orders my_fn --keep-best
+
+# Browse known mutation patterns
+melee-agent debug pattern-catalog
+melee-agent debug pattern-catalog decl-order
+
+# Static lint for suspicious casts (no compilation needed)
+melee-agent debug suggest-casts my_fn
+melee-agent debug suggest-casts my_fn --severity all --asm
+
+# Batch-triage permuter outputs against the real tree
+melee-agent debug triage-perm permute_output_dir -f my_fn
+melee-agent debug triage-perm permute_output_dir -f my_fn --apply-best
+```
+
+For permuter integration details, see
+[docs/mwcc-debug-permuter-integration.md](../../docs/mwcc-debug-permuter-integration.md).
 
 The wrapper:
 1. SSHes to the remote with the relative .c path
