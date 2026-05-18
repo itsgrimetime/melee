@@ -6,11 +6,71 @@ Comprehensive notes from a session working through all unmatched functions in `s
 
 | Function | Before | After | Status |
 |----------|--------|-------|--------|
-| mnVibration_80248644 | 98.4% | **99.8%** | Structural ceiling (PCode-gen constant inlining, see `mwcc-allocator-mechanism-deep-dive.md`) |
+| mnVibration_80248644 | 98.4% | **99.5%** | Inline (`GetNameSlot`) flips the 2-line scroll_offset diff into a 6-line j cascade diff. Structural ceiling (see `mwcc-debug-mnvibration-iter-findings.md`). |
 | mnVibration_80248444 | 91.6% | **95.1%** | Improved via pos_y reorder; remaining 16 lines blocked on iter-order register cascade |
-| fn_802487A8 | 87.4% | 87.4% | Blocked — 11 callee-save vs expected 9 (2 too many simultaneous live virtuals) |
-| mnVibration_80248ED4 | 81.6% | 81.6% | Blocked — expected loads &mnVibration_803EECE0 early; need to identify what it's used for |
-| fn_80247510 | 73.8% | 73.8% | Too large/complex; needs section-by-section analysis |
+| fn_802487A8 | 87.4% | **87.4%** | Named float (`mnVibration_804DC030`) routes one previously-anon 0.0f reloc; main blocker still the 11-vs-9 callee-save count |
+| mnVibration_80248ED4 | 81.6% | **100.0%** | Fixed — see "mnVibration_80248ED4 fixes" below |
+| fn_80247510 | 73.8% | 73.8% | Too large; many anonymous int-to-float magic SDA2 relocs which MWCC won't reuse a named definition for |
+
+## mnVibration_80248ED4 — 81.6% → 100% (May 2026)
+
+Five fixes, each contributing meaningfully:
+
+1. **Strings via &mnVibration_803EECE0 + offset.** The expected ASM holds
+   `&mnVibration_803EECE0` as a base register and uses `+0x30/+0x48/+0x58`
+   offsets to reach `"Can't get user_data.\n"`, `"mnvibration.c"`, and
+   `"user_data"` (which physically live inside the adjacent
+   `mnVibration_803EED04` data blob). Source:
+
+   ```c
+   char* strbase = (char*) &mnVibration_803EECE0;
+   ...
+   if (data == NULL) {
+       OSReport(strbase + 0x30);
+       __assert(strbase + 0x48, 0x3A7, strbase + 0x58);
+   }
+   ```
+
+   This alone took 81.6% → 86.4%. It also fixed the wrong-string issue
+   ("couldn't allocate\n" + "data" in our source vs the actual stored
+   "Can't get user_data.\n" + "user_data").
+
+2. **HSD_PadCopyStatus indexed loop with `mulli` cast.** The expected emits
+   `mulli r0, rX, 68` to address each `HSD_PadCopyStatus[i]` entry. A
+   straight `for(i=0;i<4;i++) HSD_PadCopyStatus[i].err` gets strength-reduced
+   to `addi` walker. Forcing the `mulli` pattern requires the explicit cast
+   chain:
+
+   ```c
+   for (i = 0; i < 4; i++) {
+       data->x0[i + 2] = 0;
+       data->x6[i] =
+           (*((s8*) ((u8*) HSD_PadCopyStatus + (u8) i * 0x44) + 0x41) != 0)
+               ? 0
+               : 1;
+   }
+   ```
+
+   The `(u8) i * 0x44` form keeps the multiply explicit; `(s8*)` for the byte
+   load is what triggers `extsb. r0, r0` (signed extend + set CR) instead of
+   `cmplwi r0, 0`. 86.4% → 98.5%.
+
+3. **Named extern for 0.0f.** Declared
+   `extern f32 mnVibration_804DC030;` and used it in place of `0.0f` in
+   `HSD_JObjReqAnimAll(jobj, mnVibration_804DC030);` — the SDA2 reloc now
+   names the symbol instead of an anonymous `@520`.
+
+4. **Fresh loop counter `k` for the jobjs init loop.** Reusing `i` from the
+   earlier HSD_PadCopyStatus loop made MWCC coalesce the "0" callee-save
+   virtual with the loop counter, putting the NULL stores on `r27` instead
+   of `r0`. A separate `s32 k = 0` for the do-while loop forces a fresh
+   callee-save and frees `r0` (scratch) for the stores.
+
+5. **Inline `data->title_text` in the NULL check.** Replacing
+   `text = data->title_text; if (text != NULL) HSD_SisLib_803A5CC4(text);`
+   with `if (data->title_text != NULL) HSD_SisLib_803A5CC4(data->title_text);`
+   keeps the value in `r3` throughout, avoiding an `mr r3, r0` move. 99.3%
+   → 100%.
 
 ## mnVibration_80248444 — 91.6% → 95.1%
 
