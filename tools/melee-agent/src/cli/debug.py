@@ -33,6 +33,7 @@ from ..mwcc_debug import (
     simulate_function,
     suggest,
 )
+from ..mwcc_debug import cache as pcdump_cache
 from ..mwcc_debug.cast_audit import (
     audit_function_casts,
     crossref_with_asm,
@@ -88,7 +89,9 @@ def pcdump(
         Optional[Path],
         typer.Option(
             "--output", "-o",
-            help="Save dump to file instead of stdout. Use '-' to force stdout.",
+            help="Output path for the dump. Default: cache it under "
+                 "build/mwcc_debug_cache/<unit>.txt so follow-up commands "
+                 "can auto-resolve it. Use '-' to force stdout instead.",
         ),
     ] = None,
     timeout: Annotated[
@@ -140,7 +143,10 @@ def pcdump(
     register-allocation mismatches that mismatch-db / opseq / ghidra haven't
     explained.
 
-    On success, the raw pcdump.txt is written to stdout (or --output file).
+    On success, the raw pcdump.txt is written to the cache at
+    build/mwcc_debug_cache/<unit>.txt by default. Use --output PATH for
+    a custom location, or --output - for stdout. Follow-up commands like
+    `debug analyze -f FN` auto-resolve the cached pcdump by TU.
     All diagnostics go to stderr. Exit code matches the remote compile's
     exit code (0 = success).
 
@@ -176,11 +182,30 @@ def pcdump(
 
     print(f"[mwcc_debug] ssh {host} run_pcdump.ps1 {src_rel}", file=sys.stderr)
 
-    # Decide where stdout goes
-    if output is None or str(output) == "-":
+    # Decide where stdout goes. Default behavior changed in H2: if no
+    # --output is given, save to the project pcdump cache instead of
+    # stdout. This lets follow-up `debug analyze/guide/score` find the
+    # dump automatically without the agent threading file paths.
+    # Explicit `--output -` forces stdout (old default).
+    use_cache = output is None
+    if str(output) == "-":
         stdout_dest = sys.stdout.buffer
         out_path_for_msg = "stdout"
+        cache_path_used: Optional[Path] = None
+    elif use_cache:
+        # Strip the `src/` prefix and `.c` suffix to get the unit key.
+        unit = src_rel
+        if unit.startswith("src/"):
+            unit = unit[len("src/"):]
+        if unit.endswith(".c"):
+            unit = unit[:-2]
+        pcdump_cache.ensure_cache_dir(DEFAULT_MELEE_ROOT)
+        cache_path_used = pcdump_cache.cache_path(DEFAULT_MELEE_ROOT, unit)
+        cache_path_used.parent.mkdir(parents=True, exist_ok=True)
+        stdout_dest = open(cache_path_used, "wb")
+        out_path_for_msg = str(cache_path_used)
     else:
+        cache_path_used = None
         stdout_dest = open(output, "wb")
         out_path_for_msg = str(output)
 
@@ -201,7 +226,7 @@ def pcdump(
             total += len(chunk)
         exit_code = proc.wait()
     finally:
-        if output is not None and str(output) != "-":
+        if str(output) != "-":
             stdout_dest.close()
 
     if exit_code == 0:
@@ -209,6 +234,13 @@ def pcdump(
             f"[mwcc_debug] wrote {total} bytes to {out_path_for_msg}",
             file=sys.stderr,
         )
+        if cache_path_used is not None:
+            print(
+                f"[mwcc_debug] cached — follow-up commands "
+                f"(`analyze`, `guide`, `score`, etc.) will auto-resolve "
+                f"this dump by function name.",
+                file=sys.stderr,
+            )
     else:
         print(
             f"[mwcc_debug] remote exited {exit_code}; {total} bytes captured",
@@ -268,16 +300,19 @@ def _virtreg_to_dict(info) -> dict:
 @debug_app.command("analyze")
 def analyze(
     dump: Annotated[
-        Path,
+        Optional[Path],
         typer.Argument(
-            help="Path to a pcdump.txt produced by 'debug pcdump'"
+            help="Path to a pcdump.txt produced by 'debug pcdump'. "
+                 "If omitted, auto-resolves via --function from the "
+                 "cache at build/mwcc_debug_cache/.",
         ),
-    ],
+    ] = None,
     function: Annotated[
         Optional[str],
         typer.Option(
             "--function", "-f",
-            help="Show only this function (default: list all)",
+            help="Show only this function (default: list all). Also "
+                 "used to auto-resolve the pcdump path when not given.",
         ),
     ] = None,
     show_candidates: Annotated[
@@ -308,8 +343,7 @@ def analyze(
     If a virtual got a physical that's NOT the lowest-numbered candidate, that
     asymmetry is the kind of allocator-preference question worth digging into.
     """
-    if not dump.is_file():
-        raise typer.BadParameter(f"dump file not found: {dump}")
+    dump = _resolve_pcdump_path(dump, function)
 
     text = dump.read_text()
     funcs = parse_pcdump(text)
@@ -429,18 +463,19 @@ def analyze(
 @debug_app.command("simulate")
 def simulate(
     dump: Annotated[
-        Path,
+        Optional[Path],
         typer.Argument(
-            help="Path to a pcdump.txt produced by 'debug pcdump'"
+            help="Path to a pcdump.txt produced by 'debug pcdump'. "
+                 "If omitted, auto-resolves via --function from cache."
         ),
-    ],
+    ] = None,
     function: Annotated[
-        str,
+        Optional[str],
         typer.Option(
             "--function", "-f",
             help="Function to simulate",
         ),
-    ],
+    ] = None,
     show_all: Annotated[
         bool,
         typer.Option(
@@ -464,9 +499,10 @@ def simulate(
     See docs/mwcc-debug-future-ideas.md for the long-term plan to replace
     this simulator with a real hook into mwcceppc.exe's allocator.
     """
-    if not dump.is_file():
-        raise typer.BadParameter(f"dump file not found: {dump}")
-
+    if function is None:
+        typer.echo("--function is required for simulate", err=True)
+        raise typer.Exit(2)
+    dump = _resolve_pcdump_path(dump, function)
     text = dump.read_text()
     funcs = parse_pcdump(text)
     target = next((fn for fn in funcs if fn.name == function), None)
@@ -710,21 +746,24 @@ def _load_target_spec(path: Path) -> dict:
 @debug_app.command()
 def score(
     pcdump: Annotated[
-        Path,
-        typer.Argument(help="Path to pcdump.txt"),
-    ],
+        Optional[Path],
+        typer.Argument(
+            help="Path to pcdump.txt. Omit to auto-resolve via --function "
+                 "from the cache.",
+        ),
+    ] = None,
     function: Annotated[
-        str,
+        Optional[str],
         typer.Option("--function", "-f", help="Function name to score"),
-    ],
+    ] = None,
     target: Annotated[
-        Path,
+        Optional[Path],
         typer.Option(
             "--target", "-t",
             help="Target spec file (YAML or JSON). See "
                  "src/mwcc_debug/scoring.py for format.",
         ),
-    ],
+    ] = None,
     breakdown: Annotated[
         bool,
         typer.Option(
@@ -742,6 +781,13 @@ def score(
     Lower scores are better (perfect match = 0). Designed to be called by
     decomp-permuter as a custom scorer.
     """
+    if function is None:
+        typer.echo("--function is required for score", err=True)
+        raise typer.Exit(2)
+    if target is None:
+        typer.echo("--target is required for score", err=True)
+        raise typer.Exit(2)
+    pcdump = _resolve_pcdump_path(pcdump, function)
     text = pcdump.read_text()
     spec = _load_target_spec(target)
     fns = parse_pcdump(text)
@@ -786,13 +832,16 @@ def score(
 @debug_app.command()
 def guide(
     pcdump: Annotated[
-        Path,
-        typer.Argument(help="Path to pcdump.txt"),
-    ],
+        Optional[Path],
+        typer.Argument(
+            help="Path to pcdump.txt. Omit to auto-resolve via --function "
+                 "from the cache.",
+        ),
+    ] = None,
     function: Annotated[
-        str,
+        Optional[str],
         typer.Option("--function", "-f", help="Function name to analyze"),
-    ],
+    ] = None,
     target: Annotated[
         Optional[Path],
         typer.Option(
@@ -808,6 +857,10 @@ def guide(
     spill, iteration order), and suggests directions for C-source nudges.
     Hints, not guarantees — interpret in source context.
     """
+    if function is None:
+        typer.echo("--function is required for guide", err=True)
+        raise typer.Exit(2)
+    pcdump = _resolve_pcdump_path(pcdump, function)
     text = pcdump.read_text()
     fns = parse_pcdump(text)
     fn = next((f for f in fns if f.name == function), None)
@@ -844,13 +897,16 @@ def guide(
 @debug_app.command(name="derive-target")
 def derive_target(
     pcdump: Annotated[
-        Path,
-        typer.Argument(help="Path to pcdump.txt"),
-    ],
+        Optional[Path],
+        typer.Argument(
+            help="Path to pcdump.txt. Omit to auto-resolve via --function "
+                 "from the cache.",
+        ),
+    ] = None,
     function: Annotated[
-        str,
+        Optional[str],
         typer.Option("--function", "-f", help="Function name to extract"),
-    ],
+    ] = None,
     output_format: Annotated[
         str,
         typer.Option(
@@ -870,6 +926,10 @@ def derive_target(
     the result with this command, then save the spec and use it to
     score subsequent natural-source attempts.
     """
+    if function is None:
+        typer.echo("--function is required for derive-target", err=True)
+        raise typer.Exit(2)
+    pcdump = _resolve_pcdump_path(pcdump, function)
     text = pcdump.read_text()
     fns = parse_pcdump(text)
     fn = next((f for f in fns if f.name == function), None)
@@ -909,6 +969,83 @@ def _find_unit_for_function(func_name: str, melee_root: Path) -> Optional[str]:
                 if function.get("name") == func_name:
                     return unit.get("name", "").removeprefix("main/")
     return None
+
+
+def _resolve_pcdump_path(
+    pcdump: Optional[Path],
+    function: Optional[str],
+    melee_root: Path = DEFAULT_MELEE_ROOT,
+    *,
+    require_fresh: bool = False,
+) -> Path:
+    """Resolve a pcdump path for a consumer command.
+
+    Resolution order:
+      1. If `pcdump` is given AND exists → use it.
+      2. Else if `function` is given → look up its TU, check the cache.
+         - If cache is fresh (or `require_fresh=False` and stale): use it.
+         - If cache is missing or stale: raise typer.Exit with a clear hint.
+      3. Else: raise typer.Exit asking for either path or function.
+
+    The cache stale-vs-fresh logic: `require_fresh=False` lets the agent
+    work with a slightly stale dump (useful when they just edited source
+    but want to inspect what the OLD compile produced). `require_fresh=
+    True` is for commands that NEED matching dump+source (e.g. ones that
+    correlate per-line source positions).
+    """
+    if pcdump is not None and pcdump.exists():
+        return pcdump
+    if pcdump is not None:
+        # User specified a path but it doesn't exist
+        typer.echo(f"pcdump not found: {pcdump}", err=True)
+        raise typer.Exit(2)
+    # Auto-resolve via function → TU → cache
+    if function is None:
+        typer.echo(
+            "no pcdump path provided and no --function given.\n"
+            "Either pass the pcdump path positionally, or pass --function "
+            "and we'll auto-resolve via the cache.",
+            err=True,
+        )
+        raise typer.Exit(2)
+    unit = _find_unit_for_function(function, melee_root)
+    if unit is None:
+        typer.echo(
+            f"function '{function}' not found in report.json.\n"
+            f"Try `ninja build/GALE01/report.json` to regenerate, then retry.",
+            err=True,
+        )
+        raise typer.Exit(2)
+    entry = pcdump_cache.lookup(melee_root, unit)
+    if entry is None:
+        cache_p = pcdump_cache.cache_path(melee_root, unit)
+        src_p = pcdump_cache.source_path(melee_root, unit)
+        typer.echo(
+            f"no cached pcdump for {unit} (function lives in {src_p}).\n"
+            f"Generate one with:\n"
+            f"  melee-agent debug pcdump {src_p.relative_to(melee_root)}\n"
+            f"(it will be cached to {cache_p.relative_to(melee_root)})",
+            err=True,
+        )
+        raise typer.Exit(3)
+    if not entry.fresh and require_fresh:
+        typer.echo(
+            f"cached pcdump is stale (source modified since cache).\n"
+            f"  Source: {entry.source_path}\n"
+            f"  Cache:  {entry.path}\n"
+            f"Regenerate with:\n"
+            f"  melee-agent debug pcdump {entry.source_path.relative_to(melee_root)}",
+            err=True,
+        )
+        raise typer.Exit(4)
+    if not entry.fresh:
+        # Non-fatal — warn but use the stale cache.
+        typer.echo(
+            f"[mwcc_debug] using stale cached pcdump "
+            f"({entry.source_path.name} modified since cache).",
+            err=True,
+        )
+    return entry.path
 
 
 def _get_match_pct(func_name: str, melee_root: Path) -> Optional[float]:
