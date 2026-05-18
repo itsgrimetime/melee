@@ -33,6 +33,7 @@ from ..mwcc_debug import (
     simulate_function,
     suggest,
 )
+from ..mwcc_debug.source_patch import transfer_candidate
 
 debug_app = typer.Typer(
     help="Compiler introspection via remote Windows mwcc_debug DLL"
@@ -881,3 +882,178 @@ def derive_target(
             print(f"spilled:")
             for v in spec["spilled"]:
                 print(f"  - {v}")
+
+
+def _find_unit_for_function(func_name: str, melee_root: Path) -> Optional[str]:
+    """Locate the unit (source path without .c) containing func_name via
+    report.json. Mirrors tools/checkdiff.py's find_unit_for_function."""
+    report_path = melee_root / "build" / "GALE01" / "report.json"
+    if not report_path.exists():
+        return None
+    with report_path.open("r") as f:
+        for unit in json.load(f).get("units", []):
+            for function in unit.get("functions", []):
+                if function.get("name") == func_name:
+                    return unit.get("name", "").removeprefix("main/")
+    return None
+
+
+def _get_match_pct(func_name: str, melee_root: Path) -> Optional[float]:
+    """Read the function's fuzzy_match_percent from report.json."""
+    report_path = melee_root / "build" / "GALE01" / "report.json"
+    if not report_path.exists():
+        return None
+    with report_path.open("r") as f:
+        for unit in json.load(f).get("units", []):
+            for function in unit.get("functions", []):
+                if function.get("name") == func_name:
+                    return function.get("fuzzy_match_percent")
+    return None
+
+
+@debug_app.command(name="verify-perm")
+def verify_perm(
+    candidate: Annotated[
+        Path,
+        typer.Argument(
+            help="Path to permuter candidate source (.c file with the "
+                 "mutated function). Typically output-NNNN-N/source.c "
+                 "from decomp-permuter.",
+        ),
+    ],
+    function: Annotated[
+        str,
+        typer.Option("--function", "-f", help="Function name to transfer"),
+    ],
+    keep: Annotated[
+        bool,
+        typer.Option(
+            "--keep",
+            help="If the transfer improves match%, leave the patched source "
+                 "in place. By default we always revert (dry-run semantics).",
+        ),
+    ] = False,
+    threshold: Annotated[
+        float,
+        typer.Option(
+            "--threshold",
+            help="Minimum improvement (in percentage points) to consider "
+                 "the candidate a win. Default 0.1.",
+        ),
+    ] = 0.1,
+) -> None:
+    """Tier 7a: apply a permuter candidate to the real source and verify.
+
+    The permuter preprocesses its base.c (macro expansion, header merging),
+    so a winning candidate doesn't always transfer cleanly. This command:
+
+      1. Extracts the target function from the candidate source
+      2. Patches it into the real source tree
+      3. Runs `ninja <obj>` to rebuild
+      4. Reads the fresh fuzzy_match_percent from report.json
+      5. Reports the delta vs. pre-patch baseline
+
+    By default the patched source is REVERTED at the end regardless of
+    outcome — pass --keep to leave a winning transfer applied.
+    """
+    melee_root = DEFAULT_MELEE_ROOT
+    if not candidate.exists():
+        typer.echo(f"candidate not found: {candidate}", err=True)
+        raise typer.Exit(2)
+
+    # Locate the real source file via report.json.
+    unit = _find_unit_for_function(function, melee_root)
+    if unit is None:
+        typer.echo(
+            f"function not found in report.json: {function}\n"
+            f"(report.json may be stale; try `ninja build/GALE01/report.json`)",
+            err=True,
+        )
+        raise typer.Exit(2)
+    # checkdiff convention: unit paths are relative to src/
+    target_path = melee_root / "src" / f"{unit}.c"
+    if not target_path.exists():
+        typer.echo(f"target source not found: {target_path}", err=True)
+        raise typer.Exit(2)
+
+    # Baseline match%.
+    baseline_pct = _get_match_pct(function, melee_root)
+    print(f"Function:       {function}")
+    print(f"Real source:    {target_path}")
+    print(f"Candidate:      {candidate}")
+    print(f"Baseline match: {baseline_pct:.2f}%" if baseline_pct is not None
+          else "Baseline match: (unknown)")
+
+    candidate_text = candidate.read_text()
+    orig = transfer_candidate(candidate_text, target_path, function)
+    if orig is None:
+        typer.echo(
+            f"failed to locate function '{function}' in candidate OR "
+            f"target — cannot transfer.",
+            err=True,
+        )
+        raise typer.Exit(3)
+
+    try:
+        # Build the affected .o. checkdiff convention: report.json's unit
+        # name doesn't include the "src/" prefix; ninja target does.
+        obj_path = f"build/GALE01/src/{unit}.o"
+        print(f"\nRebuilding {obj_path}...")
+        ninja_result = subprocess.run(
+            ["ninja", obj_path],
+            cwd=melee_root, capture_output=True, text=True,
+        )
+        if ninja_result.returncode != 0:
+            print("ninja failed:")
+            print(ninja_result.stdout)
+            print(ninja_result.stderr, file=sys.stderr)
+            target_path.write_text(orig)
+            print("\nReverted source. Build error implies candidate doesn't "
+                  "compile cleanly in the real tree (often due to missing "
+                  "includes or preprocessor differences from permuter's base.c).")
+            raise typer.Exit(4)
+
+        # Regenerate report.json for fresh fuzzy_match_percent.
+        report_result = subprocess.run(
+            ["ninja", "build/GALE01/report.json"],
+            cwd=melee_root, capture_output=True, text=True,
+        )
+        if report_result.returncode != 0:
+            # Non-fatal — report stale data anyway
+            print("warning: ninja build/GALE01/report.json failed", file=sys.stderr)
+
+        new_pct = _get_match_pct(function, melee_root)
+        if new_pct is None:
+            print("Could not read fresh match% after build.", file=sys.stderr)
+            target_path.write_text(orig)
+            raise typer.Exit(5)
+
+        delta = new_pct - (baseline_pct or 0.0)
+        print(f"\nNew match:      {new_pct:.2f}%")
+        print(f"Delta:          {delta:+.2f}%")
+
+        improved = delta >= threshold
+
+        if improved and keep:
+            print(f"\nCandidate improved match by ≥{threshold:.2f}% — leaving "
+                  f"patched source in place ({target_path}).")
+            return  # don't revert
+
+        if improved:
+            print(f"\nCandidate improved match by ≥{threshold:.2f}% but "
+                  f"--keep was not set — reverting. Re-run with --keep to "
+                  f"commit the change.")
+        else:
+            print(f"\nCandidate did not improve by ≥{threshold:.2f}% — "
+                  f"reverting.")
+        target_path.write_text(orig)
+        # Rebuild to restore prior state in report.json
+        subprocess.run(["ninja", obj_path, "build/GALE01/report.json"],
+                       cwd=melee_root, capture_output=True)
+    except Exception:
+        # Always revert on unexpected error
+        try:
+            target_path.write_text(orig)
+        except Exception:
+            pass
+        raise
