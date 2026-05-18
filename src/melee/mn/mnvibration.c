@@ -228,8 +228,7 @@ void fn_80247510(HSD_GObj* gobj)
                             var_ctr -= 1;
                         } while (var_ctr != 0);
                     }
-                    lb_80011E24(jobj, &panel_jobj, 2, -1,
-                                (f32) rumble_setting);
+                    lb_80011E24(jobj, &panel_jobj, 2, -1, rumble_setting);
                     HSD_JObjReqAnimAll(panel_jobj, (f32) rumble_setting);
                     HSD_JObjAnimAll(panel_jobj);
                     HSD_PadRumbleRemoveAll();
@@ -257,8 +256,7 @@ void fn_80247510(HSD_GObj* gobj)
                             var_ctr -= 1;
                         } while (var_ctr != 0);
                     }
-                    lb_80011E24(jobj, &panel_jobj, 2, -1,
-                                (f32) rumble_setting);
+                    lb_80011E24(jobj, &panel_jobj, 2, -1, rumble_setting);
                     HSD_JObjReqAnimAll(panel_jobj, (f32) rumble_setting);
                     HSD_JObjAnimAll(panel_jobj);
                     HSD_PadRumbleAdd(i, 0, 14, 0, &mnVibration_804D4FF0);
@@ -616,6 +614,7 @@ void fn_802487A8(HSD_GObj* gobj)
     u8 var_r3;
     u8* temp_r31;
     void* var_r26;
+    void* new_var3;
     s32 new_var;
     void* var_r3_3;
     PAD_STACK(56);
@@ -705,8 +704,9 @@ void fn_802487A8(HSD_GObj* gobj)
                 new_var = var_r24;
                 {
                     HSD_JObj* temp_jobj3;
-                    temp_jobj3 =
-                        ((MnVibrationData*) gobj->user_data)->jobjs[23];
+                    temp_jobj3 = ((MnVibrationData*) (new_var3 =
+                                                         gobj->user_data))
+                                     ->jobjs[23];
                     if (temp_jobj3 != NULL) {
                         var_r26 = temp_jobj3->child;
                     }
