@@ -72,6 +72,20 @@ grep -r "function_name" src/melee/
 grep -r "function_name" include/melee/
 ```
 
+## Finding all callers before changing a signature
+
+When you change a function's signature (parameter types, return type, calling convention), every caller needs to be updated to match. Grep-only finds callers in already-decompiled source — missing callers in undecompiled functions silently break the build.
+
+Always check Ghidra xrefs:
+
+```bash
+melee-agent ghidra xrefs 0x80<address>
+```
+
+This lists all call sites across the whole binary (decompiled or not). For each caller in already-decompiled code, update it. For each caller in undecompiled code, the change is safe as long as the symbol table entry is correct.
+
+If the cache is not built (you'll see "Cache not built"), run `melee-agent ghidra cache-build` once. After that, xrefs is sub-millisecond.
+
 ## Common Fixes
 
 ### Fix 1: Header Signature Mismatch

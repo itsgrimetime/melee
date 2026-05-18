@@ -979,8 +979,13 @@ class CommitValidator:
         """
         check_results = []
         staged_files = self._get_staged_files()
-        c_files = [f for f in staged_files if f.endswith(".c") and "melee/" in f]
-        h_files = [f for f in staged_files if f.endswith(".h") and "melee/" in f]
+        # Only decomp source paths — substring "melee/" wrongly matched tools/mwcc_debug/*.c etc.
+        _decomp_prefixes = (
+            "src/melee/", "src/sysdolphin/", "include/melee/", "include/sysdolphin/",
+            "melee/src/", "melee/include/",  # worktree-prefixed
+        )
+        c_files = [f for f in staged_files if f.endswith(".c") and f.startswith(_decomp_prefixes)]
+        h_files = [f for f in staged_files if f.endswith(".h") and f.startswith(_decomp_prefixes)]
         code_files = c_files + h_files  # Both C and header files
         melee_changes = [f for f in staged_files if f.startswith("melee/")]
 
