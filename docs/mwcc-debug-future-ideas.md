@@ -6,30 +6,27 @@ specifically." These are notes on what we could build next to close that
 gap. Not detailed designs; just enough that we don't re-derive the ideas
 from scratch later.
 
-## Tier 2 — hook MWCC's register-allocator entry point
+## Tier 2 — hook MWCC's register-allocator entry point — ✅ DONE
 
-The patched DLL currently hooks three functions (`pclistblocks`,
-`pcode_traverse`, `listing_helper`) to dump per-pass IR. The biggest
-remaining unknown is the allocator's *decision logic*: given that r36
-could have been any of {r27, r28, r30, r31}, why r27?
+Implemented in commit 17517fb08. Hook on `colorgraph` at VA 0x4CE2D0 in
+mwcceppc.exe v1.2.5n. After the original runs, the hook walks the IGNode
+linked list and emits a `COLORGRAPH DECISIONS` section to `pcdump.txt`
+with per-virtual: iteration index, assigned physical reg, degree,
+original interferer count, flags.
 
-A new hook on the function MWCC calls to pick a physical register for a
-given virtual (something like `chooseRegister(virtual, class, candidates)`
-or `assignReg(virtualReg)`) would let us log the candidate set, the
-chosen physical, and any cost/preference fields the allocator evaluated.
+Critical finding from the hook: MWCC dispenses nonvolatiles **TOP-DOWN
+from r31** (r31 → r30 → r29 → ...), not bottom-up from r27 as our
+positional-alignment analysis had suggested. The simulator (Tier 1.5)
+and algorithm docs have been corrected.
 
-**What it unlocks:** definitive answer to "why r27 not r31" without
-having to reverse-engineer the allocator from observed behavior.
+IGNode struct layout for v1.2.5n (different from 7.0!): see
+`tools/mwcc_debug/mwcc_debug.c` or `docs/mwcc-allocator-algorithm.md`.
 
-**Rough path:** Use Ghidra on `build/compilers/GC/1.2.5n/mwcceppc.exe`
-to find the allocator entry point. It should be reachable from / near
-the existing `0x4C2560` (`pcode_traverse`) — the coloring pass probably
-calls something like `assignPhysical(pcode_t *)` per pcode. Add the VA
-to `tools/mwcc_debug/mwcc_debug.c`, write a hook that captures
-`(virtual_reg, class, candidates, chosen)` and emits a line to
-`pcdump.txt` after each call. Rebuild DLL, redeploy to Windows host.
-
-**Effort:** ~1 day, mostly Ghidra exploration.
+What we still don't capture: the **iteration order** within colorgraph
+(determined by `simplifygraph`'s spill-cost-aware Chaitin-style
+simplification). Adding a hook on `simplifygraph` would surface this.
+Also the workingMask state per-decision is computed but not stored
+across the loop — would need an in-loop hook (much more invasive).
 
 ## Tier 3 — cross-reference MWCC 7.0 source
 

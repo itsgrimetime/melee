@@ -276,15 +276,17 @@ def analyze(
 
     if show_candidates:
         print()
-        print("Coloring decisions. Verified algorithm (per MWCC 7.0 source):")
+        print("Coloring decisions. Verified algorithm (Tier 2 binary-hook data):")
         print("  1. Compute workingMask = volatile-regs (r3..r12, r0 excluded)")
         print("     minus regs used by interferers.")
         print("  2. If workingMask non-empty: pick LOWEST set bit.")
         print("  3. Else call obtain_nonvolatile_register(), which dispenses")
-        print("     in order: r27, r28, r29, r30, r31, then r26, r25, ...")
+        print("     TOP-DOWN: r31, r30, r29, r28, r27, then r26, r25, ...")
         print("     (Once dispensed, reg is added to volatile-regs pool and")
         print("     can be reused for non-interfering virtuals.)")
         print("Run 'debug simulate' to see what the allocator would pick + why.")
+        print("For exact iteration order + per-decision data, see the")
+        print("'COLORGRAPH DECISIONS' sections in the raw pcdump.")
         for info in infos:
             if info.physical is None or not info.candidates:
                 continue
