@@ -285,59 +285,93 @@ def parse_pcdump(text: str) -> list[Function]:
     return functions
 
 
+def _align_block(pre_block: Block, post_block: Block, base_pos: int,
+                 mapping: dict[int, set[int]],
+                 positions: dict[int, list[int]]) -> int:
+    """Align instructions within a single block (matched by index across
+    passes). Returns the number of pre-block positions consumed (for advancing
+    the linear position counter)."""
+    p_idx = 0
+    q_idx = 0
+    pre_insts = pre_block.instructions
+    post_insts = post_block.instructions
+
+    while p_idx < len(pre_insts) and q_idx < len(post_insts):
+        pre_ist = pre_insts[p_idx]
+        post_ist = post_insts[q_idx]
+        # Record virtuals seen in pre regardless of whether we map them
+        for vk, vn in pre_ist.regs:
+            if vk == "r" and _is_virtual(vn):
+                positions.setdefault(vn, []).append(base_pos + p_idx)
+        if pre_ist.opcode == post_ist.opcode and len(pre_ist.regs) == len(post_ist.regs):
+            # Aligned: map virtuals position-wise
+            for (pk, pn), (qk, qn) in zip(pre_ist.regs, post_ist.regs):
+                if pk == "r" and _is_virtual(pn) and qk == "r" and not _is_virtual(qn):
+                    mapping.setdefault(pn, set()).add(qn)
+            p_idx += 1
+            q_idx += 1
+        else:
+            # Try to recover: if post has a spill/reload (li, mr, lwz from
+            # stack, stw to stack) that pre doesn't, skip post by one.
+            # Bounded so a true mismatch eventually advances pre too.
+            q_idx += 1
+            if q_idx - p_idx > 4:
+                # Also record this pre-position so the virtual is still tracked
+                for vk, vn in pre_ist.regs:
+                    if vk == "r" and _is_virtual(vn):
+                        positions.setdefault(vn, []).append(base_pos + p_idx)
+                p_idx += 1
+                q_idx = max(q_idx - 4, p_idx)  # backtrack a bit
+    # Record any pre instructions we never reached (post ran out first)
+    while p_idx < len(pre_insts):
+        for vk, vn in pre_insts[p_idx].regs:
+            if vk == "r" and _is_virtual(vn):
+                positions.setdefault(vn, []).append(base_pos + p_idx)
+        p_idx += 1
+    return len(pre_insts)
+
+
 def analyze_function(fn: Function) -> list[VirtualRegInfo]:
     """Derive per-virtual-register info by aligning pre-coloring & post-coloring.
 
     Returns a list of VirtualRegInfo, one entry per virtual register that
     appears in the pre-coloring pass.
 
-    Alignment strategy: walk both passes' instructions in linear order
-    (block-major, then in-block). When opcodes match at the same position,
-    we assume the same logical instruction, and map virtuals→physicals
-    position-by-position in the operand list.
-
-    This is heuristic. Coloring shouldn't change opcodes/operand counts,
-    but can introduce spill/reload mov instructions. We track this with a
-    simple "skip forward to next matching opcode" fallback.
+    Alignment strategy: block-by-block using block indices (which are stable
+    across passes). Within each block, do positional alignment of instructions
+    with a bounded skip-forward fallback for spill/reload movs that coloring
+    inserts. A failed alignment in block B doesn't poison blocks B+1..N.
     """
     pre = fn.last_precolor_pass()
     post = fn.get_pass("AFTER REGISTER COLORING")
     if pre is None or post is None:
         return []
 
-    pre_insts = list(pre.all_instructions())
-    post_insts = list(post.all_instructions())
+    # Build index maps for both passes
+    pre_blocks_by_idx = {b.index: b for b in pre.blocks}
+    post_blocks_by_idx = {b.index: b for b in post.blocks}
 
-    # virt → physical (set, in case allocator splits a virtual across physicals
-    # which it shouldn't but we'll be defensive)
     mapping: dict[int, set[int]] = {}
-    # virt → list of linear positions where it appears
     positions: dict[int, list[int]] = {}
 
-    # Linear position counter — increments per pre-coloring instruction
-    p_idx = 0
-    q_idx = 0
-    while p_idx < len(pre_insts) and q_idx < len(post_insts):
-        _, _, pre_ist = pre_insts[p_idx]
-        _, _, post_ist = post_insts[q_idx]
-        if pre_ist.opcode == post_ist.opcode and len(pre_ist.regs) == len(post_ist.regs):
-            # Aligned: map virtuals position-wise
-            for (pk, pn), (qk, qn) in zip(pre_ist.regs, post_ist.regs):
-                if pk == "r" and _is_virtual(pn) and qk == "r" and not _is_virtual(qn):
-                    mapping.setdefault(pn, set()).add(qn)
-                    positions.setdefault(pn, []).append(p_idx)
-            # Track virtuals that appeared even if not mapped (e.g. spilled)
-            for vk, vn in pre_ist.regs:
-                if vk == "r" and _is_virtual(vn):
-                    positions.setdefault(vn, []).append(p_idx)
-            p_idx += 1
-            q_idx += 1
-        else:
-            # Mismatch: post-pass likely has a spill/reload mov here. Skip post
-            # by one and try again. If many mismatches accumulate, also skip pre.
-            q_idx += 1
-            if q_idx - p_idx > 8:
-                p_idx += 1
+    # Walk blocks in pre-pass order, aligning each against its same-index
+    # counterpart in the post pass. Blocks present in pre but missing in post
+    # (or vice versa) are still scanned for virtual-reg appearance counts so
+    # we get live ranges even without a physical mapping.
+    base_pos = 0
+    for pre_block in pre.blocks:
+        post_block = post_blocks_by_idx.get(pre_block.index)
+        if post_block is None:
+            # Block missing in post (compiler may have eliminated it).
+            # Still record positions for live-range data.
+            for ist in pre_block.instructions:
+                for vk, vn in ist.regs:
+                    if vk == "r" and _is_virtual(vn):
+                        positions.setdefault(vn, []).append(base_pos)
+                base_pos += 1
+            continue
+        consumed = _align_block(pre_block, post_block, base_pos, mapping, positions)
+        base_pos += consumed
 
     # Deduplicate positions per virtual
     for vn in positions:
