@@ -137,4 +137,9 @@ When matches don't agree, treat the simulator output as a hypothesis to be teste
 
 ## Future work
 
-See [docs/mwcc-debug-future-ideas.md](mwcc-debug-future-ideas.md). The natural next step is **Tier 2 proper**: hook MWCC's actual `colorgraph` in `mwcceppc.exe` from the patched DLL, log every decision with workingMask + chosen + iteration index. That would let us replace the simulator's approximations with ground-truth observations.
+See [docs/mwcc-debug-future-ideas.md](mwcc-debug-future-ideas.md). Tier 2
+(colorgraph hook) and Tier 3 (buildinterferencegraph hook + 7.0 source
+cross-reference) are now both implemented. Remaining ideas: a full
+pre-simplification IG dump (currently unstable to extract), Tier 4
+(permuter integration), and Tier 5 (DLL-side allocator biasing for
+hypothesis testing).

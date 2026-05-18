@@ -149,6 +149,12 @@ of iter index → virtual → assigned physical, look at the `COLORGRAPH
 DECISIONS` sections in the raw pcdump. These come from the colorgraph hook
 in mwcc_debug.c (Tier 2 — fires once per register class per function).
 
+The pcdump ALSO includes `IG CONSTRUCTED (class=N, n_nodes=K)` event lines
+that pair with each COLORGRAPH DECISIONS section. They mark when MWCC
+finished building the interference graph for that class — useful for
+ordering visibility (which function/class is being processed at any
+given point in the dump). Tier 3 hook.
+
 The wrapper:
 1. SSHes to the remote with the relative .c path
 2. Remote: acquires a lock, `git pull --rebase` (so it sees current master), installs patched DLL, runs `mwcceppc.exe` with stock Melee flags

@@ -28,31 +28,50 @@ simplification). Adding a hook on `simplifygraph` would surface this.
 Also the workingMask state per-decision is computed but not stored
 across the loop — would need an in-loop hook (much more invasive).
 
-## Tier 3 — cross-reference MWCC 7.0 source
+## Tier 3 — hook IG construction + cross-ref 7.0 source — ✅ DONE
 
-The mwcc_debug upstream README points at <https://git.wuffs.org/MWCC/>
-— a decompilation of MWCC v7.0 targeting MSL_MacOS. Different version,
-same architectural lineage. The register allocator code there is likely
-similar enough that:
+Implemented in commits described below. Two parts:
 
-- We could identify the function name + signature of the coloring entry
-  point in the 7.0 source.
-- Then find the analogous code in our 1.2.5n binary much faster (same
-  Ghidra task as Tier 2 but with an oracle).
-- And read the actual cost/preference function to know what factors
-  influence the choice — could even build a small *symbolic simulator*
-  that predicts which register would be picked given a virtual-reg
-  numbering and use-count distribution.
+**A. 7.0 source cross-reference (done during Tier 2).**
+We read `compiler_and_linker/BackEnd/PowerPC/RegisterAllocator/{Coloring,
+InterferenceGraph,RegisterInfo}.c` from git.wuffs.org/MWCC. That established:
+- The Chaitin-style coloring algorithm
+- The TOP-DOWN nonvolatile dispense order (corrected our wrong hypothesis)
+- IGNode structure layout (different offsets in 1.2.5n vs 7.0)
+- Build pipeline: `buildinterferencegraph` → `simplifygraph` → `colorgraph` → `rewritepcode`
 
-**What it unlocks:** the algorithm becomes legible, not just observable.
+The Python simulator (`melee-agent debug simulate`) replays the colorgraph
+algorithm based on this understanding.
 
-**Rough path:** Spend an afternoon reading the 7.0 source around
-`register*` / `color*` / `allocate*` files. Document the algorithm in
-prose. Use that as the guide for Tier 2's Ghidra hunt. Optional: write
-the simulator as a Python module that takes the analyze command's output
-and predicts the assignment.
+**B. IG construction hook.**
+Hooked `buildinterferencegraph` at VA 0x530A00 (9-byte prologue). After
+construction completes, emits an `IG CONSTRUCTED (class=N, n_nodes=K)`
+event line to pcdump.txt. This gives agents ordering visibility — they
+can see exactly when each (function, register class) pair has its IG
+constructed, paired with the subsequent COLORGRAPH DECISIONS section.
 
-**Effort:** Half-day for the read; ~1 day for the simulator if pursued.
+**Known limitation:** iterating `interferencegraph[]` from inside the
+build_ig hook causes mwcceppc to crash (Rosetta exception at 0x6c2e1xxx).
+Likely cause: `findrematerializations` (called near the end of
+buildinterferencegraph) may reallocate the array, leaving stale pointers
+at some indices. The minimal hook (just logging the event) is stable.
+
+**Workaround:** the colorgraph hook's per-iter interferer dumps (committed
+in c232825c2) provide the full adjacency-list data for all virtuals that
+made it to the worklist. Simplified-out leaves aren't visible there, but
+their interferences would have been edges to non-simplified virtuals
+which ARE in the output. The data is functionally complete for matching
+investigations.
+
+**What we still don't have:** the FULL pre-simplification graph including
+simplified-out leaves. Would require either:
+- Hooking a stable intermediate function (e.g. between `buildinterferencematrix`
+  and `findrematerializations`)
+- Reading the interference *matrix* directly (at global 0x583088) instead of
+  the post-coalescing adjacency vectors — the matrix is bit-packed and stable
+
+**Effort spent:** ~half-day, mostly RE work on mwcceppc.exe to find VAs and
+debugging the iteration crash.
 
 ## Tier 4 — permuter integration
 
