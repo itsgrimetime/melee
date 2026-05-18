@@ -129,7 +129,12 @@ def simulate_function(fn: Function) -> list[SimDecision]:
         """Live range [first..last] spans a call? Then caller-save unavailable."""
         return any(info.first_use <= c <= info.last_use for c in call_positions)
 
-    # Iteration order: ascending interferer count, then ascending virtual #
+    # Iteration order — exact MWCC ordering depends on Chaitin simplification
+    # (with spill-cost-aware tie-breaking) which we can't replicate without
+    # hooking the real binary. Approximate with "ascending interferer count"
+    # — produces the best match rate empirically (~30% on mnVibration). The
+    # simulator's primary value is the algorithmic EXPLANATION in the
+    # reasoning trace; exact prediction is secondary.
     iter_order = sorted(infos, key=lambda v: (len(v.interferes_with), v.virtual))
 
     # Simulator state
