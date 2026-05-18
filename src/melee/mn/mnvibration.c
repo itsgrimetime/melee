@@ -602,24 +602,30 @@ void fn_80248748(HSD_GObj* gobj)
 
 static AnimLoopSettings mnVibration_803EECF8 = { 0.0f, 14.0f, -0.1f };
 
+/// @brief Per-frame steady-state callback for the rumble menu.
+/// Refreshes the per-port indicator animations based on current rumble
+/// settings, then watches for controller connect/disconnect transitions
+/// and updates each port's connected flag (data->x6[port]) plus its
+/// associated jobjs.
+/// @param[in] gobj The rumble-menu GObj. Equal to mnVibration_804D6C28.
 void fn_802487A8(HSD_GObj* gobj)
 {
-    HSD_JObj* sp44;
-    HSD_JObj* temp_r27;
-    HSD_JObj* var_r3_2;
-    s32 var_r24;
-    u16* var_r25;
-    u16* new_var2;
-    u32 var_r23;
-    u8 var_r3;
-    u8* temp_r31;
-    void* var_r26;
-    void* new_var3;
-    s32 new_var;
-    void* var_r3_3;
+    HSD_JObj* port_indicator;
+    HSD_JObj* rumble_indicator;
+    HSD_JObj* walker_a;
+    s32 port_a;
+    u16* idx_ptr;
+    u16* idx_ptr_alias;
+    u32 port_b;
+    u8 err;
+    u8* data_bytes;
+    void* walker_b_clear;
+    void* gobj_user_data_alias;
+    s32 port_b_alias;
+    void* walker_b_set;
     PAD_STACK(56);
 
-    temp_r31 = gobj->user_data;
+    data_bytes = gobj->user_data;
     if ((u8) mn_804A04F0.cur_menu != 0x13) {
         HSD_GObjProc* proc;
         HSD_GObjProc_8038FE24(HSD_GObj_804D7838);
@@ -627,106 +633,121 @@ void fn_802487A8(HSD_GObj* gobj)
         proc->flags_3 = HSD_GObj_804D783C;
         return;
     }
-    var_r23 = (var_r24 = 0);
+    // First loop: per-port, set animation state matching current rumble
+    // setting (rumble_on -> animate, rumble_off -> hold at frame 0).
+    port_b = (port_a = 0);
     do {
-        void* temp_jobj;
-        temp_jobj = ((MnVibrationData*) gobj->user_data)->jobjs[23];
-        if (temp_jobj == NULL) {
-            var_r3_2 = NULL;
+        void* root_jobj;
+        root_jobj = ((MnVibrationData*) gobj->user_data)->jobjs[23];
+        if (root_jobj == NULL) {
+            walker_a = NULL;
         } else {
-            var_r3_2 = ((HSD_JObj*) temp_jobj)->child;
+            walker_a = ((HSD_JObj*) root_jobj)->child;
         }
         {
             s32 i;
-            for (i = 0; i < var_r24; i++) {
-                if (var_r3_2 == NULL) {
-                    var_r3_2 = NULL;
+            for (i = 0; i < port_a; i++) {
+                if (walker_a == NULL) {
+                    walker_a = NULL;
                 } else {
-                    var_r3_2 = var_r3_2->next;
+                    walker_a = walker_a->next;
                 }
             }
         }
-        lb_80011E24(var_r3_2, &sp44, 1, -1);
-        if (GetRumbleSettingOfPort(var_r24) != 0) {
-            mn_8022EC18(sp44, &mnVibration_803EECF8, MOBJ_MASK);
+        lb_80011E24(walker_a, &port_indicator, 1, -1);
+        if (GetRumbleSettingOfPort(port_a) != 0) {
+            mn_8022EC18(port_indicator, &mnVibration_803EECF8, MOBJ_MASK);
         } else {
-            HSD_JObjReqAnimAll(sp44, mnVibration_804DC030);
-            mn_8022F3D8(sp44, 0xFF, MOBJ_MASK);
-            HSD_JObjAnimAll(sp44);
+            HSD_JObjReqAnimAll(port_indicator, mnVibration_804DC030);
+            mn_8022F3D8(port_indicator, 0xFF, MOBJ_MASK);
+            HSD_JObjAnimAll(port_indicator);
         }
-        var_r24 += 1;
-    } while (var_r24 < 4);
-    var_r25 = mnVibration_804D4FE8;
+        port_a += 1;
+    } while (port_a < 4);
+    // Second loop: detect controller connect/disconnect transitions per
+    // port, update data->x6[port] flag and refresh the corresponding
+    // visual indicators. err is from HSD_PadCopyStatus[port].err byte.
+    idx_ptr = mnVibration_804D4FE8;
     do {
-        // Force mulli pattern with explicit offset computation
-        var_r3 =
-            *((u8*) ((u8*) HSD_PadCopyStatus + (u8) var_r23 * 0x44) + 0x41);
-        var_r24 = var_r23;
-        if ((((s8) var_r3 != 0) && (temp_r31[var_r24 + 6] != 0)) ||
-            (((s8) var_r3 == 0) && (temp_r31[var_r24 + 6] == 0)))
+        err =
+            *((u8*) ((u8*) HSD_PadCopyStatus + (u8) port_b * 0x44) + 0x41);
+        port_a = port_b;
+        if ((((s8) err != 0) && (data_bytes[port_a + 6] != 0)) ||
+            (((s8) err == 0) && (data_bytes[port_a + 6] == 0)))
         {
-            new_var2 = var_r25;
-            if ((s8) var_r3 != 0) {
+            idx_ptr_alias = idx_ptr;
+            if ((s8) err != 0) {
+                // Controller now disconnected: clear flag, hide rumble
+                // indicator chain, mark x6[port] = 0.
                 HSD_JObjSetFlagsAll(
-                    ((MnVibrationData*) temp_r31)->jobjs[*new_var2], 0x10);
+                    ((MnVibrationData*) data_bytes)->jobjs[*idx_ptr_alias],
+                    0x10);
                 {
-                    void* temp_jobj2;
-                    temp_jobj2 =
+                    void* root_jobj;
+                    root_jobj =
                         ((MnVibrationData*) gobj->user_data)->jobjs[23];
-                    if (temp_jobj2 == NULL) {
-                        var_r3_3 = NULL;
+                    if (root_jobj == NULL) {
+                        walker_b_set = NULL;
                     } else {
-                        var_r3_3 = ((HSD_JObj*) temp_jobj2)->child;
+                        walker_b_set = ((HSD_JObj*) root_jobj)->child;
                     }
                 }
                 {
                     s32 i;
-                    for (i = 0; i < var_r24; i++) {
-                        if (var_r3_3 == NULL) {
-                            var_r3_3 = NULL;
+                    for (i = 0; i < port_a; i++) {
+                        if (walker_b_set == NULL) {
+                            walker_b_set = NULL;
                         } else {
-                            var_r3_3 = ((HSD_JObj*) var_r3_3)->next;
+                            walker_b_set = ((HSD_JObj*) walker_b_set)->next;
                         }
                     }
                 }
-                mnVibration_802480B4((HSD_JObj*) var_r3_3, var_r24, 0);
-                temp_r31[var_r24 + 6] = 0;
+                mnVibration_802480B4((HSD_JObj*) walker_b_set, port_a, 0);
+                data_bytes[port_a + 6] = 0;
             } else {
+                // Controller now connected: clear flag, reset rumble
+                // animation, show indicator chain, mark x6[port] = 1.
                 HSD_JObjClearFlagsAll(
-                    ((MnVibrationData*) temp_r31)->jobjs[*new_var2], 0x10);
-                var_r26 = NULL;
-                temp_r31[var_r24 + 2] = 0;
-                temp_r27 = ((MnVibrationData*) mnVibration_804D6C28->user_data)
-                               ->jobjs[mnVibration_804D4FE8[var_r24]];
-                HSD_JObjReqAnimAll(temp_r27, (f32) temp_r31[var_r24 + 2]);
-                HSD_JObjAnimAll(temp_r27);
-                new_var = var_r24;
+                    ((MnVibrationData*) data_bytes)->jobjs[*idx_ptr_alias],
+                    0x10);
+                walker_b_clear = NULL;
+                data_bytes[port_a + 2] = 0;
+                rumble_indicator =
+                    ((MnVibrationData*) mnVibration_804D6C28->user_data)
+                        ->jobjs[mnVibration_804D4FE8[port_a]];
+                HSD_JObjReqAnimAll(rumble_indicator,
+                                   (f32) data_bytes[port_a + 2]);
+                HSD_JObjAnimAll(rumble_indicator);
+                port_b_alias = port_a;
                 {
-                    HSD_JObj* temp_jobj3;
-                    temp_jobj3 =
-                        ((MnVibrationData*) (new_var3 = gobj->user_data))
+                    HSD_JObj* root_jobj;
+                    root_jobj =
+                        ((MnVibrationData*) (gobj_user_data_alias =
+                                                 gobj->user_data))
                             ->jobjs[23];
-                    if (temp_jobj3 != NULL) {
-                        var_r26 = temp_jobj3->child;
+                    if (root_jobj != NULL) {
+                        walker_b_clear = root_jobj->child;
                     }
                 }
                 {
                     s32 i;
-                    for (i = 0; i < var_r24; i++) {
-                        if (var_r26 == NULL) {
-                            var_r26 = NULL;
+                    for (i = 0; i < port_a; i++) {
+                        if (walker_b_clear == NULL) {
+                            walker_b_clear = NULL;
                         } else {
-                            var_r26 = ((HSD_JObj*) var_r26)->next;
+                            walker_b_clear =
+                                ((HSD_JObj*) walker_b_clear)->next;
                         }
                     }
                 }
-                mnVibration_802480B4((HSD_JObj*) var_r26, new_var, 1);
-                temp_r31[var_r24 + 6] = 1;
+                mnVibration_802480B4((HSD_JObj*) walker_b_clear, port_b_alias,
+                                     1);
+                data_bytes[port_a + 6] = 1;
             }
         }
-        var_r23 += 1;
-        var_r25 += 1;
-    } while ((s32) var_r23 < 4);
+        port_b += 1;
+        idx_ptr += 1;
+    } while ((s32) port_b < 4);
 }
 
 void fn_80248A78(HSD_GObj* arg0)
