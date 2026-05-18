@@ -539,30 +539,14 @@ void mnVibration_80248444(HSD_GObj* arg0, u8 arg1, u8 arg2)
     HSD_JObjAddChild(data->jobjs[17], new_jobj);
 }
 
-void mnVibration_80248644(HSD_GObj* arg0)
+static inline void mnVibration_PopulateNameRows(HSD_GObj* gobj,
+                                                MnVibrationData* data)
 {
-    MnVibrationData* ptr2;
-    MnVibrationData* data;
-    s32 i;
-    HSD_JObj* jobj17;
-    HSD_JObj* child;
-    u8 scroll_offset;
     s32 j;
     s32 name_idx;
     s32 count;
+    u8 scroll_offset;
 
-    ptr2 = data = arg0->user_data;
-    for (i = 0; i < 8; i++) {
-        if (data->texts[i] != NULL) {
-            HSD_SisLib_803A5CC4(ptr2->texts[i]);
-            data->texts[i] = NULL;
-        }
-    }
-    jobj17 = data->jobjs[17];
-    child = HSD_JObjGetChild(jobj17);
-    if (child != NULL) {
-        HSD_JObjRemoveAll(HSD_JObjGetChild(jobj17));
-    }
     for (j = 0; j < 8; j++) {
         scroll_offset = data->scroll_offset;
         count = GetNameCount();
@@ -577,9 +561,32 @@ void mnVibration_80248644(HSD_GObj* arg0)
             }
         }
         if ((s32) (u8) name_idx != 0xFF) {
-            mnVibration_80248444(arg0, (u8) name_idx, (u8) j);
+            mnVibration_80248444(gobj, (u8) name_idx, (u8) j);
         }
     }
+}
+
+void mnVibration_80248644(HSD_GObj* arg0)
+{
+    MnVibrationData* ptr2;
+    MnVibrationData* data;
+    s32 i;
+    HSD_JObj* jobj17;
+    HSD_JObj* child;
+
+    ptr2 = data = arg0->user_data;
+    for (i = 0; i < 8; i++) {
+        if (data->texts[i] != NULL) {
+            HSD_SisLib_803A5CC4(ptr2->texts[i]);
+            data->texts[i] = NULL;
+        }
+    }
+    jobj17 = data->jobjs[17];
+    child = HSD_JObjGetChild(jobj17);
+    if (child != NULL) {
+        HSD_JObjRemoveAll(HSD_JObjGetChild(jobj17));
+    }
+    mnVibration_PopulateNameRows(arg0, data);
 }
 
 static AnimLoopSettings mnVibration_803EECEC = { 50.0f, 70.0f, -0.1f };
