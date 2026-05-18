@@ -610,11 +610,11 @@ static AnimLoopSettings mnVibration_803EECF8 = { 0.0f, 14.0f, -0.1f };
 /// @param[in] gobj The rumble-menu GObj. Equal to mnVibration_804D6C28.
 void fn_802487A8(HSD_GObj* gobj)
 {
+    s32 port_a;
     HSD_JObj* port_indicator;
     HSD_JObj* rumble_indicator;
     u16* idx_ptr_chained;
     HSD_JObj* walker_a;
-    s32 port_a;
     u16* idx_ptr;
     u16* idx_ptr_alias;
     u32 port_b;
