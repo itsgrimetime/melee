@@ -2095,3 +2095,212 @@ def stuck(
     print(f"== Next steps (ranked by cost) ==")
     for i, step in enumerate(next_steps, 1):
         print(f"  {i}. {step}")
+
+
+@debug_app.command(name="ceiling")
+def ceiling(
+    function: Annotated[
+        str,
+        typer.Argument(help="Function name to check"),
+    ],
+    skip_decl_orders: Annotated[
+        bool,
+        typer.Option(
+            "--skip-decl-orders",
+            help="Skip the enumerate-decl-orders step (saves ~1 min "
+                 "but produces a less confident verdict).",
+        ),
+    ] = False,
+    decl_strategy: Annotated[
+        str,
+        typer.Option(
+            "--decl-strategy",
+            help="Strategy passed to enumerate-decl-orders. 'promote' is "
+                 "fast (N candidates); 'all' covers promote+demote+swap "
+                 "(~3N candidates).",
+        ),
+    ] = "promote",
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit verdict as JSON."),
+    ] = False,
+) -> None:
+    """Structural-ceiling verdict: is this function stuck, or is there
+    a quick win we haven't tried?
+
+    Combines two checks:
+      1. suggest-casts — static cast linter (free, milliseconds)
+      2. enumerate-decl-orders — brute-force decl-order space (~70s)
+
+    Verdict categories:
+      - WIN AVAILABLE — a quick fix exists (casts to drop, or a decl-
+        order that improves match%)
+      - PROBABLE CEILING — no fast wins found; recommends force-phys
+        hypothesis test and/or permuter as next steps
+
+    This is the command to run when you're staring at a stuck function
+    and asking "should I keep iterating, or move on?"
+    """
+    melee_root = DEFAULT_MELEE_ROOT
+    unit = _find_unit_for_function(function, melee_root)
+    if unit is None:
+        typer.echo(
+            f"function '{function}' not found in report.json", err=True
+        )
+        raise typer.Exit(2)
+    src = melee_root / "src" / f"{unit}.c"
+    baseline = _get_match_pct(function, melee_root) or 0.0
+
+    if not json_out:
+        print(f"== Structural-ceiling check for {function} ==")
+        print(f"  Baseline: {baseline:.2f}%")
+        print(f"  TU:       {src.relative_to(melee_root)}")
+        print()
+
+    # Step 1: suggest-casts
+    if not json_out:
+        print(f"[1] Cast audit (free, ~ms)...")
+    src_text = src.read_text() if src.exists() else ""
+    cast_warnings = audit_function_casts(src_text, function)
+    high_casts = [w for w in cast_warnings if w.severity == "high"]
+    med_casts = [w for w in cast_warnings if w.severity == "medium"]
+    if not json_out:
+        if high_casts:
+            print(f"    ! {len(high_casts)} HIGH-severity cast(s) found:")
+            for w in high_casts[:3]:
+                print(f"      - line {w.line}: ({w.cast_type}) "
+                      f"{w.inner_expr} → {w.call_target}")
+            if len(high_casts) > 3:
+                print(f"      ... +{len(high_casts) - 3} more")
+        else:
+            print(f"    No HIGH-severity casts.")
+        print()
+
+    # Step 2: enumerate-decl-orders (optional)
+    decl_results: list = []
+    decl_best_pct: float = baseline
+    decl_best_label: Optional[str] = None
+    if not skip_decl_orders:
+        if not json_out:
+            print(f"[2] Decl-order enumeration ({decl_strategy} strategy, "
+                  f"~minute)...")
+        names = get_decl_names(src_text, function) if src_text else None
+        if not names:
+            if not json_out:
+                print(f"    Could not find decl block — skipping.")
+        else:
+            # Build candidate list (mirror of enumerate_decl_orders logic)
+            n = len(names)
+            candidates: list[tuple[str, list[int]]] = []
+            if decl_strategy in ("promote", "all"):
+                for k in range(1, n):
+                    perm = [k] + [i for i in range(n) if i != k]
+                    candidates.append((f"promote {names[k]}", perm))
+            if decl_strategy in ("demote", "all"):
+                for k in range(n - 1):
+                    perm = [i for i in range(n) if i != k] + [k]
+                    candidates.append((f"demote {names[k]}", perm))
+            if decl_strategy in ("swap", "all"):
+                for k in range(n - 1):
+                    perm = list(range(n))
+                    perm[k], perm[k + 1] = perm[k + 1], perm[k]
+                    candidates.append((f"swap {names[k]}<->{names[k+1]}",
+                                       perm))
+
+            orig = src.read_text()
+            try:
+                for label, perm in candidates:
+                    patched = reorder_decls_in_function(orig, function, perm)
+                    if patched is None:
+                        continue
+                    src.write_text(patched)
+                    pct = _build_and_match(unit, function, melee_root)
+                    src.write_text(orig)  # revert immediately
+                    if pct is None:
+                        decl_results.append({"label": label,
+                                             "pct": None,
+                                             "delta": None})
+                        continue
+                    delta = pct - baseline
+                    decl_results.append({"label": label, "pct": pct,
+                                         "delta": delta})
+                    if pct > decl_best_pct:
+                        decl_best_pct = pct
+                        decl_best_label = label
+            finally:
+                src.write_text(orig)
+                subprocess.run(
+                    ["ninja", f"build/GALE01/src/{unit}.o",
+                     "build/GALE01/report.json"],
+                    cwd=melee_root, capture_output=True,
+                )
+            if not json_out:
+                if decl_best_label is not None:
+                    print(f"    WIN: {decl_best_label} → "
+                          f"{decl_best_pct:.2f}% (delta "
+                          f"{decl_best_pct - baseline:+.2f}%)")
+                else:
+                    print(f"    No decl-order win found "
+                          f"({len(decl_results)} candidates).")
+            print() if not json_out else None
+    else:
+        if not json_out:
+            print(f"[2] Decl-order enumeration: SKIPPED")
+            print()
+
+    # Verdict
+    has_cast_win = bool(high_casts)
+    decl_delta = decl_best_pct - baseline if decl_best_label else 0.0
+    has_decl_win = decl_delta >= 0.1
+
+    if has_cast_win or has_decl_win:
+        verdict = "WIN AVAILABLE"
+        recommendations: list[str] = []
+        if has_cast_win:
+            recommendations.append(
+                f"Drop {len(high_casts)} HIGH-severity cast(s) — run "
+                f"`melee-agent debug suggest-casts {function}` for details."
+            )
+        if has_decl_win:
+            recommendations.append(
+                f"Apply decl-order win: `melee-agent debug "
+                f"enumerate-decl-orders {function} --strategy "
+                f"{decl_strategy} --keep-best` → expected "
+                f"{decl_best_pct:.2f}%."
+            )
+    else:
+        verdict = "PROBABLE CEILING"
+        recommendations = [
+            "No fast wins from casts or decl-order. Next options:",
+            "  (a) Construct a target mapping and run `debug pcdump "
+            f"src/{unit}.c --force-phys ...` to confirm the target ASM "
+            "is reachable.",
+            "  (b) If reachable, run decomp-permuter on the function — "
+            "many small mutations are out of scope for this command.",
+            "  (c) If force-phys cannot reach the target either, this "
+            "is a true structural ceiling. Document and move on.",
+        ]
+
+    if json_out:
+        print(json.dumps({
+            "function": function,
+            "baseline_pct": baseline,
+            "verdict": verdict,
+            "high_cast_warnings": [{
+                "line": w.line, "call_target": w.call_target,
+                "cast_type": w.cast_type, "inner_expr": w.inner_expr,
+            } for w in high_casts],
+            "med_cast_warnings": [{
+                "line": w.line, "call_target": w.call_target,
+                "cast_type": w.cast_type, "inner_expr": w.inner_expr,
+            } for w in med_casts],
+            "decl_best_label": decl_best_label,
+            "decl_best_pct": decl_best_pct,
+            "decl_results": decl_results,
+            "recommendations": recommendations,
+        }, indent=2))
+        return
+
+    print(f"== VERDICT: {verdict} ==")
+    for rec in recommendations:
+        print(f"  {rec}")
