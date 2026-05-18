@@ -462,18 +462,18 @@ def analyze(
 
 @debug_app.command("simulate")
 def simulate(
+    function: Annotated[
+        str,
+        typer.Option(
+            "--function", "-f",
+            help="Function to simulate (required)",
+        ),
+    ],
     dump: Annotated[
         Optional[Path],
         typer.Argument(
             help="Path to a pcdump.txt produced by 'debug pcdump'. "
                  "If omitted, auto-resolves via --function from cache."
-        ),
-    ] = None,
-    function: Annotated[
-        Optional[str],
-        typer.Option(
-            "--function", "-f",
-            help="Function to simulate",
         ),
     ] = None,
     show_all: Annotated[
@@ -499,9 +499,6 @@ def simulate(
     See docs/mwcc-debug-future-ideas.md for the long-term plan to replace
     this simulator with a real hook into mwcceppc.exe's allocator.
     """
-    if function is None:
-        typer.echo("--function is required for simulate", err=True)
-        raise typer.Exit(2)
     dump = _resolve_pcdump_path(dump, function)
     text = dump.read_text()
     funcs = parse_pcdump(text)
@@ -745,23 +742,23 @@ def _load_target_spec(path: Path) -> dict:
 
 @debug_app.command()
 def score(
+    function: Annotated[
+        str,
+        typer.Option("--function", "-f", help="Function name to score (required)"),
+    ],
+    target: Annotated[
+        Path,
+        typer.Option(
+            "--target", "-t",
+            help="Target spec file (YAML or JSON, required). See "
+                 "src/mwcc_debug/scoring.py for format.",
+        ),
+    ],
     pcdump: Annotated[
         Optional[Path],
         typer.Argument(
             help="Path to pcdump.txt. Omit to auto-resolve via --function "
                  "from the cache.",
-        ),
-    ] = None,
-    function: Annotated[
-        Optional[str],
-        typer.Option("--function", "-f", help="Function name to score"),
-    ] = None,
-    target: Annotated[
-        Optional[Path],
-        typer.Option(
-            "--target", "-t",
-            help="Target spec file (YAML or JSON). See "
-                 "src/mwcc_debug/scoring.py for format.",
         ),
     ] = None,
     breakdown: Annotated[
@@ -781,12 +778,6 @@ def score(
     Lower scores are better (perfect match = 0). Designed to be called by
     decomp-permuter as a custom scorer.
     """
-    if function is None:
-        typer.echo("--function is required for score", err=True)
-        raise typer.Exit(2)
-    if target is None:
-        typer.echo("--target is required for score", err=True)
-        raise typer.Exit(2)
     pcdump = _resolve_pcdump_path(pcdump, function)
     text = pcdump.read_text()
     spec = _load_target_spec(target)
@@ -831,16 +822,17 @@ def score(
 
 @debug_app.command()
 def guide(
+    function: Annotated[
+        str,
+        typer.Option("--function", "-f",
+                     help="Function name to analyze (required)"),
+    ],
     pcdump: Annotated[
         Optional[Path],
         typer.Argument(
             help="Path to pcdump.txt. Omit to auto-resolve via --function "
                  "from the cache.",
         ),
-    ] = None,
-    function: Annotated[
-        Optional[str],
-        typer.Option("--function", "-f", help="Function name to analyze"),
     ] = None,
     target: Annotated[
         Optional[Path],
@@ -857,9 +849,6 @@ def guide(
     spill, iteration order), and suggests directions for C-source nudges.
     Hints, not guarantees — interpret in source context.
     """
-    if function is None:
-        typer.echo("--function is required for guide", err=True)
-        raise typer.Exit(2)
     pcdump = _resolve_pcdump_path(pcdump, function)
     text = pcdump.read_text()
     fns = parse_pcdump(text)
@@ -896,16 +885,17 @@ def guide(
 
 @debug_app.command(name="derive-target")
 def derive_target(
+    function: Annotated[
+        str,
+        typer.Option("--function", "-f",
+                     help="Function name to extract (required)"),
+    ],
     pcdump: Annotated[
         Optional[Path],
         typer.Argument(
             help="Path to pcdump.txt. Omit to auto-resolve via --function "
                  "from the cache.",
         ),
-    ] = None,
-    function: Annotated[
-        Optional[str],
-        typer.Option("--function", "-f", help="Function name to extract"),
     ] = None,
     output_format: Annotated[
         str,
@@ -926,9 +916,6 @@ def derive_target(
     the result with this command, then save the spec and use it to
     score subsequent natural-source attempts.
     """
-    if function is None:
-        typer.echo("--function is required for derive-target", err=True)
-        raise typer.Exit(2)
     pcdump = _resolve_pcdump_path(pcdump, function)
     text = pcdump.read_text()
     fns = parse_pcdump(text)
