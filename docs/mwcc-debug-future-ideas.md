@@ -142,36 +142,71 @@ re-implements a lot of permuter's machinery.
 
 **Effort:** week-plus, depending on how deep the integration goes.
 
-## Tier 5 — speculative: directly modify the DLL to bias coloring
+## Tier 5 — allocator biasing via env var — ✅ DONE
 
-The patched DLL already injects code into mwcceppc's address space. In
-principle we could go further: not just observe the allocator but *bias*
-it — e.g. force a specific virtual to a specific physical, or change
-the candidate ordering.
+Implemented in commit c8c8555aa. Lets us answer "what if r36 got r31?"
+by actually compiling that variant and diffing the emitted code.
 
-This would let us answer "what if r36 got r31?" by actually compiling
-that variant and diffing. It's the most invasive change (we'd be
-modifying the compiler's behavior, not just observing it) but it's also
-the most direct path to confirming hypotheses about the allocator.
+**Mechanism:**
+- DLL reads `MWCC_DEBUG_FORCE_PHYS` at `DllMain`. Format:
+  `"virtIdx:physReg[,virtIdx:physReg]*"`. Example: `"36:31"` forces
+  virtual #36 to physical r31. Example: `"36:31,50:27"` forces both.
+- In `hook_colorgraph`, AFTER the trampoline call (normal coloring
+  runs), the hook walks the IGNode worklist, finds each node's
+  `ig_idx` via `INTERFERENCEGRAPH[]` scan, and patches
+  `IGNode->assignedReg` if there's a matching override.
+- Next pass (`rewritepcode`) reads the patched field, so the override
+  propagates all the way to the emitted `.text`.
 
-**What it unlocks:** ground-truth answers via experimentation.
+**CLI exposure:**
+```bash
+melee-agent debug pcdump src/melee/mn/mnvibration.c \
+  --force-phys "36:31" \
+  --output /tmp/mnvib_force.txt
+```
+The CLI validates that the value contains no quotes/semicolons/
+whitespace, then passes it as `set MWCC_DEBUG_FORCE_PHYS=...` on the
+remote SSH side.
 
-**Risks:** harder to know whether a forced-mapping result reveals a
-real allocator preference or an artifact of our bias. Need careful
-experiment design.
+**Verified on mnVibration_80248644:** forcing virtual 36
+(scroll_offset) from r27 → r31 produced FINAL CODE AFTER INSTRUCTION
+SCHEDULING with `lbz r31,10(r28)` and `add r0,r31,r29` — exactly the
+codegen the matching agent's experimental tried (and failed) to coax
+with C-source restructuring. 13 `[FORCE_PHYS]` events fired across the
+TU. (Note: cleanup-loop NULL also lives in r31 because its live range
+ends before scroll_offset's begins — same physical for both is correct
+under interference-graph rules.)
 
-**Effort:** depends on what we want to bias; ~day per knob.
+**What it unlocks:** ground-truth answers via experimentation. Before
+spending hours trying to coax a specific allocation via C-source
+shuffling, force it via the env var, see whether the resulting `.text`
+matches the target. If yes, the goal is reachable; spend the time
+finding the C pattern. If no, the constraint is elsewhere (instruction
+selection, scheduling, etc) and the allocator isn't the problem.
+
+**Caveats (documented in mwcc_debug.c):**
+- Forcing two interfering virtuals to the same physical produces
+  incorrect code (data corruption — multiple live values sharing one
+  reg). DLL-patched ASM is NOT what the real compiler would emit from
+  any C source — it's a hypothesis-test artifact, not a match target.
+- Forcing across register classes (GPR vs FPR) likely crashes.
+- Only operates on virtuals that survive `simplifygraph` (made it onto
+  the worklist). Simplified-out leaves are colored elsewhere and
+  aren't reachable from the colorgraph hook.
+
+**Effort spent:** ~half-day, mostly cmd-line plumbing and env-var
+parsing in C. The IGNode patching itself is 5 lines.
 
 ## Other small wins not worth their own tier
 
-- **JSON output mode** for the analyze command — easier for agents to
-  consume programmatically.
-- **Comparison mode**: given two pcdumps (e.g. a passing-attempt and a
-  failing-attempt for the same function), diff just the coloring
-  decisions to surface what changed.
-- **ABI annotation** in the analyze command — show "r3 = arg0", "r4 =
-  arg1" etc. derived from function signature so the caller-save
-  candidate filtering accounts for argument pinning.
+Done (commits 81fbe074e, c3a26d82a):
+- ✅ **JSON output mode** for the analyze command (`--json`)
+- ✅ **Comparison mode** — `melee-agent debug diff` compares two
+  pcdumps for the same function
+- ✅ **ABI annotation** in analyze — shows `r3 = arg0`, `r4 = arg1`
+  etc. derived from function signature
+
+Still open:
 - **Live-range alignment improvements** — the current pre/post-pass
   alignment is naive (skip-forward on opcode mismatch). Could use a
   proper sequence-alignment algorithm (e.g. Smith-Waterman variant) to
