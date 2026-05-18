@@ -8,12 +8,18 @@ from .parser import (
     analyze_function,
     parse_pcdump,
 )
+from .simulator import (
+    SimDecision,
+    simulate_function,
+)
 
 __all__ = [
     "Function",
     "Instruction",
     "Pass",
+    "SimDecision",
     "VirtualRegInfo",
     "analyze_function",
     "parse_pcdump",
+    "simulate_function",
 ]

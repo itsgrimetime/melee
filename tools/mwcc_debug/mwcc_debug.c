@@ -244,6 +244,80 @@ static void hook_fn(void *func_addr, void *hook_func,
     VirtualProtect(func_addr, prologue_len + 5, old, &old);
 }
 
+// ---------------------------------------------------------------------------
+// Coloring decision hook (Tier 2).
+//
+// Hooks colorgraph(int rclass, IGNode *head) at VA 0x4CE2D0. The function
+// walks the IGNode linked list (built by simplifygraph) and assigns each
+// virtual register a physical via the Chaitin-style greedy algorithm
+// (extracted from MWCC 7.0 source). After the original runs, we re-walk
+// the same linked list to dump:
+//   - iteration position (order virtuals are colored)
+//   - assigned physical register (node->assignedReg)
+//   - interferer count (node->arraySize)
+//   - flags (fSpilled etc.)
+//
+// IGNode layout for v1.2.5n (NOT the 7.0 layout — assignedReg is at +0x10):
+typedef struct IGNode
+{
+    /* +0x00 */ struct IGNode *next;
+    /* +0x04 */ void *_pad4;
+    /* +0x08 */ int useCount;
+    /* +0x0C */ int16 _someFlag;
+    /* +0x0E */ int16 degree;
+    /* +0x10 */ int16 assignedReg; // *** assigned physical reg, or -1 ***
+    /* +0x12 */ uint8 flags;
+    /* +0x13 */ uint8 _pad13;
+    /* +0x14 */ int16 arraySize;
+    /* +0x16 */ int16 array[1]; // variable-length neighbor indices
+} IGNode;
+
+#define IG_FLAG_SPILLED 0x01
+
+#define INTERFERENCEGRAPH (*(IGNode ***)0x587E3C)
+#define N_IGNODES (*(int *)0x587190)
+
+// colorgraph's prologue is 7 bytes (push ebx/esi/edi/ebp + sub esp, 8). Using
+// 5 would split the sub esp, 8 (83 ec 08) mid-instruction and corrupt the
+// trampoline. trampoline buffer must hold prologue (7) + jump (5) = 12 bytes.
+static unsigned char colorgraph_trampoline[24];
+
+// hook @ 0x4CE2D0, colorgraph
+static int __cdecl hook_colorgraph(int rclass, IGNode *head)
+{
+    typedef int(__cdecl * colorgraph_fn)(int, IGNode *);
+    int result;
+    IGNode *node;
+    int iter_idx;
+
+    // Call original first — it does the actual coloring
+    result = ((colorgraph_fn)colorgraph_trampoline)(rclass, head);
+
+    // Dump per-virtual decisions in iteration order
+    if (PCFILE && DEBUG_GUARD)
+    {
+        debug_printf("\nCOLORGRAPH DECISIONS (class=%d, result=%d)\n", rclass, result);
+        debug_printf("%-5s %-15s %-10s %-7s %-7s %s\n",
+                     "iter", "node@", "assignedReg", "degree", "nIntfr", "flags");
+        iter_idx = 0;
+        for (node = head; node; node = node->next)
+        {
+            debug_printf("%-5d 0x%08x      r%-9d %-7d %-7d 0x%02x%s\n",
+                         iter_idx, (uint32)node, (int)node->assignedReg,
+                         (int)node->degree, (int)node->arraySize, (int)node->flags,
+                         (node->flags & IG_FLAG_SPILLED) ? "  SPILLED" : "");
+            iter_idx++;
+            if (iter_idx >= 1000) // safety cap against cyclic next-pointers
+            {
+                debug_printf("(iteration cap reached at %d nodes)\n", iter_idx);
+                break;
+            }
+        }
+    }
+
+    return result;
+}
+
 static void install_hooks(void)
 {
     // stub hooks
@@ -253,6 +327,11 @@ static void install_hooks(void)
     // trampoline @ 004C2560, real function, not a stub so properly set it up
     hook_fn((void *)0x4C2560, hook_pcode_traverse,
             traverse_trampoline, 5);
+
+    // colorgraph @ 004CE2D0, register-coloring entry point (Tier 2 hook).
+    // Prologue is 7 bytes: push ebx/esi/edi/ebp (1 each) + sub esp, 8 (3).
+    hook_fn((void *)0x4CE2D0, hook_colorgraph,
+            colorgraph_trampoline, 7);
 }
 
 // debug output setup

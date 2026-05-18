@@ -115,28 +115,39 @@ melee-agent debug analyze build/mwcc_debug/lbarq.txt
 melee-agent debug analyze build/mwcc_debug/lbarq.txt --function lbArq_80014AC4
 ```
 
-Output shows:
+Output shows live ranges, interferences, and the candidate set for each
+virtual (the physicals NOT used by an interferer — i.e., the choices the
+allocator could have made).
 
+### Step 3: simulate what the allocator would pick (and why)
+
+The `simulate` command replays MWCC's actual algorithm (extracted from the
+7.0 source at git.wuffs.org/MWCC). For each virtual it predicts what physical
+the allocator would pick and shows the reasoning. Mismatches against actual
+highlight cases our model doesn't capture (caller-save kill, r0 special-case,
+iteration-order edge cases).
+
+```bash
+melee-agent debug simulate build/mwcc_debug/mnvibration.txt \
+    --function mnVibration_80248644 --all
 ```
- Virtual   Phys  Class     Live[first..last]    Uses  Interferes
---------  -----  --------  ------------------  -----  ----------
-     r35     r29  GPR-cs    12..47                  8  r34,r36,r37
-     r36     r27  GPR-cs    28..47                  4  r34,r35,r37
-     ...
 
-Coloring decisions (expected: callee-save allocated top-down
-from r31, caller-save bottom-up from r3):
-  r35 → r29.  Candidates: {r13..r31}  ← NOT top (allocator usually picks r31 first)
-  r36 → r27.  Candidates: {r13..r28,r30,r31}  ← NOT top (allocator usually picks r31 first)
-```
+The verified MWCC algorithm (Tier 2 — direct binary-hook confirmation):
+1. workingMask = caller-save regs (r3..r12) minus interferers' regs
+2. If non-empty: pick LOWEST set bit
+3. Else: obtain_nonvolatile_register() — dispenses **r31, r30, r29, r28, r27,
+   then r26, r25, ...** (TOP-DOWN from r31). Once dispensed, the reg is
+   added to the volatile pool and can be reused for non-interfering virtuals.
 
-When you see `← NOT top/bottom`, the allocator chose something other than its
-default-strategy pick — that's a real preference question worth digging into
-(maybe via /mwcc-inspect for the front-end view, or by re-arranging the C
-source to nudge the allocator).
+This is why r32 (highest-degree, lives whole function) often ends up at r26
+in big functions: by the time r32 is colored, r27..r31 have all been
+dispensed to earlier virtuals AND r32 interferes with their holders, so the
+next dispense is needed.
 
-When the choice MATCHES the default strategy, the question shifts: "what
-constraint forced this virtual into a different class than expected?"
+For full per-decision data including iteration order and the actual mapping
+of iter index → virtual → assigned physical, look at the `COLORGRAPH
+DECISIONS` sections in the raw pcdump. These come from the colorgraph hook
+in mwcc_debug.c (Tier 2 — fires once per register class per function).
 
 The wrapper:
 1. SSHes to the remote with the relative .c path
