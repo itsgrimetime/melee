@@ -757,6 +757,7 @@ void fn_80248A78(HSD_GObj* arg0)
     HSD_JObj* jobj;
     HSD_JObj* jobj2;
     HSD_JObj* jobj3;
+    f32 spacing_pre;
     HSD_JObj* jobj4;
     HSD_GObj* cursor_gobj;
     HSD_JObj* cursor_jobj;
@@ -881,8 +882,9 @@ void fn_80248A78(HSD_GObj* arg0)
             cursor_row = data2->x0[1];
             base_y = mnVibration_JObjGetTranslationY(jobj17);
             jobj18 = data3->jobjs[18];
+            spacing_pre = mnVibration_JObjGetTranslationY(jobj18) - base_y;
             jobj17 = data3->jobjs[17];
-            spacing = mnVibration_JObjGetTranslationY(jobj18) - base_y;
+            spacing = spacing_pre;
             temp_x = mnVibration_JObjGetTranslationX(jobj17);
             mnVibration_JObjSetTranslateX(cursor_jobj, temp_x);
             jobj17 = data3->jobjs[17];
