@@ -308,19 +308,57 @@ static int __cdecl hook_colorgraph(int rclass, IGNode *head)
     // Call original first — it does the actual coloring
     result = ((colorgraph_fn)colorgraph_trampoline)(rclass, head);
 
-    // Dump per-virtual decisions in iteration order
+    // Dump per-virtual decisions in iteration order. Now also walks the
+    // interferer array (node->array, arraySize entries of short indices)
+    // so agents can see exactly which other virtuals constrained the choice.
     if (PCFILE && DEBUG_GUARD)
     {
+        IGNode **ig_array;
+        int j;
+        ig_array = INTERFERENCEGRAPH;
         debug_printf("\nCOLORGRAPH DECISIONS (class=%d, result=%d)\n", rclass, result);
-        debug_printf("%-5s %-15s %-10s %-7s %-7s %s\n",
-                     "iter", "node@", "assignedReg", "degree", "nIntfr", "flags");
+        debug_printf("%-5s %-7s %-10s %-7s %-7s %s\n",
+                     "iter", "ig_idx", "assignedReg", "degree", "nIntfr", "flags");
         iter_idx = 0;
         for (node = head; node; node = node->next)
         {
-            debug_printf("%-5d 0x%08x      r%-9d %-7d %-7d 0x%02x%s\n",
-                         iter_idx, (uint32)node, (int)node->assignedReg,
+            // Find this node's index in interferencegraph[]. Linear scan;
+            // n_nodes is typically <100 so this is cheap.
+            int my_idx = -1;
+            int n = N_IGNODES;
+            if (n > 4096) n = 4096; // defensive cap
+            for (j = 0; j < n; j++)
+            {
+                if (ig_array[j] == node) { my_idx = j; break; }
+            }
+
+            debug_printf("%-5d %-7d r%-9d %-7d %-7d 0x%02x%s\n",
+                         iter_idx, my_idx, (int)node->assignedReg,
                          (int)node->degree, (int)node->arraySize, (int)node->flags,
                          (node->flags & IG_FLAG_SPILLED) ? "  SPILLED" : "");
+
+            // Dump interferer indices. Each entry in node->array is a short
+            // index into interferencegraph[]. We also resolve to the
+            // assignedReg of each interferer so agents can see what physicals
+            // were excluded from this node's workingMask.
+            if (node->arraySize > 0)
+            {
+                int n_intfr = node->arraySize;
+                if (n_intfr > 64) n_intfr = 64; // cap output to keep readable
+                debug_printf("      interferers:");
+                for (j = 0; j < n_intfr; j++)
+                {
+                    int idx = (int)node->array[j];
+                    int phys = -1;
+                    if (idx >= 0 && idx < N_IGNODES && ig_array[idx])
+                        phys = (int)ig_array[idx]->assignedReg;
+                    debug_printf(" %d=r%d", idx, phys);
+                }
+                if ((int)node->arraySize > n_intfr)
+                    debug_printf(" ...(%d more)", (int)node->arraySize - n_intfr);
+                debug_printf("\n");
+            }
+
             iter_idx++;
             if (iter_idx >= 1000) // safety cap against cyclic next-pointers
             {
