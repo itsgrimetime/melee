@@ -1,5 +1,14 @@
 """Parsing and analysis utilities for mwcc_debug pcdump.txt output."""
 
+from .colorgraph_parser import (
+    ColorgraphDecision,
+    ColorgraphSection,
+    ConstPropEvent,
+    FunctionEvents,
+    IGConstructedEvent,
+    find_function,
+    parse_hook_events,
+)
 from .parser import (
     Function,
     Instruction,
@@ -14,12 +23,19 @@ from .simulator import (
 )
 
 __all__ = [
+    "ColorgraphDecision",
+    "ColorgraphSection",
+    "ConstPropEvent",
     "Function",
+    "FunctionEvents",
+    "IGConstructedEvent",
     "Instruction",
     "Pass",
     "SimDecision",
     "VirtualRegInfo",
     "analyze_function",
+    "find_function",
+    "parse_hook_events",
     "parse_pcdump",
     "simulate_function",
 ]

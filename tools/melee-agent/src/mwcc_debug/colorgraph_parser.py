@@ -1,0 +1,183 @@
+"""Parser for COLORGRAPH DECISIONS / IG CONSTRUCTED / CONSTPROP RAN sections.
+
+These are emitted by the mwcc_debug hooks (Tier 2/3/3.5). Separate from the
+pcode-pass parser in parser.py — the hook output has its own structured format
+that's easier to diff than the free-form pass dumps.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from typing import Optional
+
+
+_COLORGRAPH_HEADER_RE = re.compile(
+    r"^COLORGRAPH DECISIONS \(class=(\d+), result=(\d+)(?:, n_nodes=(\d+))?\)"
+)
+_IG_HEADER_RE = re.compile(r"^IG CONSTRUCTED \(class=(\d+), n_nodes=(\d+)\)")
+_CP_HEADER_RE = re.compile(
+    r"^CONSTPROP RAN \(changed_flag: before=(-?\d+) after=(-?\d+)\)"
+)
+_ITER_RE = re.compile(
+    r"^\s*(\d+)\s+(-?\d+)\s+r(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+0x([0-9a-fA-F]+)\s*$"
+)
+_INTERFERERS_RE = re.compile(r"^\s*interferers:\s*(.*)$")
+_FUNCTION_START_RE = re.compile(r"^Starting function\s+(\S+)")
+
+
+@dataclass
+class ColorgraphDecision:
+    """One row in a COLORGRAPH DECISIONS table."""
+
+    iter_idx: int
+    ig_idx: int  # -1 if linear scan didn't find it in interferencegraph[]
+    assigned_reg: int  # physical register (0..31 for GPR, etc.)
+    degree: int  # neighbor count at coloring time
+    n_interferers: int  # original interferer array size
+    flags: int  # IGNode flags (bit 0 = spilled, etc.)
+    interferers: list[tuple[int, int]] = field(default_factory=list)
+    # (interferer_idx, that_interferer's_assigned_reg) pairs
+
+
+@dataclass
+class ColorgraphSection:
+    class_id: int
+    result: int
+    n_nodes: int
+    decisions: list[ColorgraphDecision] = field(default_factory=list)
+
+
+@dataclass
+class IGConstructedEvent:
+    class_id: int
+    n_nodes: int
+
+
+@dataclass
+class ConstPropEvent:
+    changed_before: int
+    changed_after: int
+
+
+@dataclass
+class FunctionEvents:
+    """All hook-emitted events for one function in a pcdump."""
+
+    name: str
+    colorgraph_sections: list[ColorgraphSection] = field(default_factory=list)
+    ig_events: list[IGConstructedEvent] = field(default_factory=list)
+    cp_events: list[ConstPropEvent] = field(default_factory=list)
+
+
+def parse_hook_events(text: str) -> list[FunctionEvents]:
+    """Parse a pcdump.txt for hook-emitted events (COLORGRAPH DECISIONS,
+    IG CONSTRUCTED, CONSTPROP RAN), organized by function.
+
+    Returns a list of FunctionEvents in pcdump appearance order. Each
+    Function has its events (multiple colorgraph sections — one per
+    register class — and matching ig/cp events).
+    """
+    functions: list[FunctionEvents] = []
+    current_func: Optional[FunctionEvents] = None
+    current_cg: Optional[ColorgraphSection] = None
+    last_decision: Optional[ColorgraphDecision] = None
+    # True if next line might be the table header row we should skip
+    expect_header_row = False
+
+    lines = text.splitlines()
+    for line in lines:
+        stripped = line.rstrip()
+
+        m = _FUNCTION_START_RE.match(stripped)
+        if m:
+            current_func = FunctionEvents(name=m.group(1))
+            functions.append(current_func)
+            current_cg = None
+            last_decision = None
+            expect_header_row = False
+            continue
+
+        if current_func is None:
+            continue  # before first function — ignore
+
+        m = _COLORGRAPH_HEADER_RE.match(stripped)
+        if m:
+            n_nodes = int(m.group(3)) if m.group(3) else -1
+            current_cg = ColorgraphSection(
+                class_id=int(m.group(1)),
+                result=int(m.group(2)),
+                n_nodes=n_nodes,
+            )
+            current_func.colorgraph_sections.append(current_cg)
+            last_decision = None
+            expect_header_row = True  # next line will be "iter ig_idx ..."
+            continue
+
+        if expect_header_row:
+            expect_header_row = False
+            # Don't try to parse the header row as a decision
+            continue
+
+        m = _IG_HEADER_RE.match(stripped)
+        if m:
+            current_func.ig_events.append(IGConstructedEvent(
+                class_id=int(m.group(1)),
+                n_nodes=int(m.group(2)),
+            ))
+            current_cg = None
+            last_decision = None
+            continue
+
+        m = _CP_HEADER_RE.match(stripped)
+        if m:
+            current_func.cp_events.append(ConstPropEvent(
+                changed_before=int(m.group(1)),
+                changed_after=int(m.group(2)),
+            ))
+            current_cg = None
+            last_decision = None
+            continue
+
+        # Try parsing as a decision row (only if we're inside a colorgraph section)
+        if current_cg is not None:
+            m = _ITER_RE.match(stripped)
+            if m:
+                last_decision = ColorgraphDecision(
+                    iter_idx=int(m.group(1)),
+                    ig_idx=int(m.group(2)),
+                    assigned_reg=int(m.group(3)),
+                    degree=int(m.group(4)),
+                    n_interferers=int(m.group(5)),
+                    flags=int(m.group(6), 16),
+                )
+                current_cg.decisions.append(last_decision)
+                continue
+
+            # Try parsing as an interferers continuation line
+            m = _INTERFERERS_RE.match(stripped)
+            if m and last_decision is not None:
+                # Parse "idx=rN idx=rN ..." pairs
+                parts = m.group(1).split()
+                pairs = []
+                for p in parts:
+                    if "=r" not in p:
+                        continue
+                    idx_str, reg_str = p.split("=r", 1)
+                    try:
+                        idx = int(idx_str)
+                        reg = int(reg_str)
+                        pairs.append((idx, reg))
+                    except ValueError:
+                        continue
+                last_decision.interferers = pairs
+                continue
+
+    return functions
+
+
+def find_function(events: list[FunctionEvents], name: str) -> Optional[FunctionEvents]:
+    for f in events:
+        if f.name == name:
+            return f
+    return None
