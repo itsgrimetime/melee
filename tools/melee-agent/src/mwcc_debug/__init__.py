@@ -16,6 +16,13 @@ from .guidance import (
     format_suggestions,
     suggest,
 )
+from .patterns import (
+    PATTERNS,
+    MutationPattern,
+    get_pattern,
+    list_patterns,
+    patterns_for_category,
+)
 from .parser import (
     Function,
     Instruction,
@@ -43,6 +50,8 @@ __all__ = [
     "FunctionEvents",
     "IGConstructedEvent",
     "Instruction",
+    "MutationPattern",
+    "PATTERNS",
     "Pass",
     "ScoreBreakdown",
     "ScoreWeights",
@@ -55,8 +64,11 @@ __all__ = [
     "derive_target_from_function",
     "find_function",
     "format_suggestions",
+    "get_pattern",
+    "list_patterns",
     "parse_hook_events",
     "parse_pcdump",
+    "patterns_for_category",
     "score_function",
     "simulate_function",
     "suggest",

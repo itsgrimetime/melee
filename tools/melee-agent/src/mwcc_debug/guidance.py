@@ -15,6 +15,7 @@ from typing import Optional
 
 from .colorgraph_parser import FunctionEvents
 from .parser import Function, VirtualRegInfo, analyze_function
+from .patterns import PATTERNS, patterns_for_category
 from .scoring import ScoreBreakdown
 
 
@@ -23,9 +24,17 @@ class Suggestion:
     """One actionable nudge for the human reviewer."""
 
     virtual: int  # which virtual reg this concerns
-    category: str  # "interference" / "spill" / "lifetime"
+    category: str  # "interference" / "spill" / "rank" / "missing"
     description: str  # human-readable
     severity: str  # "high" / "medium" / "low" — for ordering
+    patterns: list[str] = None  # type: ignore[assignment]
+    # ^ list of pattern names from the catalog that might apply.
+    # Populated by suggest() based on category. Use format_suggestions()
+    # to render with pattern hints inlined.
+
+    def __post_init__(self) -> None:
+        if self.patterns is None:
+            self.patterns = []
 
 
 def suggest(
@@ -144,18 +153,42 @@ def suggest(
                 severity="low",
             ))
 
+    # Attach pattern hints. Each suggestion's category maps to one or
+    # more patterns from the catalog (see patterns.py:addresses).
+    for s in suggestions:
+        s.patterns = [p.name for p in patterns_for_category(s.category)]
+
     # Order by severity (high first), then by virtual number
     severity_order = {"high": 0, "medium": 1, "low": 2}
     suggestions.sort(key=lambda s: (severity_order.get(s.severity, 3), s.virtual))
     return suggestions
 
 
-def format_suggestions(suggestions: list[Suggestion]) -> str:
-    """Render suggestions as a human-readable report."""
+def format_suggestions(suggestions: list[Suggestion], with_patterns: bool = True) -> str:
+    """Render suggestions as a human-readable report.
+
+    If `with_patterns` is True (default), include named pattern hints
+    from the catalog after each suggestion. Use `debug pattern-catalog
+    <name>` to see the full pattern description + example.
+    """
     if not suggestions:
         return "No issues found — current coloring matches target."
     out = []
     for s in suggestions:
         marker = {"high": "!!", "medium": "!", "low": "·"}.get(s.severity, " ")
         out.append(f"  {marker} [r{s.virtual} / {s.category}] {s.description}")
+        if with_patterns and s.patterns:
+            pattern_titles = []
+            for name in s.patterns:
+                p = PATTERNS.get(name)
+                if p is not None:
+                    pattern_titles.append(f"`{p.name}` ({p.title})")
+            if pattern_titles:
+                out.append(
+                    f"     Patterns to try: {', '.join(pattern_titles)}"
+                )
+                out.append(
+                    f"     (run `melee-agent debug pattern-catalog <name>` "
+                    f"for examples)"
+                )
     return "\n".join(out)

@@ -33,6 +33,10 @@ from ..mwcc_debug import (
     simulate_function,
     suggest,
 )
+from ..mwcc_debug.patterns import (
+    PATTERNS,
+    list_patterns,
+)
 from ..mwcc_debug.source_patch import (
     get_decl_names,
     reorder_decls_in_function,
@@ -1280,3 +1284,106 @@ def enumerate_decl_orders(
             print(f"Applied to {target_path}. Verify with `git diff`.")
     else:
         print("Source reverted. Re-run with --keep-best to apply the win.")
+
+
+@debug_app.command(name="pattern-catalog")
+def pattern_catalog(
+    name: Annotated[
+        Optional[str],
+        typer.Argument(help="Optional pattern name. If omitted, lists all "
+                            "patterns."),
+    ] = None,
+    search: Annotated[
+        Optional[str],
+        typer.Option("--search", help="Filter the list by substring match "
+                                      "against pattern name/title."),
+    ] = None,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit catalog as JSON."),
+    ] = False,
+) -> None:
+    """Tier 7c: dump the catalog of recurring MWCC mutation patterns.
+
+    The catalog captures the small family of source mutations that
+    permuter keeps rediscovering across stuck functions — alias-split,
+    decl-order, u8↔u32 widening, drop-variadic-cast, subexpr-extract,
+    chained-init. Use as a starting point when staring at a stuck
+    function; `debug guide` will also cite pattern names directly.
+
+    Without arguments: lists all patterns with title and one-liner summary.
+    With `<name>`: shows the full pattern entry (when-to-try, example
+    before/after, mechanism).
+    """
+    if name is not None:
+        p = PATTERNS.get(name)
+        if p is None:
+            available = ", ".join(sorted(PATTERNS.keys()))
+            typer.echo(
+                f"unknown pattern: {name}\nAvailable: {available}",
+                err=True,
+            )
+            raise typer.Exit(2)
+        if json_out:
+            print(json.dumps({
+                "name": p.name,
+                "title": p.title,
+                "summary": p.summary,
+                "when_to_try": p.when_to_try,
+                "example_before": p.example_before,
+                "example_after": p.example_after,
+                "mechanism": p.mechanism,
+                "addresses": list(p.addresses),
+            }, indent=2))
+            return
+        print(f"Pattern: {p.name}")
+        print(f"Title:   {p.title}")
+        print(f"Addresses: {', '.join(p.addresses)}")
+        print()
+        print("Summary:")
+        print(f"  {p.summary}")
+        print()
+        print("When to try:")
+        print(f"  {p.when_to_try}")
+        print()
+        print("Example before:")
+        for line in p.example_before.splitlines():
+            print(f"  {line}")
+        print()
+        print("Example after:")
+        for line in p.example_after.splitlines():
+            print(f"  {line}")
+        print()
+        print("Mechanism:")
+        print(f"  {p.mechanism}")
+        return
+
+    patterns = list_patterns()
+    if search:
+        s = search.lower()
+        patterns = [p for p in patterns
+                    if s in p.name.lower() or s in p.title.lower()]
+        if not patterns:
+            print(f"No patterns matched: {search}")
+            return
+
+    if json_out:
+        print(json.dumps([{
+            "name": p.name,
+            "title": p.title,
+            "summary": p.summary,
+            "addresses": list(p.addresses),
+        } for p in patterns], indent=2))
+        return
+
+    print(f"MWCC mutation pattern catalog ({len(patterns)} entries):\n")
+    for p in patterns:
+        print(f"  {p.name}")
+        print(f"    {p.title}")
+        print(f"    Addresses: {', '.join(p.addresses)}")
+        print(f"    {p.summary}")
+        print()
+    print(
+        "Run `melee-agent debug pattern-catalog <name>` for full details "
+        "(example before/after, mechanism)."
+    )
