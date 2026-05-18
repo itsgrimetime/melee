@@ -883,6 +883,7 @@ void mnVibration_80248ED4(s32 arg0)
     HSD_Text* text;
     s32 i;
     MnVibrationData* data;
+    char* strbase = (char*) &mnVibration_803EECE0;
 
     (void) arg0;
     PAD_STACK(24);
@@ -897,19 +898,18 @@ void mnVibration_80248ED4(s32 arg0)
     HSD_JObjReqAnimAll(jobj, 0.0f);
     data = HSD_MemAlloc(sizeof(MnVibrationData));
     if (data == NULL) {
-        OSReport("couldn't allocate\n");
-        __assert("mnvibration.c", 0x3A7, "data");
+        OSReport(strbase + 0x30);
+        __assert(strbase + 0x48, 0x3A7, strbase + 0x58);
     }
     data->x0[0] = 0;
     data->x0[1] = 0;
-    data->x0[2] = 0;
-    data->x6[0] = (HSD_PadCopyStatus[0].err != 0) ? 0 : 1;
-    data->x0[3] = 0;
-    data->x6[1] = (HSD_PadCopyStatus[1].err != 0) ? 0 : 1;
-    data->x0[4] = 0;
-    data->x6[2] = (HSD_PadCopyStatus[2].err != 0) ? 0 : 1;
-    data->x0[5] = 0;
-    data->x6[3] = (HSD_PadCopyStatus[3].err != 0) ? 0 : 1;
+    for (i = 0; i < 4; i++) {
+        data->x0[i + 2] = 0;
+        data->x6[i] = (*((u8*) ((u8*) HSD_PadCopyStatus + (u8) i * 0x44) +
+                        0x41) != 0)
+                          ? 0
+                          : 1;
+    }
     data->scroll_offset = 0;
     data->texts[0] = NULL;
     data->texts[1] = NULL;
