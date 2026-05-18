@@ -752,6 +752,7 @@ void fn_802487A8(HSD_GObj* gobj)
 
 void fn_80248A78(HSD_GObj* arg0)
 {
+    f32 temp_y;
     MnVibrationData* temp_r30;
     f32 frame;
     HSD_JObj* jobj;
@@ -765,7 +766,6 @@ void fn_80248A78(HSD_GObj* arg0)
     f32 base_y;
     f32 spacing;
     f32 temp_x;
-    f32 temp_y;
     f32 temp_z;
     u8 cursor_row;
     HSD_GObj* cursor_gobj;
