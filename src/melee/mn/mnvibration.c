@@ -160,7 +160,7 @@ void fn_80247510(HSD_GObj* gobj)
     u8 cursor_row;
     u8 scroll_offset;
     s32 name_count;
-    s32 name_idx;
+    u8 name_idx;
     u8 rumble_setting;
     HSD_JObj* jobj;
     PAD_STACK(136);
@@ -704,9 +704,9 @@ void fn_802487A8(HSD_GObj* gobj)
                 new_var = var_r24;
                 {
                     HSD_JObj* temp_jobj3;
-                    temp_jobj3 = ((MnVibrationData*) (new_var3 =
-                                                         gobj->user_data))
-                                     ->jobjs[23];
+                    temp_jobj3 =
+                        ((MnVibrationData*) (new_var3 = gobj->user_data))
+                            ->jobjs[23];
                     if (temp_jobj3 != NULL) {
                         var_r26 = temp_jobj3->child;
                     }
