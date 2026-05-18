@@ -10,8 +10,10 @@ from src.mwcc_debug.patterns import (
 )
 
 
-def test_catalog_has_seven_named_patterns() -> None:
-    """The 7 patterns from the matching agent's session findings doc."""
+def test_catalog_has_eight_named_patterns() -> None:
+    """The 7 patterns from the original findings doc + the
+    param-iter-ceiling ceiling pattern added in the next session.
+    """
     expected = {
         "alias-split",
         "widen-u8-to-u32",
@@ -20,8 +22,20 @@ def test_catalog_has_seven_named_patterns() -> None:
         "subexpr-extract",
         "decl-order",
         "chained-init",
+        "param-iter-ceiling",
     }
     assert set(PATTERNS.keys()) == expected
+
+
+def test_param_iter_ceiling_is_a_ceiling_pattern() -> None:
+    """Verify the new ceiling pattern surfaces the "no fix" message."""
+    p = PATTERNS["param-iter-ceiling"]
+    # Title should signal ceiling
+    assert "CEILING" in p.title.upper()
+    # when_to_try should explicitly say not to attempt a fix
+    assert "DON'T" in p.when_to_try.upper() or "no known" in p.summary.lower()
+    # Mechanism should reference ig_idx
+    assert "ig_idx" in p.mechanism.lower()
 
 
 def test_every_pattern_has_required_fields() -> None:
@@ -74,7 +88,8 @@ def test_patterns_for_category_spill() -> None:
 
 
 def test_list_patterns_in_catalog_order() -> None:
-    """list_patterns should preserve insertion order (= original doc order)."""
+    """list_patterns should preserve insertion order (= original doc order
+    + later additions)."""
     patterns = list_patterns()
     names = [p.name for p in patterns]
     assert names == [
@@ -84,6 +99,7 @@ def test_list_patterns_in_catalog_order() -> None:
         "drop-variadic-cast",
         "subexpr-extract",
         "decl-order",
+        "param-iter-ceiling",
         "chained-init",
     ]
 

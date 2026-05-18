@@ -251,6 +251,74 @@ PATTERNS: dict[str, MutationPattern] = {
         ),
         addresses=("rank",),
     ),
+    "param-iter-ceiling": MutationPattern(
+        name="param-iter-ceiling",
+        title="Parameter loses to local in IG iteration order (CEILING)",
+        summary=(
+            "MWCC simplifygraph iterates the IG by DESCENDING ig_idx. "
+            "Parameters get LOW ig_idx (32, 33, 34 — first allocated by "
+            "the symbol table), while locals declared in the function "
+            "body get HIGHER ig_idx (35+). So locals are colored FIRST "
+            "and grab the top callee-saves (r31, r30, r29) via top-down "
+            "dispense. By the time a parameter is colored, it's stuck "
+            "with whatever's left. This is a STRUCTURAL CEILING — there "
+            "is no known C-source pattern that pushes a parameter's "
+            "ig_idx above a local's without changing the emitted .text."
+        ),
+        when_to_try=(
+            "DON'T try to fix it from C source. Recognize the signature "
+            "and escalate to Tier 6 (force-phys for hypothesis testing; "
+            "potentially a coalescenodes hook for production matching). "
+            "Signature: (a) parameter virtual (ig_idx 32-34) is at the "
+            "wrong physical, (b) the desired physical is held by a local "
+            "virtual with higher ig_idx, (c) no direct interference "
+            "between them, (d) force-phys with the desired mapping "
+            "produces the target .text, (e) enumerate-decl-orders finds "
+            "no win because locals' relative order doesn't change "
+            "parameters' ig_idx."
+        ),
+        example_before=(
+            "// Parameter gobj is virtual r32 (ig_idx 32)\n"
+            "// Local jobj is virtual r33 (ig_idx 33)\n"
+            "// Local i is virtual r34 (ig_idx 34)\n"
+            "// Coloring order (descending ig_idx): i → jobj → gobj\n"
+            "// Top-down dispense: i=r31, jobj=r30, gobj=r29\n"
+            "// But target wants gobj=r31 — UNREACHABLE from C source\n"
+            "void fn(HSD_GObj* gobj) {\n"
+            "    HSD_JObj* jobj;\n"
+            "    s32 i;\n"
+            "    // ...\n"
+            "}"
+        ),
+        example_after=(
+            "// No source-level fix exists.\n"
+            "// Things tried that DON'T work:\n"
+            "//   - Aliases: `HSD_GObj* g = gobj;` coalesces away\n"
+            "//   - volatile locals: changes emitted code\n"
+            "//   - Address-of-parameter: forces stack frame growth\n"
+            "//   - Decl-reorder: doesn't change parameter ig_idx\n"
+            "// Confirm the target IS reachable via:\n"
+            "//   melee-agent debug pcdump src/... --force-phys '32:31,...'\n"
+            "// If force-phys matches: document as Tier 6 case, move on."
+        ),
+        mechanism=(
+            "The IG node array is indexed by virtual number. Parameters "
+            "are assigned virtuals before any local declaration is "
+            "processed (they're added during function-signature parsing), "
+            "so they occupy the LOWEST virtual indices. simplifygraph "
+            "iterates this array from high index to low when building "
+            "the simplification stack, so high-index nodes are pushed "
+            "LAST and popped FIRST. The first virtuals popped get first "
+            "claim on the workingMask, and when workingMask is exhausted "
+            "(all caller-saves taken by interferers), they trigger "
+            "obtain_nonvolatile_register which dispenses r31, then r30, "
+            "etc. By the time the parameter's virtual is popped, the "
+            "high callee-saves are already taken by earlier dispenses. "
+            "No C-source reorder fixes this because parameter ig_idx is "
+            "fixed by C semantics (parameter list comes before locals)."
+        ),
+        addresses=("rank", "param-iter-ceiling"),
+    ),
     "chained-init": MutationPattern(
         name="chained-init",
         title="Chained init: `var_a = (var_b = 0);`",

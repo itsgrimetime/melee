@@ -178,6 +178,57 @@ def test_suggest_severity_ordering() -> None:
         assert severity_order[a] <= severity_order[b]
 
 
+def test_suggest_param_iter_ceiling() -> None:
+    """Detect: low-ig_idx virtual wants a physical held by higher-ig_idx
+    virtual, with no direct interference between them. This is the
+    parameter-loses-to-local-in-iter-order ceiling pattern.
+    """
+    # r32 (param-like, low ig_idx) wants r31, but actually got r0.
+    # r33 (higher ig_idx, local) holds r31.
+    # r32 and r33 don't interfere in the simple function above; they
+    # only share an instruction at the move that gets coalesced.
+    # Construct a Function where they explicitly don't interfere.
+    pre = Pass(name="BEFORE REGISTER COLORING")
+    pre_block = Block(index=0, succ=[], pred=[], labels=["L0"])
+    pre_block.instructions = [
+        make_ist("li", ("r", 33)),                   # r33 born
+        make_ist("add", ("r", 0), ("r", 33), ("r", 33)),  # r33 used
+        # r33 dies here. Now r32 can live without interference.
+        make_ist("mr", ("r", 32), ("r", 3)),         # r32 born (would be param load)
+        make_ist("add", ("r", 0), ("r", 32), ("r", 32)),  # r32 used
+    ]
+    pre.blocks.append(pre_block)
+    post = Pass(name="AFTER REGISTER COLORING")
+    post_block = Block(index=0, succ=[], pred=[], labels=["L0"])
+    post_block.instructions = [
+        make_ist("li", ("r", 31)),                   # r33 → r31
+        make_ist("add", ("r", 0), ("r", 31), ("r", 31)),
+        make_ist("mr", ("r", 0), ("r", 3)),          # r32 → r0
+        make_ist("add", ("r", 0), ("r", 0), ("r", 0)),
+    ]
+    post.blocks.append(post_block)
+    fn = Function(name="test_fn", passes=[pre, post])
+
+    # Target wants r32 at r31 (would be the agent's hypothesized "natural"
+    # allocation that force-phys can produce).
+    target = {"function": "test_fn", "virtuals": {32: 31}}
+    result = score_function(fn, target)
+    suggestions = suggest(fn, result)
+
+    # Should produce a high-severity param-iter-ceiling suggestion
+    ceiling = next((s for s in suggestions
+                    if s.category == "param-iter-ceiling"), None)
+    assert ceiling is not None, (
+        f"expected param-iter-ceiling category, got: "
+        f"{[(s.virtual, s.category, s.severity) for s in suggestions]}"
+    )
+    assert ceiling.severity == "high"
+    assert ceiling.virtual == 32
+    assert "ig_idx" in ceiling.description.lower()
+    assert "force-phys" in ceiling.description
+    assert "Tier 6" in ceiling.description
+
+
 def test_custom_weights() -> None:
     fn = build_simple_function()
     target = {"function": "test_fn", "virtuals": {32: 99}}

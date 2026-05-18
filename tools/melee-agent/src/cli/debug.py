@@ -1497,6 +1497,34 @@ def enumerate_decl_orders(
                  "leave it applied. Default reverts to original.",
         ),
     ] = False,
+    iterate: Annotated[
+        bool,
+        typer.Option(
+            "--iterate",
+            help="After finding the best ordering, apply it and re-run "
+                 "the enumeration from the new baseline. Repeats until no "
+                 "improvement found (or --iterate-max reached). Stacks "
+                 "small wins below the per-iteration threshold. Implies "
+                 "--keep-best.",
+        ),
+    ] = False,
+    iterate_max: Annotated[
+        int,
+        typer.Option(
+            "--iterate-max",
+            help="Cap on --iterate rounds. Prevents infinite loops if a "
+                 "win-finding cycle emerges. Default 10.",
+        ),
+    ] = 10,
+    iterate_threshold: Annotated[
+        float,
+        typer.Option(
+            "--iterate-threshold",
+            help="Per-round threshold when --iterate is set. Smaller than "
+                 "--threshold lets the loop stack micro-wins (0.04% type) "
+                 "that don't qualify as a single big win.",
+        ),
+    ] = 0.01,
     json_out: Annotated[
         bool,
         typer.Option("--json", help="Emit results as JSON."),
@@ -1587,47 +1615,143 @@ def enumerate_decl_orders(
         print(f"Source:      {target_path}")
         print(f"Strategy:    {strategy} ({len(candidates)} candidates)")
         print(f"Baseline:    {baseline:.2f}%")
+        if iterate:
+            print(f"Mode:        --iterate (max {iterate_max} rounds, "
+                  f"per-round threshold {iterate_threshold:.3f}%)")
         print()
 
-    results: list[dict] = []
-    best_pct = baseline
-    best_label: Optional[str] = None
-    best_perm: Optional[list[int]] = None
+    # When --iterate is set we want to stack wins. Each round:
+    #   1. Re-read `current` as the baseline-of-the-round
+    #   2. Sweep all candidates against it
+    #   3. If best > iterate_threshold, apply it as the new baseline
+    #   4. Else, terminate the iterate loop
+    # If --iterate is NOT set, we just do one round and use the larger
+    # --threshold to decide whether to apply (controlled by --keep-best).
 
-    try:
+    def run_one_round(round_idx: int, current_text: str,
+                      round_baseline: float, round_threshold: float
+                      ) -> tuple[Optional[str], float, Optional[list[int]], list[dict]]:
+        """Run one enumeration sweep starting from `current_text`.
+
+        Returns (best_label, best_pct, best_perm, per-candidate results).
+        """
+        r_results: list[dict] = []
+        r_best_pct = round_baseline
+        r_best_label: Optional[str] = None
+        r_best_perm: Optional[list[int]] = None
+
+        if iterate and not json_out:
+            print(f"== Round {round_idx} ==")
+            print(f"  Baseline: {round_baseline:.2f}%")
+
         for label, perm in candidates:
-            patched = reorder_decls_in_function(orig, function, perm)
+            patched = reorder_decls_in_function(current_text, function, perm)
             if patched is None:
-                # Permutation rejected — shouldn't happen with our generators
                 continue
             target_path.write_text(patched)
             pct = _build_and_match(unit, function, melee_root)
-            target_path.write_text(orig)  # revert before next iter
+            target_path.write_text(current_text)  # revert before next iter
             if pct is None:
-                # Build failed — record as such and continue
                 if not json_out:
                     print(f"  {label}: BUILD FAILED")
-                results.append({"label": label, "match_pct": None, "delta": None})
+                r_results.append({"label": label, "match_pct": None,
+                                  "delta": None})
                 continue
-            delta = pct - baseline
-            results.append({"label": label, "match_pct": pct, "delta": delta})
+            delta = pct - round_baseline
+            r_results.append({"label": label, "match_pct": pct,
+                              "delta": delta})
             tag = ""
-            if delta >= threshold:
+            if delta >= round_threshold:
                 tag = "  WIN"
-                if pct > best_pct:
-                    best_pct = pct
-                    best_label = label
-                    best_perm = perm
+                if pct > r_best_pct:
+                    r_best_pct = pct
+                    r_best_label = label
+                    r_best_perm = perm
             elif delta > 0:
                 tag = "  (improved)"
             elif delta < 0:
                 tag = "  (worse)"
             if not json_out:
                 print(f"  {label}: {pct:.2f}%  delta={delta:+.2f}%{tag}")
+        return r_best_label, r_best_pct, r_best_perm, r_results
+
+    all_rounds: list[dict] = []
+    current = orig
+    current_pct = baseline
+    applied_chain: list[str] = []  # labels of rounds that we kept
+
+    try:
+        if not iterate:
+            # Single sweep — preserve previous behavior.
+            best_label, best_pct, best_perm, results = run_one_round(
+                round_idx=0,
+                current_text=current,
+                round_baseline=baseline,
+                round_threshold=threshold,
+            )
+            all_rounds.append({
+                "round": 0,
+                "baseline_pct": baseline,
+                "best_label": best_label,
+                "best_pct": best_pct,
+                "results": results,
+            })
+        else:
+            # Iterate mode: each round must clear iterate_threshold to
+            # continue. We always commit the win for the round (writes
+            # back to disk before next sweep).
+            for r_idx in range(iterate_max):
+                r_best_label, r_best_pct, r_best_perm, r_results = (
+                    run_one_round(
+                        round_idx=r_idx,
+                        current_text=current,
+                        round_baseline=current_pct,
+                        round_threshold=iterate_threshold,
+                    )
+                )
+                all_rounds.append({
+                    "round": r_idx,
+                    "baseline_pct": current_pct,
+                    "best_label": r_best_label,
+                    "best_pct": r_best_pct,
+                    "results": r_results,
+                })
+                if r_best_label is None or r_best_perm is None:
+                    if not json_out:
+                        print(f"  No more wins; stopping iterate loop.")
+                    break
+                # Apply the round's winner and use it as the next baseline
+                patched = reorder_decls_in_function(
+                    current, function, r_best_perm
+                )
+                if patched is None:
+                    if not json_out:
+                        print(f"  Could not re-apply best perm "
+                              f"({r_best_label}); stopping.")
+                    break
+                current = patched
+                current_pct = r_best_pct
+                applied_chain.append(r_best_label)
+                if not json_out:
+                    print(f"  ** Applied {r_best_label}; new baseline "
+                          f"{current_pct:.2f}%")
+                    print()
+            # After the loop, `current` holds the latest patched text.
+            # The top-level best_pct/best_label reflect the cumulative
+            # state vs the original baseline.
+            best_pct = current_pct
+            best_label = (" + ".join(applied_chain)
+                          if applied_chain else None)
+            best_perm = None  # n/a in iterate mode — we already applied
     finally:
-        # Restore original at the very end (in case of unexpected error)
-        target_path.write_text(orig)
-        # Re-build to restore prior state in report.json
+        # In iterate-with-keep mode, leave the final `current` applied.
+        # In all other modes (default, single-sweep with/without keep_best),
+        # revert to the very original.
+        keep_final = iterate or (keep_best and best_pct > baseline)
+        if keep_final and current != orig:
+            target_path.write_text(current)
+        else:
+            target_path.write_text(orig)
         subprocess.run(
             ["ninja", f"build/GALE01/src/{unit}.o",
              "build/GALE01/report.json"],
@@ -1640,17 +1764,27 @@ def enumerate_decl_orders(
             "baseline_pct": baseline,
             "best_label": best_label,
             "best_pct": best_pct,
-            "results": results,
+            "iterate": iterate,
+            "applied_chain": applied_chain if iterate else [],
+            "rounds": all_rounds,
         }, indent=2))
         return
 
     print()
     if best_label is None:
-        print(f"No ordering improved match by ≥{threshold:.2f}%.")
+        if iterate:
+            print(f"No wins clearing iterate-threshold "
+                  f"{iterate_threshold:.3f}% in any round.")
+        else:
+            print(f"No ordering improved match by ≥{threshold:.2f}%.")
         return
-    print(f"Best: {best_label} → {best_pct:.2f}% (delta {best_pct - baseline:+.2f}%)")
+    print(f"Best: {best_label} → {best_pct:.2f}% "
+          f"(delta {best_pct - baseline:+.2f}%)")
 
-    if keep_best and best_perm is not None:
+    if iterate:
+        print(f"Applied {len(applied_chain)} round(s) to {target_path}. "
+              f"Verify with `git diff`.")
+    elif keep_best and best_perm is not None:
         patched = reorder_decls_in_function(orig, function, best_perm)
         if patched is not None:
             target_path.write_text(patched)
@@ -2540,3 +2674,159 @@ def ceiling(
     print(f"== VERDICT: {verdict} ==")
     for rec in recommendations:
         print(f"  {rec}")
+
+
+@debug_app.command(name="rank-callees")
+def rank_callees(
+    function: Annotated[
+        str,
+        typer.Option(
+            "--function", "-f",
+            help="Function to analyze (required)",
+        ),
+    ],
+    pcdump: Annotated[
+        Optional[Path],
+        typer.Argument(
+            help="Path to pcdump.txt. Omit to auto-resolve via --function "
+                 "from the cache.",
+        ),
+    ] = None,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit as JSON."),
+    ] = False,
+) -> None:
+    """Predict the callee-save cascade for a function before compiling.
+
+    Lists callee-save virtuals (those that got r13-r31) sorted by
+    ig_idx descending — the order MWCC's simplifygraph processes them.
+    Higher ig_idx = colored first = gets r31, r30, r29, ... via
+    top-down nonvolatile dispense.
+
+    Useful for predicting the param-iter-ceiling: if your target wants
+    a parameter virtual (low ig_idx) at r31 but several locals have
+    higher ig_idx, the cascade will give those locals r31 first and
+    the parameter will land lower. No source-level fix.
+    """
+    pcdump = _resolve_pcdump_path(pcdump, function)
+    text = pcdump.read_text()
+    events_list = parse_hook_events(text)
+    fn_events = find_function(events_list, function)
+    if fn_events is None or not fn_events.colorgraph_sections:
+        # Fall back to analyze-derived data if no hook events
+        fns = parse_pcdump(text)
+        fn = next((f for f in fns if f.name == function), None)
+        if fn is None:
+            _abort_function_not_in_dump(function, [f.name for f in fns])
+        infos = analyze_function(fn)
+        # No ig_idx info from this path; only sort by virtual num
+        callee_saves = [v for v in infos
+                        if v.physical is not None and 13 <= v.physical <= 31]
+        callee_saves.sort(key=lambda v: -v.virtual)
+        if json_out:
+            print(json.dumps({
+                "function": function,
+                "source": "analyze (no hook events)",
+                "callees": [{
+                    "virtual": v.virtual,
+                    "ig_idx": None,
+                    "physical": v.physical,
+                } for v in callee_saves],
+            }, indent=2))
+            return
+        print(f"Function: {function}")
+        print(f"Source:   analyze (no COLORGRAPH DECISIONS in dump)")
+        print()
+        if not callee_saves:
+            print("No callee-save virtuals (r13-r31) found.")
+            return
+        print(f"{'virtual':>8}  {'phys':>4}  {'note':<30}")
+        for v in callee_saves:
+            note = "param-like (low virtual #)" if v.virtual <= 34 else ""
+            print(f"  r{v.virtual:<6}  r{v.physical:<3}  {note}")
+        return
+
+    # Build the cascade from COLORGRAPH DECISIONS sections.
+    # Decisions are emitted in iter order (which is descending ig_idx order
+    # for the virtual-reg nodes).
+    rows: list[dict] = []
+    for sec in fn_events.colorgraph_sections:
+        for d in sec.decisions:
+            if d.ig_idx < 0:
+                continue  # physical-reg sentinel nodes — skip
+            if not (13 <= d.assigned_reg <= 31):
+                continue  # not a callee-save
+            rows.append({
+                "iter": d.iter_idx,
+                "ig_idx": d.ig_idx,
+                "assigned_reg": d.assigned_reg,
+                "degree": d.degree,
+                "class_id": sec.class_id,
+            })
+
+    # Sort by ig_idx descending (= iter order = coloring order)
+    rows.sort(key=lambda r: -r["ig_idx"])
+
+    # Top-down dispense prediction: the i-th popped virtual gets r(31-i)
+    # if workingMask is empty. (workingMask non-empty would pick a caller-
+    # save first; the cascade prediction is only meaningful for callee-save-
+    # bound virtuals — which is what we filtered to above.)
+    expected_seq = list(range(31, 12, -1))  # r31, r30, ..., r13
+
+    enriched = []
+    for i, r in enumerate(rows):
+        expected = expected_seq[i] if i < len(expected_seq) else None
+        is_param_like = r["ig_idx"] <= 34
+        match = (expected is not None and r["assigned_reg"] == expected)
+        enriched.append({
+            **r,
+            "expected": expected,
+            "expected_match": match,
+            "is_param_like": is_param_like,
+        })
+
+    if json_out:
+        print(json.dumps({
+            "function": function,
+            "source": "COLORGRAPH DECISIONS",
+            "callees": enriched,
+        }, indent=2))
+        return
+
+    print(f"Function: {function}")
+    print(f"Source:   COLORGRAPH DECISIONS")
+    print()
+    print(
+        f"  Predicting the callee-save cascade. Higher ig_idx → colored "
+        f"first → gets top of dispense pool."
+    )
+    print()
+    print(
+        f"  {'ig_idx':>7}  {'phys':>4}  {'predict':>7}  {'deg':>3}  notes"
+    )
+    print(f"  {'-'*7}  {'-'*4}  {'-'*7}  {'-'*3}  -----")
+    for r in enriched:
+        notes = []
+        if r["is_param_like"]:
+            notes.append("param-like (low ig_idx)")
+        if r["expected"] is not None and not r["expected_match"]:
+            notes.append(f"got r{r['assigned_reg']} not r{r['expected']}")
+        notes_str = "; ".join(notes)
+        expected_str = (f"r{r['expected']}" if r["expected"] is not None
+                        else "-")
+        print(
+            f"  {r['ig_idx']:>7}  r{r['assigned_reg']:<3}  {expected_str:>7}  "
+            f"{r['degree']:>3}  {notes_str}"
+        )
+
+    # Footer: surface param-iter-ceiling if any
+    params = [r for r in enriched if r["is_param_like"]]
+    if any(p["assigned_reg"] != p.get("expected", -1) for p in params):
+        print()
+        print(
+            "Note: at least one param-like virtual (low ig_idx) landed "
+            "below its predicted top-down position. This is the typical "
+            "param-iter-ceiling signature — see `debug pattern-catalog "
+            "param-iter-ceiling` for the full pattern."
+        )

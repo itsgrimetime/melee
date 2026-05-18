@@ -110,9 +110,54 @@ def suggest(
             ))
             continue
 
-        # No direct blocker — virtual got an unexpected scratch reg, perhaps
-        # because its interferer count is too low (not seen as nonvolatile-
-        # worthy) or because iteration order put it at a bad slot.
+        # No direct blocker. Check for the param-iter-ceiling pattern:
+        # a low-ig_idx virtual (parameter-like) wants a high callee-save
+        # that's held by a HIGHER-ig_idx virtual (local). Descending
+        # ig_idx iteration order means the local was colored first.
+        # This is a structural ceiling — surface it with the catalog
+        # pattern name so the agent stops investigating.
+        owner_of_target: Optional[int] = None
+        owner_ig_idx: Optional[int] = None
+        for other_virt, other in infos.items():
+            if other.physical == tgt_phys and other_virt != v:
+                owner_of_target = other_virt
+                owner_ig_idx = other_virt  # virtual num == ig_idx for IG nodes
+                break
+
+        # Heuristic: parameter virtuals are typically the LOWEST-numbered.
+        # 32-34 is a safe band (covers args0-args2 in PowerPC EABI).
+        # If our wrong virtual is in that band AND a higher-numbered
+        # virtual owns the target physical, it's the param-iter-ceiling.
+        is_param_like = v <= 34
+        local_owns_target = (
+            owner_of_target is not None and owner_of_target > v
+        )
+
+        if is_param_like and local_owns_target:
+            suggestions.append(Suggestion(
+                virtual=v, category="param-iter-ceiling",
+                description=(
+                    f"r{v} (low ig_idx, parameter-like) wants r{tgt_phys}, "
+                    f"but r{tgt_phys} is held by r{owner_of_target} "
+                    f"(higher ig_idx, local). MWCC simplifygraph iterates "
+                    f"the IG in DESCENDING ig_idx order, so r{owner_of_target} "
+                    f"is colored first and grabs r{tgt_phys}. r{v} gets "
+                    f"r{actual_phys} from whatever's left. This is a "
+                    f"STRUCTURAL CEILING — no known C-source pattern pushes "
+                    f"a parameter's ig_idx above a local's. Confirm via "
+                    f"`debug rank-callees -f <fn>` (shows the cascade). "
+                    f"To verify the target is reachable at all, run "
+                    f"`debug pcdump <c_file> --force-phys '{v}:{tgt_phys},"
+                    f"{owner_of_target}:{actual_phys}'`. If force-phys "
+                    f"matches: document as Tier 6 case, move on."
+                ),
+                severity="high",
+            ))
+            continue
+
+        # Generic rank issue — no direct blocker but also not the param
+        # ceiling. Could be a smaller iteration-order rearrange the agent
+        # might fix with decl-order tricks.
         candidates_str = (
             ", ".join(f"r{c}" for c in sorted(info.candidates)[:8])
             if info.candidates else "(none)"
