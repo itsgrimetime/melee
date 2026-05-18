@@ -621,6 +621,7 @@ void fn_802487A8(HSD_GObj* gobj)
     u8 err;
     u8* data_bytes;
     void* walker_b_clear;
+    u8 anim_byte_chain;
     void* gobj_user_data_alias;
     s32 port_b_alias;
     void* walker_b_set;
@@ -717,7 +718,8 @@ void fn_802487A8(HSD_GObj* gobj)
                     ((MnVibrationData*) mnVibration_804D6C28->user_data)
                         ->jobjs[mnVibration_804D4FE8[port_a]];
                 HSD_JObjReqAnimAll(rumble_indicator,
-                                   (f32) data_bytes[port_a + 2]);
+                                   (f32) (anim_byte_chain =
+                                              data_bytes[port_a + 2]));
                 HSD_JObjAnimAll(rumble_indicator);
                 port_b_alias = port_a;
                 {
