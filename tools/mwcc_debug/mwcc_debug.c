@@ -290,6 +290,16 @@ static unsigned char simplifygraph_trampoline[24];
 // (9) + JMP (5) = 14, rounded up to 24.
 static unsigned char build_ig_trampoline[24];
 
+// propagateconstants at 0x52B530: prologue 14 bytes
+//   push ebx (1) + push ebp (1) + push 0 imm8 (2) +
+//   mov [0x58826c], 0 (10 bytes — opcode+modrm+addr+imm32)
+// Trampoline needs prologue (14) + JMP (5) = 19, rounded to 32.
+static unsigned char propagateconstants_trampoline[32];
+
+// constpropchanged flag (Tier 3.5) — read this after propagateconstants
+// returns to see if anything was actually propagated.
+#define CONSTPROP_CHANGED_FLAG (*(int *)0x58826C)
+
 // obtain_nonvolatile_register variants: 8-byte prologue (push ebx + mov ebx,
 // [esp+0xc] + movsx eax, bx). Each per-class function needs its own
 // trampoline.
@@ -413,6 +423,32 @@ static int __cdecl hook_build_ig(void *proc, int rclass, int unknown)
     return result;
 }
 
+// propagateconstants hook (Tier 3.5) — fires once per (function, optimization
+// round) when MWCC's constant propagation pass runs. Reads the
+// CONSTPROP_CHANGED_FLAG (set by propagateconstantstoblock arms when any
+// constant was propagated) so we know whether this pass actually did
+// anything.
+//
+// The headline use case: for scroll_offset-in-mnVibration-style cases, we
+// expect CP to NOT fire (because the cleanup-loop "use of scroll_offset"
+// got inlined to a literal-0 instruction at PCode gen — there's nothing
+// for CP to propagate). This empirically confirms our mechanism theory.
+static void __cdecl hook_propagateconstants(void)
+{
+    typedef void(__cdecl * fn_t)(void);
+    int changed_before, changed_after;
+
+    changed_before = CONSTPROP_CHANGED_FLAG;
+    ((fn_t)propagateconstants_trampoline)();
+    changed_after = CONSTPROP_CHANGED_FLAG;
+
+    if (PCFILE && DEBUG_GUARD)
+    {
+        debug_printf("\nCONSTPROP RAN (changed_flag: before=%d after=%d)\n",
+                     changed_before, changed_after);
+    }
+}
+
 // simplifygraph hook — captures the worklist construction.
 // Returns the head of the linked-list-of-virtuals-to-color. Argument is
 // the register class. We just log when it's called + the return head.
@@ -468,6 +504,12 @@ static void install_hooks(void)
     // mov ebx,[esp+0x10] (4).
     hook_fn((void *)0x530A00, hook_build_ig,
             build_ig_trampoline, 9);
+
+    // propagateconstants @ 0x52B530 (Tier 3.5 hook) — runs once per
+    // function before coloring. Prologue 14 bytes: push ebx + push ebp +
+    // push 0 (imm8) + mov [0x58826c], 0 (10 bytes).
+    hook_fn((void *)0x52B530, hook_propagateconstants,
+            propagateconstants_trampoline, 14);
 
     // simplifygraph @ 0x4CE400 — DISABLED for now. Adding this hook crashed
     // mwcceppc at 0x4cc3b9 (memory write through a global pointer + index)

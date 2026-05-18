@@ -28,6 +28,46 @@ simplification). Adding a hook on `simplifygraph` would surface this.
 Also the workingMask state per-decision is computed but not stored
 across the loop — would need an in-loop hook (much more invasive).
 
+## Tier 3.5 — mechanism investigation (propagateconstants hook + PCode-gen finding) — ✅ DONE
+
+Investigation triggered by the matching agent reporting that their
+"use scroll_offset as NULL store source" attempt produced no new
+interferences for r36 — they observed MWCC was "splitting the live
+range" but didn't know the mechanism.
+
+Implemented in commits described below. Three findings:
+
+**A.** Empirical proof via pcdump: scroll_offset's "split" between
+cleanup-loop and j-loop is present in the EARLIEST pass (BEFORE GLOBAL
+OPTIMIZATION) — `li r50, 0; stw r50, 112(r45)` for cleanup, `lbz r36,
+10(r39)` for j-loop. Two distinct virtuals from creation.
+
+**B.** Cross-source-form invariance: baseline source (`= NULL` literal)
+and experimental (`= (HSD_Text*)(s32) scroll_offset`) produce
+**byte-identical** IR in BEFORE GLOBAL OPTIMIZATION. MWCC's PCode
+generator inlines compile-time-known constants at the use site, erasing
+C variable identity. No C-source pattern can defeat this when the
+constant is statically provable.
+
+**C.** Optimization-pass invariance: r50 is unchanged across all 8
+optimization passes (verified by Tier 3.5 propagateconstants hook at
+VA 0x52B530). CP fires but doesn't touch r50 — because there's nothing
+to propagate after PCode gen already inlined the constant.
+
+The propagateconstants hook emits `CONSTPROP RAN (changed_flag: before=X
+after=Y)` events. For functions where CP changes something, the flag
+flips. For unchanged functions, it stays. Useful general visibility into
+which functions get heavy CP treatment vs. which arrive at PCode gen
+already-optimized.
+
+**Implication for matching cascades:** when the binary hook shows a
+cleanup-loop "constant-store" pattern (`li rX, 0; stw rX, ...`) paired
+with a runtime-load pattern (`lbz rY, ...`) elsewhere in the same
+function, both deriving from the same C variable — those virtuals are
+unmergeable through pure C source. Document the case and move on.
+
+Documented in [`docs/mwcc-allocator-mechanism-deep-dive.md`](mwcc-allocator-mechanism-deep-dive.md).
+
 ## Tier 3 — hook IG construction + cross-ref 7.0 source — ✅ DONE
 
 Implemented in commits described below. Two parts:
