@@ -546,7 +546,7 @@ void mnVibration_80248644(HSD_GObj* arg0)
     s32 i;
     HSD_JObj* jobj17;
     HSD_JObj* child;
-    u8 scroll_offset;
+    u8 scroll_offset = 0;
     s32 j;
     s32 name_idx;
     s32 count;
@@ -555,7 +555,7 @@ void mnVibration_80248644(HSD_GObj* arg0)
     for (i = 0; i < 8; i++) {
         if (data->texts[i] != NULL) {
             HSD_SisLib_803A5CC4(ptr2->texts[i]);
-            data->texts[i] = NULL;
+            data->texts[i] = (HSD_Text*) (s32) scroll_offset;
         }
     }
     jobj17 = data->jobjs[17];
