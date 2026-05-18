@@ -155,6 +155,16 @@ finished building the interference graph for that class — useful for
 ordering visibility (which function/class is being processed at any
 given point in the dump). Tier 3 hook.
 
+And `CONSTPROP RAN (changed_flag: before=X after=Y)` event lines: one per
+function, marking when constant propagation fired. The `changed_flag`
+indicates whether CP modified anything. Tier 3.5 hook — useful for
+identifying functions where CP played a role (and conversely, confirming
+when an apparent variable-split happened at PCode generation rather than
+in CP).
+
+For deep diagnosis of why scroll_offset-style variable splits happen,
+see [`docs/mwcc-allocator-mechanism-deep-dive.md`](../../docs/mwcc-allocator-mechanism-deep-dive.md).
+
 The wrapper:
 1. SSHes to the remote with the relative .c path
 2. Remote: acquires a lock, `git pull --rebase` (so it sees current master), installs patched DLL, runs `mwcceppc.exe` with stock Melee flags

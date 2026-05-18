@@ -13,6 +13,45 @@ Looking at the experimental source's `BEFORE GLOBAL OPTIMIZATION` pass (the EARL
 
 This means the split is **NOT** a later optimization pass (it's there from the start). The mechanism is:
 
+### Empirical confirmation: baseline vs experimental IR are byte-identical
+
+The most striking evidence: compile the baseline source (`data->texts[i] = NULL;`) and the experimental source (`data->texts[i] = (HSD_Text*)(s32) scroll_offset;`) and compare the BEFORE GLOBAL OPTIMIZATION pass. The cleanup-loop NULL store is:
+
+**Baseline:**
+```
+li   r50, 0
+stw  r50, 112(r45)
+```
+
+**Experimental (with `u8 scroll_offset = 0;` used as the source):**
+```
+li   r50, 0
+stw  r50, 112(r45)
+```
+
+**Byte-identical.** MWCC's PCode generation produces the same IR regardless of whether the C source writes `NULL` literal or references a variable holding the constant 0. The variable identity is **completely erased** at PCode construction — MWCC tracks the VALUE (which is 0), not the variable name.
+
+This means the matching agent's "use scroll_offset as the cleanup-loop NULL source" approach is provably equivalent to the baseline at the IR level. There was no way it could have worked.
+
+### Empirical confirmation #2: r50 is unchanged across ALL optimization passes
+
+Tracking r50 (the cleanup-loop scroll_offset virtual) across every pass marker in the pcdump:
+
+| Pass | r50 in cleanup-loop body |
+|------|---|
+| BEFORE GLOBAL OPTIMIZATION | `li r50, 0; stw r50, 112(r45)` |
+| AFTER VALUE NUMBERING | `li r50, 0; stw r50, 112(r45)` |
+| AFTER COPY PROPAGATION | `li r50, 0; stw r50, 112(r45)` |
+| AFTER CODE MOTION | `li r50, 0; stw r50, 112(r45)` |
+| AFTER LOOP TRANSFORMATIONS | `li r50, 0; stw r50, 112(r45)` |
+| AFTER CONSTANT PROPAGATION | `li r50, 0; stw r50, 112(r45)` |
+| AFTER INSTRUCTION SCHEDULING | `li r50, 0; stw r50, 112(r45)` |
+| AFTER PEEPHOLE FORWARD | `li r50, 0; stw r50, 112(r45)` |
+
+**Byte-identical at every checkpoint.** None of the optimization passes touched r50. The Tier 3.5 propagateconstants hook (commit below) confirms CP DID fire for this function (changed_flag flipped) but didn't modify scroll_offset's cleanup-loop encoding — because there was nothing left to propagate after PCode generation already inlined the constant.
+
+This is as definitive as observational evidence gets. The mechanism is PCode generation, full stop.
+
 **MWCC's PCode generation inlines compile-time-known constants at the use site, creating a fresh temporary register rather than referencing the source variable.**
 
 When MWCC's front-end IR-builder sees:
