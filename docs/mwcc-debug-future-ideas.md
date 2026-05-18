@@ -22,11 +22,81 @@ and algorithm docs have been corrected.
 IGNode struct layout for v1.2.5n (different from 7.0!): see
 `tools/mwcc_debug/mwcc_debug.c` or `docs/mwcc-allocator-algorithm.md`.
 
-What we still don't capture: the **iteration order** within colorgraph
+~~What we still don't capture: the **iteration order** within colorgraph
 (determined by `simplifygraph`'s spill-cost-aware Chaitin-style
-simplification). Adding a hook on `simplifygraph` would surface this.
-Also the workingMask state per-decision is computed but not stored
-across the loop — would need an in-loop hook (much more invasive).
+simplification). Adding a hook on `simplifygraph` would surface this.~~
+
+✅ Done in commit ff4a358c8 (Tier 2.5). The simplifygraph hook at
+0x4CE400 emits `SIMPLIFY GRAPH (class=N, n_colors=K, n_class_regs=M)`
+sections with per-iter rows containing `ig_idx`, post-simplification
+`degree`, original `arraySize` (interferer count), and `flags` — the
+0x08 bit indicates a SPILLED node (potential spill candidate).
+
+Still not captured: the workingMask state per-decision is computed but
+not stored across the loop — would need an in-loop hook (much more
+invasive). Marginal value: we can already reason backwards from the
+COLORGRAPH DECISIONS output's interferer list.
+
+## Tier 2.5 — simplifygraph hook (simplification order + spill markers) — ✅ DONE
+
+Implemented in commit ff4a358c8. Hooks `simplifygraph` at VA 0x4CE400
+with the discovered 3-arg signature `(int rclass, int n_colors, int
+n_class_regs)`. After the trampoline call, walks the returned linked
+list and emits per-iteration data.
+
+Output shape:
+```
+SIMPLIFY GRAPH (class=0, n_colors=29, n_class_regs=56)
+iter  ig_idx  degree  arraySize flags     notes
+0     -1      0       0        0x2
+...
+15    -1      0       3        0xa       SPILLED
+16    36      0       0        0x2
+17    35      14      27       0x2
+...
+```
+
+Columns:
+- `iter`: position in the simplified linked list (=order colorgraph
+  walks it; head colored first)
+- `ig_idx`: index in `interferencegraph[]`. -1 for "physical reg"
+  nodes (representing r0/r3/r4/...) that weren't part of the virtual-
+  reg IG.
+- `degree`: post-simplification degree (often 0 once neighbors are
+  removed)
+- `arraySize`: pre-simplification interferer count (= original degree)
+- `flags`: IGNode flags. Bit 0x08 (8) is the SPILLED marker
+- `notes`: convenience text (`SPILLED` when flags & 0x08 is set)
+
+**What's new vs. just looking at COLORGRAPH DECISIONS:** The colorgraph
+output has the same `iter` and `ig_idx` columns BUT the degree it
+reports is the post-simplification degree (always low). The simplify
+output shows the ORIGINAL `arraySize` (real interferer count) and which
+nodes simplifygraph itself flagged as potential spills BEFORE colorgraph
+got to them. That tells you which virtuals are structurally hard to
+color (Chaitin's "can't be removed cleanly") even before the per-
+virtual coloring attempts run.
+
+Why this matters for matching: when a stuck function shows a spill
+marker on a virtual that ended up at the "wrong" physical, the
+constraint may be earlier than the allocator — the simplification
+algorithm gave up on it and pushed it through with a sentinel that
+biases later decisions. A C-source restructure that reduces that
+virtual's degree (= fewer simultaneously-live values touching it)
+might unblock the case.
+
+**Known limitation:** Reading `INTERFERENCEGRAPH[]` BEFORE the trampoline
+call crashes mwcceppc (the prior disabled hook hit this). Reading after
+is safe — and matches what we want anyway (post-simplification state).
+A "before snapshot" would let us diff degrees and surface spill flags
+added by simplifygraph itself; right now we can only see flags that were
+already set at hook exit. Workaround: pair the SIMPLIFY GRAPH section
+with the immediately-following COLORGRAPH DECISIONS in the parser — the
+colorgraph hook already captures per-node interferer arrays which encode
+the pre-simplification edges.
+
+Parser support: `parse_hook_events()` now returns `SimplifySection` /
+`SimplifyEntry` objects on each `FunctionEvents`.
 
 ## Tier 3.5 — mechanism investigation (propagateconstants hook + PCode-gen finding) — ✅ DONE
 

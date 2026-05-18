@@ -6,6 +6,8 @@ from .colorgraph_parser import (
     ConstPropEvent,
     FunctionEvents,
     IGConstructedEvent,
+    SimplifyEntry,
+    SimplifySection,
     find_function,
     parse_hook_events,
 )
@@ -32,6 +34,8 @@ __all__ = [
     "Instruction",
     "Pass",
     "SimDecision",
+    "SimplifyEntry",
+    "SimplifySection",
     "VirtualRegInfo",
     "analyze_function",
     "find_function",

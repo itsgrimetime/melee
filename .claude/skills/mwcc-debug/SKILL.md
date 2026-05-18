@@ -169,6 +169,17 @@ finished building the interference graph for that class — useful for
 ordering visibility (which function/class is being processed at any
 given point in the dump). Tier 3 hook.
 
+`SIMPLIFY GRAPH (class=N, n_colors=K, n_class_regs=M)` event lines pair
+with each COLORGRAPH DECISIONS section. They show simplifygraph's
+output: the simplification stack order (head = colored first), each
+node's pre-simplification interferer count (`arraySize`), and the
+SPILLED flag if simplifygraph marked the node as a potential spill.
+Tier 2.5 hook — useful when you need to know whether a virtual was
+structurally hard to color (Chaitin's "can't be removed cleanly")
+before colorgraph even got to it. SPILLED markers are the headline
+signal: a virtual flagged here probably won't get a clean physical
+unless you reduce its degree by C-source restructuring.
+
 And `CONSTPROP RAN (changed_flag: before=X after=Y)` event lines: one per
 function, marking when constant propagation fired. The `changed_flag`
 indicates whether CP modified anything. Tier 3.5 hook — useful for
