@@ -557,12 +557,12 @@ static inline s32 mnVibration_GetNameSlot(MnVibrationData* data, s32 j)
 
 void mnVibration_80248644(HSD_GObj* arg0)
 {
+    s32 j;
     MnVibrationData* ptr2;
     MnVibrationData* data;
     s32 i;
     HSD_JObj* jobj17;
     HSD_JObj* child;
-    s32 j;
     s32 name_idx;
 
     ptr2 = data = arg0->user_data;
