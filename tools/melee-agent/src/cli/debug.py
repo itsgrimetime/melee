@@ -33,7 +33,11 @@ from ..mwcc_debug import (
     simulate_function,
     suggest,
 )
-from ..mwcc_debug.source_patch import transfer_candidate
+from ..mwcc_debug.source_patch import (
+    get_decl_names,
+    reorder_decls_in_function,
+    transfer_candidate,
+)
 
 debug_app = typer.Typer(
     help="Compiler introspection via remote Windows mwcc_debug DLL"
@@ -1057,3 +1061,222 @@ def verify_perm(
         except Exception:
             pass
         raise
+
+
+def _build_and_match(unit: str, function: str, melee_root: Path) -> Optional[float]:
+    """Rebuild a unit's .o, regenerate report.json, return match%.
+
+    Returns None on build failure.
+    """
+    obj_path = f"build/GALE01/src/{unit}.o"
+    r = subprocess.run(
+        ["ninja", obj_path],
+        cwd=melee_root, capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        return None
+    r = subprocess.run(
+        ["ninja", "build/GALE01/report.json"],
+        cwd=melee_root, capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        return None
+    return _get_match_pct(function, melee_root)
+
+
+@debug_app.command(name="enumerate-decl-orders")
+def enumerate_decl_orders(
+    function: Annotated[
+        str,
+        typer.Argument(help="Function name to enumerate orderings for"),
+    ],
+    strategy: Annotated[
+        str,
+        typer.Option(
+            "--strategy",
+            help="Which orderings to try: 'promote' (move each var to "
+                 "first; N candidates), 'demote' (move each to last; N), "
+                 "'swap' (adjacent pair swaps; N-1), 'all' (promote+demote+"
+                 "swap), or 'full' (every permutation; N! — refuses for N>7).",
+        ),
+    ] = "promote",
+    threshold: Annotated[
+        float,
+        typer.Option(
+            "--threshold",
+            help="Minimum improvement (percentage points) to consider a win.",
+        ),
+    ] = 0.1,
+    keep_best: Annotated[
+        bool,
+        typer.Option(
+            "--keep-best",
+            help="If the best ordering improves match% by ≥threshold, "
+                 "leave it applied. Default reverts to original.",
+        ),
+    ] = False,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit results as JSON."),
+    ] = False,
+) -> None:
+    """Tier 7b: enumerate local-decl orderings, find ones that improve match%.
+
+    Most "stuck near 99%" cases have a 1-line declaration-reorder fix that
+    permuter eventually finds at ~2000 iterations. This command brute-forces
+    the small decl-order search space directly.
+
+    Strategies (in order of cost):
+
+      promote (default): for each of N locals, try promoting to position 0
+        → N candidates, ~N×6sec
+      demote: each → position N-1 → N candidates
+      swap: each adjacent pair swap → N-1 candidates
+      all: promote + demote + swap → ~3N candidates
+      full: all N! permutations (refuses for N>7 — would take hours)
+
+    Default reverts after enumeration. Pass --keep-best to apply the best
+    winning ordering.
+    """
+    melee_root = DEFAULT_MELEE_ROOT
+    unit = _find_unit_for_function(function, melee_root)
+    if unit is None:
+        typer.echo(f"function not found in report.json: {function}", err=True)
+        raise typer.Exit(2)
+    target_path = melee_root / "src" / f"{unit}.c"
+    if not target_path.exists():
+        typer.echo(f"target source not found: {target_path}", err=True)
+        raise typer.Exit(2)
+
+    orig = target_path.read_text()
+    names = get_decl_names(orig, function)
+    if not names:
+        typer.echo(
+            f"could not find a declaration block in {function} — function "
+            f"may have no locals or an unsupported decl style.",
+            err=True,
+        )
+        raise typer.Exit(3)
+    n = len(names)
+
+    # Build the list of (label, permutation) candidates to try.
+    candidates: list[tuple[str, list[int]]] = []
+    if strategy in ("promote", "all"):
+        for k in range(n):
+            if k == 0:
+                continue  # already first — identity
+            perm = [k] + [i for i in range(n) if i != k]
+            candidates.append((f"promote {names[k]}", perm))
+    if strategy in ("demote", "all"):
+        for k in range(n):
+            if k == n - 1:
+                continue
+            perm = [i for i in range(n) if i != k] + [k]
+            candidates.append((f"demote {names[k]}", perm))
+    if strategy in ("swap", "all"):
+        for k in range(n - 1):
+            perm = list(range(n))
+            perm[k], perm[k + 1] = perm[k + 1], perm[k]
+            candidates.append((f"swap {names[k]} <-> {names[k+1]}", perm))
+    if strategy == "full":
+        if n > 7:
+            typer.echo(
+                f"--strategy full refused: {n} locals = {n}! permutations. "
+                f"Use --strategy all for a tractable subset.",
+                err=True,
+            )
+            raise typer.Exit(4)
+        from itertools import permutations
+        for p in permutations(range(n)):
+            if list(p) == list(range(n)):
+                continue
+            candidates.append((f"order {list(p)}", list(p)))
+    if not candidates and strategy not in ("promote", "demote", "swap", "all", "full"):
+        typer.echo(f"unknown --strategy: {strategy}", err=True)
+        raise typer.Exit(2)
+    if not candidates:
+        typer.echo("no candidate orderings to try (function may have only 1 local).")
+        return
+
+    # Baseline match%.
+    baseline = _get_match_pct(function, melee_root) or 0.0
+    if not json_out:
+        print(f"Function:    {function} ({n} locals: {', '.join(names)})")
+        print(f"Source:      {target_path}")
+        print(f"Strategy:    {strategy} ({len(candidates)} candidates)")
+        print(f"Baseline:    {baseline:.2f}%")
+        print()
+
+    results: list[dict] = []
+    best_pct = baseline
+    best_label: Optional[str] = None
+    best_perm: Optional[list[int]] = None
+
+    try:
+        for label, perm in candidates:
+            patched = reorder_decls_in_function(orig, function, perm)
+            if patched is None:
+                # Permutation rejected — shouldn't happen with our generators
+                continue
+            target_path.write_text(patched)
+            pct = _build_and_match(unit, function, melee_root)
+            target_path.write_text(orig)  # revert before next iter
+            if pct is None:
+                # Build failed — record as such and continue
+                if not json_out:
+                    print(f"  {label}: BUILD FAILED")
+                results.append({"label": label, "match_pct": None, "delta": None})
+                continue
+            delta = pct - baseline
+            results.append({"label": label, "match_pct": pct, "delta": delta})
+            tag = ""
+            if delta >= threshold:
+                tag = "  WIN"
+                if pct > best_pct:
+                    best_pct = pct
+                    best_label = label
+                    best_perm = perm
+            elif delta > 0:
+                tag = "  (improved)"
+            elif delta < 0:
+                tag = "  (worse)"
+            if not json_out:
+                print(f"  {label}: {pct:.2f}%  delta={delta:+.2f}%{tag}")
+    finally:
+        # Restore original at the very end (in case of unexpected error)
+        target_path.write_text(orig)
+        # Re-build to restore prior state in report.json
+        subprocess.run(
+            ["ninja", f"build/GALE01/src/{unit}.o",
+             "build/GALE01/report.json"],
+            cwd=melee_root, capture_output=True,
+        )
+
+    if json_out:
+        print(json.dumps({
+            "function": function,
+            "baseline_pct": baseline,
+            "best_label": best_label,
+            "best_pct": best_pct,
+            "results": results,
+        }, indent=2))
+        return
+
+    print()
+    if best_label is None:
+        print(f"No ordering improved match by ≥{threshold:.2f}%.")
+        return
+    print(f"Best: {best_label} → {best_pct:.2f}% (delta {best_pct - baseline:+.2f}%)")
+
+    if keep_best and best_perm is not None:
+        patched = reorder_decls_in_function(orig, function, best_perm)
+        if patched is not None:
+            target_path.write_text(patched)
+            subprocess.run(
+                ["ninja", f"build/GALE01/src/{unit}.o",
+                 "build/GALE01/report.json"],
+                cwd=melee_root, capture_output=True,
+            )
+            print(f"Applied to {target_path}. Verify with `git diff`.")
+    else:
+        print("Source reverted. Re-run with --keep-best to apply the win.")

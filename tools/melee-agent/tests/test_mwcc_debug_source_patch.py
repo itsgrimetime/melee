@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from src.mwcc_debug.source_patch import (
     extract_function,
+    find_decl_block,
     find_function,
+    get_decl_names,
+    reorder_decls_in_function,
     replace_function,
 )
 
@@ -119,6 +122,99 @@ void foo(void) { int x = 1; }
     body = sample[span.body_open : span.body_close + 1]
     assert "int x = 1" in body
     assert "return" not in body
+
+
+FN_WITH_DECLS = """
+void example_fn(int arg)
+{
+    s32 i;
+    int counter;
+    HSD_Text* ptr;
+    s32 j = 0;
+    char buf[32];
+    counter = arg;
+    for (i = 0; i < counter; i++) {
+        ptr = NULL;
+    }
+}
+"""
+
+
+def test_find_decl_block_basic() -> None:
+    fn_text = "void f()\n{\n    int i;\n    int j;\n    return;\n}\n"
+    body = fn_text[fn_text.index("{"):]
+    block = find_decl_block(body)
+    assert block is not None
+    assert len(block.lines) == 2
+    assert "int i;" in block.lines[0]
+    assert "int j;" in block.lines[1]
+
+
+def test_find_decl_block_in_realistic_function() -> None:
+    span = find_function(FN_WITH_DECLS, "example_fn")
+    assert span is not None
+    fn_text = FN_WITH_DECLS[span.sig_start : span.full_end]
+    body_open_rel = span.body_open - span.sig_start
+    block = find_decl_block(fn_text[body_open_rel:])
+    assert block is not None
+    # 5 decls: i, counter, ptr, j (with initializer), buf (array)
+    assert len(block.lines) == 5
+
+
+def test_get_decl_names() -> None:
+    names = get_decl_names(FN_WITH_DECLS, "example_fn")
+    assert names == ["i", "counter", "ptr", "j", "buf"]
+
+
+def test_reorder_decls_promote_to_first() -> None:
+    """Move declaration #3 (j) to position 0."""
+    # Order [3, 0, 1, 2, 4] means: take decl 3 first, then 0, 1, 2, 4
+    patched = reorder_decls_in_function(FN_WITH_DECLS, "example_fn", [3, 0, 1, 2, 4])
+    assert patched is not None
+    new_names = get_decl_names(patched, "example_fn")
+    assert new_names == ["j", "i", "counter", "ptr", "buf"]
+    # Statements should still be there
+    assert "counter = arg;" in patched
+    assert "for (i = 0" in patched
+
+
+def test_reorder_decls_demote_to_last() -> None:
+    """Move declaration #0 (i) to position 4."""
+    patched = reorder_decls_in_function(FN_WITH_DECLS, "example_fn", [1, 2, 3, 4, 0])
+    assert patched is not None
+    new_names = get_decl_names(patched, "example_fn")
+    assert new_names == ["counter", "ptr", "j", "buf", "i"]
+
+
+def test_reorder_decls_identity_is_noop() -> None:
+    patched = reorder_decls_in_function(FN_WITH_DECLS, "example_fn", [0, 1, 2, 3, 4])
+    assert patched == FN_WITH_DECLS
+
+
+def test_reorder_decls_rejects_bad_permutation() -> None:
+    # Wrong length
+    assert reorder_decls_in_function(FN_WITH_DECLS, "example_fn", [0, 1]) is None
+    # Duplicate index
+    assert reorder_decls_in_function(FN_WITH_DECLS, "example_fn", [0, 0, 1, 2, 3]) is None
+    # Out-of-range index
+    assert reorder_decls_in_function(FN_WITH_DECLS, "example_fn", [0, 1, 2, 3, 99]) is None
+
+
+def test_decl_block_stops_at_first_statement() -> None:
+    """A decl block should END when a statement appears, even if more
+    decls come after (illegal C89 but possible in C99)."""
+    fn = """
+void f()
+{
+    int a;
+    int b;
+    a = 1;        // statement — decl block ends here
+    int c;        // ignored even though it's a decl
+    b = c;
+}
+"""
+    names = get_decl_names(fn, "f")
+    assert names == ["a", "b"]
 
 
 def test_find_function_with_string_brace() -> None:

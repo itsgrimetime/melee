@@ -224,3 +224,168 @@ def transfer_candidate(
         return None
     target_path.write_text(patched)
     return orig
+
+
+# ----------------------------------------------------------------------------
+# Declaration-block parsing + reordering (Tier 7b).
+# ----------------------------------------------------------------------------
+
+@dataclass
+class DeclBlock:
+    """The contiguous block of local declarations at the top of a function
+    body. Lines are kept as raw strings (preserving their original
+    formatting). Reordering shuffles whole lines.
+    """
+
+    # Byte offsets in the ORIGINAL function text (NOT the source file).
+    # Use FunctionSpan offsets to translate to file offsets.
+    start: int  # offset of first decl line (relative to function body_open)
+    end: int  # offset just past the last decl line
+    lines: list[str]  # one decl per element, includes the trailing newline
+
+
+_DECL_LINE_RE = re.compile(
+    r"""
+    ^                       # start of line
+    [ \t]*                  # leading indent
+    (?:                     # optional storage / type qualifiers
+        (?:static|extern|const|volatile|register|inline|auto)\s+
+    )*
+    [A-Za-z_]\w*            # type name
+    (?:\s*\**)?             # optional pointer asterisks (attached to type)
+    \s+
+    \**                     # pointer asterisks attached to variable
+    [A-Za-z_]\w*            # variable name
+    (?:\s*\[[^\]]*\])*      # optional array dimensions
+    (?:                     # optional initializer
+        \s*=\s*[^;]+
+    )?
+    \s*;                    # terminator
+    [ \t]*                  # trailing whitespace
+    (?:\n|$)
+    """,
+    re.VERBOSE,
+)
+
+
+def find_decl_block(function_text: str) -> Optional[DeclBlock]:
+    """Identify the contiguous block of local declarations at the start of
+    the function body.
+
+    `function_text` should be the body INCLUDING the opening `{` (e.g. from
+    `text[span.body_open : span.full_end]`).
+
+    Walks line-by-line starting just after the opening `{`. Includes lines
+    matching the decl regex AND interspersed blank/comment-only lines (so
+    decls separated by a blank line still count as one block). Stops at
+    the first non-decl statement.
+    """
+    # Find the position right after the opening '{'
+    open_idx = function_text.find("{")
+    if open_idx < 0:
+        return None
+    pos = open_idx + 1
+    # Skip a single newline immediately after '{' (typical formatting)
+    if pos < len(function_text) and function_text[pos] == "\n":
+        pos += 1
+
+    start = pos
+    lines: list[str] = []
+    while pos < len(function_text):
+        # Find the end of the current line
+        nl = function_text.find("\n", pos)
+        if nl < 0:
+            line = function_text[pos:]
+            line_end = len(function_text)
+        else:
+            line = function_text[pos : nl + 1]
+            line_end = nl + 1
+
+        stripped = line.strip()
+        if stripped == "":
+            # Blank line — keep walking but don't add to decl set
+            pos = line_end
+            continue
+        if stripped.startswith("//") or stripped.startswith("/*"):
+            # Comment line — keep walking but don't add
+            pos = line_end
+            continue
+        if _DECL_LINE_RE.match(line):
+            lines.append(line)
+            pos = line_end
+            continue
+        # First non-decl line — end of decl block
+        break
+
+    if not lines:
+        return None
+    # `end` is the offset just past the LAST decl line we recorded.
+    # (Trailing blank lines after the last decl aren't included.)
+    last_line = lines[-1]
+    last_line_idx = function_text.rfind(last_line, start, pos)
+    if last_line_idx < 0:
+        return None
+    end = last_line_idx + len(last_line)
+    return DeclBlock(start=start, end=end, lines=lines)
+
+
+def reorder_decls_in_function(
+    file_text: str,
+    function: str,
+    order: list[int],
+) -> Optional[str]:
+    """Return `file_text` with `function`'s declaration block reordered.
+
+    `order` is a permutation of [0..N-1] where N is the number of decls.
+    Returns None if function can't be found or the decl block is missing,
+    or if `order` has the wrong length.
+    """
+    span = find_function(file_text, function)
+    if span is None:
+        return None
+    fn_text = file_text[span.sig_start : span.full_end]
+    # Translate body_open relative to fn_text
+    body_open_rel = span.body_open - span.sig_start
+    block = find_decl_block(fn_text[body_open_rel:])
+    if block is None:
+        return None
+    if len(order) != len(block.lines):
+        return None
+    if sorted(order) != list(range(len(block.lines))):
+        return None  # not a valid permutation
+
+    # Build the new function text
+    block_abs_start = body_open_rel + block.start
+    block_abs_end = body_open_rel + block.end
+    new_block = "".join(block.lines[i] for i in order)
+    new_fn_text = (
+        fn_text[:block_abs_start]
+        + new_block
+        + fn_text[block_abs_end:]
+    )
+    return file_text[: span.sig_start] + new_fn_text + file_text[span.full_end :]
+
+
+def get_decl_names(file_text: str, function: str) -> Optional[list[str]]:
+    """Extract just the variable names from each declaration line, in order.
+
+    Useful for reporting which variable was promoted/demoted.
+    """
+    span = find_function(file_text, function)
+    if span is None:
+        return None
+    fn_text = file_text[span.sig_start : span.full_end]
+    body_open_rel = span.body_open - span.sig_start
+    block = find_decl_block(fn_text[body_open_rel:])
+    if block is None:
+        return None
+    names: list[str] = []
+    for line in block.lines:
+        # Find the LAST identifier before `;`, `[`, or `=`
+        m = re.match(
+            r"\s*(?:(?:static|extern|const|volatile|register|inline|auto)\s+)*"
+            r"[A-Za-z_]\w*(?:\s*\**)?\s+\**([A-Za-z_]\w*)",
+            line,
+        )
+        names.append(m.group(1) if m else "?")
+    return names
