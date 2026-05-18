@@ -524,8 +524,8 @@ void mnVibration_80248444(HSD_GObj* arg0, u8 arg1, u8 arg2)
     lb_8000B1CC(data->jobjs[17], &mnVibration_803EED04, &sp20);
     text = HSD_SisLib_803A6754(0, 1);
     data->texts[arg2] = text;
-    text->pos_x = sp20.x;
     text->pos_y = -(spacing * (f32) arg2 + sp20.y);
+    text->pos_x = sp20.x;
     text->pos_z = sp20.z;
     text->font_size.x = 0.03f;
     text->font_size.y = 0.03f;
