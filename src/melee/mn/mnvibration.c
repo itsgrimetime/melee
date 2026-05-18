@@ -612,6 +612,7 @@ void fn_802487A8(HSD_GObj* gobj)
     u8 var_r3;
     u8* temp_r31;
     void* var_r26;
+    s32 new_var;
     void* var_r3_3;
     PAD_STACK(56);
 
@@ -696,6 +697,7 @@ void fn_802487A8(HSD_GObj* gobj)
                                ->jobjs[mnVibration_804D4FE8[var_r24]];
                 HSD_JObjReqAnimAll(temp_r27, (f32) temp_r31[var_r24 + 2]);
                 HSD_JObjAnimAll(temp_r27);
+                new_var = var_r24;
                 {
                     HSD_JObj* temp_jobj3;
                     temp_jobj3 =
@@ -714,7 +716,7 @@ void fn_802487A8(HSD_GObj* gobj)
                         }
                     }
                 }
-                mnVibration_802480B4((HSD_JObj*) var_r26, var_r24, 1);
+                mnVibration_802480B4((HSD_JObj*) var_r26, new_var, 1);
                 temp_r31[var_r24 + 6] = 1;
             }
         }
