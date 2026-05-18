@@ -658,8 +658,9 @@ void fn_802487A8(HSD_GObj* gobj)
         // Force mulli pattern with explicit offset computation
         var_r3 =
             *((u8*) ((u8*) HSD_PadCopyStatus + (u8) var_r23 * 0x44) + 0x41);
-        if ((((s8) var_r3 != 0) && (temp_r31[var_r23 + 6] != 0)) ||
-            (((s8) var_r3 == 0) && (temp_r31[var_r23 + 6] == 0)))
+        var_r24 = var_r23;
+        if ((((s8) var_r3 != 0) && (temp_r31[var_r24 + 6] != 0)) ||
+            (((s8) var_r3 == 0) && (temp_r31[var_r24 + 6] == 0)))
         {
             if ((s8) var_r3 != 0) {
                 HSD_JObjSetFlagsAll(
@@ -676,7 +677,7 @@ void fn_802487A8(HSD_GObj* gobj)
                 }
                 {
                     s32 i;
-                    for (i = 0; i < var_r23; i++) {
+                    for (i = 0; i < var_r24; i++) {
                         if (var_r3_3 == NULL) {
                             var_r3_3 = NULL;
                         } else {
@@ -684,16 +685,16 @@ void fn_802487A8(HSD_GObj* gobj)
                         }
                     }
                 }
-                mnVibration_802480B4((HSD_JObj*) var_r3_3, var_r23, 0);
-                temp_r31[var_r23 + 6] = 0;
+                mnVibration_802480B4((HSD_JObj*) var_r3_3, var_r24, 0);
+                temp_r31[var_r24 + 6] = 0;
             } else {
                 HSD_JObjClearFlagsAll(
                     ((MnVibrationData*) temp_r31)->jobjs[*var_r25], 0x10);
                 var_r26 = NULL;
-                temp_r31[var_r23 + 2] = 0;
+                temp_r31[var_r24 + 2] = 0;
                 temp_r27 = ((MnVibrationData*) mnVibration_804D6C28->user_data)
-                               ->jobjs[mnVibration_804D4FE8[var_r23]];
-                HSD_JObjReqAnimAll(temp_r27, (f32) temp_r31[var_r23 + 2]);
+                               ->jobjs[mnVibration_804D4FE8[var_r24]];
+                HSD_JObjReqAnimAll(temp_r27, (f32) temp_r31[var_r24 + 2]);
                 HSD_JObjAnimAll(temp_r27);
                 {
                     HSD_JObj* temp_jobj3;
@@ -705,7 +706,7 @@ void fn_802487A8(HSD_GObj* gobj)
                 }
                 {
                     s32 i;
-                    for (i = 0; i < var_r23; i++) {
+                    for (i = 0; i < var_r24; i++) {
                         if (var_r26 == NULL) {
                             var_r26 = NULL;
                         } else {
@@ -713,8 +714,8 @@ void fn_802487A8(HSD_GObj* gobj)
                         }
                     }
                 }
-                mnVibration_802480B4((HSD_JObj*) var_r26, var_r23, 1);
-                temp_r31[var_r23 + 6] = 1;
+                mnVibration_802480B4((HSD_JObj*) var_r26, var_r24, 1);
+                temp_r31[var_r24 + 6] = 1;
             }
         }
         var_r23 += 1;
