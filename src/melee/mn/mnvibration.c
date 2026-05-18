@@ -627,7 +627,7 @@ void fn_802487A8(HSD_GObj* gobj)
         proc->flags_3 = HSD_GObj_804D783C;
         return;
     }
-    var_r24 = 0;
+    var_r23 = (var_r24 = 0);
     do {
         void* temp_jobj;
         temp_jobj = ((MnVibrationData*) gobj->user_data)->jobjs[23];
@@ -656,7 +656,6 @@ void fn_802487A8(HSD_GObj* gobj)
         }
         var_r24 += 1;
     } while (var_r24 < 4);
-    var_r23 = 0;
     var_r25 = mnVibration_804D4FE8;
     do {
         // Force mulli pattern with explicit offset computation
