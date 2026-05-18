@@ -20,7 +20,7 @@ from typing import Annotated, Optional
 import typer
 
 from ._common import DEFAULT_MELEE_ROOT, console
-from ..mwcc_debug import analyze_function, parse_pcdump
+from ..mwcc_debug import analyze_function, parse_pcdump, simulate_function
 
 debug_app = typer.Typer(
     help="Compiler introspection via remote Windows mwcc_debug DLL"
@@ -276,24 +276,106 @@ def analyze(
 
     if show_candidates:
         print()
-        print("Coloring decisions (expected: callee-save allocated top-down")
-        print("from r31, caller-save bottom-up from r3):")
+        print("Coloring decisions. Verified algorithm (per MWCC 7.0 source):")
+        print("  1. Compute workingMask = volatile-regs (r3..r12, r0 excluded)")
+        print("     minus regs used by interferers.")
+        print("  2. If workingMask non-empty: pick LOWEST set bit.")
+        print("  3. Else call obtain_nonvolatile_register(), which dispenses")
+        print("     in order: r27, r28, r29, r30, r31, then r26, r25, ...")
+        print("     (Once dispensed, reg is added to volatile-regs pool and")
+        print("     can be reused for non-interfering virtuals.)")
+        print("Run 'debug simulate' to see what the allocator would pick + why.")
         for info in infos:
             if info.physical is None or not info.candidates:
                 continue
             cands = sorted(info.candidates)
-            choice = info.physical
-            # MWCC's allocator strategy: callee-save (r13-r31) top-down,
-            # caller-save (r3-r12) bottom-up. Flag if the choice doesn't
-            # match the expected strategy.
-            note = ""
-            if info.physical_class == "GPR-cs":
-                expected = max(cands)
-                if choice != expected:
-                    note = f"  ← NOT top (allocator usually picks r{expected} first)"
-            elif info.physical_class == "GPR":
-                expected = min(c for c in cands if 3 <= c <= 12)
-                if choice != expected:
-                    note = f"  ← NOT bottom (allocator usually picks r{expected} first)"
             cand_str = "{" + ",".join(f"r{c}" for c in cands) + "}"
-            print(f"  r{info.virtual} → r{choice}.  Candidates: {cand_str}{note}")
+            print(f"  r{info.virtual} → r{info.physical}.  Candidates: {cand_str}")
+
+
+@debug_app.command("simulate")
+def simulate(
+    dump: Annotated[
+        Path,
+        typer.Argument(
+            help="Path to a pcdump.txt produced by 'debug pcdump'"
+        ),
+    ],
+    function: Annotated[
+        str,
+        typer.Option(
+            "--function", "-f",
+            help="Function to simulate",
+        ),
+    ],
+    show_all: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            help="Show every decision, even when prediction matches actual.",
+        ),
+    ] = False,
+):
+    """Simulate MWCC's coloring algorithm on a function and diff against actuals.
+
+    Re-implements the register-coloring loop from MWCC's source (extracted from
+    the 7.0 decompilation at git.wuffs.org/MWCC). For each virtual register,
+    the simulator predicts what physical the allocator would have picked and
+    why. Compares against the actual choice from the pcdump.
+
+    Matches confirm our understanding of the algorithm. Mismatches highlight
+    cases where our model is wrong — usually due to factors we don't see in
+    pcdump (caller-save kill at call sites, argument-passing ABI pinning, or
+    nonvolatile-allocation-order edge cases).
+
+    See docs/mwcc-debug-future-ideas.md for the long-term plan to replace
+    this simulator with a real hook into mwcceppc.exe's allocator.
+    """
+    if not dump.is_file():
+        raise typer.BadParameter(f"dump file not found: {dump}")
+
+    text = dump.read_text()
+    funcs = parse_pcdump(text)
+    target = next((fn for fn in funcs if fn.name == function), None)
+    if target is None:
+        avail = ", ".join(fn.name for fn in funcs)
+        raise typer.BadParameter(
+            f"function '{function}' not in dump. Available: {avail}"
+        )
+
+    decisions = simulate_function(target)
+    if not decisions:
+        print("No virtual registers found (or pass alignment failed).")
+        raise typer.Exit(code=1)
+
+    print(f"Function: {target.name}")
+    print(f"Algorithm: MWCC-style greedy coloring (per 7.0 source). Iteration")
+    print(f"order: ascending interferer count.")
+    print()
+    print(f"{'Virtual':>8}  {'Actual':>7}  {'Predicted':>9}  {'Match':>5}  Reasoning")
+    print(f"{'-' * 8:>8}  {'-' * 7:>7}  {'-' * 9:>9}  {'-' * 5:>5}  ---------")
+
+    matches = 0
+    mismatches = 0
+    for d in decisions:
+        actual = f"r{d.actual_physical}" if d.actual_physical is not None else "?"
+        predicted = f"r{d.predicted_physical}" if d.predicted_physical is not None else "SPILL"
+        is_match = d.actual_physical == d.predicted_physical
+        if is_match:
+            matches += 1
+            match_marker = "✓"
+        else:
+            mismatches += 1
+            match_marker = "✗"
+        if show_all or not is_match:
+            print(
+                f"     r{d.virtual:<3}  {actual:>7}  {predicted:>9}  "
+                f"{match_marker:>5}  {d.reasoning}"
+            )
+
+    print()
+    print(f"Summary: {matches} match, {mismatches} mismatch "
+          f"(out of {len(decisions)} virtuals)")
+
+    if mismatches and not show_all:
+        print("Use --all to see matching decisions too.")
