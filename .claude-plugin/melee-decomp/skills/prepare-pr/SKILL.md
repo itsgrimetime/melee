@@ -79,6 +79,17 @@ Functions:
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 ```
 
+### Step 5.5: Write Upstream-Visible PR Text
+
+Do not mention fork-only tooling in upstream PR descriptions. Keep the body
+upstream-visible: describe matched/improved functions, source structure, type
+fixes, data layout, and verification. Do not mention local attempts DB entries,
+attempt ledgers, `melee-agent`, `tools/checkdiff.py`, worktree doctor output,
+Discord archive searches, or agent process notes. Translate local process notes
+into reviewer-facing facts, for example "some remaining functions are left
+unmatched" instead of "remaining functions are documented in the local attempts
+DB."
+
 ### Step 6: Final Verification
 
 ```bash
