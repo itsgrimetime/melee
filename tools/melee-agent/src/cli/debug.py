@@ -483,6 +483,10 @@ def simulate(
             help="Show every decision, even when prediction matches actual.",
         ),
     ] = False,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit simulation results as JSON."),
+    ] = False,
 ):
     """Simulate MWCC's coloring algorithm on a function and diff against actuals.
 
@@ -504,15 +508,37 @@ def simulate(
     funcs = parse_pcdump(text)
     target = next((fn for fn in funcs if fn.name == function), None)
     if target is None:
-        avail = ", ".join(fn.name for fn in funcs)
-        raise typer.BadParameter(
-            f"function '{function}' not in dump. Available: {avail}"
-        )
+        _abort_function_not_in_dump(function, [fn.name for fn in funcs])
 
     decisions = simulate_function(target)
     if not decisions:
-        print("No virtual registers found (or pass alignment failed).")
+        if json_out:
+            print(json.dumps({"function": function, "error":
+                              "no virtual registers found (or pass alignment failed)"}))
+        else:
+            print("No virtual registers found (or pass alignment failed).")
         raise typer.Exit(code=1)
+
+    matches = sum(1 for d in decisions if d.actual_physical == d.predicted_physical)
+    mismatches = len(decisions) - matches
+
+    if json_out:
+        print(json.dumps({
+            "function": target.name,
+            "summary": {
+                "matches": matches,
+                "mismatches": mismatches,
+                "total": len(decisions),
+            },
+            "decisions": [{
+                "virtual": d.virtual,
+                "actual_physical": d.actual_physical,
+                "predicted_physical": d.predicted_physical,
+                "match": d.actual_physical == d.predicted_physical,
+                "reasoning": d.reasoning,
+            } for d in decisions],
+        }, indent=2))
+        return
 
     print(f"Function: {target.name}")
     print(f"Algorithm: MWCC-style greedy coloring (per 7.0 source). Iteration")
@@ -521,18 +547,11 @@ def simulate(
     print(f"{'Virtual':>8}  {'Actual':>7}  {'Predicted':>9}  {'Match':>5}  Reasoning")
     print(f"{'-' * 8:>8}  {'-' * 7:>7}  {'-' * 9:>9}  {'-' * 5:>5}  ---------")
 
-    matches = 0
-    mismatches = 0
     for d in decisions:
         actual = f"r{d.actual_physical}" if d.actual_physical is not None else "?"
         predicted = f"r{d.predicted_physical}" if d.predicted_physical is not None else "SPILL"
         is_match = d.actual_physical == d.predicted_physical
-        if is_match:
-            matches += 1
-            match_marker = "✓"
-        else:
-            mismatches += 1
-            match_marker = "✗"
+        match_marker = "✓" if is_match else "✗"
         if show_all or not is_match:
             print(
                 f"     r{d.virtual:<3}  {actual:>7}  {predicted:>9}  "
@@ -1206,6 +1225,10 @@ def verify_perm(
                  "the candidate a win. Default 0.1.",
         ),
     ] = 0.1,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit verification result as JSON."),
+    ] = False,
 ) -> None:
     """Tier 7a: apply a permuter candidate to the real source and verify.
 
@@ -1243,11 +1266,12 @@ def verify_perm(
 
     # Baseline match%.
     baseline_pct = _get_match_pct(function, melee_root)
-    print(f"Function:       {function}")
-    print(f"Real source:    {target_path}")
-    print(f"Candidate:      {candidate}")
-    print(f"Baseline match: {baseline_pct:.2f}%" if baseline_pct is not None
-          else "Baseline match: (unknown)")
+    if not json_out:
+        print(f"Function:       {function}")
+        print(f"Real source:    {target_path}")
+        print(f"Candidate:      {candidate}")
+        print(f"Baseline match: {baseline_pct:.2f}%" if baseline_pct is not None
+              else "Baseline match: (unknown)")
 
     candidate_text = candidate.read_text()
     # Locate which side the function is missing in for a clearer message.
@@ -1299,7 +1323,8 @@ def verify_perm(
         # Build the affected .o. checkdiff convention: report.json's unit
         # name doesn't include the "src/" prefix; ninja target does.
         obj_path = f"build/GALE01/src/{unit}.o"
-        print(f"\nRebuilding {obj_path}...")
+        if not json_out:
+            print(f"\nRebuilding {obj_path}...")
         ninja_result = subprocess.run(
             ["ninja", obj_path],
             cwd=melee_root, capture_output=True, text=True,
@@ -1334,32 +1359,52 @@ def verify_perm(
 
         new_pct = _get_match_pct(function, melee_root)
         if new_pct is None:
-            print("Could not read fresh match% after build.", file=sys.stderr)
+            if json_out:
+                print(json.dumps({
+                    "function": function,
+                    "candidate": str(candidate),
+                    "error": "could not read fresh match% after build",
+                }))
+            else:
+                print("Could not read fresh match% after build.", file=sys.stderr)
             target_path.write_text(orig)
             raise typer.Exit(5)
 
         delta = new_pct - (baseline_pct or 0.0)
-        print(f"\nNew match:      {new_pct:.2f}%")
-        print(f"Delta:          {delta:+.2f}%")
-
         improved = delta >= threshold
+        kept = improved and keep
 
-        if improved and keep:
-            print(f"\nCandidate improved match by ≥{threshold:.2f}% — leaving "
-                  f"patched source in place ({target_path}).")
-            return  # don't revert
-
-        if improved:
-            print(f"\nCandidate improved match by ≥{threshold:.2f}% but "
-                  f"--keep was not set — reverting. Re-run with --keep to "
-                  f"commit the change.")
+        if json_out:
+            print(json.dumps({
+                "function": function,
+                "candidate": str(candidate),
+                "baseline_pct": baseline_pct,
+                "new_pct": new_pct,
+                "delta": delta,
+                "threshold": threshold,
+                "improved": improved,
+                "kept": kept,
+            }, indent=2))
         else:
-            print(f"\nCandidate did not improve by ≥{threshold:.2f}% — "
-                  f"reverting.")
-        target_path.write_text(orig)
-        # Rebuild to restore prior state in report.json
-        subprocess.run(["ninja", obj_path, "build/GALE01/report.json"],
-                       cwd=melee_root, capture_output=True)
+            print(f"\nNew match:      {new_pct:.2f}%")
+            print(f"Delta:          {delta:+.2f}%")
+
+            if kept:
+                print(f"\nCandidate improved match by ≥{threshold:.2f}% — leaving "
+                      f"patched source in place ({target_path}).")
+            elif improved:
+                print(f"\nCandidate improved match by ≥{threshold:.2f}% but "
+                      f"--keep was not set — reverting. Re-run with --keep to "
+                      f"commit the change.")
+            else:
+                print(f"\nCandidate did not improve by ≥{threshold:.2f}% — "
+                      f"reverting.")
+
+        if not kept:
+            target_path.write_text(orig)
+            # Rebuild to restore prior state in report.json
+            subprocess.run(["ninja", obj_path, "build/GALE01/report.json"],
+                           cwd=melee_root, capture_output=True)
     except Exception:
         # Always revert on unexpected error
         try:
