@@ -119,6 +119,20 @@ Output shows live ranges, interferences, and the candidate set for each
 virtual (the physicals NOT used by an interferer — i.e., the choices the
 allocator could have made).
 
+### Step 2.5: diff two dumps to see what a source change did
+
+When iterating on a source change for a stuck function, dump before and
+after the change, then diff:
+
+```bash
+melee-agent debug diff before.txt after.txt --function mnVibration_80248644
+```
+
+Surfaces per-virtual changes (assigned reg, interferer set additions/
+removals, degree, flags). "No coloring changes detected" is itself a
+useful signal — your change had no IR-level effect (often because
+MWCC constant-inlined it; see [docs/mwcc-allocator-mechanism-deep-dive.md](../../docs/mwcc-allocator-mechanism-deep-dive.md)).
+
 ### Step 3: simulate what the allocator would pick (and why)
 
 The `simulate` command replays MWCC's actual algorithm (extracted from the
