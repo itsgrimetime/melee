@@ -1209,8 +1209,25 @@ def verify_perm(
         raise
 
 
-def _build_and_match(unit: str, function: str, melee_root: Path) -> Optional[float]:
-    """Rebuild a unit's .o, regenerate report.json, return match%.
+def _build_and_match(
+    unit: str,
+    function: str,
+    melee_root: Path,
+    *,
+    fast_report: bool = True,
+) -> Optional[float]:
+    """Rebuild a unit's .o and return the function's fuzzy_match_percent.
+
+    Two paths to regenerate the per-function score after building:
+
+      fast_report=True (default): call `objdiff-cli report generate`
+        directly. Skips ninja's dependency-graph traversal and avoids
+        re-checking unrelated files. Same metric (fuzzy_match_percent)
+        as the slow path. Typical speedup: ~0.7sec vs ~2-3sec.
+
+      fast_report=False: run `ninja build/GALE01/report.json` (slow
+        path). Use this when ninja's full dependency reasoning is
+        needed — e.g. after a configure change.
 
     Returns None on build failure.
     """
@@ -1221,6 +1238,20 @@ def _build_and_match(unit: str, function: str, melee_root: Path) -> Optional[flo
     )
     if r.returncode != 0:
         return None
+
+    objdiff_bin = melee_root / "build" / "tools" / "objdiff-cli"
+    if fast_report and objdiff_bin.exists():
+        report_path = melee_root / "build" / "GALE01" / "report.json"
+        r = subprocess.run(
+            [str(objdiff_bin), "report", "generate",
+             "-o", str(report_path), "-f", "json"],
+            cwd=melee_root, capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            return None
+        return _get_match_pct(function, melee_root)
+
+    # Slow path: full ninja regen.
     r = subprocess.run(
         ["ninja", "build/GALE01/report.json"],
         cwd=melee_root, capture_output=True, text=True,
