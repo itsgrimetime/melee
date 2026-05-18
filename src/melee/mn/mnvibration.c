@@ -611,7 +611,8 @@ void fn_802487A8(HSD_GObj* gobj)
     HSD_JObj* var_r3_2;
     s32 var_r24;
     u16* var_r25;
-    u8 var_r23;
+    u16* new_var2;
+    u32 var_r23;
     u8 var_r3;
     u8* temp_r31;
     void* var_r26;
@@ -666,9 +667,10 @@ void fn_802487A8(HSD_GObj* gobj)
         if ((((s8) var_r3 != 0) && (temp_r31[var_r24 + 6] != 0)) ||
             (((s8) var_r3 == 0) && (temp_r31[var_r24 + 6] == 0)))
         {
+            new_var2 = var_r25;
             if ((s8) var_r3 != 0) {
                 HSD_JObjSetFlagsAll(
-                    ((MnVibrationData*) temp_r31)->jobjs[*var_r25], 0x10);
+                    ((MnVibrationData*) temp_r31)->jobjs[*new_var2], 0x10);
                 {
                     void* temp_jobj2;
                     temp_jobj2 =
@@ -693,7 +695,7 @@ void fn_802487A8(HSD_GObj* gobj)
                 temp_r31[var_r24 + 6] = 0;
             } else {
                 HSD_JObjClearFlagsAll(
-                    ((MnVibrationData*) temp_r31)->jobjs[*var_r25], 0x10);
+                    ((MnVibrationData*) temp_r31)->jobjs[*new_var2], 0x10);
                 var_r26 = NULL;
                 temp_r31[var_r24 + 2] = 0;
                 temp_r27 = ((MnVibrationData*) mnVibration_804D6C28->user_data)
