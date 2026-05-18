@@ -31,6 +31,7 @@ from .analytics import analytics_app
 from .audit import audit_app
 from .commit import commit_app
 from .compilers import list_compilers
+from .debug import debug_app
 from .docker import docker_app
 
 # Import sub-apps from modules
@@ -57,6 +58,7 @@ app = typer.Typer(
 app.add_typer(extract_app, name="extract")
 app.add_typer(scratch_app, name="scratch")
 app.add_typer(commit_app, name="commit")
+app.add_typer(debug_app, name="debug")
 app.add_typer(docker_app, name="docker")
 app.add_typer(sync_app, name="sync")
 app.add_typer(pr_app, name="pr")
