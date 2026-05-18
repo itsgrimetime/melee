@@ -282,6 +282,21 @@ typedef struct IGNode
 // trampoline. trampoline buffer must hold prologue (7) + jump (5) = 12 bytes.
 static unsigned char colorgraph_trampoline[24];
 
+// simplifygraph: same shape prologue as colorgraph (7 bytes).
+static unsigned char simplifygraph_trampoline[24];
+
+// obtain_nonvolatile_register variants: 8-byte prologue (push ebx + mov ebx,
+// [esp+0xc] + movsx eax, bx). Each per-class function needs its own
+// trampoline.
+static unsigned char obtain_nv_gpr_trampoline[24];
+static unsigned char obtain_nv_fpr_trampoline[24];
+static unsigned char obtain_nv_crf_trampoline[24];
+
+// Per-class dispense counter — written by obtain_nv hooks, read for logging.
+static int dispense_counter_gpr = 0;
+static int dispense_counter_fpr = 0;
+static int dispense_counter_crf = 0;
+
 // hook @ 0x4CE2D0, colorgraph
 static int __cdecl hook_colorgraph(int rclass, IGNode *head)
 {
@@ -318,6 +333,39 @@ static int __cdecl hook_colorgraph(int rclass, IGNode *head)
     return result;
 }
 
+// simplifygraph hook — captures the worklist construction.
+// Returns the head of the linked-list-of-virtuals-to-color. Argument is
+// the register class. We just log when it's called + the return head.
+static void *__cdecl hook_simplifygraph(int rclass, int n_nodes)
+{
+    typedef void *(__cdecl * simplifygraph_fn)(int, int);
+    void *head;
+
+    // Reset per-class dispense counters at the start of each pass — coloring
+    // for a fresh class starts a new dispense sequence.
+    if (rclass == 0) dispense_counter_gpr = 0;
+    else if (rclass == 1) dispense_counter_fpr = 0;
+    else dispense_counter_crf = 0;
+
+    head = ((simplifygraph_fn)simplifygraph_trampoline)(rclass, n_nodes);
+
+    if (PCFILE && DEBUG_GUARD)
+    {
+        debug_printf("\nSIMPLIFYGRAPH (class=%d n_nodes=%d) head=0x%08x\n",
+                     rclass, n_nodes, (uint32)head);
+    }
+    return head;
+}
+
+// obtain_nonvolatile_register hooks: TRIED, didn't work — likely a calling
+// convention mismatch (the disassembly suggests it reads [esp+0xc] which is
+// past 2 args, hinting at a non-__cdecl convention or different arg count).
+// Wrapping these with int(__cdecl)(int, int) corrupted state and produced
+// all-r-1 assignedReg in subsequent colorgraph runs. Skipping for now —
+// the dispense order is still derivable post-hoc from the colorgraph
+// linked-list walk (each "obtain" call corresponds to a node where the
+// inferred workingMask was empty).
+
 static void install_hooks(void)
 {
     // stub hooks
@@ -332,6 +380,18 @@ static void install_hooks(void)
     // Prologue is 7 bytes: push ebx/esi/edi/ebp (1 each) + sub esp, 8 (3).
     hook_fn((void *)0x4CE2D0, hook_colorgraph,
             colorgraph_trampoline, 7);
+
+    // simplifygraph @ 0x4CE400 — DISABLED for now. Adding this hook crashed
+    // mwcceppc at 0x4cc3b9 (memory write through a global pointer + index)
+    // — possibly the function does some non-prologue work before its 7-byte
+    // pure-prologue ends, or a relative branch elsewhere jumps mid-prologue.
+    // The colorgraph hook is enough for the headline use case.
+    //
+    // hook_fn((void *)0x4CE400, hook_simplifygraph,
+    //         simplifygraph_trampoline, 7);
+
+    // (obtain_nonvolatile_register hooks intentionally skipped — see comment
+    // above; calling-convention mismatch corrupted state.)
 }
 
 // debug output setup
