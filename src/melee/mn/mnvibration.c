@@ -541,43 +541,29 @@ void mnVibration_80248444(HSD_GObj* arg0, u8 arg1, u8 arg2)
 
 void mnVibration_80248644(HSD_GObj* arg0)
 {
-    MnVibrationData* data;
     MnVibrationData* ptr2;
+    MnVibrationData* data;
     s32 i;
     HSD_JObj* jobj17;
     HSD_JObj* child;
-    s32 j;
     u8 scroll_offset;
+    s32 j;
     s32 name_idx;
     s32 count;
 
-    i = 0;
-    data = arg0->user_data;
-    ptr2 = data;
-    do {
-        if (ptr2->texts[0] != NULL) {
-            HSD_SisLib_803A5CC4(data->texts[i]);
-            ptr2->texts[0] = NULL;
+    ptr2 = data = arg0->user_data;
+    for (i = 0; i < 8; i++) {
+        if (data->texts[i] != NULL) {
+            HSD_SisLib_803A5CC4(ptr2->texts[i]);
+            data->texts[i] = NULL;
         }
-        i += 1;
-        ptr2 = (MnVibrationData*) ((u32) ptr2 + 4);
-    } while (i < 8);
+    }
     jobj17 = data->jobjs[17];
-    if (jobj17 == NULL) {
-        child = NULL;
-    } else {
-        child = jobj17->child;
-    }
+    child = HSD_JObjGetChild(jobj17);
     if (child != NULL) {
-        if (jobj17 == NULL) {
-            jobj17 = NULL;
-        } else {
-            jobj17 = jobj17->child;
-        }
-        HSD_JObjRemoveAll(jobj17);
+        HSD_JObjRemoveAll(HSD_JObjGetChild(jobj17));
     }
-    j = 0;
-    do {
+    for (j = 0; j < 8; j++) {
         scroll_offset = data->scroll_offset;
         count = GetNameCount();
         if ((count < 8) && (j >= count)) {
@@ -593,8 +579,7 @@ void mnVibration_80248644(HSD_GObj* arg0)
         if ((s32) (u8) name_idx != 0xFF) {
             mnVibration_80248444(arg0, (u8) name_idx, (u8) j);
         }
-        j += 1;
-    } while (j < 8);
+    }
 }
 
 static AnimLoopSettings mnVibration_803EECEC = { 50.0f, 70.0f, -0.1f };
