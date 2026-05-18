@@ -33,6 +33,11 @@ from ..mwcc_debug import (
     simulate_function,
     suggest,
 )
+from ..mwcc_debug.cast_audit import (
+    audit_function_casts,
+    crossref_with_asm,
+    find_call_sites,
+)
 from ..mwcc_debug.patterns import (
     PATTERNS,
     list_patterns,
@@ -1387,3 +1392,132 @@ def pattern_catalog(
         "Run `melee-agent debug pattern-catalog <name>` for full details "
         "(example before/after, mechanism)."
     )
+
+
+@debug_app.command(name="suggest-casts")
+def suggest_casts(
+    function: Annotated[
+        str,
+        typer.Argument(help="Function name to audit"),
+    ],
+    asm: Annotated[
+        bool,
+        typer.Option(
+            "--asm",
+            help="Cross-reference each call-site with the expected ASM "
+                 "in build/GALE01/asm/. Detects integer-loaded args that "
+                 "the source code wraps in (f32) (and vice versa).",
+        ),
+    ] = False,
+    severity: Annotated[
+        str,
+        typer.Option(
+            "--severity",
+            help="Filter by severity: high/medium/low/all (default: medium+).",
+        ),
+    ] = "medium",
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit warnings as JSON."),
+    ] = False,
+) -> None:
+    """Tier 7d: static lint for cast-mismatch patterns in call args.
+
+    Surfaces explicit casts on function arguments that are likely wrong —
+    especially the `(f32)` cast on integer values that the matching agent
+    identified as the `drop-variadic-cast` pattern in their session
+    findings.
+
+    Three-tier classification:
+      HIGH — cast on a value the function declares as integer
+      MEDIUM — cast on a value that LOOKS integer but can't be proven
+      LOW — every other explicit cast (for general audit)
+
+    With `--asm`, also cross-references the call site against
+    build/GALE01/asm/<unit>.s to identify args loaded as integers when
+    the source casts to float (and vice versa).
+    """
+    melee_root = DEFAULT_MELEE_ROOT
+    unit = _find_unit_for_function(function, melee_root)
+    if unit is None:
+        typer.echo(f"function not found in report.json: {function}", err=True)
+        raise typer.Exit(2)
+    target_path = melee_root / "src" / f"{unit}.c"
+    if not target_path.exists():
+        typer.echo(f"target source not found: {target_path}", err=True)
+        raise typer.Exit(2)
+
+    text = target_path.read_text()
+    warnings = audit_function_casts(text, function)
+
+    # Severity filter
+    sev_order = {"high": 0, "medium": 1, "low": 2}
+    min_level = sev_order.get(severity, 1) if severity != "all" else 99
+    if severity != "all":
+        warnings = [w for w in warnings if sev_order.get(w.severity, 99) <= min_level]
+
+    asm_contexts: dict = {}
+    if asm:
+        asm_path = melee_root / "build" / "GALE01" / "asm" / f"{unit}.s"
+        if not asm_path.exists():
+            typer.echo(
+                f"asm file not found: {asm_path}\n"
+                f"(try `ninja {asm_path.relative_to(melee_root)}`)",
+                err=True,
+            )
+        else:
+            from ..mwcc_debug.source_patch import find_function as _find_fn
+            span = _find_fn(text, function)
+            if span:
+                fn_text = text[span.sig_start : span.full_end]
+                sites = find_call_sites(fn_text)
+                contexts = crossref_with_asm(sites, asm_path, function)
+                # Index by (call_target, source_line) for warning correlation
+                for ctx in contexts:
+                    key = (ctx.source_site.call_target, ctx.source_site.line)
+                    asm_contexts[key] = ctx
+
+    if json_out:
+        data = []
+        for w in warnings:
+            entry = {
+                "line": w.line,
+                "call_target": w.call_target,
+                "arg_index": w.arg_index,
+                "cast_type": w.cast_type,
+                "inner_expr": w.inner_expr,
+                "severity": w.severity,
+                "reason": w.reason,
+            }
+            data.append(entry)
+        print(json.dumps({"function": function, "warnings": data}, indent=2))
+        return
+
+    print(f"Function: {function}")
+    print(f"Source:   {target_path}")
+    if not warnings:
+        print(
+            f"No casts at severity≥{severity}. "
+            f"(Re-run with --severity all to see all explicit casts.)"
+        )
+        return
+    print(f"Cast warnings ({len(warnings)} at severity≥{severity}):")
+    print()
+    for w in warnings:
+        marker = {"high": "!!", "medium": "!", "low": "·"}.get(w.severity, " ")
+        print(f"  {marker} {target_path}:{w.line}  ({w.severity})")
+        print(f"     ({w.cast_type}) {w.inner_expr}  →  "
+              f"{w.call_target}(... arg{w.arg_index} ...)")
+        print(f"     {w.reason}")
+        if asm:
+            key = (w.call_target, w.line - (text[:0].count('\n')))
+            # Find any matching context by call target + line proximity
+            for (target, src_line), ctx in asm_contexts.items():
+                if target == w.call_target and ctx.asm_line_idx is not None:
+                    kinds = ctx.arg_register_kinds
+                    if kinds:
+                        kind_str = ", ".join(f"{r}={k}"
+                                             for r, k in sorted(kinds.items()))
+                        print(f"     ASM arg loads: {kind_str}")
+                    break
+        print()
