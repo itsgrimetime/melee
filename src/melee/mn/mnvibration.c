@@ -168,8 +168,9 @@ static inline s32 mnVibration_GetNameSlot(MnVibrationData* data, s32 j)
     return (u8) name_idx;
 }
 
-static inline HSD_GObj* mnVibration_CreateCursorGObj(
-    MnVibrationData* data, MnVibrationJointAssets* assets)
+static inline HSD_GObj*
+mnVibration_CreateCursorGObj(MnVibrationData* data,
+                             MnVibrationJointAssets* assets)
 {
     HSD_GObj* cursor_gobj;
     HSD_JObj* loaded_joint;
