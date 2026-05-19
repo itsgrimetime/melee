@@ -856,7 +856,6 @@ void fn_80248A78(HSD_GObj* gobj)
             cursor_row = data->x0[1];
             base_y = mnVibration_JObjGetTranslationY(row_0_jobj);
             row_1_jobj = data_post_create->jobjs[18];
-            assets = &mnVibration_804A0868;
             row_spacing =
                 (0, mnVibration_JObjGetTranslationY(row_1_jobj) - base_y);
             temp_x = (temp_z = mnVibration_JObjGetTranslationX(
