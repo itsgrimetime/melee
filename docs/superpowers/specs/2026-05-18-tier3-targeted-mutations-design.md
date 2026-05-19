@@ -9,6 +9,16 @@ each seed.
 Where Tier 2 says "evaluate candidates better," Tier 3 says
 **"generate better candidates to start with."**
 
+## Naming note: "Tier 3" in this doc
+
+This spec uses "Tier 3" within the **permuter integration tier
+hierarchy** (Tier 0 = triage, Tier 1 = weight-tuned configs, Tier 2 =
+blended scoring, Tier 3 = targeted mutations). It is NOT the same as
+the broader matching-tool taxonomy (Tier 5 = allocator biasing DLL,
+Tier 6 = structural ceilings, Tier 7a-e = permuter integration
+commands). Cross-references in `docs/mwcc-debug-permuter-integration.md`
+will use "permuter Tier 3" to disambiguate.
+
 ## Why Tier 3 now
 
 Tier 2 plumbing exists, but permuter still searches a huge space
@@ -103,15 +113,40 @@ def list_bindings(
 ) -> list[VarBinding]: ...
 ```
 
-**Mechanism:** parse the function via pycparser, walk local decls in
-order. MWCC assigns virtual register numbers in declaration order
-starting at 32. The N-th local declaration becomes virtual r(32+N).
-Parameters take a separate range determined by the C ABI (r3-r10 on
-PPC), so they're handled separately.
+**Mechanism — empirically-validated, with explicit confidence:**
 
-For ambiguous cases (e.g., decl-shadowing, complex initializers), the
-bridge does best-effort matching via use-site alignment (similar to
-`match-iter-first`'s structural matcher).
+The bridge uses two strategies and reports a confidence label:
+
+1. **Use-site structural alignment (primary, "exact" confidence when
+   it matches uniquely).** Find each local decl's first read/write in
+   the source AST. Use the same structural-signature matcher
+   `iter_match.py` already implements to find that instruction in the
+   pre-coloring pass, and read the virtual register at the destination
+   slot.
+
+2. **Decl-order heuristic (fallback, "best-guess" confidence).** As a
+   secondary signal, walk local decls in declaration order and report
+   the N-th distinct virtual seen in the pre-coloring pass. This works
+   in the typical case where MWCC numbers locals roughly in source
+   order but is NOT load-bearing on its own — callers see
+   `confidence="best-guess"` when only this strategy hit.
+
+3. **Calibration step before implementation (validation gate).** Before
+   downstream mutators land, the bridge MUST be validated against ≥3
+   functions where the variable↔virtual mapping is known (e.g.,
+   `fn_80247510`, `fn_8024E1B4`, and one more from the matched set).
+   If the bridge produces wrong mappings on the calibration set, the
+   bridge is broken and Tier 3 implementation pauses until it's fixed.
+   This is a hard gate, not a nice-to-have — the entire mutator layer
+   trusts the bridge.
+
+**Parameters:** parameter virtuals get a low ig_idx (32-34) but their
+mapping to parameter names is determined by the C ABI (first GPR arg →
+r3 → some virtual). For v1, the bridge handles parameters as a separate
+read-only view (`list_bindings` returns them with `confidence="exact"`
+since the ABI fixes the mapping). Mutators do NOT operate on
+parameters in v1 (changing parameter types is a callers-API change,
+out of scope).
 
 **CLI:** `debug var-to-virtual -f FN <var-name>` and
 `debug virtual-to-var -f FN <ig-idx>`. Both also have `--json` for
@@ -122,7 +157,14 @@ tooling.
 `tools/melee-agent/src/mwcc_debug/mutators.py`
 
 AST-based source mutations targeting specific variables. Uses pycparser
-for parse + reconstruct.
+for parse + reconstruct, with the same preprocessing approach as the
+existing `source_patch.py` module (function-body extraction so MWCC-
+specific constructs at file scope — `#pragma auto_inline`,
+`#pragma dont_inline`, `__attribute__((never_inline))`, K&R-style decls
+in older TUs — don't trip pycparser). For functions where even the
+body alone is unparseable (rare in our stuck cases), mutators raise a
+recognizable `MutationUnsupported` exception and the orchestrator
+skips that seed.
 
 **Two mutators in v1:**
 
@@ -138,19 +180,40 @@ def mutate_type_change(
 ) -> str: ...
 ```
 
-**`mutate_alias_split`** — introduces a fresh local copy of a variable
-before its N-th use, and rewrites that use to reference the fresh local.
-Models the alias-split pattern from the catalog.
+**`mutate_alias_split` (pointer-alias rewrite rule for v1).**
+
+v1 restricts to the dominant catalog shape: a pointer/pointer-like
+variable that's read multiple times and we want to **alias the value
+once before the N-th statement that reads it, then rewrite that one
+statement to use the fresh local.** This models patterns like
+`fn_8024E1B4`'s `ptr = data = gobj->user_data` and similar from
+MEMORY.md.
+
+Concretely:
+
+- "Use" = a statement-level expression that **reads** the variable
+  (not writes; not a compound assignment LHS).
+- `at_stmt_index` = the 0-indexed N-th such reading statement,
+  counting in source order within the function body.
+- The rewrite:
+  1. Inserts `<type> <new_name> = <var>;` immediately before that
+     statement.
+  2. Replaces THAT ONE statement's reads of `<var>` with `<new_name>`.
+  3. All other reads of `<var>` keep the original name.
 
 ```python
 def mutate_alias_split(
     source: str,
     fn_name: str,
     var_name: str,
-    use_index: int,        # 0-indexed; 0 = first use, etc.
+    at_stmt_index: int,    # 0-indexed; counts read-only uses of var
     new_name: Optional[str] = None,  # default: var_name + "_alias"
 ) -> str: ...
 ```
+
+Out of v1 (deferred to Tier 4+): aliasing lvalues with side effects,
+aliasing write-targets, multi-statement use sites. Each adds rewrite
+ambiguity; defer until the simple form proves useful.
 
 Both return new source strings; callers are responsible for writing.
 
@@ -158,8 +221,9 @@ Both return new source strings; callers are responsible for writing.
 `debug mutate alias-split -f FN --var V --at N [--apply]`. Default: write
 to stdout. `--apply` writes back to the source file.
 
-Errors (variable not found, parse failure, ambiguous variable) raise
-typer.Exit with a clear message and a non-zero code.
+Errors (variable not found, parse failure, ambiguous variable,
+`MutationUnsupported`) raise typer.Exit with a clear message and a
+non-zero code.
 
 ### 3. Multi-start orchestrator
 
@@ -177,18 +241,44 @@ Coordinated search using everything above + the Tier 2 permuter.
    - For each (pattern, variable) pair, apply 1-3 targeted mutations
      via the mutator library
    - Stage each variant inside `nonmatchings/<fn>/tier3_seed_<idx>/`
-   - Skip seeds that fail to compile
+   - Skip seeds that fail to compile or that `mutators` flag as
+     unsupported
 4. For each surviving seed, run a permuter session with our blended
    scorer (`--per-seed-iters` iterations, default 200).
 5. Track best score across seeds + the unmutated baseline.
 6. Report the best result with its diff and which seed produced it.
 
-**Caveats:**
+**Empty-suggestion fallback.** If `guide` returns no high-severity
+suggestions (function is at high-but-stuck match with no obvious named
+blocker), tier3-search falls back to:
 
-- Single-process inside the orchestrator (seeds run sequentially) to
-  keep pcdump.txt non-racing. Future: parallel seeds via per-thread cwd.
-- Default budget: 5 seeds × 200 iterations = 1000 total iterations,
-  ~17 minutes at 1s per scoring call. Tunable.
+- Read `rank-callees` output and pick the top-3 callee-save virtuals
+  the cascade is dispensing to. Look those up via the bridge to source
+  variables.
+- Generate `mutate_type_change` and `mutate_alias_split` seeds for
+  each. This is the "speculative" path; expected to be lower-yield
+  but worth trying when there's nothing else.
+
+If both guide AND rank-callees produce no usable targets,
+tier3-search exits with a clear message: "no Tier 3 targets;
+fall back to `debug permute -f FN` for a vanilla Tier 2 run."
+
+**Seed parallelism.** Within one tier3-search invocation, seeds CAN
+run in parallel because each invokes a separate permuter session
+that runs `-j 1` (which is the existing Tier 2 constraint to avoid
+pcdump.txt races). v1 runs seeds sequentially for simplicity and
+clean log output; `--parallel-seeds N` is a Tier 3.1 follow-up if the
+budget proves painful. The deferred parallelism is purely a UX win,
+not a correctness gate.
+
+**Default budget — calibrated, not optimistic.** Tier 2 measured one
+scored iteration at ~1s under ideal conditions but real candidates
+(failing compiles, longer functions, full IGNode-distance) typically
+land at 2-3s. The default budget of 5 seeds × 200 iterations =
+1000 scoring calls = **20-50 minutes wall-clock** on a single host.
+We document this range. Agents using tier3-search are signing up for
+a long-ish run; the orchestrator emits a clear up-front estimate
+based on a single warmup score call.
 
 ## Data flow
 
@@ -217,8 +307,12 @@ mutator output    permuter run        scorer (Tier 2)
 - `tools/melee-agent/tests/test_mwcc_debug_mutators.py`
 - `tools/melee-agent/tests/test_mwcc_debug_tier3_search.py`
   (integration; uses live build artifacts when available)
-- `docs/mwcc-debug-tier3-tutorial.md`
-  (how-to for the matching agent)
+
+**Doc strategy.** Single permuter-integration doc is the source of
+truth: extend `docs/mwcc-debug-permuter-integration.md` with a Tier 3
+section (under "permuter Tier 3" label per the naming note above). No
+separate tutorial file — the integration doc already contains the
+workflow chapters for Tier 0/1/2, so Tier 3 slots in alongside them.
 
 **Modified:**
 - `tools/melee-agent/src/cli/debug.py` — 4 new CLI commands
@@ -236,19 +330,36 @@ mutator output    permuter run        scorer (Tier 2)
 - Unit: synthetic functions with known decl order → known virtual
   numbers. Includes edge cases: decl-shadowing, conditional decls in
   nested blocks, no-init vs initialized decls.
-- Integration: a known Melee function (e.g., fn_80247510) with verified
-  variable → virtual mappings.
+- **Calibration test (REQUIRED — must pass before Tier 3 implementation
+  proceeds past the bridge):** validate `list_bindings` against at
+  least 3 real Melee functions where the ground truth is known. v1
+  set: `fn_80247510` (param-iter-ceiling case; ig_idx 32-34 known
+  as params), `fn_8024E1B4` (dual-pointer pattern from MEMORY.md;
+  `ptr`/`data` mapping known), and one more from the matched set
+  to be selected during implementation. Bridge fails calibration →
+  Tier 3 implementation pauses until fixed.
 
 **Mutators:**
 - Unit: small synthetic functions, mutate, parse mutated output, check
   AST structure.
+- **Regression test against a known-good baseline (REQUIRED):**
+  `mutate_alias_split` applied to `fn_8024E1B4` reproducing the
+  dual-pointer pattern (`ptr = data = gobj->user_data`) MUST compile
+  cleanly and produce a .o matching the documented 100% baseline. This
+  converts the catalog pattern from "we noticed this works" into an
+  actively-tested mutator output.
 - Integration: real Melee TU, mutate, run through `compile.sh` (via
-  fix-perm-compile), verify the .o builds.
+  fix-perm-compile), verify the .o builds. This is the cheaper smoke
+  test on top of the regression test.
 
 **Orchestrator:**
 - End-to-end: known stuck function, run `tier3-search`, verify some
   seed produces a non-baseline score. (May not improve match in tests
   — just verify the pipeline works.)
+- Empty-suggestion path: a function where `guide` produces no
+  high-severity suggestions → orchestrator must use the rank-callees
+  fallback and either find seeds OR exit cleanly with the
+  documented message.
 
 ## Out of scope (Tier 4+)
 
@@ -282,14 +393,18 @@ mutator output    permuter run        scorer (Tier 2)
 
 ## Open questions
 
-- **Parameter virtuals.** Should mutators support modifying parameter
-  types? In v1: no — too invasive (changes callers). Locals only.
 - **Mutation diversity.** Should we run BOTH widening AND shrinking
   variants for the same variable, or pick one based on analysis? In
   v1: try both; let the score sort.
 - **Memoization.** Some mutations may produce identical sources
   across seed combinations. Detect + dedupe? In v1: no — extra
   complexity, minor cost.
+- **When to grow the mutator set.** Adding more mutators
+  (subexpr-extract, chained-init, drop-variadic-cast, etc.) is cheap
+  individually but expands the seed space. **Bar: ≥3 production
+  matches landed via Tier 3 before considering additional mutators.**
+  This prevents bloat from speculative additions and forces evidence-
+  driven growth.
 
 ## Success metric
 
