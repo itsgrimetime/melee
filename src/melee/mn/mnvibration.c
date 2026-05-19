@@ -229,11 +229,12 @@ void fn_80247510(HSD_GObj* gobj)
 
     // Handle B button - exit menu
     inputs = gm_801A36A0(4);
+    name_idx = 0;
     if (inputs & 2) {
         MnVibrationData* exit_data;
-        lbAudioAx_80024030(0);
-        mn_804A04F0.entering_menu = 0;
-        mn_80229894(4, 0, 3);
+        lbAudioAx_80024030(name_idx);
+        mn_804A04F0.entering_menu = name_idx;
+        mn_80229894(4, name_idx, 3);
         // Clean up text objects - reload data pointer
         exit_data = mnVibration_804D6C28->user_data;
         for (i = 0; i < 8; i++) {
@@ -249,14 +250,14 @@ void fn_80247510(HSD_GObj* gobj)
     }
 
     // Check animation timer
-    if (data->x0[0] < ((AnimLoopSettings*) &mnVibration_803EECE0)->end_frame) {
-        data->x0[0]++;
+    if (data->x0[name_idx] < ((AnimLoopSettings*) &mnVibration_803EECE0)->end_frame) {
+        data->x0[name_idx]++;
         return;
     }
 
     // Check A button per controller for rumble toggle
     for (i = 0; i < 4; i++) {
-        if (data->x0[i + 2] == 0) {
+        if (data->x0[i + 2] == name_idx) {
             inputs = gm_801A36A0(i);
             if (inputs & 1) {
                 HSD_JObj* panel_jobj;
