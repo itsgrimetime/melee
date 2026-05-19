@@ -967,6 +967,7 @@ bool lbColl_80006E58(Vec3* arg0, Vec3* arg1, Vec3* arg2, Vec3* arg3,
                      Vec3* arg4, Vec3* arg5, MtxPtr arg6, Vec3* arg7,
                      float* arg8, float scl, float arg10, float arg11)
 {
+    float temp_f4_9;
     float temp_f4_8;
     float temp_f4_10;
     float temp_f9_2;
@@ -978,7 +979,6 @@ bool lbColl_80006E58(Vec3* arg0, Vec3* arg1, Vec3* arg2, Vec3* arg3,
     float spD0;
     float spCC;
     float temp_f0;
-    float temp_f10;
     float temp_f10_2;
     float temp_f10_3;
     float temp_f10_4;
@@ -1021,7 +1021,6 @@ bool lbColl_80006E58(Vec3* arg0, Vec3* arg1, Vec3* arg2, Vec3* arg3,
     float temp_f4_5;
     float temp_f4_6;
     float temp_f4_7;
-    float temp_f4_9;
     float temp_f5;
     float temp_f5_2;
     float temp_f5_3;
@@ -1037,8 +1036,8 @@ bool lbColl_80006E58(Vec3* arg0, Vec3* arg1, Vec3* arg2, Vec3* arg3,
     float var_f0;
     float var_f1;
     float var_f1_2;
-    float var_f22;
     float var_f20;
+    float var_f22;
     float var_f21;
     float var_f24;
     float var_f2;
@@ -1055,6 +1054,7 @@ bool lbColl_80006E58(Vec3* arg0, Vec3* arg1, Vec3* arg2, Vec3* arg3,
     s32 var_r0_3;
     s32 var_r0_4;
     float temp_f25;
+    float temp_f10;
     PAD_STACK(88);
 
     temp_f3 = (arg10 * arg11) + scl;
