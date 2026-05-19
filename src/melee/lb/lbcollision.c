@@ -967,6 +967,7 @@ bool lbColl_80006E58(Vec3* arg0, Vec3* arg1, Vec3* arg2, Vec3* arg3,
                      Vec3* arg4, Vec3* arg5, MtxPtr arg6, Vec3* arg7,
                      float* arg8, float scl, float arg10, float arg11)
 {
+    float temp_f9_3;
     float temp_f4_9;
     float temp_f4_8;
     float temp_f4_10;
@@ -1032,7 +1033,6 @@ bool lbColl_80006E58(Vec3* arg0, Vec3* arg1, Vec3* arg2, Vec3* arg3,
     float temp_f7_2;
     float temp_f8;
     float temp_f9;
-    float temp_f9_3;
     float var_f0;
     float var_f1;
     float var_f1_2;
@@ -1198,17 +1198,17 @@ block_39: {
                 ((temp_f3_3 * temp_f3_3) +
                  ((temp_f5_3 * temp_f5_3) + (temp_f11_3 * temp_f11_3))))
             {
+                Vec3 a2;
                 Vec3 c3;
-                c3 = arg2_copy;
+                c3 = *arg2;
                 var_f0 = lbColl_804D79F8;
                 temp_f9_3 = temp_f6_4 - arg2->x;
                 temp_f10_3 = temp_f7_2 - arg2->y;
                 temp_f11_4 = temp_f8 - arg2->z;
                 {
-                    Vec3 a2;
                     float dot;
 
-                    a2 = arg0_copy;
+                    a2 = *arg0;
                     dot = (temp_f11_4 * (c3.z - a2.z)) +
                           ((temp_f9_3 * (c3.x - a2.x)) +
                            (temp_f10_3 * (c3.y - a2.y)));
@@ -1223,14 +1223,14 @@ block_39: {
                 }
                 var_f24 = var_f2;
             } else {
+                Vec3 b0;
                 Vec3 c2;
-                c2 = arg2_copy;
+                c2 = *arg2;
                 var_f0 = lbColl_804D7A08;
                 temp_f9_4 = temp_f6_4 - arg2->x;
                 temp_f10_4 = temp_f7_2 - arg2->y;
                 temp_f11_5 = temp_f8 - arg2->z;
                 {
-                    Vec3 b0;
                     float dot;
 
                     b0 = *arg1;
