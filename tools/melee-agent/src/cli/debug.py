@@ -3659,8 +3659,9 @@ def _find_wibo() -> Optional[Path]:
     """Locate the patched wibo binary. Resolution order:
 
     1. $MWCC_DEBUG_WIBO env var
-    2. <melee_root>/../melee-harness/bin/wibo (Luke's harness adjacent)
-    3. ~/code/melee-harness/bin/wibo
+    2. <melee_root>/tools/mwcc_debug/bin/wibo (vendored — built by build_wibo.sh)
+    3. <melee_root>/../melee-harness/bin/wibo (adjacent harness checkout)
+    4. ~/code/melee-harness/bin/wibo
     """
     import os as _os
     env = _os.environ.get("MWCC_DEBUG_WIBO")
@@ -3668,6 +3669,7 @@ def _find_wibo() -> Optional[Path]:
         p = Path(env).expanduser()
         return p if p.exists() else None
     candidates = [
+        DEFAULT_MELEE_ROOT / "tools" / "mwcc_debug" / "bin" / "wibo",
         DEFAULT_MELEE_ROOT.parent / "melee-harness" / "bin" / "wibo",
         Path("~/code/melee-harness/bin/wibo").expanduser(),
     ]
@@ -3675,6 +3677,27 @@ def _find_wibo() -> Optional[Path]:
         if c.exists():
             return c
     return None
+
+
+def _build_local_wibo() -> Optional[Path]:
+    """Build the vendored wibo via tools/mwcc_debug/build_wibo.sh.
+    Returns the built path or None on failure.
+    """
+    build_script = (
+        DEFAULT_MELEE_ROOT / "tools" / "mwcc_debug" / "build_wibo.sh"
+    )
+    if not build_script.exists():
+        return None
+    try:
+        subprocess.run(
+            [str(build_script)],
+            cwd=build_script.parent,
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        return None
+    out = build_script.parent / "bin" / "wibo"
+    return out if out.exists() else None
 
 
 def _find_compiler_dir() -> Path:
@@ -3733,18 +3756,18 @@ def setup_local(
     melee_root = DEFAULT_MELEE_ROOT
     compiler_dir = _find_compiler_dir()
 
-    # 1. Locate wibo
+    # 1. Locate wibo, or build it
     wibo = _find_wibo()
     if wibo is None:
-        typer.echo(
-            "wibo binary not found. Setup the patched wibo first:\n"
-            f"  git clone https://github.com/lukechampine/melee-harness "
-            f"{melee_root.parent}/melee-harness\n"
-            f"  cd {melee_root.parent}/melee-harness && bash setup.sh\n"
-            "Or set MWCC_DEBUG_WIBO=<path-to-wibo-binary>.",
-            err=True,
-        )
-        raise typer.Exit(2)
+        print("[..] wibo not found; building via build_wibo.sh...")
+        wibo = _build_local_wibo()
+        if wibo is None:
+            typer.echo(
+                "wibo build failed. See tools/mwcc_debug/build_wibo.sh.\n"
+                "Alternatives: set $MWCC_DEBUG_WIBO=<path-to-wibo-binary>.",
+                err=True,
+            )
+            raise typer.Exit(2)
     print(f"[ok] wibo: {wibo}")
 
     # 2. Build the DLL if needed
@@ -3967,3 +3990,299 @@ def pcdump_local(
     output.parent.mkdir(parents=True, exist_ok=True)
     pcdump_path.rename(output)
     print(f"wrote: {output}", file=sys.stderr)
+
+
+@debug_app.command(name="score-source")
+def score_source(
+    c_file: Annotated[
+        str,
+        typer.Argument(
+            help="Path to a .c file to compile (relative to melee root). "
+                 "Can be a staging path inside `nonmatchings/`.",
+        ),
+    ],
+    function: Annotated[
+        str,
+        typer.Option(
+            "--function", "-f",
+            help="Function within the TU to score.",
+        ),
+    ],
+    target: Annotated[
+        Path,
+        typer.Option(
+            "--target", "-t",
+            help="Target spec (YAML or JSON, from `debug derive-target`).",
+        ),
+    ],
+    cflags_from: Annotated[
+        Optional[str],
+        typer.Option(
+            "--cflags-from",
+            help="Use cflags from this unit's ninja block instead of "
+                 "inferring from c_file. Useful when c_file is a staged "
+                 "candidate without its own ninja build block.",
+        ),
+    ] = None,
+    quiet: Annotated[
+        bool,
+        typer.Option(
+            "--quiet", "-q",
+            help="Suppress everything except the integer score on stdout. "
+                 "Designed for use as permuter's external scorer command.",
+        ),
+    ] = False,
+) -> None:
+    """Compile a source via pcdump-local, then score against a target.
+
+    Single-command flow for use as decomp-permuter's external scorer.
+    Outputs an integer score (lower = better; 0 = perfect target match).
+    Use `--quiet` to silence everything except the score itself.
+
+    Wires:
+        c_file → mwcceppc_debug.exe → pcdump.txt → parse → score_function
+    """
+    from ..mwcc_debug import (
+        find_function,
+        parse_hook_events,
+        parse_pcdump,
+        score_function,
+    )
+
+    melee_root = DEFAULT_MELEE_ROOT
+    src_rel = _resolve_src_relative(c_file)
+
+    # Resolve wibo + compiler (re-use pcdump-local's resolution)
+    wibo_path = _find_wibo()
+    if wibo_path is None or not wibo_path.exists():
+        typer.echo("wibo not found. Run `debug setup-local` first.", err=True)
+        raise typer.Exit(2)
+    debug_compiler = _find_compiler_dir() / "mwcceppc_debug.exe"
+    if not debug_compiler.exists():
+        typer.echo(
+            "patched compiler not found. Run `debug setup-local` first.",
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    # cflags: from the explicit unit OR from c_file's ninja block
+    cflags_unit = cflags_from if cflags_from else c_file
+    cflags_unit_rel = _resolve_src_relative(cflags_unit)
+    cflags, _mw_version = _ninja_cflags_for_unit(cflags_unit_rel)
+
+    # Compile, generating pcdump.txt in project root
+    pcdump_path = melee_root / "pcdump.txt"
+    if pcdump_path.exists():
+        pcdump_path.unlink()
+
+    # Use unique discard .o to avoid races across parallel scorers
+    import time
+    discard_o = f"/tmp/score_source_discard_{os.getpid()}_{int(time.time()*1000)}.o"
+
+    args = (
+        [str(wibo_path), str(debug_compiler)]
+        + shlex.split(cflags)
+        + ["-c", src_rel, "-o", discard_o]
+    )
+
+    proc = subprocess.run(
+        args, cwd=melee_root, capture_output=True, text=True,
+    )
+    if not pcdump_path.exists():
+        if not quiet:
+            typer.echo(proc.stderr, err=True)
+        # Penalty for unscoreable candidates
+        print(2**30)
+        raise typer.Exit(0)
+
+    pcdump_text = pcdump_path.read_text()
+    pcdump_path.unlink()  # don't pollute repo
+
+    # Parse + score
+    fns = parse_pcdump(pcdump_text)
+    fn = next((f for f in fns if f.name == function), None)
+    if fn is None:
+        if not quiet:
+            typer.echo(
+                f"function {function!r} not in compiled pcdump. "
+                f"Candidate may have removed/renamed it.",
+                err=True,
+            )
+        print(2**30)
+        raise typer.Exit(0)
+
+    events_list = parse_hook_events(pcdump_text)
+    events = find_function(events_list, function)
+
+    target_spec = _load_target_spec(target)
+    result = score_function(fn, target_spec, events=events)
+
+    # Permuter expects an integer
+    print(int(result.total))
+
+
+@debug_app.command(name="permute")
+def permute(
+    function: Annotated[
+        str,
+        typer.Option(
+            "--function", "-f",
+            help="Function to permute (required).",
+        ),
+    ],
+    target: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--target", "-t",
+            help="Target spec for mwcc-debug scoring. Auto-derived from "
+                 "current pcdump if omitted.",
+        ),
+    ] = None,
+    perm_root: Annotated[
+        Path,
+        typer.Option(
+            "--perm-root",
+            help="Root of decomp-permuter clone.",
+        ),
+    ] = Path("~/code/decomp-permuter").expanduser(),
+    blend: Annotated[
+        float,
+        typer.Option(
+            "--blend",
+            help="Weight α applied to mwcc-debug score when blending "
+                 "with objdiff bytes. Final = bytes + α * mwcc.",
+        ),
+    ] = 0.1,
+    threads: Annotated[
+        int,
+        typer.Option(
+            "-j", "--threads",
+            help="Permuter parallelism. Default 1 to keep pcdump.txt "
+                 "writes serialized in the project root.",
+        ),
+    ] = 1,
+    extra: Annotated[
+        Optional[list[str]],
+        typer.Argument(
+            help="Extra args passed through to permuter.py.",
+        ),
+    ] = None,
+) -> None:
+    """Tier 2: run decomp-permuter with mwcc-debug score blended in.
+
+    Per-iteration, permuter scores candidates by combining objdiff
+    byte-distance with `melee-agent debug score-source` (IGNode-distance
+    from pcdump). Byte distance stays primary; the mwcc signal breaks
+    ties between byte-equivalent candidates — useful for register-cascade
+    stuck cases where the byte scorer can't distinguish many mutations.
+
+    Prerequisites:
+    - Run `melee-agent debug setup-local` (one-time).
+    - `<perm-root>/nonmatchings/<function>/` exists with base.c, target.o,
+      compile.sh. Create via `decomp-permuter/import.py`.
+    - `melee-agent debug fix-perm-compile <perm_dir>` if compile.sh was
+      generated on macOS (auto-applied by gen-permuter-config).
+
+    Single-threaded by default since our DLL writes pcdump.txt to the
+    project root and parallel threads would race. Use `-j 1` (default)
+    until we add per-thread output handling.
+    """
+    melee_root = DEFAULT_MELEE_ROOT
+    perm_dir = perm_root / "nonmatchings" / function
+
+    if not perm_dir.exists():
+        typer.echo(
+            f"{perm_dir} not found. Run decomp-permuter's import.py first:\n"
+            f"  cd {perm_root} && ./import.py <c_file> <target.s> "
+            f"--function {function}",
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    # Resolve TU for cflags
+    unit = _find_unit_for_function(function, melee_root)
+    if unit is None:
+        typer.echo(
+            f"could not find {function!r} in report.json. "
+            f"Rebuild via `ninja build/GALE01/report.json`.",
+            err=True,
+        )
+        raise typer.Exit(3)
+    unit_c = f"src/{unit}.c"
+
+    # Derive target if not given
+    if target is None:
+        target = melee_root / "build" / "mwcc_debug_cache" / \
+            f"{unit}_target.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+
+        cache_p = pcdump_cache.cache_path(melee_root, unit)
+        if not cache_p.exists():
+            print(
+                f"[..] no cached pcdump for {unit}; "
+                f"generating via pcdump-local..."
+            )
+            wibo_p = _find_wibo()
+            cc_p = _find_compiler_dir() / "mwcceppc_debug.exe"
+            if wibo_p is None or not wibo_p.exists() or not cc_p.exists():
+                typer.echo(
+                    "wibo or patched compiler missing. Run "
+                    "`melee-agent debug setup-local` first.",
+                    err=True,
+                )
+                raise typer.Exit(4)
+            cflags, _ = _ninja_cflags_for_unit(unit_c)
+            pcd_path = melee_root / "pcdump.txt"
+            if pcd_path.exists():
+                pcd_path.unlink()
+            subprocess.run(
+                [str(wibo_p), str(cc_p)]
+                + shlex.split(cflags)
+                + ["-c", unit_c, "-o", "/tmp/permute_init.o"],
+                cwd=melee_root,
+                check=True,
+            )
+            pcdump_cache.ensure_cache_dir(melee_root)
+            pcd_path.rename(cache_p)
+            print(f"[ok] pcdump → {cache_p}")
+
+        from ..mwcc_debug import derive_target_from_function
+        text = cache_p.read_text()
+        fns = parse_pcdump(text)
+        fn = next((f for f in fns if f.name == function), None)
+        if fn is None:
+            _abort_function_not_in_dump(function, [f.name for f in fns])
+        spec = derive_target_from_function(fn)
+        target.write_text(json.dumps(spec, indent=2))
+        print(f"[ok] derived target → {target}")
+    else:
+        print(f"[ok] using target: {target}")
+
+    # Locate the wrapper script
+    wrapper = (
+        melee_root / "tools" / "melee-agent" / "scripts"
+        / "permute_with_mwcc.py"
+    )
+    if not wrapper.exists():
+        typer.echo(f"wrapper not found: {wrapper}", err=True)
+        raise typer.Exit(4)
+
+    # Build env
+    env = os.environ.copy()
+    env["MELEE_PERMUTER_ROOT"] = str(perm_root)
+    env["MELEE_ROOT"] = str(melee_root)
+    env["MWCC_DEBUG_TARGET"] = str(target)
+    env["MWCC_DEBUG_FN"] = function
+    env["MWCC_DEBUG_UNIT"] = unit_c
+    env["MWCC_DEBUG_BLEND"] = str(blend)
+
+    cmd = ["python", str(wrapper), str(perm_dir), "-j", str(threads)]
+    if extra:
+        cmd.extend(extra)
+
+    print(f"[ok] launching permuter (blend={blend} threads={threads})...")
+    print(f"  {' '.join(cmd)}")
+    print()
+
+    proc = subprocess.run(cmd, env=env, cwd=perm_root)
+    raise typer.Exit(proc.returncode)
