@@ -194,7 +194,6 @@ HSD_JObj* mnVibration_802474C4(s32 count)
 void fn_80247510(HSD_GObj* gobj)
 {
     MnVibrationData* data = mnVibration_804D6C28->user_data;
-    u8 var_ctr;
     s32 i;
     u64 inputs;
     u64 inputs_repeat;
