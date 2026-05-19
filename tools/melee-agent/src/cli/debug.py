@@ -3928,22 +3928,30 @@ def pcdump_local(
     # Extract cflags from build.ninja
     cflags, _mw_version = _ninja_cflags_for_unit(src_rel)
 
-    # Construct compile command. mwcc writes pcdump.txt to cwd, so we
-    # run from melee_root and move it after.
-    pcdump_path = melee_root / "pcdump.txt"
+    # Construct compile command. The patched DLL reads
+    # MWCC_DEBUG_PCDUMP_PATH for its output filename (relative paths land
+    # in cwd = melee_root). Use a unique per-PID + per-time name so
+    # parallel pcdump-local runs don't race on a shared pcdump.txt.
+    import time
+    pcdump_name = f"pcdump_{os.getpid()}_{int(time.time() * 1000)}.txt"
+    pcdump_path = melee_root / pcdump_name
     if pcdump_path.exists():
         pcdump_path.unlink()
+
+    # Use unique discard .o too, for the same reason.
+    discard_o = f"/tmp/pcdump_local_discard_{os.getpid()}_{int(time.time() * 1000)}.o"
 
     # Args: cflags split + source + output. We discard the .o output
     # (just need the pcdump side-effect). Use /tmp for the .o.
     args = (
         [str(wibo_path), str(debug_compiler)]
         + shlex.split(cflags)
-        + ["-c", src_rel, "-o", "/tmp/pcdump_local_discard.o"]
+        + ["-c", src_rel, "-o", discard_o]
     )
 
     # Set env vars for our DLL's hooks
     env = os.environ.copy()
+    env["MWCC_DEBUG_PCDUMP_PATH"] = pcdump_name
     if force_phys:
         env["MWCC_DEBUG_FORCE_PHYS"] = force_phys
     if force_iter_first:
@@ -3973,6 +3981,12 @@ def pcdump_local(
     if not pcdump_path.exists():
         typer.echo("compile completed but no pcdump.txt was emitted", err=True)
         raise typer.Exit(4)
+
+    # Clean up the discarded .o (may not exist if compile aborted early)
+    try:
+        os.unlink(discard_o)
+    except OSError:
+        pass
 
     # Place output
     if str(output) == "-":
@@ -4070,13 +4084,17 @@ def score_source(
     cflags_unit_rel = _resolve_src_relative(cflags_unit)
     cflags, _mw_version = _ninja_cflags_for_unit(cflags_unit_rel)
 
-    # Compile, generating pcdump.txt in project root
-    pcdump_path = melee_root / "pcdump.txt"
+    # Compile, generating pcdump under a unique per-PID name so parallel
+    # scorer runs don't race on a shared pcdump.txt. The patched DLL reads
+    # MWCC_DEBUG_PCDUMP_PATH; we write the file relative to melee_root
+    # (which is the subprocess cwd) and read it back from the same path.
+    import time
+    pcdump_name = f"pcdump_score_{os.getpid()}_{int(time.time() * 1000)}.txt"
+    pcdump_path = melee_root / pcdump_name
     if pcdump_path.exists():
         pcdump_path.unlink()
 
     # Use unique discard .o to avoid races across parallel scorers
-    import time
     discard_o = f"/tmp/score_source_discard_{os.getpid()}_{int(time.time()*1000)}.o"
 
     args = (
@@ -4085,8 +4103,11 @@ def score_source(
         + ["-c", src_rel, "-o", discard_o]
     )
 
+    env = os.environ.copy()
+    env["MWCC_DEBUG_PCDUMP_PATH"] = pcdump_name
+
     proc = subprocess.run(
-        args, cwd=melee_root, capture_output=True, text=True,
+        args, cwd=melee_root, env=env, capture_output=True, text=True,
     )
     if not pcdump_path.exists():
         if not quiet:
@@ -4097,6 +4118,11 @@ def score_source(
 
     pcdump_text = pcdump_path.read_text()
     pcdump_path.unlink()  # don't pollute repo
+    # Clean up the discarded .o
+    try:
+        os.unlink(discard_o)
+    except OSError:
+        pass
 
     # Parse + score
     fns = parse_pcdump(pcdump_text)

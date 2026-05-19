@@ -803,10 +803,26 @@ static int debug_initialized = 0;
 static void enable_debug_output(void)
 {
     void *f;
+    char path_buf[260];
+    uint32 path_len;
+    const char *path;
+
     if (debug_initialized)
         return;
     debug_initialized = 1;
-    f = mw_fopen("pcdump.txt", "w");
+
+    // Read MWCC_DEBUG_PCDUMP_PATH env var; default to "pcdump.txt" so
+    // existing callers that invoke the patched compiler directly without
+    // setting the env var still work. CLI callers (pcdump-local,
+    // score-source) set this to a unique per-PID path so parallel runs
+    // don't contaminate each other's output.
+    path_len = GetEnvironmentVariableA(
+        "MWCC_DEBUG_PCDUMP_PATH", path_buf, sizeof(path_buf));
+    path = (path_len > 0 && path_len < sizeof(path_buf))
+        ? (const char *)path_buf
+        : "pcdump.txt";
+
+    f = mw_fopen(path, "w");
     if (f)
     {
         PCFILE = f;
