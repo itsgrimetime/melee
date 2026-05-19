@@ -47,9 +47,13 @@ APPLY=false
 STALE_DAYS=30
 
 # Paths to sync from master's tree (relative to repo root).
+# Skills live under .claude/skills/ (Claude's native layout) and are exposed
+# to Codex via the .codex/skills symlink. Both paths get propagated so every
+# agent (regardless of provider) sees the same skill set.
 OVERLAY_PATHS=(
     ".claude-plugin"
-    ".agents"
+    ".claude/skills"
+    ".codex"
 )
 
 # Branch prefixes that should receive the overlay.

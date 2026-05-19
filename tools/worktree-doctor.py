@@ -337,30 +337,73 @@ def collect_knowledge_source_warnings(root: Path, discord_cli: Path | None = Non
             )
         )
 
-    decomp_skill = root / ".agents" / "skills" / "decomp" / "SKILL.md"
-    if decomp_skill.exists():
-        results.append(CheckResult("ok", "repo-local decomp skill present: .agents/skills/decomp/SKILL.md"))
+    # Skills now live canonically under .claude/skills/ (Claude's native layout)
+    # and are exposed to Codex via the .codex/skills symlink. Both providers
+    # see the same set.
+    claude_skills_dir = root / ".claude" / "skills"
+    decomp_skill = claude_skills_dir / "decomp" / "SKILL.md"
+    if decomp_skill.exists() and not decomp_skill.is_symlink():
+        results.append(CheckResult("ok", ".claude/skills/decomp/SKILL.md present"))
+    elif decomp_skill.is_symlink():
+        results.append(
+            CheckResult(
+                "warn",
+                ".claude/skills/decomp/SKILL.md is a stale symlink (legacy .agents/ layout)",
+                "run ./tools/workflow/sync-hooks.sh --apply to refresh from master",
+            )
+        )
     else:
         results.append(
             CheckResult(
                 "warn",
-                ".agents/skills/decomp/SKILL.md is missing",
-                "restore the canonical repo-local decomp skill or use AGENTS.md/CLAUDE.md workflow instructions",
+                ".claude/skills/decomp/SKILL.md is missing",
+                "run ./tools/workflow/sync-hooks.sh --apply to restore from master",
             )
         )
 
-    claude_skill = root / ".claude" / "skills" / "decomp" / "SKILL.md"
+    if claude_skills_dir.is_dir():
+        skill_count = sum(1 for p in claude_skills_dir.iterdir() if p.is_dir())
+        if skill_count >= 5:
+            results.append(CheckResult("ok", f".claude/skills/ has {skill_count} skills"))
+        else:
+            results.append(
+                CheckResult(
+                    "warn",
+                    f".claude/skills/ has only {skill_count} skills (expected the full set)",
+                    "run ./tools/workflow/sync-hooks.sh --apply to sync from master",
+                )
+            )
+
     codex_skills = root / ".codex" / "skills"
-    if claude_skill.exists():
-        results.append(CheckResult("ok", "Claude decomp skill compatibility path resolves"))
+    if codex_skills.is_symlink():
+        target = os.readlink(codex_skills)
+        resolved = (codex_skills.parent / target).resolve()
+        if resolved == claude_skills_dir.resolve():
+            results.append(CheckResult("ok", ".codex/skills -> ../.claude/skills (Codex sees same skills as Claude)"))
+        else:
+            results.append(
+                CheckResult(
+                    "warn",
+                    f".codex/skills symlink points at {target} (expected ../.claude/skills)",
+                    "run ./tools/workflow/sync-hooks.sh --apply to fix",
+                )
+            )
+    elif codex_skills.exists():
+        results.append(
+            CheckResult(
+                "warn",
+                ".codex/skills is a directory, expected symlink to ../.claude/skills",
+                "remove it and run sync-hooks.sh --apply",
+            )
+        )
     else:
         results.append(
-            CheckResult("warn", ".claude/skills/decomp/SKILL.md is missing", "symlink it to .agents/skills/decomp/SKILL.md")
+            CheckResult(
+                "warn",
+                ".codex/skills is missing (Codex agents will have no skills)",
+                "run ./tools/workflow/sync-hooks.sh --apply",
+            )
         )
-    if codex_skills.exists():
-        results.append(CheckResult("ok", "Codex skills compatibility path resolves"))
-    else:
-        results.append(CheckResult("warn", ".codex/skills is missing", "symlink it to ../.agents/skills"))
 
     return results
 
