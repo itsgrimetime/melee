@@ -214,8 +214,6 @@ void fn_80247510(HSD_GObj* gobj)
     s32 i;
     u64 inputs;
     u64 inputs_repeat;
-    HSD_JObj* cursor_jobj;
-    HSD_JObj* panel_jobj;
     u8 cursor_row;
     u8 name_idx;
     u8 rumble_setting;
@@ -261,7 +259,7 @@ void fn_80247510(HSD_GObj* gobj)
         if (data->x0[i + 2] == 0) {
             inputs = gm_801A36A0(i);
             if (inputs & 1) {
-                HSD_JObj* temp_jobj;
+                HSD_JObj* panel_jobj;
                 lbAudioAx_80024030(1);
                 if (GetRumbleSettingOfPort(i) != 0) {
                     gmMainLib_8015ED4C(i, 0);
@@ -302,6 +300,7 @@ void fn_80247510(HSD_GObj* gobj)
     for (i = 0; i < 4; i++) {
         inputs = gm_801A36A0(i);
         if ((inputs & 0x40) && data->x0[i + 2] == 1) {
+            HSD_JObj* panel_jobj;
             lbAudioAx_80024030(2);
             data->x0[i + 2] = 0;
             panel_jobj = data->jobjs[mnVibration_804D4FE8[i]];
@@ -310,6 +309,7 @@ void fn_80247510(HSD_GObj* gobj)
         } else if (inputs & 0x80) {
             if (data->x0[i + 2] == 0) {
                 s32 port_idx;
+                HSD_JObj* panel_jobj;
                 lbAudioAx_80024030(2);
                 port_idx = i;
                 data->x0[port_idx + 2] = 1;
@@ -352,6 +352,7 @@ void fn_80247510(HSD_GObj* gobj)
             name_idx = mnVibration_GetNameSlot(data, cursor_row - 1);
             if (name_idx != 0xFF) {
                 f32 dy;
+                HSD_JObj* cursor_jobj;
                 lbAudioAx_80024030(2);
                 data->x0[1]--;
                 cursor_jobj = data->cursor_gobj->hsd_obj;
@@ -379,6 +380,7 @@ void fn_80247510(HSD_GObj* gobj)
             name_idx = mnVibration_GetNameSlot(data, cursor_row + 1);
             if (name_idx != 0xFF) {
                 f32 dy;
+                HSD_JObj* cursor_jobj;
                 lbAudioAx_80024030(2);
                 data->x0[1]++;
                 inputs_repeat = data->x0[1];
