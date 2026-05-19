@@ -12,7 +12,7 @@ mutation hypotheses to try, not as authoritative fixes.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 
@@ -30,6 +30,17 @@ class MutationPattern:
     # Categories the pattern addresses — used to surface from guide.py
     # by matching against suggestion categories (see guidance.py:Suggestion).
     addresses: tuple[str, ...] = ()
+    # Weight overrides for decomp-permuter's settings.toml when this
+    # pattern is detected. Keys are perm_* mutation names from
+    # decomp-permuter's default_weights.toml. Values are absolute
+    # weights (replacing the [base]/[mwcc] defaults). Empty dict means
+    # "no pattern-specific weight boosts" — caller still emits a valid
+    # settings.toml with stock defaults.
+    permuter_weights: dict[str, float] = field(default_factory=dict)
+    # When True, `gen-permuter-config` refuses to write a settings.toml
+    # for this pattern unless `--force` is set. Use for structural
+    # ceilings (e.g. param-iter-ceiling) where permuter cannot help.
+    permuter_skip: bool = False
 
 
 PATTERNS: dict[str, MutationPattern] = {
@@ -66,6 +77,11 @@ PATTERNS: dict[str, MutationPattern] = {
             "junction, so the allocator packs the rest tighter."
         ),
         addresses=("interference", "rank"),
+        permuter_weights={
+            "perm_temp_for_expr": 60.0,
+            "perm_refer_to_var": 30.0,
+            "perm_expand_expr": 15.0,
+        },
     ),
     "widen-u8-to-u32": MutationPattern(
         name="widen-u8-to-u32",
@@ -100,6 +116,11 @@ PATTERNS: dict[str, MutationPattern] = {
             "requirement."
         ),
         addresses=("spill", "interference"),
+        permuter_weights={
+            "perm_randomize_internal_type": 50.0,
+            "perm_cast_simple": 30.0,
+            "perm_expand_expr": 15.0,
+        },
     ),
     "shrink-s32-to-u8": MutationPattern(
         name="shrink-s32-to-u8",
@@ -131,6 +152,11 @@ PATTERNS: dict[str, MutationPattern] = {
             "ASM's lbz / extsb pattern."
         ),
         addresses=("interference", "spill"),
+        permuter_weights={
+            "perm_randomize_internal_type": 50.0,
+            "perm_cast_simple": 30.0,
+            "perm_expand_expr": 15.0,
+        },
     ),
     "drop-variadic-cast": MutationPattern(
         name="drop-variadic-cast",
@@ -162,6 +188,10 @@ PATTERNS: dict[str, MutationPattern] = {
             "the value as an integer that the callee can interpret."
         ),
         addresses=("interference",),  # eliminating cast frees a virtual
+        permuter_weights={
+            "perm_cast_simple": 60.0,
+            "perm_expand_expr": 30.0,
+        },
     ),
     "subexpr-extract": MutationPattern(
         name="subexpr-extract",
@@ -199,6 +229,10 @@ PATTERNS: dict[str, MutationPattern] = {
             "and scheduling that may diverge from the expected ASM."
         ),
         addresses=("rank",),
+        permuter_weights={
+            "perm_temp_for_expr": 80.0,
+            "perm_expand_expr": 30.0,
+        },
     ),
     "decl-order": MutationPattern(
         name="decl-order",
@@ -250,6 +284,11 @@ PATTERNS: dict[str, MutationPattern] = {
             "live-range analysis alone."
         ),
         addresses=("rank",),
+        permuter_weights={
+            "perm_reorder_decls": 80.0,
+            "perm_temp_for_expr": 30.0,
+            "perm_ins_block": 20.0,
+        },
     ),
     "param-iter-ceiling": MutationPattern(
         name="param-iter-ceiling",
@@ -318,6 +357,9 @@ PATTERNS: dict[str, MutationPattern] = {
             "fixed by C semantics (parameter list comes before locals)."
         ),
         addresses=("rank", "param-iter-ceiling"),
+        # No C-source fix exists; permuter cannot help. gen-permuter-config
+        # refuses to write a settings.toml for this pattern unless --force.
+        permuter_skip=True,
     ),
     "chained-init": MutationPattern(
         name="chained-init",
@@ -348,6 +390,10 @@ PATTERNS: dict[str, MutationPattern] = {
             "one virtual."
         ),
         addresses=("interference", "spill"),
+        permuter_weights={
+            "perm_chain_assignment": 50.0,
+            "perm_duplicate_assignment": 20.0,
+        },
     ),
 }
 

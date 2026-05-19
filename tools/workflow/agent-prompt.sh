@@ -174,6 +174,14 @@ git status --short && git branch --show-current
 
 Use the /decomp skill.
 
+**Read all four metrics on every checkdiff, not just match%.** checkdiff now
+prints opcode similarity, line delta, and hunk count alongside match% — and
+shows deltas vs your previous run. Match% can drop while structure improves
+(register/operand diffs keep match% low even when the shape is now correct).
+If checkdiff prints a NOTE about structural progress, treat it seriously:
+read the full diff and decide if you're closer to the true match before
+reverting. Reflexive revert on match% drop alone is a known anti-pattern.
+
 When you've gotten enough clean matches/improvements in a single TU, clean it
 up per community & project guidelines and prepare a PR.
 

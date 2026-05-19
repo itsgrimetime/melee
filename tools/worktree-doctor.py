@@ -251,11 +251,16 @@ class Doctor:
         elif (ROOT / "tools" / "table-typer" / "go.mod").exists():
             self.warn("table-typer binary missing", "run: cd tools/table-typer && go build -o table-typer")
 
-        ghidra_dir = os.environ.get("GHIDRA_INSTALL_DIR")
-        if ghidra_dir and Path(ghidra_dir).exists():
-            self.ok(f"GHIDRA_INSTALL_DIR set: {ghidra_dir}")
+        ghidra_install = detect_ghidra_install()
+        if ghidra_install is not None:
+            env_path_str = os.environ.get("GHIDRA_INSTALL_DIR")
+            via = "GHIDRA_INSTALL_DIR" if env_path_str and Path(env_path_str) == ghidra_install else "auto-detected"
+            self.ok(f"Ghidra install: {ghidra_install} ({via})")
         else:
-            self.warn("GHIDRA_INSTALL_DIR is not configured", "ghidra helper commands will be unavailable")
+            self.warn(
+                "Ghidra install not found",
+                "set GHIDRA_INSTALL_DIR or install under /opt/homebrew/Cellar/ghidra, /Applications, /opt, or ~/ghidra",
+            )
 
     def check_knowledge_sources(self) -> None:
         self.results.extend(collect_knowledge_source_warnings(ROOT))
@@ -280,6 +285,59 @@ def run_git(args: list[str], allow_fail: bool = False) -> str:
     if result.returncode != 0 and not allow_fail:
         raise RuntimeError(result.stderr.strip())
     return result.stdout if result.returncode == 0 else ""
+
+
+# Mirrors tools/melee-agent/src/cli/ghidra/detect.py so worktree-doctor can
+# validate Ghidra availability without depending on melee-agent being importable.
+# If the search/detection logic changes there, update here too.
+_GHIDRA_SEARCH_PATHS = [
+    Path("/opt/homebrew/Cellar/ghidra"),       # macOS arm64 Homebrew
+    Path("/usr/local/Cellar/ghidra"),          # macOS x86_64 Homebrew
+    Path("/Applications"),                      # macOS manual install
+    Path.home() / "Library" / "ghidra",        # macOS user-local
+    Path("/opt"),                               # Linux manual install
+    Path.home() / "ghidra",                    # user home tarball
+]
+
+
+def _ghidra_install_valid(path: Path) -> bool:
+    if not path.is_dir():
+        return False
+    return (path / "application.properties").is_file() or (path / "Ghidra" / "application.properties").is_file()
+
+
+def _ghidra_search_under(root: Path) -> Path | None:
+    if not root.exists():
+        return None
+    if _ghidra_install_valid(root):
+        return root
+    for child in sorted(root.iterdir(), reverse=True):  # newest version first
+        if not child.is_dir():
+            continue
+        if _ghidra_install_valid(child):
+            return child
+        nested = child / "libexec"
+        if _ghidra_install_valid(nested):
+            return nested
+        nested2 = child / "Ghidra"
+        if _ghidra_install_valid(nested2):
+            return nested2
+    return None
+
+
+def detect_ghidra_install() -> Path | None:
+    """Return path to a valid Ghidra install, or None. Honors GHIDRA_INSTALL_DIR
+    first, then searches common installation roots."""
+    env_val = os.environ.get("GHIDRA_INSTALL_DIR")
+    if env_val:
+        env_path = Path(env_val)
+        if _ghidra_install_valid(env_path):
+            return env_path
+    for root in _GHIDRA_SEARCH_PATHS:
+        found = _ghidra_search_under(root)
+        if found is not None:
+            return found
+    return None
 
 
 def run_cmd(args: list[str], timeout: int) -> subprocess.CompletedProcess[str]:

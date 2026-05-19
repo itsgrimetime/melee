@@ -1,0 +1,138 @@
+"""Tests for the .o post-processor that renames anonymous magic-constant
+symbols to user-supplied names."""
+
+from __future__ import annotations
+
+import shutil
+from pathlib import Path
+
+import pytest
+
+from src.mwcc_debug.o_rewriter import (
+    MAGIC_S32,
+    MAGIC_U32,
+    MagicSymbol,
+    Mapping,
+    find_magic_symbols,
+    parse_mapping,
+    rename_magic_symbols,
+)
+
+
+def test_parse_mapping_shortcuts() -> None:
+    m = parse_mapping("s32=mnVibration_804DC018,u32=mnVibration_804DC010")
+    assert m.by_value == {
+        MAGIC_S32: "mnVibration_804DC018",
+        MAGIC_U32: "mnVibration_804DC010",
+    }
+    assert m.by_name == {}
+
+
+def test_parse_mapping_hex_literal() -> None:
+    m = parse_mapping("0x4330000080000000=foo,0x4330000000000000=bar")
+    assert m.by_value == {
+        MAGIC_S32: "foo",
+        MAGIC_U32: "bar",
+    }
+
+
+def test_parse_mapping_handles_whitespace() -> None:
+    m = parse_mapping("  s32 = name1 ,  u32 = name2  ")
+    assert m.by_value[MAGIC_S32] == "name1"
+    assert m.by_value[MAGIC_U32] == "name2"
+
+
+def test_parse_mapping_at_n_direct_rename() -> None:
+    m = parse_mapping("@791=mnVibration_804DC050,@473=foo")
+    assert m.by_name == {
+        "@791": "mnVibration_804DC050",
+        "@473": "foo",
+    }
+    assert m.by_value == {}
+
+
+def test_parse_mapping_mixed_value_and_name() -> None:
+    m = parse_mapping("s32=mnVib_018,@791=mnVib_050")
+    assert m.by_value == {MAGIC_S32: "mnVib_018"}
+    assert m.by_name == {"@791": "mnVib_050"}
+
+
+def test_parse_mapping_rejects_missing_equals() -> None:
+    with pytest.raises(ValueError, match="need '<key>=<name>'"):
+        parse_mapping("s32-bad")
+
+
+def test_parse_mapping_rejects_unknown_shortcut() -> None:
+    with pytest.raises(ValueError, match="invalid value"):
+        parse_mapping("bogus=name")
+
+
+def test_parse_mapping_rejects_empty_name() -> None:
+    with pytest.raises(ValueError, match="empty name"):
+        parse_mapping("s32=")
+
+
+# Path to a real .o file from the build (skipped if not present)
+_FIXTURE_O = Path(__file__).parent.parent.parent.parent / \
+    "build" / "GALE01" / "src" / "melee" / "mn" / "mnvibration.o"
+
+
+@pytest.mark.skipif(not _FIXTURE_O.exists(),
+                    reason="requires built .o; run `ninja` first")
+def test_find_magic_symbols_on_real_o() -> None:
+    """Real .o has anonymous symbols for the s32 + u32 int-to-float biases."""
+    syms = find_magic_symbols(_FIXTURE_O)
+    values = {s.value for s in syms}
+    # The mnvibration.o always has at least the s32 bias (it does int-to-
+    # float casts) and the u32 bias (similar). Both should be detected.
+    assert MAGIC_S32 in values, (
+        f"expected s32 bias in {_FIXTURE_O.name}; got values: "
+        f"{[hex(v) for v in values]}"
+    )
+    assert MAGIC_U32 in values
+    for sym in syms:
+        assert sym.name.startswith("@")
+        assert sym.size == 8
+
+
+@pytest.mark.skipif(not _FIXTURE_O.exists(),
+                    reason="requires built .o; run `ninja` first")
+def test_rename_magic_symbols_creates_renamed_o(tmp_path: Path) -> None:
+    """End-to-end: copy a real .o, rename its s32 magic symbol, verify
+    the new name appears in the symbol table.
+    """
+    work_o = tmp_path / "test.o"
+    shutil.copy(_FIXTURE_O, work_o)
+    mapping = Mapping(by_value={MAGIC_S32: "mnVibration_804DC018"}, by_name={})
+    renames = rename_magic_symbols(work_o, mapping)
+    assert len(renames) == 1
+    old_name, new_name = renames[0]
+    assert new_name == "mnVibration_804DC018"
+    assert old_name.startswith("@")
+
+    # Confirm the symbol is renamed in the result
+    syms_after = find_magic_symbols(work_o)
+    new_names = {s.name for s in syms_after}
+    # The new name no longer starts with @, so find_magic_symbols (which
+    # filters on @) won't show it. Instead, check via elftools directly.
+    from elftools.elf.elffile import ELFFile
+    with work_o.open("rb") as f:
+        elf = ELFFile(f)
+        symtab = elf.get_section_by_name(".symtab")
+        all_names = {sym.name for sym in symtab.iter_symbols()}
+    assert "mnVibration_804DC018" in all_names
+    assert old_name not in all_names
+
+
+@pytest.mark.skipif(not _FIXTURE_O.exists(),
+                    reason="requires built .o; run `ninja` first")
+def test_rename_magic_symbols_no_match_returns_empty(tmp_path: Path) -> None:
+    """When the mapping has values not present in the .o, no renames happen."""
+    work_o = tmp_path / "test.o"
+    shutil.copy(_FIXTURE_O, work_o)
+    mapping = Mapping(
+        by_value={0xDEADBEEFCAFEBABE: "should_not_appear"},
+        by_name={},
+    )
+    renames = rename_magic_symbols(work_o, mapping)
+    assert renames == []

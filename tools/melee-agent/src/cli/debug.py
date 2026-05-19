@@ -48,6 +48,12 @@ from ..mwcc_debug.source_patch import (
     reorder_decls_in_function,
     transfer_candidate,
 )
+from ..mwcc_debug.asm_parser import (
+    extract_function as asm_extract_function,
+    find_first_def as asm_find_first_def,
+    parse_prologue_end as asm_parse_prologue_end,
+)
+from ..mwcc_debug.iter_match import match_virtual_for_expected_def
 
 debug_app = typer.Typer(
     help="Compiler introspection via remote Windows mwcc_debug DLL"
@@ -2919,3 +2925,731 @@ def rank_callees(
             "param-iter-ceiling signature — see `debug pattern-catalog "
             "param-iter-ceiling` for the full pattern."
         )
+
+
+@debug_app.command(name="match-iter-first")
+def match_iter_first(
+    function: Annotated[
+        str,
+        typer.Option(
+            "--function", "-f",
+            help="Function to analyze (required)",
+        ),
+    ],
+    pcdump: Annotated[
+        Optional[Path],
+        typer.Argument(
+            help="Path to pcdump.txt. Omit to auto-resolve via --function "
+                 "from the cache.",
+        ),
+    ] = None,
+    regs: Annotated[
+        str,
+        typer.Option(
+            "--regs",
+            help="Comma-separated physical regs to report on "
+                 "(default: r31,r30,r29,r28).",
+        ),
+    ] = "r31,r30,r29,r28",
+    asm: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--asm",
+            help="Override path to expected .s file. "
+                 "Auto-resolves via report.json.",
+        ),
+    ] = None,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit as JSON."),
+    ] = False,
+) -> None:
+    """Recommend --force-iter-first arguments by reading the expected .s.
+
+    For each physical register in --regs, finds the first instruction in
+    the expected output that defines it (post-prologue), structurally
+    aligns that instruction to the current pcdump's pre-coloring pass,
+    and reports the virtual register (= ig_idx in MWCC's IG).
+
+    Useful for local-vs-local iter-order cascades where rank-callees
+    can't tell which local "should have" gotten r31. Pipe the output's
+    ig_idx list into --force-iter-first.
+    """
+    melee_root = DEFAULT_MELEE_ROOT
+    pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
+    pcdump_text = pcdump_path.read_text()
+
+    unit = _find_unit_for_function(function, melee_root)
+    if unit is None:
+        typer.echo(
+            f"function '{function}' not found in report.json. "
+            f"Run `ninja build/GALE01/report.json` and retry.",
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    if asm is None:
+        asm_path = melee_root / "build" / "GALE01" / "asm" / f"{unit}.s"
+    else:
+        asm_path = asm
+    if not asm_path.exists():
+        typer.echo(
+            f"expected .s not found: {asm_path}\n"
+            f"Run `python configure.py && ninja` to build it.",
+            err=True,
+        )
+        raise typer.Exit(3)
+
+    asm_text = asm_path.read_text()
+    asm_fn = asm_extract_function(asm_text, function)
+    if asm_fn is None:
+        typer.echo(
+            f"function '{function}' not found in {asm_path}",
+            err=True,
+        )
+        raise typer.Exit(3)
+
+    prologue_end = asm_parse_prologue_end(asm_fn.instructions)
+    body = asm_fn.instructions[prologue_end:]
+
+    fns = parse_pcdump(pcdump_text)
+    fn = next((f for f in fns if f.name == function), None)
+    if fn is None:
+        _abort_function_not_in_dump(function, [f.name for f in fns])
+    pre_pass = fn.last_precolor_pass()
+    if pre_pass is None:
+        typer.echo(
+            f"no pre-coloring pass found in pcdump for {function}",
+            err=True,
+        )
+        raise typer.Exit(4)
+
+    # Parse --regs
+    reg_list: list[int] = []
+    for token in regs.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if not token.startswith("r"):
+            typer.echo(f"invalid reg token: {token}", err=True)
+            raise typer.Exit(2)
+        try:
+            reg_list.append(int(token[1:]))
+        except ValueError:
+            typer.echo(f"invalid reg token: {token}", err=True)
+            raise typer.Exit(2)
+
+    results: list[dict] = []
+    for reg in reg_list:
+        expected_def = asm_find_first_def(body, target_reg=reg)
+        if expected_def is None:
+            results.append({
+                "reg": reg,
+                "status": "unused",
+                "note": f"r{reg} never used as a destination in expected",
+            })
+            continue
+        pos, expected_ist = expected_def
+        match = match_virtual_for_expected_def(
+            expected_ist=expected_ist,
+            expected_position=pos,
+            pre_pass=pre_pass,
+        )
+        if match is None:
+            results.append({
+                "reg": reg,
+                "status": "no_match",
+                "note": f"no structural match in pre-coloring for "
+                        f"`{expected_ist.opcode} {expected_ist.operands}`",
+            })
+            continue
+        results.append({
+            "reg": reg,
+            "status": "ok",
+            "ig_idx": match.ig_idx,
+            "virtual": match.virtual,
+            "instr_idx": match.instruction_index,
+            "opcode": expected_ist.opcode,
+            "operands": expected_ist.operands,
+            "confidence": match.confidence,
+        })
+
+    if json_out:
+        print(json.dumps({
+            "function": function,
+            "unit": unit,
+            "results": results,
+        }, indent=2))
+        return
+
+    print(f"Function: {function}")
+    print(f"Unit:     {unit}")
+    print(f"ASM:      {asm_path.relative_to(melee_root)}")
+    print()
+    print(f"Expected iter-first targets:")
+    ig_indices: list[int] = []
+    for r in results:
+        reg_str = f"r{r['reg']}"
+        if r["status"] == "ok":
+            print(
+                f"  {reg_str} <- ig_idx {r['ig_idx']:<4} "
+                f"(virt r{r['virtual']}, instr {r['instr_idx']}: "
+                f"{r['opcode']} {r['operands']}) [{r['confidence']}]"
+            )
+            ig_indices.append(r["ig_idx"])
+        else:
+            print(f"  {reg_str} - {r['note']}")
+    if ig_indices:
+        ig_csv = ",".join(str(i) for i in ig_indices)
+        print()
+        print(f"Try:")
+        print(
+            f"  melee-agent debug pcdump <source.c> "
+            f"--force-iter-first {ig_csv}"
+        )
+
+
+@debug_app.command(name="name-magic")
+def name_magic(
+    o_file: Annotated[
+        Path,
+        typer.Argument(help="Path to the .o file to post-process."),
+    ],
+    mapping: Annotated[
+        Optional[str],
+        typer.Option(
+            "--map", "-m",
+            help="Mapping of magic constant value to symbol name. "
+                 "Format: '<value>=<name>,<value>=<name>'. <value> is "
+                 "'s32' (0x4330000080000000), 'u32' (0x4330000000000000), "
+                 "or a hex/decimal literal. May be specified once with "
+                 "multiple pairs.",
+        ),
+    ] = None,
+    out: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--out", "-o",
+            help="Output path (default: rewrite in place).",
+        ),
+    ] = None,
+    list_only: Annotated[
+        bool,
+        typer.Option(
+            "--list",
+            help="Just list anonymous .sdata2 symbols and their values; "
+                 "don't rename.",
+        ),
+    ] = False,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit as JSON."),
+    ] = False,
+) -> None:
+    """Rename anonymous @N symbols in a .o's .sdata2 to user-supplied names.
+
+    Use case: MWCC's int-to-float cast emits an anonymous symbol like
+    `@491` for the 0x4330000080000000 magic constant. The matching .o
+    references this data via a named global like `mnVibration_804DC018`
+    (from symbols.txt). The relocation target name diff blocks byte
+    matching even when the data is identical.
+
+    With `--map s32=mnVibration_804DC018`, this tool finds the
+    anonymous symbol whose .sdata2 value matches the s32 int-to-float
+    bias and renames it via objcopy.
+
+    Use `--list` to see what's available without renaming.
+    """
+    from ..mwcc_debug.o_rewriter import (
+        find_all_anonymous_sdata2_symbols,
+        parse_mapping,
+        rename_magic_symbols,
+    )
+
+    if not o_file.exists():
+        typer.echo(f".o file not found: {o_file}", err=True)
+        raise typer.Exit(2)
+
+    if list_only:
+        symbols = find_all_anonymous_sdata2_symbols(o_file)
+        if json_out:
+            print(json.dumps({
+                "o_file": str(o_file),
+                "symbols": [{
+                    "name": s.name,
+                    "offset": s.offset,
+                    "value": f"0x{s.value:016x}" if s.size == 8
+                             else f"0x{s.value:08x}",
+                    "size": s.size,
+                } for s in symbols],
+            }, indent=2))
+            return
+        if not symbols:
+            print(f"No anonymous .sdata2 symbols found in {o_file}")
+            return
+        print(f"Anonymous .sdata2 symbols in {o_file}:")
+        print(f"  {'name':<10}  {'offset':>6}  {'sz':>2}  {'value':<18}  notes")
+        print(f"  {'-'*10}  {'-'*6}  {'-'*2}  {'-'*18}  -----")
+        import struct as _struct
+        for sym in symbols:
+            note = ""
+            if sym.size == 8:
+                value_str = f"0x{sym.value:016x}"
+                if sym.value == 0x4330000080000000:
+                    note = "int-to-float bias (signed)"
+                elif sym.value == 0x4330000000000000:
+                    note = "int-to-float bias (unsigned)"
+            elif sym.size == 4:
+                value_str = f"0x{sym.value:08x}"
+                # Try interpreting as float for the note
+                try:
+                    f_val = _struct.unpack(">f",
+                                           _struct.pack(">I", sym.value))[0]
+                    note = f"float ≈ {f_val:g}"
+                except Exception:
+                    pass
+            else:
+                value_str = f"0x{sym.value:x}"
+            print(
+                f"  {sym.name:<10}  {sym.offset:>6}  {sym.size:>2}  "
+                f"{value_str:<18}  {note}"
+            )
+        return
+
+    if mapping is None:
+        typer.echo(
+            "no --map provided. Use --list to see available symbols.",
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    try:
+        value_to_name = parse_mapping(mapping)
+    except ValueError as e:
+        typer.echo(f"invalid --map: {e}", err=True)
+        raise typer.Exit(2)
+
+    try:
+        renames = rename_magic_symbols(
+            o_file, value_to_name, out_path=out
+        )
+    except FileNotFoundError as e:
+        typer.echo(
+            f"objcopy not found: {e}. Install devkitPPC or pass a custom "
+            f"path via the o_rewriter module.",
+            err=True,
+        )
+        raise typer.Exit(5)
+    except subprocess.CalledProcessError as e:
+        typer.echo(f"objcopy failed: {e}", err=True)
+        raise typer.Exit(5)
+
+    if json_out:
+        print(json.dumps({
+            "o_file": str(o_file),
+            "out": str(out) if out else str(o_file),
+            "renames": [
+                {"old": old, "new": new} for old, new in renames
+            ],
+        }, indent=2))
+        return
+
+    target = out if out is not None else o_file
+    if not renames:
+        print(
+            f"No matching anonymous symbols found in {o_file}. "
+            f"Use --list to see what's available."
+        )
+        return
+    print(f"Renamed {len(renames)} symbol(s) in {target}:")
+    for old, new in renames:
+        print(f"  {old} -> {new}")
+
+
+@debug_app.command(name="gen-permuter-config")
+def gen_permuter_config(
+    function: Annotated[
+        str,
+        typer.Option(
+            "--function", "-f",
+            help="Function to generate permuter config for (required).",
+        ),
+    ],
+    pcdump: Annotated[
+        Optional[Path],
+        typer.Argument(
+            help="Path to pcdump.txt. Omit to auto-resolve via --function "
+                 "from the cache.",
+        ),
+    ] = None,
+    pattern: Annotated[
+        Optional[str],
+        typer.Option(
+            "--pattern", "-p",
+            help="Override pattern auto-detection. Use a name from "
+                 "`debug pattern-catalog` (e.g. decl-order, alias-split).",
+        ),
+    ] = None,
+    target: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--target", "-t",
+            help="Target spec (YAML or JSON, from `debug derive-target`). "
+                 "Auto-detection needs this to identify wrong virtuals. "
+                 "Without it, falls back to stock settings unless "
+                 "--pattern is provided.",
+        ),
+    ] = None,
+    out: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--out", "-o",
+            help="Output path. Default: "
+                 "<perm-root>/nonmatchings/<function>/settings.toml",
+        ),
+    ] = None,
+    perm_root: Annotated[
+        Path,
+        typer.Option(
+            "--perm-root",
+            help="Root of decomp-permuter clone.",
+        ),
+    ] = Path("~/code/decomp-permuter").expanduser(),
+    print_only: Annotated[
+        bool,
+        typer.Option(
+            "--print",
+            help="Print rendered TOML to stdout instead of writing.",
+        ),
+    ] = False,
+    merge: Annotated[
+        bool,
+        typer.Option(
+            "--merge",
+            help="Preserve existing [weight_overrides] keys not touched "
+                 "by the pattern profile. Default: overwrite.",
+        ),
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Generate config even for skip-marked patterns "
+                 "(e.g. param-iter-ceiling). Use only if you know why.",
+        ),
+    ] = False,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit a JSON summary of the action."),
+    ] = False,
+) -> None:
+    """Generate a decomp-permuter settings.toml tuned for the detected pattern.
+
+    Pairs with `debug triage-perm` to close the integration loop: this
+    command BIASES which mutations permuter prefers based on mwcc-debug's
+    pattern detection, then triage-perm filters out base.c-vs-real-tree
+    drift on the resulting winners.
+
+    For patterns marked as structural ceilings (param-iter-ceiling),
+    this command refuses to generate a config and explains why — permuter
+    cannot fix those from C source. Use `--force` to override.
+
+    For `decl-order` specifically, you should ALSO run
+    `debug enumerate-decl-orders` first — it's deterministic and
+    ~100x faster than letting permuter rediscover decl-order rounds.
+    """
+    from ..mwcc_debug.patterns import (
+        PATTERNS,
+        get_pattern,
+        patterns_for_category,
+    )
+    from ..mwcc_debug.permuter_config import (
+        PatternSkippedError,
+        build_spec,
+        parse_existing_overrides,
+        render_settings_toml,
+        write_settings_toml,
+    )
+
+    melee_root = DEFAULT_MELEE_ROOT
+
+    # Determine the pattern
+    detected_via: str = ""
+    selected: Optional = None  # type: ignore[type-arg]
+    if pattern is not None:
+        # Explicit pattern — skip pcdump resolution entirely. Useful when
+        # the function isn't yet in report.json (e.g. setting up permuter
+        # for a newly-imported function).
+        selected = get_pattern(pattern)
+        if selected is None:
+            typer.echo(
+                f"unknown pattern: {pattern!r}. "
+                f"Run `melee-agent debug pattern-catalog` to list.",
+                err=True,
+            )
+            raise typer.Exit(2)
+        detected_via = "--pattern flag"
+    else:
+        # Auto-detect via guide/suggest infrastructure
+        pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
+        text = pcdump_path.read_text()
+        fns = parse_pcdump(text)
+        fn = next((f for f in fns if f.name == function), None)
+        if fn is None:
+            _abort_function_not_in_dump(function, [f.name for f in fns])
+        events_list = parse_hook_events(text)
+        events = find_function(events_list, function)
+        if target is not None:
+            target_spec = _load_target_spec(target)
+        else:
+            target_spec = {"virtuals": {}}
+        result = score_function(fn, target_spec, events=events)
+        suggestions = suggest(fn, result, events=events)
+
+        # Walk suggestions in severity order. For each, find the best-fit
+        # pattern. Prefer permuter_skip patterns (structural ceilings)
+        # when they match — those need a different message.
+        for s in suggestions:
+            candidates = patterns_for_category(s.category)
+            # Prefer skip-marked patterns (they're more specific signals)
+            skip_candidates = [p for p in candidates if p.permuter_skip]
+            if skip_candidates:
+                selected = skip_candidates[0]
+                detected_via = (
+                    f"suggestion category={s.category!r} (severity={s.severity})"
+                )
+                break
+            # Otherwise pick the first pattern with weights
+            for p in candidates:
+                if p.permuter_weights:
+                    selected = p
+                    detected_via = (
+                        f"suggestion category={s.category!r} "
+                        f"(severity={s.severity})"
+                    )
+                    break
+            if selected is not None:
+                break
+
+        if selected is None and suggestions:
+            # Suggestions exist but no pattern has weights for any category
+            detected_via = "no pattern matched any suggestion category"
+
+    # Resolve output path
+    if out is None:
+        if not perm_root.exists():
+            typer.echo(
+                f"--perm-root {perm_root} does not exist. "
+                f"Clone decomp-permuter there or pass --out explicitly.",
+                err=True,
+            )
+            raise typer.Exit(2)
+        fn_dir = perm_root / "nonmatchings" / function
+        if not fn_dir.exists() and not print_only:
+            typer.echo(
+                f"{fn_dir} does not exist. "
+                f"Run `./import.py <c_file> <s_file>` in {perm_root} "
+                f"first to set up this function.",
+                err=True,
+            )
+            raise typer.Exit(2)
+        out = fn_dir / "settings.toml"
+
+    # Read existing overrides if present (for --merge)
+    existing_overrides: dict[str, float] = {}
+    if out.exists() and merge:
+        existing_overrides = parse_existing_overrides(out.read_text())
+
+    # Build the spec
+    try:
+        spec = build_spec(
+            function,
+            selected,
+            existing_overrides=existing_overrides,
+            merge=merge,
+            force=force,
+        )
+    except PatternSkippedError:
+        # Structural ceiling — print guidance instead of writing
+        assert selected is not None
+        if json_out:
+            print(json.dumps({
+                "function": function,
+                "pattern": selected.name,
+                "detected_via": detected_via,
+                "action": "skipped",
+                "reason": "permuter_skip=True (Tier 6 structural ceiling)",
+            }, indent=2))
+            raise typer.Exit(1)
+        typer.echo(
+            f"Pattern: {selected.name} "
+            f"(detected via {detected_via})",
+            err=True,
+        )
+        typer.echo("", err=True)
+        typer.echo(
+            "This is a Tier 6 structural ceiling — permuter cannot fix "
+            "it from C source. The parameter virtual gets a low ig_idx "
+            "by C semantics, and locals always win the top callee-saves.",
+            err=True,
+        )
+        typer.echo("", err=True)
+        typer.echo(
+            "Recommended: confirm via `debug match-iter-first -f "
+            f"{function}` and document the function as Tier 6.",
+            err=True,
+        )
+        typer.echo(
+            "Pass --force to gen-permuter-config if you want a config "
+            "anyway (no permuter_weights will be applied).",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    # Render
+    rendered = render_settings_toml(spec)
+
+    if print_only:
+        if json_out:
+            print(json.dumps({
+                "function": function,
+                "pattern": spec.pattern_name,
+                "detected_via": detected_via,
+                "action": "printed",
+                "overrides": spec.weight_overrides,
+                "toml": rendered,
+            }, indent=2))
+            return
+        print(rendered, end="")
+        return
+
+    write_settings_toml(spec, out)
+
+    # Side-effect: fix the compile.sh for macOS+wine if it has the
+    # known import.py path-handling bug. Quiet if not applicable;
+    # one-liner note if a fix was applied.
+    from ..mwcc_debug.fix_perm_compile import fix_perm_dir
+    compile_fix = fix_perm_dir(out.parent)
+
+    if json_out:
+        print(json.dumps({
+            "function": function,
+            "pattern": spec.pattern_name,
+            "detected_via": detected_via,
+            "action": "wrote",
+            "path": str(out),
+            "overrides": spec.weight_overrides,
+            "compile_sh_fix": {
+                "action": compile_fix.action,
+                "reason": compile_fix.reason,
+            },
+        }, indent=2))
+        return
+
+    if spec.pattern_name:
+        print(f"Pattern: {spec.pattern_name} (detected via {detected_via})")
+        if spec.weight_overrides:
+            print(f"Weight overrides:")
+            for key in sorted(spec.weight_overrides):
+                print(f"  {key} = {spec.weight_overrides[key]}")
+    else:
+        print(f"No pattern detected ({detected_via or 'no suggestions'}). "
+              f"Wrote stock settings.")
+    print(f"Wrote: {out}")
+    if compile_fix.action == "fixed":
+        print(
+            f"Also fixed: {compile_fix.path.name} "
+            f"(macOS+wine path handling)"
+        )
+    print()
+
+    # Tail recommendation
+    if spec.pattern_name == "decl-order":
+        print(
+            "Tip: for decl-order specifically, try the deterministic "
+            "search first — it's ~100x faster than letting permuter "
+            "rediscover decl-order rounds:"
+        )
+        print(
+            f"  melee-agent debug enumerate-decl-orders "
+            f"-f {function} --keep-best"
+        )
+        print(
+            "If that doesn't find a win, fall back to permuter with "
+            "this config."
+        )
+    else:
+        rel_dir = out.parent.relative_to(perm_root) \
+            if perm_root in out.parents else out.parent
+        print(f"Run: cd {perm_root} && ./permuter.py {rel_dir}")
+
+
+@debug_app.command(name="fix-perm-compile")
+def fix_perm_compile(
+    target: Annotated[
+        Path,
+        typer.Argument(
+            help="Path to either a nonmatchings/<fn>/ directory or a "
+                 "compile.sh file directly.",
+        ),
+    ],
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit as JSON."),
+    ] = False,
+) -> None:
+    """Fix decomp-permuter's `compile.sh` for macOS+wine compatibility.
+
+    The compile.sh generated by `import.py` passes an absolute mac path
+    to mwcc via wine, which fails with an OS_PATHSEP assertion. This
+    command rewrites it to stage the candidate as a relative path
+    inside `nonmatchings/.permuter_stage_$$.c` (git-ignored,
+    parallel-safe), which mwcc accepts.
+
+    Idempotent: re-running on an already-fixed file is a no-op.
+
+    Pass either the function's permuter dir (e.g.
+    `~/code/decomp-permuter/nonmatchings/fn_xyz`) or the compile.sh
+    directly.
+    """
+    from ..mwcc_debug.fix_perm_compile import (
+        fix_compile_sh,
+        fix_perm_dir,
+    )
+
+    if not target.exists():
+        typer.echo(f"target not found: {target}", err=True)
+        raise typer.Exit(2)
+
+    if target.is_dir():
+        result = fix_perm_dir(target)
+    else:
+        result = fix_compile_sh(target)
+
+    if json_out:
+        print(json.dumps({
+            "path": str(result.path),
+            "action": result.action,
+            "reason": result.reason,
+        }, indent=2))
+        if result.action in ("skipped", "not-applicable"):
+            raise typer.Exit(1)
+        return
+
+    icons = {
+        "fixed": "[ok]",
+        "already-fixed": "[--]",
+        "not-applicable": "[!!]",
+        "skipped": "[!!]",
+    }
+    icon = icons.get(result.action, "[??]")
+    print(f"{icon} {result.path}")
+    print(f"   {result.action}: {result.reason}")
+    if result.action == "fixed":
+        print()
+        print("Now permuter's compile.sh will:")
+        print("  1. Stage the candidate as nonmatchings/.permuter_stage_$$.c")
+        print("  2. Pass that relative path to mwcc (avoids OS_PATHSEP)")
+        print("  3. Clean up the stage file on exit")
+    if result.action in ("skipped", "not-applicable"):
+        raise typer.Exit(1)
