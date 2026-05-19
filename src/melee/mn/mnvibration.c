@@ -270,7 +270,7 @@ void fn_80247510(HSD_GObj* gobj)
                             ((MnVibrationData*) mnVibration_804D6C28->user_data)
                                 ->jobjs[23],
                             i),
-                        &panel_jobj, 2, -1, rumble_setting);
+                        &panel_jobj, 2, -1);
                     HSD_JObjReqAnimAll(panel_jobj, (f32) rumble_setting);
                     HSD_JObjAnimAll(panel_jobj);
                     HSD_PadRumbleRemoveAll();
@@ -284,7 +284,7 @@ void fn_80247510(HSD_GObj* gobj)
                             ((MnVibrationData*) mnVibration_804D6C28->user_data)
                                 ->jobjs[23],
                             i),
-                        &panel_jobj, 2, -1, rumble_setting);
+                        &panel_jobj, 2, -1);
                     HSD_JObjReqAnimAll(panel_jobj, (f32) rumble_setting);
                     HSD_JObjAnimAll(panel_jobj);
                     HSD_PadRumbleAdd(i, 0, 14, 0, &mnVibration_804D4FF0);
