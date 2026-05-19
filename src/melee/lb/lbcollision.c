@@ -967,12 +967,10 @@ bool lbColl_80006E58(Vec3* arg0, Vec3* arg1, Vec3* arg2, Vec3* arg3,
                      Vec3* arg4, Vec3* arg5, MtxPtr arg6, Vec3* arg7,
                      float* arg8, float scl, float arg10, float arg11)
 {
-    float temp_f9_3;
     float temp_f4_9;
     float temp_f4_8;
     float temp_f4_10;
     float temp_f9_2;
-    float temp_f9_4;
     Vec3 arg0_copy;
     Vec3 arg2_copy;
     Vec3 sp104;
@@ -981,13 +979,9 @@ bool lbColl_80006E58(Vec3* arg0, Vec3* arg1, Vec3* arg2, Vec3* arg3,
     float spCC;
     float temp_f0;
     float temp_f10_2;
-    float temp_f10_3;
-    float temp_f10_4;
     float temp_f11;
     float temp_f11_2;
     float temp_f11_3;
-    float temp_f11_4;
-    float temp_f11_5;
     float temp_f12;
     float temp_f1;
     float temp_f1_10;
@@ -1055,7 +1049,7 @@ bool lbColl_80006E58(Vec3* arg0, Vec3* arg1, Vec3* arg2, Vec3* arg3,
     s32 var_r0_4;
     float temp_f25;
     float temp_f10;
-    PAD_STACK(88);
+    PAD_STACK(64);
 
     temp_f3 = (arg10 * arg11) + scl;
     arg0_copy = *arg0;
@@ -1199,22 +1193,22 @@ block_39: {
                  ((temp_f5_3 * temp_f5_3) + (temp_f11_3 * temp_f11_3))))
             {
                 Vec3 a2;
+                Vec3 d1;
                 Vec3 c3;
                 c3 = *arg2;
                 var_f0 = lbColl_804D79F8;
-                temp_f9_3 = temp_f6_4 - arg2->x;
-                temp_f10_3 = temp_f7_2 - arg2->y;
-                temp_f11_4 = temp_f8 - arg2->z;
+                d1.x = temp_f6_4 - arg2->x;
+                d1.y = temp_f7_2 - arg2->y;
+                d1.z = temp_f8 - arg2->z;
                 {
                     float dot;
 
                     a2 = *arg0;
-                    dot = (temp_f11_4 * (c3.z - a2.z)) +
-                          ((temp_f9_3 * (c3.x - a2.x)) +
-                           (temp_f10_3 * (c3.y - a2.y)));
-                    var_f2 = -dot / ((temp_f11_4 * temp_f11_4) +
-                                     ((temp_f9_3 * temp_f9_3) +
-                                      (temp_f10_3 * temp_f10_3)));
+                    dot = (d1.z * (c3.z - a2.z)) +
+                          ((d1.x * (c3.x - a2.x)) +
+                           (d1.y * (c3.y - a2.y)));
+                    var_f2 = -dot / ((d1.z * d1.z) +
+                                     ((d1.x * d1.x) + (d1.y * d1.y)));
                 }
                 if (var_f2 > lbColl_804D7A00) {
                     var_f2 = lbColl_804D7A08;
@@ -1224,22 +1218,22 @@ block_39: {
                 var_f24 = var_f2;
             } else {
                 Vec3 b0;
+                Vec3 d1;
                 Vec3 c2;
                 c2 = *arg2;
                 var_f0 = lbColl_804D7A08;
-                temp_f9_4 = temp_f6_4 - arg2->x;
-                temp_f10_4 = temp_f7_2 - arg2->y;
-                temp_f11_5 = temp_f8 - arg2->z;
+                d1.x = temp_f6_4 - arg2->x;
+                d1.y = temp_f7_2 - arg2->y;
+                d1.z = temp_f8 - arg2->z;
                 {
                     float dot;
 
                     b0 = *arg1;
-                    dot = (temp_f11_5 * (c2.z - b0.z)) +
-                          ((temp_f9_4 * (c2.x - b0.x)) +
-                           (temp_f10_4 * (c2.y - b0.y)));
-                    var_f2_2 = -dot / ((temp_f11_5 * temp_f11_5) +
-                                       ((temp_f9_4 * temp_f9_4) +
-                                        (temp_f10_4 * temp_f10_4)));
+                    dot = (d1.z * (c2.z - b0.z)) +
+                          ((d1.x * (c2.x - b0.x)) +
+                           (d1.y * (c2.y - b0.y)));
+                    var_f2_2 = -dot / ((d1.z * d1.z) +
+                                       ((d1.x * d1.x) + (d1.y * d1.y)));
                 }
                 if (var_f2_2 > lbColl_804D7A00) {
                     var_f2_2 = var_f0;
