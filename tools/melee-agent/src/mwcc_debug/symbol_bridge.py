@@ -472,16 +472,24 @@ def _collect_virtual_destinations(pre_pass) -> list[int]:
 def list_bindings(source: str, fn_name: str, pre_pass) -> list[Binding]:
     """Return Binding entries (both params and locals) for `fn_name`.
 
-    Heuristic: parameters take the first K virtuals (K = number of
-    params), then locals follow in declaration order. The "expected"
-    virtual for the cursor's Nth slot is the Nth virtual seen in
-    first-occurrence order in the pre-coloring pass; if that slot
-    isn't present (the seen list is shorter), the entry gets
-    confidence='ambiguous' with virtual=-1.
+    Heuristic: MWCC numbers parameters then locals deterministically
+    starting at virtual r32, in source declaration order. Each
+    binding's predicted virtual is `32 + cursor`.
+
+    For PARAMS: confidence is always 'best-guess'. MWCC always
+    allocates a virtual slot for a parameter even when the value lives
+    in the ABI register (r3/r4/...) without being re-defined in the
+    function body — i.e. the param's expected virtual may legitimately
+    NOT appear as a destination in the pre-coloring pass. That's the
+    common case for `gobj` in proc callbacks and similar.
+
+    For LOCALS: if the predicted virtual is observed as a destination
+    in the pre-pass, confidence is 'best-guess'; otherwise it's
+    'ambiguous' (the slot is probably eliminated by dead-code
+    elimination, or the local is only read from a memory location).
 
     The cursor advances on every iteration whether or not a virtual
-    is observed for that slot, so a missing param virtual doesn't
-    silently shift the locals down.
+    is observed, so missing slots don't silently shift later bindings.
     """
     extracted = _extract_function_text(source, fn_name)
     if extracted is None:
@@ -497,24 +505,17 @@ def list_bindings(source: str, fn_name: str, pre_pass) -> list[Binding]:
     cursor = 0
     for p in params:
         expected = 32 + cursor
-        if expected in virtuals_set:
-            out.append(Binding(
-                var_name=p.name,
-                virtual=expected,
-                decl_line=start_line,
-                kind="param",
-                type_str=p.type_str,
-                confidence="best-guess",
-            ))
-        else:
-            out.append(Binding(
-                var_name=p.name,
-                virtual=-1,
-                decl_line=start_line,
-                kind="param",
-                type_str=p.type_str,
-                confidence="ambiguous",
-            ))
+        # Params are unconditionally best-guess: MWCC always allocates
+        # a virtual slot for each parameter, even when it's not
+        # re-defined in the function body.
+        out.append(Binding(
+            var_name=p.name,
+            virtual=expected,
+            decl_line=start_line,
+            kind="param",
+            type_str=p.type_str,
+            confidence="best-guess",
+        ))
         cursor += 1
     for ld in locals_:
         expected = 32 + cursor
@@ -538,3 +539,31 @@ def list_bindings(source: str, fn_name: str, pre_pass) -> list[Binding]:
             ))
         cursor += 1
     return out
+
+
+def find_virtual_for_var(
+    source: str, fn_name: str, var_name: str, pre_pass
+) -> Optional[Binding]:
+    """Look up the predicted MWCC virtual for a source variable.
+
+    Returns the Binding for the variable named `var_name` in `fn_name`,
+    or None if no such variable is found in the function body or params.
+    """
+    for b in list_bindings(source, fn_name, pre_pass):
+        if b.var_name == var_name:
+            return b
+    return None
+
+
+def find_var_for_virtual(
+    source: str, fn_name: str, virtual: int, pre_pass
+) -> Optional[Binding]:
+    """Look up the source variable predicted to live in a virtual reg.
+
+    Returns the Binding whose `virtual` equals `virtual`, or None if no
+    such binding exists.
+    """
+    for b in list_bindings(source, fn_name, pre_pass):
+        if b.virtual == virtual:
+            return b
+    return None

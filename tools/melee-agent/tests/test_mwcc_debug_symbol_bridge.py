@@ -217,14 +217,129 @@ def test_list_bindings_includes_params_when_observed() -> None:
     assert all(b.confidence == "best-guess" for b in params)
 
 
-def test_list_bindings_unobserved_param_is_ambiguous() -> None:
-    """If a parameter's expected virtual doesn't appear in pre-pass,
-    confidence is 'ambiguous'."""
+def test_list_bindings_params_are_best_guess_even_when_unobserved() -> None:
+    """Params are always best-guess: MWCC always allocates a virtual
+    slot for each parameter, even when the param's value lives in the
+    ABI register (r3/r4/...) without being re-defined in the function
+    body. The pre-coloring pass may therefore legitimately omit the
+    param's virtual as a destination — but the slot is still there.
+
+    This is the common case for `gobj` in proc callbacks. See the
+    calibration test against fn_80247510."""
     source = "void f(HSD_GObj* gobj, int n) { int local; }"
-    # Only two virtuals present — n's expected slot is missing
+    # Only two virtuals present — both param slots (r32, r33) and
+    # local slot (r34) are notionally allocated, but only r32 and
+    # r34 appear as destinations.
     pre = _make_pre_pass([32, 34])
     bindings = list_bindings(source, "f", pre)
     params = {b.var_name: b for b in bindings if b.kind == "param"}
-    # gobj is observed (first virtual present), n is not
+    # Both params are best-guess; their virtuals are deterministic
+    # based on declaration order.
     assert params["gobj"].confidence == "best-guess"
-    assert params["n"].confidence == "ambiguous"
+    assert params["gobj"].virtual == 32
+    assert params["n"].confidence == "best-guess"
+    assert params["n"].virtual == 33
+
+
+from src.mwcc_debug.symbol_bridge import (
+    find_var_for_virtual,
+    find_virtual_for_var,
+)
+
+
+def test_find_virtual_for_var_existing_local() -> None:
+    source = "void f(void) { int x; int y; }"
+    pre = _make_pre_pass([32, 33])
+    binding = find_virtual_for_var(source, "f", "y", pre)
+    assert binding is not None
+    assert binding.virtual == 33
+    assert binding.kind == "local"
+
+
+def test_find_virtual_for_var_unknown_returns_none() -> None:
+    source = "void f(void) { int x; }"
+    pre = _make_pre_pass([32])
+    assert find_virtual_for_var(source, "f", "z", pre) is None
+
+
+def test_find_var_for_virtual_inverse() -> None:
+    source = "void f(void) { int a; int b; int c; }"
+    pre = _make_pre_pass([32, 33, 34])
+    binding = find_var_for_virtual(source, "f", 33, pre)
+    assert binding is not None
+    assert binding.var_name == "b"
+
+
+import pathlib
+
+import pytest
+
+from src.mwcc_debug.parser import parse_pcdump
+
+CALIBRATION_FIXTURES = (
+    pathlib.Path(__file__).parent / "fixtures" / "mwcc_debug"
+)
+
+
+@pytest.mark.skipif(
+    not (CALIBRATION_FIXTURES / "fn_80247510_pcdump.txt").exists(),
+    reason="fn_80247510 fixture not present",
+)
+def test_calibration_fn_80247510_has_param_gobj() -> None:
+    """Calibration gate: fn_80247510's first parameter gobj must bind
+    to a virtual >=32 with kind='param'."""
+    pcdump_text = (
+        CALIBRATION_FIXTURES / "fn_80247510_pcdump.txt"
+    ).read_text()
+    source_path = pathlib.Path(
+        "/Users/mike/code/melee/src/melee/mn/mnvibration.c"
+    )
+    if not source_path.exists():
+        pytest.skip("mnvibration.c not present")
+    source = source_path.read_text()
+
+    fns = parse_pcdump(pcdump_text)
+    fn = next((f for f in fns if f.name == "fn_80247510"), None)
+    assert fn is not None
+    pre = fn.last_precolor_pass()
+    assert pre is not None
+
+    bindings = list_bindings(source, "fn_80247510", pre)
+    params = [b for b in bindings if b.kind == "param"]
+    assert params, "fn_80247510 must have at least one param binding"
+    # gobj is the first param
+    assert params[0].var_name == "gobj"
+    assert params[0].virtual >= 32
+    assert params[0].confidence == "best-guess"
+
+
+@pytest.mark.skipif(
+    not pathlib.Path(
+        "/Users/mike/code/melee/src/melee/mn/mnevent.c"
+    ).exists(),
+    reason="mnevent.c not present",
+)
+def test_calibration_fn_8024e1b4_dual_pointer_locals() -> None:
+    """Calibration: fn_8024E1B4 has locals tree, tmp, data, iter, i
+    (per MEMORY.md dual-pointer pattern). The bridge should find them."""
+    source = pathlib.Path(
+        "/Users/mike/code/melee/src/melee/mn/mnevent.c"
+    ).read_text()
+    # Build a synthetic pre_pass with enough virtuals (one per
+    # expected entity: gobj param + 5 locals = 6 virtuals).
+    pre = _make_pre_pass([32, 33, 34, 35, 36, 37])
+    bindings = list_bindings(source, "fn_8024E1B4", pre)
+    names = [b.var_name for b in bindings]
+    # Expect: gobj (param), then tree, tmp, data, iter, i (locals)
+    assert "gobj" in names
+    assert "tree" in names
+    assert "tmp" in names
+    assert "data" in names
+    assert "iter" in names
+    assert "i" in names
+
+    # Verify ordering: gobj is param, the rest are locals in source order
+    param_names = [b.var_name for b in bindings if b.kind == "param"]
+    local_names = [b.var_name for b in bindings if b.kind == "local"]
+    assert param_names == ["gobj"]
+    assert local_names == ["tree", "tmp", "data", "iter", "i"]

@@ -4286,3 +4286,166 @@ def permute(
 
     proc = subprocess.run(cmd, env=env, cwd=perm_root)
     raise typer.Exit(proc.returncode)
+
+
+@debug_app.command(name="var-to-virtual")
+def var_to_virtual(
+    function: Annotated[
+        str,
+        typer.Option(
+            "--function", "-f",
+            help="Function to look up (required).",
+        ),
+    ],
+    var_name: Annotated[
+        str,
+        typer.Argument(help="Source-level variable name."),
+    ],
+    pcdump: Annotated[
+        Optional[Path],
+        typer.Argument(
+            help="Path to pcdump.txt. Auto-resolves from cache.",
+        ),
+    ] = None,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit as JSON."),
+    ] = False,
+) -> None:
+    """Bridge: given a source variable name, predict its MWCC virtual.
+
+    Reports `confidence`: best-guess (decl-order heuristic matched),
+    ambiguous (no observed virtual for this variable), or unsupported
+    (e.g., variable lives in a macro the tokenizer can't see).
+    """
+    from ..mwcc_debug.symbol_bridge import find_virtual_for_var
+
+    melee_root = DEFAULT_MELEE_ROOT
+    pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
+    text = pcdump_path.read_text()
+    fns = parse_pcdump(text)
+    fn = next((f for f in fns if f.name == function), None)
+    if fn is None:
+        _abort_function_not_in_dump(function, [f.name for f in fns])
+    pre = fn.last_precolor_pass()
+    if pre is None:
+        typer.echo(
+            f"no pre-coloring pass for {function}", err=True,
+        )
+        raise typer.Exit(3)
+
+    unit = _find_unit_for_function(function, melee_root)
+    if unit is None:
+        typer.echo(f"{function} not in report.json", err=True)
+        raise typer.Exit(2)
+    source = (melee_root / "src" / f"{unit}.c").read_text()
+    binding = find_virtual_for_var(source, function, var_name, pre)
+
+    if binding is None:
+        if json_out:
+            print(json.dumps({
+                "var_name": var_name,
+                "found": False,
+            }, indent=2))
+        else:
+            typer.echo(
+                f"variable {var_name!r} not found in {function}",
+                err=True,
+            )
+        raise typer.Exit(1)
+
+    if json_out:
+        print(json.dumps({
+            "var_name": binding.var_name,
+            "virtual": binding.virtual,
+            "kind": binding.kind,
+            "type": binding.type_str,
+            "confidence": binding.confidence,
+            "found": True,
+        }, indent=2))
+    else:
+        print(f"variable: {binding.var_name}")
+        print(f"  virtual: r{binding.virtual}")
+        print(f"  kind:    {binding.kind}")
+        print(f"  type:    {binding.type_str}")
+        print(f"  conf:    {binding.confidence}")
+
+
+@debug_app.command(name="virtual-to-var")
+def virtual_to_var(
+    function: Annotated[
+        str,
+        typer.Option(
+            "--function", "-f",
+            help="Function to look up (required).",
+        ),
+    ],
+    virtual: Annotated[
+        int,
+        typer.Argument(
+            help="Virtual register number (32+), or ig_idx.",
+        ),
+    ],
+    pcdump: Annotated[
+        Optional[Path],
+        typer.Argument(
+            help="Path to pcdump.txt. Auto-resolves from cache.",
+        ),
+    ] = None,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit as JSON."),
+    ] = False,
+) -> None:
+    """Bridge inverse: given a virtual register, predict the source
+    variable name (decl-order heuristic).
+    """
+    from ..mwcc_debug.symbol_bridge import find_var_for_virtual
+
+    melee_root = DEFAULT_MELEE_ROOT
+    pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
+    text = pcdump_path.read_text()
+    fns = parse_pcdump(text)
+    fn = next((f for f in fns if f.name == function), None)
+    if fn is None:
+        _abort_function_not_in_dump(function, [f.name for f in fns])
+    pre = fn.last_precolor_pass()
+    if pre is None:
+        typer.echo(
+            f"no pre-coloring pass for {function}", err=True,
+        )
+        raise typer.Exit(3)
+
+    unit = _find_unit_for_function(function, melee_root)
+    if unit is None:
+        typer.echo(f"{function} not in report.json", err=True)
+        raise typer.Exit(2)
+    source = (melee_root / "src" / f"{unit}.c").read_text()
+    binding = find_var_for_virtual(source, function, virtual, pre)
+
+    if binding is None:
+        if json_out:
+            print(json.dumps({
+                "virtual": virtual,
+                "found": False,
+            }, indent=2))
+        else:
+            typer.echo(
+                f"no source variable bound to r{virtual} in {function}",
+                err=True,
+            )
+        raise typer.Exit(1)
+
+    if json_out:
+        print(json.dumps({
+            "var_name": binding.var_name,
+            "virtual": binding.virtual,
+            "kind": binding.kind,
+            "type": binding.type_str,
+            "confidence": binding.confidence,
+            "found": True,
+        }, indent=2))
+    else:
+        print(f"r{virtual}: {binding.var_name} ({binding.kind})")
+        print(f"  type:    {binding.type_str}")
+        print(f"  conf:    {binding.confidence}")
