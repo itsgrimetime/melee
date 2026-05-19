@@ -198,15 +198,16 @@ HSD_JObj* mnVibration_802474C4(s32 count)
 /// Operates on the global menu GObj (mnVibration_804D6C28) rather than the
 /// gobj parameter, which the compiler discards immediately.
 ///
-/// @remarks Matches 83.4%. Remaining gap is the same Tier 6 cluster that
-///   blocks fn_80248A78 / fn_802487A8 — one extra callee-save in the
-///   ig_idx cascade (stmw r26 vs expected r27) plus the int-to-float magic
-///   constant emitted as an anonymous @472 reloc instead of the named
-///   mnVibration_804DC018 (see mnVibration_80248444 for the same site).
-///   No source-level rewrite found during the /understand pass moves the
-///   needle; expected asm reproduces the source's logic faithfully,
-///   including the impossible `name_count < 8 && 8 <= name_count` branch
-///   in the down-overflow path.
+/// @remarks Matches 84.9%. Structural wins so far:
+///   - mnVibration_NthPortChild static inline for per-port child walker;
+///     matched the existing for-loop / mtctr+bdnz shape used by the
+///     sibling mnVibration_802474C4 (+0.5%).
+///   - mnVibration_GetNameSlot used for the 4 hand-inlined slot-index
+///     calculations in the A-toggle, up-nav, down-nav non-overflow,
+///     and down-nav overflow paths (+1.0%, four calls of +0.2-0.6%).
+///   Remaining gap is the ig_idx cascade (current stmw r26, expected
+///   stmw r27 — one extra callee-save virtual) plus the int-to-float
+///   magic constant emitted as @472 instead of mnVibration_804DC018.
 void fn_80247510(HSD_GObj* gobj)
 {
     MnVibrationData* data = mnVibration_804D6C28->user_data;
