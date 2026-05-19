@@ -227,6 +227,7 @@ void fn_80247510(HSD_GObj* gobj)
     u8 name_idx;
     u8 rumble_setting;
     HSD_JObj* jobj;
+    int new_var;
     PAD_STACK(136);
 
     if (mn_804D6BC8.cooldown != 0) {
@@ -362,7 +363,7 @@ void fn_80247510(HSD_GObj* gobj)
     if (inputs_repeat & 0x10) {
         cursor_row = data->x0[1];
         if (cursor_row != 0) {
-            name_idx = mnVibration_GetNameSlot(data, cursor_row - 1);
+            name_idx = mnVibration_GetNameSlot(data, cursor_row - (new_var = 1));
             if (name_idx != 0xFF) {
                 f32 dy;
                 HSD_JObj* cursor_jobj;
