@@ -132,6 +132,17 @@ def pcdump(
                  "are violated.",
         ),
     ] = None,
+    branch: Annotated[
+        Optional[str],
+        typer.Option(
+            "--branch",
+            help="Compile against this branch on the remote. If omitted, "
+                 "auto-detects from the local repo's current branch. The "
+                 "remote maintains a worktree per branch so concurrent "
+                 "pcdumps on different branches don't clobber each other.",
+            envvar="MWCC_DEBUG_BRANCH",
+        ),
+    ] = None,
 ):
     """Dump MWCC's internal IR + codegen for a TU and emit pcdump.txt to stdout.
 
@@ -155,6 +166,29 @@ def pcdump(
     """
     src_rel = _resolve_src_relative(c_file)
 
+    # Resolve the branch. If not provided, auto-detect from local git
+    # (the agent's typical case: they're on `wip/<topic>` locally and
+    # want to compile that branch on the remote without thinking about
+    # it). master/main use the legacy single-checkout path on the remote.
+    if branch is None:
+        try:
+            r = subprocess.run(
+                ["git", "branch", "--show-current"],
+                cwd=DEFAULT_MELEE_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if r.returncode == 0:
+                branch = r.stdout.strip() or None
+        except Exception:
+            branch = None
+    # Reject anything that looks dangerous to pass through cmd.exe.
+    if branch is not None and any(c in branch for c in '"\'; \t&|<>'):
+        raise typer.BadParameter(
+            f"branch name must not contain shell metacharacters: {branch!r}"
+        )
+
     # Build the SSH command. We invoke via cmd so we can set env vars cleanly
     # without PowerShell-quote-escaping headaches. The cmd line is:
     #   set MWCC_DEBUG_TIMEOUT_SECS=N && [set MWCC_DEBUG_NO_PULL=1 &&]
@@ -170,6 +204,9 @@ def pcdump(
                 "--force-phys must not contain quotes, semicolons, or whitespace"
             )
         cmd_parts.append(f"set MWCC_DEBUG_FORCE_PHYS={force_phys}")
+    if branch and branch not in ("master", "main"):
+        # Non-default branch — remote will use a worktree.
+        cmd_parts.append(f"set MWCC_DEBUG_BRANCH={branch}")
     cmd_parts.append(
         f"powershell -NoProfile -ExecutionPolicy Bypass "
         f"-File {remote_script} {src_rel}"
@@ -180,7 +217,10 @@ def pcdump(
     # We pass a single command string to be invoked there.
     ssh_cmd = ["ssh", host, remote_cmd]
 
-    print(f"[mwcc_debug] ssh {host} run_pcdump.ps1 {src_rel}", file=sys.stderr)
+    branch_label = (f" branch={branch}"
+                    if branch and branch not in ("master", "main") else "")
+    print(f"[mwcc_debug] ssh {host} run_pcdump.ps1 {src_rel}{branch_label}",
+          file=sys.stderr)
 
     # Decide where stdout goes. Default behavior changed in H2: if no
     # --output is given, save to the project pcdump cache instead of

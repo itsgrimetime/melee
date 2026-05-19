@@ -6,11 +6,21 @@
 #
 # Environment:
 #   MWCC_DEBUG_TIMEOUT_SECS  (default 60)
-#   MWCC_DEBUG_REPO          (default C:\Users\mikes\code\melee)
-#   MWCC_DEBUG_COMPILER_DIR  (default <repo>\build\compilers\GC\1.2.5n)
-#                            falls back to inspector-package path if not found
+#   MWCC_DEBUG_REPO          (default C:\Users\mikes\code\melee — the master
+#                            checkout, also used as the worktree base)
+#   MWCC_DEBUG_BRANCH        (default: master; if set to anything else, the
+#                            script uses a worktree at
+#                            <MWCC_DEBUG_REPO>-worktrees\<sanitized-branch>
+#                            instead of the master checkout. Worktree is
+#                            auto-created from origin/<branch> if missing.)
+#   MWCC_DEBUG_WORKTREES_DIR (default <MWCC_DEBUG_REPO>-worktrees; the parent
+#                            directory under which per-branch worktrees live)
+#   MWCC_DEBUG_COMPILER_DIR  (default <repo>\build\compilers\GC\1.2.5n);
+#                            falls back to master's compiler then the
+#                            inspector-package path if not found
 #   MWCC_DEBUG_PATCHED_DLL   (default <script-dir>\lmgr326b.dll)
-#   MWCC_DEBUG_NO_PULL       (set to 1 to skip `git pull` for testing)
+#   MWCC_DEBUG_NO_PULL       (set to 1 to skip `git pull`/worktree-sync for
+#                            testing)
 #
 # Output contract:
 #   stdout = raw pcdump.txt content (binary-safe -- caller redirects to file)
@@ -41,21 +51,61 @@ if ($args.Count -ne 1) {
 $srcRel = $args[0] -replace '\\', '/'  # normalize to forward slashes
 
 # --- Resolve paths ---
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$repoRoot  = if ($env:MWCC_DEBUG_REPO) { $env:MWCC_DEBUG_REPO } else { "C:\Users\mikes\code\melee" }
+$scriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
+$masterRoot  = if ($env:MWCC_DEBUG_REPO) { $env:MWCC_DEBUG_REPO } else { "C:\Users\mikes\code\melee" }
+# Trim — cmd.exe's `set NAME=value && ...` chain includes any
+# whitespace before `&&` in the value. Defensive trim avoids surprises
+# when this script is invoked via SSH + cmd from the local CLI.
+$branch      = if ($env:MWCC_DEBUG_BRANCH) { $env:MWCC_DEBUG_BRANCH.Trim() } else { "" }
+$worktreesDir = if ($env:MWCC_DEBUG_WORKTREES_DIR) {
+    $env:MWCC_DEBUG_WORKTREES_DIR
+} else {
+    "$masterRoot-worktrees"
+}
+
+# Compute the active $repoRoot. If no branch override (or branch is the
+# default master/main), use the legacy master checkout. Otherwise the
+# script will use (and possibly create) a worktree under $worktreesDir.
+$useWorktree = ($branch -ne "" -and $branch -ne "master" -and $branch -ne "main")
+if ($useWorktree) {
+    # Sanitize branch name for filesystem use: `/` → `-`, drop anything
+    # that's not alphanumeric, dash, dot, or underscore.
+    $branchSafe = ($branch -replace '/', '-') -replace '[^A-Za-z0-9._\-]', ''
+    if (-not $branchSafe) {
+        Fail "branch name sanitized to empty string: $branch" 64
+    }
+    $repoRoot = Join-Path $worktreesDir $branchSafe
+} else {
+    $repoRoot = $masterRoot
+}
+
 $compilerDir = if ($env:MWCC_DEBUG_COMPILER_DIR) {
     $env:MWCC_DEBUG_COMPILER_DIR
 } else {
+    # Try active repo's compiler first.
     $candidate = Join-Path $repoRoot "build\compilers\GC\1.2.5n"
     if (Test-Path (Join-Path $candidate "mwcceppc.exe")) {
         $candidate
     } else {
-        # Fall back to inspector-package compiler if main repo doesn't have it
-        "C:\Users\mikes\code\melee-decomp\mwcc-inspector-package\melee\build\compilers\GC\1.2.5n"
+        # Fall back to master's compiler (worktrees usually don't have one
+        # since `python configure.py` only runs in master).
+        $masterCompiler = Join-Path $masterRoot "build\compilers\GC\1.2.5n"
+        if (Test-Path (Join-Path $masterCompiler "mwcceppc.exe")) {
+            $masterCompiler
+        } else {
+            # Fall back to inspector-package compiler if neither has it.
+            "C:\Users\mikes\code\melee-decomp\mwcc-inspector-package\melee\build\compilers\GC\1.2.5n"
+        }
     }
 }
 $patchedDll = if ($env:MWCC_DEBUG_PATCHED_DLL) { $env:MWCC_DEBUG_PATCHED_DLL } else { Join-Path $scriptDir "lmgr326b.dll" }
 $timeoutSecs = if ($env:MWCC_DEBUG_TIMEOUT_SECS) { [int]$env:MWCC_DEBUG_TIMEOUT_SECS } else { 60 }
+
+if ($useWorktree) {
+    Write-Err "[mwcc_debug] using worktree for branch '$branch' at $repoRoot"
+} else {
+    Write-Err "[mwcc_debug] using master checkout at $repoRoot"
+}
 
 $stockDll    = Join-Path $compilerDir "lmgr326b.dll"
 $stockBackup = Join-Path $compilerDir "lmgr326b.dll.stock"
@@ -64,10 +114,49 @@ $lockFile    = Join-Path $env:TEMP "mwcc_debug.lock"
 $workDir     = Join-Path $env:TEMP "mwcc_debug_run"
 $pcdumpFile  = Join-Path $workDir "pcdump.txt"
 
-# --- Sanity checks ---
+# --- Sanity checks (pre-worktree) ---
+if (-not (Test-Path $masterRoot)) { Fail "master repo not found: $masterRoot" }
+if (-not (Test-Path $patchedDll)) { Fail "patched DLL not found: $patchedDll" }
+
+# --- Worktree creation (if branch override given) ---
+if ($useWorktree) {
+    if (-not (Test-Path $worktreesDir)) {
+        New-Item -ItemType Directory -Path $worktreesDir -Force | Out-Null
+    }
+    if (-not (Test-Path $repoRoot)) {
+        Write-Err "[mwcc_debug] creating worktree for branch '$branch' at $repoRoot"
+        Push-Location $masterRoot
+        $savedErrActPref = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            # Fetch first so origin/$branch is current
+            $fetchOut = & git fetch origin $branch 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) {
+                Pop-Location
+                $ErrorActionPreference = $savedErrActPref
+                Fail "git fetch origin $branch failed:`n$fetchOut" 70
+            }
+            # Create the worktree pointing at origin/$branch. Use the
+            # branch name (sanitized for filesystem) as the worktree dir.
+            # `git worktree add <path> origin/<branch>` will create a
+            # detached HEAD, which is fine for our read-only-compile use.
+            $addOut = & git worktree add $repoRoot "origin/$branch" 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) {
+                Pop-Location
+                $ErrorActionPreference = $savedErrActPref
+                Fail "git worktree add $repoRoot origin/$branch failed:`n$addOut" 70
+            }
+            Write-Err "[mwcc_debug] worktree created"
+        } finally {
+            Pop-Location
+            $ErrorActionPreference = $savedErrActPref
+        }
+    }
+}
+
+# --- Sanity checks (post-worktree) ---
 if (-not (Test-Path $repoRoot))   { Fail "repo not found: $repoRoot" }
 if (-not (Test-Path $mwccExe))    { Fail "mwcceppc.exe not found: $mwccExe" }
-if (-not (Test-Path $patchedDll)) { Fail "patched DLL not found: $patchedDll" }
 if (-not (Test-Path $stockDll))   { Fail "stock DLL not found: $stockDll" }
 
 # --- Lock acquisition ---
@@ -107,16 +196,42 @@ if ($env:MWCC_DEBUG_NO_PULL -ne "1") {
     $savedErrActPref = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        # --autostash to preserve any local mods (the Windows repo shouldn't have
-        # them, but be defensive).
-        $pullOut = & git pull --rebase --autostash 2>&1 | Out-String
-        if ($LASTEXITCODE -ne 0) {
-            Write-Err "git pull failed:"
-            Write-Err $pullOut
-            Remove-Item -Force $lockFile -ErrorAction SilentlyContinue
-            Pop-Location
-            $ErrorActionPreference = $savedErrActPref
-            Fail "could not sync repo at $repoRoot" 70
+        if ($useWorktree) {
+            # Worktrees are detached HEAD on origin/<branch>. To resync,
+            # fetch + reset to origin/<branch>. Forceful: discards any
+            # accidental local mods in the worktree (which shouldn't exist
+            # since the worktree is auto-managed and read-only-compile).
+            $fetchOut = & git fetch origin $branch 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) {
+                Write-Err "git fetch origin $branch failed:"
+                Write-Err $fetchOut
+                Remove-Item -Force $lockFile -ErrorAction SilentlyContinue
+                Pop-Location
+                $ErrorActionPreference = $savedErrActPref
+                Fail "could not sync worktree at $repoRoot" 70
+            }
+            $resetOut = & git reset --hard "origin/$branch" 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) {
+                Write-Err "git reset --hard origin/$branch failed:"
+                Write-Err $resetOut
+                Remove-Item -Force $lockFile -ErrorAction SilentlyContinue
+                Pop-Location
+                $ErrorActionPreference = $savedErrActPref
+                Fail "could not reset worktree to origin/$branch" 70
+            }
+        } else {
+            # Master checkout — preserve the original pull-rebase behavior.
+            # --autostash to preserve any local mods (the Windows repo
+            # shouldn't have them, but be defensive).
+            $pullOut = & git pull --rebase --autostash 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) {
+                Write-Err "git pull failed:"
+                Write-Err $pullOut
+                Remove-Item -Force $lockFile -ErrorAction SilentlyContinue
+                Pop-Location
+                $ErrorActionPreference = $savedErrActPref
+                Fail "could not sync repo at $repoRoot" 70
+            }
         }
     } finally {
         Pop-Location
