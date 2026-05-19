@@ -1289,13 +1289,13 @@ block_39:
                 hurt_param = hurt_param_from_hit_end;
             }
         } else {
-            hit_param_candidate = ((segment_dot * hurt_start_dot) -
-                                   (hurt_len_sq * hit_start_dot)) /
-                                  closest_denom;
+            hit_param = (hit_param_candidate =
+                             ((segment_dot * hurt_start_dot) -
+                              (hurt_len_sq * hit_start_dot)) /
+                             closest_denom);
             hurt_param = ((hit_len_sq * hurt_start_dot) -
                           (segment_dot * hit_start_dot)) /
                          closest_denom;
-            hit_param = hit_param_candidate;
             if ((hit_param_candidate > lbColl_804D7A00) ||
                 (hit_param < lbColl_804D7A10) ||
                 (hurt_param > lbColl_804D7A00) ||
