@@ -343,3 +343,198 @@ def _skip_array_brackets(s: str, start: int) -> int:
         while i < len(s) and s[i].isspace():
             i += 1
     return i
+
+
+@dataclass
+class Binding:
+    """A source variable bound to its predicted MWCC virtual register."""
+    var_name: str
+    virtual: int           # -1 if unmapped
+    decl_line: int         # 1-indexed line in original source
+    kind: str              # "local" | "param"
+    type_str: str
+    confidence: str        # "best-guess" | "verified" | "rejected"
+                           # | "ambiguous" | "unsupported"
+
+
+_FN_HEADER_RE = re.compile(
+    r"""
+    (?P<retval>[^(){};\n]+?)            # return type / qualifiers
+    \s+
+    (?P<name>[A-Za-z_][A-Za-z_0-9]*)
+    \s*
+    \(
+    (?P<params>[^()]*)                  # parameter list
+    \)
+    \s*
+    (?=\{)
+    """,
+    re.VERBOSE | re.MULTILINE,
+)
+
+
+def _extract_function_text(
+    source: str, fn_name: str
+) -> Optional[tuple[str, str, int]]:
+    """Return (params_text, body_text, start_line) for `fn_name`, or
+    None if not found. params_text is the text inside (), body_text
+    is the text including outer {}, start_line is 1-indexed."""
+    cleaned = _strip_strings_and_comments(source)
+    for m in _FN_HEADER_RE.finditer(cleaned):
+        if m.group("name") != fn_name:
+            continue
+        # Find the matching body
+        body_start = m.end()
+        # m.end() points just before `{`
+        idx = body_start
+        depth = 0
+        body_begin = None
+        while idx < len(cleaned):
+            c = cleaned[idx]
+            if c == "{":
+                if depth == 0:
+                    body_begin = idx
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    body_end = idx + 1
+                    body_text = source[body_begin:body_end]
+                    params_text = m.group("params").strip()
+                    start_line = source.count("\n", 0, m.start()) + 1
+                    return (params_text, body_text, start_line)
+            idx += 1
+        return None
+    return None
+
+
+def _parse_params(params_text: str) -> list[LocalDecl]:
+    """Parse a function's parameter list into LocalDecl entries (with
+    kind set externally to 'param')."""
+    params_text = params_text.strip()
+    if not params_text or params_text == "void":
+        return []
+    out: list[LocalDecl] = []
+    depth = 0
+    buf: list[str] = []
+    parts: list[str] = []
+    for c in params_text:
+        if c == "," and depth == 0:
+            parts.append("".join(buf).strip())
+            buf = []
+            continue
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+        buf.append(c)
+    remainder = "".join(buf).strip()
+    if remainder:
+        parts.append(remainder)
+    for i, part in enumerate(parts):
+        m = re.match(
+            r"^\s*(?P<type>.+?)\s+(?P<name>[A-Za-z_][A-Za-z_0-9]*)\s*$",
+            part,
+        )
+        if m is None:
+            continue
+        type_str = re.sub(r"\s+", " ", m.group("type")).strip()
+        type_str = re.sub(r"\s*\*\s*", "*", type_str)
+        out.append(LocalDecl(
+            name=m.group("name"),
+            type_str=type_str,
+            decl_index=i,
+        ))
+    return out
+
+
+def _collect_virtual_destinations(pre_pass) -> list[int]:
+    """Return the virtual register numbers (≥32) that appear as
+    destinations in `pre_pass`, in first-occurrence order."""
+    seen: list[int] = []
+    seen_set: set[int] = set()
+    for block in pre_pass.blocks:
+        for ist in block.instructions:
+            if not ist.regs:
+                continue
+            kind, num = ist.regs[0]
+            if kind != "r":
+                continue
+            if num < 32:
+                continue
+            if num in seen_set:
+                continue
+            seen_set.add(num)
+            seen.append(num)
+    return seen
+
+
+def list_bindings(source: str, fn_name: str, pre_pass) -> list[Binding]:
+    """Return Binding entries (both params and locals) for `fn_name`.
+
+    Heuristic: parameters take the first K virtuals (K = number of
+    params), then locals follow in declaration order. The "expected"
+    virtual for the cursor's Nth slot is the Nth virtual seen in
+    first-occurrence order in the pre-coloring pass; if that slot
+    isn't present (the seen list is shorter), the entry gets
+    confidence='ambiguous' with virtual=-1.
+
+    The cursor advances on every iteration whether or not a virtual
+    is observed for that slot, so a missing param virtual doesn't
+    silently shift the locals down.
+    """
+    extracted = _extract_function_text(source, fn_name)
+    if extracted is None:
+        return []
+    params_text, body_text, start_line = extracted
+
+    params = _parse_params(params_text)
+    locals_ = walk_local_decls(body_text)
+    virtuals = _collect_virtual_destinations(pre_pass)
+    virtuals_set: set[int] = set(virtuals)
+
+    out: list[Binding] = []
+    cursor = 0
+    for p in params:
+        expected = 32 + cursor
+        if expected in virtuals_set:
+            out.append(Binding(
+                var_name=p.name,
+                virtual=expected,
+                decl_line=start_line,
+                kind="param",
+                type_str=p.type_str,
+                confidence="best-guess",
+            ))
+        else:
+            out.append(Binding(
+                var_name=p.name,
+                virtual=-1,
+                decl_line=start_line,
+                kind="param",
+                type_str=p.type_str,
+                confidence="ambiguous",
+            ))
+        cursor += 1
+    for ld in locals_:
+        expected = 32 + cursor
+        if expected in virtuals_set:
+            out.append(Binding(
+                var_name=ld.name,
+                virtual=expected,
+                decl_line=start_line,
+                kind="local",
+                type_str=ld.type_str,
+                confidence="best-guess",
+            ))
+        else:
+            out.append(Binding(
+                var_name=ld.name,
+                virtual=-1,
+                decl_line=start_line,
+                kind="local",
+                type_str=ld.type_str,
+                confidence="ambiguous",
+            ))
+        cursor += 1
+    return out

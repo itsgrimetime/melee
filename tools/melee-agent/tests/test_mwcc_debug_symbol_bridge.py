@@ -4,8 +4,16 @@ from __future__ import annotations
 
 import textwrap
 
+from src.mwcc_debug.parser import (
+    Block,
+    Function,
+    Instruction,
+    Pass,
+)
 from src.mwcc_debug.symbol_bridge import (
+    Binding,
     LocalDecl,
+    list_bindings,
     walk_local_decls,
 )
 
@@ -148,3 +156,75 @@ def test_walk_local_decls_warns_on_unrecognized_decl_shape() -> None:
     # The function-pointer line was flagged
     assert len(unrecognized) == 1
     assert "void" in unrecognized[0] or "(*cb)" in unrecognized[0]
+
+
+def _make_ist(
+    opcode: str, operands: str, regs: list[tuple[str, int]]
+) -> Instruction:
+    return Instruction(
+        opcode=opcode, operands=operands, annotations=[], regs=regs
+    )
+
+
+def _make_pre_pass(virtuals_in_order: list[int]) -> Pass:
+    """Construct a single-block pre-coloring pass that hits the
+    given virtuals in order as destination operands."""
+    pre = Pass(name="AFTER PEEPHOLE FORWARD")
+    block = Block(index=0, succ=[], pred=[], labels=["L0"])
+    for v in virtuals_in_order:
+        block.instructions.append(
+            _make_ist("li", f"r{v}, 0", [("r", v)])
+        )
+    pre.blocks.append(block)
+    return pre
+
+
+def test_list_bindings_locals_only_assigns_in_order() -> None:
+    """Two locals get the first two distinct virtuals (≥32) seen."""
+    source = textwrap.dedent("""\
+        void f(void) {
+            int a;
+            int b;
+        }
+    """)
+    pre = _make_pre_pass([32, 33, 34])
+    bindings = list_bindings(source, "f", pre)
+    locals_only = [b for b in bindings if b.kind == "local"]
+    assert [b.var_name for b in locals_only] == ["a", "b"]
+    assert locals_only[0].virtual == 32
+    assert locals_only[1].virtual == 33
+    assert all(b.confidence == "best-guess" for b in locals_only)
+
+
+def test_list_bindings_function_not_found_returns_empty() -> None:
+    source = "void other(void) { int x; }"
+    pre = _make_pre_pass([32])
+    assert list_bindings(source, "missing", pre) == []
+
+
+def test_list_bindings_includes_params_when_observed() -> None:
+    """Parameters appear in the binding list with kind='param'."""
+    source = textwrap.dedent("""\
+        void f(HSD_GObj* gobj, int n) {
+            int local;
+        }
+    """)
+    # Simulate: param virtuals 32, 33 then local virtual 34
+    pre = _make_pre_pass([32, 33, 34])
+    bindings = list_bindings(source, "f", pre)
+    params = [b for b in bindings if b.kind == "param"]
+    assert [b.var_name for b in params] == ["gobj", "n"]
+    assert all(b.confidence == "best-guess" for b in params)
+
+
+def test_list_bindings_unobserved_param_is_ambiguous() -> None:
+    """If a parameter's expected virtual doesn't appear in pre-pass,
+    confidence is 'ambiguous'."""
+    source = "void f(HSD_GObj* gobj, int n) { int local; }"
+    # Only two virtuals present — n's expected slot is missing
+    pre = _make_pre_pass([32, 34])
+    bindings = list_bindings(source, "f", pre)
+    params = {b.var_name: b for b in bindings if b.kind == "param"}
+    # gobj is observed (first virtual present), n is not
+    assert params["gobj"].confidence == "best-guess"
+    assert params["n"].confidence == "ambiguous"
