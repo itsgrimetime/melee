@@ -148,6 +148,30 @@ HSD_JObj* mnVibration_802474C4(s32 count)
     return var_r4;
 }
 
+/// @brief Per-frame think/input callback for the rumble (vibration) menu.
+///
+/// Installed as the proc on the menu GObj in mnVibration_80249174. Drives
+/// the menu state machine: B exits, the intro animation gates input, then
+/// per-controller A toggles either port-level rumble (when that port is in
+/// "panel" mode) or per-name rumble (when in "cursor" mode), and L+Up/L+Down
+/// move the name cursor or scroll the visible name window.
+///
+/// Per-port mode is stored in data->x0[port + 2]:
+///   - 0 = port-level rumble toggle mode (panel highlights port indicator)
+///   - 1 = cursor mode (this port can drive the name-list cursor)
+///
+/// Operates on the global menu GObj (mnVibration_804D6C28) rather than the
+/// gobj parameter, which the compiler discards immediately.
+///
+/// @remarks Matches 83.4%. Remaining gap is the same Tier 6 cluster that
+///   blocks fn_80248A78 / fn_802487A8 — one extra callee-save in the
+///   ig_idx cascade (stmw r26 vs expected r27) plus the int-to-float magic
+///   constant emitted as an anonymous @472 reloc instead of the named
+///   mnVibration_804DC018 (see mnVibration_80248444 for the same site).
+///   No source-level rewrite found during the /understand pass moves the
+///   needle; expected asm reproduces the source's logic faithfully,
+///   including the impossible `name_count < 8 && 8 <= name_count` branch
+///   in the down-overflow path.
 void fn_80247510(HSD_GObj* gobj)
 {
     MnVibrationData* data = mnVibration_804D6C28->user_data;
