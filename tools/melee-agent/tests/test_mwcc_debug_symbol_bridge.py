@@ -101,3 +101,50 @@ def test_walk_local_decls_skips_string_literal_lookalike() -> None:
     ''')
     names = [d.name for d in walk_local_decls(body)]
     assert names == ["s", "real"]
+
+
+def test_walk_local_decls_multi_declarator() -> None:
+    """`int x, y, z;` emits three entries in order."""
+    body = "{ int x, y, z; }"
+    decls = walk_local_decls(body)
+    assert [d.name for d in decls] == ["x", "y", "z"]
+    assert [d.decl_index for d in decls] == [0, 1, 2]
+    assert all(d.type_str == "int" for d in decls)
+
+
+def test_walk_local_decls_multi_declarator_with_initializers() -> None:
+    """`int x = 1, y = 2;` emits two entries."""
+    body = "{ int x = 1, y = 2; }"
+    decls = walk_local_decls(body)
+    assert [d.name for d in decls] == ["x", "y"]
+    assert all(d.type_str == "int" for d in decls)
+
+
+def test_walk_local_decls_array() -> None:
+    """`int arr[10];` is recognized as a single decl."""
+    body = "{ int arr[10]; }"
+    decls = walk_local_decls(body)
+    assert [d.name for d in decls] == ["arr"]
+    assert decls[0].type_str == "int"
+
+
+def test_walk_local_decls_array_with_decl_index_preserves_order() -> None:
+    """`int x; int arr[5]; int z;` returns all three in order."""
+    body = "{ int x; int arr[5]; int z; }"
+    decls = walk_local_decls(body)
+    assert [d.name for d in decls] == ["x", "arr", "z"]
+    assert [d.decl_index for d in decls] == [0, 1, 2]
+
+
+def test_walk_local_decls_warns_on_unrecognized_decl_shape() -> None:
+    """Function-pointer decls aren't yet supported. The walker
+    should record them via the warning hook so callers can detect
+    silent failures."""
+    body = "{ int x; void (*cb)(int); int z; }"
+    unrecognized: list[str] = []
+    decls = walk_local_decls(body, on_unrecognized=unrecognized.append)
+    # The two parseable decls still come through
+    assert [d.name for d in decls] == ["x", "z"]
+    # The function-pointer line was flagged
+    assert len(unrecognized) == 1
+    assert "void" in unrecognized[0] or "(*cb)" in unrecognized[0]

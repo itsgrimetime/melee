@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 
 @dataclass
@@ -26,19 +26,23 @@ class LocalDecl:
     decl_index: int    # 0-indexed position in source order
 
 
-# Matches a single declaration's leading pattern:
-#   <type-tokens> <name> [= ...] ;
-# where <type-tokens> is one or more identifier/pointer/qualifier
-# tokens, followed by a single identifier that's the variable name.
-#
-# We tokenize statement-by-statement (splitting on top-level `;`),
-# then run this on each statement-leading text to recognize decls.
+# Matches the type-prefix portion of a declaration:
+#   <type-tokens> <first-name>
+# We capture the FIRST declarator's name here so we know where the
+# type ends. The rest of the statement (additional declarators,
+# initializers, array dimensions) is parsed by the state machine
+# inside `walk_local_decls`.
 #
 # The type+name boundary requires a real separator (`*` or whitespace)
 # so we don't greedily consume the first character of the variable
 # name into the trailing type-token (e.g. `MnEventData* data` must
 # split as type=`MnEventData*`, name=`data`).
-_DECL_RE = re.compile(
+#
+# The trailing lookahead `(?=\[|=|,|;|$)` distinguishes a declaration
+# from a function call/prototype like `int foo()`: after the name
+# we must see an array `[`, initializer `=`, declarator-separator `,`,
+# statement-terminator `;`, or end-of-string.
+_DECL_HEAD_RE = re.compile(
     r"""
     ^\s*
     (?P<type>
@@ -49,9 +53,21 @@ _DECL_RE = re.compile(
     )
     (?P<name>[A-Za-z_][A-Za-z_0-9]*)
     \s*
-    (?:=|;|$)                                  # `=`, `;`, or end ends decl head
+    (?=\[|=|,|;|$)                             # lookahead: must be followed by
+                                               # `[` (array dim), `=` (init),
+                                               # `,` (next declarator), `;`, or end.
+                                               # Lookahead, so cursor stays after name.
     """,
     re.VERBOSE,
+)
+
+# Matches just the bare name of a continuation declarator. The
+# caller positions the cursor right after the `,` separator and
+# whitespace; we just need to confirm there's an identifier here.
+# Array brackets and initializers are skipped by the caller's
+# state machine.
+_DECLARATOR_NAME_RE = re.compile(
+    r"^\s*(?P<name>[A-Za-z_][A-Za-z_0-9]*)",
 )
 
 # C keywords that LOOK like type identifiers but introduce control flow
@@ -159,11 +175,81 @@ def _top_level_statements(body: str) -> list[str]:
     return stmts
 
 
-def walk_local_decls(body: str) -> list[LocalDecl]:
+def _skip_initializer(stmt: str, start: int) -> int:
+    """Starting at `start` (just past an `=` sign), skip past the
+    initializer expression and return the index of the next top-level
+    `,`, `;`, or end-of-string.
+
+    Tracks paren/brace/bracket depth so commas inside `f(a, b)` or
+    `{1, 2, 3}` aren't treated as declarator separators.
+    """
+    i = start
+    depth = 0
+    while i < len(stmt):
+        c = stmt[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif depth == 0 and (c == "," or c == ";"):
+            return i
+        i += 1
+    return i
+
+
+def _looks_like_decl(stmt: str) -> bool:
+    """Heuristic: does this statement LOOK like a declaration even
+    though `_DECL_HEAD_RE` didn't match it?
+
+    True if it starts with an identifier (i.e. could be a type) that
+    isn't a control-flow keyword. The existing caller already filters
+    out control-flow leaders, so by the time this is called we only
+    need to confirm there's substance to flag.
+
+    The point is to surface things like `void (*cb)(int);` (function
+    pointers) or other unrecognized decl shapes so callers can detect
+    silent failures of the parser.
+    """
+    stmt = stmt.strip()
+    if not stmt:
+        return False
+    # Must start with an identifier
+    if not re.match(r"^[A-Za-z_]", stmt):
+        return False
+    # Bare expression statements like `x = 5` or `foo()` shouldn't
+    # be flagged. Use a coarse check: if the first non-identifier
+    # character is `=`, `(`, `.`, `-`, `+`, `[` (etc.), it's most
+    # likely an expression statement, not a decl.
+    #
+    # Decl-looking statements have at least TWO identifiers separated
+    # by whitespace or `*` (the type and the name) OR contain `(*`
+    # (function-pointer syntax) before any `=`.
+    if "(*" in stmt.split("=")[0]:
+        return True
+    # Look for `<ident><sep><ident>` where sep is whitespace or `*`
+    if re.match(
+        r"^[A-Za-z_][A-Za-z_0-9]*\s*(?:\*+\s*|\s+)[A-Za-z_]",
+        stmt,
+    ):
+        return True
+    return False
+
+
+def walk_local_decls(
+    body: str,
+    on_unrecognized: Optional[Callable[[str], None]] = None,
+) -> list[LocalDecl]:
     """Walk a function body, return one LocalDecl per top-level local
     variable declaration in source order.
 
     `body` may include or omit the outer braces.
+
+    Multi-declarators (`int x, y, z;`) and array decls (`int arr[10];`)
+    are recognized. Function-pointer decls (`void (*cb)(int);`) and
+    other shapes the parser doesn't yet model are NOT silently dropped:
+    if `on_unrecognized` is provided, it's called with the raw
+    statement text for each such case. Callers can use this to detect
+    silent failures of the parser (e.g. Task 3's calibration gate).
     """
     out: list[LocalDecl] = []
     idx = 0
@@ -172,18 +258,88 @@ def walk_local_decls(body: str) -> list[LocalDecl]:
         first_token_m = re.match(r"^\s*([A-Za-z_][A-Za-z_0-9]*)", stmt)
         if first_token_m and first_token_m.group(1) in _NON_DECL_LEADERS:
             continue
-        m = _DECL_RE.match(stmt)
+        m = _DECL_HEAD_RE.match(stmt)
         if not m:
+            # Decl-looking but unparseable -> flag for caller.
+            if on_unrecognized is not None and _looks_like_decl(stmt):
+                on_unrecognized(stmt.strip())
             continue
         # Compact whitespace in the type
         type_str = re.sub(r"\s+", " ", m.group("type")).strip()
         # Move trailing pointer asterisks adjacent to type (canonical
         # "HSD_JObj*" rather than "HSD_JObj *")
         type_str = re.sub(r"\s*\*\s*", "*", type_str)
+
+        # Emit first declarator
         out.append(LocalDecl(
             name=m.group("name"),
             type_str=type_str,
             decl_index=idx,
         ))
         idx += 1
+
+        # Walk remainder for additional declarators (multi-declarator
+        # form `int x, y, z;` or `int a = 1, b = 2;`).
+        #
+        # State machine: at each step the cursor `i` is positioned at
+        # either an array-bracket, `=`, `,`, `;`, or end-of-statement.
+        # - `[`: skip brackets (array dim on current declarator)
+        # - `=`: skip initializer to next top-level `,` or `;`
+        # - `,`: consume one new declarator (its name becomes a LocalDecl)
+        # - `;` or end: done
+        i = _skip_array_brackets(stmt, m.end())
+        while i < len(stmt):
+            while i < len(stmt) and stmt[i].isspace():
+                i += 1
+            if i >= len(stmt):
+                break
+            c = stmt[i]
+            if c == ";":
+                break
+            if c == "[":
+                i = _skip_array_brackets(stmt, i)
+                continue
+            if c == "=":
+                i = _skip_initializer(stmt, i + 1)
+                continue
+            if c == ",":
+                i += 1
+                sub_m = _DECLARATOR_NAME_RE.match(stmt[i:])
+                if not sub_m:
+                    # Unrecognized continuation — flag and stop.
+                    if on_unrecognized is not None:
+                        on_unrecognized(stmt.strip())
+                    break
+                out.append(LocalDecl(
+                    name=sub_m.group("name"),
+                    type_str=type_str,
+                    decl_index=idx,
+                ))
+                idx += 1
+                i += sub_m.end()
+                continue
+            # Unexpected char in decl tail — bail.
+            break
     return out
+
+
+def _skip_array_brackets(s: str, start: int) -> int:
+    """Skip optional `[...]` array brackets starting at `start`,
+    handling nested brackets. Returns the position after the last
+    closing bracket (or `start` if none present).
+    """
+    i = start
+    while i < len(s) and s[i].isspace():
+        i += 1
+    while i < len(s) and s[i] == "[":
+        depth = 1
+        i += 1
+        while i < len(s) and depth > 0:
+            if s[i] == "[":
+                depth += 1
+            elif s[i] == "]":
+                depth -= 1
+            i += 1
+        while i < len(s) and s[i].isspace():
+            i += 1
+    return i
