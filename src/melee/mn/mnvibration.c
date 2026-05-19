@@ -736,10 +736,11 @@ void fn_802487A8(HSD_GObj* gobj)
 /// mnVibration_8024829C and initially hidden. This walks `port` next-
 /// pointers from the first child, clears the HIDDEN flag (0x10), and
 /// clears the backplane jobjs[22-port]->HIDDEN if that port is connected.
-static inline void mnVibration_RevealPortIndicator(HSD_GObj* gobj, s32 port)
+static inline void mnVibration_RevealPortIndicator(HSD_GObj* gobj,
+                                                   MnVibrationData* data,
+                                                   s32 port)
 {
-    MnVibrationData* data = gobj->user_data;
-    HSD_JObj* jobj = data->jobjs[23];
+    HSD_JObj* jobj = ((MnVibrationData*) gobj->user_data)->jobjs[23];
     s32 i;
 
     jobj = (jobj == NULL) ? NULL : jobj->child;
@@ -765,19 +766,20 @@ static inline void mnVibration_RevealPortIndicator(HSD_GObj* gobj, s32 port)
 /// fn_802487A8.
 void fn_80248A78(HSD_GObj* gobj)
 {
+    MnVibrationData* data = gobj->user_data;
     f32 frame;
     PAD_STACK(64);
 
-    frame = mn_8022ED6C(((MnVibrationData*) gobj->user_data)->jobjs[1],
+    frame = mn_8022ED6C(data->jobjs[1],
                         (AnimLoopSettings*) &mnVibration_803EECE0);
     if (mnVibration_804DC050 == frame) {
-        mnVibration_RevealPortIndicator(gobj, 0);
+        mnVibration_RevealPortIndicator(gobj, data, 0);
     } else if (mnVibration_804DC054 == frame) {
-        mnVibration_RevealPortIndicator(gobj, 1);
+        mnVibration_RevealPortIndicator(gobj, data, 1);
     } else if (mnVibration_804DC058 == frame) {
-        mnVibration_RevealPortIndicator(gobj, 2);
+        mnVibration_RevealPortIndicator(gobj, data, 2);
     } else if (mnVibration_804DC05C == frame) {
-        mnVibration_RevealPortIndicator(gobj, 3);
+        mnVibration_RevealPortIndicator(gobj, data, 3);
     } else if (mnVibration_804DC060 == frame) {
         if (GetNameCount() != 0) {
             MnVibrationJointAssets* assets;
