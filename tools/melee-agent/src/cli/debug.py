@@ -4183,8 +4183,9 @@ def permute(
         int,
         typer.Option(
             "-j", "--threads",
-            help="Permuter parallelism. Default 1 to keep pcdump.txt "
-                 "writes serialized in the project root.",
+            help="Permuter parallelism. score-source now uses unique "
+                 "per-PID pcdump filenames so parallel threads no longer "
+                 "race; safe to raise above 1.",
         ),
     ] = 1,
     extra: Annotated[
@@ -4209,9 +4210,9 @@ def permute(
     - `melee-agent debug fix-perm-compile <perm_dir>` if compile.sh was
       generated on macOS (auto-applied by gen-permuter-config).
 
-    Single-threaded by default since our DLL writes pcdump.txt to the
-    project root and parallel threads would race. Use `-j 1` (default)
-    until we add per-thread output handling.
+    Default is single-threaded for safety. score-source now emits
+    per-PID pcdump filenames so parallel threads no longer race on a
+    shared pcdump.txt — raise `-j` above 1 if you want concurrency.
     """
     melee_root = DEFAULT_MELEE_ROOT
     perm_dir = perm_root / "nonmatchings" / function
