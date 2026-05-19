@@ -26,11 +26,11 @@
 #include <MetroTRK/intrinsics.h>
 #include <MSL/math_ppc.h>
 
-/* 006E58 */ static bool lbColl_80006E58(
-    Vec3* hit_start, Vec3* hit_end, Vec3* hurt_start, Vec3* hurt_end,
-    Vec3* hit_closest, Vec3* hurt_closest, MtxPtr hurt_mtx,
-    Vec3* out_contact_pos, float* out_overlap, float hit_radius,
-    float hurt_radius, float broadphase_scale);
+/* 006E58 */ static bool
+lbColl_80006E58(Vec3* hit_start, Vec3* hit_end, Vec3* hurt_start,
+                Vec3* hurt_end, Vec3* hit_closest, Vec3* hurt_closest,
+                MtxPtr hurt_mtx, Vec3* out_contact_pos, float* out_overlap,
+                float hit_radius, float hurt_radius, float broadphase_scale);
 
 /// .sdata
 static GXColor lbColl_804D36D4 = { 0, 0x80, 0xFF, 0x80 };
@@ -964,19 +964,22 @@ bool lbColl_800067F8(Vec3* a, Vec3* b, Vec3* c, Vec3* d, Vec3* e, Vec3* f,
     }
 }
 
-/// @brief Tests a hit capsule segment against a hurt or shield capsule segment.
+/// @brief Tests a hit capsule segment against a hurt or shield capsule
+/// segment.
 /// @param[in] hit_start First endpoint of the hit capsule axis.
 /// @param[in] hit_end Second endpoint of the hit capsule axis.
 /// @param[in] hurt_start First endpoint of the hurt/shield capsule axis.
 /// @param[in] hurt_end Second endpoint of the hurt/shield capsule axis.
 /// @param[out] hit_closest Closest point on the hit capsule axis.
 /// @param[out] hurt_closest Closest point on the hurt/shield capsule axis.
-/// @param[in] hurt_mtx Matrix used to measure hurt radius along contact normal.
+/// @param[in] hurt_mtx Matrix used to measure hurt radius along contact
+/// normal.
 /// @param[out] out_contact_pos Contact point on the hurt/shield surface.
 /// @param[out] out_overlap Effective radius margin minus closest distance.
 /// @param[in] hit_radius Hit capsule radius.
 /// @param[in] hurt_radius Hurt/shield capsule radius.
-/// @param[in] broadphase_scale Scale applied to hurt_radius for AABB rejection.
+/// @param[in] broadphase_scale Scale applied to hurt_radius for AABB
+/// rejection.
 /// @return true if the capsule axes overlap within their effective radii.
 bool lbColl_80006E58(Vec3* hit_start, Vec3* hit_end, Vec3* hurt_start,
                      Vec3* hurt_end, Vec3* hit_closest, Vec3* hurt_closest,
@@ -984,7 +987,6 @@ bool lbColl_80006E58(Vec3* hit_start, Vec3* hit_end, Vec3* hurt_start,
                      float* out_overlap, float hit_radius, float hurt_radius,
                      float broadphase_scale)
 {
-    float segment_dot;
     float hurt_len_sq;
     float closest_delta_x;
     float hit_start_mid_x;
@@ -1050,6 +1052,7 @@ bool lbColl_80006E58(Vec3* hit_start, Vec3* hit_end, Vec3* hurt_start,
     float hurt_param_from_hit_start;
     float hurt_param_from_hit_end;
     float closest_dist;
+    float segment_dot;
     f64 local_rsqrt_estimate;
     f64 local_rsqrt_step1;
     f64 local_rsqrt_step2;
@@ -1064,7 +1067,8 @@ bool lbColl_80006E58(Vec3* hit_start, Vec3* hit_end, Vec3* hurt_start,
     float hurt_delta_y;
     PAD_STACK(64);
 
-    // Fast reject when the expanded hit segment AABB misses both hurt endpoints.
+    // Fast reject when the expanded hit segment AABB misses both hurt
+    // endpoints.
     broadphase_radius = (hurt_radius * broadphase_scale) + hit_radius;
     hit_start_copy = *hit_start;
     hurt_start_copy = *hurt_start;
@@ -1095,8 +1099,7 @@ bool lbColl_80006E58(Vec3* hit_start, Vec3* hit_end, Vec3* hurt_start,
         return 0;
     }
 block_13:
-    hit_end_y = hit_end->y;
-    if (hit_start_copy.y > hit_end_y) {
+    if (hit_start_copy.y > (hit_end_y = hit_end->y)) {
         hit_start_max_y = hit_start_copy.y + broadphase_radius;
         if ((hit_start_max_y < hurt_start_copy.y) &&
             (hit_start_max_y < hurt_end->y))
@@ -1122,8 +1125,7 @@ block_13:
         return 0;
     }
 block_26:
-    hit_end_z = hit_end->z;
-    if (hit_start_copy.z > hit_end_z) {
+    if (hit_start_copy.z > (hit_end_z = hit_end->z)) {
         hit_start_max_z = hit_start_copy.z + broadphase_radius;
         if ((hit_start_max_z < hurt_start_copy.z) &&
             (hit_start_max_z < hurt_end->z))
@@ -1148,12 +1150,9 @@ block_26:
     if ((hit_end_max_z < hurt_start_copy.z) && (hit_end_max_z < hurt_end->z)) {
         return 0;
     }
-block_39: {
-    float hit_delta_x;
-
+block_39:
     // Solve closest points between the two segment axes.
-    hit_delta_x = hit_end_x - hit_start_copy.x;
-    hit_delta.x = hit_delta_x;
+    hit_delta.x = hit_end_x - hit_start_copy.x;
     hit_delta.y = hit_end->y - hit_start_copy.y;
     hit_delta.z = hit_end->z - hit_start_copy.z;
     hurt_end_y = hurt_end->y;
@@ -1161,27 +1160,27 @@ block_39: {
     hurt_delta_y = hurt_end_y - hurt_start_copy.y;
     hurt_end_x = hurt_end->x;
     hurt_delta_x = hurt_end_x - hurt_start_copy.x;
-    start_delta_x = hit_start_copy.x - hurt_start_copy.x;
-    hurt_end_z = hurt_end->z;
-    hurt_delta_z = hurt_end_z - hurt_start_copy.z;
-    segment_dot =
-        (hit_delta.z * hurt_delta_z) +
-        ((hit_delta_x * hurt_delta_x) + (hit_delta.y * hurt_delta_y));
-    hurt_len_sq = (hurt_delta_z * hurt_delta_z) +
-              ((hurt_delta_x * hurt_delta_x) + (hurt_delta_y * hurt_delta_y));
-    start_delta_z = hit_start_copy.z - hurt_start_copy.z;
+    segment_dot = hit_delta.y * hurt_delta_y;
+    hurt_len_sq = hurt_delta_y * hurt_delta_y;
     hit_start_mid_x = hit_delta.x * hit_delta.x;
     hit_start_mid_y = hit_delta.y * hit_delta.y;
-    hit_len_sq = hit_start_mid_x + hit_start_mid_y;
+    hurt_end_z = hurt_end->z;
+    start_delta_x = hit_start_copy.x - hurt_start_copy.x;
+    hurt_delta_z = hurt_end_z - hurt_start_copy.z;
+    segment_dot = (hit_delta.x * hurt_delta_x) + segment_dot;
+    hurt_len_sq = (hurt_delta_x * hurt_delta_x) + hurt_len_sq;
+    segment_dot = (hit_delta.z * hurt_delta_z) + segment_dot;
+    hurt_len_sq = (hurt_delta_z * hurt_delta_z) + hurt_len_sq;
     hit_start_mid_z = hit_delta.z * hit_delta.z;
+    start_delta_z = hit_start_copy.z - hurt_start_copy.z;
+    hit_len_sq = hit_start_mid_x + hit_start_mid_y;
     hit_len_sq = hit_start_mid_z + hit_len_sq;
     hit_start_dot = hit_delta.y * start_delta_y;
-    hurt_start_dot = hurt_delta_y * start_delta_y;
-    hit_start_dot = (hit_delta_x * start_delta_x) + hit_start_dot;
-    hurt_start_dot = (hurt_delta_x * start_delta_x) + hurt_start_dot;
+    hit_start_dot = (hit_delta.x * start_delta_x) + hit_start_dot;
+    hurt_start_dot =
+        (hurt_delta_y * start_delta_y) + (hurt_delta_x * start_delta_x);
     hit_start_dot = (hit_delta.z * start_delta_z) + hit_start_dot;
     hurt_start_dot = (hurt_delta_z * start_delta_z) + hurt_start_dot;
-}
     closest_denom = (hit_len_sq * hurt_len_sq) - (segment_dot * segment_dot);
     if ((hurt_len_sq < lbColl_804D79F0) && (hurt_len_sq > lbColl_804D79F4)) {
         is_hurt_segment_degenerate = 1;
@@ -1208,29 +1207,34 @@ block_39: {
             }
         }
     } else {
-        if ((closest_denom < lbColl_804D79F0) && (closest_denom > lbColl_804D79F4)) {
+        if ((closest_denom < lbColl_804D79F0) &&
+            (closest_denom > lbColl_804D79F4))
+        {
             is_parallel = 1;
         } else {
             is_parallel = 0;
         }
         if (is_parallel != 0) {
-            // For parallel axes, project the hit endpoint nearer the hurt midpoint.
+            // For parallel axes, project the hit endpoint nearer the hurt
+            // midpoint.
             hurt_mid_y = (float) ((lbColl_804D7A18 * (f64) hurt_delta_y) +
                                   (f64) hurt_start_copy.y);
             hurt_mid_x = (float) ((lbColl_804D7A18 * (f64) hurt_delta_x) +
                                   (f64) hurt_start_copy.x);
             hit_start_mid_y = hit_start_copy.y - hurt_mid_y;
             hurt_mid_z = (float) ((lbColl_804D7A18 * (f64) hurt_delta_z) +
-                                 (f64) hurt_start_copy.z);
+                                  (f64) hurt_start_copy.z);
             hit_end_mid_y = hit_end->y - hurt_mid_y;
             hit_start_mid_x = hit_start_copy.x - hurt_mid_x;
             hit_end_mid_x = hit_end->x - hurt_mid_x;
             hit_start_mid_z = hit_start_copy.z - hurt_mid_z;
             hit_end_mid_z = hit_end->z - hurt_mid_z;
             if (((hit_start_mid_z * hit_start_mid_z) +
-                 ((hit_start_mid_x * hit_start_mid_x) + (hit_start_mid_y * hit_start_mid_y))) <
+                 ((hit_start_mid_x * hit_start_mid_x) +
+                  (hit_start_mid_y * hit_start_mid_y))) <
                 ((hit_end_mid_z * hit_end_mid_z) +
-                 ((hit_end_mid_x * hit_end_mid_x) + (hit_end_mid_y * hit_end_mid_y))))
+                 ((hit_end_mid_x * hit_end_mid_x) +
+                  (hit_end_mid_y * hit_end_mid_y))))
             {
                 Vec3 a2;
                 Vec3 d1;
@@ -1247,8 +1251,9 @@ block_39: {
                     dot = (d1.z * (c3.z - a2.z)) +
                           ((d1.x * (c3.x - a2.x)) +
                            (d1.y * (c3.y - a2.y)));
-                    hurt_param_from_hit_start = -dot / ((d1.z * d1.z) +
-                                     ((d1.x * d1.x) + (d1.y * d1.y)));
+                    hurt_param_from_hit_start =
+                        -dot /
+                        ((d1.z * d1.z) + ((d1.x * d1.x) + (d1.y * d1.y)));
                 }
                 if (hurt_param_from_hit_start > lbColl_804D7A00) {
                     hurt_param_from_hit_start = lbColl_804D7A08;
@@ -1272,8 +1277,9 @@ block_39: {
                     dot = (d1.z * (c2.z - b0.z)) +
                           ((d1.x * (c2.x - b0.x)) +
                            (d1.y * (c2.y - b0.y)));
-                    hurt_param_from_hit_end = -dot / ((d1.z * d1.z) +
-                                       ((d1.x * d1.x) + (d1.y * d1.y)));
+                    hurt_param_from_hit_end =
+                        -dot /
+                        ((d1.z * d1.z) + ((d1.x * d1.x) + (d1.y * d1.y)));
                 }
                 if (hurt_param_from_hit_end > lbColl_804D7A00) {
                     hurt_param_from_hit_end = hit_param;
@@ -1283,25 +1289,30 @@ block_39: {
                 hurt_param = hurt_param_from_hit_end;
             }
         } else {
-            hit_param_candidate =
-                ((segment_dot * hurt_start_dot) - (hurt_len_sq * hit_start_dot)) / closest_denom;
-            hurt_param =
-                ((hit_len_sq * hurt_start_dot) - (segment_dot * hit_start_dot)) / closest_denom;
+            hit_param_candidate = ((segment_dot * hurt_start_dot) -
+                                   (hurt_len_sq * hit_start_dot)) /
+                                  closest_denom;
+            hurt_param = ((hit_len_sq * hurt_start_dot) -
+                          (segment_dot * hit_start_dot)) /
+                         closest_denom;
             hit_param = hit_param_candidate;
-            if ((hit_param_candidate > lbColl_804D7A00) || (hit_param < lbColl_804D7A10) ||
-                (hurt_param > lbColl_804D7A00) || (hurt_param < lbColl_804D7A10))
+            if ((hit_param_candidate > lbColl_804D7A00) ||
+                (hit_param < lbColl_804D7A10) ||
+                (hurt_param > lbColl_804D7A00) ||
+                (hurt_param < lbColl_804D7A10))
             {
+                float hit_endpoint_dist_sq;
                 float hit_endpoint_param;
                 float hurt_endpoint_param;
-                float hit_endpoint_dist_sq;
                 float hurt_endpoint_dist_sq;
 
-                // If the unconstrained solution leaves either segment, compare the
-                // nearest endpoint projection from each axis.
+                // If the unconstrained solution leaves either segment, compare
+                // the nearest endpoint projection from each axis.
                 if (hit_param < lbColl_804D7A10) {
                     hit_endpoint_param = lbColl_804D79F8;
-                    hit_endpoint_dist_sq = lbColl_80005EBC(
-                        hurt_start, hurt_end, hit_start, &candidate_hurt_param);
+                    hit_endpoint_dist_sq =
+                        lbColl_80005EBC(hurt_start, hurt_end, hit_start,
+                                        &candidate_hurt_param);
                 } else {
                     hit_endpoint_param = lbColl_804D7A08;
                     hit_endpoint_dist_sq = lbColl_80005EBC(
@@ -1336,7 +1347,8 @@ block_39: {
     closest_delta_x = hit_closest->x - hurt_closest->x;
     closest_delta_z = hit_closest->z - hurt_closest->z;
     closest_dist_sq = (closest_delta_z * closest_delta_z) +
-                ((closest_delta_x * closest_delta_x) + (closest_delta_y * closest_delta_y));
+                      ((closest_delta_x * closest_delta_x) +
+                       (closest_delta_y * closest_delta_y));
     if (closest_dist_sq > lbColl_804D79F8) {
         volatile float sp38;
 
@@ -1346,11 +1358,10 @@ block_39: {
             -(((f64) closest_dist_sq *
                (closest_rsqrt_estimate * closest_rsqrt_estimate)) -
               lbColl_804D7A20);
-        closest_rsqrt_step2 =
-            lbColl_804D7A18 * closest_rsqrt_step1 *
-            -(((f64) closest_dist_sq *
-               (closest_rsqrt_step1 * closest_rsqrt_step1)) -
-              lbColl_804D7A20);
+        closest_rsqrt_step2 = lbColl_804D7A18 * closest_rsqrt_step1 *
+                              -(((f64) closest_dist_sq *
+                                 (closest_rsqrt_step1 * closest_rsqrt_step1)) -
+                                lbColl_804D7A20);
         sp38 = (float) ((f64) closest_dist_sq *
                         (lbColl_804D7A18 * closest_rsqrt_step2 *
                          -(((f64) closest_dist_sq *
@@ -1378,8 +1389,9 @@ block_39: {
     local_delta_y = hit_start_copy.y - hit_delta.y;
     local_delta_x = hit_start_copy.x - hit_delta.x;
     local_delta_z = hit_start_copy.z - hit_delta.z;
-    local_dist_sq = (local_delta_z * local_delta_z) +
-                 ((local_delta_x * local_delta_x) + (local_delta_y * local_delta_y));
+    local_dist_sq =
+        (local_delta_z * local_delta_z) +
+        ((local_delta_x * local_delta_x) + (local_delta_y * local_delta_y));
     if (local_dist_sq > lbColl_804D79F8) {
         volatile float sp34;
 
