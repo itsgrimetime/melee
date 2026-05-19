@@ -50,9 +50,9 @@ that random walks rarely target. Tier 3 closes that gap by:
         │
         ▼
 ┌───────────────────────────────────────────────────────────────┐
-│ Mutator library  (new — AST-based targeted mutations)         │
+│ Mutator library  (new — tokenizer-based targeted mutations)   │
 │   - mutate type-change                                        │
-│   - mutate alias-split                                        │
+│   - mutate insert-alias                                       │
 └───────────────────────────────────────────────────────────────┘
         │
         ▼
@@ -113,40 +113,69 @@ def list_bindings(
 ) -> list[VarBinding]: ...
 ```
 
-**Mechanism — empirically-validated, with explicit confidence:**
+**Mechanism — heuristic + self-verification, not "exact":**
 
-The bridge uses two strategies and reports a confidence label:
+The v1 bridge does NOT try to be exact via deep AST analysis. Instead
+it uses a simple decl-order heuristic plus an OPTIONAL verification
+step the orchestrator can invoke to confirm a mapping before committing
+20-50 minutes to a seed.
 
-1. **Use-site structural alignment (primary, "exact" confidence when
-   it matches uniquely).** Find each local decl's first read/write in
-   the source AST. Use the same structural-signature matcher
-   `iter_match.py` already implements to find that instruction in the
-   pre-coloring pass, and read the virtual register at the destination
-   slot.
+1. **Decl-order heuristic ("best-guess" by default).** Use the same
+   regex-based brace-tokenizer the existing `source_patch.py` uses to
+   walk a function body and collect local declarations in source
+   order. Map the N-th local to the N-th distinct virtual (r ≥ 32)
+   appearing as a destination in the pre-coloring pass after the
+   parameter virtuals. This is the dominant path and produces
+   `confidence="best-guess"`.
 
-2. **Decl-order heuristic (fallback, "best-guess" confidence).** As a
-   secondary signal, walk local decls in declaration order and report
-   the N-th distinct virtual seen in the pre-coloring pass. This works
-   in the typical case where MWCC numbers locals roughly in source
-   order but is NOT load-bearing on its own — callers see
-   `confidence="best-guess"` when only this strategy hit.
+2. **Self-verification (raises confidence to "verified").** The
+   orchestrator (NOT the bridge itself) can verify a claimed mapping
+   by applying a no-op type-change mutation (e.g., add `volatile`
+   qualifier) and re-running pcdump-local. If the predicted virtual's
+   destination type/usage changes in the new pre-coloring pass, the
+   mapping was correct → label `confidence="verified"`. If nothing
+   moves, the mapping was wrong → label `confidence="rejected"`,
+   skip this seed. This costs one extra pcdump call (~1s) per
+   verification, paid only when the orchestrator decides to commit a
+   seed.
 
-3. **Calibration step before implementation (validation gate).** Before
-   downstream mutators land, the bridge MUST be validated against ≥3
-   functions where the variable↔virtual mapping is known (e.g.,
-   `fn_80247510`, `fn_8024E1B4`, and one more from the matched set).
-   If the bridge produces wrong mappings on the calibration set, the
-   bridge is broken and Tier 3 implementation pauses until it's fixed.
-   This is a hard gate, not a nice-to-have — the entire mutator layer
-   trusts the bridge.
+3. **No pycparser dependency.** v1 does NOT use pycparser. Real Melee
+   functions are full of HSD_ASSERT, PAD_STACK, statement-expressions,
+   and other constructs that vanilla pycparser refuses. The brace-
+   tokenizer in `source_patch.py` already handles these (treats macro
+   text as opaque), is proven on this codebase, and is sufficient for
+   v1's mutator scope. If/when v2 mutators need real AST manipulation,
+   we'll add the pycparser+fake-libc layer then.
 
-**Parameters:** parameter virtuals get a low ig_idx (32-34) but their
-mapping to parameter names is determined by the C ABI (first GPR arg →
-r3 → some virtual). For v1, the bridge handles parameters as a separate
-read-only view (`list_bindings` returns them with `confidence="exact"`
-since the ABI fixes the mapping). Mutators do NOT operate on
-parameters in v1 (changing parameter types is a callers-API change,
-out of scope).
+4. **Calibration gate (REQUIRED before any tier3-search runs).**
+   Before downstream layers proceed, the bridge MUST be validated
+   against ≥3 functions where the variable↔virtual mapping is known:
+   `fn_80247510` (param-iter-ceiling case; r3 param → some virtual),
+   `fn_8024E1B4` (dual-pointer pattern from MEMORY.md;
+   `ptr`/`data`/`root` locals' virtuals known from prior decomp work),
+   and one more from a recently-matched function. Bridge fails
+   calibration → Tier 3 implementation pauses until fixed.
+
+**Parameters in v1.** Parameter virtuals get a low ig_idx (32-34) but
+their mapping to parameter names is determined by both the C ABI AND
+whether the function actually uses them.
+
+- Parameters observed in the pre-coloring pass with a known virtual
+  → `confidence="best-guess"` (heuristic matched the C ABI ordering).
+- Parameters NOT observed in the pre-coloring pass (dead parameter, or
+  the function only uses them indirectly) → `confidence="ambiguous"`
+  with a clear note. `list_bindings` still returns them so the
+  orchestrator can decide to skip vs include.
+
+Floating-point arguments (`f0..f8`), struct-by-value args, and varargs
+are **out of scope for v1 bridging**. `list_bindings` reports them
+with `confidence="unsupported"`. Mutators refuse to operate on them.
+
+`list_bindings` returns BOTH parameters and locals, each tagged with
+its `kind` field (`"param"` | `"local"`) so callers can filter.
+Mutators in v1 refuse to operate on parameters regardless of
+confidence — changing parameter types is a callers-API change, out
+of scope for v1.
 
 **CLI:** `debug var-to-virtual -f FN <var-name>` and
 `debug virtual-to-var -f FN <ig-idx>`. Both also have `--json` for
@@ -156,15 +185,22 @@ tooling.
 
 `tools/melee-agent/src/mwcc_debug/mutators.py`
 
-AST-based source mutations targeting specific variables. Uses pycparser
-for parse + reconstruct, with the same preprocessing approach as the
-existing `source_patch.py` module (function-body extraction so MWCC-
-specific constructs at file scope — `#pragma auto_inline`,
-`#pragma dont_inline`, `__attribute__((never_inline))`, K&R-style decls
-in older TUs — don't trip pycparser). For functions where even the
-body alone is unparseable (rare in our stuck cases), mutators raise a
-recognizable `MutationUnsupported` exception and the orchestrator
-skips that seed.
+**Tokenizer-based source mutations** targeting specific variables. v1
+does NOT use pycparser — instead it builds on the same brace-tokenizer
++ regex approach `source_patch.py` already uses successfully on real
+Melee functions (proven against the `auto_inline`/`dont_inline`/HSD
+macro zoo).
+
+Each mutator returns the mutated source as a string; if a mutation
+target can't be unambiguously located via the tokenizer (e.g., variable
+name appears inside an opaque macro that the tokenizer treats as a
+black box), the mutator raises `MutationUnsupported` and the
+orchestrator skips that seed.
+
+This trade-off — tokenizer instead of AST — means v1 mutators are
+restricted to simple shapes (single-decl rewrites, statement-level
+inserts). v2 can introduce a pycparser+fake-libc layer if/when the
+mutator catalog grows complex enough to need real AST work.
 
 **Two mutators in v1:**
 
@@ -180,46 +216,50 @@ def mutate_type_change(
 ) -> str: ...
 ```
 
-**`mutate_alias_split` (pointer-alias rewrite rule for v1).**
+**`mutate_insert_alias_before_use` (renamed from `mutate_alias_split`
+for clarity — v1's pointer-alias rewrite).**
 
 v1 restricts to the dominant catalog shape: a pointer/pointer-like
-variable that's read multiple times and we want to **alias the value
-once before the N-th statement that reads it, then rewrite that one
-statement to use the fresh local.** This models patterns like
+variable that's read multiple times and we want to **insert a fresh
+local copy before the N-th statement that reads it, then rewrite that
+one statement to use the fresh local.** This models patterns like
 `fn_8024E1B4`'s `ptr = data = gobj->user_data` and similar from
 MEMORY.md.
 
 Concretely:
 
-- "Use" = a statement-level expression that **reads** the variable
-  (not writes; not a compound assignment LHS).
+- "Use" = a statement-level token-occurrence of `<var>` outside string
+  literals/comments, where the variable is **read** (not on the LHS of
+  a single-equals `=` assignment in that statement).
 - `at_stmt_index` = the 0-indexed N-th such reading statement,
   counting in source order within the function body.
 - The rewrite:
   1. Inserts `<type> <new_name> = <var>;` immediately before that
      statement.
-  2. Replaces THAT ONE statement's reads of `<var>` with `<new_name>`.
+  2. Replaces THAT ONE statement's token occurrences of `<var>` with
+     `<new_name>`.
   3. All other reads of `<var>` keep the original name.
 
 ```python
-def mutate_alias_split(
+def mutate_insert_alias_before_use(
     source: str,
     fn_name: str,
     var_name: str,
-    at_stmt_index: int,    # 0-indexed; counts read-only uses of var
+    at_stmt_index: int,    # 0-indexed; counts read-only statement uses
     new_name: Optional[str] = None,  # default: var_name + "_alias"
 ) -> str: ...
 ```
 
 Out of v1 (deferred to Tier 4+): aliasing lvalues with side effects,
-aliasing write-targets, multi-statement use sites. Each adds rewrite
-ambiguity; defer until the simple form proves useful.
+aliasing write-targets, multi-statement use sites, splits where the
+variable appears in macros the tokenizer can't see into. Each adds
+rewrite ambiguity; defer until the simple form proves useful.
 
 Both return new source strings; callers are responsible for writing.
 
 **CLI:** `debug mutate type-change -f FN --var V --type T [--apply]` and
-`debug mutate alias-split -f FN --var V --at N [--apply]`. Default: write
-to stdout. `--apply` writes back to the source file.
+`debug mutate insert-alias -f FN --var V --at N [--apply]`. Default:
+write to stdout. `--apply` writes back to the source file.
 
 Errors (variable not found, parse failure, ambiguous variable,
 `MutationUnsupported`) raise typer.Exit with a clear message and a
@@ -280,6 +320,23 @@ We document this range. Agents using tier3-search are signing up for
 a long-ish run; the orchestrator emits a clear up-front estimate
 based on a single warmup score call.
 
+**`--budget N` is a hard cap on seed COUNT, not on (variable × variant)
+combinations.** If guide+fallback produce more candidate
+(variable, mutation_direction) pairs than `N`, the orchestrator
+truncates by priority (high-severity suggestions first, then
+rank-callees order). The "both widening AND shrinking" policy still
+applies but only within the budget — if the cap is hit after 2 widening
+seeds, no shrinking seeds get generated. The orchestrator logs which
+candidate seeds were dropped due to the cap.
+
+**Loud failure detection.** If, of N generated seeds, **zero compile
+successfully**, the orchestrator EXITS NON-ZERO with a clear message:
+"all N tier3 seeds failed to compile — bridge mapping likely wrong or
+mutation produced invalid C." This prevents the silent-failure trap
+where a 30-minute run returns "no improvement" when actually no seeds
+ever ran. If some seeds compile and some don't, the run continues
+normally and reports per-seed compile success in the summary.
+
 ## Data flow
 
 ```
@@ -301,18 +358,28 @@ mutator output    permuter run        scorer (Tier 2)
 ## Files
 
 **New:**
-- `tools/melee-agent/src/mwcc_debug/symbol_bridge.py`
-- `tools/melee-agent/src/mwcc_debug/mutators.py`
-- `tools/melee-agent/tests/test_mwcc_debug_symbol_bridge.py`
-- `tools/melee-agent/tests/test_mwcc_debug_mutators.py`
-- `tools/melee-agent/tests/test_mwcc_debug_tier3_search.py`
-  (integration; uses live build artifacts when available)
+- `tools/melee-agent/src/mwcc_debug/symbol_bridge.py` — brace-tokenizer
+  based decl walker + the heuristic+self-verify bridge API.
+- `tools/melee-agent/src/mwcc_debug/mutators.py` — tokenizer-based
+  `mutate_type_change` and `mutate_insert_alias_before_use`.
+- `tools/melee-agent/tests/test_mwcc_debug_symbol_bridge.py` — unit
+  tests + the calibration tests against `fn_80247510`, `fn_8024E1B4`,
+  and one more known-mapping function.
+- `tools/melee-agent/tests/test_mwcc_debug_mutators.py` — unit tests
+  + the `fn_8024E1B4` dual-pointer regression test.
+- `tools/melee-agent/tests/test_mwcc_debug_tier3_search_integration.py`
+  — explicitly named `_integration` so CI can select/skip it; depends
+  on live build artifacts (report.json, pcdumps).
 
 **Doc strategy.** Single permuter-integration doc is the source of
 truth: extend `docs/mwcc-debug-permuter-integration.md` with a Tier 3
 section (under "permuter Tier 3" label per the naming note above). No
 separate tutorial file — the integration doc already contains the
 workflow chapters for Tier 0/1/2, so Tier 3 slots in alongside them.
+While there, **reorder the existing headings to a linear Tier 0→1→2
+flow** (current doc presents Tier 0, Tier 2, Tier 1 in that order
+because Tier 2 shipped after Tier 1 was specced; cleaning the order
+is a 5-minute fix worth doing alongside the Tier 3 addition).
 
 **Modified:**
 - `tools/melee-agent/src/cli/debug.py` — 4 new CLI commands
@@ -405,6 +472,13 @@ workflow chapters for Tier 0/1/2, so Tier 3 slots in alongside them.
   matches landed via Tier 3 before considering additional mutators.**
   This prevents bloat from speculative additions and forces evidence-
   driven growth.
+
+  **Tracking Tier 3 matches.** Commits that land a match where
+  tier3-search produced the winning seed should include a
+  `Tier3-Search: <seed-description>` trailer in the commit message
+  (analogous to `Co-Authored-By`). A future `melee-agent debug
+  tier3-stats` command (out of v1 scope) can tally these by `git log
+  --grep "Tier3-Search:"`. v1 just establishes the convention.
 
 ## Success metric
 
