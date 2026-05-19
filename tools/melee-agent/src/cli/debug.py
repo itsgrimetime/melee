@@ -1262,9 +1262,11 @@ def verify_perm(
         typer.Option(
             "--threshold",
             help="Minimum improvement (in percentage points) to consider "
-                 "the candidate a win. Default 0.1.",
+                 "the candidate a win. Default 0.05 — small enough to catch "
+                 "+0.05-0.09% chain wins permuter often produces, but not "
+                 "so small that build-noise registers as a hit.",
         ),
-    ] = 0.1,
+    ] = 0.05,
     json_out: Annotated[
         bool,
         typer.Option("--json", help="Emit verification result as JSON."),
@@ -1526,9 +1528,11 @@ def enumerate_decl_orders(
         float,
         typer.Option(
             "--threshold",
-            help="Minimum improvement (percentage points) to consider a win.",
+            help="Minimum improvement (percentage points) to consider a win. "
+                 "Default 0.05 — catches the +0.05-0.09% chain wins that "
+                 "matching agents observed permuter producing.",
         ),
-    ] = 0.1,
+    ] = 0.05,
     keep_best: Annotated[
         bool,
         typer.Option(
@@ -1784,14 +1788,37 @@ def enumerate_decl_orders(
                           if applied_chain else None)
             best_perm = None  # n/a in iterate mode — we already applied
     finally:
-        # In iterate-with-keep mode, leave the final `current` applied.
-        # In all other modes (default, single-sweep with/without keep_best),
-        # revert to the very original.
-        keep_final = iterate or (keep_best and best_pct > baseline)
-        if keep_final and current != orig:
+        # Decide whether the disk-state to keep is the accumulated `current`
+        # (iterate mode with at least one winning round; or single-sweep
+        # with --keep-best after a successful win) or the original.
+        had_wins = bool(applied_chain) if iterate else (
+            keep_best and best_pct > baseline
+        )
+        keep_final = had_wins and current != orig
+        if keep_final:
             target_path.write_text(current)
+            if iterate and not json_out:
+                typer.echo(
+                    f"[mwcc_debug] iterate kept {len(applied_chain)} "
+                    f"winning round(s).",
+                    err=True,
+                )
         else:
-            target_path.write_text(orig)
+            # No wins (or single-sweep without --keep-best). Always revert
+            # to the original, regardless of any intermediate writes the
+            # candidate loop might have done. The per-candidate revert in
+            # run_one_round should leave disk at the round's baseline
+            # already, but write `orig` defensively so we're independent
+            # of that contract.
+            current_disk = target_path.read_text()
+            if current_disk != orig:
+                target_path.write_text(orig)
+                if not json_out:
+                    typer.echo(
+                        f"[mwcc_debug] reverted source (no wins above "
+                        f"threshold).",
+                        err=True,
+                    )
         subprocess.run(
             ["ninja", f"build/GALE01/src/{unit}.o",
              "build/GALE01/report.json"],
@@ -2102,9 +2129,11 @@ def triage_perm(
         float,
         typer.Option(
             "--threshold",
-            help="Minimum improvement (percentage points) to consider a win.",
+            help="Minimum improvement (percentage points) to consider a "
+                 "win. Default 0.05 — catches the +0.05-0.09% chain "
+                 "wins that hide at the previous 0.10 default.",
         ),
-    ] = 0.1,
+    ] = 0.05,
     apply_best: Annotated[
         bool,
         typer.Option(
