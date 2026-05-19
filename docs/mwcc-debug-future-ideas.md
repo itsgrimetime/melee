@@ -22,11 +22,81 @@ and algorithm docs have been corrected.
 IGNode struct layout for v1.2.5n (different from 7.0!): see
 `tools/mwcc_debug/mwcc_debug.c` or `docs/mwcc-allocator-algorithm.md`.
 
-What we still don't capture: the **iteration order** within colorgraph
+~~What we still don't capture: the **iteration order** within colorgraph
 (determined by `simplifygraph`'s spill-cost-aware Chaitin-style
-simplification). Adding a hook on `simplifygraph` would surface this.
-Also the workingMask state per-decision is computed but not stored
-across the loop — would need an in-loop hook (much more invasive).
+simplification). Adding a hook on `simplifygraph` would surface this.~~
+
+✅ Done in commit ff4a358c8 (Tier 2.5). The simplifygraph hook at
+0x4CE400 emits `SIMPLIFY GRAPH (class=N, n_colors=K, n_class_regs=M)`
+sections with per-iter rows containing `ig_idx`, post-simplification
+`degree`, original `arraySize` (interferer count), and `flags` — the
+0x08 bit indicates a SPILLED node (potential spill candidate).
+
+Still not captured: the workingMask state per-decision is computed but
+not stored across the loop — would need an in-loop hook (much more
+invasive). Marginal value: we can already reason backwards from the
+COLORGRAPH DECISIONS output's interferer list.
+
+## Tier 2.5 — simplifygraph hook (simplification order + spill markers) — ✅ DONE
+
+Implemented in commit ff4a358c8. Hooks `simplifygraph` at VA 0x4CE400
+with the discovered 3-arg signature `(int rclass, int n_colors, int
+n_class_regs)`. After the trampoline call, walks the returned linked
+list and emits per-iteration data.
+
+Output shape:
+```
+SIMPLIFY GRAPH (class=0, n_colors=29, n_class_regs=56)
+iter  ig_idx  degree  arraySize flags     notes
+0     -1      0       0        0x2
+...
+15    -1      0       3        0xa       SPILLED
+16    36      0       0        0x2
+17    35      14      27       0x2
+...
+```
+
+Columns:
+- `iter`: position in the simplified linked list (=order colorgraph
+  walks it; head colored first)
+- `ig_idx`: index in `interferencegraph[]`. -1 for "physical reg"
+  nodes (representing r0/r3/r4/...) that weren't part of the virtual-
+  reg IG.
+- `degree`: post-simplification degree (often 0 once neighbors are
+  removed)
+- `arraySize`: pre-simplification interferer count (= original degree)
+- `flags`: IGNode flags. Bit 0x08 (8) is the SPILLED marker
+- `notes`: convenience text (`SPILLED` when flags & 0x08 is set)
+
+**What's new vs. just looking at COLORGRAPH DECISIONS:** The colorgraph
+output has the same `iter` and `ig_idx` columns BUT the degree it
+reports is the post-simplification degree (always low). The simplify
+output shows the ORIGINAL `arraySize` (real interferer count) and which
+nodes simplifygraph itself flagged as potential spills BEFORE colorgraph
+got to them. That tells you which virtuals are structurally hard to
+color (Chaitin's "can't be removed cleanly") even before the per-
+virtual coloring attempts run.
+
+Why this matters for matching: when a stuck function shows a spill
+marker on a virtual that ended up at the "wrong" physical, the
+constraint may be earlier than the allocator — the simplification
+algorithm gave up on it and pushed it through with a sentinel that
+biases later decisions. A C-source restructure that reduces that
+virtual's degree (= fewer simultaneously-live values touching it)
+might unblock the case.
+
+**Known limitation:** Reading `INTERFERENCEGRAPH[]` BEFORE the trampoline
+call crashes mwcceppc (the prior disabled hook hit this). Reading after
+is safe — and matches what we want anyway (post-simplification state).
+A "before snapshot" would let us diff degrees and surface spill flags
+added by simplifygraph itself; right now we can only see flags that were
+already set at hook exit. Workaround: pair the SIMPLIFY GRAPH section
+with the immediately-following COLORGRAPH DECISIONS in the parser — the
+colorgraph hook already captures per-node interferer arrays which encode
+the pre-simplification edges.
+
+Parser support: `parse_hook_events()` now returns `SimplifySection` /
+`SimplifyEntry` objects on each `FunctionEvents`.
 
 ## Tier 3.5 — mechanism investigation (propagateconstants hook + PCode-gen finding) — ✅ DONE
 
@@ -113,34 +183,57 @@ simplified-out leaves. Would require either:
 **Effort spent:** ~half-day, mostly RE work on mwcceppc.exe to find VAs and
 debugging the iteration crash.
 
-## Tier 4 — permuter integration
+## Tier 4 — permuter integration scoring + guidance (v1) — ✅ DONE
 
-[Decomp Permuter](https://github.com/simonlindholm/decomp-permuter) does
-randomized C-source mutation, recompiles, scores against target asm.
-It's the heavyweight tool people reach for when nothing else moves the
-needle (inspector's `GOAL.md` mentions 50,000+ iterations on
-`mpColl_80046904` without finding a beating local minimum).
+Implemented as scoring/guidance primitives that can be wrapped by
+upstream decomp-permuter, plus a standalone "guide" command for manual
+investigation.
 
-The permuter is random by design. With our pcdump output + analyze
-command, we could make it smarter — after each candidate, examine the
-dump to see whether the mutation moved any of:
-- A virtual register's live range (toward or away from the target)
-- The use count of a virtual that's at the wrong physical
-- The interference graph
+See [docs/mwcc-debug-tier4-permuter.md](mwcc-debug-tier4-permuter.md)
+for the full design + integration paths.
 
-A *guided* permuter that prefers mutations that affect the right
-virtuals would converge much faster than random. Likely needs a custom
-permuter scorer that incorporates the analyze output.
+**What v1 ships:**
 
-**What it unlocks:** systematically explorable "stuck at 99.8%" cases,
-rather than stochastic.
+- `melee-agent debug score <pcdump> -f FN -t target.{yaml,json}` — emits
+  a single floating-point score (lower = better) compatible with
+  permuter's `--scorer` convention. Combines:
+  - byte_penalty (% of virtuals at wrong physical)
+  - virtual_penalty (per-wrong-virtual)
+  - spill_penalty (unexpected SPILLED markers)
+  - interferer_penalty (degree-distance)
+- `melee-agent debug guide <pcdump> -f FN [-t target]` — human-readable
+  diagnostic listing wrong virtuals, blockers, spill warnings, and
+  suggested C-source nudges. Hints, not guarantees.
+- `melee-agent debug derive-target <pcdump> -f FN` — extracts the
+  current virtual→physical mapping as a target spec. Useful for
+  capturing known-good (matched sibling) or experimental (Tier 5
+  force-phys) targets.
 
-**Rough path:** much bigger build. Implement as either (a) a new scorer
-plugin for permuter that calls our analyze command, or (b) a separate
-guided-search tool that owns its own mutation loop. (b) is cleaner but
-re-implements a lot of permuter's machinery.
+**Verified on mnVibration_80248644:**
+- Forced r36 → r31 via Tier 5, captured target spec
+- Scored natural-source baseline against forced target
+- `guide` correctly identifies: "r36 wants r31 but r31 is taken by
+  interfering virtual r51. Try: shrink the live range of r51..."
+- This pinpoints exactly the scroll_offset-vs-cleanup-loop-NULL
+  interference the matching agent was investigating manually.
 
-**Effort:** week-plus, depending on how deep the integration goes.
+**What v1 doesn't do (deferred):**
+
+- Direct wrap-around of decomp-permuter — the scorer is callable from
+  outside but we haven't built the glue script that points permuter at
+  it. To use: write a small bash wrapper that takes a permuter
+  candidate's `.o`, generates a pcdump (via SSH), and calls our score.
+- Local pcdump generation (still requires SSH to nzxt-local).
+- Targeted-mutation library — the guidance suggests directions but
+  doesn't apply them automatically.
+- Per-byte assembly diffing — currently the "byte" component is a
+  synthetic stand-in based on the virtual mapping ratio.
+
+These deferred items would be a Tier 4 v2 / v3 if matching workflows
+warrant the investment.
+
+**Effort spent:** ~half-day for v1 (scoring + guidance + derive-target
++ tests). v2/v3 are explicit future work.
 
 ## Tier 5 — allocator biasing via env var — ✅ DONE
 
@@ -197,6 +290,55 @@ selection, scheduling, etc) and the allocator isn't the problem.
 **Effort spent:** ~half-day, mostly cmd-line plumbing and env-var
 parsing in C. The IGNode patching itself is 5 lines.
 
+## Tier 7 — permuter session learnings + matching workflow tools — ✅ DONE
+
+Following the matching agent's permuter session that cracked
+`mnVibration_80248644` and `mnVibration_80248ED4` to 100%, five
+incremental commands address the specific friction points they
+flagged:
+
+**Tier 7a — `debug verify-perm`** (commit ea03c1e13)
+
+Apply a permuter candidate to the real source tree, run ninja +
+checkdiff, report match% delta. Removes the "permuter says score=1320
+but actual match% unchanged" cycle entirely. Reverts by default;
+`--keep` to apply.
+
+**Tier 7b — `debug enumerate-decl-orders`** (commit 60a7a1142)
+
+Brute-force the small declaration-order search space. Promote/demote/
+swap strategies cover ~3N candidates; full N! permutation refused for
+N>7. Would have found the mnVibration_80248644 `s32 j` move in ~10
+iterations vs permuter's 2000.
+
+**Tier 7c — pattern catalog + patternized guide** (commit 9e517f83e)
+
+Moves the seven recurring mutation patterns from the matching agent's
+session findings into `src/mwcc_debug/patterns.py` as structured
+entries. `debug guide` cites pattern names directly; new `debug
+pattern-catalog` command browses the catalog. Patterns: alias-split,
+widen-u8-to-u32, shrink-s32-to-u8, drop-variadic-cast, subexpr-extract,
+decl-order, chained-init.
+
+**Tier 7d — `debug suggest-casts`** (commit 4df91bc41)
+
+Static lint surfacing explicit casts in call-site arguments. Three-tier
+severity: HIGH when the cast's inner expression has a proven integer
+type (from local declarations/parameters), MEDIUM by heuristic
+(loop counter names, integer suffixes), LOW for general audit. Verified
+on `fn_80247510`: correctly flagged 5 `(f32) rumble_setting` casts
+(declared `u8`) as HIGH severity — the exact case the agent identified
+manually at 1.7% match% improvement.
+
+**Tier 7e — `debug triage-perm`** (commit pending)
+
+Batch-triage permuter session outputs. For each `output-NNNN-N/source.c`,
+applies the candidate to the real tree, builds, reads match%, ranks
+the results. `--apply-best` leaves the top transferring candidate
+in place. Per-candidate cost ~5-10sec; a 100-winner triage takes a
+few minutes. See [docs/mwcc-debug-permuter-integration.md](mwcc-debug-permuter-integration.md)
+for the integration model and v2/v3 sketches.
+
 ## Other small wins not worth their own tier
 
 Done (commits 81fbe074e, c3a26d82a):
@@ -206,9 +348,10 @@ Done (commits 81fbe074e, c3a26d82a):
 - ✅ **ABI annotation** in analyze — shows `r3 = arg0`, `r4 = arg1`
   etc. derived from function signature
 
-Still open:
-- **Live-range alignment improvements** — the current pre/post-pass
-  alignment is naive (skip-forward on opcode mismatch). Could use a
-  proper sequence-alignment algorithm (e.g. Smith-Waterman variant) to
-  recover more virtuals' live ranges from passes that re-order
-  instructions.
+Done (Tier 1b — commit 1b65af0f4):
+- ✅ **Live-range alignment improvements** — replaced greedy
+  skip-forward in `_align_block` with proper Needleman-Wunsch DP
+  alignment. Score function combines opcode match + physical reg
+  agreement; gap penalty allows multi-instruction insertions/deletions.
+  Unmapped virtuals on the test corpus dropped from 54 → 10 (~80%
+  reduction).

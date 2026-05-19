@@ -19,8 +19,16 @@ _IG_HEADER_RE = re.compile(r"^IG CONSTRUCTED \(class=(\d+), n_nodes=(\d+)\)")
 _CP_HEADER_RE = re.compile(
     r"^CONSTPROP RAN \(changed_flag: before=(-?\d+) after=(-?\d+)\)"
 )
+_SIMPLIFY_HEADER_RE = re.compile(
+    r"^SIMPLIFY GRAPH \(class=(\d+), n_colors=(\d+), n_class_regs=(\d+)\)"
+)
 _ITER_RE = re.compile(
     r"^\s*(\d+)\s+(-?\d+)\s+r(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+0x([0-9a-fA-F]+)\s*$"
+)
+# SIMPLIFY row: iter ig_idx degree arraySize 0xflags [notes]
+# Notes column is optional / freeform (e.g. "SPILLED").
+_SIMPLIFY_ITER_RE = re.compile(
+    r"^\s*(\d+)\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+0x([0-9a-fA-F]+)\s*(.*?)\s*$"
 )
 _INTERFERERS_RE = re.compile(r"^\s*interferers:\s*(.*)$")
 _FUNCTION_START_RE = re.compile(r"^Starting function\s+(\S+)")
@@ -61,6 +69,37 @@ class ConstPropEvent:
 
 
 @dataclass
+class SimplifyEntry:
+    """One row in a SIMPLIFY GRAPH table.
+
+    The interpretation: this node was pushed onto the simplification stack
+    at position `iter_idx` (0=first into stack, last to be colored;
+    equivalently: head of returned linked list = iter 0 = colored FIRST in
+    colorgraph's walk). `ig_idx` is the node's index in interferencegraph[],
+    or -1 for "physical reg" nodes that aren't part of the virtual-reg IG.
+    `spilled` is True if the SPILLED flag (0x08) was set by simplifygraph
+    (potential spill marker).
+    """
+
+    iter_idx: int
+    ig_idx: int
+    degree: int  # post-simplification degree (often 0 once neighbors are removed)
+    array_size: int  # original interferer count (pre-simplification)
+    flags: int
+    spilled: bool  # convenience: flags & 0x08
+
+
+@dataclass
+class SimplifySection:
+    """One emission of the simplifygraph hook for a (function, class) pair."""
+
+    class_id: int
+    n_colors: int
+    n_class_regs: int
+    entries: list[SimplifyEntry] = field(default_factory=list)
+
+
+@dataclass
 class FunctionEvents:
     """All hook-emitted events for one function in a pcdump."""
 
@@ -68,6 +107,7 @@ class FunctionEvents:
     colorgraph_sections: list[ColorgraphSection] = field(default_factory=list)
     ig_events: list[IGConstructedEvent] = field(default_factory=list)
     cp_events: list[ConstPropEvent] = field(default_factory=list)
+    simplify_sections: list[SimplifySection] = field(default_factory=list)
 
 
 def parse_hook_events(text: str) -> list[FunctionEvents]:
@@ -81,6 +121,7 @@ def parse_hook_events(text: str) -> list[FunctionEvents]:
     functions: list[FunctionEvents] = []
     current_func: Optional[FunctionEvents] = None
     current_cg: Optional[ColorgraphSection] = None
+    current_simplify: Optional[SimplifySection] = None
     last_decision: Optional[ColorgraphDecision] = None
     # True if next line might be the table header row we should skip
     expect_header_row = False
@@ -94,6 +135,7 @@ def parse_hook_events(text: str) -> list[FunctionEvents]:
             current_func = FunctionEvents(name=m.group(1))
             functions.append(current_func)
             current_cg = None
+            current_simplify = None
             last_decision = None
             expect_header_row = False
             continue
@@ -110,8 +152,22 @@ def parse_hook_events(text: str) -> list[FunctionEvents]:
                 n_nodes=n_nodes,
             )
             current_func.colorgraph_sections.append(current_cg)
+            current_simplify = None
             last_decision = None
             expect_header_row = True  # next line will be "iter ig_idx ..."
+            continue
+
+        m = _SIMPLIFY_HEADER_RE.match(stripped)
+        if m:
+            current_simplify = SimplifySection(
+                class_id=int(m.group(1)),
+                n_colors=int(m.group(2)),
+                n_class_regs=int(m.group(3)),
+            )
+            current_func.simplify_sections.append(current_simplify)
+            current_cg = None
+            last_decision = None
+            expect_header_row = True
             continue
 
         if expect_header_row:
@@ -126,6 +182,7 @@ def parse_hook_events(text: str) -> list[FunctionEvents]:
                 n_nodes=int(m.group(2)),
             ))
             current_cg = None
+            current_simplify = None
             last_decision = None
             continue
 
@@ -136,8 +193,24 @@ def parse_hook_events(text: str) -> list[FunctionEvents]:
                 changed_after=int(m.group(2)),
             ))
             current_cg = None
+            current_simplify = None
             last_decision = None
             continue
+
+        # Try parsing as a simplify row (only if we're inside a simplify section)
+        if current_simplify is not None:
+            m = _SIMPLIFY_ITER_RE.match(stripped)
+            if m:
+                flags = int(m.group(5), 16)
+                current_simplify.entries.append(SimplifyEntry(
+                    iter_idx=int(m.group(1)),
+                    ig_idx=int(m.group(2)),
+                    degree=int(m.group(3)),
+                    array_size=int(m.group(4)),
+                    flags=flags,
+                    spilled=bool(flags & 0x08),
+                ))
+                continue
 
         # Try parsing as a decision row (only if we're inside a colorgraph section)
         if current_cg is not None:

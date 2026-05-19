@@ -19,6 +19,7 @@ within each basic block.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Iterator, Optional
 
@@ -58,32 +59,33 @@ _BLOCK_RE = re.compile(r"^B(\d+):\s*Succ=\{([^}]*)\}\s*Pred=\{([^}]*)\}\s*Labels
 # Function start marker
 _FUNC_START_RE = re.compile(r"^Starting function\s+(\S+)")
 
-# Pass marker: any of "BEFORE X", "AFTER X" (caps), or the standalone fn name line
-_PASS_MARKERS = (
-    "BEFORE GLOBAL OPTIMIZATION",
-    "BEFORE COPY PROPAGATION",
-    "BEFORE CSE",
-    "BEFORE DEAD CODE",
-    "BEFORE LOOP",
-    "BEFORE PEEPHOLE",
-    "BEFORE INSTRUCTION SCHEDULING",
-    "BEFORE REGISTER COLORING",
-    "AFTER COPY PROPAGATION",
-    "AFTER CSE",
-    "AFTER DEAD CODE",
-    "AFTER LOOP",
-    "AFTER PEEPHOLE FORWARD",
-    "AFTER PEEPHOLE BACKWARD",
-    "AFTER PEEPHOLE",
-    "AFTER INSTRUCTION SCHEDULING",
-    "AFTER REGISTER COLORING",
-    "AFTER CODE MOTION",
-    "AFTER CONSTANT PROPAGATION",
-    "AFTER VALUE NUMBERING",
-    "AFTER VALUE NUMBERING 2",
-    "AFTER STRENGTH REDUCTION",
+# Pass marker: a standalone all-caps line announcing a pass dump.
+# Use a regex so we recognize variants like "AFTER LOOP TRANSFORMATIONS" or
+# "AFTER PEEPHOLE OPTIMIZATION" without enumerating every suffix MWCC has
+# ever used. Without this, unknown markers caused the next pass's blocks to
+# be appended to the previous pass — a subtle bug that corrupted the
+# post-coloring view (instructions from AFTER PEEPHOLE OPTIMIZATION leaked
+# into AFTER REGISTER COLORING).
+_PASS_MARKER_RE = re.compile(
+    r"^(BEFORE|AFTER|FINAL CODE AFTER)"
+    r"(\s+[A-Z][A-Z, ]+[A-Z])\s*$"
 )
-_PASS_MARKER_SET = set(_PASS_MARKERS)
+
+
+def _is_pass_marker(stripped: str) -> bool:
+    """Return True if this line looks like a pass marker.
+
+    Examples that match:
+      BEFORE GLOBAL OPTIMIZATION
+      AFTER COPY PROPAGATION
+      AFTER PEEPHOLE FORWARD
+      AFTER LOOP TRANSFORMATIONS
+      AFTER GENERATING EPILOGUE, PROLOGUE
+      AFTER MERGING EPILOGUE, PROLOGUE
+      AFTER PEEPHOLE OPTIMIZATION
+      FINAL CODE AFTER INSTRUCTION SCHEDULING
+    """
+    return bool(_PASS_MARKER_RE.match(stripped))
 
 
 @dataclass
@@ -243,7 +245,7 @@ def parse_pcdump(text: str) -> list[Function]:
             continue
 
         # Pass marker — appears as a standalone all-caps line
-        if stripped in _PASS_MARKER_SET:
+        if _is_pass_marker(stripped):
             if current_func is None:
                 # Pass with no function context — skip
                 i += 1
@@ -285,49 +287,139 @@ def parse_pcdump(text: str) -> list[Function]:
     return functions
 
 
+# ----------------------------------------------------------------------------
+# Needleman-Wunsch sequence alignment for instruction streams.
+#
+# Why DP instead of greedy: coloring inserts spill/reload pairs and removes
+# coalesced moves, so block instruction counts can diverge by several insns
+# in either direction. A greedy skip-forward (the previous algorithm) handles
+# 1-instruction insertions but fails on multi-insn windows or back-to-back
+# insertions/deletions. NW gives optimal global alignment in O(N×M) time
+# (cheap — Melee blocks are typically <30 insns each).
+#
+# Score function (heuristic):
+#   - opcode match: +5 base
+#   - opcode mismatch: -100 (cheaper to gap than to align mismatched opcodes)
+#   - per-position physical-reg agreement: +2 each
+#   - per-position physical-reg disagreement: -3 each
+#   - gap (skip one side): -2 per gap (less than mismatch but more than weak match)
+# ----------------------------------------------------------------------------
+_OPCODE_MISMATCH_PENALTY = -100
+_GAP_PENALTY = -2
+_BASE_OPCODE_MATCH = 5
+_PHYS_AGREE = 2
+_PHYS_DISAGREE = -3
+
+
+def _instruction_match_score(pre: Instruction, post: Instruction) -> int:
+    """Score how likely pre and post are the same instruction.
+
+    Higher = more likely the same insn (and worth aligning). Negative means
+    DP should probably prefer a gap.
+    """
+    if pre.opcode != post.opcode:
+        return _OPCODE_MISMATCH_PENALTY
+    score = _BASE_OPCODE_MATCH
+    # Compare register tokens positionally where both sides have a physical
+    for (pk, pn), (qk, qn) in zip(pre.regs, post.regs):
+        # Skip if either side is non-r (e.g. f-class) — only compare GPR-GPR
+        if pk != "r" or qk != "r":
+            continue
+        pre_is_phys = not _is_virtual(pn)
+        post_is_phys = not _is_virtual(qn)
+        if pre_is_phys and post_is_phys:
+            score += _PHYS_AGREE if pn == qn else _PHYS_DISAGREE
+        # virtual vs physical or vice versa = neutral (that's the mapping
+        # we're trying to learn)
+    return score
+
+
+def _align_nw(pre_insts: list[Instruction],
+              post_insts: list[Instruction]) -> list[tuple[Optional[int], Optional[int]]]:
+    """Needleman-Wunsch global alignment of two instruction sequences.
+
+    Returns a list of (pre_idx, post_idx) pairs in forward order. Either
+    index can be None for a gap on that side.
+    """
+    M, N = len(pre_insts), len(post_insts)
+    if M == 0:
+        return [(None, j) for j in range(N)]
+    if N == 0:
+        return [(i, None) for i in range(M)]
+
+    # dp[i][j] = best score aligning first i pre and first j post
+    dp = [[0] * (N + 1) for _ in range(M + 1)]
+    for i in range(1, M + 1):
+        dp[i][0] = i * _GAP_PENALTY
+    for j in range(1, N + 1):
+        dp[0][j] = j * _GAP_PENALTY
+
+    for i in range(1, M + 1):
+        for j in range(1, N + 1):
+            match = dp[i - 1][j - 1] + _instruction_match_score(
+                pre_insts[i - 1], post_insts[j - 1]
+            )
+            gap_post = dp[i - 1][j] + _GAP_PENALTY  # skip pre
+            gap_pre = dp[i][j - 1] + _GAP_PENALTY  # skip post
+            dp[i][j] = max(match, gap_post, gap_pre)
+
+    # Traceback
+    pairs: list[tuple[Optional[int], Optional[int]]] = []
+    i, j = M, N
+    while i > 0 or j > 0:
+        if i > 0 and j > 0:
+            match = dp[i - 1][j - 1] + _instruction_match_score(
+                pre_insts[i - 1], post_insts[j - 1]
+            )
+            if dp[i][j] == match:
+                pairs.append((i - 1, j - 1))
+                i -= 1
+                j -= 1
+                continue
+        if i > 0 and dp[i][j] == dp[i - 1][j] + _GAP_PENALTY:
+            pairs.append((i - 1, None))
+            i -= 1
+        else:
+            pairs.append((None, j - 1))
+            j -= 1
+    pairs.reverse()
+    return pairs
+
+
 def _align_block(pre_block: Block, post_block: Block, base_pos: int,
-                 mapping: dict[int, set[int]],
+                 mapping: "dict[int, Counter[int]]",
                  positions: dict[int, list[int]]) -> int:
-    """Align instructions within a single block (matched by index across
-    passes). Returns the number of pre-block positions consumed (for advancing
-    the linear position counter)."""
-    p_idx = 0
-    q_idx = 0
+    """Align instructions within a single block using NW. Records each pre
+    instruction's linearized position into `positions[vn]` and accumulates
+    per-virtual physical-reg observations into `mapping[vn]` (a Counter).
+
+    Returns the number of pre instructions consumed (for advancing the
+    linear position counter — gap-pre positions in post don't advance it).
+    """
     pre_insts = pre_block.instructions
     post_insts = post_block.instructions
+    pairs = _align_nw(pre_insts, post_insts)
 
-    while p_idx < len(pre_insts) and q_idx < len(post_insts):
-        pre_ist = pre_insts[p_idx]
-        post_ist = post_insts[q_idx]
-        # Record virtuals seen in pre regardless of whether we map them
+    for pre_idx, post_idx in pairs:
+        if pre_idx is None:
+            # Insertion in post (e.g. spill store). Pre position doesn't advance.
+            continue
+        pre_ist = pre_insts[pre_idx]
+        pos = base_pos + pre_idx
+        # Record positions for every virtual in this pre instruction
         for vk, vn in pre_ist.regs:
             if vk == "r" and _is_virtual(vn):
-                positions.setdefault(vn, []).append(base_pos + p_idx)
-        if pre_ist.opcode == post_ist.opcode and len(pre_ist.regs) == len(post_ist.regs):
-            # Aligned: map virtuals position-wise
-            for (pk, pn), (qk, qn) in zip(pre_ist.regs, post_ist.regs):
-                if pk == "r" and _is_virtual(pn) and qk == "r" and not _is_virtual(qn):
-                    mapping.setdefault(pn, set()).add(qn)
-            p_idx += 1
-            q_idx += 1
-        else:
-            # Try to recover: if post has a spill/reload (li, mr, lwz from
-            # stack, stw to stack) that pre doesn't, skip post by one.
-            # Bounded so a true mismatch eventually advances pre too.
-            q_idx += 1
-            if q_idx - p_idx > 4:
-                # Also record this pre-position so the virtual is still tracked
-                for vk, vn in pre_ist.regs:
-                    if vk == "r" and _is_virtual(vn):
-                        positions.setdefault(vn, []).append(base_pos + p_idx)
-                p_idx += 1
-                q_idx = max(q_idx - 4, p_idx)  # backtrack a bit
-    # Record any pre instructions we never reached (post ran out first)
-    while p_idx < len(pre_insts):
-        for vk, vn in pre_insts[p_idx].regs:
-            if vk == "r" and _is_virtual(vn):
-                positions.setdefault(vn, []).append(base_pos + p_idx)
-        p_idx += 1
+                positions.setdefault(vn, []).append(pos)
+        if post_idx is None:
+            # Coalesced/dead-eliminated pre instruction — no mapping recoverable
+            continue
+        post_ist = post_insts[post_idx]
+        # Map virtuals positionally. We only zip up to the common length so
+        # truncated/extended insns don't blow up; truly anomalous cases would
+        # have been filtered by the score function (large disagreement penalty).
+        for (pk, pn), (qk, qn) in zip(pre_ist.regs, post_ist.regs):
+            if pk == "r" and _is_virtual(pn) and qk == "r" and not _is_virtual(qn):
+                mapping.setdefault(pn, Counter())[qn] += 1
     return len(pre_insts)
 
 
@@ -351,7 +443,7 @@ def analyze_function(fn: Function) -> list[VirtualRegInfo]:
     pre_blocks_by_idx = {b.index: b for b in pre.blocks}
     post_blocks_by_idx = {b.index: b for b in post.blocks}
 
-    mapping: dict[int, set[int]] = {}
+    mapping: dict[int, Counter[int]] = {}
     positions: dict[int, list[int]] = {}
 
     # Walk blocks in pre-pass order, aligning each against its same-index
@@ -381,9 +473,21 @@ def analyze_function(fn: Function) -> list[VirtualRegInfo]:
     infos: dict[int, VirtualRegInfo] = {}
     for vn, poses in positions.items():
         first, last = poses[0], poses[-1]
-        # Physical: if mapping is 1-to-1, use it; else None
-        phys_set = mapping.get(vn, set())
-        phys = next(iter(phys_set)) if len(phys_set) == 1 else None
+        # Physical: pick the most common observation. If there's a tie or no
+        # observations, leave None. The NW alignment makes single-observation
+        # noise much less common than the old greedy alignment.
+        counter = mapping.get(vn)
+        phys: Optional[int] = None
+        if counter:
+            ranked = counter.most_common()
+            top_count = ranked[0][1]
+            # Only commit if the winner is unambiguous (> half of all votes)
+            # OR is the only observation.
+            total = sum(c for _, c in ranked)
+            if ranked[0][1] > total / 2:
+                phys = ranked[0][0]
+            elif len(ranked) == 1:
+                phys = ranked[0][0]
         cls = _classify_physical(phys, is_float=False) if phys is not None else "?"
         infos[vn] = VirtualRegInfo(
             virtual=vn,

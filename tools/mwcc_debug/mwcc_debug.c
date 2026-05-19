@@ -343,6 +343,74 @@ static void parse_overrides_from_env(void)
     }
 }
 
+// ---------------------------------------------------------------------------
+// Tier 6 — simplification iteration order override.
+//
+// MWCC_DEBUG_FORCE_ITER_FIRST="virtIdx[,virtIdx]*"
+//   Example: "32"          force virtual #32 to be popped first (= colored
+//                          first → first crack at top-down dispense for r31)
+//   Example: "32,38"       force #32 popped first, #38 second; everything
+//                          else preserves its original order
+//
+// Applied in the simplifygraph hook AFTER MWCC's simplification produces
+// the linked list, but BEFORE the existing logging walk. We splice the
+// named nodes out of the list and re-insert them at the head in the
+// specified order.
+//
+// Use case: addresses the param-iter-ceiling pattern. Parameters get LOW
+// ig_idx and are popped LAST by colorgraph; this lets you experimentally
+// promote a parameter to the front of the popping order. If the resulting
+// .text matches the matching target, you've confirmed the target is
+// reachable via altered iteration order alone (a hypothesis that's
+// distinct from "altered coalescing" but reaches the same observable
+// effect).
+//
+// Caveats (the user agrees to these by setting the env var):
+//   - The produced binary is a DLL-patched artifact. NOT what real MWCC
+//     would emit from any C source. Use for hypothesis testing only.
+//   - Reordering preserves correctness (the IG, interferences, and
+//     coloring algorithm are unchanged — only the visit order differs).
+//     So unlike force-phys, this can't produce data corruption.
+//   - But the resulting allocation may not be one that any natural C
+//     source would produce, so a force-iter-first match doesn't tell you
+//     a corresponding C source exists.
+#define MAX_ITER_FIRST 32
+
+static int g_iter_first[MAX_ITER_FIRST];
+static int g_n_iter_first = 0;
+static int g_iter_first_parsed = 0;
+
+static void parse_iter_first_from_env(void)
+{
+    char buf[512];
+    uint32 len;
+    int i;
+    int cur_val;
+    int has_val;
+
+    g_iter_first_parsed = 1;
+    g_n_iter_first = 0;
+
+    len = GetEnvironmentVariableA("MWCC_DEBUG_FORCE_ITER_FIRST", buf, sizeof(buf));
+    if (len == 0 || len >= sizeof(buf)) return;
+
+    cur_val = 0;
+    has_val = 0;
+    for (i = 0; i <= (int)len; i++) {
+        char c = (i == (int)len) ? '\0' : buf[i];
+        if (c >= '0' && c <= '9') {
+            cur_val = cur_val * 10 + (c - '0');
+            has_val = 1;
+        } else if ((c == ',' || c == '\0') && has_val && g_n_iter_first < MAX_ITER_FIRST) {
+            g_iter_first[g_n_iter_first] = cur_val;
+            g_n_iter_first++;
+            cur_val = 0;
+            has_val = 0;
+        }
+        // else: ignore whitespace and stray chars
+    }
+}
+
 // colorgraph's prologue is 7 bytes (push ebx/esi/edi/ebp + sub esp, 8). Using
 // 5 would split the sub esp, 8 (83 ec 08) mid-instruction and corrupt the
 // trampoline. trampoline buffer must hold prologue (7) + jump (5) = 12 bytes.
@@ -549,26 +617,129 @@ static void __cdecl hook_propagateconstants(void)
     }
 }
 
-// simplifygraph hook — captures the worklist construction.
-// Returns the head of the linked-list-of-virtuals-to-color. Argument is
-// the register class. We just log when it's called + the return head.
-static void *__cdecl hook_simplifygraph(int rclass, int n_nodes)
+// simplifygraph hook (Tier 2.5) — captures the simplification order, the
+// per-node initial degrees, and which nodes got the "spilled" flag added by
+// simplifygraph itself.
+//
+// MWCC 1.2.5n signature (from RE of call sites + prologue at 0x4CE400):
+//   IGNode *simplifygraph(int rclass, int n_colors, int n_class_regs);
+//
+//   - rclass: register class id (0=GPR, 1=FPR, ...)
+//   - n_colors: number of colors available (=count of unallocated phys regs
+//     in the class, returned by the n_available helper just before this call)
+//   - n_class_regs: total physical regs in the class (typically 32 — comes
+//     from a per-class count global at [0x58849a] et al)
+//
+// The function:
+//   1. Iterates interferencegraph[] for the given class
+//   2. Finds nodes with degree < n_colors (Chaitin "trivially colorable")
+//   3. Removes them from the graph (decrements interferer degrees)
+//   4. When stuck, picks a "potential spill" by heuristic (degree-based here,
+//      not spill-cost — the 1.2.5n version is simpler than 7.0)
+//   5. Returns the head of the simplified linked list (popped LIFO into
+//      colorgraph; head = colored first)
+//
+// Snapshot strategy: BEFORE the trampoline call, we save per-node flags +
+// degree into a static array (indexed by ig_idx). AFTER the call, we walk
+// the returned linked list to surface the iteration order and diff against
+// the snapshot to identify spill markers.
+#define MAX_SIMPLIFY_SNAPSHOT 512
+
+static struct {
+    int16 degree_before;
+    uint8 flags_before;
+    uint8 _pad;
+} g_simplify_snapshot[MAX_SIMPLIFY_SNAPSHOT];
+static int g_simplify_snapshot_n = 0;
+
+static void *__cdecl hook_simplifygraph(int rclass, int n_colors, int n_class_regs)
 {
-    typedef void *(__cdecl * simplifygraph_fn)(int, int);
-    void *head;
+    typedef void *(__cdecl * simplifygraph_fn)(int, int, int);
+    IGNode *head;
+    IGNode *node;
+    int order_idx;
+    IGNode **ig;
+    int ig_n;
 
-    // Reset per-class dispense counters at the start of each pass — coloring
-    // for a fresh class starts a new dispense sequence.
-    if (rclass == 0) dispense_counter_gpr = 0;
-    else if (rclass == 1) dispense_counter_fpr = 0;
-    else dispense_counter_crf = 0;
+    head = (IGNode *)((simplifygraph_fn)simplifygraph_trampoline)(
+        rclass, n_colors, n_class_regs);
 
-    head = ((simplifygraph_fn)simplifygraph_trampoline)(rclass, n_nodes);
+    // Tier 6 — apply iter-first overrides if any. Splice the named virtuals
+    // out of their current positions and re-insert them at the head, in the
+    // order given. The original relative order of other nodes is preserved.
+    if (g_n_iter_first > 0 && head != 0)
+    {
+        IGNode **ig_local = INTERFERENCEGRAPH;
+        int ig_n_local = N_IGNODES;
+        if (ig_n_local > 1024) ig_n_local = 1024;
+        if (ig_n_local < 0) ig_n_local = 0;
+        // For each requested virtual (in reverse so the FIRST listed ends
+        // up at the absolute head), find the IGNode in the list and move
+        // it to the head.
+        int k;
+        for (k = g_n_iter_first - 1; k >= 0; k--)
+        {
+            int want_idx = g_iter_first[k];
+            if (want_idx < 0 || want_idx >= ig_n_local) continue;
+            if (!ig_local) continue;
+            IGNode *want = ig_local[want_idx];
+            if (!want) continue;
+            if (want == head) continue;  // already at head
+            // Walk the list, find the predecessor of `want` (if any),
+            // unlink, prepend.
+            IGNode *prev = head;
+            while (prev && prev->next != want)
+                prev = prev->next;
+            if (!prev) continue;  // `want` isn't in this class's list
+            prev->next = want->next;
+            want->next = head;
+            head = want;
+            if (PCFILE && DEBUG_GUARD)
+            {
+                debug_printf("\n[FORCE_ITER_FIRST] moved ig_idx %d to head "
+                             "of class %d's simplification list\n",
+                             want_idx, rclass);
+            }
+        }
+    }
 
     if (PCFILE && DEBUG_GUARD)
     {
-        debug_printf("\nSIMPLIFYGRAPH (class=%d n_nodes=%d) head=0x%08x\n",
-                     rclass, n_nodes, (uint32)head);
+        // Read IG state AFTER simplifygraph returns. Reading before crashes
+        // (likely because INTERFERENCEGRAPH isn't reliably in shape for cross-
+        // function reads at function-start time — possibly find_remat
+        // realloc is still racing or the pointer is mid-update). After the
+        // trampoline call the IG is in its final state for this class.
+        ig = INTERFERENCEGRAPH;
+        ig_n = N_IGNODES;
+        if (ig_n > 1024) ig_n = 1024;
+        if (ig_n < 0) ig_n = 0;
+
+        debug_printf("\nSIMPLIFY GRAPH (class=%d, n_colors=%d, n_class_regs=%d)\n",
+                     rclass, n_colors, n_class_regs);
+        debug_printf("%-5s %-7s %-7s %-8s %-9s %s\n",
+                     "iter", "ig_idx", "degree", "arraySize", "flags", "notes");
+
+        order_idx = 0;
+        for (node = head; node; node = node->next)
+        {
+            int idx = -1;
+            int j;
+            const char *spill_note;
+            for (j = 0; j < ig_n; j++)
+            {
+                if (ig && ig[j] == node) { idx = j; break; }
+            }
+            spill_note = (node->flags & 0x08) ? "SPILLED" : "";
+            debug_printf("%-5d %-7d %-7d %-8d 0x%-7x %s\n",
+                         order_idx, idx,
+                         (int)node->degree,
+                         (int)node->arraySize,
+                         (int)node->flags,
+                         spill_note);
+            order_idx++;
+            if (order_idx > 256) break;
+        }
     }
     return head;
 }
@@ -611,14 +782,16 @@ static void install_hooks(void)
     hook_fn((void *)0x52B530, hook_propagateconstants,
             propagateconstants_trampoline, 14);
 
-    // simplifygraph @ 0x4CE400 — DISABLED for now. Adding this hook crashed
-    // mwcceppc at 0x4cc3b9 (memory write through a global pointer + index)
-    // — possibly the function does some non-prologue work before its 7-byte
-    // pure-prologue ends, or a relative branch elsewhere jumps mid-prologue.
-    // The colorgraph hook is enough for the headline use case.
-    //
-    // hook_fn((void *)0x4CE400, hook_simplifygraph,
-    //         simplifygraph_trampoline, 7);
+    // simplifygraph @ 0x4CE400 (Tier 2.5 hook) — runs between IG construction
+    // and colorgraph for each (function, register class) pair. Captures the
+    // simplification order and per-node {flags, degree} delta. Earlier attempt
+    // (with 2-arg signature) crashed because the real function takes 3 args:
+    // (class, n_colors, n_class_regs). The 7-byte prologue is
+    //   push ebx (1) + push esi (1) + push edi (1) + push ebp (1) +
+    //   sub esp, 0x10 (3)
+    // — same shape as colorgraph but a larger local-frame.
+    hook_fn((void *)0x4CE400, hook_simplifygraph,
+            simplifygraph_trampoline, 7);
 
     // (obtain_nonvolatile_register hooks intentionally skipped — see comment
     // above; calling-convention mismatch corrupted state.)
@@ -662,6 +835,7 @@ int __stdcall DllMain(void *hModule, uint32 reason, void *reserved)
 
         DEBUG_GUARD = 1;
         parse_overrides_from_env();
+        parse_iter_first_from_env();
         install_hooks();
     }
     return 1;

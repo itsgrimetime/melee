@@ -47,9 +47,13 @@ APPLY=false
 STALE_DAYS=30
 
 # Paths to sync from master's tree (relative to repo root).
+# Skills live under .claude/skills/ (Claude's native layout) and are exposed
+# to Codex via the .codex/skills symlink. Both paths get propagated so every
+# agent (regardless of provider) sees the same skill set.
 OVERLAY_PATHS=(
     ".claude-plugin"
-    ".agents"
+    ".claude/skills"
+    ".codex"
 )
 
 # Branch prefixes that should receive the overlay.
@@ -155,10 +159,35 @@ rsync_diff() {
     rsync -rclni "$@" "$src/" "$dst/" 2>/dev/null | grep -vE '^\.|^$' || true
 }
 
+# Compare every symlink under src against the same path under dst. Returns 0
+# if all symlinks match, 1 if any differ, are missing, or have a different
+# kind on dst. This is a workaround for openrsync (macOS-bundled rsync) whose
+# `-i` itemized output doesn't report symlink target changes — `rsync_diff`
+# returns empty for symlink-only diffs, which used to make needs_sync miss
+# things like `.codex/skills` repointing.
+symlinks_in_sync() {
+    local src="$1" dst="$2"
+    [[ -d "$src" ]] || return 0
+    while IFS= read -r -d '' link; do
+        local rel="${link#$src/}"
+        if [[ ! -L "$dst/$rel" ]]; then
+            return 1
+        fi
+        if [[ "$(readlink "$link")" != "$(readlink "$dst/$rel")" ]]; then
+            return 1
+        fi
+    done < <(find "$src" -type l -print0 2>/dev/null)
+    return 0
+}
+
 # Returns 0 if path needs syncing, 1 if already in sync.
 needs_sync() {
     local src="$1" dst="$2"
-    if [[ ! -d "$dst" ]]; then
+    if [[ ! -e "$dst" ]]; then
+        return 0
+    fi
+    # Catch symlink drift first (openrsync -i doesn't report it).
+    if ! symlinks_in_sync "$src" "$dst"; then
         return 0
     fi
     local out

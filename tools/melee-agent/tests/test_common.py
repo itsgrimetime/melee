@@ -180,11 +180,11 @@ class TestFunctionCategorization:
 
 
 class TestContextFileResolution:
-    """Tests for get_context_file - finds the right .ctx file for a source.
+    """Tests for get_context_file - maps a source path to its per-file .ctx path.
 
-    The context file lookup has a fallback chain:
-    1. Per-file .ctx in build dir
-    2. Legacy consolidated ctx.c
+    When source_file is provided, the returned path is the expected per-file
+    .ctx location under build/GALE01/, whether or not it exists yet (the
+    caller is responsible for building it via ninja).
     """
 
     @pytest.fixture
@@ -217,19 +217,6 @@ class TestContextFileResolution:
         # Path with melee/ prefix should work
         result = get_context_file("melee/ft/fighter.c", melee_root)
         assert result.exists()
-
-    def test_fallback_to_legacy_ctx(self, get_context_file, tmp_path):
-        """Should fall back to consolidated ctx.c if per-file not found."""
-        melee_root = tmp_path / "melee"
-        build_dir = melee_root / "build"
-        build_dir.mkdir(parents=True)
-        legacy_ctx = build_dir / "ctx.c"
-        legacy_ctx.write_text("/* legacy context */")
-
-        # No per-file .ctx exists, should fall back
-        result = get_context_file("melee/lb/lbcollision.c", melee_root)
-
-        assert result == legacy_ctx
 
     def test_returns_expected_path_when_missing(self, get_context_file, tmp_path):
         """Should return expected path even if file doesn't exist (for error messages)."""

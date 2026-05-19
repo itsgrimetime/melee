@@ -169,6 +169,17 @@ finished building the interference graph for that class — useful for
 ordering visibility (which function/class is being processed at any
 given point in the dump). Tier 3 hook.
 
+`SIMPLIFY GRAPH (class=N, n_colors=K, n_class_regs=M)` event lines pair
+with each COLORGRAPH DECISIONS section. They show simplifygraph's
+output: the simplification stack order (head = colored first), each
+node's pre-simplification interferer count (`arraySize`), and the
+SPILLED flag if simplifygraph marked the node as a potential spill.
+Tier 2.5 hook — useful when you need to know whether a virtual was
+structurally hard to color (Chaitin's "can't be removed cleanly")
+before colorgraph even got to it. SPILLED markers are the headline
+signal: a virtual flagged here probably won't get a clean physical
+unless you reduce its degree by C-source restructuring.
+
 And `CONSTPROP RAN (changed_flag: before=X after=Y)` event lines: one per
 function, marking when constant propagation fired. The `changed_flag`
 indicates whether CP modified anything. Tier 3.5 hook — useful for
@@ -218,6 +229,98 @@ a `[FORCE_PHYS] virtual N: rX -> rY` event in the dump.
 - Find virtual indices by inspecting the `COLORGRAPH DECISIONS` table
   in an unforced dump first. The `ig_idx` column (positive values) is
   the index you pass.
+
+### Step 5: get actionable guidance (Tier 4, hypothesis → C-source)
+
+Once you've used Step 4 to confirm a target allocation is reachable,
+use `guide` to find out WHAT specifically blocks the natural source
+from getting there. Often this points straight at a single interfering
+virtual whose lifetime needs shrinking.
+
+```bash
+# Capture target from a forced run
+melee-agent debug derive-target /tmp/forced.txt -f mnVibration_80248644 \
+    --format json > /tmp/target.json
+
+# Score baseline against target
+melee-agent debug score /tmp/baseline.txt -f mnVibration_80248644 \
+    --target /tmp/target.json --breakdown
+
+# Get actionable suggestions
+melee-agent debug guide /tmp/baseline.txt -f mnVibration_80248644 \
+    --target /tmp/target.json
+```
+
+Example output:
+```
+Suggestions (highest severity first):
+  ! [r36 / interference] r36 wants r31 but r31 is taken by interfering
+    virtual(s) r51. Try: shrink the live range of r51 so they don't
+    overlap r36, or move r36's definition earlier so it's colored
+    before r51.
+```
+
+`guide` covers three blocker categories:
+- **interference**: target physical is taken by a known interferer →
+  shrink interferer's lifetime
+- **spill**: virtual is on the spill-candidate list → reduce its
+  interferer count
+- **rank**: no direct blocker, but iteration order pushed this virtual
+  to a lower slot → adjust other virtuals' lifetimes that consumed the
+  desired physical earlier
+
+`guide` also cites named **mutation patterns** from the catalog
+(`debug pattern-catalog`) — `alias-split`, `widen-u8-to-u32`,
+`drop-variadic-cast`, `decl-order`, etc. These are the recurring
+shapes the permuter rediscovers across stuck functions.
+
+The `score` command emits a single number for permuter integration
+(lower = better). Designed to be called from a custom permuter scorer
+wrapper that compiles candidates via SSH.
+
+### Step 6: matching workflow tools (Tier 7)
+
+After Tier 5/6 confirm the target is reachable, the matching workflow
+becomes "find the C-source change." Five Tier 7 commands automate the
+specific friction points the matching agent identified in their
+permuter sessions:
+
+```bash
+# Apply a permuter winner to the real source + verify match% improves
+melee-agent debug verify-perm output-1234/source.c -f my_fn
+melee-agent debug verify-perm output-1234/source.c -f my_fn --keep
+
+# Brute-force the decl-order search space (would find decl-reorder
+# wins in ~10 iterations, vs permuter's ~2000)
+melee-agent debug enumerate-decl-orders my_fn
+melee-agent debug enumerate-decl-orders my_fn --strategy all
+melee-agent debug enumerate-decl-orders my_fn --keep-best
+
+# Browse known mutation patterns
+melee-agent debug pattern-catalog
+melee-agent debug pattern-catalog decl-order
+
+# Static lint for suspicious casts (no compilation needed)
+melee-agent debug suggest-casts my_fn
+melee-agent debug suggest-casts my_fn --severity all --asm
+
+# Batch-triage permuter outputs against the real tree
+melee-agent debug triage-perm permute_output_dir -f my_fn
+melee-agent debug triage-perm permute_output_dir -f my_fn --apply-best
+
+# Generate a pattern-tuned permuter settings.toml so permuter biases
+# toward the mutation family that addresses this function's pattern.
+# Pairs with triage-perm: tune-then-triage is the full loop.
+melee-agent debug gen-permuter-config -f my_fn --target target.json
+melee-agent debug gen-permuter-config -f my_fn --pattern decl-order
+melee-agent debug gen-permuter-config -f my_fn --print  # dry-run
+```
+
+**There is NO patched permuter binary.** Run upstream `decomp-permuter`
+as usual; mwcc-debug just informs (`gen-permuter-config`) and filters
+(`triage-perm`) around it. See
+[docs/mwcc-debug-permuter-integration.md](../../docs/mwcc-debug-permuter-integration.md)
+for the full Tier 0 / Tier 1 / deferred-tier picture.
 
 The wrapper:
 1. SSHes to the remote with the relative .c path

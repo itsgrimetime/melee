@@ -251,11 +251,16 @@ class Doctor:
         elif (ROOT / "tools" / "table-typer" / "go.mod").exists():
             self.warn("table-typer binary missing", "run: cd tools/table-typer && go build -o table-typer")
 
-        ghidra_dir = os.environ.get("GHIDRA_INSTALL_DIR")
-        if ghidra_dir and Path(ghidra_dir).exists():
-            self.ok(f"GHIDRA_INSTALL_DIR set: {ghidra_dir}")
+        ghidra_install = detect_ghidra_install()
+        if ghidra_install is not None:
+            env_path_str = os.environ.get("GHIDRA_INSTALL_DIR")
+            via = "GHIDRA_INSTALL_DIR" if env_path_str and Path(env_path_str) == ghidra_install else "auto-detected"
+            self.ok(f"Ghidra install: {ghidra_install} ({via})")
         else:
-            self.warn("GHIDRA_INSTALL_DIR is not configured", "ghidra helper commands will be unavailable")
+            self.warn(
+                "Ghidra install not found",
+                "set GHIDRA_INSTALL_DIR or install under /opt/homebrew/Cellar/ghidra, /Applications, /opt, or ~/ghidra",
+            )
 
     def check_knowledge_sources(self) -> None:
         self.results.extend(collect_knowledge_source_warnings(ROOT))
@@ -280,6 +285,59 @@ def run_git(args: list[str], allow_fail: bool = False) -> str:
     if result.returncode != 0 and not allow_fail:
         raise RuntimeError(result.stderr.strip())
     return result.stdout if result.returncode == 0 else ""
+
+
+# Mirrors tools/melee-agent/src/cli/ghidra/detect.py so worktree-doctor can
+# validate Ghidra availability without depending on melee-agent being importable.
+# If the search/detection logic changes there, update here too.
+_GHIDRA_SEARCH_PATHS = [
+    Path("/opt/homebrew/Cellar/ghidra"),       # macOS arm64 Homebrew
+    Path("/usr/local/Cellar/ghidra"),          # macOS x86_64 Homebrew
+    Path("/Applications"),                      # macOS manual install
+    Path.home() / "Library" / "ghidra",        # macOS user-local
+    Path("/opt"),                               # Linux manual install
+    Path.home() / "ghidra",                    # user home tarball
+]
+
+
+def _ghidra_install_valid(path: Path) -> bool:
+    if not path.is_dir():
+        return False
+    return (path / "application.properties").is_file() or (path / "Ghidra" / "application.properties").is_file()
+
+
+def _ghidra_search_under(root: Path) -> Path | None:
+    if not root.exists():
+        return None
+    if _ghidra_install_valid(root):
+        return root
+    for child in sorted(root.iterdir(), reverse=True):  # newest version first
+        if not child.is_dir():
+            continue
+        if _ghidra_install_valid(child):
+            return child
+        nested = child / "libexec"
+        if _ghidra_install_valid(nested):
+            return nested
+        nested2 = child / "Ghidra"
+        if _ghidra_install_valid(nested2):
+            return nested2
+    return None
+
+
+def detect_ghidra_install() -> Path | None:
+    """Return path to a valid Ghidra install, or None. Honors GHIDRA_INSTALL_DIR
+    first, then searches common installation roots."""
+    env_val = os.environ.get("GHIDRA_INSTALL_DIR")
+    if env_val:
+        env_path = Path(env_val)
+        if _ghidra_install_valid(env_path):
+            return env_path
+    for root in _GHIDRA_SEARCH_PATHS:
+        found = _ghidra_search_under(root)
+        if found is not None:
+            return found
+    return None
 
 
 def run_cmd(args: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
@@ -337,30 +395,73 @@ def collect_knowledge_source_warnings(root: Path, discord_cli: Path | None = Non
             )
         )
 
-    decomp_skill = root / ".agents" / "skills" / "decomp" / "SKILL.md"
-    if decomp_skill.exists():
-        results.append(CheckResult("ok", "repo-local decomp skill present: .agents/skills/decomp/SKILL.md"))
+    # Skills now live canonically under .claude/skills/ (Claude's native layout)
+    # and are exposed to Codex via the .codex/skills symlink. Both providers
+    # see the same set.
+    claude_skills_dir = root / ".claude" / "skills"
+    decomp_skill = claude_skills_dir / "decomp" / "SKILL.md"
+    if decomp_skill.exists() and not decomp_skill.is_symlink():
+        results.append(CheckResult("ok", ".claude/skills/decomp/SKILL.md present"))
+    elif decomp_skill.is_symlink():
+        results.append(
+            CheckResult(
+                "warn",
+                ".claude/skills/decomp/SKILL.md is a stale symlink (legacy .agents/ layout)",
+                "run ./tools/workflow/sync-hooks.sh --apply to refresh from master",
+            )
+        )
     else:
         results.append(
             CheckResult(
                 "warn",
-                ".agents/skills/decomp/SKILL.md is missing",
-                "restore the canonical repo-local decomp skill or use AGENTS.md/CLAUDE.md workflow instructions",
+                ".claude/skills/decomp/SKILL.md is missing",
+                "run ./tools/workflow/sync-hooks.sh --apply to restore from master",
             )
         )
 
-    claude_skill = root / ".claude" / "skills" / "decomp" / "SKILL.md"
+    if claude_skills_dir.is_dir():
+        skill_count = sum(1 for p in claude_skills_dir.iterdir() if p.is_dir())
+        if skill_count >= 5:
+            results.append(CheckResult("ok", f".claude/skills/ has {skill_count} skills"))
+        else:
+            results.append(
+                CheckResult(
+                    "warn",
+                    f".claude/skills/ has only {skill_count} skills (expected the full set)",
+                    "run ./tools/workflow/sync-hooks.sh --apply to sync from master",
+                )
+            )
+
     codex_skills = root / ".codex" / "skills"
-    if claude_skill.exists():
-        results.append(CheckResult("ok", "Claude decomp skill compatibility path resolves"))
+    if codex_skills.is_symlink():
+        target = os.readlink(codex_skills)
+        resolved = (codex_skills.parent / target).resolve()
+        if resolved == claude_skills_dir.resolve():
+            results.append(CheckResult("ok", ".codex/skills -> ../.claude/skills (Codex sees same skills as Claude)"))
+        else:
+            results.append(
+                CheckResult(
+                    "warn",
+                    f".codex/skills symlink points at {target} (expected ../.claude/skills)",
+                    "run ./tools/workflow/sync-hooks.sh --apply to fix",
+                )
+            )
+    elif codex_skills.exists():
+        results.append(
+            CheckResult(
+                "warn",
+                ".codex/skills is a directory, expected symlink to ../.claude/skills",
+                "remove it and run sync-hooks.sh --apply",
+            )
+        )
     else:
         results.append(
-            CheckResult("warn", ".claude/skills/decomp/SKILL.md is missing", "symlink it to .agents/skills/decomp/SKILL.md")
+            CheckResult(
+                "warn",
+                ".codex/skills is missing (Codex agents will have no skills)",
+                "run ./tools/workflow/sync-hooks.sh --apply",
+            )
         )
-    if codex_skills.exists():
-        results.append(CheckResult("ok", "Codex skills compatibility path resolves"))
-    else:
-        results.append(CheckResult("warn", ".codex/skills is missing", "symlink it to ../.agents/skills"))
 
     return results
 
