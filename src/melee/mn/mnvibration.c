@@ -144,6 +144,22 @@ static inline HSD_JObj* mnVibration_NthPortChild(HSD_JObj* parent, s32 i)
     return jobj;
 }
 
+static inline s32 mnVibration_GetNameSlot(MnVibrationData* data, s32 j)
+{
+    u8 scroll_offset = data->scroll_offset;
+    s32 count = GetNameCount();
+    s32 name_idx;
+
+    if ((count < 8) && (j >= count)) {
+        return 0xFF;
+    }
+    name_idx = scroll_offset + j;
+    if (count <= name_idx) {
+        return 0xFF;
+    }
+    return (u8) name_idx;
+}
+
 HSD_JObj* mnVibration_802474C4(s32 count)
 {
     HSD_JObj* temp_r4;
@@ -200,8 +216,6 @@ void fn_80247510(HSD_GObj* gobj)
     HSD_JObj* cursor_jobj;
     HSD_JObj* panel_jobj;
     u8 cursor_row;
-    u8 scroll_offset;
-    s32 name_count;
     u8 name_idx;
     u8 rumble_setting;
     HSD_JObj* jobj;
@@ -315,16 +329,7 @@ void fn_80247510(HSD_GObj* gobj)
     if (inputs_repeat & 1) {
         lbAudioAx_80024030(1);
         cursor_row = data->x0[1];
-        scroll_offset = data->scroll_offset;
-        name_count = GetNameCount();
-        if (name_count < 8 && cursor_row >= name_count) {
-            name_idx = 0xFF;
-        } else {
-            name_idx = scroll_offset + cursor_row;
-            if (name_count <= name_idx) {
-                name_idx = 0xFF;
-            }
-        }
+        name_idx = mnVibration_GetNameSlot(data, cursor_row);
         if (GetPersistentNameData(name_idx)->x1A1 == 1) {
             GetPersistentNameData(name_idx)->x1A1 = 0;
         } else {
@@ -341,16 +346,7 @@ void fn_80247510(HSD_GObj* gobj)
     if (inputs_repeat & 0x10) {
         cursor_row = data->x0[1];
         if (cursor_row != 0) {
-            scroll_offset = data->scroll_offset;
-            name_count = GetNameCount();
-            if (name_count < 8 && cursor_row - 1 >= name_count) {
-                name_idx = 0xFF;
-            } else {
-                name_idx = scroll_offset + cursor_row - 1;
-                if (name_count <= name_idx) {
-                    name_idx = 0xFF;
-                }
-            }
+            name_idx = mnVibration_GetNameSlot(data, cursor_row - 1);
             if (name_idx != 0xFF) {
                 f32 dy;
                 lbAudioAx_80024030(2);
@@ -377,16 +373,7 @@ void fn_80247510(HSD_GObj* gobj)
     if (inputs_repeat & 0x20) {
         cursor_row = data->x0[1];
         if (cursor_row < 7) {
-            scroll_offset = data->scroll_offset;
-            name_count = GetNameCount();
-            if (name_count < 8 && cursor_row + 1 >= name_count) {
-                name_idx = 0xFF;
-            } else {
-                name_idx = scroll_offset + cursor_row + 1;
-                if (name_count <= name_idx) {
-                    name_idx = 0xFF;
-                }
-            }
+            name_idx = mnVibration_GetNameSlot(data, cursor_row + 1);
             if (name_idx != 0xFF) {
                 f32 dy;
                 lbAudioAx_80024030(2);
@@ -404,16 +391,7 @@ void fn_80247510(HSD_GObj* gobj)
                     cursor_jobj, HSD_JObjGetTranslationZ(data->jobjs[17]));
             }
         } else if (GetNameCount() > 8) {
-            scroll_offset = data->scroll_offset;
-            name_count = GetNameCount();
-            if (name_count < 8 && 8 <= name_count) {
-                name_idx = 0xFF;
-            } else {
-                name_idx = scroll_offset + 8;
-                if (name_count <= name_idx) {
-                    name_idx = 0xFF;
-                }
-            }
+            name_idx = mnVibration_GetNameSlot(data, 8);
             if (name_idx != 0xFF) {
                 lbAudioAx_80024030(2);
                 data->scroll_offset++;
@@ -550,22 +528,6 @@ void mnVibration_80248444(HSD_GObj* arg0, u8 arg1, u8 arg2)
     HSD_JObjAnimAll(new_jobj);
     HSD_JObjSetTranslateY(new_jobj, spacing * (f32) arg2);
     HSD_JObjAddChild(data->jobjs[17], new_jobj);
-}
-
-static inline s32 mnVibration_GetNameSlot(MnVibrationData* data, s32 j)
-{
-    u8 scroll_offset = data->scroll_offset;
-    s32 count = GetNameCount();
-    s32 name_idx;
-
-    if ((count < 8) && (j >= count)) {
-        return 0xFF;
-    }
-    name_idx = scroll_offset + j;
-    if (count <= name_idx) {
-        return 0xFF;
-    }
-    return (u8) name_idx;
 }
 
 void mnVibration_80248644(HSD_GObj* arg0)
