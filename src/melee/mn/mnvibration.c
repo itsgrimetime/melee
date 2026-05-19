@@ -778,7 +778,7 @@ void fn_80248A78(HSD_GObj* gobj)
         mnVibration_RevealPortIndicator(gobj, 3);
     } else if (mnVibration_804DC060 == frame) {
         if (GetNameCount() != 0) {
-            MnVibrationJointAssets* assets = &mnVibration_804A0868;
+            MnVibrationJointAssets* assets;
             MnVibrationData* data;
             MnVibrationData* data_post_create;
             HSD_GObj* cursor_gobj;
@@ -786,8 +786,6 @@ void fn_80248A78(HSD_GObj* gobj)
             HSD_JObj* row_0_jobj;
             HSD_JObj* row_1_jobj;
             HSD_JObj* loaded_joint;
-            HSD_JObj* cursor_jobj_alias;
-            void* joint_template;
             f32 row_spacing;
             f32 base_y;
             f32 temp_x;
@@ -799,11 +797,11 @@ void fn_80248A78(HSD_GObj* gobj)
             mnVibration_80248644(gobj);
 
             // Create the cursor highlight gobj and attach its joint tree.
+            assets = &mnVibration_804A0868;
             data = gobj->user_data;
-            joint_template = assets->joint;
             cursor_gobj = GObj_Create(6, 7, 0x80);
             data->cursor_gobj = cursor_gobj;
-            loaded_joint = HSD_JObjLoadJoint(joint_template);
+            loaded_joint = HSD_JObjLoadJoint(assets->joint);
             HSD_GObjObject_80390A70(cursor_gobj, HSD_GObj_804D7849,
                                     loaded_joint);
             GObj_SetupGXLink(cursor_gobj, HSD_GObj_JObjCallback, 4, 0x80);
@@ -828,8 +826,7 @@ void fn_80248A78(HSD_GObj* gobj)
             mnVibration_JObjSetTranslateY(cursor_jobj, temp_y);
             temp_z =
                 mnVibration_JObjGetTranslationZ(data_post_create->jobjs[17]);
-            cursor_jobj_alias = cursor_jobj;
-            mnVibration_JObjSetTranslateZ(cursor_jobj_alias, temp_z);
+            mnVibration_JObjSetTranslateZ(cursor_jobj, temp_z);
         }
     }
 
