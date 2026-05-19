@@ -309,10 +309,12 @@ void fn_80247510(HSD_GObj* gobj)
             HSD_JObjAnimAll(panel_jobj);
         } else if (inputs & 0x80) {
             if (data->x0[i + 2] == 0) {
+                s32 port_idx;
                 lbAudioAx_80024030(2);
-                data->x0[i + 2] = 1;
-                panel_jobj = data->jobjs[mnVibration_804D4FE8[i]];
-                HSD_JObjReqAnimAll(panel_jobj, (f32) data->x0[i + 2]);
+                port_idx = i;
+                data->x0[port_idx + 2] = 1;
+                panel_jobj = data->jobjs[mnVibration_804D4FE8[port_idx]];
+                HSD_JObjReqAnimAll(panel_jobj, (f32) data->x0[port_idx + 2]);
                 HSD_JObjAnimAll(panel_jobj);
             }
         }
