@@ -379,9 +379,10 @@ void fn_80247510(HSD_GObj* gobj)
                 f32 dy;
                 lbAudioAx_80024030(2);
                 data->x0[1]++;
+                inputs_repeat = data->x0[1];
                 dy = (HSD_JObjGetTranslationY(data->jobjs[18]) -
                       HSD_JObjGetTranslationY(data->jobjs[17])) *
-                     (f32) data->x0[1];
+                     (f32) inputs_repeat;
                 cursor_jobj = data->cursor_gobj->hsd_obj;
                 HSD_JObjSetTranslateX(
                     cursor_jobj, HSD_JObjGetTranslationX(data->jobjs[17]));
@@ -765,9 +766,8 @@ void fn_80248A78(HSD_GObj* gobj)
     f32 frame;
     PAD_STACK(64);
 
-    frame = mn_8022ED6C(
-        ((MnVibrationData*) gobj->user_data)->jobjs[1],
-        (AnimLoopSettings*) &mnVibration_803EECE0);
+    frame = mn_8022ED6C(((MnVibrationData*) gobj->user_data)->jobjs[1],
+                        (AnimLoopSettings*) &mnVibration_803EECE0);
     if (mnVibration_804DC050 == frame) {
         mnVibration_RevealPortIndicator(gobj, 0);
     } else if (mnVibration_804DC054 == frame) {
@@ -786,6 +786,8 @@ void fn_80248A78(HSD_GObj* gobj)
             HSD_JObj* row_0_jobj;
             HSD_JObj* row_1_jobj;
             HSD_JObj* loaded_joint;
+            HSD_JObj* cursor_jobj_alias;
+            void* joint_template;
             f32 row_spacing;
             f32 base_y;
             f32 temp_x;
@@ -798,9 +800,10 @@ void fn_80248A78(HSD_GObj* gobj)
 
             // Create the cursor highlight gobj and attach its joint tree.
             data = gobj->user_data;
+            joint_template = assets->joint;
             cursor_gobj = GObj_Create(6, 7, 0x80);
             data->cursor_gobj = cursor_gobj;
-            loaded_joint = HSD_JObjLoadJoint(assets->joint);
+            loaded_joint = HSD_JObjLoadJoint(joint_template);
             HSD_GObjObject_80390A70(cursor_gobj, HSD_GObj_804D7849,
                                     loaded_joint);
             GObj_SetupGXLink(cursor_gobj, HSD_GObj_JObjCallback, 4, 0x80);
@@ -825,7 +828,8 @@ void fn_80248A78(HSD_GObj* gobj)
             mnVibration_JObjSetTranslateY(cursor_jobj, temp_y);
             temp_z =
                 mnVibration_JObjGetTranslationZ(data_post_create->jobjs[17]);
-            mnVibration_JObjSetTranslateZ(cursor_jobj, temp_z);
+            cursor_jobj_alias = cursor_jobj;
+            mnVibration_JObjSetTranslateZ(cursor_jobj_alias, temp_z);
         }
     }
 
