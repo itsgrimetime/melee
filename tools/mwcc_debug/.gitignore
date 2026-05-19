@@ -1,0 +1,11 @@
+# Built artifacts
+*.dll
+*.exp
+*.lib
+
+# Zig toolchain (downloaded by build_macos.sh)
+tools/
+
+# Wibo source + binary (downloaded/built by build_wibo.sh)
+wibo_source/
+bin/

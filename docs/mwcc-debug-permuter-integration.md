@@ -33,6 +33,67 @@ Per-candidate cost: ~5-10 seconds (one ninja per .c + report.json
 regen). For a typical permuter session with ~100 winners, total triage
 time is a few minutes.
 
+## Tier 2 (shipped — per-iteration mwcc-debug scoring)
+
+### `melee-agent debug permute -f FN [--blend α]`
+
+Runs decomp-permuter with a monkey-patched scorer that blends
+`melee-agent debug score-source` (IGNode-distance from pcdump) into
+objdiff's byte-distance scoring. Per-iteration, the candidate source
+is compiled via local `wibo + mwcceppc_debug.exe` and scored against
+a derived target.
+
+Final score blend: `bytes + α * mwcc` (default α = 0.1). Byte distance
+stays dominant; the mwcc signal breaks ties between byte-equivalent
+candidates — most useful for register-cascade ceilings where the byte
+scorer can't distinguish many mutations.
+
+Prerequisites (in addition to Tier 0/1):
+- `melee-agent debug setup-local` (one-time wibo + DLL + compiler patch)
+- `<perm-root>/nonmatchings/<FN>/` exists (run `import.py` first)
+- compile.sh fixed for mac (`melee-agent debug fix-perm-compile <perm_dir>`
+  — auto-applied by `gen-permuter-config`)
+
+Workflow:
+
+```bash
+# 1. Tune permuter weights for the function's detected pattern
+#    (also auto-fixes compile.sh for mac+wine)
+melee-agent debug gen-permuter-config -f my_stuck_fn
+
+# 2. Run permuter with mwcc-debug blending. Target auto-derived.
+melee-agent debug permute -f my_stuck_fn --blend 0.05
+
+# 3. Triage winners against the real tree as usual
+melee-agent debug triage-perm \
+    ~/code/decomp-permuter/nonmatchings/my_stuck_fn -f my_stuck_fn
+```
+
+### Implementation notes
+
+- Built on `tools/melee-agent/scripts/permute_with_mwcc.py`, a thin
+  monkey-patch wrapper around upstream `permuter.py`. No fork of
+  decomp-permuter needed.
+- Single-threaded by default (`-j 1`). Our DLL writes pcdump.txt to
+  project root, so parallel threads would race. Per-thread output
+  handling deferred.
+- The scoring path uses `score-source --cflags-from <unit>` so a
+  candidate staged at `nonmatchings/.permuter_score_<pid>.c` gets
+  compiled with the original TU's flags — no need to fake a ninja
+  build block for the staged file.
+- On scoring failure (timeout, parse error, etc.), we fall back to
+  the plain objdiff score so permuter never blocks on our infrastructure.
+
+### When NOT to use it
+
+- Pure byte-distance cases (functions where the byte scorer is doing
+  fine, like first-pass decomp under 70%). Tier 2's marginal value is
+  on the last mile — 95%+ match where byte distance has flatlined.
+- Pattern-targeted searches that converge in <100 iterations.
+  `enumerate-decl-orders` is still faster for decl-reorder, and Tier 1's
+  weight tuning often gets there in a few hundred iterations without
+  needing Tier 2.
+
 ## Tier 1 (shipped — pattern-tuned config)
 
 ### `melee-agent debug gen-permuter-config -f FN [options]`

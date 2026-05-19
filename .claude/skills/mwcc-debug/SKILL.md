@@ -1,11 +1,20 @@
 ---
 name: mwcc-debug
-description: Dump MWCC's internal codegen passes (BEFORE/AFTER REGISTER COLORING, instruction scheduling, etc.) for a Melee TU by running Savestate2A03/mwcc_debug on a remote Windows host. Use when stuck on register-allocation cascades or other last-mile matching issues — complement to mwcc-inspect (which shows front-end IR / ENodes / ObjObjects).
+description: Dump MWCC's internal codegen passes (BEFORE/AFTER REGISTER COLORING, instruction scheduling, etc.) for a Melee TU. Runs locally on macOS (via wibo+Zig-built DLL) by default, or on a remote Windows host as a fallback. Use when stuck on register-allocation cascades or other last-mile matching issues — complement to mwcc-inspect (which shows front-end IR / ENodes / ObjObjects).
 ---
 
-# MWCC Debug (remote Windows)
+# MWCC Debug (local or remote)
 
-Runs [`Savestate2A03/mwcc_debug`](https://github.com/Savestate2A03/mwcc_debug) against our 1.2.5n compiler on a remote Windows host (default: `nzxt-local`) and streams the resulting `pcdump.txt` back locally. The tool patches `lmgr326b.dll` to unlock MWCC's normally-disabled verbose-debug code path, which emits a per-pass dump of the compiler's PCode (back-end IR) for every function.
+Runs a patched mwcc_debug DLL against our 1.2.5n compiler and produces `pcdump.txt`. The patch unlocks MWCC's normally-disabled `debuglisting` code path, which emits a per-pass dump of the compiler's PCode (back-end IR) for every function. We add our own hooks on top (simplifygraph, IG construction, colorgraph decisions) for stuck-function diagnostics.
+
+**Two execution modes:**
+
+| Mode | Command | Speed | Setup |
+|---|---|---|---|
+| **Local (recommended on macOS)** | `melee-agent debug pcdump-local` | ~1s | One-time: `melee-agent debug setup-local`; needs `melee-harness` adjacent for wibo |
+| **Remote SSH** | `melee-agent debug pcdump` | ~30s | One-time: nzxt-local host with DLL deployed |
+
+Local mode is 30-40x faster and is the default for new agents. Remote remains the fallback for cases where wibo doesn't work (rare).
 
 ## When to use this
 
