@@ -221,11 +221,11 @@ HSD_JObj* mnVibration_802474C4(s32 count)
 ///   magic constant emitted as @472 instead of mnVibration_804DC018.
 void fn_80247510(HSD_GObj* gobj)
 {
+    u64 inputs_repeat;
     MnVibrationData* data = mnVibration_804D6C28->user_data;
     s32 i;
     u64 inputs;
     HSD_JObj** jobjs;
-    u64 inputs_repeat;
     u8 cursor_row;
     u8 name_idx;
     u8 rumble_setting;
@@ -263,7 +263,9 @@ void fn_80247510(HSD_GObj* gobj)
     }
 
     // Check animation timer
-    if (data->x0[name_idx] < ((AnimLoopSettings*) &mnVibration_803EECE0)->end_frame) {
+    if (data->x0[name_idx] <=
+        ((AnimLoopSettings*) &mnVibration_803EECE0)->end_frame)
+    {
         data->x0[name_idx]++;
         return;
     }
@@ -284,7 +286,7 @@ void fn_80247510(HSD_GObj* gobj)
                                 ->jobjs[23],
                             i),
                         &panel_jobj, 2, -1);
-                    HSD_JObjReqAnimAll(panel_jobj, (f32) rumble_setting);
+                    HSD_JObjReqAnimAll(panel_jobj, rumble_setting);
                     HSD_JObjAnimAll(panel_jobj);
                     HSD_PadRumbleRemoveAll();
                     HSD_PadRumbleOffN(i);
@@ -298,7 +300,7 @@ void fn_80247510(HSD_GObj* gobj)
                                 ->jobjs[23],
                             i),
                         &panel_jobj, 2, -1);
-                    HSD_JObjReqAnimAll(panel_jobj, (f32) rumble_setting);
+                    HSD_JObjReqAnimAll(panel_jobj, rumble_setting);
                     HSD_JObjAnimAll(panel_jobj);
                     HSD_PadRumbleAdd(i, 0, 14, 0, &mnVibration_804D4FF0);
                     return;
@@ -357,7 +359,7 @@ void fn_80247510(HSD_GObj* gobj)
         }
         rumble_setting = GetPersistentNameData(name_idx)->x1A1;
         jobj = mnVibration_802474C4(data->x0[1]);
-        HSD_JObjReqAnimAll(jobj, (f32) rumble_setting);
+        HSD_JObjReqAnimAll(jobj, rumble_setting);
         HSD_JObjAnimAll(jobj);
         return;
     }
@@ -381,8 +383,9 @@ void fn_80247510(HSD_GObj* gobj)
                 HSD_JObjSetTranslateX(
                     cursor_jobj, HSD_JObjGetTranslationX(nav_data->jobjs[17]));
                 HSD_JObjSetTranslateY(
-                    cursor_jobj, dy * (f32) data->x0[1] +
-                                     HSD_JObjGetTranslationY(nav_data->jobjs[17]));
+                    cursor_jobj,
+                    dy * (f32) data->x0[1] +
+                        HSD_JObjGetTranslationY(nav_data->jobjs[17]));
                 HSD_JObjSetTranslateZ(
                     cursor_jobj, HSD_JObjGetTranslationZ(nav_data->jobjs[17]));
             }
@@ -532,8 +535,9 @@ void mnVibration_80248444(HSD_GObj* arg0, u8 arg1, u8 arg2)
     u8 name_flag;
     HSD_JObj* new_jobj;
     f32 spacing;
+    f32 pos_x;
     f32 pos_y;
-    PAD_STACK(4);
+    f32 pos_z;
 
     assets = &mnVibration_804A0888;
     data = arg0->user_data;
@@ -546,16 +550,18 @@ void mnVibration_80248444(HSD_GObj* arg0, u8 arg1, u8 arg2)
     text = HSD_SisLib_803A6754(0, 1);
     data->texts[arg2] = text;
     pos_y = -(spacing * (f32) arg2 + sp20.y);
-    text->pos_x = sp20.x;
+    pos_z = sp20.z;
+    pos_x = sp20.x;
+    text->pos_x = pos_x;
     text->pos_y = pos_y;
-    text->pos_z = sp20.z;
+    text->pos_z = pos_z;
     text->font_size.x = 0.03f;
     text->font_size.y = 0.03f;
     HSD_SisLib_803A6B98(text, 0.0f, 0.0f, GetNameText(arg1));
     new_jobj = HSD_JObjLoadJoint(assets->joint);
     HSD_JObjAddAnimAll(new_jobj, assets->animjoint, assets->matanim,
                        assets->shapeanim);
-    HSD_JObjReqAnimAll(new_jobj, (f32) name_flag);
+    HSD_JObjReqAnimAll(new_jobj, name_flag);
     HSD_JObjAnimAll(new_jobj);
     HSD_JObjSetTranslateY(new_jobj, spacing * (f32) arg2);
     HSD_JObjAddChild(data->jobjs[17], new_jobj);
