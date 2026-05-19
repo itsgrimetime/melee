@@ -4449,3 +4449,119 @@ def virtual_to_var(
         print(f"r{virtual}: {binding.var_name} ({binding.kind})")
         print(f"  type:    {binding.type_str}")
         print(f"  conf:    {binding.confidence}")
+
+
+mutate_app = typer.Typer(
+    help="Tier 3: targeted source mutations on specific variables.",
+)
+debug_app.add_typer(mutate_app, name="mutate")
+
+
+def _read_source_for(function: str, melee_root: Path) -> tuple[Path, str]:
+    unit = _find_unit_for_function(function, melee_root)
+    if unit is None:
+        typer.echo(f"{function} not in report.json", err=True)
+        raise typer.Exit(2)
+    p = melee_root / "src" / f"{unit}.c"
+    return p, p.read_text()
+
+
+@mutate_app.command(name="type-change")
+def mutate_type_change_cmd(
+    function: Annotated[
+        str,
+        typer.Option(
+            "--function", "-f",
+            help="Function containing the variable.",
+        ),
+    ],
+    var: Annotated[
+        str,
+        typer.Option("--var", help="Local variable name to retype."),
+    ],
+    new_type: Annotated[
+        str,
+        typer.Option("--type", help="New type string (e.g., 'u32')."),
+    ],
+    apply: Annotated[
+        bool,
+        typer.Option(
+            "--apply",
+            help="Write the mutated source back to the file. "
+                 "Default: print to stdout.",
+        ),
+    ] = False,
+) -> None:
+    """Change a local variable's declared type."""
+    from ..mwcc_debug.mutators import MutationUnsupported, mutate_type_change
+
+    melee_root = DEFAULT_MELEE_ROOT
+    src_path, source = _read_source_for(function, melee_root)
+    try:
+        out = mutate_type_change(source, function, var, new_type)
+    except MutationUnsupported as e:
+        typer.echo(f"mutation failed: {e}", err=True)
+        raise typer.Exit(2)
+    if apply:
+        src_path.write_text(out)
+        typer.echo(f"wrote: {src_path}", err=True)
+    else:
+        print(out, end="")
+
+
+@mutate_app.command(name="insert-alias")
+def mutate_insert_alias_cmd(
+    function: Annotated[
+        str,
+        typer.Option(
+            "--function", "-f",
+            help="Function containing the variable.",
+        ),
+    ],
+    var: Annotated[
+        str,
+        typer.Option("--var", help="Local variable name to alias."),
+    ],
+    at: Annotated[
+        int,
+        typer.Option(
+            "--at",
+            help="0-indexed N-th reading statement to alias before.",
+        ),
+    ] = 0,
+    new_name: Annotated[
+        Optional[str],
+        typer.Option(
+            "--name",
+            help="Alias variable name (default: <var>_alias).",
+        ),
+    ] = None,
+    apply: Annotated[
+        bool,
+        typer.Option(
+            "--apply",
+            help="Write the mutated source back to the file. "
+                 "Default: print to stdout.",
+        ),
+    ] = False,
+) -> None:
+    """Insert a fresh local copy of a variable before the N-th
+    reading statement and rewrite that statement to use the alias."""
+    from ..mwcc_debug.mutators import (
+        MutationUnsupported, mutate_insert_alias_before_use,
+    )
+
+    melee_root = DEFAULT_MELEE_ROOT
+    src_path, source = _read_source_for(function, melee_root)
+    try:
+        out = mutate_insert_alias_before_use(
+            source, function, var, at_stmt_index=at, new_name=new_name,
+        )
+    except MutationUnsupported as e:
+        typer.echo(f"mutation failed: {e}", err=True)
+        raise typer.Exit(2)
+    if apply:
+        src_path.write_text(out)
+        typer.echo(f"wrote: {src_path}", err=True)
+    else:
+        print(out, end="")
