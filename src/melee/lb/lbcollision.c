@@ -327,60 +327,52 @@ inline bool end(Vec3* a, Vec3* b, float unk_sum)
 int lbColl_80006094(Vec3* arg0, Vec3* arg1, Vec3* arg2, Vec3* arg3, Vec3* arg4,
                     Vec3* arg5, float arg6, float arg7)
 {
-    PAD_STACK(64);
+    PAD_STACK(80);
     {
         Vec3 vec4;
-        float sp30;
-        float sp34;
-        float sp38;
         Vec3 arg4_offset;
         Vec3 arg5_offset;
-        float sp3C;
         float temp_f1;
         float unk_sum = arg6 + arg7;
-        vec4.x = arg0->x;
-        vec4.y = arg0->y;
-        vec4.z = arg0->z;
-
-        sp30 = vec4.z;
-        sp34 = arg2->x;
-        sp38 = arg2->y;
-
-        arg4_offset.x = vec4.x;
-        arg4_offset.y = vec4.y;
-        arg4_offset.z = vec4.z;
-
+        vec4 = *arg0;
+        arg4_offset = vec4;
         {
-            float temp_r0_2 = arg2->z;
-            sp3C = temp_r0_2;
-
-            arg5_offset.x = sp34;
-            arg5_offset.y = sp38;
-            arg5_offset.z = temp_r0_2;
+            Vec3 arg2_copy;
+            arg2_copy = *arg2;
+            arg5_offset = arg2_copy;
         }
 
         {
             float arg1_x = arg1->x;
             if (arg4_offset.x > arg1_x) {
-                if (!testPlusX(&arg4_offset, &arg5_offset, arg3, unk_sum)) {
-                    return false;
+                {
+                    float x = arg4_offset.x + unk_sum;
+                    if (x < arg5_offset.x && x < arg3->x) {
+                        return false;
+                    }
                 }
 
-                if (!testMinusX(&arg4_offset, &arg5_offset, arg3, unk_sum)) {
-                    return false;
+                {
+                    float x = arg1_x - unk_sum;
+                    if (x > arg5_offset.x && x > arg3->x) {
+                        return false;
+                    }
                 }
 
                 goto block_13;
-            }
-            {
-                if (!testMinusX(&arg4_offset, &arg5_offset, arg3, unk_sum)) {
-                    return false;
+            } else {
+                {
+                    float x = arg4_offset.x - unk_sum;
+                    if (x > arg5_offset.x && x > arg3->x) {
+                        return false;
+                    }
                 }
-            }
-            {
-                float x = arg1_x + unk_sum;
-                if (x < arg5_offset.x && x < arg3->x) {
-                    return false;
+
+                {
+                    float x = arg1_x + unk_sum;
+                    if (x < arg5_offset.x && x < arg3->x) {
+                        return false;
+                    }
                 }
             }
 
@@ -493,21 +485,23 @@ int lbColl_80006094(Vec3* arg0, Vec3* arg1, Vec3* arg2, Vec3* arg3, Vec3* arg4,
                             float temp_f1_2 = -temp_f11 / temp_f3_5;
                             arg4_scl = temp_f1_2;
 
-                            if (temp_f1_2 > (float) 1.0) {
-                                arg4_scl = 1.0f;
-                            } else if (arg4_scl < (float) 0.0) {
-                                arg4_scl = 0.0f;
+                            if (temp_f1_2 > lbColl_804D7A00) {
+                                arg4_scl = lbColl_804D7A08;
+                            } else if (arg4_scl < lbColl_804D7A10) {
+                                arg4_scl = lbColl_804D79F8;
                             }
                         }
                     }
                 } else {
                     if (approximatelyZero(temp_f10)) {
-                        float temp_f9 = (0.5 * temp_f22 + arg5_offset.y);
-                        float temp_f7_2 = (0.5 * temp_f23 + arg5_offset.x);
+                        float temp_f9 =
+                            (lbColl_804D7A18 * temp_f22 + arg5_offset.y);
+                        float temp_f7_2 =
+                            (lbColl_804D7A18 * temp_f23 + arg5_offset.x);
                         float temp_f10_2 = arg4_offset.y - temp_f9;
                         float temp_f11_2 = temp_f1 - temp_f9;
                         float temp_f8_2 =
-                            0.5 * arg5_offset_base + arg5_offset.z;
+                            lbColl_804D7A18 * arg5_offset_base + arg5_offset.z;
                         float temp_f3_6 = arg4_offset.x - temp_f7_2;
                         float temp_f9_2 = arg1_x - temp_f7_2;
                         float arg4_offset_z = arg4_offset.z - temp_f8_2;
@@ -521,110 +515,112 @@ int lbColl_80006094(Vec3* arg0, Vec3* arg1, Vec3* arg2, Vec3* arg3, Vec3* arg4,
                              ((temp_f9_2 * temp_f9_2) +
                               (temp_f11_2 * temp_f11_2))))
                         {
-                            Vec3 vec2;
-                            float sp90;
-                            float sp8C;
-                            float sp88;
+                            Vec3 c3;
                             float temp_f7_4;
                             float temp_f8_3;
-                            float temp_f9_3;
-                            vec2.x = sp34;
-                            vec2.y = sp38;
-                            vec2.z = sp3C;
+                            c3 = arg5_offset;
                             temp_f7_4 = temp_f4_5 - arg2->x;
                             temp_f8_3 = temp_f5 - arg2->y;
-                            sp88 = vec4.x;
-                            temp_f9_3 = temp_f6 - arg2->z;
-                            sp8C = vec4.y;
-                            sp90 = sp30;
-                            arg4_scl = 0.0f;
                             {
-                                float var_f2 =
-                                    -((temp_f9_3 * (vec2.z - sp90)) +
-                                      ((temp_f7_4 * (vec2.x - sp88)) +
-                                       (temp_f8_3 * (vec2.y - sp8C)))) /
-                                    ((temp_f9_3 * temp_f9_3) +
-                                     ((temp_f7_4 * temp_f7_4) +
-                                      (temp_f8_3 * temp_f8_3)));
-                                if (var_f2 > (float) 1.0) {
-                                    var_f2 = 1.0f;
-                                } else if (var_f2 < (float) 0.0) {
-                                    var_f2 = 0.0f;
+                                Vec3 a2;
+                                float dot;
+                                float temp_f9_3;
+                                float var_f2;
+                                a2 = vec4;
+                                temp_f9_3 = temp_f6 - arg2->z;
+                                arg4_scl = 0.0f;
+                                dot = (temp_f9_3 * (c3.z - a2.z)) +
+                                      ((temp_f7_4 * (c3.x - a2.x)) +
+                                       (temp_f8_3 * (c3.y - a2.y)));
+                                var_f2 = -dot / ((temp_f9_3 * temp_f9_3) +
+                                                 ((temp_f7_4 * temp_f7_4) +
+                                                  (temp_f8_3 * temp_f8_3)));
+                                if (var_f2 > lbColl_804D7A00) {
+                                    var_f2 = lbColl_804D7A08;
+                                } else if (var_f2 < lbColl_804D7A10) {
+                                    var_f2 = lbColl_804D79F8;
                                 }
                                 arg5_scl = var_f2;
                             }
                         } else {
-                            float sp58;
-                            float sp60;
-                            float sp48;
-                            float sp5C;
-                            float sp44;
-                            float sp40;
-                            float temp_f10_3;
-                            float temp_f11_3;
-                            float temp_f9_4;
-                            sp40 = sp34;
-                            sp44 = sp38;
-                            sp48 = sp3C;
-                            arg4_scl = 1.0f;
-                            temp_f9_4 = temp_f4_5 - arg2->x;
-                            temp_f10_3 = temp_f5 - arg2->y;
-                            sp58 = arg1->x;
-                            temp_f11_3 = temp_f6 - arg2->z;
-                            sp5C = arg1->y;
-                            sp60 = arg1->z;
+                            Vec3 c2;
+                            c2 = arg5_offset;
                             {
-                                float var_f2_2 =
-                                    -temp_f11_3 * (sp48 - sp60) +
-                                    temp_f9_4 * sp40 - sp58 +
-                                    temp_f10_3 * sp44 -
-                                    sp5C / (temp_f11_3 * temp_f11_3) +
-                                    temp_f9_4 * temp_f9_4 +
-                                    temp_f10_3 * temp_f10_3;
+                                float temp_f9_4;
+                                arg4_scl = 1.0f;
+                                temp_f9_4 = temp_f4_5 - arg2->x;
+                                {
+                                    float temp_f10_3;
+                                    float temp_f11_3;
+                                    temp_f10_3 = temp_f5 - arg2->y;
+                                    temp_f11_3 = temp_f6 - arg2->z;
+                                    {
+                                        Vec3 b0;
 
-                                if (var_f2_2 > (float) 1.0) {
-                                    var_f2_2 = 1.0f;
-                                } else if (var_f2_2 < (float) 0.0) {
-                                    var_f2_2 = 0.0f;
+                                        b0 = *arg1;
+                                        {
+                                            float dot;
+                                            float var_f2_2;
+                                            dot =
+                                                (temp_f11_3 * (c2.z - b0.z)) +
+                                                ((temp_f9_4 * (c2.x - b0.x)) +
+                                                 (temp_f10_3 * (c2.y - b0.y)));
+                                            var_f2_2 =
+                                                -dot /
+                                                ((temp_f11_3 * temp_f11_3) +
+                                                 ((temp_f9_4 * temp_f9_4) +
+                                                  (temp_f10_3 * temp_f10_3)));
+
+                                            if (var_f2_2 > lbColl_804D7A00) {
+                                                var_f2_2 = lbColl_804D7A08;
+                                            } else if (var_f2_2 <
+                                                       lbColl_804D7A10)
+                                            {
+                                                var_f2_2 = lbColl_804D79F8;
+                                            }
+
+                                            arg5_scl = var_f2_2;
+                                        }
+                                    }
                                 }
-
-                                arg5_scl = var_f2_2;
                             }
                         }
                     } else {
                         float temp_f1_3 =
-                            temp_f8 * temp_f12 - temp_f7 * temp_f11 / temp_f10;
+                            ((temp_f8 * temp_f12) - (temp_f7 * temp_f11)) /
+                            temp_f10;
                         arg5_scl =
                             ((temp_f3_5 * temp_f12) - (temp_f8 * temp_f11)) /
                             temp_f10;
                         arg4_scl = temp_f1_3;
-                        if (temp_f1_3 > (float) 1.0 ||
-                            arg4_scl < (float) 0.0 || arg5_scl > (float) 1.0 ||
-                            arg5_scl < (float) 0.0)
+                        if (temp_f1_3 > lbColl_804D7A00 ||
+                            arg4_scl < lbColl_804D7A10 ||
+                            arg5_scl > lbColl_804D7A00 ||
+                            arg5_scl < lbColl_804D7A10)
                         {
                             float var_f18;
                             float var_f19;
                             float var_f1;
                             float spA4;
 
-                            if (arg4_scl < (float) 0.0) {
-                                var_f19 = 0.0f;
+                            if (arg4_scl < lbColl_804D7A10) {
+                                var_f19 = lbColl_804D79F8;
                                 var_f18 =
                                     lbColl_80005EBC(arg2, arg3, arg0, &spA4);
                             } else {
-                                var_f19 = 1.0f;
+                                var_f19 = lbColl_804D7A08;
                                 var_f18 =
                                     lbColl_80005EBC(arg2, arg3, arg1, &spA4);
                             }
 
                             {
                                 float spA0;
-                                if (arg5_scl < (float) 0.0) {
-                                    arg5_scl = 0.0f;
+                                if (arg5_scl < lbColl_804D7A10) {
+                                    arg5_scl = lbColl_804D79F8;
                                     var_f1 = lbColl_80005EBC(arg0, arg1, arg2,
                                                              &spA0);
                                 } else {
-                                    arg5_scl = 1.0f;
+                                    arg5_scl = lbColl_804D7A08;
                                     var_f1 = lbColl_80005EBC(arg0, arg1, arg3,
                                                              &spA0);
                                 }
