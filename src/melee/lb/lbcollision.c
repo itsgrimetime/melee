@@ -967,16 +967,16 @@ bool lbColl_80006E58(Vec3* arg0, Vec3* arg1, Vec3* arg2, Vec3* arg3,
                      Vec3* arg4, Vec3* arg5, MtxPtr arg6, Vec3* arg7,
                      float* arg8, float scl, float arg10, float arg11)
 {
+    float temp_f4_8;
+    float temp_f4_10;
+    float temp_f9_2;
+    float temp_f9_4;
     Vec3 arg0_copy;
     Vec3 arg2_copy;
+    Vec3 sp104;
     Mtx sp9C;
-    float sp10C;
-    float sp108;
-    float sp104;
     float spD0;
     float spCC;
-    float sp38;
-    float sp34;
     float temp_f0;
     float temp_f10;
     float temp_f10_2;
@@ -1015,14 +1015,12 @@ bool lbColl_80006E58(Vec3* arg0, Vec3* arg1, Vec3* arg2, Vec3* arg3,
     float temp_f3;
     float temp_f3_3;
     float temp_f4;
-    float temp_f4_10;
     float temp_f4_2;
     float temp_f4_3;
     float temp_f4_4;
     float temp_f4_5;
     float temp_f4_6;
     float temp_f4_7;
-    float temp_f4_8;
     float temp_f4_9;
     float temp_f5;
     float temp_f5_2;
@@ -1035,15 +1033,13 @@ bool lbColl_80006E58(Vec3* arg0, Vec3* arg1, Vec3* arg2, Vec3* arg3,
     float temp_f7_2;
     float temp_f8;
     float temp_f9;
-    float temp_f9_2;
     float temp_f9_3;
-    float temp_f9_4;
     float var_f0;
     float var_f1;
     float var_f1_2;
+    float var_f22;
     float var_f20;
     float var_f21;
-    float var_f22;
     float var_f24;
     float var_f2;
     float var_f2_2;
@@ -1130,9 +1126,9 @@ block_39: {
     float temp_f3_2;
 
     temp_f3_2 = temp_f5 - arg0_copy.x;
-    sp104 = temp_f3_2;
-    sp108 = arg1->y - arg0_copy.y;
-    sp10C = arg1->z - arg0_copy.z;
+    sp104.x = temp_f3_2;
+    sp104.y = arg1->y - arg0_copy.y;
+    sp104.z = arg1->z - arg0_copy.z;
     temp_f7_2 = arg3->y;
     temp_f21 = arg0_copy.y - arg2_copy.y;
     temp_f26 = temp_f7_2 - arg2_copy.y;
@@ -1142,13 +1138,14 @@ block_39: {
     temp_f20 = arg0_copy.x - arg2_copy.x;
     temp_f25 = temp_f8 - arg2_copy.z;
     temp_f10 =
-        (sp10C * temp_f25) + ((temp_f3_2 * temp_f27) + (sp108 * temp_f26));
+        (sp104.z * temp_f25) + ((temp_f3_2 * temp_f27) + (sp104.y * temp_f26));
     temp_f9 = (temp_f25 * temp_f25) +
               ((temp_f27 * temp_f27) + (temp_f26 * temp_f26));
     temp_f21_2 = arg0_copy.z - arg2_copy.z;
-    temp_f5_2 = (sp10C * sp10C) + ((temp_f3_2 * temp_f3_2) + (sp108 * sp108));
-    temp_f4_7 =
-        (sp10C * temp_f21_2) + ((temp_f3_2 * temp_f20) + (sp108 * temp_f21));
+    temp_f5_2 =
+        (sp104.z * sp104.z) + ((temp_f3_2 * temp_f3_2) + (sp104.y * sp104.y));
+    temp_f4_7 = (sp104.z * temp_f21_2) +
+                ((temp_f3_2 * temp_f20) + (sp104.y * temp_f21));
     temp_f11 = (temp_f25 * temp_f21_2) +
                ((temp_f27 * temp_f20) + (temp_f26 * temp_f21));
 }
@@ -1284,9 +1281,9 @@ block_39: {
             }
         }
     }
-    arg4->x = (sp104 * var_f0) + arg0_copy.x;
-    arg4->y = (sp108 * var_f0) + arg0_copy.y;
-    arg4->z = (sp10C * var_f0) + arg0_copy.z;
+    arg4->x = (sp104.x * var_f0) + arg0_copy.x;
+    arg4->y = (sp104.y * var_f0) + arg0_copy.y;
+    arg4->z = (sp104.z * var_f0) + arg0_copy.z;
     arg5->x = (temp_f27 * var_f24) + arg2_copy.x;
     arg5->y = (temp_f26 * var_f24) + arg2_copy.y;
     arg5->z = (temp_f25 * var_f24) + arg2_copy.z;
@@ -1296,6 +1293,8 @@ block_39: {
     temp_f1_5 = (temp_f2_6 * temp_f2_6) +
                 ((temp_f4_9 * temp_f4_9) + (temp_f1_4 * temp_f1_4));
     if (temp_f1_5 > lbColl_804D79F8) {
+        volatile float sp38;
+
         temp_f1_6 = __frsqrte(temp_f1_5);
         temp_f1_7 =
             lbColl_804D7A18 * temp_f1_6 *
@@ -1318,20 +1317,20 @@ block_39: {
     }
     if (var_r0_4 != 0) {
         *arg8 = (scl + arg10) - var_f30;
-        arg7->x = arg4->x;
-        arg7->y = arg4->y;
-        arg7->z = arg4->z;
+        *arg7 = *arg4;
         return 1;
     }
     HSD_MtxInverse(arg6, sp9C);
     PSMTXMultVec(sp9C, arg4, &arg0_copy);
-    PSMTXMultVec(sp9C, arg5, (Vec3*) &sp104);
-    temp_f1_9 = arg0_copy.y - sp108;
-    temp_f4_10 = arg0_copy.x - sp104;
-    temp_f2_7 = arg0_copy.z - sp10C;
+    PSMTXMultVec(sp9C, arg5, &sp104);
+    temp_f1_9 = arg0_copy.y - sp104.y;
+    temp_f4_10 = arg0_copy.x - sp104.x;
+    temp_f2_7 = arg0_copy.z - sp104.z;
     temp_f1_10 = (temp_f2_7 * temp_f2_7) +
                  ((temp_f4_10 * temp_f4_10) + (temp_f1_9 * temp_f1_9));
     if (temp_f1_10 > lbColl_804D79F8) {
+        volatile float sp34;
+
         temp_f1_11 = __frsqrte(temp_f1_10);
         temp_f1_12 = lbColl_804D7A18 * temp_f1_11 *
                      -(((f64) temp_f1_10 * (temp_f1_11 * temp_f1_11)) -
