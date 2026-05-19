@@ -48,6 +48,12 @@ from ..mwcc_debug.source_patch import (
     reorder_decls_in_function,
     transfer_candidate,
 )
+from ..mwcc_debug.asm_parser import (
+    extract_function as asm_extract_function,
+    find_first_def as asm_find_first_def,
+    parse_prologue_end as asm_parse_prologue_end,
+)
+from ..mwcc_debug.iter_match import match_virtual_for_expected_def
 
 debug_app = typer.Typer(
     help="Compiler introspection via remote Windows mwcc_debug DLL"
@@ -2918,4 +2924,186 @@ def rank_callees(
             "below its predicted top-down position. This is the typical "
             "param-iter-ceiling signature — see `debug pattern-catalog "
             "param-iter-ceiling` for the full pattern."
+        )
+
+
+@debug_app.command(name="match-iter-first")
+def match_iter_first(
+    function: Annotated[
+        str,
+        typer.Option(
+            "--function", "-f",
+            help="Function to analyze (required)",
+        ),
+    ],
+    pcdump: Annotated[
+        Optional[Path],
+        typer.Argument(
+            help="Path to pcdump.txt. Omit to auto-resolve via --function "
+                 "from the cache.",
+        ),
+    ] = None,
+    regs: Annotated[
+        str,
+        typer.Option(
+            "--regs",
+            help="Comma-separated physical regs to report on "
+                 "(default: r31,r30,r29,r28).",
+        ),
+    ] = "r31,r30,r29,r28",
+    asm: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--asm",
+            help="Override path to expected .s file. "
+                 "Auto-resolves via report.json.",
+        ),
+    ] = None,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit as JSON."),
+    ] = False,
+) -> None:
+    """Recommend --force-iter-first arguments by reading the expected .s.
+
+    For each physical register in --regs, finds the first instruction in
+    the expected output that defines it (post-prologue), structurally
+    aligns that instruction to the current pcdump's pre-coloring pass,
+    and reports the virtual register (= ig_idx in MWCC's IG).
+
+    Useful for local-vs-local iter-order cascades where rank-callees
+    can't tell which local "should have" gotten r31. Pipe the output's
+    ig_idx list into --force-iter-first.
+    """
+    melee_root = DEFAULT_MELEE_ROOT
+    pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
+    pcdump_text = pcdump_path.read_text()
+
+    unit = _find_unit_for_function(function, melee_root)
+    if unit is None:
+        typer.echo(
+            f"function '{function}' not found in report.json. "
+            f"Run `ninja build/GALE01/report.json` and retry.",
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    if asm is None:
+        asm_path = melee_root / "build" / "GALE01" / "asm" / f"{unit}.s"
+    else:
+        asm_path = asm
+    if not asm_path.exists():
+        typer.echo(
+            f"expected .s not found: {asm_path}\n"
+            f"Run `python configure.py && ninja` to build it.",
+            err=True,
+        )
+        raise typer.Exit(3)
+
+    asm_text = asm_path.read_text()
+    asm_fn = asm_extract_function(asm_text, function)
+    if asm_fn is None:
+        typer.echo(
+            f"function '{function}' not found in {asm_path}",
+            err=True,
+        )
+        raise typer.Exit(3)
+
+    prologue_end = asm_parse_prologue_end(asm_fn.instructions)
+    body = asm_fn.instructions[prologue_end:]
+
+    fns = parse_pcdump(pcdump_text)
+    fn = next((f for f in fns if f.name == function), None)
+    if fn is None:
+        _abort_function_not_in_dump(function, [f.name for f in fns])
+    pre_pass = fn.last_precolor_pass()
+    if pre_pass is None:
+        typer.echo(
+            f"no pre-coloring pass found in pcdump for {function}",
+            err=True,
+        )
+        raise typer.Exit(4)
+
+    # Parse --regs
+    reg_list: list[int] = []
+    for token in regs.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if not token.startswith("r"):
+            typer.echo(f"invalid reg token: {token}", err=True)
+            raise typer.Exit(2)
+        try:
+            reg_list.append(int(token[1:]))
+        except ValueError:
+            typer.echo(f"invalid reg token: {token}", err=True)
+            raise typer.Exit(2)
+
+    results: list[dict] = []
+    for reg in reg_list:
+        expected_def = asm_find_first_def(body, target_reg=reg)
+        if expected_def is None:
+            results.append({
+                "reg": reg,
+                "status": "unused",
+                "note": f"r{reg} never used as a destination in expected",
+            })
+            continue
+        pos, expected_ist = expected_def
+        match = match_virtual_for_expected_def(
+            expected_ist=expected_ist,
+            expected_position=pos,
+            pre_pass=pre_pass,
+        )
+        if match is None:
+            results.append({
+                "reg": reg,
+                "status": "no_match",
+                "note": f"no structural match in pre-coloring for "
+                        f"`{expected_ist.opcode} {expected_ist.operands}`",
+            })
+            continue
+        results.append({
+            "reg": reg,
+            "status": "ok",
+            "ig_idx": match.ig_idx,
+            "virtual": match.virtual,
+            "instr_idx": match.instruction_index,
+            "opcode": expected_ist.opcode,
+            "operands": expected_ist.operands,
+            "confidence": match.confidence,
+        })
+
+    if json_out:
+        print(json.dumps({
+            "function": function,
+            "unit": unit,
+            "results": results,
+        }, indent=2))
+        return
+
+    print(f"Function: {function}")
+    print(f"Unit:     {unit}")
+    print(f"ASM:      {asm_path.relative_to(melee_root)}")
+    print()
+    print(f"Expected iter-first targets:")
+    ig_indices: list[int] = []
+    for r in results:
+        reg_str = f"r{r['reg']}"
+        if r["status"] == "ok":
+            print(
+                f"  {reg_str} <- ig_idx {r['ig_idx']:<4} "
+                f"(virt r{r['virtual']}, instr {r['instr_idx']}: "
+                f"{r['opcode']} {r['operands']}) [{r['confidence']}]"
+            )
+            ig_indices.append(r["ig_idx"])
+        else:
+            print(f"  {reg_str} - {r['note']}")
+    if ig_indices:
+        ig_csv = ",".join(str(i) for i in ig_indices)
+        print()
+        print(f"Try:")
+        print(
+            f"  melee-agent debug pcdump <source.c> "
+            f"--force-iter-first {ig_csv}"
         )
