@@ -3653,3 +3653,317 @@ def fix_perm_compile(
         print("  3. Clean up the stage file on exit")
     if result.action in ("skipped", "not-applicable"):
         raise typer.Exit(1)
+
+
+def _find_wibo() -> Optional[Path]:
+    """Locate the patched wibo binary. Resolution order:
+
+    1. $MWCC_DEBUG_WIBO env var
+    2. <melee_root>/../melee-harness/bin/wibo (Luke's harness adjacent)
+    3. ~/code/melee-harness/bin/wibo
+    """
+    import os as _os
+    env = _os.environ.get("MWCC_DEBUG_WIBO")
+    if env:
+        p = Path(env).expanduser()
+        return p if p.exists() else None
+    candidates = [
+        DEFAULT_MELEE_ROOT.parent / "melee-harness" / "bin" / "wibo",
+        Path("~/code/melee-harness/bin/wibo").expanduser(),
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+    return None
+
+
+def _find_compiler_dir() -> Path:
+    """Path to the GC/1.2.5n compiler directory."""
+    return DEFAULT_MELEE_ROOT / "build" / "compilers" / "GC" / "1.2.5n"
+
+
+def _build_local_dll() -> Optional[Path]:
+    """Build the mwcc_debug DLL via tools/mwcc_debug/build_macos.sh.
+    Returns the built DLL path or None on failure.
+    """
+    build_script = (
+        DEFAULT_MELEE_ROOT / "tools" / "mwcc_debug" / "build_macos.sh"
+    )
+    if not build_script.exists():
+        return None
+    try:
+        subprocess.run(
+            [str(build_script)],
+            cwd=build_script.parent,
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        return None
+    return build_script.parent / "MWDBG326.dll"
+
+
+@debug_app.command(name="setup-local")
+def setup_local(
+    rebuild_dll: Annotated[
+        bool,
+        typer.Option(
+            "--rebuild-dll",
+            help="Rebuild the mwcc_debug DLL via build_macos.sh even if "
+                 "it already exists.",
+        ),
+    ] = False,
+) -> None:
+    """One-time setup for local mwcc_debug pcdump (macOS+wibo).
+
+    Steps:
+    1. Verify wibo binary is available (built via melee-harness).
+    2. Build the mwcc_debug DLL via tools/mwcc_debug/build_macos.sh
+       if not already present.
+    3. Patch a copy of mwcceppc.exe to import MWDBG326.dll instead
+       of LMGR326B.dll (lives next to the stock compiler as
+       mwcceppc_debug.exe; stock compiler untouched).
+    4. Copy the DLL into the compiler dir so wibo finds it.
+
+    After setup, `melee-agent debug pcdump-local <c_file>` works.
+
+    Wibo dependency: this command expects Luke Champine's patched wibo
+    at <melee>/../melee-harness/bin/wibo (or path in $MWCC_DEBUG_WIBO).
+    Clone melee-harness adjacent to melee and build via its setup.sh.
+    """
+    melee_root = DEFAULT_MELEE_ROOT
+    compiler_dir = _find_compiler_dir()
+
+    # 1. Locate wibo
+    wibo = _find_wibo()
+    if wibo is None:
+        typer.echo(
+            "wibo binary not found. Setup the patched wibo first:\n"
+            f"  git clone https://github.com/lukechampine/melee-harness "
+            f"{melee_root.parent}/melee-harness\n"
+            f"  cd {melee_root.parent}/melee-harness && bash setup.sh\n"
+            "Or set MWCC_DEBUG_WIBO=<path-to-wibo-binary>.",
+            err=True,
+        )
+        raise typer.Exit(2)
+    print(f"[ok] wibo: {wibo}")
+
+    # 2. Build the DLL if needed
+    dll_src = melee_root / "tools" / "mwcc_debug" / "MWDBG326.dll"
+    if rebuild_dll or not dll_src.exists():
+        print("[..] building mwcc_debug DLL via build_macos.sh...")
+        built = _build_local_dll()
+        if built is None or not built.exists():
+            typer.echo(
+                "DLL build failed. Check tools/mwcc_debug/build_macos.sh.",
+                err=True,
+            )
+            raise typer.Exit(3)
+        dll_src = built
+    print(f"[ok] DLL:  {dll_src}")
+
+    # 3. Patch the compiler if needed
+    stock_compiler = compiler_dir / "mwcceppc.exe"
+    debug_compiler = compiler_dir / "mwcceppc_debug.exe"
+    patcher = melee_root / "tools" / "mwcc_debug" / "patch_mwcceppc_for_wibo.py"
+
+    if not stock_compiler.exists():
+        typer.echo(
+            f"stock compiler not found: {stock_compiler}. "
+            f"Run `python configure.py` first to download it.",
+            err=True,
+        )
+        raise typer.Exit(4)
+    if not patcher.exists():
+        typer.echo(
+            f"patcher script not found: {patcher}. "
+            f"Pull latest tools/mwcc_debug/.",
+            err=True,
+        )
+        raise typer.Exit(5)
+
+    print(f"[..] patching {stock_compiler.name} -> {debug_compiler.name}...")
+    try:
+        subprocess.run(
+            [
+                "python3", str(patcher),
+                str(stock_compiler), str(debug_compiler),
+                "--dll", str(dll_src),
+            ],
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        typer.echo(f"patcher failed: {e}", err=True)
+        raise typer.Exit(6)
+    print(f"[ok] compiler patched: {debug_compiler}")
+    print(f"[ok] DLL deployed:     {compiler_dir / 'MWDBG326.dll'}")
+    print()
+    print("Setup complete. Try:")
+    print("  melee-agent debug pcdump-local src/melee/mn/mnvibration.c")
+
+
+def _ninja_cflags_for_unit(src_rel: str) -> tuple[str, str]:
+    """Extract (cflags, mw_version) for a source from build.ninja.
+
+    Mirrors melee-harness/tools/mwcc_dump.py's find_build_block.
+    Raises typer.Exit if the source has no build block.
+    """
+    import re as _re
+    text = (DEFAULT_MELEE_ROOT / "build.ninja").read_text()
+    text = text.replace("$\n", " ")  # unfold ninja line continuations
+    obj = f"build/GALE01/{src_rel[:-2]}.o"
+    blocks = _re.split(r"^build ", text, flags=_re.M)
+    for b in blocks:
+        if b.startswith(f"{obj}:") or b.startswith(f"{obj} :"):
+            cflags = _re.search(r"\bcflags = (.*)", b).group(1).strip()
+            mw = _re.search(r"\bmw_version = (\S+)", b).group(1).strip()
+            return cflags, mw
+    typer.echo(
+        f"no build block for {obj} in build.ninja. "
+        f"Run `python configure.py && ninja build/GALE01/report.json` "
+        f"first to ensure the source is registered.",
+        err=True,
+    )
+    raise typer.Exit(2)
+
+
+@debug_app.command(name="pcdump-local")
+def pcdump_local(
+    c_file: Annotated[
+        str,
+        typer.Argument(help="Path to a .c file in the melee repo"),
+    ],
+    output: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--output", "-o",
+            help="Output path for the dump. Default: cache it under "
+                 "build/mwcc_debug_cache/<unit>.txt. Use '-' for stdout.",
+        ),
+    ] = None,
+    force_phys: Annotated[
+        Optional[str],
+        typer.Option("--force-phys", help="Tier 5: allocator bias."),
+    ] = None,
+    force_iter_first: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-iter-first",
+            help="Tier 6: reorder simplification list.",
+        ),
+    ] = None,
+    force_coalesce: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-coalesce",
+            help="Tier 6: force coalesce specific virtual pairs.",
+        ),
+    ] = None,
+    wibo: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--wibo",
+            help="Path to wibo binary. Default: auto-resolve from "
+                 "$MWCC_DEBUG_WIBO or ../melee-harness/bin/wibo.",
+        ),
+    ] = None,
+) -> None:
+    """Local mwcc_debug pcdump (macOS+wibo+Zig-built DLL, no SSH).
+
+    Compiles the given .c file locally via wibo + the patched
+    mwcceppc_debug.exe. Produces the same pcdump.txt our SSH-based
+    `debug pcdump` produces, in ~1 second vs ~30 seconds.
+
+    Requires one-time setup: run `melee-agent debug setup-local`
+    first to patch the compiler and deploy the DLL.
+
+    Env-var hooks (--force-phys, --force-iter-first, --force-coalesce)
+    pass through to the DLL.
+    """
+    melee_root = DEFAULT_MELEE_ROOT
+    src_rel = _resolve_src_relative(c_file)
+
+    # Resolve wibo
+    wibo_path = wibo or _find_wibo()
+    if wibo_path is None or not wibo_path.exists():
+        typer.echo(
+            "wibo binary not found. Run `melee-agent debug setup-local` "
+            "first, or set $MWCC_DEBUG_WIBO.",
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    compiler_dir = _find_compiler_dir()
+    debug_compiler = compiler_dir / "mwcceppc_debug.exe"
+    if not debug_compiler.exists():
+        typer.echo(
+            f"patched compiler not found: {debug_compiler}. "
+            f"Run `melee-agent debug setup-local` first.",
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    # Extract cflags from build.ninja
+    cflags, _mw_version = _ninja_cflags_for_unit(src_rel)
+
+    # Construct compile command. mwcc writes pcdump.txt to cwd, so we
+    # run from melee_root and move it after.
+    pcdump_path = melee_root / "pcdump.txt"
+    if pcdump_path.exists():
+        pcdump_path.unlink()
+
+    # Args: cflags split + source + output. We discard the .o output
+    # (just need the pcdump side-effect). Use /tmp for the .o.
+    args = (
+        [str(wibo_path), str(debug_compiler)]
+        + shlex.split(cflags)
+        + ["-c", src_rel, "-o", "/tmp/pcdump_local_discard.o"]
+    )
+
+    # Set env vars for our DLL's hooks
+    env = os.environ.copy()
+    if force_phys:
+        env["MWCC_DEBUG_FORCE_PHYS"] = force_phys
+    if force_iter_first:
+        env["MWCC_DEBUG_FORCE_ITER_FIRST"] = force_iter_first
+    if force_coalesce:
+        env["MWCC_DEBUG_FORCE_COALESCE"] = force_coalesce
+
+    try:
+        proc = subprocess.run(
+            args,
+            cwd=melee_root,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as e:
+        typer.echo(f"failed to invoke wibo: {e}", err=True)
+        raise typer.Exit(3)
+
+    if proc.returncode != 0:
+        # Compile failed — surface stderr but keep going if pcdump.txt
+        # got produced (mwcc sometimes errors after emitting partial dump).
+        typer.echo(proc.stderr, err=True)
+        if not pcdump_path.exists():
+            raise typer.Exit(proc.returncode)
+
+    if not pcdump_path.exists():
+        typer.echo("compile completed but no pcdump.txt was emitted", err=True)
+        raise typer.Exit(4)
+
+    # Place output
+    if str(output) == "-":
+        print(pcdump_path.read_text())
+        pcdump_path.unlink()
+        return
+
+    if output is None:
+        # Cache
+        unit = src_rel[:-2].removeprefix("src/")  # melee/mn/mnvibration
+        from ..mwcc_debug import cache as pcdump_cache
+        pcdump_cache.ensure_cache_dir(melee_root)
+        output = pcdump_cache.cache_path(melee_root, unit)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    pcdump_path.rename(output)
+    print(f"wrote: {output}", file=sys.stderr)

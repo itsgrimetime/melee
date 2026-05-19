@@ -1,0 +1,7 @@
+# Built artifacts
+*.dll
+*.exp
+*.lib
+
+# Zig toolchain (downloaded by build_macos.sh)
+tools/
