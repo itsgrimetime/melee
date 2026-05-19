@@ -125,6 +125,25 @@ MnVibrationJointAssets mnVibration_804A0898;
 
 /// --- Function Implementation ---
 
+static inline HSD_JObj* mnVibration_NthPortChild(HSD_JObj* parent, s32 i)
+{
+    HSD_JObj* jobj;
+
+    if (parent == NULL) {
+        jobj = NULL;
+    } else {
+        jobj = parent->child;
+    }
+    for (; i > 0; i--) {
+        if (jobj == NULL) {
+            jobj = NULL;
+        } else {
+            jobj = jobj->next;
+        }
+    }
+    return jobj;
+}
+
 HSD_JObj* mnVibration_802474C4(s32 count)
 {
     HSD_JObj* temp_r4;
@@ -233,25 +252,10 @@ void fn_80247510(HSD_GObj* gobj)
                 if (GetRumbleSettingOfPort(i) != 0) {
                     gmMainLib_8015ED4C(i, 0);
                     rumble_setting = GetRumbleSettingOfPort(i);
-                    temp_jobj =
+                    jobj = mnVibration_NthPortChild(
                         ((MnVibrationData*) mnVibration_804D6C28->user_data)
-                            ->jobjs[23];
-                    if (temp_jobj == NULL) {
-                        jobj = NULL;
-                    } else {
-                        jobj = temp_jobj->child;
-                    }
-                    var_ctr = i;
-                    if ((s32) i > 0) {
-                        do {
-                            if (jobj == NULL) {
-                                jobj = NULL;
-                            } else {
-                                jobj = jobj->next;
-                            }
-                            var_ctr -= 1;
-                        } while (var_ctr != 0);
-                    }
+                            ->jobjs[23],
+                        i);
                     lb_80011E24(jobj, &panel_jobj, 2, -1, rumble_setting);
                     HSD_JObjReqAnimAll(panel_jobj, (f32) rumble_setting);
                     HSD_JObjAnimAll(panel_jobj);
@@ -261,25 +265,10 @@ void fn_80247510(HSD_GObj* gobj)
                 } else {
                     gmMainLib_8015ED4C(i, 1);
                     rumble_setting = GetRumbleSettingOfPort(i);
-                    temp_jobj =
+                    jobj = mnVibration_NthPortChild(
                         ((MnVibrationData*) mnVibration_804D6C28->user_data)
-                            ->jobjs[23];
-                    if (temp_jobj == NULL) {
-                        jobj = NULL;
-                    } else {
-                        jobj = temp_jobj->child;
-                    }
-                    var_ctr = i;
-                    if ((s32) i > 0) {
-                        do {
-                            if (jobj == NULL) {
-                                jobj = NULL;
-                            } else {
-                                jobj = jobj->next;
-                            }
-                            var_ctr -= 1;
-                        } while (var_ctr != 0);
-                    }
+                            ->jobjs[23],
+                        i);
                     lb_80011E24(jobj, &panel_jobj, 2, -1, rumble_setting);
                     HSD_JObjReqAnimAll(panel_jobj, (f32) rumble_setting);
                     HSD_JObjAnimAll(panel_jobj);
