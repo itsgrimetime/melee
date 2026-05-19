@@ -37,7 +37,15 @@
 extern long HSD_GObj_804D783C;
 void lb_8001CE00(void);
 
-// Local inline JObj functions using ftCo_800C6AFC pattern
+// Note: standard HSD_JObjSetTranslate*/HSD_JObjGetTranslation* come from
+// <baselib/jobj.h> above with the named-extern HSD_ASSERT macro override;
+// fn_80247510 uses those (they expand the HSD_JObjSetMtxDirty macro with the
+// HSD_JObjMtxIsDirty check that matches its target asm).
+//
+// fn_80248A78 (and other intro-animation cursor setup) uses the LOCAL variants
+// below, which call ftCo_800C6AFC directly without the IsDirty check —
+// matches its target asm (the cursor is fresh-created so the IsDirty check
+// is unnecessary, and MWCC reflects that decision).
 static inline f32 mnVibration_JObjGetTranslationX(HSD_JObj* jobj)
 {
     ((jobj) ? ((void) 0)
