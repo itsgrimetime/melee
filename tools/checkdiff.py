@@ -311,6 +311,155 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
     return {"primary": primary, "reasons": reasons}
 
 
+def compute_structural_metrics(ref_lines: list[str], our_lines: list[str]) -> dict:
+    """Metrics that capture *structural* closeness, independent of match%.
+
+    These complement fuzzy_match_percent (which is byte-for-byte) by measuring
+    how close the disassembly *shape* is. Useful when register/operand
+    differences keep match% low even after a structural change brought the
+    function closer to the true match.
+
+    Returned:
+      opcode_similarity (0.0-1.0): normalized similarity over the opcode
+        sequence with operands/registers stripped. 1.0 means same opcodes in
+        same order; 0.0 means nothing in common.
+      line_delta (int): |expected_lines - current_lines|. 0 means same length.
+      hunk_count (int): number of contiguous non-equal regions in the diff.
+        Fewer hunks = more aligned structure.
+    """
+    import difflib
+
+    ref_ops = _mnemonics(ref_lines)
+    our_ops = _mnemonics(our_lines)
+    if ref_ops or our_ops:
+        opcode_similarity = difflib.SequenceMatcher(None, ref_ops, our_ops).ratio()
+    else:
+        opcode_similarity = 1.0
+
+    line_delta = abs(len(ref_lines) - len(our_lines))
+
+    sm = difflib.SequenceMatcher(None, ref_lines, our_lines)
+    hunk_count = sum(1 for tag, *_ in sm.get_opcodes() if tag != "equal")
+
+    return {
+        "opcode_similarity": opcode_similarity,
+        "line_delta": line_delta,
+        "hunk_count": hunk_count,
+    }
+
+
+# Per-worktree cache of last-run metrics per function. Lives under build/
+# (gitignored) so each worktree tracks its own progress independently.
+HISTORY_DIR = ROOT / "build" / ".checkdiff-history"
+
+
+def load_history(func_name: str) -> Optional[dict]:
+    path = HISTORY_DIR / f"{func_name}.json"
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def save_history(func_name: str, snapshot: dict) -> None:
+    try:
+        HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+        (HISTORY_DIR / f"{func_name}.json").write_text(json.dumps(snapshot))
+    except OSError:
+        pass  # non-fatal; history is a convenience, not a requirement
+
+
+def _fmt_delta(current, prev, *, lower_is_better: bool, precision: int = 1) -> str:
+    """Format an inline (↑/↓ N) delta vs prev, or "" if no prev or no change.
+
+    For 'lower is better' metrics (line_delta, hunk_count), ↓ is green progress.
+    For 'higher is better' metrics (match%, opcode similarity), ↑ is green.
+    """
+    if prev is None:
+        return ""
+    try:
+        delta = current - prev
+    except TypeError:
+        return ""
+    if delta == 0:
+        return " ="
+    arrow = "↓" if delta < 0 else "↑"
+    mag = abs(delta)
+    is_progress = (lower_is_better and delta < 0) or (not lower_is_better and delta > 0)
+    marker = "" if is_progress else "  ⚠"
+    if isinstance(current, float) or isinstance(prev, float):
+        return f" ({arrow} {mag:.{precision}f}){marker}"
+    return f" ({arrow} {mag}){marker}"
+
+
+def render_metrics_block(
+    fuzzy_pct: Optional[float],
+    metrics: dict,
+    prev: Optional[dict],
+) -> str:
+    """Multi-line block showing match% + structural metrics with deltas vs prev.
+
+    Designed to make 'structurally improving but match% dropped' obvious so
+    agents don't reflexively revert. Always shows all three structural
+    metrics so the agent has the full picture.
+    """
+    lines = []
+    if fuzzy_pct is not None:
+        d = _fmt_delta(fuzzy_pct, (prev or {}).get("fuzzy_match_percent"), lower_is_better=False)
+        lines.append(f"Match: {fuzzy_pct:.1f}%{d}")
+    op_pct = metrics["opcode_similarity"] * 100
+    op_d = _fmt_delta(op_pct, ((prev or {}).get("opcode_similarity") or 0) * 100 if prev else None, lower_is_better=False)
+    lines.append(f"Opcode similarity: {op_pct:.1f}%{op_d}")
+    ld_d = _fmt_delta(metrics["line_delta"], (prev or {}).get("line_delta"), lower_is_better=True, precision=0)
+    lines.append(f"Line delta: {metrics['line_delta']}{ld_d}")
+    hk_d = _fmt_delta(metrics["hunk_count"], (prev or {}).get("hunk_count"), lower_is_better=True, precision=0)
+    lines.append(f"Hunks: {metrics['hunk_count']}{hk_d}")
+    return "\n".join(lines)
+
+
+def make_progress_note(
+    fuzzy_pct: Optional[float],
+    metrics: dict,
+    prev: Optional[dict],
+) -> Optional[str]:
+    """If match% dropped but structural metrics improved, surface a nudge.
+
+    Catches the 'don't reflexively revert' case: agents see match% go down
+    and undo the change, even when the structure is now closer to the true
+    match (register diffs are surface-level; structure is what unlocks the
+    real match).
+    """
+    if not prev:
+        return None
+    prev_match = prev.get("fuzzy_match_percent")
+    if prev_match is None or fuzzy_pct is None:
+        return None
+    if fuzzy_pct >= prev_match - 0.01:  # not really a drop
+        return None
+    op_now = metrics["opcode_similarity"]
+    op_prev = prev.get("opcode_similarity", 0.0)
+    hunks_now = metrics["hunk_count"]
+    hunks_prev = prev.get("hunk_count", 1 << 30)
+    line_now = metrics["line_delta"]
+    line_prev = prev.get("line_delta", 1 << 30)
+
+    structural_progress = (
+        op_now > op_prev + 0.005
+        or hunks_now < hunks_prev
+        or line_now < line_prev
+    )
+    if not structural_progress:
+        return None
+    return (
+        "NOTE: match% dropped, but structure improved (opcode similarity ↑, "
+        "fewer hunks, or smaller line delta). This is often progress toward "
+        "the true match — don't reflexively revert. Read the full diff and "
+        "decide whether the new structure looks closer to expected."
+    )
+
+
 def format_side_by_side(ref_lines: list[str], our_lines: list[str], width: int = 56) -> str:
     """Generate a side-by-side diff comparing expected (left) vs current (right)."""
     import difflib
@@ -556,9 +705,19 @@ def main() -> int:
         our_lines = our_asm.split("\n")
         classification = classify_asm_diff(ref_lines, our_lines)
 
+        fuzzy_pct = get_fuzzy_match_percent(func_name)
+        metrics = compute_structural_metrics(ref_lines, our_lines)
+        prev_metrics = load_history(func_name)
+        progress_note = make_progress_note(fuzzy_pct, metrics, prev_metrics)
+        snapshot = {
+            "fuzzy_match_percent": fuzzy_pct,
+            **metrics,
+            "matched": ref_asm == our_asm,
+        }
+        save_history(func_name, snapshot)
+
         if args.format == "json":
             import json as json_mod
-            fuzzy_pct = get_fuzzy_match_percent(func_name)
             diff_data = {
                 "function": func_name,
                 "reference_lines": len(ref_lines),
@@ -566,6 +725,9 @@ def main() -> int:
                 "match": ref_asm == our_asm,
                 "classification": classification,
                 "fuzzy_match_percent": fuzzy_pct,
+                "structural": metrics,
+                "previous_run": prev_metrics,
+                "progress_note": progress_note,
                 "target_asm": ref_lines,
                 "current_asm": our_lines,
                 "diff": list(difflib.unified_diff(ref_lines, our_lines,
@@ -574,14 +736,14 @@ def main() -> int:
             print(json_mod.dumps(diff_data, indent=2))
         elif args.format == "side-by-side":
             # Side-by-side diff (better for agents to understand)
-            fuzzy_pct = get_fuzzy_match_percent(func_name)
             if ref_asm == our_asm:
                 print(f"--- MATCH: {func_name} matches! ---")
                 result = subprocess.CompletedProcess([], 0)
             else:
                 print(f"Function: {func_name}")
-                if fuzzy_pct is not None:
-                    print(f"Match: {fuzzy_pct:.1f}%")
+                print(render_metrics_block(fuzzy_pct, metrics, prev_metrics))
+                if progress_note:
+                    print(progress_note)
                 print(f"Classification: {classification['primary']}")
                 for reason in classification["reasons"]:
                     print(f"  - {reason}")
