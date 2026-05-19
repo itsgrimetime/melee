@@ -2365,6 +2365,19 @@ bool lbColl_80009F54(HitCapsule* hit, u32 arg1, float arg8)
 extern GXColor lbColl_804D36E8;
 extern GXColor lbColl_804D36EC;
 
+static inline void lbColl_DrawHitResult(MtxPtr mtx, Vec3* a, Vec3* b,
+                                        GXColor* c0, GXColor* c1, f32 size)
+{
+    Vec3 sp30;
+    Vec3 sp24;
+    Mtx sp3C;
+
+    HSD_MtxInverse(mtx, sp3C);
+    PSMTXMultVec(sp3C, a, &sp30);
+    PSMTXMultVec(sp3C, b, &sp24);
+    lbColl_800096B4(mtx, sp30, sp24, c0, c1, size);
+}
+
 bool lbColl_8000A044(HitCapsule* hit, u32 arg1, float arg8)
 {
     float var_f1;
@@ -2395,9 +2408,6 @@ bool lbColl_8000A244(HurtCapsule* hurt, u32 arg1, Mtx arg2, float arg3)
     Mtx sp9C;
     Vec3 sp90;
     Vec3 sp84;
-    Vec3 sp78;
-    Vec3 sp6C;
-    Mtx sp3C;
     float temp_f31;
     MtxPtr var_r28;
     GXColor* temp_r31_2;
@@ -2432,10 +2442,8 @@ bool lbColl_8000A244(HurtCapsule* hurt, u32 arg1, Mtx arg2, float arg3)
         } else {
             var_r28 = HSD_JObjGetMtxPtr(hurt->bone);
         }
-        HSD_MtxInverse(var_r28, sp3C);
-        PSMTXMultVec(sp3C, &sp90, &sp6C);
-        PSMTXMultVec(sp3C, &sp84, &sp78);
-        lbColl_800096B4(var_r28, sp6C, sp78, temp_r3, temp_r31_2, temp_f31);
+        lbColl_DrawHitResult(var_r28, &sp90, &sp84, temp_r3, temp_r31_2,
+                             temp_f31);
         return true;
     }
     return false;
@@ -2512,9 +2520,6 @@ bool lbColl_8000A584(HurtCapsule* hurt, u32 arg1, u32 arg2, Mtx arg3, f32 arg8)
         Mtx spA0;
         Vec3 sp94;
         Vec3 sp88;
-        Vec3 sp34;
-        Vec3 sp28;
-        Mtx sp40;
         f32 temp_f31;
         GXColor* temp_r31_2;
         MtxPtr var_r28;
@@ -2554,11 +2559,8 @@ bool lbColl_8000A584(HurtCapsule* hurt, u32 arg1, u32 arg2, Mtx arg3, f32 arg8)
             } else {
                 var_r28 = HSD_JObjGetMtxPtr(hurt->bone);
             }
-            HSD_MtxInverse(var_r28, sp40);
-            PSMTXMultVec(sp40, &sp94, &sp28);
-            PSMTXMultVec(sp40, &sp88, &sp34);
-            lbColl_800096B4(var_r28, sp28, sp34, temp_r3, temp_r31_2,
-                            temp_f31);
+            lbColl_DrawHitResult(var_r28, &sp94, &sp88, temp_r3, temp_r31_2,
+                                 temp_f31);
             return true;
         }
         return false;
@@ -2571,9 +2573,6 @@ bool lbColl_8000A78C(HitResult* hit, u32 arg1, Mtx arg2, f32 pos_z)
     Mtx sp9C;
     Vec3 sp90;
     Vec3 sp84;
-    Vec3 sp30;
-    Vec3 sp24;
-    Mtx sp3C;
     MtxPtr var_r31;
     u32 var_r0;
 
@@ -2601,11 +2600,8 @@ bool lbColl_8000A78C(HitResult* hit, u32 arg1, Mtx arg2, f32 pos_z)
         } else {
             var_r31 = HSD_JObjGetMtxPtr(hit->bone);
         }
-        HSD_MtxInverse(var_r31, sp3C);
-        PSMTXMultVec(sp3C, &sp90, &sp24);
-        PSMTXMultVec(sp3C, &sp84, &sp30);
-        lbColl_800096B4(var_r31, sp24, sp30, &lbColl_804D36C4,
-                        &lbColl_804D36C8, temp_f31);
+        lbColl_DrawHitResult(var_r31, &sp90, &sp84, &lbColl_804D36C4,
+                             &lbColl_804D36C8, temp_f31);
         return true;
     }
     return false;
@@ -2616,9 +2612,6 @@ bool lbColl_8000A95C(HitResult* hit, u32 arg1, Mtx arg2, f32 pos_z)
     Mtx sp9C;
     Vec3 sp90;
     Vec3 sp84;
-    Vec3 sp30;
-    Vec3 sp24;
-    Mtx sp3C;
 
     f32 temp_f31;
     MtxPtr var_r31;
@@ -2648,11 +2641,8 @@ bool lbColl_8000A95C(HitResult* hit, u32 arg1, Mtx arg2, f32 pos_z)
         } else {
             var_r31 = HSD_JObjGetMtxPtr(hit->bone);
         }
-        HSD_MtxInverse(var_r31, sp3C);
-        PSMTXMultVec(sp3C, &sp90, &sp24);
-        PSMTXMultVec(sp3C, &sp84, &sp30);
-        lbColl_800096B4(var_r31, sp24, sp30, &lbColl_804D36CC,
-                        &lbColl_804D36D0, temp_f31);
+        lbColl_DrawHitResult(var_r31, &sp90, &sp84, &lbColl_804D36CC,
+                             &lbColl_804D36D0, temp_f31);
         return true;
     }
     return false;
@@ -2663,9 +2653,6 @@ bool lbColl_8000AB2C(HitResult* hit, u32 arg1, MtxPtr arg2, f32 pos_z)
     Mtx sp9C;
     Vec3 sp90;
     Vec3 sp84;
-    Vec3 sp30;
-    Vec3 sp24;
-    Mtx sp3C;
 
     f32 temp_f31;
     MtxPtr var_r31;
@@ -2695,11 +2682,8 @@ bool lbColl_8000AB2C(HitResult* hit, u32 arg1, MtxPtr arg2, f32 pos_z)
         } else {
             var_r31 = HSD_JObjGetMtxPtr(hit->bone);
         }
-        HSD_MtxInverse(var_r31, sp3C);
-        PSMTXMultVec(sp3C, &sp90, &sp24);
-        PSMTXMultVec(sp3C, &sp84, &sp30);
-        lbColl_800096B4(var_r31, sp24, sp30, &lbColl_804D36D4,
-                        &lbColl_804D36D8, temp_f31);
+        lbColl_DrawHitResult(var_r31, &sp90, &sp84, &lbColl_804D36D4,
+                             &lbColl_804D36D8, temp_f31);
         return true;
     }
     return false;
