@@ -1,12 +1,19 @@
 # mwcc-debug ↔ decomp-permuter integration
 
-Implementation notes for the Tier 7e integration. Captures what v1
-ships, where the friction points are, and what v2/v3 would look like.
+Implementation notes for the integration. Captures what's shipped,
+where the friction points are, and what v2/v3 would look like.
 
-## v1 (shipped)
+## Important: there is NO patched permuter
 
-Two complementary commands cover the matching agent's MVP request from
-the session findings doc:
+`decomp-permuter` itself is unforked upstream. mwcc-debug provides
+complementary CLI commands that:
+1. **Inform** permuter (pre-run) by generating pattern-tuned config
+2. **Filter** permuter output (post-run) by triaging real-tree match%
+
+If a new agent is looking for "the augmented permuter binary," they
+won't find one. Direct them at the three commands below.
+
+## Tier 0 (shipped — basic integration)
 
 ### `melee-agent debug verify-perm <candidate.c> -f FN [--keep]`
 
@@ -25,6 +32,62 @@ actually improve real-tree match%.
 Per-candidate cost: ~5-10 seconds (one ninja per .c + report.json
 regen). For a typical permuter session with ~100 winners, total triage
 time is a few minutes.
+
+## Tier 1 (shipped — pattern-tuned config)
+
+### `melee-agent debug gen-permuter-config -f FN [options]`
+
+Generates a `<perm_root>/nonmatchings/<fn>/settings.toml` whose
+`[weight_overrides]` are tuned to mwcc-debug's pattern detection.
+Saves the agent from hand-tuning weights per function.
+
+Pattern → weight-boost mapping (from `patterns.py`):
+
+| Pattern | Boosted mutations | Why |
+|---------|-------------------|-----|
+| `decl-order` | reorder_decls=80, temp_for_expr=30, ins_block=20 | Direct decl moves + intermediate decls in new positions |
+| `alias-split` | temp_for_expr=60, refer_to_var=30, expand_expr=15 | Fresh-local extraction shortens live ranges |
+| `widen-u8-to-u32` | randomize_internal_type=50, cast_simple=30 | Type changes for promotion-mask elimination |
+| `shrink-s32-to-u8` | randomize_internal_type=50, cast_simple=30 | Mirror of widen |
+| `drop-variadic-cast` | cast_simple=60, expand_expr=30 | Remove explicit (f32) casts |
+| `subexpr-extract` | temp_for_expr=80, expand_expr=30 | Pull subexpressions into named locals |
+| `chained-init` | chain_assignment=50, duplicate_assignment=20 | `a = (b = 0)` style |
+| `param-iter-ceiling` | (refuses to generate) | Tier 6 — no C-source fix exists |
+
+Detection: scores against `--target` (a YAML/JSON spec, typically
+produced by `debug derive-target`); the highest-severity suggestion's
+category determines the pattern. With no target, falls back to stock
+settings unless `--pattern` is given.
+
+Special case for `param-iter-ceiling`: the command refuses to generate
+a config and instead prints "this is Tier 6 — permuter cannot fix it,
+use `match-iter-first` instead." Pass `--force` to override.
+
+For `decl-order`: also prints a recommendation to try
+`enumerate-decl-orders` first, which is deterministic and ~100x faster
+than letting permuter rediscover decl-order via random mutation.
+
+### Workflow
+
+```bash
+# 1. Generate a tuned config
+melee-agent debug gen-permuter-config -f my_stuck_fn \
+    --target target.json
+
+# 2. Run permuter (unmodified upstream)
+cd ~/code/decomp-permuter
+./permuter.py nonmatchings/my_stuck_fn --threads 8
+
+# 3. Triage winners against the real tree
+cd ~/code/melee
+melee-agent debug triage-perm \
+    ~/code/decomp-permuter/nonmatchings/my_stuck_fn -f my_stuck_fn
+
+# 4. Apply the best confirmed winner
+melee-agent debug triage-perm \
+    ~/code/decomp-permuter/nonmatchings/my_stuck_fn -f my_stuck_fn \
+    --apply-best
+```
 
 ## How to use with decomp-permuter
 

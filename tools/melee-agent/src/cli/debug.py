@@ -3264,3 +3264,306 @@ def name_magic(
     print(f"Renamed {len(renames)} symbol(s) in {target}:")
     for old, new in renames:
         print(f"  {old} -> {new}")
+
+
+@debug_app.command(name="gen-permuter-config")
+def gen_permuter_config(
+    function: Annotated[
+        str,
+        typer.Option(
+            "--function", "-f",
+            help="Function to generate permuter config for (required).",
+        ),
+    ],
+    pcdump: Annotated[
+        Optional[Path],
+        typer.Argument(
+            help="Path to pcdump.txt. Omit to auto-resolve via --function "
+                 "from the cache.",
+        ),
+    ] = None,
+    pattern: Annotated[
+        Optional[str],
+        typer.Option(
+            "--pattern", "-p",
+            help="Override pattern auto-detection. Use a name from "
+                 "`debug pattern-catalog` (e.g. decl-order, alias-split).",
+        ),
+    ] = None,
+    target: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--target", "-t",
+            help="Target spec (YAML or JSON, from `debug derive-target`). "
+                 "Auto-detection needs this to identify wrong virtuals. "
+                 "Without it, falls back to stock settings unless "
+                 "--pattern is provided.",
+        ),
+    ] = None,
+    out: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--out", "-o",
+            help="Output path. Default: "
+                 "<perm-root>/nonmatchings/<function>/settings.toml",
+        ),
+    ] = None,
+    perm_root: Annotated[
+        Path,
+        typer.Option(
+            "--perm-root",
+            help="Root of decomp-permuter clone.",
+        ),
+    ] = Path("~/code/decomp-permuter").expanduser(),
+    print_only: Annotated[
+        bool,
+        typer.Option(
+            "--print",
+            help="Print rendered TOML to stdout instead of writing.",
+        ),
+    ] = False,
+    merge: Annotated[
+        bool,
+        typer.Option(
+            "--merge",
+            help="Preserve existing [weight_overrides] keys not touched "
+                 "by the pattern profile. Default: overwrite.",
+        ),
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Generate config even for skip-marked patterns "
+                 "(e.g. param-iter-ceiling). Use only if you know why.",
+        ),
+    ] = False,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit a JSON summary of the action."),
+    ] = False,
+) -> None:
+    """Generate a decomp-permuter settings.toml tuned for the detected pattern.
+
+    Pairs with `debug triage-perm` to close the integration loop: this
+    command BIASES which mutations permuter prefers based on mwcc-debug's
+    pattern detection, then triage-perm filters out base.c-vs-real-tree
+    drift on the resulting winners.
+
+    For patterns marked as structural ceilings (param-iter-ceiling),
+    this command refuses to generate a config and explains why — permuter
+    cannot fix those from C source. Use `--force` to override.
+
+    For `decl-order` specifically, you should ALSO run
+    `debug enumerate-decl-orders` first — it's deterministic and
+    ~100x faster than letting permuter rediscover decl-order rounds.
+    """
+    from ..mwcc_debug.patterns import (
+        PATTERNS,
+        get_pattern,
+        patterns_for_category,
+    )
+    from ..mwcc_debug.permuter_config import (
+        PatternSkippedError,
+        build_spec,
+        parse_existing_overrides,
+        render_settings_toml,
+        write_settings_toml,
+    )
+
+    melee_root = DEFAULT_MELEE_ROOT
+
+    # Determine the pattern
+    detected_via: str = ""
+    selected: Optional = None  # type: ignore[type-arg]
+    if pattern is not None:
+        # Explicit pattern — skip pcdump resolution entirely. Useful when
+        # the function isn't yet in report.json (e.g. setting up permuter
+        # for a newly-imported function).
+        selected = get_pattern(pattern)
+        if selected is None:
+            typer.echo(
+                f"unknown pattern: {pattern!r}. "
+                f"Run `melee-agent debug pattern-catalog` to list.",
+                err=True,
+            )
+            raise typer.Exit(2)
+        detected_via = "--pattern flag"
+    else:
+        # Auto-detect via guide/suggest infrastructure
+        pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
+        text = pcdump_path.read_text()
+        fns = parse_pcdump(text)
+        fn = next((f for f in fns if f.name == function), None)
+        if fn is None:
+            _abort_function_not_in_dump(function, [f.name for f in fns])
+        events_list = parse_hook_events(text)
+        events = find_function(events_list, function)
+        if target is not None:
+            target_spec = _load_target_spec(target)
+        else:
+            target_spec = {"virtuals": {}}
+        result = score_function(fn, target_spec, events=events)
+        suggestions = suggest(fn, result, events=events)
+
+        # Walk suggestions in severity order. For each, find the best-fit
+        # pattern. Prefer permuter_skip patterns (structural ceilings)
+        # when they match — those need a different message.
+        for s in suggestions:
+            candidates = patterns_for_category(s.category)
+            # Prefer skip-marked patterns (they're more specific signals)
+            skip_candidates = [p for p in candidates if p.permuter_skip]
+            if skip_candidates:
+                selected = skip_candidates[0]
+                detected_via = (
+                    f"suggestion category={s.category!r} (severity={s.severity})"
+                )
+                break
+            # Otherwise pick the first pattern with weights
+            for p in candidates:
+                if p.permuter_weights:
+                    selected = p
+                    detected_via = (
+                        f"suggestion category={s.category!r} "
+                        f"(severity={s.severity})"
+                    )
+                    break
+            if selected is not None:
+                break
+
+        if selected is None and suggestions:
+            # Suggestions exist but no pattern has weights for any category
+            detected_via = "no pattern matched any suggestion category"
+
+    # Resolve output path
+    if out is None:
+        if not perm_root.exists():
+            typer.echo(
+                f"--perm-root {perm_root} does not exist. "
+                f"Clone decomp-permuter there or pass --out explicitly.",
+                err=True,
+            )
+            raise typer.Exit(2)
+        fn_dir = perm_root / "nonmatchings" / function
+        if not fn_dir.exists() and not print_only:
+            typer.echo(
+                f"{fn_dir} does not exist. "
+                f"Run `./import.py <c_file> <s_file>` in {perm_root} "
+                f"first to set up this function.",
+                err=True,
+            )
+            raise typer.Exit(2)
+        out = fn_dir / "settings.toml"
+
+    # Read existing overrides if present (for --merge)
+    existing_overrides: dict[str, float] = {}
+    if out.exists() and merge:
+        existing_overrides = parse_existing_overrides(out.read_text())
+
+    # Build the spec
+    try:
+        spec = build_spec(
+            function,
+            selected,
+            existing_overrides=existing_overrides,
+            merge=merge,
+            force=force,
+        )
+    except PatternSkippedError:
+        # Structural ceiling — print guidance instead of writing
+        assert selected is not None
+        if json_out:
+            print(json.dumps({
+                "function": function,
+                "pattern": selected.name,
+                "detected_via": detected_via,
+                "action": "skipped",
+                "reason": "permuter_skip=True (Tier 6 structural ceiling)",
+            }, indent=2))
+            raise typer.Exit(1)
+        typer.echo(
+            f"Pattern: {selected.name} "
+            f"(detected via {detected_via})",
+            err=True,
+        )
+        typer.echo("", err=True)
+        typer.echo(
+            "This is a Tier 6 structural ceiling — permuter cannot fix "
+            "it from C source. The parameter virtual gets a low ig_idx "
+            "by C semantics, and locals always win the top callee-saves.",
+            err=True,
+        )
+        typer.echo("", err=True)
+        typer.echo(
+            "Recommended: confirm via `debug match-iter-first -f "
+            f"{function}` and document the function as Tier 6.",
+            err=True,
+        )
+        typer.echo(
+            "Pass --force to gen-permuter-config if you want a config "
+            "anyway (no permuter_weights will be applied).",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    # Render
+    rendered = render_settings_toml(spec)
+
+    if print_only:
+        if json_out:
+            print(json.dumps({
+                "function": function,
+                "pattern": spec.pattern_name,
+                "detected_via": detected_via,
+                "action": "printed",
+                "overrides": spec.weight_overrides,
+                "toml": rendered,
+            }, indent=2))
+            return
+        print(rendered, end="")
+        return
+
+    write_settings_toml(spec, out)
+
+    if json_out:
+        print(json.dumps({
+            "function": function,
+            "pattern": spec.pattern_name,
+            "detected_via": detected_via,
+            "action": "wrote",
+            "path": str(out),
+            "overrides": spec.weight_overrides,
+        }, indent=2))
+        return
+
+    if spec.pattern_name:
+        print(f"Pattern: {spec.pattern_name} (detected via {detected_via})")
+        if spec.weight_overrides:
+            print(f"Weight overrides:")
+            for key in sorted(spec.weight_overrides):
+                print(f"  {key} = {spec.weight_overrides[key]}")
+    else:
+        print(f"No pattern detected ({detected_via or 'no suggestions'}). "
+              f"Wrote stock settings.")
+    print(f"Wrote: {out}")
+    print()
+
+    # Tail recommendation
+    if spec.pattern_name == "decl-order":
+        print(
+            "Tip: for decl-order specifically, try the deterministic "
+            "search first — it's ~100x faster than letting permuter "
+            "rediscover decl-order rounds:"
+        )
+        print(
+            f"  melee-agent debug enumerate-decl-orders "
+            f"-f {function} --keep-best"
+        )
+        print(
+            "If that doesn't find a win, fall back to permuter with "
+            "this config."
+        )
+    else:
+        rel_dir = out.parent.relative_to(perm_root) \
+            if perm_root in out.parents else out.parent
+        print(f"Run: cd {perm_root} && ./permuter.py {rel_dir}")

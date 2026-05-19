@@ -307,10 +307,20 @@ melee-agent debug suggest-casts my_fn --severity all --asm
 # Batch-triage permuter outputs against the real tree
 melee-agent debug triage-perm permute_output_dir -f my_fn
 melee-agent debug triage-perm permute_output_dir -f my_fn --apply-best
+
+# Generate a pattern-tuned permuter settings.toml so permuter biases
+# toward the mutation family that addresses this function's pattern.
+# Pairs with triage-perm: tune-then-triage is the full loop.
+melee-agent debug gen-permuter-config -f my_fn --target target.json
+melee-agent debug gen-permuter-config -f my_fn --pattern decl-order
+melee-agent debug gen-permuter-config -f my_fn --print  # dry-run
 ```
 
-For permuter integration details, see
-[docs/mwcc-debug-permuter-integration.md](../../docs/mwcc-debug-permuter-integration.md).
+**There is NO patched permuter binary.** Run upstream `decomp-permuter`
+as usual; mwcc-debug just informs (`gen-permuter-config`) and filters
+(`triage-perm`) around it. See
+[docs/mwcc-debug-permuter-integration.md](../../docs/mwcc-debug-permuter-integration.md)
+for the full Tier 0 / Tier 1 / deferred-tier picture.
 
 The wrapper:
 1. SSHes to the remote with the relative .c path
