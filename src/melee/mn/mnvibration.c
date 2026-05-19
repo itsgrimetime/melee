@@ -243,7 +243,7 @@ void fn_80247510(HSD_GObj* gobj)
     // Handle B button - exit menu
     inputs = gm_801A36A0(4);
     name_idx = 0;
-    if (inputs & 2) {
+    if (inputs & (2LL << 32)) {
         MnVibrationData* exit_data;
         lbAudioAx_80024030(name_idx);
         mn_804A04F0.entering_menu = name_idx;
@@ -263,18 +263,18 @@ void fn_80247510(HSD_GObj* gobj)
     }
 
     // Check animation timer
-    if (data->x0[name_idx] <=
+    if (data->x0[0] <=
         ((AnimLoopSettings*) &mnVibration_803EECE0)->end_frame)
     {
-        data->x0[name_idx]++;
+        data->x0[0]++;
         return;
     }
 
     // Check A button per controller for rumble toggle
     for (i = 0; i < 4; i++) {
-        if (data->x0[i + 2] == name_idx) {
+        if (data->x0[i + 2] == 0) {
             inputs = gm_801A36A0(i);
-            if (inputs & 1) {
+            if (inputs & (1LL << 32)) {
                 HSD_JObj* panel_jobj;
                 lbAudioAx_80024030(1);
                 if (GetRumbleSettingOfPort(i) != 0) {
@@ -317,14 +317,14 @@ void fn_80247510(HSD_GObj* gobj)
     // Check for up/down navigation
     for (i = 0; i < 4; i++) {
         inputs = gm_801A36A0(i);
-        if ((inputs & 0x40) && data->x0[i + 2] == 1) {
+        if ((inputs & (0x40LL << 32)) && data->x0[i + 2] == 1) {
             HSD_JObj* panel_jobj;
             lbAudioAx_80024030(2);
             data->x0[i + 2] = 0;
             panel_jobj = data->jobjs[mnVibration_804D4FE8[i]];
             HSD_JObjReqAnimAll(panel_jobj, (f32) data->x0[i + 2]);
             HSD_JObjAnimAll(panel_jobj);
-        } else if (inputs & 0x80) {
+        } else if (inputs & (0x80LL << 32)) {
             if (data->x0[i + 2] == 0) {
                 s32 port_idx;
                 HSD_JObj* panel_jobj;
@@ -348,7 +348,7 @@ void fn_80247510(HSD_GObj* gobj)
     }
 
     // Handle A button to toggle rumble setting for selected name
-    if (inputs_repeat & 1) {
+    if (inputs_repeat & (1LL << 32)) {
         lbAudioAx_80024030(1);
         cursor_row = data->x0[1];
         name_idx = mnVibration_GetNameSlot(data, cursor_row);
@@ -365,7 +365,7 @@ void fn_80247510(HSD_GObj* gobj)
     }
 
     // Handle up navigation
-    if (inputs_repeat & 0x10) {
+    if (inputs_repeat & (0x10LL << 32)) {
         cursor_row = data->x0[1];
         if (cursor_row != 0) {
             name_idx =
@@ -397,7 +397,7 @@ void fn_80247510(HSD_GObj* gobj)
     }
 
     // Handle down navigation
-    if (inputs_repeat & 0x20) {
+    if (inputs_repeat & (0x20LL << 32)) {
         cursor_row = data->x0[1];
         if (cursor_row < 7) {
             name_idx = mnVibration_GetNameSlot(data, cursor_row + 1);
