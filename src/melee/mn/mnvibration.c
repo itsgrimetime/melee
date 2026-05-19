@@ -221,6 +221,7 @@ void fn_80247510(HSD_GObj* gobj)
     MnVibrationData* data = mnVibration_804D6C28->user_data;
     s32 i;
     u64 inputs;
+    HSD_JObj** jobjs;
     u64 inputs_repeat;
     u8 cursor_row;
     u8 name_idx;
@@ -388,6 +389,7 @@ void fn_80247510(HSD_GObj* gobj)
     if (inputs_repeat & 0x20) {
         cursor_row = data->x0[1];
         if (cursor_row < 7) {
+            jobjs = data->jobjs;
             name_idx = mnVibration_GetNameSlot(data, cursor_row + 1);
             if (name_idx != 0xFF) {
                 f32 dy;
@@ -396,16 +398,16 @@ void fn_80247510(HSD_GObj* gobj)
                 data->x0[1]++;
                 inputs_repeat = data->x0[1];
                 dy = (HSD_JObjGetTranslationY(data->jobjs[18]) -
-                      HSD_JObjGetTranslationY(data->jobjs[17])) *
+                      HSD_JObjGetTranslationY(jobjs[17])) *
                      (f32) inputs_repeat;
                 cursor_jobj = data->cursor_gobj->hsd_obj;
                 HSD_JObjSetTranslateX(
-                    cursor_jobj, HSD_JObjGetTranslationX(data->jobjs[17]));
+                    cursor_jobj, HSD_JObjGetTranslationX(jobjs[17]));
                 HSD_JObjSetTranslateY(
                     cursor_jobj,
                     dy + HSD_JObjGetTranslationY(data->jobjs[17]));
                 HSD_JObjSetTranslateZ(
-                    cursor_jobj, HSD_JObjGetTranslationZ(data->jobjs[17]));
+                    cursor_jobj, HSD_JObjGetTranslationZ(jobjs[17]));
             }
         } else if (GetNameCount() > 8) {
             name_idx = mnVibration_GetNameSlot(data, 8);
