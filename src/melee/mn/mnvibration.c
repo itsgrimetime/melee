@@ -326,7 +326,8 @@ void fn_80247510(HSD_GObj* gobj)
                 port_idx = i;
                 data->x0[port_idx + 2] = 1;
                 panel_jobj = data->jobjs[mnVibration_804D4FE8[port_idx]];
-                HSD_JObjReqAnimAll(panel_jobj, (f32) data->x0[port_idx + 2]);
+                i = port_idx;
+                HSD_JObjReqAnimAll(panel_jobj, (f32) data->x0[i + 2]);
                 HSD_JObjAnimAll(panel_jobj);
             }
         }
@@ -401,13 +402,13 @@ void fn_80247510(HSD_GObj* gobj)
                       HSD_JObjGetTranslationY(jobjs[17])) *
                      (f32) inputs_repeat;
                 cursor_jobj = data->cursor_gobj->hsd_obj;
-                HSD_JObjSetTranslateX(
-                    cursor_jobj, HSD_JObjGetTranslationX(jobjs[17]));
+                HSD_JObjSetTranslateX(cursor_jobj,
+                                      HSD_JObjGetTranslationX(jobjs[17]));
                 HSD_JObjSetTranslateY(
                     cursor_jobj,
                     dy + HSD_JObjGetTranslationY(data->jobjs[17]));
-                HSD_JObjSetTranslateZ(
-                    cursor_jobj, HSD_JObjGetTranslationZ(jobjs[17]));
+                HSD_JObjSetTranslateZ(cursor_jobj,
+                                      HSD_JObjGetTranslationZ(jobjs[17]));
             }
         } else if (GetNameCount() > 8) {
             name_idx = mnVibration_GetNameSlot(data, 8);
