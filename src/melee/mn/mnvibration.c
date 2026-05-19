@@ -648,7 +648,7 @@ void fn_802487A8(HSD_GObj* gobj)
     }
     // First loop: per-port, set animation state matching current rumble
     // setting (rumble_on -> animate, rumble_off -> hold at frame 0).
-    port_b = (port_a = 0);
+    port_a = 0;
     do {
         void* root_jobj;
         root_jobj = ((MnVibrationData*) gobj->user_data)->jobjs[23];
@@ -680,6 +680,7 @@ void fn_802487A8(HSD_GObj* gobj)
     // Second loop: detect controller connect/disconnect transitions per
     // port, update data->x6[port] flag and refresh the corresponding
     // visual indicators. err is from HSD_PadCopyStatus[port].err byte.
+    port_b = 0;
     idx_ptr = (idx_ptr_chained = mnVibration_804D4FE8);
     do {
         err = *((u8*) ((u8*) HSD_PadCopyStatus + (u8) port_b * 0x44) + 0x41);
@@ -738,7 +739,9 @@ void fn_802487A8(HSD_GObj* gobj)
                     root_jobj = ((MnVibrationData*) (gobj_user_data_alias =
                                                          gobj->user_data))
                                     ->jobjs[23];
-                    if (root_jobj != NULL) {
+                    if (root_jobj == NULL) {
+                        walker_b_clear = NULL;
+                    } else {
                         walker_b_clear = root_jobj->child;
                     }
                 }
