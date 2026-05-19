@@ -1168,6 +1168,11 @@ block_39:
     start_delta_x = hit_start_copy.x - hurt_start_copy.x;
     hurt_delta_z = hurt_end_z - hurt_start_copy.z;
     segment_dot = (hit_delta.x * hurt_delta_x) + segment_dot;
+    /* Cache 1.0 constant in a callee-save to avoid reloading it across the
+     * several `hit_param = 1.0` / `hurt_param = 1.0` branches below. The
+     * variable name is a borrow from the unused-after-broadphase-rejection
+     * slot. */
+    hit_start_min_z = lbColl_804D7A08;
     hurt_len_sq = (hurt_delta_x * hurt_delta_x) + hurt_len_sq;
     segment_dot = (hit_delta.z * hurt_delta_z) + segment_dot;
     hurt_len_sq = (hurt_delta_z * hurt_delta_z) + hurt_len_sq;
@@ -1201,7 +1206,7 @@ block_39:
             projected_hit_param = -hit_start_dot / hit_len_sq;
             hit_param = projected_hit_param;
             if (projected_hit_param > lbColl_804D7A00) {
-                hit_param = lbColl_804D7A08;
+                hit_param = hit_start_min_z;
             } else if (hit_param < lbColl_804D7A10) {
                 hit_param = hurt_param;
             }
@@ -1251,12 +1256,14 @@ block_39:
                     dot = (d1.z * (c3.z - a2.z)) +
                           ((d1.x * (c3.x - a2.x)) +
                            (d1.y * (c3.y - a2.y)));
+                    hit_end_mid_x = d1.x * d1.x;
                     hurt_param_from_hit_start =
                         -dot /
-                        ((d1.z * d1.z) + ((d1.x * d1.x) + (d1.y * d1.y)));
+                        ((d1.z * d1.z) +
+                         (hit_end_mid_x + (d1.y * d1.y)));
                 }
                 if (hurt_param_from_hit_start > lbColl_804D7A00) {
-                    hurt_param_from_hit_start = lbColl_804D7A08;
+                    hurt_param_from_hit_start = hit_start_min_z;
                 } else if (hurt_param_from_hit_start < lbColl_804D7A10) {
                     hurt_param_from_hit_start = hit_param;
                 }
@@ -1266,7 +1273,7 @@ block_39:
                 Vec3 d1;
                 Vec3 c2;
                 c2 = *hurt_start;
-                hit_param = lbColl_804D7A08;
+                hit_param = hit_start_min_z;
                 d1.x = hurt_end_x - hurt_start->x;
                 d1.y = hurt_end_y - hurt_start->y;
                 d1.z = hurt_end_z - hurt_start->z;
@@ -1314,7 +1321,7 @@ block_39:
                         lbColl_80005EBC(hurt_start, hurt_end, hit_start,
                                         &candidate_hurt_param);
                 } else {
-                    hit_endpoint_param = lbColl_804D7A08;
+                    hit_endpoint_param = hit_start_min_z;
                     hit_endpoint_dist_sq = lbColl_80005EBC(
                         hurt_start, hurt_end, hit_end, &candidate_hurt_param);
                 }
@@ -1323,7 +1330,7 @@ block_39:
                     hurt_endpoint_dist_sq = lbColl_80005EBC(
                         hit_start, hit_end, hurt_start, &candidate_hit_param);
                 } else {
-                    hurt_endpoint_param = lbColl_804D7A08;
+                    hurt_endpoint_param = hit_start_min_z;
                     hurt_endpoint_dist_sq = lbColl_80005EBC(
                         hit_start, hit_end, hurt_end, &candidate_hit_param);
                 }
