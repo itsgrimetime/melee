@@ -168,6 +168,21 @@ static inline s32 mnVibration_GetNameSlot(MnVibrationData* data, s32 j)
     return (u8) name_idx;
 }
 
+static inline HSD_GObj* mnVibration_CreateCursorGObj(
+    MnVibrationData* data, MnVibrationJointAssets* assets)
+{
+    HSD_GObj* cursor_gobj;
+    HSD_JObj* loaded_joint;
+
+    cursor_gobj = GObj_Create(6, 7, 0x80);
+    data->cursor_gobj = cursor_gobj;
+    loaded_joint = HSD_JObjLoadJoint(assets->joint);
+    HSD_GObjObject_80390A70(cursor_gobj, HSD_GObj_804D7849, loaded_joint);
+    GObj_SetupGXLink(cursor_gobj, HSD_GObj_JObjCallback, 4, 0x80);
+    HSD_GObj_SetupProc(cursor_gobj, fn_80248084, 0);
+    return cursor_gobj;
+}
+
 #pragma push
 #pragma dont_inline on
 HSD_JObj* mnVibration_802474C4(s32 count)
@@ -800,7 +815,7 @@ void fn_80248A78(HSD_GObj* gobj)
 {
     MnVibrationData* data = gobj->user_data;
     f32 frame;
-    PAD_STACK(64);
+    PAD_STACK(56);
 
     frame = mn_8022ED6C(data->jobjs[1],
                         (AnimLoopSettings*) &mnVibration_803EECE0);
@@ -821,7 +836,6 @@ void fn_80248A78(HSD_GObj* gobj)
             HSD_JObj* cursor_jobj;
             HSD_JObj* row_0_jobj;
             HSD_JObj* row_1_jobj;
-            HSD_JObj* loaded_joint;
             f32 row_spacing;
             f32 base_y;
             f32 temp_x;
@@ -835,13 +849,7 @@ void fn_80248A78(HSD_GObj* gobj)
             // Create the cursor highlight gobj and attach its joint tree.
             assets = &mnVibration_804A0868;
             data = gobj->user_data;
-            cursor_gobj = GObj_Create(6, 7, 0x80);
-            data->cursor_gobj = cursor_gobj;
-            loaded_joint = HSD_JObjLoadJoint(assets->joint);
-            HSD_GObjObject_80390A70(cursor_gobj, HSD_GObj_804D7849,
-                                    loaded_joint);
-            GObj_SetupGXLink(cursor_gobj, HSD_GObj_JObjCallback, 4, 0x80);
-            HSD_GObj_SetupProc(cursor_gobj, fn_80248084, 0);
+            cursor_gobj = mnVibration_CreateCursorGObj(data, assets);
 
             // Position cursor at the current row using row 0 + row spacing.
             // (data is reloaded post-setup because the calls may have
