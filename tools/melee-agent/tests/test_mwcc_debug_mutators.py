@@ -153,3 +153,27 @@ def test_mutate_insert_alias_skips_lhs_of_assignment() -> None:
     # First read (after the write) is `p[0] = 1;`
     assert "p[0] = 1;" not in result.split("p_alias = p;")[0]
     assert "p_alias[0] = 1;" in result
+
+
+def test_regression_fn_8024e1b4_dual_pointer_shape() -> None:
+    """Pin the dual-pointer mutation shape: starting from a simple
+    function reading `data` once, mutate_insert_alias to produce the
+    aliased version. This is the v1 mutator's reproduction target
+    from MEMORY.md (`fn_8024E1B4` dual-pointer pattern).
+    """
+    before = textwrap.dedent("""\
+        void fn_8024E1B4(HSD_GObj* gobj)
+        {
+            MnEventData* data = GET_EVENTDATA(gobj);
+            HSD_GObjPLink_80390228(data->gobjs[0]);
+        }
+    """)
+    result = mutate_insert_alias_before_use(
+        before, "fn_8024E1B4", "data", at_stmt_index=0,
+        new_name="tmp",
+    )
+    # The dual-pointer pattern: `tmp = data;` inserted before the use
+    assert "MnEventData* tmp = data;" in result
+    assert "HSD_GObjPLink_80390228(tmp->gobjs[0]);" in result
+    # The decl line itself isn't touched
+    assert "MnEventData* data = GET_EVENTDATA(gobj);" in result
