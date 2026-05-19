@@ -343,6 +343,74 @@ static void parse_overrides_from_env(void)
     }
 }
 
+// ---------------------------------------------------------------------------
+// Tier 6 — simplification iteration order override.
+//
+// MWCC_DEBUG_FORCE_ITER_FIRST="virtIdx[,virtIdx]*"
+//   Example: "32"          force virtual #32 to be popped first (= colored
+//                          first → first crack at top-down dispense for r31)
+//   Example: "32,38"       force #32 popped first, #38 second; everything
+//                          else preserves its original order
+//
+// Applied in the simplifygraph hook AFTER MWCC's simplification produces
+// the linked list, but BEFORE the existing logging walk. We splice the
+// named nodes out of the list and re-insert them at the head in the
+// specified order.
+//
+// Use case: addresses the param-iter-ceiling pattern. Parameters get LOW
+// ig_idx and are popped LAST by colorgraph; this lets you experimentally
+// promote a parameter to the front of the popping order. If the resulting
+// .text matches the matching target, you've confirmed the target is
+// reachable via altered iteration order alone (a hypothesis that's
+// distinct from "altered coalescing" but reaches the same observable
+// effect).
+//
+// Caveats (the user agrees to these by setting the env var):
+//   - The produced binary is a DLL-patched artifact. NOT what real MWCC
+//     would emit from any C source. Use for hypothesis testing only.
+//   - Reordering preserves correctness (the IG, interferences, and
+//     coloring algorithm are unchanged — only the visit order differs).
+//     So unlike force-phys, this can't produce data corruption.
+//   - But the resulting allocation may not be one that any natural C
+//     source would produce, so a force-iter-first match doesn't tell you
+//     a corresponding C source exists.
+#define MAX_ITER_FIRST 32
+
+static int g_iter_first[MAX_ITER_FIRST];
+static int g_n_iter_first = 0;
+static int g_iter_first_parsed = 0;
+
+static void parse_iter_first_from_env(void)
+{
+    char buf[512];
+    uint32 len;
+    int i;
+    int cur_val;
+    int has_val;
+
+    g_iter_first_parsed = 1;
+    g_n_iter_first = 0;
+
+    len = GetEnvironmentVariableA("MWCC_DEBUG_FORCE_ITER_FIRST", buf, sizeof(buf));
+    if (len == 0 || len >= sizeof(buf)) return;
+
+    cur_val = 0;
+    has_val = 0;
+    for (i = 0; i <= (int)len; i++) {
+        char c = (i == (int)len) ? '\0' : buf[i];
+        if (c >= '0' && c <= '9') {
+            cur_val = cur_val * 10 + (c - '0');
+            has_val = 1;
+        } else if ((c == ',' || c == '\0') && has_val && g_n_iter_first < MAX_ITER_FIRST) {
+            g_iter_first[g_n_iter_first] = cur_val;
+            g_n_iter_first++;
+            cur_val = 0;
+            has_val = 0;
+        }
+        // else: ignore whitespace and stray chars
+    }
+}
+
 // colorgraph's prologue is 7 bytes (push ebx/esi/edi/ebp + sub esp, 8). Using
 // 5 would split the sub esp, 8 (83 ec 08) mid-instruction and corrupt the
 // trampoline. trampoline buffer must hold prologue (7) + jump (5) = 12 bytes.
@@ -596,6 +664,45 @@ static void *__cdecl hook_simplifygraph(int rclass, int n_colors, int n_class_re
     head = (IGNode *)((simplifygraph_fn)simplifygraph_trampoline)(
         rclass, n_colors, n_class_regs);
 
+    // Tier 6 — apply iter-first overrides if any. Splice the named virtuals
+    // out of their current positions and re-insert them at the head, in the
+    // order given. The original relative order of other nodes is preserved.
+    if (g_n_iter_first > 0 && head != 0)
+    {
+        IGNode **ig_local = INTERFERENCEGRAPH;
+        int ig_n_local = N_IGNODES;
+        if (ig_n_local > 1024) ig_n_local = 1024;
+        if (ig_n_local < 0) ig_n_local = 0;
+        // For each requested virtual (in reverse so the FIRST listed ends
+        // up at the absolute head), find the IGNode in the list and move
+        // it to the head.
+        int k;
+        for (k = g_n_iter_first - 1; k >= 0; k--)
+        {
+            int want_idx = g_iter_first[k];
+            if (want_idx < 0 || want_idx >= ig_n_local) continue;
+            if (!ig_local) continue;
+            IGNode *want = ig_local[want_idx];
+            if (!want) continue;
+            if (want == head) continue;  // already at head
+            // Walk the list, find the predecessor of `want` (if any),
+            // unlink, prepend.
+            IGNode *prev = head;
+            while (prev && prev->next != want)
+                prev = prev->next;
+            if (!prev) continue;  // `want` isn't in this class's list
+            prev->next = want->next;
+            want->next = head;
+            head = want;
+            if (PCFILE && DEBUG_GUARD)
+            {
+                debug_printf("\n[FORCE_ITER_FIRST] moved ig_idx %d to head "
+                             "of class %d's simplification list\n",
+                             want_idx, rclass);
+            }
+        }
+    }
+
     if (PCFILE && DEBUG_GUARD)
     {
         // Read IG state AFTER simplifygraph returns. Reading before crashes
@@ -728,6 +835,7 @@ int __stdcall DllMain(void *hModule, uint32 reason, void *reserved)
 
         DEBUG_GUARD = 1;
         parse_overrides_from_env();
+        parse_iter_first_from_env();
         install_hooks();
     }
     return 1;
