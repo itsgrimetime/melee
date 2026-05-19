@@ -3107,3 +3107,160 @@ def match_iter_first(
             f"  melee-agent debug pcdump <source.c> "
             f"--force-iter-first {ig_csv}"
         )
+
+
+@debug_app.command(name="name-magic")
+def name_magic(
+    o_file: Annotated[
+        Path,
+        typer.Argument(help="Path to the .o file to post-process."),
+    ],
+    mapping: Annotated[
+        Optional[str],
+        typer.Option(
+            "--map", "-m",
+            help="Mapping of magic constant value to symbol name. "
+                 "Format: '<value>=<name>,<value>=<name>'. <value> is "
+                 "'s32' (0x4330000080000000), 'u32' (0x4330000000000000), "
+                 "or a hex/decimal literal. May be specified once with "
+                 "multiple pairs.",
+        ),
+    ] = None,
+    out: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--out", "-o",
+            help="Output path (default: rewrite in place).",
+        ),
+    ] = None,
+    list_only: Annotated[
+        bool,
+        typer.Option(
+            "--list",
+            help="Just list anonymous .sdata2 symbols and their values; "
+                 "don't rename.",
+        ),
+    ] = False,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit as JSON."),
+    ] = False,
+) -> None:
+    """Rename anonymous @N symbols in a .o's .sdata2 to user-supplied names.
+
+    Use case: MWCC's int-to-float cast emits an anonymous symbol like
+    `@491` for the 0x4330000080000000 magic constant. The matching .o
+    references this data via a named global like `mnVibration_804DC018`
+    (from symbols.txt). The relocation target name diff blocks byte
+    matching even when the data is identical.
+
+    With `--map s32=mnVibration_804DC018`, this tool finds the
+    anonymous symbol whose .sdata2 value matches the s32 int-to-float
+    bias and renames it via objcopy.
+
+    Use `--list` to see what's available without renaming.
+    """
+    from ..mwcc_debug.o_rewriter import (
+        find_all_anonymous_sdata2_symbols,
+        parse_mapping,
+        rename_magic_symbols,
+    )
+
+    if not o_file.exists():
+        typer.echo(f".o file not found: {o_file}", err=True)
+        raise typer.Exit(2)
+
+    if list_only:
+        symbols = find_all_anonymous_sdata2_symbols(o_file)
+        if json_out:
+            print(json.dumps({
+                "o_file": str(o_file),
+                "symbols": [{
+                    "name": s.name,
+                    "offset": s.offset,
+                    "value": f"0x{s.value:016x}" if s.size == 8
+                             else f"0x{s.value:08x}",
+                    "size": s.size,
+                } for s in symbols],
+            }, indent=2))
+            return
+        if not symbols:
+            print(f"No anonymous .sdata2 symbols found in {o_file}")
+            return
+        print(f"Anonymous .sdata2 symbols in {o_file}:")
+        print(f"  {'name':<10}  {'offset':>6}  {'sz':>2}  {'value':<18}  notes")
+        print(f"  {'-'*10}  {'-'*6}  {'-'*2}  {'-'*18}  -----")
+        import struct as _struct
+        for sym in symbols:
+            note = ""
+            if sym.size == 8:
+                value_str = f"0x{sym.value:016x}"
+                if sym.value == 0x4330000080000000:
+                    note = "int-to-float bias (signed)"
+                elif sym.value == 0x4330000000000000:
+                    note = "int-to-float bias (unsigned)"
+            elif sym.size == 4:
+                value_str = f"0x{sym.value:08x}"
+                # Try interpreting as float for the note
+                try:
+                    f_val = _struct.unpack(">f",
+                                           _struct.pack(">I", sym.value))[0]
+                    note = f"float ≈ {f_val:g}"
+                except Exception:
+                    pass
+            else:
+                value_str = f"0x{sym.value:x}"
+            print(
+                f"  {sym.name:<10}  {sym.offset:>6}  {sym.size:>2}  "
+                f"{value_str:<18}  {note}"
+            )
+        return
+
+    if mapping is None:
+        typer.echo(
+            "no --map provided. Use --list to see available symbols.",
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    try:
+        value_to_name = parse_mapping(mapping)
+    except ValueError as e:
+        typer.echo(f"invalid --map: {e}", err=True)
+        raise typer.Exit(2)
+
+    try:
+        renames = rename_magic_symbols(
+            o_file, value_to_name, out_path=out
+        )
+    except FileNotFoundError as e:
+        typer.echo(
+            f"objcopy not found: {e}. Install devkitPPC or pass a custom "
+            f"path via the o_rewriter module.",
+            err=True,
+        )
+        raise typer.Exit(5)
+    except subprocess.CalledProcessError as e:
+        typer.echo(f"objcopy failed: {e}", err=True)
+        raise typer.Exit(5)
+
+    if json_out:
+        print(json.dumps({
+            "o_file": str(o_file),
+            "out": str(out) if out else str(o_file),
+            "renames": [
+                {"old": old, "new": new} for old, new in renames
+            ],
+        }, indent=2))
+        return
+
+    target = out if out is not None else o_file
+    if not renames:
+        print(
+            f"No matching anonymous symbols found in {o_file}. "
+            f"Use --list to see what's available."
+        )
+        return
+    print(f"Renamed {len(renames)} symbol(s) in {target}:")
+    for old, new in renames:
+        print(f"  {old} -> {new}")
