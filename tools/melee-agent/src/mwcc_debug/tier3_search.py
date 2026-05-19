@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import shlex
+import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
+from .mutators import (
+    MutationUnsupported,
+    mutate_insert_alias_before_use,
+    mutate_type_change,
+)
 from .symbol_bridge import Binding
 
 
@@ -80,3 +88,84 @@ def plan_seeds(
             ))
 
     return plans[:budget]
+
+
+@dataclass
+class MaterializedSeed:
+    """A seed source written to disk + its plan."""
+    plan: SeedPlan
+    source_path: Path        # the mutated .c file
+    seed_dir: Path           # nonmatchings/<fn>/tier3_seed_<idx>/
+    compiles: bool           # set after the smoke compile
+
+
+def materialize_seed(
+    base_source: str,
+    fn_name: str,
+    plan: SeedPlan,
+    seed_dir: Path,
+) -> Optional[Path]:
+    """Apply the plan to base_source, write result to seed_dir/base.c.
+
+    Returns the path to the written .c, or None if the mutation
+    raises MutationUnsupported.
+    """
+    try:
+        if plan.mutator == "type-change":
+            mutated = mutate_type_change(
+                base_source, fn_name, plan.target_var,
+                plan.args["new_type"],
+            )
+        elif plan.mutator == "insert-alias":
+            mutated = mutate_insert_alias_before_use(
+                base_source, fn_name, plan.target_var,
+                at_stmt_index=plan.args["at_stmt_index"],
+            )
+        else:
+            return None
+    except MutationUnsupported:
+        return None
+
+    seed_dir.mkdir(parents=True, exist_ok=True)
+    out = seed_dir / "base.c"
+    out.write_text(mutated)
+    return out
+
+
+def smoke_compile(
+    seed_source_path: Path,
+    wibo: Path,
+    debug_compiler: Path,
+    cflags: str,
+    cwd: Path,
+) -> bool:
+    """Quick compile attempt - returns True iff the .o is produced
+    successfully. Discards the .o.
+
+    Runs from `cwd` (typically the melee repo root) so the `-I` paths
+    in cflags resolve correctly. The seed source itself is passed
+    relative to cwd when possible, falling back to an absolute path
+    when the seed lives outside cwd (e.g. in the decomp-permuter
+    workspace).
+    """
+    out_o = Path("/tmp/tier3_smoke.o")
+    if out_o.exists():
+        out_o.unlink()
+
+    try:
+        src_arg = str(seed_source_path.relative_to(cwd))
+    except ValueError:
+        src_arg = str(seed_source_path)
+
+    args = (
+        [str(wibo), str(debug_compiler)]
+        + shlex.split(cflags)
+        + ["-c", src_arg, "-o", str(out_o)]
+    )
+    try:
+        proc = subprocess.run(
+            args, cwd=cwd, capture_output=True, text=True, timeout=30,
+        )
+        return proc.returncode == 0 and out_o.exists()
+    except subprocess.TimeoutExpired:
+        return False

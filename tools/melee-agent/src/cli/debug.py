@@ -4565,3 +4565,161 @@ def mutate_insert_alias_cmd(
         typer.echo(f"wrote: {src_path}", err=True)
     else:
         print(out, end="")
+
+
+@debug_app.command(name="tier3-search")
+def tier3_search(
+    function: Annotated[
+        str,
+        typer.Option(
+            "--function", "-f",
+            help="Function to search (required).",
+        ),
+    ],
+    budget: Annotated[
+        int,
+        typer.Option(
+            "--budget",
+            help="Maximum number of seed mutations to try. Hard cap "
+                 "on seed count; truncated by priority order.",
+        ),
+    ] = 5,
+    per_seed_iters: Annotated[
+        int,
+        typer.Option(
+            "--per-seed-iters",
+            help="Permuter iterations per seed.",
+        ),
+    ] = 200,
+    perm_root: Annotated[
+        Path,
+        typer.Option(
+            "--perm-root",
+            help="Root of decomp-permuter clone.",
+        ),
+    ] = Path("~/code/decomp-permuter").expanduser(),
+    target: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--target", "-t",
+            help="Target spec; auto-derived if omitted.",
+        ),
+    ] = None,
+    blend: Annotated[
+        float,
+        typer.Option("--blend", help="mwcc-score blend weight."),
+    ] = 0.1,
+) -> None:
+    """Tier 3: multi-start search over targeted mutation seeds.
+
+    Workflow:
+      1. Resolve pcdump + target.
+      2. Enumerate variable bindings via the symbol bridge.
+      3. Plan up to --budget seed mutations.
+      4. Materialize each seed inside
+         nonmatchings/<fn>/tier3_seed_<idx>/.
+      5. Smoke-compile each. If all seeds fail, exit non-zero with a
+         clear message.
+      6. For each compiling seed, run `debug permute` (Tier 2) with
+         --per-seed-iters iterations.
+      7. Report the best result.
+    """
+    from ..mwcc_debug.symbol_bridge import list_bindings
+    from ..mwcc_debug.tier3_search import (
+        materialize_seed,
+        plan_seeds,
+        smoke_compile,
+    )
+
+    melee_root = DEFAULT_MELEE_ROOT
+
+    # Resolve unit + sources
+    unit = _find_unit_for_function(function, melee_root)
+    if unit is None:
+        typer.echo(f"{function} not in report.json", err=True)
+        raise typer.Exit(2)
+    src_rel = f"src/{unit}.c"
+    src_path = melee_root / src_rel
+    base_source = src_path.read_text()
+
+    # Resolve pcdump for the bridge
+    pcdump_path = _resolve_pcdump_path(None, function, melee_root)
+    text = pcdump_path.read_text()
+    fns = parse_pcdump(text)
+    fn = next((f for f in fns if f.name == function), None)
+    if fn is None:
+        _abort_function_not_in_dump(function, [f.name for f in fns])
+    pre = fn.last_precolor_pass()
+    if pre is None:
+        typer.echo(
+            f"no pre-coloring pass for {function}", err=True,
+        )
+        raise typer.Exit(3)
+
+    bindings = list_bindings(base_source, function, pre)
+    plans = plan_seeds(bindings, budget=budget)
+    if not plans:
+        typer.echo(
+            "no Tier 3 targets; fall back to `debug permute -f "
+            f"{function}` for a vanilla Tier 2 run.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    print(f"[tier3] {len(plans)} seed plans:")
+    for i, p in enumerate(plans):
+        print(f"  seed{i}: {p.description}")
+
+    # Materialize + smoke-compile
+    wibo = _find_wibo()
+    debug_compiler = _find_compiler_dir() / "mwcceppc_debug.exe"
+    if wibo is None or not wibo.exists() or not debug_compiler.exists():
+        typer.echo(
+            "wibo or patched compiler missing. "
+            "Run `debug setup-local` first.",
+            err=True,
+        )
+        raise typer.Exit(4)
+    cflags, _mw = _ninja_cflags_for_unit(src_rel)
+
+    perm_dir = perm_root / "nonmatchings" / function
+    if not perm_dir.exists():
+        typer.echo(
+            f"{perm_dir} not found. Run decomp-permuter's "
+            "import.py first.",
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    materialized: list = []
+    for i, plan in enumerate(plans):
+        seed_dir = perm_dir / f"tier3_seed_{i}"
+        out_c = materialize_seed(base_source, function, plan, seed_dir)
+        if out_c is None:
+            print(f"[tier3] seed{i}: mutation unsupported; skipping")
+            continue
+        ok = smoke_compile(out_c, wibo, debug_compiler, cflags, melee_root)
+        print(f"[tier3] seed{i}: compile={'ok' if ok else 'FAIL'}")
+        materialized.append((plan, seed_dir, ok))
+
+    compiled = [m for m in materialized if m[2]]
+    if not compiled:
+        typer.echo(
+            f"all {len(materialized)} tier3 seeds failed to compile — "
+            "bridge mapping likely wrong or mutation produced invalid C.",
+            err=True,
+        )
+        raise typer.Exit(5)
+
+    print()
+    print(
+        f"[tier3] {len(compiled)}/{len(materialized)} seeds compiled. "
+        f"Estimated wall-clock: {2 * len(compiled) * per_seed_iters} "
+        f"to {3 * len(compiled) * per_seed_iters} seconds."
+    )
+    print(
+        "[tier3] Per-seed permuter runs not yet wired in v1 — running "
+        "`debug permute -f FN` against each seed dir manually is the "
+        "current workaround. See "
+        "docs/mwcc-debug-permuter-integration.md."
+    )
