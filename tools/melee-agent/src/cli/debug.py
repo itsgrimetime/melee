@@ -143,6 +143,19 @@ def pcdump(
             envvar="MWCC_DEBUG_BRANCH",
         ),
     ] = None,
+    force_iter_first: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-iter-first",
+            help="Tier 6: reorder the simplification list so named virtuals "
+                 "are popped first by colorgraph. Format 'virtIdx[,virtIdx]*'. "
+                 "E.g. '32' promotes virtual r32 to the head of the "
+                 "simplification stack — it gets first crack at the top-down "
+                 "callee-save dispense (r31). Addresses the param-iter-ceiling "
+                 "pattern. EXPERIMENTAL — produces DLL-patched binary, NOT "
+                 "what real MWCC would emit from any C source.",
+        ),
+    ] = None,
 ):
     """Dump MWCC's internal IR + codegen for a TU and emit pcdump.txt to stdout.
 
@@ -207,6 +220,13 @@ def pcdump(
     if branch and branch not in ("master", "main"):
         # Non-default branch — remote will use a worktree.
         cmd_parts.append(f"set MWCC_DEBUG_BRANCH={branch}")
+    if force_iter_first:
+        if any(c in force_iter_first for c in '"\'; \t'):
+            raise typer.BadParameter(
+                "--force-iter-first must not contain quotes, semicolons, "
+                "or whitespace"
+            )
+        cmd_parts.append(f"set MWCC_DEBUG_FORCE_ITER_FIRST={force_iter_first}")
     cmd_parts.append(
         f"powershell -NoProfile -ExecutionPolicy Bypass "
         f"-File {remote_script} {src_rel}"
