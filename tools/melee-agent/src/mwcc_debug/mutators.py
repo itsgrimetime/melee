@@ -184,6 +184,24 @@ def _statement_is_reading_use(
     return True
 
 
+def _stmt_is_declaration(stmt_text: str) -> bool:
+    """True if `stmt_text` looks like a variable declaration.
+
+    Declarations have one or more type tokens (identifiers or `*`)
+    before a variable name, then `=`, `;`, `[`, or `,`.  This is the
+    same pattern used by `_statement_is_reading_use` to exclude decls,
+    just stated affirmatively.
+    """
+    cleaned = _strip_strings_and_comments(stmt_text).strip()
+    decl_re = re.compile(
+        r"^\s*"
+        r"(?:[A-Za-z_][A-Za-z_0-9]*\s*\**\s*)+"
+        r"[A-Za-z_][A-Za-z_0-9]*"
+        r"\s*(?:;|=|\[|,)"
+    )
+    return bool(decl_re.match(cleaned))
+
+
 def mutate_insert_alias_before_use(
     source: str,
     fn_name: str,
@@ -191,10 +209,22 @@ def mutate_insert_alias_before_use(
     at_stmt_index: int,
     new_name: Optional[str] = None,
 ) -> str:
-    """Insert `<type> <new_name> = <var_name>;` immediately before the
-    N-th reading statement of `var_name`, and replace bare references
-    to `var_name` in THAT statement with `new_name`. Other statements
-    are unchanged.
+    """Insert an alias declaration for the N-th reading use of `var_name`
+    and rewrite that statement to use `new_name`.
+
+    MWCC uses C89 rules: declarations must appear before any executable
+    statements in a block.  If any non-declaration statement precedes the
+    insertion point in the function body, we split the alias into:
+      - ``<type> <new_name>;``  at the function body's opening brace (safe
+        top-of-block position)
+      - ``<new_name> = <var_name>;``  immediately before the target
+        statement (the assignment is an executable statement, which is fine
+        after the decl)
+
+    If the target is already at the block top (all preceding statements are
+    declarations or the target is the very first statement), we emit the
+    combined initializing form:
+      - ``<type> <new_name> = <var_name>;``
     """
     if new_name is None:
         new_name = var_name + "_alias"
@@ -228,8 +258,7 @@ def mutate_insert_alias_before_use(
     word_re = re.compile(r"\b" + re.escape(var_name) + r"\b")
     rewritten = word_re.sub(new_name, target_text)
 
-    # Find leading indentation on the target line so the inserted
-    # alias decl matches it.
+    # Find leading indentation on the target line so inserted lines match it.
     line_start = body_text.rfind("\n", 0, target_start) + 1
     indent = ""
     j = line_start
@@ -237,15 +266,47 @@ def mutate_insert_alias_before_use(
         indent += body_text[j]
         j += 1
 
-    insert = f"{indent}{var_type} {new_name} = {var_name};\n"
-
-    new_body = (
-        body_text[:line_start]
-        + insert
-        + body_text[line_start:target_start]
-        + rewritten
-        + body_text[target_end:]
+    # Determine whether any non-declaration statement precedes the target
+    # in the function body.  If so we must split the alias into a bare
+    # decl at block-top + an assignment at the use site (C89 compliance).
+    stmts_before_target = [
+        (s, e, t) for (s, e, t) in statements if e <= target_start
+    ]
+    has_non_decl_before = any(
+        not _stmt_is_declaration(t) for (_, _, t) in stmts_before_target
     )
+
+    if has_non_decl_before:
+        # C89 split: bare decl at function body open brace, assignment
+        # immediately before the target statement.
+        open_brace = body_text.find("{")
+        after_brace = open_brace + 1  # character after `{`
+        # Determine indentation from the first existing body line, or use
+        # the target's indentation as a reasonable default.
+        body_indent = indent
+
+        decl_line = f"\n{body_indent}{var_type} {new_name};"
+        assign_line = f"{indent}{new_name} = {var_name};\n"
+
+        new_body = (
+            body_text[:after_brace]
+            + decl_line
+            + body_text[after_brace:line_start]
+            + assign_line
+            + body_text[line_start:target_start]
+            + rewritten
+            + body_text[target_end:]
+        )
+    else:
+        # Block top: safe to use the combined initializing form.
+        insert = f"{indent}{var_type} {new_name} = {var_name};\n"
+        new_body = (
+            body_text[:line_start]
+            + insert
+            + body_text[line_start:target_start]
+            + rewritten
+            + body_text[target_end:]
+        )
 
     body_start_in_source = source.find(body_text)
     if body_start_in_source < 0:

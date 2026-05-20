@@ -134,10 +134,11 @@ def pcdump(
         Optional[str],
         typer.Option(
             "--force-phys",
-            help="Tier 5: bias the allocator. Format 'virtIdx:physReg[,...]'. "
-                 "E.g. '36:31' forces virtual 36 to physical r31. "
-                 "EXPERIMENTAL — may produce broken code if interferences "
-                 "are violated.",
+            help="Tier 5: bias the allocator. Format 'virtIdx:physReg[,...]' "
+                 "or 'class:virtIdx:physReg[,...]' (class: gpr, fp, fpr, int). "
+                 "E.g. '36:31' or 'gpr:36:31' (class-scoped avoids ambiguous "
+                 "FP override). EXPERIMENTAL — may produce broken code if "
+                 "interferences are violated.",
         ),
     ] = None,
     force_phys_iter: Annotated[
@@ -253,13 +254,16 @@ def pcdump(
     if no_pull:
         cmd_parts.append("set MWCC_DEBUG_NO_PULL=1")
     if force_phys:
-        # Sanity-check format and pass through. The DLL parses it.
-        # Reject embedded quotes/spaces to keep the cmd-line safe.
+        # Reject embedded quotes/spaces to keep the cmd-line safe, then
+        # normalize (strips optional class prefix, emits ambiguity warning).
         if any(c in force_phys for c in '"\'; \t'):
             raise typer.BadParameter(
                 "--force-phys must not contain quotes, semicolons, or whitespace"
             )
-        cmd_parts.append(f"set MWCC_DEBUG_FORCE_PHYS={force_phys}")
+        force_phys_dll, fp_warnings = _normalize_force_phys(force_phys)
+        for w in fp_warnings:
+            print(w, file=sys.stderr)
+        cmd_parts.append(f"set MWCC_DEBUG_FORCE_PHYS={force_phys_dll}")
     if force_phys_iter:
         if any(c in force_phys_iter for c in '"\'; \t&|<>'):
             raise typer.BadParameter(
@@ -368,6 +372,16 @@ def pcdump(
             file=sys.stderr,
         )
         if cache_path_used is not None:
+            # Write the content-hash sidecar so follow-up commands can
+            # detect freshness by content rather than mtime.  Commands
+            # like enumerate-decl-orders and tier3-search restore the
+            # source after patching, updating mtime even when unchanged;
+            # the sidecar avoids false "stale" warnings after restore.
+            try:
+                src_file = DEFAULT_MELEE_ROOT / src_rel
+                pcdump_cache.write_hash_sidecar(cache_path_used, src_file)
+            except OSError:
+                pass  # sidecar is best-effort; fall back to mtime on next lookup
             print(
                 f"[mwcc_debug] cached — follow-up commands "
                 f"(`analyze`, `guide`, `score`, etc.) will auto-resolve "
@@ -381,6 +395,71 @@ def pcdump(
         )
 
     raise typer.Exit(code=exit_code)
+
+
+_FORCE_PHYS_CLASS_NAMES = {"gpr", "fp", "fpr", "int"}
+"""Recognized class-prefix names for the ``class:ig_idx:phys`` form.
+
+``gpr`` / ``int`` → GPR class; ``fp`` / ``fpr`` → FP class.
+The class prefix is stripped before the value is passed to the DLL
+(which only understands the legacy ``ig_idx:phys`` form).
+"""
+
+
+def _normalize_force_phys(raw: str) -> tuple[str, list[str]]:
+    """Parse and normalize a ``--force-phys`` value.
+
+    Accepts two forms per spec:
+      - Legacy: ``ig_idx:phys[,ig_idx:phys]*``
+      - Class-scoped: ``class:ig_idx:phys[,class:ig_idx:phys]*``
+        where class is one of ``gpr``, ``fp``, ``fpr``, ``int``.
+
+    Returns ``(dll_value, warnings)`` where:
+      - ``dll_value`` is the ``ig_idx:phys[,...]`` string to pass to
+        the DLL (class prefix stripped).
+      - ``warnings`` is a list of human-readable warning strings
+        (empty when input is unambiguous).
+
+    Raises ``typer.BadParameter`` on malformed input.
+    """
+    parts = raw.split(",")
+    dll_parts: list[str] = []
+    warnings: list[str] = []
+    seen_bare: list[str] = []  # bare ig_idx values, to detect later if wanted
+
+    for spec in parts:
+        spec = spec.strip()
+        if not spec:
+            continue
+        tokens = spec.split(":")
+        if len(tokens) == 3 and tokens[0].lower() in _FORCE_PHYS_CLASS_NAMES:
+            # class:ig_idx:phys form — strip the class prefix for the DLL.
+            _, ig_idx_s, phys_s = tokens
+            dll_parts.append(f"{ig_idx_s}:{phys_s}")
+        elif len(tokens) == 2:
+            # Bare ig_idx:phys form. The DLL accepts this but it matches
+            # all IG classes (GPR, FP, etc.) with that ig_idx, which can
+            # be ambiguous when a GPR and an FP node share the same ig_idx.
+            dll_parts.append(spec)
+            seen_bare.append(tokens[0])
+        else:
+            raise typer.BadParameter(
+                f"--force-phys spec {spec!r} is invalid. "
+                f"Expected 'ig_idx:physReg' or 'class:ig_idx:physReg' "
+                f"(class in {{gpr, fp, fpr, int}}). "
+                f"E.g. '36:31' or 'gpr:36:31'."
+            )
+
+    if seen_bare:
+        warnings.append(
+            f"[force-phys] bare ig_idx form used ({', '.join(seen_bare)}): "
+            f"the DLL will force ALL IG classes (GPR, FP, …) that have a "
+            f"node with that ig_idx. If this matches multiple classes, "
+            f"use 'class:ig_idx:phys' (e.g. 'gpr:{seen_bare[0]}:N') to "
+            f"scope to one class and avoid unintended FP register overrides."
+        )
+
+    return ",".join(dll_parts), warnings
 
 
 # PowerPC EABI register conventions for GPR. The first 8 args go in r3..r10;
@@ -4484,7 +4563,10 @@ def pcdump_local(
         typer.Option(
             "--force-phys",
             help="Tier 5: allocator bias by ig_idx. Format "
-                 "'virtIdx:physReg[,...]'. E.g. '36:31'. By default "
+                 "'virtIdx:physReg[,...]' or 'class:virtIdx:physReg[,...]'. "
+                 "E.g. '36:31' or 'gpr:36:31' (class-scoped, avoids "
+                 "ambiguous FP override when GPR and FP share the same "
+                 "ig_idx). class is one of: gpr, fp, fpr, int. By default "
                  "applies globally — scope with --force-phys-fn.",
         ),
     ] = None,
@@ -4676,7 +4758,12 @@ def pcdump_local(
     env = os.environ.copy()
     env["MWCC_DEBUG_PCDUMP_PATH"] = pcdump_name
     if force_phys:
-        env["MWCC_DEBUG_FORCE_PHYS"] = force_phys
+        # Normalize: strip optional class prefix (gpr:N:M → N:M), emit
+        # ambiguity warning when bare form is used.
+        force_phys_dll, fp_warnings = _normalize_force_phys(force_phys)
+        for w in fp_warnings:
+            print(w, file=sys.stderr)
+        env["MWCC_DEBUG_FORCE_PHYS"] = force_phys_dll
     if force_phys_iter:
         env["MWCC_DEBUG_FORCE_PHYS_ITER"] = force_phys_iter
     if force_phys_fn:
@@ -4996,9 +5083,17 @@ def pcdump_local(
             # Touch mtime to now: Path.rename() preserves the source file's
             # creation time (the pcdump temp was created at compile start, so
             # its mtime predates any edits the user made during the compile).
-            # Without this, the staleness check fires immediately after a
-            # refresh because src_mtime > cache_mtime.
+            # Without this, the mtime-based staleness check fires immediately
+            # after a refresh because src_mtime > cache_mtime.  The content-
+            # hash sidecar (written below) supersedes mtime for freshness, but
+            # os.utime() is kept for backward compat with callers that don't
+            # have a sidecar yet.
             os.utime(output, None)
+            # Write the content-hash sidecar for the canonical cache target.
+            try:
+                pcdump_cache.write_hash_sidecar(output, melee_root / src_rel)
+            except OSError:
+                pass  # best-effort; mtime fallback still applies
     else:
         # --output specified: write there.
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -5018,6 +5113,13 @@ def pcdump_local(
             try:
                 cache_target.parent.mkdir(parents=True, exist_ok=True)
                 cache_target.write_bytes(output.read_bytes())
+                # Write hash sidecar for the mirrored cache file.
+                try:
+                    pcdump_cache.write_hash_sidecar(
+                        cache_target, melee_root / src_rel
+                    )
+                except OSError:
+                    pass  # best-effort
                 if cache_target != output:
                     print(
                         f"wrote: {output} (also synced to cache {cache_target})",
