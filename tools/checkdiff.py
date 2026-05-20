@@ -745,6 +745,7 @@ def main() -> int:
                     fromfile="expected", tofile="current", lineterm=""))
             }
             print(json_mod.dumps(diff_data, indent=2))
+            return 1 if ref_asm != our_asm else 0
         elif args.format == "side-by-side":
             # Side-by-side diff (better for agents to understand)
             if ref_asm == our_asm:

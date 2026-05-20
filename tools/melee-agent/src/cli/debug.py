@@ -1456,9 +1456,18 @@ def _resolve_pcdump_path(
         raise typer.Exit(4)
     if not entry.fresh:
         # Non-fatal — warn but use the stale cache.
+        import datetime
+        src_ts = datetime.datetime.fromtimestamp(
+            entry.source_path.stat().st_mtime
+        ).strftime("%H:%M:%S.%f")[:12]
+        cache_ts = datetime.datetime.fromtimestamp(
+            entry.path.stat().st_mtime
+        ).strftime("%H:%M:%S.%f")[:12]
         typer.echo(
             f"[mwcc_debug] using stale cached pcdump "
-            f"({entry.source_path.name} modified since cache).",
+            f"({entry.source_path.name} modified since cache; "
+            f"src={src_ts} cache={cache_ts}). "
+            f"Re-run `pcdump-local` to refresh.",
             err=True,
         )
     return entry.path
@@ -4446,6 +4455,19 @@ def pcdump_local(
                  "not given).",
         ),
     ] = False,
+    function: Annotated[
+        Optional[str],
+        typer.Option(
+            "--function", "-f",
+            help="Function name to use as the --diff target. When "
+                 "omitted, defaults to the value of --force-phys-fn / "
+                 "--force-coalesce-fn (in that order) if either is set; "
+                 "otherwise falls back to the first function found in "
+                 "the source file. Use this option when working on a "
+                 "non-first function in a multi-function TU so --diff "
+                 "compares the right function.",
+        ),
+    ] = None,
 ) -> None:
     """Local mwcc_debug pcdump (macOS+wibo+Zig-built DLL, no SSH).
 
@@ -4703,6 +4725,15 @@ def pcdump_local(
         typer.echo("compile completed but no pcdump.txt was emitted", err=True)
         raise typer.Exit(4)
 
+    # Warn early if --keep-obj was requested but the compiler didn't emit
+    # an object (e.g. a forced coalesce hung the wibo process mid-compile).
+    if keep_obj is not None and not obj_target.exists():
+        typer.echo(
+            f"[pcdump-local] --keep-obj requested but no object was produced "
+            f"(compile likely failed mid-way). Check pcdump for clues.",
+            err=True,
+        )
+
     # Run objdiff if --diff was requested. The integrated check
     # answers "did this compile reach the target?" without the agent
     # having to manually re-run objdiff-cli. We invoke checkdiff in
@@ -4729,10 +4760,17 @@ def pcdump_local(
                 build_o.write_bytes(obj_target.read_bytes())
                 print(f"[diff] running checkdiff against {build_o}...",
                       file=sys.stderr)
-                # Pick the first function in the source as the target
+                # Resolve the function name for --diff.
+                # Priority: explicit --function > --force-phys-fn >
+                # --force-coalesce-fn > first function found in source.
                 src_path = melee_root / src_rel
-                fn_to_diff = None
-                if src_path.exists():
+                fn_to_diff = (
+                    function
+                    or force_phys_fn
+                    or force_coalesce_fn
+                    or None
+                )
+                if fn_to_diff is None and src_path.exists():
                     src_text = src_path.read_text()
                     # First function definition; coarse heuristic
                     m = re.search(
@@ -4778,42 +4816,83 @@ def pcdump_local(
         pcdump_path.unlink()
         return
 
+    # Determine whether ANY force-* override was active this run.
+    # Forced pcdumps contain experimental allocator decisions that should
+    # NOT overwrite the shared baseline cache — downstream commands that
+    # auto-resolve via the cache would silently read forced data as if it
+    # were the natural allocation, producing misleading diagnostics.
+    any_forced = any([
+        force_phys, force_phys_iter, force_phys_fn,
+        force_iter_first,
+        force_coalesce, force_coalesce_fn,
+    ])
+
     # Resolve the canonical cache location for this TU so we can ALWAYS
     # update it — even when --output specifies a different path.
     # Without this, downstream commands (analyze, var-to-virtual, guide)
     # auto-resolve via the cache and silently read stale data.
+    # EXCEPTION: forced runs skip the cache entirely (see any_forced above).
     unit = src_rel[:-2].removeprefix("src/")  # melee/mn/mnvibration
     from ..mwcc_debug import cache as pcdump_cache
     pcdump_cache.ensure_cache_dir(melee_root)
     cache_target = pcdump_cache.cache_path(melee_root, unit)
 
     if output is None:
-        # No --output → cache is the destination, no extra copy needed.
-        output = cache_target
-        output.parent.mkdir(parents=True, exist_ok=True)
-        pcdump_path.rename(output)
-    else:
-        # --output specified: write there AND mirror into the cache so
-        # downstream auto-resolve doesn't read a stale dump.
-        output.parent.mkdir(parents=True, exist_ok=True)
-        # Move to user-requested path
-        pcdump_path.rename(output)
-        # Mirror to cache (best-effort; same content)
-        try:
-            cache_target.parent.mkdir(parents=True, exist_ok=True)
-            cache_target.write_bytes(output.read_bytes())
-            if cache_target != output:
-                print(
-                    f"wrote: {output} (also synced to cache {cache_target})",
-                    file=sys.stderr,
-                )
-        except OSError as e:
+        if any_forced:
+            # Forced run — write to a temp path and skip cache sync.
+            output = Path(
+                f"/tmp/pcdump_forced_{os.getpid()}_{int(time.time() * 1000)}.txt"
+            )
+            output.parent.mkdir(parents=True, exist_ok=True)
+            pcdump_path.rename(output)
+            os.utime(output, None)
             print(
-                f"wrote: {output} (cache mirror failed: {e})",
+                f"[pcdump-local] forced run — skipping cache sync to avoid "
+                f"contaminating baseline. Dump at: {output}",
                 file=sys.stderr,
             )
+        else:
+            # No --output → cache is the destination, no extra copy needed.
+            output = cache_target
+            output.parent.mkdir(parents=True, exist_ok=True)
+            pcdump_path.rename(output)
+            # Touch mtime to now: Path.rename() preserves the source file's
+            # creation time (the pcdump temp was created at compile start, so
+            # its mtime predates any edits the user made during the compile).
+            # Without this, the staleness check fires immediately after a
+            # refresh because src_mtime > cache_mtime.
+            os.utime(output, None)
+    else:
+        # --output specified: write there.
+        output.parent.mkdir(parents=True, exist_ok=True)
+        pcdump_path.rename(output)
+        os.utime(output, None)  # same mtime fix as above
+        if any_forced:
+            # Forced run — don't mirror the experimental pcdump into the
+            # shared cache; it would be treated as baseline by follow-up cmds.
+            print(
+                f"[pcdump-local] forced run — skipping cache sync to avoid "
+                f"contaminating baseline.",
+                file=sys.stderr,
+            )
+        else:
+            # Mirror to cache (best-effort; same content) so downstream
+            # auto-resolve doesn't read a stale dump.
+            try:
+                cache_target.parent.mkdir(parents=True, exist_ok=True)
+                cache_target.write_bytes(output.read_bytes())
+                if cache_target != output:
+                    print(
+                        f"wrote: {output} (also synced to cache {cache_target})",
+                        file=sys.stderr,
+                    )
+            except OSError as e:
+                print(
+                    f"wrote: {output} (cache mirror failed: {e})",
+                    file=sys.stderr,
+                )
+                return
             return
-        return
 
     print(f"wrote: {output}", file=sys.stderr)
 
