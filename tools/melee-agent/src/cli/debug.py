@@ -6016,6 +6016,23 @@ def var_to_virtual(
                  "blocks the parser skipped.",
         ),
     ] = False,
+    all_matches: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            help="Return ALL bindings matching the name. Default picks "
+                 "the highest-confidence top-level binding for back-compat.",
+        ),
+    ] = False,
+    scope_filter: Annotated[
+        Optional[str],
+        typer.Option(
+            "--scope",
+            help="Filter bindings by scope path. Exact match by default; "
+                 "trailing '/' for prefix (e.g. 'fn_X/' matches the "
+                 "function and all nested blocks inside it).",
+        ),
+    ] = None,
 ) -> None:
     """Bridge: given a source variable name, predict its MWCC virtual.
 
@@ -6027,8 +6044,10 @@ def var_to_virtual(
     """
     from ..mwcc_debug.symbol_bridge import (
         find_virtual_for_var,
+        find_all_virtuals_for_var,
         list_bindings_with_basis,
     )
+    from ..mwcc_debug.scope_path import format_for_display, is_nested_within
 
     melee_root = DEFAULT_MELEE_ROOT
     pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
@@ -6050,9 +6069,64 @@ def var_to_virtual(
         raise typer.Exit(2)
     source = (melee_root / "src" / f"{unit}.c").read_text()
     bindings, basis_data = list_bindings_with_basis(source, function, pre)
-    binding = next(
-        (b for b in bindings if b.var_name == var_name), None
-    )
+    # Phase 1 nested-block awareness: scope-aware lookup with optional
+    # --all and --scope filters. Default behavior (single binding,
+    # highest confidence) preserves back-compat.
+    matches = find_all_virtuals_for_var(bindings, var_name)
+
+    if scope_filter is not None:
+        scope_value = scope_filter.rstrip("/")
+        prefix_mode = scope_filter.endswith("/")
+        target = tuple(scope_value.split("/")) if scope_value else ()
+        if prefix_mode:
+            matches = [b for b in matches if is_nested_within(b.scope_path, target)]
+        else:
+            matches = [b for b in matches if b.scope_path == target]
+
+    binding = matches[0] if matches else None
+
+    if all_matches:
+        # New --all output path — emit the full match list, then return.
+        if not matches:
+            if json_out:
+                print(json.dumps(
+                    {"var_name": var_name, "found": False, "bindings": []},
+                    indent=2,
+                ))
+            else:
+                typer.echo(
+                    f"variable {var_name!r} not found in {function}",
+                    err=True,
+                )
+            raise typer.Exit(1)
+        if json_out:
+            payload = {
+                "var_name": var_name,
+                "found": True,
+                "bindings": [
+                    {
+                        "virtual": b.virtual,
+                        "decl_line": b.decl_line,
+                        "kind": b.kind,
+                        "type": b.type_str,
+                        "confidence": b.confidence,
+                        "scope_path": list(b.scope_path),
+                    } for b in matches
+                ],
+            }
+            if basis and basis_data is not None:
+                payload["basis"] = _basis_to_dict(basis_data)
+            print(json.dumps(payload, indent=2))
+        else:
+            print(f"{var_name} ({len(matches)} matches):")
+            for b in matches:
+                scope_str = format_for_display(b.scope_path) or "(top)"
+                print(
+                    f"  -> r{b.virtual}  ({b.confidence}, "
+                    f"type={b.type_str}, scope={scope_str}, "
+                    f"line {b.decl_line})"
+                )
+        return
 
     if binding is None:
         if json_out:
@@ -6082,11 +6156,12 @@ def var_to_virtual(
             payload["basis"] = _basis_to_dict(basis_data)
         print(json.dumps(payload, indent=2))
     else:
-        print(f"variable: {binding.var_name}")
-        print(f"  virtual: r{binding.virtual}")
-        print(f"  kind:    {binding.kind}")
-        print(f"  type:    {binding.type_str}")
-        print(f"  conf:    {binding.confidence}")
+        scope_str = format_for_display(binding.scope_path) or "(top)"
+        print(
+            f"{binding.var_name} -> r{binding.virtual}  "
+            f"({binding.confidence}, type={binding.type_str}, "
+            f"scope={scope_str}, line {binding.decl_line})"
+        )
         if basis and basis_data is not None:
             print()
             _print_basis(basis_data, bindings)

@@ -628,3 +628,17 @@ def test_function_with_nested_block_is_no_longer_low_confidence() -> None:
     assert by_name["nested1"].confidence == "ambiguous-nested"
     # Red flag is gone.
     assert "nested-decl" not in basis.red_flags
+
+
+def test_cli_var_to_virtual_help_shows_scope_and_all_flags() -> None:
+    """CLI --help mentions the new flags."""
+    import subprocess
+    import pathlib
+    cwd = pathlib.Path(__file__).parent.parent  # tools/melee-agent
+    proc = subprocess.run(
+        ["python", "-m", "src.cli", "debug", "var-to-virtual", "--help"],
+        cwd=cwd, capture_output=True, text=True, timeout=15,
+    )
+    assert proc.returncode == 0
+    assert "--all" in proc.stdout
+    assert "--scope" in proc.stdout
