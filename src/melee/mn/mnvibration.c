@@ -435,11 +435,11 @@ void fn_80247510(HSD_GObj* gobj)
                 data->x0[1]++;
                 nav_data = mnVibration_804D6C28->user_data;
                 inputs_repeat = data->x0[1];
+                cursor_jobj = data->cursor_gobj->hsd_obj;
                 jobjs = nav_data->jobjs;
                 dy = (HSD_JObjGetTranslationY(jobjs[18]) -
                       HSD_JObjGetTranslationY(jobjs[17])) *
                      (f32) inputs_repeat;
-                cursor_jobj = data->cursor_gobj->hsd_obj;
                 HSD_JObjSetTranslateX(cursor_jobj,
                                       HSD_JObjGetTranslationX(jobjs[17]));
                 HSD_JObjSetTranslateY(
