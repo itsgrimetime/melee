@@ -65,7 +65,7 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
   {
     u8 is_name_mode = data->is_name_mode;
     u8 scroll = data->saved_selection;
-    u8 offset = (((((((((data->scroll_offset & 0xFFFFFFFFu) & 0xFFFFFFFFu) & 0xFFFFFFFFu) & 0xFFFFFFFFu) & 0xFFFFFFFFu) & 0xFFFFFFFFu) & 0xFFFFFFFFu) & 0xFFFFFFFFu) & 0xFFFFFFFFu) & 0xFFFFFFFFu;
+    u8 offset = (u32) data->scroll_offset;
     int limit;
     if (is_name_mode != 0)
     {
@@ -147,7 +147,7 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
             __assert(mnDiagram3_804D4FD8, 0x3B3, mnDiagram3_804D4FE0);
           }
           icon->translate.y = row_spacing * ((f32) i);
-          if (!(icon->flags & ((1 << 14) << 11)))
+          if (!(icon->flags & (1 << 25)))
           {
             {
               if ((icon != 0L) && (!HSD_JObjMtxIsDirty(icon)))
@@ -201,7 +201,7 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
             ;
           }
           HSD_JObjAddChild(data->jobjs[6], icon);
-          mnDiagram2_GetAggregatedFighterRank(sp28, stat_type, (((u8) i) & 0xFFFFFFFF) & 0xFFFFFFFF);
+          mnDiagram2_GetAggregatedFighterRank(sp28, stat_type, ((u8) i) & 0xFFFFFFFF);
           {
             int val = *((int *) (sp28 + 0xC));
             mnDiagram_FormatDecimalNumber((char *) sp58, val, 0);
@@ -251,7 +251,7 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
           }
           else
           {
-            int val = mnDiagram2_GetStatValue(data->is_name_mode, stat_type ^ 0, entity & 0xFFFFFFFFFFFFFFFFu);
+            int val = mnDiagram2_GetStatValue(data->is_name_mode, stat_type, entity);
             if (val > max_distance)
             {
               val = max_distance;
