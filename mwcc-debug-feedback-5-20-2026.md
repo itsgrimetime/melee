@@ -231,3 +231,53 @@ Context: working on `src/melee/mn/mnvibration.c`, mainly `fn_80247510` and
   `mnVibration_80248444` (`mnVibration_804DC030`/`804DC034` instead of `0.0f`/
   `0.03f`) regressed badly (`100.0%` fuzzy to `94.33594%`), so the right source
   is still the literal form plus post-build/name-magic-style normalization.
+
+## Follow-up after merging `dd911094f`
+
+- Positive: `--force-phys-iter` is now good enough to prove the remaining
+  `fn_80248A78` register cascade. Forcing class 0 iters
+  `42/44/46 -> r28`, `55/57/58/59 -> r26`, `66 -> r29`, plus class 1 iter
+  `14 -> f29` (phys 29), makes the function instruction/register-identical to target.
+  The remaining diff is only relocation-line offset/name noise. That is a much
+  stronger signal than the prior coarse match percentage: the current source is
+  structurally viable, and the unresolved work is natural C for the allocator
+  ordering around the cursor-row/jobjs[17] block.
+
+- Regression/bug: class-scoped `--force-phys` appears to apply to both GPR and
+  FP colorgraphs again on `fn_80248A78`. Repro:
+  `pcdump-local src/melee/mn/mnvibration.c --force-phys
+  'gpr:50:26,gpr:36:29' --force-phys-fn fn_80248A78`. The dump logs both
+  class 0 applications (`ig_idx=50: r29 -> r26`, `ig_idx=36: r0 -> r29`) and
+  class 1 applications (`ig_idx=50: r0 -> r26`, `ig_idx=36: r30 -> r29`).
+  The class/iteration form did not have this problem, so `--force-phys-iter`
+  is the reliable workaround for now.
+
+- `guide` with a target derived from the successful force-iter run is useful:
+  it correctly identifies `r34` as the cursor-row virtual wanting `r29` while
+  `r50/r68` occupy it, and points at alias/lifetime changes around repeated
+  `jobjs[17]` loads. Manual source tests this round were neutral or regressed
+  and were reverted: moving `cursor_row` to function scope regressed to
+  `99.31899%`, moving its nested declaration was neutral, changing it to `u32`
+  was neutral, removing `row_0_jobj` was neutral, and chained-initing the row
+  value inside the `(f32)` cast regressed to `98.22222%`.
+
+- `tier3-search -f fn_80248A78 --target <forced-target>` still reports "no
+  Tier 3 targets" even though `guide` has a concrete alias-split/lifetime
+  diagnosis involving compiler temps `r46/r50` (`lwz 80(r51)`) and `r34`. It
+  would be useful if Tier 3 could seed mutations from `suggest-coalesce-source
+  --discover`/`guide` compiler-temp facts, not only source variables that the
+  current symbol bridge can bind.
+
+- The `dd911094f` alias mutator fixes are partial. `tier3-search` on
+  `fn_802487A8` now has some alias seeds that compile, for example the `data`
+  alias seed, but aliases of locals whose first real value is assigned later
+  still initialize too early and fail with "variable X is not initialized
+  before being used" (`port_indicator`, `walker_b_clear`,
+  `gobj_user_data_alias`). Declaring the alias at block top but assigning it
+  immediately after the original local's first real definition would make these
+  seeds testable.
+
+- Another alias-mutator edge case: `tier3-search` on `fn_80247510` generated
+  invalid member syntax for the `jobjs` seed (`->jobjs_alias[23]`). The alias
+  rewriter needs to distinguish aliasing a local pointer from aliasing a field
+  name inside `data->jobjs`.
