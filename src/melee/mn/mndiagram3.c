@@ -931,6 +931,7 @@ void mnDiagram3_8024714C(void *arg0)
     mnDiagram_ArchiveData *archive;
     Vec3 sp48;
     f32 row_spacing;
+    u8 is_name_mode;
     int i;
 
     PAD_STACK(64);
@@ -998,6 +999,7 @@ void mnDiagram3_8024714C(void *arg0)
 
     data = mnDiagram3_804D6C20->user_data;
     row0 = data->jobjs[8];
+    is_name_mode = data->is_name_mode;
     row1 = data->jobjs[9];
     HSD_ASSERT(0x3EE, row0);
     HSD_ASSERT(0x3EE, row1);
@@ -1008,7 +1010,7 @@ void mnDiagram3_8024714C(void *arg0)
         u8 scroll = data->scroll_offset;
         f32 neg_spacing = -row_spacing;
         f32 font_size = mnDiagram3_804DBFFC;
-        u8 limit = data->is_name_mode ? 0x18 : 0x15;
+        u8 limit = is_name_mode ? 0x18 : 0x15;
 
         for (i = 0; i < 10; i++) {
             HSD_Text *text;
