@@ -218,6 +218,39 @@ Context: working on `src/melee/mn/mnvibration.c`, mainly `fn_80247510` and
   `(f32) (anim_byte_chain = data->x0[port_a + 2])` into assignment plus call,
   transferred cleanly but was neutral (`95.916664%`, delta `+0.0`).
 
+## Follow-up after merging `3aedb9a72`
+
+- `match-iter-first --auto-verify` on `fn_80247510` produced useful JSON, but
+  the verify cleanup path failed with `OSError: [Errno 18] Cross-device link`
+  while renaming `pcdump_*.txt` to `/dev/null`. It also left the temporary
+  `pcdump_38275_1779316767150.txt` in the repo root. The command still reported
+  baseline/new percent as `96.50341`, so the score path completed; only cleanup
+  looks broken.
+
+- `mutate type-change -f fn_80247510 --var cursor_row --type s32 --apply`
+  rewrote more than the requested local. Besides changing `cursor_row` and
+  top-level `name_idx` in `fn_80247510`, it also changed the unrelated
+  `name_idx` local inside `mnVibration_GetNameSlot` from `s32` to `u8`. The
+  mutator should scope edits to the selected function and exact variable, or
+  print every touched declaration before applying.
+
+- `mutate insert-alias` is still not actionable for the important locals in
+  `fn_80247510`: `jobj`, `cursor_row`, and later `data` uses either report
+  zero reading statements or only one top-level read, even though the remaining
+  mismatch is concentrated in nested navigation/cursor blocks. This is the same
+  nested-local visibility gap seen in `fn_80248A78`, but it now blocks the
+  highest-value alias-split experiments for `fn_80247510` too.
+
+- A stack-layout attribution helper would be valuable for large PAD_STACK
+  cases. In `fn_80247510`, removing the nested `PAD_STACK(120)` shrinks the
+  frame from `0x118` to `0xA0` and shifts the live out-pointer locals from
+  `0xD0/0xCC` to `0x58/0x54`. Replacing it with either 30 unused `s32` locals
+  or a 128-byte aggregate whose live fields are at `+0x78/+0x7C` reproduces the
+  same frame and stack refs. A tool that reports "unreferenced stack hole from
+  offsets X..Y" and suggests equivalent local aggregate shapes would directly
+  help distinguish missing params, missing inlines, unused debug locals, and
+  missing structs.
+
 ## Follow-up after merging `d48c08a2f`
 
 - `tier3-search -f fn_80247510 --budget 4 --per-seed-time 25 --total-time 140
