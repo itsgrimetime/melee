@@ -270,7 +270,7 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
 
 void fn_802461BC(HSD_GObj* gobj)
 {
-    u8 scroll;
+    s8 scroll;
     Vec3 sp_pos1;
     Vec3 sp_pos2;
     Vec3 sp_pos3;
@@ -304,7 +304,7 @@ void fn_802461BC(HSD_GObj* gobj)
 
     if (buttons & 0x20) {
         lbAudioAx_80024030(0);
-        mn_804A04F0.entering_menu = 0;
+        mn_804A04F0.entering_menu = sel;
         mode = ((Diagram3*) mnDiagram3_804D6C20->user_data)->is_name_mode;
         gmMainLib_8015CC34()->xD = mode;
         mnDiagram2_ClearDetailView(mnDiagram3_804D6C20);
