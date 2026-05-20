@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from .colorgraph_parser import ColorgraphSection
-from .parser import Function, Instruction, Pass
+from .parser import Block, Function, Instruction, Pass
 from .symbol_bridge import (
     Binding,
     BindingBasis,
@@ -165,3 +165,30 @@ def _is_param(
         if virtual in prefix:
             return True
     return False
+
+
+def _blocks_defining(pre_pass: Pass, virtual: int) -> list[Block]:
+    """Return all blocks where `virtual` is the destination (regs[0]) of
+    any instruction. Used by TernaryCollapsePattern for phi-like detection.
+    """
+    out: list[Block] = []
+    for block in pre_pass.blocks:
+        for ist in block.instructions:
+            if ist.regs and ist.regs[0] == ("r", virtual):
+                out.append(block)
+                break  # one def per block is enough
+    return out
+
+
+def _common_successor(blocks: list[Block]) -> Optional[int]:
+    """Return the single block index that is in EVERY input block's
+    successor set, or None if there isn't exactly one such join.
+    """
+    if not blocks:
+        return None
+    common = set(blocks[0].succ)
+    for b in blocks[1:]:
+        common &= set(b.succ)
+    if len(common) == 1:
+        return next(iter(common))
+    return None
