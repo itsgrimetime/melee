@@ -121,3 +121,19 @@ def test_direct_identity_skips_missing_first_def() -> None:
     facts = _facts_with({53: _vf(53, first_def=None)})
     s = DirectIdentityPattern().check(facts, (53, 34))
     assert s is None
+
+
+def test_direct_identity_skips_self_pair() -> None:
+    """Pair (a, a) is a no-op coalesce — pattern must not fire."""
+    fd = FirstDef(block_idx=0, opcode="mr", operands="r53,r53",
+                  annotations=[], regs=[("r", 53), ("r", 53)])
+    facts = _facts_with({53: _vf(53, fd)})
+    assert DirectIdentityPattern().check(facts, (53, 53)) is None
+
+
+def test_direct_identity_skips_physical_source() -> None:
+    """First-def `mr r53, r3` is an ABI move, not inter-virtual coalesce."""
+    fd = FirstDef(block_idx=0, opcode="mr", operands="r53,r3",
+                  annotations=[], regs=[("r", 53), ("r", 3)])
+    facts = _facts_with({53: _vf(53, fd)})
+    assert DirectIdentityPattern().check(facts, (53, 3)) is None

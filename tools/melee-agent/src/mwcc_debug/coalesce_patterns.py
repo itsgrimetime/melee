@@ -72,6 +72,8 @@ class DirectIdentityPattern:
     def check(self, facts: IrFacts,
               pair: tuple[int, int]) -> Optional[Suggestion]:
         a, b = pair
+        if a == b:
+            return None
         fa = facts.by_virtual.get(a)
         if fa is None or fa.first_def is None:
             return None
@@ -81,6 +83,9 @@ class DirectIdentityPattern:
         if fd.regs[0] != ("r", a):
             return None
         if fd.regs[1] != ("r", b):
+            return None
+        # Skip if source is a physical register (ABI move into/out of virtual)
+        if b < 32:
             return None
         if fd.opcode == "mr":
             return self._make_suggestion(facts, pair, fd, "mr")
