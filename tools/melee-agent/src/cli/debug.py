@@ -138,6 +138,23 @@ def pcdump(
                  "are violated.",
         ),
     ] = None,
+    force_phys_iter: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-phys-iter",
+            help="Tier 5: bias by colorgraph iter position "
+                 "(class:iter:phys[,...]). Use for nodes that lack an "
+                 "addressable ig_idx. EXPERIMENTAL.",
+        ),
+    ] = None,
+    force_phys_fn: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-phys-fn",
+            help="Scope --force-phys and --force-phys-iter to one function. "
+                 "EXPERIMENTAL.",
+        ),
+    ] = None,
     branch: Annotated[
         Optional[str],
         typer.Option(
@@ -241,6 +258,20 @@ def pcdump(
                 "--force-phys must not contain quotes, semicolons, or whitespace"
             )
         cmd_parts.append(f"set MWCC_DEBUG_FORCE_PHYS={force_phys}")
+    if force_phys_iter:
+        if any(c in force_phys_iter for c in '"\'; \t&|<>'):
+            raise typer.BadParameter(
+                "--force-phys-iter must not contain quotes, semicolons, "
+                "whitespace, or shell metacharacters"
+            )
+        cmd_parts.append(f"set MWCC_DEBUG_FORCE_PHYS_ITER={force_phys_iter}")
+    if force_phys_fn:
+        if any(c in force_phys_fn for c in '"\'; \t&|<>'):
+            raise typer.BadParameter(
+                "--force-phys-fn must not contain quotes, semicolons, "
+                "whitespace, or shell metacharacters"
+            )
+        cmd_parts.append(f"set MWCC_DEBUG_FORCE_PHYS_FUNCTION={force_phys_fn}")
     if branch and branch not in ("master", "main"):
         # Non-default branch — remote will use a worktree.
         cmd_parts.append(f"set MWCC_DEBUG_BRANCH={branch}")
@@ -3899,7 +3930,32 @@ def pcdump_local(
     ] = None,
     force_phys: Annotated[
         Optional[str],
-        typer.Option("--force-phys", help="Tier 5: allocator bias."),
+        typer.Option(
+            "--force-phys",
+            help="Tier 5: allocator bias by ig_idx. Format "
+                 "'virtIdx:physReg[,...]'. E.g. '36:31'. By default "
+                 "applies globally — scope with --force-phys-fn.",
+        ),
+    ] = None,
+    force_phys_iter: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-phys-iter",
+            help="Tier 5: allocator bias by colorgraph iteration "
+                 "position (class:iter:phys[,...]). Use when "
+                 "--force-phys can't target a node by ig_idx (rare, "
+                 "but happens for split/spill nodes created post-IG-"
+                 "build). E.g. '1:0:31' = class 1 (GPR), iter 0, "
+                 "force to r31.",
+        ),
+    ] = None,
+    force_phys_fn: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-phys-fn",
+            help="Scope --force-phys and --force-phys-iter to a "
+                 "single function name (mirrors --force-coalesce-fn).",
+        ),
     ] = None,
     force_iter_first: Annotated[
         Optional[str],
@@ -4011,6 +4067,10 @@ def pcdump_local(
     env["MWCC_DEBUG_PCDUMP_PATH"] = pcdump_name
     if force_phys:
         env["MWCC_DEBUG_FORCE_PHYS"] = force_phys
+    if force_phys_iter:
+        env["MWCC_DEBUG_FORCE_PHYS_ITER"] = force_phys_iter
+    if force_phys_fn:
+        env["MWCC_DEBUG_FORCE_PHYS_FUNCTION"] = force_phys_fn
     if force_iter_first:
         env["MWCC_DEBUG_FORCE_ITER_FIRST"] = force_iter_first
     if force_coalesce:
@@ -4033,7 +4093,20 @@ def pcdump_local(
     if proc.returncode != 0:
         # Compile failed — surface stderr but keep going if pcdump.txt
         # got produced (mwcc sometimes errors after emitting partial dump).
-        typer.echo(proc.stderr, err=True)
+        #
+        # Filter out MWCC's "User break, cancelled..." noise: that message
+        # fires from MWCC's interrupt handler during late-cleanup paths
+        # (post-listing, post-flush). It does NOT indicate the dump is
+        # bad — pcdump.txt is already written by the time this fires.
+        # Echoing it makes successful runs look like errors. We only echo
+        # stderr if there are non-noise lines left AND the dump is missing.
+        filtered = "\n".join(
+            line for line in proc.stderr.splitlines()
+            if "User break" not in line
+            and "cancelled..." not in line
+        ).strip()
+        if filtered:
+            typer.echo(filtered, err=True)
         if not pcdump_path.exists():
             raise typer.Exit(proc.returncode)
 
