@@ -49,3 +49,75 @@ def test_immediate_operand_parses_trailing_int() -> None:
     ist = Instruction(opcode="mr", operands="r53,r34",
                       annotations=[], regs=[("r", 53), ("r", 34)])
     assert _immediate_operand(ist) is None
+
+
+from src.mwcc_debug.coalesce_ir_facts import IrFacts, VirtualFacts
+from src.mwcc_debug.coalesce_patterns import DirectIdentityPattern
+from src.mwcc_debug.parser import Block, Pass
+from src.mwcc_debug.symbol_bridge import FirstDef
+
+
+def _facts_with(virtual_facts: dict) -> IrFacts:
+    return IrFacts(
+        function_name="f",
+        pre_pass=Pass(name="X"),
+        by_virtual=virtual_facts,
+        bindings=[],
+        basis=None,
+        cg_section=None,
+    )
+
+
+def _vf(virtual, first_def, *, is_phys=False, is_param=False,
+        use_sites=None):
+    return VirtualFacts(
+        virtual=virtual, first_def=first_def,
+        use_sites=use_sites or [], use_sites_truncated=False,
+        is_param=is_param, is_phys=is_phys,
+    )
+
+
+def test_direct_identity_matches_addi_zero() -> None:
+    """First-def `addi r53, r34, 0` → DirectIdentity fires."""
+    fd = FirstDef(block_idx=5, opcode="addi", operands="r53,r34,0",
+                  annotations=[])
+    # We also need regs on the underlying Instruction — but find_first_def
+    # exposes only opcode/operands/annotations. The pattern uses
+    # _immediate_operand which parses operands directly.
+    # However the spec says regs[0]==dest, regs[1]==source check is done.
+    # Our pattern looks at the underlying instruction's `regs`, so we
+    # need to wire that through. For test purposes, attach a synthetic
+    # instruction to the FirstDef via a side-channel — see Task 9 impl.
+    fd.regs = [("r", 53), ("r", 34)]  # type: ignore[attr-defined]
+    facts = _facts_with({53: _vf(53, fd)})
+    p = DirectIdentityPattern()
+    s = p.check(facts, (53, 34))
+    assert s is not None
+    assert s.pattern_name == "direct-identity"
+
+
+def test_direct_identity_skips_addi_nonzero() -> None:
+    """First-def `addi r53, r34, 8` → NOT identity (offset arithmetic)."""
+    fd = FirstDef(block_idx=5, opcode="addi", operands="r53,r34,8",
+                  annotations=[])
+    fd.regs = [("r", 53), ("r", 34)]  # type: ignore[attr-defined]
+    facts = _facts_with({53: _vf(53, fd)})
+    s = DirectIdentityPattern().check(facts, (53, 34))
+    assert s is None
+
+
+def test_direct_identity_skips_wrong_source_register() -> None:
+    """First-def `addi r53, r35, 0` → not from r34; pair (53,34) fails."""
+    fd = FirstDef(block_idx=5, opcode="addi", operands="r53,r35,0",
+                  annotations=[])
+    fd.regs = [("r", 53), ("r", 35)]  # type: ignore[attr-defined]
+    facts = _facts_with({53: _vf(53, fd)})
+    s = DirectIdentityPattern().check(facts, (53, 34))
+    assert s is None
+
+
+def test_direct_identity_skips_missing_first_def() -> None:
+    """Virtual not defined anywhere → no match."""
+    facts = _facts_with({53: _vf(53, first_def=None)})
+    s = DirectIdentityPattern().check(facts, (53, 34))
+    assert s is None
