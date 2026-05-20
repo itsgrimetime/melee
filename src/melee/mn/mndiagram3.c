@@ -287,6 +287,7 @@ void fn_802461BC(HSD_GObj* gobj)
     HSD_Text** new_var;
     int i;
     int val;
+    HSD_Text** new_var2;
     unsigned int limit;
     HSD_Text* text;
     f32 fi;
@@ -466,7 +467,8 @@ void fn_802461BC(HSD_GObj* gobj)
                     }
                 }
             }
-            if (data) {}
+            if (data) {
+            }
             row0 = d->jobjs[8];
             ((row0)
                  ? ((void) 0)
@@ -701,9 +703,10 @@ void fn_802461BC(HSD_GObj* gobj)
             data->scroll_offset = data->scroll_offset + 1;
 
             ptr = d = mnDiagram3_804D6C20->user_data;
+            new_var2 = (new_var = ptr->row_labels);
             for (i = 0; i < 10; i++) {
                 if (d->row_labels[i] != NULL) {
-                    HSD_SisLib_803A5CC4((new_var = ptr->row_labels)[i]);
+                    HSD_SisLib_803A5CC4(new_var2[i]);
                     d->row_labels[i] = NULL;
                 }
             }
