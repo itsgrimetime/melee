@@ -425,7 +425,8 @@ void fn_80247510(HSD_GObj* gobj)
     if (inputs_repeat & (0x20LL << 32)) {
         cursor_row = data->x0[1];
         if (cursor_row < 7) {
-            name_idx = mnVibration_GetNameSlot(data, cursor_row + 1);
+            int next_row = cursor_row + 1;
+            name_idx = mnVibration_GetNameSlot(data, next_row);
             if (name_idx != 0xFF) {
                 f32 dy;
                 MnVibrationData* nav_data;

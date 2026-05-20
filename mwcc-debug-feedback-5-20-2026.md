@@ -100,6 +100,36 @@ Context: working on `src/melee/mn/mnvibration.c`, mainly `fn_80247510` and
   `cursor_row`-style value in the cursor setup block. For this TU, nested-local
   awareness is the main difference between useful and misleading guidance.
 
+- After merging `20045b280`, `python tools/checkdiff.py fn_802487A8 --no-build
+  --format json` still exits 1 with the same `UnboundLocalError` after writing
+  valid JSON. The fix appears not to cover the no-build JSON return path yet.
+
+- After merging `20045b280`, `tier3-search -f fn_802487A8 --include-low-confidence`
+  still generates seeds that fail before mutation/permutation because the
+  staged full-TU source cannot open `#include "mnvibration.h"`. The compile
+  error points at line 1 of `tier3_seed_*/base.c`. The existing
+  `fix-perm-compile` wrapper says `already-fixed`, but it only stages the
+  candidate under `nonmatchings/.permuter_stage_$$.c`; for full-TU candidates,
+  that loses the original `src/melee/mn` quote-include search directory. A
+  source-dir include (`-i src/melee/mn`) or staging the candidate at the
+  original relative TU path would unblock these seeds.
+
+- `verify-with-name-magic` successfully renames `mnVibration_80248444`'s
+  anonymous constants (`@465 -> mnVibration_804DC018`,
+  `@513 -> mnVibration_804DC030`, `@539 -> mnVibration_804DC034`), but
+  `checkdiff` still reports a mismatch because the relocation offsets differ
+  by `+2` for the renamed SDA21 relocs (for example expected `+0xc0`, current
+  `+0xc2`). The function is classified as `relocation-label-only` with
+  `opcode_similarity=1.0` and `line_delta=0`, so this looks like a relocation
+  offset/postprocess gap rather than source codegen.
+
+- On the new `fn_80247510` baseline, `suggest-coalesce-source --discover`
+  found the retained `next_row` virtual as an end-of-chain pair (`34=39`).
+  Forcing `34=39` still hit the local wibo hang guard, but the latest tooling
+  now correctly warns that `--keep-obj` produced no object and skips syncing
+  the forced dump into the baseline cache. That addresses the earlier silent
+  forced-cache contamination failure mode.
+
 ## Useful signals from the new tooling
 
 - `fn_80247510`: force-targeting the expected head registers improves hunk
