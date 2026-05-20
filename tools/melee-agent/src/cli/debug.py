@@ -434,8 +434,24 @@ def _normalize_force_phys(raw: str) -> tuple[str, list[str]]:
         tokens = spec.split(":")
         if len(tokens) == 3 and tokens[0].lower() in _FORCE_PHYS_CLASS_NAMES:
             # class:ig_idx:phys form — strip the class prefix for the DLL.
-            _, ig_idx_s, phys_s = tokens
+            # WARNING (Fix C): The DLL (MWCC_DEBUG_FORCE_PHYS) only accepts
+            # the legacy "ig_idx:phys" format and applies the override to ALL
+            # IG classes (GPR class 0 and FP class 1) that share the same
+            # ig_idx slot.  The class prefix is stripped here but is NOT
+            # passed through to the DLL; the DLL has no class-aware filtering.
+            # This means 'gpr:50:26' and 'fp:50:26' both produce the same
+            # DLL string and will both be applied to ig_idx=50 in every class.
+            # Use --force-phys-iter for class-precise control.
+            class_s, ig_idx_s, phys_s = tokens
             dll_parts.append(f"{ig_idx_s}:{phys_s}")
+            warnings.append(
+                f"[force-phys] class-scoped form '{spec}' used: the DLL does "
+                f"not support class filtering — the override for ig_idx={ig_idx_s} "
+                f"will apply to ALL IG classes (GPR and FP) that have a node "
+                f"at that ig_idx, not just class '{class_s}'. "
+                f"Use '--force-phys-iter {class_s}:{ig_idx_s}:{phys_s}' for "
+                f"class-precise control if multiple classes share this ig_idx."
+            )
         elif len(tokens) == 2:
             # Bare ig_idx:phys form. The DLL accepts this but it matches
             # all IG classes (GPR, FP, etc.) with that ig_idx, which can
@@ -1680,6 +1696,41 @@ def verify_perm(
               else "Baseline match: (unknown)")
 
     candidate_text = candidate.read_text()
+
+    # -- Fix A: guard against permuter-internal placeholder leaks ----------
+    # decomp-permuter's randomizer uses placeholder names such as
+    # 'inline_fn', 'noinline_fn', etc. for AST nodes during mutation.
+    # These must NEVER appear in the final candidate — if they do, the
+    # candidate is corrupt and applying it would silently introduce
+    # unresolvable identifiers into real source.  We check the raw
+    # candidate text before any further processing so that nothing slips
+    # through regardless of merge strategy.
+    _PERMUTER_PLACEHOLDERS = (
+        "inline_fn", "noinline_fn", "extra_fn", "helper_fn",
+        "temp_fn", "local_var_fn",
+    )
+    _placeholder_hits: list[tuple[str, int]] = []
+    for _ph in _PERMUTER_PLACEHOLDERS:
+        _count = len(re.findall(r"\b" + re.escape(_ph) + r"\b", candidate_text))
+        if _count:
+            _placeholder_hits.append((_ph, _count))
+    if _placeholder_hits:
+        _ph_summary = ", ".join(
+            f"'{ph}' ({n} occurrence{'s' if n != 1 else ''})"
+            for ph, n in _placeholder_hits
+        )
+        typer.echo(
+            f"\n[verify-perm] ABORT: permuter placeholder(s) detected in "
+            f"candidate source: {_ph_summary}\n"
+            f"These are unresolved AST placeholders from decomp-permuter's "
+            f"randomizer that should never reach real source. The candidate "
+            f"is corrupt — do NOT apply.\n"
+            f"Candidate: {candidate}",
+            err=True,
+        )
+        raise typer.Exit(7)
+    # -- end Fix A ---------------------------------------------------------
+
     # Locate which side the function is missing in for a clearer message.
     from ..mwcc_debug.source_patch import find_function as _find_fn
     target_text = target_path.read_text()
@@ -1796,6 +1847,27 @@ def verify_perm(
 
     # If 3-way merge produced a result, overwrite the naive full-replace.
     if _merge_result is not None:
+        # Belt-and-suspenders: check merged text for placeholder leaks too.
+        # The pre-candidate check above covers regions touched by the permuter,
+        # but the merge might theoretically introduce a placeholder from the
+        # base side in a region outside the target function.
+        _merged_ph_hits: list[tuple[str, int]] = []
+        for _ph in _PERMUTER_PLACEHOLDERS:
+            _count = len(re.findall(r"\b" + re.escape(_ph) + r"\b", _merge_result))
+            if _count:
+                _merged_ph_hits.append((_ph, _count))
+        if _merged_ph_hits:
+            _mph_summary = ", ".join(
+                f"'{ph}' ({n} occurrence{'s' if n != 1 else ''})"
+                for ph, n in _merged_ph_hits
+            )
+            typer.echo(
+                f"\n[verify-perm] ABORT: permuter placeholder(s) detected "
+                f"in POST-MERGE source: {_mph_summary}\n"
+                f"The merged result is corrupt — aborting without writing.",
+                err=True,
+            )
+            raise typer.Exit(7)
         target_path.write_text(_merge_result)
 
     try:
@@ -4587,14 +4659,23 @@ def pcdump_local(
         typer.Option(
             "--force-phys-fn",
             help="Scope --force-phys and --force-phys-iter to a "
-                 "single function name (mirrors --force-coalesce-fn).",
+                 "single function name (mirrors --force-coalesce-fn). "
+                 "Does NOT scope --force-iter-first — that option is "
+                 "GLOBAL with no per-function variant.",
         ),
     ] = None,
     force_iter_first: Annotated[
         Optional[str],
         typer.Option(
             "--force-iter-first",
-            help="Tier 6: reorder simplification list.",
+            help="Tier 6: reorder simplification list. WARNING: GLOBAL — "
+                 "applies to EVERY function in the TU (no per-function "
+                 "scoping; --force-phys-fn does NOT scope this option, "
+                 "and there is no --force-iter-first-fn variant). On "
+                 "multi-function TUs, virtual indices are per-function, "
+                 "so an override aimed at one function may corrupt "
+                 "others. Use only on single-function TUs, or accept "
+                 "the cross-function blast radius.",
         ),
     ] = None,
     force_coalesce: Annotated[
@@ -4916,11 +4997,13 @@ def pcdump_local(
                 f"function's IGNode set (wrong function scoped by "
                 f"--force-coalesce-fn, or index out of range).\n"
                 f"  - Interfering pair: the two virtuals have a live-range "
-                f"conflict — try `debug analyze --cg` to inspect the "
-                f"colorgraph and check for interference edges.\n"
+                f"conflict — run `debug analyze -f <fn>` and look for "
+                f"'interferers:' near the relevant ig_idx to check "
+                f"interference edges.\n"
                 f"  - DLL crash in the coalesce hook (rare): check stderr "
                 f"above for exception traces.\n"
-                f"  Next: try a different pair, or use `debug analyze --cg` "
+                f"  Next: try a different pair, or run `debug analyze -f <fn>` "
+                f"and search the output for 'interferers:' near each ig_idx "
                 f"to find a non-interfering candidate."
             )
         typer.echo(hang_msg, err=True)
@@ -5343,6 +5426,18 @@ def permute(
     Default is single-threaded for safety. score-source now emits
     per-PID pcdump filenames so parallel threads no longer race on a
     shared pcdump.txt — raise `-j` above 1 if you want concurrency.
+
+    Passing flags through to permuter.py: Typer will try to consume any
+    leading `--<name>` tokens as options of `permute` itself. Use `--`
+    to separate. Examples:
+
+        # WRONG — Typer rejects --best-only as an unknown option
+        melee-agent debug permute -f my_fn --best-only
+
+        # RIGHT — `--` ends `permute`'s own options; everything after
+        # is forwarded to permuter.py
+        melee-agent debug permute -f my_fn -- --best-only
+        melee-agent debug permute -f my_fn -j 4 -- --best-only --seed 0
 
     Note: stdout is set to line-buffering so that piping through `tail -N`
     shows live progress instead of buffering until the permuter exits.
