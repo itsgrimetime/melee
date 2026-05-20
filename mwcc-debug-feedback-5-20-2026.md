@@ -52,6 +52,49 @@ matching bytes — verify with objdump -s -j .sdata2").
 Workaround: dump `.sdata2` with `powerpc-eabi-objdump -s -j .sdata2
 <target.o>` and read which 8-byte block contains which magic.
 
+### `verify-perm` permuter-macro leak (`inline_fn` placeholder)
+
+**Severity:** high — silently breaks the build.
+
+When `verify-perm --keep` applied permuter winner
+`output-1615-1` to fn_802461BC, the resulting source had three lines
+in `mnDiagram3_8024714C` (a sibling function in the same TU, NOT the
+target) like:
+
+```c
+if (!(inline_fn(popup_jobj) & 0x02000000))
+```
+
+where the original was:
+
+```c
+if (!(popup_jobj->flags & 0x02000000))
+```
+
+`inline_fn` is a placeholder name used inside decomp-permuter's
+randomizer (per `decomp-permuter/src/randomizer.py:2344`,
+`get_noncolliding_name(ast, "inline_fn")`). It should NEVER reach the
+real source — it's an internal AST placeholder that the permuter
+resolves before scoring. But verify-perm appears to take the
+candidate's raw source verbatim and copy regions into the real file
+that haven't had this name resolved.
+
+The leak is silent — `verify-perm` reports `Delta: +0.54%` and exits
+0. The next `ninja` build catches it as "function has no prototype",
+but the corrupted file has already been committed by then.
+
+Suggestion: `verify-perm` should grep for `inline_fn` (and similar
+permuter-internal names) in the candidate and abort with a clear
+message before writing.
+
+Workaround: run `git diff --check` or `grep inline_fn <file>` after
+each verify-perm before committing.
+
+The 3-way merge check (great feature!) caught a *different* class of
+issue (conflicts with manual edits), but missed this one because
+`inline_fn` appears only in regions outside the function being
+permuted — so it doesn't show up as a conflict.
+
 ### `verify-perm` silently reverts manual fixes
 
 **Severity:** medium.
