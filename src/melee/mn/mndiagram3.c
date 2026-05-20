@@ -106,7 +106,7 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
       stat_table += 0x36;
       for (i = 0; i < 5; i++)
       {
-        new_var = (u8) i;
+        new_var = i;
         if (data->is_name_mode != 0)
         {
           if (!mnDiagram2_IsIconOnlyStat(stat_type))
