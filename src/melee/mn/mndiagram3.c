@@ -280,6 +280,7 @@ void fn_802461BC(HSD_GObj* gobj)
     Diagram3* ptr;
     HSD_JObj* row0;
     HSD_JObj* row1;
+    f32 new_var3;
     HSD_JObj* popup_jobj;
     u32 buttons;
     u8 sel;
@@ -543,6 +544,7 @@ void fn_802461BC(HSD_GObj* gobj)
             d = mnDiagram3_804D6C20->user_data;
             row0 = d->jobjs[8];
             scroll = d->scroll_offset;
+            new_var3 = mnDiagram3_804DBFFC;
             ((row0)
                  ? ((void) 0)
                  : __assert(mnDiagram3_804D4FD8, 0x3EE, mnDiagram3_804D4FE0));
@@ -564,7 +566,7 @@ void fn_802461BC(HSD_GObj* gobj)
                 text = HSD_SisLib_803A5ACC(0, 1, sp_pos2.x - row_spacing,
                                            neg_spacing * fi + -sp_pos2.y,
                                            sp_pos2.z, mnDiagram3_804DBFFC,
-                                           mnDiagram3_804DBFFC);
+                                           new_var3);
                 d->row_labels[i] = text;
 
                 if (d->is_name_mode != 0) {
