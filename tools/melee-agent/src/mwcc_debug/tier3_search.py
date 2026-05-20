@@ -42,7 +42,9 @@ class SeedPlan:
 
 
 def plan_seeds(
-    bindings: list[Binding], budget: int = 5,
+    bindings: list[Binding],
+    budget: int = 5,
+    include_low_confidence: bool = False,
 ) -> list[SeedPlan]:
     """Given the function's variable bindings, propose up to `budget`
     seed mutations in priority order.
@@ -52,14 +54,24 @@ def plan_seeds(
       2. Pointer locals -> alias-split before first use
       3. Integer locals -> type-change widening + shrinking variants
     Bindings with kind='param' or confidence in {ambiguous, unsupported,
-    rejected} are skipped.
+    rejected, low-confidence} are skipped by default.
+
+    `include_low_confidence`: also accept 'low-confidence' bindings.
+    Useful when the function has red flags (nested decls, statics,
+    extra-virtuals) and you've manually verified the mapping via
+    `var-to-virtual --basis`. Off by default to avoid generating bad
+    seeds for functions where the bridge's cursor model is unreliable.
     """
+    accepted = {"best-guess", "verified"}
+    if include_low_confidence:
+        accepted = accepted | {"low-confidence"}
+
     plans: list[SeedPlan] = []
 
     for b in bindings:
         if b.kind != "local":
             continue
-        if b.confidence not in ("best-guess", "verified"):
+        if b.confidence not in accepted:
             continue
 
         # Pointer alias-split
@@ -132,21 +144,67 @@ def materialize_seed(
     return out
 
 
+@dataclass
+class CompileResult:
+    """Outcome of a smoke-compile attempt, with enough detail for the
+    agent to debug a failure manually."""
+    ok: bool
+    stderr: str         # full compiler stderr (empty if ok)
+    stdout: str         # full compiler stdout (mostly empty)
+    one_line_reason: str  # extracted first useful error line, or ""
+
+
+def _extract_one_line_reason(stderr: str, stdout: str) -> str:
+    """Pull the most-informative error line out of mwcc's output.
+
+    MWCC errors look like:
+        ### mwcceppc.exe Compiler:
+        #    File: src/melee/mn/mnvibration.c
+        # ----------------------------------
+        # 1234:  bad code here
+        # Error:   Illegal cast operation: ...
+    We want the first "Error:" line (or the first line that contains
+    "Error" or "syntax error"). Falls back to the first non-blank line
+    if no error keyword matches.
+    """
+    lines = (stderr + "\n" + stdout).splitlines()
+    for line in lines:
+        s = line.strip()
+        if not s:
+            continue
+        # MWCC error pattern: "# Error: ..." or "Error: ..."
+        low = s.lower()
+        if "error:" in low or "syntax error" in low or "illegal" in low:
+            # Strip leading '#' decoration that mwcc adds
+            return s.lstrip("# ").strip()
+    # Fallback: first non-blank non-decoration line
+    for line in lines:
+        s = line.strip()
+        if not s or s.startswith("#" + " " * 3) or s.startswith("---"):
+            continue
+        return s
+    return "(no compiler diagnostic captured)"
+
+
 def smoke_compile(
     seed_source_path: Path,
     wibo: Path,
     debug_compiler: Path,
     cflags: str,
     cwd: Path,
-) -> bool:
-    """Quick compile attempt - returns True iff the .o is produced
-    successfully. Discards the .o.
+) -> CompileResult:
+    """Quick compile attempt — returns a CompileResult with enough
+    detail for the agent to debug a failure manually. Discards the .o.
 
     Runs from `cwd` (typically the melee repo root) so the `-I` paths
     in cflags resolve correctly. The seed source itself is passed
     relative to cwd when possible, falling back to an absolute path
     when the seed lives outside cwd (e.g. in the decomp-permuter
     workspace).
+
+    Returns:
+        CompileResult with `ok`, captured `stderr`/`stdout`, and a
+        `one_line_reason` summary extracted from the compiler output.
     """
     out_o = Path("/tmp/tier3_smoke.o")
     if out_o.exists():
@@ -166,6 +224,41 @@ def smoke_compile(
         proc = subprocess.run(
             args, cwd=cwd, capture_output=True, text=True, timeout=30,
         )
-        return proc.returncode == 0 and out_o.exists()
+        ok = proc.returncode == 0 and out_o.exists()
+        if ok:
+            return CompileResult(ok=True, stderr="", stdout="", one_line_reason="")
+        return CompileResult(
+            ok=False,
+            stderr=proc.stderr or "",
+            stdout=proc.stdout or "",
+            one_line_reason=_extract_one_line_reason(
+                proc.stderr or "", proc.stdout or ""),
+        )
     except subprocess.TimeoutExpired:
-        return False
+        return CompileResult(
+            ok=False, stderr="", stdout="",
+            one_line_reason="compile timed out (>30s)",
+        )
+
+
+def save_compile_failure(seed_dir: Path, result: CompileResult) -> Path:
+    """Write the failed compile's stderr+stdout to a log inside seed_dir.
+    Returns the path to the written log."""
+    log_path = seed_dir / "compile_error.txt"
+    seed_dir.mkdir(parents=True, exist_ok=True)
+    body = []
+    body.append(f"# Compile failed for {seed_dir / 'base.c'}\n")
+    body.append(f"# One-line reason: {result.one_line_reason}\n\n")
+    if result.stderr:
+        body.append("=== stderr ===\n")
+        body.append(result.stderr)
+        if not result.stderr.endswith("\n"):
+            body.append("\n")
+        body.append("\n")
+    if result.stdout:
+        body.append("=== stdout ===\n")
+        body.append(result.stdout)
+        if not result.stdout.endswith("\n"):
+            body.append("\n")
+    log_path.write_text("".join(body))
+    return log_path

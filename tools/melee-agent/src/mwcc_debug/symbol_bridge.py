@@ -353,8 +353,83 @@ class Binding:
     decl_line: int         # 1-indexed line in original source
     kind: str              # "local" | "param"
     type_str: str
-    confidence: str        # "best-guess" | "verified" | "rejected"
-                           # | "ambiguous" | "unsupported"
+    confidence: str        # "best-guess" | "verified" | "low-confidence"
+                           # | "rejected" | "ambiguous" | "unsupported"
+                           # NOTE: "low-confidence" is a recent addition —
+                           # surfaces when the cursor heuristic LOOKS like
+                           # it matched but red flags suggest the mapping
+                           # may be off. tier3-search skips these by
+                           # default; CLI --include-low-confidence opts in.
+
+
+@dataclass
+class BindingBasis:
+    """Evidence + red-flag set for an entire function's bindings.
+
+    Returned alongside the Binding list by `list_bindings_with_basis`.
+    Lets callers explain WHY each binding got its confidence label,
+    and lets `var-to-virtual --basis` surface the heuristic's inputs.
+    """
+    parsed_params: list[LocalDecl]
+    parsed_locals: list[LocalDecl]
+    observed_virtuals: list[int]      # destinations seen in pre-pass, ≥32, in order
+    unrecognized_decls: list[str]     # decl-shaped statements the parser couldn't handle
+    red_flags: list[str]              # human-readable concerns
+
+
+def _collect_basis(
+    body_text: str,
+    params_text: str,
+    pre_pass,
+) -> tuple[list[LocalDecl], list[LocalDecl], list[int], list[str], list[str]]:
+    """Collect the raw inputs used by `list_bindings`'s heuristic.
+
+    Returns (params, locals, observed_virtuals, unrecognized_decls,
+    red_flags). The red_flags list contains string descriptions of
+    conditions that should lower the caller's trust in the cursor
+    model:
+
+      - "nested-decl"          : body contains nested-block decls the
+                                 parser doesn't descend into (cursor
+                                 model may be wrong beyond the first
+                                 nested block)
+      - "unrecognized-decl"    : a statement LOOKED like a decl but
+                                 couldn't be parsed (function pointers,
+                                 macros, etc.); raises by 1+
+      - "static-local"         : function contains 'static' locals,
+                                 which don't get virtuals
+      - "extra-virtuals"       : pre-pass shows substantially more
+                                 destination virtuals (≥+3) than parsed
+                                 locals — compiler likely added temp
+                                 virtuals (CSE, induction var) that
+                                 shift the cursor
+    """
+    unrecognized: list[str] = []
+    locals_ = walk_local_decls(body_text, on_unrecognized=unrecognized.append)
+    params = _parse_params(params_text)
+    virtuals = _collect_virtual_destinations(pre_pass)
+
+    red_flags: list[str] = []
+    if unrecognized:
+        red_flags.append("unrecognized-decl")
+
+    # Nested-block decl detection: look for `{` chars not part of init
+    # braces. A coarse heuristic — any `{` that follows a `)` (i.e.
+    # `if (...) {`, `for (...) {`, `while (...) {`) indicates a nested
+    # scope where MWCC may declare additional virtuals we don't see.
+    stripped = _strip_strings_and_comments(body_text)
+    if re.search(r"\)\s*\{", stripped):
+        red_flags.append("nested-decl")
+
+    # Static-local detection.
+    if re.search(r"\bstatic\s+[A-Za-z_]", stripped):
+        red_flags.append("static-local")
+
+    # Compiler-introduced virtuals overshoot.
+    if len(virtuals) >= len(params) + len(locals_) + 3:
+        red_flags.append("extra-virtuals")
+
+    return params, locals_, virtuals, unrecognized, red_flags
 
 
 _FN_HEADER_RE = re.compile(
@@ -472,6 +547,19 @@ def _collect_virtual_destinations(pre_pass) -> list[int]:
 def list_bindings(source: str, fn_name: str, pre_pass) -> list[Binding]:
     """Return Binding entries (both params and locals) for `fn_name`.
 
+    Thin wrapper around `list_bindings_with_basis` — returns only the
+    bindings, dropping the basis evidence. Maintained for backward
+    compatibility with the original API.
+    """
+    bindings, _basis = list_bindings_with_basis(source, fn_name, pre_pass)
+    return bindings
+
+
+def list_bindings_with_basis(
+    source: str, fn_name: str, pre_pass,
+) -> tuple[list[Binding], Optional[BindingBasis]]:
+    """Return Bindings + the evidence used to derive them.
+
     Heuristic: MWCC numbers parameters then locals deterministically
     starting at virtual r32, in source declaration order. Each
     binding's predicted virtual is `32 + cursor`.
@@ -483,31 +571,35 @@ def list_bindings(source: str, fn_name: str, pre_pass) -> list[Binding]:
     NOT appear as a destination in the pre-coloring pass. That's the
     common case for `gobj` in proc callbacks and similar.
 
-    For LOCALS: if the predicted virtual is observed as a destination
-    in the pre-pass, confidence is 'best-guess'; otherwise it's
-    'ambiguous' (the slot is probably eliminated by dead-code
-    elimination, or the local is only read from a memory location).
+    For LOCALS:
+      - If the predicted virtual IS observed as a destination AND no
+        red flags are set → 'best-guess'.
+      - If the predicted virtual IS observed but red flags ARE set →
+        'low-confidence'. The cursor model may have shifted, the
+        match could be coincidental, and tier3-search will skip it
+        unless explicit opt-in.
+      - If the predicted virtual is NOT observed → 'ambiguous'.
 
-    The cursor advances on every iteration whether or not a virtual
-    is observed, so missing slots don't silently shift later bindings.
+    The basis carries the raw inputs (parsed params/locals, observed
+    virtuals, unrecognized decls, red flags) so callers can dump them
+    for diagnosis or audit confidence assignments.
+
+    Returns (None) basis if the function couldn't be extracted at all.
     """
     extracted = _extract_function_text(source, fn_name)
     if extracted is None:
-        return []
+        return [], None
     params_text, body_text, start_line = extracted
 
-    params = _parse_params(params_text)
-    locals_ = walk_local_decls(body_text)
-    virtuals = _collect_virtual_destinations(pre_pass)
+    (params, locals_, virtuals, unrecognized,
+     red_flags) = _collect_basis(body_text, params_text, pre_pass)
     virtuals_set: set[int] = set(virtuals)
 
     out: list[Binding] = []
     cursor = 0
     for p in params:
         expected = 32 + cursor
-        # Params are unconditionally best-guess: MWCC always allocates
-        # a virtual slot for each parameter, even when it's not
-        # re-defined in the function body.
+        # Params are unconditionally best-guess (per docstring).
         out.append(Binding(
             var_name=p.name,
             virtual=expected,
@@ -520,13 +612,16 @@ def list_bindings(source: str, fn_name: str, pre_pass) -> list[Binding]:
     for ld in locals_:
         expected = 32 + cursor
         if expected in virtuals_set:
+            # Hit — but demote to low-confidence if red flags warn the
+            # cursor model may be unreliable for this function.
+            confidence = "low-confidence" if red_flags else "best-guess"
             out.append(Binding(
                 var_name=ld.name,
                 virtual=expected,
                 decl_line=start_line,
                 kind="local",
                 type_str=ld.type_str,
-                confidence="best-guess",
+                confidence=confidence,
             ))
         else:
             out.append(Binding(
@@ -538,7 +633,15 @@ def list_bindings(source: str, fn_name: str, pre_pass) -> list[Binding]:
                 confidence="ambiguous",
             ))
         cursor += 1
-    return out
+
+    basis = BindingBasis(
+        parsed_params=params,
+        parsed_locals=locals_,
+        observed_virtuals=virtuals,
+        unrecognized_decls=unrecognized,
+        red_flags=red_flags,
+    )
+    return out, basis
 
 
 def find_virtual_for_var(
@@ -566,4 +669,43 @@ def find_var_for_virtual(
     for b in list_bindings(source, fn_name, pre_pass):
         if b.virtual == virtual:
             return b
+    return None
+
+
+@dataclass
+class FirstDef:
+    """First-write IR op for a virtual register — fallback identity when
+    no source variable maps to it. Useful for compiler-introduced temps
+    (CSE/IV/spill) where the agent needs to correlate the virtual to a
+    C-source memory access or expression."""
+    block_idx: int          # block where the virtual is first defined
+    opcode: str             # e.g. "lwz", "addi", "mr"
+    operands: str           # full operand string ("r62, 44(r34)" etc.)
+    annotations: list[str]  # any pcode annotations on the instruction
+
+
+def find_first_def(virtual: int, pre_pass) -> Optional[FirstDef]:
+    """Return the first instruction in `pre_pass` whose destination
+    operand is `virtual`. Convention: regs[0] is the dest for most
+    pcode ops in the pre-coloring pass.
+
+    Used by virtual-to-var as a fallback when no source binding maps
+    to the requested virtual. Example return for a compiler temp
+    holding a struct field load:
+        FirstDef(block_idx=0, opcode="lwz", operands="r62, 44(r34)", ...)
+    The agent reads this and knows: "r62 is `something->field_at_0x2C`
+    where `something` lives in r34."
+    """
+    for block in pre_pass.blocks:
+        for ist in block.instructions:
+            if not ist.regs:
+                continue
+            kind, num = ist.regs[0]
+            if kind == "r" and num == virtual:
+                return FirstDef(
+                    block_idx=block.index,
+                    opcode=ist.opcode,
+                    operands=ist.operands,
+                    annotations=list(ist.annotations),
+                )
     return None
