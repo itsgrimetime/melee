@@ -4750,3 +4750,129 @@ def tier3_search(
         "current workaround. See "
         "docs/mwcc-debug-permuter-integration.md."
     )
+
+
+@debug_app.command(name="verify-with-name-magic")
+def verify_with_name_magic(
+    function: Annotated[
+        str,
+        typer.Option("--function", "-f", help="Function name"),
+    ],
+    name_map: Annotated[
+        Optional[str],
+        typer.Option(
+            "--map", "-m",
+            help="Pass to name-magic. E.g., "
+                 "'s32=mnVibration_804DC018,u32=mnVibration_804DC010'. "
+                 "Optional — if omitted, runs checkdiff without renaming.",
+        ),
+    ] = None,
+) -> None:
+    """Compile, optionally rename anonymous SDA2 constants, then checkdiff.
+
+    Separates 'this is just constant-label noise' from 'this is real
+    codegen diff.' The agent runs this to confirm whether anonymous-vs-
+    named SDA2 relocations are the only diff, or whether there's still
+    a real .text mismatch.
+
+    Flow:
+      1. Build the function's TU object (`ninja build/GALE01/src/<unit>.o`)
+      2. If `--map` given, rename anonymous @N .sdata2 symbols via objcopy
+      3. Run `tools/checkdiff.py <function> --format plain` and forward
+         its output verbatim.
+    """
+    melee_root = DEFAULT_MELEE_ROOT
+    unit = _find_unit_for_function(function, melee_root)
+    if unit is None:
+        # Suggest similar names from report.json (mirrors verify-perm)
+        try:
+            report_path = melee_root / "build" / "GALE01" / "report.json"
+            if report_path.exists():
+                with report_path.open() as f:
+                    rdata = json.load(f)
+                all_names = [fn.get("name") for u in rdata.get("units", [])
+                             for fn in u.get("functions", []) if fn.get("name")]
+                suggestions = _suggest_similar_functions(function, all_names)
+            else:
+                suggestions = []
+        except Exception:
+            suggestions = []
+        msg = f"function {function!r} not in report.json."
+        if suggestions:
+            msg += "\n\nDid you mean one of these?"
+            for s in suggestions:
+                msg += f"\n  - {s}"
+        msg += "\n\nTry `ninja build/GALE01/report.json` to regenerate, then retry."
+        typer.echo(msg, err=True)
+        raise typer.Exit(2)
+
+    obj_rel = Path("build") / "GALE01" / "src" / f"{unit}.o"
+    obj_path = melee_root / obj_rel
+
+    # 1. Build the .o
+    print(f"[verify] building {obj_rel}...")
+    proc = subprocess.run(
+        ["ninja", str(obj_rel)],
+        cwd=melee_root, capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        err_summary = _extract_ninja_error(proc.stdout, proc.stderr)
+        typer.echo(f"ninja failed building {obj_rel}:", err=True)
+        typer.echo(err_summary, err=True)
+        raise typer.Exit(3)
+    if not obj_path.exists():
+        typer.echo(
+            f"ninja reported success but {obj_rel} not found", err=True,
+        )
+        raise typer.Exit(3)
+
+    # 2. Rename anonymous SDA2 symbols if --map given
+    if name_map:
+        from ..mwcc_debug.o_rewriter import (
+            parse_mapping,
+            rename_magic_symbols,
+        )
+        try:
+            mapping = parse_mapping(name_map)
+        except ValueError as e:
+            typer.echo(f"invalid --map: {e}", err=True)
+            raise typer.Exit(2)
+        try:
+            renames = rename_magic_symbols(obj_path, mapping)
+        except FileNotFoundError as e:
+            typer.echo(
+                f"objcopy not found: {e}. Install devkitPPC.",
+                err=True,
+            )
+            raise typer.Exit(5)
+        except subprocess.CalledProcessError as e:
+            typer.echo(f"objcopy failed: {e}", err=True)
+            raise typer.Exit(5)
+        if renames:
+            print(f"[verify] renamed {len(renames)} symbol(s):")
+            for old, new in renames:
+                print(f"          {old} -> {new}")
+        else:
+            print(
+                "[verify] no matching anonymous symbols found to rename "
+                "(use `debug name-magic <o_file> --list` to inspect)"
+            )
+    else:
+        print("[verify] no --map given; running checkdiff against current .o as-is")
+
+    # 3. Run checkdiff — pass --no-build so its internal ninja invocation
+    # doesn't clobber the objcopy rename we just made.
+    print(f"[verify] running checkdiff.py {function}...")
+    proc = subprocess.run(
+        [
+            "python", "tools/checkdiff.py", function,
+            "--format", "plain", "--no-build",
+        ],
+        cwd=melee_root, capture_output=True, text=True,
+    )
+    # Forward stdout (the diff) and stderr verbatim
+    if proc.stdout:
+        print(proc.stdout)
+    if proc.stderr:
+        typer.echo(proc.stderr, err=True)
+    raise typer.Exit(proc.returncode)
