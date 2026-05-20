@@ -5001,6 +5001,125 @@ def var_to_virtual(
             _print_basis(basis_data, bindings)
 
 
+@debug_app.command(name="suggest-coalesce-source")
+def suggest_coalesce_source(
+    function: Annotated[
+        str,
+        typer.Option(
+            "--function", "-f",
+            help="Function to analyze (required).",
+        ),
+    ],
+    pair: Annotated[
+        Optional[str],
+        typer.Option(
+            "-V", "--pair",
+            help="Pair mode: 'virt=root' (e.g. '53=3'). Mutually "
+                 "exclusive with --discover.",
+        ),
+    ] = None,
+    discover: Annotated[
+        bool,
+        typer.Option(
+            "--discover",
+            help="Discover mode: find candidate coalesces that would "
+                 "shorten the longest callee-save cascade. Mutually "
+                 "exclusive with --pair.",
+        ),
+    ] = False,
+    top: Annotated[
+        int,
+        typer.Option(
+            "--top",
+            help="Discover mode: max candidates (default 3). Raises "
+                 "BadParameter if passed in pair mode.",
+        ),
+    ] = 3,
+    pcdump: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--pcdump",
+            help="Path to pcdump.txt. Auto-resolves from cache.",
+        ),
+    ] = None,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit as JSON."),
+    ] = False,
+    include_low_confidence: Annotated[
+        bool,
+        typer.Option(
+            "--include-low-confidence",
+            help="Use low-confidence bridge bindings for source-line "
+                 "annotations.",
+        ),
+    ] = False,
+) -> None:
+    """Suggest C-source patterns producing a specific coalesce, or
+    discover candidate coalesces that would shorten the cascade.
+
+    Pair mode example:
+        debug suggest-coalesce-source -f fn_802461BC -V 53=3
+
+    Discover mode example:
+        debug suggest-coalesce-source -f fn_802461BC --discover --top 5
+    """
+    from ..mwcc_debug.suggest_coalesce import render_json, render_text, run
+
+    # Validation: exactly one of --pair / --discover (XOR check)
+    if (pair is None) == (not discover):
+        raise typer.BadParameter(
+            "exactly one of --pair / --discover required"
+        )
+    # --top only makes sense in discover mode
+    if pair is not None and top != 3:
+        raise typer.BadParameter(
+            "--top is only valid with --discover"
+        )
+
+    melee_root = DEFAULT_MELEE_ROOT
+    pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
+    text = pcdump_path.read_text()
+
+    # Load source for the bridge — CLI handles this so the orchestrator
+    # stays path-free (avoids circular import on cli.debug helpers).
+    source_text = ""
+    unit = _find_unit_for_function(function, melee_root)
+    if unit is not None:
+        src_path = melee_root / "src" / f"{unit}.c"
+        if src_path.exists():
+            source_text = src_path.read_text()
+
+    parsed_pair: Optional[tuple[int, int]] = None
+    if pair is not None:
+        try:
+            lhs, rhs = pair.split("=", 1)
+            parsed_pair = (int(lhs), int(rhs))
+        except (ValueError, TypeError):
+            raise typer.BadParameter(
+                f"invalid --pair {pair!r}; expected 'virt=root' (e.g. '53=3')"
+            )
+
+    try:
+        report = run(
+            function=function,
+            pair=parsed_pair,
+            discover=discover,
+            top=top,
+            include_low_confidence=include_low_confidence,
+            pcdump_text=text,
+            source_text=source_text,
+        )
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(3)
+
+    if json_out:
+        print(render_json(report))
+    else:
+        print(render_text(report))
+
+
 def _basis_to_dict(basis) -> dict:
     """Render a BindingBasis as a JSON-compatible dict."""
     return {
