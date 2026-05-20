@@ -290,6 +290,34 @@ def test_alias_split_excludes_direct_identity_case() -> None:
     assert AliasSplitPattern().check(facts, (33, 32)) is None
 
 
+def test_alias_split_skips_when_b_use_sites_truncated() -> None:
+    """When r_b's use_sites was capped, both numerator and denominator
+    are unreliable — pattern bails out to fall-through (Spec §5)."""
+    fd_long = FirstDef(block_idx=0, opcode="li", operands="r32,5",
+                       annotations=[], regs=[("r", 32)])
+    fd_short = FirstDef(block_idx=7, opcode="addi", operands="r33,r32,1",
+                        annotations=[], regs=[("r", 33), ("r", 32)])
+    # Construct r_b with use_sites_truncated=True even though len(use_sites)
+    # passes the >= 4 threshold — we want the truncation flag to override.
+    vf_b = VirtualFacts(
+        virtual=32, first_def=fd_long, use_sites=[
+            _mk_use(0), _mk_use(1), _mk_use(2), _mk_use(5), _mk_use(7),
+        ],
+        use_sites_truncated=True,  # <-- the relevant flag
+        is_param=False, is_phys=False,
+    )
+    facts = IrFacts(
+        function_name="f",
+        pre_pass=_pre_pass_with_blocks(8),
+        by_virtual={
+            32: vf_b,
+            33: _vf(33, fd_short, use_sites=[_mk_use(7), _mk_use(7)]),
+        },
+        bindings=[], basis=None, cg_section=None,
+    )
+    assert AliasSplitPattern().check(facts, (33, 32)) is None
+
+
 from src.mwcc_debug.coalesce_patterns import CommonSubExprPattern
 
 
