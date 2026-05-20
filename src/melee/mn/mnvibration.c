@@ -391,12 +391,12 @@ void fn_80247510(HSD_GObj* gobj)
         lbAudioAx_80024030(1);
         cursor_row = data->x0[1];
         name_idx = mnVibration_GetNameSlot(data, cursor_row);
-        if (GetPersistentNameData(name_idx)->x1A1 == 1) {
+        if (mnVibration_GetNameRumble(name_idx) == 1) {
             GetPersistentNameData(name_idx)->x1A1 = 0;
         } else {
             GetPersistentNameData(name_idx)->x1A1 = 1;
         }
-        rumble_setting = GetPersistentNameData(name_idx)->x1A1;
+        rumble_setting = mnVibration_GetNameRumble(name_idx);
         jobj = mnVibration_802474C4(data->x0[1]);
         HSD_JObjReqAnimAll(jobj, rumble_setting);
         HSD_JObjAnimAll(jobj);
