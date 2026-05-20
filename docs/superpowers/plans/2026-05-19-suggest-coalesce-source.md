@@ -358,12 +358,17 @@ git commit -m "suggest-coalesce-source: collect() single-block extraction (Task 
 
 ---
 
-## Task 3: `collect()` — use_sites aggregation + truncation
+## Task 3: `collect()` — coverage tests for multi-block + truncation
 
 **Files:**
 - Modify: `tools/melee-agent/tests/test_coalesce_ir_facts.py`
 
-- [ ] **Step 3.1: Write tests for multi-block aggregation + truncation**
+Task 2's implementation already handles both behaviors (see the two
+`for block in pre_pass.blocks` loops). This task adds explicit
+coverage. Note: this is NOT a strict red-first TDD step — the tests
+should pass on first run since the behavior is implemented.
+
+- [ ] **Step 3.1: Write coverage tests for multi-block aggregation + truncation**
 
 Append to `test_coalesce_ir_facts.py`:
 
@@ -425,12 +430,16 @@ git commit -m "suggest-coalesce-source: use-sites aggregation tests (Task 3)"
 
 ---
 
-## Task 4: `is_param` operational definition
+## Task 4: `is_param` — coverage tests for both paths
 
 **Files:**
 - Modify: `tools/melee-agent/tests/test_coalesce_ir_facts.py`
 
-- [ ] **Step 4.1: Write tests for both paths**
+Task 2's `_is_param` helper already implements both paths (entry-block
+ABI-mr + bridge prefix fallback). This task adds explicit coverage.
+Not strict red-first — tests should pass first run.
+
+- [ ] **Step 4.1: Write coverage tests for both paths**
 
 Append:
 
@@ -712,10 +721,17 @@ def test_analyze_cascade_marks_dependency_chain() -> None:
     ]
     facts = _make_facts_with_cg(_make_cg_section(decisions))
     candidates = analyze_cascade(facts)
-    # Find a frees-slot candidate; it must have depends_on set
+    # Three contiguous regs → one end-of-chain pair + one frees-slot
+    # pair (29-holder into 30-holder). Strict assertion: frees must exist.
     frees = [c for c in candidates if c.priority_class == "frees-slot"]
-    if frees:
-        assert frees[0].depends_on is not None
+    assert frees, "expected at least one mid-chain frees-slot candidate"
+    assert frees[0].depends_on is not None
+    # The dependency should refer to the end-of-chain pair (60, 61)
+    # (29-holder=62 depends_on 30-holder=61's merge into 30→31... actually
+    # the end-of-chain pair is the LOWEST-reg → next pair: (60, 61)
+    # since cascade=[29, 30, 31], end_pair=(by_reg[29].ig_idx,
+    # by_reg[30].ig_idx) = (62, 61))
+    assert frees[0].depends_on == (62, 61)
 ```
 
 - [ ] **Step 6.2: Run, verify failure**
@@ -912,13 +928,16 @@ git commit -m "suggest-coalesce-source: calibration pcdump fixtures (Task 7)"
 - Create: `tools/melee-agent/src/mwcc_debug/coalesce_patterns.py`
 - Create: `tools/melee-agent/tests/test_coalesce_patterns.py`
 
-- [ ] **Step 8.1: Write the failing test**
+- [ ] **Step 8.1: Write the failing tests (with skip-marker for the
+  pending all-patterns check)**
 
 ```python
 # tools/melee-agent/tests/test_coalesce_patterns.py
 """Tests for per-pattern coalesce checkers."""
 
 from __future__ import annotations
+
+import pytest
 
 from src.mwcc_debug.coalesce_patterns import (
     ALL_PATTERNS,
@@ -941,6 +960,8 @@ def test_suggestion_dataclass_shape() -> None:
     assert s.pattern_name == "direct-identity"
 
 
+# Skipped until Tasks 9–13 add each checker; un-skipped in Task 13.
+@pytest.mark.skip(reason="checkers added in Tasks 9-13; final assertion enabled in Task 13")
 def test_all_patterns_initial_set() -> None:
     """ALL_PATTERNS should list exactly the five v1 checkers."""
     names = {p.name for p in ALL_PATTERNS}
@@ -1037,20 +1058,10 @@ def _immediate_operand(ist: Instruction) -> Optional[int]:
 ALL_PATTERNS: list[Pattern] = []
 ```
 
-Since the `ALL_PATTERNS` list is empty at this stage, the `test_all_patterns_initial_set` test will fail. We deliberately leave that failure visible until Tasks 9–13 add each checker. To keep this task's commit green, add a TEMPORARY skip marker we'll remove in Task 13:
-
-```python
-# At top of test_coalesce_patterns.py, replace the all-patterns test with:
-import pytest
-
-@pytest.mark.skip(reason="checkers added in Tasks 9-13; final assertion enabled in Task 13")
-def test_all_patterns_initial_set() -> None:
-    names = {p.name for p in ALL_PATTERNS}
-    assert names == {
-        "direct-identity", "chain-init", "alias-split",
-        "common-subexpr", "ternary-collapse",
-    }
-```
+The `ALL_PATTERNS` list is empty at this stage. The
+`test_all_patterns_initial_set` test is marked `@pytest.mark.skip` in
+Step 8.1 above, to be un-skipped in Task 13 once all five checkers
+land. No test rewrite needed mid-task.
 
 - [ ] **Step 8.4: Run, verify pass**
 
@@ -2133,42 +2144,29 @@ def run(
     discover: bool = False,
     top: int = 3,
     include_low_confidence: bool = False,
-    pcdump_text: Optional[str] = None,
-    melee_root: Optional[Path] = None,
+    pcdump_text: str,
+    source_text: str = "",
 ) -> Report:
     """Build a Report for `function`.
 
-    Caller provides either `pcdump_text` (preferred, already loaded) or
-    `melee_root` (we read from the cache). Exactly one of `pair` or
-    `discover` must be set — the CLI enforces this.
-    """
-    if pcdump_text is None and melee_root is None:
-        raise ValueError("provide either pcdump_text or melee_root")
-    if pcdump_text is None:
-        from .cache import find_cached_pcdump
-        path = find_cached_pcdump(melee_root, function)
-        if path is None:
-            raise FileNotFoundError(
-                f"no cached pcdump for {function}; run pcdump-local first"
-            )
-        pcdump_text = path.read_text()
+    The CLI is responsible for resolving pcdump + source paths and
+    passing their contents in. Keeping this module path-free avoids a
+    backward import on cli.debug (which would create a circular
+    dependency since cli.debug already imports this module).
 
+    Exactly one of `pair` or `discover` must be set — the CLI
+    enforces this.
+    """
     fns = parse_pcdump(pcdump_text)
     fn = next((f for f in fns if f.name == function), None)
     if fn is None:
         raise ValueError(f"function {function!r} not in pcdump")
 
-    # Read source for the bridge
-    source = ""
-    if melee_root is not None:
-        from ..cli.debug import _find_unit_for_function
-        unit = _find_unit_for_function(function, melee_root)
-        if unit is not None:
-            src_path = melee_root / "src" / f"{unit}.c"
-            if src_path.exists():
-                source = src_path.read_text()
-
-    facts = collect(fn, source)
+    facts = collect(fn, source_text)
+    if facts.pre_pass.name == "(missing)":
+        raise ValueError(
+            f"no pre-coloring pass for {function!r}; pcdump lacks IR detail"
+        )
 
     # Hook events for colorgraph data (discover mode needs this)
     if discover:
@@ -2207,7 +2205,10 @@ def run(
                 suggestions.append(sug)
         pair_reports.append(PairReport(
             from_virt=a, to_virt=b,
-            ir_facts=_summarize_facts(facts, a, b),
+            ir_facts=_summarize_facts(
+                facts, a, b,
+                include_low_confidence=include_low_confidence,
+            ),
             suggestions=suggestions,
             priority_class=cand.priority_class if cand else None,
             depends_on=cand.depends_on if cand else None,
@@ -2221,9 +2222,21 @@ def run(
     )
 
 
-def _summarize_facts(facts: IrFacts, a: int, b: int) -> dict:
-    """Serializable per-virtual fact summary for JSON + text output."""
+def _summarize_facts(
+    facts: IrFacts, a: int, b: int,
+    *, include_low_confidence: bool = False,
+) -> dict:
+    """Serializable per-virtual fact summary for JSON + text output.
+
+    Source-line annotations from the bridge are only emitted when the
+    binding confidence is best-guess/verified (or low-confidence with
+    the explicit opt-in). Lower-confidence bindings are dropped from
+    the summary — agents shouldn't act on potentially-wrong mappings.
+    """
     out: dict = {}
+    accepted = {"best-guess", "verified"}
+    if include_low_confidence:
+        accepted = accepted | {"low-confidence"}
     for label, v in [("from", a), ("to", b)]:
         vf = facts.by_virtual.get(v)
         entry: dict = {"virtual": v, "is_phys": vf.is_phys if vf else False}
@@ -2233,10 +2246,10 @@ def _summarize_facts(facts: IrFacts, a: int, b: int) -> dict:
                 "opcode": vf.first_def.opcode,
                 "operands": vf.first_def.operands,
             }
-            entry["use_blocks"] = sorted({b for (b, _) in vf.use_sites})
-        # Source-line annotation from bridge bindings
+            entry["use_blocks"] = sorted({bi for (bi, _) in vf.use_sites})
+        # Source-line annotation from bridge bindings, gated by confidence.
         for binding in facts.bindings:
-            if binding.virtual == v:
+            if binding.virtual == v and binding.confidence in accepted:
                 entry["bridge"] = {
                     "var": binding.var_name,
                     "line": binding.decl_line,
@@ -2400,7 +2413,8 @@ def suggest_coalesce_source(
     ] = 3,
     pcdump: Annotated[
         Optional[Path],
-        typer.Argument(
+        typer.Option(
+            "--pcdump",
             help="Path to pcdump.txt. Auto-resolves from cache.",
         ),
     ] = None,
@@ -2428,22 +2442,29 @@ def suggest_coalesce_source(
     """
     from ..mwcc_debug.suggest_coalesce import render_json, render_text, run
 
-    # Validation: exactly one of --pair / --discover
+    # Validation: exactly one of --pair / --discover (XOR check)
     if (pair is None) == (not discover):
-        typer.echo(
-            "exactly one of --pair / --discover required", err=True,
+        raise typer.BadParameter(
+            "exactly one of --pair / --discover required"
         )
-        raise typer.Exit(2)
     # --top only makes sense in discover mode
     if pair is not None and top != 3:
-        typer.echo(
-            "--top is only valid with --discover", err=True,
+        raise typer.BadParameter(
+            "--top is only valid with --discover"
         )
-        raise typer.Exit(2)
 
     melee_root = DEFAULT_MELEE_ROOT
     pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
     text = pcdump_path.read_text()
+
+    # Load source for the bridge — CLI handles this so the orchestrator
+    # stays path-free (avoids circular import on cli.debug helpers).
+    source_text = ""
+    unit = _find_unit_for_function(function, melee_root)
+    if unit is not None:
+        src_path = melee_root / "src" / f"{unit}.c"
+        if src_path.exists():
+            source_text = src_path.read_text()
 
     parsed_pair: Optional[tuple[int, int]] = None
     if pair is not None:
@@ -2451,11 +2472,9 @@ def suggest_coalesce_source(
             lhs, rhs = pair.split("=", 1)
             parsed_pair = (int(lhs), int(rhs))
         except (ValueError, TypeError):
-            typer.echo(
-                f"invalid --pair {pair!r}; expected 'virt=root' (e.g. '53=3')",
-                err=True,
+            raise typer.BadParameter(
+                f"invalid --pair {pair!r}; expected 'virt=root' (e.g. '53=3')"
             )
-            raise typer.Exit(2)
 
     try:
         report = run(
@@ -2465,9 +2484,9 @@ def suggest_coalesce_source(
             top=top,
             include_low_confidence=include_low_confidence,
             pcdump_text=text,
-            melee_root=melee_root,
+            source_text=source_text,
         )
-    except (FileNotFoundError, ValueError) as e:
+    except ValueError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(3)
 
@@ -2503,31 +2522,42 @@ git commit -m "suggest-coalesce-source: CLI command (Task 15)"
 
 ```yaml
 # tools/melee-agent/tests/fixtures/coalesce_calibration.yaml
+# Strict matching per spec §13 success criterion 2. Each case lists
+# the EXACT expected pattern names or top-1 pair; the parametrize loop
+# asserts equality. When fixtures are regenerated and these values
+# change legitimately, update the YAML — the test failure is the
+# regression signal.
 cases:
   - function: fn_802461BC
     pcdump: fn_802461BC_pcdump.txt
     pair: [53, 3]
-    # At least one pattern should match, OR the fall-through emits raw IR
-    # facts. Strict equality not used here because the exact pattern can
-    # vary as checkers evolve; we assert "report has at least one pair
-    # with non-empty suggestions OR ir_facts".
+    expected_patterns:
+      # At least these checkers should fire on the pair. Empty list
+      # means "fall-through is acceptable" — but for fn_802461BC we
+      # expect DirectIdentity at minimum.
+      - direct-identity
     notes: |
       Agent's session report — confirmed force-coalesce 53=3 reaches
-      target. DirectIdentity or AliasSplit expected to fire.
+      target. Captured here as the first calibration case; populate
+      `expected_patterns` from the actual output once Task 7 fixtures
+      are committed and Task 14 produces real output. If the actual
+      output's patterns differ from this list, update the YAML and
+      record why in this `notes` block.
 
   - function: mnVibration_80248644
     pcdump: mnVibration_80248644_pcdump.txt
     discover: true
-    # The agent's underlying fix was a decl-reorder; the calibration here
-    # asserts that the cascade is detected and at least one end-of-chain
-    # pair is proposed. The specific pair changes if the source is
-    # modified, so we don't assert exact ig_idx values — only the
-    # cascade structure.
-    expected_cascade_length_min: 4   # at least 4 saved regs in chain
+    expected_cascade_length_min: 4
     expected_top_priority_class: "end-of-chain"
+    # Strict: the top-1 candidate's (from, to) must equal this exact
+    # pair. Captured from the actual output on first calibration run;
+    # update when fixtures regenerate.
+    expected_top_pair: null   # set during Task 16 execution after
+                              # first real run produces the value
     notes: |
-      MEMORY.md: matched 100% via `s32 j` decl reorder. Validates that
-      analyze_cascade produces a usable top candidate.
+      MEMORY.md: matched 100% via `s32 j` decl reorder. Strict pair
+      check is initialized null — the implementer fills in the actual
+      top-1 pair after the first run of Task 16, then commits.
 ```
 
 - [ ] **Step 16.2: Add parametrize loop test**
@@ -2574,6 +2604,14 @@ def test_calibration_corpus(case) -> None:
                 report.pairs[0].priority_class
                 == case["expected_top_priority_class"]
             )
+        # Strict: top-1 pair equality (when set in YAML)
+        top_pair = case.get("expected_top_pair")
+        if top_pair is not None:
+            assert report.pairs, "discover produced no candidates"
+            actual = (report.pairs[0].from_virt, report.pairs[0].to_virt)
+            assert actual == tuple(top_pair), (
+                f"expected top-1 pair {tuple(top_pair)}, got {actual}"
+            )
     else:
         pair_tuple = tuple(case["pair"])
         report = run(
@@ -2583,9 +2621,19 @@ def test_calibration_corpus(case) -> None:
         )
         assert report.mode == "pair"
         assert len(report.pairs) == 1
-        # Either we got suggestions or the fall-through ran (non-empty ir_facts)
         pr = report.pairs[0]
-        assert pr.suggestions or pr.ir_facts
+        # Strict: each expected pattern name must appear in suggestions
+        expected_patterns = set(case.get("expected_patterns") or [])
+        if expected_patterns:
+            actual_patterns = {s.pattern_name for s in pr.suggestions}
+            missing = expected_patterns - actual_patterns
+            assert not missing, (
+                f"expected patterns {expected_patterns}, "
+                f"actual {actual_patterns}, missing {missing}"
+            )
+        else:
+            # Fall-through acceptable: any non-empty ir_facts is OK
+            assert pr.ir_facts
 ```
 
 - [ ] **Step 16.3: Run, verify**
@@ -2622,7 +2670,7 @@ def test_cli_smoke_invokes_command() -> None:
     """Sanity test that the CLI command is wired correctly."""
     proc = subprocess.run(
         ["python", "-m", "src.cli", "debug", "suggest-coalesce-source", "--help"],
-        cwd=pathlib.Path(__file__).parent.parent.parent.parent,
+        cwd=pathlib.Path(__file__).parent.parent.parent,  # tools/melee-agent
         capture_output=True, text=True, timeout=15,
     )
     assert proc.returncode == 0
@@ -2636,7 +2684,7 @@ def test_cli_rejects_both_pair_and_discover() -> None:
     proc = subprocess.run(
         ["python", "-m", "src.cli", "debug", "suggest-coalesce-source",
          "-f", "any_fn", "-V", "53=3", "--discover"],
-        cwd=pathlib.Path(__file__).parent.parent.parent.parent,
+        cwd=pathlib.Path(__file__).parent.parent.parent,  # tools/melee-agent
         capture_output=True, text=True, timeout=15,
     )
     assert proc.returncode != 0
@@ -2648,7 +2696,7 @@ def test_cli_rejects_top_in_pair_mode() -> None:
     proc = subprocess.run(
         ["python", "-m", "src.cli", "debug", "suggest-coalesce-source",
          "-f", "any_fn", "-V", "53=3", "--top", "5"],
-        cwd=pathlib.Path(__file__).parent.parent.parent.parent,
+        cwd=pathlib.Path(__file__).parent.parent.parent,  # tools/melee-agent
         capture_output=True, text=True, timeout=15,
     )
     assert proc.returncode != 0
