@@ -1402,12 +1402,63 @@ def _find_unit_for_function(func_name: str, melee_root: Path) -> Optional[str]:
     return None
 
 
+_FIRST_DIAGNOSTIC_RE = re.compile(
+    # GCC/Clang/MWCC standard: "path/to/file.c:42:7: error: ..."
+    # Allow Windows-style backslashes in paths (wibo translates these).
+    r"^(?P<path>[^\s:][^\s:]*?):(?P<line>\d+)(?::(?P<col>\d+))?:\s*"
+    r"(?P<level>error|fatal|warning|note):\s*(?P<msg>.+)$"
+)
+
+
+def _extract_first_diagnostic(stdout: str, stderr: str) -> Optional[str]:
+    """Find the first compiler diagnostic with `filename:line: error:` shape.
+
+    This is the actual informative diagnostic — distinct from the caret
+    pointer line that follows it. ninja/wibo output often interleaves
+    progress lines around it, so we scan the full combined output and
+    return the first match. Returns None if no such line is found.
+
+    Handles MWCC's `# Error: …` block format too: when stderr looks like
+    a multi-line `# File:` / `# Line:` / `# Error:` block, synthesize a
+    `path:line: error: msg` line so callers see one usable diagnostic.
+    """
+    lines = (stdout + "\n" + stderr).splitlines()
+    # First pass: standard `filename:line: error:` shape.
+    for line in lines:
+        m = _FIRST_DIAGNOSTIC_RE.match(line.strip())
+        if m and m.group("level").lower() in ("error", "fatal"):
+            return line.strip()
+
+    # Second pass: MWCC's pretty-printed multi-line diagnostic block.
+    # Look for `# File:` followed (within a few lines) by `# Line:` and
+    # `# Error:` markers.
+    path: Optional[str] = None
+    lineno: Optional[str] = None
+    for raw in lines:
+        s = raw.strip()
+        if s.startswith("# File:"):
+            path = s[len("# File:"):].strip() or None
+        elif s.startswith("# Line:"):
+            lineno = s[len("# Line:"):].strip() or None
+        elif s.startswith("# Error:"):
+            msg = s[len("# Error:"):].strip()
+            if msg:
+                p = path or "(unknown)"
+                ln = lineno or "?"
+                return f"{p}:{ln}: error: {msg}"
+    return None
+
+
 def _extract_ninja_error(stdout: str, stderr: str, max_lines: int = 8) -> str:
     """Pull the relevant error lines out of a ninja failure dump.
 
     ninja's full output is mostly progress lines (`[N/M] ...`) that
     aren't useful. The actual error lives in lines containing 'error:',
     'FAILED:', or compiler diagnostics. Return at most `max_lines`.
+
+    To make sure the first informative diagnostic isn't trimmed away by
+    `max_lines` when there are many warnings, the result is prefixed
+    with the first `filename:line: error:` diagnostic we find.
     """
     lines = (stdout + "\n" + stderr).splitlines()
     relevant = []
@@ -1428,7 +1479,16 @@ def _extract_ninja_error(stdout: str, stderr: str, max_lines: int = 8) -> str:
         # Fall back to last few non-empty stderr lines
         tail_stderr = [l for l in stderr.splitlines() if l.strip()][-max_lines:]
         relevant = tail_stderr or ["(no error lines captured)"]
-    return "\n".join(relevant[:max_lines])
+
+    # Promote the first FULL diagnostic (filename:line: error: …) to the
+    # top of the result, so it isn't lost when many warnings precede the
+    # real error and we hit max_lines. If we already have it in relevant,
+    # this just guarantees ordering.
+    first_diag = _extract_first_diagnostic(stdout, stderr)
+    trimmed = relevant[:max_lines]
+    if first_diag and first_diag not in trimmed:
+        trimmed = [first_diag, *trimmed[: max_lines - 1]]
+    return "\n".join(trimmed)
 
 
 def _suggest_similar_functions(target: str, available: list[str], n: int = 5) -> list[str]:
@@ -1645,6 +1705,16 @@ def verify_perm(
     json_out: Annotated[
         bool,
         typer.Option("--json", help="Emit verification result as JSON."),
+    ] = False,
+    keep_failed: Annotated[
+        bool,
+        typer.Option(
+            "--keep-failed",
+            help="On compile failure, preserve the failing patched source "
+                 "at a temp path (printed in the error message) instead "
+                 "of reverting silently. Useful when the candidate is "
+                 "promising but the transfer needs manual repair.",
+        ),
     ] = False,
 ) -> None:
     """Tier 7a: apply a permuter candidate to the real source and verify.
@@ -1884,11 +1954,48 @@ def verify_perm(
             cwd=melee_root, capture_output=True, text=True,
         )
         if ninja_result.returncode != 0:
+            # Preserve the failing patched source if requested. We use
+            # `tempfile.mkstemp` so the path is unique per call — agents
+            # can re-run `verify-perm --keep-failed` for multiple
+            # candidates without trampling on each other's saved sources.
+            failed_path: Optional[Path] = None
+            if keep_failed:
+                fd, tmp_path = tempfile.mkstemp(
+                    prefix=f"verify-perm-failed-{function}-",
+                    suffix=".c",
+                )
+                try:
+                    with os.fdopen(fd, "w") as fh:
+                        fh.write(target_path.read_text())
+                    failed_path = Path(tmp_path)
+                except Exception:
+                    # If saving fails we still want the revert to happen.
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+                    failed_path = None
             target_path.write_text(orig)
             err = _extract_ninja_error(ninja_result.stdout, ninja_result.stderr)
+            first_diag = _extract_first_diagnostic(
+                ninja_result.stdout, ninja_result.stderr,
+            )
+            extra_lines: list[str] = []
+            if first_diag:
+                extra_lines.append(f"First diagnostic: {first_diag}")
+            if failed_path is not None:
+                extra_lines.append(
+                    f"Failing source preserved at: {failed_path}"
+                )
+            elif keep_failed:
+                extra_lines.append(
+                    "(--keep-failed requested but the save step itself "
+                    "failed; source was reverted.)"
+                )
+            extras_str = ("\n" + "\n".join(extra_lines)) if extra_lines else ""
             typer.echo(
                 f"ninja build failed (exit {ninja_result.returncode}). "
-                f"Relevant output:\n{err}\n\n"
+                f"Relevant output:\n{err}{extras_str}\n\n"
                 f"Source reverted. The candidate doesn't compile in the real "
                 f"tree — typical causes:\n"
                 f"  - Permuter's base.c had macros expanded that the real "
@@ -2730,6 +2837,17 @@ def triage_perm(
         bool,
         typer.Option("--json", help="Emit results as JSON."),
     ] = False,
+    keep_failed: Annotated[
+        bool,
+        typer.Option(
+            "--keep-failed",
+            help="For each compile failure, preserve the failing patched "
+                 "source at a unique temp path (paths printed alongside "
+                 "the BUILD FAILED status). Lets you re-attempt promising "
+                 "candidates with targeted fixes instead of re-running "
+                 "permuter.",
+        ),
+    ] = False,
 ) -> None:
     """Tier 7e: batch-triage decomp-permuter output candidates.
 
@@ -2805,7 +2923,10 @@ def triage_perm(
         match_pct: Optional[float]
         delta: Optional[float]
         status: str  # "ok" / "no-function" / "build-failed"
+        first_diag: Optional[str] = None  # set on build-failed
+        kept_failed_path: Optional[Path] = None  # set with --keep-failed
 
+    obj_path = f"build/GALE01/src/{unit}.o"
     results: list[Result] = []
     best: Optional[Result] = None
     try:
@@ -2819,6 +2940,51 @@ def triage_perm(
                     print(f"  [{i}/{len(candidate_paths)}] {cand.parent.name}: "
                           f"function not in candidate")
                 continue
+            # Inline the build so we can capture the first diagnostic
+            # (instead of using _build_and_match, which discards stderr).
+            r_build = subprocess.run(
+                ["ninja", obj_path],
+                cwd=melee_root, capture_output=True, text=True,
+            )
+            if r_build.returncode != 0:
+                first_diag = _extract_first_diagnostic(
+                    r_build.stdout, r_build.stderr,
+                )
+                kept_path: Optional[Path] = None
+                if keep_failed:
+                    try:
+                        fd, tmp_path = tempfile.mkstemp(
+                            prefix=(
+                                f"triage-perm-failed-{function}-"
+                                f"{cand.parent.name}-"
+                            ),
+                            suffix=".c",
+                        )
+                        with os.fdopen(fd, "w") as fh:
+                            fh.write(target_path.read_text())
+                        kept_path = Path(tmp_path)
+                    except Exception:
+                        kept_path = None
+                # Always revert to original before next iter
+                target_path.write_text(orig)
+                results.append(Result(
+                    path=cand, match_pct=None, delta=None,
+                    status="build-failed",
+                    first_diag=first_diag,
+                    kept_failed_path=kept_path,
+                ))
+                if not json_out:
+                    parts = [
+                        f"  [{i}/{len(candidate_paths)}] {cand.parent.name}: "
+                        f"BUILD FAILED"
+                    ]
+                    if first_diag:
+                        parts.append(f"    first error: {first_diag}")
+                    if kept_path is not None:
+                        parts.append(f"    kept at: {kept_path}")
+                    print("\n".join(parts))
+                continue
+            # Build succeeded — generate the report (fast path).
             pct = _build_and_match(unit, function, melee_root)
             # Always revert to original before next iter
             target_path.write_text(orig)
@@ -2827,7 +2993,7 @@ def triage_perm(
                                       delta=None, status="build-failed"))
                 if not json_out:
                     print(f"  [{i}/{len(candidate_paths)}] {cand.parent.name}: "
-                          f"BUILD FAILED")
+                          f"BUILD FAILED (report.json regen)")
                 continue
             delta = pct - baseline
             res = Result(path=cand, match_pct=pct, delta=delta, status="ok")
@@ -2847,7 +3013,7 @@ def triage_perm(
     finally:
         target_path.write_text(orig)
         subprocess.run(
-            ["ninja", f"build/GALE01/src/{unit}.o",
+            ["ninja", obj_path,
              "build/GALE01/report.json"],
             cwd=melee_root, capture_output=True,
         )
@@ -2867,6 +3033,11 @@ def triage_perm(
                 "match_pct": r.match_pct,
                 "delta": r.delta,
                 "status": r.status,
+                "first_diag": r.first_diag,
+                "kept_failed_path": (
+                    str(r.kept_failed_path)
+                    if r.kept_failed_path else None
+                ),
             } for r in results],
         }, indent=2))
         return
@@ -3424,6 +3595,130 @@ def ceiling(
         print(f"    See MEMORY.md 'HSD_ASSERT macro override' for the pattern.")
         print()
 
+    # SPILLED virtual hints — surface compiler-introduced spills before
+    # the verdict. When a PROBABLE CEILING is reported but SPILLED
+    # virtuals exist, they often point at inline-function code shape
+    # (sentinel returns, etc.) that's actually fixable in C. We list each
+    # SPILLED virtual along with whatever source binding or first-def IR
+    # op virtual-to-var can surface, and flag candidates that look like
+    # they came from an inlined callee.
+    #
+    # Failure modes are non-fatal: no pcdump cache, no SimplifyEntry
+    # data, or no source bindings just means we surface less info.
+    ceiling_spilled_hints: list[dict] = []
+    _pcdump_path_for_spilled: Optional[Path] = None
+    try:
+        _pcdump_path_for_spilled = _resolve_pcdump_path(
+            None, function, melee_root,
+        )
+    except (typer.Exit, Exception):
+        _pcdump_path_for_spilled = None  # cache missing — skip hint pass
+
+    if _pcdump_path_for_spilled is not None:
+        try:
+            from ..mwcc_debug.symbol_bridge import (
+                find_first_def as _find_first_def,
+                find_var_for_virtual as _find_var_for_virtual,
+            )
+            _pcdump_text = _pcdump_path_for_spilled.read_text()
+            _events_list = parse_hook_events(_pcdump_text)
+            _events = find_function(_events_list, function)
+            # SPILLED virtuals: scan SIMPLIFY GRAPH entries, collect
+            # ig_idx whenever entry.spilled is set (flags & 0x08).
+            # Filter to virtual regs (ig_idx >= 32 maps 1:1 with virtual
+            # numbers in MWCC).
+            _spilled_virts: list[int] = []
+            if _events is not None:
+                _seen: set[int] = set()
+                for _sec in _events.simplify_sections:
+                    for _entry in _sec.entries:
+                        if (
+                            _entry.spilled
+                            and _entry.ig_idx >= 32
+                            and _entry.ig_idx not in _seen
+                        ):
+                            _seen.add(_entry.ig_idx)
+                            _spilled_virts.append(_entry.ig_idx)
+            # For each spilled virtual, attempt the same
+            # virtual-to-source fallback `virtual-to-var` uses: source
+            # binding first, then the first defining IR op. If neither
+            # is available, just record the virtual number.
+            if _spilled_virts:
+                _fns = parse_pcdump(_pcdump_text)
+                _fn = next(
+                    (f for f in _fns if f.name == function), None,
+                )
+                _pre = _fn.last_precolor_pass() if _fn is not None else None
+                _src_text = src.read_text() if src.exists() else ""
+                for _v in _spilled_virts:
+                    _hint: dict = {"virtual": _v}
+                    _binding = None
+                    if _pre is not None and _src_text:
+                        _binding = _find_var_for_virtual(
+                            _src_text, function, _v, _pre,
+                        )
+                    if _binding is not None:
+                        _hint["var_name"] = _binding.var_name
+                        _hint["kind"] = _binding.kind
+                        _hint["confidence"] = _binding.confidence
+                    elif _pre is not None:
+                        _fd = _find_first_def(_v, _pre)
+                        if _fd is not None:
+                            _hint["first_def"] = {
+                                "block_idx": _fd.block_idx,
+                                "opcode": _fd.opcode,
+                                "operands": _fd.operands,
+                            }
+                            # Heuristic: if the first def is `li rN, <imm>`
+                            # in the entry block, that's the canonical
+                            # shape of an inlined sentinel/return-value
+                            # path. Surface a hint pointing at
+                            # static-inline callees.
+                            if (
+                                _fd.opcode == "li"
+                                and _fd.block_idx == 0
+                            ):
+                                _hint["inline_hint"] = (
+                                    "compiler-emitted immediate (li) in "
+                                    "entry block — likely an inlined "
+                                    "sentinel/return value; check "
+                                    "static-inline callees for "
+                                    "restructurable return paths"
+                                )
+                    ceiling_spilled_hints.append(_hint)
+        except Exception:
+            # Any parse/lookup failure: drop hints; verdict still emits.
+            ceiling_spilled_hints = []
+
+    if ceiling_spilled_hints and not json_out:
+        print(
+            f"[!] SPILLED virtuals (compiler couldn't keep in registers):"
+        )
+        for _h in ceiling_spilled_hints[:8]:
+            _v = _h["virtual"]
+            if "var_name" in _h:
+                print(
+                    f"    r{_v}: {_h['var_name']} "
+                    f"({_h.get('kind', '?')}/{_h.get('confidence', '?')})"
+                )
+            elif "first_def" in _h:
+                _fd = _h["first_def"]
+                print(
+                    f"    r{_v}: compiler temp — first def in "
+                    f"B{_fd['block_idx']}: `{_fd['opcode']} {_fd['operands']}`"
+                )
+                if "inline_hint" in _h:
+                    print(f"        hint: {_h['inline_hint']}")
+            else:
+                print(f"    r{_v}: (no source binding or first-def found)")
+        if len(ceiling_spilled_hints) > 8:
+            print(f"    ... +{len(ceiling_spilled_hints) - 8} more")
+        print(
+            f"    Re-run `debug virtual-to-var -f {function} <virt>` for "
+            f"each row to get full context."
+        )
+        print()
+
     # Verdict — use verified cast results (not raw heuristic count) so we
     # don't produce false-positive WIN AVAILABLE on no-op casts.
     #
@@ -3493,6 +3788,7 @@ def ceiling(
                 {"sym": s, "string": v}
                 for s, v in ceiling_hsd_assert_strings
             ],
+            "spilled_virtual_hints": ceiling_spilled_hints,
             "recommendations": recommendations,
         }, indent=2))
         return
@@ -3694,6 +3990,17 @@ def match_iter_first(
         bool,
         typer.Option("--json", help="Emit as JSON."),
     ] = False,
+    auto_verify: Annotated[
+        bool,
+        typer.Option(
+            "--auto-verify",
+            help="When ambiguous targets are present, run "
+                 "`pcdump-local --force-iter-first <list>` to score the "
+                 "recommended list against the expected output and "
+                 "report the match% delta. Off by default — the explicit "
+                 "verify step costs ~10–30s.",
+        ),
+    ] = False,
 ) -> None:
     """Recommend --force-iter-first arguments by reading the expected .s.
 
@@ -3705,6 +4012,12 @@ def match_iter_first(
     Useful for local-vs-local iter-order cascades where rank-callees
     can't tell which local "should have" gotten r31. Pipe the output's
     ig_idx list into --force-iter-first.
+
+    Warning: when any matched target has `[ambiguous]` confidence
+    (multiple pre-coloring instructions matched the expected signature),
+    feeding the full list to --force-iter-first can disturb unrelated
+    code. Verify with `pcdump-local <tu> --force-iter-first <list>
+    --diff` (or run with --auto-verify) before trusting the suggestion.
     """
     melee_root = DEFAULT_MELEE_ROOT
     pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
@@ -3805,12 +4118,98 @@ def match_iter_first(
             "confidence": match.confidence,
         })
 
+    # Detect ambiguous matches up front so both text and JSON paths agree.
+    ig_indices: list[int] = [
+        r["ig_idx"] for r in results if r.get("status") == "ok"
+    ]
+    ambiguous_results = [
+        r for r in results
+        if r.get("status") == "ok" and r.get("confidence") == "ambiguous"
+    ]
+    has_ambiguous = bool(ambiguous_results)
+    warning_message: Optional[str] = None
+    if has_ambiguous:
+        amb_regs = ", ".join(f"r{r['reg']}" for r in ambiguous_results)
+        warning_message = (
+            f"{len(ambiguous_results)} target(s) are [ambiguous] "
+            f"({amb_regs}) — multiple pre-coloring instructions matched "
+            f"the expected signature, and the closest-position pick may "
+            f"be wrong. Before trusting this output, verify with "
+            f"`pcdump-local <c_file> --force-iter-first "
+            f"{','.join(str(i) for i in ig_indices)} --diff` "
+            f"(or pass --auto-verify on this command). If the diff "
+            f"doesn't improve, the ambiguous assignments are wrong; "
+            f"try a subset."
+        )
+
+    # Optional auto-verify: run pcdump-local with the proposed iter-first
+    # list, compare per-function match% against the baseline, and surface
+    # the delta. Gated behind --auto-verify because the underlying MWCC
+    # compile is the slow part (~10–30s in our local wibo path).
+    auto_verify_result: Optional[dict] = None
+    if auto_verify and ig_indices:
+        try:
+            src_path = melee_root / "src" / f"{unit}.c"
+            if not src_path.exists():
+                auto_verify_result = {
+                    "ran": False,
+                    "reason": f"source not found: {src_path}",
+                }
+            else:
+                baseline_pct = _get_match_pct(function, melee_root)
+                ig_csv_av = ",".join(str(i) for i in ig_indices)
+                # Run pcdump-local with the override; we don't need the
+                # dump output here, but the side effect (rebuilding the
+                # .o + report.json with overrides) is what we want.
+                cmd = [
+                    sys.executable, "-m", "src.cli", "debug",
+                    "pcdump-local", str(src_path),
+                    "--force-iter-first", ig_csv_av,
+                    "-o", "/dev/null",
+                ]
+                r_av = subprocess.run(
+                    cmd,
+                    cwd=melee_root / "tools" / "melee-agent",
+                    capture_output=True, text=True,
+                    timeout=180,
+                )
+                new_pct = _get_match_pct(function, melee_root)
+                delta = (
+                    None if (new_pct is None or baseline_pct is None)
+                    else new_pct - baseline_pct
+                )
+                auto_verify_result = {
+                    "ran": True,
+                    "returncode": r_av.returncode,
+                    "baseline_pct": baseline_pct,
+                    "new_pct": new_pct,
+                    "delta": delta,
+                    "stderr_tail": "\n".join(
+                        r_av.stderr.splitlines()[-5:]
+                    ) if r_av.stderr else "",
+                }
+                # Restore the report by rebuilding the .o cleanly so the
+                # cached state isn't poisoned by our verify override.
+                subprocess.run(
+                    ["ninja", f"build/GALE01/src/{unit}.o",
+                     "build/GALE01/report.json"],
+                    cwd=melee_root, capture_output=True,
+                )
+        except (subprocess.TimeoutExpired, Exception) as _av_exc:
+            auto_verify_result = {"ran": False, "reason": str(_av_exc)}
+
     if json_out:
-        print(json.dumps({
+        payload: dict = {
             "function": function,
             "unit": unit,
             "results": results,
-        }, indent=2))
+            "has_ambiguous": has_ambiguous,
+        }
+        if warning_message:
+            payload["warning"] = warning_message
+        if auto_verify_result is not None:
+            payload["auto_verify"] = auto_verify_result
+        print(json.dumps(payload, indent=2))
         return
 
     print(f"Function: {function}")
@@ -3818,7 +4217,6 @@ def match_iter_first(
     print(f"ASM:      {asm_path.relative_to(melee_root)}")
     print()
     print(f"Expected iter-first targets:")
-    ig_indices: list[int] = []
     for r in results:
         reg_str = f"r{r['reg']}"
         if r["status"] == "ok":
@@ -3827,7 +4225,6 @@ def match_iter_first(
                 f"(virt r{r['virtual']}, instr {r['instr_idx']}: "
                 f"{r['opcode']} {r['operands']}) [{r['confidence']}]"
             )
-            ig_indices.append(r["ig_idx"])
         else:
             print(f"  {reg_str} - {r['note']}")
     if ig_indices:
@@ -3838,6 +4235,37 @@ def match_iter_first(
             f"  melee-agent debug pcdump <source.c> "
             f"--force-iter-first {ig_csv}"
         )
+    if warning_message:
+        print()
+        print(f"WARNING: {warning_message}")
+    if auto_verify_result is not None:
+        print()
+        print(f"== auto-verify ==")
+        if auto_verify_result.get("ran"):
+            base = auto_verify_result.get("baseline_pct")
+            new = auto_verify_result.get("new_pct")
+            delta = auto_verify_result.get("delta")
+            base_str = (
+                f"{base:.2f}%" if isinstance(base, (int, float)) else "?"
+            )
+            new_str = (
+                f"{new:.2f}%" if isinstance(new, (int, float)) else "?"
+            )
+            delta_str = (
+                f"{delta:+.2f}%" if isinstance(delta, (int, float))
+                else "(unknown)"
+            )
+            print(
+                f"  baseline -> with override: {base_str} -> {new_str} "
+                f"({delta_str})"
+            )
+            tail = auto_verify_result.get("stderr_tail")
+            if tail:
+                print(f"  stderr tail:")
+                for line in tail.splitlines():
+                    print(f"    {line}")
+        else:
+            print(f"  did not run: {auto_verify_result.get('reason')}")
 
 
 @debug_app.command(name="name-magic")

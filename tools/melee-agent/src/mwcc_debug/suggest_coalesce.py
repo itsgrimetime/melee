@@ -22,6 +22,31 @@ from .parser import parse_pcdump
 
 
 @dataclass
+class Preflight:
+    """Cheap safety check for a candidate coalesce pair.
+
+    `safe=True` means the pair passes all known-dangerous-pattern checks
+    (does NOT mean coalescing will improve the match — only that it is
+    structurally valid). `reasons` lists every failed check, so the
+    user/agent sees ALL dangers up front instead of triggering them
+    sequentially.
+
+    Checks currently performed (all O(degree) against cg_section data):
+      - `interferes`: virtuals interfere directly (per colorgraph data).
+        Forcing this coalesce can hang or crash the allocator.
+      - `physical_reg`: one or both virtuals are actually physical-reg
+        sentinels (< 32). Coalescing into a phys-reg slot is meaningless.
+      - `cross_class`: the two virtuals belong to different IG classes
+        (e.g. GPR + FP). MWCC's coalescer can't fuse cross-class nodes.
+      - `missing_cg_section`: no colorgraph data was available; the
+        check is best-effort — caller should treat `safe=True` here as
+        "untested, not necessarily safe".
+    """
+    safe: bool
+    reasons: list[str] = field(default_factory=list)
+
+
+@dataclass
 class PairReport:
     """One proposed pair plus its IR evidence and ranked suggestions."""
     from_virt: int
@@ -30,6 +55,7 @@ class PairReport:
     suggestions: list[Suggestion]
     priority_class: Optional[str] = None
     depends_on: Optional[tuple[int, int]] = None
+    preflight: Optional[Preflight] = None
 
 
 @dataclass
@@ -99,6 +125,16 @@ def run(
         else:
             cascade = None
 
+    # Pair mode usually doesn't pull `cg_section` (the caller only sets
+    # it in discover branch above). But our preflight needs the
+    # colorgraph data for both modes. Lazily populate it here so a `-V`
+    # user gets interference/cross-class checks too.
+    if not discover and facts.cg_section is None:
+        events_list = parse_hook_events(pcdump_text)
+        evs = find_function(events_list, function)
+        if evs and evs.colorgraph_sections:
+            facts.cg_section = evs.colorgraph_sections[0]
+
     # Run pattern checkers per pair
     pair_reports: list[PairReport] = []
     for a, b, cand in pairs_to_check:
@@ -107,6 +143,7 @@ def run(
             sug = pat.check(facts, (a, b))
             if sug is not None:
                 suggestions.append(sug)
+        preflight = _preflight_pair(facts, a, b, pcdump_text=pcdump_text)
         pair_reports.append(PairReport(
             from_virt=a, to_virt=b,
             ir_facts=_summarize_facts(
@@ -116,6 +153,7 @@ def run(
             suggestions=suggestions,
             priority_class=cand.priority_class if cand else None,
             depends_on=cand.depends_on if cand else None,
+            preflight=preflight,
         ))
 
     return Report(
@@ -124,6 +162,80 @@ def run(
         cascade=cascade,
         pairs=pair_reports,
     )
+
+
+def _preflight_pair(
+    facts: IrFacts, a: int, b: int, *, pcdump_text: str = "",
+) -> Preflight:
+    """Cheap pre-check on a coalesce candidate `a=b`.
+
+    Catches the common dangerous patterns BEFORE the user spends 45s on
+    a `pcdump-local --force-coalesce` that ends in a watchdog kill. See
+    `Preflight` for the catalog of checks.
+
+    pcdump_text is optional and used only for the cross-class probe
+    (which needs to enumerate all classes' colorgraph sections, not
+    just `facts.cg_section`).
+    """
+    reasons: list[str] = []
+
+    # physical-reg check — < 32 means MWCC pre-coloring slot, not a
+    # coalesceable virtual.
+    if a < 32 or b < 32:
+        reasons.append(
+            f"one or both nodes are physical regs "
+            f"(a={a}{'(phys)' if a < 32 else ''}, "
+            f"b={b}{'(phys)' if b < 32 else ''})"
+        )
+
+    cg = facts.cg_section
+    if cg is None:
+        # Surface the absence: caller should treat this as "untested".
+        reasons.append(
+            "no colorgraph data — interference / class checks skipped"
+        )
+        return Preflight(safe=not reasons, reasons=reasons)
+
+    # interference: build a lookup of (ig_idx -> set(interferer ig_idx))
+    interferer_map: dict[int, set[int]] = {}
+    for d in cg.decisions:
+        interferer_map[d.ig_idx] = {ig for (ig, _) in d.interferers}
+    if (
+        a in interferer_map.get(b, set())
+        or b in interferer_map.get(a, set())
+    ):
+        reasons.append(
+            f"virtuals interfere directly per colorgraph data — coalesce "
+            f"is invalid (forcing it may hang the allocator)"
+        )
+
+    # cross-class detection — enumerate ALL colorgraph sections, since
+    # facts.cg_section only carries one. If a and b live in different
+    # classes, the coalesce is structurally invalid.
+    if pcdump_text:
+        try:
+            events_list = parse_hook_events(pcdump_text)
+            ev = find_function(events_list, facts.function_name)
+            if ev is not None and ev.colorgraph_sections:
+                class_of: dict[int, list[int]] = {}
+                for sec in ev.colorgraph_sections:
+                    for d in sec.decisions:
+                        class_of.setdefault(d.ig_idx, []).append(sec.class_id)
+                a_classes = set(class_of.get(a, []))
+                b_classes = set(class_of.get(b, []))
+                # If both are non-empty and disjoint, that's cross-class.
+                if a_classes and b_classes and a_classes.isdisjoint(b_classes):
+                    reasons.append(
+                        f"cross-class coalesce — a in class(es) "
+                        f"{sorted(a_classes)}, b in class(es) "
+                        f"{sorted(b_classes)} (cross-class fuse is "
+                        f"structurally invalid)"
+                    )
+        except Exception:
+            # Best-effort; don't add a reason for the failure mode itself.
+            pass
+
+    return Preflight(safe=not reasons, reasons=reasons)
 
 
 def _summarize_facts(
@@ -186,6 +298,10 @@ def render_json(report: Report) -> str:
                         "catalog_ref": s.catalog_ref,
                     } for s in p.suggestions
                 ],
+                "preflight": (
+                    {"safe": p.preflight.safe, "reasons": p.preflight.reasons}
+                    if p.preflight is not None else None
+                ),
             } for p in report.pairs
         ],
     }
@@ -210,7 +326,12 @@ def render_text(report: Report) -> str:
             if p.depends_on:
                 d_from, d_to = p.depends_on
                 header += f" depends_on r{d_from}=r{d_to}"
+        if p.preflight is not None and not p.preflight.safe:
+            header += "   [PREFLIGHT: WARNING]"
         lines.append(header)
+        if p.preflight is not None and not p.preflight.safe:
+            for reason in p.preflight.reasons:
+                lines.append(f"  ! {reason}")
         lines.append("")
         lines.append("  IR facts:")
         for label, entry in p.ir_facts.items():
