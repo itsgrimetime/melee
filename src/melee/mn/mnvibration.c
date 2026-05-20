@@ -389,15 +389,15 @@ void fn_80247510(HSD_GObj* gobj)
     // Handle A button to toggle rumble setting for selected name
     if (inputs_repeat & (1LL << 32)) {
         lbAudioAx_80024030(1);
-        cursor_row = data->x0[1];
-        name_idx = mnVibration_GetNameSlot(data, cursor_row);
+        name_idx = mnVibration_GetNameSlot(data, data->x0[1]);
         if (mnVibration_GetNameRumble(name_idx) == 1) {
             GetPersistentNameData(name_idx)->x1A1 = 0;
         } else {
             GetPersistentNameData(name_idx)->x1A1 = 1;
         }
         rumble_setting = mnVibration_GetNameRumble(name_idx);
-        jobj = mnVibration_802474C4(data->x0[1]);
+        cursor_row = data->x0[1];
+        jobj = mnVibration_802474C4(cursor_row);
         HSD_JObjReqAnimAll(jobj, rumble_setting);
         HSD_JObjAnimAll(jobj);
         return;
@@ -437,13 +437,11 @@ void fn_80247510(HSD_GObj* gobj)
             name_idx = mnVibration_GetNameSlot(data, next_row);
             if (name_idx != 0xFF) {
                 MnVibrationData* nav_data;
-                u8 new_cursor_row;
                 lbAudioAx_80024030(2);
                 data->x0[1]++;
                 nav_data = mnVibration_804D6C28->user_data;
                 jobj = data->cursor_gobj->hsd_obj;
-                new_cursor_row = data->x0[1];
-                mnVibration_SetCursorPosition(nav_data, jobj, new_cursor_row);
+                mnVibration_SetCursorPosition(nav_data, jobj, data->x0[1]);
             }
         } else if (GetNameCount() > 8) {
             name_idx = mnVibration_GetNameSlot(data, 8);
