@@ -350,6 +350,26 @@ static struct {
 static int g_n_overrides = 0;
 static int g_overrides_parsed = 0;
 
+// Iter-based overrides — match by colorgraph iteration position rather
+// than ig_idx. Useful when a node has ig_idx that the IG-array scan
+// can't recover (e.g., split/spill nodes created post-IG-build with
+// no INTERFERENCEGRAPH[] slot, OR cases where the iteration bound
+// is wrong). Each entry is (rclass, iter_position, physical_reg).
+// Parsed from MWCC_DEBUG_FORCE_PHYS_ITER="class:iter:phys[,...]".
+#define MAX_ITER_OVERRIDES 32
+static struct {
+    int rclass;
+    int iter_idx;
+    int physical;
+} g_iter_overrides[MAX_ITER_OVERRIDES];
+static int g_n_iter_overrides = 0;
+
+// Optional function-scope filter for both FORCE_PHYS and FORCE_PHYS_ITER.
+// Identical mechanism to g_coalesce_scope_fn. Empty = apply globally
+// (legacy). Set via MWCC_DEBUG_FORCE_PHYS_FUNCTION.
+static char g_force_phys_scope_fn[FUNCNAME_BUF_LEN] = {0};
+static int g_force_phys_scope_fn_set = 0;
+
 static void parse_overrides_from_env(void)
 {
     char buf[512];
@@ -361,6 +381,50 @@ static void parse_overrides_from_env(void)
 
     g_overrides_parsed = 1;
     g_n_overrides = 0;
+    g_n_iter_overrides = 0;
+
+    // Read optional function-scope filter (shared by FORCE_PHYS +
+    // FORCE_PHYS_ITER). Empty → apply globally (legacy behavior).
+    len = GetEnvironmentVariableA(
+        "MWCC_DEBUG_FORCE_PHYS_FUNCTION",
+        g_force_phys_scope_fn, sizeof(g_force_phys_scope_fn));
+    g_force_phys_scope_fn_set = (len > 0 && len < sizeof(g_force_phys_scope_fn))
+        ? 1 : 0;
+    if (!g_force_phys_scope_fn_set) {
+        g_force_phys_scope_fn[0] = '\0';
+    }
+
+    // Parse MWCC_DEBUG_FORCE_PHYS_ITER="class:iter:phys[,class:iter:phys]*".
+    // 3-element tuple parsing — small state machine.
+    len = GetEnvironmentVariableA(
+        "MWCC_DEBUG_FORCE_PHYS_ITER", buf, sizeof(buf));
+    if (len > 0 && len < sizeof(buf)) {
+        int field; // 0=class, 1=iter, 2=phys
+        int saved_class, saved_iter;
+        cur_val = 0;
+        field = 0;
+        saved_class = saved_iter = -1;
+        for (i = 0; i <= (int)len; i++) {
+            char c = (i == (int)len) ? '\0' : buf[i];
+            if (c >= '0' && c <= '9') {
+                cur_val = cur_val * 10 + (c - '0');
+            } else if (c == ':') {
+                if (field == 0) saved_class = cur_val;
+                else if (field == 1) saved_iter = cur_val;
+                cur_val = 0;
+                field++;
+            } else if ((c == ',' || c == '\0') && field == 2
+                       && g_n_iter_overrides < MAX_ITER_OVERRIDES) {
+                g_iter_overrides[g_n_iter_overrides].rclass = saved_class;
+                g_iter_overrides[g_n_iter_overrides].iter_idx = saved_iter;
+                g_iter_overrides[g_n_iter_overrides].physical = cur_val;
+                g_n_iter_overrides++;
+                cur_val = 0;
+                field = 0;
+                saved_class = saved_iter = -1;
+            }
+        }
+    }
 
     len = GetEnvironmentVariableA("MWCC_DEBUG_FORCE_PHYS", buf, sizeof(buf));
     if (len == 0 || len >= sizeof(buf)) return;
@@ -607,36 +671,87 @@ static int __cdecl hook_colorgraph(int rclass, IGNode *head)
     // Call original first — it does the actual coloring
     result = ((colorgraph_fn)colorgraph_trampoline)(rclass, head);
 
-    // Tier 5 — apply allocator overrides if any. Walks the worklist, for
-    // each node finds its ig_idx via INTERFERENCEGRAPH[] scan, and
-    // patches assignedReg if there's a matching override.
-    if (g_n_overrides > 0)
+    // Tier 5 — apply allocator overrides. Two override mechanisms,
+    // both gated by the optional MWCC_DEBUG_FORCE_PHYS_FUNCTION scope:
+    //   (a) ig_idx-based (g_overrides): match by node->ig_idx (read
+    //       directly from the IGNode's own-index field at offset 0x0C).
+    //       Earlier versions used a linear INTERFERENCEGRAPH[] scan
+    //       which could return -1 for nodes that didn't appear in the
+    //       expected slot (wrong bound, or post-IG-build split/spill
+    //       nodes); the direct field read is reliable.
+    //   (b) iter-based (g_iter_overrides): match by (rclass, iter_idx)
+    //       — colorgraph iteration position. Fallback for cases where
+    //       ig_idx is unknown or unreliable.
     {
-        IGNode **ig = INTERFERENCEGRAPH;
-        int n = N_IGNODES;
-        if (n > 256) n = 256;
-        for (node = head; node; node = node->next)
-        {
-            int idx = -1;
-            int j, k;
-            for (j = 0; j < n; j++)
-            {
-                if (ig[j] == node) { idx = j; break; }
-            }
-            if (idx < 0) continue;
-            for (k = 0; k < g_n_overrides; k++)
-            {
-                if (g_overrides[k].virtual_idx == idx)
-                {
-                    int old_phys = (int)node->assignedReg;
-                    node->assignedReg = (int16)g_overrides[k].physical;
-                    if (PCFILE && DEBUG_GUARD)
-                    {
-                        debug_printf("\n[FORCE_PHYS] virtual %d: r%d -> r%d\n",
-                                     idx, old_phys, g_overrides[k].physical);
+        // Function-scope check (shared by both mechanisms).
+        int scope_skip = 0;
+        if (g_force_phys_scope_fn_set) {
+            if (!g_current_function_set) {
+                scope_skip = 1;
+            } else {
+                int sj;
+                for (sj = 0; sj < FUNCNAME_BUF_LEN; sj++) {
+                    if (g_current_function[sj] != g_force_phys_scope_fn[sj]) {
+                        scope_skip = 1;
+                        break;
                     }
-                    break;
+                    if (g_current_function[sj] == '\0') break;
                 }
+            }
+            if (scope_skip && PCFILE && DEBUG_GUARD
+                && (g_n_overrides > 0 || g_n_iter_overrides > 0)) {
+                debug_printf("\n[FORCE_PHYS] scope skip (fn=%s, scope=%s)\n",
+                             g_current_function_set ? g_current_function
+                                                    : "<unset>",
+                             g_force_phys_scope_fn);
+            }
+        }
+
+        if (!scope_skip && (g_n_overrides > 0 || g_n_iter_overrides > 0))
+        {
+            int local_iter = 0;
+            for (node = head; node; node = node->next)
+            {
+                int idx = (int)node->ig_idx;  // direct field read; no linear scan
+                int k;
+
+                // (a) ig_idx-based overrides
+                for (k = 0; k < g_n_overrides; k++)
+                {
+                    if (g_overrides[k].virtual_idx == idx)
+                    {
+                        int old_phys = (int)node->assignedReg;
+                        node->assignedReg = (int16)g_overrides[k].physical;
+                        if (PCFILE && DEBUG_GUARD)
+                        {
+                            debug_printf("\n[FORCE_PHYS] ig_idx=%d: r%d -> r%d\n",
+                                         idx, old_phys, g_overrides[k].physical);
+                        }
+                        break;
+                    }
+                }
+
+                // (b) iter-based overrides for this class + iter position
+                for (k = 0; k < g_n_iter_overrides; k++)
+                {
+                    if (g_iter_overrides[k].rclass == rclass
+                        && g_iter_overrides[k].iter_idx == local_iter)
+                    {
+                        int old_phys = (int)node->assignedReg;
+                        node->assignedReg = (int16)g_iter_overrides[k].physical;
+                        if (PCFILE && DEBUG_GUARD)
+                        {
+                            debug_printf("\n[FORCE_PHYS_ITER] class=%d iter=%d "
+                                         "(ig_idx=%d): r%d -> r%d\n",
+                                         rclass, local_iter, idx,
+                                         old_phys,
+                                         g_iter_overrides[k].physical);
+                        }
+                        break;
+                    }
+                }
+
+                local_iter++;
             }
         }
     }
@@ -658,15 +773,14 @@ static int __cdecl hook_colorgraph(int rclass, IGNode *head)
         iter_idx = 0;
         for (node = head; node; node = node->next)
         {
-            // Find this node's index in interferencegraph[]. Linear scan;
-            // n_nodes is typically <100 so this is cheap.
-            int my_idx = -1;
-            int n = N_IGNODES;
-            if (n > 4096) n = 4096; // defensive cap
-            for (j = 0; j < n; j++)
-            {
-                if (ig_array[j] == node) { my_idx = j; break; }
-            }
+            // Read the node's own index from its IGNode field (offset 0x0C).
+            // FUN_00530C00 writes this when materializing the IG from the
+            // union-find array, and colorgraph doesn't overwrite it.
+            // Previously we did a linear INTERFERENCEGRAPH[] scan here,
+            // which returned -1 when the IG-array bound was wrong or the
+            // node was created post-IG-build (split/spill). Direct field
+            // read is reliable.
+            int my_idx = (int)node->ig_idx;
 
             // Decode flag bits for human-readable annotation. Note: bit 0x4
             // (COALESCED_AWAY) never appears here because such nodes are NOT
