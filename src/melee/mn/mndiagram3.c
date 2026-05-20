@@ -320,10 +320,10 @@ void fn_802461BC(HSD_GObj* gobj)
     u8 sel;
     u8 mode;
     int i;
-    HSD_Text** new_var;
+    HSD_Text** labels_d;
     int val;
     HSD_Text** labels_c;
-    void** new_var2;
+    void** user_data_addr;
     int limit;
     HSD_Text* text;
     f32 fi;
@@ -351,7 +351,7 @@ void fn_802461BC(HSD_GObj* gobj)
             ((Diagram3*) mnDiagram3_804D6C20->user_data)->is_name_mode;
         mnDiagram2_ClearDetailView(mnDiagram3_804D6C20);
         HSD_GObjPLink_80390228(data->popup_gobj);
-        ptr = (d = *(new_var2 = &mnDiagram3_804D6C20->user_data));
+        ptr = (d = *(user_data_addr = &mnDiagram3_804D6C20->user_data));
         for (i = 0; i < 10; i++) {
             if (d->row_labels[i] != 0L) {
                 HSD_SisLib_803A5CC4(ptr->row_labels[i]);
@@ -563,8 +563,8 @@ void fn_802461BC(HSD_GObj* gobj)
             ptr = (d = mnDiagram3_804D6C20->user_data);
             for (i = 0; i < 10; i++) {
                 if (d->row_labels[i] != 0L) {
-                    new_var = ptr->row_labels;
-                    HSD_SisLib_803A5CC4(new_var[i]);
+                    labels_d = ptr->row_labels;
+                    HSD_SisLib_803A5CC4(labels_d[i]);
                     d->row_labels[i] = 0L;
                 }
             }
@@ -933,11 +933,11 @@ void mnDiagram3_8024714C(void *arg0)
   Vec3 sp48;
   Diagram3 *data;
   HSD_GObj *gobj;
-  f32 new_var2;
+  f32 row0_ty_tmp;
   HSD_JObj *row0;
   HSD_JObj *row1;
   mnDiagram_ArchiveData *archive;
-  void* new_var;
+  void* user_data_tmp;
   int assert_line;
   f32 row_spacing;
   HSD_JObj *popup_alias;
@@ -970,9 +970,9 @@ void mnDiagram3_8024714C(void *arg0)
     row0 = data->jobjs[8];
     popup_alias = popup_jobj;
     (row0) ? ((void) 0) : (__assert(mnDiagram3_804D4FD8, 0x3EE, mnDiagram3_804D4FE0));
-    new_var2 = row0->translate.y;
+    row0_ty_tmp = row0->translate.y;
     row1 = data->jobjs[9];
-    row_spacing = new_var2;
+    row_spacing = row0_ty_tmp;
     (row1) ? ((void) 0) : (__assert(mnDiagram3_804D4FD8, 0x3EE, mnDiagram3_804D4FE0));
     row_spacing = row1->translate.y - row_spacing;
     row0 = data->jobjs[8];
@@ -1018,8 +1018,8 @@ void mnDiagram3_8024714C(void *arg0)
     f32 neg_spacing;
     u16* base;
     gobj = mnDiagram3_804D6C20;
-    new_var = gobj->user_data;
-    d = new_var;
+    user_data_tmp = gobj->user_data;
+    d = user_data_tmp;
     row0 = d->jobjs[8];
     scroll = d->scroll_offset;
     (row0) ? ((void) 0) : (__assert(mnDiagram3_804D4FD8, 0x3EE, mnDiagram3_804D4FE0));
