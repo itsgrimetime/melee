@@ -38,6 +38,7 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
   char *base;
   u16 *table;
   HSD_JObj *row0;
+  float new_var3;
   unsigned int new_var;
   HSD_JObj *row1;
   f32 neg_spacing;
@@ -168,7 +169,7 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
             f32 y = sp6C.y;
             f32 z = sp6C.z;
             value_text->pos_x = sp6C.x;
-            value_text->pos_y = -y;
+            value_text->pos_y = (new_var3 = -y);
             value_text->pos_z = z;
           }
           value_text->default_alignment = 2;
