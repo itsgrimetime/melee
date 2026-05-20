@@ -1059,6 +1059,7 @@ void mnDiagram3_8024714C(void *arg0)
           u16 *entry = &base[(u8) val];
           HSD_SisLib_803A6368(text, *entry);
         }
+        row_spacing = mnDiagram3_804DBFF8;
       }
       i++;
     }
