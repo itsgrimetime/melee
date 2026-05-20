@@ -1003,9 +1003,9 @@ void mnDiagram3_8024714C(void *arg0)
     {
         u16 *base = (u16*) &mnDiagram3_803EEC4C;
         u8 scroll = data->scroll_offset;
-        u8 limit = data->is_name_mode ? 0x18 : 0x15;
         f32 neg_spacing = -row_spacing;
         f32 font_size = mnDiagram3_804DBFFC;
+        u8 limit = data->is_name_mode ? 0x18 : 0x15;
 
         for (i = 0; i < 10; i++) {
             HSD_Text *text;
