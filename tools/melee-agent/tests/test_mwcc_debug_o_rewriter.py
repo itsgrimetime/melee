@@ -14,6 +14,7 @@ from src.mwcc_debug.o_rewriter import (
     MagicSymbol,
     Mapping,
     find_magic_symbols,
+    globalize_symbols,
     parse_mapping,
     rename_magic_symbols,
 )
@@ -136,3 +137,48 @@ def test_rename_magic_symbols_no_match_returns_empty(tmp_path: Path) -> None:
     )
     renames = rename_magic_symbols(work_o, mapping)
     assert renames == []
+
+
+def test_globalize_symbols_noop_on_empty_list(tmp_path: Path) -> None:
+    """globalize_symbols with an empty name list must not invoke objcopy."""
+    # We don't have a .o here — passing a nonexistent path is fine because
+    # globalize_symbols must return early when names=[].
+    fake_o = tmp_path / "nonexistent.o"
+    # Should not raise even though the file doesn't exist.
+    globalize_symbols(fake_o, [])  # no-op contract
+
+
+@pytest.mark.skipif(not _FIXTURE_O.exists(),
+                    reason="requires built .o; run `ninja` first")
+def test_globalize_symbols_makes_symbol_global(tmp_path: Path) -> None:
+    """End-to-end: rename a magic symbol then globalize it; verify binding."""
+    from elftools.elf.elffile import ELFFile
+
+    work_o = tmp_path / "test.o"
+    shutil.copy(_FIXTURE_O, work_o)
+
+    # Step 1: rename the s32 magic constant to a known name.
+    mapping = Mapping(by_value={MAGIC_S32: "mnVibration_804DC018"}, by_name={})
+    renames = rename_magic_symbols(work_o, mapping)
+    assert len(renames) == 1
+    new_name = renames[0][1]
+
+    # Step 2: confirm symbol is LOCAL before globalize.
+    def _binding(o: Path, name: str) -> str:
+        with o.open("rb") as f:
+            elf = ELFFile(f)
+            symtab = elf.get_section_by_name(".symtab")
+            for sym in symtab.iter_symbols():
+                if sym.name == name:
+                    return sym["st_info"]["bind"]
+        return "NOT_FOUND"
+
+    assert _binding(work_o, new_name) == "STB_LOCAL", (
+        "renamed symbol should start as STB_LOCAL (MWCC emits local @N)"
+    )
+
+    # Step 3: globalize and verify binding changed to STB_GLOBAL.
+    globalize_symbols(work_o, [new_name])
+    assert _binding(work_o, new_name) == "STB_GLOBAL", (
+        "symbol should be STB_GLOBAL after globalize_symbols"
+    )
