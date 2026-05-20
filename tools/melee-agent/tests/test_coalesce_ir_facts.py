@@ -112,3 +112,50 @@ def test_collect_caps_use_sites_at_USE_SITES_CAP() -> None:
     facts = collect(fn, "void test_fn(void) {}")
     assert len(facts.by_virtual[32].use_sites) == USE_SITES_CAP
     assert facts.by_virtual[32].use_sites_truncated is True
+
+
+def test_is_param_via_entry_block_abi_mr() -> None:
+    """First-def `mr r32, r3` in block 0 → is_param=True."""
+    block = _make_block(0, [
+        _make_ist("mr", "r32,r3", [("r", 32), ("r", 3)]),
+    ])
+    pre_pass = Pass(name="AFTER PEEPHOLE FORWARD")
+    pre_pass.blocks.append(block)
+    from src.mwcc_debug.parser import Function
+    fn = Function(name="f", passes=[pre_pass])
+    facts = collect(fn, "void f(int x) {}")
+    assert facts.by_virtual[32].is_param is True
+
+
+def test_is_param_not_for_non_param_first_def() -> None:
+    """First-def is `li r32, 0` (not from r3-r10) → is_param=False."""
+    block = _make_block(0, [
+        _make_ist("li", "r32,0", [("r", 32)]),
+    ])
+    pre_pass = Pass(name="AFTER PEEPHOLE FORWARD")
+    pre_pass.blocks.append(block)
+    from src.mwcc_debug.parser import Function
+    fn = Function(name="f", passes=[pre_pass])
+    facts = collect(fn, "void f(void) { int x = 0; }")
+    assert facts.by_virtual[32].is_param is False
+
+
+def test_is_param_fallback_via_bridge_prefix() -> None:
+    """When no entry-block ABI-mr, use bridge's sorted observed_virtuals
+    prefix to identify likely-param virtuals."""
+    # No first-def is `mr` from r3-r10, but bridge says fn has 2 params.
+    block = _make_block(0, [
+        _make_ist("li", "r32,0", [("r", 32)]),
+        _make_ist("li", "r33,0", [("r", 33)]),
+        _make_ist("li", "r34,0", [("r", 34)]),
+    ])
+    pre_pass = Pass(name="AFTER PEEPHOLE FORWARD")
+    pre_pass.blocks.append(block)
+    from src.mwcc_debug.parser import Function
+    fn = Function(name="f", passes=[pre_pass])
+    # Two params → first two virtuals (32, 33) should be is_param
+    facts = collect(fn, "void f(int a, int b) { int c = 0; }")
+    # The bridge identifies a, b as params and c as local
+    assert facts.by_virtual[32].is_param is True
+    assert facts.by_virtual[33].is_param is True
+    assert facts.by_virtual[34].is_param is False
