@@ -6548,6 +6548,22 @@ def verify_with_name_magic(
                  "(useful for figuring out what to pass).",
         ),
     ] = None,
+    apply_auto: Annotated[
+        bool,
+        typer.Option(
+            "--apply-auto",
+            help="Automatically resolve and apply the full anonymous → "
+                 "production-symbol rename, no --map needed. Cross-"
+                 "references the production .o "
+                 "(`build/GALE01/obj/<unit>.o`) by value, renames every "
+                 "anonymous @N .sdata2 symbol whose backing bytes match a "
+                 "named symbol in the production .o, then globalizes "
+                 "(STB_GLOBAL) the new symbols. Makes the 'named SDA2 "
+                 "magic constants' matching blocker invisible to "
+                 "subsequent checkdiff runs without manually constructing "
+                 "a map. Mutually exclusive with --map.",
+        ),
+    ] = False,
 ) -> None:
     """Compile, optionally rename anonymous SDA2 constants, then checkdiff.
 
@@ -6562,15 +6578,28 @@ def verify_with_name_magic(
     references the same bytes via a named symbol (from symbols.txt).
     Reloc-target diff blocks byte matching even though the data is
     identical. `--map s32=<symname>,u32=<symname>` renames the @N
-    symbols so checkdiff sees matching reloc targets.
+    symbols so checkdiff sees matching reloc targets. Or pass
+    `--apply-auto` to do the lookup + rename automatically from the
+    production .o, no map required.
 
     Flow:
       1. Build the function's TU object (`ninja build/GALE01/src/<unit>.o`)
-      2. If `--map` given, rename anonymous @N .sdata2 symbols via objcopy
-         If omitted, list anonymous symbols and suggest the map format.
+      2. If `--map` given, rename anonymous @N .sdata2 symbols via objcopy.
+         If `--apply-auto` given, auto-resolve via value lookup against the
+         production .o and apply renames + globalize in one step.
+         If neither given, list anonymous symbols and suggest the map format.
       3. Run `tools/checkdiff.py <function> --format plain` and forward
          its output verbatim.
     """
+    if name_map and apply_auto:
+        typer.echo(
+            "--map and --apply-auto are mutually exclusive; pick one. "
+            "Use --apply-auto to auto-resolve, or --map to supply an "
+            "explicit mapping.",
+            err=True,
+        )
+        raise typer.Exit(2)
+
     melee_root = DEFAULT_MELEE_ROOT
     unit = _find_unit_for_function(function, melee_root)
     if unit is None:
@@ -6616,8 +6645,9 @@ def verify_with_name_magic(
         )
         raise typer.Exit(3)
 
-    # 2. Rename anonymous SDA2 symbols if --map given, or surface what
-    #    anonymous symbols exist so the agent can construct a map.
+    # 2. Rename anonymous SDA2 symbols if --map / --apply-auto given,
+    #    or surface what anonymous symbols exist so the agent can
+    #    construct a map.
     if name_map:
         from ..mwcc_debug.o_rewriter import (
             parse_mapping,
@@ -6647,6 +6677,62 @@ def verify_with_name_magic(
             print(
                 "[verify] no matching anonymous symbols found to rename "
                 "(use `debug name-magic <o_file> --list` to inspect)"
+            )
+    elif apply_auto:
+        from ..mwcc_debug.o_rewriter import apply_name_magic_auto
+
+        target_o = melee_root / "build" / "GALE01" / "obj" / f"{unit}.o"
+        if not target_o.exists():
+            typer.echo(
+                f"--apply-auto requires the production .o at "
+                f"{target_o.relative_to(melee_root)} (not found). "
+                f"Build it first (`ninja build/GALE01/obj/{unit}.o`) and "
+                f"retry, or use --map to supply names manually.",
+                err=True,
+            )
+            raise typer.Exit(2)
+        try:
+            result = apply_name_magic_auto(obj_path, target_o)
+        except FileNotFoundError as e:
+            typer.echo(
+                f"objcopy not found: {e}. Install devkitPPC.",
+                err=True,
+            )
+            raise typer.Exit(5)
+        except subprocess.CalledProcessError as e:
+            typer.echo(f"objcopy failed: {e}", err=True)
+            raise typer.Exit(5)
+        target_rel = target_o.relative_to(melee_root)
+        if result.renames:
+            print(
+                f"[verify] --apply-auto: renamed {len(result.renames)} "
+                f"symbol(s) via lookup against {target_rel}:"
+            )
+            globalized_set = set(result.globalized)
+            for old, new in result.renames:
+                glob_note = (
+                    " (globalized)" if new in globalized_set else ""
+                )
+                print(f"          {old} -> {new}{glob_note}")
+        else:
+            print(
+                f"[verify] --apply-auto: no anonymous .sdata2 symbols "
+                f"matched named counterparts in {target_rel} "
+                f"(found {len(result.anonymous_found)} anonymous; "
+                f"unresolved {len(result.unresolved)})"
+            )
+        if result.unresolved:
+            unresolved_names = ", ".join(
+                s.name for s in result.unresolved[:8]
+            )
+            extra = (
+                f" (+{len(result.unresolved) - 8} more)"
+                if len(result.unresolved) > 8 else ""
+            )
+            print(
+                f"[verify] --apply-auto: {len(result.unresolved)} "
+                f"anonymous symbol(s) had no value-match in "
+                f"{target_rel}: {unresolved_names}{extra}"
             )
     else:
         # No --map given. List anonymous magic constants in the freshly-

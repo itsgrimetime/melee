@@ -197,6 +197,110 @@ def find_named_sdata2_symbols_by_value(
     return out
 
 
+@dataclass
+class AutoRenameResult:
+    """Outcome of :func:`apply_name_magic_auto`.
+
+    Attributes:
+        anonymous_found: All anonymous .sdata2 symbols discovered in the
+            base .o (both 8-byte magic constants and 4-byte float literals).
+        renames: ``(old_name, new_name)`` pairs applied via objcopy. Only
+            8-byte magic constants with a value-matching named symbol in
+            the target .o are renamed; 4-byte literals are skipped because
+            matching by value is ambiguous.
+        unresolved: Anonymous symbols for which no named target counterpart
+            was found. Useful for surfacing the "couldn't resolve" count.
+        globalized: Symbols that were promoted to ``STB_GLOBAL`` after
+            renaming. Mirrors ``renames`` when ``globalize=True``.
+        target_o_path: The production .o that was consulted for the
+            value-based lookup (may not exist; callers should check).
+    """
+    anonymous_found: list[MagicSymbol]
+    renames: list[tuple[str, str]]
+    unresolved: list[MagicSymbol]
+    globalized: list[str]
+    target_o_path: Path
+
+
+def apply_name_magic_auto(
+    base_o_path: Path,
+    target_o_path: Path,
+    globalize: bool = True,
+    objcopy: str = "/opt/devkitpro/devkitPPC/bin/powerpc-eabi-objcopy",
+) -> AutoRenameResult:
+    """Auto-resolve and apply the full anonymous → production-symbol rename.
+
+    For each anonymous ``@N`` .sdata2 symbol in ``base_o_path``, look up the
+    named symbol in ``target_o_path`` whose backing bytes match (8-byte
+    values only — 4-byte float literals are excluded because matching by
+    value is ambiguous). Rename via ``objcopy --redefine-syms`` and
+    optionally globalize the new symbols (default ``True`` — the production
+    .o always has these symbols as ``STB_GLOBAL``).
+
+    This makes the "named SDA2 magic constants — not reachable from C
+    source" matching blocker invisible to subsequent checkdiff runs on the
+    rewritten .o.
+
+    Args:
+        base_o_path: The .o file to rewrite in place (the freshly compiled
+            output, e.g. ``build/GALE01/src/.../mnvibration.o``).
+        target_o_path: The production .o (e.g.
+            ``build/GALE01/obj/.../mnvibration.o``). If it does not exist,
+            no renames are performed — callers should check
+            ``target_o_path.exists()`` before relying on the result.
+        globalize: When True (default), promote each renamed symbol to
+            ``STB_GLOBAL`` via ``objcopy --globalize-symbol``.
+        objcopy: Path to the PowerPC objcopy binary.
+
+    Returns:
+        An :class:`AutoRenameResult` describing what was found, renamed,
+        and globalized.
+
+    Raises:
+        FileNotFoundError: If ``objcopy`` is missing and renames are
+            required.
+        subprocess.CalledProcessError: If objcopy fails.
+    """
+    anons, suggested = suggest_name_magic_map(base_o_path, target_o_path)
+    suggested_names: set[str] = {anon.name for anon, _ in suggested}
+    unresolved = [a for a in anons if a.name not in suggested_names]
+
+    if not suggested:
+        return AutoRenameResult(
+            anonymous_found=anons,
+            renames=[],
+            unresolved=unresolved,
+            globalized=[],
+            target_o_path=target_o_path,
+        )
+
+    # Build a direct @N → name mapping so we don't re-discover anonymous
+    # symbols inside ``rename_magic_symbols``. Using by_name (not by_value)
+    # ensures we rename exactly the symbols ``suggest_name_magic_map``
+    # vetted, even if multiple anonymous symbols happened to share a value.
+    mapping = Mapping(
+        by_value={},
+        by_name={anon.name: named for anon, named in suggested},
+    )
+    renames = rename_magic_symbols(
+        base_o_path, mapping, out_path=None, objcopy=objcopy,
+    )
+
+    globalized: list[str] = []
+    if globalize and renames:
+        new_names = [new for _, new in renames]
+        globalize_symbols(base_o_path, new_names, objcopy=objcopy)
+        globalized = new_names
+
+    return AutoRenameResult(
+        anonymous_found=anons,
+        renames=renames,
+        unresolved=unresolved,
+        globalized=globalized,
+        target_o_path=target_o_path,
+    )
+
+
 def suggest_name_magic_map(
     base_o_path: Path,
     target_o_path: Optional[Path] = None,
