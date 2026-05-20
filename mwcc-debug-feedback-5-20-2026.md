@@ -218,6 +218,17 @@ Context: working on `src/melee/mn/mnvibration.c`, mainly `fn_80247510` and
   `(f32) (anim_byte_chain = data->x0[port_a + 2])` into assignment plus call,
   transferred cleanly but was neutral (`95.916664%`, delta `+0.0`).
 
+## Follow-up after merging `2701f8137`
+
+- `match-iter-first -f fn_80247510 --auto-verify` produced useful target
+  suggestions, but the auto-verify path ended with
+  `OSError: [Errno 18] Cross-device link` while trying to move
+  `/Users/mike/.codex/worktrees/e68d/melee/pcdump_*.txt` to `/dev/null`.
+  The command still printed a baseline/override score (`96.26% -> 96.26%`),
+  but the cleanup failure makes the command exit through an implementation
+  error. This looks like a temp-file cleanup bug; unlinking the file instead of
+  renaming it to `/dev/null` should avoid the cross-device case.
+
 ## Follow-up from the `fn_802487A8` 98.36% baseline
 
 - A stronger class-scoped force proof now gets `fn_802487A8` very close to
