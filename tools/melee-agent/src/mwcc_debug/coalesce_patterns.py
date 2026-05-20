@@ -15,7 +15,11 @@ from dataclasses import dataclass
 from typing import Optional, Protocol
 
 from .coalesce_ir_facts import IrFacts, _blocks_defining, _common_successor
-from .parser import Instruction
+
+
+class _HasOperands(Protocol):
+    """Anything with an `.operands: str` — both Instruction and FirstDef qualify."""
+    operands: str
 
 
 @dataclass
@@ -40,7 +44,7 @@ class Pattern(Protocol):
 _TRAILING_INT_RE = re.compile(r",(-?\d+)\s*$")
 
 
-def _immediate_operand(ist: Instruction) -> Optional[int]:
+def _immediate_operand(ist: _HasOperands) -> Optional[int]:
     """Return the trailing integer literal in `ist.operands`, or None.
 
     Used by checkers that need to distinguish `addi rN, rM, 0` (an
@@ -89,9 +93,7 @@ class DirectIdentityPattern:
             return None
         if fd.opcode == "mr":
             return self._make_suggestion(facts, pair, fd, "mr")
-        if fd.opcode == "addi" and _immediate_operand(
-            _instr_from_first_def(fd),
-        ) == 0:
+        if fd.opcode == "addi" and _immediate_operand(fd) == 0:
             return self._make_suggestion(facts, pair, fd, "addi-0")
         return None
 
@@ -114,17 +116,6 @@ class DirectIdentityPattern:
         )
 
 
-def _instr_from_first_def(fd) -> Instruction:
-    """Adapter: build an Instruction-shaped object from a FirstDef so
-    _immediate_operand() can be called uniformly. The fields used
-    (opcode, operands) are present on both types.
-    """
-    return Instruction(
-        opcode=fd.opcode, operands=fd.operands, annotations=[],
-        regs=list(fd.regs),
-    )
-
-
 ALL_PATTERNS.append(DirectIdentityPattern())
 
 
@@ -144,8 +135,8 @@ class ChainInitPattern:
             return None
         if fa.first_def.opcode != "li" or fb.first_def.opcode != "li":
             return None
-        imm_a = _immediate_operand(_instr_from_first_def(fa.first_def))
-        imm_b = _immediate_operand(_instr_from_first_def(fb.first_def))
+        imm_a = _immediate_operand(fa.first_def)
+        imm_b = _immediate_operand(fb.first_def)
         if imm_a is None or imm_a != imm_b:
             return None
         # Adjacency: same block OR within 3 blocks of each other
@@ -194,8 +185,7 @@ class AliasSplitPattern:
         if len(fa_fd.regs) >= 2 and fa_fd.regs[1] == ("r", b):
             if fa_fd.opcode == "mr":
                 return None
-            if fa_fd.opcode == "addi" and _immediate_operand(
-                _instr_from_first_def(fa_fd)) == 0:
+            if fa_fd.opcode == "addi" and _immediate_operand(fa_fd) == 0:
                 return None
 
         # r_b: long-lived
