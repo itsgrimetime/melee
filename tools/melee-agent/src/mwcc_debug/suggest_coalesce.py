@@ -250,5 +250,65 @@ def render_text(report: Report) -> str:
             lines.append("  of both virtuals could share an assignment or")
             lines.append("  expression. Catalog: debug pattern-catalog "
                          "register-cascade")
+            # Augment with use-site IR context for compiler temps (virtuals
+            # with no bridge binding). Print the first few use-site
+            # instructions so the agent can grep the pcdump instead of
+            # doing it manually.
+            _render_use_site_context(lines, p.ir_facts)
         lines.append("")
     return "\n".join(lines)
+
+
+def _render_use_site_context(
+    lines: list[str], ir_facts: dict, max_sites: int = 5
+) -> None:
+    """Append a 'Nearby IR (use-sites)' block for virtuals that have no
+    high-confidence bridge binding (i.e. compiler temporaries).
+
+    Only renders if at least one virtual in the pair lacks a bridge entry,
+    to avoid redundancy when bridge context is already shown above.
+    """
+    any_temp = False
+    for label in ("from", "to"):
+        entry = ir_facts.get(label, {})
+        if not entry.get("bridge") and not entry.get("is_phys"):
+            any_temp = True
+            break
+    if not any_temp:
+        return
+
+    lines.append("")
+    lines.append("  Nearby IR (use-sites):")
+    for label in ("from", "to"):
+        entry = ir_facts.get(label, {})
+        v = entry.get("virtual", "?")
+        bridge = entry.get("bridge")
+        if bridge:
+            # Bridge known — already shown above; skip.
+            continue
+        if entry.get("is_phys"):
+            continue
+        # use_sites_instructions is not in the serialized dict (it would
+        # be redundant JSON). We rely on the text already printed for
+        # first_def. Surface the use_blocks list + first_def as
+        # "context" so the agent knows exactly which IR blocks to grep.
+        first_def = entry.get("first_def")
+        use_blocks = entry.get("use_blocks", [])
+        if first_def:
+            lines.append(
+                f"    r{v} (compiler temp): "
+                f"def block B{first_def['block']} "
+                f"`{first_def['opcode']} {first_def['operands']}`"
+            )
+        else:
+            lines.append(f"    r{v} (compiler temp): no first-def in pre-pass")
+        if use_blocks:
+            block_list = ", ".join(f"B{b}" for b in use_blocks[:max_sites])
+            suffix = (f" (+{len(use_blocks) - max_sites} more)"
+                      if len(use_blocks) > max_sites else "")
+            lines.append(f"      used in blocks: {block_list}{suffix}")
+        else:
+            lines.append("      (no use-blocks recorded)")
+        lines.append(
+            "      → grep pcdump for these blocks to find the C statement"
+        )
