@@ -285,7 +285,7 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
               u32 stat_val = mnDiagram2_GetStatValue(data->is_name_mode, stat_type, entity);
               if (mnDiagram_IsDistanceOverflow(stat_val))
               {
-                HSD_SisLib_803A6368(icon_text, 0x7F);
+                  HSD_SisLib_803A6368(icon_text, 0x7F);
               }
               goto next;
             }
@@ -323,7 +323,7 @@ void fn_802461BC(HSD_GObj* gobj)
     int i;
     int val;
     HSD_Text** labels_c;
-    unsigned int limit;
+    int limit;
     HSD_Text* text;
     f32 fi;
     f32 row_spacing;
