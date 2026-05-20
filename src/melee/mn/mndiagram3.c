@@ -998,8 +998,8 @@ void mnDiagram3_8024714C(void *arg0)
 
     data = mnDiagram3_804D6C20->user_data;
     row0 = data->jobjs[8];
-    row1 = data->jobjs[9];
     HSD_ASSERT(0x3EE, row0);
+    row1 = data->jobjs[9];
     HSD_ASSERT(0x3EE, row1);
     row_spacing = row1->translate.y - row0->translate.y;
     lb_8000B1CC(data->jobjs[8], (Vec3*) &mnDiagram3_803EEC28, &sp48);
@@ -1026,8 +1026,7 @@ void mnDiagram3_8024714C(void *arg0)
             if (val >= limit) {
                 val -= limit;
             }
-            HSD_SisLib_803A6368(text,
-                                ((u16*) &mnDiagram3_803EEC4C)[(u8) val]);
+            HSD_SisLib_803A6368(text, ((u16*) &mnDiagram3_803EEC4C)[(u8) val]);
         }
     }
 
