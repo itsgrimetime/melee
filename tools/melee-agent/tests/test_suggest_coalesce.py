@@ -53,3 +53,74 @@ def test_run_pair_mode_serializes_to_valid_json() -> None:
     parsed = json.loads(out)
     assert parsed["function"] == "mnDiagram3_8024714C"
     assert parsed["mode"] == "pair"
+
+
+import yaml
+
+
+def _load_calibration():
+    """Load the calibration YAML; skip silently if not present."""
+    path = pathlib.Path(__file__).parent / "fixtures" / "coalesce_calibration.yaml"
+    if not path.exists():
+        return []
+    return yaml.safe_load(path.read_text()).get("cases", [])
+
+
+import pytest
+
+
+@pytest.mark.parametrize("case", _load_calibration())
+def test_calibration_corpus(case) -> None:
+    """Each calibration case asserts the orchestrator behaves as the
+    YAML specifies. New cases can be added without writing new test
+    code — just append to coalesce_calibration.yaml."""
+    fixture_path = FIXTURES / case["pcdump"]
+    if not fixture_path.exists():
+        pytest.skip(f"fixture {case['pcdump']} not present")
+    text = fixture_path.read_text()
+
+    if case.get("discover"):
+        report = run(
+            function=case["function"],
+            discover=True, pcdump_text=text,
+        )
+        assert report.mode == "discover"
+        min_len = case.get("expected_cascade_length_min", 2)
+        assert report.cascade is not None
+        assert len(report.cascade) >= min_len
+        if "expected_top_priority_class" in case:
+            assert report.pairs, "discover produced no candidates"
+            assert (
+                report.pairs[0].priority_class
+                == case["expected_top_priority_class"]
+            )
+        # Strict: top-1 pair equality (when set in YAML)
+        top_pair = case.get("expected_top_pair")
+        if top_pair is not None:
+            assert report.pairs, "discover produced no candidates"
+            actual = (report.pairs[0].from_virt, report.pairs[0].to_virt)
+            assert actual == tuple(top_pair), (
+                f"expected top-1 pair {tuple(top_pair)}, got {actual}"
+            )
+    else:
+        pair_tuple = tuple(case["pair"])
+        report = run(
+            function=case["function"],
+            pair=pair_tuple, discover=False,
+            pcdump_text=text,
+        )
+        assert report.mode == "pair"
+        assert len(report.pairs) == 1
+        pr = report.pairs[0]
+        # Strict: each expected pattern name must appear in suggestions
+        expected_patterns = set(case.get("expected_patterns") or [])
+        if expected_patterns:
+            actual_patterns = {s.pattern_name for s in pr.suggestions}
+            missing = expected_patterns - actual_patterns
+            assert not missing, (
+                f"expected patterns {expected_patterns}, "
+                f"actual {actual_patterns}, missing {missing}"
+            )
+        else:
+            # Fall-through acceptable: any non-empty ir_facts is OK
+            assert pr.ir_facts
