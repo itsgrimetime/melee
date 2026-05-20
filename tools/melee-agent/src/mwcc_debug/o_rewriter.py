@@ -312,3 +312,33 @@ def rename_magic_symbols(
         Path(redef_file).unlink(missing_ok=True)
 
     return renames
+
+
+def globalize_symbols(
+    o_path: Path,
+    names: list[str],
+    objcopy: str = "/opt/devkitpro/devkitPPC/bin/powerpc-eabi-objcopy",
+) -> None:
+    """Make each symbol in `names` global (STB_GLOBAL) in `o_path`.
+
+    Uses objcopy with one ``--globalize-symbol <name>`` argument per name.
+    The operation is in-place: a temp file is written then atomically moved
+    over the original.
+
+    Raises subprocess.CalledProcessError if objcopy fails.
+    Raises FileNotFoundError if objcopy is not found.
+    """
+    if not names:
+        return
+
+    with tempfile.NamedTemporaryFile(suffix=".o", delete=False) as tf_out:
+        tmp_out = tf_out.name
+    try:
+        args = [objcopy]
+        for name in names:
+            args += ["--globalize-symbol", name]
+        args += [str(o_path), tmp_out]
+        subprocess.run(args, check=True)
+        shutil.move(tmp_out, str(o_path))
+    finally:
+        Path(tmp_out).unlink(missing_ok=True)

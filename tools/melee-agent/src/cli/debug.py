@@ -2869,19 +2869,96 @@ def ceiling(
         print(f"  TU:       {src.relative_to(melee_root)}")
         print()
 
-    # Step 1: suggest-casts
-    if not json_out:
-        print(f"[1] Cast audit (free, ~ms)...")
+    # Step 1: suggest-casts (with auto-verify for HIGH-severity findings)
     src_text = src.read_text() if src.exists() else ""
     cast_warnings = audit_function_casts(src_text, function)
     high_casts = [w for w in cast_warnings if w.severity == "high"]
     med_casts = [w for w in cast_warnings if w.severity == "medium"]
+    cast_verify_secs = len(high_casts) * 6
     if not json_out:
         if high_casts:
-            print(f"    ! {len(high_casts)} HIGH-severity cast(s) found:")
-            for w in high_casts[:3]:
+            print(f"[1] Cast audit (~{cast_verify_secs}s including verify)...")
+        else:
+            print(f"[1] Cast audit (free, ~ms)...")
+
+    # Auto-verify each HIGH cast by drop-test: patch src, compile, revert.
+    # Avoids false-positive WIN AVAILABLE when the cast is heuristically
+    # suspicious but removal is actually a no-op for codegen.
+    cast_verify_results: list[dict] = []  # per-cast verify record
+    if high_casts and src.exists():
+        orig_src = src.read_text()
+        try:
+            for w in high_casts:
+                # Build the drop pattern: remove "(cast_type) " prefix on the
+                # cast's line.  We match the exact text the linter found.
+                cast_text = f"({w.cast_type}) {w.inner_expr}"
+                if cast_text not in orig_src:
+                    # Fallback: maybe there's no space after the cast type.
+                    cast_text = f"({w.cast_type}){w.inner_expr}"
+                if cast_text not in orig_src:
+                    cast_verify_results.append({
+                        "line": w.line,
+                        "cast_type": w.cast_type,
+                        "inner_expr": w.inner_expr,
+                        "call_target": w.call_target,
+                        "pct_before": baseline,
+                        "pct_after": None,
+                        "delta": None,
+                        "note": "could not locate cast text in source",
+                    })
+                    continue
+                patched = orig_src.replace(cast_text, w.inner_expr, 1)
+                src.write_text(patched)
+                pct_after = _build_and_match(unit, function, melee_root)
+                src.write_text(orig_src)  # revert immediately
+                delta = (pct_after - baseline) if pct_after is not None else None
+                cast_verify_results.append({
+                    "line": w.line,
+                    "cast_type": w.cast_type,
+                    "inner_expr": w.inner_expr,
+                    "call_target": w.call_target,
+                    "pct_before": baseline,
+                    "pct_after": pct_after,
+                    "delta": delta,
+                    "note": (
+                        "WIN" if (delta is not None and delta > 0.0)
+                        else "no change" if (delta is not None and delta == 0.0)
+                        else "regression" if (delta is not None and delta < 0.0)
+                        else "build failed"
+                    ),
+                })
+        finally:
+            # Guarantee revert even if an exception was raised mid-loop.
+            src.write_text(orig_src)
+            subprocess.run(
+                ["ninja", f"build/GALE01/src/{unit}.o",
+                 "build/GALE01/report.json"],
+                cwd=melee_root, capture_output=True,
+            )
+
+    if not json_out:
+        if high_casts:
+            print(f"    ! {len(high_casts)} HIGH-severity cast(s) found — "
+                  f"auto-verified:")
+            for w, vr in zip(high_casts[:3], cast_verify_results[:3]):
+                delta_str = ""
+                if vr["delta"] is not None:
+                    if vr["delta"] > 0.0:
+                        delta_str = (f"  → drop test: {vr['pct_before']:.2f}% → "
+                                     f"{vr['pct_after']:.2f}% "
+                                     f"(+{vr['delta']:.2f}%, WIN)")
+                    else:
+                        delta_str = (f"  → drop test: {vr['pct_before']:.2f}% → "
+                                     f"{vr['pct_after']:.2f}% "
+                                     f"({vr['delta']:+.2f}%, false positive)")
+                elif vr.get("note") == "could not locate cast text in source":
+                    delta_str = "  → (could not locate cast in source; skipped)"
+                else:
+                    delta_str = "  → (build failed during verify)"
                 print(f"      - line {w.line}: ({w.cast_type}) "
                       f"{w.inner_expr} → {w.call_target}")
+                if delta_str:
+                    print(f"      {delta_str}")
             if len(high_casts) > 3:
                 print(f"      ... +{len(high_casts) - 3} more")
         else:
@@ -2960,18 +3037,33 @@ def ceiling(
             print(f"[2] Decl-order enumeration: SKIPPED")
             print()
 
-    # Verdict
-    has_cast_win = bool(high_casts)
+    # Verdict — use verified cast results (not raw heuristic count) so we
+    # don't produce false-positive WIN AVAILABLE on no-op casts.
+    #
+    # A cast counts as a win only if its verified delta is strictly positive.
+    # If cast_verify_results is empty (no high casts, or source not found),
+    # has_cast_win is False.
+    verified_cast_wins = [
+        vr for vr in cast_verify_results
+        if vr.get("delta") is not None and vr["delta"] > 0.0
+    ]
+    has_cast_win = bool(verified_cast_wins)
     decl_delta = decl_best_pct - baseline if decl_best_label else 0.0
-    has_decl_win = decl_delta >= 0.1
+    has_decl_win = decl_delta >= 0.05
 
     if has_cast_win or has_decl_win:
         verdict = "WIN AVAILABLE"
         recommendations: list[str] = []
         if has_cast_win:
+            win_lines = ", ".join(
+                f"line {vr['line']}" for vr in verified_cast_wins[:3]
+            )
+            if len(verified_cast_wins) > 3:
+                win_lines += f" +{len(verified_cast_wins) - 3} more"
             recommendations.append(
-                f"Drop {len(high_casts)} HIGH-severity cast(s) — run "
-                f"`melee-agent debug suggest-casts {function}` for details."
+                f"Drop {len(verified_cast_wins)} HIGH-severity cast(s) with "
+                f"verified improvement ({win_lines}). "
+                f"Run `melee-agent debug suggest-casts {function}` for details."
             )
         if has_decl_win:
             recommendations.append(
@@ -3006,6 +3098,7 @@ def ceiling(
                 "line": w.line, "call_target": w.call_target,
                 "cast_type": w.cast_type, "inner_expr": w.inner_expr,
             } for w in med_casts],
+            "cast_verify_results": cast_verify_results,
             "decl_best_label": decl_best_label,
             "decl_best_pct": decl_best_pct,
             "decl_results": decl_results,
@@ -3388,6 +3481,17 @@ def name_magic(
                  "don't rename.",
         ),
     ] = False,
+    globalize: Annotated[
+        bool,
+        typer.Option(
+            "--globalize/--no-globalize",
+            help="After renaming, promote each new symbol to global "
+                 "(STB_GLOBAL) via objcopy --globalize-symbol. Default "
+                 "true — the expected .o always has these symbols as "
+                 "global, so local symbols produce a symbol-binding diff "
+                 "even after renaming.",
+        ),
+    ] = True,
     json_out: Annotated[
         bool,
         typer.Option("--json", help="Emit as JSON."),
@@ -3403,12 +3507,15 @@ def name_magic(
 
     With `--map s32=mnVibration_804DC018`, this tool finds the
     anonymous symbol whose .sdata2 value matches the s32 int-to-float
-    bias and renames it via objcopy.
+    bias and renames it via objcopy.  The new symbol is also promoted to
+    global (``STB_GLOBAL``) by default, matching the binding in the
+    expected .o.  Pass ``--no-globalize`` to skip this step.
 
     Use `--list` to see what's available without renaming.
     """
     from ..mwcc_debug.o_rewriter import (
         find_all_anonymous_sdata2_symbols,
+        globalize_symbols,
         parse_mapping,
         rename_magic_symbols,
     )
@@ -3491,6 +3598,29 @@ def name_magic(
         typer.echo(f"objcopy failed: {e}", err=True)
         raise typer.Exit(5)
 
+    # Promote renamed symbols to global so the binding matches the expected
+    # .o.  The rename step leaves them local (MWCC emits anonymous symbols as
+    # STB_LOCAL); the expected .o always has them STB_GLOBAL.
+    globalized: list[str] = []
+    if globalize and renames:
+        target_path = out if out is not None else o_file
+        new_names = [new for _, new in renames]
+        try:
+            globalize_symbols(target_path, new_names)
+            globalized = new_names
+        except FileNotFoundError as e:
+            typer.echo(
+                f"objcopy not found during globalize: {e}. "
+                f"Rename succeeded but symbols remain local.",
+                err=True,
+            )
+        except subprocess.CalledProcessError as e:
+            typer.echo(
+                f"objcopy --globalize-symbol failed: {e}. "
+                f"Rename succeeded but symbols remain local.",
+                err=True,
+            )
+
     if json_out:
         print(json.dumps({
             "o_file": str(o_file),
@@ -3498,6 +3628,7 @@ def name_magic(
             "renames": [
                 {"old": old, "new": new} for old, new in renames
             ],
+            "globalized": globalized,
         }, indent=2))
         return
 
@@ -3510,7 +3641,8 @@ def name_magic(
         return
     print(f"Renamed {len(renames)} symbol(s) in {target}:")
     for old, new in renames:
-        print(f"  {old} -> {new}")
+        glob_note = " (globalized)" if new in globalized else ""
+        print(f"  {old} -> {new}{glob_note}")
 
 
 @debug_app.command(name="gen-permuter-config")
