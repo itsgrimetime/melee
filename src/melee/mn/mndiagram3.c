@@ -43,6 +43,7 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
   f32 neg_spacing;
   f32 row_spacing;
   f32 divider;
+  u8 new_var2;
   f32 icon_x_offset;
   u8 stat_type;
   int i;
@@ -184,7 +185,8 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
           {
             goto next;
           }
-          mnDiagram2_GetAggregatedFighterRank(sp38, stat_type, (u8) i);
+          new_var2 = (u8) i;
+          mnDiagram2_GetAggregatedFighterRank(sp38, stat_type, new_var2);
           icon = mnDiagram_80242B38(sp38[0], 0);
           if (icon == 0L)
           {
