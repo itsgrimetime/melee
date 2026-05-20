@@ -38,6 +38,7 @@ from ..mwcc_debug import cache as pcdump_cache
 from ..mwcc_debug.cast_audit import (
     audit_function_casts,
     crossref_with_asm,
+    detect_signedness_mismatches,
     find_call_sites,
 )
 from ..mwcc_debug.patterns import (
@@ -2346,6 +2347,17 @@ def suggest_casts(
                  "the source code wraps in (f32) (and vice versa).",
         ),
     ] = False,
+    signedness: Annotated[
+        bool,
+        typer.Option(
+            "--signedness",
+            help="Scan the current-vs-expected ASM diff (via checkdiff) "
+                 "for compare-opcode signedness mismatches: cmplwi (unsigned) "
+                 "where expected has cmpwi (signed), or vice versa. "
+                 "Requires the TU's .o to be built (`ninja <unit>.o`). "
+                 "This is separate from the source-level cast audit.",
+        ),
+    ] = False,
     severity: Annotated[
         str,
         typer.Option(
@@ -2358,14 +2370,14 @@ def suggest_casts(
         typer.Option("--json", help="Emit warnings as JSON."),
     ] = False,
 ) -> None:
-    """Tier 7d: static lint for cast-mismatch patterns in call args.
+    """Tier 7d: static lint for cast-mismatch and signedness patterns.
 
     Surfaces explicit casts on function arguments that are likely wrong —
     especially the `(f32)` cast on integer values that the matching agent
     identified as the `drop-variadic-cast` pattern in their session
     findings.
 
-    Three-tier classification:
+    Three-tier classification for cast warnings:
       HIGH — cast on a value the function declares as integer
       MEDIUM — cast on a value that LOOKS integer but can't be proven
       LOW — every other explicit cast (for general audit)
@@ -2373,6 +2385,11 @@ def suggest_casts(
     With `--asm`, also cross-references the call site against
     build/GALE01/asm/<unit>.s to identify args loaded as integers when
     the source casts to float (and vice versa).
+
+    With `--signedness`, scans the current-vs-expected ASM diff for
+    compare-opcode mismatches: cmplwi (unsigned) where expected has cmpwi
+    (signed), or vice versa. Useful when `u8 limit` → `int limit` gives
+    a match improvement that the source-level cast audit misses.
     """
     melee_root = DEFAULT_MELEE_ROOT
     unit = _find_unit_for_function(function, melee_root)
@@ -2414,10 +2431,33 @@ def suggest_casts(
                     key = (ctx.source_site.call_target, ctx.source_site.line)
                     asm_contexts[key] = ctx
 
+    # Signedness check: diff current compiled vs expected, look for
+    # cmplwi/cmpwi (unsigned/signed) opcode disagreements.
+    sign_mismatches = []
+    if signedness:
+        try:
+            proc = subprocess.run(
+                ["python", "tools/checkdiff.py", function,
+                 "--format", "json", "--no-build"],
+                cwd=melee_root, capture_output=True, text=True, timeout=60,
+            )
+            if proc.returncode in (0, 1) and proc.stdout:
+                diff_data = json.loads(proc.stdout)
+                diff_lines = diff_data.get("diff", [])
+                if diff_lines:
+                    sign_mismatches = detect_signedness_mismatches(diff_lines)
+        except (FileNotFoundError, subprocess.TimeoutExpired,
+                json.JSONDecodeError):
+            typer.echo(
+                "signedness check: checkdiff failed or produced no output",
+                err=True,
+            )
+
     if json_out:
         data = []
         for w in warnings:
             entry = {
+                "kind": "cast",
                 "line": w.line,
                 "call_target": w.call_target,
                 "arg_index": w.arg_index,
@@ -2427,7 +2467,22 @@ def suggest_casts(
                 "reason": w.reason,
             }
             data.append(entry)
-        print(json.dumps({"function": function, "warnings": data}, indent=2))
+        sign_data = []
+        for sm in sign_mismatches:
+            sign_data.append({
+                "kind": "signedness",
+                "current_opcode": sm.current_opcode,
+                "expected_opcode": sm.expected_opcode,
+                "current_line": sm.current_line,
+                "expected_line": sm.expected_line,
+                "mismatch_kind": sm.kind,
+                "suggestion": sm.suggestion,
+            })
+        print(json.dumps({
+            "function": function,
+            "warnings": data,
+            "signedness_mismatches": sign_data,
+        }, indent=2))
         return
 
     print(f"Function: {function}")
@@ -2437,27 +2492,39 @@ def suggest_casts(
             f"No casts at severity≥{severity}. "
             f"(Re-run with --severity all to see all explicit casts.)"
         )
-        return
-    print(f"Cast warnings ({len(warnings)} at severity≥{severity}):")
-    print()
-    for w in warnings:
-        marker = {"high": "!!", "medium": "!", "low": "·"}.get(w.severity, " ")
-        print(f"  {marker} {target_path}:{w.line}  ({w.severity})")
-        print(f"     ({w.cast_type}) {w.inner_expr}  →  "
-              f"{w.call_target}(... arg{w.arg_index} ...)")
-        print(f"     {w.reason}")
-        if asm:
-            key = (w.call_target, w.line - (text[:0].count('\n')))
-            # Find any matching context by call target + line proximity
-            for (target, src_line), ctx in asm_contexts.items():
-                if target == w.call_target and ctx.asm_line_idx is not None:
-                    kinds = ctx.arg_register_kinds
-                    if kinds:
-                        kind_str = ", ".join(f"{r}={k}"
-                                             for r, k in sorted(kinds.items()))
-                        print(f"     ASM arg loads: {kind_str}")
-                    break
+    else:
+        print(f"Cast warnings ({len(warnings)} at severity≥{severity}):")
         print()
+        for w in warnings:
+            marker = {"high": "!!", "medium": "!", "low": "·"}.get(w.severity, " ")
+            print(f"  {marker} {target_path}:{w.line}  ({w.severity})")
+            print(f"     ({w.cast_type}) {w.inner_expr}  →  "
+                  f"{w.call_target}(... arg{w.arg_index} ...)")
+            print(f"     {w.reason}")
+            if asm:
+                key = (w.call_target, w.line - (text[:0].count('\n')))
+                # Find any matching context by call target + line proximity
+                for (target_name, src_line), ctx in asm_contexts.items():
+                    if target_name == w.call_target and ctx.asm_line_idx is not None:
+                        kinds = ctx.arg_register_kinds
+                        if kinds:
+                            kind_str = ", ".join(f"{r}={k}"
+                                                 for r, k in sorted(kinds.items()))
+                            print(f"     ASM arg loads: {kind_str}")
+                        break
+            print()
+
+    if sign_mismatches:
+        print(f"Signedness mismatches ({len(sign_mismatches)} compare-opcode disagreements):")
+        print()
+        for sm in sign_mismatches:
+            print(f"  !! signedness-type-mismatch")
+            print(f"     current:  {sm.current_line}")
+            print(f"     expected: {sm.expected_line}")
+            print(f"     {sm.suggestion}")
+            print()
+    elif signedness:
+        print("No signedness mismatches detected.")
 
 
 @debug_app.command(name="triage-perm")
