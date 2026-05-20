@@ -164,8 +164,7 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
         if (i == 0)
         {
           lb_8000B1CC(data->jobjs[6], (Vec3 *) (base + 0x30), &sp6C);
-          value_text = HSD_SisLib_803A6754(0, 1);
-          data->value_text = value_text;
+          data->value_text = (value_text = HSD_SisLib_803A6754(0, 1));
           value_text->font_size.x = divider;
           value_text->font_size.y = divider;
           {
@@ -270,15 +269,15 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
         {
           u16 icon_id = *stat_table;
           int r17 = icon_id;
-          if (((u32) ((char) icon_id)) == 0xFFFF)
-          {
-            goto next;
+          if (((u32) ((char) icon_id)) == 0xFFFF) {
+              goto next;
           }
           lb_8000B1CC(data->jobjs[6], (Vec3 *) (base + 0x30), &sp6C);
           {
             HSD_Text *icon_text;
             f32 negated_y = -sp6C.y;
-            icon_text = HSD_SisLib_803A5ACC(0, 1, icon_x_offset + sp6C.x, (neg_spacing * ((f32) i)) + negated_y, sp6C.z, mnDiagram3_804DC014, mnDiagram3_804DC014);
+            neg_spacing = icon_x_offset + sp6C.x;
+            icon_text = HSD_SisLib_803A5ACC(0, 1, neg_spacing, (neg_spacing * ((f32) i)) + negated_y, sp6C.z, mnDiagram3_804DC014, mnDiagram3_804DC014);
             data->row_icons[i] = icon_text;
             icon_text->default_alignment = 1;
             icon_text->text_color = mn_804D4B64;
