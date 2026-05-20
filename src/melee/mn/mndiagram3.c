@@ -194,7 +194,6 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
                 HSD_JObjSetMtxDirtySub(icon);
               }
             }
-            ;
           }
           HSD_JObjAddChild(data->jobjs[6], icon);
           mnDiagram2_GetAggregatedFighterRank(sp28, stat_type,
@@ -346,7 +345,6 @@ void fn_802461BC(HSD_GObj* gobj)
         GameRules* gr;
         lbAudioAx_80024030(0);
         mn_804A04F0.entering_menu = sel;
-        ;
         gmMainLib_8015CC34()->xD =
             ((Diagram3*) mnDiagram3_804D6C20->user_data)->is_name_mode;
         mnDiagram2_ClearDetailView(mnDiagram3_804D6C20);
