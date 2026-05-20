@@ -592,6 +592,7 @@ def test_mutators_module_imports_cleanly() -> None:
     # above would have raised. Confirm the module's expected entry
     # points are still callable:
     assert callable(mutators.mutate_type_change)
+    assert callable(mutators.mutate_insert_alias_before_use)
 
 
 def test_function_with_nested_block_is_no_longer_low_confidence() -> None:
