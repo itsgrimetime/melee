@@ -258,25 +258,41 @@ static void hook_fn(void *func_addr, void *hook_func,
 //   - interferer count (node->arraySize)
 //   - flags (fSpilled etc.)
 //
-// IGNode layout for v1.2.5n (NOT the 7.0 layout — assignedReg is at +0x10):
+// IGNode layout for v1.2.5n (NOT the 7.0 layout — assignedReg is at +0x10).
+// Reverse-engineered via Ghidra of FUN_00530C00 (the IG builder at
+// VA 0x530C00) which materializes IGNodes from the union-find alias array.
 typedef struct IGNode
 {
-    /* +0x00 */ struct IGNode *next;
-    /* +0x04 */ void *_pad4;
-    /* +0x08 */ int useCount;
-    /* +0x0C */ int16 _someFlag;
-    /* +0x0E */ int16 degree;
-    /* +0x10 */ int16 assignedReg; // *** assigned physical reg, or -1 ***
-    /* +0x12 */ uint8 flags;
+    /* +0x00 */ struct IGNode *next;   // populated by simplifygraph (linked list)
+    /* +0x04 */ int _x4;               // init 0
+    /* +0x08 */ int _x8;               // init 0
+    /* +0x0C */ int16 ig_idx;          // own index in INTERFERENCEGRAPH
+    /* +0x0E */ int16 degree;          // initially = arraySize, decremented by simplify
+    /* +0x10 */ int16 assignedReg;     // INIT 0xFFFF; for COALESCED nodes (flag 0x4)
+                                       // this field holds the ROOT ig_idx until
+                                       // colorgraph overwrites it with a physical reg
+    /* +0x12 */ uint8 flags;           // bit 0x4 = node was coalesced AWAY
+                                       // bit 0x8 = node is a coalesce ROOT
+                                       // bit 0x1 = IG_FLAG_SPILLED (added by allocator)
     /* +0x13 */ uint8 _pad13;
-    /* +0x14 */ int16 arraySize;
-    /* +0x16 */ int16 array[1]; // variable-length neighbor indices
+    /* +0x14 */ int16 arraySize;       // # of interferer entries
+    /* +0x16 */ int16 array[1];        // variable-length: arraySize interferer ig_idxs
 } IGNode;
 
-#define IG_FLAG_SPILLED 0x01
+#define IG_FLAG_SPILLED       0x01
+#define IG_FLAG_COALESCED_AWAY 0x04
+#define IG_FLAG_COALESCE_ROOT  0x08
 
 #define INTERFERENCEGRAPH (*(IGNode ***)0x587E3C)
 #define N_IGNODES (*(int *)0x587190)
+
+// Coalesce alias array — union-find parent pointers, one short per virtual,
+// indexed by virtual idx. Allocated and populated by FUN_00530E00 (the
+// conservative coalescer), then read by FUN_00530C00 (the IG builder) to
+// mark coalesced nodes. Each entry holds the parent virtual idx (with path
+// compression after FUN_00530E00 finishes). A virtual is its own root iff
+// COALESCE_ALIAS[i] == i. Reverse-engineered via Ghidra.
+#define COALESCE_ALIAS (*(int16 **)0x58308C)
 
 // ---------------------------------------------------------------------------
 // Tier 5 — allocator biasing via env var.
@@ -411,6 +427,77 @@ static void parse_iter_first_from_env(void)
     }
 }
 
+// ---------------------------------------------------------------------------
+// FORCE_COALESCE — override union-find decisions made by the real coalescer.
+//
+// MWCC_DEBUG_FORCE_COALESCE="virtA=virtB[,virtA=virtB]*"
+//   Example: "42=38"        force virtual #42 to coalesce into virtual #38
+//   Example: "42=38,50=38"  also force #50 into #38 (three-way merge)
+//   Example: "42=42"        un-coalesce #42 (make it its own root again)
+//
+// Applied in the real-coalesce hook (FUN_00530E00) AFTER the trampoline runs.
+// At that point COALESCE_ALIAS is populated with the natural union-find
+// result; we patch entries to force the desired mapping. The next pipeline
+// phase (FUN_00530C00, the IG builder) reads COALESCE_ALIAS to mark
+// coalesced IGNodes, so our override propagates into the IG that
+// colorgraph then operates on.
+//
+// Caveats (the user agrees to these by setting the env var):
+//   - Forcing two interfering virtuals to coalesce produces incorrect code
+//     (the union should respect the interference matrix at DAT_00583088).
+//   - Coalesce is per-(function, register class). The hook applies overrides
+//     in every coalesce invocation; pairs that aren't in the current class'
+//     virtual-id space simply have no effect (they reference shorts that
+//     no operand uses).
+//   - Used purely for matching investigations / hypothesis testing.
+#define MAX_COALESCE_OVERRIDES 32
+
+static struct {
+    int virt;
+    int root;
+} g_coalesce_overrides[MAX_COALESCE_OVERRIDES];
+static int g_n_coalesce_overrides = 0;
+static int g_coalesce_overrides_parsed = 0;
+
+static void parse_coalesce_overrides_from_env(void)
+{
+    char buf[512];
+    uint32 len;
+    int i;
+    int cur_val;
+    int parsing_root;
+    int saved_virt;
+
+    g_coalesce_overrides_parsed = 1;
+    g_n_coalesce_overrides = 0;
+
+    len = GetEnvironmentVariableA("MWCC_DEBUG_FORCE_COALESCE", buf, sizeof(buf));
+    if (len == 0 || len >= sizeof(buf)) return;
+
+    cur_val = 0;
+    parsing_root = 0;
+    saved_virt = -1;
+    for (i = 0; i <= (int)len; i++) {
+        char c = (i == (int)len) ? '\0' : buf[i];
+        if (c >= '0' && c <= '9') {
+            cur_val = cur_val * 10 + (c - '0');
+        } else if (c == '=') {
+            saved_virt = cur_val;
+            cur_val = 0;
+            parsing_root = 1;
+        } else if ((c == ',' || c == '\0') && parsing_root &&
+                   g_n_coalesce_overrides < MAX_COALESCE_OVERRIDES) {
+            g_coalesce_overrides[g_n_coalesce_overrides].virt = saved_virt;
+            g_coalesce_overrides[g_n_coalesce_overrides].root = cur_val;
+            g_n_coalesce_overrides++;
+            cur_val = 0;
+            parsing_root = 0;
+            saved_virt = -1;
+        }
+        // else: ignore whitespace and stray chars
+    }
+}
+
 // colorgraph's prologue is 7 bytes (push ebx/esi/edi/ebp + sub esp, 8). Using
 // 5 would split the sub esp, 8 (83 ec 08) mid-instruction and corrupt the
 // trampoline. trampoline buffer must hold prologue (7) + jump (5) = 12 bytes.
@@ -419,9 +506,19 @@ static unsigned char colorgraph_trampoline[24];
 // simplifygraph: same shape prologue as colorgraph (7 bytes).
 static unsigned char simplifygraph_trampoline[24];
 
-// coalescenodes at 0x530A80: prologue 7 bytes (4× push + sub esp, 0x10).
-// Same shape as colorgraph + simplifygraph.
+// FUN_00530A80 at 0x530A80: prologue 7 bytes (4× push + sub esp, 0x10).
+// Originally MISIDENTIFIED as coalescenodes; per Ghidra RE, this is actually a
+// liveness/use-def-marking pass that walks DAT_00587C74 (basic blocks) →
+// puVar3[6] (instructions) and sets bit 0x4 on operands that are "first use
+// after def" in a forward dataflow scan. Hook kept as-is (entry/exit only)
+// for observability; the real coalesce is at FUN_00530E00 (real_coalesce_*).
 static unsigned char coalesce_trampoline[24];
+
+// real coalesce at 0x530E00: prologue 7 bytes (4× push + sub esp, 0x18).
+// Same shape as colorgraph but a bigger frame. This is the actual Chaitin-
+// Briggs conservative coalescer — uses union-find with path compression
+// over COALESCE_ALIAS (DAT_0058308C). Reverse-engineered via Ghidra.
+static unsigned char real_coalesce_trampoline[24];
 
 // buildinterferencegraph at 0x530A00: prologue 9 bytes (mov eax,[esp+4] = 4 +
 // push ebx = 1 + mov ebx,[esp+0x10] = 4). Trampoline buffer holds prologue
@@ -748,54 +845,154 @@ static void *__cdecl hook_simplifygraph(int rclass, int n_colors, int n_class_re
     return head;
 }
 
-// coalescenodes hook — snapshots IG state before+after coalesce runs, then
-// emits a per-node delta dump. The agent uses this to identify which
-// virtuals got coalesced into which representative (post-coalesce, some
-// virtuals have ig_idx=-1 in the colorgraph dump because they were merged
-// away — this hook reveals WHICH representative absorbed them).
+// Hook for FUN_00530A80 — entry/exit logging only.
 //
-// Vantage point: coalescenodes runs inside buildinterferencegraph between
-// buildinterferencematrix and findrematerializations. The IG is stable here
-// — the build_ig hook (post-findrematerializations) can't iterate the IG
-// safely because findrematerializations reallocates.
+// HISTORICAL NOTE: This function was misidentified as `coalescenodes` based
+// on its position in buildinterferencegraph's call chain. Per Ghidra RE
+// (2026-05-19), it is actually a LIVENESS / use-def-marking pass that
+// walks the per-block PCode and flags operand uses with bit 0x4. It is NOT
+// the coalescer. The real coalescer is FUN_00530E00 (`hook_real_coalesce`
+// below). The hook is retained here as a low-cost observability point in
+// the pipeline.
 //
-static int __cdecl hook_coalescenodes(int rclass, int n_nodes)
+// Pipeline reminder (see Ghidra decompile of FUN_00530A00):
+//   1. FUN_005301B0 — per-block bitset allocation (DAT_00587E74)
+//   2. FUN_00530A80 — liveness use-def marker  ← this hook
+//   3. FUN_00531290 — buildinterferencematrix (DAT_00583088)
+//   4. FUN_00530E00 — REAL conservative coalesce (union-find DAT_0058308C)
+//   5. FUN_00530C00 — materializes INTERFERENCEGRAPH (DAT_00587E3C)
+//
+// INTERFERENCEGRAPH is unsafe to read here — it holds stale pointers from
+// the prior function's compilation until Phase 5 rewrites it.
+static int __cdecl hook_dataflow_marker(int rclass, int n_nodes)
 {
-    typedef int(__cdecl * coalesce_fn)(int, int);
+    typedef int(__cdecl * fn_t)(int, int);
     int result;
     int n;
 
-    // v1 SHIPPED: entry+N_IGNODES+exit logging.
-    //
-    // IG iteration (reading INTERFERENCEGRAPH[i] inside this hook) hangs
-    // wibo+mwcc deterministically — even just `ig = INTERFERENCEGRAPH;
-    // debug_printf("ig_null=%d", ig==0)` hangs. Reading N_IGNODES alone
-    // works fine (verified). The hypothesis: the INTERFERENCEGRAPH
-    // global at 0x587E3C is somehow unstable to read from inside
-    // coalescenodes specifically (works fine in other hooks). Could be
-    // a wibo translation quirk, an alignment issue, or a real race with
-    // mwcc's internal access.
-    //
-    // For v1, we surface "coalesce ran with N_IGNODES=X" so the agent
-    // can correlate with their COLORGRAPH DECISIONS dumps. Pre→post
-    // representative mapping is deferred — likely needs different RE
-    // (find the alias-pointer field in the IGNode struct directly via
-    // static disasm of coalescenodes itself).
     if (PCFILE && DEBUG_GUARD) {
         n = N_IGNODES;
-        debug_printf("\n[COALESCE] enter class=%d n_nodes=%d N_IGNODES_pre=%d\n",
+        debug_printf("\n[DATAFLOW] enter class=%d n_nodes=%d N_IGNODES_pre=%d\n",
                      rclass, n_nodes, n);
     }
 
-    // Call original
-    result = ((coalesce_fn)coalesce_trampoline)(rclass, n_nodes);
+    result = ((fn_t)coalesce_trampoline)(rclass, n_nodes);
 
     if (PCFILE && DEBUG_GUARD) {
         n = N_IGNODES;
-        debug_printf("[COALESCE] exit result=%d N_IGNODES_post=%d\n",
+        debug_printf("[DATAFLOW] exit result=%d N_IGNODES_post=%d\n",
                      result, n);
     }
     return result;
+}
+
+// ---------------------------------------------------------------------------
+// Real coalesce hook (FUN_00530E00) — the actual Chaitin-Briggs conservative
+// coalescer for MWCC 1.2.5n. Reverse-engineered via Ghidra.
+//
+// Signature: __cdecl(uint rclass, uint n_virtuals)
+//   rclass = register class (0=FP, 1=GPR, others=CR/special)
+//   n_virtuals = total virtual-register count for this (function, class)
+//
+// What it does:
+//   1. Allocates COALESCE_ALIAS = short[n_virtuals] at DAT_0058308C
+//   2. Initializes COALESCE_ALIAS[i] = i for all i (each virtual its own root)
+//   3. For each move-class PCode instruction:
+//        - Find roots of src/dst via union-find with path-walking
+//        - If same root → redundant move → free
+//        - If different roots AND no interference (DAT_00583088) → UNION
+//          (lower idx becomes new root; phys-reg-aware logic for moves
+//          involving virtuals < 0x20)
+//   4. Rewrites all operands to use root virtuals (path compression)
+//
+// On hook exit, COALESCE_ALIAS[i] holds the FINAL root for each virtual
+// (post-compression). We dump these mappings and, if MWCC_DEBUG_FORCE_COALESCE
+// is set, patch entries to force additional/different unifications.
+//
+// Note: FUN_00530C00 (the next pipeline phase) reads COALESCE_ALIAS to mark
+// IGNodes with flag bit 0x4 (coalesced-away) / 0x8 (coalesce-root) and to
+// store the root idx in the assignedReg field. Our overrides therefore
+// propagate into the IG that colorgraph operates on.
+static void __cdecl hook_real_coalesce(unsigned int rclass, unsigned int n_virtuals)
+{
+    typedef void(__cdecl * fn_t)(unsigned int, unsigned int);
+    int i;
+    int distinct_roots;
+    int forced_count;
+    int16 *alias;
+
+    if (PCFILE && DEBUG_GUARD) {
+        debug_printf("\n[COALESCE] enter class=%d n_virtuals=%d\n",
+                     rclass, n_virtuals);
+    }
+
+    // Run the original — this populates COALESCE_ALIAS.
+    ((fn_t)real_coalesce_trampoline)(rclass, n_virtuals);
+
+    if (!g_coalesce_overrides_parsed) {
+        parse_coalesce_overrides_from_env();
+    }
+
+    alias = COALESCE_ALIAS;
+    if (alias == 0 || n_virtuals == 0) {
+        if (PCFILE && DEBUG_GUARD) {
+            debug_printf("[COALESCE] exit (alias=null or n=0)\n");
+        }
+        return;
+    }
+
+    // Dump the natural coalesce result. Show only non-trivial bindings
+    // (where root != self) to keep the output focused.
+    if (PCFILE && DEBUG_GUARD) {
+        int dumped = 0;
+        debug_printf("[COALESCE] natural mappings (virt -> root):\n");
+        for (i = 0; i < (int)n_virtuals; i++) {
+            int root = (int)alias[i];
+            if (root != i) {
+                debug_printf("  %d -> %d\n", i, root);
+                dumped++;
+                if (dumped >= 256) {
+                    debug_printf("  ...(capped at 256)\n");
+                    break;
+                }
+            }
+        }
+        if (dumped == 0) {
+            debug_printf("  (none — no virtuals coalesced)\n");
+        }
+    }
+
+    // Apply FORCE_COALESCE overrides. We patch COALESCE_ALIAS[virt] = root
+    // directly. If the user-specified virt is out of bounds (e.g., this
+    // call is for a different register class and the override doesn't
+    // apply), we silently skip — overrides are global, applied wherever
+    // they fit.
+    forced_count = 0;
+    if (g_n_coalesce_overrides > 0) {
+        for (i = 0; i < g_n_coalesce_overrides; i++) {
+            int v = g_coalesce_overrides[i].virt;
+            int r = g_coalesce_overrides[i].root;
+            if (v < 0 || v >= (int)n_virtuals) continue;
+            if (r < 0 || r >= (int)n_virtuals) continue;
+            if (PCFILE && DEBUG_GUARD) {
+                debug_printf("[FORCE_COALESCE] alias[%d]: %d -> %d\n",
+                             v, (int)alias[v], r);
+            }
+            alias[v] = (int16)r;
+            forced_count++;
+        }
+    }
+
+    // Count distinct roots (post-override) for a quick summary line.
+    distinct_roots = 0;
+    for (i = 0; i < (int)n_virtuals; i++) {
+        if ((int)alias[i] == i) distinct_roots++;
+    }
+
+    if (PCFILE && DEBUG_GUARD) {
+        debug_printf("[COALESCE] exit class=%d n_virtuals=%d distinct_roots=%d forced=%d\n",
+                     rclass, n_virtuals, distinct_roots, forced_count);
+    }
 }
 
 
@@ -848,10 +1045,18 @@ static void install_hooks(void)
     hook_fn((void *)0x4CE400, hook_simplifygraph,
             simplifygraph_trampoline, 7);
 
-    // coalescenodes @ 0x530A80 — minimal diagnostic version installed.
-    // Prologue 7 bytes (4× push + sub esp 0x10).
-    hook_fn((void *)0x530A80, hook_coalescenodes,
+    // FUN_00530A80 @ 0x530A80 — was misidentified as coalescenodes; it's
+    // actually a liveness use-def marker. Kept as observability for the
+    // 2nd phase of buildinterferencegraph. Prologue 7 bytes.
+    hook_fn((void *)0x530A80, hook_dataflow_marker,
             coalesce_trampoline, 7);
+
+    // FUN_00530E00 @ 0x530E00 — THE REAL conservative coalescer (union-find
+    // over COALESCE_ALIAS). 4th phase of buildinterferencegraph. Prologue
+    // 7 bytes (4× push + sub esp, 0x18). Hook dumps the alias array and
+    // applies MWCC_DEBUG_FORCE_COALESCE overrides.
+    hook_fn((void *)0x530E00, hook_real_coalesce,
+            real_coalesce_trampoline, 7);
 
     // (obtain_nonvolatile_register hooks intentionally skipped — see comment
     // above; calling-convention mismatch corrupted state.)

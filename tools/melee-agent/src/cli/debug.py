@@ -162,6 +162,16 @@ def pcdump(
                  "what real MWCC would emit from any C source.",
         ),
     ] = None,
+    force_coalesce: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-coalesce",
+            help="Tier 6: override the conservative coalescer. Format "
+                 "'virt=root[,virt=root]*'. E.g. '42=38' forces virtual 42 "
+                 "to coalesce into 38; '42=42' un-coalesces 42 back to its "
+                 "own root. EXPERIMENTAL.",
+        ),
+    ] = None,
 ):
     """Dump MWCC's internal IR + codegen for a TU and emit pcdump.txt to stdout.
 
@@ -233,6 +243,13 @@ def pcdump(
                 "or whitespace"
             )
         cmd_parts.append(f"set MWCC_DEBUG_FORCE_ITER_FIRST={force_iter_first}")
+    if force_coalesce:
+        if any(c in force_coalesce for c in '"\'; \t'):
+            raise typer.BadParameter(
+                "--force-coalesce must not contain quotes, semicolons, "
+                "or whitespace"
+            )
+        cmd_parts.append(f"set MWCC_DEBUG_FORCE_COALESCE={force_coalesce}")
     cmd_parts.append(
         f"powershell -NoProfile -ExecutionPolicy Bypass "
         f"-File {remote_script} {src_rel}"
@@ -3878,7 +3895,14 @@ def pcdump_local(
         Optional[str],
         typer.Option(
             "--force-coalesce",
-            help="Tier 6: force coalesce specific virtual pairs.",
+            help="Tier 6: override the conservative coalescer's union-find "
+                 "decisions. Format 'virt=root[,virt=root]*'. E.g. '42=38' "
+                 "forces virtual 42 to coalesce into virtual 38; '42=42' "
+                 "un-coalesces 42 back to its own root. Applies in every "
+                 "coalesce invocation; out-of-bounds pairs are silently "
+                 "skipped (so virtuals from the wrong register class do "
+                 "no harm). EXPERIMENTAL — forcing two interfering "
+                 "virtuals to coalesce produces incorrect code.",
         ),
     ] = None,
     wibo: Annotated[
