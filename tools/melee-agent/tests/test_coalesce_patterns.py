@@ -137,3 +137,51 @@ def test_direct_identity_skips_physical_source() -> None:
                   annotations=[], regs=[("r", 53), ("r", 3)])
     facts = _facts_with({53: _vf(53, fd)})
     assert DirectIdentityPattern().check(facts, (53, 3)) is None
+
+
+from src.mwcc_debug.coalesce_patterns import ChainInitPattern
+
+
+def test_chain_init_matches_same_block_same_immediate() -> None:
+    """Two adjacent `li r_X, 0` in the same block → ChainInit fires."""
+    fd_a = FirstDef(block_idx=2, opcode="li", operands="r33,0",
+                    annotations=[], regs=[("r", 33)])
+    fd_b = FirstDef(block_idx=2, opcode="li", operands="r34,0",
+                    annotations=[], regs=[("r", 34)])
+    facts = _facts_with({
+        33: _vf(33, fd_a),
+        34: _vf(34, fd_b),
+    })
+    s = ChainInitPattern().check(facts, (33, 34))
+    assert s is not None
+    assert s.pattern_name == "chain-init"
+
+
+def test_chain_init_skips_different_immediates() -> None:
+    """`li r33,0` vs `li r34,5` → not a chain-init."""
+    fd_a = FirstDef(block_idx=2, opcode="li", operands="r33,0",
+                    annotations=[], regs=[("r", 33)])
+    fd_b = FirstDef(block_idx=2, opcode="li", operands="r34,5",
+                    annotations=[], regs=[("r", 34)])
+    facts = _facts_with({33: _vf(33, fd_a), 34: _vf(34, fd_b)})
+    assert ChainInitPattern().check(facts, (33, 34)) is None
+
+
+def test_chain_init_skips_blocks_too_far_apart() -> None:
+    """Defs in unrelated blocks (distance > 3) → not chain-init."""
+    fd_a = FirstDef(block_idx=0, opcode="li", operands="r33,0",
+                    annotations=[], regs=[("r", 33)])
+    fd_b = FirstDef(block_idx=10, opcode="li", operands="r34,0",
+                    annotations=[], regs=[("r", 34)])
+    facts = _facts_with({33: _vf(33, fd_a), 34: _vf(34, fd_b)})
+    assert ChainInitPattern().check(facts, (33, 34)) is None
+
+
+def test_chain_init_skips_non_li_opcode() -> None:
+    """`addi r33, r0, 0` looks similar but isn't `li` → skip."""
+    fd_a = FirstDef(block_idx=2, opcode="addi", operands="r33,r0,0",
+                    annotations=[], regs=[("r", 33), ("r", 0)])
+    fd_b = FirstDef(block_idx=2, opcode="li", operands="r34,0",
+                    annotations=[], regs=[("r", 34)])
+    facts = _facts_with({33: _vf(33, fd_a), 34: _vf(34, fd_b)})
+    assert ChainInitPattern().check(facts, (33, 34)) is None

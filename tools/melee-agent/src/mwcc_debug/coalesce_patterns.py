@@ -126,3 +126,44 @@ def _instr_from_first_def(fd) -> Instruction:
 
 
 ALL_PATTERNS.append(DirectIdentityPattern())
+
+
+class ChainInitPattern:
+    """Both virtuals initialized to the same value (typically 0) in
+    adjacent IR. Combining into a chained C-source assignment collapses
+    the two `li` ops and lets MWCC coalesce.
+    """
+    name = "chain-init"
+
+    def check(self, facts: IrFacts,
+              pair: tuple[int, int]) -> Optional[Suggestion]:
+        a, b = pair
+        fa = facts.by_virtual.get(a)
+        fb = facts.by_virtual.get(b)
+        if not fa or not fb or fa.first_def is None or fb.first_def is None:
+            return None
+        if fa.first_def.opcode != "li" or fb.first_def.opcode != "li":
+            return None
+        imm_a = _immediate_operand(_instr_from_first_def(fa.first_def))
+        imm_b = _immediate_operand(_instr_from_first_def(fb.first_def))
+        if imm_a is None or imm_a != imm_b:
+            return None
+        # Adjacency: same block OR within 3 blocks of each other
+        if abs(fa.first_def.block_idx - fb.first_def.block_idx) > 3:
+            return None
+        return Suggestion(
+            pattern_name="chain-init",
+            summary=f"r{a} and r{b} are both initialized to {imm_a}",
+            ir_evidence=(
+                f"B{fa.first_def.block_idx}: li r{a}, {imm_a}; "
+                f"B{fb.first_def.block_idx}: li r{b}, {imm_b}"
+            ),
+            source_hint=(
+                f"Combine the two assignments into a chain: "
+                f"var_a = (var_b = {imm_a});"
+            ),
+            catalog_ref="chained-init",
+        )
+
+
+ALL_PATTERNS.append(ChainInitPattern())
