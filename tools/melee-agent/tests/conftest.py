@@ -35,3 +35,16 @@ def _refresh_mnvibration_src_o() -> None:
         cwd=_REPO_ROOT,
         capture_output=True,
     )
+
+
+@pytest.fixture(autouse=True)
+def _clear_ast_walker_cache():
+    """Clear ast_walker's parse cache between tests to prevent cross-test
+    state leak. Phase 1 of nested-block-local awareness."""
+    yield
+    try:
+        from src.mwcc_debug import ast_walker
+        ast_walker.clear_cache()
+    except ImportError:
+        # ast_walker not yet built — tolerate during scaffold tasks.
+        pass
