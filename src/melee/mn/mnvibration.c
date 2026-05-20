@@ -174,6 +174,22 @@ inline u8 mnVibration_GetNameRumble(s32 name_idx)
     return GetPersistentNameData(name_idx)->x1A1;
 }
 
+static inline void mnVibration_SetCursorPosition(MnVibrationData* data,
+                                                 HSD_JObj* cursor_jobj, u8 row)
+{
+    f32 dy;
+
+    dy = HSD_JObjGetTranslationY(data->jobjs[18]) -
+         HSD_JObjGetTranslationY(data->jobjs[17]);
+    HSD_JObjSetTranslateX(cursor_jobj,
+                          HSD_JObjGetTranslationX(data->jobjs[17]));
+    HSD_JObjSetTranslateY(cursor_jobj,
+                          dy * (f32) row +
+                              HSD_JObjGetTranslationY(data->jobjs[17]));
+    HSD_JObjSetTranslateZ(cursor_jobj,
+                          HSD_JObjGetTranslationZ(data->jobjs[17]));
+}
+
 static inline HSD_GObj*
 mnVibration_CreateCursorGObj(MnVibrationData* data,
                              MnVibrationJointAssets* assets)
@@ -394,7 +410,6 @@ void fn_80247510(HSD_GObj* gobj)
             name_idx =
                 mnVibration_GetNameSlot(data, cursor_row - (new_var = 1));
             if (name_idx != 0xFF) {
-                f32 dy;
                 MnVibrationData* nav_data;
                 u8 new_cursor_row;
                 lbAudioAx_80024030(2);
@@ -402,15 +417,7 @@ void fn_80247510(HSD_GObj* gobj)
                 nav_data = mnVibration_804D6C28->user_data;
                 jobj = data->cursor_gobj->hsd_obj;
                 new_cursor_row = data->x0[1];
-                dy = HSD_JObjGetTranslationY(nav_data->jobjs[18]) -
-                     HSD_JObjGetTranslationY(nav_data->jobjs[17]);
-                HSD_JObjSetTranslateX(
-                    jobj, HSD_JObjGetTranslationX(nav_data->jobjs[17]));
-                HSD_JObjSetTranslateY(
-                    jobj, dy * (f32) new_cursor_row +
-                              HSD_JObjGetTranslationY(nav_data->jobjs[17]));
-                HSD_JObjSetTranslateZ(
-                    jobj, HSD_JObjGetTranslationZ(nav_data->jobjs[17]));
+                mnVibration_SetCursorPosition(nav_data, jobj, new_cursor_row);
                 return;
             }
             return;
@@ -429,7 +436,6 @@ void fn_80247510(HSD_GObj* gobj)
             int next_row = cursor_row + 1;
             name_idx = mnVibration_GetNameSlot(data, next_row);
             if (name_idx != 0xFF) {
-                f32 dy;
                 MnVibrationData* nav_data;
                 u8 new_cursor_row;
                 lbAudioAx_80024030(2);
@@ -437,15 +443,7 @@ void fn_80247510(HSD_GObj* gobj)
                 nav_data = mnVibration_804D6C28->user_data;
                 jobj = data->cursor_gobj->hsd_obj;
                 new_cursor_row = data->x0[1];
-                dy = HSD_JObjGetTranslationY(nav_data->jobjs[18]) -
-                     HSD_JObjGetTranslationY(nav_data->jobjs[17]);
-                HSD_JObjSetTranslateX(
-                    jobj, HSD_JObjGetTranslationX(nav_data->jobjs[17]));
-                HSD_JObjSetTranslateY(
-                    jobj, dy * (f32) new_cursor_row +
-                              HSD_JObjGetTranslationY(nav_data->jobjs[17]));
-                HSD_JObjSetTranslateZ(
-                    jobj, HSD_JObjGetTranslationZ(nav_data->jobjs[17]));
+                mnVibration_SetCursorPosition(nav_data, jobj, new_cursor_row);
             }
         } else if (GetNameCount() > 8) {
             name_idx = mnVibration_GetNameSlot(data, 8);

@@ -247,6 +247,26 @@ Context: working on `src/melee/mn/mnvibration.c`, mainly `fn_80247510` and
   generation still needs to avoid aliases of locals before their first
   assignment.
 
+## Follow-up from the next heartbeat
+
+- `fn_80248A78` still has no Tier 3 targets even with
+  `--include-low-confidence`; the current symbol bridge cannot see the nested
+  cursor-block locals that the remaining 99.6% allocation mismatch depends on.
+  `suggest-coalesce-source --discover` continues to report the same
+  `46=50` repeated `lwz 80(r51)` common-subexpression candidate, but the known
+  natural source expression for that candidate regresses, so this function is
+  still saturated from the current tool surface.
+
+- `fn_80247510` now benefits from a hidden-style cursor-position inline:
+  factoring the up/down cursor movement body into
+  `mnVibration_SetCursorPosition` improves real-tree checkdiff
+  `95.61255% -> 95.708046%` with the same opcode similarity and line delta.
+  Tier 3 produced eight compiling type-change seeds for the same function
+  (`i`, `cursor_row`, `name_idx`, `rumble_setting`), but real-tree
+  verification found all were neutral or worse. The useful next Tier 3 step
+  would be generating local inline/extract-subroutine seeds for repeated
+  statement groups, not only type/alias changes.
+
 ## Follow-up during `mnvibration-decomp` heartbeat at 2026-05-20 06:00 PT
 
 - `pcdump-local --force-coalesce-fn fn_80248A78 --force-coalesce 46=50`
