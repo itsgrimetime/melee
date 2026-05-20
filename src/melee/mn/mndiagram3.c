@@ -339,10 +339,10 @@ void fn_802461BC(HSD_GObj* gobj)
     } while (0);
     base = (char*) (&mnDiagram3_803EEC10);
     data = mnDiagram3_804D6C20->user_data;
-    font_size = (font_size_b = mnDiagram3_804DBFFC);
     buttons = mn_80229624(4);
     ((s32*) (&mn_804A04F0.buttons))[1] = buttons;
     ((s32*) (&mn_804A04F0.buttons))[0] = (sel = 0);
+    font_size = (font_size_b = mnDiagram3_804DBFFC);
     if (buttons & 0x20) {
         GameRules* gr;
         lbAudioAx_80024030(0);
