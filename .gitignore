@@ -196,3 +196,4 @@ fabric.properties
 tools/table-typer/table-typer
 
 *.code-workspace
+nonmatchings/
