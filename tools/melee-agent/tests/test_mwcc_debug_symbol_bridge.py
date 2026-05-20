@@ -271,13 +271,14 @@ def test_list_bindings_with_basis_returns_basis_evidence() -> None:
     )
 
 
-def test_red_flag_nested_decl_demotes_to_low_confidence() -> None:
-    """Functions with nested-block decls get the 'nested-decl' flag,
-    which demotes locals from best-guess to low-confidence."""
+def test_nested_decl_no_longer_emits_red_flag() -> None:
+    """Phase 1: nested-block decls are now seen by the AST walker, so
+    the 'nested-decl' red flag is no longer emitted. Locals that are
+    observed as destinations remain best-guess."""
     source = textwrap.dedent("""\
         void f(void) {
             int a;
-            if (x) {
+            if (1) {
                 int nested;
             }
             int b;
@@ -286,10 +287,10 @@ def test_red_flag_nested_decl_demotes_to_low_confidence() -> None:
     pre = _make_pre_pass([32, 33, 34])
     bindings, basis = list_bindings_with_basis(source, "f", pre)
     assert basis is not None
-    assert "nested-decl" in basis.red_flags
+    assert "nested-decl" not in basis.red_flags
     locals_ = [b for b in bindings if b.kind == "local"]
-    # Locals observed as destinations → demoted to low-confidence
-    assert all(b.confidence == "low-confidence" for b in locals_)
+    # No red flags → locals stay best-guess when observed
+    assert all(b.confidence == "best-guess" for b in locals_)
 
 
 def test_red_flag_extra_virtuals_demotes_to_low_confidence() -> None:
@@ -320,21 +321,18 @@ def test_red_flag_static_local_detected() -> None:
     assert "static-local" in basis.red_flags
 
 
-def test_red_flag_unrecognized_decl_detected() -> None:
-    """If the parser can't handle a decl shape (function pointer etc.)
-    it gets surfaced as unrecognized-decl."""
-    source = textwrap.dedent("""\
-        void f(void) {
-            int a;
-            void (*cb)(int);
-            int b;
-        }
-    """)
-    pre = _make_pre_pass([32, 33, 34])
-    bindings, basis = list_bindings_with_basis(source, "f", pre)
-    assert basis is not None
-    assert "unrecognized-decl" in basis.red_flags
-    assert any("(*cb)" in s for s in basis.unrecognized_decls)
+def test_red_flag_unrecognized_decl_detected_in_fallback() -> None:
+    """The regex fallback flags function-pointer decls as unrecognized-decl.
+    The AST (tree-sitter) primary path handles them correctly, so this
+    test exercises the walker directly (not via list_bindings_with_basis
+    which now uses the AST path)."""
+    body = "{ int a; void (*cb)(int); int b; }"
+    unrecognized: list[str] = []
+    decls = walk_local_decls(body, on_unrecognized=unrecognized.append)
+    # Regex walker sees two parseable decls and one unrecognized
+    assert [d.name for d in decls] == ["a", "b"]
+    assert len(unrecognized) == 1
+    assert "void" in unrecognized[0] or "(*cb)" in unrecognized[0]
 
 
 def test_function_not_found_returns_empty_and_none_basis() -> None:
@@ -474,3 +472,55 @@ def test_binding_basis_has_decls_by_scope_with_default() -> None:
         observed_virtuals=[], unrecognized_decls=[], red_flags=[],
     )
     assert bb.decls_by_scope == {}
+
+
+def test_list_bindings_with_basis_surfaces_nested_decls() -> None:
+    """A function with a nested block returns LocalDecls in both
+    top-level and nested scope_paths via decls_by_scope."""
+    from src.mwcc_debug.symbol_bridge import list_bindings_with_basis
+    from src.mwcc_debug.parser import Pass, Block, Instruction
+
+    source = (
+        "void f(int arg0) {\n"
+        "    int outer;\n"
+        "    if (arg0) {\n"
+        "        int inner;\n"
+        "    }\n"
+        "}\n"
+    )
+    # Synthetic pre-pass with destinations: r32 (outer), r33 (inner).
+    pp = Pass(name="AFTER PEEPHOLE FORWARD")
+    pp.blocks.append(Block(index=0, succ=[], pred=[], labels=[]))
+    pp.blocks[0].instructions = [
+        Instruction(opcode="li", operands="r32,0", annotations=[], regs=[("r", 32)]),
+        Instruction(opcode="li", operands="r33,0", annotations=[], regs=[("r", 33)]),
+    ]
+    bindings, basis = list_bindings_with_basis(source, "f", pp)
+
+    # Scope grouping was populated by the AST walker.
+    scope_groups = list(basis.decls_by_scope.values())
+    all_names = {d.name for group in scope_groups for d in group}
+    assert "outer" in all_names
+    assert "inner" in all_names
+
+
+def test_list_bindings_no_longer_emits_nested_decl_red_flag() -> None:
+    """Removing the nested-decl red flag: bindings on a function with
+    nested blocks are no longer demoted to low-confidence."""
+    from src.mwcc_debug.symbol_bridge import list_bindings_with_basis
+    from src.mwcc_debug.parser import Pass, Block, Instruction
+
+    source = (
+        "void f(int arg0) {\n"
+        "    int outer;\n"
+        "    if (arg0) { int inner; }\n"
+        "}\n"
+    )
+    pp = Pass(name="AFTER PEEPHOLE FORWARD")
+    pp.blocks.append(Block(index=0, succ=[], pred=[], labels=[]))
+    pp.blocks[0].instructions = [
+        Instruction(opcode="li", operands="r32,0", annotations=[], regs=[("r", 32)]),
+        Instruction(opcode="li", operands="r33,0", annotations=[], regs=[("r", 33)]),
+    ]
+    _, basis = list_bindings_with_basis(source, "f", pp)
+    assert "nested-decl" not in basis.red_flags

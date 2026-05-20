@@ -393,31 +393,61 @@ def _collect_basis(
     body_text: str,
     params_text: str,
     pre_pass,
-) -> tuple[list[LocalDecl], list[LocalDecl], list[int], list[str], list[str]]:
+    *,
+    function_name: Optional[str] = None,
+    full_source: Optional[str] = None,
+) -> tuple[list[LocalDecl], list[LocalDecl], list[int], list[str], list[str], dict[tuple[str, ...], list[LocalDecl]]]:
     """Collect the raw inputs used by `list_bindings`'s heuristic.
 
     Returns (params, locals, observed_virtuals, unrecognized_decls,
-    red_flags). The red_flags list contains string descriptions of
-    conditions that should lower the caller's trust in the cursor
-    model:
-
-      - "nested-decl"          : body contains nested-block decls the
-                                 parser doesn't descend into (cursor
-                                 model may be wrong beyond the first
-                                 nested block)
-      - "unrecognized-decl"    : a statement LOOKED like a decl but
-                                 couldn't be parsed (function pointers,
-                                 macros, etc.); raises by 1+
-      - "static-local"         : function contains 'static' locals,
-                                 which don't get virtuals
-      - "extra-virtuals"       : pre-pass shows substantially more
-                                 destination virtuals (≥+3) than parsed
-                                 locals — compiler likely added temp
-                                 virtuals (CSE, induction var) that
-                                 shift the cursor
+    red_flags, decls_by_scope). When `function_name` and `full_source`
+    are provided, uses the tree-sitter AST walker (which sees nested
+    blocks); falls back to the legacy regex walker otherwise OR if
+    tree-sitter is unavailable.
     """
     unrecognized: list[str] = []
-    locals_ = walk_local_decls(body_text, on_unrecognized=unrecognized.append)
+    decls_by_scope: dict[tuple[str, ...], list[LocalDecl]] = {}
+
+    ast_succeeded = False
+    locals_: list[LocalDecl] = []
+
+    if function_name is not None and full_source is not None:
+        try:
+            from . import ast_walker as _aw
+            ast_decls = _aw.walk_function(full_source, function_name, path=None)
+            # Convert ast_walker.LocalDecl to symbol_bridge.LocalDecl
+            # (same shape; types are duck-compatible since we extended
+            # symbol_bridge.LocalDecl in Task 5).
+            locals_ = [LocalDecl(
+                name=d.name,
+                type_str=d.type_str,
+                decl_index=d.decl_index,
+                line_no=d.line_no,
+                byte_range=d.byte_range,
+                scope_path=d.scope_path,
+                scope_byte_range=d.scope_byte_range,
+                has_initializer=d.has_initializer,
+                initializer_line_no=d.initializer_line_no,
+            ) for d in ast_decls]
+            for d in locals_:
+                decls_by_scope.setdefault(d.scope_path, []).append(d)
+            ast_succeeded = True
+        except _aw.AstUnavailableError:
+            pass  # fall back to regex
+        except _aw.AstWalkError:
+            pass  # fall back to regex
+
+    if not ast_succeeded:
+        # Legacy regex fallback (preserves pre-Phase-1 behavior).
+        locals_ = walk_local_decls(body_text, on_unrecognized=unrecognized.append)
+        # Populate decls_by_scope with a single top-level entry under
+        # the fallback function name (or empty tuple if unknown).
+        fallback_scope: tuple[str, ...] = (function_name,) if function_name else ()
+        for d in locals_:
+            # Patch the legacy decls to carry scope_path = fallback_scope
+            d.scope_path = fallback_scope
+        decls_by_scope[fallback_scope] = list(locals_)
+
     params = _parse_params(params_text)
     virtuals = _collect_virtual_destinations(pre_pass)
 
@@ -425,15 +455,13 @@ def _collect_basis(
     if unrecognized:
         red_flags.append("unrecognized-decl")
 
-    # Nested-block decl detection: look for `{` chars not part of init
-    # braces. A coarse heuristic — any `{` that follows a `)` (i.e.
-    # `if (...) {`, `for (...) {`, `while (...) {`) indicates a nested
-    # scope where MWCC may declare additional virtuals we don't see.
-    stripped = _strip_strings_and_comments(body_text)
-    if re.search(r"\)\s*\{", stripped):
-        red_flags.append("nested-decl")
+    # NOTE: the "nested-decl" red flag was removed in Phase 1 of nested-
+    # block-local awareness. The AST walker now sees nested decls, so
+    # demoting all nested-bearing functions to low-confidence was
+    # incorrect.
 
-    # Static-local detection.
+    # Static-local detection (still useful — those don't get virtuals).
+    stripped = _strip_strings_and_comments(body_text)
     if re.search(r"\bstatic\s+[A-Za-z_]", stripped):
         red_flags.append("static-local")
 
@@ -441,7 +469,7 @@ def _collect_basis(
     if len(virtuals) >= len(params) + len(locals_) + 3:
         red_flags.append("extra-virtuals")
 
-    return params, locals_, virtuals, unrecognized, red_flags
+    return params, locals_, virtuals, unrecognized, red_flags, decls_by_scope
 
 
 _FN_HEADER_RE = re.compile(
@@ -603,8 +631,11 @@ def list_bindings_with_basis(
         return [], None
     params_text, body_text, start_line = extracted
 
-    (params, locals_, virtuals, unrecognized,
-     red_flags) = _collect_basis(body_text, params_text, pre_pass)
+    (params, locals_, virtuals, unrecognized, red_flags,
+     decls_by_scope) = _collect_basis(
+        body_text, params_text, pre_pass,
+        function_name=fn_name, full_source=source,
+    )
     virtuals_set: set[int] = set(virtuals)
 
     out: list[Binding] = []
@@ -652,6 +683,7 @@ def list_bindings_with_basis(
         observed_virtuals=virtuals,
         unrecognized_decls=unrecognized,
         red_flags=red_flags,
+        decls_by_scope=decls_by_scope,
     )
     return out, basis
 
