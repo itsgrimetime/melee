@@ -155,3 +155,49 @@ Context: working on `src/melee/mn/mnvibration.c`, mainly `fn_80247510` and
   `pcdump-local --force-coalesce-fn fn_802487A8 --force-coalesce 56=74`
   completed but did not write the requested `--keep-obj` file and emitted no
   warning about the missing object.
+
+## Follow-up after merging `365b7bd5c`
+
+- `python tools/checkdiff.py fn_802487A8 --no-build --format json` no longer
+  tracebacked after emitting JSON. It now exits non-zero for a real mismatch,
+  which is expected, and the JSON stays cleanly parseable. This fixes the
+  earlier `UnboundLocalError` path for my local workflow.
+
+- `tier3-search -f fn_802487A8 --include-low-confidence` now gets past the
+  full-TU include-path failure. The type-change seeds compile and can be
+  verified against the real source. I verified the new
+  `anim_byte_chain: u8 -> u32` seed with `verify-perm`; it transferred cleanly
+  but was neutral (`95.916664%`, delta `+0.0`).
+
+- The remaining `tier3-search` alias seeds still fail because the generated
+  declarations are inserted after executable statements in this C89/MWCC
+  context. Examples from `fn_802487A8`:
+  `HSD_JObj* port_indicator_alias = port_indicator;`,
+  `MnVibrationData* data_alias = data;`, and
+  `void* walker_b_clear_alias = walker_b_clear;` all produce expression-syntax
+  errors. Hoisting declarations to the block top, or emitting a declaration at
+  block top plus a later assignment, should make these seeds testable.
+
+- `pcdump-local` forced runs now correctly skip baseline cache sync, and the
+  local hang guard gives a useful diagnostic for `--force-coalesce 46=50` on
+  `fn_80248A78`. That closes the earlier silent forced-cache contamination
+  failure mode.
+
+- `--force-phys` still needs a class-scoped variant or a clearer class filter.
+  On `fn_80248A78`, forcing `--force-phys 50:26,36:29` with
+  `--force-phys-fn fn_80248A78` logged two force applications per ig_idx inside
+  the same function, for example `ig_idx=50: r29 -> r26` and later
+  `ig_idx=50: r0 -> r26`. The resulting diff looked structurally corrupted,
+  which makes the force proof hard to trust. A `class:ig_idx:phys` form, or
+  refusing GPR phys registers on non-GPR classes, would make this safer.
+
+- Commands that temporarily patch and restore the source (`enumerate-decl-orders`,
+  `tier3-search`, `verify-perm`) update the source mtime even when content is
+  restored. Follow-up debug commands then warn that the freshly generated cache
+  is stale (`src` newer than `cache`) despite identical source content. A
+  content-hash freshness check, or preserving/restoring mtimes for no-keep
+  experiments, would reduce false stale-cache warnings.
+
+- `tier3-search` still reports that per-seed permuter runs are not wired in v1.
+  The seed generation is useful now that the include path is fixed, but the
+  manual `verify-perm`/permuter handoff is still the slow part.
