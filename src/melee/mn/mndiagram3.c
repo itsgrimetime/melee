@@ -106,39 +106,36 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
       stat_table += 0x36;
       for (i = 0; i < 5; i++)
       {
-        new_var = i;
-        if (data->is_name_mode != 0)
-        {
-          if (!mnDiagram2_IsIconOnlyStat(stat_type))
-          {
-            if (i == 0)
-            {
-              lb_8000B1CC(data->jobjs[6], (Vec3 *) (base + 0x24), &sp6C);
-              title_text = HSD_SisLib_803A6754(0, 1);
-              data->title_text = title_text;
-              title_text->font_size.x = divider;
-              title_text->font_size.y = divider;
-              {
-                f32 y = sp6C.y;
-                f32 z = sp6C.z;
-                title_text->pos_x = sp6C.x;
-                title_text->pos_y = -y;
-                title_text->pos_z = z;
+          new_var = i;
+          if (data->is_name_mode != 0) {
+              if (!mnDiagram2_IsIconOnlyStat(stat_type)) {
+                  if (i == 0) {
+                      lb_8000B1CC(data->jobjs[6], (Vec3*) (base + 0x24),
+                                  &sp6C);
+                      title_text = HSD_SisLib_803A6754(0, 1);
+                      data->title_text = title_text;
+                      title_text->font_size.x = divider;
+                      title_text->font_size.y = divider;
+                      {
+                          f32 y = sp6C.y;
+                          f32 z = sp6C.z;
+                          title_text->pos_x = sp6C.x;
+                          title_text->pos_y = -y;
+                          title_text->pos_z = z;
+                      }
+                  }
+                  entity = mnDiagram2_GetRankedName(stat_type, (u8) i);
+                  if (entity == 0x78) {
+                      goto next;
+                      divider = mnDiagram3_804DC008;
+                  }
+                  {
+                      char* name_str = GetNameText(entity);
+                      f32 f1 = mnDiagram3_804DC00C;
+                      f32 offset_y = ((-row_spacing) * ((f32) i)) / divider;
+                      HSD_SisLib_803A6B98(title_text, f1, offset_y, name_str);
+                  }
               }
-            }
-            entity = mnDiagram2_GetRankedName(stat_type, (u8) i);
-            if (entity == 0x78)
-            {
-              goto next;
-              divider = mnDiagram3_804DC008;
-            }
-            {
-              char *name_str = GetNameText(entity);
-              f32 f1 = mnDiagram3_804DC00C;
-              f32 offset_y = ((-row_spacing) * ((f32) i)) / divider;
-              HSD_SisLib_803A6B98(title_text, f1, offset_y, name_str);
-            }
-          }
         }
         else
         {
@@ -940,7 +937,6 @@ void mnDiagram3_8024714C(void *arg0)
   mnDiagram_ArchiveData *archive;
   int assert_line;
   f32 row_spacing;
-  f32 neg_spacing;
   HSD_JObj *popup_alias;
   do
   {
@@ -1014,6 +1010,7 @@ void mnDiagram3_8024714C(void *arg0)
     Diagram3 *d;
     u8 scroll;
     u8 stat_idx;
+    f32 neg_spacing;
     u16 *base;
     f32 font_size;
     gobj = mnDiagram3_804D6C20;
