@@ -303,10 +303,11 @@ void fn_802461BC(HSD_GObj* gobj)
     ((s32*) &mn_804A04F0.buttons)[0] = (sel = 0);
 
     if (buttons & 0x20) {
+        GameRules* gr;
         lbAudioAx_80024030(0);
         mn_804A04F0.entering_menu = sel;
-        mode = ((Diagram3*) mnDiagram3_804D6C20->user_data)->is_name_mode;
-        gmMainLib_8015CC34()->xD = mode;
+        gr = gmMainLib_8015CC34();
+        gr->xD = ((Diagram3*) mnDiagram3_804D6C20->user_data)->is_name_mode;
         mnDiagram2_ClearDetailView(mnDiagram3_804D6C20);
         HSD_GObjPLink_80390228(data->popup_gobj);
 
