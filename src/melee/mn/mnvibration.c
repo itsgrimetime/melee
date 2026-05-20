@@ -247,7 +247,6 @@ void fn_80247510(HSD_GObj* gobj)
     u64 inputs_repeat;
     s32 i;
     u64 inputs;
-    HSD_JObj** jobjs;
     u8 cursor_row;
     u8 name_idx;
     u8 rumble_setting;
@@ -437,18 +436,17 @@ void fn_80247510(HSD_GObj* gobj)
                 data->x0[1]++;
                 nav_data = mnVibration_804D6C28->user_data;
                 cursor_jobj = data->cursor_gobj->hsd_obj;
-                jobjs = nav_data->jobjs;
                 inputs_repeat = data->x0[1];
-                dy = (HSD_JObjGetTranslationY(jobjs[18]) -
-                      HSD_JObjGetTranslationY(jobjs[17])) *
-                     (f32) inputs_repeat;
-                HSD_JObjSetTranslateX(cursor_jobj,
-                                      HSD_JObjGetTranslationX(jobjs[17]));
+                dy = HSD_JObjGetTranslationY(nav_data->jobjs[18]) -
+                     HSD_JObjGetTranslationY(nav_data->jobjs[17]);
+                HSD_JObjSetTranslateX(
+                    cursor_jobj, HSD_JObjGetTranslationX(nav_data->jobjs[17]));
                 HSD_JObjSetTranslateY(
                     cursor_jobj,
-                    dy + HSD_JObjGetTranslationY(nav_data->jobjs[17]));
-                HSD_JObjSetTranslateZ(cursor_jobj,
-                                      HSD_JObjGetTranslationZ(jobjs[17]));
+                    dy * (f32) inputs_repeat +
+                        HSD_JObjGetTranslationY(nav_data->jobjs[17]));
+                HSD_JObjSetTranslateZ(
+                    cursor_jobj, HSD_JObjGetTranslationZ(nav_data->jobjs[17]));
             }
         } else if (GetNameCount() > 8) {
             name_idx = mnVibration_GetNameSlot(data, 8);
@@ -655,7 +653,6 @@ void fn_802487A8(HSD_GObj* gobj)
     u16* idx_ptr_chained;
     HSD_JObj* walker_a;
     u16* idx_ptr;
-    u16* idx_ptr_alias;
     u32 port_b;
     u8 err;
     MnVibrationData* data;
@@ -715,11 +712,10 @@ void fn_802487A8(HSD_GObj* gobj)
         if ((((s8) err != 0) && (data->x6[port_a] != 0)) ||
             (((s8) err == 0) && (data->x6[port_a] == 0)))
         {
-            idx_ptr_alias = idx_ptr;
             if ((s8) err != 0) {
                 // Controller now disconnected: clear flag, hide rumble
                 // indicator chain, mark x6[port] = 0.
-                HSD_JObjSetFlagsAll(data->jobjs[*idx_ptr_alias], 0x10);
+                HSD_JObjSetFlagsAll(data->jobjs[*idx_ptr], 0x10);
                 {
                     HSD_JObj* root_jobj;
                     root_jobj =
@@ -746,7 +742,7 @@ void fn_802487A8(HSD_GObj* gobj)
             } else {
                 // Controller now connected: clear flag, reset rumble
                 // animation, show indicator chain, mark x6[port] = 1.
-                HSD_JObjClearFlagsAll(data->jobjs[*idx_ptr_alias], 0x10);
+                HSD_JObjClearFlagsAll(data->jobjs[*idx_ptr], 0x10);
                 walker_b_clear = NULL;
                 data->x0[port_a + 2] = 0;
                 rumble_indicator =

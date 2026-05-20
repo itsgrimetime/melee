@@ -218,6 +218,30 @@ Context: working on `src/melee/mn/mnvibration.c`, mainly `fn_80247510` and
   `(f32) (anim_byte_chain = data->x0[port_a + 2])` into assignment plus call,
   transferred cleanly but was neutral (`95.916664%`, delta `+0.0`).
 
+## Follow-up during `mnvibration-decomp` heartbeat at 2026-05-20 06:00 PT
+
+- `pcdump-local --force-coalesce-fn fn_80248A78 --force-coalesce 46=50`
+  still hits the local hang guard and produces no object. The new diagnostic is
+  much better than before, but its suggested next step says to run
+  `debug analyze --cg`; `melee-agent debug analyze --help` does not expose a
+  `--cg` option. Either the option is missing from the CLI or the diagnostic
+  should point at an existing command.
+
+- `verify-with-name-magic -f mnVibration_80248444 -m
+  's32=mnVibration_804DC018,@538=mnVibration_804DC034,@512=mnVibration_804DC030'`
+  renamed `@481 -> mnVibration_804DC018`, but the active diff still used `@464`
+  for the signed int-to-float bias. Direct mapping
+  `@464=mnVibration_804DC018` fixed the label. When multiple anonymous symbols
+  share the same value, the value alias (`s32=`) may choose the wrong one for
+  the function being checked; a warning listing all matching anonymous symbols
+  would make this less surprising.
+
+- After direct name-magic mapping for `mnVibration_80248444`, all anonymous
+  constant labels were fixed, but checkdiff still reported mismatch solely from
+  SDA21 relocation annotation offsets (`expected +0xc0`, current `+0xc2`, etc.).
+  That is useful confirmation that the remaining issue is relocation-offset
+  normalization/postprocessing, not source codegen or constant naming.
+
 - `verify-with-name-magic` direct anonymous-symbol mapping now works for the
   4-byte float constants in `mnVibration_80248444`: `@513` and `@539` can be
   renamed to `mnVibration_804DC030` and `mnVibration_804DC034`. After also
