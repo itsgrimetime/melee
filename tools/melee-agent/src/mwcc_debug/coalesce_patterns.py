@@ -236,3 +236,64 @@ class AliasSplitPattern:
 
 
 ALL_PATTERNS.append(AliasSplitPattern())
+
+
+class CommonSubExprPattern:
+    """r_a and r_b are defined by structurally-identical IR ops (same
+    opcode + same non-destination operand signature). MWCC's CSE should
+    have folded them but didn't — typically because the C source
+    computes the same expression twice.
+    """
+    name = "common-subexpr"
+
+    def check(self, facts: IrFacts,
+              pair: tuple[int, int]) -> Optional[Suggestion]:
+        a, b = pair
+        fa = facts.by_virtual.get(a)
+        fb = facts.by_virtual.get(b)
+        if not fa or not fb or fa.first_def is None or fb.first_def is None:
+            return None
+        if fa.is_param or fb.is_param:
+            return None
+        if fa.first_def.opcode != fb.first_def.opcode:
+            return None
+        # Signature: operands string with destination register stripped
+        sig_a = _operand_signature(fa.first_def, a)
+        sig_b = _operand_signature(fb.first_def, b)
+        if sig_a is None or sig_b is None:
+            return None
+        if sig_a != sig_b:
+            return None
+        return Suggestion(
+            pattern_name="common-subexpr",
+            summary=(
+                f"r{a} and r{b} are computed by identical IR ops "
+                f"({fa.first_def.opcode} {sig_a})"
+            ),
+            ir_evidence=(
+                f"B{fa.first_def.block_idx}: {fa.first_def.opcode} r{a},{sig_a}; "
+                f"B{fb.first_def.block_idx}: {fb.first_def.opcode} r{b},{sig_b}"
+            ),
+            source_hint=(
+                "Hoist the shared expression into a temporary:\n"
+                "    <type> shared = <var_b's expr>;\n"
+                "    use(shared);  // both places"
+            ),
+            catalog_ref="subexpr-extract",
+        )
+
+
+def _operand_signature(fd, dest_virtual: int) -> Optional[str]:
+    """Return the operands string with the leading destination removed.
+
+    For `lwz r33,44(r34)` with dest_virtual=33 → `44(r34)`.
+    For `addi r33,r34,5` with dest_virtual=33 → `r34,5`.
+    """
+    ops = fd.operands
+    prefix = f"r{dest_virtual},"
+    if not ops.startswith(prefix):
+        return None
+    return ops[len(prefix):]
+
+
+ALL_PATTERNS.append(CommonSubExprPattern())

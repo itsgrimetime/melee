@@ -290,3 +290,54 @@ def test_alias_split_excludes_direct_identity_case() -> None:
     )
     # AliasSplit's exclusion: r_a is not already a direct copy of r_b
     assert AliasSplitPattern().check(facts, (33, 32)) is None
+
+
+from src.mwcc_debug.coalesce_patterns import CommonSubExprPattern
+
+
+def test_common_subexpr_matches_identical_ops() -> None:
+    """r_a and r_b defined by structurally-identical lwz from r34+0x2C."""
+    fd_a = FirstDef(block_idx=3, opcode="lwz", operands="r33,44(r34)",
+                    annotations=[], regs=[("r", 33), ("r", 34)])
+    fd_b = FirstDef(block_idx=5, opcode="lwz", operands="r35,44(r34)",
+                    annotations=[], regs=[("r", 35), ("r", 34)])
+    facts = _facts_with({
+        33: _vf(33, fd_a),
+        35: _vf(35, fd_b),
+    })
+    s = CommonSubExprPattern().check(facts, (33, 35))
+    assert s is not None
+    assert s.pattern_name == "common-subexpr"
+
+
+def test_common_subexpr_skips_different_opcodes() -> None:
+    """Same operands but `lwz` vs `lbz` → not the same expression."""
+    fd_a = FirstDef(block_idx=3, opcode="lwz", operands="r33,44(r34)",
+                    annotations=[], regs=[("r", 33), ("r", 34)])
+    fd_b = FirstDef(block_idx=5, opcode="lbz", operands="r35,44(r34)",
+                    annotations=[], regs=[("r", 35), ("r", 34)])
+    facts = _facts_with({33: _vf(33, fd_a), 35: _vf(35, fd_b)})
+    assert CommonSubExprPattern().check(facts, (33, 35)) is None
+
+
+def test_common_subexpr_skips_different_operands() -> None:
+    """Same opcode but different offsets → different expressions."""
+    fd_a = FirstDef(block_idx=3, opcode="lwz", operands="r33,44(r34)",
+                    annotations=[], regs=[("r", 33), ("r", 34)])
+    fd_b = FirstDef(block_idx=5, opcode="lwz", operands="r35,48(r34)",
+                    annotations=[], regs=[("r", 35), ("r", 34)])
+    facts = _facts_with({33: _vf(33, fd_a), 35: _vf(35, fd_b)})
+    assert CommonSubExprPattern().check(facts, (33, 35)) is None
+
+
+def test_common_subexpr_skips_param_init() -> None:
+    """Param-init ops in the entry block are NOT CSE candidates."""
+    fd_a = FirstDef(block_idx=0, opcode="mr", operands="r33,r3",
+                    annotations=[], regs=[("r", 33), ("r", 3)])
+    fd_b = FirstDef(block_idx=0, opcode="mr", operands="r34,r3",
+                    annotations=[], regs=[("r", 34), ("r", 3)])
+    facts = _facts_with({
+        33: _vf(33, fd_a, is_param=True),
+        34: _vf(34, fd_b, is_param=True),
+    })
+    assert CommonSubExprPattern().check(facts, (33, 34)) is None
