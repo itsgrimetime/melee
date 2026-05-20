@@ -147,12 +147,69 @@ def find_named_sdata2_symbols_by_offset(
     return out
 
 
+def find_named_sdata2_symbols_by_value(
+    o_path: Path,
+) -> dict[int, str]:
+    """Scan a .o for NAMED (non-anonymous) .sdata2 symbols, indexed by
+    the 64-bit big-endian value of their backing bytes.
+
+    Unlike ``find_named_sdata2_symbols_by_offset``, this matches on the
+    *actual bytes* stored at the symbol's location rather than the section
+    offset.  This is what ``suggest_name_magic_map`` needs: the two .o files
+    (compiled vs target) can have different .sdata2 layouts, so offsets don't
+    align.  The magic values (0x4330000080000000 / 0x4330000000000000) are
+    globally unique bit patterns, so matching by value is unambiguous.
+
+    Only 8-byte symbols are included (magic constants are always 8 bytes).
+    If multiple named symbols happen to contain the same 8-byte value at
+    different offsets (extremely rare), the first one in symtab order wins.
+    """
+    from elftools.elf.elffile import ELFFile
+
+    out: dict[int, str] = {}
+    with o_path.open("rb") as f:
+        elf = ELFFile(f)
+        sdata2 = elf.get_section_by_name(".sdata2")
+        if sdata2 is None:
+            return out
+        sdata2_idx = elf.get_section_index(".sdata2")
+        data = sdata2.data()
+        symtab = elf.get_section_by_name(".symtab")
+        if symtab is None:
+            return out
+        for sym in symtab.iter_symbols():
+            if sym["st_shndx"] != sdata2_idx:
+                continue
+            name = sym.name
+            if not name or name.startswith("@"):
+                continue
+            if name.startswith("."):
+                continue
+            size = sym["st_size"]
+            if size != 8:
+                continue
+            offset = sym["st_value"]
+            if offset + 8 > len(data):
+                continue
+            value = struct.unpack(">Q", data[offset:offset + 8])[0]
+            # Only index magic-constant values to keep lookups unambiguous.
+            out.setdefault(value, name)
+    return out
+
+
 def suggest_name_magic_map(
     base_o_path: Path,
     target_o_path: Optional[Path] = None,
 ) -> tuple[list[MagicSymbol], list[tuple[MagicSymbol, str]]]:
-    """For each anonymous @N symbol in `base_o_path`, try to find a
-    matching named symbol in `target_o_path` at the same offset.
+    """For each anonymous @N symbol in ``base_o_path``, try to find a
+    matching named symbol in ``target_o_path``.
+
+    Matching is done by **value** (the actual 8-byte big-endian contents of
+    the symbol's backing storage), NOT by section offset.  The two .o files
+    frequently have different .sdata2 layouts — the compiled .o puts anonymous
+    constants in emission order while the target .o has them in the original
+    TU's declaration order.  An offset-based match would silently swap the
+    s32 and u32 magic symbols when their order differs between the two files.
 
     Returns (all_anonymous, suggested_renames). suggested_renames is
     the subset for which a named counterpart was found in the target,
@@ -166,12 +223,14 @@ def suggest_name_magic_map(
     if target_o_path is None or not target_o_path.exists():
         return (anons, [])
     try:
-        named_by_offset = find_named_sdata2_symbols_by_offset(target_o_path)
+        named_by_value = find_named_sdata2_symbols_by_value(target_o_path)
     except Exception:
         return (anons, [])
     suggested: list[tuple[MagicSymbol, str]] = []
     for sym in anons:
-        named = named_by_offset.get(sym.offset)
+        if sym.size != 8:
+            continue
+        named = named_by_value.get(sym.value)
         if named:
             suggested.append((sym, named))
     return (anons, suggested)

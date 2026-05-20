@@ -7,6 +7,7 @@ from src.mwcc_debug.source_patch import (
     find_decl_block,
     find_function,
     get_decl_names,
+    merge3_function,
     reorder_decls_in_function,
     replace_function,
 )
@@ -242,3 +243,87 @@ void f(void)
     assert body.endswith("}")
     # And the in-string brace is preserved in the slice
     assert 'hello { world' in body
+
+
+# ---------------------------------------------------------------------------
+# merge3_function tests
+# ---------------------------------------------------------------------------
+
+_BASE_FN = """\
+void myfunc(int x)
+{
+    int a = 0;
+    int b = x + 1;
+    return;
+}"""
+
+_CAND_FN = """\
+void myfunc(int x)
+{
+    int a = 0;
+    int b = x + 2;
+    return;
+}"""
+
+_CURR_FN_CLEAN = """\
+void myfunc(int x)
+{
+    int a = 0;
+    int b = x + 1;
+    return;
+}"""
+
+_CURR_FN_MANUAL_EDIT = """\
+void myfunc(int x)
+{
+    int a = 0;
+    int b = x + 1;
+    int c = b - 1;
+    return;
+}"""
+
+_CURR_FN_CONFLICT = """\
+void myfunc(int x)
+{
+    int a = 0;
+    int b = x + 99;
+    return;
+}"""
+
+
+def test_merge3_clean_no_manual_edits() -> None:
+    """Candidate changes a line; current has no manual edits — take candidate."""
+    merged, conflicts = merge3_function(_BASE_FN, _CAND_FN, _CURR_FN_CLEAN)
+    assert conflicts == []
+    assert "x + 2" in merged
+
+
+def test_merge3_preserves_current_manual_edit_in_non_mutated_region() -> None:
+    """Current added a line in a region the candidate did not touch — keep it."""
+    merged, conflicts = merge3_function(_BASE_FN, _CAND_FN, _CURR_FN_MANUAL_EDIT)
+    assert conflicts == []
+    # The candidate's change (x+2) and the manual addition (c = b-1) both appear
+    assert "x + 2" in merged
+    assert "c = b - 1" in merged
+
+
+def test_merge3_conflict_detected() -> None:
+    """Both candidate and current modified the same base line — conflict."""
+    merged, conflicts = merge3_function(_BASE_FN, _CAND_FN, _CURR_FN_CONFLICT)
+    assert len(conflicts) > 0
+    # Line number should be plausible (the b= line is line 4 in base)
+    assert any(ln >= 1 for ln, _ in conflicts)
+
+
+def test_merge3_candidate_equals_base_is_noop() -> None:
+    """Candidate identical to base — no changes; merged == current."""
+    merged, conflicts = merge3_function(_BASE_FN, _BASE_FN, _CURR_FN_MANUAL_EDIT)
+    assert conflicts == []
+    assert merged == _CURR_FN_MANUAL_EDIT
+
+
+def test_merge3_base_equals_current_takes_candidate() -> None:
+    """Current matches base (no manual edits) — merged takes candidate fully."""
+    merged, conflicts = merge3_function(_BASE_FN, _CAND_FN, _BASE_FN)
+    assert conflicts == []
+    assert "x + 2" in merged

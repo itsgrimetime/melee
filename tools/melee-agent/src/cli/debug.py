@@ -1477,6 +1477,20 @@ def _get_match_pct(func_name: str, melee_root: Path) -> Optional[float]:
     return None
 
 
+def _merge3_function(
+    base_fn: str,
+    candidate_fn: str,
+    current_fn: str,
+) -> tuple[str, list[tuple[int, str]]]:
+    """3-way merge wrapper delegating to source_patch.merge3_function.
+
+    Returns (merged_text, conflicts) where conflicts is a list of
+    (approx_line_number, description) pairs. Empty conflicts = clean merge.
+    """
+    from ..mwcc_debug.source_patch import merge3_function
+    return merge3_function(base_fn, candidate_fn, current_fn)
+
+
 @debug_app.command(name="verify-perm")
 def verify_perm(
     candidate: Annotated[
@@ -1497,6 +1511,17 @@ def verify_perm(
             "--keep",
             help="If the transfer improves match%, leave the patched source "
                  "in place. By default we always revert (dry-run semantics).",
+        ),
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="When --keep is set, allow overwriting manual edits that "
+                 "diverge from the permuter's base.c. Without --force, "
+                 "verify-perm aborts if applying the candidate would silently "
+                 "revert commits you made after importing the permuter baseline. "
+                 "Has no effect without --keep.",
         ),
     ] = False,
     threshold: Annotated[
@@ -1527,6 +1552,14 @@ def verify_perm(
 
     By default the patched source is REVERTED at the end regardless of
     outcome — pass --keep to leave a winning transfer applied.
+
+    Safe-keep behaviour: when --keep is set and a permuter base.c is found
+    (candidate.parent.parent/base.c), verify-perm performs a 3-way merge
+    instead of a full replace — it applies the *diff* from base.c to the
+    candidate onto the current real source.  If the merge conflicts (e.g.
+    you edited the same lines the permuter mutated), the command aborts
+    without writing anything.  Pass --force to fall back to a full replace
+    when a merge conflict is detected.
     """
     melee_root = DEFAULT_MELEE_ROOT
     if not candidate.exists():
@@ -1593,6 +1626,75 @@ def verify_perm(
             err=True,
         )
         raise typer.Exit(3)
+    # --- 3-way merge / divergence check (when --keep is set) ---
+    # When --keep is set, a full replacement of the function body silently
+    # discards any manual edits made AFTER the permuter's base.c was created.
+    # To prevent this:
+    #   1. If base.c exists (candidate.parent.parent/base.c), perform a 3-way
+    #      merge: apply the diff (base → candidate) to the current real source.
+    #      Conflicts abort (require --force for unsafe full-replace).
+    #   2. If base.c doesn't exist but the candidate's function differs from
+    #      the current real source's function at lines NOT covered by the
+    #      permutation, warn loudly and require --force to proceed.
+    _merge_result: Optional[str] = None  # merged target text (if 3-way used)
+    _merge_strategy: str = "full-replace"
+    if keep:
+        base_c_path = candidate.parent.parent / "base.c"
+        if base_c_path.exists():
+            from ..mwcc_debug.source_patch import (
+                extract_function as _extract_fn,
+                replace_function as _replace_fn,
+            )
+            base_text = base_c_path.read_text()
+            base_fn = _extract_fn(base_text, function)
+            cand_fn = _extract_fn(candidate_text, function)
+            real_fn = _extract_fn(target_text, function)
+            if base_fn is not None and cand_fn is not None and real_fn is not None:
+                merged_fn, conflicts = _merge3_function(base_fn, cand_fn, real_fn)
+                if conflicts and not force:
+                    # Show which lines conflict so the user knows what to fix
+                    conflict_preview = "\n".join(
+                        f"  line ~{ln}: {txt!r}" for ln, txt in conflicts[:8]
+                    )
+                    if len(conflicts) > 8:
+                        conflict_preview += f"\n  ... and {len(conflicts) - 8} more"
+                    typer.echo(
+                        f"\n[verify-perm] ABORTED — 3-way merge conflict detected.\n"
+                        f"The candidate mutates {len(conflicts)} line(s) that you "
+                        f"also edited manually since the permuter baseline was "
+                        f"imported. Applying the full candidate would silently "
+                        f"revert those edits.\n\n"
+                        f"Conflicting lines (candidate vs your edits):\n"
+                        f"{conflict_preview}\n\n"
+                        f"Options:\n"
+                        f"  1. Re-import the permuter baseline:\n"
+                        f"     cd ~/code/decomp-permuter && "
+                        f"./import.py <c_file> <target.s> --function {function}\n"
+                        f"  2. Apply just the diff manually from:\n"
+                        f"     {base_c_path}\n"
+                        f"  3. Pass --force to do a full replace (DISCARDS your "
+                        f"manual edits in the function body).",
+                        err=True,
+                    )
+                    raise typer.Exit(6)
+                _merge_result = _replace_fn(target_text, function, merged_fn)
+                _merge_strategy = (
+                    "3-way-merge" if not conflicts else "3-way-merge-forced"
+                )
+                if not json_out:
+                    if conflicts:
+                        print(
+                            f"[verify-perm] WARNING: {len(conflicts)} merge conflict(s) "
+                            f"resolved by taking candidate version (--force)."
+                        )
+                    else:
+                        print(
+                            f"[verify-perm] 3-way merge: applying permuter diff "
+                            f"(base→candidate) onto current source."
+                        )
+            # else: can't extract from base — fall through to full replace
+    # --- end merge logic ---
+
     orig = transfer_candidate(candidate_text, target_path, function)
     if orig is None:
         # Shouldn't happen if both spans are found, but defensive
@@ -1602,6 +1704,10 @@ def verify_perm(
             err=True,
         )
         raise typer.Exit(3)
+
+    # If 3-way merge produced a result, overwrite the naive full-replace.
+    if _merge_result is not None:
+        target_path.write_text(_merge_result)
 
     try:
         # Build the affected .o. checkdiff convention: report.json's unit
@@ -4919,7 +5025,16 @@ def permute(
     Default is single-threaded for safety. score-source now emits
     per-PID pcdump filenames so parallel threads no longer race on a
     shared pcdump.txt — raise `-j` above 1 if you want concurrency.
+
+    Note: stdout is set to line-buffering so that piping through `tail -N`
+    shows live progress instead of buffering until the permuter exits.
     """
+    # Force line-buffering on stdout so progress output is visible when
+    # the command is piped (e.g. `melee-agent debug permute ... | tail -20`).
+    # Without this, Python's stdio buffering holds all output until the
+    # process exits — which never happens naturally for the permuter.
+    sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
+
     melee_root = DEFAULT_MELEE_ROOT
     perm_dir = perm_root / "nonmatchings" / function
 
