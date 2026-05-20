@@ -1011,17 +1011,15 @@ void mnDiagram3_8024714C(void *arg0)
         f32 neg_spacing = -row_spacing;
         f32 font_size = mnDiagram3_804DBFFC;
         u8 limit;
+        row_spacing = mnDiagram3_804DBFF8;
 
         for (i = 0; i < 10; i++) {
             HSD_Text *text;
             int val;
 
-            text = HSD_SisLib_803A5ACC(0, 1,
-                                       sp48.x - mnDiagram3_804DBFF8,
-                                       neg_spacing * (f32) i - sp48.y,
-                                       sp48.z,
-                                       font_size,
-                                       mnDiagram3_804DBFFC);
+            text = HSD_SisLib_803A5ACC(0, 1, sp48.x - row_spacing,
+                                       (neg_spacing * (f32) i) + (-sp48.y),
+                                       sp48.z, font_size, mnDiagram3_804DBFFC);
             data->row_labels[i] = text;
 
             val = scroll + (u8) i;
