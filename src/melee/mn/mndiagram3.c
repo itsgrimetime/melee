@@ -955,7 +955,7 @@ void mnDiagram3_8024714C(void *arg0)
 
     data = gobj->user_data;
     row0 = data->jobjs[8];
-    HSD_ASSERT(0x3EE, row0);
+    HSD_ASSERT(0x3EE, data->jobjs[8]);
     row1 = data->jobjs[9];
     {
         f32 row0_y = row0->translate.y;
