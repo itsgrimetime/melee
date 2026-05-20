@@ -916,6 +916,7 @@ void mnDiagram3_80247008(int arg0)
 
 void mnDiagram3_8024714C(void *arg0)
 {
+  HSD_GObj *new_var4;
   int i;
   Vec3 sp48;
   Diagram3 *data;
@@ -953,7 +954,7 @@ void mnDiagram3_8024714C(void *arg0)
     HSD_JObjAddAnimAll(popup_jobj, archive->x4, archive->x8, archive->xC);
     HSD_JObjReqAnimAll(popup_jobj, mnDiagram3_804DC00C);
     HSD_JObjAnimAll(popup_jobj);
-    data = gobj->user_data;
+    data = (new_var4 = gobj)->user_data;
     row0 = data->jobjs[8];
     new_var3 = popup_jobj;
     (row0) ? ((void) 0) : (__assert(mnDiagram3_804D4FD8, 0x3EE, mnDiagram3_804D4FE0));
