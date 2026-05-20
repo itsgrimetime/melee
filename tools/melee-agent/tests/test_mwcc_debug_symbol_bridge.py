@@ -289,8 +289,12 @@ def test_nested_decl_no_longer_emits_red_flag() -> None:
     assert basis is not None
     assert "nested-decl" not in basis.red_flags
     locals_ = [b for b in bindings if b.kind == "local"]
-    # No red flags → locals stay best-guess when observed
-    assert all(b.confidence == "best-guess" for b in locals_)
+    by_name = {b.var_name: b for b in locals_}
+    # Top-level locals stay best-guess when observed; nested-block local is
+    # demoted to ambiguous-nested by the Phase-1 demotion pass (Task 7).
+    assert by_name["a"].confidence == "best-guess"
+    assert by_name["b"].confidence == "best-guess"
+    assert by_name["nested"].confidence == "ambiguous-nested"
 
 
 def test_red_flag_extra_virtuals_demotes_to_low_confidence() -> None:
@@ -524,3 +528,27 @@ def test_list_bindings_no_longer_emits_nested_decl_red_flag() -> None:
     ]
     _, basis = list_bindings_with_basis(source, "f", pp)
     assert "nested-decl" not in basis.red_flags
+
+
+def test_nested_block_bindings_default_to_ambiguous_nested() -> None:
+    """Bindings whose decl has a non-trivial scope_path get
+    confidence='ambiguous-nested' pending validation."""
+    from src.mwcc_debug.symbol_bridge import list_bindings_with_basis
+    from src.mwcc_debug.parser import Pass, Block, Instruction
+
+    source = (
+        "void f(int arg0) {\n"
+        "    int outer;\n"
+        "    if (arg0) { int inner; }\n"
+        "}\n"
+    )
+    pp = Pass(name="AFTER PEEPHOLE FORWARD")
+    pp.blocks.append(Block(index=0, succ=[], pred=[], labels=[]))
+    pp.blocks[0].instructions = [
+        Instruction(opcode="li", operands="r32,0", annotations=[], regs=[("r", 32)]),
+        Instruction(opcode="li", operands="r33,0", annotations=[], regs=[("r", 33)]),
+    ]
+    bindings, _ = list_bindings_with_basis(source, "f", pp)
+    by_name = {b.var_name: b for b in bindings}
+    assert by_name["outer"].confidence in {"best-guess", "verified"}
+    assert by_name["inner"].confidence == "ambiguous-nested"
