@@ -899,6 +899,7 @@ void mnDiagram3_80247008(int arg0)
 
 void mnDiagram3_8024714C(void* arg0)
 {
+    int i;
     Vec3 sp48;
     Diagram3* data;
     HSD_GObj* gobj;
@@ -907,7 +908,6 @@ void mnDiagram3_8024714C(void* arg0)
     mnDiagram_ArchiveData* archive;
     f32 row_spacing;
     f32 neg_spacing;
-    int i;
     PAD_STACK(64);
 
     {
