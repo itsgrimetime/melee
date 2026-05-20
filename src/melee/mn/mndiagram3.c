@@ -2,6 +2,12 @@
 
 #include "mndiagram3.static.h"
 
+#include <baselib/debug.h>
+#undef HSD_ASSERT
+#define HSD_ASSERT(line, cond)                                                \
+    ((cond) ? ((void) 0)                                                      \
+            : __assert(mnDiagram3_804D4FD8, line, mnDiagram3_804D4FE0))
+
 #include <baselib/gobj.h>
 #include <baselib/gobjgxlink.h>
 #include <baselib/gobjobject.h>
