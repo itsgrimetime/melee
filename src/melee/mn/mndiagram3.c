@@ -140,7 +140,7 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
             __assert(mnDiagram3_804D4FD8, 0x3B3, mnDiagram3_804D4FE0);
           }
           icon->translate.y = row_spacing * ((f32) i);
-          if (!(icon->flags & (1 << 25)))
+          if (!(icon->flags & ((1 << 14) << 11)))
           {
             {
               if ((icon != 0L) && (!HSD_JObjMtxIsDirty(icon)))
@@ -244,7 +244,7 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
           }
           else
           {
-            u32 val = mnDiagram2_GetStatValue(data->is_name_mode, stat_type, entity);
+            int val = mnDiagram2_GetStatValue(data->is_name_mode, stat_type ^ 0, entity);
             if (val > max_distance)
             {
               val = max_distance;
@@ -1014,6 +1014,7 @@ void mnDiagram3_8024714C(void *arg0)
     (row1) ? ((void) 0) : (__assert(mnDiagram3_804D4FD8, 0x3EE, mnDiagram3_804D4FE0));
     row_spacing = row1->translate.y - row_spacing;
     lb_8000B1CC(d->jobjs[8], (Vec3 *) (&mnDiagram3_803EEC28), &sp48);
+    mnDiagram3_804DBFFC = mnDiagram3_804DBFFC;
     neg_spacing = -row_spacing;
     base = (u16 *) (&mnDiagram3_803EEC4C);
     row_spacing = mnDiagram3_804DBFF8;
