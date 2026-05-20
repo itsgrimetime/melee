@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import textwrap
 
-from src.mwcc_debug.coalesce_ir_facts import IrFacts, VirtualFacts, collect, _blocks_defining, _common_successor
+from src.mwcc_debug.colorgraph_parser import (
+    ColorgraphDecision, ColorgraphSection,
+)
+from src.mwcc_debug.coalesce_ir_facts import IrFacts, VirtualFacts, collect, _blocks_defining, _common_successor, CascadeCandidate, analyze_cascade
 from src.mwcc_debug.parser import Block, Function, Instruction, Pass
 
 
@@ -197,3 +200,100 @@ def test_common_successor_none_when_multiple_shared() -> None:
     b0 = _make_block(0, [], succ=[2, 3])
     b1 = _make_block(1, [], succ=[2, 3])
     assert _common_successor([b0, b1]) is None
+
+
+def _make_cg_section(decisions, class_id=1, n_nodes=None):
+    return ColorgraphSection(
+        class_id=class_id,
+        result=1,
+        n_nodes=n_nodes if n_nodes is not None else len(decisions),
+        decisions=decisions,
+    )
+
+
+def _make_facts_with_cg(cg_section, by_virtual=None):
+    return IrFacts(
+        function_name="f",
+        pre_pass=Pass(name="X"),
+        by_virtual=by_virtual or {},
+        bindings=[],
+        basis=None,
+        cg_section=cg_section,
+    )
+
+
+def test_analyze_cascade_returns_empty_without_cg_section() -> None:
+    """Discover mode requires colorgraph data — None cg_section → []."""
+    facts = _make_facts_with_cg(None)
+    assert analyze_cascade(facts) == []
+
+
+def test_analyze_cascade_proposes_end_of_chain_first() -> None:
+    """Cascade r25..r31 (7 saved); proposed pairs collapse r25↔r26 first."""
+    decisions = [
+        ColorgraphDecision(iter_idx=0, ig_idx=50, assigned_reg=31,
+                           degree=0, n_interferers=0, flags=0),
+        ColorgraphDecision(iter_idx=1, ig_idx=51, assigned_reg=30,
+                           degree=0, n_interferers=0, flags=0),
+        ColorgraphDecision(iter_idx=2, ig_idx=52, assigned_reg=29,
+                           degree=0, n_interferers=0, flags=0),
+        ColorgraphDecision(iter_idx=3, ig_idx=53, assigned_reg=28,
+                           degree=0, n_interferers=0, flags=0),
+        ColorgraphDecision(iter_idx=4, ig_idx=54, assigned_reg=27,
+                           degree=0, n_interferers=0, flags=0),
+        ColorgraphDecision(iter_idx=5, ig_idx=55, assigned_reg=26,
+                           degree=0, n_interferers=0, flags=0),
+        ColorgraphDecision(iter_idx=6, ig_idx=56, assigned_reg=25,
+                           degree=0, n_interferers=0, flags=0),
+    ]
+    facts = _make_facts_with_cg(_make_cg_section(decisions))
+    candidates = analyze_cascade(facts)
+    # First (highest-priority) candidate must collapse the lowest-end pair
+    assert candidates[0].priority_class == "end-of-chain"
+    # r25-holder = ig_idx 56, r26-holder = ig_idx 55 → pair (56, 55)
+    assert (candidates[0].from_virt, candidates[0].to_virt) == (56, 55)
+
+
+def test_analyze_cascade_skips_directly_interfering_pairs() -> None:
+    """Two callee-save virtuals that directly interfere → not proposed."""
+    decisions = [
+        ColorgraphDecision(iter_idx=0, ig_idx=50, assigned_reg=31,
+                           degree=1, n_interferers=1, flags=0,
+                           interferers=[(51, 30)]),  # 50 interferes with 51
+        ColorgraphDecision(iter_idx=1, ig_idx=51, assigned_reg=30,
+                           degree=1, n_interferers=1, flags=0,
+                           interferers=[(50, 31)]),  # mutual
+    ]
+    facts = _make_facts_with_cg(_make_cg_section(decisions))
+    candidates = analyze_cascade(facts)
+    # Mutual-interference pair should be skipped
+    pairs = {(c.from_virt, c.to_virt) for c in candidates}
+    assert (50, 51) not in pairs
+    assert (51, 50) not in pairs
+
+
+def test_analyze_cascade_marks_dependency_chain() -> None:
+    """Mid-chain frees-slot candidates carry depends_on referring to
+    the end-of-chain pair that must succeed first.
+    """
+    decisions = [
+        ColorgraphDecision(iter_idx=0, ig_idx=60, assigned_reg=31,
+                           degree=0, n_interferers=0, flags=0),
+        ColorgraphDecision(iter_idx=1, ig_idx=61, assigned_reg=30,
+                           degree=0, n_interferers=0, flags=0),
+        ColorgraphDecision(iter_idx=2, ig_idx=62, assigned_reg=29,
+                           degree=0, n_interferers=0, flags=0),
+    ]
+    facts = _make_facts_with_cg(_make_cg_section(decisions))
+    candidates = analyze_cascade(facts)
+    # Three contiguous regs → one end-of-chain pair + one frees-slot
+    # pair (29-holder into 30-holder). Strict assertion: frees must exist.
+    frees = [c for c in candidates if c.priority_class == "frees-slot"]
+    assert frees, "expected at least one mid-chain frees-slot candidate"
+    assert frees[0].depends_on is not None
+    # The dependency should refer to the end-of-chain pair (60, 61)
+    # (29-holder=62 depends_on 30-holder=61's merge into 30→31... actually
+    # the end-of-chain pair is the LOWEST-reg → next pair: (60, 61)
+    # since cascade=[29, 30, 31], end_pair=(by_reg[29].ig_idx,
+    # by_reg[30].ig_idx) = (62, 61))
+    assert frees[0].depends_on == (62, 61)
