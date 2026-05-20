@@ -37,6 +37,15 @@ static void *(__cdecl *mw_pcode_traverse)(void *node, const char *pass_name) = (
 // static variable for capturing pass name from the most recent traverse call
 static const char *last_pass_name = NULL;
 
+// most-recent function name from pclistblocks. MWCC calls pclistblocks once
+// per debuglisting pass per function, so this is refreshed BEFORE
+// buildinterferencegraph (and therefore the coalesce hook) runs for that
+// function. Used by the coalesce hook to scope MWCC_DEBUG_FORCE_COALESCE
+// overrides to a single function within a multi-function TU.
+#define FUNCNAME_BUF_LEN 256
+static char g_current_function[FUNCNAME_BUF_LEN] = {0};
+static int g_current_function_set = 0;
+
 // important statics
 #define PCBASICBLOCKS (*(void **)0x587C74)
 #define PCFILE (*(void **)0x580610)
@@ -182,7 +191,20 @@ static void __cdecl hook_pclistblocks(const char *func_name)
         last_pass_name = NULL;
     }
     if (func_name)
+    {
+        int i;
+        // Stash the function name for downstream hooks (coalesce, colorgraph
+        // etc.) that need to scope behavior to a specific function. Copy into
+        // our own buffer — MWCC's func_name pointer may be reused per call.
+        for (i = 0; i < FUNCNAME_BUF_LEN - 1 && func_name[i]; i++)
+        {
+            g_current_function[i] = func_name[i];
+        }
+        g_current_function[i] = '\0';
+        g_current_function_set = 1;
+
         debug_printf("%s\n", func_name);
+    }
 
     for (block = (PCodeBlock *)PCBASICBLOCKS; block; block = block->nextBlock)
         list_block(block);
@@ -468,6 +490,13 @@ static struct {
 static int g_n_coalesce_overrides = 0;
 static int g_coalesce_overrides_parsed = 0;
 
+// Function scope filter — if set, MWCC_DEBUG_FORCE_COALESCE only applies
+// when the currently-compiling function's name (captured by pclistblocks
+// into g_current_function) matches. Empty = apply to every coalesce
+// invocation (legacy behavior). Set via MWCC_DEBUG_FORCE_COALESCE_FUNCTION.
+static char g_coalesce_scope_fn[FUNCNAME_BUF_LEN] = {0};
+static int g_coalesce_scope_fn_set = 0;
+
 static void parse_coalesce_overrides_from_env(void)
 {
     char buf[512];
@@ -479,6 +508,17 @@ static void parse_coalesce_overrides_from_env(void)
 
     g_coalesce_overrides_parsed = 1;
     g_n_coalesce_overrides = 0;
+
+    // Read optional function-scope filter once at parse time. Empty → apply
+    // overrides to every coalesce call (legacy global behavior).
+    len = GetEnvironmentVariableA(
+        "MWCC_DEBUG_FORCE_COALESCE_FUNCTION",
+        g_coalesce_scope_fn, sizeof(g_coalesce_scope_fn));
+    g_coalesce_scope_fn_set = (len > 0 && len < sizeof(g_coalesce_scope_fn))
+        ? 1 : 0;
+    if (!g_coalesce_scope_fn_set) {
+        g_coalesce_scope_fn[0] = '\0';
+    }
 
     len = GetEnvironmentVariableA("MWCC_DEBUG_FORCE_COALESCE", buf, sizeof(buf));
     if (len == 0 || len >= sizeof(buf)) return;
@@ -1030,24 +1070,51 @@ static void __cdecl hook_real_coalesce(unsigned int rclass, unsigned int n_virtu
         }
     }
 
-    // Apply FORCE_COALESCE overrides. We patch COALESCE_ALIAS[virt] = root
-    // directly. If the user-specified virt is out of bounds (e.g., this
-    // call is for a different register class and the override doesn't
-    // apply), we silently skip — overrides are global, applied wherever
-    // they fit.
+    // Apply FORCE_COALESCE overrides. Three filters guard each entry:
+    //   1. Function-scope filter — if MWCC_DEBUG_FORCE_COALESCE_FUNCTION is
+    //      set, skip the entire override block when the current function
+    //      (captured by hook_pclistblocks into g_current_function) doesn't
+    //      match. Prevents one function's override from corrupting an
+    //      earlier or later function in the same TU.
+    //   2. Bounds check — virt and root must be in [0, n_virtuals); pairs
+    //      for the wrong register class are silently skipped.
+    //   3. (No-op if the user happens to specify virt == root.)
     forced_count = 0;
-    if (g_n_coalesce_overrides > 0) {
-        for (i = 0; i < g_n_coalesce_overrides; i++) {
-            int v = g_coalesce_overrides[i].virt;
-            int r = g_coalesce_overrides[i].root;
-            if (v < 0 || v >= (int)n_virtuals) continue;
-            if (r < 0 || r >= (int)n_virtuals) continue;
-            if (PCFILE && DEBUG_GUARD) {
-                debug_printf("[FORCE_COALESCE] alias[%d]: %d -> %d\n",
-                             v, (int)alias[v], r);
+    {
+        int scope_skip = 0;
+        if (g_coalesce_scope_fn_set) {
+            // Need a match between g_current_function and g_coalesce_scope_fn
+            if (!g_current_function_set) {
+                scope_skip = 1;
+            } else {
+                int j;
+                for (j = 0; j < FUNCNAME_BUF_LEN; j++) {
+                    if (g_current_function[j] != g_coalesce_scope_fn[j]) {
+                        scope_skip = 1;
+                        break;
+                    }
+                    if (g_current_function[j] == '\0') break;
+                }
             }
-            alias[v] = (int16)r;
-            forced_count++;
+            if (scope_skip && PCFILE && DEBUG_GUARD) {
+                debug_printf("[FORCE_COALESCE] scope skip (fn=%s, scope=%s)\n",
+                             g_current_function_set ? g_current_function : "<unset>",
+                             g_coalesce_scope_fn);
+            }
+        }
+        if (!scope_skip && g_n_coalesce_overrides > 0) {
+            for (i = 0; i < g_n_coalesce_overrides; i++) {
+                int v = g_coalesce_overrides[i].virt;
+                int r = g_coalesce_overrides[i].root;
+                if (v < 0 || v >= (int)n_virtuals) continue;
+                if (r < 0 || r >= (int)n_virtuals) continue;
+                if (PCFILE && DEBUG_GUARD) {
+                    debug_printf("[FORCE_COALESCE] alias[%d]: %d -> %d\n",
+                                 v, (int)alias[v], r);
+                }
+                alias[v] = (int16)r;
+                forced_count++;
+            }
         }
     }
 
