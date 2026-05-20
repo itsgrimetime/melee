@@ -13,8 +13,10 @@ import pytest
 from src.mwcc_debug.o_rewriter import (
     MAGIC_S32,
     MAGIC_U32,
+    AutoRenameResult,
     MagicSymbol,
     Mapping,
+    apply_name_magic_auto,
     find_magic_symbols,
     find_named_sdata2_symbols_by_value,
     globalize_symbols,
@@ -283,4 +285,182 @@ def test_suggest_name_magic_map_uses_value_not_offset() -> None:
             f"anonymous {anon_sym.name} (value=0x{anon_sym.value:016x}): "
             f"got {named!r}, expected {expected_name!r} from value lookup. "
             f"This indicates the old offset-based matching is still in use."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests for apply_name_magic_auto — the full auto-resolve-and-apply path
+# used by `verify-with-name-magic --apply-auto`
+# ---------------------------------------------------------------------------
+
+def test_apply_name_magic_auto_missing_target_returns_empty(
+    tmp_path: Path,
+) -> None:
+    """If the target .o doesn't exist, apply_name_magic_auto must NOT raise.
+    It returns an AutoRenameResult with empty renames and unresolved equal
+    to the full set of anonymous symbols (callers decide whether to warn).
+    """
+    fake_base = tmp_path / "base.o"
+    fake_target = tmp_path / "target_does_not_exist.o"
+    # No base file either — apply_name_magic_auto delegates to
+    # suggest_name_magic_map, which calls find_all_anonymous_sdata2_symbols
+    # on the base. With no file, pyelftools raises and we propagate.
+    # So we create a tiny empty stub via shutil from a real fixture if
+    # available; otherwise skip.
+    if not _FIXTURE_O.exists():
+        pytest.skip("requires built .o; run `ninja` first")
+    shutil.copy(_FIXTURE_O, fake_base)
+
+    result = apply_name_magic_auto(fake_base, fake_target)
+    assert isinstance(result, AutoRenameResult)
+    assert result.renames == []
+    assert result.globalized == []
+    # Every anonymous symbol in the base .o is unresolved (no target lookup)
+    assert len(result.unresolved) == len(result.anonymous_found)
+    assert result.target_o_path == fake_target
+
+
+@pytest.mark.skipif(not _FIXTURE_O.exists(),
+                    reason="requires built .o; run `ninja` first")
+def test_apply_name_magic_auto_renames_and_globalizes(tmp_path: Path) -> None:
+    """End-to-end: apply_name_magic_auto should auto-resolve every
+    anonymous .sdata2 magic constant in the base .o using the production
+    .o as the lookup source, then both rename them and promote them to
+    STB_GLOBAL — no map needed.
+    """
+    from elftools.elf.elffile import ELFFile
+
+    _TARGET_O = Path(__file__).parent.parent.parent.parent / \
+        "build" / "GALE01" / "obj" / "melee" / "mn" / "mnvibration.o"
+    if not _TARGET_O.exists():
+        pytest.skip("requires built target .o; run `ninja` first")
+
+    work_o = tmp_path / "test.o"
+    shutil.copy(_FIXTURE_O, work_o)
+
+    # Pre-check: there must be at least one anonymous magic constant
+    pre_syms = find_magic_symbols(work_o)
+    assert pre_syms, "fixture .o has no anonymous magic symbols to rename"
+
+    result = apply_name_magic_auto(work_o, _TARGET_O)
+    assert isinstance(result, AutoRenameResult)
+    assert result.target_o_path == _TARGET_O
+
+    # At least the s32 and/or u32 magic constants should resolve via the
+    # production .o (mnvibration has both).
+    assert result.renames, (
+        "expected at least one rename; got none. "
+        f"anonymous_found={len(result.anonymous_found)} "
+        f"unresolved={len(result.unresolved)}"
+    )
+
+    # Every rename's new name must come from the target's named .sdata2
+    # symbols at the matching value.
+    by_value = find_named_sdata2_symbols_by_value(_TARGET_O)
+    expected_values_to_names = {v: n for v, n in by_value.items()}
+    new_names_in_result = {new for _, new in result.renames}
+    for new in new_names_in_result:
+        assert new in expected_values_to_names.values(), (
+            f"renamed symbol {new!r} is not a named .sdata2 symbol in "
+            f"target {_TARGET_O.name}"
+        )
+
+    # Every renamed symbol must be present in the new .o's symtab and be
+    # STB_GLOBAL (globalize=True by default).
+    with work_o.open("rb") as f:
+        elf = ELFFile(f)
+        symtab = elf.get_section_by_name(".symtab")
+        symtab_names: dict[str, str] = {}
+        for sym in symtab.iter_symbols():
+            if sym.name:
+                symtab_names[sym.name] = sym["st_info"]["bind"]
+    for _, new in result.renames:
+        assert new in symtab_names, (
+            f"renamed symbol {new!r} not present in result symtab"
+        )
+        assert symtab_names[new] == "STB_GLOBAL", (
+            f"renamed symbol {new!r} should be STB_GLOBAL (globalize=True), "
+            f"got {symtab_names[new]!r}"
+        )
+
+    # globalize list should mirror renames when globalize=True
+    assert set(result.globalized) == new_names_in_result
+
+
+@pytest.mark.skipif(not _FIXTURE_O.exists(),
+                    reason="requires built .o; run `ninja` first")
+def test_apply_name_magic_auto_no_globalize(tmp_path: Path) -> None:
+    """When globalize=False, apply_name_magic_auto renames but leaves the
+    new symbols as STB_LOCAL (matching MWCC's default emission).
+    """
+    from elftools.elf.elffile import ELFFile
+
+    _TARGET_O = Path(__file__).parent.parent.parent.parent / \
+        "build" / "GALE01" / "obj" / "melee" / "mn" / "mnvibration.o"
+    if not _TARGET_O.exists():
+        pytest.skip("requires built target .o; run `ninja` first")
+
+    work_o = tmp_path / "test.o"
+    shutil.copy(_FIXTURE_O, work_o)
+
+    result = apply_name_magic_auto(work_o, _TARGET_O, globalize=False)
+    assert result.renames, "expected at least one rename"
+    assert result.globalized == [], (
+        "globalize=False should leave globalized list empty"
+    )
+
+    # Verify the renamed symbol is STB_LOCAL (not promoted)
+    with work_o.open("rb") as f:
+        elf = ELFFile(f)
+        symtab = elf.get_section_by_name(".symtab")
+        bindings: dict[str, str] = {
+            sym.name: sym["st_info"]["bind"]
+            for sym in symtab.iter_symbols() if sym.name
+        }
+    for _, new in result.renames:
+        assert bindings.get(new) == "STB_LOCAL", (
+            f"with globalize=False, renamed symbol {new!r} should remain "
+            f"STB_LOCAL; got {bindings.get(new)!r}"
+        )
+
+
+@pytest.mark.skipif(not _FIXTURE_O.exists(),
+                    reason="requires built .o; run `ninja` first")
+def test_apply_name_magic_auto_unresolved_includes_size4_floats(
+    tmp_path: Path,
+) -> None:
+    """4-byte float-literal anonymous symbols (size=4) are never
+    auto-renamed because matching by value would be ambiguous (multiple
+    floats can share 0x00000000 etc.). They must appear in the unresolved
+    list so callers can warn / inspect.
+    """
+    _TARGET_O = Path(__file__).parent.parent.parent.parent / \
+        "build" / "GALE01" / "obj" / "melee" / "mn" / "mnvibration.o"
+    if not _TARGET_O.exists():
+        pytest.skip("requires built target .o; run `ninja` first")
+
+    from src.mwcc_debug.o_rewriter import find_all_anonymous_sdata2_symbols
+
+    work_o = tmp_path / "test.o"
+    shutil.copy(_FIXTURE_O, work_o)
+
+    all_anon = find_all_anonymous_sdata2_symbols(work_o)
+    size4_anon = [s for s in all_anon if s.size == 4]
+
+    result = apply_name_magic_auto(work_o, _TARGET_O)
+
+    # Every 4-byte symbol must be in unresolved (never auto-renamed)
+    unresolved_names = {s.name for s in result.unresolved}
+    for s4 in size4_anon:
+        assert s4.name in unresolved_names, (
+            f"4-byte anonymous {s4.name} should be unresolved by "
+            f"apply_name_magic_auto, but it wasn't"
+        )
+
+    # And none of the renames should target a 4-byte symbol
+    renamed_old_names = {old for old, _ in result.renames}
+    for s4 in size4_anon:
+        assert s4.name not in renamed_old_names, (
+            f"apply_name_magic_auto should not auto-rename 4-byte "
+            f"symbol {s4.name}, but it did"
         )

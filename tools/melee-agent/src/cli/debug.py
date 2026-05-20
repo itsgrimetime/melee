@@ -15,8 +15,11 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -6104,13 +6107,24 @@ def tier3_search(
                  "on seed count; truncated by priority order.",
         ),
     ] = 5,
-    per_seed_iters: Annotated[
+    per_seed_time: Annotated[
         int,
         typer.Option(
-            "--per-seed-iters",
-            help="Permuter iterations per seed.",
+            "--per-seed-time",
+            help="Wall-clock seconds to permute each compiling seed. "
+                 "The permuter runs against the seed's perm-dir for "
+                 "this long, then is killed. Default 60s.",
         ),
-    ] = 200,
+    ] = 60,
+    total_time: Annotated[
+        int,
+        typer.Option(
+            "--total-time",
+            help="Global wall-clock cap (seconds) across the whole "
+                 "per-seed search. Stop early once exceeded, even if "
+                 "seeds remain. Default 600s (10 minutes).",
+        ),
+    ] = 600,
     perm_root: Annotated[
         Path,
         typer.Option(
@@ -6129,6 +6143,27 @@ def tier3_search(
         float,
         typer.Option("--blend", help="mwcc-score blend weight."),
     ] = 0.1,
+    threshold: Annotated[
+        float,
+        typer.Option(
+            "--threshold",
+            help="Minimum delta (% improvement, post-transfer) to "
+                 "consider a seed's permuter run a win when applying "
+                 "with --apply-best. Default 0.05 — matches the global "
+                 "verify-perm default.",
+        ),
+    ] = 0.05,
+    apply_best: Annotated[
+        bool,
+        typer.Option(
+            "--apply-best",
+            help="After ranking, if the winning seed's best candidate "
+                 "improves real-source match by >= --threshold, "
+                 "transfer it to the real tree via the same verify-perm "
+                 "machinery (with the inline_fn placeholder guard). "
+                 "Off by default — dry-run semantics.",
+        ),
+    ] = False,
     include_low_confidence: Annotated[
         bool,
         typer.Option(
@@ -6154,14 +6189,24 @@ def tier3_search(
          nonmatchings/<fn>/tier3_seed_<idx>/.
       5. Smoke-compile each. If all seeds fail, exit non-zero with a
          clear message.
-      6. For each compiling seed, run `debug permute` (Tier 2) with
-         --per-seed-iters iterations.
-      7. Report the best result.
+      6. For each compiling seed, launch decomp-permuter (with
+         mwcc-debug score blending) for up to --per-seed-time seconds.
+         The global --total-time cap stops the loop early once
+         exceeded.
+      7. Find the best candidate each permuter produced and rank
+         seeds by delta (baseline score minus best candidate's score).
+      8. Print the top result with full diff path.
+      9. If --apply-best is set, transfer the winning candidate into
+         the real source tree via the same verify-perm machinery (with
+         the inline_fn placeholder check still firing).
     """
     from ..mwcc_debug.symbol_bridge import list_bindings
     from ..mwcc_debug.tier3_search import (
+        find_best_candidate,
         materialize_seed,
         plan_seeds,
+        rank_seed_results,
+        run_per_seed_permute,
         save_compile_failure,
         smoke_compile,
     )
@@ -6295,14 +6340,192 @@ def tier3_search(
     print()
     print(
         f"[tier3] {len(compiled)}/{len(materialized)} seeds compiled. "
-        f"Estimated wall-clock: {2 * len(compiled) * per_seed_iters} "
-        f"to {3 * len(compiled) * per_seed_iters} seconds."
+        f"Per-seed permute budget: {per_seed_time}s. "
+        f"Global cap: {total_time}s."
     )
+
+    # Resolve/derive the target spec once (shared across all seeds) so
+    # we don't pay the pcdump cost per-seed.
+    if target is None:
+        target = melee_root / "build" / "mwcc_debug_cache" / \
+            f"{unit}_target.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.exists():
+            spec = derive_target_from_function(fn)
+            target.write_text(json.dumps(spec, indent=2))
+            print(f"[tier3] derived target -> {target}")
+
+    # Stage each compiling seed_dir to look like a permuter perm-dir.
+    # Inherit target.o/compile.sh/settings.toml from the parent perm_dir
+    # so the permuter has everything it needs.
+    inherited_files = ["target.o", "compile.sh", "settings.toml"]
+    for plan, seed_dir, _result in compiled:
+        for fname in inherited_files:
+            src_file = perm_dir / fname
+            dst_file = seed_dir / fname
+            if src_file.exists() and not dst_file.exists():
+                shutil.copy2(src_file, dst_file)
+        # Make compile.sh executable in case the copy stripped mode.
+        sh = seed_dir / "compile.sh"
+        if sh.exists():
+            sh.chmod(0o755)
+
+    # Build the runner closure. It invokes the permute_with_mwcc.py
+    # wrapper directly against the seed_dir for `time_seconds` seconds,
+    # then SIGTERMs it. Output lands inside seed_dir/output-N-M/.
+    wrapper = (
+        melee_root / "tools" / "melee-agent" / "scripts"
+        / "permute_with_mwcc.py"
+    )
+    if not wrapper.exists():
+        typer.echo(f"wrapper not found: {wrapper}", err=True)
+        raise typer.Exit(4)
+
+    def _permute_runner(
+        seed_dir_arg: Path, fn_name: str, time_seconds: int,
+    ) -> None:
+        env = os.environ.copy()
+        env["MELEE_PERMUTER_ROOT"] = str(perm_root)
+        env["MELEE_ROOT"] = str(melee_root)
+        env["MWCC_DEBUG_TARGET"] = str(target)
+        env["MWCC_DEBUG_FN"] = fn_name
+        env["MWCC_DEBUG_UNIT"] = src_rel
+        env["MWCC_DEBUG_BLEND"] = str(blend)
+        cmd = ["python", str(wrapper), str(seed_dir_arg), "-j", "1"]
+        # Use subprocess.Popen + wait(timeout) so we can kill on
+        # expiry. permuter.py runs indefinitely; we want a hard cap.
+        proc = subprocess.Popen(
+            cmd, env=env, cwd=perm_root,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        try:
+            proc.wait(timeout=time_seconds)
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+
+    # Read the baseline score from the parent perm_dir's first seeded
+    # output (the unmutated base.c's score). We don't have a clean
+    # source of truth pre-permute — use the parent perm_dir's lowest-
+    # scoring `output-N-M` as a coarse baseline if it exists, else None.
+    parent_best = find_best_candidate(perm_dir)
+    baseline_score: Optional[int] = None
+    if parent_best is not None:
+        m = re.match(r"^output-(\d+)-\d+$", parent_best.parent.name)
+        if m:
+            baseline_score = int(m.group(1))
+
+    # Per-seed loop, respecting the global time budget.
+    print("[tier3] launching per-seed permuter runs...")
+    results: list = []
+    deadline = time.monotonic() + total_time
+    for i, (plan, seed_dir, _result) in enumerate(compiled):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            print(
+                f"[tier3] global --total-time={total_time}s exhausted; "
+                f"skipping {len(compiled) - i} remaining seed(s)."
+            )
+            break
+        # Don't let a per-seed timer run past the global cap.
+        slot = min(per_seed_time, int(remaining))
+        print(
+            f"[tier3] seed{i}: permuting for {slot}s "
+            f"({plan.description})..."
+        )
+        res = run_per_seed_permute(
+            seed_idx=i,
+            plan=plan,
+            seed_dir=seed_dir,
+            fn_name=function,
+            per_seed_time=slot,
+            runner=_permute_runner,
+            baseline_score=baseline_score,
+        )
+        if res.error:
+            print(f"[tier3] seed{i}: runner error: {res.error}")
+        elif res.best_candidate is None:
+            print(
+                f"[tier3] seed{i}: no improvement after "
+                f"{res.ran_seconds:.1f}s."
+            )
+        else:
+            print(
+                f"[tier3] seed{i}: best score={res.best_score} "
+                f"(baseline={res.baseline_score}, delta={res.delta}) "
+                f"in {res.ran_seconds:.1f}s; "
+                f"candidate={res.best_candidate}"
+            )
+        results.append(res)
+
+    print()
+    ranked = rank_seed_results(results)
+    if not ranked or all(r.best_candidate is None for r in ranked):
+        typer.echo(
+            "[tier3] No seed produced a permuter improvement. "
+            "Consider increasing --per-seed-time, widening --budget, "
+            "or inspecting individual seed_dirs manually.",
+            err=True,
+        )
+        raise typer.Exit(6)
+
+    print("[tier3] Ranked results (best first):")
+    for r in ranked:
+        if r.best_candidate is None:
+            print(
+                f"  seed{r.seed_idx}: delta=0 (no improvement) — "
+                f"{r.plan.description}"
+            )
+        else:
+            print(
+                f"  seed{r.seed_idx}: delta={r.delta} "
+                f"(score {r.baseline_score}->{r.best_score}) — "
+                f"{r.plan.description}"
+            )
+            print(f"      candidate: {r.best_candidate}")
+
+    winner = next(
+        (r for r in ranked if r.best_candidate is not None), None,
+    )
+    if winner is None:
+        return
+
+    print()
     print(
-        "[tier3] Per-seed permuter runs not yet wired in v1 — running "
-        "`debug permute -f FN` against each seed dir manually is the "
-        "current workaround. See "
-        "docs/mwcc-debug-permuter-integration.md."
+        f"[tier3] Top: seed{winner.seed_idx} delta={winner.delta} "
+        f"({winner.plan.description})"
+    )
+    print(f"        candidate: {winner.best_candidate}")
+    diff_path = winner.best_candidate.parent / "diff.diff"
+    if diff_path.exists():
+        print(f"        diff:      {diff_path}")
+
+    if not apply_best:
+        print()
+        print(
+            "[tier3] --apply-best not set; re-run with --apply-best to "
+            "transfer the winner via verify-perm, or run manually:\n"
+            f"  melee-agent debug verify-perm {winner.best_candidate} "
+            f"-f {function} --keep"
+        )
+        return
+
+    # --apply-best: invoke verify-perm in-process so the inline_fn
+    # placeholder guard + 3-way merge logic from commit f39e264a9
+    # still fires.
+    print()
+    print("[tier3] --apply-best: invoking verify-perm with --keep...")
+    verify_perm(
+        candidate=winner.best_candidate,
+        function=function,
+        keep=True,
+        force=False,
+        threshold=threshold,
+        json_out=False,
     )
 
 
@@ -6325,6 +6548,22 @@ def verify_with_name_magic(
                  "(useful for figuring out what to pass).",
         ),
     ] = None,
+    apply_auto: Annotated[
+        bool,
+        typer.Option(
+            "--apply-auto",
+            help="Automatically resolve and apply the full anonymous → "
+                 "production-symbol rename, no --map needed. Cross-"
+                 "references the production .o "
+                 "(`build/GALE01/obj/<unit>.o`) by value, renames every "
+                 "anonymous @N .sdata2 symbol whose backing bytes match a "
+                 "named symbol in the production .o, then globalizes "
+                 "(STB_GLOBAL) the new symbols. Makes the 'named SDA2 "
+                 "magic constants' matching blocker invisible to "
+                 "subsequent checkdiff runs without manually constructing "
+                 "a map. Mutually exclusive with --map.",
+        ),
+    ] = False,
 ) -> None:
     """Compile, optionally rename anonymous SDA2 constants, then checkdiff.
 
@@ -6339,15 +6578,28 @@ def verify_with_name_magic(
     references the same bytes via a named symbol (from symbols.txt).
     Reloc-target diff blocks byte matching even though the data is
     identical. `--map s32=<symname>,u32=<symname>` renames the @N
-    symbols so checkdiff sees matching reloc targets.
+    symbols so checkdiff sees matching reloc targets. Or pass
+    `--apply-auto` to do the lookup + rename automatically from the
+    production .o, no map required.
 
     Flow:
       1. Build the function's TU object (`ninja build/GALE01/src/<unit>.o`)
-      2. If `--map` given, rename anonymous @N .sdata2 symbols via objcopy
-         If omitted, list anonymous symbols and suggest the map format.
+      2. If `--map` given, rename anonymous @N .sdata2 symbols via objcopy.
+         If `--apply-auto` given, auto-resolve via value lookup against the
+         production .o and apply renames + globalize in one step.
+         If neither given, list anonymous symbols and suggest the map format.
       3. Run `tools/checkdiff.py <function> --format plain` and forward
          its output verbatim.
     """
+    if name_map and apply_auto:
+        typer.echo(
+            "--map and --apply-auto are mutually exclusive; pick one. "
+            "Use --apply-auto to auto-resolve, or --map to supply an "
+            "explicit mapping.",
+            err=True,
+        )
+        raise typer.Exit(2)
+
     melee_root = DEFAULT_MELEE_ROOT
     unit = _find_unit_for_function(function, melee_root)
     if unit is None:
@@ -6393,8 +6645,9 @@ def verify_with_name_magic(
         )
         raise typer.Exit(3)
 
-    # 2. Rename anonymous SDA2 symbols if --map given, or surface what
-    #    anonymous symbols exist so the agent can construct a map.
+    # 2. Rename anonymous SDA2 symbols if --map / --apply-auto given,
+    #    or surface what anonymous symbols exist so the agent can
+    #    construct a map.
     if name_map:
         from ..mwcc_debug.o_rewriter import (
             parse_mapping,
@@ -6424,6 +6677,62 @@ def verify_with_name_magic(
             print(
                 "[verify] no matching anonymous symbols found to rename "
                 "(use `debug name-magic <o_file> --list` to inspect)"
+            )
+    elif apply_auto:
+        from ..mwcc_debug.o_rewriter import apply_name_magic_auto
+
+        target_o = melee_root / "build" / "GALE01" / "obj" / f"{unit}.o"
+        if not target_o.exists():
+            typer.echo(
+                f"--apply-auto requires the production .o at "
+                f"{target_o.relative_to(melee_root)} (not found). "
+                f"Build it first (`ninja build/GALE01/obj/{unit}.o`) and "
+                f"retry, or use --map to supply names manually.",
+                err=True,
+            )
+            raise typer.Exit(2)
+        try:
+            result = apply_name_magic_auto(obj_path, target_o)
+        except FileNotFoundError as e:
+            typer.echo(
+                f"objcopy not found: {e}. Install devkitPPC.",
+                err=True,
+            )
+            raise typer.Exit(5)
+        except subprocess.CalledProcessError as e:
+            typer.echo(f"objcopy failed: {e}", err=True)
+            raise typer.Exit(5)
+        target_rel = target_o.relative_to(melee_root)
+        if result.renames:
+            print(
+                f"[verify] --apply-auto: renamed {len(result.renames)} "
+                f"symbol(s) via lookup against {target_rel}:"
+            )
+            globalized_set = set(result.globalized)
+            for old, new in result.renames:
+                glob_note = (
+                    " (globalized)" if new in globalized_set else ""
+                )
+                print(f"          {old} -> {new}{glob_note}")
+        else:
+            print(
+                f"[verify] --apply-auto: no anonymous .sdata2 symbols "
+                f"matched named counterparts in {target_rel} "
+                f"(found {len(result.anonymous_found)} anonymous; "
+                f"unresolved {len(result.unresolved)})"
+            )
+        if result.unresolved:
+            unresolved_names = ", ".join(
+                s.name for s in result.unresolved[:8]
+            )
+            extra = (
+                f" (+{len(result.unresolved) - 8} more)"
+                if len(result.unresolved) > 8 else ""
+            )
+            print(
+                f"[verify] --apply-auto: {len(result.unresolved)} "
+                f"anonymous symbol(s) had no value-match in "
+                f"{target_rel}: {unresolved_names}{extra}"
             )
     else:
         # No --map given. List anonymous magic constants in the freshly-

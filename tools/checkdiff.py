@@ -217,6 +217,54 @@ def _strip_relocation_lines(lines: list[str]) -> list[str]:
     return [line for line in lines if not _is_relocation_line(line)]
 
 
+# Matches the normalized offset prefix produced by get_asm_with_objdump/dtk,
+# e.g. "+0c0: " or "+042: ". The offset is hex, variable-width (3+ digits).
+_NORMALIZED_OFFSET_RE = re.compile(r"^\+([0-9a-fA-F]+):(\s)")
+
+
+def normalize_reloc_line_offsets(lines: list[str]) -> list[str]:
+    """Round reloc-line offsets down to the containing 4-byte instruction.
+
+    PowerPC SDA21 relocations target the 16-bit immediate field of an
+    instruction. Depending on which tool emitted the asm, the reloc may be
+    reported at the instruction's byte offset (e.g. ``+0xc0``) or at the
+    immediate-field's offset (+2 from instruction start, e.g. ``+0xc2``).
+    objdiff/objdump can disagree between the expected and current .o files,
+    which makes opcode-identical functions look mismatched purely on the
+    reloc-line offsets.
+
+    PPC instructions are 4-byte aligned, so any reloc emitted on an offset
+    that isn't a multiple of 4 must be inside the containing instruction.
+    Rounding the reloc-line offset down to the 4-byte boundary makes the
+    comparison invariant to this +2 quirk while preserving the relocation's
+    semantic meaning (which instruction it applies to).
+
+    Only reloc lines are rewritten; instruction lines are left untouched.
+    Lines whose offset prefix can't be parsed are passed through unchanged.
+    """
+    out: list[str] = []
+    for line in lines:
+        if not _is_relocation_line(line):
+            out.append(line)
+            continue
+        m = _NORMALIZED_OFFSET_RE.match(line)
+        if not m:
+            out.append(line)
+            continue
+        raw_offset = int(m.group(1), 16)
+        aligned = raw_offset & ~0x3
+        if aligned == raw_offset:
+            out.append(line)
+            continue
+        # Preserve the original hex width so existing alignment in the
+        # side-by-side view stays stable.
+        width = len(m.group(1))
+        sep = m.group(2)
+        rest = line[m.end():]
+        out.append(f"+{aligned:0{width}x}:{sep}{rest}")
+    return out
+
+
 def _mnemonics(lines: list[str]) -> list[str]:
     result = []
     for line in lines:
@@ -542,6 +590,16 @@ def main() -> int:
                     help="Skip the ninja rebuild step and diff the .o as-is. "
                          "Use this when the .o has been post-processed externally "
                          "(e.g. by `melee-agent debug name-magic`).")
+    ap.add_argument("--normalize-reloc", dest="normalize_reloc", action="store_true",
+                    default=True,
+                    help="Round reloc-line offsets down to the containing "
+                         "4-byte instruction. Treats relocations on the "
+                         "immediate halfword (+2) as belonging to the same "
+                         "instruction so opcode-identical functions aren't "
+                         "marked mismatched on the +2 SDA21 quirk. (default: on)")
+    ap.add_argument("--no-normalize-reloc", dest="normalize_reloc", action="store_false",
+                    help="Disable reloc-offset normalization (emit reloc "
+                         "lines exactly as the disassembler produced them).")
     args = ap.parse_args()
 
     # Auto-detect TTY - use non-interactive mode if no TTY available
@@ -718,6 +776,9 @@ def main() -> int:
         import difflib
         ref_lines = ref_asm.split("\n")
         our_lines = our_asm.split("\n")
+        if args.normalize_reloc:
+            ref_lines = normalize_reloc_line_offsets(ref_lines)
+            our_lines = normalize_reloc_line_offsets(our_lines)
         classification = classify_asm_diff(ref_lines, our_lines)
 
         fuzzy_pct = get_fuzzy_match_percent(func_name)
