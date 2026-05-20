@@ -226,5 +226,65 @@ to clean up a single function. The pattern catalog already names
 these (`alias-split`, `widen-u8-to-u32`, etc.); a `clean-cruft`
 counterpart that REVERSES would be the natural pair.
 
+### SDA21 reloc offset normalize — game-changer for diff readability
+
+**Severity:** low (just diff readability) but very impactful workflow.
+
+After cherry-picking `72e8eb29a checkdiff: normalize +2 SDA21 reloc
+offsets`, my 8024714C diff went from 53 hunks to 25. That's HUGE
+because it lets me see real differences vs display artifacts.
+
+Before the normalize fix, every R_PPC_EMB_SDA21 reloc with a +2 offset
+from the instruction start showed up as a "hunk" even though the .o
+bytes were identical. After the fix, those normalize to the
+instruction's base offset on both sides.
+
+Suggestion: this should be on by default in main without needing a
+flag, since the +2 form is purely a display detail of how the assembler
+emits relocs (depends on whether section base or instruction byte
+offset is used). Already done — just calling it out as essential.
+
+### `verify-with-name-magic --apply-auto` confirmed working
+
+Used this on 8024714C and it auto-renamed both anonymous magic
+constants in our .o:
+- `@240 -> mnDiagram3_804DC000 (globalized)` (signed int-to-float)
+- `@566 -> mnDiagram3_804DBFF0 (globalized)` (unsigned int-to-float)
+
+Useful diagnostic to confirm the only remaining diff IS the register
+cascade — but the source still can't reproduce these names naturally,
+so the .o byte-distance still shows mismatch after rename. Need either
+an objcopy-rename build step or an MWCC fix.
+
+### Permuter campaign productivity observations
+
+8-hour campaign drove the three stuck functions through these gains:
+
+| Function | Start | End | Delta | Wins | Reverts |
+|---|---|---|---|---|---|
+| mnDiagram3_80245BA4 | 92.19% | 97.42% | +5.23% | 16+ permuter wins | many cruft cleanups |
+| fn_802461BC | 96.31% | 96.48% | +0.17% | 1 manual + 1 permuter | many |
+| mnDiagram3_8024714C | 97.96% | 98.61% | +0.65% | 4 permuter wins | many |
+
+Patterns that worked well:
+- **Re-import baseline after each commit**: keeps permuter searching
+  from the new lower-score baseline. Otherwise permuter wastes time
+  on mutations of stale base.c. Restart cycle takes ~5s.
+- **--keep with verify-perm**: just-apply-if-good. Avoids the cycle
+  of test, decide, manually apply, regenerate.
+- **`inline_fn` placeholder detection in verify-perm**: caught 2+
+  real corruption attempts. Without this, those would have made it
+  to commit and broken the build silently.
+
+Patterns that DIDN'T work:
+- Manually trying to replicate `inline_fn` with `static inline f32
+  passthrough(f32 x) { return x; }`. Gave 0.1% but is ugly fake-matchey
+  code. Reverted on user feedback.
+- Moving `font_size = (font_size_b = ...)` inside if-branches. Dropped
+  match 0.5% (broke chained init load-bearing dependency).
+- `row_spacing = mnDiagram3_804DBFF8` reset trick that worked for
+  8024714C did NOT work for fn_802461BC (different live range
+  pattern).
+
 
 
