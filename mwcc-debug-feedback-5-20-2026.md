@@ -304,5 +304,54 @@ Patterns that DIDN'T work:
   8024714C did NOT work for fn_802461BC (different live range
   pattern).
 
+### Missing tool: `--force-stack-slot` for stack-layout reachability
+
+**Severity:** medium-high — blocks reachability proof for a real class of
+mismatches we hit in mnDiagram3.
+
+**Symptom:** mnDiagram3_8024714C at 98.61%. After `verify-with-name-magic
+--apply-auto`, the remaining diff is dominated by a single 12-byte
+stack-offset shift: `sp48` (a `Vec3` local) is at 72(r1) in expected vs
+84(r1) in current. Both .o files have:
+- Same total frame size (-152)
+- Same prologue (stfd f31, f30, f29; stmw r26)
+- Same number of stack slots
+- No spilled virtuals (with `_[64]` PAD_STACK in place)
+
+The only difference is which offset MWCC chose for sp48. Expected puts
+it low (72) with a 12-byte hole at 84-95. Current packs it high (84)
+with the hole at 72-83.
+
+**Why current tooling can't help:**
+- `--force-phys`: forces *register* allocation, not stack slots
+- `--force-coalesce`: same — register-allocator territory
+- `PAD_STACK` (`do { unsigned char _[N]; } while(0)`): controls *total*
+  frame size; can't independently shift one local
+- `match-iter-first`: targets register iter order, not stack placement
+
+**Tested workarounds, all failed:**
+
+| Setting | Stack | sp48 | Match | Notes |
+|---|---|---|---|---|
+| `_[64]` | -152 ✓ | 84 ✗ | 98.61% | baseline |
+| `_[60]` | -152 ✓ | 80 ✗ | 98.61% | only sp48 shifts ±4 with pad |
+| `_[52]` | -144 ✗ | 72 ✓ | 98.56% | sp48 right but frame too small |
+| `_[52]` + `f64 _unused` | -152 ✓ | 80 ✗ | 98.61% | filler doesn't go where I want |
+
+**Suggested tool:** a `--force-stack-slot` (or similar) DLL hook that
+patches MWCC's local-allocator output, analogous to how `--force-phys`
+patches the register allocator. Use case:
+```
+debug pcdump-local src/.../foo.c --force-stack-slot "sp48:72" -f my_fn --diff
+```
+
+This would let us prove whether 100% is reachable purely from MWCC's
+stack allocator. If the forced .o matches, we know there's a C-source
+nudge that gets us there. If not, the issue is something deeper.
+
+Without this tool, every stack-layout-only mismatch is unprovable: we
+can't tell "MWCC just chose differently and we need to find the
+source pattern" from "the diff has other causes we haven't isolated."
+
 
 
