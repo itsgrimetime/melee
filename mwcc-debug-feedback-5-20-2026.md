@@ -487,3 +487,31 @@ Context: working on `src/melee/mn/mnvibration.c`, mainly `fn_80247510` and
   and known inlined callees. The output should include the candidate source
   slice, why it was chosen, and the before/after checkdiff/pcdump score so we
   can distinguish real structural improvements from match-percent noise.
+
+## Follow-up after merging `3c172b9a2`
+
+- The remaining `fn_80247510` blockers need nested/block-local source
+  visibility more than top-level declaration shuffling. `var-to-virtual` reports
+  `rumble_setting` as ambiguous with `nested-decl`/`extra-virtuals`, and cannot
+  bind the nested A-button `panel_jobj` at all. The useful next bridge feature
+  would map nested locals and compiler-created call temps to source spans, not
+  just top-level locals.
+
+- Stack-slot provenance would be useful for source-shape debugging. The target
+  A-button rumble path uses separate `lb_80011E24` out-param slots at
+  `0xd0`/`0xcc`, while current source reuses `0x54`. Manually testing split
+  branch locals and top-level split locals produced distinct slots but only at
+  `0x58`/`0x54`, and also moved the int-to-float temp pair from `0xe8`/`0xec`
+  to `0xf0`/`0xf4`. A tool that explains which source local or compiler temp
+  owns each stack slot, and why it was placed there, would make this much less
+  guess-driven.
+
+- We need a targeted source-suggestion mode for "introduce a short-lived temp
+  for this call argument" without replacing the whole inline. In
+  `fn_80247510`, the target cursor-position blocks have extra copies before
+  `HSD_JObjSetMtxDirtySub` (for example passing a short-lived copy instead of
+  the main `cursor_jobj` register). Manual wrapper and macro-style translate
+  inline attempts regressed badly because they changed the entire
+  `HSD_JObjSetTranslate*` expansion. The tooling ask is narrower: given a
+  disputed call site or pcode block, suggest and verify source patterns that
+  create only the missing argument temp/lifetime split.
