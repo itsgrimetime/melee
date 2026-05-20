@@ -323,6 +323,7 @@ void fn_802461BC(HSD_GObj* gobj)
     HSD_Text** new_var;
     int val;
     HSD_Text** labels_c;
+    void** new_var2;
     int limit;
     HSD_Text* text;
     f32 fi;
@@ -350,7 +351,7 @@ void fn_802461BC(HSD_GObj* gobj)
             ((Diagram3*) mnDiagram3_804D6C20->user_data)->is_name_mode;
         mnDiagram2_ClearDetailView(mnDiagram3_804D6C20);
         HSD_GObjPLink_80390228(data->popup_gobj);
-        ptr = (d = mnDiagram3_804D6C20->user_data);
+        ptr = (d = *(new_var2 = &mnDiagram3_804D6C20->user_data));
         for (i = 0; i < 10; i++) {
             if (d->row_labels[i] != 0L) {
                 HSD_SisLib_803A5CC4(ptr->row_labels[i]);
