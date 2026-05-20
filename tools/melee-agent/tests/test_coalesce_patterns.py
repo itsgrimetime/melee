@@ -25,8 +25,6 @@ def test_suggestion_dataclass_shape() -> None:
     assert s.pattern_name == "direct-identity"
 
 
-# Skipped until Tasks 9–13 add each checker; un-skipped in Task 13.
-@pytest.mark.skip(reason="checkers added in Tasks 9-13; final assertion enabled in Task 13")
 def test_all_patterns_initial_set() -> None:
     """ALL_PATTERNS should list exactly the five v1 checkers."""
     names = {p.name for p in ALL_PATTERNS}
@@ -341,3 +339,103 @@ def test_common_subexpr_skips_param_init() -> None:
         34: _vf(34, fd_b, is_param=True),
     })
     assert CommonSubExprPattern().check(facts, (33, 34)) is None
+
+
+from src.mwcc_debug.coalesce_patterns import TernaryCollapsePattern
+
+
+def _pre_pass_with_branches() -> Pass:
+    """B0 → {B1, B2}, both flowing into B3 (join)."""
+    return Pass(name="X", blocks=[
+        Block(index=0, succ=[1, 2], pred=[], labels=[]),
+        Block(index=1, succ=[3], pred=[0], labels=[]),
+        Block(index=2, succ=[3], pred=[0], labels=[]),
+        Block(index=3, succ=[], pred=[1, 2], labels=[]),
+    ])
+
+
+def _facts_with_pre(pp, virtual_facts):
+    return IrFacts(
+        function_name="f", pre_pass=pp,
+        by_virtual=virtual_facts,
+        bindings=[], basis=None, cg_section=None,
+    )
+
+
+def test_ternary_collapse_matches_branch_with_identity() -> None:
+    """r_a defined in B1 as `mr r_a, r_b` and in B2 as `li r_a, 0`,
+    both converging at B3 → ternary-collapse fires."""
+    pp = _pre_pass_with_branches()
+    # B1: mr r33, r32
+    pp.blocks[1].instructions = [
+        Instruction(opcode="mr", operands="r33,r32", annotations=[],
+                    regs=[("r", 33), ("r", 32)]),
+    ]
+    # B2: li r33, 0
+    pp.blocks[2].instructions = [
+        Instruction(opcode="li", operands="r33,0", annotations=[],
+                    regs=[("r", 33)]),
+    ]
+    fd = FirstDef(block_idx=1, opcode="mr", operands="r33,r32",
+                  annotations=[], regs=[("r", 33), ("r", 32)])
+    facts = _facts_with_pre(pp, {
+        33: _vf(33, fd),
+        32: _vf(32, None),
+    })
+    s = TernaryCollapsePattern().check(facts, (33, 32))
+    assert s is not None
+    assert s.pattern_name == "ternary-collapse"
+
+
+def test_ternary_collapse_skips_single_def() -> None:
+    """Only one defining block → not phi-like."""
+    pp = _pre_pass_with_branches()
+    pp.blocks[1].instructions = [
+        Instruction(opcode="mr", operands="r33,r32", annotations=[],
+                    regs=[("r", 33), ("r", 32)]),
+    ]
+    # B2 has no def of r33
+    fd = FirstDef(block_idx=1, opcode="mr", operands="r33,r32",
+                  annotations=[], regs=[("r", 33), ("r", 32)])
+    facts = _facts_with_pre(pp, {33: _vf(33, fd), 32: _vf(32, None)})
+    assert TernaryCollapsePattern().check(facts, (33, 32)) is None
+
+
+def test_ternary_collapse_skips_no_common_successor() -> None:
+    """Two defining blocks but they don't converge → skip."""
+    pp = Pass(name="X", blocks=[
+        Block(index=0, succ=[1, 2], pred=[], labels=[]),
+        Block(index=1, succ=[3], pred=[0], labels=[]),
+        Block(index=2, succ=[4], pred=[0], labels=[]),  # different succ
+        Block(index=3, succ=[], pred=[1], labels=[]),
+        Block(index=4, succ=[], pred=[2], labels=[]),
+    ])
+    pp.blocks[1].instructions = [
+        Instruction(opcode="mr", operands="r33,r32", annotations=[],
+                    regs=[("r", 33), ("r", 32)]),
+    ]
+    pp.blocks[2].instructions = [
+        Instruction(opcode="li", operands="r33,0", annotations=[],
+                    regs=[("r", 33)]),
+    ]
+    fd = FirstDef(block_idx=1, opcode="mr", operands="r33,r32",
+                  annotations=[], regs=[("r", 33), ("r", 32)])
+    facts = _facts_with_pre(pp, {33: _vf(33, fd), 32: _vf(32, None)})
+    assert TernaryCollapsePattern().check(facts, (33, 32)) is None
+
+
+def test_ternary_collapse_skips_no_branch_with_rb() -> None:
+    """Multiple branches assign r_a, but none from r_b → skip."""
+    pp = _pre_pass_with_branches()
+    pp.blocks[1].instructions = [
+        Instruction(opcode="li", operands="r33,5", annotations=[],
+                    regs=[("r", 33)]),
+    ]
+    pp.blocks[2].instructions = [
+        Instruction(opcode="li", operands="r33,7", annotations=[],
+                    regs=[("r", 33)]),
+    ]
+    fd = FirstDef(block_idx=1, opcode="li", operands="r33,5",
+                  annotations=[], regs=[("r", 33)])
+    facts = _facts_with_pre(pp, {33: _vf(33, fd), 32: _vf(32, None)})
+    assert TernaryCollapsePattern().check(facts, (33, 32)) is None

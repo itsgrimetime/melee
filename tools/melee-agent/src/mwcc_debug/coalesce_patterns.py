@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass
 from typing import Optional, Protocol
 
-from .coalesce_ir_facts import IrFacts
+from .coalesce_ir_facts import IrFacts, _blocks_defining, _common_successor
 from .parser import Instruction
 
 
@@ -297,3 +297,66 @@ def _operand_signature(fd, dest_virtual: int) -> Optional[str]:
 
 
 ALL_PATTERNS.append(CommonSubExprPattern())
+
+
+class TernaryCollapsePattern:
+    """r_a is defined in multiple branches that converge at a join block.
+    One branch's first-def is a direct copy from r_b. Restructuring the
+    if/else into a single ternary assignment lets the coalescer see r_a
+    and r_b as move-related.
+    """
+    name = "ternary-collapse"
+
+    def check(self, facts: IrFacts,
+              pair: tuple[int, int]) -> Optional[Suggestion]:
+        a, b = pair
+        # Find all blocks where r_a is defined (dest of some op).
+        defining = _blocks_defining(facts.pre_pass, a)
+        if len(defining) < 2:
+            return None
+        # They must share a single join successor.
+        join_idx = _common_successor(defining)
+        if join_idx is None:
+            return None
+        # At least one defining block has `mr r_a, r_b` or `addi r_a, r_b, 0`.
+        branch_with_rb = None
+        for block in defining:
+            for ist in block.instructions:
+                if not ist.regs or ist.regs[0] != ("r", a):
+                    continue
+                if len(ist.regs) < 2 or ist.regs[1] != ("r", b):
+                    continue
+                if ist.opcode == "mr":
+                    branch_with_rb = (block.index, "mr")
+                    break
+                if ist.opcode == "addi" and _immediate_operand(ist) == 0:
+                    branch_with_rb = (block.index, "addi-0")
+                    break
+            if branch_with_rb:
+                break
+        if branch_with_rb is None:
+            return None
+
+        other_blocks = [blk.index for blk in defining
+                        if blk.index != branch_with_rb[0]]
+        return Suggestion(
+            pattern_name="ternary-collapse",
+            summary=(
+                f"r{a} is assigned in {len(defining)} branches that converge "
+                f"at B{join_idx}; one branch (B{branch_with_rb[0]}) "
+                f"already copies from r{b}"
+            ),
+            ir_evidence=(
+                f"B{branch_with_rb[0]}: {branch_with_rb[1]} r{a},r{b}; "
+                f"other branches: B{','.join(str(i) for i in other_blocks)} "
+                f"join B{join_idx}"
+            ),
+            source_hint=(
+                f"Restructure the if/else into a single assignment:\n"
+                f"    var_a = (cond) ? var_b : <other>;"
+            ),
+            catalog_ref="chained-init",
+        )
+
+
+ALL_PATTERNS.append(TernaryCollapsePattern())
