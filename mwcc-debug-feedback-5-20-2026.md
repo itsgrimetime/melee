@@ -428,3 +428,32 @@ Context: working on `src/melee/mn/mnvibration.c`, mainly `fn_80247510` and
   not yet wired in v1." The command help still describes a full workflow that
   runs `debug permute` for each compiling seed and reports the best result, so
   the implementation and help are out of sync.
+
+## Inline/extract-subroutine tooling gap
+
+- Current tools can evaluate inline hypotheses well once I write them manually:
+  `checkdiff`, `pcdump-local`, forced targets, `guide`, and pcdump diffs make it
+  clear whether a helper changed the allocator/IR in a useful direction. What is
+  still missing is a tool that suggests and tests hidden inline candidates from
+  the source/pcdump structure.
+
+- A useful `debug suggest-inlines`/Tier 3 seed mode would enumerate repeated or
+  helper-shaped statement groups, generate candidate `static inline` helpers,
+  transfer each candidate into the real TU, and rank the result with
+  `checkdiff` plus optional pcdump scoring. For `mnvibration.c`, this would be
+  especially helpful for semantic repeated blocks that are not simple text
+  duplicates, such as cursor-position setup, name rumble accessors, and
+  `mnVibration_GetNameSlot` sentinel paths.
+
+- The generator needs nested-block awareness. In the current problem functions,
+  the remaining register/lifetime mismatches often involve locals declared
+  inside cursor or rumble conditionals rather than top-level locals. Inline
+  candidates that hoist or flatten those blocks can easily regress even when the
+  repeated source text looks plausible.
+
+- A good first version could seed from existing signals instead of inventing
+  everything from scratch: `patterns inlines`, `suggest-coalesce-source
+  --discover`, `guide` compiler-temp facts, repeated pcdump load/store blocks,
+  and known inlined callees. The output should include the candidate source
+  slice, why it was chosen, and the before/after checkdiff/pcdump score so we
+  can distinguish real structural improvements from match-percent noise.
