@@ -297,3 +297,30 @@ def test_analyze_cascade_marks_dependency_chain() -> None:
     # since cascade=[29, 30, 31], end_pair=(by_reg[29].ig_idx,
     # by_reg[30].ig_idx) = (62, 61))
     assert frees[0].depends_on == (62, 61)
+
+
+def test_analyze_cascade_picks_non_interfering_holder_from_multi() -> None:
+    """When multiple holders share a reg, pick the non-interfering one
+    rather than silently dropping legitimate candidates.
+
+    Setup: r30 has ig42 (interferes with ig51), r31 has TWO holders ig51
+    (interferes with ig42) and ig43 (doesn't interfere with ig42).
+    The first-encountered for r31 is ig51 under -assigned_reg sort tie;
+    the multi-holder enumeration must still find ig42 + ig43.
+    """
+    decisions = [
+        ColorgraphDecision(iter_idx=0, ig_idx=51, assigned_reg=31,
+                           degree=1, n_interferers=1, flags=0,
+                           interferers=[(42, 30)]),
+        ColorgraphDecision(iter_idx=1, ig_idx=43, assigned_reg=31,
+                           degree=0, n_interferers=0, flags=0),
+        ColorgraphDecision(iter_idx=2, ig_idx=42, assigned_reg=30,
+                           degree=1, n_interferers=1, flags=0,
+                           interferers=[(51, 31)]),
+    ]
+    facts = _make_facts_with_cg(_make_cg_section(decisions))
+    candidates = analyze_cascade(facts)
+    assert candidates, "multi-holder enumeration must find a non-interfering pair"
+    assert candidates[0].priority_class == "end-of-chain"
+    # (low=r30→from_virt=ig42, high=r31→to_virt=ig43)
+    assert (candidates[0].from_virt, candidates[0].to_virt) == (42, 43)
