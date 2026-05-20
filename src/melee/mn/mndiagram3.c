@@ -100,7 +100,6 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
       row_spacing = row_spacing - row0_y;
       max_distance = 0x5F5E0FF;
       max_percentage = 0x98967F;
-      divider = mnDiagram3_804DC008;
       max_time = 0x5C8D7F;
       neg_spacing = -row_spacing;
       stat_table += 0x36;
@@ -130,6 +129,7 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
             if (entity == 0x78)
             {
               goto next;
+              divider = mnDiagram3_804DC008;
             }
             {
               char *name_str = GetNameText(entity);
