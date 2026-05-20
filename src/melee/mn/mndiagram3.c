@@ -272,6 +272,7 @@ void fn_802461BC(HSD_GObj* gobj)
 {
     s8 scroll;
     Vec3 sp_pos1;
+    f32 new_var4;
     f32 font_size_cache;
     Vec3 sp_pos2;
     Vec3 sp_pos3;
@@ -302,7 +303,7 @@ void fn_802461BC(HSD_GObj* gobj)
 
     base = (char*) &mnDiagram3_803EEC10;
     data = mnDiagram3_804D6C20->user_data;
-    font_size_cache = mnDiagram3_804DBFFC;
+    font_size_cache = (new_var4 = mnDiagram3_804DBFFC);
     buttons = mn_80229624(4);
     ((s32*) &mn_804A04F0.buttons)[1] = buttons;
     ((s32*) &mn_804A04F0.buttons)[0] = (sel = 0);
@@ -397,7 +398,7 @@ void fn_802461BC(HSD_GObj* gobj)
             fi = (f32) i;
             text = HSD_SisLib_803A5ACC(
                 0, 1, sp_pos1.x - row_spacing, neg_spacing * fi + -sp_pos1.y,
-                sp_pos1.z, mnDiagram3_804DBFFC, mnDiagram3_804DBFFC);
+                sp_pos1.z, new_var4, mnDiagram3_804DBFFC);
             d->row_labels[i] = text;
 
             if (d->is_name_mode != 0) {
@@ -544,7 +545,7 @@ void fn_802461BC(HSD_GObj* gobj)
             d = mnDiagram3_804D6C20->user_data;
             row0 = d->jobjs[8];
             scroll = d->scroll_offset;
-            new_var3 = mnDiagram3_804DBFFC;
+            new_var3 = new_var4;
             ((row0)
                  ? ((void) 0)
                  : __assert(mnDiagram3_804D4FD8, 0x3EE, mnDiagram3_804D4FE0));
