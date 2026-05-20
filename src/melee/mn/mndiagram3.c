@@ -272,10 +272,10 @@ void fn_802461BC(HSD_GObj* gobj)
 {
     s8 scroll;
     Vec3 sp_pos1;
-    f32 new_var4;
     f32 font_size_cache;
     Vec3 sp_pos2;
     Vec3 sp_pos3;
+    f32 new_var4;
     Diagram3* data;
     Diagram3* d;
     Diagram3* ptr;
