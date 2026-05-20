@@ -59,7 +59,8 @@ melee-agent debug suggest-coalesce-source -f mnDiagram3_8024714C --discover
   --discover                     # discover mode; mutually exclusive with --pair
   --pcdump PATH                  # explicit pcdump (else auto-resolves from cache)
   --top N                        # discover mode: max candidates (default 3);
-                                 # silently ignored in pair mode
+                                 # raises BadParameter if passed in pair mode
+                                 # (cleaner than silently ignoring)
   --json                         # structured output
   --include-low-confidence       # use low-confidence bridge bindings for source-line annotations
 ```
@@ -136,6 +137,10 @@ class VirtualFacts:
     virtual: int
     first_def: Optional[FirstDef]            # from symbol_bridge.find_first_def
     use_sites: list[tuple[int, Instruction]] # (block_idx, instr) for all uses
+    use_sites_truncated: bool                # True if uses exceeded the cap
+                                             #   (16 in v1); checkers needing
+                                             #   exhaustive counts should
+                                             #   degrade or warn
     is_param: bool
     is_phys: bool                            # < 32
 
@@ -146,6 +151,12 @@ class IrFacts:
     by_virtual: dict[int, VirtualFacts]
     bindings: list[Binding]                  # from symbol_bridge
     basis: Optional[BindingBasis]            # red flags etc.
+    cg_section: Optional[ColorgraphSection]  # populated via
+                                             #   colorgraph_parser.parse_hook_events()
+                                             #   then find_function(); carries
+                                             #   per-virtual assignedReg + interferer
+                                             #   list. REQUIRED for analyze_cascade();
+                                             #   None means discover mode can't run.
 
 def collect(fn: Function, source: str) -> IrFacts: ...
 def analyze_cascade(facts: IrFacts) -> list[tuple[int, int]]: ...
@@ -188,6 +199,10 @@ class PairReport:
     to_virt: int
     ir_facts: dict              # serializable summary
     suggestions: list[Suggestion]
+    priority_class: Optional[str]   # discover mode: "end-of-chain" or "frees-slot"
+    depends_on: Optional[tuple[int, int]]  # discover mode: pair that must
+                                           #   succeed first for this one to
+                                           #   shorten stmw range
 
 def run(function: str, *, pair: Optional[tuple[int,int]],
         discover: bool, top: int = 3,
@@ -212,10 +227,11 @@ Steps:
      any operand. Capped at 16 per virtual to bound memory.
    - `is_param`: operationally defined — TRUE if the virtual's
      `first_def` is in the entry block AND has the form `mr rN, rK`
-     where `K` ∈ {3..10} (param-ABI register copy). Falls back to
-     "virtual is in the lowest-N region the bridge classified as
-     params" when no entry-block move appears. Avoids the brittle
-     "≤34" magic number — actual numbering varies by function.
+     where `K` ∈ {3..10} (param-ABI register copy). Fallback when
+     no entry-block move appears: TRUE if the virtual's index is
+     among the first `len(basis.parsed_params)` entries of
+     `sorted(basis.observed_virtuals)`. Avoids the brittle "≤34"
+     magic number — actual numbering varies by function.
    - `is_phys`: virtual < 32. (Naming: `VirtualFacts` is a slight
      misnomer when `is_phys` is true; we keep it for simplicity since
      the data structure is identical.)
@@ -252,19 +268,39 @@ saved-register footprint. Algorithm:
    This is the actual non-coalesce-able test. Two virtuals can share
    *third-party* interferers and still coalesce; only direct mutual
    interference blocks it.
-5. Annotate each proposed pair with a `priority_class`:
+
+   **Virtual↔ig_idx mapping**: `ColorgraphDecision.interferers` is a
+   `list[tuple[int, int]]` of `(interferer_ig_idx, assigned_reg)`.
+   For non-coalesced nodes, virtual number == ig_idx (verified by
+   the recent ig_idx-fix work — `node->ig_idx` IS the IGNode array
+   index for nodes in the simplification linked list). So matching
+   `pair=(a, b)` against `r_a.cg_decision.interferers` is direct:
+   any tuple `(b, *)` means they interfere. For coalesced-away
+   nodes (flag 0x4 set), virtual ≠ ig_idx and the lookup would need
+   to follow the alias chain via `COALESCE_ALIAS` — but those nodes
+   don't appear in `cg_section.decisions` anyway (colorgraph skips
+   them), so the check is moot in practice.
+5. Annotate each proposed pair with a `priority_class` and an
+   optional `depends_on`:
    - `"end-of-chain"` — would shrink `stmw` range immediately
    - `"frees-slot"` — frees a callee-save slot, but no `stmw` win
-     unless the chain re-cascades
+     unless the chain re-cascades. `depends_on` references the
+     earlier-in-chain pair that must succeed first.
 6. Return at most `top` pairs, end-of-chain pairs first, then
-   frees-slot pairs.
+   frees-slot pairs (with their dependencies surfaced in output).
+
+The discover-mode output (text and JSON) renders `depends_on` so the
+agent sees "this candidate only shortens the stmw range AFTER pair #1
+succeeds" — preventing the "ran all three force-coalesces in parallel
+and got confused" failure mode.
 
 Limitations openly documented in the helper docstring:
 - Doesn't verify reachability via force-coalesce (user must do that
   themselves; discover-mode output explicitly says so).
 - Class-aware (GPR vs FP) — only considers same-class pairs.
-- Doesn't simulate the post-merge cascade — recommendations are
-  per-pair, not "this sequence of merges drops 2 saved regs."
+- Doesn't simulate the post-merge cascade — `depends_on` marks the
+  chain relationship but the tool doesn't attempt transitive analysis
+  ("after this merge, which OTHER pairs would shorten the cascade?").
 
 ## 6. Pattern checkers (`coalesce_patterns.py`)
 
@@ -326,6 +362,12 @@ DirectIdentity: r{a} is already defined as a direct copy from r{b}
         after the assignment.
   Catalog: debug pattern-catalog alias-split
 ```
+
+`alias-split` is the closest existing catalog entry — its "shrink the
+live range" advice applies, even though the entry's primary focus is
+the inverse direction (splitting a long range). If real-world use
+shows this catalog reference is misleading, add a dedicated
+`coalesce-direct-identity` catalog entry in a v2 increment.
 
 ### 6.2 `ChainInitPattern`
 
@@ -544,8 +586,33 @@ Top-level shape:
 ```
 
 In discover mode, `cascade` is the list of register numbers in the
-descending chain (`["r31", "r30", …, "r25"]`) and `pairs` is the
-proposed coalesces in priority order.
+descending chain as **integers** (e.g. `[31, 30, 29, 28, 27, 26, 25]`
+— text renderer adds the `r` prefix), and `pairs` is the proposed
+coalesces with `priority_class` + `depends_on` annotated:
+
+```json
+{
+  "function": "mnDiagram3_8024714C",
+  "mode": "discover",
+  "cascade": [31, 30, 29, 28, 27, 26, 25],
+  "pairs": [
+    {
+      "from": 53, "to": 3,
+      "priority_class": "end-of-chain",
+      "depends_on": null,
+      "ir_facts": {...},
+      "suggestions": [...]
+    },
+    {
+      "from": 48, "to": 29,
+      "priority_class": "frees-slot",
+      "depends_on": [53, 3],
+      "ir_facts": {...},
+      "suggestions": [...]
+    }
+  ]
+}
+```
 
 ### Source-line annotation rules
 - Annotation appears ONLY when the bridge produces `best-guess` or
@@ -680,7 +747,11 @@ testability:
    tests.
 2. **Generate calibration pcdump fixtures.** Run `pcdump-local` on
    `fn_802461BC` and `mnVibration_80248644`, commit the .txt files to
-   `tests/fixtures/mwcc_debug/`. These unblock integration tests.
+   `tests/fixtures/mwcc_debug/`. **Pre-flight check**: confirm both
+   functions compile cleanly under the current `pcdump-local`
+   command — neither should trigger the `[pcdump-local] no compile
+   progress` watchdog. If either does, escalate; the plan can't
+   proceed with hung fixtures. These unblock integration tests.
 3. `coalesce_patterns.py` — one pattern at a time. For each:
    write the checker, write 4 tests (1 positive + 3 negatives),
    confirm they pass before moving on. Order: DirectIdentity →
@@ -702,10 +773,13 @@ After implementation lands:
    facts the agent could act on).
 2. `--discover` on `mnVibration_80248644` identifies the cascade
    chain that contained the virtual the permuter eventually merged
-   in MEMORY's `permuter_breakthrough` win. (The agent's underlying
-   fix was a decl-reorder, not a coalesce per se — the validation is
-   that the proposed end-of-chain pair is in the same cascade as the
-   one the permuter solved.)
+   in MEMORY's `permuter_breakthrough` win. The agent's underlying
+   fix was a decl-reorder, not a coalesce per se — the validation in
+   the calibration YAML is **strict**: `expected_cascade_top` lists
+   the exact (a, b) pair that should appear as the top-1 candidate,
+   and the parametrize loop asserts equality. Looser "in the same
+   cascade" matching would let bugs slip; strict matching makes
+   regressions loud.
 3. ≥ 20 unit tests pass; ≥ 3 calibration cases pass; smoke test passes.
 4. JSON output round-trips through `python -m json.tool` cleanly.
 5. Docs updated (handoff entry written, MEMORY.md pointer added).
