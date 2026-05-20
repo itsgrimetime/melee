@@ -57,7 +57,7 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
     u8 is_name_mode = data->is_name_mode;
     u8 scroll = data->saved_selection;
     u8 offset = data->scroll_offset;
-    u8 limit;
+    unsigned int limit;
     if (is_name_mode != 0)
     {
       limit = 0x18;
@@ -971,7 +971,8 @@ void mnDiagram3_8024714C(void* arg0)
             f32 tx = row0->translate.x;
             assert_line = 0x3A4;
             ((popup_alias) ? ((void) 0)
-                           : __assert(mnDiagram3_804D4FD8, assert_line, mnDiagram3_804D4FE0));
+                           : __assert(mnDiagram3_804D4FD8, assert_line,
+                                      mnDiagram3_804D4FE0));
             popup_alias->translate.x = tx;
         }
         if (!(popup_jobj->flags & 0x02000000)) {
@@ -982,8 +983,9 @@ void mnDiagram3_8024714C(void* arg0)
                 : __assert(mnDiagram3_804D4FD8, 0x3EE, mnDiagram3_804D4FE0));
         {
             f32 ty = (row_spacing * mnDiagram3_804DC00C) + row0->translate.y;
-            ((popup_alias) ? ((void) 0)
-                           : __assert(mnDiagram3_804D4FD8, 0x3B3, mnDiagram3_804D4FE0));
+            ((popup_alias)
+                 ? ((void) 0)
+                 : __assert(mnDiagram3_804D4FD8, 0x3B3, mnDiagram3_804D4FE0));
             popup_alias->translate.y = ty;
         }
         if (!(popup_alias->flags & 0x02000000)) {
@@ -994,8 +996,9 @@ void mnDiagram3_8024714C(void* arg0)
                 : __assert(mnDiagram3_804D4FD8, 0x3FB, mnDiagram3_804D4FE0));
         {
             f32 tz = row0->translate.z;
-            ((popup_alias) ? ((void) 0)
-                           : __assert(mnDiagram3_804D4FD8, 0x3C2, mnDiagram3_804D4FE0));
+            ((popup_alias)
+                 ? ((void) 0)
+                 : __assert(mnDiagram3_804D4FD8, 0x3C2, mnDiagram3_804D4FE0));
             popup_alias->translate.z = tz;
         }
         if (!(popup_alias->flags & 0x02000000)) {
@@ -1030,8 +1033,8 @@ void mnDiagram3_8024714C(void* arg0)
         do {
             f32 fi = (f32) i;
             HSD_Text* text = HSD_SisLib_803A5ACC(
-                0, 1, sp48.x - row_spacing, (neg_spacing * fi) + (-sp48.y), sp48.z,
-                font_size, mnDiagram3_804DBFFC);
+                0, 1, sp48.x - row_spacing, (neg_spacing * fi) + (-sp48.y),
+                sp48.z, font_size, mnDiagram3_804DBFFC);
             d->row_labels[i] = text;
             {
                 u8 type_idx = (u8) i;
