@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import pathlib
 
+from src.mwcc_debug.coalesce_patterns import Suggestion
 from src.mwcc_debug.suggest_coalesce import (
     PairReport, Report, render_json, render_text, run,
 )
@@ -164,3 +165,68 @@ def test_cli_rejects_top_in_pair_mode() -> None:
     )
     assert proc.returncode != 0
     assert "--top is only valid with --discover" in proc.stderr
+
+
+def test_render_text_includes_all_pair_fields() -> None:
+    """render_text emits every field the discover-mode renderer is
+    responsible for: title, cascade, pair header, priority_class,
+    depends_on, IR facts heading, and each Suggestion's pattern name,
+    summary, evidence prefix, try-hint prefix, and catalog ref."""
+    report = Report(
+        function="test_fn",
+        mode="discover",
+        cascade=[31, 30, 29, 28],
+        pairs=[PairReport(
+            from_virt=53,
+            to_virt=42,
+            ir_facts={
+                "from": {"virtual": 53, "is_phys": False,
+                         "first_def": {"block": 5, "opcode": "addi",
+                                       "operands": "r53,r42,0"},
+                         "use_blocks": [5, 7]},
+                "to":   {"virtual": 42, "is_phys": False,
+                         "first_def": {"block": 2, "opcode": "li",
+                                       "operands": "r42,0"},
+                         "use_blocks": [2, 5, 7]},
+            },
+            suggestions=[Suggestion(
+                pattern_name="direct-identity",
+                summary="r53 is already a direct copy from r42",
+                ir_evidence="B5: addi r53, r42, 0",
+                source_hint="shrink the live range...",
+                catalog_ref="alias-split",
+            )],
+            priority_class="end-of-chain",
+            depends_on=(50, 51),
+        )],
+    )
+    out = render_text(report)
+    assert "test_fn" in out
+    assert "--discover" in out
+    assert "r31 → r30 → r29 → r28" in out
+    assert "pair r53=r42" in out
+    assert "[end-of-chain]" in out
+    assert "depends_on r50=r51" in out
+    assert "IR facts:" in out
+    assert "direct-identity" in out
+    assert "r53 is already a direct copy from r42" in out
+    assert "evidence:" in out
+    assert "try:" in out
+    assert "Catalog: debug pattern-catalog alias-split" in out
+
+
+def test_render_text_fall_through_when_no_suggestions() -> None:
+    """When a pair has zero suggestions, the fall-through block fires."""
+    report = Report(
+        function="test_fn",
+        mode="pair",
+        pairs=[PairReport(
+            from_virt=53, to_virt=42,
+            ir_facts={"from": {"virtual": 53, "is_phys": False},
+                      "to":   {"virtual": 42, "is_phys": False}},
+            suggestions=[],
+        )],
+    )
+    out = render_text(report)
+    assert "No specific pattern matched" in out
+    assert "register-cascade" in out
