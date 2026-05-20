@@ -4659,14 +4659,23 @@ def pcdump_local(
         typer.Option(
             "--force-phys-fn",
             help="Scope --force-phys and --force-phys-iter to a "
-                 "single function name (mirrors --force-coalesce-fn).",
+                 "single function name (mirrors --force-coalesce-fn). "
+                 "Does NOT scope --force-iter-first — that option is "
+                 "GLOBAL with no per-function variant.",
         ),
     ] = None,
     force_iter_first: Annotated[
         Optional[str],
         typer.Option(
             "--force-iter-first",
-            help="Tier 6: reorder simplification list.",
+            help="Tier 6: reorder simplification list. WARNING: GLOBAL — "
+                 "applies to EVERY function in the TU (no per-function "
+                 "scoping; --force-phys-fn does NOT scope this option, "
+                 "and there is no --force-iter-first-fn variant). On "
+                 "multi-function TUs, virtual indices are per-function, "
+                 "so an override aimed at one function may corrupt "
+                 "others. Use only on single-function TUs, or accept "
+                 "the cross-function blast radius.",
         ),
     ] = None,
     force_coalesce: Annotated[
@@ -5417,6 +5426,18 @@ def permute(
     Default is single-threaded for safety. score-source now emits
     per-PID pcdump filenames so parallel threads no longer race on a
     shared pcdump.txt — raise `-j` above 1 if you want concurrency.
+
+    Passing flags through to permuter.py: Typer will try to consume any
+    leading `--<name>` tokens as options of `permute` itself. Use `--`
+    to separate. Examples:
+
+        # WRONG — Typer rejects --best-only as an unknown option
+        melee-agent debug permute -f my_fn --best-only
+
+        # RIGHT — `--` ends `permute`'s own options; everything after
+        # is forwarded to permuter.py
+        melee-agent debug permute -f my_fn -- --best-only
+        melee-agent debug permute -f my_fn -j 4 -- --best-only --seed 0
 
     Note: stdout is set to line-buffering so that piping through `tail -N`
     shows live progress instead of buffering until the permuter exits.
