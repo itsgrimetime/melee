@@ -434,8 +434,24 @@ def _normalize_force_phys(raw: str) -> tuple[str, list[str]]:
         tokens = spec.split(":")
         if len(tokens) == 3 and tokens[0].lower() in _FORCE_PHYS_CLASS_NAMES:
             # class:ig_idx:phys form — strip the class prefix for the DLL.
-            _, ig_idx_s, phys_s = tokens
+            # WARNING (Fix C): The DLL (MWCC_DEBUG_FORCE_PHYS) only accepts
+            # the legacy "ig_idx:phys" format and applies the override to ALL
+            # IG classes (GPR class 0 and FP class 1) that share the same
+            # ig_idx slot.  The class prefix is stripped here but is NOT
+            # passed through to the DLL; the DLL has no class-aware filtering.
+            # This means 'gpr:50:26' and 'fp:50:26' both produce the same
+            # DLL string and will both be applied to ig_idx=50 in every class.
+            # Use --force-phys-iter for class-precise control.
+            class_s, ig_idx_s, phys_s = tokens
             dll_parts.append(f"{ig_idx_s}:{phys_s}")
+            warnings.append(
+                f"[force-phys] class-scoped form '{spec}' used: the DLL does "
+                f"not support class filtering — the override for ig_idx={ig_idx_s} "
+                f"will apply to ALL IG classes (GPR and FP) that have a node "
+                f"at that ig_idx, not just class '{class_s}'. "
+                f"Use '--force-phys-iter {class_s}:{ig_idx_s}:{phys_s}' for "
+                f"class-precise control if multiple classes share this ig_idx."
+            )
         elif len(tokens) == 2:
             # Bare ig_idx:phys form. The DLL accepts this but it matches
             # all IG classes (GPR, FP, etc.) with that ig_idx, which can
@@ -4972,11 +4988,13 @@ def pcdump_local(
                 f"function's IGNode set (wrong function scoped by "
                 f"--force-coalesce-fn, or index out of range).\n"
                 f"  - Interfering pair: the two virtuals have a live-range "
-                f"conflict — try `debug analyze --cg` to inspect the "
-                f"colorgraph and check for interference edges.\n"
+                f"conflict — run `debug analyze -f <fn>` and look for "
+                f"'interferers:' near the relevant ig_idx to check "
+                f"interference edges.\n"
                 f"  - DLL crash in the coalesce hook (rare): check stderr "
                 f"above for exception traces.\n"
-                f"  Next: try a different pair, or use `debug analyze --cg` "
+                f"  Next: try a different pair, or run `debug analyze -f <fn>` "
+                f"and search the output for 'interferers:' near each ig_idx "
                 f"to find a non-interfering candidate."
             )
         typer.echo(hang_msg, err=True)

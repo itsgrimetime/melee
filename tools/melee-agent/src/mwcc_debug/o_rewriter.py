@@ -397,9 +397,31 @@ def rename_magic_symbols(
 
     symbols = find_magic_symbols(o_path)
     renames: list[tuple[str, str]] = []
+    # Fix D: when multiple anonymous symbols share the same value, rename ALL
+    # of them (the user clearly wants all instances of the value renamed) and
+    # emit a warning listing the full match set so the user knows which @N
+    # names were selected.  If they need to target a specific one, the warning
+    # directs them to use direct '@N=name' mapping instead.
+    _value_to_syms: dict[int, list[str]] = {}
+    for sym in symbols:
+        _value_to_syms.setdefault(sym.value, []).append(sym.name)
     for sym in symbols:
         if sym.value in m.by_value:
             renames.append((sym.name, m.by_value[sym.value]))
+            # Emit a warning if multiple symbols share this value.
+            _matches = _value_to_syms.get(sym.value, [])
+            if len(_matches) > 1 and sym.name == _matches[0]:
+                # Print once (first match) to avoid duplicate warnings.
+                import sys as _sys
+                _sym_list = ", ".join(_matches)
+                print(
+                    f"[rename-magic] WARNING: value 0x{sym.value:016x} matches "
+                    f"multiple anonymous symbols in .o: {_sym_list}\n"
+                    f"Renaming all of them to '{m.by_value[sym.value]}'. "
+                    f"To target a specific one, use direct mapping "
+                    f"(e.g. '{_matches[0]}={m.by_value[sym.value]}').",
+                    file=_sys.stderr,
+                )
 
     # Also handle direct @N → name mappings. These can target any
     # anonymous symbol (including 4-byte float literals that

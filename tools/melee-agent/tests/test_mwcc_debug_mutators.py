@@ -223,6 +223,73 @@ def test_mutate_insert_alias_c89_combined_at_block_top() -> None:
     )
 
 
+def test_mutate_insert_alias_struct_field_access_raises() -> None:
+    """Fix F: when 'var_name' only appears as a struct field (->var_name or
+    .var_name) in the target statement, the alias replacement produces the
+    invalid '->var_name_alias' pattern.  mutate_insert_alias_before_use
+    must raise MutationUnsupported so the seed is safely skipped."""
+    # `jobjs` is a local pointer that's used only via `data->jobjs[i]`.
+    # The word-boundary regex matches `jobjs` inside `->jobjs` and replaces it,
+    # yielding `data->jobjs_alias[23]`.  The fix detects this and raises.
+    source = textwrap.dedent("""\
+        void fn_80247510(HSD_GObj* gobj) {
+            MnFooData* data;
+            HSD_JObj** jobjs;
+            data = gobj->user_data;
+            jobjs = data->jobjs;
+            HSD_JObjRemoveAll(data->jobjs[23]);
+        }
+    """)
+    with pytest.raises(MutationUnsupported, match="struct field"):
+        mutate_insert_alias_before_use(source, "fn_80247510", "jobjs", at_stmt_index=0)
+
+
+def test_mutate_insert_alias_after_first_assignment() -> None:
+    """Fix E: when 'local' is first assigned (plain write) BEFORE the
+    target reading-use statement, the alias assignment is placed immediately
+    after that first write — not at the target use site.
+
+    Shape produced:
+        {
+            type local;
+            type alias;       ← bare decl at block top
+            ...
+            local = expr;     ← first write
+            alias = local;    ← alias assigned AFTER local is set (Fix E)
+            ...
+            use(alias);       ← rewritten target
+        }
+    """
+    source = textwrap.dedent("""\
+        void fn_test(HSD_GObj* gobj) {
+            int* port_indicator;
+            DoInit(gobj);
+            port_indicator = (int*)gobj->user_data;
+            port_indicator[0] = 1;
+        }
+    """)
+    result = mutate_insert_alias_before_use(
+        source, "fn_test", "port_indicator", at_stmt_index=0,
+    )
+    lines = result.splitlines()
+    # The alias assignment must appear AFTER `port_indicator = ...;`
+    assign_idx = next(
+        (i for i, l in enumerate(lines) if "port_indicator_alias = port_indicator;" in l),
+        None,
+    )
+    first_write_idx = next(
+        (i for i, l in enumerate(lines) if "port_indicator = (int*)gobj->user_data;" in l),
+        None,
+    )
+    assert assign_idx is not None, "alias assignment line not found"
+    assert first_write_idx is not None, "first-write line not found"
+    assert assign_idx > first_write_idx, (
+        "alias assignment must appear AFTER local's first write, not before it"
+    )
+    # The rewritten use must use the alias
+    assert any("port_indicator_alias[0] = 1;" in l for l in lines)
+
+
 def test_regression_fn_8024e1b4_dual_pointer_shape() -> None:
     """Pin the dual-pointer mutation shape: starting from a simple
     function reading `data` once, mutate_insert_alias to produce the
