@@ -1680,6 +1680,41 @@ def verify_perm(
               else "Baseline match: (unknown)")
 
     candidate_text = candidate.read_text()
+
+    # -- Fix A: guard against permuter-internal placeholder leaks ----------
+    # decomp-permuter's randomizer uses placeholder names such as
+    # 'inline_fn', 'noinline_fn', etc. for AST nodes during mutation.
+    # These must NEVER appear in the final candidate — if they do, the
+    # candidate is corrupt and applying it would silently introduce
+    # unresolvable identifiers into real source.  We check the raw
+    # candidate text before any further processing so that nothing slips
+    # through regardless of merge strategy.
+    _PERMUTER_PLACEHOLDERS = (
+        "inline_fn", "noinline_fn", "extra_fn", "helper_fn",
+        "temp_fn", "local_var_fn",
+    )
+    _placeholder_hits: list[tuple[str, int]] = []
+    for _ph in _PERMUTER_PLACEHOLDERS:
+        _count = len(re.findall(r"\b" + re.escape(_ph) + r"\b", candidate_text))
+        if _count:
+            _placeholder_hits.append((_ph, _count))
+    if _placeholder_hits:
+        _ph_summary = ", ".join(
+            f"'{ph}' ({n} occurrence{'s' if n != 1 else ''})"
+            for ph, n in _placeholder_hits
+        )
+        typer.echo(
+            f"\n[verify-perm] ABORT: permuter placeholder(s) detected in "
+            f"candidate source: {_ph_summary}\n"
+            f"These are unresolved AST placeholders from decomp-permuter's "
+            f"randomizer that should never reach real source. The candidate "
+            f"is corrupt — do NOT apply.\n"
+            f"Candidate: {candidate}",
+            err=True,
+        )
+        raise typer.Exit(7)
+    # -- end Fix A ---------------------------------------------------------
+
     # Locate which side the function is missing in for a clearer message.
     from ..mwcc_debug.source_patch import find_function as _find_fn
     target_text = target_path.read_text()
@@ -1796,6 +1831,27 @@ def verify_perm(
 
     # If 3-way merge produced a result, overwrite the naive full-replace.
     if _merge_result is not None:
+        # Belt-and-suspenders: check merged text for placeholder leaks too.
+        # The pre-candidate check above covers regions touched by the permuter,
+        # but the merge might theoretically introduce a placeholder from the
+        # base side in a region outside the target function.
+        _merged_ph_hits: list[tuple[str, int]] = []
+        for _ph in _PERMUTER_PLACEHOLDERS:
+            _count = len(re.findall(r"\b" + re.escape(_ph) + r"\b", _merge_result))
+            if _count:
+                _merged_ph_hits.append((_ph, _count))
+        if _merged_ph_hits:
+            _mph_summary = ", ".join(
+                f"'{ph}' ({n} occurrence{'s' if n != 1 else ''})"
+                for ph, n in _merged_ph_hits
+            )
+            typer.echo(
+                f"\n[verify-perm] ABORT: permuter placeholder(s) detected "
+                f"in POST-MERGE source: {_mph_summary}\n"
+                f"The merged result is corrupt — aborting without writing.",
+                err=True,
+            )
+            raise typer.Exit(7)
         target_path.write_text(_merge_result)
 
     try:
