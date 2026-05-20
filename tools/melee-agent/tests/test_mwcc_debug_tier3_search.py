@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import textwrap
+from pathlib import Path
 
 from src.mwcc_debug.symbol_bridge import Binding
 from src.mwcc_debug.tier3_search import (
     CompileResult,
+    PerSeedPermuteResult,
     SeedPlan,
     _extract_one_line_reason,
+    find_best_candidate,
     plan_seeds,
+    rank_seed_results,
+    run_per_seed_permute,
 )
 
 
@@ -144,3 +149,209 @@ def test_compile_result_dataclass_default_ok_state() -> None:
     r = CompileResult(ok=True, stderr="", stdout="", one_line_reason="")
     assert r.ok is True
     assert r.one_line_reason == ""
+
+
+# --- Per-seed permuter orchestration tests --------------------------------
+#
+# These tests cover the v2 wiring: for each compiling seed, run `debug
+# permute` for a bounded time, capture the best candidate, rank seeds by
+# post-permute delta. We inject a fake `runner` callable so tests stay
+# fast and don't actually shell out to the permuter binary.
+
+
+def _seed_plan(idx: int) -> SeedPlan:
+    """Helper: minimal SeedPlan for tests."""
+    return SeedPlan(
+        mutator="type-change",
+        target_var=f"v{idx}",
+        args={"new_type": "u32"},
+        description=f"seed{idx}: type-change v{idx}: u8 -> u32",
+    )
+
+
+def test_find_best_candidate_returns_lowest_score_dir(tmp_path: Path) -> None:
+    """find_best_candidate scans output-N-M/ subdirs and returns the
+    source.c with the lowest score (lower score = closer to target)."""
+    perm_dir = tmp_path / "fn"
+    perm_dir.mkdir()
+    # output dirs use permuter's naming: output-{score}-{ctr}
+    for score, ctr in [(500, 1), (300, 1), (300, 2), (1000, 1)]:
+        d = perm_dir / f"output-{score}-{ctr}"
+        d.mkdir()
+        (d / "source.c").write_text(f"// score {score} ctr {ctr}\n")
+        (d / "score.txt").write_text(f"{score}\n")
+
+    best = find_best_candidate(perm_dir)
+    assert best is not None
+    assert best.parent.name in ("output-300-1", "output-300-2")
+    assert best.name == "source.c"
+
+
+def test_find_best_candidate_no_outputs_returns_none(tmp_path: Path) -> None:
+    """If permuter produced no improvements, return None."""
+    perm_dir = tmp_path / "fn"
+    perm_dir.mkdir()
+    # Only base.c and target.o — no output dirs
+    (perm_dir / "base.c").write_text("void fn() {}\n")
+    (perm_dir / "target.o").write_bytes(b"")
+    assert find_best_candidate(perm_dir) is None
+
+
+def test_find_best_candidate_skips_dirs_without_source(tmp_path: Path) -> None:
+    """A malformed output dir without source.c is skipped, not crashed on."""
+    perm_dir = tmp_path / "fn"
+    perm_dir.mkdir()
+    bad = perm_dir / "output-100-1"
+    bad.mkdir()
+    # No source.c written
+    good = perm_dir / "output-200-1"
+    good.mkdir()
+    (good / "source.c").write_text("// ok\n")
+
+    best = find_best_candidate(perm_dir)
+    assert best is not None
+    assert best.parent.name == "output-200-1"
+
+
+def test_run_per_seed_permute_invokes_runner_and_captures_best(
+    tmp_path: Path,
+) -> None:
+    """run_per_seed_permute calls the injected runner with the seed_dir,
+    then finds the best candidate produced inside that seed_dir."""
+    seed_dir = tmp_path / "tier3_seed_0"
+    seed_dir.mkdir()
+    (seed_dir / "base.c").write_text("void fn() {}\n")
+
+    runner_calls: list[dict] = []
+
+    def fake_runner(seed_dir_arg: Path, fn_name: str, time_seconds: int) -> None:
+        runner_calls.append({
+            "seed_dir": seed_dir_arg,
+            "fn_name": fn_name,
+            "time_seconds": time_seconds,
+        })
+        # Simulate permuter producing one improvement
+        out = seed_dir_arg / "output-150-1"
+        out.mkdir()
+        (out / "source.c").write_text("// better candidate\n")
+        (out / "score.txt").write_text("150\n")
+
+    plan = _seed_plan(0)
+    result = run_per_seed_permute(
+        seed_idx=0,
+        plan=plan,
+        seed_dir=seed_dir,
+        fn_name="fn_test",
+        per_seed_time=42,
+        runner=fake_runner,
+        baseline_score=200,
+    )
+
+    assert len(runner_calls) == 1
+    assert runner_calls[0]["seed_dir"] == seed_dir
+    assert runner_calls[0]["fn_name"] == "fn_test"
+    assert runner_calls[0]["time_seconds"] == 42
+
+    assert isinstance(result, PerSeedPermuteResult)
+    assert result.seed_idx == 0
+    assert result.plan is plan
+    assert result.best_score == 150
+    assert result.baseline_score == 200
+    assert result.delta == 50  # baseline - best (lower is better)
+    assert result.best_candidate is not None
+    assert result.best_candidate.name == "source.c"
+
+
+def test_run_per_seed_permute_no_improvement_records_zero_delta(
+    tmp_path: Path,
+) -> None:
+    """A seed where permuter produced no output gets delta=0 and
+    best_candidate=None — recorded as 'ran but didn't improve'."""
+    seed_dir = tmp_path / "tier3_seed_0"
+    seed_dir.mkdir()
+    (seed_dir / "base.c").write_text("void fn() {}\n")
+
+    def no_op_runner(seed_dir_arg: Path, fn_name: str, time_seconds: int) -> None:
+        # Permuter ran but produced no improvements
+        pass
+
+    result = run_per_seed_permute(
+        seed_idx=2,
+        plan=_seed_plan(2),
+        seed_dir=seed_dir,
+        fn_name="fn_test",
+        per_seed_time=10,
+        runner=no_op_runner,
+        baseline_score=200,
+    )
+
+    assert result.best_candidate is None
+    assert result.delta == 0
+    assert result.best_score is None
+
+
+def test_rank_seed_results_orders_by_delta_descending() -> None:
+    """rank_seed_results sorts so the largest improvement comes first."""
+    r1 = PerSeedPermuteResult(
+        seed_idx=0, plan=_seed_plan(0), seed_dir=Path("/x/0"),
+        best_candidate=None, best_score=180, baseline_score=200,
+        delta=20, ran_seconds=10,
+    )
+    r2 = PerSeedPermuteResult(
+        seed_idx=1, plan=_seed_plan(1), seed_dir=Path("/x/1"),
+        best_candidate=None, best_score=100, baseline_score=200,
+        delta=100, ran_seconds=10,
+    )
+    r3 = PerSeedPermuteResult(
+        seed_idx=2, plan=_seed_plan(2), seed_dir=Path("/x/2"),
+        best_candidate=None, best_score=None, baseline_score=200,
+        delta=0, ran_seconds=10,
+    )
+
+    ranked = rank_seed_results([r1, r2, r3])
+    assert [r.seed_idx for r in ranked] == [1, 0, 2]
+
+
+def test_rank_seed_results_empty_list_returns_empty() -> None:
+    """Empty input -> empty output (no crash on no seeds)."""
+    assert rank_seed_results([]) == []
+
+
+def test_run_per_seed_permute_runner_exception_is_caught(
+    tmp_path: Path,
+) -> None:
+    """A runner that raises (e.g. subprocess timeout) is caught — the
+    seed still gets a result with delta=0 and an error recorded, so we
+    don't crash the whole orchestration."""
+    seed_dir = tmp_path / "tier3_seed_5"
+    seed_dir.mkdir()
+
+    def crashing_runner(
+        seed_dir_arg: Path, fn_name: str, time_seconds: int,
+    ) -> None:
+        raise RuntimeError("permuter subprocess timed out")
+
+    result = run_per_seed_permute(
+        seed_idx=5,
+        plan=_seed_plan(5),
+        seed_dir=seed_dir,
+        fn_name="fn_test",
+        per_seed_time=5,
+        runner=crashing_runner,
+        baseline_score=200,
+    )
+
+    assert result.best_candidate is None
+    assert result.delta == 0
+    assert result.error is not None
+    assert "timed out" in result.error
+
+
+def test_per_seed_result_dataclass_defaults() -> None:
+    """PerSeedPermuteResult has sane defaults for unset fields."""
+    r = PerSeedPermuteResult(
+        seed_idx=0, plan=_seed_plan(0), seed_dir=Path("/x"),
+        best_candidate=None, best_score=None, baseline_score=100,
+        delta=0, ran_seconds=0,
+    )
+    assert r.error is None
