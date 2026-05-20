@@ -11,6 +11,7 @@ not a replacement.
 ```bash
 melee-agent debug pcdump-local src/melee/mn/mnvibration.c \
     --force-coalesce "42=38" \
+    --force-coalesce-fn "mnVibration_802474C4" \
     --output /tmp/forced.txt
 ```
 
@@ -22,6 +23,14 @@ Format: `virt=root[,virt=root]*`. Examples:
 | `42=38,50=38` | Three-way merge: 42, 50, 38 all share the same root |
 | `42=42` | Un-coalesce 42 back to its own root (overrides natural coalesce) |
 | `100=42` for a class with n_virtuals ≤ 100 | Silently skipped (out of bounds for that class) |
+
+**Function-scoping (`--force-coalesce-fn`)**: by default the override
+applies in EVERY function in the TU. For multi-function files where
+the spec only makes sense in one function, scope with
+`--force-coalesce-fn FUNCTION_NAME`. Non-matching functions emit a
+`[FORCE_COALESCE] scope skip (fn=X, scope=Y)` line and compile
+naturally. The scope check uses pclistblocks' function-name argument,
+which fires before each function's coalesce phase.
 
 Implemented as a hook on the *real* coalescer at **0x530E00** — see RE
 correction below. Hook runs the original Chaitin-Briggs union-find

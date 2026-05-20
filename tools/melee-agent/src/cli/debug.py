@@ -172,6 +172,14 @@ def pcdump(
                  "own root. EXPERIMENTAL.",
         ),
     ] = None,
+    force_coalesce_fn: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-coalesce-fn",
+            help="Scope --force-coalesce to a single function name in "
+                 "the TU. Other functions compile naturally. EXPERIMENTAL.",
+        ),
+    ] = None,
 ):
     """Dump MWCC's internal IR + codegen for a TU and emit pcdump.txt to stdout.
 
@@ -250,6 +258,15 @@ def pcdump(
                 "or whitespace"
             )
         cmd_parts.append(f"set MWCC_DEBUG_FORCE_COALESCE={force_coalesce}")
+    if force_coalesce_fn:
+        if any(c in force_coalesce_fn for c in '"\'; \t&|<>'):
+            raise typer.BadParameter(
+                "--force-coalesce-fn must not contain quotes, semicolons, "
+                "whitespace, or shell metacharacters"
+            )
+        cmd_parts.append(
+            f"set MWCC_DEBUG_FORCE_COALESCE_FUNCTION={force_coalesce_fn}"
+        )
     cmd_parts.append(
         f"powershell -NoProfile -ExecutionPolicy Bypass "
         f"-File {remote_script} {src_rel}"
@@ -3898,11 +3915,27 @@ def pcdump_local(
             help="Tier 6: override the conservative coalescer's union-find "
                  "decisions. Format 'virt=root[,virt=root]*'. E.g. '42=38' "
                  "forces virtual 42 to coalesce into virtual 38; '42=42' "
-                 "un-coalesces 42 back to its own root. Applies in every "
-                 "coalesce invocation; out-of-bounds pairs are silently "
-                 "skipped (so virtuals from the wrong register class do "
-                 "no harm). EXPERIMENTAL — forcing two interfering "
-                 "virtuals to coalesce produces incorrect code.",
+                 "un-coalesces 42 back to its own root. By default applies "
+                 "to EVERY coalesce invocation in the TU (out-of-bounds "
+                 "pairs are silently skipped). For multi-function TUs "
+                 "where one function's overrides would corrupt others, "
+                 "scope with --force-coalesce-fn. EXPERIMENTAL — forcing "
+                 "two interfering virtuals to coalesce produces "
+                 "incorrect code.",
+        ),
+    ] = None,
+    force_coalesce_fn: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-coalesce-fn",
+            help="Scope --force-coalesce to a single function name. "
+                 "When set, overrides only apply when the currently-"
+                 "compiling function (captured by mwcc_debug's debuglisting "
+                 "hook) matches the given name exactly. Other functions in "
+                 "the same TU compile naturally — prevents one function's "
+                 "experimental overrides from corrupting earlier or later "
+                 "functions. E.g. '--force-coalesce-fn mnVibration_802474C4 "
+                 "--force-coalesce 32=87'.",
         ),
     ] = None,
     wibo: Annotated[
@@ -3923,8 +3956,8 @@ def pcdump_local(
     Requires one-time setup: run `melee-agent debug setup-local`
     first to patch the compiler and deploy the DLL.
 
-    Env-var hooks (--force-phys, --force-iter-first, --force-coalesce)
-    pass through to the DLL.
+    Env-var hooks (--force-phys, --force-iter-first, --force-coalesce,
+    --force-coalesce-fn) pass through to the DLL.
     """
     melee_root = DEFAULT_MELEE_ROOT
     src_rel = _resolve_src_relative(c_file)
@@ -3982,6 +4015,8 @@ def pcdump_local(
         env["MWCC_DEBUG_FORCE_ITER_FIRST"] = force_iter_first
     if force_coalesce:
         env["MWCC_DEBUG_FORCE_COALESCE"] = force_coalesce
+    if force_coalesce_fn:
+        env["MWCC_DEBUG_FORCE_COALESCE_FUNCTION"] = force_coalesce_fn
 
     try:
         proc = subprocess.run(
