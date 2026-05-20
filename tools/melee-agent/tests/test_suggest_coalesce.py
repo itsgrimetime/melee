@@ -230,3 +230,112 @@ def test_render_text_fall_through_when_no_suggestions() -> None:
     out = render_text(report)
     assert "No specific pattern matched" in out
     assert "register-cascade" in out
+
+
+# --- Preflight tests (Fix E) -----------------------------------------------
+
+
+def test_preflight_flags_physical_reg() -> None:
+    """A pair where either virtual is < 32 (physical reg) is flagged."""
+    from src.mwcc_debug.coalesce_ir_facts import IrFacts
+    from src.mwcc_debug.parser import Pass
+    from src.mwcc_debug.suggest_coalesce import _preflight_pair
+    facts = IrFacts(
+        function_name="x", pre_pass=Pass(name="t"),
+        by_virtual={}, bindings=[], basis=None, cg_section=None,
+    )
+    pf = _preflight_pair(facts, 3, 42)
+    assert not pf.safe
+    assert any("physical regs" in r for r in pf.reasons)
+
+
+def test_preflight_safe_when_no_data() -> None:
+    """No cg_section + no phys regs → 'untested' but still safe=False
+    because we add a reason explaining the gap. (Callers should treat
+    this as 'preflight could not run', not 'this pair is safe'.)"""
+    from src.mwcc_debug.coalesce_ir_facts import IrFacts
+    from src.mwcc_debug.parser import Pass
+    from src.mwcc_debug.suggest_coalesce import _preflight_pair
+    facts = IrFacts(
+        function_name="x", pre_pass=Pass(name="t"),
+        by_virtual={}, bindings=[], basis=None, cg_section=None,
+    )
+    pf = _preflight_pair(facts, 55, 73)
+    assert not pf.safe
+    assert any(
+        "no colorgraph data" in r for r in pf.reasons
+    )
+
+
+def test_preflight_flags_direct_interference() -> None:
+    """When colorgraph data shows a interferes with b, flag it."""
+    from src.mwcc_debug.coalesce_ir_facts import IrFacts
+    from src.mwcc_debug.colorgraph_parser import (
+        ColorgraphDecision, ColorgraphSection,
+    )
+    from src.mwcc_debug.parser import Pass
+    from src.mwcc_debug.suggest_coalesce import _preflight_pair
+    # cg_section where ig_idx=55 lists 73 as an interferer.
+    cg = ColorgraphSection(
+        class_id=1, result=0, n_nodes=2,
+        decisions=[
+            ColorgraphDecision(
+                iter_idx=0, ig_idx=55, assigned_reg=29,
+                degree=1, n_interferers=1, flags=0,
+                interferers=[(73, 30)],
+            ),
+            ColorgraphDecision(
+                iter_idx=1, ig_idx=73, assigned_reg=30,
+                degree=1, n_interferers=1, flags=0,
+                interferers=[(55, 29)],
+            ),
+        ],
+    )
+    facts = IrFacts(
+        function_name="x", pre_pass=Pass(name="t"),
+        by_virtual={}, bindings=[], basis=None, cg_section=cg,
+    )
+    pf = _preflight_pair(facts, 55, 73)
+    assert not pf.safe
+    assert any("interfere directly" in r for r in pf.reasons)
+
+
+def test_render_text_surfaces_preflight_warning() -> None:
+    """Render text marks pairs with [PREFLIGHT: WARNING] when unsafe."""
+    from src.mwcc_debug.suggest_coalesce import Preflight
+    report = Report(
+        function="test_fn",
+        mode="pair",
+        pairs=[PairReport(
+            from_virt=55, to_virt=73,
+            ir_facts={"from": {"virtual": 55, "is_phys": False},
+                      "to":   {"virtual": 73, "is_phys": False}},
+            suggestions=[],
+            preflight=Preflight(safe=False, reasons=["interfere directly"]),
+        )],
+    )
+    out = render_text(report)
+    assert "[PREFLIGHT: WARNING]" in out
+    assert "interfere directly" in out
+
+
+def test_render_json_includes_preflight() -> None:
+    """JSON output includes preflight field per pair."""
+    from src.mwcc_debug.suggest_coalesce import Preflight
+    report = Report(
+        function="test_fn",
+        mode="pair",
+        pairs=[PairReport(
+            from_virt=55, to_virt=73,
+            ir_facts={"from": {"virtual": 55, "is_phys": False},
+                      "to":   {"virtual": 73, "is_phys": False}},
+            suggestions=[],
+            preflight=Preflight(safe=False, reasons=["bad pair"]),
+        )],
+    )
+    out = render_json(report)
+    parsed = json.loads(out)
+    pair = parsed["pairs"][0]
+    assert pair["preflight"] is not None
+    assert pair["preflight"]["safe"] is False
+    assert pair["preflight"]["reasons"] == ["bad pair"]
