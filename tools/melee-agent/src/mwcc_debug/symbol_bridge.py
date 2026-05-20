@@ -14,7 +14,7 @@ self-verification step in the orchestrator when committing to a seed.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 
@@ -682,6 +682,7 @@ class FirstDef:
     opcode: str             # e.g. "lwz", "addi", "mr"
     operands: str           # full operand string ("r62, 44(r34)" etc.)
     annotations: list[str]  # any pcode annotations on the instruction
+    regs: list[tuple[str, int]] = field(default_factory=list)  # parsed reg operands
 
 
 def find_first_def(virtual: int, pre_pass) -> Optional[FirstDef]:
@@ -707,5 +708,6 @@ def find_first_def(virtual: int, pre_pass) -> Optional[FirstDef]:
                     opcode=ist.opcode,
                     operands=ist.operands,
                     annotations=list(ist.annotations),
+                    regs=list(ist.regs),  # <-- NEW
                 )
     return None
