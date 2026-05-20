@@ -38,7 +38,7 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
   char *base;
   u16 *table;
   HSD_JObj *row0;
-  u8 new_var;
+  unsigned int new_var;
   HSD_JObj *row1;
   f32 neg_spacing;
   f32 row_spacing;
