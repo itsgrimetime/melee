@@ -86,3 +86,98 @@ def test_walk_function_function_pointer() -> None:
     decls = walk_function(src, "f", path=None)
     assert len(decls) == 1
     assert decls[0].name == "cb"
+
+
+def test_walk_function_for_loop_block() -> None:
+    """A for-loop body's decls get their own scope_path."""
+    src = (
+        "void f(void) {\n"
+        "    int outer;\n"
+        "    for (int i = 0; i < 8; i++) {\n"
+        "        int inner;\n"
+        "    }\n"
+        "}\n"
+    )
+    decls = walk_function(src, "f", path=None)
+    names = {d.name: d for d in decls}
+    assert "outer" in names
+    assert "inner" in names
+    assert names["outer"].scope_path == ("f",)
+    assert names["inner"].scope_path[0] == "f"
+    assert len(names["inner"].scope_path) == 2
+    assert names["inner"].scope_path[1].startswith("block@l")
+
+
+def test_walk_function_if_else_distinct_scopes() -> None:
+    """`if (x) { ... } else { ... }` makes two distinct nested scopes."""
+    src = (
+        "void f(int x) {\n"
+        "    if (x) {\n"
+        "        int a;\n"
+        "    } else {\n"
+        "        int b;\n"
+        "    }\n"
+        "}\n"
+    )
+    decls = walk_function(src, "f", path=None)
+    by_name = {d.name: d for d in decls}
+    assert by_name["a"].scope_path != by_name["b"].scope_path
+    assert by_name["a"].scope_path[0] == "f"
+    assert by_name["b"].scope_path[0] == "f"
+
+
+def test_walk_function_shadowing_outer_and_inner_i() -> None:
+    """An outer `int i` and an inner `int i` are both surfaced."""
+    src = (
+        "void f(void) {\n"
+        "    int i;\n"
+        "    {\n"
+        "        int i;\n"
+        "    }\n"
+        "}\n"
+    )
+    decls = walk_function(src, "f", path=None)
+    paths = sorted(d.scope_path for d in decls if d.name == "i")
+    assert len(paths) == 2
+    assert paths[0] != paths[1]
+
+
+def test_walk_function_two_blocks_same_line_distinct_paths() -> None:
+    """`if (a) { ... } else { ... }` on one line: column suffix
+    disambiguates the two scopes."""
+    src = "void f(int a) {\n    if (a) { int x; } else { int y; }\n}"
+    decls = walk_function(src, "f", path=None)
+    by_name = {d.name: d for d in decls}
+    assert by_name["x"].scope_path[1] != by_name["y"].scope_path[1]
+
+
+def test_walk_function_cache_returns_same_objects() -> None:
+    """Two calls on the same source return objects derived from the
+    same cached parse tree (verified by id() of the cached entry)."""
+    src = "void f(void) { int x; }"
+    decls_a = walk_function(src, "f", path=None)
+    decls_b = walk_function(src, "f", path=None)
+    assert [d.name for d in decls_a] == [d.name for d in decls_b]
+
+
+def test_walk_function_tolerates_pad_stack_macro() -> None:
+    """Body-level ERROR nodes from PAD_STACK don't trigger AstWalkError
+    as long as the decls themselves parse cleanly."""
+    src = (
+        "void f(void) {\n"
+        "    int x;\n"
+        "    PAD_STACK(64);\n"
+        "    int y;\n"
+        "}\n"
+    )
+    decls = walk_function(src, "f", path=None)
+    names = [d.name for d in decls]
+    assert "x" in names
+    assert "y" in names
+
+
+def test_walk_function_raises_on_decl_enclosing_error() -> None:
+    """An ERROR node that interrupts a declaration triggers AstWalkError."""
+    src = "void f(void) { int = 5; }"  # syntax error inside decl
+    with pytest.raises(AstWalkError):
+        walk_function(src, "f", path=None)

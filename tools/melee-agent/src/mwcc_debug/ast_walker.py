@@ -10,6 +10,7 @@ raised at first call and the bridge falls back to its slim regex walker
 """
 from __future__ import annotations
 
+import collections
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -59,14 +60,103 @@ class AstWalkError(Exception):
         self.line_no = line_no
 
 
-# Cache lives here; Task 4 implements lookup logic.
-_CACHE: dict[object, object] = {}
+# Cache: maps cache_key -> tree_sitter.Tree
+# cache_key is either (path, mtime_ns) for on-disk callers or
+# ("mem", id(source)) for in-memory callers (see spec § Caching).
+_CACHE: "collections.OrderedDict[object, object]" = collections.OrderedDict()
 _AST_CACHE_MAX = 64
 
 
 def clear_cache() -> None:
     """Drop all cached parses. Called by the autouse pytest fixture."""
     _CACHE.clear()
+
+
+def _cache_key(source: str, path: Optional[str]) -> object:
+    if path is not None:
+        import os
+        try:
+            mtime = os.stat(path).st_mtime_ns
+            return (path, mtime)
+        except FileNotFoundError:
+            pass
+    return ("mem", id(source))
+
+
+def _parse_cached(source: str, path: Optional[str]):
+    key = _cache_key(source, path)
+    if key in _CACHE:
+        _CACHE.move_to_end(key)
+        return _CACHE[key]
+    tree = _PARSER.parse(source.encode("utf-8"))
+    _CACHE[key] = tree
+    while len(_CACHE) > _AST_CACHE_MAX:
+        _CACHE.popitem(last=False)
+    return tree
+
+
+def _has_decl_enclosing_error(node) -> bool:
+    """Return True if any ``declaration`` node within *node* has
+    ``has_error=True`` (meaning the declarator is syntactically broken).
+
+    Body-level standalone ERROR nodes that don't wrap a declaration fragment
+    (e.g. a bare macro invocation that tree-sitter can't parse) are tolerated.
+    """
+    stack = [node]
+    while stack:
+        n = stack.pop()
+        if n.type == "declaration" and n.has_error:
+            return True
+        for child in n.children:
+            stack.append(child)
+    return False
+
+
+def _iter_compound_statements(node):
+    """Yield direct compound_statement descendants of node, stopping at
+    any function_definition (don't descend into nested functions)."""
+    stack = list(node.children)
+    while stack:
+        n = stack.pop()
+        if n.type == "compound_statement":
+            yield n
+            continue  # the recursive _walk_body call handles descent
+        if n.type == "function_definition":
+            continue
+        for c in n.children:
+            stack.append(c)
+
+
+def _walk_body(
+    body_node,
+    source_bytes: bytes,
+    scope_path: tuple[str, ...],
+    counter: list[int],
+) -> list[LocalDecl]:
+    """Recursive walk of a compound_statement body. Each nested
+    compound_statement (``{ ... }``) gets its own scope_path element of
+    the form ``block@l{line}c{col}`` from the opening brace position.
+    """
+    scope_byte_range = (body_node.start_byte, body_node.end_byte)
+    out: list[LocalDecl] = []
+    for child in body_node.children:
+        if child.type == "declaration":
+            out.extend(_extract_decls_from_declaration(
+                child, source_bytes, scope_path, scope_byte_range, counter,
+            ))
+        elif child.type == "compound_statement":
+            line, col = _byte_offset_to_line_col(source_bytes, child.start_byte)
+            new_path = scope_path + (f"block@l{line}c{col}",)
+            out.extend(_walk_body(child, source_bytes, new_path, counter))
+        else:
+            # Other statement types may contain nested compound statements
+            # (if_statement, for_statement, while_statement, do_statement,
+            # switch_statement). Walk their compound_statement children.
+            for grand in _iter_compound_statements(child):
+                line, col = _byte_offset_to_line_col(source_bytes, grand.start_byte)
+                new_path = scope_path + (f"block@l{line}c{col}",)
+                out.extend(_walk_body(grand, source_bytes, new_path, counter))
+    return out
 
 
 def _check_ts() -> None:
@@ -262,10 +352,10 @@ def walk_function(
     fn_name: str,
     path: Optional[str] = None,
 ) -> list[LocalDecl]:
-    """Walk one C function's body, return its locals."""
+    """Walk one C function's body (including nested blocks), return locals."""
     _check_ts()
+    tree = _parse_cached(source, path)
     source_bytes = source.encode("utf-8")
-    tree = _PARSER.parse(source_bytes)
     fn_node = _find_function_definition(tree.root_node, source_bytes, fn_name)
     if fn_node is None:
         return []
@@ -274,17 +364,13 @@ def walk_function(
     if body is None:
         return []
 
+    # Macro-tolerance check: only fail on decl-enclosing ERROR nodes.
+    if _has_decl_enclosing_error(body):
+        line, _ = _byte_offset_to_line_col(source_bytes, body.start_byte)
+        raise AstWalkError(
+            f"function body for {fn_name!r} contains decl-enclosing ERROR nodes",
+            line_no=line,
+        )
+
     counter = [0]
-    out: list[LocalDecl] = []
-    scope_path: tuple[str, ...] = (fn_name,)
-    scope_byte_range = (body.start_byte, body.end_byte)
-
-    # Phase 1, Task 3: top-level walk only. Iterate direct children of
-    # the function body's compound_statement.
-    for child in body.children:
-        if child.type == "declaration":
-            out.extend(_extract_decls_from_declaration(
-                child, source_bytes, scope_path, scope_byte_range, counter,
-            ))
-
-    return out
+    return _walk_body(body, source_bytes, (fn_name,), counter)
