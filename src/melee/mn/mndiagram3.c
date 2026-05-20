@@ -962,24 +962,33 @@ void mnDiagram3_8024714C(void *arg0)
 
     row0 = data->jobjs[8];
     HSD_ASSERT(0x3E1, row0);
-    HSD_ASSERT(0x3A4, popup_jobj);
-    popup_jobj->translate.x = row0->translate.x;
+    {
+        f32 tx = row0->translate.x;
+        HSD_ASSERT(0x3A4, popup_jobj);
+        popup_jobj->translate.x = tx;
+    }
     if (!(popup_jobj->flags & 0x02000000)) {
         ftCo_800C6AFC(popup_jobj);
     }
 
     row0 = data->jobjs[8];
     HSD_ASSERT(0x3EE, row0);
-    HSD_ASSERT(0x3B3, popup_jobj);
-    popup_jobj->translate.y = row0->translate.y + row_spacing * mnDiagram3_804DC00C;
+    {
+        f32 ty = row0->translate.y + row_spacing * mnDiagram3_804DC00C;
+        HSD_ASSERT(0x3B3, popup_jobj);
+        popup_jobj->translate.y = ty;
+    }
     if (!(popup_jobj->flags & 0x02000000)) {
         ftCo_800C6AFC(popup_jobj);
     }
 
     row0 = data->jobjs[8];
     HSD_ASSERT(0x3FB, row0);
-    HSD_ASSERT(0x3C2, popup_jobj);
-    popup_jobj->translate.z = row0->translate.z;
+    {
+        f32 tz = row0->translate.z;
+        HSD_ASSERT(0x3C2, popup_jobj);
+        popup_jobj->translate.z = tz;
+    }
     if (!(popup_jobj->flags & 0x02000000)) {
         ftCo_800C6AFC(popup_jobj);
     }
