@@ -655,7 +655,7 @@ void fn_802487A8(HSD_GObj* gobj)
     HSD_JObj* walker_a;
     u16* idx_ptr;
     u32 port_b;
-    u8 err;
+    s8 err;
     MnVibrationData* data;
     HSD_JObj* walker_b_clear;
     u8 anim_byte_chain;
@@ -710,10 +710,10 @@ void fn_802487A8(HSD_GObj* gobj)
     do {
         err = HSD_PadCopyStatus[(u8) port_b].err;
         port_a = port_b;
-        if ((((s8) err != 0) && (data->x6[port_a] != 0)) ||
-            (((s8) err == 0) && (data->x6[port_a] == 0)))
+        if (((err != 0) && (data->x6[port_a] != 0)) ||
+            ((err == 0) && (data->x6[port_a] == 0)))
         {
-            if ((s8) err != 0) {
+            if (err != 0) {
                 // Controller now disconnected: clear flag, hide rumble
                 // indicator chain, mark x6[port] = 0.
                 HSD_JObjSetFlagsAll(data->jobjs[*idx_ptr], 0x10);

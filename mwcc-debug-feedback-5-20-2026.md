@@ -352,3 +352,30 @@ Context: working on `src/melee/mn/mnvibration.c`, mainly `fn_80247510` and
   for `--force-iter-first`. If that support exists, it should be exposed; if it
   does not, it is risky in multi-function TUs because the forced iteration list
   can apply outside the target function.
+
+## Heartbeat follow-up at 2026-05-20 07:45 PDT
+
+- `pcdump-local --help` now exposes `--force-phys-iter` and `--force-phys-fn`,
+  and says `--force-phys-fn` scopes both `--force-phys` and
+  `--force-phys-iter`. That closes the force-by-iteration scoping gap, but the
+  help still does not clearly say whether `--force-iter-first` is scoped by the
+  same function option. The skill text implies using function scoping for
+  force-iteration work, so the CLI help should explicitly confirm or deny this.
+
+- `melee-agent debug root-identity` is not available in this checkout
+  (`No such command 'root-identity'`). If root-identity probing was shipped
+  under another command name, the skill/help should point to it; if it was not
+  shipped yet, this is still a gap for proving coalesce/root hypotheses.
+
+- `suggest-coalesce-source --discover` on `fn_802487A8` produced one candidate
+  pair, `55=73`, with no source suggestions. Forcing that exact pair with
+  `--force-coalesce-fn fn_802487A8 --force-coalesce 55=73` hung local wibo until
+  the 45s watchdog killed it. The watchdog message is helpful, but
+  `suggest-coalesce-source` should ideally preflight whether a discovered pair
+  is known-dangerous/interfering before presenting it as the only candidate.
+
+- `tier3-search` on `fn_802487A8` generated four seed plans and found two
+  compiling width-change seeds, but then stopped with "Per-seed permuter runs
+  not yet wired in v1." The command help still describes a full workflow that
+  runs `debug permute` for each compiling seed and reports the best result, so
+  the implementation and help are out of sync.
