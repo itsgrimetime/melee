@@ -419,6 +419,10 @@ static unsigned char colorgraph_trampoline[24];
 // simplifygraph: same shape prologue as colorgraph (7 bytes).
 static unsigned char simplifygraph_trampoline[24];
 
+// coalescenodes at 0x530A80: prologue 7 bytes (4× push + sub esp, 0x10).
+// Same shape as colorgraph + simplifygraph.
+static unsigned char coalesce_trampoline[24];
+
 // buildinterferencegraph at 0x530A00: prologue 9 bytes (mov eax,[esp+4] = 4 +
 // push ebx = 1 + mov ebx,[esp+0x10] = 4). Trampoline buffer holds prologue
 // (9) + JMP (5) = 14, rounded up to 24.
@@ -744,6 +748,57 @@ static void *__cdecl hook_simplifygraph(int rclass, int n_colors, int n_class_re
     return head;
 }
 
+// coalescenodes hook — snapshots IG state before+after coalesce runs, then
+// emits a per-node delta dump. The agent uses this to identify which
+// virtuals got coalesced into which representative (post-coalesce, some
+// virtuals have ig_idx=-1 in the colorgraph dump because they were merged
+// away — this hook reveals WHICH representative absorbed them).
+//
+// Vantage point: coalescenodes runs inside buildinterferencegraph between
+// buildinterferencematrix and findrematerializations. The IG is stable here
+// — the build_ig hook (post-findrematerializations) can't iterate the IG
+// safely because findrematerializations reallocates.
+//
+static int __cdecl hook_coalescenodes(int rclass, int n_nodes)
+{
+    typedef int(__cdecl * coalesce_fn)(int, int);
+    int result;
+    int n;
+
+    // v1 SHIPPED: entry+N_IGNODES+exit logging.
+    //
+    // IG iteration (reading INTERFERENCEGRAPH[i] inside this hook) hangs
+    // wibo+mwcc deterministically — even just `ig = INTERFERENCEGRAPH;
+    // debug_printf("ig_null=%d", ig==0)` hangs. Reading N_IGNODES alone
+    // works fine (verified). The hypothesis: the INTERFERENCEGRAPH
+    // global at 0x587E3C is somehow unstable to read from inside
+    // coalescenodes specifically (works fine in other hooks). Could be
+    // a wibo translation quirk, an alignment issue, or a real race with
+    // mwcc's internal access.
+    //
+    // For v1, we surface "coalesce ran with N_IGNODES=X" so the agent
+    // can correlate with their COLORGRAPH DECISIONS dumps. Pre→post
+    // representative mapping is deferred — likely needs different RE
+    // (find the alias-pointer field in the IGNode struct directly via
+    // static disasm of coalescenodes itself).
+    if (PCFILE && DEBUG_GUARD) {
+        n = N_IGNODES;
+        debug_printf("\n[COALESCE] enter class=%d n_nodes=%d N_IGNODES_pre=%d\n",
+                     rclass, n_nodes, n);
+    }
+
+    // Call original
+    result = ((coalesce_fn)coalesce_trampoline)(rclass, n_nodes);
+
+    if (PCFILE && DEBUG_GUARD) {
+        n = N_IGNODES;
+        debug_printf("[COALESCE] exit result=%d N_IGNODES_post=%d\n",
+                     result, n);
+    }
+    return result;
+}
+
+
 // obtain_nonvolatile_register hooks: TRIED, didn't work — likely a calling
 // convention mismatch (the disassembly suggests it reads [esp+0xc] which is
 // past 2 args, hinting at a non-__cdecl convention or different arg count).
@@ -792,6 +847,11 @@ static void install_hooks(void)
     // — same shape as colorgraph but a larger local-frame.
     hook_fn((void *)0x4CE400, hook_simplifygraph,
             simplifygraph_trampoline, 7);
+
+    // coalescenodes @ 0x530A80 — minimal diagnostic version installed.
+    // Prologue 7 bytes (4× push + sub esp 0x10).
+    hook_fn((void *)0x530A80, hook_coalescenodes,
+            coalesce_trampoline, 7);
 
     // (obtain_nonvolatile_register hooks intentionally skipped — see comment
     // above; calling-convention mismatch corrupted state.)
