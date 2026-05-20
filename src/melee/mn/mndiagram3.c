@@ -776,7 +776,7 @@ void mnDiagram3_80246D40(HSD_GObj* gobj)
 {
     Diagram3* data;
     HSD_JObj* jobj;
-    HSD_JObj* new_var;
+    HSD_JObj* jobj_alias;
 
     int limit;
 
@@ -797,13 +797,13 @@ void mnDiagram3_80246D40(HSD_GObj* gobj)
         HSD_JObjSetFlagsAll(jobj, 0x10);
     }
     jobj = data->jobjs[4];
-    new_var = jobj;
-    mn_8022ED6C(new_var, &mnDiagram3_803EEC1C);
+    jobj_alias = jobj;
+    mn_8022ED6C(jobj_alias, &mnDiagram3_803EEC1C);
 
     if (data->scroll_offset != 0) {
-        HSD_JObjClearFlagsAll(new_var, 0x10);
+        HSD_JObjClearFlagsAll(jobj_alias, 0x10);
     } else {
-        HSD_JObjSetFlagsAll(new_var, 0x10);
+        HSD_JObjSetFlagsAll(jobj_alias, 0x10);
     }
 }
 
@@ -916,25 +916,23 @@ void mnDiagram3_80247008(int arg0)
 
 void mnDiagram3_8024714C(void *arg0)
 {
-  unsigned short new_var5;
-  HSD_GObj *new_var4;
-  int i;
-  Vec3 sp48;
-  Diagram3 *data;
-  HSD_GObj *gobj;
-  HSD_JObj *row0;
-  HSD_JObj *row1;
-  mnDiagram_ArchiveData *archive;
-  unsigned long long new_var;
-  f32 new_var2;
-  f32 row_spacing;
-  f32 neg_spacing;
-  HSD_JObj *new_var3;
-  do
-  {
-    unsigned char _[64];
-  }
-  while (0);
+    unsigned short limit_alias;
+    HSD_GObj* gobj_alias;
+    int i;
+    Vec3 sp48;
+    Diagram3* data;
+    HSD_GObj* gobj;
+    HSD_JObj* row0;
+    HSD_JObj* row1;
+    mnDiagram_ArchiveData* archive;
+    int assert_line;
+    f32 font_size;
+    f32 row_spacing;
+    f32 neg_spacing;
+    HSD_JObj* popup_alias;
+    do {
+        unsigned char _[64];
+    } while (0);
   {
     MenuFlow *flow = &mn_804A04F0;
     flow->x10 = 2;
@@ -955,49 +953,48 @@ void mnDiagram3_8024714C(void *arg0)
     HSD_JObjAddAnimAll(popup_jobj, archive->x4, archive->x8, archive->xC);
     HSD_JObjReqAnimAll(popup_jobj, mnDiagram3_804DC00C);
     HSD_JObjAnimAll(popup_jobj);
-    data = (new_var4 = gobj)->user_data;
+    data = (gobj_alias = gobj)->user_data;
     row0 = data->jobjs[8];
-    new_var3 = popup_jobj;
+    popup_alias = popup_jobj;
     (row0) ? ((void) 0) : (__assert(mnDiagram3_804D4FD8, 0x3EE, mnDiagram3_804D4FE0));
     row1 = data->jobjs[9];
     row_spacing = row0->translate.y;
     (row1) ? ((void) 0) : (__assert(mnDiagram3_804D4FD8, 0x3EE, mnDiagram3_804D4FE0));
     row_spacing = row1->translate.y - row_spacing;
-    data++;
-    data--;
     row0 = data->jobjs[8];
     (row0) ? ((void) 0) : (__assert(mnDiagram3_804D4FD8, 0x3E1, mnDiagram3_804D4FE0));
     {
       f32 tx = row0->translate.x;
-      new_var = 0x3A4;
-      (new_var3) ? ((void) 0) : (__assert(mnDiagram3_804D4FD8, new_var, mnDiagram3_804D4FE0));
-      new_var3->translate.x = tx;
+      assert_line = 0x3A4;
+      (popup_alias) ? ((void) 0) : (__assert(mnDiagram3_804D4FD8, assert_line, mnDiagram3_804D4FE0));
+      popup_alias->translate.x = tx;
     }
     if (!(popup_jobj->flags & 0x02000000))
     {
-      ftCo_800C6AFC(new_var3);
+      ftCo_800C6AFC(popup_alias);
     }
     row0 = data->jobjs[8];
     (row0) ? ((void) 0) : (__assert(mnDiagram3_804D4FD8, 0x3EE, mnDiagram3_804D4FE0));
     {
       f32 ty = (row_spacing * mnDiagram3_804DC00C) + row0->translate.y;
-      (new_var3) ? ((void) (0 & 0xFFFF)) : (__assert(mnDiagram3_804D4FD8, 0x3B3, mnDiagram3_804D4FE0));
-      new_var3->translate.y = ty;
+      (popup_alias) ? ((void) 0)
+                 : (__assert(mnDiagram3_804D4FD8, 0x3B3, mnDiagram3_804D4FE0));
+      popup_alias->translate.y = ty;
     }
-    if (!(new_var3->flags & 0x02000000))
+    if (!(popup_alias->flags & 0x02000000))
     {
-      ftCo_800C6AFC(new_var3);
+      ftCo_800C6AFC(popup_alias);
     }
     row0 = data->jobjs[8];
     (row0) ? ((void) 0) : (__assert(mnDiagram3_804D4FD8, 0x3FB, mnDiagram3_804D4FE0));
     {
       f32 tz = row0->translate.z;
-      (new_var3) ? ((void) 0) : (__assert(mnDiagram3_804D4FD8, 0x3C2, mnDiagram3_804D4FE0));
-      new_var3->translate.z = tz;
+      (popup_alias) ? ((void) 0) : (__assert(mnDiagram3_804D4FD8, 0x3C2, mnDiagram3_804D4FE0));
+      popup_alias->translate.z = tz;
     }
-    if (!(new_var3->flags & 0x02000000))
+    if (!(popup_alias->flags & 0x02000000))
     {
-      ftCo_800C6AFC(new_var3);
+      ftCo_800C6AFC(popup_alias);
     }
   }
   {
@@ -1021,11 +1018,11 @@ void mnDiagram3_8024714C(void *arg0)
     row_spacing = mnDiagram3_804DBFF8;
     stat_idx = scroll;
     i = 0;
-    new_var2 = mnDiagram3_804DBFFC;
+    font_size = mnDiagram3_804DBFFC;
     do
     {
       f32 fi = (f32) i;
-      HSD_Text *text = HSD_SisLib_803A5ACC(0, 1, sp48.x - row_spacing, (neg_spacing * fi) + (-sp48.y), sp48.z, new_var2, mnDiagram3_804DBFFC);
+      HSD_Text *text = HSD_SisLib_803A5ACC(0, 1, sp48.x - row_spacing, (neg_spacing * fi) + (-sp48.y), sp48.z, font_size, mnDiagram3_804DBFFC);
       d->row_labels[i] = text;
       {
         u8 type_idx = (u8) i;
@@ -1039,15 +1036,12 @@ void mnDiagram3_8024714C(void *arg0)
         {
           limit = 0x15;
         }
-        new_var5 = limit;
+        limit_alias = limit;
         val = stat_idx + type_idx;
-        if (val >= ((u8) new_var5))
-        {
-          val = val - ((u8) new_var5);
-        }
-        else
-        {
-          val = (u8) val;
+        if (val >= ((u8) limit_alias)) {
+            val = val - ((u8) limit_alias);
+        } else {
+            val = (u8) val;
         }
         {
           u16 *entry = &base[(u8) val];
