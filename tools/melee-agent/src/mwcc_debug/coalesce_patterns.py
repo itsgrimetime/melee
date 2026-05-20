@@ -180,6 +180,12 @@ class AliasSplitPattern:
         if not fa or not fb or fa.first_def is None or fb.first_def is None:
             return None
 
+        # Conservative bail: if r_b's use_sites is truncated, both numerator
+        # and denominator below are understated. Falling back to fall-through
+        # is safer than risking a misfire. (Spec §5: checkers should degrade.)
+        if fb.use_sites_truncated:
+            return None
+
         # Exclusion: skip if DirectIdentity would fire
         fa_fd = fa.first_def
         if len(fa_fd.regs) >= 2 and fa_fd.regs[1] == ("r", b):
