@@ -396,17 +396,19 @@ void fn_80247510(HSD_GObj* gobj)
                 f32 dy;
                 MnVibrationData* nav_data;
                 HSD_JObj* cursor_jobj;
+                u8 new_cursor_row;
                 lbAudioAx_80024030(2);
                 data->x0[1]--;
                 nav_data = mnVibration_804D6C28->user_data;
                 cursor_jobj = data->cursor_gobj->hsd_obj;
+                new_cursor_row = data->x0[1];
                 dy = HSD_JObjGetTranslationY(nav_data->jobjs[18]) -
                      HSD_JObjGetTranslationY(nav_data->jobjs[17]);
                 HSD_JObjSetTranslateX(
                     cursor_jobj, HSD_JObjGetTranslationX(nav_data->jobjs[17]));
                 HSD_JObjSetTranslateY(
                     cursor_jobj,
-                    dy * (f32) data->x0[1] +
+                    dy * (f32) new_cursor_row +
                         HSD_JObjGetTranslationY(nav_data->jobjs[17]));
                 HSD_JObjSetTranslateZ(
                     cursor_jobj, HSD_JObjGetTranslationZ(nav_data->jobjs[17]));
@@ -434,9 +436,9 @@ void fn_80247510(HSD_GObj* gobj)
                 lbAudioAx_80024030(2);
                 data->x0[1]++;
                 nav_data = mnVibration_804D6C28->user_data;
-                inputs_repeat = data->x0[1];
                 cursor_jobj = data->cursor_gobj->hsd_obj;
                 jobjs = nav_data->jobjs;
+                inputs_repeat = data->x0[1];
                 dy = (HSD_JObjGetTranslationY(jobjs[18]) -
                       HSD_JObjGetTranslationY(jobjs[17])) *
                      (f32) inputs_repeat;
