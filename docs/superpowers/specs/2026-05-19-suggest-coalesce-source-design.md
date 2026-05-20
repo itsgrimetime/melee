@@ -58,7 +58,8 @@ melee-agent debug suggest-coalesce-source -f mnDiagram3_8024714C --discover
   -V, --pair VIRT=ROOT           # pair mode; mutually exclusive with --discover
   --discover                     # discover mode; mutually exclusive with --pair
   --pcdump PATH                  # explicit pcdump (else auto-resolves from cache)
-  --top N                        # discover mode: max candidates (default 3)
+  --top N                        # discover mode: max candidates (default 3);
+                                 # silently ignored in pair mode
   --json                         # structured output
   --include-low-confidence       # use low-confidence bridge bindings for source-line annotations
 ```
@@ -176,7 +177,9 @@ ALL_PATTERNS: list[Pattern] = [
 class Report:
     function: str
     mode: str                   # "pair" | "discover"
-    cascade: Optional[list[int]] # discover mode: the cascade chain
+    cascade: Optional[list[int]] # discover mode: the cascade phys-reg numbers (descending);
+                                 # the text renderer prefixes "r" for display
+                                 # the JSON renderer emits as-is (integers)
     pairs: list[PairReport]
 
 @dataclass
@@ -207,9 +210,15 @@ Steps:
      position. Reuses `symbol_bridge.find_first_def`.
    - `use_sites`: every (block_idx, instr) where the virtual appears in
      any operand. Capped at 16 per virtual to bound memory.
-   - `is_param`: virtual ≤ 34 (PowerPC EABI convention; matches the
-     bridge's existing heuristic).
-   - `is_phys`: virtual < 32.
+   - `is_param`: operationally defined — TRUE if the virtual's
+     `first_def` is in the entry block AND has the form `mr rN, rK`
+     where `K` ∈ {3..10} (param-ABI register copy). Falls back to
+     "virtual is in the lowest-N region the bridge classified as
+     params" when no entry-block move appears. Avoids the brittle
+     "≤34" magic number — actual numbering varies by function.
+   - `is_phys`: virtual < 32. (Naming: `VirtualFacts` is a slight
+     misnomer when `is_phys` is true; we keep it for simplicity since
+     the data structure is identical.)
 3. Call `list_bindings_with_basis(source, fn.name, pre_pass)` for
    source-variable annotations.
 4. Return `IrFacts`.
@@ -217,29 +226,45 @@ Steps:
 ### `analyze_cascade(facts) -> list[(int, int)]`
 
 Identifies the longest descending callee-save chain in the function's
-allocation. Algorithm:
+allocation and proposes coalesces that would actually reduce the
+saved-register footprint. Algorithm:
 
 1. Collect all virtuals with `assignedReg` in the callee-save range
    (r25..r31 GPR; equivalent FP range f24..f31) from the post-coloring
-   `AFTER REGISTER COLORING` pass (also reachable from `fn` via the
-   parser). Note: in *pair mode* this isn't called; in discover mode
-   the function MUST have allocator output, else return empty list.
+   `AFTER REGISTER COLORING` pass. In *pair mode* this isn't called;
+   in discover mode the function MUST have allocator output, else
+   return empty list.
 2. Sort by `assignedReg` descending. The contiguous tail starting at
-   r31 (or r30, …) is the cascade.
-3. For each adjacent (high, low) pair in the cascade where the high
-   virtual is a more-conservative choice (longer-lived) than the
-   target, propose `(low.ig_idx, high.ig_idx)` as a candidate
-   coalesce. Reading: "merge `low` into `high` to lose one saved reg."
-4. Filter: skip pairs that share an interferer in `node->array` (the
-   IGNode's interferer list, from the post-coloring section). This
-   eliminates obvious non-coalesce-able pairs.
-5. Return at most `top` pairs in priority order (innermost cascade
-   first — those have the smallest impact on function shape).
+   the LOWEST callee-save in use (e.g. r25 if r25..r31 are all used)
+   is the cascade.
+3. **Priority: end-of-chain pairs first.** Only collapses involving
+   the *lowest* callee-save in the chain reduce the `stmw rN, ...`
+   range. So `(r25-holder, r26-holder)` is the most valuable merge —
+   it lets MWCC drop the r25 save and use `stmw r26,...` instead.
+   `(r26-holder, r27-holder)` is the next-best, but only relevant
+   AFTER the first merge frees r26 (the tool doesn't track this
+   transitively in v1 — see future extensions). Mid-chain merges
+   (e.g. r28 with r29) free up a callee-save slot but don't shrink
+   the `stmw` range; we still surface them but flag them as
+   weaker-impact.
+4. **Interference filter — CORRECTED**: skip pairs `(a, b)` where
+   `b` appears in `r_a`'s IGNode interferer list (or vice versa).
+   This is the actual non-coalesce-able test. Two virtuals can share
+   *third-party* interferers and still coalesce; only direct mutual
+   interference blocks it.
+5. Annotate each proposed pair with a `priority_class`:
+   - `"end-of-chain"` — would shrink `stmw` range immediately
+   - `"frees-slot"` — frees a callee-save slot, but no `stmw` win
+     unless the chain re-cascades
+6. Return at most `top` pairs, end-of-chain pairs first, then
+   frees-slot pairs.
 
 Limitations openly documented in the helper docstring:
 - Doesn't verify reachability via force-coalesce (user must do that
   themselves; discover-mode output explicitly says so).
 - Class-aware (GPR vs FP) — only considers same-class pairs.
+- Doesn't simulate the post-merge cascade — recommendations are
+  per-pair, not "this sequence of merges drops 2 saved regs."
 
 ## 6. Pattern checkers (`coalesce_patterns.py`)
 
@@ -261,18 +286,30 @@ others did.
 aliases). The coalescer should have merged them; the fact it didn't
 means they interfere somewhere.
 
+**Operand model.** Pattern checkers consume `Instruction.regs` (a
+`list[tuple[str, int]]` ordered by appearance, e.g. `[("r", 53), ("r",
+34)]` for `addi r53,r34,0`). The first entry is the destination for
+all destination-first opcodes the checkers care about (`mr`, `addi`,
+`li`, `lwz`, etc.). Immediates aren't in `regs`; checkers parse them
+out of the `operands` string when needed. The implementation should
+add a small `_immediate_operand(instr) -> Optional[int]` helper that
+returns the trailing integer literal from `operands` (e.g. `0` for
+`addi r53,r34,0`) — kept local to `coalesce_patterns.py`.
+
 **Match condition.**
 ```python
 def check(self, facts, pair):
     a, b = pair
     fa = facts.by_virtual.get(a)
     if fa is None or fa.first_def is None: return None
-    op = fa.first_def.opcode
-    # operand-1 is dest (r_a); operand-2 is source; check operand-3 for addi
-    if op == "mr" and _operand_at(fa.first_def, 1) == f"r{b}":
+    fd = fa.first_def
+    # regs[0] = dest (r_a), regs[1] = source (must be r_b)
+    if len(fd.regs) < 2: return None
+    if fd.regs[0] != ("r", a): return None  # sanity: dest must match
+    if fd.regs[1] != ("r", b): return None
+    if fd.opcode == "mr":
         return _make_direct_identity(facts, pair)
-    if op == "addi" and _operand_at(fa.first_def, 1) == f"r{b}" \
-            and _operand_at(fa.first_def, 2) == "0":
+    if fd.opcode == "addi" and _immediate_operand(fd) == 0:
         return _make_direct_identity(facts, pair)
     return None
 ```
@@ -370,6 +407,15 @@ like behavior). One branch's first-def is a direct copy from `r_b`.
 - The other defining blocks define `r_a` from different sources
 - All defining blocks share a single successor (the join)
 
+**CFG analysis note.** The "join" test requires walking `Block.succ`
+for each block where `r_a` is defined, and checking that the set of
+successors-of-defining-blocks contains exactly one common block. The
+implementation should add a small helper in `coalesce_ir_facts.py`:
+`_blocks_defining(facts, virtual) -> list[Block]` and
+`_common_successor(blocks) -> Optional[int]`. Keep these local to the
+patterns module if they're not used elsewhere — promote to facts
+later if reuse emerges.
+
 **Suggestion text.**
 ```
 TernaryCollapse: r{a} is assigned in multiple branches that converge.
@@ -380,8 +426,11 @@ TernaryCollapse: r{a} is assigned in multiple branches that converge.
   see r{a} and r{b} as move-related:
     var_a = (cond) ? var_b : <other>;
   Source: conditional starts @ line N (best-guess)
-  Catalog: debug pattern-catalog decl-order
+  Catalog: debug pattern-catalog chained-init
 ```
+(chained-init is the closest existing catalog entry — collapsing two
+assignments into one. If a dedicated "ternary-collapse" entry is
+needed later, add it to the catalog and update this reference.)
 
 ### 6.6 Fall-through (no pattern matched)
 
@@ -619,13 +668,44 @@ These are the natural follow-ups once v1 ships:
 | Additional fixture pcdumps as calibration cases grow | NEW (one .txt per case in the YAML) |
 | `docs/mwcc-debug-handoff-<date>.md` | NEW (after implementation lands) |
 
-## 12. Success criteria
+## 12. Implementation order
+
+For the executing plan, tackle in this order to maximize per-step
+testability:
+
+1. `coalesce_ir_facts.py` + `test_coalesce_ir_facts.py`. Pure
+   data-extraction with synthetic Pass/Block/Instruction fixtures
+   (existing helpers in `test_mwcc_debug_symbol_bridge.py`). Land
+   `collect()` and `analyze_cascade()` separately, each with its own
+   tests.
+2. **Generate calibration pcdump fixtures.** Run `pcdump-local` on
+   `fn_802461BC` and `mnVibration_80248644`, commit the .txt files to
+   `tests/fixtures/mwcc_debug/`. These unblock integration tests.
+3. `coalesce_patterns.py` — one pattern at a time. For each:
+   write the checker, write 4 tests (1 positive + 3 negatives),
+   confirm they pass before moving on. Order: DirectIdentity →
+   ChainInit → AliasSplit → CommonSubExpr → TernaryCollapse.
+4. `suggest_coalesce.py` — orchestration + rendering. Render text
+   first, then JSON.
+5. `debug.py` CLI integration — wire `suggest-coalesce-source`
+   command with both `--pair` and `--discover` modes.
+6. `coalesce_calibration.yaml` + the parametrize loop in
+   `test_suggest_coalesce.py`. Smoke test of the CLI.
+7. Docs: handoff entry, MEMORY.md pointer.
+
+## 13. Success criteria
 
 After implementation lands:
 1. `melee-agent debug suggest-coalesce-source -f FN -V X=Y` produces
-   useful output on the agent's `fn_802461BC` 53=3 case
-2. `--discover` on `mnVibration_80248644` identifies the same cascade
-   the agent had to find by hand
-3. ≥ 20 unit tests pass; ≥ 3 calibration cases pass; smoke test passes
-4. JSON output round-trips through `python -m json.tool` cleanly
-5. Docs updated (handoff entry written, MEMORY.md pointer added)
+   useful output on the agent's `fn_802461BC` 53=3 case (at least one
+   pattern checker fires; if none fire, the fall-through emits IR
+   facts the agent could act on).
+2. `--discover` on `mnVibration_80248644` identifies the cascade
+   chain that contained the virtual the permuter eventually merged
+   in MEMORY's `permuter_breakthrough` win. (The agent's underlying
+   fix was a decl-reorder, not a coalesce per se — the validation is
+   that the proposed end-of-chain pair is in the same cascade as the
+   one the permuter solved.)
+3. ≥ 20 unit tests pass; ≥ 3 calibration cases pass; smoke test passes.
+4. JSON output round-trips through `python -m json.tool` cleanly.
+5. Docs updated (handoff entry written, MEMORY.md pointer added).
