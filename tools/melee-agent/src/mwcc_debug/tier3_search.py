@@ -66,7 +66,7 @@ def plan_seeds(
     """
     accepted = {"best-guess", "verified"}
     if include_low_confidence:
-        accepted = accepted | {"low-confidence"}
+        accepted = accepted | {"low-confidence", "ambiguous-nested"}
 
     plans: list[SeedPlan] = []
 

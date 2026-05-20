@@ -595,6 +595,21 @@ def list_bindings(source: str, fn_name: str, pre_pass) -> list[Binding]:
     return bindings
 
 
+def _demote_nested_to_ambiguous(bindings: list[Binding]) -> None:
+    """Apply Phase-1 confidence rule: any nested-block binding gets
+    'ambiguous-nested' until the empirical validation study in Task 12
+    promotes it.
+    """
+    for b in bindings:
+        if len(b.scope_path) > 1:
+            # Demote all non-verified confidence tiers for nested-block
+            # bindings. This covers "best-guess", "low-confidence", and
+            # "ambiguous" — any local whose decl lives inside a nested
+            # block is uncertain pending validation (Task 12).
+            if b.confidence in {"best-guess", "low-confidence", "ambiguous"}:
+                b.confidence = "ambiguous-nested"
+
+
 def list_bindings_with_basis(
     source: str, fn_name: str, pre_pass,
 ) -> tuple[list[Binding], Optional[BindingBasis]]:
@@ -643,6 +658,7 @@ def list_bindings_with_basis(
     for p in params:
         expected = 32 + cursor
         # Params are unconditionally best-guess (per docstring).
+        # Params live at function-top scope, so scope_path = (fn_name,).
         out.append(Binding(
             var_name=p.name,
             virtual=expected,
@@ -650,6 +666,7 @@ def list_bindings_with_basis(
             kind="param",
             type_str=p.type_str,
             confidence="best-guess",
+            scope_path=(fn_name,) if fn_name else (),
         ))
         cursor += 1
     for ld in locals_:
@@ -665,6 +682,7 @@ def list_bindings_with_basis(
                 kind="local",
                 type_str=ld.type_str,
                 confidence=confidence,
+                scope_path=ld.scope_path,
             ))
         else:
             out.append(Binding(
@@ -674,8 +692,11 @@ def list_bindings_with_basis(
                 kind="local",
                 type_str=ld.type_str,
                 confidence="ambiguous",
+                scope_path=ld.scope_path,
             ))
         cursor += 1
+
+    _demote_nested_to_ambiguous(out)
 
     basis = BindingBasis(
         parsed_params=params,
