@@ -212,16 +212,14 @@ def analyze_cascade(facts: IrFacts) -> list[CascadeCandidate]:
     """Identify the longest descending callee-save chain and propose
     coalesces that would shorten it.
 
-    Algorithm: see spec §5 (the version with the corrected interferer
-    test and priority_class annotations). Returns at most `top` pairs
-    when the caller passes one — this function returns all candidates;
-    the orchestrator slices.
+    For each cascade-adjacent reg pair, considers all holders coloring
+    to those regs (multi-holder per reg is real in pre-allocation
+    output) and surfaces the lowest-ig-sum non-interfering combination.
     """
     cg = facts.cg_section
     if cg is None:
         return []
 
-    # Find callee-save nodes (GPR r25..r31), sorted by assigned_reg desc
     saves = [
         d for d in cg.decisions if d.assigned_reg in _GPR_CALLEE_SAVES
     ]
@@ -229,10 +227,7 @@ def analyze_cascade(facts: IrFacts) -> list[CascadeCandidate]:
         return []
     saves.sort(key=lambda d: -d.assigned_reg)
 
-    # Identify the contiguous cascade from the bottom (lowest reg up)
-    # — that's the chain whose `stmw` range we could shrink.
     asc = sorted({d.assigned_reg for d in saves})
-    # Find the longest contiguous prefix starting from asc[0]
     cascade: list[int] = []
     for i, r in enumerate(asc):
         if i == 0 or r == asc[i - 1] + 1:
@@ -242,27 +237,46 @@ def analyze_cascade(facts: IrFacts) -> list[CascadeCandidate]:
     if len(cascade) < 2:
         return []
 
-    # Map assigned_reg → decision (one holder per reg by convention)
-    by_reg: dict[int, ColorgraphDecision] = {}
+    # Multi-holder: collect ALL decisions per assigned_reg, not just one.
+    # Pre-allocation IR routinely has multiple virtuals targeting the
+    # same callee-save reg; picking a single representative drops
+    # legitimate coalesce candidates.
+    by_reg: dict[int, list[ColorgraphDecision]] = {}
     for d in saves:
-        by_reg.setdefault(d.assigned_reg, d)
+        by_reg.setdefault(d.assigned_reg, []).append(d)
 
-    # Mutual-interference check helper
     def interferes(a: ColorgraphDecision, b: ColorgraphDecision) -> bool:
         a_idxs = {ig for (ig, _) in a.interferers}
         b_idxs = {ig for (ig, _) in b.interferers}
         return b.ig_idx in a_idxs or a.ig_idx in b_idxs
 
-    # Build candidates: end-of-chain pair first, then frees-slot pairs
+    def pick_pair(
+        low_holders: list[ColorgraphDecision],
+        high_holders: list[ColorgraphDecision],
+    ) -> Optional[tuple[ColorgraphDecision, ColorgraphDecision]]:
+        """Return the (low, high) pair with the smallest ig_idx-sum
+        whose virtuals don't interfere. None if all combinations
+        interfere or either side is empty.
+        """
+        best: Optional[tuple[ColorgraphDecision, ColorgraphDecision]] = None
+        best_key: Optional[tuple[int, int]] = None
+        for low in low_holders:
+            for high in high_holders:
+                if interferes(low, high):
+                    continue
+                key = (low.ig_idx + high.ig_idx, low.ig_idx)
+                if best is None or key < best_key:
+                    best = (low, high)
+                    best_key = key
+        return best
+
     candidates: list[CascadeCandidate] = []
     end_pair: Optional[CascadeCandidate] = None
 
-    # End-of-chain: lowest-reg with next-up-reg
-    low = cascade[0]
-    mid = cascade[1]
-    low_d = by_reg.get(low)
-    mid_d = by_reg.get(mid)
-    if low_d is not None and mid_d is not None and not interferes(low_d, mid_d):
+    low_reg, mid_reg = cascade[0], cascade[1]
+    end_holders = pick_pair(by_reg.get(low_reg, []), by_reg.get(mid_reg, []))
+    if end_holders is not None:
+        low_d, mid_d = end_holders
         end_pair = CascadeCandidate(
             from_virt=low_d.ig_idx,
             to_virt=mid_d.ig_idx,
@@ -271,14 +285,14 @@ def analyze_cascade(facts: IrFacts) -> list[CascadeCandidate]:
         )
         candidates.append(end_pair)
 
-    # Frees-slot: each successive pair above the end-of-chain
     for i in range(1, len(cascade) - 1):
-        a_d = by_reg.get(cascade[i])
-        b_d = by_reg.get(cascade[i + 1])
-        if a_d is None or b_d is None:
+        slot_holders = pick_pair(
+            by_reg.get(cascade[i], []),
+            by_reg.get(cascade[i + 1], []),
+        )
+        if slot_holders is None:
             continue
-        if interferes(a_d, b_d):
-            continue
+        a_d, b_d = slot_holders
         dep = (end_pair.from_virt, end_pair.to_virt) if end_pair else None
         candidates.append(CascadeCandidate(
             from_virt=a_d.ig_idx,
