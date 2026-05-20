@@ -1016,6 +1016,96 @@ def score(
         print(f"{result.total:.2f}")
 
 
+def _get_asm_hunks(
+    function: str, melee_root: Path, top_n: int = 5,
+) -> Optional[list[list[str]]]:
+    """Run checkdiff in JSON mode and group its unified-diff lines into
+    hunks of consecutive +/- changes. Each hunk gets a small context
+    window around it for readability.
+
+    Returns:
+        list of hunks (each a list of lines), or None if checkdiff
+        couldn't run / produce JSON / find a meaningful diff.
+
+    The 'top N' selection is by hunk size — longest hunks first, since
+    those tend to encode the most informative differences.
+    """
+    try:
+        proc = subprocess.run(
+            ["python", "tools/checkdiff.py", function,
+             "--format", "json", "--no-build"],
+            cwd=melee_root, capture_output=True, text=True, timeout=60,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    # checkdiff returns 1 when there's a mismatch (expected for stuck fns)
+    if proc.returncode not in (0, 1) or not proc.stdout:
+        return None
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return None
+    diff_lines = data.get("diff", [])
+    if not diff_lines:
+        return None
+
+    # Group lines into hunks. A hunk = a span containing +/- lines with
+    # up to 1 line of intermediate context. checkdiff produces unified-
+    # diff format, so context lines start with ' ' and change lines
+    # start with '+'/'-'. The first 3 lines are the file header.
+    body = diff_lines[3:] if len(diff_lines) >= 3 else diff_lines
+    hunks: list[list[str]] = []
+    cur: list[str] = []
+    blank_run = 0
+    for line in body:
+        if line.startswith("@@"):
+            # objdiff hunk header — boundary
+            if cur:
+                hunks.append(cur)
+                cur = []
+            blank_run = 0
+            continue
+        if line.startswith("+") or line.startswith("-"):
+            cur.append(line)
+            blank_run = 0
+        elif cur:
+            # Context line inside a hunk — keep tightly bound (one line
+            # of slack), then close on the next.
+            cur.append(line)
+            blank_run += 1
+            if blank_run >= 2:
+                hunks.append(cur[:-1])  # drop the trailing context lines
+                cur = []
+                blank_run = 0
+    if cur:
+        hunks.append(cur)
+
+    if not hunks:
+        return None
+    # Score by number of change lines (longer = more interesting)
+    def _score(h: list[str]) -> int:
+        return sum(1 for l in h if l.startswith("+") or l.startswith("-"))
+    hunks.sort(key=_score, reverse=True)
+    return hunks[:top_n]
+
+
+def _format_asm_hunks(hunks: list[list[str]], max_lines_per_hunk: int = 12) -> str:
+    """Render hunks compactly: cap each hunk at max_lines_per_hunk
+    (with a '...(N more)' footer if truncated). Returns the formatted
+    block, ready to print after a header.
+    """
+    out: list[str] = []
+    for i, hunk in enumerate(hunks):
+        if i > 0:
+            out.append("  ---")
+        n_show = min(len(hunk), max_lines_per_hunk)
+        for line in hunk[:n_show]:
+            out.append(f"  {line}")
+        if len(hunk) > n_show:
+            out.append(f"  ...({len(hunk) - n_show} more lines)")
+    return "\n".join(out)
+
+
 @debug_app.command()
 def guide(
     function: Annotated[
@@ -1038,12 +1128,27 @@ def guide(
                  "currently mapped to non-target physicals are shown.",
         ),
     ] = None,
+    asm_hunks: Annotated[
+        int,
+        typer.Option(
+            "--asm-hunks",
+            help="Also show the top N asm-diff hunks from checkdiff. "
+                 "0 (default) omits. Useful when an allocator suggestion "
+                 "is hard to interpret without seeing the actual text-"
+                 "level diff (e.g. unexpected clrlwi from a missing "
+                 "cast). Caps each hunk at ~12 lines for readability.",
+        ),
+    ] = 0,
 ) -> None:
     """Tier 4: human-readable diagnostic for stuck-function debugging.
 
     Reports which virtuals are at the wrong physical, why (interference,
     spill, iteration order), and suggests directions for C-source nudges.
     Hints, not guarantees — interpret in source context.
+
+    Pass --asm-hunks N to also dump the top N asm-diff hunks from
+    checkdiff. Saves switching tools when allocator-only analysis
+    doesn't explain the mismatch (e.g. text diffs from a stray cast).
     """
     pcdump = _resolve_pcdump_path(pcdump, function)
     text = pcdump.read_text()
@@ -1076,6 +1181,22 @@ def guide(
     print()
     print("Suggestions (highest severity first):")
     print(format_suggestions(suggestions))
+
+    if asm_hunks > 0:
+        print()
+        hunks = _get_asm_hunks(function, DEFAULT_MELEE_ROOT, top_n=asm_hunks)
+        if hunks is None:
+            print(f"== asm hunks ==")
+            print("  (checkdiff didn't produce a diff — either the .o "
+                  "isn't built yet, the function matches, or checkdiff "
+                  "errored. Run `tools/checkdiff.py {fn}` for details.)"
+                  .replace("{fn}", function))
+        elif not hunks:
+            print(f"== asm hunks ==")
+            print("  (no diff)")
+        else:
+            print(f"== top {len(hunks)} asm hunks (by diff size) ==")
+            print(_format_asm_hunks(hunks))
 
 
 @debug_app.command(name="derive-target")
@@ -2433,6 +2554,15 @@ def stuck(
         bool,
         typer.Option("--json", help="Emit structured digest as JSON."),
     ] = False,
+    asm_hunks: Annotated[
+        int,
+        typer.Option(
+            "--asm-hunks",
+            help="Also show the top N asm-diff hunks from checkdiff. "
+                 "0 (default) omits. Saves switching tools when "
+                 "allocator-level analysis doesn't explain the mismatch.",
+        ),
+    ] = 0,
 ) -> None:
     """One-shot diagnostic for a stuck function.
 
@@ -2445,7 +2575,8 @@ def stuck(
       3. Coloring summary — virtuals, SPILLED markers, pass info
       4. Guidance issues — red-flag patterns from `debug guide`
       5. Suspicious casts — HIGH+MEDIUM cast warnings
-      6. Next steps — ranked by cost/likelihood
+      6. Asm hunks (if --asm-hunks N) — text-level diff samples
+      7. Next steps — ranked by cost/likelihood
     """
     melee_root = DEFAULT_MELEE_ROOT
     unit = _find_unit_for_function(function, melee_root)
@@ -2621,6 +2752,19 @@ def stuck(
             print(f"  {marker} line {w['line']}: ({w['cast_type']}) "
                   f"{w['inner_expr']} → {w['call_target']}")
         print()
+
+    if asm_hunks > 0:
+        hunks = _get_asm_hunks(function, melee_root, top_n=asm_hunks)
+        if hunks is None:
+            print(f"== Asm hunks ==")
+            print(f"  (checkdiff didn't produce a diff — either matching, "
+                  f"not built, or errored. Try `tools/checkdiff.py "
+                  f"{function}` directly.)")
+            print()
+        elif hunks:
+            print(f"== Top {len(hunks)} asm hunks (by diff size) ==")
+            print(_format_asm_hunks(hunks))
+            print()
 
     print(f"== Next steps (ranked by cost) ==")
     for i, step in enumerate(next_steps, 1):
@@ -4470,14 +4614,32 @@ def var_to_virtual(
         bool,
         typer.Option("--json", help="Emit as JSON."),
     ] = False,
+    basis: Annotated[
+        bool,
+        typer.Option(
+            "--basis",
+            help="Also dump the heuristic's evidence: parsed params/locals, "
+                 "the cursor calculation step-by-step, observed virtuals in "
+                 "the pre-pass, and any red flags that lowered confidence. "
+                 "Use when you suspect var-to-virtual gave you a wrong "
+                 "mapping — the basis tells you whether the cursor "
+                 "shifted, a macro hid a decl, or the function has nested "
+                 "blocks the parser skipped.",
+        ),
+    ] = False,
 ) -> None:
     """Bridge: given a source variable name, predict its MWCC virtual.
 
-    Reports `confidence`: best-guess (decl-order heuristic matched),
-    ambiguous (no observed virtual for this variable), or unsupported
-    (e.g., variable lives in a macro the tokenizer can't see).
+    Reports `confidence`: best-guess (heuristic matched, no concerns),
+    low-confidence (matched but red flags present — cursor may be
+    wrong), ambiguous (no observed virtual for this variable), or
+    unsupported (e.g., variable lives in a macro the tokenizer can't
+    see). Pass `--basis` to see the underlying evidence.
     """
-    from ..mwcc_debug.symbol_bridge import find_virtual_for_var
+    from ..mwcc_debug.symbol_bridge import (
+        find_virtual_for_var,
+        list_bindings_with_basis,
+    )
 
     melee_root = DEFAULT_MELEE_ROOT
     pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
@@ -4498,36 +4660,104 @@ def var_to_virtual(
         typer.echo(f"{function} not in report.json", err=True)
         raise typer.Exit(2)
     source = (melee_root / "src" / f"{unit}.c").read_text()
-    binding = find_virtual_for_var(source, function, var_name, pre)
+    bindings, basis_data = list_bindings_with_basis(source, function, pre)
+    binding = next(
+        (b for b in bindings if b.var_name == var_name), None
+    )
 
     if binding is None:
         if json_out:
-            print(json.dumps({
-                "var_name": var_name,
-                "found": False,
-            }, indent=2))
+            payload: dict = {"var_name": var_name, "found": False}
+            if basis and basis_data is not None:
+                payload["basis"] = _basis_to_dict(basis_data)
+            print(json.dumps(payload, indent=2))
         else:
             typer.echo(
                 f"variable {var_name!r} not found in {function}",
                 err=True,
             )
+            if basis and basis_data is not None:
+                _print_basis(basis_data, bindings)
         raise typer.Exit(1)
 
     if json_out:
-        print(json.dumps({
+        payload = {
             "var_name": binding.var_name,
             "virtual": binding.virtual,
             "kind": binding.kind,
             "type": binding.type_str,
             "confidence": binding.confidence,
             "found": True,
-        }, indent=2))
+        }
+        if basis and basis_data is not None:
+            payload["basis"] = _basis_to_dict(basis_data)
+        print(json.dumps(payload, indent=2))
     else:
         print(f"variable: {binding.var_name}")
         print(f"  virtual: r{binding.virtual}")
         print(f"  kind:    {binding.kind}")
         print(f"  type:    {binding.type_str}")
         print(f"  conf:    {binding.confidence}")
+        if basis and basis_data is not None:
+            print()
+            _print_basis(basis_data, bindings)
+
+
+def _basis_to_dict(basis) -> dict:
+    """Render a BindingBasis as a JSON-compatible dict."""
+    return {
+        "parsed_params": [
+            {"name": p.name, "type": p.type_str, "decl_index": p.decl_index}
+            for p in basis.parsed_params
+        ],
+        "parsed_locals": [
+            {"name": ld.name, "type": ld.type_str, "decl_index": ld.decl_index}
+            for ld in basis.parsed_locals
+        ],
+        "observed_virtuals": basis.observed_virtuals,
+        "unrecognized_decls": basis.unrecognized_decls,
+        "red_flags": basis.red_flags,
+    }
+
+
+def _print_basis(basis, bindings) -> None:
+    """Human-readable dump of a BindingBasis + how the cursor mapped."""
+    print("=== basis ===")
+    if basis.red_flags:
+        print(f"red flags: {', '.join(basis.red_flags)}")
+        print("  (these demote 'best-guess' → 'low-confidence' for locals)")
+    else:
+        print("red flags: (none)")
+    print()
+    print(f"parsed params ({len(basis.parsed_params)}):")
+    if not basis.parsed_params:
+        print("  (none)")
+    for p in basis.parsed_params:
+        print(f"  [{p.decl_index}] {p.type_str:<22s} {p.name}")
+    print()
+    print(f"parsed locals ({len(basis.parsed_locals)}):")
+    if not basis.parsed_locals:
+        print("  (none)")
+    for ld in basis.parsed_locals:
+        print(f"  [{ld.decl_index}] {ld.type_str:<22s} {ld.name}")
+    if basis.unrecognized_decls:
+        print()
+        print("unrecognized decl-shaped statements (parser couldn't handle):")
+        for s in basis.unrecognized_decls:
+            print(f"  • {s}")
+    print()
+    obs = basis.observed_virtuals
+    obs_str = (
+        ", ".join(f"r{v}" for v in obs[:16])
+        + (f", ... (+{len(obs) - 16} more)" if len(obs) > 16 else "")
+    ) if obs else "(none)"
+    print(f"observed virtuals in pre-pass ({len(obs)}): {obs_str}")
+    print()
+    print("predicted bindings (cursor = 32 + position):")
+    for b in bindings:
+        marker = "✓" if b.virtual in obs else "·" if b.kind == "param" else "✗"
+        print(f"  {marker} {b.var_name:<22s} r{b.virtual:<5d} "
+              f"[{b.kind}/{b.confidence}]")
 
 
 @debug_app.command(name="virtual-to-var")
@@ -4768,6 +4998,20 @@ def tier3_search(
         float,
         typer.Option("--blend", help="mwcc-score blend weight."),
     ] = 0.1,
+    include_low_confidence: Annotated[
+        bool,
+        typer.Option(
+            "--include-low-confidence",
+            help="Also generate seeds from bindings the symbol-bridge "
+                 "flagged as low-confidence (red flags present: nested "
+                 "decls, statics, extra compiler-introduced virtuals). "
+                 "Off by default — skip these to avoid bad seeds on "
+                 "functions where the cursor heuristic is unreliable. "
+                 "Verify the binding manually via "
+                 "`debug var-to-virtual <var> -f FN --basis` before "
+                 "opting in.",
+        ),
+    ] = False,
 ) -> None:
     """Tier 3: multi-start search over targeted mutation seeds.
 
@@ -4787,6 +5031,7 @@ def tier3_search(
     from ..mwcc_debug.tier3_search import (
         materialize_seed,
         plan_seeds,
+        save_compile_failure,
         smoke_compile,
     )
 
@@ -4816,13 +5061,27 @@ def tier3_search(
         raise typer.Exit(3)
 
     bindings = list_bindings(base_source, function, pre)
-    plans = plan_seeds(bindings, budget=budget)
+    plans = plan_seeds(
+        bindings, budget=budget,
+        include_low_confidence=include_low_confidence,
+    )
     if not plans:
-        typer.echo(
-            "no Tier 3 targets; fall back to `debug permute -f "
-            f"{function}` for a vanilla Tier 2 run.",
-            err=True,
-        )
+        # Diagnostic: if there ARE low-confidence bindings, explain.
+        n_low = sum(1 for b in bindings if b.confidence == "low-confidence")
+        if n_low and not include_low_confidence:
+            typer.echo(
+                f"no Tier 3 targets — {n_low} local binding(s) demoted to "
+                f"low-confidence by red flags. Run `debug var-to-virtual "
+                f"<var> -f {function} --basis` to audit, then re-run "
+                f"with --include-low-confidence if mapping looks correct.",
+                err=True,
+            )
+        else:
+            typer.echo(
+                "no Tier 3 targets; fall back to `debug permute -f "
+                f"{function}` for a vanilla Tier 2 run.",
+                err=True,
+            )
         raise typer.Exit(1)
 
     print(f"[tier3] {len(plans)} seed plans:")
@@ -4857,15 +5116,44 @@ def tier3_search(
         if out_c is None:
             print(f"[tier3] seed{i}: mutation unsupported; skipping")
             continue
-        ok = smoke_compile(out_c, wibo, debug_compiler, cflags, melee_root)
-        print(f"[tier3] seed{i}: compile={'ok' if ok else 'FAIL'}")
-        materialized.append((plan, seed_dir, ok))
+        result = smoke_compile(out_c, wibo, debug_compiler, cflags, melee_root)
+        if result.ok:
+            print(f"[tier3] seed{i}: compile=ok")
+        else:
+            log_path = save_compile_failure(seed_dir, result)
+            print(f"[tier3] seed{i}: compile=FAIL — {result.one_line_reason}")
+            print(f"         (full output: {log_path}, seed source: "
+                  f"{seed_dir / 'base.c'})")
+        materialized.append((plan, seed_dir, result))
 
-    compiled = [m for m in materialized if m[2]]
+    compiled = [m for m in materialized if m[2].ok]
     if not compiled:
         typer.echo(
-            f"all {len(materialized)} tier3 seeds failed to compile — "
-            "bridge mapping likely wrong or mutation produced invalid C.",
+            f"all {len(materialized)} tier3 seeds failed to compile.",
+            err=True,
+        )
+        typer.echo("", err=True)
+        typer.echo("Failed seeds (inspect each):", err=True)
+        for i, (plan, seed_dir, result) in enumerate(materialized):
+            typer.echo(
+                f"  seed{i} ({plan.mutator} on {plan.target_var}): "
+                f"{result.one_line_reason}",
+                err=True,
+            )
+            typer.echo(
+                f"    sources: {seed_dir / 'base.c'}",
+                err=True,
+            )
+            typer.echo(
+                f"    error:   {seed_dir / 'compile_error.txt'}",
+                err=True,
+            )
+        typer.echo("", err=True)
+        typer.echo(
+            "Common causes: (a) symbol-bridge mapping is wrong (check "
+            "`debug var-to-virtual -f FN --basis`); (b) the mutation "
+            "produced invalid C (look at base.c); (c) the function uses "
+            "a pattern the mutators don't handle yet.",
             err=True,
         )
         raise typer.Exit(5)
