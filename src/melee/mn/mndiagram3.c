@@ -140,12 +140,15 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
             __assert(mnDiagram3_804D4FD8, 0x3B3, mnDiagram3_804D4FE0);
           }
           icon->translate.y = row_spacing * ((f32) i);
-          if (!(icon->flags & ((1 << 14) << 11))) {
+          if (!(icon->flags & ((1 << 14) << 11)))
+          {
+            {
+              if ((icon != 0L) && (!HSD_JObjMtxIsDirty(icon)))
               {
-                  if ((icon != 0L) && (!HSD_JObjMtxIsDirty(icon))) {
-                      HSD_JObjSetMtxDirtySub(icon);
-                  }
-              };
+                HSD_JObjSetMtxDirtySub(icon);
+              }
+            }
+            ;
           }
           HSD_JObjAddChild(data->jobjs[6], icon);
         }
@@ -191,7 +194,7 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
             ;
           }
           HSD_JObjAddChild(data->jobjs[6], icon);
-          mnDiagram2_GetAggregatedFighterRank(sp28, stat_type, (u8) i);
+          mnDiagram2_GetAggregatedFighterRank(sp28, stat_type, (((u8) i) & 0xFFFFFFFF) & 0xFFFFFFFF);
           {
             int val = *((int *) (sp28 + 0xC));
             mnDiagram_FormatDecimalNumber((char *) sp58, val, 0);
@@ -241,11 +244,11 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
           }
           else
           {
-              int val = mnDiagram2_GetStatValue(data->is_name_mode,
-                                                stat_type ^ 0, entity);
-              if (val > max_distance) {
-                  val = max_distance;
-              }
+            int val = mnDiagram2_GetStatValue(data->is_name_mode, stat_type ^ 0, entity);
+            if (val > max_distance)
+            {
+              val = max_distance;
+            }
             mnDiagram_FormatDecimalNumber((char *) sp58, val, 0);
           }
           {
@@ -966,35 +969,38 @@ void mnDiagram3_8024714C(void *arg0)
     {
       f32 tx = row0->translate.x;
       assert_line = 0x3A4;
-      (popup_alias) ? ((void) 0) : (__assert(mnDiagram3_804D4FD8, assert_line, mnDiagram3_804D4FE0));
+      (popup_alias)
+          ? ((void) 0)
+          : (__assert(mnDiagram3_804D4FD8, assert_line, mnDiagram3_804D4FE0));
       popup_alias->translate.x = tx;
     }
     if (!(popup_jobj->flags & 0x02000000))
     {
-      ftCo_800C6AFC(popup_alias);
+        ftCo_800C6AFC(popup_alias);
     }
     row0 = data->jobjs[8];
     (row0) ? ((void) 0) : (__assert(mnDiagram3_804D4FD8, 0x3EE, mnDiagram3_804D4FE0));
     {
       f32 ty = (row_spacing * mnDiagram3_804DC00C) + row0->translate.y;
-      (popup_alias) ? ((void) 0)
-                 : (__assert(mnDiagram3_804D4FD8, 0x3B3, mnDiagram3_804D4FE0));
+      (popup_alias)
+          ? ((void) 0)
+          : (__assert(mnDiagram3_804D4FD8, 0x3B3, mnDiagram3_804D4FE0));
       popup_alias->translate.y = ty;
     }
-    if (!(popup_alias->flags & 0x02000000))
-    {
-      ftCo_800C6AFC(popup_alias);
+    if (!(popup_alias->flags & 0x02000000)) {
+        ftCo_800C6AFC(popup_alias);
     }
     row0 = data->jobjs[8];
     (row0) ? ((void) 0) : (__assert(mnDiagram3_804D4FD8, 0x3FB, mnDiagram3_804D4FE0));
     {
       f32 tz = row0->translate.z;
-      (popup_alias) ? ((void) 0) : (__assert(mnDiagram3_804D4FD8, 0x3C2, mnDiagram3_804D4FE0));
+      (popup_alias)
+          ? ((void) 0)
+          : (__assert(mnDiagram3_804D4FD8, 0x3C2, mnDiagram3_804D4FE0));
       popup_alias->translate.z = tz;
     }
-    if (!(popup_alias->flags & 0x02000000))
-    {
-      ftCo_800C6AFC(popup_alias);
+    if (!(popup_alias->flags & 0x02000000)) {
+        ftCo_800C6AFC(popup_alias);
     }
   }
   {
@@ -1022,7 +1028,9 @@ void mnDiagram3_8024714C(void *arg0)
     do
     {
       f32 fi = (f32) i;
-      HSD_Text *text = HSD_SisLib_803A5ACC(0, 1, sp48.x - row_spacing, (neg_spacing * fi) + (-sp48.y), sp48.z, font_size, mnDiagram3_804DBFFC);
+      HSD_Text* text = HSD_SisLib_803A5ACC(
+          0, 1, sp48.x - row_spacing, (neg_spacing * fi) + (-sp48.y), sp48.z,
+          font_size, mnDiagram3_804DBFFC);
       d->row_labels[i] = text;
       {
         u8 type_idx = (u8) i;
