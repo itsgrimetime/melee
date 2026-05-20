@@ -19,6 +19,7 @@ within each basic block.
 from __future__ import annotations
 
 import re
+import sys
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Iterator, Optional
@@ -175,12 +176,40 @@ class VirtualRegInfo:
     candidates: set[int] = field(default_factory=set)
 
 
+def _try_parse_block_token(tok: str) -> Optional[int]:
+    """Parse a single block index token like 'B5' → 5.
+
+    Returns None for stray/malformed tokens such as a bare 'B' (which MWCC
+    occasionally emits when the predecessor/successor list is in an
+    intermediate state). Callers filter Nones out instead of crashing.
+    """
+    stripped = tok.strip().lstrip("B")
+    if not stripped:
+        return None
+    try:
+        return int(stripped)
+    except ValueError:
+        return None
+
+
 def _parse_block_header(line: str) -> Optional[Block]:
     m = _BLOCK_RE.match(line.strip())
     if not m:
         return None
-    succ = [int(s.lstrip("B")) for s in m.group(2).split() if s.strip()]
-    pred = [int(s.lstrip("B")) for s in m.group(3).split() if s.strip()]
+    raw_succ = m.group(2).split()
+    raw_pred = m.group(3).split()
+    succ_parsed = [_try_parse_block_token(s) for s in raw_succ if s.strip()]
+    pred_parsed = [_try_parse_block_token(s) for s in raw_pred if s.strip()]
+    succ = [v for v in succ_parsed if v is not None]
+    pred = [v for v in pred_parsed if v is not None]
+    # Warn (once-ish) when we silently dropped tokens so reverse-engineering
+    # later doesn't waste time wondering why a block edge is missing.
+    if len(succ) != len(succ_parsed) or len(pred) != len(pred_parsed):
+        print(
+            f"warning: parser dropped malformed block-edge tokens in line: "
+            f"{line.rstrip()!r}",
+            file=sys.stderr,
+        )
     labels = m.group(4).split()
     return Block(index=int(m.group(1)), succ=succ, pred=pred, labels=labels)
 
@@ -217,12 +246,48 @@ def _parse_instruction(line: str) -> Optional[Instruction]:
     return Instruction(opcode=opcode, operands=ops_part, annotations=annotations, regs=regs)
 
 
-def parse_pcdump(text: str) -> list[Function]:
+def _slice_to_function(text: str, function: str) -> str:
+    """Return only the portion of `text` between `Starting function <name>`
+    and the next `Starting function` (or EOF). Returns empty string if the
+    function isn't found.
+    """
+    lines = text.splitlines(keepends=True)
+    start: Optional[int] = None
+    end: Optional[int] = None
+    for i, line in enumerate(lines):
+        m = _FUNC_START_RE.match(line.strip())
+        if m is None:
+            continue
+        if m.group(1) == function and start is None:
+            start = i
+            continue
+        if start is not None:
+            # Next function boundary after the target — stop here
+            end = i
+            break
+    if start is None:
+        return ""
+    if end is None:
+        end = len(lines)
+    return "".join(lines[start:end])
+
+
+def parse_pcdump(text: str, function: Optional[str] = None) -> list[Function]:
     """Parse the full pcdump.txt content into a list of Function objects.
 
     Each Function contains the per-pass dumps. Best-effort; lines that don't
     match known patterns are silently skipped.
+
+    If `function` is given, only the section for that function is parsed,
+    and at most one Function is returned. If the target function isn't
+    present, returns []. This lets downstream commands isolate one
+    function so malformed output in other functions doesn't abort the parse.
     """
+    if function is not None:
+        text = _slice_to_function(text, function)
+        if not text:
+            return []
+
     functions: list[Function] = []
     current_func: Optional[Function] = None
     current_pass: Optional[Pass] = None

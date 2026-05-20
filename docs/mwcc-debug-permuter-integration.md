@@ -33,6 +33,62 @@ Per-candidate cost: ~5-10 seconds (one ninja per .c + report.json
 regen). For a typical permuter session with ~100 winners, total triage
 time is a few minutes.
 
+## Tier 1 (shipped — pattern-tuned config)
+
+### `melee-agent debug gen-permuter-config -f FN [options]`
+
+Generates a `<perm_root>/nonmatchings/<fn>/settings.toml` whose
+`[weight_overrides]` are tuned to mwcc-debug's pattern detection.
+Saves the agent from hand-tuning weights per function.
+
+Pattern → weight-boost mapping (from `patterns.py`):
+
+| Pattern | Boosted mutations | Why |
+|---------|-------------------|-----|
+| `decl-order` | reorder_decls=80, temp_for_expr=30, ins_block=20 | Direct decl moves + intermediate decls in new positions |
+| `alias-split` | temp_for_expr=60, refer_to_var=30, expand_expr=15 | Fresh-local extraction shortens live ranges |
+| `widen-u8-to-u32` | randomize_internal_type=50, cast_simple=30 | Type changes for promotion-mask elimination |
+| `shrink-s32-to-u8` | randomize_internal_type=50, cast_simple=30 | Mirror of widen |
+| `drop-variadic-cast` | cast_simple=60, expand_expr=30 | Remove explicit (f32) casts |
+| `subexpr-extract` | temp_for_expr=80, expand_expr=30 | Pull subexpressions into named locals |
+| `chained-init` | chain_assignment=50, duplicate_assignment=20 | `a = (b = 0)` style |
+| `param-iter-ceiling` | (refuses to generate) | Tier 6 — no C-source fix exists |
+
+Detection: scores against `--target` (a YAML/JSON spec, typically
+produced by `debug derive-target`); the highest-severity suggestion's
+category determines the pattern. With no target, falls back to stock
+settings unless `--pattern` is given.
+
+Special case for `param-iter-ceiling`: the command refuses to generate
+a config and instead prints "this is Tier 6 — permuter cannot fix it,
+use `match-iter-first` instead." Pass `--force` to override.
+
+For `decl-order`: also prints a recommendation to try
+`enumerate-decl-orders` first, which is deterministic and ~100x faster
+than letting permuter rediscover decl-order via random mutation.
+
+### Workflow
+
+```bash
+# 1. Generate a tuned config
+melee-agent debug gen-permuter-config -f my_stuck_fn \
+    --target target.json
+
+# 2. Run permuter (unmodified upstream)
+cd ~/code/decomp-permuter
+./permuter.py nonmatchings/my_stuck_fn --threads 8
+
+# 3. Triage winners against the real tree
+cd ~/code/melee
+melee-agent debug triage-perm \
+    ~/code/decomp-permuter/nonmatchings/my_stuck_fn -f my_stuck_fn
+
+# 4. Apply the best confirmed winner
+melee-agent debug triage-perm \
+    ~/code/decomp-permuter/nonmatchings/my_stuck_fn -f my_stuck_fn \
+    --apply-best
+```
+
 ## Tier 2 (shipped — per-iteration mwcc-debug scoring)
 
 ### `melee-agent debug permute -f FN [--blend α]`
@@ -94,61 +150,60 @@ melee-agent debug triage-perm \
   weight tuning often gets there in a few hundred iterations without
   needing Tier 2.
 
-## Tier 1 (shipped — pattern-tuned config)
+## Tier 3 (shipped — targeted mutations + multi-start)
 
-### `melee-agent debug gen-permuter-config -f FN [options]`
+Where Tier 2 says "evaluate candidates better," Tier 3 says "generate
+better candidates to start with." Given a stuck function, the agent
+identifies WHICH variable is blocking via the new symbol bridge, then
+applies targeted mutations (type-change, alias-split) directly on that
+variable. Each mutation becomes a permuter starting point.
 
-Generates a `<perm_root>/nonmatchings/<fn>/settings.toml` whose
-`[weight_overrides]` are tuned to mwcc-debug's pattern detection.
-Saves the agent from hand-tuning weights per function.
+### Primitives (each also a CLI command)
 
-Pattern → weight-boost mapping (from `patterns.py`):
-
-| Pattern | Boosted mutations | Why |
-|---------|-------------------|-----|
-| `decl-order` | reorder_decls=80, temp_for_expr=30, ins_block=20 | Direct decl moves + intermediate decls in new positions |
-| `alias-split` | temp_for_expr=60, refer_to_var=30, expand_expr=15 | Fresh-local extraction shortens live ranges |
-| `widen-u8-to-u32` | randomize_internal_type=50, cast_simple=30 | Type changes for promotion-mask elimination |
-| `shrink-s32-to-u8` | randomize_internal_type=50, cast_simple=30 | Mirror of widen |
-| `drop-variadic-cast` | cast_simple=60, expand_expr=30 | Remove explicit (f32) casts |
-| `subexpr-extract` | temp_for_expr=80, expand_expr=30 | Pull subexpressions into named locals |
-| `chained-init` | chain_assignment=50, duplicate_assignment=20 | `a = (b = 0)` style |
-| `param-iter-ceiling` | (refuses to generate) | Tier 6 — no C-source fix exists |
-
-Detection: scores against `--target` (a YAML/JSON spec, typically
-produced by `debug derive-target`); the highest-severity suggestion's
-category determines the pattern. With no target, falls back to stock
-settings unless `--pattern` is given.
-
-Special case for `param-iter-ceiling`: the command refuses to generate
-a config and instead prints "this is Tier 6 — permuter cannot fix it,
-use `match-iter-first` instead." Pass `--force` to override.
-
-For `decl-order`: also prints a recommendation to try
-`enumerate-decl-orders` first, which is deterministic and ~100x faster
-than letting permuter rediscover decl-order via random mutation.
+| Command | Purpose |
+|---|---|
+| `debug var-to-virtual -f FN <var>` | Predict MWCC virtual for a source variable name |
+| `debug virtual-to-var -f FN <ig_idx>` | Inverse lookup |
+| `debug mutate type-change -f FN --var V --type T` | Change a local's declared type |
+| `debug mutate insert-alias -f FN --var V --at N` | Alias before N-th reading statement |
+| `debug tier3-search -f FN` | Multi-start orchestrator (plans + materializes seeds) |
 
 ### Workflow
 
 ```bash
-# 1. Generate a tuned config
-melee-agent debug gen-permuter-config -f my_stuck_fn \
-    --target target.json
+# 1. Identify the blocker
+melee-agent debug guide -f my_stuck_fn
 
-# 2. Run permuter (unmodified upstream)
-cd ~/code/decomp-permuter
-./permuter.py nonmatchings/my_stuck_fn --threads 8
+# 2. Plan + materialize seeds
+melee-agent debug tier3-search -f my_stuck_fn --budget 5
 
-# 3. Triage winners against the real tree
-cd ~/code/melee
-melee-agent debug triage-perm \
-    ~/code/decomp-permuter/nonmatchings/my_stuck_fn -f my_stuck_fn
-
-# 4. Apply the best confirmed winner
-melee-agent debug triage-perm \
-    ~/code/decomp-permuter/nonmatchings/my_stuck_fn -f my_stuck_fn \
-    --apply-best
+# 3. For each tier3_seed_<i>/ that compiled, run permuter (Tier 2)
+for seed in ~/code/decomp-permuter/nonmatchings/my_stuck_fn/tier3_seed_*; do
+    melee-agent debug permute -f my_stuck_fn \
+        --perm-root ~/code/decomp-permuter \
+        --blend 0.05
+done
 ```
+
+### Calibration + confidence
+
+The symbol bridge reports confidence per binding: `best-guess`,
+`verified`, `rejected`, `ambiguous`, `unsupported`. The orchestrator
+skips bindings with `ambiguous`/`unsupported`/`rejected`. If
+`tier3-search` reports "all seeds failed to compile," the bridge is
+likely wrong for that function — `debug var-to-virtual` lets you
+inspect the mappings interactively.
+
+### Tracking Tier 3 matches
+
+Commits where tier3-search produced the winning seed should include:
+
+```
+Tier3-Search: <seed-description>
+```
+
+as a trailer (analogous to `Co-Authored-By:`). A future
+`debug tier3-stats` can count via `git log --grep "Tier3-Search:"`.
 
 ## How to use with decomp-permuter
 
