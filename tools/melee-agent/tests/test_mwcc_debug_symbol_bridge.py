@@ -242,9 +242,108 @@ def test_list_bindings_params_are_best_guess_even_when_unobserved() -> None:
 
 
 from src.mwcc_debug.symbol_bridge import (
+    BindingBasis,
     find_var_for_virtual,
     find_virtual_for_var,
+    list_bindings_with_basis,
 )
+
+
+def test_list_bindings_with_basis_returns_basis_evidence() -> None:
+    """list_bindings_with_basis exposes the parsed inputs + flags."""
+    source = textwrap.dedent("""\
+        void f(int n) {
+            int a;
+            int b;
+        }
+    """)
+    pre = _make_pre_pass([32, 33, 34])
+    bindings, basis = list_bindings_with_basis(source, "f", pre)
+    assert basis is not None
+    assert [p.name for p in basis.parsed_params] == ["n"]
+    assert [ld.name for ld in basis.parsed_locals] == ["a", "b"]
+    assert basis.observed_virtuals == [32, 33, 34]
+    assert basis.red_flags == []
+    # All locals stay best-guess when no red flags
+    assert all(
+        b.confidence == "best-guess"
+        for b in bindings if b.kind == "local"
+    )
+
+
+def test_red_flag_nested_decl_demotes_to_low_confidence() -> None:
+    """Functions with nested-block decls get the 'nested-decl' flag,
+    which demotes locals from best-guess to low-confidence."""
+    source = textwrap.dedent("""\
+        void f(void) {
+            int a;
+            if (x) {
+                int nested;
+            }
+            int b;
+        }
+    """)
+    pre = _make_pre_pass([32, 33, 34])
+    bindings, basis = list_bindings_with_basis(source, "f", pre)
+    assert basis is not None
+    assert "nested-decl" in basis.red_flags
+    locals_ = [b for b in bindings if b.kind == "local"]
+    # Locals observed as destinations → demoted to low-confidence
+    assert all(b.confidence == "low-confidence" for b in locals_)
+
+
+def test_red_flag_extra_virtuals_demotes_to_low_confidence() -> None:
+    """Many more observed virtuals than parsed locals signals that
+    MWCC introduced temps (CSE/IV) that shifted the cursor."""
+    source = "void f(int n) { int a; }"
+    # 1 param + 1 local should produce 2 virtuals. Simulate 8 (extra
+    # compiler-introduced temps). Difference = 6 ≥ 3 → extra-virtuals.
+    pre = _make_pre_pass([32, 33, 34, 35, 36, 37, 38, 39])
+    bindings, basis = list_bindings_with_basis(source, "f", pre)
+    assert basis is not None
+    assert "extra-virtuals" in basis.red_flags
+    local = next(b for b in bindings if b.kind == "local")
+    assert local.confidence == "low-confidence"
+
+
+def test_red_flag_static_local_detected() -> None:
+    """Functions with 'static' locals get the static-local red flag."""
+    source = textwrap.dedent("""\
+        void f(void) {
+            int a;
+            static int s = 0;
+        }
+    """)
+    pre = _make_pre_pass([32, 33])
+    bindings, basis = list_bindings_with_basis(source, "f", pre)
+    assert basis is not None
+    assert "static-local" in basis.red_flags
+
+
+def test_red_flag_unrecognized_decl_detected() -> None:
+    """If the parser can't handle a decl shape (function pointer etc.)
+    it gets surfaced as unrecognized-decl."""
+    source = textwrap.dedent("""\
+        void f(void) {
+            int a;
+            void (*cb)(int);
+            int b;
+        }
+    """)
+    pre = _make_pre_pass([32, 33, 34])
+    bindings, basis = list_bindings_with_basis(source, "f", pre)
+    assert basis is not None
+    assert "unrecognized-decl" in basis.red_flags
+    assert any("(*cb)" in s for s in basis.unrecognized_decls)
+
+
+def test_function_not_found_returns_empty_and_none_basis() -> None:
+    """When the function doesn't exist, return ([], None)."""
+    source = "void other(void) { int x; }"
+    pre = _make_pre_pass([32])
+    bindings, basis = list_bindings_with_basis(source, "missing", pre)
+    assert bindings == []
+    assert basis is None
 
 
 def test_find_virtual_for_var_existing_local() -> None:

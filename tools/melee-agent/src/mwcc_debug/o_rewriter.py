@@ -108,6 +108,75 @@ def find_all_anonymous_sdata2_symbols(o_path: Path) -> list[MagicSymbol]:
     return out
 
 
+def find_named_sdata2_symbols_by_offset(
+    o_path: Path,
+) -> dict[int, str]:
+    """Scan a .o for NAMED (non-anonymous) .sdata2 symbols, indexed by
+    their byte offset within .sdata2.
+
+    Used to cross-reference an anonymous @N symbol in the base (compiled)
+    .o against a named symbol at the same offset in the target .o.
+    When they match, we can generate a copy-pastable `--map` for
+    `verify-with-name-magic` without making the agent grep symbols.txt.
+    """
+    from elftools.elf.elffile import ELFFile
+
+    out: dict[int, str] = {}
+    with o_path.open("rb") as f:
+        elf = ELFFile(f)
+        sdata2 = elf.get_section_by_name(".sdata2")
+        if sdata2 is None:
+            return out
+        sdata2_idx = elf.get_section_index(".sdata2")
+        symtab = elf.get_section_by_name(".symtab")
+        if symtab is None:
+            return out
+        for sym in symtab.iter_symbols():
+            if sym["st_shndx"] != sdata2_idx:
+                continue
+            name = sym.name
+            if not name or name.startswith("@"):
+                continue
+            # Skip section symbols (no useful name for our purposes)
+            if name.startswith("."):
+                continue
+            offset = sym["st_value"]
+            # If multiple named symbols share an offset (rare), prefer
+            # the first one encountered (deterministic via symtab order).
+            out.setdefault(offset, name)
+    return out
+
+
+def suggest_name_magic_map(
+    base_o_path: Path,
+    target_o_path: Optional[Path] = None,
+) -> tuple[list[MagicSymbol], list[tuple[MagicSymbol, str]]]:
+    """For each anonymous @N symbol in `base_o_path`, try to find a
+    matching named symbol in `target_o_path` at the same offset.
+
+    Returns (all_anonymous, suggested_renames). suggested_renames is
+    the subset for which a named counterpart was found in the target,
+    paired with that named symbol. Callers render this as a copy-
+    pastable --map (key=value pairs).
+
+    If target_o_path is None or doesn't exist, suggested_renames is
+    empty — caller falls back to the placeholder suggestion.
+    """
+    anons = find_all_anonymous_sdata2_symbols(base_o_path)
+    if target_o_path is None or not target_o_path.exists():
+        return (anons, [])
+    try:
+        named_by_offset = find_named_sdata2_symbols_by_offset(target_o_path)
+    except Exception:
+        return (anons, [])
+    suggested: list[tuple[MagicSymbol, str]] = []
+    for sym in anons:
+        named = named_by_offset.get(sym.offset)
+        if named:
+            suggested.append((sym, named))
+    return (anons, suggested)
+
+
 @dataclass
 class Mapping:
     """A parsed mapping: either by-value (matches data content) or by-name

@@ -6,7 +6,9 @@ import textwrap
 
 from src.mwcc_debug.symbol_bridge import Binding
 from src.mwcc_debug.tier3_search import (
+    CompileResult,
     SeedPlan,
+    _extract_one_line_reason,
     plan_seeds,
 )
 
@@ -61,6 +63,31 @@ def test_plan_seeds_skips_unsupported_confidence() -> None:
     assert "bad" not in target_vars
 
 
+def test_plan_seeds_skips_low_confidence_by_default() -> None:
+    """low-confidence bindings are skipped unless explicitly opted in."""
+    bindings = [
+        Binding(
+            var_name="weak", virtual=33, decl_line=1,
+            kind="local", type_str="u8", confidence="low-confidence",
+        ),
+    ]
+    plans = plan_seeds(bindings, budget=10)
+    assert plans == []
+
+
+def test_plan_seeds_includes_low_confidence_when_opted_in() -> None:
+    """With include_low_confidence=True, low-confidence bindings ARE used."""
+    bindings = [
+        Binding(
+            var_name="weak", virtual=33, decl_line=1,
+            kind="local", type_str="u8", confidence="low-confidence",
+        ),
+    ]
+    plans = plan_seeds(bindings, budget=10, include_low_confidence=True)
+    assert plans  # at least one plan generated
+    assert all(p.target_var == "weak" for p in plans)
+
+
 def test_plan_seeds_skips_params() -> None:
     """v1 mutators don't operate on params - skip them in planning."""
     bindings = [
@@ -74,3 +101,46 @@ def test_plan_seeds_skips_params() -> None:
     target_vars = {p.target_var for p in plans}
     assert "gobj" not in target_vars
     assert "data" in target_vars
+
+
+def test_extract_one_line_reason_picks_mwcc_error_line() -> None:
+    """The MWCC error block has '# Error: ...' as the most useful line."""
+    stderr = textwrap.dedent("""\
+        ### mwcceppc.exe Compiler:
+        #    File: src/melee/mn/mnvibration.c
+        # ----------------------------------
+        # 1234:  bad code here
+        # Error:   Illegal cast operation: cannot cast 'int' to 'HSD_JObj*'
+        # The rest is noise.
+    """)
+    reason = _extract_one_line_reason(stderr, "")
+    assert "Illegal cast" in reason
+    # Leading '#' decoration is stripped.
+    assert not reason.startswith("#")
+
+
+def test_extract_one_line_reason_syntax_error() -> None:
+    """'syntax error' should be caught when 'error:' isn't there."""
+    stderr = "Something benign\nfile:1: syntax error before token foo\n"
+    reason = _extract_one_line_reason(stderr, "")
+    assert "syntax error" in reason
+
+
+def test_extract_one_line_reason_fallback_on_no_keyword() -> None:
+    """If no error keyword appears, fall back to first non-blank line."""
+    stderr = "\n\nweird output not matching keywords\n"
+    reason = _extract_one_line_reason(stderr, "")
+    assert "weird output" in reason
+
+
+def test_extract_one_line_reason_empty_returns_placeholder() -> None:
+    """Empty input returns the explicit no-diagnostic placeholder."""
+    reason = _extract_one_line_reason("", "")
+    assert "no compiler diagnostic" in reason
+
+
+def test_compile_result_dataclass_default_ok_state() -> None:
+    """Sanity check: a fresh ok=True result has empty error fields."""
+    r = CompileResult(ok=True, stderr="", stdout="", one_line_reason="")
+    assert r.ok is True
+    assert r.one_line_reason == ""

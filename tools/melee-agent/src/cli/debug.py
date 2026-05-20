@@ -13,6 +13,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -1016,6 +1017,96 @@ def score(
         print(f"{result.total:.2f}")
 
 
+def _get_asm_hunks(
+    function: str, melee_root: Path, top_n: int = 5,
+) -> Optional[list[list[str]]]:
+    """Run checkdiff in JSON mode and group its unified-diff lines into
+    hunks of consecutive +/- changes. Each hunk gets a small context
+    window around it for readability.
+
+    Returns:
+        list of hunks (each a list of lines), or None if checkdiff
+        couldn't run / produce JSON / find a meaningful diff.
+
+    The 'top N' selection is by hunk size — longest hunks first, since
+    those tend to encode the most informative differences.
+    """
+    try:
+        proc = subprocess.run(
+            ["python", "tools/checkdiff.py", function,
+             "--format", "json", "--no-build"],
+            cwd=melee_root, capture_output=True, text=True, timeout=60,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    # checkdiff returns 1 when there's a mismatch (expected for stuck fns)
+    if proc.returncode not in (0, 1) or not proc.stdout:
+        return None
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return None
+    diff_lines = data.get("diff", [])
+    if not diff_lines:
+        return None
+
+    # Group lines into hunks. A hunk = a span containing +/- lines with
+    # up to 1 line of intermediate context. checkdiff produces unified-
+    # diff format, so context lines start with ' ' and change lines
+    # start with '+'/'-'. The first 3 lines are the file header.
+    body = diff_lines[3:] if len(diff_lines) >= 3 else diff_lines
+    hunks: list[list[str]] = []
+    cur: list[str] = []
+    blank_run = 0
+    for line in body:
+        if line.startswith("@@"):
+            # objdiff hunk header — boundary
+            if cur:
+                hunks.append(cur)
+                cur = []
+            blank_run = 0
+            continue
+        if line.startswith("+") or line.startswith("-"):
+            cur.append(line)
+            blank_run = 0
+        elif cur:
+            # Context line inside a hunk — keep tightly bound (one line
+            # of slack), then close on the next.
+            cur.append(line)
+            blank_run += 1
+            if blank_run >= 2:
+                hunks.append(cur[:-1])  # drop the trailing context lines
+                cur = []
+                blank_run = 0
+    if cur:
+        hunks.append(cur)
+
+    if not hunks:
+        return None
+    # Score by number of change lines (longer = more interesting)
+    def _score(h: list[str]) -> int:
+        return sum(1 for l in h if l.startswith("+") or l.startswith("-"))
+    hunks.sort(key=_score, reverse=True)
+    return hunks[:top_n]
+
+
+def _format_asm_hunks(hunks: list[list[str]], max_lines_per_hunk: int = 12) -> str:
+    """Render hunks compactly: cap each hunk at max_lines_per_hunk
+    (with a '...(N more)' footer if truncated). Returns the formatted
+    block, ready to print after a header.
+    """
+    out: list[str] = []
+    for i, hunk in enumerate(hunks):
+        if i > 0:
+            out.append("  ---")
+        n_show = min(len(hunk), max_lines_per_hunk)
+        for line in hunk[:n_show]:
+            out.append(f"  {line}")
+        if len(hunk) > n_show:
+            out.append(f"  ...({len(hunk) - n_show} more lines)")
+    return "\n".join(out)
+
+
 @debug_app.command()
 def guide(
     function: Annotated[
@@ -1038,12 +1129,27 @@ def guide(
                  "currently mapped to non-target physicals are shown.",
         ),
     ] = None,
+    asm_hunks: Annotated[
+        int,
+        typer.Option(
+            "--asm-hunks",
+            help="Also show the top N asm-diff hunks from checkdiff. "
+                 "0 (default) omits. Useful when an allocator suggestion "
+                 "is hard to interpret without seeing the actual text-"
+                 "level diff (e.g. unexpected clrlwi from a missing "
+                 "cast). Caps each hunk at ~12 lines for readability.",
+        ),
+    ] = 0,
 ) -> None:
     """Tier 4: human-readable diagnostic for stuck-function debugging.
 
     Reports which virtuals are at the wrong physical, why (interference,
     spill, iteration order), and suggests directions for C-source nudges.
     Hints, not guarantees — interpret in source context.
+
+    Pass --asm-hunks N to also dump the top N asm-diff hunks from
+    checkdiff. Saves switching tools when allocator-only analysis
+    doesn't explain the mismatch (e.g. text diffs from a stray cast).
     """
     pcdump = _resolve_pcdump_path(pcdump, function)
     text = pcdump.read_text()
@@ -1076,6 +1182,22 @@ def guide(
     print()
     print("Suggestions (highest severity first):")
     print(format_suggestions(suggestions))
+
+    if asm_hunks > 0:
+        print()
+        hunks = _get_asm_hunks(function, DEFAULT_MELEE_ROOT, top_n=asm_hunks)
+        if hunks is None:
+            print(f"== asm hunks ==")
+            print("  (checkdiff didn't produce a diff — either the .o "
+                  "isn't built yet, the function matches, or checkdiff "
+                  "errored. Run `tools/checkdiff.py {fn}` for details.)"
+                  .replace("{fn}", function))
+        elif not hunks:
+            print(f"== asm hunks ==")
+            print("  (no diff)")
+        else:
+            print(f"== top {len(hunks)} asm hunks (by diff size) ==")
+            print(_format_asm_hunks(hunks))
 
 
 @debug_app.command(name="derive-target")
@@ -1136,6 +1258,35 @@ def derive_target(
             print(f"spilled:")
             for v in spec["spilled"]:
                 print(f"  - {v}")
+
+
+def _count_function_defs(source: str) -> int:
+    """Coarse count of function definitions in a C TU. Used as a safety
+    heuristic for the --force-coalesce / --force-phys multi-fn guard:
+    when N>=2, force-* without -fn is risky enough to refuse.
+
+    Heuristic: count lines that look like `<retval> <name>(...)` at the
+    top of the file (column 0), excluding obvious non-definitions
+    (statements, declarations ending in `;`). Strings + comments are
+    stripped first. Not exact — `static inline` definitions and
+    K&R prototypes can over- or under-count — but good enough for a
+    "are there multiple functions in this TU" gate.
+    """
+    # Strip strings + comments crudely (newline-preserving)
+    cleaned = re.sub(r'/\*.*?\*/', '', source, flags=re.DOTALL)
+    cleaned = re.sub(r'//[^\n]*', '', cleaned)
+    cleaned = re.sub(r'"[^"\n]*"', '""', cleaned)
+    # Function-definition heuristic: at column 0, a line that has
+    # `name(...)` followed (eventually) by `{` not `;`. Count by
+    # searching for `^<type-or-attr-tokens>+<name>(...)` followed by
+    # `{` somewhere within a few hundred chars (allows multiline
+    # parameter lists).
+    pattern = re.compile(
+        r'^[A-Za-z_][\w\s\*]*?\b([A-Za-z_]\w*)\s*\([^)]*\)\s*'
+        r'(?:[A-Za-z_]\w*\s*)*\{',
+        re.MULTILINE,
+    )
+    return len(pattern.findall(cleaned))
 
 
 def _find_unit_for_function(func_name: str, melee_root: Path) -> Optional[str]:
@@ -1504,7 +1655,11 @@ def verify_perm(
             raise typer.Exit(5)
 
         delta = new_pct - (baseline_pct or 0.0)
-        improved = delta >= threshold
+        # Use epsilon to tolerate float-precision noise — e.g., 91.64-91.59
+        # is 0.04999999... due to IEEE rounding even though both inputs
+        # display as 2-decimal numbers. Without the epsilon a real
+        # +0.05 win at threshold 0.05 gets silently dropped.
+        improved = delta >= threshold - 1e-9
         kept = improved and keep
 
         if json_out:
@@ -1796,7 +1951,9 @@ def enumerate_decl_orders(
             r_results.append({"label": label, "match_pct": pct,
                               "delta": delta})
             tag = ""
-            if delta >= round_threshold:
+            # epsilon: 91.64-91.59 = 0.04999... in IEEE float; without
+            # tolerance a real +0.05 win at threshold 0.05 silently drops.
+            if delta >= round_threshold - 1e-9:
                 tag = "  WIN"
                 if pct > r_best_pct:
                     r_best_pct = pct
@@ -2340,7 +2497,9 @@ def triage_perm(
             res = Result(path=cand, match_pct=pct, delta=delta, status="ok")
             results.append(res)
             tag = ""
-            if delta >= threshold:
+            # epsilon: float-precision tolerance so +0.05 wins at
+            # threshold 0.05 don't silently drop.
+            if delta >= threshold - 1e-9:
                 tag = "  WIN"
                 if best is None or pct > best.match_pct:
                     best = res
@@ -2381,18 +2540,18 @@ def triage_perm(
     print(f"Top {min(top_k, len(ok_results))} candidates by real-tree match%:")
     print("=" * 70)
     for r in ok_results[:top_k]:
-        marker = "WIN" if r.delta >= threshold else "    "
+        marker = "WIN" if r.delta >= threshold - 1e-9 else "    "
         print(f"  {marker}  {r.match_pct:.2f}%  ({r.delta:+.2f}%)  "
               f"{r.path.parent.name}/source.c")
 
-    n_wins = sum(1 for r in ok_results if r.delta >= threshold)
+    n_wins = sum(1 for r in ok_results if r.delta >= threshold - 1e-9)
     n_build_failed = sum(1 for r in results if r.status == "build-failed")
     n_no_fn = sum(1 for r in results if r.status == "no-function")
     print()
     print(f"Summary: {n_wins} winners (≥{threshold:.2f}% over baseline), "
           f"{n_build_failed} build failures, {n_no_fn} missing function")
 
-    if apply_best and best is not None and best.delta >= threshold:
+    if apply_best and best is not None and best.delta >= threshold - 1e-9:
         cand_text = best.path.read_text()
         transfer_candidate(cand_text, target_path, function)
         subprocess.run(
@@ -2433,6 +2592,15 @@ def stuck(
         bool,
         typer.Option("--json", help="Emit structured digest as JSON."),
     ] = False,
+    asm_hunks: Annotated[
+        int,
+        typer.Option(
+            "--asm-hunks",
+            help="Also show the top N asm-diff hunks from checkdiff. "
+                 "0 (default) omits. Saves switching tools when "
+                 "allocator-level analysis doesn't explain the mismatch.",
+        ),
+    ] = 0,
 ) -> None:
     """One-shot diagnostic for a stuck function.
 
@@ -2445,7 +2613,8 @@ def stuck(
       3. Coloring summary — virtuals, SPILLED markers, pass info
       4. Guidance issues — red-flag patterns from `debug guide`
       5. Suspicious casts — HIGH+MEDIUM cast warnings
-      6. Next steps — ranked by cost/likelihood
+      6. Asm hunks (if --asm-hunks N) — text-level diff samples
+      7. Next steps — ranked by cost/likelihood
     """
     melee_root = DEFAULT_MELEE_ROOT
     unit = _find_unit_for_function(function, melee_root)
@@ -2621,6 +2790,19 @@ def stuck(
             print(f"  {marker} line {w['line']}: ({w['cast_type']}) "
                   f"{w['inner_expr']} → {w['call_target']}")
         print()
+
+    if asm_hunks > 0:
+        hunks = _get_asm_hunks(function, melee_root, top_n=asm_hunks)
+        if hunks is None:
+            print(f"== Asm hunks ==")
+            print(f"  (checkdiff didn't produce a diff — either matching, "
+                  f"not built, or errored. Try `tools/checkdiff.py "
+                  f"{function}` directly.)")
+            print()
+        elif hunks:
+            print(f"== Top {len(hunks)} asm hunks (by diff size) ==")
+            print(_format_asm_hunks(hunks))
+            print()
 
     print(f"== Next steps (ranked by cost) ==")
     for i, step in enumerate(next_steps, 1):
@@ -4002,6 +4184,30 @@ def pcdump_local(
                  "$MWCC_DEBUG_WIBO or ../melee-harness/bin/wibo.",
         ),
     ] = None,
+    keep_obj: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--keep-obj",
+            help="Preserve the compiled .o at this path instead of "
+                 "discarding it. The default behavior is to discard, "
+                 "but for force-coalesce / force-phys hypothesis "
+                 "testing the .o is exactly what you need to feed into "
+                 "objdiff/checkdiff. Path can be absolute or relative "
+                 "to the melee root.",
+        ),
+    ] = None,
+    diff: Annotated[
+        bool,
+        typer.Option(
+            "--diff",
+            help="After compile, run objdiff against the production "
+                 "target.o for the function (or whole TU). Saves a "
+                 "round-trip when you want to know 'does this "
+                 "force-coalesce reach the target?' in one shot. "
+                 "Implies --keep-obj (uses a temp path if --keep-obj "
+                 "not given).",
+        ),
+    ] = False,
 ) -> None:
     """Local mwcc_debug pcdump (macOS+wibo+Zig-built DLL, no SSH).
 
@@ -4014,6 +4220,10 @@ def pcdump_local(
 
     Env-var hooks (--force-phys, --force-iter-first, --force-coalesce,
     --force-coalesce-fn) pass through to the DLL.
+
+    Use --keep-obj PATH to preserve the compiled .o for downstream
+    inspection (objdiff/checkdiff/etc.). Use --diff to run an integrated
+    objdiff against the target — answers "does this match?" in one go.
     """
     melee_root = DEFAULT_MELEE_ROOT
     src_rel = _resolve_src_relative(c_file)
@@ -4051,15 +4261,33 @@ def pcdump_local(
     if pcdump_path.exists():
         pcdump_path.unlink()
 
-    # Use unique discard .o too, for the same reason.
-    discard_o = f"/tmp/pcdump_local_discard_{os.getpid()}_{int(time.time() * 1000)}.o"
+    # Resolve where the .o lands. Default: discard via /tmp. When the
+    # agent wants to inspect/diff the output, --keep-obj routes it to a
+    # specific path. --diff implies keeping (a temp path if no --keep-obj
+    # was given) so we have something to diff against.
+    if keep_obj is not None:
+        obj_target = keep_obj if keep_obj.is_absolute() else (melee_root / keep_obj)
+        obj_target.parent.mkdir(parents=True, exist_ok=True)
+        obj_out = str(obj_target)
+        discard_obj_after = False
+    elif diff:
+        obj_target = Path(
+            f"/tmp/pcdump_local_keep_{os.getpid()}_{int(time.time() * 1000)}.o"
+        )
+        obj_out = str(obj_target)
+        discard_obj_after = True  # remove after diff if not user-requested
+    else:
+        obj_target = Path(
+            f"/tmp/pcdump_local_discard_{os.getpid()}_{int(time.time() * 1000)}.o"
+        )
+        obj_out = str(obj_target)
+        discard_obj_after = True
 
-    # Args: cflags split + source + output. We discard the .o output
-    # (just need the pcdump side-effect). Use /tmp for the .o.
+    # Args: cflags split + source + output.
     args = (
         [str(wibo_path), str(debug_compiler)]
         + shlex.split(cflags)
-        + ["-c", src_rel, "-o", discard_o]
+        + ["-c", src_rel, "-o", obj_out]
     )
 
     # Set env vars for our DLL's hooks
@@ -4078,17 +4306,140 @@ def pcdump_local(
     if force_coalesce_fn:
         env["MWCC_DEBUG_FORCE_COALESCE_FUNCTION"] = force_coalesce_fn
 
+    # Safety guard: --force-coalesce without --force-coalesce-fn on a
+    # multi-function TU is a known wibo-hanger. Virtual indices are
+    # per-function; if the spec happens to be in-bounds for an unintended
+    # function, the resulting compile can drive that function's state
+    # into pathology and lock the wibo process in UE state (immune to
+    # SIGKILL). Detect heuristically by counting function definitions
+    # in the .c file and refuse the run with a clear error.
+    # Distinguish "not provided" (None) from "explicit empty opt-out" (""):
+    # the guard only fires on None.
+    if force_coalesce and force_coalesce_fn is None:
+        src_path = melee_root / src_rel
+        if src_path.exists():
+            n_fns = _count_function_defs(src_path.read_text())
+            if n_fns >= 2:
+                typer.echo(
+                    f"refusing --force-coalesce without --force-coalesce-fn "
+                    f"on a multi-function TU ({src_rel} has ~{n_fns} "
+                    f"function definitions).\n"
+                    f"Virtual indices are per-function; an override aimed at "
+                    f"one function can corrupt others and may hang the wibo "
+                    f"compile process in UE state.\n"
+                    f"Re-run with `--force-coalesce-fn <function_name>` to "
+                    f"scope the override. Pass `--force-coalesce-fn ''` to "
+                    f"explicitly opt out of this check (NOT RECOMMENDED).",
+                    err=True,
+                )
+                raise typer.Exit(2)
+    # Same guard for --force-phys: same per-function issue, same wibo
+    # risk if a per-function-class override happens to fit elsewhere.
+    if (force_phys or force_phys_iter) and force_phys_fn is None:
+        src_path = melee_root / src_rel
+        if src_path.exists():
+            n_fns = _count_function_defs(src_path.read_text())
+            if n_fns >= 2:
+                typer.echo(
+                    f"refusing --force-phys/--force-phys-iter without "
+                    f"--force-phys-fn on a multi-function TU "
+                    f"({src_rel} has ~{n_fns} function definitions).\n"
+                    f"Same per-function-virtual hazard as --force-coalesce. "
+                    f"Re-run with `--force-phys-fn <function_name>` to scope. "
+                    f"Pass `--force-phys-fn ''` to opt out (NOT RECOMMENDED).",
+                    err=True,
+                )
+                raise typer.Exit(2)
+
+    # Use Popen + a no-progress watchdog so a hung wibo (UE state from a
+    # force-coalesce edge case, etc.) doesn't burn the full default
+    # timeout. The watchdog kills the subprocess group after N seconds
+    # without any progress on stdout/stderr. We can't actually kill a
+    # wibo that's pinned in UE state (immune to SIGKILL — only a host
+    # reboot reaps it), but we can stop OUR process from waiting and
+    # stop accumulating new compile attempts behind it.
+    WATCHDOG_TIMEOUT_S = float(os.environ.get(
+        "MWCC_DEBUG_HANG_TIMEOUT", "45"))
     try:
-        proc = subprocess.run(
+        proc_handle = subprocess.Popen(
             args,
             cwd=melee_root,
             env=env,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
+            start_new_session=True,  # own pgrp for clean kill
         )
     except FileNotFoundError as e:
         typer.echo(f"failed to invoke wibo: {e}", err=True)
         raise typer.Exit(3)
+
+    import select
+    import signal as _signal
+    out_buf: list[str] = []
+    err_buf: list[str] = []
+    last_progress = time.time()
+    killed_by_watchdog = False
+    while True:
+        if proc_handle.poll() is not None:
+            # Drain remaining output
+            remaining_out, remaining_err = proc_handle.communicate()
+            if remaining_out:
+                out_buf.append(remaining_out)
+            if remaining_err:
+                err_buf.append(remaining_err)
+            break
+        # Wait for output (up to 1s at a time so we can check watchdog).
+        ready, _, _ = select.select(
+            [proc_handle.stdout, proc_handle.stderr], [], [], 1.0,
+        )
+        for stream in ready:
+            chunk = stream.readline()
+            if chunk:
+                if stream is proc_handle.stdout:
+                    out_buf.append(chunk)
+                else:
+                    err_buf.append(chunk)
+                last_progress = time.time()
+        if time.time() - last_progress > WATCHDOG_TIMEOUT_S:
+            killed_by_watchdog = True
+            try:
+                os.killpg(os.getpgid(proc_handle.pid), _signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            # Drain whatever the OS still hands back (proc may be UE)
+            try:
+                remaining_out, remaining_err = proc_handle.communicate(timeout=2)
+                if remaining_out:
+                    out_buf.append(remaining_out)
+                if remaining_err:
+                    err_buf.append(remaining_err)
+            except subprocess.TimeoutExpired:
+                # wibo is in UE state — can't reap. Move on.
+                pass
+            break
+
+    # Shim into the old proc.stderr/stdout/returncode contract so the
+    # rest of the function works unchanged.
+    class _ProcShim:
+        def __init__(self, rc, out, err):
+            self.returncode = rc
+            self.stdout = out
+            self.stderr = err
+    proc = _ProcShim(
+        rc=(proc_handle.returncode if proc_handle.returncode is not None else 124),
+        out="".join(out_buf),
+        err="".join(err_buf),
+    )
+
+    if killed_by_watchdog:
+        typer.echo(
+            f"[pcdump-local] no compile progress for "
+            f"{WATCHDOG_TIMEOUT_S:.0f}s — likely wibo hang (UE state). "
+            f"Subprocess killed; check `ps aux | grep wibo` for zombie. "
+            f"Override via MWCC_DEBUG_HANG_TIMEOUT=<seconds>.",
+            err=True,
+        )
 
     if proc.returncode != 0:
         # Compile failed — surface stderr but keep going if pcdump.txt
@@ -4114,11 +4465,74 @@ def pcdump_local(
         typer.echo("compile completed but no pcdump.txt was emitted", err=True)
         raise typer.Exit(4)
 
-    # Clean up the discarded .o (may not exist if compile aborted early)
-    try:
-        os.unlink(discard_o)
-    except OSError:
-        pass
+    # Run objdiff if --diff was requested. The integrated check
+    # answers "did this compile reach the target?" without the agent
+    # having to manually re-run objdiff-cli. We invoke checkdiff in
+    # --no-build mode so it uses the .o we just produced.
+    if diff:
+        if not obj_target.exists():
+            typer.echo(
+                f"--diff requested but .o not produced at {obj_target}; "
+                f"compile likely failed (see error above).",
+                err=True,
+            )
+        else:
+            # checkdiff finds the function by name across all .o files
+            # the build emits; the simplest contract is to copy our .o
+            # into the build path that checkdiff expects, then call it.
+            unit_for_o = src_rel[:-2].removeprefix("src/")  # melee/mn/foo
+            build_o = melee_root / "build" / "GALE01" / "src" / f"{unit_for_o}.o"
+            build_o_existed = build_o.exists()
+            saved_o: Optional[bytes] = None
+            if build_o_existed:
+                saved_o = build_o.read_bytes()
+            try:
+                build_o.parent.mkdir(parents=True, exist_ok=True)
+                build_o.write_bytes(obj_target.read_bytes())
+                print(f"[diff] running checkdiff against {build_o}...",
+                      file=sys.stderr)
+                # Pick the first function in the source as the target
+                src_path = melee_root / src_rel
+                fn_to_diff = None
+                if src_path.exists():
+                    src_text = src_path.read_text()
+                    # First function definition; coarse heuristic
+                    m = re.search(
+                        r'^[A-Za-z_][\w\s\*]*?\b([A-Za-z_]\w*)\s*\([^)]*\)\s*'
+                        r'(?:[A-Za-z_]\w*\s*)*\{',
+                        src_text, re.MULTILINE,
+                    )
+                    if m:
+                        fn_to_diff = m.group(1)
+                if fn_to_diff is None:
+                    print(
+                        "[diff] could not find a function name to diff; "
+                        "use checkdiff manually.", file=sys.stderr,
+                    )
+                else:
+                    print(f"[diff] target function: {fn_to_diff}", file=sys.stderr)
+                    diff_proc = subprocess.run(
+                        ["python", "tools/checkdiff.py", fn_to_diff,
+                         "--format", "plain", "--no-build"],
+                        cwd=melee_root,
+                    )
+                    if diff_proc.returncode == 0:
+                        print("[diff] MATCH — function bytes are identical.")
+            finally:
+                if build_o_existed and saved_o is not None:
+                    build_o.write_bytes(saved_o)
+                elif not build_o_existed and build_o.exists():
+                    try:
+                        build_o.unlink()
+                    except OSError:
+                        pass
+
+    # Clean up the .o if it was temp-allocated (and not requested by user)
+    if discard_obj_after:
+        try:
+            os.unlink(obj_out)
+        except OSError:
+            pass
 
     # Place output
     if str(output) == "-":
@@ -4126,15 +4540,43 @@ def pcdump_local(
         pcdump_path.unlink()
         return
 
-    if output is None:
-        # Cache
-        unit = src_rel[:-2].removeprefix("src/")  # melee/mn/mnvibration
-        from ..mwcc_debug import cache as pcdump_cache
-        pcdump_cache.ensure_cache_dir(melee_root)
-        output = pcdump_cache.cache_path(melee_root, unit)
+    # Resolve the canonical cache location for this TU so we can ALWAYS
+    # update it — even when --output specifies a different path.
+    # Without this, downstream commands (analyze, var-to-virtual, guide)
+    # auto-resolve via the cache and silently read stale data.
+    unit = src_rel[:-2].removeprefix("src/")  # melee/mn/mnvibration
+    from ..mwcc_debug import cache as pcdump_cache
+    pcdump_cache.ensure_cache_dir(melee_root)
+    cache_target = pcdump_cache.cache_path(melee_root, unit)
 
-    output.parent.mkdir(parents=True, exist_ok=True)
-    pcdump_path.rename(output)
+    if output is None:
+        # No --output → cache is the destination, no extra copy needed.
+        output = cache_target
+        output.parent.mkdir(parents=True, exist_ok=True)
+        pcdump_path.rename(output)
+    else:
+        # --output specified: write there AND mirror into the cache so
+        # downstream auto-resolve doesn't read a stale dump.
+        output.parent.mkdir(parents=True, exist_ok=True)
+        # Move to user-requested path
+        pcdump_path.rename(output)
+        # Mirror to cache (best-effort; same content)
+        try:
+            cache_target.parent.mkdir(parents=True, exist_ok=True)
+            cache_target.write_bytes(output.read_bytes())
+            if cache_target != output:
+                print(
+                    f"wrote: {output} (also synced to cache {cache_target})",
+                    file=sys.stderr,
+                )
+        except OSError as e:
+            print(
+                f"wrote: {output} (cache mirror failed: {e})",
+                file=sys.stderr,
+            )
+            return
+        return
+
     print(f"wrote: {output}", file=sys.stderr)
 
 
@@ -4470,14 +4912,32 @@ def var_to_virtual(
         bool,
         typer.Option("--json", help="Emit as JSON."),
     ] = False,
+    basis: Annotated[
+        bool,
+        typer.Option(
+            "--basis",
+            help="Also dump the heuristic's evidence: parsed params/locals, "
+                 "the cursor calculation step-by-step, observed virtuals in "
+                 "the pre-pass, and any red flags that lowered confidence. "
+                 "Use when you suspect var-to-virtual gave you a wrong "
+                 "mapping — the basis tells you whether the cursor "
+                 "shifted, a macro hid a decl, or the function has nested "
+                 "blocks the parser skipped.",
+        ),
+    ] = False,
 ) -> None:
     """Bridge: given a source variable name, predict its MWCC virtual.
 
-    Reports `confidence`: best-guess (decl-order heuristic matched),
-    ambiguous (no observed virtual for this variable), or unsupported
-    (e.g., variable lives in a macro the tokenizer can't see).
+    Reports `confidence`: best-guess (heuristic matched, no concerns),
+    low-confidence (matched but red flags present — cursor may be
+    wrong), ambiguous (no observed virtual for this variable), or
+    unsupported (e.g., variable lives in a macro the tokenizer can't
+    see). Pass `--basis` to see the underlying evidence.
     """
-    from ..mwcc_debug.symbol_bridge import find_virtual_for_var
+    from ..mwcc_debug.symbol_bridge import (
+        find_virtual_for_var,
+        list_bindings_with_basis,
+    )
 
     melee_root = DEFAULT_MELEE_ROOT
     pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
@@ -4498,36 +4958,104 @@ def var_to_virtual(
         typer.echo(f"{function} not in report.json", err=True)
         raise typer.Exit(2)
     source = (melee_root / "src" / f"{unit}.c").read_text()
-    binding = find_virtual_for_var(source, function, var_name, pre)
+    bindings, basis_data = list_bindings_with_basis(source, function, pre)
+    binding = next(
+        (b for b in bindings if b.var_name == var_name), None
+    )
 
     if binding is None:
         if json_out:
-            print(json.dumps({
-                "var_name": var_name,
-                "found": False,
-            }, indent=2))
+            payload: dict = {"var_name": var_name, "found": False}
+            if basis and basis_data is not None:
+                payload["basis"] = _basis_to_dict(basis_data)
+            print(json.dumps(payload, indent=2))
         else:
             typer.echo(
                 f"variable {var_name!r} not found in {function}",
                 err=True,
             )
+            if basis and basis_data is not None:
+                _print_basis(basis_data, bindings)
         raise typer.Exit(1)
 
     if json_out:
-        print(json.dumps({
+        payload = {
             "var_name": binding.var_name,
             "virtual": binding.virtual,
             "kind": binding.kind,
             "type": binding.type_str,
             "confidence": binding.confidence,
             "found": True,
-        }, indent=2))
+        }
+        if basis and basis_data is not None:
+            payload["basis"] = _basis_to_dict(basis_data)
+        print(json.dumps(payload, indent=2))
     else:
         print(f"variable: {binding.var_name}")
         print(f"  virtual: r{binding.virtual}")
         print(f"  kind:    {binding.kind}")
         print(f"  type:    {binding.type_str}")
         print(f"  conf:    {binding.confidence}")
+        if basis and basis_data is not None:
+            print()
+            _print_basis(basis_data, bindings)
+
+
+def _basis_to_dict(basis) -> dict:
+    """Render a BindingBasis as a JSON-compatible dict."""
+    return {
+        "parsed_params": [
+            {"name": p.name, "type": p.type_str, "decl_index": p.decl_index}
+            for p in basis.parsed_params
+        ],
+        "parsed_locals": [
+            {"name": ld.name, "type": ld.type_str, "decl_index": ld.decl_index}
+            for ld in basis.parsed_locals
+        ],
+        "observed_virtuals": basis.observed_virtuals,
+        "unrecognized_decls": basis.unrecognized_decls,
+        "red_flags": basis.red_flags,
+    }
+
+
+def _print_basis(basis, bindings) -> None:
+    """Human-readable dump of a BindingBasis + how the cursor mapped."""
+    print("=== basis ===")
+    if basis.red_flags:
+        print(f"red flags: {', '.join(basis.red_flags)}")
+        print("  (these demote 'best-guess' → 'low-confidence' for locals)")
+    else:
+        print("red flags: (none)")
+    print()
+    print(f"parsed params ({len(basis.parsed_params)}):")
+    if not basis.parsed_params:
+        print("  (none)")
+    for p in basis.parsed_params:
+        print(f"  [{p.decl_index}] {p.type_str:<22s} {p.name}")
+    print()
+    print(f"parsed locals ({len(basis.parsed_locals)}):")
+    if not basis.parsed_locals:
+        print("  (none)")
+    for ld in basis.parsed_locals:
+        print(f"  [{ld.decl_index}] {ld.type_str:<22s} {ld.name}")
+    if basis.unrecognized_decls:
+        print()
+        print("unrecognized decl-shaped statements (parser couldn't handle):")
+        for s in basis.unrecognized_decls:
+            print(f"  • {s}")
+    print()
+    obs = basis.observed_virtuals
+    obs_str = (
+        ", ".join(f"r{v}" for v in obs[:16])
+        + (f", ... (+{len(obs) - 16} more)" if len(obs) > 16 else "")
+    ) if obs else "(none)"
+    print(f"observed virtuals in pre-pass ({len(obs)}): {obs_str}")
+    print()
+    print("predicted bindings (cursor = 32 + position):")
+    for b in bindings:
+        marker = "✓" if b.virtual in obs else "·" if b.kind == "param" else "✗"
+        print(f"  {marker} {b.var_name:<22s} r{b.virtual:<5d} "
+              f"[{b.kind}/{b.confidence}]")
 
 
 @debug_app.command(name="virtual-to-var")
@@ -4540,9 +5068,11 @@ def virtual_to_var(
         ),
     ],
     virtual: Annotated[
-        int,
+        str,
         typer.Argument(
-            help="Virtual register number (32+), or ig_idx.",
+            help="Virtual register number (32+) or ig_idx. Accepts "
+                 "'62' or 'r62' — the 'r' prefix is stripped so you "
+                 "can copy-paste straight from analyze/guide output.",
         ),
     ],
     pcdump: Annotated[
@@ -4557,9 +5087,29 @@ def virtual_to_var(
     ] = False,
 ) -> None:
     """Bridge inverse: given a virtual register, predict the source
-    variable name (decl-order heuristic).
+    variable name (decl-order heuristic). When no source variable
+    binds to the requested virtual (compiler-introduced temps, spill
+    nodes, etc.), falls back to showing the first defining IR op
+    so you can correlate to the C source manually.
     """
-    from ..mwcc_debug.symbol_bridge import find_var_for_virtual
+    from ..mwcc_debug.symbol_bridge import (
+        find_first_def,
+        find_var_for_virtual,
+    )
+
+    # Accept 'r62' alongside '62' — easier to copy from analyze output.
+    vstr = virtual.strip()
+    if vstr.lower().startswith("r"):
+        vstr = vstr[1:]
+    try:
+        virtual_int = int(vstr)
+    except ValueError:
+        typer.echo(
+            f"invalid virtual register {virtual!r}; expected an integer "
+            f"(optionally with 'r' prefix).", err=True,
+        )
+        raise typer.Exit(2)
+    virtual = virtual_int  # downstream code uses int form
 
     melee_root = DEFAULT_MELEE_ROOT
     pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
@@ -4583,16 +5133,48 @@ def virtual_to_var(
     binding = find_var_for_virtual(source, function, virtual, pre)
 
     if binding is None:
+        # Fallback: no source variable mapped (compiler temp, spill,
+        # post-CSE intermediate, etc.). Surface the first-def IR op so
+        # the agent can correlate to a C expression manually — e.g.,
+        # `lwz r62, 44(r34)` means "r62 is something->field_at_0x2C
+        # where something is in r34".
+        first = find_first_def(virtual, pre)
         if json_out:
-            print(json.dumps({
+            payload: dict = {
                 "virtual": virtual,
                 "found": False,
-            }, indent=2))
+            }
+            if first is not None:
+                payload["first_def"] = {
+                    "block_idx": first.block_idx,
+                    "opcode": first.opcode,
+                    "operands": first.operands,
+                    "annotations": first.annotations,
+                }
+            print(json.dumps(payload, indent=2))
         else:
             typer.echo(
-                f"no source variable bound to r{virtual} in {function}",
+                f"no source variable bound to r{virtual} in {function} "
+                f"(likely a compiler-introduced temp — spill, CSE, or IV).",
                 err=True,
             )
+            if first is not None:
+                typer.echo("", err=True)
+                typer.echo("first defining op (in pre-coloring pass):", err=True)
+                typer.echo(
+                    f"  block {first.block_idx}: {first.opcode} {first.operands}",
+                    err=True,
+                )
+                if first.annotations:
+                    for a in first.annotations:
+                        typer.echo(f"    {a}", err=True)
+                typer.echo("", err=True)
+                typer.echo(
+                    "Hint: correlate the load address/offset back to a C "
+                    "struct field, or trace the source register(s) to find "
+                    "the originating expression.",
+                    err=True,
+                )
         raise typer.Exit(1)
 
     if json_out:
@@ -4768,6 +5350,20 @@ def tier3_search(
         float,
         typer.Option("--blend", help="mwcc-score blend weight."),
     ] = 0.1,
+    include_low_confidence: Annotated[
+        bool,
+        typer.Option(
+            "--include-low-confidence",
+            help="Also generate seeds from bindings the symbol-bridge "
+                 "flagged as low-confidence (red flags present: nested "
+                 "decls, statics, extra compiler-introduced virtuals). "
+                 "Off by default — skip these to avoid bad seeds on "
+                 "functions where the cursor heuristic is unreliable. "
+                 "Verify the binding manually via "
+                 "`debug var-to-virtual <var> -f FN --basis` before "
+                 "opting in.",
+        ),
+    ] = False,
 ) -> None:
     """Tier 3: multi-start search over targeted mutation seeds.
 
@@ -4787,6 +5383,7 @@ def tier3_search(
     from ..mwcc_debug.tier3_search import (
         materialize_seed,
         plan_seeds,
+        save_compile_failure,
         smoke_compile,
     )
 
@@ -4816,13 +5413,27 @@ def tier3_search(
         raise typer.Exit(3)
 
     bindings = list_bindings(base_source, function, pre)
-    plans = plan_seeds(bindings, budget=budget)
+    plans = plan_seeds(
+        bindings, budget=budget,
+        include_low_confidence=include_low_confidence,
+    )
     if not plans:
-        typer.echo(
-            "no Tier 3 targets; fall back to `debug permute -f "
-            f"{function}` for a vanilla Tier 2 run.",
-            err=True,
-        )
+        # Diagnostic: if there ARE low-confidence bindings, explain.
+        n_low = sum(1 for b in bindings if b.confidence == "low-confidence")
+        if n_low and not include_low_confidence:
+            typer.echo(
+                f"no Tier 3 targets — {n_low} local binding(s) demoted to "
+                f"low-confidence by red flags. Run `debug var-to-virtual "
+                f"<var> -f {function} --basis` to audit, then re-run "
+                f"with --include-low-confidence if mapping looks correct.",
+                err=True,
+            )
+        else:
+            typer.echo(
+                "no Tier 3 targets; fall back to `debug permute -f "
+                f"{function}` for a vanilla Tier 2 run.",
+                err=True,
+            )
         raise typer.Exit(1)
 
     print(f"[tier3] {len(plans)} seed plans:")
@@ -4857,15 +5468,44 @@ def tier3_search(
         if out_c is None:
             print(f"[tier3] seed{i}: mutation unsupported; skipping")
             continue
-        ok = smoke_compile(out_c, wibo, debug_compiler, cflags, melee_root)
-        print(f"[tier3] seed{i}: compile={'ok' if ok else 'FAIL'}")
-        materialized.append((plan, seed_dir, ok))
+        result = smoke_compile(out_c, wibo, debug_compiler, cflags, melee_root)
+        if result.ok:
+            print(f"[tier3] seed{i}: compile=ok")
+        else:
+            log_path = save_compile_failure(seed_dir, result)
+            print(f"[tier3] seed{i}: compile=FAIL — {result.one_line_reason}")
+            print(f"         (full output: {log_path}, seed source: "
+                  f"{seed_dir / 'base.c'})")
+        materialized.append((plan, seed_dir, result))
 
-    compiled = [m for m in materialized if m[2]]
+    compiled = [m for m in materialized if m[2].ok]
     if not compiled:
         typer.echo(
-            f"all {len(materialized)} tier3 seeds failed to compile — "
-            "bridge mapping likely wrong or mutation produced invalid C.",
+            f"all {len(materialized)} tier3 seeds failed to compile.",
+            err=True,
+        )
+        typer.echo("", err=True)
+        typer.echo("Failed seeds (inspect each):", err=True)
+        for i, (plan, seed_dir, result) in enumerate(materialized):
+            typer.echo(
+                f"  seed{i} ({plan.mutator} on {plan.target_var}): "
+                f"{result.one_line_reason}",
+                err=True,
+            )
+            typer.echo(
+                f"    sources: {seed_dir / 'base.c'}",
+                err=True,
+            )
+            typer.echo(
+                f"    error:   {seed_dir / 'compile_error.txt'}",
+                err=True,
+            )
+        typer.echo("", err=True)
+        typer.echo(
+            "Common causes: (a) symbol-bridge mapping is wrong (check "
+            "`debug var-to-virtual -f FN --basis`); (b) the mutation "
+            "produced invalid C (look at base.c); (c) the function uses "
+            "a pattern the mutators don't handle yet.",
             err=True,
         )
         raise typer.Exit(5)
@@ -5005,31 +5645,47 @@ def verify_with_name_magic(
             )
     else:
         # No --map given. List anonymous magic constants in the freshly-
-        # built .o so the agent can construct a map. This eliminates the
-        # "I see @243 in the diff, what does that correspond to?" gap.
+        # built .o so the agent can construct a map. Cross-reference with
+        # the target .o (build/GALE01/obj/<unit>.o) to suggest concrete
+        # named symbols instead of placeholders.
         try:
-            from ..mwcc_debug.o_rewriter import find_all_anonymous_sdata2_symbols
-            syms = find_all_anonymous_sdata2_symbols(obj_path)
+            from ..mwcc_debug.o_rewriter import suggest_name_magic_map
+            target_o = melee_root / "build" / "GALE01" / "obj" / f"{unit}.o"
+            syms, suggested = suggest_name_magic_map(obj_path, target_o)
         except Exception as e:
-            syms = []
+            syms, suggested = [], []
             print(f"[verify] no --map given (sym-list failed: {e})")
         if syms:
+            named_for_sym: dict[str, str] = {s.name: n for s, n in suggested}
             print(f"[verify] no --map given; {len(syms)} anonymous .sdata2 "
                   f"symbol(s) found in {obj_rel}:")
             print(f"        {'name':<10}  {'sz':>2}  {'value':<18}  notes")
             print(f"        {'-'*10}  {'-'*2}  {'-'*18}  -----")
             import struct as _struct
-            suggested_pairs: list[str] = []
+            ready_pairs: list[str] = []
+            placeholder_pairs: list[str] = []
             for s in syms:
                 note = ""
+                named = named_for_sym.get(s.name)
                 if s.size == 8:
                     value_str = f"0x{s.value:016x}"
                     if s.value == 0x4330000080000000:
-                        note = "int-to-float bias (signed) — try `s32=<sym>`"
-                        suggested_pairs.append("s32=<NAMED_SYMBOL>")
+                        if named:
+                            note = f"signed int-to-float bias → s32={named}"
+                            ready_pairs.append(f"s32={named}")
+                        else:
+                            note = "int-to-float bias (signed) — try `s32=<sym>`"
+                            placeholder_pairs.append("s32=<NAMED_SYMBOL>")
                     elif s.value == 0x4330000000000000:
-                        note = "int-to-float bias (unsigned) — try `u32=<sym>`"
-                        suggested_pairs.append("u32=<NAMED_SYMBOL>")
+                        if named:
+                            note = f"unsigned int-to-float bias → u32={named}"
+                            ready_pairs.append(f"u32={named}")
+                        else:
+                            note = "int-to-float bias (unsigned) — try `u32=<sym>`"
+                            placeholder_pairs.append("u32=<NAMED_SYMBOL>")
+                    elif named:
+                        note = f"target named: {named}"
+                        ready_pairs.append(f"{s.name}={named}")
                 elif s.size == 4:
                     value_str = f"0x{s.value:08x}"
                     try:
@@ -5037,17 +5693,34 @@ def verify_with_name_magic(
                         note = f"float ≈ {f_val:g}"
                     except Exception:
                         pass
+                    if named:
+                        note = f"{note + ' / ' if note else ''}target named: {named}"
+                        ready_pairs.append(f"{s.name}={named}")
                 else:
                     value_str = f"0x{s.value:x}"
                 print(f"        {s.name:<10}  {s.size:>2}  {value_str:<18}  {note}")
-            if suggested_pairs:
+            if ready_pairs:
+                # Concrete map ready to copy-paste — built from target .o
+                # cross-reference, so the agent doesn't have to grep
+                # symbols.txt.
                 print(
-                    f"[verify] HINT: if checkdiff below complains about "
-                    f"{', '.join(s.name for s in syms if s.size == 8)} relocs, "
-                    f"re-run with `--map "
-                    f"'{','.join(sorted(set(suggested_pairs)))}'` "
-                    f"(replace <NAMED_SYMBOL> with the target .o's named "
-                    f"symbol at that .sdata2 offset; check symbols.txt)."
+                    f"[verify] HINT: target .o ({target_o.relative_to(melee_root) if target_o.exists() else target_o}) "
+                    f"has named counterparts. Re-run with:\n"
+                    f"  --map '{','.join(ready_pairs)}'"
+                )
+                if placeholder_pairs:
+                    print(
+                        f"[verify] (some anonymous symbols had no target "
+                        f"counterpart; fill in manually: "
+                        f"{','.join(sorted(set(placeholder_pairs)))})"
+                    )
+            elif placeholder_pairs:
+                print(
+                    f"[verify] HINT: target .o not built or has no named "
+                    f"counterparts at matching offsets. Build it first "
+                    f"(`ninja build/GALE01/obj/{unit}.o`) for an auto-"
+                    f"resolved map, or fill in manually: "
+                    f"`--map '{','.join(sorted(set(placeholder_pairs)))}'`"
                 )
             else:
                 print(
