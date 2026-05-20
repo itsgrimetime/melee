@@ -218,6 +218,17 @@ static inline void mnVibration_SetPortPanelState(MnVibrationData* data,
     HSD_JObjAnimAll(panel_jobj);
 }
 
+static inline void mnVibration_CleanupText(MnVibrationData* data,
+                                           s32 cleanup_idx)
+{
+    for (; cleanup_idx < 8; cleanup_idx++) {
+        HSD_SisLib_803A5CC4(data->texts[cleanup_idx]);
+    }
+    if (data->title_text != NULL) {
+        HSD_SisLib_803A5CC4(data->title_text);
+    }
+}
+
 static inline HSD_GObj*
 mnVibration_CreateCursorGObj(MnVibrationData* data,
                              MnVibrationJointAssets* assets)
@@ -290,6 +301,7 @@ void fn_80247510(HSD_GObj* gobj)
     MnVibrationData* data = mnVibration_804D6C28->user_data;
     u64 inputs_repeat;
     s32 i;
+    s32 nav_idx;
     u64 inputs;
     u8 cursor_row;
     u8 name_idx;
@@ -310,19 +322,12 @@ void fn_80247510(HSD_GObj* gobj)
     name_idx = 0;
     if (inputs & (2LL << 32)) {
         MnVibrationData* exit_data;
-        int cleanup_idx;
         lbAudioAx_80024030(name_idx);
         mn_804A04F0.entering_menu = name_idx;
         mn_80229894(4, name_idx, 3);
         // Clean up text objects - reload data pointer
         exit_data = mnVibration_804D6C28->user_data;
-        cleanup_idx = name_idx;
-        for (; cleanup_idx < 8; cleanup_idx++) {
-            HSD_SisLib_803A5CC4(exit_data->texts[cleanup_idx]);
-        }
-        if (exit_data->title_text != NULL) {
-            HSD_SisLib_803A5CC4(exit_data->title_text);
-        }
+        mnVibration_CleanupText(exit_data, name_idx);
         HSD_GObjPLink_80390228(mnVibration_804D6C28);
         HSD_PadRumbleRemoveAll();
         lb_8001CE00();
@@ -382,15 +387,15 @@ void fn_80247510(HSD_GObj* gobj)
     }
 
     // Check for up/down navigation
-    for (i = 0; i < 4; i++) {
-        inputs = gm_801A36A0(i);
-        if ((inputs & (0x40LL << 32)) && data->x0[i + 2] == 1) {
+    for (nav_idx = 0; nav_idx < 4; nav_idx++) {
+        inputs = gm_801A36A0(nav_idx);
+        if ((inputs & (0x40LL << 32)) && data->x0[nav_idx + 2] == 1) {
             lbAudioAx_80024030(2);
-            mnVibration_SetPortPanelState(data, i, 0);
-        } else if (gm_801A36A0(i) & (0x80LL << 32)) {
-            if (data->x0[i + 2] == 0) {
+            mnVibration_SetPortPanelState(data, nav_idx, 0);
+        } else if (gm_801A36A0(nav_idx) & (0x80LL << 32)) {
+            if (data->x0[nav_idx + 2] == 0) {
                 lbAudioAx_80024030(2);
-                mnVibration_SetPortPanelState(data, i, 1);
+                mnVibration_SetPortPanelState(data, nav_idx, 1);
             }
         }
     }

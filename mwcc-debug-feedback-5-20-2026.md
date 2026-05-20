@@ -218,6 +218,25 @@ Context: working on `src/melee/mn/mnvibration.c`, mainly `fn_80247510` and
   `(f32) (anim_byte_chain = data->x0[port_a + 2])` into assignment plus call,
   transferred cleanly but was neutral (`95.916664%`, delta `+0.0`).
 
+## Follow-up after merging `d48c08a2f`
+
+- `tier3-search -f fn_80247510 --budget 4 --per-seed-time 25 --total-time 140
+  --include-low-confidence` now launches per-seed permuter runs and reports
+  useful seed plans. In this case the four seeds compiled but found no
+  improvement. However, the command left an untracked `pcdump.txt` at the repo
+  root after exit. It would be cleaner to write that scratch dump under the
+  seed directory or `/tmp`, or remove it on completion when no candidate is
+  applied.
+
+- The same `tier3-search` run generated only broad alias/type seeds
+  (`data` alias, `nav_idx` type changes, `cursor_row` type change). For the
+  current `fn_80247510` blocker, the actionable question is more specific:
+  "can we introduce a short-lived temp around the inlined
+  `HSD_JObjSetMtxDirtySub` argument without changing the main
+  `cursor_jobj` lifetime?" An inline/source-suggestion mode that can target a
+  pcode block or function-call argument would be more useful than whole-local
+  aliasing here.
+
 ## Follow-up after merging `2701f8137`
 
 - `match-iter-first -f fn_80247510 --auto-verify` produced useful target
