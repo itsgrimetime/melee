@@ -243,8 +243,8 @@ HSD_JObj* mnVibration_802474C4(s32 count)
 ///   magic constant emitted as @472 instead of mnVibration_804DC018.
 void fn_80247510(HSD_GObj* gobj)
 {
-    u64 inputs_repeat;
     MnVibrationData* data = mnVibration_804D6C28->user_data;
+    u64 inputs_repeat;
     s32 i;
     u64 inputs;
     HSD_JObj** jobjs;
@@ -253,7 +253,7 @@ void fn_80247510(HSD_GObj* gobj)
     u8 rumble_setting;
     HSD_JObj* jobj;
     int new_var;
-    PAD_STACK(136);
+    PAD_STACK(144);
 
     if (mn_804D6BC8.cooldown != 0) {
         Menu_DecrementAnimTimer();
@@ -343,19 +343,19 @@ void fn_80247510(HSD_GObj* gobj)
             HSD_JObj* panel_jobj;
             lbAudioAx_80024030(2);
             data->x0[i + 2] = 0;
-            panel_jobj = data->jobjs[mnVibration_804D4FE8[i]];
-            HSD_JObjReqAnimAll(panel_jobj, (f32) data->x0[i + 2]);
+            panel_jobj = ((MnVibrationData*) mnVibration_804D6C28->user_data)
+                             ->jobjs[mnVibration_804D4FE8[(u8) i]];
+            HSD_JObjReqAnimAll(panel_jobj, data->x0[i + 2]);
             HSD_JObjAnimAll(panel_jobj);
-        } else if (inputs & (0x80LL << 32)) {
+        } else if (gm_801A36A0(i) & (0x80LL << 32)) {
             if (data->x0[i + 2] == 0) {
-                s32 port_idx;
                 HSD_JObj* panel_jobj;
                 lbAudioAx_80024030(2);
-                port_idx = i;
-                data->x0[port_idx + 2] = 1;
-                panel_jobj = data->jobjs[mnVibration_804D4FE8[port_idx]];
-                i = port_idx;
-                HSD_JObjReqAnimAll(panel_jobj, (f32) data->x0[i + 2]);
+                data->x0[i + 2] = 1;
+                panel_jobj =
+                    ((MnVibrationData*) mnVibration_804D6C28->user_data)
+                        ->jobjs[mnVibration_804D4FE8[(u8) i]];
+                HSD_JObjReqAnimAll(panel_jobj, data->x0[i + 2]);
                 HSD_JObjAnimAll(panel_jobj);
             }
         }
@@ -410,11 +410,14 @@ void fn_80247510(HSD_GObj* gobj)
                         HSD_JObjGetTranslationY(nav_data->jobjs[17]));
                 HSD_JObjSetTranslateZ(
                     cursor_jobj, HSD_JObjGetTranslationZ(nav_data->jobjs[17]));
+                return;
             }
+            return;
         } else if (GetNameCount() > 8 && data->scroll_offset != 0) {
             lbAudioAx_80024030(2);
             data->scroll_offset--;
             mnVibration_80248644(mnVibration_804D6C28);
+            return;
         }
     }
 
