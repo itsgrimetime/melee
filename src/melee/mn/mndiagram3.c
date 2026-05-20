@@ -286,8 +286,8 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
               if (mnDiagram_IsDistanceOverflow(stat_val))
               {
                 HSD_SisLib_803A6368(icon_text, 0x7F);
-                goto next;
               }
+              goto next;
             }
             HSD_SisLib_803A6368(icon_text, r17);
           }
