@@ -547,6 +547,10 @@ def main() -> int:
     # Auto-detect TTY - use non-interactive mode if no TTY available
     if not sys.stdout.isatty():
         args.no_tty = True
+    # --format json always uses the non-interactive path (TTY would only
+    # produce objdiff-cli's interactive diff, which can't emit JSON).
+    if args.format == "json":
+        args.no_tty = True
 
     func_name = args.function
 
@@ -745,6 +749,7 @@ def main() -> int:
                     fromfile="expected", tofile="current", lineterm=""))
             }
             print(json_mod.dumps(diff_data, indent=2))
+            return 1 if ref_asm != our_asm else 0
         elif args.format == "side-by-side":
             # Side-by-side diff (better for agents to understand)
             if ref_asm == our_asm:

@@ -84,3 +84,48 @@ def test_ensure_cache_dir_creates_path(melee_root: Path) -> None:
     p = ensure_cache_dir(melee_root)
     assert p == melee_root / "build" / CACHE_DIRNAME
     assert p.is_dir()
+
+
+def test_lookup_fresh_after_rename_with_utime(melee_root: Path) -> None:
+    """Simulate the pcdump-local rename path: a temp file created before a
+    source edit is renamed to the cache. Without an explicit os.utime() call
+    the cache mtime stays at pre-edit time, causing a false stale report.
+    With os.utime() the mtime is bumped to now and the entry should be fresh.
+    """
+    import os
+
+    src = melee_root / "src" / "melee" / "mn" / "mnvibration.c"
+    src.write_text("// original")
+
+    # Simulate temp pcdump created BEFORE source edit
+    tmp = melee_root / "pcdump_tmp.txt"
+    tmp.write_text("Starting function ...")
+    old_tmp_mtime = tmp.stat().st_mtime
+
+    time.sleep(0.05)
+
+    # Source is saved/touched after pcdump started (ninja or user edit)
+    src.write_text("// updated")
+
+    time.sleep(0.01)
+
+    # Rename to cache (preserves old mtime — this is the bug scenario)
+    cache = cache_path(melee_root, "melee/mn/mnvibration")
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    tmp.rename(cache)
+
+    # Without utime: cache has old mtime → stale
+    entry_before_utime = lookup(melee_root, "melee/mn/mnvibration")
+    assert entry_before_utime is not None
+    assert entry_before_utime.fresh is False, (
+        "Expected stale before utime (rename preserves old mtime)"
+    )
+
+    # Apply the fix: touch mtime to now
+    os.utime(cache, None)
+
+    entry_after_utime = lookup(melee_root, "melee/mn/mnvibration")
+    assert entry_after_utime is not None
+    assert entry_after_utime.fresh is True, (
+        "Expected fresh after os.utime() bumps cache mtime to now"
+    )
