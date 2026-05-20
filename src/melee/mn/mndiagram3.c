@@ -933,7 +933,7 @@ void mnDiagram3_8024714C(void *arg0)
   HSD_JObj *row0;
   HSD_JObj *row1;
   mnDiagram_ArchiveData *archive;
-  void *new_var;
+  void* new_var;
   int assert_line;
   f32 row_spacing;
   HSD_JObj *popup_alias;
@@ -1011,7 +1011,7 @@ void mnDiagram3_8024714C(void *arg0)
     u8 stat_idx;
     f32 font_size;
     f32 neg_spacing;
-    u16 *base;
+    u16* base;
     gobj = mnDiagram3_804D6C20;
     new_var = gobj->user_data;
     d = new_var;
@@ -1019,7 +1019,8 @@ void mnDiagram3_8024714C(void *arg0)
     scroll = d->scroll_offset;
     (row0) ? ((void) 0) : (__assert(mnDiagram3_804D4FD8, 0x3EE, mnDiagram3_804D4FE0));
     row1 = d->jobjs[9];
-    row_spacing = row0->translate.y;
+    font_size = row0->translate.y;
+    row_spacing = font_size;
     (row1) ? ((void) 0) : (__assert(mnDiagram3_804D4FD8, 0x3EE, mnDiagram3_804D4FE0));
     row_spacing = row1->translate.y - row_spacing;
     lb_8000B1CC(d->jobjs[8], (Vec3 *) (&mnDiagram3_803EEC28), &sp48);
