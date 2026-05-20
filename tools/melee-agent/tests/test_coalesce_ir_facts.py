@@ -73,3 +73,42 @@ def test_collect_populates_facts_for_single_block() -> None:
     assert 3 in facts.by_virtual
     assert facts.by_virtual[3].is_phys is True
     assert facts.by_virtual[32].is_phys is False
+
+
+def test_collect_aggregates_use_sites_across_blocks() -> None:
+    """A virtual used in multiple blocks gets all its use sites."""
+    b0 = _make_block(0, [
+        _make_ist("li", "r32,5", [("r", 32)]),
+    ])
+    b1 = _make_block(1, [
+        _make_ist("addi", "r33,r32,1", [("r", 33), ("r", 32)]),
+    ])
+    b2 = _make_block(2, [
+        _make_ist("stw", "r32,4(r34)", [("r", 32), ("r", 34)]),
+    ])
+    pre_pass = Pass(name="AFTER PEEPHOLE FORWARD")
+    pre_pass.blocks.extend([b0, b1, b2])
+    from src.mwcc_debug.parser import Function
+    fn = Function(name="test_fn", passes=[pre_pass])
+    facts = collect(fn, "void test_fn(void) {}")
+    use_blocks = {b for (b, _) in facts.by_virtual[32].use_sites}
+    assert use_blocks == {0, 1, 2}
+    assert facts.by_virtual[32].use_sites_truncated is False
+
+
+def test_collect_caps_use_sites_at_USE_SITES_CAP() -> None:
+    """When use sites exceed the cap, truncated flag is True."""
+    from src.mwcc_debug.coalesce_ir_facts import USE_SITES_CAP
+    # 20 uses in one block — should be capped to 16
+    instrs = [
+        _make_ist("addi", f"r33,r32,{i}", [("r", 33), ("r", 32)])
+        for i in range(20)
+    ]
+    block = _make_block(0, instrs)
+    pre_pass = Pass(name="AFTER PEEPHOLE FORWARD")
+    pre_pass.blocks.append(block)
+    from src.mwcc_debug.parser import Function
+    fn = Function(name="test_fn", passes=[pre_pass])
+    facts = collect(fn, "void test_fn(void) {}")
+    assert len(facts.by_virtual[32].use_sites) == USE_SITES_CAP
+    assert facts.by_virtual[32].use_sites_truncated is True

@@ -147,7 +147,8 @@ def _is_param(
     if first_def is not None and first_def.block_idx == 0:
         if first_def.opcode == "mr":
             # regs[1] is the source register
-            # We don't have regs here — re-derive from operands string
+            # TODO(task-9): use first_def.regs[1] once FirstDef carries it.
+            # For now we parse the source register out of the operands string.
             ops = first_def.operands.replace(" ", "")
             parts = ops.split(",")
             if len(parts) >= 2 and parts[1].startswith("r"):
