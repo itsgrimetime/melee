@@ -64,7 +64,7 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
         }
 
         {
-            int val = offset + scroll;
+            int val = scroll + offset;
             if (val >= limit) {
                 val = val - limit;
             } else {
@@ -408,8 +408,11 @@ void fn_802461BC(HSD_GObj* gobj)
             i++;
         } while (i < 10);
 
-        mnDiagram2_ClearDetailView(mnDiagram3_804D6C20);
-        mnDiagram3_80245BA4(mnDiagram3_804D6C20);
+        {
+            HSD_GObj* g = mnDiagram3_804D6C20;
+            mnDiagram2_ClearDetailView(g);
+            mnDiagram3_80245BA4(g);
+        }
         return;
     }
 
@@ -447,7 +450,8 @@ void fn_802461BC(HSD_GObj* gobj)
                                              mnDiagram3_804D4FE0));
                     is_dirty = 0;
                     if (!(popup_jobj->flags & 0x800000) &&
-                        (popup_jobj->flags & 0x40)) {
+                        (popup_jobj->flags & 0x40))
+                    {
                         is_dirty = 1;
                     }
                     if (is_dirty == 0) {
@@ -472,7 +476,8 @@ void fn_802461BC(HSD_GObj* gobj)
                                              mnDiagram3_804D4FE0));
                     is_dirty = 0;
                     if (!(popup_jobj->flags & 0x800000) &&
-                        (popup_jobj->flags & 0x40)) {
+                        (popup_jobj->flags & 0x40))
+                    {
                         is_dirty = 1;
                     }
                     if (is_dirty == 0) {
@@ -497,7 +502,8 @@ void fn_802461BC(HSD_GObj* gobj)
                                              mnDiagram3_804D4FE0));
                     is_dirty = 0;
                     if (!(popup_jobj->flags & 0x800000) &&
-                        (popup_jobj->flags & 0x40)) {
+                        (popup_jobj->flags & 0x40))
+                    {
                         is_dirty = 1;
                     }
                     if (is_dirty == 0) {
@@ -505,8 +511,11 @@ void fn_802461BC(HSD_GObj* gobj)
                     }
                 }
             }
-            mnDiagram2_ClearDetailView(mnDiagram3_804D6C20);
-            mnDiagram3_80245BA4(mnDiagram3_804D6C20);
+            {
+                HSD_GObj* g = mnDiagram3_804D6C20;
+                mnDiagram2_ClearDetailView(g);
+                mnDiagram3_80245BA4(g);
+            }
             return;
         }
         if (data->scroll_offset != 0) {
@@ -564,8 +573,11 @@ void fn_802461BC(HSD_GObj* gobj)
                 i++;
             } while (i < 10);
 
-            mnDiagram2_ClearDetailView(mnDiagram3_804D6C20);
-            mnDiagram3_80245BA4(mnDiagram3_804D6C20);
+            {
+                HSD_GObj* g = mnDiagram3_804D6C20;
+                mnDiagram2_ClearDetailView(g);
+                mnDiagram3_80245BA4(g);
+            }
         }
     } else if (buttons & 2) {
         if (data->saved_selection < 9) {
@@ -601,7 +613,8 @@ void fn_802461BC(HSD_GObj* gobj)
                                              mnDiagram3_804D4FE0));
                     is_dirty = 0;
                     if (!(popup_jobj->flags & 0x800000) &&
-                        (popup_jobj->flags & 0x40)) {
+                        (popup_jobj->flags & 0x40))
+                    {
                         is_dirty = 1;
                     }
                     if (is_dirty == 0) {
@@ -626,7 +639,8 @@ void fn_802461BC(HSD_GObj* gobj)
                                              mnDiagram3_804D4FE0));
                     is_dirty = 0;
                     if (!(popup_jobj->flags & 0x800000) &&
-                        (popup_jobj->flags & 0x40)) {
+                        (popup_jobj->flags & 0x40))
+                    {
                         is_dirty = 1;
                     }
                     if (is_dirty == 0) {
@@ -651,7 +665,8 @@ void fn_802461BC(HSD_GObj* gobj)
                                              mnDiagram3_804D4FE0));
                     is_dirty = 0;
                     if (!(popup_jobj->flags & 0x800000) &&
-                        (popup_jobj->flags & 0x40)) {
+                        (popup_jobj->flags & 0x40))
+                    {
                         is_dirty = 1;
                     }
                     if (is_dirty == 0) {
@@ -659,8 +674,11 @@ void fn_802461BC(HSD_GObj* gobj)
                     }
                 }
             }
-            mnDiagram2_ClearDetailView(mnDiagram3_804D6C20);
-            mnDiagram3_80245BA4(mnDiagram3_804D6C20);
+            {
+                HSD_GObj* g = mnDiagram3_804D6C20;
+                mnDiagram2_ClearDetailView(g);
+                mnDiagram3_80245BA4(g);
+            }
             return;
         }
         if (data->is_name_mode != 0) {
@@ -723,8 +741,11 @@ void fn_802461BC(HSD_GObj* gobj)
                 i++;
             } while (i < 10);
 
-            mnDiagram2_ClearDetailView(mnDiagram3_804D6C20);
-            mnDiagram3_80245BA4(mnDiagram3_804D6C20);
+            {
+                HSD_GObj* g = mnDiagram3_804D6C20;
+                mnDiagram2_ClearDetailView(g);
+                mnDiagram3_80245BA4(g);
+            }
         }
     }
 }
