@@ -16,16 +16,35 @@ until Phase 1 lands and the AST surface is stable.
 
 ## Motivation
 
-The heartbeat agent's `fn_80248A78` matching is blocked at 99.6% by a
-register-allocation swap involving `cursor_row` — a local declared inside
-the cursor-setup nested block. Today:
+The heartbeat agent's `fn_80248A78` matching is blocked at 99.6% by
+register-allocation issues in the `frame == 14.0f` branch
+(`src/melee/mn/mnvibration.c` lines 109+ of the function), where four
+locals are declared inside a nested compound statement:
 
-- `var-to-virtual cursor_row` returns "variable not found".
-- `virtual-to-var 34` returns the low-confidence top-level `frame` guess.
-- `mutate insert-alias --var cursor_row` fails the same way.
-- `enumerate-decl-orders` only considers top-level locals — the actual
-  interesting swap candidates (`cursor_jobj`, `row_0_jobj`, etc.) are
-  unreachable.
+```c
+} else if (frame == 14.0f) {
+    if (GetNameCount() != 0) {
+        MnVibrationData* data2;
+        MnVibrationData* data3;
+        MnVibrationAssets* assets;
+        HSD_JObj* loaded_joint;
+        ...
+    }
+}
+```
+
+Today:
+
+- `var-to-virtual data2` returns "variable not found" — the bridge's
+  regex walker skips into the outer compound statement and never sees
+  `data2`.
+- `virtual-to-var <virt>` for whichever virtual MWCC assigned to
+  `data2` returns a wrong, low-confidence guess pulled from a
+  top-level local (typically `frame` or `jobj` because the cursor
+  model overshoots).
+- `mutate insert-alias --var data2` fails the same way.
+- `enumerate-decl-orders` only considers top-level locals — swap
+  candidates within the nested block are unreachable.
 
 The current regex parser in `symbol_bridge.py` explicitly says at
 `_top_level_statements`: "Nested-block contents are returned as a single
@@ -41,11 +60,31 @@ Three new modules + one rewrite, all in
   source via `tree-sitter` + `tree-sitter-c` (already project deps).
   Exposes `walk_function(source, fn_name) -> list[LocalDecl]`.
   One file, one purpose. No regex.
-- **`symbol_bridge.py`** (rewrite) — keeps the same public API. Drops
-  `_top_level_statements`, `_strip_strings_and_comments`,
-  `walk_local_decls`, `_looks_like_decl`, the `_skip_initializer` /
-  `_skip_array_brackets` helpers, and most regex constants. Shrinks from
-  ~713 lines to ~250. Calls `ast_walker.walk_function` to get decls.
+- **`symbol_bridge.py`** (rewrite) — keeps the same public API.
+  **Private helpers `_extract_function_text`, `_strip_strings_and_comments`,
+  and `walk_local_decls` MUST be preserved as backward-compat adapters**
+  because `tools/melee-agent/src/mwcc_debug/mutators.py:14-18` imports
+  all three and uses them in `mutate_type_change`, `_get_var_type_in_fn`,
+  `mutate_insert_alias_before_use`, and the statement-splitter
+  (reviewer 2 feedback C1). Phase 1 thin-wraps these:
+  - `walk_local_decls(body)` → delegates to the tree-sitter walker for
+    a synthetic single-function source, returns
+    `list[LocalDecl]` (top-level only — preserves pre-Phase-1
+    behavior for mutators that don't yet understand nested scope).
+    Phase 2 migrates mutators to scope-aware lookups.
+  - `_strip_strings_and_comments(text)` → can stay as-is. It's a
+    text-only utility used by mutators for their *own* string analysis,
+    not for decl lookup. Phase 1 keeps it.
+  - `_extract_function_text(source, fn_name)` → delegates to
+    `ast_walker.extract_function_text` (which uses tree-sitter to
+    locate the function body), but signature and return shape stay
+    identical so mutators don't change.
+
+  The genuinely-obsolete internals (`_top_level_statements`,
+  `_looks_like_decl`, `_skip_initializer`, `_skip_array_brackets`,
+  `_DECL_HEAD_RE`, `_DECLARATOR_NAME_RE`) are deleted. Net shrink is
+  modest, but module clarity improves substantially. See the File
+  Structure table at the end for revised LOC math.
 - **`scope_path.py`** (new, ~80 lines) — utilities: `is_nested_within`,
   `nearest_common_ancestor`, `format_for_display`. Shared between
   bridge and (in Phase 2) the mutator.
@@ -98,9 +137,13 @@ work.
   `{` token. The column suffix disambiguates two blocks that open on
   the same line (common when macros expand to `if (x) { ... } else
   { ... }` on a single line — reviewer feedback I3).
-- Stable across reformats as long as the block-opening token doesn't
-  move; if it does, the path changes — that's intentional, callers
-  re-derive after structural edits.
+- **Transient, not persistent.** Stable for the lifetime of one CLI
+  invocation. Adding a comment line, reformatting braces, or running
+  any source mutation invalidates `scope_path` strings because the
+  `line:col` of the block-opening `{` moves. Callers that persist a
+  binding across a mutation MUST re-derive its scope_path after the
+  edit. Phase 2 mutate/enumerate tooling will internally re-parse
+  after every source change (reviewer 2 feedback I2).
 
 CLI display uses `/` as separator (e.g.
 `fn_80248A78/block@l234c12`). The `--scope <value>` filter on lookups:
@@ -151,8 +194,12 @@ class Binding:
 
 When the regex-fallback path fires (tree-sitter ImportError or parse
 failure — see "Tree-sitter availability and parse failure" below),
-returned Bindings carry `scope_path=(fn_name,)` (top-level only —
-fallback doesn't descend into nested blocks).
+returned `LocalDecl` AND `Binding` records consistently set
+`scope_path=(fn_name,)` (top-level only — fallback doesn't descend
+into nested blocks). The default `()` from the `LocalDecl` field
+declaration is only used when constructing test fixtures without a
+known function name; production code paths always populate at least
+the function-name element (reviewer feedback I4).
 
 ### `BindingBasis` (existing in `symbol_bridge.py:365`, extended)
 
@@ -176,12 +223,13 @@ in task #113). One new field:
 decls_by_scope: dict[tuple[str, ...], list[LocalDecl]] = field(default_factory=dict)
 ```
 
-Surfaces all decls grouped by `scope_path`. Phase 2 (mutate +
-enumerate) will use this; Phase 1 ships it empty-but-correct so Phase
-2 lands without touching `BindingBasis` again (reviewer feedback S4).
+Surfaces all decls grouped by `scope_path`. Phase 1 populates this
+fully (reviewer 2 feedback S4 — it's nearly free given we already
+have the AST walk, and ships `--basis` strictly more informative).
+Phase 2 (mutate + enumerate) consumes it.
 
-(Reviewer feedback C2: `parsed_locals` is preserved, `decls_by_scope`
-is additive.)
+(Reviewer 1 feedback C2: `parsed_locals` is preserved,
+`decls_by_scope` is additive.)
 
 ### `FirstDef` (unchanged)
 
@@ -189,34 +237,57 @@ Pcdump-only concept. No source-position fields needed.
 
 ## Lookup behavior
 
-### `var-to-virtual <name>`
+### `var-to-virtual <name>` (API and CLI contract — reviewer 2 C2)
 
-Input: variable name (e.g. `cursor_row`). Optional: `--scope <value>`
-(format documented under `scope_path` above — exact match by default,
-trailing `/` for prefix).
+The existing function signature `find_virtual_for_var` returns
+`Optional[Binding]` and the CLI displays one binding. Phase 1 keeps
+that default behavior — single binding, picked by highest confidence
+then top-level-first — to preserve backward compatibility for scripts
+and the existing JSON schema.
 
-1. Walk AST → all `LocalDecl`s with `name == "cursor_row"` (may be
-   multiple due to shadowing or unrelated reuse).
-2. For each matching decl, look up the corresponding `Binding` via
-   ordinal-within-scope matching (see "Per-scope ordinal matching"
-   below).
-3. Return ALL matches, sorted: highest confidence first; within same
-   confidence, by `scope_path` (top-level before nested).
-4. If `--scope <value>` is given, filter to bindings using exact/prefix
-   semantics from `scope_path` section.
+A NEW `--all` flag (default off) opts in to multi-binding output for
+shadowing / nested-reuse cases.
 
-Output (text, with the project's `rN` prefix convention from task
-#115):
+Default behavior (unchanged from today):
+1. Walk AST → all `LocalDecl`s with `name == "cursor_row"`.
+2. Look up each candidate `Binding`.
+3. **Pick one** by (highest confidence → top-level scope first → first
+   in source order). Return as `Optional[Binding]` to the CLI.
+4. CLI prints single binding, same text + JSON schema as today, BUT
+   adds a `scope_path` field to the output.
+
+With `--all`:
+1. Same walk + lookup as above.
+2. Return `list[Binding]` to the CLI.
+3. CLI prints all matches, sorted: confidence then scope (top-level
+   first); JSON payload becomes an array under a new top-level key.
+
+With `--scope <value>` (orthogonal to `--all`):
+- Filter using exact/prefix semantics from `scope_path` section.
+- If `--scope` reduces matches to one, output stays single-binding
+  even without `--all`.
+
+API surface change summary:
+- `find_virtual_for_var(...)` keeps its `Optional[Binding]` signature
+  for back-compat. A new sibling `find_all_virtuals_for_var(...) ->
+  list[Binding]` powers `--all`.
+
+Output text (single, default):
 ```
 cursor_row -> r34  (best-guess, type=HSD_JObj*, scope=fn_80248A78/block@l234c12, line 235)
-cursor_row -> r78  (best-guess, type=HSD_JObj*, scope=fn_80248A78/block@l312c12, line 313)
 ```
 
-JSON includes `scope_path` as an array per binding.
+Output text (`--all`):
+```
+cursor_row (2 matches):
+  -> r34  (best-guess, type=HSD_JObj*, scope=fn_80248A78/block@l234c12, line 235)
+  -> r78  (best-guess, type=HSD_JObj*, scope=fn_80248A78/block@l312c12, line 313)
+```
 
 If zero matches: print the existing "variable not found" error. The
-agent's complaint specifically was that `cursor_row` produced this error
-because the nested-block decl was invisible — Phase 1 fixes that.
+heartbeat agent's complaint was that nested-block decls produced this
+error because they were invisible — Phase 1 fixes that without
+breaking the default single-binding contract.
 
 ### `virtual-to-var <virt>`
 
@@ -261,45 +332,92 @@ Algorithm:
 4. If `observed_virtuals` runs out, remaining decls get `virtual=-1`
    with `confidence="ambiguous"`.
 
-**Worked example (reviewer feedback I1):** Suppose `fn_80248A78` has
-this shape:
+**Worked example (reviewer feedback I1, using real
+`fn_80248A78` shape):** Truncated to illustrate the algorithm, with
+placeholder virtual numbers (X, Y, Z for nested-block decls — exact
+numbers come from MWCC and are validated empirically; see
+"Confidence calibration for nested bindings" below).
 
 ```c
-void fn_80248A78(HSD_GObj* gobj) {
-    MnVibrationData* data;       // top-level decl 0
-    s32 i;                       // top-level decl 1
-    HSD_JObj* frame;             // top-level decl 2
-    // ... 3 instructions defining r32, r33, r34 ...
-    for (i = 0; i < 8; i++) {    // opens nested scope at line 234
-        HSD_JObj* cursor_row;    // nested decl 0
-        HSD_JObj* row_0_jobj;    // nested decl 1
-        // ... 2 more instructions defining r35, r36 ...
+void fn_80248A78(HSD_GObj* arg0) {
+    MnVibrationData* temp_r30;   // top-level decl 0
+    f32 frame;                    // top-level decl 1
+    HSD_JObj* jobj;               // top-level decl 2
+    // ... 15 more top-level decls including cursor_row, base_y, etc.
+    if (frame == 10.0f) { ... }
+    else if (frame == 14.0f) {
+        if (GetNameCount() != 0) {                 // opens at line L
+            MnVibrationData* data2;   // nested decl 0 in this scope
+            MnVibrationData* data3;   // nested decl 1
+            MnVibrationAssets* assets;// nested decl 2
+            HSD_JObj* loaded_joint;   // nested decl 3
+            // ... uses data2 / data3 / assets / loaded_joint ...
+        }
     }
 }
 ```
 
-Suppose `observed_virtuals = [32, 33, 34, 35, 36]`.
+Suppose `observed_virtuals = [32, 33, ..., 51, X, Y, Z, W, ...]`
+(the cascade after MWCC has assigned all top-level decls reaches
+some N at function end; then nested-block first-defs follow).
 
 Per-scope walk:
-- Scope `fn_80248A78`: decls = [data, i, frame].
-  - `data` ← 32, `i` ← 33, `frame` ← 34. (3 claimed.)
-- Scope `fn_80248A78/block@l234c4`: decls = [cursor_row, row_0_jobj].
-  - `cursor_row` ← 35, `row_0_jobj` ← 36. (5 claimed total.)
+- Scope `fn_80248A78`: decls = [temp_r30, frame, jobj, jobj2, ...,
+  cursor_row, base_y, spacing, temp_x, temp_y, temp_z].
+  - Each top-level decl gets the next virtual from `observed_virtuals`
+    in source order (existing cursor model, unchanged).
+- Scope `fn_80248A78/block@lLcC` (`GetNameCount() != 0` body): decls =
+  [data2, data3, assets, loaded_joint].
+  - `data2` ← X, `data3` ← Y, `assets` ← Z, `loaded_joint` ← W,
+    where X..W are the next un-claimed virtuals after the top-level
+    walk finished.
 
 Today's bridge:
-- `cursor_row` doesn't appear in any scope (regex walker skipped the
-  nested block).
-- `virtual-to-var 35` returns the wrong low-confidence top-level
-  `frame` (since the cursor model overshoots its 3 top-level decls).
+- `data2` / `data3` / `assets` / `loaded_joint` don't appear in any
+  scope (regex walker skipped the nested compound statement).
+- `virtual-to-var X` returns whatever wrong top-level guess the
+  cursor model produces because the cursor overshoots.
 
 Phase 1 bridge:
-- `cursor_row` returns a `best-guess` binding `r35`.
-- `virtual-to-var 35` returns `cursor_row` with
-  `scope=fn_80248A78/block@l234c4`.
+- The four nested-block decls each get a binding with `scope_path`
+  set to the nested scope.
+- `virtual-to-var X` may return `data2` *if* the per-scope ordinal
+  model holds. Whether that's a `"best-guess"` or
+  `"ambiguous-nested"` confidence depends on empirical validation
+  (see next subsection).
 
-The matching stays best-guess (we still don't have MWCC line numbers).
-The improvement is *visibility*: nested-block decls now exist in the
-binding list at all.
+### Confidence calibration for nested bindings (reviewer feedback I6)
+
+The per-scope ordinal heuristic is an extrapolation from today's
+"MWCC numbers locals in source order from r32" rule. It is *not*
+proven to hold for nested-block decls — MWCC's allocator iterates IR
+in IR-emission order, which happens to track source order at function
+top but may interleave nested-block decls with body-of-outer-block
+CSE temps, induction vars, etc.
+
+Phase 1 ships a **conservative default**: nested-block bindings get
+`confidence="ambiguous-nested"` (a new value added to the existing
+confidence ladder) until empirical evidence supports promoting them.
+`tier3_search` skips `"ambiguous-nested"` by default (same treatment
+as `"low-confidence"`); CLI surfaces them with a clear annotation:
+`(ambiguous, nested — verify with var-to-virtual --basis)`.
+
+A Phase 1 task (added in writing-plans) executes a small empirical
+study before promotion: pick 3-5 functions across `mn/mnvibration.c`,
+`mn/mnname.c`, `mn/mnevent.c` that have nested-block decls; run
+pcdump; manually correlate observed virtuals to source decls. If the
+per-scope ordinal model holds for ≥ 80% of the studied decls, the
+nested-binding confidence floor is promoted to `"best-guess"` in a
+follow-up commit. If not, the bridge keeps `"ambiguous-nested"` and a
+follow-up spec investigates a better algorithm.
+
+Either way, *visibility* — the nested decl appearing in the binding
+list at all — is the Phase 1 win. *Precision* is gated behind the
+study.
+
+The matching algorithm itself stays best-guess (we still don't have
+MWCC line numbers). The improvement is visibility plus an honest
+confidence label.
 
 ## Error handling
 
@@ -396,19 +514,49 @@ it's purely lexical.
 Tree-sitter handles these natively. The `_looks_like_decl` heuristic
 for "unrecognized shapes" in the old parser is no longer needed.
 
-### Caching
+### Macro-heavy source (reviewer 2 feedback S6)
+
+Melee's `.c` files use `PAD_STACK(N)`, `HSD_ASSERT(...)`, and other
+macros that tree-sitter sees as undefined identifiers when parsing
+without preprocessing. Bare tree-sitter may flag these as `ERROR`
+nodes.
+
+`walk_function` softens the error check: an `ERROR` node at the *body
+level* (sibling of a decl/statement) is tolerated as long as the
+decls themselves parse cleanly. Only `ERROR` nodes that *enclose* or
+*interrupt* a decl trigger `AstWalkError` and fallback. This matches
+the existing tolerance pattern in `hooks/c_analyzer.py`.
+
+A pre-implementation validation task (added to the writing-plans
+output): run `ast_walker.walk_function` on `mnvibration.c`,
+`mnname.c`, `mnevent.c` for at least 10 functions and confirm
+fallback fires < 10% of the time. If it fires more, increase the
+tolerance bar before merging Phase 1.
+
+### Caching (reviewer feedback C3 + I4)
 
 `ast_walker.walk_function` is called many times per CLI invocation
 (every CLI command path that needs bindings). The walker caches
-parsed `tree_sitter.Tree` objects in a module-level dict keyed on
-`source_sha256(source: str)`. The path argument (when provided by
-callers) is informational only — it never participates in the cache
-key. This handles in-memory sources (mutate, permuter staging) the
-same as on-disk files (reviewer feedback I4).
+parsed `tree_sitter.Tree` objects via a tiered key strategy:
 
-`ast_walker.clear_cache()` is exposed for tests. A pytest autouse
-fixture in `tools/melee-agent/tests/conftest.py` calls it between
-tests to prevent cross-test cache leaks:
+- **On-disk callers**: cache key = `(path, mtime_ns)`. Cheap to
+  compute; correct as long as filesystem mtime is reliable (which it
+  is for ninja-managed source).
+- **In-memory callers** (mutate, permuter staging, test fixtures —
+  pass `path=None`): cache key = `("mem", id(source_string))`. The
+  Python object identity is sufficient because the same source
+  string is typically reused across a single mutator iteration; once
+  the string goes out of scope it's GC'd and its entry becomes stale
+  (handled by max-size eviction).
+
+A max-size LRU bounds growth to 64 entries (configurable via
+`_AST_CACHE_MAX`); least-recently-used entries are evicted on
+insert. This handles the `enumerate-decl-orders --iterate` flow
+where many distinct source variants are walked sequentially.
+
+`ast_walker.clear_cache()` is exposed for tests. The existing
+`tools/melee-agent/tests/conftest.py` is **extended** with an
+autouse fixture (reviewer feedback S1 — the file already exists):
 
 ```python
 @pytest.fixture(autouse=True)
@@ -417,6 +565,11 @@ def _clear_ast_walker_cache():
     from src.mwcc_debug import ast_walker
     ast_walker.clear_cache()
 ```
+
+If autouse scope proves too coarse during implementation (perf hit
+on hot tests that don't touch the bridge), it can be narrowed to a
+named fixture explicitly used by ast-walker / bridge / mutators
+tests. Start broad, narrow if needed.
 
 ## Testing strategy
 
@@ -489,8 +642,21 @@ bridge upgrade is additive at the data level.
 
 Also explicitly run `pytest test_coalesce_ir_facts.py` since
 `coalesce_ir_facts` imports `Binding`, `BindingBasis`, `find_first_def`
-and others from `symbol_bridge`. Verify no regression (reviewer
+and others from `symbol_bridge`. Verify no regression (reviewer 1
 feedback S2).
+
+### tier3-search downstream behavior check (reviewer 2 feedback S5)
+
+The new `"ambiguous-nested"` confidence is treated like
+`"low-confidence"` by `tier3_search.plan_seeds()` (skipped by
+default, opted in via `--include-low-confidence`). Removing the
+`nested-decl` red flag means functions with nested blocks may now
+have *more* top-level bindings classified as `"best-guess"` than
+before (the demotion is gone). Run `tier3-search --dry-run` on 5
+representative functions before and after the bridge swap; record
+seed count + ordering. Diffs are expected to be small but non-zero
+— document any intentional changes in the plan's smoke-test
+section.
 
 ### Full-suite gate
 
@@ -526,14 +692,27 @@ the calibration regression). No regressions.
 
 | File | Action | LOC delta |
 |------|--------|-----------|
-| `tools/melee-agent/src/mwcc_debug/ast_walker.py` | Create | +~250 |
-| `tools/melee-agent/src/mwcc_debug/symbol_bridge.py` | Rewrite (extend `LocalDecl`, `Binding`, `BindingBasis`; replace regex walker with tree-sitter call; keep slim regex fallback) | -713 → +~280 (net -433) |
+| `tools/melee-agent/src/mwcc_debug/ast_walker.py` | Create | +~280 |
+| `tools/melee-agent/src/mwcc_debug/symbol_bridge.py` | Rewrite (extend `LocalDecl`, `Binding`, `BindingBasis`; replace regex walker with tree-sitter call; keep slim regex fallback; preserve `_extract_function_text`, `_strip_strings_and_comments`, `walk_local_decls` as back-compat adapters for `mutators.py`) | -713 → +~330 (net -383) |
 | `tools/melee-agent/src/mwcc_debug/scope_path.py` | Create | +~80 |
 | `tools/melee-agent/tests/test_ast_walker.py` | Create | +~320 |
 | `tools/melee-agent/tests/test_scope_path.py` | Create | +~120 |
 | `tools/melee-agent/tests/test_mwcc_debug_symbol_bridge.py` | Extend (existing tests stay, add nested-block + scope cases + nested-decl red-flag removal regression) | +~220 |
-| `tools/melee-agent/tests/conftest.py` | Add autouse fixture for `ast_walker.clear_cache()` (create file if absent) | +~10 |
+| `tools/melee-agent/tests/conftest.py` | Extend (existing 37-line file) with autouse fixture for `ast_walker.clear_cache()` | +~10 |
 
 The existing `LocalDecl`, `Binding`, `BindingBasis` are **extended in
 place**; no parallel types are introduced. Existing readers continue
-to work unchanged (new fields all carry safe defaults).
+to work unchanged (new fields all carry safe defaults). The private
+helpers `_extract_function_text`, `_strip_strings_and_comments`, and
+`walk_local_decls` are preserved as back-compat adapters so
+`mutators.py` does not need to change in Phase 1.
+
+Net repo LOC change: roughly **+520 lines added, 713 removed = +810
+net** counting tests. Without tests: net **-303** in production
+source. The point of the change is module clarity (one 713-line file
+split into focused modules) rather than line count (reviewer 2
+feedback S2).
+
+Phase 2 will revisit `mutators.py` and `enumerate-decl-orders` to
+adopt the scope-aware API directly, retiring the back-compat
+adapters at that point.
