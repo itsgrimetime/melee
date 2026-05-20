@@ -121,7 +121,7 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
                           f32 y = sp6C.y;
                           f32 z = sp6C.z;
                           title_text->pos_x = sp6C.x;
-                          title_text->pos_y = -y;
+                          title_text->pos_y = (divider = -y);
                           title_text->pos_z = z;
                       }
                   }
