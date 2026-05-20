@@ -57,7 +57,7 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
     u8 is_name_mode = data->is_name_mode;
     u8 scroll = data->saved_selection;
     u8 offset = data->scroll_offset;
-    unsigned int limit;
+    int limit;
     if (is_name_mode != 0)
     {
       limit = 0x18;
