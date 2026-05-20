@@ -124,3 +124,43 @@ def test_calibration_corpus(case) -> None:
         else:
             # Fall-through acceptable: any non-empty ir_facts is OK
             assert pr.ir_facts
+
+
+import subprocess
+
+
+def test_cli_smoke_invokes_command() -> None:
+    """Sanity test that the CLI command is wired correctly."""
+    proc = subprocess.run(
+        ["python", "-m", "src.cli", "debug", "suggest-coalesce-source", "--help"],
+        cwd=pathlib.Path(__file__).parent.parent,  # tools/melee-agent
+        capture_output=True, text=True, timeout=15,
+    )
+    assert proc.returncode == 0
+    assert "--function" in proc.stdout
+    assert "--pair" in proc.stdout
+    assert "--discover" in proc.stdout
+
+
+def test_cli_rejects_both_pair_and_discover() -> None:
+    """Mutually-exclusive option enforcement."""
+    proc = subprocess.run(
+        ["python", "-m", "src.cli", "debug", "suggest-coalesce-source",
+         "-f", "any_fn", "-V", "53=3", "--discover"],
+        cwd=pathlib.Path(__file__).parent.parent,  # tools/melee-agent
+        capture_output=True, text=True, timeout=15,
+    )
+    assert proc.returncode != 0
+    assert "exactly one of --pair / --discover" in proc.stderr
+
+
+def test_cli_rejects_top_in_pair_mode() -> None:
+    """--top is only valid with --discover."""
+    proc = subprocess.run(
+        ["python", "-m", "src.cli", "debug", "suggest-coalesce-source",
+         "-f", "any_fn", "-V", "53=3", "--top", "5"],
+        cwd=pathlib.Path(__file__).parent.parent,  # tools/melee-agent
+        capture_output=True, text=True, timeout=15,
+    )
+    assert proc.returncode != 0
+    assert "--top is only valid with --discover" in proc.stderr
