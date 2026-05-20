@@ -402,7 +402,10 @@ void fn_802461BC(HSD_GObj* gobj)
             } else {
                 val = (u8) val;
             }
-            HSD_SisLib_803A6368(text, *(u16*) (base + 0x3C + 2 * (u8) val));
+            {
+                char* p = base + (u8) val * 2;
+                HSD_SisLib_803A6368(text, *(u16*) (p + 0x3C));
+            }
             i++;
         } while (i < 10);
 
@@ -566,7 +569,10 @@ void fn_802461BC(HSD_GObj* gobj)
                 } else {
                     val = (u8) val;
                 }
-                HSD_SisLib_803A6368(text, *(u16*) (base + 0x3C + 2 * (u8) val));
+                {
+                char* p = base + (u8) val * 2;
+                HSD_SisLib_803A6368(text, *(u16*) (p + 0x3C));
+            }
                 i++;
             } while (i < 10);
 
@@ -733,7 +739,10 @@ void fn_802461BC(HSD_GObj* gobj)
                 } else {
                     val = (u8) val;
                 }
-                HSD_SisLib_803A6368(text, *(u16*) (base + 0x3C + 2 * (u8) val));
+                {
+                char* p = base + (u8) val * 2;
+                HSD_SisLib_803A6368(text, *(u16*) (p + 0x3C));
+            }
                 i++;
             } while (i < 10);
 
