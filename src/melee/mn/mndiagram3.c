@@ -930,6 +930,7 @@ void mnDiagram3_8024714C(void *arg0)
   Vec3 sp48;
   Diagram3 *data;
   HSD_GObj *gobj;
+  f32 new_var2;
   HSD_JObj *row0;
   HSD_JObj *row1;
   mnDiagram_ArchiveData *archive;
@@ -966,8 +967,9 @@ void mnDiagram3_8024714C(void *arg0)
     row0 = data->jobjs[8];
     popup_alias = popup_jobj;
     (row0) ? ((void) 0) : (__assert(mnDiagram3_804D4FD8, 0x3EE, mnDiagram3_804D4FE0));
+    new_var2 = row0->translate.y;
     row1 = data->jobjs[9];
-    row_spacing = row0->translate.y;
+    row_spacing = new_var2;
     (row1) ? ((void) 0) : (__assert(mnDiagram3_804D4FD8, 0x3EE, mnDiagram3_804D4FE0));
     row_spacing = row1->translate.y - row_spacing;
     row0 = data->jobjs[8];
