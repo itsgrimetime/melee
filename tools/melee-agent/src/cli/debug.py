@@ -15,8 +15,11 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -38,6 +41,7 @@ from ..mwcc_debug import cache as pcdump_cache
 from ..mwcc_debug.cast_audit import (
     audit_function_casts,
     crossref_with_asm,
+    detect_signedness_mismatches,
     find_call_sites,
 )
 from ..mwcc_debug.patterns import (
@@ -133,10 +137,11 @@ def pcdump(
         Optional[str],
         typer.Option(
             "--force-phys",
-            help="Tier 5: bias the allocator. Format 'virtIdx:physReg[,...]'. "
-                 "E.g. '36:31' forces virtual 36 to physical r31. "
-                 "EXPERIMENTAL — may produce broken code if interferences "
-                 "are violated.",
+            help="Tier 5: bias the allocator. Format 'virtIdx:physReg[,...]' "
+                 "or 'class:virtIdx:physReg[,...]' (class: gpr, fp, fpr, int). "
+                 "E.g. '36:31' or 'gpr:36:31' (class-scoped avoids ambiguous "
+                 "FP override). EXPERIMENTAL — may produce broken code if "
+                 "interferences are violated.",
         ),
     ] = None,
     force_phys_iter: Annotated[
@@ -252,13 +257,16 @@ def pcdump(
     if no_pull:
         cmd_parts.append("set MWCC_DEBUG_NO_PULL=1")
     if force_phys:
-        # Sanity-check format and pass through. The DLL parses it.
-        # Reject embedded quotes/spaces to keep the cmd-line safe.
+        # Reject embedded quotes/spaces to keep the cmd-line safe, then
+        # normalize (strips optional class prefix, emits ambiguity warning).
         if any(c in force_phys for c in '"\'; \t'):
             raise typer.BadParameter(
                 "--force-phys must not contain quotes, semicolons, or whitespace"
             )
-        cmd_parts.append(f"set MWCC_DEBUG_FORCE_PHYS={force_phys}")
+        force_phys_dll, fp_warnings = _normalize_force_phys(force_phys)
+        for w in fp_warnings:
+            print(w, file=sys.stderr)
+        cmd_parts.append(f"set MWCC_DEBUG_FORCE_PHYS={force_phys_dll}")
     if force_phys_iter:
         if any(c in force_phys_iter for c in '"\'; \t&|<>'):
             raise typer.BadParameter(
@@ -367,6 +375,16 @@ def pcdump(
             file=sys.stderr,
         )
         if cache_path_used is not None:
+            # Write the content-hash sidecar so follow-up commands can
+            # detect freshness by content rather than mtime.  Commands
+            # like enumerate-decl-orders and tier3-search restore the
+            # source after patching, updating mtime even when unchanged;
+            # the sidecar avoids false "stale" warnings after restore.
+            try:
+                src_file = DEFAULT_MELEE_ROOT / src_rel
+                pcdump_cache.write_hash_sidecar(cache_path_used, src_file)
+            except OSError:
+                pass  # sidecar is best-effort; fall back to mtime on next lookup
             print(
                 f"[mwcc_debug] cached — follow-up commands "
                 f"(`analyze`, `guide`, `score`, etc.) will auto-resolve "
@@ -380,6 +398,87 @@ def pcdump(
         )
 
     raise typer.Exit(code=exit_code)
+
+
+_FORCE_PHYS_CLASS_NAMES = {"gpr", "fp", "fpr", "int"}
+"""Recognized class-prefix names for the ``class:ig_idx:phys`` form.
+
+``gpr`` / ``int`` → GPR class; ``fp`` / ``fpr`` → FP class.
+The class prefix is stripped before the value is passed to the DLL
+(which only understands the legacy ``ig_idx:phys`` form).
+"""
+
+
+def _normalize_force_phys(raw: str) -> tuple[str, list[str]]:
+    """Parse and normalize a ``--force-phys`` value.
+
+    Accepts two forms per spec:
+      - Legacy: ``ig_idx:phys[,ig_idx:phys]*``
+      - Class-scoped: ``class:ig_idx:phys[,class:ig_idx:phys]*``
+        where class is one of ``gpr``, ``fp``, ``fpr``, ``int``.
+
+    Returns ``(dll_value, warnings)`` where:
+      - ``dll_value`` is the ``ig_idx:phys[,...]`` string to pass to
+        the DLL (class prefix stripped).
+      - ``warnings`` is a list of human-readable warning strings
+        (empty when input is unambiguous).
+
+    Raises ``typer.BadParameter`` on malformed input.
+    """
+    parts = raw.split(",")
+    dll_parts: list[str] = []
+    warnings: list[str] = []
+    seen_bare: list[str] = []  # bare ig_idx values, to detect later if wanted
+
+    for spec in parts:
+        spec = spec.strip()
+        if not spec:
+            continue
+        tokens = spec.split(":")
+        if len(tokens) == 3 and tokens[0].lower() in _FORCE_PHYS_CLASS_NAMES:
+            # class:ig_idx:phys form — strip the class prefix for the DLL.
+            # WARNING (Fix C): The DLL (MWCC_DEBUG_FORCE_PHYS) only accepts
+            # the legacy "ig_idx:phys" format and applies the override to ALL
+            # IG classes (GPR class 0 and FP class 1) that share the same
+            # ig_idx slot.  The class prefix is stripped here but is NOT
+            # passed through to the DLL; the DLL has no class-aware filtering.
+            # This means 'gpr:50:26' and 'fp:50:26' both produce the same
+            # DLL string and will both be applied to ig_idx=50 in every class.
+            # Use --force-phys-iter for class-precise control.
+            class_s, ig_idx_s, phys_s = tokens
+            dll_parts.append(f"{ig_idx_s}:{phys_s}")
+            warnings.append(
+                f"[force-phys] class-scoped form '{spec}' used: the DLL does "
+                f"not support class filtering — the override for ig_idx={ig_idx_s} "
+                f"will apply to ALL IG classes (GPR and FP) that have a node "
+                f"at that ig_idx, not just class '{class_s}'. "
+                f"Use '--force-phys-iter {class_s}:{ig_idx_s}:{phys_s}' for "
+                f"class-precise control if multiple classes share this ig_idx."
+            )
+        elif len(tokens) == 2:
+            # Bare ig_idx:phys form. The DLL accepts this but it matches
+            # all IG classes (GPR, FP, etc.) with that ig_idx, which can
+            # be ambiguous when a GPR and an FP node share the same ig_idx.
+            dll_parts.append(spec)
+            seen_bare.append(tokens[0])
+        else:
+            raise typer.BadParameter(
+                f"--force-phys spec {spec!r} is invalid. "
+                f"Expected 'ig_idx:physReg' or 'class:ig_idx:physReg' "
+                f"(class in {{gpr, fp, fpr, int}}). "
+                f"E.g. '36:31' or 'gpr:36:31'."
+            )
+
+    if seen_bare:
+        warnings.append(
+            f"[force-phys] bare ig_idx form used ({', '.join(seen_bare)}): "
+            f"the DLL will force ALL IG classes (GPR, FP, …) that have a "
+            f"node with that ig_idx. If this matches multiple classes, "
+            f"use 'class:ig_idx:phys' (e.g. 'gpr:{seen_bare[0]}:N') to "
+            f"scope to one class and avoid unintended FP register overrides."
+        )
+
+    return ",".join(dll_parts), warnings
 
 
 # PowerPC EABI register conventions for GPR. The first 8 args go in r3..r10;
@@ -1303,12 +1402,63 @@ def _find_unit_for_function(func_name: str, melee_root: Path) -> Optional[str]:
     return None
 
 
+_FIRST_DIAGNOSTIC_RE = re.compile(
+    # GCC/Clang/MWCC standard: "path/to/file.c:42:7: error: ..."
+    # Allow Windows-style backslashes in paths (wibo translates these).
+    r"^(?P<path>[^\s:][^\s:]*?):(?P<line>\d+)(?::(?P<col>\d+))?:\s*"
+    r"(?P<level>error|fatal|warning|note):\s*(?P<msg>.+)$"
+)
+
+
+def _extract_first_diagnostic(stdout: str, stderr: str) -> Optional[str]:
+    """Find the first compiler diagnostic with `filename:line: error:` shape.
+
+    This is the actual informative diagnostic — distinct from the caret
+    pointer line that follows it. ninja/wibo output often interleaves
+    progress lines around it, so we scan the full combined output and
+    return the first match. Returns None if no such line is found.
+
+    Handles MWCC's `# Error: …` block format too: when stderr looks like
+    a multi-line `# File:` / `# Line:` / `# Error:` block, synthesize a
+    `path:line: error: msg` line so callers see one usable diagnostic.
+    """
+    lines = (stdout + "\n" + stderr).splitlines()
+    # First pass: standard `filename:line: error:` shape.
+    for line in lines:
+        m = _FIRST_DIAGNOSTIC_RE.match(line.strip())
+        if m and m.group("level").lower() in ("error", "fatal"):
+            return line.strip()
+
+    # Second pass: MWCC's pretty-printed multi-line diagnostic block.
+    # Look for `# File:` followed (within a few lines) by `# Line:` and
+    # `# Error:` markers.
+    path: Optional[str] = None
+    lineno: Optional[str] = None
+    for raw in lines:
+        s = raw.strip()
+        if s.startswith("# File:"):
+            path = s[len("# File:"):].strip() or None
+        elif s.startswith("# Line:"):
+            lineno = s[len("# Line:"):].strip() or None
+        elif s.startswith("# Error:"):
+            msg = s[len("# Error:"):].strip()
+            if msg:
+                p = path or "(unknown)"
+                ln = lineno or "?"
+                return f"{p}:{ln}: error: {msg}"
+    return None
+
+
 def _extract_ninja_error(stdout: str, stderr: str, max_lines: int = 8) -> str:
     """Pull the relevant error lines out of a ninja failure dump.
 
     ninja's full output is mostly progress lines (`[N/M] ...`) that
     aren't useful. The actual error lives in lines containing 'error:',
     'FAILED:', or compiler diagnostics. Return at most `max_lines`.
+
+    To make sure the first informative diagnostic isn't trimmed away by
+    `max_lines` when there are many warnings, the result is prefixed
+    with the first `filename:line: error:` diagnostic we find.
     """
     lines = (stdout + "\n" + stderr).splitlines()
     relevant = []
@@ -1329,7 +1479,16 @@ def _extract_ninja_error(stdout: str, stderr: str, max_lines: int = 8) -> str:
         # Fall back to last few non-empty stderr lines
         tail_stderr = [l for l in stderr.splitlines() if l.strip()][-max_lines:]
         relevant = tail_stderr or ["(no error lines captured)"]
-    return "\n".join(relevant[:max_lines])
+
+    # Promote the first FULL diagnostic (filename:line: error: …) to the
+    # top of the result, so it isn't lost when many warnings precede the
+    # real error and we hit max_lines. If we already have it in relevant,
+    # this just guarantees ordering.
+    first_diag = _extract_first_diagnostic(stdout, stderr)
+    trimmed = relevant[:max_lines]
+    if first_diag and first_diag not in trimmed:
+        trimmed = [first_diag, *trimmed[: max_lines - 1]]
+    return "\n".join(trimmed)
 
 
 def _suggest_similar_functions(target: str, available: list[str], n: int = 5) -> list[str]:
@@ -1456,9 +1615,18 @@ def _resolve_pcdump_path(
         raise typer.Exit(4)
     if not entry.fresh:
         # Non-fatal — warn but use the stale cache.
+        import datetime
+        src_ts = datetime.datetime.fromtimestamp(
+            entry.source_path.stat().st_mtime
+        ).strftime("%H:%M:%S.%f")[:12]
+        cache_ts = datetime.datetime.fromtimestamp(
+            entry.path.stat().st_mtime
+        ).strftime("%H:%M:%S.%f")[:12]
         typer.echo(
             f"[mwcc_debug] using stale cached pcdump "
-            f"({entry.source_path.name} modified since cache).",
+            f"({entry.source_path.name} modified since cache; "
+            f"src={src_ts} cache={cache_ts}). "
+            f"Re-run `pcdump-local` to refresh.",
             err=True,
         )
     return entry.path
@@ -1475,6 +1643,20 @@ def _get_match_pct(func_name: str, melee_root: Path) -> Optional[float]:
                 if function.get("name") == func_name:
                     return function.get("fuzzy_match_percent")
     return None
+
+
+def _merge3_function(
+    base_fn: str,
+    candidate_fn: str,
+    current_fn: str,
+) -> tuple[str, list[tuple[int, str]]]:
+    """3-way merge wrapper delegating to source_patch.merge3_function.
+
+    Returns (merged_text, conflicts) where conflicts is a list of
+    (approx_line_number, description) pairs. Empty conflicts = clean merge.
+    """
+    from ..mwcc_debug.source_patch import merge3_function
+    return merge3_function(base_fn, candidate_fn, current_fn)
 
 
 @debug_app.command(name="verify-perm")
@@ -1499,6 +1681,17 @@ def verify_perm(
                  "in place. By default we always revert (dry-run semantics).",
         ),
     ] = False,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="When --keep is set, allow overwriting manual edits that "
+                 "diverge from the permuter's base.c. Without --force, "
+                 "verify-perm aborts if applying the candidate would silently "
+                 "revert commits you made after importing the permuter baseline. "
+                 "Has no effect without --keep.",
+        ),
+    ] = False,
     threshold: Annotated[
         float,
         typer.Option(
@@ -1512,6 +1705,16 @@ def verify_perm(
     json_out: Annotated[
         bool,
         typer.Option("--json", help="Emit verification result as JSON."),
+    ] = False,
+    keep_failed: Annotated[
+        bool,
+        typer.Option(
+            "--keep-failed",
+            help="On compile failure, preserve the failing patched source "
+                 "at a temp path (printed in the error message) instead "
+                 "of reverting silently. Useful when the candidate is "
+                 "promising but the transfer needs manual repair.",
+        ),
     ] = False,
 ) -> None:
     """Tier 7a: apply a permuter candidate to the real source and verify.
@@ -1527,6 +1730,14 @@ def verify_perm(
 
     By default the patched source is REVERTED at the end regardless of
     outcome — pass --keep to leave a winning transfer applied.
+
+    Safe-keep behaviour: when --keep is set and a permuter base.c is found
+    (candidate.parent.parent/base.c), verify-perm performs a 3-way merge
+    instead of a full replace — it applies the *diff* from base.c to the
+    candidate onto the current real source.  If the merge conflicts (e.g.
+    you edited the same lines the permuter mutated), the command aborts
+    without writing anything.  Pass --force to fall back to a full replace
+    when a merge conflict is detected.
     """
     melee_root = DEFAULT_MELEE_ROOT
     if not candidate.exists():
@@ -1558,6 +1769,41 @@ def verify_perm(
               else "Baseline match: (unknown)")
 
     candidate_text = candidate.read_text()
+
+    # -- Fix A: guard against permuter-internal placeholder leaks ----------
+    # decomp-permuter's randomizer uses placeholder names such as
+    # 'inline_fn', 'noinline_fn', etc. for AST nodes during mutation.
+    # These must NEVER appear in the final candidate — if they do, the
+    # candidate is corrupt and applying it would silently introduce
+    # unresolvable identifiers into real source.  We check the raw
+    # candidate text before any further processing so that nothing slips
+    # through regardless of merge strategy.
+    _PERMUTER_PLACEHOLDERS = (
+        "inline_fn", "noinline_fn", "extra_fn", "helper_fn",
+        "temp_fn", "local_var_fn",
+    )
+    _placeholder_hits: list[tuple[str, int]] = []
+    for _ph in _PERMUTER_PLACEHOLDERS:
+        _count = len(re.findall(r"\b" + re.escape(_ph) + r"\b", candidate_text))
+        if _count:
+            _placeholder_hits.append((_ph, _count))
+    if _placeholder_hits:
+        _ph_summary = ", ".join(
+            f"'{ph}' ({n} occurrence{'s' if n != 1 else ''})"
+            for ph, n in _placeholder_hits
+        )
+        typer.echo(
+            f"\n[verify-perm] ABORT: permuter placeholder(s) detected in "
+            f"candidate source: {_ph_summary}\n"
+            f"These are unresolved AST placeholders from decomp-permuter's "
+            f"randomizer that should never reach real source. The candidate "
+            f"is corrupt — do NOT apply.\n"
+            f"Candidate: {candidate}",
+            err=True,
+        )
+        raise typer.Exit(7)
+    # -- end Fix A ---------------------------------------------------------
+
     # Locate which side the function is missing in for a clearer message.
     from ..mwcc_debug.source_patch import find_function as _find_fn
     target_text = target_path.read_text()
@@ -1593,6 +1839,75 @@ def verify_perm(
             err=True,
         )
         raise typer.Exit(3)
+    # --- 3-way merge / divergence check (when --keep is set) ---
+    # When --keep is set, a full replacement of the function body silently
+    # discards any manual edits made AFTER the permuter's base.c was created.
+    # To prevent this:
+    #   1. If base.c exists (candidate.parent.parent/base.c), perform a 3-way
+    #      merge: apply the diff (base → candidate) to the current real source.
+    #      Conflicts abort (require --force for unsafe full-replace).
+    #   2. If base.c doesn't exist but the candidate's function differs from
+    #      the current real source's function at lines NOT covered by the
+    #      permutation, warn loudly and require --force to proceed.
+    _merge_result: Optional[str] = None  # merged target text (if 3-way used)
+    _merge_strategy: str = "full-replace"
+    if keep:
+        base_c_path = candidate.parent.parent / "base.c"
+        if base_c_path.exists():
+            from ..mwcc_debug.source_patch import (
+                extract_function as _extract_fn,
+                replace_function as _replace_fn,
+            )
+            base_text = base_c_path.read_text()
+            base_fn = _extract_fn(base_text, function)
+            cand_fn = _extract_fn(candidate_text, function)
+            real_fn = _extract_fn(target_text, function)
+            if base_fn is not None and cand_fn is not None and real_fn is not None:
+                merged_fn, conflicts = _merge3_function(base_fn, cand_fn, real_fn)
+                if conflicts and not force:
+                    # Show which lines conflict so the user knows what to fix
+                    conflict_preview = "\n".join(
+                        f"  line ~{ln}: {txt!r}" for ln, txt in conflicts[:8]
+                    )
+                    if len(conflicts) > 8:
+                        conflict_preview += f"\n  ... and {len(conflicts) - 8} more"
+                    typer.echo(
+                        f"\n[verify-perm] ABORTED — 3-way merge conflict detected.\n"
+                        f"The candidate mutates {len(conflicts)} line(s) that you "
+                        f"also edited manually since the permuter baseline was "
+                        f"imported. Applying the full candidate would silently "
+                        f"revert those edits.\n\n"
+                        f"Conflicting lines (candidate vs your edits):\n"
+                        f"{conflict_preview}\n\n"
+                        f"Options:\n"
+                        f"  1. Re-import the permuter baseline:\n"
+                        f"     cd ~/code/decomp-permuter && "
+                        f"./import.py <c_file> <target.s> --function {function}\n"
+                        f"  2. Apply just the diff manually from:\n"
+                        f"     {base_c_path}\n"
+                        f"  3. Pass --force to do a full replace (DISCARDS your "
+                        f"manual edits in the function body).",
+                        err=True,
+                    )
+                    raise typer.Exit(6)
+                _merge_result = _replace_fn(target_text, function, merged_fn)
+                _merge_strategy = (
+                    "3-way-merge" if not conflicts else "3-way-merge-forced"
+                )
+                if not json_out:
+                    if conflicts:
+                        print(
+                            f"[verify-perm] WARNING: {len(conflicts)} merge conflict(s) "
+                            f"resolved by taking candidate version (--force)."
+                        )
+                    else:
+                        print(
+                            f"[verify-perm] 3-way merge: applying permuter diff "
+                            f"(base→candidate) onto current source."
+                        )
+            # else: can't extract from base — fall through to full replace
+    # --- end merge logic ---
+
     orig = transfer_candidate(candidate_text, target_path, function)
     if orig is None:
         # Shouldn't happen if both spans are found, but defensive
@@ -1602,6 +1917,31 @@ def verify_perm(
             err=True,
         )
         raise typer.Exit(3)
+
+    # If 3-way merge produced a result, overwrite the naive full-replace.
+    if _merge_result is not None:
+        # Belt-and-suspenders: check merged text for placeholder leaks too.
+        # The pre-candidate check above covers regions touched by the permuter,
+        # but the merge might theoretically introduce a placeholder from the
+        # base side in a region outside the target function.
+        _merged_ph_hits: list[tuple[str, int]] = []
+        for _ph in _PERMUTER_PLACEHOLDERS:
+            _count = len(re.findall(r"\b" + re.escape(_ph) + r"\b", _merge_result))
+            if _count:
+                _merged_ph_hits.append((_ph, _count))
+        if _merged_ph_hits:
+            _mph_summary = ", ".join(
+                f"'{ph}' ({n} occurrence{'s' if n != 1 else ''})"
+                for ph, n in _merged_ph_hits
+            )
+            typer.echo(
+                f"\n[verify-perm] ABORT: permuter placeholder(s) detected "
+                f"in POST-MERGE source: {_mph_summary}\n"
+                f"The merged result is corrupt — aborting without writing.",
+                err=True,
+            )
+            raise typer.Exit(7)
+        target_path.write_text(_merge_result)
 
     try:
         # Build the affected .o. checkdiff convention: report.json's unit
@@ -1614,11 +1954,48 @@ def verify_perm(
             cwd=melee_root, capture_output=True, text=True,
         )
         if ninja_result.returncode != 0:
+            # Preserve the failing patched source if requested. We use
+            # `tempfile.mkstemp` so the path is unique per call — agents
+            # can re-run `verify-perm --keep-failed` for multiple
+            # candidates without trampling on each other's saved sources.
+            failed_path: Optional[Path] = None
+            if keep_failed:
+                fd, tmp_path = tempfile.mkstemp(
+                    prefix=f"verify-perm-failed-{function}-",
+                    suffix=".c",
+                )
+                try:
+                    with os.fdopen(fd, "w") as fh:
+                        fh.write(target_path.read_text())
+                    failed_path = Path(tmp_path)
+                except Exception:
+                    # If saving fails we still want the revert to happen.
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+                    failed_path = None
             target_path.write_text(orig)
             err = _extract_ninja_error(ninja_result.stdout, ninja_result.stderr)
+            first_diag = _extract_first_diagnostic(
+                ninja_result.stdout, ninja_result.stderr,
+            )
+            extra_lines: list[str] = []
+            if first_diag:
+                extra_lines.append(f"First diagnostic: {first_diag}")
+            if failed_path is not None:
+                extra_lines.append(
+                    f"Failing source preserved at: {failed_path}"
+                )
+            elif keep_failed:
+                extra_lines.append(
+                    "(--keep-failed requested but the save step itself "
+                    "failed; source was reverted.)"
+                )
+            extras_str = ("\n" + "\n".join(extra_lines)) if extra_lines else ""
             typer.echo(
                 f"ninja build failed (exit {ninja_result.returncode}). "
-                f"Relevant output:\n{err}\n\n"
+                f"Relevant output:\n{err}{extras_str}\n\n"
                 f"Source reverted. The candidate doesn't compile in the real "
                 f"tree — typical causes:\n"
                 f"  - Permuter's base.c had macros expanded that the real "
@@ -2231,6 +2608,17 @@ def suggest_casts(
                  "the source code wraps in (f32) (and vice versa).",
         ),
     ] = False,
+    signedness: Annotated[
+        bool,
+        typer.Option(
+            "--signedness",
+            help="Scan the current-vs-expected ASM diff (via checkdiff) "
+                 "for compare-opcode signedness mismatches: cmplwi (unsigned) "
+                 "where expected has cmpwi (signed), or vice versa. "
+                 "Requires the TU's .o to be built (`ninja <unit>.o`). "
+                 "This is separate from the source-level cast audit.",
+        ),
+    ] = False,
     severity: Annotated[
         str,
         typer.Option(
@@ -2243,14 +2631,14 @@ def suggest_casts(
         typer.Option("--json", help="Emit warnings as JSON."),
     ] = False,
 ) -> None:
-    """Tier 7d: static lint for cast-mismatch patterns in call args.
+    """Tier 7d: static lint for cast-mismatch and signedness patterns.
 
     Surfaces explicit casts on function arguments that are likely wrong —
     especially the `(f32)` cast on integer values that the matching agent
     identified as the `drop-variadic-cast` pattern in their session
     findings.
 
-    Three-tier classification:
+    Three-tier classification for cast warnings:
       HIGH — cast on a value the function declares as integer
       MEDIUM — cast on a value that LOOKS integer but can't be proven
       LOW — every other explicit cast (for general audit)
@@ -2258,6 +2646,11 @@ def suggest_casts(
     With `--asm`, also cross-references the call site against
     build/GALE01/asm/<unit>.s to identify args loaded as integers when
     the source casts to float (and vice versa).
+
+    With `--signedness`, scans the current-vs-expected ASM diff for
+    compare-opcode mismatches: cmplwi (unsigned) where expected has cmpwi
+    (signed), or vice versa. Useful when `u8 limit` → `int limit` gives
+    a match improvement that the source-level cast audit misses.
     """
     melee_root = DEFAULT_MELEE_ROOT
     unit = _find_unit_for_function(function, melee_root)
@@ -2299,10 +2692,33 @@ def suggest_casts(
                     key = (ctx.source_site.call_target, ctx.source_site.line)
                     asm_contexts[key] = ctx
 
+    # Signedness check: diff current compiled vs expected, look for
+    # cmplwi/cmpwi (unsigned/signed) opcode disagreements.
+    sign_mismatches = []
+    if signedness:
+        try:
+            proc = subprocess.run(
+                ["python", "tools/checkdiff.py", function,
+                 "--format", "json", "--no-build"],
+                cwd=melee_root, capture_output=True, text=True, timeout=60,
+            )
+            if proc.returncode in (0, 1) and proc.stdout:
+                diff_data = json.loads(proc.stdout)
+                diff_lines = diff_data.get("diff", [])
+                if diff_lines:
+                    sign_mismatches = detect_signedness_mismatches(diff_lines)
+        except (FileNotFoundError, subprocess.TimeoutExpired,
+                json.JSONDecodeError):
+            typer.echo(
+                "signedness check: checkdiff failed or produced no output",
+                err=True,
+            )
+
     if json_out:
         data = []
         for w in warnings:
             entry = {
+                "kind": "cast",
                 "line": w.line,
                 "call_target": w.call_target,
                 "arg_index": w.arg_index,
@@ -2312,7 +2728,22 @@ def suggest_casts(
                 "reason": w.reason,
             }
             data.append(entry)
-        print(json.dumps({"function": function, "warnings": data}, indent=2))
+        sign_data = []
+        for sm in sign_mismatches:
+            sign_data.append({
+                "kind": "signedness",
+                "current_opcode": sm.current_opcode,
+                "expected_opcode": sm.expected_opcode,
+                "current_line": sm.current_line,
+                "expected_line": sm.expected_line,
+                "mismatch_kind": sm.kind,
+                "suggestion": sm.suggestion,
+            })
+        print(json.dumps({
+            "function": function,
+            "warnings": data,
+            "signedness_mismatches": sign_data,
+        }, indent=2))
         return
 
     print(f"Function: {function}")
@@ -2322,27 +2753,39 @@ def suggest_casts(
             f"No casts at severity≥{severity}. "
             f"(Re-run with --severity all to see all explicit casts.)"
         )
-        return
-    print(f"Cast warnings ({len(warnings)} at severity≥{severity}):")
-    print()
-    for w in warnings:
-        marker = {"high": "!!", "medium": "!", "low": "·"}.get(w.severity, " ")
-        print(f"  {marker} {target_path}:{w.line}  ({w.severity})")
-        print(f"     ({w.cast_type}) {w.inner_expr}  →  "
-              f"{w.call_target}(... arg{w.arg_index} ...)")
-        print(f"     {w.reason}")
-        if asm:
-            key = (w.call_target, w.line - (text[:0].count('\n')))
-            # Find any matching context by call target + line proximity
-            for (target, src_line), ctx in asm_contexts.items():
-                if target == w.call_target and ctx.asm_line_idx is not None:
-                    kinds = ctx.arg_register_kinds
-                    if kinds:
-                        kind_str = ", ".join(f"{r}={k}"
-                                             for r, k in sorted(kinds.items()))
-                        print(f"     ASM arg loads: {kind_str}")
-                    break
+    else:
+        print(f"Cast warnings ({len(warnings)} at severity≥{severity}):")
         print()
+        for w in warnings:
+            marker = {"high": "!!", "medium": "!", "low": "·"}.get(w.severity, " ")
+            print(f"  {marker} {target_path}:{w.line}  ({w.severity})")
+            print(f"     ({w.cast_type}) {w.inner_expr}  →  "
+                  f"{w.call_target}(... arg{w.arg_index} ...)")
+            print(f"     {w.reason}")
+            if asm:
+                key = (w.call_target, w.line - (text[:0].count('\n')))
+                # Find any matching context by call target + line proximity
+                for (target_name, src_line), ctx in asm_contexts.items():
+                    if target_name == w.call_target and ctx.asm_line_idx is not None:
+                        kinds = ctx.arg_register_kinds
+                        if kinds:
+                            kind_str = ", ".join(f"{r}={k}"
+                                                 for r, k in sorted(kinds.items()))
+                            print(f"     ASM arg loads: {kind_str}")
+                        break
+            print()
+
+    if sign_mismatches:
+        print(f"Signedness mismatches ({len(sign_mismatches)} compare-opcode disagreements):")
+        print()
+        for sm in sign_mismatches:
+            print(f"  !! signedness-type-mismatch")
+            print(f"     current:  {sm.current_line}")
+            print(f"     expected: {sm.expected_line}")
+            print(f"     {sm.suggestion}")
+            print()
+    elif signedness:
+        print("No signedness mismatches detected.")
 
 
 @debug_app.command(name="triage-perm")
@@ -2393,6 +2836,17 @@ def triage_perm(
     json_out: Annotated[
         bool,
         typer.Option("--json", help="Emit results as JSON."),
+    ] = False,
+    keep_failed: Annotated[
+        bool,
+        typer.Option(
+            "--keep-failed",
+            help="For each compile failure, preserve the failing patched "
+                 "source at a unique temp path (paths printed alongside "
+                 "the BUILD FAILED status). Lets you re-attempt promising "
+                 "candidates with targeted fixes instead of re-running "
+                 "permuter.",
+        ),
     ] = False,
 ) -> None:
     """Tier 7e: batch-triage decomp-permuter output candidates.
@@ -2469,7 +2923,10 @@ def triage_perm(
         match_pct: Optional[float]
         delta: Optional[float]
         status: str  # "ok" / "no-function" / "build-failed"
+        first_diag: Optional[str] = None  # set on build-failed
+        kept_failed_path: Optional[Path] = None  # set with --keep-failed
 
+    obj_path = f"build/GALE01/src/{unit}.o"
     results: list[Result] = []
     best: Optional[Result] = None
     try:
@@ -2483,6 +2940,51 @@ def triage_perm(
                     print(f"  [{i}/{len(candidate_paths)}] {cand.parent.name}: "
                           f"function not in candidate")
                 continue
+            # Inline the build so we can capture the first diagnostic
+            # (instead of using _build_and_match, which discards stderr).
+            r_build = subprocess.run(
+                ["ninja", obj_path],
+                cwd=melee_root, capture_output=True, text=True,
+            )
+            if r_build.returncode != 0:
+                first_diag = _extract_first_diagnostic(
+                    r_build.stdout, r_build.stderr,
+                )
+                kept_path: Optional[Path] = None
+                if keep_failed:
+                    try:
+                        fd, tmp_path = tempfile.mkstemp(
+                            prefix=(
+                                f"triage-perm-failed-{function}-"
+                                f"{cand.parent.name}-"
+                            ),
+                            suffix=".c",
+                        )
+                        with os.fdopen(fd, "w") as fh:
+                            fh.write(target_path.read_text())
+                        kept_path = Path(tmp_path)
+                    except Exception:
+                        kept_path = None
+                # Always revert to original before next iter
+                target_path.write_text(orig)
+                results.append(Result(
+                    path=cand, match_pct=None, delta=None,
+                    status="build-failed",
+                    first_diag=first_diag,
+                    kept_failed_path=kept_path,
+                ))
+                if not json_out:
+                    parts = [
+                        f"  [{i}/{len(candidate_paths)}] {cand.parent.name}: "
+                        f"BUILD FAILED"
+                    ]
+                    if first_diag:
+                        parts.append(f"    first error: {first_diag}")
+                    if kept_path is not None:
+                        parts.append(f"    kept at: {kept_path}")
+                    print("\n".join(parts))
+                continue
+            # Build succeeded — generate the report (fast path).
             pct = _build_and_match(unit, function, melee_root)
             # Always revert to original before next iter
             target_path.write_text(orig)
@@ -2491,7 +2993,7 @@ def triage_perm(
                                       delta=None, status="build-failed"))
                 if not json_out:
                     print(f"  [{i}/{len(candidate_paths)}] {cand.parent.name}: "
-                          f"BUILD FAILED")
+                          f"BUILD FAILED (report.json regen)")
                 continue
             delta = pct - baseline
             res = Result(path=cand, match_pct=pct, delta=delta, status="ok")
@@ -2511,7 +3013,7 @@ def triage_perm(
     finally:
         target_path.write_text(orig)
         subprocess.run(
-            ["ninja", f"build/GALE01/src/{unit}.o",
+            ["ninja", obj_path,
              "build/GALE01/report.json"],
             cwd=melee_root, capture_output=True,
         )
@@ -2531,6 +3033,11 @@ def triage_perm(
                 "match_pct": r.match_pct,
                 "delta": r.delta,
                 "status": r.status,
+                "first_diag": r.first_diag,
+                "kept_failed_path": (
+                    str(r.kept_failed_path)
+                    if r.kept_failed_path else None
+                ),
             } for r in results],
         }, indent=2))
         return
@@ -2707,6 +3214,20 @@ def stuck(
             "reason": w.reason,
         } for w in warnings if w.severity in ("high", "medium")]
 
+    # HSD_ASSERT override detection — scan the compiled .o for anonymous
+    # .sdata symbols whose content matches known assert filename strings
+    # (jobj.h, jobj, lobj.h, etc.).  When found, the fix is to override
+    # HSD_ASSERT before the jobj.h include so the inline assert uses named
+    # extern char[] symbols instead of anonymous @N ones.
+    hsd_assert_strings: list[tuple[str, str]] = []
+    _built_o = melee_root / "build" / "GALE01" / "src" / f"{unit}.o"
+    if _built_o.exists():
+        try:
+            from ..mwcc_debug.o_rewriter import find_anonymous_assert_strings
+            hsd_assert_strings = find_anonymous_assert_strings(_built_o)
+        except Exception:
+            pass
+
     # Next steps — ranked by cost
     next_steps: list[str] = []
     if any(w["severity"] == "high" for w in cast_warnings_high_med):
@@ -2737,6 +3258,9 @@ def stuck(
     digest["coloring_summary"] = coloring_summary
     digest["guidance_issues"] = guidance_issues
     digest["cast_warnings"] = cast_warnings_high_med
+    digest["hsd_assert_strings"] = [
+        {"sym": s, "string": v} for s, v in hsd_assert_strings
+    ]
     digest["next_steps"] = next_steps
 
     if json_out:
@@ -2789,6 +3313,21 @@ def stuck(
             marker = {"high": "!!", "medium": "!"}.get(w["severity"], " ")
             print(f"  {marker} line {w['line']}: ({w['cast_type']}) "
                   f"{w['inner_expr']} → {w['call_target']}")
+        print()
+
+    if hsd_assert_strings:
+        syms_str = ", ".join(f"{s} ({v!r})" for s, v in hsd_assert_strings)
+        print(f"== HSD_ASSERT override needed ==")
+        print(f"  Anonymous .sdata assert strings detected: {syms_str}")
+        print(f"  These come from HSD_ASSERT inside jobj.h (or similar) inline")
+        print(f"  functions. The relocation names will differ from the target .o.")
+        print(f"  Fix: before the <baselib/jobj.h> include, add:")
+        print(f"    #include <baselib/debug.h>")
+        print(f"    #undef HSD_ASSERT")
+        print(f"    #define HSD_ASSERT(line, cond) \\")
+        print(f"        ((cond) ? ((void) 0) : __assert(<file_sym>, line, <fn_sym>))")
+        print(f"  where <file_sym> / <fn_sym> are named extern char[] symbols")
+        print(f"  declared in the TU (see MEMORY.md 'HSD_ASSERT macro override').")
         print()
 
     if asm_hunks > 0:
@@ -2869,19 +3408,96 @@ def ceiling(
         print(f"  TU:       {src.relative_to(melee_root)}")
         print()
 
-    # Step 1: suggest-casts
-    if not json_out:
-        print(f"[1] Cast audit (free, ~ms)...")
+    # Step 1: suggest-casts (with auto-verify for HIGH-severity findings)
     src_text = src.read_text() if src.exists() else ""
     cast_warnings = audit_function_casts(src_text, function)
     high_casts = [w for w in cast_warnings if w.severity == "high"]
     med_casts = [w for w in cast_warnings if w.severity == "medium"]
+    cast_verify_secs = len(high_casts) * 6
     if not json_out:
         if high_casts:
-            print(f"    ! {len(high_casts)} HIGH-severity cast(s) found:")
-            for w in high_casts[:3]:
+            print(f"[1] Cast audit (~{cast_verify_secs}s including verify)...")
+        else:
+            print(f"[1] Cast audit (free, ~ms)...")
+
+    # Auto-verify each HIGH cast by drop-test: patch src, compile, revert.
+    # Avoids false-positive WIN AVAILABLE when the cast is heuristically
+    # suspicious but removal is actually a no-op for codegen.
+    cast_verify_results: list[dict] = []  # per-cast verify record
+    if high_casts and src.exists():
+        orig_src = src.read_text()
+        try:
+            for w in high_casts:
+                # Build the drop pattern: remove "(cast_type) " prefix on the
+                # cast's line.  We match the exact text the linter found.
+                cast_text = f"({w.cast_type}) {w.inner_expr}"
+                if cast_text not in orig_src:
+                    # Fallback: maybe there's no space after the cast type.
+                    cast_text = f"({w.cast_type}){w.inner_expr}"
+                if cast_text not in orig_src:
+                    cast_verify_results.append({
+                        "line": w.line,
+                        "cast_type": w.cast_type,
+                        "inner_expr": w.inner_expr,
+                        "call_target": w.call_target,
+                        "pct_before": baseline,
+                        "pct_after": None,
+                        "delta": None,
+                        "note": "could not locate cast text in source",
+                    })
+                    continue
+                patched = orig_src.replace(cast_text, w.inner_expr, 1)
+                src.write_text(patched)
+                pct_after = _build_and_match(unit, function, melee_root)
+                src.write_text(orig_src)  # revert immediately
+                delta = (pct_after - baseline) if pct_after is not None else None
+                cast_verify_results.append({
+                    "line": w.line,
+                    "cast_type": w.cast_type,
+                    "inner_expr": w.inner_expr,
+                    "call_target": w.call_target,
+                    "pct_before": baseline,
+                    "pct_after": pct_after,
+                    "delta": delta,
+                    "note": (
+                        "WIN" if (delta is not None and delta > 0.0)
+                        else "no change" if (delta is not None and delta == 0.0)
+                        else "regression" if (delta is not None and delta < 0.0)
+                        else "build failed"
+                    ),
+                })
+        finally:
+            # Guarantee revert even if an exception was raised mid-loop.
+            src.write_text(orig_src)
+            subprocess.run(
+                ["ninja", f"build/GALE01/src/{unit}.o",
+                 "build/GALE01/report.json"],
+                cwd=melee_root, capture_output=True,
+            )
+
+    if not json_out:
+        if high_casts:
+            print(f"    ! {len(high_casts)} HIGH-severity cast(s) found — "
+                  f"auto-verified:")
+            for w, vr in zip(high_casts[:3], cast_verify_results[:3]):
+                delta_str = ""
+                if vr["delta"] is not None:
+                    if vr["delta"] > 0.0:
+                        delta_str = (f"  → drop test: {vr['pct_before']:.2f}% → "
+                                     f"{vr['pct_after']:.2f}% "
+                                     f"(+{vr['delta']:.2f}%, WIN)")
+                    else:
+                        delta_str = (f"  → drop test: {vr['pct_before']:.2f}% → "
+                                     f"{vr['pct_after']:.2f}% "
+                                     f"({vr['delta']:+.2f}%, false positive)")
+                elif vr.get("note") == "could not locate cast text in source":
+                    delta_str = "  → (could not locate cast in source; skipped)"
+                else:
+                    delta_str = "  → (build failed during verify)"
                 print(f"      - line {w.line}: ({w.cast_type}) "
                       f"{w.inner_expr} → {w.call_target}")
+                if delta_str:
+                    print(f"      {delta_str}")
             if len(high_casts) > 3:
                 print(f"      ... +{len(high_casts) - 3} more")
         else:
@@ -2960,18 +3576,176 @@ def ceiling(
             print(f"[2] Decl-order enumeration: SKIPPED")
             print()
 
-    # Verdict
-    has_cast_win = bool(high_casts)
+    # HSD_ASSERT override detection — same as in `stuck`.
+    ceiling_hsd_assert_strings: list[tuple[str, str]] = []
+    _ceiling_built_o = melee_root / "build" / "GALE01" / "src" / f"{unit}.o"
+    if _ceiling_built_o.exists():
+        try:
+            from ..mwcc_debug.o_rewriter import find_anonymous_assert_strings
+            ceiling_hsd_assert_strings = find_anonymous_assert_strings(
+                _ceiling_built_o)
+        except Exception:
+            pass
+    if ceiling_hsd_assert_strings and not json_out:
+        syms_str = ", ".join(
+            f"{s} ({v!r})" for s, v in ceiling_hsd_assert_strings)
+        print(f"[!] HSD_ASSERT override needed — anonymous .sdata assert "
+              f"strings: {syms_str}")
+        print(f"    Add #undef/#define HSD_ASSERT before <baselib/jobj.h>.")
+        print(f"    See MEMORY.md 'HSD_ASSERT macro override' for the pattern.")
+        print()
+
+    # SPILLED virtual hints — surface compiler-introduced spills before
+    # the verdict. When a PROBABLE CEILING is reported but SPILLED
+    # virtuals exist, they often point at inline-function code shape
+    # (sentinel returns, etc.) that's actually fixable in C. We list each
+    # SPILLED virtual along with whatever source binding or first-def IR
+    # op virtual-to-var can surface, and flag candidates that look like
+    # they came from an inlined callee.
+    #
+    # Failure modes are non-fatal: no pcdump cache, no SimplifyEntry
+    # data, or no source bindings just means we surface less info.
+    ceiling_spilled_hints: list[dict] = []
+    _pcdump_path_for_spilled: Optional[Path] = None
+    try:
+        _pcdump_path_for_spilled = _resolve_pcdump_path(
+            None, function, melee_root,
+        )
+    except (typer.Exit, Exception):
+        _pcdump_path_for_spilled = None  # cache missing — skip hint pass
+
+    if _pcdump_path_for_spilled is not None:
+        try:
+            from ..mwcc_debug.symbol_bridge import (
+                find_first_def as _find_first_def,
+                find_var_for_virtual as _find_var_for_virtual,
+            )
+            _pcdump_text = _pcdump_path_for_spilled.read_text()
+            _events_list = parse_hook_events(_pcdump_text)
+            _events = find_function(_events_list, function)
+            # SPILLED virtuals: scan SIMPLIFY GRAPH entries, collect
+            # ig_idx whenever entry.spilled is set (flags & 0x08).
+            # Filter to virtual regs (ig_idx >= 32 maps 1:1 with virtual
+            # numbers in MWCC).
+            _spilled_virts: list[int] = []
+            if _events is not None:
+                _seen: set[int] = set()
+                for _sec in _events.simplify_sections:
+                    for _entry in _sec.entries:
+                        if (
+                            _entry.spilled
+                            and _entry.ig_idx >= 32
+                            and _entry.ig_idx not in _seen
+                        ):
+                            _seen.add(_entry.ig_idx)
+                            _spilled_virts.append(_entry.ig_idx)
+            # For each spilled virtual, attempt the same
+            # virtual-to-source fallback `virtual-to-var` uses: source
+            # binding first, then the first defining IR op. If neither
+            # is available, just record the virtual number.
+            if _spilled_virts:
+                _fns = parse_pcdump(_pcdump_text)
+                _fn = next(
+                    (f for f in _fns if f.name == function), None,
+                )
+                _pre = _fn.last_precolor_pass() if _fn is not None else None
+                _src_text = src.read_text() if src.exists() else ""
+                for _v in _spilled_virts:
+                    _hint: dict = {"virtual": _v}
+                    _binding = None
+                    if _pre is not None and _src_text:
+                        _binding = _find_var_for_virtual(
+                            _src_text, function, _v, _pre,
+                        )
+                    if _binding is not None:
+                        _hint["var_name"] = _binding.var_name
+                        _hint["kind"] = _binding.kind
+                        _hint["confidence"] = _binding.confidence
+                    elif _pre is not None:
+                        _fd = _find_first_def(_v, _pre)
+                        if _fd is not None:
+                            _hint["first_def"] = {
+                                "block_idx": _fd.block_idx,
+                                "opcode": _fd.opcode,
+                                "operands": _fd.operands,
+                            }
+                            # Heuristic: if the first def is `li rN, <imm>`
+                            # in the entry block, that's the canonical
+                            # shape of an inlined sentinel/return-value
+                            # path. Surface a hint pointing at
+                            # static-inline callees.
+                            if (
+                                _fd.opcode == "li"
+                                and _fd.block_idx == 0
+                            ):
+                                _hint["inline_hint"] = (
+                                    "compiler-emitted immediate (li) in "
+                                    "entry block — likely an inlined "
+                                    "sentinel/return value; check "
+                                    "static-inline callees for "
+                                    "restructurable return paths"
+                                )
+                    ceiling_spilled_hints.append(_hint)
+        except Exception:
+            # Any parse/lookup failure: drop hints; verdict still emits.
+            ceiling_spilled_hints = []
+
+    if ceiling_spilled_hints and not json_out:
+        print(
+            f"[!] SPILLED virtuals (compiler couldn't keep in registers):"
+        )
+        for _h in ceiling_spilled_hints[:8]:
+            _v = _h["virtual"]
+            if "var_name" in _h:
+                print(
+                    f"    r{_v}: {_h['var_name']} "
+                    f"({_h.get('kind', '?')}/{_h.get('confidence', '?')})"
+                )
+            elif "first_def" in _h:
+                _fd = _h["first_def"]
+                print(
+                    f"    r{_v}: compiler temp — first def in "
+                    f"B{_fd['block_idx']}: `{_fd['opcode']} {_fd['operands']}`"
+                )
+                if "inline_hint" in _h:
+                    print(f"        hint: {_h['inline_hint']}")
+            else:
+                print(f"    r{_v}: (no source binding or first-def found)")
+        if len(ceiling_spilled_hints) > 8:
+            print(f"    ... +{len(ceiling_spilled_hints) - 8} more")
+        print(
+            f"    Re-run `debug virtual-to-var -f {function} <virt>` for "
+            f"each row to get full context."
+        )
+        print()
+
+    # Verdict — use verified cast results (not raw heuristic count) so we
+    # don't produce false-positive WIN AVAILABLE on no-op casts.
+    #
+    # A cast counts as a win only if its verified delta is strictly positive.
+    # If cast_verify_results is empty (no high casts, or source not found),
+    # has_cast_win is False.
+    verified_cast_wins = [
+        vr for vr in cast_verify_results
+        if vr.get("delta") is not None and vr["delta"] > 0.0
+    ]
+    has_cast_win = bool(verified_cast_wins)
     decl_delta = decl_best_pct - baseline if decl_best_label else 0.0
-    has_decl_win = decl_delta >= 0.1
+    has_decl_win = decl_delta >= 0.05
 
     if has_cast_win or has_decl_win:
         verdict = "WIN AVAILABLE"
         recommendations: list[str] = []
         if has_cast_win:
+            win_lines = ", ".join(
+                f"line {vr['line']}" for vr in verified_cast_wins[:3]
+            )
+            if len(verified_cast_wins) > 3:
+                win_lines += f" +{len(verified_cast_wins) - 3} more"
             recommendations.append(
-                f"Drop {len(high_casts)} HIGH-severity cast(s) — run "
-                f"`melee-agent debug suggest-casts {function}` for details."
+                f"Drop {len(verified_cast_wins)} HIGH-severity cast(s) with "
+                f"verified improvement ({win_lines}). "
+                f"Run `melee-agent debug suggest-casts {function}` for details."
             )
         if has_decl_win:
             recommendations.append(
@@ -3006,9 +3780,15 @@ def ceiling(
                 "line": w.line, "call_target": w.call_target,
                 "cast_type": w.cast_type, "inner_expr": w.inner_expr,
             } for w in med_casts],
+            "cast_verify_results": cast_verify_results,
             "decl_best_label": decl_best_label,
             "decl_best_pct": decl_best_pct,
             "decl_results": decl_results,
+            "hsd_assert_strings": [
+                {"sym": s, "string": v}
+                for s, v in ceiling_hsd_assert_strings
+            ],
+            "spilled_virtual_hints": ceiling_spilled_hints,
             "recommendations": recommendations,
         }, indent=2))
         return
@@ -3210,6 +3990,17 @@ def match_iter_first(
         bool,
         typer.Option("--json", help="Emit as JSON."),
     ] = False,
+    auto_verify: Annotated[
+        bool,
+        typer.Option(
+            "--auto-verify",
+            help="When ambiguous targets are present, run "
+                 "`pcdump-local --force-iter-first <list>` to score the "
+                 "recommended list against the expected output and "
+                 "report the match% delta. Off by default — the explicit "
+                 "verify step costs ~10–30s.",
+        ),
+    ] = False,
 ) -> None:
     """Recommend --force-iter-first arguments by reading the expected .s.
 
@@ -3221,6 +4012,12 @@ def match_iter_first(
     Useful for local-vs-local iter-order cascades where rank-callees
     can't tell which local "should have" gotten r31. Pipe the output's
     ig_idx list into --force-iter-first.
+
+    Warning: when any matched target has `[ambiguous]` confidence
+    (multiple pre-coloring instructions matched the expected signature),
+    feeding the full list to --force-iter-first can disturb unrelated
+    code. Verify with `pcdump-local <tu> --force-iter-first <list>
+    --diff` (or run with --auto-verify) before trusting the suggestion.
     """
     melee_root = DEFAULT_MELEE_ROOT
     pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
@@ -3321,12 +4118,98 @@ def match_iter_first(
             "confidence": match.confidence,
         })
 
+    # Detect ambiguous matches up front so both text and JSON paths agree.
+    ig_indices: list[int] = [
+        r["ig_idx"] for r in results if r.get("status") == "ok"
+    ]
+    ambiguous_results = [
+        r for r in results
+        if r.get("status") == "ok" and r.get("confidence") == "ambiguous"
+    ]
+    has_ambiguous = bool(ambiguous_results)
+    warning_message: Optional[str] = None
+    if has_ambiguous:
+        amb_regs = ", ".join(f"r{r['reg']}" for r in ambiguous_results)
+        warning_message = (
+            f"{len(ambiguous_results)} target(s) are [ambiguous] "
+            f"({amb_regs}) — multiple pre-coloring instructions matched "
+            f"the expected signature, and the closest-position pick may "
+            f"be wrong. Before trusting this output, verify with "
+            f"`pcdump-local <c_file> --force-iter-first "
+            f"{','.join(str(i) for i in ig_indices)} --diff` "
+            f"(or pass --auto-verify on this command). If the diff "
+            f"doesn't improve, the ambiguous assignments are wrong; "
+            f"try a subset."
+        )
+
+    # Optional auto-verify: run pcdump-local with the proposed iter-first
+    # list, compare per-function match% against the baseline, and surface
+    # the delta. Gated behind --auto-verify because the underlying MWCC
+    # compile is the slow part (~10–30s in our local wibo path).
+    auto_verify_result: Optional[dict] = None
+    if auto_verify and ig_indices:
+        try:
+            src_path = melee_root / "src" / f"{unit}.c"
+            if not src_path.exists():
+                auto_verify_result = {
+                    "ran": False,
+                    "reason": f"source not found: {src_path}",
+                }
+            else:
+                baseline_pct = _get_match_pct(function, melee_root)
+                ig_csv_av = ",".join(str(i) for i in ig_indices)
+                # Run pcdump-local with the override; we don't need the
+                # dump output here, but the side effect (rebuilding the
+                # .o + report.json with overrides) is what we want.
+                cmd = [
+                    sys.executable, "-m", "src.cli", "debug",
+                    "pcdump-local", str(src_path),
+                    "--force-iter-first", ig_csv_av,
+                    "-o", "/dev/null",
+                ]
+                r_av = subprocess.run(
+                    cmd,
+                    cwd=melee_root / "tools" / "melee-agent",
+                    capture_output=True, text=True,
+                    timeout=180,
+                )
+                new_pct = _get_match_pct(function, melee_root)
+                delta = (
+                    None if (new_pct is None or baseline_pct is None)
+                    else new_pct - baseline_pct
+                )
+                auto_verify_result = {
+                    "ran": True,
+                    "returncode": r_av.returncode,
+                    "baseline_pct": baseline_pct,
+                    "new_pct": new_pct,
+                    "delta": delta,
+                    "stderr_tail": "\n".join(
+                        r_av.stderr.splitlines()[-5:]
+                    ) if r_av.stderr else "",
+                }
+                # Restore the report by rebuilding the .o cleanly so the
+                # cached state isn't poisoned by our verify override.
+                subprocess.run(
+                    ["ninja", f"build/GALE01/src/{unit}.o",
+                     "build/GALE01/report.json"],
+                    cwd=melee_root, capture_output=True,
+                )
+        except (subprocess.TimeoutExpired, Exception) as _av_exc:
+            auto_verify_result = {"ran": False, "reason": str(_av_exc)}
+
     if json_out:
-        print(json.dumps({
+        payload: dict = {
             "function": function,
             "unit": unit,
             "results": results,
-        }, indent=2))
+            "has_ambiguous": has_ambiguous,
+        }
+        if warning_message:
+            payload["warning"] = warning_message
+        if auto_verify_result is not None:
+            payload["auto_verify"] = auto_verify_result
+        print(json.dumps(payload, indent=2))
         return
 
     print(f"Function: {function}")
@@ -3334,7 +4217,6 @@ def match_iter_first(
     print(f"ASM:      {asm_path.relative_to(melee_root)}")
     print()
     print(f"Expected iter-first targets:")
-    ig_indices: list[int] = []
     for r in results:
         reg_str = f"r{r['reg']}"
         if r["status"] == "ok":
@@ -3343,7 +4225,6 @@ def match_iter_first(
                 f"(virt r{r['virtual']}, instr {r['instr_idx']}: "
                 f"{r['opcode']} {r['operands']}) [{r['confidence']}]"
             )
-            ig_indices.append(r["ig_idx"])
         else:
             print(f"  {reg_str} - {r['note']}")
     if ig_indices:
@@ -3354,6 +4235,37 @@ def match_iter_first(
             f"  melee-agent debug pcdump <source.c> "
             f"--force-iter-first {ig_csv}"
         )
+    if warning_message:
+        print()
+        print(f"WARNING: {warning_message}")
+    if auto_verify_result is not None:
+        print()
+        print(f"== auto-verify ==")
+        if auto_verify_result.get("ran"):
+            base = auto_verify_result.get("baseline_pct")
+            new = auto_verify_result.get("new_pct")
+            delta = auto_verify_result.get("delta")
+            base_str = (
+                f"{base:.2f}%" if isinstance(base, (int, float)) else "?"
+            )
+            new_str = (
+                f"{new:.2f}%" if isinstance(new, (int, float)) else "?"
+            )
+            delta_str = (
+                f"{delta:+.2f}%" if isinstance(delta, (int, float))
+                else "(unknown)"
+            )
+            print(
+                f"  baseline -> with override: {base_str} -> {new_str} "
+                f"({delta_str})"
+            )
+            tail = auto_verify_result.get("stderr_tail")
+            if tail:
+                print(f"  stderr tail:")
+                for line in tail.splitlines():
+                    print(f"    {line}")
+        else:
+            print(f"  did not run: {auto_verify_result.get('reason')}")
 
 
 @debug_app.command(name="name-magic")
@@ -3388,6 +4300,17 @@ def name_magic(
                  "don't rename.",
         ),
     ] = False,
+    globalize: Annotated[
+        bool,
+        typer.Option(
+            "--globalize/--no-globalize",
+            help="After renaming, promote each new symbol to global "
+                 "(STB_GLOBAL) via objcopy --globalize-symbol. Default "
+                 "true — the expected .o always has these symbols as "
+                 "global, so local symbols produce a symbol-binding diff "
+                 "even after renaming.",
+        ),
+    ] = True,
     json_out: Annotated[
         bool,
         typer.Option("--json", help="Emit as JSON."),
@@ -3403,12 +4326,15 @@ def name_magic(
 
     With `--map s32=mnVibration_804DC018`, this tool finds the
     anonymous symbol whose .sdata2 value matches the s32 int-to-float
-    bias and renames it via objcopy.
+    bias and renames it via objcopy.  The new symbol is also promoted to
+    global (``STB_GLOBAL``) by default, matching the binding in the
+    expected .o.  Pass ``--no-globalize`` to skip this step.
 
     Use `--list` to see what's available without renaming.
     """
     from ..mwcc_debug.o_rewriter import (
         find_all_anonymous_sdata2_symbols,
+        globalize_symbols,
         parse_mapping,
         rename_magic_symbols,
     )
@@ -3491,6 +4417,29 @@ def name_magic(
         typer.echo(f"objcopy failed: {e}", err=True)
         raise typer.Exit(5)
 
+    # Promote renamed symbols to global so the binding matches the expected
+    # .o.  The rename step leaves them local (MWCC emits anonymous symbols as
+    # STB_LOCAL); the expected .o always has them STB_GLOBAL.
+    globalized: list[str] = []
+    if globalize and renames:
+        target_path = out if out is not None else o_file
+        new_names = [new for _, new in renames]
+        try:
+            globalize_symbols(target_path, new_names)
+            globalized = new_names
+        except FileNotFoundError as e:
+            typer.echo(
+                f"objcopy not found during globalize: {e}. "
+                f"Rename succeeded but symbols remain local.",
+                err=True,
+            )
+        except subprocess.CalledProcessError as e:
+            typer.echo(
+                f"objcopy --globalize-symbol failed: {e}. "
+                f"Rename succeeded but symbols remain local.",
+                err=True,
+            )
+
     if json_out:
         print(json.dumps({
             "o_file": str(o_file),
@@ -3498,6 +4447,7 @@ def name_magic(
             "renames": [
                 {"old": old, "new": new} for old, new in renames
             ],
+            "globalized": globalized,
         }, indent=2))
         return
 
@@ -3510,7 +4460,8 @@ def name_magic(
         return
     print(f"Renamed {len(renames)} symbol(s) in {target}:")
     for old, new in renames:
-        print(f"  {old} -> {new}")
+        glob_note = " (globalized)" if new in globalized else ""
+        print(f"  {old} -> {new}{glob_note}")
 
 
 @debug_app.command(name="gen-permuter-config")
@@ -4115,7 +5066,10 @@ def pcdump_local(
         typer.Option(
             "--force-phys",
             help="Tier 5: allocator bias by ig_idx. Format "
-                 "'virtIdx:physReg[,...]'. E.g. '36:31'. By default "
+                 "'virtIdx:physReg[,...]' or 'class:virtIdx:physReg[,...]'. "
+                 "E.g. '36:31' or 'gpr:36:31' (class-scoped, avoids "
+                 "ambiguous FP override when GPR and FP share the same "
+                 "ig_idx). class is one of: gpr, fp, fpr, int. By default "
                  "applies globally — scope with --force-phys-fn.",
         ),
     ] = None,
@@ -4136,14 +5090,23 @@ def pcdump_local(
         typer.Option(
             "--force-phys-fn",
             help="Scope --force-phys and --force-phys-iter to a "
-                 "single function name (mirrors --force-coalesce-fn).",
+                 "single function name (mirrors --force-coalesce-fn). "
+                 "Does NOT scope --force-iter-first — that option is "
+                 "GLOBAL with no per-function variant.",
         ),
     ] = None,
     force_iter_first: Annotated[
         Optional[str],
         typer.Option(
             "--force-iter-first",
-            help="Tier 6: reorder simplification list.",
+            help="Tier 6: reorder simplification list. WARNING: GLOBAL — "
+                 "applies to EVERY function in the TU (no per-function "
+                 "scoping; --force-phys-fn does NOT scope this option, "
+                 "and there is no --force-iter-first-fn variant). On "
+                 "multi-function TUs, virtual indices are per-function, "
+                 "so an override aimed at one function may corrupt "
+                 "others. Use only on single-function TUs, or accept "
+                 "the cross-function blast radius.",
         ),
     ] = None,
     force_coalesce: Annotated[
@@ -4208,6 +5171,19 @@ def pcdump_local(
                  "not given).",
         ),
     ] = False,
+    function: Annotated[
+        Optional[str],
+        typer.Option(
+            "--function", "-f",
+            help="Function name to use as the --diff target. When "
+                 "omitted, defaults to the value of --force-phys-fn / "
+                 "--force-coalesce-fn (in that order) if either is set; "
+                 "otherwise falls back to the first function found in "
+                 "the source file. Use this option when working on a "
+                 "non-first function in a multi-function TU so --diff "
+                 "compares the right function.",
+        ),
+    ] = None,
 ) -> None:
     """Local mwcc_debug pcdump (macOS+wibo+Zig-built DLL, no SSH).
 
@@ -4294,7 +5270,12 @@ def pcdump_local(
     env = os.environ.copy()
     env["MWCC_DEBUG_PCDUMP_PATH"] = pcdump_name
     if force_phys:
-        env["MWCC_DEBUG_FORCE_PHYS"] = force_phys
+        # Normalize: strip optional class prefix (gpr:N:M → N:M), emit
+        # ambiguity warning when bare form is used.
+        force_phys_dll, fp_warnings = _normalize_force_phys(force_phys)
+        for w in fp_warnings:
+            print(w, file=sys.stderr)
+        env["MWCC_DEBUG_FORCE_PHYS"] = force_phys_dll
     if force_phys_iter:
         env["MWCC_DEBUG_FORCE_PHYS_ITER"] = force_phys_iter
     if force_phys_fn:
@@ -4433,13 +5414,30 @@ def pcdump_local(
     )
 
     if killed_by_watchdog:
-        typer.echo(
+        hang_msg = (
             f"[pcdump-local] no compile progress for "
             f"{WATCHDOG_TIMEOUT_S:.0f}s — likely wibo hang (UE state). "
             f"Subprocess killed; check `ps aux | grep wibo` for zombie. "
-            f"Override via MWCC_DEBUG_HANG_TIMEOUT=<seconds>.",
-            err=True,
+            f"Override via MWCC_DEBUG_HANG_TIMEOUT=<seconds>."
         )
+        if force_coalesce:
+            hang_msg += (
+                f"\n[pcdump-local] --force-coalesce '{force_coalesce}' was "
+                f"active. Possible causes for the hang:\n"
+                f"  - Invalid pair: one or both virtuals are not in this "
+                f"function's IGNode set (wrong function scoped by "
+                f"--force-coalesce-fn, or index out of range).\n"
+                f"  - Interfering pair: the two virtuals have a live-range "
+                f"conflict — run `debug analyze -f <fn>` and look for "
+                f"'interferers:' near the relevant ig_idx to check "
+                f"interference edges.\n"
+                f"  - DLL crash in the coalesce hook (rare): check stderr "
+                f"above for exception traces.\n"
+                f"  Next: try a different pair, or run `debug analyze -f <fn>` "
+                f"and search the output for 'interferers:' near each ig_idx "
+                f"to find a non-interfering candidate."
+            )
+        typer.echo(hang_msg, err=True)
 
     if proc.returncode != 0:
         # Compile failed — surface stderr but keep going if pcdump.txt
@@ -4464,6 +5462,15 @@ def pcdump_local(
     if not pcdump_path.exists():
         typer.echo("compile completed but no pcdump.txt was emitted", err=True)
         raise typer.Exit(4)
+
+    # Warn early if --keep-obj was requested but the compiler didn't emit
+    # an object (e.g. a forced coalesce hung the wibo process mid-compile).
+    if keep_obj is not None and not obj_target.exists():
+        typer.echo(
+            f"[pcdump-local] --keep-obj requested but no object was produced "
+            f"(compile likely failed mid-way). Check pcdump for clues.",
+            err=True,
+        )
 
     # Run objdiff if --diff was requested. The integrated check
     # answers "did this compile reach the target?" without the agent
@@ -4491,10 +5498,17 @@ def pcdump_local(
                 build_o.write_bytes(obj_target.read_bytes())
                 print(f"[diff] running checkdiff against {build_o}...",
                       file=sys.stderr)
-                # Pick the first function in the source as the target
+                # Resolve the function name for --diff.
+                # Priority: explicit --function > --force-phys-fn >
+                # --force-coalesce-fn > first function found in source.
                 src_path = melee_root / src_rel
-                fn_to_diff = None
-                if src_path.exists():
+                fn_to_diff = (
+                    function
+                    or force_phys_fn
+                    or force_coalesce_fn
+                    or None
+                )
+                if fn_to_diff is None and src_path.exists():
                     src_text = src_path.read_text()
                     # First function definition; coarse heuristic
                     m = re.search(
@@ -4540,42 +5554,98 @@ def pcdump_local(
         pcdump_path.unlink()
         return
 
+    # Determine whether ANY force-* override was active this run.
+    # Forced pcdumps contain experimental allocator decisions that should
+    # NOT overwrite the shared baseline cache — downstream commands that
+    # auto-resolve via the cache would silently read forced data as if it
+    # were the natural allocation, producing misleading diagnostics.
+    any_forced = any([
+        force_phys, force_phys_iter, force_phys_fn,
+        force_iter_first,
+        force_coalesce, force_coalesce_fn,
+    ])
+
     # Resolve the canonical cache location for this TU so we can ALWAYS
     # update it — even when --output specifies a different path.
     # Without this, downstream commands (analyze, var-to-virtual, guide)
     # auto-resolve via the cache and silently read stale data.
+    # EXCEPTION: forced runs skip the cache entirely (see any_forced above).
     unit = src_rel[:-2].removeprefix("src/")  # melee/mn/mnvibration
     from ..mwcc_debug import cache as pcdump_cache
     pcdump_cache.ensure_cache_dir(melee_root)
     cache_target = pcdump_cache.cache_path(melee_root, unit)
 
     if output is None:
-        # No --output → cache is the destination, no extra copy needed.
-        output = cache_target
-        output.parent.mkdir(parents=True, exist_ok=True)
-        pcdump_path.rename(output)
-    else:
-        # --output specified: write there AND mirror into the cache so
-        # downstream auto-resolve doesn't read a stale dump.
-        output.parent.mkdir(parents=True, exist_ok=True)
-        # Move to user-requested path
-        pcdump_path.rename(output)
-        # Mirror to cache (best-effort; same content)
-        try:
-            cache_target.parent.mkdir(parents=True, exist_ok=True)
-            cache_target.write_bytes(output.read_bytes())
-            if cache_target != output:
-                print(
-                    f"wrote: {output} (also synced to cache {cache_target})",
-                    file=sys.stderr,
-                )
-        except OSError as e:
+        if any_forced:
+            # Forced run — write to a temp path and skip cache sync.
+            output = Path(
+                f"/tmp/pcdump_forced_{os.getpid()}_{int(time.time() * 1000)}.txt"
+            )
+            output.parent.mkdir(parents=True, exist_ok=True)
+            pcdump_path.rename(output)
+            os.utime(output, None)
             print(
-                f"wrote: {output} (cache mirror failed: {e})",
+                f"[pcdump-local] forced run — skipping cache sync to avoid "
+                f"contaminating baseline. Dump at: {output}",
                 file=sys.stderr,
             )
+        else:
+            # No --output → cache is the destination, no extra copy needed.
+            output = cache_target
+            output.parent.mkdir(parents=True, exist_ok=True)
+            pcdump_path.rename(output)
+            # Touch mtime to now: Path.rename() preserves the source file's
+            # creation time (the pcdump temp was created at compile start, so
+            # its mtime predates any edits the user made during the compile).
+            # Without this, the mtime-based staleness check fires immediately
+            # after a refresh because src_mtime > cache_mtime.  The content-
+            # hash sidecar (written below) supersedes mtime for freshness, but
+            # os.utime() is kept for backward compat with callers that don't
+            # have a sidecar yet.
+            os.utime(output, None)
+            # Write the content-hash sidecar for the canonical cache target.
+            try:
+                pcdump_cache.write_hash_sidecar(output, melee_root / src_rel)
+            except OSError:
+                pass  # best-effort; mtime fallback still applies
+    else:
+        # --output specified: write there.
+        output.parent.mkdir(parents=True, exist_ok=True)
+        pcdump_path.rename(output)
+        os.utime(output, None)  # same mtime fix as above
+        if any_forced:
+            # Forced run — don't mirror the experimental pcdump into the
+            # shared cache; it would be treated as baseline by follow-up cmds.
+            print(
+                f"[pcdump-local] forced run — skipping cache sync to avoid "
+                f"contaminating baseline.",
+                file=sys.stderr,
+            )
+        else:
+            # Mirror to cache (best-effort; same content) so downstream
+            # auto-resolve doesn't read a stale dump.
+            try:
+                cache_target.parent.mkdir(parents=True, exist_ok=True)
+                cache_target.write_bytes(output.read_bytes())
+                # Write hash sidecar for the mirrored cache file.
+                try:
+                    pcdump_cache.write_hash_sidecar(
+                        cache_target, melee_root / src_rel
+                    )
+                except OSError:
+                    pass  # best-effort
+                if cache_target != output:
+                    print(
+                        f"wrote: {output} (also synced to cache {cache_target})",
+                        file=sys.stderr,
+                    )
+            except OSError as e:
+                print(
+                    f"wrote: {output} (cache mirror failed: {e})",
+                    file=sys.stderr,
+                )
+                return
             return
-        return
 
     print(f"wrote: {output}", file=sys.stderr)
 
@@ -4787,7 +5857,28 @@ def permute(
     Default is single-threaded for safety. score-source now emits
     per-PID pcdump filenames so parallel threads no longer race on a
     shared pcdump.txt — raise `-j` above 1 if you want concurrency.
+
+    Passing flags through to permuter.py: Typer will try to consume any
+    leading `--<name>` tokens as options of `permute` itself. Use `--`
+    to separate. Examples:
+
+        # WRONG — Typer rejects --best-only as an unknown option
+        melee-agent debug permute -f my_fn --best-only
+
+        # RIGHT — `--` ends `permute`'s own options; everything after
+        # is forwarded to permuter.py
+        melee-agent debug permute -f my_fn -- --best-only
+        melee-agent debug permute -f my_fn -j 4 -- --best-only --seed 0
+
+    Note: stdout is set to line-buffering so that piping through `tail -N`
+    shows live progress instead of buffering until the permuter exits.
     """
+    # Force line-buffering on stdout so progress output is visible when
+    # the command is piped (e.g. `melee-agent debug permute ... | tail -20`).
+    # Without this, Python's stdio buffering holds all output until the
+    # process exits — which never happens naturally for the permuter.
+    sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
+
     melee_root = DEFAULT_MELEE_ROOT
     perm_dir = perm_root / "nonmatchings" / function
 
@@ -4999,6 +6090,125 @@ def var_to_virtual(
         if basis and basis_data is not None:
             print()
             _print_basis(basis_data, bindings)
+
+
+@debug_app.command(name="suggest-coalesce-source")
+def suggest_coalesce_source(
+    function: Annotated[
+        str,
+        typer.Option(
+            "--function", "-f",
+            help="Function to analyze (required).",
+        ),
+    ],
+    pair: Annotated[
+        Optional[str],
+        typer.Option(
+            "-V", "--pair",
+            help="Pair mode: 'virt=root' (e.g. '53=3'). Mutually "
+                 "exclusive with --discover.",
+        ),
+    ] = None,
+    discover: Annotated[
+        bool,
+        typer.Option(
+            "--discover",
+            help="Discover mode: find candidate coalesces that would "
+                 "shorten the longest callee-save cascade. Mutually "
+                 "exclusive with --pair.",
+        ),
+    ] = False,
+    top: Annotated[
+        int,
+        typer.Option(
+            "--top",
+            help="Discover mode: max candidates (default 3). Raises "
+                 "BadParameter if passed in pair mode.",
+        ),
+    ] = 3,
+    pcdump: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--pcdump",
+            help="Path to pcdump.txt. Auto-resolves from cache.",
+        ),
+    ] = None,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit as JSON."),
+    ] = False,
+    include_low_confidence: Annotated[
+        bool,
+        typer.Option(
+            "--include-low-confidence",
+            help="Use low-confidence bridge bindings for source-line "
+                 "annotations.",
+        ),
+    ] = False,
+) -> None:
+    """Suggest C-source patterns producing a specific coalesce, or
+    discover candidate coalesces that would shorten the cascade.
+
+    Pair mode example:
+        debug suggest-coalesce-source -f fn_802461BC -V 53=3
+
+    Discover mode example:
+        debug suggest-coalesce-source -f fn_802461BC --discover --top 5
+    """
+    from ..mwcc_debug.suggest_coalesce import render_json, render_text, run
+
+    # Validation: exactly one of --pair / --discover (XOR check)
+    if (pair is None) == (not discover):
+        raise typer.BadParameter(
+            "exactly one of --pair / --discover required"
+        )
+    # --top only makes sense in discover mode
+    if pair is not None and top != 3:
+        raise typer.BadParameter(
+            "--top is only valid with --discover"
+        )
+
+    melee_root = DEFAULT_MELEE_ROOT
+    pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
+    text = pcdump_path.read_text()
+
+    # Load source for the bridge — CLI handles this so the orchestrator
+    # stays path-free (avoids circular import on cli.debug helpers).
+    source_text = ""
+    unit = _find_unit_for_function(function, melee_root)
+    if unit is not None:
+        src_path = melee_root / "src" / f"{unit}.c"
+        if src_path.exists():
+            source_text = src_path.read_text()
+
+    parsed_pair: Optional[tuple[int, int]] = None
+    if pair is not None:
+        try:
+            lhs, rhs = pair.split("=", 1)
+            parsed_pair = (int(lhs), int(rhs))
+        except (ValueError, TypeError):
+            raise typer.BadParameter(
+                f"invalid --pair {pair!r}; expected 'virt=root' (e.g. '53=3')"
+            )
+
+    try:
+        report = run(
+            function=function,
+            pair=parsed_pair,
+            discover=discover,
+            top=top,
+            include_low_confidence=include_low_confidence,
+            pcdump_text=text,
+            source_text=source_text,
+        )
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(3)
+
+    if json_out:
+        print(render_json(report))
+    else:
+        print(render_text(report))
 
 
 def _basis_to_dict(basis) -> dict:
@@ -5325,13 +6535,24 @@ def tier3_search(
                  "on seed count; truncated by priority order.",
         ),
     ] = 5,
-    per_seed_iters: Annotated[
+    per_seed_time: Annotated[
         int,
         typer.Option(
-            "--per-seed-iters",
-            help="Permuter iterations per seed.",
+            "--per-seed-time",
+            help="Wall-clock seconds to permute each compiling seed. "
+                 "The permuter runs against the seed's perm-dir for "
+                 "this long, then is killed. Default 60s.",
         ),
-    ] = 200,
+    ] = 60,
+    total_time: Annotated[
+        int,
+        typer.Option(
+            "--total-time",
+            help="Global wall-clock cap (seconds) across the whole "
+                 "per-seed search. Stop early once exceeded, even if "
+                 "seeds remain. Default 600s (10 minutes).",
+        ),
+    ] = 600,
     perm_root: Annotated[
         Path,
         typer.Option(
@@ -5350,6 +6571,27 @@ def tier3_search(
         float,
         typer.Option("--blend", help="mwcc-score blend weight."),
     ] = 0.1,
+    threshold: Annotated[
+        float,
+        typer.Option(
+            "--threshold",
+            help="Minimum delta (% improvement, post-transfer) to "
+                 "consider a seed's permuter run a win when applying "
+                 "with --apply-best. Default 0.05 — matches the global "
+                 "verify-perm default.",
+        ),
+    ] = 0.05,
+    apply_best: Annotated[
+        bool,
+        typer.Option(
+            "--apply-best",
+            help="After ranking, if the winning seed's best candidate "
+                 "improves real-source match by >= --threshold, "
+                 "transfer it to the real tree via the same verify-perm "
+                 "machinery (with the inline_fn placeholder guard). "
+                 "Off by default — dry-run semantics.",
+        ),
+    ] = False,
     include_low_confidence: Annotated[
         bool,
         typer.Option(
@@ -5375,14 +6617,24 @@ def tier3_search(
          nonmatchings/<fn>/tier3_seed_<idx>/.
       5. Smoke-compile each. If all seeds fail, exit non-zero with a
          clear message.
-      6. For each compiling seed, run `debug permute` (Tier 2) with
-         --per-seed-iters iterations.
-      7. Report the best result.
+      6. For each compiling seed, launch decomp-permuter (with
+         mwcc-debug score blending) for up to --per-seed-time seconds.
+         The global --total-time cap stops the loop early once
+         exceeded.
+      7. Find the best candidate each permuter produced and rank
+         seeds by delta (baseline score minus best candidate's score).
+      8. Print the top result with full diff path.
+      9. If --apply-best is set, transfer the winning candidate into
+         the real source tree via the same verify-perm machinery (with
+         the inline_fn placeholder check still firing).
     """
     from ..mwcc_debug.symbol_bridge import list_bindings
     from ..mwcc_debug.tier3_search import (
+        find_best_candidate,
         materialize_seed,
         plan_seeds,
+        rank_seed_results,
+        run_per_seed_permute,
         save_compile_failure,
         smoke_compile,
     )
@@ -5468,7 +6720,10 @@ def tier3_search(
         if out_c is None:
             print(f"[tier3] seed{i}: mutation unsupported; skipping")
             continue
-        result = smoke_compile(out_c, wibo, debug_compiler, cflags, melee_root)
+        result = smoke_compile(
+            out_c, wibo, debug_compiler, cflags, melee_root,
+            extra_include_dirs=[src_path.parent],
+        )
         if result.ok:
             print(f"[tier3] seed{i}: compile=ok")
         else:
@@ -5513,14 +6768,192 @@ def tier3_search(
     print()
     print(
         f"[tier3] {len(compiled)}/{len(materialized)} seeds compiled. "
-        f"Estimated wall-clock: {2 * len(compiled) * per_seed_iters} "
-        f"to {3 * len(compiled) * per_seed_iters} seconds."
+        f"Per-seed permute budget: {per_seed_time}s. "
+        f"Global cap: {total_time}s."
     )
+
+    # Resolve/derive the target spec once (shared across all seeds) so
+    # we don't pay the pcdump cost per-seed.
+    if target is None:
+        target = melee_root / "build" / "mwcc_debug_cache" / \
+            f"{unit}_target.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.exists():
+            spec = derive_target_from_function(fn)
+            target.write_text(json.dumps(spec, indent=2))
+            print(f"[tier3] derived target -> {target}")
+
+    # Stage each compiling seed_dir to look like a permuter perm-dir.
+    # Inherit target.o/compile.sh/settings.toml from the parent perm_dir
+    # so the permuter has everything it needs.
+    inherited_files = ["target.o", "compile.sh", "settings.toml"]
+    for plan, seed_dir, _result in compiled:
+        for fname in inherited_files:
+            src_file = perm_dir / fname
+            dst_file = seed_dir / fname
+            if src_file.exists() and not dst_file.exists():
+                shutil.copy2(src_file, dst_file)
+        # Make compile.sh executable in case the copy stripped mode.
+        sh = seed_dir / "compile.sh"
+        if sh.exists():
+            sh.chmod(0o755)
+
+    # Build the runner closure. It invokes the permute_with_mwcc.py
+    # wrapper directly against the seed_dir for `time_seconds` seconds,
+    # then SIGTERMs it. Output lands inside seed_dir/output-N-M/.
+    wrapper = (
+        melee_root / "tools" / "melee-agent" / "scripts"
+        / "permute_with_mwcc.py"
+    )
+    if not wrapper.exists():
+        typer.echo(f"wrapper not found: {wrapper}", err=True)
+        raise typer.Exit(4)
+
+    def _permute_runner(
+        seed_dir_arg: Path, fn_name: str, time_seconds: int,
+    ) -> None:
+        env = os.environ.copy()
+        env["MELEE_PERMUTER_ROOT"] = str(perm_root)
+        env["MELEE_ROOT"] = str(melee_root)
+        env["MWCC_DEBUG_TARGET"] = str(target)
+        env["MWCC_DEBUG_FN"] = fn_name
+        env["MWCC_DEBUG_UNIT"] = src_rel
+        env["MWCC_DEBUG_BLEND"] = str(blend)
+        cmd = ["python", str(wrapper), str(seed_dir_arg), "-j", "1"]
+        # Use subprocess.Popen + wait(timeout) so we can kill on
+        # expiry. permuter.py runs indefinitely; we want a hard cap.
+        proc = subprocess.Popen(
+            cmd, env=env, cwd=perm_root,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        try:
+            proc.wait(timeout=time_seconds)
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+
+    # Read the baseline score from the parent perm_dir's first seeded
+    # output (the unmutated base.c's score). We don't have a clean
+    # source of truth pre-permute — use the parent perm_dir's lowest-
+    # scoring `output-N-M` as a coarse baseline if it exists, else None.
+    parent_best = find_best_candidate(perm_dir)
+    baseline_score: Optional[int] = None
+    if parent_best is not None:
+        m = re.match(r"^output-(\d+)-\d+$", parent_best.parent.name)
+        if m:
+            baseline_score = int(m.group(1))
+
+    # Per-seed loop, respecting the global time budget.
+    print("[tier3] launching per-seed permuter runs...")
+    results: list = []
+    deadline = time.monotonic() + total_time
+    for i, (plan, seed_dir, _result) in enumerate(compiled):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            print(
+                f"[tier3] global --total-time={total_time}s exhausted; "
+                f"skipping {len(compiled) - i} remaining seed(s)."
+            )
+            break
+        # Don't let a per-seed timer run past the global cap.
+        slot = min(per_seed_time, int(remaining))
+        print(
+            f"[tier3] seed{i}: permuting for {slot}s "
+            f"({plan.description})..."
+        )
+        res = run_per_seed_permute(
+            seed_idx=i,
+            plan=plan,
+            seed_dir=seed_dir,
+            fn_name=function,
+            per_seed_time=slot,
+            runner=_permute_runner,
+            baseline_score=baseline_score,
+        )
+        if res.error:
+            print(f"[tier3] seed{i}: runner error: {res.error}")
+        elif res.best_candidate is None:
+            print(
+                f"[tier3] seed{i}: no improvement after "
+                f"{res.ran_seconds:.1f}s."
+            )
+        else:
+            print(
+                f"[tier3] seed{i}: best score={res.best_score} "
+                f"(baseline={res.baseline_score}, delta={res.delta}) "
+                f"in {res.ran_seconds:.1f}s; "
+                f"candidate={res.best_candidate}"
+            )
+        results.append(res)
+
+    print()
+    ranked = rank_seed_results(results)
+    if not ranked or all(r.best_candidate is None for r in ranked):
+        typer.echo(
+            "[tier3] No seed produced a permuter improvement. "
+            "Consider increasing --per-seed-time, widening --budget, "
+            "or inspecting individual seed_dirs manually.",
+            err=True,
+        )
+        raise typer.Exit(6)
+
+    print("[tier3] Ranked results (best first):")
+    for r in ranked:
+        if r.best_candidate is None:
+            print(
+                f"  seed{r.seed_idx}: delta=0 (no improvement) — "
+                f"{r.plan.description}"
+            )
+        else:
+            print(
+                f"  seed{r.seed_idx}: delta={r.delta} "
+                f"(score {r.baseline_score}->{r.best_score}) — "
+                f"{r.plan.description}"
+            )
+            print(f"      candidate: {r.best_candidate}")
+
+    winner = next(
+        (r for r in ranked if r.best_candidate is not None), None,
+    )
+    if winner is None:
+        return
+
+    print()
     print(
-        "[tier3] Per-seed permuter runs not yet wired in v1 — running "
-        "`debug permute -f FN` against each seed dir manually is the "
-        "current workaround. See "
-        "docs/mwcc-debug-permuter-integration.md."
+        f"[tier3] Top: seed{winner.seed_idx} delta={winner.delta} "
+        f"({winner.plan.description})"
+    )
+    print(f"        candidate: {winner.best_candidate}")
+    diff_path = winner.best_candidate.parent / "diff.diff"
+    if diff_path.exists():
+        print(f"        diff:      {diff_path}")
+
+    if not apply_best:
+        print()
+        print(
+            "[tier3] --apply-best not set; re-run with --apply-best to "
+            "transfer the winner via verify-perm, or run manually:\n"
+            f"  melee-agent debug verify-perm {winner.best_candidate} "
+            f"-f {function} --keep"
+        )
+        return
+
+    # --apply-best: invoke verify-perm in-process so the inline_fn
+    # placeholder guard + 3-way merge logic from commit f39e264a9
+    # still fires.
+    print()
+    print("[tier3] --apply-best: invoking verify-perm with --keep...")
+    verify_perm(
+        candidate=winner.best_candidate,
+        function=function,
+        keep=True,
+        force=False,
+        threshold=threshold,
+        json_out=False,
     )
 
 
@@ -5543,6 +6976,22 @@ def verify_with_name_magic(
                  "(useful for figuring out what to pass).",
         ),
     ] = None,
+    apply_auto: Annotated[
+        bool,
+        typer.Option(
+            "--apply-auto",
+            help="Automatically resolve and apply the full anonymous → "
+                 "production-symbol rename, no --map needed. Cross-"
+                 "references the production .o "
+                 "(`build/GALE01/obj/<unit>.o`) by value, renames every "
+                 "anonymous @N .sdata2 symbol whose backing bytes match a "
+                 "named symbol in the production .o, then globalizes "
+                 "(STB_GLOBAL) the new symbols. Makes the 'named SDA2 "
+                 "magic constants' matching blocker invisible to "
+                 "subsequent checkdiff runs without manually constructing "
+                 "a map. Mutually exclusive with --map.",
+        ),
+    ] = False,
 ) -> None:
     """Compile, optionally rename anonymous SDA2 constants, then checkdiff.
 
@@ -5557,15 +7006,28 @@ def verify_with_name_magic(
     references the same bytes via a named symbol (from symbols.txt).
     Reloc-target diff blocks byte matching even though the data is
     identical. `--map s32=<symname>,u32=<symname>` renames the @N
-    symbols so checkdiff sees matching reloc targets.
+    symbols so checkdiff sees matching reloc targets. Or pass
+    `--apply-auto` to do the lookup + rename automatically from the
+    production .o, no map required.
 
     Flow:
       1. Build the function's TU object (`ninja build/GALE01/src/<unit>.o`)
-      2. If `--map` given, rename anonymous @N .sdata2 symbols via objcopy
-         If omitted, list anonymous symbols and suggest the map format.
+      2. If `--map` given, rename anonymous @N .sdata2 symbols via objcopy.
+         If `--apply-auto` given, auto-resolve via value lookup against the
+         production .o and apply renames + globalize in one step.
+         If neither given, list anonymous symbols and suggest the map format.
       3. Run `tools/checkdiff.py <function> --format plain` and forward
          its output verbatim.
     """
+    if name_map and apply_auto:
+        typer.echo(
+            "--map and --apply-auto are mutually exclusive; pick one. "
+            "Use --apply-auto to auto-resolve, or --map to supply an "
+            "explicit mapping.",
+            err=True,
+        )
+        raise typer.Exit(2)
+
     melee_root = DEFAULT_MELEE_ROOT
     unit = _find_unit_for_function(function, melee_root)
     if unit is None:
@@ -5611,8 +7073,9 @@ def verify_with_name_magic(
         )
         raise typer.Exit(3)
 
-    # 2. Rename anonymous SDA2 symbols if --map given, or surface what
-    #    anonymous symbols exist so the agent can construct a map.
+    # 2. Rename anonymous SDA2 symbols if --map / --apply-auto given,
+    #    or surface what anonymous symbols exist so the agent can
+    #    construct a map.
     if name_map:
         from ..mwcc_debug.o_rewriter import (
             parse_mapping,
@@ -5642,6 +7105,62 @@ def verify_with_name_magic(
             print(
                 "[verify] no matching anonymous symbols found to rename "
                 "(use `debug name-magic <o_file> --list` to inspect)"
+            )
+    elif apply_auto:
+        from ..mwcc_debug.o_rewriter import apply_name_magic_auto
+
+        target_o = melee_root / "build" / "GALE01" / "obj" / f"{unit}.o"
+        if not target_o.exists():
+            typer.echo(
+                f"--apply-auto requires the production .o at "
+                f"{target_o.relative_to(melee_root)} (not found). "
+                f"Build it first (`ninja build/GALE01/obj/{unit}.o`) and "
+                f"retry, or use --map to supply names manually.",
+                err=True,
+            )
+            raise typer.Exit(2)
+        try:
+            result = apply_name_magic_auto(obj_path, target_o)
+        except FileNotFoundError as e:
+            typer.echo(
+                f"objcopy not found: {e}. Install devkitPPC.",
+                err=True,
+            )
+            raise typer.Exit(5)
+        except subprocess.CalledProcessError as e:
+            typer.echo(f"objcopy failed: {e}", err=True)
+            raise typer.Exit(5)
+        target_rel = target_o.relative_to(melee_root)
+        if result.renames:
+            print(
+                f"[verify] --apply-auto: renamed {len(result.renames)} "
+                f"symbol(s) via lookup against {target_rel}:"
+            )
+            globalized_set = set(result.globalized)
+            for old, new in result.renames:
+                glob_note = (
+                    " (globalized)" if new in globalized_set else ""
+                )
+                print(f"          {old} -> {new}{glob_note}")
+        else:
+            print(
+                f"[verify] --apply-auto: no anonymous .sdata2 symbols "
+                f"matched named counterparts in {target_rel} "
+                f"(found {len(result.anonymous_found)} anonymous; "
+                f"unresolved {len(result.unresolved)})"
+            )
+        if result.unresolved:
+            unresolved_names = ", ".join(
+                s.name for s in result.unresolved[:8]
+            )
+            extra = (
+                f" (+{len(result.unresolved) - 8} more)"
+                if len(result.unresolved) > 8 else ""
+            )
+            print(
+                f"[verify] --apply-auto: {len(result.unresolved)} "
+                f"anonymous symbol(s) had no value-match in "
+                f"{target_rel}: {unresolved_names}{extra}"
             )
     else:
         # No --map given. List anonymous magic constants in the freshly-

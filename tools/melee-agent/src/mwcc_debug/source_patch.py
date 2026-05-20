@@ -18,6 +18,7 @@ This module provides that lift. Limitations:
 
 from __future__ import annotations
 
+import difflib
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -389,3 +390,178 @@ def get_decl_names(file_text: str, function: str) -> Optional[list[str]]:
         )
         names.append(m.group(1) if m else "?")
     return names
+
+
+def merge3_function(
+    base: str,
+    candidate: str,
+    current: str,
+) -> tuple[str, list[tuple[int, str]]]:
+    """3-way merge of a single function body (as extracted strings).
+
+    Treats `base` as the common ancestor (permuter's base.c function text),
+    `candidate` as the permuter's mutated version (theirs), and `current` as
+    the real source's current version (ours — may contain manual edits made
+    after the permuter baseline was imported).
+
+    Strategy (line-level):
+    - Lines unchanged in candidate vs base AND unchanged in current vs base:
+      keep current (no-op).
+    - Lines changed in candidate but unchanged in current: take candidate.
+    - Lines changed in current but unchanged in candidate: keep current.
+    - Lines changed in BOTH candidate and current: CONFLICT. Conflicts are
+      recorded as (approx_line_number, conflict_description) pairs.
+
+    When a conflict is detected, the candidate version is used for the
+    conflicting region (caller decides whether to abort or proceed).
+
+    Returns (merged_text, conflicts) where conflicts is empty on clean merge.
+    """
+    import difflib
+
+    base_lines = base.splitlines(keepends=True)
+    cand_lines = candidate.splitlines(keepends=True)
+    curr_lines = current.splitlines(keepends=True)
+
+    # Compute opcodes for base→candidate and base→current
+    sm_bc = difflib.SequenceMatcher(None, base_lines, cand_lines, autojunk=False)
+    sm_bx = difflib.SequenceMatcher(None, base_lines, curr_lines, autojunk=False)
+
+    # Build a set of base-line indices that are modified by each side.
+    # "modified" = deleted or replaced (not just inserted after).
+    def _modified_base_indices(opcodes, a_len: int) -> set[int]:
+        modified: set[int] = set()
+        for tag, i1, i2, j1, j2 in opcodes:
+            if tag in ("replace", "delete"):
+                modified.update(range(i1, i2))
+        return modified
+
+    cand_opcodes = sm_bc.get_opcodes()
+    curr_opcodes = sm_bx.get_opcodes()
+    cand_modified = _modified_base_indices(cand_opcodes, len(base_lines))
+    curr_modified = _modified_base_indices(curr_opcodes, len(base_lines))
+
+    # Conflict = both sides modified the same base line(s).
+    conflict_base_indices = cand_modified & curr_modified
+
+    conflicts: list[tuple[int, str]] = []
+    if conflict_base_indices:
+        for idx in sorted(conflict_base_indices):
+            base_line = base_lines[idx].rstrip("\n")
+            conflicts.append((
+                idx + 1,
+                f"base: {base_line!r}",
+            ))
+
+    # Build merged result: start from current, then apply candidate's changes
+    # for lines that candidate touched but current didn't.
+    # The simplest correct merge: use difflib.Differ on base→candidate hunks
+    # and apply non-conflicting insertions/replacements onto current.
+    #
+    # Implementation: walk base→candidate opcodes. For each hunk:
+    # - "equal": leave current unchanged (use current's corresponding lines).
+    # - "replace"/"delete"/"insert": if NOT a conflict, apply the candidate
+    #   change; if conflict, apply candidate (caller-decided).
+    #
+    # To build the output we need a mapping from base indices to current
+    # indices (base→current opcodes give us that).
+    # We'll build a "current-indexed" output by walking both opcode lists.
+
+    # Simpler approach: rebuild from candidate, but for non-conflicting regions
+    # that current changed (vs base), prefer current.
+    # Walk base→candidate and base→current simultaneously.
+
+    merged: list[str] = []
+    # Map base indices to their current counterparts
+    base_to_curr: dict[int, list[str]] = {}  # base idx → replacement lines in current
+    base_deleted_by_curr: set[int] = set()
+
+    for tag, i1, i2, j1, j2 in curr_opcodes:
+        if tag == "equal":
+            for k in range(i2 - i1):
+                base_to_curr[i1 + k] = [curr_lines[j1 + k]]
+        elif tag in ("replace",):
+            # Map the whole replaced range
+            curr_chunk = curr_lines[j1:j2]
+            for k in range(i2 - i1):
+                base_to_curr[i1 + k] = curr_chunk if k == 0 else []
+        elif tag == "delete":
+            for k in range(i2 - i1):
+                base_deleted_by_curr.add(i1 + k)
+                base_to_curr[i1 + k] = []
+        elif tag == "insert":
+            # Insertion before base[i1]: attach to the previous base line
+            # We'll handle insertions by keying them to the preceding base idx.
+            # For simplicity, attach inserted current lines to the next base idx.
+            key = i1  # insert before base[i1]
+            if key not in base_to_curr:
+                base_to_curr[key] = []
+            base_to_curr[key] = list(curr_lines[j1:j2]) + base_to_curr.get(key, [])
+
+    pending_curr_inserts: dict[int, list[str]] = {}
+    for tag, i1, i2, j1, j2 in curr_opcodes:
+        if tag == "insert":
+            pending_curr_inserts.setdefault(i1, []).extend(curr_lines[j1:j2])
+
+    # Now walk candidate opcodes to build merged output
+    curr_pos = 0  # position in curr_lines (for equal regions)
+    # We'll re-index by rebuilding from scratch using base as anchor.
+    # Emit lines for each base segment per candidate opcode.
+
+    # Rebuild curr lookup: for each base index, what are the curr lines?
+    # For "insert" in curr (before base[i1]), attach to i1 as prefix.
+    curr_prefix: dict[int, list[str]] = {}  # extra curr lines inserted BEFORE base[i]
+    for tag, i1, i2, j1, j2 in curr_opcodes:
+        if tag == "insert":
+            curr_prefix.setdefault(i1, []).extend(curr_lines[j1:j2])
+
+    # Rebuild: for each base line index, what is the current version?
+    # base_to_curr[i] = the lines that replaced base[i] in current (may be empty if deleted)
+    base_to_curr2: dict[int, list[str]] = {}
+    for tag, i1, i2, j1, j2 in curr_opcodes:
+        if tag == "equal":
+            for k in range(i2 - i1):
+                base_to_curr2[i1 + k] = [curr_lines[j1 + k]]
+        elif tag == "replace":
+            # Split the replacement across the base indices evenly
+            curr_chunk = curr_lines[j1:j2]
+            for k in range(i2 - i1):
+                base_to_curr2[i1 + k] = curr_chunk if k == 0 else []
+        elif tag == "delete":
+            for k in range(i2 - i1):
+                base_to_curr2[i1 + k] = []
+        # insert handled via curr_prefix
+
+    # Walk candidate opcodes, building merged output
+    for tag, i1, i2, j1, j2 in cand_opcodes:
+        if tag == "equal":
+            # Candidate kept these base lines: emit current's version
+            for k in range(i2 - i1):
+                base_idx = i1 + k
+                merged.extend(curr_prefix.get(base_idx, []))
+                merged.extend(base_to_curr2.get(base_idx, [base_lines[base_idx]]))
+        elif tag in ("replace", "delete"):
+            cand_chunk = cand_lines[j1:j2]
+            # For each base line in this range: is it a conflict?
+            for k in range(i2 - i1):
+                base_idx = i1 + k
+                merged.extend(curr_prefix.get(base_idx, []))
+                if base_idx in conflict_base_indices:
+                    # Conflict: take candidate version on first base idx, skip rest
+                    if k == 0:
+                        merged.extend(cand_chunk)
+                else:
+                    # Non-conflict: take candidate (it changed, current didn't)
+                    if k == 0:
+                        merged.extend(cand_chunk)
+                    # else: cand replaced multiple base lines, emit chunk only once
+        elif tag == "insert":
+            # Candidate inserted lines before base[i1] — always take them
+            merged.extend(cand_lines[j1:j2])
+
+    # Emit any trailing curr_prefix for base lines beyond the last opcode
+    for base_idx in sorted(curr_prefix):
+        if base_idx >= len(base_lines):
+            merged.extend(curr_prefix[base_idx])
+
+    return "".join(merged), conflicts

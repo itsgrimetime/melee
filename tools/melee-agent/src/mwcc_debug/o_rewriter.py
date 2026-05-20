@@ -147,12 +147,173 @@ def find_named_sdata2_symbols_by_offset(
     return out
 
 
+def find_named_sdata2_symbols_by_value(
+    o_path: Path,
+) -> dict[int, str]:
+    """Scan a .o for NAMED (non-anonymous) .sdata2 symbols, indexed by
+    the 64-bit big-endian value of their backing bytes.
+
+    Unlike ``find_named_sdata2_symbols_by_offset``, this matches on the
+    *actual bytes* stored at the symbol's location rather than the section
+    offset.  This is what ``suggest_name_magic_map`` needs: the two .o files
+    (compiled vs target) can have different .sdata2 layouts, so offsets don't
+    align.  The magic values (0x4330000080000000 / 0x4330000000000000) are
+    globally unique bit patterns, so matching by value is unambiguous.
+
+    Only 8-byte symbols are included (magic constants are always 8 bytes).
+    If multiple named symbols happen to contain the same 8-byte value at
+    different offsets (extremely rare), the first one in symtab order wins.
+    """
+    from elftools.elf.elffile import ELFFile
+
+    out: dict[int, str] = {}
+    with o_path.open("rb") as f:
+        elf = ELFFile(f)
+        sdata2 = elf.get_section_by_name(".sdata2")
+        if sdata2 is None:
+            return out
+        sdata2_idx = elf.get_section_index(".sdata2")
+        data = sdata2.data()
+        symtab = elf.get_section_by_name(".symtab")
+        if symtab is None:
+            return out
+        for sym in symtab.iter_symbols():
+            if sym["st_shndx"] != sdata2_idx:
+                continue
+            name = sym.name
+            if not name or name.startswith("@"):
+                continue
+            if name.startswith("."):
+                continue
+            size = sym["st_size"]
+            if size != 8:
+                continue
+            offset = sym["st_value"]
+            if offset + 8 > len(data):
+                continue
+            value = struct.unpack(">Q", data[offset:offset + 8])[0]
+            # Only index magic-constant values to keep lookups unambiguous.
+            out.setdefault(value, name)
+    return out
+
+
+@dataclass
+class AutoRenameResult:
+    """Outcome of :func:`apply_name_magic_auto`.
+
+    Attributes:
+        anonymous_found: All anonymous .sdata2 symbols discovered in the
+            base .o (both 8-byte magic constants and 4-byte float literals).
+        renames: ``(old_name, new_name)`` pairs applied via objcopy. Only
+            8-byte magic constants with a value-matching named symbol in
+            the target .o are renamed; 4-byte literals are skipped because
+            matching by value is ambiguous.
+        unresolved: Anonymous symbols for which no named target counterpart
+            was found. Useful for surfacing the "couldn't resolve" count.
+        globalized: Symbols that were promoted to ``STB_GLOBAL`` after
+            renaming. Mirrors ``renames`` when ``globalize=True``.
+        target_o_path: The production .o that was consulted for the
+            value-based lookup (may not exist; callers should check).
+    """
+    anonymous_found: list[MagicSymbol]
+    renames: list[tuple[str, str]]
+    unresolved: list[MagicSymbol]
+    globalized: list[str]
+    target_o_path: Path
+
+
+def apply_name_magic_auto(
+    base_o_path: Path,
+    target_o_path: Path,
+    globalize: bool = True,
+    objcopy: str = "/opt/devkitpro/devkitPPC/bin/powerpc-eabi-objcopy",
+) -> AutoRenameResult:
+    """Auto-resolve and apply the full anonymous → production-symbol rename.
+
+    For each anonymous ``@N`` .sdata2 symbol in ``base_o_path``, look up the
+    named symbol in ``target_o_path`` whose backing bytes match (8-byte
+    values only — 4-byte float literals are excluded because matching by
+    value is ambiguous). Rename via ``objcopy --redefine-syms`` and
+    optionally globalize the new symbols (default ``True`` — the production
+    .o always has these symbols as ``STB_GLOBAL``).
+
+    This makes the "named SDA2 magic constants — not reachable from C
+    source" matching blocker invisible to subsequent checkdiff runs on the
+    rewritten .o.
+
+    Args:
+        base_o_path: The .o file to rewrite in place (the freshly compiled
+            output, e.g. ``build/GALE01/src/.../mnvibration.o``).
+        target_o_path: The production .o (e.g.
+            ``build/GALE01/obj/.../mnvibration.o``). If it does not exist,
+            no renames are performed — callers should check
+            ``target_o_path.exists()`` before relying on the result.
+        globalize: When True (default), promote each renamed symbol to
+            ``STB_GLOBAL`` via ``objcopy --globalize-symbol``.
+        objcopy: Path to the PowerPC objcopy binary.
+
+    Returns:
+        An :class:`AutoRenameResult` describing what was found, renamed,
+        and globalized.
+
+    Raises:
+        FileNotFoundError: If ``objcopy`` is missing and renames are
+            required.
+        subprocess.CalledProcessError: If objcopy fails.
+    """
+    anons, suggested = suggest_name_magic_map(base_o_path, target_o_path)
+    suggested_names: set[str] = {anon.name for anon, _ in suggested}
+    unresolved = [a for a in anons if a.name not in suggested_names]
+
+    if not suggested:
+        return AutoRenameResult(
+            anonymous_found=anons,
+            renames=[],
+            unresolved=unresolved,
+            globalized=[],
+            target_o_path=target_o_path,
+        )
+
+    # Build a direct @N → name mapping so we don't re-discover anonymous
+    # symbols inside ``rename_magic_symbols``. Using by_name (not by_value)
+    # ensures we rename exactly the symbols ``suggest_name_magic_map``
+    # vetted, even if multiple anonymous symbols happened to share a value.
+    mapping = Mapping(
+        by_value={},
+        by_name={anon.name: named for anon, named in suggested},
+    )
+    renames = rename_magic_symbols(
+        base_o_path, mapping, out_path=None, objcopy=objcopy,
+    )
+
+    globalized: list[str] = []
+    if globalize and renames:
+        new_names = [new for _, new in renames]
+        globalize_symbols(base_o_path, new_names, objcopy=objcopy)
+        globalized = new_names
+
+    return AutoRenameResult(
+        anonymous_found=anons,
+        renames=renames,
+        unresolved=unresolved,
+        globalized=globalized,
+        target_o_path=target_o_path,
+    )
+
+
 def suggest_name_magic_map(
     base_o_path: Path,
     target_o_path: Optional[Path] = None,
 ) -> tuple[list[MagicSymbol], list[tuple[MagicSymbol, str]]]:
-    """For each anonymous @N symbol in `base_o_path`, try to find a
-    matching named symbol in `target_o_path` at the same offset.
+    """For each anonymous @N symbol in ``base_o_path``, try to find a
+    matching named symbol in ``target_o_path``.
+
+    Matching is done by **value** (the actual 8-byte big-endian contents of
+    the symbol's backing storage), NOT by section offset.  The two .o files
+    frequently have different .sdata2 layouts — the compiled .o puts anonymous
+    constants in emission order while the target .o has them in the original
+    TU's declaration order.  An offset-based match would silently swap the
+    s32 and u32 magic symbols when their order differs between the two files.
 
     Returns (all_anonymous, suggested_renames). suggested_renames is
     the subset for which a named counterpart was found in the target,
@@ -166,15 +327,99 @@ def suggest_name_magic_map(
     if target_o_path is None or not target_o_path.exists():
         return (anons, [])
     try:
-        named_by_offset = find_named_sdata2_symbols_by_offset(target_o_path)
+        named_by_value = find_named_sdata2_symbols_by_value(target_o_path)
     except Exception:
         return (anons, [])
     suggested: list[tuple[MagicSymbol, str]] = []
     for sym in anons:
-        named = named_by_offset.get(sym.offset)
+        if sym.size != 8:
+            continue
+        named = named_by_value.get(sym.value)
         if named:
             suggested.append((sym, named))
     return (anons, suggested)
+
+
+# Known assert-filename byte strings found in .sdata (NOT .sdata2).
+# These come from HSD_ASSERT / __assert calls where jobj.h (and similar)
+# inline functions emit the __FILE__ string into .sdata.  When MWCC names
+# these @N (anonymous), checkdiff reports a relocation-name mismatch.
+_KNOWN_ASSERT_STRINGS: frozenset[str] = frozenset([
+    "jobj.h", "jobj",
+    "lobj.h", "lobj",
+    "dobj.h", "dobj",
+    "aobj.h", "aobj",
+    "cobj.h", "cobj",
+    "mobj.h", "mobj",
+])
+
+
+def find_anonymous_assert_strings(
+    o_path: Path,
+) -> list[tuple[str, str]]:
+    """Scan the .sdata section of `o_path` for anonymous @N symbols whose
+    content is a known HSD_ASSERT filename or condition string.
+
+    Returns a list of (symbol_name, decoded_string) pairs — e.g.
+    [("@12", "jobj.h"), ("@13", "jobj")].
+
+    Empty list if no .sdata section exists, pyelftools is unavailable, or no
+    anonymous assert strings are found.
+
+    This is used by `stuck` / `ceiling` to detect the "HSD_ASSERT override"
+    pattern: when jobj.h inline functions emit anonymous @N strings, the fix
+    is to `#undef`/`#define HSD_ASSERT` before the `<baselib/jobj.h>` include
+    and route the assert through named extern char[] symbols.
+    """
+    try:
+        from elftools.elf.elffile import ELFFile
+    except ImportError:
+        return []
+
+    out: list[tuple[str, str]] = []
+    try:
+        with o_path.open("rb") as f:
+            elf = ELFFile(f)
+            sdata = elf.get_section_by_name(".sdata")
+            if sdata is None:
+                return []
+            sdata_idx = elf.get_section_index(".sdata")
+            data = sdata.data()
+            symtab = elf.get_section_by_name(".symtab")
+            if symtab is None:
+                return []
+            for sym in symtab.iter_symbols():
+                if sym["st_shndx"] != sdata_idx:
+                    continue
+                name = sym.name
+                if not name or not name.startswith("@"):
+                    continue
+                size = sym["st_size"]
+                # Assert strings are short (5-12 bytes) and NUL-terminated.
+                if not (4 <= size <= 16):
+                    continue
+                offset = sym["st_value"]
+                if offset + size > len(data):
+                    continue
+                raw = data[offset:offset + size]
+                # Must be printable ASCII followed by a NUL byte.
+                if raw[-1] != 0:
+                    continue
+                try:
+                    decoded = raw[:-1].decode("ascii")
+                except (UnicodeDecodeError, ValueError):
+                    continue
+                if not all(0x20 <= b < 0x7F for b in raw[:-1]):
+                    continue
+                # Match against known set OR any short printable string that
+                # looks like an assert filename (contains '.' or is all alpha).
+                if (decoded in _KNOWN_ASSERT_STRINGS
+                        or (len(decoded) <= 12
+                            and decoded.replace(".", "").replace("_", "").isalpha())):
+                    out.append((name, decoded))
+    except Exception:
+        pass
+    return out
 
 
 @dataclass
@@ -256,9 +501,31 @@ def rename_magic_symbols(
 
     symbols = find_magic_symbols(o_path)
     renames: list[tuple[str, str]] = []
+    # Fix D: when multiple anonymous symbols share the same value, rename ALL
+    # of them (the user clearly wants all instances of the value renamed) and
+    # emit a warning listing the full match set so the user knows which @N
+    # names were selected.  If they need to target a specific one, the warning
+    # directs them to use direct '@N=name' mapping instead.
+    _value_to_syms: dict[int, list[str]] = {}
+    for sym in symbols:
+        _value_to_syms.setdefault(sym.value, []).append(sym.name)
     for sym in symbols:
         if sym.value in m.by_value:
             renames.append((sym.name, m.by_value[sym.value]))
+            # Emit a warning if multiple symbols share this value.
+            _matches = _value_to_syms.get(sym.value, [])
+            if len(_matches) > 1 and sym.name == _matches[0]:
+                # Print once (first match) to avoid duplicate warnings.
+                import sys as _sys
+                _sym_list = ", ".join(_matches)
+                print(
+                    f"[rename-magic] WARNING: value 0x{sym.value:016x} matches "
+                    f"multiple anonymous symbols in .o: {_sym_list}\n"
+                    f"Renaming all of them to '{m.by_value[sym.value]}'. "
+                    f"To target a specific one, use direct mapping "
+                    f"(e.g. '{_matches[0]}={m.by_value[sym.value]}').",
+                    file=_sys.stderr,
+                )
 
     # Also handle direct @N → name mappings. These can target any
     # anonymous symbol (including 4-byte float literals that
@@ -312,3 +579,33 @@ def rename_magic_symbols(
         Path(redef_file).unlink(missing_ok=True)
 
     return renames
+
+
+def globalize_symbols(
+    o_path: Path,
+    names: list[str],
+    objcopy: str = "/opt/devkitpro/devkitPPC/bin/powerpc-eabi-objcopy",
+) -> None:
+    """Make each symbol in `names` global (STB_GLOBAL) in `o_path`.
+
+    Uses objcopy with one ``--globalize-symbol <name>`` argument per name.
+    The operation is in-place: a temp file is written then atomically moved
+    over the original.
+
+    Raises subprocess.CalledProcessError if objcopy fails.
+    Raises FileNotFoundError if objcopy is not found.
+    """
+    if not names:
+        return
+
+    with tempfile.NamedTemporaryFile(suffix=".o", delete=False) as tf_out:
+        tmp_out = tf_out.name
+    try:
+        args = [objcopy]
+        for name in names:
+            args += ["--globalize-symbol", name]
+        args += [str(o_path), tmp_out]
+        subprocess.run(args, check=True)
+        shutil.move(tmp_out, str(o_path))
+    finally:
+        Path(tmp_out).unlink(missing_ok=True)

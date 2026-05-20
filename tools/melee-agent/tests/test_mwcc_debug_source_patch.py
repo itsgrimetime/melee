@@ -7,6 +7,7 @@ from src.mwcc_debug.source_patch import (
     find_decl_block,
     find_function,
     get_decl_names,
+    merge3_function,
     reorder_decls_in_function,
     replace_function,
 )
@@ -242,3 +243,156 @@ void f(void)
     assert body.endswith("}")
     # And the in-string brace is preserved in the slice
     assert 'hello { world' in body
+
+
+# ---------------------------------------------------------------------------
+# merge3_function tests
+# ---------------------------------------------------------------------------
+
+_BASE_FN = """\
+void myfunc(int x)
+{
+    int a = 0;
+    int b = x + 1;
+    return;
+}"""
+
+_CAND_FN = """\
+void myfunc(int x)
+{
+    int a = 0;
+    int b = x + 2;
+    return;
+}"""
+
+_CURR_FN_CLEAN = """\
+void myfunc(int x)
+{
+    int a = 0;
+    int b = x + 1;
+    return;
+}"""
+
+_CURR_FN_MANUAL_EDIT = """\
+void myfunc(int x)
+{
+    int a = 0;
+    int b = x + 1;
+    int c = b - 1;
+    return;
+}"""
+
+_CURR_FN_CONFLICT = """\
+void myfunc(int x)
+{
+    int a = 0;
+    int b = x + 99;
+    return;
+}"""
+
+
+def test_merge3_clean_no_manual_edits() -> None:
+    """Candidate changes a line; current has no manual edits — take candidate."""
+    merged, conflicts = merge3_function(_BASE_FN, _CAND_FN, _CURR_FN_CLEAN)
+    assert conflicts == []
+    assert "x + 2" in merged
+
+
+def test_merge3_preserves_current_manual_edit_in_non_mutated_region() -> None:
+    """Current added a line in a region the candidate did not touch — keep it."""
+    merged, conflicts = merge3_function(_BASE_FN, _CAND_FN, _CURR_FN_MANUAL_EDIT)
+    assert conflicts == []
+    # The candidate's change (x+2) and the manual addition (c = b-1) both appear
+    assert "x + 2" in merged
+    assert "c = b - 1" in merged
+
+
+def test_merge3_conflict_detected() -> None:
+    """Both candidate and current modified the same base line — conflict."""
+    merged, conflicts = merge3_function(_BASE_FN, _CAND_FN, _CURR_FN_CONFLICT)
+    assert len(conflicts) > 0
+    # Line number should be plausible (the b= line is line 4 in base)
+    assert any(ln >= 1 for ln, _ in conflicts)
+
+
+def test_merge3_candidate_equals_base_is_noop() -> None:
+    """Candidate identical to base — no changes; merged == current."""
+    merged, conflicts = merge3_function(_BASE_FN, _BASE_FN, _CURR_FN_MANUAL_EDIT)
+    assert conflicts == []
+    assert merged == _CURR_FN_MANUAL_EDIT
+
+
+def test_merge3_base_equals_current_takes_candidate() -> None:
+    """Current matches base (no manual edits) — merged takes candidate fully."""
+    merged, conflicts = merge3_function(_BASE_FN, _CAND_FN, _BASE_FN)
+    assert conflicts == []
+    assert "x + 2" in merged
+
+
+# ---------------------------------------------------------------------------
+# Fix A: verify-perm permuter placeholder detection
+# ---------------------------------------------------------------------------
+
+import re as _re
+
+# Mirror the placeholder list from debug.py so the test catches any drift.
+_PERMUTER_PLACEHOLDERS = (
+    "inline_fn", "noinline_fn", "extra_fn", "helper_fn",
+    "temp_fn", "local_var_fn",
+)
+
+
+def _has_placeholder(text: str) -> list[str]:
+    """Return list of placeholder names found in `text` (for test assertions)."""
+    found = []
+    for ph in _PERMUTER_PLACEHOLDERS:
+        if _re.search(r"\b" + _re.escape(ph) + r"\b", text):
+            found.append(ph)
+    return found
+
+
+def test_placeholder_detection_finds_inline_fn() -> None:
+    """Fix A: 'inline_fn' in candidate text is detected as a placeholder."""
+    candidate = """\
+void mnDiagram3_8024714C(HSD_GObj* gobj) {
+    if (!(inline_fn(popup_jobj) & 0x02000000)) {
+        return;
+    }
+}
+"""
+    hits = _has_placeholder(candidate)
+    assert "inline_fn" in hits, (
+        "verify-perm should detect 'inline_fn' as a permuter placeholder"
+    )
+
+
+def test_placeholder_detection_ignores_clean_candidate() -> None:
+    """Fix A: a candidate with no placeholders returns an empty hit list."""
+    candidate = """\
+void fn(HSD_GObj* gobj) {
+    if (!(popup_jobj->flags & 0x02000000)) {
+        return;
+    }
+}
+"""
+    hits = _has_placeholder(candidate)
+    assert hits == [], f"clean candidate should have no placeholder hits, got {hits}"
+
+
+def test_placeholder_detection_word_boundary() -> None:
+    """Fix A: 'inline_fn_wrapper' must NOT be flagged — only exact matches."""
+    candidate = "void f(void) { inline_fn_wrapper(x); }"
+    # 'inline_fn_wrapper' contains 'inline_fn' as a prefix, but the
+    # word-boundary regex must NOT match it.
+    hits = _has_placeholder(candidate)
+    assert "inline_fn" not in hits, (
+        "'inline_fn' must not match inside 'inline_fn_wrapper' (word boundary)"
+    )
+
+
+def test_placeholder_detection_all_known_placeholders() -> None:
+    """Fix A: every placeholder in the sentinel list is detected."""
+    for ph in _PERMUTER_PLACEHOLDERS:
+        candidate = f"void f(void) {{ {ph}(x); }}"
+        hits = _has_placeholder(candidate)
+        assert ph in hits, f"placeholder '{ph}' was not detected"

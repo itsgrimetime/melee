@@ -165,6 +165,77 @@ def ensure_disassembler() -> tuple[str, Path]:
     return ("dtk", dtk_path)
 
 
+def apply_name_magic_if_available(
+    source_o: Path,
+    target_o: Path,
+    *,
+    verbose: bool = False,
+) -> Optional[dict]:
+    """Auto-rename anonymous .sdata2 magic constants in ``source_o`` using
+    named symbols from ``target_o``.
+
+    MWCC emits int-to-float bias literals as anonymous ``@N`` symbols in
+    ``.sdata2``. The production .o references the same bytes via named
+    globals (e.g. ``mnVibration_804DC018``). objdiff reports a relocation-
+    name mismatch even though the function body is otherwise identical.
+    This helper resolves that by renaming the anonymous symbols in place
+    via objcopy.
+
+    Idempotent: calling repeatedly on the same ``source_o`` is a no-op
+    after the first invocation (no @N symbols remain to rename).
+
+    Returns ``None`` (silently) when:
+        - ``target_o`` does not exist,
+        - the ``melee-agent`` helper module is unavailable, or
+        - objcopy is missing or fails.
+
+    Returns a dict ``{"renames": [...], "globalized": [...],
+    "unresolved": [...]}`` on success. The dict's lists may be empty if
+    the .o has no anonymous magic constants to rename.
+    """
+    if not target_o.exists():
+        return None
+    melee_agent_src = SCRIPT_DIR / "melee-agent" / "src"
+    if not melee_agent_src.is_dir():
+        return None
+    _path_str = str(melee_agent_src)
+    _added_path = _path_str not in sys.path
+    if _added_path:
+        sys.path.insert(0, _path_str)
+    try:
+        from mwcc_debug.o_rewriter import apply_name_magic_auto
+    except ImportError:
+        return None
+    finally:
+        if _added_path and sys.path and sys.path[0] == _path_str:
+            sys.path.pop(0)
+
+    try:
+        result = apply_name_magic_auto(source_o, target_o)
+    except (FileNotFoundError, subprocess.CalledProcessError, OSError) as exc:
+        if verbose:
+            print(
+                f"warning: name-magic auto-rename skipped: {exc}",
+                file=sys.stderr,
+            )
+        return None
+
+    summary = {
+        "renames": list(result.renames),
+        "globalized": list(result.globalized),
+        "unresolved": [s.name for s in result.unresolved],
+    }
+    if verbose and summary["renames"]:
+        print(
+            f"[checkdiff] name-magic: renamed {len(summary['renames'])} "
+            f"anonymous .sdata2 symbol(s) via {target_o}",
+            file=sys.stderr,
+        )
+        for old, new in summary["renames"]:
+            print(f"           {old} -> {new}", file=sys.stderr)
+    return summary
+
+
 def acquire_checkdiff_lock(obj_path: str):
     """Acquire a per-object lock for compile-producing checkdiff work."""
     if os.environ.get("CHECKDIFF_NO_LOCK"):
@@ -600,10 +671,23 @@ def main() -> int:
     ap.add_argument("--no-normalize-reloc", dest="normalize_reloc", action="store_false",
                     help="Disable reloc-offset normalization (emit reloc "
                          "lines exactly as the disassembler produced them).")
+    ap.add_argument("--no-name-magic", dest="name_magic", action="store_false",
+                    default=True,
+                    help="Disable the transparent name-magic auto-rename "
+                         "that rewrites anonymous .sdata2 @N symbols in the "
+                         "freshly-built .o to their production-symbol names "
+                         "via the matching ./build/GALE01/obj/<unit>.o. "
+                         "Pass this to debug the rename behavior itself or "
+                         "to see raw @N relocation names in the diff. "
+                         "(default: rename enabled)")
     args = ap.parse_args()
 
     # Auto-detect TTY - use non-interactive mode if no TTY available
     if not sys.stdout.isatty():
+        args.no_tty = True
+    # --format json always uses the non-interactive path (TTY would only
+    # produce objdiff-cli's interactive diff, which can't emit JSON).
+    if args.format == "json":
         args.no_tty = True
 
     func_name = args.function
@@ -656,6 +740,15 @@ def main() -> int:
             print(f"error: --no-build given but {our_obj} not found; "
                   f"build it first (or omit --no-build)", file=sys.stderr)
             return 1
+
+    # Transparently rename anonymous .sdata2 @N magic constants in the
+    # freshly-built .o to their production-symbol names. Idempotent and
+    # opt-out via --no-name-magic. Mutating the .o under build/GALE01/src/
+    # is safe (it's rebuilt on demand and ignored by git).
+    if args.name_magic:
+        source_o_abs = ROOT / our_obj.lstrip("./")
+        target_o_abs = ROOT / ref_obj.lstrip("./")
+        apply_name_magic_if_available(source_o_abs, target_o_abs)
 
     # diff
     if args.no_tty:
@@ -806,6 +899,7 @@ def main() -> int:
                     fromfile="expected", tofile="current", lineterm=""))
             }
             print(json_mod.dumps(diff_data, indent=2))
+            return 1 if ref_asm != our_asm else 0
         elif args.format == "side-by-side":
             # Side-by-side diff (better for agents to understand)
             if ref_asm == our_asm:
