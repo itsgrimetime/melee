@@ -19,7 +19,6 @@
 #include "lb/lbaudio_ax.h"
 #include "mn/inlines.h"
 #include "mn/mnmain.h"
-#include "mn/mnname.h"
 #include "mn/types.h"
 
 #include <dolphin/os.h>
@@ -35,6 +34,8 @@
 
 /// --- Externs ---
 extern long HSD_GObj_804D783C;
+char* GetNameText(u8 slot);
+int GetNameCount(void);
 void lb_8001CE00(void);
 
 // Note: standard HSD_JObjSetTranslate*/HSD_JObjGetTranslation* come from
@@ -166,6 +167,11 @@ static inline s32 mnVibration_GetNameSlot(MnVibrationData* data, s32 j)
         return 0xFF;
     }
     return (u8) name_idx;
+}
+
+inline u8 mnVibration_GetNameRumble(s32 name_idx)
+{
+    return GetPersistentNameData(name_idx)->x1A1;
 }
 
 static inline HSD_GObj*
@@ -557,7 +563,7 @@ void mnVibration_80248444(HSD_GObj* arg0, u8 arg1, u8 arg2)
 
     assets = &mnVibration_804A0888;
     data = arg0->user_data;
-    name_flag = GetPersistentNameData((s32) arg1)->x1A1;
+    name_flag = mnVibration_GetNameRumble((s32) arg1);
     jobj17 = data->jobjs[17];
     spacing = HSD_JObjGetTranslationY(jobj17);
     jobj18 = data->jobjs[18];
@@ -574,7 +580,7 @@ void mnVibration_80248444(HSD_GObj* arg0, u8 arg1, u8 arg2)
     text->font_size.x = 0.03f;
     text->font_size.y = 0.03f;
     HSD_SisLib_803A6B98(text, 0.0f, 0.0f, GetNameText(arg1));
-    new_jobj = HSD_JObjLoadJoint(assets->joint);
+    new_jobj = new_jobj = HSD_JObjLoadJoint(assets->joint);
     HSD_JObjAddAnimAll(new_jobj, assets->animjoint, assets->matanim,
                        assets->shapeanim);
     HSD_JObjReqAnimAll(new_jobj, name_flag);
