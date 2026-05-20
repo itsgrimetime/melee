@@ -282,6 +282,7 @@ void fn_802461BC(HSD_GObj* gobj)
     HSD_JObj* popup_jobj;
     u32 buttons;
     u8 sel;
+    u8 mode;
     int i;
     int val;
     u8 limit;
@@ -304,8 +305,8 @@ void fn_802461BC(HSD_GObj* gobj)
     if (buttons & 0x20) {
         lbAudioAx_80024030(0);
         mn_804A04F0.entering_menu = 0;
-        sel = ((Diagram3*) mnDiagram3_804D6C20->user_data)->is_name_mode;
-        gmMainLib_8015CC34()->xD = sel;
+        mode = ((Diagram3*) mnDiagram3_804D6C20->user_data)->is_name_mode;
+        gmMainLib_8015CC34()->xD = mode;
         mnDiagram2_ClearDetailView(mnDiagram3_804D6C20);
         HSD_GObjPLink_80390228(data->popup_gobj);
 
@@ -322,8 +323,8 @@ void fn_802461BC(HSD_GObj* gobj)
 
     if (buttons & 0xC0) {
         lbAudioAx_80024030(1);
-        sel = ((Diagram3*) mnDiagram3_804D6C20->user_data)->is_name_mode;
-        gmMainLib_8015CC34()->xD = sel;
+        mode = ((Diagram3*) mnDiagram3_804D6C20->user_data)->is_name_mode;
+        gmMainLib_8015CC34()->xD = mode;
         mnDiagram2_ClearDetailView(mnDiagram3_804D6C20);
         HSD_GObjPLink_80390228(data->popup_gobj);
 
