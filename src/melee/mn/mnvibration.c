@@ -308,7 +308,7 @@ void fn_80247510(HSD_GObj* gobj)
     u8 rumble_setting;
     HSD_JObj* jobj;
     int new_var;
-    PAD_STACK(144);
+    PAD_STACK(16);
 
     if (mn_804D6BC8.cooldown != 0) {
         Menu_DecrementAnimTimer();
@@ -347,33 +347,35 @@ void fn_80247510(HSD_GObj* gobj)
         if (data->x0[i + 2] == 0) {
             inputs = gm_801A36A0(i);
             if (inputs & (1LL << 32)) {
-                HSD_JObj* panel_jobj;
+                HSD_JObj* panel_jobj0;
+                HSD_JObj* panel_jobj1;
+                PAD_STACK(120);
                 lbAudioAx_80024030(1);
                 if (GetRumbleSettingOfPort(i) != 0) {
                     gmMainLib_8015ED4C(i, 0);
                     rumble_setting = GetRumbleSettingOfPort(i);
-                    lb_80011E24(
-                        mnVibration_NthPortChild(
-                            ((MnVibrationData*) mnVibration_804D6C28->user_data)
-                                ->jobjs[23],
-                            i),
-                        &panel_jobj, 2, -1);
-                    HSD_JObjReqAnimAll(panel_jobj, rumble_setting);
-                    HSD_JObjAnimAll(panel_jobj);
+                    lb_80011E24(mnVibration_NthPortChild(
+                                    ((MnVibrationData*)
+                                         mnVibration_804D6C28->user_data)
+                                        ->jobjs[23],
+                                    i),
+                                &panel_jobj0, 2, -1);
+                    HSD_JObjReqAnimAll(panel_jobj0, rumble_setting);
+                    HSD_JObjAnimAll(panel_jobj0);
                     HSD_PadRumbleRemoveAll();
                     HSD_PadRumbleOffN(i);
                     return;
                 } else {
                     gmMainLib_8015ED4C(i, 1);
                     rumble_setting = GetRumbleSettingOfPort(i);
-                    lb_80011E24(
-                        mnVibration_NthPortChild(
-                            ((MnVibrationData*) mnVibration_804D6C28->user_data)
-                                ->jobjs[23],
-                            i),
-                        &panel_jobj, 2, -1);
-                    HSD_JObjReqAnimAll(panel_jobj, rumble_setting);
-                    HSD_JObjAnimAll(panel_jobj);
+                    lb_80011E24(mnVibration_NthPortChild(
+                                    ((MnVibrationData*)
+                                         mnVibration_804D6C28->user_data)
+                                        ->jobjs[23],
+                                    i),
+                                &panel_jobj1, 2, -1);
+                    HSD_JObjReqAnimAll(panel_jobj1, rumble_setting);
+                    HSD_JObjAnimAll(panel_jobj1);
                     HSD_PadRumbleAdd(i, 0, 14, 0, &mnVibration_804D4FF0);
                     return;
                 }
