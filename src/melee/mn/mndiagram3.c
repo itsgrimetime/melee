@@ -957,8 +957,11 @@ void mnDiagram3_8024714C(void *arg0)
     row0 = data->jobjs[8];
     HSD_ASSERT(0x3EE, row0);
     row1 = data->jobjs[9];
-    HSD_ASSERT(0x3EE, row1);
-    row_spacing = row1->translate.y - row0->translate.y;
+    {
+        f32 row0_y = row0->translate.y;
+        HSD_ASSERT(0x3EE, row1);
+        row_spacing = row1->translate.y - row0_y;
+    }
 
     row0 = data->jobjs[8];
     HSD_ASSERT(0x3E1, row0);
