@@ -320,6 +320,7 @@ void fn_802461BC(HSD_GObj* gobj)
     u8 sel;
     u8 mode;
     int i;
+    HSD_Text** new_var;
     int val;
     HSD_Text** labels_c;
     int limit;
@@ -561,7 +562,8 @@ void fn_802461BC(HSD_GObj* gobj)
             ptr = (d = mnDiagram3_804D6C20->user_data);
             for (i = 0; i < 10; i++) {
                 if (d->row_labels[i] != 0L) {
-                    HSD_SisLib_803A5CC4(ptr->row_labels[i]);
+                    new_var = ptr->row_labels;
+                    HSD_SisLib_803A5CC4(new_var[i]);
                     d->row_labels[i] = 0L;
                 }
             }
