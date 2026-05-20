@@ -201,3 +201,33 @@ Context: working on `src/melee/mn/mnvibration.c`, mainly `fn_80247510` and
 - `tier3-search` still reports that per-seed permuter runs are not wired in v1.
   The seed generation is useful now that the include path is fixed, but the
   manual `verify-perm`/permuter handoff is still the slow part.
+
+## Follow-up after merging `314fcc4ef`
+
+- The new class-scoped `--force-phys` syntax works as intended. Re-running the
+  old ambiguous `fn_80248A78` hypothesis with
+  `--force-phys 'gpr:50:26,gpr:36:29'` no longer double-applied the same ig_idx
+  to FP and GPR colorgraphs. The force still did not reach target text, which is
+  a useful source-shape signal: the visible row-0-JObj/cursor-row register swap
+  is not sufficient on its own.
+
+- `suggest-casts --asm --signedness` was useful as a quick negative filter on
+  `fn_80248A78`, `fn_802487A8`, `fn_80247510`, and `mnVibration_80248444`.
+  It found no signedness mismatches in the current diffs. The only nearby
+  `fn_802487A8` candidate, splitting
+  `(f32) (anim_byte_chain = data->x0[port_a + 2])` into assignment plus call,
+  transferred cleanly but was neutral (`95.916664%`, delta `+0.0`).
+
+- `verify-with-name-magic` direct anonymous-symbol mapping now works for the
+  4-byte float constants in `mnVibration_80248444`: `@513` and `@539` can be
+  renamed to `mnVibration_804DC030` and `mnVibration_804DC034`. After also
+  mapping `u32=mnVibration_804DC018`, the remaining diff is only relocation
+  site offsets (`+0xc0` vs `+0xc2`, and similar) even when the symbol names now
+  match. A relocation-line normalizer that treats relocations on the immediate
+  halfword as belonging to the containing instruction would let this
+  opcode-identical function be reported as matched/noise-only.
+
+- Trying to source-reference the named float globals directly in
+  `mnVibration_80248444` (`mnVibration_804DC030`/`804DC034` instead of `0.0f`/
+  `0.03f`) regressed badly (`100.0%` fuzzy to `94.33594%`), so the right source
+  is still the literal form plus post-build/name-magic-style normalization.
