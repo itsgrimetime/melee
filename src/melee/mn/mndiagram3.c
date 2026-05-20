@@ -916,6 +916,7 @@ void mnDiagram3_80247008(int arg0)
 
 void mnDiagram3_8024714C(void *arg0)
 {
+  unsigned short new_var5;
   HSD_GObj *new_var4;
   int i;
   Vec3 sp48;
@@ -980,7 +981,7 @@ void mnDiagram3_8024714C(void *arg0)
     (row0) ? ((void) 0) : (__assert(mnDiagram3_804D4FD8, 0x3EE, mnDiagram3_804D4FE0));
     {
       f32 ty = (row_spacing * mnDiagram3_804DC00C) + row0->translate.y;
-      (new_var3) ? ((void) 0) : (__assert(mnDiagram3_804D4FD8, 0x3B3, mnDiagram3_804D4FE0));
+      (new_var3) ? ((void) (0 & 0xFFFF)) : (__assert(mnDiagram3_804D4FD8, 0x3B3, mnDiagram3_804D4FE0));
       new_var3->translate.y = ty;
     }
     if (!(new_var3->flags & 0x02000000))
@@ -1038,10 +1039,11 @@ void mnDiagram3_8024714C(void *arg0)
         {
           limit = 0x15;
         }
+        new_var5 = limit;
         val = stat_idx + type_idx;
-        if (val >= ((u8) limit))
+        if (val >= ((u8) new_var5))
         {
-          val = val - ((u8) limit);
+          val = val - ((u8) new_var5);
         }
         else
         {
