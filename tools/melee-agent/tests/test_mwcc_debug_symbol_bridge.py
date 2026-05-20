@@ -552,3 +552,44 @@ def test_nested_block_bindings_default_to_ambiguous_nested() -> None:
     by_name = {b.var_name: b for b in bindings}
     assert by_name["outer"].confidence in {"best-guess", "verified"}
     assert by_name["inner"].confidence == "ambiguous-nested"
+
+
+def test_extract_function_text_still_importable() -> None:
+    """mutators.py imports _extract_function_text. Phase 1 keeps it.
+    Signature: returns Optional[tuple[str, str, int]] =
+    (params_text, body_text, start_line)."""
+    from src.mwcc_debug.symbol_bridge import _extract_function_text
+    extracted = _extract_function_text("void f(int x) { int y; }", "f")
+    assert extracted is not None
+    params, body, start_line = extracted
+    assert "int y" in body
+    assert params == "int x"
+    assert start_line == 1
+
+
+def test_strip_strings_and_comments_still_importable() -> None:
+    """mutators.py uses _strip_strings_and_comments. Phase 1 keeps it."""
+    from src.mwcc_debug.symbol_bridge import _strip_strings_and_comments
+    out = _strip_strings_and_comments('a = "hello"; /* c */ b = 1;')
+    assert '"hello"' not in out
+    assert "/* c */" not in out
+    assert "b = 1" in out
+
+
+def test_walk_local_decls_still_importable() -> None:
+    """mutators.py uses walk_local_decls. Phase 1 keeps top-level walk."""
+    from src.mwcc_debug.symbol_bridge import walk_local_decls
+    out = walk_local_decls("{ int x; HSD_JObj* y; }")
+    names = {d.name for d in out}
+    assert "x" in names
+    assert "y" in names
+
+
+def test_mutators_module_imports_cleanly() -> None:
+    """Smoke test: mutators imports the helpers it expects."""
+    from src.mwcc_debug import mutators
+    # If symbol_bridge stopped exporting required helpers, the import
+    # above would have raised. Confirm the module's expected entry
+    # points are still callable:
+    assert callable(mutators.mutate_type_change)
+    assert callable(mutators.mutate_insert_alias_before_use)
