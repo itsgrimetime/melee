@@ -262,7 +262,7 @@ an objcopy-rename build step or an MWCC fix.
 
 | Function | Start | End | Delta | Wins | Reverts |
 |---|---|---|---|---|---|
-| mnDiagram3_80245BA4 | 92.19% | 97.42% | +5.23% | 16+ permuter wins | many cruft cleanups |
+| mnDiagram3_80245BA4 | 92.19% | 97.47% | +5.28% | 17+ permuter wins | many cruft cleanups |
 | fn_802461BC | 96.31% | 96.74% | +0.43% | 1 manual + 2 permuter | many |
 | mnDiagram3_8024714C | 97.96% | 98.61% | +0.65% | 4 permuter wins | many |
 
