@@ -135,7 +135,7 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
             {
               char *name_str = GetNameText(entity);
               f32 f1 = mnDiagram3_804DC00C;
-              f32 offset_y = (neg_spacing * ((f32) i)) / divider;
+              f32 offset_y = ((-row_spacing) * ((f32) i)) / divider;
               HSD_SisLib_803A6B98(title_text, f1, offset_y, name_str);
             }
           }
@@ -210,7 +210,7 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
           }
           {
             f32 f1 = mnDiagram3_804DC00C;
-            f32 offset_y = (neg_spacing * ((f32) i)) / divider;
+            f32 offset_y = ((-row_spacing) * ((f32) i)) / divider;
             HSD_SisLib_803A6B98(value_text, f1, offset_y, (char *) sp58);
           }
         }
@@ -262,7 +262,7 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
           }
           {
             f32 f1 = mnDiagram3_804DC00C;
-            f32 offset_y = (neg_spacing * ((f32) i)) / divider;
+            f32 offset_y = ((-row_spacing) * ((f32) i)) / divider;
             HSD_SisLib_803A6B98(value_text, f1, offset_y, (char *) sp58);
           }
         }
@@ -277,7 +277,9 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
             HSD_Text *icon_text;
             f32 negated_y = -sp6C.y;
             neg_spacing = icon_x_offset + sp6C.x;
-            icon_text = HSD_SisLib_803A5ACC(0, 1, neg_spacing, (neg_spacing * ((f32) i)) + negated_y, sp6C.z, mnDiagram3_804DC014, mnDiagram3_804DC014);
+            icon_text = HSD_SisLib_803A5ACC(
+                0, 1, neg_spacing, (neg_spacing * ((f32) i)) + negated_y,
+                sp6C.z, mnDiagram3_804DC014, mnDiagram3_804DC014);
             data->row_icons[i] = icon_text;
             icon_text->default_alignment = 1;
             icon_text->text_color = mn_804D4B64;
