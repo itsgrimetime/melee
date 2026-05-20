@@ -329,3 +329,26 @@ Context: working on `src/melee/mn/mnvibration.c`, mainly `fn_80247510` and
   `melee-agent debug permute -f fn_80248A78 --best-only` fails because Typer
   consumes the upstream permuter flag. A note in the help example would save
   one failed launch.
+
+## Heartbeat follow-up at 2026-05-20 07:10 PDT
+
+- `debug ceiling fn_80247510` reported "PROBABLE CEILING" after cast and
+  decl-order checks, but the next `debug stuck`/`virtual-to-var` pass exposed a
+  concrete source-shape lead: all four unexpected SPILLED virtuals were
+  compiler-created `li 255` temps from the inlined `mnVibration_GetNameSlot`
+  sentinel paths. It would be useful if `ceiling` optionally ran the same
+  virtual-to-source fallback for SPILLED nodes and surfaced "try sentinel/return
+  shape around this inline" before calling ceiling.
+
+- `match-iter-first` on `fn_80247510` returned an ambiguous target list
+  (`146,52,49,148,41`). Feeding that list to `--force-iter-first` or forcing the
+  corresponding phys regs did not move toward a clean target and disturbed
+  early code. The output already labels these as ambiguous; a follow-up
+  "verify this with pcdump-local --diff before trusting it" note, or an
+  integrated dry-run score, would make the failure mode clearer.
+
+- `pcdump-local` has function scoping for `--force-phys` and
+  `--force-coalesce`, but the help does not show a function-scoped equivalent
+  for `--force-iter-first`. If that support exists, it should be exposed; if it
+  does not, it is risky in multi-function TUs because the forced iteration list
+  can apply outside the target function.
