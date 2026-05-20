@@ -1,0 +1,254 @@
+# tools/melee-agent/src/mwcc_debug/suggest_coalesce.py
+"""Orchestrator + renderer for `debug suggest-coalesce-source`.
+
+Composes the IR-facts layer + per-pattern checkers + (in discover mode)
+the cascade analyzer into a Report, then renders human-readable text
+or JSON. The CLI thin-wraps this module.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
+from .coalesce_ir_facts import (
+    CascadeCandidate, IrFacts, analyze_cascade, collect,
+)
+from .coalesce_patterns import ALL_PATTERNS, Suggestion
+from .colorgraph_parser import find_function, parse_hook_events
+from .parser import parse_pcdump
+
+
+@dataclass
+class PairReport:
+    """One proposed pair plus its IR evidence and ranked suggestions."""
+    from_virt: int
+    to_virt: int
+    ir_facts: dict
+    suggestions: list[Suggestion]
+    priority_class: Optional[str] = None
+    depends_on: Optional[tuple[int, int]] = None
+
+
+@dataclass
+class Report:
+    """Full orchestration result; rendered to text or JSON by callers."""
+    function: str
+    mode: str  # "pair" | "discover"
+    cascade: Optional[list[int]] = None
+    pairs: list[PairReport] = field(default_factory=list)
+
+
+def run(
+    function: str,
+    *,
+    pair: Optional[tuple[int, int]] = None,
+    discover: bool = False,
+    top: int = 3,
+    include_low_confidence: bool = False,
+    pcdump_text: str,
+    source_text: str = "",
+) -> Report:
+    """Build a Report for `function`.
+
+    The CLI is responsible for resolving pcdump + source paths and
+    passing their contents in. Keeping this module path-free avoids a
+    backward import on cli.debug (which would create a circular
+    dependency since cli.debug already imports this module).
+
+    Exactly one of `pair` or `discover` must be set — the CLI
+    enforces this.
+    """
+    fns = parse_pcdump(pcdump_text)
+    fn = next((f for f in fns if f.name == function), None)
+    if fn is None:
+        raise ValueError(f"function {function!r} not in pcdump")
+
+    facts = collect(fn, source_text)
+    if facts.pre_pass.name == "(missing)":
+        raise ValueError(
+            f"no pre-coloring pass for {function!r}; pcdump lacks IR detail"
+        )
+
+    # Hook events for colorgraph data (discover mode needs this)
+    if discover:
+        events_list = parse_hook_events(pcdump_text)
+        evs = find_function(events_list, function)
+        if evs and evs.colorgraph_sections:
+            facts.cg_section = evs.colorgraph_sections[0]
+
+    # Resolve pairs to evaluate
+    if pair is not None:
+        pairs_to_check: list[tuple[int, int, Optional[CascadeCandidate]]] = [
+            (pair[0], pair[1], None)
+        ]
+        cascade: Optional[list[int]] = None
+    else:
+        cands = analyze_cascade(facts)[:top]
+        pairs_to_check = [(c.from_virt, c.to_virt, c) for c in cands]
+        # Build the cascade summary list (descending phys regs)
+        if facts.cg_section is not None:
+            chain = sorted(
+                {d.assigned_reg for d in facts.cg_section.decisions
+                 if 25 <= d.assigned_reg <= 31},
+                reverse=True,
+            )
+            cascade = chain if len(chain) >= 2 else None
+        else:
+            cascade = None
+
+    # Run pattern checkers per pair
+    pair_reports: list[PairReport] = []
+    for a, b, cand in pairs_to_check:
+        suggestions: list[Suggestion] = []
+        for pat in ALL_PATTERNS:
+            sug = pat.check(facts, (a, b))
+            if sug is not None:
+                suggestions.append(sug)
+        pair_reports.append(PairReport(
+            from_virt=a, to_virt=b,
+            ir_facts=_summarize_facts(
+                facts, a, b,
+                include_low_confidence=include_low_confidence,
+            ),
+            suggestions=suggestions,
+            priority_class=cand.priority_class if cand else None,
+            depends_on=cand.depends_on if cand else None,
+        ))
+
+    return Report(
+        function=function,
+        mode="discover" if discover else "pair",
+        cascade=cascade,
+        pairs=pair_reports,
+    )
+
+
+def _summarize_facts(
+    facts: IrFacts, a: int, b: int,
+    *, include_low_confidence: bool = False,
+) -> dict:
+    """Serializable per-virtual fact summary for JSON + text output.
+
+    Source-line annotations from the bridge are only emitted when the
+    binding confidence is best-guess/verified (or low-confidence with
+    the explicit opt-in). Lower-confidence bindings are dropped from
+    the summary — agents shouldn't act on potentially-wrong mappings.
+    """
+    out: dict = {}
+    accepted = {"best-guess", "verified"}
+    if include_low_confidence:
+        accepted = accepted | {"low-confidence"}
+    for label, v in [("from", a), ("to", b)]:
+        vf = facts.by_virtual.get(v)
+        entry: dict = {"virtual": v, "is_phys": vf.is_phys if vf else False}
+        if vf and vf.first_def:
+            entry["first_def"] = {
+                "block": vf.first_def.block_idx,
+                "opcode": vf.first_def.opcode,
+                "operands": vf.first_def.operands,
+            }
+            entry["use_blocks"] = sorted({bi for (bi, _) in vf.use_sites})
+        # Source-line annotation from bridge bindings, gated by confidence.
+        for binding in facts.bindings:
+            if binding.virtual == v and binding.confidence in accepted:
+                entry["bridge"] = {
+                    "var": binding.var_name,
+                    "line": binding.decl_line,
+                    "confidence": binding.confidence,
+                }
+                break
+        out[label] = entry
+    return out
+
+
+def render_json(report: Report) -> str:
+    """Render Report as parseable JSON."""
+    payload = {
+        "function": report.function,
+        "mode": report.mode,
+        "cascade": report.cascade,
+        "pairs": [
+            {
+                "from": p.from_virt,
+                "to": p.to_virt,
+                "priority_class": p.priority_class,
+                "depends_on": list(p.depends_on) if p.depends_on else None,
+                "ir_facts": p.ir_facts,
+                "suggestions": [
+                    {
+                        "pattern": s.pattern_name,
+                        "summary": s.summary,
+                        "ir_evidence": s.ir_evidence,
+                        "source_hint": s.source_hint,
+                        "catalog_ref": s.catalog_ref,
+                    } for s in p.suggestions
+                ],
+            } for p in report.pairs
+        ],
+    }
+    return json.dumps(payload, indent=2)
+
+
+def render_text(report: Report) -> str:
+    """Render Report as human-readable text."""
+    lines: list[str] = []
+    lines.append(f"suggest-coalesce-source — {report.function}  "
+                 f"{'--discover' if report.mode == 'discover' else 'pair'}")
+    if report.mode == "discover" and report.cascade:
+        cas_str = " → ".join(f"r{r}" for r in report.cascade)
+        lines.append(f"")
+        lines.append(f"Longest callee-save cascade: {cas_str}")
+        lines.append(f"  ({len(report.cascade)} saved regs)")
+    lines.append("")
+    for p in report.pairs:
+        header = f"pair r{p.from_virt}=r{p.to_virt}"
+        if p.priority_class:
+            header += f"   [{p.priority_class}]"
+            if p.depends_on:
+                d_from, d_to = p.depends_on
+                header += f" depends_on r{d_from}=r{d_to}"
+        lines.append(header)
+        lines.append("")
+        lines.append("  IR facts:")
+        for label, entry in p.ir_facts.items():
+            v = entry["virtual"]
+            kind = "physical reg" if entry["is_phys"] else f"r{v}"
+            line = f"    {kind}: "
+            if "first_def" in entry:
+                fd = entry["first_def"]
+                line += f"defined block B{fd['block']} by `{fd['opcode']} {fd['operands']}`"
+                if "use_blocks" in entry:
+                    line += f"  [uses: {entry['use_blocks']}]"
+            else:
+                line += "no first-def found"
+            lines.append(line)
+            if "bridge" in entry:
+                br = entry["bridge"]
+                lines.append(
+                    f"      bridge: {br['var']} @ line {br['line']} "
+                    f"({br['confidence']})"
+                )
+        lines.append("")
+        if p.suggestions:
+            lines.append("  Suggestions (highest confidence first):")
+            for i, s in enumerate(p.suggestions, 1):
+                lines.append(f"    {i}. {s.pattern_name}")
+                lines.append(f"       {s.summary}")
+                lines.append(f"       evidence: {s.ir_evidence}")
+                if s.source_hint:
+                    lines.append(f"       try: {s.source_hint}")
+                if s.catalog_ref:
+                    lines.append(
+                        f"       Catalog: debug pattern-catalog {s.catalog_ref}"
+                    )
+        else:
+            lines.append("  No specific pattern matched. Raw IR facts above —")
+            lines.append("  search the C source for places where the bindings")
+            lines.append("  of both virtuals could share an assignment or")
+            lines.append("  expression. Catalog: debug pattern-catalog "
+                         "register-cascade")
+        lines.append("")
+    return "\n".join(lines)
