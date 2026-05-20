@@ -282,6 +282,7 @@ void fn_802461BC(HSD_GObj *gobj)
   HSD_JObj *row0;
   HSD_JObj *row1;
   f32 new_var3;
+  HSD_Text **new_var7;
   HSD_JObj *popup_jobj;
   u32 buttons;
   u8 sel;
@@ -344,9 +345,10 @@ void fn_802461BC(HSD_GObj *gobj)
     ptr = (d = mnDiagram3_804D6C20->user_data);
     for (i = 0; i < 10; i++)
     {
+      new_var7 = ptr->row_labels;
       if (d->row_labels[i] != 0L)
       {
-        HSD_SisLib_803A5CC4(ptr->row_labels[i]);
+        HSD_SisLib_803A5CC4(new_var7[i]);
         d->row_labels[i] = 0L;
       }
     }
