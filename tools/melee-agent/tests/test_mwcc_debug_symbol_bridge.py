@@ -442,3 +442,35 @@ def test_calibration_fn_8024e1b4_dual_pointer_locals() -> None:
     local_names = [b.var_name for b in bindings if b.kind == "local"]
     assert param_names == ["gobj"]
     assert local_names == ["tree", "tmp", "data", "iter", "i"]
+
+
+def test_local_decl_has_new_scope_fields_with_defaults() -> None:
+    """LocalDecl carries the new scope fields with safe defaults."""
+    from src.mwcc_debug.symbol_bridge import LocalDecl
+    d = LocalDecl(name="x", type_str="int", decl_index=0)
+    assert d.line_no == 0
+    assert d.byte_range == (0, 0)
+    assert d.scope_path == ()
+    assert d.scope_byte_range == (0, 0)
+    assert d.has_initializer is False
+    assert d.initializer_line_no is None
+
+
+def test_binding_has_scope_path_with_default() -> None:
+    """Binding has a new scope_path field, defaults to ()."""
+    from src.mwcc_debug.symbol_bridge import Binding
+    b = Binding(
+        var_name="x", virtual=32, decl_line=5,
+        kind="local", type_str="int", confidence="best-guess",
+    )
+    assert b.scope_path == ()
+
+
+def test_binding_basis_has_decls_by_scope_with_default() -> None:
+    """BindingBasis has a new decls_by_scope dict."""
+    from src.mwcc_debug.symbol_bridge import BindingBasis
+    bb = BindingBasis(
+        parsed_params=[], parsed_locals=[],
+        observed_virtuals=[], unrecognized_decls=[], red_flags=[],
+    )
+    assert bb.decls_by_scope == {}

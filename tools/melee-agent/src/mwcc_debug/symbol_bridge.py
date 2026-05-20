@@ -24,6 +24,13 @@ class LocalDecl:
     name: str          # variable name
     type_str: str      # canonical type as written in source (e.g., "HSD_JObj*")
     decl_index: int    # 0-indexed position in source order
+    # Phase-1 nested-block fields (default-valued for back-compat):
+    line_no: int = 0                              # 1-indexed source line
+    byte_range: tuple[int, int] = (0, 0)          # [start, end) byte offsets
+    scope_path: tuple[str, ...] = ()              # ("fn", "block@lLcC")
+    scope_byte_range: tuple[int, int] = (0, 0)    # enclosing block span
+    has_initializer: bool = False
+    initializer_line_no: Optional[int] = None
 
 
 # Matches the type-prefix portion of a declaration:
@@ -360,6 +367,9 @@ class Binding:
                            # it matched but red flags suggest the mapping
                            # may be off. tier3-search skips these by
                            # default; CLI --include-low-confidence opts in.
+                           # | "ambiguous-nested" (NEW: Phase 1 default
+                           #   for nested-block bindings pending validation)
+    scope_path: tuple[str, ...] = ()
 
 
 @dataclass
@@ -372,9 +382,11 @@ class BindingBasis:
     """
     parsed_params: list[LocalDecl]
     parsed_locals: list[LocalDecl]
-    observed_virtuals: list[int]      # destinations seen in pre-pass, ≥32, in order
+    observed_virtuals: list[int]      # destinations seen in pre-pass, >=32, in order
     unrecognized_decls: list[str]     # decl-shaped statements the parser couldn't handle
     red_flags: list[str]              # human-readable concerns
+    # Phase-1 grouped view:
+    decls_by_scope: dict[tuple[str, ...], list[LocalDecl]] = field(default_factory=dict)
 
 
 def _collect_basis(
