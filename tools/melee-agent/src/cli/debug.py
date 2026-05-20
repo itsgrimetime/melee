@@ -6372,7 +6372,8 @@ def virtual_to_var(
     ] = False,
 ) -> None:
     """Bridge inverse: given a virtual register, predict the source
-    variable name (decl-order heuristic). When no source variable
+    variable name (decl-order heuristic), including the variable's
+    scope path (function-top vs nested-block). When no source variable
     binds to the requested virtual (compiler-introduced temps, spill
     nodes, etc.), falls back to showing the first defining IR op
     so you can correlate to the C source manually.
@@ -6463,18 +6464,26 @@ def virtual_to_var(
         raise typer.Exit(1)
 
     if json_out:
-        print(json.dumps({
+        from ..mwcc_debug.scope_path import format_for_display
+        payload: dict = {
             "var_name": binding.var_name,
             "virtual": binding.virtual,
             "kind": binding.kind,
             "type": binding.type_str,
             "confidence": binding.confidence,
+            "scope_path": list(binding.scope_path),
             "found": True,
-        }, indent=2))
+        }
+        print(json.dumps(payload, indent=2))
     else:
+        from ..mwcc_debug.scope_path import format_for_display
+        scope_str = format_for_display(binding.scope_path) if binding.scope_path else ""
+        scope_suffix = f"  scope: {scope_str}" if scope_str else ""
         print(f"r{virtual}: {binding.var_name} ({binding.kind})")
         print(f"  type:    {binding.type_str}")
         print(f"  conf:    {binding.confidence}")
+        if scope_suffix:
+            print(scope_suffix)
 
 
 mutate_app = typer.Typer(

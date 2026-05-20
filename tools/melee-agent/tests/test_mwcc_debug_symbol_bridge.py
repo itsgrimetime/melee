@@ -642,3 +642,17 @@ def test_cli_var_to_virtual_help_shows_scope_and_all_flags() -> None:
     assert proc.returncode == 0
     assert "--all" in proc.stdout
     assert "--scope" in proc.stdout
+
+
+def test_cli_virtual_to_var_help_mentions_scope() -> None:
+    """CLI --help mentions scope in output description."""
+    import subprocess
+    import pathlib
+    cwd = pathlib.Path(__file__).parent.parent
+    proc = subprocess.run(
+        ["python", "-m", "src.cli", "debug", "virtual-to-var", "--help"],
+        cwd=cwd, capture_output=True, text=True, timeout=15,
+    )
+    assert proc.returncode == 0
+    # Verify help text was updated to mention scope (covers user's expectation)
+    assert "scope" in proc.stdout.lower()
