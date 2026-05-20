@@ -287,7 +287,7 @@ void fn_802461BC(HSD_GObj* gobj)
     HSD_Text** new_var;
     int i;
     int val;
-    u8 limit;
+    unsigned int limit;
     HSD_Text* text;
     f32 fi;
     f32 row_spacing;
@@ -466,6 +466,7 @@ void fn_802461BC(HSD_GObj* gobj)
                     }
                 }
             }
+            if (data) {}
             row0 = d->jobjs[8];
             ((row0)
                  ? ((void) 0)
