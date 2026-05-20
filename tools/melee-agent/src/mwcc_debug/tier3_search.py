@@ -192,6 +192,7 @@ def smoke_compile(
     debug_compiler: Path,
     cflags: str,
     cwd: Path,
+    extra_include_dirs: Optional[list[Path]] = None,
 ) -> CompileResult:
     """Quick compile attempt — returns a CompileResult with enough
     detail for the agent to debug a failure manually. Discards the .o.
@@ -201,6 +202,12 @@ def smoke_compile(
     relative to cwd when possible, falling back to an absolute path
     when the seed lives outside cwd (e.g. in the decomp-permuter
     workspace).
+
+    `extra_include_dirs`: additional directories prepended to the MWCC
+    include search path via `-i` flags. Use this when the seed source
+    is staged outside the original TU directory so that quote-includes
+    (e.g. `#include "mnvibration.h"`) can still resolve. Typically
+    the parent directory of the original .c file.
 
     Returns:
         CompileResult with `ok`, captured `stderr`/`stdout`, and a
@@ -215,9 +222,18 @@ def smoke_compile(
     except ValueError:
         src_arg = str(seed_source_path)
 
+    extra_i_flags: list[str] = []
+    for d in (extra_include_dirs or []):
+        try:
+            dir_arg = str(d.relative_to(cwd))
+        except ValueError:
+            dir_arg = str(d)
+        extra_i_flags += ["-i", dir_arg]
+
     args = (
         [str(wibo), str(debug_compiler)]
         + shlex.split(cflags)
+        + extra_i_flags
         + ["-c", src_arg, "-o", str(out_o)]
     )
     try:

@@ -5913,7 +5913,10 @@ def tier3_search(
         if out_c is None:
             print(f"[tier3] seed{i}: mutation unsupported; skipping")
             continue
-        result = smoke_compile(out_c, wibo, debug_compiler, cflags, melee_root)
+        result = smoke_compile(
+            out_c, wibo, debug_compiler, cflags, melee_root,
+            extra_include_dirs=[src_path.parent],
+        )
         if result.ok:
             print(f"[tier3] seed{i}: compile=ok")
         else:
