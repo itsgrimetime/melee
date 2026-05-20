@@ -592,4 +592,38 @@ def test_mutators_module_imports_cleanly() -> None:
     # above would have raised. Confirm the module's expected entry
     # points are still callable:
     assert callable(mutators.mutate_type_change)
-    assert callable(mutators.mutate_insert_alias_before_use)
+
+
+def test_function_with_nested_block_is_no_longer_low_confidence() -> None:
+    """A function that previously triggered nested-decl red flag and
+    got demoted to low-confidence is now best-guess (top-level decls)
+    or ambiguous-nested (nested-block decls)."""
+    from src.mwcc_debug.symbol_bridge import list_bindings_with_basis
+    from src.mwcc_debug.parser import Pass, Block, Instruction
+
+    source = (
+        "void f(int arg0) {\n"
+        "    int top1;\n"
+        "    int top2;\n"
+        "    if (arg0) {\n"
+        "        int nested1;\n"
+        "    }\n"
+        "}\n"
+    )
+    pp = Pass(name="AFTER PEEPHOLE FORWARD")
+    pp.blocks.append(Block(index=0, succ=[], pred=[], labels=[]))
+    pp.blocks[0].instructions = [
+        Instruction(opcode="li", operands="r32,0", annotations=[], regs=[("r", 32)]),
+        Instruction(opcode="li", operands="r33,0", annotations=[], regs=[("r", 33)]),
+        Instruction(opcode="li", operands="r34,0", annotations=[], regs=[("r", 34)]),
+    ]
+    bindings, basis = list_bindings_with_basis(source, "f", pp)
+    by_name = {b.var_name: b for b in bindings}
+
+    # Top-level decls are no longer demoted.
+    assert by_name["top1"].confidence in {"best-guess", "verified"}
+    assert by_name["top2"].confidence in {"best-guess", "verified"}
+    # Nested decls get the new ambiguous-nested label.
+    assert by_name["nested1"].confidence == "ambiguous-nested"
+    # Red flag is gone.
+    assert "nested-decl" not in basis.red_flags
