@@ -252,7 +252,7 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
           }
           else
           {
-            int val = mnDiagram2_GetStatValue(data->is_name_mode, stat_type ^ 0, entity);
+            int val = mnDiagram2_GetStatValue(data->is_name_mode, stat_type ^ 0, entity & 0xFFFFFFFFFFFFFFFFu);
             if (val > max_distance)
             {
               val = max_distance;
@@ -285,7 +285,7 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
               u32 stat_val = mnDiagram2_GetStatValue(data->is_name_mode, stat_type, entity);
               if (mnDiagram_IsDistanceOverflow(stat_val))
               {
-                  HSD_SisLib_803A6368(icon_text, 0x7F);
+                HSD_SisLib_803A6368(icon_text, 0x7F);
               }
               goto next;
             }
