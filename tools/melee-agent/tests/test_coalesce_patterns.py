@@ -185,3 +185,108 @@ def test_chain_init_skips_non_li_opcode() -> None:
                     annotations=[], regs=[("r", 34)])
     facts = _facts_with({33: _vf(33, fd_a), 34: _vf(34, fd_b)})
     assert ChainInitPattern().check(facts, (33, 34)) is None
+
+
+from src.mwcc_debug.coalesce_patterns import AliasSplitPattern
+from src.mwcc_debug.parser import Block
+
+
+def _mk_use(block_idx, opcode="addi", operands="r33,r32,1"):
+    """Construct (block_idx, Instruction) for VirtualFacts.use_sites."""
+    return (block_idx, Instruction(
+        opcode=opcode, operands=operands, annotations=[],
+        regs=[("r", 33), ("r", 32)],
+    ))
+
+
+def _pre_pass_with_blocks(n_blocks):
+    pp = Pass(name="X")
+    pp.blocks = [Block(index=i, succ=[], pred=[], labels=[])
+                 for i in range(n_blocks)]
+    return pp
+
+
+def test_alias_split_matches_long_short_pair() -> None:
+    """r_b long-lived (5 blocks in 8-block fn), r_a short (all in B7)."""
+    fd_long = FirstDef(block_idx=0, opcode="li", operands="r32,5",
+                       annotations=[], regs=[("r", 32)])
+    fd_short = FirstDef(block_idx=7, opcode="addi", operands="r33,r32,1",
+                        annotations=[], regs=[("r", 33), ("r", 32)])
+    facts = IrFacts(
+        function_name="f",
+        pre_pass=_pre_pass_with_blocks(8),
+        by_virtual={
+            32: _vf(32, fd_long, use_sites=[
+                _mk_use(0), _mk_use(1), _mk_use(2), _mk_use(5), _mk_use(7),
+            ]),
+            33: _vf(33, fd_short, use_sites=[_mk_use(7), _mk_use(7)]),
+        },
+        bindings=[], basis=None, cg_section=None,
+    )
+    s = AliasSplitPattern().check(facts, (33, 32))
+    assert s is not None
+    assert s.pattern_name == "alias-split"
+
+
+def test_alias_split_skips_when_a_also_long_lived() -> None:
+    """Both virtuals long-lived → no split makes sense."""
+    fd_a = FirstDef(block_idx=0, opcode="li", operands="r33,5",
+                    annotations=[], regs=[("r", 33)])
+    fd_b = FirstDef(block_idx=0, opcode="li", operands="r32,5",
+                    annotations=[], regs=[("r", 32)])
+    facts = IrFacts(
+        function_name="f",
+        pre_pass=_pre_pass_with_blocks(8),
+        by_virtual={
+            32: _vf(32, fd_b, use_sites=[
+                _mk_use(0), _mk_use(2), _mk_use(4), _mk_use(6),
+            ]),
+            33: _vf(33, fd_a, use_sites=[
+                _mk_use(0), _mk_use(2), _mk_use(4), _mk_use(6),
+            ]),
+        },
+        bindings=[], basis=None, cg_section=None,
+    )
+    assert AliasSplitPattern().check(facts, (33, 32)) is None
+
+
+def test_alias_split_skips_when_b_used_too_few() -> None:
+    """r_b must have ≥ 4 use sites; 3 isn't enough."""
+    fd_b = FirstDef(block_idx=0, opcode="li", operands="r32,5",
+                    annotations=[], regs=[("r", 32)])
+    fd_a = FirstDef(block_idx=7, opcode="addi", operands="r33,r32,1",
+                    annotations=[], regs=[("r", 33), ("r", 32)])
+    facts = IrFacts(
+        function_name="f",
+        pre_pass=_pre_pass_with_blocks(8),
+        by_virtual={
+            32: _vf(32, fd_b, use_sites=[_mk_use(0), _mk_use(2), _mk_use(7)]),
+            33: _vf(33, fd_a, use_sites=[_mk_use(7)]),
+        },
+        bindings=[], basis=None, cg_section=None,
+    )
+    assert AliasSplitPattern().check(facts, (33, 32)) is None
+
+
+def test_alias_split_excludes_direct_identity_case() -> None:
+    """If r_a's first-def is `addi r_a, r_b, 0`, DirectIdentity owns this
+    pair; AliasSplit should not also fire."""
+    fd_a_identity = FirstDef(
+        block_idx=7, opcode="addi", operands="r33,r32,0",
+        annotations=[], regs=[("r", 33), ("r", 32)],
+    )
+    fd_b = FirstDef(block_idx=0, opcode="li", operands="r32,5",
+                    annotations=[], regs=[("r", 32)])
+    facts = IrFacts(
+        function_name="f",
+        pre_pass=_pre_pass_with_blocks(8),
+        by_virtual={
+            32: _vf(32, fd_b, use_sites=[
+                _mk_use(0), _mk_use(1), _mk_use(2), _mk_use(5), _mk_use(7),
+            ]),
+            33: _vf(33, fd_a_identity, use_sites=[_mk_use(7)]),
+        },
+        bindings=[], basis=None, cg_section=None,
+    )
+    # AliasSplit's exclusion: r_a is not already a direct copy of r_b
+    assert AliasSplitPattern().check(facts, (33, 32)) is None

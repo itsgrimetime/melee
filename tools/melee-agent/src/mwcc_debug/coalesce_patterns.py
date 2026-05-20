@@ -167,3 +167,72 @@ class ChainInitPattern:
 
 
 ALL_PATTERNS.append(ChainInitPattern())
+
+
+class AliasSplitPattern:
+    """r_b is long-lived (≥4 use sites, spans ≥50% of function's blocks),
+    r_a is short-lived (≤3 uses, all in same block). Introducing an alias
+    variable just before r_a's first use lets r_a inherit r_b's lifetime
+    endpoint so they can coalesce.
+
+    EXCLUSION: if r_a's first-def is already `addi r_a, r_b, 0` or
+    `mr r_a, r_b`, DirectIdentityPattern owns the pair and we skip
+    (otherwise we'd fire on every direct-identity case).
+    """
+    name = "alias-split"
+
+    def check(self, facts: IrFacts,
+              pair: tuple[int, int]) -> Optional[Suggestion]:
+        a, b = pair
+        fa = facts.by_virtual.get(a)
+        fb = facts.by_virtual.get(b)
+        if not fa or not fb or fa.first_def is None or fb.first_def is None:
+            return None
+
+        # Exclusion: skip if DirectIdentity would fire
+        fa_fd = fa.first_def
+        if len(fa_fd.regs) >= 2 and fa_fd.regs[1] == ("r", b):
+            if fa_fd.opcode == "mr":
+                return None
+            if fa_fd.opcode == "addi" and _immediate_operand(
+                _instr_from_first_def(fa_fd)) == 0:
+                return None
+
+        # r_b: long-lived
+        b_uses = len(fb.use_sites)
+        b_blocks = {bi for (bi, _) in fb.use_sites}
+        total_blocks = max(1, len(facts.pre_pass.blocks))
+        if b_uses < 4:
+            return None
+        if len(b_blocks) / total_blocks < 0.5:
+            return None
+
+        # r_a: short-lived, all in same block
+        a_uses = len(fa.use_sites)
+        a_blocks = {bi for (bi, _) in fa.use_sites}
+        if a_uses > 3:
+            return None
+        if len(a_blocks) > 1:
+            return None
+        a_block = next(iter(a_blocks)) if a_blocks else fa.first_def.block_idx
+
+        return Suggestion(
+            pattern_name="alias-split",
+            summary=(
+                f"r{b} is long-lived ({b_uses} uses across {len(b_blocks)} "
+                f"blocks); r{a} is short-lived (used only in block B{a_block})"
+            ),
+            ir_evidence=(
+                f"r{b} uses: blocks {sorted(b_blocks)}; "
+                f"r{a} uses: block B{a_block}"
+            ),
+            source_hint=(
+                f"Introduce an alias variable before r{a}'s first use:\n"
+                f"    <type> tmp = <var_b>;\n"
+                f"    use(tmp);  // formerly use(r_a)"
+            ),
+            catalog_ref="alias-split",
+        )
+
+
+ALL_PATTERNS.append(AliasSplitPattern())
