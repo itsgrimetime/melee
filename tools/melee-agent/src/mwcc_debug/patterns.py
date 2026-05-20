@@ -395,6 +395,136 @@ PATTERNS: dict[str, MutationPattern] = {
             "perm_duplicate_assignment": 20.0,
         },
     ),
+    "anon-magic-constant": MutationPattern(
+        name="anon-magic-constant",
+        title="Anonymous @N sdata2 constant blocks reloc-name match",
+        summary=(
+            "MWCC's int-to-float cast emits a 64-bit magic constant "
+            "into the .sdata2 literal pool under an ANONYMOUS local "
+            "symbol name like `@243`. The target .o references the "
+            "same bytes via a NAMED global from symbols.txt (e.g. "
+            "`mnDiagram3_804DBFF0`). Even though the .sdata2 bytes are "
+            "identical, the relocation TARGET-NAME diff blocks byte "
+            "matching. checkdiff reports a diff like "
+            "`R_PPC_EMB_SDA21 @243 → mnDiagram3_804DBFF0`."
+        ),
+        when_to_try=(
+            "When checkdiff shows `@N` relocations on the actual side "
+            "and named symbols on the expected side, AND the .sdata2 "
+            "bytes match. Three classic offenders:\n"
+            "  - 0x4330000080000000  signed int-to-float bias (`s32`)\n"
+            "  - 0x4330000000000000  unsigned int-to-float bias (`u32`)\n"
+            "  - 4-byte float literals (any constant float value)\n"
+            "Look for `(double)int_var` casts, divides/modulos by "
+            "non-constant ints, or float constants whose hex value the "
+            "target's symbols.txt names directly. Confirm via `debug "
+            "name-magic <o_file> --list`."
+        ),
+        example_before=(
+            "// Compiled .o:    R_PPC_EMB_SDA21 @243\n"
+            "// Expected .o:    R_PPC_EMB_SDA21 mnDiagram3_804DBFF0\n"
+            "// .sdata2 bytes:  IDENTICAL (0x4330000080000000)\n"
+            "// checkdiff:      reports diff on reloc target name only"
+        ),
+        example_after=(
+            "# No C-source change needed. The bytes are right;\n"
+            "# only the reloc target name differs. Rename via:\n"
+            "melee-agent debug verify-with-name-magic -f my_function \\\n"
+            "    --map 's32=mnDiagram3_804DBFF0,u32=mnDiagram3_804DC000'\n"
+            "# This post-processes the .o with objcopy --redefine-syms,\n"
+            "# then re-runs checkdiff. If now byte-identical → ship.\n"
+            "# NOTE: the rename is OURS — to make the byte match\n"
+            "# without an upstream-visible source change, this is a\n"
+            "# tooling artifact, not a real source fix. Use it to\n"
+            "# confirm the .text-only match is real, then decide what\n"
+            "# (if anything) needs to land in symbols.txt or extern decls."
+        ),
+        mechanism=(
+            "MWCC v1.2.5n's literal-pool emitter generates an anonymous "
+            "local-scope symbol (`@N`) for each new 64-bit constant value "
+            "it sees in a TU. The naming heuristic does NOT consult "
+            "extern declarations — even if you declare `extern f64 "
+            "mnDiagram3_804DBFF0` at the same byte value, MWCC still "
+            "emits its own anonymous symbol. Fixing this from C source "
+            "would require modifying MWCC's literal-pool naming code "
+            "(no static-source workaround exists). The post-process "
+            "rename is the practical workaround: scan the .o for "
+            "anonymous .sdata2 symbols, identify ones whose 64-bit "
+            "value matches a known magic constant, rename to the "
+            "target's symbol name via objcopy. Same bytes, same "
+            "relocation, just a different symbol-table entry."
+        ),
+        addresses=("missing",),  # only relevant when bytes match but relocs don't
+    ),
+    "register-cascade": MutationPattern(
+        name="register-cascade",
+        title="Too many saved registers vs target (cascade overshoot)",
+        summary=(
+            "Compiled .o uses MORE callee-save registers than the "
+            "expected. Typically actual is r25-r31 (7 saved) while "
+            "expected is r26-r31 (6 saved). The extra register is "
+            "usually a short-lived virtual that COULD share a physical "
+            "with another short-lived virtual but MWCC's conservative "
+            "coalescer didn't merge them. Examples: a brief `sel = 0` "
+            "init that occupies r25 for two instructions, or a loop "
+            "counter init that gets its own register instead of "
+            "reusing one freed up just before the loop."
+        ),
+        when_to_try=(
+            "When `COLORGRAPH DECISIONS` shows N callee-saves used "
+            "but the expected `.s` shows N-1 (or fewer). Confirm by "
+            "comparing the `stmw rN, ...` / `lmw` instruction in "
+            "expected vs actual — the saved-register count is encoded "
+            "there. Look in the `[COALESCE] natural mappings` section "
+            "to see what MWCC naturally coalesced; the gap is what "
+            "you'd need to additionally merge."
+        ),
+        example_before=(
+            "// Compiled: 7 saved regs r25-r31, stmw r25,...\n"
+            "// Expected: 6 saved regs r26-r31, stmw r26,...\n"
+            "// The extra reg holds a brief `sel = 0` virtual that\n"
+            "// could have been merged with the loop counter."
+        ),
+        example_after=(
+            "# Two-step workflow:\n"
+            "# 1. Hypothesis test: can the target allocation be reached\n"
+            "#    if we force the coalesce?\n"
+            "melee-agent debug pcdump-local src/melee/mn/foo.c \\\n"
+            "    --force-coalesce 'SEL_IDX=LOOP_IDX'\n"
+            "#    (use the ig_idx values from the natural [COALESCE] dump)\n"
+            "\n"
+            "# 2. If force-coalesce produces matching .text:\n"
+            "#    (a) Try natural-coalesce-inducing C patterns:\n"
+            "#        - Combine `sel = 0; for (i = 0; ...)` into\n"
+            "#          `for (sel = i = 0; ...)`\n"
+            "#        - Use `sel` as the loop counter directly\n"
+            "#        - Introduce an alias `i = sel;` before the loop\n"
+            "#    (b) If none collapse the cascade, run permuter\n"
+            "#        (`debug permute -f fn`) which mutates the source\n"
+            "#        to find a move-instruction that triggers coalesce\n"
+            "#    (c) Last resort: accept the cascade or document the\n"
+            "#        function as a Tier 7 ceiling."
+        ),
+        mechanism=(
+            "MWCC's coalescer (FUN_00530E00) is CONSERVATIVE — it only "
+            "merges virtuals connected by an explicit MOVE PCode "
+            "instruction AND that don't interfere. Two virtuals "
+            "without a move between them (e.g. two separately-"
+            "initialized variables) are never coalesced, even if "
+            "their live ranges don't overlap. The source-level "
+            "workaround is to ARRANGE for there to BE a move "
+            "instruction — chain assignments, alias variables, or "
+            "common subexpressions that produce two pcode operands "
+            "MWCC will identify as move-related."
+        ),
+        addresses=("rank",),  # cascade is a rank-category issue
+        permuter_weights={
+            "perm_chain_assignment": 30.0,
+            "perm_duplicate_assignment": 30.0,
+            "perm_temp_for_expr": 40.0,
+            "perm_refer_to_var": 40.0,
+        },
+    ),
 }
 
 
