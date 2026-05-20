@@ -188,4 +188,43 @@ that runs name-magic on each .o post-compile would essentially make
 this class of mismatch invisible. Worth considering as a build step,
 even if it doesn't help "matching .text production" specifically.
 
+### Permuter cruft cleanup — observations from 80245BA4
+
+After permuter found wins, the source accumulated patterns like:
+- `u8 offset = (((((((((data->scroll_offset & 0xFFFFFFFFu) & 0xFFFFFFFFu) & ...) & 0xFFFFFFFFu);` (10× nested no-op masks)
+- `mnDiagram2_GetAggregatedFighterRank(sp28, stat_type, (((u8) i) & 0xFFFFFFFF) & 0xFFFFFFFF);` (double nested no-op masks)
+- `int val = (long long) (scroll + offset);` (pointless 64-bit cast then truncate)
+- `unsigned long long stat_val = mnDiagram2_GetStatValue(...);` (ULL for what's clearly an int)
+- `goto next; divider = mnDiagram3_804DC008;` (dead assignment AFTER unconditional goto — still affects scheduling!)
+- `(1 << 14) << 11` (instead of `(1 << 25)`)
+- `unsigned int new_var = i;` then `func(stat_type, new_var)` (alias-split into intermediate variable)
+- `stat_type ^ 0` (XOR with 0 — identity)
+- `entity & 0xFFFFFFFFFFFFFFFFu` (mask with all-1s 64-bit literal — no-op)
+
+A reviewer reading this code thinks "this is generated garbage." Many
+of these ARE load-bearing for codegen:
+- 10× → 1× nested masks: harmless (10×, 1×, none all give same matching)
+- BUT removing all masks: -0.26% — at least ONE mask is needed
+- `(long long)` cast: load-bearing (+0.05% over int / +0.10% over no cast)
+- `goto next; divider = ...`: load-bearing (-0.26% if moved before goto)
+- Alias `new_var = i; f(new_var)`: load-bearing (-0.15% if removed)
+- `stat_type ^ 0`: NOT load-bearing (+0.05% to remove)
+- `entity & 0xFFFFFFFFFFFFFFFFu`: NOT load-bearing (same +0.05%)
+- ULL `stat_val`: load-bearing (-0.10% with u32)
+
+**Tooling idea:** a `clean-cruft` command that:
+1. Identifies common patterns produced by permuter (alias-split into
+   `new_varN`, nested no-op masks, dead-code-after-goto, XOR with 0,
+   AND with all-1s, pointless 64-bit truncation)
+2. For each one, tries removing it
+3. Reports which are load-bearing (need to stay) vs purely cosmetic
+   cruft (safe to remove)
+4. Optionally applies the safe removals
+
+Would save the ~20 manual `verify-perm-and-revert` cycles I just ran
+to clean up a single function. The pattern catalog already names
+these (`alias-split`, `widen-u8-to-u32`, etc.); a `clean-cruft`
+counterpart that REVERSES would be the natural pair.
+
+
 
