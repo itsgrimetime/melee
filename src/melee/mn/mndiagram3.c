@@ -140,12 +140,11 @@ void mnDiagram3_80245BA4(HSD_GObj *gobj)
         }
         else
         {
-          entity = mnDiagram2_GetRankedFighter(stat_type, fighter_idx);
-          icon = mnDiagram_80242B38(entity, 0);
-          if (icon == 0L)
-          {
-            __assert(mnDiagram3_804D4FD8, 0x3B3, mnDiagram3_804D4FE0);
-          }
+            entity = mnDiagram2_GetRankedFighter(stat_type, fighter_idx);
+            icon = mnDiagram_80242B38(entity, 0);
+            if (icon == 0L) {
+                __assert(mnDiagram3_804D4FD8, 0x3B3, mnDiagram3_804D4FE0);
+            }
           icon->translate.y = row_spacing * ((f32) i);
           if (!(icon->flags & (1 << 25))) {
               {
@@ -312,7 +311,7 @@ void fn_802461BC(HSD_GObj* gobj)
     Diagram3* d;
     Diagram3* ptr;
     HSD_JObj* row0;
-    HSD_Text** new_var;
+    HSD_Text** labels_b;
     HSD_JObj* row1;
     f32 font_size_c;
     HSD_Text** labels_a;
@@ -402,10 +401,10 @@ void fn_802461BC(HSD_GObj* gobj)
             data->scroll_offset = 0;
         }
         ptr = (d = mnDiagram3_804D6C20->user_data);
-        new_var = ptr->row_labels;
+        labels_b = ptr->row_labels;
         for (i = 0; i < 10; i++) {
             if (d->row_labels[i] != 0L) {
-                HSD_SisLib_803A5CC4(new_var[i]);
+                HSD_SisLib_803A5CC4(labels_b[i]);
                 d->row_labels[i] = 0L;
             }
         }
