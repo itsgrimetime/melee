@@ -455,6 +455,10 @@ PATTERNS: dict[str, MutationPattern] = {
             "relocation, just a different symbol-table entry."
         ),
         addresses=("missing",),  # only relevant when bytes match but relocs don't
+        # The fix is a tooling rename (objcopy --redefine-syms), not a
+        # source mutation. Permuter cannot help — its mutations would
+        # randomly change source without addressing the .sdata2 naming.
+        permuter_skip=True,
     ),
     "register-cascade": MutationPattern(
         name="register-cascade",
