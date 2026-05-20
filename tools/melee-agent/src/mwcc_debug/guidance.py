@@ -146,10 +146,20 @@ def suggest(
                     f"STRUCTURAL CEILING — no known C-source pattern pushes "
                     f"a parameter's ig_idx above a local's. Confirm via "
                     f"`debug rank-callees -f <fn>` (shows the cascade). "
-                    f"To verify the target is reachable at all, run "
-                    f"`debug pcdump <c_file> --force-phys '{v}:{tgt_phys},"
-                    f"{owner_of_target}:{actual_phys}'`. If force-phys "
-                    f"matches: document as Tier 6 case, move on."
+                    f"Three ways to verify the target is reachable:\n"
+                    f"      (a) `debug pcdump-local <c_file> "
+                    f"--force-iter-first {v}` — safest, pure iter-order "
+                    f"change, no IG mutation.\n"
+                    f"      (b) `debug pcdump-local <c_file> "
+                    f"--force-coalesce '{v}={owner_of_target}'` — merge "
+                    f"param into the local that wins the phys; if matches, "
+                    f"search for natural-coalesce C patterns (moves, "
+                    f"common subexprs).\n"
+                    f"      (c) `debug pcdump-local <c_file> --force-phys "
+                    f"'{v}:{tgt_phys},{owner_of_target}:{actual_phys}'` — "
+                    f"hard override, may produce incorrect code (last resort).\n"
+                    f"      If any of these matches: document as Tier 6 "
+                    f"case + try permuter (`debug permute -f <fn>`)."
                 ),
                 severity="high",
             ))
@@ -157,11 +167,29 @@ def suggest(
 
         # Generic rank issue — no direct blocker but also not the param
         # ceiling. Could be a smaller iteration-order rearrange the agent
-        # might fix with decl-order tricks.
+        # might fix with decl-order tricks. Could also be a coalesce gap —
+        # MWCC may have failed to merge two virtuals that COULD share a
+        # phys (e.g. a short-lived `sel = 0` virtual + loop counter init).
         candidates_str = (
             ", ".join(f"r{c}" for c in sorted(info.candidates)[:8])
             if info.candidates else "(none)"
         )
+        # Find any virtual currently using r{tgt_phys} — candidate to
+        # hypothesis-test a coalesce-merge with via --force-coalesce.
+        coalesce_hint = ""
+        for owner_v, owner_info in infos.items():
+            if owner_v == v:
+                continue
+            if owner_info.physical == tgt_phys:
+                coalesce_hint = (
+                    f" If they shouldn't both live (e.g. one is a brief "
+                    f"`sel = 0`), hypothesis-test with `debug pcdump-local "
+                    f"<c_file> --force-coalesce '{v}={owner_v}'` — if .text "
+                    f"matches, look for a C-source pattern that makes MWCC "
+                    f"naturally coalesce them (move instruction, common "
+                    f"subexpression, alias variable)."
+                )
+                break
         suggestions.append(Suggestion(
             virtual=v, category="rank",
             description=(
@@ -173,7 +201,7 @@ def suggest(
                 f"{{{candidates_str}}}. Try: increase r{v}'s degree (more "
                 f"interferences) to push it up the simplification stack, "
                 f"or shrink the lifetime of other virtuals that consumed "
-                f"r{tgt_phys} earlier."
+                f"r{tgt_phys} earlier." + coalesce_hint
             ),
             severity="low",
         ))

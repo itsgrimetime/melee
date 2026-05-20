@@ -172,6 +172,14 @@ def pcdump(
                  "own root. EXPERIMENTAL.",
         ),
     ] = None,
+    force_coalesce_fn: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-coalesce-fn",
+            help="Scope --force-coalesce to a single function name in "
+                 "the TU. Other functions compile naturally. EXPERIMENTAL.",
+        ),
+    ] = None,
 ):
     """Dump MWCC's internal IR + codegen for a TU and emit pcdump.txt to stdout.
 
@@ -250,6 +258,15 @@ def pcdump(
                 "or whitespace"
             )
         cmd_parts.append(f"set MWCC_DEBUG_FORCE_COALESCE={force_coalesce}")
+    if force_coalesce_fn:
+        if any(c in force_coalesce_fn for c in '"\'; \t&|<>'):
+            raise typer.BadParameter(
+                "--force-coalesce-fn must not contain quotes, semicolons, "
+                "whitespace, or shell metacharacters"
+            )
+        cmd_parts.append(
+            f"set MWCC_DEBUG_FORCE_COALESCE_FUNCTION={force_coalesce_fn}"
+        )
     cmd_parts.append(
         f"powershell -NoProfile -ExecutionPolicy Bypass "
         f"-File {remote_script} {src_rel}"
@@ -3898,11 +3915,27 @@ def pcdump_local(
             help="Tier 6: override the conservative coalescer's union-find "
                  "decisions. Format 'virt=root[,virt=root]*'. E.g. '42=38' "
                  "forces virtual 42 to coalesce into virtual 38; '42=42' "
-                 "un-coalesces 42 back to its own root. Applies in every "
-                 "coalesce invocation; out-of-bounds pairs are silently "
-                 "skipped (so virtuals from the wrong register class do "
-                 "no harm). EXPERIMENTAL — forcing two interfering "
-                 "virtuals to coalesce produces incorrect code.",
+                 "un-coalesces 42 back to its own root. By default applies "
+                 "to EVERY coalesce invocation in the TU (out-of-bounds "
+                 "pairs are silently skipped). For multi-function TUs "
+                 "where one function's overrides would corrupt others, "
+                 "scope with --force-coalesce-fn. EXPERIMENTAL — forcing "
+                 "two interfering virtuals to coalesce produces "
+                 "incorrect code.",
+        ),
+    ] = None,
+    force_coalesce_fn: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-coalesce-fn",
+            help="Scope --force-coalesce to a single function name. "
+                 "When set, overrides only apply when the currently-"
+                 "compiling function (captured by mwcc_debug's debuglisting "
+                 "hook) matches the given name exactly. Other functions in "
+                 "the same TU compile naturally — prevents one function's "
+                 "experimental overrides from corrupting earlier or later "
+                 "functions. E.g. '--force-coalesce-fn mnVibration_802474C4 "
+                 "--force-coalesce 32=87'.",
         ),
     ] = None,
     wibo: Annotated[
@@ -3923,8 +3956,8 @@ def pcdump_local(
     Requires one-time setup: run `melee-agent debug setup-local`
     first to patch the compiler and deploy the DLL.
 
-    Env-var hooks (--force-phys, --force-iter-first, --force-coalesce)
-    pass through to the DLL.
+    Env-var hooks (--force-phys, --force-iter-first, --force-coalesce,
+    --force-coalesce-fn) pass through to the DLL.
     """
     melee_root = DEFAULT_MELEE_ROOT
     src_rel = _resolve_src_relative(c_file)
@@ -3982,6 +4015,8 @@ def pcdump_local(
         env["MWCC_DEBUG_FORCE_ITER_FIRST"] = force_iter_first
     if force_coalesce:
         env["MWCC_DEBUG_FORCE_COALESCE"] = force_coalesce
+    if force_coalesce_fn:
+        env["MWCC_DEBUG_FORCE_COALESCE_FUNCTION"] = force_coalesce_fn
 
     try:
         proc = subprocess.run(
@@ -4786,9 +4821,13 @@ def verify_with_name_magic(
         Optional[str],
         typer.Option(
             "--map", "-m",
-            help="Pass to name-magic. E.g., "
+            help="Mapping of magic constant → named symbol. E.g., "
                  "'s32=mnVibration_804DC018,u32=mnVibration_804DC010'. "
-                 "Optional — if omitted, runs checkdiff without renaming.",
+                 "Keys: 's32' (signed int-to-float bias), 'u32' (unsigned), "
+                 "any hex literal, or '@N' for direct anonymous-symbol "
+                 "rename. If omitted, the .o is built and anonymous "
+                 "magic symbols are LISTED with a suggested map "
+                 "(useful for figuring out what to pass).",
         ),
     ] = None,
 ) -> None:
@@ -4799,9 +4838,18 @@ def verify_with_name_magic(
     named SDA2 relocations are the only diff, or whether there's still
     a real .text mismatch.
 
+    Common case: MWCC's int-to-float cast emits a magic constant
+    (0x4330000080000000 signed, 0x4330000000000000 unsigned) into the
+    .sdata2 literal pool under an anonymous `@N` name. The target .o
+    references the same bytes via a named symbol (from symbols.txt).
+    Reloc-target diff blocks byte matching even though the data is
+    identical. `--map s32=<symname>,u32=<symname>` renames the @N
+    symbols so checkdiff sees matching reloc targets.
+
     Flow:
       1. Build the function's TU object (`ninja build/GALE01/src/<unit>.o`)
       2. If `--map` given, rename anonymous @N .sdata2 symbols via objcopy
+         If omitted, list anonymous symbols and suggest the map format.
       3. Run `tools/checkdiff.py <function> --format plain` and forward
          its output verbatim.
     """
@@ -4850,7 +4898,8 @@ def verify_with_name_magic(
         )
         raise typer.Exit(3)
 
-    # 2. Rename anonymous SDA2 symbols if --map given
+    # 2. Rename anonymous SDA2 symbols if --map given, or surface what
+    #    anonymous symbols exist so the agent can construct a map.
     if name_map:
         from ..mwcc_debug.o_rewriter import (
             parse_mapping,
@@ -4882,7 +4931,59 @@ def verify_with_name_magic(
                 "(use `debug name-magic <o_file> --list` to inspect)"
             )
     else:
-        print("[verify] no --map given; running checkdiff against current .o as-is")
+        # No --map given. List anonymous magic constants in the freshly-
+        # built .o so the agent can construct a map. This eliminates the
+        # "I see @243 in the diff, what does that correspond to?" gap.
+        try:
+            from ..mwcc_debug.o_rewriter import find_all_anonymous_sdata2_symbols
+            syms = find_all_anonymous_sdata2_symbols(obj_path)
+        except Exception as e:
+            syms = []
+            print(f"[verify] no --map given (sym-list failed: {e})")
+        if syms:
+            print(f"[verify] no --map given; {len(syms)} anonymous .sdata2 "
+                  f"symbol(s) found in {obj_rel}:")
+            print(f"        {'name':<10}  {'sz':>2}  {'value':<18}  notes")
+            print(f"        {'-'*10}  {'-'*2}  {'-'*18}  -----")
+            import struct as _struct
+            suggested_pairs: list[str] = []
+            for s in syms:
+                note = ""
+                if s.size == 8:
+                    value_str = f"0x{s.value:016x}"
+                    if s.value == 0x4330000080000000:
+                        note = "int-to-float bias (signed) — try `s32=<sym>`"
+                        suggested_pairs.append("s32=<NAMED_SYMBOL>")
+                    elif s.value == 0x4330000000000000:
+                        note = "int-to-float bias (unsigned) — try `u32=<sym>`"
+                        suggested_pairs.append("u32=<NAMED_SYMBOL>")
+                elif s.size == 4:
+                    value_str = f"0x{s.value:08x}"
+                    try:
+                        f_val = _struct.unpack(">f", _struct.pack(">I", s.value))[0]
+                        note = f"float ≈ {f_val:g}"
+                    except Exception:
+                        pass
+                else:
+                    value_str = f"0x{s.value:x}"
+                print(f"        {s.name:<10}  {s.size:>2}  {value_str:<18}  {note}")
+            if suggested_pairs:
+                print(
+                    f"[verify] HINT: if checkdiff below complains about "
+                    f"{', '.join(s.name for s in syms if s.size == 8)} relocs, "
+                    f"re-run with `--map "
+                    f"'{','.join(sorted(set(suggested_pairs)))}'` "
+                    f"(replace <NAMED_SYMBOL> with the target .o's named "
+                    f"symbol at that .sdata2 offset; check symbols.txt)."
+                )
+            else:
+                print(
+                    "[verify] HINT: if checkdiff below complains about "
+                    "@N relocs, you can pass `--map '@N=<sym>'` directly to "
+                    "rename specific anonymous symbols."
+                )
+        else:
+            print("[verify] no --map given; .o has no anonymous .sdata2 symbols")
 
     # 3. Run checkdiff — pass --no-build so its internal ninja invocation
     # doesn't clobber the objcopy rename we just made.

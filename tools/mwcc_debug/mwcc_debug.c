@@ -37,6 +37,15 @@ static void *(__cdecl *mw_pcode_traverse)(void *node, const char *pass_name) = (
 // static variable for capturing pass name from the most recent traverse call
 static const char *last_pass_name = NULL;
 
+// most-recent function name from pclistblocks. MWCC calls pclistblocks once
+// per debuglisting pass per function, so this is refreshed BEFORE
+// buildinterferencegraph (and therefore the coalesce hook) runs for that
+// function. Used by the coalesce hook to scope MWCC_DEBUG_FORCE_COALESCE
+// overrides to a single function within a multi-function TU.
+#define FUNCNAME_BUF_LEN 256
+static char g_current_function[FUNCNAME_BUF_LEN] = {0};
+static int g_current_function_set = 0;
+
 // important statics
 #define PCBASICBLOCKS (*(void **)0x587C74)
 #define PCFILE (*(void **)0x580610)
@@ -182,7 +191,20 @@ static void __cdecl hook_pclistblocks(const char *func_name)
         last_pass_name = NULL;
     }
     if (func_name)
+    {
+        int i;
+        // Stash the function name for downstream hooks (coalesce, colorgraph
+        // etc.) that need to scope behavior to a specific function. Copy into
+        // our own buffer — MWCC's func_name pointer may be reused per call.
+        for (i = 0; i < FUNCNAME_BUF_LEN - 1 && func_name[i]; i++)
+        {
+            g_current_function[i] = func_name[i];
+        }
+        g_current_function[i] = '\0';
+        g_current_function_set = 1;
+
         debug_printf("%s\n", func_name);
+    }
 
     for (block = (PCodeBlock *)PCBASICBLOCKS; block; block = block->nextBlock)
         list_block(block);
@@ -293,6 +315,15 @@ typedef struct IGNode
 // compression after FUN_00530E00 finishes). A virtual is its own root iff
 // COALESCE_ALIAS[i] == i. Reverse-engineered via Ghidra.
 #define COALESCE_ALIAS (*(int16 **)0x58308C)
+
+// Per-class snapshot of n_virtuals from the most recent coalesce hook.
+// Used by colorgraph hook as the correct bound when iterating
+// INTERFERENCEGRAPH (which is sized to n_virtuals, NOT N_IGNODES — the
+// two can diverge by a few entries depending on per-block-count state).
+// Reading past the actual IG size returns garbage pointers whose
+// dereference hangs wibo (root-caused 2026-05-19). Indexed by rclass.
+#define MAX_REGCLASS 4
+static int g_last_n_virtuals[MAX_REGCLASS] = {0, 0, 0, 0};
 
 // ---------------------------------------------------------------------------
 // Tier 5 — allocator biasing via env var.
@@ -459,6 +490,13 @@ static struct {
 static int g_n_coalesce_overrides = 0;
 static int g_coalesce_overrides_parsed = 0;
 
+// Function scope filter — if set, MWCC_DEBUG_FORCE_COALESCE only applies
+// when the currently-compiling function's name (captured by pclistblocks
+// into g_current_function) matches. Empty = apply to every coalesce
+// invocation (legacy behavior). Set via MWCC_DEBUG_FORCE_COALESCE_FUNCTION.
+static char g_coalesce_scope_fn[FUNCNAME_BUF_LEN] = {0};
+static int g_coalesce_scope_fn_set = 0;
+
 static void parse_coalesce_overrides_from_env(void)
 {
     char buf[512];
@@ -470,6 +508,17 @@ static void parse_coalesce_overrides_from_env(void)
 
     g_coalesce_overrides_parsed = 1;
     g_n_coalesce_overrides = 0;
+
+    // Read optional function-scope filter once at parse time. Empty → apply
+    // overrides to every coalesce call (legacy global behavior).
+    len = GetEnvironmentVariableA(
+        "MWCC_DEBUG_FORCE_COALESCE_FUNCTION",
+        g_coalesce_scope_fn, sizeof(g_coalesce_scope_fn));
+    g_coalesce_scope_fn_set = (len > 0 && len < sizeof(g_coalesce_scope_fn))
+        ? 1 : 0;
+    if (!g_coalesce_scope_fn_set) {
+        g_coalesce_scope_fn[0] = '\0';
+    }
 
     len = GetEnvironmentVariableA("MWCC_DEBUG_FORCE_COALESCE", buf, sizeof(buf));
     if (len == 0 || len >= sizeof(buf)) return;
@@ -619,10 +668,18 @@ static int __cdecl hook_colorgraph(int rclass, IGNode *head)
                 if (ig_array[j] == node) { my_idx = j; break; }
             }
 
-            debug_printf("%-5d %-7d r%-9d %-7d %-7d 0x%02x%s\n",
-                         iter_idx, my_idx, (int)node->assignedReg,
-                         (int)node->degree, (int)node->arraySize, (int)node->flags,
-                         (node->flags & IG_FLAG_SPILLED) ? "  SPILLED" : "");
+            // Decode flag bits for human-readable annotation. Note: bit 0x4
+            // (COALESCED_AWAY) never appears here because such nodes are NOT
+            // in the simplification/coloring linked list — they get visited
+            // in the separate "COALESCED ALIASES" pass below.
+            {
+                const char *spilled = (node->flags & IG_FLAG_SPILLED) ? "  SPILLED" : "";
+                const char *root = (node->flags & IG_FLAG_COALESCE_ROOT) ? "  [ROOT]" : "";
+                debug_printf("%-5d %-7d r%-9d %-7d %-7d 0x%02x%s%s\n",
+                             iter_idx, my_idx, (int)node->assignedReg,
+                             (int)node->degree, (int)node->arraySize,
+                             (int)node->flags, spilled, root);
+            }
 
             // Dump interferer indices. Each entry in node->array is a short
             // index into interferencegraph[]. We also resolve to the
@@ -651,6 +708,52 @@ static int __cdecl hook_colorgraph(int rclass, IGNode *head)
             {
                 debug_printf("(iteration cap reached at %d nodes)\n", iter_idx);
                 break;
+            }
+        }
+
+        // COALESCED ALIASES — for each IGNode with flag bit 0x4 set, dump
+        // its (alias → root) mapping. These nodes were merged away during
+        // FUN_00530E00 (the conservative coalescer) and don't appear in the
+        // simplification linked list, so colorgraph never visits them. The
+        // root's ig_idx is stored in the alias node's assignedReg field by
+        // FUN_00530C00 and remains there (colorgraph only overwrites
+        // assignedReg for nodes it processes — i.e. the roots).
+        //
+        // IMPORTANT: iterate up to g_last_n_virtuals[rclass] (stashed by
+        // the coalesce hook), NOT N_IGNODES. The two can diverge by a few
+        // entries — N_IGNODES is sometimes the block count or includes
+        // extra state, and reading past the actual IG buffer's end returns
+        // garbage pointers that hang wibo on dereference.
+        {
+            int found = 0;
+            int cap = ((int)rclass >= 0 && (int)rclass < MAX_REGCLASS)
+                ? g_last_n_virtuals[rclass]
+                : 0;
+            if (cap > 4096) cap = 4096; // defensive cap
+            for (j = 0; j < cap; j++)
+            {
+                IGNode *n = ig_array[j];
+                if (n == 0) continue;
+                if ((n->flags & IG_FLAG_COALESCED_AWAY) == 0) continue;
+                if (found == 0)
+                {
+                    debug_printf("\nCOALESCED ALIASES (alias_idx -> root_idx [root_phys]):\n");
+                }
+                {
+                    int root_idx = (int)n->assignedReg;
+                    int root_phys = -1;
+                    if (root_idx >= 0 && root_idx < cap && ig_array[root_idx])
+                    {
+                        root_phys = (int)ig_array[root_idx]->assignedReg;
+                    }
+                    debug_printf("  %d -> %d [r%d]\n", j, root_idx, root_phys);
+                }
+                found++;
+                if (found >= 256)
+                {
+                    debug_printf("  ...(capped at 256)\n");
+                    break;
+                }
             }
         }
 
@@ -926,6 +1029,11 @@ static void __cdecl hook_real_coalesce(unsigned int rclass, unsigned int n_virtu
                      rclass, n_virtuals);
     }
 
+    // Stash for the colorgraph hook to use as the IG iteration bound.
+    if ((int)rclass >= 0 && (int)rclass < MAX_REGCLASS) {
+        g_last_n_virtuals[rclass] = (int)n_virtuals;
+    }
+
     // Run the original — this populates COALESCE_ALIAS.
     ((fn_t)real_coalesce_trampoline)(rclass, n_virtuals);
 
@@ -962,24 +1070,51 @@ static void __cdecl hook_real_coalesce(unsigned int rclass, unsigned int n_virtu
         }
     }
 
-    // Apply FORCE_COALESCE overrides. We patch COALESCE_ALIAS[virt] = root
-    // directly. If the user-specified virt is out of bounds (e.g., this
-    // call is for a different register class and the override doesn't
-    // apply), we silently skip — overrides are global, applied wherever
-    // they fit.
+    // Apply FORCE_COALESCE overrides. Three filters guard each entry:
+    //   1. Function-scope filter — if MWCC_DEBUG_FORCE_COALESCE_FUNCTION is
+    //      set, skip the entire override block when the current function
+    //      (captured by hook_pclistblocks into g_current_function) doesn't
+    //      match. Prevents one function's override from corrupting an
+    //      earlier or later function in the same TU.
+    //   2. Bounds check — virt and root must be in [0, n_virtuals); pairs
+    //      for the wrong register class are silently skipped.
+    //   3. (No-op if the user happens to specify virt == root.)
     forced_count = 0;
-    if (g_n_coalesce_overrides > 0) {
-        for (i = 0; i < g_n_coalesce_overrides; i++) {
-            int v = g_coalesce_overrides[i].virt;
-            int r = g_coalesce_overrides[i].root;
-            if (v < 0 || v >= (int)n_virtuals) continue;
-            if (r < 0 || r >= (int)n_virtuals) continue;
-            if (PCFILE && DEBUG_GUARD) {
-                debug_printf("[FORCE_COALESCE] alias[%d]: %d -> %d\n",
-                             v, (int)alias[v], r);
+    {
+        int scope_skip = 0;
+        if (g_coalesce_scope_fn_set) {
+            // Need a match between g_current_function and g_coalesce_scope_fn
+            if (!g_current_function_set) {
+                scope_skip = 1;
+            } else {
+                int j;
+                for (j = 0; j < FUNCNAME_BUF_LEN; j++) {
+                    if (g_current_function[j] != g_coalesce_scope_fn[j]) {
+                        scope_skip = 1;
+                        break;
+                    }
+                    if (g_current_function[j] == '\0') break;
+                }
             }
-            alias[v] = (int16)r;
-            forced_count++;
+            if (scope_skip && PCFILE && DEBUG_GUARD) {
+                debug_printf("[FORCE_COALESCE] scope skip (fn=%s, scope=%s)\n",
+                             g_current_function_set ? g_current_function : "<unset>",
+                             g_coalesce_scope_fn);
+            }
+        }
+        if (!scope_skip && g_n_coalesce_overrides > 0) {
+            for (i = 0; i < g_n_coalesce_overrides; i++) {
+                int v = g_coalesce_overrides[i].virt;
+                int r = g_coalesce_overrides[i].root;
+                if (v < 0 || v >= (int)n_virtuals) continue;
+                if (r < 0 || r >= (int)n_virtuals) continue;
+                if (PCFILE && DEBUG_GUARD) {
+                    debug_printf("[FORCE_COALESCE] alias[%d]: %d -> %d\n",
+                                 v, (int)alias[v], r);
+                }
+                alias[v] = (int16)r;
+                forced_count++;
+            }
         }
     }
 
