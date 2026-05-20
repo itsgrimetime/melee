@@ -270,6 +270,7 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
 
 void fn_802461BC(HSD_GObj* gobj)
 {
+    u8 scroll;
     Vec3 sp_pos1;
     Vec3 sp_pos2;
     Vec3 sp_pos3;
@@ -292,7 +293,6 @@ void fn_802461BC(HSD_GObj* gobj)
     f32 ty;
     f32 tz;
     char* base;
-    u8 scroll;
     PAD_STACK(208);
 
     base = (char*) &mnDiagram3_803EEC10;
