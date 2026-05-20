@@ -292,7 +292,6 @@ void fn_802461BC(HSD_GObj* gobj)
     f32 ty;
     f32 tz;
     char* base;
-    u16* table;
     u8 scroll;
     PAD_STACK(208);
 
@@ -383,7 +382,6 @@ void fn_802461BC(HSD_GObj* gobj)
         lb_8000B1CC(d->jobjs[8], (Vec3*) (base + 0x18), &sp_pos1);
 
         neg_spacing = -row_spacing;
-        table = (u16*) (base + 0x3C);
         row_spacing = mnDiagram3_804DBFF8;
         i = 0;
         do {
@@ -404,7 +402,7 @@ void fn_802461BC(HSD_GObj* gobj)
             } else {
                 val = (u8) val;
             }
-            HSD_SisLib_803A6368(text, table[(u8) val]);
+            HSD_SisLib_803A6368(text, *(u16*) (base + 0x3C + 2 * (u8) val));
             i++;
         } while (i < 10);
 
@@ -547,7 +545,6 @@ void fn_802461BC(HSD_GObj* gobj)
             lb_8000B1CC(d->jobjs[8], (Vec3*) (base + 0x18), &sp_pos2);
 
             neg_spacing = -row_spacing;
-            table = (u16*) (base + 0x3C);
             row_spacing = mnDiagram3_804DBFF8;
             i = 0;
             do {
@@ -569,7 +566,7 @@ void fn_802461BC(HSD_GObj* gobj)
                 } else {
                     val = (u8) val;
                 }
-                HSD_SisLib_803A6368(text, table[(u8) val]);
+                HSD_SisLib_803A6368(text, *(u16*) (base + 0x3C + 2 * (u8) val));
                 i++;
             } while (i < 10);
 
@@ -715,7 +712,6 @@ void fn_802461BC(HSD_GObj* gobj)
             lb_8000B1CC(d->jobjs[8], (Vec3*) (base + 0x18), &sp_pos3);
 
             neg_spacing = -row_spacing;
-            table = (u16*) (base + 0x3C);
             row_spacing = mnDiagram3_804DBFF8;
             i = 0;
             do {
@@ -737,7 +733,7 @@ void fn_802461BC(HSD_GObj* gobj)
                 } else {
                     val = (u8) val;
                 }
-                HSD_SisLib_803A6368(text, table[(u8) val]);
+                HSD_SisLib_803A6368(text, *(u16*) (base + 0x3C + 2 * (u8) val));
                 i++;
             } while (i < 10);
 
