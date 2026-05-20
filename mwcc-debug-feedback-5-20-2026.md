@@ -281,3 +281,27 @@ Context: working on `src/melee/mn/mnvibration.c`, mainly `fn_80247510` and
   invalid member syntax for the `jobjs` seed (`->jobjs_alias[23]`). The alias
   rewriter needs to distinguish aliasing a local pointer from aliasing a field
   name inside `data->jobjs`.
+
+## Heartbeat follow-up at 2026-05-20 05:00 PDT
+
+- The checked-in `mwcc-debug` skill says `virtual-to-var` supports `--basis`,
+  but the CLI rejects it (`No such option: --basis`). `var-to-virtual --basis`
+  works. For nested-local-heavy functions like `fn_80248A78`, inverse bridge
+  evidence would be useful because `virtual-to-var r34` currently returns the
+  low-confidence top-level `frame` guess while the relevant value is in the
+  nested cursor setup block.
+
+- `verify-perm`/`triage-perm` build-failure output is still too filtered for
+  interesting failed candidates. During a short `debug permute` run on
+  `fn_80248A78`, lower byte-score candidates such as `output-3650-2` and
+  `output-3665-6` failed real-tree transfer, but `verify-perm` only surfaced:
+  `#   Error:           ^^^^^^^^^`. Including the first full compiler
+  diagnostic with filename/line, or preserving a temporary failing source path
+  on request, would make it possible to repair promising candidates instead of
+  manually re-running/inspecting them.
+
+- `debug permute` is useful with the new per-PID pcdump scorer, but extra
+  upstream permuter args need an explicit `--` separator. Without it,
+  `melee-agent debug permute -f fn_80248A78 --best-only` fails because Typer
+  consumes the upstream permuter flag. A note in the help example would save
+  one failed launch.
