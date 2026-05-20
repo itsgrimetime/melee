@@ -1266,38 +1266,54 @@ def _collect_basis(
     return params, locals_, virtuals, unrecognized, red_flags, decls_by_scope
 ```
 
-Now update the callers of `_collect_basis`. Search for it:
+Now update the only caller of `_collect_basis`, which is
+`list_bindings_with_basis`. Read its existing body first
+(`tools/melee-agent/src/mwcc_debug/symbol_bridge.py:558-644`).
 
-```bash
-grep -n "_collect_basis" tools/melee-agent/src/mwcc_debug/symbol_bridge.py
-```
-
-The primary caller is `list_bindings_with_basis`. Update its call site to pass `function_name=fn_name, full_source=source` and unpack the new 6-tuple:
+The actual `_extract_function_text` signature returns
+`Optional[tuple[str, str, int]]` = `(params_text, body_text,
+start_line)`. The existing code at line 589-592 unpacks the 3-tuple
+correctly:
 
 ```python
-def list_bindings_with_basis(
-    source: str, fn_name: str, pre_pass,
-) -> tuple[list[Binding], BindingBasis]:
-    body_text, params_text = _extract_function_text(source, fn_name)
-    if body_text is None:
-        return [], BindingBasis(
-            parsed_params=[], parsed_locals=[],
-            observed_virtuals=[], unrecognized_decls=[],
-            red_flags=["function-not-found"],
-        )
-    params, locals_, virtuals, unrecognized, red_flags, decls_by_scope = _collect_basis(
-        body_text, params_text, pre_pass,
-        function_name=fn_name, full_source=source,
-    )
-    bindings = _bindings_from_basis(params, locals_, virtuals, red_flags)
-    return bindings, BindingBasis(
-        parsed_params=params, parsed_locals=locals_,
-        observed_virtuals=virtuals, unrecognized_decls=unrecognized,
-        red_flags=red_flags, decls_by_scope=decls_by_scope,
-    )
+extracted = _extract_function_text(source, fn_name)
+if extracted is None:
+    return [], None
+params_text, body_text, start_line = extracted
 ```
 
-Note: bindings are constructed inline inside `list_bindings_with_basis` (search for `Binding(` — multiple call sites around lines 603, 618, 627). There is no `_bindings_from_basis` helper; the confidence-assignment logic is inlined. Task 7 will wire `scope_path` onto each `Binding(...)` construction and add the `ambiguous-nested` post-pass before this function returns.
+Phase 1 changes are surgical — DO NOT rewrite the whole function:
+
+1. Modify the `_collect_basis(...)` call to pass the new kwargs and
+   unpack the new 6-tuple:
+   ```python
+   (params, locals_, virtuals, unrecognized, red_flags,
+    decls_by_scope) = _collect_basis(
+       body_text, params_text, pre_pass,
+       function_name=fn_name, full_source=source,
+   )
+   ```
+2. Modify the `BindingBasis(...)` construction at the end of the
+   function (find it — it's after the bindings loop) to pass the new
+   `decls_by_scope` kwarg:
+   ```python
+   return out, BindingBasis(
+       parsed_params=params,
+       parsed_locals=locals_,
+       observed_virtuals=virtuals,
+       unrecognized_decls=unrecognized,
+       red_flags=red_flags,
+       decls_by_scope=decls_by_scope,    # NEW
+   )
+   ```
+3. Leave the binding-construction loop (the three `Binding(...)` call
+   sites around lines 603, 618, 627) UNCHANGED in this task. Task 7
+   wires `scope_path` onto each `Binding(...)` and adds the
+   `ambiguous-nested` post-pass.
+
+There is no `_bindings_from_basis` helper — confidence assignment is
+inlined in the loop. Task 7 will add the demotion helper after this
+task ships clean.
 
 - [ ] **Step 6.4: Run tests, verify pass**
 
@@ -1444,12 +1460,16 @@ Append to `test_mwcc_debug_symbol_bridge.py`:
 
 ```python
 def test_extract_function_text_still_importable() -> None:
-    """mutators.py imports _extract_function_text. Phase 1 keeps it."""
+    """mutators.py imports _extract_function_text. Phase 1 keeps it.
+    Signature: returns Optional[tuple[str, str, int]] =
+    (params_text, body_text, start_line)."""
     from src.mwcc_debug.symbol_bridge import _extract_function_text
-    body, params = _extract_function_text("void f(int x) { int y; }", "f")
-    assert body is not None
+    extracted = _extract_function_text("void f(int x) { int y; }", "f")
+    assert extracted is not None
+    params, body, start_line = extracted
     assert "int y" in body
     assert params == "int x"
+    assert start_line == 1
 
 
 def test_strip_strings_and_comments_still_importable() -> None:
@@ -1600,79 +1620,136 @@ def find_all_virtuals_for_var(
     return matches
 ```
 
-- [ ] **Step 10.3: Wire CLI flags and output**
+- [ ] **Step 10.3: Wire CLI flags and output (surgical edits)**
 
-In `cli/debug.py`, extend the `var-to-virtual` command's parameter list with two new Typer options:
+The current var-to-virtual command is at
+`tools/melee-agent/src/cli/debug.py:5983-6112`. Apply THREE
+edits:
 
-```python
-all_matches: Annotated[
-    bool,
-    typer.Option("--all", help="Return ALL bindings matching the name "
-                 "(default: pick highest-confidence top-level)."),
-] = False,
-scope_filter: Annotated[
-    Optional[str],
-    typer.Option("--scope", help="Filter bindings by scope path. "
-                 "Exact match by default; trailing '/' for prefix "
-                 "(e.g. 'fn_X/' matches the function and all nested "
-                 "blocks inside it)."),
-] = None,
-```
-
-In the body, where the command currently calls `find_virtual_for_var`, replace with:
+**Edit 1 — add two new params to the function signature** (after the
+existing `basis` parameter at line 6018, before the `) -> None:` close):
 
 ```python
-from ..mwcc_debug.symbol_bridge import find_all_virtuals_for_var
-from ..mwcc_debug.scope_path import format_for_display, is_nested_within
-
-matches = find_all_virtuals_for_var(bindings, var_name)
-
-# Apply --scope filter
-if scope_filter is not None:
-    scope_value = scope_filter.rstrip("/")
-    prefix_mode = scope_filter.endswith("/")
-    target = tuple(scope_value.split("/")) if scope_value else ()
-    if prefix_mode:
-        matches = [b for b in matches if is_nested_within(b.scope_path, target)]
-    else:
-        matches = [b for b in matches if b.scope_path == target]
-
-# Default to single binding (back-compat)
-if not all_matches:
-    matches = matches[:1]
-
-if not matches:
-    typer.echo(f"variable not found: {var_name!r}", err=True)
-    raise typer.Exit(1)
-
-if json_out:
-    payload = {
-        "var_name": var_name,
-        "bindings": [
-            {
-                "virtual": b.virtual,
-                "decl_line": b.decl_line,
-                "kind": b.kind,
-                "type_str": b.type_str,
-                "confidence": b.confidence,
-                "scope_path": list(b.scope_path),
-            } for b in matches
-        ],
-    }
-    print(json.dumps(payload, indent=2))
-else:
-    if all_matches and len(matches) > 1:
-        print(f"{var_name} ({len(matches)} matches):")
-        prefix = "  -> "
-    else:
-        prefix = f"{var_name} -> "
-    for b in matches:
-        scope_str = format_for_display(b.scope_path)
-        print(f"{prefix}r{b.virtual}  ({b.confidence}, type={b.type_str}, "
-              f"scope={scope_str}, line {b.decl_line})")
+    all_matches: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            help="Return ALL bindings matching the name. Default picks "
+                 "the highest-confidence top-level binding for back-compat.",
+        ),
+    ] = False,
+    scope_filter: Annotated[
+        Optional[str],
+        typer.Option(
+            "--scope",
+            help="Filter bindings by scope path. Exact match by default; "
+                 "trailing '/' for prefix (e.g. 'fn_X/' matches the "
+                 "function and all nested blocks inside it).",
+        ),
+    ] = None,
 ```
 
-If `json` is already imported as `json_mod` elsewhere in `debug.py`, use that name; otherwise add `import json` near the top.
+**Edit 2 — update the import at line 6028-6031** to add the new symbols:
+
+```python
+    from ..mwcc_debug.symbol_bridge import (
+        find_virtual_for_var,
+        find_all_virtuals_for_var,
+        list_bindings_with_basis,
+    )
+    from ..mwcc_debug.scope_path import format_for_display, is_nested_within
+```
+
+**Edit 3 — replace the binding-selection block** at lines 6053-6055
+(`binding = next(...)`):
+
+```python
+    # Phase 1 nested-block awareness: scope-aware lookup with optional
+    # --all and --scope filters. Default behavior (single binding,
+    # highest confidence) preserves back-compat.
+    matches = find_all_virtuals_for_var(bindings, var_name)
+
+    if scope_filter is not None:
+        scope_value = scope_filter.rstrip("/")
+        prefix_mode = scope_filter.endswith("/")
+        target = tuple(scope_value.split("/")) if scope_value else ()
+        if prefix_mode:
+            matches = [b for b in matches if is_nested_within(b.scope_path, target)]
+        else:
+            matches = [b for b in matches if b.scope_path == target]
+
+    binding = matches[0] if matches else None
+```
+
+The rest of the function (lines 6057+ — the `binding is None` branch,
+JSON output, text output, `--basis` dump) stays untouched at this
+step. The `--all` flag is wired in via a NEW output branch added
+right BEFORE the existing `if binding is None:` block:
+
+```python
+    if all_matches:
+        # New --all output path — emit the full match list, then return.
+        if not matches:
+            if json_out:
+                print(json.dumps(
+                    {"var_name": var_name, "found": False, "bindings": []},
+                    indent=2,
+                ))
+            else:
+                typer.echo(
+                    f"variable {var_name!r} not found in {function}",
+                    err=True,
+                )
+            raise typer.Exit(1)
+        if json_out:
+            payload = {
+                "var_name": var_name,
+                "found": True,
+                "bindings": [
+                    {
+                        "virtual": b.virtual,
+                        "decl_line": b.decl_line,
+                        "kind": b.kind,
+                        "type": b.type_str,
+                        "confidence": b.confidence,
+                        "scope_path": list(b.scope_path),
+                    } for b in matches
+                ],
+            }
+            if basis and basis_data is not None:
+                payload["basis"] = _basis_to_dict(basis_data)
+            print(json.dumps(payload, indent=2))
+        else:
+            print(f"{var_name} ({len(matches)} matches):")
+            for b in matches:
+                scope_str = format_for_display(b.scope_path) or "(top)"
+                print(
+                    f"  -> r{b.virtual}  ({b.confidence}, "
+                    f"type={b.type_str}, scope={scope_str}, "
+                    f"line {b.decl_line})"
+                )
+        return
+```
+
+Also update the existing default-text output (around line 6090) to
+include scope info:
+
+```python
+        # Existing single-binding text output — augment with scope.
+        scope_str = format_for_display(binding.scope_path) or "(top)"
+        print(
+            f"{binding.var_name} -> r{binding.virtual}  "
+            f"({binding.confidence}, type={binding.type_str}, "
+            f"scope={scope_str}, line {binding.decl_line})"
+        )
+```
+
+(Read the existing text-output block first to match its exact style —
+the snippet above is the target shape.)
+
+If `json` is not imported at the top of debug.py, add `import json`
+near the existing imports. Check the existing var-to-virtual JSON
+block — it already uses `json.dumps`, so the import is already there.
 
 - [ ] **Step 10.4: Smoke-test via subprocess**
 
@@ -1892,9 +1969,17 @@ Aggregate rate: <P>%.
 Decision: <promote / keep>.
 ```
 
+**Placeholder gate:** Before running `git add` on the validation doc,
+grep for `<` to verify no `<N>`/`<M>`/`<P>` placeholders remain.
+Commit only after every `<...>` is replaced with measured values or
+a definite "yes"/"no". If the agent doesn't have data to fill them
+in, the agent reports BLOCKED rather than committing template
+text.
+
 - [ ] **Step 12.4: If decision = promote, follow-up commit on the demotion**
 
-If the validation supports promotion, edit `symbol_bridge.py:_demote_nested_to_ambiguous`:
+If the validation supports promotion, edit `_demote_nested_to_ambiguous`
+in `symbol_bridge.py`:
 
 ```python
 def _demote_nested_to_ambiguous(bindings: list[Binding]) -> None:
@@ -1907,7 +1992,17 @@ def _demote_nested_to_ambiguous(bindings: list[Binding]) -> None:
     return
 ```
 
-…and update test_nested_block_bindings_default_to_ambiguous_nested in Task 7 to expect `best-guess`. If decision = keep, leave the test as-is.
+Also: **rename** the now-baseline Task 7 test
+`test_nested_block_bindings_default_to_ambiguous_nested` to
+`test_nested_block_bindings_pre_promotion_baseline_DELETE_ME` and add
+a new test `test_nested_block_bindings_after_promotion_are_best_guess`
+that asserts nested decls now get `best-guess`. The renamed
+baseline test gets removed in the SAME commit (use git rm or the
+agent's edit-then-delete approach). This way each commit's
+regression test set is internally consistent.
+
+If decision = keep, leave the Task 7 test as-is. No `_demote_…`
+edit needed.
 
 - [ ] **Step 12.5: Commit**
 
@@ -1978,18 +2073,32 @@ nodes in walk_function (loosen _has_decl_enclosing_error).>
 
 `tier3-search` has no `--dry-run` flag in the CLI, but it logs its seed plan before running per-seed permute. We compare seed counts by capturing the first ~20 lines of output (which lists the planned seeds) and stopping the run after the seed-plan summary.
 
-For each of 5 representative functions, time-bound the run to a few seconds (long enough to print the plan, short enough to abort before per-seed permute starts):
+For each of 5 representative functions, capture the seed plan
+header that `tier3-search` prints before per-seed permute runs. The
+verified output line format is:
+
+```
+[tier3] 5 seed plans:
+  seed0: insert-alias before first use of <var> (<type>)
+  seed1: type-change <var>: <from> -> <to>
+  ...
+```
+
+Setting `--per-seed-time 0 --total-time 0` causes the permute loop
+to skip every seed after printing the plan.
 
 ```bash
 for fn in fn_80248A78 mnVibration_80248644 mnName_GetPageCount mnEvent_8024CE74 fn_802487A8; do
     echo "=== $fn ==="
-    timeout 5 python -m src.cli debug tier3-search -f "$fn" \
+    timeout 30 python -m src.cli debug tier3-search -f "$fn" \
         --include-low-confidence --per-seed-time 0 --total-time 0 2>&1 | \
-        grep -E "seed plan|Planned [0-9]+ seeds|seeds compile|seed_count|^  " | head -10
+        grep -E "^\[tier3\] [0-9]+ seed plans|^  seed[0-9]+:" | head -20
 done
 ```
 
-The `--per-seed-time 0 --total-time 0` combination causes the permute loop to skip every seed; we just want the plan. If the output doesn't surface a seed count cleanly, fall back to counting compile-success lines in the output.
+The `[tier3] N seed plans:` line gives the count directly. If a
+function is not found in `report.json` (e.g. unmapped fn_), skip
+that function and pick another.
 
 Append a section to `docs/mwcc-debug-nested-block-macro-tolerance-2026-05-20.md`:
 
