@@ -9,3 +9,7 @@ tools/
 # Wibo source + binary (downloaded/built by build_wibo.sh)
 wibo_source/
 bin/
+
+# Ghidra project for mwcceppc.exe (created by analyzeHeadless,
+# ~40MB binary DB — see scripts/setup_ghidra.sh for re-creation)
+ghidra_project/

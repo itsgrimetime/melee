@@ -538,6 +538,10 @@ def main() -> int:
                     help="Force non-interactive output (auto-detected if no TTY)")
     ap.add_argument("--format", choices=["plain", "side-by-side", "json"], default="side-by-side",
                     help="Output format when using --no-tty (default: side-by-side)")
+    ap.add_argument("--no-build", action="store_true",
+                    help="Skip the ninja rebuild step and diff the .o as-is. "
+                         "Use this when the .o has been post-processed externally "
+                         "(e.g. by `melee-agent debug name-magic`).")
     args = ap.parse_args()
 
     # Auto-detect TTY - use non-interactive mode if no TTY available
@@ -572,21 +576,28 @@ def main() -> int:
     # build
     ref_obj = f"./build/GALE01/obj/{obj_path}.o"
     our_obj = f"./build/GALE01/src/{obj_path}.o"
-    result = subprocess.run(["ninja", our_obj], cwd=ROOT, capture_output=True, text=True)
-    if result.returncode != 0:
-        print("ninja failed:", file=sys.stderr)
-        print(result.stdout, file=sys.stderr)
-        print(result.stderr, file=sys.stderr)
-        return 1
+    if not args.no_build:
+        result = subprocess.run(["ninja", our_obj], cwd=ROOT, capture_output=True, text=True)
+        if result.returncode != 0:
+            print("ninja failed:", file=sys.stderr)
+            print(result.stdout, file=sys.stderr)
+            print(result.stderr, file=sys.stderr)
+            return 1
 
-    # Regenerate report.json to get fresh fuzzy_match_percent
-    # This is needed because the VS Code extension relies on accurate match percentages
-    result = subprocess.run(
-        ["ninja", "build/GALE01/report.json"],
-        cwd=ROOT, capture_output=True, text=True
-    )
-    if result.returncode != 0:
-        print("warning: failed to regenerate report.json", file=sys.stderr)
+        # Regenerate report.json to get fresh fuzzy_match_percent
+        # This is needed because the VS Code extension relies on accurate match percentages
+        result = subprocess.run(
+            ["ninja", "build/GALE01/report.json"],
+            cwd=ROOT, capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            print("warning: failed to regenerate report.json", file=sys.stderr)
+    else:
+        # --no-build: caller has post-processed the .o; just verify it exists.
+        if not (ROOT / our_obj.lstrip("./")).exists():
+            print(f"error: --no-build given but {our_obj} not found; "
+                  f"build it first (or omit --no-build)", file=sys.stderr)
+            return 1
 
     # diff
     if args.no_tty:
