@@ -353,6 +353,8 @@ void fn_802461BC(HSD_GObj* gobj)
         lbAudioAx_80024030(1);
         if (data->is_name_mode == 0) {
             sel = 1;
+        } else {
+            sel = 0;
         }
         data->is_name_mode = sel;
         if (data->is_name_mode == 0 &&
