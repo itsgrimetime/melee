@@ -670,3 +670,42 @@ def find_var_for_virtual(
         if b.virtual == virtual:
             return b
     return None
+
+
+@dataclass
+class FirstDef:
+    """First-write IR op for a virtual register — fallback identity when
+    no source variable maps to it. Useful for compiler-introduced temps
+    (CSE/IV/spill) where the agent needs to correlate the virtual to a
+    C-source memory access or expression."""
+    block_idx: int          # block where the virtual is first defined
+    opcode: str             # e.g. "lwz", "addi", "mr"
+    operands: str           # full operand string ("r62, 44(r34)" etc.)
+    annotations: list[str]  # any pcode annotations on the instruction
+
+
+def find_first_def(virtual: int, pre_pass) -> Optional[FirstDef]:
+    """Return the first instruction in `pre_pass` whose destination
+    operand is `virtual`. Convention: regs[0] is the dest for most
+    pcode ops in the pre-coloring pass.
+
+    Used by virtual-to-var as a fallback when no source binding maps
+    to the requested virtual. Example return for a compiler temp
+    holding a struct field load:
+        FirstDef(block_idx=0, opcode="lwz", operands="r62, 44(r34)", ...)
+    The agent reads this and knows: "r62 is `something->field_at_0x2C`
+    where `something` lives in r34."
+    """
+    for block in pre_pass.blocks:
+        for ist in block.instructions:
+            if not ist.regs:
+                continue
+            kind, num = ist.regs[0]
+            if kind == "r" and num == virtual:
+                return FirstDef(
+                    block_idx=block.index,
+                    opcode=ist.opcode,
+                    operands=ist.operands,
+                    annotations=list(ist.annotations),
+                )
+    return None
