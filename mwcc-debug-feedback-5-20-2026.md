@@ -218,6 +218,35 @@ Context: working on `src/melee/mn/mnvibration.c`, mainly `fn_80247510` and
   `(f32) (anim_byte_chain = data->x0[port_a + 2])` into assignment plus call,
   transferred cleanly but was neutral (`95.916664%`, delta `+0.0`).
 
+## Follow-up from the `fn_802487A8` 98.36% baseline
+
+- A stronger class-scoped force proof now gets `fn_802487A8` very close to
+  target text. Forcing
+  `gpr:32:30,gpr:45:31,gpr:73:23,gpr:47:23,gpr:48:25,gpr:79:28,gpr:106:29,gpr:53:26,gpr:55:24,gpr:51:27`
+  leaves only the expected relocation-name noise plus two real source-shape
+  gaps: the `mnVibration_804D4FE8` SDA base temp is still separate from
+  `idx_ptr`, and MWCC does not naturally keep a long-lived zero-extended port
+  alias for both `HSD_PadCopyStatus[port]` and the later
+  `mnVibration_804D4FE8[port]` lookup.
+
+- `--force-coalesce-fn fn_802487A8 --force-coalesce 48=50` now produces a
+  useful local hang diagnostic instead of silently contaminating the cache. The
+  diagnostic pointed at an invalid/interfering pair; `debug analyze --json`
+  confirms baseline virtuals `48` (`idx_ptr = base + offset`) and `50`
+  (`mnVibration_804D4FE8` SDA base) currently interfere. That means the source
+  problem is not just "force these two together"; the C has to avoid creating
+  the separate live base temp in the first place.
+
+- `tier3-search` is improved after the C89 alias-split update: four of six
+  generated `fn_802487A8` seeds compiled. Real-tree verification found no
+  source wins: `data` alias regressed (`98.36% -> 96.58%`), `anim_byte_chain`
+  `u8 -> u32` and `port_b_alias s32 -> u32` were neutral, and
+  `anim_byte_chain u8 -> s8` regressed hard. The two remaining alias seeds now
+  fail with definite-init diagnostics (`port_indicator` and
+  `gobj_user_data_alias` "not initialized before being used"), so alias seed
+  generation still needs to avoid aliases of locals before their first
+  assignment.
+
 ## Follow-up during `mnvibration-decomp` heartbeat at 2026-05-20 06:00 PT
 
 - `pcdump-local --force-coalesce-fn fn_80248A78 --force-coalesce 46=50`
