@@ -290,7 +290,7 @@ wrapper that compiles candidates via SSH.
 ### Step 6: matching workflow tools (Tier 7)
 
 After Tier 5/6 confirm the target is reachable, the matching workflow
-becomes "find the C-source change." Five Tier 7 commands automate the
+becomes "find the C-source change." Tier 7 commands automate the
 specific friction points the matching agent identified in their
 permuter sessions:
 
@@ -309,9 +309,10 @@ melee-agent debug enumerate-decl-orders my_fn --keep-best
 melee-agent debug pattern-catalog
 melee-agent debug pattern-catalog decl-order
 
-# Static lint for suspicious casts (no compilation needed)
+# Static lint for suspicious casts + compare-opcode signedness mismatches
 melee-agent debug suggest-casts my_fn
 melee-agent debug suggest-casts my_fn --severity all --asm
+melee-agent debug suggest-casts my_fn --signedness  # detect cmplwi/cmpwi disagreements
 
 # Batch-triage permuter outputs against the real tree
 melee-agent debug triage-perm permute_output_dir -f my_fn
@@ -323,6 +324,32 @@ melee-agent debug triage-perm permute_output_dir -f my_fn --apply-best
 melee-agent debug gen-permuter-config -f my_fn --target target.json
 melee-agent debug gen-permuter-config -f my_fn --pattern decl-order
 melee-agent debug gen-permuter-config -f my_fn --print  # dry-run
+
+# Compile source file locally and score against a target spec (IGNode distance).
+# Used as the external scorer for decomp-permuter (--quiet flag for machine use).
+melee-agent debug score-source src/melee/mn/mnfoo.c -f my_fn --target target.json
+melee-agent debug score-source src/melee/mn/mnfoo.c -f my_fn --target target.json --quiet
+
+# Source-level variable ↔ virtual register bridge (symbol bridge)
+melee-agent debug var-to-virtual my_var -f my_fn          # which virtual does my_var map to?
+melee-agent debug var-to-virtual my_var -f my_fn --basis  # + show confidence evidence
+melee-agent debug virtual-to-var r53 -f my_fn             # which source var maps to r53?
+
+# Suggest C-source patterns to produce a specific coalesce (or discover candidates)
+melee-agent debug suggest-coalesce-source -f my_fn -V 53=3          # pair mode: coalesce r53 with r3
+melee-agent debug suggest-coalesce-source -f my_fn --discover --top 5  # discover best candidates
+
+# Apply targeted source mutations (type change, alias insertion)
+melee-agent debug mutate type-change -f my_fn --var my_var --type u32
+melee-agent debug mutate type-change -f my_fn --var my_var --type u32 --apply
+melee-agent debug mutate insert-alias -f my_fn --var my_var --at 0
+melee-agent debug mutate insert-alias -f my_fn --var my_var --at 0 --apply
+
+# Multi-start search over targeted mutation seeds (Tier 3)
+# Enumerates variable bindings, plans seed mutations, smoke-compiles each,
+# then launches permuter per seed. Use when manual attempts stall.
+melee-agent debug tier3-search -f my_fn
+melee-agent debug tier3-search -f my_fn --budget 10 --per-seed-iters 500
 ```
 
 **There is NO patched permuter binary.** Run upstream `decomp-permuter`
@@ -331,14 +358,38 @@ as usual; mwcc-debug just informs (`gen-permuter-config`) and filters
 [docs/mwcc-debug-permuter-integration.md](../../docs/mwcc-debug-permuter-integration.md)
 for the full Tier 0 / Tier 1 / deferred-tier picture.
 
-The wrapper:
+The `pcdump` (remote) wrapper:
 1. SSHes to the remote with the relative .c path
 2. Remote: acquires a lock, `git pull --rebase` (so it sees current master), installs patched DLL, runs `mwcceppc.exe` with stock Melee flags
 3. Remote: streams `pcdump.txt` bytes back over SSH stdout
 4. Local: writes raw bytes to `--output` file (or stdout)
 5. Remote: restores stock DLL via `try/finally` (so a crash doesn't leave the patched DLL installed)
 
-**Uncommitted local changes are not seen by the remote.** Commit + push first (auto-push is on master, so a normal commit is enough).
+**For the remote pcdump path only:** uncommitted local changes are not seen by the remote. Commit + push first (auto-push is on master, so a normal commit is enough). Local mode (`pcdump-local`) always sees the current working tree.
+
+### Function-scoped force options
+
+All `--force-phys`, `--force-iter-first`, and `--force-coalesce` options accept a `-fn` scoped variant that limits the override to a single named function in multi-function TUs:
+
+```bash
+# Scope --force-phys to one function only
+melee-agent debug pcdump src/melee/mn/mnfoo.c \
+    --force-phys "36:31" --force-phys-fn mnFoo_80246000
+
+# Scope --force-coalesce to one function only
+melee-agent debug pcdump src/melee/mn/mnfoo.c \
+    --force-coalesce "53=3" --force-coalesce-fn mnFoo_80246000
+
+# Scope --force-iter-first to one function
+melee-agent debug pcdump src/melee/mn/mnfoo.c \
+    --force-iter-first "62,47" --force-phys-fn mnFoo_80246000
+
+# Force by colorgraph iteration position (for nodes without an addressable ig_idx)
+melee-agent debug pcdump src/melee/mn/mnfoo.c \
+    --force-phys-iter "0:3:31"   # class 0, iter 3 → r31
+```
+
+Use `-fn` variants when the TU has multiple functions and the override would otherwise affect all of them.
 
 ### Useful env-var overrides
 
@@ -416,10 +467,9 @@ B1: Succ={B3 } Pred={B0 } Labels={L1 }
 ## Limitations
 
 - **Back-end only.** Doesn't show parsed expression trees, ObjObject addresses, or variable scoping decisions. For those, use `/mwcc-inspect`.
-- **Runs on Windows.** macOS+wibo+Rosetta crashes mwcceppc when the verbose-debug path is active. The macOS PoC produced partial output before hanging; the Windows path is the only viable production workflow.
-- **One TU at a time.** The DLL is swapped repo-wide on the remote; the script holds a lock so concurrent invocations queue.
+- **One TU at a time.** The DLL is swapped repo-wide; for remote mode the script holds a lock so concurrent invocations queue. Local mode uses a unique pcdump path per invocation (no locking needed).
 - **Output is large.** A typical Melee TU produces 50KB–MB. Use `--output` rather than streaming.
-- **Requires committed code.** The remote does `git pull --rebase`, so uncommitted local changes aren't seen. Commit first (auto-push on master).
+- **Remote mode requires committed code.** The remote does `git pull --rebase`, so uncommitted local changes aren't seen. Commit first (auto-push on master). Local mode (`pcdump-local`) always uses the current working tree — no commit required.
 
 ## Troubleshooting
 
@@ -429,7 +479,7 @@ B1: Succ={B3 } Pred={B0 } Labels={L1 }
 | Remote: `patched DLL not found` | Re-run setup (scp + Move-Item) |
 | Remote: `lock held by PID=N` | A previous run is in flight or crashed. Wait 30 min or `ssh nzxt-local 'powershell -Command "Remove-Item $env:TEMP\mwcc_debug.lock"'` |
 | Remote: `git pull failed: You are not currently on a branch` | The Windows repo is in detached HEAD. `ssh nzxt-local 'cd /c/Users/mikes/code/melee && git fetch origin && git reset --hard origin/master'` |
-| `compile exit=124` (timeout) | Either a very large TU or mwcceppc hung. Try `--timeout 300`. If still timing out, the TU may hit the same bug we hit on macOS — try a smaller subset. |
+| `compile exit=124` (timeout) | Either a very large TU or mwcceppc hung. Try `--timeout 300`. If still timing out, the TU is unusually large — try splitting or using `pcdump-local` instead. |
 | Empty pcdump.txt | Compile failed too early to produce output. Check the stderr passthrough in the wrapper output. |
 
 ## Compare to mwcc-inspect
@@ -441,7 +491,7 @@ B1: Succ={B3 } Pred={B0 } Labels={L1 }
 | **Mechanism** | Patches `lmgr326b.dll` to unlock `debuglisting=1` | Attaches debugger via `dbgeng.dll` |
 | **Best for** | "Why did the allocator pick THESE registers?" | "How did the compiler parse my expressions?" |
 | **Output size** | 50KB–MB per TU (very verbose) | 5–50KB per function (structured) |
-| **Stability** | Stable on Windows, broken on macOS (Rosetta) | Stable on Windows, not built for macOS |
+| **Stability** | Stable: local (macOS/wibo) + remote (Windows). Local is preferred. | Stable on Windows, not built for macOS |
 
 You can use both on the same TU back-to-back to triangulate.
 
@@ -449,5 +499,5 @@ You can use both on the same TU back-to-back to triangulate.
 
 - Upstream tool: https://github.com/Savestate2A03/mwcc_debug
 - Workflow doc: [docs/mwcc-debug.md](../../docs/mwcc-debug.md)
-- macOS PoC investigation (abandoned): [docs/mwcc-debug-poc-design.md](../../docs/mwcc-debug-poc-design.md) and [docs/mwcc-debug-poc-plan.md](../../docs/mwcc-debug-poc-plan.md)
+- macOS local mode docs: [docs/mwcc-debug-poc-design.md](../../docs/mwcc-debug-poc-design.md) and [docs/mwcc-debug-poc-plan.md](../../docs/mwcc-debug-poc-plan.md) (PoC docs, now shipped as `pcdump-local`)
 - Sister skill: `/mwcc-inspect` for front-end IR

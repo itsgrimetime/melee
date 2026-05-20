@@ -6,6 +6,7 @@ from src.mwcc_debug.cast_audit import (
     _looks_integer,
     _split_args,
     audit_function_casts,
+    detect_signedness_mismatches,
     find_call_sites,
 )
 
@@ -179,3 +180,108 @@ void f(void)  // line 3
 
 def test_audit_function_not_found() -> None:
     assert audit_function_casts("/* empty file */", "nope") == []
+
+
+# ---------------------------------------------------------------------------
+# Signedness mismatch detection tests
+# ---------------------------------------------------------------------------
+
+def test_detect_signedness_unsigned_vs_signed() -> None:
+    """Current emits cmplwi (unsigned) but expected has cmpwi (signed)."""
+    diff_lines = [
+        "-/* 80245C18 002427F8  2C 0E 00 00 */\tcmpwi r14, 0x0",
+        "+/* 80245C18 002427F8  28 0E 00 00 */\tcmplwi r14, 0x0",
+    ]
+    mismatches = detect_signedness_mismatches(diff_lines)
+    assert len(mismatches) == 1
+    assert mismatches[0].kind == "unsigned_vs_signed"
+    assert mismatches[0].current_opcode == "cmplwi"
+    assert mismatches[0].expected_opcode == "cmpwi"
+    assert "u8/u16/u32/unsigned" in mismatches[0].suggestion
+    assert "s8/s16/s32/int" in mismatches[0].suggestion
+
+
+def test_detect_signedness_signed_vs_unsigned() -> None:
+    """Current emits cmpwi (signed) but expected has cmplwi (unsigned)."""
+    diff_lines = [
+        "-/* 80245C38 00242818  28 0F 00 00 */\tcmplwi r15, 0x0",
+        "+/* 80245C38 00242818  2C 0F 00 00 */\tcmpwi r15, 0x0",
+    ]
+    mismatches = detect_signedness_mismatches(diff_lines)
+    assert len(mismatches) == 1
+    assert mismatches[0].kind == "signed_vs_unsigned"
+    assert mismatches[0].current_opcode == "cmpwi"
+    assert mismatches[0].expected_opcode == "cmplwi"
+    assert "s8/s16/s32/int" in mismatches[0].suggestion
+    assert "u8/u16/u32/unsigned" in mismatches[0].suggestion
+
+
+def test_detect_signedness_no_mismatch_when_both_unsigned() -> None:
+    """Both sides use cmplwi — not a mismatch."""
+    diff_lines = [
+        "-/* 80245C38 00242818  28 0F 00 00 */\tcmplwi r15, 0x1",
+        "+/* 80245C38 00242818  28 0F 00 00 */\tcmplwi r15, 0x0",
+    ]
+    mismatches = detect_signedness_mismatches(diff_lines)
+    assert len(mismatches) == 0
+
+
+def test_detect_signedness_no_mismatch_when_both_signed() -> None:
+    """Both sides use cmpwi — not a mismatch."""
+    diff_lines = [
+        "-/* 80245C18 002427F8  2C 0E 00 07 */\tcmpwi r14, 0x7",
+        "+/* 80245C18 002427F8  2C 0E 00 00 */\tcmpwi r14, 0x0",
+    ]
+    mismatches = detect_signedness_mismatches(diff_lines)
+    assert len(mismatches) == 0
+
+
+def test_detect_signedness_ignores_non_cmp_pairs() -> None:
+    """Unrelated opcode differences are not flagged."""
+    diff_lines = [
+        "-\taddi r3, r4, 0x0",
+        "+\tli r3, 0x0",
+    ]
+    mismatches = detect_signedness_mismatches(diff_lines)
+    assert len(mismatches) == 0
+
+
+def test_detect_signedness_multiple_in_one_diff() -> None:
+    """Multiple cmp mismatches in the same diff are all reported."""
+    diff_lines = [
+        "-/* 80245C18 002427F8  2C 0E 00 00 */\tcmpwi r14, 0x0",
+        "+/* 80245C18 002427F8  28 0E 00 00 */\tcmplwi r14, 0x0",
+        " /* context line */",
+        "-/* 80245C38 00242818  28 0F 00 00 */\tcmplwi r15, 0x0",
+        "+/* 80245C38 00242818  2C 0F 00 00 */\tcmpwi r15, 0x0",
+    ]
+    mismatches = detect_signedness_mismatches(diff_lines)
+    assert len(mismatches) == 2
+    kinds = {m.kind for m in mismatches}
+    assert "unsigned_vs_signed" in kinds
+    assert "signed_vs_unsigned" in kinds
+
+
+def test_detect_signedness_context_line_flushes_pending() -> None:
+    """A context line between a '-' and '+' means no pairing."""
+    diff_lines = [
+        "-/* 80245C18 002427F8  2C 0E 00 00 */\tcmpwi r14, 0x0",
+        " /* context line breaks the pair */",
+        "+/* 80245C38 00242818  28 0F 00 00 */\tcmplwi r15, 0x0",
+    ]
+    mismatches = detect_signedness_mismatches(diff_lines)
+    # The '-' and '+' are separated by a context line, so no pairing.
+    assert len(mismatches) == 0
+
+
+def test_detect_signedness_cmplw_vs_cmpw() -> None:
+    """Register-register form: cmplw vs cmpw (no immediate)."""
+    diff_lines = [
+        "-/* 80245FBC 00242B9C  7C 04 40 40 */\tcmpw r4, r8",
+        "+/* 80245FBC 00242B9C  7C 04 78 40 */\tcmplw r4, r8",
+    ]
+    mismatches = detect_signedness_mismatches(diff_lines)
+    assert len(mismatches) == 1
+    assert mismatches[0].kind == "unsigned_vs_signed"
+    assert mismatches[0].expected_opcode == "cmpw"
+    assert mismatches[0].current_opcode == "cmplw"

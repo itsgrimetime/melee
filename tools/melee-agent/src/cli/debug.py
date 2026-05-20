@@ -38,6 +38,7 @@ from ..mwcc_debug import cache as pcdump_cache
 from ..mwcc_debug.cast_audit import (
     audit_function_casts,
     crossref_with_asm,
+    detect_signedness_mismatches,
     find_call_sites,
 )
 from ..mwcc_debug.patterns import (
@@ -2346,6 +2347,17 @@ def suggest_casts(
                  "the source code wraps in (f32) (and vice versa).",
         ),
     ] = False,
+    signedness: Annotated[
+        bool,
+        typer.Option(
+            "--signedness",
+            help="Scan the current-vs-expected ASM diff (via checkdiff) "
+                 "for compare-opcode signedness mismatches: cmplwi (unsigned) "
+                 "where expected has cmpwi (signed), or vice versa. "
+                 "Requires the TU's .o to be built (`ninja <unit>.o`). "
+                 "This is separate from the source-level cast audit.",
+        ),
+    ] = False,
     severity: Annotated[
         str,
         typer.Option(
@@ -2358,14 +2370,14 @@ def suggest_casts(
         typer.Option("--json", help="Emit warnings as JSON."),
     ] = False,
 ) -> None:
-    """Tier 7d: static lint for cast-mismatch patterns in call args.
+    """Tier 7d: static lint for cast-mismatch and signedness patterns.
 
     Surfaces explicit casts on function arguments that are likely wrong —
     especially the `(f32)` cast on integer values that the matching agent
     identified as the `drop-variadic-cast` pattern in their session
     findings.
 
-    Three-tier classification:
+    Three-tier classification for cast warnings:
       HIGH — cast on a value the function declares as integer
       MEDIUM — cast on a value that LOOKS integer but can't be proven
       LOW — every other explicit cast (for general audit)
@@ -2373,6 +2385,11 @@ def suggest_casts(
     With `--asm`, also cross-references the call site against
     build/GALE01/asm/<unit>.s to identify args loaded as integers when
     the source casts to float (and vice versa).
+
+    With `--signedness`, scans the current-vs-expected ASM diff for
+    compare-opcode mismatches: cmplwi (unsigned) where expected has cmpwi
+    (signed), or vice versa. Useful when `u8 limit` → `int limit` gives
+    a match improvement that the source-level cast audit misses.
     """
     melee_root = DEFAULT_MELEE_ROOT
     unit = _find_unit_for_function(function, melee_root)
@@ -2414,10 +2431,33 @@ def suggest_casts(
                     key = (ctx.source_site.call_target, ctx.source_site.line)
                     asm_contexts[key] = ctx
 
+    # Signedness check: diff current compiled vs expected, look for
+    # cmplwi/cmpwi (unsigned/signed) opcode disagreements.
+    sign_mismatches = []
+    if signedness:
+        try:
+            proc = subprocess.run(
+                ["python", "tools/checkdiff.py", function,
+                 "--format", "json", "--no-build"],
+                cwd=melee_root, capture_output=True, text=True, timeout=60,
+            )
+            if proc.returncode in (0, 1) and proc.stdout:
+                diff_data = json.loads(proc.stdout)
+                diff_lines = diff_data.get("diff", [])
+                if diff_lines:
+                    sign_mismatches = detect_signedness_mismatches(diff_lines)
+        except (FileNotFoundError, subprocess.TimeoutExpired,
+                json.JSONDecodeError):
+            typer.echo(
+                "signedness check: checkdiff failed or produced no output",
+                err=True,
+            )
+
     if json_out:
         data = []
         for w in warnings:
             entry = {
+                "kind": "cast",
                 "line": w.line,
                 "call_target": w.call_target,
                 "arg_index": w.arg_index,
@@ -2427,7 +2467,22 @@ def suggest_casts(
                 "reason": w.reason,
             }
             data.append(entry)
-        print(json.dumps({"function": function, "warnings": data}, indent=2))
+        sign_data = []
+        for sm in sign_mismatches:
+            sign_data.append({
+                "kind": "signedness",
+                "current_opcode": sm.current_opcode,
+                "expected_opcode": sm.expected_opcode,
+                "current_line": sm.current_line,
+                "expected_line": sm.expected_line,
+                "mismatch_kind": sm.kind,
+                "suggestion": sm.suggestion,
+            })
+        print(json.dumps({
+            "function": function,
+            "warnings": data,
+            "signedness_mismatches": sign_data,
+        }, indent=2))
         return
 
     print(f"Function: {function}")
@@ -2437,27 +2492,39 @@ def suggest_casts(
             f"No casts at severity≥{severity}. "
             f"(Re-run with --severity all to see all explicit casts.)"
         )
-        return
-    print(f"Cast warnings ({len(warnings)} at severity≥{severity}):")
-    print()
-    for w in warnings:
-        marker = {"high": "!!", "medium": "!", "low": "·"}.get(w.severity, " ")
-        print(f"  {marker} {target_path}:{w.line}  ({w.severity})")
-        print(f"     ({w.cast_type}) {w.inner_expr}  →  "
-              f"{w.call_target}(... arg{w.arg_index} ...)")
-        print(f"     {w.reason}")
-        if asm:
-            key = (w.call_target, w.line - (text[:0].count('\n')))
-            # Find any matching context by call target + line proximity
-            for (target, src_line), ctx in asm_contexts.items():
-                if target == w.call_target and ctx.asm_line_idx is not None:
-                    kinds = ctx.arg_register_kinds
-                    if kinds:
-                        kind_str = ", ".join(f"{r}={k}"
-                                             for r, k in sorted(kinds.items()))
-                        print(f"     ASM arg loads: {kind_str}")
-                    break
+    else:
+        print(f"Cast warnings ({len(warnings)} at severity≥{severity}):")
         print()
+        for w in warnings:
+            marker = {"high": "!!", "medium": "!", "low": "·"}.get(w.severity, " ")
+            print(f"  {marker} {target_path}:{w.line}  ({w.severity})")
+            print(f"     ({w.cast_type}) {w.inner_expr}  →  "
+                  f"{w.call_target}(... arg{w.arg_index} ...)")
+            print(f"     {w.reason}")
+            if asm:
+                key = (w.call_target, w.line - (text[:0].count('\n')))
+                # Find any matching context by call target + line proximity
+                for (target_name, src_line), ctx in asm_contexts.items():
+                    if target_name == w.call_target and ctx.asm_line_idx is not None:
+                        kinds = ctx.arg_register_kinds
+                        if kinds:
+                            kind_str = ", ".join(f"{r}={k}"
+                                                 for r, k in sorted(kinds.items()))
+                            print(f"     ASM arg loads: {kind_str}")
+                        break
+            print()
+
+    if sign_mismatches:
+        print(f"Signedness mismatches ({len(sign_mismatches)} compare-opcode disagreements):")
+        print()
+        for sm in sign_mismatches:
+            print(f"  !! signedness-type-mismatch")
+            print(f"     current:  {sm.current_line}")
+            print(f"     expected: {sm.expected_line}")
+            print(f"     {sm.suggestion}")
+            print()
+    elif signedness:
+        print("No signedness mismatches detected.")
 
 
 @debug_app.command(name="triage-perm")
@@ -2822,6 +2889,20 @@ def stuck(
             "reason": w.reason,
         } for w in warnings if w.severity in ("high", "medium")]
 
+    # HSD_ASSERT override detection — scan the compiled .o for anonymous
+    # .sdata symbols whose content matches known assert filename strings
+    # (jobj.h, jobj, lobj.h, etc.).  When found, the fix is to override
+    # HSD_ASSERT before the jobj.h include so the inline assert uses named
+    # extern char[] symbols instead of anonymous @N ones.
+    hsd_assert_strings: list[tuple[str, str]] = []
+    _built_o = melee_root / "build" / "GALE01" / "src" / f"{unit}.o"
+    if _built_o.exists():
+        try:
+            from ..mwcc_debug.o_rewriter import find_anonymous_assert_strings
+            hsd_assert_strings = find_anonymous_assert_strings(_built_o)
+        except Exception:
+            pass
+
     # Next steps — ranked by cost
     next_steps: list[str] = []
     if any(w["severity"] == "high" for w in cast_warnings_high_med):
@@ -2852,6 +2933,9 @@ def stuck(
     digest["coloring_summary"] = coloring_summary
     digest["guidance_issues"] = guidance_issues
     digest["cast_warnings"] = cast_warnings_high_med
+    digest["hsd_assert_strings"] = [
+        {"sym": s, "string": v} for s, v in hsd_assert_strings
+    ]
     digest["next_steps"] = next_steps
 
     if json_out:
@@ -2904,6 +2988,21 @@ def stuck(
             marker = {"high": "!!", "medium": "!"}.get(w["severity"], " ")
             print(f"  {marker} line {w['line']}: ({w['cast_type']}) "
                   f"{w['inner_expr']} → {w['call_target']}")
+        print()
+
+    if hsd_assert_strings:
+        syms_str = ", ".join(f"{s} ({v!r})" for s, v in hsd_assert_strings)
+        print(f"== HSD_ASSERT override needed ==")
+        print(f"  Anonymous .sdata assert strings detected: {syms_str}")
+        print(f"  These come from HSD_ASSERT inside jobj.h (or similar) inline")
+        print(f"  functions. The relocation names will differ from the target .o.")
+        print(f"  Fix: before the <baselib/jobj.h> include, add:")
+        print(f"    #include <baselib/debug.h>")
+        print(f"    #undef HSD_ASSERT")
+        print(f"    #define HSD_ASSERT(line, cond) \\")
+        print(f"        ((cond) ? ((void) 0) : __assert(<file_sym>, line, <fn_sym>))")
+        print(f"  where <file_sym> / <fn_sym> are named extern char[] symbols")
+        print(f"  declared in the TU (see MEMORY.md 'HSD_ASSERT macro override').")
         print()
 
     if asm_hunks > 0:
@@ -3152,6 +3251,25 @@ def ceiling(
             print(f"[2] Decl-order enumeration: SKIPPED")
             print()
 
+    # HSD_ASSERT override detection — same as in `stuck`.
+    ceiling_hsd_assert_strings: list[tuple[str, str]] = []
+    _ceiling_built_o = melee_root / "build" / "GALE01" / "src" / f"{unit}.o"
+    if _ceiling_built_o.exists():
+        try:
+            from ..mwcc_debug.o_rewriter import find_anonymous_assert_strings
+            ceiling_hsd_assert_strings = find_anonymous_assert_strings(
+                _ceiling_built_o)
+        except Exception:
+            pass
+    if ceiling_hsd_assert_strings and not json_out:
+        syms_str = ", ".join(
+            f"{s} ({v!r})" for s, v in ceiling_hsd_assert_strings)
+        print(f"[!] HSD_ASSERT override needed — anonymous .sdata assert "
+              f"strings: {syms_str}")
+        print(f"    Add #undef/#define HSD_ASSERT before <baselib/jobj.h>.")
+        print(f"    See MEMORY.md 'HSD_ASSERT macro override' for the pattern.")
+        print()
+
     # Verdict — use verified cast results (not raw heuristic count) so we
     # don't produce false-positive WIN AVAILABLE on no-op casts.
     #
@@ -3217,6 +3335,10 @@ def ceiling(
             "decl_best_label": decl_best_label,
             "decl_best_pct": decl_best_pct,
             "decl_results": decl_results,
+            "hsd_assert_strings": [
+                {"sym": s, "string": v}
+                for s, v in ceiling_hsd_assert_strings
+            ],
             "recommendations": recommendations,
         }, indent=2))
         return
@@ -4693,13 +4815,28 @@ def pcdump_local(
     )
 
     if killed_by_watchdog:
-        typer.echo(
+        hang_msg = (
             f"[pcdump-local] no compile progress for "
             f"{WATCHDOG_TIMEOUT_S:.0f}s — likely wibo hang (UE state). "
             f"Subprocess killed; check `ps aux | grep wibo` for zombie. "
-            f"Override via MWCC_DEBUG_HANG_TIMEOUT=<seconds>.",
-            err=True,
+            f"Override via MWCC_DEBUG_HANG_TIMEOUT=<seconds>."
         )
+        if force_coalesce:
+            hang_msg += (
+                f"\n[pcdump-local] --force-coalesce '{force_coalesce}' was "
+                f"active. Possible causes for the hang:\n"
+                f"  - Invalid pair: one or both virtuals are not in this "
+                f"function's IGNode set (wrong function scoped by "
+                f"--force-coalesce-fn, or index out of range).\n"
+                f"  - Interfering pair: the two virtuals have a live-range "
+                f"conflict — try `debug analyze --cg` to inspect the "
+                f"colorgraph and check for interference edges.\n"
+                f"  - DLL crash in the coalesce hook (rare): check stderr "
+                f"above for exception traces.\n"
+                f"  Next: try a different pair, or use `debug analyze --cg` "
+                f"to find a non-interfering candidate."
+            )
+        typer.echo(hang_msg, err=True)
 
     if proc.returncode != 0:
         # Compile failed — surface stderr but keep going if pcdump.txt

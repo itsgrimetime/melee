@@ -236,6 +236,88 @@ def suggest_name_magic_map(
     return (anons, suggested)
 
 
+# Known assert-filename byte strings found in .sdata (NOT .sdata2).
+# These come from HSD_ASSERT / __assert calls where jobj.h (and similar)
+# inline functions emit the __FILE__ string into .sdata.  When MWCC names
+# these @N (anonymous), checkdiff reports a relocation-name mismatch.
+_KNOWN_ASSERT_STRINGS: frozenset[str] = frozenset([
+    "jobj.h", "jobj",
+    "lobj.h", "lobj",
+    "dobj.h", "dobj",
+    "aobj.h", "aobj",
+    "cobj.h", "cobj",
+    "mobj.h", "mobj",
+])
+
+
+def find_anonymous_assert_strings(
+    o_path: Path,
+) -> list[tuple[str, str]]:
+    """Scan the .sdata section of `o_path` for anonymous @N symbols whose
+    content is a known HSD_ASSERT filename or condition string.
+
+    Returns a list of (symbol_name, decoded_string) pairs — e.g.
+    [("@12", "jobj.h"), ("@13", "jobj")].
+
+    Empty list if no .sdata section exists, pyelftools is unavailable, or no
+    anonymous assert strings are found.
+
+    This is used by `stuck` / `ceiling` to detect the "HSD_ASSERT override"
+    pattern: when jobj.h inline functions emit anonymous @N strings, the fix
+    is to `#undef`/`#define HSD_ASSERT` before the `<baselib/jobj.h>` include
+    and route the assert through named extern char[] symbols.
+    """
+    try:
+        from elftools.elf.elffile import ELFFile
+    except ImportError:
+        return []
+
+    out: list[tuple[str, str]] = []
+    try:
+        with o_path.open("rb") as f:
+            elf = ELFFile(f)
+            sdata = elf.get_section_by_name(".sdata")
+            if sdata is None:
+                return []
+            sdata_idx = elf.get_section_index(".sdata")
+            data = sdata.data()
+            symtab = elf.get_section_by_name(".symtab")
+            if symtab is None:
+                return []
+            for sym in symtab.iter_symbols():
+                if sym["st_shndx"] != sdata_idx:
+                    continue
+                name = sym.name
+                if not name or not name.startswith("@"):
+                    continue
+                size = sym["st_size"]
+                # Assert strings are short (5-12 bytes) and NUL-terminated.
+                if not (4 <= size <= 16):
+                    continue
+                offset = sym["st_value"]
+                if offset + size > len(data):
+                    continue
+                raw = data[offset:offset + size]
+                # Must be printable ASCII followed by a NUL byte.
+                if raw[-1] != 0:
+                    continue
+                try:
+                    decoded = raw[:-1].decode("ascii")
+                except (UnicodeDecodeError, ValueError):
+                    continue
+                if not all(0x20 <= b < 0x7F for b in raw[:-1]):
+                    continue
+                # Match against known set OR any short printable string that
+                # looks like an assert filename (contains '.' or is all alpha).
+                if (decoded in _KNOWN_ASSERT_STRINGS
+                        or (len(decoded) <= 12
+                            and decoded.replace(".", "").replace("_", "").isalpha())):
+                    out.append((name, decoded))
+    except Exception:
+        pass
+    return out
+
+
 @dataclass
 class Mapping:
     """A parsed mapping: either by-value (matches data content) or by-name

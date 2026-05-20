@@ -418,6 +418,149 @@ def audit_function_casts(
 
 
 # ----------------------------------------------------------------------------
+# Signedness mismatch detection (compare-opcode disagreement)
+# ----------------------------------------------------------------------------
+
+# Signed compare opcodes (cmpw / cmpwi / cmp / cmpi).
+_SIGNED_CMP_RE = re.compile(
+    r"\b(cmpwi?|cmpi)\b"
+)
+# Unsigned compare opcodes (cmplw / cmplwi / cmpl / cmpli).
+_UNSIGNED_CMP_RE = re.compile(
+    r"\b(cmplwi?|cmpli)\b"
+)
+
+# Extract just the opcode from a diff line (stripping leading +/- and the
+# dtk comment block "/* addr off  bytes */").
+_DIFF_INSTR_RE = re.compile(
+    r"^[+\- ]\s*(?:/\*[^*]*\*/\s*)?\s*(\S+)\s*(.*?)$"
+)
+
+
+@dataclass
+class SignednessMismatch:
+    """A compare instruction where current uses signed/unsigned but expected
+    uses the opposite."""
+
+    current_opcode: str   # what the compiler emitted
+    expected_opcode: str  # what the expected ASM has
+    current_line: str     # raw current-side diff line (stripped of leading +/-)
+    expected_line: str    # raw expected-side diff line (stripped of leading -)
+    kind: str             # "unsigned_vs_signed" or "signed_vs_unsigned"
+
+    @property
+    def suggestion(self) -> str:
+        if self.kind == "unsigned_vs_signed":
+            return (
+                f"Current emits `{self.current_opcode}` (unsigned compare) "
+                f"but expected has `{self.expected_opcode}` (signed compare). "
+                f"The variable being compared is declared unsigned but expected "
+                f"behaviour is signed. "
+                f"Try changing its type from u8/u16/u32/unsigned → s8/s16/s32/int."
+            )
+        else:
+            return (
+                f"Current emits `{self.current_opcode}` (signed compare) "
+                f"but expected has `{self.expected_opcode}` (unsigned compare). "
+                f"The variable being compared is declared signed but expected "
+                f"behaviour is unsigned. "
+                f"Try changing its type from s8/s16/s32/int → u8/u16/u32/unsigned."
+            )
+
+
+def _strip_diff_prefix(line: str) -> str:
+    """Remove the leading '+'/'-'/' ' from a unified-diff line."""
+    if line and line[0] in "+-  ":
+        return line[1:]
+    return line
+
+
+def _extract_opcode(diff_line: str) -> Optional[str]:
+    """Extract the opcode from a diff line (with or without dtk comment)."""
+    stripped = _strip_diff_prefix(diff_line)
+    m = _DIFF_INSTR_RE.match("+" + stripped)
+    if m:
+        return m.group(1)
+    return None
+
+
+def detect_signedness_mismatches(
+    diff_lines: list[str],
+) -> list[SignednessMismatch]:
+    """Scan a unified diff (as lines) for compare-opcode signedness mismatches.
+
+    The diff format expected is unified diff where:
+      - Lines starting with '-' are the expected (target) side.
+      - Lines starting with '+' are the current (compiled) side.
+
+    Each consecutive (-) / (+) pair at the same logical position is checked:
+    if one has a signed compare opcode and the other has the corresponding
+    unsigned opcode (with the same register operands), a SignednessMismatch
+    is returned.
+
+    Strategy: collect pending '-' lines and pair them positionally with the
+    following '+' lines within the same hunk. Only pairs where BOTH sides are
+    compare instructions and the signedness disagrees are reported.
+    """
+    mismatches: list[SignednessMismatch] = []
+    pending_minus: list[str] = []
+
+    for line in diff_lines:
+        if line.startswith("-"):
+            pending_minus.append(line)
+        elif line.startswith("+"):
+            if pending_minus:
+                minus_line = pending_minus.pop(0)
+                _check_cmp_pair(minus_line, line, mismatches)
+            # else: unmatched '+' line — ignore
+        else:
+            # Context line or @@ header — flush pending
+            pending_minus.clear()
+
+    return mismatches
+
+
+def _check_cmp_pair(
+    minus_line: str,
+    plus_line: str,
+    out: list[SignednessMismatch],
+) -> None:
+    """Check one (-) / (+) diff pair for signedness mismatch."""
+    exp_opcode = _extract_opcode(minus_line)
+    cur_opcode = _extract_opcode(plus_line)
+    if not exp_opcode or not cur_opcode:
+        return
+    exp_signed = bool(_SIGNED_CMP_RE.match(exp_opcode))
+    exp_unsigned = bool(_UNSIGNED_CMP_RE.match(exp_opcode))
+    cur_signed = bool(_SIGNED_CMP_RE.match(cur_opcode))
+    cur_unsigned = bool(_UNSIGNED_CMP_RE.match(cur_opcode))
+
+    # Only flag if both sides are compare instructions and they disagree on
+    # signedness.
+    if not (exp_signed or exp_unsigned):
+        return
+    if not (cur_signed or cur_unsigned):
+        return
+
+    if cur_unsigned and exp_signed:
+        out.append(SignednessMismatch(
+            current_opcode=cur_opcode,
+            expected_opcode=exp_opcode,
+            current_line=_strip_diff_prefix(plus_line).strip(),
+            expected_line=_strip_diff_prefix(minus_line).strip(),
+            kind="unsigned_vs_signed",
+        ))
+    elif cur_signed and exp_unsigned:
+        out.append(SignednessMismatch(
+            current_opcode=cur_opcode,
+            expected_opcode=exp_opcode,
+            current_line=_strip_diff_prefix(plus_line).strip(),
+            expected_line=_strip_diff_prefix(minus_line).strip(),
+            kind="signed_vs_unsigned",
+        ))
+
+
+# ----------------------------------------------------------------------------
 # Optional ASM cross-ref
 # ----------------------------------------------------------------------------
 
