@@ -263,8 +263,26 @@ an objcopy-rename build step or an MWCC fix.
 | Function | Start | End | Delta | Wins | Reverts |
 |---|---|---|---|---|---|
 | mnDiagram3_80245BA4 | 92.19% | 97.42% | +5.23% | 16+ permuter wins | many cruft cleanups |
-| fn_802461BC | 96.31% | 96.48% | +0.17% | 1 manual + 1 permuter | many |
+| fn_802461BC | 96.31% | 96.74% | +0.43% | 1 manual + 2 permuter | many |
 | mnDiagram3_8024714C | 97.96% | 98.61% | +0.65% | 4 permuter wins | many |
+
+After ~10 hours, all three functions appear to be at their permuter
+ceilings — search spaces well-explored, no real-match wins above the
++0.05% threshold from any further runs. The remaining gap to 100% for
+each is dominated by:
+- Anonymous magic constants (2 of them in each function) that require
+  post-process .o renaming, not natural source.
+- Register cascade where MWCC's ig_idx ordering puts the function
+  parameter at the bottom of the chain instead of the top, leaving
+  the wrong physical register selected.
+
+The Tier 5/6 toolset (force-phys, force-coalesce) can confirm what
+register assignments are *reachable*, but the C-source pattern to
+produce them naturally is sometimes unknowable without compiler
+modifications.
+
+5/8 functions in this TU matched at 100%; the remaining 3 are stuck
+at their structural ceilings.
 
 Patterns that worked well:
 - **Re-import baseline after each commit**: keeps permuter searching
