@@ -1004,7 +1004,6 @@ void mnDiagram3_8024714C(void *arg0)
     row_spacing = row1->translate.y - row0->translate.y;
     lb_8000B1CC(data->jobjs[8], (Vec3*) &mnDiagram3_803EEC28, &sp48);
     {
-        u16 *base = (u16*) &mnDiagram3_803EEC4C;
         u8 scroll = data->scroll_offset;
         f32 neg_spacing = -row_spacing;
         f32 font_size = mnDiagram3_804DBFFC;
@@ -1027,7 +1026,8 @@ void mnDiagram3_8024714C(void *arg0)
             if (val >= limit) {
                 val -= limit;
             }
-            HSD_SisLib_803A6368(text, base[(u8) val]);
+            HSD_SisLib_803A6368(text,
+                                ((u16*) &mnDiagram3_803EEC4C)[(u8) val]);
         }
     }
 
