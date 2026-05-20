@@ -440,9 +440,8 @@ void fn_802461BC(HSD_GObj* gobj)
             ((row1)
                  ? ((void) 0)
                  : __assert(mnDiagram3_804D4FD8, 0x3EE, mnDiagram3_804D4FE0));
-            row0 = d->jobjs[8];
             row_spacing = row1->translate.y - row_spacing;
-            ((row0)
+            ((d->jobjs[8])
                  ? ((void) 0)
                  : __assert(mnDiagram3_804D4FD8, 0x3E1, mnDiagram3_804D4FE0));
             tx = row0->translate.x;
