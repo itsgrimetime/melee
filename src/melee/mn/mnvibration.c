@@ -127,6 +127,12 @@ typedef struct MnVibrationData {
     /* 0x94 */ HSD_GObj* cursor_gobj;
 } MnVibrationData;
 
+typedef struct MnVibrationInputScratch {
+    /* 0x00 */ u8 name_order[0x78];
+    /* 0x78 */ HSD_JObj* panel_jobj1;
+    /* 0x7C */ HSD_JObj* panel_jobj0;
+} MnVibrationInputScratch;
+
 MnVibrationJointAssets mnVibration_804A0868;
 MnVibrationJointAssets mnVibration_804A0878;
 MnVibrationJointAssets mnVibration_804A0888;
@@ -347,9 +353,7 @@ void fn_80247510(HSD_GObj* gobj)
         if (data->x0[i + 2] == 0) {
             inputs = gm_801A36A0(i);
             if (inputs & (1LL << 32)) {
-                HSD_JObj* panel_jobj0;
-                HSD_JObj* panel_jobj1;
-                PAD_STACK(120);
+                MnVibrationInputScratch scratch;
                 lbAudioAx_80024030(1);
                 if (GetRumbleSettingOfPort(i) != 0) {
                     gmMainLib_8015ED4C(i, 0);
@@ -359,9 +363,9 @@ void fn_80247510(HSD_GObj* gobj)
                                          mnVibration_804D6C28->user_data)
                                         ->jobjs[23],
                                     i),
-                                &panel_jobj0, 2, -1);
-                    HSD_JObjReqAnimAll(panel_jobj0, rumble_setting);
-                    HSD_JObjAnimAll(panel_jobj0);
+                                &scratch.panel_jobj0, 2, -1);
+                    HSD_JObjReqAnimAll(scratch.panel_jobj0, rumble_setting);
+                    HSD_JObjAnimAll(scratch.panel_jobj0);
                     HSD_PadRumbleRemoveAll();
                     HSD_PadRumbleOffN(i);
                     return;
@@ -373,9 +377,9 @@ void fn_80247510(HSD_GObj* gobj)
                                          mnVibration_804D6C28->user_data)
                                         ->jobjs[23],
                                     i),
-                                &panel_jobj1, 2, -1);
-                    HSD_JObjReqAnimAll(panel_jobj1, rumble_setting);
-                    HSD_JObjAnimAll(panel_jobj1);
+                                &scratch.panel_jobj1, 2, -1);
+                    HSD_JObjReqAnimAll(scratch.panel_jobj1, rumble_setting);
+                    HSD_JObjAnimAll(scratch.panel_jobj1);
                     HSD_PadRumbleAdd(i, 0, 14, 0, &mnVibration_804D4FF0);
                     return;
                 }
