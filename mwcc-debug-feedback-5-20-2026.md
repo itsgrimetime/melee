@@ -548,3 +548,42 @@ Context: working on `src/melee/mn/mnvibration.c`, mainly `fn_80247510` and
   `HSD_JObjSetTranslate*` expansion. The tooling ask is narrower: given a
   disputed call site or pcode block, suggest and verify source patterns that
   create only the missing argument temp/lifetime split.
+
+## Follow-up after merging `94da38422`
+
+- `debug suggest-inlines -f fn_80247510 --seed-source coalesce` and
+  `--seed-source guide` both returned zero candidates even though the pcdump has
+  a concrete source-shape lead: virtual `r50` is loaded once from
+  `data->cursor_gobj->hsd_obj` and then used directly through the inlined
+  `HSD_JObjSetTranslate*`/`HSD_JObjSetMtxDirtySub` paths, while target ASM has
+  short-lived copies before the dirty-sub calls. A useful seed here would come
+  from "single pointer feeds repeated inlined setter/dirty paths" or from the
+  target/current opcode diff, not only from already-discovered coalesces.
+
+- `debug suggest-inlines -f fn_80247510 --seed-source patterns --verify` found
+  only neutral one-line return-helper candidates. The command is working, but it
+  would be higher-signal if it could prioritize candidates near mismatching
+  hunks, pcdump blocks, a requested source variable, or a requested virtual
+  register. In this function the relevant area is the cursor setter block, not
+  the simple helper calls that already compile to the same code.
+
+- `debug mutate insert-alias -f fn_80247510 --var jobj --at 0 --name
+  jobj_alias` hung before producing preview output. A timeout, progress logging,
+  or a cheap preview mode that does not run heavy validation would make this
+  command safer to use during source-shape probing.
+
+- `debug enumerate-decl-orders --json` can still print non-JSON status text
+  when there are no candidate orderings for a nested scope. That breaks simple
+  JSON consumers. It should return a valid JSON object with an empty result set
+  and a diagnostic message.
+
+- A nested `enumerate-decl-orders --strategy full` run for
+  `fn_80247510/block@l440c40/block@l442c29/block@l448c12` returned a candidate
+  with `match_pct: null` but no clear compile/checkdiff diagnostic. Please
+  include the failing command, compiler/checkdiff error, or temporary source path
+  when verification cannot produce a score.
+
+- `suggest-inlines --json` includes full `patched_source` payloads for each
+  candidate by default. On large TUs this makes the output enormous and hard to
+  inspect. A summary-only default, plus an explicit `--emit-patches` or
+  `--write-patches` option, would fit the debugging loop better.
