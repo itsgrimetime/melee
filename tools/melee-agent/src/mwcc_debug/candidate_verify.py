@@ -6,7 +6,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
-from .source_shape import CandidatePatch, CandidateScore, rank_scores
+from .source_shape import (
+    CandidateCopyTrace,
+    CandidatePatch,
+    CandidateScore,
+    rank_scores,
+)
 
 
 @dataclass(frozen=True)
@@ -23,6 +28,7 @@ class CheckdiffResult:
 
 
 CheckdiffRunner = Callable[[CandidatePatch, Path], CheckdiffResult]
+CopyTraceRunner = Callable[[CandidatePatch], list[CandidateCopyTrace]]
 
 
 def stage_patch(stage_root: Path, function: str, patch: CandidatePatch) -> StagedCandidate:
@@ -97,6 +103,7 @@ def verify_real_tree_patches(
     threshold: float,
     diagnostics_root: Optional[Path] = None,
     baseline_result: Optional[CheckdiffResult] = None,
+    copy_trace_runner: Optional[CopyTraceRunner] = None,
 ) -> list[CandidateScore]:
     original = source_path.read_text()
     scores: list[CandidateScore] = []
@@ -122,6 +129,18 @@ def verify_real_tree_patches(
                 if score_delta >= best_delta:
                     best_delta = score_delta
                     best_patch = patch
+                copy_traces: tuple[CandidateCopyTrace, ...] = ()
+                if copy_trace_runner is not None:
+                    try:
+                        copy_traces = tuple(copy_trace_runner(patch))
+                    except Exception as exc:
+                        copy_traces = (CandidateCopyTrace(
+                            from_virtual=None,
+                            to_virtual=None,
+                            status="trace-error",
+                            likely_cause="trace-error",
+                            note=f"{type(exc).__name__}: {exc}",
+                        ),)
                 scores.append(CandidateScore(
                     candidate_id=patch.candidate_id,
                     compile_ok=True,
@@ -132,6 +151,7 @@ def verify_real_tree_patches(
                     checkdiff_baseline_pct=baseline_pct,
                     candidate_size=len(patch.patched_source.splitlines()),
                     helper_param_count=0,
+                    copy_traces=copy_traces,
                 ))
             except Exception as exc:
                 log_path = None

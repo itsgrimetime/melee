@@ -434,6 +434,32 @@ def test_render_json_can_emit_full_patched_source() -> None:
     assert "patched_source" in payload["patches"][0]
 
 
+def test_render_json_can_emit_patch_hunks_without_full_source() -> None:
+    source = textwrap.dedent("""\
+        void f(HSD_JObj* cursor_jobj)
+        {
+            HSD_JObjSetMtxDirtySub(cursor_jobj);
+        }
+    """)
+    report = run(
+        source=source,
+        function="f",
+        pcdump_text="",
+        seed_source="patterns",
+        budget=8,
+        max_span_statements=2,
+        verify=False,
+    )
+
+    payload = json.loads(render_json(report, emit_hunks=True))
+
+    patch = payload["patches"][0]
+    assert "hunk" in patch
+    assert "@@" in patch["hunk"]
+    assert "+    HSD_JObj* cursor_jobj_arg_temp;" in patch["hunk"]
+    assert "patched_source" not in patch
+
+
 def test_generate_return_helper_candidate_for_single_assignment() -> None:
     source = textwrap.dedent("""\
         void f(HSD_JObj* jobj)
@@ -505,7 +531,10 @@ def test_render_json_includes_scores() -> None:
 
 
 def test_render_text_scores_include_baseline_candidate_and_delta() -> None:
+    from src.mwcc_debug import source_shape
     from src.mwcc_debug.source_shape import CandidateScore, SourceShapeReport
+
+    assert hasattr(source_shape, "CandidateCopyTrace")
 
     report = SourceShapeReport(
         function="f",
@@ -520,6 +549,18 @@ def test_render_text_scores_include_baseline_candidate_and_delta() -> None:
                 pcdump_score_delta=None,
                 diagnostics_path=None,
                 checkdiff_baseline_pct=97.25,
+                copy_traces=(
+                    source_shape.CandidateCopyTrace(
+                        from_virtual=50,
+                        to_virtual=110,
+                        status="copy-found",
+                        likely_cause="removed-before-coloring",
+                        first_copy_pass="BEFORE GLOBAL OPTIMIZATION",
+                        last_copy_pass="AFTER PEEPHOLE FORWARD",
+                        first_absent_pass="BEFORE REGISTER COLORING",
+                        transform_category="copy-propagation-or-dead-copy",
+                    ),
+                ),
             )
         ],
     )
@@ -529,3 +570,6 @@ def test_render_text_scores_include_baseline_candidate_and_delta() -> None:
     assert "baseline=97.250" in out
     assert "candidate=97.250" in out
     assert "delta=+0.000" in out
+    assert "copy r110<-r50" in out
+    assert "removed-before-coloring" in out
+    assert "first_absent=BEFORE REGISTER COLORING" in out
