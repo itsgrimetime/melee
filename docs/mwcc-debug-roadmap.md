@@ -1,252 +1,268 @@
-# mwcc-debug roadmap — 2026-05-20
+# mwcc-debug roadmap — 2026-05-21
 
-Single-page consolidation of "what's next" for the mwcc-debug toolset.
-Replaces the scattered references in feedback docs, validation
-studies, and `mwcc-debug-future-ideas.md`.
+Consolidated "what's next" for the mwcc-debug toolset after the
+2026-05-20 feedback passes on `wip/mn-heartbeat` and
+`decomp/mndiagram3`.
 
-Items grouped by priority + dependency. Within each group, ordered
-roughly by impact.
-
----
-
-## Recently shipped (the floor)
-
-For context — these landed between 2026-05-18 and 2026-05-20 and
-established the current capability.
-
-- Tree-sitter-based **nested-block-local awareness Phase 1** (this
-  doc's spec: `2026-05-20-nested-block-local-awareness-design.md`).
-  Bridge sees nested decls; `var-to-virtual`/`virtual-to-var` emit
-  scope paths; nested bindings ship as `ambiguous-nested` confidence
-  (22% accuracy on empirical study — see validation doc).
-- **`debug suggest-coalesce-source`** — pair + discover modes, 5
-  pattern checkers, calibration corpus (multi-holder cascade
-  enumeration in `analyze_cascade`).
-- **`verify-perm` 3-way merge + placeholder leak guard** —
-  `inline_fn`/`noinline_fn`/etc. permuter-internals are detected
-  before they corrupt real source.
-- **`verify-with-name-magic`** — by-value mapping +
-  `--apply-auto` + `--globalize` default-on.
-- **`ceiling` auto-verify** — HIGH-severity cast suggestions get
-  drop+compile+revert verification before reporting `WIN AVAILABLE`.
-- **`pcdump-local`** improvements: function-scoped `--diff`,
-  content-hash freshness check, force-flag-aware cache skip,
-  `--keep-obj` missing-file warning, hang diagnostic for
-  `--force-coalesce`.
-- **`tier3-search` v2** — per-seed permuter wiring,
-  `--per-seed-time`, `--total-time`, `--threshold`, `--apply-best`.
-- **`checkdiff`** — JSON exit normalization, `--normalize-reloc`
-  default-on for SDA21 `+2` offset folding.
-- **CLI ergonomics** — `name-magic` `--globalize`,
-  `suggest-casts --signedness`, `match-iter-first --auto-verify`,
-  `suggest-coalesce-source` preflight, mwcc-debug skill text
-  refresh.
+Phase 2 is now organized around the larger matching unlock:
+**Source-Shape Suggestions v1**, centered on `debug suggest-inlines`.
+Nested-block-local follow-through remains required, but it is treated as
+supporting infrastructure for source-shape generation rather than the
+headline.
 
 ---
 
-## Next up: Phase 2 of nested-block-local awareness
+## Recently shipped baseline
 
-Phase 1 surfaced nested decls in the bridge. Phase 2 lets the
-mutator + decl-order enumerator act on them.
+For context, these landed between 2026-05-18 and 2026-05-20 and define
+the current floor.
 
-### P2.1: `mutate insert-alias` scope-aware insertion (HIGH)
-- Currently: alias decl always goes at function-top; alias
-  assignment at the original insertion point. C89 split logic
-  added in Round 7 for cases where the local is first-assigned
-  later.
-- Phase 2: place alias decl at the **nearest enclosing block**
-  identified by the target use's `scope_path`. Alias assignment
-  stays at the use site. Lets mutators target nested-block
-  locals without inflating the outer scope.
-- Depends on: Phase 1's `LocalDecl.scope_byte_range` (already
-  populated).
-
-### P2.2: `enumerate-decl-orders` scope-aware (MEDIUM)
-- Currently: enumerates permutations of top-level locals only.
-- Phase 2: walk `BindingBasis.decls_by_scope`; enumerate swaps
-  **within-scope only** (cross-scope swap would change
-  semantics — illegal). Surfaces the cursor-row/jobjs[17]-block
-  swap candidates the heartbeat agent's been blocked on for
-  fn_80248A78.
-- Depends on: P2.1 indirectly (decl reorder mechanics align with
-  alias placement).
-
-### P2.3: tier3-search seeding from compiler-temp facts (MEDIUM)
-- Currently: tier3 only seeds from bridge-bound variables. With
-  Phase 1 the bridge sees more, but compiler temps (no source
-  binding at all) still aren't seedable.
-- Phase 2: feed `suggest-coalesce-source --discover` pairs and
-  `guide` compiler-temp diagnostics into tier3's seed planner.
-  Targets the "found a useful pair but can't generate a seed"
-  gap heartbeat flagged on fn_80248A78 (`46=50`).
-
-### P2.4: Per-scope ordinal heuristic v2 (LOW, needs research)
-- Empirical study (`docs/mwcc-debug-nested-block-validation-...md`)
-  showed the v1 heuristic holds 22% of the time on nested decls.
-- Phase 2 may investigate: lifetime-based scope correlation
-  (virtual whose first-def block is reachable only from a
-  scope-entry block belongs to that scope), or a hybrid that
-  consults `extra-virtuals` red flag and per-scope use-site
-  density. Until then `ambiguous-nested` is the honest label.
-- Could also be punted to Phase 3 — Phase 2 work above doesn't
-  block on this.
+- Tree-sitter-based **nested-block-local awareness Phase 1**.
+  Bridge output carries `scope_path`; `var-to-virtual` and
+  `virtual-to-var` expose scope paths; nested bindings remain
+  `ambiguous-nested` after the validation study found only 22%
+  correctness for the per-scope ordinal heuristic.
+- **`debug suggest-coalesce-source`** with pair/discover modes, pattern
+  checkers, discover-mode preflight, and use-site context for compiler
+  temps.
+- **`verify-perm` protections** including 3-way merge, placeholder leak
+  guard, cleaner build-failure diagnostics, and failed-source preserve
+  support.
+- **`verify-with-name-magic` / checkdiff name-magic integration** with
+  by-value mapping, direct anonymous-symbol mapping, globalize support,
+  and transparent checkdiff normalization by default.
+- **`pcdump-local` reliability improvements**: function-scoped diff,
+  content-hash freshness checks, forced-cache skip, keep-obj warnings,
+  and local hang diagnostics.
+- **Allocator forcing/scoring**: force-phys, force-phys-iter,
+  force-coalesce, derive-target, score-source, guide, and
+  match-iter-first auto-verification.
+- **`tier3-search` v2**: seed generation, smoke compile, per-seed
+  permuter wiring, budget/time controls, and `--apply-best`.
+- **`checkdiff`**: JSON exit normalization and SDA21 relocation
+  normalizer default-on.
+- **CLI/docs refresh** for local mode, force scoping, name-magic,
+  coalesce suggestions, bridge lookups, mutate, and tier3 workflows.
 
 ---
 
-## Larger features (own spec each)
+## Phase 2: Source-Shape Suggestions v1
 
-### `debug suggest-inlines` / extract-subroutine seed mode (HIGH)
-- Source: heartbeat feedback, "Inline/extract-subroutine tooling
-  gap" section.
-- Enumerate repeated/helper-shaped statement groups; generate
-  `static inline` candidates; transfer each into the TU; rank by
-  `checkdiff` + pcdump score.
-- Depends on Phase 2 nested-block awareness for placement (inline
-  candidate insertion needs scope-aware decl placement).
-- Seed sources: `patterns inlines`, `suggest-coalesce-source
-  --discover`, `guide` compiler-temp facts, repeated pcdump
-  load/store blocks, known inlined callees.
-- Heartbeat agent ranks this as the next big matching unlock
-  after nested-block awareness lands.
+Spec:
+`docs/superpowers/specs/2026-05-21-source-shape-suggestions-design.md`
 
-### `suggest-casts --signedness` multi-hop refinement (LOW-MEDIUM)
-- Round 6 added `--signedness` detection (`cmplwi` vs `cmpwi`).
-- mndiagram3 agent reported the real win was a **two-hop**
-  change: `u8 limit → unsigned int limit → int limit` for
-  +0.26%+0.13%. The widen-u8-to-u32 pattern catches hop 1; the
-  new signedness check catches hop 2. Need to verify the
-  heuristic fires on the real diff (we haven't tested on the
-  mndiagram3 case yet) and surface multi-hop sequences as a
-  combined recommendation.
+Implementation plan:
+`docs/superpowers/plans/2026-05-21-source-shape-suggestions.md`
 
-### Relocation `+2` SDA21 normalizer — extension (LOW)
-- Round 4 shipped `checkdiff --normalize-reloc`. Default-on.
-- Open: agent reports some functions still have leftover
-  relocation-only mismatches after the normalizer. Investigate
-  whether more reloc shapes need folding (R_PPC_ADDR16_HA/LO
-  pairs, etc.).
+### Goal
 
----
+The current tools can prove allocator targets and explain many
+register-cascade hypotheses. The recurring blocker is finding natural C
+source that produces the desired shape. Phase 2 adds a tool that
+generates and verifies small hidden-inline/extract-helper/source-shape
+candidates.
 
-## Medium correctness / UX gaps
+Primary command:
 
-These were flagged in feedback but deferred during the 8 rounds of
-fanout fixes — small enough that a dedicated spec is overkill, but
-big enough to need design thought.
+```bash
+melee-agent debug suggest-inlines -f <fn>
+melee-agent debug suggest-inlines -f <fn> --verify
+melee-agent debug suggest-inlines -f <fn> --target target.json --verify
+```
 
-### Permuter `inline_fn` upstream patch (LOW)
-- Round 8 shipped `verify-perm`'s placeholder-leak guard. The
-  underlying bug is in decomp-permuter's randomizer
-  (`get_noncolliding_name(ast, "inline_fn")` in
-  `decomp-permuter/src/randomizer.py:2344`).
-- Upstream patch to make the randomizer always resolve placeholders
-  before persisting candidate `source.c` would be cleaner than
-  catching the leak downstream. Defer until upstream contact.
+### P2.1: Scope-aware source editing infrastructure (HIGH)
 
-### Pre-match calibration case for suggest-coalesce-source (LOW)
-- Currently calibration corpus has 2 cases; the discover-mode case
-  uses a **post-match** fixture that yields 0 candidates, so the
-  test only checks `cascade.length >= 6` (weak regression signal).
-- Flagged as a session-spawn chip earlier in this session.
-- Capture a pre-match snapshot of an mn-module function (e.g.
-  pre-`s32 j` reorder of mnVibration_80248644), add as case 3 with
-  concrete `expected_top_priority_class` + `expected_top_pair`.
+- `mutate insert-alias` places alias declarations at the nearest
+  enclosing block for the selected use, not always at function top.
+- Alias assignment stays near the selected use and must occur after the
+  original local's first real definition.
+- `enumerate-decl-orders` walks `BindingBasis.decls_by_scope` and
+  enumerates reorders within a single scope only.
+- Cross-scope declaration swaps are rejected because they can change C
+  semantics.
+- CLI output includes scope paths; `--scope` restricts to one scope.
 
-### `--force-phys` class-scoped form regression (LOW)
-- Round 7 shipped `gpr:N:phys` parsing; Round 8 added a warning
-  when the form is used because the DLL strips the prefix
-  unconditionally and applies the override to all classes.
-- Real fix needs DLL change: pass class through to the override,
-  filter by class inside the hook. Out-of-scope for current
-  workflow tooling work. Track on the `mwcc-debug-future-ideas`
-  side.
+Why first: `suggest-inlines` must operate inside nested cursor/rumble
+blocks without illegal C89 placement or accidental scope hoisting.
 
-### Ninja post-compile name-magic step (LOW)
-- Round 2's name-magic `--apply-auto` is a CLI helper.
-- Spawned task chip earlier this session: wire into ninja so
-  every `.o` post-compile gets auto-renamed without manual
-  invocation. Wider workflow change — keep deferred until name
-  needs aren't satisfied by manual `--apply-auto` invocations.
+### P2.2: Source span and candidate model (HIGH)
 
----
+- Add shared `SourceAnchor`, `InlineCandidate`, `CandidatePatch`, and
+  `CandidateScore` dataclasses.
+- Add tree-sitter-backed statement/block span discovery that preserves
+  scope paths, byte ranges, and line ranges.
+- Reject spans with `goto`, labels, `case/default`, cross-scope ranges,
+  macro parse interruptions, ambiguous outputs, or unknown parameter
+  types.
 
-## Small wins / docs cleanup
+### P2.3: `debug suggest-inlines` candidate generation (HIGH)
 
-### `virtual-to-var --basis` symmetry (TRIVIAL)
-- `var-to-virtual` has `--basis`; `virtual-to-var` doesn't.
-- Either add `--basis` to `virtual-to-var` for symmetry or
-  document the asymmetry in skill text.
-- Round 1 of docs fixes confirmed the skill currently doesn't
-  claim `virtual-to-var --basis` exists, so this is a real
-  feature-add not a doc-fix.
+Seed sources:
 
-### `debug root-identity` skill reference cleanup (TRIVIAL)
-- Skill mentions `root-identity` but no such command exists.
-- Either ship the command (low priority — agent hasn't said
-  it's blocking) or remove the reference. The latter is what
-  Round 1 confirmed; the reference is already absent from the
-  in-repo skill but may still be referenced in handoff docs.
+- repeated/helper-shaped statement groups in the same function;
+- `guide` compiler-temp facts and wrong-virtual diagnostics;
+- `suggest-coalesce-source --discover` pairs, especially compiler-temp
+  pairs with no bridge binding;
+- known pattern-catalog shapes such as cursor-position blocks,
+  `GetNameSlot` sentinel paths, repeated `data->jobjs[...]` accessors,
+  and short-lived call-argument temps.
 
-### `enumerate-decl-orders --include-low-confidence` parity (TRIVIAL)
-- Round 7 added `ambiguous-nested` to `tier3-search`'s opt-in
-  set. `enumerate-decl-orders` doesn't have the same opt-in;
-  it only enumerates `kind=="local"` bindings regardless of
-  confidence. Verify whether nested-block locals are reaching
-  it now that Phase 1 surfaces them.
+Candidate forms:
+
+- extract a contiguous statement group to a file-scope `static inline
+  void` helper;
+- extract a single-value expression/helper;
+- introduce a short-lived temp for one call argument without changing the
+  whole surrounding inline expansion.
+
+### P2.4: Candidate verification and ranking (HIGH)
+
+- Stage candidates under
+  `nonmatchings/<fn>/source_shape_candidate_<idx>/`.
+- Smoke-compile with the original TU include directory.
+- Temporarily apply candidate source to the real tree for `checkdiff`
+  scoring, then restore unless `--apply-best` succeeds.
+- If a target spec is supplied, also run pcdump/score-source so allocator
+  improvements that do not immediately improve match percent are still
+  visible.
+- Rank by compile success, checkdiff delta, pcdump score delta, candidate
+  size, helper parameter count, and stable candidate id.
+
+### P2.5: Compiler-temp seeding for Tier 3 (MEDIUM)
+
+- Feed `SourceAnchor` records from `guide` and
+  `suggest-coalesce-source --discover` into `tier3-search`.
+- Generate seeds only when compiler-temp facts can be tied to a source
+  span, field access, or call argument.
+- Report unanchored compiler temps with first-def/use-site evidence
+  instead of silently producing no targets.
+
+### P2.6: Documentation and calibration (MEDIUM)
+
+- Add non-applying smoke examples for `fn_80247510`, `fn_80248A78`, and
+  one `mndiagram3.c` function.
+- Keep a small rejected-candidate corpus so unsupported source shapes
+  fail with useful reasons.
+- Update the `mwcc-debug` skill once the CLI exists.
 
 ---
 
-## Punted (with reasoning)
+## Backlog from feedback docs
 
-### C semantic analyzer (PUNTED)
-- Spec § "Out of scope" — Phase 1 stays lexical. Resolving
-  shadowing, type inference, full preprocessor expansion would
-  be a multi-month effort. Tree-sitter + cursor heuristic gets
-  us 90%+ of the value at 5% of the cost.
+These are not part of Phase 2 Source-Shape Suggestions v1 unless called
+out above.
 
-### Per-iter workingMask in colorgraph hook (PUNTED)
-- `mwcc-debug-future-ideas.md` Tier 2.5 note. Would need an
-  in-loop hook (much more invasive). Marginal value — we can
-  already reason backwards from COLORGRAPH DECISIONS output.
+### Stack layout tools (HIGH, separate spec)
 
-### Per-function decompiled-source caching (PUNTED)
-- Earlier session idea. Bridge is already fast enough with
-  Phase 1's ast_walker cache; full source cache adds little.
+- **Stack-slot provenance helper:** report which source local or compiler
+  temp owns each stack slot, identify unreferenced stack holes, and
+  suggest equivalent aggregate/local shapes.
+- **`--force-stack-slot`:** DLL-side reachability hook for stack allocator
+  placement, analogous to `--force-phys`, for cases where total frame
+  size matches but one local lands at the wrong offset.
+
+### Source cleanup and permuter hygiene (MEDIUM)
+
+- **`clean-cruft`:** detect permuter-generated patterns such as nested
+  no-op masks, XOR with 0, all-ones masks, dead code after `goto`,
+  artificial aliases, and questionable 64-bit casts; verify removals
+  one by one and apply only non-load-bearing cleanups.
+- **Upstream decomp-permuter placeholder fix:** local `verify-perm`
+  guards catch `inline_fn` leaks, but the cleaner fix belongs upstream in
+  the randomizer/candidate persistence path.
+- **Stale baseline warnings:** continue improving workflows that apply a
+  candidate over source changed since import. Current 3-way merge covers
+  the local side; upstream or import-time warnings would still help.
+
+### Name/relocation post-processing (MEDIUM)
+
+- **Ninja post-compile name-magic:** run automatic name-magic after each
+  object compile so anonymous int-to-float magic mismatches stop
+  obscuring real text differences during normal iteration.
+- **Relocation normalizer extensions:** investigate remaining
+  relocation-only mismatches beyond the current SDA21 `+2` fold.
+- **Anonymous value ambiguity warnings:** when multiple anonymous symbols
+  share bytes/value, list all possible matches so value-based
+  name-magic choices are less surprising.
+
+### Diagnostic suggestions (MEDIUM)
+
+- **HSD_ASSERT override detector:** detect anonymous assert strings such
+  as `jobj.h`/`jobj` and suggest the known override pattern before
+  `<baselib/jobj.h>`.
+- **`suggest-casts` multi-hop signedness:** surface combined
+  `u8 -> unsigned int -> int` style recommendations when width and
+  compare-signedness checks both apply.
+- **`ceiling` SPILLED fallback:** before reporting a probable ceiling,
+  optionally run virtual-to-source fallback on unexpected SPILLED nodes
+  and surface sentinel/inline source-shape leads.
+
+### Force/preflight/CLI UX (LOW-MEDIUM)
+
+- **`root-identity`:** either ship the command or remove stale references
+  from any remaining handoff/skill docs.
+- **Force scoping clarity:** keep help text explicit about which force
+  options are scoped by `--force-phys-fn`, especially
+  `--force-iter-first`.
+- **Class-scoped force regression watch:** if `--force-phys` again
+  applies to both GPR and FP classes, fix the DLL-side class filter; use
+  `--force-phys-iter` as the reliable workaround meanwhile.
+- **Coalesce preflight coverage:** continue broadening the invalid-pair
+  checks that prevent local wibo hangs before a forced run.
+
+### Test corpus health (LOW)
+
+- Add a pre-match calibration case for `suggest-coalesce-source
+  --discover` with concrete expected top pair/priority, not only a
+  post-match fixture that yields zero candidates.
+- Keep smoke tests for cache freshness and forced-cache isolation.
 
 ---
 
-## Live spawn-task chips (from this session)
+## Punted with reasoning
 
-These were flagged as user-facing chips during the work — they
-may already be queued for spinning off into separate sessions:
-
-1. **Pre-match calibration case for discover-mode** (suggest-coalesce-source).
-   Covered above under "Medium gaps."
-2. **Wire `verify-with-name-magic --apply-auto` into ninja
-   post-compile** (Round 2 follow-up). Covered above under
-   "Ninja post-compile name-magic step."
-
-If you've dismissed them, they're effectively here only.
+- **Full C semantic analyzer:** Phase 2 remains AST/lexical. Type
+  inference, shadowing resolution, and full preprocessor expansion are a
+  separate multi-month project.
+- **Per-iteration workingMask hook:** useful but invasive; current
+  simplify/colorgraph outputs are enough for the planned source-shape
+  work.
+- **Per-function decompiled-source caching:** bridge and AST walks are
+  currently fast enough; more cache state adds little.
 
 ---
 
-## How to decide what's next
+## How to decide what is next
 
-- **For matching unlocks today:** P2.1 + P2.2 (mutate insert-alias
-  + enumerate-decl-orders scope-aware). Heartbeat agent has been
-  blocked on fn_80248A78's nested cursor block for this.
-- **For broadest leverage:** `debug suggest-inlines`. But it
-  depends on Phase 2 above, so don't start there yet.
-- **For test corpus health:** pre-match calibration case for
-  suggest-coalesce-source. Low effort, locks in a real regression
-  signal.
+- For the largest matching unlock: implement Phase 2 Source-Shape
+  Suggestions v1, starting with scope-aware source editing.
+- For immediate nested-local blockers: P2.1 alone can unblock targeted
+  alias and declaration-order experiments.
+- For stack-only mismatches like `mnDiagram3_8024714C`: write a separate
+  stack-layout spec after Source-Shape Suggestions v1 lands.
+- For day-to-day diff readability: keep improving name/relocation
+  post-processing, but avoid making it a dependency of source-shape
+  generation.
 
-## Source documents (kept around for detail)
+---
 
-- `docs/superpowers/specs/2026-05-20-nested-block-local-awareness-design.md` — Phase 1 spec, includes Phase 2 candidate list at §"Out of scope"
-- `docs/superpowers/plans/2026-05-20-nested-block-local-awareness.md` — Phase 1 plan (executed)
-- `docs/mwcc-debug-future-ideas.md` — broader Tier 1-7 roadmap; most items marked ✅ DONE
-- `docs/mwcc-debug-nested-block-validation-2026-05-20.md` — 22% accuracy finding
-- `docs/mwcc-debug-nested-block-macro-tolerance-2026-05-20.md` — 0% fallback baseline
-- `decomp/mndiagram3:mwcc-debug-feedback-5-20-2026.md` — agent feedback (mostly addressed)
-- `wip/mn-heartbeat:mwcc-debug-feedback-5-20-2026.md` — agent feedback (mostly addressed; "Inline/extract-subroutine tooling gap" section is the source of the `suggest-inlines` feature request)
+## Source documents
+
+- `docs/superpowers/specs/2026-05-21-source-shape-suggestions-design.md`
+  — Phase 2 design.
+- `docs/superpowers/specs/2026-05-20-nested-block-local-awareness-design.md`
+  — Phase 1 nested-local design.
+- `docs/superpowers/plans/2026-05-20-nested-block-local-awareness.md`
+  — Phase 1 implementation plan.
+- `docs/mwcc-debug-nested-block-validation-2026-05-20.md`
+  — 22% nested ordinal validation result.
+- `docs/mwcc-debug-nested-block-macro-tolerance-2026-05-20.md`
+  — macro tolerance and tier3 seed-count snapshot.
+- `docs/mwcc-debug-future-ideas.md`
+  — historical tier roadmap; mostly superseded by this file for current
+  prioritization.
+- `decomp/mndiagram3:mwcc-debug-feedback-5-20-2026.md`
+  — mndiagram3 campaign feedback.
+- `wip/mn-heartbeat:mwcc-debug-feedback-5-20-2026.md`
+  — mnvibration heartbeat feedback and source of the inline/extract
+  tooling request.

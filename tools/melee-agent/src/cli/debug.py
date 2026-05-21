@@ -50,7 +50,9 @@ from ..mwcc_debug.patterns import (
 )
 from ..mwcc_debug.source_patch import (
     get_decl_names,
+    get_decl_names_by_scope,
     reorder_decls_in_function,
+    reorder_decls_in_function_scope,
     transfer_candidate,
 )
 from ..mwcc_debug.asm_parser import (
@@ -2192,6 +2194,14 @@ def enumerate_decl_orders(
                  "that don't qualify as a single big win.",
         ),
     ] = 0.01,
+    scope: Annotated[
+        Optional[str],
+        typer.Option(
+            "--scope",
+            help="Optional scope_path display string. When omitted, "
+                 "enumerates the function-top scope first.",
+        ),
+    ] = None,
     json_out: Annotated[
         bool,
         typer.Option("--json", help="Emit results as JSON."),
@@ -2226,11 +2236,13 @@ def enumerate_decl_orders(
         raise typer.Exit(2)
 
     orig = target_path.read_text()
-    names = get_decl_names(orig, function)
+    scope_map = get_decl_names_by_scope(orig, function)
+    selected_scope = tuple(scope.split("/")) if scope else (function,)
+    names = scope_map.get(selected_scope)
     if not names:
         typer.echo(
-            f"could not find a declaration block in {function} — function "
-            f"may have no locals or an unsupported decl style.",
+            f"could not find a declaration block in {function} scope "
+            f"{'/'.join(selected_scope)}.",
             err=True,
         )
         raise typer.Exit(3)
@@ -2312,7 +2324,12 @@ def enumerate_decl_orders(
             print(f"  Baseline: {round_baseline:.2f}%")
 
         for label, perm in candidates:
-            patched = reorder_decls_in_function(current_text, function, perm)
+            if selected_scope == (function,):
+                patched = reorder_decls_in_function(current_text, function, perm)
+            else:
+                patched = reorder_decls_in_function_scope(
+                    current_text, function, selected_scope, perm,
+                )
             if patched is None:
                 continue
             target_path.write_text(patched)
@@ -2390,9 +2407,14 @@ def enumerate_decl_orders(
                         print(f"  No more wins; stopping iterate loop.")
                     break
                 # Apply the round's winner and use it as the next baseline
-                patched = reorder_decls_in_function(
-                    current, function, r_best_perm
-                )
+                if selected_scope == (function,):
+                    patched = reorder_decls_in_function(
+                        current, function, r_best_perm
+                    )
+                else:
+                    patched = reorder_decls_in_function_scope(
+                        current, function, selected_scope, r_best_perm,
+                    )
                 if patched is None:
                     if not json_out:
                         print(f"  Could not re-apply best perm "
@@ -2477,7 +2499,12 @@ def enumerate_decl_orders(
         print(f"Applied {len(applied_chain)} round(s) to {target_path}. "
               f"Verify with `git diff`.")
     elif keep_best and best_perm is not None:
-        patched = reorder_decls_in_function(orig, function, best_perm)
+        if selected_scope == (function,):
+            patched = reorder_decls_in_function(orig, function, best_perm)
+        else:
+            patched = reorder_decls_in_function_scope(
+                orig, function, selected_scope, best_perm,
+            )
         if patched is not None:
             target_path.write_text(patched)
             subprocess.run(
@@ -6286,6 +6313,131 @@ def suggest_coalesce_source(
         print(render_text(report))
 
 
+@debug_app.command(name="suggest-inlines")
+def suggest_inlines_cmd(
+    function: Annotated[
+        str,
+        typer.Option("--function", "-f", help="Function to analyze."),
+    ],
+    pcdump: Annotated[
+        Optional[Path],
+        typer.Option("--pcdump", help="Optional pcdump path."),
+    ] = None,
+    seed_source: Annotated[
+        str,
+        typer.Option(
+            "--seed-source",
+            help="Candidate seed source: all, repeated, guide, coalesce, or patterns.",
+        ),
+    ] = "all",
+    budget: Annotated[
+        int,
+        typer.Option("--budget", help="Maximum candidate count."),
+    ] = 8,
+    max_span_statements: Annotated[
+        int,
+        typer.Option("--max-span-statements", help="Max statements per repeated group."),
+    ] = 6,
+    verify: Annotated[
+        bool,
+        typer.Option("--verify", help="Stage and verify candidates."),
+    ] = False,
+    apply_best: Annotated[
+        bool,
+        typer.Option("--apply-best", help="Apply best verified candidate."),
+    ] = False,
+    target: Annotated[
+        Optional[Path],
+        typer.Option("--target", help="Optional target spec for allocator scoring."),
+    ] = None,
+    threshold: Annotated[
+        float,
+        typer.Option("--threshold", help="Minimum checkdiff delta for --apply-best."),
+    ] = 0.05,
+    keep_failed: Annotated[
+        bool,
+        typer.Option("--keep-failed", help="Preserve failed candidate diagnostics."),
+    ] = False,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit JSON."),
+    ] = False,
+) -> None:
+    """Suggest hidden inline/helper/source-shape candidates."""
+    if seed_source not in {"all", "repeated", "guide", "coalesce", "patterns"}:
+        raise typer.BadParameter(
+            "--seed-source must be one of: all, repeated, guide, coalesce, patterns"
+        )
+    if apply_best and not verify:
+        typer.echo("--apply-best requires --verify", err=True)
+        raise typer.Exit(2)
+    if target is not None and not verify:
+        typer.echo("--target is only used with --verify", err=True)
+
+    from ..mwcc_debug.suggest_inlines import render_json, render_text, run
+
+    melee_root = DEFAULT_MELEE_ROOT
+    unit = _find_unit_for_function(function, melee_root)
+    if unit is None:
+        typer.echo(f"{function} not in report.json", err=True)
+        raise typer.Exit(2)
+    source_path = melee_root / "src" / f"{unit}.c"
+    source = source_path.read_text()
+    pcdump_text = ""
+    if pcdump is not None:
+        pcdump_text = pcdump.read_text()
+
+    report = run(
+        source=source,
+        function=function,
+        pcdump_text=pcdump_text,
+        seed_source=seed_source,
+        budget=budget,
+        max_span_statements=max_span_statements,
+        verify=False,
+    )
+    if verify:
+        from ..mwcc_debug.candidate_verify import (
+            CheckdiffResult,
+            parse_checkdiff_json,
+            verify_real_tree_patches,
+        )
+        from ..mwcc_debug.source_shape import rank_scores
+
+        def _checkdiff_runner(fn_name: str) -> CheckdiffResult:
+            proc = subprocess.run(
+                [
+                    "python",
+                    "tools/checkdiff.py",
+                    fn_name,
+                    "--no-build",
+                    "--no-tty",
+                    "--format",
+                    "json",
+                ],
+                cwd=melee_root,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if not proc.stdout.strip():
+                raise RuntimeError(proc.stderr.strip() or "checkdiff produced no JSON")
+            return parse_checkdiff_json(proc.stdout)
+
+        report.scores = rank_scores(verify_real_tree_patches(
+            function=function,
+            source_path=source_path,
+            patches=report.patches,
+            checkdiff_runner=_checkdiff_runner,
+            apply_best=apply_best,
+            threshold=threshold,
+        ))
+    if json_out:
+        print(render_json(report))
+    else:
+        print(render_text(report))
+
+
 def _basis_to_dict(basis) -> dict:
     """Render a BindingBasis as a JSON-compatible dict."""
     return {
@@ -6571,6 +6723,14 @@ def mutate_insert_alias_cmd(
             help="Alias variable name (default: <var>_alias).",
         ),
     ] = None,
+    scope: Annotated[
+        Optional[str],
+        typer.Option(
+            "--scope",
+            help="Optional exact scope_path display string, e.g. "
+                 "fn/block@l10c4. Use var-to-virtual --all to inspect.",
+        ),
+    ] = None,
     apply: Annotated[
         bool,
         typer.Option(
@@ -6588,9 +6748,15 @@ def mutate_insert_alias_cmd(
 
     melee_root = DEFAULT_MELEE_ROOT
     src_path, source = _read_source_for(function, melee_root)
+    parsed_scope = tuple(scope.split("/")) if scope else None
     try:
         out = mutate_insert_alias_before_use(
-            source, function, var, at_stmt_index=at, new_name=new_name,
+            source,
+            function,
+            var,
+            at_stmt_index=at,
+            new_name=new_name,
+            scope_filter=parsed_scope,
         )
     except MutationUnsupported as e:
         typer.echo(f"mutation failed: {e}", err=True)

@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import textwrap
+
 from src.mwcc_debug.source_patch import (
     extract_function,
     find_decl_block,
     find_function,
     get_decl_names,
+    get_decl_names_by_scope,
     merge3_function,
     reorder_decls_in_function,
+    reorder_decls_in_function_scope,
     replace_function,
 )
 
@@ -396,3 +400,44 @@ def test_placeholder_detection_all_known_placeholders() -> None:
         candidate = f"void f(void) {{ {ph}(x); }}"
         hits = _has_placeholder(candidate)
         assert ph in hits, f"placeholder '{ph}' was not detected"
+
+
+def test_get_decl_names_by_scope_includes_nested_block() -> None:
+    source = textwrap.dedent("""\
+        void f(int cond)
+        {
+            int top_a;
+            int top_b;
+            if (cond) {
+                HSD_JObj* row_0_jobj;
+                HSD_JObj* cursor_row;
+                Use(row_0_jobj, cursor_row);
+            }
+        }
+    """)
+    scopes = get_decl_names_by_scope(source, "f")
+    assert ("f",) in scopes
+    nested_scope = next(scope for scope in scopes if len(scope) == 2)
+    assert scopes[("f",)] == ["top_a", "top_b"]
+    assert scopes[nested_scope] == ["row_0_jobj", "cursor_row"]
+
+
+def test_reorder_decls_in_function_scope_only_changes_target_scope() -> None:
+    source = textwrap.dedent("""\
+        void f(int cond)
+        {
+            int top_a;
+            int top_b;
+            if (cond) {
+                HSD_JObj* row_0_jobj;
+                HSD_JObj* cursor_row;
+                Use(row_0_jobj, cursor_row);
+            }
+        }
+    """)
+    scopes = get_decl_names_by_scope(source, "f")
+    nested_scope = next(scope for scope in scopes if len(scope) == 2)
+    result = reorder_decls_in_function_scope(source, "f", nested_scope, [1, 0])
+    assert result is not None
+    assert result.index("int top_a;") < result.index("int top_b;")
+    assert result.index("HSD_JObj* cursor_row;") < result.index("HSD_JObj* row_0_jobj;")
