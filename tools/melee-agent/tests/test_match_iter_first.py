@@ -27,6 +27,37 @@ def test_pcdump_local_help_exposes_force_iter_first_function_scope() -> None:
     assert "Scope --force-iter-first" in proc.stdout
 
 
+def test_match_iter_first_help_documents_auto_verify_cleanup_contract() -> None:
+    proc = subprocess.run(
+        ["python", "-m", "src.cli", "debug", "match-iter-first", "--help"],
+        cwd=CLI_CWD,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+
+    assert proc.returncode == 0
+    assert "MWCC_DEBUG_RESTORE_TIMEOUT" in proc.stdout
+    assert "MWCC_DEBUG_HANG_TIMEOUT" in proc.stdout
+    assert "cleanup_complete=false" in proc.stdout
+    assert "non-zero" in proc.stdout
+
+
+def test_restore_object_report_help_exposes_guarded_cleanup_command() -> None:
+    proc = subprocess.run(
+        ["python", "-m", "src.cli", "debug", "restore-object-report", "--help"],
+        cwd=CLI_CWD,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+
+    assert proc.returncode == 0
+    assert "--max-steps" in proc.stdout
+    assert "--force" in proc.stdout
+    assert "MWCC_DEBUG_RESTORE_MAX_STEPS" in proc.stdout
+
+
 def test_match_iter_first_auto_verify_command_scopes_force_iter_first() -> None:
     src_path = MELEE_ROOT / "src" / "melee" / "mn" / "mnvibration.c"
 
@@ -114,8 +145,31 @@ def test_auto_verify_restore_hint_explains_truncated_ninja_state() -> None:
     )
 
     assert "ninja -t recompact" in hint
+    assert "restore-object-report" in hint
     assert ".ninja_deps" in hint
     assert "python configure.py" in hint
+
+
+def test_ninja_dry_run_step_count_uses_total_planned_steps() -> None:
+    assert debug_cli._ninja_dry_run_planned_steps(
+        "[1/969] Building C object\n"
+        "[2/969] Building C object\n"
+    ) == 969
+    assert debug_cli._ninja_dry_run_planned_steps("ninja: no work to do.\n") == 0
+    assert debug_cli._ninja_dry_run_planned_steps("touch foo.o\nlink report\n") == 2
+
+
+def test_expensive_restore_guard_returns_failure_without_running_ninja() -> None:
+    result = debug_cli._make_expensive_restore_result(
+        ["ninja", "build/GALE01/src/melee/mn/mnvibration.o"],
+        planned_steps=969,
+        max_steps=64,
+    )
+
+    assert result.returncode == 125
+    assert "would run 969 ninja step(s)" in result.stderr
+    assert "MWCC_DEBUG_RESTORE_MAX_STEPS" in result.stderr
+    assert "--force" in result.stderr
 
 
 def test_auto_verify_restore_failure_requests_nonzero_exit() -> None:

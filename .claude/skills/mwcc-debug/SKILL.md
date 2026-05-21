@@ -456,6 +456,18 @@ bounded by `MWCC_DEBUG_RESTORE_TIMEOUT`, falling back to
 `MWCC_DEBUG_HANG_TIMEOUT`, then 180s. A failed restore exits non-zero and
 reports `cleanup_complete=false` in JSON.
 
+If auto-verify cleanup fails or the build metadata looks truncated, use the
+managed cleanup command instead of raw `ninja`:
+
+```bash
+melee-agent debug restore-object-report src/melee/mn/mnvibration.c
+melee-agent debug restore-object-report src/melee/mn/mnvibration.c --force
+```
+
+`restore-object-report` runs `ninja -n` first, refuses unexpectedly large
+restore plans by default (`MWCC_DEBUG_RESTORE_MAX_STEPS`, default 64), and
+uses the same timeout/process-group handling as auto-verify.
+
 ### Useful env-var overrides
 
 | Var | Default | What |
@@ -464,6 +476,8 @@ reports `cleanup_complete=false` in JSON.
 | `MWCC_DEBUG_REMOTE_SCRIPT` | `C:\Users\mikes\code\mwcc_debug\run_pcdump.ps1` | Remote script path |
 | `MWCC_DEBUG_REPO` (set on remote) | `C:\Users\mikes\code\melee` | Remote repo path |
 | `MWCC_DEBUG_TIMEOUT_SECS` (passed to remote) | 60 | Per-compile timeout |
+| `MWCC_DEBUG_RESTORE_TIMEOUT` | 180 | Auto-verify/restore cleanup timeout (falls back to `MWCC_DEBUG_HANG_TIMEOUT`) |
+| `MWCC_DEBUG_RESTORE_MAX_STEPS` | 64 | Max `ninja -n` restore steps before managed cleanup refuses without `--force` |
 
 ## Workflow: register-cascade investigation
 
