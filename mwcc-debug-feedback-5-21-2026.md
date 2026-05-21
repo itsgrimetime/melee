@@ -310,3 +310,43 @@ Context: merged `b64403c36` (`mwcc-debug: trace inline candidate copies`) into
   or highlighted the interesting traces: pcode-only/removed-before-coloring
   copies, copies involving the candidate's argument temp, and traces whose
   source/destination virtuals are mentioned by `suggest-coalesce-source`.
+
+## Follow-up after `ef6640f35`
+
+Context: merged `ef6640f35` (`mwcc-debug: filter inline copy trace summaries`)
+into `wip/mn-heartbeat` and reran
+`suggest-inlines --verify --trace-copies` against `fn_80247510`.
+
+### Improvements that helped
+
+- The human output is much more usable now. It reports compact per-candidate
+  trace summaries like `showing 12/57 candidate-relevant traces (45 omitted)`
+  instead of dumping every raw candidate-only copy.
+
+- For the grouped X/Y/Z dirty-temp candidate, the highlighted traces include
+  the actual cursor copies:
+  `r110 <- r50` at block 245,
+  `r109 <- r50` at block 262, and
+  `r108 <- r50` at block 279. All three are still reported as
+  `copy-eliminated-before-coloring`, confirming the no-gain source-shape
+  result in a readable way.
+
+- JSON now includes both raw data and summary fields:
+  `copy_trace_highlights`, `copy_trace_total_count`, and
+  `copy_trace_omitted_count`. That makes it possible to script a concise view
+  while keeping the full trace list available.
+
+### Remaining issues / new requests
+
+- The single-axis dirty-temp candidates still highlight unrelated dominant
+  source copies (`r135 <- r45`, `r139 <- r45`) while omitting the relevant
+  cursor copy (`r108 <- r50`) from `copy_trace_highlights`. For source-shape
+  candidates, traces involving the argument temp's source virtual or the
+  patched statement's block should outrank generic dominant-source copies.
+
+- Some highlight labels are confusing: the grouped candidate shows entries with
+  `interest_reasons: ["removed-before-coloring"]` even when
+  `likely_cause`/`transform_category` say `copy-survived`. It would be clearer
+  if the reason distinguished "the visible `mr` disappears after register
+  coloring / scheduling" from "the copy was eliminated before coloring and the
+  destination never reached simplify/colorgraph."
