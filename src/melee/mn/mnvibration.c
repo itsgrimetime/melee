@@ -117,9 +117,9 @@ typedef struct MnVibrationJointAssets {
 } MnVibrationJointAssets;
 
 typedef struct MnVibrationData {
-    /* 0x00 */ u8 x0[6];         // Controller scroll states
-    /* 0x06 */ u8 x6[4];         // Controller connected flags
-    /* 0x0A */ u8 scroll_offset; // Scroll offset for name list
+    /* 0x00 */ u8 x0[6]; // [0] intro timer, [1] cursor row, [2..5] port modes
+    /* 0x06 */ u8 x6[4]; // Controller connected flags
+    /* 0x0A */ u8 scroll_offset; // First visible saved-name slot
     /* 0x0B */ u8 pad_0B;
     /* 0x0C */ HSD_JObj* jobjs[25]; // JObj references (0xC to 0x70)
     /* 0x70 */ HSD_Text* texts[8];  // Text handles for name display
@@ -292,16 +292,19 @@ HSD_JObj* mnVibration_802474C4(s32 count)
 /// Operates on the global menu GObj (mnVibration_804D6C28) rather than the
 /// gobj parameter, which the compiler discards immediately.
 ///
-/// @remarks Matches 84.9%. Structural wins so far:
+/// @remarks Matches 96.50%. Structural wins so far:
 ///   - mnVibration_NthPortChild static inline for per-port child walker;
 ///     matched the existing for-loop / mtctr+bdnz shape used by the
 ///     sibling mnVibration_802474C4 (+0.5%).
 ///   - mnVibration_GetNameSlot used for the 4 hand-inlined slot-index
 ///     calculations in the A-toggle, up-nav, down-nav non-overflow,
 ///     and down-nav overflow paths (+1.0%, four calls of +0.2-0.6%).
-///   Remaining gap is the ig_idx cascade (current stmw r26, expected
-///   stmw r27 — one extra callee-save virtual) plus the int-to-float
-///   magic constant emitted as @472 instead of mnVibration_804DC018.
+///   - MnVibrationInputScratch models the large lb_80011E24 output area in
+///     the per-port A-toggle path.
+///   Current gap is dominated by the inlined cursor-position sequence and the
+///   0xFF saved-name slot sentinel paths. The shallow cast/decl-order probes
+///   find no wins, so further progress likely needs another natural inline or
+///   a more accurate source shape for those regions.
 void fn_80247510(HSD_GObj* gobj)
 {
     MnVibrationData* data = mnVibration_804D6C28->user_data;
