@@ -335,6 +335,7 @@ melee-agent debug var-to-virtual my_var -f my_fn          # which virtual does m
 melee-agent debug var-to-virtual my_var -f my_fn --basis  # + show confidence evidence
 melee-agent debug virtual-to-var r53 -f my_fn             # which source var maps to r53?
 melee-agent debug virtual-to-ig -f my_fn --virtual r108   # map visible pcode virtual to allocator graph
+melee-agent debug virtual-to-ig -f my_fn --virtual r50 --class gpr  # disambiguate GPR/FP ig_idx collisions
 
 # Suggest C-source patterns to produce a specific coalesce (or discover candidates)
 melee-agent debug suggest-coalesce-source -f my_fn -V 53=3          # pair mode: coalesce r53 with r3
@@ -342,9 +343,13 @@ melee-agent debug suggest-coalesce-source -f my_fn --discover --top 5  # discove
 
 # Trace a source-created pcode copy through the allocator. Use this when a
 # manual local/temp creates `mr rTO,rFROM` before coloring, but final ASM
-# appears to coalesce or remove the copy.
+# appears to coalesce or remove the copy. The report includes the first pass
+# where the copy is absent and a coarse transform category.
 melee-agent debug trace-copy -f my_fn --from r50 --to r108
+melee-agent debug trace-copy -f my_fn --from r50 --to r108 --class gpr
 melee-agent debug trace-copy -f my_fn --from r50 --to r108 --json
+melee-agent debug trace-copy -f my_fn --list-copies
+melee-agent debug trace-copy -f my_fn --involving r50 --near-block 245
 
 # Suggest hidden inline/helper source shapes
 melee-agent debug suggest-inlines -f my_fn
@@ -357,9 +362,13 @@ melee-agent debug suggest-inlines -f my_fn --verify --apply-best
 # candidates with reasons. Pattern seeds understand visible
 # `HSD_JObjSetTranslateX/Y/Z` calls as hiding `HSD_JObjSetMtxDirtySub`, so they
 # can propose cursor-copy/dirty-call lifetime splits even when the dirty call is
-# inside the header inline. Use `--verify` to stage candidates and score them
-# against real-tree `checkdiff`; source is restored unless `--apply-best` keeps a
-# verified winner.
+# inside a header inline or a same-source direct static-inline helper. Use
+# `--verify` to stage candidates and score them against real-tree `checkdiff`;
+# source is restored unless `--apply-best` keeps a verified winner.
+
+# Keep temporary source probes out of the canonical pcdump cache.
+melee-agent debug pcdump-local src/melee/mn/mnvibration.c --no-cache-sync
+melee-agent debug pcdump-local src/melee/mn/mnvibration.c --output /tmp/probe.txt --no-cache-sync
 
 # Apply targeted source mutations (type change, alias insertion)
 melee-agent debug mutate type-change -f my_fn --var my_var --type u32
