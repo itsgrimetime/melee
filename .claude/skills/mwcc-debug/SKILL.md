@@ -339,6 +339,18 @@ melee-agent debug virtual-to-var r53 -f my_fn             # which source var map
 melee-agent debug suggest-coalesce-source -f my_fn -V 53=3          # pair mode: coalesce r53 with r3
 melee-agent debug suggest-coalesce-source -f my_fn --discover --top 5  # discover best candidates
 
+# Suggest hidden inline/helper source shapes
+melee-agent debug suggest-inlines -f my_fn
+melee-agent debug suggest-inlines -f my_fn --seed-source repeated
+melee-agent debug suggest-inlines -f my_fn --verify
+melee-agent debug suggest-inlines -f my_fn --verify --apply-best
+
+# `suggest-inlines` is diagnostic by default. It reports repeated/helper-shaped
+# statement groups, short-lived call-argument temp candidates, and rejected
+# candidates with reasons. Use `--verify` to stage candidates and score them
+# against real-tree `checkdiff`; source is restored unless `--apply-best`
+# keeps a verified winner.
+
 # Apply targeted source mutations (type change, alias insertion)
 melee-agent debug mutate type-change -f my_fn --var my_var --type u32
 melee-agent debug mutate type-change -f my_fn --var my_var --type u32 --apply

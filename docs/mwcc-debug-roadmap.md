@@ -51,6 +51,9 @@ the current floor.
 Spec:
 `docs/superpowers/specs/2026-05-21-source-shape-suggestions-design.md`
 
+Implementation plan:
+`docs/superpowers/plans/2026-05-21-source-shape-suggestions.md`
+
 ### Goal
 
 The current tools can prove allocator targets and explain many
