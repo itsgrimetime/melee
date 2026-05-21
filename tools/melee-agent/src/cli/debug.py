@@ -5074,6 +5074,11 @@ def _ninja_cflags_for_unit(src_rel: str) -> tuple[str, str]:
     raise typer.Exit(2)
 
 
+def _raise_pcdump_local_watchdog_exit(killed_by_watchdog: bool) -> None:
+    if killed_by_watchdog:
+        raise typer.Exit(124)
+
+
 @debug_app.command(name="pcdump-local")
 def pcdump_local(
     c_file: Annotated[
@@ -5604,6 +5609,7 @@ def pcdump_local(
     if str(output) == "-":
         print(pcdump_path.read_text())
         pcdump_path.unlink()
+        _raise_pcdump_local_watchdog_exit(killed_by_watchdog)
         return
 
     # Determine whether ANY force-* override was active this run.
@@ -5712,10 +5718,13 @@ def pcdump_local(
                     f"wrote: {output} (cache mirror failed: {e})",
                     file=sys.stderr,
                 )
+                _raise_pcdump_local_watchdog_exit(killed_by_watchdog)
                 return
+            _raise_pcdump_local_watchdog_exit(killed_by_watchdog)
             return
 
     print(f"wrote: {output}", file=sys.stderr)
+    _raise_pcdump_local_watchdog_exit(killed_by_watchdog)
 
 
 @debug_app.command(name="score-source")
@@ -6484,6 +6493,16 @@ def suggest_inlines_cmd(
                 )
             return parse_checkdiff_json(proc.stdout)
 
+        baseline_result = None
+        try:
+            baseline_result = _checkdiff_runner(function)
+        except Exception as exc:
+            typer.echo(
+                f"[suggest-inlines] baseline checkdiff unavailable: "
+                f"{type(exc).__name__}: {exc}",
+                err=True,
+            )
+
         report.scores = rank_scores(verify_real_tree_patches(
             function=function,
             source_path=source_path,
@@ -6492,6 +6511,7 @@ def suggest_inlines_cmd(
             apply_best=apply_best,
             threshold=threshold,
             diagnostics_root=Path("nonmatchings") / function / "suggest_inlines",
+            baseline_result=baseline_result,
         ))
     if json_out:
         print(render_json(report, emit_patches=emit_patches))

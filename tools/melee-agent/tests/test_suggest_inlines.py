@@ -172,7 +172,8 @@ def test_generate_patches_for_arg_temp_candidate() -> None:
     patch = patches[0]
     assert "cursor_jobj_arg_temp" in patch.patched_source
     assert "HSD_JObjSetMtxDirtySub(cursor_jobj_arg_temp);" in patch.patched_source
-    assert "    void* cursor_jobj_arg_temp;" in patch.patched_source
+    assert "    HSD_JObj* cursor_jobj_arg_temp;" in patch.patched_source
+    assert "void* cursor_jobj_arg_temp" not in patch.patched_source
     assert "HSD_JObjSetMtxDirtySub(void*" not in patch.patched_source
 
 
@@ -196,10 +197,64 @@ def test_generate_patches_for_hidden_dirty_arg_temp_candidate() -> None:
 
     assert len(patches) == 1
     patched = patches[0].patched_source
-    assert "    void* cursor_jobj_arg_temp;" in patched
+    assert "    HSD_JObj* cursor_jobj_arg_temp;" in patched
+    assert "void* cursor_jobj_arg_temp" not in patched
     assert "cursor_jobj_arg_temp = cursor_jobj;" in patched
     assert "HSD_JObjSetTranslateX(cursor_jobj_arg_temp, x);" in patched
     assert "HSD_JObjSetTranslateX(void*" not in patched
+
+
+def test_hidden_dirty_arg_temp_patch_uses_source_type_and_top_declaration() -> None:
+    source = textwrap.dedent("""\
+        void f(HSD_JObj* cursor_jobj, f32 x)
+        {
+            int marker;
+            marker = 0;
+            HSD_JObjSetTranslateX(cursor_jobj, x);
+        }
+    """)
+    candidates = generate_candidates(
+        source=source,
+        function="f",
+        seed_source="patterns",
+        max_span_statements=2,
+        budget=8,
+    )
+    candidate = next(c for c in candidates if c.kind == "hidden-dirty-arg-temp")
+
+    patched = generate_patches(source, "f", [candidate])[0].patched_source
+
+    assert "    HSD_JObj* cursor_jobj_arg_temp;\n    marker = 0;" in patched
+    assert "void* cursor_jobj_arg_temp" not in patched
+    assert "cursor_jobj_arg_temp = cursor_jobj;" in patched
+    assert "HSD_JObjSetTranslateX(cursor_jobj_arg_temp, x);" in patched
+
+
+def test_hidden_dirty_group_candidate_patches_xyz_together() -> None:
+    source = textwrap.dedent("""\
+        void f(HSD_JObj* cursor_jobj, f32 x, f32 y, f32 z)
+        {
+            HSD_JObjSetTranslateX(cursor_jobj, x);
+            HSD_JObjSetTranslateY(cursor_jobj, y);
+            HSD_JObjSetTranslateZ(cursor_jobj, z);
+        }
+    """)
+    candidates = generate_candidates(
+        source=source,
+        function="f",
+        seed_source="patterns",
+        max_span_statements=2,
+        budget=8,
+    )
+    candidate = next(c for c in candidates if c.kind == "hidden-dirty-arg-temp-group")
+
+    patched = generate_patches(source, "f", [candidate])[0].patched_source
+
+    assert patched.count("HSD_JObj* cursor_jobj_arg_temp;") == 1
+    assert patched.count("cursor_jobj_arg_temp = cursor_jobj;") == 3
+    assert "HSD_JObjSetTranslateX(cursor_jobj_arg_temp, x);" in patched
+    assert "HSD_JObjSetTranslateY(cursor_jobj_arg_temp, y);" in patched
+    assert "HSD_JObjSetTranslateZ(cursor_jobj_arg_temp, z);" in patched
 
 
 def test_generate_patches_for_hidden_dirty_arg_temp_inside_helper() -> None:
@@ -227,7 +282,8 @@ def test_generate_patches_for_hidden_dirty_arg_temp_inside_helper() -> None:
 
     assert len(patches) == 1
     patched = patches[0].patched_source
-    assert "void* cursor_jobj_arg_temp;" in patched
+    assert "HSD_JObj* cursor_jobj_arg_temp;" in patched
+    assert "void* cursor_jobj_arg_temp" not in patched
     assert "cursor_jobj_arg_temp = cursor_jobj;" in patched
     assert "HSD_JObjSetTranslateX(cursor_jobj_arg_temp, x);" in patched
     assert "SetCursor(jobj, 1.0f);" in patched
@@ -446,3 +502,30 @@ def test_render_json_includes_scores() -> None:
     payload = json.loads(render_json(report))
     assert payload["scores"][0]["candidate_id"] == "arg-temp-0001"
     assert payload["scores"][0]["checkdiff_delta"] == 0.1
+
+
+def test_render_text_scores_include_baseline_candidate_and_delta() -> None:
+    from src.mwcc_debug.source_shape import CandidateScore, SourceShapeReport
+
+    report = SourceShapeReport(
+        function="f",
+        candidates=[],
+        patches=[],
+        scores=[
+            CandidateScore(
+                candidate_id="arg-temp-0001",
+                compile_ok=True,
+                checkdiff_pct=97.25,
+                checkdiff_delta=0.0,
+                pcdump_score_delta=None,
+                diagnostics_path=None,
+                checkdiff_baseline_pct=97.25,
+            )
+        ],
+    )
+
+    out = render_text(report)
+
+    assert "baseline=97.250" in out
+    assert "candidate=97.250" in out
+    assert "delta=+0.000" in out

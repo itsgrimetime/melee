@@ -216,6 +216,14 @@ def _preflight_pair(
             f"is invalid (forcing it may hang the allocator)"
         )
 
+    if a >= 32 and b >= 32 and not _has_direct_copy_edge(facts, a, b):
+        reasons.append(
+            f"no direct copy/identity edge between r{a} and r{b} in "
+            f"pre-coloring IR — non-interfering but unsafe to force; "
+            f"treat this as a source-shape lead, not a --force-coalesce "
+            f"proof"
+        )
+
     # cross-class detection — enumerate ALL colorgraph sections, since
     # facts.cg_section only carries one. If a and b live in different
     # classes, the coalesce is structurally invalid.
@@ -243,6 +251,30 @@ def _preflight_pair(
             pass
 
     return Preflight(safe=not reasons, reasons=reasons)
+
+
+def _has_direct_copy_edge(facts: IrFacts, a: int, b: int) -> bool:
+    """Return True if pre-coloring IR contains a cheap copy a<->b edge."""
+    targets = {(a, b), (b, a)}
+    for _block_idx, _idx, inst in facts.pre_pass.all_instructions():
+        regs = [(kind, num) for kind, num in inst.regs if kind == "r"]
+        if len(regs) < 2:
+            continue
+        dst = regs[0][1]
+        src = regs[1][1]
+        if (dst, src) not in targets:
+            continue
+        if inst.opcode == "mr":
+            return True
+        if inst.opcode == "addi":
+            parts = [part.strip() for part in inst.operands.split(",")]
+            if len(parts) >= 3 and parts[2] == "0":
+                return True
+        if inst.opcode == "or" and len(regs) >= 3:
+            rhs2 = regs[2][1]
+            if src == rhs2:
+                return True
+    return False
 
 
 def _summarize_facts(
