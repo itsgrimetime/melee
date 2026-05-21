@@ -31,6 +31,7 @@ class InlineCandidate:
     writes: tuple[str, ...]
     source_excerpt: str
     rejection_reason: Optional[str] = None
+    metadata: dict[str, str] = field(default_factory=dict)
 
     @property
     def is_rejected(self) -> bool:

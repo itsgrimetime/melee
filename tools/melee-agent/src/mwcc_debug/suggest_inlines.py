@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict
 from typing import Optional
 
+from .ast_walker import walk_function
 from .source_shape import (
     CandidatePatch,
     InlineCandidate,
@@ -17,6 +19,7 @@ from .source_spans import (
     SpanGroup,
     find_call_argument_spans,
     find_repeated_call_groups,
+    list_statement_spans,
     reject_reason_for_span_group,
 )
 
@@ -77,6 +80,59 @@ def _candidate_from_arg(function: str, idx: int, arg: CallArgumentSpan) -> Inlin
     )
 
 
+def _local_type_map(source: str, function: str) -> dict[str, str]:
+    return {decl.name: decl.type_str for decl in walk_function(source, function, path=None)}
+
+
+def _return_helper_candidates(
+    source: str,
+    function: str,
+    start_idx: int,
+) -> list[InlineCandidate]:
+    local_types = _local_type_map(source, function)
+    out: list[InlineCandidate] = []
+    idx = start_idx
+    assign_re = re.compile(
+        r"^\s*(?P<lhs>[A-Za-z_][A-Za-z_0-9]*)\s*=\s*(?P<rhs>.+);\s*$",
+        re.DOTALL,
+    )
+    for span in list_statement_spans(source, function):
+        m = assign_re.match(span.text)
+        if m is None:
+            continue
+        lhs = m.group("lhs")
+        rhs = m.group("rhs").strip()
+        if lhs not in local_types:
+            continue
+        if "(" not in rhs or ")" not in rhs:
+            continue
+        reads = tuple(name for name in span.reads if name != lhs)
+        anchor = SourceAnchor(
+            function=function,
+            scope_path=span.scope_path,
+            byte_range=span.byte_range,
+            line_range=span.line_range,
+            kind="pattern",
+            reason=f"single-output helper for {lhs}",
+        )
+        out.append(InlineCandidate(
+            candidate_id=_candidate_id("return-helper", idx),
+            kind="return-helper",
+            anchor=anchor,
+            helper_name=_helper_name(function, "return_helper", idx),
+            reads=reads,
+            writes=(lhs,),
+            source_excerpt=span.text,
+            metadata={
+                "return_type": local_types[lhs],
+                "rhs": rhs,
+                "lhs": lhs,
+            },
+        ))
+        idx += 1
+    return out
+
+
 def generate_candidates(
     *,
     source: str,
@@ -98,6 +154,9 @@ def generate_candidates(
             if not arg.text:
                 continue
             candidates.append(_candidate_from_arg(function, idx, arg))
+            idx += 1
+        for candidate in _return_helper_candidates(source, function, idx):
+            candidates.append(candidate)
             idx += 1
     return candidates[:budget]
 
@@ -145,6 +204,31 @@ def _patch_void_helper(source: str, function: str, candidate: InlineCandidate) -
     )
 
 
+def _patch_return_helper(source: str, function: str, candidate: InlineCandidate) -> CandidatePatch:
+    return_type = candidate.metadata["return_type"]
+    rhs = candidate.metadata["rhs"]
+    lhs = candidate.metadata["lhs"]
+    helper = (
+        f"static inline {return_type} {candidate.helper_name}(void)\n"
+        "{\n"
+        f"    return {rhs};\n"
+        "}\n\n"
+    )
+    insert_pos = source.find(f"void {function}")
+    if insert_pos < 0:
+        insert_pos = 0
+    start, end = candidate.anchor.byte_range
+    replacement = f"{lhs} = {candidate.helper_name}();"
+    out = source[:start] + replacement + source[end:]
+    out = out[:insert_pos] + helper + out[insert_pos:]
+    return CandidatePatch(
+        candidate_id=candidate.candidate_id,
+        patched_source=out,
+        summary=f"extract {candidate.helper_name}",
+        touched_ranges=(candidate.anchor.byte_range,),
+    )
+
+
 def generate_patches(
     source: str,
     function: str,
@@ -158,6 +242,8 @@ def generate_patches(
             patches.append(_patch_arg_temp(source, candidate))
         elif candidate.kind == "void-helper":
             patches.append(_patch_void_helper(source, function, candidate))
+        elif candidate.kind == "return-helper":
+            patches.append(_patch_return_helper(source, function, candidate))
     return patches
 
 

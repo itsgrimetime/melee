@@ -131,3 +131,50 @@ def test_render_json_is_parseable() -> None:
     payload = json.loads(render_json(report))
     assert payload["function"] == "f"
     assert payload["candidates"]
+
+
+def test_generate_return_helper_candidate_for_single_assignment() -> None:
+    source = textwrap.dedent("""\
+        void f(HSD_JObj* jobj)
+        {
+            f32 y;
+            y = HSD_JObjGetTranslationY(jobj);
+            Use(y);
+        }
+    """)
+    candidates = generate_candidates(
+        source=source,
+        function="f",
+        seed_source="patterns",
+        max_span_statements=2,
+        budget=8,
+    )
+    candidate = next(c for c in candidates if c.kind == "return-helper")
+    assert candidate.writes == ("y",)
+    assert candidate.metadata["return_type"] == "f32"
+    assert candidate.metadata["rhs"] == "HSD_JObjGetTranslationY(jobj)"
+
+
+def test_generate_patches_for_return_helper_candidate() -> None:
+    source = textwrap.dedent("""\
+        void f(HSD_JObj* jobj)
+        {
+            f32 y;
+            y = HSD_JObjGetTranslationY(jobj);
+            Use(y);
+        }
+    """)
+    candidates = generate_candidates(
+        source=source,
+        function="f",
+        seed_source="patterns",
+        max_span_statements=2,
+        budget=8,
+    )
+    candidate = next(c for c in candidates if c.kind == "return-helper")
+    patches = generate_patches(source, "f", [candidate])
+    assert len(patches) == 1
+    patched = patches[0].patched_source
+    assert "static inline f32 f_return_helper_" in patched
+    assert "return HSD_JObjGetTranslationY(jobj);" in patched
+    assert "y = f_return_helper_" in patched
