@@ -561,3 +561,49 @@ inline variations around the cursor `HSD_JObjSetTranslate*` expansion.
   metadata, but `pcdump-local` should probably catch this and print an
   actionable diagnostic like "build.ninja missing; run python configure.py"
   instead of a full Python traceback.
+
+## Follow-up after `bcef18570`
+
+Context: merged `bcef18570` (`mwcc-debug: report iter-first cleanup failures`)
+and reran `match-iter-first --auto-verify` for `fn_80247510`.
+
+### Improvements that helped
+
+- The restore timeout now falls back to `MWCC_DEBUG_HANG_TIMEOUT` as requested.
+  With `MWCC_DEBUG_HANG_TIMEOUT=8`, auto-verify printed
+  `restore timeout: 8s (MWCC_DEBUG_HANG_TIMEOUT)` and timed out cleanup after
+  eight seconds instead of waiting the previous 180-second default.
+
+- A failed restore now propagates to the top-level process status. The command
+  exited with status `124` after the restore timeout, while still printing the
+  iter-first result. That makes the failure script-detectable.
+
+- The cleanup hint is useful and specific. For the repeated
+  `ninja: warning: premature end of file; recovering` case it suggested
+  `ninja -t recompact` and, if needed, rebuilding metadata.
+
+### Remaining issues / requests
+
+- The `match-iter-first --help` text still only describes scoring the forced
+  iter-first list. It does not mention restore cleanup, timeout env vars,
+  `cleanup_complete=false`, or non-zero exit behavior. The skill doc has the
+  details, but the CLI help is where I looked first during iteration.
+
+- After running the suggested `ninja -t recompact`, manually retrying
+  `ninja build/GALE01/src/melee/mn/mnvibration.o build/GALE01/report.json`
+  expanded into a large rebuild (`[1/969]...`) and hit my 30-second guard. For
+  this workflow, a safer cleanup command would avoid kicking off a full rebuild
+  when the goal is only to restore the one touched object/report state, or would
+  print that the next cleanup step may be expensive.
+
+- The guarded manual restore retry left its `wibo ... mnvibration.c` child
+  orphaned under PID 1 in `UE` state after timeout; `kill -9` did not clear it.
+  That was outside `match-iter-first` itself, but it makes the cleanup hint
+  risky to run manually. A debugger-provided cleanup/restore command that owns
+  the process tree would be safer than asking the caller to rerun raw `ninja`.
+
+### Result for `fn_80247510`
+
+- The iter-first candidate remains a no-gain proof:
+  `97.15% -> 97.15% (+0.00%)` for
+  `--force-iter-first 151,48,45,153 --force-iter-first-fn fn_80247510`.
