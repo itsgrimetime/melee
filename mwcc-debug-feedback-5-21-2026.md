@@ -459,3 +459,32 @@ created but eliminated before coloring.
   variant. The command itself warns about this, but for workflows like
   `fn_80247510` a `--force-iter-first-fn` scope would make ambiguous
   suggestions much safer to test.
+
+## Follow-up after `2242eb84f`
+
+Context: merged `2242eb84f` (`mwcc-debug: scope iter-first auto verification`)
+and retried the `match-iter-first` path for `fn_80247510`.
+
+### Improvements that helped
+
+- `pcdump-local --force-iter-first-fn fn_80247510` is now available and works
+  as the scoped verification path requested above. A direct scoped run with
+  `--force-iter-first 151,48,45,153 --force-iter-first-fn fn_80247510 --diff`
+  completed cleanly without affecting the whole TU, though it still
+  mismatched. This confirms the iter-first candidate is not enough to solve the
+  missing-copy issue.
+
+- `match-iter-first --auto-verify` now prints useful phase output:
+  resolving baseline match percent, showing the local watchdog setting,
+  printing the exact scoped force list under test, then reading the post-verify
+  match percent. That addresses the previous "silent for too long" problem for
+  the expensive portion of the command.
+
+### Remaining issue / request
+
+- The auto-verify command still hung after printing `restoring clean report`.
+  The live child was `ninja build/GALE01/src/melee/mn/mnvibration.o
+  build/GALE01/report.json`; it had to be killed manually. The restore phase
+  needs the same timeout/progress treatment as the forced compile phase, and
+  ideally should report whether it is restoring source, object, report, or
+  cache state.
