@@ -4041,8 +4041,12 @@ def match_iter_first(
             help="When ambiguous targets are present, run "
                  "`pcdump-local --force-iter-first <list>` to score the "
                  "recommended list against the expected output and "
-                 "report the match% delta. Off by default — the explicit "
-                 "verify step costs ~10–30s.",
+                 "report the match% delta. Then restore object/report "
+                 "state with a managed cleanup bounded by "
+                 "MWCC_DEBUG_RESTORE_TIMEOUT, falling back to "
+                 "MWCC_DEBUG_HANG_TIMEOUT. Restore failures print "
+                 "cleanup_complete=false in JSON and exit non-zero. "
+                 "Off by default — the explicit verify step costs ~10–30s.",
         ),
     ] = False,
 ) -> None:
@@ -4253,30 +4257,41 @@ def match_iter_first(
                 }
                 # Restore the report by rebuilding the .o cleanly so the
                 # cached state isn't poisoned by our verify override.
-                restore_cmd = [
-                    "ninja", f"build/GALE01/src/{unit}.o",
-                    "build/GALE01/report.json",
-                ]
                 (
                     restore_timeout_s,
                     restore_timeout_source,
                 ) = _resolve_auto_verify_restore_timeout()
+                restore_max_steps = _resolve_auto_verify_restore_max_steps()
                 print(
                     f"[auto-verify] restore timeout: {restore_timeout_s:g}s "
                     f"({restore_timeout_source})",
                     file=sys.stderr,
                 )
                 print(
+                    f"[auto-verify] restore max dry-run steps: "
+                    f"{restore_max_steps}",
+                    file=sys.stderr,
+                )
+                print(
                     "[auto-verify] restoring clean object/report state",
                     file=sys.stderr,
                 )
-                restore_proc = _run_auto_verify_command_with_status(
-                    restore_cmd,
-                    cwd=melee_root,
-                    phase="restoring object/report",
-                    status_label=" ".join(restore_cmd),
-                    timeout_s=restore_timeout_s,
+                restore_proc, restore_planned_steps = (
+                    _restore_object_report_for_unit(
+                        unit=unit,
+                        melee_root=melee_root,
+                        timeout_s=restore_timeout_s,
+                        max_steps=restore_max_steps,
+                        force=False,
+                    )
                 )
+                if restore_planned_steps > restore_max_steps:
+                    print(
+                        f"[auto-verify] restore skipped: dry-run planned "
+                        f"{restore_planned_steps} ninja steps, above "
+                        f"MWCC_DEBUG_RESTORE_MAX_STEPS={restore_max_steps}",
+                        file=sys.stderr,
+                    )
                 restore_stderr_tail = "\n".join(
                     restore_proc.stderr.splitlines()[-5:]
                 ) if restore_proc.stderr else ""
@@ -4284,6 +4299,8 @@ def match_iter_first(
                     "returncode": restore_proc.returncode,
                     "timeout_s": restore_timeout_s,
                     "timeout_source": restore_timeout_source,
+                    "max_steps": restore_max_steps,
+                    "planned_steps": restore_planned_steps,
                     "stderr_tail": restore_stderr_tail,
                 }
                 restore_hint = _auto_verify_restore_cleanup_hint(
@@ -4383,7 +4400,9 @@ def match_iter_first(
                     f"  restore object/report: exit "
                     f"{restore.get('returncode')} "
                     f"(timeout {restore.get('timeout_s')}s"
-                    f" via {restore.get('timeout_source', 'unknown')})"
+                    f" via {restore.get('timeout_source', 'unknown')}; "
+                    f"planned {restore.get('planned_steps', '?')} steps, "
+                    f"max {restore.get('max_steps', '?')})"
                 )
                 restore_tail = restore.get("stderr_tail")
                 if restore_tail:
@@ -5221,15 +5240,130 @@ def _resolve_auto_verify_restore_timeout(
     return 180.0, "default"
 
 
+def _resolve_auto_verify_restore_max_steps(
+    env: Optional[Mapping[str, str]] = None,
+) -> int:
+    values = env if env is not None else os.environ
+    return int(values.get("MWCC_DEBUG_RESTORE_MAX_STEPS", "64"))
+
+
 def _auto_verify_restore_cleanup_hint(stderr: str) -> str:
     if "ninja: warning: premature end of file; recovering" not in stderr:
         return ""
     return (
         "ninja metadata looks truncated after an interrupted build; run "
-        "`ninja -t recompact` from the repo root. If the warning persists, "
+        "`ninja -t recompact` from the repo root, then retry with "
+        "`melee-agent debug restore-object-report <source.c>`. That command "
+        "previews the ninja plan, refuses large rebuilds unless `--force` is "
+        "passed, and owns the restore process group. If the warning persists, "
         "remove `.ninja_deps`/`.ninja_log`, then run `python configure.py` "
         "before retrying."
     )
+
+
+def _restore_object_report_cmd_for_unit(unit: str) -> list[str]:
+    return [
+        "ninja",
+        f"build/GALE01/src/{unit}.o",
+        "build/GALE01/report.json",
+    ]
+
+
+def _ninja_dry_run_planned_steps(output: str) -> int:
+    total_steps = 0
+    fallback_steps = 0
+    for line in output.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped == "ninja: no work to do.":
+            continue
+        match = re.match(r"^\[(\d+)/(\d+)\]", stripped)
+        if match:
+            total_steps = max(total_steps, int(match.group(2)))
+        else:
+            fallback_steps += 1
+    return total_steps or fallback_steps
+
+
+def _make_expensive_restore_result(
+    cmd: list[str],
+    *,
+    planned_steps: int,
+    max_steps: int,
+) -> subprocess.CompletedProcess[str]:
+    stderr = (
+        f"[restore] refusing to launch restore: ninja dry-run would run "
+        f"{planned_steps} ninja step(s), above "
+        f"MWCC_DEBUG_RESTORE_MAX_STEPS={max_steps}.\n"
+        f"This can expand into a large rebuild. Re-run with "
+        f"`melee-agent debug restore-object-report <source.c> --force` "
+        f"or raise MWCC_DEBUG_RESTORE_MAX_STEPS if you intentionally want "
+        f"to launch it."
+    )
+    return subprocess.CompletedProcess(cmd, 125, "", stderr)
+
+
+def _restore_object_report_for_unit(
+    *,
+    unit: str,
+    melee_root: Path,
+    timeout_s: float,
+    max_steps: int,
+    force: bool = False,
+) -> tuple[subprocess.CompletedProcess[str], int]:
+    restore_cmd = _restore_object_report_cmd_for_unit(unit)
+    dry_run_cmd = ["ninja", "-n", *restore_cmd[1:]]
+    try:
+        dry_run = subprocess.run(
+            dry_run_cmd,
+            cwd=melee_root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stderr = (
+            (exc.stderr or "") + "\n"
+            f"[restore] ninja dry-run timed out after 30s; refusing to "
+            f"launch restore without a plan."
+        )
+        return subprocess.CompletedProcess(dry_run_cmd, 124, exc.stdout or "", stderr), 0
+    dry_output = "\n".join(
+        text for text in (dry_run.stdout, dry_run.stderr) if text
+    )
+    planned_steps = _ninja_dry_run_planned_steps(dry_output)
+    print(
+        f"[auto-verify] restore dry-run: {planned_steps} ninja step(s)",
+        file=sys.stderr,
+    )
+    if dry_run.returncode != 0:
+        return dry_run, planned_steps
+    if planned_steps == 0:
+        return subprocess.CompletedProcess(
+            restore_cmd,
+            0,
+            dry_run.stdout,
+            dry_run.stderr,
+        ), planned_steps
+    if planned_steps > max_steps and not force:
+        return _make_expensive_restore_result(
+            restore_cmd,
+            planned_steps=planned_steps,
+            max_steps=max_steps,
+        ), planned_steps
+    if planned_steps > max_steps:
+        print(
+            f"[auto-verify] restore dry-run plans {planned_steps} steps; "
+            f"running anyway because --force was requested",
+            file=sys.stderr,
+        )
+    proc = _run_auto_verify_command_with_status(
+        restore_cmd,
+        cwd=melee_root,
+        phase="restoring object/report",
+        status_label=" ".join(restore_cmd),
+        timeout_s=timeout_s,
+    )
+    return proc, planned_steps
 
 
 def _auto_verify_failure_exit_code(auto_verify_result: Optional[dict]) -> Optional[int]:
@@ -5307,6 +5441,85 @@ def _run_auto_verify_command_with_status(
                 f"({phase}: {status_label})",
                 file=sys.stderr,
             )
+
+
+@debug_app.command(name="restore-object-report")
+def restore_object_report(
+    c_file: Annotated[
+        str,
+        typer.Argument(
+            help="Path to the .c file whose object/report state should be restored.",
+        ),
+    ],
+    timeout: Annotated[
+        Optional[float],
+        typer.Option(
+            "--timeout",
+            help="Restore timeout in seconds. Defaults to "
+                 "MWCC_DEBUG_RESTORE_TIMEOUT, then MWCC_DEBUG_HANG_TIMEOUT, "
+                 "then 180.",
+        ),
+    ] = None,
+    max_steps: Annotated[
+        Optional[int],
+        typer.Option(
+            "--max-steps",
+            help="Maximum ninja dry-run steps allowed before refusing to "
+                 "launch restore. Defaults to MWCC_DEBUG_RESTORE_MAX_STEPS "
+                 "(64).",
+        ),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Run even when the dry-run plan exceeds --max-steps.",
+        ),
+    ] = False,
+) -> None:
+    """Safely restore one source's object and build report.
+
+    This is the managed cleanup path used by match-iter-first --auto-verify.
+    It previews the ninja plan first, refuses unexpectedly large rebuilds by
+    default, and runs the restore in an owned process group with a timeout.
+    """
+    melee_root = DEFAULT_MELEE_ROOT
+    src_rel = _resolve_src_relative(c_file)
+    unit = src_rel[:-2].removeprefix("src/")
+    if timeout is None:
+        timeout_s, timeout_source = _resolve_auto_verify_restore_timeout()
+    else:
+        timeout_s, timeout_source = timeout, "--timeout"
+    max_step_count = (
+        max_steps
+        if max_steps is not None
+        else _resolve_auto_verify_restore_max_steps()
+    )
+    print(
+        f"[restore] timeout: {timeout_s:g}s ({timeout_source})",
+        file=sys.stderr,
+    )
+    print(
+        f"[restore] max dry-run steps: {max_step_count}",
+        file=sys.stderr,
+    )
+    proc, planned_steps = _restore_object_report_for_unit(
+        unit=unit,
+        melee_root=melee_root,
+        timeout_s=timeout_s,
+        max_steps=max_step_count,
+        force=force,
+    )
+    print(
+        f"[restore] planned ninja steps: {planned_steps}",
+        file=sys.stderr,
+    )
+    if proc.stdout:
+        print(proc.stdout, end="")
+    if proc.stderr:
+        typer.echo(proc.stderr, err=True)
+    if proc.returncode != 0:
+        raise typer.Exit(proc.returncode)
 
 
 @debug_app.command(name="pcdump-local")
