@@ -452,7 +452,9 @@ Use `-fn` variants when the TU has multiple functions and the override would oth
 prints the exact scoped force list before compiling, and emits periodic
 status while `pcdump-local`'s watchdog bounds no-progress hangs. The cleanup
 restore phase is also status-reported as object/report restoration and is
-bounded by `MWCC_DEBUG_RESTORE_TIMEOUT` (default 180s).
+bounded by `MWCC_DEBUG_RESTORE_TIMEOUT`, falling back to
+`MWCC_DEBUG_HANG_TIMEOUT`, then 180s. A failed restore exits non-zero and
+reports `cleanup_complete=false` in JSON.
 
 ### Useful env-var overrides
 

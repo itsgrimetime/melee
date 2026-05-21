@@ -88,6 +88,48 @@ def test_auto_verify_runner_times_out_restore_phase(capsys) -> None:
     assert "timed out" in result.stderr
 
 
+def test_auto_verify_restore_timeout_inherits_hang_timeout(monkeypatch) -> None:
+    monkeypatch.delenv("MWCC_DEBUG_RESTORE_TIMEOUT", raising=False)
+    monkeypatch.setenv("MWCC_DEBUG_HANG_TIMEOUT", "8")
+
+    timeout_s, source = debug_cli._resolve_auto_verify_restore_timeout()
+
+    assert timeout_s == 8.0
+    assert source == "MWCC_DEBUG_HANG_TIMEOUT"
+
+
+def test_auto_verify_restore_timeout_prefers_restore_env(monkeypatch) -> None:
+    monkeypatch.setenv("MWCC_DEBUG_RESTORE_TIMEOUT", "12")
+    monkeypatch.setenv("MWCC_DEBUG_HANG_TIMEOUT", "8")
+
+    timeout_s, source = debug_cli._resolve_auto_verify_restore_timeout()
+
+    assert timeout_s == 12.0
+    assert source == "MWCC_DEBUG_RESTORE_TIMEOUT"
+
+
+def test_auto_verify_restore_hint_explains_truncated_ninja_state() -> None:
+    hint = debug_cli._auto_verify_restore_cleanup_hint(
+        "ninja: warning: premature end of file; recovering\n"
+    )
+
+    assert "ninja -t recompact" in hint
+    assert ".ninja_deps" in hint
+    assert "python configure.py" in hint
+
+
+def test_auto_verify_restore_failure_requests_nonzero_exit() -> None:
+    assert debug_cli._auto_verify_failure_exit_code({
+        "ran": True,
+        "restore": {"returncode": 124},
+    }) == 124
+    assert debug_cli._auto_verify_failure_exit_code({
+        "ran": True,
+        "restore": {"returncode": 0},
+    }) is None
+    assert debug_cli._auto_verify_failure_exit_code({"ran": False}) is None
+
+
 def test_mwcc_debug_dll_has_iter_first_function_scope() -> None:
     dll_source = (MELEE_ROOT / "tools" / "mwcc_debug" / "mwcc_debug.c").read_text()
 

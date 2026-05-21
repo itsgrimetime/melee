@@ -302,3 +302,19 @@ def test_pcdump_local_watchdog_exit_is_nonzero() -> None:
         debug_cli._raise_pcdump_local_watchdog_exit(True)
 
     assert exc_info.value.exit_code == 124
+
+
+def test_pcdump_local_missing_build_ninja_prints_actionable_fix(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", tmp_path)
+
+    with pytest.raises(typer.Exit) as exc_info:
+        debug_cli._ninja_cflags_for_unit("src/melee/mn/mnvibration.c")
+
+    captured = capsys.readouterr()
+    assert exc_info.value.exit_code == 2
+    assert "build.ninja missing" in captured.err
+    assert "python configure.py" in captured.err
