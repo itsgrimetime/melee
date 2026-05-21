@@ -383,3 +383,36 @@ into `wip/mn-heartbeat` and reran
   candidates. For source-shape candidates, traces involving the touched
   argument/source virtual (`r50` here) should probably sort ahead of generic
   post-coloring-disappear traces, even if both are "interesting."
+
+## Follow-up after `686086dc0`
+
+Context: merged `686086dc0` (`mwcc-debug: rank eliminated inline copies first`)
+into `wip/mn-heartbeat` and reran
+`suggest-inlines --verify --trace-copies` against `fn_80247510`.
+
+### Improvements that helped
+
+- The ranking fix addresses the remaining issue from `cc373568a`. The
+  single-axis dirty-temp candidates now put the relevant `r50 -> r108`
+  `copy-eliminated-before-coloring` trace first in `copy_trace_highlights`.
+
+- The grouped candidate now starts with the three expected cursor-copy traces:
+  `r50 -> r108` at block 279,
+  `r50 -> r109` at block 262, and
+  `r50 -> r110` at block 245. This makes the negative result immediately
+  readable without scripting around the JSON.
+
+### Result for `fn_80247510`
+
+- This improved diagnostics quality, but did not change the matching result.
+  All four dirty-temp inline/source-shape candidates still compile cleanly and
+  tie the baseline at `97.14597%`.
+
+- The important copies are still eliminated before coloring, so this remains
+  evidence against the current dirty-temp hidden-inline shape being sufficient
+  to solve the register/lifetime issue.
+
+### New requests
+
+- None from this run. The previously reported trace-prioritization issue looks
+  resolved.
