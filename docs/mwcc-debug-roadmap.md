@@ -33,7 +33,8 @@ the current floor.
   and transparent checkdiff normalization by default.
 - **`pcdump-local` reliability improvements**: function-scoped diff,
   content-hash freshness checks, forced-cache skip, `--no-cache-sync`
-  for temporary probes, keep-obj warnings, and local hang diagnostics.
+  for temporary probes, checkdiff timeouts for integrated `--diff`,
+  keep-obj warnings, and local hang diagnostics.
 - **Allocator forcing/scoring**: force-phys, force-phys-iter,
   force-coalesce, derive-target, score-source, guide, and
   match-iter-first auto-verification.
@@ -41,6 +42,11 @@ the current floor.
   first-absent-pass reporting, transform categorization, and copy
   discovery filters for `--list-copies`, `--involving`, and
   `--near-block`.
+- **Source-shape feedback fixes**: `suggest-inlines` handles
+  tree-sitter byte offsets correctly in source with non-ASCII comments,
+  omits full patched sources from JSON unless `--emit-patches` is set,
+  treats `guide`/`coalesce` seed modes as pattern fallbacks, and records
+  per-candidate verification failures instead of aborting.
 - **`tier3-search` v2**: seed generation, smoke compile, per-seed
   permuter wiring, budget/time controls, and `--apply-best`.
 - **`checkdiff`**: JSON exit normalization and SDA21 relocation
@@ -127,6 +133,8 @@ Candidate forms:
   `HSD_JObjSetTranslateX/Y/Z` pattern seeds, so cursor-copy/dirty-call
   candidates are still proposed when the visible calls live inside a
   static-inline helper.
+- keep source splices byte/character-offset safe when comments or
+  documentation before the candidate contain non-ASCII characters.
 
 ### P2.4: Candidate verification and ranking (HIGH)
 
@@ -226,7 +234,10 @@ out above.
   applies to both GPR and FP classes, fix the DLL-side class filter; use
   `--force-phys-iter` as the reliable workaround meanwhile.
 - **Coalesce preflight coverage:** continue broadening the invalid-pair
-  checks that prevent local wibo hangs before a forced run.
+  checks that prevent local wibo hangs before a forced run. Current
+  coverage flags physical-register pairs, direct interference,
+  cross-class pairs, missing colorgraph nodes, and absent colorgraph
+  data.
 
 ### Test corpus health (LOW)
 

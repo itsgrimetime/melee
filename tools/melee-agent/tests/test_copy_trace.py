@@ -259,3 +259,4 @@ def test_pcdump_local_help_exposes_no_cache_sync() -> None:
 
     assert proc.returncode == 0
     assert "--no-cache-sync" in proc.stdout
+    assert "--checkdiff-timeout" in proc.stdout

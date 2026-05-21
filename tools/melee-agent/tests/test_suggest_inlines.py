@@ -101,6 +101,57 @@ def test_generate_hidden_dirty_arg_temp_inside_direct_inline_helper() -> None:
     assert "HSD_JObjSetTranslateX" in candidate.source_excerpt
 
 
+def test_generate_hidden_dirty_arg_temp_inside_helper_after_unicode_comment() -> None:
+    source = textwrap.dedent("""\
+        // Cursor helper — source comments may contain Unicode arrows →.
+        static inline void SetCursor(HSD_JObj* cursor_jobj, f32 x)
+        {
+            HSD_JObjSetTranslateX(cursor_jobj,
+                                  HSD_JObjGetTranslationX(cursor_jobj));
+        }
+
+        void f(HSD_JObj* jobj)
+        {
+            SetCursor(jobj, 1.0f);
+        }
+    """)
+    candidates = generate_candidates(
+        source=source,
+        function="f",
+        seed_source="patterns",
+        max_span_statements=2,
+        budget=8,
+    )
+
+    candidate = next(c for c in candidates if c.kind == "hidden-dirty-arg-temp")
+    assert candidate.anchor.scope_path == ("SetCursor",)
+    assert candidate.reads == ("cursor_jobj",)
+
+
+def test_coalesce_seed_uses_pattern_fallback_for_hidden_dirty_candidates() -> None:
+    source = textwrap.dedent("""\
+        // Cursor helper — source comments may contain Unicode arrows →.
+        static inline void SetCursor(HSD_JObj* cursor_jobj, f32 x)
+        {
+            HSD_JObjSetTranslateX(cursor_jobj, x);
+        }
+
+        void f(HSD_JObj* jobj)
+        {
+            SetCursor(jobj, 1.0f);
+        }
+    """)
+    candidates = generate_candidates(
+        source=source,
+        function="f",
+        seed_source="coalesce",
+        max_span_statements=2,
+        budget=8,
+    )
+
+    assert any(c.kind == "hidden-dirty-arg-temp" for c in candidates)
+
+
 def test_generate_patches_for_arg_temp_candidate() -> None:
     source = textwrap.dedent("""\
         void f(HSD_JObj* cursor_jobj)
@@ -182,6 +233,56 @@ def test_generate_patches_for_hidden_dirty_arg_temp_inside_helper() -> None:
     assert "SetCursor(jobj, 1.0f);" in patched
 
 
+def test_generate_patches_uses_byte_offsets_safely_after_unicode_comment() -> None:
+    source = textwrap.dedent("""\
+        // Existing notes — these are before the function and use Unicode.
+        void f(HSD_JObj* cursor_jobj)
+        {
+            HSD_JObjSetMtxDirtySub(cursor_jobj);
+        }
+    """)
+    candidates = generate_candidates(
+        source=source,
+        function="f",
+        seed_source="patterns",
+        max_span_statements=2,
+        budget=8,
+    )
+    arg_temp = next(c for c in candidates if c.kind == "arg-temp")
+
+    patched = generate_patches(source, "f", [arg_temp])[0].patched_source
+
+    assert "cursor_jobj_arg_temp = cursor_jobj;" in patched
+    assert "HSD_JObjSetMtxDirtySub(cursor_jobj_arg_temp);" in patched
+    assert "cucursor_jobj" not in patched
+
+
+def test_generate_return_helper_patch_uses_byte_offsets_safely_after_unicode_comment() -> None:
+    source = textwrap.dedent("""\
+        // Existing notes — these are before the function and use Unicode.
+        void f(void)
+        {
+            int inputs;
+            inputs = GetInputs();
+            Use(inputs);
+        }
+    """)
+    candidates = generate_candidates(
+        source=source,
+        function="f",
+        seed_source="patterns",
+        max_span_statements=2,
+        budget=8,
+    )
+    candidate = next(c for c in candidates if c.kind == "return-helper")
+
+    patched = generate_patches(source, "f", [candidate])[0].patched_source
+
+    assert "inputs = f_return_helper_" in patched
+    assert "inininputs" not in patched
+    assert "GetInputs()" in patched
+
+
 def test_run_diagnostic_report_does_not_require_pcdump() -> None:
     source = textwrap.dedent("""\
         void f(HSD_JObj* cursor_jobj)
@@ -239,6 +340,42 @@ def test_render_json_is_parseable() -> None:
     payload = json.loads(render_json(report))
     assert payload["function"] == "f"
     assert payload["candidates"]
+
+
+def test_render_json_omits_full_patched_source_by_default() -> None:
+    source = "void f(HSD_JObj* cursor_jobj) { HSD_JObjSetMtxDirtySub(cursor_jobj); }"
+    report = run(
+        source=source,
+        function="f",
+        pcdump_text="",
+        seed_source="patterns",
+        budget=8,
+        max_span_statements=2,
+        verify=False,
+    )
+
+    payload = json.loads(render_json(report))
+
+    assert payload["patches"]
+    assert "summary" in payload["patches"][0]
+    assert "patched_source" not in payload["patches"][0]
+
+
+def test_render_json_can_emit_full_patched_source() -> None:
+    source = "void f(HSD_JObj* cursor_jobj) { HSD_JObjSetMtxDirtySub(cursor_jobj); }"
+    report = run(
+        source=source,
+        function="f",
+        pcdump_text="",
+        seed_source="patterns",
+        budget=8,
+        max_span_statements=2,
+        verify=False,
+    )
+
+    payload = json.loads(render_json(report, emit_patches=True))
+
+    assert "patched_source" in payload["patches"][0]
 
 
 def test_generate_return_helper_candidate_for_single_assignment() -> None:

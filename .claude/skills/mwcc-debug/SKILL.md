@@ -340,6 +340,8 @@ melee-agent debug virtual-to-ig -f my_fn --virtual r50 --class gpr  # disambigua
 # Suggest C-source patterns to produce a specific coalesce (or discover candidates)
 melee-agent debug suggest-coalesce-source -f my_fn -V 53=3          # pair mode: coalesce r53 with r3
 melee-agent debug suggest-coalesce-source -f my_fn --discover --top 5  # discover best candidates
+# Preflight warnings flag unsafe force-coalesce probes, including direct
+# interference and pairs where either virtual is absent from the colorgraph.
 
 # Trace a source-created pcode copy through the allocator. Use this when a
 # manual local/temp creates `mr rTO,rFROM` before coloring, but final ASM
@@ -354,20 +356,26 @@ melee-agent debug trace-copy -f my_fn --involving r50 --near-block 245
 # Suggest hidden inline/helper source shapes
 melee-agent debug suggest-inlines -f my_fn
 melee-agent debug suggest-inlines -f my_fn --seed-source repeated
+melee-agent debug suggest-inlines -f my_fn --seed-source coalesce  # pattern fallback for coalesce leads
 melee-agent debug suggest-inlines -f my_fn --verify
+melee-agent debug suggest-inlines -f my_fn --verify --checkdiff-timeout 120
 melee-agent debug suggest-inlines -f my_fn --verify --apply-best
+melee-agent debug suggest-inlines -f my_fn --json              # summaries only
+melee-agent debug suggest-inlines -f my_fn --json --emit-patches
 
 # `suggest-inlines` is diagnostic by default. It reports repeated/helper-shaped
 # statement groups, short-lived call-argument temp candidates, and rejected
 # candidates with reasons. Pattern seeds understand visible
 # `HSD_JObjSetTranslateX/Y/Z` calls as hiding `HSD_JObjSetMtxDirtySub`, so they
 # can propose cursor-copy/dirty-call lifetime splits even when the dirty call is
-# inside a header inline or a same-source direct static-inline helper. Use
-# `--verify` to stage candidates and score them against real-tree `checkdiff`;
-# source is restored unless `--apply-best` keeps a verified winner.
+# inside a header inline or a same-source direct static-inline helper, even when
+# comments before the helper contain non-ASCII text. Use `--verify` to stage
+# candidates and score them against real-tree `checkdiff`; source is restored
+# unless `--apply-best` keeps a verified winner.
 
 # Keep temporary source probes out of the canonical pcdump cache.
 melee-agent debug pcdump-local src/melee/mn/mnvibration.c --no-cache-sync
+melee-agent debug pcdump-local src/melee/mn/mnvibration.c --diff --checkdiff-timeout 120
 melee-agent debug pcdump-local src/melee/mn/mnvibration.c --output /tmp/probe.txt --no-cache-sync
 
 # Apply targeted source mutations (type change, alias insertion)

@@ -95,6 +95,7 @@ def verify_real_tree_patches(
     checkdiff_runner: RealTreeCheckdiffRunner,
     apply_best: bool,
     threshold: float,
+    diagnostics_root: Optional[Path] = None,
 ) -> list[CandidateScore]:
     original = source_path.read_text()
     scores: list[CandidateScore] = []
@@ -103,21 +104,39 @@ def verify_real_tree_patches(
     try:
         for patch in patches:
             source_path.write_text(patch.patched_source)
-            result = checkdiff_runner(function)
-            delta = result.delta if result.delta is not None else -9999.0
-            if delta >= best_delta:
-                best_delta = delta
-                best_patch = patch
-            scores.append(CandidateScore(
-                candidate_id=patch.candidate_id,
-                compile_ok=True,
-                checkdiff_pct=result.match_pct,
-                checkdiff_delta=result.delta,
-                pcdump_score_delta=None,
-                diagnostics_path=None,
-                candidate_size=len(patch.patched_source.splitlines()),
-                helper_param_count=0,
-            ))
+            try:
+                result = checkdiff_runner(function)
+                delta = result.delta if result.delta is not None else -9999.0
+                if delta >= best_delta:
+                    best_delta = delta
+                    best_patch = patch
+                scores.append(CandidateScore(
+                    candidate_id=patch.candidate_id,
+                    compile_ok=True,
+                    checkdiff_pct=result.match_pct,
+                    checkdiff_delta=result.delta,
+                    pcdump_score_delta=None,
+                    diagnostics_path=None,
+                    candidate_size=len(patch.patched_source.splitlines()),
+                    helper_param_count=0,
+                ))
+            except Exception as exc:
+                log_path = None
+                if diagnostics_root is not None:
+                    diag_dir = diagnostics_root / patch.candidate_id
+                    diag_dir.mkdir(parents=True, exist_ok=True)
+                    log_path = diag_dir / "verify_error.txt"
+                    log_path.write_text(f"{type(exc).__name__}: {exc}\n")
+                scores.append(CandidateScore(
+                    candidate_id=patch.candidate_id,
+                    compile_ok=False,
+                    checkdiff_pct=None,
+                    checkdiff_delta=None,
+                    pcdump_score_delta=None,
+                    diagnostics_path=log_path,
+                    candidate_size=len(patch.patched_source.splitlines()),
+                    helper_param_count=0,
+                ))
     finally:
         if apply_best and best_patch is not None:
             source_path.write_text(best_patch.patched_source)

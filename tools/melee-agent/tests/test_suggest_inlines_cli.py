@@ -51,3 +51,5 @@ def test_suggest_inlines_help_mentions_threshold_and_keep_failed() -> None:
     assert "--threshold" in proc.stdout
     assert "--keep-failed" in proc.stdout
     assert "--target" in proc.stdout
+    assert "--emit-patches" in proc.stdout
+    assert "--checkdiff-timeout" in proc.stdout

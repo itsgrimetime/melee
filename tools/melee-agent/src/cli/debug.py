@@ -5220,6 +5220,13 @@ def pcdump_local(
                  "baseline for follow-up diagnostics.",
         ),
     ] = False,
+    checkdiff_timeout: Annotated[
+        float,
+        typer.Option(
+            "--checkdiff-timeout",
+            help="Timeout in seconds for the integrated --diff checkdiff run.",
+        ),
+    ] = 60.0,
 ) -> None:
     """Local mwcc_debug pcdump (macOS+wibo+Zig-built DLL, no SSH).
 
@@ -5561,13 +5568,22 @@ def pcdump_local(
                     )
                 else:
                     print(f"[diff] target function: {fn_to_diff}", file=sys.stderr)
-                    diff_proc = subprocess.run(
-                        ["python", "tools/checkdiff.py", fn_to_diff,
-                         "--format", "plain", "--no-build"],
-                        cwd=melee_root,
-                    )
-                    if diff_proc.returncode == 0:
-                        print("[diff] MATCH — function bytes are identical.")
+                    try:
+                        diff_proc = subprocess.run(
+                            ["python", "tools/checkdiff.py", fn_to_diff,
+                             "--format", "plain", "--no-build"],
+                            cwd=melee_root,
+                            timeout=checkdiff_timeout,
+                        )
+                        if diff_proc.returncode == 0:
+                            print("[diff] MATCH — function bytes are identical.")
+                    except subprocess.TimeoutExpired:
+                        print(
+                            f"[diff] checkdiff timed out after "
+                            f"{checkdiff_timeout:g}s; rerun manually or raise "
+                            f"--checkdiff-timeout.",
+                            file=sys.stderr,
+                        )
             finally:
                 if build_o_existed and saved_o is not None:
                     build_o.write_bytes(saved_o)
@@ -6383,6 +6399,20 @@ def suggest_inlines_cmd(
         bool,
         typer.Option("--keep-failed", help="Preserve failed candidate diagnostics."),
     ] = False,
+    emit_patches: Annotated[
+        bool,
+        typer.Option(
+            "--emit-patches",
+            help="Include full patched_source payloads in --json output.",
+        ),
+    ] = False,
+    checkdiff_timeout: Annotated[
+        float,
+        typer.Option(
+            "--checkdiff-timeout",
+            help="Timeout in seconds for each checkdiff run during --verify.",
+        ),
+    ] = 60.0,
     json_out: Annotated[
         bool,
         typer.Option("--json", help="Emit JSON."),
@@ -6430,23 +6460,28 @@ def suggest_inlines_cmd(
         from ..mwcc_debug.source_shape import rank_scores
 
         def _checkdiff_runner(fn_name: str) -> CheckdiffResult:
+            cmd = [
+                "python",
+                "tools/checkdiff.py",
+                fn_name,
+                "--no-build",
+                "--no-tty",
+                "--format",
+                "json",
+            ]
             proc = subprocess.run(
-                [
-                    "python",
-                    "tools/checkdiff.py",
-                    fn_name,
-                    "--no-build",
-                    "--no-tty",
-                    "--format",
-                    "json",
-                ],
+                cmd,
                 cwd=melee_root,
                 capture_output=True,
                 text=True,
-                timeout=60,
+                timeout=checkdiff_timeout,
             )
             if not proc.stdout.strip():
-                raise RuntimeError(proc.stderr.strip() or "checkdiff produced no JSON")
+                cmd_text = " ".join(cmd)
+                raise RuntimeError(
+                    proc.stderr.strip()
+                    or f"checkdiff produced no JSON: {cmd_text}"
+                )
             return parse_checkdiff_json(proc.stdout)
 
         report.scores = rank_scores(verify_real_tree_patches(
@@ -6456,9 +6491,10 @@ def suggest_inlines_cmd(
             checkdiff_runner=_checkdiff_runner,
             apply_best=apply_best,
             threshold=threshold,
+            diagnostics_root=Path("nonmatchings") / function / "suggest_inlines",
         ))
     if json_out:
-        print(render_json(report))
+        print(render_json(report, emit_patches=emit_patches))
     else:
         print(render_text(report))
 
