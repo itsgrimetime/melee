@@ -34,7 +34,9 @@ the current floor.
 - **`pcdump-local` reliability improvements**: function-scoped diff,
   content-hash freshness checks, forced-cache skip, `--no-cache-sync`
   for temporary probes, checkdiff timeouts for integrated `--diff`,
-  keep-obj warnings, and local hang diagnostics.
+  keep-obj warnings, local hang diagnostics, and non-zero exit status
+  (`124`) when the watchdog kills a compile even if a partial dump was
+  produced.
 - **Allocator forcing/scoring**: force-phys, force-phys-iter,
   force-coalesce, derive-target, score-source, guide, and
   match-iter-first auto-verification.
@@ -46,7 +48,10 @@ the current floor.
   tree-sitter byte offsets correctly in source with non-ASCII comments,
   omits full patched sources from JSON unless `--emit-patches` is set,
   treats `guide`/`coalesce` seed modes as pattern fallbacks, and records
-  per-candidate verification failures instead of aborting.
+  per-candidate verification failures instead of aborting. Follow-up
+  fixes add typed/top-of-scope dirty-temp patches, grouped X/Y/Z
+  hidden-dirty candidates, and baseline/candidate/delta score reporting
+  for verified candidates.
 - **`tier3-search` v2**: seed generation, smoke compile, per-seed
   permuter wiring, budget/time controls, and `--apply-best`.
 - **`checkdiff`**: JSON exit normalization and SDA21 relocation
@@ -124,7 +129,10 @@ Candidate forms:
   void` helper;
 - extract a single-value expression/helper;
 - introduce a short-lived temp for one call argument without changing the
-  whole surrounding inline expansion.
+  whole surrounding inline expansion;
+- introduce a grouped short-lived temp for visible
+  `HSD_JObjSetTranslateX/Y/Z` calls that share the same first argument,
+  preserving the apparent source type and local declaration-at-top style.
 - trace a source-created copy from visible pcode virtuals to simplify and
   colorgraph decisions (`debug virtual-to-ig`, `debug trace-copy`) before
   deciding whether the remaining blocker is source lifetime or allocator
@@ -148,6 +156,8 @@ Candidate forms:
   visible.
 - Rank by compile success, checkdiff delta, pcdump score delta, candidate
   size, helper parameter count, and stable candidate id.
+- Verification output should show baseline match percent, candidate
+  match percent, and delta even when the candidate ties baseline.
 
 ### P2.5: Compiler-temp seeding for Tier 3 (MEDIUM)
 
@@ -236,8 +246,10 @@ out above.
 - **Coalesce preflight coverage:** continue broadening the invalid-pair
   checks that prevent local wibo hangs before a forced run. Current
   coverage flags physical-register pairs, direct interference,
-  cross-class pairs, missing colorgraph nodes, and absent colorgraph
-  data.
+  cross-class pairs, missing colorgraph nodes, absent colorgraph data,
+  and non-interfering pairs with no direct pre-coloring copy/identity
+  edge. Such pairs remain useful source-shape leads, but should not be
+  presented as safe `--force-coalesce` proofs.
 
 ### Test corpus health (LOW)
 

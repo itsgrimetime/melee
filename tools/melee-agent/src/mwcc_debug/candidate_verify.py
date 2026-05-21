@@ -96,27 +96,40 @@ def verify_real_tree_patches(
     apply_best: bool,
     threshold: float,
     diagnostics_root: Optional[Path] = None,
+    baseline_result: Optional[CheckdiffResult] = None,
 ) -> list[CandidateScore]:
     original = source_path.read_text()
     scores: list[CandidateScore] = []
     best_patch: Optional[CandidatePatch] = None
     best_delta = threshold
+    baseline_pct = baseline_result.match_pct if baseline_result else None
     try:
         for patch in patches:
             source_path.write_text(patch.patched_source)
             try:
                 result = checkdiff_runner(function)
-                delta = result.delta if result.delta is not None else -9999.0
-                if delta >= best_delta:
-                    best_delta = delta
+                checkdiff_delta = result.delta
+                if (
+                    checkdiff_delta is None
+                    and result.match_pct is not None
+                    and baseline_pct is not None
+                ):
+                    checkdiff_delta = result.match_pct - baseline_pct
+                score_delta = (
+                    checkdiff_delta
+                    if checkdiff_delta is not None else -9999.0
+                )
+                if score_delta >= best_delta:
+                    best_delta = score_delta
                     best_patch = patch
                 scores.append(CandidateScore(
                     candidate_id=patch.candidate_id,
                     compile_ok=True,
                     checkdiff_pct=result.match_pct,
-                    checkdiff_delta=result.delta,
+                    checkdiff_delta=checkdiff_delta,
                     pcdump_score_delta=None,
                     diagnostics_path=None,
+                    checkdiff_baseline_pct=baseline_pct,
                     candidate_size=len(patch.patched_source.splitlines()),
                     helper_param_count=0,
                 ))
@@ -134,6 +147,7 @@ def verify_real_tree_patches(
                     checkdiff_delta=None,
                     pcdump_score_delta=None,
                     diagnostics_path=log_path,
+                    checkdiff_baseline_pct=baseline_pct,
                     candidate_size=len(patch.patched_source.splitlines()),
                     helper_param_count=0,
                 ))

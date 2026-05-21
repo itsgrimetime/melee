@@ -341,7 +341,8 @@ melee-agent debug virtual-to-ig -f my_fn --virtual r50 --class gpr  # disambigua
 melee-agent debug suggest-coalesce-source -f my_fn -V 53=3          # pair mode: coalesce r53 with r3
 melee-agent debug suggest-coalesce-source -f my_fn --discover --top 5  # discover best candidates
 # Preflight warnings flag unsafe force-coalesce probes, including direct
-# interference and pairs where either virtual is absent from the colorgraph.
+# interference, pairs where either virtual is absent from the colorgraph, and
+# non-interfering pairs that lack a direct pre-coloring copy/identity edge.
 
 # Trace a source-created pcode copy through the allocator. Use this when a
 # manual local/temp creates `mr rTO,rFROM` before coloring, but final ASM
@@ -367,16 +368,20 @@ melee-agent debug suggest-inlines -f my_fn --json --emit-patches
 # statement groups, short-lived call-argument temp candidates, and rejected
 # candidates with reasons. Pattern seeds understand visible
 # `HSD_JObjSetTranslateX/Y/Z` calls as hiding `HSD_JObjSetMtxDirtySub`, so they
-# can propose cursor-copy/dirty-call lifetime splits even when the dirty call is
-# inside a header inline or a same-source direct static-inline helper, even when
-# comments before the helper contain non-ASCII text. Use `--verify` to stage
-# candidates and score them against real-tree `checkdiff`; source is restored
-# unless `--apply-best` keeps a verified winner.
+# can propose typed cursor-copy/dirty-call lifetime splits, including grouped
+# X/Y/Z candidates, even when the dirty call is inside a header inline or a
+# same-source direct static-inline helper and comments before the helper contain
+# non-ASCII text. Use `--verify` to stage candidates and score them against
+# real-tree `checkdiff`; output includes baseline percent, candidate percent,
+# and delta, and source is restored unless `--apply-best` keeps a verified
+# winner.
 
 # Keep temporary source probes out of the canonical pcdump cache.
 melee-agent debug pcdump-local src/melee/mn/mnvibration.c --no-cache-sync
 melee-agent debug pcdump-local src/melee/mn/mnvibration.c --diff --checkdiff-timeout 120
 melee-agent debug pcdump-local src/melee/mn/mnvibration.c --output /tmp/probe.txt --no-cache-sync
+# If MWCC_DEBUG_HANG_TIMEOUT kills a local compile, pcdump-local exits 124 even
+# if it wrote a partial dump, so scripts do not treat the partial as valid.
 
 # Apply targeted source mutations (type change, alias insertion)
 melee-agent debug mutate type-change -f my_fn --var my_var --type u32

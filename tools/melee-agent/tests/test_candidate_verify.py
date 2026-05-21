@@ -112,3 +112,33 @@ def test_verify_real_tree_records_runner_error_and_continues(tmp_path: Path) -> 
     assert scores[0].diagnostics_path is not None
     assert "checkdiff timed out" in scores[0].diagnostics_path.read_text()
     assert source_path.read_text() == "void f(void) { Original(); }\n"
+
+
+def test_verify_real_tree_computes_delta_from_baseline_result(tmp_path: Path) -> None:
+    source_path = tmp_path / "file.c"
+    source_path.write_text("void f(void) { Original(); }\n")
+    patch = CandidatePatch(
+        candidate_id="arg-temp-0001",
+        patched_source="void f(void) { Candidate(); }\n",
+        summary="candidate",
+        touched_ranges=((1, 2),),
+    )
+
+    def runner(function: str) -> CheckdiffResult:
+        assert function == "fn_test"
+        return CheckdiffResult(match_pct=97.25, delta=None)
+
+    scores = verify_real_tree_patches(
+        function="fn_test",
+        source_path=source_path,
+        patches=[patch],
+        checkdiff_runner=runner,
+        apply_best=False,
+        threshold=0.05,
+        baseline_result=CheckdiffResult(match_pct=97.25, delta=None),
+    )
+
+    assert scores[0].checkdiff_baseline_pct == 97.25
+    assert scores[0].checkdiff_pct == 97.25
+    assert scores[0].checkdiff_delta == 0.0
+    assert source_path.read_text() == "void f(void) { Original(); }\n"

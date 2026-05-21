@@ -58,6 +58,7 @@ class CandidateScore:
     checkdiff_delta: Optional[float]
     pcdump_score_delta: Optional[float]
     diagnostics_path: Optional[Path]
+    checkdiff_baseline_pct: Optional[float] = None
     candidate_size: int = 0
     helper_param_count: int = 0
 

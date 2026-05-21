@@ -6,6 +6,10 @@ import pathlib
 import subprocess
 import textwrap
 
+import pytest
+import typer
+
+from src.cli import debug as debug_cli
 from src.mwcc_debug.copy_trace import (
     find_virtual_to_ig,
     list_copy_lifetimes,
@@ -260,3 +264,11 @@ def test_pcdump_local_help_exposes_no_cache_sync() -> None:
     assert proc.returncode == 0
     assert "--no-cache-sync" in proc.stdout
     assert "--checkdiff-timeout" in proc.stdout
+
+
+def test_pcdump_local_watchdog_exit_is_nonzero() -> None:
+    assert hasattr(debug_cli, "_raise_pcdump_local_watchdog_exit")
+    with pytest.raises(typer.Exit) as exc_info:
+        debug_cli._raise_pcdump_local_watchdog_exit(True)
+
+    assert exc_info.value.exit_code == 124
