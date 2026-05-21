@@ -6495,6 +6495,182 @@ def _print_basis(basis, bindings) -> None:
               f"[{b.kind}/{b.confidence}]")
 
 
+def _parse_virtual_reg_token(token: str) -> int:
+    vstr = token.strip()
+    if vstr.lower().startswith("r"):
+        vstr = vstr[1:]
+    try:
+        return int(vstr)
+    except ValueError:
+        raise typer.BadParameter(
+            f"invalid virtual register {token!r}; expected an integer "
+            "or an r-prefixed token like r108"
+        )
+
+
+@debug_app.command(name="virtual-to-ig")
+def virtual_to_ig(
+    function: Annotated[
+        str,
+        typer.Option(
+            "--function", "-f",
+            help="Function to look up.",
+        ),
+    ],
+    virtual: Annotated[
+        str,
+        typer.Option(
+            "--virtual",
+            help="Visible pcode virtual register, e.g. r108 or 108.",
+        ),
+    ],
+    pcdump: Annotated[
+        Optional[Path],
+        typer.Argument(
+            help="Path to pcdump.txt. Auto-resolves from cache when omitted.",
+        ),
+    ] = None,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit as JSON."),
+    ] = False,
+) -> None:
+    """Map a visible pcode virtual register to allocator graph identity."""
+    from ..mwcc_debug.copy_trace import find_virtual_to_ig
+
+    virtual_int = _parse_virtual_reg_token(virtual)
+    melee_root = DEFAULT_MELEE_ROOT
+    pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
+    result = find_virtual_to_ig(pcdump_path.read_text(), function, virtual_int)
+
+    if json_out:
+        print(json.dumps(result.to_dict(), indent=2))
+        return
+
+    print(f"Function: {function}")
+    print(f"Virtual:  r{virtual_int}")
+    print(f"Status:   {result.status}")
+    if result.note:
+        print(f"Note:     {result.note}")
+    if result.class_id is not None:
+        print(f"Class:    {result.class_id}")
+    if result.ig_idx is not None:
+        print(f"ig_idx:   {result.ig_idx}")
+    if result.simplify_iter is not None:
+        print(f"Simplify: iter {result.simplify_iter}")
+    if result.color_iter is not None:
+        assigned = (
+            "?" if result.assigned_reg is None else f"r{result.assigned_reg}"
+        )
+        print(f"Color:    iter {result.color_iter}, assigned {assigned}")
+    if result.live_range is not None:
+        print(
+            f"Live:     {result.live_range[0]}..{result.live_range[1]} "
+            f"({result.use_count} use(s))"
+        )
+    if result.first_occurrence is not None:
+        occ = result.first_occurrence
+        print(
+            "First:    "
+            f"{occ.pass_name} B{occ.block_idx}:{occ.instr_idx} "
+            f"{occ.opcode} {occ.operands}"
+        )
+    if result.last_occurrence is not None:
+        occ = result.last_occurrence
+        print(
+            "Last:     "
+            f"{occ.pass_name} B{occ.block_idx}:{occ.instr_idx} "
+            f"{occ.opcode} {occ.operands}"
+        )
+
+
+@debug_app.command(name="trace-copy")
+def trace_copy(
+    function: Annotated[
+        str,
+        typer.Option(
+            "--function", "-f",
+            help="Function containing the pcode copy.",
+        ),
+    ],
+    from_reg: Annotated[
+        str,
+        typer.Option(
+            "--from",
+            help="Source virtual register for the copy, e.g. r50.",
+        ),
+    ],
+    to_reg: Annotated[
+        str,
+        typer.Option(
+            "--to",
+            help="Destination virtual register for the copy, e.g. r108.",
+        ),
+    ],
+    pcdump: Annotated[
+        Optional[Path],
+        typer.Argument(
+            help="Path to pcdump.txt. Auto-resolves from cache when omitted.",
+        ),
+    ] = None,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit as JSON."),
+    ] = False,
+) -> None:
+    """Trace where a pcode copy appears and why it disappears."""
+    from ..mwcc_debug.copy_trace import trace_copy_lifetime
+
+    from_virtual = _parse_virtual_reg_token(from_reg)
+    to_virtual = _parse_virtual_reg_token(to_reg)
+    melee_root = DEFAULT_MELEE_ROOT
+    pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
+    report = trace_copy_lifetime(
+        pcdump_path.read_text(),
+        function,
+        from_virtual=from_virtual,
+        to_virtual=to_virtual,
+    )
+
+    if json_out:
+        print(json.dumps(report.to_dict(), indent=2))
+        return
+
+    print(f"Function: {function}")
+    print(f"Copy:     r{to_virtual} <- r{from_virtual}")
+    print(f"Status:   {report.status}")
+    print(f"Likely:   {report.likely_cause}")
+    if report.note:
+        print(f"Note:     {report.note}")
+    if report.first_copy is not None:
+        occ = report.first_copy
+        print(
+            "First:    "
+            f"{occ.pass_name} B{occ.block_idx}:{occ.instr_idx} "
+            f"{occ.opcode} {occ.operands}"
+        )
+    if report.last_copy is not None:
+        occ = report.last_copy
+        print(
+            "Last:     "
+            f"{occ.pass_name} B{occ.block_idx}:{occ.instr_idx} "
+            f"{occ.opcode} {occ.operands}"
+        )
+    print()
+    print("Source virtual:")
+    print(f"  status: {report.from_mapping.status}")
+    if report.from_mapping.ig_idx is not None:
+        print(f"  ig_idx: {report.from_mapping.ig_idx}")
+    if report.from_mapping.assigned_reg is not None:
+        print(f"  phys:   r{report.from_mapping.assigned_reg}")
+    print("Destination virtual:")
+    print(f"  status: {report.to_mapping.status}")
+    if report.to_mapping.ig_idx is not None:
+        print(f"  ig_idx: {report.to_mapping.ig_idx}")
+    if report.to_mapping.assigned_reg is not None:
+        print(f"  phys:   r{report.to_mapping.assigned_reg}")
+
+
 @debug_app.command(name="virtual-to-var")
 def virtual_to_var(
     function: Annotated[
