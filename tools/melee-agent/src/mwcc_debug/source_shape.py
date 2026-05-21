@@ -1,9 +1,10 @@
 """Shared dataclasses for source-shape suggestion tooling."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections import Counter
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 
 @dataclass(frozen=True)
@@ -59,9 +60,25 @@ class CandidateCopyTrace:
     likely_cause: str
     first_copy_pass: Optional[str] = None
     last_copy_pass: Optional[str] = None
+    first_copy_block: Optional[int] = None
+    last_copy_block: Optional[int] = None
     first_absent_pass: Optional[str] = None
     transform_category: Optional[str] = None
+    interest_reasons: tuple[str, ...] = ()
     note: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class CandidateCopyTraceSet:
+    """Display-focused subset plus the total raw trace count."""
+
+    traces: tuple[CandidateCopyTrace, ...]
+    total_count: int
+    raw_traces: tuple[CandidateCopyTrace, ...] = ()
+
+    @property
+    def omitted_count(self) -> int:
+        return max(0, self.total_count - len(self.traces))
 
 
 @dataclass(frozen=True)
@@ -78,6 +95,103 @@ class CandidateScore:
     candidate_size: int = 0
     helper_param_count: int = 0
     copy_traces: tuple[CandidateCopyTrace, ...] = ()
+    copy_trace_highlights: tuple[CandidateCopyTrace, ...] = ()
+    copy_trace_total_count: int = 0
+    copy_trace_omitted_count: int = 0
+
+
+def _unique_reasons(reasons: Iterable[str]) -> tuple[str, ...]:
+    out: list[str] = []
+    for reason in reasons:
+        if reason and reason not in out:
+            out.append(reason)
+    return tuple(out)
+
+
+def _removed_before_coloring(trace: CandidateCopyTrace) -> bool:
+    if trace.likely_cause == "removed-before-coloring":
+        return True
+    if trace.transform_category in {
+        "copy-eliminated-before-coloring",
+        "copy-propagation-or-dead-copy",
+        "copy-rewritten-before-coloring",
+    }:
+        return True
+    return trace.first_absent_pass is not None
+
+
+def summarize_candidate_copy_traces(
+    traces: Iterable[CandidateCopyTrace],
+    *,
+    max_traces: int = 12,
+    priority_virtuals: tuple[int, ...] = (),
+) -> CandidateCopyTraceSet:
+    """Select candidate-relevant copy traces for human output.
+
+    The full candidate pcdump can introduce many incidental copies after a
+    source rewrite. For source-shape candidates, the most useful subset is
+    usually the dominant source virtual fanning out to new temps, then copies
+    that disappear before coloring, then any caller-prioritized virtuals.
+    """
+    trace_tuple = tuple(traces)
+    if not trace_tuple:
+        return CandidateCopyTraceSet(traces=(), total_count=0)
+
+    removed_sources = Counter(
+        trace.from_virtual for trace in trace_tuple
+        if trace.from_virtual is not None and _removed_before_coloring(trace)
+    )
+    dominant_source: Optional[int] = None
+    if removed_sources:
+        [(candidate_source, count), *rest] = removed_sources.most_common()
+        if count > 1 and (not rest or rest[0][1] < count):
+            dominant_source = candidate_source
+
+    priority_set = set(priority_virtuals)
+    annotated: list[CandidateCopyTrace] = []
+    for trace in trace_tuple:
+        reasons = list(trace.interest_reasons)
+        if (
+            dominant_source is not None
+            and trace.from_virtual == dominant_source
+        ):
+            reasons.append("dominant-source-virtual")
+        if _removed_before_coloring(trace):
+            reasons.append("removed-before-coloring")
+        if (
+            trace.from_virtual in priority_set
+            or trace.to_virtual in priority_set
+        ):
+            reasons.append("priority-virtual")
+        annotated.append(replace(
+            trace,
+            interest_reasons=_unique_reasons(reasons),
+        ))
+
+    dominant = [
+        trace for trace in annotated
+        if "dominant-source-virtual" in trace.interest_reasons
+    ]
+    interesting = [
+        trace for trace in annotated
+        if trace.interest_reasons
+    ]
+    selected = dominant or interesting or annotated
+
+    def key(trace: CandidateCopyTrace) -> tuple[int, int, int, int]:
+        return (
+            0 if "dominant-source-virtual" in trace.interest_reasons else 1,
+            0 if _removed_before_coloring(trace) else 1,
+            -1 if trace.to_virtual is None else trace.to_virtual,
+            -1 if trace.from_virtual is None else trace.from_virtual,
+        )
+
+    selected = sorted(selected, key=key)[:max_traces]
+    return CandidateCopyTraceSet(
+        traces=tuple(selected),
+        total_count=len(trace_tuple),
+        raw_traces=tuple(annotated),
+    )
 
 
 @dataclass

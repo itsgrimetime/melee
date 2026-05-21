@@ -8,6 +8,7 @@ from typing import Callable, Optional
 
 from .source_shape import (
     CandidateCopyTrace,
+    CandidateCopyTraceSet,
     CandidatePatch,
     CandidateScore,
     rank_scores,
@@ -28,7 +29,10 @@ class CheckdiffResult:
 
 
 CheckdiffRunner = Callable[[CandidatePatch, Path], CheckdiffResult]
-CopyTraceRunner = Callable[[CandidatePatch], list[CandidateCopyTrace]]
+CopyTraceRunner = Callable[
+    [CandidatePatch],
+    list[CandidateCopyTrace] | CandidateCopyTraceSet,
+]
 
 
 def stage_patch(stage_root: Path, function: str, patch: CandidatePatch) -> StagedCandidate:
@@ -130,9 +134,21 @@ def verify_real_tree_patches(
                     best_delta = score_delta
                     best_patch = patch
                 copy_traces: tuple[CandidateCopyTrace, ...] = ()
+                copy_trace_highlights: tuple[CandidateCopyTrace, ...] = ()
+                copy_trace_total_count = 0
+                copy_trace_omitted_count = 0
                 if copy_trace_runner is not None:
                     try:
-                        copy_traces = tuple(copy_trace_runner(patch))
+                        trace_result = copy_trace_runner(patch)
+                        if isinstance(trace_result, CandidateCopyTraceSet):
+                            trace_set = trace_result
+                            copy_trace_highlights = trace_set.traces
+                            copy_traces = trace_set.raw_traces or trace_set.traces
+                            copy_trace_total_count = trace_set.total_count
+                            copy_trace_omitted_count = trace_set.omitted_count
+                        else:
+                            copy_traces = tuple(trace_result)
+                            copy_trace_total_count = len(copy_traces)
                     except Exception as exc:
                         copy_traces = (CandidateCopyTrace(
                             from_virtual=None,
@@ -141,6 +157,8 @@ def verify_real_tree_patches(
                             likely_cause="trace-error",
                             note=f"{type(exc).__name__}: {exc}",
                         ),)
+                        copy_trace_highlights = copy_traces
+                        copy_trace_total_count = 1
                 scores.append(CandidateScore(
                     candidate_id=patch.candidate_id,
                     compile_ok=True,
@@ -152,6 +170,9 @@ def verify_real_tree_patches(
                     candidate_size=len(patch.patched_source.splitlines()),
                     helper_param_count=0,
                     copy_traces=copy_traces,
+                    copy_trace_highlights=copy_trace_highlights,
+                    copy_trace_total_count=copy_trace_total_count,
+                    copy_trace_omitted_count=copy_trace_omitted_count,
                 ))
             except Exception as exc:
                 log_path = None

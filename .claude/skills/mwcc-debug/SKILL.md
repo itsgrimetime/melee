@@ -379,9 +379,12 @@ melee-agent debug suggest-inlines -f my_fn --json --emit-patches
 # and delta, and source is restored unless `--apply-best` keeps a verified
 # winner. Use `--trace-copies` or `--explain` with `--verify` when you need to
 # know whether a candidate-introduced `mr` copy survives to simplify/colorgraph
-# or is eliminated before coloring. Use `--json --emit-hunks` (alias:
-# `--emit-diffs`) for compact unified diffs without full `patched_source`
-# payloads; reserve `--emit-patches` for the full rewritten TU.
+# or is eliminated before coloring. Human output summarizes the
+# candidate-relevant subset first, especially dominant source-virtual copies
+# that are removed before coloring, and reports how many noisy candidate-only
+# copies were omitted. Use `--json --emit-hunks` (alias: `--emit-diffs`) for
+# compact unified diffs without full `patched_source` payloads; reserve
+# `--emit-patches` for the full rewritten TU.
 
 # Keep temporary source probes out of the canonical pcdump cache.
 melee-agent debug pcdump-local src/melee/mn/mnvibration.c --no-cache-sync

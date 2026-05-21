@@ -177,3 +177,51 @@ def test_verify_real_tree_attaches_copy_trace_results(tmp_path: Path) -> None:
 
     assert scores[0].copy_traces == (trace,)
     assert source_path.read_text() == "void f(void) { Original(); }\n"
+
+
+def test_verify_real_tree_preserves_copy_trace_summary_counts(tmp_path: Path) -> None:
+    assert hasattr(source_shape, "CandidateCopyTraceSet")
+    source_path = tmp_path / "file.c"
+    source_path.write_text("void f(void) { Original(); }\n")
+    patch = CandidatePatch(
+        candidate_id="hidden-dirty-arg-temp-group-0004",
+        patched_source="void f(void) { Candidate(); }\n",
+        summary="candidate",
+        touched_ranges=((1, 2),),
+    )
+    trace = source_shape.CandidateCopyTrace(
+        from_virtual=50,
+        to_virtual=110,
+        status="copy-found",
+        likely_cause="removed-before-coloring",
+        interest_reasons=("dominant-source-virtual",),
+    )
+    noisy_trace = source_shape.CandidateCopyTrace(
+        from_virtual=70,
+        to_virtual=120,
+        status="copy-found",
+        likely_cause="removed-before-coloring",
+    )
+    trace_set = source_shape.CandidateCopyTraceSet(
+        traces=(trace,),
+        total_count=2,
+        raw_traces=(trace, noisy_trace),
+    )
+
+    def runner(function: str) -> CheckdiffResult:
+        return CheckdiffResult(match_pct=97.25, delta=0.0)
+
+    scores = verify_real_tree_patches(
+        function="fn_test",
+        source_path=source_path,
+        patches=[patch],
+        checkdiff_runner=runner,
+        apply_best=False,
+        threshold=0.05,
+        copy_trace_runner=lambda candidate: trace_set,
+    )
+
+    assert scores[0].copy_trace_highlights == (trace,)
+    assert scores[0].copy_traces == (trace, noisy_trace)
+    assert scores[0].copy_trace_total_count == 2
+    assert scores[0].copy_trace_omitted_count == 1
