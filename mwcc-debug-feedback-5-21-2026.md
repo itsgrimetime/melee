@@ -416,3 +416,46 @@ into `wip/mn-heartbeat` and reran
 
 - None from this run. The previously reported trace-prioritization issue looks
   resolved.
+
+## Manual follow-up after checked-setter probes
+
+Context: tried several local inline shapes for `fn_80247510` after the
+dirty-temp candidates proved that the `r50 -> r108/r109/r110` copies are
+created but eliminated before coloring.
+
+### Source-shape evidence
+
+- A local checked `HSD_JObjSetTranslateX/Y/Z` wrapper with
+  `HSD_JObj* temp = jobj`, standard named asserts, store/checks on `jobj`, and
+  `HSD_JObjSetMtxDirtySub(temp)` still produced the expected block-245
+  `r110 <- r50` copy, but `trace-copy` reported the same result:
+  `copy-eliminated-before-coloring`, first absent at `AFTER REGISTER COLORING`.
+
+- Splitting the dirty check into a two-argument helper made the probe worse:
+  the stack frame grew to `-304`, and the function still mismatched. Calling
+  `HSD_JObjSetMtxDirty(temp)` directly also grew the frame and did not preserve
+  the copy.
+
+- Naming the row jobjs and translation value temporaries in
+  `mnVibration_SetCursorPosition` did not help. It still mismatched and removed
+  the candidate `r50` copy around block 245 entirely.
+
+- `match-iter-first` suggested `--force-iter-first 151,48,45,153`, but the full
+  forced run and several smaller subsets (`48`, `45`, `153`, `151`,
+  `48,45`, `48,153`, `45,153`, `151,48`) all still mismatched. This looks like
+  a poor fit for the missing-copy problem rather than an iter-order-only
+  blocker.
+
+### Tooling feedback
+
+- `match-iter-first --auto-verify` gave no progress output while running and
+  had to be killed manually after hanging long enough to be unproductive. It
+  would be safer if auto-verify reused the local watchdog by default, surfaced
+  the exact force list being tested before compiling, and printed periodic
+  phase/status output.
+
+- Verifying `--force-iter-first` is awkward in this multi-function TU because
+  `pcdump-local --force-iter-first` is global and has no function-scoped
+  variant. The command itself warns about this, but for workflows like
+  `fn_80247510` a `--force-iter-first-fn` scope would make ambiguous
+  suggestions much safer to test.
