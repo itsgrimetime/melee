@@ -350,3 +350,36 @@ into `wip/mn-heartbeat` and reran
   if the reason distinguished "the visible `mr` disappears after register
   coloring / scheduling" from "the copy was eliminated before coloring and the
   destination never reached simplify/colorgraph."
+
+## Follow-up after `cc373568a`
+
+Context: merged `cc373568a` (`mwcc-debug: prioritize source-shape copy traces`)
+into `wip/mn-heartbeat` and reran
+`suggest-inlines --verify --trace-copies` against `fn_80247510`.
+
+### Improvements that helped
+
+- The source-shape trace prioritization now surfaces the important single-axis
+  cursor-copy result. The X/Y/Z single-axis candidates each include the
+  relevant `r50 -> r108` trace in `copy_trace_highlights`, with blocks 245,
+  262, and 279 respectively depending on which setter was patched.
+
+- The grouped candidate still highlights the full expected cursor-copy set:
+  `r50 -> r110` at block 245,
+  `r50 -> r109` at block 262, and
+  `r50 -> r108` at block 279. All three remain
+  `copy-eliminated-before-coloring`, so this is still a strong negative result
+  for the dirty-temp source shape.
+
+- The previous ambiguous `removed-before-coloring` label was split into
+  `removed-before-coloring` versus `copy-disappears-after-coloring`, which is
+  clearer when a copy survives coloring but disappears later in scheduling or
+  rewriting.
+
+### Remaining issue / request
+
+- The useful `r50 -> r108` trace is present now, but it still appears after
+  several generic `copy-disappears-after-coloring` entries in the single-axis
+  candidates. For source-shape candidates, traces involving the touched
+  argument/source virtual (`r50` here) should probably sort ahead of generic
+  post-coloring-disappear traces, even if both are "interesting."
