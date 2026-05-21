@@ -65,6 +65,29 @@ def test_auto_verify_runner_emits_periodic_status(capsys) -> None:
     assert "still running" in captured.err
 
 
+def test_auto_verify_runner_times_out_restore_phase(capsys) -> None:
+    cmd = [
+        sys.executable,
+        "-c",
+        "import time; time.sleep(5)",
+    ]
+
+    result = debug_cli._run_auto_verify_command_with_status(
+        cmd,
+        cwd=CLI_CWD,
+        status_label="clean object/report",
+        phase="restoring object/report",
+        status_interval_s=0.05,
+        timeout_s=0.12,
+    )
+
+    captured = capsys.readouterr()
+    assert result.returncode == 124
+    assert "restoring object/report: clean object/report" in captured.err
+    assert "still running" in captured.err
+    assert "timed out" in result.stderr
+
+
 def test_mwcc_debug_dll_has_iter_first_function_scope() -> None:
     dll_source = (MELEE_ROOT / "tools" / "mwcc_debug" / "mwcc_debug.c").read_text()
 

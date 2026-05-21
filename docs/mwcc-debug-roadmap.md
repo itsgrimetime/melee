@@ -40,7 +40,8 @@ the current floor.
 - **Allocator forcing/scoring**: force-phys, force-phys-iter,
   force-coalesce, derive-target, score-source, guide, and
   match-iter-first auto-verification with scoped force lists and periodic
-  status output.
+  status output, including bounded clean object/report restoration after
+  forced probes.
 - **Copy tracing diagnostics**: class-aware `virtual-to-ig`, `trace-copy`
   first-absent-pass reporting, transform categorization, and copy
   discovery filters for `--list-copies`, `--involving`, and

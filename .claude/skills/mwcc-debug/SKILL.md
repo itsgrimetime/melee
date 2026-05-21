@@ -450,7 +450,9 @@ melee-agent debug pcdump src/melee/mn/mnfoo.c \
 Use `-fn` variants when the TU has multiple functions and the override would otherwise affect all of them.
 `match-iter-first --auto-verify` uses `--force-iter-first-fn` automatically,
 prints the exact scoped force list before compiling, and emits periodic
-status while `pcdump-local`'s watchdog bounds no-progress hangs.
+status while `pcdump-local`'s watchdog bounds no-progress hangs. The cleanup
+restore phase is also status-reported as object/report restoration and is
+bounded by `MWCC_DEBUG_RESTORE_TIMEOUT` (default 180s).
 
 ### Useful env-var overrides
 
