@@ -82,3 +82,45 @@ def verify_patches(
                 helper_param_count=0,
             ))
     return rank_scores(scores)
+
+
+RealTreeCheckdiffRunner = Callable[[str], CheckdiffResult]
+
+
+def verify_real_tree_patches(
+    *,
+    function: str,
+    source_path: Path,
+    patches: list[CandidatePatch],
+    checkdiff_runner: RealTreeCheckdiffRunner,
+    apply_best: bool,
+    threshold: float,
+) -> list[CandidateScore]:
+    original = source_path.read_text()
+    scores: list[CandidateScore] = []
+    best_patch: Optional[CandidatePatch] = None
+    best_delta = threshold
+    try:
+        for patch in patches:
+            source_path.write_text(patch.patched_source)
+            result = checkdiff_runner(function)
+            delta = result.delta if result.delta is not None else -9999.0
+            if delta >= best_delta:
+                best_delta = delta
+                best_patch = patch
+            scores.append(CandidateScore(
+                candidate_id=patch.candidate_id,
+                compile_ok=True,
+                checkdiff_pct=result.match_pct,
+                checkdiff_delta=result.delta,
+                pcdump_score_delta=None,
+                diagnostics_path=None,
+                candidate_size=len(patch.patched_source.splitlines()),
+                helper_param_count=0,
+            ))
+    finally:
+        if apply_best and best_patch is not None:
+            source_path.write_text(best_patch.patched_source)
+        else:
+            source_path.write_text(original)
+    return rank_scores(scores)

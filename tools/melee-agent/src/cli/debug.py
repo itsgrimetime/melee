@@ -6382,6 +6382,42 @@ def suggest_inlines_cmd(
         max_span_statements=max_span_statements,
         verify=False,
     )
+    if verify:
+        from ..mwcc_debug.candidate_verify import (
+            CheckdiffResult,
+            parse_checkdiff_json,
+            verify_real_tree_patches,
+        )
+        from ..mwcc_debug.source_shape import rank_scores
+
+        def _checkdiff_runner(fn_name: str) -> CheckdiffResult:
+            proc = subprocess.run(
+                [
+                    "python",
+                    "tools/checkdiff.py",
+                    fn_name,
+                    "--no-build",
+                    "--no-tty",
+                    "--format",
+                    "json",
+                ],
+                cwd=melee_root,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if not proc.stdout.strip():
+                raise RuntimeError(proc.stderr.strip() or "checkdiff produced no JSON")
+            return parse_checkdiff_json(proc.stdout)
+
+        report.scores = rank_scores(verify_real_tree_patches(
+            function=function,
+            source_path=source_path,
+            patches=report.patches,
+            checkdiff_runner=_checkdiff_runner,
+            apply_best=apply_best,
+            threshold=0.05,
+        ))
     if json_out:
         print(render_json(report))
     else:
