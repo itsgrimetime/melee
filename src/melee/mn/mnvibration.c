@@ -215,12 +215,14 @@ static inline void mnVibration_SetCursorPosition(MnVibrationData* data,
 static inline void mnVibration_SetPortPanelState(MnVibrationData* data,
                                                  s32 port, u8 state)
 {
+    u8 state_copy;
     HSD_JObj* panel_jobj;
 
     data->x0[port + 2] = state;
+    state_copy = data->x0[port + 2];
     panel_jobj = ((MnVibrationData*) mnVibration_804D6C28->user_data)
                      ->jobjs[mnVibration_804D4FE8[(u8) port]];
-    HSD_JObjReqAnimAll(panel_jobj, data->x0[port + 2]);
+    HSD_JObjReqAnimAll(panel_jobj, state_copy);
     HSD_JObjAnimAll(panel_jobj);
 }
 

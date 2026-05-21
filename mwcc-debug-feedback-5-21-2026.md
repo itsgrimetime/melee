@@ -663,3 +663,292 @@ for `fn_80247510`.
   inline but still coalesced the cursor and dirty pointer into a single
   register; adding a stable cursor local restored the `-280` frame but dropped
   the target `f30` save and still mismatched. These probes were reverted.
+
+## Attempt-history visibility gap
+
+Context: before trying another `fn_80247510` inline/source-shape probe, I
+refreshed the function's attempt history to avoid repeating prior experiments.
+
+- `melee-agent attempts show fn_80247510` displayed only attempts `#42-#61`
+  and did not make the truncation obvious. The raw ledger had all 61 attempts,
+  so I had to query `/Users/mike/.config/decomp-me/attempt_ledger.json`
+  directly with `jq` to reconstruct the complete experiment map.
+
+- This matters for the `mwcc-debug` workflow because source-shape experiments
+  are often guided by old pcdump clues. If the visible attempt list omits older
+  dead ends like value temps, row locals, or dirty-pointer aliases, agents are
+  likely to repeat expensive/known-bad variants after context compaction.
+
+- Suggested fix: add an explicit truncation banner to `attempts show`, plus an
+  `--all` or `--limit` option. A compact one-line mode like
+  `#N [match outcome classification] retained=... blocker=... :: note` would
+  also be useful for debugger-guided sessions.
+
+## Follow-up value-temp probe result
+
+Context: after reviewing the full history, I tried to isolate the one useful
+clue from earlier broad value-temp experiments without recreating their large
+frame/register cascade.
+
+- Tight `f32` value temps inside `mnVibration_SetCursorPosition` are not a
+  viable source shape for `fn_80247510`. X-only, Y-only, and `register f32`
+  X-only variants all expanded the frame from `-280` to `-288`.
+
+- `mwcc-debug diff` showed temp/stack virtual churn, but final scheduled code
+  still passed the cursor directly to each hidden dirty call (`mr r3,r31`).
+  None of these variants produced the target short-lived aliases
+  (`mr r30,r31` / `mr r28,r31`) before `HSD_JObjSetMtxDirtySub`.
+
+## Port-panel ordering probe
+
+Context: pivoted from the cursor-copy mismatch to the smaller port-panel block
+in `fn_80247510`, where the target wants the byte-to-float state store and
+`mnVibration_804D4FE8` halfword load before loading `mnVibration_804D6C28`.
+
+### Useful signals
+
+- `pcdump-local` plus `debug analyze` made the blocker clear: in the retained
+  `u8 state_copy` shape, the state byte virtual (`r133` / `r131`) interferes
+  with the global-load virtual (`r216` / `r239`) because the `lwz
+  mnVibration_804D6C28` is present before the state conversion store in the
+  colored block. That forces `state=r5, global=r4`; the target needs
+  `state=r4, global=r5`.
+
+- `--force-phys-fn fn_80247510 --force-phys "133:4,216:5,217:4,131:4,239:5,240:4"`
+  was a useful proof: forced registers changed the local block to
+  `lbz r4` / `lwz r5`, but the instruction order still stayed wrong
+  (`lwz mnVibration_804D6C28` before `lhzx` and before the state store). This
+  confirms the remaining port-panel issue is source/PCode ordering, not just
+  allocator choice.
+
+### Remaining issue / request
+
+- The checked-in `mwcc-debug` skill documents `--force-phys "36:31"` but does
+  not mention that multi-function TUs require `--force-phys-fn <function>`.
+  It also does not explain the distinction between `--force-phys` and
+  `--force-phys-iter` when class-specific forcing is desired. The tool's
+  runtime warning explained this, but having the example in the skill would
+  make forced-register proofs faster and less error-prone.
+
+## Port-panel controlled source experiments
+
+Context: after the force-phys proof showed the remaining port-panel mismatch is
+source/PCode order, I tested new source shapes that operate outside the already
+exhausted helper-local/index-local space.
+
+### Experiment results
+
+- Passing an explicit `u8* port_state` to the setter, without otherwise changing
+  loop lifetime, compiled exactly like the retained `u8 state_copy` baseline:
+  `97.159615%`, opcode `0.98219178`, line delta `6`, hunk count `27`.
+
+- Making `port_state` a loop-scope pointer used by both branch tests and setter
+  calls regressed to `96.0%`, opcode `0.97668038`, line delta `8`, hunk count
+  `36`. It kept the pointer too long, moved the local block to `r31`, and still
+  loaded `mnVibration_804D6C28` before `lhzx` / the state store.
+
+- Splitting state update and panel animation into two phases, with the branch
+  doing `data->x0[...] = state` and passing `data->x0[...]` to an animation
+  helper, compiled exactly like baseline.
+
+- Adding an explicit branch-local `u8 state_copy` before the animation helper
+  also compiled exactly like baseline.
+
+- A macro-shaped setter boundary regressed to `97.11869%`, line delta `6`, hunk
+  count `31`. It kept the same bad `lwz mnVibration_804D6C28` ordering and
+  changed the panel JObj register family away from the target.
+
+- Rewriting the surrounding branch as first-check plus `continue`, then a
+  separate second check, compiled exactly like baseline.
+
+- Hoisting the current port state byte before both button checks regressed to
+  `95.57435%`, opcode `0.97597804`, line delta `9`, hunk count `31`. It created
+  another long-lived byte value and still did not delay the global load.
+
+### Tooling requests
+
+- Add an order-trace mode for one function/window that reports the relative
+  order of tagged instructions across MWCC passes. For this block, I want to
+  tag `stb state`, `lbz state`, `lhzx mnVibration_804D4FE8`, `stw state`, and
+  `lwz mnVibration_804D6C28`, then see the first pass where the global load is
+  before the table/state work.
+
+- Add a scheduler/dependency explanation for a selected window: list dependency
+  edges and ready-list decisions for why `lwz mnVibration_804D6C28` is allowed
+  and chosen before `lhzx` / `stw state`. If the order is already present before
+  scheduling, say which earlier pass/source PCode introduced it.
+
+- Add a local-window scorer for repeated experiments. Whole-function fuzzy
+  scores are useful, but for this blocker I need a compact report for the
+  `+344..+378` and `+3d4..+408` windows: opcode order, register class, stack
+  slots, and whether the global load is before or after table/state work.
+
+## Cursor reference comparison after reorientation
+
+Context: after exhausting same-pointer dirty aliases and port-panel ordering
+variants, I compared other menu cursor code to `fn_80247510` to check whether
+the vibration cursor block might be trying to follow a shared/canonical helper
+shape.
+
+### Useful signals
+
+- `mnStageSw_80236178` is a 100% matched function with the same natural idiom:
+  load a cursor JObj, compute a Y delta from two reference JObjs, then call
+  `HSD_JObjSetTranslateX/Y`. Its final asm passes the cursor directly to the
+  hidden dirty calls (`mr r3,r31`), and `debug trace-copy
+  build/mwcc_debug/mnstagesw_cursor_compare.txt -f mnStageSw_80236178
+  --list-copies --near-block 20` reports zero copies.
+
+- `mnGallery_802591BC` is also matched and has the simpler cursor-copy idiom
+  (`SetTranslateX/Y/Z(jobj, GetTranslation*(child))`). Its final asm likewise
+  uses the destination JObj directly for hidden dirty calls, with no short-lived
+  cursor alias.
+
+- This makes it unlikely that `fn_80247510`'s target-only `mr r30,r31` /
+  `mr r28,r31` copies are the normal result of a shared menu cursor helper or
+  the stock `HSD_JObjSetTranslate*` inline. The vibration target still appears
+  to need a source shape that creates a semantically live dirty-call alias before
+  register coloring, not just the canonical cursor-position source.
+
+### Experiment results
+
+- A custom dirty-argument cursor setter did create an early PCode copy
+  (`r115 <- r49`), but `trace-copy` classified the destination as pcode-only
+  and the copy disappeared before/at register coloring. The source shape
+  cascaded the surrounding registers and was reverted.
+
+- A two-parameter cursor setter called with a separate dirty-pointer expression
+  (`data->cursor_gobj->hsd_obj`) compiled identically to baseline:
+  `97.159615%`, opcode `0.9821917808219178`, line delta `6`, hunk count `27`.
+  There were no relevant copies near the cursor block, so this also was
+  reverted.
+
+### Tooling requests
+
+- `debug mutate insert-alias -f fn_80247510 --var jobj --at 0 --name
+  cursor_alias` hung for more than 50 seconds before printing any candidates.
+  It would be much more useful if this command first printed a quick list of
+  possible insertion/read locations, or accepted a timeout/progress mode that
+  fails with partial candidate information instead of producing no output.
+
+- `trace-copy` is good enough to show that a candidate alias is pcode-only and
+  absent after coloring, but for this blocker the key missing explanation is
+  narrower: which pass eliminated the pcode-only alias, whether it ever entered
+  simplifygraph/colorgraph, and what source property would make the destination
+  become an allocator-visible virtual instead of a disposable copy.
+
+## Expert-suggested cursor and port-panel probes
+
+Context: after sharing the 69-attempt history with another matching expert, I
+tested the highest-signal new hypotheses against the current `97.159615%`
+baseline.
+
+### Cursor dirty-alias probes
+
+- Distinct expression paths (`cursor_jobj` from `data->cursor_gobj->hsd_obj`,
+  dirty target from `mnVibration_804D6C28->user_data->cursor_gobj->hsd_obj`)
+  regressed to `95.60846%`, opcode `0.9084699453551912`, line delta `2`, hunk
+  count `75`. It produced a genuinely distinct dirty register, but not the
+  target `mr r30,r31` / `mr r28,r31` saves; it cascaded the surrounding
+  cursor/data registers instead.
+
+- `HSD_JObjSetMtxDirtyInline(jobj)` inside local cursor setters regressed to
+  `88.428375%`, opcode `0.66`, line delta `78`, hunk count `28`. The inline
+  function path emitted direct dirty calls (`mr r3,r31`) and did not create the
+  target saves.
+
+- Single-use dirty temp (`dirty_jobj = jobj`, use `dirty_jobj` only as the
+  `HSD_JObjSetMtxDirtySub` argument, all checks still use `jobj`) regressed to
+  `96.5116%`, opcode `0.9821917808219178`, line delta `6`, hunk count `60`.
+  It kept dirty calls in `r30` (`mr r3,r30`), but still did not emit the target
+  local copies from `r31` into newly dead registers.
+
+- Hybrid `nav_data->cursor_gobj->hsd_obj` dirty pointer regressed to
+  `96.27013%`, opcode `0.9084699453551912`, line delta `2`, hunk count `51`.
+  Like the global distinct-expression probe, it used/reloaded a distinct dirty
+  value rather than producing the target copy from the live cursor register.
+
+### Port-panel volatile probe
+
+- Volatile state-byte reload (`state_copy = *(volatile u8*) &data->x0[port+2]`)
+  regressed to `96.7367%`, opcode `0.9753761969904241`, line delta `4`, hunk
+  count `24`. It changed the local state read into an `add` plus `lbz 2(r3)`
+  shape and still left the `mnVibration_804D6C28` global load before the table
+  halfword load/state store.
+
+### Permuter setup finding
+
+- `debug gen-permuter-config -f fn_80247510 --pattern alias-split --force`
+  generated a more appropriate config than the auto-detected low-severity
+  `widen-u8-to-u32` profile.
+
+- The existing `/Users/mike/code/decomp-permuter/nonmatchings/fn_80247510`
+  import is stale: its `base.c` predates the current hidden cursor-position
+  helper/source state, and `debug verify-perm .../base.c -f fn_80247510` fails
+  to transfer/compile in the real tree. A serious C1 run needs a fresh import
+  from the current source or a tool command that refreshes the permuter
+  nonmatching in place.
+
+### Tooling requests
+
+- `gen-permuter-config` can write a useful settings file even when the
+  corresponding permuter `base.c` is stale/non-transferable. It would help if
+  the command optionally verified the base candidate against the real tree and
+  warned "settings generated, but this permuter import is stale" before an
+  agent spends time on a run that cannot be triaged cleanly.
+
+- A one-command "refresh permuter import from current source/function" wrapper
+  would make the C1 recommendation much easier to execute safely. The manual
+  `decomp-permuter/import.py` path is easy to misuse in this repo because the
+  build is ninja/configure-based and the old import may silently lag behind the
+  current retained source shape.
+
+## Targeted permuter run on cursor blocks
+
+Context: after the dirty-alias source probes failed, I tried the C1
+decomp-permuter recommendation against a fresh import from the current source.
+
+### Setup and run results
+
+- A fresh `decomp-permuter/import.py --function fn_80247510` import from the
+  current `src/melee/mn/mnvibration.c` compiled standalone, but
+  `debug verify-perm nonmatchings/fn_80247510/base.c -f fn_80247510` initially
+  failed to transfer. The pruned `base.c` had a duplicate
+  `mnVibration_802474C4` prototype wrapped in `#pragma push` /
+  `#pragma dont_inline on` / `#pragma pop`, so the verifier extracted a stray
+  `#pragma pop` with `fn_80247510`. Removing that generated pragma/prototype
+  block made the base transfer cleanly at the current `97.159615%` baseline.
+
+- I generated the alias-split profile and wrapped only the up-nav/down-nav
+  cursor blocks in `PERM_RANDOMIZE(...)` to keep the search focused on the six
+  missing cursor dirty-call copies.
+
+- A quick stock run and a short mwcc-blended run produced only score-11175 tied
+  candidates. `debug triage-perm` found no improvement: most transferred as
+  exact baseline, two regressed slightly (`97.12551%` / `97.13915%`), and one
+  build-failed on real-tree transfer.
+
+- The full high-parallel stock run used `-j 10 --better-only` and stopped at
+  exactly 60,000 iterations. Throughput was about 35 iterations/second. The
+  minimum score seen was still `11175`; there were no candidates below the
+  current baseline score, so no new output directories were produced.
+
+### Tooling requests
+
+- `debug permute --perm-root` currently acts like it is both the decomp-permuter
+  code root and the nonmatching data root. That made a repo-local fresh import
+  awkward: pointing `--perm-root` at the repo let it find
+  `nonmatchings/fn_80247510` but then `permute_with_mwcc.py` could not import
+  decomp-permuter's `src.compiler`. I worked around this by invoking
+  `permute_with_mwcc.py` manually with `MELEE_PERMUTER_ROOT` and `MELEE_ROOT`.
+  Splitting these into separate options, or letting `debug permute` accept an
+  explicit perm-dir path, would make fresh-import workflows much safer.
+
+- `triage-perm` reports `status: build-failed` with `first_diag: null` for at
+  least one candidate. A short captured compiler/ninja diagnostic would make it
+  easier to distinguish harmless transfer artifacts from potentially useful
+  near-miss candidates.
+
+- A wrapper-level `--max-iterations` option for `debug permute` would be useful.
+  For this run I had to write an external monitor that parsed progress text and
+  stopped the process at 60,000 iterations.
