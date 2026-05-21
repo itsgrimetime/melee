@@ -50,7 +50,9 @@ from ..mwcc_debug.patterns import (
 )
 from ..mwcc_debug.source_patch import (
     get_decl_names,
+    get_decl_names_by_scope,
     reorder_decls_in_function,
+    reorder_decls_in_function_scope,
     transfer_candidate,
 )
 from ..mwcc_debug.asm_parser import (
@@ -2192,6 +2194,14 @@ def enumerate_decl_orders(
                  "that don't qualify as a single big win.",
         ),
     ] = 0.01,
+    scope: Annotated[
+        Optional[str],
+        typer.Option(
+            "--scope",
+            help="Optional scope_path display string. When omitted, "
+                 "enumerates the function-top scope first.",
+        ),
+    ] = None,
     json_out: Annotated[
         bool,
         typer.Option("--json", help="Emit results as JSON."),
@@ -2226,11 +2236,13 @@ def enumerate_decl_orders(
         raise typer.Exit(2)
 
     orig = target_path.read_text()
-    names = get_decl_names(orig, function)
+    scope_map = get_decl_names_by_scope(orig, function)
+    selected_scope = tuple(scope.split("/")) if scope else (function,)
+    names = scope_map.get(selected_scope)
     if not names:
         typer.echo(
-            f"could not find a declaration block in {function} — function "
-            f"may have no locals or an unsupported decl style.",
+            f"could not find a declaration block in {function} scope "
+            f"{'/'.join(selected_scope)}.",
             err=True,
         )
         raise typer.Exit(3)
@@ -2312,7 +2324,12 @@ def enumerate_decl_orders(
             print(f"  Baseline: {round_baseline:.2f}%")
 
         for label, perm in candidates:
-            patched = reorder_decls_in_function(current_text, function, perm)
+            if selected_scope == (function,):
+                patched = reorder_decls_in_function(current_text, function, perm)
+            else:
+                patched = reorder_decls_in_function_scope(
+                    current_text, function, selected_scope, perm,
+                )
             if patched is None:
                 continue
             target_path.write_text(patched)
@@ -2390,9 +2407,14 @@ def enumerate_decl_orders(
                         print(f"  No more wins; stopping iterate loop.")
                     break
                 # Apply the round's winner and use it as the next baseline
-                patched = reorder_decls_in_function(
-                    current, function, r_best_perm
-                )
+                if selected_scope == (function,):
+                    patched = reorder_decls_in_function(
+                        current, function, r_best_perm
+                    )
+                else:
+                    patched = reorder_decls_in_function_scope(
+                        current, function, selected_scope, r_best_perm,
+                    )
                 if patched is None:
                     if not json_out:
                         print(f"  Could not re-apply best perm "
@@ -2477,7 +2499,12 @@ def enumerate_decl_orders(
         print(f"Applied {len(applied_chain)} round(s) to {target_path}. "
               f"Verify with `git diff`.")
     elif keep_best and best_perm is not None:
-        patched = reorder_decls_in_function(orig, function, best_perm)
+        if selected_scope == (function,):
+            patched = reorder_decls_in_function(orig, function, best_perm)
+        else:
+            patched = reorder_decls_in_function_scope(
+                orig, function, selected_scope, best_perm,
+            )
         if patched is not None:
             target_path.write_text(patched)
             subprocess.run(

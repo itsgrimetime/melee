@@ -392,6 +392,79 @@ def get_decl_names(file_text: str, function: str) -> Optional[list[str]]:
     return names
 
 
+def _line_bounds_for_range(file_text: str, byte_range: tuple[int, int]) -> tuple[int, int]:
+    start, end = byte_range
+    line_start = file_text.rfind("\n", 0, start) + 1
+    line_end = file_text.find("\n", end)
+    if line_end < 0:
+        line_end = len(file_text)
+    else:
+        line_end += 1
+    return line_start, line_end
+
+
+def _decl_line_ranges_for_scope(
+    file_text: str,
+    function: str,
+    scope_path: tuple[str, ...],
+) -> list[tuple[str, int, int]]:
+    from .ast_walker import walk_function
+
+    decls = [
+        decl for decl in walk_function(file_text, function, path=None)
+        if decl.scope_path == scope_path
+    ]
+    out: list[tuple[str, int, int]] = []
+    for decl in decls:
+        start, end = _line_bounds_for_range(file_text, decl.byte_range)
+        out.append((decl.name, start, end))
+    return out
+
+
+def get_decl_names_by_scope(
+    file_text: str,
+    function: str,
+) -> dict[tuple[str, ...], list[str]]:
+    """Return a mapping from scope_path to list of declaration names.
+
+    Each scope_path is a tuple: ``(function,)`` for the top-level function
+    scope, or ``(function, "block@l{line}c{col}", ...)`` for nested blocks.
+    """
+    from .ast_walker import walk_function
+
+    out: dict[tuple[str, ...], list[str]] = {}
+    for decl in walk_function(file_text, function, path=None):
+        out.setdefault(decl.scope_path, []).append(decl.name)
+    return out
+
+
+def reorder_decls_in_function_scope(
+    file_text: str,
+    function: str,
+    scope_path: tuple[str, ...],
+    order: list[int],
+) -> Optional[str]:
+    """Reorder declarations in a specific scope (top-level or nested block).
+
+    Like ``reorder_decls_in_function`` but targets ``scope_path`` rather than
+    always the function-top scope. Returns the patched source text, or None if
+    the scope has no declarations or ``order`` is not a valid permutation.
+    """
+    decl_ranges = _decl_line_ranges_for_scope(file_text, function, scope_path)
+    if not decl_ranges:
+        return None
+    if len(order) != len(decl_ranges):
+        return None
+    if sorted(order) != list(range(len(decl_ranges))):
+        return None
+    line_ranges = [(start, end) for _name, start, end in decl_ranges]
+    block_start = line_ranges[0][0]
+    block_end = line_ranges[-1][1]
+    original_lines = [file_text[start:end] for start, end in line_ranges]
+    reordered = "".join(original_lines[i] for i in order)
+    return file_text[:block_start] + reordered + file_text[block_end:]
+
+
 def merge3_function(
     base: str,
     candidate: str,
