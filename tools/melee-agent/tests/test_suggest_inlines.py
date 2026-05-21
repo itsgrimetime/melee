@@ -178,3 +178,26 @@ def test_generate_patches_for_return_helper_candidate() -> None:
     assert "static inline f32 f_return_helper_" in patched
     assert "return HSD_JObjGetTranslationY(jobj);" in patched
     assert "y = f_return_helper_" in patched
+
+
+def test_render_json_includes_scores() -> None:
+    from src.mwcc_debug.source_shape import CandidateScore, SourceShapeReport
+
+    report = SourceShapeReport(
+        function="f",
+        candidates=[],
+        patches=[],
+        scores=[
+            CandidateScore(
+                candidate_id="arg-temp-0001",
+                compile_ok=True,
+                checkdiff_pct=99.0,
+                checkdiff_delta=0.1,
+                pcdump_score_delta=None,
+                diagnostics_path=None,
+            )
+        ],
+    )
+    payload = json.loads(render_json(report))
+    assert payload["scores"][0]["candidate_id"] == "arg-temp-0001"
+    assert payload["scores"][0]["checkdiff_delta"] == 0.1

@@ -6346,6 +6346,18 @@ def suggest_inlines_cmd(
         bool,
         typer.Option("--apply-best", help="Apply best verified candidate."),
     ] = False,
+    target: Annotated[
+        Optional[Path],
+        typer.Option("--target", help="Optional target spec for allocator scoring."),
+    ] = None,
+    threshold: Annotated[
+        float,
+        typer.Option("--threshold", help="Minimum checkdiff delta for --apply-best."),
+    ] = 0.05,
+    keep_failed: Annotated[
+        bool,
+        typer.Option("--keep-failed", help="Preserve failed candidate diagnostics."),
+    ] = False,
     json_out: Annotated[
         bool,
         typer.Option("--json", help="Emit JSON."),
@@ -6359,6 +6371,8 @@ def suggest_inlines_cmd(
     if apply_best and not verify:
         typer.echo("--apply-best requires --verify", err=True)
         raise typer.Exit(2)
+    if target is not None and not verify:
+        typer.echo("--target is only used with --verify", err=True)
 
     from ..mwcc_debug.suggest_inlines import render_json, render_text, run
 
@@ -6416,7 +6430,7 @@ def suggest_inlines_cmd(
             patches=report.patches,
             checkdiff_runner=_checkdiff_runner,
             apply_best=apply_best,
-            threshold=0.05,
+            threshold=threshold,
         ))
     if json_out:
         print(render_json(report))
