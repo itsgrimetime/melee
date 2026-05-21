@@ -187,6 +187,14 @@ def pcdump(
                  "what real MWCC would emit from any C source.",
         ),
     ] = None,
+    force_iter_first_fn: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-iter-first-fn",
+            help="Scope --force-iter-first to one function in the TU. Other "
+                 "functions compile with their natural simplification order.",
+        ),
+    ] = None,
     force_coalesce: Annotated[
         Optional[str],
         typer.Option(
@@ -293,6 +301,15 @@ def pcdump(
                 "or whitespace"
             )
         cmd_parts.append(f"set MWCC_DEBUG_FORCE_ITER_FIRST={force_iter_first}")
+    if force_iter_first_fn:
+        if any(c in force_iter_first_fn for c in '"\'; \t&|<>'):
+            raise typer.BadParameter(
+                "--force-iter-first-fn must not contain quotes, semicolons, "
+                "whitespace, or shell metacharacters"
+            )
+        cmd_parts.append(
+            f"set MWCC_DEBUG_FORCE_ITER_FIRST_FUNCTION={force_iter_first_fn}"
+        )
     if force_coalesce:
         if any(c in force_coalesce for c in '"\'; \t'):
             raise typer.BadParameter(
@@ -4163,7 +4180,8 @@ def match_iter_first(
             f"the expected signature, and the closest-position pick may "
             f"be wrong. Before trusting this output, verify with "
             f"`pcdump-local <c_file> --force-iter-first "
-            f"{','.join(str(i) for i in ig_indices)} --diff` "
+            f"{','.join(str(i) for i in ig_indices)} "
+            f"--force-iter-first-fn {function} --diff` "
             f"(or pass --auto-verify on this command). If the diff "
             f"doesn't improve, the ambiguous assignments are wrong; "
             f"try a subset."
@@ -4183,22 +4201,39 @@ def match_iter_first(
                     "reason": f"source not found: {src_path}",
                 }
             else:
+                print(
+                    f"[auto-verify] resolving baseline match% for {function}",
+                    file=sys.stderr,
+                )
                 baseline_pct = _get_match_pct(function, melee_root)
                 ig_csv_av = ",".join(str(i) for i in ig_indices)
-                # Run pcdump-local with the override; we don't need the
-                # dump output here, but the side effect (rebuilding the
-                # .o + report.json with overrides) is what we want.
-                cmd = [
-                    sys.executable, "-m", "src.cli", "debug",
-                    "pcdump-local", str(src_path),
-                    "--force-iter-first", ig_csv_av,
-                    "-o", "/dev/null",
-                ]
-                r_av = subprocess.run(
+                watchdog_s = os.environ.get("MWCC_DEBUG_HANG_TIMEOUT", "45")
+                print(
+                    f"[auto-verify] pcdump-local watchdog: {watchdog_s}s "
+                    f"without compile progress",
+                    file=sys.stderr,
+                )
+                # Run pcdump-local with the override. The dump itself is
+                # discarded; pcdump-local's local watchdog bounds no-progress
+                # hangs, while this wrapper emits periodic status so long
+                # runs are visibly alive.
+                cmd = _build_match_iter_first_auto_verify_cmd(
+                    src_path=src_path,
+                    ig_csv=ig_csv_av,
+                    function=function,
+                )
+                status_label = (
+                    f"--force-iter-first {ig_csv_av} "
+                    f"--force-iter-first-fn {function}"
+                )
+                r_av = _run_auto_verify_command_with_status(
                     cmd,
                     cwd=melee_root / "tools" / "melee-agent",
-                    capture_output=True, text=True,
-                    timeout=180,
+                    status_label=status_label,
+                )
+                print(
+                    "[auto-verify] reading post-verify match%",
+                    file=sys.stderr,
                 )
                 new_pct = _get_match_pct(function, melee_root)
                 delta = (
@@ -4217,6 +4252,7 @@ def match_iter_first(
                 }
                 # Restore the report by rebuilding the .o cleanly so the
                 # cached state isn't poisoned by our verify override.
+                print("[auto-verify] restoring clean report", file=sys.stderr)
                 subprocess.run(
                     ["ninja", f"build/GALE01/src/{unit}.o",
                      "build/GALE01/report.json"],
@@ -4259,8 +4295,9 @@ def match_iter_first(
         print()
         print(f"Try:")
         print(
-            f"  melee-agent debug pcdump <source.c> "
-            f"--force-iter-first {ig_csv}"
+            f"  melee-agent debug pcdump-local <source.c> "
+            f"--force-iter-first {ig_csv} "
+            f"--force-iter-first-fn {function} --diff"
         )
     if warning_message:
         print()
@@ -5079,6 +5116,56 @@ def _raise_pcdump_local_watchdog_exit(killed_by_watchdog: bool) -> None:
         raise typer.Exit(124)
 
 
+def _build_match_iter_first_auto_verify_cmd(
+    *,
+    src_path: Path,
+    ig_csv: str,
+    function: str,
+) -> list[str]:
+    return [
+        sys.executable, "-m", "src.cli", "debug",
+        "pcdump-local", str(src_path),
+        "--force-iter-first", ig_csv,
+        "--force-iter-first-fn", function,
+    ]
+
+
+def _run_auto_verify_command_with_status(
+    cmd: list[str],
+    *,
+    cwd: Path,
+    status_label: str,
+    status_interval_s: float = 10.0,
+    env: Optional[dict[str, str]] = None,
+) -> subprocess.CompletedProcess[str]:
+    print(f"[auto-verify] testing {status_label}", file=sys.stderr)
+    proc = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    started = time.time()
+    while True:
+        try:
+            stdout, stderr = proc.communicate(timeout=status_interval_s)
+            return subprocess.CompletedProcess(
+                cmd,
+                proc.returncode,
+                stdout,
+                stderr,
+            )
+        except subprocess.TimeoutExpired:
+            elapsed = time.time() - started
+            print(
+                f"[auto-verify] still running after {elapsed:.0f}s "
+                f"({status_label})",
+                file=sys.stderr,
+            )
+
+
 @debug_app.command(name="pcdump-local")
 def pcdump_local(
     c_file: Annotated[
@@ -5122,23 +5209,27 @@ def pcdump_local(
         typer.Option(
             "--force-phys-fn",
             help="Scope --force-phys and --force-phys-iter to a "
-                 "single function name (mirrors --force-coalesce-fn). "
-                 "Does NOT scope --force-iter-first — that option is "
-                 "GLOBAL with no per-function variant.",
+                 "single function name (mirrors --force-coalesce-fn).",
         ),
     ] = None,
     force_iter_first: Annotated[
         Optional[str],
         typer.Option(
             "--force-iter-first",
-            help="Tier 6: reorder simplification list. WARNING: GLOBAL — "
-                 "applies to EVERY function in the TU (no per-function "
-                 "scoping; --force-phys-fn does NOT scope this option, "
-                 "and there is no --force-iter-first-fn variant). On "
-                 "multi-function TUs, virtual indices are per-function, "
-                 "so an override aimed at one function may corrupt "
-                 "others. Use only on single-function TUs, or accept "
-                 "the cross-function blast radius.",
+            help="Tier 6: reorder simplification list. By default this "
+                 "applies to every function in the TU; scope with "
+                 "--force-iter-first-fn on multi-function TUs.",
+        ),
+    ] = None,
+    force_iter_first_fn: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-iter-first-fn",
+            help="Scope --force-iter-first to a single function name. "
+                 "Other functions in the same TU compile with their "
+                 "natural simplification order. E.g. "
+                 "'--force-iter-first-fn mnVibration_80247510 "
+                 "--force-iter-first 151,48'.",
         ),
     ] = None,
     force_coalesce: Annotated[
@@ -5208,12 +5299,12 @@ def pcdump_local(
         typer.Option(
             "--function", "-f",
             help="Function name to use as the --diff target. When "
-                 "omitted, defaults to the value of --force-phys-fn / "
-                 "--force-coalesce-fn (in that order) if either is set; "
-                 "otherwise falls back to the first function found in "
-                 "the source file. Use this option when working on a "
-                 "non-first function in a multi-function TU so --diff "
-                 "compares the right function.",
+                 "omitted, defaults to the value of --force-iter-first-fn / "
+                 "--force-phys-fn / --force-coalesce-fn (in that order) "
+                 "if any is set; otherwise falls back to the first "
+                 "function found in the source file. Use this option "
+                 "when working on a non-first function in a multi-function "
+                 "TU so --diff compares the right function.",
         ),
     ] = None,
     no_cache_sync: Annotated[
@@ -5243,7 +5334,7 @@ def pcdump_local(
     first to patch the compiler and deploy the DLL.
 
     Env-var hooks (--force-phys, --force-iter-first, --force-coalesce,
-    --force-coalesce-fn) pass through to the DLL.
+    and their function-scope variants) pass through to the DLL.
 
     Use --keep-obj PATH to preserve the compiled .o for downstream
     inspection (objdiff/checkdiff/etc.). Use --diff to run an integrated
@@ -5330,6 +5421,8 @@ def pcdump_local(
         env["MWCC_DEBUG_FORCE_PHYS_FUNCTION"] = force_phys_fn
     if force_iter_first:
         env["MWCC_DEBUG_FORCE_ITER_FIRST"] = force_iter_first
+    if force_iter_first_fn:
+        env["MWCC_DEBUG_FORCE_ITER_FIRST_FUNCTION"] = force_iter_first_fn
     if force_coalesce:
         env["MWCC_DEBUG_FORCE_COALESCE"] = force_coalesce
     if force_coalesce_fn:
@@ -5552,6 +5645,7 @@ def pcdump_local(
                 src_path = melee_root / src_rel
                 fn_to_diff = (
                     function
+                    or force_iter_first_fn
                     or force_phys_fn
                     or force_coalesce_fn
                     or None
@@ -5619,7 +5713,7 @@ def pcdump_local(
     # were the natural allocation, producing misleading diagnostics.
     any_forced = any([
         force_phys, force_phys_iter, force_phys_fn,
-        force_iter_first,
+        force_iter_first, force_iter_first_fn,
         force_coalesce, force_coalesce_fn,
     ])
     skip_cache_sync = any_forced or no_cache_sync

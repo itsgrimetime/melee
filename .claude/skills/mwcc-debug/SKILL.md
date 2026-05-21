@@ -440,7 +440,7 @@ melee-agent debug pcdump src/melee/mn/mnfoo.c \
 
 # Scope --force-iter-first to one function
 melee-agent debug pcdump src/melee/mn/mnfoo.c \
-    --force-iter-first "62,47" --force-phys-fn mnFoo_80246000
+    --force-iter-first "62,47" --force-iter-first-fn mnFoo_80246000
 
 # Force by colorgraph iteration position (for nodes without an addressable ig_idx)
 melee-agent debug pcdump src/melee/mn/mnfoo.c \
@@ -448,6 +448,9 @@ melee-agent debug pcdump src/melee/mn/mnfoo.c \
 ```
 
 Use `-fn` variants when the TU has multiple functions and the override would otherwise affect all of them.
+`match-iter-first --auto-verify` uses `--force-iter-first-fn` automatically,
+prints the exact scoped force list before compiling, and emits periodic
+status while `pcdump-local`'s watchdog bounds no-progress hangs.
 
 ### Useful env-var overrides
 
