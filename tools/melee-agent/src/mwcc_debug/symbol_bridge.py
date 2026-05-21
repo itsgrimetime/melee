@@ -723,6 +723,29 @@ def find_virtual_for_var(
     return None
 
 
+def find_all_virtuals_for_var(
+    bindings: list[Binding],
+    var_name: str,
+) -> list[Binding]:
+    """Return ALL bindings whose `var_name` matches. Sorted by:
+    1. Confidence rank (verified > best-guess > ambiguous-nested
+       > low-confidence > others).
+    2. Scope depth (top-level scope_path of length 1 before nested).
+    """
+    _RANK = {
+        "verified": 0,
+        "best-guess": 1,
+        "ambiguous-nested": 2,
+        "low-confidence": 3,
+        "ambiguous": 4,
+        "unsupported": 5,
+        "rejected": 6,
+    }
+    matches = [b for b in bindings if b.var_name == var_name]
+    matches.sort(key=lambda b: (_RANK.get(b.confidence, 99), len(b.scope_path)))
+    return matches
+
+
 def find_var_for_virtual(
     source: str, fn_name: str, virtual: int, pre_pass
 ) -> Optional[Binding]:
