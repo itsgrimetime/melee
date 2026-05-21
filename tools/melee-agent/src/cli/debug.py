@@ -21,7 +21,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Mapping, Optional
 
 import typer
 
@@ -4243,6 +4243,7 @@ def match_iter_first(
                 auto_verify_result = {
                     "ran": True,
                     "returncode": r_av.returncode,
+                    "status": "ok" if r_av.returncode == 0 else "verify_failed",
                     "baseline_pct": baseline_pct,
                     "new_pct": new_pct,
                     "delta": delta,
@@ -4256,9 +4257,15 @@ def match_iter_first(
                     "ninja", f"build/GALE01/src/{unit}.o",
                     "build/GALE01/report.json",
                 ]
-                restore_timeout_s = float(os.environ.get(
-                    "MWCC_DEBUG_RESTORE_TIMEOUT", "180"
-                ))
+                (
+                    restore_timeout_s,
+                    restore_timeout_source,
+                ) = _resolve_auto_verify_restore_timeout()
+                print(
+                    f"[auto-verify] restore timeout: {restore_timeout_s:g}s "
+                    f"({restore_timeout_source})",
+                    file=sys.stderr,
+                )
                 print(
                     "[auto-verify] restoring clean object/report state",
                     file=sys.stderr,
@@ -4270,13 +4277,26 @@ def match_iter_first(
                     status_label=" ".join(restore_cmd),
                     timeout_s=restore_timeout_s,
                 )
-                auto_verify_result["restore"] = {
+                restore_stderr_tail = "\n".join(
+                    restore_proc.stderr.splitlines()[-5:]
+                ) if restore_proc.stderr else ""
+                restore_result = {
                     "returncode": restore_proc.returncode,
                     "timeout_s": restore_timeout_s,
-                    "stderr_tail": "\n".join(
-                        restore_proc.stderr.splitlines()[-5:]
-                    ) if restore_proc.stderr else "",
+                    "timeout_source": restore_timeout_source,
+                    "stderr_tail": restore_stderr_tail,
                 }
+                restore_hint = _auto_verify_restore_cleanup_hint(
+                    restore_proc.stderr or ""
+                )
+                if restore_hint:
+                    restore_result["cleanup_hint"] = restore_hint
+                auto_verify_result["restore"] = restore_result
+                if restore_proc.returncode == 0:
+                    auto_verify_result["cleanup_complete"] = True
+                else:
+                    auto_verify_result["status"] = "restore_failed"
+                    auto_verify_result["cleanup_complete"] = False
         except (subprocess.TimeoutExpired, Exception) as _av_exc:
             auto_verify_result = {"ran": False, "reason": str(_av_exc)}
 
@@ -4291,7 +4311,17 @@ def match_iter_first(
             payload["warning"] = warning_message
         if auto_verify_result is not None:
             payload["auto_verify"] = auto_verify_result
+            status = auto_verify_result.get("status")
+            if status:
+                payload["auto_verify_status"] = status
+            if "cleanup_complete" in auto_verify_result:
+                payload["cleanup_complete"] = auto_verify_result[
+                    "cleanup_complete"
+                ]
         print(json.dumps(payload, indent=2))
+        exit_code = _auto_verify_failure_exit_code(auto_verify_result)
+        if exit_code is not None:
+            raise typer.Exit(exit_code)
         return
 
     print(f"Function: {function}")
@@ -4352,15 +4382,22 @@ def match_iter_first(
                 print(
                     f"  restore object/report: exit "
                     f"{restore.get('returncode')} "
-                    f"(timeout {restore.get('timeout_s')}s)"
+                    f"(timeout {restore.get('timeout_s')}s"
+                    f" via {restore.get('timeout_source', 'unknown')})"
                 )
                 restore_tail = restore.get("stderr_tail")
                 if restore_tail:
                     print(f"  restore stderr tail:")
                     for line in restore_tail.splitlines():
                         print(f"    {line}")
+                cleanup_hint = restore.get("cleanup_hint")
+                if cleanup_hint:
+                    print(f"  cleanup hint: {cleanup_hint}")
         else:
             print(f"  did not run: {auto_verify_result.get('reason')}")
+    exit_code = _auto_verify_failure_exit_code(auto_verify_result)
+    if exit_code is not None:
+        raise typer.Exit(exit_code)
 
 
 @debug_app.command(name="name-magic")
@@ -5124,7 +5161,17 @@ def _ninja_cflags_for_unit(src_rel: str) -> tuple[str, str]:
     Raises typer.Exit if the source has no build block.
     """
     import re as _re
-    text = (DEFAULT_MELEE_ROOT / "build.ninja").read_text()
+    build_ninja = DEFAULT_MELEE_ROOT / "build.ninja"
+    try:
+        text = build_ninja.read_text()
+    except FileNotFoundError:
+        typer.echo(
+            f"build.ninja missing: {build_ninja}\n"
+            f"Run `python configure.py` from the repo root, then retry "
+            f"`pcdump-local`.",
+            err=True,
+        )
+        raise typer.Exit(2)
     text = text.replace("$\n", " ")  # unfold ninja line continuations
     obj = f"build/GALE01/{src_rel[:-2]}.o"
     blocks = _re.split(r"^build ", text, flags=_re.M)
@@ -5159,6 +5206,45 @@ def _build_match_iter_first_auto_verify_cmd(
         "--force-iter-first", ig_csv,
         "--force-iter-first-fn", function,
     ]
+
+
+def _resolve_auto_verify_restore_timeout(
+    env: Optional[Mapping[str, str]] = None,
+) -> tuple[float, str]:
+    values = env if env is not None else os.environ
+    restore_timeout = values.get("MWCC_DEBUG_RESTORE_TIMEOUT")
+    if restore_timeout is not None:
+        return float(restore_timeout), "MWCC_DEBUG_RESTORE_TIMEOUT"
+    hang_timeout = values.get("MWCC_DEBUG_HANG_TIMEOUT")
+    if hang_timeout is not None:
+        return float(hang_timeout), "MWCC_DEBUG_HANG_TIMEOUT"
+    return 180.0, "default"
+
+
+def _auto_verify_restore_cleanup_hint(stderr: str) -> str:
+    if "ninja: warning: premature end of file; recovering" not in stderr:
+        return ""
+    return (
+        "ninja metadata looks truncated after an interrupted build; run "
+        "`ninja -t recompact` from the repo root. If the warning persists, "
+        "remove `.ninja_deps`/`.ninja_log`, then run `python configure.py` "
+        "before retrying."
+    )
+
+
+def _auto_verify_failure_exit_code(auto_verify_result: Optional[dict]) -> Optional[int]:
+    if not isinstance(auto_verify_result, dict) or not auto_verify_result.get("ran"):
+        return None
+    restore = auto_verify_result.get("restore")
+    if not isinstance(restore, dict):
+        return None
+    returncode = restore.get("returncode")
+    if returncode in (None, 0, "0"):
+        return None
+    try:
+        return int(returncode)
+    except (TypeError, ValueError):
+        return 1
 
 
 def _run_auto_verify_command_with_status(
