@@ -952,3 +952,38 @@ decomp-permuter recommendation against a fresh import from the current source.
 - A wrapper-level `--max-iterations` option for `debug permute` would be useful.
   For this run I had to write an external monitor that parsed progress text and
   stopped the process at 60,000 iterations.
+
+## `mwcc-inspect` wrapper hang on `mnvibration.c`
+
+Context: I tried the lighter-weight front-end inspector on
+`src/melee/mn/mnvibration.c` to compare `fn_80247510` with the matched
+`fn_80248A78` cursor setup.
+
+### Result
+
+- `tools/workflow/mwcc-inspect.sh src/melee/mn/mnvibration.c` hung silently:
+  the local wrapper processes stayed alive, `build/mwcc_inspect/mnvibration.txt`
+  remained zero bytes, and I did not see a remote `MwccInspectorCLI.exe` or
+  `mwcceppc.exe` process. I killed the local wrapper after confirming it was
+  stuck.
+
+- A direct SSH invocation using the same local `ninja -t commands` compile
+  arguments succeeded and produced a 348 KiB
+  `build/mwcc_inspect/mnvibration.txt` dump with no stderr.
+
+- The successful dump was useful: in `fn_80247510`, all six dirty calls are
+  front-end `HSD_JObjSetMtxDirtySub([jobj])` with no separate temp object. In
+  matched `fn_80248A78`, the local cursor setters have explicit compiler temps
+  such as `[@734] = [cursor_jobj]` followed by `ftCo_800C6AFC([@734])`.
+
+### Tooling requests
+
+- The wrapper should print phase markers or a `--verbose` trace around fetch,
+  checkout, command construction, SSH start, and remote inspector launch. A
+  silent local hang with an empty output file is hard to distinguish from a
+  slow inspector run.
+
+- Add a wrapper timeout or heartbeat for the remote launch phase. If no output
+  file bytes appear and no remote inspector/compiler process exists after some
+  interval, fail with the SSH command and resolved remote ref instead of
+  waiting indefinitely.
