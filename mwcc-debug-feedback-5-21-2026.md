@@ -530,3 +530,34 @@ retried `match-iter-first --auto-verify` for `fn_80247510`.
   `97.15% -> 97.15% (+0.00%)` for
   `--force-iter-first 151,48,45,153 --force-iter-first-fn fn_80247510`.
   This remains a negative result for the iter-order-only path.
+
+## Manual follow-up after inline dirty-helper probes
+
+Context: after the scoped iter-first path tied baseline, tried two narrower
+inline variations around the cursor `HSD_JObjSetTranslate*` expansion.
+
+### Source-shape evidence
+
+- A one-argument split dirty helper, modeled after the matched `ifstatus.c`
+  style, was structurally wrong here. It compiled into actual
+  `bl HSD_JObjMtxIsDirty` calls instead of the inline dirty-test body, shortened
+  the cursor-position block, and still mismatched.
+
+- A fully expanded local dirty-test helper avoided the `HSD_JObjMtxIsDirty`
+  calls and produced a dirty-check body closer to the target, including
+  explicit assert/flag-test logic before `HSD_JObjSetMtxDirtySub`. It was still
+  a regression: the frame grew from `-280` to `-304`, callee-save assignments
+  cascaded broadly, and `fn_80247510` still mismatched.
+
+- Net result: the missing cursor-pointer copies are not solved by simply
+  splitting the dirty helper or manually expanding the dirty test. The source
+  shape still needs a lifetime barrier that preserves a short-lived dirty
+  pointer without increasing the frame or moving the long-lived cursor pointer.
+
+### Tooling feedback
+
+- `pcdump-local` crashed with a raw `FileNotFoundError` traceback when
+  `build.ninja` was absent. Running `python configure.py` fixed the local build
+  metadata, but `pcdump-local` should probably catch this and print an
+  actionable diagnostic like "build.ninja missing; run python configure.py"
+  instead of a full Python traceback.
