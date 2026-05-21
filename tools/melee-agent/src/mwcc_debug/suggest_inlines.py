@@ -1,6 +1,7 @@
 """Candidate generation and rendering for `debug suggest-inlines`."""
 from __future__ import annotations
 
+import difflib
 import json
 import re
 from dataclasses import asdict
@@ -552,6 +553,7 @@ def _patch_argument_temps(
         patched_source=out,
         summary=f"introduce short-lived temp {temp_name}",
         touched_ranges=tuple(arg.byte_range for arg in args),
+        hunk=_patch_hunk(source, out, candidate.candidate_id),
     )
 
 
@@ -633,6 +635,7 @@ def _patch_void_helper(source: str, function: str, candidate: InlineCandidate) -
         patched_source=out,
         summary=f"extract {candidate.helper_name}",
         touched_ranges=(candidate.anchor.byte_range,),
+        hunk=_patch_hunk(source, out, candidate.candidate_id),
     )
 
 
@@ -658,7 +661,18 @@ def _patch_return_helper(source: str, function: str, candidate: InlineCandidate)
         patched_source=out,
         summary=f"extract {candidate.helper_name}",
         touched_ranges=(candidate.anchor.byte_range,),
+        hunk=_patch_hunk(source, out, candidate.candidate_id),
     )
+
+
+def _patch_hunk(source: str, patched_source: str, candidate_id: str) -> str:
+    return "\n".join(difflib.unified_diff(
+        source.splitlines(),
+        patched_source.splitlines(),
+        fromfile="before",
+        tofile=candidate_id,
+        lineterm="",
+    ))
 
 
 def generate_patches(
@@ -761,10 +775,35 @@ def render_text(report: SourceShapeReport) -> str:
                     f"- {score.candidate_id}: compile={score.compile_ok} "
                     f"delta={delta_text}"
                 )
+            for trace in score.copy_traces:
+                from_text = (
+                    "?" if trace.from_virtual is None
+                    else f"r{trace.from_virtual}"
+                )
+                to_text = (
+                    "?" if trace.to_virtual is None
+                    else f"r{trace.to_virtual}"
+                )
+                line = (
+                    f"  copy {to_text}<-{from_text}: "
+                    f"status={trace.status} cause={trace.likely_cause}"
+                )
+                if trace.first_absent_pass:
+                    line += f" first_absent={trace.first_absent_pass}"
+                if trace.transform_category:
+                    line += f" transform={trace.transform_category}"
+                if trace.note:
+                    line += f" note={trace.note}"
+                lines.append(line)
     return "\n".join(lines)
 
 
-def render_json(report: SourceShapeReport, *, emit_patches: bool = False) -> str:
+def render_json(
+    report: SourceShapeReport,
+    *,
+    emit_patches: bool = False,
+    emit_hunks: bool = False,
+) -> str:
     payload = asdict(report)
     if not emit_patches:
         payload["patches"] = [
@@ -772,6 +811,7 @@ def render_json(report: SourceShapeReport, *, emit_patches: bool = False) -> str
                 "candidate_id": patch.candidate_id,
                 "summary": patch.summary,
                 "touched_ranges": patch.touched_ranges,
+                **({"hunk": patch.hunk} if emit_hunks else {}),
             }
             for patch in report.patches
         ]

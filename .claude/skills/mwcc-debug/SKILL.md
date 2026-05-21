@@ -359,9 +359,12 @@ melee-agent debug suggest-inlines -f my_fn
 melee-agent debug suggest-inlines -f my_fn --seed-source repeated
 melee-agent debug suggest-inlines -f my_fn --seed-source coalesce  # pattern fallback for coalesce leads
 melee-agent debug suggest-inlines -f my_fn --verify
+melee-agent debug suggest-inlines -f my_fn --verify --trace-copies
+melee-agent debug suggest-inlines -f my_fn --verify --explain
 melee-agent debug suggest-inlines -f my_fn --verify --checkdiff-timeout 120
 melee-agent debug suggest-inlines -f my_fn --verify --apply-best
 melee-agent debug suggest-inlines -f my_fn --json              # summaries only
+melee-agent debug suggest-inlines -f my_fn --json --emit-hunks
 melee-agent debug suggest-inlines -f my_fn --json --emit-patches
 
 # `suggest-inlines` is diagnostic by default. It reports repeated/helper-shaped
@@ -374,7 +377,11 @@ melee-agent debug suggest-inlines -f my_fn --json --emit-patches
 # non-ASCII text. Use `--verify` to stage candidates and score them against
 # real-tree `checkdiff`; output includes baseline percent, candidate percent,
 # and delta, and source is restored unless `--apply-best` keeps a verified
-# winner.
+# winner. Use `--trace-copies` or `--explain` with `--verify` when you need to
+# know whether a candidate-introduced `mr` copy survives to simplify/colorgraph
+# or is eliminated before coloring. Use `--json --emit-hunks` (alias:
+# `--emit-diffs`) for compact unified diffs without full `patched_source`
+# payloads; reserve `--emit-patches` for the full rewritten TU.
 
 # Keep temporary source probes out of the canonical pcdump cache.
 melee-agent debug pcdump-local src/melee/mn/mnvibration.c --no-cache-sync

@@ -6415,6 +6415,41 @@ def suggest_inlines_cmd(
             help="Include full patched_source payloads in --json output.",
         ),
     ] = False,
+    emit_hunks: Annotated[
+        bool,
+        typer.Option(
+            "--emit-hunks",
+            "--emit-diffs",
+            help=(
+                "Include compact unified hunks in --json output without "
+                "full patched_source payloads."
+            ),
+        ),
+    ] = False,
+    trace_copies: Annotated[
+        bool,
+        typer.Option(
+            "--trace-copies",
+            help=(
+                "With --verify, compile candidate pcdumps and trace newly "
+                "introduced `mr` copies."
+            ),
+        ),
+    ] = False,
+    explain: Annotated[
+        bool,
+        typer.Option(
+            "--explain",
+            help="Alias for --trace-copies during --verify.",
+        ),
+    ] = False,
+    trace_timeout: Annotated[
+        float,
+        typer.Option(
+            "--trace-timeout",
+            help="Timeout in seconds for each trace-copy pcdump compile.",
+        ),
+    ] = 60.0,
     checkdiff_timeout: Annotated[
         float,
         typer.Option(
@@ -6435,6 +6470,11 @@ def suggest_inlines_cmd(
     if apply_best and not verify:
         typer.echo("--apply-best requires --verify", err=True)
         raise typer.Exit(2)
+    if explain:
+        trace_copies = True
+    if trace_copies and not verify:
+        typer.echo("--trace-copies/--explain requires --verify", err=True)
+        raise typer.Exit(2)
     if target is not None and not verify:
         typer.echo("--target is only used with --verify", err=True)
 
@@ -6446,6 +6486,7 @@ def suggest_inlines_cmd(
         typer.echo(f"{function} not in report.json", err=True)
         raise typer.Exit(2)
     source_path = melee_root / "src" / f"{unit}.c"
+    source_rel = str(source_path.relative_to(melee_root))
     source = source_path.read_text()
     pcdump_text = ""
     if pcdump is not None:
@@ -6466,7 +6507,66 @@ def suggest_inlines_cmd(
             parse_checkdiff_json,
             verify_real_tree_patches,
         )
-        from ..mwcc_debug.source_shape import rank_scores
+        from ..mwcc_debug.source_shape import CandidateCopyTrace, rank_scores
+
+        def _run_trace_pcdump(src_rel: str) -> str:
+            with tempfile.TemporaryDirectory() as td:
+                out_path = Path(td) / "pcdump.txt"
+                env = os.environ.copy()
+                pkg_root = str(melee_root / "tools" / "melee-agent")
+                existing = env.get("PYTHONPATH")
+                env["PYTHONPATH"] = (
+                    pkg_root if not existing
+                    else f"{pkg_root}{os.pathsep}{existing}"
+                )
+                cmd = [
+                    sys.executable,
+                    "-m",
+                    "src.cli",
+                    "debug",
+                    "pcdump-local",
+                    src_rel,
+                    "--output",
+                    str(out_path),
+                    "--no-cache-sync",
+                    "--function",
+                    function,
+                ]
+                proc = subprocess.run(
+                    cmd,
+                    cwd=melee_root,
+                    capture_output=True,
+                    text=True,
+                    timeout=trace_timeout,
+                    env=env,
+                )
+                if proc.returncode != 0:
+                    detail = (proc.stderr or proc.stdout).strip()
+                    raise RuntimeError(
+                        detail or f"pcdump-local exited {proc.returncode}"
+                    )
+                if not out_path.exists():
+                    raise RuntimeError("pcdump-local produced no pcdump output")
+                return out_path.read_text()
+
+        def _candidate_copy_trace_from_report(copy_report) -> CandidateCopyTrace:
+            return CandidateCopyTrace(
+                from_virtual=copy_report.from_virtual,
+                to_virtual=copy_report.to_virtual,
+                status=copy_report.status,
+                likely_cause=copy_report.likely_cause,
+                first_copy_pass=(
+                    None if copy_report.first_copy is None
+                    else copy_report.first_copy.pass_name
+                ),
+                last_copy_pass=(
+                    None if copy_report.last_copy is None
+                    else copy_report.last_copy.pass_name
+                ),
+                first_absent_pass=copy_report.first_absent_pass,
+                transform_category=copy_report.transform_category,
+                note=copy_report.note,
+            )
 
         def _checkdiff_runner(fn_name: str) -> CheckdiffResult:
             cmd = [
@@ -6503,6 +6603,47 @@ def suggest_inlines_cmd(
                 err=True,
             )
 
+        copy_trace_runner = None
+        trace_setup_error = None
+        baseline_trace_pcdump = pcdump_text or None
+        if trace_copies:
+            if baseline_trace_pcdump is None:
+                try:
+                    baseline_trace_pcdump = _run_trace_pcdump(source_rel)
+                except Exception as exc:
+                    trace_setup_error = f"{type(exc).__name__}: {exc}"
+                    typer.echo(
+                        f"[suggest-inlines] baseline pcdump unavailable for "
+                        f"copy tracing: {trace_setup_error}",
+                        err=True,
+                    )
+
+            if baseline_trace_pcdump is None:
+                def _copy_trace_runner(_candidate) -> list[CandidateCopyTrace]:
+                    return [CandidateCopyTrace(
+                        from_virtual=None,
+                        to_virtual=None,
+                        status="trace-error",
+                        likely_cause="trace-error",
+                        note=trace_setup_error,
+                    )]
+            else:
+                from ..mwcc_debug.copy_trace import list_new_copy_lifetimes
+
+                def _copy_trace_runner(_candidate) -> list[CandidateCopyTrace]:
+                    candidate_pcdump = _run_trace_pcdump(source_rel)
+                    return [
+                        _candidate_copy_trace_from_report(copy_report)
+                        for copy_report in list_new_copy_lifetimes(
+                            baseline_trace_pcdump,
+                            candidate_pcdump,
+                            function,
+                            reg_class="gpr",
+                        )
+                    ]
+
+            copy_trace_runner = _copy_trace_runner
+
         report.scores = rank_scores(verify_real_tree_patches(
             function=function,
             source_path=source_path,
@@ -6512,9 +6653,14 @@ def suggest_inlines_cmd(
             threshold=threshold,
             diagnostics_root=Path("nonmatchings") / function / "suggest_inlines",
             baseline_result=baseline_result,
+            copy_trace_runner=copy_trace_runner,
         ))
     if json_out:
-        print(render_json(report, emit_patches=emit_patches))
+        print(render_json(
+            report,
+            emit_patches=emit_patches,
+            emit_hunks=emit_hunks,
+        ))
     else:
         print(render_text(report))
 

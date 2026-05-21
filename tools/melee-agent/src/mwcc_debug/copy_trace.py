@@ -556,6 +556,17 @@ def _copy_pairs(fn) -> list[tuple[int, int, InstructionOccurrence]]:
     return out
 
 
+def _copy_pair_set(pcdump_text: str, function: str) -> set[tuple[int, int]]:
+    fns = parse_pcdump(pcdump_text, function=function)
+    fn = fns[0] if fns else None
+    if fn is None:
+        return set()
+    return {
+        (from_virtual, to_virtual)
+        for from_virtual, to_virtual, _occurrence in _copy_pairs(fn)
+    }
+
+
 def list_copy_lifetimes(
     pcdump_text: str,
     function: str,
@@ -590,3 +601,27 @@ def list_copy_lifetimes(
             reg_class=reg_class,
         ))
     return reports
+
+
+def list_new_copy_lifetimes(
+    baseline_pcdump_text: str,
+    candidate_pcdump_text: str,
+    function: str,
+    *,
+    involving: Optional[int] = None,
+    near_block: Optional[int] = None,
+    reg_class: Optional[str] = "gpr",
+) -> list[CopyTraceReport]:
+    """Trace candidate-only `mr` copies relative to a baseline pcdump."""
+    baseline_pairs = _copy_pair_set(baseline_pcdump_text, function)
+    reports = list_copy_lifetimes(
+        candidate_pcdump_text,
+        function,
+        involving=involving,
+        near_block=near_block,
+        reg_class=reg_class,
+    )
+    return [
+        report for report in reports
+        if (report.from_virtual, report.to_virtual) not in baseline_pairs
+    ]

@@ -46,6 +46,22 @@ class CandidatePatch:
     patched_source: str
     summary: str
     touched_ranges: tuple[tuple[int, int], ...]
+    hunk: str = ""
+
+
+@dataclass(frozen=True)
+class CandidateCopyTrace:
+    """Copy-lifetime summary attached to a verified source candidate."""
+
+    from_virtual: Optional[int]
+    to_virtual: Optional[int]
+    status: str
+    likely_cause: str
+    first_copy_pass: Optional[str] = None
+    last_copy_pass: Optional[str] = None
+    first_absent_pass: Optional[str] = None
+    transform_category: Optional[str] = None
+    note: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -61,6 +77,7 @@ class CandidateScore:
     checkdiff_baseline_pct: Optional[float] = None
     candidate_size: int = 0
     helper_param_count: int = 0
+    copy_traces: tuple[CandidateCopyTrace, ...] = ()
 
 
 @dataclass

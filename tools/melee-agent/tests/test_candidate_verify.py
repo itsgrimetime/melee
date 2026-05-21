@@ -10,6 +10,7 @@ from src.mwcc_debug.candidate_verify import (
     verify_patches,
     verify_real_tree_patches,
 )
+from src.mwcc_debug import source_shape
 from src.mwcc_debug.source_shape import CandidatePatch
 
 
@@ -141,4 +142,38 @@ def test_verify_real_tree_computes_delta_from_baseline_result(tmp_path: Path) ->
     assert scores[0].checkdiff_baseline_pct == 97.25
     assert scores[0].checkdiff_pct == 97.25
     assert scores[0].checkdiff_delta == 0.0
+    assert source_path.read_text() == "void f(void) { Original(); }\n"
+
+
+def test_verify_real_tree_attaches_copy_trace_results(tmp_path: Path) -> None:
+    assert hasattr(source_shape, "CandidateCopyTrace")
+    source_path = tmp_path / "file.c"
+    source_path.write_text("void f(void) { Original(); }\n")
+    patch = CandidatePatch(
+        candidate_id="arg-temp-0001",
+        patched_source="void f(void) { Candidate(); }\n",
+        summary="candidate",
+        touched_ranges=((1, 2),),
+    )
+    trace = source_shape.CandidateCopyTrace(
+        from_virtual=50,
+        to_virtual=110,
+        status="copy-found",
+        likely_cause="removed-before-coloring",
+    )
+
+    def runner(function: str) -> CheckdiffResult:
+        return CheckdiffResult(match_pct=97.25, delta=0.0)
+
+    scores = verify_real_tree_patches(
+        function="fn_test",
+        source_path=source_path,
+        patches=[patch],
+        checkdiff_runner=runner,
+        apply_best=False,
+        threshold=0.05,
+        copy_trace_runner=lambda candidate: [trace],
+    )
+
+    assert scores[0].copy_traces == (trace,)
     assert source_path.read_text() == "void f(void) { Original(); }\n"

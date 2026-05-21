@@ -21,6 +21,10 @@ def test_suggest_inlines_help() -> None:
     assert "--seed-source" in proc.stdout
     assert "--verify" in proc.stdout
     assert "--apply-best" in proc.stdout
+    assert "--trace-copies" in proc.stdout
+    assert "--explain" in proc.stdout
+    assert "--emit-hunks" in proc.stdout
+    assert "--emit-diffs" in proc.stdout
 
 
 def test_suggest_inlines_rejects_apply_best_without_verify() -> None:
@@ -52,4 +56,6 @@ def test_suggest_inlines_help_mentions_threshold_and_keep_failed() -> None:
     assert "--keep-failed" in proc.stdout
     assert "--target" in proc.stdout
     assert "--emit-patches" in proc.stdout
+    assert "--emit-hunks" in proc.stdout
+    assert "--emit-diffs" in proc.stdout
     assert "--checkdiff-timeout" in proc.stdout

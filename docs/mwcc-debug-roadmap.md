@@ -1,7 +1,7 @@
 # mwcc-debug roadmap — 2026-05-21
 
 Consolidated "what's next" for the mwcc-debug toolset after the
-2026-05-20 feedback passes on `wip/mn-heartbeat` and
+2026-05-20 and 2026-05-21 feedback passes on `wip/mn-heartbeat` and
 `decomp/mndiagram3`.
 
 Phase 2 is now organized around the larger matching unlock:
@@ -14,7 +14,7 @@ headline.
 
 ## Recently shipped baseline
 
-For context, these landed between 2026-05-18 and 2026-05-20 and define
+For context, these landed between 2026-05-18 and 2026-05-21 and define
 the current floor.
 
 - Tree-sitter-based **nested-block-local awareness Phase 1**.
@@ -51,7 +51,11 @@ the current floor.
   per-candidate verification failures instead of aborting. Follow-up
   fixes add typed/top-of-scope dirty-temp patches, grouped X/Y/Z
   hidden-dirty candidates, and baseline/candidate/delta score reporting
-  for verified candidates.
+  for verified candidates. Verified candidates can now attach optional
+  copy-trace explanations for newly introduced `mr` copies via
+  `--trace-copies`/`--explain`, and JSON output can emit compact unified
+  hunks via `--emit-hunks`/`--emit-diffs` without one-line full-TU
+  `patched_source` payloads.
 - **`tier3-search` v2**: seed generation, smoke compile, per-seed
   permuter wiring, budget/time controls, and `--apply-best`.
 - **`checkdiff`**: JSON exit normalization and SDA21 relocation
@@ -82,6 +86,8 @@ Primary command:
 ```bash
 melee-agent debug suggest-inlines -f <fn>
 melee-agent debug suggest-inlines -f <fn> --verify
+melee-agent debug suggest-inlines -f <fn> --verify --trace-copies
+melee-agent debug suggest-inlines -f <fn> --json --emit-hunks
 melee-agent debug suggest-inlines -f <fn> --target target.json --verify
 ```
 
@@ -158,6 +164,13 @@ Candidate forms:
   size, helper parameter count, and stable candidate id.
 - Verification output should show baseline match percent, candidate
   match percent, and delta even when the candidate ties baseline.
+- Optional `--trace-copies` / `--explain` verification should compile a
+  candidate pcdump, diff its `mr` copies against the baseline pcdump, and
+  report whether each new copy reaches simplify/colorgraph or is removed
+  before coloring.
+- JSON output should stay compact by default, support compact unified
+  hunks with `--emit-hunks` / `--emit-diffs`, and emit full
+  `patched_source` only when `--emit-patches` is requested.
 
 ### P2.5: Compiler-temp seeding for Tier 3 (MEDIUM)
 

@@ -15,6 +15,7 @@ from src.mwcc_debug.copy_trace import (
     list_copy_lifetimes,
     trace_copy_lifetime,
 )
+from src.mwcc_debug import copy_trace
 
 
 CLI_CWD = pathlib.Path(__file__).parent.parent
@@ -231,6 +232,35 @@ def test_list_copy_lifetimes_discovers_copies_by_virtual_and_block() -> None:
     assert [(r.to_virtual, r.from_virtual) for r in reports] == [(108, 50)]
     assert reports[0].first_copy is not None
     assert reports[0].first_copy.block_idx == 245
+
+
+def test_list_new_copy_lifetimes_reports_candidate_only_copies() -> None:
+    assert hasattr(copy_trace, "list_new_copy_lifetimes")
+    baseline = textwrap.dedent("""\
+        Starting function fn_80247510
+        BEFORE REGISTER COLORING
+        fn_80247510
+        B245: Succ={} Pred={} Labels={}
+            bl HSD_JObjSetTranslateX
+        SIMPLIFY GRAPH (class=0, n_colors=20, n_class_regs=32)
+          iter ig_idx degree arraySize flags notes
+            0 50 1 1 0x00
+        COLORGRAPH DECISIONS (class=0, result=1, n_nodes=1)
+          iter ig_idx phys degree nIntfr flags
+            0 50 r31 1 0 0x00
+    """)
+
+    reports = copy_trace.list_new_copy_lifetimes(
+        baseline,
+        PCDUMP_COPY_REMOVED,
+        "fn_80247510",
+        reg_class="gpr",
+    )
+
+    assert [(report.to_virtual, report.from_virtual) for report in reports] == [
+        (108, 50)
+    ]
+    assert reports[0].likely_cause == "removed-before-coloring"
 
 
 def test_trace_copy_help_exposes_copy_lifetime_command() -> None:
