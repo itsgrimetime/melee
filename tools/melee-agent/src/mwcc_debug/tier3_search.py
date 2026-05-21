@@ -15,6 +15,7 @@ from .mutators import (
     mutate_insert_alias_before_use,
     mutate_type_change,
 )
+from .source_shape import SourceAnchor
 from .symbol_bridge import Binding
 
 
@@ -432,3 +433,35 @@ def rank_seed_results(
     Ties are broken by seed_idx ascending so output is stable.
     """
     return sorted(results, key=lambda r: (-r.delta, r.seed_idx))
+
+
+def plan_seeds_from_source_anchors(
+    anchors: list[SourceAnchor],
+    budget: int = 5,
+) -> list[SeedPlan]:
+    """Convert compiler-temp SourceAnchor records into tier3 SeedPlans.
+
+    Each anchor with at least one virtual register produces one
+    "source-shape" seed whose target_var is the joined register names
+    (e.g. "r46_r50" for virtuals=(46, 50)).  Anchors with no virtuals
+    are skipped.  At most `budget` plans are returned.
+    """
+    plans: list[SeedPlan] = []
+    for anchor in anchors:
+        if not anchor.virtuals:
+            continue
+        joined = "_".join(f"r{v}" for v in anchor.virtuals)
+        plans.append(SeedPlan(
+            mutator="source-shape",
+            target_var=joined,
+            args={
+                "anchor": anchor,
+                "kind": anchor.kind,
+            },
+            description=(
+                f"source-shape seed from {anchor.kind}: {anchor.reason}"
+            ),
+        ))
+        if len(plans) >= budget:
+            break
+    return plans

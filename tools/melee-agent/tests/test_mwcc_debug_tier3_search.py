@@ -355,3 +355,25 @@ def test_per_seed_result_dataclass_defaults() -> None:
         delta=0, ran_seconds=0,
     )
     assert r.error is None
+
+
+def test_plan_seeds_from_source_anchors_adds_arg_temp_seed() -> None:
+    from src.mwcc_debug.source_shape import SourceAnchor
+    from src.mwcc_debug.tier3_search import plan_seeds_from_source_anchors
+
+    anchors = [
+        SourceAnchor(
+            function="fn_test",
+            scope_path=("fn_test", "block@l10c4"),
+            byte_range=(100, 130),
+            line_range=(10, 12),
+            kind="coalesce",
+            reason="compiler temp r46 repeated load near call argument",
+            virtuals=(46, 50),
+        )
+    ]
+    plans = plan_seeds_from_source_anchors(anchors, budget=5)
+    assert len(plans) == 1
+    assert plans[0].mutator == "source-shape"
+    assert plans[0].target_var == "r46_r50"
+    assert "compiler temp" in plans[0].description
