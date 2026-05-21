@@ -6313,6 +6313,81 @@ def suggest_coalesce_source(
         print(render_text(report))
 
 
+@debug_app.command(name="suggest-inlines")
+def suggest_inlines_cmd(
+    function: Annotated[
+        str,
+        typer.Option("--function", "-f", help="Function to analyze."),
+    ],
+    pcdump: Annotated[
+        Optional[Path],
+        typer.Option("--pcdump", help="Optional pcdump path."),
+    ] = None,
+    seed_source: Annotated[
+        str,
+        typer.Option(
+            "--seed-source",
+            help="Candidate seed source: all, repeated, guide, coalesce, or patterns.",
+        ),
+    ] = "all",
+    budget: Annotated[
+        int,
+        typer.Option("--budget", help="Maximum candidate count."),
+    ] = 8,
+    max_span_statements: Annotated[
+        int,
+        typer.Option("--max-span-statements", help="Max statements per repeated group."),
+    ] = 6,
+    verify: Annotated[
+        bool,
+        typer.Option("--verify", help="Stage and verify candidates."),
+    ] = False,
+    apply_best: Annotated[
+        bool,
+        typer.Option("--apply-best", help="Apply best verified candidate."),
+    ] = False,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit JSON."),
+    ] = False,
+) -> None:
+    """Suggest hidden inline/helper/source-shape candidates."""
+    if seed_source not in {"all", "repeated", "guide", "coalesce", "patterns"}:
+        raise typer.BadParameter(
+            "--seed-source must be one of: all, repeated, guide, coalesce, patterns"
+        )
+    if apply_best and not verify:
+        typer.echo("--apply-best requires --verify", err=True)
+        raise typer.Exit(2)
+
+    from ..mwcc_debug.suggest_inlines import render_json, render_text, run
+
+    melee_root = DEFAULT_MELEE_ROOT
+    unit = _find_unit_for_function(function, melee_root)
+    if unit is None:
+        typer.echo(f"{function} not in report.json", err=True)
+        raise typer.Exit(2)
+    source_path = melee_root / "src" / f"{unit}.c"
+    source = source_path.read_text()
+    pcdump_text = ""
+    if pcdump is not None:
+        pcdump_text = pcdump.read_text()
+
+    report = run(
+        source=source,
+        function=function,
+        pcdump_text=pcdump_text,
+        seed_source=seed_source,
+        budget=budget,
+        max_span_statements=max_span_statements,
+        verify=False,
+    )
+    if json_out:
+        print(render_json(report))
+    else:
+        print(render_text(report))
+
+
 def _basis_to_dict(basis) -> dict:
     """Render a BindingBasis as a JSON-compatible dict."""
     return {
