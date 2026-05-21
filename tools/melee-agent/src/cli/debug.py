@@ -6571,6 +6571,14 @@ def mutate_insert_alias_cmd(
             help="Alias variable name (default: <var>_alias).",
         ),
     ] = None,
+    scope: Annotated[
+        Optional[str],
+        typer.Option(
+            "--scope",
+            help="Optional exact scope_path display string, e.g. "
+                 "fn/block@l10c4. Use var-to-virtual --all to inspect.",
+        ),
+    ] = None,
     apply: Annotated[
         bool,
         typer.Option(
@@ -6588,9 +6596,15 @@ def mutate_insert_alias_cmd(
 
     melee_root = DEFAULT_MELEE_ROOT
     src_path, source = _read_source_for(function, melee_root)
+    parsed_scope = tuple(scope.split("/")) if scope else None
     try:
         out = mutate_insert_alias_before_use(
-            source, function, var, at_stmt_index=at, new_name=new_name,
+            source,
+            function,
+            var,
+            at_stmt_index=at,
+            new_name=new_name,
+            scope_filter=parsed_scope,
         )
     except MutationUnsupported as e:
         typer.echo(f"mutation failed: {e}", err=True)

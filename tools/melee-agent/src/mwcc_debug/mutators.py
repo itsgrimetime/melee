@@ -11,6 +11,8 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from .scope_path import is_nested_within
+from .source_spans import StatementSpan, list_statement_spans
 from .symbol_bridge import (
     _extract_function_text,
     _strip_strings_and_comments,
@@ -202,37 +204,64 @@ def _stmt_is_declaration(stmt_text: str) -> bool:
     return bool(decl_re.match(cleaned))
 
 
+def _span_matches_scope(
+    span: "StatementSpan",
+    scope_filter: Optional[tuple[str, ...]],
+    scope_filter_prefix: Optional[tuple[str, ...]],
+) -> bool:
+    if scope_filter is not None:
+        return span.scope_path == scope_filter
+    if scope_filter_prefix is not None:
+        # Sentinel form ("fn", "block@") matches any nested scope inside fn.
+        if len(scope_filter_prefix) == 2 and scope_filter_prefix[1] == "block@":
+            return len(span.scope_path) > 1 and span.scope_path[0] == scope_filter_prefix[0]
+        return is_nested_within(span.scope_path, scope_filter_prefix)
+    return True
+
+
+def _find_block_top_pos(source: str, scope_byte_range: tuple[int, int]) -> int:
+    """Position immediately after the opening `{` and its trailing newline.
+    Does NOT skip existing decls — the alias bare decl is intentionally
+    inserted as the FIRST line inside the block so callers can rely on
+    its position relative to other declarations in the block."""
+    start, end = scope_byte_range
+    open_brace = source.find("{", start, end)
+    if open_brace < 0:
+        return start
+    pos = open_brace + 1
+    # Consume the rest of the line containing `{` (whitespace then newline).
+    while pos < end and source[pos] in " \t\r":
+        pos += 1
+    if pos < end and source[pos] == "\n":
+        pos += 1
+    return pos
+
+
 def mutate_insert_alias_before_use(
     source: str,
     fn_name: str,
     var_name: str,
     at_stmt_index: int,
     new_name: Optional[str] = None,
+    scope_filter: Optional[tuple[str, ...]] = None,
+    scope_filter_prefix: Optional[tuple[str, ...]] = None,
 ) -> str:
     """Insert an alias declaration for the N-th reading use of `var_name`
     and rewrite that statement to use `new_name`.
 
-    MWCC uses C89 rules: declarations must appear before any executable
-    statements in a block.  If any non-declaration statement precedes the
-    insertion point in the function body, we split the alias into:
-      - ``<type> <new_name>;``  at the function body's opening brace (safe
-        top-of-block position)
-      - ``<new_name> = <var_name>;``  immediately before the target
-        statement (the assignment is an executable statement, which is fine
-        after the decl)
-
-    If the target is already at the block top (all preceding statements are
-    declarations or the target is the very first statement), we emit the
-    combined initializing form:
-      - ``<type> <new_name> = <var_name>;``
+    Form selection:
+      - Function-top target with no non-decls before it in the same block
+        → combined initializing form (`<type> <new_name> = <var>;`).
+      - Otherwise → split form (bare `<type> <new_name>;` at the nearest
+        enclosing block top + `<new_name> = <var>;` right before the use,
+        moved after the first plain write of `<var>` when one exists in
+        the same block before the use).
     """
     if new_name is None:
         new_name = var_name + "_alias"
 
-    extracted = _extract_function_text(source, fn_name)
-    if extracted is None:
+    if _extract_function_text(source, fn_name) is None:
         raise MutationUnsupported(f"function {fn_name!r} not found")
-    _params_text, body_text, _ = extracted
 
     var_type = _get_var_type_in_fn(source, fn_name, var_name)
     if var_type is None:
@@ -240,145 +269,91 @@ def mutate_insert_alias_before_use(
             f"variable {var_name!r} not found in {fn_name!r}"
         )
 
-    statements = _split_function_body_into_statements(body_text)
-    reading_stmts = [
-        (start, end, text) for (start, end, text) in statements
-        if _statement_is_reading_use(text, var_name)
+    span_statements = list_statement_spans(source, fn_name)
+    target_span_candidates = [
+        span for span in span_statements
+        if _span_matches_scope(span, scope_filter, scope_filter_prefix)
+        and _statement_is_reading_use(span.text, var_name)
     ]
-    if at_stmt_index >= len(reading_stmts):
+    if at_stmt_index >= len(target_span_candidates):
         raise MutationUnsupported(
             f"at_stmt_index={at_stmt_index} out of range "
-            f"(only {len(reading_stmts)} reading statements)"
+            f"(only {len(target_span_candidates)} reading statements)"
         )
-    target_start, target_end, target_text = reading_stmts[at_stmt_index]
+    target_span = target_span_candidates[at_stmt_index]
+    target_start_abs, target_end_abs = target_span.byte_range
+    target_text = source[target_start_abs:target_end_abs]
 
-    # Rewrite the target statement: replace bare `var_name` tokens
-    # with `new_name`. Use word-boundary regex to avoid touching
-    # substrings.
+    # Rewrite the target: replace bare `var_name` tokens with `new_name`.
     word_re = re.compile(r"\b" + re.escape(var_name) + r"\b")
     rewritten = word_re.sub(new_name, target_text)
 
-    # Fix F: detect if the replacement introduced a struct-field alias,
-    # e.g. `->jobjs` → `->jobjs_alias[23]`.  This happens when `var_name`
-    # is actually a field name embedded in a member-access expression
-    # (data->jobjs[i]) rather than a standalone local.  The word-boundary
-    # regex correctly matches `jobjs` inside `->jobjs` and replaces it,
-    # producing the invalid `->jobjs_alias` pattern.
-    #
-    # Detection: if the rewritten statement contains `->new_name` or
-    # `.new_name` (where new_name starts with var_name), the alias
-    # target is a field, not a bindable local.  Raise MutationUnsupported
-    # so the seed is skipped.
-    _field_re = re.compile(
-        r"(?:->|\.)" + re.escape(new_name) + r"\b"
-    )
-    if _field_re.search(rewritten):
+    # Struct-field guard: if the only occurrence is `->var` or `.var`, refuse.
+    field_re = re.compile(r"(?:->|\.)" + re.escape(new_name) + r"\b")
+    if field_re.search(rewritten):
         raise MutationUnsupported(
             f"[tier3-search] skipping alias seed for '{var_name}': appears "
             f"to be a struct field access (found '{new_name}' after '->'/'.'), "
             f"not a bindable local. Use direct-mapping instead."
         )
 
-    # Find leading indentation on the target line so inserted lines match it.
-    line_start = body_text.rfind("\n", 0, target_start) + 1
+    # Indentation of the target's line (spaces/tabs only).
+    target_line_start_abs = source.rfind("\n", 0, target_start_abs) + 1
     indent = ""
-    j = line_start
-    while j < target_start and body_text[j] in " \t":
-        indent += body_text[j]
-        j += 1
-
-    # Determine whether any non-declaration statement precedes the target
-    # in the function body.  If so we must split the alias into a bare
-    # decl at block-top + an assignment at the use site (C89 compliance).
-    stmts_before_target = [
-        (s, e, t) for (s, e, t) in statements if e <= target_start
-    ]
-    has_non_decl_before = any(
-        not _stmt_is_declaration(t) for (_, _, t) in stmts_before_target
-    )
-
-    if has_non_decl_before:
-        # C89 split: bare decl at function body open brace, assignment
-        # immediately before the target statement.
-        open_brace = body_text.find("{")
-        after_brace = open_brace + 1  # character after `{`
-        # Determine indentation from the first existing body line, or use
-        # the target's indentation as a reasonable default.
-        body_indent = indent
-
-        decl_line = f"\n{body_indent}{var_type} {new_name};"
-        assign_line = f"{indent}{new_name} = {var_name};\n"
-
-        # Fix E: place 'alias = local' AFTER local's first real assignment.
-        # The target statement (at_stmt_index=0) may be the first USE of the
-        # variable, but the variable itself may not have been written yet
-        # (e.g. it's a pointer first set by `var_name = expr;` later in
-        # the function, or a compound `var_name->field = x;` statement that
-        # reads the uninitialized pointer).  If we place `alias = local`
-        # immediately before the target without checking, we read an
-        # uninitialized variable — MWCC may surface this as a compile error.
-        #
-        # Strategy: look for the first statement that is a plain write
-        # (`var_name = <expr>;`) occurring BEFORE the target statement.
-        # If found, insert the alias assignment right after that write.
-        # Otherwise fall back to inserting immediately before the target
-        # (the compile error from MWCC is the correct outcome and surfaces
-        # the issue to the user rather than silently corrupting source).
-        _first_write_end: Optional[int] = None
-        _write_re = re.compile(
-            r"^\s*" + re.escape(var_name) + r"\s*=\s*[^=]"
-        )
-        for _s, _e, _t in statements:
-            if _e > target_start:
-                break
-            if _write_re.match(_strip_strings_and_comments(_t)):
-                _first_write_end = _e
-                break
-
-        if _first_write_end is not None and _first_write_end < target_start:
-            # Local has a real assignment before the target use.  Insert the
-            # alias assignment immediately after that assignment statement.
-            _nl = body_text.find("\n", _first_write_end)
-            _insert_pos = (_nl + 1) if _nl >= 0 else _first_write_end
-            new_body = (
-                body_text[:after_brace]
-                + decl_line
-                + body_text[after_brace:_insert_pos]
-                + assign_line
-                + body_text[_insert_pos:target_start]
-                + rewritten
-                + body_text[target_end:]
-            )
+    for ch in source[target_line_start_abs:target_start_abs]:
+        if ch in " \t":
+            indent += ch
         else:
-            # No prior write found — place alias assignment immediately before
-            # the target statement (original behaviour).
-            new_body = (
-                body_text[:after_brace]
-                + decl_line
-                + body_text[after_brace:line_start]
-                + assign_line
-                + body_text[line_start:target_start]
-                + rewritten
-                + body_text[target_end:]
-            )
-    else:
-        # Block top: safe to use the combined initializing form.
-        insert = f"{indent}{var_type} {new_name} = {var_name};\n"
-        new_body = (
-            body_text[:line_start]
-            + insert
-            + body_text[line_start:target_start]
+            break
+
+    # Spans in the same block as target, lying before it.
+    same_block_before = [
+        s for s in span_statements
+        if s.scope_path == target_span.scope_path
+        and s.byte_range[1] <= target_start_abs
+    ]
+    has_non_decl_before = any(s.kind != "declaration" for s in same_block_before)
+    is_function_top = len(target_span.scope_path) == 1
+
+    if is_function_top and not has_non_decl_before:
+        # Combined form: decl+init at target line.
+        combined_line = f"{indent}{var_type} {new_name} = {var_name};\n"
+        return (
+            source[:target_line_start_abs]
+            + combined_line
+            + source[target_line_start_abs:target_start_abs]
             + rewritten
-            + body_text[target_end:]
+            + source[target_end_abs:]
         )
 
-    body_start_in_source = source.find(body_text)
-    if body_start_in_source < 0:
-        raise MutationUnsupported(
-            "could not relocate function body in source"
-        )
-    return (
-        source[:body_start_in_source]
-        + new_body
-        + source[body_start_in_source + len(body_text):]
-    )
+    # Split form. Decl goes at nearest block top; assign goes either right
+    # after `var`'s first plain write in the same block, or right before
+    # the use when no such write exists.
+    decl_insert_abs = _find_block_top_pos(source, target_span.scope_byte_range)
+    decl_line = f"{indent}{var_type} {new_name};\n"
+
+    write_re = re.compile(r"^\s*" + re.escape(var_name) + r"\s*=\s*[^=]")
+    first_write_end_abs: Optional[int] = None
+    for s in same_block_before:
+        cleaned = _strip_strings_and_comments(s.text)
+        if write_re.match(cleaned):
+            first_write_end_abs = s.byte_range[1]
+            break
+
+    if first_write_end_abs is not None and first_write_end_abs < target_start_abs:
+        nl = source.find("\n", first_write_end_abs)
+        assign_insert_abs = (nl + 1) if nl >= 0 else first_write_end_abs
+    else:
+        assign_insert_abs = target_line_start_abs
+
+    assign_line = f"{indent}{new_name} = {var_name};\n"
+
+    edits: list[tuple[int, int, str]] = [
+        (target_start_abs, target_end_abs, rewritten),
+        (assign_insert_abs, assign_insert_abs, assign_line),
+        (decl_insert_abs, decl_insert_abs, decl_line),
+    ]
+    out = source
+    for start, end, replacement in sorted(edits, key=lambda e: e[0], reverse=True):
+        out = out[:start] + replacement + out[end:]
+    return out

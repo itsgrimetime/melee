@@ -290,6 +290,54 @@ def test_mutate_insert_alias_after_first_assignment() -> None:
     assert any("port_indicator_alias[0] = 1;" in l for l in lines)
 
 
+def test_mutate_insert_alias_places_decl_in_nearest_nested_block() -> None:
+    source = textwrap.dedent("""\
+        void f(int cond, HSD_JObj* cursor_jobj)
+        {
+            int top;
+            if (cond) {
+                int nested;
+                HSD_JObjSetMtxDirtySub(cursor_jobj);
+            }
+        }
+    """)
+    result = mutate_insert_alias_before_use(
+        source, "f", "cursor_jobj", at_stmt_index=0,
+    )
+    lines = result.splitlines()
+    outer_decl_idx = next(i for i, line in enumerate(lines) if "int top;" in line)
+    if_idx = next(i for i, line in enumerate(lines) if "if (cond)" in line)
+    alias_decl_idx = next(i for i, line in enumerate(lines) if "cursor_jobj_alias;" in line)
+    nested_decl_idx = next(i for i, line in enumerate(lines) if "int nested;" in line)
+    call_idx = next(i for i, line in enumerate(lines) if "HSD_JObjSetMtxDirtySub" in line)
+    assert outer_decl_idx < if_idx < alias_decl_idx < nested_decl_idx < call_idx
+    assert "HSD_JObjSetMtxDirtySub(cursor_jobj_alias);" in result
+
+
+def test_mutate_insert_alias_scope_filter_disambiguates_shadowed_name() -> None:
+    source = textwrap.dedent("""\
+        void f(int cond)
+        {
+            HSD_JObj* jobj;
+            UseTop(jobj);
+            if (cond) {
+                HSD_JObj* jobj;
+                UseNested(jobj);
+            }
+        }
+    """)
+    result = mutate_insert_alias_before_use(
+        source,
+        "f",
+        "jobj",
+        at_stmt_index=0,
+        new_name="inner_alias",
+        scope_filter_prefix=("f", "block@"),
+    )
+    assert "UseTop(jobj);" in result
+    assert "UseNested(inner_alias);" in result
+
+
 def test_regression_fn_8024e1b4_dual_pointer_shape() -> None:
     """Pin the dual-pointer mutation shape: starting from a simple
     function reading `data` once, mutate_insert_alias to produce the
