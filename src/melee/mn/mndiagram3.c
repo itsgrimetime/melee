@@ -931,6 +931,7 @@ void mnDiagram3_8024714C(void *arg0)
     mnDiagram_ArchiveData *archive;
     Vec3 sp48;
     f32 row_spacing;
+    u8 scroll;
     int i;
 
     PAD_STACK(64);
@@ -998,6 +999,7 @@ void mnDiagram3_8024714C(void *arg0)
 
     data = mnDiagram3_804D6C20->user_data;
     row0 = data->jobjs[8];
+    scroll = data->scroll_offset;
     HSD_ASSERT(0x3EE, row0);
     {
         f32 row0_y = row0->translate.y;
@@ -1007,7 +1009,6 @@ void mnDiagram3_8024714C(void *arg0)
     }
     lb_8000B1CC(data->jobjs[8], (Vec3*) &mnDiagram3_803EEC28, &sp48);
     {
-        u8 scroll = data->scroll_offset;
         f32 neg_spacing = -row_spacing;
         f32 font_size = mnDiagram3_804DBFFC;
         u8 limit;
