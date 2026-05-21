@@ -56,9 +56,12 @@ the current floor.
   `--trace-copies`/`--explain`, and JSON output can emit compact unified
   hunks via `--emit-hunks`/`--emit-diffs` without one-line full-TU
   `patched_source` payloads. Follow-up filtering now ranks the human
-  trace summary toward candidate-relevant copies, especially dominant
-  source-virtual fan-outs and copies removed before coloring, while
-  reporting how many noisy candidate-only copies were omitted.
+  trace summary toward candidate-relevant copies, especially copies
+  involving the candidate argument's source virtual or patch-local
+  block, dominant source-virtual fan-outs, and copies removed before
+  coloring, while reporting how many noisy candidate-only copies were
+  omitted. Labels distinguish copies eliminated before coloring from
+  copies that survive coloring but disappear in later passes.
 - **`tier3-search` v2**: seed generation, smoke compile, per-seed
   permuter wiring, budget/time controls, and `--apply-best`.
 - **`checkdiff`**: JSON exit normalization and SDA21 relocation
@@ -171,7 +174,9 @@ Candidate forms:
   candidate pcdump, diff its `mr` copies against the baseline pcdump, and
   report whether each new copy reaches simplify/colorgraph or is removed
   before coloring. Human output should show a filtered/ranked summary of
-  the candidate-relevant subset while JSON keeps the raw trace list.
+  the candidate-relevant subset, with source-argument and patch-local
+  traces ahead of generic dominant-source traces, while JSON keeps the
+  raw trace list.
 - JSON output should stay compact by default, support compact unified
   hunks with `--emit-hunks` / `--emit-diffs`, and emit full
   `patched_source` only when `--emit-patches` is requested.

@@ -689,3 +689,87 @@ def test_copy_trace_summary_prefers_dominant_removed_source() -> None:
         "dominant-source-virtual" in trace.interest_reasons
         for trace in summary.traces
     )
+
+
+def test_copy_trace_summary_prioritizes_candidate_source_virtual() -> None:
+    from src.mwcc_debug import source_shape
+
+    traces = tuple(
+        source_shape.CandidateCopyTrace(
+            from_virtual=45,
+            to_virtual=virtual,
+            status="copy-found",
+            likely_cause="removed-before-coloring",
+            first_copy_block=100 + idx,
+        )
+        for idx, virtual in enumerate((135, 136, 137, 138))
+    ) + (
+        source_shape.CandidateCopyTrace(
+            from_virtual=50,
+            to_virtual=108,
+            status="copy-found",
+            likely_cause="removed-before-coloring",
+            first_copy_block=245,
+        ),
+    )
+
+    summary = source_shape.summarize_candidate_copy_traces(
+        traces,
+        max_traces=1,
+        priority_virtuals=(50,),
+    )
+
+    assert [(trace.to_virtual, trace.from_virtual) for trace in summary.traces] == [
+        (108, 50)
+    ]
+    assert "priority-virtual" in summary.traces[0].interest_reasons
+
+
+def test_copy_trace_summary_prioritizes_patch_local_block() -> None:
+    from src.mwcc_debug import source_shape
+
+    traces = (
+        source_shape.CandidateCopyTrace(
+            from_virtual=45,
+            to_virtual=135,
+            status="copy-found",
+            likely_cause="removed-before-coloring",
+            first_copy_block=100,
+        ),
+        source_shape.CandidateCopyTrace(
+            from_virtual=50,
+            to_virtual=108,
+            status="copy-found",
+            likely_cause="removed-before-coloring",
+            first_copy_block=245,
+        ),
+    )
+
+    summary = source_shape.summarize_candidate_copy_traces(
+        traces,
+        max_traces=1,
+        priority_blocks=(245,),
+    )
+
+    assert [(trace.to_virtual, trace.from_virtual) for trace in summary.traces] == [
+        (108, 50)
+    ]
+    assert "patch-local-block" in summary.traces[0].interest_reasons
+
+
+def test_copy_trace_summary_distinguishes_post_coloring_disappearances() -> None:
+    from src.mwcc_debug import source_shape
+
+    summary = source_shape.summarize_candidate_copy_traces((
+        source_shape.CandidateCopyTrace(
+            from_virtual=71,
+            to_virtual=121,
+            status="copy-found",
+            likely_cause="copy-survived-distinct-phys",
+            transform_category="copy-survived",
+            first_absent_pass="AFTER INSTRUCTION SCHEDULING",
+        ),
+    ))
+
+    assert "removed-before-coloring" not in summary.traces[0].interest_reasons
+    assert "copy-disappears-after-coloring" in summary.traces[0].interest_reasons

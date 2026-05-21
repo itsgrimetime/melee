@@ -6581,6 +6581,41 @@ def suggest_inlines_cmd(
                 note=copy_report.note,
             )
 
+        def _candidate_target_function(candidate) -> str:
+            if candidate.anchor.scope_path:
+                return candidate.anchor.scope_path[0]
+            return candidate.metadata.get("helper_function", function)
+
+        def _candidate_priority_virtuals(
+            candidate,
+            candidate_pcdump: str,
+        ) -> tuple[int, ...]:
+            from ..mwcc_debug.symbol_bridge import (
+                find_all_virtuals_for_var,
+                list_bindings_with_basis,
+            )
+
+            virtuals: list[int] = list(candidate.anchor.virtuals)
+            target_function = _candidate_target_function(candidate)
+            fns = parse_pcdump(candidate_pcdump, function=target_function)
+            fn = fns[0] if fns else None
+            pre_pass = None if fn is None else fn.last_precolor_pass()
+            if pre_pass is None:
+                return tuple(dict.fromkeys(virtuals))
+
+            bindings, _basis = list_bindings_with_basis(
+                source_path.read_text(),
+                target_function,
+                pre_pass,
+            )
+            for name in candidate.reads:
+                if re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", name) is None:
+                    continue
+                for binding in find_all_virtuals_for_var(bindings, name):
+                    if binding.virtual >= 32:
+                        virtuals.append(binding.virtual)
+            return tuple(dict.fromkeys(virtuals))
+
         def _checkdiff_runner(fn_name: str) -> CheckdiffResult:
             cmd = [
                 "python",
@@ -6664,7 +6699,11 @@ def suggest_inlines_cmd(
                     ]
                     candidate = candidate_by_id.get(_candidate.candidate_id)
                     priority_virtuals = (
-                        () if candidate is None else candidate.anchor.virtuals
+                        () if candidate is None
+                        else _candidate_priority_virtuals(
+                            candidate,
+                            candidate_pcdump,
+                        )
                     )
                     return summarize_candidate_copy_traces(
                         traces,

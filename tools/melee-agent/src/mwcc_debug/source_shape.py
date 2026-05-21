@@ -117,7 +117,11 @@ def _removed_before_coloring(trace: CandidateCopyTrace) -> bool:
         "copy-rewritten-before-coloring",
     }:
         return True
-    return trace.first_absent_pass is not None
+    return False
+
+
+def _disappears_after_coloring(trace: CandidateCopyTrace) -> bool:
+    return trace.first_absent_pass is not None and not _removed_before_coloring(trace)
 
 
 def summarize_candidate_copy_traces(
@@ -125,13 +129,15 @@ def summarize_candidate_copy_traces(
     *,
     max_traces: int = 12,
     priority_virtuals: tuple[int, ...] = (),
+    priority_blocks: tuple[int, ...] = (),
 ) -> CandidateCopyTraceSet:
     """Select candidate-relevant copy traces for human output.
 
     The full candidate pcdump can introduce many incidental copies after a
     source rewrite. For source-shape candidates, the most useful subset is
-    usually the dominant source virtual fanning out to new temps, then copies
-    that disappear before coloring, then any caller-prioritized virtuals.
+    usually copies touching the candidate's source virtual or patched block,
+    then dominant source virtuals fanning out to new temps, then copies whose
+    visible `mr` disappears before allocator output.
     """
     trace_tuple = tuple(traces)
     if not trace_tuple:
@@ -148,9 +154,20 @@ def summarize_candidate_copy_traces(
             dominant_source = candidate_source
 
     priority_set = set(priority_virtuals)
+    priority_block_set = set(priority_blocks)
     annotated: list[CandidateCopyTrace] = []
     for trace in trace_tuple:
         reasons = list(trace.interest_reasons)
+        if (
+            trace.from_virtual in priority_set
+            or trace.to_virtual in priority_set
+        ):
+            reasons.append("priority-virtual")
+        if (
+            trace.first_copy_block in priority_block_set
+            or trace.last_copy_block in priority_block_set
+        ):
+            reasons.append("patch-local-block")
         if (
             dominant_source is not None
             and trace.from_virtual == dominant_source
@@ -158,30 +175,28 @@ def summarize_candidate_copy_traces(
             reasons.append("dominant-source-virtual")
         if _removed_before_coloring(trace):
             reasons.append("removed-before-coloring")
-        if (
-            trace.from_virtual in priority_set
-            or trace.to_virtual in priority_set
-        ):
-            reasons.append("priority-virtual")
+        elif _disappears_after_coloring(trace):
+            reasons.append("copy-disappears-after-coloring")
         annotated.append(replace(
             trace,
             interest_reasons=_unique_reasons(reasons),
         ))
 
-    dominant = [
-        trace for trace in annotated
-        if "dominant-source-virtual" in trace.interest_reasons
-    ]
     interesting = [
         trace for trace in annotated
         if trace.interest_reasons
     ]
-    selected = dominant or interesting or annotated
+    selected = interesting or annotated
 
-    def key(trace: CandidateCopyTrace) -> tuple[int, int, int, int]:
+    def key(trace: CandidateCopyTrace) -> tuple[int, int, int, int, int, int]:
         return (
+            0 if "priority-virtual" in trace.interest_reasons else 1,
+            0 if "patch-local-block" in trace.interest_reasons else 1,
             0 if "dominant-source-virtual" in trace.interest_reasons else 1,
-            0 if _removed_before_coloring(trace) else 1,
+            0 if (
+                _removed_before_coloring(trace)
+                or "copy-disappears-after-coloring" in trace.interest_reasons
+            ) else 1,
             -1 if trace.to_virtual is None else trace.to_virtual,
             -1 if trace.from_virtual is None else trace.from_virtual,
         )

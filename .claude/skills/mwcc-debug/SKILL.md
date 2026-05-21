@@ -380,11 +380,14 @@ melee-agent debug suggest-inlines -f my_fn --json --emit-patches
 # winner. Use `--trace-copies` or `--explain` with `--verify` when you need to
 # know whether a candidate-introduced `mr` copy survives to simplify/colorgraph
 # or is eliminated before coloring. Human output summarizes the
-# candidate-relevant subset first, especially dominant source-virtual copies
-# that are removed before coloring, and reports how many noisy candidate-only
-# copies were omitted. Use `--json --emit-hunks` (alias: `--emit-diffs`) for
-# compact unified diffs without full `patched_source` payloads; reserve
-# `--emit-patches` for the full rewritten TU.
+# candidate-relevant subset first, especially copies involving the candidate
+# argument's source virtual or patch-local block, then dominant source-virtual
+# copies that are removed before coloring. Labels distinguish copies eliminated
+# before coloring from copies that survive coloring but disappear later. The
+# summary reports how many noisy candidate-only copies were omitted. Use
+# `--json --emit-hunks` (alias: `--emit-diffs`) for compact unified diffs
+# without full `patched_source` payloads; reserve `--emit-patches` for the full
+# rewritten TU.
 
 # Keep temporary source probes out of the canonical pcdump cache.
 melee-agent debug pcdump-local src/melee/mn/mnvibration.c --no-cache-sync
