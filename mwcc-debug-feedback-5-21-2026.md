@@ -273,3 +273,40 @@ Context: merged `d7108027c` (`mwcc-debug: address fn_80247510 feedback`) into
   earlier manual grouped probe plus `trace-copy`, this still looks like a
   pcode-only copy eliminated before coloring, not the missing natural lifetime
   barrier.
+
+## Follow-up after `b64403c36`
+
+Context: merged `b64403c36` (`mwcc-debug: trace inline candidate copies`) into
+`wip/mn-heartbeat` and reran the inline diagnostics against `fn_80247510`.
+
+### Improvements that helped
+
+- `suggest-inlines --json --emit-hunks` works well. It emits compact unified
+  hunks for each candidate without the one-line full-TU `patched_source`
+  payload, which makes reviewing large-TU candidates much faster.
+
+- `suggest-inlines --verify --trace-copies` now automatically proves the key
+  dirty-temp source-shape result. The grouped candidate still ties baseline
+  (`97.14597 -> 97.14597`, `delta=0.0`), and its introduced cursor copies:
+  `r50 -> r110`, `r50 -> r109`, and `r50 -> r108` are all reported as
+  `removed-before-coloring` / `copy-eliminated-before-coloring`.
+
+- This confirms the earlier manual trace result without applying source by hand:
+  the obvious X/Y/Z dirty-temp candidate creates the expected PCode copies, but
+  they do not survive into simplify/colorgraph. The remaining mismatch needs a
+  different source structure or a deeper lifetime barrier, not this temp shape.
+
+### Remaining issues / new requests
+
+- `--trace-copies` currently reports every newly introduced copy in the whole
+  candidate pcdump. For these four dirty-temp candidates that was 50, 50, 50,
+  and 57 traces respectively, while the useful signal was only the cursor-copy
+  subset. A filtered summary would be much easier to act on, for example:
+  "copies involving variables/virtuals touched by the candidate", "copies near
+  the candidate's source hunk/basic block", or "copies introduced by this patch
+  and not present in the baseline near the patched statement."
+
+- The JSON has the right raw data, but it would help if the human output ranked
+  or highlighted the interesting traces: pcode-only/removed-before-coloring
+  copies, copies involving the candidate's argument temp, and traces whose
+  source/destination virtuals are mentioned by `suggest-coalesce-source`.
