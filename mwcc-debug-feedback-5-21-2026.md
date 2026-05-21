@@ -223,3 +223,53 @@ regressions`) into `wip/mn-heartbeat` and reran the diagnostics against
 - The grouped temp shape also regressed the frame from `-280` to `-288` and
   caused a broad register cascade. This is further evidence that the current
   hand-written dirty-temp rewrite is not the final source structure.
+
+## Follow-up after `d7108027c`
+
+Context: merged `d7108027c` (`mwcc-debug: address fn_80247510 feedback`) into
+`wip/mn-heartbeat` and reran the diagnostics against `fn_80247510`.
+
+### Improvements that helped
+
+- `suggest-coalesce-source --discover` now correctly marks the whole cascade as
+  unsafe to force when no direct copy/identity edge exists. The important
+  `34 -> 50` pair now reports:
+  `no direct copy/identity edge between r34 and r50 in pre-coloring IR`.
+  This resolves the misleading "safe" preflight from the prior run.
+
+- `suggest-inlines --seed-source patterns` now includes
+  `hidden-dirty-arg-temp-group-0004`, the grouped X/Y/Z dirty-temp candidate
+  for `mnVibration_SetCursorPosition`.
+
+- The generated dirty-temp source now uses the apparent type
+  `HSD_JObj* cursor_jobj_arg_temp` and keeps declarations before executable
+  statements. That fixes the earlier `void*` / declaration-placement concern.
+
+- `suggest-inlines --verify --checkdiff-timeout 10` now reports baseline,
+  candidate, and delta. For the three single-axis candidates and the grouped
+  candidate, the score was `97.14597 -> 97.14597` with `delta=0.0`.
+
+- `pcdump-local` now returns exit status `124` when the watchdog kills the bad
+  forced coalesce run. That makes the partial dump distinguishable from a valid
+  force proof in scripts.
+
+### Remaining issues / new requests
+
+- The grouped dirty-temp candidate ties checkdiff but still does not tell us
+  whether its introduced copy survives or dies before coloring. A useful next
+  layer would be an optional `suggest-inlines --trace-copies` / `--explain`
+  mode that, for verified candidates, runs `trace-copy` on newly introduced
+  `mr` copies and reports whether each copy reached simplify/colorgraph.
+
+- `--emit-patches` is useful but hard to inspect because each `patched_source`
+  JSON string is the full TU on one line. A compact `--emit-diffs` or
+  `--emit-hunks` mode would make candidate review much faster, especially for
+  large TUs like `mnvibration.c`.
+
+### Source-shape evidence
+
+- The new grouped dirty-temp candidate is confirmed as a no-gain source shape:
+  it compiles cleanly and ties the current baseline (`delta=0.0`). Based on the
+  earlier manual grouped probe plus `trace-copy`, this still looks like a
+  pcode-only copy eliminated before coloring, not the missing natural lifetime
+  barrier.
