@@ -587,3 +587,43 @@ Context: working on `src/melee/mn/mnvibration.c`, mainly `fn_80247510` and
   candidate by default. On large TUs this makes the output enormous and hard to
   inspect. A summary-only default, plus an explicit `--emit-patches` or
   `--write-patches` option, would fit the debugging loop better.
+
+## Follow-up from the `fn_80247510` cursor-copy blocker
+
+- A copy-lifetime/coalescing diagnostic would directly help the current
+  `fn_80247510` blocker. The target cursor-position blocks keep a copied
+  `HSD_JObj*` alive before each `HSD_JObjSetTranslateX/Y/Z` assert and then
+  pass that copy to `HSD_JObjSetMtxDirtySub`. A manual X-only helper with
+  `HSD_JObj* dirty_jobj = jobj;` created the expected pre-color PCode
+  (`mr r108,r50`), but final ASM still coalesced it away and called dirty with
+  the original cursor pointer. A command like
+  `debug trace-copy -f fn_80247510 --from r50 --to r108` should report the
+  pass where a copy first appears, the pass where it disappears, and whether it
+  was removed by copy propagation, coalescing, coloring/rewrite, or scheduling.
+
+- We need a reliable bridge from visible PCode virtual names to allocator
+  graph indices. The pcdump shows source-relevant virtuals such as
+  `mr r108,r50`, but `--force-phys`/`--force-phys-iter` operate on colorgraph
+  `ig_idx`/iteration positions. A command like
+  `debug virtual-to-ig -f fn_80247510 --virtual 108` should show the matching
+  class, `ig_idx`, iteration index, assigned physical register, live range, and
+  whether the virtual survived into the colorgraph. This would prevent
+  accidental force tests against the wrong identifier.
+
+- A force/proof mode for preserving a copy would be higher-signal than forcing
+  final physical registers for this case. Something like
+  `--force-no-coalesce r108:r50` or `--force-copy-survives r108:r50` would let
+  us test whether preserving that one PCode copy alone creates the missing
+  target `mr` instructions. If the forced no-coalesce output matches the target
+  cursor block, we know the remaining source work is manufacturing a natural
+  lifetime/interference barrier. If it still does not match, we can stop
+  treating the missing `mr`s as a pure coalescing problem.
+
+- `suggest-inlines` needs macro/header-inline expansion awareness for this
+  family of misses. In source, the disputed dirty calls are hidden behind
+  `HSD_JObjSetTranslate*` and the `HSD_JObjSetMtxDirty` macro, so
+  `suggest-inlines --seed-source patterns` only offered unrelated visible-call
+  helper candidates. For this function, the useful suggestion would be an
+  argument-temp/lifetime-split pattern around the expanded
+  `HSD_JObjSetMtxDirtySub(cursor_jobj)` call even though that call is not
+  visible in the handwritten C.
