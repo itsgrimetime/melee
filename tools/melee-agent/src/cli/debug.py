@@ -6507,7 +6507,12 @@ def suggest_inlines_cmd(
             parse_checkdiff_json,
             verify_real_tree_patches,
         )
-        from ..mwcc_debug.source_shape import CandidateCopyTrace, rank_scores
+        from ..mwcc_debug.source_shape import (
+            CandidateCopyTrace,
+            CandidateCopyTraceSet,
+            rank_scores,
+            summarize_candidate_copy_traces,
+        )
 
         def _run_trace_pcdump(src_rel: str) -> str:
             with tempfile.TemporaryDirectory() as td:
@@ -6563,6 +6568,14 @@ def suggest_inlines_cmd(
                     None if copy_report.last_copy is None
                     else copy_report.last_copy.pass_name
                 ),
+                first_copy_block=(
+                    None if copy_report.first_copy is None
+                    else copy_report.first_copy.block_idx
+                ),
+                last_copy_block=(
+                    None if copy_report.last_copy is None
+                    else copy_report.last_copy.block_idx
+                ),
                 first_absent_pass=copy_report.first_absent_pass,
                 transform_category=copy_report.transform_category,
                 note=copy_report.note,
@@ -6606,6 +6619,10 @@ def suggest_inlines_cmd(
         copy_trace_runner = None
         trace_setup_error = None
         baseline_trace_pcdump = pcdump_text or None
+        candidate_by_id = {
+            candidate.candidate_id: candidate
+            for candidate in report.candidates
+        }
         if trace_copies:
             if baseline_trace_pcdump is None:
                 try:
@@ -6619,20 +6636,24 @@ def suggest_inlines_cmd(
                     )
 
             if baseline_trace_pcdump is None:
-                def _copy_trace_runner(_candidate) -> list[CandidateCopyTrace]:
-                    return [CandidateCopyTrace(
+                def _copy_trace_runner(_candidate) -> CandidateCopyTraceSet:
+                    trace = CandidateCopyTrace(
                         from_virtual=None,
                         to_virtual=None,
                         status="trace-error",
                         likely_cause="trace-error",
                         note=trace_setup_error,
-                    )]
+                    )
+                    return CandidateCopyTraceSet(
+                        traces=(trace,),
+                        total_count=1,
+                    )
             else:
                 from ..mwcc_debug.copy_trace import list_new_copy_lifetimes
 
-                def _copy_trace_runner(_candidate) -> list[CandidateCopyTrace]:
+                def _copy_trace_runner(_candidate) -> CandidateCopyTraceSet:
                     candidate_pcdump = _run_trace_pcdump(source_rel)
-                    return [
+                    traces = [
                         _candidate_copy_trace_from_report(copy_report)
                         for copy_report in list_new_copy_lifetimes(
                             baseline_trace_pcdump,
@@ -6641,6 +6662,14 @@ def suggest_inlines_cmd(
                             reg_class="gpr",
                         )
                     ]
+                    candidate = candidate_by_id.get(_candidate.candidate_id)
+                    priority_virtuals = (
+                        () if candidate is None else candidate.anchor.virtuals
+                    )
+                    return summarize_candidate_copy_traces(
+                        traces,
+                        priority_virtuals=priority_virtuals,
+                    )
 
             copy_trace_runner = _copy_trace_runner
 

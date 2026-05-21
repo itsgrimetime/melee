@@ -775,7 +775,25 @@ def render_text(report: SourceShapeReport) -> str:
                     f"- {score.candidate_id}: compile={score.compile_ok} "
                     f"delta={delta_text}"
                 )
-            for trace in score.copy_traces:
+            display_traces = score.copy_trace_highlights or score.copy_traces
+            total_traces = score.copy_trace_total_count or len(display_traces)
+            if total_traces:
+                omitted_count = (
+                    score.copy_trace_omitted_count
+                    or max(0, total_traces - len(display_traces))
+                )
+                if omitted_count:
+                    lines.append(
+                        f"  copy traces: showing {len(display_traces)}/"
+                        f"{total_traces} candidate-relevant traces "
+                        f"({omitted_count} omitted)"
+                    )
+                else:
+                    lines.append(
+                        f"  copy traces: showing {len(display_traces)}/"
+                        f"{total_traces} traces"
+                    )
+            for trace in display_traces:
                 from_text = (
                     "?" if trace.from_virtual is None
                     else f"r{trace.from_virtual}"
@@ -788,6 +806,14 @@ def render_text(report: SourceShapeReport) -> str:
                     f"  copy {to_text}<-{from_text}: "
                     f"status={trace.status} cause={trace.likely_cause}"
                 )
+                if trace.interest_reasons:
+                    line = (
+                        f"  copy {to_text}<-{from_text} "
+                        f"[{', '.join(trace.interest_reasons)}]: "
+                        f"status={trace.status} cause={trace.likely_cause}"
+                    )
+                if trace.first_copy_block is not None:
+                    line += f" block={trace.first_copy_block}"
                 if trace.first_absent_pass:
                     line += f" first_absent={trace.first_absent_pass}"
                 if trace.transform_category:

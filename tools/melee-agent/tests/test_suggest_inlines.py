@@ -573,3 +573,119 @@ def test_render_text_scores_include_baseline_candidate_and_delta() -> None:
     assert "copy r110<-r50" in out
     assert "removed-before-coloring" in out
     assert "first_absent=BEFORE REGISTER COLORING" in out
+
+
+def test_render_text_summarizes_and_highlights_filtered_copy_traces() -> None:
+    from src.mwcc_debug import source_shape
+    from src.mwcc_debug.source_shape import CandidateScore, SourceShapeReport
+
+    report = SourceShapeReport(
+        function="f",
+        candidates=[],
+        patches=[],
+        scores=[
+            CandidateScore(
+                candidate_id="hidden-dirty-arg-temp-group-0004",
+                compile_ok=True,
+                checkdiff_pct=97.25,
+                checkdiff_delta=0.0,
+                pcdump_score_delta=None,
+                diagnostics_path=None,
+                checkdiff_baseline_pct=97.25,
+                copy_trace_total_count=57,
+                copy_trace_omitted_count=54,
+                copy_traces=(
+                    source_shape.CandidateCopyTrace(
+                        from_virtual=50,
+                        to_virtual=110,
+                        status="copy-found",
+                        likely_cause="removed-before-coloring",
+                        first_absent_pass="BEFORE REGISTER COLORING",
+                        transform_category="copy-eliminated-before-coloring",
+                        first_copy_block=245,
+                        interest_reasons=(
+                            "dominant-source-virtual",
+                            "removed-before-coloring",
+                        ),
+                    ),
+                    source_shape.CandidateCopyTrace(
+                        from_virtual=50,
+                        to_virtual=109,
+                        status="copy-found",
+                        likely_cause="removed-before-coloring",
+                        first_copy_block=246,
+                        interest_reasons=("dominant-source-virtual",),
+                    ),
+                    source_shape.CandidateCopyTrace(
+                        from_virtual=50,
+                        to_virtual=108,
+                        status="copy-found",
+                        likely_cause="removed-before-coloring",
+                        first_copy_block=247,
+                        interest_reasons=("dominant-source-virtual",),
+                    ),
+                ),
+            )
+        ],
+    )
+
+    out = render_text(report)
+
+    assert "copy traces: showing 3/57 candidate-relevant traces (54 omitted)" in out
+    assert "copy r110<-r50 [dominant-source-virtual, removed-before-coloring]" in out
+    assert "block=245" in out
+
+
+def test_copy_trace_summary_prefers_dominant_removed_source() -> None:
+    from src.mwcc_debug import source_shape
+
+    assert hasattr(source_shape, "summarize_candidate_copy_traces")
+    traces = (
+        source_shape.CandidateCopyTrace(
+            from_virtual=50,
+            to_virtual=110,
+            status="copy-found",
+            likely_cause="removed-before-coloring",
+        ),
+        source_shape.CandidateCopyTrace(
+            from_virtual=50,
+            to_virtual=109,
+            status="copy-found",
+            likely_cause="removed-before-coloring",
+        ),
+        source_shape.CandidateCopyTrace(
+            from_virtual=50,
+            to_virtual=108,
+            status="copy-found",
+            likely_cause="removed-before-coloring",
+        ),
+        source_shape.CandidateCopyTrace(
+            from_virtual=70,
+            to_virtual=120,
+            status="copy-found",
+            likely_cause="removed-before-coloring",
+        ),
+        source_shape.CandidateCopyTrace(
+            from_virtual=71,
+            to_virtual=121,
+            status="copy-found",
+            likely_cause="coalesced-in-coloring",
+        ),
+    )
+
+    summary = source_shape.summarize_candidate_copy_traces(
+        traces,
+        max_traces=3,
+    )
+
+    assert summary.total_count == 5
+    assert summary.omitted_count == 2
+    assert [(t.to_virtual, t.from_virtual) for t in summary.traces] == [
+        (108, 50),
+        (109, 50),
+        (110, 50),
+    ]
+    assert all(
+        "dominant-source-virtual" in trace.interest_reasons
+        for trace in summary.traces
+    )
