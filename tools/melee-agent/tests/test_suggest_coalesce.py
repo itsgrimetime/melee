@@ -300,6 +300,38 @@ def test_preflight_flags_direct_interference() -> None:
     assert any("interfere directly" in r for r in pf.reasons)
 
 
+def test_preflight_flags_missing_colorgraph_node() -> None:
+    """If either virtual is absent from the selected colorgraph section,
+    do not present the coalesce as safe. This catches simplify-only /
+    pcode-only temps before a forced run can hang local wibo."""
+    from src.mwcc_debug.coalesce_ir_facts import IrFacts
+    from src.mwcc_debug.colorgraph_parser import (
+        ColorgraphDecision, ColorgraphSection,
+    )
+    from src.mwcc_debug.parser import Pass
+    from src.mwcc_debug.suggest_coalesce import _preflight_pair
+
+    cg = ColorgraphSection(
+        class_id=0, result=1, n_nodes=1,
+        decisions=[
+            ColorgraphDecision(
+                iter_idx=0, ig_idx=34, assigned_reg=31,
+                degree=0, n_interferers=0, flags=0,
+                interferers=[],
+            ),
+        ],
+    )
+    facts = IrFacts(
+        function_name="fn_80247510", pre_pass=Pass(name="t"),
+        by_virtual={}, bindings=[], basis=None, cg_section=cg,
+    )
+
+    pf = _preflight_pair(facts, 34, 50)
+
+    assert not pf.safe
+    assert any("missing colorgraph node" in r for r in pf.reasons)
+
+
 def test_render_text_surfaces_preflight_warning() -> None:
     """Render text marks pairs with [PREFLIGHT: WARNING] when unsafe."""
     from src.mwcc_debug.suggest_coalesce import Preflight

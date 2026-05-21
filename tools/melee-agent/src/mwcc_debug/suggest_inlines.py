@@ -28,6 +28,19 @@ def _candidate_id(kind: str, idx: int) -> str:
     return f"{kind}-{idx:04d}"
 
 
+def _char_index_for_byte(source: str, byte_offset: int) -> int:
+    """Convert a tree-sitter UTF-8 byte offset to a Python string index."""
+    return len(source.encode("utf-8")[:byte_offset].decode("utf-8"))
+
+
+def _char_range_for_bytes(source: str, byte_range: tuple[int, int]) -> tuple[int, int]:
+    start, end = byte_range
+    return (
+        _char_index_for_byte(source, start),
+        _char_index_for_byte(source, end),
+    )
+
+
 def _helper_name(function: str, kind: str, idx: int) -> str:
     safe_kind = kind.replace("-", "_")
     return f"{function}_{safe_kind}_{idx:04d}"
@@ -117,11 +130,12 @@ def _candidate_from_hidden_dirty_arg(
 
 
 def _is_first_call_argument(source: str, arg: CallArgumentSpan) -> bool:
-    call_start = source.rfind(f"{arg.call_name}(", 0, arg.byte_range[0])
+    arg_start, _ = _char_range_for_bytes(source, arg.byte_range)
+    call_start = source.rfind(f"{arg.call_name}(", 0, arg_start)
     if call_start < 0:
         return False
     prefix_end = call_start + len(arg.call_name) + 1
-    return source[prefix_end:arg.byte_range[0]].strip() == ""
+    return source[prefix_end:arg_start].strip() == ""
 
 
 def _hidden_dirty_arg_candidates(
@@ -265,7 +279,7 @@ def generate_candidates(
         ):
             candidates.append(_candidate_from_group(function, idx, group))
             idx += 1
-    if seed_source in {"all", "patterns"}:
+    if seed_source in {"all", "patterns", "coalesce", "guide"}:
         for arg in find_call_argument_spans(source, function, "HSD_JObjSetMtxDirtySub"):
             if not arg.text:
                 continue
@@ -288,7 +302,7 @@ def generate_candidates(
 def _patch_arg_temp(source: str, candidate: InlineCandidate) -> CandidatePatch:
     arg_text = candidate.reads[0]
     temp_name = f"{arg_text}_arg_temp"
-    call_start, call_end = candidate.anchor.byte_range
+    call_start, call_end = _char_range_for_bytes(source, candidate.anchor.byte_range)
     statement_start = source.rfind("\n", 0, call_start) + 1
     line_prefix = source[statement_start:call_start]
     indent_match = re.match(r"[ \t]*", line_prefix)
@@ -319,7 +333,7 @@ def _patch_void_helper(source: str, function: str, candidate: InlineCandidate) -
     if insert_pos < 0:
         insert_pos = 0
     call = f"{candidate.helper_name}();"
-    start, end = candidate.anchor.byte_range
+    start, end = _char_range_for_bytes(source, candidate.anchor.byte_range)
     out = source[:start] + call + source[end:]
     out = out[:insert_pos] + helper + out[insert_pos:]
     return CandidatePatch(
@@ -343,7 +357,7 @@ def _patch_return_helper(source: str, function: str, candidate: InlineCandidate)
     insert_pos = source.find(f"void {function}")
     if insert_pos < 0:
         insert_pos = 0
-    start, end = candidate.anchor.byte_range
+    start, end = _char_range_for_bytes(source, candidate.anchor.byte_range)
     replacement = f"{lhs} = {candidate.helper_name}();"
     out = source[:start] + replacement + source[end:]
     out = out[:insert_pos] + helper + out[insert_pos:]
@@ -438,5 +452,15 @@ def render_text(report: SourceShapeReport) -> str:
     return "\n".join(lines)
 
 
-def render_json(report: SourceShapeReport) -> str:
-    return json.dumps(asdict(report), indent=2, default=str)
+def render_json(report: SourceShapeReport, *, emit_patches: bool = False) -> str:
+    payload = asdict(report)
+    if not emit_patches:
+        payload["patches"] = [
+            {
+                "candidate_id": patch.candidate_id,
+                "summary": patch.summary,
+                "touched_ranges": patch.touched_ranges,
+            }
+            for patch in report.patches
+        ]
+    return json.dumps(payload, indent=2, default=str)

@@ -200,6 +200,13 @@ def _preflight_pair(
     interferer_map: dict[int, set[int]] = {}
     for d in cg.decisions:
         interferer_map[d.ig_idx] = {ig for (ig, _) in d.interferers}
+    missing_nodes = [v for v in (a, b) if v not in interferer_map]
+    if missing_nodes:
+        missing = ", ".join(f"r{v}" for v in missing_nodes)
+        reasons.append(
+            f"missing colorgraph node(s): {missing} — virtual may be "
+            f"simplify-only or pcode-only, so forced coalesce is unsafe"
+        )
     if (
         a in interferer_map.get(b, set())
         or b in interferer_map.get(a, set())
