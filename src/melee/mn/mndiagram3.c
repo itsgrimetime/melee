@@ -1028,7 +1028,7 @@ void mnDiagram3_8024714C(void *arg0)
             if (val >= (u8) limit) {
                 val -= (u8) limit;
             } else {
-                val = (u8) val;
+                val = (u8) (val & 0xFFFFu);
             }
             HSD_SisLib_803A6368(text, ((u16*) &mnDiagram3_803EEC4C)[(u8) val]);
         }
