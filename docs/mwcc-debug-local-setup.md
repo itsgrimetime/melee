@@ -82,7 +82,8 @@ All our env-var hooks pass through via the matching CLI flags:
 
 ```bash
 melee-agent debug pcdump-local src/melee/mn/mnvibration.c \
-    --force-iter-first 132,47,45,134
+    --force-iter-first 132,47,45,134 \
+    --force-iter-first-fn mnVibration_80247510
 # → pcdump shows [FORCE_ITER_FIRST] moved ig_idx ... entries
 ```
 

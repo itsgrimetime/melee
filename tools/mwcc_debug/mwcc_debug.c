@@ -490,6 +490,8 @@ static void parse_overrides_from_env(void)
 static int g_iter_first[MAX_ITER_FIRST];
 static int g_n_iter_first = 0;
 static int g_iter_first_parsed = 0;
+static char g_iter_first_scope_fn[FUNCNAME_BUF_LEN] = {0};
+static int g_iter_first_scope_fn_set = 0;
 
 static void parse_iter_first_from_env(void)
 {
@@ -501,6 +503,17 @@ static void parse_iter_first_from_env(void)
 
     g_iter_first_parsed = 1;
     g_n_iter_first = 0;
+    g_iter_first_scope_fn_set = 0;
+
+    len = GetEnvironmentVariableA(
+        "MWCC_DEBUG_FORCE_ITER_FIRST_FUNCTION", buf, sizeof(buf));
+    if (len > 0 && len < FUNCNAME_BUF_LEN) {
+        for (i = 0; i < FUNCNAME_BUF_LEN - 1 && buf[i]; i++) {
+            g_iter_first_scope_fn[i] = buf[i];
+        }
+        g_iter_first_scope_fn[i] = '\0';
+        g_iter_first_scope_fn_set = 1;
+    }
 
     len = GetEnvironmentVariableA("MWCC_DEBUG_FORCE_ITER_FIRST", buf, sizeof(buf));
     if (len == 0 || len >= sizeof(buf)) return;
@@ -985,38 +998,62 @@ static void *__cdecl hook_simplifygraph(int rclass, int n_colors, int n_class_re
     // Tier 6 — apply iter-first overrides if any. Splice the named virtuals
     // out of their current positions and re-insert them at the head, in the
     // order given. The original relative order of other nodes is preserved.
-    if (g_n_iter_first > 0 && head != 0)
     {
-        IGNode **ig_local = INTERFERENCEGRAPH;
-        int ig_n_local = N_IGNODES;
-        if (ig_n_local > 1024) ig_n_local = 1024;
-        if (ig_n_local < 0) ig_n_local = 0;
-        // For each requested virtual (in reverse so the FIRST listed ends
-        // up at the absolute head), find the IGNode in the list and move
-        // it to the head.
-        int k;
-        for (k = g_n_iter_first - 1; k >= 0; k--)
+        int iter_scope_skip = 0;
+        if (g_iter_first_scope_fn_set) {
+            if (!g_current_function_set) {
+                iter_scope_skip = 1;
+            } else {
+                int sj;
+                for (sj = 0; sj < FUNCNAME_BUF_LEN; sj++) {
+                    if (g_current_function[sj] != g_iter_first_scope_fn[sj]) {
+                        iter_scope_skip = 1;
+                        break;
+                    }
+                    if (g_current_function[sj] == '\0') break;
+                }
+            }
+            if (iter_scope_skip && PCFILE && DEBUG_GUARD && g_n_iter_first > 0) {
+                debug_printf("\n[FORCE_ITER_FIRST] scope skip (fn=%s, scope=%s)\n",
+                             g_current_function_set ? g_current_function
+                                                    : "<unset>",
+                             g_iter_first_scope_fn);
+            }
+        }
+
+        if (!iter_scope_skip && g_n_iter_first > 0 && head != 0)
         {
-            int want_idx = g_iter_first[k];
-            if (want_idx < 0 || want_idx >= ig_n_local) continue;
-            if (!ig_local) continue;
-            IGNode *want = ig_local[want_idx];
-            if (!want) continue;
-            if (want == head) continue;  // already at head
-            // Walk the list, find the predecessor of `want` (if any),
-            // unlink, prepend.
-            IGNode *prev = head;
-            while (prev && prev->next != want)
-                prev = prev->next;
-            if (!prev) continue;  // `want` isn't in this class's list
-            prev->next = want->next;
-            want->next = head;
-            head = want;
-            if (PCFILE && DEBUG_GUARD)
+            IGNode **ig_local = INTERFERENCEGRAPH;
+            int ig_n_local = N_IGNODES;
+            if (ig_n_local > 1024) ig_n_local = 1024;
+            if (ig_n_local < 0) ig_n_local = 0;
+            // For each requested virtual (in reverse so the FIRST listed ends
+            // up at the absolute head), find the IGNode in the list and move
+            // it to the head.
+            int k;
+            for (k = g_n_iter_first - 1; k >= 0; k--)
             {
-                debug_printf("\n[FORCE_ITER_FIRST] moved ig_idx %d to head "
-                             "of class %d's simplification list\n",
-                             want_idx, rclass);
+                int want_idx = g_iter_first[k];
+                if (want_idx < 0 || want_idx >= ig_n_local) continue;
+                if (!ig_local) continue;
+                IGNode *want = ig_local[want_idx];
+                if (!want) continue;
+                if (want == head) continue;  // already at head
+                // Walk the list, find the predecessor of `want` (if any),
+                // unlink, prepend.
+                IGNode *prev = head;
+                while (prev && prev->next != want)
+                    prev = prev->next;
+                if (!prev) continue;  // `want` isn't in this class's list
+                prev->next = want->next;
+                want->next = head;
+                head = want;
+                if (PCFILE && DEBUG_GUARD)
+                {
+                    debug_printf("\n[FORCE_ITER_FIRST] moved ig_idx %d to head "
+                                 "of class %d's simplification list\n",
+                                 want_idx, rclass);
+                }
             }
         }
     }

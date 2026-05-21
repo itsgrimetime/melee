@@ -34,12 +34,13 @@ the current floor.
 - **`pcdump-local` reliability improvements**: function-scoped diff,
   content-hash freshness checks, forced-cache skip, `--no-cache-sync`
   for temporary probes, checkdiff timeouts for integrated `--diff`,
-  keep-obj warnings, local hang diagnostics, and non-zero exit status
-  (`124`) when the watchdog kills a compile even if a partial dump was
-  produced.
+  keep-obj warnings, function-scoped `--force-iter-first-fn`, local hang
+  diagnostics, and non-zero exit status (`124`) when the watchdog kills a
+  compile even if a partial dump was produced.
 - **Allocator forcing/scoring**: force-phys, force-phys-iter,
   force-coalesce, derive-target, score-source, guide, and
-  match-iter-first auto-verification.
+  match-iter-first auto-verification with scoped force lists and periodic
+  status output.
 - **Copy tracing diagnostics**: class-aware `virtual-to-ig`, `trace-copy`
   first-absent-pass reporting, transform categorization, and copy
   discovery filters for `--list-copies`, `--involving`, and
