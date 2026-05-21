@@ -4252,12 +4252,31 @@ def match_iter_first(
                 }
                 # Restore the report by rebuilding the .o cleanly so the
                 # cached state isn't poisoned by our verify override.
-                print("[auto-verify] restoring clean report", file=sys.stderr)
-                subprocess.run(
-                    ["ninja", f"build/GALE01/src/{unit}.o",
-                     "build/GALE01/report.json"],
-                    cwd=melee_root, capture_output=True,
+                restore_cmd = [
+                    "ninja", f"build/GALE01/src/{unit}.o",
+                    "build/GALE01/report.json",
+                ]
+                restore_timeout_s = float(os.environ.get(
+                    "MWCC_DEBUG_RESTORE_TIMEOUT", "180"
+                ))
+                print(
+                    "[auto-verify] restoring clean object/report state",
+                    file=sys.stderr,
                 )
+                restore_proc = _run_auto_verify_command_with_status(
+                    restore_cmd,
+                    cwd=melee_root,
+                    phase="restoring object/report",
+                    status_label=" ".join(restore_cmd),
+                    timeout_s=restore_timeout_s,
+                )
+                auto_verify_result["restore"] = {
+                    "returncode": restore_proc.returncode,
+                    "timeout_s": restore_timeout_s,
+                    "stderr_tail": "\n".join(
+                        restore_proc.stderr.splitlines()[-5:]
+                    ) if restore_proc.stderr else "",
+                }
         except (subprocess.TimeoutExpired, Exception) as _av_exc:
             auto_verify_result = {"ran": False, "reason": str(_av_exc)}
 
@@ -4328,6 +4347,18 @@ def match_iter_first(
                 print(f"  stderr tail:")
                 for line in tail.splitlines():
                     print(f"    {line}")
+            restore = auto_verify_result.get("restore")
+            if isinstance(restore, dict):
+                print(
+                    f"  restore object/report: exit "
+                    f"{restore.get('returncode')} "
+                    f"(timeout {restore.get('timeout_s')}s)"
+                )
+                restore_tail = restore.get("stderr_tail")
+                if restore_tail:
+                    print(f"  restore stderr tail:")
+                    for line in restore_tail.splitlines():
+                        print(f"    {line}")
         else:
             print(f"  did not run: {auto_verify_result.get('reason')}")
 
@@ -5135,10 +5166,15 @@ def _run_auto_verify_command_with_status(
     *,
     cwd: Path,
     status_label: str,
+    phase: str = "testing",
     status_interval_s: float = 10.0,
+    timeout_s: Optional[float] = None,
     env: Optional[dict[str, str]] = None,
 ) -> subprocess.CompletedProcess[str]:
-    print(f"[auto-verify] testing {status_label}", file=sys.stderr)
+    if phase == "testing":
+        print(f"[auto-verify] testing {status_label}", file=sys.stderr)
+    else:
+        print(f"[auto-verify] {phase}: {status_label}", file=sys.stderr)
     proc = subprocess.Popen(
         cmd,
         cwd=cwd,
@@ -5146,6 +5182,7 @@ def _run_auto_verify_command_with_status(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        start_new_session=True,
     )
     started = time.time()
     while True:
@@ -5159,9 +5196,29 @@ def _run_auto_verify_command_with_status(
             )
         except subprocess.TimeoutExpired:
             elapsed = time.time() - started
+            if timeout_s is not None and elapsed >= timeout_s:
+                import signal as _signal
+                timeout_msg = (
+                    f"[auto-verify] {phase} timed out after "
+                    f"{timeout_s:g}s ({status_label})"
+                )
+                print(timeout_msg, file=sys.stderr)
+                try:
+                    os.killpg(os.getpgid(proc.pid), _signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                try:
+                    stdout, stderr = proc.communicate(timeout=2)
+                except subprocess.TimeoutExpired:
+                    stdout, stderr = "", ""
+                stderr = (stderr or "")
+                if stderr and not stderr.endswith("\n"):
+                    stderr += "\n"
+                stderr += timeout_msg
+                return subprocess.CompletedProcess(cmd, 124, stdout, stderr)
             print(
                 f"[auto-verify] still running after {elapsed:.0f}s "
-                f"({status_label})",
+                f"({phase}: {status_label})",
                 file=sys.stderr,
             )
 
