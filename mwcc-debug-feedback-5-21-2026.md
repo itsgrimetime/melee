@@ -76,3 +76,68 @@ Context: continuing work on `src/melee/mn/mnvibration.c`, focused on
   function size, and did not introduce the desired `r108 <- r50` copy at all.
   This rules out the naive "copy both pointer and value" local helper shape for
   `fn_80247510`.
+
+## Follow-up after `19e6ebb38`
+
+Context: merged `19e6ebb38` (`mwcc-debug: refine copy tracing followups`) into
+`wip/mn-heartbeat` and reran the diagnostics against `fn_80247510`.
+
+### Improvements that helped
+
+- `trace-copy --class gpr` fixes the earlier class-confusion problem. Re-running
+  the old X-only cursor temp dump now correctly reports `r50` as the GPR cursor
+  pointer. The stronger result is: source `r50` reaches simplify only, the copy
+  destination `r108` is pcode-only, and the copy disappears before any colorgraph
+  decision. That is the precise evidence we needed.
+
+- `trace-copy --list-copies`, `--involving`, and `--near-block` are useful. The
+  baseline has no copy involving `r50` around block 245, while the dirty-copy
+  source probes do expose `r50 -> temp` copies at that exact block.
+
+- `pcdump-local --no-cache-sync` works and is very helpful for source probes.
+  It let temporary inline experiments stay out of the canonical pcdump cache.
+
+### Remaining issues / new requests
+
+- `suggest-coalesce-source --discover` surfaced a plausible cascade target:
+  `34 -> 50` as the final pair in the current `31,30,29,28,27` cascade. Pair
+  mode maps `r34` to `inputs_repeat` with low confidence, but `r50` falls back
+  to the defining IR op `lwz r50,40(...)`. No source suggestion was produced for
+  the important `34 -> 50` pair, so the result is useful as a direction but not
+  directly actionable yet.
+
+- The preflight for `--force-coalesce` still misses at least one hang case:
+  `pcdump-local ... --force-coalesce "34=50" --force-coalesce-fn fn_80247510`
+  hung locally even though `suggest-coalesce-source` marked the pair safe. A
+  timeout, dry-run preflight, or stronger invalid-pair detector would make this
+  safer to use during active iteration.
+
+- `suggest-inlines --seed-source patterns --budget 80` still only produced
+  generic return-helper candidates for `fn_80247510`; it did not propose the
+  cursor `HSD_JObjSetTranslate*` / dirty-call lifetime split. `--seed-source
+  coalesce` returned no candidates. This is still the biggest missing source
+  suggestion for this function.
+
+- One `suggest-inlines --json` patched-source payload was visibly malformed
+  while showing return-helper candidates, with tokens like `ininputs` and
+  `naname_idx` in the patched source. I did not apply it, but this looks like
+  a source-splice bug worth guarding in verification.
+
+- Direct `python configure.py && ninja` and direct `python tools/checkdiff.py
+  fn_80247510 --no-tty --format plain` both got stuck in a configure/ninja path
+  in this worktree. `debug guide --asm-hunks` still managed to show hunks, so
+  this may be an adjacent build/checkdiff issue rather than debugger-specific,
+  but any debugger command that shells out to checkdiff should have a timeout
+  and clear failure mode.
+
+### Source-shape evidence
+
+- All-axis and outer-scope `dirty_jobj = cursor_jobj` cursor setter probes both
+  create the expected early copy at block 245 (`r50 -> r110` in the current
+  numbering), but `trace-copy` reports the destination as pcode-only and the
+  source as simplify-only. The copy still does not become a colorgraph node.
+
+- Those dirty-copy probes also cause a broad allocator cascade: `r49/r50` are
+  removed from the baseline colorgraph and many callee-save assignments shift.
+  That is not a local register nudge; it is a structural regression. The probes
+  were reverted.
