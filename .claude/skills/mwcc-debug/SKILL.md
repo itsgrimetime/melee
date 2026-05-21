@@ -383,7 +383,8 @@ melee-agent debug suggest-inlines -f my_fn --json --emit-patches
 # candidate-relevant subset first, especially copies involving the candidate
 # argument's source virtual or patch-local block, then dominant source-virtual
 # copies that are removed before coloring. Labels distinguish copies eliminated
-# before coloring from copies that survive coloring but disappear later. The
+# before coloring from copies that survive coloring but disappear later, and
+# before-coloring eliminations sort ahead of generic later disappearances. The
 # summary reports how many noisy candidate-only copies were omitted. Use
 # `--json --emit-hunks` (alias: `--emit-diffs`) for compact unified diffs
 # without full `patched_source` payloads; reserve `--emit-patches` for the full

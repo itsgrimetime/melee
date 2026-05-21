@@ -61,7 +61,8 @@ the current floor.
   block, dominant source-virtual fan-outs, and copies removed before
   coloring, while reporting how many noisy candidate-only copies were
   omitted. Labels distinguish copies eliminated before coloring from
-  copies that survive coloring but disappear in later passes.
+  copies that survive coloring but disappear in later passes, and
+  before-coloring eliminations sort ahead of generic later disappearances.
 - **`tier3-search` v2**: seed generation, smoke compile, per-seed
   permuter wiring, budget/time controls, and `--apply-best`.
 - **`checkdiff`**: JSON exit normalization and SDA21 relocation

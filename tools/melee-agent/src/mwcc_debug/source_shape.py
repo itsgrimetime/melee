@@ -188,15 +188,15 @@ def summarize_candidate_copy_traces(
     ]
     selected = interesting or annotated
 
-    def key(trace: CandidateCopyTrace) -> tuple[int, int, int, int, int, int]:
+    def key(
+        trace: CandidateCopyTrace,
+    ) -> tuple[int, int, int, int, int, int, int]:
         return (
             0 if "priority-virtual" in trace.interest_reasons else 1,
             0 if "patch-local-block" in trace.interest_reasons else 1,
+            0 if _removed_before_coloring(trace) else 1,
             0 if "dominant-source-virtual" in trace.interest_reasons else 1,
-            0 if (
-                _removed_before_coloring(trace)
-                or "copy-disappears-after-coloring" in trace.interest_reasons
-            ) else 1,
+            0 if "copy-disappears-after-coloring" in trace.interest_reasons else 1,
             -1 if trace.to_virtual is None else trace.to_virtual,
             -1 if trace.from_virtual is None else trace.from_virtual,
         )
