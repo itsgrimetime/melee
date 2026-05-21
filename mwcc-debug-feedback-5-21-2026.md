@@ -488,3 +488,45 @@ and retried the `match-iter-first` path for `fn_80247510`.
   needs the same timeout/progress treatment as the forced compile phase, and
   ideally should report whether it is restoring source, object, report, or
   cache state.
+
+## Follow-up after `2866b508e`
+
+Context: merged `2866b508e` (`mwcc-debug: bound iter-first restore phase`) and
+retried `match-iter-first --auto-verify` for `fn_80247510`.
+
+### Improvements that helped
+
+- The restore phase now reports clear status:
+  `restoring object/report: ninja build/GALE01/src/melee/mn/mnvibration.o build/GALE01/report.json`.
+  It also prints periodic progress lines, so the command is no longer silent
+  while cleanup is running.
+
+- The restore phase is now bounded. In this run it timed out cleanly at the
+  default 180 seconds and reported `restore object/report: exit 124`, instead
+  of requiring a manual kill.
+
+### Remaining issues / requests
+
+- `MWCC_DEBUG_HANG_TIMEOUT=8` does not affect the restore phase; restore uses
+  `MWCC_DEBUG_RESTORE_TIMEOUT` and defaults to 180 seconds. That is documented
+  in the skill now, but it was easy to miss during iteration. It would be useful
+  if `match-iter-first --auto-verify` printed the active restore timeout up
+  front, or inherited the shorter hang timeout when no restore-specific timeout
+  is set.
+
+- The command process still exited successfully even though the restore phase
+  timed out and reported exit 124 internally. If object/report restoration
+  fails, scripted workflows need a non-zero exit status or a machine-readable
+  top-level status so they do not treat the run as fully cleaned up.
+
+- The restore stderr tail showed repeated
+  `ninja: warning: premature end of file; recovering`. If this is a known
+  partial-report or interrupted-ninja state, the tool should surface the likely
+  cleanup action.
+
+### Result for `fn_80247510`
+
+- The scoped iter-first candidate still tied baseline:
+  `97.15% -> 97.15% (+0.00%)` for
+  `--force-iter-first 151,48,45,153 --force-iter-first-fn fn_80247510`.
+  This remains a negative result for the iter-order-only path.
