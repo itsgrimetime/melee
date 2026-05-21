@@ -5289,7 +5289,14 @@ def _make_expensive_restore_result(
     *,
     planned_steps: int,
     max_steps: int,
+    dry_run_output: str = "",
 ) -> subprocess.CompletedProcess[str]:
+    preview_lines = [
+        line.strip()
+        for line in dry_run_output.splitlines()
+        if line.strip()
+    ][:8]
+    preview = "\n".join(f"  {line}" for line in preview_lines)
     stderr = (
         f"[restore] refusing to launch restore: ninja dry-run would run "
         f"{planned_steps} ninja step(s), above "
@@ -5297,8 +5304,16 @@ def _make_expensive_restore_result(
         f"This can expand into a large rebuild. Re-run with "
         f"`melee-agent debug restore-object-report <source.c> --force` "
         f"or raise MWCC_DEBUG_RESTORE_MAX_STEPS if you intentionally want "
-        f"to launch it."
+        f"to launch it.\n"
+        f"[restore] If worktree-doctor reports `build/GALE01/report.json "
+        f"is older than build.ninja`, ninja must treat report generation as "
+        f"stale and may fan out through many compile edges. There is no "
+        f"metadata-only repair for that generated report/object state; run "
+        f"`python configure.py` first if build metadata changed, then retry "
+        f"the managed restore."
     )
+    if preview:
+        stderr += f"\n[restore] dry-run preview:\n{preview}"
     return subprocess.CompletedProcess(cmd, 125, "", stderr)
 
 
@@ -5349,6 +5364,7 @@ def _restore_object_report_for_unit(
             restore_cmd,
             planned_steps=planned_steps,
             max_steps=max_steps,
+            dry_run_output=dry_output,
         ), planned_steps
     if planned_steps > max_steps:
         print(
@@ -5364,6 +5380,28 @@ def _restore_object_report_for_unit(
         timeout_s=timeout_s,
     )
     return proc, planned_steps
+
+
+def _pcdump_local_missing_diff_target_hint(
+    function: str,
+    *,
+    src_rel: str,
+    explicit: bool,
+) -> str:
+    if explicit:
+        return (
+            f"[diff] target function {function!r} is not in report.json. "
+            f"Check the spelling, run `ninja build/GALE01/report.json` if "
+            f"the report is stale, or pass `--function <function_name>` for "
+            f"a report-backed function in {src_rel}."
+        )
+    return (
+        f"[diff] inferred target function {function!r} from the first "
+        f"function definition in {src_rel}, but it is not in report.json. "
+        f"The first function may be a static inline helper. Re-run with "
+        f"`--function <function_name>` for the non-inline function you want "
+        f"to compare."
+    )
 
 
 def _auto_verify_failure_exit_code(auto_verify_result: Optional[dict]) -> Optional[int]:
@@ -5999,6 +6037,12 @@ def pcdump_local(
                 # Priority: explicit --function > --force-phys-fn >
                 # --force-coalesce-fn > first function found in source.
                 src_path = melee_root / src_rel
+                explicit_diff_target = any([
+                    function,
+                    force_iter_first_fn,
+                    force_phys_fn,
+                    force_coalesce_fn,
+                ])
                 fn_to_diff = (
                     function
                     or force_iter_first_fn
@@ -6020,6 +6064,15 @@ def pcdump_local(
                     print(
                         "[diff] could not find a function name to diff; "
                         "use checkdiff manually.", file=sys.stderr,
+                    )
+                elif _find_unit_for_function(fn_to_diff, melee_root) is None:
+                    print(
+                        _pcdump_local_missing_diff_target_hint(
+                            fn_to_diff,
+                            src_rel=src_rel,
+                            explicit=explicit_diff_target,
+                        ),
+                        file=sys.stderr,
                     )
                 else:
                     print(f"[diff] target function: {fn_to_diff}", file=sys.stderr)

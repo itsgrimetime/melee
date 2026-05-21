@@ -466,7 +466,17 @@ melee-agent debug restore-object-report src/melee/mn/mnvibration.c --force
 
 `restore-object-report` runs `ninja -n` first, refuses unexpectedly large
 restore plans by default (`MWCC_DEBUG_RESTORE_MAX_STEPS`, default 64), and
-uses the same timeout/process-group handling as auto-verify.
+uses the same timeout/process-group handling as auto-verify. Oversized
+refusals include a dry-run preview and explain the common stale-metadata case:
+if `worktree-doctor` reports `build/GALE01/report.json is older than
+build.ninja`, there is no metadata-only repair for that generated
+report/object state; run `python configure.py`, then retry the managed restore
+or use `--force` only when you intentionally want the rebuild.
+
+For `pcdump-local --diff`, pass `--function` when the TU starts with static
+inline helpers or when you want a non-first function. If `--diff` infers a
+first function that is absent from `report.json`, it prints a targeted
+`--function` hint instead of falling through to a confusing `checkdiff` error.
 
 ### Useful env-var overrides
 

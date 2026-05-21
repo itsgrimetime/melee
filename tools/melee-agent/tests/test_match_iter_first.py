@@ -172,6 +172,23 @@ def test_expensive_restore_guard_returns_failure_without_running_ninja() -> None
     assert "--force" in result.stderr
 
 
+def test_expensive_restore_guard_explains_stale_metadata_and_preview() -> None:
+    result = debug_cli._make_expensive_restore_result(
+        ["ninja", "build/GALE01/src/melee/mn/mnvibration.o"],
+        planned_steps=575,
+        max_steps=64,
+        dry_run_output=(
+            "[1/575] Linking build/GALE01/report.json\n"
+            "[2/575] Compiling src/melee/mn/mnvibration.c\n"
+        ),
+    )
+
+    assert "dry-run preview" in result.stderr
+    assert "[1/575] Linking build/GALE01/report.json" in result.stderr
+    assert "report.json is older than build.ninja" in result.stderr
+    assert "no metadata-only repair" in result.stderr
+
+
 def test_auto_verify_restore_failure_requests_nonzero_exit() -> None:
     assert debug_cli._auto_verify_failure_exit_code({
         "ran": True,
