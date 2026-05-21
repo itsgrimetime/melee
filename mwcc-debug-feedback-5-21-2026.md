@@ -141,3 +141,85 @@ Context: merged `19e6ebb38` (`mwcc-debug: refine copy tracing followups`) into
   removed from the baseline colorgraph and many callee-save assignments shift.
   That is not a local register nudge; it is a structural regression. The probes
   were reverted.
+
+## Follow-up after `3494375bf`
+
+Context: merged `3494375bf` (`mwcc-debug: fix source-shape feedback
+regressions`) into `wip/mn-heartbeat` and reran the diagnostics against
+`fn_80247510`.
+
+### Improvements that helped
+
+- `suggest-inlines --seed-source patterns` now finds the relevant hidden
+  dirty-call source shapes first. The top candidates are the X/Y/Z
+  `HSD_JObjSetTranslate*` calls in `mnVibration_SetCursorPosition`, each
+  described as a short-lived argument temp for the hidden
+  `HSD_JObjSetMtxDirtySub` call.
+
+- The candidate scope is now correct: the suggestions point at
+  `mnVibration_SetCursorPosition`, not unrelated local names in
+  `fn_80247510`.
+
+- Default `--json` output is now compact. Full `patched_source` is emitted only
+  with `--emit-patches`, and the earlier malformed splice tokens like
+  `ininputs` / `naname_idx` did not reappear in this run.
+
+- `suggest-inlines --verify --checkdiff-timeout 10` compiled the dirty-call
+  candidates without hanging. The three single-axis candidates each scored
+  `97.14597`, so they are valid probes but do not improve the current function
+  by themselves.
+
+- `pcdump-local --diff -f fn_80247510 --checkdiff-timeout 5` also returned
+  promptly and produced a useful objdiff. The integrated diff path is now usable
+  for this function, where direct checkdiff/build commands had previously been
+  easy to wedge.
+
+- The new `pcdump-local` compile watchdog works when configured with
+  `MWCC_DEBUG_HANG_TIMEOUT`. Re-running the bad
+  `--force-coalesce "34=50"` probe with `MWCC_DEBUG_HANG_TIMEOUT=8` returned
+  after about ten seconds and printed a clear diagnostic instead of trapping the
+  session indefinitely.
+
+### Remaining issues / new requests
+
+- `suggest-coalesce-source --discover` still marks `34 -> 50` safe and
+  actionable even though `pcdump-local --force-coalesce "34=50"
+  --force-coalesce-fn fn_80247510` still hangs the compiler. `debug analyze`
+  confirms `r34` and `r50` do not directly interfere in the baseline graph, so
+  the current direct-interference preflight is understandable but insufficient.
+  This likely needs a stronger "forceability" preflight or an optional dry-run
+  path that can reuse the watchdog and report "non-interfering but unsafe to
+  force."
+
+- The watchdog diagnostic currently exits successfully and writes a partial
+  pcdump. For scripted workflows, a watchdog-triggered compile should probably
+  return non-zero or include a machine-readable status so callers do not treat
+  the partial dump as a valid forced proof.
+
+- `suggest-inlines --verify` reports `checkdiff_delta: null` and no baseline
+  percent. For this workflow, it would be more useful to print the baseline
+  score, candidate score, and delta, even when the candidate merely ties the
+  baseline.
+
+- The emitted dirty-temp patch uses a generic `void* cursor_jobj_arg_temp` and
+  inserts the declaration at the patch site. It compiles, but source candidates
+  would be easier to evaluate and upstream if they preserved the apparent
+  source type (`HSD_JObj*`) and followed the local declaration-at-top style.
+
+- The hidden dirty-call suggestions are single-axis. A grouped candidate for
+  applying the same temp strategy to X/Y/Z together would be helpful, because
+  the target mismatch involves the repeated dirty-call copy pattern across all
+  three translation setters.
+
+### Source-shape evidence
+
+- Manually applying the grouped X/Y/Z dirty-temp shape produced the expected
+  early `mr r110,r50` copy at block 245. `trace-copy --list-copies --involving
+  r50 --near-block 245` still reports the destination as `pcode-only`, with the
+  copy eliminated before coloring. That means the newly suggested temp shape is
+  a good diagnostic lead, but it is not yet the natural lifetime barrier needed
+  by the target.
+
+- The grouped temp shape also regressed the frame from `-280` to `-288` and
+  caused a broad register cascade. This is further evidence that the current
+  hand-written dirty-temp rewrite is not the final source structure.
