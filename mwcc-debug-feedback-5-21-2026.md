@@ -607,3 +607,59 @@ and reran `match-iter-first --auto-verify` for `fn_80247510`.
 - The iter-first candidate remains a no-gain proof:
   `97.15% -> 97.15% (+0.00%)` for
   `--force-iter-first 151,48,45,153 --force-iter-first-fn fn_80247510`.
+
+## Follow-up after `56b9dd5e3`
+
+Context: merged `56b9dd5e3` (`mwcc-debug: guard iter-first restore cleanup`)
+and retried `match-iter-first --auto-verify` plus several source-shape probes
+for `fn_80247510`.
+
+### Improvements that helped
+
+- `match-iter-first --help` now documents the auto-verify cleanup behavior,
+  the managed restore phase, `MWCC_DEBUG_RESTORE_TIMEOUT`, fallback to
+  `MWCC_DEBUG_HANG_TIMEOUT`, and `cleanup_complete=false`/non-zero failures.
+  This addresses the prior discoverability gap.
+
+- Auto-verify now uses the scoped force list and managed restore path. The run
+  printed:
+  `--force-iter-first 151,48,45,153 --force-iter-first-fn fn_80247510`, then
+  refused to launch a 575-step restore because it exceeded
+  `MWCC_DEBUG_RESTORE_MAX_STEPS=64`. That is a much safer failure mode than
+  the earlier raw `ninja` cleanup path that could launch a large rebuild and
+  leave orphaned `wibo` children.
+
+- `suggest-inlines --seed-source coalesce --json --emit-hunks` now emits the
+  grouped X/Y/Z hidden dirty-argument temp candidate directly. This is the
+  right diagnostic family for the current cursor-copy mismatch, even though the
+  candidate still does not match.
+
+### Remaining issues / requests
+
+- After managed restore refuses an oversized dry-run plan, the worktree remains
+  in a stale-report state (`worktree-doctor` still reports
+  `build/GALE01/report.json is older than build.ninja`). The refusal is correct,
+  but the next safe step is not obvious. A diagnostic explaining why the dry-run
+  expanded to 575 steps, or a narrower "repair only report/object metadata if
+  possible" mode, would help avoid falling back to raw `ninja`.
+
+- `pcdump-local --diff` without `-f` defaulted to the first function in the TU
+  (`mnVibration_JObjGetTranslationX`) and failed because that inline helper is
+  not in `report.json`. The help text explains `-f`, so this is mostly user
+  error, but the failure could suggest `--function` when the chosen symbol is
+  static inline or absent from the report.
+
+### Source-shape evidence
+
+- The scoped iter-first candidate still ties baseline:
+  `97.15% -> 97.15% (+0.00%)`.
+
+- The grouped translate-argument temp candidate regressed the frame from `-280`
+  to `-288` and changed the cursor register itself rather than introducing the
+  target short-lived dirty pointer copy.
+
+- Hand-written dirty-call helper functions emitted real helper calls and
+  shortened the cursor block badly. Macro-expanded dirty-temp variants stayed
+  inline but still coalesced the cursor and dirty pointer into a single
+  register; adding a stable cursor local restored the `-280` frame but dropped
+  the target `f30` save and still mismatched. These probes were reverted.
