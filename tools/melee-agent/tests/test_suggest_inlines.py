@@ -52,6 +52,27 @@ def test_generate_arg_temp_candidate_for_named_call() -> None:
     assert any(c.kind == "arg-temp" and "cursor_jobj" in c.reads for c in candidates)
 
 
+def test_generate_hidden_dirty_arg_temp_for_translate_inline() -> None:
+    source = textwrap.dedent("""\
+        void f(HSD_JObj* cursor_jobj, f32 x)
+        {
+            HSD_JObjSetTranslateX(cursor_jobj, x);
+        }
+    """)
+    candidates = generate_candidates(
+        source=source,
+        function="f",
+        seed_source="patterns",
+        max_span_statements=2,
+        budget=8,
+    )
+
+    candidate = next(c for c in candidates if c.kind == "hidden-dirty-arg-temp")
+    assert candidate.reads == ("cursor_jobj",)
+    assert candidate.metadata["visible_call"] == "HSD_JObjSetTranslateX"
+    assert candidate.metadata["hidden_call"] == "HSD_JObjSetMtxDirtySub"
+
+
 def test_generate_patches_for_arg_temp_candidate() -> None:
     source = textwrap.dedent("""\
         void f(HSD_JObj* cursor_jobj)
@@ -72,6 +93,34 @@ def test_generate_patches_for_arg_temp_candidate() -> None:
     patch = patches[0]
     assert "cursor_jobj_arg_temp" in patch.patched_source
     assert "HSD_JObjSetMtxDirtySub(cursor_jobj_arg_temp);" in patch.patched_source
+    assert "    void* cursor_jobj_arg_temp;" in patch.patched_source
+    assert "HSD_JObjSetMtxDirtySub(void*" not in patch.patched_source
+
+
+def test_generate_patches_for_hidden_dirty_arg_temp_candidate() -> None:
+    source = textwrap.dedent("""\
+        void f(HSD_JObj* cursor_jobj, f32 x)
+        {
+            HSD_JObjSetTranslateX(cursor_jobj, x);
+        }
+    """)
+    candidates = generate_candidates(
+        source=source,
+        function="f",
+        seed_source="patterns",
+        max_span_statements=2,
+        budget=8,
+    )
+    candidate = next(c for c in candidates if c.kind == "hidden-dirty-arg-temp")
+
+    patches = generate_patches(source, "f", [candidate])
+
+    assert len(patches) == 1
+    patched = patches[0].patched_source
+    assert "    void* cursor_jobj_arg_temp;" in patched
+    assert "cursor_jobj_arg_temp = cursor_jobj;" in patched
+    assert "HSD_JObjSetTranslateX(cursor_jobj_arg_temp, x);" in patched
+    assert "HSD_JObjSetTranslateX(void*" not in patched
 
 
 def test_run_diagnostic_report_does_not_require_pcdump() -> None:

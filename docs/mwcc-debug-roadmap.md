@@ -105,7 +105,8 @@ Seed sources:
   pairs with no bridge binding;
 - known pattern-catalog shapes such as cursor-position blocks,
   `GetNameSlot` sentinel paths, repeated `data->jobjs[...]` accessors,
-  and short-lived call-argument temps.
+  short-lived call-argument temps, and header-inline dirty calls hidden
+  behind `HSD_JObjSetTranslateX/Y/Z`.
 
 Candidate forms:
 
@@ -114,6 +115,10 @@ Candidate forms:
 - extract a single-value expression/helper;
 - introduce a short-lived temp for one call argument without changing the
   whole surrounding inline expansion.
+- trace a source-created copy from visible pcode virtuals to simplify and
+  colorgraph decisions (`debug virtual-to-ig`, `debug trace-copy`) before
+  deciding whether the remaining blocker is source lifetime or allocator
+  coalescing.
 
 ### P2.4: Candidate verification and ranking (HIGH)
 

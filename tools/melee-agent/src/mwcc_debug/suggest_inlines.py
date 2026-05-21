@@ -80,6 +80,65 @@ def _candidate_from_arg(function: str, idx: int, arg: CallArgumentSpan) -> Inlin
     )
 
 
+def _candidate_from_hidden_dirty_arg(
+    function: str,
+    idx: int,
+    arg: CallArgumentSpan,
+) -> InlineCandidate:
+    anchor = SourceAnchor(
+        function=function,
+        scope_path=arg.scope_path,
+        byte_range=arg.byte_range,
+        line_range=arg.line_range,
+        kind="pattern",
+        reason=(
+            f"short-lived argument temp for hidden HSD_JObjSetMtxDirtySub "
+            f"inside {arg.call_name}"
+        ),
+    )
+    return InlineCandidate(
+        candidate_id=_candidate_id("hidden-dirty-arg-temp", idx),
+        kind="hidden-dirty-arg-temp",
+        anchor=anchor,
+        helper_name=_helper_name(function, "hidden_dirty_arg_temp", idx),
+        reads=(arg.text,),
+        writes=(),
+        source_excerpt=arg.statement.text,
+        metadata={
+            "visible_call": arg.call_name,
+            "hidden_call": "HSD_JObjSetMtxDirtySub",
+        },
+    )
+
+
+def _is_first_call_argument(source: str, arg: CallArgumentSpan) -> bool:
+    call_start = source.rfind(f"{arg.call_name}(", 0, arg.byte_range[0])
+    if call_start < 0:
+        return False
+    prefix_end = call_start + len(arg.call_name) + 1
+    return source[prefix_end:arg.byte_range[0]].strip() == ""
+
+
+def _hidden_dirty_arg_candidates(
+    source: str,
+    function: str,
+    start_idx: int,
+) -> list[InlineCandidate]:
+    out: list[InlineCandidate] = []
+    idx = start_idx
+    for call_name in (
+        "HSD_JObjSetTranslateX",
+        "HSD_JObjSetTranslateY",
+        "HSD_JObjSetTranslateZ",
+    ):
+        for arg in find_call_argument_spans(source, function, call_name):
+            if not arg.text or not _is_first_call_argument(source, arg):
+                continue
+            out.append(_candidate_from_hidden_dirty_arg(function, idx, arg))
+            idx += 1
+    return out
+
+
 def _local_type_map(source: str, function: str) -> dict[str, str]:
     return {decl.name: decl.type_str for decl in walk_function(source, function, path=None)}
 
@@ -155,6 +214,9 @@ def generate_candidates(
                 continue
             candidates.append(_candidate_from_arg(function, idx, arg))
             idx += 1
+        for candidate in _hidden_dirty_arg_candidates(source, function, idx):
+            candidates.append(candidate)
+            idx += 1
         for candidate in _return_helper_candidates(source, function, idx):
             candidates.append(candidate)
             idx += 1
@@ -166,7 +228,9 @@ def _patch_arg_temp(source: str, candidate: InlineCandidate) -> CandidatePatch:
     temp_name = f"{arg_text}_arg_temp"
     call_start, call_end = candidate.anchor.byte_range
     statement_start = source.rfind("\n", 0, call_start) + 1
-    indent = source[statement_start:call_start]
+    line_prefix = source[statement_start:call_start]
+    indent_match = re.match(r"[ \t]*", line_prefix)
+    indent = "" if indent_match is None else indent_match.group(0)
     decl = f"{indent}void* {temp_name};\n"
     assign = f"{indent}{temp_name} = {arg_text};\n"
     patched_arg = temp_name
@@ -239,6 +303,8 @@ def generate_patches(
         if candidate.is_rejected:
             continue
         if candidate.kind == "arg-temp":
+            patches.append(_patch_arg_temp(source, candidate))
+        elif candidate.kind == "hidden-dirty-arg-temp":
             patches.append(_patch_arg_temp(source, candidate))
         elif candidate.kind == "void-helper":
             patches.append(_patch_void_helper(source, function, candidate))

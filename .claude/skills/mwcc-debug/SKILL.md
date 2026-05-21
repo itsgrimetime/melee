@@ -334,10 +334,17 @@ melee-agent debug score-source src/melee/mn/mnfoo.c -f my_fn --target target.jso
 melee-agent debug var-to-virtual my_var -f my_fn          # which virtual does my_var map to?
 melee-agent debug var-to-virtual my_var -f my_fn --basis  # + show confidence evidence
 melee-agent debug virtual-to-var r53 -f my_fn             # which source var maps to r53?
+melee-agent debug virtual-to-ig -f my_fn --virtual r108   # map visible pcode virtual to allocator graph
 
 # Suggest C-source patterns to produce a specific coalesce (or discover candidates)
 melee-agent debug suggest-coalesce-source -f my_fn -V 53=3          # pair mode: coalesce r53 with r3
 melee-agent debug suggest-coalesce-source -f my_fn --discover --top 5  # discover best candidates
+
+# Trace a source-created pcode copy through the allocator. Use this when a
+# manual local/temp creates `mr rTO,rFROM` before coloring, but final ASM
+# appears to coalesce or remove the copy.
+melee-agent debug trace-copy -f my_fn --from r50 --to r108
+melee-agent debug trace-copy -f my_fn --from r50 --to r108 --json
 
 # Suggest hidden inline/helper source shapes
 melee-agent debug suggest-inlines -f my_fn
@@ -347,9 +354,12 @@ melee-agent debug suggest-inlines -f my_fn --verify --apply-best
 
 # `suggest-inlines` is diagnostic by default. It reports repeated/helper-shaped
 # statement groups, short-lived call-argument temp candidates, and rejected
-# candidates with reasons. Use `--verify` to stage candidates and score them
-# against real-tree `checkdiff`; source is restored unless `--apply-best`
-# keeps a verified winner.
+# candidates with reasons. Pattern seeds understand visible
+# `HSD_JObjSetTranslateX/Y/Z` calls as hiding `HSD_JObjSetMtxDirtySub`, so they
+# can propose cursor-copy/dirty-call lifetime splits even when the dirty call is
+# inside the header inline. Use `--verify` to stage candidates and score them
+# against real-tree `checkdiff`; source is restored unless `--apply-best` keeps a
+# verified winner.
 
 # Apply targeted source mutations (type change, alias insertion)
 melee-agent debug mutate type-change -f my_fn --var my_var --type u32
