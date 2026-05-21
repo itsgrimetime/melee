@@ -1024,8 +1024,10 @@ void mnDiagram3_8024714C(void *arg0)
 
             val = scroll + (u8) i;
             limit = data->is_name_mode ? 0x18 : 0x15;
-            if (val >= limit) {
-                val -= limit;
+            if (val >= (u8) limit) {
+                val -= (u8) limit;
+            } else {
+                val = (u8) val;
             }
             HSD_SisLib_803A6368(text, ((u16*) &mnDiagram3_803EEC4C)[(u8) val]);
         }
