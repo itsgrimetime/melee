@@ -5211,6 +5211,15 @@ def pcdump_local(
                  "compares the right function.",
         ),
     ] = None,
+    no_cache_sync: Annotated[
+        bool,
+        typer.Option(
+            "--no-cache-sync",
+            help="Do not update the canonical pcdump cache. Use for "
+                 "temporary source experiments that should not become the "
+                 "baseline for follow-up diagnostics.",
+        ),
+    ] = False,
 ) -> None:
     """Local mwcc_debug pcdump (macOS+wibo+Zig-built DLL, no SSH).
 
@@ -5591,6 +5600,7 @@ def pcdump_local(
         force_iter_first,
         force_coalesce, force_coalesce_fn,
     ])
+    skip_cache_sync = any_forced or no_cache_sync
 
     # Resolve the canonical cache location for this TU so we can ALWAYS
     # update it — even when --output specifies a different path.
@@ -5603,19 +5613,27 @@ def pcdump_local(
     cache_target = pcdump_cache.cache_path(melee_root, unit)
 
     if output is None:
-        if any_forced:
-            # Forced run — write to a temp path and skip cache sync.
+        if skip_cache_sync:
+            # Forced/no-cache run — write to a temp path and skip cache sync.
+            prefix = "forced" if any_forced else "nocache"
             output = Path(
-                f"/tmp/pcdump_forced_{os.getpid()}_{int(time.time() * 1000)}.txt"
+                f"/tmp/pcdump_{prefix}_{os.getpid()}_{int(time.time() * 1000)}.txt"
             )
             output.parent.mkdir(parents=True, exist_ok=True)
             pcdump_path.rename(output)
             os.utime(output, None)
-            print(
-                f"[pcdump-local] forced run — skipping cache sync to avoid "
-                f"contaminating baseline. Dump at: {output}",
-                file=sys.stderr,
-            )
+            if any_forced:
+                print(
+                    f"[pcdump-local] forced run — skipping cache sync to avoid "
+                    f"contaminating baseline. Dump at: {output}",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"[pcdump-local] --no-cache-sync — leaving baseline cache "
+                    f"unchanged. Dump at: {output}",
+                    file=sys.stderr,
+                )
         else:
             # No --output → cache is the destination, no extra copy needed.
             output = cache_target
@@ -5640,14 +5658,21 @@ def pcdump_local(
         output.parent.mkdir(parents=True, exist_ok=True)
         pcdump_path.rename(output)
         os.utime(output, None)  # same mtime fix as above
-        if any_forced:
+        if skip_cache_sync:
             # Forced run — don't mirror the experimental pcdump into the
             # shared cache; it would be treated as baseline by follow-up cmds.
-            print(
-                f"[pcdump-local] forced run — skipping cache sync to avoid "
-                f"contaminating baseline.",
-                file=sys.stderr,
-            )
+            if any_forced:
+                print(
+                    f"[pcdump-local] forced run — skipping cache sync to avoid "
+                    f"contaminating baseline.",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"[pcdump-local] --no-cache-sync — leaving baseline cache "
+                    f"unchanged.",
+                    file=sys.stderr,
+                )
         else:
             # Mirror to cache (best-effort; same content) so downstream
             # auto-resolve doesn't read a stale dump.
@@ -6497,15 +6522,45 @@ def _print_basis(basis, bindings) -> None:
 
 def _parse_virtual_reg_token(token: str) -> int:
     vstr = token.strip()
-    if vstr.lower().startswith("r"):
+    if vstr.lower().startswith(("r", "f")):
         vstr = vstr[1:]
     try:
         return int(vstr)
     except ValueError:
         raise typer.BadParameter(
             f"invalid virtual register {token!r}; expected an integer "
-            "or an r-prefixed token like r108"
+            "or a register token like r108/f108"
         )
+
+
+def _reg_class_from_virtual_token(token: Optional[str]) -> Optional[str]:
+    if token is None:
+        return None
+    stripped = token.strip().lower()
+    if stripped.startswith("r"):
+        return "gpr"
+    if stripped.startswith("f"):
+        return "fpr"
+    return None
+
+
+def _effective_reg_class(
+    explicit: Optional[str],
+    *tokens: Optional[str],
+    default: Optional[str] = None,
+) -> Optional[str]:
+    if explicit is not None:
+        valid = {"gpr", "int", "r", "fp", "fpr", "f", "float"}
+        if explicit.strip().lower() not in valid:
+            raise typer.BadParameter(
+                f"invalid register class {explicit!r}; expected gpr/int or fp/fpr"
+            )
+        return explicit
+    for token in tokens:
+        inferred = _reg_class_from_virtual_token(token)
+        if inferred is not None:
+            return inferred
+    return default
 
 
 @debug_app.command(name="virtual-to-ig")
@@ -6524,6 +6579,14 @@ def virtual_to_ig(
             help="Visible pcode virtual register, e.g. r108 or 108.",
         ),
     ],
+    reg_class: Annotated[
+        Optional[str],
+        typer.Option(
+            "--class",
+            help="Register class to select when an ig_idx is ambiguous "
+                 "(gpr/int or fp/fpr). Inferred from r*/f* tokens when omitted.",
+        ),
+    ] = None,
     pcdump: Annotated[
         Optional[Path],
         typer.Argument(
@@ -6539,9 +6602,15 @@ def virtual_to_ig(
     from ..mwcc_debug.copy_trace import find_virtual_to_ig
 
     virtual_int = _parse_virtual_reg_token(virtual)
+    effective_class = _effective_reg_class(reg_class, virtual)
     melee_root = DEFAULT_MELEE_ROOT
     pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
-    result = find_virtual_to_ig(pcdump_path.read_text(), function, virtual_int)
+    result = find_virtual_to_ig(
+        pcdump_path.read_text(),
+        function,
+        virtual_int,
+        reg_class=effective_class,
+    )
 
     if json_out:
         print(json.dumps(result.to_dict(), indent=2))
@@ -6554,6 +6623,9 @@ def virtual_to_ig(
         print(f"Note:     {result.note}")
     if result.class_id is not None:
         print(f"Class:    {result.class_id}")
+    if result.candidate_class_ids:
+        classes = ", ".join(str(class_id) for class_id in result.candidate_class_ids)
+        print(f"Classes:  {classes}")
     if result.ig_idx is not None:
         print(f"ig_idx:   {result.ig_idx}")
     if result.simplify_iter is not None:
@@ -6594,19 +6666,47 @@ def trace_copy(
         ),
     ],
     from_reg: Annotated[
-        str,
+        Optional[str],
         typer.Option(
             "--from",
             help="Source virtual register for the copy, e.g. r50.",
         ),
-    ],
+    ] = None,
     to_reg: Annotated[
-        str,
+        Optional[str],
         typer.Option(
             "--to",
             help="Destination virtual register for the copy, e.g. r108.",
         ),
-    ],
+    ] = None,
+    list_copies: Annotated[
+        bool,
+        typer.Option(
+            "--list-copies",
+            help="Discover and trace all virtual-register copies in the function.",
+        ),
+    ] = False,
+    involving: Annotated[
+        Optional[str],
+        typer.Option(
+            "--involving",
+            help="Discovery filter: only copies with this source or destination virtual.",
+        ),
+    ] = None,
+    near_block: Annotated[
+        Optional[int],
+        typer.Option(
+            "--near-block",
+            help="Discovery filter: only copies observed in this basic block.",
+        ),
+    ] = None,
+    reg_class: Annotated[
+        Optional[str],
+        typer.Option(
+            "--class",
+            help="Register class for virtual-to-IG lookup (gpr/int or fp/fpr).",
+        ),
+    ] = None,
     pcdump: Annotated[
         Optional[Path],
         typer.Argument(
@@ -6619,17 +6719,75 @@ def trace_copy(
     ] = False,
 ) -> None:
     """Trace where a pcode copy appears and why it disappears."""
-    from ..mwcc_debug.copy_trace import trace_copy_lifetime
+    from ..mwcc_debug.copy_trace import list_copy_lifetimes, trace_copy_lifetime
+
+    melee_root = DEFAULT_MELEE_ROOT
+    pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
+    pcdump_text = pcdump_path.read_text()
+    effective_class = _effective_reg_class(
+        reg_class,
+        from_reg,
+        to_reg,
+        involving,
+        default="gpr",
+    )
+
+    if list_copies or involving is not None or near_block is not None:
+        involving_virtual = (
+            None if involving is None else _parse_virtual_reg_token(involving)
+        )
+        reports = list_copy_lifetimes(
+            pcdump_text,
+            function,
+            involving=involving_virtual,
+            near_block=near_block,
+            reg_class=effective_class,
+        )
+        if json_out:
+            print(json.dumps([report.to_dict() for report in reports], indent=2))
+            return
+        print(f"Function: {function}")
+        print(f"Copies:   {len(reports)}")
+        for report in reports:
+            print(f"- r{report.to_virtual} <- r{report.from_virtual}")
+            print(f"  status: {report.status}")
+            print(f"  likely: {report.likely_cause}")
+            if report.transform_category:
+                print(f"  transform: {report.transform_category}")
+            if report.first_copy is not None:
+                occ = report.first_copy
+                print(
+                    "  first: "
+                    f"{occ.pass_name} B{occ.block_idx}:{occ.instr_idx} "
+                    f"{occ.opcode} {occ.operands}"
+                )
+            if report.last_copy is not None:
+                occ = report.last_copy
+                print(
+                    "  last:  "
+                    f"{occ.pass_name} B{occ.block_idx}:{occ.instr_idx} "
+                    f"{occ.opcode} {occ.operands}"
+                )
+            if report.first_absent_pass is not None:
+                print(f"  first absent: {report.first_absent_pass}")
+        return
+
+    if from_reg is None or to_reg is None:
+        typer.echo(
+            "--from and --to are required unless using --list-copies, "
+            "--involving, or --near-block.",
+            err=True,
+        )
+        raise typer.Exit(2)
 
     from_virtual = _parse_virtual_reg_token(from_reg)
     to_virtual = _parse_virtual_reg_token(to_reg)
-    melee_root = DEFAULT_MELEE_ROOT
-    pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
     report = trace_copy_lifetime(
-        pcdump_path.read_text(),
+        pcdump_text,
         function,
         from_virtual=from_virtual,
         to_virtual=to_virtual,
+        reg_class=effective_class,
     )
 
     if json_out:
@@ -6640,6 +6798,8 @@ def trace_copy(
     print(f"Copy:     r{to_virtual} <- r{from_virtual}")
     print(f"Status:   {report.status}")
     print(f"Likely:   {report.likely_cause}")
+    if report.transform_category:
+        print(f"Transform: {report.transform_category}")
     if report.note:
         print(f"Note:     {report.note}")
     if report.first_copy is not None:
@@ -6656,6 +6816,8 @@ def trace_copy(
             f"{occ.pass_name} B{occ.block_idx}:{occ.instr_idx} "
             f"{occ.opcode} {occ.operands}"
         )
+    if report.first_absent_pass is not None:
+        print(f"Absent:   first absent in {report.first_absent_pass}")
     print()
     print("Source virtual:")
     print(f"  status: {report.from_mapping.status}")

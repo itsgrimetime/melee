@@ -84,6 +84,8 @@ def _candidate_from_hidden_dirty_arg(
     function: str,
     idx: int,
     arg: CallArgumentSpan,
+    *,
+    helper_function: Optional[str] = None,
 ) -> InlineCandidate:
     anchor = SourceAnchor(
         function=function,
@@ -96,6 +98,12 @@ def _candidate_from_hidden_dirty_arg(
             f"inside {arg.call_name}"
         ),
     )
+    metadata = {
+        "visible_call": arg.call_name,
+        "hidden_call": "HSD_JObjSetMtxDirtySub",
+    }
+    if helper_function is not None:
+        metadata["helper_function"] = helper_function
     return InlineCandidate(
         candidate_id=_candidate_id("hidden-dirty-arg-temp", idx),
         kind="hidden-dirty-arg-temp",
@@ -104,10 +112,7 @@ def _candidate_from_hidden_dirty_arg(
         reads=(arg.text,),
         writes=(),
         source_excerpt=arg.statement.text,
-        metadata={
-            "visible_call": arg.call_name,
-            "hidden_call": "HSD_JObjSetMtxDirtySub",
-        },
+        metadata=metadata,
     )
 
 
@@ -123,9 +128,12 @@ def _hidden_dirty_arg_candidates(
     source: str,
     function: str,
     start_idx: int,
+    *,
+    report_function: Optional[str] = None,
 ) -> list[InlineCandidate]:
     out: list[InlineCandidate] = []
     idx = start_idx
+    report_fn = function if report_function is None else report_function
     for call_name in (
         "HSD_JObjSetTranslateX",
         "HSD_JObjSetTranslateY",
@@ -134,8 +142,57 @@ def _hidden_dirty_arg_candidates(
         for arg in find_call_argument_spans(source, function, call_name):
             if not arg.text or not _is_first_call_argument(source, arg):
                 continue
-            out.append(_candidate_from_hidden_dirty_arg(function, idx, arg))
+            out.append(_candidate_from_hidden_dirty_arg(
+                report_fn,
+                idx,
+                arg,
+                helper_function=None if report_fn == function else function,
+            ))
             idx += 1
+    return out
+
+
+_CALL_NAME_RE = re.compile(r"\b([A-Za-z_][A-Za-z_0-9]*)\s*\(")
+_CALL_NAME_KEYWORDS = {
+    "if",
+    "for",
+    "while",
+    "switch",
+    "return",
+    "sizeof",
+}
+
+
+def _direct_call_names(source: str, function: str) -> tuple[str, ...]:
+    names: list[str] = []
+    for span in list_statement_spans(source, function):
+        for match in _CALL_NAME_RE.finditer(span.text):
+            name = match.group(1)
+            if name in _CALL_NAME_KEYWORDS:
+                continue
+            if name not in names:
+                names.append(name)
+    return tuple(names)
+
+
+def _hidden_dirty_arg_candidates_from_direct_helpers(
+    source: str,
+    function: str,
+    start_idx: int,
+) -> list[InlineCandidate]:
+    out: list[InlineCandidate] = []
+    idx = start_idx
+    for helper_name in _direct_call_names(source, function):
+        if helper_name == function:
+            continue
+        helper_candidates = _hidden_dirty_arg_candidates(
+            source,
+            helper_name,
+            idx,
+            report_function=function,
+        )
+        out.extend(helper_candidates)
+        idx += len(helper_candidates)
     return out
 
 
@@ -215,6 +272,11 @@ def generate_candidates(
             candidates.append(_candidate_from_arg(function, idx, arg))
             idx += 1
         for candidate in _hidden_dirty_arg_candidates(source, function, idx):
+            candidates.append(candidate)
+            idx += 1
+        for candidate in _hidden_dirty_arg_candidates_from_direct_helpers(
+            source, function, idx,
+        ):
             candidates.append(candidate)
             idx += 1
         for candidate in _return_helper_candidates(source, function, idx):

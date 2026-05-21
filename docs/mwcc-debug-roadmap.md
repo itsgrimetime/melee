@@ -32,11 +32,15 @@ the current floor.
   by-value mapping, direct anonymous-symbol mapping, globalize support,
   and transparent checkdiff normalization by default.
 - **`pcdump-local` reliability improvements**: function-scoped diff,
-  content-hash freshness checks, forced-cache skip, keep-obj warnings,
-  and local hang diagnostics.
+  content-hash freshness checks, forced-cache skip, `--no-cache-sync`
+  for temporary probes, keep-obj warnings, and local hang diagnostics.
 - **Allocator forcing/scoring**: force-phys, force-phys-iter,
   force-coalesce, derive-target, score-source, guide, and
   match-iter-first auto-verification.
+- **Copy tracing diagnostics**: class-aware `virtual-to-ig`, `trace-copy`
+  first-absent-pass reporting, transform categorization, and copy
+  discovery filters for `--list-copies`, `--involving`, and
+  `--near-block`.
 - **`tier3-search` v2**: seed generation, smoke compile, per-seed
   permuter wiring, budget/time controls, and `--apply-best`.
 - **`checkdiff`**: JSON exit normalization and SDA21 relocation
@@ -119,6 +123,10 @@ Candidate forms:
   colorgraph decisions (`debug virtual-to-ig`, `debug trace-copy`) before
   deciding whether the remaining blocker is source lifetime or allocator
   coalescing.
+- scan one level of direct same-source helper calls for
+  `HSD_JObjSetTranslateX/Y/Z` pattern seeds, so cursor-copy/dirty-call
+  candidates are still proposed when the visible calls live inside a
+  static-inline helper.
 
 ### P2.4: Candidate verification and ranking (HIGH)
 
@@ -204,6 +212,11 @@ out above.
 
 ### Force/preflight/CLI UX (LOW-MEDIUM)
 
+- **Copy-survival force proof:** add a DLL-side `--force-copy-survives`
+  or no-coalesce hook for a specific `mr rTO,rFROM` edge. This remains
+  the unimplemented 2026-05-21 feedback item: forcing final physical
+  registers is not enough to prove whether preserving a specific copy
+  would create the target `mr` instructions.
 - **`root-identity`:** either ship the command or remove stale references
   from any remaining handoff/skill docs.
 - **Force scoping clarity:** keep help text explicit about which force
@@ -271,3 +284,6 @@ out above.
 - `wip/mn-heartbeat:mwcc-debug-feedback-5-20-2026.md`
   — mnvibration heartbeat feedback and source of the inline/extract
   tooling request.
+- `wip/mn-heartbeat:mwcc-debug-feedback-5-21-2026.md`
+  — fn_80247510 copy-tracing follow-up and remaining copy-survival force
+  proof request.
