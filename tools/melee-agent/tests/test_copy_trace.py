@@ -318,3 +318,16 @@ def test_pcdump_local_missing_build_ninja_prints_actionable_fix(
     assert exc_info.value.exit_code == 2
     assert "build.ninja missing" in captured.err
     assert "python configure.py" in captured.err
+
+
+def test_pcdump_local_diff_hint_suggests_function_for_inferred_inline() -> None:
+    hint = debug_cli._pcdump_local_missing_diff_target_hint(
+        "mnVibration_JObjGetTranslationX",
+        src_rel="src/melee/mn/mnvibration.c",
+        explicit=False,
+    )
+
+    assert "mnVibration_JObjGetTranslationX" in hint
+    assert "first function" in hint
+    assert "static inline" in hint
+    assert "--function" in hint
