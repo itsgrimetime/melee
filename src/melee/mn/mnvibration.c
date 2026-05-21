@@ -292,7 +292,7 @@ HSD_JObj* mnVibration_802474C4(s32 count)
 /// Operates on the global menu GObj (mnVibration_804D6C28) rather than the
 /// gobj parameter, which the compiler discards immediately.
 ///
-/// @remarks Matches 96.50%. Structural wins so far:
+/// @remarks Matches 97.15%. Structural wins so far:
 ///   - mnVibration_NthPortChild static inline for per-port child walker;
 ///     matched the existing for-loop / mtctr+bdnz shape used by the
 ///     sibling mnVibration_802474C4 (+0.5%).
@@ -301,10 +301,12 @@ HSD_JObj* mnVibration_802474C4(s32 count)
 ///     and down-nav overflow paths (+1.0%, four calls of +0.2-0.6%).
 ///   - MnVibrationInputScratch models the large lb_80011E24 output area in
 ///     the per-port A-toggle path.
-///   Current gap is dominated by the inlined cursor-position sequence and the
-///   0xFF saved-name slot sentinel paths. The shallow cast/decl-order probes
-///   find no wins, so further progress likely needs another natural inline or
-///   a more accurate source shape for those regions.
+///   - Up-navigation now uses direct guard returns for the 0xFF saved-name
+///     slot and top-row/no-scroll cases, matching the target's branch shape.
+///   Current gap is dominated by six missing mr instructions in the inlined
+///   cursor-position setters. The shallow cast/decl-order probes find no wins,
+///   so further progress likely needs another natural inline or a more
+///   accurate source shape for that local pointer lifetime.
 void fn_80247510(HSD_GObj* gobj)
 {
     MnVibrationData* data = mnVibration_804D6C28->user_data;
@@ -440,7 +442,10 @@ void fn_80247510(HSD_GObj* gobj)
         if (cursor_row != 0) {
             name_idx =
                 mnVibration_GetNameSlot(data, cursor_row - (new_var = 1));
-            if (name_idx != 0xFF) {
+            if (name_idx == 0xFF) {
+                return;
+            }
+            {
                 MnVibrationData* nav_data;
                 u8 new_cursor_row;
                 lbAudioAx_80024030(2);
@@ -451,8 +456,13 @@ void fn_80247510(HSD_GObj* gobj)
                 mnVibration_SetCursorPosition(nav_data, jobj, new_cursor_row);
                 return;
             }
-            return;
-        } else if (GetNameCount() > 8 && data->scroll_offset != 0) {
+        } else {
+            if (GetNameCount() <= 8) {
+                return;
+            }
+            if (data->scroll_offset == 0) {
+                return;
+            }
             lbAudioAx_80024030(2);
             data->scroll_offset--;
             mnVibration_80248644(mnVibration_804D6C28);
