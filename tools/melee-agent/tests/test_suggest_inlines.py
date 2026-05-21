@@ -757,6 +757,39 @@ def test_copy_trace_summary_prioritizes_patch_local_block() -> None:
     assert "patch-local-block" in summary.traces[0].interest_reasons
 
 
+def test_copy_trace_summary_prefers_before_coloring_copy_over_late_disappear() -> None:
+    from src.mwcc_debug import source_shape
+
+    summary = source_shape.summarize_candidate_copy_traces(
+        (
+            source_shape.CandidateCopyTrace(
+                from_virtual=71,
+                to_virtual=80,
+                status="copy-found",
+                likely_cause="copy-survived-distinct-phys",
+                transform_category="copy-survived",
+                first_absent_pass="AFTER INSTRUCTION SCHEDULING",
+                first_copy_block=100,
+            ),
+            source_shape.CandidateCopyTrace(
+                from_virtual=50,
+                to_virtual=108,
+                status="copy-found",
+                likely_cause="removed-before-coloring",
+                transform_category="copy-eliminated-before-coloring",
+                first_absent_pass="BEFORE REGISTER COLORING",
+                first_copy_block=245,
+            ),
+        ),
+        max_traces=1,
+    )
+
+    assert [(trace.to_virtual, trace.from_virtual) for trace in summary.traces] == [
+        (108, 50)
+    ]
+    assert "removed-before-coloring" in summary.traces[0].interest_reasons
+
+
 def test_copy_trace_summary_distinguishes_post_coloring_disappearances() -> None:
     from src.mwcc_debug import source_shape
 
