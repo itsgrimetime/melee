@@ -568,13 +568,13 @@ bool grVenom_8020427C(Ground_GObj* arg)
 }
 
 /// grVenom_80204284
-/// @todo Currently 97.29% match - needs minor register allocation fix
 void grVenom_80204284(Ground_GObj* gobj)
 {
     Ground* gp;
     HSD_JObj* src_jobj;
     HSD_JObj* dst_jobj;
     u32 pad2;
+    Ground* cur_gp;
     Ground_GObj* other_gobj;
     Vec3 pos;
     s32 timer;
@@ -582,7 +582,8 @@ void grVenom_80204284(Ground_GObj* gobj)
 
     gp = GET_GROUND(gobj);
     src_jobj = GET_JOBJ(gobj);
-    dst_jobj = (HSD_JObj*) ((HSD_GObj*) gp->gv.venom.xC4)->hsd_obj;
+    cur_gp = gp;
+    dst_jobj = (HSD_JObj*) ((HSD_GObj*) cur_gp->gv.venom.xC4)->hsd_obj;
 
     HSD_JObjGetTranslation(src_jobj, &pos);
     HSD_JObjSetTranslate(dst_jobj, &pos);
