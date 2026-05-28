@@ -33,7 +33,7 @@
 /* 0D7268 */ s32 ftCo_800D7268(Fighter* fp);
 /* 0D72A0 */ bool ftCo_800D72A0(Fighter* fp);
 /* 0D730C */ bool ftCo_800D730C(Fighter_GObj* gobj, bool);
-/* 0D74A4 */ UNK_RET ftCo_800D74A4(Fighter_GObj* gobj);
+/* 0D74A4 */ void ftCo_800D74A4(Fighter_GObj* gobj);
 /* 0D7590 */ void ftCo_JumpAerialF1_Anim(Fighter_GObj* gobj);
 /* 0D7614 */ void ftCo_JumpAerialF1_IASA(Fighter_GObj* gobj);
 /* 0D7634 */ void ftCo_JumpAerialF1_Phys(Fighter_GObj* gobj);
