@@ -1,0 +1,11 @@
+--- before
++++ after
+@@ -870,6 +870,8 @@
+       fn_80172C78(gm_80160474(ckind, MJ_CLASSIC));
+       if (ckind == CKIND_ZELDA)
+       {
++        i++;
++        i--;
+         fn_80172C78(gm_80160474(CKIND_SEAK, MJ_CLASSIC));
+       }
+       if (ckind == CKIND_SEAK)

@@ -1,0 +1,10 @@
+--- before
++++ after
+@@ -2319,7 +2319,6 @@
+       {
+         ifStatus_802F6898();
+         un_802FF570();
+-        if (Ground_801C2BA4(1) == 0L)
+         {
+           ifStatus_802F68F0();
+           un_802FF620();

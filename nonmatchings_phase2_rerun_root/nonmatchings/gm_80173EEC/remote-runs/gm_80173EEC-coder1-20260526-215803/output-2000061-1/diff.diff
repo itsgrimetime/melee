@@ -1,0 +1,30 @@
+--- before
++++ after
+@@ -404,7 +404,7 @@
+ bool fn_80164B48(void);
+ bool un_80304470(void);
+ bool un_80304510(void);
+-int un_803045A0(void);
++short un_803045A0(void);
+ int un_80304690(void);
+ bool un_80304780(void);
+ bool gmMainLib_8015CF94(void);
+@@ -860,6 +860,7 @@
+ {
+   int i;
+   u8 ckind;
++  int new_var;
+   u16 *temp_r29;
+   for (i = 0; i < 0x19; i++)
+   {
+@@ -868,7 +869,9 @@
+     {
+       ckind = gm_8016400C(i);
+       fn_80172C78(gm_80160474(ckind, MJ_CLASSIC));
+-      if (ckind == CKIND_ZELDA)
++      i = CKIND_ZELDA;
++      new_var = ckind == i;
++      if (new_var)
+       {
+         fn_80172C78(gm_80160474(CKIND_SEAK, MJ_CLASSIC));
+       }

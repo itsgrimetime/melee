@@ -1,0 +1,36 @@
+--- before
++++ after
+@@ -860,10 +860,12 @@
+ {
+   int i;
+   u8 ckind;
++  volatile short new_var;
+   u16 *temp_r29;
+   for (i = 0; i < 0x19; i++)
+   {
+     temp_r29 = &gmMainLib_8015EDBC()->x18[i];
++    i = gm_8016400C(i);
+     if ((*temp_r29) >= 100)
+     {
+       ckind = gm_8016400C(i);
+@@ -879,7 +881,7 @@
+     }
+     if ((*temp_r29) >= 200)
+     {
+-      ckind = gm_8016400C(i);
++      ckind = i;
+       fn_80172C78(gm_80160474(ckind, MJ_ADVENTURE));
+       if (ckind == CKIND_ZELDA)
+       {
+@@ -925,9 +927,10 @@
+   {
+     fn_80172C78(0x96);
+   }
++  new_var = 0x116;
+   if (un_803045A0() != 0)
+   {
+-    fn_80172C78(0x116);
++    fn_80172C78(new_var);
+   }
+   if (un_80304690() != 0)
+   {

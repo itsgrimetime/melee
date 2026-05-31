@@ -1,0 +1,40 @@
+--- before
++++ after
+@@ -2288,12 +2288,19 @@
+   HSD_JObj *dst_jobj;
+   u32 pad2;
+   Ground_GObj *other_gobj;
++  Ground_GObj *new_var3;
+   Vec3 pos;
+   s32 timer;
+   u32 pad;
++  HSD_JObj *new_var4;
++  int new_var2;
++  u32 new_var;
+   gp = (Ground *) HSD_GObjGetUserData(gobj);
+   src_jobj = (HSD_JObj *) HSD_GObjGetHSDObj(gobj);
+-  dst_jobj = (HSD_JObj *) ((HSD_GObj *) gp->gv.venom.xC4)->hsd_obj;
++  new_var = gp->gv.venom.xC4;
++  timer = gp->gv.venom.xC8;
++  new_var4 = (HSD_JObj *) ((HSD_GObj *) new_var)->hsd_obj;
++  dst_jobj = new_var4;
+   HSD_JObjGetTranslation(src_jobj, &pos);
+   HSD_JObjSetTranslate(dst_jobj, &pos);
+   Ground_801C39C0();
+@@ -2308,11 +2315,14 @@
+       {
+         ifStatus_802F6898();
+         un_802FF570();
+-        other_gobj = (Ground_GObj *) grVenom_80203EAC(1);
++        new_var3 = grVenom_80203EAC(1);
++        other_gobj = (Ground_GObj *) new_var3;
+         if (other_gobj != 0L)
+         {
+           Ground *other_gp = (Ground *) HSD_GObjGetUserData(other_gobj);
+-          grCorneria_801E25C4(other_gobj, &other_gp->gv.venom.xC4, 4, 6, 0x6B6CC);
++ do { } while (0);
++          new_var2 = 4;
++          grCorneria_801E25C4(other_gobj, &other_gp->gv.venom.xC4, new_var2, 6, 0x6B6CC);
+         }
+       }
+       else

@@ -1,0 +1,58 @@
+--- before
++++ after
+@@ -2283,19 +2283,25 @@
+ Ground_GObj *grVenom_80203EAC(int gobj_id);
+ void grVenom_80204284(Ground_GObj *gobj)
+ {
++  Ground *new_var;
++  Ground *new_var2;
+   Ground *gp;
+   HSD_JObj *src_jobj;
+   HSD_JObj *dst_jobj;
+   u32 pad2;
+   Ground_GObj *other_gobj;
+   Vec3 pos;
+-  s32 timer;
++  volatile short timer;
++  Ground *new_var4;
+   u32 pad;
+-  gp = (Ground *) HSD_GObjGetUserData(gobj);
++  void **new_var3;
++  new_var3 = &((HSD_GObj *) (timer = gp->gv.venom.xC4))->hsd_obj;
++  new_var4 = (Ground *) HSD_GObjGetUserData(gobj);
++  gp = new_var4;
+   src_jobj = (HSD_JObj *) HSD_GObjGetHSDObj(gobj);
+-  dst_jobj = (HSD_JObj *) ((HSD_GObj *) gp->gv.venom.xC4)->hsd_obj;
++  ;
+   HSD_JObjGetTranslation(src_jobj, &pos);
+-  HSD_JObjSetTranslate(dst_jobj, &pos);
++  HSD_JObjSetTranslate((HSD_JObj *) (*new_var3), &pos);
+   Ground_801C39C0();
+   Ground_801C3BB4();
+   timer = gp->gv.venom.xC8;
+@@ -2304,7 +2310,8 @@
+     gp->gv.venom.xC8 = timer + 1;
+     if (((s32) gp->gv.venom.xC8) >= 0x3C)
+     {
+-      if (((s32) gp->gv.venom.xC8) == 0x3C)
++      new_var2 = gp;
++      if (((s32) new_var2->gv.venom.xC8) == 0x3C)
+       {
+         ifStatus_802F6898();
+         un_802FF570();
+@@ -2318,12 +2325,14 @@
+       else
+       {
+         ifStatus_802F6898();
++        new_var = new_var2;
+         un_802FF570();
+         if (Ground_801C2BA4(1) == 0L)
+         {
++          new_var2->gv.venom.xC4 += 0;
+           ifStatus_802F68F0();
+           un_802FF620();
+-          gp->gv.venom.xC8 = -1;
++          new_var->gv.venom.xC8 = -1;
+         }
+       }
+     }

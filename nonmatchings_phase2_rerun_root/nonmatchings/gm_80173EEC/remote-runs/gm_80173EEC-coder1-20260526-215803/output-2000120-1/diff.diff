@@ -1,0 +1,30 @@
+--- before
++++ after
+@@ -409,7 +409,7 @@
+ bool un_80304780(void);
+ bool gmMainLib_8015CF94(void);
+ bool gmMainLib_8015D508(void);
+-int gmMainLib_8015D94C(u32);
++volatile char gmMainLib_8015D94C(u32);
+ bool gmMainLib_8015DADC(u32);
+ struct gmm_retval_EDBC *gmMainLib_8015EDBC(void);
+ s32 gmMainLib_8015EE90(void);
+@@ -863,7 +863,7 @@
+   u16 *temp_r29;
+   for (i = 0; i < 0x19; i++)
+   {
+-    temp_r29 = &gmMainLib_8015EDBC()->x18[i];
++    temp_r29 = &gmMainLib_8015EDBC()->x18[i & 0xFFFFFFFF];
+     if ((*temp_r29) >= 100)
+     {
+       ckind = gm_8016400C(i);
+@@ -890,7 +890,8 @@
+         fn_80172C78(gm_80160474(CKIND_ZELDA, MJ_ADVENTURE));
+       }
+     }
+-    if ((*temp_r29) >= 300)
++    ckind = *temp_r29;
++    if (ckind >= 300)
+     {
+       ckind = gm_8016400C(i);
+       fn_80172C78(gm_80160474(ckind, MJ_ALLSTAR));

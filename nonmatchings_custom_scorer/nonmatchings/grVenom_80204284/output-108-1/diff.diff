@@ -1,0 +1,53 @@
+--- before
++++ after
+@@ -2281,16 +2281,23 @@
+ };
+ void grVenom_8020362C(void);
+ Ground_GObj *grVenom_80203EAC(int gobj_id);
++inline void *inline_fn(Ground_GObj *arg0)
++{
++  return HSD_GObjGetUserData(arg0);
++}
++
+ void grVenom_80204284(Ground_GObj *gobj)
+ {
+   Ground *gp;
+   HSD_JObj *src_jobj;
++  volatile unsigned int new_var;
+   HSD_JObj *dst_jobj;
+   u32 pad2;
+   Ground_GObj *other_gobj;
+   Vec3 pos;
+   s32 timer;
+   u32 pad;
++  new_var = 1;
+   gp = (Ground *) HSD_GObjGetUserData(gobj);
+   src_jobj = (HSD_JObj *) HSD_GObjGetHSDObj(gobj);
+   dst_jobj = (HSD_JObj *) ((HSD_GObj *) gp->gv.venom.xC4)->hsd_obj;
+@@ -2304,14 +2311,14 @@
+     gp->gv.venom.xC8 = timer + 1;
+     if (((s32) gp->gv.venom.xC8) >= 0x3C)
+     {
+-      if (((s32) gp->gv.venom.xC8) == 0x3C)
++      if ((double) (((s32) gp->gv.venom.xC8) == 0x3C))
+       {
+         ifStatus_802F6898();
+         un_802FF570();
+-        other_gobj = (Ground_GObj *) grVenom_80203EAC(1);
++        other_gobj = (Ground_GObj *) grVenom_80203EAC(new_var);
+         if (other_gobj != 0L)
+         {
+-          Ground *other_gp = (Ground *) HSD_GObjGetUserData(other_gobj);
++          Ground *other_gp = (Ground *) inline_fn(other_gobj);
+           grCorneria_801E25C4(other_gobj, &other_gp->gv.venom.xC4, 4, 6, 0x6B6CC);
+         }
+       }
+@@ -2319,7 +2326,7 @@
+       {
+         ifStatus_802F6898();
+         un_802FF570();
+-        if (Ground_801C2BA4(1) == 0L)
++        if (Ground_801C2BA4(new_var) == 0L)
+         {
+           ifStatus_802F68F0();
+           un_802FF620();

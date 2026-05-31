@@ -1,0 +1,13 @@
+{
+  "job_id": "gm_80173EEC-coder1-20260526-171813",
+  "function": "gm_80173EEC",
+  "target": "coder1",
+  "ssh": "mike-grimes-dev-1.coder",
+  "remote_perm_dir": "/home/discord/permuter-work/decomp-permuter/remote-runs/gm_80173EEC-coder1-20260526-171813/nonmatchings/gm_80173EEC",
+  "remote_run_dir": "/home/discord/permuter-work/decomp-permuter/remote-runs/gm_80173EEC-coder1-20260526-171813",
+  "local_perm_dir": "/Users/mike/code/melee/nonmatchings_phase2_root/nonmatchings/gm_80173EEC",
+  "tmux_session": "melee-perm-gm_80173EEC-coder1-20260526-171813",
+  "threads": 16,
+  "mode": "stock",
+  "created_at": "2026-05-26T17:18:13"
+}

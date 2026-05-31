@@ -1,0 +1,20 @@
+--- before
++++ after
+@@ -879,7 +879,7 @@
+     }
+     if ((*temp_r29) >= 200)
+     {
+-      ckind = gm_8016400C(i);
++      ckind = (i = gm_8016400C(i));
+       fn_80172C78(gm_80160474(ckind, MJ_ADVENTURE));
+       if (ckind == CKIND_ZELDA)
+       {
+@@ -905,7 +905,7 @@
+     }
+   }
+ 
+-  if (fn_80164B48() != 0)
++  if (((double) fn_80164B48()) != 0)
+   {
+     fn_80172C78(0xA0);
+   }

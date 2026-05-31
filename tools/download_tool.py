@@ -16,10 +16,16 @@ import os
 import platform
 import shutil
 import stat
+import time
 import urllib.request
 import zipfile
 from typing import Callable, Dict
 from pathlib import Path
+
+# HTTP status codes that should trigger a retry
+RETRYABLE_STATUS_CODES = {502, 503, 504, 429}
+MAX_RETRIES = 4
+INITIAL_BACKOFF_SECONDS = 2
 
 
 def binutils_url(tag):
@@ -79,7 +85,25 @@ def sjiswrap_url(tag: str) -> str:
 
 def wibo_url(tag: str) -> str:
     repo = "https://github.com/decompals/wibo"
-    return f"{repo}/releases/download/{tag}/wibo"
+    # Version 1.0.0+ uses architecture-specific binaries
+    # Older versions (0.x) use just "wibo" for 32-bit
+    try:
+        major_version = int(tag.split(".")[0])
+    except (ValueError, IndexError):
+        major_version = 0
+
+    if major_version >= 1:
+        uname = platform.uname()
+        system = uname.system.lower()
+        arch = uname.machine.lower()
+        if arch == "amd64":
+            arch = "x86_64"
+        if system == "darwin":
+            return f"{repo}/releases/download/{tag}/wibo-macos"
+        else:
+            return f"{repo}/releases/download/{tag}/wibo-{arch}"
+    else:
+        return f"{repo}/releases/download/{tag}/wibo"
 
 
 TOOLS: Dict[str, Callable[[str], str]] = {
@@ -109,6 +133,38 @@ def download(url, response, output) -> None:
         os.chmod(output, st.st_mode | stat.S_IEXEC)
 
 
+def urlopen_with_retry(req, context=None):
+    """Open URL with exponential backoff retry for transient errors."""
+    last_error = None
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            if context:
+                return urllib.request.urlopen(req, context=context)
+            else:
+                return urllib.request.urlopen(req)
+        except urllib.error.HTTPError as e:
+            if e.code in RETRYABLE_STATUS_CODES:
+                last_error = e
+                if attempt < MAX_RETRIES:
+                    wait_time = INITIAL_BACKOFF_SECONDS * (2 ** attempt)
+                    print(f"HTTP {e.code} error, retrying in {wait_time}s (attempt {attempt + 1}/{MAX_RETRIES})...")
+                    time.sleep(wait_time)
+                    continue
+            raise
+        except urllib.error.URLError as e:
+            # Retry on network-level errors (connection reset, timeout, etc.)
+            last_error = e
+            if attempt < MAX_RETRIES:
+                wait_time = INITIAL_BACKOFF_SECONDS * (2 ** attempt)
+                print(f"Network error: {e.reason}, retrying in {wait_time}s (attempt {attempt + 1}/{MAX_RETRIES})...")
+                time.sleep(wait_time)
+                continue
+            raise
+    # If we exhausted all retries, raise the last error
+    if last_error:
+        raise last_error
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("tool", help="Tool name")
@@ -122,7 +178,7 @@ def main() -> None:
     print(f"Downloading {url} to {output}")
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     try:
-        with urllib.request.urlopen(req) as response:
+        with urlopen_with_retry(req) as response:
             download(url, response, output)
     except urllib.error.URLError as e:
         if str(e).find("CERTIFICATE_VERIFY_FAILED") == -1:
@@ -136,7 +192,7 @@ def main() -> None:
             )
             return
 
-        with urllib.request.urlopen(
+        with urlopen_with_retry(
             req, context=ssl.create_default_context(cafile=certifi.where())
         ) as response:
             download(url, response, output)

@@ -1,0 +1,21 @@
+--- before
++++ after
+@@ -900,7 +900,8 @@
+       }
+       if (ckind == CKIND_SEAK)
+       {
+-        fn_80172C78(gm_80160474(CKIND_ZELDA, MJ_ALLSTAR));
++        i = MJ_ALLSTAR;
++        fn_80172C78(gm_80160474(CKIND_ZELDA, i));
+       }
+     }
+   }
+@@ -921,7 +922,7 @@
+   {
+     fn_80172C78(0x10C);
+   }
+-  if (gmMainLib_8015D94C(0x1A) != 0)
++  if ((float) (gmMainLib_8015D94C(0x1A) != 0))
+   {
+     fn_80172C78(0x96);
+   }

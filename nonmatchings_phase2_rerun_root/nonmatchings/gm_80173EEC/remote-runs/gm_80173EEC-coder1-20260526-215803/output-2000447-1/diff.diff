@@ -1,0 +1,35 @@
+--- before
++++ after
+@@ -858,8 +858,9 @@
+ 
+ void gm_80173EEC(void)
+ {
++  volatile unsigned long long new_var;
+   int i;
+-  u8 ckind;
++  volatile long long ckind;
+   u16 *temp_r29;
+   for (i = 0; i < 0x19; i++)
+   {
+@@ -885,7 +886,7 @@
+       {
+         fn_80172C78(gm_80160474(CKIND_SEAK, MJ_ADVENTURE));
+       }
+-      if (ckind == CKIND_SEAK)
++      if (0, ckind == CKIND_SEAK)
+       {
+         fn_80172C78(gm_80160474(CKIND_ZELDA, MJ_ADVENTURE));
+       }
+@@ -925,7 +926,11 @@
+   {
+     fn_80172C78(0x96);
+   }
+-  if (un_803045A0() != 0)
++  if (((!ckind) && (!ckind)) && (!ckind))
++  {
++  }
++  new_var = un_803045A0();
++  if (new_var != 0)
+   {
+     fn_80172C78(0x116);
+   }

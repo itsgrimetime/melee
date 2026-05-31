@@ -1,0 +1,44 @@
+--- before
++++ after
+@@ -2287,24 +2287,28 @@
+   HSD_JObj *src_jobj;
+   HSD_JObj *dst_jobj;
+   u32 pad2;
++  Vec3 *new_var;
+   Ground_GObj *other_gobj;
++  u32 new_var2;
+   Vec3 pos;
+   s32 timer;
+   u32 pad;
+   gp = (Ground *) HSD_GObjGetUserData(gobj);
+   src_jobj = (HSD_JObj *) HSD_GObjGetHSDObj(gobj);
+   dst_jobj = (HSD_JObj *) ((HSD_GObj *) gp->gv.venom.xC4)->hsd_obj;
+-  HSD_JObjGetTranslation(src_jobj, &pos);
++  grVenom_8020362C();
++  HSD_JObjGetTranslation(src_jobj, new_var = &pos);
++  new_var2 = gp->gv.venom.xC8;
+   HSD_JObjSetTranslate(dst_jobj, &pos);
+   Ground_801C39C0();
+   Ground_801C3BB4();
+-  timer = gp->gv.venom.xC8;
++  timer = new_var2;
+   if (timer > 0)
+   {
+     gp->gv.venom.xC8 = timer + 1;
+-    if (((s32) gp->gv.venom.xC8) >= 0x3C)
+-    {
+-      if (((s32) gp->gv.venom.xC8) == 0x3C)
++    if (((s32) new_var2) >= 0x3C)
++    {
++      if (((s32) new_var2) == 0x3C)
+       {
+         ifStatus_802F6898();
+         un_802FF570();
+@@ -2329,7 +2333,6 @@
+     }
+   }
+   lb_800115F4();
+-  grVenom_8020362C();
+   Ground_801C2FE0(gobj);
+ }
+ 

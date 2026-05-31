@@ -1,0 +1,44 @@
+--- before
++++ after
+@@ -398,7 +398,7 @@
+ bool gm_80163114(void);
+ bool fn_80163D24(void);
+ bool fn_80163D74(void);
+-u8 gm_8016400C(u8 ckind);
++u8 gm_8016400C(volatile unsigned int ckind);
+ bool gm_80164600(void);
+ bool gm_80164ABC(void);
+ bool fn_80164B48(void);
+@@ -858,9 +858,11 @@
+ 
+ void gm_80173EEC(void)
+ {
+-  int i;
+-  u8 ckind;
++  volatile long i;
++  int new_var;
++  volatile long long ckind;
+   u16 *temp_r29;
++  new_var = 0xFFFF;
+   for (i = 0; i < 0x19; i++)
+   {
+     temp_r29 = &gmMainLib_8015EDBC()->x18[i];
+@@ -870,7 +872,7 @@
+       fn_80172C78(gm_80160474(ckind, MJ_CLASSIC));
+       if (ckind == CKIND_ZELDA)
+       {
+-        fn_80172C78(gm_80160474(CKIND_SEAK, MJ_CLASSIC));
++        fn_80172C78(gm_80160474(((((CKIND_SEAK & new_var) & new_var) & new_var) & new_var) & new_var, MJ_CLASSIC));
+       }
+       if (ckind == CKIND_SEAK)
+       {
+@@ -900,7 +902,8 @@
+       }
+       if (ckind == CKIND_SEAK)
+       {
+-        fn_80172C78(gm_80160474(CKIND_ZELDA, MJ_ALLSTAR));
++        i = gm_80160474(CKIND_ZELDA, MJ_ALLSTAR);
++        fn_80172C78(i);
+       }
+     }
+   }

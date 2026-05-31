@@ -1,0 +1,80 @@
+--- before
++++ after
+@@ -856,21 +856,35 @@
+   return result;
+ }
+ 
++inline bool inline_fn(u8 arg0)
++{
++  return gm_80160474(arg0, MJ_CLASSIC);
++}
++
+ void gm_80173EEC(void)
+ {
++  bool new_var4;
+   int i;
++  volatile char new_var5;
+   u8 ckind;
++  int new_var3;
+   u16 *temp_r29;
++  int *new_var2;
++  volatile char pad;
++  int new_var;
+   for (i = 0; i < 0x19; i++)
+   {
+     temp_r29 = &gmMainLib_8015EDBC()->x18[i];
+-    if ((*temp_r29) >= 100)
+-    {
+-      ckind = gm_8016400C(i);
+-      fn_80172C78(gm_80160474(ckind, MJ_CLASSIC));
+-      if (ckind == CKIND_ZELDA)
+-      {
+-        fn_80172C78(gm_80160474(CKIND_SEAK, MJ_CLASSIC));
++    new_var2 = &i;
++    if (((*temp_r29) + 1) > 100)
++    {
++      ckind = gm_8016400C(*new_var2);
++      new_var4 = gm_80160474(CKIND_SEAK, MJ_CLASSIC);
++      fn_80172C78(inline_fn(ckind));
++      new_var = ckind == CKIND_ZELDA;
++      if (new_var)
++      {
++        fn_80172C78(new_var4);
+       }
+       if (ckind == CKIND_SEAK)
+       {
+@@ -879,7 +893,7 @@
+     }
+     if ((*temp_r29) >= 200)
+     {
+-      ckind = gm_8016400C(i);
++      ckind = (unsigned char) gm_8016400C(i);
+       fn_80172C78(gm_80160474(ckind, MJ_ADVENTURE));
+       if (ckind == CKIND_ZELDA)
+       {
+@@ -890,7 +904,10 @@
+         fn_80172C78(gm_80160474(CKIND_ZELDA, MJ_ADVENTURE));
+       }
+     }
+-    if ((*temp_r29) >= 300)
++    new_var5 = (*temp_r29) >= 300;
++    new_var3 = ckind == CKIND_ZELDA;
++    new_var = new_var3;
++    if (new_var5)
+     {
+       ckind = gm_8016400C(i);
+       fn_80172C78(gm_80160474(ckind, MJ_ALLSTAR));
+@@ -909,11 +926,12 @@
+   {
+     fn_80172C78(0xA0);
+   }
++  new_var = gmMainLib_8015EE90() != 0;
+   if (gm_80164ABC())
+   {
+     fn_80172C78(0x9F);
+   }
+-  if (gmMainLib_8015EE90() != 0)
++  if (new_var)
+   {
+     fn_80172C78(0xDC);
+   }

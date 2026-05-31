@@ -1,0 +1,20 @@
+--- before
++++ after
+@@ -406,7 +406,7 @@
+ bool un_80304510(void);
+ int un_803045A0(void);
+ int un_80304690(void);
+-bool un_80304780(void);
++volatile short un_80304780(void);
+ bool gmMainLib_8015CF94(void);
+ bool gmMainLib_8015D508(void);
+ int gmMainLib_8015D94C(u32);
+@@ -871,6 +871,8 @@
+       if (ckind == CKIND_ZELDA)
+       {
+         fn_80172C78(gm_80160474(CKIND_SEAK, MJ_CLASSIC));
++        i++;
++        i--;
+       }
+       if (ckind == CKIND_SEAK)
+       {

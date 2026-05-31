@@ -1,0 +1,11 @@
+--- before
++++ after
+@@ -894,7 +894,7 @@
+     {
+       ckind = gm_8016400C(i);
+       fn_80172C78(gm_80160474(ckind, MJ_ALLSTAR));
+-      if (ckind == CKIND_ZELDA)
++      if ((i = ckind) == CKIND_ZELDA)
+       {
+         fn_80172C78(gm_80160474(CKIND_SEAK, MJ_ALLSTAR));
+       }

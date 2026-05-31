@@ -1,0 +1,50 @@
+--- before
++++ after
+@@ -859,8 +859,9 @@
+ void gm_80173EEC(void)
+ {
+   int i;
+-  u8 ckind;
++  volatile long long ckind;
+   u16 *temp_r29;
++  u8 new_var;
+   for (i = 0; i < 0x19; i++)
+   {
+     temp_r29 = &gmMainLib_8015EDBC()->x18[i];
+@@ -894,13 +895,15 @@
+     {
+       ckind = gm_8016400C(i);
+       fn_80172C78(gm_80160474(ckind, MJ_ALLSTAR));
+-      if (ckind == CKIND_ZELDA)
++      new_var = ckind;
++      if (new_var == CKIND_ZELDA)
+       {
+         fn_80172C78(gm_80160474(CKIND_SEAK, MJ_ALLSTAR));
+       }
+-      if (ckind == CKIND_SEAK)
+-      {
+-        fn_80172C78(gm_80160474(CKIND_ZELDA, MJ_ALLSTAR));
++      if (new_var == CKIND_SEAK)
++      {
++        i = gm_80160474(CKIND_ZELDA, MJ_ALLSTAR);
++        fn_80172C78(i);
+       }
+     }
+   }
+@@ -921,6 +924,7 @@
+   {
+     fn_80172C78(0x10C);
+   }
++  ckind = un_80304690();
+   if (gmMainLib_8015D94C(0x1A) != 0)
+   {
+     fn_80172C78(0x96);
+@@ -929,7 +933,7 @@
+   {
+     fn_80172C78(0x116);
+   }
+-  if (un_80304690() != 0)
++  if (ckind != 0)
+   {
+     fn_80172C78(0xAF);
+   }

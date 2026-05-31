@@ -1,0 +1,56 @@
+--- before
++++ after
+@@ -2281,16 +2281,25 @@
+ };
+ void grVenom_8020362C(void);
+ Ground_GObj *grVenom_80203EAC(int gobj_id);
++inline int inline_fn(s32 arg0, int arg1)
++{
++  return arg0 == arg1;
++}
++
+ void grVenom_80204284(Ground_GObj *gobj)
+ {
+   Ground *gp;
+   HSD_JObj *src_jobj;
++  Ground *new_var2;
+   HSD_JObj *dst_jobj;
+   u32 pad2;
++  volatile unsigned int new_var3;
+   Ground_GObj *other_gobj;
+   Vec3 pos;
++  volatile short new_var;
+   s32 timer;
+   u32 pad;
++  new_var3 = 6;
+   gp = (Ground *) HSD_GObjGetUserData(gobj);
+   src_jobj = (HSD_JObj *) HSD_GObjGetHSDObj(gobj);
+   dst_jobj = (HSD_JObj *) ((HSD_GObj *) gp->gv.venom.xC4)->hsd_obj;
+@@ -2299,12 +2308,14 @@
+   Ground_801C39C0();
+   Ground_801C3BB4();
+   timer = gp->gv.venom.xC8;
++  new_var2 = gp;
+   if (timer > 0)
+   {
+-    gp->gv.venom.xC8 = timer + 1;
+-    if (((s32) gp->gv.venom.xC8) >= 0x3C)
+-    {
+-      if (((s32) gp->gv.venom.xC8) == 0x3C)
++    new_var2->gv.venom.xC8 = timer - -1;
++    new_var = 0x3C;
++    if (((s32) gp->gv.venom.xC8) >= new_var)
++    {
++      if (inline_fn((s32) gp->gv.venom.xC8, 0x3C))
+       {
+         ifStatus_802F6898();
+         un_802FF570();
+@@ -2312,7 +2323,7 @@
+         if (other_gobj != 0L)
+         {
+           Ground *other_gp = (Ground *) HSD_GObjGetUserData(other_gobj);
+-          grCorneria_801E25C4(other_gobj, &other_gp->gv.venom.xC4, 4, 6, 0x6B6CC);
++          grCorneria_801E25C4(other_gobj, &other_gp->gv.venom.xC4, 4, new_var3, 0x6B6CC);
+         }
+       }
+       else

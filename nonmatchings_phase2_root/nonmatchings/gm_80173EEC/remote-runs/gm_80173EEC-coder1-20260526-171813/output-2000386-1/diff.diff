@@ -1,0 +1,60 @@
+--- before
++++ after
+@@ -155,7 +155,7 @@
+ bool fn_80172700(void);
+ bool fn_80172734(void);
+ bool fn_80172768(void);
+-bool fn_80172C78(int);
++unsigned char fn_80172C78(int);
+ bool fn_80173510(void);
+ bool fn_801735F0(void);
+ bool fn_80173644(void);
+@@ -790,7 +790,7 @@
+ #pragma pop
+ #pragma push
+ #pragma dont_inline on
+-bool fn_80172C78(int arg0);
++unsigned char fn_80172C78(int);
+ #pragma pop
+ static const struct lbl_803B7AD0_t
+ {
+@@ -859,18 +859,21 @@
+ void gm_80173EEC(void)
+ {
+   int i;
+-  u8 ckind;
++  volatile unsigned long long ckind;
+   u16 *temp_r29;
++  bool new_var;
+   for (i = 0; i < 0x19; i++)
+   {
+     temp_r29 = &gmMainLib_8015EDBC()->x18[i];
+     if ((*temp_r29) >= 100)
+     {
++      i = 0;
+       ckind = gm_8016400C(i);
+       fn_80172C78(gm_80160474(ckind, MJ_CLASSIC));
++      new_var = gm_80160474(CKIND_SEAK, MJ_CLASSIC);
+       if (ckind == CKIND_ZELDA)
+       {
+-        fn_80172C78(gm_80160474(CKIND_SEAK, MJ_CLASSIC));
++        fn_80172C78(new_var);
+       }
+       if (ckind == CKIND_SEAK)
+       {
+@@ -927,11 +930,14 @@
+   }
+   if (un_803045A0() != 0)
+   {
++    if (ckind)
++    {
++    }
+     fn_80172C78(0x116);
+   }
++  fn_80172C78(0xAF);
+   if (un_80304690() != 0)
+   {
+-    fn_80172C78(0xAF);
+   }
+   if (un_80304780() != 0)
+   {

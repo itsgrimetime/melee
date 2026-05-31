@@ -1,0 +1,40 @@
+--- before
++++ after
+@@ -859,7 +859,8 @@
+ void gm_80173EEC(void)
+ {
+   int i;
+-  u8 ckind;
++  volatile unsigned long ckind;
++  int new_var;
+   u16 *temp_r29;
+   for (i = 0; i < 0x19; i++)
+   {
+@@ -868,16 +869,17 @@
+     {
+       ckind = gm_8016400C(i);
+       fn_80172C78(gm_80160474(ckind, MJ_CLASSIC));
++      new_var = ckind == CKIND_SEAK;
+       if (ckind == CKIND_ZELDA)
+       {
+         fn_80172C78(gm_80160474(CKIND_SEAK, MJ_CLASSIC));
+       }
+-      if (ckind == CKIND_SEAK)
++      if (new_var)
+       {
+         fn_80172C78(gm_80160474(CKIND_ZELDA, MJ_CLASSIC));
+       }
+     }
+-    if ((*temp_r29) >= 200)
++    if (((*temp_r29) & 0xFFu) >= 200)
+     {
+       ckind = gm_8016400C(i);
+       fn_80172C78(gm_80160474(ckind, MJ_ADVENTURE));
+@@ -894,6 +896,7 @@
+     {
+       ckind = gm_8016400C(i);
+       fn_80172C78(gm_80160474(ckind, MJ_ALLSTAR));
++      i = 0;
+       if (ckind == CKIND_ZELDA)
+       {
+         fn_80172C78(gm_80160474(CKIND_SEAK, MJ_ALLSTAR));

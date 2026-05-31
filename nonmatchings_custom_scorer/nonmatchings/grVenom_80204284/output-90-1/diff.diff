@@ -1,0 +1,20 @@
+--- before
++++ after
+@@ -2294,8 +2294,8 @@
+   gp = (Ground *) HSD_GObjGetUserData(gobj);
+   src_jobj = (HSD_JObj *) HSD_GObjGetHSDObj(gobj);
+   dst_jobj = (HSD_JObj *) ((HSD_GObj *) gp->gv.venom.xC4)->hsd_obj;
++  HSD_JObjSetTranslate(dst_jobj, &pos);
+   HSD_JObjGetTranslation(src_jobj, &pos);
+-  HSD_JObjSetTranslate(dst_jobj, &pos);
+   Ground_801C39C0();
+   Ground_801C3BB4();
+   timer = gp->gv.venom.xC8;
+@@ -2329,6 +2329,7 @@
+     }
+   }
+   lb_800115F4();
++  gp->gv.venom.xC8 = -1;
+   grVenom_8020362C();
+   Ground_801C2FE0(gobj);
+ }

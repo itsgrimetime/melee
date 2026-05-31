@@ -1,0 +1,10 @@
+--- before
++++ after
+@@ -2291,6 +2291,7 @@
+   Vec3 pos;
+   s32 timer;
+   u32 pad;
++  gp->gv.venom.xC8 = -1;
+   gp = (Ground *) HSD_GObjGetUserData(gobj);
+   src_jobj = (HSD_JObj *) HSD_GObjGetHSDObj(gobj);
+   dst_jobj = (HSD_JObj *) ((HSD_GObj *) gp->gv.venom.xC4)->hsd_obj;

@@ -1,0 +1,50 @@
+--- before
++++ after
+@@ -2289,11 +2289,14 @@
+   u32 pad2;
+   Ground_GObj *other_gobj;
+   Vec3 pos;
++  int new_var;
+   s32 timer;
+   u32 pad;
+   gp = (Ground *) HSD_GObjGetUserData(gobj);
+   src_jobj = (HSD_JObj *) HSD_GObjGetHSDObj(gobj);
+   dst_jobj = (HSD_JObj *) ((HSD_GObj *) gp->gv.venom.xC4)->hsd_obj;
++  other_gobj = (Ground_GObj *) grVenom_80203EAC(new_var & 0xFFFFu);
++  new_var = 1;
+   HSD_JObjGetTranslation(src_jobj, &pos);
+   HSD_JObjSetTranslate(dst_jobj, &pos);
+   Ground_801C39C0();
+@@ -2308,10 +2311,11 @@
+       {
+         ifStatus_802F6898();
+         un_802FF570();
+-        other_gobj = (Ground_GObj *) grVenom_80203EAC(1);
++        other_gobj = (Ground_GObj *) grVenom_80203EAC(new_var & 0xFFFFu);
+         if (other_gobj != 0L)
+         {
+           Ground *other_gp = (Ground *) HSD_GObjGetUserData(other_gobj);
++          Ground_801C2FE0(gobj);
+           grCorneria_801E25C4(other_gobj, &other_gp->gv.venom.xC4, 4, 6, 0x6B6CC);
+         }
+       }
+@@ -2319,17 +2323,16 @@
+       {
+         ifStatus_802F6898();
+         un_802FF570();
+-        if (Ground_801C2BA4(1) == 0L)
++        if (Ground_801C2BA4(new_var) == 0L)
+         {
+           ifStatus_802F68F0();
+           un_802FF620();
+-          gp->gv.venom.xC8 = -1;
++          gp->gv.venom.xC8 = -new_var;
+         }
+       }
+     }
+   }
+   lb_800115F4();
+   grVenom_8020362C();
+-  Ground_801C2FE0(gobj);
+ }
+ 

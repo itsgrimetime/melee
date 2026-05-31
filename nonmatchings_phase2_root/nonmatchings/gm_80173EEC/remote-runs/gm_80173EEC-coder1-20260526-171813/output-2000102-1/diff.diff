@@ -1,0 +1,30 @@
+--- before
++++ after
+@@ -860,6 +860,7 @@
+ {
+   int i;
+   u8 ckind;
++  int new_var;
+   u16 *temp_r29;
+   for (i = 0; i < 0x19; i++)
+   {
+@@ -867,7 +868,7 @@
+     if ((*temp_r29) >= 100)
+     {
+       ckind = gm_8016400C(i);
+-      fn_80172C78(gm_80160474(ckind, MJ_CLASSIC));
++      fn_80172C78(i = gm_80160474(ckind, MJ_CLASSIC));
+       if (ckind == CKIND_ZELDA)
+       {
+         fn_80172C78(gm_80160474(CKIND_SEAK, MJ_CLASSIC));
+@@ -880,8 +881,9 @@
+     if ((*temp_r29) >= 200)
+     {
+       ckind = gm_8016400C(i);
++      new_var = CKIND_ZELDA;
+       fn_80172C78(gm_80160474(ckind, MJ_ADVENTURE));
+-      if (ckind == CKIND_ZELDA)
++      if (ckind == new_var)
+       {
+         fn_80172C78(gm_80160474(CKIND_SEAK, MJ_ADVENTURE));
+       }

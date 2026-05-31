@@ -1,0 +1,11 @@
+--- before
++++ after
+@@ -2312,7 +2312,7 @@
+         if (other_gobj != 0L)
+         {
+           Ground *other_gp = (Ground *) HSD_GObjGetUserData(other_gobj);
+-          grCorneria_801E25C4(other_gobj, &other_gp->gv.venom.xC4, 4, 6, 0x6B6CC);
++          grCorneria_801E25C4(other_gobj, &other_gp->gv.venom.xC4, 4, 6, ((((((((((0x6B6CC & 0xFFu) & 0xFFu) & 0xFFu) & 0xFFu) & 0xFFu) & 0xFFu) & 0xFFu) & 0xFFu) & 0xFFu) & 0xFFu) & 0xFFu);
+         }
+       }
+       else

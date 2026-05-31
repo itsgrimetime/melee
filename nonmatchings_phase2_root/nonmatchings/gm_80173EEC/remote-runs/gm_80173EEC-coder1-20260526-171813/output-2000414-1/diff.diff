@@ -1,0 +1,20 @@
+--- before
++++ after
+@@ -859,7 +859,7 @@
+ void gm_80173EEC(void)
+ {
+   int i;
+-  u8 ckind;
++  volatile long long ckind;
+   u16 *temp_r29;
+   for (i = 0; i < 0x19; i++)
+   {
+@@ -868,7 +868,7 @@
+     {
+       ckind = gm_8016400C(i);
+       fn_80172C78(gm_80160474(ckind, MJ_CLASSIC));
+-      if (ckind == CKIND_ZELDA)
++      if ((ckind == CKIND_ZELDA) != 0)
+       {
+         fn_80172C78(gm_80160474(CKIND_SEAK, MJ_CLASSIC));
+       }

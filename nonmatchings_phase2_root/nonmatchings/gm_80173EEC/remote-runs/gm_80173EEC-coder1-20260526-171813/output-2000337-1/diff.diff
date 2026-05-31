@@ -1,0 +1,98 @@
+--- before
++++ after
+@@ -856,55 +856,64 @@
+   return result;
+ }
+ 
++inline bool inline_fn(int arg0, int arg1)
++{
++  return gm_80160474(arg0, arg1);
++}
++
+ void gm_80173EEC(void)
+ {
++  u16 *new_var;
+   int i;
+   u8 ckind;
++  s32 new_var2;
+   u16 *temp_r29;
+   for (i = 0; i < 0x19; i++)
+   {
+-    temp_r29 = &gmMainLib_8015EDBC()->x18[i];
++    new_var = &gmMainLib_8015EDBC()->x18[i];
++    temp_r29 = new_var;
+     if ((*temp_r29) >= 100)
+     {
+       ckind = gm_8016400C(i);
+-      fn_80172C78(gm_80160474(ckind, MJ_CLASSIC));
++      fn_80172C78(inline_fn(ckind, MJ_CLASSIC));
++      if (((float) ckind) == CKIND_ZELDA)
++      {
++        fn_80172C78(inline_fn(CKIND_SEAK, MJ_CLASSIC));
++      }
++      if (ckind == CKIND_SEAK)
++      {
++        fn_80172C78(inline_fn(CKIND_ZELDA, MJ_CLASSIC));
++      }
++    }
++    if ((*temp_r29) >= 200)
++    {
++      ckind = gm_8016400C(i);
++      fn_80172C78(inline_fn(ckind, MJ_ADVENTURE));
+       if (ckind == CKIND_ZELDA)
+       {
+-        fn_80172C78(gm_80160474(CKIND_SEAK, MJ_CLASSIC));
++        fn_80172C78(inline_fn(CKIND_SEAK, MJ_ADVENTURE));
+       }
+       if (ckind == CKIND_SEAK)
+       {
+-        fn_80172C78(gm_80160474(CKIND_ZELDA, MJ_CLASSIC));
+-      }
+-    }
+-    if ((*temp_r29) >= 200)
++        fn_80172C78(inline_fn(CKIND_ZELDA, MJ_ADVENTURE));
++      }
++    }
++    if ((*temp_r29) >= 300)
+     {
+       ckind = gm_8016400C(i);
+-      fn_80172C78(gm_80160474(ckind, MJ_ADVENTURE));
++      fn_80172C78(inline_fn((float) ckind, MJ_ALLSTAR));
+       if (ckind == CKIND_ZELDA)
+       {
+-        fn_80172C78(gm_80160474(CKIND_SEAK, MJ_ADVENTURE));
++        fn_80172C78(inline_fn(CKIND_SEAK, MJ_ALLSTAR));
+       }
+       if (ckind == CKIND_SEAK)
+       {
+-        fn_80172C78(gm_80160474(CKIND_ZELDA, MJ_ADVENTURE));
+-      }
+-    }
+-    if ((*temp_r29) >= 300)
+-    {
+-      ckind = gm_8016400C(i);
+-      fn_80172C78(gm_80160474(ckind, MJ_ALLSTAR));
+-      if (ckind == CKIND_ZELDA)
+-      {
+-        fn_80172C78(gm_80160474(CKIND_SEAK, MJ_ALLSTAR));
+-      }
+-      if (ckind == CKIND_SEAK)
+-      {
+         fn_80172C78(gm_80160474(CKIND_ZELDA, MJ_ALLSTAR));
+       }
+     }
+   }
+ 
++  new_var2 = gmMainLib_8015EE90();
+   if (fn_80164B48() != 0)
+   {
+     fn_80172C78(0xA0);
+@@ -913,7 +922,7 @@
+   {
+     fn_80172C78(0x9F);
+   }
+-  if (gmMainLib_8015EE90() != 0)
++  if (new_var2 != 0)
+   {
+     fn_80172C78(0xDC);
+   }

@@ -1,0 +1,29 @@
+--- before
++++ after
+@@ -2289,20 +2289,23 @@
+   u32 pad2;
+   Ground_GObj *other_gobj;
+   Vec3 pos;
++  volatile int new_var;
+   s32 timer;
+   u32 pad;
+   gp = (Ground *) HSD_GObjGetUserData(gobj);
+   src_jobj = (HSD_JObj *) HSD_GObjGetHSDObj(gobj);
++  new_var = 0xFFFFFFFF;
+   dst_jobj = (HSD_JObj *) ((HSD_GObj *) gp->gv.venom.xC4)->hsd_obj;
+   HSD_JObjGetTranslation(src_jobj, &pos);
+-  HSD_JObjSetTranslate(dst_jobj, &pos);
++  HSD_JObjSetTranslate((0, dst_jobj), &pos);
+   Ground_801C39C0();
+   Ground_801C3BB4();
+   timer = gp->gv.venom.xC8;
+   if (timer > 0)
+   {
+-    gp->gv.venom.xC8 = timer + 1;
+-    if (((s32) gp->gv.venom.xC8) >= 0x3C)
++    gp->gv.venom.xC8 = 1;
++    gp->gv.venom.xC8 = (timer + gp->gv.venom.xC8) & 0xFF;
++    if (((s32) (((((((((((gp->gv.venom.xC8 & new_var) & new_var) & new_var) & new_var) & new_var) & new_var) & new_var) & new_var) & new_var) & 0xFFFFFFFF) & 0xFFFFFFFF)) >= 0x3C)
+     {
+       if (((s32) gp->gv.venom.xC8) == 0x3C)
+       {

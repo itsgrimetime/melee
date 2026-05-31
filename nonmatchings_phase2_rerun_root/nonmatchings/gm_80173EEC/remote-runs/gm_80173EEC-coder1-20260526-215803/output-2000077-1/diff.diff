@@ -1,0 +1,16 @@
+--- before
++++ after
+@@ -892,11 +892,12 @@
+     }
+     if ((*temp_r29) >= 300)
+     {
++      i = gm_80160474(CKIND_SEAK, MJ_ALLSTAR);
+       ckind = gm_8016400C(i);
+       fn_80172C78(gm_80160474(ckind, MJ_ALLSTAR));
+       if (ckind == CKIND_ZELDA)
+       {
+-        fn_80172C78(gm_80160474(CKIND_SEAK, MJ_ALLSTAR));
++        fn_80172C78(i);
+       }
+       if (ckind == CKIND_SEAK)
+       {

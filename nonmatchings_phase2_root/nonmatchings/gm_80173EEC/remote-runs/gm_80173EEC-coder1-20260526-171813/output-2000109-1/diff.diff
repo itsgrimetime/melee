@@ -1,0 +1,21 @@
+--- before
++++ after
+@@ -864,7 +864,7 @@
+   for (i = 0; i < 0x19; i++)
+   {
+     temp_r29 = &gmMainLib_8015EDBC()->x18[i];
+-    if ((*temp_r29) >= 100)
++    if (100 <= (*temp_r29))
+     {
+       ckind = gm_8016400C(i);
+       fn_80172C78(gm_80160474(ckind, MJ_CLASSIC));
+@@ -881,7 +881,8 @@
+     {
+       ckind = gm_8016400C(i);
+       fn_80172C78(gm_80160474(ckind, MJ_ADVENTURE));
+-      if (ckind == CKIND_ZELDA)
++      i = ckind == CKIND_ZELDA;
++      if (i)
+       {
+         fn_80172C78(gm_80160474(CKIND_SEAK, MJ_ADVENTURE));
+       }

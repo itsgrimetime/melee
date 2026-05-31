@@ -1,0 +1,62 @@
+--- before
++++ after
+@@ -389,7 +389,7 @@
+   u32 x60[4];
+ };
+ static struct lbl_803B7A60_t lbl_803B7A60 = {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0.0f, 0.0f, 0.0f, 0.0f}, {0x0FFFFFFF, 0x0FFFFFFF, 0x0FFFFFFF, 0x0FFFFFFF}, {0, 0, 0, 0}};
+-bool gm_80160474(CharacterKind, MajorSceneKind);
++bool gm_80160474(CharacterKind, int);
+ bool fn_80162CCC(void);
+ bool gm_80162D1C(void);
+ bool gm_80162EC8(void);
+@@ -858,13 +858,15 @@
+ 
+ void gm_80173EEC(void)
+ {
++  u16 new_var;
+   int i;
+   u8 ckind;
+   u16 *temp_r29;
+   for (i = 0; i < 0x19; i++)
+   {
+     temp_r29 = &gmMainLib_8015EDBC()->x18[i];
+-    if ((*temp_r29) >= 100)
++    new_var = *temp_r29;
++    if (new_var >= 100)
+     {
+       ckind = gm_8016400C(i);
+       fn_80172C78(gm_80160474(ckind, MJ_CLASSIC));
+@@ -877,7 +879,7 @@
+         fn_80172C78(gm_80160474(CKIND_ZELDA, MJ_CLASSIC));
+       }
+     }
+-    if ((*temp_r29) >= 200)
++    if (new_var >= 200)
+     {
+       ckind = gm_8016400C(i);
+       fn_80172C78(gm_80160474(ckind, MJ_ADVENTURE));
+@@ -887,10 +889,11 @@
+       }
+       if (ckind == CKIND_SEAK)
+       {
+-        fn_80172C78(gm_80160474(CKIND_ZELDA, MJ_ADVENTURE));
+-      }
+-    }
+-    if ((*temp_r29) >= 300)
++        i = gm_80160474(CKIND_ZELDA, MJ_ADVENTURE);
++        fn_80172C78(i);
++      }
++    }
++    if (new_var >= 300)
+     {
+       ckind = gm_8016400C(i);
+       fn_80172C78(gm_80160474(ckind, MJ_ALLSTAR));
+@@ -929,7 +932,7 @@
+   {
+     fn_80172C78(0x116);
+   }
+-  if (un_80304690() != 0)
++  if ((un_80304690() != 0) & 0xFFFFu)
+   {
+     fn_80172C78(0xAF);
+   }

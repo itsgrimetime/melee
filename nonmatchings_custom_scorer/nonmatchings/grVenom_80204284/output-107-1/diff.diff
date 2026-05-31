@@ -1,0 +1,27 @@
+--- before
++++ after
+@@ -2290,10 +2290,12 @@
+   Ground_GObj *other_gobj;
+   Vec3 pos;
+   s32 timer;
++  volatile unsigned char new_var;
+   u32 pad;
+   gp = (Ground *) HSD_GObjGetUserData(gobj);
++  new_var = gp->gv.venom.xC4;
+   src_jobj = (HSD_JObj *) HSD_GObjGetHSDObj(gobj);
+-  dst_jobj = (HSD_JObj *) ((HSD_GObj *) gp->gv.venom.xC4)->hsd_obj;
++  dst_jobj = (HSD_JObj *) ((HSD_GObj *) new_var)->hsd_obj;
+   HSD_JObjGetTranslation(src_jobj, &pos);
+   HSD_JObjSetTranslate(dst_jobj, &pos);
+   Ground_801C39C0();
+@@ -2322,8 +2324,9 @@
+         if (Ground_801C2BA4(1) == 0L)
+         {
+           ifStatus_802F68F0();
++          new_var = 1;
+           un_802FF620();
+-          gp->gv.venom.xC8 = -1;
++          gp->gv.venom.xC8 = -new_var;
+         }
+       }
+     }

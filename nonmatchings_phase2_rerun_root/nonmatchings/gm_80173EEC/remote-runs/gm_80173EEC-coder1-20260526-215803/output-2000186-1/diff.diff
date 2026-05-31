@@ -1,0 +1,33 @@
+--- before
++++ after
+@@ -401,7 +401,7 @@
+ u8 gm_8016400C(u8 ckind);
+ bool gm_80164600(void);
+ bool gm_80164ABC(void);
+-bool fn_80164B48(void);
++volatile long long fn_80164B48(void);
+ bool un_80304470(void);
+ bool un_80304510(void);
+ int un_803045A0(void);
+@@ -856,6 +856,11 @@
+   return result;
+ }
+ 
++inline int inline_fn(u8 arg0)
++{
++  return arg0 == CKIND_SEAK;
++}
++
+ void gm_80173EEC(void)
+ {
+   int i;
+@@ -872,7 +877,8 @@
+       {
+         fn_80172C78(gm_80160474(CKIND_SEAK, MJ_CLASSIC));
+       }
+-      if (ckind == CKIND_SEAK)
++      i = inline_fn(ckind);
++      if (i)
+       {
+         fn_80172C78(gm_80160474(CKIND_ZELDA, MJ_CLASSIC));
+       }

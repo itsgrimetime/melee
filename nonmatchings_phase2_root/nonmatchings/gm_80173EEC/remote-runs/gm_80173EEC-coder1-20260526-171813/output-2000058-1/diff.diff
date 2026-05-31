@@ -1,0 +1,12 @@
+--- before
++++ after
+@@ -892,7 +892,8 @@
+     }
+     if ((*temp_r29) >= 300)
+     {
+-      ckind = gm_8016400C(i);
++      i = gm_8016400C(i);
++      ckind = i;
+       fn_80172C78(gm_80160474(ckind, MJ_ALLSTAR));
+       if (ckind == CKIND_ZELDA)
+       {

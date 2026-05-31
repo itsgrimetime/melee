@@ -1,0 +1,73 @@
+--- before
++++ after
+@@ -2281,34 +2281,48 @@
+ };
+ void grVenom_8020362C(void);
+ Ground_GObj *grVenom_80203EAC(int gobj_id);
++inline int inline_fn(int arg0)
++{
++  return -arg0;
++}
++
+ void grVenom_80204284(Ground_GObj *gobj)
+ {
+   Ground *gp;
+   HSD_JObj *src_jobj;
+   HSD_JObj *dst_jobj;
++  void *new_var5;
++  void *new_var;
++  Ground_GObj *new_var4;
++  struct grVenom_GroundVars *new_var3;
+   u32 pad2;
+   Ground_GObj *other_gobj;
+   Vec3 pos;
++  s32 new_var2;
+   s32 timer;
+   u32 pad;
++  src_jobj = (HSD_JObj *) HSD_GObjGetHSDObj(gobj);
++  new_var5 = (new_var = ((HSD_GObj *) gp->gv.venom.xC4)->hsd_obj);
++  dst_jobj = (HSD_JObj *) new_var5;
+   gp = (Ground *) HSD_GObjGetUserData(gobj);
+-  src_jobj = (HSD_JObj *) HSD_GObjGetHSDObj(gobj);
+-  dst_jobj = (HSD_JObj *) ((HSD_GObj *) gp->gv.venom.xC4)->hsd_obj;
+   HSD_JObjGetTranslation(src_jobj, &pos);
+   HSD_JObjSetTranslate(dst_jobj, &pos);
+   Ground_801C39C0();
++  new_var3 = &gp->gv.venom;
+   Ground_801C3BB4();
+-  timer = gp->gv.venom.xC8;
++  new_var2 = (s32) (*new_var3).xC8;
++  timer = (*new_var3).xC8;
+   if (timer > 0)
+   {
+     gp->gv.venom.xC8 = timer + 1;
+-    if (((s32) gp->gv.venom.xC8) >= 0x3C)
+-    {
+-      if (((s32) gp->gv.venom.xC8) == 0x3C)
++    if (new_var2 >= 0x3C)
++    {
++      new_var4 = (Ground_GObj *) grVenom_80203EAC(1);
++      if (new_var2 == 0x3C)
+       {
+         ifStatus_802F6898();
+         un_802FF570();
+-        other_gobj = (Ground_GObj *) grVenom_80203EAC(1);
++        other_gobj = new_var4;
+         if (other_gobj != 0L)
+         {
+           Ground *other_gp = (Ground *) HSD_GObjGetUserData(other_gobj);
+@@ -2318,12 +2332,10 @@
+       else
+       {
+         ifStatus_802F6898();
+-        un_802FF570();
+-        if (Ground_801C2BA4(1) == 0L)
+-        {
++ un_802FF570(); if (Ground_801C2BA4(1) == 0L) {
+           ifStatus_802F68F0();
+           un_802FF620();
+-          gp->gv.venom.xC8 = -1;
++          gp->gv.venom.xC8 = inline_fn(1);
+         }
+       }
+     }

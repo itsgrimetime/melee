@@ -1,0 +1,11 @@
+--- before
++++ after
+@@ -885,7 +885,7 @@
+       {
+         fn_80172C78(gm_80160474(CKIND_SEAK, MJ_ADVENTURE));
+       }
+-      if (ckind == CKIND_SEAK)
++      if (ckind == (i = CKIND_SEAK))
+       {
+         fn_80172C78(gm_80160474(CKIND_ZELDA, MJ_ADVENTURE));
+       }

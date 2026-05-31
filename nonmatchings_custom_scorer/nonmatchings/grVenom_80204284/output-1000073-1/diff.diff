@@ -1,0 +1,11 @@
+--- before
++++ after
+@@ -2224,7 +2224,7 @@
+ HSD_GObj *Ground_801C2BA4(s32);
+ bool Ground_801C2FE0(Ground_GObj *);
+ void Ground_801C39C0(void);
+-void Ground_801C3BB4(void);
++volatile char Ground_801C3BB4(void);
+ void un_802FF570(void);
+ void un_802FF620(void);
+ void ifStatus_802F6898(void);

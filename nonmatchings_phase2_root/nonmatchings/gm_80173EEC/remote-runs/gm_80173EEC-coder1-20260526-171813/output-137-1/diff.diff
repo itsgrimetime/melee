@@ -1,0 +1,82 @@
+--- before
++++ after
+@@ -856,6 +856,16 @@
+   return result;
+ }
+ 
++inline bool inline_fn()
++{
++  return un_80304780();
++}
++
++inline bool inline_fn2(u8 arg0, int arg1)
++{
++  return gm_80160474(arg0, arg1);
++}
++
+ void gm_80173EEC(void)
+ {
+   int i;
+@@ -864,43 +874,43 @@
+   for (i = 0; i < 0x19; i++)
+   {
+     temp_r29 = &gmMainLib_8015EDBC()->x18[i];
+-    if ((*temp_r29) >= 100)
++    if (100 <= (*temp_r29))
+     {
+       ckind = gm_8016400C(i);
+-      fn_80172C78(gm_80160474(ckind, MJ_CLASSIC));
++      fn_80172C78(inline_fn2(ckind, MJ_CLASSIC));
+       if (ckind == CKIND_ZELDA)
+       {
+-        fn_80172C78(gm_80160474(CKIND_SEAK, MJ_CLASSIC));
++        fn_80172C78(inline_fn2(CKIND_SEAK, MJ_CLASSIC));
+       }
+       if (ckind == CKIND_SEAK)
+       {
+-        fn_80172C78(gm_80160474(CKIND_ZELDA, MJ_CLASSIC));
++        fn_80172C78(inline_fn2(CKIND_ZELDA, MJ_CLASSIC));
+       }
+     }
+     if ((*temp_r29) >= 200)
+     {
+       ckind = gm_8016400C(i);
+-      fn_80172C78(gm_80160474(ckind, MJ_ADVENTURE));
++      fn_80172C78(inline_fn2(ckind, MJ_ADVENTURE));
+       if (ckind == CKIND_ZELDA)
+       {
+-        fn_80172C78(gm_80160474(CKIND_SEAK, MJ_ADVENTURE));
++        fn_80172C78(inline_fn2(CKIND_SEAK, MJ_ADVENTURE));
+       }
+       if (ckind == CKIND_SEAK)
+       {
+-        fn_80172C78(gm_80160474(CKIND_ZELDA, MJ_ADVENTURE));
++        fn_80172C78(inline_fn2(CKIND_ZELDA, MJ_ADVENTURE));
+       }
+     }
+     if ((*temp_r29) >= 300)
+     {
+       ckind = gm_8016400C(i);
+-      fn_80172C78(gm_80160474(ckind, MJ_ALLSTAR));
++      fn_80172C78(inline_fn2(ckind, MJ_ALLSTAR));
+       if (ckind == CKIND_ZELDA)
+       {
+-        fn_80172C78(gm_80160474(CKIND_SEAK, MJ_ALLSTAR));
++        fn_80172C78(inline_fn2(CKIND_SEAK, MJ_ALLSTAR));
+       }
+       if (ckind == CKIND_SEAK)
+       {
+-        fn_80172C78(gm_80160474(CKIND_ZELDA, MJ_ALLSTAR));
++        fn_80172C78(inline_fn2(CKIND_ZELDA, MJ_ALLSTAR));
+       }
+     }
+   }
+@@ -933,7 +943,7 @@
+   {
+     fn_80172C78(0xAF);
+   }
+-  if (un_80304780() != 0)
++  if (inline_fn() != 0)
+   {
+     fn_80172C78(0x100);
+   }

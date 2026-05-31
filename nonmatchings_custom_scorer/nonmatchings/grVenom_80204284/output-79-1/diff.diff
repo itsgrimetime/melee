@@ -1,0 +1,32 @@
+--- before
++++ after
+@@ -2162,7 +2162,7 @@
+   return result;
+ }
+ 
+-inline static void HSD_JObjSetTranslate(HSD_JObj *jobj, Vec3 *translate)
++inline static unsigned long HSD_JObjSetTranslate(HSD_JObj *jobj, Vec3 *translate)
+ {
+   (jobj) ? ((void) 0) : (__assert("src/sysdolphin/baselib/jobj.h", 916, "jobj"));
+   (translate) ? ((void) 0) : (__assert("src/sysdolphin/baselib/jobj.h", 917, "translate"));
+@@ -2291,17 +2291,18 @@
+   Vec3 pos;
+   s32 timer;
+   u32 pad;
++  Ground_801C3BB4();
+   gp = (Ground *) HSD_GObjGetUserData(gobj);
+   src_jobj = (HSD_JObj *) HSD_GObjGetHSDObj(gobj);
+   dst_jobj = (HSD_JObj *) ((HSD_GObj *) gp->gv.venom.xC4)->hsd_obj;
+   HSD_JObjGetTranslation(src_jobj, &pos);
+   HSD_JObjSetTranslate(dst_jobj, &pos);
+   Ground_801C39C0();
+-  Ground_801C3BB4();
+   timer = gp->gv.venom.xC8;
+   if (timer > 0)
+   {
+-    gp->gv.venom.xC8 = timer + 1;
++    gp->gv.venom.xC8 = timer;
++    gp->gv.venom.xC8 = gp->gv.venom.xC8 + 1;
+     if (((s32) gp->gv.venom.xC8) >= 0x3C)
+     {
+       if (((s32) gp->gv.venom.xC8) == 0x3C)

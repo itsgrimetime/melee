@@ -142,7 +142,14 @@ parser.add_argument(
     "--require-protos",
     dest="require_protos",
     action="store_true",
-    help="require function prototypes",
+    default=True,
+    help="require function prototypes (default: enabled)",
+)
+parser.add_argument(
+    "--no-require-protos",
+    dest="require_protos",
+    action="store_false",
+    help="disable function prototype requirement",
 )
 parser.add_argument(
     "--non-matching",
@@ -185,7 +192,7 @@ config.compilers_tag = "20251118"
 config.dtk_tag = "v1.8.3"
 config.objdiff_tag = "v3.6.1"
 config.sjiswrap_tag = "v1.2.2"
-config.wibo_tag = "0.7.0"
+config.wibo_tag = "1.0.0"
 
 # Project
 config.config_path = Path("config") / config.version / "config.yml"
@@ -457,7 +464,7 @@ config.libs = [
             Object(NonMatching, "melee/lb/lbmemory.c"),
             Object(NonMatching, "melee/lb/lbheap.c"),
             Object(Matching, "melee/lb/lbfile.c"),
-            Object(Matching, "melee/lb/lbarchive.c"),
+            Object(Equivalent, "melee/lb/lbarchive.c"),
             Object(Equivalent, "melee/lb/lbdvd.c"),
             Object(NonMatching, "melee/lb/lb_0192.c"),
             Object(NonMatching, "melee/lb/lbcardnew.c"),
@@ -642,17 +649,7 @@ config.libs = [
             Object(Matching, "melee/ft/chara/ftCommon/ftCo_HammerLanding.c"),
             Object(Matching, "melee/ft/chara/ftCommon/ftCo_0C60.c"),
             Object(Matching, "melee/ft/chara/ftCommon/ftCo_DemoCallback0.c"),
-            Object(Matching, "melee/ft/ft_0C31.c"),
-            Object(Matching, "melee/ft/ftCo_800C703C.c"),
-            Object(Matching, "melee/ft/ftCo_800C7070.c"),
-            Object(Matching, "melee/ft/ftCo_800C70D0.c"),
-            Object(Matching, "melee/ft/ftCo_800C7178.c"),
-            Object(Matching, "melee/ft/ftCo_800C7220.c"),
-            Object(Matching, "melee/ft/ftCo_800C739C.c"),
-            Object(Matching, "melee/ft/ftCo_800C7434.c"),
-            Object(Matching, "melee/ft/ftCo_800C7590.c"),
-            Object(Matching, "melee/ft/ftCo_800C78B0.c"),
-            Object(Matching, "melee/ft/ftCo_800C7CA0.c"),
+            Object(NonMatching, "melee/ft/ft_0C31.c"),
             Object(NonMatching, "melee/ft/ftmetal.c"),
             Object(Matching, "melee/ft/ft_0C88.c"),
             Object(Matching, "melee/ft/chara/ftCommon/ftCo_DownSpot.c"),
@@ -915,41 +912,7 @@ config.libs = [
             ),
             Object(Matching, "melee/ft/chara/ftMasterHand/ftMh_ThrownMasterHand.c"),
             # Crazy Hand
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_Init.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_Wait1_0.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_Entry.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_Damage_0.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_Sweep.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_SweepWait.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_Walk.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_Drill.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_RockCrush_0.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_RockCrush_1.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_Poke.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_FingerBeam_0.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_FingerBeam.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_BackAirplane1.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_BackAirplane2.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_BackAirplane3.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_BackCrush.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_BackDisappear.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_Wait1_1.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_Grab.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_Cancel.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_Squeezing_0.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_Squeezing_1.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_Squeeze.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_Throw.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_Slam.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_TagRockPaper.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_FingerGun2.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_TagGrab.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_GrabUnk1_B174.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_CaptureCrazyHand.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_CaptureDamageCrazyHand.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_CaptureWaitCrazyHand.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_ThrownCrazyHand.c"),
-            Object(Matching, "melee/ft/chara/ftCrazyHand/ftCh_TagCancel.c"),
+            Object(NonMatching, "melee/ft/chara/ftCrazyHand/ftCh_Init.c"),
             # Main
             Object(Matching, "melee/ft/ftbosslib.c"),
         ],
@@ -1051,7 +1014,7 @@ config.libs = [
             Object(Matching, "melee/gr/grtest.c"),
             Object(NonMatching, "melee/gr/grkinokoroute.c"),
             Object(NonMatching, "melee/gr/grshrineroute.c"),
-            Object(Matching, "melee/gr/grzebesroute.c"),
+            Object(NonMatching, "melee/gr/grzebesroute.c"),
             Object(NonMatching, "melee/gr/grbigblueroute.c"),
             Object(Matching, "melee/gr/grfigure1.c"),
             Object(Matching, "melee/gr/grfigure2.c"),
@@ -1067,7 +1030,7 @@ config.libs = [
             Object(Matching, "melee/gr/grbattle.c"),
             Object(Matching, "melee/gr/grlast.c"),
             Object(NonMatching, "melee/gr/grhomerun.c"),
-            Object(Matching, "melee/gr/grheal.c"),
+            Object(NonMatching, "melee/gr/grheal.c"),
             # Break the Targets stages
             Object(Matching, "melee/gr/grtmario.c"),
             Object(Matching, "melee/gr/grtcaptain.c"),
@@ -1153,18 +1116,10 @@ config.libs = [
             Object(Matching, "melee/it/it_26B1.c"),
             Object(NonMatching, "melee/it/it_266F.c"),
             Object(NonMatching, "melee/it/itcoll.c"),
-            Object(Matching, "melee/it/it_3F14.c"),
-            Object(Matching, "melee/it/it_2725.c"),
-            Object(Matching, "melee/it/ithitbox.c"),
-            Object(Matching, "melee/it/itmaplib.c"),
-            Object(Matching, "melee/it/itmaterial.c"),
-            Object(Matching, "melee/it/iteffect.c"),
-            Object(Matching, "melee/it/itanimlist.c"),
-            Object(Matching, "melee/it/it_279C.c"),
-            Object(Matching, "melee/it/itzako.c"),
+            Object(NonMatching, "melee/it/it_2725.c"),
             # Individual items
             Object(Matching, "melee/it/items/itcapsule.c"),
-            Object(Matching, "melee/it/items/itbombhei.c"),
+            Object(NonMatching, "melee/it/items/itbombhei.c"),
             Object(NonMatching, "melee/it/items/itdosei.c"),
             Object(Matching, "melee/it/items/itheart.c"),
             Object(Matching, "melee/it/items/ittomato.c"),
@@ -1183,7 +1138,7 @@ config.libs = [
             Object(Matching, "melee/it/items/itfoods.c"),
             Object(Matching, "melee/it/items/itmsbomb.c"),
             Object(NonMatching, "melee/it/items/itflipper.c"),
-            Object(Matching, "melee/it/items/itsscope.c"),
+            Object(NonMatching, "melee/it/items/itsscope.c"),
             Object(Matching, "melee/it/items/itstarrod.c"),
             Object(Matching, "melee/it/items/itharisen.c"),
             Object(Matching, "melee/it/items/itfflower.c"),
@@ -1313,7 +1268,7 @@ config.libs = [
             Object(Matching, "melee/it/items/itwhitebea.c"),
             # Stage-related items
             Object(Matching, "melee/it/items/itoctarock.c"),
-            Object(Matching, "melee/it/items/it_2E5A.c"),
+            Object(NonMatching, "melee/it/items/it_2E5A.c"),
             Object(Matching, "melee/it/items/it_2E6A.c"),
             Object(NonMatching, "melee/it/items/itarwinglaser.c"),
             Object(Matching, "melee/it/items/itoctarockstone.c"),
@@ -1324,7 +1279,7 @@ config.libs = [
             Object(Matching, "melee/it/items/itwhispyapple.c"),
             Object(Matching, "melee/it/items/ittools.c"),
             Object(Matching, "melee/it/items/itkyasarinegg.c"),
-            Object(Matching, "melee/it/items/itmasterhandlaser.c"),
+            Object(NonMatching, "melee/it/items/itmasterhandlaser.c"),
             Object(Matching, "melee/it/items/itmasterhandbullet.c"),
             Object(Matching, "melee/it/items/itcrazyhandbomb.c"),
             Object(Matching, "melee/it/items/itcoin.c"),
@@ -1369,7 +1324,7 @@ config.libs = [
             Object(Matching, "melee/vi/vi.c"),
             Object(Matching, "melee/vi/vi0102.c"),
             Object(NonMatching, "melee/vi/vi0401.c"),
-            Object(Matching, "melee/vi/vi0402.c"),
+            Object(NonMatching, "melee/vi/vi0402.c"),
             Object(NonMatching, "melee/vi/vi0501.c"),
             Object(NonMatching, "melee/vi/vi0502.c"),
             Object(Matching, "melee/vi/vi0601.c"),
@@ -1721,7 +1676,6 @@ config.libs = [
                 extra_cflags=["-Cpp_exceptions on"],
             ),
             Object(NonMatching, "sysdolphin/baselib/hsd_3B34.c"),
-            Object(NonMatching, "sysdolphin/baselib/hsd_3B5C.c"),
         ],
     ),
 ]
@@ -1762,8 +1716,41 @@ config.progress_report_args = [
     # "--config functionRelocDiffs=data_value",
 ]
 
+def _purge_wrong_arch_wibo(config: ProjectConfig) -> None:
+    """Fork-only: drop build/tools/wibo if it's wrong arch for this host.
+
+    download_tool.py picks the correct wibo binary per platform, but once a
+    binary exists at build/tools/wibo, ninja won't redownload. The wrong-arch
+    binary can land there via cross-host worktree copies, stale state from a
+    prior platform, or an older download_tool.py that used the legacy URL.
+    Removing it lets the next build fetch a fresh one.
+    """
+    wibo = config.build_dir / "tools" / "wibo"
+    if not wibo.exists():
+        return
+    try:
+        with open(wibo, "rb") as f:
+            magic = f.read(4)
+    except OSError:
+        return
+    is_macho = magic in (
+        b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf",
+        b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe",
+    )
+    is_elf = magic == b"\x7fELF"
+    correct = is_macho if sys.platform == "darwin" else is_elf
+    if not correct:
+        kind = "Mach-O" if sys.platform == "darwin" else "ELF"
+        print(
+            f"warning: {wibo} is wrong arch (expected {kind} for {sys.platform}); "
+            "removing so it will be re-downloaded"
+        )
+        wibo.unlink()
+
+
 if args.mode == "configure":
     # Write build.ninja and objdiff.json
+    _purge_wrong_arch_wibo(config)
     generate_build(config)
 elif args.mode == "progress":
     # Print progress information

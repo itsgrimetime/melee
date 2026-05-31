@@ -1,0 +1,22 @@
+--- before
++++ after
+@@ -858,8 +858,9 @@
+ 
+ void gm_80173EEC(void)
+ {
++  volatile long long pad;
+   int i;
+-  u8 ckind;
++  volatile long long ckind;
+   u16 *temp_r29;
+   for (i = 0; i < 0x19; i++)
+   {
+@@ -937,7 +938,7 @@
+   {
+     fn_80172C78(0x100);
+   }
+-  if (gm_80173EEC_inline())
++  if (gm_80173EEC_inline() != 0.0f)
+   {
+     fn_80172C78(0x123);
+   }

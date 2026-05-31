@@ -1,0 +1,31 @@
+--- before
++++ after
+@@ -877,15 +877,15 @@
+         fn_80172C78(gm_80160474(CKIND_ZELDA, MJ_CLASSIC));
+       }
+     }
+-    if ((*temp_r29) >= 200)
+-    {
+-      ckind = gm_8016400C(i);
++    if (((*temp_r29) - 1) >= (200 - 1))
++    {
++      ckind = (i = gm_8016400C(i));
+       fn_80172C78(gm_80160474(ckind, MJ_ADVENTURE));
+       if (ckind == CKIND_ZELDA)
+       {
+         fn_80172C78(gm_80160474(CKIND_SEAK, MJ_ADVENTURE));
+       }
+-      if (ckind == CKIND_SEAK)
++      if (i == CKIND_SEAK)
+       {
+         fn_80172C78(gm_80160474(CKIND_ZELDA, MJ_ADVENTURE));
+       }
+@@ -927,7 +927,7 @@
+   }
+   if (un_803045A0() != 0)
+   {
+-    fn_80172C78(0x116);
++    fn_80172C78(0x116 & 0xFFFFFFFFFFFFFFFFu);
+   }
+   if (un_80304690() != 0)
+   {

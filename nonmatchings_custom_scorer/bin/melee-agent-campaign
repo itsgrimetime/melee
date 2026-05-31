@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export PYTHONPATH="/Users/mike/.codex/worktrees/67c8/melee/tools/melee-agent${PYTHONPATH:+:$PYTHONPATH}"
+cd /Users/mike/code/melee
+exec python -m src.cli "$@"

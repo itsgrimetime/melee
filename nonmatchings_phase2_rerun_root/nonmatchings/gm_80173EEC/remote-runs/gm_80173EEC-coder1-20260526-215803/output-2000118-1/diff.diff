@@ -1,0 +1,19 @@
+--- before
++++ after
+@@ -861,7 +861,7 @@
+   int i;
+   u8 ckind;
+   u16 *temp_r29;
+-  for (i = 0; i < 0x19; i++)
++  for (i = 0; (float) (i < 0x19); i++)
+   {
+     temp_r29 = &gmMainLib_8015EDBC()->x18[i];
+     if ((*temp_r29) >= 100)
+@@ -883,6 +883,7 @@
+       fn_80172C78(gm_80160474(ckind, MJ_ADVENTURE));
+       if (ckind == CKIND_ZELDA)
+       {
++        i = 0;
+         fn_80172C78(gm_80160474(CKIND_SEAK, MJ_ADVENTURE));
+       }
+       if (ckind == CKIND_SEAK)

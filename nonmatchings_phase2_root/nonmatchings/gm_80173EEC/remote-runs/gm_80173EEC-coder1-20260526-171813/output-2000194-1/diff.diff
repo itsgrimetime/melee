@@ -1,0 +1,39 @@
+--- before
++++ after
+@@ -856,6 +856,11 @@
+   return result;
+ }
+ 
++inline bool inline_fn()
++{
++  return gm_80173EEC_inline();
++}
++
+ void gm_80173EEC(void)
+ {
+   int i;
+@@ -868,7 +873,8 @@
+     {
+       ckind = gm_8016400C(i);
+       fn_80172C78(gm_80160474(ckind, MJ_CLASSIC));
+-      if (ckind == CKIND_ZELDA)
++      i = ckind == CKIND_ZELDA;
++      if (i)
+       {
+         fn_80172C78(gm_80160474(CKIND_SEAK, MJ_CLASSIC));
+       }
+@@ -933,11 +939,12 @@
+   {
+     fn_80172C78(0xAF);
+   }
+-  if (un_80304780() != 0)
++  ckind = un_80304780();
++  if (ckind != 0)
+   {
+     fn_80172C78(0x100);
+   }
+-  if (gm_80173EEC_inline())
++  if (inline_fn())
+   {
+     fn_80172C78(0x123);
+   }

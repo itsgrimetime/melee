@@ -1,0 +1,19 @@
+--- before
++++ after
+@@ -863,6 +863,7 @@
+   u16 *temp_r29;
+   for (i = 0; i < 0x19; i++)
+   {
++    i = gm_8016400C(i);
+     temp_r29 = &gmMainLib_8015EDBC()->x18[i];
+     if ((*temp_r29) >= 100)
+     {
+@@ -892,7 +893,7 @@
+     }
+     if ((*temp_r29) >= 300)
+     {
+-      ckind = gm_8016400C(i);
++      ckind = i;
+       fn_80172C78(gm_80160474(ckind, MJ_ALLSTAR));
+       if (ckind == CKIND_ZELDA)
+       {

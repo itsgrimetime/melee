@@ -1,0 +1,25 @@
+--- before
++++ after
+@@ -406,7 +406,7 @@
+ bool un_80304510(void);
+ int un_803045A0(void);
+ int un_80304690(void);
+-bool un_80304780(void);
++unsigned long long un_80304780(void);
+ bool gmMainLib_8015CF94(void);
+ bool gmMainLib_8015D508(void);
+ int gmMainLib_8015D94C(u32);
+@@ -894,11 +894,12 @@
+     {
+       ckind = gm_8016400C(i);
+       fn_80172C78(gm_80160474(ckind, MJ_ALLSTAR));
++      i = CKIND_SEAK;
+       if (ckind == CKIND_ZELDA)
+       {
+         fn_80172C78(gm_80160474(CKIND_SEAK, MJ_ALLSTAR));
+       }
+-      if (ckind == CKIND_SEAK)
++      if (ckind == i)
+       {
+         fn_80172C78(gm_80160474(CKIND_ZELDA, MJ_ALLSTAR));
+       }
