@@ -2375,6 +2375,46 @@ def _read_frame_reservation_expected_asm(
     return asm_path.read_text()
 
 
+def _read_frame_reservation_current_asm(
+    function: str,
+    *,
+    melee_root: Path,
+) -> str | None:
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "tools/checkdiff.py",
+            function,
+            "--format",
+            "json",
+            "--no-build",
+        ],
+        cwd=melee_root,
+        capture_output=True,
+        text=True,
+        env=_checkdiff_env_without_fingerprint(),
+    )
+    if proc.returncode not in (0, 1):
+        return None
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return None
+    current_asm = payload.get("current_asm")
+    if not isinstance(current_asm, list) or not all(
+        isinstance(line, str) for line in current_asm
+    ):
+        return None
+    return "\n".join(current_asm)
+
+
+def _pcdump_has_symbolic_stack_homes(pcdump_text: str) -> bool:
+    return bool(re.search(
+        r"@[A-Za-z0-9_]\w*(?:[+-]\d+)?\s*\(\s*r1\s*\)",
+        pcdump_text,
+    ))
+
+
 def _format_stack_range(item: Mapping[str, object]) -> str:
     start = int(item["start"])
     end = int(item["end"])
@@ -2458,17 +2498,24 @@ def frame_reservations(
     """Inspect stack-frame gaps and implicit reserved ranges."""
     melee_root = DEFAULT_MELEE_ROOT
     pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
+    pcdump_text = pcdump_path.read_text()
     expected_text = _read_frame_reservation_expected_asm(
         function,
         expected_asm=expected_asm,
         no_expected=no_expected,
         melee_root=melee_root,
     )
+    current_text = (
+        _read_frame_reservation_current_asm(function, melee_root=melee_root)
+        if _pcdump_has_symbolic_stack_homes(pcdump_text)
+        else None
+    )
     try:
         report = analyze_frame_reservations(
-            pcdump_path.read_text(),
+            pcdump_text,
             function,
             expected_asm_text=expected_text,
+            current_asm_text=current_text,
         )
     except ValueError as exc:
         typer.echo(str(exc), err=True)

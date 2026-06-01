@@ -107,3 +107,74 @@ def test_frame_reservation_report_labels_callee_save_access_ranges() -> None:
         {"start": 8, "end": 24, "size": 16},
         {"start": 40, "end": 48, "size": 8},
     ]
+
+
+def test_frame_reservation_resolves_symbolic_stack_homes_from_current_asm() -> None:
+    pcdump = textwrap.dedent("""\
+        Starting function fn_80000001
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        fn_80000001
+        B0: Succ={} Pred={} Labels={}
+            stwu    r1,-168(r1)
+            stfs    f0,@810(r1); fIsVolatile
+            lfs     f31,@810(r1); fIsVolatile
+            addi    r1,r1,168
+    """)
+    current_asm = textwrap.dedent("""\
+        +000: 94 21 ff 58 \tstwu    r1,-168(r1)
+        +004: d0 01 00 30 \tstfs    f0,48(r1)
+        +008: c3 e1 00 30 \tlfs     f31,48(r1)
+        +00c: 38 21 00 a8 \taddi    r1,r1,168
+    """)
+
+    report = analyze_frame_reservations(
+        pcdump,
+        "fn_80000001",
+        current_asm_text=current_asm,
+    )
+
+    accesses = [
+        item
+        for item in report["current"]["accesses"]
+        if item["opcode"] in {"stfs", "lfs"}
+    ]
+    assert [item["offset"] for item in accesses] == [0x30, 0x30]
+    assert all(item["original_operands"].endswith("@810(r1)") for item in accesses)
+    assert all(item["symbolic_home"] == "@810" for item in accesses)
+    assert report["current"]["symbolic_home_map"] == [
+        {"symbol": "@810", "offset": 0x30}
+    ]
+    assert report["current"]["unresolved_symbolic_homes"] == []
+    assert {
+        "start": 0x30,
+        "end": 0x34,
+        "size": 4,
+        "kind": "local-or-temporary",
+    } in report["current"]["access_ranges"]
+
+
+def test_frame_reservation_reports_unresolved_symbolic_homes_without_offset() -> None:
+    pcdump = textwrap.dedent("""\
+        Starting function fn_80000001
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        fn_80000001
+        B0: Succ={} Pred={} Labels={}
+            stwu    r1,-168(r1)
+            stfs    f0,@810(r1); fIsVolatile
+            addi    r1,r1,168
+    """)
+
+    report = analyze_frame_reservations(pcdump, "fn_80000001")
+
+    assert report["current"]["access_ranges"] == []
+    assert report["current"]["accesses"] == []
+    assert report["current"]["unresolved_symbolic_homes"] == [
+        {
+            "symbol": "@810",
+            "opcode": "stfs",
+            "operands": "f0,@810(r1)",
+            "pass": "FINAL CODE AFTER INSTRUCTION SCHEDULING",
+            "block_idx": 0,
+            "instr_idx": 1,
+        }
+    ]
