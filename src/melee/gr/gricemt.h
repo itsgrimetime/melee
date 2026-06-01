@@ -73,6 +73,10 @@ struct IceMountainParams {
 };
 
 extern f32 grIm_804DB570;
+extern f32 grIm_804DB574;
+extern f32 grIm_804DB5B0;
+extern f32 grIm_804DB5B4;
+extern f32 grIm_804DB5B8;
 
 /* 1F6868 */ void grIceMt_801F6868(bool id);
 /* 1F686C */ void grIceMt_801F686C(void);
