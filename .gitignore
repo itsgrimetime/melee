@@ -68,6 +68,7 @@ venv.bak/
 
 # Build artifacts
 build/
+/nonmatchings/
 *.o
 *.elf
 *.map

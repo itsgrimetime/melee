@@ -611,6 +611,75 @@ def test_debug_permute_bootstrap_source_file_stages_variant_and_restores(
     ).read_text()
 
 
+def test_debug_permute_bootstrap_promotes_fresh_worktree_import(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    perm_root = tmp_path / "decomp-permuter"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text("void fn_80000000(void) { fresh_token(); }\n")
+    perm_root.mkdir()
+    (perm_root / "import.py").write_text("")
+
+    stale_worktree_dir = melee_root / "nonmatchings" / "fn_80000000"
+    stale_worktree_dir.mkdir(parents=True)
+    (stale_worktree_dir / "base.c").write_text("stale worktree base\n")
+
+    destination = perm_root / "nonmatchings" / "fn_80000000"
+    destination.mkdir(parents=True)
+    (destination / "base.c").write_text("stale perm root base\n")
+    (destination / "settings.toml").write_text("custom = true\n")
+    output_dir = destination / "output-1-1"
+    output_dir.mkdir()
+    (output_dir / "source.c").write_text("candidate output\n")
+
+    def fake_run(argv, *, cwd=None, capture_output=False, text=False, check=False, **kwargs):
+        argv = [str(part) for part in argv]
+        if "import.py" in argv[1]:
+            imported = melee_root / "nonmatchings" / "fn_80000000-2"
+            imported.mkdir(parents=True)
+            (imported / "base.c").write_text("fresh_token from import\n")
+            (imported / "compile.sh").write_text("#!/usr/bin/env bash\n")
+            (imported / "target.s").write_text("target asm\n")
+            (imported / "target.o").write_bytes(b"target")
+            (imported / "settings.toml").write_text("stock = true\n")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/mn/sample",
+    )
+    monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "bootstrap",
+            "-f",
+            "fn_80000000",
+            "--perm-root",
+            str(perm_root),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["function_dir"] == str(destination)
+    assert (destination / "base.c").read_text() == "fresh_token from import\n"
+    assert (destination / "compile.sh").exists()
+    assert (destination / "target.o").read_bytes() == b"target"
+    assert (destination / "settings.toml").read_text() == "custom = true\n"
+    assert (output_dir / "source.c").read_text() == "candidate output\n"
+    assert not (melee_root / "nonmatchings" / "fn_80000000-2").exists()
+
+
 def test_permuter_function_dir_accepts_worktree_import_path(tmp_path: Path) -> None:
     melee_root = tmp_path / "melee"
     perm_root = tmp_path / "decomp-permuter"
@@ -1836,14 +1905,16 @@ def test_refresh_match_pct_reports_persistent_report_json_decode(
     assert "JSON" in diagnostic
 
 
-def test_dump_local_force_phys_help_does_not_claim_class_filtering() -> None:
+def test_dump_local_force_phys_help_describes_class_filtering() -> None:
     result = runner.invoke(app, ["debug", "dump", "local", "--help"])
 
     assert result.exit_code == 0
     out = strip_ansi(result.stdout)
-    assert "The DLL" in out
-    assert "ignores the class prefix" in out
-    assert "class-scoped, avoids ambiguous FP override" not in out
+    normalized = " ".join(out.split())
+    assert "Class-scoped entries are passed" in normalized
+    assert "through to the DLL" in normalized
+    assert "apply to that register class" in normalized
+    assert "ignores the class prefix" not in normalized
 
 
 def test_dump_local_diff_holds_checkdiff_lock_while_staging_object(

@@ -187,6 +187,50 @@ def test_classify_asm_diff_localizes_same_frame_compiler_temp_stack_slot() -> No
     )
 
 
+def test_classify_asm_diff_detects_indexed_struct_pointer_materialization() -> None:
+    checkdiff = _load_checkdiff()
+    expected = [
+        "<fn_80000000>:",
+        "+000: lwz r5, 4(r4)",
+        "+004: lwzx r0, r5, r29",
+        "+008: lwz r6, 8(r4)",
+        "+00c: lwzx r3, r6, r29",
+    ]
+    current = [
+        "<fn_80000000>:",
+        "+000: lwz r5, 4(r4)",
+        "+004: add r4, r5, r29",
+        "+008: lwz r0, 0(r4)",
+        "+00c: lwz r3, 8(r4)",
+    ]
+
+    classification = checkdiff.classify_asm_diff(expected, current)
+
+    assert classification["primary"] == "indexed-struct-pointer-materialization"
+    hint = "\n".join(classification["reasons"])
+    assert "indexed struct array" in hint
+    assert "materializes an element pointer" in hint
+    assert "split the first field into a scalar local" in hint
+    assert "avoid a live per-element pointer" in hint
+    assert classification["indexed_struct_pointer_materialization"] == {
+        "expected_indexed_ops": [
+            {"line_index": 2, "opcode": "lwzx", "body": "lwzx r0, r5, r29"},
+            {"line_index": 4, "opcode": "lwzx", "body": "lwzx r3, r6, r29"},
+        ],
+        "current_materialized_pointers": [
+            {
+                "line_index": 2,
+                "add": "add r4, r5, r29",
+                "pointer_register": "r4",
+                "field_accesses": [
+                    {"line_index": 3, "body": "lwz r0, 0(r4)"},
+                    {"line_index": 4, "body": "lwz r3, 8(r4)"},
+                ],
+            }
+        ],
+    }
+
+
 def test_stack_slot_localizer_accepts_pcdump_bridge() -> None:
     checkdiff = _load_checkdiff()
     expected = [

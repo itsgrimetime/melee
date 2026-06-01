@@ -2896,6 +2896,86 @@ def _resolve_permuter_function_dir(
     return perm_dir
 
 
+def _permuter_import_dirs(
+    function: str,
+    *,
+    perm_root: Path,
+    melee_root: Path,
+) -> set[Path]:
+    pattern = re.compile(rf"^{re.escape(function)}(?:-\d+)?$")
+    roots = {perm_root, melee_root}
+    dirs: set[Path] = set()
+    for root in roots:
+        nonmatchings = root / "nonmatchings"
+        if not nonmatchings.is_dir():
+            continue
+        for child in nonmatchings.iterdir():
+            if child.is_dir() and pattern.match(child.name):
+                dirs.add(child)
+    return dirs
+
+
+def _detect_new_permuter_import_dir(
+    function: str,
+    before: set[Path],
+    *,
+    perm_root: Path,
+    melee_root: Path,
+) -> Optional[Path]:
+    new_dirs = _permuter_import_dirs(
+        function,
+        perm_root=perm_root,
+        melee_root=melee_root,
+    ) - before
+    if not new_dirs:
+        return None
+    return max(new_dirs, key=lambda path: path.stat().st_mtime)
+
+
+def _replace_path_from(src: Path, dst: Path) -> None:
+    if dst.exists():
+        if dst.is_dir() and not dst.is_symlink():
+            shutil.rmtree(dst)
+        else:
+            dst.unlink()
+    shutil.move(str(src), str(dst))
+
+
+def _promote_permuter_import_dir(
+    imported_dir: Path,
+    *,
+    function: str,
+    perm_root: Path,
+    keep_existing_settings: bool,
+) -> Path:
+    """Move fresh import.py output into <perm_root>/nonmatchings/<function>.
+
+    decomp-permuter's import.py chooses the output root from the imported source
+    path, so importing a Melee source normally writes to the matcher worktree's
+    nonmatchings directory. Normalize the fresh import into the decomp-permuter
+    checkout and refresh generated files without deleting existing output-* dirs.
+    """
+    dest_dir = perm_root / "nonmatchings" / function
+    if imported_dir.resolve() == dest_dir.resolve():
+        return dest_dir
+
+    dest_dir.parent.mkdir(parents=True, exist_ok=True)
+    if not dest_dir.exists():
+        shutil.move(str(imported_dir), str(dest_dir))
+        return dest_dir
+
+    for child in imported_dir.iterdir():
+        if (
+            child.name == "settings.toml"
+            and keep_existing_settings
+            and (dest_dir / child.name).exists()
+        ):
+            continue
+        _replace_path_from(child, dest_dir / child.name)
+    shutil.rmtree(imported_dir, ignore_errors=True)
+    return dest_dir
+
+
 def _looks_like_decomp_permuter_root(path: Path) -> bool:
     return (path / "permuter.py").is_file() and (path / "src" / "compiler.py").is_file()
 
@@ -3117,6 +3197,11 @@ def permute_bootstrap(
         typer.echo(f"decomp-permuter import.py not found: {import_py}", err=True)
         raise typer.Exit(2)
 
+    before_import_dirs = _permuter_import_dirs(
+        function,
+        perm_root=perm_root,
+        melee_root=melee_root,
+    )
     asm_path = _tmp_asm_path_for_function(function)
     extract_cmd = [
         "melee-agent",
@@ -3165,10 +3250,23 @@ def permute_bootstrap(
         typer.echo(import_proc.stderr or import_proc.stdout, err=True)
         raise typer.Exit(import_proc.returncode or 1)
 
-    fn_dir = _resolve_permuter_function_dir(
+    imported_dir = _detect_new_permuter_import_dir(
         function,
+        before_import_dirs,
         perm_root=perm_root,
         melee_root=melee_root,
+    )
+    if imported_dir is None:
+        imported_dir = _resolve_permuter_function_dir(
+            function,
+            perm_root=perm_root,
+            melee_root=melee_root,
+        )
+    fn_dir = _promote_permuter_import_dir(
+        imported_dir,
+        function=function,
+        perm_root=perm_root,
+        keep_existing_settings=not force,
     )
     if not fn_dir.exists():
         typer.echo(

@@ -613,6 +613,124 @@ def _detect_inline_boundary_artifact(
     }
 
 
+_REG_RE = re.compile(r"^r(?:[0-9]|[12][0-9]|3[01])$")
+_STRUCT_INDEXED_OPS = {
+    "lbzx",
+    "lhzx",
+    "lhax",
+    "lwzx",
+    "lfsx",
+    "lfdx",
+    "stbx",
+    "sthx",
+    "stwx",
+    "stfsx",
+    "stfdx",
+}
+_STRUCT_OFFSET_OPS = {
+    "lbz",
+    "lha",
+    "lhz",
+    "lwz",
+    "lfs",
+    "lfd",
+    "stb",
+    "sth",
+    "stw",
+    "stfs",
+    "stfd",
+}
+_REG_OFFSET_OPERAND_RE = re.compile(
+    r"^(?:-?(?:0x[0-9A-Fa-f]+|\d+))\s*\(\s*(r(?:[0-9]|[12][0-9]|3[01]))\s*\)$"
+)
+
+
+def _split_operands(operands: str) -> list[str]:
+    return [operand.strip() for operand in operands.split(",") if operand.strip()]
+
+
+def _is_gpr(token: str) -> bool:
+    return _REG_RE.match(token) is not None
+
+
+def detect_indexed_struct_pointer_materialization(
+    ref_lines: list[str],
+    our_lines: list[str],
+) -> Optional[dict]:
+    expected_indexed_ops: list[dict] = []
+    for line_index, line in enumerate(ref_lines):
+        body = _asm_body(line)
+        parts = body.split(None, 1)
+        if len(parts) != 2 or parts[0] not in _STRUCT_INDEXED_OPS:
+            continue
+        operands = _split_operands(parts[1])
+        if len(operands) >= 3 and _is_gpr(operands[-2]) and _is_gpr(operands[-1]):
+            expected_indexed_ops.append({
+                "line_index": line_index,
+                "opcode": parts[0],
+                "body": body,
+            })
+
+    current_materialized: list[dict] = []
+    for line_index, line in enumerate(our_lines):
+        body = _asm_body(line)
+        parts = body.split(None, 1)
+        if len(parts) != 2 or parts[0] != "add":
+            continue
+        operands = _split_operands(parts[1])
+        if len(operands) != 3 or not all(_is_gpr(operand) for operand in operands):
+            continue
+        pointer_reg = operands[0]
+        field_accesses: list[dict] = []
+        for nearby_index in range(line_index + 1, min(len(our_lines), line_index + 5)):
+            nearby_body = _asm_body(our_lines[nearby_index])
+            nearby_parts = nearby_body.split(None, 1)
+            if len(nearby_parts) != 2 or nearby_parts[0] not in _STRUCT_OFFSET_OPS:
+                continue
+            nearby_operands = _split_operands(nearby_parts[1])
+            if not nearby_operands:
+                continue
+            if any(
+                (match := _REG_OFFSET_OPERAND_RE.match(operand))
+                and match.group(1) == pointer_reg
+                for operand in nearby_operands
+            ):
+                field_accesses.append({
+                    "line_index": nearby_index,
+                    "body": nearby_body,
+                })
+        if field_accesses:
+            current_materialized.append({
+                "line_index": line_index,
+                "add": body,
+                "pointer_register": pointer_reg,
+                "field_accesses": field_accesses,
+            })
+
+    if not expected_indexed_ops or not current_materialized:
+        return None
+    return {
+        "expected_indexed_ops": expected_indexed_ops,
+        "current_materialized_pointers": current_materialized,
+    }
+
+
+def format_indexed_struct_pointer_materialization_diagnostic(diag: dict) -> str:
+    expected_count = len(diag.get("expected_indexed_ops") or [])
+    current_count = len(diag.get("current_materialized_pointers") or [])
+    return (
+        "indexed struct array pointer-shape hint: expected keeps the array base "
+        f"plus byte/index offset for {expected_count} indexed "
+        f"{_plural(expected_count, 'load/store')}, while current materializes an "
+        "element pointer shape "
+        f"{current_count} element {_plural(current_count, 'pointer')} with add "
+        "and then accesses fields through that pointer. For MWCC, split "
+        "the first field into a scalar local and keep later dyn_desc/"
+        "field accesses as direct array.base+offset expressions; avoid a live "
+        "per-element pointer across calls or loops."
+    )
+
+
 _STACK_FRAME_ALLOC_RE = re.compile(
     r"\bstwu\s+r1\s*,\s*(-?(?:0x[0-9A-Fa-f]+|\d+))\s*\(\s*r1\s*\)"
 )
@@ -1022,6 +1140,9 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
         ref_calls,
         our_calls,
     )
+    indexed_struct_pointer_materialization = (
+        detect_indexed_struct_pointer_materialization(ref_lines, our_lines)
+    )
 
     if len(ref_lines) != len(our_lines):
         reasons.append(f"line count differs: expected {len(ref_lines)}, current {len(our_lines)}")
@@ -1107,6 +1228,12 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
             "likely wibo/local compiler inlined locally across an inline boundary"
         )
         primary = "inline-boundary-toolchain-artifact"
+    if indexed_struct_pointer_materialization:
+        reasons.append(format_indexed_struct_pointer_materialization_diagnostic(
+            indexed_struct_pointer_materialization
+        ))
+        if primary in {"instruction-sequence", "operand-register-or-offset", "register-allocation"}:
+            primary = "indexed-struct-pointer-materialization"
 
     if not reasons:
         reasons.append("differences require direct inspection")
@@ -1118,6 +1245,10 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
         result["stack_slot_localizer"] = stack_slot_localizer
     if inline_boundary_artifact:
         result["inline_boundary_artifact"] = inline_boundary_artifact
+    if indexed_struct_pointer_materialization:
+        result["indexed_struct_pointer_materialization"] = (
+            indexed_struct_pointer_materialization
+        )
     return result
 
 
