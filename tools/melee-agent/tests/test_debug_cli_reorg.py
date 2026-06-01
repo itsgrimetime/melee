@@ -3001,6 +3001,120 @@ def test_tier3_search_no_improvement_is_successful_search_outcome(
     assert "No seed produced a permuter improvement" in strip_ansi(result.stderr)
 
 
+def test_tier3_search_falls_back_to_source_shape_probe_seeds(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from src.mwcc_debug.pressure_explorer import LifetimeLayoutProbe
+
+    melee_root = tmp_path / "melee"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    base_source = "void fn_80000000(void) { int x; x = 1; }\n"
+    patched_source = "void fn_80000000(void) { int x; int cursor; x = 1; }\n"
+    src_path.write_text(base_source)
+    pcdump_path = tmp_path / "pcdump.txt"
+    pcdump_path.write_text("pcdump fixture")
+    target_path = tmp_path / "target.json"
+    target_path.write_text("{}")
+
+    perm_root = tmp_path / "permuter"
+    perm_dir = perm_root / "nonmatchings" / "fn_80000000"
+    perm_dir.mkdir(parents=True)
+    for name in ("target.o", "settings.toml"):
+        (perm_dir / name).write_text("")
+    (perm_dir / "compile.sh").write_text("#!/bin/sh\n")
+
+    wibo = tmp_path / "wibo"
+    compiler_dir = tmp_path / "compiler"
+    compiler_dir.mkdir()
+    wibo.write_text("")
+    (compiler_dir / "mwcceppc_debug.exe").write_text("")
+    wrapper = (
+        melee_root / "tools" / "melee-agent" / "scripts"
+        / "permute_with_mwcc.py"
+    )
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text("")
+
+    pre = object()
+    parsed_fn = SimpleNamespace(name="fn_80000000", last_precolor_pass=lambda: pre)
+    compile_result = tier3_mod.CompileResult(
+        ok=True,
+        stderr="",
+        stdout="",
+        one_line_reason="",
+    )
+
+    import src.mwcc_debug.pressure_explorer as pressure_explorer
+    import src.mwcc_debug.symbol_bridge as symbol_bridge
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(debug_cli, "_find_unit_for_function", lambda function, root: "melee/mn/sample")
+    monkeypatch.setattr(debug_cli, "_resolve_pcdump_path", lambda path, function, root=None: pcdump_path)
+    monkeypatch.setattr(debug_cli, "parse_pcdump", lambda text: [parsed_fn])
+    monkeypatch.setattr(symbol_bridge, "list_bindings", lambda source, function, pass_obj: [])
+    monkeypatch.setattr(tier3_mod, "plan_seeds", lambda bindings, budget, include_low_confidence: [])
+    monkeypatch.setattr(
+        pressure_explorer,
+        "generate_lifetime_layout_probes",
+        lambda source, function, max_probes=12: [
+            LifetimeLayoutProbe(
+                label="case-c2-loop-cursor",
+                operator="temp-introduction",
+                description="rebind loop cursor temp",
+                source_text=patched_source,
+            )
+        ],
+    )
+    monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+    monkeypatch.setattr(debug_cli, "_find_compiler_dir", lambda: compiler_dir)
+    monkeypatch.setattr(debug_cli, "_ninja_cflags_for_unit", lambda src_rel: ("", "mwcc"))
+    monkeypatch.setattr(tier3_mod, "smoke_compile", lambda *args, **kwargs: compile_result)
+
+    def fake_run_per_seed_permute(**kwargs):
+        return tier3_mod.PerSeedPermuteResult(
+            seed_idx=kwargs["seed_idx"],
+            plan=kwargs["plan"],
+            seed_dir=kwargs["seed_dir"],
+            best_candidate=None,
+            best_score=None,
+            baseline_score=None,
+            delta=0,
+            ran_seconds=0.0,
+        )
+
+    monkeypatch.setattr(tier3_mod, "run_per_seed_permute", fake_run_per_seed_permute)
+    monkeypatch.setattr(tier3_mod, "rank_seed_results", lambda results: results)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "search",
+            "-f",
+            "fn_80000000",
+            "--budget",
+            "1",
+            "--per-seed-time",
+            "1",
+            "--total-time",
+            "1",
+            "--perm-root",
+            str(perm_root),
+            "--target",
+            str(target_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    out = strip_ansi(result.stdout)
+    assert "source-shape probe fallback" in out
+    assert "case-c2-loop-cursor" in out
+    assert (perm_dir / "tier3_seed_0" / "base.c").read_text() == patched_source
+
+
 def test_debug_guide_warns_when_no_target_is_loaded(monkeypatch, tmp_path: Path) -> None:
     pcdump = tmp_path / "sample.pcdump.txt"
     pcdump.write_text("placeholder\n")

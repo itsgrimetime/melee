@@ -13,7 +13,9 @@ from src.mwcc_debug.tier3_search import (
     SeedPlan,
     _extract_one_line_reason,
     find_best_candidate,
+    materialize_seed,
     plan_seeds,
+    plan_seeds_from_lifetime_layout_probes,
     rank_seed_results,
     run_per_seed_permute,
     smoke_compile,
@@ -417,3 +419,42 @@ def test_plan_seeds_from_source_anchors_adds_arg_temp_seed() -> None:
     assert plans[0].mutator == "source-shape"
     assert plans[0].target_var == "r46_r50"
     assert "compiler temp" in plans[0].description
+
+
+def test_plan_seeds_from_lifetime_layout_probes_preserves_source_text() -> None:
+    from src.mwcc_debug.pressure_explorer import LifetimeLayoutProbe
+
+    probe = LifetimeLayoutProbe(
+        label="case-c2-loop-cursor",
+        operator="temp-introduction",
+        description="rebind loop cursor temp",
+        source_text="void fn_test(void) { int tmp; tmp = 1; }\n",
+    )
+
+    plans = plan_seeds_from_lifetime_layout_probes([probe], budget=5)
+
+    assert len(plans) == 1
+    assert plans[0].mutator == "source-shape"
+    assert plans[0].target_var == "case-c2-loop-cursor"
+    assert plans[0].args["source_text"] == probe.source_text
+    assert "rebind loop cursor temp" in plans[0].description
+
+
+def test_materialize_seed_writes_source_shape_probe(tmp_path: Path) -> None:
+    mutated = "void fn_test(void) { int tmp; tmp = 1; }\n"
+    plan = SeedPlan(
+        mutator="source-shape",
+        target_var="case-c2-loop-cursor",
+        args={"source_text": mutated},
+        description="source-shape temp introduction",
+    )
+
+    out = materialize_seed(
+        "void fn_test(void) {}\n",
+        "fn_test",
+        plan,
+        tmp_path / "tier3_seed_0",
+    )
+
+    assert out is not None
+    assert out.read_text() == mutated

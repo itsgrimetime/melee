@@ -17279,11 +17279,13 @@ def tier3_search(
         find_best_candidate,
         materialize_seed,
         plan_seeds,
+        plan_seeds_from_lifetime_layout_probes,
         rank_seed_results,
         run_per_seed_permute,
         save_compile_failure,
         smoke_compile,
     )
+    from ..mwcc_debug.pressure_explorer import generate_lifetime_layout_probes
 
     melee_root = DEFAULT_MELEE_ROOT
 
@@ -17315,6 +17317,21 @@ def tier3_search(
         bindings, budget=budget,
         include_low_confidence=include_low_confidence,
     )
+    if not plans:
+        probes = generate_lifetime_layout_probes(
+            base_source,
+            function,
+            max_probes=budget,
+        )
+        plans = plan_seeds_from_lifetime_layout_probes(
+            probes,
+            budget=budget,
+        )
+        if plans:
+            print(
+                "[tier3] no symbol-bridge seed plans; using "
+                "source-shape probe fallback"
+            )
     if not plans:
         # Diagnostic: if there ARE low-confidence bindings, explain.
         n_low = sum(1 for b in bindings if b.confidence == "low-confidence")

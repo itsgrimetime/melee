@@ -17,6 +17,7 @@ from .mutators import (
     mutate_insert_alias_before_use,
     mutate_type_change,
 )
+from .pressure_explorer import LifetimeLayoutProbe
 from .source_shape import SourceAnchor
 from .symbol_bridge import Binding
 
@@ -138,6 +139,11 @@ def materialize_seed(
                 base_source, fn_name, plan.target_var,
                 at_stmt_index=plan.args["at_stmt_index"],
             )
+        elif plan.mutator == "source-shape":
+            source_text = plan.args.get("source_text")
+            if not isinstance(source_text, str):
+                return None
+            mutated = source_text
         else:
             return None
     except MutationUnsupported:
@@ -475,6 +481,28 @@ def plan_seeds_from_source_anchors(
             description=(
                 f"source-shape seed from {anchor.kind}: {anchor.reason}"
             ),
+        ))
+        if len(plans) >= budget:
+            break
+    return plans
+
+
+def plan_seeds_from_lifetime_layout_probes(
+    probes: list[LifetimeLayoutProbe],
+    budget: int = 5,
+) -> list[SeedPlan]:
+    """Convert concrete lifetime/source-shape probes into tier3 seeds."""
+    plans: list[SeedPlan] = []
+    for probe in probes:
+        plans.append(SeedPlan(
+            mutator="source-shape",
+            target_var=probe.label,
+            args={
+                "source_text": probe.source_text,
+                "operator": probe.operator,
+                "label": probe.label,
+            },
+            description=f"source-shape {probe.label}: {probe.description}",
         ))
         if len(plans) >= budget:
             break

@@ -155,6 +155,74 @@ def test_remote_doctor_cli_reports_failed_checks(
     assert "FAIL\tremote python3 toml\trequired - No module named toml" in result.stdout
 
 
+def test_remote_submit_cli_suggests_healthy_target_after_preflight_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    function = "fn_80000000"
+    perm_root = tmp_path / "decomp-permuter"
+    perm_dir = perm_root / "nonmatchings" / function
+    perm_dir.mkdir(parents=True)
+    (perm_dir / "base.c").write_text("void fn_80000000(void) {}\n")
+    coder2 = pr.RemoteTarget(
+        name="coder2",
+        ssh="coder2.example",
+        remote_melee_root="/home/discord/melee",
+        remote_perm_root="/home/discord/decomp-permuter",
+        threads=16,
+        session_prefix="melee-perm",
+    )
+    coder3 = pr.RemoteTarget(
+        name="coder3",
+        ssh="coder3.example",
+        remote_melee_root="/home/discord/melee",
+        remote_perm_root="/home/discord/decomp-permuter",
+        threads=16,
+        session_prefix="melee-perm",
+    )
+
+    def fake_submit_job(**kwargs: object) -> pr.RemoteJob:
+        assert kwargs["target"] == coder2
+        assert kwargs["local_perm_dir"] == perm_dir
+        raise pr.RemoteJobError(
+            "remote preflight failed for coder2: remote melee root: "
+            "/home/discord/melee missing"
+        )
+
+    def fake_suggest_ready_targets(
+        targets: dict[str, pr.RemoteTarget],
+        *,
+        failed_target_name: str,
+        local_perm_dir: Path | None = None,
+    ) -> list[str]:
+        assert targets == {"coder2": coder2, "coder3": coder3}
+        assert failed_target_name == "coder2"
+        assert local_perm_dir == perm_dir
+        return ["coder3"]
+
+    monkeypatch.setattr(pr, "load_targets", lambda config_path=pr.CONFIG_PATH: {
+        "coder2": coder2,
+        "coder3": coder3,
+    })
+    monkeypatch.setattr(pr, "submit_job", fake_submit_job)
+    monkeypatch.setattr(pr, "suggest_ready_targets", fake_suggest_ready_targets, raising=False)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug", "permute", "remote", "submit",
+            "-f", function,
+            "--target", "coder2",
+            "--perm-root", str(perm_root),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "remote preflight failed for coder2" in result.stderr
+    assert "Healthy configured target(s): coder3" in result.stderr
+    assert "Retry with --target coder3" in result.stderr
+
+
 def test_remote_doctor_cli_repair_runs_before_final_report(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -593,6 +661,56 @@ def test_doctor_target_reports_ready_remote_and_local_perm_dir(tmp_path: Path) -
     assert "remote-objdump-command" in calls[0][2]
     assert {check.name: check.ok for check in report.checks}["local path leaks"]
     assert {check.name: check.ok for check in report.checks}["remote objdump command"]
+
+
+def test_suggest_ready_targets_skips_failed_target_and_unhealthy_siblings() -> None:
+    targets = {
+        "coder2": pr.RemoteTarget(
+            name="coder2",
+            ssh="coder2.example",
+            remote_melee_root="/home/discord/melee",
+            remote_perm_root="/home/discord/decomp-permuter",
+            threads=16,
+            session_prefix="melee-perm",
+        ),
+        "coder1": pr.RemoteTarget(
+            name="coder1",
+            ssh="coder1.example",
+            remote_melee_root="/home/discord/permuter-work/melee",
+            remote_perm_root="/home/discord/permuter-work/decomp-permuter",
+            threads=16,
+            session_prefix="melee-perm",
+        ),
+        "coder3": pr.RemoteTarget(
+            name="coder3",
+            ssh="coder3.example",
+            remote_melee_root="/home/discord/melee",
+            remote_perm_root="/home/discord/decomp-permuter",
+            threads=16,
+            session_prefix="melee-perm",
+        ),
+    }
+    probed: list[str] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        probed.append(argv[1])
+        if argv[1] == "coder3.example":
+            return pr.CommandResult(returncode=0, stdout=_remote_doctor_ok_stdout(), stderr="")
+        return pr.CommandResult(returncode=255, stdout="", stderr="ssh failed\n")
+
+    suggestions = pr.suggest_ready_targets(
+        targets,
+        failed_target_name="coder2",
+        runner=fake_runner,
+    )
+
+    assert suggestions == ["coder3"]
+    assert probed == ["coder1.example", "coder3.example"]
 
 
 def test_doctor_target_flags_missing_remote_objdump_from_settings(tmp_path: Path) -> None:

@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, NamedTuple
+from typing import Any, Callable, Mapping, NamedTuple
 
 from . import candidate_audit
 from .permuter_config import DEFAULT_OBJDUMP_COMMAND
@@ -429,6 +429,34 @@ def doctor_target(
         ))
 
     return DoctorReport(target=target.name, checks=checks)
+
+
+def suggest_ready_targets(
+    targets: Mapping[str, RemoteTarget],
+    *,
+    failed_target_name: str,
+    local_perm_dir: Path | None = None,
+    runner: Callable[..., CommandResult] = run_command,
+    limit: int = 3,
+) -> list[str]:
+    """Return configured sibling targets whose doctor checks currently pass."""
+    ready: list[str] = []
+    for name in sorted(targets):
+        if name == failed_target_name:
+            continue
+        try:
+            report = doctor_target(
+                targets[name],
+                local_perm_dir=local_perm_dir,
+                runner=runner,
+            )
+        except RemoteJobError:
+            continue
+        if report.ok:
+            ready.append(name)
+            if len(ready) >= limit:
+                break
+    return ready
 
 
 def repair_target(
