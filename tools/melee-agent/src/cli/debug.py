@@ -837,6 +837,9 @@ debug_app.add_typer(permute_app, name="permute")
 debug_app.add_typer(util_app, name="util")
 permute_app.add_typer(remote_app, name="remote")
 
+from src.search.cli import search_app as _search_app  # noqa: E402
+debug_app.add_typer(_search_app, name="search")
+
 
 def _resolve_src_relative(c_file: str) -> str:
     """Resolve a .c file path to one relative to the melee repo root.
@@ -3484,6 +3487,8 @@ def remote_submit(
         )
         raise typer.Exit(2)
 
+    targets: dict[str, permuter_remote.RemoteTarget] = {}
+    target: permuter_remote.RemoteTarget | None = None
     try:
         targets = _remote_load_targets()
         target = targets.get(target_name)
@@ -3502,6 +3507,23 @@ def remote_submit(
             mode=mode,
         )
     except (permuter_remote.RemoteConfigError, permuter_remote.RemoteJobError) as exc:
+        if (
+            isinstance(exc, permuter_remote.RemoteJobError)
+            and target is not None
+            and "remote preflight failed" in str(exc)
+        ):
+            suggestions = permuter_remote.suggest_ready_targets(
+                targets,
+                failed_target_name=target.name,
+                local_perm_dir=perm_dir,
+            )
+            if suggestions:
+                retry = suggestions[0]
+                exc = permuter_remote.RemoteJobError(
+                    f"{exc}\n"
+                    f"Healthy configured target(s): {', '.join(suggestions)}\n"
+                    f"Retry with --target {retry}."
+                )
         _remote_error(exc)
 
     print(f"Job: {job.job_id}")
