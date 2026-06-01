@@ -7,14 +7,68 @@ wiring discovered in Task-9 discovery; see task notes for exact signatures.
 
 from __future__ import annotations
 
+import hashlib
+import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
+import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Protocol
+from typing import Iterator, Protocol
 
 from src.search.types import TargetSpec
+
+
+# ---------------------------------------------------------------------------
+# Repo-wide compile lock
+# ---------------------------------------------------------------------------
+
+@contextmanager
+def _acquire_repo_build_lock(
+    melee_root: Path, *, label: str = "search compile"
+) -> Iterator[None]:
+    """Acquire the SAME repo-wide lock used by tools/checkdiff.py and
+    ``cli/debug.py:_acquire_checkdiff_repo_lock``.
+
+    Replicated here (rather than imported from cli/) to avoid a
+    search/mwcc_debug -> cli layering dependency; the lock path scheme is
+    identical so it serialises against checkdiff/source-scoring runs that
+    mutate the same build tree.
+    """
+    if os.environ.get("CHECKDIFF_NO_LOCK"):
+        yield
+        return
+    try:
+        import fcntl
+    except ImportError:
+        yield
+        return
+
+    lock_dir = Path(tempfile.gettempdir()) / "melee-checkdiff-locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha1(str(melee_root.resolve()).encode()).hexdigest()[:12]
+    lock_path = lock_dir / f"repo.{digest}.lock"
+    lock_file = lock_path.open("w")
+    try:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print(f"waiting for repo-wide {label} lock", file=sys.stderr)
+            start = time.monotonic()
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            print(
+                f"acquired {label} lock after {time.monotonic() - start:.1f}s",
+                file=sys.stderr,
+            )
+        yield
+    finally:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        finally:
+            lock_file.close()
 
 
 # ---------------------------------------------------------------------------
@@ -64,11 +118,13 @@ class RealLocalCompiler:
 
     Strategy: the LocalCompiler Protocol requires (obj_path | None, stderr).
     The real compile path is:
-      1. Write source_text to a temp file alongside the real TU source.
-      2. Replace the TU .c with the candidate source.
-      3. Run `ninja build/GALE01/src/<unit>.o`.
-      4. Copy the resulting .o to a stable artifact location.
-      5. Restore the original TU .c.
+      1. Acquire the repo-wide build lock (serialise vs other agents).
+      2. Save the original TU .c AND the original build .o bytes.
+      3. Replace the TU .c with the candidate source.
+      4. Run `ninja build/GALE01/src/<unit>.o`.
+      5. Copy the resulting .o to a caller-owned temp path.
+      6. In a finally, restore BOTH the TU .c and the build .o so the repo
+         tree is never left out of sync with a search candidate.
 
     This mirrors how the convergence loop and mwcc-debug iterate on TUs.
     """
@@ -85,29 +141,39 @@ class RealLocalCompiler:
         if not unit_src.exists():
             return None, f"unit source not found: {unit_src}"
 
-        original = unit_src.read_bytes()
-        try:
-            unit_src.write_text(source_text, encoding="utf-8")
-            proc = subprocess.run(
-                ["ninja", obj_rel],
-                cwd=self._melee_root,
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-            stderr = proc.stderr + proc.stdout
-            if proc.returncode != 0:
-                return None, stderr
-            if not obj_abs.exists():
-                return None, f"ninja succeeded but .o not found: {obj_abs}\n{stderr}"
-            # Copy to a stable per-compile temp path so the caller owns it.
-            dest = Path(tempfile.mktemp(suffix=".o", prefix="search_compile_"))
-            shutil.copy2(obj_abs, dest)
-            return dest, stderr
-        except subprocess.TimeoutExpired:
-            return None, "ninja timed out"
-        finally:
-            unit_src.write_bytes(original)
+        with _acquire_repo_build_lock(self._melee_root):
+            original_c = unit_src.read_bytes()
+            original_o = obj_abs.read_bytes() if obj_abs.exists() else None
+            try:
+                unit_src.write_text(source_text, encoding="utf-8")
+                proc = subprocess.run(
+                    ["ninja", obj_rel],
+                    cwd=self._melee_root,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                stderr = proc.stderr + proc.stdout
+                if proc.returncode != 0:
+                    return None, stderr
+                if not obj_abs.exists():
+                    return None, f"ninja succeeded but .o not found: {obj_abs}\n{stderr}"
+                # Copy to a caller-owned temp path (securely created).
+                fd, dest = tempfile.mkstemp(suffix=".o", prefix="search_compile_")
+                os.close(fd)
+                shutil.copy2(obj_abs, dest)
+                return Path(dest), stderr
+            except subprocess.TimeoutExpired:
+                return None, "ninja timed out"
+            finally:
+                # Restore the repo tree on EVERY path: TU .c first, then the
+                # build .o (write back the original bytes, or remove the
+                # candidate .o if there was no prior object).
+                unit_src.write_bytes(original_c)
+                if original_o is not None:
+                    obj_abs.write_bytes(original_o)
+                else:
+                    obj_abs.unlink(missing_ok=True)
 
 
 class RealByteScorer:
@@ -213,15 +279,17 @@ class RealRemotePermuterClient:
 
         job = self._jobs.get(job_id)
         if job is None:
-            return "unknown"
+            return "failed"
         result = status_job(job)
         state = result.state
-        # Map permuter tmux states to substrate states
-        if state in ("active",):
+        # Map permuter tmux states onto the ProducerStatus Literal
+        # ("running" | "drained" | "failed"); any unexpected/unknown state
+        # is reported as "failed" so downstream never sees an off-contract value.
+        if state == "active":
             return "running"
-        if state in ("stopped", "unknown"):
+        if state == "stopped":
             return "drained"
-        return state
+        return "failed"
 
     def stop(self, job_id: str) -> None:
         from src.mwcc_debug.permuter_remote import stop_job
@@ -282,9 +350,10 @@ class _DryLocalCompiler:
     """Write a stub .o (zeroed bytes) so the pipeline can score it."""
 
     def compile(self, source_text: str, target: TargetSpec) -> tuple[Path | None, str]:
-        dest = Path(tempfile.mktemp(suffix=".o", prefix="dry_compile_"))
-        dest.write_bytes(b"\x00" * 4)  # 1 word stub
-        return dest, ""
+        fd, dest = tempfile.mkstemp(suffix=".o", prefix="dry_compile_")
+        os.close(fd)
+        Path(dest).write_bytes(b"\x00" * 4)  # 1 word stub
+        return Path(dest), ""
 
 
 class _DryByteScorer:

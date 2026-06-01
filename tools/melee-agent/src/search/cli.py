@@ -5,6 +5,7 @@ Register under debug_app via: debug_app.add_typer(search_app, name="search")
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Annotated, Optional
@@ -15,6 +16,21 @@ search_app = typer.Typer(
     help="Fast+directed match-search substrate (Spec 1).",
     no_args_is_help=True,
 )
+
+# Canonical mwcc cflags used by the project (see CLAUDE.md "Notes").
+_CFLAGS = (
+    "-O4,p -nodefaults -proc gekko -fp hardware -Cpp_exceptions off "
+    "-enum int -fp_contract on -inline auto"
+)
+
+
+def _compute_melee_root() -> Path:
+    """Resolve the melee repo root from this file's location.
+
+    tools/melee-agent/src/search/cli.py:
+      parents[0]=search  [1]=src  [2]=melee-agent  [3]=tools  [4]=<repo root>
+    """
+    return Path(__file__).resolve().parents[4]
 
 
 @search_app.command("run")
@@ -70,8 +86,7 @@ def run_cmd(
     from src.search.store import ArtifactStore
     from src.search.types import Budget, TargetSpec
 
-    # Resolve melee root (two levels up from tools/melee-agent)
-    melee_root = Path(__file__).resolve().parents[3]
+    melee_root = _compute_melee_root()
 
     # Resolve expected .o path from report.json
     expected_obj = _resolve_expected_obj(melee_root, function, unit)
@@ -93,26 +108,23 @@ def run_cmd(
         scorer = RealByteScorer()
         verifier = RealCheckdiffVerifier(melee_root)
 
-    # Backend
-    _CFLAGS = "-O4,p -nodefaults -proc gekko -fp hardware -Cpp_exceptions off -enum int -fp_contract on -inline auto"
+    # Backend — one spec factory parameterised by backend_mode.
+    cflags_hash = hashlib.sha256(_CFLAGS.encode()).hexdigest()[:16]
 
-    def _make_compile_spec(variant) -> CompileSpec:
-        import hashlib as _hashlib
-        from src.search.artifact import CompileSpec
-        cflags_hash = _hashlib.sha256(_CFLAGS.encode()).hexdigest()[:16]
+    def _make_spec(backend_mode: str) -> CompileSpec:
         return CompileSpec(
             target_id=f"{function}@{unit}",
             cflags_hash=cflags_hash,
             base_context_hash="",
             toolchain_fingerprint="mwcc_233_163n",
-            backend_mode="plain-local",
+            backend_mode=backend_mode,
             manifest_path=store / "manifest.json",
         )
 
     backend = PlainLocalBackend(
         compiler=compiler,
         store=artifact_store,
-        compile_spec_factory=_make_compile_spec,
+        compile_spec_factory=lambda variant: _make_spec("plain-local"),
         target=target,
     )
 
@@ -131,26 +143,12 @@ def run_cmd(
         remote_list = [r.strip() for r in remotes.split(",") if r.strip()]
         if remote_list:
             client = RealRemotePermuterClient(melee_root)
-
-            def _make_prod_spec(text: str) -> CompileSpec:
-                import hashlib as _hashlib
-                from src.search.artifact import CompileSpec
-                cflags_hash = _hashlib.sha256(_CFLAGS.encode()).hexdigest()[:16]
-                return CompileSpec(
-                    target_id=f"{function}@{unit}",
-                    cflags_hash=cflags_hash,
-                    base_context_hash="",
-                    toolchain_fingerprint="mwcc_233_163n",
-                    backend_mode="permuter-job",
-                    manifest_path=store / "manifest.json",
-                )
-
             producers.append(
                 PermuterJobProducer(
                     client=client,
                     store=artifact_store,
                     remotes=remote_list,
-                    compile_spec_factory=_make_prod_spec,
+                    compile_spec_factory=lambda text: _make_spec("permuter-job"),
                 )
             )
 
