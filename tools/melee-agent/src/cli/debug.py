@@ -12872,6 +12872,132 @@ def _run_checkdiff_stack_slot_localizer(
     return None, None
 
 
+@inspect_app.command(name="stack-homes")
+def inspect_stack_homes(
+    function: Annotated[
+        str,
+        typer.Option(
+            "--function", "-f",
+            help="Function to analyze.",
+        ),
+    ],
+    pcdump: Annotated[
+        Optional[Path],
+        typer.Argument(
+            help="Path to pcdump.txt. Auto-resolves from cache when omitted.",
+        ),
+    ] = None,
+    checkdiff_json: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--checkdiff-json",
+            help=(
+                "Existing checkdiff --format json output containing a "
+                "stack_slot_localizer. If omitted, checkdiff is run with "
+                "--no-build to get one."
+            ),
+        ),
+    ] = None,
+    source_file: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--source-file",
+            help=(
+                "C source file used for source/lifetime attribution. Defaults "
+                "to the repo source for the function when available."
+            ),
+        ),
+    ] = None,
+    checkdiff_timeout: Annotated[
+        float,
+        typer.Option(
+            "--checkdiff-timeout",
+            help="Timeout in seconds when auto-running checkdiff.",
+        ),
+    ] = 60.0,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit as JSON."),
+    ] = False,
+) -> None:
+    """Explain final-only FPR stack-home targets and source-shape leads."""
+    from ..mwcc_debug.stack_home_explorer import (
+        explore_stack_homes,
+        render_stack_home_report_text,
+    )
+
+    melee_root = DEFAULT_MELEE_ROOT
+    pcdump_path = _resolve_pcdump_path(
+        pcdump,
+        function,
+        melee_root,
+        require_fresh=False,
+    )
+
+    if checkdiff_json is not None:
+        if not checkdiff_json.is_file():
+            raise typer.BadParameter(f"checkdiff JSON not found: {checkdiff_json}")
+        try:
+            checkdiff_payload = json.loads(checkdiff_json.read_text())
+        except json.JSONDecodeError as exc:
+            raise typer.BadParameter(
+                f"checkdiff JSON could not be parsed: {exc}"
+            ) from exc
+        localizer = _find_stack_slot_localizer_in_json(checkdiff_payload)
+        if localizer is None:
+            typer.echo(
+                f"{checkdiff_json} did not contain stack_slot_localizer",
+                err=True,
+            )
+            raise typer.Exit(3)
+    else:
+        localizer, error = _run_checkdiff_stack_slot_localizer(
+            function=function,
+            melee_root=melee_root,
+            timeout=checkdiff_timeout,
+        )
+        if error is not None:
+            typer.echo(error, err=True)
+            raise typer.Exit(3)
+        if localizer is None:
+            typer.echo(
+                "checkdiff did not report a stack_slot_localizer for "
+                f"{function}",
+                err=True,
+            )
+            raise typer.Exit(3)
+
+    source_text = None
+    source_label = None
+    if source_file is not None:
+        if not source_file.is_file():
+            raise typer.BadParameter(f"source file not found: {source_file}")
+        source_text = source_file.read_text()
+        source_label = str(source_file)
+    else:
+        unit = _find_unit_for_function(function, melee_root)
+        if unit is not None:
+            candidate = melee_root / "src" / f"{unit}.c"
+            if candidate.is_file():
+                source_text = candidate.read_text()
+                try:
+                    source_label = str(candidate.relative_to(melee_root))
+                except ValueError:
+                    source_label = str(candidate)
+
+    report = explore_stack_homes(
+        pcdump_path.read_text(),
+        function,
+        localizer,
+        source_text=source_text,
+        source_file=source_label,
+    )
+    if json_out:
+        print(json.dumps(report, indent=2))
+    else:
+        print(render_stack_home_report_text(report))
+
+
 def _score_source_candidate_real_tree(
     path: Path,
     *,

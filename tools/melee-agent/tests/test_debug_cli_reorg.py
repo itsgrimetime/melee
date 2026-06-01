@@ -65,6 +65,7 @@ def test_representative_grouped_command_help_works() -> None:
         ["debug", "inspect", "diagnose", "--help"],
         ["debug", "inspect", "explain-virtual", "--help"],
         ["debug", "inspect", "explain-schedule", "--help"],
+        ["debug", "inspect", "stack-homes", "--help"],
         ["debug", "target", "derive", "--help"],
         ["debug", "target", "match-iter-first", "--help"],
         ["debug", "target", "score-source", "--help"],
