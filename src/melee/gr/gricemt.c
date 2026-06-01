@@ -341,6 +341,7 @@ bool grIceMt_801F71E0(void)
     return false;
 }
 
+#pragma auto_inline off
 HSD_GObj* grIceMt_801F71E8(int gobj_id)
 {
     HSD_GObj* gobj;
@@ -357,6 +358,7 @@ HSD_GObj* grIceMt_801F71E8(int gobj_id)
 
     return gobj;
 }
+#pragma auto_inline on
 
 /// #grIceMt_801F72D4
 /// extern char grIm_803B8220;
@@ -1570,67 +1572,69 @@ void grIceMt_801F9ACC(Ground_GObj* gobj, float y, GrIceMtSegmentLookup ev,
     }
 }
 
-static inline HSD_GObj* grIceMt_801F71E8_inner(int id)
-{
-    return grIceMt_801F71E8(id);
-}
-static inline HSD_GObj* grIceMt_801F71E8_noinline(int id)
-{
-    return grIceMt_801F71E8_inner(id);
-}
-
 void grIceMt_801FA0BC(s16* arg0)
 {
-    HSD_GObj* mgobj;
+    HSD_GObj* gobj;
     HSD_JObj* jobj;
-    Ground* gp2;
-    HSD_JObj** ptrs;
-    f32 f;
-    s16 id;
+    Ground* gp;
+    f32 frame;
+    PAD_STACK(24);
 
-    id = arg0[0];
-    f = grIceMt_801F993C(arg0[0], arg0[1]);
-    if (id != -1) {
-        mgobj = grIceMt_801F71E8_noinline(id);
-        HSD_ASSERT(0xB44, mgobj);
-        jobj = mgobj->hsd_obj;
-        HSD_ASSERT(0xB46, jobj);
-        HSD_JObjSetTranslateY(jobj, -20.0f * Ground_801C0498() + f);
+    frame = grIceMt_801F993C(arg0[0], arg0[1]);
+
+    if (arg0[0] != -1) {
+        gobj = grIceMt_801F71E8(arg0[0]);
+        if (gobj == NULL) {
+            __assert((char*) &grIm_803E4068 + 0x690, 0xB44, "mgobj");
+        }
+        jobj = gobj->hsd_obj;
+        if (jobj == NULL) {
+            __assert((char*) &grIm_803E4068 + 0x690, 0xB46, "jobj");
+        }
+        HSD_JObjSetTranslateY(jobj, grIm_804DB570 * Ground_801C0498() + frame);
         Ground_801C3214(arg0[0]);
-        Ground_801C2FE0(mgobj);
+        Ground_801C2FE0(gobj);
         Ground_801C32AC(arg0[0]);
     }
-    id = arg0[1];
-    if (id != -1) {
-        mgobj = grIceMt_801F71E8_noinline(id);
-        HSD_ASSERT(0xB50, mgobj);
-        jobj = mgobj->hsd_obj;
-        HSD_ASSERT(0xB52, jobj);
-        HSD_JObjSetTranslateY(jobj, -20.0f * Ground_801C0498());
+
+    if (arg0[1] != -1) {
+        gobj = grIceMt_801F71E8(arg0[1]);
+        if (gobj == NULL) {
+            __assert((char*) &grIm_803E4068 + 0x690, 0xB50, "mgobj");
+        }
+        jobj = gobj->hsd_obj;
+        if (jobj == NULL) {
+            __assert((char*) &grIm_803E4068 + 0x690, 0xB52, "jobj");
+        }
+        HSD_JObjSetTranslateY(jobj, grIm_804DB570 * Ground_801C0498());
         Ground_801C3214(arg0[1]);
-        Ground_801C2FE0(mgobj);
+        Ground_801C2FE0(gobj);
         Ground_801C32AC(arg0[1]);
-        gp2 = mgobj->user_data;
-        ((UnkFlagStruct*) &gp2->gv.icemt2.xC4)->b0 = 1;
-        ((UnkFlagStruct*) &gp2->gv.icemt2.xC4)->b1 = 1;
-        gp2 = mgobj->user_data;
-        if (((UnkFlagStruct*) &gp2->gv.icemt2.xC4)->b1) {
-            ((UnkFlagStruct*) &gp2->gv.icemt2.xC4)->b1 = 0;
-            ptrs = &gp2->gv.icemt2.xC8;
-            if (ptrs[0]) {
-                Ground_801C2D0C(0, ptrs[0]);
-            }
-            if (ptrs[1]) {
-                Ground_801C2D0C(1, ptrs[1]);
-            }
-            if (ptrs[2]) {
-                Ground_801C2D0C(2, ptrs[2]);
-            }
-            if (ptrs[3]) {
-                Ground_801C2D0C(3, ptrs[3]);
+
+        gp = gobj->user_data;
+        ((UnkFlagStruct*) &gp->gv.icemt2.xC4)->b0 = 1;
+        ((UnkFlagStruct*) &gp->gv.icemt2.xC4)->b1 = 1;
+        gp = gobj->user_data;
+        {
+            HSD_JObj** jobjs = &gp->gv.icemt2.xC8;
+            if (((UnkFlagStruct*) &gp->gv.icemt2.xC4)->b1) {
+                ((UnkFlagStruct*) &gp->gv.icemt2.xC4)->b1 = 0;
+                if (jobjs[0] != NULL) {
+                    Ground_801C2D0C(0, jobjs[0]);
+                }
+                if (jobjs[1] != NULL) {
+                    Ground_801C2D0C(1, jobjs[1]);
+                }
+                if (jobjs[2] != NULL) {
+                    Ground_801C2D0C(2, jobjs[2]);
+                }
+                if (jobjs[3] != NULL) {
+                    Ground_801C2D0C(3, jobjs[3]);
+                }
             }
         }
     }
+
     grIceMt_801FA854();
 }
 
