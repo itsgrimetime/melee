@@ -57,6 +57,7 @@ def test_representative_grouped_command_help_works() -> None:
         ["debug", "dump", "restore-object-report", "--help"],
         ["debug", "inspect", "guide", "--help"],
         ["debug", "inspect", "asm", "--help"],
+        ["debug", "inspect", "frame-reservations", "--help"],
         ["debug", "inspect", "var-to-virtual", "--help"],
         ["debug", "inspect", "virtual-to-var", "--help"],
         ["debug", "inspect", "virtual-to-ig", "--help"],
@@ -84,6 +85,64 @@ def test_representative_grouped_command_help_works() -> None:
     for command in commands:
         result = runner.invoke(app, command)
         assert result.exit_code == 0, (command, result.stdout)
+
+
+def test_frame_reservations_cli_reports_extra_low_gap(tmp_path: Path) -> None:
+    pcdump = tmp_path / "pcdump.txt"
+    pcdump.write_text(textwrap.dedent("""\
+        Starting function fn_80000000
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        fn_80000000
+        B0: Succ={} Pred={} Labels={}
+            mflr r0
+            stw r0,4(r1)
+            stwu r1,-88(r1)
+            stfd f31,80(r1)
+            stmw r26,40(r1)
+            lmw r26,40(r1)
+            lfd f31,80(r1)
+            addi r1,r1,88
+    """))
+    expected = tmp_path / "expected.s"
+    expected.write_text(textwrap.dedent("""\
+        .fn fn_80000000, global
+        /* 80000000 */    mflr r0
+        /* 80000004 */    stw r0, 0x4(r1)
+        /* 80000008 */    stwu r1, -0x98(r1)
+        /* 8000000C */    stfd f31, 0x90(r1)
+        /* 80000010 */    stmw r26, 0x68(r1)
+        /* 80000014 */    lmw r26, 0x68(r1)
+        /* 80000018 */    lfd f31, 0x90(r1)
+        /* 8000001C */    addi r1, r1, 0x98
+        .endfn fn_80000000
+    """))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "frame-reservations",
+            "-f",
+            "fn_80000000",
+            str(pcdump),
+            "--expected-asm",
+            str(expected),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["frame_delta"] == 64
+    assert payload["extra_low_frame_reservation"] == {
+        "start": 40,
+        "end": 104,
+        "size": 64,
+        "origin": "implicit-frame-reservation",
+        "current_accesses_in_range": [],
+    }
+    assert "no current pcode stack access" in payload["summary"]
 
 
 def test_dump_remote_quotes_cmd_env_assignments(monkeypatch, tmp_path: Path) -> None:

@@ -80,6 +80,7 @@ from ..mwcc_debug.diff_report import (
     compare_function_dumps,
     render_text_report,
 )
+from ..mwcc_debug.frame_reservations import analyze_frame_reservations
 
 
 @dataclasses.dataclass(frozen=True)
@@ -2335,6 +2336,148 @@ def inspect_asm(
         typer.echo("checkdiff JSON did not include current_asm lines", err=True)
         raise typer.Exit(2)
     typer.echo("\n".join(current_asm))
+
+
+def _read_frame_reservation_expected_asm(
+    function: str,
+    *,
+    expected_asm: Optional[Path],
+    no_expected: bool,
+    melee_root: Path,
+) -> str | None:
+    if no_expected:
+        return None
+    if expected_asm is not None:
+        if not expected_asm.exists():
+            typer.echo(f"expected asm not found: {expected_asm}", err=True)
+            raise typer.Exit(2)
+        return expected_asm.read_text()
+
+    asm_path = _tmp_asm_path_for_function(function)
+    extract_cmd = [
+        "melee-agent",
+        "extract",
+        "get",
+        function,
+        "--full",
+        "--output",
+        str(asm_path),
+    ]
+    proc = subprocess.run(
+        extract_cmd,
+        cwd=melee_root,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        typer.echo(proc.stderr or proc.stdout, err=True)
+        raise typer.Exit(proc.returncode or 1)
+    return asm_path.read_text()
+
+
+def _format_stack_range(item: Mapping[str, object]) -> str:
+    start = int(item["start"])
+    end = int(item["end"])
+    size = int(item["size"])
+    return f"0x{start:x}-0x{end:x} ({size} bytes)"
+
+
+def _print_unused_ranges(label: str, ranges: list[dict]) -> None:
+    print(f"{label} unused ranges:")
+    if not ranges:
+        print("  none")
+        return
+    for item in ranges:
+        print(f"  {_format_stack_range(item)}")
+
+
+def _print_frame_reservation_report(report: dict) -> None:
+    print(report["summary"])
+    current = report["current"]
+    expected = report.get("expected")
+    print(f"current frame: {current.get('frame_size')}")
+    if expected is not None:
+        print(f"expected frame: {expected.get('frame_size')}")
+        print(f"frame delta: {report.get('frame_delta')}")
+    _print_unused_ranges("current", current.get("unused_ranges", []))
+    if expected is not None:
+        _print_unused_ranges("expected", expected.get("unused_ranges", []))
+
+    extra = report.get("extra_low_frame_reservation")
+    if extra is None:
+        return
+    print()
+    print(f"extra low-frame reservation: {_format_stack_range(extra)}")
+    print(f"origin: {extra.get('origin')}")
+    accesses = extra.get("current_accesses_in_range") or []
+    if not accesses:
+        print("current non-save stack accesses in range: none")
+        return
+    print("current non-save stack accesses in range:")
+    for access in accesses:
+        print(
+            f"  {access.get('opcode')} {access.get('operands')} "
+            f"at 0x{int(access['offset']):x} "
+            f"({access.get('kind')})"
+        )
+
+
+@inspect_app.command(name="frame-reservations")
+def frame_reservations(
+    function: Annotated[
+        str,
+        typer.Option("--function", "-f", help="Function name to inspect"),
+    ],
+    pcdump: Annotated[
+        Optional[Path],
+        typer.Argument(
+            help="Path to pcdump.txt. Omit to auto-resolve via --function "
+                 "from the cache.",
+        ),
+    ] = None,
+    expected_asm: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--expected-asm",
+            help="Path to expected target asm. Omit to extract via "
+                 "`melee-agent extract get <function> --full`.",
+        ),
+    ] = None,
+    no_expected: Annotated[
+        bool,
+        typer.Option(
+            "--no-expected",
+            help="Inspect only the current pcdump without extracting target asm.",
+        ),
+    ] = False,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit the report as JSON."),
+    ] = False,
+) -> None:
+    """Inspect stack-frame gaps and implicit reserved ranges."""
+    melee_root = DEFAULT_MELEE_ROOT
+    pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
+    expected_text = _read_frame_reservation_expected_asm(
+        function,
+        expected_asm=expected_asm,
+        no_expected=no_expected,
+        melee_root=melee_root,
+    )
+    try:
+        report = analyze_frame_reservations(
+            pcdump_path.read_text(),
+            function,
+            expected_asm_text=expected_text,
+        )
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2) from exc
+
+    if json_out:
+        print(json.dumps(report, indent=2))
+        return
+    _print_frame_reservation_report(report)
 
 
 @inspect_app.command("guide")
