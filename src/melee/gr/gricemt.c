@@ -1403,14 +1403,20 @@ f32 grIceMt_801F993C(s32 arg0, s32 arg1)
             break;
         }
     }
-    HSD_ASSERTMSG(0xA9D, upper_ix < ICEMT_FIELD_MAX, "upper_ix<ICEMT_FIELD_MAX");
+    if (!(upper_ix < ICEMT_FIELD_MAX)) {
+        __assert((char*) &grIm_803E4068 + 0x690, 0xA9D,
+                 (char*) &grIm_803E4068 + 0x828);
+    }
 
     for (under_ix = 0; under_ix < ICEMT_FIELD_MAX; under_ix++) {
         if (arg1 == grIm_803E4068[under_ix].id) {
             break;
         }
     }
-    HSD_ASSERTMSG(0xAA2, under_ix < ICEMT_FIELD_MAX, "under_ix<ICEMT_FIELD_MAX");
+    if (!(under_ix < ICEMT_FIELD_MAX)) {
+        __assert((char*) &grIm_803E4068 + 0x690, 0xAA2,
+                 (char*) &grIm_803E4068 + 0x844);
+    }
 
     return -((t * grIm_803E4068[upper_ix].x8) -
              (t * grIm_803E4068[under_ix].x4 + grIm_804D69F4->x40));
