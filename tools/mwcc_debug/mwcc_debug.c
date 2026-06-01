@@ -924,6 +924,16 @@ static int g_n_iter_first = 0;
 static int g_iter_first_parsed = 0;
 static char g_iter_first_scope_fn[FUNCNAME_BUF_LEN] = {0};
 static int g_iter_first_scope_fn_set = 0;
+static int g_iter_first_scope_class = -1;
+static int g_iter_first_scope_class_set = 0;
+
+typedef struct IterFirstIterSpec {
+    int rclass;
+    int iter_idx;
+} IterFirstIterSpec;
+
+static IterFirstIterSpec g_iter_first_iters[MAX_ITER_FIRST];
+static int g_n_iter_first_iters = 0;
 
 static void parse_iter_first_from_env(void)
 {
@@ -935,7 +945,10 @@ static void parse_iter_first_from_env(void)
 
     g_iter_first_parsed = 1;
     g_n_iter_first = 0;
+    g_n_iter_first_iters = 0;
     g_iter_first_scope_fn_set = 0;
+    g_iter_first_scope_class = -1;
+    g_iter_first_scope_class_set = 0;
 
     len = GetEnvironmentVariableA(
         "MWCC_DEBUG_FORCE_ITER_FIRST_FUNCTION", buf, sizeof(buf));
@@ -945,6 +958,66 @@ static void parse_iter_first_from_env(void)
         }
         g_iter_first_scope_fn[i] = '\0';
         g_iter_first_scope_fn_set = 1;
+    }
+
+    len = GetEnvironmentVariableA(
+        "MWCC_DEBUG_FORCE_ITER_FIRST_CLASS", buf, sizeof(buf));
+    if (len > 0 && len < sizeof(buf)) {
+        cur_val = 0;
+        has_val = 0;
+        for (i = 0; i < (int)len; i++) {
+            char c = buf[i];
+            if (c >= '0' && c <= '9') {
+                cur_val = cur_val * 10 + (c - '0');
+                has_val = 1;
+            }
+        }
+        if (has_val) {
+            g_iter_first_scope_class = cur_val;
+            g_iter_first_scope_class_set = 1;
+        }
+    }
+
+    len = GetEnvironmentVariableA(
+        "MWCC_DEBUG_FORCE_ITER_FIRST_ITER", buf, sizeof(buf));
+    if (len > 0 && len < sizeof(buf)) {
+        int cur_class = 0;
+        int cur_iter = 0;
+        int parsing_iter = 0;
+        int has_class = 0;
+        int has_iter = 0;
+        for (i = 0; i <= (int)len; i++) {
+            char c = (i == (int)len) ? '\0' : buf[i];
+            if (c >= '0' && c <= '9') {
+                if (parsing_iter) {
+                    cur_iter = cur_iter * 10 + (c - '0');
+                    has_iter = 1;
+                } else {
+                    cur_class = cur_class * 10 + (c - '0');
+                    has_class = 1;
+                }
+            } else if (c == ':' && has_class && !parsing_iter) {
+                parsing_iter = 1;
+            } else if ((c == ',' || c == '\0')
+                       && parsing_iter && has_class && has_iter
+                       && g_n_iter_first_iters < MAX_ITER_FIRST) {
+                g_iter_first_iters[g_n_iter_first_iters].rclass = cur_class;
+                g_iter_first_iters[g_n_iter_first_iters].iter_idx = cur_iter;
+                g_n_iter_first_iters++;
+                cur_class = 0;
+                cur_iter = 0;
+                parsing_iter = 0;
+                has_class = 0;
+                has_iter = 0;
+            } else if (c == ',' || c == '\0') {
+                cur_class = 0;
+                cur_iter = 0;
+                parsing_iter = 0;
+                has_class = 0;
+                has_iter = 0;
+            }
+            // else: ignore whitespace and stray chars
+        }
     }
 
     len = GetEnvironmentVariableA("MWCC_DEBUG_FORCE_ITER_FIRST", buf, sizeof(buf));
@@ -1431,21 +1504,27 @@ static void *__cdecl hook_simplifygraph(int rclass, int n_colors, int n_class_re
     // out of their current positions and re-insert them at the head, in the
     // order given. The original relative order of other nodes is preserved.
     {
-        int iter_scope_skip = 0;
+        int iter_fn_scope_skip = 0;
+        int iter_class_scope_skip = 0;
+        IGNode **ig_local = INTERFERENCEGRAPH;
+        int ig_n_local = N_IGNODES;
+        if (ig_n_local > 1024) ig_n_local = 1024;
+        if (ig_n_local < 0) ig_n_local = 0;
         if (g_iter_first_scope_fn_set) {
             if (!g_current_function_set) {
-                iter_scope_skip = 1;
+                iter_fn_scope_skip = 1;
             } else {
                 int sj;
                 for (sj = 0; sj < FUNCNAME_BUF_LEN; sj++) {
                     if (g_current_function[sj] != g_iter_first_scope_fn[sj]) {
-                        iter_scope_skip = 1;
+                        iter_fn_scope_skip = 1;
                         break;
                     }
                     if (g_current_function[sj] == '\0') break;
                 }
             }
-            if (iter_scope_skip && PCFILE && DEBUG_GUARD && g_n_iter_first > 0) {
+            if (iter_fn_scope_skip && PCFILE && DEBUG_GUARD
+                && (g_n_iter_first > 0 || g_n_iter_first_iters > 0)) {
                 debug_printf("\n[FORCE_ITER_FIRST] scope skip (fn=%s, scope=%s)\n",
                              g_current_function_set ? g_current_function
                                                     : "<unset>",
@@ -1453,12 +1532,67 @@ static void *__cdecl hook_simplifygraph(int rclass, int n_colors, int n_class_re
             }
         }
 
-        if (!iter_scope_skip && g_n_iter_first > 0 && head != 0)
+        if (g_iter_first_scope_class_set
+            && rclass != g_iter_first_scope_class) {
+            iter_class_scope_skip = 1;
+            if (!iter_fn_scope_skip && PCFILE && DEBUG_GUARD
+                && g_n_iter_first > 0) {
+                debug_printf("\n[FORCE_ITER_FIRST] class skip "
+                             "(class=%d, scope=%d)\n",
+                             rclass, g_iter_first_scope_class);
+            }
+        }
+
+        if (!iter_fn_scope_skip && g_n_iter_first_iters > 0 && head != 0)
         {
-            IGNode **ig_local = INTERFERENCEGRAPH;
-            int ig_n_local = N_IGNODES;
-            if (ig_n_local > 1024) ig_n_local = 1024;
-            if (ig_n_local < 0) ig_n_local = 0;
+            int k;
+            for (k = g_n_iter_first_iters - 1; k >= 0; k--)
+            {
+                int want_iter = g_iter_first_iters[k].iter_idx;
+                IGNode *want;
+                IGNode *prev;
+                int pos;
+                int moved_idx;
+                int scan;
+                if (g_iter_first_iters[k].rclass != rclass) continue;
+                if (want_iter < 0) continue;
+                want = head;
+                pos = 0;
+                while (want && pos < want_iter) {
+                    want = want->next;
+                    pos++;
+                }
+                if (!want) continue;
+                if (want == head) continue;
+                prev = head;
+                while (prev && prev->next != want)
+                    prev = prev->next;
+                if (!prev) continue;
+                prev->next = want->next;
+                want->next = head;
+                head = want;
+                moved_idx = -1;
+                if (ig_local) {
+                    for (scan = 0; scan < ig_n_local; scan++) {
+                        if (ig_local[scan] == want) {
+                            moved_idx = scan;
+                            break;
+                        }
+                    }
+                }
+                if (PCFILE && DEBUG_GUARD)
+                {
+                    debug_printf("\n[FORCE_ITER_FIRST_ITER] moved class %d "
+                                 "iter %d (ig_idx %d) to head of "
+                                 "simplification list\n",
+                                 rclass, want_iter, moved_idx);
+                }
+            }
+        }
+
+        if (!iter_fn_scope_skip && !iter_class_scope_skip
+            && g_n_iter_first > 0 && head != 0)
+        {
             // For each requested virtual (in reverse so the FIRST listed ends
             // up at the absolute head), find the IGNode in the list and move
             // it to the head.

@@ -244,6 +244,16 @@ def test_checkdiff_lock_is_repo_wide(checkdiff, tmp_path, monkeypatch):
     assert str(tmp_path) not in first.name
 
 
+def test_checkdiff_no_build_skips_build_report_lock(checkdiff):
+    ap = checkdiff._build_arg_parser()
+
+    no_build_args = ap.parse_args(["fn_alpha", "--no-build", "--format", "json"])
+    build_args = ap.parse_args(["fn_alpha", "--format", "json"])
+
+    assert checkdiff.should_acquire_checkdiff_lock(no_build_args) is False
+    assert checkdiff.should_acquire_checkdiff_lock(build_args) is True
+
+
 def test_record_post_build_novel(checkdiff, tmp_path, monkeypatch):
     """Novel branch: writes a new ledger entry, no banner."""
     ledger = tmp_path / "ledger.json"

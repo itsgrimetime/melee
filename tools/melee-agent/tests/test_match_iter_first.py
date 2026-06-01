@@ -34,6 +34,8 @@ def test_pcdump_local_help_exposes_force_iter_first_function_scope() -> None:
 
     assert proc.returncode == 0
     assert "--force-iter-first-fn" in proc.stdout
+    assert "--force-iter-first-class" in proc.stdout
+    assert "--force-iter-first-iter" in proc.stdout
     assert "Scope --force-iter-first" in proc.stdout
 
 
@@ -228,6 +230,21 @@ def test_force_vector_parser_accepts_phys_coalesce_iter_and_iter_first() -> None
     assert entries[3].ig_idx == 50
 
 
+def test_force_vector_parser_accepts_class_scoped_iter_first() -> None:
+    entries = debug_cli._parse_force_vector(
+        "class1:ig50:iter-first,class1:iter4:iter-first"
+    )
+
+    assert [entry.kind for entry in entries] == [
+        "force_iter_first",
+        "force_iter_first_iter",
+    ]
+    assert entries[0].class_id == 1
+    assert entries[0].ig_idx == 50
+    assert entries[1].class_id == 1
+    assert entries[1].iter_idx == 4
+
+
 def test_force_vector_auto_verify_command_scopes_all_force_types(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -274,6 +291,32 @@ def test_force_vector_auto_verify_command_scopes_all_force_types(
     assert "--checkdiff-timeout" in cmd
     assert cmd[cmd.index("--checkdiff-timeout") + 1] == "12.5"
     assert str(output) in cmd
+
+
+def test_force_vector_auto_verify_command_scopes_iter_first_by_class(
+    tmp_path: pathlib.Path,
+) -> None:
+    src_path = tmp_path / "sample.c"
+    src_path.write_text("void fn_test(void) {}\n", encoding="utf-8")
+    entries = debug_cli._parse_force_vector(
+        "class1:ig50:iter-first,class1:iter4:iter-first"
+    )
+
+    cmd = debug_cli._build_force_vector_auto_verify_cmd(
+        src_path=src_path,
+        function="fn_test",
+        entries=entries,
+        output_path=tmp_path / "forced.pcdump.txt",
+    )
+
+    assert "--force-iter-first" in cmd
+    assert cmd[cmd.index("--force-iter-first") + 1] == "50"
+    assert "--force-iter-first-class" in cmd
+    assert cmd[cmd.index("--force-iter-first-class") + 1] == "1"
+    assert "--force-iter-first-iter" in cmd
+    assert cmd[cmd.index("--force-iter-first-iter") + 1] == "1:4"
+    assert "--force-iter-first-fn" in cmd
+    assert cmd[cmd.index("--force-iter-first-fn") + 1] == "fn_test"
 
 
 def test_force_vector_auto_verify_runs_union_singles_and_prefixes(
@@ -468,5 +511,8 @@ def test_mwcc_debug_dll_has_iter_first_function_scope() -> None:
     dll_source = (MELEE_ROOT / "tools" / "mwcc_debug" / "mwcc_debug.c").read_text()
 
     assert "MWCC_DEBUG_FORCE_ITER_FIRST_FUNCTION" in dll_source
+    assert "MWCC_DEBUG_FORCE_ITER_FIRST_CLASS" in dll_source
+    assert "MWCC_DEBUG_FORCE_ITER_FIRST_ITER" in dll_source
     assert "g_iter_first_scope_fn_set" in dll_source
+    assert "g_iter_first_scope_class_set" in dll_source
     assert "[FORCE_ITER_FIRST] scope skip" in dll_source

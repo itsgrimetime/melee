@@ -10,6 +10,7 @@ import pytest
 from typer.testing import CliRunner
 
 from src.cli import app
+from src.cli import debug as debug_cli
 from src.mwcc_debug.pressure_explorer import (
     compare_pressure_signatures,
     generate_lifetime_layout_probes,
@@ -675,6 +676,73 @@ def test_lifetime_layout_cli_source_failure_keeps_source_path(
     assert variant["source_retained"] == str(source)
 
 
+def test_lifetime_layout_cli_scores_source_with_match_percent_and_stack_slots(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline = tmp_path / "baseline.txt"
+    source = tmp_path / "probe.c"
+    baseline.write_text(BASELINE)
+    source.write_text("void fn_80000000(void) {}\n")
+
+    stack_localizer = {
+        "mismatch_count": 1,
+        "deltas": [4],
+        "mismatches": [
+            {
+                "opcode": "stfs",
+                "expected_offset": 0x34,
+                "current_offset": 0x30,
+                "delta": 4,
+            }
+        ],
+    }
+
+    def fake_compile(*args, **kwargs) -> str:
+        return CANDIDATE
+
+    def fake_real_score(*args, **kwargs):
+        return debug_cli._SourceCandidateRealScore(
+            match_percent=99.94,
+            match_percent_error=None,
+            stack_slot_localizer=stack_localizer,
+            stack_slot_error=None,
+        )
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture.compile_source_variant",
+        fake_compile,
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_score_source_candidate_real_tree",
+        fake_real_score,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "lifetime-layout",
+            "-f",
+            "fn_80000000",
+            "--pcdump",
+            str(baseline),
+            "--candidate",
+            f"temp-introduction={source}",
+            "--pairs",
+            "r37/r40",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    variant = json.loads(result.stdout)["variants"][0]
+    assert variant["final_match_percent"] == 99.94
+    assert variant["stack_slot_localizer"] == stack_localizer
+
+
 def test_lifetime_layout_json_compile_probes_emits_live_candidate_paths(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -705,6 +773,7 @@ def test_lifetime_layout_json_compile_probes_emits_live_candidate_paths(
             "--source-file",
             str(source),
             "--compile-probes",
+            "--no-score-match-percent",
             "--max-probes",
             "1",
             "--json",

@@ -255,6 +255,8 @@ def _parse_force_vector(raw: str) -> list[_ForceVectorEntry]:
       - ``class0:iter5:phys=r31`` -> ``--force-phys-iter 0:5:31``
       - ``ig42:coalesce=38`` / ``ig42:root=38`` / ``42=38`` -> coalesce
       - ``ig50:iter-first`` -> ``--force-iter-first 50``
+      - ``class1:ig50:iter-first`` -> scoped ``--force-iter-first 50``
+      - ``class1:iter4:iter-first`` -> ``--force-iter-first-iter 1:4``
     """
     if any(c in raw for c in '"\';\r\n&|<>'):
         raise ValueError(
@@ -314,6 +316,30 @@ def _parse_force_vector(raw: str) -> list[_ForceVectorEntry]:
                 ))
                 continue
 
+            if len(parts) == 3 and parts[2].lower() in {
+                "iter-first", "iter_first", "first",
+            }:
+                class_name = parts[0].lower()
+                if class_name not in _FORCE_VECTOR_CLASS_NAMES:
+                    raise ValueError(f"unknown force-vector class {parts[0]!r}")
+                class_id = _FORCE_VECTOR_CLASS_NAMES[class_name]
+                middle = parts[1].lower()
+                if middle.startswith("iter"):
+                    entries.append(_ForceVectorEntry(
+                        raw=spec,
+                        kind="force_iter_first_iter",
+                        class_id=class_id,
+                        iter_idx=_parse_force_vector_int(parts[1], prefix="iter"),
+                    ))
+                else:
+                    entries.append(_ForceVectorEntry(
+                        raw=spec,
+                        kind="force_iter_first",
+                        class_id=class_id,
+                        ig_idx=_parse_force_vector_int(parts[1], prefix="ig"),
+                    ))
+                continue
+
             if "=" in lower and ":" not in lower:
                 lhs, rhs = spec.split("=", 1)
                 entries.append(_ForceVectorEntry(
@@ -329,7 +355,8 @@ def _parse_force_vector(raw: str) -> list[_ForceVectorEntry]:
         raise ValueError(
             f"invalid --force-vector entry {spec!r}; expected forms like "
             "ig40:phys=r30, ig42:coalesce=38, "
-            "class0:iter5:phys=r31, or ig50:iter-first"
+            "class0:iter5:phys=r31, class1:ig50:iter-first, "
+            "class1:iter4:iter-first, or ig50:iter-first"
         )
 
     if not entries:
@@ -364,12 +391,48 @@ def _force_vector_dump_args(
         and entry.ig_idx is not None
         and entry.root is not None
     ]
-    force_iter_first = [
+    force_iter_first_unscoped = [
         str(entry.ig_idx)
         for entry in entries
         if entry.kind == "force_iter_first"
+        and entry.class_id is None
         and entry.ig_idx is not None
     ]
+    force_iter_first_scoped = [
+        entry
+        for entry in entries
+        if entry.kind == "force_iter_first"
+        and entry.class_id is not None
+        and entry.ig_idx is not None
+    ]
+    force_iter_first_iter = [
+        f"{entry.class_id}:{entry.iter_idx}"
+        for entry in entries
+        if entry.kind == "force_iter_first_iter"
+        and entry.class_id is not None
+        and entry.iter_idx is not None
+    ]
+    if force_iter_first_unscoped and force_iter_first_scoped:
+        raise ValueError(
+            "--force-vector cannot mix unscoped and class-scoped iter-first "
+            "entries in one probe"
+        )
+    iter_first_classes = {
+        entry.class_id for entry in force_iter_first_scoped
+        if entry.class_id is not None
+    }
+    if len(iter_first_classes) > 1:
+        raise ValueError(
+            "--force-vector class-scoped iter-first entries must use one "
+            "class per probe"
+        )
+    force_iter_first = force_iter_first_unscoped or [
+        str(entry.ig_idx) for entry in force_iter_first_scoped
+        if entry.ig_idx is not None
+    ]
+    force_iter_first_class = (
+        str(next(iter(iter_first_classes))) if iter_first_classes else ""
+    )
 
     args: list[str] = []
     summary = {
@@ -377,6 +440,8 @@ def _force_vector_dump_args(
         "force_phys_iter_csv": ",".join(force_phys_iter),
         "force_coalesce_csv": ",".join(force_coalesce),
         "force_iter_first_csv": ",".join(force_iter_first),
+        "force_iter_first_class": force_iter_first_class,
+        "force_iter_first_iter_csv": ",".join(force_iter_first_iter),
     }
     if force_phys or force_phys_iter:
         needs_force_phys_scope = True
@@ -394,6 +459,14 @@ def _force_vector_dump_args(
         args.extend(["--force-coalesce-fn", function])
     if force_iter_first:
         args.extend(["--force-iter-first", summary["force_iter_first_csv"]])
+        if force_iter_first_class:
+            args.extend(["--force-iter-first-class", force_iter_first_class])
+    if force_iter_first_iter:
+        args.extend([
+            "--force-iter-first-iter",
+            summary["force_iter_first_iter_csv"],
+        ])
+    if force_iter_first or force_iter_first_iter:
         args.extend(["--force-iter-first-fn", function])
     return args, summary
 
@@ -459,6 +532,8 @@ def _force_vector_probe_payload(
         "force_phys_iter_csv": summary["force_phys_iter_csv"],
         "force_coalesce_csv": summary["force_coalesce_csv"],
         "force_iter_first_csv": summary["force_iter_first_csv"],
+        "force_iter_first_class": summary["force_iter_first_class"],
+        "force_iter_first_iter_csv": summary["force_iter_first_iter_csv"],
         "returncode": proc.returncode,
         "match": match,
         "status": (
@@ -800,6 +875,29 @@ def pcdump(
                  "what real MWCC would emit from any C source.",
         ),
     ] = None,
+    force_iter_first_class: Annotated[
+        Optional[int],
+        typer.Option(
+            "--force-iter-first-class",
+            help=(
+                "Scope --force-iter-first IG indices to one register class "
+                "(0=GPR, 1=FPR). Use when the same ig_idx exists in multiple "
+                "classes and an FPR/GPR-only hypothesis must avoid disturbing "
+                "the other allocator pass."
+            ),
+        ),
+    ] = None,
+    force_iter_first_iter: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-iter-first-iter",
+            help=(
+                "Tier 6: reorder simplification list by class and current "
+                "iteration position. Format 'class:iter[,class:iter]*'. "
+                "Useful for split/spill nodes that lack a stable ig_idx."
+            ),
+        ),
+    ] = None,
     force_iter_first_fn: Annotated[
         Optional[str],
         typer.Option(
@@ -941,6 +1039,25 @@ def pcdump(
         cmd_parts.append(_cmd_set_env(
             "MWCC_DEBUG_FORCE_ITER_FIRST",
             force_iter_first,
+        ))
+    if force_iter_first_class is not None:
+        if not force_iter_first:
+            raise typer.BadParameter(
+                "--force-iter-first-class requires --force-iter-first"
+            )
+        cmd_parts.append(_cmd_set_env(
+            "MWCC_DEBUG_FORCE_ITER_FIRST_CLASS",
+            str(force_iter_first_class),
+        ))
+    if force_iter_first_iter:
+        if any(c in force_iter_first_iter for c in '"\'; \t&|<>'):
+            raise typer.BadParameter(
+                "--force-iter-first-iter must not contain quotes, semicolons, "
+                "whitespace, or shell metacharacters"
+            )
+        cmd_parts.append(_cmd_set_env(
+            "MWCC_DEBUG_FORCE_ITER_FIRST_ITER",
+            force_iter_first_iter,
         ))
     if force_iter_first_fn:
         if any(c in force_iter_first_fn for c in '"\'; \t&|<>'):
@@ -9383,8 +9500,8 @@ def pcdump_local(
             "--force-phys",
             help="Tier 5: allocator bias by ig_idx. Format "
                  "'virtIdx:physReg[,...]' or 'class:virtIdx:physReg[,...]'. "
-                 "E.g. '36:31' or 'gpr:36:31'. The DLL ignores the class "
-                 "prefix and still applies by ig_idx across register classes; "
+                 "The DLL ignores the class prefix and still applies by ig_idx "
+                 "across register classes; "
                  "use --force-phys-iter for class-precise control. By default "
                  "applies globally — scope with --force-phys-fn. "
                  "DIAGNOSTIC-ONLY: uses the patched debug compiler and does "
@@ -9421,6 +9538,28 @@ def pcdump_local(
                  "--force-iter-first-fn on multi-function TUs. "
                  "DIAGNOSTIC-ONLY: uses the patched debug compiler and does "
                  "not affect production ninja builds.",
+        ),
+    ] = None,
+    force_iter_first_class: Annotated[
+        Optional[int],
+        typer.Option(
+            "--force-iter-first-class",
+            help=(
+                "Scope --force-iter-first IG indices to one register class "
+                "(0=GPR, 1=FPR), preventing an FPR-only probe from reordering "
+                "same-numbered GPR nodes or vice versa."
+            ),
+        ),
+    ] = None,
+    force_iter_first_iter: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-iter-first-iter",
+            help=(
+                "Tier 6: reorder simplification list by class and current "
+                "iteration position. Format 'class:iter[,class:iter]*'. "
+                "Useful for split/spill nodes that lack a stable ig_idx."
+            ),
         ),
     ] = None,
     force_iter_first_fn: Annotated[
@@ -9654,6 +9793,19 @@ def pcdump_local(
         env["MWCC_DEBUG_FORCE_PHYS_FUNCTION"] = force_phys_fn
     if force_iter_first:
         env["MWCC_DEBUG_FORCE_ITER_FIRST"] = force_iter_first
+    if force_iter_first_class is not None:
+        if not force_iter_first:
+            raise typer.BadParameter(
+                "--force-iter-first-class requires --force-iter-first"
+            )
+        env["MWCC_DEBUG_FORCE_ITER_FIRST_CLASS"] = str(force_iter_first_class)
+    if force_iter_first_iter:
+        if any(c in force_iter_first_iter for c in '"\'; \t&|<>'):
+            raise typer.BadParameter(
+                "--force-iter-first-iter must not contain quotes, semicolons, "
+                "whitespace, or shell metacharacters"
+            )
+        env["MWCC_DEBUG_FORCE_ITER_FIRST_ITER"] = force_iter_first_iter
     if force_iter_first_fn:
         env["MWCC_DEBUG_FORCE_ITER_FIRST_FUNCTION"] = force_iter_first_fn
     if force_coalesce:
@@ -12309,20 +12461,96 @@ def _unregister_active_source_restore(path: Path) -> None:
     _ACTIVE_SOURCE_RESTORES.pop(path, None)
 
 
-def _select_order_source_match_percent(
+@dataclasses.dataclass(frozen=True)
+class _SourceCandidateRealScore:
+    match_percent: float | None
+    match_percent_error: str | None
+    stack_slot_localizer: dict | None = None
+    stack_slot_error: str | None = None
+
+
+def _find_stack_slot_localizer_in_json(value: object) -> dict | None:
+    if isinstance(value, dict):
+        localizer = value.get("stack_slot_localizer")
+        if isinstance(localizer, dict):
+            return localizer
+        for child in value.values():
+            found = _find_stack_slot_localizer_in_json(child)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for child in value:
+            found = _find_stack_slot_localizer_in_json(child)
+            if found is not None:
+                return found
+    return None
+
+
+def _run_checkdiff_stack_slot_localizer(
+    *,
+    function: str,
+    melee_root: Path,
+    timeout: float | None = None,
+) -> tuple[dict | None, str | None]:
+    try:
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "tools/checkdiff.py",
+                function,
+                "--format",
+                "json",
+                "--no-build",
+            ],
+            cwd=melee_root,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return None, "checkdiff stack-slot localizer timed out"
+    except Exception as exc:
+        return None, f"checkdiff stack-slot localizer failed: {exc}"
+
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        detail = (proc.stderr or proc.stdout or str(exc)).strip()
+        return None, f"checkdiff stack-slot localizer emitted non-json: {detail}"
+
+    localizer = _find_stack_slot_localizer_in_json(payload)
+    if localizer is not None:
+        return localizer, None
+    if proc.returncode not in (0, 1):
+        detail = (proc.stderr or proc.stdout or "").strip()
+        return None, (
+            f"checkdiff stack-slot localizer failed with exit {proc.returncode}"
+            + (f": {detail}" if detail else "")
+        )
+    return None, None
+
+
+def _score_source_candidate_real_tree(
     path: Path,
     *,
     function: str,
     melee_root: Path,
     timeout: float | None = None,
     status: Callable[[str], None] | None = None,
-) -> tuple[float | None, str | None]:
+    include_stack_slot: bool = False,
+) -> _SourceCandidateRealScore:
     unit = _find_unit_for_function(function, melee_root)
     if unit is None:
-        return None, f"function not found in report.json: {function}"
+        return _SourceCandidateRealScore(
+            None,
+            f"function not found in report.json: {function}",
+        )
     target_path = melee_root / "src" / f"{unit}.c"
     if not target_path.exists():
-        return None, f"target source not found: {target_path}"
+        return _SourceCandidateRealScore(
+            None,
+            f"target source not found: {target_path}",
+        )
     if status is not None:
         status("waiting for source-scoring lock")
     with _acquire_source_score_repo_lock(melee_root):
@@ -12341,7 +12569,7 @@ def _select_order_source_match_percent(
                 status(f"applying candidate to src/{unit}.c")
             if transfer_candidate(candidate_text, target_path, function) is None:
                 result = (None, f"function not found in candidate source: {path}")
-                return result
+                return _SourceCandidateRealScore(*result)
             applied = True
             if status is not None:
                 status(f"building {obj_path}")
@@ -12359,7 +12587,7 @@ def _select_order_source_match_percent(
                         + (" after retry" if retried else "")
                     ),
                 ))
-                return result
+                return _SourceCandidateRealScore(*result)
             if status is not None:
                 status("build complete; refreshing report.json")
             result = _refresh_match_pct_after_successful_build(
@@ -12368,9 +12596,26 @@ def _select_order_source_match_percent(
                 melee_root,
                 timeout=timeout,
             )
+            stack_slot_localizer = None
+            stack_slot_error = None
+            if include_stack_slot:
+                if status is not None:
+                    status("running checkdiff stack-slot localizer")
+                stack_slot_localizer, stack_slot_error = (
+                    _run_checkdiff_stack_slot_localizer(
+                        function=function,
+                        melee_root=melee_root,
+                        timeout=timeout,
+                    )
+                )
             if status is not None:
                 status("match-percent refresh complete")
-            return result
+            return _SourceCandidateRealScore(
+                result[0],
+                result[1],
+                stack_slot_localizer,
+                stack_slot_error,
+            )
         finally:
             if applied:
                 if status is not None:
@@ -12406,6 +12651,24 @@ def _select_order_source_match_percent(
                 raise RuntimeError(restore_error)
             if cleanup_error:
                 raise RuntimeError(cleanup_error)
+
+
+def _select_order_source_match_percent(
+    path: Path,
+    *,
+    function: str,
+    melee_root: Path,
+    timeout: float | None = None,
+    status: Callable[[str], None] | None = None,
+) -> tuple[float | None, str | None]:
+    score = _score_source_candidate_real_tree(
+        path,
+        function=function,
+        melee_root=melee_root,
+        timeout=timeout,
+        status=status,
+    )
+    return score.match_percent, score.match_percent_error
 
 
 def _select_order_source_fingerprints(
@@ -14391,6 +14654,18 @@ def mutate_lifetime_layout_cmd(
             help="Compile generated source probes and report pressure deltas.",
         ),
     ] = False,
+    score_match_percent: Annotated[
+        bool,
+        typer.Option(
+            "--score-match-percent/--no-score-match-percent",
+            help=(
+                "For source candidates, temporarily transfer into the real "
+                "tree and read final report.json match percent plus "
+                "checkdiff stack-slot deltas. Enabled by default; use "
+                "--no-score-match-percent for faster pcdump-only scoring."
+            ),
+        ),
+    ] = True,
     max_probes: Annotated[
         int,
         typer.Option(
@@ -14482,6 +14757,21 @@ def mutate_lifetime_layout_cmd(
                 )
             else:
                 raise ValueError(f"expected .txt pcdump or .c source, got {path}")
+            real_score = _SourceCandidateRealScore(None, None)
+            if score_match_percent and path.suffix == ".c":
+                status = (
+                    _make_real_score_status("lifetime-layout", label)
+                    if not json_out
+                    else None
+                )
+                real_score = _score_source_candidate_real_tree(
+                    path,
+                    function=function,
+                    melee_root=DEFAULT_MELEE_ROOT,
+                    timeout=timeout,
+                    status=status,
+                    include_stack_slot=True,
+                )
             try:
                 candidate_sig = pressure_signature_from_pcdump(
                     candidate_text,
@@ -14496,7 +14786,7 @@ def mutate_lifetime_layout_cmd(
                     ) from exc
                 raise
             delta = compare_pressure_signatures(baseline, candidate_sig)
-            variants.append({
+            variant = {
                 "label": label,
                 "operator": operator,
                 "status": "ok",
@@ -14504,7 +14794,16 @@ def mutate_lifetime_layout_cmd(
                 "signature": candidate_sig.to_dict(),
                 "delta": delta.to_dict(),
                 "_text": render_pressure_delta(label, operator, delta),
-            })
+            }
+            if real_score.match_percent is not None:
+                variant["final_match_percent"] = real_score.match_percent
+            if real_score.match_percent_error is not None:
+                variant["match_percent_error"] = real_score.match_percent_error
+            if real_score.stack_slot_localizer is not None:
+                variant["stack_slot_localizer"] = real_score.stack_slot_localizer
+            if real_score.stack_slot_error is not None:
+                variant["stack_slot_error"] = real_score.stack_slot_error
+            variants.append(variant)
         except Exception as exc:
             failed = {
                 "label": label,
@@ -14582,6 +14881,23 @@ def mutate_lifetime_layout_cmd(
         for variant in variants:
             if variant["status"] == "ok":
                 print(variant["_text"])
+                if variant.get("final_match_percent") is not None:
+                    print(
+                        f"  final_match_percent: "
+                        f"{variant['final_match_percent']:.6g}"
+                    )
+                if variant.get("match_percent_error"):
+                    print(f"  match_percent_error: {variant['match_percent_error']}")
+                if variant.get("stack_slot_localizer"):
+                    localizer = variant["stack_slot_localizer"]
+                    deltas = ",".join(str(d) for d in localizer.get("deltas", []))
+                    mismatch_count = localizer.get("mismatch_count", 0)
+                    print(
+                        f"  stack_slot_localizer: {mismatch_count} mismatch(es)"
+                        + (f", deltas={deltas}" if deltas else "")
+                    )
+                if variant.get("stack_slot_error"):
+                    print(f"  stack_slot_error: {variant['stack_slot_error']}")
             else:
                 print(
                     f"- {variant['label']} [{variant['operator']}] failed: "

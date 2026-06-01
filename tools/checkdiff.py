@@ -356,6 +356,11 @@ def acquire_checkdiff_lock(obj_path: str):
     return lock_file
 
 
+def should_acquire_checkdiff_lock(args) -> bool:
+    """Return whether this checkdiff invocation mutates build/report state."""
+    return not getattr(args, "no_build", False)
+
+
 def _asm_body(line: str) -> str:
     if line.startswith("<"):
         return line
@@ -1809,7 +1814,11 @@ def main() -> int:
         )
 
     c_file = SRC_ROOT / f"{obj_path}.c"
-    lock_handle = acquire_checkdiff_lock(obj_path)
+    lock_handle = (
+        acquire_checkdiff_lock(obj_path)
+        if should_acquire_checkdiff_lock(args)
+        else None
+    )
     _ = lock_handle  # Keep the lock file alive until process exit.
 
     # Pre-build phase: compute fingerprint and look up prior attempt.
