@@ -12962,6 +12962,31 @@ def inspect_stack_homes(
             help="Timeout in seconds when auto-running checkdiff.",
         ),
     ] = 60.0,
+    score_sqrt_array_variants: Annotated[
+        bool,
+        typer.Option(
+            "--score-sqrt-array-variants",
+            help=(
+                "Generate local-array sqrtf variants, compile them in the "
+                "current tree, and rank target stack-slot movement before "
+                "overall match percent."
+            ),
+        ),
+    ] = False,
+    max_variants: Annotated[
+        int,
+        typer.Option(
+            "--max-variants",
+            help="Maximum generated sqrt-array variants to score.",
+        ),
+    ] = 4,
+    variant_timeout: Annotated[
+        float,
+        typer.Option(
+            "--variant-timeout",
+            help="Timeout in seconds for each generated variant build/score.",
+        ),
+    ] = 120.0,
     json_out: Annotated[
         bool,
         typer.Option("--json", help="Emit as JSON."),
@@ -12969,7 +12994,9 @@ def inspect_stack_homes(
 ) -> None:
     """Explain final-only FPR stack-home targets and source-shape leads."""
     from ..mwcc_debug.stack_home_explorer import (
+        attach_variant_rankings,
         explore_stack_homes,
+        generate_local_array_sqrt_variants,
         render_stack_home_report_text,
     )
 
@@ -13039,6 +13066,45 @@ def inspect_stack_homes(
         source_text=source_text,
         source_file=source_label,
     )
+    if score_sqrt_array_variants:
+        if source_text is None:
+            typer.echo(
+                "--score-sqrt-array-variants requires source text; pass "
+                "--source-file or rebuild report.json so the function source "
+                "can be resolved.",
+                err=True,
+            )
+            raise typer.Exit(2)
+        variants = generate_local_array_sqrt_variants(
+            source_text,
+            function,
+            max_variants=max_variants,
+        )
+        variant_results: list[dict] = []
+        with tempfile.TemporaryDirectory(prefix="stack-home-variants-") as td:
+            temp_dir = Path(td)
+            for variant in variants:
+                variant_id = variant["id"]
+                candidate_path = temp_dir / f"{variant_id}.c"
+                candidate_path.write_text(variant["candidate_source"])
+                score = _score_source_candidate_real_tree(
+                    candidate_path,
+                    function=function,
+                    melee_root=melee_root,
+                    timeout=variant_timeout,
+                    include_stack_slot=True,
+                )
+                variant_results.append({
+                    "variant_id": variant_id,
+                    "kind": variant["kind"],
+                    "description": variant["description"],
+                    "match_percent": score.match_percent,
+                    "match_percent_error": score.match_percent_error,
+                    "stack_slot_localizer": score.stack_slot_localizer,
+                    "stack_slot_error": score.stack_slot_error,
+                    "source_patch": variant.get("source_patch"),
+                })
+        attach_variant_rankings(report, variant_results)
     if json_out:
         print(json.dumps(report, indent=2))
     else:

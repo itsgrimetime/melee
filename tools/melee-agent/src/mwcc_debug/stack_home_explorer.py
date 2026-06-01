@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import difflib
+import re
 from dataclasses import asdict
 from typing import Any
 
@@ -141,7 +143,374 @@ def render_stack_home_report_text(report: dict[str, Any]) -> str:
                 sketch = suggestion.get("edit_sketch")
                 if sketch:
                     lines.append(f"       sketch: {sketch}")
+    rankings = report.get("variant_rankings") or []
+    if rankings:
+        lines.append("")
+        lines.append("seeded variant rankings:")
+        for variant in rankings:
+            objective = variant.get("target_objective") or {}
+            match = objective.get("overall_match_percent")
+            match_text = "?" if match is None else f"{match:.5f}"
+            lines.append(
+                f"  {variant.get('rank')}. {variant.get('variant_id')} "
+                f"target_fixed={objective.get('target_fixed')} "
+                f"match={match_text}"
+            )
+            summary = variant.get("summary")
+            if summary:
+                lines.append(f"     {summary}")
     return "\n".join(lines)
+
+
+def generate_local_array_sqrt_variants(
+    source_text: str,
+    function: str,
+    *,
+    max_variants: int | None = None,
+) -> list[dict[str, Any]]:
+    """Seed known sqrtf local-array stack-layout variants."""
+    bounds = _find_function_bounds(source_text, function)
+    if bounds is None:
+        return []
+    fn_start, fn_end = bounds
+    function_text = source_text[fn_start:fn_end]
+    assignment = _find_first_sqrt_assignment(function_text)
+    if assignment is None:
+        return []
+
+    specs = [
+        ("local-array-sqrt-slot-1-index-0", 1, 0, "function-top"),
+        ("local-array-sqrt-slot-2-index-1", 2, 1, "function-top"),
+        ("branch-local-array-sqrt-slot-1-index-0", 1, 0, "branch-local"),
+        ("branch-local-array-sqrt-slot-2-index-1", 2, 1, "branch-local"),
+    ]
+    variants: list[dict[str, Any]] = []
+    for variant_id, array_size, index, placement in specs:
+        candidate_function = _apply_sqrt_array_variant(
+            function_text,
+            assignment,
+            array_size=array_size,
+            index=index,
+            placement=placement,
+        )
+        if candidate_function is None:
+            continue
+        candidate_source = source_text[:fn_start] + candidate_function + source_text[fn_end:]
+        variants.append({
+            "id": variant_id,
+            "kind": "local-array-sqrt-slot",
+            "description": (
+                f"local float array around sqrtf ({placement}, "
+                f"f32 sqrt_slot[{array_size}], index {index})"
+            ),
+            "placement": placement,
+            "array_size": array_size,
+            "index": index,
+            "candidate_source": candidate_source,
+            "source_patch": "\n".join(difflib.unified_diff(
+                source_text.splitlines(),
+                candidate_source.splitlines(),
+                fromfile="source.c",
+                tofile=f"{variant_id}.c",
+                lineterm="",
+            )),
+        })
+        if max_variants is not None and len(variants) >= max_variants:
+            break
+    return variants
+
+
+def attach_variant_rankings(
+    report: dict[str, Any],
+    variant_results: list[dict[str, Any]],
+) -> dict[str, Any]:
+    ranked = rank_stack_home_variant_results(
+        report.get("targets") or [],
+        variant_results,
+    )
+    report["variant_rankings"] = ranked
+    report["ranking"]["target_movement_measured"] = bool(ranked)
+    report["ranking"]["overall_match_percent_used"] = bool(ranked)
+    if ranked:
+        report["ranking"]["note"] = (
+            "Variants are ranked by target stack-slot movement first, then "
+            "overall match percent."
+        )
+    return report
+
+
+def rank_stack_home_variant_results(
+    targets: list[dict[str, Any]],
+    variant_results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    ranked: list[dict[str, Any]] = []
+    for result in variant_results:
+        objective = _variant_target_objective(targets, result)
+        item = {
+            "variant_id": result.get("variant_id") or result.get("id"),
+            "kind": result.get("kind"),
+            "description": result.get("description"),
+            "target_objective": objective,
+            "match_percent_error": result.get("match_percent_error"),
+            "stack_slot_error": result.get("stack_slot_error"),
+            "remaining_stack_slot_deltas": _remaining_stack_slot_deltas(
+                result.get("stack_slot_localizer"),
+            ),
+            "named_local_deltas": result.get("named_local_deltas") or [],
+            "source_patch": result.get("source_patch"),
+        }
+        item["summary"] = _variant_summary(item)
+        ranked.append(item)
+
+    ranked.sort(key=_variant_sort_key, reverse=True)
+    for rank, item in enumerate(ranked, start=1):
+        item["rank"] = rank
+    return ranked
+
+
+def _variant_target_objective(
+    targets: list[dict[str, Any]],
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    localizer = result.get("stack_slot_localizer")
+    fixed = 0
+    statuses: list[dict[str, Any]] = []
+    for target in targets:
+        current = _int_or_none(target.get("current_offset"))
+        expected = _int_or_none(target.get("expected_offset"))
+        opcode = target.get("opcode")
+        observed = _find_matching_mismatch(localizer, opcode, current, expected)
+        target_fixed = observed is None
+        fixed += 1 if target_fixed else 0
+        statuses.append({
+            "opcode": opcode,
+            "virtual_token": target.get("virtual_token"),
+            "baseline_current_offset": current,
+            "expected_offset": expected,
+            "target_fixed": target_fixed,
+            "observed_mismatch": observed,
+        })
+    target_count = len(targets)
+    movement_score = fixed / target_count if target_count else 0.0
+    return {
+        "fixed_count": fixed,
+        "target_count": target_count,
+        "target_fixed": bool(target_count) and fixed == target_count,
+        "movement_score": movement_score,
+        "target_statuses": statuses,
+        "overall_match_percent": result.get("match_percent"),
+        "target_movement_measured": True,
+    }
+
+
+def _find_matching_mismatch(
+    localizer: Any,
+    opcode: Any,
+    current: int | None,
+    expected: int | None,
+) -> dict[str, Any] | None:
+    if not isinstance(localizer, dict):
+        return None
+    for mismatch in localizer.get("mismatches") or []:
+        if not isinstance(mismatch, dict):
+            continue
+        if str(mismatch.get("opcode")).lower() != str(opcode).lower():
+            continue
+        if _int_or_none(mismatch.get("current_offset")) != current:
+            continue
+        if _int_or_none(mismatch.get("expected_offset")) != expected:
+            continue
+        return dict(mismatch)
+    return None
+
+
+def _remaining_stack_slot_deltas(localizer: Any) -> list[dict[str, Any]]:
+    if not isinstance(localizer, dict):
+        return []
+    out: list[dict[str, Any]] = []
+    for mismatch in localizer.get("mismatches") or []:
+        if not isinstance(mismatch, dict):
+            continue
+        out.append({
+            "opcode": mismatch.get("opcode"),
+            "current_offset": mismatch.get("current_offset"),
+            "expected_offset": mismatch.get("expected_offset"),
+            "delta": mismatch.get("delta"),
+        })
+    return out
+
+
+def _variant_summary(variant: dict[str, Any]) -> str:
+    objective = variant.get("target_objective") or {}
+    if objective.get("target_fixed"):
+        parts = ["target fixed"]
+    else:
+        fixed = objective.get("fixed_count")
+        total = objective.get("target_count")
+        parts = [f"target partly fixed ({fixed}/{total})"]
+    named = [
+        f"{item.get('name')} {_format_signed(item.get('delta'))}"
+        for item in variant.get("named_local_deltas") or []
+        if item.get("name") is not None and item.get("delta") is not None
+    ]
+    if named:
+        parts.append("; ".join(named))
+    remaining = variant.get("remaining_stack_slot_deltas") or []
+    if remaining and not named:
+        parts.append(f"{len(remaining)} remaining stack-slot delta(s)")
+    return "; ".join(parts)
+
+
+def _variant_sort_key(variant: dict[str, Any]) -> tuple[float, float, float]:
+    objective = variant.get("target_objective") or {}
+    target_fixed = 1.0 if objective.get("target_fixed") else 0.0
+    movement = float(objective.get("movement_score") or 0.0)
+    match = objective.get("overall_match_percent")
+    match_score = float(match) if isinstance(match, (int, float)) else -1.0
+    return target_fixed, movement, match_score
+
+
+def _find_function_bounds(source_text: str, function: str) -> tuple[int, int] | None:
+    match = re.search(rf"\b{re.escape(function)}\s*\(", source_text)
+    if match is None:
+        return None
+    open_brace = source_text.find("{", match.end())
+    if open_brace < 0:
+        return None
+    close_brace = _find_matching(source_text, open_brace, "{", "}")
+    if close_brace is None:
+        return None
+    line_start = source_text.rfind("\n", 0, match.start()) + 1
+    return line_start, close_brace + 1
+
+
+def _find_first_sqrt_assignment(function_text: str) -> dict[str, Any] | None:
+    sqrt_pos = function_text.find("sqrtf(")
+    if sqrt_pos < 0:
+        return None
+    line_start = function_text.rfind("\n", 0, sqrt_pos) + 1
+    prefix = function_text[line_start:sqrt_pos]
+    match = re.search(
+        r"(?P<indent>[ \t]*)(?P<lhs>[A-Za-z_]\w*)\s*=\s*$",
+        prefix,
+    )
+    if match is None:
+        return None
+    open_paren = function_text.find("(", sqrt_pos)
+    close_paren = _find_matching(function_text, open_paren, "(", ")")
+    if close_paren is None:
+        return None
+    semicolon = function_text.find(";", close_paren)
+    if semicolon < 0:
+        return None
+    return {
+        "line_start": line_start,
+        "end": semicolon + 1,
+        "lhs": match.group("lhs"),
+        "indent": match.group("indent"),
+        "sqrt_call": function_text[sqrt_pos:semicolon].strip(),
+    }
+
+
+def _apply_sqrt_array_variant(
+    function_text: str,
+    assignment: dict[str, Any],
+    *,
+    array_size: int,
+    index: int,
+    placement: str,
+) -> str | None:
+    decl = f"f32 sqrt_slot[{array_size}];"
+    assign = (
+        f"{assignment['indent']}sqrt_slot[{index}] = {assignment['sqrt_call']};\n"
+        f"{assignment['indent']}{assignment['lhs']} = sqrt_slot[{index}];"
+    )
+    replaced = (
+        function_text[:assignment["line_start"]]
+        + assign
+        + function_text[assignment["end"]:]
+    )
+    if placement == "function-top":
+        insert_at = _top_decl_insert_pos(replaced)
+        if insert_at is None:
+            return None
+        indent = _line_indent_at(replaced, insert_at) or "    "
+        return replaced[:insert_at] + f"{indent}{decl}\n" + replaced[insert_at:]
+    if placement == "branch-local":
+        return (
+            function_text[:assignment["line_start"]]
+            + f"{assignment['indent']}{decl}\n"
+            + assign
+            + function_text[assignment["end"]:]
+        )
+    return None
+
+
+def _top_decl_insert_pos(function_text: str) -> int | None:
+    open_brace = function_text.find("{")
+    if open_brace < 0:
+        return None
+    body_start = open_brace + 1
+    lines = list(re.finditer(r".*(?:\n|$)", function_text[body_start:]))
+    last_decl_end: int | None = None
+    in_decl_block = True
+    for line_match in lines:
+        raw = line_match.group(0)
+        if raw == "":
+            continue
+        stripped = raw.strip()
+        abs_end = body_start + line_match.end()
+        if not stripped:
+            if last_decl_end is not None:
+                return body_start + line_match.start()
+            continue
+        if in_decl_block and _looks_like_local_decl(stripped):
+            last_decl_end = abs_end
+            continue
+        in_decl_block = False
+        break
+    return last_decl_end
+
+
+def _looks_like_local_decl(stripped_line: str) -> bool:
+    if not stripped_line.endswith(";"):
+        return False
+    if stripped_line.startswith(("return ", "if ", "for ", "while ", "switch ")):
+        return False
+    return bool(re.match(
+        r"(?:const\s+|volatile\s+|static\s+)?"
+        r"(?:f32|float|double|s32|u32|int|Vec3|[A-Za-z_]\w*_t|[A-Za-z_]\w*)"
+        r"(?:\s*\*|\s+)+[A-Za-z_]\w*",
+        stripped_line,
+    ))
+
+
+def _line_indent_at(text: str, pos: int) -> str:
+    line_start = text.rfind("\n", 0, pos) + 1
+    match = re.match(r"[ \t]*", text[line_start:pos])
+    return "" if match is None else match.group(0)
+
+
+def _find_matching(text: str, open_idx: int, open_char: str, close_char: str) -> int | None:
+    if open_idx < 0 or open_idx >= len(text) or text[open_idx] != open_char:
+        return None
+    depth = 0
+    for idx in range(open_idx, len(text)):
+        char = text[idx]
+        if char == open_char:
+            depth += 1
+        elif char == close_char:
+            depth -= 1
+            if depth == 0:
+                return idx
+    return None
+
+
+def _format_signed(value: Any) -> str:
+    number = _int_or_none(value)
+    if number is None:
+        return str(value)
+    return f"{number:+d}"
 
 
 def _is_stack_home_candidate(candidate: dict[str, Any]) -> bool:

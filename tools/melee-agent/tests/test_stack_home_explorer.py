@@ -9,7 +9,11 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from src.cli import app
-from src.mwcc_debug.stack_home_explorer import explore_stack_homes
+from src.mwcc_debug.stack_home_explorer import (
+    attach_variant_rankings,
+    explore_stack_homes,
+    generate_local_array_sqrt_variants,
+)
 
 
 runner = CliRunner()
@@ -180,3 +184,181 @@ def test_stack_home_explorer_cli_consumes_checkdiff_json(
     assert payload["status"] == "ok"
     assert payload["targets"][0]["register_class_name"] == "fpr"
     assert payload["targets"][0]["suggestions"][0]["rank"] == 1
+
+
+def test_stack_home_explorer_seeds_local_array_sqrt_variants() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000001(float a, float b, float c)
+        {
+            f32 dist;
+            f32 sum;
+
+            dist = sqrtf((a * a) +
+                         (b * c));
+            sink(dist + sum);
+        }
+    """)
+
+    variants = generate_local_array_sqrt_variants(
+        source,
+        "fn_80000001",
+    )
+
+    by_id = {variant["id"]: variant for variant in variants}
+    variant = by_id["local-array-sqrt-slot-1-index-0"]
+    assert variant["kind"] == "local-array-sqrt-slot"
+    assert "f32 sqrt_slot[1];" in variant["candidate_source"]
+    assert "sqrt_slot[0] = sqrtf((a * a) +" in variant["candidate_source"]
+    assert "dist = sqrt_slot[0];" in variant["candidate_source"]
+    assert "local float array around sqrtf" in variant["description"]
+    assert "source_patch" in variant
+
+
+def test_stack_home_explorer_ranks_target_movement_before_match_percent() -> None:
+    report = explore_stack_homes(
+        PCDUMP,
+        "fn_80000001",
+        LOCALIZER,
+        source_text=SOURCE,
+        source_file="src/melee/pl/plbonuslib.c",
+    )
+    still_mismatched = {
+        "mismatch_count": 2,
+        "mismatches": [
+            {
+                "opcode": "stfs",
+                "expected_offset": 0x34,
+                "current_offset": 0x30,
+                "delta": 4,
+            },
+            {
+                "opcode": "lfs",
+                "expected_offset": 0x34,
+                "current_offset": 0x30,
+                "delta": 4,
+            },
+        ],
+    }
+    target_fixed_but_lower_score = {
+        "mismatch_count": 2,
+        "mismatches": [
+            {
+                "opcode": "lwz",
+                "expected_offset": 0x44,
+                "current_offset": 0x48,
+                "delta": -4,
+            },
+            {
+                "opcode": "stfs",
+                "expected_offset": 0x38,
+                "current_offset": 0x3C,
+                "delta": -4,
+            },
+        ],
+    }
+
+    attach_variant_rankings(
+        report,
+        [
+            {
+                "variant_id": "named-float-temp",
+                "kind": "introduce-named-float-temp",
+                "description": "keeps target mismatch",
+                "match_percent": 99.99,
+                "stack_slot_localizer": still_mismatched,
+            },
+            {
+                "variant_id": "local-array-sqrt-slot-1-index-0",
+                "kind": "local-array-sqrt-slot",
+                "description": "local float array around sqrtf",
+                "match_percent": 99.86643,
+                "stack_slot_localizer": target_fixed_but_lower_score,
+                "named_local_deltas": [
+                    {"name": "cam_pos", "delta": 4},
+                    {"name": "other_pos", "delta": 4},
+                ],
+            },
+        ],
+    )
+
+    ranked = report["variant_rankings"]
+    assert ranked[0]["variant_id"] == "local-array-sqrt-slot-1-index-0"
+    assert ranked[0]["target_objective"]["fixed_count"] == 2
+    assert ranked[0]["target_objective"]["target_fixed"] is True
+    assert ranked[0]["target_objective"]["overall_match_percent"] == 99.86643
+    assert ranked[0]["named_local_deltas"] == [
+        {"name": "cam_pos", "delta": 4},
+        {"name": "other_pos", "delta": 4},
+    ]
+    assert "target fixed" in ranked[0]["summary"]
+    assert "cam_pos +4" in ranked[0]["summary"]
+    assert ranked[1]["target_objective"]["fixed_count"] == 0
+
+
+def test_stack_home_explorer_cli_scores_seeded_sqrt_variants(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "source.c"
+    source.write_text(textwrap.dedent("""\
+        void fn_80000001(float a, float b, float c)
+        {
+            f32 dist;
+            f32 sum;
+
+            dist = sqrtf((a * a) +
+                         (b * c));
+            sink(dist + sum);
+        }
+    """))
+    pcdump = tmp_path / "pcdump.txt"
+    pcdump.write_text(PCDUMP)
+    checkdiff = tmp_path / "checkdiff.json"
+    checkdiff.write_text(json.dumps({"stack_slot_localizer": LOCALIZER}))
+
+    def fake_score(path, *, function, melee_root, timeout=None, status=None, include_stack_slot=False):
+        text = path.read_text()
+        if "sqrt_slot[0] = sqrtf" in text:
+            localizer = {"mismatch_count": 0, "mismatches": []}
+            match = 99.86643
+        else:
+            localizer = LOCALIZER
+            match = 99.99
+        return type("Score", (), {
+            "match_percent": match,
+            "match_percent_error": None,
+            "stack_slot_localizer": localizer,
+            "stack_slot_error": None,
+        })()
+
+    monkeypatch.setattr(
+        "src.cli.debug._score_source_candidate_real_tree",
+        fake_score,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "stack-homes",
+            "-f",
+            "fn_80000001",
+            str(pcdump),
+            "--checkdiff-json",
+            str(checkdiff),
+            "--source-file",
+            str(source),
+            "--score-sqrt-array-variants",
+            "--max-variants",
+            "2",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["ranking"]["target_movement_measured"] is True
+    assert payload["ranking"]["overall_match_percent_used"] is True
+    assert payload["variant_rankings"][0]["kind"] == "local-array-sqrt-slot"
+    assert payload["variant_rankings"][0]["target_objective"]["target_fixed"] is True
