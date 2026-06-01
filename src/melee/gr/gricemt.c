@@ -1572,6 +1572,11 @@ void grIceMt_801F9ACC(Ground_GObj* gobj, float y, GrIceMtSegmentLookup ev,
     }
 }
 
+static inline HSD_JObj** grIceMt_FA0BC_jobjs(Ground* g)
+{
+    return &g->gv.icemt2.xC8;
+}
+
 void grIceMt_801FA0BC(s16* arg0)
 {
     HSD_GObj* gobj;
@@ -1616,7 +1621,7 @@ void grIceMt_801FA0BC(s16* arg0)
         ((UnkFlagStruct*) &gp->gv.icemt2.xC4)->b1 = 1;
         gp = gobj->user_data;
         {
-            HSD_JObj** jobjs = &gp->gv.icemt2.xC8;
+            HSD_JObj** jobjs = grIceMt_FA0BC_jobjs(gp);
             if (((UnkFlagStruct*) &gp->gv.icemt2.xC4)->b1) {
                 ((UnkFlagStruct*) &gp->gv.icemt2.xC4)->b1 = 0;
                 if (jobjs[0] != NULL) {
