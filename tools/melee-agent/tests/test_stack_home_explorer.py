@@ -295,40 +295,170 @@ def test_stack_home_explorer_ranks_target_movement_before_match_percent() -> Non
     assert ranked[1]["target_objective"]["fixed_count"] == 0
 
 
+def test_stack_home_explorer_derives_named_local_deltas_from_checkdiff_context() -> None:
+    report = explore_stack_homes(
+        PCDUMP,
+        "fn_80000001",
+        LOCALIZER,
+        source_text=textwrap.dedent("""\
+            void fn_80000001(int i, Vec3* pos)
+            {
+                Vec3 other_pos;
+                Vec3 cam_pos;
+                Player_LoadPlayerCoords(i, &other_pos);
+                sink(other_pos.x);
+                Stage_UnkSetVec3TCam_Offset(&cam_pos);
+                sink(cam_pos.x);
+            }
+        """),
+        source_file="src/melee/pl/plbonuslib.c",
+    )
+    checkdiff_payload = {
+        "target_asm": [
+            "    stwu    r1,-168(r1)",
+            "+28c: 48 00 00 01 \tbl      <fn_80000001+0x28c>",
+            "+28c: R_PPC_REL24\tPlayer_LoadPlayerCoords",
+            "+294: c0 01 00 44 \tlfs     f1,68(r1)",
+            "+3a4: 48 00 00 01 \tbl      <fn_80000001+0x3a4>",
+            "+3a4: R_PPC_REL24\tStage_UnkSetVec3TCam_Offset",
+            "+3ac: c0 21 00 38 \tlfs     f2,56(r1)",
+        ],
+        "current_asm": [
+            "    stwu    r1,-168(r1)",
+            "+28c: 48 00 00 01 \tbl      <fn_80000001+0x28c>",
+            "+28c: R_PPC_REL24\tPlayer_LoadPlayerCoords",
+            "+294: c0 01 00 48 \tlfs     f1,72(r1)",
+            "+3a4: 48 00 00 01 \tbl      <fn_80000001+0x3a4>",
+            "+3a4: R_PPC_REL24\tStage_UnkSetVec3TCam_Offset",
+            "+3ac: c0 21 00 3c \tlfs     f2,60(r1)",
+        ],
+    }
+
+    attach_variant_rankings(
+        report,
+        [
+            {
+                "variant_id": "local-array-sqrt-slot-1-index-0",
+                "kind": "local-array-sqrt-slot",
+                "description": "local float array around sqrtf",
+                "match_percent": 99.86643,
+                "stack_slot_localizer": {"mismatch_count": 0, "mismatches": []},
+                "checkdiff_payload": checkdiff_payload,
+            },
+        ],
+        source_text=textwrap.dedent("""\
+            void fn_80000001(int i, Vec3* pos)
+            {
+                Vec3 other_pos;
+                Vec3 cam_pos;
+                Player_LoadPlayerCoords(i, &other_pos);
+                sink(other_pos.x);
+                Stage_UnkSetVec3TCam_Offset(&cam_pos);
+                sink(cam_pos.x);
+            }
+        """),
+        function="fn_80000001",
+    )
+
+    variant = report["variant_rankings"][0]
+    assert variant["target_objective"]["target_fixed"] is True
+    assert variant["named_local_deltas"] == [
+        {
+            "name": "other_pos",
+            "delta": 4,
+            "expected_offset": 0x44,
+            "current_offset": 0x48,
+            "call": "Player_LoadPlayerCoords",
+        },
+        {
+            "name": "cam_pos",
+            "delta": 4,
+            "expected_offset": 0x38,
+            "current_offset": 0x3C,
+            "call": "Stage_UnkSetVec3TCam_Offset",
+        },
+    ]
+    assert variant["raw_local_deltas"] == [
+        {
+            "opcode": "lfs",
+            "expected_offset": 0x44,
+            "current_offset": 0x48,
+            "delta": 4,
+            "line_index": 3,
+        },
+        {
+            "opcode": "lfs",
+            "expected_offset": 0x38,
+            "current_offset": 0x3C,
+            "delta": 4,
+            "line_index": 6,
+        },
+    ]
+    assert "new local layout deltas remain" in variant["summary"]
+    assert "other_pos +4" in variant["summary"]
+    assert "cam_pos +4" in variant["summary"]
+
+
 def test_stack_home_explorer_cli_scores_seeded_sqrt_variants(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    source = tmp_path / "source.c"
-    source.write_text(textwrap.dedent("""\
+    source_text = textwrap.dedent("""\
         void fn_80000001(float a, float b, float c)
         {
+            Vec3 other_pos;
+            Vec3 cam_pos;
             f32 dist;
             f32 sum;
 
+            Player_LoadPlayerCoords(0, &other_pos);
             dist = sqrtf((a * a) +
                          (b * c));
+            Stage_UnkSetVec3TCam_Offset(&cam_pos);
             sink(dist + sum);
         }
-    """))
+    """)
+    source = tmp_path / "source.c"
+    source.write_text(source_text)
     pcdump = tmp_path / "pcdump.txt"
     pcdump.write_text(PCDUMP)
     checkdiff = tmp_path / "checkdiff.json"
     checkdiff.write_text(json.dumps({"stack_slot_localizer": LOCALIZER}))
+    checkdiff_payload = {
+        "target_asm": [
+            "+28c: 48 00 00 01 \tbl      <fn_80000001+0x28c>",
+            "+28c: R_PPC_REL24\tPlayer_LoadPlayerCoords",
+            "+294: c0 01 00 44 \tlfs     f1,68(r1)",
+            "+3a4: 48 00 00 01 \tbl      <fn_80000001+0x3a4>",
+            "+3a4: R_PPC_REL24\tStage_UnkSetVec3TCam_Offset",
+            "+3ac: c0 21 00 38 \tlfs     f2,56(r1)",
+        ],
+        "current_asm": [
+            "+28c: 48 00 00 01 \tbl      <fn_80000001+0x28c>",
+            "+28c: R_PPC_REL24\tPlayer_LoadPlayerCoords",
+            "+294: c0 01 00 48 \tlfs     f1,72(r1)",
+            "+3a4: 48 00 00 01 \tbl      <fn_80000001+0x3a4>",
+            "+3a4: R_PPC_REL24\tStage_UnkSetVec3TCam_Offset",
+            "+3ac: c0 21 00 3c \tlfs     f2,60(r1)",
+        ],
+    }
 
     def fake_score(path, *, function, melee_root, timeout=None, status=None, include_stack_slot=False):
         text = path.read_text()
         if "sqrt_slot[0] = sqrtf" in text:
             localizer = {"mismatch_count": 0, "mismatches": []}
             match = 99.86643
+            payload = checkdiff_payload
         else:
             localizer = LOCALIZER
             match = 99.99
+            payload = None
         return type("Score", (), {
             "match_percent": match,
             "match_percent_error": None,
             "stack_slot_localizer": localizer,
             "stack_slot_error": None,
+            "checkdiff_payload": payload,
         })()
 
     monkeypatch.setattr(
@@ -362,3 +492,19 @@ def test_stack_home_explorer_cli_scores_seeded_sqrt_variants(
     assert payload["ranking"]["overall_match_percent_used"] is True
     assert payload["variant_rankings"][0]["kind"] == "local-array-sqrt-slot"
     assert payload["variant_rankings"][0]["target_objective"]["target_fixed"] is True
+    assert payload["variant_rankings"][0]["named_local_deltas"] == [
+        {
+            "name": "other_pos",
+            "delta": 4,
+            "expected_offset": 0x44,
+            "current_offset": 0x48,
+            "call": "Player_LoadPlayerCoords",
+        },
+        {
+            "name": "cam_pos",
+            "delta": 4,
+            "expected_offset": 0x38,
+            "current_offset": 0x3C,
+            "call": "Stage_UnkSetVec3TCam_Offset",
+        },
+    ]

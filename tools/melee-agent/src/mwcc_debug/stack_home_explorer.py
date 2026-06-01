@@ -11,6 +11,11 @@ from .stack_slot_bridge import explain_stack_slot_localizer
 from .virtual_attribution import explain_virtuals
 
 
+_ASM_STACK_SLOT_RE = re.compile(r"(?P<offset>-?(?:0x[0-9A-Fa-f]+|\d+))\(r1\)")
+_ASM_BRANCH_CALL_RE = re.compile(r"\bbl\s+(?P<call>[A-Za-z_]\w*)")
+_ASM_RELOC_CALL_RE = re.compile(r"\bR_PPC_REL24\s+(?P<call>[A-Za-z_]\w*)")
+
+
 def explore_stack_homes(
     pcdump_text: str,
     function: str,
@@ -223,10 +228,15 @@ def generate_local_array_sqrt_variants(
 def attach_variant_rankings(
     report: dict[str, Any],
     variant_results: list[dict[str, Any]],
+    *,
+    source_text: str | None = None,
+    function: str | None = None,
 ) -> dict[str, Any]:
     ranked = rank_stack_home_variant_results(
         report.get("targets") or [],
         variant_results,
+        source_text=source_text,
+        function=function or report.get("function"),
     )
     report["variant_rankings"] = ranked
     report["ranking"]["target_movement_measured"] = bool(ranked)
@@ -242,10 +252,19 @@ def attach_variant_rankings(
 def rank_stack_home_variant_results(
     targets: list[dict[str, Any]],
     variant_results: list[dict[str, Any]],
+    *,
+    source_text: str | None = None,
+    function: str | None = None,
 ) -> list[dict[str, Any]]:
     ranked: list[dict[str, Any]] = []
     for result in variant_results:
         objective = _variant_target_objective(targets, result)
+        local_layout = _variant_local_layout_deltas(
+            targets,
+            result,
+            source_text=source_text,
+            function=function,
+        )
         item = {
             "variant_id": result.get("variant_id") or result.get("id"),
             "kind": result.get("kind"),
@@ -256,7 +275,11 @@ def rank_stack_home_variant_results(
             "remaining_stack_slot_deltas": _remaining_stack_slot_deltas(
                 result.get("stack_slot_localizer"),
             ),
-            "named_local_deltas": result.get("named_local_deltas") or [],
+            "raw_local_deltas": local_layout["raw"],
+            "named_local_deltas": (
+                result.get("named_local_deltas")
+                or local_layout["named"]
+            ),
             "source_patch": result.get("source_patch"),
         }
         item["summary"] = _variant_summary(item)
@@ -340,6 +363,254 @@ def _remaining_stack_slot_deltas(localizer: Any) -> list[dict[str, Any]]:
     return out
 
 
+def _variant_local_layout_deltas(
+    targets: list[dict[str, Any]],
+    result: dict[str, Any],
+    *,
+    source_text: str | None,
+    function: str | None,
+) -> dict[str, list[dict[str, Any]]]:
+    raw: list[dict[str, Any]] = []
+    for mismatch in _variant_stack_mismatches(result):
+        if _matches_target_stack_slot(targets, mismatch):
+            continue
+        expected = _int_or_none(mismatch.get("expected_offset"))
+        current = _int_or_none(mismatch.get("current_offset"))
+        if expected is None or current is None or expected == current:
+            continue
+        raw.append({
+            "opcode": mismatch.get("opcode"),
+            "expected_offset": expected,
+            "current_offset": current,
+            "delta": current - expected,
+            "line_index": mismatch.get("line_index"),
+        })
+
+    named = _name_local_deltas_from_context(
+        raw,
+        result.get("checkdiff_payload"),
+        source_text=source_text,
+        function=function,
+    )
+    return {"raw": raw, "named": named}
+
+
+def _variant_stack_mismatches(result: dict[str, Any]) -> list[dict[str, Any]]:
+    payload = result.get("checkdiff_payload")
+    if isinstance(payload, dict):
+        target_asm = payload.get("target_asm") or payload.get("reference_asm")
+        current_asm = payload.get("current_asm")
+        if isinstance(target_asm, list) and isinstance(current_asm, list):
+            mismatches = _stack_mismatches_from_asm_lines(target_asm, current_asm)
+            if mismatches:
+                return mismatches
+        localizer = _find_stack_slot_localizer_in_payload(payload)
+        if localizer is not None:
+            return [
+                dict(item)
+                for item in localizer.get("mismatches") or []
+                if isinstance(item, dict)
+            ]
+
+    localizer = result.get("stack_slot_localizer")
+    if isinstance(localizer, dict):
+        return [
+            dict(item)
+            for item in localizer.get("mismatches") or []
+            if isinstance(item, dict)
+        ]
+    return []
+
+
+def _stack_mismatches_from_asm_lines(
+    target_asm: list[Any],
+    current_asm: list[Any],
+) -> list[dict[str, Any]]:
+    mismatches: list[dict[str, Any]] = []
+    for line_index, (expected_line, current_line) in enumerate(
+        zip(target_asm, current_asm)
+    ):
+        expected_body = _asm_instruction_body(expected_line)
+        current_body = _asm_instruction_body(current_line)
+        if expected_body == current_body:
+            continue
+        expected_slots = _ASM_STACK_SLOT_RE.findall(expected_body)
+        current_slots = _ASM_STACK_SLOT_RE.findall(current_body)
+        if len(expected_slots) != 1 or len(current_slots) != 1:
+            continue
+        expected_offset = _int_or_none(expected_slots[0])
+        current_offset = _int_or_none(current_slots[0])
+        if (
+            expected_offset is None
+            or current_offset is None
+            or expected_offset < 0
+            or current_offset < 0
+            or expected_offset == current_offset
+        ):
+            continue
+        expected_opcode = expected_body.split(None, 1)[0] if expected_body.split() else ""
+        current_opcode = current_body.split(None, 1)[0] if current_body.split() else ""
+        if expected_opcode != current_opcode:
+            continue
+        mismatches.append({
+            "line_index": line_index,
+            "expected_offset": expected_offset,
+            "current_offset": current_offset,
+            "delta": expected_offset - current_offset,
+            "opcode": expected_opcode,
+            "expected": expected_body,
+            "current": current_body,
+        })
+    return mismatches
+
+
+def _asm_instruction_body(line: Any) -> str:
+    body = str(line).strip()
+    return re.sub(
+        r"^\+\w+:\s+(?:(?:[0-9A-Fa-f]{2})\s+){4}",
+        "",
+        body,
+    ).strip()
+
+
+def _find_stack_slot_localizer_in_payload(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        localizer = value.get("stack_slot_localizer")
+        if isinstance(localizer, dict):
+            return localizer
+        for child in value.values():
+            found = _find_stack_slot_localizer_in_payload(child)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for child in value:
+            found = _find_stack_slot_localizer_in_payload(child)
+            if found is not None:
+                return found
+    return None
+
+
+def _matches_target_stack_slot(
+    targets: list[dict[str, Any]],
+    mismatch: dict[str, Any],
+) -> bool:
+    opcode = str(mismatch.get("opcode")).lower()
+    expected = _int_or_none(mismatch.get("expected_offset"))
+    current = _int_or_none(mismatch.get("current_offset"))
+    return any(
+        str(target.get("opcode")).lower() == opcode
+        and _int_or_none(target.get("expected_offset")) == expected
+        and _int_or_none(target.get("current_offset")) == current
+        for target in targets
+    )
+
+
+def _name_local_deltas_from_context(
+    raw_deltas: list[dict[str, Any]],
+    checkdiff_payload: Any,
+    *,
+    source_text: str | None,
+    function: str | None,
+) -> list[dict[str, Any]]:
+    if not raw_deltas or not source_text or not isinstance(checkdiff_payload, dict):
+        return []
+    target_asm = checkdiff_payload.get("target_asm") or checkdiff_payload.get("reference_asm")
+    if not isinstance(target_asm, list):
+        return []
+    source_calls = _source_addressed_local_calls(source_text, function)
+    if not source_calls:
+        return []
+
+    named: list[dict[str, Any]] = []
+    seen: set[tuple[str, int, int]] = set()
+    for delta in raw_deltas:
+        line_index = delta.get("line_index")
+        if not isinstance(line_index, int):
+            continue
+        call = _nearest_source_backed_call(target_asm, line_index, source_calls)
+        if call is None:
+            continue
+        names = source_calls.get(call) or []
+        if not names:
+            continue
+        name = names[0]
+        expected = _int_or_none(delta.get("expected_offset"))
+        current = _int_or_none(delta.get("current_offset"))
+        if expected is None or current is None:
+            continue
+        key = (name, expected, current)
+        if key in seen:
+            continue
+        seen.add(key)
+        named.append({
+            "name": name,
+            "delta": current - expected,
+            "expected_offset": expected,
+            "current_offset": current,
+            "call": call,
+        })
+    return named
+
+
+def _source_addressed_local_calls(
+    source_text: str,
+    function: str | None,
+) -> dict[str, list[str]]:
+    if function:
+        bounds = _find_function_bounds(source_text, function)
+        if bounds is not None:
+            source_text = source_text[bounds[0]:bounds[1]]
+
+    calls: dict[str, list[str]] = {}
+    for match in re.finditer(
+        r"\b(?P<call>[A-Za-z_]\w*)\s*\((?P<args>[^;{}]*)\)\s*;",
+        source_text,
+        flags=re.DOTALL,
+    ):
+        names = re.findall(r"&\s*([A-Za-z_]\w*)", match.group("args"))
+        if not names:
+            continue
+        call = match.group("call")
+        bucket = calls.setdefault(call, [])
+        for name in names:
+            if name not in bucket:
+                bucket.append(name)
+    return calls
+
+
+def _nearest_source_backed_call(
+    asm_lines: list[Any],
+    line_index: int,
+    source_calls: dict[str, list[str]],
+    *,
+    window: int = 6,
+) -> str | None:
+    for distance in range(0, window + 1):
+        prev_idx = line_index - distance
+        if 0 <= prev_idx < len(asm_lines):
+            call = _asm_call_name(asm_lines[prev_idx])
+            if call in source_calls:
+                return call
+        if distance == 0:
+            continue
+        next_idx = line_index + distance
+        if 0 <= next_idx < len(asm_lines):
+            call = _asm_call_name(asm_lines[next_idx])
+            if call in source_calls:
+                return call
+    return None
+
+
+def _asm_call_name(line: Any) -> str | None:
+    text = str(line)
+    match = _ASM_RELOC_CALL_RE.search(text)
+    if match is None:
+        match = _ASM_BRANCH_CALL_RE.search(text)
+    if match is None:
+        return None
+    return match.group("call")
+
+
 def _variant_summary(variant: dict[str, Any]) -> str:
     objective = variant.get("target_objective") or {}
     if objective.get("target_fixed"):
@@ -354,9 +625,16 @@ def _variant_summary(variant: dict[str, Any]) -> str:
         if item.get("name") is not None and item.get("delta") is not None
     ]
     if named:
+        if objective.get("target_fixed"):
+            parts.append("new local layout deltas remain")
         parts.append("; ".join(named))
+    raw_local = variant.get("raw_local_deltas") or []
+    if raw_local and not named:
+        if objective.get("target_fixed"):
+            parts.append("new local layout deltas remain")
+        parts.append(f"{len(raw_local)} raw local stack delta(s)")
     remaining = variant.get("remaining_stack_slot_deltas") or []
-    if remaining and not named:
+    if remaining and not named and not raw_local:
         parts.append(f"{len(remaining)} remaining stack-slot delta(s)")
     return "; ".join(parts)
 
@@ -881,6 +1159,8 @@ def _int_or_none(value: Any) -> int | None:
     if value is None:
         return None
     try:
+        if isinstance(value, str):
+            return int(value, 0)
         return int(value)
     except (TypeError, ValueError):
         return None

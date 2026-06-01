@@ -12856,6 +12856,7 @@ class _SourceCandidateRealScore:
     match_percent_error: str | None
     stack_slot_localizer: dict | None = None
     stack_slot_error: str | None = None
+    checkdiff_payload: dict | None = None
 
 
 def _find_stack_slot_localizer_in_json(value: object) -> dict | None:
@@ -12876,6 +12877,25 @@ def _find_stack_slot_localizer_in_json(value: object) -> dict | None:
 
 
 def _run_checkdiff_stack_slot_localizer(
+    *,
+    function: str,
+    melee_root: Path,
+    timeout: float | None = None,
+) -> tuple[dict | None, str | None]:
+    payload, error = _run_checkdiff_stack_slot_payload(
+        function=function,
+        melee_root=melee_root,
+        timeout=timeout,
+    )
+    if error is not None:
+        return None, error
+    localizer = _find_stack_slot_localizer_in_json(payload)
+    if localizer is not None:
+        return localizer, None
+    return None, None
+
+
+def _run_checkdiff_stack_slot_payload(
     *,
     function: str,
     melee_root: Path,
@@ -12905,18 +12925,15 @@ def _run_checkdiff_stack_slot_localizer(
         payload = json.loads(proc.stdout)
     except json.JSONDecodeError as exc:
         detail = (proc.stderr or proc.stdout or str(exc)).strip()
-        return None, f"checkdiff stack-slot localizer emitted non-json: {detail}"
+        return None, f"checkdiff stack-slot analysis emitted non-json: {detail}"
 
-    localizer = _find_stack_slot_localizer_in_json(payload)
-    if localizer is not None:
-        return localizer, None
     if proc.returncode not in (0, 1):
         detail = (proc.stderr or proc.stdout or "").strip()
         return None, (
-            f"checkdiff stack-slot localizer failed with exit {proc.returncode}"
+            f"checkdiff stack-slot analysis failed with exit {proc.returncode}"
             + (f": {detail}" if detail else "")
         )
-    return None, None
+    return payload, None
 
 
 @inspect_app.command(name="stack-homes")
@@ -13102,9 +13119,15 @@ def inspect_stack_homes(
                     "match_percent_error": score.match_percent_error,
                     "stack_slot_localizer": score.stack_slot_localizer,
                     "stack_slot_error": score.stack_slot_error,
+                    "checkdiff_payload": getattr(score, "checkdiff_payload", None),
                     "source_patch": variant.get("source_patch"),
                 })
-        attach_variant_rankings(report, variant_results)
+        attach_variant_rankings(
+            report,
+            variant_results,
+            source_text=source_text,
+            function=function,
+        )
     if json_out:
         print(json.dumps(report, indent=2))
     else:
@@ -13179,16 +13202,21 @@ def _score_source_candidate_real_tree(
             )
             stack_slot_localizer = None
             stack_slot_error = None
+            checkdiff_payload = None
             if include_stack_slot:
                 if status is not None:
                     status("running checkdiff stack-slot localizer")
-                stack_slot_localizer, stack_slot_error = (
-                    _run_checkdiff_stack_slot_localizer(
+                checkdiff_payload, stack_slot_error = (
+                    _run_checkdiff_stack_slot_payload(
                         function=function,
                         melee_root=melee_root,
                         timeout=timeout,
                     )
                 )
+                if checkdiff_payload is not None:
+                    stack_slot_localizer = _find_stack_slot_localizer_in_json(
+                        checkdiff_payload
+                    )
             if status is not None:
                 status("match-percent refresh complete")
             return _SourceCandidateRealScore(
@@ -13196,6 +13224,7 @@ def _score_source_candidate_real_tree(
                 result[1],
                 stack_slot_localizer,
                 stack_slot_error,
+                checkdiff_payload,
             )
         finally:
             if applied:
