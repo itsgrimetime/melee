@@ -14,6 +14,7 @@ from src.mwcc_debug.permuter_config import (
     PatternSkippedError,
     ScorerConfig,
     SettingsTomlSpec,
+    WEIGHT_OVERRIDE_CAPS,
     build_spec,
     parse_existing_overrides,
     render_settings_toml,
@@ -78,6 +79,35 @@ def test_build_spec_no_merge_drops_existing() -> None:
     assert "perm_xor_zero" not in spec.weight_overrides
     # Pattern keys are present
     assert "perm_reorder_decls" in spec.weight_overrides
+
+
+def test_build_spec_caps_risky_internal_type_pattern_weight() -> None:
+    pattern = PATTERNS["widen-u8-to-u32"]
+    assert pattern.permuter_weights["perm_randomize_internal_type"] == 50.0
+
+    spec = build_spec("fn_test", pattern)
+
+    assert (
+        spec.weight_overrides["perm_randomize_internal_type"]
+        == WEIGHT_OVERRIDE_CAPS["perm_randomize_internal_type"]
+    )
+    assert spec.weight_overrides["perm_cast_simple"] == 30.0
+
+
+def test_build_spec_caps_existing_internal_type_weight_when_merging() -> None:
+    pattern = PATTERNS["alias-split"]
+    spec = build_spec(
+        "fn_test",
+        pattern,
+        existing_overrides={"perm_randomize_internal_type": 50.0},
+        merge=True,
+    )
+
+    assert (
+        spec.weight_overrides["perm_randomize_internal_type"]
+        == WEIGHT_OVERRIDE_CAPS["perm_randomize_internal_type"]
+    )
+    assert spec.weight_overrides["perm_temp_for_expr"] == 60.0
 
 
 def test_render_with_weights_parses_back_via_toml() -> None:

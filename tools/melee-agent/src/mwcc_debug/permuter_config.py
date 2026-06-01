@@ -38,6 +38,15 @@ from .patterns import MutationPattern
 # not depend on a system powerpc-eabi-objdump install.
 DEFAULT_OBJDUMP_COMMAND = "melee-agent debug target dtk-objdump"
 
+# decomp-permuter's internal-type randomizer has a higher crash rate on
+# preprocessed Melee sources because prior mutations can leave StructRef
+# expressions whose base no longer resolves to a struct/union pointer. Keep
+# generated configs at stock weight instead of letting pattern profiles make
+# that mutation dominate the run.
+WEIGHT_OVERRIDE_CAPS: Mapping[str, float] = {
+    "perm_randomize_internal_type": 10.0,
+}
+
 
 @dataclass
 class ScorerConfig:
@@ -78,6 +87,14 @@ class PatternSkippedError(RuntimeError):
     the caller didn't pass force=True."""
 
 
+def _cap_weight_overrides(overrides: dict[str, float]) -> dict[str, float]:
+    capped = dict(overrides)
+    for key, max_value in WEIGHT_OVERRIDE_CAPS.items():
+        if key in capped and capped[key] > max_value:
+            capped[key] = max_value
+    return capped
+
+
 def build_spec(
     func_name: str,
     pattern: MutationPattern | None,
@@ -110,6 +127,7 @@ def build_spec(
         overrides.update(existing_overrides)
     if pattern is not None:
         overrides.update(pattern.permuter_weights)
+    overrides = _cap_weight_overrides(overrides)
 
     return SettingsTomlSpec(
         func_name=func_name,
