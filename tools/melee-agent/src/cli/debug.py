@@ -58,6 +58,7 @@ from ..mwcc_debug.patterns import (
 )
 from ..mwcc_debug.source_patch import (
     extract_function,
+    find_function_definitions,
     get_decl_names,
     get_decl_names_by_scope,
     reorder_decls_in_function,
@@ -3708,6 +3709,13 @@ def _extract_ninja_error(stdout: str, stderr: str, max_lines: int = 8) -> str:
             for nearby in range(max(0, idx - 4), min(len(lines), idx + 3)):
                 if lines[nearby].strip():
                     context_indexes.add(nearby)
+        for nearby in range(idx + 1, min(len(lines), idx + 5)):
+            nearby_stripped = lines[nearby].strip()
+            if not nearby_stripped:
+                continue
+            if re.match(r"^\[\d+/\d+\]", nearby_stripped):
+                break
+            context_indexes.add(nearby)
     relevant = [lines[idx] for idx in sorted(context_indexes)]
     if not relevant:
         # Fall back to last few non-empty stderr lines
@@ -4910,9 +4918,11 @@ def _failure_diagnostic_or_fallback(
     fallback: str,
 ) -> str:
     first_diag = _extract_first_diagnostic(stdout, stderr)
-    if first_diag:
-        return first_diag
     diagnostic = _extract_ninja_error(stdout, stderr, max_lines=8)
+    if first_diag:
+        if diagnostic and diagnostic != "(no error lines captured)":
+            return diagnostic
+        return first_diag
     if diagnostic and diagnostic != "(no error lines captured)":
         return diagnostic
     return fallback
@@ -12917,6 +12927,21 @@ class _SourceCandidateRealScore:
     checkdiff_payload: dict | None = None
 
 
+def _new_external_function_definitions(
+    candidate_text: str,
+    original_text: str,
+    *,
+    function: str,
+) -> list[str]:
+    candidate_names = {
+        span.name for span in find_function_definitions(candidate_text)
+    }
+    original_names = {
+        span.name for span in find_function_definitions(original_text)
+    }
+    return sorted(candidate_names - original_names - {function})
+
+
 def _find_stack_slot_localizer_in_json(value: object) -> dict | None:
     if isinstance(value, dict):
         localizer = value.get("stack_slot_localizer")
@@ -13220,6 +13245,24 @@ def _score_source_candidate_real_tree(
             status("source-scoring lock acquired")
         candidate_text = path.read_text()
         original = target_path.read_text()
+        external_helpers = _new_external_function_definitions(
+            candidate_text,
+            original,
+            function=function,
+        )
+        if external_helpers:
+            helper_list = ", ".join(external_helpers)
+            return _SourceCandidateRealScore(
+                None,
+                (
+                    f"candidate source defines helper function(s) outside "
+                    f"{function}: {helper_list}. Source candidate scoring only "
+                    f"transfers {function} into {target_path.relative_to(melee_root)}, "
+                    "so those definitions would be dropped before the real-tree "
+                    "build. Inline the helper into the target function or apply "
+                    "the helper to the real source file before scoring."
+                ),
+            )
         obj_path = f"build/GALE01/src/{unit}.o"
         _register_active_source_restore(target_path, original)
         result: tuple[float | None, str | None] = (None, None)

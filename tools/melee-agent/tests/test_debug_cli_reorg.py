@@ -1486,6 +1486,27 @@ def test_debug_permute_verify_json_preserves_multiline_mwcc_diagnostic(
     assert src_path.read_text() == original
 
 
+def test_failure_diagnostic_preserves_context_after_file_line_error() -> None:
+    stderr = (
+        "FAILED: build/GALE01/src/melee/pl/plbonuslib.o\n"
+        "src/melee/pl/plbonuslib.c:1172: error: undefined identifier 'f654_slot_helper'\n"
+        "    f654_slot_helper(slot);\n"
+        "    ^\n"
+        "#   Error: illegal implicit declaration of function 'f654_slot_helper'\n"
+    )
+
+    diagnostic = debug_cli._failure_diagnostic_or_fallback(
+        "",
+        stderr,
+        fallback="fallback",
+    )
+
+    assert "undefined identifier 'f654_slot_helper'" in diagnostic
+    assert "f654_slot_helper(slot);" in diagnostic
+    assert "^" in diagnostic
+    assert "illegal implicit declaration" in diagnostic
+
+
 def test_debug_permute_verify_json_retries_transient_report_json_decode(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

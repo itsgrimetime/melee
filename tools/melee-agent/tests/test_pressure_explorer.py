@@ -897,6 +897,69 @@ def test_lifetime_layout_cli_scores_source_with_match_percent_and_stack_slots(
     assert variant["stack_slot_localizer"] == stack_localizer
 
 
+def test_score_source_candidate_rejects_new_helper_definition_without_build(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    melee_root = tmp_path / "melee"
+    target = melee_root / "src" / "melee" / "pl" / "plbonuslib.c"
+    target.parent.mkdir(parents=True)
+    original = textwrap.dedent("""\
+        static float existing_helper(float value)
+        {
+            return value;
+        }
+
+        void fn_8003F654(void)
+        {
+            existing_helper(1.0f);
+        }
+    """)
+    target.write_text(original)
+
+    candidate = tmp_path / "candidate.c"
+    candidate.write_text(textwrap.dedent("""\
+        static float existing_helper(float value)
+        {
+            return value;
+        }
+
+        static inline float f654_slot_helper(float value)
+        {
+            return value;
+        }
+
+        void fn_8003F654(void)
+        {
+            f654_slot_helper(1.0f);
+        }
+    """))
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/pl/plbonuslib",
+    )
+
+    def fail_if_builds(*args, **kwargs):
+        raise AssertionError("candidate with external helper should be rejected before build")
+
+    monkeypatch.setattr(debug_cli, "_run_ninja_with_no_diag_retry", fail_if_builds)
+
+    score = debug_cli._score_source_candidate_real_tree(
+        candidate,
+        function="fn_8003F654",
+        melee_root=melee_root,
+    )
+
+    assert score.match_percent is None
+    assert score.match_percent_error is not None
+    assert "helper function(s) outside fn_8003F654" in score.match_percent_error
+    assert "f654_slot_helper" in score.match_percent_error
+    assert "only transfers fn_8003F654" in score.match_percent_error
+    assert target.read_text() == original
+
+
 def test_lifetime_layout_json_compile_probes_emits_live_candidate_paths(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,

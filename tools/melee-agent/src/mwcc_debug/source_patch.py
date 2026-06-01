@@ -184,6 +184,101 @@ def find_function(text: str, name: str) -> Optional[FunctionSpan]:
     return None
 
 
+def find_function_definitions(text: str) -> list[FunctionSpan]:
+    """Locate top-level function definitions in `text`.
+
+    This is intentionally conservative: it only considers identifier calls at
+    top-level brace depth whose closing parameter list is immediately followed
+    by a function body. It skips control-flow keywords so constructs such as
+    `if (...) {` are not reported as definitions.
+    """
+    stripped = _strip_c_comments(text)
+    brace_depth_at: list[int] = [0] * (len(stripped) + 1)
+    depth = 0
+    for idx, ch in enumerate(stripped):
+        brace_depth_at[idx] = depth
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth = max(0, depth - 1)
+    brace_depth_at[len(stripped)] = depth
+
+    control_keywords = {
+        "case",
+        "do",
+        "else",
+        "for",
+        "if",
+        "return",
+        "sizeof",
+        "switch",
+        "while",
+    }
+    spans: list[FunctionSpan] = []
+    pattern = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
+
+    for m in pattern.finditer(stripped):
+        name = m.group(1)
+        if name in control_keywords:
+            continue
+        if brace_depth_at[m.start()] != 0:
+            continue
+
+        paren_open = m.end() - 1
+        depth = 1
+        j = paren_open + 1
+        while j < len(stripped) and depth > 0:
+            c = stripped[j]
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+            j += 1
+        if depth != 0:
+            continue
+        paren_close = j - 1
+
+        k = paren_close + 1
+        while k < len(stripped) and stripped[k] in " \t\n":
+            k += 1
+        if k >= len(stripped) or stripped[k] != "{":
+            continue
+
+        body_open = k
+        depth = 1
+        j = body_open + 1
+        while j < len(stripped) and depth > 0:
+            c = stripped[j]
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+            j += 1
+        if depth != 0:
+            continue
+        body_close = j - 1
+
+        sig_start = m.start()
+        while sig_start > 0:
+            prev = stripped[sig_start - 1]
+            if prev == "\n" and sig_start - 2 >= 0 and stripped[sig_start - 2] == "\n":
+                break
+            if prev in ";}":
+                break
+            sig_start -= 1
+        while sig_start < m.start() and stripped[sig_start] in " \t\n":
+            sig_start += 1
+
+        spans.append(FunctionSpan(
+            name=name,
+            sig_start=sig_start,
+            body_open=body_open,
+            body_close=body_close,
+        ))
+
+    return spans
+
+
 def extract_function(text: str, name: str) -> Optional[str]:
     """Return the full source of function `name` (signature + body) from `text`."""
     span = find_function(text, name)
