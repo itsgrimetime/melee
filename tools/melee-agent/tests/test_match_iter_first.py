@@ -36,7 +36,10 @@ def test_pcdump_local_help_exposes_force_iter_first_function_scope() -> None:
     assert "--force-iter-first-fn" in proc.stdout
     assert "--force-iter-first-class" in proc.stdout
     assert "--force-iter-first-iter" in proc.stdout
+    assert "--force-select-order" in proc.stdout
+    assert "--force-select-order-class" in proc.stdout
     assert "Scope --force-iter-first" in proc.stdout
+    assert "selection order" in proc.stdout
 
 
 def test_match_iter_first_help_documents_auto_verify_cleanup_contract() -> None:
@@ -245,6 +248,37 @@ def test_force_vector_parser_accepts_class_scoped_iter_first() -> None:
     assert entries[1].iter_idx == 4
 
 
+def test_force_phys_normalizer_preserves_class_scope_for_dll() -> None:
+    dll_value, warnings = debug_cli._normalize_force_phys(
+        "gpr:40:29,1:50:31"
+    )
+
+    assert dll_value == "0:40:29,1:50:31"
+    assert not any("does not support class filtering" in w for w in warnings)
+
+
+def test_force_vector_parser_accepts_class_scoped_select_order() -> None:
+    entries = debug_cli._parse_force_vector(
+        "class0:ig40:select-first,class0:ig32:select-first"
+    )
+
+    assert [entry.kind for entry in entries] == [
+        "force_select_order",
+        "force_select_order",
+    ]
+    assert [entry.class_id for entry in entries] == [0, 0]
+    assert [entry.ig_idx for entry in entries] == [40, 32]
+
+
+def test_force_vector_parser_accepts_class_scoped_force_phys_by_ig() -> None:
+    entries = debug_cli._parse_force_vector("class0:ig40:phys=r29")
+
+    assert [entry.kind for entry in entries] == ["force_phys"]
+    assert entries[0].class_id == 0
+    assert entries[0].ig_idx == 40
+    assert entries[0].phys == 29
+
+
 def test_force_vector_auto_verify_command_scopes_all_force_types(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -291,6 +325,50 @@ def test_force_vector_auto_verify_command_scopes_all_force_types(
     assert "--checkdiff-timeout" in cmd
     assert cmd[cmd.index("--checkdiff-timeout") + 1] == "12.5"
     assert str(output) in cmd
+
+
+def test_force_vector_auto_verify_command_scopes_select_order_by_class(
+    tmp_path: pathlib.Path,
+) -> None:
+    src_path = tmp_path / "sample.c"
+    src_path.write_text("void fn_test(void) {}\n", encoding="utf-8")
+    entries = debug_cli._parse_force_vector(
+        "class0:ig40:select-first,class0:ig32:select-first"
+    )
+
+    cmd = debug_cli._build_force_vector_auto_verify_cmd(
+        src_path=src_path,
+        function="fn_test",
+        entries=entries,
+        output_path=tmp_path / "forced.pcdump.txt",
+    )
+
+    assert "--force-select-order" in cmd
+    assert cmd[cmd.index("--force-select-order") + 1] == "40,32"
+    assert "--force-select-order-class" in cmd
+    assert cmd[cmd.index("--force-select-order-class") + 1] == "0"
+    assert "--force-select-order-fn" in cmd
+    assert cmd[cmd.index("--force-select-order-fn") + 1] == "fn_test"
+
+
+def test_force_vector_auto_verify_command_preserves_class_scoped_force_phys(
+    tmp_path: pathlib.Path,
+) -> None:
+    src_path = tmp_path / "sample.c"
+    src_path.write_text("void fn_test(void) {}\n", encoding="utf-8")
+    entries = debug_cli._parse_force_vector("class0:ig40:phys=r29")
+
+    cmd = debug_cli._build_force_vector_auto_verify_cmd(
+        src_path=src_path,
+        function="fn_test",
+        entries=entries,
+        output_path=tmp_path / "forced.pcdump.txt",
+    )
+
+    assert "--force-phys" in cmd
+    assert cmd[cmd.index("--force-phys") + 1] == "0:40:29"
+    assert "--force-phys-fn" in cmd
+    assert cmd[cmd.index("--force-phys-fn") + 1] == "fn_test"
 
 
 def test_force_vector_auto_verify_command_scopes_iter_first_by_class(
@@ -516,3 +594,13 @@ def test_mwcc_debug_dll_has_iter_first_function_scope() -> None:
     assert "g_iter_first_scope_fn_set" in dll_source
     assert "g_iter_first_scope_class_set" in dll_source
     assert "[FORCE_ITER_FIRST] scope skip" in dll_source
+
+
+def test_mwcc_debug_dll_has_class_scoped_force_phys() -> None:
+    dll_source = (MELEE_ROOT / "tools" / "mwcc_debug" / "mwcc_debug.c").read_text()
+
+    assert "MWCC_DEBUG_FORCE_PHYS" in dll_source
+    assert "rclass" in dll_source
+    assert "g_overrides[k].rclass < 0" in dll_source
+    assert "g_overrides[k].rclass == rclass" in dll_source
+    assert "[FORCE_PHYS] class=%d" in dll_source

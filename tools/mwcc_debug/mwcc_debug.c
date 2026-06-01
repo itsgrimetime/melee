@@ -763,6 +763,7 @@ static int g_last_n_virtuals[MAX_REGCLASS] = {0, 0, 0, 0};
 // MWCC_DEBUG_FORCE_PHYS="virtIdx:physReg[,virtIdx:physReg]*"
 //   Example: "36:31"          force virtual #36 to physical r31
 //   Example: "36:31,50:27"    force virtual #36 to r31 AND #50 to r27
+//   Example: "0:36:31"        force virtual #36 to r31 only in class 0
 //
 // Applied in the colorgraph hook AFTER MWCC's normal coloring runs but
 // BEFORE rewritepcode emits the final instructions. The next pass sees
@@ -776,6 +777,7 @@ static int g_last_n_virtuals[MAX_REGCLASS] = {0, 0, 0, 0};
 #define MAX_OVERRIDES 32
 
 static struct {
+    int rclass;      // -1 = legacy all classes; otherwise exact rclass match
     int virtual_idx;
     int physical;
 } g_overrides[MAX_OVERRIDES];
@@ -808,8 +810,9 @@ static void parse_overrides_from_env(void)
     uint32 len;
     int i;
     int cur_val;
-    int parsing_phys;
-    int saved_virt;
+    int fields[3];
+    int n_fields;
+    int has_val;
 
     g_overrides_parsed = 1;
     g_n_overrides = 0;
@@ -861,26 +864,45 @@ static void parse_overrides_from_env(void)
     len = GetEnvironmentVariableA("MWCC_DEBUG_FORCE_PHYS", buf, sizeof(buf));
     if (len == 0 || len >= sizeof(buf)) return;
 
-    // Tiny state machine: read digits into cur_val. ':' transitions to
-    // parsing physical (saved virtual). ',' or end commits the pair.
+    // Tiny state machine: accept either "ig:phys" (legacy all classes)
+    // or "class:ig:phys" (class-scoped). Python normalizes class names
+    // to numeric class IDs before setting this env var.
     cur_val = 0;
-    parsing_phys = 0;
-    saved_virt = -1;
+    n_fields = 0;
+    has_val = 0;
     for (i = 0; i <= (int)len; i++) {
         char c = (i == (int)len) ? '\0' : buf[i];
         if (c >= '0' && c <= '9') {
             cur_val = cur_val * 10 + (c - '0');
+            has_val = 1;
         } else if (c == ':') {
-            saved_virt = cur_val;
+            if (has_val && n_fields < 3) {
+                fields[n_fields] = cur_val;
+                n_fields++;
+            }
             cur_val = 0;
-            parsing_phys = 1;
-        } else if ((c == ',' || c == '\0') && parsing_phys && g_n_overrides < MAX_OVERRIDES) {
-            g_overrides[g_n_overrides].virtual_idx = saved_virt;
-            g_overrides[g_n_overrides].physical = cur_val;
-            g_n_overrides++;
+            has_val = 0;
+        } else if (c == ',' || c == '\0') {
+            if (has_val && n_fields < 3) {
+                fields[n_fields] = cur_val;
+                n_fields++;
+            }
+            if (g_n_overrides < MAX_OVERRIDES) {
+                if (n_fields == 2) {
+                    g_overrides[g_n_overrides].rclass = -1;
+                    g_overrides[g_n_overrides].virtual_idx = fields[0];
+                    g_overrides[g_n_overrides].physical = fields[1];
+                    g_n_overrides++;
+                } else if (n_fields == 3) {
+                    g_overrides[g_n_overrides].rclass = fields[0];
+                    g_overrides[g_n_overrides].virtual_idx = fields[1];
+                    g_overrides[g_n_overrides].physical = fields[2];
+                    g_n_overrides++;
+                }
+            }
             cur_val = 0;
-            parsing_phys = 0;
-            saved_virt = -1;
+            n_fields = 0;
+            has_val = 0;
         }
         // else: ignore whitespace and stray chars
     }
@@ -1236,14 +1258,18 @@ static int __cdecl hook_colorgraph(int rclass, IGNode *head)
                 // (a) ig_idx-based overrides
                 for (k = 0; k < g_n_overrides; k++)
                 {
-                    if (g_overrides[k].virtual_idx == idx)
+                    if (g_overrides[k].virtual_idx == idx
+                        && (g_overrides[k].rclass < 0
+                            || g_overrides[k].rclass == rclass))
                     {
                         int old_phys = (int)node->assignedReg;
                         node->assignedReg = (int16)g_overrides[k].physical;
                         if (PCFILE && DEBUG_GUARD)
                         {
-                            debug_printf("\n[FORCE_PHYS] ig_idx=%d: r%d -> r%d\n",
-                                         idx, old_phys, g_overrides[k].physical);
+                            debug_printf("\n[FORCE_PHYS] class=%d ig_idx=%d: "
+                                         "r%d -> r%d\n",
+                                         rclass, idx, old_phys,
+                                         g_overrides[k].physical);
                         }
                         break;
                     }

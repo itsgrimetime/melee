@@ -247,16 +247,27 @@ def _parse_force_vector_phys(raw: str) -> int:
     return int(value, 0)
 
 
+_FORCE_SELECT_ACTIONS = {
+    "select-first",
+    "select_first",
+    "select-order",
+    "select_order",
+    "select",
+}
+
+
 def _parse_force_vector(raw: str) -> list[_ForceVectorEntry]:
     """Parse composed force specs for one diagnostic auto-verify run.
 
     Supported entries:
       - ``ig40:phys=r30`` or ``40:phys=30`` -> ``--force-phys 40:30``
+      - ``class0:ig40:phys=r29`` -> ``--force-phys 0:40:29``
       - ``class0:iter5:phys=r31`` -> ``--force-phys-iter 0:5:31``
       - ``ig42:coalesce=38`` / ``ig42:root=38`` / ``42=38`` -> coalesce
       - ``ig50:iter-first`` -> ``--force-iter-first 50``
       - ``class1:ig50:iter-first`` -> scoped ``--force-iter-first 50``
       - ``class1:iter4:iter-first`` -> ``--force-iter-first-iter 1:4``
+      - ``class0:ig40:select-first`` -> ``--force-select-order 40``
     """
     if any(c in raw for c in '"\';\r\n&|<>'):
         raise ValueError(
@@ -278,6 +289,14 @@ def _parse_force_vector(raw: str) -> list[_ForceVectorEntry]:
                 entries.append(_ForceVectorEntry(
                     raw=spec,
                     kind="force_iter_first",
+                    ig_idx=_parse_force_vector_int(parts[0], prefix="ig"),
+                ))
+                continue
+
+            if len(parts) == 2 and parts[1].lower() in _FORCE_SELECT_ACTIONS:
+                entries.append(_ForceVectorEntry(
+                    raw=spec,
+                    kind="force_select_order",
                     ig_idx=_parse_force_vector_int(parts[0], prefix="ig"),
                 ))
                 continue
@@ -307,13 +326,24 @@ def _parse_force_vector(raw: str) -> list[_ForceVectorEntry]:
                 class_name = parts[0].lower()
                 if class_name not in _FORCE_VECTOR_CLASS_NAMES:
                     raise ValueError(f"unknown force-vector class {parts[0]!r}")
-                entries.append(_ForceVectorEntry(
-                    raw=spec,
-                    kind="force_phys_iter",
-                    class_id=_FORCE_VECTOR_CLASS_NAMES[class_name],
-                    iter_idx=_parse_force_vector_int(parts[1], prefix="iter"),
-                    phys=_parse_force_vector_phys(parts[2].split("=", 1)[1]),
-                ))
+                class_id = _FORCE_VECTOR_CLASS_NAMES[class_name]
+                middle = parts[1].lower()
+                if middle.startswith("iter"):
+                    entries.append(_ForceVectorEntry(
+                        raw=spec,
+                        kind="force_phys_iter",
+                        class_id=class_id,
+                        iter_idx=_parse_force_vector_int(parts[1], prefix="iter"),
+                        phys=_parse_force_vector_phys(parts[2].split("=", 1)[1]),
+                    ))
+                else:
+                    entries.append(_ForceVectorEntry(
+                        raw=spec,
+                        kind="force_phys",
+                        class_id=class_id,
+                        ig_idx=_parse_force_vector_int(parts[1], prefix="ig"),
+                        phys=_parse_force_vector_phys(parts[2].split("=", 1)[1]),
+                    ))
                 continue
 
             if len(parts) == 3 and parts[2].lower() in {
@@ -340,6 +370,24 @@ def _parse_force_vector(raw: str) -> list[_ForceVectorEntry]:
                     ))
                 continue
 
+            if len(parts) == 3 and parts[2].lower() in _FORCE_SELECT_ACTIONS:
+                class_name = parts[0].lower()
+                if class_name not in _FORCE_VECTOR_CLASS_NAMES:
+                    raise ValueError(f"unknown force-vector class {parts[0]!r}")
+                class_id = _FORCE_VECTOR_CLASS_NAMES[class_name]
+                middle = parts[1].lower()
+                if middle.startswith("iter"):
+                    raise ValueError(
+                        "select-order entries must target an ig_idx, not an iter"
+                    )
+                entries.append(_ForceVectorEntry(
+                    raw=spec,
+                    kind="force_select_order",
+                    class_id=class_id,
+                    ig_idx=_parse_force_vector_int(parts[1], prefix="ig"),
+                ))
+                continue
+
             if "=" in lower and ":" not in lower:
                 lhs, rhs = spec.split("=", 1)
                 entries.append(_ForceVectorEntry(
@@ -355,8 +403,10 @@ def _parse_force_vector(raw: str) -> list[_ForceVectorEntry]:
         raise ValueError(
             f"invalid --force-vector entry {spec!r}; expected forms like "
             "ig40:phys=r30, ig42:coalesce=38, "
-            "class0:iter5:phys=r31, class1:ig50:iter-first, "
-            "class1:iter4:iter-first, or ig50:iter-first"
+            "class0:ig40:phys=r29, class0:iter5:phys=r31, "
+            "class1:ig50:iter-first, "
+            "class1:iter4:iter-first, class0:ig40:select-first, "
+            "or ig50:iter-first"
         )
 
     if not entries:
@@ -370,7 +420,11 @@ def _force_vector_dump_args(
     function: str,
 ) -> tuple[list[str], dict]:
     force_phys = [
-        f"{entry.ig_idx}:{entry.phys}"
+        (
+            f"{entry.class_id}:{entry.ig_idx}:{entry.phys}"
+            if entry.class_id is not None
+            else f"{entry.ig_idx}:{entry.phys}"
+        )
         for entry in entries
         if entry.kind == "force_phys"
         and entry.ig_idx is not None
@@ -412,6 +466,20 @@ def _force_vector_dump_args(
         and entry.class_id is not None
         and entry.iter_idx is not None
     ]
+    force_select_order_unscoped = [
+        str(entry.ig_idx)
+        for entry in entries
+        if entry.kind == "force_select_order"
+        and entry.class_id is None
+        and entry.ig_idx is not None
+    ]
+    force_select_order_scoped = [
+        entry
+        for entry in entries
+        if entry.kind == "force_select_order"
+        and entry.class_id is not None
+        and entry.ig_idx is not None
+    ]
     if force_iter_first_unscoped and force_iter_first_scoped:
         raise ValueError(
             "--force-vector cannot mix unscoped and class-scoped iter-first "
@@ -433,6 +501,34 @@ def _force_vector_dump_args(
     force_iter_first_class = (
         str(next(iter(iter_first_classes))) if iter_first_classes else ""
     )
+    if (force_iter_first_unscoped or force_iter_first_scoped
+            or force_iter_first_iter) and (
+                force_select_order_unscoped or force_select_order_scoped):
+        raise ValueError(
+            "--force-vector cannot mix iter-first and select-order entries "
+            "in one probe"
+        )
+    if force_select_order_unscoped and force_select_order_scoped:
+        raise ValueError(
+            "--force-vector cannot mix unscoped and class-scoped select-order "
+            "entries in one probe"
+        )
+    select_order_classes = {
+        entry.class_id for entry in force_select_order_scoped
+        if entry.class_id is not None
+    }
+    if len(select_order_classes) > 1:
+        raise ValueError(
+            "--force-vector class-scoped select-order entries must use one "
+            "class per probe"
+        )
+    force_select_order = force_select_order_unscoped or [
+        str(entry.ig_idx) for entry in force_select_order_scoped
+        if entry.ig_idx is not None
+    ]
+    force_select_order_class = (
+        str(next(iter(select_order_classes))) if select_order_classes else ""
+    )
 
     args: list[str] = []
     summary = {
@@ -442,6 +538,8 @@ def _force_vector_dump_args(
         "force_iter_first_csv": ",".join(force_iter_first),
         "force_iter_first_class": force_iter_first_class,
         "force_iter_first_iter_csv": ",".join(force_iter_first_iter),
+        "force_select_order_csv": ",".join(force_select_order),
+        "force_select_order_class": force_select_order_class,
     }
     if force_phys or force_phys_iter:
         needs_force_phys_scope = True
@@ -468,6 +566,11 @@ def _force_vector_dump_args(
         ])
     if force_iter_first or force_iter_first_iter:
         args.extend(["--force-iter-first-fn", function])
+    if force_select_order:
+        args.extend(["--force-select-order", summary["force_select_order_csv"]])
+        if force_select_order_class:
+            args.extend(["--force-select-order-class", force_select_order_class])
+        args.extend(["--force-select-order-fn", function])
     return args, summary
 
 
@@ -534,6 +637,8 @@ def _force_vector_probe_payload(
         "force_iter_first_csv": summary["force_iter_first_csv"],
         "force_iter_first_class": summary["force_iter_first_class"],
         "force_iter_first_iter_csv": summary["force_iter_first_iter_csv"],
+        "force_select_order_csv": summary["force_select_order_csv"],
+        "force_select_order_class": summary["force_select_order_class"],
         "returncode": proc.returncode,
         "match": match,
         "status": (
@@ -827,9 +932,9 @@ def pcdump(
             "--force-phys",
             help="Tier 5: bias the allocator. Format 'virtIdx:physReg[,...]' "
                  "or 'class:virtIdx:physReg[,...]' (class: gpr, fp, fpr, int). "
-                 "E.g. '36:31' or 'gpr:36:31'. The DLL ignores the class "
-                 "prefix and still applies by ig_idx across register classes; "
-                 "use --force-phys-iter for class-precise control. "
+                 "E.g. '36:31' or 'gpr:36:31'. Class-scoped entries are "
+                 "passed through to the DLL and only apply to that register "
+                 "class. "
                  "EXPERIMENTAL — may produce broken code if interferences "
                  "are violated.",
         ),
@@ -904,6 +1009,30 @@ def pcdump(
             "--force-iter-first-fn",
             help="Scope --force-iter-first to one function in the TU. Other "
                  "functions compile with their natural simplification order.",
+        ),
+    ] = None,
+    force_select_order: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-select-order",
+            help="Tier 6: explicit alias for --force-iter-first when testing "
+                 "allocator selection order. Format 'virtIdx[,virtIdx]*'; "
+                 "the first listed node gets first selection priority.",
+        ),
+    ] = None,
+    force_select_order_class: Annotated[
+        Optional[int],
+        typer.Option(
+            "--force-select-order-class",
+            help="Scope --force-select-order IG indices to one register class "
+                 "(0=GPR, 1=FPR).",
+        ),
+    ] = None,
+    force_select_order_fn: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-select-order-fn",
+            help="Scope --force-select-order to one function in the TU.",
         ),
     ] = None,
     force_coalesce: Annotated[
@@ -1030,24 +1159,38 @@ def pcdump(
     if branch and branch not in ("master", "main"):
         # Non-default branch — remote will use a worktree.
         cmd_parts.append(_cmd_set_env("MWCC_DEBUG_BRANCH", branch))
-    if force_iter_first:
-        if any(c in force_iter_first for c in '"\'; \t'):
+    if force_iter_first and force_select_order:
+        raise typer.BadParameter(
+            "--force-select-order and --force-iter-first target the same "
+            "selection-order hook; use one spelling per run"
+        )
+    iter_first_value = force_iter_first or force_select_order
+    iter_first_class = (
+        force_iter_first_class
+        if force_iter_first is not None
+        else force_select_order_class
+    )
+    iter_first_fn = force_iter_first_fn or force_select_order_fn
+
+    if iter_first_value:
+        if any(c in iter_first_value for c in '"\'; \t'):
             raise typer.BadParameter(
-                "--force-iter-first must not contain quotes, semicolons, "
+                "--force-iter-first/--force-select-order must not contain quotes, semicolons, "
                 "or whitespace"
             )
         cmd_parts.append(_cmd_set_env(
             "MWCC_DEBUG_FORCE_ITER_FIRST",
-            force_iter_first,
+            iter_first_value,
         ))
-    if force_iter_first_class is not None:
-        if not force_iter_first:
+    if iter_first_class is not None:
+        if not iter_first_value:
             raise typer.BadParameter(
-                "--force-iter-first-class requires --force-iter-first"
+                "--force-iter-first-class/--force-select-order-class requires "
+                "--force-iter-first or --force-select-order"
             )
         cmd_parts.append(_cmd_set_env(
             "MWCC_DEBUG_FORCE_ITER_FIRST_CLASS",
-            str(force_iter_first_class),
+            str(iter_first_class),
         ))
     if force_iter_first_iter:
         if any(c in force_iter_first_iter for c in '"\'; \t&|<>'):
@@ -1059,16 +1202,16 @@ def pcdump(
             "MWCC_DEBUG_FORCE_ITER_FIRST_ITER",
             force_iter_first_iter,
         ))
-    if force_iter_first_fn:
-        if any(c in force_iter_first_fn for c in '"\'; \t&|<>'):
+    if iter_first_fn:
+        if any(c in iter_first_fn for c in '"\'; \t&|<>'):
             raise typer.BadParameter(
-                "--force-iter-first-fn must not contain quotes, semicolons, "
+                "--force-iter-first-fn/--force-select-order-fn must not contain quotes, semicolons, "
                 "whitespace, or shell metacharacters"
             )
         cmd_parts.append(
             _cmd_set_env(
                 "MWCC_DEBUG_FORCE_ITER_FIRST_FUNCTION",
-                force_iter_first_fn,
+                iter_first_fn,
             )
         )
     if force_coalesce:
@@ -1203,13 +1346,37 @@ def pcdump(
     raise typer.Exit(code=exit_code)
 
 
-_FORCE_PHYS_CLASS_NAMES = {"gpr", "fp", "fpr", "int"}
+_FORCE_PHYS_CLASS_NAMES = {
+    "gpr": 0,
+    "int": 0,
+    "r": 0,
+    "class0": 0,
+    "fp": 1,
+    "fpr": 1,
+    "f": 1,
+    "class1": 1,
+}
 """Recognized class-prefix names for the ``class:ig_idx:phys`` form.
 
 ``gpr`` / ``int`` → GPR class; ``fp`` / ``fpr`` → FP class.
-The class prefix is stripped before the value is passed to the DLL
-(which only understands the legacy ``ig_idx:phys`` form).
+Numeric class IDs are also accepted and passed through to the DLL.
 """
+
+
+def _parse_force_phys_class(raw: str) -> int:
+    class_s = raw.strip().lower()
+    if class_s in _FORCE_PHYS_CLASS_NAMES:
+        return _FORCE_PHYS_CLASS_NAMES[class_s]
+    try:
+        class_id = int(class_s, 0)
+    except ValueError as exc:
+        raise typer.BadParameter(
+            f"--force-phys class {raw!r} is invalid. Expected one of "
+            "{gpr, fp, fpr, int, class0, class1} or a numeric class ID."
+        ) from exc
+    if class_id < 0:
+        raise typer.BadParameter("--force-phys class ID must be non-negative")
+    return class_id
 
 
 def _validate_force_schedule(raw: str, *, option: str = "--force-schedule") -> str:
@@ -1236,11 +1403,13 @@ def _normalize_force_phys(raw: str) -> tuple[str, list[str]]:
     Accepts two forms per spec:
       - Legacy: ``ig_idx:phys[,ig_idx:phys]*``
       - Class-scoped: ``class:ig_idx:phys[,class:ig_idx:phys]*``
-        where class is one of ``gpr``, ``fp``, ``fpr``, ``int``.
+        where class is one of ``gpr``, ``fp``, ``fpr``, ``int`` or a
+        numeric class ID.
 
     Returns ``(dll_value, warnings)`` where:
-      - ``dll_value`` is the ``ig_idx:phys[,...]`` string to pass to
-        the DLL (class prefix stripped).
+      - ``dll_value`` is the force-phys string to pass to the DLL. Bare
+        entries remain ``ig_idx:phys``; scoped entries become
+        ``class_id:ig_idx:phys``.
       - ``warnings`` is a list of human-readable warning strings
         (empty when input is unambiguous).
 
@@ -1256,28 +1425,10 @@ def _normalize_force_phys(raw: str) -> tuple[str, list[str]]:
         if not spec:
             continue
         tokens = spec.split(":")
-        if len(tokens) == 3 and tokens[0].lower() in _FORCE_PHYS_CLASS_NAMES:
-            # class:ig_idx:phys form — strip the class prefix for the DLL.
-            # WARNING (Fix C): The DLL (MWCC_DEBUG_FORCE_PHYS) only accepts
-            # the legacy "ig_idx:phys" format and applies the override to ALL
-            # IG classes (GPR class 0 and FP class 1) that share the same
-            # ig_idx slot.  The class prefix is stripped here but is NOT
-            # passed through to the DLL; the DLL has no class-aware filtering.
-            # This means 'gpr:50:26' and 'fp:50:26' both produce the same
-            # DLL string and will both be applied to ig_idx=50 in every class.
-            # Use --force-phys-iter for class-precise control.
+        if len(tokens) == 3:
             class_s, ig_idx_s, phys_s = tokens
-            dll_parts.append(f"{ig_idx_s}:{phys_s}")
-            warnings.append(
-                f"[force-phys] class-scoped form '{spec}' used: the DLL does "
-                f"not support class filtering — the override for ig_idx={ig_idx_s} "
-                f"will apply to ALL IG classes (GPR and FP) that have a node "
-                f"at that ig_idx, not just class '{class_s}'. "
-                f"For class-precise control, use --force-phys-iter with "
-                f"class:iter:phys syntax after finding the colorgraph iter "
-                f"for this node, e.g. '--force-phys-iter <class>:<iter>:{phys_s}'. "
-                f"Do not reuse ig_idx={ig_idx_s} as the iter value."
-            )
+            class_id = _parse_force_phys_class(class_s)
+            dll_parts.append(f"{class_id}:{ig_idx_s}:{phys_s}")
         elif len(tokens) == 2:
             # Bare ig_idx:phys form. The DLL accepts this but it matches
             # all IG classes (GPR, FP, etc.) with that ig_idx, which can
@@ -1288,7 +1439,7 @@ def _normalize_force_phys(raw: str) -> tuple[str, list[str]]:
             raise typer.BadParameter(
                 f"--force-phys spec {spec!r} is invalid. "
                 f"Expected 'ig_idx:physReg' or 'class:ig_idx:physReg' "
-                f"(class in {{gpr, fp, fpr, int}}). "
+                f"(class in {{gpr, fp, fpr, int, class0, class1}} or numeric). "
                 f"E.g. '36:31' or 'gpr:36:31'."
             )
 
@@ -9500,9 +9651,8 @@ def pcdump_local(
             "--force-phys",
             help="Tier 5: allocator bias by ig_idx. Format "
                  "'virtIdx:physReg[,...]' or 'class:virtIdx:physReg[,...]'. "
-                 "The DLL ignores the class prefix and still applies by ig_idx "
-                 "across register classes; "
-                 "use --force-phys-iter for class-precise control. By default "
+                 "Class-scoped entries are passed through to the DLL and only "
+                 "apply to that register class. By default "
                  "applies globally — scope with --force-phys-fn. "
                  "DIAGNOSTIC-ONLY: uses the patched debug compiler and does "
                  "not affect production ninja builds.",
@@ -9516,7 +9666,7 @@ def pcdump_local(
                  "position (class:iter:phys[,...]). Use when "
                  "--force-phys can't target a node by ig_idx (rare, "
                  "but happens for split/spill nodes created post-IG-"
-                 "build). E.g. '1:0:31' = class 1 (GPR), iter 0, "
+                 "build). E.g. '0:0:31' = class 0 (GPR), iter 0, "
                  "force to r31. DIAGNOSTIC-ONLY: uses the patched debug "
                  "compiler and does not affect production ninja builds.",
         ),
@@ -9571,6 +9721,36 @@ def pcdump_local(
                  "natural simplification order. E.g. "
                  "'--force-iter-first-fn mnVibration_80247510 "
                  "--force-iter-first 151,48'.",
+        ),
+    ] = None,
+    force_select_order: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-select-order",
+            help="Tier 6: explicit alias for --force-iter-first when testing "
+                 "allocator selection order. Format 'virtIdx[,virtIdx]*'; "
+                 "the first listed node gets first selection priority. "
+                 "DIAGNOSTIC-ONLY: uses the patched debug compiler and does "
+                 "not affect production ninja builds.",
+        ),
+    ] = None,
+    force_select_order_class: Annotated[
+        Optional[int],
+        typer.Option(
+            "--force-select-order-class",
+            help=(
+                "Scope --force-select-order IG indices to one register class "
+                "(0=GPR, 1=FPR), matching --force-iter-first-class."
+            ),
+        ),
+    ] = None,
+    force_select_order_fn: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-select-order-fn",
+            help="Scope --force-select-order to a single function name. "
+                 "Other functions in the same TU compile with their "
+                 "natural selection order.",
         ),
     ] = None,
     force_coalesce: Annotated[
@@ -9664,8 +9844,9 @@ def pcdump_local(
             "--function", "-f",
             help="Function name to use as the --diff target. When "
                  "omitted, defaults to the value of --force-iter-first-fn / "
-                 "--force-phys-fn / --force-coalesce-fn (in that order) "
-                 "if any is set; otherwise falls back to the first "
+                 "--force-select-order-fn / --force-phys-fn / "
+                 "--force-coalesce-fn (in that order) if any is set; "
+                 "otherwise falls back to the first "
                  "function found in the source file. Use this option "
                  "when working on a non-first function in a multi-function "
                  "TU so --diff compares the right function.",
@@ -9791,14 +9972,28 @@ def pcdump_local(
         env["MWCC_DEBUG_FORCE_PHYS_ITER"] = force_phys_iter
     if force_phys_fn:
         env["MWCC_DEBUG_FORCE_PHYS_FUNCTION"] = force_phys_fn
-    if force_iter_first:
-        env["MWCC_DEBUG_FORCE_ITER_FIRST"] = force_iter_first
-    if force_iter_first_class is not None:
-        if not force_iter_first:
+    if force_iter_first and force_select_order:
+        raise typer.BadParameter(
+            "--force-select-order and --force-iter-first target the same "
+            "selection-order hook; use one spelling per run"
+        )
+    iter_first_value = force_iter_first or force_select_order
+    iter_first_class = (
+        force_iter_first_class
+        if force_iter_first is not None
+        else force_select_order_class
+    )
+    iter_first_fn = force_iter_first_fn or force_select_order_fn
+
+    if iter_first_value:
+        env["MWCC_DEBUG_FORCE_ITER_FIRST"] = iter_first_value
+    if iter_first_class is not None:
+        if not iter_first_value:
             raise typer.BadParameter(
-                "--force-iter-first-class requires --force-iter-first"
+                "--force-iter-first-class/--force-select-order-class requires "
+                "--force-iter-first or --force-select-order"
             )
-        env["MWCC_DEBUG_FORCE_ITER_FIRST_CLASS"] = str(force_iter_first_class)
+        env["MWCC_DEBUG_FORCE_ITER_FIRST_CLASS"] = str(iter_first_class)
     if force_iter_first_iter:
         if any(c in force_iter_first_iter for c in '"\'; \t&|<>'):
             raise typer.BadParameter(
@@ -9806,8 +10001,8 @@ def pcdump_local(
                 "whitespace, or shell metacharacters"
             )
         env["MWCC_DEBUG_FORCE_ITER_FIRST_ITER"] = force_iter_first_iter
-    if force_iter_first_fn:
-        env["MWCC_DEBUG_FORCE_ITER_FIRST_FUNCTION"] = force_iter_first_fn
+    if iter_first_fn:
+        env["MWCC_DEBUG_FORCE_ITER_FIRST_FUNCTION"] = iter_first_fn
     if force_coalesce:
         env["MWCC_DEBUG_FORCE_COALESCE"] = force_coalesce
     if force_coalesce_fn:
@@ -10067,6 +10262,7 @@ def pcdump_local(
                     explicit_diff_target = any([
                         function,
                         force_iter_first_fn,
+                        force_select_order_fn,
                         force_phys_fn,
                         force_coalesce_fn,
                         force_schedule_fn,
@@ -10074,6 +10270,7 @@ def pcdump_local(
                     fn_to_diff = (
                         function
                         or force_iter_first_fn
+                        or force_select_order_fn
                         or force_phys_fn
                         or force_coalesce_fn
                         or force_schedule_fn
@@ -10111,6 +10308,7 @@ def pcdump_local(
                         checkdiff_env = _checkdiff_env_for_locked_child(
                             disable_fingerprint=bool(
                                 force_iter_first_fn
+                                or force_select_order_fn
                                 or force_phys_fn
                                 or force_coalesce_fn
                                 or force_schedule_fn
@@ -10157,6 +10355,7 @@ def pcdump_local(
     any_forced = any([
         force_phys, force_phys_iter, force_phys_fn,
         force_iter_first, force_iter_first_fn,
+        force_select_order, force_select_order_fn,
         force_coalesce, force_coalesce_fn,
         force_schedule, force_schedule_fn,
     ])
