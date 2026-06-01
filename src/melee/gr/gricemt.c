@@ -95,8 +95,90 @@ IceMtRowData grIm_803E4068[6] = {
     { 4, 195.0f, -185.0f }, { 5, 190.0f, -200.0f }, { 6, 180.0f, -190.0f },
 };
 
-S16Vec3 grIm_803E40B0[] = {
-    { 0, 0, 0 }, { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 0 }, { 2, 0, 0 }
+typedef struct IceMtStagePointTable {
+    S16Vec3 points[195];
+    s16 pad;
+} IceMtStagePointTable;
+
+IceMtStagePointTable grIm_803E40B0 = {
+    { { 0, 1, 0 },   { 1, 1, 0 },   { 2, 1, 0 },   { 3, 1, 0 },
+      { 4, 1, 0 },   { 5, 1, 0 },   { 6, 1, 0 },   { 7, 1, 0 },
+      { 10, 1, 0 },  { 11, 1, 0 },  { 12, 1, 0 },  { 13, 1, 0 },
+      { 14, 1, 0 },  { 15, 1, 0 },  { 16, 1, 0 },  { 17, 1, 0 },
+      { 18, 1, 0 },  { 19, 1, 0 },  { 20, 1, 0 },  { 21, 1, 0 },
+      { 22, 1, 0 },  { 23, 1, 0 },  { 24, 1, 0 },  { 25, 1, 0 },
+      { 26, 1, 0 },  { 27, 1, 0 },  { 28, 1, 0 },  { 29, 1, 0 },
+      { 30, 1, 0 },  { 31, 1, 0 },  { 32, 2, 0 },  { 33, 2, 0 },
+      { 36, 2, 3 },  { 39, 2, 0 },  { 40, 2, 0 },  { 41, 2, 0 },
+      { 42, 2, 0 },  { 43, 2, 0 },  { 44, 2, 0 },  { 45, 2, 0 },
+      { 46, 2, 0 },  { 47, 2, 0 },  { 48, 2, 0 },  { 49, 2, 0 },
+      { 50, 2, 0 },  { 51, 2, 0 },  { 52, 2, 0 },  { 53, 2, 0 },
+      { 54, 2, 0 },  { 55, 2, 0 },  { 56, 2, 0 },  { 57, 2, 0 },
+      { 58, 2, 0 },  { 59, 2, 0 },  { 60, 2, 0 },  { 61, 2, 0 },
+      { 62, 2, 0 },  { 63, 2, 0 },  { 64, 2, 0 },  { 65, 2, 0 },
+      { 66, 2, 0 },  { 67, 3, 0 },  { 68, 3, 0 },  { 69, 3, 0 },
+      { 74, 3, 0 },  { 75, 3, 0 },  { 76, 3, 0 },  { 77, 3, 0 },
+      { 78, 3, 0 },  { 79, 3, 0 },  { 80, 3, 0 },  { 81, 3, 0 },
+      { 82, 3, 0 },  { 83, 3, 0 },  { 84, 3, 0 },  { 85, 3, 0 },
+      { 86, 3, 0 },  { 87, 3, 0 },  { 88, 3, 0 },  { 89, 3, 0 },
+      { 90, 3, 0 },  { 91, 3, 0 },  { 92, 3, 0 },  { 93, 3, 0 },
+      { 94, 3, 0 },  { 95, 3, 0 },  { 96, 3, 0 },  { 97, 3, 0 },
+      { 98, 3, 0 },  { 99, 3, 0 },  { 100, 3, 0 }, { 101, 3, 0 },
+      { 102, 4, 0 }, { 103, 4, 0 }, { 104, 4, 0 }, { 105, 4, 0 },
+      { 106, 4, 0 }, { 107, 4, 0 }, { 108, 4, 0 }, { 109, 4, 0 },
+      { 110, 4, 0 }, { 111, 4, 0 }, { 113, 4, 2 }, { 114, 4, 3 },
+      { 115, 4, 4 }, { 118, 4, 0 }, { 119, 4, 0 }, { 120, 4, 0 },
+      { 121, 4, 0 }, { 122, 4, 0 }, { 123, 4, 0 }, { 124, 4, 0 },
+      { 125, 4, 0 }, { 126, 4, 0 }, { 127, 4, 0 }, { 128, 4, 0 },
+      { 129, 4, 0 }, { 130, 4, 0 }, { 131, 4, 0 }, { 132, 4, 0 },
+      { 133, 4, 0 }, { 134, 4, 0 }, { 135, 4, 0 }, { 136, 4, 0 },
+      { 137, 4, 0 }, { 138, 4, 0 }, { 139, 4, 0 }, { 140, 4, 0 },
+      { 141, 4, 0 }, { 142, 4, 0 }, { 143, 5, 0 }, { 144, 5, 0 },
+      { 145, 5, 0 }, { 146, 5, 0 }, { 152, 5, 0 }, { 153, 5, 0 },
+      { 154, 5, 0 }, { 155, 5, 0 }, { 156, 5, 0 }, { 157, 5, 0 },
+      { 158, 5, 0 }, { 159, 5, 0 }, { 160, 5, 0 }, { 161, 5, 0 },
+      { 162, 5, 0 }, { 163, 5, 0 }, { 164, 5, 0 }, { 165, 5, 0 },
+      { 166, 5, 0 }, { 167, 5, 0 }, { 168, 5, 0 }, { 169, 5, 0 },
+      { 170, 5, 0 }, { 171, 5, 0 }, { 172, 5, 0 }, { 173, 5, 0 },
+      { 174, 5, 0 }, { 175, 5, 0 }, { 176, 5, 0 }, { 177, 5, 0 },
+      { 178, 5, 0 }, { 179, 5, 0 }, { 180, 6, 0 }, { 181, 6, 0 },
+      { 182, 6, 0 }, { 183, 6, 0 }, { 184, 6, 0 }, { 189, 6, 0 },
+      { 190, 6, 0 }, { 191, 6, 0 }, { 192, 6, 0 }, { 193, 6, 0 },
+      { 194, 6, 0 }, { 195, 6, 0 }, { 196, 6, 0 }, { 197, 6, 0 },
+      { 198, 6, 0 }, { 199, 6, 0 }, { 200, 6, 0 }, { 201, 6, 0 },
+      { 202, 6, 0 }, { 203, 6, 0 }, { 204, 6, 0 }, { 205, 6, 0 },
+      { 206, 6, 0 }, { 207, 6, 0 }, { 208, 6, 0 }, { 209, 6, 0 },
+      { 210, 6, 0 }, { 211, 6, 0 }, { 212, 6, 0 }, { 213, 6, 0 },
+      { 214, 6, 0 }, { 215, 6, 0 }, { 216, 6, 0 } },
+    0,
+};
+
+s16 grIm_803E4544[218] = {
+    0,   1,   2,   3,   4,   5,   6,   7,   8,   9,   10,  11,  12,  13,  14,
+    15,  16,  17,  18,  19,  20,  21,  22,  23,  24,  25,  26,  27,  28,  29,
+    30,  31,  32,  33,  34,  35,  36,  37,  38,  39,  40,  41,  42,  43,  44,
+    45,  46,  47,  48,  49,  50,  51,  52,  53,  54,  55,  56,  57,  58,  59,
+    60,  61,  62,  63,  64,  65,  66,  67,  68,  69,  70,  71,  72,  73,  74,
+    75,  76,  77,  78,  79,  80,  81,  82,  83,  84,  85,  86,  87,  88,  89,
+    90,  91,  92,  93,  94,  95,  96,  97,  98,  99,  100, 101, 102, 103, 104,
+    105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119,
+    120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134,
+    135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149,
+    150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164,
+    165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179,
+    180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194,
+    195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209,
+    210, 211, 212, 213, 214, 215, 216, 0
+};
+
+typedef struct IceMtAssertStringBlock {
+    char file[0xC];
+    char field_max[0x14];
+} IceMtAssertStringBlock;
+
+IceMtAssertStringBlock grIm_803E46F8 = {
+    "gricemt.c",
+    "i<ICEMT_FIELD_MAX",
 };
 
 StageCallbacks grIm_803E4718[] = { { grIceMt_801F72D4, grIceMt_801F75DC,
@@ -133,7 +215,7 @@ StageData grIm_803E4800 = {
     grIceMt_801FA8F8,
     grIceMt_801FA900,
     1,
-    grIm_803E40B0,
+    grIm_803E40B0.points,
     3,
 };
 
@@ -153,6 +235,16 @@ extern u32 grIm_804DB5A4;
 void grIceMt_801F6868(bool id) {}
 
 #define ICEMT_FIELD_MAX 6
+#define BLOCK_COLL_JOBJ_MAX 20
+
+#define GRICEMT_ASSERT(line, cond, msg)                                       \
+    ((cond) ? ((void) 0) : __assert(grIm_803E46F8.file, line, msg))
+#define GRICEMT_ASSERT_FIELD(line, cond)                                      \
+    GRICEMT_ASSERT(line, cond, grIm_803E46F8.field_max)
+#undef HSD_ASSERT
+#undef HSD_ASSERTMSG
+#define HSD_ASSERT(line, cond) GRICEMT_ASSERT(line, cond, #cond)
+#define HSD_ASSERTMSG(line, cond, msg) GRICEMT_ASSERT(line, cond, msg)
 
 /// #grIceMt_801F686C
 void grIceMt_801F686C(void)
@@ -197,7 +289,7 @@ void grIceMt_801F686C(void)
             field30 = grIm_803E4068[row_idx].id;
             break;
         }
-        HSD_ASSERTMSG(0x258, row_idx < ICEMT_FIELD_MAX, "<ICEMT_FIELD_MAX>");
+        GRICEMT_ASSERT_FIELD(0x258, row_idx < ICEMT_FIELD_MAX);
 
         // Second loop: find row where xAC[0], xAC[1], and field30 don't match
         for (row_idx = 0; row_idx < ICEMT_FIELD_MAX; row_idx++) {
@@ -215,7 +307,7 @@ void grIceMt_801F686C(void)
             field29 = grIm_803E4068[row_idx].id;
             break;
         }
-        HSD_ASSERTMSG(0x261, row_idx < ICEMT_FIELD_MAX, "<ICEMT_FIELD_MAX>");
+        GRICEMT_ASSERT_FIELD(0x261, row_idx < ICEMT_FIELD_MAX);
 
         // Third loop: find row where xAC[0], xAC[1], field30, and field29
         // don't match
@@ -237,7 +329,7 @@ void grIceMt_801F686C(void)
             field28 = grIm_803E4068[row_idx].id;
             break;
         }
-        HSD_ASSERTMSG(0x26B, row_idx < ICEMT_FIELD_MAX, "<ICEMT_FIELD_MAX>");
+        GRICEMT_ASSERT_FIELD(0x26B, row_idx < ICEMT_FIELD_MAX);
 
         // Calculate Y positions for the 3 topi platforms
         y_pos = Ground_801C0498();
@@ -351,8 +443,8 @@ HSD_GObj* grIceMt_801F71E8(int gobj_id)
     if (gobj != NULL) {
         Ground_SetupStageCallbacks(gobj, callbacks);
     } else {
-        OSReport("%s:%d: couldn t get gobj(id=%d)\n", "gricemt.c", 0x35C,
-                 gobj_id);
+        OSReport("%s:%d: couldn t get gobj(id=%d)\n", grIm_803E46F8.file,
+                 0x35C, gobj_id);
     }
 
     return gobj;
@@ -469,8 +561,6 @@ void grIceMt_801F7728(Ground_GObj* gobj)
 }
 
 void grIceMt_801F77AC(Ground_GObj* arg0) {}
-
-extern s16 grIm_803E4544[218];
 
 /// #fn_801F77B0
 void fn_801F77B0(HSD_GObj* arg0)
@@ -1052,17 +1142,17 @@ void fn_801F8C64(Item_GObj* gobj, Ground* u1, Vec3* u2, HSD_GObj* u3, f32 u4)
 /// @brief Creates material items and attaches them to Entity05 platform JObjs.
 /// @param gobj The Entity05 Ground_GObj
 /// @param joint_indices Array of joint indices to get parent JObjs from
-/// @param count Number of items to create (max 20)
+/// @param block_num Number of items to create (max 20)
 /// @param output_array Array to store created Item_GObj pointers
-void grIceMt_801F8CDC(Ground_GObj* gobj, s16* joint_indices, int count,
+void grIceMt_801F8CDC(Ground_GObj* gobj, s16* joint_indices, int block_num,
                       HSD_GObj** output_array)
 {
     Ground* gp = gobj->user_data;
     UnkArchiveStruct* archive;
     void* jobj_desc;
     HSD_JObj* parent_jobjs[20];
-    HSD_JObj* parent_jobj;
-    HSD_JObj* child_jobj;
+    HSD_JObj* coll_jobj;
+    HSD_JObj* block_jobj;
     Item_GObj* item;
     int i;
     u8 unused[24];
@@ -1070,23 +1160,23 @@ void grIceMt_801F8CDC(Ground_GObj* gobj, s16* joint_indices, int count,
     archive = grDatFiles_801C6324();
     jobj_desc = archive->unk4->unk8[7].unk0;
 
-    HSD_ASSERT(0x7D4, count <= 20);
+    HSD_ASSERT(0x7D4, block_num<=BLOCK_COLL_JOBJ_MAX);
 
-    for (i = 0; i < count; i++) {
+    for (i = 0; i < block_num; i++) {
         parent_jobjs[i] = Ground_801C3FA4(gobj, joint_indices[i]);
     }
 
-    for (i = 0; i < count; i++) {
-        parent_jobj = parent_jobjs[i];
-        HSD_ASSERT(0x7E3, parent_jobj);
+    for (i = 0; i < block_num; i++) {
+        coll_jobj = parent_jobjs[i];
+        HSD_ASSERT(0x7E3, coll_jobj);
 
-        child_jobj = HSD_JObjLoadJoint(jobj_desc);
-        HSD_ASSERT(0x7E6, child_jobj);
+        block_jobj = HSD_JObjLoadJoint(jobj_desc);
+        HSD_ASSERT(0x7E6, block_jobj);
 
-        HSD_JObjAddChild(parent_jobj, child_jobj);
+        HSD_JObjAddChild(coll_jobj, block_jobj);
 
-        item = grMaterial_801C8CFC(8, 0, gp, parent_jobj, NULL, fn_801F8C64,
-                                   NULL);
+        item =
+            grMaterial_801C8CFC(8, 0, gp, coll_jobj, NULL, fn_801F8C64, NULL);
         if (item != NULL) {
             grMaterial_801C8DE0(item, 0.0f, -1.0f,
                                 0.0f, 0.0f, 1.0f,
