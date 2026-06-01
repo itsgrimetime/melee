@@ -1059,20 +1059,21 @@ void fn_801F8C64(Item_GObj* gobj, Ground* u1, Vec3* u2, HSD_GObj* u3, f32 u4)
 void grIceMt_801F8CDC(Ground_GObj* gobj, s16* joint_indices, int count,
                       HSD_GObj** output_array)
 {
+    int i;
     Ground* gp = gobj->user_data;
     UnkArchiveStruct* archive;
     void* jobj_desc;
+    u8 unused[16];
     HSD_JObj* parent_jobjs[20];
     HSD_JObj* parent_jobj;
     HSD_JObj* child_jobj;
     Item_GObj* item;
-    int i;
-    u8 unused[24];
+    FORCE_PAD_STACK_4;
 
     archive = grDatFiles_801C6324();
     jobj_desc = archive->unk4->unk8[7].unk0;
 
-    HSD_ASSERT(0x7D4, count <= 20);
+    HSD_ASSERTMSG(0x7D4, count <= 20, "block_num<=BLOCK_COLL_JOBJ_MAX");
 
     for (i = 0; i < count; i++) {
         parent_jobjs[i] = Ground_801C3FA4(gobj, joint_indices[i]);
@@ -1080,19 +1081,19 @@ void grIceMt_801F8CDC(Ground_GObj* gobj, s16* joint_indices, int count,
 
     for (i = 0; i < count; i++) {
         parent_jobj = parent_jobjs[i];
-        HSD_ASSERT(0x7E3, parent_jobj);
+        HSD_ASSERTMSG(0x7E3, parent_jobj, "coll_jobj");
 
         child_jobj = HSD_JObjLoadJoint(jobj_desc);
-        HSD_ASSERT(0x7E6, child_jobj);
+        HSD_ASSERTMSG(0x7E6, child_jobj, "block_jobj");
 
         HSD_JObjAddChild(parent_jobj, child_jobj);
 
         item = grMaterial_801C8CFC(8, 0, gp, parent_jobj, NULL, fn_801F8C64,
                                    NULL);
         if (item != NULL) {
-            grMaterial_801C8DE0(item, 0.0f, -1.0f,
-                                0.0f, 0.0f, 1.0f,
-                                0.0f, 6.0f);
+            grMaterial_801C8DE0(item, grIm_804DB574, grIm_804DB5B0,
+                                grIm_804DB574, grIm_804DB574, grIm_804DB5B4,
+                                grIm_804DB574, grIm_804DB5B8);
             grMaterial_801C8E08(item);
             grMaterial_801C8E68(item, 0);
         }
