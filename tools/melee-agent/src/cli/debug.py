@@ -215,7 +215,11 @@ def _checkdiff_env_for_locked_child(*, disable_fingerprint: bool) -> dict[str, s
 
 
 @contextmanager
-def _acquire_checkdiff_repo_lock(melee_root: Path):
+def _acquire_checkdiff_repo_lock(
+    melee_root: Path,
+    *,
+    label: str = "checkdiff build/report",
+):
     """Acquire the same repo-wide lock used by tools/checkdiff.py."""
     if os.environ.get("CHECKDIFF_NO_LOCK"):
         yield
@@ -236,17 +240,23 @@ def _acquire_checkdiff_repo_lock(melee_root: Path):
         try:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            print("waiting for repo-wide checkdiff build/report lock", file=sys.stderr)
+            print(f"waiting for repo-wide {label} lock", file=sys.stderr)
             start = time.monotonic()
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             elapsed = time.monotonic() - start
-            print(f"acquired checkdiff lock after {elapsed:.1f}s", file=sys.stderr)
+            print(f"acquired {label} lock after {elapsed:.1f}s", file=sys.stderr)
         yield
     finally:
         try:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
         finally:
             lock_file.close()
+
+
+@contextmanager
+def _acquire_source_score_repo_lock(melee_root: Path):
+    with _acquire_checkdiff_repo_lock(melee_root, label="source-scoring"):
+        yield
 
 
 def _format_source_diff(
@@ -11858,68 +11868,69 @@ def _select_order_source_match_percent(
     target_path = melee_root / "src" / f"{unit}.c"
     if not target_path.exists():
         return None, f"target source not found: {target_path}"
-    candidate_text = path.read_text()
-    original = target_path.read_text()
-    obj_path = f"build/GALE01/src/{unit}.o"
-    _register_active_source_restore(target_path, original)
-    result: tuple[float | None, str | None] = (None, None)
-    restore_error: str | None = None
-    cleanup_error: str | None = None
-    applied = False
-    try:
-        if transfer_candidate(candidate_text, target_path, function) is None:
-            result = (None, f"function not found in candidate source: {path}")
+    with _acquire_source_score_repo_lock(melee_root):
+        candidate_text = path.read_text()
+        original = target_path.read_text()
+        obj_path = f"build/GALE01/src/{unit}.o"
+        _register_active_source_restore(target_path, original)
+        result: tuple[float | None, str | None] = (None, None)
+        restore_error: str | None = None
+        cleanup_error: str | None = None
+        applied = False
+        try:
+            if transfer_candidate(candidate_text, target_path, function) is None:
+                result = (None, f"function not found in candidate source: {path}")
+                return result
+            applied = True
+            build_result, retried = _run_ninja_with_no_diag_retry(
+                ["ninja", obj_path],
+                melee_root,
+                timeout=timeout,
+            )
+            if build_result.returncode != 0:
+                result = (None, _failure_diagnostic_or_fallback(
+                    build_result.stdout,
+                    build_result.stderr,
+                    fallback=(
+                        f"ninja {obj_path} failed with exit {build_result.returncode}"
+                        + (" after retry" if retried else "")
+                    ),
+                ))
+                return result
+            result = _refresh_match_pct_after_successful_build(
+                unit,
+                function,
+                melee_root,
+                timeout=timeout,
+            )
             return result
-        applied = True
-        build_result, retried = _run_ninja_with_no_diag_retry(
-            ["ninja", obj_path],
-            melee_root,
-            timeout=timeout,
-        )
-        if build_result.returncode != 0:
-            result = (None, _failure_diagnostic_or_fallback(
-                build_result.stdout,
-                build_result.stderr,
-                fallback=(
-                    f"ninja {obj_path} failed with exit {build_result.returncode}"
-                    + (" after retry" if retried else "")
-                ),
-            ))
-            return result
-        result = _refresh_match_pct_after_successful_build(
-            unit,
-            function,
-            melee_root,
-            timeout=timeout,
-        )
-        return result
-    finally:
-        if applied:
-            restore_error = _restore_source_snapshot(target_path, original)
-        _unregister_active_source_restore(target_path)
-        if restore_error:
-            print(f"[source-restore] {restore_error}", file=sys.stderr)
-        elif applied:
-            try:
-                subprocess.run(
-                    ["ninja", obj_path, "build/GALE01/report.json"],
-                    cwd=melee_root,
-                    capture_output=True,
-                    timeout=timeout,
-                )
-            except subprocess.TimeoutExpired:
-                cleanup_error = (
-                    f"timed out restoring object/report after source restore: "
-                    f"ninja {obj_path} build/GALE01/report.json"
-                )
-            except Exception:
-                cleanup_error = (
-                    "failed to rebuild object/report after source restore"
-                )
-        if restore_error:
-            raise RuntimeError(restore_error)
-        if cleanup_error:
-            raise RuntimeError(cleanup_error)
+        finally:
+            if applied:
+                restore_error = _restore_source_snapshot(target_path, original)
+            _unregister_active_source_restore(target_path)
+            if restore_error:
+                print(f"[source-restore] {restore_error}", file=sys.stderr)
+            elif applied:
+                try:
+                    subprocess.run(
+                        ["ninja", obj_path, "build/GALE01/report.json"],
+                        cwd=melee_root,
+                        capture_output=True,
+                        timeout=timeout,
+                    )
+                except subprocess.TimeoutExpired:
+                    cleanup_error = (
+                        f"timed out restoring object/report after source restore: "
+                        f"ninja {obj_path} build/GALE01/report.json"
+                    )
+                except Exception:
+                    cleanup_error = (
+                        "failed to rebuild object/report after source restore"
+                    )
+            if restore_error:
+                raise RuntimeError(restore_error)
+            if cleanup_error:
+                raise RuntimeError(cleanup_error)
 
 
 def _select_order_source_fingerprints(
@@ -13834,6 +13845,17 @@ def mutate_lifetime_layout_cmd(
             help="Source file used to generate lifetime/layout probes.",
         ),
     ] = None,
+    output_dir: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--output-dir",
+            help=(
+                "Directory for generated --compile-probes source files. "
+                "When omitted, JSON output retains a temp directory because "
+                "variant paths are machine-readable follow-up inputs."
+            ),
+        ),
+    ] = None,
     candidates: Annotated[
         Optional[list[str]],
         typer.Option(
@@ -13923,6 +13945,7 @@ def mutate_lifetime_layout_cmd(
     )
 
     variants: list[dict] = []
+    generated_source_dir: Path | None = None
 
     def _score_candidate(
         *,
@@ -13990,7 +14013,13 @@ def mutate_lifetime_layout_cmd(
         if source_text is None:
             typer.echo("--compile-probes requires --source-file or repo source", err=True)
             raise typer.Exit(2)
-        probe_dir = Path(tempfile.mkdtemp(prefix="melee_lifetime_layout_"))
+        probe_dir = (
+            output_dir
+            if output_dir is not None
+            else Path(tempfile.mkdtemp(prefix="melee_lifetime_layout_"))
+        )
+        probe_dir.mkdir(parents=True, exist_ok=True)
+        generated_source_dir = probe_dir
         start_idx = len(variants)
         try:
             for probe in probes:
@@ -14005,11 +14034,12 @@ def mutate_lifetime_layout_cmd(
             generated_failed = any(
                 variant["status"] != "ok" for variant in variants[start_idx:]
             )
-            if not generated_failed:
+            retain_generated = generated_failed or json_out or output_dir is not None
+            if not retain_generated:
                 shutil.rmtree(probe_dir, ignore_errors=True)
 
     if json_out:
-        print(json.dumps({
+        payload = {
             "function": function,
             "baseline": baseline.to_dict(),
             "probes": [probe.to_dict() for probe in probes],
@@ -14017,7 +14047,10 @@ def mutate_lifetime_layout_cmd(
                 {k: v for k, v in variant.items() if k != "_text"}
                 for variant in variants
             ],
-        }, indent=2))
+        }
+        if generated_source_dir is not None:
+            payload["generated_source_dir"] = str(generated_source_dir)
+        print(json.dumps(payload, indent=2))
         return
 
     print(f"lifetime-layout pressure explorer - {function}")

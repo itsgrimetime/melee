@@ -511,6 +511,82 @@ def test_select_order_source_match_percent_restores_after_compile_timeout(
     assert target.read_text() == original
 
 
+def test_select_order_source_match_percent_holds_repo_lock_through_restore(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    melee_root = tmp_path / "melee"
+    target = melee_root / "src" / "melee" / "mn" / "sample.c"
+    target.parent.mkdir(parents=True)
+    original = "void fn_80000000(void) { /* original */ }\n"
+    candidate_text = "void fn_80000000(void) { /* candidate */ }\n"
+    target.write_text(original)
+    candidate = tmp_path / "candidate.c"
+    candidate.write_text(candidate_text)
+    events: list[str] = []
+    lock_held = False
+
+    class FakeLock:
+        def __enter__(self):
+            nonlocal lock_held
+            events.append("lock-enter")
+            lock_held = True
+
+        def __exit__(self, exc_type, exc, tb):
+            nonlocal lock_held
+            assert target.read_text() == original
+            events.append("lock-exit")
+            lock_held = False
+
+    def fake_lock(root: pathlib.Path, *, label: str = ""):
+        assert root == melee_root
+        assert label == "source-scoring"
+        return FakeLock()
+
+    def fake_ninja(*args, **kwargs):
+        assert lock_held is True
+        assert target.read_text() == candidate_text
+        events.append("ninja")
+        return (
+            subprocess.CompletedProcess(args[0], 0, "", ""),
+            False,
+        )
+
+    def fake_refresh(*args, **kwargs):
+        assert lock_held is True
+        assert target.read_text() == candidate_text
+        events.append("report")
+        return 97.5, None
+
+    def fake_cleanup(*args, **kwargs):
+        assert lock_held is True
+        assert target.read_text() == original
+        events.append("cleanup")
+        return subprocess.CompletedProcess(args[0], 0, "", "")
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/mn/sample",
+    )
+    monkeypatch.setattr(debug_cli, "_acquire_checkdiff_repo_lock", fake_lock)
+    monkeypatch.setattr(debug_cli, "_run_ninja_with_no_diag_retry", fake_ninja)
+    monkeypatch.setattr(debug_cli, "_refresh_match_pct_after_successful_build", fake_refresh)
+    monkeypatch.setattr(debug_cli.subprocess, "run", fake_cleanup)
+
+    pct, error = debug_cli._select_order_source_match_percent(
+        candidate,
+        function="fn_80000000",
+        melee_root=melee_root,
+        timeout=1,
+    )
+
+    assert pct == 97.5
+    assert error is None
+    assert events == ["lock-enter", "ninja", "report", "cleanup", "lock-exit"]
+    assert target.read_text() == original
+
+
 def test_refresh_match_percent_reports_objdiff_timeout(
     tmp_path: pathlib.Path,
     monkeypatch,

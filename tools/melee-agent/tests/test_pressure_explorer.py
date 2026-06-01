@@ -580,3 +580,46 @@ def test_lifetime_layout_cli_source_failure_keeps_source_path(
     assert variant["status"] == "failed"
     assert "compiled probe pcdump omitted the target function" in variant["error"]
     assert variant["source_retained"] == str(source)
+
+
+def test_lifetime_layout_json_compile_probes_emits_live_candidate_paths(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline = tmp_path / "baseline.txt"
+    source = tmp_path / "source.c"
+    baseline.write_text(BASELINE)
+    source.write_text(SOURCE)
+
+    def fake_compile(*args, **kwargs) -> str:
+        return CANDIDATE
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture.compile_source_variant",
+        fake_compile,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "lifetime-layout",
+            "-f",
+            "fn_80000000",
+            "--pcdump",
+            str(baseline),
+            "--source-file",
+            str(source),
+            "--compile-probes",
+            "--max-probes",
+            "1",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    variant = payload["variants"][0]
+    assert variant["status"] == "ok"
+    assert pathlib.Path(variant["path"]).exists()
