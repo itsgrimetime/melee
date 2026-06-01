@@ -198,6 +198,334 @@ def _build_match_iter_first_target_vector(
     }
 
 
+@dataclasses.dataclass(frozen=True)
+class _ForceVectorEntry:
+    raw: str
+    kind: str
+    ig_idx: int | None = None
+    phys: int | None = None
+    root: int | None = None
+    class_id: int | None = None
+    iter_idx: int | None = None
+
+    def to_payload(self) -> dict:
+        payload: dict = {"raw": self.raw, "kind": self.kind}
+        for key in ("ig_idx", "phys", "root", "class_id", "iter_idx"):
+            value = getattr(self, key)
+            if value is not None:
+                payload[key] = value
+        return payload
+
+
+_FORCE_VECTOR_CLASS_NAMES = {
+    "gpr": 0,
+    "int": 0,
+    "r": 0,
+    "class0": 0,
+    "fp": 1,
+    "fpr": 1,
+    "f": 1,
+    "class1": 1,
+}
+
+
+def _parse_force_vector_int(raw: str, *, prefix: str = "") -> int:
+    value = raw.strip().lower()
+    if prefix and value.startswith(prefix):
+        value = value[len(prefix):]
+    if not value:
+        raise ValueError(f"expected integer in {raw!r}")
+    return int(value, 0)
+
+
+def _parse_force_vector_phys(raw: str) -> int:
+    value = raw.strip().lower()
+    if value.startswith(("r", "f")):
+        value = value[1:]
+    if not value:
+        raise ValueError(f"expected physical register in {raw!r}")
+    return int(value, 0)
+
+
+def _parse_force_vector(raw: str) -> list[_ForceVectorEntry]:
+    """Parse composed force specs for one diagnostic auto-verify run.
+
+    Supported entries:
+      - ``ig40:phys=r30`` or ``40:phys=30`` -> ``--force-phys 40:30``
+      - ``class0:iter5:phys=r31`` -> ``--force-phys-iter 0:5:31``
+      - ``ig42:coalesce=38`` / ``ig42:root=38`` / ``42=38`` -> coalesce
+      - ``ig50:iter-first`` -> ``--force-iter-first 50``
+    """
+    if any(c in raw for c in '"\';\r\n&|<>'):
+        raise ValueError(
+            "--force-vector must not contain quotes, semicolons, newlines, "
+            "or shell metacharacters"
+        )
+
+    entries: list[_ForceVectorEntry] = []
+    for item in raw.split(","):
+        spec = item.strip()
+        if not spec:
+            continue
+        lower = spec.lower()
+        try:
+            parts = spec.split(":")
+            if len(parts) == 2 and parts[1].lower() in {
+                "iter-first", "iter_first", "first",
+            }:
+                entries.append(_ForceVectorEntry(
+                    raw=spec,
+                    kind="force_iter_first",
+                    ig_idx=_parse_force_vector_int(parts[0], prefix="ig"),
+                ))
+                continue
+
+            if len(parts) == 2 and parts[1].lower().startswith("phys="):
+                entries.append(_ForceVectorEntry(
+                    raw=spec,
+                    kind="force_phys",
+                    ig_idx=_parse_force_vector_int(parts[0], prefix="ig"),
+                    phys=_parse_force_vector_phys(parts[1].split("=", 1)[1]),
+                ))
+                continue
+
+            if len(parts) == 2 and (
+                parts[1].lower().startswith("coalesce=")
+                or parts[1].lower().startswith("root=")
+            ):
+                entries.append(_ForceVectorEntry(
+                    raw=spec,
+                    kind="force_coalesce",
+                    ig_idx=_parse_force_vector_int(parts[0], prefix="ig"),
+                    root=_parse_force_vector_int(parts[1].split("=", 1)[1], prefix="ig"),
+                ))
+                continue
+
+            if len(parts) == 3 and parts[2].lower().startswith("phys="):
+                class_name = parts[0].lower()
+                if class_name not in _FORCE_VECTOR_CLASS_NAMES:
+                    raise ValueError(f"unknown force-vector class {parts[0]!r}")
+                entries.append(_ForceVectorEntry(
+                    raw=spec,
+                    kind="force_phys_iter",
+                    class_id=_FORCE_VECTOR_CLASS_NAMES[class_name],
+                    iter_idx=_parse_force_vector_int(parts[1], prefix="iter"),
+                    phys=_parse_force_vector_phys(parts[2].split("=", 1)[1]),
+                ))
+                continue
+
+            if "=" in lower and ":" not in lower:
+                lhs, rhs = spec.split("=", 1)
+                entries.append(_ForceVectorEntry(
+                    raw=spec,
+                    kind="force_coalesce",
+                    ig_idx=_parse_force_vector_int(lhs, prefix="ig"),
+                    root=_parse_force_vector_int(rhs, prefix="ig"),
+                ))
+                continue
+        except ValueError as exc:
+            raise ValueError(f"invalid --force-vector entry {spec!r}: {exc}") from exc
+
+        raise ValueError(
+            f"invalid --force-vector entry {spec!r}; expected forms like "
+            "ig40:phys=r30, ig42:coalesce=38, "
+            "class0:iter5:phys=r31, or ig50:iter-first"
+        )
+
+    if not entries:
+        raise ValueError("--force-vector did not contain any entries")
+    return entries
+
+
+def _force_vector_dump_args(
+    entries: list[_ForceVectorEntry],
+    *,
+    function: str,
+) -> tuple[list[str], dict]:
+    force_phys = [
+        f"{entry.ig_idx}:{entry.phys}"
+        for entry in entries
+        if entry.kind == "force_phys"
+        and entry.ig_idx is not None
+        and entry.phys is not None
+    ]
+    force_phys_iter = [
+        f"{entry.class_id}:{entry.iter_idx}:{entry.phys}"
+        for entry in entries
+        if entry.kind == "force_phys_iter"
+        and entry.class_id is not None
+        and entry.iter_idx is not None
+        and entry.phys is not None
+    ]
+    force_coalesce = [
+        f"{entry.ig_idx}={entry.root}"
+        for entry in entries
+        if entry.kind == "force_coalesce"
+        and entry.ig_idx is not None
+        and entry.root is not None
+    ]
+    force_iter_first = [
+        str(entry.ig_idx)
+        for entry in entries
+        if entry.kind == "force_iter_first"
+        and entry.ig_idx is not None
+    ]
+
+    args: list[str] = []
+    summary = {
+        "force_phys_csv": ",".join(force_phys),
+        "force_phys_iter_csv": ",".join(force_phys_iter),
+        "force_coalesce_csv": ",".join(force_coalesce),
+        "force_iter_first_csv": ",".join(force_iter_first),
+    }
+    if force_phys or force_phys_iter:
+        needs_force_phys_scope = True
+    else:
+        needs_force_phys_scope = False
+
+    if force_phys:
+        args.extend(["--force-phys", summary["force_phys_csv"]])
+    if force_phys_iter:
+        args.extend(["--force-phys-iter", summary["force_phys_iter_csv"]])
+    if needs_force_phys_scope:
+        args.extend(["--force-phys-fn", function])
+    if force_coalesce:
+        args.extend(["--force-coalesce", summary["force_coalesce_csv"]])
+        args.extend(["--force-coalesce-fn", function])
+    if force_iter_first:
+        args.extend(["--force-iter-first", summary["force_iter_first_csv"]])
+        args.extend(["--force-iter-first-fn", function])
+    return args, summary
+
+
+def _build_force_vector_auto_verify_cmd(
+    *,
+    src_path: Path,
+    function: str,
+    entries: list[_ForceVectorEntry],
+    output_path: Optional[Path] = None,
+    checkdiff_timeout: float = 60.0,
+) -> list[str]:
+    if output_path is None:
+        output_path = (
+            src_path.parent
+            / f".{function}.force-vector.{os.getpid()}.{int(time.time() * 1000)}.pcdump.txt"
+        )
+    force_args, _summary = _force_vector_dump_args(entries, function=function)
+    return [
+        sys.executable, "-m", "src.cli", "debug", "dump", "local", str(src_path),
+        *force_args,
+        "--function", function,
+        "--diff",
+        "--checkdiff-timeout", f"{checkdiff_timeout:g}",
+        "-o", str(output_path),
+    ]
+
+
+def _force_vector_probe_groups(
+    entries: list[_ForceVectorEntry],
+    *,
+    include_diagnostic_probes: bool,
+) -> list[tuple[str, list[_ForceVectorEntry], int | None]]:
+    groups: list[tuple[str, list[_ForceVectorEntry], int | None]] = [
+        ("union", entries, None)
+    ]
+    if not include_diagnostic_probes:
+        return groups
+    for index, entry in enumerate(entries, start=1):
+        groups.append((f"single[{index}]", [entry], index))
+    for end in range(2, len(entries)):
+        groups.append((f"prefix[1..{end}]", entries[:end], end))
+    return groups
+
+
+def _force_vector_probe_payload(
+    *,
+    label: str,
+    entries: list[_ForceVectorEntry],
+    proc: subprocess.CompletedProcess[str],
+    output_path: Path,
+    ordinal: int | None,
+) -> dict:
+    _args, summary = _force_vector_dump_args(entries, function="<fn>")
+    stdout = proc.stdout or ""
+    stderr = proc.stderr or ""
+    match = "[diff] MATCH" in stdout
+    return {
+        "label": label,
+        "ordinal": ordinal,
+        "entries": [entry.to_payload() for entry in entries],
+        "force_phys_csv": summary["force_phys_csv"],
+        "force_phys_iter_csv": summary["force_phys_iter_csv"],
+        "force_coalesce_csv": summary["force_coalesce_csv"],
+        "force_iter_first_csv": summary["force_iter_first_csv"],
+        "returncode": proc.returncode,
+        "match": match,
+        "status": (
+            "match" if match else
+            "no_match" if proc.returncode == 0 else
+            "failed"
+        ),
+        "pcdump": str(output_path),
+        "stdout_tail": "\n".join(stdout.splitlines()[-8:]),
+        "stderr_tail": "\n".join(stderr.splitlines()[-8:]),
+    }
+
+
+def _run_force_vector_auto_verify(
+    *,
+    src_path: Path,
+    function: str,
+    entries: list[_ForceVectorEntry],
+    melee_root: Path,
+    checkdiff_timeout: float = 60.0,
+    run_diagnostic_probes: bool = True,
+) -> dict:
+    groups = _force_vector_probe_groups(
+        entries,
+        include_diagnostic_probes=run_diagnostic_probes,
+    )
+    payload: dict = {
+        "entries": [entry.to_payload() for entry in entries],
+        "probe_count": len(groups),
+        "probes": [],
+    }
+    for label, group_entries, ordinal in groups:
+        safe_label = re.sub(r"[^A-Za-z0-9_.-]+", "-", label).strip(".-")
+        output_path = (
+            src_path.parent
+            / f".{function}.force-vector.{safe_label}.{os.getpid()}.{int(time.time() * 1000)}.pcdump.txt"
+        )
+        cmd = _build_force_vector_auto_verify_cmd(
+            src_path=src_path,
+            function=function,
+            entries=group_entries,
+            output_path=output_path,
+            checkdiff_timeout=checkdiff_timeout,
+        )
+        proc = _run_auto_verify_command_with_status(
+            cmd,
+            cwd=melee_root / "tools" / "melee-agent",
+            status_label=f"force-vector {label}",
+        )
+        try:
+            output_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        probe = _force_vector_probe_payload(
+            label=label,
+            entries=group_entries,
+            proc=proc,
+            output_path=output_path,
+            ordinal=ordinal,
+        )
+        if label == "union":
+            payload["union"] = probe
+        else:
+            payload["probes"].append(probe)
+    return payload
+
+
 def _checkdiff_env_without_fingerprint() -> dict[str, str]:
     env = os.environ.copy()
     env["CHECKDIFF_NO_FINGERPRINT"] = "1"
@@ -6597,6 +6925,37 @@ def match_iter_first(
                  "Off by default — the explicit verify step costs ~10–30s.",
         ),
     ] = False,
+    force_vector: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-vector",
+            help=(
+                "Compose several force overrides and verify them together "
+                "with `debug dump local --diff`. Entries are comma-separated: "
+                "ig40:phys=r30, ig42:coalesce=38, "
+                "class0:iter5:phys=r31, ig50:iter-first. The union is tested "
+                "first, then singleton and prefix probes run by default to "
+                "expose incompatible steps."
+            ),
+        ),
+    ] = None,
+    force_vector_probes: Annotated[
+        bool,
+        typer.Option(
+            "--force-vector-probes/--no-force-vector-probes",
+            help=(
+                "When --force-vector is set, also test each singleton entry "
+                "and each intermediate prefix after the full union."
+            ),
+        ),
+    ] = True,
+    force_vector_checkdiff_timeout: Annotated[
+        float,
+        typer.Option(
+            "--force-vector-checkdiff-timeout",
+            help="Timeout in seconds for each force-vector integrated checkdiff run.",
+        ),
+    ] = 60.0,
     allow_stale_pcdump: Annotated[
         bool,
         typer.Option(
@@ -6625,6 +6984,12 @@ def match_iter_first(
     feeding the full list to --force-iter-first can disturb unrelated
     code. Verify with `debug dump local <tu> --force-iter-first <list>
     --diff` (or run with --auto-verify) before trusting the suggestion.
+
+    Auto-verify cleanup is bounded by MWCC_DEBUG_RESTORE_TIMEOUT, falling back
+    to MWCC_DEBUG_HANG_TIMEOUT; restore failures print cleanup_complete=false.
+
+    --force-vector composes multiple force overrides, verifies the union with
+    integrated checkdiff, and probes individual/prefix steps for compatibility.
     """
     melee_root = DEFAULT_MELEE_ROOT
     pcdump_path = _resolve_pcdump_path(
@@ -6764,6 +7129,34 @@ def match_iter_first(
 
     events_fn = find_function(parse_hook_events(pcdump_text), function)
     target_vector = _build_match_iter_first_target_vector(results, events_fn)
+
+    force_vector_entries: list[_ForceVectorEntry] | None = None
+    force_vector_result: Optional[dict] = None
+    if force_vector is not None:
+        try:
+            force_vector_entries = _parse_force_vector(force_vector)
+        except ValueError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(2) from exc
+        src_path = melee_root / "src" / f"{unit}.c"
+        if not src_path.exists():
+            force_vector_result = {
+                "ran": False,
+                "reason": f"source not found: {src_path}",
+            }
+        else:
+            try:
+                force_vector_result = _run_force_vector_auto_verify(
+                    src_path=src_path,
+                    function=function,
+                    entries=force_vector_entries,
+                    melee_root=melee_root,
+                    checkdiff_timeout=force_vector_checkdiff_timeout,
+                    run_diagnostic_probes=force_vector_probes,
+                )
+                force_vector_result["ran"] = True
+            except Exception as exc:
+                force_vector_result = {"ran": False, "reason": str(exc)}
 
     # Optional auto-verify: run debug dump local with the proposed iter-first
     # list, compare per-function match% against the baseline, and surface
@@ -6930,6 +7323,12 @@ def match_iter_first(
                 payload["cleanup_complete"] = auto_verify_result[
                     "cleanup_complete"
                 ]
+        if force_vector_result is not None:
+            payload["force_vector_verify"] = force_vector_result
+            union = force_vector_result.get("union")
+            if isinstance(union, dict):
+                payload["force_vector_status"] = union.get("status")
+                payload["force_vector_match"] = union.get("match")
         print(json.dumps(payload, indent=2))
         exit_code = _auto_verify_failure_exit_code(auto_verify_result)
         if exit_code is not None:
@@ -7033,6 +7432,39 @@ def match_iter_first(
                     print(f"  cleanup hint: {cleanup_hint}")
         else:
             print(f"  did not run: {auto_verify_result.get('reason')}")
+    if force_vector_result is not None:
+        print()
+        print("== force-vector verify ==")
+        if not force_vector_result.get("ran"):
+            print(f"  did not run: {force_vector_result.get('reason')}")
+        else:
+            union = force_vector_result.get("union", {})
+            if isinstance(union, dict):
+                print(
+                    f"  union: {union.get('status')} "
+                    f"(returncode {union.get('returncode')})"
+                )
+                for key in (
+                    "force_phys_csv",
+                    "force_phys_iter_csv",
+                    "force_coalesce_csv",
+                    "force_iter_first_csv",
+                ):
+                    if union.get(key):
+                        print(f"    {key}: {union[key]}")
+                stdout_tail = union.get("stdout_tail")
+                if stdout_tail and union.get("status") != "match":
+                    print("    stdout tail:")
+                    for line in str(stdout_tail).splitlines():
+                        print(f"      {line}")
+            probes = force_vector_result.get("probes")
+            if isinstance(probes, list) and probes:
+                print("  diagnostic probes:")
+                for probe in probes:
+                    print(
+                        f"    {probe.get('label')}: {probe.get('status')} "
+                        f"(returncode {probe.get('returncode')})"
+                    )
     exit_code = _auto_verify_failure_exit_code(auto_verify_result)
     if exit_code is not None:
         raise typer.Exit(exit_code)

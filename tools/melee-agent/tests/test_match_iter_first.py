@@ -54,6 +54,8 @@ def test_match_iter_first_help_documents_auto_verify_cleanup_contract() -> None:
     assert "MWCC_DEBUG_HANG_TIMEOUT" in proc.stdout
     assert "cleanup_complete=false" in proc.stdout
     assert "non-zero" in proc.stdout
+    assert "--force-vector" in proc.stdout
+    assert "integrated checkdiff" in proc.stdout
 
 
 def test_match_iter_first_rejects_stale_auto_cache_by_default(
@@ -203,6 +205,123 @@ def test_match_iter_first_auto_verify_command_scopes_force_iter_first() -> None:
     output_path = pathlib.Path(cmd[cmd.index("-o") + 1])
     assert output_path.parent == src_path.parent
     assert output_path.name.startswith(".fn_80247510.auto-verify.")
+
+
+def test_force_vector_parser_accepts_phys_coalesce_iter_and_iter_first() -> None:
+    entries = debug_cli._parse_force_vector(
+        "ig40:phys=r30,ig42:coalesce=38,class0:iter5:phys=r31,ig50:iter-first"
+    )
+
+    assert [entry.kind for entry in entries] == [
+        "force_phys",
+        "force_coalesce",
+        "force_phys_iter",
+        "force_iter_first",
+    ]
+    assert entries[0].ig_idx == 40
+    assert entries[0].phys == 30
+    assert entries[1].ig_idx == 42
+    assert entries[1].root == 38
+    assert entries[2].class_id == 0
+    assert entries[2].iter_idx == 5
+    assert entries[2].phys == 31
+    assert entries[3].ig_idx == 50
+
+
+def test_force_vector_auto_verify_command_scopes_all_force_types(
+    tmp_path: pathlib.Path,
+) -> None:
+    src_path = tmp_path / "sample.c"
+    src_path.write_text("void fn_test(void) {}\n", encoding="utf-8")
+    entries = debug_cli._parse_force_vector(
+        "ig40:phys=r30,ig42:coalesce=38,class0:iter5:phys=r31,ig50:iter-first"
+    )
+    output = tmp_path / "forced.pcdump.txt"
+
+    cmd = debug_cli._build_force_vector_auto_verify_cmd(
+        src_path=src_path,
+        function="fn_test",
+        entries=entries,
+        output_path=output,
+        checkdiff_timeout=12.5,
+    )
+
+    assert cmd[:6] == [
+        sys.executable,
+        "-m",
+        "src.cli",
+        "debug",
+        "dump",
+        "local",
+    ]
+    assert "--force-phys" in cmd
+    assert cmd[cmd.index("--force-phys") + 1] == "40:30"
+    assert "--force-phys-iter" in cmd
+    assert cmd[cmd.index("--force-phys-iter") + 1] == "0:5:31"
+    assert "--force-phys-fn" in cmd
+    assert cmd[cmd.index("--force-phys-fn") + 1] == "fn_test"
+    assert "--force-coalesce" in cmd
+    assert cmd[cmd.index("--force-coalesce") + 1] == "42=38"
+    assert "--force-coalesce-fn" in cmd
+    assert cmd[cmd.index("--force-coalesce-fn") + 1] == "fn_test"
+    assert "--force-iter-first" in cmd
+    assert cmd[cmd.index("--force-iter-first") + 1] == "50"
+    assert "--force-iter-first-fn" in cmd
+    assert cmd[cmd.index("--force-iter-first-fn") + 1] == "fn_test"
+    assert "--diff" in cmd
+    assert "--function" in cmd
+    assert cmd[cmd.index("--function") + 1] == "fn_test"
+    assert "--checkdiff-timeout" in cmd
+    assert cmd[cmd.index("--checkdiff-timeout") + 1] == "12.5"
+    assert str(output) in cmd
+
+
+def test_force_vector_auto_verify_runs_union_singles_and_prefixes(
+    monkeypatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    src_path = tmp_path / "sample.c"
+    src_path.write_text("void fn_test(void) {}\n", encoding="utf-8")
+    entries = debug_cli._parse_force_vector(
+        "ig40:phys=r30,ig42:coalesce=38,ig50:iter-first"
+    )
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, *, cwd, status_label, phase="testing",
+                 status_interval_s=10.0, timeout_s=None, env=None):
+        calls.append(cmd)
+        stdout = "[diff] MATCH - function bytes are identical.\n" if "union" in status_label else "diff remained\n"
+        return subprocess.CompletedProcess(cmd, 0, stdout, "")
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_run_auto_verify_command_with_status",
+        fake_run,
+    )
+
+    result = debug_cli._run_force_vector_auto_verify(
+        src_path=src_path,
+        function="fn_test",
+        entries=entries,
+        melee_root=tmp_path,
+        checkdiff_timeout=30.0,
+        run_diagnostic_probes=True,
+    )
+
+    labels = [probe["label"] for probe in result["probes"]]
+    assert result["union"]["match"] is True
+    assert labels == [
+        "single[1]",
+        "single[2]",
+        "single[3]",
+        "prefix[1..2]",
+    ]
+    assert all(probe["match"] is False for probe in result["probes"])
+    assert len(calls) == 5
+    assert all("--diff" in call for call in calls)
+    assert calls[0][calls[0].index("--force-phys") + 1] == "40:30"
+    assert calls[0][calls[0].index("--force-coalesce") + 1] == "42=38"
+    assert calls[0][calls[0].index("--force-iter-first") + 1] == "50"
 
 
 def test_auto_verify_runner_emits_periodic_status(capsys) -> None:
