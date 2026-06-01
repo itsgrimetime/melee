@@ -14500,6 +14500,16 @@ def debug_coalesce_search_cmd(
             help="Maximum generated probes to compile or list.",
         ),
     ] = 8,
+    frame_reservation_bytes: Annotated[
+        Optional[int],
+        typer.Option(
+            "--frame-reservation-bytes",
+            help=(
+                "Add a PAD_STACK(N) source probe for implicit no-access frame "
+                "reservation gaps."
+            ),
+        ),
+    ] = None,
     timeout: Annotated[
         int,
         typer.Option(
@@ -14569,6 +14579,7 @@ def debug_coalesce_search_cmd(
         generate_lifetime_layout_probes(
             source_text,
             function,
+            frame_reservation_bytes=frame_reservation_bytes,
             max_probes=max_probes,
         )
         if source_text
@@ -14821,6 +14832,16 @@ def debug_select_order_search_cmd(
             help="Maximum generated probes to compile or list.",
         ),
     ] = 8,
+    frame_reservation_bytes: Annotated[
+        Optional[int],
+        typer.Option(
+            "--frame-reservation-bytes",
+            help=(
+                "Add a PAD_STACK(N) source probe for implicit no-access frame "
+                "reservation gaps."
+            ),
+        ),
+    ] = None,
     beam_depth: Annotated[
         int,
         typer.Option(
@@ -14924,6 +14945,7 @@ def debug_select_order_search_cmd(
         generate_lifetime_layout_probes(
             source_text,
             function,
+            frame_reservation_bytes=frame_reservation_bytes,
             max_probes=max_probes,
         )
         if source_text
@@ -15146,6 +15168,7 @@ def debug_select_order_search_cmd(
                 for probe in generate_lifetime_layout_probes(
                     parent_source,
                     function,
+                    frame_reservation_bytes=frame_reservation_bytes,
                     max_probes=max_probes,
                 ):
                     body_hash, diff_hash = _select_order_source_fingerprints(
@@ -15367,6 +15390,16 @@ def mutate_lifetime_layout_cmd(
             help="Maximum generated probes to list or compile.",
         ),
     ] = 12,
+    frame_reservation_bytes: Annotated[
+        Optional[int],
+        typer.Option(
+            "--frame-reservation-bytes",
+            help=(
+                "Add a PAD_STACK(N) source probe for implicit no-access frame "
+                "reservation gaps."
+            ),
+        ),
+    ] = None,
     timeout: Annotated[
         int,
         typer.Option(
@@ -15419,6 +15452,7 @@ def mutate_lifetime_layout_cmd(
         generate_lifetime_layout_probes(
             source_text,
             function,
+            frame_reservation_bytes=frame_reservation_bytes,
             max_probes=max_probes,
         )
         if source_text

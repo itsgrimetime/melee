@@ -340,6 +340,92 @@ def test_call_arg_tempization_wraps_single_argument_temp_in_block() -> None:
     assert "        {\n            int ll_probe_arg_0" in probe.source_text
 
 
+def test_call_arg_tempization_preserves_float_argument_type() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(float x)
+        {
+            f32 y;
+            y = 2.0f;
+            sinkf(x + y);
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(source, "fn_80000000", max_probes=30)
+    probe = next(
+        probe for probe in probes if probe.operator == "call-argument-tempization"
+    )
+
+    assert "f32 ll_probe_arg_0 = x + y;" in probe.source_text
+    assert "sinkf(ll_probe_arg_0);" in probe.source_text
+    assert "int ll_probe_arg_0 = x + y;" not in probe.source_text
+    assert probe.provenance == {
+        "kind": "call-argument-tempization",
+        "call": "sinkf",
+        "argument_index": 0,
+        "temp_type": "f32",
+    }
+
+
+def test_frame_reservation_pad_stack_probe_inserts_requested_pad() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(int flag)
+        {
+            int count;
+            float y;
+
+            sink(flag + count, y);
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(
+        source,
+        "fn_80000000",
+        frame_reservation_bytes=64,
+        max_probes=30,
+    )
+    probe = next(
+        probe for probe in probes if probe.operator == "frame-reservation-pad-stack"
+    )
+
+    assert probe.label == "frame-reservation-pad-stack-64"
+    assert "    float y;\n    PAD_STACK(64);\n\n    sink" in probe.source_text
+    assert probe.provenance == {
+        "kind": "frame-reservation-pad-stack",
+        "bytes": 64,
+        "action": "insert",
+    }
+
+
+def test_frame_reservation_pad_stack_probe_replaces_existing_pad() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(int flag)
+        {
+            int count;
+            PAD_STACK(8);
+            sink(flag + count);
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(
+        source,
+        "fn_80000000",
+        frame_reservation_bytes=64,
+        max_probes=30,
+    )
+    probe = next(
+        probe for probe in probes if probe.operator == "frame-reservation-pad-stack"
+    )
+
+    assert "PAD_STACK(8)" not in probe.source_text
+    assert "    PAD_STACK(64);\n    sink" in probe.source_text
+    assert probe.provenance == {
+        "kind": "frame-reservation-pad-stack",
+        "bytes": 64,
+        "action": "replace",
+        "previous_bytes": 8,
+    }
+
+
 def test_call_return_compare_chain_probes_include_targeted_variants() -> None:
     source = textwrap.dedent("""\
         void fn_80000000(void* entity, float dist, int teammate_slot)
@@ -785,3 +871,43 @@ def test_lifetime_layout_json_compile_probes_emits_live_candidate_paths(
     variant = payload["variants"][0]
     assert variant["status"] == "ok"
     assert pathlib.Path(variant["path"]).exists()
+
+
+def test_lifetime_layout_cli_exposes_frame_reservation_probe(
+    tmp_path: pathlib.Path,
+) -> None:
+    baseline = tmp_path / "baseline.txt"
+    source = tmp_path / "source.c"
+    baseline.write_text(BASELINE)
+    source.write_text(SOURCE)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "lifetime-layout",
+            "-f",
+            "fn_80000000",
+            "--pcdump",
+            str(baseline),
+            "--source-file",
+            str(source),
+            "--frame-reservation-bytes",
+            "64",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    probes = json.loads(result.stdout)["probes"]
+    probe = next(
+        probe for probe in probes
+        if probe["operator"] == "frame-reservation-pad-stack"
+    )
+    assert probe["label"] == "frame-reservation-pad-stack-64"
+    assert probe["provenance"] == {
+        "kind": "frame-reservation-pad-stack",
+        "bytes": 64,
+        "action": "insert",
+    }

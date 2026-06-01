@@ -286,6 +286,7 @@ def generate_lifetime_layout_probes(
     source_text: str,
     function: str,
     *,
+    frame_reservation_bytes: int | None = None,
     max_probes: int = 12,
 ) -> list[LifetimeLayoutProbe]:
     """Generate conservative source-shape probes for pressure exploration.
@@ -301,6 +302,16 @@ def generate_lifetime_layout_probes(
     body = source_text[body_start:body_end]
     probes: list[LifetimeLayoutProbe] = []
 
+    if frame_reservation_bytes is not None and frame_reservation_bytes > 0:
+        _append_probe(
+            probes,
+            _probe_frame_reservation_pad_stack(
+                source_text,
+                body,
+                body_start,
+                frame_reservation_bytes,
+            ),
+        )
     for probe in _probe_call_return_compare_chain(
         source_text,
         body,
@@ -825,6 +836,7 @@ def _probe_call_arg_temp(
     body_start: int,
     function: str,
 ) -> LifetimeLayoutProbe | None:
+    scoped_types = _scoped_identifier_types(source, body, body_start, function)
     for match in re.finditer(
         r"(?m)^([ \t]*)([A-Za-z_]\w*)\(([^;\n]*)\);",
         body,
@@ -835,10 +847,11 @@ def _probe_call_arg_temp(
             if not _has_tempizable_arithmetic(arg):
                 continue
             temp = "ll_probe_arg_0"
+            temp_type = _infer_call_arg_temp_type(arg, scoped_types)
             args[index] = temp
             replacement = (
                 f"{indent}{{\n"
-                f"{indent}    int {temp} = {arg.strip()};\n"
+                f"{indent}    {temp_type} {temp} = {arg.strip()};\n"
                 f"{indent}    {call}({', '.join(args)});\n"
                 f"{indent}}}"
             )
@@ -849,8 +862,170 @@ def _probe_call_arg_temp(
                 source_text=_replace_body_slice(
                     source, body_start, match.start(), match.end(), replacement
                 ),
+                provenance={
+                    "kind": "call-argument-tempization",
+                    "call": call,
+                    "argument_index": index,
+                    "temp_type": temp_type,
+                },
             )
     return None
+
+
+def _probe_frame_reservation_pad_stack(
+    source: str,
+    body: str,
+    body_start: int,
+    bytes_: int,
+) -> LifetimeLayoutProbe | None:
+    existing = re.search(
+        r"(?m)^([ \t]*)PAD_STACK\(\s*(0x[0-9A-Fa-f]+|\d+)\s*\);\n?",
+        body,
+    )
+    if existing is not None:
+        previous = int(existing.group(2), 0)
+        if previous == bytes_:
+            return None
+        indent = existing.group(1)
+        replacement = f"{indent}PAD_STACK({bytes_});\n"
+        return LifetimeLayoutProbe(
+            label=f"frame-reservation-pad-stack-{bytes_}",
+            operator="frame-reservation-pad-stack",
+            description=(
+                f"Replace existing PAD_STACK({previous}) with PAD_STACK({bytes_}) "
+                "to test an implicit no-access frame reservation."
+            ),
+            source_text=_replace_body_slice(
+                source,
+                body_start,
+                existing.start(),
+                existing.end(),
+                replacement,
+            ),
+            provenance={
+                "kind": "frame-reservation-pad-stack",
+                "bytes": bytes_,
+                "action": "replace",
+                "previous_bytes": previous,
+            },
+        )
+
+    insert_rel, indent = _pad_stack_insert_position(body)
+    if insert_rel is None:
+        return None
+    line = f"{indent}PAD_STACK({bytes_});\n"
+    return LifetimeLayoutProbe(
+        label=f"frame-reservation-pad-stack-{bytes_}",
+        operator="frame-reservation-pad-stack",
+        description=(
+            f"Insert PAD_STACK({bytes_}) to test an implicit no-access "
+            "frame reservation."
+        ),
+        source_text=(
+            source[: body_start + insert_rel]
+            + line
+            + source[body_start + insert_rel :]
+        ),
+        provenance={
+            "kind": "frame-reservation-pad-stack",
+            "bytes": bytes_,
+            "action": "insert",
+        },
+    )
+
+
+def _pad_stack_insert_position(body: str) -> tuple[int | None, str]:
+    cursor = 0
+    insert_rel: int | None = None
+    indent = "    "
+    for line in body.splitlines(keepends=True):
+        stripped = line.strip()
+        if not stripped:
+            if insert_rel is not None:
+                break
+            cursor += len(line)
+            continue
+        match = _LOCAL_DECL_RE.match(line)
+        if match is not None:
+            indent_match = re.match(r"[ \t]*", line)
+            indent = "" if indent_match is None else indent_match.group(0)
+            insert_rel = cursor + len(line)
+            cursor += len(line)
+            continue
+        if insert_rel is None:
+            indent_match = re.match(r"[ \t]*", line)
+            indent = "" if indent_match is None else indent_match.group(0)
+            insert_rel = cursor
+        break
+    if insert_rel is None:
+        insert_rel = len(body)
+    return insert_rel, indent
+
+
+def _scoped_identifier_types(
+    source: str,
+    body: str,
+    body_start: int,
+    function: str,
+) -> dict[str, str]:
+    types: dict[str, str] = {}
+    params = _function_param_text(source, function, body_start)
+    if params is not None:
+        for part in _split_top_level_args(params):
+            parsed = _parse_simple_decl(part)
+            if parsed is not None:
+                name, typ = parsed
+                types[name] = typ
+    for match in re.finditer(
+        r"(?m)^[ \t]*(?P<type>f32|float|double|s32|u32|int)\s+"
+        r"(?:\*+\s*)?(?P<name>[A-Za-z_]\w*)\s*(?:[=;,\[])",
+        body,
+    ):
+        types[match.group("name")] = match.group("type")
+    return types
+
+
+def _function_param_text(
+    source: str,
+    function: str,
+    body_start: int,
+) -> str | None:
+    prefix = source[:body_start]
+    matches = list(re.finditer(rf"\b{re.escape(function)}\s*\(", prefix))
+    if not matches:
+        return None
+    open_paren = prefix.find("(", matches[-1].start())
+    close_paren = _find_matching_paren(source, open_paren)
+    if close_paren is None or close_paren > body_start:
+        return None
+    return source[open_paren + 1:close_paren]
+
+
+def _parse_simple_decl(text: str) -> tuple[str, str] | None:
+    if "(*" in text:
+        return None
+    text = re.sub(r"\s+", " ", text.strip())
+    match = re.match(
+        r"^(?P<type>(?:const\s+|volatile\s+)*(?:f32|float|double|s32|u32|int|"
+        r"[A-Za-z_]\w+)(?:\s*\*)*)\s+(?P<name>[A-Za-z_]\w*)$",
+        text,
+    )
+    if match is None:
+        return None
+    typ = match.group("type").replace("const ", "").replace("volatile ", "").strip()
+    return match.group("name"), typ
+
+
+def _infer_call_arg_temp_type(expr: str, scoped_types: dict[str, str]) -> str:
+    names = set(re.findall(r"\b[A-Za-z_]\w*\b", expr))
+    referenced_types = {scoped_types[name] for name in names if name in scoped_types}
+    if "double" in referenced_types:
+        return "double"
+    if "f32" in referenced_types:
+        return "f32"
+    if "float" in referenced_types or re.search(r"\d+\.\d*|\d*\.\d+|\d+\.?f\b", expr):
+        return "float"
+    return "int"
 
 
 @dataclass(frozen=True)
