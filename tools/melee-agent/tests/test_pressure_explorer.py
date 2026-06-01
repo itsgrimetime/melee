@@ -757,9 +757,106 @@ def test_lifetime_layout_cli_source_failure_keeps_source_path(
 
     assert result.exit_code == 0, result.stdout + result.stderr
     variant = json.loads(result.stdout)["variants"][0]
-    assert variant["status"] == "failed"
+    assert variant["status"] == "malformed-source"
     assert "compiled probe pcdump omitted the target function" in variant["error"]
     assert variant["source_retained"] == str(source)
+    assert "source_hunk" in variant
+    assert "fn_80000000" in variant["source_hunk"]
+
+
+def test_lifetime_layout_cli_rejects_source_missing_target_before_compile(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline = tmp_path / "baseline.txt"
+    source = tmp_path / "probe.c"
+    baseline.write_text(BASELINE)
+    source.write_text("void fn_80000001(void) {\n    helper();\n}\n")
+
+    def fail_if_compiled(*args, **kwargs) -> str:
+        raise AssertionError("source missing target should be rejected before compile")
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture.compile_source_variant",
+        fail_if_compiled,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "lifetime-layout",
+            "-f",
+            "fn_80000000",
+            "--pcdump",
+            str(baseline),
+            "--candidate",
+            f"block-scope={source}",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    variant = json.loads(result.stdout)["variants"][0]
+    assert variant["status"] == "malformed-source"
+    assert "target function fn_80000000 not found in candidate source" in variant["error"]
+    assert "before compile" in variant["error"]
+    assert variant["source_retained"] == str(source)
+    assert "fn_80000001" in variant["source_hunk"]
+
+
+def test_lifetime_layout_cli_marks_dump_missing_target_as_malformed_source(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.mwcc_debug.diff_capture import CompileFailure
+
+    baseline = tmp_path / "baseline.txt"
+    source = tmp_path / "probe.c"
+    baseline.write_text(BASELINE)
+    source.write_text("void fn_80000000(void) {\n}\n")
+
+    def fake_compile(diff_input, *, function, melee_root, timeout) -> str:
+        raise CompileFailure(
+            side=diff_input.label,
+            command=["debug", "dump", "local"],
+            stdout="",
+            stderr=(
+                "function 'fn_80000000' not found in pcdump\n"
+                "suggestions: fn_80000001"
+            ),
+            returncode=3,
+        )
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture.compile_source_variant",
+        fake_compile,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "lifetime-layout",
+            "-f",
+            "fn_80000000",
+            "--pcdump",
+            str(baseline),
+            "--candidate",
+            f"block-scope={source}",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    variant = json.loads(result.stdout)["variants"][0]
+    assert variant["status"] == "malformed-source"
+    assert "compiled probe pcdump omitted the target function" in variant["error"]
+    assert "fn_80000001" in variant["error"]
+    assert variant["source_retained"] == str(source)
+    assert "fn_80000000" in variant["source_hunk"]
 
 
 def test_lifetime_layout_json_reports_candidate_progress_and_timeout_failure(

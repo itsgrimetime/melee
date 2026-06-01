@@ -34,7 +34,7 @@ from .analytics import analytics_app
 from .audit import audit_app
 from .commit import commit_app
 from .compilers import list_compilers
-from .debug import debug_app
+from .debug import _acquire_checkdiff_repo_lock, debug_app
 from .docker import docker_app
 
 # Import sub-apps from modules
@@ -51,6 +51,7 @@ from .struct import struct_app
 from .stub import stub_app
 from .sync import sync_app
 from .tracking import attempts_app
+from ..mwcc_debug.diff_capture import _run_with_process_group_timeout
 
 
 class ReportingTyper(typer.Typer):
@@ -123,8 +124,14 @@ def opseq(ctx: typer.Context) -> None:
     else:
         cmd = ["go", "run", ".", "opseq", *args]
 
+    timeout = _opseq_timeout_seconds()
     try:
-        subprocess.run(cmd, cwd=table_typer_dir, check=True)
+        with _acquire_checkdiff_repo_lock(DEFAULT_MELEE_ROOT, label="opseq build/report"):
+            proc = _run_with_process_group_timeout(
+                cmd,
+                cwd=table_typer_dir,
+                timeout=timeout,
+            )
     except FileNotFoundError as exc:
         typer.echo(f"opseq helper could not start: {exc}", err=True)
         typer.echo(
@@ -132,8 +139,33 @@ def opseq(ctx: typer.Context) -> None:
             err=True,
         )
         raise typer.Exit(127)
-    except subprocess.CalledProcessError as exc:
-        raise typer.Exit(exc.returncode)
+    except subprocess.TimeoutExpired:
+        typer.echo(
+            f"opseq timed out after {timeout:g}s while running: "
+            f"{shlex.join(cmd)}",
+            err=True,
+        )
+        raise typer.Exit(124)
+
+    _forward_subprocess_output(proc)
+    if proc.returncode != 0:
+        raise typer.Exit(proc.returncode)
+
+
+def _opseq_timeout_seconds() -> int:
+    raw = os.environ.get("MELEE_AGENT_OPSEQ_TIMEOUT", "120")
+    try:
+        timeout = int(float(raw))
+    except ValueError:
+        return 120
+    return max(timeout, 1)
+
+
+def _forward_subprocess_output(proc: subprocess.CompletedProcess[str]) -> None:
+    if proc.stdout:
+        typer.echo(proc.stdout, nl=False)
+    if proc.stderr:
+        typer.echo(proc.stderr, err=True, nl=False)
 
 
 app.command("compilers")(list_compilers)

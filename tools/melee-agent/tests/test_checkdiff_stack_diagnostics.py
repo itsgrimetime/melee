@@ -262,6 +262,38 @@ def test_classify_asm_diff_guides_volatile_and_loop_counter_reg_swaps() -> None:
     assert "loop-counter reuse" in reason_text
 
 
+def test_register_only_diff_demotes_indexed_pointer_shape_hint() -> None:
+    checkdiff = _load_checkdiff()
+    expected = [
+        "<fn_80000000>:",
+        "+000: lwz r30, 0x594(r31)",
+        "+004: lwzx r0, r5, r30",
+        "+008: add r29, r6, r30",
+        "+00c: lwz r4, 0(r29)",
+        "+010: addi r30, r30, 1",
+        "+014: cmpw r30, r29",
+    ]
+    current = [
+        "<fn_80000000>:",
+        "+000: lwz r29, 0x594(r31)",
+        "+004: lwzx r0, r5, r29",
+        "+008: add r30, r6, r29",
+        "+00c: lwz r4, 0(r30)",
+        "+010: addi r29, r29, 1",
+        "+014: cmpw r29, r30",
+    ]
+
+    classification = checkdiff.classify_asm_diff(expected, current)
+
+    assert classification["primary"] == "register-allocation"
+    assert classification["indexed_struct_pointer_materialization"]
+    guidance = classification["register_allocation_guidance"]
+    assert guidance["callee_swap_pairs"] == [["r29", "r30"]]
+    reason_text = "\n".join(classification["reasons"])
+    assert "indexed pointer-shape hint demoted" in reason_text
+    assert "register-allocation guidance" in reason_text
+
+
 def test_stack_slot_localizer_accepts_pcdump_bridge() -> None:
     checkdiff = _load_checkdiff()
     expected = [

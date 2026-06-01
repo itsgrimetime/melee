@@ -58,6 +58,7 @@ from ..mwcc_debug.patterns import (
 )
 from ..mwcc_debug.source_patch import (
     extract_function,
+    find_function as find_source_function,
     find_function_definitions,
     get_decl_names,
     get_decl_names_by_scope,
@@ -73,6 +74,7 @@ from ..mwcc_debug.asm_parser import (
 from ..mwcc_debug.iter_match import match_virtual_for_expected_def
 from ..mwcc_debug.diff_capture import (
     CompileFailure,
+    _kill_process_tree,
     read_inspect_input_if_available,
     read_or_compile_input,
     resolve_diff_input,
@@ -10490,7 +10492,6 @@ def pcdump_local(
         raise typer.Exit(3)
 
     import select
-    import signal as _signal
     out_buf: list[str] = []
     err_buf: list[str] = []
     last_progress = time.time()
@@ -10518,10 +10519,7 @@ def pcdump_local(
                 last_progress = time.time()
         if time.time() - last_progress > WATCHDOG_TIMEOUT_S:
             killed_by_watchdog = True
-            try:
-                os.killpg(os.getpgid(proc_handle.pid), _signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
+            _kill_debug_dump_local_process_tree(proc_handle)
             # Drain whatever the OS still hands back (proc may be UE)
             try:
                 remaining_out, remaining_err = proc_handle.communicate(timeout=2)
@@ -10542,7 +10540,11 @@ def pcdump_local(
             self.stdout = out
             self.stderr = err
     proc = _ProcShim(
-        rc=(proc_handle.returncode if proc_handle.returncode is not None else 124),
+        rc=(
+            124
+            if killed_by_watchdog
+            else (proc_handle.returncode if proc_handle.returncode is not None else 124)
+        ),
         out="".join(out_buf),
         err="".join(err_buf),
     )
@@ -13079,6 +13081,64 @@ def _new_external_function_definitions(
         span.name for span in find_function_definitions(original_text)
     }
     return sorted(candidate_names - original_names - {function})
+
+
+class _MalformedSourceCandidate(ValueError):
+    def __init__(self, message: str, *, source_hunk: str | None = None):
+        super().__init__(message)
+        self.source_hunk = source_hunk
+
+
+def _compact_source_hunk_for_function(
+    source_text: str,
+    function: str,
+    *,
+    context: int = 4,
+    max_lines: int = 14,
+) -> str:
+    lines = source_text.splitlines()
+    if not lines:
+        return ""
+
+    span = find_source_function(source_text, function)
+    if span is not None:
+        anchor_offset = span.sig_start
+    else:
+        match = re.search(rf"\b{re.escape(function)}\s*\(", source_text)
+        if match is not None:
+            anchor_offset = match.start()
+        else:
+            definitions = find_function_definitions(source_text)
+            anchor_offset = definitions[0].sig_start if definitions else 0
+
+    anchor_line = source_text[:anchor_offset].count("\n")
+    start = max(0, anchor_line - context)
+    end = min(len(lines), max(start + 1, anchor_line + max_lines - context))
+    return "\n".join(f"{idx + 1}: {lines[idx]}" for idx in range(start, end))
+
+
+def _prevalidate_lifetime_layout_source_candidate(
+    path: Path,
+    *,
+    function: str,
+) -> tuple[str, str | None]:
+    source_text = path.read_text(encoding="utf-8", errors="replace")
+    if find_source_function(source_text, function) is not None:
+        return source_text, None
+
+    names = [span.name for span in find_function_definitions(source_text)[:5]]
+    suffix = f"; candidate defines: {', '.join(names)}" if names else ""
+    raise _MalformedSourceCandidate(
+        (
+            f"target function {function} not found in candidate source before "
+            f"compile: {path}{suffix}"
+        ),
+        source_hunk=_compact_source_hunk_for_function(source_text, function),
+    )
+
+
+def _kill_debug_dump_local_process_tree(proc_handle: subprocess.Popen[str]) -> None:
+    _kill_process_tree(proc_handle.pid, proc_handle)
 
 
 def _find_stack_slot_localizer_in_json(value: object) -> dict | None:
@@ -15753,20 +15813,45 @@ def mutate_lifetime_layout_cmd(
             path=path,
         )
         try:
+            candidate_source_text: str | None = None
             if path.suffix == ".txt":
                 candidate_text = path.read_text(encoding="utf-8", errors="replace")
             elif path.suffix == ".c":
-                candidate_text = compile_source_variant(
-                    DiffInput(
-                        label=label,
-                        token=str(path),
-                        kind="source",
-                        path=path,
-                    ),
-                    function=function,
-                    melee_root=DEFAULT_MELEE_ROOT,
-                    timeout=timeout,
+                candidate_source_text, _ = (
+                    _prevalidate_lifetime_layout_source_candidate(
+                        path,
+                        function=function,
+                    )
                 )
+                try:
+                    candidate_text = compile_source_variant(
+                        DiffInput(
+                            label=label,
+                            token=str(path),
+                            kind="source",
+                            path=path,
+                        ),
+                        function=function,
+                        melee_root=DEFAULT_MELEE_ROOT,
+                        timeout=timeout,
+                    )
+                except CompileFailure as exc:
+                    detail = str(exc)
+                    if (
+                        exc.returncode == 3
+                        and "not found in pcdump" in detail
+                    ):
+                        raise _MalformedSourceCandidate(
+                            (
+                                f"{detail}; compiled probe pcdump omitted the "
+                                f"target function. Source retained at {path}"
+                            ),
+                            source_hunk=_compact_source_hunk_for_function(
+                                candidate_source_text,
+                                function,
+                            ),
+                        ) from exc
+                    raise
             else:
                 raise ValueError(f"expected .txt pcdump or .c source, got {path}")
             real_score = _SourceCandidateRealScore(None, None)
@@ -15792,9 +15877,16 @@ def mutate_lifetime_layout_cmd(
                 )
             except ValueError as exc:
                 if path.suffix == ".c":
-                    raise ValueError(
+                    raise _MalformedSourceCandidate(
                         f"{exc}; compiled probe pcdump omitted the target "
-                        f"function. Source retained at {path}"
+                        f"function. Source retained at {path}",
+                        source_hunk=_compact_source_hunk_for_function(
+                            candidate_source_text or path.read_text(
+                                encoding="utf-8",
+                                errors="replace",
+                            ),
+                            function,
+                        ),
                     ) from exc
                 raise
             delta = compare_pressure_signatures(baseline, candidate_sig)
@@ -15824,15 +15916,18 @@ def mutate_lifetime_layout_cmd(
                 path=path,
             )
         except Exception as exc:
+            malformed_source = isinstance(exc, _MalformedSourceCandidate)
             failed = {
                 "label": label,
                 "operator": operator,
-                "status": "failed",
+                "status": "malformed-source" if malformed_source else "failed",
                 "path": str(path),
                 "error": str(exc),
             }
             if path.suffix == ".c" and path.exists():
                 failed["source_retained"] = str(path)
+            if malformed_source and exc.source_hunk:
+                failed["source_hunk"] = exc.source_hunk
             variants.append(failed)
             _emit_candidate_progress(
                 "lifetime-layout-candidate-failed",

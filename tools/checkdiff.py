@@ -1356,7 +1356,12 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
         reasons.append(format_indexed_struct_pointer_materialization_diagnostic(
             indexed_struct_pointer_materialization
         ))
-        if primary in {"instruction-sequence", "operand-register-or-offset", "register-allocation"}:
+        if primary == "register-allocation" and register_allocation_guidance:
+            reasons.append(
+                "indexed pointer-shape hint demoted because opcode-aligned "
+                "register-allocation evidence is stronger"
+            )
+        elif primary in {"instruction-sequence", "operand-register-or-offset"}:
             primary = "indexed-struct-pointer-materialization"
 
     if not reasons:

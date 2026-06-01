@@ -33,20 +33,43 @@ def test_opseq_alias_forwards_to_table_typer(monkeypatch, tmp_path):
     """`melee-agent opseq` should be a discoverable alias for table-typer."""
     table_typer = tmp_path / "tools" / "table-typer"
     table_typer.mkdir(parents=True)
-    calls = []
+    events = []
 
-    def fake_run(cmd, cwd=None, check=False):
-        calls.append((cmd, cwd, check))
-        return subprocess.CompletedProcess(cmd, 0)
+    class FakeLock:
+        def __enter__(self):
+            events.append("lock-enter")
+
+        def __exit__(self, exc_type, exc, tb):
+            events.append("lock-exit")
+
+    def fake_lock(root, *, label):
+        assert root == tmp_path
+        assert label == "opseq build/report"
+        return FakeLock()
+
+    def fake_run(cmd, *, cwd, timeout, env=None):
+        events.append(("run", cmd, cwd, timeout, env))
+        return subprocess.CompletedProcess(cmd, 0, "match\n", "")
 
     monkeypatch.setattr(cli, "DEFAULT_MELEE_ROOT", tmp_path)
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(cli, "_acquire_checkdiff_repo_lock", fake_lock)
+    monkeypatch.setattr(cli, "_run_with_process_group_timeout", fake_run)
+    monkeypatch.setenv("MELEE_AGENT_OPSEQ_TIMEOUT", "7")
 
     result = runner.invoke(app, ["opseq", "-candidates", "beq,mr,bl"])
 
     assert result.exit_code == 0
-    assert calls == [
-        (["go", "run", ".", "opseq", "-candidates", "beq,mr,bl"], table_typer, True)
+    assert result.stdout == "match\n"
+    assert events == [
+        "lock-enter",
+        (
+            "run",
+            ["go", "run", ".", "opseq", "-candidates", "beq,mr,bl"],
+            table_typer,
+            7,
+            None,
+        ),
+        "lock-exit",
     ]
 
 
@@ -58,6 +81,61 @@ def test_opseq_alias_reports_bootstrap_command_when_sources_missing(monkeypatch,
     assert result.exit_code == 2
     assert "tools/table-typer" in strip_ansi(result.stderr)
     assert "go run . opseq" in strip_ansi(result.stderr)
+
+
+def test_opseq_alias_forwards_helper_failure_stderr(monkeypatch, tmp_path):
+    table_typer = tmp_path / "tools" / "table-typer"
+    table_typer.mkdir(parents=True)
+
+    class FakeLock:
+        def __enter__(self):
+            return None
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+    def fake_run(cmd, *, cwd, timeout, env=None):
+        return subprocess.CompletedProcess(
+            cmd,
+            2,
+            "Waiting for ninja to finish...\n",
+            "ninja: error: deps log is corrupt\n",
+        )
+
+    monkeypatch.setattr(cli, "DEFAULT_MELEE_ROOT", tmp_path)
+    monkeypatch.setattr(cli, "_acquire_checkdiff_repo_lock", lambda *a, **k: FakeLock())
+    monkeypatch.setattr(cli, "_run_with_process_group_timeout", fake_run)
+
+    result = runner.invoke(app, ["opseq", "beq,mr,bl"])
+
+    assert result.exit_code == 2
+    assert "Waiting for ninja to finish" in result.stdout
+    assert "ninja: error: deps log is corrupt" in result.stderr
+
+
+def test_opseq_alias_reports_timeout(monkeypatch, tmp_path):
+    table_typer = tmp_path / "tools" / "table-typer"
+    table_typer.mkdir(parents=True)
+
+    class FakeLock:
+        def __enter__(self):
+            return None
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+    def fake_run(cmd, *, cwd, timeout, env=None):
+        raise subprocess.TimeoutExpired(cmd, timeout)
+
+    monkeypatch.setattr(cli, "DEFAULT_MELEE_ROOT", tmp_path)
+    monkeypatch.setattr(cli, "_acquire_checkdiff_repo_lock", lambda *a, **k: FakeLock())
+    monkeypatch.setattr(cli, "_run_with_process_group_timeout", fake_run)
+    monkeypatch.setenv("MELEE_AGENT_OPSEQ_TIMEOUT", "3")
+
+    result = runner.invoke(app, ["opseq", "beq,mr,bl"])
+
+    assert result.exit_code == 124
+    assert "opseq timed out after 3s" in result.stderr
 
 
 # Path to the melee submodule
