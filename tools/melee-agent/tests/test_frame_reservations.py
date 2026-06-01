@@ -178,3 +178,57 @@ def test_frame_reservation_reports_unresolved_symbolic_homes_without_offset() ->
             "instr_idx": 1,
         }
     ]
+
+
+def test_frame_reservation_resolves_named_local_stack_homes_from_current_asm() -> None:
+    pcdump = textwrap.dedent("""\
+        Starting function MatToQuat
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        MatToQuat
+        B0: Succ={} Pred={} Labels={}
+            stwu    r1,-80(r1)
+            stfs    f4,lenCol+8(r1)
+            stfs    f5,lenCol+12(r1)
+            stfs    f6,q3(r1)
+            stfs    f7,nxt(r1)
+            addi    r1,r1,80
+    """)
+    current_asm = textwrap.dedent("""\
+        +000: 94 21 ff b0 \tstwu    r1,-80(r1)
+        +004: d0 81 00 30 \tstfs    f4,48(r1)
+        +008: d0 a1 00 34 \tstfs    f5,52(r1)
+        +00c: d0 c1 00 28 \tstfs    f6,40(r1)
+        +010: d0 e1 00 40 \tstfs    f7,64(r1)
+        +014: 38 21 00 50 \taddi    r1,r1,80
+    """)
+    expected_asm = textwrap.dedent("""\
+        .fn MatToQuat, global
+        /* 80342360 */    stwu r1, -0x48(r1)
+        /* 80342364 */    stfs f6, 0x24(r1)
+        /* 80342368 */    stfs f4, 0x2c(r1)
+        /* 8034236c */    stfs f5, 0x30(r1)
+        /* 80342370 */    stfs f7, 0x3c(r1)
+        /* 80342374 */    addi r1, r1, 0x48
+        .endfn MatToQuat
+    """)
+
+    report = analyze_frame_reservations(
+        pcdump,
+        "MatToQuat",
+        expected_asm_text=expected_asm,
+        current_asm_text=current_asm,
+    )
+
+    assert report["current"]["symbolic_home_map"] == [
+        {"symbol": "lenCol+12", "offset": 0x34},
+        {"symbol": "lenCol+8", "offset": 0x30},
+        {"symbol": "nxt", "offset": 0x40},
+        {"symbol": "q3", "offset": 0x28},
+    ]
+    assert report["current"]["unresolved_symbolic_homes"] == []
+    assert [
+        item["offset"]
+        for item in report["current"]["accesses"]
+        if item["opcode"] == "stfs"
+    ] == [0x30, 0x34, 0x28, 0x40]
+    assert report["extra_low_frame_reservation"] is None

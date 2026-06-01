@@ -98,8 +98,12 @@ _MATCH_ITER_RANGE_RE = re.compile(r"^([rf])(\d+)(?:-|\.\.)([rf])?(\d+)$")
 _MATCH_ITER_ALIASES: dict[str, tuple[_MatchIterFirstReg, ...]] = {
     "gpr-callee": tuple(_MatchIterFirstReg("r", n) for n in range(31, 24, -1)),
     "callee-gpr": tuple(_MatchIterFirstReg("r", n) for n in range(31, 24, -1)),
+    "gpr-volatile": tuple(_MatchIterFirstReg("r", n) for n in range(3, 13)),
+    "volatile-gpr": tuple(_MatchIterFirstReg("r", n) for n in range(3, 13)),
     "fpr-callee": tuple(_MatchIterFirstReg("f", n) for n in range(31, 23, -1)),
     "callee-fpr": tuple(_MatchIterFirstReg("f", n) for n in range(31, 23, -1)),
+    "fpr-volatile": tuple(_MatchIterFirstReg("f", n) for n in range(0, 14)),
+    "volatile-fpr": tuple(_MatchIterFirstReg("f", n) for n in range(0, 14)),
 }
 
 
@@ -7554,8 +7558,9 @@ def match_iter_first(
         typer.Option(
             "--regs",
             help="Comma-separated physical regs to report on "
-                 "(for example r31,r30, f31-f30, or gpr-callee for "
-                 "r31-r25; default: r31,r30,r29,r28).",
+                 "(for example r31,r30, f31-f30, gpr-callee for "
+                 "r31-r25, or gpr-volatile,r0 for volatile target diffs; "
+                 "default: r31,r30,r29,r28).",
         ),
     ] = "r31,r30,r29,r28",
     asm: Annotated[

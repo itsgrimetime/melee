@@ -1112,6 +1112,122 @@ def add_pad_stack_probe_guidance(
         reasons.append(message)
 
 
+def _register_tokens(text: str) -> list[str]:
+    return [match.group(0) for match in _REGISTER_TOKEN_RE.finditer(text)]
+
+
+def _is_gpr(reg: str) -> bool:
+    return reg.startswith("r")
+
+
+def _gpr_num(reg: str) -> int:
+    return int(reg[1:])
+
+
+def _is_volatile_gpr(reg: str) -> bool:
+    return _is_gpr(reg) and (_gpr_num(reg) == 0 or 3 <= _gpr_num(reg) <= 12)
+
+
+def _is_callee_gpr(reg: str) -> bool:
+    return _is_gpr(reg) and 25 <= _gpr_num(reg) <= 31
+
+
+def _sorted_regs(regs: set[str]) -> list[str]:
+    return sorted(regs, key=lambda reg: (reg[0], int(reg[1:])))
+
+
+def detect_register_allocation_guidance(
+    ref_lines: list[str],
+    our_lines: list[str],
+) -> Optional[dict]:
+    register_only_count = 0
+    volatile_targets: set[str] = set()
+    volatile_currents: set[str] = set()
+    callee_edges: set[tuple[str, str]] = set()
+
+    for ref_line, our_line in zip(ref_lines, our_lines):
+        if ref_line == our_line:
+            continue
+        ref_body = _asm_body(ref_line)
+        our_body = _asm_body(our_line)
+        if _normalize_register_tokens(ref_body) != _normalize_register_tokens(our_body):
+            continue
+        register_only_count += 1
+        for ref_reg, cur_reg in zip(_register_tokens(ref_body), _register_tokens(our_body)):
+            if ref_reg == cur_reg:
+                continue
+            if _is_volatile_gpr(ref_reg):
+                volatile_targets.add(ref_reg)
+            if _is_volatile_gpr(cur_reg):
+                volatile_currents.add(cur_reg)
+            if _is_callee_gpr(ref_reg) and _is_callee_gpr(cur_reg):
+                callee_edges.add((ref_reg, cur_reg))
+
+    if register_only_count == 0:
+        return None
+
+    callee_swap_pairs: list[list[str]] = []
+    seen_swaps: set[frozenset[str]] = set()
+    for left, right in sorted(callee_edges):
+        if left == right or (right, left) not in callee_edges:
+            continue
+        key = frozenset((left, right))
+        if key in seen_swaps:
+            continue
+        seen_swaps.add(key)
+        callee_swap_pairs.append(_sorted_regs({left, right}))
+
+    guidance: dict = {
+        "register_only_count": register_only_count,
+        "volatile_target_registers": _sorted_regs(volatile_targets),
+        "volatile_current_registers": _sorted_regs(volatile_currents),
+        "callee_swap_pairs": callee_swap_pairs,
+    }
+
+    suggestions: list[str] = []
+    if volatile_targets:
+        suggestions.append(
+            "inspect volatile targets with `debug target match-iter-first "
+            "-f <function> --regs gpr-volatile,r0`; for flag/reload predicate "
+            "diffs, try u8/bool/int flag type, pointer-vs-bool predicate, "
+            "or short liveness nudges"
+        )
+    if callee_swap_pairs:
+        pairs = ", ".join("<->".join(pair) for pair in callee_swap_pairs)
+        suggestions.append(
+            f"callee-save swap {pairs} suggests branch-local loop-counter reuse, "
+            "nested declaration order, or tree-index vs cursor-increment source "
+            "perturbations"
+        )
+    guidance["suggestions"] = suggestions
+    return guidance
+
+
+def format_register_allocation_guidance(guidance: dict) -> str:
+    parts = [
+        "register-allocation guidance:",
+        f"{guidance.get('register_only_count', 0)} opcode-aligned paired "
+        "instruction(s) differ only by register",
+    ]
+    volatile_targets = guidance.get("volatile_target_registers") or []
+    if volatile_targets:
+        parts.append(
+            "volatile target regs "
+            f"{','.join(volatile_targets)}; run "
+            "`debug target match-iter-first -f <function> --regs "
+            "gpr-volatile,r0` and inspect flag/reload predicate bindings"
+        )
+    callee_swaps = guidance.get("callee_swap_pairs") or []
+    if callee_swaps:
+        pairs = ", ".join("<->".join(pair) for pair in callee_swaps)
+        parts.append(
+            f"callee-save swap {pairs}; try loop-counter reuse, nested "
+            "declaration order, tree-index vs cursor-increment, or "
+            "discard/self-assignment liveness nudges"
+        )
+    return "; ".join(parts)
+
+
 def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
     """Best-effort classification to help agents avoid chasing false leads."""
     if ref_lines == our_lines:
@@ -1142,6 +1258,10 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
     )
     indexed_struct_pointer_materialization = (
         detect_indexed_struct_pointer_materialization(ref_lines, our_lines)
+    )
+    register_allocation_guidance = detect_register_allocation_guidance(
+        ref_lines,
+        our_lines,
     )
 
     if len(ref_lines) != len(our_lines):
@@ -1220,6 +1340,10 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
         reasons.append(f"{likely_register_diffs} differing paired lines look register-only after normalization")
         if primary == "operand-register-or-offset":
             primary = "register-allocation"
+    if register_allocation_guidance:
+        reasons.append(format_register_allocation_guidance(
+            register_allocation_guidance
+        ))
 
     if inline_boundary_artifact:
         calls = ", ".join(inline_boundary_artifact["missing_ref_calls"])
@@ -1249,6 +1373,8 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
         result["indexed_struct_pointer_materialization"] = (
             indexed_struct_pointer_materialization
         )
+    if register_allocation_guidance:
+        result["register_allocation_guidance"] = register_allocation_guidance
     return result
 
 

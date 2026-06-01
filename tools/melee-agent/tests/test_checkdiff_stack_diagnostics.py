@@ -231,6 +231,37 @@ def test_classify_asm_diff_detects_indexed_struct_pointer_materialization() -> N
     }
 
 
+def test_classify_asm_diff_guides_volatile_and_loop_counter_reg_swaps() -> None:
+    checkdiff = _load_checkdiff()
+    expected = [
+        "<fn_80000000>:",
+        "+000: lbz r4, 0x2227(r31)",
+        "+004: cmpwi r3, 0",
+        "+008: lwz r30, 0x594(r31)",
+        "+00c: addi r29, r29, 1",
+        "+010: cmpw r29, r30",
+    ]
+    current = [
+        "<fn_80000000>:",
+        "+000: lbz r0, 0x2227(r31)",
+        "+004: cmpwi r0, 0",
+        "+008: lwz r29, 0x594(r31)",
+        "+00c: addi r30, r30, 1",
+        "+010: cmpw r30, r29",
+    ]
+
+    classification = checkdiff.classify_asm_diff(expected, current)
+
+    assert classification["primary"] == "register-allocation"
+    guidance = classification["register_allocation_guidance"]
+    assert guidance["volatile_target_registers"] == ["r3", "r4"]
+    assert guidance["callee_swap_pairs"] == [["r29", "r30"]]
+    reason_text = "\n".join(classification["reasons"])
+    assert "--regs gpr-volatile,r0" in reason_text
+    assert "flag/reload predicate" in reason_text
+    assert "loop-counter reuse" in reason_text
+
+
 def test_stack_slot_localizer_accepts_pcdump_bridge() -> None:
     checkdiff = _load_checkdiff()
     expected = [

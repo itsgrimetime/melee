@@ -61,6 +61,7 @@ def test_match_iter_first_help_documents_auto_verify_cleanup_contract() -> None:
     assert "non-zero" in proc.stdout
     assert "--force-vector" in proc.stdout
     assert "integrated checkdiff" in proc.stdout
+    assert "gpr-volatile" in proc.stdout
 
 
 def test_match_iter_first_rejects_stale_auto_cache_by_default(
@@ -115,6 +116,15 @@ def test_match_iter_first_reg_parser_expands_callee_alias_and_ranges() -> None:
 
     assert [reg.name for reg in regs] == [
         "r31", "r30", "r29", "r28", "r27", "r26", "r25", "f31", "f30",
+    ]
+
+
+def test_match_iter_first_reg_parser_expands_volatile_aliases() -> None:
+    regs = debug_cli._parse_match_iter_first_regs("gpr-volatile,r0")
+
+    assert [reg.name for reg in regs] == [
+        "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12",
+        "r0",
     ]
 
 
