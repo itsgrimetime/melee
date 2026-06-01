@@ -125,7 +125,7 @@ def test_compile_source_variant_uses_process_group_timeout_runner(
     assert captured["timeout"] == 7
 
 
-def test_compile_source_variant_sets_child_hang_watchdog_to_candidate_timeout(
+def test_compile_source_variant_sets_child_hang_watchdog_before_parent_timeout(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -156,7 +156,41 @@ def test_compile_source_variant_sets_child_hang_watchdog_to_candidate_timeout(
 
     env = captured["env"]
     assert isinstance(env, dict)
-    assert env["MWCC_DEBUG_HANG_TIMEOUT"] == "7"
+    assert env["MWCC_DEBUG_HANG_TIMEOUT"] == "6"
+
+
+def test_compile_source_variant_preserves_shorter_existing_child_watchdog(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    src = tmp_path / "src" / "melee" / "mn" / "sample.c"
+    src.parent.mkdir(parents=True)
+    src.write_text("void fn_test(void) {}\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def fake_run(cmd, *, cwd, timeout, env):
+        captured["env"] = env
+        out_path = Path(cmd[cmd.index("--output") + 1])
+        out_path.write_text("Starting function fn_test\n", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setenv("MWCC_DEBUG_HANG_TIMEOUT", "3")
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture._run_with_process_group_timeout",
+        fake_run,
+    )
+
+    diff_input = DiffInput(label="A", token=str(src), kind="source", path=src)
+    compile_source_variant(
+        diff_input,
+        function="fn_test",
+        melee_root=tmp_path,
+        timeout=30,
+    )
+
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["MWCC_DEBUG_HANG_TIMEOUT"] == "3"
 
 
 def test_compile_source_variant_stages_outside_repo_source_and_restores(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -546,3 +580,62 @@ def test_process_group_timeout_bounds_hung_communicate(
     assert calls["start_new_session"] is True
     assert calls["killpg"] == (4321, signal.SIGKILL)
     assert calls["wait_timeout"] == 5
+
+
+def test_process_group_timeout_kills_descendant_process_groups(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: dict[str, object] = {"killpg": []}
+    unblock = threading.Event()
+
+    class FakePipe:
+        def close(self) -> None:
+            unblock.set()
+
+    class FakeProc:
+        pid = 4321
+        returncode = None
+        stdout = FakePipe()
+        stderr = FakePipe()
+
+        def communicate(self, timeout: float):
+            unblock.wait(30)
+            return "", ""
+
+        def wait(self, timeout: int):
+            self.returncode = -signal.SIGKILL
+
+        def kill(self):
+            calls["kill"] = True
+
+    def fake_popen(cmd, cwd, env, stdout, stderr, text, start_new_session):
+        return FakeProc()
+
+    def fake_run(cmd, capture_output, text, check):
+        parent = cmd[-1]
+        stdout_text = {"4321": "5000\n", "5000": ""}[parent]
+        return SimpleNamespace(returncode=0 if stdout_text else 1, stdout=stdout_text)
+
+    def fake_getpgid(pid: int) -> int:
+        return {4321: 4321, 5000: 5000}[pid]
+
+    def fake_killpg(pgid: int, sig: int) -> None:
+        calls["killpg"].append((pgid, sig))
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("os.getpgid", fake_getpgid)
+    monkeypatch.setattr("os.killpg", fake_killpg)
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        _run_with_process_group_timeout(
+            ["python", "-c", "hang"],
+            cwd=tmp_path,
+            timeout=0.01,
+        )
+
+    assert calls["killpg"] == [
+        (5000, signal.SIGKILL),
+        (4321, signal.SIGKILL),
+    ]

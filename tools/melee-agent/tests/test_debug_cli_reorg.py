@@ -541,9 +541,74 @@ def test_debug_permute_bootstrap_imports_and_writes_settings(
         "--full",
     ]
     assert "import.py" in calls[1][0][1]
+    assert "--preserve-macros" in calls[1][0]
+    assert "PAD_STACK" in calls[1][0][calls[1][0].index("--preserve-macros") + 1]
     fn_dir = perm_root / "nonmatchings" / "fn_80000000"
     assert (fn_dir / "settings.toml").exists()
     assert "func_name = \"fn_80000000\"" in (fn_dir / "settings.toml").read_text()
+
+
+def test_debug_permute_bootstrap_source_file_stages_variant_and_restores(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    perm_root = tmp_path / "decomp-permuter"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    variant_path = tmp_path / "variant.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text("void fn_80000000(void) {}\n")
+    variant_path.write_text("void fn_80000000(void) { PAD_STACK(64); }\n")
+    perm_root.mkdir()
+    (perm_root / "import.py").write_text("")
+
+    observed_import_source: list[str] = []
+
+    def fake_run(argv, *, cwd=None, capture_output=False, text=False, check=False, **kwargs):
+        argv = [str(part) for part in argv]
+        if "import.py" in argv[1]:
+            observed_import_source.append(src_path.read_text())
+            assert argv[2] == str(src_path)
+            fn_dir = perm_root / "nonmatchings" / "fn_80000000"
+            fn_dir.mkdir(parents=True)
+            (fn_dir / "base.c").write_text(src_path.read_text())
+            (fn_dir / "compile.sh").write_text("#!/usr/bin/env bash\n")
+            (fn_dir / "target.o").write_bytes(b"target")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/mn/sample",
+    )
+    monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "bootstrap",
+            "-f",
+            "fn_80000000",
+            "--perm-root",
+            str(perm_root),
+            "--source-file",
+            str(variant_path),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert observed_import_source == [variant_path.read_text()]
+    assert src_path.read_text() == "void fn_80000000(void) {}\n"
+    payload = json.loads(result.stdout)
+    assert payload["source"] == str(variant_path)
+    assert payload["import_source"] == str(src_path)
+    assert "PAD_STACK(64)" in (
+        perm_root / "nonmatchings" / "fn_80000000" / "base.c"
+    ).read_text()
 
 
 def test_permuter_function_dir_accepts_worktree_import_path(tmp_path: Path) -> None:

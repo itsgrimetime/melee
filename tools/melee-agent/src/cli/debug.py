@@ -26,7 +26,7 @@ import tempfile
 import time
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Callable, Mapping, NoReturn, Optional
+from typing import Annotated, Callable, Iterator, Mapping, NoReturn, Optional
 
 import typer
 
@@ -2849,6 +2849,34 @@ def _tmp_asm_path_for_function(function: str) -> Path:
     return Path("/tmp") / f"{safe_name}.s"
 
 
+_PERMUTER_DEFAULT_PRESERVE_MACROS = r"PAD_STACK|FORCE_PAD_STACK(?:_[0-9]+)?"
+
+
+@contextmanager
+def _staged_permuter_import_source(
+    repo_source: Path,
+    source_file: Path | None,
+) -> Iterator[tuple[Path, bool]]:
+    if source_file is None:
+        yield repo_source, False
+        return
+
+    source_file = source_file.expanduser()
+    if not source_file.is_file():
+        raise typer.BadParameter(f"source file not found: {source_file}")
+    if source_file.resolve() == repo_source.resolve():
+        yield repo_source, False
+        return
+
+    original = repo_source.read_bytes()
+    replacement = source_file.read_bytes()
+    try:
+        repo_source.write_bytes(replacement)
+        yield repo_source, True
+    finally:
+        repo_source.write_bytes(original)
+
+
 def _resolve_permuter_function_dir(
     function: str,
     *,
@@ -3033,6 +3061,27 @@ def permute_bootstrap(
             help="Root of decomp-permuter clone.",
         ),
     ] = Path("~/code/decomp-permuter").expanduser(),
+    source_file: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--source-file",
+            help=(
+                "Import this edited source instead of the repo TU. The file is "
+                "temporarily staged over the real TU so decomp-permuter still "
+                "uses the correct Melee build settings."
+            ),
+        ),
+    ] = None,
+    preserve_macros: Annotated[
+        str,
+        typer.Option(
+            "--preserve-macros",
+            help=(
+                "Regex of source macros decomp-permuter should keep in base.c. "
+                "Use an empty string to disable."
+            ),
+        ),
+    ] = _PERMUTER_DEFAULT_PRESERVE_MACROS,
     force: Annotated[
         bool,
         typer.Option("--force", help="Overwrite stock settings.toml if present."),
@@ -3090,20 +3139,27 @@ def permute_bootstrap(
     python_bin = perm_root / ".venv" / "bin" / "python"
     if not python_bin.exists():
         python_bin = Path(sys.executable)
-    import_cmd = [
-        str(python_bin),
-        str(import_py),
-        str(src_path),
-        str(asm_path),
-        "--function",
-        function,
-    ]
-    import_proc = subprocess.run(
-        import_cmd,
-        cwd=perm_root,
-        capture_output=True,
-        text=True,
-    )
+    requested_source = source_file.expanduser() if source_file is not None else src_path
+    with _staged_permuter_import_source(src_path, source_file) as (
+        import_source,
+        source_staged,
+    ):
+        import_cmd = [
+            str(python_bin),
+            str(import_py),
+            str(import_source),
+            str(asm_path),
+            "--function",
+            function,
+        ]
+        if preserve_macros is not None:
+            import_cmd.extend(["--preserve-macros", preserve_macros])
+        import_proc = subprocess.run(
+            import_cmd,
+            cwd=perm_root,
+            capture_output=True,
+            text=True,
+        )
     if import_proc.returncode != 0:
         typer.echo(import_proc.stderr or import_proc.stdout, err=True)
         raise typer.Exit(import_proc.returncode or 1)
@@ -3130,7 +3186,9 @@ def permute_bootstrap(
     payload = {
         "function": function,
         "unit": unit,
-        "source": str(src_path),
+        "source": str(requested_source),
+        "import_source": str(src_path),
+        "source_staged": source_staged,
         "asm": str(asm_path),
         "perm_root": str(perm_root),
         "function_dir": str(fn_dir),
@@ -15461,6 +15519,40 @@ def mutate_lifetime_layout_cmd(
 
     variants: list[dict] = []
     generated_source_dir: Path | None = None
+    score_total = len(candidates or []) + (len(probes) if compile_probes else 0)
+    score_index = 0
+
+    def _emit_candidate_progress(
+        event: str,
+        *,
+        index: int,
+        label: str,
+        operator: str,
+        path: Path,
+        error: str | None = None,
+    ) -> None:
+        payload = {
+            "event": event,
+            "index": index,
+            "total": score_total,
+            "label": label,
+            "operator": operator,
+            "path": str(path),
+        }
+        if error is not None:
+            payload["error"] = error
+        if json_out:
+            print(json.dumps(payload), file=sys.stderr, flush=True)
+        else:
+            message = (
+                f"[lifetime-layout] {index}/{score_total} {label} "
+                f"[{operator}]: {path}"
+            )
+            if event.endswith("-failed") and error is not None:
+                message += f" failed: {error}"
+            elif event.endswith("-ok"):
+                message += " ok"
+            print(message, file=sys.stderr, flush=True)
 
     def _score_candidate(
         *,
@@ -15468,6 +15560,16 @@ def mutate_lifetime_layout_cmd(
         operator: str,
         path: Path,
     ) -> None:
+        nonlocal score_index
+        score_index += 1
+        current_index = score_index
+        _emit_candidate_progress(
+            "lifetime-layout-candidate-start",
+            index=current_index,
+            label=label,
+            operator=operator,
+            path=path,
+        )
         try:
             if path.suffix == ".txt":
                 candidate_text = path.read_text(encoding="utf-8", errors="replace")
@@ -15532,6 +15634,13 @@ def mutate_lifetime_layout_cmd(
             if real_score.stack_slot_error is not None:
                 variant["stack_slot_error"] = real_score.stack_slot_error
             variants.append(variant)
+            _emit_candidate_progress(
+                "lifetime-layout-candidate-ok",
+                index=current_index,
+                label=label,
+                operator=operator,
+                path=path,
+            )
         except Exception as exc:
             failed = {
                 "label": label,
@@ -15543,6 +15652,14 @@ def mutate_lifetime_layout_cmd(
             if path.suffix == ".c" and path.exists():
                 failed["source_retained"] = str(path)
             variants.append(failed)
+            _emit_candidate_progress(
+                "lifetime-layout-candidate-failed",
+                index=current_index,
+                label=label,
+                operator=operator,
+                path=path,
+                error=str(exc),
+            )
 
     for spec in candidates or []:
         label, operator, path = _parse_lifetime_layout_candidate(spec)

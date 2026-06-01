@@ -762,6 +762,74 @@ def test_lifetime_layout_cli_source_failure_keeps_source_path(
     assert variant["source_retained"] == str(source)
 
 
+def test_lifetime_layout_json_reports_candidate_progress_and_timeout_failure(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.mwcc_debug.diff_capture import CompileFailure
+
+    baseline = tmp_path / "baseline.txt"
+    source = tmp_path / "probe.c"
+    baseline.write_text(BASELINE)
+    source.write_text("void fn_80000000(void) {}\n")
+
+    def fake_compile(diff_input, *, function, melee_root, timeout) -> str:
+        raise CompileFailure(
+            side=diff_input.label,
+            command=["debug", "dump", "local"],
+            stdout="",
+            stderr="dump local timed out after 5s",
+            returncode=124,
+        )
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture.compile_source_variant",
+        fake_compile,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "lifetime-layout",
+            "-f",
+            "fn_80000000",
+            "--pcdump",
+            str(baseline),
+            "--candidate",
+            f"manual:block-scope={source}",
+            "--timeout",
+            "5",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    variant = payload["variants"][0]
+    assert variant["status"] == "failed"
+    assert variant["label"] == "manual"
+    assert variant["source_retained"] == str(source)
+    assert "timed out" in variant["error"]
+    progress = [
+        json.loads(line)
+        for line in result.stderr.splitlines()
+        if line.startswith("{")
+    ]
+    assert progress[0] == {
+        "event": "lifetime-layout-candidate-start",
+        "index": 1,
+        "total": 1,
+        "label": "manual",
+        "operator": "block-scope",
+        "path": str(source),
+    }
+    assert progress[1]["event"] == "lifetime-layout-candidate-failed"
+    assert progress[1]["label"] == "manual"
+    assert "timed out" in progress[1]["error"]
+
+
 def test_lifetime_layout_cli_scores_source_with_match_percent_and_stack_slots(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,

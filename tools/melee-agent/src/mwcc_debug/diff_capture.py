@@ -159,16 +159,23 @@ def compile_source_variant(
 def _env_with_child_hang_timeout(timeout: int) -> dict[str, str]:
     env = os.environ.copy()
     existing = env.get("MWCC_DEBUG_HANG_TIMEOUT")
-    child_timeout = timeout
+    child_timeout = _child_hang_timeout_before_parent(timeout)
     if existing is not None:
         try:
             existing_float = float(existing)
         except ValueError:
             existing_float = 0.0
         if existing_float > 0:
-            child_timeout = min(float(timeout), existing_float)
+            child_timeout = min(child_timeout, existing_float)
     env["MWCC_DEBUG_HANG_TIMEOUT"] = f"{child_timeout:g}"
     return env
+
+
+def _child_hang_timeout_before_parent(timeout: int) -> float:
+    if timeout <= 1:
+        return max(0.1, float(timeout) * 0.5)
+    grace = min(10.0, max(1.0, float(timeout) * 0.1))
+    return max(1.0, float(timeout) - grace)
 
 
 @contextmanager
@@ -307,12 +314,7 @@ def _run_with_process_group_timeout(
 
     if thread.is_alive() or isinstance(result.get("exc"), subprocess.TimeoutExpired):
         exc = result.get("exc")
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        except PermissionError:
-            proc.kill()
+        _kill_process_tree(proc.pid, proc)
         for pipe in (getattr(proc, "stdout", None), getattr(proc, "stderr", None)):
             if pipe is not None:
                 try:
@@ -343,3 +345,49 @@ def _run_with_process_group_timeout(
         str(stdout),
         str(stderr),
     )
+
+
+def _kill_process_tree(root_pid: int, proc: subprocess.Popen[str]) -> None:
+    pids = _descendant_pids(root_pid)
+    pids.append(root_pid)
+    killed_pgids: set[int] = set()
+    for pid in pids:
+        try:
+            pgid = os.getpgid(pid)
+        except ProcessLookupError:
+            if pid != root_pid:
+                continue
+            pgid = pid
+        except PermissionError:
+            pgid = pid
+        if pgid in killed_pgids:
+            continue
+        killed_pgids.add(pgid)
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            if pid == root_pid:
+                proc.kill()
+
+
+def _descendant_pids(root_pid: int) -> list[int]:
+    try:
+        result = subprocess.run(
+            ["pgrep", "-P", str(root_pid)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (FileNotFoundError, OSError, TypeError):
+        return []
+    children: list[int] = []
+    for line in result.stdout.splitlines():
+        try:
+            child = int(line.strip())
+        except ValueError:
+            continue
+        children.extend(_descendant_pids(child))
+        children.append(child)
+    return children
