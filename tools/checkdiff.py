@@ -164,7 +164,10 @@ def get_dtk_download_url() -> str:
         if machine in ("x86_64", "amd64"):
             return f"https://github.com/encounter/decomp-toolkit/releases/download/{DTK_VERSION}/dtk-macos-x86_64"
         elif machine in ("aarch64", "arm64"):
-            return f"https://github.com/encounter/decomp-toolkit/releases/download/{DTK_VERSION}/dtk-macos-arm64"
+            # The native macOS arm64 DTK binary can launch-suspend indefinitely
+            # on some Apple Silicon hosts. Rosetta x86_64 DTK is slower to
+            # launch but reliable.
+            return f"https://github.com/encounter/decomp-toolkit/releases/download/{DTK_VERSION}/dtk-macos-x86_64"
     elif system == "windows":
         return f"https://github.com/encounter/decomp-toolkit/releases/download/{DTK_VERSION}/dtk-windows-x86_64.exe"
 

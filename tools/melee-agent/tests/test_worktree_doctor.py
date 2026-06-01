@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -117,6 +119,107 @@ def test_fix_table_typer_go_missing_is_optional_warn(monkeypatch, tmp_path: Path
     assert "go" in blob
     # A missing optional tool must never make the doctor fail.
     assert all(r.level != "fail" for r in doctor.results)
+
+
+def test_fix_replaces_macos_arm64_dtk_with_rosetta_binary(monkeypatch, tmp_path: Path) -> None:
+    doctor_mod = load_worktree_doctor()
+    dtk = tmp_path / "build" / "tools" / "dtk"
+    dtk.parent.mkdir(parents=True)
+    dtk.write_bytes(b"arm64 dtk")
+
+    monkeypatch.setattr(doctor_mod, "ROOT", tmp_path)
+    monkeypatch.setattr(doctor_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(doctor_mod.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(doctor_mod, "detect_macho_arch", lambda path: "arm64")
+
+    calls: list[Path] = []
+
+    def fake_download(path: Path) -> bool:
+        calls.append(path)
+        path.write_bytes(b"x86_64 dtk")
+        return True
+
+    monkeypatch.setattr(doctor_mod, "redownload_dtk", fake_download)
+    monkeypatch.setattr(doctor_mod.Doctor, "check_wibo_tool", lambda self: None)
+
+    doctor = doctor_mod.Doctor(fix=True)
+    doctor.check_build_tools()
+
+    assert calls == [dtk]
+    assert dtk.read_bytes() == b"x86_64 dtk"
+    assert any("refreshed build/tools/dtk" in r.message for r in doctor.results)
+
+
+def _process_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def test_refresh_report_timeout_kills_child_processes(monkeypatch, tmp_path: Path) -> None:
+    doctor_mod = load_worktree_doctor()
+    child_pid_file = tmp_path / "child.pid"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    ninja = bin_dir / "ninja"
+    ninja.write_text(
+        "#!/bin/sh\n"
+        "sleep 30 &\n"
+        "echo $! > \"$CHILD_PID_FILE\"\n"
+        "wait\n"
+    )
+    ninja.chmod(0o755)
+    (tmp_path / "configure.py").write_text("import sys\nsys.exit(0)\n")
+
+    monkeypatch.setattr(doctor_mod, "REPORT_REFRESH_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setenv("CHILD_PID_FILE", str(child_pid_file))
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    child_pid: int | None = None
+    try:
+        result = doctor_mod.refresh_report_json(tmp_path)
+        assert result.returncode == 124
+
+        child_pid = int(child_pid_file.read_text().strip())
+        for _ in range(20):
+            if not _process_exists(child_pid):
+                break
+            time.sleep(0.05)
+        assert not _process_exists(child_pid)
+    finally:
+        if child_pid is not None and _process_exists(child_pid):
+            os.kill(child_pid, signal.SIGKILL)
+
+
+def test_fix_removes_corrupt_ninja_deps(monkeypatch, tmp_path: Path) -> None:
+    doctor_mod = load_worktree_doctor()
+    ninja_deps = tmp_path / ".ninja_deps"
+    ninja_deps.write_text("corrupt")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    ninja = bin_dir / "ninja"
+    ninja.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"-t\" ] && [ \"$2\" = \"deps\" ]; then\n"
+        "  echo 'ninja: warning: premature end of file; recovering' >&2\n"
+        "  exit 0\n"
+        "fi\n"
+        "exit 1\n"
+    )
+    ninja.chmod(0o755)
+
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    result = doctor_mod.repair_ninja_deps_if_corrupt(tmp_path, fix=True)
+
+    assert result is not None
+    assert result.level == "ok"
+    assert "removed corrupt .ninja_deps" in result.message
+    assert not ninja_deps.exists()
 
 
 def test_table_typer_missing_without_fix_labels_optional(monkeypatch, tmp_path: Path) -> None:

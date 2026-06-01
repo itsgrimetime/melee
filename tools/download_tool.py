@@ -46,6 +46,17 @@ def compilers_url(tag: str) -> str:
     return f"https://files.decomp.dev/compilers_{tag}.zip"
 
 
+def dtk_arch_for_host(system: str, machine: str) -> str:
+    arch = machine.lower()
+    if arch == "amd64":
+        return "x86_64"
+    if system.lower() == "darwin" and arch in ("aarch64", "arm64"):
+        # The native macOS arm64 DTK binary can launch-suspend indefinitely on
+        # some Apple Silicon hosts. The x86_64 build runs reliably via Rosetta.
+        return "x86_64"
+    return arch
+
+
 def dtk_url(tag: str) -> str:
     uname = platform.uname()
     suffix = ""
@@ -54,9 +65,7 @@ def dtk_url(tag: str) -> str:
         system = "macos"
     elif system == "windows":
         suffix = ".exe"
-    arch = uname.machine.lower()
-    if arch == "amd64":
-        arch = "x86_64"
+    arch = dtk_arch_for_host(uname.system, uname.machine)
 
     repo = "https://github.com/encounter/decomp-toolkit"
     return f"{repo}/releases/download/{tag}/dtk-{system}-{arch}{suffix}"

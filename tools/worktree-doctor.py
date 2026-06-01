@@ -5,10 +5,16 @@ from __future__ import annotations
 
 import argparse
 import os
+import platform
 import shlex
 import shutil
+import signal
+import stat
+import struct
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -37,12 +43,19 @@ DISCORD_SEARCH_CANDIDATES = [
 COMPILE_RULES = {"mwcc", "mwcc_sjis", "mwcc_extab", "mwcc_sjis_extab", "as"}
 STALE_GRACE_SECONDS = 1.0
 REPORT_REL_PATH = Path("build") / "GALE01" / "report.json"
+BUILD_CONFIG_REL_PATH = Path("build") / "GALE01" / "config.json"
 REPORT_REFRESH_FIX = "run: python configure.py && ninja build/GALE01/report.json"
 REPORT_REFRESH_TIMEOUT_SECONDS = 300
 
 # Kept in sync with configure.py's config.wibo_tag; only used by --fix to
 # re-download the right wibo binary if the existing one is wrong arch.
 WIBO_DOWNLOAD_TAG = "1.0.0"
+DTK_DOWNLOAD_TAG = "v1.8.3"
+
+MACHO_CPU_TYPES = {
+    0x01000007: "x86_64",
+    0x0100000C: "arm64",
+}
 
 
 @dataclass
@@ -63,6 +76,132 @@ def install_base_dol(candidate: Path, dol_path: Path) -> str:
     except OSError:
         shutil.copy2(candidate, dol_path)
         return "copied"
+
+
+def detect_macho_arch(path: Path) -> str | None:
+    try:
+        data = path.read_bytes()[:4096]
+    except OSError:
+        return None
+    if len(data) < 8:
+        return None
+
+    magic = data[:4]
+    if magic in (b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe"):
+        endian = "<"
+        cpu_type_offset = 4
+    elif magic in (b"\xfe\xed\xfa\xcf", b"\xfe\xed\xfa\xce"):
+        endian = ">"
+        cpu_type_offset = 4
+    elif magic in (b"\xca\xfe\xba\xbe", b"\xca\xfe\xba\xbf"):
+        if len(data) < 8:
+            return None
+        nfat_arch = struct.unpack(">I", data[4:8])[0]
+        arches = set()
+        offset = 8
+        entry_size = 20
+        for _ in range(nfat_arch):
+            if len(data) < offset + entry_size:
+                break
+            cpu_type = struct.unpack(">I", data[offset : offset + 4])[0]
+            arch = MACHO_CPU_TYPES.get(cpu_type)
+            if arch:
+                arches.add(arch)
+            offset += entry_size
+        if "x86_64" in arches and "arm64" in arches:
+            return "universal"
+        if len(arches) == 1:
+            return next(iter(arches))
+        return None
+    else:
+        return None
+
+    if len(data) < cpu_type_offset + 4:
+        return None
+    cpu_type = struct.unpack(
+        endian + "I",
+        data[cpu_type_offset : cpu_type_offset + 4],
+    )[0]
+    return MACHO_CPU_TYPES.get(cpu_type)
+
+
+def redownload_dtk(dtk: Path) -> bool:
+    machine = platform.machine().lower()
+    if machine in ("amd64", "x86_64") or sys.platform == "darwin":
+        arch = "x86_64"
+    elif machine in ("aarch64", "arm64"):
+        arch = "aarch64"
+    elif machine in ("i686", "i386"):
+        arch = "i686"
+    else:
+        arch = machine
+
+    if sys.platform == "darwin":
+        system = "macos"
+        suffix = ""
+    elif sys.platform.startswith("linux"):
+        system = "linux"
+        suffix = ""
+    elif sys.platform.startswith(("win32", "cygwin")):
+        system = "windows"
+        arch = "x86_64"
+        suffix = ".exe"
+    else:
+        return False
+
+    asset = f"dtk-{system}-{arch}{suffix}"
+    url = f"https://github.com/encounter/decomp-toolkit/releases/download/{DTK_DOWNLOAD_TAG}/{asset}"
+
+    try:
+        dtk.unlink()
+    except OSError:
+        pass
+    dtk.parent.mkdir(parents=True, exist_ok=True)
+
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as response:
+            with open(dtk, "wb") as f:
+                shutil.copyfileobj(response, f)
+    except (urllib.error.URLError, OSError):
+        return False
+    dtk.chmod(dtk.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    return dtk.exists() and dtk.stat().st_size > 0
+
+
+def repair_ninja_deps_if_corrupt(root: Path, fix: bool) -> CheckResult | None:
+    ninja_deps = root / ".ninja_deps"
+    if not ninja_deps.exists():
+        return None
+
+    result = run_cmd(
+        ["ninja", "-t", "deps", str(BUILD_CONFIG_REL_PATH)],
+        timeout=10,
+        cwd=root,
+    )
+    output = f"{result.stdout}\n{result.stderr}"
+    if "premature end of file" not in output:
+        return None
+
+    if not fix:
+        return CheckResult(
+            "warn",
+            ".ninja_deps is corrupt; Ninja may repeatedly rebuild generated config",
+            "run python tools/worktree-doctor.py --fix or delete .ninja_deps",
+        )
+
+    try:
+        ninja_deps.unlink()
+    except OSError as exc:
+        return CheckResult(
+            "fail",
+            f"could not remove corrupt .ninja_deps: {exc}",
+            "delete .ninja_deps and rerun ninja",
+        )
+    return CheckResult(
+        "ok",
+        "removed corrupt .ninja_deps; Ninja will rebuild its dependency database",
+    )
 
 
 class Doctor:
@@ -161,6 +300,10 @@ class Doctor:
             )
 
     def check_build_tools(self) -> None:
+        self.check_wibo_tool()
+        self.check_dtk_tool()
+
+    def check_wibo_tool(self) -> None:
         wibo = ROOT / "build" / "tools" / "wibo"
         if not wibo.exists():
             # download_tool.py will fetch on first ninja build; nothing to validate yet.
@@ -205,17 +348,56 @@ class Doctor:
             f"(decompals/wibo tag {WIBO_DOWNLOAD_TAG})",
         )
 
+    def check_dtk_tool(self) -> None:
+        dtk = ROOT / "build" / "tools" / "dtk"
+        if not dtk.exists():
+            # download_tool.py will fetch on first ninja build; nothing to validate yet.
+            self.ok("build/tools/dtk not present yet (will download on first build)")
+            return
+
+        if sys.platform != "darwin" or platform.machine().lower() not in (
+            "aarch64",
+            "arm64",
+        ):
+            self.ok("build/tools/dtk present")
+            return
+
+        arch = detect_macho_arch(dtk)
+        if arch == "x86_64":
+            self.ok("build/tools/dtk arch is safe (x86_64 via Rosetta)")
+            return
+        if arch == "universal":
+            self.ok("build/tools/dtk arch is safe (universal Mach-O)")
+            return
+        if arch != "arm64":
+            self.warn(f"could not confirm build/tools/dtk arch ({arch or 'unknown'})")
+            return
+
+        if self.fix:
+            if redownload_dtk(dtk):
+                self.ok(
+                    f"refreshed build/tools/dtk (arm64 -> x86_64 via Rosetta, "
+                    f"tag {DTK_DOWNLOAD_TAG})"
+                )
+                return
+            self.fail(
+                "build/tools/dtk is macOS arm64 and --fix download failed",
+                f"manually download https://github.com/encounter/decomp-toolkit/releases/download/"
+                f"{DTK_DOWNLOAD_TAG}/dtk-macos-x86_64 to build/tools/dtk",
+            )
+            return
+
+        self.fail(
+            "build/tools/dtk is macOS arm64 and can hang before main on this host",
+            f"run {Path(__file__).name} --fix to replace it with the x86_64/Rosetta DTK",
+        )
+
     def _redownload_wibo(self, wibo: Path) -> bool:
         """Download the right wibo binary for this host.
 
         Self-contained — does not depend on tools/download_tool.py (older
         wip worktrees still ship the legacy URL that 404s on tag 1.0.0+).
         """
-        import platform
-        import stat
-        import urllib.error
-        import urllib.request
-
         machine = platform.machine().lower()
         if machine == "amd64":
             machine = "x86_64"
@@ -336,6 +518,10 @@ class Doctor:
         self.results.extend(collect_knowledge_source_warnings(ROOT))
 
     def check_stale_state(self) -> None:
+        ninja_deps_result = repair_ninja_deps_if_corrupt(ROOT, self.fix)
+        if ninja_deps_result is not None:
+            self.results.append(ninja_deps_result)
+
         stale_results = collect_stale_state_warnings(ROOT)
         if not stale_results:
             self.ok("build/report freshness checks passed")
@@ -433,13 +619,54 @@ def detect_ghidra_install() -> Path | None:
     return None
 
 
-def run_cmd(args: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
+def _terminate_process_group(proc: subprocess.Popen[str]) -> tuple[str, str]:
     try:
-        return subprocess.run(args, cwd=ROOT, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired as exc:
-        return subprocess.CompletedProcess(args, 124, exc.stdout or "", exc.stderr or "timed out")
+        os.killpg(proc.pid, signal.SIGTERM)
+    except (OSError, ProcessLookupError):
+        pass
+    try:
+        return proc.communicate(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (OSError, ProcessLookupError):
+            pass
+        return proc.communicate()
+
+
+def run_cmd(
+    args: list[str],
+    timeout: float,
+    *,
+    cwd: Path | None = None,
+    timeout_message: str = "timed out",
+) -> subprocess.CompletedProcess[str]:
+    cwd = cwd or ROOT
+    try:
+        proc = subprocess.Popen(
+            args,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
     except FileNotFoundError as exc:
         return subprocess.CompletedProcess(args, 127, "", str(exc))
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+        return subprocess.CompletedProcess(args, proc.returncode, stdout, stderr)
+    except subprocess.TimeoutExpired as exc:
+        stdout, stderr = _terminate_process_group(proc)
+        timeout_detail = timeout_message
+        if stderr:
+            timeout_detail = f"{stderr.rstrip()}\n{timeout_message}"
+        return subprocess.CompletedProcess(
+            args,
+            124,
+            stdout or exc.stdout or "",
+            timeout_detail,
+        )
 
 
 def build_table_typer(root: Path) -> subprocess.CompletedProcess[str]:
@@ -530,27 +757,16 @@ def refresh_report_json(root: Path) -> subprocess.CompletedProcess[str]:
     if configure.returncode != 0:
         return configure
 
-    try:
-        return subprocess.run(
-            ["ninja", str(REPORT_REL_PATH)],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            timeout=REPORT_REFRESH_TIMEOUT_SECONDS,
-        )
-    except FileNotFoundError as exc:
-        return subprocess.CompletedProcess(["ninja", str(REPORT_REL_PATH)], 127, "", str(exc))
-    except subprocess.TimeoutExpired as exc:
-        cmd = ["ninja", str(REPORT_REL_PATH)]
-        return subprocess.CompletedProcess(
-            cmd,
-            124,
-            exc.stdout or "",
-            (
-                f"timed out after {REPORT_REFRESH_TIMEOUT_SECONDS}s running "
-                f"{shlex.join(cmd)}; retry manually or inspect stuck build jobs"
-            ),
-        )
+    cmd = ["ninja", str(REPORT_REL_PATH)]
+    return run_cmd(
+        cmd,
+        timeout=REPORT_REFRESH_TIMEOUT_SECONDS,
+        cwd=root,
+        timeout_message=(
+            f"timed out after {REPORT_REFRESH_TIMEOUT_SECONDS}s running "
+            f"{shlex.join(cmd)}; killed the build process group"
+        ),
+    )
 
 
 def restore_from_master(rel_path: str, dest: Path) -> bool:
