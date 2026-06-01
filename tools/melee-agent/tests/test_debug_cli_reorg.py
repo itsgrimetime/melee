@@ -2652,6 +2652,81 @@ def test_decl_orders_json_emits_candidate_progress_to_stderr(monkeypatch, tmp_pa
     assert "[decl-orders] 1/1 swap a <-> b" in strip_ansi(result.stderr)
 
 
+def test_decl_orders_auto_selects_nested_scope_when_top_has_no_decls(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    melee_root = tmp_path
+    report_dir = melee_root / "build" / "GALE01"
+    report_dir.mkdir(parents=True)
+    (report_dir / "report.json").write_text(
+        json.dumps(
+            {
+                "units": [
+                    {
+                        "name": "main/melee/mn/sample",
+                        "functions": [
+                            {"name": "f", "fuzzy_match_percent": 10.0},
+                        ],
+                    }
+                ]
+            }
+        )
+    )
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    original = textwrap.dedent("""\
+        void f(int flag)
+        {
+            if (flag) {
+                int a;
+                int b;
+                a = b;
+            }
+        }
+    """)
+    src_path.write_text(original)
+
+    def fake_build_and_match(unit, function, root, *, fast_report=True):
+        text = src_path.read_text()
+        if "int b;\n        int a;" in text:
+            return 20.0
+        return 10.0
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(debug_cli, "_build_and_match", fake_build_and_match)
+    monkeypatch.setattr(
+        debug_cli.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "decl-orders",
+            "f",
+            "--strategy",
+            "swap",
+            "--threshold",
+            "1",
+            "--keep-best",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["scope"].startswith("f/block@")
+    assert payload["selected_scope_reason"] == "auto-nested"
+    assert payload["available_scopes"][0]["scope"] == payload["scope"]
+    assert payload["available_scopes"][0]["names"] == ["a", "b"]
+    assert payload["best_label"] == "swap a <-> b"
+    assert "int b;\n        int a;" in src_path.read_text()
+
+
 def test_mutate_simplify_order_emits_candidate_progress_to_stderr(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

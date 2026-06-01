@@ -5270,12 +5270,44 @@ def enumerate_decl_orders(
 
     orig = target_path.read_text()
     scope_map = get_decl_names_by_scope(orig, function)
-    selected_scope = tuple(scope.split("/")) if scope else (function,)
+    available_scopes = [
+        {
+            "scope": "/".join(scope_path),
+            "names": names,
+            "declaration_count": len(names),
+            "is_top_level": scope_path == (function,),
+        }
+        for scope_path, names in scope_map.items()
+    ]
+    selected_scope_reason = "explicit" if scope else "function-top"
+    if scope:
+        selected_scope = tuple(scope.split("/"))
+    else:
+        selected_scope = (function,)
+        if not scope_map.get(selected_scope):
+            nested_scopes = [
+                scope_path
+                for scope_path, names in scope_map.items()
+                if scope_path != (function,) and len(names) >= 2
+            ]
+            if not nested_scopes:
+                nested_scopes = [
+                    scope_path
+                    for scope_path in scope_map
+                    if scope_path != (function,)
+                ]
+            if nested_scopes:
+                selected_scope = nested_scopes[0]
+                selected_scope_reason = "auto-nested"
     names = scope_map.get(selected_scope)
     if not names:
+        available = ", ".join(
+            f"{item['scope']} ({len(item['names'])} decls)"
+            for item in available_scopes
+        ) or "none"
         typer.echo(
             f"could not find a declaration block in {function} scope "
-            f"{'/'.join(selected_scope)}.",
+            f"{'/'.join(selected_scope)}. Available scopes: {available}.",
             err=True,
         )
         raise typer.Exit(3)
@@ -5328,6 +5360,7 @@ def enumerate_decl_orders(
     if not json_out:
         print(f"Function:    {function} ({n} locals: {', '.join(names)})")
         print(f"Source:      {target_path}")
+        print(f"Scope:       {'/'.join(selected_scope)} ({selected_scope_reason})")
         print(f"Strategy:    {strategy} ({len(candidates)} candidates)")
         print(f"Baseline:    {baseline:.2f}%")
         if iterate:
@@ -5530,6 +5563,9 @@ def enumerate_decl_orders(
     if json_out:
         print(json.dumps({
             "function": function,
+            "scope": "/".join(selected_scope),
+            "selected_scope_reason": selected_scope_reason,
+            "available_scopes": available_scopes,
             "baseline_pct": baseline,
             "best_label": best_label,
             "best_pct": best_pct,
