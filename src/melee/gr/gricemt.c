@@ -1343,18 +1343,26 @@ float grIceMt_801F96E0(struct grIceMt_GroundVars* arg0, float farg0)
     if (arg0->xC4 != -1) {
         HSD_JObj* jobj;
         mgobj = Ground_801C2BA4(arg0->xC4);
-        HSD_ASSERT(0xA45, mgobj);
+        if (mgobj == NULL) {
+            __assert((char*) &grIm_803E4068 + 0x690, 0xA45, "mgobj");
+        }
         jobj = GET_JOBJ(mgobj);
-        HSD_ASSERT(0xA46, jobj);
+        if (jobj == NULL) {
+            __assert((char*) &grIm_803E4068 + 0x690, 0xA46, "jobj");
+        }
         HSD_JObjAddTranslationY(jobj, farg0);
     }
     if (arg0->xC6 != -1) {
         HSD_JObj* jobj;
         mgobj = Ground_801C2BA4(arg0->xC6);
-        HSD_ASSERT(0xA4B, mgobj);
+        if (mgobj == NULL) {
+            __assert((char*) &grIm_803E4068 + 0x690, 0xA4B, "mgobj");
+        }
         jobj = GET_JOBJ(mgobj);
         jobj2 = jobj;
-        HSD_ASSERT(0xA4C, jobj);
+        if (jobj == NULL) {
+            __assert((char*) &grIm_803E4068 + 0x690, 0xA4C, "jobj");
+        }
         HSD_JObjAddTranslationY(jobj2, farg0);
     }
 }
