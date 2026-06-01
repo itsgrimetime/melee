@@ -6,12 +6,51 @@
 
 set -e
 
-# Only run in remote Claude Code environment
-if [ "$CLAUDE_CODE_REMOTE" != "true" ]; then
+if [ -n "$CLAUDE_PROJECT_DIR" ]; then
+    cd "$CLAUDE_PROJECT_DIR"
+else
     exit 0
 fi
 
-cd "$CLAUDE_PROJECT_DIR"
+ensure_base_dol() {
+    local dest="orig/GALE01/sys/main.dol"
+    if [ -f "$dest" ]; then
+        return 0
+    fi
+
+    local candidates=()
+    if [ -n "$MELEE_BASE_DOL_SOURCE" ]; then
+        candidates+=("$MELEE_BASE_DOL_SOURCE")
+    fi
+    candidates+=(
+        "/Users/mike/code/melee/orig/GALE01/sys/main.dol"
+        "$HOME/.config/decomp-me/orig/GALE01/main.dol"
+    )
+
+    local candidate
+    for candidate in "${candidates[@]}"; do
+        if [ -f "$candidate" ]; then
+            mkdir -p "$(dirname "$dest")"
+            if [ -L "$dest" ] && [ ! -e "$dest" ]; then
+                rm "$dest"
+            fi
+            if ln -s "$candidate" "$dest" 2>/dev/null; then
+                echo "Linked base DOL from $candidate" >&2
+            else
+                cp "$candidate" "$dest"
+                echo "Copied base DOL from $candidate" >&2
+            fi
+            return 0
+        fi
+    done
+}
+
+ensure_base_dol
+
+# Only continue with remote/container bootstrap in Claude Code remote.
+if [ "$CLAUDE_CODE_REMOTE" != "true" ]; then
+    exit 0
+fi
 
 # Check if wibo can run in this environment (requires modify_ldt syscall)
 check_wibo_support() {

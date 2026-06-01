@@ -78,6 +78,38 @@ mode_label() {
     if [[ "$WORKTREE_MODE" == "pr" ]]; then echo "PR"; else echo "WIP"; fi
 }
 
+ensure_base_dol() {
+    local dest="orig/GALE01/sys/main.dol"
+    if [[ -f "$dest" ]]; then
+        echo "Base DOL present: $dest"
+        return
+    fi
+
+    local candidates=(
+        "$REPO_ROOT/orig/GALE01/sys/main.dol"
+        "$HOME/.config/decomp-me/orig/GALE01/main.dol"
+    )
+
+    local candidate
+    for candidate in "${candidates[@]}"; do
+        if [[ -f "$candidate" ]]; then
+            mkdir -p "$(dirname "$dest")"
+            if [[ -L "$dest" && ! -e "$dest" ]]; then
+                rm "$dest"
+            fi
+            if ln -s "$candidate" "$dest" 2>/dev/null; then
+                echo "Linked base DOL: $dest -> $candidate"
+            else
+                cp "$candidate" "$dest"
+                echo "Copied base DOL: $dest"
+            fi
+            return
+        fi
+    done
+
+    echo -e "${YELLOW}Warning: base DOL not found; run python tools/worktree-doctor.py --fix in the worktree.${NC}"
+}
+
 cmd_create() {
     local branch="$1"
 
@@ -188,6 +220,8 @@ EOF
             fi
         done
     fi
+
+    ensure_base_dol
 
     echo ""
     echo -e "${GREEN}=== $(mode_label) Worktree Ready ===${NC}"

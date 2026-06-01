@@ -4,8 +4,14 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from typer.testing import CliRunner
+
+import src.cli.debug as debug_cli
+from src.cli import app
+
 
 MELEE_AGENT = Path(__file__).parent.parent
+runner = CliRunner()
 
 
 def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
@@ -25,8 +31,56 @@ def test_diff_help_mentions_source_and_pcdump_modes() -> None:
     assert "source or pcdump" in proc.stdout
     assert "--fn" in proc.stdout
     assert "--timeout" in proc.stdout
+    assert "--source-inspect" in proc.stdout
     assert "--inspect-a" in proc.stdout
     assert "--inspect-b" in proc.stdout
+
+
+def test_diff_source_inputs_default_to_pcdump_only(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    left = tmp_path / "left.c"
+    right = tmp_path / "right.c"
+    left.write_text("void fn_test(void) {}\n", encoding="utf-8")
+    right.write_text("void fn_test(void) {}\n", encoding="utf-8")
+    pcdump = (
+        "Starting function fn_test\n"
+        "BEFORE REGISTER COLORING\n"
+        "fn_test\n"
+        "B0: Succ={} Pred={} Labels={L0 }\n"
+        "    li r32, 0\n"
+        "AFTER REGISTER COLORING\n"
+        "fn_test\n"
+        "B0: Succ={} Pred={} Labels={L0 }\n"
+        "    li r3, 0\n"
+    )
+
+    def fake_read_or_compile(diff_input, *, function, melee_root, timeout):
+        assert diff_input.kind == "source"
+        return pcdump
+
+    def fail_inspect(*args, **kwargs):
+        raise AssertionError("source diff should not run mwcc-inspect by default")
+
+    monkeypatch.setattr(debug_cli, "read_or_compile_input", fake_read_or_compile)
+    monkeypatch.setattr(debug_cli, "read_inspect_input_if_available", fail_inspect)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "diff",
+            str(left),
+            str(right),
+            "--function",
+            "fn_test",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "NO DIVERGENCE" in result.stdout
 
 
 def test_diff_requires_function() -> None:

@@ -52,6 +52,19 @@ class CheckResult:
     fix: str | None = None
 
 
+def install_base_dol(candidate: Path, dol_path: Path) -> str:
+    if dol_path.is_symlink() and not dol_path.exists():
+        dol_path.unlink()
+
+    dol_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        dol_path.symlink_to(candidate)
+        return "linked"
+    except OSError:
+        shutil.copy2(candidate, dol_path)
+        return "copied"
+
+
 class Doctor:
     def __init__(self, fix: bool = False):
         self.fix = fix
@@ -132,9 +145,8 @@ class Doctor:
 
         candidate = next((path for path in DOL_CANDIDATES if path.exists()), None)
         if candidate and self.fix:
-            dol_path.parent.mkdir(parents=True, exist_ok=True)
-            dol_path.symlink_to(candidate)
-            self.ok(f"linked base DOL from {candidate}")
+            action = install_base_dol(candidate, dol_path)
+            self.ok(f"{action} base DOL from {candidate}")
             return
 
         if candidate:

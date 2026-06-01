@@ -1286,14 +1286,26 @@ def diff(
             help="mwcc-inspect output for the second input. Requires --inspect-a.",
         ),
     ] = None,
+    source_inspect: Annotated[
+        bool,
+        typer.Option(
+            "--source-inspect",
+            help=(
+                "Also run tools/workflow/mwcc-inspect.sh for .c inputs. "
+                "Default source mode is local pcdump-only."
+            ),
+        ),
+    ] = False,
 ):
     """Compare two source or pcdump inputs through the mwcc-debug pipeline.
 
     Existing `.txt` inputs are treated as already-captured pcdumps. `.c`
     inputs are compiled with `debug dump local --no-cache-sync`, then the
-    resulting pass snapshots are compared in pipeline order. Pass
-    `--inspect-a/--inspect-b` to include pre-captured mwcc-inspect front-end
-    snapshots in the same staged lowering report.
+    resulting pass snapshots are compared in pipeline order without running
+    the heavier mwcc-inspect front-end workflow. Pass `--source-inspect` to
+    run mwcc-inspect for `.c` inputs, or pass `--inspect-a/--inspect-b` to
+    include pre-captured front-end snapshots in the same staged lowering
+    report.
     """
     if function is None:
         typer.echo("--fn/--function is required for mwcc-debug diff MVP.", err=True)
@@ -1327,7 +1339,7 @@ def diff(
         if inspect_a is not None and inspect_b is not None:
             inspect_text_a = inspect_a.read_text(encoding="utf-8", errors="replace")
             inspect_text_b = inspect_b.read_text(encoding="utf-8", errors="replace")
-        else:
+        elif source_inspect:
             inspect_text_a = read_inspect_input_if_available(
                 resolved_a,
                 function=function,
@@ -1340,6 +1352,16 @@ def diff(
                 melee_root=melee_root,
                 timeout=timeout,
             )
+        else:
+            if resolved_a.kind == "source" or resolved_b.kind == "source":
+                typer.echo(
+                    "[mwcc-debug] source inputs are using local pcdump-only diff; "
+                    "pass --source-inspect or --inspect-a/--inspect-b to include "
+                    "mwcc-inspect front-end snapshots.",
+                    err=True,
+                )
+            inspect_text_a = None
+            inspect_text_b = None
         if (inspect_text_a is None) != (inspect_text_b is None):
             typer.echo(
                 "[mwcc-debug] mwcc-inspect snapshot unavailable for one side; "

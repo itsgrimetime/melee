@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -136,3 +138,55 @@ def test_table_typer_missing_without_fix_labels_optional(monkeypatch, tmp_path: 
     assert any("--fix" in (r.fix or "") for r in warns)
     blob = " ".join((r.message + " " + (r.fix or "")).lower() for r in warns)
     assert "optional" in blob
+
+
+def test_fix_replaces_broken_base_dol_symlink(monkeypatch, tmp_path: Path) -> None:
+    doctor_mod = load_worktree_doctor()
+    candidate = tmp_path / "shared" / "main.dol"
+    candidate.parent.mkdir(parents=True)
+    candidate.write_bytes(b"fake dol")
+    worktree = tmp_path / "worktree"
+    dol_path = worktree / "orig" / "GALE01" / "sys" / "main.dol"
+    dol_path.parent.mkdir(parents=True)
+    dol_path.symlink_to(tmp_path / "missing" / "main.dol")
+
+    monkeypatch.setattr(doctor_mod, "ROOT", worktree)
+    monkeypatch.setattr(doctor_mod, "DOL_CANDIDATES", [candidate])
+
+    doctor = doctor_mod.Doctor(fix=True)
+    doctor.check_base_dol()
+
+    assert dol_path.exists()
+    assert dol_path.is_symlink()
+    assert dol_path.resolve() == candidate
+    assert any(r.level == "ok" and "base DOL" in r.message for r in doctor.results)
+
+
+def test_session_startup_links_base_dol_for_local_agent_worktree(tmp_path: Path) -> None:
+    repo = Path(__file__).resolve().parents[3]
+    script = repo / ".claude" / "hooks" / "session-startup.sh"
+    project = tmp_path / "agent-worktree"
+    project.mkdir()
+    candidate = tmp_path / "shared" / "main.dol"
+    candidate.parent.mkdir(parents=True)
+    candidate.write_bytes(b"fake dol")
+
+    env = os.environ.copy()
+    env["CLAUDE_PROJECT_DIR"] = str(project)
+    env["CLAUDE_CODE_REMOTE"] = ""
+    env["MELEE_BASE_DOL_SOURCE"] = str(candidate)
+
+    proc = subprocess.run(
+        ["bash", str(script)],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    dol_path = project / "orig" / "GALE01" / "sys" / "main.dol"
+    assert proc.returncode == 0, proc.stderr
+    assert dol_path.exists()
+    assert dol_path.is_symlink()
+    assert dol_path.resolve() == candidate
