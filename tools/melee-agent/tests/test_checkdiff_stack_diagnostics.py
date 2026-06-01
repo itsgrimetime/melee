@@ -127,7 +127,10 @@ def test_manual_unused_padding_array_guidance_is_diagnostic_only() -> None:
         {"name": "natural_stack_probe", "bytes": 24}
     ]
     assert classification["diagnostic_pad_stack"]["total_pad_stack_bytes"] == 24
-    assert any("manual stack padding natural_stack_probe[24]" in r for r in classification["reasons"])
+    assert any(
+        "manual stack padding natural_stack_probe[24]" in r
+        for r in classification["reasons"]
+    )
     assert any("not shippable source" in r for r in classification["reasons"])
     summary = checkdiff.format_summary(
         "fn_80000000",
@@ -178,4 +181,58 @@ def test_classify_asm_diff_localizes_same_frame_compiler_temp_stack_slot() -> No
         ],
     }
     assert any("compiler-temp spill slot" in r for r in classification["reasons"])
-    assert any("PAD_STACK" not in r and "frame reservation" not in r for r in classification["reasons"])
+    assert any(
+        "PAD_STACK" not in r and "frame reservation" not in r
+        for r in classification["reasons"]
+    )
+
+
+def test_stack_slot_localizer_accepts_pcdump_bridge() -> None:
+    checkdiff = _load_checkdiff()
+    expected = [
+        "<fn_80000000>:",
+        "+000: stwu r1, -168(r1)",
+        "+004: stfs f1, 0x34(r1)",
+    ]
+    current = [
+        "<fn_80000000>:",
+        "+000: stwu r1, -168(r1)",
+        "+004: stfs f1, 0x30(r1)",
+    ]
+    pcdump_text = """
+Starting function fn_80000000
+BEFORE REGISTER COLORING
+fn_80000000
+B0: Succ={} Pred={} Labels={}
+    frsp    f50,f1
+    stfs    f50,0x30(r1)
+SIMPLIFY GRAPH (class=1, n_colors=32, n_class_regs=61)
+  iter ig_idx degree arraySize flags notes
+    0 50 1 1 0x08 SPILLED
+COLORGRAPH DECISIONS (class=1, result=1, n_nodes=61)
+  iter ig_idx phys degree nIntfr flags
+    0 50 r1 1 1 0x08
+      interferers:
+FINAL CODE AFTER INSTRUCTION SCHEDULING
+fn_80000000
+B0: Succ={} Pred={} Labels={}
+    stwu    r1,-168(r1)
+    stfs    f1,0x30(r1)
+"""
+
+    classification = checkdiff.classify_asm_diff(expected, current)
+    checkdiff.add_stack_slot_pcdump_bridge(
+        classification,
+        function="fn_80000000",
+        pcdump_text=pcdump_text,
+        source_text="void fn_80000000(void) { dist = sqrtf(dx * dx); }\n",
+        source_file="src/melee/pl/plbonuslib.c",
+    )
+
+    bridge = classification["stack_slot_localizer"]["pcdump_bridge"]
+    assert bridge["status"] == "ok"
+    assert bridge["candidates"][0]["spill_root"] == "r50"
+    assert any(
+        "pcdump bridge: likely class 1 spill root r50" in reason
+        for reason in classification["reasons"]
+    )

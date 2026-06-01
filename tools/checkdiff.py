@@ -66,6 +66,15 @@ except ImportError:
     Fingerprint = None  # type: ignore
     extract_function_body = None  # type: ignore
 
+try:
+    from src.mwcc_debug.stack_slot_bridge import (
+        explain_stack_slot_localizer,
+        render_stack_slot_bridge_summary,
+    )
+except ImportError:
+    explain_stack_slot_localizer = None  # type: ignore
+    render_stack_slot_bridge_summary = None  # type: ignore
+
 
 def _is_repo_root(path: Path) -> bool:
     return (
@@ -873,6 +882,11 @@ def format_stack_slot_localizer_diagnostic(classification: dict) -> Optional[str
         if frame is not None
         else "frame size is unchanged/unknown"
     )
+    bridge_text = None
+    if render_stack_slot_bridge_summary is not None:
+        bridge = diag.get("pcdump_bridge")
+        if isinstance(bridge, dict):
+            bridge_text = render_stack_slot_bridge_summary(bridge)
     return (
         "compiler-temp spill slot localizer: "
         f"{frame_text}, but {count} paired r1 stack "
@@ -883,7 +897,48 @@ def format_stack_slot_localizer_diagnostic(classification: dict) -> Optional[str
         "independently of named locals: try retiming a sqrt/call-result temp, "
         "a narrow address-taken or volatile temp around the producer/consumer, "
         "or source-shape probes that preserve already-correct named-local offsets."
+        + (f" {bridge_text}." if bridge_text else "")
     )
+
+
+def add_stack_slot_pcdump_bridge(
+    classification: dict,
+    *,
+    function: str,
+    pcdump_text: Optional[str] = None,
+    pcdump_path: Optional[Path] = None,
+    source_text: Optional[str] = None,
+    source_file: Optional[str] = None,
+) -> None:
+    if explain_stack_slot_localizer is None:
+        return
+    localizer = classification.get("stack_slot_localizer")
+    if not isinstance(localizer, dict):
+        return
+    if pcdump_text is None and pcdump_path is not None:
+        try:
+            pcdump_text = pcdump_path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            localizer["pcdump_bridge_error"] = str(exc)
+            return
+    if not pcdump_text:
+        return
+    report = explain_stack_slot_localizer(
+        pcdump_text,
+        function,
+        localizer,
+        source_text=source_text,
+        source_file=source_file,
+    )
+    localizer["pcdump_bridge"] = report
+    if render_stack_slot_bridge_summary is None:
+        return
+    summary = render_stack_slot_bridge_summary(report)
+    if not summary:
+        return
+    reasons = classification.setdefault("reasons", [])
+    if summary not in reasons:
+        reasons.append(summary)
 
 
 def format_pad_stack_probe_diagnostic(classification: dict) -> Optional[str]:
@@ -1697,6 +1752,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                     help="Skip the ninja rebuild step and diff the .o as-is. "
                          "Use this when the .o has been post-processed externally "
                          "(e.g. by `melee-agent debug name-magic`).")
+    ap.add_argument("--pcdump", type=Path,
+                    help="Optional mwcc_debug pcdump.txt for the current build. "
+                         "When stack-slot-localizer fires, checkdiff maps the "
+                         "shifted r1 slot back to likely MWCC virtual/IG roots.")
     ap.add_argument("--build-timeout", type=float,
                     default=DEFAULT_BUILD_TIMEOUT_SECONDS,
                     help="Timeout in seconds for each ninja build/report step "
@@ -2023,6 +2082,25 @@ def main() -> int:
                 collect_section_anchor_aliases(ROOT / our_obj.lstrip("./")),
             )
         classification = classify_asm_diff(ref_lines, our_lines)
+        source_text_for_bridge = None
+        if args.pcdump is not None and c_file.is_file():
+            try:
+                source_text_for_bridge = c_file.read_text(
+                    encoding="utf-8",
+                    errors="replace",
+                )
+            except OSError:
+                source_text_for_bridge = None
+        add_stack_slot_pcdump_bridge(
+            classification,
+            function=func_name,
+            pcdump_path=args.pcdump,
+            source_text=source_text_for_bridge,
+            source_file=(
+                str(c_file.relative_to(ROOT))
+                if c_file.is_absolute() else str(c_file)
+            ),
+        )
         add_pad_stack_probe_guidance(
             classification,
             detect_diagnostic_pad_stack_in_source(c_file, func_name),
