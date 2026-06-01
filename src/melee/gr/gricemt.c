@@ -1432,7 +1432,12 @@ static inline HSD_GObj* grIceMt_801F71E8_noinline2(int id)
     return grIceMt_801F71E8_inner2(id);
 }
 
-void grIceMt_801F9ACC(Ground_GObj* gobj, float y, GrIceMtSegmentLookup ev,
+#undef HSD_ASSERT
+#define HSD_ASSERT(line, cond)                                                \
+    ((cond) ? ((void) 0)                                                      \
+            : __assert((char*) &grIm_803E4068 + 0x690, line, #cond))
+
+int grIceMt_801F9ACC(Ground_GObj* gobj, float y, GrIceMtSegmentLookup ev,
                       Ground_GObj* arg3)
 {
     s16* seg = (s16*) gobj;
@@ -1447,7 +1452,7 @@ void grIceMt_801F9ACC(Ground_GObj* gobj, float y, GrIceMtSegmentLookup ev,
     s16 id;
 
     if (seg[0] == -1 || seg[1] == -1) {
-        return;
+        return 0;
     }
     f = grIceMt_801F993C(seg[0], seg[1]);
     mgobj = Ground_801C2BA4(seg[1]);
@@ -1585,7 +1590,12 @@ void grIceMt_801F9ACC(Ground_GObj* gobj, float y, GrIceMtSegmentLookup ev,
     if (did != 0) {
         grIceMt_801FA854();
     }
+    return did;
 }
+
+#undef HSD_ASSERT
+#define HSD_ASSERT(line, cond)                                                \
+    ((cond) ? ((void) 0) : __assert(__FILE__, line, #cond))
 
 static inline HSD_JObj** grIceMt_FA0BC_jobjs(Ground* g)
 {
