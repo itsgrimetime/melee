@@ -507,6 +507,99 @@ def test_expression_shape_probe_introduces_named_distance_component_temps() -> N
     assert "(ll_probe_dy_0 * ll_probe_dy_0)" in probe.source_text
 
 
+def test_expression_shape_probe_splits_abs_branch_discriminator() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(Vec* prevPos, Vec* pos)
+        {
+            float y_abs;
+
+            y_abs = pos->y - prevPos->y;
+            if (y_abs > 0.0f) {
+                if (y_abs < 0.0f) {
+                    y_abs = -y_abs;
+                } else {
+                    y_abs = y_abs;
+                }
+            }
+            sink(y_abs);
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(source, "fn_80000000", max_probes=30)
+    probe = next(
+        probe for probe in probes
+        if probe.label == "abs-branch-discriminator-split-0"
+    )
+
+    assert "float ll_probe_abs_discriminator_0;" in probe.source_text
+    assert "ll_probe_abs_discriminator_0 = pos->y - prevPos->y;" in probe.source_text
+    assert "y_abs = ll_probe_abs_discriminator_0;" in probe.source_text
+    assert "if (ll_probe_abs_discriminator_0 > 0.0f)" in probe.source_text
+    assert "if (y_abs < 0.0f)" in probe.source_text
+    assert probe.provenance == {
+        "kind": "abs-branch-discriminator-split",
+        "value_local": "y_abs",
+        "discriminator_local": "ll_probe_abs_discriminator_0",
+        "expression": "pos->y - prevPos->y",
+    }
+
+
+def test_guard_shape_probe_rewrites_boolean_call_return_as_case0_default_switch() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(Entity* entity)
+        {
+            if (ftLib_8008732C(entity)) {
+                return;
+            }
+            sink(entity);
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(source, "fn_80000000", max_probes=30)
+    probe = next(
+        probe for probe in probes
+        if probe.label == "boolean-guard-switch-0"
+    )
+
+    assert "switch (ftLib_8008732C(entity))" in probe.source_text
+    assert "case 0:" in probe.source_text
+    assert "break;" in probe.source_text
+    assert "default:" in probe.source_text
+    assert "return;" in probe.source_text
+    assert "if (ftLib_8008732C(entity))" not in probe.source_text
+    assert probe.provenance == {
+        "kind": "boolean-guard-switch",
+        "condition": "ftLib_8008732C(entity)",
+    }
+
+
+def test_probe_generation_skips_function_prototype_before_definition() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(Entity* entity);
+
+        void unrelated(void)
+        {
+            int x0;
+            int x1;
+            sink(x0, x1);
+        }
+
+        void fn_80000000(Entity* entity)
+        {
+            if (ftLib_8008732C(entity)) {
+                return;
+            }
+            sink(entity);
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(source, "fn_80000000", max_probes=30)
+    labels = {probe.label for probe in probes}
+
+    assert "boolean-guard-switch-0" in labels
+    assert "adjacent-decl-swap-0" not in labels
+
+
 def test_lifetime_layout_cli_compares_candidate_pcdump_json(tmp_path: pathlib.Path) -> None:
     baseline = tmp_path / "baseline.txt"
     candidate = tmp_path / "candidate.txt"

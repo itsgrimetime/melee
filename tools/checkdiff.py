@@ -596,8 +596,10 @@ def _detect_inline_boundary_artifact(
     }
 
 
-_STACK_FRAME_ALLOC_RE = re.compile(r"\bstwu\s+r1\s*,\s*(-?\d+)\s*\(\s*r1\s*\)")
-_STACK_SLOT_RE = re.compile(r"(-?\d+)\s*\(\s*r1\s*\)")
+_STACK_FRAME_ALLOC_RE = re.compile(
+    r"\bstwu\s+r1\s*,\s*(-?(?:0x[0-9A-Fa-f]+|\d+))\s*\(\s*r1\s*\)"
+)
+_STACK_SLOT_RE = re.compile(r"(-?(?:0x[0-9A-Fa-f]+|\d+))\s*\(\s*r1\s*\)")
 _PAD_STACK_RE = re.compile(r"\bPAD_STACK\s*\(\s*(\d+)\s*\)")
 _MANUAL_STACK_PADDING_RE = re.compile(
     r"\bUNUSED\s+"
@@ -612,7 +614,7 @@ def _stack_frame_size(lines: list[str]) -> Optional[int]:
     for line in lines:
         match = _STACK_FRAME_ALLOC_RE.search(_asm_body(line))
         if match:
-            return abs(int(match.group(1), 10))
+            return abs(int(match.group(1), 0))
     return None
 
 
@@ -620,17 +622,65 @@ def _paired_stack_delta(ref_body: str, our_body: str) -> Optional[int]:
     ref_frame = _STACK_FRAME_ALLOC_RE.search(ref_body)
     our_frame = _STACK_FRAME_ALLOC_RE.search(our_body)
     if ref_frame and our_frame:
-        return abs(int(ref_frame.group(1), 10)) - abs(int(our_frame.group(1), 10))
+        return abs(int(ref_frame.group(1), 0)) - abs(int(our_frame.group(1), 0))
 
     ref_slots = _STACK_SLOT_RE.findall(ref_body)
     our_slots = _STACK_SLOT_RE.findall(our_body)
     if len(ref_slots) != 1 or len(our_slots) != 1:
         return None
-    ref_offset = int(ref_slots[0], 10)
-    our_offset = int(our_slots[0], 10)
+    ref_offset = int(ref_slots[0], 0)
+    our_offset = int(our_slots[0], 0)
     if ref_offset < 0 or our_offset < 0:
         return None
     return ref_offset - our_offset
+
+
+def detect_stack_slot_localizer(ref_lines: list[str], our_lines: list[str]) -> Optional[dict]:
+    expected_frame = _stack_frame_size(ref_lines)
+    current_frame = _stack_frame_size(our_lines)
+    if (
+        expected_frame is not None
+        and current_frame is not None
+        and expected_frame != current_frame
+    ):
+        return None
+
+    mismatches: list[dict] = []
+    for line_index, (ref_line, our_line) in enumerate(zip(ref_lines, our_lines)):
+        if ref_line == our_line:
+            continue
+        ref_body = _asm_body(ref_line)
+        our_body = _asm_body(our_line)
+        ref_slots = _STACK_SLOT_RE.findall(ref_body)
+        our_slots = _STACK_SLOT_RE.findall(our_body)
+        if len(ref_slots) != 1 or len(our_slots) != 1:
+            continue
+        ref_offset = int(ref_slots[0], 0)
+        our_offset = int(our_slots[0], 0)
+        if ref_offset < 0 or our_offset < 0 or ref_offset == our_offset:
+            continue
+        ref_opcode = ref_body.split(None, 1)[0] if ref_body.split() else ""
+        our_opcode = our_body.split(None, 1)[0] if our_body.split() else ""
+        if ref_opcode != our_opcode:
+            continue
+        mismatches.append({
+            "line_index": line_index,
+            "expected_offset": ref_offset,
+            "current_offset": our_offset,
+            "delta": ref_offset - our_offset,
+            "opcode": ref_opcode,
+            "expected": ref_body,
+            "current": our_body,
+        })
+
+    if not mismatches:
+        return None
+    return {
+        "frame_size": expected_frame if expected_frame == current_frame else None,
+        "mismatch_count": len(mismatches),
+        "deltas": sorted({item["delta"] for item in mismatches}),
+        "mismatches": mismatches,
+    }
 
 
 def detect_stack_frame_delta(ref_lines: list[str], our_lines: list[str]) -> Optional[dict]:
@@ -797,6 +847,37 @@ def format_stack_frame_diagnostic(classification: dict) -> Optional[str]:
     )
 
 
+def format_stack_slot_localizer_diagnostic(classification: dict) -> Optional[str]:
+    diag = classification.get("stack_slot_localizer")
+    if not diag:
+        return None
+    count = diag.get("mismatch_count", 0)
+    mismatches = diag.get("mismatches") or []
+    examples = []
+    for item in mismatches[:3]:
+        examples.append(
+            f"{item.get('opcode')} expected 0x{item.get('expected_offset'):x}(r1) "
+            f"but current uses 0x{item.get('current_offset'):x}(r1)"
+        )
+    frame = diag.get("frame_size")
+    frame_text = (
+        f"frame size already matches at {frame} bytes"
+        if frame is not None
+        else "frame size is unchanged/unknown"
+    )
+    return (
+        "compiler-temp spill slot localizer: "
+        f"{frame_text}, but {count} paired r1 stack "
+        f"{_plural(count, 'reference')} use different offsets"
+        + (f" ({'; '.join(examples)})" if examples else "")
+        + ". This is a stack-slot placement mismatch, not a frame "
+        "reservation problem. Target the unnamed compiler temp/spill slot "
+        "independently of named locals: try retiming a sqrt/call-result temp, "
+        "a narrow address-taken or volatile temp around the producer/consumer, "
+        "or source-shape probes that preserve already-correct named-local offsets."
+    )
+
+
 def format_pad_stack_probe_diagnostic(classification: dict) -> Optional[str]:
     probe = classification.get("diagnostic_pad_stack")
     if not probe:
@@ -899,6 +980,10 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
         detect_stack_frame_delta(ref_lines, our_lines)
         if ref_mnemonics == our_mnemonics else None
     )
+    stack_slot_localizer = (
+        detect_stack_slot_localizer(ref_lines, our_lines)
+        if ref_mnemonics == our_mnemonics else None
+    )
 
     if ref_calls != our_calls:
         reasons.append("call shape differs; check prototypes, return types, and inline boundaries")
@@ -935,6 +1020,14 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
             reasons.append(hint)
         if primary == "operand-register-or-offset":
             primary = "stack-layout"
+    if stack_slot_localizer:
+        hint = format_stack_slot_localizer_diagnostic({
+            "stack_slot_localizer": stack_slot_localizer,
+        })
+        if hint:
+            reasons.append(hint)
+        if primary in {"operand-register-or-offset", "stack-layout"}:
+            primary = "stack-slot-layout"
     if data_symbol_diffs:
         reasons.append(f"{data_symbol_diffs} differing paired lines reference data/symbol relocations")
         if primary == "operand-register-or-offset":
@@ -958,6 +1051,8 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
     result = {"primary": primary, "reasons": reasons}
     if stack_frame_delta:
         result["stack_frame_delta"] = stack_frame_delta
+    if stack_slot_localizer:
+        result["stack_slot_localizer"] = stack_slot_localizer
     if inline_boundary_artifact:
         result["inline_boundary_artifact"] = inline_boundary_artifact
     return result

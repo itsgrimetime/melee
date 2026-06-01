@@ -137,3 +137,45 @@ def test_manual_unused_padding_array_guidance_is_diagnostic_only() -> None:
     )
     assert "diagnostic_pad_stack=24" in summary
     assert "source_guidance=natural-frame-reservation" in summary
+
+
+def test_classify_asm_diff_localizes_same_frame_compiler_temp_stack_slot() -> None:
+    checkdiff = _load_checkdiff()
+    expected = [
+        "<fn_80000000>:",
+        "+000: stwu r1, -64(r1)",
+        "+004: stfs f1, 0x34(r1)",
+        "+008: lfs f2, 0x38(r1)",
+        "+00c: bl sqrtf",
+        "+010: addi r1, r1, 64",
+    ]
+    current = [
+        "<fn_80000000>:",
+        "+000: stwu r1, -64(r1)",
+        "+004: stfs f1, 0x30(r1)",
+        "+008: lfs f2, 0x38(r1)",
+        "+00c: bl sqrtf",
+        "+010: addi r1, r1, 64",
+    ]
+
+    classification = checkdiff.classify_asm_diff(expected, current)
+
+    assert classification["primary"] == "stack-slot-layout"
+    assert classification["stack_slot_localizer"] == {
+        "frame_size": 64,
+        "mismatch_count": 1,
+        "deltas": [4],
+        "mismatches": [
+            {
+                "line_index": 2,
+                "expected_offset": 52,
+                "current_offset": 48,
+                "delta": 4,
+                "opcode": "stfs",
+                "expected": "stfs f1, 0x34(r1)",
+                "current": "stfs f1, 0x30(r1)",
+            }
+        ],
+    }
+    assert any("compiler-temp spill slot" in r for r in classification["reasons"])
+    assert any("PAD_STACK" not in r and "frame reservation" not in r for r in classification["reasons"])

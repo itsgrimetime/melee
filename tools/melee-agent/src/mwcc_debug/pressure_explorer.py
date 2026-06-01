@@ -331,6 +331,10 @@ def generate_lifetime_layout_probes(
     )
     _append_probe(
         probes,
+        _probe_boolean_guard_switch(source_text, body, body_start, body_end, function),
+    )
+    _append_probe(
+        probes,
         _probe_early_guard_return(source_text, body, body_start, body_end, function),
     )
     _append_probe(
@@ -455,21 +459,27 @@ def _append_probe(
 
 
 def _find_function_body_span(source: str, function: str) -> tuple[int, int] | None:
-    match = re.search(rf"\b{re.escape(function)}\s*\(", source)
-    if match is None:
-        return None
-    brace = source.find("{", match.end())
-    if brace < 0:
-        return None
-    depth = 0
-    for idx in range(brace, len(source)):
-        char = source[idx]
-        if char == "{":
-            depth += 1
-        elif char == "}":
-            depth -= 1
-            if depth == 0:
-                return brace + 1, idx
+    for match in re.finditer(rf"\b{re.escape(function)}\s*\(", source):
+        open_paren = source.find("(", match.start(), match.end())
+        if open_paren < 0:
+            continue
+        close_paren = _find_matching_paren(source, open_paren)
+        if close_paren is None:
+            continue
+        cursor = close_paren + 1
+        while cursor < len(source) and source[cursor].isspace():
+            cursor += 1
+        if cursor >= len(source) or source[cursor] != "{":
+            continue
+        depth = 0
+        for idx in range(cursor, len(source)):
+            char = source[idx]
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return cursor + 1, idx
     return None
 
 
@@ -898,6 +908,14 @@ def _probe_expression_shape(
     distance = _probe_distance_component_temps(source, body, body_start, function)
     if distance is not None:
         probes.append(distance)
+    abs_discriminator = _probe_abs_branch_discriminator_split(
+        source,
+        body,
+        body_start,
+        function,
+    )
+    if abs_discriminator is not None:
+        probes.append(abs_discriminator)
     return probes
 
 
@@ -1228,6 +1246,155 @@ def _probe_distance_component_temps(
                 "kind": "distance-component-temps",
                 "dx": dx,
                 "dy": dy,
+            },
+        )
+    return None
+
+
+def _probe_abs_branch_discriminator_split(
+    source: str,
+    body: str,
+    body_start: int,
+    function: str,
+) -> LifetimeLayoutProbe | None:
+    expr = rf"(?P<expr>{_DIFF_EXPR_RE})"
+    patterns = [
+        re.compile(
+            rf"(?m)^([ \t]*)(?P<type>float|f32|double)\s+"
+            rf"(?P<name>[A-Za-z_]\w*)\s*=\s*{expr}\s*;\n?"
+        ),
+        re.compile(
+            rf"(?m)^([ \t]*)(?P<name>[A-Za-z_]\w*)\s*=\s*{expr}\s*;\n?"
+        ),
+    ]
+    for assign_re in patterns:
+        for assign in assign_re.finditer(body):
+            indent = assign.group(1)
+            value_name = assign.group("name")
+            branch_re = re.compile(
+                rf"(?m)^([ \t]*)if\s*\(\s*{re.escape(value_name)}\s*>\s*"
+                r"0(?:\.0f?)?\s*\)\s*\{"
+            )
+            branch = branch_re.search(body, assign.end())
+            if branch is None:
+                continue
+            branch_open = body_start + branch.end() - 1
+            branch_close = _find_matching_brace(source, branch_open)
+            if branch_close is None or branch_close > body_start + len(body):
+                continue
+            branch_body = source[branch_open + 1:branch_close]
+            if not re.search(
+                rf"\bif\s*\(\s*{re.escape(value_name)}\s*<\s*0(?:\.0f?)?\s*\)",
+                branch_body,
+            ):
+                continue
+
+            temp = "ll_probe_abs_discriminator_0"
+            expression = _normalize_inline_expr(assign.group("expr"))
+            if "type" in assign.groupdict() and assign.group("type"):
+                type_name = assign.group("type")
+                replacement = (
+                    f"{indent}{type_name} {temp} = {expression};\n"
+                    f"{indent}{type_name} {value_name} = {temp};\n"
+                )
+            else:
+                replacement = (
+                    f"{indent}float {temp};\n"
+                    f"{indent}{temp} = {expression};\n"
+                    f"{indent}{value_name} = {temp};\n"
+                )
+            branch_header_start = body_start + branch.start()
+            branch_header_end = body_start + branch.end()
+            branch_header = source[branch_header_start:branch_header_end]
+            rewritten_header = re.sub(
+                rf"\b{re.escape(value_name)}\b",
+                temp,
+                branch_header,
+                count=1,
+            )
+            mutated = _replace_absolute_slice(
+                source,
+                branch_header_start,
+                branch_header_end,
+                rewritten_header,
+            )
+            mutated = _replace_body_slice(
+                mutated,
+                body_start,
+                assign.start(),
+                assign.end(),
+                replacement,
+            )
+            return LifetimeLayoutProbe(
+                label="abs-branch-discriminator-split-0",
+                operator="expression-shape",
+                description=(
+                    f"Split `{value_name}` branch discriminator from the abs "
+                    "materialization local."
+                ),
+                source_text=mutated,
+                provenance={
+                    "kind": "abs-branch-discriminator-split",
+                    "value_local": value_name,
+                    "discriminator_local": temp,
+                    "expression": expression,
+                },
+            )
+    return None
+
+
+def _probe_boolean_guard_switch(
+    source: str,
+    body: str,
+    body_start: int,
+    body_end: int,
+    function: str,
+) -> LifetimeLayoutProbe | None:
+    if re.search(rf"\bvoid\s+{re.escape(function)}\s*\(", source[:body_start]) is None:
+        return None
+    for match in re.finditer(r"(?m)^([ \t]*)if\s*\(", body):
+        indent = match.group(1)
+        condition_start = body_start + match.end() - 1
+        condition_end = _find_matching_paren(source, condition_start)
+        if condition_end is None or condition_end > body_end:
+            continue
+        condition = source[condition_start + 1:condition_end].strip()
+        if not re.fullmatch(r"[A-Za-z_]\w*\s*\([^{};]*\)", condition):
+            continue
+        open_brace = source.find("{", condition_end, body_end)
+        if open_brace < 0:
+            continue
+        close_brace = _find_matching_brace(source, open_brace)
+        if close_brace is None or close_brace > body_end:
+            continue
+        if not re.fullmatch(r"\s*return\s*;\s*", source[open_brace + 1:close_brace]):
+            continue
+        trailing = source[close_brace + 1:body_end].lstrip()
+        if trailing.startswith("else"):
+            continue
+        replacement = (
+            f"{indent}switch ({condition}) {{\n"
+            f"{indent}case 0:\n"
+            f"{indent}    break;\n"
+            f"{indent}default:\n"
+            f"{indent}    return;\n"
+            f"{indent}}}"
+        )
+        return LifetimeLayoutProbe(
+            label="boolean-guard-switch-0",
+            operator="guard-shape",
+            description=(
+                "Rewrite a boolean call guard return as case 0/default switch."
+            ),
+            source_text=_replace_absolute_slice(
+                source,
+                body_start + match.start(),
+                close_brace + 1,
+                replacement,
+            ),
+            provenance={
+                "kind": "boolean-guard-switch",
+                "condition": condition,
             },
         )
     return None
