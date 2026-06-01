@@ -1,4 +1,5 @@
 from __future__ import annotations
+import time
 from dataclasses import replace
 from pathlib import Path
 from src.search.adapters import CheckdiffVerifier
@@ -12,11 +13,24 @@ class DefaultScheduler:
 
     def run(self, *, sources, backends, producers, pipeline, target, budget, policy) -> SearchResult:
         acct = {"compiled": 0, "harvested": 0, "promoted": 0, "compile_failed": 0,
-                "score_failed": 0, "deduped": 0}
+                "score_failed": 0, "deduped": 0, "retried": 0}
         seen: set[str] = set()
         best: list[CandidateArtifact] = []
         matched: CandidateArtifact | None = None
         base = SourceSpec("", target)
+
+        backend = backends[0] if backends else None
+
+        def compile_with_retry(variant: SourceVariant) -> CandidateArtifact:
+            """Compile `variant`, retrying a transient compile_failed up to
+            policy.max_retries times (bounded retry per spec §3.6-P3)."""
+            art = backend.compile(variant); acct["compiled"] += 1
+            attempts = 0
+            while art.status == "compile_failed" and attempts < policy.max_retries:
+                attempts += 1
+                art = backend.compile(variant)
+                acct["compiled"] += 1; acct["retried"] += 1
+            return art
 
         def ingest(art: CandidateArtifact) -> CandidateArtifact | None:
             nonlocal matched
@@ -33,15 +47,29 @@ class DefaultScheduler:
             return scored
 
         handles = [(p, p.start(base, target, budget)) for p in producers]
-        backend = backends[0] if backends else None
+        # deferred: pcdump-capability routing (route_pcdump_to_capable_only /
+        # want_pcdump) is tied to the tier-2 directed/pcdump seam — pcdump IS
+        # the directed seam, out of scope for Spec 1. Round-robin only here.
+        # NOTE: max_iters=0 falls through to a single pass (treated as "run
+        # once"); max_seconds is a wall-clock cap enforced below.
         iters = budget.max_iters or 1
+        deadline = (time.monotonic() + budget.max_seconds
+                    if budget.max_seconds is not None else None)
         for _ in range(iters):
+            if deadline is not None and time.monotonic() >= deadline:
+                break
             for src in sources:
+                scored_batch: list[CandidateArtifact] = []
                 for variant in src.next_batch(policy.batch_size):
                     if backend is None: break
-                    art = backend.compile(variant); acct["compiled"] += 1
-                    ingest(art)
+                    art = compile_with_retry(variant)
+                    s = ingest(art)
+                    if s is not None:
+                        scored_batch.append(s)
                     if matched: break
+                # observe once per drained source batch (spec §3.6-P3)
+                src.observe(scored_batch)
+                if matched: break
             for producer, handle in handles:
                 harvested = producer.poll(handle)
                 acct["harvested"] += len(harvested)
@@ -49,10 +77,11 @@ class DefaultScheduler:
                 harvested.sort(key=lambda a: (a.producer_score is None, a.producer_score))
                 for cand in harvested[: policy.promote_top_k]:
                     if backend is None: break
-                    recompiled = backend.compile(SourceVariant(cand.source_blob.read_text(), cand.provenance))
+                    recompiled = compile_with_retry(
+                        SourceVariant(cand.source_blob.read_text(), cand.provenance))
                     recompiled = replace(recompiled, candidate_id=cand.candidate_id,
                                          producer_score=cand.producer_score, provenance=cand.provenance)
-                    acct["promoted"] += 1; acct["compiled"] += 1
+                    acct["promoted"] += 1
                     ingest(recompiled)
                     if matched: break
             if matched: break

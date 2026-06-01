@@ -77,7 +77,7 @@ def run_cmd(
         RealLocalCompiler,
         RealRemotePermuterClient,
     )
-    from src.search.artifact import CompileSpec
+    from src.search.artifact import CompileManifest, CompileSpec
     from src.search.backends import PlainLocalBackend
     from src.search.producers import PermuterJobProducer
     from src.search.scheduler import DefaultScheduler
@@ -108,6 +108,37 @@ def run_cmd(
         scorer = RealByteScorer()
         verifier = RealCheckdiffVerifier(melee_root)
 
+    # Sources — load seed texts first; they form the base context blob that
+    # the manifest records and that base_context_hash is derived from.
+    seed_texts: list[str] = []
+    for seed_path in (seeds or []):
+        if seed_path.exists():
+            seed_texts.append(seed_path.read_text())
+        else:
+            typer.echo(f"[warn] seed file not found: {seed_path}", err=True)
+    source = SeedListSource(seed_texts)
+
+    # Persist the compile manifest ONCE (content-addressed: same inputs ->
+    # same path). The artifact's manifest_path will point here, and
+    # base_context_hash is the hash of the SAME blob stored in the manifest
+    # so compute_candidate_id and the manifest stay consistent (spec §3.1).
+    cflags_list = _CFLAGS.split()
+    include_paths = _resolve_include_paths(melee_root, unit)
+    base_context_blob_text = "\n".join(seed_texts)
+    base_context_blob = artifact_store.put_source(base_context_blob_text)
+    base_context_hash = hashlib.sha256(base_context_blob_text.encode()).hexdigest()[:32]
+    obj_rel = f"build/GALE01/src/{unit}.o"
+    compile_command = [
+        "ninja", obj_rel,
+    ]
+    manifest = CompileManifest(
+        compile_command=compile_command,
+        cflags=cflags_list,
+        include_paths=include_paths,
+        base_context_blob=base_context_blob,
+    )
+    manifest_path = artifact_store.put_manifest(manifest)
+
     # Backend — one spec factory parameterised by backend_mode.
     cflags_hash = hashlib.sha256(_CFLAGS.encode()).hexdigest()[:16]
 
@@ -115,10 +146,10 @@ def run_cmd(
         return CompileSpec(
             target_id=f"{function}@{unit}",
             cflags_hash=cflags_hash,
-            base_context_hash="",
+            base_context_hash=base_context_hash,
             toolchain_fingerprint="mwcc_233_163n",
             backend_mode=backend_mode,
-            manifest_path=store / "manifest.json",
+            manifest_path=manifest_path,
         )
 
     backend = PlainLocalBackend(
@@ -127,15 +158,6 @@ def run_cmd(
         compile_spec_factory=lambda variant: _make_spec("plain-local"),
         target=target,
     )
-
-    # Sources
-    seed_texts: list[str] = []
-    for seed_path in (seeds or []):
-        if seed_path.exists():
-            seed_texts.append(seed_path.read_text())
-        else:
-            typer.echo(f"[warn] seed file not found: {seed_path}", err=True)
-    source = SeedListSource(seed_texts)
 
     # Producers
     producers = []
@@ -185,6 +207,19 @@ def run_cmd(
 def status_cmd() -> None:
     """Show status of the search substrate (store, config)."""
     typer.echo("search substrate: ready")
+
+
+# Canonical melee include search dirs (mirrors configure.py:includes_base).
+_INCLUDES_BASE = ["src", "src/MSL", "src/Runtime", "extern/dolphin/include"]
+
+
+def _resolve_include_paths(melee_root: Path, unit: str) -> list[str]:
+    """Resolve the compiler `-i` include search paths for UNIT.
+
+    Returns absolute paths for the project's canonical include base. Kept as a
+    helper so the manifest records the same include set the real compile uses.
+    """
+    return [str((melee_root / inc).resolve()) for inc in _INCLUDES_BASE]
 
 
 def _resolve_expected_obj(melee_root: Path, function: str, unit: str) -> Path:

@@ -320,7 +320,19 @@ class RealCheckdiffVerifier:
             melee_root=self._melee_root,
             build_obj_path=build_obj_path,
         )
-        return checker.is_clean(obj_path)
+        # Verification copies the candidate .o into the SHARED build tree and
+        # runs checkdiff, so it MUST hold the same repo-wide lock as the
+        # compile path (adapters.py RealLocalCompiler) — otherwise a
+        # concurrent agent's build can race the swap (spec §3.1: "scheduler
+        # owns the lock + restore").
+        #
+        # Deferred: CheckdiffChecker does its own .convbak swap+restore, so we
+        # do not also route through ArtifactStore.stage_for_verify here
+        # (consolidating the two restore mechanisms would need invasive
+        # changes to the shared CheckdiffChecker). The lock is the must-fix;
+        # the restore-dedup is the nice-to-have and is left for a follow-up.
+        with _acquire_repo_build_lock(self._melee_root, label="search verify"):
+            return checker.is_clean(obj_path)
 
     def _resolve_build_obj(self, function: str) -> Path | None:
         import json
