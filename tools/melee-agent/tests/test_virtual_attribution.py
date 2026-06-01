@@ -250,6 +250,39 @@ def test_explain_virtuals_classifies_ir_first_def_provenance_without_source() ->
     assert by_virtual[44].source.field_offset == 12
 
 
+def test_explain_virtuals_uses_fpr_class_for_first_def_provenance() -> None:
+    pcdump = textwrap.dedent("""\
+        Starting function fn_80000004
+        BEFORE REGISTER COLORING
+        fn_80000004
+        B0: Succ={} Pred={} Labels={}
+            bl helper
+            frsp f42,f1
+            stfs f42,0x30(r1)
+        COLORGRAPH DECISIONS (class=1, result=1, n_nodes=1)
+          iter ig_idx phys degree nIntfr flags
+            0 42 r6 0 0 0x00
+    """)
+
+    report = explain_virtuals(
+        pcdump,
+        "fn_80000004",
+        virtuals=[42],
+        reg_class="fpr",
+    )
+
+    entry = report.virtuals[0]
+    assert entry.class_id == 1
+    assert entry.assigned_reg == 6
+    assert entry.first_occurrence is not None
+    assert entry.first_occurrence.opcode == "frsp"
+    assert entry.source is not None
+    assert entry.source.kind == "fpr-temp"
+    assert entry.source.expression == "frsp f42,f1"
+    assert entry.source.first_def is not None
+    assert entry.source.first_def.opcode == "frsp"
+
+
 def test_explain_virtual_cli_all_reports_every_pcode_virtual(tmp_path: pathlib.Path) -> None:
     pcdump = tmp_path / "pcdump.txt"
     source = tmp_path / "sample.c"

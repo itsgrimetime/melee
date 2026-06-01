@@ -13354,6 +13354,17 @@ def debug_diff_schedule(
     print(render_diff_json(report) if json_out else render_diff_text(report))
 
 
+def _normalize_virtual_to_var_reg_class(value: str) -> str:
+    key = value.strip().lower()
+    if key in {"gpr", "int", "r", "0"}:
+        return "gpr"
+    if key in {"fpr", "fp", "float", "f", "1"}:
+        return "fpr"
+    raise typer.BadParameter(
+        f"unknown register class {value!r}; expected gpr/r/0 or fpr/f/1"
+    )
+
+
 @inspect_app.command(name="virtual-to-var")
 def virtual_to_var(
     function: Annotated[
@@ -13381,6 +13392,15 @@ def virtual_to_var(
         bool,
         typer.Option("--json", help="Emit as JSON."),
     ] = False,
+    reg_class: Annotated[
+        Optional[str],
+        typer.Option(
+            "--class",
+            help="Register class for the inverse lookup: gpr/r/0 or fpr/f/1. "
+                 "When omitted, infer from an r*/f* virtual token and "
+                 "default to GPR for bare numbers.",
+        ),
+    ] = None,
 ) -> None:
     """Bridge inverse: given a virtual register, predict the source
     variable name (decl-order heuristic), including the variable's
@@ -13394,19 +13414,29 @@ def virtual_to_var(
         find_var_for_virtual,
     )
 
-    # Accept 'r62' alongside '62' — easier to copy from analyze output.
+    # Accept 'r62' and 'f42' alongside bare numbers — easier to copy from
+    # analyze/guide/explain output while preserving the old bare-GPR default.
     vstr = virtual.strip()
-    if vstr.lower().startswith("r"):
+    inferred_class = None
+    if vstr.lower().startswith("f"):
+        inferred_class = "fpr"
+        vstr = vstr[1:]
+    elif vstr.lower().startswith("r"):
+        inferred_class = "gpr"
         vstr = vstr[1:]
     try:
         virtual_int = int(vstr)
     except ValueError:
         typer.echo(
             f"invalid virtual register {virtual!r}; expected an integer "
-            f"(optionally with 'r' prefix).", err=True,
+            f"(optionally with 'r' or 'f' prefix).", err=True,
         )
         raise typer.Exit(2)
     virtual = virtual_int  # downstream code uses int form
+    reg_class = _normalize_virtual_to_var_reg_class(
+        reg_class or inferred_class or "gpr"
+    )
+    reg_kind = "f" if reg_class == "fpr" else "r"
 
     melee_root = DEFAULT_MELEE_ROOT
     pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
@@ -13432,6 +13462,60 @@ def virtual_to_var(
         source_label = str(source_path.relative_to(melee_root))
     except ValueError:
         source_label = str(source_path)
+    if reg_class == "fpr":
+        from ..mwcc_debug.virtual_attribution import explain_virtuals
+        report = explain_virtuals(
+            text,
+            function,
+            virtuals=[virtual],
+            source_text=source,
+            source_file=source_label,
+            reg_class=reg_class,
+        )
+        entry = report.virtuals[0]
+        source_info = entry.source
+        first = (
+            source_info.first_def
+            if source_info is not None and source_info.first_def is not None
+            else entry.first_occurrence
+        )
+        assigned = (
+            None
+            if entry.assigned_reg is None
+            else f"{reg_kind}{entry.assigned_reg}"
+        )
+        if json_out:
+            payload = {
+                "virtual": virtual,
+                "register_class": reg_class,
+                "class_id": entry.class_id,
+                "ig_idx": entry.ig_idx,
+                "assigned_reg": assigned,
+                "status": entry.status,
+                "found": False,
+                "source": (
+                    None if source_info is None else dataclasses.asdict(source_info)
+                ),
+                "first_def": None if first is None else dataclasses.asdict(first),
+            }
+            print(json.dumps(payload, indent=2))
+        else:
+            typer.echo(
+                f"no source variable bound to {reg_kind}{virtual} in {function} "
+                "(likely an FPR compiler-introduced temp or spill root).",
+                err=True,
+            )
+            if first is not None:
+                typer.echo("", err=True)
+                typer.echo("first defining FPR op:", err=True)
+                typer.echo(
+                    f"  block {first.block_idx}: {first.opcode} {first.operands}",
+                    err=True,
+                )
+            if assigned is not None:
+                typer.echo(f"assigned physical: {assigned}", err=True)
+        return
+
     binding = find_var_for_virtual(source, function, virtual, pre)
 
     if binding is None:

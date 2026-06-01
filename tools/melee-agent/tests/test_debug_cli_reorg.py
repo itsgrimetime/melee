@@ -2872,6 +2872,81 @@ def test_virtual_to_var_surfaces_call_return_copy_chain(
     assert "no source variable bound" not in result.stderr
 
 
+def test_virtual_to_var_accepts_fpr_class_and_reports_fpr_first_def(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    source = melee_root / "src" / "melee" / "mn" / "sample.c"
+    source.parent.mkdir(parents=True)
+    source.write_text("void fn_80000004(void) {}\n")
+    pcdump = tmp_path / "sample.pcdump.txt"
+    pcdump.write_text(textwrap.dedent("""\
+        Starting function fn_80000004
+        BEFORE REGISTER COLORING
+        fn_80000004
+        B0: Succ={} Pred={} Labels={}
+            bl helper
+            frsp f42,f1
+            stfs f42,0x30(r1)
+        COLORGRAPH DECISIONS (class=1, result=1, n_nodes=1)
+          iter ig_idx phys degree nIntfr flags
+            0 42 r6 0 0 0x00
+    """))
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, melee_root: "melee/mn/sample",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "virtual-to-var",
+            "-f",
+            "fn_80000004",
+            "f42",
+            str(pcdump),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["virtual"] == 42
+    assert payload["register_class"] == "fpr"
+    assert payload["class_id"] == 1
+    assert payload["assigned_reg"] == "f6"
+    assert payload["found"] is False
+    assert payload["source"]["kind"] == "fpr-temp"
+    assert payload["source"]["expression"] == "frsp f42,f1"
+    assert payload["first_def"]["opcode"] == "frsp"
+
+    class_result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "virtual-to-var",
+            "-f",
+            "fn_80000004",
+            "42",
+            str(pcdump),
+            "--class",
+            "fpr",
+            "--json",
+        ],
+    )
+    assert class_result.exit_code == 0, class_result.stdout + class_result.stderr
+    class_payload = json.loads(class_result.stdout)
+    assert class_payload["register_class"] == "fpr"
+    assert class_payload["source"]["expression"] == "frsp f42,f1"
+
+
 def test_auto_verify_expensive_restore_refusal_does_not_fail_command() -> None:
     result = {
         "ran": True,

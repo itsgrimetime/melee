@@ -23,7 +23,7 @@ _SIMPLIFY_HEADER_RE = re.compile(
     r"^SIMPLIFY GRAPH \(class=(\d+), n_colors=(\d+), n_class_regs=(\d+)\)"
 )
 _ITER_RE = re.compile(
-    r"^\s*(\d+)\s+(-?\d+)\s+r(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+0x([0-9a-fA-F]+)\s*$"
+    r"^\s*(\d+)\s+(-?\d+)\s+r(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+0x([0-9a-fA-F]+)(?:\s+\[.*\])?\s*$"
 )
 # SIMPLIFY row: iter ig_idx degree arraySize 0xflags [notes]
 # Notes column is optional / freeform (e.g. "SPILLED").

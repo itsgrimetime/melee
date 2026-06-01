@@ -121,3 +121,72 @@ def test_stack_slot_bridge_maps_fpr_slot_to_spill_root_and_source() -> None:
         },
     ]
     assert any("BEFORE REGISTER COLORING" in item for item in candidate["evidence"])
+
+
+def test_stack_slot_bridge_maps_final_only_fpr_stack_home_to_colored_root() -> None:
+    pcdump = textwrap.dedent("""\
+        Starting function fn_80000001
+        BEFORE REGISTER COLORING
+        fn_80000001
+        B0: Succ={} Pred={} Labels={}
+            frsp    f41,f80
+            fmr     f50,f41
+        SIMPLIFY GRAPH (class=1, n_colors=32, n_class_regs=81)
+          iter ig_idx degree arraySize flags notes
+            0 50 14 34 0x0a SPILLED
+            1 41 0 2 0x0a SPILLED
+        COLORGRAPH DECISIONS (class=1, result=1, n_nodes=81)
+          iter ig_idx phys degree nIntfr flags
+            0 50 r31 14 34 0x0a  [ROOT]
+              interferers:
+            1 41 r0 0 2 0x0a  [ROOT]
+              interferers:
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        fn_80000001
+        B0: Succ={} Pred={} Labels={}
+            stwu    r1,-168(r1)
+            frsp    f0,f0
+            stfs    f0,@810(r1); fIsVolatile
+            lfs     f31,@810(r1); fIsVolatile
+            blr
+    """)
+    localizer = {
+        "frame_size": 168,
+        "mismatch_count": 2,
+        "deltas": [4, 4],
+        "mismatches": [
+            {
+                "opcode": "stfs",
+                "expected_offset": 0x34,
+                "current_offset": 0x30,
+                "delta": 4,
+            },
+            {
+                "opcode": "lfs",
+                "expected_offset": 0x34,
+                "current_offset": 0x30,
+                "delta": 4,
+            },
+        ],
+    }
+
+    report = explain_stack_slot_localizer(
+        pcdump,
+        "fn_80000001",
+        localizer,
+    )
+
+    assert report["status"] == "ok"
+    by_opcode = {candidate["opcode"]: candidate for candidate in report["candidates"]}
+    assert by_opcode["stfs"]["virtual_token"] == "f41"
+    assert by_opcode["stfs"]["spill_root"] == "r41"
+    assert by_opcode["stfs"]["assigned_reg"] == "f0"
+    assert by_opcode["stfs"]["site_kind"] == "final-only-stack-home"
+    assert any(
+        "FINAL CODE AFTER INSTRUCTION SCHEDULING" in item
+        for item in by_opcode["stfs"]["evidence"]
+    )
+    assert by_opcode["lfs"]["virtual_token"] == "f50"
+    assert by_opcode["lfs"]["spill_root"] == "r50"
+    assert by_opcode["lfs"]["assigned_reg"] == "f31"
+    assert by_opcode["lfs"]["site_kind"] == "final-only-stack-home"

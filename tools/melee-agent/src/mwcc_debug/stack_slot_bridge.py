@@ -12,7 +12,10 @@ from .parser import Function, Pass, parse_pcdump
 from .virtual_attribution import explain_virtuals
 
 _STACK_R1_RE = re.compile(
-    r"\b(?P<offset>[-+]?(?:0x[0-9A-Fa-f]+|\d+))\s*\(\s*r1\s*\)"
+    r"(?<![@\w])(?P<offset>[-+]?(?:0x[0-9A-Fa-f]+|\d+))\s*\(\s*r1\s*\)"
+)
+_STACK_R1_ANY_RE = re.compile(
+    r"(?P<slot>@?[A-Za-z0-9_]\w*(?:[+-]\d+)?)\s*\(\s*r1\s*\)"
 )
 _REG_RE = re.compile(r"\b(?P<kind>[rf])(?P<num>\d+)\b")
 _CALL_RE = re.compile(r"\b(?P<name>[A-Za-z_]\w*)\s*\(")
@@ -55,6 +58,7 @@ class StackSlotSite:
     offset: int
     reg_kind: str
     virtual: int
+    site_kind: str = "precolor-stack-site"
 
     @property
     def virtual_token(self) -> str:
@@ -110,6 +114,7 @@ def explain_stack_slot_localizer(
             sites = _infer_sites_from_final_pass(
                 fn,
                 final_pass,
+                events,
                 opcode,
                 current_offset,
             )
@@ -202,6 +207,7 @@ def _candidate_for_site(
         "register_class": reg_class,
         "virtual": site.virtual,
         "virtual_token": site.virtual_token,
+        "site_kind": site.site_kind,
         "spill_root": f"r{mapping.ig_idx if mapping.ig_idx is not None else site.virtual}",
         "ig_idx": mapping.ig_idx,
         "mapping_status": mapping.status,
@@ -256,6 +262,7 @@ def _find_precolor_stack_sites(
 def _infer_sites_from_final_pass(
     fn: Function,
     final_pass: Pass,
+    events,
     opcode: str,
     offset: int,
 ) -> list[StackSlotSite]:
@@ -266,6 +273,12 @@ def _infer_sites_from_final_pass(
         if site.opcode == opcode and site.offset == offset
     ]
     if not final_sites:
+        final_sites = _symbolic_stack_sites_in_pass(
+            final_pass,
+            opcode,
+            assumed_offset=offset,
+        )
+    if not final_sites:
         return []
     pre_pass = _select_precolor_pass(fn)
     if pre_pass is None:
@@ -275,7 +288,90 @@ def _infer_sites_from_final_pass(
         for site in _stack_sites_in_pass(pre_pass)
         if site.opcode == opcode and site.offset == offset and site.virtual >= 32
     ]
-    return pre_sites
+    if pre_sites:
+        return pre_sites
+
+    inferred: list[StackSlotSite] = []
+    for site in final_sites:
+        class_id = _class_for_reg_kind(site.reg_kind)
+        virtuals = _virtuals_assigned_to_phys(events, class_id, site.virtual)
+        for virtual in virtuals:
+            inferred.append(StackSlotSite(
+                pass_name=site.pass_name,
+                block_idx=site.block_idx,
+                instr_idx=site.instr_idx,
+                opcode=site.opcode,
+                operands=site.operands,
+                offset=site.offset,
+                reg_kind=site.reg_kind,
+                virtual=virtual,
+                site_kind="final-only-stack-home",
+            ))
+    return inferred
+
+
+def _virtuals_assigned_to_phys(events, class_id: int, phys: int) -> list[int]:
+    if events is None:
+        return []
+    out: list[int] = []
+    for section in events.colorgraph_sections:
+        if section.class_id != class_id:
+            continue
+        for decision in section.decisions:
+            if decision.assigned_reg == phys:
+                out.append(decision.ig_idx)
+    spilled = _spilled_virtuals(events, class_id)
+    spilled_out = [virtual for virtual in out if virtual in spilled]
+    return spilled_out or out
+
+
+def _spilled_virtuals(events, class_id: int) -> set[int]:
+    if events is None:
+        return set()
+    return {
+        entry.ig_idx
+        for section in events.simplify_sections
+        if section.class_id == class_id
+        for entry in section.entries
+        if entry.spilled
+    }
+
+
+def _symbolic_stack_sites_in_pass(
+    pass_: Pass,
+    opcode: str,
+    *,
+    assumed_offset: int,
+) -> list[StackSlotSite]:
+    sites: list[StackSlotSite] = []
+    volatile_sites: list[StackSlotSite] = []
+    for block in pass_.blocks:
+        for instr_idx, instr in enumerate(block.instructions):
+            if instr.opcode.lower() != opcode:
+                continue
+            if _stack_offset(instr.operands) is not None:
+                continue
+            if _stack_slot_token(instr.operands) is None:
+                continue
+            reg = _first_register(instr.operands)
+            if reg is None:
+                continue
+            kind, num = reg
+            site = StackSlotSite(
+                pass_name=pass_.name,
+                block_idx=block.index,
+                instr_idx=instr_idx,
+                opcode=opcode,
+                operands=instr.operands,
+                offset=assumed_offset,
+                reg_kind=kind,
+                virtual=num,
+                site_kind="final-symbolic-stack-home",
+            )
+            sites.append(site)
+            if "fIsVolatile" in instr.annotations:
+                volatile_sites.append(site)
+    return volatile_sites or sites
 
 
 def _stack_sites_in_pass(pass_: Pass) -> list[StackSlotSite]:
@@ -315,6 +411,16 @@ def _stack_offset(operands: str) -> int | None:
         return int(match.group("offset"), 0)
     except ValueError:
         return None
+
+
+def _stack_slot_token(operands: str) -> str | None:
+    match = _STACK_R1_ANY_RE.search(operands)
+    if match is None:
+        return None
+    token = match.group("slot")
+    if re.fullmatch(r"[-+]?(?:0x[0-9A-Fa-f]+|\d+)", token):
+        return None
+    return token
 
 
 def _first_register(operands: str) -> tuple[str, int] | None:

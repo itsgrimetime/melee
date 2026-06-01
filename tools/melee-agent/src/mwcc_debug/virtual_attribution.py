@@ -59,6 +59,38 @@ _IMPLICIT_TEMP_OPS = {
     "xoris",
 }
 _COMPARE_TEMP_OPS = {"cmp", "cmpi", "cmpl", "cmpli"}
+_FPR_TEMP_OPS = {
+    "fabs",
+    "fadd",
+    "fadds",
+    "fcmpo",
+    "fcmpu",
+    "fctiwz",
+    "fdiv",
+    "fdivs",
+    "fmadd",
+    "fmadds",
+    "fmr",
+    "fmsub",
+    "fmsubs",
+    "fmul",
+    "fmuls",
+    "fnabs",
+    "fneg",
+    "fnmadd",
+    "fnmsub",
+    "fnmsubs",
+    "fres",
+    "frsp",
+    "frsqrte",
+    "fsel",
+    "fsub",
+    "fsubs",
+    "lfd",
+    "lfs",
+    "stfd",
+    "stfs",
+}
 
 
 @dataclass(frozen=True)
@@ -169,6 +201,8 @@ def _as_passes(passes: Pass | tuple[Pass, ...] | None) -> tuple[Pass, ...]:
 def _find_first_def_site(
     virtual: int,
     pre_pass: Pass | tuple[Pass, ...] | None,
+    *,
+    reg_kind: str = "r",
 ) -> InstructionSite | None:
     for pass_ in _as_passes(pre_pass):
         for block in pass_.blocks:
@@ -176,7 +210,7 @@ def _find_first_def_site(
                 if not instr.regs:
                     continue
                 kind, num = instr.regs[0]
-                if kind == "r" and num == virtual:
+                if kind == reg_kind and num == virtual:
                     return InstructionSite(
                         pass_name=pass_.name,
                         block_idx=block.index,
@@ -347,6 +381,8 @@ def _source_from_first_def(site: InstructionSite, *, source_file: str | None) ->
         kind = "load/store-address"
     elif opcode in _IMPLICIT_TEMP_OPS:
         kind = "implicit-temp"
+    elif opcode in _FPR_TEMP_OPS:
+        kind = "fpr-temp"
 
     return SourceAttribution(
         kind=kind,
@@ -387,6 +423,7 @@ def _source_for_virtual(
     *,
     function: str,
     pre_pass: Pass | tuple[Pass, ...] | None,
+    reg_kind: str,
     source_text: str | None,
     source_file: str | None,
     bindings_by_virtual: dict[int, object],
@@ -395,7 +432,7 @@ def _source_for_virtual(
     binding = None
     passes = _as_passes(pre_pass)
     binding_pass = passes[-1] if passes else None
-    if source_text and binding_pass is not None:
+    if reg_kind == "r" and source_text and binding_pass is not None:
         try:
             binding = find_var_for_virtual(source_text, function, virtual, binding_pass)
         except Exception:
@@ -403,13 +440,13 @@ def _source_for_virtual(
     if binding is not None:
         return _source_from_binding(binding, source_file=source_file)
 
-    if call_return_origin is not None:
+    if reg_kind == "r" and call_return_origin is not None:
         return _source_from_call_return_origin(
             call_return_origin,
             source_file=source_file,
         )
 
-    first_def = _find_first_def_site(virtual, pre_pass)
+    first_def = _find_first_def_site(virtual, pre_pass, reg_kind=reg_kind)
     if first_def is None:
         return None
     load_source = _source_from_load(
@@ -621,6 +658,7 @@ def explain_virtuals(
             virtual,
             function=function,
             pre_pass=pre_passes,
+            reg_kind=reg_kind,
             source_text=source_text,
             source_file=source_file,
             bindings_by_virtual=bindings,
@@ -637,7 +675,7 @@ def explain_virtuals(
             assigned_reg=mapping.assigned_reg,
             live_range=live_range,
             live_blocks=_live_blocks(virtual, pre_passes, reg_kind=reg_kind),
-            use_count=0 if info is None else info.use_count,
+            use_count=len(pre_occurrences) if info is None else info.use_count,
             first_occurrence=first_occurrence,
             last_occurrence=last_occurrence,
             source=source,
