@@ -185,6 +185,32 @@ def test_coalesce_search_requires_fresh_cached_pcdump_by_default(
     assert result.exit_code == 4
 
 
+def test_coalesce_search_missing_function_in_pcdump_exits_cleanly(
+    tmp_path: pathlib.Path,
+) -> None:
+    baseline = tmp_path / "baseline.txt"
+    baseline.write_text(BASELINE.replace("fn_80000000", "other_fn"))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "coalesce-search",
+            "-f",
+            "fn_80000000",
+            "--target",
+            "r37=r40",
+            "--pcdump",
+            str(baseline),
+        ],
+    )
+
+    assert result.exit_code == 3
+    assert "function 'fn_80000000' not found in pcdump" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert "Traceback" not in result.stdout
+
+
 def test_coalesce_search_allow_stale_pcdump_opt_out(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: pathlib.Path,
@@ -263,6 +289,58 @@ def test_coalesce_search_scores_source_candidate_match_percent(
     assert result.exit_code == 0, result.stdout + result.stderr
     payload = json.loads(result.stdout)
     assert payload["variants"][0]["objective"]["match_percent"] == 88.25
+
+
+def test_coalesce_search_non_json_emits_real_score_status(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    import src.mwcc_debug.diff_capture as diff_capture
+
+    baseline = tmp_path / "baseline.txt"
+    candidate = tmp_path / "candidate.c"
+    baseline.write_text(BASELINE)
+    candidate.write_text("void fn_80000000(void) {}\n")
+
+    monkeypatch.setattr(
+        diff_capture,
+        "compile_source_variant",
+        lambda *args, **kwargs: COALESCED,
+    )
+
+    def fake_match_percent(*args, status=None, **kwargs):
+        assert status is not None
+        status("build complete; refreshing report.json")
+        return 88.25, None
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_select_order_source_match_percent",
+        fake_match_percent,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "coalesce-search",
+            "-f",
+            "fn_80000000",
+            "--target",
+            "r37=r40",
+            "--pcdump",
+            str(baseline),
+            "--candidate",
+            f"source-score:temp-introduction={candidate}",
+            "--no-compile-probes",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert (
+        "[coalesce-search] source-score: build complete; refreshing report.json"
+        in result.stderr
+    )
 
 
 def test_coalesce_search_help_smoke() -> None:

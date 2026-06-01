@@ -9,7 +9,7 @@ mode. No business logic — checkers consume these facts.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 from .colorgraph_parser import ColorgraphDecision, ColorgraphSection
 from .parser import Block, Function, Instruction, Pass
@@ -204,7 +204,7 @@ class CascadeCandidate:
     """One proposed coalesce surfaced by analyze_cascade()."""
     from_virt: int        # ig_idx of the virtual that would be merged away
     to_virt: int          # ig_idx of the virtual it would merge into
-    priority_class: str   # "end-of-chain" | "frees-slot"
+    priority_class: str   # "end-of-chain" | "frees-slot" | "register-reuse"
     depends_on: Optional[tuple[int, int]]  # earlier pair this depends on
 
 
@@ -224,17 +224,6 @@ def analyze_cascade(facts: IrFacts) -> list[CascadeCandidate]:
         d for d in cg.decisions if d.assigned_reg in _GPR_CALLEE_SAVES
     ]
     if len(saves) < 2:
-        return []
-    saves.sort(key=lambda d: -d.assigned_reg)
-
-    asc = sorted({d.assigned_reg for d in saves})
-    cascade: list[int] = []
-    for i, r in enumerate(asc):
-        if i == 0 or r == asc[i - 1] + 1:
-            cascade.append(r)
-        else:
-            break
-    if len(cascade) < 2:
         return []
 
     # Multi-holder: collect ALL decisions per assigned_reg, not just one.
@@ -271,34 +260,114 @@ def analyze_cascade(facts: IrFacts) -> list[CascadeCandidate]:
         return best
 
     candidates: list[CascadeCandidate] = []
+    seen_pairs: set[tuple[int, int]] = set()
+
+    def add_candidate(candidate: CascadeCandidate) -> None:
+        key = (candidate.from_virt, candidate.to_virt)
+        if key in seen_pairs:
+            return
+        seen_pairs.add(key)
+        candidates.append(candidate)
+
     end_pair: Optional[CascadeCandidate] = None
 
-    low_reg, mid_reg = cascade[0], cascade[1]
-    end_holders = pick_pair(by_reg.get(low_reg, []), by_reg.get(mid_reg, []))
-    if end_holders is not None:
-        low_d, mid_d = end_holders
-        end_pair = CascadeCandidate(
-            from_virt=low_d.ig_idx,
-            to_virt=mid_d.ig_idx,
-            priority_class="end-of-chain",
-            depends_on=None,
-        )
-        candidates.append(end_pair)
+    asc = sorted({d.assigned_reg for d in saves})
+    cascade: list[int] = []
+    for i, r in enumerate(asc):
+        if i == 0 or r == asc[i - 1] + 1:
+            cascade.append(r)
+        else:
+            break
 
-    for i in range(1, len(cascade) - 1):
-        slot_holders = pick_pair(
-            by_reg.get(cascade[i], []),
-            by_reg.get(cascade[i + 1], []),
-        )
-        if slot_holders is None:
-            continue
-        a_d, b_d = slot_holders
-        dep = (end_pair.from_virt, end_pair.to_virt) if end_pair else None
-        candidates.append(CascadeCandidate(
-            from_virt=a_d.ig_idx,
-            to_virt=b_d.ig_idx,
-            priority_class="frees-slot",
-            depends_on=dep,
-        ))
+    if len(cascade) >= 2:
+        low_reg, mid_reg = cascade[0], cascade[1]
+        end_holders = pick_pair(by_reg.get(low_reg, []), by_reg.get(mid_reg, []))
+        if end_holders is not None:
+            low_d, mid_d = end_holders
+            end_pair = CascadeCandidate(
+                from_virt=low_d.ig_idx,
+                to_virt=mid_d.ig_idx,
+                priority_class="end-of-chain",
+                depends_on=None,
+            )
+            add_candidate(end_pair)
+
+    if len(cascade) >= 2:
+        for i in range(1, len(cascade) - 1):
+            slot_holders = pick_pair(
+                by_reg.get(cascade[i], []),
+                by_reg.get(cascade[i + 1], []),
+            )
+            if slot_holders is None:
+                continue
+            a_d, b_d = slot_holders
+            dep = (end_pair.from_virt, end_pair.to_virt) if end_pair else None
+            add_candidate(CascadeCandidate(
+                from_virt=a_d.ig_idx,
+                to_virt=b_d.ig_idx,
+                priority_class="frees-slot",
+                depends_on=dep,
+            ))
+
+    for reuse_candidate in _find_register_reuse_candidates(
+        facts,
+        saves,
+        interferes=interferes,
+    ):
+        add_candidate(reuse_candidate)
 
     return candidates
+
+
+def _virtual_instruction_ranges(pre_pass: Pass) -> dict[int, tuple[int, int]]:
+    positions: dict[int, list[int]] = {}
+    ordinal = 0
+    for _block_idx, _instr_idx, inst in pre_pass.all_instructions():
+        for kind, num in inst.regs:
+            if kind == "r" and num >= 32:
+                positions.setdefault(num, []).append(ordinal)
+        ordinal += 1
+    return {
+        virtual: (min(items), max(items))
+        for virtual, items in positions.items()
+        if items
+    }
+
+
+def _find_register_reuse_candidates(
+    facts: IrFacts,
+    saves: list[ColorgraphDecision],
+    *,
+    interferes: Callable[[ColorgraphDecision, ColorgraphDecision], bool],
+) -> list[CascadeCandidate]:
+    ranges = _virtual_instruction_ranges(facts.pre_pass)
+    rows: list[tuple[tuple[int, int, int], CascadeCandidate]] = []
+    for idx, a in enumerate(saves):
+        if a.ig_idx < 32 or a.ig_idx not in ranges:
+            continue
+        for b in saves[idx + 1:]:
+            if b.ig_idx < 32 or b.ig_idx not in ranges:
+                continue
+            if a.assigned_reg == b.assigned_reg or interferes(a, b):
+                continue
+            a_start, a_end = ranges[a.ig_idx]
+            b_start, b_end = ranges[b.ig_idx]
+            if a_end < b_start:
+                earlier, later = a, b
+            elif b_end < a_start:
+                earlier, later = b, a
+            else:
+                continue
+            phys_delta = abs(later.assigned_reg - earlier.assigned_reg)
+            candidate = CascadeCandidate(
+                from_virt=later.ig_idx,
+                to_virt=earlier.ig_idx,
+                priority_class="register-reuse",
+                depends_on=None,
+            )
+            rows.append((
+                (-phys_delta, later.ig_idx + earlier.ig_idx, later.ig_idx),
+                candidate,
+            ))
+    rows.sort(key=lambda item: item[0])
+    return [candidate for _key, candidate in rows]

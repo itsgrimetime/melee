@@ -11861,6 +11861,7 @@ def _select_order_source_match_percent(
     function: str,
     melee_root: Path,
     timeout: float | None = None,
+    status: Callable[[str], None] | None = None,
 ) -> tuple[float | None, str | None]:
     unit = _find_unit_for_function(function, melee_root)
     if unit is None:
@@ -11868,7 +11869,11 @@ def _select_order_source_match_percent(
     target_path = melee_root / "src" / f"{unit}.c"
     if not target_path.exists():
         return None, f"target source not found: {target_path}"
+    if status is not None:
+        status("waiting for source-scoring lock")
     with _acquire_source_score_repo_lock(melee_root):
+        if status is not None:
+            status("source-scoring lock acquired")
         candidate_text = path.read_text()
         original = target_path.read_text()
         obj_path = f"build/GALE01/src/{unit}.o"
@@ -11878,10 +11883,14 @@ def _select_order_source_match_percent(
         cleanup_error: str | None = None
         applied = False
         try:
+            if status is not None:
+                status(f"applying candidate to src/{unit}.c")
             if transfer_candidate(candidate_text, target_path, function) is None:
                 result = (None, f"function not found in candidate source: {path}")
                 return result
             applied = True
+            if status is not None:
+                status(f"building {obj_path}")
             build_result, retried = _run_ninja_with_no_diag_retry(
                 ["ninja", obj_path],
                 melee_root,
@@ -11897,21 +11906,31 @@ def _select_order_source_match_percent(
                     ),
                 ))
                 return result
+            if status is not None:
+                status("build complete; refreshing report.json")
             result = _refresh_match_pct_after_successful_build(
                 unit,
                 function,
                 melee_root,
                 timeout=timeout,
             )
+            if status is not None:
+                status("match-percent refresh complete")
             return result
         finally:
             if applied:
+                if status is not None:
+                    status("restoring source")
                 restore_error = _restore_source_snapshot(target_path, original)
             _unregister_active_source_restore(target_path)
             if restore_error:
                 print(f"[source-restore] {restore_error}", file=sys.stderr)
             elif applied:
                 try:
+                    if status is not None:
+                        status(
+                            f"cleanup rebuild {obj_path} build/GALE01/report.json"
+                        )
                     subprocess.run(
                         ["ninja", obj_path, "build/GALE01/report.json"],
                         cwd=melee_root,
@@ -11927,6 +11946,8 @@ def _select_order_source_match_percent(
                     cleanup_error = (
                         "failed to rebuild object/report after source restore"
                     )
+                if cleanup_error is None and status is not None:
+                    status("cleanup rebuild complete")
             if restore_error:
                 raise RuntimeError(restore_error)
             if cleanup_error:
@@ -12966,6 +12987,28 @@ def _parse_lifetime_layout_candidate(spec: str) -> tuple[str, str, Path]:
     return label.strip(), operator.strip(), path
 
 
+def _make_real_score_status(command: str, label: str) -> Callable[[str], None]:
+    def _status(message: str) -> None:
+        print(f"[{command}] {label}: {message}", file=sys.stderr, flush=True)
+
+    return _status
+
+
+def _pressure_signature_from_pcdump_or_exit(
+    signature_func: Callable[..., object],
+    pcdump_text: str,
+    function: str,
+    **kwargs,
+):
+    try:
+        return signature_func(pcdump_text, function, **kwargs)
+    except ValueError as exc:
+        if "not found in pcdump" not in str(exc):
+            raise
+        available = [fn.name for fn in parse_pcdump(pcdump_text)]
+        _abort_function_not_in_dump(function, available)
+
+
 @debug_app.command(name="coalesce-search")
 def debug_coalesce_search_cmd(
     function: Annotated[
@@ -13083,7 +13126,8 @@ def debug_coalesce_search_cmd(
         require_fresh=not allow_stale_pcdump,
     )
     baseline_text = baseline_path.read_text()
-    baseline = pressure_signature_from_pcdump(
+    baseline = _pressure_signature_from_pcdump_or_exit(
+        pressure_signature_from_pcdump,
         baseline_text,
         function,
         pairs=target_pairs,
@@ -13149,12 +13193,18 @@ def debug_coalesce_search_cmd(
             match_percent = None
             match_percent_error = None
             if score_match_percent and path.suffix == ".c":
+                status = (
+                    _make_real_score_status("coalesce-search", label)
+                    if not json_out
+                    else None
+                )
                 match_percent, match_percent_error = (
                     _select_order_source_match_percent(
                         path,
                         function=function,
                         melee_root=DEFAULT_MELEE_ROOT,
                         timeout=timeout,
+                        status=status,
                     )
                 )
             candidate_sig = pressure_signature_from_pcdump(
@@ -13433,7 +13483,8 @@ def debug_select_order_search_cmd(
         DEFAULT_MELEE_ROOT,
     )
     baseline_text = baseline_path.read_text(encoding="utf-8", errors="replace")
-    baseline = pressure_signature_from_pcdump(
+    baseline = _pressure_signature_from_pcdump_or_exit(
+        pressure_signature_from_pcdump,
         baseline_text,
         function,
         pairs=target_orders,
@@ -13505,12 +13556,18 @@ def debug_select_order_search_cmd(
             match_percent = None
             match_percent_error = None
             if score_match_percent and path.suffix == ".c":
+                status = (
+                    _make_real_score_status("select-order-search", label)
+                    if not json_out
+                    else None
+                )
                 match_percent, match_percent_error = (
                     _select_order_source_match_percent(
                         path,
                         function=function,
                         melee_root=DEFAULT_MELEE_ROOT,
                         timeout=timeout,
+                        status=status,
                     )
                 )
             candidate_sig = pressure_signature_from_pcdump(
@@ -13916,7 +13973,8 @@ def mutate_lifetime_layout_cmd(
         require_fresh=False,
     )
     baseline_text = baseline_path.read_text()
-    baseline = pressure_signature_from_pcdump(
+    baseline = _pressure_signature_from_pcdump_or_exit(
+        pressure_signature_from_pcdump,
         baseline_text,
         function,
         pairs=pair_list,

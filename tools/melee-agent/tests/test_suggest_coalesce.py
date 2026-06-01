@@ -232,6 +232,97 @@ def test_render_text_fall_through_when_no_suggestions() -> None:
     assert "register-cascade" in out
 
 
+def test_discover_surfaces_disjoint_non_copy_register_reuse_candidate() -> None:
+    """Discover mode should include callee-save reuse when lifetimes do not
+    overlap, even without a direct copy edge between the two virtuals.
+    """
+    from src.mwcc_debug.coalesce_ir_facts import IrFacts, analyze_cascade
+    from src.mwcc_debug.colorgraph_parser import (
+        ColorgraphDecision, ColorgraphSection,
+    )
+    from src.mwcc_debug.parser import Block, Instruction, Pass
+
+    pre_pass = Pass(
+        name="BEFORE REGISTER COLORING",
+        blocks=[
+            Block(
+                index=0,
+                succ=[],
+                pred=[],
+                labels=[],
+                instructions=[
+                    Instruction(
+                        opcode="lis",
+                        operands="r60,grIm_803E4068@ha",
+                        annotations=[],
+                        regs=[("r", 60)],
+                    ),
+                    Instruction(
+                        opcode="lwz",
+                        operands="r3,0(r60)",
+                        annotations=[],
+                        regs=[("r", 3), ("r", 60)],
+                    ),
+                    Instruction(
+                        opcode="lwz",
+                        operands="r61,200(r3)",
+                        annotations=[],
+                        regs=[("r", 61), ("r", 3)],
+                    ),
+                    Instruction(
+                        opcode="stw",
+                        operands="r61,0(r4)",
+                        annotations=[],
+                        regs=[("r", 61), ("r", 4)],
+                    ),
+                ],
+            ),
+        ],
+    )
+    cg = ColorgraphSection(
+        class_id=0,
+        result=1,
+        n_nodes=2,
+        decisions=[
+            ColorgraphDecision(
+                iter_idx=0,
+                ig_idx=60,
+                assigned_reg=30,
+                degree=0,
+                n_interferers=0,
+                flags=0,
+                interferers=[],
+            ),
+            ColorgraphDecision(
+                iter_idx=1,
+                ig_idx=61,
+                assigned_reg=28,
+                degree=0,
+                n_interferers=0,
+                flags=0,
+                interferers=[],
+            ),
+        ],
+    )
+    facts = IrFacts(
+        function_name="grIceMt_801FA0BC",
+        pre_pass=pre_pass,
+        by_virtual={},
+        bindings=[],
+        basis=None,
+        cg_section=cg,
+    )
+
+    candidates = analyze_cascade(facts)
+
+    assert any(
+        cand.from_virt == 61
+        and cand.to_virt == 60
+        and cand.priority_class == "register-reuse"
+        for cand in candidates
+    )
+
+
 # --- Preflight tests (Fix E) -----------------------------------------------
 
 
