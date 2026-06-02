@@ -810,6 +810,35 @@ def test_pointer_walk_loop_probes_control_tree_index_address_and_end() -> None:
     }
 
 
+def test_lifetime_layout_operator_filter_applies_before_max_limit() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(Fighter* fp, FigaTree** trees)
+        {
+            FigaTree** tree = trees;
+            int i;
+            for (i = 0; i < fp->dynamics_num; i++) {
+                ftCo_8009CB40(fp, i, true, tree[i]);
+            }
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(
+        source,
+        "fn_80000000",
+        max_probes=2,
+        operator_filter={"pointer-walk-loop"},
+    )
+
+    assert [probe.operator for probe in probes] == [
+        "pointer-walk-loop",
+        "pointer-walk-loop",
+    ]
+    assert [probe.label for probe in probes] == [
+        "pointer-walk-loop-index-temp-0",
+        "pointer-walk-loop-base-alias-0",
+    ]
+
+
 def test_pointer_base_call_loop_probes_index_direct_tree_argument() -> None:
     source = textwrap.dedent("""\
         void fn_80000000(Fighter* fp, FigaTree** tree)
@@ -1507,3 +1536,56 @@ def test_lifetime_layout_cli_exposes_frame_reservation_probe(
         "bytes": 64,
         "action": "insert",
     }
+
+
+def test_lifetime_layout_cli_focuses_b4_tree_loop_probe_families(
+    tmp_path: pathlib.Path,
+) -> None:
+    baseline = tmp_path / "baseline.txt"
+    source = tmp_path / "source.c"
+    baseline.write_text(BASELINE)
+    source.write_text(textwrap.dedent("""\
+        void fn_80000000(Fighter* fp, FigaTree** trees)
+        {
+            FigaTree** tree = trees;
+            int i;
+            for (i = 0; i < fp->dynamics_num; i++) {
+                ftCo_8009CB40(fp, i, true, tree[i]);
+            }
+        }
+    """))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "lifetime-layout",
+            "-f",
+            "fn_80000000",
+            "--pcdump",
+            str(baseline),
+            "--source-file",
+            str(source),
+            "--focus",
+            "b4-tree-loop",
+            "--max-probes",
+            "3",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["focus"] == "b4-tree-loop"
+    assert payload["operator_filter"] == [
+        "declaration-order",
+        "indexed-pointer-loop",
+        "loop-counter-hoist",
+        "loop-counter-type",
+        "pointer-base-call-loop",
+        "pointer-walk-loop",
+    ]
+    operators = {probe["operator"] for probe in payload["probes"]}
+    assert operators == {"pointer-walk-loop"}
+    assert len(payload["probes"]) == 3

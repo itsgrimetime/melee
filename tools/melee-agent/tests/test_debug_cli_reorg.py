@@ -2897,6 +2897,130 @@ def test_debug_dump_setup_rebuilds_stale_dll(
     assert "building mwcc_debug DLL" in out
 
 
+def test_debug_dump_setup_promotes_import_name_dll_when_build_omits_mwdbg(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    compiler_dir = tmp_path / "build" / "compilers" / "GC" / "1.2.5n"
+    compiler_dir.mkdir(parents=True)
+    (compiler_dir / "mwcceppc.exe").write_text("stock compiler")
+    tools_dir = tmp_path / "tools" / "mwcc_debug"
+    tools_dir.mkdir(parents=True)
+    source = tools_dir / "mwcc_debug.c"
+    source.write_text("// source")
+    for filename in ("build_wibo.sh", "build_macos.sh", "patch_mwcceppc_for_wibo.py"):
+        (tools_dir / filename).write_text("")
+    wibo = tools_dir / "bin" / "wibo"
+    wibo.parent.mkdir(parents=True)
+    wibo.write_text("")
+    wibo.chmod(0o755)
+
+    patch_calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **_kwargs) -> SimpleNamespace:
+        if args and str(args[0]).endswith("build_macos.sh"):
+            (tools_dir / "lmgr326b.dll").write_text("built dll")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        patch_calls.append(args)
+        dll_arg = Path(args[args.index("--dll") + 1])
+        (compiler_dir / "MWDBG326.dll").write_bytes(dll_arg.read_bytes())
+        (compiler_dir / "mwcceppc_debug.exe").write_text("patched compiler")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", tmp_path)
+    monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+    monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(app, ["debug", "dump", "setup"])
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert (tools_dir / "MWDBG326.dll").read_text() == "built dll"
+    assert patch_calls
+    assert str(tools_dir / "MWDBG326.dll") in patch_calls[0]
+    out = strip_ansi(result.stdout)
+    assert "using alternate DLL output" in out
+
+
+def test_debug_dump_local_probe_uses_same_tu_build_settings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "src" / "melee" / "ft" / "ftdynamics.c"
+    source.parent.mkdir(parents=True)
+    source.write_text("void ftCo_8009E7B4(void) {}\n")
+    probe = tmp_path / "build" / "mwcc_debug_cache" / "probes" / "e7b4" / "probe.c"
+    probe.parent.mkdir(parents=True)
+    probe.write_text("void ftCo_8009E7B4(void) {}\n")
+    output = tmp_path / "probe.pcdump.txt"
+    args_file = tmp_path / "wibo-args.txt"
+
+    (tmp_path / "build.ninja").write_text(textwrap.dedent("""\
+        build build/GALE01/src/melee/ft/ftdynamics.o: mwcc src/melee/ft/ftdynamics.c
+          cflags = -I include -DREAL_TU_FLAG=1
+          mw_version = GC/1.2.5n
+    """))
+    compiler_dir = tmp_path / "build" / "compilers" / "GC" / "1.2.5n"
+    compiler_dir.mkdir(parents=True)
+    (compiler_dir / "mwcceppc_debug.exe").write_text("debug compiler")
+
+    wibo = tmp_path / "fake-wibo.py"
+    wibo.write_text(textwrap.dedent("""\
+        #!/usr/bin/env python3
+        import os
+        import pathlib
+        import sys
+
+        pathlib.Path(os.environ["MELEE_TEST_WIBO_ARGS"]).write_text(
+            "\\n".join(sys.argv[1:]),
+            encoding="utf-8",
+        )
+        pcdump_path = pathlib.Path(os.environ["MWCC_DEBUG_PCDUMP_PATH"])
+        pcdump_path.write_text(
+            "Starting function ftCo_8009E7B4\\n"
+            "AFTER REGISTER COLORING\\n"
+            "ftCo_8009E7B4\\n"
+            "B0: Succ={} Pred={} Labels={}\\n"
+            "    blr\\n",
+            encoding="utf-8",
+        )
+        if "-o" in sys.argv:
+            pathlib.Path(sys.argv[sys.argv.index("-o") + 1]).write_text(
+                "object",
+                encoding="utf-8",
+            )
+    """))
+    wibo.chmod(0o755)
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", tmp_path)
+    monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+    monkeypatch.setenv("MELEE_TEST_WIBO_ARGS", str(args_file))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "dump",
+            "local",
+            str(probe),
+            "--unit-source",
+            str(source),
+            "--function",
+            "ftCo_8009E7B4",
+            "--output",
+            str(output),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert output.exists()
+    args_text = args_file.read_text()
+    assert "-DREAL_TU_FLAG=1" in args_text
+    assert "src/melee/ft" in args_text
+    assert "build/mwcc_debug_cache/probes/e7b4/probe.c" in args_text
+    assert "src/melee/ft/ftdynamics.c" not in args_text
+    assert "same-TU probe" in result.stderr
+
+
 def test_force_coalesce_preflight_rejects_known_unsafe_pair(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

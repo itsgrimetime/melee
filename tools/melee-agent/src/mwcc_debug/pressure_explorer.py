@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 import re
 from dataclasses import dataclass
 
@@ -288,6 +289,7 @@ def generate_lifetime_layout_probes(
     *,
     frame_reservation_bytes: int | None = None,
     max_probes: int = 12,
+    operator_filter: Iterable[str] | None = None,
 ) -> list[LifetimeLayoutProbe]:
     """Generate conservative source-shape probes for pressure exploration.
 
@@ -370,6 +372,9 @@ def generate_lifetime_layout_probes(
         probes,
         _probe_call_arg_temp(source_text, body, body_start, function),
     )
+    if operator_filter is not None:
+        allowed = frozenset(operator_filter)
+        probes = [probe for probe in probes if probe.operator in allowed]
     return probes[:max_probes]
 
 

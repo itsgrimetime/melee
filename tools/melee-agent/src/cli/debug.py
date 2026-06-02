@@ -10607,14 +10607,35 @@ def _build_local_dll() -> Optional[Path]:
     if not build_script.exists():
         return None
     try:
-        subprocess.run(
+        proc = subprocess.run(
             [str(build_script)],
             cwd=build_script.parent,
             check=True,
+            capture_output=True,
+            text=True,
         )
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as exc:
+        if exc.stdout:
+            print(exc.stdout, end="")
+        if exc.stderr:
+            typer.echo(exc.stderr, err=True)
         return None
-    return build_script.parent / "MWDBG326.dll"
+    if proc.stdout:
+        print(proc.stdout, end="")
+    if proc.stderr:
+        typer.echo(proc.stderr, err=True)
+    built = build_script.parent / "MWDBG326.dll"
+    if built.exists():
+        return built
+    import_name_dll = build_script.parent / "lmgr326b.dll"
+    if import_name_dll.exists():
+        shutil.copy2(import_name_dll, built)
+        print(
+            f"[ok] using alternate DLL output {import_name_dll.name} "
+            f"as {built.name}"
+        )
+        return built
+    return built
 
 
 @dataclasses.dataclass(frozen=True)
@@ -10885,6 +10906,19 @@ def _ninja_cflags_for_unit(src_rel: str) -> tuple[str, str]:
         err=True,
     )
     raise typer.Exit(2)
+
+
+def _cflags_with_same_tu_include_dir(cflags: str, unit_src_rel: str) -> str:
+    """Make copied same-TU probes resolve quote-includes like the real source.
+
+    The Melee build uses MWCC's `-cwd source`, so `"foo.h"` is resolved from
+    the compiled file's directory. A probe copied under build/... needs the
+    original source directory on the include path to keep local headers working.
+    """
+    unit_dir = Path(unit_src_rel).parent.as_posix()
+    if not unit_dir or unit_dir == ".":
+        return cflags
+    return f"-i {shlex.quote(unit_dir)} {cflags}"
 
 
 def _raise_pcdump_local_watchdog_exit(killed_by_watchdog: bool) -> None:
@@ -11535,6 +11569,19 @@ def pcdump_local(
                  "TU so --diff compares the right function.",
         ),
     ] = None,
+    unit_source: Annotated[
+        Optional[str],
+        typer.Option(
+            "--unit-source",
+            help=(
+                "Use this real same-TU source file's build.ninja flags and "
+                "object/cache identity while compiling C_FILE. This lets "
+                "`build/mwcc_debug_cache/probes/.../*.c` probe files compile "
+                "with the original TU settings without registering their own "
+                "ninja edge. Probe runs leave the baseline cache unchanged."
+            ),
+        ),
+    ] = None,
     no_cache_sync: Annotated[
         bool,
         typer.Option(
@@ -11571,6 +11618,12 @@ def pcdump_local(
     """
     melee_root = DEFAULT_MELEE_ROOT
     src_rel = _resolve_src_relative(c_file)
+    unit_src_rel = (
+        _resolve_src_relative(unit_source)
+        if unit_source is not None
+        else src_rel
+    )
+    same_tu_probe = unit_src_rel != src_rel
 
     # Resolve wibo
     wibo_path = wibo or _find_wibo()
@@ -11594,8 +11647,11 @@ def pcdump_local(
         )
         raise typer.Exit(2)
 
-    # Extract cflags from build.ninja
-    cflags, _mw_version = _ninja_cflags_for_unit(src_rel)
+    # Extract cflags from build.ninja. Probe files can borrow settings from
+    # their real same-TU source via --unit-source.
+    cflags, _mw_version = _ninja_cflags_for_unit(unit_src_rel)
+    if same_tu_probe:
+        cflags = _cflags_with_same_tu_include_dir(cflags, unit_src_rel)
 
     # Construct compile command. The patched DLL reads
     # MWCC_DEBUG_PCDUMP_PATH for its output filename (relative paths land
@@ -11936,7 +11992,7 @@ def pcdump_local(
             # checkdiff finds the function by name across all .o files
             # the build emits; the simplest contract is to copy our .o
             # into the build path that checkdiff expects, then call it.
-            unit_for_o = src_rel[:-2].removeprefix("src/")  # melee/mn/foo
+            unit_for_o = unit_src_rel[:-2].removeprefix("src/")  # melee/mn/foo
             build_o = melee_root / "build" / "GALE01" / "src" / f"{unit_for_o}.o"
             with _acquire_checkdiff_repo_lock(melee_root):
                 build_o_existed = build_o.exists()
@@ -11989,7 +12045,7 @@ def pcdump_local(
                         print(
                             _pcdump_local_missing_diff_target_hint(
                                 fn_to_diff,
-                                src_rel=src_rel,
+                                src_rel=unit_src_rel,
                                 explicit=explicit_diff_target,
                             ),
                             file=sys.stderr,
@@ -12076,18 +12132,23 @@ def pcdump_local(
         _finish_pcdump_local_run()
         return
 
-    skip_cache_sync = any_forced or no_cache_sync
+    skip_cache_sync = any_forced or no_cache_sync or same_tu_probe
 
     # Resolve the canonical cache location for this TU so we can ALWAYS
     # update it — even when --output specifies a different path.
     # Without this, downstream commands (analyze, var-to-virtual, guide)
     # auto-resolve via the cache and silently read stale data.
     # EXCEPTION: forced runs skip the cache entirely (see any_forced above).
-    unit = src_rel[:-2].removeprefix("src/")  # melee/mn/mnvibration
+    unit = unit_src_rel[:-2].removeprefix("src/")  # melee/mn/mnvibration
     pcdump_cache.ensure_cache_dir(melee_root)
     cache_target = pcdump_cache.cache_path(melee_root, unit)
     cache_skip_reason: Optional[str] = None
-    if function_missing_exit_code is not None:
+    if same_tu_probe:
+        cache_skip_reason = (
+            f"same-TU probe {src_rel} compiled with build settings from "
+            f"{unit_src_rel}"
+        )
+    elif function_missing_exit_code is not None:
         skip_cache_sync = True
         cache_skip_reason = (
             f"requested function {function!r} was not emitted in pcdump"
@@ -12299,6 +12360,8 @@ def score_source(
     cflags_unit = cflags_from if cflags_from else c_file
     cflags_unit_rel = _resolve_src_relative(cflags_unit)
     cflags, _mw_version = _ninja_cflags_for_unit(cflags_unit_rel)
+    if cflags_unit_rel != src_rel:
+        cflags = _cflags_with_same_tu_include_dir(cflags, cflags_unit_rel)
 
     # Compile, generating pcdump under a unique per-PID name so parallel
     # scorer runs don't race on a shared pcdump.txt. The patched DLL reads
@@ -16004,6 +16067,41 @@ _LIFETIME_LAYOUT_RANKING = (
     "lifetime-layout pressure objective, final match percent tiebreaker"
 )
 
+_LIFETIME_LAYOUT_FOCUSES: dict[str, tuple[str, ...]] = {
+    "b4-tree-loop": (
+        "declaration-order",
+        "indexed-pointer-loop",
+        "loop-counter-hoist",
+        "loop-counter-type",
+        "pointer-base-call-loop",
+        "pointer-walk-loop",
+    ),
+}
+
+
+def _resolve_lifetime_layout_operator_filter(
+    *,
+    focus: str | None,
+    operators: list[str] | None,
+) -> tuple[str, ...] | None:
+    selected: list[str] = []
+    if focus:
+        try:
+            selected.extend(_LIFETIME_LAYOUT_FOCUSES[focus])
+        except KeyError as exc:
+            choices = ", ".join(sorted(_LIFETIME_LAYOUT_FOCUSES))
+            raise typer.BadParameter(
+                f"unknown focus {focus!r}; choices: {choices}"
+            ) from exc
+    for operator in operators or []:
+        for item in operator.split(","):
+            item = item.strip()
+            if item:
+                selected.append(item)
+    if not selected:
+        return None
+    return tuple(dict.fromkeys(selected))
+
 
 def _score_lifetime_layout_objective(
     delta,
@@ -17166,6 +17264,27 @@ def mutate_lifetime_layout_cmd(
             ),
         ),
     ] = None,
+    focus: Annotated[
+        Optional[str],
+        typer.Option(
+            "--focus",
+            help=(
+                "Named probe-family bundle. `b4-tree-loop` focuses the "
+                "x594_b4 tree loop problem space: pointer/indexed tree loops "
+                "plus loop-counter declaration/type/scope probes."
+            ),
+        ),
+    ] = None,
+    operators: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--operator",
+            help=(
+                "Only generate/compile probes from this operator family. "
+                "Repeat or pass comma-separated names; combines with --focus."
+            ),
+        ),
+    ] = None,
     timeout: Annotated[
         int,
         typer.Option(
@@ -17201,6 +17320,10 @@ def mutate_lifetime_layout_cmd(
         function,
         pairs=pair_list,
     )
+    operator_filter = _resolve_lifetime_layout_operator_filter(
+        focus=focus,
+        operators=operators,
+    )
 
     source_text = None
     if source_file is not None:
@@ -17220,6 +17343,7 @@ def mutate_lifetime_layout_cmd(
             function,
             frame_reservation_bytes=frame_reservation_bytes,
             max_probes=max_probes,
+            operator_filter=operator_filter,
         )
         if source_text
         else []
@@ -17459,12 +17583,20 @@ def mutate_lifetime_layout_cmd(
                 for variant in ranked_variants
             ],
         }
+        if focus is not None:
+            payload["focus"] = focus
+        if operator_filter is not None:
+            payload["operator_filter"] = list(operator_filter)
         if generated_source_dir is not None:
             payload["generated_source_dir"] = str(generated_source_dir)
         print(json.dumps(payload, indent=2))
         return
 
     print(f"lifetime-layout pressure explorer - {function}")
+    if focus is not None:
+        print(f"focus: {focus}")
+    if operator_filter is not None:
+        print("operator filter: " + ", ".join(operator_filter))
     print(
         f"baseline: frame={baseline.frame_size if baseline.frame_size is not None else '?'} "
         f"saved={','.join(baseline.saved_regs) or '-'} "
