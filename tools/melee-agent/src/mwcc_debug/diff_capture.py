@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
+from .source_patch import transfer_candidate
+
 
 @dataclass(frozen=True)
 class DiffInput:
@@ -190,15 +192,23 @@ def _source_path_for_compile(
     except ValueError:
         rel = None
     if rel is not None and str(rel).startswith("src/"):
-        yield diff_input.path
+        original = diff_input.path.read_bytes()
+        try:
+            yield diff_input.path
+        finally:
+            diff_input.path.write_bytes(original)
         return
 
     unit = _find_unit_for_function(function, melee_root)
     target = melee_root / "src" / f"{unit}.c"
     original = target.read_bytes()
-    replacement = diff_input.path.read_bytes()
+    candidate_text = diff_input.path.read_text(encoding="utf-8", errors="replace")
     try:
-        target.write_bytes(replacement)
+        if transfer_candidate(candidate_text, target, function) is None:
+            raise ValueError(
+                f"{diff_input.label}: target function {function} not found in "
+                f"candidate source {diff_input.path} or target source {target}"
+            )
         yield target
     finally:
         target.write_bytes(original)

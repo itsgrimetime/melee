@@ -196,7 +196,12 @@ def test_compile_source_variant_preserves_shorter_existing_child_watchdog(
 def test_compile_source_variant_stages_outside_repo_source_and_restores(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     real_src = tmp_path / "src" / "melee" / "mn" / "sample.c"
     real_src.parent.mkdir(parents=True)
-    real_src.write_text("void fn_test(void) { int original = 1; }\n", encoding="utf-8")
+    original_text = (
+        "int retained_global;\n\n"
+        "void fn_test(void) { int original = 1; }\n\n"
+        "void retained_helper(void) {}\n"
+    )
+    real_src.write_text(original_text, encoding="utf-8")
     report = tmp_path / "build" / "GALE01" / "report.json"
     report.parent.mkdir(parents=True)
     report.write_text(
@@ -204,10 +209,18 @@ def test_compile_source_variant_stages_outside_repo_source_and_restores(monkeypa
         encoding="utf-8",
     )
     candidate = tmp_path / "candidate.c"
-    candidate.write_text("void fn_test(void) { int candidate = 2; }\n", encoding="utf-8")
+    candidate.write_text(
+        "void generated_probe_helper(void) {}\n\n"
+        "void fn_test(void) { int candidate = 2; }\n",
+        encoding="utf-8",
+    )
 
     def fake_run(cmd, *, cwd, timeout, env=None):
-        assert real_src.read_text(encoding="utf-8") == candidate.read_text(encoding="utf-8")
+        staged = real_src.read_text(encoding="utf-8")
+        assert "candidate = 2" in staged
+        assert "retained_global" in staged
+        assert "retained_helper" in staged
+        assert "generated_probe_helper" not in staged
         out_path = Path(cmd[cmd.index("--output") + 1])
         out_path.write_text("Starting function fn_test\n", encoding="utf-8")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -221,7 +234,39 @@ def test_compile_source_variant_stages_outside_repo_source_and_restores(monkeypa
     text = compile_source_variant(diff_input, function="fn_test", melee_root=tmp_path, timeout=30)
 
     assert text == "Starting function fn_test\n"
-    assert "original = 1" in real_src.read_text(encoding="utf-8")
+    assert real_src.read_text(encoding="utf-8") == original_text
+
+
+def test_compile_source_variant_missing_target_function_fails_before_staging(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    real_src = tmp_path / "src" / "melee" / "mn" / "sample.c"
+    real_src.parent.mkdir(parents=True)
+    original_text = "void fn_test(void) { int original = 1; }\n"
+    real_src.write_text(original_text, encoding="utf-8")
+    report = tmp_path / "build" / "GALE01" / "report.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(
+        '{"units":[{"name":"main/melee/mn/sample","functions":[{"name":"fn_test"}]}]}',
+        encoding="utf-8",
+    )
+    candidate = tmp_path / "candidate.c"
+    candidate.write_text("void different_function(void) {}\n", encoding="utf-8")
+
+    def fake_run(*args, **kwargs):
+        raise AssertionError("missing-function candidates must not invoke dump local")
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture._run_with_process_group_timeout",
+        fake_run,
+    )
+
+    diff_input = DiffInput(label="B", token=str(candidate), kind="source", path=candidate)
+    with pytest.raises(ValueError, match="target function fn_test not found"):
+        compile_source_variant(diff_input, function="fn_test", melee_root=tmp_path, timeout=30)
+
+    assert real_src.read_text(encoding="utf-8") == original_text
 
 
 def test_compile_source_variant_surfaces_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
