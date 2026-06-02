@@ -1049,7 +1049,7 @@ def test_debug_permute_verify_uses_current_source_as_audit_base(
     monkeypatch.setattr(
         debug_cli,
         "_refresh_match_pct_after_successful_build",
-        lambda unit, function, root, fast_report=False: (91.25, None),
+        lambda unit, function, root, fast_report=False, timeout=None: (91.25, None),
     )
     monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
 
@@ -1063,6 +1063,8 @@ def test_debug_permute_verify_uses_current_source_as_audit_base(
             "-f",
             "fn_80000000",
             "--json",
+            "--candidate-timeout",
+            "0",
         ],
     )
 
@@ -1077,6 +1079,79 @@ def test_debug_permute_verify_uses_current_source_as_audit_base(
     assert status["status"] == "ok"
     assert status["source_risks"] == []
     assert calls[0] == ["ninja", "build/GALE01/src/melee/mn/sample.o"]
+
+
+def test_debug_permute_verify_candidate_timeout_restores_and_reports(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    original = "void fn_80000000(void)\n{\n    real_call();\n}\n"
+    src_path.write_text(original)
+
+    candidate = tmp_path / "source.c"
+    candidate.write_text("void fn_80000000(void)\n{\n    candidate_call();\n}\n")
+
+    obj_cmd = ["ninja", "build/GALE01/src/melee/mn/sample.o"]
+    calls: list[tuple[list[str], float | None]] = []
+
+    def fake_ninja(cmd, melee_root_arg, *, timeout=None):
+        cmd = [str(part) for part in cmd]
+        calls.append((cmd, timeout))
+        return (
+            subprocess.CompletedProcess(
+                cmd,
+                124,
+                "",
+                "timed out after 0.01s running ninja sample.o",
+            ),
+            False,
+        )
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/mn/sample",
+    )
+    monkeypatch.setattr(debug_cli, "_get_match_pct", lambda function, root: 91.0)
+    monkeypatch.setattr(debug_cli, "_run_ninja_with_no_diag_retry", fake_ninja)
+    monkeypatch.setattr(
+        debug_cli,
+        "_refresh_match_pct_after_successful_build",
+        lambda *args, **kwargs: pytest.fail("timed-out builds must not refresh"),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "verify",
+            str(candidate),
+            "-f",
+            "fn_80000000",
+            "--candidate-timeout",
+            "0.01",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 4, result.stdout + result.stderr
+    data = json.loads(result.stdout)
+    assert data["status"] == "build-timeout"
+    assert data["returncode"] == 124
+    assert data["source_reverted"] is True
+    assert "timed out after 0.01s" in data["first_diag"]
+    assert src_path.read_text() == original
+    assert calls == [(obj_cmd, 0.01)]
+    status = json.loads(
+        (candidate.parent / "melee-agent-candidate-status.json").read_text()
+    )
+    assert status["status"] == "build-timeout"
+    assert "timed out after 0.01s" in status["first_diag"]
 
 
 def test_debug_permute_triage_retries_empty_build_failure_once(
@@ -1555,6 +1630,8 @@ def test_debug_permute_verify_json_build_failure_reverts_source(
             "-f",
             "fn_80000000",
             "--json",
+            "--candidate-timeout",
+            "0",
         ],
     )
 
@@ -1611,6 +1688,8 @@ def test_debug_permute_verify_json_build_failure_writes_status_sidecar(
             "-f",
             "fn_80000000",
             "--json",
+            "--candidate-timeout",
+            "0",
         ],
     )
 
@@ -1667,6 +1746,8 @@ def test_debug_permute_verify_json_preserves_multiline_mwcc_diagnostic(
             "-f",
             "fn_80000000",
             "--json",
+            "--candidate-timeout",
+            "0",
         ],
     )
 
@@ -1751,6 +1832,8 @@ def test_debug_permute_verify_json_retries_transient_report_json_decode(
             "fn_80000000",
             "--json",
             "--keep-failed",
+            "--candidate-timeout",
+            "0",
         ],
     )
 
@@ -1806,6 +1889,8 @@ def test_debug_permute_verify_json_reports_persistent_report_json_decode(
             "-f",
             "fn_80000000",
             "--json",
+            "--candidate-timeout",
+            "0",
         ],
     )
 

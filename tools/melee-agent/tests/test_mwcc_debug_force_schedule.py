@@ -23,7 +23,8 @@ def test_dump_local_help_exposes_force_schedule() -> None:
     assert result.exit_code == 0
     assert "--force-schedule" in result.stdout
     assert "--force-schedule-fn" in result.stdout
-    assert "adjacent same-base loads" in result.stdout
+    assert "pin adjacent same-base" in result.stdout
+    assert "loads after instruction" in result.stdout
     assert "DIAGNOSTIC-ONLY" in result.stdout
 
 
@@ -67,8 +68,8 @@ def test_dump_remote_escapes_force_schedule_for_cmd(monkeypatch: pytest.MonkeyPa
     assert result.exit_code == 0
     assert popen_calls
     remote_cmd = popen_calls[0][2]
-    assert "set MWCC_DEBUG_FORCE_SCHEDULE=lwz:0x74^>0x70" in remote_cmd
-    assert "set MWCC_DEBUG_FORCE_SCHEDULE_FUNCTION=fn_8003F294" in remote_cmd
+    assert 'set "MWCC_DEBUG_FORCE_SCHEDULE=lwz:0x74>0x70"' in remote_cmd
+    assert 'set "MWCC_DEBUG_FORCE_SCHEDULE_FUNCTION=fn_8003F294"' in remote_cmd
 
 
 def test_permute_verify_passes_force_schedule_to_dump_local(
@@ -114,6 +115,8 @@ def test_permute_verify_passes_force_schedule_to_dump_local(
             "-f",
             "fn_80000000",
             "--json",
+            "--candidate-timeout",
+            "0",
             "--force-schedule",
             "lwz:0x74>0x70",
             "--force-schedule-fn",

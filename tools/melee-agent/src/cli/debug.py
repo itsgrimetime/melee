@@ -4777,6 +4777,14 @@ def verify_perm(
                  "verified --function when --force-schedule is set.",
         ),
     ] = None,
+    candidate_timeout: Annotated[
+        float,
+        typer.Option(
+            "--candidate-timeout",
+            help="Build/report timeout in seconds for the transferred "
+                 "candidate (0 disables).",
+        ),
+    ] = 120.0,
 ) -> None:
     """Tier 7a: apply a permuter candidate to the real source and verify.
 
@@ -4841,6 +4849,7 @@ def verify_perm(
                 "--force-schedule-fn must not contain quotes, semicolons, "
                 "whitespace, or shell metacharacters"
             )
+    compile_timeout = None if candidate_timeout <= 0 else candidate_timeout
 
     base_text_for_audit = candidate_audit.read_candidate_base_text(candidate.parent)
     if base_text_for_audit is None:
@@ -5045,8 +5054,10 @@ def verify_perm(
         obj_path = f"build/GALE01/src/{unit}.o"
         if not json_out:
             if force_schedule:
+                build_label = "debug dump local --force-schedule"
                 print(f"\nForce-schedule rebuilding {obj_path}...")
             else:
+                build_label = f"ninja {obj_path}"
                 print(f"\nRebuilding {obj_path}...")
         if force_schedule:
             fd, tmp_dump = tempfile.mkstemp(
@@ -5075,21 +5086,26 @@ def verify_perm(
             ]
             if force_schedule_fn:
                 build_cmd.extend(["--force-schedule-fn", force_schedule_fn])
-            build_result = subprocess.run(
+            build_result = _run_command_with_optional_timeout(
                 build_cmd,
                 cwd=melee_root / "tools" / "melee-agent",
-                capture_output=True,
-                text=True,
+                timeout=compile_timeout,
             )
             build_label = "debug dump local --force-schedule"
         else:
             build_cmd = ["ninja", obj_path]
-            build_result = subprocess.run(
+            build_result, _retried_build = _run_ninja_with_no_diag_retry(
                 build_cmd,
-                cwd=melee_root, capture_output=True, text=True,
+                melee_root,
+                timeout=compile_timeout,
             )
             build_label = f"ninja {obj_path}"
         if build_result.returncode != 0:
+            build_status = (
+                "build-timeout"
+                if build_result.returncode == 124
+                else "build-failed"
+            )
             # Preserve the failing patched source if requested. We use
             # `tempfile.mkstemp` so the path is unique per call — agents
             # can re-run `debug permute verify --keep-failed` for multiple
@@ -5116,9 +5132,13 @@ def verify_perm(
                 build_result.stdout,
                 build_result.stderr,
                 fallback=(
-                    f"{build_label} failed with exit "
-                    f"{build_result.returncode} and emitted no compiler "
-                    f"diagnostic"
+                    _timeout_message(build_cmd, compile_timeout)
+                    if build_status == "build-timeout"
+                    else (
+                        f"{build_label} failed with exit "
+                        f"{build_result.returncode} and emitted no compiler "
+                        f"diagnostic"
+                    )
                 ),
             )
             source_reverted = False
@@ -5130,22 +5150,26 @@ def verify_perm(
             if json_out:
                 _write_permuter_candidate_status(
                     candidate,
-                    status="build-failed",
+                    status=build_status,
                     function=function,
                     first_diag=first_diag,
                     risks=audit_report.risks,
                     semantic_risk_bucket="repo-invalid",
                     source="verify",
-                    extra={"returncode": build_result.returncode},
+                    extra={
+                        "returncode": build_result.returncode,
+                        "timeout_seconds": compile_timeout,
+                    },
                 )
                 print(json.dumps({
                     "function": function,
                     "candidate": str(candidate),
                     "success": False,
-                    "status": "build-failed",
+                    "status": build_status,
                     "semantic_risk_bucket": "repo-invalid",
                     "baseline_pct": baseline_pct,
                     "returncode": build_result.returncode,
+                    "timeout_seconds": compile_timeout,
                     "first_diag": first_diag,
                     "error": err,
                     "failed_path": str(failed_path) if failed_path else None,
@@ -5155,13 +5179,16 @@ def verify_perm(
                 raise typer.Exit(4)
             _write_permuter_candidate_status(
                 candidate,
-                status="build-failed",
+                status=build_status,
                 function=function,
                 first_diag=first_diag,
                 risks=audit_report.risks,
                 semantic_risk_bucket="repo-invalid",
                 source="verify",
-                extra={"returncode": build_result.returncode},
+                extra={
+                    "returncode": build_result.returncode,
+                    "timeout_seconds": compile_timeout,
+                },
             )
             extra_lines: list[str] = []
             if first_diag:
@@ -5176,9 +5203,14 @@ def verify_perm(
                     "failed; source was reverted.)"
                 )
             extras_str = ("\n" + "\n".join(extra_lines)) if extra_lines else ""
+            failure_label = (
+                "timed out"
+                if build_status == "build-timeout"
+                else f"failed (exit {build_result.returncode})"
+            )
             typer.echo(
-                f"{build_label} failed (exit {build_result.returncode}). "
-                f"Relevant output:\n{err}{extras_str}\n\n"
+                f"{build_label} {failure_label}. Relevant output:\n"
+                f"{err}{extras_str}\n\n"
                 f"Source reverted. The candidate doesn't compile in the real "
                 f"tree — typical causes:\n"
                 f"  - Permuter's base.c had macros expanded that the real "
@@ -5197,6 +5229,7 @@ def verify_perm(
             function,
             melee_root,
             fast_report=bool(force_schedule),
+            timeout=compile_timeout,
         )
         if new_pct is None:
             if json_out:
@@ -5297,8 +5330,11 @@ def verify_perm(
         if not kept:
             target_path.write_text(orig)
             # Rebuild to restore prior state in report.json
-            subprocess.run(["ninja", obj_path, "build/GALE01/report.json"],
-                           cwd=melee_root, capture_output=True)
+            _run_ninja_with_no_diag_retry(
+                ["ninja", obj_path, "build/GALE01/report.json"],
+                melee_root,
+                timeout=compile_timeout,
+            )
     finally:
         # Always restore the source unless this invocation intentionally kept
         # an improving candidate. This also covers typer.Exit/SystemExit paths.
@@ -5375,6 +5411,41 @@ def _build_and_match_with_diagnostic(
     return pct, _diagnostic
 
 
+def _run_command_with_optional_timeout(
+    cmd: list[str],
+    *,
+    cwd: Path,
+    timeout: float | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run a command, killing its process tree when a timeout is supplied."""
+    try:
+        if timeout is not None:
+            return _run_with_process_group_timeout(
+                cmd,
+                cwd=cwd,
+                timeout=timeout,
+            )
+        return subprocess.run(
+            cmd,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode(errors="replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode(errors="replace")
+        return subprocess.CompletedProcess(
+            cmd,
+            124,
+            stdout,
+            (stderr + "\n" + _timeout_message(cmd, timeout)).strip(),
+        )
+
+
 def _run_ninja_with_no_diag_retry(
     cmd: list[str],
     melee_root: Path,
@@ -5383,37 +5454,11 @@ def _run_ninja_with_no_diag_retry(
 ) -> tuple[subprocess.CompletedProcess[str], bool]:
     """Run a ninja command, retrying once if it fails without diagnostics."""
     def _run_once() -> subprocess.CompletedProcess[str]:
-        try:
-            if timeout is not None:
-                return _run_with_process_group_timeout(
-                    cmd,
-                    cwd=melee_root,
-                    timeout=timeout,
-                )
-            return subprocess.run(
-                cmd,
-                cwd=melee_root,
-                capture_output=True,
-                text=True,
-            )
-        except subprocess.TimeoutExpired as exc:
-            stdout = exc.stdout or ""
-            stderr = exc.stderr or ""
-            if isinstance(stdout, bytes):
-                stdout = stdout.decode(errors="replace")
-            if isinstance(stderr, bytes):
-                stderr = stderr.decode(errors="replace")
-            timeout_msg = (
-                f"timed out after {timeout:g}s running {' '.join(cmd)}"
-                if timeout is not None else
-                f"timed out running {' '.join(cmd)}"
-            )
-            return subprocess.CompletedProcess(
-                cmd,
-                124,
-                stdout,
-                (stderr + "\n" + timeout_msg).strip(),
-            )
+        return _run_command_with_optional_timeout(
+            cmd,
+            cwd=melee_root,
+            timeout=timeout,
+        )
 
     result = _run_once()
     if result.returncode == 0:
