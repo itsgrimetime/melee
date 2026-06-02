@@ -270,6 +270,47 @@ def run_cmd(
     typer.echo(json.dumps(summary, indent=2))
 
 
+@search_app.command("directed")
+def directed_cmd(
+    function: Annotated[str, typer.Option("--function", "-f", help="Function name to match.")],
+    unit: Annotated[str, typer.Option("--unit", "-u", help="Translation unit path (e.g. melee/gr/gricemt).")],
+    store: Annotated[
+        Optional[Path],
+        typer.Option("--store", help="Artifact store directory. Defaults to build/directed-store."),
+    ] = None,
+    dry: Annotated[
+        bool,
+        typer.Option("--dry/--no-dry", help="Use in-memory fakes; no mwcc runs. For testing."),
+    ] = False,
+    max_iters: Annotated[
+        int,
+        typer.Option("--max-iters", help="Maximum scheduler iterations."),
+    ] = 8,
+) -> None:
+    """Run the directed (pcdump-guided) search layer for FUNCTION in UNIT.
+
+    In dry mode (--dry), uses in-memory fakes and no real mwcc compilation.
+    Prints a JSON result with 'gate', 'directed_telemetry', and 'accounting'.
+    """
+    import json as _json
+
+    from src.search.directed.run import run_directed
+
+    melee_root = _compute_melee_root()
+    if store is None:
+        store = melee_root / "build" / "directed-store"
+
+    res = run_directed(
+        function=function,
+        unit=unit,
+        melee_root=melee_root,
+        store_dir=store,
+        dry=dry,
+        max_iters=max_iters,
+    )
+    typer.echo(_json.dumps(res, indent=2))
+
+
 @search_app.command("status")
 def status_cmd() -> None:
     """Show status of the search substrate (store, config)."""
