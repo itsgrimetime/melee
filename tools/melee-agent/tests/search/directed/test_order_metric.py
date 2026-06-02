@@ -22,11 +22,13 @@ import pytest
 from src.search.directed.order_metric import (
     NINEACC_ORDER_TARGET,
     NINEACC_PHYS_TARGET,
+    CandidateScore,
     Score,
     colorgraph_ranks,
     order_distance,
     phys_match,
     score_9acc,
+    score_candidate_reanchored,
 )
 from src.mwcc_debug.colorgraph_parser import (
     ColorgraphDecision,
@@ -262,6 +264,159 @@ class TestScoreDataclass:
         assert {33, 40} <= s.missing_target_nodes
         assert s.rank33 is None
         assert s.rank40 is None
+
+
+# ---------------------------------------------------------------------------
+# score_candidate_reanchored — unit tests
+# ---------------------------------------------------------------------------
+
+def _make_role_descriptor(ig_idx, first_def_sig, is_param, var_name, assigned_reg,
+                           use_site_multiset=None, spilled=False):
+    """Helper to build minimal RoleDescriptor for reanchor tests."""
+    from src.mwcc_debug.role_descriptor import RoleDescriptor
+    return RoleDescriptor(
+        ig_idx=ig_idx,
+        first_def_sig=first_def_sig,
+        use_site_multiset=use_site_multiset or (),
+        is_param=is_param,
+        var_name=var_name,
+        var_confidence="high" if var_name else None,
+        assigned_reg=assigned_reg,
+        live_range=(0, 100),
+        use_count=2,
+        spilled=spilled,
+    )
+
+
+def _ref_descs_9acc_baseline():
+    """Minimal ref_descs matching the 9ACC baseline identity (ig33=y param, ig40=gp local)."""
+    return {
+        33: _make_role_descriptor(33, "mr r#,r#", True, "y", assigned_reg=29),
+        40: _make_role_descriptor(40, "li r#,0", False, "gp", assigned_reg=27),
+    }
+
+
+class TestScoreCandidateReanchored:
+    """Tests for score_candidate_reanchored using synthetic pcdumps + descriptors."""
+
+    def _pcdump_with(self, decisions):
+        """Build synthetic pcdump: decisions = [(iter_idx, ig_idx, assigned_reg)]."""
+        return _make_pcdump("grIceMt_801F9ACC", decisions)
+
+    def test_baseline_identity_stable_order_distance_4(self):
+        # Candidate has same ig numbering as ref: ig33@rank3, ig40@rank5 (baseline swap)
+        pcdump = self._pcdump_with([
+            (0, 32, 3),
+            (1, 95, 4),
+            (2, 33, 29),  # ig33 at rank=3, assigned r29
+            (3, 34, 6),
+            (4, 40, 27),  # ig40 at rank=5, assigned r27
+        ])
+        ref = _ref_descs_9acc_baseline()
+        # Add identical candidate descs for 33 and 40 so reanchor works
+        from src.mwcc_debug.role_descriptor import RoleDescriptor
+        # We need to provide full cand_descs via patching build_descriptors
+        # Use the same ref_descs as cand_descs (identity case)
+        # Call directly with the helper's pcdump which has the right structure
+        # but build_descriptors would fail on a synthetic pcdump
+        # Instead, patch build_descriptors to return the ref_descs
+        from unittest.mock import patch
+        with patch("src.search.directed.order_metric.Compile") as mock_compile_cls:
+            mock_compile = mock_compile_cls.from_text.return_value
+            with patch("src.search.directed.order_metric.build_descriptors") as mock_bd:
+                mock_bd.return_value = ref  # candidate has same descs → stable identity
+                result = score_candidate_reanchored(pcdump, ref)
+
+        assert result.valid is True
+        assert result.invalid_reason is None
+        assert result.rank33 == 3
+        assert result.rank40 == 5
+        assert result.order_distance == 4
+        assert result.phys_matched == 0  # both are swapped
+
+    def test_target_identity_stable_order_distance_0(self):
+        # Candidate has the TARGET coloring: ig40@rank3 (r29), ig33@rank5 (r27)
+        pcdump = self._pcdump_with([
+            (0, 32, 3),
+            (1, 95, 4),
+            (2, 40, 29),  # ig40 at rank=3, assigned r29 ✓
+            (3, 34, 6),
+            (4, 33, 27),  # ig33 at rank=5, assigned r27 ✓
+        ])
+        ref = _ref_descs_9acc_baseline()
+        from unittest.mock import patch
+        with patch("src.search.directed.order_metric.Compile") as mock_compile_cls:
+            mock_compile = mock_compile_cls.from_text.return_value
+            with patch("src.search.directed.order_metric.build_descriptors") as mock_bd:
+                mock_bd.return_value = ref
+                result = score_candidate_reanchored(pcdump, ref)
+
+        assert result.valid is True
+        assert result.rank33 == 5
+        assert result.rank40 == 3
+        assert result.order_distance == 0
+        assert result.phys_matched == 2
+
+    def test_identity_lost_when_role_not_reanchored(self):
+        # Cand descs omit ig33 entirely → reanchor cannot match it → invalid
+        pcdump = self._pcdump_with([
+            (0, 40, 27),  # ig40 present, ig33 absent
+        ])
+        ref = _ref_descs_9acc_baseline()
+        # Candidate descs: only ig40, ig33 gone
+        cand_descs_only40 = {
+            40: _make_role_descriptor(40, "li r#,0", False, "gp", assigned_reg=27),
+        }
+        from unittest.mock import patch
+        with patch("src.search.directed.order_metric.Compile") as mock_compile_cls:
+            mock_compile = mock_compile_cls.from_text.return_value
+            with patch("src.search.directed.order_metric.build_descriptors") as mock_bd:
+                mock_bd.return_value = cand_descs_only40
+                result = score_candidate_reanchored(pcdump, ref)
+
+        assert result.valid is False
+        assert result.invalid_reason is not None
+        assert "identity_lost" in result.invalid_reason
+        assert "33" in result.invalid_reason
+
+    def test_compile_parse_failure_returns_invalid(self):
+        # If Compile.from_text raises, result is invalid
+        from unittest.mock import patch
+        with patch("src.search.directed.order_metric.Compile") as mock_compile_cls:
+            mock_compile_cls.from_text.side_effect = ValueError("not found")
+            result = score_candidate_reanchored("bad pcdump text", _ref_descs_9acc_baseline())
+
+        assert result.valid is False
+        assert "compile_parse_failed" in (result.invalid_reason or "")
+
+    def test_ig_renumbered_to_new_stable_slot(self):
+        # Simulate mutation that renumbers ig33 -> ig50 and ig40 -> ig51.
+        # ref_descs has ig33/ig40; cand_descs has ig50/ig51 with SAME descriptors.
+        ref = _ref_descs_9acc_baseline()
+        cand_descs_renumbered = {
+            50: _make_role_descriptor(50, "mr r#,r#", True, "y", assigned_reg=27),  # was ig33
+            51: _make_role_descriptor(51, "li r#,0", False, "gp", assigned_reg=29),  # was ig40
+        }
+        # Pcdump uses NEW ig numbers: ig50@rank5 (r27), ig51@rank3 (r29) → target
+        pcdump = self._pcdump_with([
+            (0, 32, 3),
+            (1, 95, 4),
+            (2, 51, 29),  # ig51 (=orig ig40=gp) at rank=3, r29 ✓
+            (3, 34, 6),
+            (4, 50, 27),  # ig50 (=orig ig33=y) at rank=5, r27 ✓
+        ])
+        from unittest.mock import patch
+        with patch("src.search.directed.order_metric.Compile") as mock_compile_cls:
+            mock_compile = mock_compile_cls.from_text.return_value
+            with patch("src.search.directed.order_metric.build_descriptors") as mock_bd:
+                mock_bd.return_value = cand_descs_renumbered
+                result = score_candidate_reanchored(pcdump, ref)
+
+        # Reanchor should find ig50→orig33 and ig51→orig40 via descriptor match.
+        # If it does, rank33=5 (for ig50), rank40=3 (for ig51), od=0, phys=2
+        assert result.valid is True, f"Expected valid but got: {result.invalid_reason}"
+        assert result.order_distance == 0
+        assert result.phys_matched == 2
 
 
 # ---------------------------------------------------------------------------
