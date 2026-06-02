@@ -208,6 +208,15 @@ class DirectedScorePipeline:
             if call.parent_state.current_best is not None
             else None
         )
+        # Prefer mutator attribution from art.provenance.mutation (set by
+        # DirectedSource with the exact key returned from propose); fall back
+        # to parent_state.last_lever.  Strip the "@N" dedup suffix from pair-
+        # enumeration keys (e.g. "reorder_local_decls@2" → "reorder_local_decls").
+        prov_mutation = getattr(getattr(art, "provenance", None), "mutation", None)
+        if prov_mutation is not None and "@" in str(prov_mutation):
+            prov_mutation = str(prov_mutation).split("@")[0]
+        applied_mutator = prov_mutation or parent_state.last_lever
+
         meta = DirectedMeta(
             candidate_id=art.candidate_id,
             source_hash=art.source_hash,
@@ -224,7 +233,7 @@ class DirectedScorePipeline:
             reanchor_matched=len(reanchor.matched),
             reanchor_total=len(roles),
             diagnosis_chars=len(case),
-            applied_mutator=parent_state.last_lever,
+            applied_mutator=applied_mutator,
             directed_scalar=disp,
         )
 

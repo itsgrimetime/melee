@@ -564,6 +564,26 @@ def _run_live(
     # populate the byte_history needed to trigger should_escalate normally.
     from src.search.adapters import RealByteScorer
 
+    def _safe_classify(prev: Any, curr: Any, *, edit_was_order_change: bool,
+                       history: list, checkdiff_clean: bool):
+        """classify_progress wrapper that guards against DirectedSearchState 'prev'.
+
+        The scorer passes ``parent_state.prev_state`` as ``prev``.
+        ``parent_state.prev_state`` is a ``DirectedSearchState`` (or None for
+        the root) which does NOT have the ``.identity`` attribute that
+        ``classify_progress`` expects.  Guard by passing ``None`` whenever
+        ``prev`` lacks that attribute.
+        """
+        from src.mwcc_debug.progress_classifier import classify_progress
+        # Only pass prev if it has the .identity attribute (an IterationState).
+        safe_prev = prev if hasattr(prev, "identity") else None
+        return classify_progress(
+            safe_prev, curr,
+            edit_was_order_change=edit_was_order_change,
+            history=history,
+            checkdiff_clean=checkdiff_clean,
+        )
+
     class _AlwaysEscalate(DirectedScorePipeline):
         """DirectedScorePipeline that always escalates to pcdump/directed."""
         def should_escalate(self, art: Any, ctx: Any) -> bool:
@@ -572,6 +592,7 @@ def _run_live(
     score_pipeline = _AlwaysEscalate(
         plateau_n=3,
         byte_scorer=RealByteScorer(),
+        classify=_safe_classify,
     )
 
     # Source text for seeding
