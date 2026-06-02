@@ -1226,9 +1226,9 @@ void un_803147C4(void)
 
     memzero(data + 0x2AC, 0x18);
     un_8031457C();
-    gobj = (HSD_GObj**) (data + 0x2C4);
-    memzero(gobj, 0x14);
+    memzero(data + 0x2C4, 0x14);
 
+    gobj = (HSD_GObj**) (data + 0x2C4);
     archive = un_804D6ED8;
 
     if (archive->data == NULL) {
