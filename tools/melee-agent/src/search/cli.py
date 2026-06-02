@@ -13,6 +13,7 @@ import shlex
 import subprocess
 import sys
 from dataclasses import asdict, is_dataclass
+from itertools import combinations
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -333,6 +334,70 @@ def _source_deltas(base_text: str, candidate_text: str) -> list[dict]:
     return deltas
 
 
+def _source_hunks(
+    base_text: str,
+    candidate_text: str,
+    *,
+    candidate_id: str,
+) -> list[dict]:
+    base_lines = base_text.splitlines()
+    candidate_lines = candidate_text.splitlines()
+    matcher = difflib.SequenceMatcher(None, base_lines, candidate_lines)
+    hunks: list[dict] = []
+    for idx, (tag, i1, i2, j1, j2) in enumerate(matcher.get_opcodes(), 1):
+        if tag == "equal":
+            continue
+        removed = base_lines[i1:i2]
+        added = candidate_lines[j1:j2]
+        hunks.append({
+            "candidate_id": candidate_id,
+            "hunk": idx,
+            "tag": tag,
+            "base_start": i1,
+            "base_end": i2,
+            "candidate_start": j1,
+            "candidate_end": j2,
+            "kind": _classify_source_delta(removed, added),
+            "removed": removed,
+            "added": added,
+        })
+    return hunks
+
+
+def _hunks_overlap(left: dict, right: dict) -> bool:
+    left_start = int(left["base_start"])
+    left_end = int(left["base_end"])
+    right_start = int(right["base_start"])
+    right_end = int(right["base_end"])
+    if left_start == left_end and right_start == right_end:
+        return left_start == right_start
+    return max(left_start, right_start) < min(left_end, right_end)
+
+
+def _merge_source_hunks(base_text: str, hunks: list[dict]) -> str | None:
+    base_lines = base_text.splitlines()
+    ordered = sorted(
+        hunks,
+        key=lambda hunk: (int(hunk["base_start"]), int(hunk["base_end"])),
+    )
+    for idx, current in enumerate(ordered):
+        for other in ordered[idx + 1:]:
+            if _hunks_overlap(current, other):
+                return None
+    merged: list[str] = []
+    cursor = 0
+    for hunk in ordered:
+        start = int(hunk["base_start"])
+        end = int(hunk["base_end"])
+        if start < cursor:
+            return None
+        merged.extend(base_lines[cursor:start])
+        merged.extend(hunk["added"])
+        cursor = end
+    merged.extend(base_lines[cursor:])
+    return "\n".join(merged) + ("\n" if base_text.endswith("\n") else "")
+
+
 def _generated_artifacts(candidate_text: str) -> list[str]:
     artifacts: list[str] = []
     if re.search(r"(?m)^\s*#\s*line\b", candidate_text):
@@ -469,6 +534,147 @@ def _triage_candidate(
         "score_result": _run_triage_score_command(
             score_command,
             candidate_path=candidate_path,
+        ),
+    }
+
+
+def _combined_assignment_progress(metas: list[dict | None]) -> dict:
+    buckets: dict[str, dict[tuple[int, int | None], str]] = {
+        "satisfied": {},
+        "blocked": {},
+        "abstained": {},
+    }
+    for meta in metas:
+        progress = _assignment_progress(meta)
+        proof = (meta or {}).get("proof_assignments") or {}
+        for status in ("satisfied", "blocked", "abstained"):
+            entries = proof.get(status, []) or []
+            for index, entry in enumerate(entries):
+                if not isinstance(entry, dict):
+                    continue
+                try:
+                    original = int(entry["original_ig"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                desired_raw = entry.get("desired_phys")
+                try:
+                    desired = int(desired_raw) if desired_raw is not None else None
+                except (TypeError, ValueError):
+                    desired = None
+                rendered = (
+                    progress[status][index]
+                    if index < len(progress[status])
+                    else _format_assignment(entry, status=status)
+                )
+                buckets[status][(original, desired)] = rendered
+    return {
+        status: [
+            rendered
+            for _key, rendered in sorted(values.items(), key=lambda item: item[0])
+        ]
+        for status, values in buckets.items()
+    }
+
+
+def _combined_clusters(metas: list[dict | None]) -> list[str]:
+    clusters: list[str] = []
+    for meta in metas:
+        for cluster in _assignment_clusters(meta):
+            if cluster not in clusters:
+                clusters.append(cluster)
+    return clusters
+
+
+def _combination_attribution(clusters: list[str], parents: list[str]) -> str:
+    if len(clusters) > 1:
+        return "multi-cluster interaction"
+    if len(parents) > 1:
+        return "same-cluster crossover"
+    return "single-candidate"
+
+
+def _combined_candidate_id(parent_ids: list[str], text: str) -> str:
+    parent_part = "-".join(parent_ids)
+    return f"combine-{parent_part}-{_source_hash(text)[:10]}"
+
+
+def _load_combine_candidate(
+    *,
+    spec: str,
+    base_text: str,
+    telemetry: list[dict],
+) -> dict:
+    candidate_id, path = _parse_triage_candidate(spec)
+    text = path.read_text()
+    source_hash = _source_hash(text)
+    meta = _triage_telemetry_for(
+        telemetry,
+        candidate_id=candidate_id,
+        source_hash=source_hash,
+    )
+    return {
+        "candidate_id": candidate_id,
+        "path": path,
+        "source_hash": source_hash,
+        "meta": meta,
+        "hunks": _source_hunks(
+            base_text,
+            text,
+            candidate_id=candidate_id,
+        ),
+    }
+
+
+def _combine_candidate_pair(
+    *,
+    base_text: str,
+    out_dir: Path,
+    left: dict,
+    right: dict,
+    score_command: str | None,
+) -> dict:
+    parents = [left["candidate_id"], right["candidate_id"]]
+    hunks = [*left["hunks"], *right["hunks"]]
+    clusters = _combined_clusters([left["meta"], right["meta"]])
+    merged_text = _merge_source_hunks(base_text, hunks)
+    if merged_text is None:
+        return {
+            "parents": parents,
+            "status": "skipped",
+            "reason": "overlapping-source-hunks",
+            "clusters": clusters,
+            "attribution": _combination_attribution(clusters, parents),
+        }
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    candidate_id = _combined_candidate_id(parents, merged_text)
+    out_path = out_dir / f"{candidate_id}.c"
+    out_path.write_text(merged_text)
+    return {
+        "candidate_id": candidate_id,
+        "parents": parents,
+        "status": "ok",
+        "path": str(out_path),
+        "source_hash": _source_hash(merged_text),
+        "applied_hunks": [
+            {
+                "parent": hunk["candidate_id"],
+                "kind": hunk["kind"],
+                "base_lines": [
+                    int(hunk["base_start"]) + 1,
+                    int(hunk["base_end"]),
+                ],
+            }
+            for hunk in hunks
+        ],
+        "assignment_union": _combined_assignment_progress(
+            [left["meta"], right["meta"]]
+        ),
+        "clusters": clusters,
+        "attribution": _combination_attribution(clusters, parents),
+        "score_result": _run_triage_score_command(
+            score_command,
+            candidate_path=out_path,
         ),
     }
 
@@ -618,6 +824,130 @@ def triage_cmd(
             typer.echo(
                 "  score command: "
                 f"returncode={score_result['returncode']}"
+            )
+
+
+@search_app.command("combine")
+def combine_cmd(
+    base: Annotated[
+        Path,
+        typer.Option(
+            "--base",
+            help="Retained/base source file used as the recombination anchor.",
+        ),
+    ],
+    candidates: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--candidate",
+            help=(
+                "Candidate source file, or CANDIDATE_ID=path. May be passed "
+                "multiple times."
+            ),
+        ),
+    ] = None,
+    telemetry: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--telemetry",
+            help=(
+                "JSON from debug search run/directed containing "
+                "directed_telemetry."
+            ),
+        ),
+    ] = None,
+    out_dir: Annotated[
+        Path,
+        typer.Option(
+            "--out-dir",
+            help="Directory where combined candidate sources are written.",
+        ),
+    ] = Path("build/search-combined"),
+    score_command: Annotated[
+        Optional[str],
+        typer.Option(
+            "--score-command",
+            help=(
+                "Optional command template to score each combined candidate. "
+                "Use {candidate} as the generated source path placeholder."
+            ),
+        ),
+    ] = None,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Recombine complementary directed-search candidate source hunks."""
+    if not base.is_file():
+        raise typer.BadParameter(f"base source not found: {base}")
+    candidate_specs = candidates or []
+    if len(candidate_specs) < 2:
+        raise typer.BadParameter("pass at least two --candidate values")
+
+    base_text = base.read_text()
+    telemetry_entries = _load_triage_telemetry(telemetry)
+    loaded = [
+        _load_combine_candidate(
+            spec=spec,
+            base_text=base_text,
+            telemetry=telemetry_entries,
+        )
+        for spec in candidate_specs
+    ]
+    combos = [
+        _combine_candidate_pair(
+            base_text=base_text,
+            out_dir=out_dir,
+            left=left,
+            right=right,
+            score_command=score_command,
+        )
+        for left, right in combinations(loaded, 2)
+    ]
+    payload = {
+        "base": str(base),
+        "base_source_hash": _source_hash(base_text),
+        "telemetry_count": len(telemetry_entries),
+        "candidates": [
+            {
+                "candidate_id": item["candidate_id"],
+                "path": str(item["path"]),
+                "source_hash": item["source_hash"],
+                "hunk_count": len(item["hunks"]),
+                "clusters": _assignment_clusters(item["meta"]),
+                "assignment_progress": _assignment_progress(item["meta"]),
+            }
+            for item in loaded
+        ],
+        "combinations": combos,
+    }
+    if json_out:
+        typer.echo(json.dumps(payload, indent=2))
+        return
+
+    typer.echo(f"Base: {base}")
+    typer.echo(f"Telemetry entries: {len(telemetry_entries)}")
+    for combo in combos:
+        typer.echo("")
+        typer.echo(f"== {' + '.join(combo['parents'])} ==")
+        typer.echo(f"  status: {combo['status']}")
+        typer.echo(f"  attribution: {combo['attribution']}")
+        if combo.get("clusters"):
+            typer.echo("  clusters: " + "; ".join(combo["clusters"]))
+        if combo["status"] != "ok":
+            typer.echo(f"  reason: {combo.get('reason')}")
+            continue
+        typer.echo(f"  output: {combo['path']}")
+        progress = combo["assignment_union"]
+        if progress["satisfied"]:
+            typer.echo(
+                "  satisfied union: " + ", ".join(progress["satisfied"])
+            )
+        if combo.get("score_result") is not None:
+            typer.echo(
+                "  score command: "
+                f"returncode={combo['score_result']['returncode']}"
             )
 
 

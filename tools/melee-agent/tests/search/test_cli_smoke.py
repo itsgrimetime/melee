@@ -191,6 +191,120 @@ def test_search_triage_clusters_source_deltas_and_scores_candidates(
     )
 
 
+def test_search_combine_recombines_complementary_candidate_deltas(
+    tmp_path: Path,
+) -> None:
+    base = tmp_path / "base.c"
+    base.write_text(
+        "void ftCo_8009E7B4(void) {\n"
+        "    int flag = fp->x594_b4;\n"
+        "    sink(flag);\n"
+        "    for (int i = 0; i < count; i++) {\n"
+        "        sink(tree);\n"
+        "    }\n"
+        "}\n"
+    )
+    early = tmp_path / "early.c"
+    early.write_text(
+        "void ftCo_8009E7B4(void) {\n"
+        "    int reload = fp->x594_b4;\n"
+        "    int flag = reload != 0;\n"
+        "    sink(flag);\n"
+        "    for (int i = 0; i < count; i++) {\n"
+        "        sink(tree);\n"
+        "    }\n"
+        "}\n"
+    )
+    late = tmp_path / "late.c"
+    late.write_text(
+        "void ftCo_8009E7B4(void) {\n"
+        "    int flag = fp->x594_b4;\n"
+        "    sink(flag);\n"
+        "    for (int idx = count; idx != 0; --idx) {\n"
+        "        sink(tree->next);\n"
+        "    }\n"
+        "}\n"
+    )
+    telemetry = tmp_path / "telemetry.json"
+    telemetry.write_text(json.dumps({
+        "directed_telemetry": [
+            {
+                "candidate_id": "early",
+                "byte_score": 2036,
+                "proof_assignments": {
+                    "satisfied": [
+                        {"original_ig": 42, "desired_phys": 3, "assigned_phys": 3},
+                        {"original_ig": 44, "desired_phys": 4, "assigned_phys": 4},
+                    ],
+                    "blocked": [],
+                    "abstained": [],
+                },
+            },
+            {
+                "candidate_id": "late",
+                "byte_score": 2036,
+                "proof_assignments": {
+                    "satisfied": [
+                        {"original_ig": 35, "desired_phys": 30, "assigned_phys": 30},
+                    ],
+                    "blocked": [],
+                    "abstained": [],
+                },
+            },
+        ]
+    }))
+    score_script = tmp_path / "score_candidate.py"
+    score_script.write_text(
+        "import json, pathlib, sys\n"
+        "text = pathlib.Path(sys.argv[1]).read_text()\n"
+        "print(json.dumps({\n"
+        "  'byte_score': 2028,\n"
+        "  'opcode_preservation': 'unknown',\n"
+        "  'has_early': 'reload != 0' in text,\n"
+        "  'has_late': 'tree->next' in text,\n"
+        "}))\n"
+    )
+
+    result = CliRunner().invoke(
+        search_app,
+        [
+            "combine",
+            "--base", str(base),
+            "--candidate", f"early={early}",
+            "--candidate", f"late={late}",
+            "--telemetry", str(telemetry),
+            "--out-dir", str(tmp_path / "combined"),
+            "--score-command", f"{sys.executable} {score_script} {{candidate}}",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["combinations"][0]["parents"] == ["early", "late"]
+    assert payload["combinations"][0]["attribution"] == "multi-cluster interaction"
+    assert payload["combinations"][0]["assignment_union"]["satisfied"] == [
+        "ig35->r30",
+        "ig42->r3",
+        "ig44->r4",
+    ]
+    assert "early flag/reload temps" in payload["combinations"][0]["clusters"]
+    assert (
+        "late x594_b4/x594_b3 loop IV/tree-pointer swaps"
+        in payload["combinations"][0]["clusters"]
+    )
+    combined_path = Path(payload["combinations"][0]["path"])
+    combined_text = combined_path.read_text()
+    assert "int flag = reload != 0;" in combined_text
+    assert "sink(tree->next);" in combined_text
+    assert payload["combinations"][0]["score_result"]["parsed_json"] == {
+        "byte_score": 2028,
+        "opcode_preservation": "unknown",
+        "has_early": True,
+        "has_late": True,
+    }
+
+
 def test_parse_directed_force_phys_accepts_scoped_csv_and_force_vector() -> None:
     force_phys, class_id = _parse_directed_force_phys(
         "0:58:4,class0:ig44:phys=r4,42:3",
