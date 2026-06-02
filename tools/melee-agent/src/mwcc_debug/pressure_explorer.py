@@ -2211,6 +2211,40 @@ def _probe_nested_loop_counter_hoist(
             continue
 
         insert_type = "int"
+        existing_top_counter = next(
+            (
+                top_decl
+                for top_decl in top_decls
+                if top_decl.name == decl.name and top_decl.type_name == insert_type
+            ),
+            None,
+        )
+        if existing_top_counter is not None:
+            reused_source = _replace_body_slice(
+                source,
+                body_start,
+                decl.start,
+                decl.end,
+                "",
+            )
+            reused_probe = LifetimeLayoutProbe(
+                label="loop-counter-hoist-before-0",
+                operator="loop-counter-hoist",
+                description=(
+                    f"Reuse existing function-scope loop counter `{decl.name}` "
+                    f"and remove nested {decl.type_name} declaration."
+                ),
+                source_text=reused_source,
+                provenance={
+                    "kind": "loop-counter-hoist",
+                    "counter": decl.name,
+                    "from_type": decl.type_name,
+                    "to_type": insert_type,
+                    "placement": "reuse:function-scope",
+                },
+            )
+            return reused_probe, None
+
         insert_indent = top_decls[0].indent
         insert_text = f"{insert_indent}{insert_type} {decl.name};\n"
 

@@ -586,6 +586,32 @@ def test_declaration_order_probes_include_adjacent_swap_and_loop_counter_hoist()
     assert "        s32 i;\n" not in hoist_after
 
 
+def test_loop_counter_hoist_reuses_existing_function_scope_counter() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(int flag, int count)
+        {
+            int i;
+            int total;
+
+            if (flag) {
+                s32 i;
+                for (i = 0; i < count; i++) {
+                    total += i;
+                }
+            }
+            sink(total);
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(source, "fn_80000000", max_probes=30)
+    probe = next(probe for probe in probes if probe.label == "loop-counter-hoist-before-0")
+
+    assert probe.source_text.count("int i;") == 1
+    assert "        s32 i;\n" not in probe.source_text
+    assert "        for (i = 0; i < count; i++)" in probe.source_text
+    assert probe.to_dict()["provenance"]["placement"] == "reuse:function-scope"
+
+
 def test_loop_counter_type_probe_targets_loop_counter_not_first_local() -> None:
     source = textwrap.dedent("""\
         void fn_80000000(void)

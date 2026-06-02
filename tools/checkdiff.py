@@ -2370,7 +2370,16 @@ def main() -> int:
         matched = is_effective_match(ref_asm, our_asm, classification)
         snapshot_verdict = classification.get("primary") or ""
 
-        fuzzy_pct = get_fuzzy_match_percent(func_name)
+        if args.no_build:
+            # report.json was not regenerated for --no-build. The object diff
+            # below is fresh, but the cached fuzzy_match_percent can describe a
+            # different prior build, so suppress it instead of publishing a
+            # misleading headline percentage.
+            fuzzy_pct = None
+            fuzzy_pct_source = "suppressed_stale_report_no_build"
+        else:
+            fuzzy_pct = get_fuzzy_match_percent(func_name)
+            fuzzy_pct_source = "report_json"
         metrics = compute_structural_metrics(ref_lines, our_lines)
         prev_metrics = load_history(func_name)
         progress_note = make_progress_note(fuzzy_pct, metrics, prev_metrics)
@@ -2398,6 +2407,7 @@ def main() -> int:
                 "match": matched,
                 "classification": classification,
                 "fuzzy_match_percent": fuzzy_pct,
+                "fuzzy_match_percent_source": fuzzy_pct_source,
                 "structural": metrics,
                 "previous_run": prev_metrics,
                 "progress_note": progress_note,

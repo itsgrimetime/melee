@@ -483,6 +483,54 @@ def test_dry_run_divergent_banner_includes_pending_in_count(checkdiff, tmp_path,
     assert "2 distinct match%s" in err  # 87.2 (in ledger) + 98.5 (pending) = 2
 
 
+def test_no_build_json_suppresses_stale_report_match_percent(
+    checkdiff, tmp_path, monkeypatch, capsys,
+):
+    _make_stub_repo(tmp_path, "fn_alpha", match_pct=27.27)
+    _patch_paths(checkdiff, monkeypatch, tmp_path)
+    ref_obj = tmp_path / "build" / "GALE01" / "obj" / "melee" / "mn" / "sample.o"
+    our_obj = tmp_path / "build" / "GALE01" / "src" / "melee" / "mn" / "sample.o"
+    ref_obj.parent.mkdir(parents=True)
+    our_obj.parent.mkdir(parents=True)
+    ref_obj.write_bytes(b"ref")
+    our_obj.write_bytes(b"ours")
+
+    objdump_output = (
+        "00000000 <fn_alpha>:\n"
+        "   0:\t4e 80 00 20\tblr\n"
+    )
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:1] == ["killall"]:
+            return checkdiff.subprocess.CompletedProcess(cmd, 0, "", "")
+        return checkdiff.subprocess.CompletedProcess(cmd, 0, objdump_output, "")
+
+    monkeypatch.setattr(checkdiff, "ensure_disassembler", lambda: ("objdump", "objdump"))
+    monkeypatch.setattr(checkdiff.subprocess, "run", fake_run)
+    monkeypatch.setattr(checkdiff, "apply_name_magic_if_available", lambda *args, **kwargs: None)
+    monkeypatch.setattr(checkdiff, "collect_section_anchor_aliases", lambda path: {})
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "checkdiff.py",
+            "fn_alpha",
+            "--no-build",
+            "--format",
+            "json",
+            "--no-fingerprint",
+        ],
+    )
+
+    rc = checkdiff.main()
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+    assert rc == 0
+    assert payload["match"] is True
+    assert payload["fuzzy_match_percent"] is None
+    assert payload["fuzzy_match_percent_source"] == "suppressed_stale_report_no_build"
+
+
 def test_record_post_build_returns_empty_string_for_none_fp(checkdiff, tmp_path, monkeypatch):
     """record_post_build_attempt must defend against fp=None even
     though the current caller guards — future-proofs new callers."""
