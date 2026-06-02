@@ -130,6 +130,48 @@ def test_start_patches_seed_function_into_permuter_base(tmp_path):
     assert "unrelated" not in submitted_base
 
 
+def test_start_keeps_permuter_base_when_seed_lacks_target_function(tmp_path):
+    perm_dir = tmp_path / "nonmatchings" / "f"
+    perm_dir.mkdir(parents=True)
+    (perm_dir / "base.c").write_text(
+        "typedef int s32;\n"
+        "s32 helper(void) { return 1; }\n"
+        "s32 f(void)\n"
+        "{\n"
+        "    return 7;\n"
+        "}\n"
+    )
+    (perm_dir / "compile.sh").write_text("#!/bin/sh\nexit 0\n")
+    (perm_dir / "settings.toml").write_text("base = \"base.c\"\n")
+    (perm_dir / "target.o").write_bytes(b"target")
+    raw_tu_seed = (
+        "#include \"ftdynamics.h\"\n"
+        "s32 unrelated(void) { return 99; }\n"
+    )
+
+    store = ArtifactStore(tmp_path / "store")
+    rem = FakeRemote(tmp_path)
+    prod = PermuterJobProducer(
+        client=rem,
+        store=store,
+        remotes=["coder1"],
+        compile_spec_factory=lambda txt: _spec(tmp_path),
+        permuter_base_dir=perm_dir,
+        base_source_text=raw_tu_seed,
+    )
+
+    prod.start(
+        SourceSpec("ignored scheduler base", TargetSpec("f", "u", tmp_path / "e.o")),
+        TargetSpec("f", "u", tmp_path / "e.o"),
+        Budget(max_iters=1),
+    )
+
+    submitted_dir, _, _ = rem.submitted[0]
+    submitted_base = (submitted_dir / "base.c").read_text()
+    assert "return 7;" in submitted_base
+    assert "return 99;" not in submitted_base
+
+
 def test_start_defines_c_literals_needed_by_seed_function(tmp_path):
     perm_dir = tmp_path / "nonmatchings" / "f"
     perm_dir.mkdir(parents=True)

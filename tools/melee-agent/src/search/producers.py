@@ -56,9 +56,7 @@ class PermuterJobProducer:
 
         candidate_function = extract_function(base_source, function)
         if candidate_function is None:
-            raise ValueError(
-                f"seed source does not define {function}; cannot build permuter base"
-            )
+            return _ensure_permuter_literal_defines(permuter_text)
         candidate_function = _trim_leading_preprocessor_lines(candidate_function)
         patched = replace_function(permuter_text, function, candidate_function)
         if patched is None:

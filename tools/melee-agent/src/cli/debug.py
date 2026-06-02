@@ -15292,20 +15292,45 @@ def debug_select_order_search_cmd(
         diff_fingerprint: str | None = None,
     ) -> None:
         try:
+            candidate_source_text: str | None = None
             if path.suffix == ".txt":
                 candidate_text = path.read_text(encoding="utf-8", errors="replace")
             elif path.suffix == ".c":
-                candidate_text = compile_source_variant(
-                    DiffInput(
-                        label=label,
-                        token=str(path),
-                        kind="source",
-                        path=path,
-                    ),
-                    function=function,
-                    melee_root=DEFAULT_MELEE_ROOT,
-                    timeout=timeout,
+                candidate_source_text, _ = (
+                    _prevalidate_lifetime_layout_source_candidate(
+                        path,
+                        function=function,
+                    )
                 )
+                try:
+                    candidate_text = compile_source_variant(
+                        DiffInput(
+                            label=label,
+                            token=str(path),
+                            kind="source",
+                            path=path,
+                        ),
+                        function=function,
+                        melee_root=DEFAULT_MELEE_ROOT,
+                        timeout=timeout,
+                    )
+                except CompileFailure as exc:
+                    detail = str(exc)
+                    if (
+                        exc.returncode == 3
+                        and "not found in pcdump" in detail
+                    ):
+                        raise _MalformedSourceCandidate(
+                            (
+                                f"{detail}; compiled probe pcdump omitted the "
+                                f"target function. Source retained at {path}"
+                            ),
+                            source_hunk=_compact_source_hunk_for_function(
+                                candidate_source_text,
+                                function,
+                            ),
+                        ) from exc
+                    raise
             else:
                 raise ValueError(f"expected .txt pcdump or .c source, got {path}")
             match_percent = None
@@ -15325,12 +15350,27 @@ def debug_select_order_search_cmd(
                         status=status,
                     )
                 )
-            candidate_sig = pressure_signature_from_pcdump(
-                candidate_text,
-                function,
-                pairs=target_orders,
-                class_id=class_id,
-            )
+            try:
+                candidate_sig = pressure_signature_from_pcdump(
+                    candidate_text,
+                    function,
+                    pairs=target_orders,
+                    class_id=class_id,
+                )
+            except ValueError as exc:
+                if path.suffix == ".c":
+                    raise _MalformedSourceCandidate(
+                        f"{exc}; compiled probe pcdump omitted the target "
+                        f"function. Source retained at {path}",
+                        source_hunk=_compact_source_hunk_for_function(
+                            candidate_source_text or path.read_text(
+                                encoding="utf-8",
+                                errors="replace",
+                            ),
+                            function,
+                        ),
+                    ) from exc
+                raise
             delta = compare_pressure_signatures(baseline, candidate_sig)
             objective = score_select_order_candidate(
                 baseline_text,
@@ -15371,7 +15411,10 @@ def debug_select_order_search_cmd(
             return variant
         except Exception as exc:
             failed_status = "failed"
-            if isinstance(exc, CompileFailure) or (
+            malformed_source = isinstance(exc, _MalformedSourceCandidate)
+            if malformed_source:
+                failed_status = "malformed-source"
+            elif isinstance(exc, CompileFailure) or (
                 path.suffix == ".c" and "not found in pcdump" in str(exc)
             ):
                 failed_status = "build-failed"
@@ -15399,6 +15442,8 @@ def debug_select_order_search_cmd(
                 failed["source_retained"] = str(source_retained)
             elif path.suffix == ".c" and path.exists():
                 failed["source_retained"] = str(path)
+            if malformed_source and exc.source_hunk:
+                failed["source_hunk"] = exc.source_hunk
             variants.append(failed)
             return failed
 

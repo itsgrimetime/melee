@@ -4,6 +4,7 @@ Uses --dry-compiler so no real mwcc/wibo/SSH is needed.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -99,3 +100,67 @@ def test_search_run_missing_permuter_dir_degrades_to_local_only(tmp_path: Path) 
     assert result.exit_code == 0, result.output
     assert "remote producers disabled" in result.stderr
     assert "function dir, compile.sh, settings.toml, target.o" in result.stderr
+
+
+def test_search_run_remote_progress_goes_to_stderr(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runner = CliRunner()
+    repo = tmp_path / "repo"
+    report = repo / "build" / "GALE01" / "report.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(
+        '{"units":[{"name":"main/u","functions":[{"name":"f"}]}]}'
+    )
+    perm_dir = tmp_path / "perm" / "nonmatchings" / "f"
+    perm_dir.mkdir(parents=True)
+    (perm_dir / "base.c").write_text("int f(void){return 1;}\n")
+    (perm_dir / "compile.sh").write_text("#!/bin/sh\nexit 0\n")
+    (perm_dir / "settings.toml").write_text("base = \"base.c\"\n")
+    (perm_dir / "target.o").write_bytes(b"target")
+
+    class _QuietRemote:
+        def __init__(self, melee_root):
+            self.stopped = []
+
+        def submit(self, base_dir, function, remote):
+            return f"{function}-{remote}-job"
+
+        def fetch(self, job_id):
+            return []
+
+        def status(self, job_id):
+            return "running"
+
+        def stop(self, job_id):
+            self.stopped.append(job_id)
+
+    monkeypatch.setattr("src.search.cli._compute_melee_root", lambda: repo)
+    monkeypatch.setattr(
+        "src.search.adapters.RealRemotePermuterClient",
+        _QuietRemote,
+    )
+
+    result = runner.invoke(
+        search_app,
+        [
+            "run",
+            "--function", "f",
+            "--unit", "u",
+            "--store", str(tmp_path / "store"),
+            "--perm-root", str(tmp_path / "perm"),
+            "--remotes", "coder3",
+            "--max-iters", "2",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    summary = json.loads(result.stdout)
+    assert summary["accounting"]["producer_polls"] == 2
+    assert summary["accounting"]["budget_exhausted"] is True
+    assert "producer-started" in result.stderr
+    assert "job=f-coder3-job" in result.stderr
+    assert "producer-poll" in result.stderr
+    assert "state=running" in result.stderr
+    assert "harvested=0" in result.stderr

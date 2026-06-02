@@ -240,6 +240,27 @@ def test_block_scope_probe_does_not_duplicate_wrapped_lines() -> None:
     assert probe.source_text.count("int temp = x + 1;") == 1
 
 
+def test_block_scope_probe_skips_region_that_crosses_shallower_else() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(int kind, int flag)
+        {
+            if (kind == 0) {
+                int anim_id = get_anim();
+                if (anim_id == 1) {
+                    sink(anim_id);
+                }
+            } else if (flag) {
+                int anim_id = get_other_anim();
+                sink(anim_id);
+            }
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(source, "fn_80000000", max_probes=20)
+
+    assert "block-scope" not in {probe.operator for probe in probes}
+
+
 def test_declaration_use_distance_probe_moves_plain_decl_to_first_use() -> None:
     source = textwrap.dedent("""\
         void fn_80000000(int flag, int x)

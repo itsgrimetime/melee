@@ -150,6 +150,63 @@ class _FailedProducer:
         self.stopped = True
 
 
+class _RunningEmptyProducer:
+    def __init__(self):
+        self.polls = 0
+        self.stopped = False
+
+    def name(self):
+        return "running-empty"
+
+    def start(self, base, target, budget):
+        from src.search.types import ProducerHandle
+
+        return ProducerHandle(self.name(), ["job-1"])
+
+    def poll(self, handle):
+        self.polls += 1
+        return []
+
+    def status(self, handle):
+        from src.search.types import ProducerStatus
+
+        return ProducerStatus("running")
+
+    def stop(self, handle):
+        self.stopped = True
+
+
+def test_scheduler_reports_active_empty_producer_polls_until_budget(tmp_path):
+    store = ArtifactStore(tmp_path / "store")
+    producer = _RunningEmptyProducer()
+    events = []
+    pipe = ByteScorePipeline(scorer=NonMatchScorer())
+    sched = DefaultScheduler(store=store, verifier=None)
+
+    res = sched.run(
+        sources=[],
+        backends=[],
+        producers=[producer],
+        pipeline=pipe,
+        target=TargetSpec("f", "u", tmp_path / "e.o"),
+        budget=Budget(max_iters=3),
+        policy=SchedulePolicy(),
+        progress=events.append,
+    )
+
+    assert producer.polls == 3
+    assert producer.stopped
+    assert res.accounting["producer_polls"] == 3
+    assert res.accounting["producer_no_candidate_polls"] == 3
+    assert res.accounting["producer_active"] == 3
+    assert res.accounting["budget_exhausted"] is True
+    assert events[0]["event"] == "producer-started"
+    poll_events = [event for event in events if event["event"] == "producer-poll"]
+    assert [event["poll"] for event in poll_events] == [1, 2, 3]
+    assert all(event["state"] == "running" for event in poll_events)
+    assert all(event["harvested"] == 0 for event in poll_events)
+
+
 def test_scheduler_surfaces_failed_producer_and_stops_polling(tmp_path):
     store = ArtifactStore(tmp_path / "store")
     producer = _FailedProducer()

@@ -658,6 +658,8 @@ def _probe_declaration_use_distance(
         if use_end is None:
             continue
         use_block = body[use_start:use_end]
+        if _block_crosses_shallower_else(use_block, use_line):
+            continue
         decl_text = match.group(0).strip()
         wrapped = (
             f"{indent}{{\n"
@@ -747,7 +749,14 @@ def _probe_block_scope(
     if block_end is None:
         return None
     block_end = max(block_end, match.end())
+    block_end = _balanced_region_end(body, match.start(), block_end)
     block_text = body[match.start():block_end]
+    first_line_end = body.find("\n", match.start())
+    if first_line_end < 0:
+        first_line_end = match.end()
+    first_line = body[match.start():first_line_end]
+    if _block_crosses_shallower_else(block_text, first_line):
+        return None
     replacement = _wrap_block_text(block_text, indent)
     return LifetimeLayoutProbe(
         label="block-scope-0",

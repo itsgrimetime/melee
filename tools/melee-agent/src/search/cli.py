@@ -216,6 +216,35 @@ def run_cmd(
     budget = Budget(max_iters=max_iters)
     scheduler = DefaultScheduler(store=artifact_store, verifier=verifier)
 
+    def _emit_progress(event: dict) -> None:
+        name = event.get("event", "progress")
+        producer = event.get("producer")
+        prefix = f"[search] {name}"
+        fields: list[str] = []
+        if producer:
+            fields.append(f"producer={producer}")
+        jobs = event.get("jobs") or []
+        if jobs:
+            fields.append("jobs=" + ",".join(str(job) for job in jobs))
+            if len(jobs) == 1:
+                fields.append(f"job={jobs[0]}")
+        for key in (
+            "iteration",
+            "poll",
+            "state",
+            "harvested",
+            "detail",
+            "reason",
+            "elapsed_seconds",
+        ):
+            value = event.get(key)
+            if value not in (None, ""):
+                fields.append(f"{key}={value}")
+        if fields:
+            typer.echo(f"{prefix} " + " ".join(fields), err=True)
+        else:
+            typer.echo(prefix, err=True)
+
     result = scheduler.run(
         sources=[source],
         backends=[backend],
@@ -224,6 +253,7 @@ def run_cmd(
         target=target,
         budget=budget,
         policy=policy,
+        progress=_emit_progress if producers else None,
     )
 
     summary = {

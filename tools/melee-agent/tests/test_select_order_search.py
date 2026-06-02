@@ -908,7 +908,7 @@ def test_select_order_search_beam_composes_and_ranks_by_real_score(
     assert variants[1]["objective"]["match_percent"] == 97.37545
 
 
-def test_select_order_search_marks_source_pcdump_omission_as_build_failed(
+def test_select_order_search_marks_source_pcdump_omission_as_malformed_source(
     tmp_path: pathlib.Path,
     monkeypatch,
 ) -> None:
@@ -945,9 +945,10 @@ def test_select_order_search_marks_source_pcdump_omission_as_build_failed(
 
     assert result.exit_code == 0, result.stdout + result.stderr
     variant = json.loads(result.stdout)["variants"][0]
-    assert variant["status"] == "build-failed"
+    assert variant["status"] == "malformed-source"
     assert "fn_80000000 not found in pcdump" in variant["error"]
     assert variant["source_retained"] == str(source)
+    assert "source_hunk" in variant
     assert "objective" not in variant
 
 

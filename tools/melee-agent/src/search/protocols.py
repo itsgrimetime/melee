@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Callable, Protocol, runtime_checkable
 
 from src.search.artifact import CandidateArtifact
 from src.search.types import (
@@ -119,6 +119,7 @@ class Scheduler(Protocol):
         target: TargetSpec,
         budget: Budget,
         policy: SchedulePolicy,
+        progress: Callable[[dict], None] | None = None,
     ) -> SearchResult:
         """Run a search and return the result."""
         ...
