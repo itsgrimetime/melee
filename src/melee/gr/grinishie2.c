@@ -649,7 +649,8 @@ void grInishie2_801FD9EC(HSD_GObj* gobj)
 
     if (grAnime_801C83D0(gobj, 1, 1) != 0) {
         if (gp->gv.inishie23.xC8_flags.b1) {
-            f32 temp_f = GET_GROUND(gobj)->gv.inishie23.xD8.x + GET_GROUND(gobj)->gv.inishie23.xCC.x;
+            f32 temp_f = GET_GROUND(gobj)->gv.inishie23.xD8.x +
+                         GET_GROUND(gobj)->gv.inishie23.xCC.x;
 
             if (temp_f > Stage_GetCamBoundsRightOffset()) {
                 var_r0 = 2;
@@ -668,8 +669,8 @@ void grInishie2_801FD9EC(HSD_GObj* gobj)
                 if ((s16) gp->gv.inishie23.xCA < 2) {
                     gp->gv.inishie23.xC8_flags.b3 ^= 1;
                 } else {
-                    f32 temp_f =
-                        GET_GROUND(gobj)->gv.inishie23.xD8.x + GET_GROUND(gobj)->gv.inishie23.xCC.x;
+                    f32 temp_f = GET_GROUND(gobj)->gv.inishie23.xD8.x +
+                                 GET_GROUND(gobj)->gv.inishie23.xCC.x;
 
                     if (temp_f > Stage_GetCamBoundsRightOffset()) {
                         var_r3 = 2;
