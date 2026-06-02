@@ -785,6 +785,7 @@ void un_80303FD4(HSD_GObj* arg0, struct un_80304138_objalloc_t* arg1,
     int count;
     int count2 = 0;
     int size;
+    int v;
     void* buf;
     struct un_80304138_objalloc_t* un;
     PAD_STACK(8);
@@ -812,8 +813,8 @@ void un_80303FD4(HSD_GObj* arg0, struct un_80304138_objalloc_t* arg1,
         arg1->x4 = DevText_Create(count2 + 0x78, arg4, arg5, size, count, buf);
         if (arg1->x4 != NULL) {
             DevText_Show(arg0, arg1->x4);
-            for (i = 0; arg1->x8[i].x0 != 0; i++) {
-                if (arg1->x8[i].x0 == 9) {
+            for (i = 0; (v = arg1->x8[i].x0) != 0; i++) {
+                if (v == 9) {
                     i = 0;
                     break;
                 }
