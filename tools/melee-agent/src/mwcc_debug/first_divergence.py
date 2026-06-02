@@ -337,6 +337,39 @@ def find_register_choice_divergence(views, target: TargetColoring
     return None
 
 
+def _register_choice_divergences(views, target: TargetColoring) -> list[DivergencePoint]:
+    points: list[DivergencePoint] = []
+    for v in sorted(views, key=lambda d: d.iter_idx):
+        if v.ig_idx in target.force_phys:
+            want = target.force_phys[v.ig_idx]
+            if v.assigned_reg != want:
+                points.append(
+                    DivergencePoint(v.ig_idx, v.iter_idx, v.assigned_reg, want)
+                )
+    return points
+
+
+def _is_r0_boundary(point: DivergencePoint) -> bool:
+    return point.baseline_reg == 0 or point.target_reg == 0
+
+
+def _with_r0_continuation(
+    fact: AllocatorFact,
+    skipped: list[DivergencePoint],
+) -> AllocatorFact:
+    if not skipped:
+        return fact
+    ids = ", ".join(str(point.ig_idx) for point in skipped)
+    label = "target ig" if len(skipped) == 1 else "target igs"
+    return replace(
+        fact,
+        local_target=(
+            f"continued past r0-boundary {label} {ids}; "
+            f"{fact.local_target}"
+        ),
+    )
+
+
 _CALLEE_SAVE = set(NONVOLATILE_ALLOC_ORDER)  # {13..31}
 
 
@@ -413,8 +446,8 @@ def analyze_first_divergence(fev, target: TargetColoring) -> FirstDivergenceRepo
     views_by_ig = {v.ig_idx: v for v in views if v.ig_idx >= 0}
 
     # Step 1b — register-choice walk.
-    point = find_register_choice_divergence(views, target)
-    if point is None:
+    points = _register_choice_divergences(views, target)
+    if not points:
         return FirstDivergenceReport(
             fact=AllocatorFact(
                 class_id=target.class_id, ig_idx=-1, case=DivergenceCase.NONE,
@@ -426,6 +459,17 @@ def analyze_first_divergence(fev, target: TargetColoring) -> FirstDivergenceRepo
             ),
             source=None,
         )
+    point = points[0]
+    skipped_r0: list[DivergencePoint] = []
+    if _is_r0_boundary(point):
+        for candidate in points:
+            if _is_r0_boundary(candidate):
+                skipped_r0.append(candidate)
+                continue
+            point = candidate
+            break
+        else:
+            skipped_r0 = []
 
     # Step 2 — replay + state at X.
     steps = {s.ig_idx: s for s in replay_decisions(views)}
@@ -442,20 +486,26 @@ def analyze_first_divergence(fev, target: TargetColoring) -> FirstDivergenceRepo
         abstain_reasons.append("divergence involves r0, a model boundary the replay cannot predict")
     if abstain_reasons:
         return FirstDivergenceReport(
-            fact=AllocatorFact(
-                class_id=target.class_id, ig_idx=point.ig_idx,
-                case=DivergenceCase.ABSTAINED, iter_idx=point.iter_idx,
-                baseline_reg=point.baseline_reg, target_reg=point.target_reg,
-                coalesced_nodes=(), coalesced_root=None, coalesced_root_phys=None,
-                blocker_ig=None, blocker_dependency=False,
-                working_mask=step.working_mask, cap_hit=step.cap_hit,
-                earlier_unmapped_warning=False,
-                local_target="ABSTAINED — " + "; ".join(abstain_reasons),
+            fact=_with_r0_continuation(
+                AllocatorFact(
+                    class_id=target.class_id, ig_idx=point.ig_idx,
+                    case=DivergenceCase.ABSTAINED, iter_idx=point.iter_idx,
+                    baseline_reg=point.baseline_reg, target_reg=point.target_reg,
+                    coalesced_nodes=(), coalesced_root=None,
+                    coalesced_root_phys=None, blocker_ig=None,
+                    blocker_dependency=False, working_mask=step.working_mask,
+                    cap_hit=step.cap_hit, earlier_unmapped_warning=False,
+                    local_target="ABSTAINED — " + "; ".join(abstain_reasons),
+                ),
+                skipped_r0,
             ),
             source=None,
         )
 
-    fact = classify_divergence(point, step, target, views_by_ig, interferers)
+    fact = _with_r0_continuation(
+        classify_divergence(point, step, target, views_by_ig, interferers),
+        skipped_r0,
+    )
 
     # Partial-map caveat: warn if an earlier non-target node exists.
     earlier_unmapped = any(

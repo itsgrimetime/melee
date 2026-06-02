@@ -413,6 +413,26 @@ def test_analyze_abstains_on_r0_divergence():
     assert report.fact.case == fd.DivergenceCase.ABSTAINED
 
 
+def test_analyze_continues_past_r0_boundary_to_next_target_divergence():
+    class _Sec:
+        class_id = 0
+    sec = _Sec()
+    sec.decisions = [
+        type("D", (), dict(ig_idx=58, iter_idx=0, assigned_reg=0, degree=0,
+                           n_interferers=0, flags=0, interferers=[]))(),
+        type("D", (), dict(ig_idx=34, iter_idx=1, assigned_reg=29, degree=0,
+                           n_interferers=0, flags=0, interferers=[]))(),
+    ]
+    fev = _FakeFunctionEvents("f", [sec])
+    target = fd.TargetColoring(class_id=0, force_phys={58: 4, 34: 30})
+
+    report = fd.analyze_first_divergence(fev, target)
+
+    assert report.fact.case is not fd.DivergenceCase.ABSTAINED
+    assert report.fact.ig_idx == 34
+    assert "continued past r0-boundary target ig 58" in report.fact.local_target
+
+
 def test_analyze_abstains_on_cap_hit():
     class _Sec:
         class_id = 0

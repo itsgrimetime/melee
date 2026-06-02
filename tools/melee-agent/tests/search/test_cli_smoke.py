@@ -305,6 +305,150 @@ def test_search_combine_recombines_complementary_candidate_deltas(
     }
 
 
+def test_search_combine_manual_ranges_recombine_broad_generated_candidates(
+    tmp_path: Path,
+) -> None:
+    base = tmp_path / "base.c"
+    base.write_text(
+        "void ftCo_8009E7B4(void) {\n"
+        "    int flag = fp->x594_b4;\n"
+        "    sink(flag);\n"
+        "    for (int i = 0; i < count; i++) {\n"
+        "        sink(tree);\n"
+        "    }\n"
+        "}\n"
+    )
+    early = tmp_path / "early-generated.c"
+    early.write_text(
+        "void ftCo_8009E7B4(void) {\n"
+        "    /* generated */ int reload = fp->x594_b4;\n"
+        "    /* generated */ int flag = reload != 0;\n"
+        "    /* generated */ sink(flag);\n"
+        "    /* generated */ for (int i = 0; i < count; i++) {\n"
+        "    /* generated */     sink(tree);\n"
+        "    /* generated */ }\n"
+        "}\n"
+    )
+    late = tmp_path / "late-generated.c"
+    late.write_text(
+        "void ftCo_8009E7B4(void) {\n"
+        "    /* generated */ int flag = fp->x594_b4;\n"
+        "    /* generated */ sink(flag);\n"
+        "    /* generated */ for (int idx = count; idx != 0; --idx) {\n"
+        "    /* generated */     sink(tree->next);\n"
+        "    /* generated */ }\n"
+        "}\n"
+    )
+
+    result = CliRunner().invoke(
+        search_app,
+        [
+            "combine",
+            "--base", str(base),
+            "--candidate", f"early={early}",
+            "--candidate", f"late={late}",
+            "--range", "early:2-2=2-3",
+            "--range", "late:4-6=4-6",
+            "--out-dir", str(tmp_path / "combined"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    combo = payload["combinations"][0]
+    assert combo["status"] == "ok"
+    assert combo["applied_hunks"] == [
+        {
+            "parent": "early",
+            "kind": "manual-subhunk",
+            "base_lines": [2, 2],
+        },
+        {
+            "parent": "late",
+            "kind": "manual-subhunk",
+            "base_lines": [4, 6],
+        },
+    ]
+    combined_text = Path(combo["path"]).read_text()
+    assert "int flag = reload != 0;" in combined_text
+    assert "sink(tree->next);" in combined_text
+
+
+def test_search_minimize_removes_unneeded_subhunks_while_preserving_assignments(
+    tmp_path: Path,
+) -> None:
+    base = tmp_path / "base.c"
+    base.write_text(
+        "void ftCo_8009E7B4(void) {\n"
+        "    int flag = fp->x594_b4;\n"
+        "    sink(flag);\n"
+        "    for (int i = 0; i < count; i++) {\n"
+        "        sink(tree);\n"
+        "    }\n"
+        "}\n"
+    )
+    candidate = tmp_path / "candidate.c"
+    candidate.write_text(
+        "void ftCo_8009E7B4(void) {\n"
+        "    int reload = fp->x594_b4;\n"
+        "    int flag = reload != 0;\n"
+        "    int generated_noise = 0;\n"
+        "    sink(flag);\n"
+        "    for (int idx = count; idx != 0; --idx) {\n"
+        "        sink(tree->next);\n"
+        "    }\n"
+        "}\n"
+    )
+    score_script = tmp_path / "score.py"
+    score_script.write_text(
+        "import json, pathlib, sys\n"
+        "text = pathlib.Path(sys.argv[1]).read_text()\n"
+        "satisfied = []\n"
+        "if 'reload != 0' in text:\n"
+        "    satisfied.extend([\n"
+        "        {'original_ig': 42, 'desired_phys': 3, 'assigned_phys': 3},\n"
+        "        {'original_ig': 44, 'desired_phys': 4, 'assigned_phys': 4},\n"
+        "    ])\n"
+        "if 'tree->next' in text:\n"
+        "    satisfied.append({'original_ig': 35, 'desired_phys': 30, 'assigned_phys': 30})\n"
+        "print(json.dumps({'byte_score': 2006, 'proof_assignments': {'satisfied': satisfied}}))\n"
+    )
+
+    result = CliRunner().invoke(
+        search_app,
+        [
+            "minimize",
+            "--base", str(base),
+            "--candidate", f"candidate={candidate}",
+            "--range", "candidate:2-2=2-3",
+            "--range", "candidate:3-3=4-5",
+            "--range", "candidate:4-6=6-8",
+            "--preserve-assignment", "42:3",
+            "--preserve-assignment", "35:30",
+            "--max-byte-score", "2006",
+            "--score-command", f"{sys.executable} {score_script} {{candidate}}",
+            "--out", str(tmp_path / "minimized.c"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "ok"
+    assert len(payload["removed_hunks"]) == 1
+    assert payload["removed_hunks"][0]["base_lines"] == [3, 3]
+    minimized_text = Path(payload["path"]).read_text()
+    assert "generated_noise" not in minimized_text
+    assert "reload != 0" in minimized_text
+    assert "tree->next" in minimized_text
+    assert payload["score_result"]["parsed_json"]["proof_assignments"]["satisfied"] == [
+        {"original_ig": 42, "desired_phys": 3, "assigned_phys": 3},
+        {"original_ig": 44, "desired_phys": 4, "assigned_phys": 4},
+        {"original_ig": 35, "desired_phys": 30, "assigned_phys": 30},
+    ]
+
+
 def test_parse_directed_force_phys_accepts_scoped_csv_and_force_vector() -> None:
     force_phys, class_id = _parse_directed_force_phys(
         "0:58:4,class0:ig44:phys=r4,42:3",

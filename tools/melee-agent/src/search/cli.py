@@ -364,6 +364,84 @@ def _source_hunks(
     return hunks
 
 
+_MANUAL_RANGE_RE = re.compile(
+    r"^(?P<candidate>[^:=]+):"
+    r"(?P<base_start>\d+)-(?P<base_end>\d+)="
+    r"(?P<candidate_start>\d+)-(?P<candidate_end>\d+)$"
+)
+
+
+def _parse_manual_range(raw: str) -> dict:
+    match = _MANUAL_RANGE_RE.match(raw.strip())
+    if match is None:
+        raise typer.BadParameter(
+            "--range must look like CANDIDATE_ID:BASE_START-BASE_END="
+            "CANDIDATE_START-CANDIDATE_END"
+        )
+    values = match.groupdict()
+    out = {
+        "candidate_id": values["candidate"].strip(),
+        "base_start": int(values["base_start"]),
+        "base_end": int(values["base_end"]),
+        "candidate_start": int(values["candidate_start"]),
+        "candidate_end": int(values["candidate_end"]),
+    }
+    if not out["candidate_id"]:
+        raise typer.BadParameter("--range candidate id cannot be empty")
+    for key in ("base_start", "base_end", "candidate_start", "candidate_end"):
+        if out[key] < 1:
+            raise typer.BadParameter(f"--range {key} must be >= 1")
+    if out["base_end"] < out["base_start"]:
+        raise typer.BadParameter("--range base end must be >= base start")
+    if out["candidate_end"] < out["candidate_start"]:
+        raise typer.BadParameter("--range candidate end must be >= candidate start")
+    return out
+
+
+def _manual_source_hunks(
+    *,
+    base_text: str,
+    candidate_text: str,
+    candidate_id: str,
+    manual_ranges: list[dict],
+) -> list[dict]:
+    base_lines = base_text.splitlines()
+    candidate_lines = candidate_text.splitlines()
+    hunks: list[dict] = []
+    for idx, spec in enumerate(manual_ranges, 1):
+        if spec["candidate_id"] != candidate_id:
+            continue
+        base_start = int(spec["base_start"]) - 1
+        base_end = int(spec["base_end"])
+        candidate_start = int(spec["candidate_start"]) - 1
+        candidate_end = int(spec["candidate_end"])
+        if base_end > len(base_lines):
+            raise typer.BadParameter(
+                f"--range for {candidate_id} references base line "
+                f"{base_end}, but base has {len(base_lines)} line(s)"
+            )
+        if candidate_end > len(candidate_lines):
+            raise typer.BadParameter(
+                f"--range for {candidate_id} references candidate line "
+                f"{candidate_end}, but candidate has {len(candidate_lines)} line(s)"
+            )
+        removed = base_lines[base_start:base_end]
+        added = candidate_lines[candidate_start:candidate_end]
+        hunks.append({
+            "candidate_id": candidate_id,
+            "hunk": idx,
+            "tag": "manual",
+            "base_start": base_start,
+            "base_end": base_end,
+            "candidate_start": candidate_start,
+            "candidate_end": candidate_end,
+            "kind": "manual-subhunk",
+            "removed": removed,
+            "added": added,
+        })
+    return hunks
+
+
 def _hunks_overlap(left: dict, right: dict) -> bool:
     left_start = int(left["base_start"])
     left_end = int(left["base_end"])
@@ -603,6 +681,7 @@ def _load_combine_candidate(
     spec: str,
     base_text: str,
     telemetry: list[dict],
+    manual_ranges: list[dict] | None = None,
 ) -> dict:
     candidate_id, path = _parse_triage_candidate(spec)
     text = path.read_text()
@@ -612,16 +691,33 @@ def _load_combine_candidate(
         candidate_id=candidate_id,
         source_hash=source_hash,
     )
+    manual_hunks = _manual_source_hunks(
+        base_text=base_text,
+        candidate_text=text,
+        candidate_id=candidate_id,
+        manual_ranges=manual_ranges or [],
+    )
     return {
         "candidate_id": candidate_id,
         "path": path,
         "source_hash": source_hash,
         "meta": meta,
-        "hunks": _source_hunks(
+        "hunks": manual_hunks or _source_hunks(
             base_text,
             text,
             candidate_id=candidate_id,
         ),
+    }
+
+
+def _hunk_summary(hunk: dict) -> dict:
+    return {
+        "parent": hunk["candidate_id"],
+        "kind": hunk["kind"],
+        "base_lines": [
+            int(hunk["base_start"]) + 1,
+            int(hunk["base_end"]),
+        ],
     }
 
 
@@ -657,14 +753,7 @@ def _combine_candidate_pair(
         "path": str(out_path),
         "source_hash": _source_hash(merged_text),
         "applied_hunks": [
-            {
-                "parent": hunk["candidate_id"],
-                "kind": hunk["kind"],
-                "base_lines": [
-                    int(hunk["base_start"]) + 1,
-                    int(hunk["base_end"]),
-                ],
-            }
+            _hunk_summary(hunk)
             for hunk in hunks
         ],
         "assignment_union": _combined_assignment_progress(
@@ -683,6 +772,72 @@ def _meta_to_dict(meta) -> dict:
     if is_dataclass(meta):
         return asdict(meta)
     return dict(meta)
+
+
+def _parse_assignment_spec(raw: str) -> tuple[int, int]:
+    parts = [part.strip() for part in raw.split(":")]
+    if len(parts) != 2:
+        raise typer.BadParameter(
+            "--preserve-assignment must look like IG:PHYS, e.g. 42:3"
+        )
+    try:
+        return (
+            _parse_directed_int(parts[0], prefix="ig"),
+            _parse_directed_phys(parts[1]),
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(
+            f"invalid --preserve-assignment {raw!r}: {exc}"
+        ) from exc
+
+
+def _assignment_keys_from_score(score_result: dict | None) -> set[tuple[int, int]]:
+    if not score_result:
+        return set()
+    parsed = score_result.get("parsed_json")
+    if not isinstance(parsed, dict):
+        return set()
+    proof = parsed.get("proof_assignments") or {}
+    if not isinstance(proof, dict):
+        return set()
+    keys: set[tuple[int, int]] = set()
+    for entry in proof.get("satisfied", []) or []:
+        if isinstance(entry, str):
+            match = re.match(r"ig(?P<ig>\d+)->r(?P<phys>\d+)$", entry.strip())
+            if match:
+                keys.add((int(match.group("ig")), int(match.group("phys"))))
+            continue
+        if not isinstance(entry, dict):
+            continue
+        try:
+            keys.add((int(entry["original_ig"]), int(entry["desired_phys"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return keys
+
+
+def _score_byte_score(score_result: dict | None) -> int | None:
+    parsed = (score_result or {}).get("parsed_json")
+    if not isinstance(parsed, dict):
+        return None
+    value = parsed.get("byte_score")
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _score_preserves(
+    score_result: dict | None,
+    *,
+    required_assignments: set[tuple[int, int]],
+    max_byte_score: int | None,
+) -> bool:
+    parsed = (score_result or {}).get("parsed_json")
+    if not isinstance(parsed, dict):
+        return False
+    if max_byte_score is not None:
+        byte_score = _score_byte_score(score_result)
+        if byte_score is None or byte_score > max_byte_score:
+            return False
+    return required_assignments <= _assignment_keys_from_score(score_result)
 
 
 def _byte_score_from_obj(obj) -> int | None:
@@ -873,6 +1028,17 @@ def combine_cmd(
             ),
         ),
     ] = None,
+    manual_range_specs: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--range",
+            help=(
+                "Manual subhunk range CANDIDATE_ID:BASE_START-BASE_END="
+                "CANDIDATE_START-CANDIDATE_END. When present for a candidate, "
+                "combine uses those subhunks instead of broad auto hunks."
+            ),
+        ),
+    ] = None,
     json_out: Annotated[
         bool,
         typer.Option("--json", help="Emit machine-readable JSON."),
@@ -887,11 +1053,16 @@ def combine_cmd(
 
     base_text = base.read_text()
     telemetry_entries = _load_triage_telemetry(telemetry)
+    manual_ranges = [
+        _parse_manual_range(spec)
+        for spec in (manual_range_specs or [])
+    ]
     loaded = [
         _load_combine_candidate(
             spec=spec,
             base_text=base_text,
             telemetry=telemetry_entries,
+            manual_ranges=manual_ranges,
         )
         for spec in candidate_specs
     ]
@@ -949,6 +1120,174 @@ def combine_cmd(
                 "  score command: "
                 f"returncode={combo['score_result']['returncode']}"
             )
+
+
+@search_app.command("minimize")
+def minimize_cmd(
+    base: Annotated[
+        Path,
+        typer.Option(
+            "--base",
+            help="Retained/base source file used as the minimization anchor.",
+        ),
+    ],
+    candidate: Annotated[
+        str,
+        typer.Option(
+            "--candidate",
+            help="Candidate source file, or CANDIDATE_ID=path.",
+        ),
+    ],
+    manual_range_specs: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--range",
+            help=(
+                "Manual subhunk range CANDIDATE_ID:BASE_START-BASE_END="
+                "CANDIDATE_START-CANDIDATE_END. May be repeated."
+            ),
+        ),
+    ] = None,
+    preserve_assignments: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--preserve-assignment",
+            help="Required satisfied assignment IG:PHYS, e.g. 42:3.",
+        ),
+    ] = None,
+    max_byte_score: Annotated[
+        Optional[int],
+        typer.Option(
+            "--max-byte-score",
+            help="Reject minimized candidates with byte_score above this value.",
+        ),
+    ] = None,
+    score_command: Annotated[
+        str,
+        typer.Option(
+            "--score-command",
+            help=(
+                "Command template used to score each minimized candidate. "
+                "Use {candidate} as the generated source path placeholder."
+            ),
+        ),
+    ] = "",
+    out: Annotated[
+        Path,
+        typer.Option("--out", help="Output path for the minimized source."),
+    ] = Path("build/search-minimized/minimized.c"),
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Delta-reduce candidate subhunks while preserving proof assignments."""
+    if not base.is_file():
+        raise typer.BadParameter(f"base source not found: {base}")
+    if not score_command:
+        raise typer.BadParameter("--score-command is required for minimization")
+    base_text = base.read_text()
+    manual_ranges = [
+        _parse_manual_range(spec)
+        for spec in (manual_range_specs or [])
+    ]
+    loaded = _load_combine_candidate(
+        spec=candidate,
+        base_text=base_text,
+        telemetry=[],
+        manual_ranges=manual_ranges,
+    )
+    hunks = list(loaded["hunks"])
+    if not hunks:
+        raise typer.BadParameter("candidate has no source hunks to minimize")
+    required = {
+        _parse_assignment_spec(spec)
+        for spec in (preserve_assignments or [])
+    }
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    scratch_dir = out.parent / f".{out.stem}-minimize"
+    scratch_dir.mkdir(parents=True, exist_ok=True)
+
+    current = list(hunks)
+    initial_text = _merge_source_hunks(base_text, current)
+    if initial_text is None:
+        raise typer.BadParameter(
+            "candidate hunks overlap; pass narrower --range values"
+        )
+    initial_path = scratch_dir / "initial.c"
+    initial_path.write_text(initial_text)
+    best_score = _run_triage_score_command(
+        score_command,
+        candidate_path=initial_path,
+    )
+    if not _score_preserves(
+        best_score,
+        required_assignments=required,
+        max_byte_score=max_byte_score,
+    ):
+        payload = {
+            "status": "failed",
+            "reason": "initial-candidate-does-not-preserve-objective",
+            "candidate_id": loaded["candidate_id"],
+            "score_result": best_score,
+        }
+        if json_out:
+            typer.echo(json.dumps(payload, indent=2))
+            return
+        typer.echo(payload["reason"])
+        raise typer.Exit(1)
+
+    removed: list[dict] = []
+    for index, hunk in enumerate(list(current), 1):
+        trial = [item for item in current if item is not hunk]
+        trial_text = _merge_source_hunks(base_text, trial)
+        if trial_text is None:
+            continue
+        trial_path = scratch_dir / f"trial-{index}.c"
+        trial_path.write_text(trial_text)
+        trial_score = _run_triage_score_command(
+            score_command,
+            candidate_path=trial_path,
+        )
+        if _score_preserves(
+            trial_score,
+            required_assignments=required,
+            max_byte_score=max_byte_score,
+        ):
+            current = trial
+            removed.append(_hunk_summary(hunk))
+            best_score = trial_score
+
+    minimized_text = _merge_source_hunks(base_text, current)
+    if minimized_text is None:
+        raise typer.BadParameter("minimized hunks unexpectedly overlap")
+    out.write_text(minimized_text)
+    final_score = _run_triage_score_command(score_command, candidate_path=out)
+    payload = {
+        "status": "ok",
+        "candidate_id": loaded["candidate_id"],
+        "path": str(out),
+        "source_hash": _source_hash(minimized_text),
+        "required_assignments": [
+            f"ig{ig}->r{phys}" for ig, phys in sorted(required)
+        ],
+        "kept_hunks": [_hunk_summary(hunk) for hunk in current],
+        "removed_hunks": removed,
+        "score_result": final_score,
+    }
+    if json_out:
+        typer.echo(json.dumps(payload, indent=2))
+        return
+
+    typer.echo(f"status: {payload['status']}")
+    typer.echo(f"output: {payload['path']}")
+    if removed:
+        typer.echo(f"removed hunks: {len(removed)}")
+    typer.echo(
+        "preserved: "
+        + ", ".join(payload["required_assignments"])
+    )
 
 
 def _derive_directed_force_phys_from_diff(
