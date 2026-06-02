@@ -326,6 +326,8 @@ def generate_lifetime_layout_probes(
         _append_probe(probes, probe)
     for probe in _probe_indexed_pointer_loop(source_text, body, body_start, function):
         _append_probe(probes, probe)
+    for probe in _probe_pointer_walk_loop(source_text, body, body_start, function):
+        _append_probe(probes, probe)
     _append_probe(
         probes,
         _probe_temp_introduction(source_text, body, body_start, function),
@@ -1261,6 +1263,35 @@ class _IndexedLoopUse:
     decl_type: str | None
 
 
+@dataclass(frozen=True)
+class _PointerWalkLoopUse:
+    loop_start: int
+    loop_close: int
+    loop_indent: str
+    counter: str
+    bound: str
+    bound_start: int
+    bound_end: int
+    condition_start: int
+    condition_end: int
+    increment_start: int
+    increment_end: int
+    line_start: int
+    line_end: int
+    line: str
+    line_indent: str
+    base: str
+    base_start: int
+    base_end: int
+    index_expr: str
+    index_start: int
+    index_end: int
+    indexed_start: int
+    indexed_end: int
+    base_type: str
+    value_type: str
+
+
 def _probe_indexed_pointer_loop(
     source: str,
     body: str,
@@ -1427,6 +1458,304 @@ def _probe_indexed_pointer_loop(
     return probes
 
 
+def _probe_pointer_walk_loop(
+    source: str,
+    body: str,
+    body_start: int,
+    function: str,
+) -> list[LifetimeLayoutProbe]:
+    use = _find_pointer_walk_loop_use(source, body, body_start, function)
+    if use is None:
+        return []
+    probes: list[LifetimeLayoutProbe] = []
+
+    index_line = (
+        use.line[:use.index_start]
+        + "ll_probe_index_0"
+        + use.line[use.index_end:]
+    )
+    probes.append(
+        LifetimeLayoutProbe(
+            label="pointer-walk-loop-index-temp-0",
+            operator="pointer-walk-loop",
+            description=(
+                f"Name pointer-walk index expression `{use.index_expr}` before "
+                f"loading `{use.base}[...]`."
+            ),
+            source_text=_replace_body_slice(
+                source,
+                body_start,
+                use.line_start,
+                use.line_end,
+                f"{use.line_indent}int ll_probe_index_0 = {use.index_expr};\n"
+                f"{index_line}",
+            ),
+            provenance=_pointer_walk_provenance(use, "index-temp"),
+        )
+    )
+
+    base_line = (
+        use.line[:use.base_start]
+        + "ll_probe_base_0"
+        + use.line[use.base_end:]
+    )
+    probes.append(
+        LifetimeLayoutProbe(
+            label="pointer-walk-loop-base-alias-0",
+            operator="pointer-walk-loop",
+            description=(
+                f"Alias pointer-walk base `{use.base}` immediately before "
+                "the indexed use."
+            ),
+            source_text=_replace_body_slice(
+                source,
+                body_start,
+                use.line_start,
+                use.line_end,
+                f"{use.line_indent}{use.base_type} ll_probe_base_0 = {use.base};\n"
+                f"{base_line}",
+            ),
+            provenance=_pointer_walk_provenance(use, "base-alias"),
+        )
+    )
+
+    address_line = (
+        use.line[:use.indexed_start]
+        + "*ll_probe_addr_0"
+        + use.line[use.indexed_end:]
+    )
+    probes.append(
+        LifetimeLayoutProbe(
+            label="pointer-walk-loop-address-temp-0",
+            operator="pointer-walk-loop",
+            description=(
+                f"Name computed pointer address `{use.base} + {use.index_expr}` "
+                "before the loop call."
+            ),
+            source_text=_replace_body_slice(
+                source,
+                body_start,
+                use.line_start,
+                use.line_end,
+                (
+                    f"{use.line_indent}{use.base_type} ll_probe_addr_0 = "
+                    f"{use.base} + {use.index_expr};\n"
+                    f"{address_line}"
+                ),
+            ),
+            provenance=_pointer_walk_provenance(use, "address-temp"),
+        )
+    )
+
+    value_line = (
+        use.line[:use.indexed_start]
+        + "ll_probe_value_0"
+        + use.line[use.indexed_end:]
+    )
+    probes.append(
+        LifetimeLayoutProbe(
+            label="pointer-walk-loop-value-temp-0",
+            operator="pointer-walk-loop",
+            description=(
+                f"Name pointer-walk loaded value `{use.base}[{use.index_expr}]` "
+                "before the loop call."
+            ),
+            source_text=_replace_body_slice(
+                source,
+                body_start,
+                use.line_start,
+                use.line_end,
+                (
+                    f"{use.line_indent}{use.value_type} ll_probe_value_0 = "
+                    f"{use.base}[{use.index_expr}];\n"
+                    f"{value_line}"
+                ),
+            ),
+            provenance=_pointer_walk_provenance(use, "value-temp"),
+        )
+    )
+
+    loop_text = source[body_start + use.loop_start:body_start + use.loop_close + 1]
+    probes.append(
+        LifetimeLayoutProbe(
+            label="pointer-walk-loop-induction-0",
+            operator="pointer-walk-loop",
+            description=(
+                f"Carry `{use.base}` as an induction pointer alongside "
+                f"`{use.counter}`."
+            ),
+            source_text=_replace_body_slice(
+                source,
+                body_start,
+                use.loop_start,
+                use.loop_close + 1,
+                _pointer_walk_loop_replacement(
+                    use,
+                    loop_text,
+                    extra_decl=f"{use.base_type} ll_probe_iter_0 = {use.base};",
+                    condition=None,
+                    indexed_replacement="*ll_probe_iter_0",
+                ),
+            ),
+            provenance=_pointer_walk_provenance(use, "induction"),
+        )
+    )
+
+    probes.append(
+        LifetimeLayoutProbe(
+            label="pointer-walk-loop-end-pointer-0",
+            operator="pointer-walk-loop",
+            description=(
+                f"Precompute an end pointer for `{use.base}` and loop until "
+                "the pointer reaches it."
+            ),
+            source_text=_replace_body_slice(
+                source,
+                body_start,
+                use.loop_start,
+                use.loop_close + 1,
+                _pointer_walk_loop_replacement(
+                    use,
+                    loop_text,
+                    extra_decl=(
+                        f"{use.base_type} ll_probe_iter_0 = {use.base};\n"
+                        f"{use.loop_indent}    {use.base_type} ll_probe_end_0 = "
+                        f"{use.base} + {use.bound};"
+                    ),
+                    condition="ll_probe_iter_0 < ll_probe_end_0",
+                    indexed_replacement="*ll_probe_iter_0",
+                ),
+            ),
+            provenance=_pointer_walk_provenance(use, "end-pointer"),
+        )
+    )
+
+    return probes
+
+
+def _pointer_walk_loop_replacement(
+    use: _PointerWalkLoopUse,
+    loop_text: str,
+    *,
+    extra_decl: str,
+    condition: str | None,
+    indexed_replacement: str,
+) -> str:
+    rel_line_start = use.line_start - use.loop_start
+    rel_line_end = use.line_end - use.loop_start
+    line = (
+        use.line[:use.indexed_start]
+        + indexed_replacement
+        + use.line[use.indexed_end:]
+    )
+    rewritten = loop_text[:rel_line_start] + line + loop_text[rel_line_end:]
+    rel_increment_end = use.increment_end - use.loop_start
+    rewritten = (
+        rewritten[:rel_increment_end]
+        + ", ll_probe_iter_0++"
+        + rewritten[rel_increment_end:]
+    )
+    if condition is not None:
+        rel_condition_start = use.condition_start - use.loop_start
+        rel_condition_end = use.condition_end - use.loop_start
+        rewritten = (
+            rewritten[:rel_condition_start]
+            + condition
+            + rewritten[rel_condition_end:]
+        )
+    return (
+        f"{use.loop_indent}{{\n"
+        f"{use.loop_indent}    {extra_decl}\n"
+        f"{_indent_block_lines(rewritten, use.loop_indent)}"
+        f"{use.loop_indent}}}"
+    )
+
+
+def _pointer_walk_provenance(
+    use: _PointerWalkLoopUse,
+    variant: str,
+) -> dict[str, str]:
+    return {
+        "kind": "pointer-walk-loop",
+        "variant": variant,
+        "counter": use.counter,
+        "base": use.base,
+        "index_expr": use.index_expr,
+        "bound": use.bound,
+    }
+
+
+def _find_pointer_walk_loop_use(
+    source: str,
+    body: str,
+    body_start: int,
+    function: str,
+) -> _PointerWalkLoopUse | None:
+    scoped_types = _scoped_identifier_types(source, body, body_start, function)
+    loop_re = re.compile(
+        r"(?m)^(?P<indent>[ \t]*)for\s*\(\s*"
+        r"(?P<counter>[A-Za-z_]\w*)\s*=\s*0\s*;\s*"
+        r"(?P<condition>(?P=counter)\s*<\s*(?P<bound>[^;]+?))\s*;\s*"
+        r"(?P<increment>(?:(?P=counter)\+\+|\+\+(?P=counter)|"
+        r"(?P=counter)\s*\+=\s*1))"
+        r"\s*\)\s*\{"
+    )
+    for loop in loop_re.finditer(body):
+        abs_open = body_start + loop.end() - 1
+        abs_close = _find_matching_brace(source, abs_open)
+        if abs_close is None or abs_close > body_start + len(body):
+            continue
+        loop_body_start = abs_open + 1
+        loop_body = source[loop_body_start:abs_close]
+        line_cursor = 0
+        for line in loop_body.splitlines(keepends=True):
+            line_start = loop_body_start - body_start + line_cursor
+            line_end = line_start + len(line)
+            line_cursor += len(line)
+            indexed = _find_indexed_expression_in_line(
+                line,
+                counter=loop.group("counter"),
+            )
+            if indexed is None:
+                continue
+            base = str(indexed["base"])
+            base_type = scoped_types.get(base)
+            value_type = (
+                _remove_pointer_from_type(base_type)
+                if base_type is not None else None
+            )
+            if base_type is None or value_type is None:
+                continue
+            return _PointerWalkLoopUse(
+                loop_start=loop.start(),
+                loop_close=abs_close - body_start,
+                loop_indent=loop.group("indent"),
+                counter=loop.group("counter"),
+                bound=loop.group("bound").strip(),
+                bound_start=loop.start("bound"),
+                bound_end=loop.end("bound"),
+                condition_start=loop.start("condition"),
+                condition_end=loop.end("condition"),
+                increment_start=loop.start("increment"),
+                increment_end=loop.end("increment"),
+                line_start=line_start,
+                line_end=line_end,
+                line=line,
+                line_indent=re.match(r"[ \t]*", line).group(0),
+                base=base,
+                base_start=int(indexed["base_start"]),
+                base_end=int(indexed["base_end"]),
+                index_expr=str(indexed["index_expr"]),
+                index_start=int(indexed["index_start"]),
+                index_end=int(indexed["index_end"]),
+                indexed_start=int(indexed["address_start"]),
+                indexed_end=int(indexed["indexed_end"]),
+                base_type=base_type,
+                value_type=value_type,
+            )
+    return None
+
+
 def _find_indexed_pointer_loop_use(
     source: str,
     body: str,
@@ -1555,6 +1884,13 @@ def _normalize_type_spelling(type_name: str) -> str:
 
 def _add_pointer_to_type(type_name: str) -> str:
     return _normalize_type_spelling(type_name) + "*"
+
+
+def _remove_pointer_from_type(type_name: str) -> str | None:
+    normalized = _normalize_type_spelling(type_name)
+    if not normalized.endswith("*"):
+        return None
+    return normalized[:-1]
 
 
 def _probe_nested_loop_counter_hoist(

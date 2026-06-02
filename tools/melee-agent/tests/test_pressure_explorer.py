@@ -678,6 +678,65 @@ def test_indexed_pointer_loop_probes_control_base_index_address_and_bound() -> N
     )
 
 
+def test_pointer_walk_loop_probes_control_tree_index_address_and_end() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(Fighter* fp, FigaTree** trees)
+        {
+            FigaTree** tree = trees;
+            int i;
+            for (i = 0; i < fp->dynamics_num; i++) {
+                ftCo_8009CB40(fp, i, true, tree[i]);
+            }
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(source, "fn_80000000", max_probes=60)
+    by_label = {probe.label: probe for probe in probes}
+
+    index = by_label["pointer-walk-loop-index-temp-0"]
+    assert "        int ll_probe_index_0 = i;\n" in index.source_text
+    assert "tree[ll_probe_index_0]" in index.source_text
+
+    base = by_label["pointer-walk-loop-base-alias-0"]
+    assert "        FigaTree** ll_probe_base_0 = tree;\n" in base.source_text
+    assert "ll_probe_base_0[i]" in base.source_text
+
+    address = by_label["pointer-walk-loop-address-temp-0"]
+    assert "        FigaTree** ll_probe_addr_0 = tree + i;\n" in address.source_text
+    assert "ftCo_8009CB40(fp, i, true, *ll_probe_addr_0);" in address.source_text
+
+    value = by_label["pointer-walk-loop-value-temp-0"]
+    assert "        FigaTree* ll_probe_value_0 = tree[i];\n" in value.source_text
+    assert "ftCo_8009CB40(fp, i, true, ll_probe_value_0);" in value.source_text
+
+    induction = by_label["pointer-walk-loop-induction-0"]
+    assert "        FigaTree** ll_probe_iter_0 = tree;\n" in induction.source_text
+    assert (
+        "for (i = 0; i < fp->dynamics_num; i++, ll_probe_iter_0++)"
+        in induction.source_text
+    )
+    assert "ftCo_8009CB40(fp, i, true, *ll_probe_iter_0);" in induction.source_text
+
+    end_pointer = by_label["pointer-walk-loop-end-pointer-0"]
+    assert (
+        "        FigaTree** ll_probe_end_0 = tree + fp->dynamics_num;\n"
+        in end_pointer.source_text
+    )
+    assert (
+        "for (i = 0; ll_probe_iter_0 < ll_probe_end_0; i++, ll_probe_iter_0++)"
+        in end_pointer.source_text
+    )
+
+    assert address.provenance == {
+        "kind": "pointer-walk-loop",
+        "variant": "address-temp",
+        "counter": "i",
+        "base": "tree",
+        "index_expr": "i",
+        "bound": "fp->dynamics_num",
+    }
+
+
 def test_expression_shape_probe_removes_assignment_in_expression_temp() -> None:
     source = textwrap.dedent("""\
         void fn_80000000(Vec* prevPos, Vec* pos)
