@@ -273,9 +273,14 @@ set +e
   printf 'cd %s\n' "$(shell_quote "${REMOTE_DIR}")"
   printf 'echo "[mwcc-inspect:remote] stage=checkout ref=%s" >&2\n' "$(shell_quote "${REMOTE_REF}")"
   printf 'if ! git rev-parse --verify %s >/dev/null 2>&1; then\n' "$(shell_quote "${REMOTE_REF}")"
-  printf '  git fetch origin --quiet\n'
+  printf '  echo "[mwcc-inspect:remote] ref not present locally; fetching origin branches" >&2\n'
+  printf "  git fetch origin --prune '+refs/heads/*:refs/remotes/origin/*'\n"
   printf 'fi\n'
-  printf 'git -c advice.detachedHead=false checkout --quiet %s 2>/dev/null\n' "$(shell_quote "${REMOTE_REF}")"
+  printf 'if ! git cat-file -e %s 2>/dev/null; then\n' "$(shell_quote "${REMOTE_REF}^{commit}")"
+  printf '  echo "[mwcc-inspect:remote] remote is missing ref %s after fetch; push it to origin or set MWCC_INSPECT_REMOTE_REF" >&2\n' "$(shell_quote "${REMOTE_REF}")"
+  printf '  exit 128\n'
+  printf 'fi\n'
+  printf 'git -c advice.detachedHead=false checkout --quiet %s\n' "$(shell_quote "${REMOTE_REF}")"
   printf 'REMOTE_SOURCE=%s\n' "$(shell_quote "${REMOTE_SOURCE}")"
   printf 'REMOTE_TMP=%s\n' "$(shell_quote "${REMOTE_TMP}")"
   printf 'REMOTE_DIR=%s\n' "$(shell_quote "${REMOTE_DIR}")"

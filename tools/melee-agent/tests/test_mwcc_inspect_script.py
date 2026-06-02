@@ -135,6 +135,9 @@ def test_mwcc_inspect_upload_uses_remote_bash_stdin_for_candidate(tmp_path: Path
     )
     inspector_log = next(log for log in stdin_logs if "MwccInspectorCLI" in log)
     assert "checkout --quiet 'master'" in inspector_log
+    assert "git fetch origin --prune '+refs/heads/*:refs/remotes/origin/*'" in inspector_log
+    assert "git cat-file -e 'master^{commit}'" in inspector_log
+    assert "remote is missing ref 'master'" in inspector_log
     assert "codex/local-only" not in inspector_log
     assert "REMOTE_DIR='/remote/melee'" in inspector_log
     assert (

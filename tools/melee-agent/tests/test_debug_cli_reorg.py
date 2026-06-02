@@ -206,6 +206,36 @@ def test_frame_reservations_cli_reports_current_low_expansion(tmp_path: Path) ->
     assert "current non-save stack accesses in range: none" in result.stdout
 
 
+def test_frame_residual_hint_routes_register_clean_stack_growth() -> None:
+    report = {
+        "function": "gm_801A9DD0",
+        "summary": (
+            "gm_801A9DD0: expected frame=144, current frame=152; "
+            "current has an implicit unused low local home "
+            "(0x18-0x1c, 4 bytes) plus 4 bytes of alignment growth"
+        ),
+        "current": {"frame_size": 152},
+        "expected": {"frame_size": 144},
+        "frame_delta": -8,
+        "extra_low_frame_reservation": None,
+        "current_low_frame_expansion": {
+            "start": 24,
+            "end": 28,
+            "size": 4,
+            "origin": "implicit-current-low-local-home",
+            "current_accesses_in_range": [],
+        },
+    }
+
+    hint = debug_cli._frame_residual_hint_from_report(report)
+
+    assert hint is not None
+    assert hint["kind"] == "frame-local-area"
+    assert "not register allocation" in hint["message"]
+    assert "debug inspect frame-reservations -f gm_801A9DD0" in hint["next_steps"][0]
+    assert "--force-frame-from-diff" in hint["next_steps"][1]
+
+
 def test_dump_remote_quotes_cmd_env_assignments(monkeypatch, tmp_path: Path) -> None:
     captured: dict[str, list[str]] = {}
 
@@ -3352,6 +3382,36 @@ def test_mutate_type_change_diff_prints_focused_preview(monkeypatch, tmp_path) -
     assert "+++ " in out
     assert "-    int x;" in out
     assert "+    u32 x;" in out
+    assert src_path.read_text() == source
+
+
+def test_mutate_type_change_accepts_source_file_override(tmp_path) -> None:
+    src_path = tmp_path / "dirty.c"
+    source = "void f(void)\n{\n    int flag;\n    flag = 1;\n}\n"
+    src_path.write_text(source)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "type-change",
+            "-f",
+            "f",
+            "--var",
+            "flag",
+            "--type",
+            "u32",
+            "--source-file",
+            str(src_path),
+            "--diff",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    out = strip_ansi(result.stdout)
+    assert "-    int flag;" in out
+    assert "+    u32 flag;" in out
     assert src_path.read_text() == source
 
 

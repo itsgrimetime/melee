@@ -46,8 +46,13 @@ class PlainLocalBackend:
         spec = self._spec_factory(variant)
         source_blob = self._store.put_source(variant.source_text)
         source_hash = hashlib.sha256(variant.source_text.encode()).hexdigest()[:32]
-        cid = compute_candidate_id(spec, source_hash)
         prov = variant.provenance or Provenance("unknown", None, None, "", {})
+        cid_override = prov.producer_meta.get("candidate_id_override")
+        cid = (
+            cid_override
+            if isinstance(cid_override, str) and cid_override
+            else compute_candidate_id(spec, source_hash)
+        )
         obj, stderr = self._compiler.compile(variant.source_text, self._target)
         status = "ok" if obj is not None else "compile_failed"
         return CandidateArtifact(

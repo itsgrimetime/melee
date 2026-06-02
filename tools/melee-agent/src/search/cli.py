@@ -90,6 +90,22 @@ def _resolve_source_file(path: Path | None, *, melee_root: Path) -> Path | None:
     raise typer.BadParameter(f"source file not found: {path}")
 
 
+def _parse_run_seed(raw: str, *, melee_root: Path) -> tuple[str, Path]:
+    """Parse a search run seed, optionally preserving an explicit ID."""
+    if "=" in raw:
+        candidate_id, path_s = raw.split("=", 1)
+        candidate_id = candidate_id.strip()
+        path = Path(path_s.strip())
+    else:
+        path = Path(raw.strip())
+        candidate_id = path.stem
+    if not candidate_id:
+        raise typer.BadParameter(f"seed spec {raw!r} has an empty candidate id")
+    resolved = _resolve_source_file(path, melee_root=melee_root)
+    assert resolved is not None
+    return candidate_id, resolved
+
+
 def _parse_directed_int(raw: str, *, prefix: str = "") -> int:
     value = raw.strip().lower()
     if prefix and value.startswith(prefix):
@@ -1362,8 +1378,14 @@ def run_cmd(
         typer.Option("--store", help="Artifact store directory. Defaults to build/search-store."),
     ] = None,
     seeds: Annotated[
-        Optional[list[Path]],
-        typer.Option("--seed", help="Seed source files (.c). May be passed multiple times."),
+        Optional[list[str]],
+        typer.Option(
+            "--seed",
+            help=(
+                "Seed source files (.c), optionally ID=path. "
+                "May be passed multiple times."
+            ),
+        ),
     ] = None,
     no_remote: Annotated[
         bool,
@@ -1552,12 +1574,19 @@ def run_cmd(
     # proof/control baselines stay anchored to the current TU source even
     # when a non-baseline seed is provided.
     seed_texts: list[str] = []
-    for seed_path in (seeds or []):
-        if seed_path.exists():
-            seed_texts.append(seed_path.read_text())
-        else:
-            typer.echo(f"[warn] seed file not found: {seed_path}", err=True)
-    source = SeedListSource(seed_texts)
+    seed_entries: list[dict[str, str]] = []
+    seed_variants: list[tuple[str, str]] = []
+    for raw_seed in (seeds or []):
+        candidate_id, seed_path = _parse_run_seed(raw_seed, melee_root=melee_root)
+        seed_text = seed_path.read_text(encoding="utf-8")
+        seed_texts.append(seed_text)
+        seed_variants.append((candidate_id, seed_text))
+        seed_entries.append({
+            "candidate_id": candidate_id,
+            "path": str(seed_path),
+            "source_hash": _source_hash(seed_text),
+        })
+    source = SeedListSource(seed_variants)
     base_seed_text = seed_texts[0] if seed_texts else None
     tu_source_path = melee_root / "src" / f"{unit}.c"
     baseline_source_text = (
@@ -1797,6 +1826,8 @@ def run_cmd(
         "candidates": len(result.best),
         "accounting": result.accounting,
     }
+    if seed_entries:
+        summary["seed_candidates"] = seed_entries
     if directed_summary is not None:
         summary["directed"] = directed_summary
         summary["directed_telemetry"] = [

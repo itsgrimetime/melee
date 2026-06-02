@@ -71,6 +71,35 @@ def test_search_run_dry(tmp_path: Path) -> None:
     assert "accounting" in result.stdout.lower()
 
 
+def test_search_run_accepts_named_seed_id(tmp_path: Path) -> None:
+    runner = CliRunner()
+    seed = tmp_path / "flag-bool.c"
+    seed.write_text("int MatToQuat(){return 0;}")
+    result = runner.invoke(
+        search_app,
+        [
+            "run",
+            "--function", "MatToQuat",
+            "--unit", "quatlib",
+            "--no-remote",
+            "--seed", f"flag_bool={seed}",
+            "--store", str(tmp_path / "store"),
+            "--max-iters", "1",
+            "--dry-compiler",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    summary = json.loads(result.stdout)
+    assert summary["seed_candidates"] == [
+        {
+            "candidate_id": "flag_bool",
+            "path": str(seed),
+            "source_hash": summary["seed_candidates"][0]["source_hash"],
+        }
+    ]
+
+
 def test_search_run_help_documents_directed_options() -> None:
     runner = CliRunner()
     result = runner.invoke(search_app, ["run", "--help"], env={"COLUMNS": "180"})
@@ -79,6 +108,7 @@ def test_search_run_help_documents_directed_options() -> None:
     assert "--directed-force-phys" in result.stdout
     assert "--directed-from-diff" in result.stdout
     assert "--directed-class" in result.stdout
+    assert "ID=path" in result.stdout
 
 
 def test_search_triage_clusters_source_deltas_and_scores_candidates(

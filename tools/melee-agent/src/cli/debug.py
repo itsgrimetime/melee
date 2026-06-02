@@ -2945,6 +2945,81 @@ def frame_reservations(
     _print_frame_reservation_report(report)
 
 
+def _frame_residual_hint_from_report(
+    report: dict,
+    *,
+    unit: str | None = None,
+) -> dict | None:
+    """Return next-step guidance for frame-only/local-area residuals."""
+    function = report.get("function")
+    if not function:
+        return None
+    low_expansion = report.get("current_low_frame_expansion")
+    extra_reservation = report.get("extra_low_frame_reservation")
+    residual = None
+    if isinstance(low_expansion, dict):
+        residual = low_expansion
+    elif isinstance(extra_reservation, dict):
+        residual = extra_reservation
+    if residual is None:
+        return None
+    if residual.get("current_accesses_in_range"):
+        return None
+
+    summary = report.get("summary") or (
+        f"{function}: frame/local-area reservation differs from target"
+    )
+    src_arg = f"src/{unit}.c" if unit else "<source.c>"
+    message = (
+        f"{summary}; this residual is frame/local-area, not register "
+        "allocation. Prefer frame-reservation inspection or a frame patch "
+        "before register allocator tools."
+    )
+    return {
+        "kind": "frame-local-area",
+        "message": message,
+        "summary": summary,
+        "next_steps": [
+            f"melee-agent debug inspect frame-reservations -f {function}",
+            (
+                f"melee-agent debug dump local {src_arg} -f {function} "
+                "--diff --force-frame-from-diff"
+            ),
+        ],
+    }
+
+
+def _detect_frame_residual_hint(
+    function: str,
+    *,
+    unit: str | None,
+    melee_root: Path,
+    pcdump_path: Path,
+) -> dict | None:
+    try:
+        pcdump_text = pcdump_path.read_text()
+        expected_text = _read_frame_reservation_expected_asm(
+            function,
+            expected_asm=None,
+            no_expected=False,
+            melee_root=melee_root,
+        )
+        current_text = (
+            _read_frame_reservation_current_asm(function, melee_root=melee_root)
+            if _pcdump_has_symbolic_stack_homes(pcdump_text)
+            else None
+        )
+        report = analyze_frame_reservations(
+            pcdump_text,
+            function,
+            expected_asm_text=expected_text,
+            current_asm_text=current_text,
+        )
+    except Exception:
+        return None
+    return _frame_residual_hint_from_report(report, unit=unit)
+
+
 @inspect_app.command("guide")
 def guide(
     function: Annotated[
@@ -7179,6 +7254,7 @@ def stuck(
     coloring_summary: Optional[dict] = None
     guidance_issues: list = []
     cast_warnings_high_med: list = []
+    frame_residual_hint: dict | None = None
     src_text = src.read_text() if src.exists() else ""
     decl_order_summary = (
         _default_decl_order_search_summary(src_text, function)
@@ -7222,6 +7298,12 @@ def stuck(
                 "description": s.description,
                 "patterns": s.patterns,
             } for s in suggestions]
+        frame_residual_hint = _detect_frame_residual_hint(
+            function,
+            unit=unit,
+            melee_root=melee_root,
+            pcdump_path=pcdump_path,
+        )
 
     # Cast warnings — always run regardless of pcdump
     if src_text:
@@ -7252,6 +7334,8 @@ def stuck(
 
     # Next steps — ranked by cost
     next_steps: list[str] = []
+    if frame_residual_hint:
+        next_steps.extend(frame_residual_hint["next_steps"])
     if any(w["severity"] == "high" for w in cast_warnings_high_med):
         next_steps.append(
             "[free, static] Drop suspicious casts surfaced by suggest casts. "
@@ -7305,6 +7389,7 @@ def stuck(
     digest["hsd_assert_strings"] = [
         {"sym": s, "string": v} for s, v in hsd_assert_strings
     ]
+    digest["frame_residual"] = frame_residual_hint
     digest["next_steps"] = next_steps
 
     if json_out:
@@ -7347,8 +7432,17 @@ def stuck(
         print()
     elif coloring_summary:
         print(f"== Guidance issues ==")
-        print(f"  (none — pcdump available but no flagged issues. Provide "
-              f"--target to compare against a specific mapping.)")
+        if frame_residual_hint:
+            print(f"  (none from register-allocation guidance; see "
+                  f"frame/local-area residual below.)")
+        else:
+            print(f"  (none — pcdump available but no flagged issues. Provide "
+                  f"--target to compare against a specific mapping.)")
+        print()
+
+    if frame_residual_hint:
+        print(f"== Frame/local-area residual ==")
+        print(f"  {frame_residual_hint['message']}")
         print()
 
     if cast_warnings_high_med:
@@ -7953,7 +8047,18 @@ def ceiling(
         raise typer.Exit(2)
     src = melee_root / "src" / f"{unit}.c"
     baseline = _get_match_pct(function, melee_root) or 0.0
-    _resolve_pcdump_path(None, function, melee_root, require_fresh=True)
+    diagnose_pcdump_path = _resolve_pcdump_path(
+        None,
+        function,
+        melee_root,
+        require_fresh=True,
+    )
+    frame_residual_hint = _detect_frame_residual_hint(
+        function,
+        unit=unit,
+        melee_root=melee_root,
+        pcdump_path=diagnose_pcdump_path,
+    )
 
     if not json_out:
         print(f"== Current-tooling diagnosis for {function} ==")
@@ -8279,6 +8384,11 @@ def ceiling(
     if coupled_force_phys_guidance and not json_out:
         _print_coupled_force_phys_guidance(coupled_force_phys_guidance)
 
+    if frame_residual_hint and not json_out:
+        print("[!] Frame/local-area residual:")
+        print(f"    {frame_residual_hint['message']}")
+        print()
+
     # Verdict — use verified cast results (not raw heuristic count) so we
     # don't produce false-positive WIN AVAILABLE on no-op casts.
     #
@@ -8314,6 +8424,12 @@ def ceiling(
                 f"{decl_strategy} --keep-best` → expected "
                 f"{decl_best_pct:.2f}%."
             )
+    elif frame_residual_hint:
+        verdict = "FRAME/LOCAL-AREA RESIDUAL"
+        recommendations = [
+            frame_residual_hint["message"],
+            *frame_residual_hint["next_steps"],
+        ]
     else:
         verdict = "NO FAST TRANSFORM FOUND"
         recommendations = _ceiling_recommendations(function, unit)
@@ -8345,6 +8461,7 @@ def ceiling(
             ],
             "spilled_virtual_hints": ceiling_spilled_hints,
             "coupled_force_phys": coupled_force_phys_guidance,
+            "frame_residual": frame_residual_hint,
             "recommendations": recommendations,
         }, indent=2))
         return
@@ -16024,6 +16141,13 @@ def mutate_type_change_cmd(
         str,
         typer.Option("--type", help="New type string (e.g., 'u32')."),
     ],
+    source_file: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--source-file",
+            help="Source file to mutate instead of resolving from report.json.",
+        ),
+    ] = None,
     apply: Annotated[
         bool,
         typer.Option(
@@ -16041,7 +16165,15 @@ def mutate_type_change_cmd(
     from ..mwcc_debug.mutators import MutationUnsupported, mutate_type_change
 
     melee_root = DEFAULT_MELEE_ROOT
-    src_path, source = _read_source_for(function, melee_root)
+    if source_file is not None:
+        src_path = _resolve_existing_cli_file(
+            source_file,
+            melee_root=melee_root,
+            label="source file",
+        )
+        source = src_path.read_text()
+    else:
+        src_path, source = _read_source_for(function, melee_root)
     try:
         out = mutate_type_change(source, function, var, new_type)
     except MutationUnsupported as e:
