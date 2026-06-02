@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 
 @dataclass(frozen=True)
@@ -58,7 +58,8 @@ class CandidateArtifact:
     pcdump_path: Path | None
     compiler_stderr: str
     provenance: Provenance
-    status: Literal["ok", "harvested", "compile_failed", "score_failed"]
+    status: Literal["ok", "harvested", "compile_failed", "score_failed", "invalid"]
+    directed_meta: Any = None
 
 
 def compute_candidate_id(spec: CompileSpec, source_hash: str) -> str:

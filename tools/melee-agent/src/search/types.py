@@ -72,6 +72,7 @@ class SearchContext:
 
     iters_done: int = 0
     best_byte_score: int | None = None
+    byte_history: list = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -91,3 +92,4 @@ class SearchResult:
     best: list = field(default_factory=list)  # list[CandidateArtifact]
     matched: Any = None  # CandidateArtifact | None
     accounting: dict = field(default_factory=dict)
+    directed_telemetry: list = field(default_factory=list)
