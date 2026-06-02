@@ -505,7 +505,7 @@ void mnDiagram3_8024714C(void* arg0)
             f32 fi = (f32) i;
             HSD_Text* text = HSD_SisLib_803A5ACC(
                 0, 1, sp48.x - row_spacing, neg_spacing * fi + -sp48.y, sp48.z,
-                mnDiagram3_804DBFFC, mnDiagram3_804DBFFC);
+                row_spacing, mnDiagram3_804DBFFC);
 
             d->row_labels[i] = text;
             {
