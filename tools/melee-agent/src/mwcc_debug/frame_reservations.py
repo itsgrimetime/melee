@@ -75,13 +75,26 @@ def analyze_frame_reservations(
         if expected is not None
         else None
     )
-    summary = _summary(function, current, expected, frame_delta, extra)
+    current_low_expansion = (
+        _current_low_frame_expansion(current, expected, frame_delta)
+        if expected is not None
+        else None
+    )
+    summary = _summary(
+        function,
+        current,
+        expected,
+        frame_delta,
+        extra,
+        current_low_expansion,
+    )
     report = {
         "function": function,
         "current": current,
         "expected": expected,
         "frame_delta": frame_delta,
         "extra_low_frame_reservation": extra,
+        "current_low_frame_expansion": current_low_expansion,
         "summary": summary,
     }
     return report
@@ -460,12 +473,55 @@ def _extra_low_frame_reservation(current: dict, expected: dict | None) -> dict |
     }
 
 
+def _current_low_frame_expansion(
+    current: dict,
+    expected: dict | None,
+    frame_delta: int | None,
+) -> dict | None:
+    if expected is None or frame_delta is None or frame_delta >= 0:
+        return None
+    cur_first = _first_non_abi_access_offset(current)
+    exp_first = _first_non_abi_access_offset(expected)
+    if cur_first is None or exp_first is None or cur_first <= exp_first:
+        return None
+    frame_growth = -frame_delta
+    low_home_size = cur_first - exp_first
+    if low_home_size <= 0 or frame_growth < low_home_size:
+        return None
+    accesses = [
+        item
+        for item in current.get("accesses", [])
+        if not item.get("pre_frame") and exp_first <= item["offset"] < cur_first
+        and (
+            current.get("frame_size") is None
+            or item["offset"] < current["frame_size"]
+        )
+        and item.get("kind") not in {
+            "callee-save-gpr",
+            "callee-save-fpr",
+            "link-register-save",
+        }
+    ]
+    return {
+        "start": exp_first,
+        "end": cur_first,
+        "size": low_home_size,
+        "origin": "implicit-current-low-local-home",
+        "frame_growth_bytes": frame_growth,
+        "alignment_growth_bytes": frame_growth - low_home_size,
+        "first_non_abi_access_expected": exp_first,
+        "first_non_abi_access_current": cur_first,
+        "current_accesses_in_range": accesses,
+    }
+
+
 def _summary(
     function: str,
     current: dict,
     expected: dict | None,
     frame_delta: int | None,
     extra: dict | None,
+    current_low_expansion: dict | None,
 ) -> str:
     cur_frame = current.get("frame_size")
     if expected is None or expected.get("frame_size") is None:
@@ -480,6 +536,23 @@ def _summary(
             f"(0x{extra['start']:x}-0x{extra['end']:x}) before the first "
             "callee/local stack access, with no current pcode stack access "
             "origin in that range"
+        )
+    if (
+        current_low_expansion is not None
+        and not current_low_expansion["current_accesses_in_range"]
+    ):
+        align = current_low_expansion["alignment_growth_bytes"]
+        detail = (
+            f"current has an implicit unused low local home "
+            f"(0x{current_low_expansion['start']:x}-"
+            f"0x{current_low_expansion['end']:x}, "
+            f"{current_low_expansion['size']} bytes)"
+        )
+        if align:
+            detail += f" plus {align} bytes of alignment growth"
+        return (
+            f"{function}: expected frame={exp_frame}, current frame={cur_frame}; "
+            f"{detail}"
         )
     return (
         f"{function}: expected frame={exp_frame}, current frame={cur_frame}; "

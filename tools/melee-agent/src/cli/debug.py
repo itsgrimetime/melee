@@ -2842,6 +2842,25 @@ def _print_frame_reservation_report(report: dict) -> None:
     if expected is not None:
         _print_unused_ranges("expected", expected.get("unused_ranges", []))
 
+    current_low = report.get("current_low_frame_expansion")
+    if current_low is not None:
+        print()
+        print(f"current low-frame expansion: {_format_stack_range(current_low)}")
+        print(f"origin: {current_low.get('origin')}")
+        print(f"frame growth bytes: {current_low.get('frame_growth_bytes')}")
+        print(f"alignment growth bytes: {current_low.get('alignment_growth_bytes')}")
+        accesses = current_low.get("current_accesses_in_range") or []
+        if not accesses:
+            print("current non-save stack accesses in range: none")
+        else:
+            print("current non-save stack accesses in range:")
+            for access in accesses:
+                print(
+                    f"  {access.get('opcode')} {access.get('operands')} "
+                    f"at 0x{int(access['offset']):x} "
+                    f"({access.get('kind')})"
+                )
+
     extra = report.get("extra_low_frame_reservation")
     if extra is None:
         return

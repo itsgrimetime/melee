@@ -74,6 +74,66 @@ def test_frame_reservation_report_finds_extra_unused_low_frame_gap() -> None:
     assert "no current pcode stack access" in report["summary"]
 
 
+def test_frame_reservation_report_finds_current_low_home_realignment_growth() -> None:
+    pcdump = textwrap.dedent("""\
+        Starting function gm_801A9DD0
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        gm_801A9DD0
+        B0: Succ={} Pred={} Labels={}
+            stw r0,4(r1)
+            stwu r1,-152(r1)
+            stfd f31,144(r1)
+            stfd f30,136(r1)
+            stw r8,40(r1)
+            stw r7,28(r1)
+            stw r9,72(r1)
+            lfd f0,72(r1)
+            stw r9,80(r1)
+            lfd f0,80(r1)
+            lfd f30,136(r1)
+            lfd f31,144(r1)
+            addi r1,r1,152
+    """)
+    expected_asm = textwrap.dedent("""\
+        .fn gm_801A9DD0, global
+        /* 801A9DD8 */    stw r0, 0x4(r1)
+        /* 801A9DDC */    stwu r1, -0x90(r1)
+        /* 801A9DE0 */    stfd f31, 0x88(r1)
+        /* 801A9DE4 */    stfd f30, 0x80(r1)
+        /* 801A9DE8 */    stw r8, 0x24(r1)
+        /* 801A9DEC */    stw r7, 0x18(r1)
+        /* 801A9DF0 */    stw r9, 0x40(r1)
+        /* 801A9DF4 */    lfd f0, 0x40(r1)
+        /* 801A9DF8 */    stw r9, 0x48(r1)
+        /* 801A9DFC */    lfd f0, 0x48(r1)
+        /* 801A9E00 */    lfd f30, 0x80(r1)
+        /* 801A9E04 */    lfd f31, 0x88(r1)
+        /* 801A9E08 */    addi r1, r1, 0x90
+        .endfn gm_801A9DD0
+    """)
+
+    report = analyze_frame_reservations(
+        pcdump,
+        "gm_801A9DD0",
+        expected_asm_text=expected_asm,
+    )
+
+    signature = report["current_low_frame_expansion"]
+    assert signature == {
+        "start": 24,
+        "end": 28,
+        "size": 4,
+        "origin": "implicit-current-low-local-home",
+        "frame_growth_bytes": 8,
+        "alignment_growth_bytes": 4,
+        "first_non_abi_access_expected": 24,
+        "first_non_abi_access_current": 28,
+        "current_accesses_in_range": [],
+    }
+    assert "implicit unused low local home" in report["summary"]
+    assert "plus 4 bytes of alignment growth" in report["summary"]
+
+
 def test_frame_reservation_report_labels_callee_save_access_ranges() -> None:
     pcdump = textwrap.dedent("""\
         Starting function fn_80000000

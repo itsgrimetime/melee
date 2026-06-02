@@ -146,6 +146,66 @@ def test_frame_reservations_cli_reports_extra_low_gap(tmp_path: Path) -> None:
     assert "no current pcode stack access" in payload["summary"]
 
 
+def test_frame_reservations_cli_reports_current_low_expansion(tmp_path: Path) -> None:
+    pcdump = tmp_path / "pcdump.txt"
+    pcdump.write_text(textwrap.dedent("""\
+        Starting function gm_801A9DD0
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        gm_801A9DD0
+        B0: Succ={} Pred={} Labels={}
+            stw r0,4(r1)
+            stwu r1,-152(r1)
+            stfd f31,144(r1)
+            stfd f30,136(r1)
+            stw r8,40(r1)
+            stw r7,28(r1)
+            stw r9,72(r1)
+            lfd f0,72(r1)
+            stw r9,80(r1)
+            lfd f0,80(r1)
+            lfd f30,136(r1)
+            lfd f31,144(r1)
+            addi r1,r1,152
+    """))
+    expected = tmp_path / "expected.s"
+    expected.write_text(textwrap.dedent("""\
+        .fn gm_801A9DD0, global
+        /* 801A9DD8 */    stw r0, 0x4(r1)
+        /* 801A9DDC */    stwu r1, -0x90(r1)
+        /* 801A9DE0 */    stfd f31, 0x88(r1)
+        /* 801A9DE4 */    stfd f30, 0x80(r1)
+        /* 801A9DE8 */    stw r8, 0x24(r1)
+        /* 801A9DEC */    stw r7, 0x18(r1)
+        /* 801A9DF0 */    stw r9, 0x40(r1)
+        /* 801A9DF4 */    lfd f0, 0x40(r1)
+        /* 801A9DF8 */    stw r9, 0x48(r1)
+        /* 801A9DFC */    lfd f0, 0x48(r1)
+        /* 801A9E00 */    lfd f30, 0x80(r1)
+        /* 801A9E04 */    lfd f31, 0x88(r1)
+        /* 801A9E08 */    addi r1, r1, 0x90
+        .endfn gm_801A9DD0
+    """))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "frame-reservations",
+            "-f",
+            "gm_801A9DD0",
+            str(pcdump),
+            "--expected-asm",
+            str(expected),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "current low-frame expansion: 0x18-0x1c (4 bytes)" in result.stdout
+    assert "alignment growth bytes: 4" in result.stdout
+    assert "current non-save stack accesses in range: none" in result.stdout
+
+
 def test_dump_remote_quotes_cmd_env_assignments(monkeypatch, tmp_path: Path) -> None:
     captured: dict[str, list[str]] = {}
 
