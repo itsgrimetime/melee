@@ -458,10 +458,11 @@ def _run_live(
     from src.search.scoring import ByteScorePipeline, DefaultSchedulePolicy
     from src.search.types import Budget, SchedulePolicy, SourceSpec, TargetSpec
 
-    # Resolve expected .o and initial source.
+    # Resolve expected .o, objective baseline, and candidate seed source.
     tu_path = melee_root / "src" / f"{unit}.c"
-    source_path = Path(source_file) if source_file is not None else tu_path
-    source_text = source_path.read_text(encoding="utf-8")
+    baseline_source_text = tu_path.read_text(encoding="utf-8")
+    seed_source_path = Path(source_file) if source_file is not None else tu_path
+    seed_source_text = seed_source_path.read_text(encoding="utf-8")
 
     # Determine force_phys: prefer operator-provided proof, retain the older
     # grIceMt fixture default for backward compatibility.
@@ -479,7 +480,7 @@ def _run_live(
     )
     cflags_hash = _hashlib.sha256(_CFLAGS.encode()).hexdigest()[:16]
     base_context_hash = _hashlib.sha256(
-        source_text.encode()
+        baseline_source_text.encode()
     ).hexdigest()[:32]
 
     # Minimal manifest
@@ -490,7 +491,7 @@ def _run_live(
         compile_command=["ninja", obj_rel],
         cflags=_CFLAGS.split(),
         include_paths=include_paths,
-        base_context_blob=store.put_source(""),
+        base_context_blob=store.put_source(baseline_source_text),
         permuter_compile_sh=None,
         permuter_settings_toml=None,
     )
@@ -538,7 +539,7 @@ def _run_live(
             proof_force_phys=force_phys,
             class_id=class_id,
             backend=pcdump_backend,
-            baseline_source_text=source_text,
+            baseline_source_text=baseline_source_text,
         )
         preflight_objective(objective)
     except PreflightError as exc:
@@ -604,8 +605,9 @@ def _run_live(
         directed_from_start=True,
     )
 
-    # Source text for seeding
-    tu_source = source_text
+    # Source text for seeding. A --seed override is a candidate, not the
+    # objective baseline; the proof vector is anchored to the repo TU source.
+    tu_source = seed_source_text
 
     # Build the propose function
     def propose(source_text: str, tried: frozenset):
@@ -780,7 +782,7 @@ def _run_live(
         score_pipeline=score_pipeline,
         objective=objective,
         target=target,
-        source_text=source_text,
+        source_text=baseline_source_text,
     )
 
     from src.search.directed.gate import evaluate_phase1_gate
@@ -790,6 +792,15 @@ def _run_live(
         control_displacement=control_displacement,
     )
     accounting = dict(result.accounting)
+    accounting["context"] = {
+        "baseline_source_hash": _hashlib.sha256(
+            baseline_source_text.encode()
+        ).hexdigest()[:32],
+        "seed_source_hash": _hashlib.sha256(
+            seed_source_text.encode()
+        ).hexdigest()[:32],
+        "seed_source_file": str(seed_source_path),
+    }
     accounting["control"] = {
         "phys_match_fraction": control_displacement,
         "proof_assignments": (
