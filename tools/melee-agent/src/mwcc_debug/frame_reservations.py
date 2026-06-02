@@ -100,6 +100,11 @@ def analyze_frame_reservations(
     return report
 
 
+def analyze_frame_from_function(fn: Function) -> dict:
+    """Return a JSON-friendly current-side frame model for a parsed function."""
+    return _analyze_instructions(_final_instructions(fn))
+
+
 def _select_final_pass(fn: Function) -> Pass | None:
     preferred = (
         "FINAL CODE AFTER INSTRUCTION SCHEDULING",

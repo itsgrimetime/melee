@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from .colorgraph_parser import FunctionEvents, SimplifySection
+from .frame_reservations import analyze_frame_from_function
 from .parser import Function, VirtualRegInfo, analyze_function
 
 
@@ -43,6 +44,8 @@ class ScoreWeights:
     virtual: float = 10.0
     spill: float = 5.0
     interferer: float = 1.0
+    frame_size: float = 1.0
+    frame_unused: float = 0.25
 
 
 _DEFAULT_WEIGHTS = ScoreWeights()
@@ -64,6 +67,37 @@ class ScoreBreakdown:
     wrong: list[tuple[int, int, int]]  # (virtual, target_phys, actual_phys)
     matched: int  # count of correctly-mapped virtuals
     targeted: int  # count of virtuals named in target
+    frame_targeted: bool
+    frame_size_actual: int | None
+    frame_size_target: int | None
+    frame_size_distance: int
+    frame_unused_distance: int
+    frame_penalty: float
+
+
+def _range_signature(ranges: list[dict]) -> set[tuple[int, int]]:
+    out: set[tuple[int, int]] = set()
+    for item in ranges:
+        try:
+            out.add((int(item["start"]), int(item["end"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+def _range_symmetric_distance(actual: list[dict], target: list[dict]) -> int:
+    actual_ranges = _range_signature(actual)
+    target_ranges = _range_signature(target)
+    distance = 0
+    for start, end in actual_ranges.symmetric_difference(target_ranges):
+        distance += max(0, end - start)
+    return distance
+
+
+def _coerce_frame_target(raw: object) -> dict:
+    if not isinstance(raw, dict):
+        return {}
+    return raw
 
 
 def _virtuals_from_analyze(fn: Function) -> dict[int, VirtualRegInfo]:
@@ -137,6 +171,34 @@ def score_function(
     spill_penalty = (len(spill_unexpected) + len(spill_missing)) * weights.spill
     interferer_penalty = interferer_distance * weights.interferer
 
+    target_frame = _coerce_frame_target(target.get("frame"))
+    frame_targeted = bool(target_frame)
+    frame_size_actual = None
+    frame_size_target = None
+    frame_size_distance = 0
+    frame_unused_distance = 0
+    if frame_targeted:
+        actual_frame = analyze_frame_from_function(fn)
+        frame_size_actual = actual_frame.get("frame_size")
+        raw_target_frame_size = target_frame.get("frame_size")
+        if raw_target_frame_size is not None:
+            try:
+                frame_size_target = int(raw_target_frame_size)
+            except (TypeError, ValueError):
+                frame_size_target = None
+        if frame_size_actual is not None and frame_size_target is not None:
+            frame_size_distance = abs(frame_size_actual - frame_size_target)
+        target_unused_ranges = target_frame.get("unused_ranges")
+        if isinstance(target_unused_ranges, list):
+            frame_unused_distance = _range_symmetric_distance(
+                actual_frame.get("unused_ranges", []),
+                target_unused_ranges,
+            )
+    frame_penalty = (
+        frame_size_distance * weights.frame_size
+        + frame_unused_distance * weights.frame_unused
+    )
+
     # Byte distance is not directly computable from pcdump alone (we'd need
     # the target .o for that). For now it's a synthetic stand-in:
     # 100 * (1 - matched/targeted) — i.e. fraction of target NOT met,
@@ -148,7 +210,13 @@ def score_function(
         byte_pct_miss = 0.0
     byte_penalty = byte_pct_miss * weights.byte / 100.0
 
-    total = byte_penalty + virtual_penalty + spill_penalty + interferer_penalty
+    total = (
+        byte_penalty
+        + virtual_penalty
+        + spill_penalty
+        + interferer_penalty
+        + frame_penalty
+    )
 
     return ScoreBreakdown(
         total=total,
@@ -162,6 +230,12 @@ def score_function(
         wrong=wrong,
         matched=matched,
         targeted=targeted,
+        frame_targeted=frame_targeted,
+        frame_size_actual=frame_size_actual,
+        frame_size_target=frame_size_target,
+        frame_size_distance=frame_size_distance,
+        frame_unused_distance=frame_unused_distance,
+        frame_penalty=frame_penalty,
     )
 
 
@@ -184,8 +258,17 @@ def derive_target_from_function(fn: Function,
                     spilled.append(entry.ig_idx)
     spilled = sorted(set(spilled))
 
-    return {
+    spec = {
         "function": fn.name,
         "virtuals": virtuals,
         "spilled": spilled,
     }
+    frame = analyze_frame_from_function(fn)
+    if frame.get("frame_size") is not None:
+        spec["frame"] = {
+            "frame_size": frame["frame_size"],
+            "access_ranges": frame.get("access_ranges", []),
+            "unused_ranges": frame.get("unused_ranges", []),
+            "symbolic_home_map": frame.get("symbolic_home_map", []),
+        }
+    return spec

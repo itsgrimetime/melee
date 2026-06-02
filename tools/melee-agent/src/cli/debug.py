@@ -2514,6 +2514,12 @@ def score(
             "spill_unexpected": result.spill_unexpected,
             "spill_missing": result.spill_missing,
             "interferer_distance": result.interferer_distance,
+            "frame_targeted": result.frame_targeted,
+            "frame_size_actual": result.frame_size_actual,
+            "frame_size_target": result.frame_size_target,
+            "frame_size_distance": result.frame_size_distance,
+            "frame_unused_distance": result.frame_unused_distance,
+            "frame_penalty": result.frame_penalty,
         }))
         return
 
@@ -2528,6 +2534,11 @@ def score(
               f"missing={len(result.spill_missing)})")
         print(f"Interferer penalty: {result.interferer_penalty:.2f} "
               f"(sum |Δdeg| = {result.interferer_distance})")
+        if result.frame_targeted:
+            print(f"Frame penalty:      {result.frame_penalty:.2f} "
+                  f"(size {result.frame_size_actual} → "
+                  f"{result.frame_size_target}, "
+                  f"unused-range Δ={result.frame_unused_distance})")
     else:
         print(f"{result.total:.2f}")
 
@@ -3020,6 +3031,208 @@ def _detect_frame_residual_hint(
     return _frame_residual_hint_from_report(report, unit=unit)
 
 
+def _frame_source_suggestions_from_report(
+    report: dict,
+    *,
+    unit: str | None = None,
+) -> list[dict]:
+    function = report.get("function") or "<function>"
+    src_rel = f"src/{unit}.c" if unit else "<source.c>"
+    frame_target = f"{function}.frame-target.json"
+    suggestions: list[dict] = []
+
+    current_low = report.get("current_low_frame_expansion")
+    if isinstance(current_low, dict):
+        range_text = _format_stack_range(current_low)
+        commands = [
+            (
+                f"melee-agent debug target derive -f {function} --format json "
+                f"> {frame_target}"
+            ),
+            (
+                f"melee-agent debug target score-source {src_rel} "
+                f"-f {function} --target {frame_target}"
+            ),
+            (
+                f"melee-agent debug dump local {src_rel} -f {function} "
+                "--diff --force-frame-from-diff"
+            ),
+        ]
+        suggestions.append({
+            "rank": 1,
+            "kind": "suppress-unused-local-home",
+            "origin": current_low.get("origin"),
+            "range": {
+                "start": current_low.get("start"),
+                "end": current_low.get("end"),
+                "size": current_low.get("size"),
+            },
+            "description": (
+                f"Current source reserves an unused low local home at "
+                f"{range_text}. For gm_801A9DD0-style cases this commonly "
+                "comes from a held FP constant whose mutable local form gets "
+                "a DLOCAL stack home. Try source shapes that keep the held FP "
+                "constant live without a named mutable local home: split the "
+                "constant lifetime, use direct literal/global expression at "
+                "the final FP call, or compare against a matched sibling with "
+                "the same SetNear/SetFar idiom."
+            ),
+            "commands": commands,
+            "score_target": {
+                "frame_size": report.get("expected", {}).get("frame_size")
+                if isinstance(report.get("expected"), dict) else None,
+                "score_command": commands[1],
+            },
+        })
+        if current_low.get("alignment_growth_bytes"):
+            suggestions.append({
+                "rank": 2,
+                "kind": "reduce-alignment-growth",
+                "origin": current_low.get("origin"),
+                "description": (
+                    "The unused low home also changes the next 8-byte-aligned "
+                    "scratch slot. Probe source variants that move int-to-float "
+                    "magic-double scratch lifetimes away from the held FP "
+                    "constant, then rank them with the frame target scorer."
+                ),
+                "commands": [commands[1]],
+            })
+
+    extra = report.get("extra_low_frame_reservation")
+    if isinstance(extra, dict):
+        commands = [
+            (
+                f"melee-agent debug target score-source {src_rel} "
+                f"-f {function} --target {frame_target}"
+            ),
+            (
+                f"melee-agent debug mutate lifetime-layout -f {function} "
+                f"--frame-reservation-bytes {extra.get('size')}"
+            ),
+        ]
+        suggestions.append({
+            "rank": len(suggestions) + 1,
+            "kind": "add-low-frame-reservation",
+            "origin": extra.get("origin"),
+            "range": {
+                "start": extra.get("start"),
+                "end": extra.get("end"),
+                "size": extra.get("size"),
+            },
+            "description": (
+                "The target reserves low-frame bytes before the first current "
+                "callee/local stack access. Try explicit reservation probes or "
+                "source lifetime changes that introduce a natural low local."
+            ),
+            "commands": commands,
+        })
+
+    if not suggestions:
+        suggestions.append({
+            "rank": 1,
+            "kind": "derive-frame-target",
+            "origin": "frame-size",
+            "description": (
+                "No unused-home signature was detected. Derive a frame target "
+                "from a matched/forced reference and use score-source to rank "
+                "source candidates by frame-size and unused-range distance."
+            ),
+            "commands": [
+                (
+                    f"melee-agent debug target derive -f {function} "
+                    f"--format json > {frame_target}"
+                ),
+                (
+                    f"melee-agent debug target score-source {src_rel} "
+                    f"-f {function} --target {frame_target}"
+                ),
+            ],
+        })
+    return suggestions
+
+
+def _print_frame_suggestions(report: dict, suggestions: list[dict]) -> None:
+    print(report["summary"])
+    print()
+    print("Frame source suggestions:")
+    for suggestion in suggestions:
+        print(f"{suggestion['rank']}. {suggestion['kind']}")
+        print(f"   {suggestion['description']}")
+        commands = suggestion.get("commands") or []
+        if commands:
+            print("   Commands:")
+            for command in commands:
+                print(f"     {command}")
+
+
+@suggest_app.command(name="frame")
+def suggest_frame_cmd(
+    function: Annotated[
+        str,
+        typer.Option("--function", "-f", help="Function name to inspect"),
+    ],
+    pcdump: Annotated[
+        Optional[Path],
+        typer.Argument(
+            help="Path to pcdump.txt. Omit to auto-resolve via --function.",
+        ),
+    ] = None,
+    expected_asm: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--expected-asm",
+            help="Expected target asm. Omit to extract via `extract get --full`.",
+        ),
+    ] = None,
+    no_expected: Annotated[
+        bool,
+        typer.Option(
+            "--no-expected",
+            help="Do not compare against target asm; emit generic frame levers.",
+        ),
+    ] = False,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit as JSON."),
+    ] = False,
+) -> None:
+    """Suggest source/probe levers for stack-frame/local-area residuals."""
+    melee_root = DEFAULT_MELEE_ROOT
+    pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
+    pcdump_text = pcdump_path.read_text()
+    expected_text = _read_frame_reservation_expected_asm(
+        function,
+        expected_asm=expected_asm,
+        no_expected=no_expected,
+        melee_root=melee_root,
+    )
+    current_text = (
+        _read_frame_reservation_current_asm(function, melee_root=melee_root)
+        if _pcdump_has_symbolic_stack_homes(pcdump_text)
+        else None
+    )
+    try:
+        report = analyze_frame_reservations(
+            pcdump_text,
+            function,
+            expected_asm_text=expected_text,
+            current_asm_text=current_text,
+        )
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2) from exc
+    unit = _find_unit_for_function(function, melee_root)
+    suggestions = _frame_source_suggestions_from_report(report, unit=unit)
+    if json_out:
+        print(json.dumps({
+            "function": function,
+            "frame": report,
+            "suggestions": suggestions,
+        }, indent=2))
+        return
+    _print_frame_suggestions(report, suggestions)
+
+
 @inspect_app.command("guide")
 def guide(
     function: Annotated[
@@ -3241,6 +3454,29 @@ def derive_target(
             print(f"spilled:")
             for v in spec["spilled"]:
                 print(f"  - {v}")
+        if spec.get("frame"):
+            frame = spec["frame"]
+            print("frame:")
+            print(f"  frame_size: {frame.get('frame_size')}")
+            access_ranges = frame.get("access_ranges") or []
+            if access_ranges:
+                print("  access_ranges:")
+                for item in access_ranges:
+                    print(
+                        f"    - start: {item.get('start')}\n"
+                        f"      end: {item.get('end')}\n"
+                        f"      size: {item.get('size')}\n"
+                        f"      kind: {item.get('kind')}"
+                    )
+            unused_ranges = frame.get("unused_ranges") or []
+            if unused_ranges:
+                print("  unused_ranges:")
+                for item in unused_ranges:
+                    print(
+                        f"    - start: {item.get('start')}\n"
+                        f"      end: {item.get('end')}\n"
+                        f"      size: {item.get('size')}"
+                    )
     typer.echo(
         "Hint: save stdout to a target file, then run "
         f"`melee-agent debug inspect guide -f {function} --target <file>`.",

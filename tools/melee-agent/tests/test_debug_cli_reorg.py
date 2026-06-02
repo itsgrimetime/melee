@@ -69,6 +69,7 @@ def test_representative_grouped_command_help_works() -> None:
         ["debug", "target", "derive", "--help"],
         ["debug", "target", "match-iter-first", "--help"],
         ["debug", "target", "score-source", "--help"],
+        ["debug", "suggest", "frame", "--help"],
         ["debug", "suggest", "coalesce", "--help"],
         ["debug", "suggest", "schedule", "--help"],
         ["debug", "suggest", "inlines", "--help"],
@@ -234,6 +235,119 @@ def test_frame_residual_hint_routes_register_clean_stack_growth() -> None:
     assert "not register allocation" in hint["message"]
     assert "debug inspect frame-reservations -f gm_801A9DD0" in hint["next_steps"][0]
     assert "--force-frame-from-diff" in hint["next_steps"][1]
+
+
+def test_target_score_dump_json_includes_frame_component(tmp_path: Path) -> None:
+    pcdump = tmp_path / "pcdump.txt"
+    pcdump.write_text(textwrap.dedent("""\
+        Starting function fn_80000000
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        fn_80000000
+        B0: Succ={} Pred={} Labels={}
+            stwu r1,-152(r1)
+            stw r31,40(r1)
+            addi r1,r1,152
+    """))
+    target = tmp_path / "target.json"
+    target.write_text(json.dumps({
+        "function": "fn_80000000",
+        "virtuals": {},
+        "frame": {"frame_size": 144},
+    }))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "target",
+            "score-dump",
+            "-f",
+            "fn_80000000",
+            "--target",
+            str(target),
+            str(pcdump),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["frame_targeted"] is True
+    assert payload["frame_size_actual"] == 152
+    assert payload["frame_size_target"] == 144
+    assert payload["frame_size_distance"] == 8
+    assert payload["frame_penalty"] > 0
+
+
+def test_suggest_frame_reports_low_home_source_levers(tmp_path: Path) -> None:
+    pcdump = tmp_path / "pcdump.txt"
+    pcdump.write_text(textwrap.dedent("""\
+        Starting function gm_801A9DD0
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        gm_801A9DD0
+        B0: Succ={} Pred={} Labels={}
+            stw r0,4(r1)
+            stwu r1,-152(r1)
+            stfd f31,144(r1)
+            stfd f30,136(r1)
+            stw r8,40(r1)
+            stw r7,28(r1)
+            stw r9,72(r1)
+            lfd f0,72(r1)
+            stw r9,80(r1)
+            lfd f0,80(r1)
+            lfd f30,136(r1)
+            lfd f31,144(r1)
+            addi r1,r1,152
+    """))
+    expected = tmp_path / "expected.s"
+    expected.write_text(textwrap.dedent("""\
+        .fn gm_801A9DD0, global
+        /* 801A9DD8 */    stw r0, 0x4(r1)
+        /* 801A9DDC */    stwu r1, -0x90(r1)
+        /* 801A9DE0 */    stfd f31, 0x88(r1)
+        /* 801A9DE4 */    stfd f30, 0x80(r1)
+        /* 801A9DE8 */    stw r8, 0x24(r1)
+        /* 801A9DEC */    stw r7, 0x18(r1)
+        /* 801A9DF0 */    stw r9, 0x40(r1)
+        /* 801A9DF4 */    lfd f0, 0x40(r1)
+        /* 801A9DF8 */    stw r9, 0x48(r1)
+        /* 801A9DFC */    lfd f0, 0x48(r1)
+        /* 801A9E00 */    lfd f30, 0x80(r1)
+        /* 801A9E04 */    lfd f31, 0x88(r1)
+        /* 801A9E08 */    addi r1, r1, 0x90
+        .endfn gm_801A9DD0
+    """))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "suggest",
+            "frame",
+            "-f",
+            "gm_801A9DD0",
+            str(pcdump),
+            "--expected-asm",
+            str(expected),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["frame"]["current_low_frame_expansion"]["origin"] == (
+        "implicit-current-low-local-home"
+    )
+    assert payload["suggestions"][0]["kind"] == "suppress-unused-local-home"
+    assert "held FP constant" in payload["suggestions"][0]["description"]
+    joined_commands = "\n".join(
+        command
+        for suggestion in payload["suggestions"]
+        for command in suggestion["commands"]
+    )
+    assert "debug target score-source" in joined_commands
+    assert "--force-frame-from-diff" in joined_commands
 
 
 def test_dump_remote_quotes_cmd_env_assignments(monkeypatch, tmp_path: Path) -> None:
@@ -2333,9 +2447,10 @@ def test_dump_local_force_phys_help_describes_class_filtering() -> None:
     assert result.exit_code == 0
     out = strip_ansi(result.stdout)
     normalized = " ".join(out.split())
-    assert "Class-scoped entries are passed" in normalized
+    assert "Class-scoped entries are" in normalized
     assert "through to the DLL" in normalized
-    assert "apply to that register class" in normalized
+    assert "apply to that" in normalized
+    assert "register class" in normalized
     assert "ignores the class prefix" not in normalized
 
 

@@ -56,6 +56,20 @@ def build_simple_function() -> Function:
     return Function(name="test_fn", passes=[pre, post])
 
 
+def build_framed_function(frame_size: int) -> Function:
+    fn = build_simple_function()
+    final = Pass(name="FINAL CODE AFTER INSTRUCTION SCHEDULING")
+    final_block = Block(index=0, succ=[], pred=[], labels=["L0"])
+    final_block.instructions = [
+        Instruction("stwu", f"r1,-{frame_size}(r1)", [], []),
+        Instruction("stw", "r31,40(r1)", [], [("r", 31)]),
+        Instruction("addi", f"r1,r1,{frame_size}", [], []),
+    ]
+    final.blocks.append(final_block)
+    fn.passes.append(final)
+    return fn
+
+
 def test_score_perfect_match() -> None:
     fn = build_simple_function()
     target = {
@@ -128,6 +142,35 @@ def test_derive_target_roundtrip() -> None:
     # Scoring against the derived target should give 0
     result = score_function(fn, spec)
     assert result.total == 0.0
+
+
+def test_derive_target_includes_frame_and_scores_frame_distance() -> None:
+    target_fn = build_framed_function(144)
+    candidate_fn = build_framed_function(152)
+    spec = derive_target_from_function(target_fn)
+
+    assert spec["frame"]["frame_size"] == 144
+    assert spec["frame"]["unused_ranges"][0] == {"start": 8, "end": 40, "size": 32}
+
+    result = score_function(
+        candidate_fn,
+        {"function": "test_fn", "virtuals": {}, "frame": spec["frame"]},
+        weights=ScoreWeights(
+            byte=0.0,
+            virtual=0.0,
+            spill=0.0,
+            interferer=0.0,
+            frame_size=1.0,
+            frame_unused=0.0,
+        ),
+    )
+
+    assert result.frame_targeted
+    assert result.frame_size_actual == 152
+    assert result.frame_size_target == 144
+    assert result.frame_size_distance == 8
+    assert result.frame_penalty == 8.0
+    assert result.total == 8.0
 
 
 def test_suggest_interference_blocker() -> None:
@@ -340,12 +383,8 @@ def test_ceiling_command_docstring_uses_current_tooling_language() -> None:
     assert "Structural-ceiling verdict" not in doc
 
 
-def test_force_phys_class_warning_does_not_suggest_ig_idx_as_iter() -> None:
+def test_force_phys_class_scoped_value_passes_to_dll_without_iter_warning() -> None:
     dll_value, warnings = debug._normalize_force_phys("gpr:33:31")
 
-    assert dll_value == "33:31"
-    joined = "\n".join(warnings)
-    assert "--force-phys-iter gpr:33:31" not in joined
-    assert "class:iter:phys" in joined
-    assert "<class>:<iter>:31" in joined
-    assert "do not reuse ig_idx=33 as the iter value" in joined.lower()
+    assert dll_value == "0:33:31"
+    assert warnings == []
