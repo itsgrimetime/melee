@@ -2,11 +2,14 @@ from __future__ import annotations
 import time
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 from src.search.adapters import CheckdiffVerifier
 from src.search.artifact import CandidateArtifact
 from src.search.store import ArtifactStore
-from src.search.types import (SearchResult, TargetSpec, Budget, SchedulePolicy, SourceSpec, SourceVariant)
+from src.search.types import (SearchResult, SearchContext, TargetSpec, Budget, SchedulePolicy, SourceSpec, SourceVariant)
+
+if TYPE_CHECKING:
+    from src.search.directed.contracts import DirectedSchedulerConfig, DirectedSearchState
 
 class DefaultScheduler:
     def __init__(self, *, store: ArtifactStore, verifier: CheckdiffVerifier | None):
@@ -23,6 +26,7 @@ class DefaultScheduler:
         budget,
         policy,
         progress: Callable[[dict], None] | None = None,
+        directed: "DirectedSchedulerConfig | None" = None,
     ) -> SearchResult:
         acct = {"compiled": 0, "harvested": 0, "promoted": 0, "compile_failed": 0,
                 "score_failed": 0, "deduped": 0, "retried": 0,
@@ -32,6 +36,7 @@ class DefaultScheduler:
                 "producer_stopped": 0, "iterations": 0,
                 "budget_exhausted": False}
         seen: set[str] = set()
+        directed_seen: set[tuple] = set()  # (candidate_id, parent_state_id) in directed mode
         best: list[CandidateArtifact] = []
         matched: CandidateArtifact | None = None
         base = SourceSpec("", target)
@@ -72,6 +77,21 @@ class DefaultScheduler:
                     or self._verifier.is_match(target.function, scored.object_path)):
                 matched = scored
             return scored
+
+        # --- directed-mode state (all behind if directed is not None) ---
+        directed_telemetry: list = []
+        ctx: SearchContext | None = None
+        parent_state: "DirectedSearchState | None" = None
+        if directed is not None:
+            from src.search.directed.contracts import DirectedSearchState
+            ctx = SearchContext()
+            parent_state = DirectedSearchState(
+                prev_state=None,
+                history=(),
+                last_lever=None,
+                current_best=None,
+                state_id="root",
+            )
 
         handles = []
         for p in producers:
@@ -125,16 +145,112 @@ class DefaultScheduler:
                 batch = src.next_batch(policy.batch_size)
                 if batch:
                     made_progress = True
-                for variant in batch:
-                    if backend is None: break
-                    art = compile_with_retry(variant)
-                    s = ingest(art)
-                    if s is not None:
-                        scored_batch.append(s)
+
+                if directed is not None:
+                    # --- DIRECTED MODE: all new behavior behind this guard ---
+                    from src.search.directed.contracts import (
+                        DirectedScoringCall,
+                        DirectedSearchState,
+                    )
+                    # Step 1: decide escalation BEFORE compiling (so want_pcdump is known)
+                    escalate = directed.score_pipeline.should_escalate(None, ctx)
+                    active_backend = directed.backend if escalate else backend
+                    # Directed dedup uses (candidate_id, parent_state_id) so same
+                    # source under different parents is not dropped.
+                    current_parent_id = parent_state.state_id
+
+                    dir_batch_candidates: list[CandidateArtifact] = []
+                    for variant in batch:
+                        if active_backend is None:
+                            break
+                        art = active_backend.compile(variant, want_pcdump=escalate)
+                        acct["compiled"] += 1
+                        # Directed dedup: (candidate_id, parent_state_id) so the
+                        # same source under different parents is not dropped.
+                        dedup_key = (art.candidate_id, current_parent_id)
+                        if dedup_key in directed_seen:
+                            acct["deduped"] += 1
+                            continue
+                        directed_seen.add(dedup_key)
+                        if art.status == "compile_failed":
+                            acct["compile_failed"] += 1
+                            continue
+                        # Byte score via the standard pipeline
+                        scored_art = directed.score_pipeline.score_byte(art, target)
+                        if scored_art.status == "score_failed":
+                            acct["score_failed"] += 1
+                            continue
+                        best.append(scored_art)
+                        # Directed scoring
+                        if escalate:
+                            call = DirectedScoringCall(directed.objective, parent_state)
+                            scored_art = directed.score_pipeline.score_directed(scored_art, call)
+                            if scored_art.directed_meta is not None:
+                                directed_telemetry.append(scored_art.directed_meta)
+                                if not scored_art.directed_meta.valid:
+                                    acct["directed_invalid"] = acct.get("directed_invalid", 0) + 1
+                                    # invalid → skip from best-selection
+                                    continue
+                        dir_batch_candidates.append(scored_art)
+                        if scored_art.byte_score == 0 and (
+                            self._verifier is None
+                            or self._verifier.is_match(target.function, scored_art.object_path)
+                        ):
+                            matched = scored_art
+
+                    # Select exactly ONE best by (byte_score asc, -displacement desc)
+                    def _dir_key(a: CandidateArtifact):
+                        bs = a.byte_score if a.byte_score is not None else (1 << 30)
+                        disp = -(a.directed_meta.displacement if a.directed_meta else 0.0)
+                        return (bs, disp)
+
+                    if dir_batch_candidates:
+                        one_best = min(dir_batch_candidates, key=_dir_key)
+                    elif dir_batch_candidates == [] and batch:
+                        # All candidates were invalid or failed; still need to
+                        # observe and advance — pick from byte-scored best list
+                        # (fallback: pick last compiled artifact with byte_score)
+                        byte_only = [a for a in best if a.directed_meta is None or a.directed_meta.valid]
+                        one_best = min(byte_only, key=_dir_key) if byte_only else None
+                    else:
+                        one_best = None
+
+                    if one_best is not None:
+                        scored_batch = [one_best]
+                        if one_best.byte_score is not None:
+                            ctx.byte_history.append(one_best.byte_score)
+
+                    # observe exactly ONE best (not the whole batch)
+                    src.observe(scored_batch)
+
+                    # Advance parent_state for the next iteration
+                    applied_mutator = (
+                        one_best.directed_meta.applied_mutator
+                        if (one_best is not None and one_best.directed_meta is not None)
+                        else None
+                    )
+                    parent_state = DirectedSearchState(
+                        prev_state=parent_state,
+                        history=parent_state.history + (parent_state.state_id,),
+                        last_lever=applied_mutator,
+                        current_best=one_best,
+                        state_id=f"s{iteration}",
+                    )
+                    if matched:
+                        break
+
+                else:
+                    # --- TIER-1 (unchanged) path ---
+                    for variant in batch:
+                        if backend is None: break
+                        art = compile_with_retry(variant)
+                        s = ingest(art)
+                        if s is not None:
+                            scored_batch.append(s)
+                        if matched: break
+                    # observe once per drained source batch (spec §3.6-P3)
+                    src.observe(scored_batch)
                     if matched: break
-                # observe once per drained source batch (spec §3.6-P3)
-                src.observe(scored_batch)
-                if matched: break
             active_handles = []
             for producer, handle in handles:
                 harvested = producer.poll(handle)
@@ -204,4 +320,9 @@ class DefaultScheduler:
                 jobs=list(handle.job_ids),
             )
         best.sort(key=lambda a: (a.byte_score is None, a.byte_score))
-        return SearchResult(best=best[:25], matched=matched, accounting=acct)
+        return SearchResult(
+            best=best[:25],
+            matched=matched,
+            accounting=acct,
+            directed_telemetry=directed_telemetry,
+        )
