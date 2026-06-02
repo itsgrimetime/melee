@@ -16,6 +16,7 @@ from src.mwcc_debug.colorgraph_parser import (
     ColorgraphSection,
     FunctionEvents,
 )
+from src.mwcc_debug.parser import Block, Instruction, Pass
 
 
 CLI_CWD = pathlib.Path(__file__).parent.parent
@@ -62,6 +63,26 @@ def test_match_iter_first_help_documents_auto_verify_cleanup_contract() -> None:
     assert "--force-vector" in proc.stdout
     assert "integrated checkdiff" in proc.stdout
     assert "gpr-volatile" in proc.stdout
+
+
+def test_force_phys_from_diff_help_documents_inputs_and_verification() -> None:
+    proc = subprocess.run(
+        [
+            "python", "-m", "src.cli", "debug", "target",
+            "force-phys-from-diff", "--help",
+        ],
+        cwd=CLI_CWD,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+
+    assert proc.returncode == 0
+    assert "--checkdiff-json" in proc.stdout
+    assert "--allow-stale-pcd" in proc.stdout
+    assert "--verify" in proc.stdout
+    assert "register-only checkdiff" in proc.stdout
+    assert "force-vector" in proc.stdout
 
 
 def test_match_iter_first_rejects_stale_auto_cache_by_default(
@@ -194,6 +215,146 @@ def test_match_iter_first_vector_keeps_full_target_order_and_current_regs() -> N
     ]
     assert [target["already_target"] for target in vector["targets"]] == [
         False, False, True,
+    ]
+
+
+def test_force_phys_from_diff_derives_repeated_and_dotted_targets() -> None:
+    target_asm = [
+        "<fn_test>:",
+        "+000: 7c 08 02 a6 \tmflr    r0",
+        "+004: 94 21 ff e0 \tstwu    r1,-32(r1)",
+        "+008: 88 9f 22 27 \tlbz     r4,8743(r31)",
+        "+00c: 54 84 ff ff \trlwinm. r4,r4,31,31,31",
+        "+010: 3b c0 00 00 \tli      r30,0",
+        "+014: 3b de 00 01 \taddi    r30,r30,1",
+    ]
+    current_asm = [
+        "<fn_test>:",
+        "+000: 7c 08 02 a6 \tmflr    r0",
+        "+004: 94 21 ff e0 \tstwu    r1,-32(r1)",
+        "+008: 88 1f 22 27 \tlbz     r0,8743(r31)",
+        "+00c: 54 03 ff ff \trlwinm. r3,r0,31,31,31",
+        "+010: 3b a0 00 00 \tli      r29,0",
+        "+014: 3b bd 00 01 \taddi    r29,r29,1",
+    ]
+    pre_pass = Pass(
+        name="BEFORE REGISTER COLORING",
+        blocks=[
+            Block(
+                index=0,
+                succ=[],
+                pred=[],
+                labels=[],
+                instructions=[
+                    Instruction(
+                        opcode="lbz",
+                        operands="r58,8743(r32)",
+                        annotations=[],
+                        regs=[("r", 58), ("r", 32)],
+                    ),
+                    Instruction(
+                        opcode="rlwinm",
+                        operands="r45,r58,31,31,31",
+                        annotations=[],
+                        regs=[("r", 45), ("r", 58)],
+                    ),
+                    Instruction(
+                        opcode="li",
+                        operands="r34,0",
+                        annotations=[],
+                        regs=[("r", 34)],
+                    ),
+                    Instruction(
+                        opcode="addi",
+                        operands="r34,r34,1",
+                        annotations=[],
+                        regs=[("r", 34), ("r", 34)],
+                    ),
+                    Instruction(
+                        opcode="li",
+                        operands="r36,0",
+                        annotations=[],
+                        regs=[("r", 36)],
+                    ),
+                    Instruction(
+                        opcode="addi",
+                        operands="r36,r36,1",
+                        annotations=[],
+                        regs=[("r", 36), ("r", 36)],
+                    ),
+                ],
+            ),
+        ],
+    )
+    events = FunctionEvents(
+        name="fn_test",
+        colorgraph_sections=[
+            ColorgraphSection(
+                class_id=0,
+                result=1,
+                n_nodes=4,
+                decisions=[
+                    ColorgraphDecision(
+                        iter_idx=0,
+                        ig_idx=58,
+                        assigned_reg=0,
+                        degree=0,
+                        n_interferers=0,
+                        flags=0,
+                    ),
+                    ColorgraphDecision(
+                        iter_idx=1,
+                        ig_idx=45,
+                        assigned_reg=3,
+                        degree=0,
+                        n_interferers=0,
+                        flags=0,
+                    ),
+                    ColorgraphDecision(
+                        iter_idx=2,
+                        ig_idx=34,
+                        assigned_reg=30,
+                        degree=0,
+                        n_interferers=0,
+                        flags=0,
+                    ),
+                    ColorgraphDecision(
+                        iter_idx=3,
+                        ig_idx=36,
+                        assigned_reg=29,
+                        degree=0,
+                        n_interferers=0,
+                        flags=0,
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    vector = debug_cli._derive_force_phys_from_register_diff_lines(
+        target_asm,
+        current_asm,
+        pre_pass,
+        events,
+    )
+
+    assert vector["force_phys_csv"] == "0:58:4,0:45:4,0:36:30"
+    assert vector["force_vector"] == (
+        "class0:ig58:phys=r4,"
+        "class0:ig45:phys=r4,"
+        "class0:ig36:phys=r30"
+    )
+    assert [target["occurrence_count"] for target in vector["targets"]] == [
+        1, 1, 2,
+    ]
+    assert [target["current_reg_name"] for target in vector["targets"]] == [
+        "r0", "r3", "r29",
+    ]
+    assert [target["already_target"] for target in vector["targets"]] == [
+        False, False, False,
+    ]
+    assert [target["confidence"] for target in vector["targets"]] == [
+        "exact", "exact", "current-reg",
     ]
 
 

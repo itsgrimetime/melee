@@ -67,11 +67,16 @@ from ..mwcc_debug.source_patch import (
     transfer_candidate,
 )
 from ..mwcc_debug.asm_parser import (
+    AsmInstruction,
     extract_function as asm_extract_function,
     find_first_def as asm_find_first_def,
     parse_prologue_end as asm_parse_prologue_end,
 )
-from ..mwcc_debug.iter_match import match_virtual_for_expected_def
+from ..mwcc_debug.iter_match import (
+    MatchResult,
+    instr_signature,
+    match_virtual_for_expected_def,
+)
 from ..mwcc_debug.diff_capture import (
     CompileFailure,
     _kill_process_tree,
@@ -220,6 +225,373 @@ def _build_match_iter_first_target_vector(
         "force_phys_csv": ",".join(force_phys_csv_parts),
         "force_vector": ",".join(force_vector_parts),
         "targets": targets,
+    }
+
+
+_CHECKDIFF_ASM_REG_RE = re.compile(r"\b([rf])(\d+)\b")
+
+
+def _checkdiff_asm_body(line: str) -> str:
+    if line.startswith("<"):
+        return line
+    if ":" in line:
+        line = line.split(":", 1)[1]
+    line = line.strip()
+    line = re.sub(r"^(?:[0-9a-fA-F]{2}\s+){4}", "", line)
+    line = re.sub(r"^[0-9a-fA-F]{8}\s+", "", line)
+    return line.strip()
+
+
+def _parse_checkdiff_asm_instruction(line: str) -> AsmInstruction | None:
+    body = _checkdiff_asm_body(line)
+    if not body or body.startswith("<") or body.startswith("."):
+        return None
+    parts = body.split(None, 1)
+    if not parts:
+        return None
+    opcode = parts[0].rstrip(".")
+    operands = parts[1] if len(parts) > 1 else ""
+    regs = [
+        (kind, int(number))
+        for kind, number in _CHECKDIFF_ASM_REG_RE.findall(operands)
+    ]
+    return AsmInstruction(opcode=opcode, operands=operands, regs=regs)
+
+
+def _asm_instruction_destination(
+    instruction: AsmInstruction | None,
+) -> tuple[str, int] | None:
+    if instruction is None or not instruction.regs:
+        return None
+    opcode = instruction.opcode
+    if (
+        opcode.startswith("st")
+        or opcode.startswith("psq_st")
+        or opcode.startswith("b")
+        or opcode.startswith("cmp")
+    ):
+        return None
+    kind, number = instruction.regs[0]
+    if number > 31:
+        return None
+    return kind, number
+
+
+def _current_colorgraph_reg(
+    events: FunctionEvents | None,
+    *,
+    class_id: int,
+    ig_idx: int,
+) -> int | None:
+    if events is None:
+        return None
+    for section in events.colorgraph_sections:
+        if section.class_id != class_id:
+            continue
+        for decision in section.decisions:
+            if decision.ig_idx == ig_idx:
+                return decision.assigned_reg
+    return None
+
+
+def _prepass_destination_virtual(instruction, reg_kind: str) -> int | None:
+    if not instruction.regs:
+        return None
+    kind, number = instruction.regs[0]
+    if kind != reg_kind or number < 32:
+        return None
+    return number
+
+
+def _match_virtual_for_register_diff(
+    *,
+    expected_ist: AsmInstruction,
+    expected_position: int,
+    pre_pass,
+    reg_kind: str,
+    current_phys: int,
+    events: FunctionEvents | None,
+) -> MatchResult | None:
+    target_sig = instr_signature(expected_ist.opcode, expected_ist.operands)
+    candidates: list[tuple[int, Any, int, int | None]] = []
+    linear_index = 0
+    for block in pre_pass.blocks:
+        for instruction in block.instructions:
+            if instr_signature(instruction.opcode, instruction.operands) != target_sig:
+                linear_index += 1
+                continue
+            virtual = _prepass_destination_virtual(instruction, reg_kind)
+            if virtual is None:
+                linear_index += 1
+                continue
+            class_id = _match_iter_first_class_id(reg_kind)
+            assigned = (
+                None if class_id is None else _current_colorgraph_reg(
+                    events,
+                    class_id=class_id,
+                    ig_idx=virtual,
+                )
+            )
+            candidates.append((linear_index, instruction, virtual, assigned))
+            linear_index += 1
+    if not candidates:
+        return None
+
+    current_matches = [
+        candidate for candidate in candidates
+        if candidate[3] == current_phys
+    ]
+    ranked = current_matches or candidates
+    ranked.sort(key=lambda item: abs(item[0] - expected_position))
+    best_i, _best_instruction, virtual, _assigned = ranked[0]
+    if len(candidates) == 1:
+        confidence = "exact"
+    elif len(current_matches) == 1:
+        confidence = "current-reg"
+    else:
+        confidence = "ambiguous"
+    return MatchResult(
+        virtual=virtual,
+        ig_idx=virtual,
+        instruction_index=best_i,
+        confidence=confidence,
+    )
+
+
+def _derive_force_phys_from_register_diff_lines(
+    target_asm: list[str],
+    current_asm: list[str],
+    pre_pass,
+    events: FunctionEvents | None,
+) -> dict:
+    target_instructions: list[AsmInstruction] = []
+    target_by_line: dict[int, tuple[int, AsmInstruction]] = {}
+    for line_index, line in enumerate(target_asm):
+        instruction = _parse_checkdiff_asm_instruction(line)
+        if instruction is None:
+            continue
+        target_by_line[line_index] = (len(target_instructions), instruction)
+        target_instructions.append(instruction)
+
+    prologue_end = asm_parse_prologue_end(target_instructions)
+    target_order: list[tuple[int, str, int, int]] = []
+    target_data: dict[tuple[int, str, int, int], dict] = {}
+    conflicts: list[dict] = []
+
+    for line_index, (target_line, current_line) in enumerate(
+        zip(target_asm, current_asm)
+    ):
+        if target_line == current_line:
+            continue
+        target_instruction = _parse_checkdiff_asm_instruction(target_line)
+        current_instruction = _parse_checkdiff_asm_instruction(current_line)
+        if target_instruction is None or current_instruction is None:
+            continue
+        if instr_signature(
+            target_instruction.opcode,
+            target_instruction.operands,
+        ) != instr_signature(
+            current_instruction.opcode,
+            current_instruction.operands,
+        ):
+            continue
+        target_dest = _asm_instruction_destination(target_instruction)
+        current_dest = _asm_instruction_destination(current_instruction)
+        if target_dest is None or target_dest == current_dest:
+            continue
+        kind, phys = target_dest
+        class_id = _match_iter_first_class_id(kind)
+        if class_id is None:
+            continue
+        target_position = target_by_line.get(line_index)
+        if target_position is None:
+            continue
+        instruction_index, _ = target_position
+        if instruction_index < prologue_end:
+            continue
+        current_kind, current_phys = current_dest
+        if current_kind != kind:
+            continue
+        match = _match_virtual_for_register_diff(
+            expected_ist=target_instruction,
+            expected_position=instruction_index - prologue_end,
+            pre_pass=pre_pass,
+            reg_kind=kind,
+            current_phys=current_phys,
+            events=events,
+        )
+        if match is None:
+            continue
+
+        conflict_key = (class_id, kind, match.ig_idx)
+        existing_for_ig = [
+            key for key in target_order
+            if key[:3] == conflict_key and key[3] != phys
+        ]
+        if existing_for_ig:
+            conflicts.append({
+                "class_id": class_id,
+                "kind": kind,
+                "ig_idx": match.ig_idx,
+                "existing_phys": existing_for_ig[0][3],
+                "conflicting_phys": phys,
+                "line_index": line_index,
+                "target_asm": target_line,
+                "current_asm": current_line,
+            })
+            continue
+
+        key = (class_id, kind, match.ig_idx, phys)
+        if key not in target_data:
+            current_reg = _current_colorgraph_reg(
+                events,
+                class_id=class_id,
+                ig_idx=match.ig_idx,
+            )
+            force_phys_entry = f"{class_id}:{match.ig_idx}:{phys}"
+            force_vector_entry = (
+                f"class{class_id}:ig{match.ig_idx}:phys={kind}{phys}"
+            )
+            target_data[key] = {
+                "class_id": class_id,
+                "kind": kind,
+                "ig_idx": match.ig_idx,
+                "target_reg": phys,
+                "target_reg_name": f"{kind}{phys}",
+                "current_reg": current_reg,
+                "current_reg_name": (
+                    f"{kind}{current_reg}"
+                    if isinstance(current_reg, int) else None
+                ),
+                "already_target": (
+                    current_reg == phys if isinstance(current_reg, int) else None
+                ),
+                "force_phys_entry": force_phys_entry,
+                "force_vector_entry": force_vector_entry,
+                "occurrences": [],
+            }
+            target_order.append(key)
+        target_data[key]["occurrences"].append({
+            "line_index": line_index,
+            "target_asm": target_line,
+            "current_asm": current_line,
+            "opcode": target_instruction.opcode,
+            "operands": target_instruction.operands,
+            "instruction_index": match.instruction_index,
+            "confidence": match.confidence,
+        })
+
+    targets: list[dict] = []
+    for key in target_order:
+        target = dict(target_data[key])
+        occurrences = target["occurrences"]
+        target["occurrence_count"] = len(occurrences)
+        occurrence_confidences = {
+            item["confidence"] for item in occurrences
+        }
+        if "ambiguous" in occurrence_confidences:
+            target["confidence"] = "ambiguous"
+        elif "current-reg" in occurrence_confidences:
+            target["confidence"] = "current-reg"
+        else:
+            target["confidence"] = "exact"
+        targets.append(target)
+
+    return {
+        "force_phys": {
+            str(target["ig_idx"]): target["target_reg"]
+            for target in targets
+        },
+        "force_phys_csv": ",".join(
+            target["force_phys_entry"] for target in targets
+        ),
+        "force_vector": ",".join(
+            target["force_vector_entry"] for target in targets
+        ),
+        "targets": targets,
+        "conflicts": conflicts,
+        "register_only_target_count": sum(
+            target["occurrence_count"] for target in targets
+        ),
+    }
+
+
+def _read_force_phys_checkdiff_payload(
+    *,
+    function: str,
+    melee_root: Path,
+    checkdiff_json: Path | None,
+    checkdiff_timeout: float,
+) -> tuple[dict, str]:
+    if checkdiff_json is not None:
+        try:
+            return json.loads(checkdiff_json.read_text()), str(checkdiff_json)
+        except json.JSONDecodeError as exc:
+            typer.echo(
+                f"checkdiff JSON could not be parsed: {exc}",
+                err=True,
+            )
+            raise typer.Exit(2) from exc
+        except OSError as exc:
+            typer.echo(f"checkdiff JSON could not be read: {exc}", err=True)
+            raise typer.Exit(2) from exc
+
+    cmd = [
+        "python",
+        "tools/checkdiff.py",
+        function,
+        "--format",
+        "json",
+        "--no-build",
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=melee_root,
+            capture_output=True,
+            text=True,
+            timeout=checkdiff_timeout,
+            env=_checkdiff_env_without_fingerprint(),
+        )
+    except subprocess.TimeoutExpired as exc:
+        typer.echo(
+            f"checkdiff timed out after {checkdiff_timeout:g}s",
+            err=True,
+        )
+        raise typer.Exit(3) from exc
+    except OSError as exc:
+        typer.echo(f"failed to run checkdiff: {exc}", err=True)
+        raise typer.Exit(3) from exc
+
+    if proc.returncode not in (0, 1) or not proc.stdout.strip():
+        if proc.stderr:
+            typer.echo(proc.stderr.rstrip(), err=True)
+        if proc.stdout:
+            typer.echo(proc.stdout.rstrip(), err=True)
+        raise typer.Exit(proc.returncode or 3)
+    try:
+        return json.loads(proc.stdout), "checkdiff"
+    except json.JSONDecodeError as exc:
+        if proc.stderr:
+            typer.echo(proc.stderr.rstrip(), err=True)
+        typer.echo(f"checkdiff did not emit JSON: {exc}", err=True)
+        raise typer.Exit(3) from exc
+
+
+def _checkdiff_asm_lines(payload: dict, key: str) -> list[str]:
+    value = payload.get(key)
+    if not isinstance(value, list) or not all(
+        isinstance(line, str) for line in value
+    ):
+        typer.echo(f"checkdiff JSON did not include {key} lines", err=True)
+        raise typer.Exit(2)
+    return value
+
+
+def _force_phys_target_spec(function: str, vector: dict) -> dict:
+    return {
+        "function": function,
+        "virtuals": vector.get("force_phys", {}),
     }
 
 
@@ -7607,6 +7979,263 @@ def rank_callees(
             "param-iter-ceiling signature — see `debug util patterns "
             "param-iter-ceiling` for the full pattern."
         )
+
+
+@target_app.command(name="force-phys-from-diff")
+def force_phys_from_diff(
+    function: Annotated[
+        str,
+        typer.Option(
+            "--function", "-f",
+            help="Function to analyze (required).",
+        ),
+    ],
+    pcdump: Annotated[
+        Optional[Path],
+        typer.Argument(
+            help="Path to pcdump.txt. Omit to auto-resolve via --function "
+                 "from the cache.",
+        ),
+    ] = None,
+    checkdiff_json: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--checkdiff-json",
+            help=(
+                "Existing `tools/checkdiff.py <function> --format json` "
+                "payload. If omitted, this command runs checkdiff with "
+                "--no-build."
+            ),
+        ),
+    ] = None,
+    checkdiff_timeout: Annotated[
+        float,
+        typer.Option(
+            "--checkdiff-timeout",
+            help="Timeout in seconds when auto-running checkdiff.",
+        ),
+    ] = 60.0,
+    verify: Annotated[
+        bool,
+        typer.Option(
+            "--verify/--no-verify",
+            help=(
+                "Run bounded union, singleton, and prefix force-vector "
+                "verification after deriving the target list."
+            ),
+        ),
+    ] = False,
+    force_vector_probes: Annotated[
+        bool,
+        typer.Option(
+            "--force-vector-probes/--no-force-vector-probes",
+            help=(
+                "With --verify, run singleton and prefix diagnostic probes "
+                "after the full force-vector union."
+            ),
+        ),
+    ] = True,
+    force_vector_checkdiff_timeout: Annotated[
+        float,
+        typer.Option(
+            "--force-vector-checkdiff-timeout",
+            help="Timeout in seconds for each force-vector checkdiff run.",
+        ),
+    ] = 60.0,
+    allow_stale_pcdump: Annotated[
+        bool,
+        typer.Option(
+            "--allow-stale-pcdump",
+            help=(
+                "Allow an auto-resolved cached pcdump whose source has "
+                "changed since capture. Off by default because stale "
+                "precolor data can map targets to the wrong ig_idx."
+            ),
+        ),
+    ] = False,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit as JSON."),
+    ] = False,
+) -> None:
+    """Derive --force-phys targets from a register-only checkdiff.
+
+    The command aligns target/current checkdiff assembly lines to the
+    function's pre-coloring pcdump, maps each mismatching physical-register
+    destination back to its virtual/ig node, and emits both target-spec JSON
+    for `debug target score-dump` and a class-scoped force-vector suitable
+    for `match-iter-first --force-vector` diagnostic verification.
+    """
+    melee_root = DEFAULT_MELEE_ROOT
+    pcdump_path = _resolve_pcdump_path(
+        pcdump,
+        function,
+        melee_root,
+        require_fresh=not allow_stale_pcdump,
+    )
+    pcdump_text = pcdump_path.read_text()
+
+    fns = parse_pcdump(pcdump_text)
+    fn = next((f for f in fns if f.name == function), None)
+    if fn is None:
+        _abort_function_not_in_dump(function, [f.name for f in fns])
+    pre_pass = fn.last_precolor_pass()
+    if pre_pass is None:
+        typer.echo(
+            f"no pre-coloring pass found in pcdump for {function}",
+            err=True,
+        )
+        raise typer.Exit(4)
+
+    events_fn = find_function(parse_hook_events(pcdump_text), function)
+    checkdiff_payload, checkdiff_source = _read_force_phys_checkdiff_payload(
+        function=function,
+        melee_root=melee_root,
+        checkdiff_json=checkdiff_json,
+        checkdiff_timeout=checkdiff_timeout,
+    )
+    payload_function = checkdiff_payload.get("function")
+    if isinstance(payload_function, str) and payload_function != function:
+        typer.echo(
+            f"checkdiff JSON is for {payload_function}, not {function}",
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    target_asm = _checkdiff_asm_lines(checkdiff_payload, "target_asm")
+    current_asm = _checkdiff_asm_lines(checkdiff_payload, "current_asm")
+    vector = _derive_force_phys_from_register_diff_lines(
+        target_asm,
+        current_asm,
+        pre_pass,
+        events_fn,
+    )
+    target_spec = _force_phys_target_spec(function, vector)
+    unit = _find_unit_for_function(function, melee_root)
+
+    force_vector_result: dict | None = None
+    if verify:
+        force_vector = vector.get("force_vector")
+        if not force_vector:
+            force_vector_result = {
+                "ran": False,
+                "reason": "no force-vector targets were derived",
+            }
+        elif unit is None:
+            force_vector_result = {
+                "ran": False,
+                "reason": "function not found in report.json",
+            }
+        else:
+            src_path = melee_root / "src" / f"{unit}.c"
+            if not src_path.exists():
+                force_vector_result = {
+                    "ran": False,
+                    "reason": f"source not found: {src_path}",
+                }
+            else:
+                try:
+                    entries = _parse_force_vector(force_vector)
+                    force_vector_result = _run_force_vector_auto_verify(
+                        src_path=src_path,
+                        function=function,
+                        entries=entries,
+                        melee_root=melee_root,
+                        checkdiff_timeout=force_vector_checkdiff_timeout,
+                        run_diagnostic_probes=force_vector_probes,
+                    )
+                    force_vector_result["ran"] = True
+                except Exception as exc:
+                    force_vector_result = {
+                        "ran": False,
+                        "reason": str(exc),
+                    }
+
+    classification = checkdiff_payload.get("classification")
+    result_payload = {
+        "function": function,
+        "unit": unit,
+        "pcdump": str(pcdump_path),
+        "checkdiff_source": checkdiff_source,
+        "checkdiff_classification": classification,
+        "target_spec": target_spec,
+        "force_phys": vector["force_phys"],
+        "force_phys_csv": vector["force_phys_csv"],
+        "force_vector": vector["force_vector"],
+        "targets": vector["targets"],
+        "conflicts": vector["conflicts"],
+        "register_only_target_count": vector["register_only_target_count"],
+    }
+    if force_vector_result is not None:
+        result_payload["force_vector_verify"] = force_vector_result
+
+    if json_out:
+        print(json.dumps(result_payload, indent=2))
+        return
+
+    print(f"Function: {function}")
+    if unit:
+        print(f"Unit:     {unit}")
+    print(f"PCDump:   {pcdump_path}")
+    print(f"Checkdiff: {checkdiff_source}")
+    print()
+    if not vector["targets"]:
+        print("No register-only physical-register target destinations derived.")
+    else:
+        print("Derived force-phys targets from register-only checkdiff:")
+        for target in vector["targets"]:
+            current = target.get("current_reg_name") or "?"
+            status = (
+                "already target"
+                if target.get("already_target") is True
+                else "needs move"
+                if target.get("already_target") is False
+                else "current unknown"
+            )
+            print(
+                f"  class{target['class_id']} ig{target['ig_idx']} -> "
+                f"{target['target_reg_name']} "
+                f"(current {current}; {status}; "
+                f"{target['occurrence_count']} occurrence"
+                f"{'' if target['occurrence_count'] == 1 else 's'})"
+            )
+    if vector["conflicts"]:
+        print()
+        print("Conflicting targets skipped:")
+        for conflict in vector["conflicts"]:
+            print(
+                f"  class{conflict['class_id']} ig{conflict['ig_idx']} "
+                f"wanted both {conflict['kind']}{conflict['existing_phys']} "
+                f"and {conflict['kind']}{conflict['conflicting_phys']}"
+            )
+    print()
+    print("Target spec for debug target score-dump:")
+    print(json.dumps(target_spec, indent=2))
+    if vector["force_phys_csv"]:
+        print()
+        print(f"Force-phys vector: {vector['force_phys_csv']}")
+    if vector["force_vector"]:
+        print(f"Force-vector: {vector['force_vector']}")
+    if force_vector_result is not None:
+        print()
+        print("== force-vector verify ==")
+        if not force_vector_result.get("ran"):
+            print(f"  did not run: {force_vector_result.get('reason')}")
+        else:
+            union = force_vector_result.get("union", {})
+            if isinstance(union, dict):
+                print(
+                    f"  union: {union.get('status')} "
+                    f"(returncode {union.get('returncode')})"
+                )
+            probes = force_vector_result.get("probes")
+            if isinstance(probes, list) and probes:
+                print("  diagnostic probes:")
+                for probe in probes:
+                    print(
+                        f"    {probe.get('label')}: {probe.get('status')} "
+                        f"(returncode {probe.get('returncode')})"
+                    )
 
 
 @target_app.command(name="match-iter-first")
