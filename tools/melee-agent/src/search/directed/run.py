@@ -527,6 +527,7 @@ def _run_live(
     # Build the DirectedObjective
     preflight_ok = True
     preflight_reason = None
+    preflight_fallback = None
     objective = None
     try:
         objective = build_directed_objective(
@@ -543,11 +544,13 @@ def _run_live(
     except PreflightError as exc:
         preflight_ok = False
         preflight_reason = str(exc)
+        if preflight_reason == "case_abstained" and force_phys and objective is not None:
+            preflight_fallback = "force_phys_assignment"
     except Exception as exc:
         preflight_ok = False
         preflight_reason = f"build_error:{exc}"
 
-    if not preflight_ok:
+    if not preflight_ok and preflight_fallback is None:
         from src.search.directed.gate import evaluate_phase1_gate
         verdict = evaluate_phase1_gate(
             preflight_ok=False,
@@ -730,6 +733,12 @@ def _run_live(
     # DirectedSource
     directed_source = DirectedSource(propose=propose, apply=_apply_fn)
     directed_source.seed(SourceSpec(tu_source, target))
+    sources = [directed_source]
+    if preflight_fallback == "force_phys_assignment":
+        from src.search.sources import SeedListSource
+        seed_source = SeedListSource([tu_source])
+        seed_source.seed(SourceSpec(tu_source, target))
+        sources.insert(0, seed_source)
 
     cfg = DirectedSchedulerConfig(
         objective=objective,
@@ -741,7 +750,7 @@ def _run_live(
     sched = DefaultScheduler(store=store, verifier=None)
 
     result = sched.run(
-        sources=[directed_source],
+        sources=sources,
         backends=[pcdump_backend],
         producers=[],
         pipeline=score_pipeline,
@@ -753,10 +762,19 @@ def _run_live(
 
     from src.search.directed.gate import evaluate_phase1_gate
     verdict = evaluate_phase1_gate(
-        preflight_ok=True,
+        preflight_ok=preflight_ok or preflight_fallback is not None,
         telemetry=result.directed_telemetry,
         control_displacement=0.0,
     )
+    accounting = dict(result.accounting)
+    if preflight_reason is not None:
+        preflight_accounting = {
+            "ok": preflight_ok,
+            "reason": preflight_reason,
+        }
+        if preflight_fallback is not None:
+            preflight_accounting["fallback"] = preflight_fallback
+        accounting["preflight"] = preflight_accounting
 
     return {
         "gate": {
@@ -767,5 +785,5 @@ def _run_live(
         "directed_telemetry": [
             _meta_to_dict(m) for m in result.directed_telemetry
         ],
-        "accounting": result.accounting,
+        "accounting": accounting,
     }

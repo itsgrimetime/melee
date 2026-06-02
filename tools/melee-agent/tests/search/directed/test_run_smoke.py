@@ -89,3 +89,109 @@ def test_run_directed_dry_accounting(tmp_path):
     accounting = res["accounting"]
     assert isinstance(accounting, dict), "accounting must be a dict"
     assert "compiled" in accounting, f"accounting missing 'compiled': {accounting}"
+
+
+def test_run_directed_live_case_abstained_scores_seed_fallback(
+    tmp_path,
+    monkeypatch,
+):
+    from src.search.directed.contracts import DirectedMeta, DirectedObjective
+    from src.search.directed.objective import PreflightError
+    from src.search.types import SearchResult
+
+    repo = tmp_path / "repo"
+    source_path = repo / "src" / "melee" / "ft" / "ftdynamics.c"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text("int ftCo_8009E7B4(void){return 7;}\n")
+    seed_texts = []
+
+    class _Roles:
+        function = "ftCo_8009E7B4"
+        roles = [object()]
+
+    class _FakePcdumpBackend:
+        def __init__(self, **kwargs):
+            pass
+
+    class _FakeScheduler:
+        def __init__(self, **kwargs):
+            pass
+
+        def run(self, *, sources, **kwargs):
+            for source in sources:
+                if source.name() == "seed-list":
+                    batch = source.next_batch(1)
+                    seed_texts.extend(variant.source_text for variant in batch)
+                    break
+            return SearchResult(
+                accounting={"compiled": 1},
+                directed_telemetry=[
+                    DirectedMeta(
+                        candidate_id="seed",
+                        source_hash="hash",
+                        iteration=1,
+                        parent_id=None,
+                        parent_state_id="root",
+                        valid=True,
+                        invalid_reason=None,
+                        case="force_phys_assignment",
+                        label="assignment_fallback",
+                        order_distance=0,
+                        displacement=1.0,
+                        displacement_delta=1.0,
+                        reanchor_matched=1,
+                        reanchor_total=1,
+                        diagnosis_chars=21,
+                        applied_mutator="seed#1",
+                        directed_scalar=1.0,
+                    )
+                ],
+            )
+
+    def fake_objective(**kwargs):
+        return DirectedObjective(
+            search_target=kwargs["search_target"],
+            role_target=_Roles(),
+            baseline_compile=object(),
+            baseline_pcdump_path=tmp_path / "baseline.pcdump.txt",
+            baseline_source_hash="baseline",
+            class_id=kwargs["class_id"],
+            objective_iter_by_original_ig={58: 1},
+            proof_force_phys=kwargs["proof_force_phys"],
+        )
+
+    def abstain_preflight(_objective):
+        raise PreflightError("case_abstained")
+
+    monkeypatch.setattr(
+        "src.search.directed.pcdump_backend.PcdumpLocalBackend",
+        _FakePcdumpBackend,
+    )
+    monkeypatch.setattr(
+        "src.search.directed.objective.build_directed_objective",
+        fake_objective,
+    )
+    monkeypatch.setattr(
+        "src.search.directed.objective.preflight_objective",
+        abstain_preflight,
+    )
+    monkeypatch.setattr(
+        "src.search.scheduler.DefaultScheduler",
+        _FakeScheduler,
+    )
+
+    from src.search.directed.run import run_directed
+
+    res = run_directed(
+        function="ftCo_8009E7B4",
+        unit="melee/ft/ftdynamics",
+        melee_root=repo,
+        store_dir=tmp_path / "store",
+        max_iters=1,
+        proof_force_phys={58: 4},
+    )
+
+    assert seed_texts == [source_path.read_text()]
+    assert res["gate"]["reason"] == "attributable_progress"
+    assert res["directed_telemetry"][0]["case"] == "force_phys_assignment"
+    assert res["accounting"]["preflight"]["fallback"] == "force_phys_assignment"

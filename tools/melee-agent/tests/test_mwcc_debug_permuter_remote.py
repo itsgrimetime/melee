@@ -1477,6 +1477,62 @@ def test_submit_job_preflights_remote_objdump_before_rsync(tmp_path: Path) -> No
     assert not list(jobs_dir.glob("*.json"))
 
 
+def test_submit_job_preserves_multiline_remote_preflight_detail(
+    tmp_path: Path,
+) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    (local_perm / "base.c").write_text("void fn_80000000(void) {}\n")
+    (local_perm / "settings.toml").write_text("[score]\n")
+    jobs_dir = tmp_path / "jobs"
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        ok_without_toml = _remote_doctor_ok_stdout().replace(
+            "remote-python3-toml\tok\ttoml ok\n",
+            "",
+        )
+        return pr.CommandResult(
+            returncode=0,
+            stdout=(
+                ok_without_toml
+                + "remote-python3-toml\tfail\tTraceback (most recent call last):\n"
+                + "  File \"<stdin>\", line 1, in <module>\n"
+                + "ModuleNotFoundError: No module named 'toml'\n"
+            ),
+            stderr="",
+        )
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    with pytest.raises(pr.RemoteJobError) as exc:
+        pr.submit_job(
+            function="fn_80000000",
+            target=target,
+            local_perm_dir=local_perm,
+            jobs_dir=jobs_dir,
+            runner=fake_runner,
+            now=lambda: "2026-05-25T14:30:12",
+        )
+
+    detail = str(exc.value)
+    assert "remote python3 toml: Traceback (most recent call last):" in detail
+    assert "File \"<stdin>\", line 1, in <module>" in detail
+    assert "ModuleNotFoundError: No module named 'toml'" in detail
+    assert not list(jobs_dir.glob("*.json"))
+
+
 def test_submit_job_missing_local_perm_dir_raises(tmp_path: Path) -> None:
     target = pr.RemoteTarget(
         name="coder64",

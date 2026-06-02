@@ -1220,15 +1220,27 @@ def _parse_remote_doctor_output(
     known_labels = {**labels, **scorer_labels, **objdump_labels}
     checks: list[DoctorCheck] = []
     seen: set[str] = set()
+    last_check_idx: int | None = None
     for line in stdout.splitlines():
         parts = line.split("\t", 2)
         if len(parts) != 3:
+            if last_check_idx is not None:
+                previous = checks[last_check_idx]
+                detail = f"{previous.detail}\n{line}" if previous.detail else line
+                checks[last_check_idx] = DoctorCheck(
+                    previous.name,
+                    previous.ok,
+                    detail,
+                    previous.required,
+                )
             continue
         key, status, detail = parts
         if key not in known_labels:
+            last_check_idx = None
             continue
         seen.add(key)
         checks.append(DoctorCheck(known_labels[key], status == "ok", detail))
+        last_check_idx = len(checks) - 1
     expected_labels = dict(labels)
     if expect_scorer:
         expected_labels.update(scorer_labels)
