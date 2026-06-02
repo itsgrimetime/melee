@@ -67,6 +67,9 @@ class DirectedMeta:
     diagnosis_chars: int
     applied_mutator: Any  # str | None
     directed_scalar: float
+    proof_assignments: Any = None  # dict | None
+    byte_score: Any = None  # int | None
+    checkdiff_gate: Any = None  # str | None
 
 
 @dataclass(frozen=True)

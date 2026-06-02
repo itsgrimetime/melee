@@ -40,6 +40,7 @@ def run_directed(
     max_iters: int = 8,
     proof_force_phys: dict[int, int] | None = None,
     class_id: int = 0,
+    source_file: Any = None,
 ) -> dict:
     """Run the directed search layer for *function* in *unit*.
 
@@ -86,6 +87,7 @@ def run_directed(
         max_iters=max_iters,
         proof_force_phys=proof_force_phys,
         class_id=class_id,
+        source_file=source_file,
     )
 
 
@@ -434,6 +436,7 @@ def _run_live(
     max_iters: int,
     proof_force_phys: dict[int, int] | None = None,
     class_id: int = 0,
+    source_file: Any = None,
 ) -> dict:
     """Live run: real mwcc compile + analysis + scoring."""
     import hashlib as _hashlib
@@ -455,8 +458,10 @@ def _run_live(
     from src.search.scoring import ByteScorePipeline, DefaultSchedulePolicy
     from src.search.types import Budget, SchedulePolicy, SourceSpec, TargetSpec
 
-    # Resolve expected .o
+    # Resolve expected .o and initial source.
     tu_path = melee_root / "src" / f"{unit}.c"
+    source_path = Path(source_file) if source_file is not None else tu_path
+    source_text = source_path.read_text(encoding="utf-8")
 
     # Determine force_phys: prefer operator-provided proof, retain the older
     # grIceMt fixture default for backward compatibility.
@@ -474,7 +479,7 @@ def _run_live(
     )
     cflags_hash = _hashlib.sha256(_CFLAGS.encode()).hexdigest()[:16]
     base_context_hash = _hashlib.sha256(
-        tu_path.read_text(encoding="utf-8").encode()
+        source_text.encode()
     ).hexdigest()[:32]
 
     # Minimal manifest
@@ -532,6 +537,7 @@ def _run_live(
             proof_force_phys=force_phys,
             class_id=class_id,
             backend=pcdump_backend,
+            baseline_source_text=source_text,
         )
         preflight_objective(objective)
     except PreflightError as exc:
@@ -596,7 +602,7 @@ def _run_live(
     )
 
     # Source text for seeding
-    tu_source = tu_path.read_text(encoding="utf-8")
+    tu_source = source_text
 
     # Build the propose function
     def propose(source_text: str, tried: frozenset):

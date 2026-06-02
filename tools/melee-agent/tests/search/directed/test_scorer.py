@@ -14,7 +14,9 @@ class _State:
 class _Re:
     def __init__(self, matched): self.matched = matched
 class _Dec:
-    def __init__(self, iter_idx): self.iter_idx = iter_idx
+    def __init__(self, iter_idx, assigned_reg=None):
+        self.iter_idx = iter_idx
+        self.assigned_reg = assigned_reg
 class _Case:                      # mimic a DivergenceCase enum member
     def __init__(self, v): self.value = v
 
@@ -24,6 +26,14 @@ def _objective(roles_n=2):
     return DirectedObjective(search_target=None, role_target=rt, baseline_compile=None,
         baseline_pcdump_path=None, baseline_source_hash="h", class_id=0,
         objective_iter_by_original_ig={37: 3, 34: 103}, proof_force_phys={})
+
+def _force_phys_objective():
+    class _RT: pass
+    rt = _RT(); rt.roles = [object()] * 3; rt.function = "ftCo_8009E7B4"
+    return DirectedObjective(search_target=None, role_target=rt, baseline_compile=None,
+        baseline_pcdump_path=None, baseline_source_hash="h", class_id=0,
+        objective_iter_by_original_ig={58: 1, 44: 2, 42: 3},
+        proof_force_phys={58: 4, 44: 4, 42: 3})
 
 def _parent(disp=0.3, last_lever=None):
     ps = DirectedSearchState(prev_state=None, history=(), last_lever=last_lever, current_best=None, state_id="p")
@@ -48,6 +58,58 @@ def _pipe(case_value, matched={1:37,2:34}, decisions={1:_Dec(103),2:_Dec(3)}):
 def test_invalid_on_enum_abstained(tmp_path):
     out = _pipe("abstained").score_directed(_art(tmp_path), DirectedScoringCall(_objective(), _parent()))
     assert out.status == "invalid" and out.directed_meta.valid is False and out.directed_meta.invalid_reason == "case_abstained"
+
+def test_force_phys_assignment_fallback_scores_abstained_case(tmp_path):
+    p = DirectedScorePipeline(
+        analyze=lambda t,c,class_id=0:(
+            _State(_Case("abstained")),
+            object(),
+            _Re({1: 58, 2: 44}),
+        ),
+        compile_from_text=lambda art: object(),
+        decisions_of=lambda c:{1: _Dec(10, 4), 2: _Dec(20, 5)},
+        classify=lambda prev,curr,**k: type("L",(),{"value":"SAME"})(),
+    )
+    art = replace(_art(tmp_path), byte_score=6)
+
+    out = p.score_directed(
+        art,
+        DirectedScoringCall(_force_phys_objective(), _parent(disp=0.0)),
+    )
+
+    assert out.status == "ok"
+    assert out.directed_score == pytest.approx(1 / 3)
+    meta = out.directed_meta
+    assert meta.valid is True
+    assert meta.case == "force_phys_assignment"
+    assert meta.label == "assignment_fallback"
+    assert meta.proof_assignments["satisfied"] == [
+        {
+            "original_ig": 58,
+            "new_ig": 1,
+            "desired_phys": 4,
+            "assigned_phys": 4,
+        }
+    ]
+    assert meta.proof_assignments["blocked"] == [
+        {
+            "original_ig": 44,
+            "new_ig": 2,
+            "desired_phys": 4,
+            "assigned_phys": 5,
+        }
+    ]
+    assert meta.proof_assignments["abstained"] == [
+        {
+            "original_ig": 42,
+            "new_ig": None,
+            "desired_phys": 3,
+            "assigned_phys": None,
+            "reason": "not_reanchored",
+        }
+    ]
+    assert meta.byte_score == 6
+    assert meta.checkdiff_gate == "byte_mismatch"
 
 def test_invalid_on_case_none(tmp_path):
     out = _pipe("none").score_directed(_art(tmp_path), DirectedScoringCall(_objective(), _parent()))

@@ -55,6 +55,12 @@ def _default_classify(prev: Any, curr: Any, *, edit_was_order_change: bool,
                              checkdiff_clean=checkdiff_clean)
 
 
+def _checkdiff_gate_for_byte_score(byte_score: int | None) -> str:
+    if byte_score is None:
+        return "unknown"
+    return "byte_match" if byte_score == 0 else "byte_mismatch"
+
+
 # ---------------------------------------------------------------------------
 # Pipeline
 # ---------------------------------------------------------------------------
@@ -158,6 +164,15 @@ class DirectedScorePipeline:
         if case == "none":
             return self._invalid(art, call, "case_none")
         if case == "abstained":
+            decisions = self._decisions_for_compile(compile, obj)
+            fallback = self._force_phys_assignment_fallback(
+                art,
+                call,
+                reanchor=reanchor,
+                decisions=decisions,
+            )
+            if fallback is not None:
+                return fallback
             return self._invalid(art, call, "case_abstained")
         if report is None:
             return self._invalid(art, call, "no_report")
@@ -167,21 +182,7 @@ class DirectedScorePipeline:
             return self._invalid(art, call, "low_coverage")
 
         # --- compute decisions ---
-        if self._decisions_of is not None:
-            decisions = self._decisions_of(compile)
-        else:
-            # Real default: extract from colorgraph sections for class_id.
-            from src.mwcc_debug.colorgraph_parser import find_function
-            # compile.fev is a FunctionEvents object; find_function expects
-            # a list[FunctionEvents] so wrap it.
-            fev_arg = [compile.fev] if not isinstance(compile.fev, list) else compile.fev
-            fe = find_function(fev_arg, obj.role_target.function)
-            if fe and fe.colorgraph_sections:
-                matching = [s for s in fe.colorgraph_sections if s.class_id == obj.class_id]
-                section = matching[-1] if matching else fe.colorgraph_sections[-1]
-                decisions = {d.ig_idx: d for d in section.decisions}
-            else:
-                decisions = {}
+        decisions = self._decisions_for_compile(compile, obj)
 
         # --- metrics ---
         cand = candidate_iter_by_original_ig(reanchor.matched, decisions)
@@ -238,6 +239,139 @@ class DirectedScorePipeline:
         )
 
         return replace(art, directed_score=disp, directed_meta=meta, status="ok")
+
+    def _decisions_for_compile(self, compile: Any, obj: Any) -> dict:
+        if self._decisions_of is not None:
+            return self._decisions_of(compile)
+
+        from src.mwcc_debug.colorgraph_parser import find_function
+
+        fev_arg = [compile.fev] if not isinstance(compile.fev, list) else compile.fev
+        fe = find_function(fev_arg, obj.role_target.function)
+        if fe and fe.colorgraph_sections:
+            matching = [
+                s for s in fe.colorgraph_sections
+                if s.class_id == obj.class_id
+            ]
+            section = matching[-1] if matching else fe.colorgraph_sections[-1]
+            return {d.ig_idx: d for d in section.decisions}
+        return {}
+
+    def _force_phys_assignment_fallback(
+        self,
+        art: Any,
+        call: DirectedScoringCall,
+        *,
+        reanchor: Any,
+        decisions: dict,
+    ) -> Any | None:
+        obj = call.objective
+        proof = getattr(obj, "proof_force_phys", None) or {}
+        if not proof:
+            return None
+
+        matched = getattr(reanchor, "matched", None) or {}
+        original_to_new = {orig: new for new, orig in matched.items()}
+        satisfied: list[dict] = []
+        blocked: list[dict] = []
+        abstained: list[dict] = []
+        for raw_orig, raw_desired in sorted(proof.items()):
+            orig = int(raw_orig)
+            desired = int(raw_desired)
+            new_ig = original_to_new.get(orig)
+            if new_ig is None and orig in decisions:
+                new_ig = orig
+            if new_ig is None:
+                abstained.append({
+                    "original_ig": orig,
+                    "new_ig": None,
+                    "desired_phys": desired,
+                    "assigned_phys": None,
+                    "reason": "not_reanchored",
+                })
+                continue
+
+            decision = decisions.get(new_ig)
+            if decision is None:
+                abstained.append({
+                    "original_ig": orig,
+                    "new_ig": new_ig,
+                    "desired_phys": desired,
+                    "assigned_phys": None,
+                    "reason": "missing_decision",
+                })
+                continue
+
+            assigned = getattr(decision, "assigned_reg", None)
+            if assigned is None:
+                abstained.append({
+                    "original_ig": orig,
+                    "new_ig": new_ig,
+                    "desired_phys": desired,
+                    "assigned_phys": None,
+                    "reason": "missing_assignment",
+                })
+            elif int(assigned) == desired:
+                satisfied.append({
+                    "original_ig": orig,
+                    "new_ig": new_ig,
+                    "desired_phys": desired,
+                    "assigned_phys": int(assigned),
+                })
+            else:
+                blocked.append({
+                    "original_ig": orig,
+                    "new_ig": new_ig,
+                    "desired_phys": desired,
+                    "assigned_phys": int(assigned),
+                })
+
+        total = max(len(proof), 1)
+        score = len(satisfied) / total
+        parent_state = call.parent_state
+        parent_disp = self._parent_displacement_of(parent_state)
+        prov_mutation = getattr(getattr(art, "provenance", None), "mutation", None)
+        if prov_mutation is not None and "@" in str(prov_mutation):
+            prov_mutation = str(prov_mutation).split("@")[0]
+        applied_mutator = prov_mutation or parent_state.last_lever or "force_phys_assignment"
+
+        parent_id = (
+            getattr(call.parent_state.current_best, "candidate_id", None)
+            if call.parent_state.current_best is not None
+            else None
+        )
+        meta = DirectedMeta(
+            candidate_id=art.candidate_id,
+            source_hash=art.source_hash,
+            iteration=0,
+            parent_id=parent_id,
+            parent_state_id=parent_state.state_id,
+            valid=True,
+            invalid_reason=None,
+            case="force_phys_assignment",
+            label="assignment_fallback",
+            order_distance=len(blocked) + len(abstained),
+            displacement=score,
+            displacement_delta=score - parent_disp,
+            reanchor_matched=len(satisfied) + len(blocked),
+            reanchor_total=len(proof),
+            diagnosis_chars=len("force_phys_assignment"),
+            applied_mutator=applied_mutator,
+            directed_scalar=score,
+            proof_assignments={
+                "satisfied": satisfied,
+                "blocked": blocked,
+                "abstained": abstained,
+            },
+            byte_score=art.byte_score,
+            checkdiff_gate=_checkdiff_gate_for_byte_score(art.byte_score),
+        )
+        return replace(
+            art,
+            directed_score=score,
+            directed_meta=meta,
+            status="ok",
+        )
 
     # ------------------------------------------------------------------
     # _invalid

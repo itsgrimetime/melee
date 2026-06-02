@@ -44,13 +44,46 @@ class _SearchRunDirectedPipeline:
         return self._directed_pipeline.score_directed(art, call)
 
 
-def _compute_melee_root() -> Path:
-    """Resolve the melee repo root from this file's location.
+def _looks_like_melee_root(path: Path) -> bool:
+    return (path / "configure.py").is_file() and (path / "src" / "melee").is_dir()
 
-    tools/melee-agent/src/search/cli.py:
-      parents[0]=search  [1]=src  [2]=melee-agent  [3]=tools  [4]=<repo root>
+
+def _find_melee_root(start: Path) -> Path | None:
+    current = start.resolve()
+    for candidate in (current, *current.parents):
+        if _looks_like_melee_root(candidate):
+            return candidate
+    return None
+
+
+def _compute_melee_root() -> Path:
+    """Resolve the melee repo root for the command invocation.
+
+    Prefer the current working directory so an editable install launched from a
+    matcher worktree operates on that dirty checkout. Fall back to this file's
+    repo root when invoked from outside a Melee tree.
     """
+    cwd_root = _find_melee_root(Path.cwd())
+    if cwd_root is not None:
+        return cwd_root
+
+    # tools/melee-agent/src/search/cli.py:
+    # parents[0]=search [1]=src [2]=melee-agent [3]=tools [4]=<repo root>
     return Path(__file__).resolve().parents[4]
+
+
+def _resolve_source_file(path: Path | None, *, melee_root: Path) -> Path | None:
+    if path is None:
+        return None
+    expanded = path.expanduser()
+    candidates = [expanded]
+    if not expanded.is_absolute():
+        candidates.append(Path.cwd() / expanded)
+        candidates.append(melee_root / expanded)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    raise typer.BadParameter(f"source file not found: {path}")
 
 
 def _parse_directed_int(raw: str, *, prefix: str = "") -> int:
@@ -489,6 +522,8 @@ def run_cmd(
         from src.search.directed.pcdump_backend import PcdumpLocalBackend
         from src.search.directed.scorer import DirectedScorePipeline
 
+        preflight_status = "ok"
+        preflight_ok = True
         pcdump_backend = PcdumpLocalBackend(
             melee_root=melee_root,
             unit=unit,
@@ -509,11 +544,15 @@ def run_cmd(
             )
             preflight_objective(objective)
         except PreflightError as exc:
-            typer.echo(
-                f"error: directed objective preflight failed: {exc}",
-                err=True,
-            )
-            raise typer.Exit(4) from exc
+            reason = str(exc)
+            if reason != "case_abstained":
+                typer.echo(
+                    f"error: directed objective preflight failed: {exc}",
+                    err=True,
+                )
+                raise typer.Exit(4) from exc
+            preflight_status = f"fallback:{reason}"
+            preflight_ok = False
         except Exception as exc:
             typer.echo(
                 f"error: directed objective build failed: {exc}",
@@ -543,7 +582,8 @@ def run_cmd(
                 for ig_idx, iter_idx
                 in sorted(objective.objective_iter_by_original_ig.items())
             },
-            "preflight": "ok",
+            "preflight": preflight_status,
+            "preflight_ok": preflight_ok,
         }
 
     # Producers
@@ -661,6 +701,14 @@ def directed_cmd(
         Optional[Path],
         typer.Option("--store", help="Artifact store directory. Defaults to build/directed-store."),
     ] = None,
+    source_file: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--seed",
+            "--source-file",
+            help="Use this source file as the initial directed-search seed.",
+        ),
+    ] = None,
     dry: Annotated[
         bool,
         typer.Option("--dry/--no-dry", help="Use in-memory fakes; no mwcc runs. For testing."),
@@ -719,6 +767,7 @@ def directed_cmd(
     from src.search.directed.run import run_directed
 
     melee_root = _compute_melee_root()
+    source_file = _resolve_source_file(source_file, melee_root=melee_root)
     if store is None:
         store = melee_root / "build" / "directed-store"
     proof_force_phys = None
@@ -757,6 +806,7 @@ def directed_cmd(
         max_iters=max_iters,
         proof_force_phys=proof_force_phys,
         class_id=class_id,
+        source_file=source_file,
     )
     typer.echo(_json.dumps(res, indent=2))
 
