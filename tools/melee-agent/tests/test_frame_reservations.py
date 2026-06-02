@@ -4,7 +4,28 @@ from __future__ import annotations
 
 import textwrap
 
-from src.mwcc_debug.frame_reservations import analyze_frame_reservations
+from src.mwcc_debug.frame_reservations import (
+    analyze_frame_from_asm_text,
+    analyze_frame_reservations,
+)
+
+
+def test_analyze_frame_from_asm_text_accepts_checkdiff_lines() -> None:
+    frame = analyze_frame_from_asm_text(textwrap.dedent("""\
+        <gm_801A9DD0>:
+        +014: 94 21 ff 70 \tstwu    r1,-144(r1)
+        +060: 91 01 00 24 \tstw     r8,36(r1)
+        +13c: 38 81 00 38 \taddi    r4,r1,56
+        +1f0: 38 21 00 90 \taddi    r1,r1,144
+    """))
+
+    assert frame["frame_size"] == 144
+    assert {
+        "start": 36,
+        "end": 40,
+        "size": 4,
+        "kind": "local-or-temporary",
+    } in frame["access_ranges"]
 
 
 def test_frame_reservation_report_finds_extra_unused_low_frame_gap() -> None:

@@ -279,6 +279,62 @@ def test_target_score_dump_json_includes_frame_component(tmp_path: Path) -> None
     assert payload["frame_penalty"] > 0
 
 
+def test_target_derive_can_override_frame_from_checkdiff_target_asm(
+    tmp_path: Path,
+) -> None:
+    pcdump = tmp_path / "pcdump.txt"
+    pcdump.write_text(textwrap.dedent("""\
+        Starting function gm_801A9DD0
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        gm_801A9DD0
+        B0: Succ={} Pred={} Labels={}
+            stwu r1,-152(r1)
+            stw r8,40(r1)
+            addi r1,r1,152
+    """))
+    checkdiff_json = tmp_path / "checkdiff.json"
+    checkdiff_json.write_text(json.dumps({
+        "target_asm": [
+            "<gm_801A9DD0>:",
+            "+014: 94 21 ff 70 \tstwu    r1,-144(r1)",
+            "+060: 91 01 00 24 \tstw     r8,36(r1)",
+            "+1f0: 38 21 00 90 \taddi    r1,r1,144",
+        ],
+        "current_asm": [
+            "<gm_801A9DD0>:",
+            "+014: 94 21 ff 68 \tstwu    r1,-152(r1)",
+            "+060: 91 01 00 28 \tstw     r8,40(r1)",
+            "+1f0: 38 21 00 98 \taddi    r1,r1,152",
+        ],
+    }))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "target",
+            "derive",
+            "-f",
+            "gm_801A9DD0",
+            str(pcdump),
+            "--frame-from-checkdiff",
+            str(checkdiff_json),
+            "--format",
+            "json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["frame"]["frame_size"] == 144
+    assert {
+        "start": 36,
+        "end": 40,
+        "size": 4,
+        "kind": "local-or-temporary",
+    } in payload["frame"]["access_ranges"]
+
+
 def test_suggest_frame_reports_low_home_source_levers(tmp_path: Path) -> None:
     pcdump = tmp_path / "pcdump.txt"
     pcdump.write_text(textwrap.dedent("""\
@@ -347,6 +403,8 @@ def test_suggest_frame_reports_low_home_source_levers(tmp_path: Path) -> None:
         for command in suggestion["commands"]
     )
     assert "debug target score-source" in joined_commands
+    assert "tools/checkdiff.py gm_801A9DD0 --format json --no-build" in joined_commands
+    assert "--frame-from-checkdiff gm_801A9DD0.checkdiff.json" in joined_commands
     assert "--force-frame-from-diff" in joined_commands
 
 

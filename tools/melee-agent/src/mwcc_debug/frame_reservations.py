@@ -105,6 +105,11 @@ def analyze_frame_from_function(fn: Function) -> dict:
     return _analyze_instructions(_final_instructions(fn))
 
 
+def analyze_frame_from_asm_text(asm_text: str) -> dict:
+    """Return a JSON-friendly frame model for raw target/checkdiff asm text."""
+    return _analyze_instructions(_parse_expected_asm(asm_text))
+
+
 def _select_final_pass(fn: Function) -> Pass | None:
     preferred = (
         "FINAL CODE AFTER INSTRUCTION SCHEDULING",

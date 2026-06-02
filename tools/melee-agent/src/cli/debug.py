@@ -89,7 +89,10 @@ from ..mwcc_debug.diff_report import (
     compare_function_dumps,
     render_text_report,
 )
-from ..mwcc_debug.frame_reservations import analyze_frame_reservations
+from ..mwcc_debug.frame_reservations import (
+    analyze_frame_from_asm_text,
+    analyze_frame_reservations,
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -2860,6 +2863,43 @@ def _read_frame_reservation_current_asm(
     return "\n".join(current_asm)
 
 
+def _frame_spec_from_checkdiff_target(checkdiff_json: Path) -> dict:
+    if not checkdiff_json.exists():
+        raise typer.BadParameter(
+            f"checkdiff JSON not found: {checkdiff_json}"
+        )
+    try:
+        payload = json.loads(checkdiff_json.read_text())
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter(
+            f"checkdiff JSON could not be parsed: {exc}"
+        ) from exc
+    except OSError as exc:
+        raise typer.BadParameter(
+            f"checkdiff JSON could not be read: {exc}"
+        ) from exc
+
+    target_asm = payload.get("target_asm") or payload.get("reference_asm")
+    if not isinstance(target_asm, list) or not all(
+        isinstance(line, str) for line in target_asm
+    ):
+        raise typer.BadParameter(
+            "checkdiff JSON must contain target_asm or reference_asm lines"
+        )
+
+    frame = analyze_frame_from_asm_text("\n".join(target_asm))
+    if frame.get("frame_size") is None:
+        raise typer.BadParameter(
+            "checkdiff target asm did not contain a stack-frame allocation"
+        )
+    return {
+        "frame_size": frame["frame_size"],
+        "access_ranges": frame.get("access_ranges", []),
+        "unused_ranges": frame.get("unused_ranges", []),
+        "symbolic_home_map": frame.get("symbolic_home_map", []),
+    }
+
+
 def _pcdump_has_symbolic_stack_homes(pcdump_text: str) -> bool:
     return bool(re.search(
         r"@[A-Za-z0-9_]\w*(?:[+-]\d+)?\s*\(\s*r1\s*\)",
@@ -3081,6 +3121,7 @@ def _frame_source_suggestions_from_report(
     function = report.get("function") or "<function>"
     src_rel = f"src/{unit}.c" if unit else "<source.c>"
     frame_target = f"{function}.frame-target.json"
+    checkdiff_target = f"{function}.checkdiff.json"
     suggestions: list[dict] = []
 
     current_low = report.get("current_low_frame_expansion")
@@ -3088,7 +3129,12 @@ def _frame_source_suggestions_from_report(
         range_text = _format_stack_range(current_low)
         commands = [
             (
-                f"melee-agent debug target derive -f {function} --format json "
+                f"python tools/checkdiff.py {function} --format json "
+                f"--no-build > {checkdiff_target}"
+            ),
+            (
+                f"melee-agent debug target derive -f {function} "
+                f"--frame-from-checkdiff {checkdiff_target} --format json "
                 f"> {frame_target}"
             ),
             (
@@ -3176,12 +3222,17 @@ def _frame_source_suggestions_from_report(
             "origin": "frame-size",
             "description": (
                 "No unused-home signature was detected. Derive a frame target "
-                "from a matched/forced reference and use score-source to rank "
+                "from checkdiff's expected/reference asm and use score-source to rank "
                 "source candidates by frame-size and unused-range distance."
             ),
             "commands": [
                 (
+                    f"python tools/checkdiff.py {function} --format json "
+                    f"--no-build > {checkdiff_target}"
+                ),
+                (
                     f"melee-agent debug target derive -f {function} "
+                    f"--frame-from-checkdiff {checkdiff_target} "
                     f"--format json > {frame_target}"
                 ),
                 (
@@ -3443,6 +3494,18 @@ def derive_target(
                  "a same-source force-phys target. Scope with --class.",
         ),
     ] = False,
+    frame_from_checkdiff: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--frame-from-checkdiff",
+            help=(
+                "Override the frame target with target_asm/reference_asm from "
+                "a `tools/checkdiff.py <function> --format json` payload. "
+                "Use this when the current pcdump frame differs from the "
+                "expected object frame."
+            ),
+        ),
+    ] = None,
     class_id: Annotated[
         int,
         typer.Option("--class", help="Register class for --force-phys-safe "
@@ -3482,6 +3545,9 @@ def derive_target(
         spec = {"function": function, "virtuals": virtuals, "spilled": spilled}
     else:
         spec = derive_target_from_function(fn, events=events)
+
+    if frame_from_checkdiff is not None:
+        spec["frame"] = _frame_spec_from_checkdiff_target(frame_from_checkdiff)
 
     fmt = (output_format or "yaml").lower()
     if fmt == "json":
