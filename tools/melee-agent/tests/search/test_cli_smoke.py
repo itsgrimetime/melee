@@ -5,6 +5,7 @@ Uses --dry-compiler so no real mwcc/wibo/SSH is needed.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -78,6 +79,116 @@ def test_search_run_help_documents_directed_options() -> None:
     assert "--directed-force-phys" in result.stdout
     assert "--directed-from-diff" in result.stdout
     assert "--directed-class" in result.stdout
+
+
+def test_search_triage_clusters_source_deltas_and_scores_candidates(
+    tmp_path: Path,
+) -> None:
+    base = tmp_path / "base.c"
+    base.write_text(
+        "void ftCo_8009E7B4(void) {\n"
+        "    int flag = fp->x594_b4;\n"
+        "    for (int i = 0; i < count; i++) {\n"
+        "        if (flag) sink(tree);\n"
+        "    }\n"
+        "}\n"
+    )
+    natural = tmp_path / "naturalized.c"
+    natural.write_text(
+        "void ftCo_8009E7B4(void) {\n"
+        "    int reload = fp->x594_b4;\n"
+        "    int flag = reload != 0;\n"
+        "    for (int i = 0; i < count; i++) {\n"
+        "        if (flag) sink(tree);\n"
+        "    }\n"
+        "}\n"
+    )
+    late = tmp_path / "late.c"
+    late.write_text(
+        "void ftCo_8009E7B4(void) {\n"
+        "#line 99 \"generated\"\n"
+        "    int var_42 = fp->x594_b3;\n"
+        "    goto generated_label;\n"
+        "generated_label:\n"
+        "    for (int idx = count; idx != 0; --idx) sink(tree->next);\n"
+        "}\n"
+    )
+    telemetry = tmp_path / "telemetry.json"
+    telemetry.write_text(json.dumps({
+        "directed_telemetry": [
+            {
+                "candidate_id": "naturalized",
+                "byte_score": 2036,
+                "proof_assignments": {
+                    "satisfied": [
+                        {"original_ig": 42, "desired_phys": 3, "assigned_phys": 3},
+                        {"original_ig": 44, "desired_phys": 4, "assigned_phys": 4},
+                    ],
+                    "blocked": [
+                        {"original_ig": 35, "desired_phys": 30, "assigned_phys": 29},
+                    ],
+                    "abstained": [],
+                },
+            },
+            {
+                "candidate_id": "late",
+                "byte_score": 2036,
+                "proof_assignments": {
+                    "satisfied": [
+                        {"original_ig": 35, "desired_phys": 30, "assigned_phys": 30},
+                    ],
+                    "blocked": [],
+                    "abstained": [
+                        {"original_ig": 56, "desired_phys": 29, "reason": "not_reanchored"},
+                    ],
+                },
+            },
+        ]
+    }))
+    score_script = tmp_path / "score_candidate.py"
+    score_script.write_text(
+        "import json, sys\n"
+        "print(json.dumps({'candidate': sys.argv[1], 'byte_score': 2036}))\n"
+    )
+
+    result = CliRunner().invoke(
+        search_app,
+        [
+            "triage",
+            "--base", str(base),
+            "--candidate", f"naturalized={natural}",
+            "--candidate", f"late={late}",
+            "--telemetry", str(telemetry),
+            "--score-command", f"{sys.executable} {score_script} {{candidate}}",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    naturalized = payload["candidates"][0]
+    assert naturalized["candidate_id"] == "naturalized"
+    assert naturalized["assignment_progress"]["satisfied"] == [
+        "ig42->r3",
+        "ig44->r4",
+    ]
+    assert "early flag/reload temps" in naturalized["assignment_clusters"]
+    assert any(
+        delta["kind"] == "field-bit/predicate-shape"
+        for delta in naturalized["source_deltas"]
+    )
+    assert naturalized["score_result"]["parsed_json"]["byte_score"] == 2036
+
+    late_payload = payload["candidates"][1]
+    assert "late x594_b4/x594_b3 loop IV/tree-pointer swaps" in late_payload[
+        "assignment_clusters"
+    ]
+    assert "preprocessor-line-marker" in late_payload["generated_artifacts"]
+    assert "unnatural-goto-label" in late_payload["generated_artifacts"]
+    assert any(
+        "Remove generated control-flow scaffolding" in suggestion
+        for suggestion in late_payload["naturalization_suggestions"]
+    )
 
 
 def test_parse_directed_force_phys_accepts_scoped_csv_and_force_vector() -> None:

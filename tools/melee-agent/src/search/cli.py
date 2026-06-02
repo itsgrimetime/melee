@@ -5,8 +5,11 @@ Register under debug_app via: debug_app.add_typer(search_app, name="search")
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
+import re
+import shlex
 import subprocess
 import sys
 from dataclasses import asdict, is_dataclass
@@ -176,6 +179,300 @@ def _format_directed_force_phys(force_phys: dict[int, int], class_id: int) -> st
     )
 
 
+def _source_hash(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()[:32]
+
+
+def _parse_triage_candidate(raw: str) -> tuple[str, Path]:
+    if "=" in raw:
+        candidate_id, path_s = raw.split("=", 1)
+        candidate_id = candidate_id.strip()
+        path = Path(path_s.strip())
+    else:
+        path = Path(raw.strip())
+        candidate_id = path.stem
+    if not candidate_id:
+        raise typer.BadParameter(
+            f"candidate spec {raw!r} has an empty candidate id"
+        )
+    if not path.is_file():
+        raise typer.BadParameter(f"candidate source not found: {path}")
+    return candidate_id, path
+
+
+def _load_triage_telemetry(path: Path | None) -> list[dict]:
+    if path is None:
+        return []
+    payload = json.loads(path.read_text())
+    if isinstance(payload, dict):
+        telemetry = payload.get("directed_telemetry", [])
+    else:
+        telemetry = payload
+    if not isinstance(telemetry, list):
+        raise typer.BadParameter(
+            "--telemetry must contain a JSON list or a directed_telemetry list"
+        )
+    return [
+        dict(entry) for entry in telemetry
+        if isinstance(entry, dict)
+    ]
+
+
+def _triage_telemetry_for(
+    telemetry: list[dict],
+    *,
+    candidate_id: str,
+    source_hash: str,
+) -> dict | None:
+    for entry in telemetry:
+        if entry.get("candidate_id") == candidate_id:
+            return entry
+    for entry in telemetry:
+        if entry.get("source_hash") == source_hash:
+            return entry
+    return None
+
+
+def _format_assignment(entry: dict, *, status: str) -> str:
+    original = entry.get("original_ig")
+    desired = entry.get("desired_phys")
+    assigned = entry.get("assigned_phys")
+    if status == "satisfied":
+        return f"ig{original}->r{desired}"
+    if status == "blocked":
+        return f"ig{original}: wanted r{desired}, got r{assigned}"
+    reason = entry.get("reason")
+    suffix = f" ({reason})" if reason else ""
+    return f"ig{original}: wanted r{desired}, abstained{suffix}"
+
+
+def _assignment_progress(meta: dict | None) -> dict:
+    proof = (meta or {}).get("proof_assignments") or {}
+    return {
+        "satisfied": [
+            _format_assignment(entry, status="satisfied")
+            for entry in proof.get("satisfied", []) or []
+            if isinstance(entry, dict)
+        ],
+        "blocked": [
+            _format_assignment(entry, status="blocked")
+            for entry in proof.get("blocked", []) or []
+            if isinstance(entry, dict)
+        ],
+        "abstained": [
+            _format_assignment(entry, status="abstained")
+            for entry in proof.get("abstained", []) or []
+            if isinstance(entry, dict)
+        ],
+    }
+
+
+def _assignment_igs(meta: dict | None) -> set[int]:
+    proof = (meta or {}).get("proof_assignments") or {}
+    out: set[int] = set()
+    for bucket in ("satisfied", "blocked", "abstained"):
+        for entry in proof.get(bucket, []) or []:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                out.add(int(entry["original_ig"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+    return out
+
+
+def _assignment_clusters(meta: dict | None) -> list[str]:
+    igs = _assignment_igs(meta)
+    clusters: list[str] = []
+    if igs & {58, 44, 42}:
+        clusters.append("early flag/reload temps")
+    if igs & {35, 56, 34}:
+        clusters.append("late x594_b4/x594_b3 loop IV/tree-pointer swaps")
+    if not clusters and igs:
+        clusters.append("unclassified proof-assignment movement")
+    return clusters
+
+
+def _classify_source_delta(removed: list[str], added: list[str]) -> str:
+    text = "\n".join([*removed, *added])
+    lowered = text.lower()
+    if any(token in lowered for token in ("x594", "_b4", "_b3", "flag")):
+        return "field-bit/predicate-shape"
+    if re.search(r"\b(for|while|do)\b|\+\+|--", text):
+        return "loop-control-shape"
+    if re.search(r"\bif\b|\?|&&|\|\|", text):
+        return "predicate-shape"
+    if re.search(r"\b(?:int|s32|u32|float|bool|BOOL)\s+\w+", text):
+        return "decl-lifetime-shape"
+    if re.search(r"\b(?:return|break|continue|goto)\b", text):
+        return "control-flow-shape"
+    return "source-shape"
+
+
+def _source_deltas(base_text: str, candidate_text: str) -> list[dict]:
+    base_lines = base_text.splitlines()
+    candidate_lines = candidate_text.splitlines()
+    matcher = difflib.SequenceMatcher(None, base_lines, candidate_lines)
+    deltas: list[dict] = []
+    for idx, (tag, i1, i2, j1, j2) in enumerate(matcher.get_opcodes(), 1):
+        if tag == "equal":
+            continue
+        removed = base_lines[i1:i2]
+        added = candidate_lines[j1:j2]
+        deltas.append({
+            "hunk": idx,
+            "tag": tag,
+            "base_lines": [i1 + 1, i2],
+            "candidate_lines": [j1 + 1, j2],
+            "kind": _classify_source_delta(removed, added),
+            "removed": removed[:8],
+            "added": added[:8],
+            "removed_count": len(removed),
+            "added_count": len(added),
+        })
+    return deltas
+
+
+def _generated_artifacts(candidate_text: str) -> list[str]:
+    artifacts: list[str] = []
+    if re.search(r"(?m)^\s*#\s*line\b", candidate_text):
+        artifacts.append("preprocessor-line-marker")
+    if re.search(r"\b(?:var|tmp|sp|phi)_?\d+\b", candidate_text):
+        artifacts.append("generated-temp-name")
+    if re.search(
+        r"\bgoto\b|^\s*[A-Za-z_]\w*:\s*$",
+        candidate_text,
+        flags=re.MULTILINE,
+    ):
+        artifacts.append("unnatural-goto-label")
+    if re.search(r"\bvolatile\b", candidate_text):
+        artifacts.append("volatile-marker")
+    return artifacts
+
+
+def _naturalization_suggestions(
+    *,
+    deltas: list[dict],
+    artifacts: list[str],
+    clusters: list[str],
+) -> list[str]:
+    suggestions: list[str] = []
+    if "preprocessor-line-marker" in artifacts:
+        suggestions.append(
+            "Drop preprocessor line markers before retaining the edit."
+        )
+    if "generated-temp-name" in artifacts:
+        suggestions.append(
+            "Rename generated temporaries to source-meaningful locals and keep "
+            "only the lifetime/definition movement they caused."
+        )
+    if "unnatural-goto-label" in artifacts:
+        suggestions.append(
+            "Remove generated control-flow scaffolding; naturalize it as a "
+            "structured if/loop shape before re-scoring."
+        )
+    kinds = {delta["kind"] for delta in deltas}
+    if "field-bit/predicate-shape" in kinds:
+        suggestions.append(
+            "Minimize field-bit/predicate changes to the smallest readable "
+            "reload, flag, or direct-test variant that preserves assignment "
+            "movement."
+        )
+    if "loop-control-shape" in kinds:
+        suggestions.append(
+            "Minimize loop-control changes separately from pointer/field "
+            "changes, then re-score the combined naturalized edit."
+        )
+    if any("early flag/reload" in cluster for cluster in clusters):
+        suggestions.append(
+            "Treat early flag/reload edits as one cluster; single-temp probes "
+            "may lose the allocator movement."
+        )
+    if any("late x594" in cluster for cluster in clusters):
+        suggestions.append(
+            "Treat late x594 and loop/tree-pointer edits as one cluster before "
+            "judging byte-score recovery."
+        )
+    if not suggestions:
+        suggestions.append(
+            "No generated artifacts detected; try retaining the smallest hunk "
+            "that preserves the reported proof-assignment movement."
+        )
+    return suggestions
+
+
+def _run_triage_score_command(
+    template: str | None,
+    *,
+    candidate_path: Path,
+) -> dict | None:
+    if not template:
+        return None
+    args = [
+        token.replace("{candidate}", str(candidate_path)).replace(
+            "{candidate_path}", str(candidate_path)
+        )
+        for token in shlex.split(template)
+    ]
+    if not any(str(candidate_path) in token for token in args):
+        args.append(str(candidate_path))
+    proc = subprocess.run(args, capture_output=True, text=True)
+    result: dict = {
+        "command": args,
+        "returncode": proc.returncode,
+        "stdout": proc.stdout,
+        "stderr": proc.stderr,
+    }
+    try:
+        result["parsed_json"] = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        pass
+    return result
+
+
+def _triage_candidate(
+    *,
+    candidate_id: str,
+    candidate_path: Path,
+    base_text: str,
+    telemetry: list[dict],
+    score_command: str | None,
+) -> dict:
+    candidate_text = candidate_path.read_text()
+    source_hash = _source_hash(candidate_text)
+    meta = _triage_telemetry_for(
+        telemetry,
+        candidate_id=candidate_id,
+        source_hash=source_hash,
+    )
+    deltas = _source_deltas(base_text, candidate_text)
+    artifacts = _generated_artifacts(candidate_text)
+    clusters = _assignment_clusters(meta)
+    return {
+        "candidate_id": candidate_id,
+        "path": str(candidate_path),
+        "source_hash": source_hash,
+        "byte_score": None if meta is None else meta.get("byte_score"),
+        "directed_score": (
+            None if meta is None
+            else meta.get("directed_scalar", meta.get("displacement"))
+        ),
+        "assignment_progress": _assignment_progress(meta),
+        "assignment_clusters": clusters,
+        "source_deltas": deltas,
+        "generated_artifacts": artifacts,
+        "naturalization_suggestions": _naturalization_suggestions(
+            deltas=deltas,
+            artifacts=artifacts,
+            clusters=clusters,
+        ),
+        "score_result": _run_triage_score_command(
+            score_command,
+            candidate_path=candidate_path,
+        ),
+    }
+
+
 def _meta_to_dict(meta) -> dict:
     if is_dataclass(meta):
         return asdict(meta)
@@ -203,6 +500,125 @@ def _best_byte_score(result) -> int | None:
         if score is not None:
             scores.append(score)
     return min(scores) if scores else None
+
+
+@search_app.command("triage")
+def triage_cmd(
+    base: Annotated[
+        Path,
+        typer.Option(
+            "--base",
+            help="Retained/base source file to compare candidates against.",
+        ),
+    ],
+    candidates: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--candidate",
+            help=(
+                "Candidate source file, or CANDIDATE_ID=path. May be passed "
+                "multiple times."
+            ),
+        ),
+    ] = None,
+    telemetry: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--telemetry",
+            help=(
+                "JSON from debug search run/directed containing "
+                "directed_telemetry."
+            ),
+        ),
+    ] = None,
+    score_command: Annotated[
+        Optional[str],
+        typer.Option(
+            "--score-command",
+            help=(
+                "Optional command template to score each candidate. Use "
+                "{candidate} as the source path placeholder."
+            ),
+        ),
+    ] = None,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Triage directed-search candidates by source delta and proof movement."""
+    if not base.is_file():
+        raise typer.BadParameter(f"base source not found: {base}")
+    candidate_specs = candidates or []
+    if not candidate_specs:
+        raise typer.BadParameter("pass at least one --candidate")
+
+    base_text = base.read_text()
+    telemetry_entries = _load_triage_telemetry(telemetry)
+    results = [
+        _triage_candidate(
+            candidate_id=candidate_id,
+            candidate_path=candidate_path,
+            base_text=base_text,
+            telemetry=telemetry_entries,
+            score_command=score_command,
+        )
+        for candidate_id, candidate_path in (
+            _parse_triage_candidate(spec)
+            for spec in candidate_specs
+        )
+    ]
+    payload = {
+        "base": str(base),
+        "base_source_hash": _source_hash(base_text),
+        "telemetry_count": len(telemetry_entries),
+        "candidates": results,
+    }
+    if json_out:
+        typer.echo(json.dumps(payload, indent=2))
+        return
+
+    typer.echo(f"Base: {base}")
+    typer.echo(f"Telemetry entries: {len(telemetry_entries)}")
+    for result in results:
+        typer.echo("")
+        typer.echo(f"== {result['candidate_id']} ==")
+        typer.echo(f"  path: {result['path']}")
+        if result.get("byte_score") is not None:
+            typer.echo(f"  byte_score: {result['byte_score']}")
+        progress = result["assignment_progress"]
+        if progress["satisfied"]:
+            typer.echo(
+                "  satisfied: " + ", ".join(progress["satisfied"])
+            )
+        if progress["blocked"]:
+            typer.echo("  blocked: " + ", ".join(progress["blocked"]))
+        if progress["abstained"]:
+            typer.echo("  abstained: " + ", ".join(progress["abstained"]))
+        if result["assignment_clusters"]:
+            typer.echo(
+                "  clusters: " + "; ".join(result["assignment_clusters"])
+            )
+        if result["generated_artifacts"]:
+            typer.echo(
+                "  generated artifacts: "
+                + ", ".join(result["generated_artifacts"])
+            )
+        typer.echo("  source deltas:")
+        for delta in result["source_deltas"]:
+            typer.echo(
+                f"    - {delta['kind']} "
+                f"(+{delta['added_count']} / -{delta['removed_count']})"
+            )
+        typer.echo("  naturalization:")
+        for suggestion in result["naturalization_suggestions"]:
+            typer.echo(f"    - {suggestion}")
+        score_result = result.get("score_result")
+        if score_result is not None:
+            typer.echo(
+                "  score command: "
+                f"returncode={score_result['returncode']}"
+            )
 
 
 def _derive_directed_force_phys_from_diff(
