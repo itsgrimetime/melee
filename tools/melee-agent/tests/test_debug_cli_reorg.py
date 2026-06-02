@@ -302,6 +302,61 @@ def test_diagnose_spilled_hints_reuse_call_return_copy_chain() -> None:
     }]
 
 
+def test_diagnose_force_phys_reports_coupled_source_shape_guidance(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    src_path = melee_root / "src" / "melee" / "pl" / "plbonuslib.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text("void ftCo_8009E7B4(void) {}\n")
+    pcdump = tmp_path / "ftCo_8009E7B4.pcdump.txt"
+    pcdump.write_text("Starting function ftCo_8009E7B4\n")
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/pl/plbonuslib",
+    )
+    monkeypatch.setattr(debug_cli, "_get_match_pct", lambda function, root: 99.1)
+    monkeypatch.setattr(debug_cli, "audit_function_casts", lambda source, function: [])
+    monkeypatch.setattr(
+        debug_cli,
+        "_resolve_pcdump_path",
+        lambda pcdump_arg, function, melee_root=None, *, require_fresh=False: pcdump,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "diagnose",
+            "ftCo_8009E7B4",
+            "--skip-decl-orders",
+            "--force-phys",
+            "0:58:4,0:44:4,0:42:3,0:35:30,0:56:29,0:34:30",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    out = strip_ansi(result.stdout)
+    assert "Coupled force-phys proof vector" in out
+    assert "early flag/reload temps: r58->r4, r44->r4, r42->r3" in out
+    assert (
+        "late x594_b4/x594_b3 loop IV/tree-pointer swaps: "
+        "r35->r30, r56->r29, r34->r30"
+    ) in out
+    assert "singleton/prefix force-phys probes can no-match" in out
+    assert "multi-site allocator-shape hypothesis" in out
+    assert (
+        "melee-agent debug dump local src/melee/pl/plbonuslib.c "
+        "--force-phys 0:58:4,0:44:4,0:42:3,0:35:30,0:56:29,0:34:30 "
+        "--force-phys-fn ftCo_8009E7B4"
+    ) in out
+
+
 def test_permuter_scorer_uses_grouped_score_source_command() -> None:
     script = (
         __import__("pathlib")

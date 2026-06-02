@@ -7389,6 +7389,257 @@ def _ceiling_recommendations(function: str, unit: str) -> list[str]:
     ]
 
 
+@dataclasses.dataclass(frozen=True)
+class DiagnoseForcePhysEntry:
+    class_id: int | None
+    virtual: int
+    phys: int
+    token: str
+
+
+def _parse_diagnose_force_phys(
+    raw: str,
+) -> tuple[list[DiagnoseForcePhysEntry], str, list[str]]:
+    """Parse a diagnose-only force-phys proof vector."""
+    normalized, warnings = _normalize_force_phys(raw)
+    entries: list[DiagnoseForcePhysEntry] = []
+    for token in normalized.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        parts = token.split(":")
+        try:
+            if len(parts) == 3:
+                class_id = _parse_force_phys_class(parts[0])
+                virtual = _parse_force_vector_int(parts[1], prefix="ig")
+                phys = _parse_force_vector_phys(parts[2])
+            elif len(parts) == 2:
+                class_id = None
+                virtual = _parse_force_vector_int(parts[0], prefix="ig")
+                phys = _parse_force_vector_phys(parts[1])
+            else:
+                raise ValueError(
+                    "expected IG:PHYS or CLASS:IG:PHYS"
+                )
+        except ValueError as exc:
+            raise typer.BadParameter(
+                f"--force-phys entry {token!r} is invalid: {exc}"
+            ) from exc
+        entries.append(DiagnoseForcePhysEntry(
+            class_id=class_id,
+            virtual=virtual,
+            phys=phys,
+            token=token,
+        ))
+    if not entries:
+        raise typer.BadParameter("--force-phys did not contain any entries")
+    return entries, normalized, warnings
+
+
+def _format_force_phys_members(entries: list[DiagnoseForcePhysEntry]) -> str:
+    return ", ".join(f"r{entry.virtual}->r{entry.phys}" for entry in entries)
+
+
+def _cluster_entries_by_virtuals(
+    entries: list[DiagnoseForcePhysEntry],
+    virtuals: list[int],
+) -> list[DiagnoseForcePhysEntry]:
+    by_virtual = {entry.virtual: entry for entry in entries}
+    return [by_virtual[v] for v in virtuals if v in by_virtual]
+
+
+def _diagnose_coupled_force_phys_guidance(
+    *,
+    function: str,
+    unit: str,
+    force_phys: str | None,
+) -> dict | None:
+    if not force_phys:
+        return None
+    entries, normalized, warnings = _parse_diagnose_force_phys(force_phys)
+    if len(entries) < 3:
+        return {
+            "proof_force_phys": normalized,
+            "warnings": warnings,
+            "coupled": False,
+            "reason": (
+                "At least three proof assignments are needed before diagnose "
+                "treats the vector as a coupled source-shape problem."
+            ),
+            "entries": [
+                {
+                    "class_id": entry.class_id,
+                    "virtual": entry.virtual,
+                    "phys": entry.phys,
+                }
+                for entry in entries
+            ],
+            "clusters": [],
+            "experiments": [],
+            "verification_commands": [],
+        }
+
+    entry_virtuals = {entry.virtual for entry in entries}
+    clusters: list[dict] = []
+    experiments: list[str] = []
+    if (
+        function == "ftCo_8009E7B4"
+        and {58, 44, 42, 35, 56, 34}.issubset(entry_virtuals)
+    ):
+        early = _cluster_entries_by_virtuals(entries, [58, 44, 42])
+        late = _cluster_entries_by_virtuals(entries, [35, 56, 34])
+        clusters = [
+            {
+                "name": "early flag/reload temps",
+                "members": _format_force_phys_members(early),
+                "virtuals": [entry.virtual for entry in early],
+                "phys": [entry.phys for entry in early],
+                "rationale": (
+                    "These volatile-register targets sit around the early "
+                    "flag/reload path; changing one temp alone leaves the "
+                    "same allocator pressure for the neighboring reloads."
+                ),
+            },
+            {
+                "name": "late x594_b4/x594_b3 loop IV/tree-pointer swaps",
+                "members": _format_force_phys_members(late),
+                "virtuals": [entry.virtual for entry in late],
+                "phys": [entry.phys for entry in late],
+                "rationale": (
+                    "These callee-save targets couple the late field-bit "
+                    "tests with loop-index and tree-pointer lifetimes."
+                ),
+            },
+        ]
+        experiments = [
+            (
+                "Early cluster: try natural flag/reload variants together "
+                "(split or merge the flag temp, move the reload closer to "
+                "first use, and reorder the nearby boolean/reload locals)."
+            ),
+            (
+                "Late cluster: try natural x594_b4/x594_b3 variants together "
+                "(direct field tests versus named temps, swap loop IV and "
+                "tree-pointer declaration/use order, and hoist/sink the "
+                "tree-pointer reload)."
+            ),
+            (
+                "Combined probe: apply one early-cluster edit and one "
+                "late-cluster edit in the same candidate before judging the "
+                "byte score; this is a multi-site allocator-shape hypothesis."
+            ),
+        ]
+    else:
+        volatile = [
+            entry for entry in entries
+            if entry.phys <= 12 or entry.virtual >= 40
+        ]
+        callee_save = [entry for entry in entries if entry not in volatile]
+        if not volatile or not callee_save:
+            mid = max(1, len(entries) // 2)
+            volatile = entries[:mid]
+            callee_save = entries[mid:]
+        clusters = [
+            {
+                "name": "volatile/reload-pressure cluster",
+                "members": _format_force_phys_members(volatile),
+                "virtuals": [entry.virtual for entry in volatile],
+                "phys": [entry.phys for entry in volatile],
+                "rationale": (
+                    "These assignments bias volatile or high-numbered temps; "
+                    "they often move when reloads, predicates, or call-return "
+                    "copies are reshaped together."
+                ),
+            },
+            {
+                "name": "callee-save/lifetime-pressure cluster",
+                "members": _format_force_phys_members(callee_save),
+                "virtuals": [entry.virtual for entry in callee_save],
+                "phys": [entry.phys for entry in callee_save],
+                "rationale": (
+                    "These assignments bias longer-lived callee-save choices; "
+                    "they often need loop, cursor, or pointer lifetime changes."
+                ),
+            },
+        ]
+        experiments = [
+            (
+                "Treat each cluster as one source-shape region, not as "
+                "independent virtual nudges."
+            ),
+            (
+                "Combine one volatile/reload edit with one lifetime-pressure "
+                "edit before judging whether the allocator movement is useful."
+            ),
+        ]
+
+    src_rel = f"src/{unit}.c"
+    return {
+        "proof_force_phys": normalized,
+        "warnings": warnings,
+        "coupled": True,
+        "entries": [
+            {
+                "class_id": entry.class_id,
+                "virtual": entry.virtual,
+                "phys": entry.phys,
+            }
+            for entry in entries
+        ],
+        "clusters": clusters,
+        "partial_probe_explanation": (
+            "singleton/prefix force-phys probes can no-match because each "
+            "partial override preserves pressure that the other cluster must "
+            "also relieve; a union byte-match is evidence for coupled source "
+            "shape, not independent one-virtual nudges."
+        ),
+        "hypothesis": (
+            "multi-site allocator-shape hypothesis: look for natural C edits "
+            "that move both clusters together, then re-score assignment "
+            "satisfaction and byte preservation."
+        ),
+        "experiments": experiments,
+        "verification_commands": [
+            (
+                f"melee-agent debug dump local {src_rel} --force-phys "
+                f"{normalized} --force-phys-fn {function}"
+            ),
+            (
+                f"melee-agent debug inspect diagnose {function} "
+                f"--skip-decl-orders --force-phys {normalized}"
+            ),
+        ],
+    }
+
+
+def _print_coupled_force_phys_guidance(guidance: dict) -> None:
+    if not guidance.get("coupled"):
+        print("[!] Force-phys proof vector:")
+        print(f"    {guidance.get('reason', 'not enough entries')}")
+        print()
+        return
+    print("[!] Coupled force-phys proof vector:")
+    print(f"    proof: {guidance['proof_force_phys']}")
+    for warning in guidance.get("warnings", []):
+        print(f"    warning: {warning}")
+    print("    Clusters:")
+    for cluster in guidance.get("clusters", []):
+        print(f"      - {cluster['name']}: {cluster['members']}")
+        if cluster.get("rationale"):
+            print(f"        {cluster['rationale']}")
+    print(f"    Why partial probes fail: {guidance['partial_probe_explanation']}")
+    print(f"    Hypothesis: {guidance['hypothesis']}")
+    if guidance.get("experiments"):
+        print("    Source experiments:")
+        for experiment in guidance["experiments"]:
+            print(f"      - {experiment}")
+    if guidance.get("verification_commands"):
+        print("    Verify:")
+        for command in guidance["verification_commands"]:
+            print(f"      {command}")
+    print()
+
+
 def _diagnose_site_hint(site) -> dict:
     return {
         "block_idx": site.block_idx,
@@ -7634,6 +7885,16 @@ def ceiling(
                  "(~3N candidates).",
         ),
     ] = "promote",
+    force_phys: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-phys",
+            help=(
+                "Optional force-phys proof vector to explain as a coupled "
+                "source-shape problem. Accepts IG:PHYS or CLASS:IG:PHYS CSV."
+            ),
+        ),
+    ] = None,
     json_out: Annotated[
         bool,
         typer.Option("--json", help="Emit verdict as JSON."),
@@ -7683,6 +7944,11 @@ def ceiling(
 
     # Step 1: suggest casts (with auto-verify for HIGH-severity findings)
     src_text = src.read_text() if src.exists() else ""
+    coupled_force_phys_guidance = _diagnose_coupled_force_phys_guidance(
+        function=function,
+        unit=unit,
+        force_phys=force_phys,
+    )
     cast_warnings = audit_function_casts(src_text, function)
     high_casts = [w for w in cast_warnings if w.severity == "high"]
     med_casts = [w for w in cast_warnings if w.severity == "medium"]
@@ -7991,6 +8257,9 @@ def ceiling(
         )
         print()
 
+    if coupled_force_phys_guidance and not json_out:
+        _print_coupled_force_phys_guidance(coupled_force_phys_guidance)
+
     # Verdict — use verified cast results (not raw heuristic count) so we
     # don't produce false-positive WIN AVAILABLE on no-op casts.
     #
@@ -8056,6 +8325,7 @@ def ceiling(
                 for s, v in ceiling_hsd_assert_strings
             ],
             "spilled_virtual_hints": ceiling_spilled_hints,
+            "coupled_force_phys": coupled_force_phys_guidance,
             "recommendations": recommendations,
         }, indent=2))
         return
