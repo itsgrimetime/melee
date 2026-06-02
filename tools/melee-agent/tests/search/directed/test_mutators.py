@@ -101,6 +101,232 @@ def test_reorder_second_line_absent_returns_none():
     assert apply_mutator("reorder_local_decls", a, src) is None
 
 
+def test_flatten_nested_if_else_block():
+    src = (
+        "if (anim_id != -1) {\n"
+        "    reload = true;\n"
+        "} else {\n"
+        "    if (kind != FTKIND_KIRBY) {\n"
+        "        reload = false;\n"
+        "    }\n"
+        "}\n"
+    )
+    block = (
+        "} else {\n"
+        "    if (kind != FTKIND_KIRBY) {\n"
+        "        reload = false;\n"
+        "    }\n"
+        "}"
+    )
+    a = Anchor("flatten_nested_if", (0, 0), {"block": block})
+
+    assert apply_mutator("flatten_nested_if", a, src) == (
+        "if (anim_id != -1) {\n"
+        "    reload = true;\n"
+        "} else if (kind != FTKIND_KIRBY) {\n"
+        "    reload = false;\n"
+        "}\n"
+    )
+
+
+def test_suffixed_source_shape_key_dispatches_to_base_mutator():
+    src = (
+        "if (anim_id != -1) {\n"
+        "    reload = true;\n"
+        "} else {\n"
+        "    if (kind != FTKIND_KIRBY) {\n"
+        "        reload = false;\n"
+        "    }\n"
+        "}\n"
+    )
+    block = (
+        "} else {\n"
+        "    if (kind != FTKIND_KIRBY) {\n"
+        "        reload = false;\n"
+        "    }\n"
+        "}"
+    )
+    a = Anchor("flatten_nested_if", (0, 0), {"block": block})
+
+    assert apply_mutator("flatten_nested_if@0", a, src) == (
+        "if (anim_id != -1) {\n"
+        "    reload = true;\n"
+        "} else if (kind != FTKIND_KIRBY) {\n"
+        "    reload = false;\n"
+        "}\n"
+    )
+
+
+def test_unflatten_else_if_block():
+    src = (
+        "if (anim_id != -1) {\n"
+        "    reload = true;\n"
+        "} else if (kind != FTKIND_KIRBY) {\n"
+        "    reload = false;\n"
+        "}\n"
+    )
+    block = (
+        "} else if (kind != FTKIND_KIRBY) {\n"
+        "    reload = false;\n"
+        "}"
+    )
+    a = Anchor("unflatten_else_if", (0, 0), {"block": block})
+
+    assert apply_mutator("unflatten_else_if", a, src) == (
+        "if (anim_id != -1) {\n"
+        "    reload = true;\n"
+        "} else {\n"
+        "    if (kind != FTKIND_KIRBY) {\n"
+        "        reload = false;\n"
+        "    }\n"
+        "}\n"
+    )
+
+
+def test_remove_branch_block_scope():
+    src = (
+        "if (fp->x594_b4) {\n"
+        "    {\n"
+        "        s32 i;\n"
+        "        for (i = 0; i < n; i++) {\n"
+        "            sink(i);\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+    block = (
+        "    {\n"
+        "        s32 i;\n"
+        "        for (i = 0; i < n; i++) {\n"
+        "            sink(i);\n"
+        "        }\n"
+        "    }"
+    )
+    a = Anchor("remove_branch_scope", (0, 0), {"block": block})
+
+    assert apply_mutator("remove_branch_scope", a, src) == (
+        "if (fp->x594_b4) {\n"
+        "    s32 i;\n"
+        "    for (i = 0; i < n; i++) {\n"
+        "        sink(i);\n"
+        "    }\n"
+        "}\n"
+    )
+
+
+def test_add_branch_block_scope():
+    src = (
+        "if (fp->x594_b4) {\n"
+        "    s32 i;\n"
+        "    for (i = 0; i < n; i++) {\n"
+        "        sink(i);\n"
+        "    }\n"
+        "}\n"
+    )
+    body = (
+        "    s32 i;\n"
+        "    for (i = 0; i < n; i++) {\n"
+        "        sink(i);\n"
+        "    }"
+    )
+    a = Anchor("add_branch_scope", (0, 0), {"body": body})
+
+    assert apply_mutator("add_branch_scope", a, src) == (
+        "if (fp->x594_b4) {\n"
+        "    {\n"
+        "        s32 i;\n"
+        "        for (i = 0; i < n; i++) {\n"
+        "            sink(i);\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+
+
+def test_widen_local_lifetime_moves_decl_before_branch():
+    src = (
+        "if (anim_id != -1) {\n"
+        "    bool reload;\n"
+        "    reload = true;\n"
+        "}\n"
+    )
+    a = Anchor(
+        "widen_local_lifetime",
+        (0, 0),
+        {
+            "decl_line": "    bool reload;",
+            "insert_before_line": "if (anim_id != -1) {",
+        },
+    )
+
+    assert apply_mutator("widen_local_lifetime", a, src) == (
+        "bool reload;\n"
+        "if (anim_id != -1) {\n"
+        "    reload = true;\n"
+        "}\n"
+    )
+
+
+def test_narrow_local_lifetime_moves_decl_into_branch():
+    src = (
+        "bool reload;\n"
+        "if (anim_id != -1) {\n"
+        "    reload = true;\n"
+        "}\n"
+    )
+    a = Anchor(
+        "narrow_local_lifetime",
+        (0, 0),
+        {
+            "decl_line": "bool reload;",
+            "insert_after_line": "if (anim_id != -1) {",
+        },
+    )
+
+    assert apply_mutator("narrow_local_lifetime", a, src) == (
+        "if (anim_id != -1) {\n"
+        "    bool reload;\n"
+        "    reload = true;\n"
+        "}\n"
+    )
+
+
+def test_reuse_loop_counter_scope_removes_inner_decl():
+    src = (
+        "{\n"
+        "    int i;\n"
+        "    if (fallback) {\n"
+        "        int i;\n"
+        "        for (i = 0; i < n; i++) {\n"
+        "            sink(i);\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+    block = (
+        "        int i;\n"
+        "        for (i = 0; i < n; i++) {\n"
+        "            sink(i);\n"
+        "        }"
+    )
+    a = Anchor(
+        "reuse_loop_counter_scope",
+        (0, 0),
+        {"outer_decl_line": "    int i;", "block": block, "decl_line": "        int i;"},
+    )
+
+    assert apply_mutator("reuse_loop_counter_scope", a, src) == (
+        "{\n"
+        "    int i;\n"
+        "    if (fallback) {\n"
+        "        for (i = 0; i < n; i++) {\n"
+        "            sink(i);\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+
+
 def test_order_change_mutators_set():
     """ORDER_CHANGE_MUTATORS must include reorder_local_decls."""
     assert "reorder_local_decls" in ORDER_CHANGE_MUTATORS

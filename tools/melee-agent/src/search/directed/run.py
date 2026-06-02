@@ -24,6 +24,43 @@ import hashlib
 from pathlib import Path
 from typing import Any, Optional
 
+_DIAGNOSIS_LEVER_ORDER = (
+    "reorder_local_decls",
+    "change_counter_width",
+    "split_decl_init",
+)
+
+_SOURCE_SHAPE_LEVER_ORDER = (
+    "flatten_nested_if",
+    "unflatten_else_if",
+    "remove_branch_scope",
+    "add_branch_scope",
+    "widen_local_lifetime",
+    "narrow_local_lifetime",
+    "reuse_loop_counter_scope",
+)
+
+
+def _source_shape_proposal(source_text: str, tried: frozenset):
+    """Return the next actionable source-shape proposal, if any.
+
+    These are concrete control-flow/scope edits discovered directly from the
+    current source text. They are indexed like blind fallback proposals so
+    multiple same-family anchors can be tried independently, but they remain
+    actionable because the anchor is a concrete source-shape edit site.
+    """
+    from src.search.directed.anchors import iter_source_shape_anchors
+
+    allowed = set(_SOURCE_SHAPE_LEVER_ORDER)
+    for idx, anchor in enumerate(iter_source_shape_anchors(source_text)):
+        if anchor.mutator_key not in allowed:
+            continue
+        key = f"{anchor.mutator_key}@{idx}"
+        if key in tried or anchor.mutator_key in tried:
+            continue
+        return (key, anchor, {"source_shape": True})
+    return None
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -345,21 +382,14 @@ def _meta_to_dict(m: Any) -> dict:
 def _make_propose(*, backend: Any, function: str, source_text_ref: list) -> Any:
     """Build a propose callable for DirectedSource.
 
-    Tries levers in order: reorder_local_decls, change_counter_width,
-    split_decl_init.  Compiles the source to a pcdump via backend, runs
-    analyze_iteration_full + build_diagnosis, then calls resolve_anchor on
-    each untried lever.
+    Tries diagnosis levers in order.  Compiles the source to a pcdump via
+    backend, runs analyze_iteration_full + build_diagnosis, then calls
+    resolve_anchor on each untried lever.
 
     Returns (mutator_key, anchor) | None.
     """
     from src.search.directed.anchors import resolve_anchor
     from src.search.directed.diagnosis import build_diagnosis
-
-    _LEVER_ORDER = [
-        "reorder_local_decls",
-        "change_counter_width",
-        "split_decl_init",
-    ]
 
     def propose(source_text: str, tried: frozenset) -> Optional[tuple]:
         # Compile to get a pcdump
@@ -400,7 +430,7 @@ def _make_propose(*, backend: Any, function: str, source_text_ref: list) -> Any:
             diag = None
 
         # Try each lever in order
-        for lever in _LEVER_ORDER:
+        for lever in _DIAGNOSIS_LEVER_ORDER:
             if lever in tried:
                 continue
             if diag is not None and diag.source_idea is not None:
@@ -626,12 +656,6 @@ def _run_live(
         import re as _re
         from src.search.directed.anchors import resolve_anchor, Anchor
 
-        _LEVER_ORDER = [
-            "reorder_local_decls",
-            "change_counter_width",
-            "split_decl_init",
-        ]
-
         # Compile to get a fresh pcdump for diagnosis
         variant = SourceVariant(source_text, None)
         art = pcdump_backend.compile(variant, want_pcdump=True)
@@ -666,12 +690,16 @@ def _run_live(
         if diag is not None and diag.source_idea is not None:
             si = diag.source_idea
             if si.var_name is not None:
-                for lever in _LEVER_ORDER:
+                for lever in _DIAGNOSIS_LEVER_ORDER:
                     if lever in tried:
                         continue
                     anchor = resolve_anchor(si, source_text)
                     if anchor is not None and anchor.mutator_key == lever:
                         return (lever, anchor)
+
+        source_shape = _source_shape_proposal(source_text, tried)
+        if source_shape is not None:
+            return source_shape
 
         # Fallback path (NON-ACTIONABLE / attribution-integrity, Codex round 4
         # P0): when var_name is None (e.g. C2_STICKY_POOL), the analysis did

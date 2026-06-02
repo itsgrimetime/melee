@@ -1,7 +1,7 @@
 """Anchor resolver for the select-order directed search layer.
 
 An Anchor locates a specific edit site in C source that a mutator can
-transform.  The resolver tries three levers in priority order:
+transform.  The diagnosis resolver tries three levers in priority order:
 
   1. reorder_local_decls  — swap two adjacent local declarations
   2. change_counter_width — change s16↔s32 in a single decl line
@@ -10,6 +10,14 @@ transform.  The resolver tries three levers in priority order:
 The ``payload`` dict is the exact contract consumed by ``apply_mutator`` in
 ``mutators.py``.  Every cited line in the payload is verified to exist in
 ``source_text`` before an Anchor is returned.
+
+``iter_source_shape_anchors`` separately discovers conservative
+control-flow/scope edit sites for directed search:
+
+  * nested ``else { if (...)`` flatten/unflatten forms
+  * brace-only branch scopes that can be added or removed
+  * local declaration lifetime widening/narrowing around branch scopes
+  * inner loop-counter declarations that can reuse an outer counter
 """
 
 from __future__ import annotations
@@ -26,8 +34,8 @@ class Anchor:
     Attributes
     ----------
     mutator_key:
-        One of ``"reorder_local_decls"``, ``"change_counter_width"``,
-        ``"split_decl_init"``.
+        A registered directed mutator key such as ``"reorder_local_decls"``
+        or ``"flatten_nested_if"``.
     span:
         ``(start, end)`` character offsets in the source string.  For
         ``reorder_local_decls`` the span covers both lines (first through end
@@ -144,9 +152,232 @@ def _span_for_line(line: str, source_text: str) -> tuple:
     return (start, end)
 
 
+def _line_records(source_text: str) -> list[tuple[int, int, str]]:
+    records: list[tuple[int, int, str]] = []
+    pos = 0
+    for raw in source_text.splitlines(keepends=True):
+        line = raw[:-1] if raw.endswith("\n") else raw
+        records.append((pos, pos + len(line), line))
+        pos += len(raw)
+    return records
+
+
+def _block_text(
+    source_text: str,
+    records: list[tuple[int, int, str]],
+    start_idx: int,
+    end_idx: int,
+) -> str:
+    return source_text[records[start_idx][0]:records[end_idx][1]]
+
+
+def _brace_delta(line: str) -> int:
+    return line.count("{") - line.count("}")
+
+
+def _find_block_end(
+    records: list[tuple[int, int, str]],
+    start_idx: int,
+    *,
+    initial_depth: int = 1,
+) -> Optional[int]:
+    depth = initial_depth
+    for idx in range(start_idx + 1, len(records)):
+        depth += _brace_delta(records[idx][2])
+        if depth == 0:
+            return idx
+        if depth < 0:
+            return None
+    return None
+
+
+def _source_shape_span(
+    records: list[tuple[int, int, str]],
+    start_idx: int,
+    end_idx: int,
+) -> tuple[int, int]:
+    return (records[start_idx][0], records[end_idx][1])
+
+
+def _iter_flatten_nested_if_anchors(source_text: str, records: list[tuple[int, int, str]]):
+    for idx in range(len(records) - 1):
+        line = records[idx][2]
+        next_line = records[idx + 1][2]
+        if re.match(r"^[ \t]*}\s*else\s*{\s*$", line) is None:
+            continue
+        if re.match(r"^[ \t]+if\s*\([^{}]+\)\s*{\s*$", next_line) is None:
+            continue
+        end_idx = _find_block_end(records, idx, initial_depth=1)
+        if end_idx is None or end_idx <= idx + 2:
+            continue
+        block = _block_text(source_text, records, idx, end_idx)
+        yield Anchor(
+            mutator_key="flatten_nested_if",
+            span=_source_shape_span(records, idx, end_idx),
+            payload={"block": block},
+        )
+
+
+def _iter_unflatten_else_if_anchors(source_text: str, records: list[tuple[int, int, str]]):
+    for idx, (_start, _end, line) in enumerate(records):
+        if re.match(r"^[ \t]*}\s*else\s+if\s*\([^{}]+\)\s*{\s*$", line) is None:
+            continue
+        end_idx = _find_block_end(records, idx, initial_depth=1)
+        if end_idx is None:
+            continue
+        block = _block_text(source_text, records, idx, end_idx)
+        yield Anchor(
+            mutator_key="unflatten_else_if",
+            span=_source_shape_span(records, idx, end_idx),
+            payload={"block": block},
+        )
+
+
+def _iter_remove_branch_scope_anchors(source_text: str, records: list[tuple[int, int, str]]):
+    for idx, (_start, _end, line) in enumerate(records):
+        if re.match(r"^[ \t]+{\s*$", line) is None:
+            continue
+        previous = next(
+            (records[p][2] for p in range(idx - 1, -1, -1) if records[p][2].strip()),
+            "",
+        )
+        if not previous.rstrip().endswith("{"):
+            continue
+        end_idx = _find_block_end(records, idx, initial_depth=1)
+        if end_idx is None or end_idx <= idx + 1:
+            continue
+        block = _block_text(source_text, records, idx, end_idx)
+        yield Anchor(
+            mutator_key="remove_branch_scope",
+            span=_source_shape_span(records, idx, end_idx),
+            payload={"block": block},
+        )
+
+
+_BRANCH_OPEN_RE = re.compile(
+    r"^[ \t]*(?:if|else\s+if|else|for|while|switch)\b.*{\s*$"
+)
+
+
+def _iter_add_branch_scope_anchors(source_text: str, records: list[tuple[int, int, str]]):
+    for idx, (_start, _end, line) in enumerate(records):
+        if _BRANCH_OPEN_RE.match(line) is None:
+            continue
+        end_idx = _find_block_end(records, idx, initial_depth=1)
+        if end_idx is None or end_idx <= idx + 1:
+            continue
+        body_indices = [
+            body_idx
+            for body_idx in range(idx + 1, end_idx)
+            if records[body_idx][2].strip()
+        ]
+        if not body_indices:
+            continue
+        first_body = records[body_indices[0]][2]
+        if first_body.strip() == "{":
+            continue
+        if any(
+            re.match(r"^[ \t]*}\s*else\b", records[body_idx][2]) is not None
+            for body_idx in body_indices
+        ):
+            continue
+        body = _block_text(source_text, records, idx + 1, end_idx - 1)
+        yield Anchor(
+            mutator_key="add_branch_scope",
+            span=_source_shape_span(records, idx + 1, end_idx - 1),
+            payload={"body": body},
+        )
+
+
+def _iter_lifetime_scope_anchors(source_text: str, records: list[tuple[int, int, str]]):
+    for idx, (_start, _end, line) in enumerate(records):
+        if _BRANCH_OPEN_RE.match(line) is None:
+            continue
+        end_idx = _find_block_end(records, idx, initial_depth=1)
+        if end_idx is None:
+            continue
+        for inner_idx in range(idx + 1, end_idx):
+            inner_line = records[inner_idx][2]
+            if _LOCAL_DECL_RE.match(inner_line):
+                yield Anchor(
+                    mutator_key="widen_local_lifetime",
+                    span=_span_for_line(inner_line, source_text),
+                    payload={
+                        "decl_line": inner_line,
+                        "insert_before_line": line,
+                    },
+                )
+                break
+        previous_idx = next(
+            (p for p in range(idx - 1, -1, -1) if records[p][2].strip()),
+            None,
+        )
+        if previous_idx is not None:
+            previous_line = records[previous_idx][2]
+            if _LOCAL_DECL_RE.match(previous_line):
+                yield Anchor(
+                    mutator_key="narrow_local_lifetime",
+                    span=_span_for_line(previous_line, source_text),
+                    payload={
+                        "decl_line": previous_line,
+                        "insert_after_line": line,
+                    },
+                )
+
+
+_LOOP_COUNTER_DECL_RE = re.compile(
+    r"^[ \t]*(?:int|s32)\s+(?P<var>[A-Za-z_]\w*)\s*;\s*$"
+)
+
+
+def _iter_reuse_loop_counter_anchors(source_text: str, records: list[tuple[int, int, str]]):
+    outer_decls: dict[str, str] = {}
+    for idx, (_start, _end, line) in enumerate(records):
+        match = _LOOP_COUNTER_DECL_RE.match(line)
+        if match is None:
+            continue
+        var = match.group("var")
+        if var not in outer_decls:
+            outer_decls[var] = line
+            continue
+        next_idx = next(
+            (p for p in range(idx + 1, len(records)) if records[p][2].strip()),
+            None,
+        )
+        if next_idx is None:
+            continue
+        next_line = records[next_idx][2]
+        if re.match(rf"^[ \t]*for\s*\(\s*{re.escape(var)}\s*=", next_line) is None:
+            continue
+        end_idx = _find_block_end(records, next_idx, initial_depth=1)
+        if end_idx is None:
+            continue
+        block = _block_text(source_text, records, idx, end_idx)
+        yield Anchor(
+            mutator_key="reuse_loop_counter_scope",
+            span=_source_shape_span(records, idx, end_idx),
+            payload={
+                "outer_decl_line": outer_decls[var],
+                "block": block,
+                "decl_line": line,
+            },
+        )
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+
+def iter_source_shape_anchors(source_text: str):
+    """Yield conservative control-flow/scope anchors for directed search."""
+    records = _line_records(source_text)
+    yield from _iter_flatten_nested_if_anchors(source_text, records)
+    yield from _iter_unflatten_else_if_anchors(source_text, records)
+    yield from _iter_remove_branch_scope_anchors(source_text, records)
+    yield from _iter_add_branch_scope_anchors(source_text, records)
+    yield from _iter_lifetime_scope_anchors(source_text, records)
+    yield from _iter_reuse_loop_counter_anchors(source_text, records)
 
 
 def resolve_anchor(source_idea: Any, source_text: str) -> Optional[Anchor]:

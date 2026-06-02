@@ -1,5 +1,5 @@
 """Tests for select-order anchor resolver (Task 8)."""
-from src.search.directed.anchors import resolve_anchor
+from src.search.directed.anchors import iter_source_shape_anchors, resolve_anchor
 
 SRC = (
     "int grIceMt_801F9ACC(Ground_GObj* gobj, float y, GrIceMtSegmentLookup ev,\n"
@@ -85,3 +85,82 @@ def test_anchor_is_frozen():
         assert False, "should be frozen"
     except (dataclasses.FrozenInstanceError, TypeError, AttributeError):
         pass
+
+
+def test_source_shape_anchors_cover_control_flow_and_scope_mutators():
+    src = (
+        "{\n"
+        "    bool reload;\n"
+        "    if (anim_id != -1) {\n"
+        "        bool inner_reload;\n"
+        "        inner_reload = true;\n"
+        "    } else {\n"
+        "        if (kind != FTKIND_KIRBY) {\n"
+        "            reload = false;\n"
+        "        }\n"
+        "    }\n"
+        "    if (fp->x594_b4) {\n"
+        "        {\n"
+        "            s32 j;\n"
+        "            sink(j);\n"
+        "        }\n"
+        "    }\n"
+        "    int i;\n"
+        "    if (fallback) {\n"
+        "        int i;\n"
+        "        for (i = 0; i < n; i++) {\n"
+        "            sink(i);\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+
+    anchors = list(iter_source_shape_anchors(src))
+    keys = {anchor.mutator_key for anchor in anchors}
+
+    assert "flatten_nested_if" in keys
+    assert "unflatten_else_if" not in keys
+    assert "remove_branch_scope" in keys
+    assert "add_branch_scope" in keys
+    assert "widen_local_lifetime" in keys
+    assert "narrow_local_lifetime" in keys
+    assert "reuse_loop_counter_scope" in keys
+    for anchor in anchors:
+        for value in anchor.payload.values():
+            if isinstance(value, str) and "\n" in value:
+                assert value in src
+
+
+def test_source_shape_anchors_discover_unflatten_else_if():
+    src = (
+        "if (anim_id != -1) {\n"
+        "    reload = true;\n"
+        "} else if (kind != FTKIND_KIRBY) {\n"
+        "    reload = false;\n"
+        "}\n"
+    )
+
+    anchors = list(iter_source_shape_anchors(src))
+
+    assert any(anchor.mutator_key == "unflatten_else_if" for anchor in anchors)
+
+
+def test_add_branch_scope_anchor_does_not_cross_else_chain():
+    src = (
+        "if (anim_id != -1) {\n"
+        "    reload = true;\n"
+        "} else {\n"
+        "    if (kind != FTKIND_KIRBY) {\n"
+        "        reload = false;\n"
+        "    }\n"
+        "}\n"
+    )
+
+    anchors = [
+        anchor
+        for anchor in iter_source_shape_anchors(src)
+        if anchor.mutator_key == "add_branch_scope"
+    ]
+
+    assert anchors
+    assert all("} else" not in anchor.payload["body"] for anchor in anchors)
