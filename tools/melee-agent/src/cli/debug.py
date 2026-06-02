@@ -171,11 +171,6 @@ def _build_match_iter_first_target_vector(
                 ] = decision.assigned_reg
 
     targets: list[dict] = []
-    force_iter_first: list[int] = []
-    force_phys: dict[str, int] = {}
-    force_phys_csv_parts: list[str] = []
-    force_phys_unscoped_csv_parts: list[str] = []
-    force_vector_parts: list[str] = []
     for result in results:
         if result.get("status") != "ok":
             continue
@@ -187,18 +182,13 @@ def _build_match_iter_first_target_vector(
             current_by_class_ig.get((class_id, ig_idx))
             if class_id is not None else None
         )
-        force_iter_first.append(ig_idx)
-        force_phys[str(ig_idx)] = reg
         force_phys_unscoped = f"{ig_idx}:{reg}"
-        force_phys_unscoped_csv_parts.append(force_phys_unscoped)
         if class_id is not None:
             force_phys_entry = f"{class_id}:{ig_idx}:{reg}"
             force_vector_entry = f"class{class_id}:ig{ig_idx}:phys={kind}{reg}"
         else:
             force_phys_entry = force_phys_unscoped
             force_vector_entry = f"ig{ig_idx}:phys={kind}{reg}"
-        force_phys_csv_parts.append(force_phys_entry)
-        force_vector_parts.append(force_vector_entry)
         targets.append({
             "target_reg": reg,
             "target_reg_name": str(result.get("reg_name") or f"{kind}{reg}"),
@@ -217,6 +207,56 @@ def _build_match_iter_first_target_vector(
             "force_vector_entry": force_vector_entry,
         })
 
+    phys_by_key: dict[tuple[int | None, int], list[dict]] = {}
+    for target in targets:
+        key = (target.get("class_id"), int(target["ig_idx"]))
+        bucket = phys_by_key.setdefault(key, [])
+        if not any(item["target_reg"] == target["target_reg"] for item in bucket):
+            bucket.append(target)
+
+    conflict_by_key: dict[tuple[int | None, int], dict] = {}
+    for key, bucket in phys_by_key.items():
+        if len(bucket) <= 1:
+            continue
+        class_id, ig_idx = key
+        conflict_by_key[key] = {
+            "class_id": class_id,
+            "ig_idx": ig_idx,
+            "target_regs": [int(item["target_reg"]) for item in bucket],
+            "target_reg_names": [
+                str(item.get("target_reg_name") or item["target_reg"])
+                for item in bucket
+            ],
+        }
+
+    force_iter_first: list[int] = []
+    seen_iter_first: set[int] = set()
+    force_phys: dict[str, int] = {}
+    force_phys_csv_parts: list[str] = []
+    force_phys_unscoped_csv_parts: list[str] = []
+    force_vector_parts: list[str] = []
+    seen_force_keys: set[tuple[int | None, int]] = set()
+    for target in targets:
+        ig_idx = int(target["ig_idx"])
+        if ig_idx not in seen_iter_first:
+            force_iter_first.append(ig_idx)
+            seen_iter_first.add(ig_idx)
+        key = (target.get("class_id"), ig_idx)
+        conflict = conflict_by_key.get(key)
+        runnable = conflict is None
+        target["force_vector_runnable"] = runnable
+        if conflict is not None:
+            target["force_vector_conflict"] = conflict
+            continue
+        if key in seen_force_keys:
+            continue
+        seen_force_keys.add(key)
+        force_phys[str(ig_idx)] = int(target["target_reg"])
+        force_phys_csv_parts.append(str(target["force_phys_entry"]))
+        force_phys_unscoped_csv_parts.append(f"{ig_idx}:{target['target_reg']}")
+        force_vector_parts.append(str(target["force_vector_entry"]))
+
+    conflicts = list(conflict_by_key.values())
     return {
         "force_iter_first": force_iter_first,
         "force_iter_first_csv": ",".join(str(i) for i in force_iter_first),
@@ -224,6 +264,8 @@ def _build_match_iter_first_target_vector(
         "force_phys_unscoped_csv": ",".join(force_phys_unscoped_csv_parts),
         "force_phys_csv": ",".join(force_phys_csv_parts),
         "force_vector": ",".join(force_vector_parts),
+        "force_vector_runnable": not conflicts,
+        "conflicts": conflicts,
         "targets": targets,
     }
 
@@ -9348,9 +9390,9 @@ def match_iter_first(
         })
 
     # Detect ambiguous matches up front so both text and JSON paths agree.
-    ig_indices: list[int] = [
+    ig_indices: list[int] = list(dict.fromkeys(
         r["ig_idx"] for r in results if r.get("status") == "ok"
-    ]
+    ))
     ambiguous_results = [
         r for r in results
         if r.get("status") == "ok" and r.get("confidence") == "ambiguous"
@@ -9558,6 +9600,10 @@ def match_iter_first(
             "force_phys": target_vector["force_phys"],
             "force_phys_csv": target_vector["force_phys_csv"],
             "force_vector": target_vector["force_vector"],
+            "force_vector_runnable": target_vector.get(
+                "force_vector_runnable", True,
+            ),
+            "force_vector_conflicts": target_vector.get("conflicts", []),
         }
         if warning_message:
             payload["warning"] = warning_message
@@ -9635,6 +9681,18 @@ def match_iter_first(
                 f"Force-vector for diagnostic probes: "
                 f"{target_vector['force_vector']}"
             )
+        if target_vector.get("conflicts"):
+            print("Force-vector conflicts omitted from runnable vector:")
+            for conflict in target_vector["conflicts"]:
+                class_part = (
+                    f"class{conflict['class_id']}:"
+                    if conflict.get("class_id") is not None else ""
+                )
+                regs = ", ".join(conflict.get("target_reg_names") or [])
+                print(
+                    f"  {class_part}ig{conflict['ig_idx']} has multiple "
+                    f"target phys regs: {regs}"
+                )
     if warning_message:
         print()
         print(f"WARNING: {warning_message}")

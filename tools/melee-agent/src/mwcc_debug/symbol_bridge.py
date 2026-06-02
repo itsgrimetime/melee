@@ -519,7 +519,36 @@ def _extract_function_text(
                     start_line = source.count("\n", 0, m.start()) + 1
                     return (params_text, body_text, start_line)
             idx += 1
+        break
+    try:
+        from .source_patch import find_function
+    except Exception:
         return None
+    span = find_function(source, fn_name)
+    if span is None:
+        return None
+    cleaned = _strip_strings_and_comments(source)
+    header = cleaned[span.sig_start:span.body_open]
+    name_m = re.search(r"\b" + re.escape(fn_name) + r"\s*\(", header)
+    if name_m is None:
+        return None
+    paren_open = span.sig_start + name_m.end() - 1
+    depth = 1
+    idx = paren_open + 1
+    while idx < span.body_open and depth > 0:
+        c = cleaned[idx]
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+        idx += 1
+    if depth != 0:
+        return None
+    paren_close = idx - 1
+    params_text = source[paren_open + 1:paren_close].strip()
+    body_text = source[span.body_open:span.full_end]
+    start_line = source.count("\n", 0, span.sig_start) + 1
+    return (params_text, body_text, start_line)
     return None
 
 

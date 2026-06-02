@@ -385,11 +385,17 @@ class DirectedScorePipeline:
     def _invalid(self, art: Any, call: DirectedScoringCall, reason: str) -> Any:
         """Return art with a DirectedMeta marking the candidate as invalid."""
         parent_state = call.parent_state
+        parent_id = (
+            getattr(call.parent_state.current_best, "candidate_id", None)
+            if call.parent_state.current_best is not None
+            else None
+        )
+        applied_mutator, non_actionable = self._attribution(art, parent_state)
         meta = DirectedMeta(
             candidate_id=art.candidate_id,
             source_hash=art.source_hash,
             iteration=0,
-            parent_id=None,
+            parent_id=parent_id,
             parent_state_id=parent_state.state_id,
             valid=False,
             invalid_reason=reason,
@@ -401,8 +407,11 @@ class DirectedScorePipeline:
             reanchor_matched=0,
             reanchor_total=0,
             diagnosis_chars=0,
-            applied_mutator=parent_state.last_lever,
+            applied_mutator=applied_mutator,
             directed_scalar=0.0,
+            byte_score=art.byte_score,
+            checkdiff_gate=_checkdiff_gate_for_byte_score(art.byte_score),
+            non_actionable=non_actionable,
         )
         return replace(art, directed_meta=meta, status="invalid")
 

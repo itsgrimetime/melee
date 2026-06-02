@@ -216,6 +216,69 @@ def test_match_iter_first_vector_keeps_full_target_order_and_current_regs() -> N
     assert [target["already_target"] for target in vector["targets"]] == [
         False, False, True,
     ]
+    assert vector["force_vector_runnable"] is True
+    assert vector["conflicts"] == []
+
+
+def test_match_iter_first_vector_suppresses_conflicting_duplicate_ig_force_phys() -> None:
+    events = FunctionEvents(
+        name="fn_test",
+        colorgraph_sections=[
+            ColorgraphSection(
+                class_id=0,
+                result=1,
+                n_nodes=1,
+                decisions=[
+                    ColorgraphDecision(
+                        iter_idx=0,
+                        ig_idx=41,
+                        assigned_reg=4,
+                        degree=0,
+                        n_interferers=0,
+                        flags=0,
+                    ),
+                ],
+            ),
+        ],
+    )
+    results = [
+        {
+            "status": "ok",
+            "kind": "r",
+            "reg": 5,
+            "reg_name": "r5",
+            "ig_idx": 41,
+            "confidence": "ambiguous",
+        },
+        {
+            "status": "ok",
+            "kind": "r",
+            "reg": 6,
+            "reg_name": "r6",
+            "ig_idx": 41,
+            "confidence": "ambiguous",
+        },
+    ]
+
+    vector = debug_cli._build_match_iter_first_target_vector(results, events)
+
+    assert vector["force_iter_first"] == [41]
+    assert vector["force_phys"] == {}
+    assert vector["force_phys_csv"] == ""
+    assert vector["force_vector"] == ""
+    assert vector["force_vector_runnable"] is False
+    assert vector["conflicts"] == [
+        {
+            "class_id": 0,
+            "ig_idx": 41,
+            "target_regs": [5, 6],
+            "target_reg_names": ["r5", "r6"],
+        }
+    ]
+    assert [target["force_vector_runnable"] for target in vector["targets"]] == [
+        False,
+        False,
+    ]
 
 
 def test_force_phys_from_diff_derives_repeated_and_dotted_targets() -> None:

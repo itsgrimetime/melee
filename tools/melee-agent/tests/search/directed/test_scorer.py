@@ -120,6 +120,33 @@ def test_invalid_on_no_roles(tmp_path):
     out = _pipe("B").score_directed(_art(tmp_path), DirectedScoringCall(_objective(roles_n=0), _parent()))
     assert out.directed_meta.invalid_reason == "no_roles"
 
+def test_invalid_directed_meta_keeps_artifact_provenance(tmp_path):
+    from src.search.artifact import Provenance
+
+    art = replace(
+        _art(tmp_path),
+        candidate_id="flag_bool",
+        source_hash="flag-bool-hash",
+        provenance=Provenance(
+            "seed-list",
+            None,
+            "flag_bool",
+            "base",
+            {"candidate_id_override": "flag_bool"},
+        ),
+    )
+
+    out = _pipe("B", matched={}).score_directed(
+        art,
+        DirectedScoringCall(_objective(roles_n=2), _parent(last_lever=None)),
+    )
+
+    assert out.status == "invalid"
+    assert out.directed_meta.invalid_reason == "low_coverage"
+    assert out.directed_meta.candidate_id == "flag_bool"
+    assert out.directed_meta.source_hash == "flag-bool-hash"
+    assert out.directed_meta.applied_mutator == "flag_bool"
+
 def test_valid_scores_and_is_pure(tmp_path):
     # GATE SIGNAL is phys-match; with empty proof there are no roles to satisfy,
     # so the phys-match gate signal is 0.0 / mismatch 0. The OLD iter-ordering

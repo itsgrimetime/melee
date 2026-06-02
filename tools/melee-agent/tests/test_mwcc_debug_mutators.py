@@ -38,6 +38,27 @@ def test_mutate_type_change_with_pointer_type() -> None:
     assert "HSD_JObj* j;" not in result
 
 
+def test_mutate_type_change_finds_function_with_function_pointer_param() -> None:
+    source = textwrap.dedent("""\
+        void ftCo_8009E7B4(Fighter* fp, u8 (*arg1)[2])
+        {
+            int i;
+            if (fp->anim_id != -1) {
+                bool reload;
+                u8 flag = fp->x2227_b6 & 0xFFFF;
+                if (flag) {
+                    reload = false;
+                }
+            }
+        }
+    """)
+
+    result = mutate_type_change(source, "ftCo_8009E7B4", "flag", "u32")
+
+    assert "u32 flag = fp->x2227_b6 & 0xFFFF;" in result
+    assert "u8 flag = fp->x2227_b6 & 0xFFFF;" not in result
+
+
 def test_mutate_type_change_preserves_initializer() -> None:
     """`int x = 5;` → `u32 x = 5;`."""
     source = "void f(void) { int x = 5; }"

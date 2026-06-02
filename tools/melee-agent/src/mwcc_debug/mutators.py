@@ -31,6 +31,17 @@ def _normalize_type(type_str: str) -> str:
     return re.sub(r"\s*\*\s*", "*", re.sub(r"\s+", " ", type_str.strip()))
 
 
+def _walk_function_local_decls(source: str, fn_name: str, body_text: str) -> list:
+    try:
+        from . import ast_walker
+        decls = ast_walker.walk_function(source, fn_name, path=None)
+        if decls:
+            return list(decls)
+    except Exception:
+        pass
+    return walk_local_decls(body_text)
+
+
 def _find_decl_separator(text: str, start: int) -> int:
     """Return the next top-level comma or end-of-declaration."""
     depth = 0
@@ -122,7 +133,7 @@ def mutate_type_change(
     if extracted is None:
         raise MutationUnsupported(f"function {fn_name!r} not found")
     _params_text, body_text, _start_line = extracted
-    decls = walk_local_decls(body_text)
+    decls = _walk_function_local_decls(source, fn_name, body_text)
     target = next((d for d in decls if d.name == var_name), None)
     if target is None:
         raise MutationUnsupported(
@@ -195,7 +206,7 @@ def _get_var_type_in_fn(
     if extracted is None:
         return None
     params_text, body_text, _ = extracted
-    for d in walk_local_decls(body_text):
+    for d in _walk_function_local_decls(source, fn_name, body_text):
         if d.name == var_name:
             return d.type_str
     for p in _parse_params(params_text):
