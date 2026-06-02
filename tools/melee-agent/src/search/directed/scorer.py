@@ -86,6 +86,7 @@ class DirectedScorePipeline:
         coverage_floor: float = 0.5,
         plateau_n: int = 3,
         parent_displacement_of: Callable = lambda ps: getattr(ps, "displacement", 0.0),
+        byte_scorer: Optional[Any] = None,
     ) -> None:
         self._analyze = analyze if analyze is not None else _default_analyze
         self._compile_from_text = compile_from_text  # None = build inside score_directed
@@ -94,6 +95,30 @@ class DirectedScorePipeline:
         self._coverage_floor = coverage_floor
         self._plateau_n = plateau_n
         self._parent_displacement_of = parent_displacement_of
+        # Byte scorer for score_byte(). If None, score_byte passes through.
+        self._byte_scorer = byte_scorer
+
+    # ------------------------------------------------------------------
+    # score_byte
+    # ------------------------------------------------------------------
+
+    def score_byte(self, art: Any, target: Any) -> Any:
+        """Tier-1 byte-distance score.  Delegates to the real byte scorer.
+
+        This is required by the scheduler's directed-mode branch (which calls
+        ``directed.score_pipeline.score_byte`` for every compiled candidate
+        before escalating to ``score_directed``).  The default implementation
+        uses ``RealByteScorer``; callers may inject a custom scorer via
+        ``DirectedScorePipeline(byte_scorer=...)``.
+        """
+        from dataclasses import replace as _replace
+        if self._byte_scorer is None:
+            # No byte scorer injected — just pass through (score = None)
+            return art
+        if art.object_path is None:
+            return _replace(art, status="score_failed")
+        dist = self._byte_scorer.byte_distance(art.object_path, target)
+        return _replace(art, byte_score=dist, status="ok")
 
     # ------------------------------------------------------------------
     # score_directed
@@ -147,7 +172,10 @@ class DirectedScorePipeline:
         else:
             # Real default: extract from colorgraph sections for class_id.
             from src.mwcc_debug.colorgraph_parser import find_function
-            fe = find_function(compile.fev, obj.role_target.function)
+            # compile.fev is a FunctionEvents object; find_function expects
+            # a list[FunctionEvents] so wrap it.
+            fev_arg = [compile.fev] if not isinstance(compile.fev, list) else compile.fev
+            fe = find_function(fev_arg, obj.role_target.function)
             if fe and fe.colorgraph_sections:
                 matching = [s for s in fe.colorgraph_sections if s.class_id == obj.class_id]
                 section = matching[-1] if matching else fe.colorgraph_sections[-1]

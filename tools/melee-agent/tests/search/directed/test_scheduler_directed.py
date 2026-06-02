@@ -28,6 +28,8 @@ from src.search.scheduler import DefaultScheduler
 from src.search.store import ArtifactStore
 from src.search.types import (
     Budget,
+    ProducerHandle,
+    ProducerStatus,
     SchedulePolicy,
     SearchContext,
     SearchResult,
@@ -295,6 +297,136 @@ def test_directed_escalates_routes_pcdump_scores_per_parent_selects_one(tmp_path
     # Result has the SearchResult shape
     assert isinstance(res, SearchResult)
     assert res.directed_telemetry is not None
+
+
+def test_directed_best_prefers_directed_score_before_byte_score(tmp_path):
+    """Directed mode optimizes the allocator objective first.
+
+    Byte score remains the fallback tie-breaker, but a candidate with better
+    directed displacement must outrank a byte-closer sibling.
+    """
+    store = ArtifactStore(tmp_path / "store")
+    variants = [
+        SourceVariant("int f(){return 1;}", None),
+        SourceVariant("int f(){return 2;}", None),
+    ]
+    arts = [
+        _make_art("directed-better", byte_score=20, tmp=tmp_path),
+        _make_art("byte-better", byte_score=1, tmp=tmp_path),
+    ]
+    source = FakeSource(variants)
+    backend = FakePcdumpBackend(arts)
+    pipeline = FakeScorePipeline(
+        always_escalate=True,
+        metas=[
+            _make_meta(True, 9.0, "root"),
+            _make_meta(True, 1.0, "root"),
+        ],
+    )
+
+    sched = DefaultScheduler(store=store, verifier=None)
+    cfg = DirectedSchedulerConfig(
+        objective=None,
+        score_pipeline=pipeline,
+        backend=backend,
+        plateau_n=3,
+    )
+
+    res = sched.run(
+        sources=[source],
+        backends=[backend],
+        producers=[],
+        pipeline=pipeline,
+        target=TargetSpec("f", "u", tmp_path / "e.o"),
+        budget=Budget(max_iters=1),
+        policy=SchedulePolicy(batch_size=2),
+        directed=cfg,
+    )
+
+    assert res.best[0].candidate_id == "directed-better"
+    assert res.best[0].directed_meta is not None
+    assert res.best[0].directed_meta.displacement == 9.0
+
+
+def test_directed_remote_harvested_candidates_are_directed_scored(tmp_path):
+    store = ArtifactStore(tmp_path / "store")
+    remote_sources = []
+    for name in ("remote-directed-better", "remote-byte-better"):
+        path = tmp_path / f"{name}.c"
+        path.write_text(f"int f(void){{return {len(remote_sources)};}}\n")
+        remote_sources.append(path)
+
+    harvested_base = [
+        _make_art("remote-directed-better", byte_score=20, tmp=tmp_path),
+        _make_art("remote-byte-better", byte_score=1, tmp=tmp_path),
+    ]
+    harvested = []
+    for art, source_path in zip(harvested_base, remote_sources):
+        harvested.append(replace(
+            art,
+            source_blob=source_path,
+            object_path=None,
+            status="harvested",
+        ))
+
+    class _Producer:
+        def __init__(self):
+            self._polled = False
+
+        def name(self):
+            return "fake-remote"
+
+        def start(self, base, target, budget):
+            return ProducerHandle("fake-remote", ["job"])
+
+        def poll(self, handle):
+            if self._polled:
+                return []
+            self._polled = True
+            return harvested
+
+        def status(self, handle):
+            return ProducerStatus("drained")
+
+        def stop(self, handle):
+            pass
+
+    source = FakeSource([])
+    backend = FakePcdumpBackend([
+        _make_art("compiled-remote-directed-better", byte_score=20, tmp=tmp_path),
+        _make_art("compiled-remote-byte-better", byte_score=1, tmp=tmp_path),
+    ])
+    pipeline = FakeScorePipeline(
+        always_escalate=True,
+        metas=[
+            _make_meta(True, 9.0, "root"),
+            _make_meta(True, 1.0, "root"),
+        ],
+    )
+
+    sched = DefaultScheduler(store=store, verifier=None)
+    cfg = DirectedSchedulerConfig(
+        objective=None,
+        score_pipeline=pipeline,
+        backend=backend,
+        plateau_n=3,
+    )
+
+    res = sched.run(
+        sources=[source],
+        backends=[backend],
+        producers=[_Producer()],
+        pipeline=pipeline,
+        target=TargetSpec("f", "u", tmp_path / "e.o"),
+        budget=Budget(max_iters=1),
+        policy=SchedulePolicy(batch_size=1, promote_top_k=2),
+        directed=cfg,
+    )
+
+    assert res.accounting["promoted"] == 2
+    assert len(res.directed_telemetry) == 2
+    assert res.best[0].candidate_id == "remote-directed-better"
+    assert res.best[0].directed_meta.displacement == 9.0
 
 
 def test_invalid_surfaced_not_progress(tmp_path):

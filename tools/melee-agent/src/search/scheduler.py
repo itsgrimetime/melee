@@ -84,11 +84,17 @@ class DefaultScheduler:
         directed_seen: set[tuple] = set()  # (candidate_id, parent_state_id)
 
         def _dir_key(a: CandidateArtifact):
-            """Rank directed candidates: byte_score ascending, then larger
-            displacement preferred (tie-break)."""
+            """Rank directed candidates by directed score, then byte score."""
             bs = a.byte_score if a.byte_score is not None else (1 << 30)
-            disp = -(a.directed_meta.displacement if a.directed_meta else 0.0)
-            return (bs, disp)
+            directed_value = a.directed_score
+            if directed_value is None and a.directed_meta is not None:
+                directed_value = getattr(a.directed_meta, "directed_scalar", None)
+            if directed_value is None and a.directed_meta is not None:
+                directed_value = getattr(a.directed_meta, "displacement", None)
+            directed_rank = (
+                -directed_value if directed_value is not None else (1 << 30)
+            )
+            return (directed_rank, bs)
 
         if directed is not None:
             from src.search.directed.contracts import DirectedSearchState
@@ -189,10 +195,6 @@ class DefaultScheduler:
                         if scored_art.status == "score_failed":
                             acct["score_failed"] += 1
                             continue
-                        # best[] intentionally holds the pre-score_directed
-                        # (byte-only) artifact for byte ranking; matched/telemetry
-                        # below hold the post-directed one.
-                        best.append(scored_art)
                         # Track this batch's byte-scored artifacts (incl. ones
                         # that will be marked invalid) so the all-invalid
                         # fallback can pick a CURRENT-batch byte-best to mutate
@@ -208,6 +210,7 @@ class DefaultScheduler:
                                     acct["directed_invalid"] = acct.get("directed_invalid", 0) + 1
                                     # invalid → skip from best-selection
                                     continue
+                        best.append(scored_art)
                         dir_batch_candidates.append(scored_art)
                         if scored_art.byte_score == 0 and (
                             self._verifier is None
@@ -275,13 +278,68 @@ class DefaultScheduler:
                 harvested = [h for h in harvested if h.candidate_id not in seen]
                 harvested.sort(key=lambda a: (a.producer_score is None, a.producer_score))
                 for cand in harvested[: policy.promote_top_k]:
-                    if backend is None: break
-                    recompiled = compile_with_retry(
-                        SourceVariant(cand.source_blob.read_text(), cand.provenance))
-                    recompiled = replace(recompiled, candidate_id=cand.candidate_id,
-                                         producer_score=cand.producer_score, provenance=cand.provenance)
-                    acct["promoted"] += 1
-                    ingest(recompiled)
+                    variant = SourceVariant(
+                        cand.source_blob.read_text(),
+                        cand.provenance,
+                    )
+                    if directed is not None:
+                        from src.search.directed.contracts import DirectedScoringCall
+
+                        seen.add(cand.candidate_id)
+                        if directed.backend is None:
+                            break
+                        recompiled = directed.backend.compile(
+                            variant,
+                            want_pcdump=True,
+                        )
+                        acct["compiled"] += 1
+                        if recompiled.status == "compile_failed":
+                            acct["compile_failed"] += 1
+                            continue
+                        recompiled = replace(
+                            recompiled,
+                            candidate_id=cand.candidate_id,
+                            producer_score=cand.producer_score,
+                            provenance=cand.provenance,
+                        )
+                        scored = directed.score_pipeline.score_byte(
+                            recompiled,
+                            target,
+                        )
+                        if scored.status == "score_failed":
+                            acct["score_failed"] += 1
+                            continue
+                        call = DirectedScoringCall(directed.objective, parent_state)
+                        scored = directed.score_pipeline.score_directed(scored, call)
+                        if scored.directed_meta is not None:
+                            directed_telemetry.append(scored.directed_meta)
+                            if not scored.directed_meta.valid:
+                                acct["directed_invalid"] = (
+                                    acct.get("directed_invalid", 0) + 1
+                                )
+                                continue
+                        best.append(scored)
+                        acct["promoted"] += 1
+                        if scored.byte_score == 0 and (
+                            self._verifier is None
+                            or self._verifier.is_match(
+                                target.function,
+                                scored.object_path,
+                            )
+                        ):
+                            matched = scored
+                    else:
+                        if backend is None:
+                            break
+                        recompiled = compile_with_retry(variant)
+                        recompiled = replace(
+                            recompiled,
+                            candidate_id=cand.candidate_id,
+                            producer_score=cand.producer_score,
+                            provenance=cand.provenance,
+                        )
+                        acct["promoted"] += 1
+                        ingest(recompiled)
                     if matched: break
                 status = producer.status(handle)
                 if status.state == "failed":
@@ -331,7 +389,10 @@ class DefaultScheduler:
                 producer=producer.name(),
                 jobs=list(handle.job_ids),
             )
-        best.sort(key=lambda a: (a.byte_score is None, a.byte_score))
+        if directed is not None:
+            best.sort(key=_dir_key)
+        else:
+            best.sort(key=lambda a: (a.byte_score is None, a.byte_score))
         return SearchResult(
             best=best[:25],
             matched=matched,

@@ -7,6 +7,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
+import sys
+from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -24,6 +27,23 @@ _CFLAGS = (
 )
 
 
+class _SearchRunDirectedPipeline:
+    """Bridge byte scoring and directed scoring for `debug search run`."""
+
+    def __init__(self, *, byte_pipeline, directed_pipeline) -> None:
+        self._byte_pipeline = byte_pipeline
+        self._directed_pipeline = directed_pipeline
+
+    def score_byte(self, art, target):
+        return self._byte_pipeline.score_byte(art, target)
+
+    def should_escalate(self, art, ctx) -> bool:
+        return True
+
+    def score_directed(self, art, call):
+        return self._directed_pipeline.score_directed(art, call)
+
+
 def _compute_melee_root() -> Path:
     """Resolve the melee repo root from this file's location.
 
@@ -31,6 +51,165 @@ def _compute_melee_root() -> Path:
       parents[0]=search  [1]=src  [2]=melee-agent  [3]=tools  [4]=<repo root>
     """
     return Path(__file__).resolve().parents[4]
+
+
+def _parse_directed_int(raw: str, *, prefix: str = "") -> int:
+    value = raw.strip().lower()
+    if prefix and value.startswith(prefix):
+        value = value[len(prefix):]
+    if not value:
+        raise ValueError(f"missing integer in {raw!r}")
+    return int(value, 0)
+
+
+def _parse_directed_class(raw: str) -> int:
+    value = raw.strip().lower()
+    if value in {"gpr", "r"}:
+        return 0
+    if value in {"fp", "fpr", "f"}:
+        return 1
+    if value.startswith("class"):
+        value = value[len("class"):]
+    return _parse_directed_int(value)
+
+
+def _parse_directed_phys(raw: str) -> int:
+    value = raw.strip().lower()
+    if value.startswith("phys="):
+        value = value.split("=", 1)[1]
+    if value.startswith(("r", "f")):
+        value = value[1:]
+    return _parse_directed_int(value)
+
+
+def _parse_directed_force_phys(
+    raw: str,
+    *,
+    default_class_id: int = 0,
+) -> tuple[dict[int, int], int]:
+    """Parse a directed force-phys proof vector for one register class.
+
+    Supported entries:
+      - ``0:58:4`` (class_id:ig_idx:phys)
+      - ``58:4`` (uses --directed-class/default_class_id)
+      - ``class0:ig58:phys=r4`` (force-vector style)
+    """
+    force_phys: dict[int, int] = {}
+    class_id: int | None = None
+    for entry in raw.split(","):
+        spec = entry.strip()
+        if not spec:
+            continue
+        parts = [part.strip() for part in spec.split(":")]
+        try:
+            if len(parts) == 3 and parts[0].lower().startswith("class"):
+                entry_class = _parse_directed_class(parts[0])
+                ig_idx = _parse_directed_int(parts[1], prefix="ig")
+                phys = _parse_directed_phys(parts[2])
+            elif len(parts) == 3:
+                entry_class = _parse_directed_class(parts[0])
+                ig_idx = _parse_directed_int(parts[1], prefix="ig")
+                phys = _parse_directed_phys(parts[2])
+            elif len(parts) == 2:
+                entry_class = default_class_id
+                ig_idx = _parse_directed_int(parts[0], prefix="ig")
+                phys = _parse_directed_phys(parts[1])
+            else:
+                raise ValueError(
+                    "expected class_id:ig_idx:phys, ig_idx:phys, "
+                    "or class0:ig58:phys=r4"
+                )
+        except ValueError as exc:
+            raise ValueError(
+                f"invalid --directed-force-phys entry {spec!r}: {exc}"
+            ) from exc
+        if class_id is None:
+            class_id = entry_class
+        elif entry_class != class_id:
+            raise ValueError(
+                "--directed-force-phys currently supports one register "
+                f"class per run; saw class {class_id} and {entry_class}"
+            )
+        force_phys[ig_idx] = phys
+    if not force_phys:
+        raise ValueError("--directed-force-phys did not contain any entries")
+    return force_phys, (default_class_id if class_id is None else class_id)
+
+
+def _format_directed_force_phys(force_phys: dict[int, int], class_id: int) -> str:
+    return ",".join(
+        f"{class_id}:{ig_idx}:{phys}"
+        for ig_idx, phys in sorted(force_phys.items())
+    )
+
+
+def _meta_to_dict(meta) -> dict:
+    if is_dataclass(meta):
+        return asdict(meta)
+    return dict(meta)
+
+
+def _derive_directed_force_phys_from_diff(
+    *,
+    function: str,
+    melee_root: Path,
+    verify: bool,
+    checkdiff_timeout: float,
+    force_vector_probes: bool,
+    default_class_id: int,
+) -> tuple[dict[int, int], int, dict]:
+    cmd = [
+        sys.executable,
+        "-m",
+        "src.cli",
+        "debug",
+        "target",
+        "force-phys-from-diff",
+        "--function",
+        function,
+        "--json",
+        "--checkdiff-timeout",
+        f"{checkdiff_timeout:g}",
+        "--force-vector-checkdiff-timeout",
+        f"{checkdiff_timeout:g}",
+    ]
+    if verify:
+        cmd.append("--verify")
+        if not force_vector_probes:
+            cmd.append("--no-force-vector-probes")
+    proc = subprocess.run(
+        cmd,
+        cwd=melee_root / "tools" / "melee-agent",
+        capture_output=True,
+        text=True,
+        timeout=max(checkdiff_timeout * 8, 120.0),
+    )
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        raise RuntimeError(
+            "debug target force-phys-from-diff failed"
+            + (f": {detail}" if detail else "")
+        )
+    payload = json.loads(proc.stdout)
+    force_phys_csv = payload.get("force_phys_csv") or ""
+    force_phys, class_id = _parse_directed_force_phys(
+        force_phys_csv,
+        default_class_id=default_class_id,
+    )
+    if verify:
+        verify_payload = payload.get("force_vector_verify") or {}
+        union = verify_payload.get("union") if isinstance(verify_payload, dict) else None
+        if not verify_payload.get("ran") or not isinstance(union, dict):
+            raise RuntimeError(
+                "directed force-vector verification did not run: "
+                f"{verify_payload.get('reason', 'no union probe')}"
+            )
+        if not union.get("match"):
+            raise RuntimeError(
+                "directed force-vector union did not match "
+                f"(status={union.get('status')}, returncode={union.get('returncode')})"
+            )
+    return force_phys, class_id, payload
 
 
 @search_app.command("run")
@@ -68,6 +247,63 @@ def run_cmd(
             help="Root of decomp-permuter clone used for remote producer jobs.",
         ),
     ] = Path("~/code/decomp-permuter"),
+    directed_force_phys: Annotated[
+        Optional[str],
+        typer.Option(
+            "--directed-force-phys",
+            help=(
+                "Enable directed allocator scoring with a force-phys proof "
+                "vector, e.g. 0:58:4,0:44:4 or class0:ig58:phys=r4."
+            ),
+        ),
+    ] = None,
+    directed_from_diff: Annotated[
+        bool,
+        typer.Option(
+            "--directed-from-diff/--no-directed-from-diff",
+            help=(
+                "Derive the directed force-phys proof from "
+                "`debug target force-phys-from-diff` before running."
+            ),
+        ),
+    ] = False,
+    directed_class: Annotated[
+        int,
+        typer.Option(
+            "--directed-class",
+            help="Default register class for unscoped directed proof entries.",
+        ),
+    ] = 0,
+    directed_verify: Annotated[
+        bool,
+        typer.Option(
+            "--verify/--no-verify",
+            help=(
+                "With --directed-from-diff, require force-vector verification "
+                "to run and byte-match before the search starts."
+            ),
+        ),
+    ] = False,
+    directed_force_vector_probes: Annotated[
+        bool,
+        typer.Option(
+            "--directed-force-vector-probes/--no-directed-force-vector-probes",
+            help=(
+                "With --directed-from-diff --verify, include singleton and "
+                "prefix force-vector diagnostic probes."
+            ),
+        ),
+    ] = True,
+    directed_checkdiff_timeout: Annotated[
+        float,
+        typer.Option(
+            "--directed-checkdiff-timeout",
+            help=(
+                "Timeout in seconds for directed proof derivation and "
+                "force-vector verification checkdiff runs."
+            ),
+        ),
+    ] = 60.0,
 ) -> None:
     """Run a search over source variants for FUNCTION in UNIT.
 
@@ -100,6 +336,61 @@ def run_cmd(
     expected_obj = _resolve_expected_obj(melee_root, function, unit)
 
     target = TargetSpec(function=function, unit=unit, expected_obj=expected_obj)
+
+    directed_force_phys_map: dict[int, int] | None = None
+    directed_class_id = directed_class
+    directed_source = None
+    directed_derivation_payload: dict | None = None
+    if directed_force_phys and directed_from_diff:
+        typer.echo(
+            "error: pass either --directed-force-phys or --directed-from-diff, not both",
+            err=True,
+        )
+        raise typer.Exit(2)
+    try:
+        if directed_force_phys:
+            directed_force_phys_map, directed_class_id = _parse_directed_force_phys(
+                directed_force_phys,
+                default_class_id=directed_class,
+            )
+            directed_source = "explicit"
+        elif directed_from_diff:
+            (
+                directed_force_phys_map,
+                directed_class_id,
+                directed_derivation_payload,
+            ) = _derive_directed_force_phys_from_diff(
+                function=function,
+                melee_root=melee_root,
+                verify=directed_verify,
+                checkdiff_timeout=directed_checkdiff_timeout,
+                force_vector_probes=directed_force_vector_probes,
+                default_class_id=directed_class,
+            )
+            directed_source = "force-phys-from-diff"
+    except (ValueError, RuntimeError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+        typer.echo(f"error: directed objective setup failed: {exc}", err=True)
+        raise typer.Exit(2) from exc
+
+    directed_manifest = None
+    if directed_force_phys_map is not None:
+        directed_manifest = {
+            "enabled": True,
+            "source": directed_source,
+            "class_id": directed_class_id,
+            "proof_force_phys": {
+                str(ig_idx): phys
+                for ig_idx, phys in sorted(directed_force_phys_map.items())
+            },
+            "proof_force_phys_csv": _format_directed_force_phys(
+                directed_force_phys_map,
+                directed_class_id,
+            ),
+            "from_diff_verified": (
+                bool(directed_derivation_payload.get("force_vector_verify"))
+                if directed_derivation_payload is not None else None
+            ),
+        }
 
     # Store
     if store is None:
@@ -161,6 +452,7 @@ def run_cmd(
             remote_ready_permuter_dir / "settings.toml"
             if remote_ready_permuter_dir is not None else None
         ),
+        directed_objective=directed_manifest,
     )
     manifest_path = artifact_store.put_manifest(manifest)
 
@@ -183,6 +475,76 @@ def run_cmd(
         compile_spec_factory=lambda variant: _make_spec("plain-local"),
         target=target,
     )
+
+    directed_config = None
+    directed_summary = None
+    directed_pipeline = None
+    if directed_force_phys_map is not None:
+        from src.search.directed.contracts import DirectedSchedulerConfig
+        from src.search.directed.objective import (
+            PreflightError,
+            build_directed_objective,
+            preflight_objective,
+        )
+        from src.search.directed.pcdump_backend import PcdumpLocalBackend
+        from src.search.directed.scorer import DirectedScorePipeline
+
+        pcdump_backend = PcdumpLocalBackend(
+            melee_root=melee_root,
+            unit=unit,
+            target=target,
+            store=artifact_store,
+            compile_spec_factory=lambda variant: _make_spec("pcdump-local"),
+        )
+        try:
+            objective = build_directed_objective(
+                melee_root=melee_root,
+                search_target=target,
+                function=function,
+                unit=unit,
+                proof_force_phys=directed_force_phys_map,
+                class_id=directed_class_id,
+                backend=pcdump_backend,
+                baseline_source_text=base_seed_text,
+            )
+            preflight_objective(objective)
+        except PreflightError as exc:
+            typer.echo(
+                f"error: directed objective preflight failed: {exc}",
+                err=True,
+            )
+            raise typer.Exit(4) from exc
+        except Exception as exc:
+            typer.echo(
+                f"error: directed objective build failed: {exc}",
+                err=True,
+            )
+            raise typer.Exit(4) from exc
+
+        directed_pipeline = _SearchRunDirectedPipeline(
+            byte_pipeline=ByteScorePipeline(scorer),
+            directed_pipeline=DirectedScorePipeline(plateau_n=3),
+        )
+        directed_config = DirectedSchedulerConfig(
+            objective=objective,
+            score_pipeline=directed_pipeline,
+            backend=pcdump_backend,
+            plateau_n=3,
+        )
+        directed_summary = {
+            **(directed_manifest or {}),
+            "baseline_source_hash": objective.baseline_source_hash,
+            "baseline_pcdump_path": (
+                str(objective.baseline_pcdump_path)
+                if objective.baseline_pcdump_path is not None else None
+            ),
+            "objective_iter_by_original_ig": {
+                str(ig_idx): iter_idx
+                for ig_idx, iter_idx
+                in sorted(objective.objective_iter_by_original_ig.items())
+            },
+            "preflight": "ok",
+        }
 
     # Producers
     producers = []
@@ -211,7 +573,7 @@ def run_cmd(
                 )
 
     # Pipeline + scheduler
-    pipeline = ByteScorePipeline(scorer)
+    pipeline = directed_pipeline or ByteScorePipeline(scorer)
     policy = DefaultSchedulePolicy()
     budget = Budget(max_iters=max_iters)
     scheduler = DefaultScheduler(store=artifact_store, verifier=verifier)
@@ -255,18 +617,39 @@ def run_cmd(
         budget=budget,
         policy=policy,
         progress=_emit_progress if producers else None,
+        directed=directed_config,
     )
+
+    best_art = result.best[0] if result.best else None
+    # Derive best_directed_score: prefer directed_telemetry (post-directed
+    # scoring), fall back to best_art.directed_score if set.
+    best_directed_score = None
+    if result.directed_telemetry:
+        valid_disps = [
+            m.displacement for m in result.directed_telemetry
+            if getattr(m, "valid", False) and getattr(m, "displacement", None) is not None
+        ]
+        if valid_disps:
+            best_directed_score = max(valid_disps)
+    if best_directed_score is None and best_art is not None:
+        best_directed_score = best_art.directed_score
 
     summary = {
         "function": function,
         "unit": unit,
         "matched": result.matched is not None,
-        "best_byte_score": (
-            result.best[0].byte_score if result.best else None
-        ),
+        "best_byte_score": best_art.byte_score if best_art else None,
+        "best_directed_score": best_directed_score,
         "candidates": len(result.best),
         "accounting": result.accounting,
     }
+    if directed_summary is not None:
+        summary["directed"] = directed_summary
+        summary["directed_telemetry"] = [
+            _meta_to_dict(meta) for meta in result.directed_telemetry
+        ]
+        if best_art is not None and best_art.directed_meta is not None:
+            summary["best_directed_meta"] = _meta_to_dict(best_art.directed_meta)
     typer.echo(json.dumps(summary, indent=2))
 
 
@@ -286,6 +669,45 @@ def directed_cmd(
         int,
         typer.Option("--max-iters", help="Maximum scheduler iterations."),
     ] = 8,
+    directed_force_phys: Annotated[
+        Optional[str],
+        typer.Option(
+            "--directed-force-phys",
+            "--force-phys",
+            help=(
+                "Directed force-phys proof vector, e.g. "
+                "0:58:4,0:44:4 or class0:ig58:phys=r4."
+            ),
+        ),
+    ] = None,
+    directed_from_diff: Annotated[
+        bool,
+        typer.Option(
+            "--directed-from-diff/--no-directed-from-diff",
+            help="Derive the directed proof with debug target force-phys-from-diff.",
+        ),
+    ] = False,
+    directed_class: Annotated[
+        int,
+        typer.Option(
+            "--directed-class",
+            help="Default register class for unscoped directed proof entries.",
+        ),
+    ] = 0,
+    directed_verify: Annotated[
+        bool,
+        typer.Option(
+            "--verify/--no-verify",
+            help="With --directed-from-diff, require force-vector verification.",
+        ),
+    ] = False,
+    directed_checkdiff_timeout: Annotated[
+        float,
+        typer.Option(
+            "--directed-checkdiff-timeout",
+            help="Timeout in seconds for directed proof derivation.",
+        ),
+    ] = 60.0,
 ) -> None:
     """Run the directed (pcdump-guided) search layer for FUNCTION in UNIT.
 
@@ -299,6 +721,32 @@ def directed_cmd(
     melee_root = _compute_melee_root()
     if store is None:
         store = melee_root / "build" / "directed-store"
+    proof_force_phys = None
+    class_id = directed_class
+    if directed_force_phys and directed_from_diff:
+        typer.echo(
+            "error: pass either --directed-force-phys or --directed-from-diff, not both",
+            err=True,
+        )
+        raise typer.Exit(2)
+    try:
+        if directed_force_phys:
+            proof_force_phys, class_id = _parse_directed_force_phys(
+                directed_force_phys,
+                default_class_id=directed_class,
+            )
+        elif directed_from_diff:
+            proof_force_phys, class_id, _payload = _derive_directed_force_phys_from_diff(
+                function=function,
+                melee_root=melee_root,
+                verify=directed_verify,
+                checkdiff_timeout=directed_checkdiff_timeout,
+                force_vector_probes=False,
+                default_class_id=directed_class,
+            )
+    except (ValueError, RuntimeError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+        typer.echo(f"error: directed objective setup failed: {exc}", err=True)
+        raise typer.Exit(2) from exc
 
     res = run_directed(
         function=function,
@@ -307,6 +755,8 @@ def directed_cmd(
         store_dir=store,
         dry=dry,
         max_iters=max_iters,
+        proof_force_phys=proof_force_phys,
+        class_id=class_id,
     )
     typer.echo(_json.dumps(res, indent=2))
 

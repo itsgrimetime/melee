@@ -38,6 +38,8 @@ def run_directed(
     store_dir: Any,
     dry: bool = False,
     max_iters: int = 8,
+    proof_force_phys: dict[int, int] | None = None,
+    class_id: int = 0,
 ) -> dict:
     """Run the directed search layer for *function* in *unit*.
 
@@ -82,6 +84,8 @@ def run_directed(
         melee_root=melee_root,
         store=store,
         max_iters=max_iters,
+        proof_force_phys=proof_force_phys,
+        class_id=class_id,
     )
 
 
@@ -421,7 +425,16 @@ class _DummyReanchor:
     matched: dict = {}
 
 
-def _run_live(*, function: str, unit: str, melee_root: Path, store: Any, max_iters: int) -> dict:
+def _run_live(
+    *,
+    function: str,
+    unit: str,
+    melee_root: Path,
+    store: Any,
+    max_iters: int,
+    proof_force_phys: dict[int, int] | None = None,
+    class_id: int = 0,
+) -> dict:
     """Live run: real mwcc compile + analysis + scoring."""
     import hashlib as _hashlib
 
@@ -445,9 +458,14 @@ def _run_live(*, function: str, unit: str, melee_root: Path, store: Any, max_ite
     # Resolve expected .o
     tu_path = melee_root / "src" / f"{unit}.c"
 
-    # Determine force_phys: use the pinned constant for 9ACC; empty otherwise
+    # Determine force_phys: prefer operator-provided proof, retain the older
+    # grIceMt fixture default for backward compatibility.
     is_9acc = function == "grIceMt_801F9ACC"
-    force_phys = GRICEMT_9ACC_FORCE_PHYS if is_9acc else {}
+    force_phys = (
+        proof_force_phys
+        if proof_force_phys is not None
+        else GRICEMT_9ACC_FORCE_PHYS if is_9acc else {}
+    )
 
     # Build compile spec factory (shared by both backends)
     _CFLAGS = (
@@ -512,7 +530,7 @@ def _run_live(*, function: str, unit: str, melee_root: Path, store: Any, max_ite
             function=function,
             unit=unit,
             proof_force_phys=force_phys,
-            class_id=0,
+            class_id=class_id,
             backend=pcdump_backend,
         )
         preflight_objective(objective)
@@ -540,16 +558,41 @@ def _run_live(*, function: str, unit: str, melee_root: Path, store: Any, max_ite
             "accounting": {"preflight_failed": True, "reason": preflight_reason},
         }
 
-    # Score pipeline (real)
-    score_pipeline = DirectedScorePipeline(plateau_n=3)
+    # Score pipeline (real): always escalate to directed scoring so the pcdump
+    # backend is used from iteration 0. The DirectedSource's propose function
+    # already does its own compile for analysis; tier-1-first would never
+    # populate the byte_history needed to trigger should_escalate normally.
+    from src.search.adapters import RealByteScorer
+
+    class _AlwaysEscalate(DirectedScorePipeline):
+        """DirectedScorePipeline that always escalates to pcdump/directed."""
+        def should_escalate(self, art: Any, ctx: Any) -> bool:
+            return True
+
+    score_pipeline = _AlwaysEscalate(
+        plateau_n=3,
+        byte_scorer=RealByteScorer(),
+    )
 
     # Source text for seeding
     tu_source = tu_path.read_text(encoding="utf-8")
 
     # Build the propose function
     def propose(source_text: str, tried: frozenset):
-        """Try levers in priority order, returning the first untried anchor."""
-        from src.search.directed.anchors import resolve_anchor
+        """Try levers in priority order, returning the first untried anchor.
+
+        Primary path: use build_diagnosis to identify the source_idea and
+        resolve an anchor from it.
+
+        Fallback path (C2_STICKY_POOL / var_name=None): when the analysis
+        produces a valid diagnosis but no named var (common for sticky-pool
+        divergence), enumerate adjacent local declaration pairs in the
+        function body and try ``reorder_local_decls`` on each in turn.
+        This lets the gate see real compiled/scored candidates even when the
+        analysis doesn't resolve a specific variable.
+        """
+        import re as _re
+        from src.search.directed.anchors import resolve_anchor, Anchor
 
         _LEVER_ORDER = [
             "reorder_local_decls",
@@ -585,21 +628,80 @@ def _run_live(*, function: str, unit: str, melee_root: Path, store: Any, max_ite
         except Exception:
             return None
 
-        # Try each lever in order
-        if diag is None or diag.source_idea is None:
-            return None
+        # Primary path: resolve via diagnosis source_idea
+        if diag is not None and diag.source_idea is not None:
+            si = diag.source_idea
+            if si.var_name is not None:
+                for lever in _LEVER_ORDER:
+                    if lever in tried:
+                        continue
+                    anchor = resolve_anchor(si, source_text)
+                    if anchor is not None and anchor.mutator_key == lever:
+                        return (lever, anchor)
 
-        for lever in _LEVER_ORDER:
-            if lever in tried:
+        # Fallback path: when var_name is None (e.g. C2_STICKY_POOL), try
+        # reorder_local_decls on the first untried adjacent local declaration
+        # pair in the function body.  We iterate through pairs and skip those
+        # whose pair index is already in the tried set (stored as
+        # "reorder_local_decls@N").  The key passed to DirectedSource is the
+        # pair-specific token; a custom apply_fn (below) strips the "@N"
+        # suffix before dispatching to apply_mutator.
+        _DECL_RE = _re.compile(
+            r"^(?P<indent>[ \t]+)"
+            r"(?P<type>[A-Za-z_][\w* ]*?)"
+            r"[ \t]+"
+            r"(?P<var>[A-Za-z_]\w*)"
+            r"[^;]*;",
+            _re.MULTILINE,
+        )
+        matches = list(_DECL_RE.finditer(source_text))
+        for i in range(len(matches) - 1):
+            pair_key = f"reorder_local_decls@{i}"
+            if pair_key in tried:
                 continue
-            anchor = resolve_anchor(diag.source_idea, source_text)
-            if anchor is not None and anchor.mutator_key == lever:
-                return (lever, anchor)
+            m1, m2 = matches[i], matches[i + 1]
+            # They must be adjacent (only whitespace between them)
+            between = source_text[m1.end():m2.start()]
+            if between.strip():
+                continue
+            line_start1 = source_text.rfind("\n", 0, m1.start()) + 1
+            line_end1 = source_text.find("\n", m1.end())
+            if line_end1 == -1:
+                line_end1 = len(source_text)
+            first_line = source_text[line_start1:line_end1]
+
+            line_start2 = source_text.rfind("\n", 0, m2.start()) + 1
+            line_end2 = source_text.find("\n", m2.end())
+            if line_end2 == -1:
+                line_end2 = len(source_text)
+            second_line = source_text[line_start2:line_end2]
+
+            if first_line + "\n" + second_line not in source_text:
+                continue
+
+            start = line_start1
+            end = line_end2 + 1 if line_end2 < len(source_text) else line_end2
+            anchor = Anchor(
+                mutator_key="reorder_local_decls",
+                span=(start, end),
+                payload={
+                    "first_line": first_line,
+                    "second_line": second_line,
+                },
+            )
+            return (pair_key, anchor)
 
         return None
 
+    # Custom apply: strip "@N" suffix from fallback pair keys before dispatch
+    def _apply_fn(key: str, anchor, source_text: str):
+        from src.search.directed.mutators import apply_mutator
+        # Strip "@N" suffix produced by the fallback pair enumeration
+        base_key = key.split("@")[0] if "@" in key else key
+        return apply_mutator(base_key, anchor, source_text)
+
     # DirectedSource
-    directed_source = DirectedSource(propose=propose)
+    directed_source = DirectedSource(propose=propose, apply=_apply_fn)
     directed_source.seed(SourceSpec(tu_source, target))
 
     cfg = DirectedSchedulerConfig(

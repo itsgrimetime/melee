@@ -63,6 +63,10 @@ class PreflightError(Exception):
     """
 
 
+class DirectedObjectiveBuildError(Exception):
+    """Raised when a DirectedObjective cannot be built from live artifacts."""
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -143,6 +147,7 @@ def build_directed_objective(
     proof_force_phys: dict,
     class_id: int = 0,
     backend: Any,
+    baseline_source_text: str | None = None,
     parse_pcdump: Callable = _decisions_by_ig,
 ) -> DirectedObjective:
     """Build a DirectedObjective for *function* in *unit*.
@@ -162,11 +167,22 @@ def build_directed_objective(
 
     melee_root = Path(melee_root)
     tu_path = melee_root / "src" / f"{unit}.c"
-    tu_source: str = tu_path.read_text(encoding="utf-8")
+    tu_source: str = (
+        baseline_source_text
+        if baseline_source_text is not None
+        else tu_path.read_text(encoding="utf-8")
+    )
 
     # Compile to get a baseline pcdump.
     artifact = backend.compile(SourceVariant(tu_source, None), want_pcdump=True)
     baseline_pcdump_path = artifact.pcdump_path
+    if artifact.status != "ok" or baseline_pcdump_path is None:
+        detail = getattr(artifact, "compiler_stderr", "") or ""
+        detail = detail.strip()
+        raise DirectedObjectiveBuildError(
+            "baseline pcdump compile failed"
+            + (f": {detail}" if detail else "")
+        )
     pcdump_text: str = Path(baseline_pcdump_path).read_text(encoding="utf-8")
 
     # Build role structures.

@@ -30,6 +30,7 @@ class CompileManifest:
     base_context_blob: Path
     permuter_compile_sh: Path | None = None
     permuter_settings_toml: Path | None = None
+    directed_objective: dict | None = None
 
 
 @dataclass(frozen=True)
