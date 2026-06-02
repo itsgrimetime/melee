@@ -564,47 +564,51 @@ PATTERNS = [
     ),
     Pattern(
         id="register-keyword-respected-by-mwcc",
-        name="`register` keyword still respected by MWCC for allocation hints",
+        name="`register` keyword is not a reliable MWCC allocation hint in this repo",
         description=(
-            "Modern compilers ignore the `register` keyword, but MWCC "
-            "(1.2.5n) honors it as an allocation hint. Useful when a loop "
-            "temp like a `next` pointer is being aggressively reused and "
-            "you need it in its own register: "
-            "`register UnkStruct* next = obj->unk0;`"
+            "For the MWCC 1.2.5n compiler configuration used by this "
+            "Melee repo, the C `register` keyword does not respect "
+            "allocation-hint intent in ordinary source. Probes that only "
+            "add `register` should be treated as expected no-ops for "
+            "allocator mismatches."
         ),
         root_cause=(
-            "Older C compilers respected `register` as a 'try to keep this "
-            "in a register' hint. MWCC inherits this behavior. Also "
-            "required for some inline-asm operand bindings."
+            "The old entry generalized from other MWCC folklore, but this "
+            "compiler configuration does not use `register` as a useful "
+            "allocator hint for normal C variables. Register allocation "
+            "changes need source-shape, lifetime, type, or control-flow "
+            "changes instead."
         ),
         signals=[],
         examples=[
             Example(
-                function="generic loop",
-                after=(
-                    "// register hint for a tight loop temp:\n"
-                    "for (cur = list_head; cur != NULL; cur = next) {\n"
-                    "    register UnkStruct* next = cur->next;  // hint\n"
-                    "    process(cur);\n"
-                    "}\n"
+                function="ftCo_8009E7B4",
+                context=(
+                    "Manual `register` probes scored neutral and did not "
+                    "alter the relevant allocator result."
                 ),
             ),
         ],
         fixes=[
             Fix(
                 description=(
-                    "When a loop temp is being reused / collapsed in your "
-                    "code but target keeps it in a dedicated register, "
-                    "try adding `register` keyword. MWCC respects it as "
-                    "a hint."
+                    "Do not spend time adding `register` as an allocator "
+                    "probe in this repo. If a value needs a different "
+                    "physical register, use lifetime-layout, "
+                    "declaration/source-shape probes, or a targeted "
+                    "allocator diagnostic instead."
                 ),
-                success_rate=0.5,
+                success_rate=0.0,
             ),
         ],
         opcodes=["lwz", "mr"],
         categories=["register"],
         provenance=Provenance(),
-        notes="Discord 2022-05-16 (revo).",
+        notes=(
+            "Corrected after ftCo_8009E7B4 probe batch: "
+            "register_flag_reload and register_i_tree_success were "
+            "unchanged at 99.44976."
+        ),
     ),
     Pattern(
         id="savegpr-restgpr-5-store-threshold",

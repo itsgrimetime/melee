@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Optional
 
+from .corrections import apply_pattern_corrections
 from .schema import CATEGORIES, SIGNAL_TYPES, get_db
 
 
@@ -198,6 +199,7 @@ class PatternDB:
 
     def __init__(self, conn: sqlite3.Connection | None = None):
         self.conn = conn or get_db()
+        apply_pattern_corrections(self.conn)
 
     def insert(self, pattern: Pattern) -> None:
         """Insert a new pattern."""

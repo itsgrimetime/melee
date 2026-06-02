@@ -3,7 +3,7 @@
 from typer.testing import CliRunner
 
 from src.cli import app
-from src.mismatch_db.models import Pattern, PatternDB
+from src.mismatch_db.models import Fix, Pattern, PatternDB
 from src.mismatch_db.sample_entries import load_samples
 from src.mismatch_db.schema import init_db
 
@@ -82,3 +82,41 @@ def test_quick_win_harvest_patterns_are_searchable(tmp_path):
 
     assert "thp-component-layout-pred-dc-padding" in {p.id for p in thp_results}
     assert "function-pointer-cast-forces-indirect-call" in {p.id for p in cast_results}
+
+
+def test_register_keyword_stale_pattern_is_corrected(tmp_path):
+    db = PatternDB(init_db(tmp_path / "patterns.db"))
+    db.insert(
+        Pattern(
+            id="register-keyword-respected-by-mwcc",
+            name="`register` keyword still respected by MWCC for allocation hints",
+            description="MWCC (1.2.5n) honors register as an allocation hint.",
+            root_cause="MWCC respects register as a hint.",
+            fixes=[
+                Fix(
+                    description=(
+                        "When target keeps a loop temp in a dedicated register, "
+                        "try adding register keyword. MWCC respects it as a hint."
+                    ),
+                    success_rate=0.5,
+                )
+            ],
+            categories=["register"],
+            opcodes=["lwz", "mr"],
+        )
+    )
+
+    corrected = PatternDB(db.conn).get("register-keyword-respected-by-mwcc")
+
+    assert corrected is not None
+    assert "does not respect" in corrected.description
+    assert "do not spend time" in corrected.fixes[0].description.lower()
+    stale_text = " ".join(
+        [
+            corrected.name,
+            corrected.description,
+            corrected.root_cause,
+            corrected.fixes[0].description,
+        ]
+    )
+    assert "MWCC respects" not in stale_text

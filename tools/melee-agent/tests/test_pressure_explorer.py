@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 from src.cli import app
 from src.cli import debug as debug_cli
 from src.mwcc_debug.pressure_explorer import (
+    PressureDelta,
     compare_pressure_signatures,
     generate_lifetime_layout_probes,
     pressure_signature_from_pcdump,
@@ -1055,6 +1056,33 @@ def test_lifetime_layout_cli_compares_candidate_pcdump_json(tmp_path: pathlib.Pa
     assert payload["variants"][1]["rank"] == 2
     assert payload["variants"][1]["label"] == "unchanged"
     assert payload["variants"][1]["objective"]["actionability"] == "neutral"
+
+
+def test_lifetime_layout_objective_keeps_untargeted_interference_neutral() -> None:
+    delta = PressureDelta(
+        frame_before=56,
+        frame_after=56,
+        frame_delta=0,
+        saved_added=(),
+        saved_removed=(),
+        spill_added=(),
+        spill_removed=(),
+        interference_added=((10, 11), (12, 13)),
+        interference_removed=((20, 21), (22, 23), (24, 25)),
+        coalesce_added=(),
+        coalesce_removed=(),
+        target_pairs=(),
+    )
+
+    objective = debug_cli._score_lifetime_layout_objective(
+        delta,
+        target_pairs=[],
+        match_percent=99.37799,
+    )
+
+    assert objective["actionability"] == "regressed"
+    assert "interference_removed" not in objective["actionability_reasons"]
+    assert objective["sort_key"][3] == 0.0
 
 
 def test_lifetime_layout_cli_source_failure_keeps_source_path(

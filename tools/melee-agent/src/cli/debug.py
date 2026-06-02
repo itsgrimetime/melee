@@ -15559,6 +15559,7 @@ def _score_lifetime_layout_objective(
     match_percent: float | None = None,
     stack_slot_localizer: dict | None = None,
 ) -> dict[str, Any]:
+    has_target_pairs = bool(target_pairs)
     target_virtuals = {
         virtual for pair in target_pairs for virtual in pair
     }
@@ -15573,6 +15574,7 @@ def _score_lifetime_layout_objective(
 
     reasons: list[str] = []
     regressions: list[str] = []
+    topology_changes: list[str] = []
     if frame_gain:
         reasons.append("frame_reduced")
     elif delta.frame_delta is not None and delta.frame_delta > 0:
@@ -15584,7 +15586,10 @@ def _score_lifetime_layout_objective(
     if delta.spill_added:
         regressions.append("spill_added")
     if delta.interference_removed:
-        reasons.append("interference_removed")
+        if has_target_pairs:
+            reasons.append("interference_removed")
+        else:
+            topology_changes.append("interference_removed")
     if delta.interference_added:
         regressions.append("interference_added")
     if delta.coalesce_added:
@@ -15606,11 +15611,14 @@ def _score_lifetime_layout_objective(
             stack_slot_mismatch_count = raw_count
 
     match_score = match_percent if match_percent is not None else -1.0
+    interference_removed_score = (
+        len(delta.interference_removed) if has_target_pairs else 0
+    )
     sort_key = (
         float(actionability == "improved"),
         float(len(target_spill_removed)),
         float(len(delta.spill_removed)),
-        float(len(delta.interference_removed)),
+        float(interference_removed_score),
         float(len(delta.coalesce_added)),
         float(frame_gain),
         float(match_score),
@@ -15638,6 +15646,7 @@ def _score_lifetime_layout_objective(
         "actionability": actionability,
         "actionability_reasons": reasons,
         "actionability_regressions": regressions,
+        "topology_changes": topology_changes,
         "sort_key": list(sort_key),
     }
 
