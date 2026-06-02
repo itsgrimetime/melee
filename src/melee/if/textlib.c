@@ -775,6 +775,8 @@ void fn_80303EF4(HSD_GObj* gobj)
     }
 }
 
+#pragma push
+#pragma dont_inline on
 void un_80303FD4(HSD_GObj* arg0, struct un_80304138_objalloc_t* arg1,
                  struct un_80304138_objalloc_t_x8* arg2, int arg3, int arg4,
                  int arg5)
@@ -827,6 +829,7 @@ void un_80303FD4(HSD_GObj* arg0, struct un_80304138_objalloc_t* arg1,
         }
     }
 }
+#pragma pop
 
 void un_80304138(void)
 {
