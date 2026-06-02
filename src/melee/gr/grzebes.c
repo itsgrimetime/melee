@@ -669,6 +669,16 @@ void grZebes_801D925C(HSD_GObj* gobj)
 
 void grZebes_801D93D8(Ground_GObj* arg) {}
 
+const grZe_BubbleConfig grZe_803B8044 = {
+    { 1.0f, 1.1f, 1.0f, 1.2f, 1.1f, 1.0f, 1.0f },
+    {
+        { 7.59f, 2.5f, 0.0f },
+        { 24.05f, 2.2f, 0.0f },
+        { 8.2f, -4.55f, 0.0f },
+        { 24.1f, -4.6f, 0.0f },
+    },
+};
+
 void grZebes_801D93DC(Ground_GObj* gobj)
 {
     Ground* gp = GET_GROUND(gobj);
@@ -2220,16 +2230,6 @@ void grZebes_801DC744(s32 arg0, u8 arg1)
                          1.0f);
     }
 }
-
-const grZe_BubbleConfig grZe_803B8044 = {
-    { 1.0f, 1.1f, 1.0f, 1.2f, 1.1f, 1.0f, 1.0f },
-    {
-        { 7.59f, 2.5f, 0.0f },
-        { 24.05f, 2.2f, 0.0f },
-        { 8.2f, -4.55f, 0.0f },
-        { 24.1f, -4.6f, 0.0f },
-    },
-};
 
 void grZebes_801DC9DC(s32 arg0)
 {
