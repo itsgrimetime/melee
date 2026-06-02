@@ -836,6 +836,8 @@ def test_debug_permute_triage_reports_placeholder_candidate(
             str(perm_dir),
             "-f",
             "fn_80000000",
+            "--candidate-timeout",
+            "0",
             "--json",
         ],
     )
@@ -1121,6 +1123,8 @@ def test_debug_permute_triage_retries_empty_build_failure_once(
             str(perm_dir),
             "-f",
             "fn_80000000",
+            "--candidate-timeout",
+            "0",
             "--json",
         ],
     )
@@ -1131,6 +1135,125 @@ def test_debug_permute_triage_retries_empty_build_failure_once(
     assert data["results"][0]["semantic_risk_bucket"] == "plausible-C-shape"
     assert data["results"][0]["match_pct"] == 95.6426
     assert calls.count(obj_cmd) == 2
+
+
+def test_run_ninja_with_timeout_uses_process_tree_runner(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[list[str], Path, float]] = []
+
+    def fake_process_tree_runner(cmd, *, cwd, timeout, env=None):
+        calls.append(([str(part) for part in cmd], cwd, timeout))
+        raise subprocess.TimeoutExpired(cmd, timeout, output="out", stderr="err")
+
+    def fail_subprocess_run(*args, **kwargs):
+        raise AssertionError("timeout builds must use process-tree runner")
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_run_with_process_group_timeout",
+        fake_process_tree_runner,
+        raising=False,
+    )
+    monkeypatch.setattr(debug_cli.subprocess, "run", fail_subprocess_run)
+
+    result, retried = debug_cli._run_ninja_with_no_diag_retry(
+        ["ninja", "build/GALE01/src/melee/mn/sample.o"],
+        tmp_path,
+        timeout=0.25,
+    )
+
+    assert calls == [
+        (
+            ["ninja", "build/GALE01/src/melee/mn/sample.o"],
+            tmp_path,
+            0.25,
+        )
+    ]
+    assert result.returncode == 124
+    assert retried is False
+    assert "err" in result.stderr
+    assert "timed out after 0.25s running ninja" in result.stderr
+
+
+def test_debug_permute_triage_candidate_timeout_restores_and_reports_progress(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    original = "void fn_80000000(void)\n{\n    real_call();\n}\n"
+    src_path.write_text(original)
+
+    perm_dir = tmp_path / "nonmatchings" / "fn_80000000"
+    output_dir = perm_dir / "output-284-1"
+    output_dir.mkdir(parents=True)
+    (output_dir / "source.c").write_text(
+        "void fn_80000000(void)\n{\n    real_call();\n}\n"
+    )
+
+    obj_cmd = ["ninja", "build/GALE01/src/melee/mn/sample.o"]
+    calls: list[tuple[list[str], float | None]] = []
+
+    def fake_ninja(cmd, melee_root_arg, *, timeout=None):
+        cmd = [str(part) for part in cmd]
+        calls.append((cmd, timeout))
+        if cmd == obj_cmd:
+            return (
+                subprocess.CompletedProcess(
+                    cmd,
+                    124,
+                    "",
+                    "timed out after 0.01s running ninja sample.o",
+                ),
+                False,
+            )
+        return subprocess.CompletedProcess(cmd, 0, "", ""), False
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/mn/sample",
+    )
+    monkeypatch.setattr(debug_cli, "_get_match_pct", lambda function, root: 91.0)
+    monkeypatch.setattr(debug_cli, "_run_ninja_with_no_diag_retry", fake_ninja)
+    monkeypatch.setattr(
+        debug_cli,
+        "_refresh_match_pct_after_successful_build",
+        lambda *args, **kwargs: pytest.fail("timed-out builds must not refresh"),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "triage",
+            str(perm_dir),
+            "-f",
+            "fn_80000000",
+            "--candidate-timeout",
+            "0.01",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    data = json.loads(result.stdout)
+    assert data["results"][0]["status"] == "build-failed"
+    assert "timed out after 0.01s" in data["results"][0]["first_diag"]
+    assert src_path.read_text() == original
+    assert calls[0] == (obj_cmd, 0.01)
+    assert "output-284-1" in result.stderr
+    assert "building build/GALE01/src/melee/mn/sample.o" in result.stderr
+    status = json.loads(
+        (output_dir / "melee-agent-candidate-status.json").read_text()
+    )
+    assert status["status"] == "build-failed"
+    assert "timed out after 0.01s" in status["first_diag"]
 
 
 def test_debug_permute_triage_rejects_unsafe_candidate_before_build(
@@ -1308,6 +1431,8 @@ def test_debug_permute_triage_resume_skips_status_sidecars_before_max(
             "1",
             "--threshold",
             "1.0",
+            "--candidate-timeout",
+            "0",
             "--json",
         ],
     )
@@ -1731,6 +1856,8 @@ def test_debug_permute_triage_rechecks_winners_before_ranking(
             str(perm_dir),
             "-f",
             "fn_80000000",
+            "--candidate-timeout",
+            "0",
             "--json",
         ],
     )
@@ -1792,6 +1919,8 @@ def test_debug_permute_triage_json_preserves_multiline_mwcc_diagnostic(
             str(perm_dir),
             "-f",
             "fn_80000000",
+            "--candidate-timeout",
+            "0",
             "--json",
         ],
     )
@@ -1861,6 +1990,8 @@ def test_debug_permute_triage_retries_transient_report_json_decode(
             str(perm_dir),
             "-f",
             "fn_80000000",
+            "--candidate-timeout",
+            "0",
             "--json",
         ],
     )

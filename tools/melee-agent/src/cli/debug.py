@@ -75,6 +75,7 @@ from ..mwcc_debug.iter_match import match_virtual_for_expected_def
 from ..mwcc_debug.diff_capture import (
     CompileFailure,
     _kill_process_tree,
+    _run_with_process_group_timeout,
     read_inspect_input_if_available,
     read_or_compile_input,
     resolve_diff_input,
@@ -4994,12 +4995,17 @@ def _run_ninja_with_no_diag_retry(
     """Run a ninja command, retrying once if it fails without diagnostics."""
     def _run_once() -> subprocess.CompletedProcess[str]:
         try:
+            if timeout is not None:
+                return _run_with_process_group_timeout(
+                    cmd,
+                    cwd=melee_root,
+                    timeout=timeout,
+                )
             return subprocess.run(
                 cmd,
                 cwd=melee_root,
                 capture_output=True,
                 text=True,
-                timeout=timeout,
             )
         except subprocess.TimeoutExpired as exc:
             stdout = exc.stdout or ""
@@ -5163,6 +5169,8 @@ def _recheck_transferred_candidate_match(
     unit: str,
     melee_root: Path,
     original_source: str,
+    *,
+    timeout: float | None = None,
 ) -> tuple[Optional[float], Optional[str]]:
     """Re-measure a candidate from clean source using function-only transfer."""
     obj_path = f"build/GALE01/src/{unit}.o"
@@ -5173,6 +5181,7 @@ def _recheck_transferred_candidate_match(
         build_result, retried_build = _run_ninja_with_no_diag_retry(
             ["ninja", obj_path],
             melee_root,
+            timeout=timeout,
         )
         if build_result.returncode != 0:
             return None, _failure_diagnostic_or_fallback(
@@ -5189,6 +5198,7 @@ def _recheck_transferred_candidate_match(
             unit,
             function,
             melee_root,
+            timeout=timeout,
         )
     finally:
         target_path.write_text(original_source)
@@ -6000,6 +6010,13 @@ def triage_perm(
                  "--max-candidates.",
         ),
     ] = "name",
+    candidate_timeout: Annotated[
+        float,
+        typer.Option(
+            "--candidate-timeout",
+            help="Per-candidate build/report timeout in seconds (0 disables).",
+        ),
+    ] = 120.0,
 ) -> None:
     """Tier 7e: batch-triage decomp-permuter output candidates.
 
@@ -6087,6 +6104,7 @@ def triage_perm(
     if max_candidates > 0 and len(candidate_paths) > max_candidates:
         candidate_paths = candidate_paths[:max_candidates]
 
+    compile_timeout = None if candidate_timeout <= 0 else candidate_timeout
     baseline = _get_match_pct(function, melee_root) or 0.0
     if not json_out:
         print(f"Function: {function}")
@@ -6114,6 +6132,13 @@ def triage_perm(
     obj_path = f"build/GALE01/src/{unit}.o"
     results: list[Result] = []
     best: Optional[Result] = None
+
+    def emit_progress(message: str) -> None:
+        if json_out:
+            typer.echo(f"[triage] {message}", err=True)
+        else:
+            print(message)
+
     try:
         for i, cand in enumerate(candidate_paths, 1):
             cand_text = cand.read_text()
@@ -6168,9 +6193,14 @@ def triage_perm(
                 continue
             # Inline the build so we can capture the first diagnostic
             # (instead of using _build_and_match, which discards stderr).
+            emit_progress(
+                f"[{i}/{len(candidate_paths)}] {cand.parent.name}: "
+                f"building {obj_path} from {cand}"
+            )
             r_build, retried_build = _run_ninja_with_no_diag_retry(
                 ["ninja", obj_path],
                 melee_root,
+                timeout=compile_timeout,
             )
             if r_build.returncode != 0:
                 first_diag = _failure_diagnostic_or_fallback(
@@ -6239,6 +6269,7 @@ def triage_perm(
                 unit,
                 function,
                 melee_root,
+                timeout=compile_timeout,
             )
             # Always revert to original before next iter
             target_path.write_text(orig)
@@ -6272,6 +6303,7 @@ def triage_perm(
                     unit,
                     melee_root,
                     orig,
+                    timeout=compile_timeout,
                 )
                 if recheck_pct is None:
                     _write_permuter_candidate_status(
@@ -6368,10 +6400,10 @@ def triage_perm(
                       f"{pct:.2f}%  delta={delta:+.2f}%{tag}")
     finally:
         target_path.write_text(orig)
-        subprocess.run(
-            ["ninja", obj_path,
-             "build/GALE01/report.json"],
-            cwd=melee_root, capture_output=True,
+        _run_ninja_with_no_diag_retry(
+            ["ninja", obj_path, "build/GALE01/report.json"],
+            melee_root,
+            timeout=compile_timeout,
         )
 
     # Sort results: highest match% first, then by directory name as tiebreak
