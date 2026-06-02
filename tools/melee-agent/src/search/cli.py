@@ -463,8 +463,9 @@ def run_cmd(
         scorer = RealByteScorer()
         verifier = RealCheckdiffVerifier(melee_root)
 
-    # Sources — load seed texts first; they form the base context blob that
-    # the manifest records and that base_context_hash is derived from.
+    # Sources — load seed texts first; they are candidate inputs. Directed
+    # proof/control baselines stay anchored to the current TU source even
+    # when a non-baseline seed is provided.
     seed_texts: list[str] = []
     for seed_path in (seeds or []):
         if seed_path.exists():
@@ -473,6 +474,11 @@ def run_cmd(
             typer.echo(f"[warn] seed file not found: {seed_path}", err=True)
     source = SeedListSource(seed_texts)
     base_seed_text = seed_texts[0] if seed_texts else None
+    tu_source_path = melee_root / "src" / f"{unit}.c"
+    baseline_source_text = (
+        tu_source_path.read_text(encoding="utf-8")
+        if tu_source_path.exists() else None
+    )
     permuter_dir = _resolve_permuter_function_dir(
         function,
         perm_root=perm_root,
@@ -563,7 +569,7 @@ def run_cmd(
                 proof_force_phys=directed_force_phys_map,
                 class_id=directed_class_id,
                 backend=pcdump_backend,
-                baseline_source_text=base_seed_text,
+                baseline_source_text=baseline_source_text,
             )
             preflight_objective(objective)
         except PreflightError as exc:

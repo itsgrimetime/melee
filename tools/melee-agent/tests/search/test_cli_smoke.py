@@ -240,7 +240,9 @@ def test_search_run_directed_force_phys_emits_objective_and_telemetry(
     assert summary["directed"]["proof_force_phys"] == {"44": 4, "58": 4}
     assert summary["best_directed_score"] == 7.0
     assert summary["directed_telemetry"][0]["candidate_id"] == "directed-candidate"
-    assert objective_sources == [seed.read_text()]
+    assert objective_sources == [
+        (repo / "src" / "melee" / "ft" / "ftdynamics.c").read_text()
+    ]
 
 
 def test_search_run_directed_summary_reports_byte_best_not_directed_best(
