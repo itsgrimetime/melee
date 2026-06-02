@@ -56,6 +56,9 @@ ignore = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 addopts = "--cov=src --cov-report=term-missing --cov-report=html"
+markers = [
+    "slow: live compiler tests (require LIVE_9ACC_TESTS=1)",
+]
 
 [tool.coverage.run]
 source = ["src"]
