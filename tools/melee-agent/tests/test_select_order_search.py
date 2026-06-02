@@ -17,6 +17,7 @@ from src.mwcc_debug.cache import cache_path
 from src.mwcc_debug.pressure_explorer import LifetimeLayoutProbe
 from src.mwcc_debug.select_order_search import (
     rank_select_order_candidates,
+    render_select_order_variant,
     score_select_order_candidate,
 )
 
@@ -104,6 +105,92 @@ MISSING_SECOND = textwrap.dedent("""\
     B0: Succ={} Pred={} Labels={}
         stwu r1,-48(r1)
         stmw r29,24(r1)
+        blr
+""")
+
+
+STICKY_POOL_BASELINE = textwrap.dedent("""\
+    Starting function fn_80000000
+    BEFORE REGISTER COLORING
+    fn_80000000
+    B0: Succ={} Pred={} Labels={}
+        mr r32,r3
+        mr r50,r4
+        add r56,r32,r50
+        add r36,r56,r32
+        add r72,r36,r50
+        add r63,r72,r36
+        add r71,r63,r56
+    AFTER REGISTER COLORING
+    fn_80000000
+    B0: Succ={} Pred={} Labels={}
+        mr r29,r3
+        mr r28,r4
+        add r30,r29,r28
+        add r29,r30,r29
+        add r31,r29,r28
+        add r27,r31,r29
+        add r26,r27,r30
+    SIMPLIFY GRAPH (class=0, n_colors=29, n_class_regs=45)
+      iter ig_idx degree arraySize flags notes
+        0 56 5 5 0x00
+        1 36 6 6 0x00
+    COLORGRAPH DECISIONS (class=0, result=1, n_nodes=6)
+      iter ig_idx phys degree nIntfr flags
+        0 56 r30 5 5 0x00
+          interferers: 32=r29 36=r29 50=r28 63=r27 71=r26
+        1 36 r29 6 6 0x00
+          interferers: 32=r29 50=r28 56=r30 63=r27 71=r26 72=r31
+        2 72 r31 1 1 0x00
+          interferers: 36=r29
+    FINAL CODE AFTER INSTRUCTION SCHEDULING
+    fn_80000000
+    B0: Succ={} Pred={} Labels={}
+        stwu r1,-48(r1)
+        stmw r26,24(r1)
+        blr
+""")
+
+
+STICKY_POOL_REDUCED_FIRST_DEGREE = textwrap.dedent("""\
+    Starting function fn_80000000
+    BEFORE REGISTER COLORING
+    fn_80000000
+    B0: Succ={} Pred={} Labels={}
+        mr r32,r3
+        mr r50,r4
+        add r56,r32,r50
+        add r36,r56,r32
+        add r72,r36,r50
+        add r63,r72,r36
+        add r71,r63,r56
+    AFTER REGISTER COLORING
+    fn_80000000
+    B0: Succ={} Pred={} Labels={}
+        mr r29,r3
+        mr r28,r4
+        add r30,r29,r28
+        add r29,r30,r29
+        add r31,r29,r28
+        add r27,r31,r29
+        add r26,r27,r30
+    SIMPLIFY GRAPH (class=0, n_colors=29, n_class_regs=45)
+      iter ig_idx degree arraySize flags notes
+        0 56 5 5 0x00
+        1 36 5 5 0x00
+    COLORGRAPH DECISIONS (class=0, result=1, n_nodes=6)
+      iter ig_idx phys degree nIntfr flags
+        0 56 r30 5 5 0x00
+          interferers: 32=r29 36=r29 50=r28 63=r27 71=r26
+        1 36 r29 5 5 0x00
+          interferers: 32=r29 50=r28 56=r30 63=r27 71=r26
+        2 72 r31 0 0 0x00
+          interferers:
+    FINAL CODE AFTER INSTRUCTION SCHEDULING
+    fn_80000000
+    B0: Succ={} Pred={} Labels={}
+        stwu r1,-48(r1)
+        stmw r26,24(r1)
         blr
 """)
 
@@ -198,6 +285,100 @@ def test_select_order_ranking_prefers_actionable_missing_side_over_unchanged() -
         "missing-target-side",
         "high-match-wrong-order",
     ]
+
+
+def test_select_order_score_reports_targeted_interference_facts() -> None:
+    objective = score_select_order_candidate(
+        STICKY_POOL_BASELINE,
+        STICKY_POOL_BASELINE,
+        function="fn_80000000",
+        target_orders=[(36, 56)],
+        match_percent=99.26,
+    )
+
+    payload = objective.to_dict()
+    pair = payload["target_orders"][0]
+
+    assert payload["opcode_shape_preserved"] is True
+    assert payload["targeted_interference_movement_count"] == 0
+    assert pair["candidate_first_fact"]["virtual"] == 36
+    assert pair["candidate_first_fact"]["live_range"] == [3, 5]
+    assert pair["candidate_first_fact"]["degree"] == 6
+    assert pair["candidate_first_fact"]["interferers"] == [32, 50, 56, 63, 71, 72]
+    assert pair["candidate_second_fact"]["virtual"] == 56
+    assert pair["candidate_second_fact"]["live_range"] == [2, 6]
+    assert pair["candidate_second_fact"]["degree"] == 5
+    assert pair["candidate_first_only_interferers"] == [72]
+    assert pair["candidate_shared_interferers"] == [32, 50, 63, 71]
+    assert {
+        (intent["kind"], intent["virtual"], intent.get("interferer"))
+        for intent in pair["probe_intents"]
+    } >= {
+        ("reduce-degree", 36, None),
+        ("remove-interference", 36, 72),
+        ("increase-degree", 56, None),
+        ("add-interference", 56, 72),
+    }
+
+
+def test_select_order_ranking_prefers_targeted_degree_movement() -> None:
+    unchanged = score_select_order_candidate(
+        STICKY_POOL_BASELINE,
+        STICKY_POOL_BASELINE,
+        function="fn_80000000",
+        target_orders=[(36, 56)],
+        match_percent=99.26,
+    )
+    reduced_first_degree = score_select_order_candidate(
+        STICKY_POOL_BASELINE,
+        STICKY_POOL_REDUCED_FIRST_DEGREE,
+        function="fn_80000000",
+        target_orders=[(36, 56)],
+        match_percent=98.0,
+    )
+
+    ranked = rank_select_order_candidates([
+        {
+            "label": "unchanged-sticky-pool",
+            "status": "ok",
+            "objective": unchanged.to_dict(),
+        },
+        {
+            "label": "reduced-r36-degree",
+            "status": "ok",
+            "objective": reduced_first_degree.to_dict(),
+        },
+    ])
+
+    assert ranked[0]["label"] == "reduced-r36-degree"
+    assert ranked[0]["objective"]["targeted_interference_movement_count"] == 1
+    assert (
+        ranked[0]["objective"]["target_orders"][0]["desired_first_degree_reduced"]
+        is True
+    )
+
+
+def test_select_order_render_includes_targeted_probe_intents() -> None:
+    objective = score_select_order_candidate(
+        STICKY_POOL_BASELINE,
+        STICKY_POOL_BASELINE,
+        function="fn_80000000",
+        target_orders=[(36, 56)],
+        match_percent=99.26,
+    )
+    text = render_select_order_variant({
+        "rank": 1,
+        "label": "unchanged-sticky-pool",
+        "operator": "noop",
+        "status": "ok",
+        "objective": objective.to_dict(),
+    })
+
+    assert "opcode_shape_preserved=yes" in text
+    assert "r36 fact: live=3..5 degree=6 nIntfr=6 interferers=r32,r50,r56,r63,r71,r72" in text
+    assert "r56 fact: live=2..6 degree=5 nIntfr=5 interferers=r32,r36,r50,r63,r71" in text
+    assert "probe-intent: remove r36/r72 interference" in text
+    assert "probe-intent: add r56/r72 interference" in text
 
 
 def test_select_order_search_cli_ranks_candidate_pcdumps_json(

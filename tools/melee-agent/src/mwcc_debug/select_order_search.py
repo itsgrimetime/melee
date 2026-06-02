@@ -7,10 +7,52 @@ from typing import Any
 
 from .colorgraph_parser import (
     ColorgraphSection,
+    ColorgraphDecision,
     find_function,
     parse_hook_events,
 )
+from .parser import Function, Pass, analyze_function, parse_pcdump
 from .pressure_explorer import PressureDelta
+
+
+@dataclass(frozen=True)
+class SelectOrderVirtualFact:
+    virtual: int
+    iter_idx: int | None
+    assigned_reg: int | None
+    degree: int | None
+    n_interferers: int | None
+    live_range: tuple[int, int] | None
+    interferers: tuple[int, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "virtual": self.virtual,
+            "iter_idx": self.iter_idx,
+            "assigned_reg": self.assigned_reg,
+            "degree": self.degree,
+            "n_interferers": self.n_interferers,
+            "live_range": (
+                None if self.live_range is None else list(self.live_range)
+            ),
+            "interferers": list(self.interferers),
+        }
+
+
+@dataclass(frozen=True)
+class SelectOrderProbeIntent:
+    kind: str
+    virtual: int
+    interferer: int | None
+    description: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "virtual": self.virtual,
+            "interferer": self.interferer,
+            "description": self.description,
+        }
 
 
 @dataclass(frozen=True)
@@ -35,6 +77,19 @@ class SelectOrderPairObjective:
     candidate_missing_virtuals: tuple[int, ...]
     actionable_movement: bool
     distance_to_flip: int | None
+    baseline_first_fact: SelectOrderVirtualFact | None
+    baseline_second_fact: SelectOrderVirtualFact | None
+    candidate_first_fact: SelectOrderVirtualFact | None
+    candidate_second_fact: SelectOrderVirtualFact | None
+    candidate_first_only_interferers: tuple[int, ...]
+    candidate_second_only_interferers: tuple[int, ...]
+    candidate_shared_interferers: tuple[int, ...]
+    desired_first_degree_reduced: bool
+    undesired_second_degree_increased: bool
+    first_extra_interference_removed: tuple[int, ...]
+    second_extra_interference_added: tuple[int, ...]
+    targeted_interference_movement: bool
+    probe_intents: tuple[SelectOrderProbeIntent, ...]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -58,6 +113,33 @@ class SelectOrderPairObjective:
             "candidate_missing_virtuals": list(self.candidate_missing_virtuals),
             "actionable_movement": self.actionable_movement,
             "distance_to_flip": self.distance_to_flip,
+            "baseline_first_fact": _fact_to_dict(self.baseline_first_fact),
+            "baseline_second_fact": _fact_to_dict(self.baseline_second_fact),
+            "candidate_first_fact": _fact_to_dict(self.candidate_first_fact),
+            "candidate_second_fact": _fact_to_dict(self.candidate_second_fact),
+            "candidate_first_only_interferers": list(
+                self.candidate_first_only_interferers
+            ),
+            "candidate_second_only_interferers": list(
+                self.candidate_second_only_interferers
+            ),
+            "candidate_shared_interferers": list(
+                self.candidate_shared_interferers
+            ),
+            "desired_first_degree_reduced": self.desired_first_degree_reduced,
+            "undesired_second_degree_increased": (
+                self.undesired_second_degree_increased
+            ),
+            "first_extra_interference_removed": list(
+                self.first_extra_interference_removed
+            ),
+            "second_extra_interference_added": list(
+                self.second_extra_interference_added
+            ),
+            "targeted_interference_movement": (
+                self.targeted_interference_movement
+            ),
+            "probe_intents": [intent.to_dict() for intent in self.probe_intents],
         }
 
 
@@ -75,6 +157,8 @@ class SelectOrderObjective:
     spill_added: tuple[int, ...]
     frame_delta: int | None
     match_percent: float | None
+    opcode_shape_preserved: bool | None
+    targeted_interference_movement_count: int
     sort_key: tuple[float, ...]
 
     def to_dict(self) -> dict[str, Any]:
@@ -91,6 +175,10 @@ class SelectOrderObjective:
             "spill_added": list(self.spill_added),
             "frame_delta": self.frame_delta,
             "match_percent": self.match_percent,
+            "opcode_shape_preserved": self.opcode_shape_preserved,
+            "targeted_interference_movement_count": (
+                self.targeted_interference_movement_count
+            ),
             "sort_key": list(self.sort_key),
         }
 
@@ -123,6 +211,18 @@ def score_select_order_candidate(
     candidate_order = _section_order_map(candidate_section)
     baseline_assigned = _section_assigned_map(baseline_section)
     candidate_assigned = _section_assigned_map(candidate_section)
+    baseline_facts = _target_virtual_facts(
+        baseline_pcdump,
+        function=function,
+        section=baseline_section,
+        virtuals={virtual for pair in normalized_targets for virtual in pair},
+    )
+    candidate_facts = _target_virtual_facts(
+        candidate_pcdump,
+        function=function,
+        section=candidate_section,
+        virtuals={virtual for pair in normalized_targets for virtual in pair},
+    )
 
     pair_scores = tuple(
         _score_order_pair(
@@ -132,6 +232,8 @@ def score_select_order_candidate(
             candidate_order=candidate_order,
             baseline_assigned=baseline_assigned,
             candidate_assigned=candidate_assigned,
+            baseline_facts=baseline_facts,
+            candidate_facts=candidate_facts,
         )
         for first, second in normalized_targets
     )
@@ -153,6 +255,9 @@ def score_select_order_candidate(
     target_spill_removed = tuple(
         sorted(virtual for virtual in spill_removed if virtual in target_virtuals)
     )
+    targeted_interference_movement_count = sum(
+        1 for pair in pair_scores if pair.targeted_interference_movement
+    )
     objective = SelectOrderObjective(
         target_orders=pair_scores,
         target_order_satisfied=bool(pair_scores)
@@ -168,6 +273,12 @@ def score_select_order_candidate(
         spill_added=spill_added,
         frame_delta=delta.frame_delta if delta is not None else None,
         match_percent=match_percent,
+        opcode_shape_preserved=_opcode_shape_preserved(
+            baseline_pcdump,
+            candidate_pcdump,
+            function=function,
+        ),
+        targeted_interference_movement_count=targeted_interference_movement_count,
         sort_key=(),
     )
     return replace(objective, sort_key=_objective_sort_key(objective))
@@ -214,7 +325,9 @@ def render_select_order_variant(variant: dict[str, Any]) -> str:
         f"target_order_improved={_yesno(objective.get('target_order_improved'))} "
         f"satisfied={objective.get('satisfied_count', 0)} "
         f"actionable={objective.get('actionable_movement_count', 0)} "
-        f"missing={objective.get('missing_count', 0)}"
+        f"targeted={objective.get('targeted_interference_movement_count', 0)} "
+        f"missing={objective.get('missing_count', 0)} "
+        f"opcode_shape_preserved={_fmt_optional_bool(objective.get('opcode_shape_preserved'))}"
     )
     target_spill_removed = objective.get("target_spill_removed") or []
     lines.append(
@@ -239,6 +352,26 @@ def render_select_order_variant(variant: dict[str, Any]) -> str:
             f"distance_to_flip={_fmt_optional_int(pair.get('distance_to_flip'))} "
             f"missing={_fmt_virtuals(pair.get('candidate_missing_virtuals') or [])}"
         )
+        first_fact = pair.get("candidate_first_fact")
+        second_fact = pair.get("candidate_second_fact")
+        if isinstance(first_fact, dict):
+            lines.append(f"      r{pair['first_virtual']} fact: {_fmt_fact(first_fact)}")
+        if isinstance(second_fact, dict):
+            lines.append(f"      r{pair['second_virtual']} fact: {_fmt_fact(second_fact)}")
+        first_only = pair.get("candidate_first_only_interferers") or []
+        second_only = pair.get("candidate_second_only_interferers") or []
+        shared = pair.get("candidate_shared_interferers") or []
+        if first_only or second_only or shared:
+            lines.append(
+                "      interferers: "
+                f"first_only={_fmt_virtuals(first_only)} "
+                f"second_only={_fmt_virtuals(second_only)} "
+                f"shared={_fmt_virtuals(shared)}"
+            )
+        for intent in pair.get("probe_intents", [])[:4]:
+            rendered = _fmt_probe_intent(intent)
+            if rendered:
+                lines.append(f"      probe-intent: {rendered}")
     match = objective.get("match_percent")
     if isinstance(match, (int, float)):
         lines.append(f"   final_match_percent: {match:.3f}")
@@ -257,6 +390,8 @@ def _score_order_pair(
     candidate_order: dict[int, int],
     baseline_assigned: dict[int, int],
     candidate_assigned: dict[int, int],
+    baseline_facts: dict[int, SelectOrderVirtualFact],
+    candidate_facts: dict[int, SelectOrderVirtualFact],
 ) -> SelectOrderPairObjective:
     baseline_first = baseline_order.get(first)
     baseline_second = baseline_order.get(second)
@@ -289,10 +424,51 @@ def _score_order_pair(
         (baseline_first is None) != (candidate_first is None)
         or (baseline_second is None) != (candidate_second is None)
     )
+    baseline_first_fact = baseline_facts.get(first)
+    baseline_second_fact = baseline_facts.get(second)
+    candidate_first_fact = candidate_facts.get(first)
+    candidate_second_fact = candidate_facts.get(second)
+    candidate_first_only, candidate_second_only, candidate_shared = (
+        _target_interferer_sets(
+            first,
+            second,
+            candidate_first_fact,
+            candidate_second_fact,
+        )
+    )
+    baseline_first_only, baseline_second_only, _baseline_shared = (
+        _target_interferer_sets(
+            first,
+            second,
+            baseline_first_fact,
+            baseline_second_fact,
+        )
+    )
+    desired_first_degree_reduced = _degree_reduced(
+        baseline_first_fact,
+        candidate_first_fact,
+    )
+    undesired_second_degree_increased = _degree_increased(
+        baseline_second_fact,
+        candidate_second_fact,
+    )
+    first_extra_interference_removed = tuple(
+        sorted(set(baseline_first_only) - set(candidate_first_only))
+    )
+    second_extra_interference_added = tuple(
+        sorted(set(candidate_second_only) - set(baseline_second_only))
+    )
+    targeted_interference_movement = (
+        desired_first_degree_reduced
+        or undesired_second_degree_increased
+        or bool(first_extra_interference_removed)
+        or bool(second_extra_interference_added)
+    )
     actionable_movement = (
         candidate_satisfied
         or gap_moved_closer
         or (presence_changed and candidate_present_count > 0)
+        or targeted_interference_movement
     )
     return SelectOrderPairObjective(
         first_virtual=first,
@@ -315,6 +491,26 @@ def _score_order_pair(
         candidate_missing_virtuals=candidate_missing_virtuals,
         actionable_movement=actionable_movement,
         distance_to_flip=_distance_to_flip(candidate_gap, baseline_gap),
+        baseline_first_fact=baseline_first_fact,
+        baseline_second_fact=baseline_second_fact,
+        candidate_first_fact=candidate_first_fact,
+        candidate_second_fact=candidate_second_fact,
+        candidate_first_only_interferers=candidate_first_only,
+        candidate_second_only_interferers=candidate_second_only,
+        candidate_shared_interferers=candidate_shared,
+        desired_first_degree_reduced=desired_first_degree_reduced,
+        undesired_second_degree_increased=undesired_second_degree_increased,
+        first_extra_interference_removed=first_extra_interference_removed,
+        second_extra_interference_added=second_extra_interference_added,
+        targeted_interference_movement=targeted_interference_movement,
+        probe_intents=_probe_intents(
+            first,
+            second,
+            candidate_satisfied=candidate_satisfied,
+            candidate_first_fact=candidate_first_fact,
+            candidate_second_fact=candidate_second_fact,
+            candidate_first_only_interferers=candidate_first_only,
+        ),
     )
 
 
@@ -347,6 +543,203 @@ def _section_assigned_map(section: ColorgraphSection) -> dict[int, int]:
         if decision.ig_idx >= 0 and decision.ig_idx not in assigned:
             assigned[decision.ig_idx] = decision.assigned_reg
     return assigned
+
+
+def _section_decision_map(section: ColorgraphSection) -> dict[int, ColorgraphDecision]:
+    decisions: dict[int, ColorgraphDecision] = {}
+    for decision in section.decisions:
+        if decision.ig_idx >= 0 and decision.ig_idx not in decisions:
+            decisions[decision.ig_idx] = decision
+    return decisions
+
+
+def _target_virtual_facts(
+    pcdump_text: str,
+    *,
+    function: str,
+    section: ColorgraphSection,
+    virtuals: set[int],
+) -> dict[int, SelectOrderVirtualFact]:
+    decisions = _section_decision_map(section)
+    live_ranges = _live_range_map(pcdump_text, function)
+    facts: dict[int, SelectOrderVirtualFact] = {}
+    for virtual in virtuals:
+        decision = decisions.get(virtual)
+        if decision is None:
+            facts[virtual] = SelectOrderVirtualFact(
+                virtual=virtual,
+                iter_idx=None,
+                assigned_reg=None,
+                degree=None,
+                n_interferers=None,
+                live_range=live_ranges.get(virtual),
+                interferers=(),
+            )
+            continue
+        facts[virtual] = SelectOrderVirtualFact(
+            virtual=virtual,
+            iter_idx=decision.iter_idx,
+            assigned_reg=decision.assigned_reg,
+            degree=decision.degree,
+            n_interferers=decision.n_interferers,
+            live_range=live_ranges.get(virtual),
+            interferers=tuple(
+                sorted(
+                    {
+                        other
+                        for other, _assigned in decision.interferers
+                        if other >= 32
+                    }
+                )
+            ),
+        )
+    return facts
+
+
+def _live_range_map(pcdump_text: str, function: str) -> dict[int, tuple[int, int]]:
+    parsed = parse_pcdump(pcdump_text, function=function)
+    if not parsed:
+        return {}
+    return {
+        info.virtual: (info.first_use, info.last_use)
+        for info in analyze_function(parsed[0])
+    }
+
+
+def _target_interferer_sets(
+    first: int,
+    second: int,
+    first_fact: SelectOrderVirtualFact | None,
+    second_fact: SelectOrderVirtualFact | None,
+) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
+    first_set = set() if first_fact is None else set(first_fact.interferers)
+    second_set = set() if second_fact is None else set(second_fact.interferers)
+    first_only = tuple(sorted((first_set - second_set) - {second}))
+    second_only = tuple(sorted((second_set - first_set) - {first}))
+    shared = tuple(sorted((first_set & second_set) - {first, second}))
+    return first_only, second_only, shared
+
+
+def _degree_reduced(
+    baseline: SelectOrderVirtualFact | None,
+    candidate: SelectOrderVirtualFact | None,
+) -> bool:
+    if baseline is None or candidate is None:
+        return False
+    if baseline.degree is None or candidate.degree is None:
+        return False
+    return candidate.degree < baseline.degree
+
+
+def _degree_increased(
+    baseline: SelectOrderVirtualFact | None,
+    candidate: SelectOrderVirtualFact | None,
+) -> bool:
+    if baseline is None or candidate is None:
+        return False
+    if baseline.degree is None or candidate.degree is None:
+        return False
+    return candidate.degree > baseline.degree
+
+
+def _probe_intents(
+    first: int,
+    second: int,
+    *,
+    candidate_satisfied: bool,
+    candidate_first_fact: SelectOrderVirtualFact | None,
+    candidate_second_fact: SelectOrderVirtualFact | None,
+    candidate_first_only_interferers: tuple[int, ...],
+) -> tuple[SelectOrderProbeIntent, ...]:
+    if candidate_satisfied:
+        return ()
+    intents: list[SelectOrderProbeIntent] = []
+    if candidate_first_fact is not None:
+        intents.append(SelectOrderProbeIntent(
+            kind="reduce-degree",
+            virtual=first,
+            interferer=None,
+            description=(
+                f"Reduce r{first}'s degree/lifetime so it can be selected "
+                f"before r{second}."
+            ),
+        ))
+    for interferer in candidate_first_only_interferers:
+        intents.append(SelectOrderProbeIntent(
+            kind="remove-interference",
+            virtual=first,
+            interferer=interferer,
+            description=(
+                f"Remove r{first}/r{interferer} interference to shrink the "
+                "desired-first side."
+            ),
+        ))
+    if candidate_second_fact is not None:
+        intents.append(SelectOrderProbeIntent(
+            kind="increase-degree",
+            virtual=second,
+            interferer=None,
+            description=(
+                f"Increase r{second}'s degree/lifetime so r{first} is not "
+                "left behind in the selection order."
+            ),
+        ))
+    for interferer in candidate_first_only_interferers:
+        intents.append(SelectOrderProbeIntent(
+            kind="add-interference",
+            virtual=second,
+            interferer=interferer,
+            description=(
+                f"Add harmless r{second}/r{interferer} interference to raise "
+                "the undesired-first side."
+            ),
+        ))
+    return tuple(intents)
+
+
+def _opcode_shape_preserved(
+    baseline_pcdump: str,
+    candidate_pcdump: str,
+    *,
+    function: str,
+) -> bool | None:
+    baseline = _final_opcode_sequence(baseline_pcdump, function)
+    candidate = _final_opcode_sequence(candidate_pcdump, function)
+    if baseline is None or candidate is None:
+        return None
+    return baseline == candidate
+
+
+def _final_opcode_sequence(pcdump_text: str, function: str) -> tuple[str, ...] | None:
+    parsed = parse_pcdump(pcdump_text, function=function)
+    if not parsed:
+        return None
+    selected = _select_final_pass(parsed[0])
+    if selected is None:
+        return None
+    return tuple(
+        instr.opcode
+        for block in selected.blocks
+        for instr in block.instructions
+    )
+
+
+def _select_final_pass(fn: Function) -> Pass | None:
+    preferred = (
+        "FINAL CODE AFTER INSTRUCTION SCHEDULING",
+        "AFTER PEEPHOLE OPTIMIZATION",
+        "AFTER MERGING EPILOGUE, PROLOGUE",
+        "AFTER GENERATING EPILOGUE, PROLOGUE",
+    )
+    by_name = {pass_.name: pass_ for pass_ in fn.passes}
+    for name in preferred:
+        if name in by_name:
+            return by_name[name]
+    return fn.passes[-1] if fn.passes else None
+
+
+def _fact_to_dict(fact: SelectOrderVirtualFact | None) -> dict[str, Any] | None:
+    return None if fact is None else fact.to_dict()
 
 
 def _gap(first_iter: int | None, second_iter: int | None) -> int | None:
@@ -386,6 +779,7 @@ def _objective_sort_key(objective: SelectOrderObjective) -> tuple[float, ...]:
         float(objective.target_order_improved),
         float(objective.improved_count),
         float(objective.actionable_movement_count),
+        float(objective.targeted_interference_movement_count),
         distance_score,
         -float(objective.missing_count),
         gap_score,
@@ -423,6 +817,46 @@ def _fmt_virtuals(values: list[int] | tuple[int, ...]) -> str:
 
 def _fmt_optional_int(value: object) -> str:
     return "?" if value is None else str(value)
+
+
+def _fmt_optional_bool(value: object) -> str:
+    if value is None:
+        return "?"
+    return _yesno(value)
+
+
+def _fmt_fact(fact: dict[str, Any]) -> str:
+    live = fact.get("live_range")
+    if isinstance(live, list) and len(live) == 2:
+        live_text = f"{live[0]}..{live[1]}"
+    else:
+        live_text = "?"
+    degree = _fmt_optional_int(fact.get("degree"))
+    n_interferers = _fmt_optional_int(fact.get("n_interferers"))
+    return (
+        f"live={live_text} "
+        f"degree={degree} "
+        f"nIntfr={n_interferers} "
+        f"interferers={_fmt_virtuals(fact.get('interferers') or [])}"
+    )
+
+
+def _fmt_probe_intent(intent: dict[str, Any]) -> str:
+    kind = intent.get("kind")
+    virtual = intent.get("virtual")
+    interferer = intent.get("interferer")
+    if not isinstance(virtual, int):
+        return ""
+    if kind == "remove-interference" and isinstance(interferer, int):
+        return f"remove r{virtual}/r{interferer} interference"
+    if kind == "add-interference" and isinstance(interferer, int):
+        return f"add r{virtual}/r{interferer} interference"
+    if kind == "reduce-degree":
+        return f"reduce r{virtual} degree/lifetime"
+    if kind == "increase-degree":
+        return f"increase r{virtual} degree/lifetime"
+    description = intent.get("description")
+    return str(description) if description else ""
 
 
 def _yesno(value: object) -> str:
