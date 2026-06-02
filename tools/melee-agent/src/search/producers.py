@@ -39,8 +39,17 @@ class PermuterJobProducer:
                         f"remote permuter base missing required {name}: {src}"
                     )
                 shutil.copy2(src, base_dir / name)
-        job_ids = [self._client.submit(base_dir, target.function, r) for r in self._remotes]
-        return ProducerHandle(self.name(), job_ids)
+        job_ids: list[str] = []
+        start_failures: list[dict[str, str]] = []
+        for remote in self._remotes:
+            try:
+                job_ids.append(self._client.submit(base_dir, target.function, remote))
+            except Exception as exc:
+                start_failures.append({
+                    "remote": remote,
+                    "detail": str(exc),
+                })
+        return ProducerHandle(self.name(), job_ids, start_failures=start_failures)
 
     def _prepare_base_source(self, base_source: str, function: str) -> str:
         if self._permuter_base_dir is None:
@@ -84,6 +93,12 @@ class PermuterJobProducer:
         return out
 
     def status(self, handle: ProducerHandle) -> ProducerStatus:
+        if not handle.job_ids:
+            detail = "; ".join(
+                failure.get("detail", "") for failure in handle.start_failures
+                if failure.get("detail")
+            )
+            return ProducerStatus("failed", detail=detail or "no remote jobs started")
         states: set[str] = set()
         details: list[str] = []
         for jid in handle.job_ids:

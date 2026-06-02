@@ -164,3 +164,75 @@ def test_search_run_remote_progress_goes_to_stderr(
     assert "producer-poll" in result.stderr
     assert "state=running" in result.stderr
     assert "harvested=0" in result.stderr
+
+
+def test_search_run_partial_remote_start_failure_keeps_healthy_remote(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runner = CliRunner()
+    repo = tmp_path / "repo"
+    report = repo / "build" / "GALE01" / "report.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(
+        '{"units":[{"name":"main/u","functions":[{"name":"f"}]}]}'
+    )
+    perm_dir = tmp_path / "perm" / "nonmatchings" / "f"
+    perm_dir.mkdir(parents=True)
+    (perm_dir / "base.c").write_text("int f(void){return 1;}\n")
+    (perm_dir / "compile.sh").write_text("#!/bin/sh\nexit 0\n")
+    (perm_dir / "settings.toml").write_text("base = \"base.c\"\n")
+    (perm_dir / "target.o").write_bytes(b"target")
+
+    class _PartialRemote:
+        def __init__(self, melee_root):
+            self.stopped = []
+
+        def submit(self, base_dir, function, remote):
+            if remote == "coder1":
+                raise RuntimeError("remote preflight failed for coder1: missing toml")
+            return f"{function}-{remote}-job"
+
+        def fetch(self, job_id):
+            return []
+
+        def status(self, job_id):
+            return "running"
+
+        def stop(self, job_id):
+            self.stopped.append(job_id)
+
+    monkeypatch.setattr("src.search.cli._compute_melee_root", lambda: repo)
+    monkeypatch.setattr(
+        "src.search.adapters.RealRemotePermuterClient",
+        _PartialRemote,
+    )
+
+    result = runner.invoke(
+        search_app,
+        [
+            "run",
+            "--function", "f",
+            "--unit", "u",
+            "--store", str(tmp_path / "store"),
+            "--perm-root", str(tmp_path / "perm"),
+            "--remotes", "coder1,coder3",
+            "--max-iters", "1",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    summary = json.loads(result.stdout)
+    assert summary["accounting"]["producer_started"] == 1
+    assert summary["accounting"]["producer_failed"] == 1
+    assert summary["accounting"]["producer_failures"] == [
+        {
+            "producer": "permuter-job",
+            "jobs": [],
+            "remote": "coder1",
+            "detail": "remote preflight failed for coder1: missing toml",
+        }
+    ]
+    assert "producer-start-failed" in result.stderr
+    assert "remote=coder1" in result.stderr
+    assert "job=f-coder3-job" in result.stderr

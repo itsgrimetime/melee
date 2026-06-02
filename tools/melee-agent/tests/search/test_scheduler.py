@@ -176,6 +176,76 @@ class _RunningEmptyProducer:
         self.stopped = True
 
 
+class _PartiallyStartedProducer:
+    def __init__(self):
+        self.polls = 0
+        self.stopped_jobs = []
+
+    def name(self):
+        return "partial-producer"
+
+    def start(self, base, target, budget):
+        from src.search.types import ProducerHandle
+
+        return ProducerHandle(
+            self.name(),
+            ["job-good"],
+            start_failures=[
+                {
+                    "remote": "coder1",
+                    "detail": "remote preflight failed for coder1: missing toml",
+                }
+            ],
+        )
+
+    def poll(self, handle):
+        self.polls += 1
+        return []
+
+    def status(self, handle):
+        from src.search.types import ProducerStatus
+
+        return ProducerStatus("running")
+
+    def stop(self, handle):
+        self.stopped_jobs.extend(handle.job_ids)
+
+
+def test_scheduler_accounts_start_failures_without_dropping_healthy_jobs(tmp_path):
+    store = ArtifactStore(tmp_path / "store")
+    producer = _PartiallyStartedProducer()
+    events = []
+    pipe = ByteScorePipeline(scorer=NonMatchScorer())
+    sched = DefaultScheduler(store=store, verifier=None)
+
+    res = sched.run(
+        sources=[],
+        backends=[],
+        producers=[producer],
+        pipeline=pipe,
+        target=TargetSpec("f", "u", tmp_path / "e.o"),
+        budget=Budget(max_iters=1),
+        policy=SchedulePolicy(),
+        progress=events.append,
+    )
+
+    assert producer.polls == 1
+    assert producer.stopped_jobs == ["job-good"]
+    assert res.accounting["producer_started"] == 1
+    assert res.accounting["producer_failed"] == 1
+    assert res.accounting["producer_failures"] == [
+        {
+            "producer": "partial-producer",
+            "jobs": [],
+            "remote": "coder1",
+            "detail": "remote preflight failed for coder1: missing toml",
+        }
+    ]
+    assert res.accounting["producer_polls"] == 1
+    assert any(event["event"] == "producer-start-failed" for event in events)
+    assert any(event["event"] == "producer-poll" for event in events)
+
+
 def test_scheduler_reports_active_empty_producer_polls_until_budget(tmp_path):
     store = ArtifactStore(tmp_path / "store")
     producer = _RunningEmptyProducer()

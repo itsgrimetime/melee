@@ -76,13 +76,29 @@ class DefaultScheduler:
         handles = []
         for p in producers:
             handle = p.start(base, target, budget)
-            handles.append((p, handle))
+            for failure in handle.start_failures:
+                acct["producer_failed"] += 1
+                failure_payload = {
+                    "producer": p.name(),
+                    "jobs": [],
+                    "remote": failure.get("remote", ""),
+                    "detail": failure.get("detail", ""),
+                }
+                acct["producer_failures"].append(failure_payload)
+                emit(
+                    "producer-start-failed",
+                    producer=p.name(),
+                    remote=failure_payload["remote"],
+                    detail=failure_payload["detail"],
+                )
             acct["producer_started"] += len(handle.job_ids)
-            emit(
-                "producer-started",
-                producer=p.name(),
-                jobs=list(handle.job_ids),
-            )
+            if handle.job_ids:
+                handles.append((p, handle))
+                emit(
+                    "producer-started",
+                    producer=p.name(),
+                    jobs=list(handle.job_ids),
+                )
         all_handles = list(handles)
         # deferred: pcdump-capability routing (route_pcdump_to_capable_only /
         # want_pcdump) is tied to the tier-2 directed/pcdump seam — pcdump IS

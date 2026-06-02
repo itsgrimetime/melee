@@ -605,6 +605,79 @@ def test_loop_counter_type_probe_targets_loop_counter_not_first_local() -> None:
     assert "    s32 i;" not in probe.source_text
 
 
+def test_indexed_pointer_loop_probes_control_base_index_address_and_bound() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(FigaTree*** base, u8* order, int count)
+        {
+            FigaTree*** trees = base;
+            int i;
+            for (i = 0; i < count; i++) {
+                FigaTree* tree = trees[order[i]][0];
+                apply(i, tree);
+            }
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(source, "fn_80000000", max_probes=60)
+    by_label = {probe.label: probe for probe in probes}
+
+    assert "indexed-pointer-loop-bound-local-0" in by_label
+    bound = by_label["indexed-pointer-loop-bound-local-0"]
+    assert "    {\n        int ll_probe_loop_bound_0 = count;\n" in bound.source_text
+    assert "for (i = 0; i < ll_probe_loop_bound_0; i++)" in bound.source_text
+
+    assert "indexed-pointer-loop-index-temp-0" in by_label
+    index = by_label["indexed-pointer-loop-index-temp-0"]
+    assert "        int ll_probe_index_0 = order[i];\n" in index.source_text
+    assert "trees[ll_probe_index_0][0]" in index.source_text
+
+    assert "indexed-pointer-loop-base-alias-0" in by_label
+    base_alias = by_label["indexed-pointer-loop-base-alias-0"]
+    assert "        FigaTree*** ll_probe_base_0 = trees;\n" in base_alias.source_text
+    assert "ll_probe_base_0[order[i]][0]" in base_alias.source_text
+
+    assert "indexed-pointer-loop-address-temp-0" in by_label
+    address = by_label["indexed-pointer-loop-address-temp-0"]
+    assert "        FigaTree** ll_probe_addr_0 = trees[order[i]];\n" in address.source_text
+    assert "FigaTree* tree = ll_probe_addr_0[0];" in address.source_text
+
+    assert address.provenance == {
+        "kind": "indexed-pointer-loop",
+        "variant": "address-temp",
+        "counter": "i",
+        "base": "trees",
+        "index_expr": "order[i]",
+        "bound": "count",
+    }
+
+    struct_source = textwrap.dedent("""\
+        void fn_80000001(struct FigaTree*** base, u8* order, int count)
+        {
+            struct FigaTree*** trees = base;
+            int i;
+            for (i = 0; i < count; i++) {
+                struct FigaTree* tree = trees[order[i]][0];
+                apply(i, tree);
+            }
+        }
+    """)
+
+    struct_probes = generate_lifetime_layout_probes(
+        struct_source,
+        "fn_80000001",
+        max_probes=60,
+    )
+    struct_by_label = {probe.label: probe for probe in struct_probes}
+    assert (
+        "        struct FigaTree*** ll_probe_base_0 = trees;\n"
+        in struct_by_label["indexed-pointer-loop-base-alias-0"].source_text
+    )
+    assert (
+        "        struct FigaTree** ll_probe_addr_0 = trees[order[i]];\n"
+        in struct_by_label["indexed-pointer-loop-address-temp-0"].source_text
+    )
+
+
 def test_expression_shape_probe_removes_assignment_in_expression_temp() -> None:
     source = textwrap.dedent("""\
         void fn_80000000(Vec* prevPos, Vec* pos)

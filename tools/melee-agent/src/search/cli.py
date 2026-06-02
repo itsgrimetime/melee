@@ -229,6 +229,7 @@ def run_cmd(
             if len(jobs) == 1:
                 fields.append(f"job={jobs[0]}")
         for key in (
+            "remote",
             "iteration",
             "poll",
             "state",

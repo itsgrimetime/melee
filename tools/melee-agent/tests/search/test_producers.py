@@ -19,6 +19,12 @@ class FakeRemote:
     def status(self, job_id): return "running"
     def stop(self, job_id): self.stopped.append(job_id)
 
+class PartiallyFailingRemote(FakeRemote):
+    def submit(self, base_dir, function, remote):
+        if remote == "coder1":
+            raise RuntimeError("remote preflight failed for coder1: missing toml")
+        return super().submit(base_dir, function, remote)
+
 def _spec(tmp): return CompileSpec("f@u","c","b","t","permuter-job",tmp/"m.json")
 
 def test_poll_yields_harvested_sourceonly_candidates(tmp_path):
@@ -43,6 +49,35 @@ def test_stop_only_targets_our_jobs(tmp_path):
                    TargetSpec("f","u",tmp_path/"e.o"), Budget())
     prod.stop(h)
     assert rem.stopped == h.job_ids
+
+
+def test_start_records_failed_remote_and_keeps_healthy_jobs(tmp_path):
+    store = ArtifactStore(tmp_path / "store")
+    rem = PartiallyFailingRemote(tmp_path)
+    prod = PermuterJobProducer(
+        client=rem,
+        store=store,
+        remotes=["coder1", "coder2", "coder3"],
+        compile_spec_factory=lambda txt: _spec(tmp_path),
+    )
+
+    handle = prod.start(
+        SourceSpec("base", TargetSpec("f", "u", tmp_path / "e.o")),
+        TargetSpec("f", "u", tmp_path / "e.o"),
+        Budget(max_iters=1),
+    )
+
+    assert handle.job_ids == ["f-coder2-job", "f-coder3-job"]
+    assert handle.start_failures == [
+        {
+            "remote": "coder1",
+            "detail": "remote preflight failed for coder1: missing toml",
+        }
+    ]
+    assert [remote for _base, _function, remote in rem.submitted] == [
+        "coder2",
+        "coder3",
+    ]
 
 
 def test_start_copies_remote_ready_permuter_support_files(tmp_path):

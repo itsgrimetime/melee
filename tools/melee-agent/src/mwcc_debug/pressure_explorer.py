@@ -324,6 +324,8 @@ def generate_lifetime_layout_probes(
         _append_probe(probes, probe)
     for probe in _probe_declaration_order(source_text, body, body_start, function):
         _append_probe(probes, probe)
+    for probe in _probe_indexed_pointer_loop(source_text, body, body_start, function):
+        _append_probe(probes, probe)
     _append_probe(
         probes,
         _probe_temp_introduction(source_text, body, body_start, function),
@@ -1003,11 +1005,15 @@ def _scoped_identifier_types(
                 name, typ = parsed
                 types[name] = typ
     for match in re.finditer(
-        r"(?m)^[ \t]*(?P<type>f32|float|double|s32|u32|int)\s+"
-        r"(?:\*+\s*)?(?P<name>[A-Za-z_]\w*)\s*(?:[=;,\[])",
+        r"(?m)^[ \t]*(?P<decl>(?:const\s+|volatile\s+)*"
+        r"(?:struct\s+[A-Za-z_]\w*|[A-Za-z_]\w+)(?:\s*\*)*"
+        r"\s+[A-Za-z_]\w*)\s*(?:[=;,\[])",
         body,
     ):
-        types[match.group("name")] = match.group("type")
+        parsed = _parse_simple_decl(match.group("decl"))
+        if parsed is not None:
+            name, typ = parsed
+            types[name] = _normalize_type_spelling(typ)
     return types
 
 
@@ -1033,12 +1039,13 @@ def _parse_simple_decl(text: str) -> tuple[str, str] | None:
     text = re.sub(r"\s+", " ", text.strip())
     match = re.match(
         r"^(?P<type>(?:const\s+|volatile\s+)*(?:f32|float|double|s32|u32|int|"
-        r"[A-Za-z_]\w+)(?:\s*\*)*)\s+(?P<name>[A-Za-z_]\w*)$",
+        r"struct\s+[A-Za-z_]\w*|[A-Za-z_]\w+)(?:\s*\*)*)\s+"
+        r"(?P<name>[A-Za-z_]\w*)$",
         text,
     )
     if match is None:
         return None
-    typ = match.group("type").replace("const ", "").replace("volatile ", "").strip()
+    typ = _normalize_type_spelling(match.group("type"))
     return match.group("name"), typ
 
 
@@ -1225,6 +1232,329 @@ def _probe_loop_counter_type(
             },
         )
     return None
+
+
+@dataclass(frozen=True)
+class _IndexedLoopUse:
+    loop_start: int
+    loop_end: int
+    loop_open: int
+    loop_close: int
+    loop_indent: str
+    counter: str
+    bound: str
+    bound_start: int
+    bound_end: int
+    line_start: int
+    line_end: int
+    line: str
+    line_indent: str
+    base: str
+    base_start: int
+    base_end: int
+    index_expr: str
+    index_start: int
+    index_end: int
+    address_start: int
+    address_end: int
+    indexed_end: int
+    decl_type: str | None
+
+
+def _probe_indexed_pointer_loop(
+    source: str,
+    body: str,
+    body_start: int,
+    function: str,
+) -> list[LifetimeLayoutProbe]:
+    use = _find_indexed_pointer_loop_use(source, body, body_start)
+    if use is None:
+        return []
+    scoped_types = _scoped_identifier_types(source, body, body_start, function)
+    probes: list[LifetimeLayoutProbe] = []
+
+    loop_text = source[body_start + use.loop_start:body_start + use.loop_close + 1]
+    rel_bound_start = use.bound_start - use.loop_start
+    rel_bound_end = use.bound_end - use.loop_start
+    bounded_loop = (
+        loop_text[:rel_bound_start]
+        + "ll_probe_loop_bound_0"
+        + loop_text[rel_bound_end:]
+    )
+    bounded_replacement = (
+        f"{use.loop_indent}{{\n"
+        f"{use.loop_indent}    int ll_probe_loop_bound_0 = {use.bound};\n"
+        f"{_indent_block_lines(bounded_loop, use.loop_indent)}"
+        f"{use.loop_indent}}}"
+    )
+    probes.append(
+        LifetimeLayoutProbe(
+            label="indexed-pointer-loop-bound-local-0",
+            operator="indexed-pointer-loop",
+            description=(
+                f"Cache loop bound `{use.bound}` in a scoped local before the "
+                f"indexed pointer loop over `{use.base}`."
+            ),
+            source_text=_replace_body_slice(
+                source,
+                body_start,
+                use.loop_start,
+                use.loop_close + 1,
+                bounded_replacement,
+            ),
+            provenance={
+                "kind": "indexed-pointer-loop",
+                "variant": "bound-local",
+                "counter": use.counter,
+                "base": use.base,
+                "index_expr": use.index_expr,
+                "bound": use.bound,
+            },
+        )
+    )
+
+    if use.index_expr != use.counter:
+        index_line = (
+            use.line[:use.index_start]
+            + "ll_probe_index_0"
+            + use.line[use.index_end:]
+        )
+        index_replacement = (
+            f"{use.line_indent}int ll_probe_index_0 = {use.index_expr};\n"
+            f"{index_line}"
+        )
+        probes.append(
+            LifetimeLayoutProbe(
+                label="indexed-pointer-loop-index-temp-0",
+                operator="indexed-pointer-loop",
+                description=(
+                    f"Name indexed pointer loop index expression `{use.index_expr}` "
+                    f"before using `{use.base}`."
+                ),
+                source_text=_replace_body_slice(
+                    source,
+                    body_start,
+                    use.line_start,
+                    use.line_end,
+                    index_replacement,
+                ),
+                provenance={
+                    "kind": "indexed-pointer-loop",
+                    "variant": "index-temp",
+                    "counter": use.counter,
+                    "base": use.base,
+                    "index_expr": use.index_expr,
+                    "bound": use.bound,
+                },
+            )
+        )
+
+    base_type = scoped_types.get(use.base)
+    if base_type:
+        base_line = (
+            use.line[:use.base_start]
+            + "ll_probe_base_0"
+            + use.line[use.base_end:]
+        )
+        base_replacement = (
+            f"{use.line_indent}{base_type} ll_probe_base_0 = {use.base};\n"
+            f"{base_line}"
+        )
+        probes.append(
+            LifetimeLayoutProbe(
+                label="indexed-pointer-loop-base-alias-0",
+                operator="indexed-pointer-loop",
+                description=(
+                    f"Alias indexed pointer loop base `{use.base}` inside the "
+                    "loop body."
+                ),
+                source_text=_replace_body_slice(
+                    source,
+                    body_start,
+                    use.line_start,
+                    use.line_end,
+                    base_replacement,
+                ),
+                provenance={
+                    "kind": "indexed-pointer-loop",
+                    "variant": "base-alias",
+                    "counter": use.counter,
+                    "base": use.base,
+                    "index_expr": use.index_expr,
+                    "bound": use.bound,
+                },
+            )
+        )
+
+    if use.decl_type is not None and use.indexed_end > use.address_end:
+        address_expr = use.line[use.address_start:use.address_end]
+        address_type = _add_pointer_to_type(use.decl_type)
+        address_line = (
+            use.line[:use.address_start]
+            + "ll_probe_addr_0"
+            + use.line[use.address_end:]
+        )
+        address_replacement = (
+            f"{use.line_indent}{address_type} ll_probe_addr_0 = {address_expr};\n"
+            f"{address_line}"
+        )
+        probes.append(
+            LifetimeLayoutProbe(
+                label="indexed-pointer-loop-address-temp-0",
+                operator="indexed-pointer-loop",
+                description=(
+                    f"Name computed pointer address `{address_expr}` before "
+                    "loading the indexed loop value."
+                ),
+                source_text=_replace_body_slice(
+                    source,
+                    body_start,
+                    use.line_start,
+                    use.line_end,
+                    address_replacement,
+                ),
+                provenance={
+                    "kind": "indexed-pointer-loop",
+                    "variant": "address-temp",
+                    "counter": use.counter,
+                    "base": use.base,
+                    "index_expr": use.index_expr,
+                    "bound": use.bound,
+                },
+            )
+        )
+
+    return probes
+
+
+def _find_indexed_pointer_loop_use(
+    source: str,
+    body: str,
+    body_start: int,
+) -> _IndexedLoopUse | None:
+    loop_re = re.compile(
+        r"(?m)^(?P<indent>[ \t]*)for\s*\(\s*"
+        r"(?P<counter>[A-Za-z_]\w*)\s*=\s*0\s*;\s*"
+        r"(?P=counter)\s*<\s*(?P<bound>[^;]+?)\s*;\s*"
+        r"(?:(?P=counter)\+\+|\+\+(?P=counter)|(?P=counter)\s*\+=\s*1)"
+        r"\s*\)\s*\{"
+    )
+    for loop in loop_re.finditer(body):
+        abs_open = body_start + loop.end() - 1
+        abs_close = _find_matching_brace(source, abs_open)
+        if abs_close is None or abs_close > body_start + len(body):
+            continue
+        loop_body_start = abs_open + 1
+        loop_body = source[loop_body_start:abs_close]
+        line_cursor = 0
+        for line in loop_body.splitlines(keepends=True):
+            line_start = loop_body_start - body_start + line_cursor
+            line_end = line_start + len(line)
+            line_cursor += len(line)
+            if _LOCAL_DECL_RE.match(line) is None:
+                continue
+            indexed = _find_indexed_expression_in_line(
+                line,
+                counter=loop.group("counter"),
+            )
+            if indexed is None:
+                continue
+            decl_type = _initialized_decl_type(line)
+            return _IndexedLoopUse(
+                loop_start=loop.start(),
+                loop_end=loop.end(),
+                loop_open=loop.end() - 1,
+                loop_close=abs_close - body_start,
+                loop_indent=loop.group("indent"),
+                counter=loop.group("counter"),
+                bound=loop.group("bound").strip(),
+                bound_start=loop.start("bound"),
+                bound_end=loop.end("bound"),
+                line_start=line_start,
+                line_end=line_end,
+                line=line,
+                line_indent=re.match(r"[ \t]*", line).group(0),
+                base=indexed["base"],
+                base_start=indexed["base_start"],
+                base_end=indexed["base_end"],
+                index_expr=indexed["index_expr"],
+                index_start=indexed["index_start"],
+                index_end=indexed["index_end"],
+                address_start=indexed["address_start"],
+                address_end=indexed["address_end"],
+                indexed_end=indexed["indexed_end"],
+                decl_type=decl_type,
+            )
+    return None
+
+
+def _find_indexed_expression_in_line(
+    line: str,
+    *,
+    counter: str,
+) -> dict[str, object] | None:
+    for match in re.finditer(r"\b(?P<base>[A-Za-z_]\w*)\s*\[", line):
+        open_bracket = line.find("[", match.start())
+        close_bracket = _find_matching_bracket(line, open_bracket)
+        if close_bracket is None:
+            continue
+        index_expr = line[open_bracket + 1:close_bracket].strip()
+        if not re.search(rf"\b{re.escape(counter)}\b", index_expr):
+            continue
+        indexed_end = close_bracket + 1
+        cursor = indexed_end
+        while cursor < len(line) and line[cursor] in " \t":
+            cursor += 1
+        if cursor < len(line) and line[cursor] == "[":
+            second_close = _find_matching_bracket(line, cursor)
+            if second_close is not None:
+                indexed_end = second_close + 1
+        return {
+            "base": match.group("base"),
+            "base_start": match.start("base"),
+            "base_end": match.end("base"),
+            "index_expr": index_expr,
+            "index_start": open_bracket + 1,
+            "index_end": close_bracket,
+            "address_start": match.start("base"),
+            "address_end": close_bracket + 1,
+            "indexed_end": indexed_end,
+        }
+    return None
+
+
+def _find_matching_bracket(text: str, open_index: int) -> int | None:
+    depth = 0
+    for idx in range(open_index, len(text)):
+        char = text[idx]
+        if char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+            if depth == 0:
+                return idx
+    return None
+
+
+def _initialized_decl_type(line: str) -> str | None:
+    match = re.match(
+        r"^[ \t]*(?P<type>(?:const\s+|volatile\s+)*"
+        r"(?:struct\s+[A-Za-z_]\w*|[A-Za-z_]\w+)(?:\s*\*)*)"
+        r"\s+[A-Za-z_]\w*\s*=",
+        line,
+    )
+    if match is None:
+        return None
+    return _normalize_type_spelling(match.group("type"))
+
+
+def _normalize_type_spelling(type_name: str) -> str:
+    type_name = type_name.replace("const ", "").replace("volatile ", "").strip()
+    return re.sub(r"\s*\*\s*", "*", type_name)
+
+
+def _add_pointer_to_type(type_name: str) -> str:
+    return _normalize_type_spelling(type_name) + "*"
 
 
 def _probe_nested_loop_counter_hoist(

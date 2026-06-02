@@ -55,6 +55,7 @@ class ProducerHandle:
 
     producer_name: str
     job_ids: list[str]
+    start_failures: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
