@@ -1,117 +1,121 @@
 # Directed (pcdump-guided) Search Layer — Design
 
-**Status:** Approved design, under independent review (Codex round 1 incorporated 2026-06-01)
-**Builds on:** `docs/superpowers/specs/2026-06-01-fast-directed-search-substrate-design.md` (the substrate — five primitives, two converging paths, deferred directed seams)
+**Status:** Approved design, under independent review (Codex rounds 1–2 incorporated 2026-06-01)
+**Builds on:** `docs/superpowers/specs/2026-06-01-fast-directed-search-substrate-design.md`
 **Proof target:** `grIceMt_801F9ACC` (the ev/did register select-order wall, 98.84%, blind permuter confirmed insufficient)
 
 ---
 
 ## 1. Context & motivation
 
-The recurring terminal wall on hard functions is an **emergent register select-order / interference-graph (ig) ordering** that local source tweaks can't reach and blind permuter can't crack. Confirmed empirically on `grIceMt_801F9ACC`: its sole residual is a 2-way `ev`/`did` callee-save coloring swap; remote permuter floored at 7,400+ AND ~72K iters on semantically-neutral "no-op nudges" that never flip the coloring. This is a **mutation-space** ceiling, not an iteration-count one — exactly the class the substrate's deferred **directed** seams were designed for.
+The recurring terminal wall is an **emergent register select-order / interference-graph (ig) ordering** that local tweaks can't reach and blind permuter can't crack (9ACC's 2-way `ev`/`did` coloring swap floored permuter at 7,400+ and ~72K iters on no-op nudges). It is the class the substrate's deferred **directed** seams were designed for.
 
-Two assets already exist:
-- **The substrate** ships the directed seams in place but **deferred/unwired**: `ScorePipeline.score_directed` raises `NotImplementedError`, `should_escalate` returns `False`, `DefaultScheduler.ingest()` calls only `score_byte` (pcdump routing is an explicit deferred comment), `CandidateArtifact` has a `directed_score: float | None` slot, and `BackendCaps.supports_pcdump`/`want_pcdump` exist. The `VariantSource` interface is **`next_batch(n) -> list[SourceVariant]`** (synchronous, called inline before producers are polled); `ArtifactProducer` is the async submit/poll lifecycle.
-- **A general convergence/divergence engine** in `tools/melee-agent/src/mwcc_debug/`: `analyze_iteration_full(target, compile, class_id) -> (IterationState, report, ReanchorResult)` (divergence `case = state.fact.case`; role identity `state.identity` / `res.matched`; `state.role_order_rank`; reanchor coverage `len(res.matched)/len(target.roles)`); `classify_progress(prev_state, state, edit_was_order_change, history, checkdiff_clean)` producing `MOVED_LATER`/`SAME`/`CYCLE`/`NON_COMPARABLE`/`ROLE_GONE`; `coalesce_patterns` + `suggest_coalesce` (IR-grounded checkers emitting **advisory** `source_hint: Optional[str]` prose); `colorgraph_parser` (`ColorgraphDecision`/`SimplifyEntry` expose `iter_idx`/`ig_idx`). This shipped as the role-identity matcher but is **research-grade**: the **Editor** was never completed, and the **gate-3 pilots silently ran VOID 4×** (empty `target.roles` → `case=NONE` → every arm == control).
+Two assets exist:
+- **The substrate**: directed seams present but **deferred/unwired** — `score_directed` raises `NotImplementedError`, `should_escalate` returns `False`, `DefaultScheduler.ingest()` calls only `score_byte` (pcdump routing is a deferred comment), `CandidateArtifact.directed_score` slot, `BackendCaps.supports_pcdump`/`want_pcdump`. `VariantSource` is **`next_batch(n) -> list[SourceVariant]`** (synchronous, before producers poll); `ArtifactProducer` is async submit/poll. `search.TargetSpec` = `{function, unit, expected_obj}`.
+- **The convergence engine** in `tools/melee-agent/src/mwcc_debug/`: `analyze_iteration_full(target, compile, class_id) -> (IterationState, FirstDivergenceReport, ReanchorResult)` where `case = state.fact.case`, identity `state.identity`/`res.matched`, `state.role_order_rank` (a **fixed target rank per original IG, not a candidate distance**), coverage `len(res.matched)/len(target.roles)`; its `target` is the **mwcc-debug** target (roles + metadata, distinct from `search.TargetSpec`) and `compile` is a `role_descriptor.Compile`. `classify_progress(prev_state, state, edit_was_order_change, history, checkdiff_clean)` → labels. `analyze_first_divergence` returns `source=None`. `suggest_coalesce`/`coalesce_patterns` are a separate pair/discover tool emitting `pattern_name` (`direct-identity`, `chain-init`, `alias-split`, `common-subexpr`) + advisory prose `source_hint`. `colorgraph_parser` exposes `ColorgraphDecision`/`SimplifyEntry` with `iter_idx`/`ig_idx`.
 
-This build connects the two. Per Codex round 1, three spec assumptions were wrong and are corrected throughout: (a) the scheduler **must** gain a tier-2 branch (it is not zero-change — it activates a deferred seam); (b) `source_hint`s are advisory text, so a real **typed-mutator** Editor must be built; (c) `distance_to_flip` is not a real field — the directed signal is built from `role_order_rank` + reanchor coverage + label (+ optional `ig_idx`-derived refinement).
+Per Codex rounds 1–2, several spec assumptions conflicted with this reality and are corrected throughout (see Appendix A). The load-bearing corrections: a real **candidate ordering distance** (not `role_order_rank`) is the directed metric; directed scoring is **pure vs an explicit parent**; a **`DirectedDiagnosis`** object and a **source-anchor resolver** must be *built* (the analysis returns neither mutator nor anchor); the scheduler **tier-2 branch is a build**, decided from byte-history *before* compile.
 
 ## 2. Decisions (locked in brainstorming)
 
-1. **Success = both, sequenced.** Phase 1: a validated directed *mechanism* that measurably advances the directed score on 9ACC under a trustworthy harness; machine-checked gate. Phase 2: add the LLM Editor and attempt 9ACC → 100%. A sound mechanism that doesn't crack 9ACC is a characterized partial success.
-2. **Editor = hybrid.** A deterministic **typed-mutator** Editor (a `DirectedSource` `VariantSource`) is the validated phase-1 spine; an **LLM Editor** (an async `ArtifactProducer`) is the phase-2 reach, activated only after the deterministic tier stalls.
-3. **Scope = general divergence engine.** Reuse the full `analyze_iteration_full` + role-identity + progress labels + reanchor coverage. This makes the **harness-validity problem a first-class pillar** (it caused the gate-3 VOID failures).
-4. **Approach = decompose into substrate primitives.** Reuse the convergence *analysis* as a library; do **not** run `run_convergence_loop`. The substrate scheduler (with an activated tier-2 branch) replaces its orchestration, but the **convergence progress state it carried (`prev_state`, `history`, `last_lever`, baseline) is preserved explicitly** as a `DirectedSearchState` (Codex P1-5) — dropping the loop must not drop that state.
+1. **Success = both, sequenced.** Phase 1: validated mechanism with a machine-checked gate on 9ACC. Phase 2: LLM Editor + the 100% attempt.
+2. **Editor = hybrid.** Deterministic **typed-mutator** `DirectedSource` (`VariantSource`) is the phase-1 spine; an **async `LlmEditorProducer`** is the phase-2 reach.
+3. **Scope = general divergence engine.** Reuse `analyze_iteration_full` + role-identity + labels + reanchor coverage; harness-validity is a first-class pillar.
+4. **Approach = decompose into substrate primitives.** Reuse the analysis as a library; do not run `run_convergence_loop`, but **preserve its progress state explicitly** as a `DirectedSearchState` (`prev_state`, `history`, `last_lever`, baseline) — advanced only on best-selection, never mid-batch.
 
 ## 3. Architecture & data flow
 
-Reused convergence pieces map onto substrate seams; new build items are marked **(build)**:
-
-| Convergence piece (reused as library) | Substrate seam / new item |
+| Convergence piece (reused) | Substrate seam / **(build)** |
 |---|---|
-| typed mutators selected by diagnosis **(build)** | **`DirectedSource`** — a `VariantSource` (`next_batch`) vending edited sources |
-| LLM edit generation **(build, phase 2)** | **`LlmEditorProducer`** — an async `ArtifactProducer` |
-| `analyze_iteration_full` + `classify_progress` (+ `DirectedSearchState`) | **tier-2 `ScorePipeline.score_directed`** |
-| byte-score plateau detection **(build)** | **`ScorePipeline.should_escalate`** |
-| `MWCC_DEBUG_PCDUMP_PATH` + `--keep-obj` compile path | **`PcdumpLocalBackend`** **(build)** |
+| typed mutators selected by `DirectedDiagnosis` **(build)** | **`DirectedSource`** (`VariantSource`, `next_batch`) |
+| LLM edit generation **(build, phase 2)** | **`LlmEditorProducer`** (async `ArtifactProducer` + directed context) |
+| `analyze_iteration_full` + ordering distance + `classify_progress` | **tier-2 `ScorePipeline.score_directed`** (pure vs parent) |
+| byte-score plateau | **`ScorePipeline.should_escalate`** **(build)** |
+| `MWCC_DEBUG_PCDUMP_PATH` + `--keep-obj` | **`PcdumpLocalBackend`** **(build)** |
+| (none — derived) | **`DirectedDiagnosis`** + **source-anchor resolver** **(build)** |
 
-`run_convergence_loop` is **not** used. The substrate `DefaultScheduler` gains a **tier-2 escalation branch (build)** — the deferred seam, now activated. One directed iteration:
+`run_convergence_loop` is **not** used. The substrate `DefaultScheduler` gains a **tier-2 escalation branch (build)** — the deferred seam, activated. One directed iteration:
 
-1. `DirectedSource.next_batch(n)` → `list[SourceVariant]` (each = a typed mutator applied to the current best, selected by the latest diagnosis). Returns `[]` on exhaustion (Codex P2-12).
-2. Scheduler → backend compile. **When `should_escalate` is active, route to the pcdump-capable `PcdumpLocalBackend`** (`want_pcdump`), which emits `.o` + pcdump from one invocation as a content-addressed pair (Codex P1-8).
-3. `score_byte` (tier-1). `byte_score==0` + checkdiff-clean → win short-circuit (exists).
-4. **`should_escalate(byte-score history)`** (Codex P1-7): `True` on a defined plateau (N candidates with no best-byte improvement). On escalate → `score_directed(candidate, DirectedSearchState)` reads the pcdump → directed result (scalar + label + diagnosis + validity), updating `DirectedSearchState`.
-5. Directed results flow back via `observe` (the existing per-batch feedback edge): `DirectedSource` updates current-best and stall counter; on K stalls the scheduler **starts the `LlmEditorProducer`** (phase 2).
+1. **Escalation mode is decided from prior byte-score history before the batch** (Codex P1-6), so `want_pcdump` is known at compile time. In directed mode, all compiles route to `PcdumpLocalBackend`.
+2. `DirectedSource.next_batch(n)` → `list[SourceVariant]` (each = a typed mutator applied to the current-best, selected by the current `DirectedDiagnosis`). `[]` on exhaustion.
+3. Backend compile (`PcdumpLocalBackend` in directed mode) → `.o` + bound pcdump pair.
+4. `score_byte` (tier-1). `byte_score==0` + checkdiff-clean → win short-circuit.
+5. `score_directed(candidate, parent_state)` — **pure** (Codex P0-1): scores the candidate against its **parent** state (`parent_candidate_id`/`parent_state_id`), returns `DirectedMeta`, mutates **no** global state.
+6. The scheduler **selects the new current-best** from the batch (tier-1 byte, then directed scalar); `observe` then advances the global `DirectedSearchState` to that best and updates the stall counter. K stalls → scheduler **dynamically starts** `LlmEditorProducer` with directed context (Codex P1-7).
 
-**Cross-unit coupling (corrected, Codex P1-5):** not just "diagnosis." A `DirectedSearchState` (owned by the directed coordinator/pipeline) carries `prev_state`, `history`, `last_lever`, the `DirectedObjective` (below), and the current best — threaded into every `score_directed` so `classify_progress` is correct.
+## 4. Data contracts (build — Codex P0-2, P1-3, P1-4, P2-8)
 
-## 4. Data contracts (new — Codex P0-2, P1-9)
-
-- **`DirectedObjective`** (the pre-flight-validated target): `{TargetSpec, baseline_compile, baseline_pcdump, baseline_source_hash, class_id, roles}`. Defines exactly which compile/pcdump the analysis runs against (the existing analysis needs a `compile` callable; `TargetSpec` has none today).
-- **`DirectedMeta`** (attached to a scored candidate; extends the artifact/telemetry channel): `{valid: bool, invalid_reason: str | None, case, label, role_order_rank: int | None, rank_delta: int | None, reanchor_matched: int, reanchor_total: int, diagnosis: str, diagnosis_chars: int, applied_mutator: str | None, directed_scalar: float}`.
-- **`CandidateArtifact.status`** gains **`"invalid"`** (alongside `ok`/`harvested`/`compile_failed`/`score_failed`) so an `INVALID` directed analysis is first-class, never silently a "no-progress" score.
-- **`SearchResult`** gains a `directed_telemetry: list[DirectedMeta]` so the phase-1 gate is machine-checkable from the result alone.
+- **`DirectedObjective`** (qualified fields, resolving the `TargetSpec` collision): `{search_target: search.TargetSpec, role_target: mwcc_debug target, baseline_compile: role_descriptor.Compile, baseline_pcdump_path: Path, baseline_source_hash: str, class_id: int}`.
+- **`DirectedDiagnosis`** (derived — does not exist in the analysis today): `{case, target_igs, source_idea, coalesce_pair | None, mutator_key | None, resolved_anchor | None, analysis_valid: bool, actionable: bool, invalid_reason: str | None}`. A builder composes it from `(IterationState, FirstDivergenceReport, ReanchorResult)` + the anchor resolver + `suggest_coalesce`. `analysis_valid` and `actionable` are **separate** (Codex P2-9).
+- **`DirectedMeta`** (attached to the scored candidate, fully linkable): `{candidate_id, source_hash, iteration, parent_id, parent_state_id, valid, invalid_reason, case, label, order_distance: float, order_distance_delta: float, reanchor_matched, reanchor_total, diagnosis_chars, applied_mutator: str | None, directed_scalar: float}`.
+- **`CandidateArtifact`** gains `directed_meta: DirectedMeta | None` and status **`"invalid"`**.
+- **`SearchResult`** gains `directed_telemetry: list[DirectedMeta]`.
 
 ## 5. The core units
 
 ### 5.1 `DirectedSource` (`VariantSource`, `next_batch(n)`)
-- **`next_batch(n) → list[SourceVariant]`**: from the latest diagnosis, select up to `n` untried **typed mutators** and apply each to the current-best source. Returns `[]` when mutators are exhausted (Codex P2-12).
-- **Typed mutators (build — Codex P0-3):** a small library of *programmatic* C transforms, each with resolved source anchors + concrete replacement (not the advisory `source_hint` text). Initial set, grounded in the 9ACC levers and `coalesce_patterns` semantics: `wrap_field_access_in_accessor`, `hoist_temp_before_branch`, `reorder_decl`, `change_return_type_to_int`, `introduce_indirection_local`. The diagnosis (target coalesce/role from the analysis) + the advisory `source_hint` select the mutator and its parameters; the mutator performs the edit. Mutators that cannot resolve their anchors in the current source are skipped (not emitted as broken candidates).
-- **`observe(scored)`**: updates current-best (best tier-1, tie-broken by directed scalar), records which mutator moved vs stalled the directed scalar, increments a stall counter; **K consecutive stalls signals escalation** (the scheduler then starts the LLM producer).
+- **`next_batch(n)`**: from the current `DirectedDiagnosis`, apply up to `n` untried typed mutators to the current-best; `[]` on exhaustion.
+- **Typed mutators + anchor resolver (build — Codex P1-5):** mutators are *programmatic* C transforms with resolved source anchors. They require a **source-anchor resolver** (build) that maps a `DirectedDiagnosis.source_idea`/`coalesce_pair` to concrete source spans — the existing `pattern_name`/prose `source_hint` do **not** carry anchors. Phase 1 ships **only the mutators whose anchors the resolver can actually derive** from real `SourceIdea` fields, mapped from real pattern names (`direct-identity`→accessor/identity routing, `chain-init`→hoist-temp-before-use, `alias-split`→introduce-indirection-local, `common-subexpr`→reorder/reuse). A mutator whose anchor can't resolve is skipped (never emits broken source). The 9ACC levers (int-return, GetUserData accessor, new_var indirection) are the concrete validation set.
+- **`observe(scored)`**: the scheduler having selected the new current-best, `observe` advances the global `DirectedSearchState` (`prev_state`/`history`/`last_lever`) to it; records mutator→Δscalar; increments the stall counter; signals escalation at K stalls.
 
-### 5.2 `score_directed` (tier-2 `ScorePipeline`)
-- Reads `candidate.pcdump_path`, runs the analysis vs the `DirectedObjective` using `DirectedSearchState.prev_state`/`history`/`last_lever` → `case`, identity, `role_order_rank`, reanchor coverage, progress `label`. Updates `DirectedSearchState`.
-- **Directed scalar (corrected — no `distance_to_flip`, Codex P1-4):** composite of reanchor coverage (primary "how close") and `role_order_rank` progress, with the categorical `label` as direction. *Optional refinement* for select-order cases: an ig-ordering distance derived from `colorgraph_parser`'s `ig_idx` (confirmed exposed) — gated behind its own tests; not a hard dependency.
-- **`should_escalate(byte-score history) → bool` (Codex P1-7):** `True` when the best byte-score has not improved over the last N candidates (plateau). Requires byte-score history in the directed context (added; `SearchContext` lacks it today).
-- **Validity gates (hardened — Codex P1-6):** return an `INVALID` result (status `"invalid"`, with `invalid_reason`) unless ALL hold: roles non-empty; **`case ∉ {NONE, ABSTAINED}`** (`ABSTAINED` carries a non-empty `local_target` but is explicitly non-actionable — text length alone is insufficient); `report` present; reanchor coverage ≥ a floor; identity/rank present when rank scoring is used; and the diagnosis maps to an **actionable** mutator/anchor (not just `diagnosis_chars>0`). The scheduler surfaces `INVALID` loudly and never counts it as control-equivalent.
+### 5.2 `score_directed` (tier-2 `ScorePipeline`, pure vs parent)
+- **Pure**: `score_directed(candidate, parent_state) -> DirectedMeta`. Runs the analysis on the candidate's pcdump vs the `DirectedObjective`, using the **parent's** `prev_state`/`history`/`last_lever`; mutates no global state (Codex P0-1).
+- **Directed scalar = candidate ordering distance (Codex P1-2, load-bearing):** for select-order cases the scalar is a real ordering distance between the candidate's decision order (from `colorgraph_parser`'s `iter_idx`) and the objective role order — **Kendall-τ / pairwise inversions over the objective role pairs**. `role_order_rank` is a fixed target rank and is *flat* on a 2-way swap, so it is **not** the metric. Reanchor coverage and the categorical `label` are secondary (direction/validity), not the primary gradient. The ordering distance is **mandatory** for the 9ACC proof target and gated by 9ACC fixtures.
+- **`should_escalate(byte-score history) → bool` (Codex P1-6):** plateau over the last N (no best-byte improvement); evaluated from prior history *before* the next batch so `want_pcdump` is set at compile.
+- **Validity (`analysis_valid`, hardened — Codex P1-6, P2-9):** `INVALID` (status `"invalid"`) unless roles non-empty, `case ∉ {NONE, ABSTAINED}` (`ABSTAINED` carries a non-empty `local_target` but is non-actionable), `report` present, reanchor coverage ≥ floor, and identity/rank present where used. This gates **scoring validity** only; whether the *next* diagnosis is actionable is a separate search-continuation signal and must **not** invalidate a candidate's real progress.
 
 ### 5.3 `PcdumpLocalBackend` (`CompileBackend`, build — Codex P1-8)
-Compiles a candidate through the debug compiler path that already works (`debug dump local` style: `--keep-obj` + `MWCC_DEBUG_PCDUMP_PATH=<out>.pcdump.txt` in one invocation), under the same repo build lock as `RealLocalCompiler`. Stores the `.o` and the pcdump as a single content-addressed artifact pair (source/object/dump digests) so the pcdump provably belongs to the same compile that produced the `.o`. Reports `supports_pcdump=True`.
+Compiles via the proven debug path (`--keep-obj` + `MWCC_DEBUG_PCDUMP_PATH=<out>.pcdump.txt`, one invocation), under the same repo build lock as `RealLocalCompiler`. Stores `.o` + pcdump as one content-addressed pair with both digests bound (no stale/mismatched pcdump). `supports_pcdump=True`.
 
-### 5.4 `LlmEditorProducer` (`ArtifactProducer`, build — phase 2, Codex P2-10)
-The LLM Editor is **async** (an `ArtifactProducer`), not a blocking `next_batch` call: given {current source, diagnosis, failed mutator attempts, advisory `source_hint`s}, it generates candidate edits off the critical path, bounded by a hard per-run token/edit budget, with submit/poll/stop like the permuter producer. The scheduler starts it only on escalation (K deterministic stalls).
+### 5.4 `LlmEditorProducer` (`ArtifactProducer`, build — phase 2, Codex P1-7, P2-10)
+Async producer with an explicit **directed request context** (extends the producer protocol): `{current_source, diagnosis, failed_mutators, source_hints, budget}`. The scheduler **starts and stops it dynamically mid-loop** after `observe` signals escalation (the substrate today starts producers only pre-loop — this is a scheduler extension). Bounded by a hard per-run token/edit budget; emits source-only candidates recompiled by the scheduler like any producer.
 
-## 6. Escalation, scheduler wiring & the validity harness
+## 6. Scheduler tier-2 branch & validity harness (build — Codex P0-1, P1-6, P1-7, P2-9)
 
-**Scheduler tier-2 branch (build — Codex P0-1):** `DefaultScheduler` is extended (the deferred seam, activated) to: keep byte-score history + `DirectedSearchState`; when `should_escalate` fires, route `want_pcdump` to `PcdumpLocalBackend`, call `score_directed`, attach `DirectedMeta`, surface `INVALID` loudly, record `directed_telemetry`, and pass directed-scored candidates to `observe`. This branch is generic (any tier-2 scorer uses it); the directed layer drops in behind it. The existing dedup/promote/win short-circuit are unchanged.
+`DefaultScheduler` is extended (generic; any tier-2 scorer reuses it):
+- Maintain **byte-score history** and the global `DirectedSearchState`. Decide escalation mode from history **before** each batch; in directed mode, compile through `PcdumpLocalBackend` (`want_pcdump`). The triggering candidate is recompiled once through `PcdumpLocalBackend` to bind its pcdump.
+- Call `score_directed(candidate, parent_state)` **purely** per candidate; attach `directed_meta`; surface `INVALID` loudly (never control-equivalent); append to `directed_telemetry`.
+- **Select** the new current-best, then `observe` (advances `DirectedSearchState`).
+- Dynamically start/stop `LlmEditorProducer` on escalation.
+- Existing dedup/promote/win short-circuit unchanged.
 
-**Escalation:** K consecutive stalled directed scalars (tracked in `observe`) → scheduler starts `LlmEditorProducer` (bounded). Deterministic mutators are the validated phase-1 spine; the LLM is the phase-2 reach.
-
-**Validity harness — three layers (the gate-3 fix; a silent VOID run must be impossible):**
-1. **Per-candidate:** the hardened `INVALID` result (§5.2), including `ABSTAINED`.
-2. **Per-run pre-flight:** before any search, validate the `DirectedObjective` — run the analysis once against the **defined baseline compile/pcdump** and assert roles non-empty, `case ∉ {NONE, ABSTAINED}`, `report` present, `diagnosis` actionable. On failure, **abort loudly** (the exact empty-`target.roles` failure that voided gate-3 pilot #1).
-3. **Per-run gate telemetry:** the **phase-1 gate passes iff** pre-flight passed AND the escalated/treatment candidates are `valid` with `case ∉ {NONE, ABSTAINED}` AND ≥1 shows **attributable** directed progress (Codex P2-11): a `MOVED_LATER`/`role_order_rank` improvement that is (a) attributed to a specific applied mutator, (b) accompanied by non-regressed byte score and stable-or-improved reanchor coverage, and (c) better than a control/baseline candidate. This automates the gate-3 post-mortem rule.
+**Validity harness — three layers:**
+1. **Per-candidate:** the hardened `analysis_valid` gate (§5.2), incl. `ABSTAINED`.
+2. **Per-run pre-flight:** validate the `DirectedObjective` — run the analysis once against the defined `baseline_compile`/`baseline_pcdump` and assert roles non-empty, `case ∉ {NONE, ABSTAINED}`, `report` present. Abort loudly otherwise (the gate-3 pilot-#1 failure).
+3. **Per-run gate (attributable — Codex P2-9, P2-11):** phase-1 passes iff pre-flight green AND treatment candidates are `analysis_valid` AND ≥1 shows **attributable** progress: an `order_distance` improvement (a) attributed to a specific applied mutator, (b) with non-regressed byte score and stable-or-improved reanchor coverage, (c) better than a control/baseline candidate. Attribution is on the **applied** mutator, independent of whether the *next* diagnosis is actionable.
 
 ## 7. Phase plan
 
-- **Phase 1 — Validated mechanism.** Build: `PcdumpLocalBackend`; the scheduler tier-2 branch + byte-history + `DirectedSearchState`; `score_directed` + hardened validity gates; `should_escalate`; the `DirectedObjective` + pre-flight; the typed-mutator `DirectedSource` (deterministic only); the `DirectedMeta`/`INVALID`/telemetry contract additions. Validate on 9ACC.
-  **→ GATE (machine-checked):** pre-flight green AND treatment candidates valid (`case ∉ {NONE,ABSTAINED}`) AND ≥1 *attributable* directed-progress signal (§6.3). If red, **stop and reassess** — do not build the LLM tier on a broken foundation.
-- **Phase 2 — Capability + 100% attempt.** Build `LlmEditorProducer` + escalation. Run the full hybrid directed search on 9ACC for `byte_score==0`+checkdiff-clean. Deliverable: 9ACC cracked, or a characterized partial (directed scalar reached X; final edit eluded the LLM).
+- **Phase 1 — Validated mechanism.** Build: `PcdumpLocalBackend`; the scheduler tier-2 branch (byte-history, directed mode, pure scoring, best-selection, telemetry); `DirectedObjective` + pre-flight; the `DirectedDiagnosis` builder + source-anchor resolver; the ordering-distance metric (`iter_idx` Kendall) + `score_directed` + hardened validity; `should_escalate`; the typed-mutator `DirectedSource` (derivable mutators only); the contract additions (`directed_meta`, `"invalid"`, telemetry). Validate on 9ACC.
+  **→ GATE (machine-checked, §6.3).** If red, **stop and reassess**.
+- **Phase 2 — Capability + 100% attempt.** Build `LlmEditorProducer` + dynamic escalation. Run the hybrid search on 9ACC for `byte_score==0`+checkdiff-clean. Deliverable: cracked, or a characterized partial (order_distance reached X).
 
 ## 8. Testing
 
-- **Typed mutators:** golden tests — each mutator applied to a fixture source produces the exact expected patched source; un-resolvable anchors → skipped, not broken output.
-- `DirectedSource`: fake scorer feeds canned diagnoses → asserts the right mutator per case; `observe` flips to escalation after K stalls; exhaustion → `[]`.
-- `score_directed`: **fixture pcdumps captured from 9ACC at known states** → assert scalar/label/diagnosis from the real `analyze_iteration_full` return; assert `INVALID` on empty-roles, `case==NONE`, **`case==ABSTAINED`**, missing-report, and low-coverage fixtures.
-- **Gate-3 regression test:** empty/degenerate `target.roles` triggers pre-flight **ABORT**, not a silent control-equivalent run.
-- `PcdumpLocalBackend`: a compile yields a `.o` and a pcdump from one invocation; the pcdump digest is bound to the `.o` digest (no stale/mismatched pcdump).
-- **Plateau:** byte-history with a 9ACC-like fixed residual → `should_escalate` fires after exactly N; a still-improving history → does not fire.
-- **Scheduler tier-2 branch:** a planted matching candidate reaches the win short-circuit; an escalated INVALID candidate is surfaced (not counted as progress); `directed_telemetry` is populated.
-- **Phase-1 gate:** passes on an attributable-progress telemetry fixture; fails on a VOID telemetry fixture and on an unattributed/regressing "progress" fixture (Codex P2-11).
+- **Ordering-distance metric:** 9ACC fixtures at known states → Kendall/inversion distance decreases as the ev/did order approaches the objective; `role_order_rank` is shown flat across the same fixtures (justifying its rejection).
+- **Pure scoring (Codex P0-1):** two batch-sibling candidates from one parent get identical scores regardless of evaluation order (no cross-contamination).
+- **`DirectedDiagnosis` builder:** from fixture `(IterationState, FirstDivergenceReport, ReanchorResult)` → asserts `case`, `mutator_key`, resolved anchor, and the `analysis_valid`/`actionable` split.
+- **Anchor resolver + mutators:** golden tests — resolver derives the right span; each mutator produces the exact expected patched source; un-resolvable anchor → skipped.
+- `score_directed` validity: `INVALID` on empty-roles, `NONE`, **`ABSTAINED`**, missing-report, low-coverage.
+- **Gate-3 regression:** empty/degenerate roles → pre-flight ABORT, not a silent control-equivalent run.
+- `PcdumpLocalBackend`: one invocation yields `.o`+pcdump with bound digests.
+- **Plateau:** fixed-residual byte-history → `should_escalate` fires after exactly N; improving history → never.
+- **Scheduler tier-2 + dynamic producer:** directed mode routes pcdump; INVALID surfaced (not progress); telemetry populated; `LlmEditorProducer` starts on escalation and stops on budget.
+- **Phase-1 gate:** passes on attributable-progress telemetry; fails on VOID telemetry and on unattributed/regressing "progress".
 
 ## 9. Out of scope (YAGNI)
 
-- Typed-mutator library expansion beyond what 9ACC + the relevant `coalesce_patterns` cover (extend as needed, don't pre-build the full catalogue).
-- Multi-function batch directed search.
-- Remote/distributed directed search — the local `PcdumpLocalBackend` is the phase-1/2 vehicle.
+- Mutator/anchor-resolver coverage beyond what 9ACC + the derivable `coalesce_patterns` need.
+- Multi-function batch directed search; remote/distributed directed search (local `PcdumpLocalBackend` is the vehicle).
 
 ## 10. Success criteria
 
-- **Phase 1 (gate):** on 9ACC, machine-checked per §6.3: pre-flight passes; treatment candidates valid (`case ∉ {NONE,ABSTAINED}`); ≥1 attributable directed-progress signal. The mechanism is provably non-VOID and genuinely diagnosing.
-- **Phase 2:** `grIceMt_801F9ACC` reaches `match=true`/100%, OR a characterized partial that advances the directed scalar and isolates the residual the LLM couldn't close.
-- **No silent regressions:** the directed source/scorer integrate behind the (now-activated) tier-2 seam; all existing substrate tests stay green; the extended litmus (a second tier-2 scorer drops in behind the same branch) holds.
+- **Phase 1 (gate):** machine-checked per §6.3 on 9ACC — pre-flight passes; treatment candidates `analysis_valid`; ≥1 attributable `order_distance` improvement. Provably non-VOID and genuinely diagnosing.
+- **Phase 2:** `grIceMt_801F9ACC` `match=true`/100%, or a characterized partial that advances `order_distance` and isolates the residual.
+- **No silent regressions:** integrates behind the activated tier-2 seam; existing substrate tests stay green; the extended litmus (a second tier-2 scorer drops in behind the same branch) holds.
 
 ---
 
 ### Appendix A — Codex review log
-- **Round 1 (2026-06-01, gpt-5.5 xhigh):** incorporated. P0: scheduler tier-2 branch must be built (§3,§6); artifact diagnosis/validity/telemetry channel + `INVALID` status (§4); `source_hint`s are advisory → typed mutators (§5.1). P1: real `analyze_iteration_full` return schema, drop `distance_to_flip` (§5.2); preserve `DirectedSearchState` when dropping the loop (§2,§3); `ABSTAINED` is invalid (§5.2,§6); byte-history for `should_escalate` (§5.2); `PcdumpLocalBackend` (§5.3); `DirectedObjective` baseline compile for pre-flight (§4,§6). P2: LLM editor as async `ArtifactProducer` (§5.4); attributable phase-1 gate (§6.3); `next_batch(n)` shape (§5.1). Confirmed FINE: `ig_idx` exposed; same-invocation pcdump sidecars proven.
+- **Round 1 (gpt-5.5 xhigh):** scheduler tier-2 branch is a build; diagnosis/validity/telemetry channel + `INVALID`; `source_hint`s advisory → typed mutators; real `analyze_iteration_full` schema, drop `distance_to_flip`; preserve `DirectedSearchState`; `ABSTAINED` invalid; byte-history plateau; `PcdumpLocalBackend`; `DirectedObjective` baseline compile; LLM as async producer; attributable gate; `next_batch(n)`. (`ig_idx` exposed; same-invocation pcdump proven.)
+- **Round 2 (gpt-5.5 xhigh):** directed scoring **pure vs parent**, global state advances only on best-selection (P0-1); **`role_order_rank` is flat on the 9ACC swap → ordering distance (Kendall on `iter_idx`) is the mandatory metric** (P1-2); `DirectedObjective` qualified fields resolving the `TargetSpec` collision (P1-3); `DirectedDiagnosis` must be built — analysis returns no diagnosis/mutator/anchor, `analyze_first_divergence` `source=None` (P1-4); mutators grounded in real pattern names + a source-anchor resolver, phase-1 shrunk to derivable mutators (P1-5); escalation decided from byte-history before compile so `want_pcdump` is set (P1-6); `LlmEditorProducer` needs directed context + dynamic mid-loop start/stop (P1-7); `directed_meta` linkage fields (P2-8); split `analysis_valid` from `actionable` (P2-9).
