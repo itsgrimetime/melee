@@ -122,3 +122,57 @@ def test_scheduler_retry_is_bounded(tmp_path):
     assert comp.calls == 3
     assert res.accounting["compile_failed"] == 1
     assert res.matched is None
+
+
+class _FailedProducer:
+    def __init__(self):
+        self.polls = 0
+        self.stopped = False
+
+    def name(self):
+        return "failed-producer"
+
+    def start(self, base, target, budget):
+        from src.search.types import ProducerHandle
+
+        return ProducerHandle(self.name(), ["job-1"])
+
+    def poll(self, handle):
+        self.polls += 1
+        return []
+
+    def status(self, handle):
+        from src.search.types import ProducerStatus
+
+        return ProducerStatus("failed", detail="fatal error: missing include")
+
+    def stop(self, handle):
+        self.stopped = True
+
+
+def test_scheduler_surfaces_failed_producer_and_stops_polling(tmp_path):
+    store = ArtifactStore(tmp_path / "store")
+    producer = _FailedProducer()
+    pipe = ByteScorePipeline(scorer=NonMatchScorer())
+    sched = DefaultScheduler(store=store, verifier=None)
+
+    res = sched.run(
+        sources=[],
+        backends=[],
+        producers=[producer],
+        pipeline=pipe,
+        target=TargetSpec("f", "u", tmp_path / "e.o"),
+        budget=Budget(max_iters=20),
+        policy=SchedulePolicy(),
+    )
+
+    assert producer.polls == 1
+    assert producer.stopped
+    assert res.accounting["producer_failed"] == 1
+    assert res.accounting["producer_failures"] == [
+        {
+            "producer": "failed-producer",
+            "jobs": ["job-1"],
+            "detail": "fatal error: missing include",
+        }
+    ]

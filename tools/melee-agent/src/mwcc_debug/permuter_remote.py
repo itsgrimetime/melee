@@ -124,6 +124,7 @@ PYTHON_DEPS = [
     "typer>=0.12.0",
     "rich>=13.0",
     "pyyaml>=6.0",
+    "toml>=0.10.2",
     "anthropic>=0.40.0",
     "python-dotenv>=1.0.0",
     "pyelftools>=0.31",
@@ -755,12 +756,6 @@ def _remote_repair_bootstrap_script(target: RemoteTarget) -> str:
 def _remote_submit_script(job: RemoteJob, target: RemoteTarget) -> str:
     metadata = json.dumps(asdict(job), indent=2)
     perm_rel = f"remote-runs/{job.job_id}/nonmatchings/{job.function}"
-    run_command = (
-        f"cd {shlex.quote(target.remote_perm_root)} && "
-        f"MELEE_ROOT={shlex.quote(target.remote_melee_root)} "
-        f"./permuter.py {shlex.quote(perm_rel)} -j {job.threads} "
-        f"> {shlex.quote(job.remote_run_dir)}/permuter.log 2>&1"
-    )
     return "\n".join(
         [
             "set -eu",
@@ -772,9 +767,21 @@ def _remote_submit_script(job: RemoteJob, target: RemoteTarget) -> str:
             'test -d "$remote_perm_root"',
             'test -d "$remote_melee_root"',
             "command -v tmux >/dev/null 2>&1",
+            'if command -v python3.11 >/dev/null 2>&1; then remote_py="$(command -v python3.11)"; '
+            'elif command -v python3 >/dev/null 2>&1 && python3 - <<\'PY\' >/dev/null 2>&1\n'
+            "import sys\n"
+            "raise SystemExit(0 if sys.version_info >= (3, 11) else 1)\n"
+            "PY\n"
+            'then remote_py="$(command -v python3)"; else echo "python >=3.11 missing" >&2; exit 1; fi',
+            "export remote_py",
             'mkdir -p "$remote_run_dir"',
             f"printf '%s\\n' {shlex.quote(metadata)} > \"$remote_run_dir/metadata.json\"",
-            f"tmux new-session -d -s \"$tmux_session\" {shlex.quote(run_command)}",
+            (
+                'tmux new-session -d -s "$tmux_session" '
+                f'"cd \\"$remote_perm_root\\" && MELEE_ROOT=\\"$remote_melee_root\\" '
+                f'\\"$remote_py\\" ./permuter.py {shlex.quote(perm_rel)} '
+                f'-j {job.threads} > \\"$remote_run_dir/permuter.log\\" 2>&1"'
+            ),
         ]
     )
 
@@ -799,14 +806,20 @@ def _remote_doctor_script(
         "command -v sh >/dev/null 2>&1 && emit remote-sh ok sh || emit remote-sh fail 'sh missing'",
         "command -v rsync >/dev/null 2>&1 && emit remote-rsync ok \"$(command -v rsync)\" || emit remote-rsync fail 'rsync missing'",
         "command -v tmux >/dev/null 2>&1 && emit remote-tmux ok \"$(command -v tmux)\" || emit remote-tmux fail 'tmux missing'",
-        "command -v python3 >/dev/null 2>&1 && emit remote-python3 ok \"$(command -v python3)\" || emit remote-python3 fail 'python3 missing'",
+        'if command -v python3.11 >/dev/null 2>&1; then doctor_py="$(command -v python3.11)"; '
+        'elif command -v python3 >/dev/null 2>&1 && python3 - <<\'PY\' >/dev/null 2>&1\n'
+        "import sys\n"
+        "raise SystemExit(0 if sys.version_info >= (3, 11) else 1)\n"
+        "PY\n"
+        'then doctor_py="$(command -v python3)"; else doctor_py=""; fi',
+        'test -n "$doctor_py" && emit remote-python3 ok "$doctor_py" || emit remote-python3 fail "python >=3.11 missing"',
         'test -d "$melee_root" && emit remote-melee-root ok "$melee_root" || emit remote-melee-root fail "$melee_root missing"',
         'test -d "$perm_root" && emit remote-perm-root ok "$perm_root" || emit remote-perm-root fail "$perm_root missing"',
         'test -x "$perm_root/permuter.py" && emit remote-permuter-py ok "$perm_root/permuter.py" || emit remote-permuter-py fail "$perm_root/permuter.py missing or not executable"',
         'test -f "$melee_root/build/compilers/GC/1.2.5n/mwcceppc_debug.exe" && emit remote-mwcc ok "$melee_root/build/compilers/GC/1.2.5n/mwcceppc_debug.exe" || emit remote-mwcc fail "$melee_root/build/compilers/GC/1.2.5n/mwcceppc_debug.exe missing"',
         'test -x "$melee_root/tools/mwcc_debug/bin/wibo" && emit remote-wibo ok "$melee_root/tools/mwcc_debug/bin/wibo" || emit remote-wibo fail "$melee_root/tools/mwcc_debug/bin/wibo missing or not executable"',
         'if test -x "$melee_root/tools/melee-agent/.venv/bin/melee-agent"; then emit remote-melee-agent ok "$melee_root/tools/melee-agent/.venv/bin/melee-agent"; elif command -v melee-agent >/dev/null 2>&1; then emit remote-melee-agent ok "$(command -v melee-agent)"; elif test -x "$HOME/.local/bin/melee-agent"; then emit remote-melee-agent ok "$HOME/.local/bin/melee-agent"; else emit remote-melee-agent fail "melee-agent missing"; fi',
-        'if command -v python3 >/dev/null 2>&1; then python3 - <<\'PY\' >/tmp/melee-remote-doctor-python.$$ 2>&1\nimport toml\nprint("toml ok")\nPY\nrc=$?; out=$(cat /tmp/melee-remote-doctor-python.$$); rm -f /tmp/melee-remote-doctor-python.$$; test "$rc" -eq 0 && emit remote-python3-toml ok "$out" || emit remote-python3-toml fail "$out"; else emit remote-python3-toml fail "python3 missing"; fi',
+        'if test -n "$doctor_py"; then "$doctor_py" - <<\'PY\' >/tmp/melee-remote-doctor-python.$$ 2>&1\nimport toml\nprint("toml ok")\nPY\nrc=$?; out=$(cat /tmp/melee-remote-doctor-python.$$); rm -f /tmp/melee-remote-doctor-python.$$; test "$rc" -eq 0 && emit remote-python3-toml ok "$out" || emit remote-python3-toml fail "$out"; else emit remote-python3-toml fail "python >=3.11 missing"; fi',
     ]
     if objdump_info is not None:
         lines.extend(_remote_objdump_doctor_lines(objdump_info))
@@ -1130,7 +1143,10 @@ def _doctor_local_objdump(
         return [], None
     if not isinstance(command, str) or not command.strip():
         return [DoctorCheck("local objdump command", False, "objdump_command missing")], None
-    command = _remote_objdump_command(command, target)
+    if target is not None:
+        command = _remote_objdump_command(DEFAULT_OBJDUMP_COMMAND, target)
+    else:
+        command = _remote_objdump_command(command, target)
     try:
         argv = shlex.split(command)
     except ValueError as exc:

@@ -244,6 +244,7 @@ class RealRemotePermuterClient:
     def __init__(self, melee_root: Path) -> None:
         self._melee_root = Path(melee_root)
         self._jobs: dict[str, object] = {}  # job_id -> RemoteJob
+        self._job_errors: dict[str, str] = {}
 
     def submit(self, base_dir: Path, function: str, remote: str) -> str:
         from src.mwcc_debug.permuter_remote import load_targets, submit_job
@@ -272,6 +273,10 @@ class RealRemotePermuterClient:
             m = _OUTPUT_DIR_RE.match(dir_name)
             score = float(m.group("score")) if m else float("-inf")
             results.append((source_c, score))
+        if not results:
+            failure = _summarize_permuter_failure(fetch_dest / "remote-run" / "permuter.log")
+            if failure:
+                self._job_errors[job_id] = failure
         return results
 
     def status(self, job_id: str) -> str:
@@ -280,6 +285,8 @@ class RealRemotePermuterClient:
         job = self._jobs.get(job_id)
         if job is None:
             return "failed"
+        if job_id in self._job_errors:
+            return f"failed:{self._job_errors[job_id]}"
         result = status_job(job)
         state = result.state
         # Map permuter tmux states onto the ProducerStatus Literal
@@ -297,6 +304,30 @@ class RealRemotePermuterClient:
         job = self._jobs.get(job_id)
         if job is not None:
             stop_job(job)
+
+
+def _summarize_permuter_failure(log_path: Path) -> str:
+    if not log_path.exists():
+        return ""
+    try:
+        lines = log_path.read_text(errors="replace").splitlines()
+    except OSError:
+        return ""
+    needles = (
+        "fatal error",
+        "returned non-zero exit status",
+        "traceback",
+        "error:",
+    )
+    for index, line in enumerate(lines):
+        if any(needle in line.lower() for needle in needles):
+            window = [line.strip()]
+            for follow in lines[index + 1:index + 3]:
+                stripped = follow.strip()
+                if stripped:
+                    window.append(stripped)
+            return " | ".join(window)
+    return ""
 
 
 class RealCheckdiffVerifier:

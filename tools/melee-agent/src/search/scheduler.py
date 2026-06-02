@@ -13,7 +13,8 @@ class DefaultScheduler:
 
     def run(self, *, sources, backends, producers, pipeline, target, budget, policy) -> SearchResult:
         acct = {"compiled": 0, "harvested": 0, "promoted": 0, "compile_failed": 0,
-                "score_failed": 0, "deduped": 0, "retried": 0}
+                "score_failed": 0, "deduped": 0, "retried": 0,
+                "producer_failed": 0, "producer_drained": 0, "producer_failures": []}
         seen: set[str] = set()
         best: list[CandidateArtifact] = []
         matched: CandidateArtifact | None = None
@@ -47,6 +48,7 @@ class DefaultScheduler:
             return scored
 
         handles = [(p, p.start(base, target, budget)) for p in producers]
+        all_handles = list(handles)
         # deferred: pcdump-capability routing (route_pcdump_to_capable_only /
         # want_pcdump) is tied to the tier-2 directed/pcdump seam — pcdump IS
         # the directed seam, out of scope for Spec 1. Round-robin only here.
@@ -58,9 +60,13 @@ class DefaultScheduler:
         for _ in range(iters):
             if deadline is not None and time.monotonic() >= deadline:
                 break
+            made_progress = False
             for src in sources:
                 scored_batch: list[CandidateArtifact] = []
-                for variant in src.next_batch(policy.batch_size):
+                batch = src.next_batch(policy.batch_size)
+                if batch:
+                    made_progress = True
+                for variant in batch:
                     if backend is None: break
                     art = compile_with_retry(variant)
                     s = ingest(art)
@@ -70,9 +76,12 @@ class DefaultScheduler:
                 # observe once per drained source batch (spec §3.6-P3)
                 src.observe(scored_batch)
                 if matched: break
+            active_handles = []
             for producer, handle in handles:
                 harvested = producer.poll(handle)
                 acct["harvested"] += len(harvested)
+                if harvested:
+                    made_progress = True
                 harvested = [h for h in harvested if h.candidate_id not in seen]
                 harvested.sort(key=lambda a: (a.producer_score is None, a.producer_score))
                 for cand in harvested[: policy.promote_top_k]:
@@ -84,8 +93,23 @@ class DefaultScheduler:
                     acct["promoted"] += 1
                     ingest(recompiled)
                     if matched: break
+                status = producer.status(handle)
+                if status.state == "failed":
+                    acct["producer_failed"] += 1
+                    acct["producer_failures"].append({
+                        "producer": producer.name(),
+                        "jobs": list(handle.job_ids),
+                        "detail": status.detail,
+                    })
+                elif status.state == "drained":
+                    acct["producer_drained"] += 1
+                else:
+                    active_handles.append((producer, handle))
+            handles = active_handles
             if matched: break
-        for producer, handle in handles:
+            if not handles and not made_progress:
+                break
+        for producer, handle in all_handles:
             producer.stop(handle)
         best.sort(key=lambda a: (a.byte_score is None, a.byte_score))
         return SearchResult(best=best[:25], matched=matched, accounting=acct)

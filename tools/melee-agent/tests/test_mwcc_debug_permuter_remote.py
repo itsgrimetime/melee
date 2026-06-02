@@ -751,6 +751,45 @@ def test_doctor_target_flags_missing_remote_objdump_from_settings(tmp_path: Path
     assert "powerpc-eabi-objdump" in objdump_check.detail
 
 
+def test_doctor_target_uses_staged_remote_objdump_for_local_absolute_settings(
+    tmp_path: Path,
+) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    (local_perm / "compile.sh").write_text("#!/bin/sh\n")
+    (local_perm / "settings.toml").write_text(
+        'objdump_command = "/opt/devkitpro/devkitPPC/bin/powerpc-eabi-objdump -dr"\n'
+    )
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+    calls: list[list[str]] = []
+
+    def fake_runner(argv: list[str], **_: object) -> pr.CommandResult:
+        calls.append(argv)
+        return pr.CommandResult(
+            returncode=0,
+            stdout=(
+                _remote_doctor_ok_stdout()
+                + "remote-objdump-command\tok\tmelee-agent debug target dtk-objdump --help\n"
+            ),
+            stderr="",
+        )
+
+    report = pr.doctor_target(target, local_perm_dir=local_perm, runner=fake_runner)
+
+    assert report.ok
+    remote_script = calls[0][2]
+    assert "/opt/devkitpro/devkitPPC/bin/powerpc-eabi-objdump" not in remote_script
+    assert "melee-agent debug target dtk-objdump --melee-root /home/coder/melee" in remote_script
+
+
 def test_doctor_target_checks_full_objdump_command(tmp_path: Path) -> None:
     local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
     local_perm.mkdir(parents=True)
@@ -1198,6 +1237,26 @@ command = "/home/coder/.local/bin/melee-agent debug target score-simplify-order 
     assert "cd /home/coder/melee/tools/melee-agent" in bootstrap_script
 
 
+def test_repair_python_deps_include_toml_for_remote_doctor() -> None:
+    assert any(dep.partition(">=")[0] == "toml" for dep in pr.PYTHON_DEPS)
+
+
+def test_remote_doctor_uses_python311_for_toml_when_available() -> None:
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    script = pr._remote_doctor_script(target)
+
+    assert "command -v python3.11" in script
+    assert '"$doctor_py" - <<' in script
+
+
 def _exclude_index(call: list[str], pattern: str) -> int:
     for index, arg in enumerate(call):
         if arg == pattern and index > 0 and call[index - 1] == "--exclude":
@@ -1268,11 +1327,12 @@ def test_submit_job_builds_rsync_ssh_tmux_and_metadata(tmp_path: Path) -> None:
     remote_script = submit_call[2]
     assert "/home/coder/decomp-permuter" in remote_script
     assert "/home/coder/melee" in remote_script
-    assert "MELEE_ROOT=/home/coder/melee" in remote_script
+    assert 'MELEE_ROOT=\\"$remote_melee_root\\"' in remote_script
     assert "command -v tmux" in remote_script
+    assert "command -v python3.11" in remote_script
     assert "tmux new-session -d" in remote_script
     assert (
-        "./permuter.py remote-runs/fn_80000000-coder64-20260525-143012/"
+        '\\"$remote_py\\" ./permuter.py remote-runs/fn_80000000-coder64-20260525-143012/'
         "nonmatchings/fn_80000000 -j 64"
     ) in remote_script
     assert "metadata.json" in remote_script

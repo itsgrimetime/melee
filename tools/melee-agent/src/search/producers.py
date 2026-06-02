@@ -1,5 +1,6 @@
 from __future__ import annotations
 import hashlib
+import re
 import shutil
 from pathlib import Path
 from typing import Callable
@@ -27,12 +28,9 @@ class PermuterJobProducer:
         base_source = (
             self._base_source_text if self._base_source_text is not None else base.base_source
         )
-        if base_source:
-            (base_dir / "base.c").write_text(base_source)
-        elif self._permuter_base_dir is not None and (self._permuter_base_dir / "base.c").exists():
-            shutil.copy2(self._permuter_base_dir / "base.c", base_dir / "base.c")
-        else:
-            (base_dir / "base.c").write_text(base_source)
+        (base_dir / "base.c").write_text(
+            self._prepare_base_source(base_source, target.function)
+        )
         if self._permuter_base_dir is not None:
             for name in ("compile.sh", "settings.toml", "target.o"):
                 src = self._permuter_base_dir / name
@@ -43,6 +41,31 @@ class PermuterJobProducer:
                 shutil.copy2(src, base_dir / name)
         job_ids = [self._client.submit(base_dir, target.function, r) for r in self._remotes]
         return ProducerHandle(self.name(), job_ids)
+
+    def _prepare_base_source(self, base_source: str, function: str) -> str:
+        if self._permuter_base_dir is None:
+            return base_source
+        permuter_base = self._permuter_base_dir / "base.c"
+        if not permuter_base.exists():
+            return base_source
+        permuter_text = permuter_base.read_text()
+        if not base_source:
+            return permuter_text
+
+        from src.mwcc_debug.source_patch import extract_function, replace_function
+
+        candidate_function = extract_function(base_source, function)
+        if candidate_function is None:
+            raise ValueError(
+                f"seed source does not define {function}; cannot build permuter base"
+            )
+        candidate_function = _trim_leading_preprocessor_lines(candidate_function)
+        patched = replace_function(permuter_text, function, candidate_function)
+        if patched is None:
+            raise ValueError(
+                f"permuter base.c does not define {function}; cannot patch seed"
+            )
+        return _ensure_permuter_literal_defines(patched)
 
     def poll(self, handle: ProducerHandle) -> list[CandidateArtifact]:
         out: list[CandidateArtifact] = []
@@ -63,11 +86,54 @@ class PermuterJobProducer:
         return out
 
     def status(self, handle: ProducerHandle) -> ProducerStatus:
-        states = {self._client.status(j) for j in handle.job_ids}
+        states: set[str] = set()
+        details: list[str] = []
+        for jid in handle.job_ids:
+            state = self._client.status(jid)
+            if state.startswith("failed:"):
+                states.add("failed")
+                details.append(state.split(":", 1)[1].strip())
+            else:
+                states.add(state)
         if "running" in states: return ProducerStatus("running")
         if states == {"drained"}: return ProducerStatus("drained")
-        return ProducerStatus("failed", detail=",".join(sorted(states)))
+        detail = "; ".join(detail for detail in details if detail)
+        return ProducerStatus("failed", detail=detail or ",".join(sorted(states)))
 
     def stop(self, handle: ProducerHandle) -> None:
         for jid in handle.job_ids:
             self._client.stop(jid)
+
+
+def _trim_leading_preprocessor_lines(source: str) -> str:
+    lines = source.splitlines(keepends=True)
+    while lines and (not lines[0].strip() or lines[0].lstrip().startswith("#")):
+        lines.pop(0)
+    return "".join(lines)
+
+
+def _ensure_permuter_literal_defines(source: str) -> str:
+    missing: list[str] = []
+    for name, value in (("false", "0"), ("true", "1"), ("NULL", "0")):
+        if re.search(rf"\b{re.escape(name)}\b", source) and not re.search(
+            rf"(?m)^[ \t]*#\s*define\s+{re.escape(name)}\b", source
+        ):
+            missing.append(
+                f"#ifndef {name}\n"
+                f"#define {name} {value}\n"
+                f"#endif\n"
+            )
+    if not missing:
+        return source
+    block = "".join(missing)
+    bool_decl = re.search(r"(?m)^typedef\s+int\s+bool\s*;\s*$", source)
+    if bool_decl is None:
+        return block + source
+    insert_at = source.find("\n", bool_decl.end())
+    if insert_at < 0:
+        insert_at = bool_decl.end()
+        newline = "\n"
+    else:
+        insert_at += 1
+        newline = ""
+    return source[:insert_at] + newline + block + source[insert_at:]
