@@ -824,8 +824,12 @@ void un_80303FD4(HSD_GObj* arg0, struct un_80304138_objalloc_t* arg1,
             DevText_HideCursor(arg1->x4);
             DevText_SetScale(arg1->x4, 10.0f, 17.0f);
             un_804D6E48 = NULL;
-            for (i = 0; arg1->x8[i].x0 != 9; i++) {
-                un_80302E00(&arg1->x8[i], 4);
+            {
+                struct un_80304138_objalloc_t_x8* p = arg1->x8;
+                while (p->x0 != 9) {
+                    un_80302E00(p, 4);
+                    p++;
+                }
             }
         }
     }
