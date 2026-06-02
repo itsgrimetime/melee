@@ -1593,13 +1593,13 @@ void fn_8017A9B4(int slot)
 
     desc = &disp->player_img1[slot];
     desc->image_ptr = NULL;
-    lb_800121FC(desc, disp->state.dim_w1[lookup], disp->state.dim_h1[lookup],
-                5, 0);
+    lb_800121FC(desc, ((u16*) disp->state.dim_w1)[lookup],
+                ((u16*) disp->state.dim_h1)[lookup], 5, 0);
 
     desc = &disp->player_img2[slot];
     desc->image_ptr = NULL;
-    lb_800121FC(desc, disp->state.dim_w2[lookup], disp->state.dim_h2[lookup],
-                5, 0);
+    lb_800121FC(desc, ((u16*) disp->state.dim_w2)[lookup],
+                ((u16*) disp->state.dim_h2)[lookup], 5, 0);
 }
 
 extern u32 lbl_803D7018[];
