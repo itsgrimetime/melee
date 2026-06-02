@@ -26,7 +26,7 @@ import tempfile
 import time
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Callable, Iterator, Mapping, NoReturn, Optional
+from typing import Annotated, Any, Callable, Iterator, Mapping, NoReturn, Optional
 
 import typer
 
@@ -168,6 +168,9 @@ def _build_match_iter_first_target_vector(
     targets: list[dict] = []
     force_iter_first: list[int] = []
     force_phys: dict[str, int] = {}
+    force_phys_csv_parts: list[str] = []
+    force_phys_unscoped_csv_parts: list[str] = []
+    force_vector_parts: list[str] = []
     for result in results:
         if result.get("status") != "ok":
             continue
@@ -181,10 +184,21 @@ def _build_match_iter_first_target_vector(
         )
         force_iter_first.append(ig_idx)
         force_phys[str(ig_idx)] = reg
+        force_phys_unscoped = f"{ig_idx}:{reg}"
+        force_phys_unscoped_csv_parts.append(force_phys_unscoped)
+        if class_id is not None:
+            force_phys_entry = f"{class_id}:{ig_idx}:{reg}"
+            force_vector_entry = f"class{class_id}:ig{ig_idx}:phys={kind}{reg}"
+        else:
+            force_phys_entry = force_phys_unscoped
+            force_vector_entry = f"ig{ig_idx}:phys={kind}{reg}"
+        force_phys_csv_parts.append(force_phys_entry)
+        force_vector_parts.append(force_vector_entry)
         targets.append({
             "target_reg": reg,
             "target_reg_name": str(result.get("reg_name") or f"{kind}{reg}"),
             "kind": kind,
+            "class_id": class_id,
             "ig_idx": ig_idx,
             "current_reg": current_reg,
             "current_reg_name": (
@@ -194,15 +208,17 @@ def _build_match_iter_first_target_vector(
             "already_target": (
                 current_reg == reg if isinstance(current_reg, int) else None
             ),
+            "force_phys_entry": force_phys_entry,
+            "force_vector_entry": force_vector_entry,
         })
 
     return {
         "force_iter_first": force_iter_first,
         "force_iter_first_csv": ",".join(str(i) for i in force_iter_first),
         "force_phys": force_phys,
-        "force_phys_csv": ",".join(
-            f"{ig_idx}:{phys}" for ig_idx, phys in force_phys.items()
-        ),
+        "force_phys_unscoped_csv": ",".join(force_phys_unscoped_csv_parts),
+        "force_phys_csv": ",".join(force_phys_csv_parts),
+        "force_vector": ",".join(force_vector_parts),
         "targets": targets,
     }
 
@@ -7946,6 +7962,7 @@ def match_iter_first(
                     "force_iter_first_csv": target_vector["force_iter_first_csv"],
                     "force_phys": target_vector["force_phys"],
                     "force_phys_csv": target_vector["force_phys_csv"],
+                    "force_vector": target_vector["force_vector"],
                     "baseline_pct": baseline_pct,
                     "new_pct": new_pct,
                     "delta": delta,
@@ -8029,6 +8046,7 @@ def match_iter_first(
             "force_iter_first_csv": target_vector["force_iter_first_csv"],
             "force_phys": target_vector["force_phys"],
             "force_phys_csv": target_vector["force_phys_csv"],
+            "force_vector": target_vector["force_vector"],
         }
         if warning_message:
             payload["warning"] = warning_message
@@ -8100,6 +8118,11 @@ def match_iter_first(
             print(
                 f"Force-phys vector for scorer setup: "
                 f"{target_vector['force_phys_csv']}"
+            )
+        if target_vector["force_vector"]:
+            print(
+                f"Force-vector for diagnostic probes: "
+                f"{target_vector['force_vector']}"
             )
     if warning_message:
         print()
@@ -14759,6 +14782,123 @@ def _make_real_score_status(command: str, label: str) -> Callable[[str], None]:
     return _status
 
 
+_LIFETIME_LAYOUT_RANKING = (
+    "lifetime-layout pressure objective, final match percent tiebreaker"
+)
+
+
+def _score_lifetime_layout_objective(
+    delta,
+    *,
+    target_pairs: list[tuple[int, int]] | tuple[tuple[int, int], ...],
+    match_percent: float | None = None,
+    stack_slot_localizer: dict | None = None,
+) -> dict[str, Any]:
+    target_virtuals = {
+        virtual for pair in target_pairs for virtual in pair
+    }
+    target_spill_removed = tuple(
+        sorted(virtual for virtual in delta.spill_removed if virtual in target_virtuals)
+    )
+    frame_gain = (
+        -delta.frame_delta
+        if delta.frame_delta is not None and delta.frame_delta < 0
+        else 0
+    )
+
+    reasons: list[str] = []
+    regressions: list[str] = []
+    if frame_gain:
+        reasons.append("frame_reduced")
+    elif delta.frame_delta is not None and delta.frame_delta > 0:
+        regressions.append("frame_grew")
+    if target_spill_removed:
+        reasons.append("target_spill_removed")
+    elif delta.spill_removed:
+        reasons.append("spill_removed")
+    if delta.spill_added:
+        regressions.append("spill_added")
+    if delta.interference_removed:
+        reasons.append("interference_removed")
+    if delta.interference_added:
+        regressions.append("interference_added")
+    if delta.coalesce_added:
+        reasons.append("coalesce_added")
+    if delta.coalesce_removed:
+        regressions.append("coalesce_removed")
+
+    if reasons:
+        actionability = "improved"
+    elif regressions:
+        actionability = "regressed"
+    else:
+        actionability = "neutral"
+
+    stack_slot_mismatch_count = None
+    if stack_slot_localizer is not None:
+        raw_count = stack_slot_localizer.get("mismatch_count")
+        if isinstance(raw_count, int):
+            stack_slot_mismatch_count = raw_count
+
+    match_score = match_percent if match_percent is not None else -1.0
+    sort_key = (
+        float(actionability == "improved"),
+        float(len(target_spill_removed)),
+        float(len(delta.spill_removed)),
+        float(len(delta.interference_removed)),
+        float(len(delta.coalesce_added)),
+        float(frame_gain),
+        float(match_score),
+        -float(len(delta.spill_added)),
+        -float(len(delta.interference_added)),
+        -float(len(delta.coalesce_removed)),
+    )
+    return {
+        "target_pairs": [list(pair) for pair in target_pairs],
+        "frame_delta": delta.frame_delta,
+        "frame_before": delta.frame_before,
+        "frame_after": delta.frame_after,
+        "saved_removed": list(delta.saved_removed),
+        "saved_added": list(delta.saved_added),
+        "target_spill_removed": list(target_spill_removed),
+        "spill_removed": list(delta.spill_removed),
+        "spill_added": list(delta.spill_added),
+        "interference_removed_count": len(delta.interference_removed),
+        "interference_added_count": len(delta.interference_added),
+        "coalesce_added_count": len(delta.coalesce_added),
+        "coalesce_removed_count": len(delta.coalesce_removed),
+        "match_percent": match_percent,
+        "opcode_shape_preserved": None,
+        "stack_slot_mismatch_count": stack_slot_mismatch_count,
+        "actionability": actionability,
+        "actionability_reasons": reasons,
+        "actionability_regressions": regressions,
+        "sort_key": list(sort_key),
+    }
+
+
+def _rank_lifetime_layout_candidates(
+    variants: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    ranked = [dict(variant) for variant in variants]
+    ranked.sort(key=_lifetime_layout_variant_sort_key, reverse=True)
+    for idx, variant in enumerate(ranked, start=1):
+        variant["rank"] = idx
+    return ranked
+
+
+def _lifetime_layout_variant_sort_key(variant: dict[str, Any]) -> tuple[float, ...]:
+    if variant.get("status") != "ok":
+        return (-1.0,)
+    objective = variant.get("objective") or {}
+    sort_key = objective.get("sort_key")
+    if isinstance(sort_key, list):
+        return tuple(float(item) for item in sort_key)
+    if isinstance(sort_key, tuple):
+        return tuple(float(item) for item in sort_key)
+    return (0.0,)
+
+
 def _pressure_signature_from_pcdump_or_exit(
     signature_func: Callable[..., object],
     pcdump_text: str,
@@ -15989,6 +16129,12 @@ def mutate_lifetime_layout_cmd(
                     ) from exc
                 raise
             delta = compare_pressure_signatures(baseline, candidate_sig)
+            objective = _score_lifetime_layout_objective(
+                delta,
+                target_pairs=pair_list,
+                match_percent=real_score.match_percent,
+                stack_slot_localizer=real_score.stack_slot_localizer,
+            )
             variant = {
                 "label": label,
                 "operator": operator,
@@ -15996,16 +16142,20 @@ def mutate_lifetime_layout_cmd(
                 "path": str(path),
                 "signature": candidate_sig.to_dict(),
                 "delta": delta.to_dict(),
+                "objective": objective,
                 "_text": render_pressure_delta(label, operator, delta),
             }
             if real_score.match_percent is not None:
                 variant["final_match_percent"] = real_score.match_percent
+                variant["match_percent"] = real_score.match_percent
             if real_score.match_percent_error is not None:
                 variant["match_percent_error"] = real_score.match_percent_error
             if real_score.stack_slot_localizer is not None:
                 variant["stack_slot_localizer"] = real_score.stack_slot_localizer
             if real_score.stack_slot_error is not None:
                 variant["stack_slot_error"] = real_score.stack_slot_error
+            if path.suffix == ".c":
+                variant["source_retained"] = str(path)
             variants.append(variant)
             _emit_candidate_progress(
                 "lifetime-layout-candidate-ok",
@@ -16070,14 +16220,16 @@ def mutate_lifetime_layout_cmd(
             if not retain_generated:
                 shutil.rmtree(probe_dir, ignore_errors=True)
 
+    ranked_variants = _rank_lifetime_layout_candidates(variants)
     if json_out:
         payload = {
             "function": function,
+            "ranking": _LIFETIME_LAYOUT_RANKING,
             "baseline": baseline.to_dict(),
             "probes": [probe.to_dict() for probe in probes],
             "variants": [
                 {k: v for k, v in variant.items() if k != "_text"}
-                for variant in variants
+                for variant in ranked_variants
             ],
         }
         if generated_source_dir is not None:
@@ -16098,9 +16250,27 @@ def mutate_lifetime_layout_cmd(
     elif source_text is None:
         print("Probes: source unavailable; pass --source-file to generate them.")
     if variants:
+        print(f"ranking: {_LIFETIME_LAYOUT_RANKING}")
         print("Variants:")
-        for variant in variants:
+        for variant in ranked_variants:
             if variant["status"] == "ok":
+                print(
+                    f"{variant.get('rank', '?')}. "
+                    f"{variant['label']} [{variant['operator']}]"
+                )
+                objective = variant.get("objective") or {}
+                target_spill_removed = ",".join(
+                    "r" + str(v)
+                    for v in objective.get("target_spill_removed", [])
+                ) or "-"
+                print(
+                    "  objective: "
+                    f"actionability={objective.get('actionability', '?')} "
+                    f"frame_delta={objective.get('frame_delta')} "
+                    f"target_spill_removed={target_spill_removed} "
+                    f"interference_removed={objective.get('interference_removed_count', 0)} "
+                    f"coalesce_added={objective.get('coalesce_added_count', 0)}"
+                )
                 print(variant["_text"])
                 if variant.get("final_match_percent") is not None:
                     print(

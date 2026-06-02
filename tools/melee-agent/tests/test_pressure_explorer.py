@@ -737,6 +737,58 @@ def test_pointer_walk_loop_probes_control_tree_index_address_and_end() -> None:
     }
 
 
+def test_pointer_base_call_loop_probes_index_direct_tree_argument() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(Fighter* fp, FigaTree** tree)
+        {
+            int i;
+            for (i = 0; i < fp->dynamics_num; i++) {
+                ftCo_8009CB40(fp, i, true, tree);
+            }
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(source, "fn_80000000", max_probes=60)
+    by_label = {probe.label: probe for probe in probes}
+
+    indexed = by_label["pointer-base-call-indexed-0"]
+    assert "ftCo_8009CB40(fp, i, true, tree[i]);" in indexed.source_text
+
+    value = by_label["pointer-base-call-value-temp-0"]
+    assert "        FigaTree* ll_probe_value_0 = tree[i];\n" in value.source_text
+    assert "ftCo_8009CB40(fp, i, true, ll_probe_value_0);" in value.source_text
+
+    address = by_label["pointer-base-call-address-temp-0"]
+    assert "        FigaTree** ll_probe_addr_0 = tree + i;\n" in address.source_text
+    assert "ftCo_8009CB40(fp, i, true, *ll_probe_addr_0);" in address.source_text
+
+    induction = by_label["pointer-base-call-induction-0"]
+    assert "        FigaTree** ll_probe_iter_0 = tree;\n" in induction.source_text
+    assert (
+        "for (i = 0; i < fp->dynamics_num; i++, ll_probe_iter_0++)"
+        in induction.source_text
+    )
+    assert "ftCo_8009CB40(fp, i, true, *ll_probe_iter_0);" in induction.source_text
+
+    end_pointer = by_label["pointer-base-call-end-pointer-0"]
+    assert "        FigaTree** ll_probe_end_0 = tree + fp->dynamics_num;\n" in (
+        end_pointer.source_text
+    )
+    assert (
+        "for (i = 0; ll_probe_iter_0 < ll_probe_end_0; i++, ll_probe_iter_0++)"
+        in end_pointer.source_text
+    )
+
+    assert address.provenance == {
+        "kind": "pointer-base-call-loop",
+        "variant": "address-temp",
+        "counter": "i",
+        "base": "tree",
+        "index_expr": "i",
+        "bound": "fp->dynamics_num",
+    }
+
+
 def test_expression_shape_probe_removes_assignment_in_expression_temp() -> None:
     source = textwrap.dedent("""\
         void fn_80000000(Vec* prevPos, Vec* pos)
@@ -895,6 +947,8 @@ def test_lifetime_layout_cli_compares_candidate_pcdump_json(tmp_path: pathlib.Pa
             "--pcdump",
             str(baseline),
             "--candidate",
+            f"unchanged={baseline}",
+            "--candidate",
             f"temp-introduction={candidate}",
             "--pairs",
             "r37/r40",
@@ -905,12 +959,30 @@ def test_lifetime_layout_cli_compares_candidate_pcdump_json(tmp_path: pathlib.Pa
     assert result.exit_code == 0, result.stdout + result.stderr
     payload = json.loads(result.stdout)
     assert payload["function"] == "fn_80000000"
+    assert payload["ranking"] == (
+        "lifetime-layout pressure objective, final match percent tiebreaker"
+    )
     assert payload["baseline"]["frame_size"] == 56
     variant = payload["variants"][0]
+    assert variant["rank"] == 1
+    assert variant["label"] == "temp-introduction"
     assert variant["operator"] == "temp-introduction"
     assert variant["delta"]["frame_delta"] == -8
     assert variant["delta"]["spill_removed"] == [37]
     assert variant["delta"]["interference_removed"] == [[37, 40]]
+    assert variant["objective"]["frame_delta"] == -8
+    assert variant["objective"]["target_spill_removed"] == [37]
+    assert variant["objective"]["actionability"] == "improved"
+    assert variant["objective"]["actionability_reasons"] == [
+        "frame_reduced",
+        "target_spill_removed",
+        "interference_removed",
+    ]
+    assert variant["objective"]["match_percent"] is None
+    assert variant["objective"]["opcode_shape_preserved"] is None
+    assert payload["variants"][1]["rank"] == 2
+    assert payload["variants"][1]["label"] == "unchanged"
+    assert payload["variants"][1]["objective"]["actionability"] == "neutral"
 
 
 def test_lifetime_layout_cli_source_failure_keeps_source_path(
@@ -1181,8 +1253,13 @@ def test_lifetime_layout_cli_scores_source_with_match_percent_and_stack_slots(
 
     assert result.exit_code == 0, result.stdout + result.stderr
     variant = json.loads(result.stdout)["variants"][0]
+    assert variant["rank"] == 1
     assert variant["final_match_percent"] == 99.94
+    assert variant["match_percent"] == 99.94
+    assert variant["objective"]["match_percent"] == 99.94
+    assert variant["source_retained"] == str(source)
     assert variant["stack_slot_localizer"] == stack_localizer
+    assert variant["objective"]["stack_slot_mismatch_count"] == 1
 
 
 def test_score_source_candidate_rejects_new_helper_definition_without_build(

@@ -176,7 +176,19 @@ def test_match_iter_first_vector_keeps_full_target_order_and_current_regs() -> N
     assert vector["force_iter_first"] == [33, 40, 45]
     assert vector["force_iter_first_csv"] == "33,40,45"
     assert vector["force_phys"] == {"33": 31, "40": 30, "45": 29}
-    assert vector["force_phys_csv"] == "33:31,40:30,45:29"
+    assert vector["force_phys_unscoped_csv"] == "33:31,40:30,45:29"
+    assert vector["force_phys_csv"] == "0:33:31,0:40:30,0:45:29"
+    assert vector["force_vector"] == (
+        "class0:ig33:phys=r31,"
+        "class0:ig40:phys=r30,"
+        "class0:ig45:phys=r29"
+    )
+    assert [target["class_id"] for target in vector["targets"]] == [0, 0, 0]
+    assert [target["force_vector_entry"] for target in vector["targets"]] == [
+        "class0:ig33:phys=r31",
+        "class0:ig40:phys=r30",
+        "class0:ig45:phys=r29",
+    ]
     assert [target["current_reg_name"] for target in vector["targets"]] == [
         "r27", "r26", "r29",
     ]

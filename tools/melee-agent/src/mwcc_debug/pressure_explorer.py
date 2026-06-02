@@ -328,6 +328,8 @@ def generate_lifetime_layout_probes(
         _append_probe(probes, probe)
     for probe in _probe_pointer_walk_loop(source_text, body, body_start, function):
         _append_probe(probes, probe)
+    for probe in _probe_pointer_base_call_loop(source_text, body, body_start, function):
+        _append_probe(probes, probe)
     _append_probe(
         probes,
         _probe_temp_introduction(source_text, body, body_start, function),
@@ -1292,6 +1294,27 @@ class _PointerWalkLoopUse:
     value_type: str
 
 
+@dataclass(frozen=True)
+class _PointerBaseCallLoopUse:
+    loop_start: int
+    loop_close: int
+    loop_indent: str
+    counter: str
+    bound: str
+    condition_start: int
+    condition_end: int
+    increment_end: int
+    line_start: int
+    line_end: int
+    line: str
+    line_indent: str
+    base: str
+    base_start: int
+    base_end: int
+    base_type: str
+    value_type: str
+
+
 def _probe_indexed_pointer_loop(
     source: str,
     body: str,
@@ -1753,6 +1776,279 @@ def _find_pointer_walk_loop_use(
                 base_type=base_type,
                 value_type=value_type,
             )
+    return None
+
+
+def _probe_pointer_base_call_loop(
+    source: str,
+    body: str,
+    body_start: int,
+    function: str,
+) -> list[LifetimeLayoutProbe]:
+    use = _find_pointer_base_call_loop_use(source, body, body_start, function)
+    if use is None:
+        return []
+
+    probes: list[LifetimeLayoutProbe] = []
+    indexed_line = (
+        use.line[:use.base_start]
+        + f"{use.base}[{use.counter}]"
+        + use.line[use.base_end:]
+    )
+    probes.append(
+        LifetimeLayoutProbe(
+            label="pointer-base-call-indexed-0",
+            operator="pointer-base-call-loop",
+            description=(
+                f"Index pointer base `{use.base}` at `{use.counter}` at the "
+                "loop call site."
+            ),
+            source_text=_replace_body_slice(
+                source,
+                body_start,
+                use.line_start,
+                use.line_end,
+                indexed_line,
+            ),
+            provenance=_pointer_base_call_provenance(use, "indexed"),
+        )
+    )
+
+    value_line = (
+        use.line[:use.base_start]
+        + "ll_probe_value_0"
+        + use.line[use.base_end:]
+    )
+    probes.append(
+        LifetimeLayoutProbe(
+            label="pointer-base-call-value-temp-0",
+            operator="pointer-base-call-loop",
+            description=(
+                f"Name `{use.base}[{use.counter}]` before passing it to the "
+                "loop call."
+            ),
+            source_text=_replace_body_slice(
+                source,
+                body_start,
+                use.line_start,
+                use.line_end,
+                (
+                    f"{use.line_indent}{use.value_type} ll_probe_value_0 = "
+                    f"{use.base}[{use.counter}];\n"
+                    f"{value_line}"
+                ),
+            ),
+            provenance=_pointer_base_call_provenance(use, "value-temp"),
+        )
+    )
+
+    address_line = (
+        use.line[:use.base_start]
+        + "*ll_probe_addr_0"
+        + use.line[use.base_end:]
+    )
+    probes.append(
+        LifetimeLayoutProbe(
+            label="pointer-base-call-address-temp-0",
+            operator="pointer-base-call-loop",
+            description=(
+                f"Name computed pointer address `{use.base} + {use.counter}` "
+                "before the loop call."
+            ),
+            source_text=_replace_body_slice(
+                source,
+                body_start,
+                use.line_start,
+                use.line_end,
+                (
+                    f"{use.line_indent}{use.base_type} ll_probe_addr_0 = "
+                    f"{use.base} + {use.counter};\n"
+                    f"{address_line}"
+                ),
+            ),
+            provenance=_pointer_base_call_provenance(use, "address-temp"),
+        )
+    )
+
+    loop_text = source[body_start + use.loop_start:body_start + use.loop_close + 1]
+    probes.append(
+        LifetimeLayoutProbe(
+            label="pointer-base-call-induction-0",
+            operator="pointer-base-call-loop",
+            description=(
+                f"Carry `{use.base}` as an induction pointer alongside "
+                f"`{use.counter}` for the loop call."
+            ),
+            source_text=_replace_body_slice(
+                source,
+                body_start,
+                use.loop_start,
+                use.loop_close + 1,
+                _pointer_base_call_loop_replacement(
+                    use,
+                    loop_text,
+                    extra_decl=f"{use.base_type} ll_probe_iter_0 = {use.base};",
+                    condition=None,
+                    base_replacement="*ll_probe_iter_0",
+                ),
+            ),
+            provenance=_pointer_base_call_provenance(use, "induction"),
+        )
+    )
+
+    probes.append(
+        LifetimeLayoutProbe(
+            label="pointer-base-call-end-pointer-0",
+            operator="pointer-base-call-loop",
+            description=(
+                f"Precompute an end pointer for `{use.base}` and loop until "
+                "the pointer reaches it."
+            ),
+            source_text=_replace_body_slice(
+                source,
+                body_start,
+                use.loop_start,
+                use.loop_close + 1,
+                _pointer_base_call_loop_replacement(
+                    use,
+                    loop_text,
+                    extra_decl=(
+                        f"{use.base_type} ll_probe_iter_0 = {use.base};\n"
+                        f"{use.loop_indent}    {use.base_type} ll_probe_end_0 = "
+                        f"{use.base} + {use.bound};"
+                    ),
+                    condition="ll_probe_iter_0 < ll_probe_end_0",
+                    base_replacement="*ll_probe_iter_0",
+                ),
+            ),
+            provenance=_pointer_base_call_provenance(use, "end-pointer"),
+        )
+    )
+
+    return probes
+
+
+def _pointer_base_call_loop_replacement(
+    use: _PointerBaseCallLoopUse,
+    loop_text: str,
+    *,
+    extra_decl: str,
+    condition: str | None,
+    base_replacement: str,
+) -> str:
+    rel_line_start = use.line_start - use.loop_start
+    rel_line_end = use.line_end - use.loop_start
+    line = (
+        use.line[:use.base_start]
+        + base_replacement
+        + use.line[use.base_end:]
+    )
+    rewritten = loop_text[:rel_line_start] + line + loop_text[rel_line_end:]
+    rel_increment_end = use.increment_end - use.loop_start
+    rewritten = (
+        rewritten[:rel_increment_end]
+        + ", ll_probe_iter_0++"
+        + rewritten[rel_increment_end:]
+    )
+    if condition is not None:
+        rel_condition_start = use.condition_start - use.loop_start
+        rel_condition_end = use.condition_end - use.loop_start
+        rewritten = (
+            rewritten[:rel_condition_start]
+            + condition
+            + rewritten[rel_condition_end:]
+        )
+    return (
+        f"{use.loop_indent}{{\n"
+        f"{use.loop_indent}    {extra_decl}\n"
+        f"{_indent_block_lines(rewritten, use.loop_indent)}"
+        f"{use.loop_indent}}}"
+    )
+
+
+def _pointer_base_call_provenance(
+    use: _PointerBaseCallLoopUse,
+    variant: str,
+) -> dict[str, str]:
+    return {
+        "kind": "pointer-base-call-loop",
+        "variant": variant,
+        "counter": use.counter,
+        "base": use.base,
+        "index_expr": use.counter,
+        "bound": use.bound,
+    }
+
+
+def _find_pointer_base_call_loop_use(
+    source: str,
+    body: str,
+    body_start: int,
+    function: str,
+) -> _PointerBaseCallLoopUse | None:
+    scoped_types = _scoped_identifier_types(source, body, body_start, function)
+    pointer_bases = {
+        name: typ for name, typ in scoped_types.items()
+        if (
+            (value_type := _remove_pointer_from_type(typ)) is not None
+            and value_type.endswith("*")
+        )
+    }
+    if not pointer_bases:
+        return None
+    loop_re = re.compile(
+        r"(?m)^(?P<indent>[ \t]*)for\s*\(\s*"
+        r"(?P<counter>[A-Za-z_]\w*)\s*=\s*0\s*;\s*"
+        r"(?P<condition>(?P=counter)\s*<\s*(?P<bound>[^;]+?))\s*;\s*"
+        r"(?P<increment>(?:(?P=counter)\+\+|\+\+(?P=counter)|"
+        r"(?P=counter)\s*\+=\s*1))"
+        r"\s*\)\s*\{"
+    )
+    for loop in loop_re.finditer(body):
+        abs_open = body_start + loop.end() - 1
+        abs_close = _find_matching_brace(source, abs_open)
+        if abs_close is None or abs_close > body_start + len(body):
+            continue
+        loop_body_start = abs_open + 1
+        loop_body = source[loop_body_start:abs_close]
+        line_cursor = 0
+        for line in loop_body.splitlines(keepends=True):
+            line_start = loop_body_start - body_start + line_cursor
+            line_end = line_start + len(line)
+            line_cursor += len(line)
+            if not re.search(rf"\b{re.escape(loop.group('counter'))}\b", line):
+                continue
+            for base, base_type in pointer_bases.items():
+                match = re.search(rf"\b{re.escape(base)}\b", line)
+                if match is None:
+                    continue
+                cursor = match.end()
+                while cursor < len(line) and line[cursor] in " \t":
+                    cursor += 1
+                if cursor < len(line) and line[cursor] == "[":
+                    continue
+                value_type = _remove_pointer_from_type(base_type)
+                if value_type is None:
+                    continue
+                return _PointerBaseCallLoopUse(
+                    loop_start=loop.start(),
+                    loop_close=abs_close - body_start,
+                    loop_indent=loop.group("indent"),
+                    counter=loop.group("counter"),
+                    bound=loop.group("bound").strip(),
+                    condition_start=loop.start("condition"),
+                    condition_end=loop.end("condition"),
+                    increment_end=loop.end("increment"),
+                    line_start=line_start,
+                    line_end=line_end,
+                    line=line,
+                    line_indent=re.match(r"[ \t]*", line).group(0),
+                    base=base,
+                    base_start=match.start(),
+                    base_end=match.end(),
+                    base_type=base_type,
+                    value_type=value_type,
+                )
     return None
 
 
