@@ -196,6 +196,69 @@ class CommitValidator:
         except subprocess.CalledProcessError:
             return ""
 
+    def _get_staged_touched_new_lines(self, file_path: str) -> set[int]:
+        """Return new-file line numbers touched by the staged diff."""
+        diff = self._get_staged_diff(file_path)
+        touched: set[int] = set()
+        new_line: int | None = None
+
+        for line in diff.splitlines():
+            if line.startswith("@@"):
+                match = re.search(r"\+(\d+)(?:,(\d+))?", line)
+                new_line = int(match.group(1)) - 1 if match else None
+                continue
+            if new_line is None:
+                continue
+            if line.startswith("+") and not line.startswith("+++"):
+                new_line += 1
+                touched.add(new_line)
+            elif line.startswith("-") and not line.startswith("---"):
+                touched.add(max(new_line + 1, 1))
+            else:
+                new_line += 1
+
+        return touched
+
+    def _find_function_implementations(self, c_content: str) -> dict[str, dict[str, object]]:
+        """Find non-static function implementations and their line spans."""
+        func_pattern = re.compile(
+            r"^(?!static\s)(\w+(?:\s*\*)?)\s+(\w+)\s*\(([^)]*)\)\s*(?:\{|$)",
+            re.MULTILINE,
+        )
+        implementations: dict[str, dict[str, object]] = {}
+
+        for match in func_pattern.finditer(c_content):
+            return_type = match.group(1).strip()
+            func_name = match.group(2)
+            params = match.group(3).strip()
+
+            if func_name in ("main", "if", "while", "for", "switch"):
+                continue
+
+            start_line = c_content[: match.start()].count("\n") + 1
+            end_line = start_line
+            brace_pos = c_content.find("{", match.start())
+            if brace_pos != -1:
+                depth = 0
+                for idx in range(brace_pos, len(c_content)):
+                    char = c_content[idx]
+                    if char == "{":
+                        depth += 1
+                    elif char == "}":
+                        depth -= 1
+                        if depth == 0:
+                            end_line = c_content[: idx + 1].count("\n") + 1
+                            break
+
+            implementations[func_name] = {
+                "return_type": return_type,
+                "params": params,
+                "start_line": start_line,
+                "end_line": end_line,
+            }
+
+        return implementations
+
     def _load_compile_commands(self) -> dict[str, list[str]]:
         """Load compile_commands.json and return file -> args mapping."""
         if not COMPILE_COMMANDS.exists():
@@ -588,8 +651,18 @@ class CommitValidator:
         staged_files = self._get_staged_files()
         git_cwd = self.worktree_path if self.worktree_path else PROJECT_ROOT
 
-        # Find staged C files
-        c_files = [f for f in staged_files if f.endswith(".c") and "melee/src/" in f]
+        # Find staged C files. Hooks can run either from a parent repo that
+        # prefixes paths with melee/ or directly inside the melee checkout.
+        c_files = [
+            f
+            for f in staged_files
+            if f.endswith(".c")
+            and (
+                f.startswith("melee/src/")
+                or f.startswith("src/melee/")
+                or f.startswith("src/sysdolphin/")
+            )
+        ]
 
         if not c_files:
             return
@@ -609,21 +682,7 @@ class CommitValidator:
             except subprocess.CalledProcessError:
                 continue
 
-            # Find function implementations (non-static, at start of line)
-            # Pattern: type name(params) { or type name(params)\n{
-            func_pattern = re.compile(r"^(?!static\s)(\w+(?:\s*\*)?)\s+(\w+)\s*\(([^)]*)\)\s*(?:\{|$)", re.MULTILINE)
-
-            implementations = {}
-            for match in func_pattern.finditer(c_content):
-                return_type = match.group(1).strip()
-                func_name = match.group(2)
-                params = match.group(3).strip()
-
-                # Skip main and other special functions
-                if func_name in ("main", "if", "while", "for", "switch"):
-                    continue
-
-                implementations[func_name] = {"return_type": return_type, "params": params}
+            implementations = self._find_function_implementations(c_content)
 
             if not implementations:
                 continue
@@ -653,6 +712,10 @@ class CommitValidator:
             if not header_content:
                 continue
 
+            c_touched_lines = self._get_staged_touched_new_lines(c_file)
+            header_touched_lines = self._get_staged_touched_new_lines(header_file)
+            scope_to_touched = bool(c_touched_lines or header_touched_lines)
+
             # Check each implementation against header declaration
             for func_name, impl in implementations.items():
                 # Look for the function in the header
@@ -664,6 +727,15 @@ class CommitValidator:
 
                 match = decl_pattern.search(header_content)
                 if match:
+                    decl_line = header_content[: match.start()].count("\n") + 1
+                    impl_touched = any(
+                        int(impl["start_line"]) <= line <= int(impl["end_line"])
+                        for line in c_touched_lines
+                    )
+                    decl_touched = decl_line in header_touched_lines
+                    if scope_to_touched and not (impl_touched or decl_touched):
+                        continue
+
                     header_return = match.group(2)
                     header_params = match.group(3).strip()
 

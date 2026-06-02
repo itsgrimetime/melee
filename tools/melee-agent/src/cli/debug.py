@@ -4092,12 +4092,13 @@ def _reject_unsafe_force_coalesce(
             f"src/{unit}.c" if unit is not None else "<source.c>"
         )
         typer.echo(
-            "[debug dump local] force-coalesce preflight skipped: no fresh "
-            f"cached pcdump for {function}. Run `melee-agent debug dump local "
-            f"{dump_hint}` without force options first.",
+            "[debug dump local] refusing --force-coalesce: fresh cached pcdump "
+            f"required for {function}. Run `melee-agent debug dump local "
+            f"{dump_hint}` without force options first, then retry the scoped "
+            "force-coalesce.",
             err=True,
         )
-        return
+        raise typer.Exit(2)
 
     pcdump_text = pcdump_path.read_text()
     unsafe: list[tuple[int, int, list[str]]] = []

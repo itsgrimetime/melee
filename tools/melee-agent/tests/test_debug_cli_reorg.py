@@ -2670,6 +2670,36 @@ def test_force_coalesce_preflight_rejects_known_unsafe_pair(
     assert exc.value.exit_code == 2
 
 
+def test_force_coalesce_preflight_requires_fresh_cached_pcdump(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    src = tmp_path / "src" / "melee" / "ty" / "tylist.c"
+    src.parent.mkdir(parents=True)
+    src.write_text("void un_803147C4(void) {}\n")
+
+    def missing_fresh_pcdump(*args, **kwargs):
+        raise typer.Exit(4)
+
+    monkeypatch.setattr(debug_cli, "_resolve_pcdump_path", missing_fresh_pcdump)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/ty/tylist",
+    )
+
+    with pytest.raises(typer.Exit) as exc:
+        debug_cli._reject_unsafe_force_coalesce(
+            force_coalesce="36=39",
+            function="un_803147C4",
+            melee_root=tmp_path,
+        )
+
+    assert exc.value.exit_code == 2
+    assert "fresh cached pcdump required" in capsys.readouterr().err
+
+
 def test_force_coalesce_preflight_skips_self_uncoalesce_pair(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2694,6 +2724,17 @@ def test_force_coalesce_preflight_skips_self_uncoalesce_pair(
         melee_root=tmp_path,
     )
     assert called is False
+
+
+def test_force_coalesce_hook_normalizes_alias_roots_before_override() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    hook_source = repo_root / "tools" / "mwcc_debug" / "mwcc_debug.c"
+    text = hook_source.read_text()
+
+    assert "coalesce_find_root_guarded" in text
+    assert "detected alias cycle" in text
+    assert "alias[v] = (int16)target_root" in text
+    assert "alias[v] = (int16)r;" not in text
 
 
 def test_mutate_type_change_diff_prints_focused_preview(monkeypatch, tmp_path) -> None:

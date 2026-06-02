@@ -1086,6 +1086,7 @@ static void parse_iter_first_from_env(void)
 //     no operand uses).
 //   - Used purely for matching investigations / hypothesis testing.
 #define MAX_COALESCE_OVERRIDES 32
+#define COALESCE_ROOT_MAX_STEPS 4096
 
 static struct {
     int virt;
@@ -1149,6 +1150,60 @@ static void parse_coalesce_overrides_from_env(void)
         }
         // else: ignore whitespace and stray chars
     }
+}
+
+static int coalesce_find_root_guarded(
+    int16 *alias, int n_virtuals, int start, int *out_root)
+{
+    int cur;
+    int steps;
+    int max_steps;
+
+    if (alias == 0 || out_root == 0) return 0;
+    if (n_virtuals <= 0) return 0;
+    if (start < 0 || start >= n_virtuals) return 0;
+
+    cur = start;
+    max_steps = n_virtuals;
+    if (max_steps > COALESCE_ROOT_MAX_STEPS) {
+        max_steps = COALESCE_ROOT_MAX_STEPS;
+    }
+
+    for (steps = 0; steps < max_steps; steps++) {
+        int next = (int)alias[cur];
+        if (next < 0 || next >= n_virtuals) return 0;
+        if (next == cur) {
+            *out_root = cur;
+            return 1;
+        }
+        cur = next;
+    }
+
+    return 0;
+}
+
+static int coalesce_normalize_alias_roots_guarded(
+    int16 *alias, int n_virtuals)
+{
+    int i;
+    int ok = 1;
+
+    for (i = 0; i < n_virtuals; i++) {
+        int root;
+        if (!coalesce_find_root_guarded(alias, n_virtuals, i, &root)) {
+            ok = 0;
+            if (PCFILE && DEBUG_GUARD) {
+                debug_printf(
+                    "[COALESCE] detected alias cycle or out-of-range root "
+                    "while normalizing alias[%d]=%d\n",
+                    i, (int)alias[i]);
+            }
+            continue;
+        }
+        alias[i] = (int16)root;
+    }
+
+    return ok;
 }
 
 // colorgraph's prologue is 7 bytes (push ebx/esi/edi/ebp + sub esp, 8). Using
@@ -1791,6 +1846,12 @@ static void __cdecl hook_real_coalesce(unsigned int rclass, unsigned int n_virtu
         }
         return;
     }
+    if (!coalesce_normalize_alias_roots_guarded(alias, (int)n_virtuals)) {
+        if (PCFILE && DEBUG_GUARD) {
+            debug_printf("[COALESCE] exit (invalid alias forest)\n");
+        }
+        return;
+    }
 
     // Dump the natural coalesce result. Show only non-trivial bindings
     // (where root != self) to keep the output focused.
@@ -1813,7 +1874,7 @@ static void __cdecl hook_real_coalesce(unsigned int rclass, unsigned int n_virtu
         }
     }
 
-    // Apply FORCE_COALESCE overrides. Three filters guard each entry:
+    // Apply FORCE_COALESCE overrides. Four filters guard each entry:
     //   1. Function-scope filter — if MWCC_DEBUG_FORCE_COALESCE_FUNCTION is
     //      set, skip the entire override block when the current function
     //      (captured by hook_pclistblocks into g_current_function) doesn't
@@ -1821,7 +1882,11 @@ static void __cdecl hook_real_coalesce(unsigned int rclass, unsigned int n_virtu
     //      earlier or later function in the same TU.
     //   2. Bounds check — virt and root must be in [0, n_virtuals); pairs
     //      for the wrong register class are silently skipped.
-    //   3. (No-op if the user happens to specify virt == root.)
+    //   3. Root-normalization — the requested target must resolve to a
+    //      bounded union-find root before we write it into COALESCE_ALIAS.
+    //   4. Cycle check — virt=root is an explicit un-coalesce, but
+    //      virt=<descendant of virt> is skipped because it would create an
+    //      alias cycle that can hang the next MWCC phase.
     forced_count = 0;
     {
         int scope_skip = 0;
@@ -1849,15 +1914,55 @@ static void __cdecl hook_real_coalesce(unsigned int rclass, unsigned int n_virtu
             for (i = 0; i < g_n_coalesce_overrides; i++) {
                 int v = g_coalesce_overrides[i].virt;
                 int r = g_coalesce_overrides[i].root;
+                int current_root;
+                int target_root;
                 if (v < 0 || v >= (int)n_virtuals) continue;
                 if (r < 0 || r >= (int)n_virtuals) continue;
-                if (PCFILE && DEBUG_GUARD) {
-                    debug_printf("[FORCE_COALESCE] alias[%d]: %d -> %d\n",
-                                 v, (int)alias[v], r);
+                if (!coalesce_find_root_guarded(
+                        alias, (int)n_virtuals, v, &current_root)) {
+                    if (PCFILE && DEBUG_GUARD) {
+                        debug_printf(
+                            "[FORCE_COALESCE] skip alias[%d]: detected alias "
+                            "cycle or out-of-range current root\n",
+                            v);
+                    }
+                    continue;
                 }
-                alias[v] = (int16)r;
+                if (!coalesce_find_root_guarded(
+                        alias, (int)n_virtuals, r, &target_root)) {
+                    if (PCFILE && DEBUG_GUARD) {
+                        debug_printf(
+                            "[FORCE_COALESCE] skip alias[%d]=%d: detected "
+                            "alias cycle or out-of-range target root\n",
+                            v, r);
+                    }
+                    continue;
+                }
+                if (v == r) {
+                    target_root = v;
+                } else if (target_root == v) {
+                    if (PCFILE && DEBUG_GUARD) {
+                        debug_printf(
+                            "[FORCE_COALESCE] skip alias[%d]=%d: target "
+                            "resolves back to source root; detected alias "
+                            "cycle risk\n",
+                            v, r);
+                    }
+                    continue;
+                }
+                if (current_root == target_root && alias[v] == target_root) {
+                    continue;
+                }
+                if (PCFILE && DEBUG_GUARD) {
+                    debug_printf(
+                        "[FORCE_COALESCE] alias[%d]: %d -> %d "
+                        "(requested %d)\n",
+                        v, (int)alias[v], target_root, r);
+                }
+                alias[v] = (int16)target_root;
                 forced_count++;
             }
+            coalesce_normalize_alias_roots_guarded(alias, (int)n_virtuals);
         }
     }
 
