@@ -25,6 +25,7 @@ import pytest
 import toml
 from typer.testing import CliRunner
 
+import src.cli.debug as cli_debug
 from src.cli import app
 
 
@@ -288,6 +289,101 @@ def test_setup_missing_baseline_dump_fails_with_help(
     err = result.stderr or result.stdout
     assert "--baseline-dump is required" in err
     assert "debug dump local" in err
+
+
+def test_setup_can_bootstrap_and_auto_generate_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One command should prepare a targeted simplify-order campaign."""
+    function = "un_80303FD4"
+    perm_root = tmp_path / "decomp-permuter"
+    perm_root.mkdir()
+    melee_root = tmp_path / "melee"
+    src_path = melee_root / "src" / "melee" / "if" / "textlib.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text(f"void {function}(void) {{}}\n")
+    _stub_wibo_and_compiler(tmp_path, monkeypatch)
+
+    bootstrap_calls: list[tuple[str, Path]] = []
+    dump_calls: list[list[str]] = []
+
+    def fake_bootstrap_permuter_dir(
+        function_arg: str,
+        *,
+        perm_root: Path,
+        source_file,
+        preserve_macros: str,
+        force: bool,
+    ) -> dict:
+        bootstrap_calls.append((function_arg, perm_root))
+        perm_dir = perm_root / "nonmatchings" / function_arg
+        perm_dir.mkdir(parents=True)
+        (perm_dir / "base.c").write_text(f"void {function_arg}(void) {{}}\n")
+        (perm_dir / "target.o").write_bytes(b"\0" * 16)
+        csh = perm_dir / "compile.sh"
+        csh.write_text(SAMPLE_COMPILE_SH)
+        csh.chmod(0o755)
+        (perm_dir / "settings.toml").write_text(
+            f'func_name = "{function_arg}"\n'
+            'compiler_type = "mwcc"\n'
+        )
+        return {"function_dir": str(perm_dir)}
+
+    def fake_run(cmd, **kwargs):
+        cmd = [str(part) for part in cmd]
+        dump_calls.append(cmd)
+        out = Path(cmd[cmd.index("--output") + 1])
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(f"Starting function {function}\n")
+        return __import__("subprocess").CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(cli_debug, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        cli_debug,
+        "_find_unit_for_function",
+        lambda function_arg, root: "melee/if/textlib",
+    )
+    monkeypatch.setattr(
+        cli_debug,
+        "_bootstrap_permuter_dir",
+        fake_bootstrap_permuter_dir,
+        raising=False,
+    )
+    monkeypatch.setattr(cli_debug.subprocess, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug", "permute", "setup-simplify-order-scorer",
+            "--function", function,
+            "--want-first", "32",
+            "--force-phys", "32:25,35:26,36:27,41:30",
+            "--perm-root", str(perm_root),
+            "--bootstrap",
+            "--auto-baseline-dump",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + "\n" + (result.stderr or "")
+    assert bootstrap_calls == [(function, perm_root)]
+    assert len(dump_calls) == 1
+    assert dump_calls[0][:5] == [
+        os.sys.executable, "-m", "src.cli", "debug", "dump",
+    ]
+    assert "local" in dump_calls[0]
+    assert "--function" in dump_calls[0]
+    assert function in dump_calls[0]
+    baseline = perm_root / "nonmatchings" / function / "baseline.pcdump.txt"
+    assert str(baseline) in dump_calls[0]
+
+    target_yaml = (
+        perm_root / "nonmatchings" / function / "simplify_order_target.yaml"
+    ).read_text()
+    assert f"baseline_dump: {baseline}" in target_yaml
+    assert "simplify_order_target: [32]" in target_yaml
+    assert "force_phys:" in target_yaml
+    assert "32: 25" in target_yaml
+    assert "41: 30" in target_yaml
 
 
 def test_setup_baseline_missing_function_errors(

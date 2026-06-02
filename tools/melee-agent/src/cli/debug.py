@@ -3410,6 +3410,147 @@ def _resolve_decomp_permuter_root(requested_root: Path) -> Path:
     )
 
 
+def _bootstrap_permuter_dir(
+    function: str,
+    *,
+    perm_root: Path,
+    source_file: Optional[Path],
+    preserve_macros: str,
+    force: bool,
+) -> dict:
+    """Bootstrap a decomp-permuter function dir and return action metadata."""
+    from ..mwcc_debug.fix_perm_compile import fix_perm_dir
+    from ..mwcc_debug.permuter_config import build_spec, write_settings_toml
+
+    melee_root = DEFAULT_MELEE_ROOT
+    unit = _find_unit_for_function(function, melee_root)
+    if unit is None:
+        typer.echo(
+            f"could not find {function!r} in report.json. "
+            "Rebuild report.json and retry.",
+            err=True,
+        )
+        raise typer.Exit(2)
+    src_path = melee_root / "src" / f"{unit}.c"
+    if not src_path.exists():
+        typer.echo(f"source not found: {src_path}", err=True)
+        raise typer.Exit(2)
+    if not perm_root.exists():
+        typer.echo(f"--perm-root does not exist: {perm_root}", err=True)
+        raise typer.Exit(2)
+    import_py = perm_root / "import.py"
+    if not import_py.exists():
+        typer.echo(f"decomp-permuter import.py not found: {import_py}", err=True)
+        raise typer.Exit(2)
+
+    before_import_dirs = _permuter_import_dirs(
+        function,
+        perm_root=perm_root,
+        melee_root=melee_root,
+    )
+    asm_path = _tmp_asm_path_for_function(function)
+    extract_cmd = [
+        "melee-agent",
+        "extract",
+        "get",
+        function,
+        "--full",
+        "--output",
+        str(asm_path),
+    ]
+    extract_proc = subprocess.run(
+        extract_cmd,
+        cwd=melee_root,
+        capture_output=True,
+        text=True,
+    )
+    if extract_proc.returncode != 0:
+        typer.echo(extract_proc.stderr or extract_proc.stdout, err=True)
+        raise typer.Exit(extract_proc.returncode or 1)
+
+    python_bin = perm_root / ".venv" / "bin" / "python"
+    if not python_bin.exists():
+        python_bin = Path(sys.executable)
+    requested_source = source_file.expanduser() if source_file is not None else src_path
+    with _staged_permuter_import_source(src_path, source_file) as (
+        import_source,
+        source_staged,
+    ):
+        import_cmd = [
+            str(python_bin),
+            str(import_py),
+            str(import_source),
+            str(asm_path),
+            "--function",
+            function,
+        ]
+        if preserve_macros is not None:
+            import_cmd.extend(["--preserve-macros", preserve_macros])
+        import_proc = subprocess.run(
+            import_cmd,
+            cwd=perm_root,
+            capture_output=True,
+            text=True,
+        )
+    if import_proc.returncode != 0:
+        typer.echo(import_proc.stderr or import_proc.stdout, err=True)
+        raise typer.Exit(import_proc.returncode or 1)
+
+    imported_dir = _detect_new_permuter_import_dir(
+        function,
+        before_import_dirs,
+        perm_root=perm_root,
+        melee_root=melee_root,
+    )
+    if imported_dir is None:
+        imported_dir = _resolve_permuter_function_dir(
+            function,
+            perm_root=perm_root,
+            melee_root=melee_root,
+        )
+    fn_dir = _promote_permuter_import_dir(
+        imported_dir,
+        function=function,
+        perm_root=perm_root,
+        keep_existing_settings=not force,
+    )
+    if not fn_dir.exists():
+        typer.echo(
+            f"import.py completed but function dir was not found: {fn_dir}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    fix_result = fix_perm_dir(fn_dir)
+    settings_path = fn_dir / "settings.toml"
+    settings_action = "kept"
+    if force or not settings_path.exists():
+        write_settings_toml(build_spec(function, pattern=None), settings_path)
+        settings_action = "written"
+
+    return {
+        "function": function,
+        "unit": unit,
+        "source": str(requested_source),
+        "import_source": str(src_path),
+        "source_staged": source_staged,
+        "asm": str(asm_path),
+        "perm_root": str(perm_root),
+        "function_dir": str(fn_dir),
+        "extract_command": extract_cmd,
+        "import_command": import_cmd,
+        "fix_compile": {
+            "path": str(fix_result.path),
+            "action": fix_result.action,
+            "reason": fix_result.reason,
+        },
+        "settings": {
+            "path": str(settings_path),
+            "action": settings_action,
+        },
+    }
+
+
 def _permuter_import_hint(
     function: str,
     *,
@@ -3571,146 +3712,28 @@ def permute_bootstrap(
     ] = False,
 ) -> None:
     """Bootstrap a decomp-permuter function dir from the current repo source."""
-    from ..mwcc_debug.fix_perm_compile import fix_perm_dir
-    from ..mwcc_debug.permuter_config import build_spec, write_settings_toml
-
-    melee_root = DEFAULT_MELEE_ROOT
-    unit = _find_unit_for_function(function, melee_root)
-    if unit is None:
-        typer.echo(
-            f"could not find {function!r} in report.json. "
-            "Rebuild report.json and retry.",
-            err=True,
-        )
-        raise typer.Exit(2)
-    src_path = melee_root / "src" / f"{unit}.c"
-    if not src_path.exists():
-        typer.echo(f"source not found: {src_path}", err=True)
-        raise typer.Exit(2)
-    if not perm_root.exists():
-        typer.echo(f"--perm-root does not exist: {perm_root}", err=True)
-        raise typer.Exit(2)
-    import_py = perm_root / "import.py"
-    if not import_py.exists():
-        typer.echo(f"decomp-permuter import.py not found: {import_py}", err=True)
-        raise typer.Exit(2)
-
-    before_import_dirs = _permuter_import_dirs(
+    payload = _bootstrap_permuter_dir(
         function,
         perm_root=perm_root,
-        melee_root=melee_root,
+        source_file=source_file,
+        preserve_macros=preserve_macros,
+        force=force,
     )
-    asm_path = _tmp_asm_path_for_function(function)
-    extract_cmd = [
-        "melee-agent",
-        "extract",
-        "get",
-        function,
-        "--full",
-        "--output",
-        str(asm_path),
-    ]
-    extract_proc = subprocess.run(
-        extract_cmd,
-        cwd=melee_root,
-        capture_output=True,
-        text=True,
-    )
-    if extract_proc.returncode != 0:
-        typer.echo(extract_proc.stderr or extract_proc.stdout, err=True)
-        raise typer.Exit(extract_proc.returncode or 1)
-
-    python_bin = perm_root / ".venv" / "bin" / "python"
-    if not python_bin.exists():
-        python_bin = Path(sys.executable)
-    requested_source = source_file.expanduser() if source_file is not None else src_path
-    with _staged_permuter_import_source(src_path, source_file) as (
-        import_source,
-        source_staged,
-    ):
-        import_cmd = [
-            str(python_bin),
-            str(import_py),
-            str(import_source),
-            str(asm_path),
-            "--function",
-            function,
-        ]
-        if preserve_macros is not None:
-            import_cmd.extend(["--preserve-macros", preserve_macros])
-        import_proc = subprocess.run(
-            import_cmd,
-            cwd=perm_root,
-            capture_output=True,
-            text=True,
-        )
-    if import_proc.returncode != 0:
-        typer.echo(import_proc.stderr or import_proc.stdout, err=True)
-        raise typer.Exit(import_proc.returncode or 1)
-
-    imported_dir = _detect_new_permuter_import_dir(
-        function,
-        before_import_dirs,
-        perm_root=perm_root,
-        melee_root=melee_root,
-    )
-    if imported_dir is None:
-        imported_dir = _resolve_permuter_function_dir(
-            function,
-            perm_root=perm_root,
-            melee_root=melee_root,
-        )
-    fn_dir = _promote_permuter_import_dir(
-        imported_dir,
-        function=function,
-        perm_root=perm_root,
-        keep_existing_settings=not force,
-    )
-    if not fn_dir.exists():
-        typer.echo(
-            f"import.py completed but function dir was not found: {fn_dir}",
-            err=True,
-        )
-        raise typer.Exit(1)
-
-    fix_result = fix_perm_dir(fn_dir)
-    settings_path = fn_dir / "settings.toml"
-    settings_action = "kept"
-    if force or not settings_path.exists():
-        write_settings_toml(build_spec(function, pattern=None), settings_path)
-        settings_action = "written"
-
-    payload = {
-        "function": function,
-        "unit": unit,
-        "source": str(requested_source),
-        "import_source": str(src_path),
-        "source_staged": source_staged,
-        "asm": str(asm_path),
-        "perm_root": str(perm_root),
-        "function_dir": str(fn_dir),
-        "extract_command": extract_cmd,
-        "import_command": import_cmd,
-        "fix_compile": {
-            "path": str(fix_result.path),
-            "action": fix_result.action,
-            "reason": fix_result.reason,
-        },
-        "settings": {
-            "path": str(settings_path),
-            "action": settings_action,
-        },
-    }
     if json_out:
         print(json.dumps(payload, indent=2))
         return
 
+    src_path = Path(payload["import_source"])
+    fn_dir = Path(payload["function_dir"])
+    asm_path = Path(payload["asm"])
+    fix_result = payload["fix_compile"]
+    settings_action = payload["settings"]["action"]
     print(f"Wrote/imported {fn_dir}")
     print(f"  source: {src_path}")
     print(f"  target asm: {asm_path}")
     print(
-        f"  compile.sh: {fix_result.action}"
-        + (f" ({fix_result.reason})" if fix_result.reason else "")
+        f"  compile.sh: {fix_result['action']}"
+        + (f" ({fix_result['reason']})" if fix_result["reason"] else "")
     )
     print(f"  settings.toml: {settings_action}")
     print()
@@ -9220,6 +9243,23 @@ def setup_simplify_order_scorer(
                  "to permuter's [scorer].timeout_seconds).",
         ),
     ] = 5.0,
+    bootstrap: Annotated[
+        bool,
+        typer.Option(
+            "--bootstrap",
+            help="If the permuter function dir is missing, create it first "
+                 "with `debug permute bootstrap` semantics before wiring "
+                 "the simplify-order scorer.",
+        ),
+    ] = False,
+    auto_baseline_dump: Annotated[
+        bool,
+        typer.Option(
+            "--auto-baseline-dump",
+            help="Generate <perm-dir>/baseline.pcdump.txt with "
+                 "`debug dump local` when --baseline-dump is omitted.",
+        ),
+    ] = False,
     melee_agent_bin: Annotated[
         str,
         typer.Option(
@@ -9304,15 +9344,65 @@ def setup_simplify_order_scorer(
 
     perm_dir = perm_root / "nonmatchings" / function
     if not perm_dir.is_dir():
-        typer.echo(
-            f"perm dir not found: {perm_dir}\n"
-            f"Expected layout: <perm_root>/nonmatchings/<function>/\n"
-            f"Create one first with:\n"
-            f"  melee-agent extract get {function} --create-scratch\n"
-            f"or by running decomp-permuter's import.py.",
-            err=True,
-        )
-        raise typer.Exit(2)
+        if bootstrap:
+            _bootstrap_permuter_dir(
+                function,
+                perm_root=perm_root,
+                source_file=None,
+                preserve_macros=_PERMUTER_DEFAULT_PRESERVE_MACROS,
+                force=force,
+            )
+            perm_dir = perm_root / "nonmatchings" / function
+        if not perm_dir.is_dir():
+            typer.echo(
+                f"perm dir not found: {perm_dir}\n"
+                f"Expected layout: <perm_root>/nonmatchings/<function>/\n"
+                f"Create one first with:\n"
+                f"  melee-agent extract get {function} --create-scratch\n"
+                f"or by running decomp-permuter's import.py.",
+                err=True,
+            )
+            raise typer.Exit(2)
+
+    if baseline_dump is None and auto_baseline_dump:
+        unit = _find_unit_for_function(function, DEFAULT_MELEE_ROOT)
+        if unit is None:
+            typer.echo(
+                f"could not find {function!r} in report.json. "
+                "Rebuild report.json and retry.",
+                err=True,
+            )
+            raise typer.Exit(2)
+        src_path = DEFAULT_MELEE_ROOT / "src" / f"{unit}.c"
+        if not src_path.exists():
+            typer.echo(f"source not found: {src_path}", err=True)
+            raise typer.Exit(2)
+        baseline_dump = perm_dir / "baseline.pcdump.txt"
+        if force or not baseline_dump.exists():
+            baseline_dump.parent.mkdir(parents=True, exist_ok=True)
+            dump_cmd = [
+                sys.executable,
+                "-m",
+                "src.cli",
+                "debug",
+                "dump",
+                "local",
+                str(src_path),
+                "--output",
+                str(baseline_dump),
+                "--function",
+                function,
+                "--no-cache-sync",
+            ]
+            dump_proc = subprocess.run(
+                dump_cmd,
+                cwd=DEFAULT_MELEE_ROOT / "tools" / "melee-agent",
+                capture_output=True,
+                text=True,
+            )
+            if dump_proc.returncode != 0:
+                typer.echo(dump_proc.stderr or dump_proc.stdout, err=True)
+                raise typer.Exit(dump_proc.returncode or 1)
 
     if want_first is not None and want_late is not None:
         typer.echo(
