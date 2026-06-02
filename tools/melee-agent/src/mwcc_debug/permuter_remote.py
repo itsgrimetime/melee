@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import posixpath
 import re
 import shlex
@@ -598,6 +599,9 @@ def submit_job(
     mode: str = "stock",
     runner: Callable[..., CommandResult] = run_command,
     now: Callable[[], str] | None = None,
+    local_melee_root: Path | None = None,
+    local_perm_root: Path | None = None,
+    auto_repair: bool = True,
 ) -> RemoteJob:
     """Copy a local permuter directory to a remote target and start it in tmux."""
     if mode != "stock":
@@ -635,17 +639,32 @@ def submit_job(
     with _staged_remote_perm_dir(local_perm_dir, target=target) as submit_perm_dir:
         _validate_remote_ready_perm_dir(submit_perm_dir)
         preflight = doctor_target(target, local_perm_dir=submit_perm_dir, runner=runner)
+        if (
+            not preflight.ok
+            and auto_repair
+            and _preflight_can_be_repaired(preflight)
+        ):
+            try:
+                repair_target(
+                    target,
+                    local_melee_root=_resolve_auto_repair_melee_root(local_melee_root),
+                    local_perm_root=_resolve_auto_repair_perm_root(
+                        local_perm_root,
+                        local_perm_dir,
+                    ),
+                    runner=runner,
+                )
+            except RemoteJobError as exc:
+                raise RemoteJobError(
+                    f"remote preflight failed for {target.name}: "
+                    f"{_preflight_failure_detail(preflight)}; "
+                    f"auto-repair failed: {exc}"
+                ) from exc
+            preflight = doctor_target(target, local_perm_dir=submit_perm_dir, runner=runner)
         if not preflight.ok:
-            failed = [
-                f"{check.name}: {check.detail}"
-                for check in preflight.checks
-                if check.required and not check.ok
-            ]
-            detail = "; ".join(failed[:5])
-            if len(failed) > 5:
-                detail += f"; +{len(failed) - 5} more"
             raise RemoteJobError(
-                f"remote preflight failed for {target.name}: {detail}"
+                f"remote preflight failed for {target.name}: "
+                f"{_preflight_failure_detail(preflight)}"
             )
 
         job_path = write_job(job, jobs_dir=jobs_dir)
@@ -1187,6 +1206,72 @@ def _parse_scorer_command(command: str) -> ScorerCommandInfo:
 
 def _looks_persistent_root(path: str) -> bool:
     return bool(path) and not path.startswith("/tmp/codex-remote-perm-")
+
+
+def _preflight_failure_detail(report: DoctorReport) -> str:
+    failed = [
+        f"{check.name}: {check.detail}"
+        for check in report.checks
+        if check.required and not check.ok
+    ]
+    detail = "; ".join(failed[:5])
+    if len(failed) > 5:
+        detail += f"; +{len(failed) - 5} more"
+    return detail
+
+
+def _preflight_can_be_repaired(report: DoctorReport) -> bool:
+    repairable = {
+        "remote melee root",
+        "remote permuter root",
+        "remote permuter.py",
+        "remote MWCC compiler",
+        "remote Linux wibo",
+        "remote melee-agent",
+        "remote python3 toml",
+    }
+    return any(
+        check.required and not check.ok and check.name in repairable
+        for check in report.checks
+    )
+
+
+def _resolve_auto_repair_melee_root(local_melee_root: Path | None) -> Path:
+    if local_melee_root is not None:
+        return local_melee_root
+    inferred = _infer_local_root()
+    if inferred is None:
+        raise RemoteJobError("unable to infer local Melee root for remote auto-repair")
+    return inferred
+
+
+def _resolve_auto_repair_perm_root(
+    local_perm_root: Path | None,
+    local_perm_dir: Path,
+) -> Path:
+    if local_perm_root is not None:
+        return local_perm_root
+    env_root = os.environ.get("MELEE_DECOMP_PERMUTER_ROOT")
+    candidates: list[Path] = []
+    if env_root:
+        candidates.append(Path(env_root).expanduser())
+    if local_perm_dir.parent.name == "nonmatchings":
+        candidates.append(local_perm_dir.parent.parent)
+    candidates.extend([
+        Path("~/code/decomp-permuter").expanduser(),
+        Path("~/code/melee-harness/decomp-permuter").expanduser(),
+    ])
+    for candidate in candidates:
+        if _looks_like_decomp_permuter_root(candidate):
+            return candidate
+    raise RemoteJobError(
+        "unable to infer decomp-permuter checkout for remote auto-repair; "
+        "set MELEE_DECOMP_PERMUTER_ROOT or run remote doctor --repair"
+    )
+
+
+def _looks_like_decomp_permuter_root(path: Path) -> bool:
+    return (path / "permuter.py").is_file() and (path / "src").is_dir()
 
 
 def _parse_remote_doctor_output(

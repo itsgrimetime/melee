@@ -1339,6 +1339,88 @@ def test_submit_job_builds_rsync_ssh_tmux_and_metadata(tmp_path: Path) -> None:
     assert "permuter.log" in remote_script
 
 
+def test_submit_job_repairs_missing_remote_toml_before_start(
+    tmp_path: Path,
+) -> None:
+    local_melee = tmp_path / "melee"
+    local_perm_root = tmp_path / "decomp-permuter"
+    local_perm = local_perm_root / "nonmatchings" / "fn_80000000"
+    (local_melee / "tools" / "melee-agent").mkdir(parents=True)
+    (local_melee / "tools" / "mwcc_debug").mkdir(parents=True)
+    compiler_dir = local_melee / "build" / "compilers" / "GC" / "1.2.5n"
+    compiler_dir.mkdir(parents=True)
+    (compiler_dir / "mwcceppc_debug.exe").write_text("mwcc\n")
+    (compiler_dir / "MWDBG326.dll").write_text("dll\n")
+    local_perm.mkdir(parents=True)
+    (local_perm / "base.c").write_text("void fn_80000000(void) {}\n")
+    (local_perm / "compile.sh").write_text("#!/bin/sh\n")
+    (local_perm / "settings.toml").write_text(
+        'objdump_command = "melee-agent debug target dtk-objdump"\n'
+    )
+    (local_perm_root / "permuter.py").write_text("#!/usr/bin/env python3\n")
+    (local_perm_root / "src").mkdir()
+    jobs_dir = tmp_path / "jobs"
+    calls: list[list[str]] = []
+    doctor_calls = 0
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        nonlocal doctor_calls
+        calls.append(argv)
+        if argv and argv[0] == "ssh" and "remote-rsync" in argv[2]:
+            doctor_calls += 1
+            stdout = _remote_doctor_ok_stdout().replace(
+                "remote-python3-toml\tok\ttoml ok\n",
+                "",
+            )
+            if doctor_calls == 1:
+                stdout += (
+                    "remote-python3-toml\tfail\tTraceback (most recent call last):\n"
+                    + "ModuleNotFoundError: No module named 'toml'\n"
+                    + "remote-objdump-command\tok\tmelee-agent debug target dtk-objdump --help\n"
+                )
+            else:
+                stdout += (
+                    "remote-python3-toml\tok\ttoml ok\n"
+                    + "remote-objdump-command\tok\tmelee-agent debug target dtk-objdump --help\n"
+                )
+            return pr.CommandResult(returncode=0, stdout=stdout, stderr="")
+        return pr.CommandResult(returncode=0, stdout="", stderr="")
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    job = pr.submit_job(
+        function="fn_80000000",
+        target=target,
+        local_perm_dir=local_perm,
+        jobs_dir=jobs_dir,
+        runner=fake_runner,
+        now=lambda: "2026-05-25T14:30:12",
+        local_melee_root=local_melee,
+        local_perm_root=local_perm_root,
+    )
+
+    assert job.job_id == "fn_80000000-coder64-20260525-143012"
+    assert doctor_calls == 2
+    bootstrap_call = next(
+        call for call in calls
+        if call[0] == "ssh" and "pip install --user" in call[2]
+    )
+    assert "toml>=0.10.2" in bootstrap_call[2]
+    assert (jobs_dir / f"{job.job_id}.json").exists()
+
+
 def test_submit_job_stages_compile_sh_with_remote_wibo_and_melee_root(
     tmp_path: Path,
 ) -> None:

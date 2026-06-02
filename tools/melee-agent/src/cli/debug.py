@@ -3917,6 +3917,8 @@ def remote_submit(
             jobs_dir=permuter_remote.JOBS_DIR,
             threads=threads,
             mode=mode,
+            local_melee_root=melee_root,
+            local_perm_root=_resolve_decomp_permuter_root(perm_root),
         )
     except (permuter_remote.RemoteConfigError, permuter_remote.RemoteJobError) as exc:
         if (

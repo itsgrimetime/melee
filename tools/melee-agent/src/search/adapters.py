@@ -256,7 +256,12 @@ class RealRemotePermuterClient:
                 f"available: {list(targets)}"
             )
         target = targets[remote]
-        job = submit_job(function=function, target=target, local_perm_dir=base_dir)
+        job = submit_job(
+            function=function,
+            target=target,
+            local_perm_dir=base_dir,
+            local_melee_root=self._melee_root,
+        )
         self._jobs[job.job_id] = job
         return job.job_id
 
