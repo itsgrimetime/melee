@@ -2309,6 +2309,27 @@ def test_dump_local_force_phys_help_describes_class_filtering() -> None:
     assert "ignores the class prefix" not in normalized
 
 
+def test_dump_local_help_exposes_force_frame_from_diff() -> None:
+    result = runner.invoke(app, ["debug", "dump", "local", "--help"])
+
+    assert result.exit_code == 0
+    out = strip_ansi(result.stdout)
+    assert "--force-frame-from-diff" in out
+    assert "stack-frame immediates" in " ".join(out.split())
+
+    alias_result = runner.invoke(
+        app,
+        [
+            "debug",
+            "dump",
+            "local",
+            "--force-no-home-from-diff",
+            "--help",
+        ],
+    )
+    assert alias_result.exit_code == 0
+
+
 def test_dump_local_diff_holds_checkdiff_lock_while_staging_object(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2397,6 +2418,124 @@ def test_dump_local_diff_holds_checkdiff_lock_while_staging_object(
 
     assert result.exit_code == 0, result.stdout + result.stderr
     assert events == ["lock-enter", "checkdiff", "lock-exit"]
+    assert build_o.read_bytes() == b"original-object"
+
+
+def test_dump_local_force_frame_from_diff_patches_before_final_checkdiff(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from src.mwcc_debug import force_frame as force_frame_mod
+
+    melee_root = tmp_path / "melee"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text("void fn_80000000(void)\n{\n}\n")
+    compiler_dir = melee_root / "build" / "compilers" / "GC" / "1.2.5n"
+    compiler_dir.mkdir(parents=True)
+    (compiler_dir / "mwcceppc_debug.exe").write_text("")
+    wibo = tmp_path / "wibo"
+    wibo.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "pcdump = Path.cwd() / os.environ['MWCC_DEBUG_PCDUMP_PATH']\n"
+        "pcdump.write_text('Starting function fn_80000000\\n')\n"
+        "obj = Path(sys.argv[sys.argv.index('-o') + 1])\n"
+        "obj.write_bytes(b'compiled-object')\n"
+    )
+    wibo.chmod(0o755)
+    build_o = melee_root / "build" / "GALE01" / "src" / "melee" / "mn" / "sample.o"
+    build_o.parent.mkdir(parents=True)
+    build_o.write_bytes(b"original-object")
+
+    locked = False
+    events: list[str] = []
+
+    class FakeLock:
+        def __enter__(self):
+            nonlocal locked
+            locked = True
+            events.append("lock-enter")
+
+        def __exit__(self, exc_type, exc, tb):
+            nonlocal locked
+            events.append("lock-exit")
+            locked = False
+
+    def fake_run(cmd, **kwargs):
+        nonlocal locked
+        cmd_s = [str(part) for part in cmd]
+        if cmd_s[:2] != ["python", "tools/checkdiff.py"]:
+            raise AssertionError(f"unexpected command: {cmd_s}")
+        assert locked is True
+        assert kwargs["env"]["CHECKDIFF_NO_LOCK"] == "1"
+        assert kwargs["env"]["CHECKDIFF_NO_FINGERPRINT"] == "1"
+        if "--format" in cmd_s and cmd_s[cmd_s.index("--format") + 1] == "json":
+            assert kwargs["capture_output"] is True
+            assert kwargs["text"] is True
+            assert build_o.read_bytes() == b"compiled-object"
+            events.append("json-checkdiff")
+            return SimpleNamespace(
+                returncode=1,
+                stdout=json.dumps({"target_asm": [], "current_asm": []}),
+                stderr="",
+            )
+        assert build_o.read_bytes() == b"patched-object"
+        events.append("plain-checkdiff")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    def fake_derive(payload):
+        events.append("derive-plan")
+        return SimpleNamespace(is_empty=False)
+
+    def fake_apply(path, function, plan):
+        assert path == build_o
+        assert function == "fn_80000000"
+        events.append("apply-plan")
+        path.write_bytes(b"patched-object")
+        return SimpleNamespace(
+            byte_patches_applied=2,
+            symbol_renames=[("@146", "gm_804DAAB0")],
+        )
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+    monkeypatch.setattr(debug_cli, "_find_compiler_dir", lambda: compiler_dir)
+    monkeypatch.setattr(debug_cli, "_ninja_cflags_for_unit", lambda src_rel: ("", "mwcc"))
+    monkeypatch.setattr(debug_cli, "_find_unit_for_function", lambda function, root: "melee/mn/sample")
+    monkeypatch.setattr(debug_cli, "_cache_settle_seconds", lambda env=None: 0.0)
+    monkeypatch.setattr(debug_cli, "_acquire_checkdiff_repo_lock", lambda root: FakeLock())
+    monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(force_frame_mod, "derive_force_frame_patch_plan", fake_derive)
+    monkeypatch.setattr(force_frame_mod, "apply_force_frame_patch_plan", fake_apply)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "dump",
+            "local",
+            str(src_path),
+            "--diff",
+            "--force-frame-from-diff",
+            "--function",
+            "fn_80000000",
+            "--output",
+            str(tmp_path / "pcdump.out"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert events == [
+        "lock-enter",
+        "json-checkdiff",
+        "derive-plan",
+        "apply-plan",
+        "plain-checkdiff",
+        "lock-exit",
+    ]
     assert build_o.read_bytes() == b"original-object"
 
 

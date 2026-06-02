@@ -11574,6 +11574,21 @@ def pcdump_local(
                  "not given).",
         ),
     ] = False,
+    force_frame_from_diff: Annotated[
+        bool,
+        typer.Option(
+            "--force-frame-from-diff",
+            "--force-no-home-from-diff",
+            help=(
+                "DIAGNOSTIC-ONLY: with --diff, run a preflight checkdiff JSON "
+                "pass, derive stack-frame immediates and anonymous literal "
+                "renames from the paired current/target asm, patch the "
+                "temporary .o, then run the final checkdiff. Useful for "
+                "proving held-FP/no-home frame hypotheses without changing C "
+                "source."
+            ),
+        ),
+    ] = False,
     function: Annotated[
         Optional[str],
         typer.Option(
@@ -11643,6 +11658,14 @@ def pcdump_local(
         else src_rel
     )
     same_tu_probe = unit_src_rel != src_rel
+
+    if force_frame_from_diff and not diff:
+        typer.echo(
+            "--force-frame-from-diff requires --diff so it can derive patches "
+            "from paired checkdiff asm.",
+            err=True,
+        )
+        raise typer.Exit(2)
 
     # Resolve wibo
     wibo_path = wibo or _find_wibo()
@@ -12081,8 +12104,82 @@ def pcdump_local(
                                 or force_phys_fn
                                 or force_coalesce_fn
                                 or force_schedule_fn
+                                or force_frame_from_diff
                             )
                         )
+                        if force_frame_from_diff:
+                            try:
+                                force_json_proc = subprocess.run(
+                                    ["python", "tools/checkdiff.py", fn_to_diff,
+                                     "--format", "json", "--no-build"],
+                                    cwd=melee_root,
+                                    timeout=checkdiff_timeout,
+                                    env=checkdiff_env,
+                                    capture_output=True,
+                                    text=True,
+                                )
+                                if not force_json_proc.stdout.strip():
+                                    if force_json_proc.stderr:
+                                        print(force_json_proc.stderr, file=sys.stderr)
+                                    print(
+                                        "[force-frame] checkdiff JSON preflight "
+                                        "produced no JSON; final diff will run "
+                                        "without object patching.",
+                                        file=sys.stderr,
+                                    )
+                                else:
+                                    from ..mwcc_debug.force_frame import (
+                                        ForceFramePatchError,
+                                        apply_force_frame_patch_plan,
+                                        derive_force_frame_patch_plan,
+                                    )
+
+                                    payload = json.loads(force_json_proc.stdout)
+                                    plan = derive_force_frame_patch_plan(payload)
+                                    if plan.is_empty:
+                                        print(
+                                            "[force-frame] no eligible "
+                                            "stack-frame immediates or "
+                                            "anonymous literal renames found; "
+                                            "final diff will run unchanged.",
+                                            file=sys.stderr,
+                                        )
+                                    else:
+                                        result = apply_force_frame_patch_plan(
+                                            build_o,
+                                            fn_to_diff,
+                                            plan,
+                                        )
+                                        obj_target.write_bytes(build_o.read_bytes())
+                                        print(
+                                            "[force-frame] applied "
+                                            f"{result.byte_patches_applied} "
+                                            "stack-frame immediate patch(es) "
+                                            f"and {len(result.symbol_renames)} "
+                                            "literal rename(s) before final "
+                                            "checkdiff.",
+                                            file=sys.stderr,
+                                        )
+                            except subprocess.TimeoutExpired:
+                                print(
+                                    f"[force-frame] checkdiff JSON preflight "
+                                    f"timed out after {checkdiff_timeout:g}s; "
+                                    "final diff will run without object "
+                                    "patching.",
+                                    file=sys.stderr,
+                                )
+                            except (
+                                ForceFramePatchError,
+                                json.JSONDecodeError,
+                                OSError,
+                                subprocess.CalledProcessError,
+                            ) as exc:
+                                print(
+                                    f"[force-frame] could not apply "
+                                    f"diff-derived object patch: {exc}; final "
+                                    "diff will run unchanged.",
+                                    file=sys.stderr,
+                                )
                         try:
                             diff_proc = subprocess.run(
                                 ["python", "tools/checkdiff.py", fn_to_diff,
@@ -12127,6 +12224,7 @@ def pcdump_local(
         force_select_order, force_select_order_fn,
         force_coalesce, force_coalesce_fn,
         force_schedule, force_schedule_fn,
+        force_frame_from_diff,
     ])
     if any_forced:
         print(
