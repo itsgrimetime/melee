@@ -8,7 +8,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from src.search.cli import _compute_melee_root, search_app
+from src.search.cli import _compute_melee_root, _resolve_expected_obj, search_app
 
 
 def test_compute_melee_root_points_at_repo_root() -> None:
@@ -47,3 +47,55 @@ def test_search_run_dry(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.output
     assert "accounting" in result.stdout.lower()
+
+
+def test_expected_obj_resolves_original_obj_not_current_build_obj(tmp_path: Path) -> None:
+    """The scorer must compare candidates against the target/original object.
+
+    build/GALE01/src/<unit>.o is overwritten by the local candidate compile;
+    using it as the expected object makes the baseline score as an exact match.
+    """
+
+    report = tmp_path / "build" / "GALE01" / "report.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(
+        '{"units":[{"name":"main/melee/ft/ftdynamics",'
+        '"functions":[{"name":"ftCo_8009E7B4"}]}]}'
+    )
+
+    resolved = _resolve_expected_obj(
+        tmp_path,
+        "ftCo_8009E7B4",
+        "melee/ft/ftdynamics",
+    )
+
+    assert resolved == tmp_path / "build" / "GALE01" / "obj" / "melee" / "ft" / "ftdynamics.o"
+
+
+def test_expected_obj_fallback_uses_original_obj_tree(tmp_path: Path) -> None:
+    resolved = _resolve_expected_obj(
+        tmp_path,
+        "ftCo_8009E7B4",
+        "melee/ft/ftdynamics",
+    )
+
+    assert resolved == tmp_path / "build" / "GALE01" / "obj" / "melee" / "ft" / "ftdynamics.o"
+
+
+def test_search_run_missing_permuter_dir_degrades_to_local_only(tmp_path: Path) -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        search_app,
+        [
+            "run",
+            "--function", "ftCo_8009E7B4",
+            "--unit", "melee/ft/ftdynamics",
+            "--store", str(tmp_path / "store"),
+            "--max-iters", "1",
+            "--perm-root", str(tmp_path / "missing-decomp-permuter"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "remote producers disabled" in result.stderr
+    assert "function dir, compile.sh, settings.toml, target.o" in result.stderr

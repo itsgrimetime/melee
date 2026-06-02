@@ -529,6 +529,8 @@ def _probe_temp_introduction(
     temp = "ll_probe_temp_0"
     if declaration:
         indent, decl_lhs, lhs, expr = match.groups()
+        if _has_later_decl_before_statement(body, match.end(), indent):
+            return None
         replacement = (
             f"{indent}{decl_lhs};\n"
             f"{indent}int {temp} = {expr.strip()};\n"
@@ -548,6 +550,19 @@ def _probe_temp_introduction(
             source, body_start, match.start(), match.end(), replacement
         ),
     )
+
+
+def _has_later_decl_before_statement(body: str, start: int, indent: str) -> bool:
+    for line in body[start:].splitlines(keepends=True):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if not line.startswith(indent):
+            return False
+        if _LOCAL_DECL_RE.match(line):
+            return True
+        return False
+    return False
 
 
 def _probe_temp_removal(
@@ -815,6 +830,8 @@ def _probe_condition_nesting(
     absolute_open = body_start + match.end() - 1
     absolute_close = _find_matching_brace(source, absolute_open)
     if absolute_close is None or absolute_close > body_end:
+        return None
+    if source[absolute_close + 1:body_end].lstrip().startswith("else"):
         return None
     indent, left, right = match.groups()
     header = f"{indent}if ({left.strip()}) {{\n{indent}    if ({right.strip()}) {{"

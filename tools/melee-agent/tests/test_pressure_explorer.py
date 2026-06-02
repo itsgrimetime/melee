@@ -167,6 +167,44 @@ def test_generate_lifetime_layout_probes_includes_core_operator_families() -> No
     assert all("fn_80000000" in probe.source_text for probe in probes)
 
 
+def test_temp_introduction_skips_initialized_decl_before_later_decl() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(Fighter* fp, u8 (*arg1)[2])
+        {
+            if (fp->x594_b4) {
+                int idx = (*arg1)[1];
+                FigaTree*** trees = fp->ft_data->x2C->x10;
+                sink(idx, trees);
+            }
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(source, "fn_80000000", max_probes=30)
+
+    assert "temp-introduction" not in {probe.operator for probe in probes}
+
+
+def test_condition_nesting_skips_if_else_chain() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(int kind, int flag)
+        {
+            bool reload;
+            if (kind != 1 && kind != 2) {
+                reload = false;
+            } else if (!flag) {
+                reload = true;
+            }
+            if (reload) {
+                sink();
+            }
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(source, "fn_80000000", max_probes=30)
+
+    assert "condition-nesting" not in {probe.operator for probe in probes}
+
+
 def test_block_scope_probe_keeps_local_uses_inside_block() -> None:
     source = textwrap.dedent("""\
         void grGreatBay_801F5460(Ground_GObj* gobj)

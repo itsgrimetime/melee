@@ -1,5 +1,6 @@
 from __future__ import annotations
 import hashlib
+import shutil
 from pathlib import Path
 from typing import Callable
 from src.search.adapters import RemotePermuterClient
@@ -9,9 +10,13 @@ from src.search.types import SourceSpec, TargetSpec, Budget, ProducerHandle, Pro
 
 class PermuterJobProducer:
     def __init__(self, *, client: RemotePermuterClient, store: ArtifactStore,
-                 remotes: list[str], compile_spec_factory: Callable[[str], CompileSpec]):
+                 remotes: list[str], compile_spec_factory: Callable[[str], CompileSpec],
+                 permuter_base_dir: Path | None = None,
+                 base_source_text: str | None = None):
         self._client = client; self._store = store
         self._remotes = remotes; self._spec_factory = compile_spec_factory
+        self._permuter_base_dir = Path(permuter_base_dir) if permuter_base_dir else None
+        self._base_source_text = base_source_text
         self._seen: set[str] = set()
 
     def name(self) -> str: return "permuter-job"
@@ -19,7 +24,23 @@ class PermuterJobProducer:
     def start(self, base: SourceSpec, target: TargetSpec, budget: Budget) -> ProducerHandle:
         base_dir = self._store.root / "permuter-bases" / target.function
         base_dir.mkdir(parents=True, exist_ok=True)
-        (base_dir / "base.c").write_text(base.base_source)
+        base_source = (
+            self._base_source_text if self._base_source_text is not None else base.base_source
+        )
+        if base_source:
+            (base_dir / "base.c").write_text(base_source)
+        elif self._permuter_base_dir is not None and (self._permuter_base_dir / "base.c").exists():
+            shutil.copy2(self._permuter_base_dir / "base.c", base_dir / "base.c")
+        else:
+            (base_dir / "base.c").write_text(base_source)
+        if self._permuter_base_dir is not None:
+            for name in ("compile.sh", "settings.toml", "target.o"):
+                src = self._permuter_base_dir / name
+                if not src.exists():
+                    raise FileNotFoundError(
+                        f"remote permuter base missing required {name}: {src}"
+                    )
+                shutil.copy2(src, base_dir / name)
         job_ids = [self._client.submit(base_dir, target.function, r) for r in self._remotes]
         return ProducerHandle(self.name(), job_ids)
 

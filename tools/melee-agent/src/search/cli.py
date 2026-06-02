@@ -61,6 +61,13 @@ def run_cmd(
         bool,
         typer.Option("--dry-compiler", help="Use stub compiler (no real mwcc/wibo). For testing."),
     ] = False,
+    perm_root: Annotated[
+        Path,
+        typer.Option(
+            "--perm-root",
+            help="Root of decomp-permuter clone used for remote producer jobs.",
+        ),
+    ] = Path("~/code/decomp-permuter"),
 ) -> None:
     """Run a search over source variants for FUNCTION in UNIT.
 
@@ -87,6 +94,7 @@ def run_cmd(
     from src.search.types import Budget, TargetSpec
 
     melee_root = _compute_melee_root()
+    perm_root = perm_root.expanduser()
 
     # Resolve expected .o path from report.json
     expected_obj = _resolve_expected_obj(melee_root, function, unit)
@@ -117,6 +125,15 @@ def run_cmd(
         else:
             typer.echo(f"[warn] seed file not found: {seed_path}", err=True)
     source = SeedListSource(seed_texts)
+    base_seed_text = seed_texts[0] if seed_texts else None
+    permuter_dir = _resolve_permuter_function_dir(
+        function,
+        perm_root=perm_root,
+        melee_root=melee_root,
+    )
+    remote_ready_permuter_dir = (
+        permuter_dir if _is_remote_ready_permuter_dir(permuter_dir) else None
+    )
 
     # Persist the compile manifest ONCE (content-addressed: same inputs ->
     # same path). The artifact's manifest_path will point here, and
@@ -136,6 +153,14 @@ def run_cmd(
         cflags=cflags_list,
         include_paths=include_paths,
         base_context_blob=base_context_blob,
+        permuter_compile_sh=(
+            remote_ready_permuter_dir / "compile.sh"
+            if remote_ready_permuter_dir is not None else None
+        ),
+        permuter_settings_toml=(
+            remote_ready_permuter_dir / "settings.toml"
+            if remote_ready_permuter_dir is not None else None
+        ),
     )
     manifest_path = artifact_store.put_manifest(manifest)
 
@@ -164,15 +189,26 @@ def run_cmd(
     if not no_remote and not dry_compiler:
         remote_list = [r.strip() for r in remotes.split(",") if r.strip()]
         if remote_list:
-            client = RealRemotePermuterClient(melee_root)
-            producers.append(
-                PermuterJobProducer(
-                    client=client,
-                    store=artifact_store,
-                    remotes=remote_list,
-                    compile_spec_factory=lambda text: _make_spec("permuter-job"),
+            if remote_ready_permuter_dir is None:
+                missing = _missing_remote_ready_permuter_files(permuter_dir)
+                typer.echo(
+                    "[warn] remote producers disabled: "
+                    f"{permuter_dir} is missing {', '.join(missing)}. "
+                    "Run `melee-agent debug permute bootstrap` first.",
+                    err=True,
                 )
-            )
+            else:
+                client = RealRemotePermuterClient(melee_root)
+                producers.append(
+                    PermuterJobProducer(
+                        client=client,
+                        store=artifact_store,
+                        remotes=remote_list,
+                        compile_spec_factory=lambda text: _make_spec("permuter-job"),
+                        permuter_base_dir=remote_ready_permuter_dir,
+                        base_source_text=base_seed_text,
+                    )
+                )
 
     # Pipeline + scheduler
     pipeline = ByteScorePipeline(scorer)
@@ -237,9 +273,38 @@ def _resolve_expected_obj(melee_root: Path, function: str, unit: str) -> Path:
                 for fn in u.get("functions", []):
                     if fn.get("name") == function:
                         unit_name = u.get("name", "").removeprefix("main/")
-                        return melee_root / "build" / "GALE01" / "src" / f"{unit_name}.o"
+                        return melee_root / "build" / "GALE01" / "obj" / f"{unit_name}.o"
         except Exception:
             pass
 
     # Fallback: derive from unit arg
-    return melee_root / "build" / "GALE01" / "src" / f"{unit}.o"
+    return melee_root / "build" / "GALE01" / "obj" / f"{unit}.o"
+
+
+def _resolve_permuter_function_dir(
+    function: str,
+    *,
+    perm_root: Path,
+    melee_root: Path,
+) -> Path:
+    """Find a decomp-permuter function dir in either supported location."""
+    perm_dir = perm_root / "nonmatchings" / function
+    if perm_dir.exists():
+        return perm_dir
+
+    worktree_dir = melee_root / "nonmatchings" / function
+    if worktree_dir.exists():
+        return worktree_dir
+
+    return perm_dir
+
+
+def _missing_remote_ready_permuter_files(perm_dir: Path) -> list[str]:
+    required = ["compile.sh", "settings.toml", "target.o"]
+    if not perm_dir.is_dir():
+        return ["function dir", *required]
+    return [name for name in required if not (perm_dir / name).exists()]
+
+
+def _is_remote_ready_permuter_dir(perm_dir: Path) -> bool:
+    return not _missing_remote_ready_permuter_files(perm_dir)

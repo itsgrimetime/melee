@@ -7,6 +7,7 @@ manifest that read_manifest can recover (cflags + include paths + command).
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -55,6 +56,7 @@ def test_dry_run_persists_roundtrippable_manifest(tmp_path: Path) -> None:
             "--store", str(store_dir),
             "--max-iters", "1",
             "--dry-compiler",
+            "--perm-root", str(tmp_path / "missing-decomp-permuter"),
         ],
     )
     assert result.exit_code == 0, result.output
@@ -94,3 +96,38 @@ def test_dry_run_persists_roundtrippable_manifest(tmp_path: Path) -> None:
     assert hashlib.sha256(
         recovered.base_context_blob.read_text().encode()
     ).hexdigest()[:32] == expected_base_hash
+
+
+def test_cli_manifest_records_complete_permuter_function_dir(tmp_path: Path) -> None:
+    store_dir = tmp_path / "store"
+    seed = tmp_path / "seed.c"
+    seed.write_text("int MatToQuat(){return 0;}")
+    perm_root = tmp_path / "decomp-permuter"
+    perm_dir = perm_root / "nonmatchings" / "MatToQuat"
+    perm_dir.mkdir(parents=True)
+    (perm_dir / "compile.sh").write_text("#!/bin/sh\nexit 0\n")
+    (perm_dir / "settings.toml").write_text("base = \"base.c\"\n")
+    (perm_dir / "target.o").write_bytes(b"target")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        search_app,
+        [
+            "run",
+            "--function", "MatToQuat",
+            "--unit", "quatlib",
+            "--no-remote",
+            "--seed", str(seed),
+            "--store", str(store_dir),
+            "--max-iters", "1",
+            "--dry-compiler",
+            "--perm-root", str(perm_root),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    manifests = list((store_dir / "manifests").glob("*.json"))
+    assert len(manifests) == 1
+    payload = json.loads(manifests[0].read_text())
+    assert payload["permuter_compile_sh"] == str(perm_dir / "compile.sh")
+    assert payload["permuter_settings_toml"] == str(perm_dir / "settings.toml")
