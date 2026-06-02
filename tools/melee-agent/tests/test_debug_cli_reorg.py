@@ -2374,6 +2374,69 @@ def test_dump_local_watchdog_uses_process_tree_killer(
     assert "no compile progress" in result.stderr
 
 
+def test_dump_local_watchdog_treats_pcdump_growth_as_progress(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text("void fn_80000000(void)\n{\n}\n")
+    compiler_dir = melee_root / "build" / "compilers" / "GC" / "1.2.5n"
+    compiler_dir.mkdir(parents=True)
+    (compiler_dir / "mwcceppc_debug.exe").write_text("")
+    wibo = tmp_path / "wibo"
+    wibo.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os\n"
+        "import time\n"
+        "from pathlib import Path\n"
+        "pcdump = Path.cwd() / os.environ['MWCC_DEBUG_PCDUMP_PATH']\n"
+        "with pcdump.open('w') as f:\n"
+        "    for i in range(8):\n"
+        "        f.write('Starting function fn_80000000\\n')\n"
+        "        f.write(f'chunk {i}\\n')\n"
+        "        f.flush()\n"
+        "        time.sleep(0.2)\n"
+    )
+    wibo.chmod(0o755)
+    killed: list[int] = []
+
+    def fake_kill_tree(proc_handle: subprocess.Popen[str]) -> None:
+        killed.append(proc_handle.pid)
+        os.killpg(os.getpgid(proc_handle.pid), 9)
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+    monkeypatch.setattr(debug_cli, "_find_compiler_dir", lambda: compiler_dir)
+    monkeypatch.setattr(debug_cli, "_ninja_cflags_for_unit", lambda src_rel: ("", "mwcc"))
+    monkeypatch.setattr(debug_cli, "_cache_settle_seconds", lambda env=None: 0.0)
+    monkeypatch.setattr(debug_cli, "_kill_debug_dump_local_process_tree", fake_kill_tree)
+    monkeypatch.setenv("MWCC_DEBUG_HANG_TIMEOUT", "0.1")
+    output = tmp_path / "pcdump.out"
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "dump",
+            "local",
+            str(src_path),
+            "--function",
+            "fn_80000000",
+            "--output",
+            str(output),
+            "--no-cache-sync",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert killed == []
+    assert "no compile progress" not in result.stderr
+    assert output.exists()
+    assert "chunk 7" in output.read_text()
+
+
 def test_inspect_explain_schedule_reads_pcdump(
     tmp_path: Path,
 ) -> None:

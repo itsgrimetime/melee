@@ -11315,10 +11315,11 @@ def pcdump_local(
     # Use Popen + a no-progress watchdog so a hung wibo (UE state from a
     # force-coalesce edge case, etc.) doesn't burn the full default
     # timeout. The watchdog kills the subprocess group after N seconds
-    # without any progress on stdout/stderr. We can't actually kill a
-    # wibo that's pinned in UE state (immune to SIGKILL — only a host
-    # reboot reaps it), but we can stop OUR process from waiting and
-    # stop accumulating new compile attempts behind it.
+    # without any progress on stdout/stderr or the pcdump output file.
+    # We can't actually kill a wibo that's pinned in UE state (immune
+    # to SIGKILL — only a host reboot reaps it), but we can stop OUR
+    # process from waiting and stop accumulating new compile attempts
+    # behind it.
     WATCHDOG_TIMEOUT_S = float(os.environ.get(
         "MWCC_DEBUG_HANG_TIMEOUT", "45"))
     try:
@@ -11339,6 +11340,7 @@ def pcdump_local(
     out_buf: list[str] = []
     err_buf: list[str] = []
     last_progress = time.time()
+    pcdump_progress_marker: tuple[int, int] | None = None
     killed_by_watchdog = False
     while True:
         if proc_handle.poll() is not None:
@@ -11361,6 +11363,15 @@ def pcdump_local(
                 else:
                     err_buf.append(chunk)
                 last_progress = time.time()
+        try:
+            pcdump_stat = pcdump_path.stat()
+        except OSError:
+            pcdump_marker = None
+        else:
+            pcdump_marker = (pcdump_stat.st_size, pcdump_stat.st_mtime_ns)
+        if pcdump_marker is not None and pcdump_marker != pcdump_progress_marker:
+            pcdump_progress_marker = pcdump_marker
+            last_progress = time.time()
         if time.time() - last_progress > WATCHDOG_TIMEOUT_S:
             killed_by_watchdog = True
             _kill_debug_dump_local_process_tree(proc_handle)
