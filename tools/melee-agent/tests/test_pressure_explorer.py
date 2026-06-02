@@ -612,6 +612,52 @@ def test_loop_counter_hoist_reuses_existing_function_scope_counter() -> None:
     assert probe.to_dict()["provenance"]["placement"] == "reuse:function-scope"
 
 
+def test_sibling_loop_counter_hoist_reuses_safe_call_loops_and_skips_indexed_loop() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(Fighter* fp, FigaTree*** trees, u8* order, int anim_id)
+        {
+            int total;
+
+            if (anim_id != -1) {
+                s32 i;
+                for (i = 0; i < fp->dynamics_num; i++) {
+                    ftCo_8009CB40(fp, i, 0, 0);
+                }
+            }
+            if (fp->x594_b4) {
+                s32 i;
+                for (i = 0; i < fp->dynamics_num; i++) {
+                    FigaTree* tree = trees[order[i]][0];
+                    ftCo_8009CB40(fp, i, 1, tree);
+                }
+            }
+            if (anim_id == -1) {
+                s32 i;
+                for (i = 0; i < fp->dynamics_num; i++) {
+                    ftCo_8009CB40(fp, i, 0, 0);
+                }
+            }
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(source, "fn_80000000", max_probes=60)
+    by_label = {probe.label: probe for probe in probes}
+
+    probe = by_label["sibling-loop-counter-hoist-function-0"]
+    assert "    int i;\n    int total;" in probe.source_text
+    assert probe.source_text.count("        s32 i;\n") == 1
+    assert "if (fp->x594_b4) {\n        s32 i;" in probe.source_text
+    assert probe.source_text.count("for (i = 0; i < fp->dynamics_num; i++)") == 3
+    assert probe.to_dict()["provenance"] == {
+        "kind": "sibling-loop-counter-hoist",
+        "counter": "i",
+        "call_symbol": "ftCo_8009CB40",
+        "loop_count": 2,
+        "placement": "function-scope",
+        "skipped_indexed_loops": 1,
+    }
+
+
 def test_loop_counter_type_probe_targets_loop_counter_not_first_local() -> None:
     source = textwrap.dedent("""\
         void fn_80000000(void)

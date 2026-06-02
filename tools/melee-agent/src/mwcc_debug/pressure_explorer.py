@@ -1076,6 +1076,16 @@ class _DeclLine:
     depth: int
 
 
+@dataclass(frozen=True)
+class _SiblingCounterLoop:
+    decl: _DeclLine
+    loop_start: int
+    loop_close: int
+    shape: str
+    call_symbol: str
+    indexed_by_counter: bool
+
+
 def _probe_declaration_order(
     source: str,
     body: str,
@@ -1091,6 +1101,7 @@ def _probe_declaration_order(
     )
     if hoist_before is not None:
         probes.append(hoist_before)
+    probes.extend(_probe_sibling_loop_counter_hoists(source, body, body_start, function))
     adjacent = _probe_adjacent_decl_swap(source, body, body_start, function)
     if adjacent is not None:
         probes.append(adjacent)
@@ -2303,6 +2314,195 @@ def _probe_nested_loop_counter_hoist(
         return before_probe, after_probe
 
     return None, None
+
+
+def _probe_sibling_loop_counter_hoists(
+    source: str,
+    body: str,
+    body_start: int,
+    function: str,
+) -> list[LifetimeLayoutProbe]:
+    decls = _iter_decl_lines(body)
+    top_decls = [decl for decl in decls if decl.depth == 0]
+    if not top_decls:
+        return []
+
+    loops: list[_SiblingCounterLoop] = []
+    for decl in decls:
+        if decl.depth == 0 or decl.type_name not in {"int", "s32"}:
+            continue
+        use = _sibling_counter_loop_for_decl(source, body, body_start, decl)
+        if use is not None:
+            loops.append(use)
+
+    grouped: dict[tuple[str, str, str, int], list[_SiblingCounterLoop]] = {}
+    for use in loops:
+        key = (use.decl.name, use.shape, use.call_symbol, use.decl.depth)
+        grouped.setdefault(key, []).append(use)
+
+    probes: list[LifetimeLayoutProbe] = []
+    for (counter, _shape, call_symbol, _depth), group in grouped.items():
+        safe = [use for use in group if not use.indexed_by_counter]
+        if len(safe) < 2:
+            continue
+        selected = safe[:2]
+        existing_top_counter = next(
+            (
+                decl
+                for decl in top_decls
+                if decl.name == counter and decl.type_name == "int"
+            ),
+            None,
+        )
+        conflicting_top_counter = next(
+            (
+                decl
+                for decl in top_decls
+                if decl.name == counter and decl.type_name != "int"
+            ),
+            None,
+        )
+        if existing_top_counter is not None:
+            insert_offset = existing_top_counter.start
+            insert_text = ""
+            placement = "reuse:function-scope"
+        elif conflicting_top_counter is not None:
+            continue
+        else:
+            before_target = _preferred_loop_counter_insert_target(top_decls)
+            insert_offset = before_target.start
+            insert_text = f"{before_target.indent}int {counter};\n"
+            placement = "function-scope"
+
+        selected_decls = [use.decl for use in selected]
+        mutated_body = _remove_decls_and_insert_text(
+            body,
+            selected_decls,
+            insert_offset,
+            insert_text,
+        )
+        probes.append(
+            LifetimeLayoutProbe(
+                label=f"sibling-loop-counter-hoist-function-{len(probes)}",
+                operator="loop-counter-hoist",
+                description=(
+                    f"Hoist loop counter `{counter}` for {len(selected)} "
+                    f"sibling `{call_symbol}` call loops while leaving indexed "
+                    "loops block-local."
+                ),
+                source_text=(
+                    source[:body_start]
+                    + mutated_body
+                    + source[body_start + len(body):]
+                ),
+                provenance={
+                    "kind": "sibling-loop-counter-hoist",
+                    "counter": counter,
+                    "call_symbol": call_symbol,
+                    "loop_count": len(selected),
+                    "placement": placement,
+                    "skipped_indexed_loops": sum(
+                        1 for use in group if use.indexed_by_counter
+                    ),
+                },
+            )
+        )
+        break
+    return probes
+
+
+def _sibling_counter_loop_for_decl(
+    source: str,
+    body: str,
+    body_start: int,
+    decl: _DeclLine,
+) -> _SiblingCounterLoop | None:
+    loop_start = _find_loop_using_counter(body, decl.end, decl.name)
+    if loop_start is None:
+        return None
+    if body[decl.end:loop_start].strip():
+        return None
+
+    counter = re.escape(decl.name)
+    loop_re = re.compile(
+        rf"[ \t]*for\s*\(\s*{counter}\s*=\s*(?P<init>[^;]+);\s*"
+        rf"{counter}\s*<\s*(?P<bound>[^;]+);\s*"
+        rf"(?:{counter}\s*\+\+|\+\+\s*{counter})\s*\)\s*\{{",
+        re.MULTILINE,
+    )
+    match = loop_re.match(body, loop_start)
+    if match is None:
+        return None
+
+    loop_open = match.end() - 1
+    loop_close_abs = _find_matching_brace(source, body_start + loop_open)
+    if loop_close_abs is None:
+        return None
+    loop_close = loop_close_abs - body_start
+    if loop_close > len(body):
+        return None
+
+    loop_body = body[loop_open + 1:loop_close]
+    call_symbol = _first_counter_call_symbol(loop_body, decl.name)
+    if call_symbol is None:
+        return None
+    return _SiblingCounterLoop(
+        decl=decl,
+        loop_start=loop_start,
+        loop_close=loop_close,
+        shape=(
+            f"init={_normalize_loop_shape_expr(match.group('init'))};"
+            f"bound={_normalize_loop_shape_expr(match.group('bound'))};"
+            "inc=++"
+        ),
+        call_symbol=call_symbol,
+        indexed_by_counter=_loop_indexes_with_counter(loop_body, decl.name),
+    )
+
+
+def _first_counter_call_symbol(loop_body: str, counter: str) -> str | None:
+    call_re = re.compile(
+        r"\b(?P<call>[A-Za-z_]\w*)\s*\((?P<args>[^;{}]*)\)\s*;"
+    )
+    for match in call_re.finditer(loop_body):
+        if re.search(rf"\b{re.escape(counter)}\b", match.group("args")):
+            return match.group("call")
+    return None
+
+
+def _loop_indexes_with_counter(loop_body: str, counter: str) -> bool:
+    return (
+        re.search(
+            rf"\[[^\]\n;]*\b{re.escape(counter)}\b[^\]\n;]*\]",
+            loop_body,
+        )
+        is not None
+    )
+
+
+def _normalize_loop_shape_expr(expr: str) -> str:
+    return re.sub(r"\s+", "", expr.strip())
+
+
+def _remove_decls_and_insert_text(
+    body: str,
+    decls: list[_DeclLine],
+    insert_offset: int,
+    insert_text: str,
+) -> str:
+    mutated = body
+    adjusted_insert = insert_offset
+    for decl in sorted(decls, key=lambda item: item.start, reverse=True):
+        mutated = mutated[:decl.start] + mutated[decl.end:]
+        if decl.start < adjusted_insert:
+            adjusted_insert -= decl.end - decl.start
+    if insert_text:
+        mutated = (
+            mutated[:adjusted_insert]
+            + insert_text
+            + mutated[adjusted_insert:]
+        )
+    return mutated
 
 
 def _preferred_loop_counter_insert_target(decls: list[_DeclLine]) -> _DeclLine:
