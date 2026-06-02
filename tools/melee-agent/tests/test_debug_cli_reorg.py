@@ -548,6 +548,67 @@ def test_debug_permute_bootstrap_imports_and_writes_settings(
     assert "func_name = \"fn_80000000\"" in (fn_dir / "settings.toml").read_text()
 
 
+def test_debug_permute_bootstrap_recovers_melee_root_from_install_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    perm_root = tmp_path / "decomp-permuter"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text("void fn_80000000(void) {}\n")
+    report = melee_root / "build" / "GALE01" / "report.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(
+        '{"units":[{"name":"main/melee/mn/sample",'
+        '"functions":[{"name":"fn_80000000"}]}]}'
+    )
+    package_debug = melee_root / "tools" / "melee-agent" / "src" / "cli" / "debug.py"
+    package_debug.parent.mkdir(parents=True)
+    package_debug.write_text("# package path marker\n")
+    perm_root.mkdir()
+    (perm_root / "import.py").write_text("")
+
+    calls: list[tuple[list[str], Path | None]] = []
+
+    def fake_run(argv, *, cwd=None, capture_output=False, text=False, check=False, **kwargs):
+        argv = [str(part) for part in argv]
+        calls.append((argv, cwd))
+        if "import.py" in argv[1]:
+            assert argv[2] == str(src_path)
+            fn_dir = perm_root / "nonmatchings" / "fn_80000000"
+            fn_dir.mkdir(parents=True)
+            (fn_dir / "base.c").write_text(src_path.read_text())
+            (fn_dir / "compile.sh").write_text("#!/usr/bin/env bash\n")
+            (fn_dir / "target.o").write_bytes(b"target")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", perm_root)
+    monkeypatch.setattr(debug_cli, "__file__", str(package_debug))
+    monkeypatch.chdir(perm_root)
+    monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "bootstrap",
+            "-f",
+            "fn_80000000",
+            "--perm-root",
+            str(perm_root),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["unit"] == "melee/mn/sample"
+    assert payload["import_source"] == str(src_path)
+    assert calls[0][1] == melee_root
+
+
 def test_debug_permute_bootstrap_source_file_stages_variant_and_restores(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3215,6 +3276,52 @@ def test_ceiling_requires_fresh_cached_pcdump_before_verdict(monkeypatch, tmp_pa
 
     assert result.exit_code == 4
     assert "PROBABLE CEILING" not in strip_ansi(result.stdout)
+
+
+def test_inspect_stuck_suppresses_decl_orders_when_no_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path
+    report_dir = melee_root / "build" / "GALE01"
+    report_dir.mkdir(parents=True)
+    (report_dir / "report.json").write_text(
+        json.dumps(
+            {
+                "units": [
+                    {
+                        "name": "main/melee/mn/sample",
+                        "functions": [
+                            {
+                                "name": "fn_80000000",
+                                "fuzzy_match_percent": 99.45,
+                            },
+                        ],
+                    }
+                ]
+            }
+        )
+    )
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text(
+        "void fn_80000000(void)\n{\n    int only;\n    only = 0;\n}\n"
+    )
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(debug_cli, "audit_function_casts", lambda source, function: [])
+
+    result = runner.invoke(
+        app,
+        ["debug", "inspect", "stuck", "fn_80000000", "--no-pcdump", "--json"],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    next_steps = "\n".join(payload["next_steps"])
+    assert "debug mutate decl-orders fn_80000000" not in next_steps
+    assert "no decl-order candidates" in next_steps
+    assert "debug inspect diagnose fn_80000000 --skip-decl-orders" in next_steps
 
 
 def test_tier3_search_no_improvement_is_successful_search_outcome(

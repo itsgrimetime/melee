@@ -3243,6 +3243,77 @@ def _find_unit_for_function(func_name: str, melee_root: Path) -> Optional[str]:
     return None
 
 
+def _looks_like_melee_root(path: Path) -> bool:
+    return (path / "src" / "melee").is_dir()
+
+
+def _package_melee_root() -> Path:
+    # src/cli/debug.py -> src -> melee-agent -> tools -> repo root
+    return Path(__file__).resolve().parents[4]
+
+
+def _source_file_melee_root(source_file: Path) -> Path | None:
+    source_file = source_file.expanduser()
+    source_path = source_file.resolve() if source_file.exists() else source_file
+    for candidate in (source_path.parent, *source_path.parents):
+        if _looks_like_melee_root(candidate):
+            return candidate
+    return None
+
+
+def _bootstrap_melee_root_candidates(source_file: Path | None) -> list[Path]:
+    candidates: list[Path] = []
+    env_root = os.environ.get("MELEE_ROOT")
+    if env_root:
+        candidates.append(Path(env_root).expanduser())
+    if source_file is not None:
+        source_root = _source_file_melee_root(source_file)
+        if source_root is not None:
+            candidates.append(source_root)
+    candidates.append(DEFAULT_MELEE_ROOT)
+    cwd = Path.cwd()
+    candidates.extend([cwd, *cwd.parents])
+    candidates.append(_package_melee_root())
+
+    deduped: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.expanduser().resolve()
+        except OSError:
+            resolved = candidate.expanduser()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        deduped.append(resolved)
+    return deduped
+
+
+def _resolve_bootstrap_melee_root(
+    function: str,
+    *,
+    source_file: Path | None,
+    melee_root: Path | None,
+) -> Path:
+    if melee_root is not None:
+        root = melee_root.expanduser().resolve()
+        if not _looks_like_melee_root(root):
+            raise typer.BadParameter(
+                f"--melee-root does not look like a Melee checkout: {root}"
+            )
+        return root
+
+    fallback: Path | None = None
+    for candidate in _bootstrap_melee_root_candidates(source_file):
+        if not _looks_like_melee_root(candidate):
+            continue
+        if fallback is None:
+            fallback = candidate
+        if _find_unit_for_function(function, candidate) is not None:
+            return candidate
+    return fallback or DEFAULT_MELEE_ROOT
+
+
 def _tmp_asm_path_for_function(function: str) -> Path:
     safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", function)
     return Path("/tmp") / f"{safe_name}.s"
@@ -3415,6 +3486,7 @@ def _bootstrap_permuter_dir(
     *,
     perm_root: Path,
     source_file: Optional[Path],
+    melee_root: Optional[Path],
     preserve_macros: str,
     force: bool,
 ) -> dict:
@@ -3422,7 +3494,11 @@ def _bootstrap_permuter_dir(
     from ..mwcc_debug.fix_perm_compile import fix_perm_dir
     from ..mwcc_debug.permuter_config import build_spec, write_settings_toml
 
-    melee_root = DEFAULT_MELEE_ROOT
+    melee_root = _resolve_bootstrap_melee_root(
+        function,
+        source_file=source_file,
+        melee_root=melee_root,
+    )
     unit = _find_unit_for_function(function, melee_root)
     if unit is None:
         typer.echo(
@@ -3692,6 +3768,16 @@ def permute_bootstrap(
             ),
         ),
     ] = None,
+    melee_root: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--melee-root",
+            help=(
+                "Melee repo/worktree root. Defaults to MELEE_ROOT, "
+                "--source-file/cwd detection, then the installed package repo."
+            ),
+        ),
+    ] = None,
     preserve_macros: Annotated[
         str,
         typer.Option(
@@ -3716,6 +3802,7 @@ def permute_bootstrap(
         function,
         perm_root=perm_root,
         source_file=source_file,
+        melee_root=melee_root,
         preserve_macros=preserve_macros,
         force=force,
     )
@@ -6927,6 +7014,62 @@ def triage_perm(
               f"{target_path}. Verify with `git diff`.")
 
 
+def _decl_order_candidate_count(names: list[str], strategy: str) -> int:
+    n = len(names)
+    if strategy in ("promote", "demote", "swap"):
+        return max(0, n - 1)
+    if strategy == "all":
+        return max(0, 3 * (n - 1))
+    if strategy == "full":
+        import math
+        return max(0, math.factorial(n) - 1)
+    return 0
+
+
+def _default_decl_order_search_summary(
+    source: str,
+    function: str,
+    *,
+    strategy: str = "promote",
+) -> dict:
+    scope_map = get_decl_names_by_scope(source, function)
+    selected_scope = (function,)
+    selected_scope_reason = "function-top"
+    if not scope_map.get(selected_scope):
+        nested_scopes = [
+            scope_path
+            for scope_path, names in scope_map.items()
+            if scope_path != (function,) and len(names) >= 2
+        ]
+        if not nested_scopes:
+            nested_scopes = [
+                scope_path
+                for scope_path in scope_map
+                if scope_path != (function,)
+            ]
+        if nested_scopes:
+            selected_scope = nested_scopes[0]
+            selected_scope_reason = "auto-nested"
+
+    names = scope_map.get(selected_scope) or []
+    available_scopes = [
+        {
+            "scope": "/".join(scope_path),
+            "declaration_count": len(scope_names),
+            "is_top_level": scope_path == (function,),
+        }
+        for scope_path, scope_names in scope_map.items()
+    ]
+    return {
+        "scope": "/".join(selected_scope),
+        "selected_scope_reason": selected_scope_reason,
+        "declaration_count": len(names),
+        "candidate_count": _decl_order_candidate_count(names, strategy),
+        "strategy": strategy,
+        "available_scopes": available_scopes,
+    }
+
+
 @inspect_app.command(name="stuck")
 def stuck(
     function: Annotated[
@@ -7017,6 +7160,11 @@ def stuck(
     coloring_summary: Optional[dict] = None
     guidance_issues: list = []
     cast_warnings_high_med: list = []
+    src_text = src.read_text() if src.exists() else ""
+    decl_order_summary = (
+        _default_decl_order_search_summary(src_text, function)
+        if src_text else None
+    )
 
     if pcdump_path is not None:
         text = pcdump_path.read_text()
@@ -7057,8 +7205,7 @@ def stuck(
             } for s in suggestions]
 
     # Cast warnings — always run regardless of pcdump
-    if src.exists():
-        src_text = src.read_text()
+    if src_text:
         warnings = audit_function_casts(src_text, function)
         cast_warnings_high_med = [{
             "line": w.line,
@@ -7097,15 +7244,36 @@ def stuck(
             "[medium] Try patterns from `debug util patterns` that "
             "address SPILLED markers: widen-u8-to-u32, alias-split."
         )
-    next_steps.append(
-        "[~70sec] Run `melee-agent debug mutate decl-orders " + function +
-        "` — brute-forces the decl-order search space, finds 1-line wins."
-    )
-    next_steps.append(
-        "[minutes] Run `melee-agent debug inspect diagnose " + function +
-        "` for a current-tooling diagnosis (combines force-phys evidence + "
-        "mutate decl-orders without treating the function as impossible)."
-    )
+    if (
+        decl_order_summary is not None
+        and decl_order_summary["candidate_count"] > 0
+    ):
+        next_steps.append(
+            "[~70sec] Run `melee-agent debug mutate decl-orders " + function +
+            "` — brute-forces the decl-order search space, finds 1-line wins."
+        )
+        next_steps.append(
+            "[minutes] Run `melee-agent debug inspect diagnose " + function +
+            "` for a current-tooling diagnosis (combines force-phys evidence + "
+            "mutate decl-orders without treating the function as impossible)."
+        )
+    elif decl_order_summary is not None:
+        next_steps.append(
+            "[free] Skip direct decl-order search: no decl-order candidates "
+            f"in default scope {decl_order_summary['scope']} "
+            f"({decl_order_summary['declaration_count']} declaration"
+            f"{'' if decl_order_summary['declaration_count'] == 1 else 's'})."
+        )
+        next_steps.append(
+            "[minutes] Run `melee-agent debug inspect diagnose " + function +
+            " --skip-decl-orders` for the remaining current-tooling diagnosis."
+        )
+    else:
+        next_steps.append(
+            "[minutes] Run `melee-agent debug inspect diagnose " + function +
+            " --skip-decl-orders` for a current-tooling diagnosis; source was "
+            "unavailable for decl-order preflight."
+        )
     next_steps.append(
         "[hours] As a last resort, run decomp-permuter and feed its "
         "outputs through `debug permute triage`."
@@ -7114,6 +7282,7 @@ def stuck(
     digest["coloring_summary"] = coloring_summary
     digest["guidance_issues"] = guidance_issues
     digest["cast_warnings"] = cast_warnings_high_med
+    digest["decl_order_summary"] = decl_order_summary
     digest["hsd_assert_strings"] = [
         {"sym": s, "string": v} for s, v in hsd_assert_strings
     ]
@@ -9351,6 +9520,7 @@ def setup_simplify_order_scorer(
                 function,
                 perm_root=perm_root,
                 source_file=None,
+                melee_root=None,
                 preserve_macros=_PERMUTER_DEFAULT_PRESERVE_MACROS,
                 force=force,
             )
