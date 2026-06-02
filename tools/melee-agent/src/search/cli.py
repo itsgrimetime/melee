@@ -182,6 +182,29 @@ def _meta_to_dict(meta) -> dict:
     return dict(meta)
 
 
+def _byte_score_from_obj(obj) -> int | None:
+    score = (
+        obj.get("byte_score")
+        if isinstance(obj, dict)
+        else getattr(obj, "byte_score", None)
+    )
+    return score if isinstance(score, int) and not isinstance(score, bool) else None
+
+
+def _best_byte_score(result) -> int | None:
+    """Report byte-best independently from directed-best ordering."""
+    scores: list[int] = []
+    for art in result.best:
+        score = _byte_score_from_obj(art)
+        if score is not None:
+            scores.append(score)
+    for meta in getattr(result, "directed_telemetry", []) or []:
+        score = _byte_score_from_obj(meta)
+        if score is not None:
+            scores.append(score)
+    return min(scores) if scores else None
+
+
 def _derive_directed_force_phys_from_diff(
     *,
     function: str,
@@ -678,7 +701,7 @@ def run_cmd(
         "function": function,
         "unit": unit,
         "matched": result.matched is not None,
-        "best_byte_score": best_art.byte_score if best_art else None,
+        "best_byte_score": _best_byte_score(result),
         "best_directed_score": best_directed_score,
         "candidates": len(result.best),
         "accounting": result.accounting,

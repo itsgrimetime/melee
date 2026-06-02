@@ -243,6 +243,141 @@ def test_search_run_directed_force_phys_emits_objective_and_telemetry(
     assert objective_sources == [seed.read_text()]
 
 
+def test_search_run_directed_summary_reports_byte_best_not_directed_best(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from src.search.artifact import CandidateArtifact, CompileSpec, Provenance
+    from src.search.types import SearchResult
+
+    runner = CliRunner()
+    repo = tmp_path / "repo"
+    (repo / "src" / "melee" / "ft").mkdir(parents=True)
+    (repo / "src" / "melee" / "ft" / "ftdynamics.c").write_text(
+        "int ftCo_8009E7B4(void){return 0;}\n"
+    )
+    report = repo / "build" / "GALE01" / "report.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(
+        '{"units":[{"name":"main/melee/ft/ftdynamics",'
+        '"functions":[{"name":"ftCo_8009E7B4"}]}]}'
+    )
+    seed = tmp_path / "seed.c"
+    seed.write_text("int ftCo_8009E7B4(void){return 1;}\n")
+
+    spec = CompileSpec(
+        target_id="ftCo_8009E7B4@melee/ft/ftdynamics",
+        cflags_hash="cflags",
+        base_context_hash="base",
+        toolchain_fingerprint="mwcc",
+        backend_mode="plain-local",
+        manifest_path=tmp_path / "manifest.json",
+    )
+    provenance = Provenance("seed", None, None, "base", {})
+
+    def artifact(candidate_id: str, byte_score: int, directed_score: float):
+        source_blob = tmp_path / f"{candidate_id}.c"
+        source_blob.write_text("int ftCo_8009E7B4(void){return 1;}\n")
+        obj = tmp_path / f"{candidate_id}.o"
+        obj.write_bytes(b"OBJ")
+        return CandidateArtifact(
+            candidate_id=candidate_id,
+            source_hash=f"{candidate_id}-hash",
+            source_blob=source_blob,
+            compile_spec=spec,
+            object_path=obj,
+            producer_score=None,
+            byte_score=byte_score,
+            directed_score=directed_score,
+            pcdump_path=None,
+            compiler_stderr="",
+            provenance=provenance,
+            status="ok",
+            directed_meta={
+                "candidate_id": candidate_id,
+                "valid": True,
+                "displacement": directed_score,
+                "byte_score": byte_score,
+            },
+        )
+
+    directed_best = artifact("directed-best", 2036, 6.0)
+    byte_best = artifact("byte-best", 2006, 2.0)
+
+    class _Objective:
+        search_target = object()
+        role_target = object()
+        baseline_compile = object()
+        baseline_pcdump_path = tmp_path / "baseline.pcdump.txt"
+        baseline_source_hash = "baseline"
+        class_id = 0
+        objective_iter_by_original_ig = {58: 1}
+        proof_force_phys = {58: 4}
+
+    class _PcdumpBackend:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class _DirectedScorePipeline:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class _Scheduler:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def run(self, **kwargs):
+            assert kwargs["directed"] is not None
+            return SearchResult(
+                best=[directed_best, byte_best],
+                matched=None,
+                accounting={"iters_done": 1},
+                directed_telemetry=[
+                    directed_best.directed_meta,
+                    byte_best.directed_meta,
+                ],
+            )
+
+    monkeypatch.setattr("src.search.cli._compute_melee_root", lambda: repo)
+    monkeypatch.setattr(
+        "src.search.directed.objective.build_directed_objective",
+        lambda **kwargs: _Objective(),
+    )
+    monkeypatch.setattr(
+        "src.search.directed.objective.preflight_objective",
+        lambda objective: None,
+    )
+    monkeypatch.setattr(
+        "src.search.directed.pcdump_backend.PcdumpLocalBackend",
+        _PcdumpBackend,
+    )
+    monkeypatch.setattr(
+        "src.search.directed.scorer.DirectedScorePipeline",
+        _DirectedScorePipeline,
+    )
+    monkeypatch.setattr("src.search.scheduler.DefaultScheduler", _Scheduler)
+
+    result = runner.invoke(
+        search_app,
+        [
+            "run",
+            "--function", "ftCo_8009E7B4",
+            "--unit", "melee/ft/ftdynamics",
+            "--no-remote",
+            "--seed", str(seed),
+            "--store", str(tmp_path / "store"),
+            "--max-iters", "1",
+            "--dry-compiler",
+            "--directed-force-phys", "0:58:4",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    summary = json.loads(result.stdout)
+    assert summary["best_directed_meta"]["candidate_id"] == "directed-best"
+    assert summary["best_byte_score"] == 2006
+
+
 def test_search_run_directed_force_phys_continues_after_abstained_preflight(
     tmp_path: Path,
     monkeypatch,
