@@ -781,6 +781,7 @@ void un_80303FD4(HSD_GObj* arg0, struct un_80304138_objalloc_t* arg1,
                  struct un_80304138_objalloc_t_x8* arg2, int arg3, int arg4,
                  int arg5)
 {
+    struct un_80304138_objalloc_t_x8* new_var2;
     int i;
     int count;
     int new_var;
@@ -802,7 +803,7 @@ void un_80303FD4(HSD_GObj* arg0, struct un_80304138_objalloc_t* arg1,
         count++;
     }
 
-    size = un_80302EA4(arg1->x8);
+    size = un_80302EA4(new_var2 = arg1->x8);
     un_804D6E44 = arg1;
     buf = HSD_MemAlloc(size * count * 2);
     if (buf != NULL) {
