@@ -23,11 +23,29 @@ from src.search.types import SourceVariant
 
 
 # ---------------------------------------------------------------------------
-# Module-level constant: force-phys map for grIceMt_801F9ACC ev/did swap.
-# Exact ig→phys values are confirmed via live `debug` analysis at Task 12.
-# Project notes: ev→r27, did→r29.  Leave empty until pinned.
+# Module-level constant: force-phys map for grIceMt_801F9ACC register swap.
+#
+# Derived at Task 12 from live pcdump analysis of the current source
+# (melee-agent debug dump local src/melee/gr/gricemt.c --function grIceMt_801F9ACC):
+#
+#   Block 1 of "BEFORE GLOBAL OPTIMIZATION" pass sets up params:
+#     mr r32,r3   → ig_idx=32 = gobj     → currently r31
+#     mr r33,r4   → ig_idx=33 = y(float  → currently r29  ← SWAP TARGET
+#                                shadow)
+#     mr r34,r5   → ig_idx=34 = ev       → currently r28  (stable, not swapped)
+#   Block 2:
+#     li r40,0    → ig_idx=40 = did=0    → currently r27  ← SWAP TARGET
+#
+#   Expected assembly (from checkdiff baseline diff):
+#     addi r27,r4,0  → y-shadow should get r27
+#     li   r29,0     → did should get r29
+#
+#   Desired coloring: ig_idx=33 → r27, ig_idx=40 → r29.
+#   (The project notes' "ev→r27, did→r29" used older ig numbering; the
+#   current source version maps y-shadow as ig39→r29 in the memory note
+#   but after source changes the node indices are 33 and 40.)
 # ---------------------------------------------------------------------------
-GRICEMT_9ACC_FORCE_PHYS: dict = {}  # {original_ig: desired_phys}; Task 12 pins values
+GRICEMT_9ACC_FORCE_PHYS: dict = {33: 27, 40: 29}  # ig_idx→desired_phys
 
 
 # ---------------------------------------------------------------------------
