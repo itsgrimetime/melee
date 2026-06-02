@@ -81,11 +81,20 @@ def evaluate_phase1_gate(
     def _cov_ok(m) -> bool:
         return m.reanchor_matched / max(m.reanchor_total, 1) >= coverage_floor
 
-    # A winner must be attributed, have positive displacement delta, meet coverage,
-    # and beat the control baseline.
+    def _attributed(m) -> bool:
+        # Attribution integrity (Codex round 4 P0): a candidate is attributed
+        # ONLY if it has an applied_mutator AND that mutator came from an
+        # ACTIONABLE (resolved-anchor) diagnosis.  The blind var_name=None
+        # decl-pair fallback marks its candidates non_actionable, so a no-op
+        # can never satisfy the attribution requirement.
+        return bool(m.applied_mutator) and not getattr(m, "non_actionable", False)
+
+    # A winner must be ATTRIBUTED, beat the REAL control baseline's phys-match
+    # (displacement > control_displacement), show improvement vs its parent
+    # (displacement_delta > 0), and meet coverage.
     winners = [
         m for m in treatment
-        if m.applied_mutator
+        if _attributed(m)
         and m.displacement_delta > 0
         and _cov_ok(m)
         and m.displacement > control_displacement
@@ -106,18 +115,33 @@ def evaluate_phase1_gate(
     # No passing candidate.  Distinguish the honest "no gradient" outcome from
     # genuinely unattributed/regressing telemetry.
     #
-    # "no_smooth_gradient": attributed + covered treatment exists, but every
-    # such candidate had displacement_delta <= 0.  A pure register transposition
-    # has no smooth displacement signal; this routes to Phase 2.
-    attributed_covered = [m for m in treatment if m.applied_mutator and _cov_ok(m)]
-    if attributed_covered and all(m.displacement_delta <= 0 for m in attributed_covered):
+    # "no_smooth_gradient": ATTRIBUTED (actionable) + covered treatment exists,
+    # but no such candidate beat the control baseline's phys-match (every one
+    # had displacement <= control AND/OR delta <= 0).  A pure register
+    # transposition whose decl-order levers don't move any role to its desired
+    # phys has no smooth signal; this routes to Phase 2.  This is the CORRECT,
+    # valuable Phase-1 outcome, not a mechanism failure.
+    attributed_covered = [m for m in treatment if _attributed(m) and _cov_ok(m)]
+    if attributed_covered:
         return GateVerdict(
             False,
             "no_smooth_gradient",
             {
                 "n_treatment": len(treatment),
+                "n_attributed_covered": len(attributed_covered),
+                "best_displacement": max(m.displacement for m in attributed_covered),
                 "best_delta": max(m.displacement_delta for m in attributed_covered),
+                "control_displacement": control_displacement,
             },
         )
 
-    return GateVerdict(False, "unattributed_or_regressing", {"n_treatment": len(treatment)})
+    return GateVerdict(
+        False,
+        "unattributed_or_regressing",
+        {
+            "n_treatment": len(treatment),
+            "n_non_actionable": sum(
+                1 for m in treatment if getattr(m, "non_actionable", False)
+            ),
+        },
+    )

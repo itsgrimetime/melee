@@ -59,6 +59,11 @@ class DirectedMeta:
     invalid_reason: Any  # str | None
     case: Any  # str | None
     label: Any  # str | None
+    # --- GATE SIGNAL (Codex round 4 "Fix A" — phys-match) ---
+    # displacement := phys_match_fraction (|satisfied| / total); 1.0 = full swap.
+    # order_distance := phys_mismatch_count (blocked + abstained); 0 = the win.
+    # These are the ONLY fields the gate reads. They are NOT the old
+    # iter-ordering metric (which is demoted to the iter_* diagnostic fields).
     order_distance: int
     displacement: float
     displacement_delta: float
@@ -70,6 +75,16 @@ class DirectedMeta:
     proof_assignments: Any = None  # dict | None
     byte_score: Any = None  # int | None
     checkdiff_gate: Any = None  # str | None
+    # --- ATTRIBUTION INTEGRITY (Codex round 4 P0) ---
+    # True when applied_mutator came from a NON-actionable (var_name=None blind
+    # decl-pair) diagnosis with no causal link to the divergence. The gate
+    # treats a non_actionable candidate as UNATTRIBUTED so a no-op can never
+    # satisfy the attribution requirement.
+    non_actionable: bool = False
+    # --- DIAGNOSTIC TELEMETRY ONLY (the OLD iter-ordering metric) ---
+    # Kept for inspection/characterization; NEVER consulted by the gate.
+    iter_order_distance: Any = None  # int | None
+    iter_displacement: Any = None  # float | None
 
 
 @dataclass(frozen=True)

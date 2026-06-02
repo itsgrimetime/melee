@@ -19,6 +19,9 @@ from src.search.directed.metric import (
     candidate_iter_by_original_ig,
     displacement,
     order_distance,
+    phys_assignment_buckets,
+    phys_match_fraction,
+    phys_mismatch_count,
 )
 
 
@@ -93,6 +96,7 @@ class DirectedScorePipeline:
         plateau_n: int = 3,
         parent_displacement_of: Callable = lambda ps: getattr(ps, "displacement", 0.0),
         byte_scorer: Optional[Any] = None,
+        directed_from_start: bool = False,
     ) -> None:
         self._analyze = analyze if analyze is not None else _default_analyze
         self._compile_from_text = compile_from_text  # None = build inside score_directed
@@ -103,6 +107,12 @@ class DirectedScorePipeline:
         self._parent_displacement_of = parent_displacement_of
         # Byte scorer for score_byte(). If None, score_byte passes through.
         self._byte_scorer = byte_scorer
+        # directed_from_start: an explicit, documented config for a
+        # directed-ONLY run that scores directed from iteration 1 by design
+        # (Codex round 4 P1).  Replaces the old `_AlwaysEscalate` subclass hack
+        # in run.py.  When False, the byte-plateau heuristic governs escalation
+        # for mixed tier-1/tier-2 runs.
+        self._directed_from_start = directed_from_start
 
     # ------------------------------------------------------------------
     # score_byte
@@ -184,10 +194,23 @@ class DirectedScorePipeline:
         # --- compute decisions ---
         decisions = self._decisions_for_compile(compile, obj)
 
-        # --- metrics ---
+        # --- GATE SIGNAL: phys-match (Codex round 4 "Fix A") -------------
+        # Measure progress toward the desired PHYSICAL register assignment
+        # (proof_force_phys / desired_phys vs the candidate's assigned_reg,
+        # mapped through reanchor.matched).  The baseline IS the wall (9ACC
+        # scores 0/N by construction), so a no-op that merely reproduces the
+        # baseline coloring can NEVER inflate this signal.
+        proof = getattr(obj, "proof_force_phys", None) or {}
+        buckets = phys_assignment_buckets(proof, reanchor.matched, decisions)
+        total_roles = len(proof) if proof else len(roles)
+        disp = phys_match_fraction(buckets, total_roles)   # |satisfied|/total
+        od = phys_mismatch_count(buckets)                  # 0 == the swap win
+
+        # --- DIAGNOSTIC ONLY: the OLD iter-ordering metric --------------
+        # Demoted to telemetry (Codex round 4); NEVER the gate signal.
         cand = candidate_iter_by_original_ig(reanchor.matched, decisions)
-        od = order_distance(cand, obj.objective_iter_by_original_ig)
-        disp = displacement(cand, obj.objective_iter_by_original_ig)
+        iter_od = order_distance(cand, obj.objective_iter_by_original_ig)
+        iter_disp = displacement(cand, obj.objective_iter_by_original_ig)
 
         # --- classify progress ---
         eoc = parent_state.last_lever in ORDER_CHANGE_MUTATORS
@@ -209,14 +232,7 @@ class DirectedScorePipeline:
             if call.parent_state.current_best is not None
             else None
         )
-        # Prefer mutator attribution from art.provenance.mutation (set by
-        # DirectedSource with the exact key returned from propose); fall back
-        # to parent_state.last_lever.  Strip the "@N" dedup suffix from pair-
-        # enumeration keys (e.g. "reorder_local_decls@2" → "reorder_local_decls").
-        prov_mutation = getattr(getattr(art, "provenance", None), "mutation", None)
-        if prov_mutation is not None and "@" in str(prov_mutation):
-            prov_mutation = str(prov_mutation).split("@")[0]
-        applied_mutator = prov_mutation or parent_state.last_lever
+        applied_mutator, non_actionable = self._attribution(art, parent_state)
 
         meta = DirectedMeta(
             candidate_id=art.candidate_id,
@@ -228,6 +244,7 @@ class DirectedScorePipeline:
             invalid_reason=None,
             case=case,
             label=label,
+            # GATE SIGNAL: phys-match
             order_distance=od,
             displacement=disp,
             displacement_delta=delta,
@@ -236,9 +253,45 @@ class DirectedScorePipeline:
             diagnosis_chars=len(case),
             applied_mutator=applied_mutator,
             directed_scalar=disp,
+            proof_assignments=buckets,
+            byte_score=art.byte_score,
+            checkdiff_gate=_checkdiff_gate_for_byte_score(art.byte_score),
+            non_actionable=non_actionable,
+            # DIAGNOSTIC ONLY: the old iter-ordering metric
+            iter_order_distance=iter_od,
+            iter_displacement=iter_disp,
         )
 
         return replace(art, directed_score=disp, directed_meta=meta, status="ok")
+
+    # ------------------------------------------------------------------
+    # _attribution — resolve applied_mutator + the non_actionable flag.
+    # ------------------------------------------------------------------
+
+    def _attribution(self, art: Any, parent_state: Any) -> tuple:
+        """Return ``(applied_mutator, non_actionable)``.
+
+        Prefer mutator attribution from ``art.provenance.mutation`` (set by
+        DirectedSource with the exact key returned from propose); fall back to
+        ``parent_state.last_lever``.  Strip the ``@N`` dedup suffix from pair-
+        enumeration keys.
+
+        ``non_actionable`` is True when the provenance carries the
+        ``non_actionable`` marker — i.e. the mutator came from the blind
+        ``var_name=None`` decl-pair fallback with NO causal link to the
+        diagnosis (Codex round 4 P0 attribution integrity).  The gate treats
+        such a candidate as UNATTRIBUTED.
+        """
+        prov = getattr(art, "provenance", None)
+        prov_mutation = getattr(prov, "mutation", None)
+        if prov_mutation is not None and "@" in str(prov_mutation):
+            prov_mutation = str(prov_mutation).split("@")[0]
+        applied_mutator = prov_mutation or parent_state.last_lever
+        non_actionable = False
+        meta = getattr(prov, "producer_meta", None)
+        if isinstance(meta, dict) and meta.get("non_actionable"):
+            non_actionable = True
+        return applied_mutator, non_actionable
 
     def _decisions_for_compile(self, compile: Any, obj: Any) -> dict:
         if self._decisions_of is not None:
@@ -271,69 +324,20 @@ class DirectedScorePipeline:
             return None
 
         matched = getattr(reanchor, "matched", None) or {}
-        original_to_new = {orig: new for new, orig in matched.items()}
-        satisfied: list[dict] = []
-        blocked: list[dict] = []
-        abstained: list[dict] = []
-        for raw_orig, raw_desired in sorted(proof.items()):
-            orig = int(raw_orig)
-            desired = int(raw_desired)
-            new_ig = original_to_new.get(orig)
-            if new_ig is None and orig in decisions:
-                new_ig = orig
-            if new_ig is None:
-                abstained.append({
-                    "original_ig": orig,
-                    "new_ig": None,
-                    "desired_phys": desired,
-                    "assigned_phys": None,
-                    "reason": "not_reanchored",
-                })
-                continue
+        # Reuse the shared phys-match helper so the abstained fallback and the
+        # main score_directed path compute the SAME gate signal.
+        buckets = phys_assignment_buckets(proof, matched, decisions)
+        satisfied = buckets["satisfied"]
+        blocked = buckets["blocked"]
+        abstained = buckets["abstained"]
 
-            decision = decisions.get(new_ig)
-            if decision is None:
-                abstained.append({
-                    "original_ig": orig,
-                    "new_ig": new_ig,
-                    "desired_phys": desired,
-                    "assigned_phys": None,
-                    "reason": "missing_decision",
-                })
-                continue
-
-            assigned = getattr(decision, "assigned_reg", None)
-            if assigned is None:
-                abstained.append({
-                    "original_ig": orig,
-                    "new_ig": new_ig,
-                    "desired_phys": desired,
-                    "assigned_phys": None,
-                    "reason": "missing_assignment",
-                })
-            elif int(assigned) == desired:
-                satisfied.append({
-                    "original_ig": orig,
-                    "new_ig": new_ig,
-                    "desired_phys": desired,
-                    "assigned_phys": int(assigned),
-                })
-            else:
-                blocked.append({
-                    "original_ig": orig,
-                    "new_ig": new_ig,
-                    "desired_phys": desired,
-                    "assigned_phys": int(assigned),
-                })
-
-        total = max(len(proof), 1)
-        score = len(satisfied) / total
+        total = len(proof)
+        score = phys_match_fraction(buckets, total)
         parent_state = call.parent_state
         parent_disp = self._parent_displacement_of(parent_state)
-        prov_mutation = getattr(getattr(art, "provenance", None), "mutation", None)
-        if prov_mutation is not None and "@" in str(prov_mutation):
-            prov_mutation = str(prov_mutation).split("@")[0]
-        applied_mutator = prov_mutation or parent_state.last_lever or "force_phys_assignment"
+        applied_mutator, non_actionable = self._attribution(art, parent_state)
+        if applied_mutator is None:
+            applied_mutator = "force_phys_assignment"
 
         parent_id = (
             getattr(call.parent_state.current_best, "candidate_id", None)
@@ -365,6 +369,7 @@ class DirectedScorePipeline:
             },
             byte_score=art.byte_score,
             checkdiff_gate=_checkdiff_gate_for_byte_score(art.byte_score),
+            non_actionable=non_actionable,
         )
         return replace(
             art,
@@ -406,17 +411,25 @@ class DirectedScorePipeline:
     # ------------------------------------------------------------------
 
     def should_escalate(self, art: Any, ctx: Any) -> bool:
-        """Return True if the search has plateaued and should escalate.
+        """Return True if directed scoring should run for this batch.
 
-        Plateau definition: the value *plateau_n* steps ago is <= the minimum
-        of the last *plateau_n* values — i.e. no value in the window beat the
-        starting value of that window, so there's been no improvement.
+        When ``directed_from_start`` is set (a directed-only run), this is
+        unconditionally True from iteration 1 — directed scoring IS the run's
+        purpose.  This is the explicit, documented replacement for the old
+        ``_AlwaysEscalate`` subclass.
+
+        Otherwise the byte-plateau heuristic governs (mixed tier-1/tier-2):
+        the value *plateau_n* steps ago is <= the minimum of the last
+        *plateau_n* values — i.e. no value in the window beat the starting
+        value of that window, so there's been no improvement.
 
         Corrected formula: h[-plateau_n] == min(h[-plateau_n:])
           - [5,5,5]: h[-3]=5, min([5,5,5])=5 → True (flat)
           - [7,6,5]: h[-3]=7, min([7,6,5])=5 → False (improving)
           - [5,5]:   len < plateau_n → False
         """
+        if self._directed_from_start:
+            return True
         h = ctx.byte_history
         n = self._plateau_n
         if len(h) < n:

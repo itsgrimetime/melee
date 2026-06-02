@@ -31,8 +31,12 @@ class DirectedSource:
     Parameters
     ----------
     propose:
-        ``(source_text: str, tried: frozenset[str]) -> (key, anchor) | None``
-        Return ``None`` to signal exhaustion.
+        ``(source_text: str, tried: frozenset[str]) -> (key, anchor) |
+        (key, anchor, meta) | None``
+        Return ``None`` to signal exhaustion.  The optional 3rd element is a
+        dict merged into the variant's ``Provenance.producer_meta`` — used to
+        mark a blind/non-actionable proposal (``{"non_actionable": True}``) so
+        the gate never counts it as attributed.
     apply:
         ``(key: str, anchor, source_text: str) -> str | None``
         Defaults to :func:`src.search.directed.mutators.apply_mutator`.
@@ -78,7 +82,12 @@ class DirectedSource:
             p = self._propose(self._current_best, frozenset(self._tried))
             if p is None:
                 break
-            key, anchor = p
+            # propose may return (key, anchor) or (key, anchor, meta).
+            if len(p) == 3:
+                key, anchor, prop_meta = p
+            else:
+                key, anchor = p
+                prop_meta = {}
             # No-infinite-loop guard: skip (but do NOT re-add) already-tried keys.
             if key in self._tried:
                 continue
@@ -97,7 +106,7 @@ class DirectedSource:
                         parent_id=None,
                         mutation=key,
                         base_hash="",
-                        producer_meta={},
+                        producer_meta=dict(prop_meta) if prop_meta else {},
                     ),
                 )
             )

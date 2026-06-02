@@ -20,12 +20,13 @@ class _Dec:
 class _Case:                      # mimic a DivergenceCase enum member
     def __init__(self, v): self.value = v
 
-def _objective(roles_n=2):
+def _objective(roles_n=2, proof_force_phys=None):
     class _RT: pass
     rt = _RT(); rt.roles = [object()] * roles_n; rt.function = "grIceMt_801F9ACC"
     return DirectedObjective(search_target=None, role_target=rt, baseline_compile=None,
         baseline_pcdump_path=None, baseline_source_hash="h", class_id=0,
-        objective_iter_by_original_ig={37: 3, 34: 103}, proof_force_phys={})
+        objective_iter_by_original_ig={37: 3, 34: 103},
+        proof_force_phys=proof_force_phys if proof_force_phys is not None else {})
 
 def _force_phys_objective():
     class _RT: pass
@@ -120,14 +121,53 @@ def test_invalid_on_no_roles(tmp_path):
     assert out.directed_meta.invalid_reason == "no_roles"
 
 def test_valid_scores_and_is_pure(tmp_path):
-    call = DirectedScoringCall(_objective(), _parent(disp=0.3))
+    # GATE SIGNAL is phys-match; with empty proof there are no roles to satisfy,
+    # so the phys-match gate signal is 0.0 / mismatch 0. The OLD iter-ordering
+    # metric is demoted to the iter_* DIAGNOSTIC fields and is NEVER the gate
+    # signal.
+    call = DirectedScoringCall(_objective(), _parent(disp=0.0))
     p = _pipe("B")
     a = p.score_directed(_art(tmp_path), call); b = p.score_directed(_art(tmp_path), call)
     assert a.directed_meta.valid is True and a.status == "ok"
-    assert a.directed_meta.order_distance == b.directed_meta.order_distance   # pure: same parent -> same
-    # candidate iters {37:103,34:3} vs objective {37:3,34:103} -> inverted -> order_distance 1
-    assert a.directed_meta.order_distance == 1
-    assert a.directed_meta.displacement_delta == pytest.approx(a.directed_meta.displacement - 0.3)
+    # pure: same parent -> same (gate signal)
+    assert a.directed_meta.order_distance == b.directed_meta.order_distance
+    assert a.directed_meta.displacement == b.directed_meta.displacement
+    # GATE SIGNAL fields (phys-match): empty proof -> 0.0 / 0
+    assert a.directed_meta.displacement == 0.0
+    assert a.directed_meta.order_distance == 0
+    # DIAGNOSTIC ONLY: candidate iters {37:103,34:3} vs objective {37:3,34:103}
+    # are inverted -> iter_order_distance 1 (telemetry, not the gate signal).
+    assert a.directed_meta.iter_order_distance == 1
+    assert a.directed_meta.displacement_delta == pytest.approx(a.directed_meta.displacement - 0.0)
+
+
+def test_phys_match_is_the_gate_signal(tmp_path):
+    # The directed gate signal measures phys-match: how many roles' assigned_reg
+    # equals their desired_phys (proof_force_phys), mapped via reanchor.matched.
+    # proof {37: 27, 34: 29}; reanchor {new1->37, new2->34}.
+    proof_obj = lambda dec: DirectedScorePipeline(
+        analyze=lambda t,c,class_id=0:(_State(_Case("B")), object(), _Re({1: 37, 2: 34})),
+        compile_from_text=lambda art: object(),
+        decisions_of=lambda compile: dec,
+        classify=lambda prev,curr,**k: type("L",(),{"value":"SAME"})())
+    call = DirectedScoringCall(
+        _objective(proof_force_phys={37: 27, 34: 29}), _parent(disp=0.0))
+
+    # 0/2: neither role at desired phys (the WALL — baseline scores 0.0).
+    wall = proof_obj({1: _Dec(103, assigned_reg=29), 2: _Dec(3, assigned_reg=27)})
+    m0 = wall.score_directed(_art(tmp_path), call).directed_meta
+    assert m0.displacement == 0.0 and m0.order_distance == 2
+
+    # 1/2: one role reached desired phys.
+    half = proof_obj({1: _Dec(103, assigned_reg=27), 2: _Dec(3, assigned_reg=27)})
+    m1 = half.score_directed(_art(tmp_path), call).directed_meta
+    assert m1.displacement == pytest.approx(0.5) and m1.order_distance == 1
+
+    # 2/2: both roles at desired phys (the phys-swap WIN).
+    win = proof_obj({1: _Dec(103, assigned_reg=27), 2: _Dec(3, assigned_reg=29)})
+    m2 = win.score_directed(_art(tmp_path), call).directed_meta
+    assert m2.displacement == 1.0 and m2.order_distance == 0
+    assert m2.proof_assignments["satisfied"] and not m2.proof_assignments["blocked"]
 
 def test_edit_was_order_change_passed_from_last_lever(tmp_path):
     seen = {}
@@ -145,3 +185,14 @@ def test_should_escalate_plateau():
     assert p.should_escalate(None, ctx) is False      # still improving -> do NOT escalate
     ctx.byte_history = [5,5]
     assert p.should_escalate(None, ctx) is False      # < plateau_n -> no
+
+
+def test_directed_from_start_always_escalates():
+    # The explicit, documented replacement for the old _AlwaysEscalate hack:
+    # a directed-only run scores directed from iteration 1 by design.
+    p = DirectedScorePipeline(analyze=None, compile_from_text=None, decisions_of=None,
+                              plateau_n=3, directed_from_start=True)
+    ctx = SearchContext(); ctx.byte_history = []        # empty -> plateau would be False
+    assert p.should_escalate(None, ctx) is True
+    ctx.byte_history = [7, 6, 5]                          # improving -> plateau would be False
+    assert p.should_escalate(None, ctx) is True          # but directed_from_start forces True

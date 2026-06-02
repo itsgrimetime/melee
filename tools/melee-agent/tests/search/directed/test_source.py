@@ -29,6 +29,26 @@ def test_next_batch_proposes_until_exhausted():
     assert batch[0].provenance.mutation == "reorder_local_decls"
 
 
+def test_propose_three_tuple_sets_producer_meta():
+    # propose may return (key, anchor, meta); the meta is merged into
+    # Provenance.producer_meta so a blind/non-actionable proposal is tagged.
+    seq = iter([("reorder_local_decls@0", object(), {"non_actionable": True}), None])
+    s = DirectedSource(propose=lambda src, tried: next(seq), apply=lambda k, a, src: src + k)
+    s.seed(_spec("B"))
+    batch = s.next_batch(8)
+    assert len(batch) == 1
+    assert batch[0].provenance.mutation == "reorder_local_decls@0"
+    assert batch[0].provenance.producer_meta == {"non_actionable": True}
+
+
+def test_propose_two_tuple_has_empty_producer_meta():
+    seq = iter([("m1", object()), None])
+    s = DirectedSource(propose=lambda src, tried: next(seq), apply=lambda k, a, src: src)
+    s.seed(_spec())
+    batch = s.next_batch(8)
+    assert batch[0].provenance.producer_meta == {}
+
+
 def test_next_batch_caps_at_n():
     seq = iter([("m1", object()), ("m2", object()), ("m3", object())])
     s = DirectedSource(propose=lambda src, tried: next(seq, None), apply=lambda k, a, src: src)

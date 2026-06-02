@@ -244,13 +244,24 @@ class DefaultScheduler:
                         if (one_best is not None and one_best.directed_meta is not None)
                         else None
                     )
-                    parent_state = DirectedSearchState(
+                    next_parent = DirectedSearchState(
                         prev_state=parent_state,
                         history=parent_state.history + (parent_state.state_id,),
                         last_lever=applied_mutator,
                         current_best=one_best,
                         state_id=f"s{iteration}",
                     )
+                    # Thread the selected best's directed (phys-match) scalar
+                    # onto the next parent so the scorer's displacement_delta is
+                    # measured against the real parent's phys-match, not a flat
+                    # 0.0. (DirectedSearchState is frozen; set via object.)
+                    best_disp = (
+                        one_best.directed_meta.displacement
+                        if (one_best is not None and one_best.directed_meta is not None)
+                        else 0.0
+                    )
+                    object.__setattr__(next_parent, "displacement", best_disp)
+                    parent_state = next_parent
                     if matched:
                         break
 

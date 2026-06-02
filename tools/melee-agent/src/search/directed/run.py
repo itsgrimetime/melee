@@ -593,15 +593,15 @@ def _run_live(
             checkdiff_clean=checkdiff_clean,
         )
 
-    class _AlwaysEscalate(DirectedScorePipeline):
-        """DirectedScorePipeline that always escalates to pcdump/directed."""
-        def should_escalate(self, art: Any, ctx: Any) -> bool:
-            return True
-
-    score_pipeline = _AlwaysEscalate(
+    # A directed-only run scores directed from iteration 1 BY DESIGN — that is
+    # the whole point of the run.  This is now an explicit, documented config
+    # flag (directed_from_start=True), NOT a sneaky `_AlwaysEscalate` subclass
+    # (Codex round 4 P1).
+    score_pipeline = DirectedScorePipeline(
         plateau_n=3,
         byte_scorer=RealByteScorer(),
         classify=_safe_classify,
+        directed_from_start=True,
     )
 
     # Source text for seeding
@@ -658,7 +658,9 @@ def _run_live(
         except Exception:
             return None
 
-        # Primary path: resolve via diagnosis source_idea
+        # Primary path (ACTIONABLE): resolve via a diagnosis source_idea with a
+        # real var_name.  Candidates from this path ARE attributed — the
+        # mutator has a causal link to the resolved anchor.
         if diag is not None and diag.source_idea is not None:
             si = diag.source_idea
             if si.var_name is not None:
@@ -669,13 +671,18 @@ def _run_live(
                     if anchor is not None and anchor.mutator_key == lever:
                         return (lever, anchor)
 
-        # Fallback path: when var_name is None (e.g. C2_STICKY_POOL), try
-        # reorder_local_decls on the first untried adjacent local declaration
-        # pair in the function body.  We iterate through pairs and skip those
-        # whose pair index is already in the tried set (stored as
-        # "reorder_local_decls@N").  The key passed to DirectedSource is the
-        # pair-specific token; a custom apply_fn (below) strips the "@N"
-        # suffix before dispatching to apply_mutator.
+        # Fallback path (NON-ACTIONABLE / attribution-integrity, Codex round 4
+        # P0): when var_name is None (e.g. C2_STICKY_POOL), the analysis did
+        # NOT resolve a specific variable, so blindly enumerating adjacent
+        # local-declaration pairs has NO causal link to the diagnosis.  These
+        # candidates are tagged ``{"non_actionable": True}`` so the gate can
+        # never count them as attributed — a no-op reorder can never satisfy
+        # the gate's ``applied_mutator`` requirement.
+        #
+        # We iterate through pairs and skip those whose pair index is already
+        # in the tried set (stored as "reorder_local_decls@N").  The key passed
+        # to DirectedSource is the pair-specific token; a custom apply_fn
+        # (below) strips the "@N" suffix before dispatching to apply_mutator.
         _DECL_RE = _re.compile(
             r"^(?P<indent>[ \t]+)"
             r"(?P<type>[A-Za-z_][\w* ]*?)"
@@ -719,7 +726,9 @@ def _run_live(
                     "second_line": second_line,
                 },
             )
-            return (pair_key, anchor)
+            # NON-ACTIONABLE: blind decl-pair enumeration, no causal link to the
+            # diagnosis.  Tag so the gate treats it as unattributed.
+            return (pair_key, anchor, {"non_actionable": True})
 
         return None
 
@@ -760,13 +769,35 @@ def _run_live(
         directed=cfg,
     )
 
+    # --- REAL CONTROL BASELINE (Codex round 4 P0) ----------------------
+    # Compile + score the UNCHANGED source through the SAME directed scoring
+    # path, then feed its phys_match_fraction to the gate as the control to
+    # beat.  This replaces the hardcoded control_displacement=0.0 so a
+    # candidate only "passes" by beating the real baseline's phys-match (which
+    # is 0/N at the 9ACC wall, BY CONSTRUCTION — not trivially satisfiable).
+    control_displacement, control_meta = _score_control_baseline(
+        backend=pcdump_backend,
+        score_pipeline=score_pipeline,
+        objective=objective,
+        target=target,
+        source_text=source_text,
+    )
+
     from src.search.directed.gate import evaluate_phase1_gate
     verdict = evaluate_phase1_gate(
         preflight_ok=preflight_ok or preflight_fallback is not None,
         telemetry=result.directed_telemetry,
-        control_displacement=0.0,
+        control_displacement=control_displacement,
     )
     accounting = dict(result.accounting)
+    accounting["control"] = {
+        "phys_match_fraction": control_displacement,
+        "proof_assignments": (
+            control_meta.get("proof_assignments") if control_meta else None
+        ),
+        "valid": control_meta.get("valid") if control_meta else None,
+        "invalid_reason": control_meta.get("invalid_reason") if control_meta else None,
+    }
     if preflight_reason is not None:
         preflight_accounting = {
             "ok": preflight_ok,
@@ -787,3 +818,48 @@ def _run_live(
         ],
         "accounting": accounting,
     }
+
+
+def _score_control_baseline(
+    *,
+    backend: Any,
+    score_pipeline: Any,
+    objective: Any,
+    target: Any,
+    source_text: str,
+) -> tuple:
+    """Compile + score the UNCHANGED source as the real control baseline.
+
+    Returns ``(phys_match_fraction, meta_dict | None)``.  Uses the SAME
+    ``score_directed`` path as treatment candidates so the comparison is
+    apples-to-apples.  On any failure returns ``(0.0, None)`` — a conservative
+    control (a candidate must then strictly exceed 0.0 to pass), which still
+    cannot reward a no-op because the no-op reproduces this same control.
+    """
+    from src.search.directed.contracts import (
+        DirectedScoringCall,
+        DirectedSearchState,
+    )
+    from src.search.types import SourceVariant
+
+    if objective is None:
+        return 0.0, None
+    try:
+        art = backend.compile(SourceVariant(source_text, None), want_pcdump=True)
+        if art.status != "ok" or art.pcdump_path is None:
+            return 0.0, None
+        art = score_pipeline.score_byte(art, target)
+        root = DirectedSearchState(
+            prev_state=None, history=(), last_lever=None,
+            current_best=None, state_id="control",
+        )
+        scored = score_pipeline.score_directed(
+            art, DirectedScoringCall(objective, root)
+        )
+    except Exception:
+        return 0.0, None
+
+    meta = scored.directed_meta
+    if meta is None:
+        return 0.0, None
+    return float(meta.displacement), _meta_to_dict(meta)

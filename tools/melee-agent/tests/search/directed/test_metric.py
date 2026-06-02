@@ -1,8 +1,17 @@
-from src.search.directed.metric import candidate_iter_by_original_ig, order_distance, displacement
+from src.search.directed.metric import (
+    candidate_iter_by_original_ig,
+    order_distance,
+    displacement,
+    phys_assignment_buckets,
+    phys_match_fraction,
+    phys_mismatch_count,
+)
 
 
 class _Dec:
-    def __init__(self, iter_idx): self.iter_idx = iter_idx
+    def __init__(self, iter_idx, assigned_reg=None):
+        self.iter_idx = iter_idx
+        self.assigned_reg = assigned_reg
 
 
 def test_reanchor_mapping():
@@ -35,3 +44,37 @@ def test_displacement_measures_pre_flip_movement():
 
 def test_displacement_degenerate_single_role():
     assert displacement({37: 3}, {37: 3, 34: 103}) == 0.0
+
+
+# --- phys-match (the GATE signal — Codex round 4 "Fix A") ---
+
+def test_phys_match_buckets_satisfied_blocked_abstained():
+    proof = {37: 27, 34: 29, 99: 5}              # 99 will not reanchor -> abstained
+    matched = {1: 37, 2: 34}                       # new_ig -> original_ig
+    decisions = {1: _Dec(10, assigned_reg=27),     # 37 -> 27 == desired -> satisfied
+                 2: _Dec(20, assigned_reg=27)}     # 34 -> 27 != 29     -> blocked
+    b = phys_assignment_buckets(proof, matched, decisions)
+    assert [r["original_ig"] for r in b["satisfied"]] == [37]
+    assert [r["original_ig"] for r in b["blocked"]] == [34]
+    assert [r["original_ig"] for r in b["abstained"]] == [99]
+
+
+def test_phys_match_fraction_and_mismatch_count():
+    # The 9ACC wall: 0/2 by construction (neither role at desired phys).
+    proof = {37: 27, 34: 29}
+    matched = {1: 37, 2: 34}
+    wall = {1: _Dec(0, assigned_reg=29), 2: _Dec(0, assigned_reg=27)}   # swapped
+    b = phys_assignment_buckets(proof, matched, wall)
+    assert phys_match_fraction(b, len(proof)) == 0.0
+    assert phys_mismatch_count(b) == 2
+
+    win = {1: _Dec(0, assigned_reg=27), 2: _Dec(0, assigned_reg=29)}     # both right
+    b2 = phys_assignment_buckets(proof, matched, win)
+    assert phys_match_fraction(b2, len(proof)) == 1.0
+    assert phys_mismatch_count(b2) == 0          # 0 == the phys-swap win
+
+
+def test_phys_match_empty_proof_is_zero():
+    b = phys_assignment_buckets({}, {1: 37}, {1: _Dec(0, assigned_reg=27)})
+    assert phys_match_fraction(b, 0) == 0.0
+    assert phys_mismatch_count(b) == 0
