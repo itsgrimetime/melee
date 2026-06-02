@@ -371,3 +371,154 @@ def test_tier1_unchanged_when_directed_none(tmp_path):
         "tier-1 should not request pcdump"
     )
     assert isinstance(res, SearchResult)
+
+
+class _MultiBatchSource:
+    """Yields a fixed batch per iteration, recording the candidate_ids of each
+    observed batch (not just lengths)."""
+
+    def __init__(self, batches: list[list[SourceVariant]]) -> None:
+        self._batches = batches
+        self._call = 0
+        self.observed_ids: list[list[str]] = []  # candidate_id list per observe
+
+    def name(self) -> str:
+        return "multi-batch"
+
+    def seed(self, base: Any) -> None:
+        pass
+
+    def next_batch(self, n: int) -> list[SourceVariant]:
+        if self._call >= len(self._batches):
+            return []
+        b = self._batches[self._call]
+        self._call += 1
+        return b[:n]
+
+    def observe(self, scored: list[Any]) -> None:
+        self.observed_ids.append([a.candidate_id for a in scored])
+
+
+def test_all_invalid_batch_falls_back_to_current_batch_not_stale(tmp_path):
+    """REGRESSION (latent multi-iteration bug): when EVERY candidate in the
+    current batch is invalid, the fallback must observe a CURRENT-batch
+    byte-best — never a stale valid candidate from a prior batch.
+
+    Setup: iteration 1 yields candidate 'good1' (valid). Iteration 2 yields
+    candidate 'bad2' (invalid). Iteration 2's observe must see 'bad2', not the
+    stale 'good1' from iteration 1.
+    """
+    store = ArtifactStore(tmp_path / "store")
+
+    v_good = SourceVariant("int f(){return 1;}", None)
+    v_bad = SourceVariant("int f(){return 2;}", None)
+    source = _MultiBatchSource([[v_good], [v_bad]])
+
+    art_good = _make_art("good1", byte_score=10, tmp=tmp_path)
+    art_bad = _make_art("bad2", byte_score=99, tmp=tmp_path)
+
+    class _SeqBackend:
+        """Returns good1 then bad2 across compile calls."""
+        def __init__(self):
+            self._arts = [art_good, art_bad]
+            self._idx = 0
+            self.all_want_pcdump: list[bool] = []
+
+        def name(self):
+            return "seq"
+
+        def capabilities(self):
+            from src.search.types import BackendCaps
+            return BackendCaps("local", 1, True)
+
+        def compile(self, variant, *, want_pcdump=False):
+            self.all_want_pcdump.append(want_pcdump)
+            art = self._arts[self._idx % len(self._arts)]
+            self._idx += 1
+            return art
+
+    class _SeqPipeline:
+        """Always escalates; first candidate valid, second invalid."""
+        def __init__(self):
+            self._call = 0
+
+        def score_byte(self, art, target):
+            return art
+
+        def should_escalate(self, art, ctx):
+            return True
+
+        def score_directed(self, art, call):
+            valid = (self._call == 0)  # only the FIRST candidate is valid
+            self._call += 1
+            meta = _make_meta(
+                valid, 1.0, call.parent_state.state_id,
+                invalid_reason=None if valid else "case_none",
+            )
+            status = "invalid" if not valid else art.status
+            return replace(art, directed_meta=meta, status=status)
+
+    backend = _SeqBackend()
+    pipeline = _SeqPipeline()
+    sched = DefaultScheduler(store=store, verifier=None)
+    cfg = DirectedSchedulerConfig(
+        objective=None,
+        score_pipeline=pipeline,
+        backend=backend,
+        plateau_n=3,
+    )
+
+    res = sched.run(
+        sources=[source],
+        backends=[backend],
+        producers=[],
+        pipeline=pipeline,
+        target=TargetSpec("f", "u", tmp_path / "e.o"),
+        budget=Budget(max_iters=2),
+        policy=SchedulePolicy(batch_size=1),
+        directed=cfg,
+    )
+
+    # Two observe calls (one per iteration), each with exactly one candidate.
+    assert source.observed_ids == [["good1"], ["bad2"]], (
+        f"batch 2 must observe its OWN byte-best 'bad2', not stale 'good1'; "
+        f"got {source.observed_ids}"
+    )
+    # The invalid one was still surfaced + counted, not treated as progress.
+    assert res.accounting.get("directed_invalid", 0) == 1
+
+
+def test_empty_batch_observes_empty_and_advances(tmp_path):
+    """When nothing compiles in the batch (no variants), directed mode observes
+    an empty list rather than a stale candidate."""
+    store = ArtifactStore(tmp_path / "store")
+
+    # Source yields one empty batch then drains. Provide a never-used art.
+    source = _MultiBatchSource([[]])
+    backend = FakePcdumpBackend([_make_art("never", 0, tmp_path)])
+    pipeline = FakeScorePipeline(always_escalate=True, metas=[_make_meta(True, 1.0, "root")])
+
+    sched = DefaultScheduler(store=store, verifier=None)
+    cfg = DirectedSchedulerConfig(
+        objective=None,
+        score_pipeline=pipeline,
+        backend=backend,
+        plateau_n=3,
+    )
+
+    res = sched.run(
+        sources=[source],
+        backends=[backend],
+        producers=[],
+        pipeline=pipeline,
+        target=TargetSpec("f", "u", tmp_path / "e.o"),
+        budget=Budget(max_iters=1),
+        policy=SchedulePolicy(batch_size=4),
+        directed=cfg,
+    )
+
+    # Empty batch → observe([]) → recorded as an empty id list.
+    assert source.observed_ids == [[]], (
+        f"empty batch must observe [], got {source.observed_ids}"
+    )
+    assert res.directed_telemetry == []

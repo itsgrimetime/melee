@@ -36,7 +36,6 @@ class DefaultScheduler:
                 "producer_stopped": 0, "iterations": 0,
                 "budget_exhausted": False}
         seen: set[str] = set()
-        directed_seen: set[tuple] = set()  # (candidate_id, parent_state_id) in directed mode
         best: list[CandidateArtifact] = []
         matched: CandidateArtifact | None = None
         base = SourceSpec("", target)
@@ -82,6 +81,15 @@ class DefaultScheduler:
         directed_telemetry: list = []
         ctx: SearchContext | None = None
         parent_state: "DirectedSearchState | None" = None
+        directed_seen: set[tuple] = set()  # (candidate_id, parent_state_id)
+
+        def _dir_key(a: CandidateArtifact):
+            """Rank directed candidates: byte_score ascending, then larger
+            displacement preferred (tie-break)."""
+            bs = a.byte_score if a.byte_score is not None else (1 << 30)
+            disp = -(a.directed_meta.displacement if a.directed_meta else 0.0)
+            return (bs, disp)
+
         if directed is not None:
             from src.search.directed.contracts import DirectedSearchState
             ctx = SearchContext()
@@ -160,6 +168,7 @@ class DefaultScheduler:
                     current_parent_id = parent_state.state_id
 
                     dir_batch_candidates: list[CandidateArtifact] = []
+                    dir_byte_scored: list[CandidateArtifact] = []  # CURRENT batch only
                     for variant in batch:
                         if active_backend is None:
                             break
@@ -180,7 +189,15 @@ class DefaultScheduler:
                         if scored_art.status == "score_failed":
                             acct["score_failed"] += 1
                             continue
+                        # best[] intentionally holds the pre-score_directed
+                        # (byte-only) artifact for byte ranking; matched/telemetry
+                        # below hold the post-directed one.
                         best.append(scored_art)
+                        # Track this batch's byte-scored artifacts (incl. ones
+                        # that will be marked invalid) so the all-invalid
+                        # fallback can pick a CURRENT-batch byte-best to mutate
+                        # from — never a stale candidate from a prior batch.
+                        dir_byte_scored.append(scored_art)
                         # Directed scoring
                         if escalate:
                             call = DirectedScoringCall(directed.objective, parent_state)
@@ -198,21 +215,16 @@ class DefaultScheduler:
                         ):
                             matched = scored_art
 
-                    # Select exactly ONE best by (byte_score asc, -displacement desc)
-                    def _dir_key(a: CandidateArtifact):
-                        bs = a.byte_score if a.byte_score is not None else (1 << 30)
-                        disp = -(a.directed_meta.displacement if a.directed_meta else 0.0)
-                        return (bs, disp)
-
+                    # Select exactly ONE best (byte_score asc, then -displacement).
                     if dir_batch_candidates:
                         one_best = min(dir_batch_candidates, key=_dir_key)
-                    elif dir_batch_candidates == [] and batch:
-                        # All candidates were invalid or failed; still need to
-                        # observe and advance — pick from byte-scored best list
-                        # (fallback: pick last compiled artifact with byte_score)
-                        byte_only = [a for a in best if a.directed_meta is None or a.directed_meta.valid]
-                        one_best = min(byte_only, key=_dir_key) if byte_only else None
+                    elif dir_byte_scored:
+                        # Every candidate this batch was invalid (but some
+                        # compiled+byte-scored): fall back to the CURRENT batch's
+                        # byte-best so the source still has something to mutate.
+                        one_best = min(dir_byte_scored, key=_dir_key)
                     else:
+                        # Nothing compiled this batch.
                         one_best = None
 
                     if one_best is not None:
