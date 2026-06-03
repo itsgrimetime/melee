@@ -508,6 +508,7 @@ def _run_transform_validations(
     probe_payloads: list[dict],
     *,
     validate_command: str,
+    stop_on_retained: bool = False,
 ) -> list[dict]:
     results: list[dict] = []
     for probe in probe_payloads:
@@ -576,7 +577,56 @@ def _run_transform_validations(
             "source_regions": source_regions,
             "uncovered_transform_classes": uncovered_transform_classes,
         })
+        if stop_on_retained and outcome == "retained-source-improvement":
+            break
     return results
+
+
+def _summarize_transform_validations(
+    probe_payloads: list[dict],
+    validation_results: list[dict],
+) -> dict:
+    outcomes: dict[str, int] = {}
+    for result in validation_results:
+        outcome = str(result.get("outcome") or "unknown")
+        outcomes[outcome] = outcomes.get(outcome, 0) + 1
+    evaluated_ids = [
+        str(result.get("probe_id"))
+        for result in validation_results
+        if result.get("probe_id") is not None
+    ]
+    evaluated_set = set(evaluated_ids)
+    remaining_ids = [
+        str(probe.get("probe_id"))
+        for probe in probe_payloads
+        if probe.get("probe_id") is not None and str(probe.get("probe_id")) not in evaluated_set
+    ]
+    if not probe_payloads:
+        stop_condition = "no-probes"
+    elif outcomes.get("retained-source-improvement"):
+        stop_condition = "retained-source-improvement"
+    elif outcomes.get("larger-refactor-recommended"):
+        stop_condition = "larger-refactor-recommended"
+    elif validation_results and all(
+        result.get("outcome") == "negative-evidence"
+        for result in validation_results
+    ):
+        stop_condition = "exhausted-negative-evidence"
+    elif validation_results and all(
+        result.get("outcome") == "blocked"
+        for result in validation_results
+    ):
+        stop_condition = "blocked"
+    elif validation_results:
+        stop_condition = "mixed"
+    else:
+        stop_condition = "not-run"
+    return {
+        "stop_condition": stop_condition,
+        "evaluated_probes": len(validation_results),
+        "remaining_probe_ids": remaining_ids,
+        "outcomes": outcomes,
+    }
 
 
 def _assignment_progress(meta: dict | None) -> dict:
@@ -674,6 +724,13 @@ def plan_transforms_cmd(
             ),
         ),
     ] = None,
+    stop_on_retained: Annotated[
+        bool,
+        typer.Option(
+            "--stop-on-retained/--validate-all",
+            help="Stop validation after the first retained source improvement.",
+        ),
+    ] = False,
     json_out: Annotated[
         bool,
         typer.Option("--json/--no-json", help="Emit machine-readable JSON."),
@@ -715,6 +772,11 @@ def plan_transforms_cmd(
         payload["validation"] = _run_transform_validations(
             payload["probes"],
             validate_command=validate_command,
+            stop_on_retained=stop_on_retained,
+        )
+        payload["validation_summary"] = _summarize_transform_validations(
+            payload["probes"],
+            payload["validation"],
         )
     if record_ledger:
         payload["ledger_record"] = _record_transform_plan_attempt(
@@ -744,14 +806,14 @@ def plan_transforms_cmd(
     if write_probes is not None:
         typer.echo(f"Probe directory: {write_probes}")
     if validate_command is not None:
-        outcomes: dict[str, int] = {}
-        for item in payload.get("validation", []):
-            outcome = str(item.get("outcome") or "unknown")
-            outcomes[outcome] = outcomes.get(outcome, 0) + 1
+        summary = payload.get("validation_summary", {})
+        outcomes = summary.get("outcomes", {})
         typer.echo(
             "Validation: "
             + ", ".join(f"{key}={value}" for key, value in sorted(outcomes.items()))
         )
+        if summary.get("stop_condition"):
+            typer.echo(f"Stop condition: {summary['stop_condition']}")
     if record_ledger:
         record = payload["ledger_record"]
         typer.echo(

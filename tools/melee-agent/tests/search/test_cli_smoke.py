@@ -398,6 +398,87 @@ def test_search_plan_transforms_records_larger_refactor_recommendation(
     assert "uncovered=helper_shape" in attempt["note"]
 
 
+def test_search_plan_transforms_can_stop_after_retained_probe(tmp_path: Path) -> None:
+    source = tmp_path / "e7b4.c"
+    source.write_text(
+        "void ftCo_8009E7B4(void) {\n"
+        "    if (flag) {\n"
+        "        reload = 1;\n"
+        "    } else {\n"
+        "        if (kind != 0) {\n"
+        "            reload = 0;\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(
+        search_app,
+        [
+            "plan-transforms",
+            "--function", "ftCo_8009E7B4",
+            "--unit", "melee/ft/ftcommon",
+            "--force-phys", "58:4,35:29",
+            "--source-file", str(source),
+            "--max-per-family", "1",
+            "--write-probes", str(tmp_path / "probes"),
+            "--validate-command",
+            f"{sys.executable} -c \"print('match=true')\" {{candidate_path}}",
+            "--stop-on-retained",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert len(payload["probes"]) > 1
+    assert len(payload["validation"]) == 1
+    assert payload["validation_summary"]["stop_condition"] == "retained-source-improvement"
+    assert payload["validation_summary"]["evaluated_probes"] == 1
+    assert payload["validation_summary"]["remaining_probe_ids"]
+
+
+def test_search_plan_transforms_summarizes_exhausted_negative_evidence(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "e7b4.c"
+    source.write_text(
+        "void ftCo_8009E7B4(void) {\n"
+        "    if (flag) {\n"
+        "        reload = 1;\n"
+        "    } else {\n"
+        "        if (kind != 0) {\n"
+        "            reload = 0;\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(
+        search_app,
+        [
+            "plan-transforms",
+            "--function", "ftCo_8009E7B4",
+            "--unit", "melee/ft/ftcommon",
+            "--force-phys", "58:4,35:29",
+            "--source-file", str(source),
+            "--max-per-family", "1",
+            "--write-probes", str(tmp_path / "probes"),
+            "--validate-command",
+            f"{sys.executable} -c \"print('match=false')\" {{candidate_path}}",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["validation"]
+    assert payload["validation_summary"]["stop_condition"] == "exhausted-negative-evidence"
+    assert payload["validation_summary"]["remaining_probe_ids"] == []
+
+
 def test_search_triage_clusters_source_deltas_and_scores_candidates(
     tmp_path: Path,
 ) -> None:
