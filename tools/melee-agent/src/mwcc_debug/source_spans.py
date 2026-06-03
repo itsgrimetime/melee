@@ -175,6 +175,13 @@ def reject_reason_for_span_group(spans: list[StatementSpan]) -> Optional[str]:
         return "span contains goto"
     if any(span.kind in {"labeled_statement", "case_statement"} for span in spans):
         return "span contains label or case"
+    nonlocal_flow_kinds = {
+        "return_statement",
+        "break_statement",
+        "continue_statement",
+    }
+    if any(span.kind in nonlocal_flow_kinds for span in spans):
+        return "span contains nonlocal control flow"
     return None
 
 

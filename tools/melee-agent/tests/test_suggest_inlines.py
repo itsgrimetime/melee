@@ -35,6 +35,38 @@ def test_generate_candidates_from_repeated_call_groups() -> None:
     assert all(c.anchor.kind == "repeated" for c in candidates)
 
 
+def test_repeated_call_group_rejects_return_before_live_statement() -> None:
+    source = textwrap.dedent("""\
+        void f(Fighter* fp, int flag)
+        {
+            if (flag) {
+                return;
+            }
+            ftCo_8009CB40(fp, 0, 1, NULL);
+            if (flag) {
+                return;
+            }
+            ftCo_8009CB40(fp, 1, 1, NULL);
+        }
+    """)
+
+    candidates = generate_candidates(
+        source=source,
+        function="f",
+        seed_source="repeated",
+        max_span_statements=2,
+        budget=8,
+    )
+
+    assert not [
+        c for c in candidates
+        if c.kind == "void-helper"
+        and "return;" in c.source_excerpt
+        and "ftCo_8009CB40" in c.source_excerpt
+        and not c.is_rejected
+    ]
+
+
 def test_generate_arg_temp_candidate_for_named_call() -> None:
     source = textwrap.dedent("""\
         void f(HSD_JObj* cursor_jobj)
