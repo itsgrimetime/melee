@@ -2223,12 +2223,15 @@ def first_divergence_cmd(
         typer.Option("--function", "-f", help="Function name"),
     ],
     force_phys: Annotated[
-        str,
+        Optional[str],
         typer.Option(
             "--force-phys",
-            help="Target coloring as ig:phys[,ig:phys] (the map KEYS are the target node set)",
+            help=(
+                "Target coloring as ig:phys[,ig:phys] (the map KEYS are the "
+                "target node set). Required unless --frame is used."
+            ),
         ),
-    ],
+    ] = None,
     dump: Annotated[
         Optional[Path],
         typer.Argument(help="pcdump (auto-resolved if omitted)"),
@@ -2241,12 +2244,70 @@ def first_divergence_cmd(
         bool,
         typer.Option("--source", help="Attach advisory source ideas"),
     ] = False,
+    frame: Annotated[
+        bool,
+        typer.Option(
+            "--frame",
+            help=(
+                "Explain the first stack-frame/local-area divergence instead "
+                "of allocator force-phys divergence."
+            ),
+        ),
+    ] = False,
+    expected_asm: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--expected-asm",
+            help=(
+                "Expected target asm for --frame. Omit to extract via "
+                "`melee-agent extract get <function> --full`."
+            ),
+        ),
+    ] = None,
+    no_expected: Annotated[
+        bool,
+        typer.Option(
+            "--no-expected",
+            help="For --frame, inspect only the current pcdump without target asm.",
+        ),
+    ] = False,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit machine-readable output."),
+    ] = False,
 ):
     """Find the earliest allocator decision diverging from a same-source target.
 
     Gated allocator facts are derived mechanically from the recorded colorgraph;
     --source adds a NON-gated advisory layer (heuristic symbol-bridge mapping).
     """
+    if frame:
+        if source:
+            typer.echo(
+                "--source is only valid for allocator --force-phys mode; "
+                "frame mode emits source levers directly.",
+                err=True,
+            )
+            raise typer.Exit(2)
+        report = _first_divergence_frame_report(
+            function,
+            dump=dump,
+            expected_asm=expected_asm,
+            no_expected=no_expected,
+        )
+        if json_out:
+            print(json.dumps(report, indent=2))
+        else:
+            print(_format_first_divergence_frame_report(report))
+        return
+
+    if force_phys is None:
+        raise typer.BadParameter("--force-phys is required unless --frame is used")
+    if expected_asm is not None or no_expected:
+        raise typer.BadParameter("--expected-asm/--no-expected require --frame")
+    if json_out:
+        raise typer.BadParameter("--json is currently only supported with --frame")
+
     from ..mwcc_debug import first_divergence as fd
     from ..mwcc_debug.colorgraph_parser import parse_hook_events, find_function
 
@@ -2284,6 +2345,177 @@ def first_divergence_cmd(
             source=fd.attach_source_ideas(report.fact, src_text, function, pre),
         )
     typer.echo(fd.format_report(report))
+
+
+def _first_divergence_frame_case(report: dict) -> str:
+    if report.get("expected") is None:
+        return "frame-current-only"
+    if report.get("current_low_frame_expansion") is not None:
+        return "frame-unused-low-home"
+    if report.get("extra_low_frame_reservation") is not None:
+        return "frame-missing-low-reservation"
+    if report.get("frame_delta"):
+        return "frame-size"
+    return "none"
+
+
+def _first_divergence_frame_local_target(case: str, residual: dict | None) -> str:
+    if case == "frame-unused-low-home":
+        text = (
+            "suppress the unused low local home by changing the source shape "
+            "that created it; for held-FP constants, try splitting the constant "
+            "lifetime or using the literal/global expression at the final FP call"
+        )
+        if residual and residual.get("alignment_growth_bytes"):
+            text += (
+                ", then reduce the downstream 8-byte alignment growth from the "
+                "int-to-float scratch slot"
+            )
+        return text
+    if case == "frame-missing-low-reservation":
+        return (
+            "introduce the target's low-frame reservation naturally, or use "
+            "frame patch/probe verification to confirm the expected frame is reachable"
+        )
+    if case == "frame-size":
+        return (
+            "derive a frame target from checkdiff and rank source candidates by "
+            "frame-size and unused-range distance"
+        )
+    if case == "none":
+        return "no frame/local-area divergence detected"
+    return "inspect the current frame without a target frame comparison"
+
+
+def _frame_residual_for_case(report: dict, case: str) -> dict | None:
+    if case == "frame-unused-low-home":
+        return report.get("current_low_frame_expansion")
+    if case == "frame-missing-low-reservation":
+        return report.get("extra_low_frame_reservation")
+    return None
+
+
+def _first_divergence_frame_report(
+    function: str,
+    *,
+    dump: Path | None,
+    expected_asm: Path | None,
+    no_expected: bool,
+) -> dict:
+    melee_root = DEFAULT_MELEE_ROOT
+    dump_path = _resolve_pcdump_path(dump, function, melee_root)
+    pcdump_text = dump_path.read_text()
+    expected_text = _read_frame_reservation_expected_asm(
+        function,
+        expected_asm=expected_asm,
+        no_expected=no_expected,
+        melee_root=melee_root,
+    )
+    current_text = (
+        _read_frame_reservation_current_asm(function, melee_root=melee_root)
+        if _pcdump_has_symbolic_stack_homes(pcdump_text)
+        else None
+    )
+    try:
+        frame_report = analyze_frame_reservations(
+            pcdump_text,
+            function,
+            expected_asm_text=expected_text,
+            current_asm_text=current_text,
+        )
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2) from exc
+
+    case = _first_divergence_frame_case(frame_report)
+    residual = _frame_residual_for_case(frame_report, case)
+    unit = _find_unit_for_function(function, melee_root)
+    suggestions = _frame_source_suggestions_from_report(frame_report, unit=unit)
+    next_steps = [
+        f"melee-agent debug inspect frame-reservations -f {function}",
+        f"melee-agent debug suggest frame -f {function}",
+    ]
+    for suggestion in suggestions:
+        for command in suggestion.get("commands") or []:
+            if command not in next_steps:
+                next_steps.append(command)
+
+    residual_payload = None
+    if isinstance(residual, dict):
+        residual_payload = {
+            "range": {
+                "start": residual.get("start"),
+                "end": residual.get("end"),
+                "size": residual.get("size"),
+            },
+            "origin": residual.get("origin"),
+            "frame_growth_bytes": residual.get("frame_growth_bytes"),
+            "alignment_growth_bytes": residual.get("alignment_growth_bytes"),
+            "current_accesses_in_range": residual.get("current_accesses_in_range", []),
+        }
+
+    current = frame_report.get("current") or {}
+    expected = frame_report.get("expected") or {}
+    return {
+        "kind": "frame-local-area",
+        "function": function,
+        "case": case,
+        "summary": frame_report.get("summary"),
+        "current_frame": current.get("frame_size"),
+        "target_frame": expected.get("frame_size"),
+        "frame_delta": frame_report.get("frame_delta"),
+        "residual": residual_payload,
+        "local_target": _first_divergence_frame_local_target(case, residual),
+        "next_steps": next_steps,
+        "suggestions": suggestions,
+        "frame": frame_report,
+    }
+
+
+def _format_first_divergence_frame_report(report: dict) -> str:
+    lines = ["=== FRAME/LOCAL-AREA FACTS (gated) ==="]
+    lines.append(
+        "First divergence: frame/local-area "
+        f"Case {report['case']}"
+    )
+    lines.append(f"  current frame: {report.get('current_frame')}")
+    lines.append(f"  target frame: {report.get('target_frame')}")
+    lines.append(f"  frame delta: {report.get('frame_delta')}")
+    residual = report.get("residual")
+    if residual is not None:
+        range_info = residual["range"]
+        if range_info.get("start") is not None:
+            lines.append(
+                "  residual range: "
+                + _format_stack_range({
+                    "start": range_info["start"],
+                    "end": range_info["end"],
+                    "size": range_info["size"],
+                })
+            )
+        if residual.get("origin"):
+            lines.append(f"  origin: {residual['origin']}")
+        if residual.get("frame_growth_bytes") is not None:
+            lines.append(f"  frame growth bytes: {residual['frame_growth_bytes']}")
+        if residual.get("alignment_growth_bytes") is not None:
+            lines.append(
+                f"  alignment growth bytes: {residual['alignment_growth_bytes']}"
+            )
+    lines.append(f"  local target: {report['local_target']}")
+    lines.append("")
+    lines.append("=== SOURCE IDEAS (ADVISORY, not validated) ===")
+    suggestions = report.get("suggestions") or []
+    if suggestions:
+        for suggestion in suggestions:
+            lines.append(f"  {suggestion['rank']}. {suggestion['kind']}")
+            lines.append(f"     {suggestion['description']}")
+    else:
+        lines.append("  (no frame source suggestions available)")
+    lines.append("")
+    lines.append("=== NEXT STEPS ===")
+    for step in report.get("next_steps") or []:
+        lines.append(f"  {step}")
+    return "\n".join(lines)
 
 
 @inspect_app.command("diff")

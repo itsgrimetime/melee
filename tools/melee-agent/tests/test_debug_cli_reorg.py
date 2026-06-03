@@ -408,6 +408,138 @@ def test_suggest_frame_reports_low_home_source_levers(tmp_path: Path) -> None:
     assert "--force-frame-from-diff" in joined_commands
 
 
+def test_first_divergence_frame_mode_reports_low_home_case(tmp_path: Path) -> None:
+    pcdump = tmp_path / "pcdump.txt"
+    pcdump.write_text(textwrap.dedent("""\
+        Starting function gm_801A9DD0
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        gm_801A9DD0
+        B0: Succ={} Pred={} Labels={}
+            stw r0,4(r1)
+            stwu r1,-152(r1)
+            stfd f31,144(r1)
+            stfd f30,136(r1)
+            stw r8,40(r1)
+            stw r7,28(r1)
+            stw r9,72(r1)
+            lfd f0,72(r1)
+            stw r9,80(r1)
+            lfd f0,80(r1)
+            lfd f30,136(r1)
+            lfd f31,144(r1)
+            addi r1,r1,152
+    """))
+    expected = tmp_path / "expected.s"
+    expected.write_text(textwrap.dedent("""\
+        .fn gm_801A9DD0, global
+        /* 801A9DD8 */    stw r0, 0x4(r1)
+        /* 801A9DDC */    stwu r1, -0x90(r1)
+        /* 801A9DE0 */    stfd f31, 0x88(r1)
+        /* 801A9DE4 */    stfd f30, 0x80(r1)
+        /* 801A9DE8 */    stw r8, 0x24(r1)
+        /* 801A9DEC */    stw r7, 0x18(r1)
+        /* 801A9DF0 */    stw r9, 0x40(r1)
+        /* 801A9DF4 */    lfd f0, 0x40(r1)
+        /* 801A9DF8 */    stw r9, 0x48(r1)
+        /* 801A9DFC */    lfd f0, 0x48(r1)
+        /* 801A9E00 */    lfd f30, 0x80(r1)
+        /* 801A9E04 */    lfd f31, 0x88(r1)
+        /* 801A9E08 */    addi r1, r1, 0x90
+        .endfn gm_801A9DD0
+    """))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "first-divergence",
+            "-f",
+            "gm_801A9DD0",
+            str(pcdump),
+            "--frame",
+            "--expected-asm",
+            str(expected),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    out = strip_ansi(result.stdout)
+    assert "FRAME/LOCAL-AREA FACTS" in out
+    assert "Case frame-unused-low-home" in out
+    assert "current frame: 152" in out
+    assert "target frame: 144" in out
+    assert "0x18-0x1c (4 bytes)" in out
+    assert "debug suggest frame -f gm_801A9DD0" in out
+    assert "--force-frame-from-diff" in out
+
+
+def test_first_divergence_frame_mode_json_reports_next_steps(tmp_path: Path) -> None:
+    pcdump = tmp_path / "pcdump.txt"
+    pcdump.write_text(textwrap.dedent("""\
+        Starting function gm_801A9DD0
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        gm_801A9DD0
+        B0: Succ={} Pred={} Labels={}
+            stw r0,4(r1)
+            stwu r1,-152(r1)
+            stfd f31,144(r1)
+            stfd f30,136(r1)
+            stw r8,40(r1)
+            stw r7,28(r1)
+            stw r9,72(r1)
+            lfd f0,72(r1)
+            stw r9,80(r1)
+            lfd f30,136(r1)
+            lfd f31,144(r1)
+            addi r1,r1,152
+    """))
+    expected = tmp_path / "expected.s"
+    expected.write_text(textwrap.dedent("""\
+        .fn gm_801A9DD0, global
+        /* 801A9DD8 */    stw r0, 0x4(r1)
+        /* 801A9DDC */    stwu r1, -0x90(r1)
+        /* 801A9DE0 */    stfd f31, 0x88(r1)
+        /* 801A9DE4 */    stfd f30, 0x80(r1)
+        /* 801A9DE8 */    stw r8, 0x24(r1)
+        /* 801A9DEC */    stw r7, 0x18(r1)
+        /* 801A9DF0 */    stw r9, 0x40(r1)
+        /* 801A9DF4 */    lfd f0, 0x40(r1)
+        /* 801A9DF8 */    stw r9, 0x48(r1)
+        /* 801A9DFC */    lfd f0, 0x48(r1)
+        /* 801A9E00 */    lfd f30, 0x80(r1)
+        /* 801A9E04 */    lfd f31, 0x88(r1)
+        /* 801A9E08 */    addi r1, r1, 0x90
+        .endfn gm_801A9DD0
+    """))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "first-divergence",
+            "-f",
+            "gm_801A9DD0",
+            str(pcdump),
+            "--frame",
+            "--expected-asm",
+            str(expected),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["kind"] == "frame-local-area"
+    assert payload["case"] == "frame-unused-low-home"
+    assert payload["current_frame"] == 152
+    assert payload["target_frame"] == 144
+    assert payload["residual"]["range"]["start"] == 24
+    assert payload["residual"]["alignment_growth_bytes"] == 4
+    assert any("--force-frame-from-diff" in step for step in payload["next_steps"])
+
+
 def test_dump_remote_quotes_cmd_env_assignments(monkeypatch, tmp_path: Path) -> None:
     captured: dict[str, list[str]] = {}
 
