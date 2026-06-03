@@ -81,6 +81,23 @@ class RemoteStatus:
 
 
 @dataclass(frozen=True)
+class RemoteLogStatus:
+    exists: bool
+    modified_at: datetime | None = None
+    best_score: str | None = None
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class OrphanedWiboProcess:
+    pid: int
+    ppid: int
+    stat: str
+    elapsed: str
+    command: str
+
+
+@dataclass(frozen=True)
 class DoctorCheck:
     name: str
     ok: bool
@@ -271,6 +288,111 @@ def status_job(
     return RemoteStatus(job_id=job.job_id, state=result.stdout.strip() or "unknown")
 
 
+def parse_timestamp(value: str) -> datetime:
+    """Parse a job timestamp as a naive datetime for age reporting."""
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+
+
+def utcnow() -> datetime:
+    """Current time hook for tests."""
+    return datetime.utcnow().replace(microsecond=0)
+
+
+def remote_log_status(
+    job: RemoteJob,
+    runner: Callable[..., CommandResult] = run_command,
+) -> RemoteLogStatus:
+    """Read bounded remote log metadata for stale-job decisions."""
+    log_path = f"{job.remote_run_dir}/permuter.log"
+    script = (
+        f"log={shlex.quote(log_path)}; "
+        "if [ ! -f \"$log\" ]; then printf 'exists\t0\n'; exit 0; fi; "
+        "printf 'exists\t1\n'; "
+        "printf 'mtime\t'; "
+        "(stat -c %Y \"$log\" 2>/dev/null || stat -f %m \"$log\" 2>/dev/null || printf 0); "
+        "printf '\n'; "
+        "printf 'best\t'; "
+        "tail -c 65536 \"$log\" | tr '\r' '\n' | "
+        "grep -E 'best|score|match' | tail -n 1 | head -c 240; "
+        "printf '\n'"
+    )
+    result = runner(["ssh", job.ssh, _remote_sh(script)], check=False)
+    if result.returncode != 0:
+        return RemoteLogStatus(
+            exists=False,
+            detail=result.stderr.strip() or result.stdout.strip(),
+        )
+    fields: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        if "\t" not in line:
+            continue
+        key, value = line.split("\t", 1)
+        fields[key] = value
+    exists = fields.get("exists") == "1"
+    modified_at = None
+    raw_mtime = fields.get("mtime")
+    if raw_mtime:
+        try:
+            modified_at = datetime.fromtimestamp(int(raw_mtime))
+        except ValueError:
+            modified_at = None
+    best = fields.get("best") or None
+    return RemoteLogStatus(exists=exists, modified_at=modified_at, best_score=best)
+
+
+def sanitize_log_tail(text: str, *, lines: int) -> str:
+    """Turn CR progress streams into bounded logical lines."""
+    logical = text.replace("\r", "\n")
+    cleaned_lines: list[str] = []
+    for line in logical.splitlines():
+        # Progress streams may include backspaces; dropping them is enough for
+        # readable bounded status output and avoids trying to emulate a TTY.
+        line = line.replace("\b", "")
+        if line.strip():
+            cleaned_lines.append(line)
+    if lines > 0:
+        cleaned_lines = cleaned_lines[-lines:]
+    if not cleaned_lines:
+        return ""
+    return "\n".join(cleaned_lines) + "\n"
+
+
+def detect_orphaned_wibo_processes(
+    runner: Callable[[list[str]], CommandResult] = run_command,
+) -> list[OrphanedWiboProcess]:
+    """Find orphaned local wibo/MWCC processes that likely need operator action."""
+    result = runner(
+        ["ps", "-axo", "pid=,ppid=,stat=,etime=,command="],
+        check=False,
+    )
+    if result.returncode != 0:
+        return []
+    orphans: list[OrphanedWiboProcess] = []
+    for raw in result.stdout.splitlines():
+        parts = raw.strip().split(None, 4)
+        if len(parts) != 5:
+            continue
+        pid_s, ppid_s, stat, elapsed, command = parts
+        command_lower = command.lower()
+        if "wibo" not in command_lower or "mwcceppc" not in command_lower:
+            continue
+        try:
+            pid = int(pid_s)
+            ppid = int(ppid_s)
+        except ValueError:
+            continue
+        if ppid != 1:
+            continue
+        orphans.append(OrphanedWiboProcess(
+            pid=pid,
+            ppid=ppid,
+            stat=stat,
+            elapsed=elapsed,
+            command=command,
+        ))
+    return orphans
+
+
 def fetch_job(
     job: RemoteJob,
     runner: Callable[..., CommandResult] = run_command,
@@ -341,6 +463,7 @@ def tail_job(
     runner: Callable[..., CommandResult] | None = None,
     lines: int = 80,
     follow: bool = False,
+    max_bytes: int = 65536,
 ) -> CommandResult:
     """Read a remote job's permuter log, following only when requested."""
     if follow and runner is None:
@@ -352,13 +475,18 @@ def tail_job(
         runner = run_command
     if isinstance(lines, bool) or not isinstance(lines, int) or lines < 1:
         raise RemoteJobError("tail lines must be a positive integer")
-    follow_flag = " -f" if follow else ""
+    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 1024:
+        raise RemoteJobError("tail max_bytes must be an integer >= 1024")
+    if follow:
+        tail_cmd = f"tail -n {lines} -f"
+    else:
+        tail_cmd = f"tail -c {max_bytes}"
     return runner(
         [
             "ssh",
             job.ssh,
             _remote_sh(
-                f"tail -n {lines}{follow_flag} "
+                f"{tail_cmd} "
                 f"{shlex.quote(job.remote_run_dir)}/permuter.log"
             ),
         ],

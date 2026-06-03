@@ -4719,15 +4719,66 @@ def remote_list() -> None:
 @remote_app.command(name="status")
 def remote_status(
     job_id: Annotated[str, typer.Argument(help="Remote permuter job id.")],
+    stale_hours: Annotated[
+        float,
+        typer.Option(
+            "--stale-hours",
+            help="Recommend stopping active jobs older than this many wall hours.",
+        ),
+    ] = 24.0,
+    idle_hours: Annotated[
+        float,
+        typer.Option(
+            "--idle-hours",
+            help="Recommend stopping active jobs whose log is idle this many hours.",
+        ),
+    ] = 12.0,
 ) -> None:
-    """Show whether a remote permuter job is active."""
+    """Show remote permuter job activity and stale cleanup guidance."""
     try:
         job = _remote_read_job(job_id)
         status = permuter_remote.status_job(job)
+        log_status = permuter_remote.remote_log_status(job)
     except (permuter_remote.RemoteConfigError, permuter_remote.RemoteJobError) as exc:
         _remote_error(exc)
 
     print(f"{status.job_id}: {status.state}")
+    now = permuter_remote.utcnow()
+    try:
+        created_at = permuter_remote.parse_timestamp(job.created_at)
+    except ValueError:
+        created_at = None
+    if created_at is not None:
+        wall_age_h = max(0.0, (now - created_at).total_seconds() / 3600.0)
+        print(f"wall age: {wall_age_h:.1f}h")
+    else:
+        wall_age_h = None
+        print(f"wall age: unknown ({job.created_at})")
+    print(f"function: {job.function}")
+    print(f"target: {job.target} ({job.ssh})")
+    print(f"remote path: {job.remote_perm_dir}")
+    if log_status.exists and log_status.modified_at is not None:
+        idle_h = max(0.0, (now - log_status.modified_at).total_seconds() / 3600.0)
+        print(f"log idle: {idle_h:.1f}h")
+    else:
+        idle_h = None
+        detail = f" - {log_status.detail}" if log_status.detail else ""
+        print(f"log idle: unknown{detail}")
+    if log_status.best_score:
+        print(f"best score: {log_status.best_score}")
+    reasons: list[str] = []
+    if status.state == "active":
+        if wall_age_h is not None and wall_age_h >= stale_hours:
+            reasons.append(f"wall age >= {stale_hours:g}h")
+        if idle_h is not None and idle_h >= idle_hours:
+            reasons.append(f"log idle >= {idle_hours:g}h")
+    if reasons:
+        print(f"recommendation: stop ({'; '.join(reasons)})")
+        print(f"cleanup: melee-agent debug permute remote stop {job.job_id}")
+    elif status.state == "active":
+        print("recommendation: keep")
+    else:
+        print("recommendation: stopped")
     if status.detail:
         typer.echo(status.detail, err=True)
 
@@ -4784,11 +4835,37 @@ def remote_tail(
         _remote_error(exc)
 
     if result.stdout:
-        typer.echo(result.stdout, nl=False)
+        stdout = (
+            result.stdout if follow
+            else permuter_remote.sanitize_log_tail(result.stdout, lines=lines)
+        )
+        typer.echo(stdout, nl=False)
     if result.stderr:
         typer.echo(result.stderr, err=True, nl=False)
     if result.returncode != 0:
         raise typer.Exit(2)
+
+
+@permute_app.command(name="local-orphans")
+def permute_local_orphans() -> None:
+    """Detect orphaned local wibo/MWCC compile processes."""
+    orphans = permuter_remote.detect_orphaned_wibo_processes()
+    if not orphans:
+        print("No orphaned local wibo/MWCC processes detected.")
+        return
+    print("Orphaned local wibo/MWCC processes:")
+    for proc in orphans:
+        state_note = (
+            " uninterruptible; kill may not work, restart host if it blocks builds"
+            if "U" in proc.stat
+            else ""
+        )
+        print(
+            f"PID={proc.pid}\tPPID={proc.ppid}\tSTAT={proc.stat}\t"
+            f"ELAPSED={proc.elapsed}{state_note}"
+        )
+        print(f"  {proc.command}")
+    raise typer.Exit(1)
 
 
 @remote_app.command(name="stop")

@@ -120,6 +120,137 @@ def test_remote_tail_cli_help_documents_snapshot_and_follow() -> None:
     assert "snapshot" in result.stdout.lower()
 
 
+def test_remote_tail_cli_sanitizes_carriage_return_progress(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+
+    def fake_read_job(job_id: str, jobs_dir: Path = pr.JOBS_DIR) -> pr.RemoteJob:
+        assert job_id == job.job_id
+        return job
+
+    def fake_tail_job(
+        loaded_job: pr.RemoteJob,
+        *,
+        runner,
+        lines: int = 80,
+        follow: bool = False,
+    ) -> pr.CommandResult:
+        assert loaded_job == job
+        assert lines == 3
+        assert follow is False
+        return pr.CommandResult(
+            returncode=0,
+            stdout=(
+                "started\n"
+                "iter 1 score 120\riter 2 score 115\riter 3 score 110\r"
+                "done\n"
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(pr, "read_job", fake_read_job)
+    monkeypatch.setattr(pr, "tail_job", fake_tail_job)
+
+    result = CliRunner().invoke(
+        app,
+        ["debug", "permute", "remote", "tail", job.job_id, "--lines", "3"],
+    )
+
+    assert result.exit_code == 0
+    assert "\r" not in result.stdout
+    assert "iter 1 score" not in result.stdout
+    assert "iter 2 score 115" in result.stdout
+    assert "iter 3 score 110" in result.stdout
+    assert "done" in result.stdout
+
+
+def test_remote_status_reports_stale_age_and_cleanup_guidance(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+    now = pr.parse_timestamp("2026-05-27T15:30:12")
+
+    def fake_read_job(job_id: str, jobs_dir: Path = pr.JOBS_DIR) -> pr.RemoteJob:
+        assert job_id == job.job_id
+        return job
+
+    def fake_status_job(
+        loaded_job: pr.RemoteJob,
+    ) -> pr.RemoteStatus:
+        assert loaded_job == job
+        return pr.RemoteStatus(job_id=job.job_id, state="active")
+
+    def fake_remote_log_status(
+        loaded_job: pr.RemoteJob,
+    ) -> pr.RemoteLogStatus:
+        assert loaded_job == job
+        return pr.RemoteLogStatus(
+            exists=True,
+            modified_at=pr.parse_timestamp("2026-05-26T14:30:12"),
+            best_score="99.71%",
+        )
+
+    monkeypatch.setattr(pr, "read_job", fake_read_job)
+    monkeypatch.setattr(pr, "status_job", fake_status_job)
+    monkeypatch.setattr(pr, "remote_log_status", fake_remote_log_status)
+    monkeypatch.setattr(pr, "utcnow", lambda: now)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "remote",
+            "status",
+            job.job_id,
+            "--stale-hours",
+            "24",
+            "--idle-hours",
+            "12",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert f"{job.job_id}: active" in result.stdout
+    assert "wall age: 49.0h" in result.stdout
+    assert "log idle: 25.0h" in result.stdout
+    assert "best score: 99.71%" in result.stdout
+    assert "recommendation: stop" in result.stdout
+    assert f"melee-agent debug permute remote stop {job.job_id}" in result.stdout
+
+
+def test_permute_local_orphans_cli_reports_uninterruptible_wibo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        pr,
+        "detect_orphaned_wibo_processes",
+        lambda: [
+            pr.OrphanedWiboProcess(
+                pid=24276,
+                ppid=1,
+                stat="UE",
+                elapsed="40:01:02",
+                command=(
+                    "build/tools/wibo build/compilers/GC/1.2.5n/"
+                    "mwcceppc.exe -c src/melee/ft/ftdynamics.c"
+                ),
+            )
+        ],
+    )
+
+    result = CliRunner().invoke(app, ["debug", "permute", "local-orphans"])
+
+    assert result.exit_code == 1
+    assert "24276" in result.stdout
+    assert "STAT=UE" in result.stdout
+    assert "uninterruptible" in result.stdout
+    assert "restart" in result.stdout.lower()
+
+
 def test_remote_doctor_cli_reports_failed_checks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -521,7 +652,7 @@ def test_tail_job_snapshots_remote_permuter_log_by_default(tmp_path: Path) -> No
         [
             "ssh",
             "coder.coder64",
-            "sh -lc 'tail -n 20 /home/coder/decomp-permuter/remote-runs/fn_80000000-coder64-20260525-143012/permuter.log'",
+            "sh -lc 'tail -c 65536 /home/coder/decomp-permuter/remote-runs/fn_80000000-coder64-20260525-143012/permuter.log'",
         ]
     ]
 
