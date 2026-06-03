@@ -288,13 +288,40 @@ def _record_transform_plan_attempt(
     plan,
     probes,
     source_path: Path | None,
+    validation_results: list[dict] | None = None,
 ) -> dict:
     from src.cli.tracking import record_attempt
 
     clusters = ",".join(cluster.cluster_id for cluster in plan.clusters)
     family_ids = ",".join(family.family_id for family in plan.families)
-    if probes:
+    retained_results = [
+        result for result in (validation_results or [])
+        if result.get("outcome") == "retained-source-improvement"
+    ]
+    negative_results = [
+        result for result in (validation_results or [])
+        if result.get("outcome") == "negative-evidence"
+    ]
+    if retained_results:
+        outcome = "improved"
+        retained = True
+        blocker = ""
+        retained_ids = ",".join(str(result.get("probe_id")) for result in retained_results)
+        note = (
+            f"transform-plan validation retained-source-improvement "
+            f"probes={retained_ids} clusters={clusters} families={family_ids}"
+        )
+    elif validation_results and negative_results:
+        outcome = "blocked"
+        retained = False
+        blocker = "transform-plan validation exhausted probes with negative evidence"
+        note = (
+            f"transform-plan negative-evidence probes={len(negative_results)} "
+            f"clusters={clusters} families={family_ids}"
+        )
+    elif probes:
         outcome = "neutral"
+        retained = False
         blocker = ""
         note = (
             f"transform-plan probes={len(probes)} clusters={clusters} "
@@ -302,6 +329,7 @@ def _record_transform_plan_attempt(
         )
     else:
         outcome = "blocked"
+        retained = False
         blocker = (
             "transform-plan produced no materialized probes; target function "
             "body is absent or no applicable anchors matched"
@@ -314,6 +342,7 @@ def _record_transform_plan_attempt(
         classification="transform-corpus",
         blocker=blocker,
         note=note,
+        retained=retained,
         source_file=str(source_path) if source_path is not None else "",
     )
     attempts = summary.get("attempts", [])
@@ -324,7 +353,67 @@ def _record_transform_plan_attempt(
         "classification": "transform-corpus",
         "blocker": blocker,
         "note": note,
+        "retained": retained,
     }
+
+
+def _classify_validation_result(returncode: int, stdout: str, stderr: str) -> str:
+    text = f"{stdout}\n{stderr}".lower()
+    if returncode == 0 and any(
+        marker in text
+        for marker in (
+            "match=true",
+            "matched=true",
+            "retained-source-improvement",
+            "fix found",
+        )
+    ):
+        return "retained-source-improvement"
+    if returncode == 0:
+        return "negative-evidence"
+    return "blocked"
+
+
+def _run_transform_validations(
+    probe_payloads: list[dict],
+    *,
+    validate_command: str,
+) -> list[dict]:
+    results: list[dict] = []
+    for probe in probe_payloads:
+        candidate_path = probe.get("candidate_path")
+        if not candidate_path:
+            results.append({
+                "probe_id": probe.get("probe_id"),
+                "family_id": probe.get("family_id"),
+                "outcome": "blocked",
+                "returncode": None,
+                "command": None,
+                "stdout": "",
+                "stderr": "candidate_path missing; pass --write-probes",
+            })
+            continue
+        args = [
+            token.replace("{candidate_path}", str(candidate_path)).replace(
+                "{candidate}", str(candidate_path)
+            )
+            for token in shlex.split(validate_command)
+        ]
+        proc = subprocess.run(args, capture_output=True, text=True)
+        results.append({
+            "probe_id": probe.get("probe_id"),
+            "family_id": probe.get("family_id"),
+            "outcome": _classify_validation_result(
+                proc.returncode,
+                proc.stdout,
+                proc.stderr,
+            ),
+            "returncode": proc.returncode,
+            "command": args,
+            "stdout": proc.stdout,
+            "stderr": proc.stderr,
+        })
+    return results
 
 
 def _assignment_progress(meta: dict | None) -> dict:
@@ -412,6 +501,16 @@ def plan_transforms_cmd(
             help="Record the transform plan/probe outcome in the shared attempts ledger.",
         ),
     ] = False,
+    validate_command: Annotated[
+        Optional[str],
+        typer.Option(
+            "--validate-command",
+            help=(
+                "External command template to validate each generated probe. "
+                "Use {candidate_path} as the candidate source placeholder."
+            ),
+        ),
+    ] = None,
     json_out: Annotated[
         bool,
         typer.Option("--json/--no-json", help="Emit machine-readable JSON."),
@@ -449,12 +548,18 @@ def plan_transforms_cmd(
         )
 
     payload = _transform_plan_payload(plan, probes, write_dir=write_probes)
+    if validate_command is not None:
+        payload["validation"] = _run_transform_validations(
+            payload["probes"],
+            validate_command=validate_command,
+        )
     if record_ledger:
         payload["ledger_record"] = _record_transform_plan_attempt(
             function=function,
             plan=plan,
             probes=probes,
             source_path=source_path,
+            validation_results=payload.get("validation"),
         )
     if json_out:
         typer.echo(_json.dumps(payload, indent=2))
@@ -475,6 +580,15 @@ def plan_transforms_cmd(
     typer.echo(f"Materialized probes: {len(payload['probes'])}")
     if write_probes is not None:
         typer.echo(f"Probe directory: {write_probes}")
+    if validate_command is not None:
+        outcomes: dict[str, int] = {}
+        for item in payload.get("validation", []):
+            outcome = str(item.get("outcome") or "unknown")
+            outcomes[outcome] = outcomes.get(outcome, 0) + 1
+        typer.echo(
+            "Validation: "
+            + ", ".join(f"{key}={value}" for key, value in sorted(outcomes.items()))
+        )
     if record_ledger:
         record = payload["ledger_record"]
         typer.echo(

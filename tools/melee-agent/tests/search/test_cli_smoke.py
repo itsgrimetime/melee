@@ -192,6 +192,102 @@ def test_search_plan_transforms_can_record_no_probe_evidence(
     assert "early_flag_reload" in attempt["note"]
 
 
+def test_search_plan_transforms_validates_generated_probes(tmp_path: Path) -> None:
+    source = tmp_path / "e7b4.c"
+    source.write_text(
+        "void ftCo_8009E7B4(void) {\n"
+        "    if (flag) {\n"
+        "        reload = 1;\n"
+        "    } else {\n"
+        "        if (kind != 0) {\n"
+        "            reload = 0;\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+    probes_dir = tmp_path / "probes"
+    runner = CliRunner()
+
+    result = runner.invoke(
+        search_app,
+        [
+            "plan-transforms",
+            "--function", "ftCo_8009E7B4",
+            "--unit", "melee/ft/ftcommon",
+            "--force-phys", "58:4,35:29",
+            "--source-file", str(source),
+            "--max-per-family", "1",
+            "--write-probes", str(probes_dir),
+            "--validate-command",
+            (
+                f"{sys.executable} -c \"import pathlib,sys; "
+                "p=pathlib.Path(sys.argv[1]); print('match=true' if p.exists() else 'missing')\" "
+                "{candidate_path}"
+            ),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["validation"]
+    first = payload["validation"][0]
+    assert first["outcome"] == "retained-source-improvement"
+    assert first["returncode"] == 0
+    assert first["probe_id"] == payload["probes"][0]["probe_id"]
+
+
+def test_search_plan_transforms_records_retained_validation_evidence(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "e7b4.c"
+    source.write_text(
+        "void ftCo_8009E7B4(void) {\n"
+        "    if (flag) {\n"
+        "        reload = 1;\n"
+        "    } else {\n"
+        "        if (kind != 0) {\n"
+        "            reload = 0;\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+    ledger = tmp_path / "attempts.json"
+    monkeypatch.setenv("DECOMP_ATTEMPT_LEDGER_FILE", str(ledger))
+    runner = CliRunner()
+
+    result = runner.invoke(
+        search_app,
+        [
+            "plan-transforms",
+            "--function", "ftCo_8009E7B4",
+            "--unit", "melee/ft/ftcommon",
+            "--force-phys", "58:4,35:29",
+            "--source-file", str(source),
+            "--max-per-family", "1",
+            "--write-probes", str(tmp_path / "probes"),
+            "--validate-command",
+            (
+                f"{sys.executable} -c \"import pathlib,sys; "
+                "p=pathlib.Path(sys.argv[1]); print('match=true' if p.exists() else 'missing')\" "
+                "{candidate_path}"
+            ),
+            "--record-ledger",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["ledger_record"]["outcome"] == "improved"
+    data = json.loads(ledger.read_text())
+    attempt = data["functions"]["ftCo_8009E7B4"]["attempts"][0]
+    assert attempt["outcome"] == "improved"
+    assert attempt["retained"] is True
+    assert "retained-source-improvement" in attempt["note"]
+
+
 def test_search_triage_clusters_source_deltas_and_scores_candidates(
     tmp_path: Path,
 ) -> None:
