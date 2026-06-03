@@ -54,6 +54,7 @@ class BaselineSignature:
     coalesce_mappings: frozenset[tuple[int, int]]
     spill_set: frozenset[int]
     simplify_order: tuple[int, ...]
+    assigned_regs: frozenset[tuple[int, int]] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -276,11 +277,13 @@ def baseline_signature(events: FunctionEvents, *, class_id: int) -> BaselineSign
     mappings = _coalesce_mappings(events, class_id)
     spills = _spill_set(events, class_id)
     order = _simplify_order(events, class_id)
+    assigned = _assigned_regs(events, class_id)
     return BaselineSignature(
         interference_edges=frozenset(edges),
         coalesce_mappings=frozenset(mappings),
         spill_set=frozenset(spills),
         simplify_order=order,
+        assigned_regs=frozenset(assigned.items()),
     )
 
 
@@ -328,6 +331,21 @@ def _simplify_order(events: FunctionEvents, class_id: int) -> tuple[int, ...]:
         if section.class_id == class_id:
             return tuple(e.ig_idx for e in section.entries)
     return ()
+
+
+def _assigned_regs(events: FunctionEvents, class_id: int) -> dict[int, int]:
+    """Assigned physical registers from the final colorgraph section."""
+    matching = [
+        section for section in events.colorgraph_sections
+        if section.class_id == class_id
+    ]
+    if not matching:
+        return {}
+    return {
+        decision.ig_idx: decision.assigned_reg
+        for decision in matching[-1].decisions
+        if decision.ig_idx >= 0
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -496,6 +514,40 @@ def _common_suffix_length(a: tuple[int, ...], b: tuple[int, ...]) -> int:
     return matched
 
 
+def score_force_phys_assignment(
+    baseline: BaselineSignature,
+    candidate: BaselineSignature,
+    target_phys: dict[int, int],
+) -> SimplifyScore:
+    """Score a candidate by physical-register target hits.
+
+    Reuses ``SimplifyScore`` as the existing search/ranking carrier:
+    ``target_prefix`` stores target igs, ``observed_prefix`` stores the igs
+    whose assigned physical matches, and ``common_prefix_length`` stores the
+    match count. This keeps the search result shape stable while letting
+    callers label the objective as force-phys.
+    """
+    target_igs = tuple(target_phys.keys())
+    baseline_assigned = dict(baseline.assigned_regs)
+    candidate_assigned = dict(candidate.assigned_regs)
+
+    observed = tuple(
+        ig for ig in target_igs
+        if candidate_assigned.get(ig) == target_phys[ig]
+    )
+    baseline_matched = sum(
+        1 for ig in target_igs
+        if baseline_assigned.get(ig) == target_phys[ig]
+    )
+    return SimplifyScore(
+        target_prefix=target_igs,
+        observed_prefix=observed,
+        common_prefix_length=len(observed),
+        is_exact_match=(len(observed) == len(target_igs)),
+        baseline_common_prefix_length=baseline_matched,
+    )
+
+
 def combined_value(
     simplify_score: SimplifyScore,
     precolor: PrecolorDistance,
@@ -573,6 +625,7 @@ def search(
     target: tuple[int, ...],
     *,
     target_late: tuple[int, ...] = (),
+    force_phys: dict[int, int] | None = None,
     class_id: int = 0,
     max_candidates: int = 100,
     timeout: int = 60,
@@ -596,6 +649,9 @@ def search(
         simplify_order (late-mode, for ``--want-late``). When non-empty,
         suffix scoring is used instead of prefix scoring. Mutually exclusive
         with `target`.
+      force_phys: optional physical-register target map. When set, variants
+        are scored by how many target igs land on their requested physical
+        register, not by simplify-order proximity.
       class_id: Which register class to score against. Defaults to 0 (GPR).
       max_candidates: Hard cap on variants compiled. Driver stops when the
         cumulative compile count reaches this — bounds wall-clock cost.
@@ -664,7 +720,9 @@ def search(
             # too, not just the count.
             # In late-mode (target_late non-empty) use suffix scoring so
             # common_prefix_length tracks how many tail positions match.
-            if target_late:
+            if force_phys:
+                score = score_force_phys_assignment(baseline, sig, force_phys)
+            elif target_late:
                 score = _score_simplify_order_suffix(baseline, sig, target_late)
             else:
                 score = score_simplify_order(baseline, sig, target)

@@ -3999,7 +3999,11 @@ def test_suggest_register_tiebreak_emits_compiler_temp_levers() -> None:
     assert "occupy r3" in out
     assert "move the defining expression" in out
     assert "debug inspect virtual-to-var -f ft_800852B0 r53" in out
-    assert "debug mutate simplify-order --fn ft_800852B0 --want-late 53" in out
+    assert (
+        "debug mutate simplify-order --fn ft_800852B0 "
+        "--force-phys 53:4 --no-preserve-precolor"
+    ) in out
+    assert "--want-late 53" not in out
 
 
 def test_suggest_register_tiebreak_json_is_structured() -> None:

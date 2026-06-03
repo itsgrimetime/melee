@@ -60,24 +60,26 @@ def _events_for_class(
     simplify_order: list[int] | None = None,
     coalesce_mappings: list[tuple[int, int]] | None = None,
     spilled_ig_idxs: set[int] | None = None,
+    assigned_by_ig: dict[int, int] | None = None,
 ) -> FunctionEvents:
     """Build a single-class FunctionEvents from the four components."""
     interference_edges = interference_edges or []
     simplify_order = simplify_order or [32, 33]
     coalesce_mappings = coalesce_mappings or []
     spilled_ig_idxs = spilled_ig_idxs or set()
+    assigned_by_ig = assigned_by_ig or {}
 
     adj: dict[int, list[tuple[int, int]]] = {}
     for a, b in interference_edges:
         adj.setdefault(a, []).append((b, 30))
         adj.setdefault(b, []).append((a, 30))
 
-    ig_idxs = sorted(set(simplify_order) | set(adj.keys()))
+    ig_idxs = sorted(set(simplify_order) | set(adj.keys()) | set(assigned_by_ig))
     decisions = [
         _decision(
             iter_idx=i,
             ig_idx=ig,
-            assigned=30,
+            assigned=assigned_by_ig.get(ig, 30),
             interferers=sorted(adj.get(ig, [])),
         )
         for i, ig in enumerate(ig_idxs)
@@ -401,7 +403,11 @@ def _stub_compiles(
     return calls
 
 
-def _pcdump_for(simplify_order: list[int], interference_edges: list[tuple[int, int]] | None = None) -> str:
+def _pcdump_for(
+    simplify_order: list[int],
+    interference_edges: list[tuple[int, int]] | None = None,
+    assigned_by_ig: dict[int, int] | None = None,
+) -> str:
     """Build a minimal hook-events pcdump string that the colorgraph
     parser can read into FunctionEvents."""
     lines = ["Starting function fn_test"]
@@ -410,12 +416,14 @@ def _pcdump_for(simplify_order: list[int], interference_edges: list[tuple[int, i
     for a, b in interference_edges or []:
         adj.setdefault(a, []).append((b, 30))
         adj.setdefault(b, []).append((a, 30))
-    ig_idxs = sorted(set(simplify_order) | set(adj.keys()))
+    assigned_by_ig = assigned_by_ig or {}
+    ig_idxs = sorted(set(simplify_order) | set(adj.keys()) | set(assigned_by_ig))
     lines.append(f"COLORGRAPH DECISIONS (class=0, result=1, n_nodes={len(ig_idxs)})")
     lines.append("iter ig_idx assigned degree n_interferers flags")
     for i, ig in enumerate(ig_idxs):
         # Required form for _ITER_RE: "iter ig_idx rN degree array_size 0xflags"
-        lines.append(f"  {i}  {ig}  r30  {len(adj.get(ig, []))}  {len(adj.get(ig, []))}  0x0")
+        assigned = assigned_by_ig.get(ig, 30)
+        lines.append(f"  {i}  {ig}  r{assigned}  {len(adj.get(ig, []))}  {len(adj.get(ig, []))}  0x0")
         if ig in adj:
             interferers = " ".join(f"{idx}=r{reg}" for idx, reg in adj[ig])
             lines.append(f"  interferers: {interferers}")
@@ -458,6 +466,51 @@ def test_search_returns_exact_match_when_variant_hits_target(
     assert result.exact_match is not None
     assert result.exact_match.provenance == "hit"
     # Stop early — no more variants compiled past the exact-match.
+    assert result.total_compiles == 1
+
+
+def test_search_force_phys_scores_assignment_when_simplify_order_is_unusable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    baseline = baseline_signature(
+        _events_for_class(
+            simplify_order=[-1, -1],
+            assigned_by_ig={53: 5},
+        ),
+        class_id=0,
+    )
+
+    _stub_compiles(
+        monkeypatch,
+        pcdumps_by_text={
+            "VARIANT_A": _pcdump_for(
+                [-1, -1],
+                assigned_by_ig={53: 4},
+            ),
+        },
+    )
+
+    def src(_ctx):
+        yield SourceVariant(
+            text="VARIANT_A",
+            provenance="force-phys-hit",
+            parent_baseline=ctx.source_path,
+        )
+
+    result = search(
+        sources=[src],
+        ctx=ctx,
+        baseline=baseline,
+        target=(53,),
+        force_phys={53: 4},
+        max_candidates=10,
+        timeout=10,
+        preserve_precolor_enabled=False,
+    )
+
+    assert result.exact_match is not None
+    assert result.exact_match.provenance == "force-phys-hit"
     assert result.total_compiles == 1
 
 

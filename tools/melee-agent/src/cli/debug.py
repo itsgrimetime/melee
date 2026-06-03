@@ -8430,7 +8430,7 @@ def _register_tiebreak_guidance(
         ),
         (
             f"melee-agent debug mutate simplify-order --fn {function} "
-            f"--want-late {primary_ig} --no-preserve-precolor"
+            f"--force-phys {normalized} --no-preserve-precolor"
         ),
         (
             f"melee-agent debug mutate decl-orders {function} --strategy all"
@@ -18971,6 +18971,46 @@ def _render_lex_ranking(
     print()
 
 
+def _render_force_phys_ranking(
+    result,
+    target_phys: dict[int, int],
+    *,
+    top_n: int = 8,
+) -> None:
+    """Print the unified force-phys ranking across passing + rejected."""
+    rows = _unified_candidates(result)
+    if not rows:
+        return
+
+    rows.sort(key=lambda r: (-r[1].common_prefix_length, r[2].total, r[0]))
+    shown = rows[:top_n]
+
+    target_text = ", ".join(
+        f"ig{ig}->r{phys}" for ig, phys in target_phys.items()
+    )
+    print(f"Best by force-phys target then distance (top {len(shown)}):")
+    print(f"  target: {target_text}")
+    for prov, s, dist, reason in shown:
+        observed = ", ".join(
+            f"ig{ig}->r{target_phys[ig]}" for ig in s.observed_prefix
+        ) or "(none)"
+        print(
+            f"  {prov}: hits={s.common_prefix_length}/{len(s.target_prefix)} "
+            f"distance={dist.total} (matched: {observed})"
+        )
+        print(
+            f"     precolor distance: "
+            f"IG +{dist.ig_added}/-{dist.ig_removed}, "
+            f"coalesce +{dist.coalesce_added}/-{dist.coalesce_removed}, "
+            f"spills +{dist.spill_added}/-{dist.spill_removed}"
+        )
+        if reason:
+            print(f"     gate rejected: {reason}")
+        else:
+            print("     gate passed")
+    print()
+
+
 # ---------------------------------------------------------------------------
 # --triage post-search composition: real-tree match% ranking
 # ---------------------------------------------------------------------------
@@ -19394,6 +19434,16 @@ def mutate_simplify_order_cmd(
             help="Register class to target. 0 = GPR (default).",
         ),
     ] = 0,
+    force_phys: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-phys",
+            help="Score variants by force-phys assignment hits instead of "
+                 "simplify-order proximity. Accepts IG:PHYS or CLASS:IG:PHYS "
+                 "pairs, e.g. '53:4' or '0:53:4'. Mutually exclusive with "
+                 "--want-first/--want-late.",
+        ),
+    ] = None,
     preserve_precolor: Annotated[
         bool,
         typer.Option(
@@ -19528,16 +19578,27 @@ def mutate_simplify_order_cmd(
 
     melee_root = DEFAULT_MELEE_ROOT
 
-    # Mutual exclusion and at-least-one validation for --want-first / --want-late.
+    # Mutual exclusion and at-least-one validation for objective selectors.
     if want_first is not None and want_late is not None:
         typer.echo(
             "error: --want-first and --want-late are mutually exclusive",
             err=True,
         )
         raise typer.Exit(2)
-    if want_first is None and want_late is None:
+    objective_count = sum(
+        option is not None for option in (want_first, want_late, force_phys)
+    )
+    if objective_count == 0:
         typer.echo(
-            "error: must specify exactly one of --want-first or --want-late",
+            "error: must specify exactly one of --want-first, --want-late, "
+            "or --force-phys",
+            err=True,
+        )
+        raise typer.Exit(2)
+    if objective_count > 1:
+        typer.echo(
+            "error: --want-first, --want-late, and --force-phys are "
+            "mutually exclusive",
             err=True,
         )
         raise typer.Exit(2)
@@ -19545,6 +19606,8 @@ def mutate_simplify_order_cmd(
     # Parse the chosen flag into target / target_late tuples.
     target: tuple[int, ...] = ()
     target_late: tuple[int, ...] = ()
+    force_phys_target: dict[int, int] = {}
+    force_phys_normalized: Optional[str] = None
 
     if want_first is not None:
         raw = want_first.strip()
@@ -19580,6 +19643,31 @@ def mutate_simplify_order_cmd(
             raise typer.Exit(2)
         if not target_late:
             typer.echo("--want-late parsed to an empty sequence", err=True)
+            raise typer.Exit(2)
+
+    if force_phys is not None:
+        try:
+            entries, force_phys_normalized, _warnings = (
+                _parse_diagnose_force_phys(force_phys)
+            )
+        except typer.BadParameter as exc:
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(2) from exc
+        force_phys_target = {
+            entry.virtual: entry.phys
+            for entry in entries
+            if (class_id if entry.class_id is None else entry.class_id) == class_id
+        }
+        if not force_phys_target:
+            available = ", ".join(
+                str(class_id if entry.class_id is None else entry.class_id)
+                for entry in entries
+            )
+            typer.echo(
+                f"error: --force-phys has no entries for class {class_id} "
+                f"(entry classes: {available})",
+                err=True,
+            )
             raise typer.Exit(2)
 
     # Resolve the unit + source for the function.
@@ -19651,7 +19739,7 @@ def mutate_simplify_order_cmd(
 
     baseline_sig = baseline_signature(base_for_fn, class_id=class_id)
 
-    if not baseline_sig.simplify_order:
+    if not baseline_sig.simplify_order and not force_phys_target:
         typer.echo(
             f"baseline has no simplify-graph entries for class {class_id}; "
             "the function may not exercise that register class.",
@@ -19662,7 +19750,14 @@ def mutate_simplify_order_cmd(
     print(f"Function:        {function}")
     print(f"Source:          {source_path}")
     print(f"Class:           {class_id}")
-    if target_late:
+    if force_phys_target:
+        target_force_text = ",".join(
+            f"{ig}:r{phys}" for ig, phys in force_phys_target.items()
+        )
+        print(f"Target force-phys: {target_force_text}")
+        if force_phys_normalized is not None:
+            print(f"Force-phys arg:  {force_phys_normalized}")
+    elif target_late:
         print(f"Target suffix:   {','.join(str(x) for x in target_late)}")
     else:
         print(f"Target prefix:   {','.join(str(x) for x in target)}")
@@ -19732,6 +19827,7 @@ def mutate_simplify_order_cmd(
         baseline=baseline_sig,
         target=target,
         target_late=target_late,
+        force_phys=force_phys_target or None,
         class_id=class_id,
         max_candidates=max_candidates,
         timeout=timeout,
@@ -19760,7 +19856,10 @@ def mutate_simplify_order_cmd(
     # In late-mode target is () and target_late carries the meaningful sequence;
     # pass the non-empty one to the renderers so their length checks are correct.
     effective_target = target_late if target_late else target
-    if effective_rank_mode is RankMode.combined:
+    if force_phys_target:
+        _render_force_phys_ranking(result, force_phys_target)
+        effective_target = tuple(force_phys_target.keys())
+    elif effective_rank_mode is RankMode.combined:
         _render_combined_score_ranking(result, effective_target, alpha=combined_alpha)
     else:
         _render_lex_ranking(result, effective_target)
@@ -19775,7 +19874,8 @@ def mutate_simplify_order_cmd(
     # nothing when there are no gate-rejected candidates; otherwise answers
     # "did any rejected candidate move simplify-order toward target?" — the
     # input for the harvest-vs-custom-scorer decision.
-    _render_gate_rejected_distribution(result, effective_target)
+    if not force_phys_target:
+        _render_gate_rejected_distribution(result, effective_target)
 
     # --triage composition: run `debug permute triage` after the harvest
     # to surface a second ranking by real-tree match% (the ground-truth
@@ -19811,15 +19911,27 @@ def mutate_simplify_order_cmd(
         raise typer.Exit(0)
 
     if not result.progress:
-        print("No variants made progress beyond baseline.")
+        if force_phys_target:
+            print("No variants improved force-phys assignments beyond baseline.")
+        else:
+            print("No variants made progress beyond baseline.")
         if not preserve_precolor and result.gate_rejected_count == 0:
-            print("(Tried with --no-preserve-precolor — nothing changed the "
-                  "simplify order at all.)")
+            if force_phys_target:
+                print("(Tried with --no-preserve-precolor — no candidate "
+                      "changed the requested physical assignment.)")
+            else:
+                print("(Tried with --no-preserve-precolor — nothing changed the "
+                      "simplify order at all.)")
         else:
             print("Consider:")
-            print("  - Re-running with --no-preserve-precolor to see if any "
-                  "variant produces the target order while disturbing other "
-                  "RA inputs.")
+            if force_phys_target:
+                print("  - Re-running with a wider candidate pool or more "
+                      "source-shape levers while preserving the same "
+                      "--force-phys objective.")
+            else:
+                print("  - Re-running with --no-preserve-precolor to see if any "
+                      "variant produces the target order while disturbing other "
+                      "RA inputs.")
             if not with_permuter:
                 print("  - Running decomp-permuter (`./permuter.py "
                       f"nonmatchings/{function}`) then re-running this "
@@ -19833,14 +19945,29 @@ def mutate_simplify_order_cmd(
     for i, scored in enumerate(result.progress[:3]):
         s = scored.score
         print(f"  {i + 1}. {scored.variant.provenance}")
-        print(f"     prefix match:  {s.common_prefix_length}/{len(s.target_prefix)}")
-        print(f"     observed:      {','.join(str(x) for x in s.observed_prefix)}")
-        print(f"     baseline:      {s.baseline_common_prefix_length}/"
-              f"{len(s.target_prefix)} matched")
+        if force_phys_target:
+            observed = ", ".join(
+                f"ig{ig}->r{force_phys_target[ig]}"
+                for ig in s.observed_prefix
+            ) or "(none)"
+            print(f"     force-phys hits: {s.common_prefix_length}/{len(s.target_prefix)}")
+            print(f"     matched:         {observed}")
+            print(f"     baseline:        {s.baseline_common_prefix_length}/"
+                  f"{len(s.target_prefix)} matched")
+        else:
+            print(f"     prefix match:  {s.common_prefix_length}/{len(s.target_prefix)}")
+            print(f"     observed:      {','.join(str(x) for x in s.observed_prefix)}")
+            print(f"     baseline:      {s.baseline_common_prefix_length}/"
+                  f"{len(s.target_prefix)} matched")
     print()
-    print("These variants make partial progress but don't fully hit the "
-          "target. Inspect them with `debug inspect diff` to see what "
-          "changed, then iterate.")
+    if force_phys_target:
+        print("These variants improve the force-phys objective but don't fully "
+              "hit it. Inspect them with `debug inspect diff` to see what "
+              "changed, then iterate.")
+    else:
+        print("These variants make partial progress but don't fully hit the "
+              "target. Inspect them with `debug inspect diff` to see what "
+              "changed, then iterate.")
 
 
 @mutate_app.command(name="search")
