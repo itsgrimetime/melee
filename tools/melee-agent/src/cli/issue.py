@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Annotated
@@ -18,6 +19,25 @@ from ._common import console
 from .complete import _get_current_branch
 
 issue_app = typer.Typer(help="Report and track tooling issues")
+
+GOVERNANCE_FIELDS = {
+    "reusable_class": "Reusable class",
+    "applies_to": "Applies to",
+    "source_actionable_output": "Source-actionable output",
+    "stop_condition": "Stop condition",
+    "existing_workflow_failed": "Existing workflow failed",
+}
+IMPACT_VALUES = {
+    "matched",
+    "retained-source-improvement",
+    "negative-evidence",
+    "infrastructure-only",
+    "diagnostic-only",
+}
+FEATURE_LIKE_BLOCKER_RE = re.compile(
+    r"\b(needs?|add|support|missing|lacks?|should|capability|no\s+[-\w ]*model)\b",
+    re.IGNORECASE,
+)
 
 
 def _detect_session_id() -> str | None:
@@ -56,6 +76,76 @@ def _normalize_functions(functions: list[str]) -> list[str]:
     return [function.strip() for function in functions if function.strip()]
 
 
+def _body_has_governance(body: str | None) -> bool:
+    if not body:
+        return False
+    for label in GOVERNANCE_FIELDS.values():
+        pattern = rf"^\s*(?:-\s*)?{re.escape(label)}\s*:"
+        if re.search(pattern, body, re.IGNORECASE | re.MULTILINE) is None:
+            return False
+    return True
+
+
+def _governance_flag_values(
+    *,
+    reusable_class: str | None,
+    applies_to: list[str],
+    source_actionable_output: str | None,
+    stop_condition: str | None,
+    existing_workflow_failed: str | None,
+) -> dict[str, str]:
+    return {
+        "reusable_class": (reusable_class or "").strip(),
+        "applies_to": ", ".join(_normalize_functions(applies_to)),
+        "source_actionable_output": (source_actionable_output or "").strip(),
+        "stop_condition": (stop_condition or "").strip(),
+        "existing_workflow_failed": (existing_workflow_failed or "").strip(),
+    }
+
+
+def _missing_governance_fields(values: dict[str, str]) -> list[str]:
+    return [label for key, label in GOVERNANCE_FIELDS.items() if not values.get(key)]
+
+
+def _append_body_section(body: str | None, section: str) -> str:
+    existing = (body or "").strip()
+    if not existing:
+        return section
+    return f"{existing}\n\n{section}"
+
+
+def _append_governance_section(body: str | None, values: dict[str, str]) -> str:
+    lines = ["Governance:"]
+    for key, label in GOVERNANCE_FIELDS.items():
+        lines.append(f"{label}: {values[key]}")
+    return _append_body_section(body, "\n".join(lines))
+
+
+def _append_governance_waiver(body: str | None, waiver: str) -> str:
+    return _append_body_section(body, f"Governance:\nGovernance waiver: {waiver.strip()}")
+
+
+def _looks_like_feature_blocker(summary: str, body: str | None) -> bool:
+    text = f"{summary}\n{body or ''}"
+    return FEATURE_LIKE_BLOCKER_RE.search(text) is not None
+
+
+def _append_impact_note(note: str | None, impact: str | None) -> str | None:
+    if impact is None:
+        return note
+    normalized = impact.strip().lower()
+    if normalized not in IMPACT_VALUES:
+        valid = ", ".join(sorted(IMPACT_VALUES))
+        raise ValueError(f"impact must be one of: {valid}")
+    impact_line = f"impact={normalized}"
+    clean_note = (note or "").strip()
+    if not clean_note:
+        return impact_line
+    if re.search(r"^impact=", clean_note, re.MULTILINE):
+        return clean_note
+    return f"{clean_note}\n{impact_line}"
+
+
 def _echo_json(payload: object) -> None:
     print(json.dumps(payload, indent=2, default=str))
 
@@ -86,11 +176,72 @@ def report_command(
         typer.Option("--worktree", help="Worktree path; auto-detected when omitted"),
     ] = None,
     branch: Annotated[str | None, typer.Option("--branch", help="Git branch; auto-detected when omitted")] = None,
+    reusable_class: Annotated[
+        str | None,
+        typer.Option("--reusable-class", help="Reusable mismatch/tooling class this feature targets"),
+    ] = None,
+    applies_to: Annotated[
+        list[str] | None,
+        typer.Option("--applies-to", help="Known function or class member this feature applies to; repeatable"),
+    ] = None,
+    source_actionable_output: Annotated[
+        str | None,
+        typer.Option("--source-actionable-output", help="Source-level output this feature will produce"),
+    ] = None,
+    stop_condition: Annotated[
+        str | None,
+        typer.Option("--stop-condition", help="Bounded condition for stopping this tooling path"),
+    ] = None,
+    existing_workflow_failed: Annotated[
+        str | None,
+        typer.Option("--existing-workflow-failed", help="Existing workflow/tool path that failed first"),
+    ] = None,
+    governance_waiver: Annotated[
+        str | None,
+        typer.Option("--governance-waiver", help="Explicit reason to bypass feature governance metadata"),
+    ] = None,
     output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
     """Report a tooling issue, feature request, papercut, or blocker."""
     worktree_path = worktree or _detect_worktree_path()
     branch_name = branch or _get_current_branch(Path(worktree_path))
+    cleaned_functions = _normalize_functions(functions or [])
+    applies_to_values = _normalize_functions(applies_to or []) or cleaned_functions
+
+    if kind == "feature":
+        if governance_waiver and governance_waiver.strip():
+            body = _append_governance_waiver(body, governance_waiver)
+        elif not _body_has_governance(body):
+            governance_values = _governance_flag_values(
+                reusable_class=reusable_class,
+                applies_to=applies_to_values,
+                source_actionable_output=source_actionable_output,
+                stop_condition=stop_condition,
+                existing_workflow_failed=existing_workflow_failed,
+            )
+            missing = _missing_governance_fields(governance_values)
+            if missing:
+                console.print(
+                    "[red]Feature issues require governance metadata.[/red] "
+                    "Provide labeled lines in --body or pass the dedicated "
+                    "governance flags."
+                )
+                console.print("[red]Missing:[/red] " + ", ".join(missing))
+                raise typer.Exit(2)
+            body = _append_governance_section(body, governance_values)
+    elif (
+        kind == "blocker"
+        and not output_json
+        and not governance_waiver
+        and not _body_has_governance(body)
+        and _looks_like_feature_blocker(summary, body)
+    ):
+        console.print(
+            "[yellow]This blocker looks like a feature request. "
+            "If it is asking for new tooling capability, prefer "
+            "--kind feature with governance metadata or add "
+            "--governance-waiver.[/yellow]"
+        )
 
     db = get_db()
     try:
@@ -99,7 +250,7 @@ def report_command(
             kind=kind,
             tool=tool,
             body=body,
-            functions=_normalize_functions(functions or []),
+            functions=cleaned_functions,
             agent_id=agent_id or _get_agent_id(),
             session_id=session_id or _detect_session_id(),
             worktree_path=worktree_path,
@@ -203,6 +354,10 @@ def show_command(
 def resolve_command(
     issue_id: Annotated[int, typer.Argument(help="Issue ID")],
     note: Annotated[str | None, typer.Option("--note", "-n", help="Resolution note")] = None,
+    impact: Annotated[
+        str | None,
+        typer.Option("--impact", help="Outcome tag: matched, retained-source-improvement, negative-evidence, infrastructure-only, diagnostic-only"),
+    ] = None,
     agent_id: Annotated[
         str | None,
         typer.Option("--agent-id", help="Resolving agent ID; auto-detected when omitted"),
@@ -210,10 +365,16 @@ def resolve_command(
     output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
     """Mark a reported tooling issue as resolved."""
+    try:
+        resolution_note = _append_impact_note(note, impact)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from exc
+
     issue = get_db().resolve_tool_issue(
         issue_id,
         agent_id=agent_id or _get_agent_id(),
-        resolution_note=note,
+        resolution_note=resolution_note,
     )
     if issue is None:
         console.print(f"[red]Issue not found: {issue_id}[/red]")

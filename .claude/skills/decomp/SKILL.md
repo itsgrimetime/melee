@@ -29,6 +29,24 @@ melee-agent attempts record Func_80000000 --match 87.5 --outcome improved \
 
 Mark source-level wins with `--retained` even when score drops because correct structure can temporarily lower match percentage.
 
+## Tooling Issue Gate
+
+File bugs and papercuts immediately when tooling blocks real work. For new
+tooling features, use the enforced governance fields on `melee-agent issue
+report` so the request is reusable and source-actionable:
+
+```bash
+melee-agent issue report "short feature summary" \
+  --kind feature --tool mwcc-debug --function Func_80000000 \
+  --reusable-class "stack/local unused home reservation" \
+  --applies-to Func_80000000 \
+  --source-actionable-output "ranked source transforms with real-tree validation" \
+  --stop-condition "no retained source improvement after a bounded candidate set" \
+  --existing-workflow-failed "checkdiff plus existing mwcc-debug diagnose produced no source lever"
+```
+
+Use `--governance-waiver "<reason>"` only for a true exploratory exception.
+
 ## Before Chasing Registers
 
 Use shape-discovery tools after 2-3 failed source experiments:

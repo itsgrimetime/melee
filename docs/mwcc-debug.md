@@ -195,6 +195,24 @@ melee-agent issue report "mwcc-debug local dump hung after COLORGRAPH DECISIONS"
   --body "Command, last visible output, timeout, and what this blocked"
 ```
 
+Bugs and papercuts should stay lightweight. Feature requests must include the
+governance metadata enforced by the CLI:
+
+```bash
+melee-agent issue report "mwcc-debug needs a source lever for frame-only walls" \
+  --kind feature --tool mwcc-debug --function gm_801A9DD0 \
+  --reusable-class "stack/local unused home reservation" \
+  --applies-to gm_801A9DD0 \
+  --source-actionable-output "ranked frame source transforms and score-source target" \
+  --stop-condition "no candidate improves frame score after 50 probes" \
+  --existing-workflow-failed "inspect diagnose was register-only and reported no fast transform"
+```
+
+Use `--governance-waiver "<reason>"` only for exploratory feature issues that
+cannot honestly fill those fields yet. When resolving an issue, add
+`--impact matched|retained-source-improvement|negative-evidence|infrastructure-only|diagnostic-only`
+when the outcome is known.
+
 If a `melee-agent` command fails through the wrapped entrypoint, copy the
 suggested `melee-agent issue report ...` command it prints. If it hangs,
 interrupt it and report the hang manually.

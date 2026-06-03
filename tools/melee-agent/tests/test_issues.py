@@ -134,6 +134,205 @@ def test_issue_list_and_resolve_work_from_cli(tmp_path):
     reset_db()
 
 
+def test_feature_issue_requires_governance_metadata(tmp_path):
+    """Feature requests should carry reuse/source-actionability metadata."""
+    reset_db()
+    get_db(tmp_path / "state.db")
+
+    result = runner.invoke(
+        app,
+        [
+            "issue",
+            "report",
+            "mwcc-debug needs a new source search objective",
+            "--kind",
+            "feature",
+            "--tool",
+            "mwcc-debug",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "Feature issues require governance metadata" in strip_ansi(result.stdout)
+
+    reset_db()
+
+
+def test_feature_issue_governance_flags_are_normalized_into_body(tmp_path):
+    """Dedicated governance flags should be stored as a normalized body section."""
+    reset_db()
+    db = get_db(tmp_path / "state.db")
+
+    result = runner.invoke(
+        app,
+        [
+            "issue",
+            "report",
+            "Frame target scorer needed",
+            "--kind",
+            "feature",
+            "--tool",
+            "mwcc-debug",
+            "--function",
+            "gm_801A9DD0",
+            "--reusable-class",
+            "stack/local unused home reservation",
+            "--applies-to",
+            "fn_80175A94",
+            "--source-actionable-output",
+            "ranked frame source transforms and score-source target",
+            "--stop-condition",
+            "no candidate improves frame score after 50 probes",
+            "--existing-workflow-failed",
+            "inspect diagnose was register-only and reported no fast transform",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    stored = db.get_tool_issue(payload["id"])
+    assert stored is not None
+    body = stored["body"]
+    assert "Governance:" in body
+    assert "Reusable class: stack/local unused home reservation" in body
+    assert "Applies to: fn_80175A94" in body
+    assert "Source-actionable output: ranked frame source transforms" in body
+    assert "Stop condition: no candidate improves frame score after 50 probes" in body
+    assert "Existing workflow failed: inspect diagnose was register-only" in body
+
+    reset_db()
+
+
+def test_feature_issue_governance_body_labels_are_accepted(tmp_path):
+    """Structured body labels should satisfy the feature request gate."""
+    reset_db()
+    db = get_db(tmp_path / "state.db")
+    body = "\n".join(
+        [
+            "Observed during a stuck function campaign.",
+            "",
+            "Governance:",
+            "Reusable class: select-order swaps among interfering callee-saves",
+            "Applies to: grGreatBay_801F5460, grIceMt_801F9ACC",
+            "Source-actionable output: ranked source transforms with real-tree validation",
+            "Stop condition: no retained source improvement after a bounded candidate set",
+            "Existing workflow failed: coalesce-search cannot target interfering nodes",
+        ]
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "issue",
+            "report",
+            "select-order search needs source-transform coverage",
+            "--kind",
+            "feature",
+            "--tool",
+            "mwcc-debug",
+            "--body",
+            body,
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    stored = db.get_tool_issue(payload["id"])
+    assert stored is not None
+    assert stored["body"] == body
+
+    reset_db()
+
+
+def test_feature_issue_governance_waiver_is_stored(tmp_path):
+    """Waived feature requests should remain visible in the stored body."""
+    reset_db()
+    db = get_db(tmp_path / "state.db")
+
+    result = runner.invoke(
+        app,
+        [
+            "issue",
+            "report",
+            "exploratory compiler pass trace hook",
+            "--kind",
+            "feature",
+            "--tool",
+            "mwcc-debug",
+            "--governance-waiver",
+            "one-off exploratory issue from active matching session",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    stored = db.get_tool_issue(payload["id"])
+    assert stored is not None
+    assert "Governance waiver: one-off exploratory issue" in stored["body"]
+
+    reset_db()
+
+
+def test_feature_like_blocker_warns_but_reports(tmp_path):
+    """Blocker reports that look like feature requests should warn, not fail."""
+    reset_db()
+    db = get_db(tmp_path / "state.db")
+
+    result = runner.invoke(
+        app,
+        [
+            "issue",
+            "report",
+            "mwcc-debug needs a stack-frame model before this can continue",
+            "--kind",
+            "blocker",
+            "--tool",
+            "mwcc-debug",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "looks like a feature request" in strip_ansi(result.stdout)
+    stored = db.list_tool_issues(status="open")
+    assert len(stored) == 1
+    assert stored[0]["kind"] == "blocker"
+
+    reset_db()
+
+
+def test_issue_resolve_accepts_impact_tag(tmp_path):
+    """Resolution impact should be appended to the stored note."""
+    reset_db()
+    db = StateDB(tmp_path / "state.db")
+    issue = db.report_tool_issue("mwcc-debug scorer found no retained source", kind="feature")
+    db.close()
+    reset_db()
+    get_db(tmp_path / "state.db")
+
+    result = runner.invoke(
+        app,
+        [
+            "issue",
+            "resolve",
+            str(issue["id"]),
+            "--note",
+            "Ran the bounded search and found no improving candidate.",
+            "--impact",
+            "negative-evidence",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["resolution_note"].endswith("impact=negative-evidence")
+
+    reset_db()
+
+
 def test_issue_show_reports_missing_issue(tmp_path):
     """Showing a missing issue should fail with a useful message."""
     reset_db()

@@ -65,6 +65,26 @@ melee-agent debug util name-magic build/GALE01/src/melee/mn/foo.o --map @123=lbl
 melee-agent debug util verify-name-magic -f fn_80247510
 ```
 
+## Tooling Issue Gate
+
+Report bugs, hangs, confusing output, and papercuts immediately. Feature
+requests are gated by `melee-agent issue report`: include the reusable class,
+known affected functions, source-actionable output, stop condition, and the
+existing workflow that failed first.
+
+```bash
+melee-agent issue report "mwcc-debug needs a source lever for frame-only walls" \
+  --kind feature --tool mwcc-debug --function gm_801A9DD0 \
+  --reusable-class "stack/local unused home reservation" \
+  --applies-to gm_801A9DD0 \
+  --source-actionable-output "ranked frame source transforms and score-source target" \
+  --stop-condition "no candidate improves frame score after 50 probes" \
+  --existing-workflow-failed "inspect diagnose was register-only and reported no fast transform"
+```
+
+For a one-off exploratory feature issue, pass
+`--governance-waiver "<reason>"`; the waiver is stored with the issue.
+
 ## When to use this
 
 | Situation | Recommendation |
