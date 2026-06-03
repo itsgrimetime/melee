@@ -720,6 +720,18 @@ def test_diagnose_force_phys_reports_coupled_source_shape_guidance(
         "_resolve_pcdump_path",
         lambda pcdump_arg, function, melee_root=None, *, require_fresh=False: pcdump,
     )
+    ledger_path = tmp_path / "attempts.json"
+    monkeypatch.setenv("DECOMP_ATTEMPT_LEDGER_FILE", str(ledger_path))
+    from src.cli.tracking import record_attempt
+
+    record_attempt(
+        "ftCo_8009E7B4",
+        match_percent=99.1,
+        outcome="blocked",
+        classification="register-allocation",
+        blocker="b4 tree probes exhausted without source movement",
+        note="b4 tree probes and remote permuter produced negative evidence",
+    )
 
     result = runner.invoke(
         app,
@@ -744,11 +756,39 @@ def test_diagnose_force_phys_reports_coupled_source_shape_guidance(
     ) in out
     assert "singleton/prefix force-phys probes can no-match" in out
     assert "multi-site allocator-shape hypothesis" in out
+    assert "Source-lever coverage matrix" in out
+    assert "early flag/reload block" in out
+    assert "x594_b4/x594_b3 field-bit tests" in out
+    assert "b4 tree probes exhausted without source movement" in out
+    assert "status: negative-evidence" in out
     assert (
         "melee-agent debug dump local src/melee/pl/plbonuslib.c "
         "--force-phys 0:58:4,0:44:4,0:42:3,0:35:30,0:56:29,0:34:30 "
         "--force-phys-fn ftCo_8009E7B4"
     ) in out
+
+    json_result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "diagnose",
+            "ftCo_8009E7B4",
+            "--skip-decl-orders",
+            "--force-phys",
+            "0:58:4,0:44:4,0:42:3,0:35:30,0:56:29,0:34:30",
+            "--json",
+        ],
+    )
+    assert json_result.exit_code == 0, json_result.stdout + json_result.stderr
+    payload = json.loads(json_result.stdout)
+    matrix = payload["coupled_force_phys"]["coverage_matrix"]
+    assert matrix[0]["source_regions"][0] == "early flag/reload block"
+    assert any(
+        family["status"] == "negative-evidence"
+        for row in matrix
+        for family in row["transform_families"]
+    )
 
 
 def test_permuter_scorer_uses_grouped_score_source_command() -> None:

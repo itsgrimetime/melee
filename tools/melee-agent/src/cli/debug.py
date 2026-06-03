@@ -8214,6 +8214,182 @@ def _cluster_entries_by_virtuals(
     return [by_virtual[v] for v in virtuals if v in by_virtual]
 
 
+def _attempt_evidence_for_keywords(
+    function: str,
+    keywords: list[str],
+) -> dict:
+    from .tracking import summarize_attempts
+
+    summary = summarize_attempts(function)
+    attempts = summary.get("attempts", [])
+    matches: list[dict] = []
+    lowered_keywords = [keyword.lower() for keyword in keywords]
+    for attempt in attempts:
+        text = " ".join(
+            str(attempt.get(key) or "")
+            for key in ("note", "classification", "blocker", "verdict")
+        ).lower()
+        if lowered_keywords and not any(keyword in text for keyword in lowered_keywords):
+            continue
+        matches.append(attempt)
+
+    retained = [attempt for attempt in matches if attempt.get("retained")]
+    negative = [
+        attempt for attempt in matches
+        if str(attempt.get("outcome") or "") in {
+            "neutral", "regressed", "reverted", "blocked",
+        }
+    ]
+    if retained:
+        status = "retained-source-improvement"
+    elif negative:
+        status = "negative-evidence"
+    elif matches:
+        status = "tried"
+    else:
+        status = "untried"
+    evidence_notes: list[str] = []
+    for attempt in (retained or negative or matches)[:3]:
+        note = str(attempt.get("blocker") or attempt.get("note") or "").strip()
+        if not note:
+            continue
+        if len(note) > 220:
+            note = note[:217].rstrip() + "..."
+        evidence_notes.append(note)
+    return {
+        "status": status,
+        "attempt_count": len(matches),
+        "evidence": evidence_notes,
+    }
+
+
+def _coverage_family(
+    *,
+    function: str,
+    name: str,
+    keywords: list[str],
+    expected_effect: str,
+    next_probe: str,
+) -> dict:
+    evidence = _attempt_evidence_for_keywords(function, keywords)
+    return {
+        "name": name,
+        "status": evidence["status"],
+        "attempt_count": evidence["attempt_count"],
+        "evidence": evidence["evidence"],
+        "expected_effect": expected_effect,
+        "next_probe": next_probe,
+    }
+
+
+def _force_phys_coverage_matrix(
+    *,
+    function: str,
+    unit: str,
+    clusters: list[dict],
+) -> list[dict]:
+    src_rel = f"src/{unit}.c"
+    rows: list[dict] = []
+    for cluster in clusters:
+        name = cluster.get("name", "")
+        holders = [
+            f"ig{virtual}->r{phys}"
+            for virtual, phys in zip(
+                cluster.get("virtuals", []),
+                cluster.get("phys", []),
+                strict=False,
+            )
+        ]
+        if function == "ftCo_8009E7B4" and "early" in name:
+            rows.append({
+                "cluster": name,
+                "source_file": src_rel,
+                "source_regions": [
+                    "early flag/reload block",
+                    "boolean flag temp and reload boundary",
+                    "early volatile call-adjacent temps",
+                ],
+                "target_holders": holders,
+                "transform_families": [
+                    _coverage_family(
+                        function=function,
+                        name="flag-temp split/merge",
+                        keywords=["flag", "split", "merge", "boolean"],
+                        expected_effect="move volatile proof holders together",
+                        next_probe="split/merge the flag temp and keep reload placement stable",
+                    ),
+                    _coverage_family(
+                        function=function,
+                        name="reload sink/hoist",
+                        keywords=["reload", "sink", "hoist", "remote permuter"],
+                        expected_effect="change reload live-range overlap near ig58/ig44/ig42",
+                        next_probe="move the reload closer to first use or preserve it across the branch",
+                    ),
+                    _coverage_family(
+                        function=function,
+                        name="early local declaration/use order",
+                        keywords=["decl", "order", "early", "local"],
+                        expected_effect="change allocator tie-break order without semantic refactor",
+                        next_probe="try scoped declaration/use-boundary movement in the early block",
+                    ),
+                ],
+            })
+        elif function == "ftCo_8009E7B4" and "late" in name:
+            rows.append({
+                "cluster": name,
+                "source_file": src_rel,
+                "source_regions": [
+                    "x594_b4/x594_b3 field-bit tests",
+                    "loop IV/tree-pointer lifetime boundary",
+                    "late callee-save holder overlap",
+                ],
+                "target_holders": holders,
+                "transform_families": [
+                    _coverage_family(
+                        function=function,
+                        name="b4/b3 direct field test vs named temps",
+                        keywords=["b4", "b3", "field", "tree probes"],
+                        expected_effect="move late callee-save proof holders around field-bit tests",
+                        next_probe="compare direct field tests with named temp forms",
+                    ),
+                    _coverage_family(
+                        function=function,
+                        name="loop index vs pointer-walk role split",
+                        keywords=["loop", "tree", "pointer", "iv", "b4"],
+                        expected_effect="change loop IV/tree-pointer holder overlap",
+                        next_probe="split pointer-walk base from loop index and validate real-tree output",
+                    ),
+                    _coverage_family(
+                        function=function,
+                        name="tree-pointer reload sink/hoist",
+                        keywords=["tree", "reload", "sink", "hoist"],
+                        expected_effect="change r30/r29 callee-save pressure in the late cluster",
+                        next_probe="sink or hoist the tree-pointer reload across the bit-test block",
+                    ),
+                ],
+            })
+        else:
+            rows.append({
+                "cluster": name,
+                "source_file": src_rel,
+                "source_regions": [
+                    "proof-vector source region unresolved",
+                    "run virtual-to-var or first-divergence to refine spans",
+                ],
+                "target_holders": holders,
+                "transform_families": [
+                    _coverage_family(
+                        function=function,
+                        name="clustered source-shape probe",
+                        keywords=["source", "shape", "probe", "force"],
+                        expected_effect="move all proof holders in this cluster together",
+                        next_probe="instantiate one source-shape edit per mapped holder region",
+                    )
+                ],
+            })
+    return rows
+
+
 def _diagnose_coupled_force_phys_guidance(
     *,
     function: str,
@@ -8248,9 +8424,10 @@ def _diagnose_coupled_force_phys_guidance(
     entry_virtuals = {entry.virtual for entry in entries}
     clusters: list[dict] = []
     experiments: list[str] = []
-    if (
-        function == "ftCo_8009E7B4"
-        and {58, 44, 42, 35, 56, 34}.issubset(entry_virtuals)
+    if function == "ftCo_8009E7B4" and (
+        entry_virtuals & {58, 44, 42}
+    ) and (
+        entry_virtuals & {35, 56, 34}
     ):
         early = _cluster_entries_by_virtuals(entries, [58, 44, 42])
         late = _cluster_entries_by_virtuals(entries, [35, 56, 34])
@@ -8340,7 +8517,7 @@ def _diagnose_coupled_force_phys_guidance(
         ]
 
     src_rel = f"src/{unit}.c"
-    return {
+    guidance = {
         "proof_force_phys": normalized,
         "warnings": warnings,
         "coupled": True,
@@ -8376,6 +8553,12 @@ def _diagnose_coupled_force_phys_guidance(
             ),
         ],
     }
+    guidance["coverage_matrix"] = _force_phys_coverage_matrix(
+        function=function,
+        unit=unit,
+        clusters=clusters,
+    )
+    return guidance
 
 
 def _print_coupled_force_phys_guidance(guidance: dict) -> None:
@@ -8399,6 +8582,23 @@ def _print_coupled_force_phys_guidance(guidance: dict) -> None:
         print("    Source experiments:")
         for experiment in guidance["experiments"]:
             print(f"      - {experiment}")
+    if guidance.get("coverage_matrix"):
+        print("    Source-lever coverage matrix:")
+        for row in guidance["coverage_matrix"]:
+            print(f"      - {row['cluster']}:")
+            print(f"        source: {row['source_file']}")
+            print(f"        regions: {', '.join(row.get('source_regions') or [])}")
+            print(f"        holders: {', '.join(row.get('target_holders') or [])}")
+            for family in row.get("transform_families", []):
+                print(
+                    f"        * {family['name']} "
+                    f"(status: {family['status']}, "
+                    f"attempts: {family['attempt_count']})"
+                )
+                if family.get("evidence"):
+                    print(f"          evidence: {'; '.join(family['evidence'])}")
+                print(f"          expected: {family['expected_effect']}")
+                print(f"          next: {family['next_probe']}")
     if guidance.get("verification_commands"):
         print("    Verify:")
         for command in guidance["verification_commands"]:
