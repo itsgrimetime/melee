@@ -457,3 +457,83 @@ def mutate_insert_alias_before_use(
     for start, end, replacement in sorted(edits, key=lambda e: e[0], reverse=True):
         out = out[:start] + replacement + out[end:]
     return out
+
+
+def mutate_preserve_lifetime_after_use(
+    source: str,
+    fn_name: str,
+    var_name: str,
+    at_stmt_index: int,
+    sink_name: Optional[str] = None,
+    scope_filter: Optional[tuple[str, ...]] = None,
+    scope_filter_prefix: Optional[tuple[str, ...]] = None,
+) -> str:
+    """Insert a volatile sink assignment after the N-th reading use.
+
+    This gives simplify-order searches a source-level way to keep a holder
+    live across a later statement without rewriting the statement that reads
+    it. The resulting candidate is intended for compile-and-rank search, not
+    as final checked-in decomp source.
+    """
+    if sink_name is None:
+        sink_name = var_name + "_lifetime_sink"
+
+    if _extract_function_text(source, fn_name) is None:
+        raise MutationUnsupported(f"function {fn_name!r} not found")
+
+    var_type = _get_var_type_in_fn(source, fn_name, var_name)
+    if var_type is None:
+        raise MutationUnsupported(
+            f"variable {var_name!r} not found in {fn_name!r}"
+        )
+    if "[" in var_type or "(" in var_type:
+        raise MutationUnsupported(
+            f"variable {var_name!r} has unsupported lifetime-sink type {var_type!r}"
+        )
+
+    span_statements = list_statement_spans(source, fn_name)
+    target_span_candidates = [
+        span for span in span_statements
+        if _span_matches_scope(span, scope_filter, scope_filter_prefix)
+        and span.kind != "declaration"
+        and _statement_is_reading_use(span.text, var_name)
+    ]
+    if at_stmt_index >= len(target_span_candidates):
+        raise MutationUnsupported(
+            f"at_stmt_index={at_stmt_index} out of range "
+            f"(only {len(target_span_candidates)} reading statements)"
+        )
+    target_span = target_span_candidates[at_stmt_index]
+    target_start_abs, target_end_abs = target_span.byte_range
+    target_text = source[target_start_abs:target_end_abs]
+
+    field_re = re.compile(r"(?:->|\.)" + re.escape(var_name) + r"\b")
+    if field_re.search(target_text):
+        raise MutationUnsupported(
+            f"[debug mutate search] skipping lifetime seed for '{var_name}': "
+            "appears to be a struct field access, not a bindable local."
+        )
+
+    target_line_start_abs = source.rfind("\n", 0, target_start_abs) + 1
+    indent = ""
+    for ch in source[target_line_start_abs:target_start_abs]:
+        if ch in " \t":
+            indent += ch
+        else:
+            break
+
+    decl_insert_abs = _find_block_top_pos(source, target_span.scope_byte_range)
+    decl_line = f"{indent}volatile {var_type} {sink_name};\n"
+
+    nl = source.find("\n", target_end_abs)
+    assign_insert_abs = (nl + 1) if nl >= 0 else target_end_abs
+    assign_line = f"{indent}{sink_name} = {var_name};\n"
+
+    edits: list[tuple[int, int, str]] = [
+        (assign_insert_abs, assign_insert_abs, assign_line),
+        (decl_insert_abs, decl_insert_abs, decl_line),
+    ]
+    out = source
+    for start, end, replacement in sorted(edits, key=lambda e: e[0], reverse=True):
+        out = out[:start] + replacement + out[end:]
+    return out

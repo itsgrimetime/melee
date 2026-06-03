@@ -20265,7 +20265,7 @@ def mutate_simplify_order_cmd(
     Useful for stuck functions where the RA-input breakdown shows that
     simplify order is the only diverging input component. The search
     iterates variants from the existing source-mutation primitives
-    (decl-orders, insert-alias, type-change), gates them on the
+    (decl-orders, insert-alias, holder-lifetime, type-change), gates them on the
     preserve-precolor invariant, and ranks survivors by how much of the
     target prefix they reproduce.
 
@@ -20286,6 +20286,7 @@ def mutate_simplify_order_cmd(
     )
     from ..mwcc_debug.simplify_variants import (
         decl_orders_source,
+        holder_lifetime_source,
         insert_alias_source,
         type_change_source,
     )
@@ -20488,6 +20489,7 @@ def mutate_simplify_order_cmd(
     sources: list = [
         decl_orders_source,
         insert_alias_source,
+        holder_lifetime_source,
         type_change_source,
     ]
     # Track the resolved permuter dir at function scope so the post-search

@@ -2,11 +2,12 @@
 
 Each adapter wraps an existing source-mutation primitive into the
 `VariantSource` interface: a callable that takes a `FunctionContext` and
-yields `SourceVariant`s. The MVP ships three adapters:
+yields `SourceVariant`s. The core adapters are:
 
 - `decl_orders_source`: declaration reorderings (promote/demote/swap).
 - `insert_alias_source`: insert an alias before the first reading-use of
   each local.
+- `holder_lifetime_source`: keep a local holder live after later read sites.
 - `type_change_source`: try signedness flips for int-like locals.
 
 Each adapter is fail-soft: if the underlying mutator raises (variable not
@@ -26,6 +27,7 @@ from typing import Iterator
 from .mutators import (
     MutationUnsupported,
     mutate_insert_alias_before_use,
+    mutate_preserve_lifetime_after_use,
     mutate_type_change,
 )
 from .simplify_search import FunctionContext, SourceVariant
@@ -116,6 +118,7 @@ def decl_orders_source(ctx: FunctionContext) -> Iterator[SourceVariant]:
 # ---------------------------------------------------------------------------
 
 _MAX_ALIAS_READ_SITES = 8
+_MAX_HOLDER_LIFETIME_READ_SITES = 8
 
 
 def insert_alias_source(ctx: FunctionContext) -> Iterator[SourceVariant]:
@@ -152,6 +155,51 @@ def insert_alias_source(ctx: FunctionContext) -> Iterator[SourceVariant]:
             yield SourceVariant(
                 text=patched,
                 provenance=f"insert-alias {decl.name}@{read_idx}",
+                parent_baseline=ctx.source_path,
+            )
+
+
+# ---------------------------------------------------------------------------
+# holder_lifetime_source
+# ---------------------------------------------------------------------------
+
+
+def holder_lifetime_source(ctx: FunctionContext) -> Iterator[SourceVariant]:
+    """Yield variants that keep local holder values live after read sites.
+
+    Force-phys searches often need a register assignment to survive a later
+    use without rewriting the use itself. For each local, try bounded later
+    read sites and insert a small volatile sink after that statement so the
+    compiler has a source-level lifetime extension candidate to evaluate.
+    """
+    source_text = ctx.source_path.read_text(encoding="utf-8")
+    extracted = _extract_function_text(source_text, ctx.function)
+    if extracted is None:
+        return
+    _params, body_text, _line = extracted
+    locals_ = walk_local_decls(body_text)
+
+    seen_texts: set[str] = set()
+    for decl in locals_:
+        for read_idx in range(_MAX_HOLDER_LIFETIME_READ_SITES):
+            try:
+                patched = mutate_preserve_lifetime_after_use(
+                    source_text,
+                    ctx.function,
+                    decl.name,
+                    at_stmt_index=read_idx,
+                    sink_name=f"{decl.name}_lifetime_sink_{read_idx}",
+                )
+            except MutationUnsupported:
+                break
+            except Exception:
+                break
+            if patched == source_text or patched in seen_texts:
+                continue
+            seen_texts.add(patched)
+            yield SourceVariant(
+                text=patched,
+                provenance=f"holder-lifetime {decl.name}@{read_idx}",
                 parent_baseline=ctx.source_path,
             )
 

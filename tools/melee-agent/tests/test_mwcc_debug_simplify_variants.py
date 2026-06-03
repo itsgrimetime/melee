@@ -8,6 +8,7 @@ import pytest
 from src.mwcc_debug.simplify_search import FunctionContext
 from src.mwcc_debug.simplify_variants import (
     decl_orders_source,
+    holder_lifetime_source,
     insert_alias_source,
     type_change_source,
 )
@@ -187,6 +188,51 @@ def test_insert_alias_source_skips_variables_with_no_reads(tmp_path: Path) -> No
     variants = list(insert_alias_source(ctx))
 
     # No reading uses of `unused` -> no alias variants.
+    assert variants == []
+
+
+# ---------------------------------------------------------------------------
+# holder_lifetime_source
+# ---------------------------------------------------------------------------
+
+
+def test_holder_lifetime_source_yields_variants_after_read_sites(tmp_path: Path) -> None:
+    source = (
+        "void fn_test(void) {\n"
+        "    int holder;\n"
+        "    int other;\n"
+        "    holder = 1;\n"
+        "    other = holder + 2;\n"
+        "    other += 3;\n"
+        "}\n"
+    )
+    ctx = _ctx(tmp_path, source)
+
+    variants = list(holder_lifetime_source(ctx))
+
+    provs = {v.provenance for v in variants}
+    assert "holder-lifetime holder@0" in provs
+    variant = next(v for v in variants if v.provenance == "holder-lifetime holder@0")
+    assert "volatile int holder_lifetime_sink_0;" in variant.text
+    assert (
+        "    other = holder + 2;\n"
+        "    holder_lifetime_sink_0 = holder;\n"
+        "    other += 3;"
+    ) in variant.text
+    assert variant.parent_baseline == ctx.source_path
+
+
+def test_holder_lifetime_source_skips_variables_with_no_reads(tmp_path: Path) -> None:
+    source = (
+        "void fn_test(void) {\n"
+        "    int unused;\n"
+        "    unused = 1;\n"
+        "}\n"
+    )
+    ctx = _ctx(tmp_path, source)
+
+    variants = list(holder_lifetime_source(ctx))
+
     assert variants == []
 
 
