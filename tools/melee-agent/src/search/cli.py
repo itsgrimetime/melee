@@ -282,6 +282,51 @@ def _transform_plan_payload(plan, probes, *, write_dir: Path | None = None) -> d
     }
 
 
+def _record_transform_plan_attempt(
+    *,
+    function: str,
+    plan,
+    probes,
+    source_path: Path | None,
+) -> dict:
+    from src.cli.tracking import record_attempt
+
+    clusters = ",".join(cluster.cluster_id for cluster in plan.clusters)
+    family_ids = ",".join(family.family_id for family in plan.families)
+    if probes:
+        outcome = "neutral"
+        blocker = ""
+        note = (
+            f"transform-plan probes={len(probes)} clusters={clusters} "
+            f"families={family_ids}"
+        )
+    else:
+        outcome = "blocked"
+        blocker = (
+            "transform-plan produced no materialized probes; target function "
+            "body is absent or no applicable anchors matched"
+        )
+        note = f"transform-plan no-probes clusters={clusters} families={family_ids}"
+    summary = record_attempt(
+        function,
+        match_percent=0.0,
+        outcome=outcome,
+        classification="transform-corpus",
+        blocker=blocker,
+        note=note,
+        source_file=str(source_path) if source_path is not None else "",
+    )
+    attempts = summary.get("attempts", [])
+    attempt = attempts[-1] if attempts else {}
+    return {
+        "outcome": outcome,
+        "attempt_index": attempt.get("index"),
+        "classification": "transform-corpus",
+        "blocker": blocker,
+        "note": note,
+    }
+
+
 def _assignment_progress(meta: dict | None) -> dict:
     proof = (meta or {}).get("proof_assignments") or {}
     return {
@@ -360,6 +405,13 @@ def plan_transforms_cmd(
             help="Optional directory where materialized candidate source files are written.",
         ),
     ] = None,
+    record_ledger: Annotated[
+        bool,
+        typer.Option(
+            "--record-ledger/--no-record-ledger",
+            help="Record the transform plan/probe outcome in the shared attempts ledger.",
+        ),
+    ] = False,
     json_out: Annotated[
         bool,
         typer.Option("--json/--no-json", help="Emit machine-readable JSON."),
@@ -397,6 +449,13 @@ def plan_transforms_cmd(
         )
 
     payload = _transform_plan_payload(plan, probes, write_dir=write_probes)
+    if record_ledger:
+        payload["ledger_record"] = _record_transform_plan_attempt(
+            function=function,
+            plan=plan,
+            probes=probes,
+            source_path=source_path,
+        )
     if json_out:
         typer.echo(_json.dumps(payload, indent=2))
         return
@@ -416,6 +475,12 @@ def plan_transforms_cmd(
     typer.echo(f"Materialized probes: {len(payload['probes'])}")
     if write_probes is not None:
         typer.echo(f"Probe directory: {write_probes}")
+    if record_ledger:
+        record = payload["ledger_record"]
+        typer.echo(
+            f"Ledger: {record['outcome']} "
+            f"(attempt {record.get('attempt_index')})"
+        )
 
 
 def _classify_source_delta(removed: list[str], added: list[str]) -> str:

@@ -149,6 +149,49 @@ def test_search_plan_transforms_outputs_corpus_plan_and_probes(tmp_path: Path) -
     assert payload["probes"][0]["candidate_path"] is None
 
 
+def test_search_plan_transforms_can_record_no_probe_evidence(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "placeholder.c"
+    source.write_text(
+        "void helper(void) {\n"
+        "    if (a) {\n"
+        "        x = 1;\n"
+        "    } else if (b) {\n"
+        "        x = 2;\n"
+        "    }\n"
+        "}\n"
+        "/// #ftCo_8009E7B4\n"
+    )
+    ledger = tmp_path / "attempts.json"
+    monkeypatch.setenv("DECOMP_ATTEMPT_LEDGER_FILE", str(ledger))
+    runner = CliRunner()
+
+    result = runner.invoke(
+        search_app,
+        [
+            "plan-transforms",
+            "--function", "ftCo_8009E7B4",
+            "--unit", "melee/ft/ftdynamics",
+            "--force-phys", "58:4,35:29",
+            "--source-file", str(source),
+            "--record-ledger",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["ledger_record"]["outcome"] == "blocked"
+    data = json.loads(ledger.read_text())
+    attempt = data["functions"]["ftCo_8009E7B4"]["attempts"][0]
+    assert attempt["outcome"] == "blocked"
+    assert attempt["classification"] == "transform-corpus"
+    assert "no materialized probes" in attempt["blocker"]
+    assert "early_flag_reload" in attempt["note"]
+
+
 def test_search_triage_clusters_source_deltas_and_scores_candidates(
     tmp_path: Path,
 ) -> None:
