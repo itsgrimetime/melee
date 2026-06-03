@@ -111,6 +111,44 @@ def test_search_run_help_documents_directed_options() -> None:
     assert "ID=path" in result.stdout
 
 
+def test_search_plan_transforms_outputs_corpus_plan_and_probes(tmp_path: Path) -> None:
+    source = tmp_path / "e7b4.c"
+    source.write_text(
+        "void ftCo_8009E7B4(void) {\n"
+        "    if (flag) {\n"
+        "        reload = 1;\n"
+        "    } else {\n"
+        "        if (kind != 0) {\n"
+        "            reload = 0;\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(
+        search_app,
+        [
+            "plan-transforms",
+            "--function", "ftCo_8009E7B4",
+            "--unit", "melee/ft/ftcommon",
+            "--force-phys", "58:4,35:29",
+            "--source-file", str(source),
+            "--max-per-family", "1",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["plan"]["function"] == "ftCo_8009E7B4"
+    assert "condition_split_merge" in {
+        family["family_id"] for family in payload["plan"]["families"]
+    }
+    assert payload["probes"]
+    assert payload["probes"][0]["candidate_path"] is None
+
+
 def test_search_triage_clusters_source_deltas_and_scores_candidates(
     tmp_path: Path,
 ) -> None:

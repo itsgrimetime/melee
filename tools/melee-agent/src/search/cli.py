@@ -263,6 +263,25 @@ def _format_assignment(entry: dict, *, status: str) -> str:
     return f"ig{original}: wanted r{desired}, abstained{suffix}"
 
 
+def _transform_plan_payload(plan, probes, *, write_dir: Path | None = None) -> dict:
+    probe_payloads: list[dict] = []
+    if write_dir is not None:
+        write_dir.mkdir(parents=True, exist_ok=True)
+    for probe in probes:
+        item = asdict(probe)
+        candidate_path = None
+        if write_dir is not None:
+            candidate_path = write_dir / f"{probe.probe_id.replace('/', '_')}.c"
+            candidate_path.write_text(probe.candidate_text)
+        item["candidate_path"] = None if candidate_path is None else str(candidate_path)
+        item.pop("candidate_text", None)
+        probe_payloads.append(item)
+    return {
+        "plan": asdict(plan),
+        "probes": probe_payloads,
+    }
+
+
 def _assignment_progress(meta: dict | None) -> dict:
     proof = (meta or {}).get("proof_assignments") or {}
     return {
@@ -308,6 +327,95 @@ def _assignment_clusters(meta: dict | None) -> list[str]:
     if not clusters and igs:
         clusters.append("unclassified proof-assignment movement")
     return clusters
+
+
+@search_app.command("plan-transforms")
+def plan_transforms_cmd(
+    function: Annotated[str, typer.Option("--function", "-f", help="Function to plan for.")],
+    unit: Annotated[str, typer.Option("--unit", "-u", help="Translation unit path, e.g. melee/ft/ftcommon.")],
+    force_phys: Annotated[
+        str,
+        typer.Option(
+            "--force-phys",
+            "--directed-force-phys",
+            help="Force-phys proof vector as IG:PHYS or CLASS:IG:PHYS entries.",
+        ),
+    ],
+    source_file: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--source-file",
+            "--source",
+            help="Optional C source file used to instantiate concrete probes.",
+        ),
+    ] = None,
+    max_per_family: Annotated[
+        int,
+        typer.Option("--max-per-family", help="Maximum materialized probes per family."),
+    ] = 3,
+    write_probes: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--write-probes",
+            help="Optional directory where materialized candidate source files are written.",
+        ),
+    ] = None,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json/--no-json", help="Emit machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Plan source-transform families and instantiate bounded probes."""
+    import json as _json
+
+    from src.search.directed.transform_corpus import (
+        generate_transform_probes,
+        plan_transform_experiments,
+    )
+
+    melee_root = _compute_melee_root()
+    try:
+        force_phys_map, _class_id = _parse_directed_force_phys(force_phys)
+    except ValueError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(2) from exc
+
+    plan = plan_transform_experiments(
+        function=function,
+        unit=unit,
+        force_phys=force_phys_map,
+    )
+    probes = ()
+    source_path = _resolve_source_file(source_file, melee_root=melee_root)
+    if source_path is not None:
+        probes = generate_transform_probes(
+            source_path.read_text(),
+            function=function,
+            unit=unit,
+            force_phys=force_phys_map,
+            max_per_family=max_per_family,
+        )
+
+    payload = _transform_plan_payload(plan, probes, write_dir=write_probes)
+    if json_out:
+        typer.echo(_json.dumps(payload, indent=2))
+        return
+
+    typer.echo(f"Function: {plan.function}")
+    typer.echo(f"Source:   {plan.source_file}")
+    typer.echo("Clusters:")
+    for cluster in plan.clusters:
+        typer.echo(f"  - {cluster.label}: {', '.join(cluster.target_assignments)}")
+        typer.echo(f"    families: {', '.join(cluster.family_ids)}")
+    typer.echo("Families:")
+    for family in plan.families:
+        typer.echo(
+            f"  - {family.family_id}: {family.label} "
+            f"(risk: {family.semantic_risk})"
+        )
+    typer.echo(f"Materialized probes: {len(payload['probes'])}")
+    if write_probes is not None:
+        typer.echo(f"Probe directory: {write_probes}")
 
 
 def _classify_source_delta(removed: list[str], added: list[str]) -> str:
