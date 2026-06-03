@@ -115,14 +115,15 @@ def decl_orders_source(ctx: FunctionContext) -> Iterator[SourceVariant]:
 # insert_alias_source
 # ---------------------------------------------------------------------------
 
+_MAX_ALIAS_READ_SITES = 8
+
 
 def insert_alias_source(ctx: FunctionContext) -> Iterator[SourceVariant]:
     """Yield alias-insertion variants for each local that has a reading use.
 
-    For each local, try inserting an alias at the first reading use
-    (`at_stmt_index=0`). Variables that have no reading uses, that can't
-    be unambiguously located, or that look like struct fields are skipped
-    via `MutationUnsupported`.
+    For each local, try inserting an alias at bounded reading-use sites.
+    Variables that have no reading uses, that can't be unambiguously located,
+    or that look like struct fields are skipped via `MutationUnsupported`.
     """
     source_text = ctx.source_path.read_text(encoding="utf-8")
     extracted = _extract_function_text(source_text, ctx.function)
@@ -133,25 +134,26 @@ def insert_alias_source(ctx: FunctionContext) -> Iterator[SourceVariant]:
 
     seen_texts: set[str] = set()
     for decl in locals_:
-        try:
-            patched = mutate_insert_alias_before_use(
-                source_text,
-                ctx.function,
-                decl.name,
-                at_stmt_index=0,
+        for read_idx in range(_MAX_ALIAS_READ_SITES):
+            try:
+                patched = mutate_insert_alias_before_use(
+                    source_text,
+                    ctx.function,
+                    decl.name,
+                    at_stmt_index=read_idx,
+                )
+            except MutationUnsupported:
+                break
+            except Exception:
+                break
+            if patched == source_text or patched in seen_texts:
+                continue
+            seen_texts.add(patched)
+            yield SourceVariant(
+                text=patched,
+                provenance=f"insert-alias {decl.name}@{read_idx}",
+                parent_baseline=ctx.source_path,
             )
-        except MutationUnsupported:
-            continue
-        except Exception:
-            continue
-        if patched == source_text or patched in seen_texts:
-            continue
-        seen_texts.add(patched)
-        yield SourceVariant(
-            text=patched,
-            provenance=f"insert-alias {decl.name}@0",
-            parent_baseline=ctx.source_path,
-        )
 
 
 # ---------------------------------------------------------------------------

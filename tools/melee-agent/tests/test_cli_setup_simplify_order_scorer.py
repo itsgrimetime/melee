@@ -92,6 +92,31 @@ def _make_baseline_dump(tmp_path: Path, function: str) -> Path:
     return p
 
 
+def _make_force_phys_pcdump(
+    path: Path,
+    function: str,
+    *,
+    assigned_by_ig: dict[int, int],
+    simplify_order: list[int] | None = None,
+) -> Path:
+    simplify_order = simplify_order or [-1, -1]
+    ig_idxs = sorted(assigned_by_ig)
+    lines = [f"Starting function {function}"]
+    lines.append(f"COLORGRAPH DECISIONS (class=0, result=1, n_nodes={len(ig_idxs)})")
+    lines.append("iter ig_idx assigned degree n_interferers flags")
+    for i, ig in enumerate(ig_idxs):
+        assigned = assigned_by_ig.get(ig, 30)
+        lines.append(f"  {i}  {ig}  r{assigned}  0  0  0x0")
+    lines.append("[COALESCE] enter class=0 n_virtuals=40")
+    lines.append("[COALESCE] exit class=0 n_virtuals=40 distinct_roots=40 forced=0")
+    lines.append("SIMPLIFY GRAPH (class=0, n_colors=29, n_class_regs=40)")
+    lines.append("iter ig_idx degree array_size flags")
+    for i, ig in enumerate(simplify_order):
+        lines.append(f"  {i}  {ig}  1  1  0x0")
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
 def _stub_wibo_and_compiler(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     """Create fake wibo + mwcceppc_debug.exe files and patch the finders.
 
@@ -312,6 +337,7 @@ def test_setup_can_bootstrap_and_auto_generate_baseline(
         *,
         perm_root: Path,
         source_file,
+        melee_root: Path,
         preserve_macros: str,
         force: bool,
     ) -> dict:
@@ -609,6 +635,92 @@ def test_setup_force_phys_invalid_format_errors(
     assert result.exit_code != 0
     err = result.stderr or result.stdout
     assert "force-phys" in err.lower()
+
+
+def test_score_force_phys_scores_assignment_hits_when_simplify_order_is_unusable(
+    tmp_path: Path,
+) -> None:
+    function = "fn_test"
+    baseline = _make_force_phys_pcdump(
+        tmp_path / "baseline.pcdump.txt",
+        function,
+        assigned_by_ig={53: 5},
+        simplify_order=[-1, -1],
+    )
+    target = tmp_path / "force_phys_target.yaml"
+    target.write_text(
+        textwrap.dedent(f"""\
+            function: {function}
+            class_id: 0
+            baseline_dump: {baseline}
+            force_phys:
+              53: 4
+        """)
+    )
+    obj = tmp_path / "candidate.o"
+    obj.write_bytes(b"\0")
+    _make_force_phys_pcdump(
+        Path(str(obj) + ".pcdump.txt"),
+        function,
+        assigned_by_ig={53: 4},
+        simplify_order=[-1, -1],
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug", "target", "score-force-phys",
+            str(obj),
+            "--function", function,
+            "--target", str(target),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + "\n" + (result.stderr or "")
+    payload = __import__("json").loads(result.stdout)
+    assert payload["score"] == 0
+    assert payload["force_phys_hits"] == 1
+    assert payload["targeted"] == 1
+    assert payload["matched_igs"] == [53]
+
+
+def test_setup_force_phys_scorer_wires_settings_without_simplify_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    function = "fn_test"
+    perm_root = _make_perm_dir(tmp_path, function=function)
+    baseline = _make_force_phys_pcdump(
+        tmp_path / "baseline.pcdump.txt",
+        function,
+        assigned_by_ig={53: 5},
+        simplify_order=[-1, -1],
+    )
+    _stub_wibo_and_compiler(tmp_path, monkeypatch)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug", "permute", "setup-simplify-order-scorer",
+            "--function", function,
+            "--scorer-mode", "force-phys",
+            "--force-phys", "53:4",
+            "--class", "0",
+            "--baseline-dump", str(baseline),
+            "--perm-root", str(perm_root),
+            "--force",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + "\n" + (result.stderr or "")
+    perm_dir = perm_root / "nonmatchings" / function
+    parsed = toml.loads((perm_dir / "settings.toml").read_text())
+    assert "score-force-phys" in parsed["scorer"]["command"]
+    assert "score-simplify-order" not in parsed["scorer"]["command"]
+    target_yaml = (perm_dir / "simplify_order_target.yaml").read_text()
+    assert "force_phys:" in target_yaml
+    assert "53: 4" in target_yaml
+    assert "simplify_order_target" not in target_yaml
 
 
 # ---------------------------------------------------------------------------

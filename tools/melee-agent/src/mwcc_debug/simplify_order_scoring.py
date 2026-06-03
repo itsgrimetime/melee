@@ -666,6 +666,7 @@ def _signature_with_filtered_order(sig: BaselineSignature) -> BaselineSignature:
         coalesce_mappings=sig.coalesce_mappings,
         spill_set=sig.spill_set,
         simplify_order=filtered,
+        assigned_regs=sig.assigned_regs,
     )
 
 

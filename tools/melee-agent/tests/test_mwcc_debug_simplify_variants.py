@@ -141,9 +141,9 @@ def test_decl_orders_source_handles_struct_pointer_initializers(tmp_path: Path) 
 # ---------------------------------------------------------------------------
 
 
-def test_insert_alias_source_yields_one_variant_per_var_and_use_site(tmp_path: Path) -> None:
+def test_insert_alias_source_yields_one_variant_per_var_and_read_site(tmp_path: Path) -> None:
     """The adapter iterates over each local var, and for each, attempts to
-    insert an alias at the first reading-use site. Variables with no
+    insert an alias at each supported reading-use site. Variables with no
     reading uses (only writes/decls) are skipped.
     """
     source = (
@@ -164,8 +164,9 @@ def test_insert_alias_source_yields_one_variant_per_var_and_use_site(tmp_path: P
     # `c` is never read => no alias possible. We expect at least 2.
     assert len(variants) >= 2
     provs = {v.provenance for v in variants}
-    assert any("a" in p for p in provs)
-    assert any("b" in p for p in provs)
+    assert "insert-alias a@0" in provs
+    assert "insert-alias a@1" in provs
+    assert "insert-alias b@0" in provs
     # All variants share the same parent baseline path.
     assert all(v.parent_baseline == ctx.source_path for v in variants)
 
