@@ -288,6 +288,116 @@ def test_search_plan_transforms_records_retained_validation_evidence(
     assert "retained-source-improvement" in attempt["note"]
 
 
+def test_search_plan_transforms_captures_structured_validation_evidence(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "e7b4.c"
+    source.write_text(
+        "void ftCo_8009E7B4(void) {\n"
+        "    if (flag) {\n"
+        "        reload = 1;\n"
+        "    } else {\n"
+        "        if (kind != 0) {\n"
+        "            reload = 0;\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+    ledger = tmp_path / "attempts.json"
+    monkeypatch.setenv("DECOMP_ATTEMPT_LEDGER_FILE", str(ledger))
+    runner = CliRunner()
+
+    result = runner.invoke(
+        search_app,
+        [
+            "plan-transforms",
+            "--function", "ftCo_8009E7B4",
+            "--unit", "melee/ft/ftcommon",
+            "--force-phys", "58:4,35:29",
+            "--source-file", str(source),
+            "--max-per-family", "1",
+            "--write-probes", str(tmp_path / "probes"),
+            "--validate-command",
+            (
+                f"{sys.executable} -c \"import json; "
+                "print(json.dumps({'match': True, 'match_percent': 96.25, "
+                "'target_assignment_movement': {'ig58->r4': 'satisfied'}}))\" "
+                "{candidate_path}"
+            ),
+            "--record-ledger",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    first = payload["validation"][0]
+    assert first["outcome"] == "retained-source-improvement"
+    assert first["match_percent"] == 96.25
+    assert first["target_assignment_movement"] == {"ig58->r4": "satisfied"}
+    assert payload["ledger_record"]["match_percent"] == 96.25
+    data = json.loads(ledger.read_text())
+    attempt = data["functions"]["ftCo_8009E7B4"]["attempts"][0]
+    assert attempt["match_percent"] == 96.2
+    assert "movement=ig58->r4:satisfied" in attempt["note"]
+
+
+def test_search_plan_transforms_records_larger_refactor_recommendation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "e7b4.c"
+    source.write_text(
+        "void ftCo_8009E7B4(void) {\n"
+        "    if (flag) {\n"
+        "        reload = 1;\n"
+        "    } else {\n"
+        "        if (kind != 0) {\n"
+        "            reload = 0;\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+    ledger = tmp_path / "attempts.json"
+    monkeypatch.setenv("DECOMP_ATTEMPT_LEDGER_FILE", str(ledger))
+    runner = CliRunner()
+
+    result = runner.invoke(
+        search_app,
+        [
+            "plan-transforms",
+            "--function", "ftCo_8009E7B4",
+            "--unit", "melee/ft/ftcommon",
+            "--force-phys", "58:4,35:29",
+            "--source-file", str(source),
+            "--max-per-family", "1",
+            "--write-probes", str(tmp_path / "probes"),
+            "--validate-command",
+            (
+                f"{sys.executable} -c \"import json; "
+                "print(json.dumps({'outcome': 'larger-refactor', "
+                "'source_regions': ['early flag/reload block'], "
+                "'uncovered_transform_classes': ['helper_shape']}))\" "
+                "{candidate_path}"
+            ),
+            "--record-ledger",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["validation"][0]["outcome"] == "larger-refactor-recommended"
+    record = payload["ledger_record"]
+    assert record["outcome"] == "blocked"
+    assert "larger refactor" in record["blocker"]
+    data = json.loads(ledger.read_text())
+    attempt = data["functions"]["ftCo_8009E7B4"]["attempts"][0]
+    assert "source_regions=early flag/reload block" in attempt["note"]
+    assert "uncovered=helper_shape" in attempt["note"]
+
+
 def test_search_triage_clusters_source_deltas_and_scores_candidates(
     tmp_path: Path,
 ) -> None:

@@ -302,6 +302,18 @@ def _record_transform_plan_attempt(
         result for result in (validation_results or [])
         if result.get("outcome") == "negative-evidence"
     ]
+    refactor_results = [
+        result for result in (validation_results or [])
+        if result.get("outcome") == "larger-refactor-recommended"
+    ]
+    match_values = [
+        float(result["match_percent"])
+        for result in (validation_results or [])
+        if result.get("match_percent") is not None
+    ]
+    match_percent = max(match_values) if match_values else 0.0
+    movement_note = _validation_movement_note(validation_results or [])
+    refactor_note = _validation_refactor_note(refactor_results)
     if retained_results:
         outcome = "improved"
         retained = True
@@ -311,6 +323,18 @@ def _record_transform_plan_attempt(
             f"transform-plan validation retained-source-improvement "
             f"probes={retained_ids} clusters={clusters} families={family_ids}"
         )
+        if movement_note:
+            note += f" {movement_note}"
+    elif refactor_results:
+        outcome = "blocked"
+        retained = False
+        blocker = "transform-plan validation recommends larger refactor"
+        note = (
+            f"transform-plan larger-refactor clusters={clusters} "
+            f"families={family_ids}"
+        )
+        if refactor_note:
+            note += f" {refactor_note}"
     elif validation_results and negative_results:
         outcome = "blocked"
         retained = False
@@ -319,6 +343,8 @@ def _record_transform_plan_attempt(
             f"transform-plan negative-evidence probes={len(negative_results)} "
             f"clusters={clusters} families={family_ids}"
         )
+        if movement_note:
+            note += f" {movement_note}"
     elif probes:
         outcome = "neutral"
         retained = False
@@ -337,7 +363,7 @@ def _record_transform_plan_attempt(
         note = f"transform-plan no-probes clusters={clusters} families={family_ids}"
     summary = record_attempt(
         function,
-        match_percent=0.0,
+        match_percent=match_percent,
         outcome=outcome,
         classification="transform-corpus",
         blocker=blocker,
@@ -354,10 +380,76 @@ def _record_transform_plan_attempt(
         "blocker": blocker,
         "note": note,
         "retained": retained,
+        "match_percent": match_percent,
     }
 
 
-def _classify_validation_result(returncode: int, stdout: str, stderr: str) -> str:
+def _parse_validation_payload(stdout: str) -> dict | None:
+    text = stdout.strip()
+    if not text:
+        return None
+    candidates = [text, *reversed(text.splitlines())]
+    for candidate in candidates:
+        candidate = candidate.strip()
+        if not candidate.startswith("{"):
+            continue
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _payload_bool(value) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "matched"}:
+            return True
+        if lowered in {"0", "false", "no", "mismatch", "unmatched"}:
+            return False
+    return None
+
+
+def _payload_float(value) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed < 0 or parsed > 100:
+        return None
+    return parsed
+
+
+def _classify_validation_result(
+    returncode: int,
+    stdout: str,
+    stderr: str,
+    payload: dict | None = None,
+) -> str:
+    if payload:
+        outcome = str(payload.get("outcome") or payload.get("status") or "").lower()
+        if outcome in {
+            "retained",
+            "retained-source-improvement",
+            "improved",
+            "matched",
+        }:
+            return "retained-source-improvement"
+        if outcome in {"larger-refactor", "larger_refactor", "refactor"}:
+            return "larger-refactor-recommended"
+        if outcome in {"negative", "negative-evidence", "no-improvement", "failed"}:
+            return "negative-evidence"
+        match_value = _payload_bool(payload.get("match", payload.get("matched")))
+        if match_value is True:
+            return "retained-source-improvement"
+        if match_value is False and returncode == 0:
+            return "negative-evidence"
     text = f"{stdout}\n{stderr}".lower()
     if returncode == 0 and any(
         marker in text
@@ -372,6 +464,44 @@ def _classify_validation_result(returncode: int, stdout: str, stderr: str) -> st
     if returncode == 0:
         return "negative-evidence"
     return "blocked"
+
+
+def _validation_movement_note(results: list[dict]) -> str:
+    movement_items: list[str] = []
+    for result in results:
+        movement = result.get("target_assignment_movement")
+        if isinstance(movement, dict):
+            for key, value in sorted(movement.items()):
+                movement_items.append(f"{key}:{value}")
+        elif isinstance(movement, list):
+            movement_items.extend(str(item) for item in movement)
+        elif movement:
+            movement_items.append(str(movement))
+    if not movement_items:
+        return ""
+    return "movement=" + ",".join(movement_items[:8])
+
+
+def _validation_refactor_note(results: list[dict]) -> str:
+    regions: list[str] = []
+    uncovered: list[str] = []
+    for result in results:
+        source_regions = result.get("source_regions")
+        if isinstance(source_regions, list):
+            regions.extend(str(item) for item in source_regions)
+        elif source_regions:
+            regions.append(str(source_regions))
+        classes = result.get("uncovered_transform_classes")
+        if isinstance(classes, list):
+            uncovered.extend(str(item) for item in classes)
+        elif classes:
+            uncovered.append(str(classes))
+    parts = []
+    if regions:
+        parts.append("source_regions=" + ",".join(regions[:6]))
+    if uncovered:
+        parts.append("uncovered=" + ",".join(uncovered[:6]))
+    return " ".join(parts)
 
 
 def _run_transform_validations(
@@ -400,18 +530,51 @@ def _run_transform_validations(
             for token in shlex.split(validate_command)
         ]
         proc = subprocess.run(args, capture_output=True, text=True)
+        validation_payload = _parse_validation_payload(proc.stdout)
+        outcome = _classify_validation_result(
+            proc.returncode,
+            proc.stdout,
+            proc.stderr,
+            validation_payload,
+        )
+        match_percent = None
+        target_assignment_movement = None
+        recommendation = None
+        source_regions = None
+        uncovered_transform_classes = None
+        if validation_payload:
+            match_percent = _payload_float(
+                validation_payload.get(
+                    "match_percent",
+                    validation_payload.get("fuzzy_match_percent"),
+                )
+            )
+            target_assignment_movement = validation_payload.get(
+                "target_assignment_movement",
+                validation_payload.get(
+                    "assignment_movement",
+                    validation_payload.get("movement"),
+                ),
+            )
+            recommendation = validation_payload.get("recommendation")
+            source_regions = validation_payload.get("source_regions")
+            uncovered_transform_classes = validation_payload.get(
+                "uncovered_transform_classes"
+            )
         results.append({
             "probe_id": probe.get("probe_id"),
             "family_id": probe.get("family_id"),
-            "outcome": _classify_validation_result(
-                proc.returncode,
-                proc.stdout,
-                proc.stderr,
-            ),
+            "outcome": outcome,
             "returncode": proc.returncode,
             "command": args,
             "stdout": proc.stdout,
             "stderr": proc.stderr,
+            "validator_payload": validation_payload,
+            "match_percent": match_percent,
+            "target_assignment_movement": target_assignment_movement,
+            "recommendation": recommendation,
+            "source_regions": source_regions,
+            "uncovered_transform_classes": uncovered_transform_classes,
         })
     return results
 
