@@ -142,7 +142,7 @@ static inline s32 random_adder_f(f32 temp_f0, f32 temp_f2)
     s32 var_r3_2;
     temp_r28_2 = (s32) temp_f0;
     var_r29 = (s32) temp_f2;
-    if ((s32) temp_f2 > (s32) temp_f0) {
+    if (var_r29 > temp_r28_2) {
         temp_r3 = var_r29 - temp_r28_2;
         if (temp_r3 != 0) {
             var_r3 = HSD_Randi(temp_r3);
