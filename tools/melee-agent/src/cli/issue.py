@@ -7,7 +7,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 from rich.table import Table
@@ -150,6 +150,92 @@ def _echo_json(payload: object) -> None:
     print(json.dumps(payload, indent=2, default=str))
 
 
+def _issue_text(issue: dict[str, Any]) -> str:
+    return "\n".join(
+        str(issue.get(key) or "")
+        for key in ("summary", "body", "resolution_note")
+    )
+
+
+def _extract_impact(note: str | None) -> str:
+    if not note:
+        return ""
+    match = re.search(r"^impact=([-\w]+)\s*$", note, re.MULTILINE)
+    return match.group(1).strip().lower() if match else ""
+
+
+def _extract_governance_applies_to(body: str | None) -> list[str]:
+    if not body:
+        return []
+    match = re.search(r"^\s*Applies to\s*:\s*(.+)$", body, re.IGNORECASE | re.MULTILINE)
+    if match is None:
+        return []
+    raw = match.group(1)
+    return [
+        part.strip()
+        for part in re.split(r"[,;]", raw)
+        if part.strip()
+    ]
+
+
+def _attempt_roi_for_functions(functions: list[str]) -> dict[str, Any]:
+    from .tracking import summarize_attempts
+
+    by_function: dict[str, Any] = {}
+    attempt_count = 0
+    retained_source_wins = 0
+    negative_evidence = 0
+    recent_blockers: list[str] = []
+    for function_name in sorted(set(functions)):
+        summary = summarize_attempts(function_name)
+        by_function[function_name] = {
+            "exists": summary["exists"],
+            "attempt_count": summary["attempt_count"],
+            "retained_improvements": summary["retained_improvements"],
+            "best_match_percent": summary["best_match_percent"],
+            "move_on_recommended": summary["move_on_recommended"],
+            "move_on_reason": summary["move_on_reason"],
+            "recent_blockers": summary["recent_blockers"],
+        }
+        attempt_count += int(summary["attempt_count"])
+        retained_source_wins += int(summary["retained_improvements"])
+        recent_blockers.extend(str(blocker) for blocker in summary["recent_blockers"])
+        for attempt in summary["attempts"]:
+            outcome = str(attempt.get("outcome") or "")
+            if outcome in {"neutral", "regressed", "reverted", "blocked"}:
+                negative_evidence += 1
+    return {
+        "attempt_count": attempt_count,
+        "retained_source_wins": retained_source_wins,
+        "negative_evidence": negative_evidence,
+        "recent_blockers": recent_blockers,
+        "by_function": by_function,
+    }
+
+
+def _campaign_recommendation(
+    *,
+    status: str,
+    impact: str,
+    retained_source_wins: int,
+    negative_evidence: int,
+    generality_count: int,
+) -> str:
+    if status == "open":
+        return "keep-investing"
+    if impact == "negative-evidence":
+        return "stop-or-defer"
+    if impact in {"matched", "retained-source-improvement"} or retained_source_wins > 0:
+        return "mature"
+    if generality_count >= 3:
+        return "mature"
+    if impact in {"infrastructure-only", "diagnostic-only"}:
+        return "mature"
+    if negative_evidence > 0 and retained_source_wins == 0:
+        return "stop-or-defer"
+    return "keep-investing"
+
+
 @issue_app.command("report")
 def report_command(
     summary: Annotated[str, typer.Argument(help="Short summary of the tooling issue")],
@@ -266,6 +352,121 @@ def report_command(
 
     console.print(f"[green]Reported issue #{issue['id']}[/green]: {issue['summary']}")
     console.print(f"[dim]View: melee-agent issue show {issue['id']}[/dim]")
+
+
+@issue_app.command("campaign-report")
+def campaign_report_command(
+    functions: Annotated[
+        list[str] | None,
+        typer.Option("--function", "-f", help="Campaign function to analyze; repeatable"),
+    ] = None,
+    tool: Annotated[str | None, typer.Option("--tool", "-t", help="Filter by tool")] = None,
+    limit: Annotated[int, typer.Option("--limit", "-n", help="Maximum issues to scan")] = 200,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
+):
+    """Report tooling-campaign ROI, generality, and remaining gaps."""
+    focus_functions = set(_normalize_functions(functions or []))
+    db = get_db()
+    issues = db.list_tool_issues(status="all", tool=tool, limit=limit)
+
+    rows: list[dict[str, Any]] = []
+    for issue in issues:
+        issue_functions = list(issue.get("functions") or [])
+        applies_to = _extract_governance_applies_to(issue.get("body"))
+        generality_functions = sorted(set(issue_functions) | set(applies_to))
+        text = _issue_text(issue)
+        if focus_functions and not (
+            focus_functions & set(generality_functions)
+            or any(fn in text for fn in focus_functions)
+        ):
+            continue
+
+        roi = _attempt_roi_for_functions(generality_functions or list(focus_functions))
+        impact = _extract_impact(issue.get("resolution_note"))
+        retained_source_wins = int(roi["retained_source_wins"])
+        if impact in {"matched", "retained-source-improvement"}:
+            retained_source_wins = max(retained_source_wins, 1)
+        negative_evidence = int(roi["negative_evidence"])
+        if impact == "negative-evidence":
+            negative_evidence = max(negative_evidence, 1)
+        downstream_functions = sorted(set(generality_functions) - focus_functions)
+        recommendation = _campaign_recommendation(
+            status=issue["status"],
+            impact=impact,
+            retained_source_wins=retained_source_wins,
+            negative_evidence=negative_evidence,
+            generality_count=len(generality_functions),
+        )
+        rows.append({
+            "id": issue["id"],
+            "status": issue["status"],
+            "kind": issue["kind"],
+            "tool": issue.get("tool") or "",
+            "summary": issue["summary"],
+            "functions": issue_functions,
+            "applies_to": applies_to,
+            "generality_functions": generality_functions,
+            "downstream_functions": downstream_functions,
+            "impact": impact,
+            "attempt_count": roi["attempt_count"],
+            "retained_source_wins": retained_source_wins,
+            "negative_evidence": negative_evidence,
+            "recent_blockers": roi["recent_blockers"],
+            "attempts_by_function": roi["by_function"],
+            "open_follow_up_gap": issue["status"] == "open",
+            "recommendation": recommendation,
+        })
+
+    summary = {
+        "issue_count": len(rows),
+        "open_follow_up_gaps": sum(1 for row in rows if row["open_follow_up_gap"]),
+        "retained_source_wins": sum(int(row["retained_source_wins"]) for row in rows),
+        "negative_evidence": sum(int(row["negative_evidence"]) for row in rows),
+        "mature": sum(1 for row in rows if row["recommendation"] == "mature"),
+        "keep_investing": sum(1 for row in rows if row["recommendation"] == "keep-investing"),
+        "stop_or_defer": sum(1 for row in rows if row["recommendation"] == "stop-or-defer"),
+    }
+    payload = {
+        "functions": sorted(focus_functions),
+        "tool": tool,
+        "summary": summary,
+        "issues": rows,
+    }
+
+    if output_json:
+        _echo_json(payload)
+        return
+
+    if not rows:
+        console.print("[dim]No campaign issues found[/dim]")
+        return
+
+    table = Table(title="Tooling Campaign ROI")
+    table.add_column("ID", justify="right")
+    table.add_column("Status")
+    table.add_column("Impact")
+    table.add_column("ROI", justify="right")
+    table.add_column("Generality")
+    table.add_column("Recommendation")
+    table.add_column("Summary", max_width=48)
+    for row in rows:
+        table.add_row(
+            str(row["id"]),
+            row["status"],
+            row["impact"] or "-",
+            f"+{row['retained_source_wins']} / -{row['negative_evidence']}",
+            str(len(row["generality_functions"])),
+            row["recommendation"],
+            row["summary"],
+        )
+    console.print(table)
+    console.print(
+        "Summary: "
+        f"{summary['mature']} mature, "
+        f"{summary['keep_investing']} keep-investing, "
+        f"{summary['stop_or_defer']} stop/defer, "
+        f"{summary['open_follow_up_gaps']} open gaps"
+    )
 
 
 @issue_app.command("list")

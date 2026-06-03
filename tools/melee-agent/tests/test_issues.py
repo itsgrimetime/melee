@@ -333,6 +333,96 @@ def test_issue_resolve_accepts_impact_tag(tmp_path):
     reset_db()
 
 
+def test_issue_campaign_report_links_issue_impacts_and_attempt_roi(tmp_path, monkeypatch):
+    """Campaign reporting should expose ROI/generalization signals together."""
+    reset_db()
+    db = StateDB(tmp_path / "state.db")
+    retained = db.report_tool_issue(
+        "register tiebreak scorer",
+        kind="feature",
+        tool="mwcc-debug",
+        functions=["ftCo_8009E7B4", "fn_80175A94"],
+        body="\n".join(
+            [
+                "Governance:",
+                "Reusable class: coupled force-phys tiebreak",
+                "Applies to: ftCo_8009E7B4, fn_80175A94, un_803147C4",
+                "Source-actionable output: ranked force-phys source edits",
+                "Stop condition: retained source win or bounded negative evidence",
+                "Existing workflow failed: generic diagnose advice",
+            ]
+        ),
+    )
+    negative = db.report_tool_issue(
+        "deep probe exhausted one branch",
+        kind="feature",
+        tool="mwcc-debug",
+        functions=["ftCo_8009E7B4"],
+    )
+    open_gap = db.report_tool_issue(
+        "source coverage matrix missing",
+        kind="feature",
+        tool="mwcc-debug",
+        functions=["ftCo_8009E7B4"],
+    )
+    db.resolve_tool_issue(
+        retained["id"],
+        agent_id="agent-test",
+        resolution_note=(
+            "Used on later functions and kept one source edit.\n"
+            "impact=retained-source-improvement"
+        ),
+    )
+    db.resolve_tool_issue(
+        negative["id"],
+        agent_id="agent-test",
+        resolution_note="Exhausted bounded search.\nimpact=negative-evidence",
+    )
+    db.close()
+    reset_db()
+    get_db(tmp_path / "state.db")
+
+    ledger_path = tmp_path / "attempts.json"
+    monkeypatch.setenv("DECOMP_ATTEMPT_LEDGER_FILE", str(ledger_path))
+    from src.cli.tracking import record_attempt
+
+    record_attempt(
+        "ftCo_8009E7B4",
+        match_percent=91.0,
+        outcome="improved",
+        retained=True,
+        note="kept source probe result",
+    )
+    record_attempt(
+        "fn_80175A94",
+        match_percent=80.0,
+        outcome="blocked",
+        classification="register-allocation",
+        blocker="same tiebreak family",
+    )
+
+    result = runner.invoke(
+        app,
+        ["issue", "campaign-report", "--function", "ftCo_8009E7B4", "--json"],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    by_id = {entry["id"]: entry for entry in payload["issues"]}
+    assert by_id[retained["id"]]["impact"] == "retained-source-improvement"
+    assert by_id[retained["id"]]["recommendation"] == "mature"
+    assert by_id[retained["id"]]["retained_source_wins"] == 1
+    assert "fn_80175A94" in by_id[retained["id"]]["downstream_functions"]
+    assert "un_803147C4" in by_id[retained["id"]]["generality_functions"]
+    assert by_id[negative["id"]]["recommendation"] == "stop-or-defer"
+    assert by_id[negative["id"]]["negative_evidence"] >= 1
+    assert by_id[open_gap["id"]]["recommendation"] == "keep-investing"
+    assert payload["summary"]["open_follow_up_gaps"] == 1
+    assert payload["summary"]["retained_source_wins"] >= 1
+
+    reset_db()
+
+
 def test_issue_show_reports_missing_issue(tmp_path):
     """Showing a missing issue should fail with a useful message."""
     reset_db()
