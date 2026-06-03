@@ -163,6 +163,7 @@ class CompileResult:
     stderr: str         # full compiler stderr (empty if ok)
     stdout: str         # full compiler stdout (mostly empty)
     one_line_reason: str  # extracted first useful error line, or ""
+    pcdump_text: Optional[str] = None
 
 
 def _extract_one_line_reason(stderr: str, stdout: str) -> str:
@@ -259,14 +260,30 @@ def smoke_compile(
             env=env,
         )
         ok = proc.returncode == 0 and out_o.exists()
+        pcdump_text = None
+        if pcdump_path.exists():
+            try:
+                pcdump_text = pcdump_path.read_text(
+                    encoding="utf-8",
+                    errors="replace",
+                )
+            except OSError:
+                pcdump_text = None
         if ok:
-            return CompileResult(ok=True, stderr="", stdout="", one_line_reason="")
+            return CompileResult(
+                ok=True,
+                stderr="",
+                stdout="",
+                one_line_reason="",
+                pcdump_text=pcdump_text,
+            )
         return CompileResult(
             ok=False,
             stderr=proc.stderr or "",
             stdout=proc.stdout or "",
             one_line_reason=_extract_one_line_reason(
                 proc.stderr or "", proc.stdout or ""),
+            pcdump_text=pcdump_text,
         )
     except subprocess.TimeoutExpired:
         return CompileResult(
@@ -350,6 +367,7 @@ class PerSeedPermuteResult:
     delta: int
     ran_seconds: float
     error: Optional[str] = None
+    seed_score: Optional[int] = None
 
 
 def find_best_candidate(perm_dir: Path) -> Optional[Path]:
@@ -404,6 +422,7 @@ def run_per_seed_permute(
     per_seed_time: int,
     runner: PermuteRunner,
     baseline_score: Optional[int],
+    seed_score: Optional[int] = None,
 ) -> PerSeedPermuteResult:
     """Run the permuter against one seed for `per_seed_time` seconds,
     then find the best candidate it produced.
@@ -427,6 +446,17 @@ def run_per_seed_permute(
         if m is not None:
             best_score = int(m.group("score"))
 
+    seed_base = seed_dir / "base.c"
+    if (
+        seed_score is not None
+        and seed_base.exists()
+        and baseline_score is not None
+        and seed_score < baseline_score
+        and (best_score is None or seed_score < best_score)
+    ):
+        best_path = seed_base
+        best_score = seed_score
+
     if best_score is not None and baseline_score is not None:
         delta = max(0, baseline_score - best_score)
     else:
@@ -442,6 +472,7 @@ def run_per_seed_permute(
         delta=delta,
         ran_seconds=elapsed,
         error=error,
+        seed_score=seed_score,
     )
 
 

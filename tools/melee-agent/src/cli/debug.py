@@ -91,6 +91,7 @@ from ..mwcc_debug.diff_report import (
 )
 from ..mwcc_debug.frame_reservations import (
     analyze_frame_from_asm_text,
+    analyze_frame_from_function,
     analyze_frame_reservations,
 )
 
@@ -19732,9 +19733,13 @@ def tier3_search(
         save_compile_failure,
         smoke_compile,
     )
-    from ..mwcc_debug.pressure_explorer import generate_lifetime_layout_probes
+    from ..mwcc_debug.pressure_explorer import (
+        generate_frame_directed_probes,
+        generate_lifetime_layout_probes,
+    )
 
     melee_root = DEFAULT_MELEE_ROOT
+    explicit_target = target is not None
 
     # Resolve unit + sources
     unit = _find_unit_for_function(function, melee_root)
@@ -19759,11 +19764,56 @@ def tier3_search(
         )
         raise typer.Exit(3)
 
+    # Resolve/derive the target spec before seed planning. Frame-specific
+    # targets can drive seed generation, not just later candidate scoring.
+    if target is None:
+        target = melee_root / "build" / "mwcc_debug_cache" / \
+            f"{unit}_target.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.exists():
+            events_list = parse_hook_events(text)
+            events = find_function(events_list, function)
+            spec = derive_target_from_function(fn, events=events)
+            target.write_text(json.dumps(spec, indent=2))
+            print(f"[tier3] derived target -> {target}")
+    try:
+        target_spec = _load_target_spec(target)
+    except typer.Exit:
+        raw_target_text = target.read_text() if target.exists() else ""
+        try:
+            raw_target = json.loads(raw_target_text) if raw_target_text else None
+        except json.JSONDecodeError:
+            raw_target = None
+        if raw_target == {}:
+            target_spec = {}
+        else:
+            raise
+
     bindings = list_bindings(base_source, function, pre)
-    plans = plan_seeds(
-        bindings, budget=budget,
-        include_low_confidence=include_low_confidence,
-    )
+    plans = []
+    target_frame = target_spec.get("frame")
+    if isinstance(target_frame, dict):
+        frame_probes = generate_frame_directed_probes(
+            base_source,
+            function,
+            current_frame=analyze_frame_from_function(fn),
+            target_frame=target_frame,
+            max_probes=budget,
+        )
+        plans.extend(plan_seeds_from_lifetime_layout_probes(
+            frame_probes,
+            budget=budget,
+        ))
+        if plans:
+            print(
+                "[tier3] using frame-directed seed plans from target frame"
+            )
+    remaining_budget = max(0, budget - len(plans))
+    if remaining_budget:
+        plans.extend(plan_seeds(
+            bindings, budget=remaining_budget,
+            include_low_confidence=include_low_confidence,
+        ))
     if not plans:
         probes = generate_lifetime_layout_probes(
             base_source,
@@ -19829,6 +19879,17 @@ def tier3_search(
         )
         raise typer.Exit(2)
 
+    baseline_score: Optional[int] = None
+    if explicit_target and target_spec:
+        baseline_events_list = parse_hook_events(text)
+        baseline_events = find_function(baseline_events_list, function)
+        baseline_score = int(score_function(
+            fn,
+            target_spec,
+            events=baseline_events,
+        ).total)
+        print(f"[tier3] target baseline score={baseline_score}")
+
     materialized: list = []
     for i, plan in enumerate(plans):
         seed_dir = perm_dir / f"tier3_seed_{i}"
@@ -19847,7 +19908,28 @@ def tier3_search(
             print(f"[tier3] seed{i}: compile=FAIL — {result.one_line_reason}")
             print(f"         (full output: {log_path}, seed source: "
                   f"{seed_dir / 'base.c'})")
-        materialized.append((plan, seed_dir, result))
+        seed_score = None
+        if (
+            result.ok
+            and explicit_target
+            and target_spec
+            and result.pcdump_text
+        ):
+            seed_fns = parse_pcdump(result.pcdump_text)
+            seed_fn = next(
+                (candidate for candidate in seed_fns if candidate.name == function),
+                None,
+            )
+            if seed_fn is not None:
+                seed_events_list = parse_hook_events(result.pcdump_text)
+                seed_events = find_function(seed_events_list, function)
+                seed_score = int(score_function(
+                    seed_fn,
+                    target_spec,
+                    events=seed_events,
+                ).total)
+                print(f"[tier3] seed{i}: target score={seed_score}")
+        materialized.append((plan, seed_dir, result, seed_score))
 
     compiled = [m for m in materialized if m[2].ok]
     if not compiled:
@@ -19857,7 +19939,7 @@ def tier3_search(
         )
         typer.echo("", err=True)
         typer.echo("Failed seeds (inspect each):", err=True)
-        for i, (plan, seed_dir, result) in enumerate(materialized):
+        for i, (plan, seed_dir, result, _seed_score) in enumerate(materialized):
             typer.echo(
                 f"  seed{i} ({plan.mutator} on {plan.target_var}): "
                 f"{result.one_line_reason}",
@@ -19888,22 +19970,11 @@ def tier3_search(
         f"Global cap: {total_time}s."
     )
 
-    # Resolve/derive the target spec once (shared across all seeds) so
-    # we don't pay the pcdump cost per-seed.
-    if target is None:
-        target = melee_root / "build" / "mwcc_debug_cache" / \
-            f"{unit}_target.json"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if not target.exists():
-            spec = derive_target_from_function(fn)
-            target.write_text(json.dumps(spec, indent=2))
-            print(f"[tier3] derived target -> {target}")
-
     # Stage each compiling seed_dir to look like a permuter perm-dir.
     # Inherit target.o/compile.sh/settings.toml from the parent perm_dir
     # so the permuter has everything it needs.
     inherited_files = ["target.o", "compile.sh", "settings.toml"]
-    for plan, seed_dir, _result in compiled:
+    for plan, seed_dir, _result, _seed_score in compiled:
         for fname in inherited_files:
             src_file = perm_dir / fname
             dst_file = seed_dir / fname
@@ -19957,8 +20028,7 @@ def tier3_search(
     # source of truth pre-permute — use the parent perm_dir's lowest-
     # scoring `output-N-M` as a coarse baseline if it exists, else None.
     parent_best = find_best_candidate(perm_dir)
-    baseline_score: Optional[int] = None
-    if parent_best is not None:
+    if baseline_score is None and parent_best is not None:
         m = re.match(r"^output-(\d+)-\d+$", parent_best.parent.name)
         if m:
             baseline_score = int(m.group(1))
@@ -19967,7 +20037,7 @@ def tier3_search(
     print("[tier3] launching per-seed permuter runs...")
     results: list = []
     deadline = time.monotonic() + total_time
-    for i, (plan, seed_dir, _result) in enumerate(compiled):
+    for i, (plan, seed_dir, _result, seed_score) in enumerate(compiled):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             print(
@@ -19989,6 +20059,7 @@ def tier3_search(
             per_seed_time=slot,
             runner=_permute_runner,
             baseline_score=baseline_score,
+            seed_score=seed_score,
         )
         if res.error:
             print(f"[tier3] seed{i}: runner error: {res.error}")

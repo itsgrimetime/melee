@@ -378,6 +378,335 @@ def generate_lifetime_layout_probes(
     return probes[:max_probes]
 
 
+def generate_frame_directed_probes(
+    source_text: str,
+    function: str,
+    *,
+    current_frame: dict | None = None,
+    target_frame: dict | None = None,
+    max_probes: int = 12,
+) -> list[LifetimeLayoutProbe]:
+    """Generate source variants for frame/local-area residuals.
+
+    These are concrete versions of the levers surfaced by
+    `debug suggest frame`: avoid a mutable FP-constant home, split the
+    constant lifetime, and move int-to-float scratch lifetimes closer to
+    their final use. They are intentionally conservative and only fire for
+    one-use local patterns.
+    """
+    if not isinstance(target_frame, dict):
+        return []
+    target_size = _frame_size_from_model(target_frame)
+    current_size = _frame_size_from_model(current_frame or {})
+    if current_size is not None and target_size is not None:
+        if current_size <= target_size:
+            return []
+
+    span = _find_function_body_span(source_text, function)
+    if span is None:
+        return []
+    body_start, body_end = span
+    body = source_text[body_start:body_end]
+    probes: list[LifetimeLayoutProbe] = []
+
+    for probe in _probe_frame_direct_literal_fp_calls(
+        source_text,
+        body,
+        body_start,
+        function,
+    ):
+        _append_probe(probes, probe)
+        if len(probes) >= max_probes:
+            return probes
+    for probe in _probe_frame_split_fp_const_lifetimes(
+        source_text,
+        body,
+        body_start,
+        function,
+    ):
+        _append_probe(probes, probe)
+        if len(probes) >= max_probes:
+            return probes
+    for probe in _probe_frame_magic_scratch_relocations(
+        source_text,
+        body,
+        body_start,
+        function,
+    ):
+        _append_probe(probes, probe)
+        if len(probes) >= max_probes:
+            return probes
+    return probes
+
+
+def _frame_size_from_model(model: dict) -> int | None:
+    try:
+        raw = model.get("frame_size")
+    except AttributeError:
+        return None
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+_FLOAT_LITERAL_RE = (
+    r"[-+]?(?:(?:\d+\.\d*)|(?:\d*\.\d+)|(?:\d+))(?:[fF])?"
+)
+
+
+@dataclass(frozen=True)
+class _FpConstCandidate:
+    name: str
+    literal: str
+    decl_start: int
+    decl_end: int
+    decl_indent: str
+    decl_replacement: str | None
+    assign_start: int | None
+    assign_end: int | None
+    assign_text: str
+    call_start: int
+    call_end: int
+    call_replacement: str
+    call_name: str
+
+
+def _probe_frame_direct_literal_fp_calls(
+    source: str,
+    body: str,
+    body_start: int,
+    function: str,
+) -> list[LifetimeLayoutProbe]:
+    probes: list[LifetimeLayoutProbe] = []
+    for cand in _fp_const_candidates(body):
+        replacements = [
+            (cand.decl_start, cand.decl_end, ""),
+            (cand.call_start, cand.call_end, cand.call_replacement),
+        ]
+        if cand.assign_start is not None and cand.assign_end is not None:
+            replacements.append((cand.assign_start, cand.assign_end, ""))
+        mutated = _replace_body_slices(source, body_start, replacements)
+        probes.append(LifetimeLayoutProbe(
+            label=f"frame-direct-literal-at-final-fp-call-{cand.name}",
+            operator="frame-direct-literal-at-final-fp-call",
+            description=(
+                f"Pass `{cand.literal}` directly to {cand.call_name} instead "
+                f"of keeping one-use FP local `{cand.name}`."
+            ),
+            source_text=mutated,
+            provenance={
+                "kind": "frame-direct-literal-at-final-fp-call",
+                "variable": cand.name,
+                "literal": cand.literal,
+                "call": cand.call_name,
+            },
+        ))
+    return probes
+
+
+def _probe_frame_split_fp_const_lifetimes(
+    source: str,
+    body: str,
+    body_start: int,
+    function: str,
+) -> list[LifetimeLayoutProbe]:
+    probes: list[LifetimeLayoutProbe] = []
+    for cand in _fp_const_candidates(body):
+        insert = f"{cand.decl_indent}{cand.assign_text.strip()}\n"
+        replacements: list[tuple[int, int, str]] = [
+            (cand.call_start, cand.call_start, insert),
+        ]
+        if cand.assign_start is not None and cand.assign_end is not None:
+            replacements.append((cand.assign_start, cand.assign_end, ""))
+        elif cand.decl_replacement is not None:
+            replacements.append(
+                (cand.decl_start, cand.decl_end, cand.decl_replacement)
+            )
+        mutated = _replace_body_slices(source, body_start, replacements)
+        if mutated == source:
+            continue
+        probes.append(LifetimeLayoutProbe(
+            label=f"frame-split-fp-const-lifetime-{cand.name}",
+            operator="frame-split-fp-const-lifetime",
+            description=(
+                f"Move one-use FP constant `{cand.name}` assignment next to "
+                f"its {cand.call_name} use."
+            ),
+            source_text=mutated,
+            provenance={
+                "kind": "frame-split-fp-const-lifetime",
+                "variable": cand.name,
+                "literal": cand.literal,
+                "call": cand.call_name,
+            },
+        ))
+    return probes
+
+
+def _probe_frame_magic_scratch_relocations(
+    source: str,
+    body: str,
+    body_start: int,
+    function: str,
+) -> list[LifetimeLayoutProbe]:
+    probes: list[LifetimeLayoutProbe] = []
+    assign_re = re.compile(
+        r"(?m)^([ \t]*)([A-Za-z_]\w*)\s*=\s*\(f32\)\s*([^;\n]+);[ \t]*\n?"
+    )
+    for assign in assign_re.finditer(body):
+        indent, name, expr = assign.groups()
+        if not _has_simple_f32_declaration(body, name, before=assign.start()):
+            continue
+        if len(re.findall(rf"\b{re.escape(name)}\b", body)) != 3:
+            continue
+        call = _find_later_call_using_name(body, assign.end(), name)
+        if call is None:
+            continue
+        if not _call_has_top_level_arg(call.group("args"), name):
+            continue
+        between = body[assign.end():call.start()]
+        if re.search(rf"\b{re.escape(name)}\b", between):
+            continue
+        insert = f"{indent}{name} = (f32) {expr.strip()};\n"
+        if body[assign.end():call.start()].strip() == "":
+            continue
+        mutated = _replace_body_slices(
+            source,
+            body_start,
+            [
+                (call.start(), call.start(), insert),
+                (assign.start(), assign.end(), ""),
+            ],
+        )
+        probes.append(LifetimeLayoutProbe(
+            label=f"frame-magic-scratch-relocation-{name}",
+            operator="frame-magic-scratch-relocation",
+            description=(
+                f"Move int-to-float scratch assignment for `{name}` next to "
+                f"its final call use."
+            ),
+            source_text=mutated,
+            provenance={
+                "kind": "frame-magic-scratch-relocation",
+                "variable": name,
+            },
+        ))
+    return probes
+
+
+def _fp_const_candidates(body: str) -> list[_FpConstCandidate]:
+    candidates: list[_FpConstCandidate] = []
+    decl_re = re.compile(
+        rf"(?m)^([ \t]*)f32\s+([A-Za-z_]\w*)\s*(?:=\s*({_FLOAT_LITERAL_RE}))?;[ \t]*\n?"
+    )
+    for decl in decl_re.finditer(body):
+        indent, name, init_literal = decl.groups()
+        literal = init_literal
+        assign_start: int | None = None
+        assign_end: int | None = None
+        assign_text: str
+        if literal is None:
+            assign_re = re.compile(
+                rf"(?m)^([ \t]*){re.escape(name)}\s*=\s*({_FLOAT_LITERAL_RE});[ \t]*\n?"
+            )
+            assign = assign_re.search(body, decl.end())
+            if assign is None:
+                continue
+            literal = assign.group(2)
+            assign_start = assign.start()
+            assign_end = assign.end()
+            assign_text = assign.group(0)
+            expected_uses = 3
+            search_start = assign.end()
+            decl_replacement = None
+        else:
+            assign_text = f"{indent}{name} = {literal};\n"
+            expected_uses = 2
+            search_start = decl.end()
+            decl_replacement = f"{indent}f32 {name};\n"
+        if len(re.findall(rf"\b{re.escape(name)}\b", body)) != expected_uses:
+            continue
+        call = _find_later_call_using_name(body, search_start, name)
+        if call is None:
+            continue
+        args = list(_split_top_level_args(call.group("args")))
+        replaced = False
+        for idx, arg in enumerate(args):
+            if arg.strip() == name:
+                args[idx] = literal
+                replaced = True
+                break
+        if not replaced:
+            continue
+        call_replacement = (
+            f"{call.group('indent')}{call.group('callee')}"
+            f"({', '.join(args)});{call.group('newline')}"
+        )
+        candidates.append(_FpConstCandidate(
+            name=name,
+            literal=literal,
+            decl_start=decl.start(),
+            decl_end=decl.end(),
+            decl_indent=indent,
+            decl_replacement=decl_replacement,
+            assign_start=assign_start,
+            assign_end=assign_end,
+            assign_text=assign_text,
+            call_start=call.start(),
+            call_end=call.end(),
+            call_replacement=call_replacement,
+            call_name=call.group("callee"),
+        ))
+    return candidates
+
+
+def _find_later_call_using_name(
+    body: str,
+    start: int,
+    name: str,
+) -> re.Match[str] | None:
+    call_re = re.compile(
+        r"(?m)^(?P<indent>[ \t]*)(?P<callee>[A-Za-z_]\w*)"
+        r"\((?P<args>[^;\n]*)\);[ \t]*(?P<newline>\n?)"
+    )
+    for call in call_re.finditer(body, start):
+        if re.search(rf"\b{re.escape(name)}\b", call.group("args")):
+            return call
+    return None
+
+
+def _call_has_top_level_arg(args_text: str, name: str) -> bool:
+    return any(arg.strip() == name for arg in _split_top_level_args(args_text))
+
+
+def _has_simple_f32_declaration(body: str, name: str, *, before: int) -> bool:
+    prefix = body[:before]
+    return re.search(
+        rf"(?m)^[ \t]*f32\s+{re.escape(name)}\s*(?:;|=)",
+        prefix,
+    ) is not None
+
+
+def _replace_body_slices(
+    source: str,
+    body_start: int,
+    replacements: list[tuple[int, int, str]],
+) -> str:
+    mutated = source
+    for rel_start, rel_end, replacement in sorted(
+        replacements,
+        key=lambda item: (item[0], item[1]),
+        reverse=True,
+    ):
+        start = body_start + rel_start
+        end = body_start + rel_end
+        mutated = mutated[:start] + replacement + mutated[end:]
+    return mutated
+
+
 def _target_pair_states(
     pcdump_text: str,
     function: str,

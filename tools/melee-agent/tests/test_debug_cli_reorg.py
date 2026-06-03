@@ -4285,6 +4285,141 @@ def test_tier3_search_falls_back_to_source_shape_probe_seeds(
     assert (perm_dir / "tier3_seed_0" / "base.c").read_text() == patched_source
 
 
+def test_tier3_search_uses_frame_directed_seeds_and_scores_seed_base(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text(
+        "void fn_80000000(HSD_CObj* cobj, int arg2) {\n"
+        "    f32 far_val;\n"
+        "    f32 bottom;\n"
+        "    far_val = 2.0f;\n"
+        "    bottom = (f32) arg2;\n"
+        "    setup();\n"
+        "    HSD_CObjSetFar(cobj, far_val);\n"
+        "    HSD_CObjSetOrtho(cobj, 0.0f, bottom, 0.0f, 1.0f);\n"
+        "}\n"
+    )
+    pcdump_path = tmp_path / "pcdump.txt"
+    pcdump_path.write_text("baseline pcdump")
+    target_path = tmp_path / "target.json"
+    target_path.write_text(json.dumps({
+        "function": "fn_80000000",
+        "virtuals": {},
+        "frame": {
+            "frame_size": 144,
+            "unused_ranges": [],
+        },
+    }))
+
+    perm_root = tmp_path / "permuter"
+    perm_dir = perm_root / "nonmatchings" / "fn_80000000"
+    perm_dir.mkdir(parents=True)
+    for name in ("target.o", "settings.toml"):
+        (perm_dir / name).write_text("")
+    (perm_dir / "compile.sh").write_text("#!/bin/sh\n")
+
+    wibo = tmp_path / "wibo"
+    compiler_dir = tmp_path / "compiler"
+    compiler_dir.mkdir()
+    wibo.write_text("")
+    (compiler_dir / "mwcceppc_debug.exe").write_text("")
+    wrapper = (
+        melee_root / "tools" / "melee-agent" / "scripts"
+        / "permute_with_mwcc.py"
+    )
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text("")
+
+    pre = object()
+    parsed_fn = SimpleNamespace(name="fn_80000000", last_precolor_pass=lambda: pre)
+    score_calls: list[str] = []
+    captured_runs: list[dict] = []
+
+    import src.mwcc_debug.symbol_bridge as symbol_bridge
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(debug_cli, "_find_unit_for_function", lambda function, root: "melee/mn/sample")
+    monkeypatch.setattr(debug_cli, "_resolve_pcdump_path", lambda path, function, root=None: pcdump_path)
+    monkeypatch.setattr(debug_cli, "parse_pcdump", lambda text: [parsed_fn])
+    monkeypatch.setattr(debug_cli, "parse_hook_events", lambda text: [])
+    monkeypatch.setattr(debug_cli, "find_function", lambda events, function: None)
+    monkeypatch.setattr(debug_cli, "analyze_frame_from_function", lambda fn: {"frame_size": 152})
+    monkeypatch.setattr(symbol_bridge, "list_bindings", lambda source, function, pass_obj: [])
+    monkeypatch.setattr(tier3_mod, "plan_seeds", lambda bindings, budget, include_low_confidence: [])
+    monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+    monkeypatch.setattr(debug_cli, "_find_compiler_dir", lambda: compiler_dir)
+    monkeypatch.setattr(debug_cli, "_ninja_cflags_for_unit", lambda src_rel: ("", "mwcc"))
+
+    def fake_score_function(fn, target_spec, events=None):
+        score_calls.append("score")
+        total = 34 if len(score_calls) == 1 else 8
+        return SimpleNamespace(total=total)
+
+    def fake_smoke_compile(*args, **kwargs):
+        return tier3_mod.CompileResult(
+            ok=True,
+            stderr="",
+            stdout="",
+            one_line_reason="",
+            pcdump_text="seed pcdump",
+        )
+
+    def fake_run_per_seed_permute(**kwargs):
+        captured_runs.append(kwargs)
+        return tier3_mod.PerSeedPermuteResult(
+            seed_idx=kwargs["seed_idx"],
+            plan=kwargs["plan"],
+            seed_dir=kwargs["seed_dir"],
+            best_candidate=kwargs["seed_dir"] / "base.c",
+            best_score=kwargs["seed_score"],
+            baseline_score=kwargs["baseline_score"],
+            delta=kwargs["baseline_score"] - kwargs["seed_score"],
+            ran_seconds=0.0,
+            seed_score=kwargs["seed_score"],
+        )
+
+    monkeypatch.setattr(debug_cli, "score_function", fake_score_function)
+    monkeypatch.setattr(tier3_mod, "smoke_compile", fake_smoke_compile)
+    monkeypatch.setattr(tier3_mod, "run_per_seed_permute", fake_run_per_seed_permute)
+    monkeypatch.setattr(tier3_mod, "rank_seed_results", lambda results: results)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "search",
+            "-f",
+            "fn_80000000",
+            "--budget",
+            "1",
+            "--per-seed-time",
+            "1",
+            "--total-time",
+            "1",
+            "--perm-root",
+            str(perm_root),
+            "--target",
+            str(target_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    out = strip_ansi(result.stdout)
+    assert "frame-directed seed plans" in out
+    assert "frame-direct-literal-at-final-fp-call" in out
+    assert captured_runs
+    assert captured_runs[0]["baseline_score"] == 34
+    assert captured_runs[0]["seed_score"] == 8
+    assert "HSD_CObjSetFar(cobj, 2.0f);" in (
+        perm_dir / "tier3_seed_0" / "base.c"
+    ).read_text()
+
+
 def test_debug_guide_warns_when_no_target_is_loaded(monkeypatch, tmp_path: Path) -> None:
     pcdump = tmp_path / "sample.pcdump.txt"
     pcdump.write_text("placeholder\n")

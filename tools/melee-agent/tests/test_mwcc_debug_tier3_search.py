@@ -332,6 +332,37 @@ def test_run_per_seed_permute_no_improvement_records_zero_delta(
     assert result.best_score is None
 
 
+def test_run_per_seed_permute_keeps_seed_score_improvement(
+    tmp_path: Path,
+) -> None:
+    """A frame-directed seed can improve target score before the permuter
+    creates output dirs; keep that seed as the best candidate."""
+    seed_dir = tmp_path / "tier3_seed_0"
+    seed_dir.mkdir()
+    base = seed_dir / "base.c"
+    base.write_text("void fn() {}\n")
+
+    def no_output_runner(seed_dir_arg: Path, fn_name: str, time_seconds: int) -> None:
+        pass
+
+    result = run_per_seed_permute(
+        seed_idx=0,
+        plan=_seed_plan(0),
+        seed_dir=seed_dir,
+        fn_name="fn_test",
+        per_seed_time=10,
+        runner=no_output_runner,
+        baseline_score=34,
+        seed_score=8,
+    )
+
+    assert result.best_candidate == base
+    assert result.best_score == 8
+    assert result.baseline_score == 34
+    assert result.seed_score == 8
+    assert result.delta == 26
+
+
 def test_rank_seed_results_orders_by_delta_descending() -> None:
     """rank_seed_results sorts so the largest improvement comes first."""
     r1 = PerSeedPermuteResult(

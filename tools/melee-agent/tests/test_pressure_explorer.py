@@ -14,6 +14,7 @@ from src.cli import debug as debug_cli
 from src.mwcc_debug.pressure_explorer import (
     PressureDelta,
     compare_pressure_signatures,
+    generate_frame_directed_probes,
     generate_lifetime_layout_probes,
     pressure_signature_from_pcdump,
 )
@@ -166,6 +167,45 @@ def test_generate_lifetime_layout_probes_includes_core_operator_families() -> No
     assert "condition-nesting" in operators
     assert "call-argument-tempization" in operators
     assert all("fn_80000000" in probe.source_text for probe in probes)
+
+
+def test_generate_frame_directed_probes_materializes_frame_levers() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(HSD_CObj* cobj, int arg1, int arg2)
+        {
+            f32 far_val;
+            f32 bottom;
+
+            far_val = 2.0f;
+            bottom = (f32) arg2;
+            setup();
+            HSD_CObjSetFar(cobj, far_val);
+            HSD_CObjSetOrtho(cobj, 0.0f, bottom, 0.0f, (f32) arg1);
+        }
+    """)
+
+    probes = generate_frame_directed_probes(
+        source,
+        "fn_80000000",
+        current_frame={"frame_size": 152},
+        target_frame={"frame_size": 144, "unused_ranges": []},
+        max_probes=10,
+    )
+    by_operator = {probe.operator: probe for probe in probes}
+
+    direct = by_operator["frame-direct-literal-at-final-fp-call"]
+    assert "HSD_CObjSetFar(cobj, 2.0f);" in direct.source_text
+    assert "far_val = 2.0f;" not in direct.source_text
+
+    split = by_operator["frame-split-fp-const-lifetime"]
+    assert "setup();\n    far_val = 2.0f;\n    HSD_CObjSetFar" in split.source_text
+
+    scratch = by_operator["frame-magic-scratch-relocation"]
+    assert (
+        "HSD_CObjSetFar(cobj, far_val);\n"
+        "    bottom = (f32) arg2;\n"
+        "    HSD_CObjSetOrtho"
+    ) in scratch.source_text
 
 
 def test_temp_introduction_skips_initialized_decl_before_later_decl() -> None:
