@@ -30,7 +30,7 @@ static PerfLabelLine gm_80480B38[4];
 static const Vec3 gm_803B7D68 = { 0.0f, 0.0f, 1.0f };
 static const Vec3 gm_803B7D74 = { 0.0f, 0.0f, 0.0f };
 
-void gm_801A9DD0(HSD_GObj* arg0, u16 arg1, int arg2, int arg3, int arg4)
+void gm_801A9DD0(HSD_GObj* arg0, u16 arg1, u16 arg2, int arg3, int arg4)
 {
     HSD_CObj* cobj;
     f32 roll = 0.0f;
