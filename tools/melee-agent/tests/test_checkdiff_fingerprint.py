@@ -508,7 +508,11 @@ def test_no_build_json_suppresses_stale_report_match_percent(
     monkeypatch.setattr(checkdiff, "ensure_disassembler", lambda: ("objdump", "objdump"))
     monkeypatch.setattr(checkdiff.subprocess, "run", fake_run)
     monkeypatch.setattr(checkdiff, "apply_name_magic_if_available", lambda *args, **kwargs: None)
-    monkeypatch.setattr(checkdiff, "collect_section_anchor_aliases", lambda path: {})
+    monkeypatch.setattr(
+        checkdiff,
+        "collect_section_anchor_aliases",
+        lambda path, peer_path=None: {},
+    )
     monkeypatch.setattr(
         sys,
         "argv",

@@ -267,6 +267,207 @@ def test_normalize_colocated_data_anchor_in_dtk_instruction_operands(checkdiff):
     ]
 
 
+def test_collects_anonymous_data_string_symbol_aliases(checkdiff):
+    """Local ``@N`` .data/.sdata string symbols canonicalize to named globals."""
+    aliases = checkdiff._collect_symbol_aliases_by_location([
+        {
+            "name": "@411",
+            "section": ".data",
+            "shndx": 4,
+            "value": 0x20,
+            "size": 16,
+            "bind": "STB_LOCAL",
+            "type": "STT_OBJECT",
+        },
+        {
+            "name": "lbl_803BF4B0",
+            "section": ".data",
+            "shndx": 4,
+            "value": 0x20,
+            "size": 16,
+            "bind": "STB_GLOBAL",
+            "type": "STT_OBJECT",
+        },
+        {
+            "name": "@412",
+            "section": ".sdata",
+            "shndx": 7,
+            "value": 0x8,
+            "size": 8,
+            "bind": "STB_LOCAL",
+            "type": "STT_OBJECT",
+        },
+        {
+            "name": "mpLib_804D3960",
+            "section": ".sdata",
+            "shndx": 7,
+            "value": 0x8,
+            "size": 8,
+            "bind": "STB_GLOBAL",
+            "type": "STT_OBJECT",
+        },
+        {
+            "name": "@500",
+            "section": ".text",
+            "shndx": 1,
+            "value": 0x8,
+            "size": 4,
+            "bind": "STB_LOCAL",
+            "type": "STT_OBJECT",
+        },
+        {
+            "name": "text_name",
+            "section": ".text",
+            "shndx": 1,
+            "value": 0x8,
+            "size": 4,
+            "bind": "STB_GLOBAL",
+            "type": "STT_OBJECT",
+        },
+    ])
+
+    assert aliases["@411"] == "lbl_803BF4B0"
+    assert aliases["@412"] == "mpLib_804D3960"
+    assert "@500" not in aliases
+
+
+def test_collects_shifted_anonymous_data_aliases_from_peer_object(checkdiff):
+    """Source-object local strings can align to reference globals by section delta."""
+    source_symbols = [
+        {
+            "name": "@274",
+            "section": ".data",
+            "shndx": 2,
+            "value": 0x78,
+            "size": 0xE,
+            "bind": "STB_LOCAL",
+            "type": "STT_OBJECT",
+        },
+        {
+            "name": "@275",
+            "section": ".data",
+            "shndx": 2,
+            "value": 0x88,
+            "size": 0xF,
+            "bind": "STB_LOCAL",
+            "type": "STT_OBJECT",
+        },
+        {
+            "name": "@276",
+            "section": ".data",
+            "shndx": 2,
+            "value": 0x98,
+            "size": 0x10,
+            "bind": "STB_LOCAL",
+            "type": "STT_OBJECT",
+        },
+        {
+            "name": "@411",
+            "section": ".data",
+            "shndx": 2,
+            "value": 0xA8,
+            "size": 0x1B,
+            "bind": "STB_LOCAL",
+            "type": "STT_OBJECT",
+        },
+        {
+            "name": "@412",
+            "section": ".sdata",
+            "shndx": 4,
+            "value": 0x8,
+            "size": 0x2,
+            "bind": "STB_LOCAL",
+            "type": "STT_OBJECT",
+        },
+    ]
+    reference_symbols = [
+        {
+            "name": "lbl_803BF480",
+            "section": ".data",
+            "shndx": 2,
+            "value": 0x20A8,
+            "size": 0xE,
+            "bind": "STB_GLOBAL",
+            "type": "STT_OBJECT",
+        },
+        {
+            "name": "lbl_803BF490",
+            "section": ".data",
+            "shndx": 2,
+            "value": 0x20B8,
+            "size": 0xF,
+            "bind": "STB_GLOBAL",
+            "type": "STT_OBJECT",
+        },
+        {
+            "name": "lbl_803BF4A0",
+            "section": ".data",
+            "shndx": 2,
+            "value": 0x20C8,
+            "size": 0x10,
+            "bind": "STB_GLOBAL",
+            "type": "STT_OBJECT",
+        },
+        {
+            "name": "lbl_803BF4B0",
+            "section": ".data",
+            "shndx": 2,
+            "value": 0x20D8,
+            "size": 0x1B,
+            "bind": "STB_GLOBAL",
+            "type": "STT_OBJECT",
+        },
+        {
+            "name": "mpLib_804D3960",
+            "section": ".sdata",
+            "shndx": 4,
+            "value": 0x8,
+            "size": 0x2,
+            "bind": "STB_GLOBAL",
+            "type": "STT_OBJECT",
+        },
+        {
+            "name": "gap_09_804D3962_sdata",
+            "section": ".sdata",
+            "shndx": 4,
+            "value": 0xA,
+            "size": 0x2,
+            "bind": "STB_GLOBAL",
+            "type": "STT_OBJECT",
+        },
+    ]
+
+    aliases = checkdiff._collect_symbol_aliases_by_location(
+        source_symbols,
+        peer_symbols=reference_symbols,
+    )
+
+    assert aliases["@411"] == "lbl_803BF4B0"
+    assert aliases["@412"] == "mpLib_804D3960"
+
+
+def test_normalize_colocated_anonymous_string_symbols(checkdiff):
+    """Reloc text using local anonymous symbols normalizes to named strings."""
+    lines = [
+        "+040: R_PPC_ADDR16_HA\t@411",
+        "+044: R_PPC_ADDR16_LO\t@411",
+        "+048: R_PPC_EMB_SDA21\t@412",
+        "+04c: .4byte @411+0x4",
+    ]
+
+    result = checkdiff.normalize_section_anchor_references(
+        lines,
+        {"@411": "lbl_803BF4B0", "@412": "mpLib_804D3960"},
+    )
+
+    assert result == [
+        "+040: R_PPC_ADDR16_HA\tlbl_803BF4B0",
+        "+044: R_PPC_ADDR16_LO\tlbl_803BF4B0",
+        "+048: R_PPC_EMB_SDA21\tmpLib_804D3960",
+        "+04c: .4byte lbl_803BF4B0+0x4",
+    ]
+
+
 @pytest.mark.skipif(
     not _GRINISHIE2_SRC_O.exists(),
     reason="requires built grinishie2.o; run `ninja` first",

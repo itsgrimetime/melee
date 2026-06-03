@@ -398,15 +398,205 @@ def _strip_relocation_lines(lines: list[str]) -> list[str]:
 # e.g. "+0c0: " or "+042: ". The offset is hex, variable-width (3+ digits).
 _NORMALIZED_OFFSET_RE = re.compile(r"^\+([0-9a-fA-F]+):(\s)")
 _SECTION_ANCHOR_NAME_RE = re.compile(r"^\.\.\.[A-Za-z0-9_$.]+\.\d+$")
+_ANONYMOUS_DATA_SYMBOL_RE = re.compile(r"^@\d+$")
 _SECTION_ANCHOR_TOKEN_CHARS = r"A-Za-z0-9_$."
+_ANONYMOUS_DATA_ALIAS_SECTIONS = {".data", ".sdata"}
 
 
 def _is_section_anchor_symbol(name: str) -> bool:
     return bool(_SECTION_ANCHOR_NAME_RE.match(name))
 
 
-def collect_section_anchor_aliases(obj_path: Path) -> dict[str, str]:
-    """Map local zero-size section anchors to co-located global objects.
+def _is_anonymous_data_symbol(name: str) -> bool:
+    return bool(_ANONYMOUS_DATA_SYMBOL_RE.match(name))
+
+
+def _collect_symbol_aliases_by_location(
+    symbols: list[dict[str, object]],
+    *,
+    peer_symbols: list[dict[str, object]] | None = None,
+) -> dict[str, str]:
+    anchors_by_loc: dict[tuple[int, int], list[str]] = {}
+    anonymous_by_loc: dict[tuple[int, int], list[str]] = {}
+    globals_by_loc: dict[tuple[int, int], list[str]] = {}
+    anonymous_records: list[dict[str, object]] = []
+    global_records: list[dict[str, object]] = []
+
+    for sym in symbols:
+        name = sym["name"]
+        shndx = sym["shndx"]
+        if not isinstance(name, str) or not name or not isinstance(shndx, int):
+            continue
+
+        loc = (shndx, int(sym["value"]))
+        bind = sym["bind"]
+        sym_type = sym["type"]
+        size = int(sym["size"])
+        section = sym["section"]
+
+        if (
+            bind == "STB_LOCAL"
+            and size == 0
+            and _is_section_anchor_symbol(name)
+        ):
+            anchors_by_loc.setdefault(loc, []).append(name)
+        elif (
+            bind == "STB_LOCAL"
+            and sym_type == "STT_OBJECT"
+            and isinstance(section, str)
+            and section in _ANONYMOUS_DATA_ALIAS_SECTIONS
+            and _is_anonymous_data_symbol(name)
+        ):
+            anonymous_by_loc.setdefault(loc, []).append(name)
+            anonymous_records.append(sym)
+        elif (
+            bind == "STB_GLOBAL"
+            and sym_type == "STT_OBJECT"
+            and size > 0
+            and not name.startswith("gap_")
+            and not _is_section_anchor_symbol(name)
+            and not _is_anonymous_data_symbol(name)
+        ):
+            globals_by_loc.setdefault(loc, []).append(name)
+            global_records.append(sym)
+
+    if peer_symbols is not None:
+        for sym in peer_symbols:
+            name = sym["name"]
+            section = sym["section"]
+            if not isinstance(name, str) or not isinstance(section, str):
+                continue
+            if (
+                sym["bind"] == "STB_GLOBAL"
+                and sym["type"] == "STT_OBJECT"
+                and int(sym["size"]) > 0
+                and section in _ANONYMOUS_DATA_ALIAS_SECTIONS
+                and not name.startswith("gap_")
+                and not _is_section_anchor_symbol(name)
+                and not _is_anonymous_data_symbol(name)
+            ):
+                global_records.append(sym)
+
+    aliases: dict[str, str] = {}
+    for local_by_loc in (anchors_by_loc, anonymous_by_loc):
+        for loc, local_names in local_by_loc.items():
+            globals_at_loc = globals_by_loc.get(loc)
+            if not globals_at_loc:
+                continue
+            replacement = sorted(globals_at_loc)[0]
+            for local_name in local_names:
+                aliases[local_name] = replacement
+
+    shifted_aliases = _collect_shifted_anonymous_symbol_aliases(
+        anonymous_records,
+        global_records,
+    )
+    for local_name, replacement in shifted_aliases.items():
+        aliases.setdefault(local_name, replacement)
+    return aliases
+
+
+def _collect_shifted_anonymous_symbol_aliases(
+    anonymous_records: list[dict[str, object]],
+    global_records: list[dict[str, object]],
+) -> dict[str, str]:
+    """Map local ``@N`` symbols to peer globals after a section-offset shift."""
+    globals_by_section_size: dict[tuple[str, int], list[dict[str, object]]] = {}
+    globals_by_section_value_size: dict[
+        tuple[str, int, int], list[str]
+    ] = {}
+    for sym in global_records:
+        section = sym["section"]
+        if not isinstance(section, str):
+            continue
+        value = int(sym["value"])
+        size = int(sym["size"])
+        globals_by_section_size.setdefault((section, size), []).append(sym)
+        globals_by_section_value_size.setdefault(
+            (section, value, size),
+            [],
+        ).append(str(sym["name"]))
+
+    deltas_by_section: dict[str, dict[int, int]] = {}
+    for sym in anonymous_records:
+        section = sym["section"]
+        if not isinstance(section, str):
+            continue
+        value = int(sym["value"])
+        size = int(sym["size"])
+        for global_sym in globals_by_section_size.get((section, size), []):
+            delta = int(global_sym["value"]) - value
+            deltas_by_section.setdefault(section, {})
+            deltas_by_section[section][delta] = (
+                deltas_by_section[section].get(delta, 0) + 1
+            )
+
+    best_delta_by_section: dict[str, int] = {}
+    for section, counts in deltas_by_section.items():
+        if not counts:
+            continue
+        ranked = sorted(counts.items(), key=lambda item: item[1], reverse=True)
+        delta, count = ranked[0]
+        next_count = ranked[1][1] if len(ranked) > 1 else 0
+        min_count = 1 if section == ".sdata" else 2
+        if count >= min_count and count > next_count:
+            best_delta_by_section[section] = delta
+
+    aliases: dict[str, str] = {}
+    for sym in anonymous_records:
+        name = str(sym["name"])
+        section = sym["section"]
+        if not isinstance(section, str) or section not in best_delta_by_section:
+            continue
+        value = int(sym["value"]) + best_delta_by_section[section]
+        size = int(sym["size"])
+        candidates = globals_by_section_value_size.get((section, value, size), [])
+        if len(candidates) == 1:
+            aliases[name] = candidates[0]
+    return aliases
+
+
+def _read_object_symbol_records(obj_path: Path) -> list[dict[str, object]]:
+    try:
+        from elftools.common.exceptions import ELFError
+        from elftools.elf.elffile import ELFFile
+    except ImportError:
+        return []
+
+    try:
+        with obj_path.open("rb") as f:
+            elf = ELFFile(f)
+            symtab = elf.get_section_by_name(".symtab")
+            if symtab is None:
+                return []
+
+            symbols: list[dict[str, object]] = []
+            for sym in symtab.iter_symbols():
+                name = sym.name
+                shndx = sym["st_shndx"]
+                if not name or not isinstance(shndx, int):
+                    continue
+                info = sym["st_info"]
+                section = elf.get_section(shndx)
+                symbols.append({
+                    "name": name,
+                    "section": section.name if section is not None else None,
+                    "shndx": shndx,
+                    "value": int(sym["st_value"]),
+                    "size": int(sym["st_size"]),
+                    "bind": info["bind"],
+                    "type": info["type"],
+                })
+            return symbols
+    except (OSError, KeyError, TypeError, ValueError, ELFError):
+        return []
+
+
+def collect_section_anchor_aliases(
+    obj_path: Path,
+    peer_obj_path: Path | None = None,
+) -> dict[str, str]:
+    """Map local section aliases to co-located global objects.
 
     MWCC/dtk can emit a local symbol such as ``...data.0`` at the same
     ``.data`` offset as a real global object, then show ADDR16_HA/LO relocs
@@ -414,57 +604,16 @@ def collect_section_anchor_aliases(obj_path: Path) -> dict[str, str]:
     so checkdiff should canonicalize the anchor to the named global before
     comparing disassembly.
     """
-    try:
-        from elftools.common.exceptions import ELFError
-        from elftools.elf.elffile import ELFFile
-    except ImportError:
-        return {}
-
-    try:
-        with obj_path.open("rb") as f:
-            elf = ELFFile(f)
-            symtab = elf.get_section_by_name(".symtab")
-            if symtab is None:
-                return {}
-
-            anchors_by_loc: dict[tuple[int, int], list[str]] = {}
-            globals_by_loc: dict[tuple[int, int], list[str]] = {}
-            for sym in symtab.iter_symbols():
-                name = sym.name
-                shndx = sym["st_shndx"]
-                if not name or not isinstance(shndx, int):
-                    continue
-                loc = (shndx, int(sym["st_value"]))
-                info = sym["st_info"]
-                bind = info["bind"]
-                sym_type = info["type"]
-                size = int(sym["st_size"])
-
-                if (
-                    bind == "STB_LOCAL"
-                    and size == 0
-                    and _is_section_anchor_symbol(name)
-                ):
-                    anchors_by_loc.setdefault(loc, []).append(name)
-                elif (
-                    bind == "STB_GLOBAL"
-                    and sym_type == "STT_OBJECT"
-                    and size > 0
-                    and not _is_section_anchor_symbol(name)
-                ):
-                    globals_by_loc.setdefault(loc, []).append(name)
-    except (OSError, KeyError, TypeError, ValueError, ELFError):
-        return {}
-
-    aliases: dict[str, str] = {}
-    for loc, anchors in anchors_by_loc.items():
-        globals_at_loc = globals_by_loc.get(loc)
-        if not globals_at_loc:
-            continue
-        replacement = globals_at_loc[0]
-        for anchor in anchors:
-            aliases[anchor] = replacement
-    return aliases
+    symbols = _read_object_symbol_records(obj_path)
+    peer_symbols = (
+        _read_object_symbol_records(peer_obj_path)
+        if peer_obj_path is not None
+        else None
+    )
+    return _collect_symbol_aliases_by_location(
+        symbols,
+        peer_symbols=peer_symbols,
+    )
 
 
 def normalize_section_anchor_references(
@@ -2335,13 +2484,15 @@ def main() -> int:
         if args.normalize_reloc:
             ref_lines = normalize_reloc_line_offsets(ref_lines)
             our_lines = normalize_reloc_line_offsets(our_lines)
+            ref_obj_path = ROOT / ref_obj.lstrip("./")
+            our_obj_path = ROOT / our_obj.lstrip("./")
             ref_lines = normalize_section_anchor_references(
                 ref_lines,
-                collect_section_anchor_aliases(ROOT / ref_obj.lstrip("./")),
+                collect_section_anchor_aliases(ref_obj_path, our_obj_path),
             )
             our_lines = normalize_section_anchor_references(
                 our_lines,
-                collect_section_anchor_aliases(ROOT / our_obj.lstrip("./")),
+                collect_section_anchor_aliases(our_obj_path, ref_obj_path),
             )
         classification = classify_asm_diff(ref_lines, our_lines)
         source_text_for_bridge = None
