@@ -421,6 +421,172 @@ def test_force_phys_from_diff_derives_repeated_and_dotted_targets() -> None:
     ]
 
 
+def test_force_phys_from_diff_aligns_stack_slots_with_frame_delta() -> None:
+    target_asm = [
+        "<fn_frame>:",
+        "+000: 7c 08 02 a6 \tmflr    r0",
+        "+004: 94 21 ff d0 \tstwu    r1,-48(r1)",
+        "+008: 83 e1 00 28 \tlwz     r31,40(r1)",
+        "+00c: 83 c1 00 2c \tlwz     r30,44(r1)",
+    ]
+    current_asm = [
+        "<fn_frame>:",
+        "+000: 7c 08 02 a6 \tmflr    r0",
+        "+004: 94 21 ff c8 \tstwu    r1,-56(r1)",
+        "+008: 83 a1 00 28 \tlwz     r29,40(r1)",
+        "+00c: 83 c1 00 30 \tlwz     r30,48(r1)",
+        "+010: 83 e1 00 34 \tlwz     r31,52(r1)",
+    ]
+    pre_pass = Pass(
+        name="BEFORE REGISTER COLORING",
+        blocks=[
+            Block(
+                index=0,
+                succ=[],
+                pred=[],
+                labels=[],
+                instructions=[
+                    Instruction(
+                        opcode="lwz",
+                        operands="r35,40(r1)",
+                        annotations=[],
+                        regs=[("r", 35), ("r", 1)],
+                    ),
+                    Instruction(
+                        opcode="lwz",
+                        operands="r36,44(r1)",
+                        annotations=[],
+                        regs=[("r", 36), ("r", 1)],
+                    ),
+                ],
+            ),
+        ],
+    )
+    events = FunctionEvents(
+        name="fn_frame",
+        colorgraph_sections=[
+            ColorgraphSection(
+                class_id=0,
+                result=1,
+                n_nodes=2,
+                decisions=[
+                    ColorgraphDecision(
+                        iter_idx=0,
+                        ig_idx=35,
+                        assigned_reg=30,
+                        degree=0,
+                        n_interferers=0,
+                        flags=0,
+                    ),
+                    ColorgraphDecision(
+                        iter_idx=1,
+                        ig_idx=36,
+                        assigned_reg=31,
+                        degree=0,
+                        n_interferers=0,
+                        flags=0,
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    vector = debug_cli._derive_force_phys_from_register_diff_lines(
+        target_asm,
+        current_asm,
+        pre_pass,
+        events,
+    )
+
+    assert vector["frame_alignment"]["frame_delta"] == -8
+    assert vector["force_phys_csv"] == "0:35:31,0:36:30"
+    assert vector["conflicts"] == []
+    assert [
+        occurrence["line_index"]
+        for target in vector["targets"]
+        for occurrence in target["occurrences"]
+    ] == [3, 4]
+
+
+def test_force_phys_from_diff_excludes_conflicted_igs_from_runnable_vector() -> None:
+    target_asm = [
+        "<fn_conflict>:",
+        "+000: 7c 08 02 a6 \tmflr    r0",
+        "+004: 94 21 ff e0 \tstwu    r1,-32(r1)",
+        "+008: 3b e0 00 00 \tli      r31,0",
+        "+00c: 3b c0 00 00 \tli      r30,0",
+    ]
+    current_asm = [
+        "<fn_conflict>:",
+        "+000: 7c 08 02 a6 \tmflr    r0",
+        "+004: 94 21 ff e0 \tstwu    r1,-32(r1)",
+        "+008: 3b a0 00 00 \tli      r29,0",
+        "+00c: 3b a0 00 00 \tli      r29,0",
+    ]
+    pre_pass = Pass(
+        name="BEFORE REGISTER COLORING",
+        blocks=[
+            Block(
+                index=0,
+                succ=[],
+                pred=[],
+                labels=[],
+                instructions=[
+                    Instruction(
+                        opcode="li",
+                        operands="r35,0",
+                        annotations=[],
+                        regs=[("r", 35)],
+                    ),
+                ],
+            ),
+        ],
+    )
+    events = FunctionEvents(
+        name="fn_conflict",
+        colorgraph_sections=[
+            ColorgraphSection(
+                class_id=0,
+                result=1,
+                n_nodes=1,
+                decisions=[
+                    ColorgraphDecision(
+                        iter_idx=0,
+                        ig_idx=35,
+                        assigned_reg=29,
+                        degree=0,
+                        n_interferers=0,
+                        flags=0,
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    vector = debug_cli._derive_force_phys_from_register_diff_lines(
+        target_asm,
+        current_asm,
+        pre_pass,
+        events,
+    )
+
+    assert vector["force_phys"] == {}
+    assert vector["force_phys_csv"] == ""
+    assert vector["force_vector"] == ""
+    assert vector["conflicts"] == [
+        {
+            "class_id": 0,
+            "kind": "r",
+            "ig_idx": 35,
+            "existing_phys": 31,
+            "conflicting_phys": 30,
+            "line_index": 4,
+            "target_asm": "+00c: 3b c0 00 00 \tli      r30,0",
+            "current_asm": "+00c: 3b a0 00 00 \tli      r29,0",
+        }
+    ]
+
+
 def test_restore_object_report_help_exposes_guarded_cleanup_command() -> None:
     proc = subprocess.run(
         [

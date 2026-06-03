@@ -273,6 +273,10 @@ def _build_match_iter_first_target_vector(
 
 
 _CHECKDIFF_ASM_REG_RE = re.compile(r"\b([rf])(\d+)\b")
+_CHECKDIFF_STWU_FRAME_RE = re.compile(r"\bstwu\s+r1,\s*(-?\d+)\(r1\)")
+_CHECKDIFF_STACK_SLOT_RE = re.compile(
+    r"(?P<offset>-?(?:0x[0-9a-fA-F]+|\d+))(?P<suffix>\s*\(\s*r1\s*\))"
+)
 
 
 def _checkdiff_asm_body(line: str) -> str:
@@ -300,6 +304,41 @@ def _parse_checkdiff_asm_instruction(line: str) -> AsmInstruction | None:
         for kind, number in _CHECKDIFF_ASM_REG_RE.findall(operands)
     ]
     return AsmInstruction(opcode=opcode, operands=operands, regs=regs)
+
+
+def _checkdiff_frame_size(lines: list[str]) -> int | None:
+    for line in lines:
+        body = _checkdiff_asm_body(line)
+        match = _CHECKDIFF_STWU_FRAME_RE.search(body)
+        if match is None:
+            continue
+        offset = int(match.group(1), 10)
+        if offset < 0:
+            return -offset
+    return None
+
+
+def _adjust_checkdiff_stack_slots(operands: str, delta: int) -> str:
+    if delta == 0:
+        return operands
+
+    def repl(match: re.Match[str]) -> str:
+        raw_offset = match.group("offset")
+        base = 16 if raw_offset.lower().startswith("0x") else 10
+        value = int(raw_offset, base) + delta
+        rendered = hex(value) if base == 16 else str(value)
+        return f"{rendered}{match.group('suffix')}"
+
+    return _CHECKDIFF_STACK_SLOT_RE.sub(repl, operands)
+
+
+def _checkdiff_instruction_signature(
+    instruction: AsmInstruction,
+    *,
+    stack_delta: int = 0,
+) -> tuple[str, str]:
+    operands = _adjust_checkdiff_stack_slots(instruction.operands, stack_delta)
+    return instr_signature(instruction.opcode, operands)
 
 
 def _asm_instruction_destination(
@@ -410,33 +449,135 @@ def _derive_force_phys_from_register_diff_lines(
 ) -> dict:
     target_instructions: list[AsmInstruction] = []
     target_by_line: dict[int, tuple[int, AsmInstruction]] = {}
+    target_entries: list[tuple[int, int, AsmInstruction, str]] = []
     for line_index, line in enumerate(target_asm):
         instruction = _parse_checkdiff_asm_instruction(line)
         if instruction is None:
             continue
         target_by_line[line_index] = (len(target_instructions), instruction)
+        target_entries.append((
+            line_index,
+            len(target_instructions),
+            instruction,
+            line,
+        ))
         target_instructions.append(instruction)
 
+    current_entries: list[tuple[int, int, AsmInstruction, str]] = []
+    for line_index, line in enumerate(current_asm):
+        instruction = _parse_checkdiff_asm_instruction(line)
+        if instruction is None:
+            continue
+        current_entries.append((
+            line_index,
+            len(current_entries),
+            instruction,
+            line,
+        ))
+
     prologue_end = asm_parse_prologue_end(target_instructions)
+    target_frame_size = _checkdiff_frame_size(target_asm)
+    current_frame_size = _checkdiff_frame_size(current_asm)
+    frame_delta = (
+        target_frame_size - current_frame_size
+        if target_frame_size is not None and current_frame_size is not None
+        else None
+    )
+    current_stack_delta = frame_delta or 0
+    use_frame_alignment = current_stack_delta != 0
+    paired_lines: list[
+        tuple[int, str, str, AsmInstruction, AsmInstruction, int]
+    ] = []
+
+    if use_frame_alignment:
+        unused_current = list(current_entries)
+        for (
+            target_line_index,
+            target_instruction_index,
+            target_instruction,
+            target_line,
+        ) in target_entries:
+            target_sig = _checkdiff_instruction_signature(target_instruction)
+            ranked: list[
+                tuple[int, int, str, AsmInstruction, int]
+            ] = []
+            for current_pos, (
+                current_line_index,
+                current_instruction_index,
+                current_instruction,
+                current_line,
+            ) in enumerate(unused_current):
+                current_sig = _checkdiff_instruction_signature(
+                    current_instruction,
+                    stack_delta=current_stack_delta,
+                )
+                if current_sig != target_sig:
+                    continue
+                ranked.append((
+                    abs(current_instruction_index - target_instruction_index),
+                    current_pos,
+                    current_line,
+                    current_instruction,
+                    current_instruction_index,
+                ))
+            if not ranked:
+                continue
+            (
+                _distance,
+                current_pos,
+                current_line,
+                current_instruction,
+                _current_instruction_index,
+            ) = sorted(ranked, key=lambda item: (item[0], item[1]))[0]
+            unused_current.pop(current_pos)
+            paired_lines.append((
+                target_line_index,
+                target_line,
+                current_line,
+                target_instruction,
+                current_instruction,
+                target_instruction_index,
+            ))
+    else:
+        for line_index, (target_line, current_line) in enumerate(
+            zip(target_asm, current_asm)
+        ):
+            target_instruction = _parse_checkdiff_asm_instruction(target_line)
+            current_instruction = _parse_checkdiff_asm_instruction(current_line)
+            if target_instruction is None or current_instruction is None:
+                continue
+            target_position = target_by_line.get(line_index)
+            if target_position is None:
+                continue
+            instruction_index, _ = target_position
+            paired_lines.append((
+                line_index,
+                target_line,
+                current_line,
+                target_instruction,
+                current_instruction,
+                instruction_index,
+            ))
+
     target_order: list[tuple[int, str, int, int]] = []
     target_data: dict[tuple[int, str, int, int], dict] = {}
     conflicts: list[dict] = []
 
-    for line_index, (target_line, current_line) in enumerate(
-        zip(target_asm, current_asm)
-    ):
+    for (
+        line_index,
+        target_line,
+        current_line,
+        target_instruction,
+        current_instruction,
+        instruction_index,
+    ) in paired_lines:
         if target_line == current_line:
             continue
-        target_instruction = _parse_checkdiff_asm_instruction(target_line)
-        current_instruction = _parse_checkdiff_asm_instruction(current_line)
-        if target_instruction is None or current_instruction is None:
-            continue
-        if instr_signature(
-            target_instruction.opcode,
-            target_instruction.operands,
-        ) != instr_signature(
-            current_instruction.opcode,
-            current_instruction.operands,
+        if _checkdiff_instruction_signature(
+            target_instruction,
+        ) != _checkdiff_instruction_signature(
+            current_instruction,
+            stack_delta=current_stack_delta,
         ):
             continue
         target_dest = _asm_instruction_destination(target_instruction)
@@ -447,10 +588,6 @@ def _derive_force_phys_from_register_diff_lines(
         class_id = _match_iter_first_class_id(kind)
         if class_id is None:
             continue
-        target_position = target_by_line.get(line_index)
-        if target_position is None:
-            continue
-        instruction_index, _ = target_position
         if instruction_index < prologue_end:
             continue
         current_kind, current_phys = current_dest
@@ -541,22 +678,48 @@ def _derive_force_phys_from_register_diff_lines(
             target["confidence"] = "exact"
         targets.append(target)
 
+    conflict_keys = {
+        (
+            int(conflict["class_id"]),
+            str(conflict["kind"]),
+            int(conflict["ig_idx"]),
+        )
+        for conflict in conflicts
+    }
+    for target in targets:
+        conflict_key = (
+            int(target["class_id"]),
+            str(target["kind"]),
+            int(target["ig_idx"]),
+        )
+        target["force_vector_runnable"] = conflict_key not in conflict_keys
+
+    runnable_targets = [
+        target for target in targets if target["force_vector_runnable"]
+    ]
+
     return {
         "force_phys": {
             str(target["ig_idx"]): target["target_reg"]
-            for target in targets
+            for target in runnable_targets
         },
         "force_phys_csv": ",".join(
-            target["force_phys_entry"] for target in targets
+            target["force_phys_entry"] for target in runnable_targets
         ),
         "force_vector": ",".join(
-            target["force_vector_entry"] for target in targets
+            target["force_vector_entry"] for target in runnable_targets
         ),
         "targets": targets,
         "conflicts": conflicts,
         "register_only_target_count": sum(
             target["occurrence_count"] for target in targets
         ),
+        "frame_alignment": {
+            "target_frame_size": target_frame_size,
+            "current_frame_size": current_frame_size,
+            "frame_delta": frame_delta,
+            "applied": use_frame_alignment,
+        },
     }
 
 
@@ -9858,6 +10021,7 @@ def force_phys_from_diff(
         "targets": vector["targets"],
         "conflicts": vector["conflicts"],
         "register_only_target_count": vector["register_only_target_count"],
+        "frame_alignment": vector.get("frame_alignment"),
     }
     if force_vector_result is not None:
         result_payload["force_vector_verify"] = force_vector_result
@@ -9871,6 +10035,14 @@ def force_phys_from_diff(
         print(f"Unit:     {unit}")
     print(f"PCDump:   {pcdump_path}")
     print(f"Checkdiff: {checkdiff_source}")
+    frame_alignment = vector.get("frame_alignment") or {}
+    if frame_alignment.get("applied"):
+        print(
+            "Frame alignment: "
+            f"target=0x{frame_alignment['target_frame_size']:x} "
+            f"current=0x{frame_alignment['current_frame_size']:x} "
+            f"delta={frame_alignment['frame_delta']}"
+        )
     print()
     if not vector["targets"]:
         print("No register-only physical-register target destinations derived.")
