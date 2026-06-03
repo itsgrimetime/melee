@@ -29,7 +29,7 @@ from .mutators import (
     mutate_type_change,
 )
 from .simplify_search import FunctionContext, SourceVariant
-from .source_patch import get_decl_names, reorder_decls_in_function
+from .source_patch import get_decl_names_by_scope, reorder_decls_in_function_scope
 from .symbol_bridge import _extract_function_text, walk_local_decls
 
 
@@ -47,7 +47,23 @@ def decl_orders_source(ctx: FunctionContext) -> Iterator[SourceVariant]:
     are silently skipped (so we don't waste a compile slot on a no-op).
     """
     source_text = ctx.source_path.read_text(encoding="utf-8")
-    names = get_decl_names(source_text, ctx.function)
+    scope_map = get_decl_names_by_scope(source_text, ctx.function)
+    selected_scope = (ctx.function,)
+    if not scope_map.get(selected_scope):
+        nested_scopes = [
+            scope_path
+            for scope_path, scope_names in scope_map.items()
+            if scope_path != (ctx.function,) and len(scope_names) >= 2
+        ]
+        if not nested_scopes:
+            nested_scopes = [
+                scope_path
+                for scope_path in scope_map
+                if scope_path != (ctx.function,)
+            ]
+        if nested_scopes:
+            selected_scope = nested_scopes[0]
+    names = scope_map.get(selected_scope)
     if not names:
         return
     n = len(names)
@@ -74,7 +90,12 @@ def decl_orders_source(ctx: FunctionContext) -> Iterator[SourceVariant]:
     seen_texts: set[str] = set()
     for label, perm in candidates:
         try:
-            patched = reorder_decls_in_function(source_text, ctx.function, perm)
+            patched = reorder_decls_in_function_scope(
+                source_text,
+                ctx.function,
+                selected_scope,
+                perm,
+            )
         except Exception:
             # Reorder helper returns None on bad inputs; we also defensively
             # swallow any unexpected exception so one bad permutation can't

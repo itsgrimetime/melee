@@ -3903,6 +3903,132 @@ def test_decl_orders_auto_selects_nested_scope_when_top_has_no_decls(
     assert "int b;\n        int a;" in src_path.read_text()
 
 
+def test_diagnose_decl_orders_uses_scope_map_for_struct_initializer_decls(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    src_path = melee_root / "src" / "melee" / "ft" / "ft_0852.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text(textwrap.dedent("""\
+        void ft_800852B0(void)
+        {
+            struct UnkCostumeList* var_r8 = CostumeListsForeachCharacter;
+            ftData_UnkCountStruct* var_r9 = ftData_Table_Unk0;
+            ftData_UnkCountStruct* var_r10 = ftData_UnkIntPairs;
+            int i;
+
+            for (i = 0; i < FTKIND_MAX; ++var_r8, ++var_r9, ++var_r10, ++i) {
+                int costume_idx = 0;
+                gFtDataList[i] = NULL;
+            }
+        }
+    """))
+    pcdump = tmp_path / "ft_800852B0.pcdump.txt"
+    pcdump.write_text("Starting function ft_800852B0\n")
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/ft/ft_0852",
+    )
+    monkeypatch.setattr(debug_cli, "_get_match_pct", lambda function, root: 97.36)
+    monkeypatch.setattr(debug_cli, "audit_function_casts", lambda source, function: [])
+    monkeypatch.setattr(debug_cli, "_detect_frame_residual_hint", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        debug_cli,
+        "_resolve_pcdump_path",
+        lambda pcdump_arg, function, melee_root=None, *, require_fresh=False: pcdump,
+    )
+    monkeypatch.setattr(debug_cli.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=0))
+
+    def fake_build_and_match_with_diagnostic(unit, function, root, *, timeout=60.0):
+        text = src_path.read_text()
+        if "var_r9 = ftData_Table_Unk0;\n    struct UnkCostumeList* var_r8" in text:
+            return 97.40, None
+        return 97.36, None
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_build_and_match_with_diagnostic",
+        fake_build_and_match_with_diagnostic,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "diagnose",
+            "ft_800852B0",
+            "--decl-strategy",
+            "swap",
+            "--max-seconds",
+            "0",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    out = strip_ansi(result.stdout)
+    assert "Could not find decl block" not in out
+    assert "Scope: ft_800852B0 (function-top)" in out
+    assert "swap var_r8<->var_r9" in out
+    assert "WIN: swap var_r8<->var_r9" in out
+    assert src_path.read_text().startswith("void ft_800852B0")
+
+
+def test_suggest_register_tiebreak_emits_compiler_temp_levers() -> None:
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "suggest",
+            "register-tiebreak",
+            "-f",
+            "ft_800852B0",
+            "--force-phys",
+            "53:4",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    out = strip_ansi(result.stdout)
+    assert "Register-tiebreak source levers for ft_800852B0" in out
+    assert "ig53 -> r4" in out
+    assert "occupy r3" in out
+    assert "move the defining expression" in out
+    assert "debug inspect virtual-to-var -f ft_800852B0 r53" in out
+    assert "debug mutate simplify-order --fn ft_800852B0 --want-late 53" in out
+
+
+def test_suggest_register_tiebreak_json_is_structured() -> None:
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "suggest",
+            "register-tiebreak",
+            "-f",
+            "ft_800852B0",
+            "--force-phys",
+            "0:53:4",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["function"] == "ft_800852B0"
+    assert payload["normalized_force_phys"] == "0:53:4"
+    assert payload["targets"][0]["ig_idx"] == 53
+    assert payload["targets"][0]["target_phys"] == 4
+    assert any(
+        lever["kind"] == "interference-insertion"
+        for lever in payload["levers"]
+    )
+
+
 def test_mutate_simplify_order_emits_candidate_progress_to_stderr(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

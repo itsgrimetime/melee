@@ -441,3 +441,58 @@ def test_reorder_decls_in_function_scope_only_changes_target_scope() -> None:
     assert result is not None
     assert result.index("int top_a;") < result.index("int top_b;")
     assert result.index("HSD_JObj* cursor_row;") < result.index("HSD_JObj* row_0_jobj;")
+
+
+def test_decl_scope_finds_struct_pointer_initializers_and_loop_local() -> None:
+    source = textwrap.dedent("""\
+        void ft_800852B0(void)
+        {
+            struct UnkCostumeList* var_r8 = CostumeListsForeachCharacter;
+            ftData_UnkCountStruct* var_r9 = ftData_Table_Unk0;
+            ftData_UnkCountStruct* var_r10 = ftData_UnkIntPairs;
+            int i;
+
+            for (i = 0; i < FTKIND_MAX; ++var_r8, ++var_r9, ++var_r10, ++i) {
+                int costume_idx = 0;
+                gFtDataList[i] = NULL;
+            }
+        }
+    """)
+
+    assert get_decl_names(source, "ft_800852B0") is None
+
+    scopes = get_decl_names_by_scope(source, "ft_800852B0")
+
+    assert scopes[("ft_800852B0",)] == ["var_r8", "var_r9", "var_r10", "i"]
+    nested_scope = next(scope for scope in scopes if len(scope) == 2)
+    assert scopes[nested_scope] == ["costume_idx"]
+
+
+def test_reorder_function_scope_handles_struct_pointer_initializers() -> None:
+    source = textwrap.dedent("""\
+        void ft_800852B0(void)
+        {
+            struct UnkCostumeList* var_r8 = CostumeListsForeachCharacter;
+            ftData_UnkCountStruct* var_r9 = ftData_Table_Unk0;
+            ftData_UnkCountStruct* var_r10 = ftData_UnkIntPairs;
+            int i;
+
+            for (i = 0; i < FTKIND_MAX; ++var_r8, ++var_r9, ++var_r10, ++i) {
+                int costume_idx = 0;
+                gFtDataList[i] = NULL;
+            }
+        }
+    """)
+
+    result = reorder_decls_in_function_scope(
+        source,
+        "ft_800852B0",
+        ("ft_800852B0",),
+        [1, 0, 2, 3],
+    )
+
+    assert result is not None
+    assert result.index("var_r9 = ftData_Table_Unk0") < result.index(
+        "var_r8 = CostumeListsForeachCharacter"
+    )
+    assert "int costume_idx = 0;" in result

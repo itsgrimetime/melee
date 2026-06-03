@@ -110,6 +110,32 @@ def test_decl_orders_source_empty_when_function_missing(tmp_path: Path) -> None:
     assert variants == []
 
 
+def test_decl_orders_source_handles_struct_pointer_initializers(tmp_path: Path) -> None:
+    source = (
+        "void fn_test(void) {\n"
+        "    struct UnkCostumeList* var_r8 = CostumeListsForeachCharacter;\n"
+        "    ftData_UnkCountStruct* var_r9 = ftData_Table_Unk0;\n"
+        "    ftData_UnkCountStruct* var_r10 = ftData_UnkIntPairs;\n"
+        "    int i;\n"
+        "    for (i = 0; i < FTKIND_MAX; ++i) {\n"
+        "        int costume_idx = 0;\n"
+        "        gFtDataList[i] = NULL;\n"
+        "    }\n"
+        "}\n"
+    )
+    ctx = _ctx(tmp_path, source)
+
+    variants = list(decl_orders_source(ctx))
+
+    assert variants
+    assert any(
+        "var_r9 = ftData_Table_Unk0;\n"
+        "    struct UnkCostumeList* var_r8 = CostumeListsForeachCharacter;"
+        in variant.text
+        for variant in variants
+    )
+
+
 # ---------------------------------------------------------------------------
 # insert_alias_source
 # ---------------------------------------------------------------------------

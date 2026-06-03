@@ -60,9 +60,7 @@ from ..mwcc_debug.source_patch import (
     extract_function,
     find_function as find_source_function,
     find_function_definitions,
-    get_decl_names,
     get_decl_names_by_scope,
-    reorder_decls_in_function,
     reorder_decls_in_function_scope,
     transfer_candidate,
 )
@@ -6654,12 +6652,9 @@ def enumerate_decl_orders(
                     file=sys.stderr,
                     flush=True,
                 )
-            if selected_scope == (function,):
-                patched = reorder_decls_in_function(current_text, function, perm)
-            else:
-                patched = reorder_decls_in_function_scope(
-                    current_text, function, selected_scope, perm,
-                )
+            patched = reorder_decls_in_function_scope(
+                current_text, function, selected_scope, perm,
+            )
             if patched is None:
                 continue
             target_path.write_text(patched)
@@ -6714,14 +6709,9 @@ def enumerate_decl_orders(
                 "results": results,
             })
             if keep_best and best_label is not None and best_perm is not None:
-                if selected_scope == (function,):
-                    patched = reorder_decls_in_function(
-                        current, function, best_perm
-                    )
-                else:
-                    patched = reorder_decls_in_function_scope(
-                        current, function, selected_scope, best_perm,
-                    )
+                patched = reorder_decls_in_function_scope(
+                    current, function, selected_scope, best_perm,
+                )
                 if patched is not None:
                     current = patched
                     applied_single_best = True
@@ -6750,14 +6740,9 @@ def enumerate_decl_orders(
                         print(f"  No more wins; stopping iterate loop.")
                     break
                 # Apply the round's winner and use it as the next baseline
-                if selected_scope == (function,):
-                    patched = reorder_decls_in_function(
-                        current, function, r_best_perm
-                    )
-                else:
-                    patched = reorder_decls_in_function_scope(
-                        current, function, selected_scope, r_best_perm,
-                    )
+                patched = reorder_decls_in_function_scope(
+                    current, function, selected_scope, r_best_perm,
+                )
                 if patched is None:
                     if not json_out:
                         print(f"  Could not re-apply best perm "
@@ -7697,13 +7682,14 @@ def _decl_order_candidate_count(names: list[str], strategy: str) -> int:
     return 0
 
 
-def _default_decl_order_search_summary(
-    source: str,
+def _select_decl_order_scope(
+    scope_map: dict[tuple[str, ...], list[str]],
     function: str,
     *,
-    strategy: str = "promote",
-) -> dict:
-    scope_map = get_decl_names_by_scope(source, function)
+    explicit_scope: str | None = None,
+) -> tuple[tuple[str, ...], str]:
+    if explicit_scope:
+        return tuple(explicit_scope.split("/")), "explicit"
     selected_scope = (function,)
     selected_scope_reason = "function-top"
     if not scope_map.get(selected_scope):
@@ -7721,7 +7707,20 @@ def _default_decl_order_search_summary(
         if nested_scopes:
             selected_scope = nested_scopes[0]
             selected_scope_reason = "auto-nested"
+    return selected_scope, selected_scope_reason
 
+
+def _default_decl_order_search_summary(
+    source: str,
+    function: str,
+    *,
+    strategy: str = "promote",
+) -> dict:
+    scope_map = get_decl_names_by_scope(source, function)
+    selected_scope, selected_scope_reason = _select_decl_order_scope(
+        scope_map,
+        function,
+    )
     names = scope_map.get(selected_scope) or []
     available_scopes = [
         {
@@ -8330,6 +8329,159 @@ def _print_coupled_force_phys_guidance(guidance: dict) -> None:
     print()
 
 
+def _register_tiebreak_guidance(
+    *,
+    function: str,
+    unit: str | None,
+    force_phys: str,
+) -> dict:
+    entries, normalized, warnings = _parse_diagnose_force_phys(force_phys)
+    src_rel = f"src/{unit}.c" if unit else "<source.c>"
+    targets = [
+        {
+            "class_id": entry.class_id,
+            "ig_idx": entry.virtual,
+            "target_phys": entry.phys,
+            "register": f"r{entry.phys}",
+            "below_registers": [f"r{reg}" for reg in range(3, entry.phys)],
+        }
+        for entry in entries
+    ]
+    primary = targets[0]
+    primary_ig = primary["ig_idx"]
+    primary_phys = primary["target_phys"]
+    below_registers = primary["below_registers"]
+    below_text = ", ".join(below_registers) if below_registers else (
+        "the lower volatile register set"
+    )
+    levers = [
+        {
+            "rank": 1,
+            "kind": "interference-insertion",
+            "target": f"ig{primary_ig}->r{primary_phys}",
+            "description": (
+                f"Keep a nearby named value live across ig{primary_ig}'s first "
+                f"definition so the allocator must occupy {below_text} before "
+                f"the compiler temp is colored."
+            ),
+            "source_moves": [
+                (
+                    "Introduce a short-lived alias for a pointer, counter, or "
+                    "table expression immediately before the temp's defining "
+                    "expression, then consume it after that expression."
+                ),
+                (
+                    "Extend an existing loop or table pointer's lifetime by "
+                    "moving its last use just past the temp definition."
+                ),
+            ],
+        },
+        {
+            "rank": 2,
+            "kind": "simplify-order-shift",
+            "target": f"ig{primary_ig}->r{primary_phys}",
+            "description": (
+                f"move the defining expression for ig{primary_ig} later in "
+                "source order, or sink the load/use that creates the compiler "
+                "temp closer to its first real use."
+            ),
+            "source_moves": [
+                (
+                    "Inline a one-use table/global expression at the store or "
+                    "call site instead of materializing it before loop pressure "
+                    "is established."
+                ),
+                (
+                    "Split a combined condition or store so the temp-producing "
+                    "subexpression appears after the named holder that should "
+                    f"claim {below_text}."
+                ),
+            ],
+        },
+        {
+            "rank": 3,
+            "kind": "targeted-alias",
+            "target": f"ig{primary_ig}->r{primary_phys}",
+            "description": (
+                "Try a scoped alias around the first defining expression to "
+                "change the temp's local lifetime without changing observable C."
+            ),
+            "source_moves": [
+                (
+                    "Use `debug mutate insert-alias` on candidate holder "
+                    "locals near the temp definition, then score against the "
+                    "force-phys objective."
+                ),
+            ],
+        },
+    ]
+    verification_commands = [
+        (
+            f"melee-agent debug inspect virtual-to-var -f {function} "
+            f"r{primary_ig}"
+        ),
+        (
+            f"melee-agent debug inspect first-divergence -f {function} "
+            f"--force-phys {normalized} --source"
+        ),
+        (
+            f"melee-agent debug dump local {src_rel} --force-phys "
+            f"{normalized} --force-phys-fn {function}"
+        ),
+        (
+            f"melee-agent debug mutate simplify-order --fn {function} "
+            f"--want-late {primary_ig} --no-preserve-precolor"
+        ),
+        (
+            f"melee-agent debug mutate decl-orders {function} --strategy all"
+        ),
+    ]
+    return {
+        "function": function,
+        "source": src_rel,
+        "normalized_force_phys": normalized,
+        "warnings": warnings,
+        "targets": targets,
+        "levers": levers,
+        "verification_commands": verification_commands,
+        "notes": [
+            (
+                "This is source guidance for Case B/C compiler-temp register "
+                "tiebreaks: force-phys proves reachability, but no source "
+                "variable is directly bound to the temp."
+            ),
+            (
+                "Prefer variants that preserve the target function's current "
+                "byte score until the requested physical assignment moves."
+            ),
+        ],
+    }
+
+
+def _print_register_tiebreak_guidance(guidance: dict) -> None:
+    print(f"Register-tiebreak source levers for {guidance['function']}")
+    print(f"  force-phys: {guidance['normalized_force_phys']}")
+    print(f"  source:     {guidance['source']}")
+    for warning in guidance.get("warnings", []):
+        print(f"  warning:    {warning}")
+    print()
+    print("Targets:")
+    for target in guidance["targets"]:
+        below = ", ".join(target["below_registers"]) or "none below target"
+        print(f"  - ig{target['ig_idx']} -> r{target['target_phys']} "
+              f"(below: {below})")
+    print()
+    print("Source levers:")
+    for lever in guidance["levers"]:
+        print(f"  {lever['rank']}. {lever['kind']}: {lever['description']}")
+        for move in lever.get("source_moves", []):
+            print(f"     - {move}")
+    print()
+    print("Verify:")
+    for command in guidance["verification_commands"]:
+        print(f"  {command}")
+
+
 def _diagnose_site_hint(site) -> dict:
     return {
         "block_idx": site.block_idx,
@@ -8650,6 +8802,14 @@ def ceiling(
         unit=unit,
         force_phys=force_phys,
     )
+    register_tiebreak_guidance = (
+        _register_tiebreak_guidance(
+            function=function,
+            unit=unit,
+            force_phys=force_phys,
+        )
+        if force_phys else None
+    )
     cast_warnings = audit_function_casts(src_text, function)
     high_casts = [w for w in cast_warnings if w.severity == "high"]
     med_casts = [w for w in cast_warnings if w.severity == "medium"]
@@ -8753,11 +8913,35 @@ def ceiling(
             budget_note = f", budget {max_seconds:g}s" if max_seconds else ""
             print(f"[2] Decl-order enumeration ({decl_strategy} strategy, "
                   f"~minute{budget_note})...", flush=True)
-        names = get_decl_names(src_text, function) if src_text else None
+        scope_map = get_decl_names_by_scope(src_text, function) if src_text else {}
+        selected_scope, selected_scope_reason = _select_decl_order_scope(
+            scope_map,
+            function,
+        )
+        names = scope_map.get(selected_scope)
         if not names:
             if not json_out:
-                print(f"    Could not find decl block — skipping.")
+                available = ", ".join(
+                    f"{'/'.join(scope_path)} ({len(scope_names)} decls)"
+                    for scope_path, scope_names in scope_map.items()
+                ) or "none"
+                print(
+                    "    Could not find reorderable decl scope — skipping. "
+                    f"Available scopes: {available}."
+                )
         else:
+            if not json_out:
+                print(
+                    f"    Scope: {'/'.join(selected_scope)} "
+                    f"({selected_scope_reason})"
+                )
+                nested = [
+                    f"{'/'.join(scope_path)} ({len(scope_names)} decls)"
+                    for scope_path, scope_names in scope_map.items()
+                    if scope_path != selected_scope
+                ]
+                if nested:
+                    print(f"    Other scopes: {', '.join(nested)}")
             # Build candidate list (mirror of enumerate_decl_orders logic)
             n = len(names)
             candidates: list[tuple[str, list[int]]] = []
@@ -8818,7 +9002,12 @@ def ceiling(
                     _stopped_early,
                 ) = _run_decl_candidates(
                     candidates,
-                    reorder=lambda perm: reorder_decls_in_function(orig, function, perm),
+                    reorder=lambda perm: reorder_decls_in_function_scope(
+                        orig,
+                        function,
+                        selected_scope,
+                        perm,
+                    ),
                     build_and_match=_bm,
                     baseline=baseline,
                     max_seconds=max_seconds,
@@ -8960,6 +9149,9 @@ def ceiling(
 
     if coupled_force_phys_guidance and not json_out:
         _print_coupled_force_phys_guidance(coupled_force_phys_guidance)
+    if register_tiebreak_guidance and not json_out:
+        _print_register_tiebreak_guidance(register_tiebreak_guidance)
+        print()
 
     if frame_residual_hint and not json_out:
         print("[!] Frame/local-area residual:")
@@ -9038,6 +9230,7 @@ def ceiling(
             ],
             "spilled_virtual_hints": ceiling_spilled_hints,
             "coupled_force_phys": coupled_force_phys_guidance,
+            "register_tiebreak": register_tiebreak_guidance,
             "frame_residual": frame_residual_hint,
             "recommendations": recommendations,
         }, indent=2))
@@ -14040,6 +14233,44 @@ def var_to_virtual(
         if basis and basis_data is not None:
             print()
             _print_basis(basis_data, bindings)
+
+
+@suggest_app.command(name="register-tiebreak")
+def suggest_register_tiebreak(
+    function: Annotated[
+        str,
+        typer.Option(
+            "--function", "-f",
+            help="Function to analyze.",
+        ),
+    ],
+    force_phys: Annotated[
+        str,
+        typer.Option(
+            "--force-phys",
+            help="Reachable IG:PHYS or CLASS:IG:PHYS assignment, e.g. 53:4.",
+        ),
+    ],
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit guidance as JSON."),
+    ] = False,
+) -> None:
+    """Suggest source levers for compiler-temp register tiebreaks.
+
+    Use this when force-phys proves a Case B/C register assignment reachable
+    but `virtual-to-var` reports no source variable bound to the target IG.
+    """
+    unit = _find_unit_for_function(function, DEFAULT_MELEE_ROOT)
+    guidance = _register_tiebreak_guidance(
+        function=function,
+        unit=unit,
+        force_phys=force_phys,
+    )
+    if json_out:
+        print(json.dumps(guidance, indent=2))
+    else:
+        _print_register_tiebreak_guidance(guidance)
 
 
 @suggest_app.command(name="coalesce")
