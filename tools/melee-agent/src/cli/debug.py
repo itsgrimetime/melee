@@ -19122,6 +19122,55 @@ def _parse_lifetime_layout_candidate(spec: str) -> tuple[str, str, Path]:
     return label.strip(), operator.strip(), path
 
 
+def _control_flow_compile_source_variant(
+    diff_input,
+    *,
+    function: str,
+    melee_root: Path,
+    timeout: int,
+):
+    from ..mwcc_debug.diff_capture import compile_source_variant
+
+    return compile_source_variant(
+        diff_input,
+        function=function,
+        melee_root=melee_root,
+        timeout=timeout,
+    )
+
+
+def _control_flow_stop_condition(
+    kind: str,
+    *,
+    blocker: str | None,
+    reason: str,
+) -> dict[str, str | None]:
+    return {"kind": kind, "blocker": blocker, "reason": reason}
+
+
+def _control_flow_empty_payload(
+    *,
+    function: str,
+    source: Path | None,
+    blocker: str,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "function": function,
+        "source": str(source) if source is not None else None,
+        "generated_source_dir": None,
+        "probe_count": 0,
+        "blocker": blocker,
+        "stop_condition": _control_flow_stop_condition(
+            "blocked",
+            blocker=blocker,
+            reason=reason,
+        ),
+        "probes": [],
+        "variants": [],
+    }
+
+
 def _indexed_struct_compile_source_variant(
     diff_input,
     *,
@@ -20978,6 +21027,342 @@ def mutate_lifetime_layout_cmd(
                     print(f"  source: {variant['source_retained']}")
     elif not compile_probes and not candidates:
         print("Variants: none; pass --compile-probes or --candidate OPERATOR=path.")
+
+
+@mutate_app.command(name="control-flow-shape-search")
+def mutate_control_flow_shape_search_cmd(
+    function: Annotated[
+        str,
+        typer.Option(
+            "--function",
+            "-f",
+            help="Function to explore.",
+        ),
+    ],
+    source_file: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--source-file",
+            help="Source file used to generate control-flow shape probes.",
+        ),
+    ] = None,
+    output_dir: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--output-dir",
+            help="Directory for generated control-flow probe source files.",
+        ),
+    ] = None,
+    candidates: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--candidate",
+            help=(
+                "Candidate source to score, repeatable. Format "
+                "OPERATOR=path or LABEL:OPERATOR=path."
+            ),
+        ),
+    ] = None,
+    compile_probes: Annotated[
+        bool,
+        typer.Option(
+            "--compile-probes/--no-compile-probes",
+            help="Compile generated control-flow shape source probes.",
+        ),
+    ] = True,
+    score_match_percent: Annotated[
+        bool,
+        typer.Option(
+            "--score-match-percent/--no-score-match-percent",
+            help=(
+                "For source candidates, temporarily transfer into the real "
+                "tree and read final report.json match percent."
+            ),
+        ),
+    ] = True,
+    max_probes: Annotated[
+        int,
+        typer.Option(
+            "--max-probes",
+            help="Maximum generated probes to list or compile.",
+        ),
+    ] = 12,
+    operators: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--operator",
+            help="Control-flow operator to generate; repeatable.",
+        ),
+    ] = None,
+    timeout: Annotated[
+        int,
+        typer.Option(
+            "--timeout",
+            help="Per-candidate compile timeout in seconds.",
+        ),
+    ] = 120,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit as JSON."),
+    ] = False,
+) -> None:
+    """Compile and score conservative control-flow shape source probes."""
+    from ..mwcc_debug.control_flow_shape import (
+        DEFAULT_CONTROL_FLOW_OPERATORS,
+        scan_control_flow_shape_probes,
+    )
+    from ..mwcc_debug.diff_capture import DiffInput
+
+    melee_root = DEFAULT_MELEE_ROOT
+    resolved_source: Path | None = None
+    source_text: str | None = None
+    candidate_specs = candidates or []
+    operator_filter = tuple(operators or ())
+
+    if source_file is not None:
+        resolved_source = _resolve_existing_cli_file(
+            source_file,
+            melee_root=melee_root,
+            label="source file",
+        )
+        source_text = resolved_source.read_text(
+            encoding="utf-8",
+            errors="replace",
+        )
+    else:
+        unit = _find_unit_for_function(function, melee_root)
+        if unit is not None:
+            candidate_source = melee_root / "src" / f"{unit}.c"
+            if candidate_source.exists():
+                resolved_source = candidate_source
+                source_text = candidate_source.read_text(
+                    encoding="utf-8",
+                    errors="replace",
+                )
+
+    if source_text is None and not candidate_specs:
+        payload = _control_flow_empty_payload(
+            function=function,
+            source=None,
+            blocker="source-unavailable",
+            reason="source file could not be resolved",
+        )
+        if json_out:
+            print(json.dumps(payload, indent=2))
+        else:
+            print("control-flow-shape-search")
+            print("blocked: source-unavailable")
+        return
+
+    probes = []
+    scan_status: Mapping[str, Any] = {
+        "blocker": "no-control-flow-shape-probes",
+        "reason": "no safe control-flow source transform matched",
+        "supported_candidate_count": 0,
+        "rejected_candidate_count": 0,
+    }
+    if source_text is not None:
+        probes, scan_status = scan_control_flow_shape_probes(
+            source_text,
+            function,
+            operator_filter=operator_filter or None,
+            max_probes=max_probes,
+        )
+        probes = probes[:max_probes]
+
+    generated_source_dir: Path | None = None
+    generated_probe_paths: dict[str, Path] = {}
+    if probes and (json_out or compile_probes):
+        if output_dir is not None:
+            generated_source_dir = output_dir.expanduser()
+            if not generated_source_dir.is_absolute():
+                generated_source_dir = (Path.cwd() / generated_source_dir).resolve()
+            generated_source_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            generated_source_dir = Path(
+                tempfile.mkdtemp(prefix="control-flow-shape-search-")
+            )
+        for probe in probes:
+            path = generated_source_dir / f"{probe.label}.c"
+            path.write_text(probe.source_text, encoding="utf-8")
+            generated_probe_paths[probe.label] = path
+
+    probe_payloads = [probe.to_dict() for probe in probes]
+    probe_by_label = {probe.label: probe.to_dict() for probe in probes}
+    variants: list[dict[str, Any]] = []
+
+    def _score_candidate(
+        *,
+        label: str,
+        operator: str,
+        path: Path,
+        probe: dict[str, Any] | None = None,
+    ) -> None:
+        variant: dict[str, Any] = {
+            "label": label,
+            "operator": operator,
+            "status": "ok",
+            "path": str(path),
+            "source_retained": str(path) if path.suffix == ".c" else None,
+            "match_percent": None,
+            "final_match_percent": None,
+            "match_percent_error": None,
+            "error": None,
+            "probe": probe,
+        }
+        try:
+            if path.suffix != ".c":
+                raise ValueError(f"expected .c source candidate, got {path}")
+            _control_flow_compile_source_variant(
+                DiffInput(
+                    label=label,
+                    token=str(path),
+                    kind="source",
+                    path=path,
+                ),
+                function=function,
+                melee_root=melee_root,
+                timeout=timeout,
+            )
+            if score_match_percent:
+                status = (
+                    _make_real_score_status("control-flow-shape-search", label)
+                    if not json_out
+                    else None
+                )
+                score = _score_source_candidate_real_tree(
+                    path,
+                    function=function,
+                    melee_root=melee_root,
+                    timeout=timeout,
+                    status=status,
+                    include_stack_slot=False,
+                )
+                variant["match_percent"] = score.match_percent
+                variant["final_match_percent"] = score.match_percent
+                variant["match_percent_error"] = score.match_percent_error
+        except CompileFailure as exc:
+            variant["status"] = "build-failed"
+            variant["error"] = str(exc)
+        except Exception as exc:
+            variant["status"] = "failed"
+            variant["error"] = str(exc)
+        variants.append(variant)
+
+    for spec in candidate_specs:
+        label, operator, path = _parse_lifetime_layout_candidate(spec)
+        if operator not in DEFAULT_CONTROL_FLOW_OPERATORS:
+            raise typer.BadParameter(
+                "expected control-flow shape operator candidate",
+                param_hint="--candidate",
+            )
+        _score_candidate(label=label, operator=operator, path=path)
+
+    if compile_probes:
+        for probe in probes:
+            path = generated_probe_paths.get(probe.label)
+            if path is None:
+                continue
+            _score_candidate(
+                label=probe.label,
+                operator=probe.operator,
+                path=path,
+                probe=probe_by_label.get(probe.label),
+            )
+
+    variants.sort(
+        key=lambda variant: (
+            0
+            if variant.get("status") == "ok"
+            and (
+                variant.get("final_match_percent") == 100.0
+                or variant.get("match_percent") == 100.0
+            )
+            else 1,
+            -(
+                float(
+                    variant.get("final_match_percent")
+                    if variant.get("final_match_percent") is not None
+                    else variant.get("match_percent")
+                    if variant.get("match_percent") is not None
+                    else -1.0
+                )
+            ),
+            str(variant.get("label") or ""),
+        )
+    )
+
+    validated = any(
+        variant.get("status") == "ok"
+        and (
+            variant.get("final_match_percent") == 100.0
+            or variant.get("match_percent") == 100.0
+        )
+        for variant in variants
+    )
+    if validated:
+        blocker = None
+        stop_condition = _control_flow_stop_condition(
+            "validated",
+            blocker=None,
+            reason="validated candidate found",
+        )
+    elif variants:
+        blocker = "no-control-flow-shape-candidate"
+        stop_condition = _control_flow_stop_condition(
+            "unvalidated",
+            blocker=blocker,
+            reason="no control-flow shape candidate reached a true 100% match",
+        )
+    elif probes and not compile_probes and not candidate_specs:
+        blocker = "no-control-flow-shape-candidate"
+        stop_condition = _control_flow_stop_condition(
+            "unvalidated",
+            blocker=blocker,
+            reason="safe control-flow shape probes were generated but not compiled",
+        )
+    else:
+        blocker = str(scan_status.get("blocker") or "no-control-flow-shape-probes")
+        stop_condition = _control_flow_stop_condition(
+            "blocked",
+            blocker=blocker,
+            reason=str(scan_status.get("reason") or blocker),
+        )
+
+    payload = {
+        "function": function,
+        "source": str(resolved_source) if resolved_source is not None else None,
+        "generated_source_dir": (
+            str(generated_source_dir) if generated_source_dir is not None else None
+        ),
+        "probe_count": len(probes),
+        "blocker": blocker,
+        "stop_condition": stop_condition,
+        "probes": probe_payloads,
+        "variants": variants,
+    }
+
+    if json_out:
+        print(json.dumps(payload, indent=2))
+        return
+
+    print("control-flow-shape-search")
+    print(f"function: {function}")
+    print(f"source: {payload['source']}")
+    print(f"generated_source_dir: {payload['generated_source_dir']}")
+    print(
+        f"stop: {stop_condition['kind']}"
+        + (f" ({stop_condition['blocker']})" if stop_condition["blocker"] else "")
+    )
+    for variant in variants:
+        line = f"- {variant['label']} [{variant['operator']}] {variant['status']}"
+        if variant.get("final_match_percent") is not None:
+            line += f" match={variant['final_match_percent']:.6g}"
+        print(line)
+        if variant.get("error"):
+            print(f"  error: {variant['error']}")
+        if variant.get("source_retained"):
+            print(f"  source: {variant['source_retained']}")
 
 
 @mutate_app.command(name="indexed-struct-search")

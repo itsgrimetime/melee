@@ -74,6 +74,7 @@ def test_representative_grouped_command_help_works() -> None:
         ["debug", "suggest", "schedule", "--help"],
         ["debug", "suggest", "inlines", "--help"],
         ["debug", "mutate", "decl-orders", "--help"],
+        ["debug", "mutate", "control-flow-shape-search", "--help"],
         ["debug", "mutate", "frame-transform-search", "--help"],
         ["debug", "mutate", "indexed-struct-search", "--help"],
         ["debug", "mutate", "lifetime-layout", "--help"],
@@ -101,6 +102,135 @@ def test_indexed_struct_search_help_works() -> None:
     assert result.exit_code == 0, result.output
     assert "--score-match-percent" in result.output
     assert "--compile-probes" in result.output
+
+
+def test_control_flow_shape_search_help_works() -> None:
+    result = runner.invoke(
+        debug_cli.debug_app,
+        ["mutate", "control-flow-shape-search", "--help"],
+        env={"COLUMNS": "200"},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "--operator" in result.output
+    assert "--score-match-percent" in result.output
+    assert "--compile-probes" in result.output
+
+
+def test_control_flow_shape_search_json_reports_no_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", tmp_path)
+    monkeypatch.setattr(debug_cli, "_find_unit_for_function", lambda function, root: None)
+
+    result = runner.invoke(
+        debug_cli.debug_app,
+        ["mutate", "control-flow-shape-search", "-f", "fn_80000000", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["blocker"] == "source-unavailable"
+    assert payload["function"] == "fn_80000000"
+    assert payload["source"] is None
+    assert payload["generated_source_dir"] is None
+    assert payload["probe_count"] == 0
+    assert payload["probes"] == []
+    assert payload["stop_condition"] == {
+        "kind": "blocked",
+        "blocker": "source-unavailable",
+        "reason": "source file could not be resolved",
+    }
+    assert payload["variants"] == []
+
+
+def test_control_flow_shape_search_json_scores_generated_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "repo"
+    source = melee_root / "src" / "melee" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        textwrap.dedent(
+            """\
+            int fn_80000000(int cond, int a, int b)
+            {
+                int x;
+                x = cond ? a : b;
+                return x;
+            }
+            """
+        )
+    )
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/demo",
+    )
+
+    def fake_compile(diff_input, *, function, melee_root, timeout):
+        return "pcdump text"
+
+    def fake_score(
+        path,
+        *,
+        function,
+        melee_root,
+        timeout=None,
+        status=None,
+        include_stack_slot=False,
+    ):
+        return debug_cli._SourceCandidateRealScore(100.0, None)
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_control_flow_compile_source_variant",
+        fake_compile,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_score_source_candidate_real_tree",
+        fake_score,
+    )
+
+    result = runner.invoke(
+        debug_cli.debug_app,
+        [
+            "mutate",
+            "control-flow-shape-search",
+            "-f",
+            "fn_80000000",
+            "--json",
+            "--operator",
+            "ternary-to-if-else",
+            "--max-probes",
+            "2",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["blocker"] is None
+    assert payload["function"] == "fn_80000000"
+    assert payload["source"].endswith("src/melee/demo.c")
+    assert Path(payload["generated_source_dir"]).exists()
+    assert payload["stop_condition"]["kind"] == "validated"
+    assert payload["stop_condition"]["blocker"] is None
+    assert payload["probe_count"] == 1
+    assert payload["probes"][0]["operator"] == "ternary-to-if-else"
+    variant = payload["variants"][0]
+    assert variant["status"] == "ok"
+    assert variant["operator"] == "ternary-to-if-else"
+    assert Path(variant["path"]).exists()
+    assert variant["match_percent"] == 100.0
+    assert variant["final_match_percent"] == 100.0
+    assert variant["error"] is None
+    assert Path(variant["source_retained"]).exists()
+    assert variant["probe"]["provenance"]["kind"] == "control-flow-shape"
 
 
 def test_name_magic_source_declarations_help_is_available() -> None:
