@@ -40,6 +40,7 @@ from .docker import docker_app
 # Import sub-apps from modules
 from .extract import extract_app
 from .ghidra import ghidra_app
+from .harvest import harvest_cmd
 from .hook import hook_app
 from .issue import issue_app
 from .patterns import patterns_app
@@ -169,6 +170,7 @@ def _forward_subprocess_output(proc: subprocess.CompletedProcess[str]) -> None:
 
 
 app.command("compilers")(list_compilers)
+app.command("harvest")(harvest_cmd)
 
 
 def _build_failure_report_command(
