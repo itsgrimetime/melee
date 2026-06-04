@@ -17089,6 +17089,14 @@ class _SourceCandidateRealScore:
     checkdiff_payload: dict | None = None
 
 
+@dataclasses.dataclass(frozen=True)
+class _NameMagicWholeSourceScore:
+    match_percent: float | None
+    match_percent_error: str | None
+    no_name_magic_match: bool | None
+    checkdiff_payload: dict | None = None
+
+
 def _new_external_function_definitions(
     candidate_text: str,
     original_text: str,
@@ -17237,6 +17245,131 @@ def _run_checkdiff_stack_slot_payload(
             + (f": {detail}" if detail else "")
         )
     return payload, None
+
+
+def _run_checkdiff_no_name_magic_json(
+    function: str,
+    *,
+    melee_root: Path,
+    timeout: float | None,
+    no_build: bool = False,
+) -> tuple[dict | None, str | None]:
+    cmd = [
+        sys.executable,
+        "tools/checkdiff.py",
+        function,
+        "--format",
+        "json",
+        "--no-name-magic",
+    ]
+    if no_build:
+        cmd.append("--no-build")
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=melee_root,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=_checkdiff_env_without_fingerprint(),
+        )
+    except subprocess.TimeoutExpired:
+        return None, "checkdiff --no-name-magic timed out"
+    except Exception as exc:
+        return None, f"checkdiff --no-name-magic failed: {exc}"
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        detail = (proc.stderr or proc.stdout or str(exc)).strip()
+        return None, f"checkdiff --no-name-magic emitted non-json: {detail}"
+    if proc.returncode not in (0, 1):
+        detail = (proc.stderr or proc.stdout or "").strip()
+        return None, (
+            f"checkdiff --no-name-magic exited {proc.returncode}"
+            + (f": {detail}" if detail else "")
+        )
+    return payload, None
+
+
+def _name_magic_decode_anonymous_symbol(symbol: Any) -> dict[str, Any]:
+    import struct
+
+    payload: dict[str, Any] = {
+        "anonymous": symbol.name,
+        "name": symbol.name,
+        "size": symbol.size,
+        "value": symbol.value,
+    }
+    if symbol.size == 4:
+        try:
+            payload["float"] = struct.unpack(
+                ">f",
+                struct.pack(">I", symbol.value),
+            )[0]
+        except Exception:
+            pass
+    elif symbol.size == 8:
+        try:
+            from ..mwcc_debug.o_rewriter import MAGIC_S32, MAGIC_U32
+
+            if symbol.value == MAGIC_S32:
+                payload["bias"] = "s32"
+            elif symbol.value == MAGIC_U32:
+                payload["bias"] = "u32"
+            else:
+                payload["double"] = struct.unpack(
+                    ">d",
+                    struct.pack(">Q", symbol.value),
+                )[0]
+        except Exception:
+            pass
+    return payload
+
+
+def _name_magic_object_evidence(
+    unit: str,
+    melee_root: Path,
+) -> tuple[dict[str, Any] | None, str | None]:
+    current_obj = melee_root / "build" / "GALE01" / "src" / f"{unit}.o"
+    if not current_obj.exists():
+        return None, "current-object-missing"
+    target_obj = melee_root / "build" / "GALE01" / "obj" / f"{unit}.o"
+    if not target_obj.exists():
+        return None, "target-object-missing"
+
+    from ..mwcc_debug.o_rewriter import (
+        find_all_anonymous_sdata2_symbols,
+        suggest_name_magic_map,
+    )
+
+    symbols = find_all_anonymous_sdata2_symbols(current_obj)
+    duplicate_counts: dict[tuple[int, int], int] = {}
+    for symbol in symbols:
+        duplicate_counts[(symbol.size, symbol.value)] = (
+            duplicate_counts.get((symbol.size, symbol.value), 0) + 1
+        )
+
+    anonymous_sdata2: dict[str, dict[str, Any]] = {}
+    for symbol in symbols:
+        rendered = _name_magic_decode_anonymous_symbol(symbol)
+        if duplicate_counts.get((symbol.size, symbol.value), 0) > 1:
+            rendered["ambiguous"] = True
+        anonymous_sdata2[symbol.name] = rendered
+
+    _all_symbols, suggested = suggest_name_magic_map(current_obj, target_obj)
+    suggestions: list[dict[str, Any]] = []
+    for symbol, target in suggested:
+        suggestion = _name_magic_decode_anonymous_symbol(symbol)
+        suggestion["target"] = target
+        suggestions.append(suggestion)
+
+    return (
+        {
+            "anonymous_sdata2": anonymous_sdata2,
+            "name_magic_suggestions": suggestions,
+        },
+        None,
+    )
 
 
 @inspect_app.command(name="stack-homes")
@@ -17545,6 +17678,142 @@ def _score_source_candidate_real_tree(
                 result[1],
                 stack_slot_localizer,
                 stack_slot_error,
+                checkdiff_payload,
+            )
+        finally:
+            if applied:
+                if status is not None:
+                    status("restoring source")
+                restore_error = _restore_source_snapshot(target_path, original)
+            _unregister_active_source_restore(target_path)
+            if restore_error:
+                print(f"[source-restore] {restore_error}", file=sys.stderr)
+            elif applied:
+                try:
+                    if status is not None:
+                        status(
+                            f"cleanup rebuild {obj_path} build/GALE01/report.json"
+                        )
+                    subprocess.run(
+                        ["ninja", obj_path, "build/GALE01/report.json"],
+                        cwd=melee_root,
+                        capture_output=True,
+                        timeout=timeout,
+                    )
+                except subprocess.TimeoutExpired:
+                    cleanup_error = (
+                        f"timed out restoring object/report after source restore: "
+                        f"ninja {obj_path} build/GALE01/report.json"
+                    )
+                except Exception:
+                    cleanup_error = (
+                        "failed to rebuild object/report after source restore"
+                    )
+                if cleanup_error is None and status is not None:
+                    status("cleanup rebuild complete")
+            if restore_error:
+                raise RuntimeError(restore_error)
+            if cleanup_error:
+                raise RuntimeError(cleanup_error)
+
+
+def _score_whole_source_candidate_no_name_magic(
+    path: Path,
+    *,
+    function: str,
+    melee_root: Path,
+    timeout: float | None = None,
+    status: Callable[[str], None] | None = None,
+) -> _NameMagicWholeSourceScore:
+    unit = _find_unit_for_function(function, melee_root)
+    if unit is None:
+        return _NameMagicWholeSourceScore(
+            None,
+            f"function not found in report.json: {function}",
+            None,
+        )
+    target_path = melee_root / "src" / f"{unit}.c"
+    if not target_path.exists():
+        return _NameMagicWholeSourceScore(
+            None,
+            f"target source not found: {target_path}",
+            None,
+        )
+    if status is not None:
+        status("waiting for source-scoring lock")
+    with _acquire_source_score_repo_lock(melee_root):
+        if status is not None:
+            status("source-scoring lock acquired")
+        candidate_text = path.read_text(encoding="utf-8", errors="replace")
+        original = target_path.read_text(encoding="utf-8", errors="replace")
+        obj_path = f"build/GALE01/src/{unit}.o"
+        _register_active_source_restore(target_path, original)
+        applied = False
+        restore_error: str | None = None
+        cleanup_error: str | None = None
+        try:
+            if status is not None:
+                status(f"applying whole-file candidate to src/{unit}.c")
+            target_path.write_text(candidate_text, encoding="utf-8")
+            applied = True
+            if status is not None:
+                status(f"building {obj_path}")
+            build_result, retried = _run_ninja_with_no_diag_retry(
+                ["ninja", obj_path],
+                melee_root,
+                timeout=timeout,
+            )
+            if build_result.returncode != 0:
+                return _NameMagicWholeSourceScore(
+                    None,
+                    _failure_diagnostic_or_fallback(
+                        build_result.stdout,
+                        build_result.stderr,
+                        fallback=(
+                            f"ninja {obj_path} failed with exit "
+                            f"{build_result.returncode}"
+                            + (" after retry" if retried else "")
+                        ),
+                    ),
+                    None,
+                )
+            if status is not None:
+                status("build complete; refreshing report.json")
+            match_percent, match_error = _refresh_match_pct_after_successful_build(
+                unit,
+                function,
+                melee_root,
+                timeout=timeout,
+            )
+            if match_error is not None:
+                return _NameMagicWholeSourceScore(
+                    match_percent,
+                    match_error,
+                    None,
+                )
+            if status is not None:
+                status("running checkdiff --no-name-magic")
+            checkdiff_payload, checkdiff_error = _run_checkdiff_no_name_magic_json(
+                function,
+                melee_root=melee_root,
+                timeout=timeout,
+                no_build=True,
+            )
+            if checkdiff_error is not None:
+                return _NameMagicWholeSourceScore(
+                    match_percent,
+                    checkdiff_error,
+                    None,
+                    checkdiff_payload,
+                )
+            return _NameMagicWholeSourceScore(
+                match_percent,
+                None,
+                (
+                    checkdiff_payload.get("match") is True
+                    if checkdiff_payload is not None
+                    else None
+                ),
                 checkdiff_payload,
             )
         finally:
@@ -20924,6 +21193,503 @@ def mutate_indexed_struct_search_cmd(
             print(f"  error: {variant['error']}")
         if variant.get("source_retained"):
             print(f"  source: {variant['source_retained']}")
+
+
+def _name_magic_source_stop_condition(
+    kind: str,
+    *,
+    blocker: str | None,
+    reason: str,
+) -> dict[str, str | None]:
+    return {"kind": kind, "blocker": blocker, "reason": reason}
+
+
+def _name_magic_source_evidence_payload(
+    *,
+    parsed: Any,
+    checkdiff_payload: Mapping[str, Any],
+    object_evidence: Mapping[str, Any],
+) -> dict[str, Any]:
+    anonymous_sdata2 = object_evidence.get("anonymous_sdata2")
+    if isinstance(anonymous_sdata2, Mapping):
+        anonymous_payload = list(anonymous_sdata2.values())
+    else:
+        anonymous_payload = []
+    suggestions = object_evidence.get("name_magic_suggestions")
+    return {
+        "raw_relocations": [
+            dict(relocation.__dict__) for relocation in parsed.relocations
+        ],
+        "residual_diff_count": parsed.residual_diff_count,
+        "classification": checkdiff_payload.get("classification"),
+        "anonymous_sdata2": anonymous_payload,
+        "name_magic_suggestions": (
+            list(suggestions) if isinstance(suggestions, list) else []
+        ),
+    }
+
+
+def _name_magic_source_blocked_payload(
+    *,
+    function: str,
+    source: Path | None,
+    blocker: str,
+    reason: str,
+    evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "function": function,
+        "source": str(source) if source is not None else None,
+        "generated_source_dir": None,
+        "probe_count": 0,
+        "blocker": blocker,
+        "stop_condition": _name_magic_source_stop_condition(
+            "blocked",
+            blocker=blocker,
+            reason=reason,
+        ),
+        "probes": [],
+        "variants": [],
+    }
+    if evidence is not None:
+        payload["evidence"] = evidence
+    return payload
+
+
+def _name_magic_source_match_percent(variant: Mapping[str, Any]) -> float | None:
+    value = variant.get("final_match_percent")
+    if value is None:
+        value = variant.get("match_percent")
+    return float(value) if isinstance(value, (int, float)) else None
+
+
+def _rank_name_magic_source_variants(
+    variants: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    ranked = list(variants)
+    ranked.sort(
+        key=lambda variant: (
+            0
+            if variant.get("status") == "ok"
+            and variant.get("no_name_magic_match") is True
+            else 1,
+            0
+            if variant.get("status") == "ok"
+            and _name_magic_source_match_percent(variant) == 100.0
+            else 1,
+            0 if variant.get("status") == "ok" else 1,
+            -(
+                _name_magic_source_match_percent(variant)
+                if _name_magic_source_match_percent(variant) is not None
+                else -1.0
+            ),
+            str(variant.get("label") or ""),
+        )
+    )
+    return ranked
+
+
+_NAME_MAGIC_SOURCE_CANDIDATE_OPERATORS = {
+    "data-symbol-static-to-global",
+    "sdata2-named-float-load",
+    "name-magic-source-combined",
+}
+
+
+@mutate_app.command(name="name-magic-source-declarations")
+def mutate_name_magic_source_declarations_cmd(
+    function: Annotated[
+        str,
+        typer.Option(
+            "--function",
+            "-f",
+            help="Function to explore.",
+        ),
+    ],
+    source_file: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--source-file",
+            help="Source file used to generate name-magic source probes.",
+        ),
+    ] = None,
+    candidates: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--candidate",
+            help=(
+                "Candidate source to score, repeatable. Format "
+                "OPERATOR=path or LABEL:OPERATOR=path."
+            ),
+        ),
+    ] = None,
+    compile_probes: Annotated[
+        bool,
+        typer.Option(
+            "--compile-probes/--no-compile-probes",
+            help="Compile generated name-magic source probes.",
+        ),
+    ] = True,
+    score_match_percent: Annotated[
+        bool,
+        typer.Option(
+            "--score-match-percent/--no-score-match-percent",
+            help=(
+                "For source candidates, temporarily apply the whole candidate "
+                "file in the real tree and validate with --no-name-magic."
+            ),
+        ),
+    ] = True,
+    max_probes: Annotated[
+        int,
+        typer.Option(
+            "--max-probes",
+            help="Maximum generated probes to list or compile.",
+        ),
+    ] = 12,
+    timeout: Annotated[
+        int,
+        typer.Option(
+            "--timeout",
+            help="Per-candidate compile timeout in seconds.",
+        ),
+    ] = 120,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit as JSON."),
+    ] = False,
+) -> None:
+    """Generate source declarations/references for name-magic relocation mismatches.
+
+    Common switches: --score-match-percent, --no-score-match-percent,
+    --compile-probes.
+    """
+    from ..mwcc_debug.name_magic_source import (
+        NameMagicBlocker,
+        generate_name_magic_source_probes,
+        parse_name_magic_relocation_evidence,
+    )
+
+    melee_root = DEFAULT_MELEE_ROOT
+    candidate_specs = candidates or []
+    resolved_source: Path | None = None
+    source_text: str | None = None
+    unit = _find_unit_for_function(function, melee_root)
+
+    if source_file is not None:
+        resolved_source = _resolve_existing_cli_file(
+            source_file,
+            melee_root=melee_root,
+            label="source file",
+        )
+        source_text = resolved_source.read_text(
+            encoding="utf-8",
+            errors="replace",
+        )
+    elif unit is not None:
+        candidate_source = melee_root / "src" / f"{unit}.c"
+        if candidate_source.exists():
+            resolved_source = candidate_source
+            source_text = candidate_source.read_text(
+                encoding="utf-8",
+                errors="replace",
+            )
+
+    def _emit(payload: dict[str, Any]) -> None:
+        if json_out:
+            print(json.dumps(payload, indent=2))
+            return
+        print("name-magic-source-declarations")
+        print(f"function: {function}")
+        print(f"source: {payload.get('source')}")
+        stop = payload.get("stop_condition") or {}
+        print(
+            f"stop: {stop.get('kind')}"
+            + (f" ({stop.get('blocker')})" if stop.get("blocker") else "")
+        )
+        if payload.get("generated_source_dir"):
+            print(f"generated_source_dir: {payload['generated_source_dir']}")
+        for variant in payload.get("variants", []):
+            line = (
+                f"- {variant['label']} [{variant['operator']}] "
+                f"{variant['status']}"
+            )
+            if variant.get("final_match_percent") is not None:
+                line += f" match={variant['final_match_percent']:.6g}"
+            if variant.get("no_name_magic_match") is not None:
+                line += f" no-name-magic={variant['no_name_magic_match']}"
+            print(line)
+            if variant.get("error"):
+                print(f"  error: {variant['error']}")
+
+    if source_text is None and not candidate_specs:
+        _emit(
+            _name_magic_source_blocked_payload(
+                function=function,
+                source=None,
+                blocker="source-unavailable",
+                reason="source file could not be resolved",
+            )
+        )
+        return
+
+    checkdiff_payload, checkdiff_error = _run_checkdiff_no_name_magic_json(
+        function,
+        melee_root=melee_root,
+        timeout=timeout,
+        no_build=False,
+    )
+    if checkdiff_error is not None or checkdiff_payload is None:
+        _emit(
+            _name_magic_source_blocked_payload(
+                function=function,
+                source=resolved_source,
+                blocker=NameMagicBlocker.NO_NAME_MAGIC_VALIDATION_FAILED.value,
+                reason=(
+                    checkdiff_error
+                    or "checkdiff --no-name-magic did not produce JSON"
+                ),
+            )
+        )
+        return
+
+    if unit is None and not candidate_specs:
+        _emit(
+            _name_magic_source_blocked_payload(
+                function=function,
+                source=resolved_source,
+                blocker="source-unavailable",
+                reason="source unit could not be resolved from report.json",
+            )
+        )
+        return
+
+    if unit is not None:
+        object_evidence, object_error = _name_magic_object_evidence(
+            unit,
+            melee_root,
+        )
+        if object_error is not None or object_evidence is None:
+            _emit(
+                _name_magic_source_blocked_payload(
+                    function=function,
+                    source=resolved_source,
+                    blocker=object_error or "object-evidence-unavailable",
+                    reason=object_error or "object evidence could not be read",
+                )
+            )
+            return
+    else:
+        object_evidence = {
+            "anonymous_sdata2": {},
+            "name_magic_suggestions": [],
+        }
+
+    parsed = parse_name_magic_relocation_evidence(checkdiff_payload)
+    evidence = _name_magic_source_evidence_payload(
+        parsed=parsed,
+        checkdiff_payload=checkdiff_payload,
+        object_evidence=object_evidence,
+    )
+
+    classification = checkdiff_payload.get("classification")
+    anonymous_sdata2 = object_evidence.get("anonymous_sdata2")
+    has_anonymous_sdata2 = (
+        isinstance(anonymous_sdata2, Mapping) and bool(anonymous_sdata2)
+    )
+    if (
+        parsed.blocker
+        == NameMagicBlocker.RAW_DIFF_NO_SUPPORTED_DATA_SYMBOL_PAIR
+        and isinstance(classification, Mapping)
+        and classification.get("primary") == "data-symbol-or-relocation"
+        and has_anonymous_sdata2
+        and not candidate_specs
+    ):
+        _emit(
+            _name_magic_source_blocked_payload(
+                function=function,
+                source=resolved_source,
+                blocker=NameMagicBlocker.SDATA2_POOL_ORDER_DEPENDENT.value,
+                reason=(
+                    ".sdata2 anonymous pool order evidence was present, but "
+                    "checkdiff did not expose a same-offset source-addressable "
+                    "relocation pair"
+                ),
+                evidence=evidence,
+            )
+        )
+        return
+
+    probes = []
+    probe_blocker = parsed.blocker
+    if source_text is not None and parsed.blocker is None:
+        probes, probe_blocker = generate_name_magic_source_probes(
+            source_text,
+            function,
+            checkdiff_payload,
+            object_evidence["anonymous_sdata2"],
+            max_probes=max_probes,
+        )
+    probes = probes[:max_probes]
+
+    if probe_blocker is not None and not probes and not candidate_specs:
+        _emit(
+            _name_magic_source_blocked_payload(
+                function=function,
+                source=resolved_source,
+                blocker=probe_blocker.value,
+                reason=getattr(parsed, "reason", None) or probe_blocker.value,
+                evidence=evidence,
+            )
+        )
+        return
+
+    generated_source_dir: Path | None = None
+    generated_probe_paths: dict[str, Path] = {}
+    if probes and (json_out or compile_probes):
+        generated_source_dir = Path(
+            tempfile.mkdtemp(prefix="name-magic-source-declarations-")
+        )
+        for probe in probes:
+            path = generated_source_dir / f"{probe.label}.c"
+            path.write_text(probe.source_text, encoding="utf-8")
+            generated_probe_paths[probe.label] = path
+
+    probe_payloads = [probe.to_dict() for probe in probes]
+    probe_by_label = {probe.label: probe.to_dict() for probe in probes}
+    variants: list[dict[str, Any]] = []
+
+    def _score_candidate(
+        *,
+        label: str,
+        operator: str,
+        path: Path,
+        probe: dict[str, Any] | None = None,
+    ) -> None:
+        variant: dict[str, Any] = {
+            "label": label,
+            "operator": operator,
+            "status": "ok",
+            "path": str(path),
+            "source_retained": str(path) if path.suffix == ".c" else None,
+            "match_percent": None,
+            "final_match_percent": None,
+            "match_percent_error": None,
+            "no_name_magic_match": None,
+            "error": None,
+            "probe": probe,
+        }
+        try:
+            if path.suffix != ".c":
+                raise ValueError(f"expected .c source candidate, got {path}")
+            if score_match_percent:
+                status = (
+                    _make_real_score_status(
+                        "name-magic-source-declarations",
+                        label,
+                    )
+                    if not json_out
+                    else None
+                )
+                score = _score_whole_source_candidate_no_name_magic(
+                    path,
+                    function=function,
+                    melee_root=melee_root,
+                    timeout=timeout,
+                    status=status,
+                )
+                variant["match_percent"] = score.match_percent
+                variant["final_match_percent"] = score.match_percent
+                variant["match_percent_error"] = score.match_percent_error
+                variant["no_name_magic_match"] = score.no_name_magic_match
+                if score.checkdiff_payload is not None:
+                    variant["checkdiff_payload"] = score.checkdiff_payload
+                if score.match_percent_error is not None and (
+                    score.match_percent is None
+                    and score.no_name_magic_match is None
+                ):
+                    variant["status"] = "failed"
+                    variant["error"] = score.match_percent_error
+        except Exception as exc:
+            variant["status"] = "failed"
+            variant["error"] = str(exc)
+        variants.append(variant)
+
+    for spec in candidate_specs:
+        label, operator, path = _parse_lifetime_layout_candidate(spec)
+        if operator not in _NAME_MAGIC_SOURCE_CANDIDATE_OPERATORS:
+            raise typer.BadParameter(
+                "expected name-magic source candidate operator",
+                param_hint="--candidate",
+            )
+        _score_candidate(label=label, operator=operator, path=path)
+
+    if compile_probes:
+        for probe in probes:
+            path = generated_probe_paths.get(probe.label)
+            if path is None:
+                continue
+            _score_candidate(
+                label=probe.label,
+                operator=probe.operator,
+                path=path,
+                probe=probe_by_label.get(probe.label),
+            )
+
+    ranked_variants = _rank_name_magic_source_variants(variants)
+    validated = any(
+        variant.get("status") == "ok"
+        and _name_magic_source_match_percent(variant) == 100.0
+        and variant.get("no_name_magic_match") is True
+        for variant in ranked_variants
+    )
+    if validated:
+        blocker = None
+        stop_condition = _name_magic_source_stop_condition(
+            "validated",
+            blocker=None,
+            reason="validated candidate found",
+        )
+    elif ranked_variants:
+        blocker = NameMagicBlocker.NO_NAME_MAGIC_CANDIDATE.value
+        stop_condition = _name_magic_source_stop_condition(
+            "unvalidated",
+            blocker=blocker,
+            reason="no source candidate reached a true --no-name-magic match",
+        )
+    elif probes and not compile_probes and not candidate_specs:
+        blocker = NameMagicBlocker.NO_NAME_MAGIC_CANDIDATE.value
+        stop_condition = _name_magic_source_stop_condition(
+            "unvalidated",
+            blocker=blocker,
+            reason="safe name-magic probes were generated but not compiled",
+        )
+    else:
+        blocker = (
+            probe_blocker.value
+            if probe_blocker is not None
+            else NameMagicBlocker.NO_NAME_MAGIC_CANDIDATE.value
+        )
+        stop_condition = _name_magic_source_stop_condition(
+            "blocked",
+            blocker=blocker,
+            reason=blocker,
+        )
+
+    payload = {
+        "function": function,
+        "source": str(resolved_source) if resolved_source is not None else None,
+        "generated_source_dir": (
+            str(generated_source_dir) if generated_source_dir is not None else None
+        ),
+        "probe_count": len(probes),
+        "blocker": blocker,
+        "stop_condition": stop_condition,
+        "evidence": evidence,
+        "probes": probe_payloads,
+        "variants": ranked_variants,
+    }
+    _emit(payload)
 
 
 @mutate_app.command(name="frame-transform-search")

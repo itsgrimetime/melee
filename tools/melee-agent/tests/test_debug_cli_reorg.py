@@ -103,6 +103,346 @@ def test_indexed_struct_search_help_works() -> None:
     assert "--compile-probes" in result.output
 
 
+def test_name_magic_source_declarations_help_is_available() -> None:
+    result = runner.invoke(
+        app,
+        ["debug", "mutate", "name-magic-source-declarations", "--help"],
+    )
+
+    assert result.exit_code == 0
+    assert "--score-match-percent" in result.output
+    assert "--no-score-match-percent" in result.output
+    assert "--compile-probes" in result.output
+
+
+def test_name_magic_source_declarations_json_blocks_without_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.cli import debug as debug_cli
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, melee_root: None,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "name-magic-source-declarations",
+            "-f",
+            "fn_80000000",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["function"] == "fn_80000000"
+    assert payload["blocker"] == "source-unavailable"
+    assert payload["stop_condition"]["kind"] == "blocked"
+
+
+def test_name_magic_source_declarations_json_blocks_when_current_object_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from src.cli import debug as debug_cli
+
+    repo = tmp_path / "repo"
+    source = repo / "src" / "melee" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text("void fn_80000000(void) {}\n", encoding="utf-8")
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", repo)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, melee_root: "melee/demo",
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_run_checkdiff_no_name_magic_json",
+        lambda *args, **kwargs: (
+            {
+                "diff": [
+                    "-+010: R_PPC_EMB_SDA21\tmn_804DBDA8",
+                    "++010: R_PPC_EMB_SDA21\t@267",
+                ],
+                "classification": {"primary": "data-symbol-or-relocation"},
+            },
+            None,
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "name-magic-source-declarations",
+            "-f",
+            "fn_80000000",
+            "--source-file",
+            str(source),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["blocker"] == "current-object-missing"
+    assert payload["stop_condition"]["kind"] == "blocked"
+
+
+def test_name_magic_source_declarations_json_blocks_when_target_object_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from src.cli import debug as debug_cli
+
+    repo = tmp_path / "repo"
+    source = repo / "src" / "melee" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text("void fn_80000000(void) {}\n", encoding="utf-8")
+    current_obj = repo / "build" / "GALE01" / "src" / "melee" / "demo.o"
+    current_obj.parent.mkdir(parents=True)
+    current_obj.write_bytes(b"fake")
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", repo)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, melee_root: "melee/demo",
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_run_checkdiff_no_name_magic_json",
+        lambda *args, **kwargs: (
+            {
+                "diff": [
+                    "-+010: R_PPC_EMB_SDA21\tmn_804DBDA8",
+                    "++010: R_PPC_EMB_SDA21\t@267",
+                ],
+                "classification": {"primary": "data-symbol-or-relocation"},
+            },
+            None,
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "name-magic-source-declarations",
+            "-f",
+            "fn_80000000",
+            "--source-file",
+            str(source),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["blocker"] == "target-object-missing"
+    assert payload["stop_condition"]["kind"] == "blocked"
+
+
+def test_name_magic_source_declarations_json_blocks_when_no_name_magic_validation_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from src.cli import debug as debug_cli
+
+    source = tmp_path / "demo.c"
+    source.write_text("void fn_80000000(void) {}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        debug_cli,
+        "_run_checkdiff_no_name_magic_json",
+        lambda *args, **kwargs: (
+            None,
+            "checkdiff --no-name-magic emitted non-json",
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "name-magic-source-declarations",
+            "-f",
+            "fn_80000000",
+            "--source-file",
+            str(source),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["blocker"] == "no-name-magic-validation-failed"
+    assert payload["stop_condition"]["kind"] == "blocked"
+
+
+def test_name_magic_source_declarations_json_reports_sdata2_pool_order_blocker(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from src.cli import debug as debug_cli
+
+    repo = tmp_path / "repo"
+    source = repo / "src" / "melee" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text("void fn_80000000(void) { sink(0.0F); }\n", encoding="utf-8")
+    current_obj = repo / "build" / "GALE01" / "src" / "melee" / "demo.o"
+    target_obj = repo / "build" / "GALE01" / "obj" / "melee" / "demo.o"
+    current_obj.parent.mkdir(parents=True)
+    target_obj.parent.mkdir(parents=True)
+    current_obj.write_bytes(b"fake")
+    target_obj.write_bytes(b"fake")
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", repo)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, melee_root: "melee/demo",
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_run_checkdiff_no_name_magic_json",
+        lambda *args, **kwargs: (
+            {
+                "diff": [
+                    "-+010: R_PPC_EMB_SDA21\tmn_804DBDA8",
+                    "++010: R_PPC_EMB_SDA21\tlbl_804D0000",
+                ],
+                "classification": {"primary": "data-symbol-or-relocation"},
+            },
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_name_magic_object_evidence",
+        lambda unit, melee_root: (
+            {
+                "anonymous_sdata2": {
+                    "@267": {"size": 4, "float": 0.0, "value": 0}
+                },
+                "name_magic_suggestions": [],
+            },
+            None,
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "name-magic-source-declarations",
+            "-f",
+            "fn_80000000",
+            "--source-file",
+            str(source),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["blocker"] == "sdata2-pool-order-dependent"
+    assert payload["stop_condition"]["kind"] == "blocked"
+
+
+def test_name_magic_source_declarations_candidate_requires_no_name_magic_match(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from src.cli import debug as debug_cli
+
+    source = tmp_path / "candidate.c"
+    source.write_text("void fn_80000000(void) {}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, melee_root: "melee/demo",
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_run_checkdiff_no_name_magic_json",
+        lambda *args, **kwargs: (
+            {
+                "diff": [
+                    "-+010: R_PPC_EMB_SDA21\tmn_804DBDA8",
+                    "++010: R_PPC_EMB_SDA21\t@267",
+                ],
+                "classification": {"primary": "data-symbol-or-relocation"},
+            },
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_name_magic_object_evidence",
+        lambda unit, melee_root: (
+            {
+                "anonymous_sdata2": {
+                    "@267": {"size": 4, "float": 0.0, "value": 0}
+                },
+                "name_magic_suggestions": [
+                    {
+                        "anonymous": "@267",
+                        "size": 4,
+                        "value": 0,
+                        "target": "mn_804DBDA8",
+                    }
+                ],
+            },
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_score_whole_source_candidate_no_name_magic",
+        lambda *args, **kwargs: debug_cli._NameMagicWholeSourceScore(
+            100.0,
+            None,
+            False,
+            {"match": False, "fuzzy_match_percent": 100.0},
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "name-magic-source-declarations",
+            "-f",
+            "fn_80000000",
+            "--source-file",
+            str(source),
+            "--candidate",
+            f"manual:sdata2-named-float-load={source}",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["variants"][0]["final_match_percent"] == 100.0
+    assert payload["variants"][0]["no_name_magic_match"] is False
+    assert payload["blocker"] == "no-name-magic-candidate"
+    assert payload["stop_condition"] == {
+        "kind": "unvalidated",
+        "blocker": "no-name-magic-candidate",
+        "reason": "no source candidate reached a true --no-name-magic match",
+    }
+
+
 def test_indexed_struct_search_json_reports_no_source(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
