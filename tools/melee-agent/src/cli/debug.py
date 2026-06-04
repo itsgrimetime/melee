@@ -3106,6 +3106,103 @@ def _get_asm_hunks(
     return hunks[:top_n]
 
 
+def _get_checkdiff_classification(
+    function: str,
+    melee_root: Path,
+) -> dict | None:
+    try:
+        proc = subprocess.run(
+            [
+                "python",
+                "tools/checkdiff.py",
+                function,
+                "--format",
+                "json",
+                "--no-build",
+                "--no-name-magic",
+                "--no-fingerprint",
+            ],
+            cwd=melee_root,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=_checkdiff_env_without_fingerprint(),
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode not in (0, 1) or not proc.stdout:
+        return None
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return None
+    classification = payload.get("classification")
+    return classification if isinstance(classification, dict) else None
+
+
+def _frame_residual_hint_from_checkdiff_classification(
+    function: str,
+    classification: dict | None,
+    *,
+    unit: str | None,
+) -> dict | None:
+    if not classification:
+        return None
+    primary = classification.get("primary")
+    reasons = classification.get("reasons") or []
+    reason_text = "\n".join(str(reason).lower() for reason in reasons)
+    src_arg = f"src/{unit}.c" if unit else "<source.c>"
+
+    if primary == "stack-layout" and (
+        "frame reservation gap" in reason_text
+        or "pad_stack" in reason_text
+        or "frame size" in reason_text
+    ):
+        return {
+            "kind": "frame-size",
+            "origin": "checkdiff-classification",
+            "subcategory": (
+                "frame-too-small" if "too small" in reason_text
+                else "frame-too-large" if "too large" in reason_text
+                else "frame-size-delta"
+            ),
+            "message": (
+                f"{function}: checkdiff reports a stack frame-size residual. "
+                "Decl-order probes can move local slots but cannot change the "
+                "reserved frame size, so prefer frame-reservation tools first."
+            ),
+            "summary": "frame-size residual from checkdiff classification",
+            "next_steps": [
+                f"melee-agent debug inspect frame-reservations -f {function}",
+                f"melee-agent debug suggest frame -f {function}",
+                (
+                    f"melee-agent debug dump local {src_arg} -f {function} "
+                    "--diff --force-frame-from-diff"
+                ),
+            ],
+        }
+
+    if primary == "stack-slot-layout":
+        return {
+            "kind": "same-frame-stack-slot-placement",
+            "origin": "checkdiff-classification",
+            "subcategory": "same-frame-stack-slot-placement",
+            "message": (
+                f"{function}: checkdiff reports same-frame stack-slot "
+                "placement differences. Prefer lifetime/layout probes; "
+                "decl-order search is usually neutral on this class."
+            ),
+            "summary": "same-frame stack-slot residual from checkdiff classification",
+            "next_steps": [
+                (
+                    f"melee-agent debug mutate lifetime-layout -f {function} "
+                    "--compile-probes"
+                ),
+            ],
+        }
+    return None
+
+
 def _format_asm_hunks(hunks: list[list[str]], max_lines_per_hunk: int = 12) -> str:
     """Render hunks compactly: cap each hunk at max_lines_per_hunk
     (with a '...(N more)' footer if truncated). Returns the formatted
@@ -8090,6 +8187,12 @@ def stuck(
         _default_decl_order_search_summary(src_text, function)
         if src_text else None
     )
+    checkdiff_classification = _get_checkdiff_classification(function, melee_root)
+    static_frame_residual_hint = _frame_residual_hint_from_checkdiff_classification(
+        function,
+        checkdiff_classification,
+        unit=unit,
+    )
 
     if pcdump_path is not None:
         text = pcdump_path.read_text()
@@ -8134,6 +8237,8 @@ def stuck(
             melee_root=melee_root,
             pcdump_path=pcdump_path,
         )
+    if frame_residual_hint is None:
+        frame_residual_hint = static_frame_residual_hint
 
     # Cast warnings — always run regardless of pcdump
     if src_text:
@@ -8181,10 +8286,20 @@ def stuck(
         decl_order_summary is not None
         and decl_order_summary["candidate_count"] > 0
     ):
-        next_steps.append(
-            "[~70sec] Run `melee-agent debug mutate decl-orders " + function +
-            "` — brute-forces the decl-order search space, finds 1-line wins."
-        )
+        if frame_residual_hint and frame_residual_hint.get("kind") in {
+            "frame-size",
+            "same-frame-stack-slot-placement",
+        }:
+            next_steps.append(
+                "[~70sec] Optional cheap probe: run `melee-agent debug mutate "
+                "decl-orders " + function + "` after the headline stack-layout "
+                "tool; decl-order search is often neutral on this class."
+            )
+        else:
+            next_steps.append(
+                "[~70sec] Run `melee-agent debug mutate decl-orders " + function +
+                "` — brute-forces the decl-order search space, finds 1-line wins."
+            )
         next_steps.append(
             "[minutes] Run `melee-agent debug inspect diagnose " + function +
             "` for a current-tooling diagnosis (combines force-phys evidence + "
@@ -8215,6 +8330,7 @@ def stuck(
     digest["coloring_summary"] = coloring_summary
     digest["guidance_issues"] = guidance_issues
     digest["cast_warnings"] = cast_warnings_high_med
+    digest["checkdiff_classification"] = checkdiff_classification
     digest["decl_order_summary"] = decl_order_summary
     digest["hsd_assert_strings"] = [
         {"sym": s, "string": v} for s, v in hsd_assert_strings

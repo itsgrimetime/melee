@@ -4237,6 +4237,128 @@ def test_inspect_stuck_suppresses_decl_orders_when_no_candidates(
     assert "debug inspect diagnose fn_80000000 --skip-decl-orders" in next_steps
 
 
+def test_inspect_stuck_routes_frame_size_rows_to_frame_tools(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text(
+        "void fn_80000000(void)\n"
+        "{\n"
+        "    int a;\n"
+        "    int b;\n"
+        "    a = 0;\n"
+        "    b = a;\n"
+        "}\n"
+    )
+
+    def fake_run(cmd, **kwargs):
+        cmd_s = [str(part) for part in cmd]
+        assert cmd_s[:2] == ["python", "tools/checkdiff.py"]
+        return SimpleNamespace(
+            returncode=1,
+            stdout=json.dumps(
+                {
+                    "classification": {
+                        "primary": "stack-layout",
+                        "reasons": [
+                            "frame reservation gap is too large; try PAD_STACK"
+                        ],
+                    }
+                }
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/mn/sample",
+    )
+    monkeypatch.setattr(debug_cli, "_get_match_pct", lambda function, root: 99.45)
+    monkeypatch.setattr(debug_cli, "audit_function_casts", lambda source, function: [])
+    monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        ["debug", "inspect", "stuck", "fn_80000000", "--no-pcdump", "--json"],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["frame_residual"]["kind"] == "frame-size"
+    assert payload["frame_residual"]["subcategory"] == "frame-too-large"
+    assert payload["next_steps"][0] == (
+        "melee-agent debug inspect frame-reservations -f fn_80000000"
+    )
+    assert "debug suggest frame -f fn_80000000" in payload["next_steps"][1]
+    joined = "\n".join(payload["next_steps"][:3])
+    assert "debug mutate decl-orders fn_80000000" not in joined
+    assert "Optional cheap probe" in "\n".join(payload["next_steps"])
+
+
+def test_inspect_stuck_routes_same_slot_rows_to_lifetime_layout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text(
+        "void fn_80000000(void)\n"
+        "{\n"
+        "    int a;\n"
+        "    int b;\n"
+        "    a = 0;\n"
+        "    b = a;\n"
+        "}\n"
+    )
+
+    def fake_run(cmd, **kwargs):
+        cmd_s = [str(part) for part in cmd]
+        assert cmd_s[:2] == ["python", "tools/checkdiff.py"]
+        return SimpleNamespace(
+            returncode=1,
+            stdout=json.dumps(
+                {
+                    "classification": {
+                        "primary": "stack-slot-layout",
+                        "reasons": [
+                            "2 differing paired lines reference stack slots"
+                        ],
+                    }
+                }
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/mn/sample",
+    )
+    monkeypatch.setattr(debug_cli, "_get_match_pct", lambda function, root: 99.45)
+    monkeypatch.setattr(debug_cli, "audit_function_casts", lambda source, function: [])
+    monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        ["debug", "inspect", "stuck", "fn_80000000", "--no-pcdump", "--json"],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["frame_residual"]["kind"] == "same-frame-stack-slot-placement"
+    assert payload["next_steps"][0] == (
+        "melee-agent debug mutate lifetime-layout -f fn_80000000 --compile-probes"
+    )
+    assert "Optional cheap probe" in "\n".join(payload["next_steps"])
+
+
 def test_tier3_search_no_improvement_is_successful_search_outcome(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
