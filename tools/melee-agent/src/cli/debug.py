@@ -3710,6 +3710,13 @@ def _print_frame_reservation_report(report: dict) -> None:
         verdict = first_divergence.get("verdict") or {}
         if verdict.get("status"):
             print(f"verdict: {verdict.get('status')} - {verdict.get('reason')}")
+        validated_verdict = first_divergence.get("validated_verdict") or {}
+        if validated_verdict.get("status"):
+            print(
+                "validated verdict: "
+                f"{validated_verdict.get('status')} - "
+                f"{validated_verdict.get('reason')}"
+            )
 
     current_low = report.get("current_low_frame_expansion")
     if current_low is not None:
@@ -3827,11 +3834,54 @@ def frame_reservations(
         report["frame_transform_probe_evaluation"] = (
             evaluate_frame_transform_probe_results(report, variants)
         )
+        _attach_frame_transform_validated_verdict(report)
 
     if json_out:
         print(json.dumps(report, indent=2))
         return
     _print_frame_reservation_report(report)
+
+
+def _attach_frame_transform_validated_verdict(report: dict) -> None:
+    first_divergence = report.get("frame_first_divergence")
+    evaluation = report.get("frame_transform_probe_evaluation")
+    if not isinstance(first_divergence, dict) or not isinstance(evaluation, Mapping):
+        return
+    verdict = evaluation.get("verdict")
+    stop_condition = evaluation.get("stop_condition")
+    if verdict == "source-reachable-frame-transform":
+        first_divergence["validated_verdict"] = {
+            "status": "source-reachable-validated",
+            "confidence": "high",
+            "probe_verdict": verdict,
+            "reason": (
+                "frame transform probe evidence validates a source-reachable "
+                "change for the first frame divergence"
+            ),
+            "stop_condition": stop_condition,
+        }
+    elif verdict == "partial-source-reachable-frame-transform":
+        first_divergence["validated_verdict"] = {
+            "status": "partial-source-reachable-validated",
+            "confidence": "medium",
+            "probe_verdict": verdict,
+            "reason": (
+                "frame transform probe evidence partially reduces the first "
+                "frame divergence"
+            ),
+            "stop_condition": stop_condition,
+        }
+    elif verdict == "frame-transform-ceiling-candidate":
+        first_divergence["validated_verdict"] = {
+            "status": "bounded-ceiling-candidate",
+            "confidence": "medium",
+            "probe_verdict": verdict,
+            "reason": (
+                "bounded frame-transform probes did not reduce the first "
+                "frame divergence"
+            ),
+            "stop_condition": stop_condition,
+        }
 
 
 def _frame_residual_hint_from_report(

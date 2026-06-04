@@ -463,6 +463,16 @@ def test_frame_reservations_cli_evaluates_probe_results_json(
     assert frame_evaluation["verdict"] == "source-reachable-frame-transform"
     assert frame_evaluation["stop_condition"]["kind"] == "validated-frame-transform"
     assert frame_evaluation["best_variant"]["label"] == "frame-shrink"
+    assert payload["frame_first_divergence"]["validated_verdict"] == {
+        "status": "source-reachable-validated",
+        "confidence": "high",
+        "probe_verdict": "source-reachable-frame-transform",
+        "reason": (
+            "frame transform probe evidence validates a source-reachable "
+            "change for the first frame divergence"
+        ),
+        "stop_condition": frame_evaluation["stop_condition"],
+    }
 
 
 def test_frame_reservations_cli_reports_current_low_expansion(tmp_path: Path) -> None:
