@@ -3567,6 +3567,13 @@ def _print_stack_home_order_summary(current: Mapping[str, object]) -> None:
     verdict = guidance.get("verdict")
     if verdict:
         print(f"reorder verdict: {verdict}")
+    validated_verdict = guidance.get("validated_verdict")
+    if isinstance(validated_verdict, Mapping) and validated_verdict.get("status"):
+        print(
+            "validated reorder verdict: "
+            f"{validated_verdict.get('status')} - "
+            f"{validated_verdict.get('reason')}"
+        )
     probe_plan = guidance.get("probe_plan")
     if isinstance(probe_plan, Mapping):
         operators = probe_plan.get("operator_priority")
@@ -3831,6 +3838,7 @@ def frame_reservations(
             report,
             variants,
         )
+        _attach_stack_home_validated_verdict(report)
         report["frame_transform_probe_evaluation"] = (
             evaluate_frame_transform_probe_results(report, variants)
         )
@@ -3840,6 +3848,48 @@ def frame_reservations(
         print(json.dumps(report, indent=2))
         return
     _print_frame_reservation_report(report)
+
+
+def _attach_stack_home_validated_verdict(report: dict) -> None:
+    current = report.get("current")
+    evaluation = report.get("stack_home_probe_evaluation")
+    if not isinstance(current, dict) or not isinstance(evaluation, Mapping):
+        return
+    guidance = current.get("stack_home_reorder_guidance")
+    if not isinstance(guidance, dict):
+        return
+    verdict = evaluation.get("verdict")
+    stop_condition = evaluation.get("stop_condition")
+    if verdict == "source-reachable-reorder":
+        guidance["validated_verdict"] = {
+            "status": "source-reachable-reorder",
+            "confidence": "high",
+            "probe_verdict": verdict,
+            "reason": (
+                "stack-home probe evidence validates a source-reachable reorder"
+            ),
+            "stop_condition": stop_condition,
+        }
+    elif verdict == "partial-source-reachable-reorder":
+        guidance["validated_verdict"] = {
+            "status": "partial-source-reachable-reorder",
+            "confidence": "medium",
+            "probe_verdict": verdict,
+            "reason": (
+                "stack-home probe evidence partially reorders target homes"
+            ),
+            "stop_condition": stop_condition,
+        }
+    elif verdict == "internal-tiebreak-ceiling-candidate":
+        guidance["validated_verdict"] = {
+            "status": "internal-tiebreak-ceiling-candidate",
+            "confidence": "medium",
+            "probe_verdict": verdict,
+            "reason": (
+                "bounded stack-home reorder probes left target placement unchanged"
+            ),
+            "stop_condition": stop_condition,
+        }
 
 
 def _attach_frame_transform_validated_verdict(report: dict) -> None:

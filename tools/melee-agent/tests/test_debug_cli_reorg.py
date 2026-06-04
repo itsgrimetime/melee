@@ -459,6 +459,16 @@ def test_frame_reservations_cli_evaluates_probe_results_json(
     assert evaluation["stop_condition"]["kind"] == "validated-source-reorder"
     assert evaluation["best_variant"]["label"] == "swap-cycle"
     assert evaluation["best_variant"]["target_fixed"] is True
+    guidance = payload["current"]["stack_home_reorder_guidance"]
+    assert guidance["validated_verdict"] == {
+        "status": "source-reachable-reorder",
+        "confidence": "high",
+        "probe_verdict": "source-reachable-reorder",
+        "reason": (
+            "stack-home probe evidence validates a source-reachable reorder"
+        ),
+        "stop_condition": evaluation["stop_condition"],
+    }
     frame_evaluation = payload["frame_transform_probe_evaluation"]
     assert frame_evaluation["verdict"] == "source-reachable-frame-transform"
     assert frame_evaluation["stop_condition"]["kind"] == "validated-frame-transform"
