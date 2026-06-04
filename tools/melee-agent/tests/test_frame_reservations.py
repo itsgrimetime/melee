@@ -299,36 +299,79 @@ def test_frame_reservation_reports_first_occupied_object_divergence() -> None:
     assert divergence["expected"]["start"] == 24
     assert divergence["cause_hypothesis"] == {
         "status": "heuristic",
-        "kind": "stack-object-offset-shift",
+        "kind": "lifetime-or-ordering-shift",
         "confidence": "medium",
         "reason": (
-            "current and expected stack objects have the same shape but "
-            "different offsets; inspect local lifetime, ordering, or alignment"
+            "attributed stack object has the same shape but different offsets; "
+            "inspect local lifetime, first-use order, address-taking, or alignment"
         ),
+        "source_object_symbol": "local_temp",
         "current_expected_offset_delta": 4,
         "frame_delta": 0,
     }
     assert divergence["source_attribution"] == {
-        "status": "symbolic-stack-home",
+        "status": "source-object-attributed",
+        "identity_kind": "symbolic-stack-home",
+        "confidence": "medium",
         "current_symbols": ["local_temp"],
         "expected_symbols": ["local_temp"],
+        "primary_source_object": {
+            "symbol": "local_temp",
+            "identity_kind": "symbolic-stack-home",
+            "side": "both",
+            "current_offset": 28,
+            "expected_offset": 24,
+            "offset_delta": 4,
+            "size": 4,
+            "kind": "local-or-temporary",
+            "opcodes": ["stw"],
+            "access_count": 1,
+            "first_access": {
+                "opcode": "stw",
+                "operands": "r8,local_temp(r1)",
+                "pass": "FINAL CODE AFTER INSTRUCTION SCHEDULING",
+                "block_idx": 0,
+                "instr_idx": 1,
+            },
+        },
+        "source_objects": [
+            {
+                "symbol": "local_temp",
+                "identity_kind": "symbolic-stack-home",
+                "side": "both",
+                "current_offset": 28,
+                "expected_offset": 24,
+                "offset_delta": 4,
+                "size": 4,
+                "kind": "local-or-temporary",
+                "opcodes": ["stw"],
+                "access_count": 1,
+                "first_access": {
+                    "opcode": "stw",
+                    "operands": "r8,local_temp(r1)",
+                    "pass": "FINAL CODE AFTER INSTRUCTION SCHEDULING",
+                    "block_idx": 0,
+                    "instr_idx": 1,
+                },
+            },
+        ],
         "reason": (
-            "diverging stack object maps to resolved symbolic stack homes; "
-            "ObjObject identity is still unavailable"
+            "diverging stack object maps to resolved symbolic stack-home identity"
         ),
     }
     assert divergence["verdict"] == {
         "status": "source-reachable-candidate",
         "reason": (
-            "heuristic cause stack-object-offset-shift is addressable by targeted "
-            "frame/lifetime source probes"
+            "heuristic cause lifetime-or-ordering-shift for local_temp is "
+            "addressable by targeted frame/lifetime source probes"
         ),
-        "confidence": "medium",
+            "confidence": "medium",
+        "source_object_symbol": "local_temp",
     }
     assert divergence["frame_transform_probe_plan"] == {
         "status": "ready",
         "objective": "reduce frame/local-area divergence toward expected",
-        "cause_kind": "stack-object-offset-shift",
+        "cause_kind": "lifetime-or-ordering-shift",
         "operator_priority": [
             "declaration-use-distance",
             "block-scope",
@@ -396,7 +439,14 @@ def test_frame_reservation_reports_frame_size_only_divergence() -> None:
         "status": "frame-size-only",
         "frame_delta": -8,
         "source_attribution": {
-            "status": "heuristic-no-source-object",
+            "status": "unattributed",
+            "identity_kind": None,
+            "confidence": "low",
+            "current_symbols": [],
+            "expected_symbols": [],
+            "primary_source_object": None,
+            "source_objects": [],
+            "unresolved_dependency": "mwcc-stack-home-origin-tags",
             "reason": (
                 "stack-object divergence is classified, but exact source object "
                 "identity requires MWCC stack-home origin instrumentation"
@@ -414,12 +464,14 @@ def test_frame_reservation_reports_frame_size_only_divergence() -> None:
             "frame_delta": -8,
         },
         "verdict": {
-            "status": "source-reachable-candidate",
+            "status": "unresolved-source-attribution",
             "reason": (
-                "heuristic cause extra-frame-reservation-or-alignment is "
-                "addressable by targeted frame/lifetime source probes"
+                "heuristic cause extra-frame-reservation-or-alignment needs "
+                "MWCC stack-home origin instrumentation or validating probe "
+                "evidence before source-reachable vs ceiling can be decided"
             ),
             "confidence": "medium",
+            "unresolved_dependency": "mwcc-stack-home-origin-tags",
         },
         "frame_transform_probe_plan": {
             "status": "ready",
@@ -999,6 +1051,28 @@ def test_frame_reservation_infers_expected_symbolic_stack_home_order() -> None:
             },
         ],
     }
+    divergence = report["frame_first_divergence"]
+    assert divergence["source_attribution"]["primary_source_object"] == {
+        "symbol": "c",
+        "identity_kind": "symbolic-stack-home",
+        "side": "both",
+        "current_offset": 0x28,
+        "expected_offset": 0x30,
+        "offset_delta": -0x8,
+        "size": 4,
+        "kind": "local-or-temporary",
+        "opcodes": ["stfs"],
+        "access_count": 1,
+        "first_access": {
+            "opcode": "stfs",
+            "operands": "f6,c(r1)",
+            "pass": "FINAL CODE AFTER INSTRUCTION SCHEDULING",
+            "block_idx": 0,
+            "instr_idx": 3,
+        },
+    }
+    assert divergence["source_attribution"]["confidence"] == "medium"
+    assert divergence["cause_hypothesis"]["source_object_symbol"] == "c"
     guidance = report["current"]["stack_home_reorder_guidance"]
     assert guidance["status"] == "source-reorder-probe-needed"
     assert guidance["verdict"] == "unknown-unvalidated"

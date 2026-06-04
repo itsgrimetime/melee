@@ -3679,6 +3679,31 @@ def _print_frame_reservation_report(report: dict) -> None:
             confidence = cause.get("confidence")
             suffix = f" ({confidence})" if confidence else ""
             print(f"cause: {cause.get('kind')}{suffix}")
+        attribution = first_divergence.get("source_attribution")
+        if isinstance(attribution, Mapping):
+            primary = attribution.get("primary_source_object")
+            if isinstance(primary, Mapping) and primary.get("symbol"):
+                current_offset = primary.get("current_offset")
+                expected_offset = primary.get("expected_offset")
+                current_text = (
+                    "?" if current_offset is None else f"0x{int(current_offset):x}"
+                )
+                expected_text = (
+                    "?" if expected_offset is None else f"0x{int(expected_offset):x}"
+                )
+                print(
+                    "source object: "
+                    f"{primary.get('symbol')} "
+                    f"({attribution.get('confidence')}, "
+                    f"{primary.get('kind')}, "
+                    f"{current_text}->{expected_text})"
+                )
+            elif attribution.get("status"):
+                print(
+                    "source object: "
+                    f"{attribution.get('status')} "
+                    f"({attribution.get('unresolved_dependency')})"
+                )
         probe_plan = first_divergence.get("frame_transform_probe_plan") or {}
         if isinstance(probe_plan, Mapping):
             operators = [
@@ -3922,16 +3947,42 @@ def _attach_frame_transform_validated_verdict(report: dict) -> None:
             "stop_condition": stop_condition,
         }
     elif verdict == "frame-transform-ceiling-candidate":
-        first_divergence["validated_verdict"] = {
-            "status": "bounded-ceiling-candidate",
-            "confidence": "medium",
-            "probe_verdict": verdict,
-            "reason": (
-                "bounded frame-transform probes did not reduce the first "
-                "frame divergence"
-            ),
-            "stop_condition": stop_condition,
-        }
+        attribution = first_divergence.get("source_attribution")
+        source_object = (
+            attribution.get("primary_source_object")
+            if isinstance(attribution, Mapping)
+            else None
+        )
+        if isinstance(source_object, Mapping) and source_object.get("symbol"):
+            first_divergence["validated_verdict"] = {
+                "status": "attributed-frame-unchanged",
+                "confidence": "medium",
+                "probe_verdict": verdict,
+                "reason": (
+                    "bounded frame-size transform probes left the frame delta "
+                    "unchanged for an attributed source-object divergence"
+                ),
+                "source_object_symbol": source_object.get("symbol"),
+                "stop_condition": stop_condition,
+            }
+        else:
+            unresolved_dependency = (
+                attribution.get("unresolved_dependency")
+                if isinstance(attribution, Mapping)
+                else "mwcc-stack-home-origin-tags"
+            )
+            first_divergence["validated_verdict"] = {
+                "status": "internal-tiebreak-ceiling",
+                "confidence": "medium",
+                "probe_verdict": verdict,
+                "reason": (
+                    "bounded frame transform probes left an unattributed "
+                    "divergence unchanged; likely compiler-internal layout "
+                    "tiebreak or missing stack-home origin instrumentation"
+                ),
+                "unresolved_dependency": unresolved_dependency,
+                "stop_condition": stop_condition,
+            }
 
 
 def _frame_residual_hint_from_report(

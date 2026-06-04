@@ -486,6 +486,213 @@ def test_frame_reservations_cli_evaluates_probe_results_json(
     }
 
 
+def test_frame_reservations_cli_ceiling_with_source_object_is_frame_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    pcdump = tmp_path / "pcdump.txt"
+    pcdump.write_text(textwrap.dedent("""\
+        Starting function fn_80000003
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        fn_80000003
+        B0: Succ={} Pred={} Labels={}
+            stwu    r1,-80(r1)
+            stfs    f4,a(r1)
+            addi    r1,r1,80
+    """))
+    expected = tmp_path / "expected.s"
+    expected.write_text(textwrap.dedent("""\
+        .fn fn_80000003, global
+        /* 80000000 */    stwu r1, -72(r1)
+        /* 80000004 */    stfs f4, 40(r1)
+        /* 80000008 */    addi r1, r1, 72
+        .endfn fn_80000003
+    """))
+    probe_results = tmp_path / "probes.json"
+    probe_results.write_text(json.dumps({
+        "variants": [
+            {
+                "label": "unchanged",
+                "operator": "block-scope",
+                "status": "ok",
+                "objective": {"frame_after": 80},
+            }
+        ]
+    }))
+    current_asm = textwrap.dedent("""\
+        +000: 94 21 ff b0 \tstwu    r1,-80(r1)
+        +004: d0 81 00 30 \tstfs    f4,48(r1)
+        +008: 38 21 00 50 \taddi    r1,r1,80
+    """)
+    monkeypatch.setattr(
+        debug_cli,
+        "_read_frame_reservation_current_asm",
+        lambda function, melee_root=None: current_asm,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "frame-reservations",
+            "-f",
+            "fn_80000003",
+            str(pcdump),
+            "--expected-asm",
+            str(expected),
+            "--probe-results-json",
+            str(probe_results),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["frame_transform_probe_evaluation"]["verdict"] == (
+        "frame-transform-ceiling-candidate"
+    )
+    assert payload["frame_first_divergence"]["source_attribution"]["status"] == (
+        "source-object-attributed"
+    )
+    assert payload["frame_first_divergence"]["validated_verdict"] == {
+        "status": "attributed-frame-unchanged",
+        "confidence": "medium",
+        "probe_verdict": "frame-transform-ceiling-candidate",
+        "reason": (
+            "bounded frame-size transform probes left the frame delta unchanged "
+            "for an attributed source-object divergence"
+        ),
+        "source_object_symbol": "a",
+        "stop_condition": payload["frame_transform_probe_evaluation"]["stop_condition"],
+    }
+
+
+def test_frame_reservations_cli_ceiling_without_source_object_is_internal(
+    tmp_path: Path,
+) -> None:
+    pcdump = tmp_path / "pcdump.txt"
+    pcdump.write_text(textwrap.dedent("""\
+        Starting function fn_80000004
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        fn_80000004
+        B0: Succ={} Pred={} Labels={}
+            stwu    r1,-80(r1)
+            stw     r8,48(r1)
+            addi    r1,r1,80
+    """))
+    expected = tmp_path / "expected.s"
+    expected.write_text(textwrap.dedent("""\
+        .fn fn_80000004, global
+        /* 80000000 */    stwu r1, -72(r1)
+        /* 80000004 */    stw r8, 40(r1)
+        /* 80000008 */    addi r1, r1, 72
+        .endfn fn_80000004
+    """))
+    probe_results = tmp_path / "probes.json"
+    probe_results.write_text(json.dumps({
+        "variants": [
+            {
+                "label": "unchanged",
+                "operator": "block-scope",
+                "status": "ok",
+                "objective": {"frame_after": 80},
+            }
+        ]
+    }))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "frame-reservations",
+            "-f",
+            "fn_80000004",
+            str(pcdump),
+            "--expected-asm",
+            str(expected),
+            "--probe-results-json",
+            str(probe_results),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["frame_transform_probe_evaluation"]["verdict"] == (
+        "frame-transform-ceiling-candidate"
+    )
+    assert payload["frame_first_divergence"]["source_attribution"]["status"] == (
+        "unattributed"
+    )
+    assert payload["frame_first_divergence"]["validated_verdict"] == {
+        "status": "internal-tiebreak-ceiling",
+        "confidence": "medium",
+        "probe_verdict": "frame-transform-ceiling-candidate",
+        "reason": (
+            "bounded frame transform probes left an unattributed divergence "
+            "unchanged; likely compiler-internal layout tiebreak or missing "
+            "stack-home origin instrumentation"
+        ),
+        "unresolved_dependency": "mwcc-stack-home-origin-tags",
+        "stop_condition": payload["frame_transform_probe_evaluation"]["stop_condition"],
+    }
+
+
+def test_frame_reservations_cli_text_reports_primary_source_object(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    pcdump = tmp_path / "pcdump.txt"
+    pcdump.write_text(textwrap.dedent("""\
+        Starting function fn_80000005
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        fn_80000005
+        B0: Succ={} Pred={} Labels={}
+            stwu    r1,-80(r1)
+            stfs    f4,a(r1)
+            addi    r1,r1,80
+    """))
+    expected = tmp_path / "expected.s"
+    expected.write_text(textwrap.dedent("""\
+        .fn fn_80000005, global
+        /* 80000000 */    stwu r1, -72(r1)
+        /* 80000004 */    stfs f4, 40(r1)
+        /* 80000008 */    addi r1, r1, 72
+        .endfn fn_80000005
+    """))
+    current_asm = textwrap.dedent("""\
+        +000: 94 21 ff b0 \tstwu    r1,-80(r1)
+        +004: d0 81 00 30 \tstfs    f4,48(r1)
+        +008: 38 21 00 50 \taddi    r1,r1,80
+    """)
+    monkeypatch.setattr(
+        debug_cli,
+        "_read_frame_reservation_current_asm",
+        lambda function, melee_root=None: current_asm,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "frame-reservations",
+            "-f",
+            "fn_80000005",
+            str(pcdump),
+            "--expected-asm",
+            str(expected),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    out = strip_ansi(result.stdout)
+    assert "cause: lifetime-or-ordering-shift (medium)" in out
+    assert "source object: a (medium, local-or-temporary, 0x30->0x28)" in out
+
+
 def test_frame_reservations_cli_reports_current_low_expansion(tmp_path: Path) -> None:
     pcdump = tmp_path / "pcdump.txt"
     pcdump.write_text(textwrap.dedent("""\
@@ -550,7 +757,8 @@ def test_frame_reservations_cli_reports_current_low_expansion(tmp_path: Path) ->
     assert (
         "next frame probe: melee-agent debug suggest frame -f gm_801A9DD0 --json"
     ) in result.stdout
-    assert "verdict: source-reachable-candidate" in result.stdout
+    assert "source object: unattributed (mwcc-stack-home-origin-tags)" in result.stdout
+    assert "verdict: unresolved-source-attribution" in result.stdout
     assert "current low-frame expansion: 0x18-0x1c (4 bytes)" in result.stdout
     assert "alignment growth bytes: 4" in result.stdout
     assert "current non-save stack accesses in range: none" in result.stdout

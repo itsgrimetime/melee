@@ -809,6 +809,7 @@ def _stack_objects(
     opcodes_by_range: dict[tuple[int, int, str], set[str]] = {}
     symbols_by_range: dict[tuple[int, int, str], set[str]] = {}
     expected_symbols_by_range: dict[tuple[int, int, str], set[str]] = {}
+    first_access_by_range: dict[tuple[int, int, str], dict] = {}
     for trace in access_traces:
         if trace.get("pre_frame"):
             continue
@@ -828,6 +829,13 @@ def _stack_objects(
         key = (start, end, kind)
         access_count_by_range[key] = access_count_by_range.get(key, 0) + 1
         opcodes_by_range.setdefault(key, set()).add(str(trace.get("opcode") or ""))
+        first_access_by_range.setdefault(key, {
+            "opcode": trace.get("opcode"),
+            "operands": trace.get("original_operands") or trace.get("operands"),
+            "pass": trace.get("pass"),
+            "block_idx": trace.get("block_idx"),
+            "instr_idx": trace.get("instr_idx"),
+        })
         symbol = trace.get("symbolic_home")
         if isinstance(symbol, str) and symbol:
             symbols_by_range.setdefault(key, set()).add(symbol)
@@ -860,9 +868,17 @@ def _stack_objects(
         source_symbols = sorted(symbols_by_range.get(key, set()))
         if source_symbols:
             obj["source_symbols"] = source_symbols
+            first_access = first_access_by_range.get(key)
+            if first_access is not None:
+                obj["first_access"] = first_access
         expected_source_symbols = sorted(expected_symbols_by_range.get(key, set()))
         if expected_source_symbols:
             obj["expected_source_symbols"] = expected_source_symbols
+            obj["expected_source_offsets"] = {
+                symbol: expected_symbolic_offsets[symbol]
+                for symbol in expected_source_symbols
+                if symbol in expected_symbolic_offsets
+            }
         objects.append(obj)
     for item in unused_ranges:
         objects.append({
@@ -1482,24 +1498,31 @@ def _first_stack_object_divergence(
         exp = expected_objects[index] if index < len(expected_objects) else None
         if cur == exp:
             continue
-        cause = _frame_divergence_cause_hypothesis(cur, exp, frame_delta)
+        attribution = _source_attribution(cur, exp)
+        cause = _frame_divergence_cause_hypothesis(
+            cur,
+            exp,
+            frame_delta,
+            attribution=attribution,
+        )
         return {
             "status": "diverged",
             "index": index,
             "reason": _stack_object_divergence_reason(cur, exp),
             "current": cur,
             "expected": exp,
-            "source_attribution": _source_attribution(cur, exp),
+            "source_attribution": attribution,
             "cause_hypothesis": cause,
             "verdict": _frame_divergence_verdict(cause),
             "frame_transform_probe_plan": _frame_transform_probe_plan(cause),
         }
     if frame_delta:
+        attribution = _source_attribution(None, None)
         cause = _frame_size_only_cause_hypothesis(frame_delta)
         return {
             "status": "frame-size-only",
             "frame_delta": frame_delta,
-            "source_attribution": _source_attribution(None, None),
+            "source_attribution": attribution,
             "cause_hypothesis": cause,
             "verdict": _frame_divergence_verdict(cause),
             "frame_transform_probe_plan": _frame_transform_probe_plan(cause),
@@ -1511,8 +1534,29 @@ def _frame_divergence_cause_hypothesis(
     current: dict | None,
     expected: dict | None,
     frame_delta: int | None,
+    *,
+    attribution: dict | None = None,
 ) -> dict:
+    source_object = _primary_source_object(attribution)
+    source_symbol = (
+        source_object.get("symbol")
+        if isinstance(source_object, dict)
+        else None
+    )
     if current is None:
+        if source_symbol:
+            return {
+                "status": "heuristic",
+                "kind": "missing-source-local-home",
+                "confidence": "medium",
+                "reason": (
+                    "expected has an attributed stack object with no current "
+                    "counterpart; inspect missing local home, call-argument "
+                    "temp, or saved range"
+                ),
+                "source_object_symbol": source_symbol,
+                "frame_delta": frame_delta,
+            }
         return {
             "status": "heuristic",
             "kind": "missing-current-stack-object",
@@ -1524,6 +1568,19 @@ def _frame_divergence_cause_hypothesis(
             "frame_delta": frame_delta,
         }
     if expected is None:
+        if source_symbol:
+            return {
+                "status": "heuristic",
+                "kind": "extra-source-local-home",
+                "confidence": "medium",
+                "reason": (
+                    "current has an attributed stack object with no expected "
+                    "counterpart; inspect extra local home, call-argument "
+                    "temp, address-taking, or spill"
+                ),
+                "source_object_symbol": source_symbol,
+                "frame_delta": frame_delta,
+            }
         return {
             "status": "heuristic",
             "kind": "extra-current-stack-object",
@@ -1540,6 +1597,22 @@ def _frame_divergence_cause_hypothesis(
     expected_kind = expected.get("kind")
     offset_delta = _object_offset_delta(current, expected)
     if current_size == expected_size and current_kind == expected_kind:
+        if source_symbol:
+            return {
+                "status": "heuristic",
+                "kind": "lifetime-or-ordering-shift",
+                "confidence": str(attribution.get("confidence") or "medium")
+                if isinstance(attribution, dict)
+                else "medium",
+                "reason": (
+                    "attributed stack object has the same shape but different "
+                    "offsets; inspect local lifetime, first-use order, "
+                    "address-taking, or alignment"
+                ),
+                "source_object_symbol": source_symbol,
+                "current_expected_offset_delta": offset_delta,
+                "frame_delta": frame_delta,
+            }
         return {
             "status": "heuristic",
             "kind": "stack-object-offset-shift",
@@ -1552,6 +1625,20 @@ def _frame_divergence_cause_hypothesis(
             "frame_delta": frame_delta,
         }
     if current_size != expected_size:
+        if source_symbol:
+            return {
+                "status": "heuristic",
+                "kind": "type-size-or-alignment",
+                "confidence": "medium",
+                "reason": (
+                    "attributed stack object differs in size; inspect type "
+                    "size, array extent, struct layout, or alignment"
+                ),
+                "source_object_symbol": source_symbol,
+                "current_size": current_size,
+                "expected_size": expected_size,
+                "frame_delta": frame_delta,
+            }
         return {
             "status": "heuristic",
             "kind": "stack-object-size-or-alignment",
@@ -1640,7 +1727,7 @@ def _frame_transform_probe_plan(cause: dict) -> dict:
 
 
 def _frame_transform_operator_priority(cause_kind: str) -> list[str]:
-    if cause_kind == "stack-object-offset-shift":
+    if cause_kind in {"stack-object-offset-shift", "lifetime-or-ordering-shift"}:
         return [
             "declaration-use-distance",
             "block-scope",
@@ -1654,7 +1741,7 @@ def _frame_transform_operator_priority(cause_kind: str) -> list[str]:
             "declaration-use-distance",
             "block-scope",
         ]
-    if cause_kind == "stack-object-size-or-alignment":
+    if cause_kind in {"stack-object-size-or-alignment", "type-size-or-alignment"}:
         return [
             "frame-split-fp-const-lifetime",
             "frame-direct-literal-at-final-fp-call",
@@ -1664,6 +1751,8 @@ def _frame_transform_operator_priority(cause_kind: str) -> list[str]:
     if cause_kind in {
         "extra-current-stack-object",
         "missing-current-stack-object",
+        "extra-source-local-home",
+        "missing-source-local-home",
     }:
         return [
             "declaration-use-distance",
@@ -1686,23 +1775,144 @@ def _source_attribution(
     expected_symbols = (
         _object_expected_source_symbols(current) or _object_source_symbols(expected)
     )
+    source_objects = _source_objects_from_divergence(
+        current,
+        expected,
+        current_symbols=current_symbols,
+        expected_symbols=expected_symbols,
+    )
     if current_symbols or expected_symbols:
+        primary = source_objects[0] if source_objects else None
+        confidence = "medium"
+        if isinstance(primary, dict):
+            if (
+                primary.get("current_offset") is not None
+                and primary.get("current_offset") == primary.get("expected_offset")
+            ):
+                confidence = "high"
         return {
-            "status": "symbolic-stack-home",
+            "status": "source-object-attributed",
+            "identity_kind": "symbolic-stack-home",
+            "confidence": confidence,
             "current_symbols": current_symbols,
             "expected_symbols": expected_symbols,
+            "primary_source_object": primary,
+            "source_objects": source_objects,
             "reason": (
-                "diverging stack object maps to resolved symbolic stack homes; "
-                "ObjObject identity is still unavailable"
+                "diverging stack object maps to resolved symbolic stack-home identity"
             ),
         }
     return {
-        "status": "heuristic-no-source-object",
+        "status": "unattributed",
+        "identity_kind": None,
+        "confidence": "low",
+        "current_symbols": [],
+        "expected_symbols": [],
+        "primary_source_object": None,
+        "source_objects": [],
+        "unresolved_dependency": "mwcc-stack-home-origin-tags",
         "reason": (
             "stack-object divergence is classified, but exact source object "
             "identity requires MWCC stack-home origin instrumentation"
         ),
     }
+
+
+def _source_objects_from_divergence(
+    current: dict | None,
+    expected: dict | None,
+    *,
+    current_symbols: list[str],
+    expected_symbols: list[str],
+) -> list[dict]:
+    symbols = list(dict.fromkeys([*current_symbols, *expected_symbols]))
+    objects: list[dict] = []
+    for symbol in symbols:
+        in_current = symbol in current_symbols
+        in_expected = symbol in expected_symbols
+        side = "both" if in_current and in_expected else (
+            "current" if in_current else "expected"
+        )
+        current_offset = current.get("start") if isinstance(current, dict) else None
+        expected_offset = _expected_offset_for_source_symbol(
+            symbol,
+            current,
+            expected,
+        )
+        if not isinstance(current_offset, int):
+            current_offset = None
+        if not isinstance(expected_offset, int):
+            expected_offset = None
+        obj = {
+            "symbol": symbol,
+            "identity_kind": "symbolic-stack-home",
+            "side": side,
+            "current_offset": current_offset,
+            "expected_offset": expected_offset,
+            "offset_delta": (
+                current_offset - expected_offset
+                if current_offset is not None and expected_offset is not None
+                else None
+            ),
+            "size": _source_object_value(current, expected, "size"),
+            "kind": _source_object_value(current, expected, "kind"),
+            "opcodes": (
+                current.get("opcodes")
+                if isinstance(current, dict) and isinstance(current.get("opcodes"), list)
+                else []
+            ),
+            "access_count": (
+                current.get("access_count")
+                if isinstance(current, dict) and isinstance(current.get("access_count"), int)
+                else 0
+            ),
+            "first_access": (
+                current.get("first_access")
+                if isinstance(current, dict) and isinstance(current.get("first_access"), dict)
+                else None
+            ),
+        }
+        objects.append(obj)
+    return objects
+
+
+def _expected_offset_for_source_symbol(
+    symbol: str,
+    current: dict | None,
+    expected: dict | None,
+) -> int | None:
+    if isinstance(current, dict):
+        offsets = current.get("expected_source_offsets")
+        if isinstance(offsets, dict):
+            value = offsets.get(symbol)
+            if isinstance(value, int):
+                return value
+    if isinstance(expected, dict):
+        symbols = expected.get("source_symbols")
+        if isinstance(symbols, list) and symbol in symbols:
+            value = expected.get("start")
+            if isinstance(value, int):
+                return value
+    return None
+
+
+def _source_object_value(
+    current: dict | None,
+    expected: dict | None,
+    key: str,
+):
+    if isinstance(current, dict) and current.get(key) is not None:
+        return current.get(key)
+    if isinstance(expected, dict):
+        return expected.get(key)
+    return None
+
+
+def _primary_source_object(attribution: dict | None) -> dict | None:
+    if not isinstance(attribution, dict):
+        return None
+    primary = attribution.get("primary_source_object")
+    return primary if isinstance(primary, dict) else None
 
 
 def _object_source_symbols(item: dict | None) -> list[str]:
@@ -1732,14 +1942,32 @@ def _frame_divergence_verdict(cause: dict) -> dict:
         "extra-frame-reservation-or-alignment",
         "extra-current-stack-object",
         "missing-current-stack-object",
+        "lifetime-or-ordering-shift",
+        "type-size-or-alignment",
+        "extra-source-local-home",
+        "missing-source-local-home",
     }:
+        source_symbol = cause.get("source_object_symbol")
+        if not source_symbol:
+            return {
+                "status": "unresolved-source-attribution",
+                "reason": (
+                    f"heuristic cause {kind} needs MWCC stack-home origin "
+                    "instrumentation or validating probe evidence before "
+                    "source-reachable vs ceiling can be decided"
+                ),
+                "confidence": confidence,
+                "unresolved_dependency": "mwcc-stack-home-origin-tags",
+            }
         return {
             "status": "source-reachable-candidate",
             "reason": (
-                f"heuristic cause {kind} is addressable by targeted "
-                "frame/lifetime source probes"
+                f"heuristic cause {kind}"
+                + f" for {source_symbol}"
+                + " is addressable by targeted frame/lifetime source probes"
             ),
             "confidence": confidence,
+            "source_object_symbol": source_symbol,
         }
     return {
         "status": "unknown",
@@ -1770,10 +1998,14 @@ def _occupied_stack_objects(frame: dict) -> list[dict]:
                 "kind",
                 "source",
                 "boundary_confidence",
-                "ambiguous",
-                "source_symbols",
-                "expected_source_symbols",
-            )
+            "ambiguous",
+            "source_symbols",
+            "expected_source_symbols",
+            "expected_source_offsets",
+            "access_count",
+            "opcodes",
+            "first_access",
+        )
             if key in item
         }
         for item in frame.get("stack_objects") or []
