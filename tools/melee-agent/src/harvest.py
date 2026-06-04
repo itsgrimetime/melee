@@ -114,6 +114,17 @@ class ValidatorRunner(Protocol):
         ...
 
 
+class MatchCheckerRunner(Protocol):
+    def __call__(
+        self,
+        function: str,
+        *,
+        cwd: Path,
+        timeout: int,
+    ) -> HarnessProcessResult:
+        ...
+
+
 
 def _utc_now() -> str:
     return (
@@ -381,6 +392,34 @@ def _default_validator(
     )
 
 
+def _default_match_checker(
+    function: str,
+    *,
+    cwd: Path,
+    timeout: int,
+) -> HarnessProcessResult:
+    command = [
+        sys.executable,
+        "tools/checkdiff.py",
+        function,
+        "--format",
+        "json",
+    ]
+    completed = subprocess.run(
+        command,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    return HarnessProcessResult(
+        command=command,
+        returncode=completed.returncode,
+        stdout=completed.stdout,
+        stderr=completed.stderr,
+    )
+
+
 def _frame_transform_command(request: HarvestRequest) -> list[str]:
     assert request.source_file is not None
     return [
@@ -480,6 +519,90 @@ def _short_output(text: str, limit: int = 2000) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + "...<truncated>"
+
+
+def _match_checker_indicates_match(process: HarnessProcessResult) -> bool:
+    if process.returncode != 0:
+        return False
+    try:
+        payload = json.loads(process.stdout)
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, dict) and "match" in payload:
+        return payload.get("match") is True
+    return True
+
+
+def _already_matched_result(
+    request: HarvestRequest,
+    *,
+    repo_root: Path,
+    harness: str | None,
+    match_checker: MatchCheckerRunner,
+) -> HarvestResult | None:
+    try:
+        process = match_checker(
+            request.function,
+            cwd=repo_root,
+            timeout=request.timeout,
+        )
+    except Exception:
+        return None
+    if not _match_checker_indicates_match(process):
+        return None
+    return _base_result(
+        request,
+        harness=harness,
+        status="already-matched",
+        blocker=None,
+        reason="function already matches; stale queue row skipped",
+        command=process.command,
+        details={
+            "stdout": _short_output(process.stdout),
+            "stderr": _short_output(process.stderr),
+        },
+    )
+
+
+def _matched_functions_in_source_file(
+    repo_root: Path,
+    source_file: Path,
+    *,
+    exclude: str,
+) -> list[str]:
+    report_path = repo_root / "build" / "GALE01" / "report.json"
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+
+    source_resolved = source_file.resolve()
+    matched: list[str] = []
+    for unit in report.get("units") or []:
+        if not isinstance(unit, dict):
+            continue
+        metadata = unit.get("metadata") or {}
+        unit_source = metadata.get("source_path") or unit.get("name")
+        if not isinstance(unit_source, str) or not unit_source:
+            continue
+        unit_source_path = Path(unit_source)
+        if not unit_source_path.is_absolute():
+            unit_source_path = repo_root / unit_source_path
+        try:
+            if unit_source_path.resolve() != source_resolved:
+                continue
+        except OSError:
+            continue
+        for function in unit.get("functions") or []:
+            if not isinstance(function, dict):
+                continue
+            name = function.get("name")
+            if not isinstance(name, str) or name == exclude:
+                continue
+            score = _float_or_none(function.get("fuzzy_match_percent"))
+            if score is not None and score >= VALIDATED_MATCH_PERCENT:
+                matched.append(name)
+    return matched
 
 
 def _candidate_path_for_apply(candidate_path: str, repo_root: Path) -> Path:
@@ -651,6 +774,89 @@ def _apply_candidate(
             },
         )
 
+    for matched_function in _matched_functions_in_source_file(
+        repo_root,
+        request.source_file,
+        exclude=request.function,
+    ):
+        try:
+            regression = validator(
+                matched_function,
+                cwd=repo_root,
+                timeout=request.timeout,
+            )
+        except BaseException as exc:
+            try:
+                _atomic_write_text(request.source_file, target_text)
+            except Exception as rollback_exc:
+                return _base_result(
+                    request,
+                    harness=harness,
+                    status="blocked",
+                    blocker=BLOCKER_APPLY_VALIDATION_FAILED,
+                    reason="post-apply regression guard failed and rollback failed",
+                    command=command,
+                    candidate_path=candidate_path,
+                    final_match_percent=final_match_percent,
+                    details={
+                        "regression_function": matched_function,
+                        "error": str(exc),
+                        "rollback_error": str(rollback_exc),
+                    },
+                )
+            return _base_result(
+                request,
+                harness=harness,
+                status="blocked",
+                blocker=BLOCKER_APPLY_VALIDATION_FAILED,
+                reason="post-apply regression guard failed",
+                command=command,
+                candidate_path=candidate_path,
+                final_match_percent=final_match_percent,
+                details={
+                    "regression_function": matched_function,
+                    "error": str(exc),
+                },
+            )
+        if regression.returncode == 0:
+            continue
+        try:
+            _atomic_write_text(request.source_file, target_text)
+        except Exception as rollback_exc:
+            return _base_result(
+                request,
+                harness=harness,
+                status="blocked",
+                blocker=BLOCKER_APPLY_VALIDATION_FAILED,
+                reason="post-apply regression guard failed and rollback failed",
+                command=command,
+                candidate_path=candidate_path,
+                final_match_percent=final_match_percent,
+                details={
+                    "regression_function": matched_function,
+                    "validator_command": regression.command,
+                    "validator_stdout": _short_output(regression.stdout),
+                    "validator_stderr": _short_output(regression.stderr),
+                    "rollback_error": str(rollback_exc),
+                },
+            )
+        return _base_result(
+            request,
+            harness=harness,
+            status="blocked",
+            blocker=BLOCKER_APPLY_VALIDATION_FAILED,
+            reason="post-apply regression guard failed",
+            command=command,
+            candidate_path=candidate_path,
+            final_match_percent=final_match_percent,
+            details={
+                "regression_function": matched_function,
+                "validator_command": regression.command,
+                "validator_stdout": _short_output(regression.stdout),
+                "validator_stderr": _short_output(regression.stderr),
+            },
+        )
+
     return _base_result(
         request,
         harness=harness,
@@ -681,8 +887,19 @@ def run_harvest_request(
     repo_root: Path,
     runner: HarnessRunner = _default_runner,
     validator: ValidatorRunner = _default_validator,
+    match_checker: MatchCheckerRunner = _default_match_checker,
 ) -> HarvestResult:
     harness = select_harness(request)
+    if request.apply:
+        already_matched = _already_matched_result(
+            request,
+            repo_root=repo_root,
+            harness=harness,
+            match_checker=match_checker,
+        )
+        if already_matched is not None:
+            return already_matched
+
     if harness is None:
         return _base_result(
             request,
@@ -909,6 +1126,7 @@ def run_harvest(
     max_probes: int = 8,
     runner: HarnessRunner = _default_runner,
     validator: ValidatorRunner = _default_validator,
+    match_checker: MatchCheckerRunner = _default_match_checker,
 ) -> dict[str, Any]:
     started_at = _utc_now()
     if queue_path is None:
@@ -939,6 +1157,7 @@ def run_harvest(
             repo_root=repo_root,
             runner=runner,
             validator=validator,
+            match_checker=match_checker,
         )
         for request in requests
     ]

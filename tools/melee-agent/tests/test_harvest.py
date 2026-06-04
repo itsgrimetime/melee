@@ -857,6 +857,119 @@ def test_apply_replaces_only_target_function_when_validation_passes(
     )
 
 
+def test_apply_skips_already_matched_row_before_running_harness(tmp_path: Path) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(queue, [_row("demo_fn")])
+
+    def runner(args: list[str], *, cwd: Path, timeout: int) -> HarnessProcessResult:
+        raise AssertionError("already-matched rows should not run the harness")
+
+    ledger = run_harvest(
+        "stack-local-layout",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+        match_checker=lambda function, *, cwd, timeout: HarnessProcessResult(
+            ["checkdiff", function], 0, "match=true\n", ""
+        ),
+        apply=True,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "already-matched"
+    assert result["blocker"] is None
+    assert result["applied"] is False
+    assert result["reason"] == "function already matches; stale queue row skipped"
+
+
+def test_apply_rolls_back_when_same_file_matched_function_regresses(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    target = repo_root / "src" / "melee/demo.c"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    original = textwrap.dedent(
+        """\
+        int demo_fn(void) {
+            return 1;
+        }
+
+        int sibling(void) {
+            return 7;
+        }
+        """
+    )
+    target.write_text(original, encoding="utf-8")
+    report = repo_root / "build" / "GALE01" / "report.json"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(
+        json.dumps(
+            {
+                "units": [
+                    {
+                        "metadata": {"source_path": "src/melee/demo.c"},
+                        "functions": [
+                            {
+                                "name": "demo_fn",
+                                "fuzzy_match_percent": 99.0,
+                            },
+                            {
+                                "name": "sibling",
+                                "fuzzy_match_percent": 100.0,
+                            },
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    candidate = tmp_path / "candidate.c"
+    candidate.write_text("int demo_fn(void) {\n    return 2;\n}\n", encoding="utf-8")
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(queue, [_row("demo_fn")])
+    _, runner = _json_runner(
+        {
+            "variants": [
+                {
+                    "status": "ok",
+                    "source_path": str(candidate),
+                    "final_match_percent": 100.0,
+                }
+            ]
+        }
+    )
+
+    def validator(
+        function: str,
+        *,
+        cwd: Path,
+        timeout: int,
+    ) -> HarnessProcessResult:
+        if function == "sibling":
+            return HarnessProcessResult(["checkdiff", function], 1, "", "mismatch")
+        return HarnessProcessResult(["checkdiff", function], 0, "", "")
+
+    ledger = run_harvest(
+        "stack-local-layout",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+        match_checker=lambda function, *, cwd, timeout: HarnessProcessResult(
+            ["checkdiff", function], 1, "", "mismatch"
+        ),
+        validator=validator,
+        apply=True,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "apply-validation-failed"
+    assert result["reason"] == "post-apply regression guard failed"
+    assert target.read_text(encoding="utf-8") == original
+
+
 def test_apply_rolls_back_when_validation_fails(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     target = repo_root / "src" / "melee/demo.c"
