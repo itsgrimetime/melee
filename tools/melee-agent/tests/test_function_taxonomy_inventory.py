@@ -170,6 +170,8 @@ def test_generate_inventory_classifies_report_functions_and_writes_outputs(
     assert records[0]["decl_order_candidate_count"] == 3
     assert records[1]["known_small_pattern_candidate"] is True
     assert records[1]["work_bucket"] == "known-small-pattern-candidate"
+    assert records[1]["source_actionability"] == "current-tools-small-pattern"
+    assert records[1]["headline_tool"] == "mismatch-db"
     assert records[2]["work_bucket"] == "stack-local-layout"
     assert records[2]["subcategory"] == "frame-too-large"
     assert records[2]["frame_cause"] == "frame-too-large"
@@ -212,6 +214,66 @@ def test_generate_inventory_classifies_report_functions_and_writes_outputs(
     assert "| Report non-100% | 4 |" in summary
     assert "| stack-local-layout | 2 |" in summary
     assert "| known-small-pattern-candidate | 1 |" in summary
+
+
+def test_describe_actionability_splits_non_frame_work_buckets() -> None:
+    from tools.function_taxonomy_inventory import describe_actionability
+
+    cases = [
+        (
+            "signature-call-type",
+            "call-shape-or-prototype",
+            "current-tools-signature",
+            "debug-suggest-casts",
+        ),
+        (
+            "inline-boundary",
+            "missing-reference-call-current-inlined",
+            "current-tools-inline",
+            "patterns-inlines",
+        ),
+        (
+            "data-symbol-relocation",
+            "persistent-data-symbol-or-relocation",
+            "current-tools-data-symbol",
+            "checkdiff-name-magic",
+        ),
+        (
+            "indexed-struct-pointer",
+            "array-indexed-vs-element-pointer",
+            "current-tools-indexed-pointer",
+            "source-shape",
+        ),
+        (
+            "structural-reconstruction",
+            "branch-or-control-flow-shape",
+            "structural-rebuild",
+            "extract-opseq-xrefs",
+        ),
+        (
+            "structural-reconstruction",
+            "opcode-sequence-diff",
+            "opcode-reconstruction",
+            "opseq-mismatch-db",
+        ),
+        (
+            "structural-reconstruction",
+            "direct-inspection-needed",
+            "backend-ceiling",
+            "manual-inspection",
+        ),
+        (
+            "register-allocator",
+            "register-only-needs-pcdump-proof",
+            "pcdump-proof-needed",
+            "mwcc-debug",
+        ),
+    ]
+
+    for bucket, subcategory, actionability, headline in cases:
+        result = describe_actionability(bucket, subcategory)
+        assert result["source_actionability"] == actionability
+        assert result["headline_tool"] == headline
 
 
 def test_generate_inventory_honors_limit_before_running_checkdiff(tmp_path: Path) -> None:

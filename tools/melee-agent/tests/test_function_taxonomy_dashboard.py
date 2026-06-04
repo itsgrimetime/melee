@@ -100,8 +100,15 @@ def test_default_dashboard_template_loads_embedded_data() -> None:
     assert "window.__TAXONOMY_DASHBOARD_DATA__" in text
     assert "Taxonomy guide" in text
     assert "closabilityFilter" in text
+    assert "sourceActionabilityFilter" in text
+    assert "actionabilityInfo" in text
+    assert "closabilityInfo" in text
     assert "frame_closability_tier" in text
     assert "frame_source_object_symbol" in text
     assert "Frame closability" in text
-    assert 'for (const id of ["search", "bucketFilter", "tierFilter", "primaryFilter", "closabilityFilter", "minMatch"])' in text
+    assert "current-tools-signature" in text
+    assert "gen-gated-366" in text
+    assert "blocked on the #366" in text
+    assert 'for (const id of ["search", "bucketFilter", "sourceActionabilityFilter", "tierFilter", "primaryFilter", "closabilityFilter", "minMatch"])' in text
+    assert 'if (sourceActionability && row.source_actionability !== sourceActionability) return false;' in text
     assert 'if (closability && row.frame_closability_tier !== closability) return false;' in text

@@ -306,10 +306,83 @@ def describe_actionability(
             }
     if bucket == "known-small-pattern-candidate":
         return {
-            "source_actionability": "source-probe",
+            "source_actionability": "current-tools-small-pattern",
             "headline_tool": "mismatch-db",
             "actionability_reason": "small operand/opcode pattern likely has a targeted source edit",
         }
+    if bucket == "signature-call-type":
+        return {
+            "source_actionability": "current-tools-signature",
+            "headline_tool": "debug-suggest-casts",
+            "actionability_reason": (
+                "call shape or prototype mismatch; inspect casts, typedef widths, "
+                "and declarations with current signature tools"
+            ),
+        }
+    if bucket == "inline-boundary":
+        return {
+            "source_actionability": "current-tools-inline",
+            "headline_tool": "patterns-inlines",
+            "actionability_reason": (
+                "inline/call boundary mismatch; compare helper definitions and "
+                "call-preserving source forms"
+            ),
+        }
+    if bucket == "data-symbol-relocation":
+        return {
+            "source_actionability": "current-tools-data-symbol",
+            "headline_tool": "checkdiff-name-magic",
+            "actionability_reason": (
+                "data, string, or relocation mismatch; model named data and "
+                "rerun checkdiff with relocation/name-magic evidence"
+            ),
+        }
+    if bucket == "indexed-struct-pointer":
+        return {
+            "source_actionability": "current-tools-indexed-pointer",
+            "headline_tool": "source-shape",
+            "actionability_reason": (
+                "array-indexed versus element-pointer source shape mismatch; "
+                "try pointer temporary and indexed-access rewrites"
+            ),
+        }
+    if bucket == "register-allocator":
+        return {
+            "source_actionability": "pcdump-proof-needed",
+            "headline_tool": "mwcc-debug",
+            "actionability_reason": (
+                "instruction stream is close; collect pcdump-backed allocator "
+                "evidence before source edits"
+            ),
+        }
+    if bucket == "structural-reconstruction":
+        if subcategory == "branch-or-control-flow-shape":
+            return {
+                "source_actionability": "structural-rebuild",
+                "headline_tool": "extract-opseq-xrefs",
+                "actionability_reason": (
+                    "control-flow/source-shape mismatch; rebuild natural branch "
+                    "or loop structure before local tuning"
+                ),
+            }
+        if subcategory == "opcode-sequence-diff":
+            return {
+                "source_actionability": "opcode-reconstruction",
+                "headline_tool": "opseq-mismatch-db",
+                "actionability_reason": (
+                    "generic opcode sequence mismatch; search similar opcode "
+                    "patterns and matched functions for source shape"
+                ),
+            }
+        if subcategory == "direct-inspection-needed":
+            return {
+                "source_actionability": "backend-ceiling",
+                "headline_tool": "manual-inspection",
+                "actionability_reason": (
+                    "backend-ceiling classification; inspect manually and bank "
+                    "when no current source lever is credible"
+                ),
+            }
     return {
         "source_actionability": "source-probe",
         "headline_tool": bucket,

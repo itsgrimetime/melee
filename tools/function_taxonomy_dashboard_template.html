@@ -166,7 +166,7 @@
 
     .filters {
       display: grid;
-      grid-template-columns: minmax(220px, 1.4fr) repeat(5, minmax(130px, 1fr));
+      grid-template-columns: minmax(220px, 1.4fr) repeat(6, minmax(130px, 1fr));
       gap: 10px;
       padding: 14px 16px;
       border-bottom: 1px solid var(--line);
@@ -582,8 +582,8 @@
       .charts { grid-template-columns: 1fr; }
       .bar-row { grid-template-columns: 132px minmax(80px, 1fr) 36px; }
       .detail-grid { grid-template-columns: 1fr; }
-      th:nth-child(4), td:nth-child(4),
-      th:nth-child(7), td:nth-child(7) { display: none; }
+      th:nth-child(5), td:nth-child(5),
+      th:nth-child(8), td:nth-child(8) { display: none; }
     }
   </style>
 </head>
@@ -622,6 +622,10 @@
           <label>
             Bucket
             <select id="bucketFilter"></select>
+          </label>
+          <label>
+            Actionability
+            <select id="sourceActionabilityFilter"></select>
           </label>
           <label>
             Tier
@@ -667,6 +671,7 @@
                 <th data-sort="match_percent">Match</th>
                 <th data-sort="function">Function</th>
                 <th data-sort="work_bucket">Bucket</th>
+                <th data-sort="source_actionability">Actionability</th>
                 <th data-sort="primary">Primary</th>
                 <th data-sort="subcategory">Subcategory</th>
                 <th data-sort="frame_closability_tier">Frame closability</th>
@@ -724,6 +729,22 @@
       "reorder-gated-362",
       "ceiling"
     ];
+    const actionabilityOrder = [
+      "current-tools-signature",
+      "current-tools-inline",
+      "current-tools-data-symbol",
+      "current-tools-indexed-pointer",
+      "current-tools-small-pattern",
+      "current-tools",
+      "structural-rebuild",
+      "opcode-reconstruction",
+      "pcdump-proof-needed",
+      "generator-gated",
+      "backend-ceiling",
+      "ceiling",
+      "diagnostic-only",
+      "source-probe"
+    ];
     const bucketOrder = [
       "signature-call-type",
       "inline-boundary",
@@ -775,6 +796,102 @@
         label: "Register Allocator",
         description: "The instruction stream is largely right, but register allocation or scheduling proof is still needed.",
         focus: "Use pcdump-backed evidence and first-divergence analysis before manual RA tuning."
+      }
+    };
+
+    const actionabilityInfo = {
+      "current-tools-signature": {
+        label: "Signature Tools",
+        description: "Prototype, cast, typedef-width, or call-shape work that current signature/cast tools can narrow.",
+        focus: "Run debug suggest casts, audit headers, and verify call-site declarations."
+      },
+      "current-tools-inline": {
+        label: "Inline Boundary Tools",
+        description: "Inline or emitted-call boundary work where existing inline and pattern inspection usually gives the next source edit.",
+        focus: "Compare helper definitions, static inline annotations, and call-preserving source forms."
+      },
+      "current-tools-data-symbol": {
+        label: "Data Symbol Tools",
+        description: "Data, string, blob, or relocation rows where naming/modeling data is the primary current-tool path.",
+        focus: "Use checkdiff name-magic evidence and model named data or string blobs."
+      },
+      "current-tools-indexed-pointer": {
+        label: "Indexed Pointer Shape",
+        description: "Array-indexed versus materialized element-pointer rows that current source-shape rewrites can test.",
+        focus: "Try pointer temporaries, array indexing, and struct member access variants."
+      },
+      "current-tools-small-pattern": {
+        label: "Small Pattern Tools",
+        description: "Tiny opcode, operand, or idiom rows that are good mismatch-db/opseq candidates.",
+        focus: "Search known patterns, then try a narrow type, cast, constant, or address-base tweak."
+      },
+      "current-tools": {
+        label: "Current Frame Tools",
+        description: "Frame rows with a bounded current-tool probe path.",
+        focus: "Run the row's next command before broader source exploration."
+      },
+      "structural-rebuild": {
+        label: "Structural Rebuild",
+        description: "Control-flow/source-shape rows that need natural branch, loop, or early-exit reconstruction.",
+        focus: "Use extract, opseq, xrefs, and nearby matched functions to rebuild high-level structure."
+      },
+      "opcode-reconstruction": {
+        label: "Opcode Reconstruction",
+        description: "Generic instruction sequence rows where the next split is opcode-pattern research.",
+        focus: "Search opseq and mismatch-db for similar emitted instruction runs."
+      },
+      "pcdump-proof-needed": {
+        label: "Pcdump Proof Needed",
+        description: "Register-allocation rows that need allocator evidence before source edits are credible.",
+        focus: "Collect pcdump-backed first-divergence or force-phys evidence."
+      },
+      "generator-gated": {
+        label: "Generator Gated",
+        description: "Likely source-reachable, but blocked on a missing generator or source lever.",
+        focus: "Use the frame closability tier or issue reference to decide which generator work unblocks it."
+      },
+      "backend-ceiling": {
+        label: "Backend Ceiling",
+        description: "Rows classified as backend/toolchain ceilings or direct-inspection cases, not current source-probe wins.",
+        focus: "Inspect manually and bank unless new evidence reveals a source lever."
+      },
+      "ceiling": {
+        label: "Ceiling",
+        description: "Current evidence marks this as unresolved, compiler-internal, or not worth routing to source probes.",
+        focus: "Bank it or collect better attribution evidence."
+      },
+      "diagnostic-only": {
+        label: "Diagnostic Only",
+        description: "Rows where current tools can explain the residual but do not yet offer a bounded source transform.",
+        focus: "Inspect before investing in source experiments."
+      },
+      "source-probe": {
+        label: "Generic Source Probe",
+        description: "Fallback actionability for rows that do not yet have a sharper source-action tier.",
+        focus: "Use the bucket and primary classification to choose the first tool."
+      }
+    };
+
+    const closabilityInfo = {
+      "current-tools-padstack": {
+        label: "Current Tools: Frame Reservation",
+        description: "Current tools can test this with a frame-reservation probe command without committing diagnostic padding.",
+        focus: "Run frame-transform-search with frame-reservation-pad-stack."
+      },
+      "gen-gated-366": {
+        label: "Generator Gated: #366",
+        description: "Likely source-reachable, but blocked on the #366 directed frame-transform/source generator.",
+        focus: "Do not treat this as a quick row until the #366 generator is available."
+      },
+      "reorder-gated-362": {
+        label: "Reorder Gated: #362",
+        description: "Same-frame stack-slot placement is blocked on the #362 assignment-order/reorder lever.",
+        focus: "Use lifetime-layout evidence; closure waits for the reorder lever."
+      },
+      "ceiling": {
+        label: "Ceiling",
+        description: "Current frame attribution marks this as unresolved, compiler-internal, or not source-closable with current tools.",
+        focus: "Bank the row unless new attribution evidence appears."
       }
     };
 
@@ -922,7 +1039,11 @@
 
     function taxonomyInfo(kind, value) {
       if (!value) return null;
-      return kind === "bucket" ? bucketInfo[value] : primaryInfo[value];
+      if (kind === "bucket") return bucketInfo[value];
+      if (kind === "primary") return primaryInfo[value];
+      if (kind === "actionability") return actionabilityInfo[value];
+      if (kind === "closability") return closabilityInfo[value];
+      return null;
     }
 
     function taxonomyTitle(kind, value) {
@@ -949,6 +1070,18 @@
 
     function initControls() {
       optionList($("bucketFilter"), bucketOrder, "buckets", "bucket");
+      const sourceActionabilityValues = actionabilityOrder.filter((value) =>
+        state.records.some((row) => row.source_actionability === value)
+      );
+      const extraActionability = Array.from(countBy(state.records, "source_actionability").keys())
+        .filter((value) => value && !actionabilityOrder.includes(value))
+        .sort();
+      optionList(
+        $("sourceActionabilityFilter"),
+        sourceActionabilityValues.concat(extraActionability),
+        "actionability tiers",
+        "actionability"
+      );
       optionList($("tierFilter"), tierOrder, "tiers");
       const primaries = Array.from(countBy(state.records, "primary").keys()).sort();
       optionList($("primaryFilter"), primaries, "primary classifications", "primary");
@@ -961,10 +1094,11 @@
       optionList(
         $("closabilityFilter"),
         closabilityValues.concat(extraClosability),
-        "frame closability tiers"
+        "frame closability tiers",
+        "closability"
       );
 
-      for (const id of ["search", "bucketFilter", "tierFilter", "primaryFilter", "closabilityFilter", "minMatch"]) {
+      for (const id of ["search", "bucketFilter", "sourceActionabilityFilter", "tierFilter", "primaryFilter", "closabilityFilter", "minMatch"]) {
         $(id).addEventListener("input", applyFilters);
       }
       $("near99").addEventListener("click", () => toggleButton("near99"));
@@ -995,6 +1129,7 @@
     function resetFilters() {
       $("search").value = "";
       $("bucketFilter").value = "";
+      $("sourceActionabilityFilter").value = "";
       $("tierFilter").value = "";
       $("primaryFilter").value = "";
       $("closabilityFilter").value = "";
@@ -1016,6 +1151,7 @@
         row.function,
         row.file_path,
         row.work_bucket,
+        row.source_actionability,
         row.primary,
         row.subcategory,
         row.frame_cause,
@@ -1027,7 +1163,7 @@
       return haystack.includes(query);
     }
 
-    function renderTaxonomyGuide(bucket, primary) {
+    function renderTaxonomyGuide(bucket, primary, sourceActionability, closability) {
       const guide = $("taxonomyGuide");
       const items = [];
 
@@ -1061,6 +1197,34 @@
         });
       }
 
+      if (sourceActionability) {
+        const info = taxonomyInfo("actionability", sourceActionability);
+        const total = taxonomyCount("source_actionability", sourceActionability);
+        const visible = state.filtered.filter((row) => row.source_actionability === sourceActionability).length;
+        items.push({
+          title: `Actionability: ${taxonomyLabel("actionability", sourceActionability)}`,
+          key: sourceActionability,
+          color: "#465157",
+          description: info?.description || "No description captured for this actionability tier.",
+          focus: info?.focus,
+          meta: `${total.toLocaleString()} total classified; ${visible.toLocaleString()} currently visible.`
+        });
+      }
+
+      if (closability) {
+        const info = taxonomyInfo("closability", closability);
+        const total = taxonomyCount("frame_closability_tier", closability);
+        const visible = state.filtered.filter((row) => row.frame_closability_tier === closability).length;
+        items.push({
+          title: `Frame closability: ${taxonomyLabel("closability", closability)}`,
+          key: closability,
+          color: "#2f855a",
+          description: info?.description || "No description captured for this frame closability tier.",
+          focus: info?.focus,
+          meta: `${total.toLocaleString()} total classified; ${visible.toLocaleString()} currently visible.`
+        });
+      }
+
       if (!items.length) {
         guide.classList.add("empty-guide");
         guide.innerHTML = "";
@@ -1086,6 +1250,7 @@
     function applyFilters() {
       const query = $("search").value.trim().toLowerCase();
       const bucket = $("bucketFilter").value;
+      const sourceActionability = $("sourceActionabilityFilter").value;
       const tier = $("tierFilter").value;
       const primary = $("primaryFilter").value;
       const closability = $("closabilityFilter").value;
@@ -1094,6 +1259,7 @@
       state.filtered = state.records.filter((row) => {
         if (!rowMatchesSearch(row, query)) return false;
         if (bucket && row.work_bucket !== bucket) return false;
+        if (sourceActionability && row.source_actionability !== sourceActionability) return false;
         if (tier && row.match_tier !== tier) return false;
         if (primary && row.primary !== primary) return false;
         if (closability && row.frame_closability_tier !== closability) return false;
@@ -1105,7 +1271,7 @@
       });
 
       sortRows();
-      renderTaxonomyGuide(bucket, primary);
+      renderTaxonomyGuide(bucket, primary, sourceActionability, closability);
       renderMetrics();
       renderCharts();
       renderTable();
@@ -1198,12 +1364,13 @@
           <td class="mono">${formatPct(row.match_percent)}%</td>
           <td><div class="fn">${escapeHtml(row.function)}</div><div class="muted">${escapeHtml(row.match_tier)}</div></td>
           <td>${bucketPill(row.work_bucket)}</td>
+          <td title="${escapeHtml(taxonomyTitle("actionability", row.source_actionability))}">${escapeHtml(row.source_actionability || "-")}</td>
           <td title="${escapeHtml(taxonomyTitle("primary", row.primary))}">${escapeHtml(row.primary)}</td>
           <td>${escapeHtml(row.subcategory)}</td>
           <td>${escapeHtml(row.frame_closability_tier || "-")}</td>
           <td><span class="mono">${escapeHtml(row.file_path)}</span></td>
         </tr>
-      `).join("") || `<tr><td colspan="7"><div class="empty">No rows match the current filters.</div></td></tr>`;
+      `).join("") || `<tr><td colspan="8"><div class="empty">No rows match the current filters.</div></td></tr>`;
 
       document.querySelectorAll("tr[data-fn]").forEach((tr) => {
         tr.addEventListener("click", () => {
@@ -1228,9 +1395,13 @@
       const structural = row.structural || {};
       const rowBucketInfo = taxonomyInfo("bucket", row.work_bucket);
       const rowPrimaryInfo = taxonomyInfo("primary", row.primary);
+      const rowActionabilityInfo = taxonomyInfo("actionability", row.source_actionability);
+      const rowClosabilityInfo = taxonomyInfo("closability", row.frame_closability_tier);
       const taxonomyNotes = [
         rowBucketInfo ? `Bucket: ${rowBucketInfo.description}` : "",
+        rowActionabilityInfo ? `Actionability: ${rowActionabilityInfo.description}` : "",
         rowPrimaryInfo ? `Primary: ${rowPrimaryInfo.description}` : "",
+        rowClosabilityInfo ? `Frame closability: ${rowClosabilityInfo.description}` : "",
         row.frame_cause ? `Frame cause: ${row.frame_cause}` : "",
         row.frame_verdict ? `Frame verdict: ${row.frame_verdict}` : ""
       ].filter(Boolean);
@@ -1254,6 +1425,7 @@
         <div class="detail-grid">
           <div class="kv"><div class="k">Match</div><div class="v">${formatPct(row.match_percent)}%</div></div>
           <div class="kv"><div class="k">Tier</div><div class="v">${escapeHtml(row.match_tier)}</div></div>
+          <div class="kv"><div class="k">Actionability</div><div class="v">${escapeHtml(row.source_actionability || "-")}</div></div>
           <div class="kv"><div class="k">Primary</div><div class="v">${escapeHtml(row.primary)}</div></div>
           <div class="kv"><div class="k">Frame closability</div><div class="v">${escapeHtml(row.frame_closability_tier || "-")}</div></div>
           <div class="kv"><div class="k">Frame source</div><div class="v">${escapeHtml(row.frame_source_object_symbol || "-")}</div></div>
@@ -1349,7 +1521,7 @@
         if (state.records.length) selectRow(state.records[0]);
       } catch (error) {
         $("loadStatus").innerHTML = `<strong>Load failed</strong>${escapeHtml(error.message)}`;
-        $("rows").innerHTML = `<tr><td colspan="7"><div class="empty">Could not load taxonomy files. Open this dashboard through a local HTTP server from the taxonomy directory.</div></td></tr>`;
+        $("rows").innerHTML = `<tr><td colspan="8"><div class="empty">Could not load taxonomy files. Open this dashboard through a local HTTP server from the taxonomy directory.</div></td></tr>`;
       }
     }
 
