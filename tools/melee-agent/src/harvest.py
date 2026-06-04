@@ -335,6 +335,42 @@ def _candidate_source_path(candidate: dict[str, Any]) -> str | None:
     return None
 
 
+def _candidate_header_path(candidate: Mapping[str, Any] | None) -> str | None:
+    if candidate is None:
+        return None
+    for key in (
+        "header_path",
+        "header_retained",
+        "retained_header_path",
+        "candidate_header_path",
+        "generated_header_path",
+        "retained_header",
+    ):
+        value = candidate.get(key)
+        if isinstance(value, str) and value:
+            return value
+    header = candidate.get("header")
+    if isinstance(header, Mapping):
+        value = header.get("path")
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _candidate_header_target(
+    candidate: Mapping[str, Any] | None,
+    request: HarvestRequest,
+    repo_root: Path,
+) -> Path | None:
+    if candidate is not None:
+        value = candidate.get("header_target")
+        if isinstance(value, str) and value:
+            return _candidate_path_for_apply(value, repo_root)
+    if request.source_file is None:
+        return None
+    return request.source_file.with_suffix(".h")
+
+
 def _iter_candidates(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, list):
         return [item for item in payload if isinstance(item, dict)]
@@ -952,6 +988,108 @@ def _atomic_write_text(path: Path, text: str) -> None:
             Path(temp_name).unlink(missing_ok=True)
 
 
+@dataclass(frozen=True)
+class _HeaderApplyCandidate:
+    candidate_path: str
+    target_path: Path
+    candidate_text: str
+    target_text: str
+
+
+def _read_optional_header_apply_candidate(
+    request: HarvestRequest,
+    *,
+    repo_root: Path,
+    candidate: Mapping[str, Any] | None,
+    harness: str,
+    command: list[str],
+    candidate_path: str,
+    final_match_percent: float,
+) -> tuple[_HeaderApplyCandidate | None, HarvestResult | None]:
+    header_candidate_path = _candidate_header_path(candidate)
+    if header_candidate_path is None:
+        return None, None
+
+    candidate_file = _candidate_path_for_apply(header_candidate_path, repo_root)
+    if candidate_file.suffix != ".h":
+        return None, _base_result(
+            request,
+            harness=harness,
+            status="blocked",
+            blocker=BLOCKER_DECLARATION_APPLY_UNSUPPORTED,
+            reason="retained header candidate is not a .h file",
+            command=command,
+            candidate_path=candidate_path,
+            final_match_percent=final_match_percent,
+            details={"header_candidate_path": header_candidate_path},
+        )
+
+    target_header = _candidate_header_target(candidate, request, repo_root)
+    if target_header is None or not target_header.exists():
+        return None, _base_result(
+            request,
+            harness=harness,
+            status="blocked",
+            blocker=BLOCKER_DECLARATION_APPLY_UNSUPPORTED,
+            reason="target header for retained source candidate was not found",
+            command=command,
+            candidate_path=candidate_path,
+            final_match_percent=final_match_percent,
+            details={"header_candidate_path": str(candidate_file)},
+        )
+
+    try:
+        candidate_text = candidate_file.read_text(encoding="utf-8")
+        target_text = target_header.read_text(encoding="utf-8")
+    except OSError as exc:
+        return None, _base_result(
+            request,
+            harness=harness,
+            status="blocked",
+            blocker=BLOCKER_APPLY_TRANSFER_FAILED,
+            reason="candidate or target header could not be read",
+            command=command,
+            candidate_path=candidate_path,
+            final_match_percent=final_match_percent,
+            details={
+                "header_candidate_path": str(candidate_file),
+                "header_target": str(target_header),
+                "error": str(exc),
+            },
+        )
+
+    return (
+        _HeaderApplyCandidate(
+            candidate_path=str(candidate_file),
+            target_path=target_header,
+            candidate_text=candidate_text,
+            target_text=target_text,
+        ),
+        None,
+    )
+
+
+def _restore_apply_targets(
+    source_file: Path,
+    source_text: str,
+    header_candidate: _HeaderApplyCandidate | None = None,
+) -> str | None:
+    errors: list[str] = []
+    try:
+        _atomic_write_text(source_file, source_text)
+    except Exception as exc:
+        errors.append(str(exc))
+    if header_candidate is not None:
+        try:
+            _atomic_write_text(
+                header_candidate.target_path,
+                header_candidate.target_text,
+            )
+        except Exception as exc:
+            errors.append(str(exc))
+    return "; ".join(errors) if errors else None
+
+
 def _apply_candidate(
     request: HarvestRequest,
     *,
@@ -1192,6 +1330,7 @@ def _apply_whole_file_candidate(
     *,
     repo_root: Path,
     candidate_path: str,
+    candidate: Mapping[str, Any] | None = None,
     validator: ValidatorRunner,
     harness: str,
     command: list[str],
@@ -1238,7 +1377,24 @@ def _apply_whole_file_candidate(
             details={"error": str(exc)},
         )
 
+    header_candidate, header_error = _read_optional_header_apply_candidate(
+        request,
+        repo_root=repo_root,
+        candidate=candidate,
+        harness=harness,
+        command=command,
+        candidate_path=candidate_path,
+        final_match_percent=final_match_percent,
+    )
+    if header_error is not None:
+        return header_error
+
     try:
+        if header_candidate is not None:
+            _atomic_write_text(
+                header_candidate.target_path,
+                header_candidate.candidate_text,
+            )
         _atomic_write_text(request.source_file, candidate_text)
         validation = validator(
             request.function,
@@ -1246,9 +1402,12 @@ def _apply_whole_file_candidate(
             timeout=request.timeout,
         )
     except BaseException as exc:
-        try:
-            _atomic_write_text(request.source_file, target_text)
-        except Exception as rollback_exc:
+        rollback_error = _restore_apply_targets(
+            request.source_file,
+            target_text,
+            header_candidate,
+        )
+        if rollback_error is not None:
             return _base_result(
                 request,
                 harness=harness,
@@ -1260,7 +1419,7 @@ def _apply_whole_file_candidate(
                 final_match_percent=final_match_percent,
                 details={
                     "error": str(exc),
-                    "rollback_error": str(rollback_exc),
+                    "rollback_error": rollback_error,
                 },
             )
         return _base_result(
@@ -1276,9 +1435,12 @@ def _apply_whole_file_candidate(
         )
 
     if validation.returncode != 0:
-        try:
-            _atomic_write_text(request.source_file, target_text)
-        except Exception as rollback_exc:
+        rollback_error = _restore_apply_targets(
+            request.source_file,
+            target_text,
+            header_candidate,
+        )
+        if rollback_error is not None:
             return _base_result(
                 request,
                 harness=harness,
@@ -1292,7 +1454,7 @@ def _apply_whole_file_candidate(
                     "validator_command": validation.command,
                     "validator_stdout": _short_output(validation.stdout),
                     "validator_stderr": _short_output(validation.stderr),
-                    "rollback_error": str(rollback_exc),
+                    "rollback_error": rollback_error,
                 },
             )
         return _base_result(
@@ -1317,9 +1479,12 @@ def _apply_whole_file_candidate(
         validator=validator,
     )
     if regression_error is not None:
-        try:
-            _atomic_write_text(request.source_file, target_text)
-        except Exception as rollback_exc:
+        rollback_error = _restore_apply_targets(
+            request.source_file,
+            target_text,
+            header_candidate,
+        )
+        if rollback_error is not None:
             return _base_result(
                 request,
                 harness=harness,
@@ -1329,7 +1494,7 @@ def _apply_whole_file_candidate(
                 command=command,
                 candidate_path=candidate_path,
                 final_match_percent=final_match_percent,
-                details={**regression_error, "rollback_error": str(rollback_exc)},
+                details={**regression_error, "rollback_error": rollback_error},
             )
         return _base_result(
             request,
@@ -1353,7 +1518,17 @@ def _apply_whole_file_candidate(
         candidate_path=candidate_path,
         final_match_percent=final_match_percent,
         applied=True,
-        details={"validator_command": validation.command},
+        details={
+            "validator_command": validation.command,
+            **(
+                {
+                    "header_candidate_path": header_candidate.candidate_path,
+                    "header_target": str(header_candidate.target_path),
+                }
+                if header_candidate is not None
+                else {}
+            ),
+        },
     )
 
 
@@ -1531,6 +1706,7 @@ def _apply_partial_layer_candidate(
     *,
     repo_root: Path,
     candidate_path: str,
+    candidate: Mapping[str, Any] | None = None,
     match_checker: MatchCheckerRunner,
     validator: ValidatorRunner,
     harness: str,
@@ -1568,6 +1744,18 @@ def _apply_partial_layer_candidate(
             details={"error": str(exc)},
         )
 
+    header_candidate, header_error = _read_optional_header_apply_candidate(
+        request,
+        repo_root=repo_root,
+        candidate=candidate,
+        harness=harness,
+        command=command,
+        candidate_path=candidate_path,
+        final_match_percent=final_match_percent,
+    )
+    if header_error is not None:
+        return header_error
+
     if harness == HARNESS_NAME_MAGIC_SOURCE:
         patched = candidate_text
     else:
@@ -1597,6 +1785,11 @@ def _apply_partial_layer_candidate(
             )
 
     try:
+        if header_candidate is not None:
+            _atomic_write_text(
+                header_candidate.target_path,
+                header_candidate.candidate_text,
+            )
         _atomic_write_text(request.source_file, patched)
         after_process = match_checker(
             request.function,
@@ -1619,9 +1812,12 @@ def _apply_partial_layer_candidate(
             else None
         )
     except BaseException as exc:
-        try:
-            _atomic_write_text(request.source_file, target_text)
-        except Exception as rollback_exc:
+        rollback_error = _restore_apply_targets(
+            request.source_file,
+            target_text,
+            header_candidate,
+        )
+        if rollback_error is not None:
             return _base_result(
                 request,
                 harness=harness,
@@ -1633,7 +1829,7 @@ def _apply_partial_layer_candidate(
                 final_match_percent=final_match_percent,
                 details={
                     "error": str(exc),
-                    "rollback_error": str(rollback_exc),
+                    "rollback_error": rollback_error,
                 },
             )
         return _base_result(
@@ -1658,6 +1854,9 @@ def _apply_partial_layer_candidate(
         "after_match_checker_stdout": _short_output(after_process.stdout),
         "after_match_checker_stderr": _short_output(after_process.stderr),
     }
+    if header_candidate is not None:
+        details["header_candidate_path"] = header_candidate.candidate_path
+        details["header_target"] = str(header_candidate.target_path)
     if regression_error is not None:
         details.update(regression_error)
 
@@ -1675,10 +1874,13 @@ def _apply_partial_layer_candidate(
             details=details,
         )
 
-    try:
-        _atomic_write_text(request.source_file, target_text)
-    except Exception as rollback_exc:
-        details["rollback_error"] = str(rollback_exc)
+    rollback_error = _restore_apply_targets(
+        request.source_file,
+        target_text,
+        header_candidate,
+    )
+    if rollback_error is not None:
+        details["rollback_error"] = rollback_error
         return _base_result(
             request,
             harness=harness,
@@ -1890,6 +2092,7 @@ def run_composed_harvest_request(
                     layer_request,
                     repo_root=repo_root,
                     candidate_path=candidate_path,
+                    candidate=candidate,
                     validator=layer_validator,
                     harness=harness,
                     command=command,
@@ -1953,6 +2156,7 @@ def run_composed_harvest_request(
                 layer_request,
                 repo_root=repo_root,
                 candidate_path=candidate_path,
+                candidate=sub_candidate,
                 match_checker=layer_match_checker,
                 validator=layer_validator,
                 harness=harness,
@@ -2211,6 +2415,7 @@ def run_harvest_request(
             request,
             repo_root=repo_root,
             candidate_path=candidate_path,
+            candidate=candidate,
             validator=validator,
             harness=harness,
             command=command,

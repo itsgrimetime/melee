@@ -444,6 +444,113 @@ def test_name_magic_source_declarations_candidate_requires_no_name_magic_match(
     }
 
 
+def test_name_magic_source_declarations_retains_header_externs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from src.cli import debug as debug_cli
+
+    repo = tmp_path / "repo"
+    source = repo / "src" / "melee" / "demo.c"
+    header = repo / "src" / "melee" / "demo.h"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        '#include "demo.h"\n\nvoid fn_80000000(void) { sink(0.0F); }\n',
+        encoding="utf-8",
+    )
+    header.write_text(
+        "#ifndef DEMO_H\n#define DEMO_H\n\n#endif\n",
+        encoding="utf-8",
+    )
+    current_obj = repo / "build" / "GALE01" / "src" / "melee" / "demo.o"
+    target_obj = repo / "build" / "GALE01" / "obj" / "melee" / "demo.o"
+    current_obj.parent.mkdir(parents=True)
+    target_obj.parent.mkdir(parents=True)
+    current_obj.write_bytes(b"fake")
+    target_obj.write_bytes(b"fake")
+    scored_headers: list[Path | None] = []
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", repo)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, melee_root: "melee/demo",
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_run_checkdiff_no_name_magic_json",
+        lambda *args, **kwargs: (
+            {
+                "diff": [
+                    "-+010: R_PPC_EMB_SDA21\tmn_804DBDA8",
+                    "++010: R_PPC_EMB_SDA21\t@267",
+                ],
+                "classification": {"primary": "data-symbol-or-relocation"},
+            },
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_name_magic_object_evidence",
+        lambda unit, melee_root: (
+            {
+                "anonymous_sdata2": {
+                    "@267": {"size": 4, "float": 0.0, "value": 0}
+                },
+                "name_magic_suggestions": [
+                    {
+                        "anonymous": "@267",
+                        "size": 4,
+                        "value": 0,
+                        "target": "mn_804DBDA8",
+                    }
+                ],
+            },
+            None,
+        ),
+    )
+
+    def fake_score(*args, **kwargs):
+        scored_headers.append(kwargs.get("header_path"))
+        return debug_cli._NameMagicWholeSourceScore(
+            100.0,
+            None,
+            True,
+            {"match": True},
+        )
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_score_whole_source_candidate_no_name_magic",
+        fake_score,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "name-magic-source-declarations",
+            "-f",
+            "fn_80000000",
+            "--source-file",
+            str(source),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    variant = payload["variants"][0]
+    source_text = Path(variant["source_retained"]).read_text(encoding="utf-8")
+    header_text = Path(variant["header_retained"]).read_text(encoding="utf-8")
+    assert "extern volatile f32 mn_804DBDA8;" not in source_text
+    assert "sink(mn_804DBDA8);" in source_text
+    assert "extern volatile f32 mn_804DBDA8;" in header_text
+    assert scored_headers == [Path(variant["header_retained"])]
+
+
 def test_name_magic_whole_source_score_validates_cleanup_rebuild(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

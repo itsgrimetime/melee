@@ -257,8 +257,9 @@ def test_sdata2_float_probe_replaces_unique_literal_with_named_volatile_load() -
 
     assert blocker is None
     assert [probe.operator for probe in probes] == ["sdata2-named-float-load"]
-    assert "extern volatile f32 mn_804DBDA8;" in probes[0].source_text
+    assert "extern volatile f32 mn_804DBDA8;" not in probes[0].source_text
     assert "HSD_JObjReqAnimAll(jobj, mn_804DBDA8);" in probes[0].source_text
+    assert probes[0].header_declarations == ("extern volatile f32 mn_804DBDA8;",)
 
 
 def test_sdata2_float_probe_only_replaces_body_literals() -> None:
@@ -333,8 +334,9 @@ def test_sdata2_double_probe_replaces_unique_literal_with_named_volatile_load() 
 
     assert blocker is None
     assert [probe.operator for probe in probes] == ["sdata2-named-float-load"]
-    assert "extern volatile f64 mn_804DCA00;" in probes[0].source_text
+    assert "extern volatile f64 mn_804DCA00;" not in probes[0].source_text
     assert "sink_double(mn_804DCA00);" in probes[0].source_text
+    assert probes[0].header_declarations == ("extern volatile f64 mn_804DCA00;",)
 
 
 def test_combined_probe_applies_static_and_sdata2_edits_from_original_source() -> None:
@@ -370,8 +372,9 @@ def test_combined_probe_applies_static_and_sdata2_edits_from_original_source() -
     ]
     combined = probes[2].source_text
     assert "u16 mn_803EAE68[] = { 1, 2, 3 };" in combined
-    assert "extern volatile f32 mn_804DBDA8;" in combined
+    assert "extern volatile f32 mn_804DBDA8;" not in combined
     assert "HSD_JObjReqAnimAll(jobj, mn_804DBDA8);" in combined
+    assert probes[2].header_declarations == ("extern volatile f32 mn_804DBDA8;",)
 
 
 def test_sdata2_float_probe_blocks_when_literal_site_is_ambiguous() -> None:

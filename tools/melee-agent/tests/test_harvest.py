@@ -1138,6 +1138,88 @@ def test_compose_apply_preserves_sub100_improvement_and_continues_to_match(
     )
 
 
+def test_compose_apply_preserves_name_magic_sub100_source_and_header(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    target = repo_root / "src" / "melee/demo.c"
+    header = repo_root / "src" / "melee/demo.h"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text('#include "demo.h"\nint demo_fn(void) { return 1; }\n')
+    header.write_text("#ifndef DEMO_H\n#define DEMO_H\n\n#endif\n")
+    candidate = tmp_path / "name_magic.c"
+    candidate_header = tmp_path / "name_magic.h"
+    candidate.write_text('#include "demo.h"\nint demo_fn(void) { return 2; }\n')
+    candidate_header.write_text(
+        "#ifndef DEMO_H\n#define DEMO_H\n\n"
+        "extern volatile f32 demo_804D0000;\n\n"
+        "#endif\n"
+    )
+    queue = tmp_path / "queues" / "composite.tsv"
+    row = _row(
+        "demo_fn",
+        headline_tool="source-shape",
+        source_actionability="",
+        frame_closability_tier="",
+    )
+    row["primary"] = "data-symbol-or-relocation"
+    _write_queue(queue, [row])
+    _, runner = _json_runner(
+        {
+            "stop_condition": {
+                "kind": "unvalidated",
+                "blocker": "no-name-magic-candidate",
+            },
+            "variants": [
+                {
+                    "status": "ok",
+                    "source_retained": str(candidate),
+                    "header_retained": str(candidate_header),
+                    "final_match_percent": 95.0,
+                    "no_name_magic_match": False,
+                }
+            ],
+        }
+    )
+    match_payloads = iter(
+        [
+            _match_process(
+                "demo_fn",
+                match=False,
+                percent=90.0,
+                primary="data-symbol-or-relocation",
+            ),
+            _match_process(
+                "demo_fn",
+                match=False,
+                percent=95.0,
+                primary="stack-layout",
+            ),
+            _match_process("demo_fn", match=True, percent=100.0, primary="match"),
+        ]
+    )
+
+    ledger = run_harvest(
+        "composite",
+        repo_root=repo_root,
+        queue_path=queue,
+        target_map={"demo_fn": {"harnesses": ["name-magic-source-declarations"]}},
+        runner=runner,
+        match_checker=lambda function, *, cwd, timeout: next(match_payloads),
+        validator=lambda function, *, cwd, timeout: HarnessProcessResult(
+            ["checkdiff", function], 0, "", ""
+        ),
+        apply=True,
+        compose=True,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "already-matched"
+    assert result["details"]["layers"][0]["status"] == "applied"
+    assert target.read_text() == candidate.read_text()
+    assert header.read_text() == candidate_header.read_text()
+
+
 def test_compose_apply_rolls_back_sub100_candidate_without_improvement(
     tmp_path: Path,
 ) -> None:
@@ -1981,6 +2063,115 @@ def test_name_magic_apply_replaces_entire_source_file(tmp_path: Path) -> None:
 
     assert ledger["results"][0]["status"] == "applied"
     assert target.read_text(encoding="utf-8") == candidate_text
+
+
+def test_name_magic_apply_replaces_source_and_header_candidate(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    target = repo_root / "src" / "melee/demo.c"
+    header = repo_root / "src" / "melee/demo.h"
+    target.parent.mkdir(parents=True)
+    target.write_text('#include "demo.h"\nint demo_fn(void) { return 1; }\n')
+    header.write_text("#ifndef DEMO_H\n#define DEMO_H\n\n#endif\n")
+    candidate = tmp_path / "candidate.c"
+    candidate_header = tmp_path / "candidate.h"
+    candidate.write_text('#include "demo.h"\nint demo_fn(void) { return 2; }\n')
+    candidate_header.write_text(
+        "#ifndef DEMO_H\n#define DEMO_H\n\n"
+        "extern volatile f32 demo_804D0000;\n\n"
+        "#endif\n"
+    )
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    _write_queue(queue, [_name_magic_row("demo_fn", primary="data-symbol-relocation")])
+    _, runner = _json_runner(
+        {
+            "stop_condition": {"kind": "validated"},
+            "variants": [
+                {
+                    "status": "ok",
+                    "source_retained": str(candidate),
+                    "header_retained": str(candidate_header),
+                    "final_match_percent": 100.0,
+                    "no_name_magic_match": True,
+                }
+            ],
+        }
+    )
+
+    ledger = run_harvest(
+        "data-symbol-relocation",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+        match_checker=lambda function, *, cwd, timeout: HarnessProcessResult(
+            ["checkdiff", function], 1, "", "mismatch"
+        ),
+        validator=lambda function, *, cwd, timeout: HarnessProcessResult(
+            ["checkdiff", function], 0, "", ""
+        ),
+        apply=True,
+    )
+
+    assert ledger["results"][0]["status"] == "applied"
+    assert target.read_text() == candidate.read_text()
+    assert header.read_text() == candidate_header.read_text()
+
+
+def test_name_magic_apply_rolls_back_source_and_header_on_validation_fail(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    target = repo_root / "src" / "melee/demo.c"
+    header = repo_root / "src" / "melee/demo.h"
+    target.parent.mkdir(parents=True)
+    original_source = '#include "demo.h"\nint demo_fn(void) { return 1; }\n'
+    original_header = "#ifndef DEMO_H\n#define DEMO_H\n\n#endif\n"
+    target.write_text(original_source)
+    header.write_text(original_header)
+    candidate = tmp_path / "candidate.c"
+    candidate_header = tmp_path / "candidate.h"
+    candidate.write_text('#include "demo.h"\nint demo_fn(void) { return 2; }\n')
+    candidate_header.write_text(
+        "#ifndef DEMO_H\n#define DEMO_H\n\n"
+        "extern volatile f32 demo_804D0000;\n\n"
+        "#endif\n"
+    )
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    _write_queue(queue, [_name_magic_row("demo_fn", primary="data-symbol-relocation")])
+    _, runner = _json_runner(
+        {
+            "stop_condition": {"kind": "validated"},
+            "variants": [
+                {
+                    "status": "ok",
+                    "source_retained": str(candidate),
+                    "header_retained": str(candidate_header),
+                    "final_match_percent": 100.0,
+                    "no_name_magic_match": True,
+                }
+            ],
+        }
+    )
+
+    ledger = run_harvest(
+        "data-symbol-relocation",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+        match_checker=lambda function, *, cwd, timeout: HarnessProcessResult(
+            ["checkdiff", function], 1, "", "mismatch"
+        ),
+        validator=lambda function, *, cwd, timeout: HarnessProcessResult(
+            ["checkdiff", function], 1, "", "mismatch"
+        ),
+        apply=True,
+    )
+
+    assert ledger["results"][0]["status"] == "blocked"
+    assert ledger["results"][0]["blocker"] == "apply-validation-failed"
+    assert target.read_text() == original_source
+    assert header.read_text() == original_header
 
 
 def test_name_magic_whole_file_apply_rolls_back_same_file_regression(

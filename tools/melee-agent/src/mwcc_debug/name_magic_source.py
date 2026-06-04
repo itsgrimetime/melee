@@ -58,14 +58,18 @@ class NameMagicSourceProbe:
     source_text: str
     edits: tuple[NameMagicSourceEdit, ...]
     provenance: dict[str, Any]
+    header_declarations: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "label": self.label,
             "operator": self.operator,
             "description": self.description,
             "provenance": dict(self.provenance),
         }
+        if self.header_declarations:
+            payload["header_declarations"] = list(self.header_declarations)
+        return payload
 
 
 @dataclasses.dataclass(frozen=True)
@@ -398,11 +402,6 @@ def _sdata2_named_float_probe(
 
     literal_start, literal_end = sites[0]
     edits = (
-        NameMagicSourceEdit(
-            insert_at,
-            insert_at,
-            f"extern volatile {c_type} {relocation.expected_symbol};\n",
-        ),
         NameMagicSourceEdit(literal_start, literal_end, relocation.expected_symbol),
     )
     source_text = _apply_source_edits(source, edits)
@@ -419,6 +418,9 @@ def _sdata2_named_float_probe(
                 "size": size,
                 "value": value,
             },
+            header_declarations=(
+                f"extern volatile {c_type} {relocation.expected_symbol};",
+            ),
         ),
         None,
     )
@@ -428,6 +430,13 @@ def _combined_probe(
     source: str, probes: list[NameMagicSourceProbe]
 ) -> NameMagicSourceProbe | None:
     edits = tuple(edit for probe in probes for edit in probe.edits)
+    header_declarations = tuple(
+        dict.fromkeys(
+            declaration
+            for probe in probes
+            for declaration in probe.header_declarations
+        )
+    )
     try:
         source_text = _apply_source_edits(source, edits)
     except ValueError:
@@ -439,6 +448,7 @@ def _combined_probe(
         source_text=source_text,
         edits=edits,
         provenance={"operators": [probe.operator for probe in probes]},
+        header_declarations=header_declarations,
     )
 
 

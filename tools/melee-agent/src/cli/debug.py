@@ -17734,6 +17734,8 @@ def _score_whole_source_candidate_no_name_magic(
     *,
     function: str,
     melee_root: Path,
+    header_path: Path | None = None,
+    header_target: Path | None = None,
     timeout: float | None = None,
     status: Callable[[str], None] | None = None,
 ) -> _NameMagicWholeSourceScore:
@@ -17758,12 +17760,42 @@ def _score_whole_source_candidate_no_name_magic(
             status("source-scoring lock acquired")
         candidate_text = path.read_text(encoding="utf-8", errors="replace")
         original = target_path.read_text(encoding="utf-8", errors="replace")
+        target_header_path: Path | None = None
+        candidate_header_text: str | None = None
+        original_header: str | None = None
+        if header_path is not None:
+            target_header_path = header_target or target_path.with_suffix(".h")
+            if not target_header_path.exists():
+                return _NameMagicWholeSourceScore(
+                    None,
+                    f"target header not found: {target_header_path}",
+                    None,
+                )
+            candidate_header_text = header_path.read_text(
+                encoding="utf-8",
+                errors="replace",
+            )
+            original_header = target_header_path.read_text(
+                encoding="utf-8",
+                errors="replace",
+            )
         obj_path = f"build/GALE01/src/{unit}.o"
         _register_active_source_restore(target_path, original)
+        if target_header_path is not None and original_header is not None:
+            _register_active_source_restore(target_header_path, original_header)
         applied = False
+        header_applied = False
         restore_error: str | None = None
         cleanup_error: str | None = None
         try:
+            if (
+                target_header_path is not None
+                and candidate_header_text is not None
+            ):
+                if status is not None:
+                    status(f"applying header candidate to {target_header_path}")
+                target_header_path.write_text(candidate_header_text, encoding="utf-8")
+                header_applied = True
             if status is not None:
                 status(f"applying whole-file candidate to src/{unit}.c")
             target_path.write_text(candidate_text, encoding="utf-8")
@@ -17833,10 +17865,29 @@ def _score_whole_source_candidate_no_name_magic(
                 if status is not None:
                     status("restoring source")
                 restore_error = _restore_source_snapshot(target_path, original)
+            if (
+                header_applied
+                and target_header_path is not None
+                and original_header is not None
+            ):
+                if status is not None:
+                    status("restoring header")
+                header_restore_error = _restore_source_snapshot(
+                    target_header_path,
+                    original_header,
+                )
+                if header_restore_error:
+                    restore_error = (
+                        f"{restore_error}; {header_restore_error}"
+                        if restore_error
+                        else header_restore_error
+                    )
             _unregister_active_source_restore(target_path)
+            if target_header_path is not None:
+                _unregister_active_source_restore(target_header_path)
             if restore_error:
                 print(f"[source-restore] {restore_error}", file=sys.stderr)
-            elif applied:
+            elif applied or header_applied:
                 try:
                     if status is not None:
                         status(
@@ -17875,6 +17926,50 @@ def _score_whole_source_candidate_no_name_magic(
                 raise RuntimeError(restore_error)
             if cleanup_error:
                 raise RuntimeError(cleanup_error)
+
+
+def _name_magic_header_for_source(source: Path | None) -> Path | None:
+    if source is None:
+        return None
+    header = source.with_suffix(".h")
+    return header if header.exists() else None
+
+
+def _normalize_header_declaration(declaration: str) -> str:
+    declaration = declaration.strip()
+    if not declaration:
+        return ""
+    return declaration if declaration.endswith(";") else f"{declaration};"
+
+
+def _name_magic_header_candidate_text(
+    header_text: str,
+    declarations: list[str] | tuple[str, ...],
+) -> str:
+    missing = [
+        declaration
+        for declaration in (
+            _normalize_header_declaration(item) for item in declarations
+        )
+        if declaration and declaration not in header_text
+    ]
+    if not missing:
+        return header_text
+
+    block = "\n".join(missing)
+    lines = header_text.splitlines(keepends=True)
+    offset = 0
+    final_endif_offset: int | None = None
+    for line in lines:
+        if line.strip().startswith("#endif"):
+            final_endif_offset = offset
+        offset += len(line)
+    if final_endif_offset is None:
+        return header_text.rstrip() + "\n\n" + block + "\n"
+
+    before = header_text[:final_endif_offset].rstrip()
+    after = header_text[final_endif_offset:].lstrip("\n")
+    return before + "\n\n" + block + "\n\n" + after
 
 
 def _select_order_source_match_percent(
@@ -21569,14 +21664,38 @@ def mutate_name_magic_source_declarations_cmd(
 
     generated_source_dir: Path | None = None
     generated_probe_paths: dict[str, Path] = {}
+    generated_probe_headers: dict[str, tuple[Path, Path]] = {}
     if probes and (json_out or compile_probes):
         generated_source_dir = Path(
             tempfile.mkdtemp(prefix="name-magic-source-declarations-")
+        )
+        target_header = _name_magic_header_for_source(resolved_source)
+        target_header_text = (
+            target_header.read_text(encoding="utf-8", errors="replace")
+            if target_header is not None
+            else None
         )
         for probe in probes:
             path = generated_source_dir / f"{probe.label}.c"
             path.write_text(probe.source_text, encoding="utf-8")
             generated_probe_paths[probe.label] = path
+            if (
+                probe.header_declarations
+                and target_header is not None
+                and target_header_text is not None
+            ):
+                header_path = generated_source_dir / f"{probe.label}.h"
+                header_path.write_text(
+                    _name_magic_header_candidate_text(
+                        target_header_text,
+                        probe.header_declarations,
+                    ),
+                    encoding="utf-8",
+                )
+                generated_probe_headers[probe.label] = (
+                    header_path,
+                    target_header,
+                )
 
     probe_payloads = [probe.to_dict() for probe in probes]
     probe_by_label = {probe.label: probe.to_dict() for probe in probes}
@@ -21588,6 +21707,8 @@ def mutate_name_magic_source_declarations_cmd(
         operator: str,
         path: Path,
         probe: dict[str, Any] | None = None,
+        header_path: Path | None = None,
+        header_target: Path | None = None,
     ) -> None:
         variant: dict[str, Any] = {
             "label": label,
@@ -21602,6 +21723,10 @@ def mutate_name_magic_source_declarations_cmd(
             "error": None,
             "probe": probe,
         }
+        if header_path is not None:
+            variant["header_retained"] = str(header_path)
+        if header_target is not None:
+            variant["header_target"] = str(header_target)
         try:
             if path.suffix != ".c":
                 raise ValueError(f"expected .c source candidate, got {path}")
@@ -21618,6 +21743,8 @@ def mutate_name_magic_source_declarations_cmd(
                     path,
                     function=function,
                     melee_root=melee_root,
+                    header_path=header_path,
+                    header_target=header_target,
                     timeout=timeout,
                     status=status,
                 )
@@ -21652,11 +21779,14 @@ def mutate_name_magic_source_declarations_cmd(
             path = generated_probe_paths.get(probe.label)
             if path is None:
                 continue
+            header_pair = generated_probe_headers.get(probe.label)
             _score_candidate(
                 label=probe.label,
                 operator=probe.operator,
                 path=path,
                 probe=probe_by_label.get(probe.label),
+                header_path=header_pair[0] if header_pair is not None else None,
+                header_target=header_pair[1] if header_pair is not None else None,
             )
 
     ranked_variants = _rank_name_magic_source_variants(variants)
