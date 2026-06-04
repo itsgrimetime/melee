@@ -598,6 +598,37 @@ def test_frame_reservation_resolves_named_local_stack_homes_from_current_asm() -
                 "target_symbols": ["q3", "lenCol+8", "lenCol+12", "nxt"],
             },
         ],
+        "probe_plan": {
+            "status": "ready",
+            "objective": "move stack homes into expected target offset order",
+            "target_symbols": ["q3", "lenCol+8", "lenCol+12", "nxt"],
+            "current_offset_order": ["q3", "lenCol+8", "lenCol+12", "nxt"],
+            "expected_offset_order": ["q3", "lenCol+8", "lenCol+12", "nxt"],
+            "cycles": [],
+            "operator_priority": [
+                "declaration-use-distance",
+                "block-scope",
+                "call-argument-tempization",
+                "decl-orders",
+            ],
+            "suggested_commands": [
+                {
+                    "kind": "lifetime-layout",
+                    "command": (
+                        "melee-agent debug mutate lifetime-layout -f <function> "
+                        "--operator declaration-use-distance --operator block-scope "
+                        "--operator call-argument-tempization --compile-probes --json"
+                    ),
+                },
+                {
+                    "kind": "decl-orders",
+                    "command": (
+                        "melee-agent debug mutate decl-orders <function> "
+                        "--strategy all --json"
+                    ),
+                },
+            ],
+        },
         "next_steps": [
             "melee-agent debug mutate lifetime-layout -f <function> --compile-probes",
             "melee-agent debug mutate decl-orders <function> --strategy all --json",
@@ -799,6 +830,43 @@ def test_frame_reservation_infers_expected_symbolic_stack_home_order() -> None:
     assert guidance["verdict"] == "unknown-unvalidated"
     assert "target asm" in guidance["reason"]
     assert guidance["candidate_levers"][0]["target_symbols"] == ["c", "a"]
+    assert guidance["probe_plan"] == {
+        "status": "ready",
+        "objective": "move stack homes into expected target offset order",
+        "target_symbols": ["c", "a"],
+        "current_offset_order": ["c", "a", "b"],
+        "expected_offset_order": ["a", "c", "b"],
+        "cycles": [
+            {
+                "symbols": ["c", "a"],
+                "current_positions": [0, 1],
+                "expected_positions": [1, 0],
+            },
+        ],
+        "operator_priority": [
+            "declaration-use-distance",
+            "block-scope",
+            "call-argument-tempization",
+            "decl-orders",
+        ],
+        "suggested_commands": [
+            {
+                "kind": "lifetime-layout",
+                "command": (
+                    "melee-agent debug mutate lifetime-layout -f <function> "
+                    "--operator declaration-use-distance --operator block-scope "
+                    "--operator call-argument-tempization --compile-probes --json"
+                ),
+            },
+            {
+                "kind": "decl-orders",
+                "command": (
+                    "melee-agent debug mutate decl-orders <function> "
+                    "--strategy all --json"
+                ),
+            },
+        ],
+    }
 
 
 def test_frame_reservation_stack_home_assignment_merges_repeated_accesses() -> None:

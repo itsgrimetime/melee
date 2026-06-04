@@ -323,6 +323,7 @@ def _analyze_instructions(
         "stack_home_reorder_guidance": _stack_home_reorder_guidance(
             stack_home_order_summary,
             expected_order_summary=stack_home_expected_order_summary,
+            target_permutation=stack_home_target_permutation,
         ),
         "symbolic_home_map": [
             {"symbol": symbol, "offset": offset}
@@ -711,6 +712,7 @@ def _stack_home_reorder_guidance(
     order_summary: dict,
     *,
     expected_order_summary: dict | None = None,
+    target_permutation: dict | None = None,
 ) -> dict:
     if order_summary.get("status") != "computed":
         return {
@@ -741,6 +743,10 @@ def _stack_home_reorder_guidance(
             reverse=True,
         )
         target_symbols = [str(row.get("symbol")) for row in displaced[:5]]
+        probe_plan = _stack_home_probe_plan(
+            target_symbols,
+            target_permutation=target_permutation,
+        )
         return {
             "status": "source-reorder-probe-needed",
             "verdict": "unknown-unvalidated",
@@ -773,6 +779,7 @@ def _stack_home_reorder_guidance(
                     "target_symbols": target_symbols,
                 },
             ],
+            "probe_plan": probe_plan,
             "next_steps": [
                 "melee-agent debug mutate lifetime-layout -f <function> --compile-probes",
                 "melee-agent debug mutate decl-orders <function> --strategy all --json",
@@ -822,9 +829,65 @@ def _stack_home_reorder_guidance(
                 "target_symbols": target_symbols,
             },
         ],
+        "probe_plan": _stack_home_probe_plan(target_symbols),
         "next_steps": [
             "melee-agent debug mutate lifetime-layout -f <function> --compile-probes",
             "melee-agent debug mutate decl-orders <function> --strategy all --json",
+        ],
+    }
+
+
+def _stack_home_probe_plan(
+    target_symbols: list[str],
+    *,
+    target_permutation: dict | None = None,
+) -> dict:
+    current_order: list[str] = []
+    expected_order: list[str] = []
+    cycles: list[dict] = []
+    if target_permutation and target_permutation.get("status") == "computed":
+        raw_current_order = target_permutation.get("current_offset_order")
+        raw_expected_order = target_permutation.get("expected_offset_order")
+        raw_cycles = target_permutation.get("cycles")
+        if isinstance(raw_current_order, list):
+            current_order = [str(symbol) for symbol in raw_current_order]
+        if isinstance(raw_expected_order, list):
+            expected_order = [str(symbol) for symbol in raw_expected_order]
+        if isinstance(raw_cycles, list):
+            cycles = [
+                cycle for cycle in raw_cycles
+                if isinstance(cycle, dict)
+            ]
+
+    return {
+        "status": "ready",
+        "objective": "move stack homes into expected target offset order",
+        "target_symbols": target_symbols,
+        "current_offset_order": current_order,
+        "expected_offset_order": expected_order,
+        "cycles": cycles,
+        "operator_priority": [
+            "declaration-use-distance",
+            "block-scope",
+            "call-argument-tempization",
+            "decl-orders",
+        ],
+        "suggested_commands": [
+            {
+                "kind": "lifetime-layout",
+                "command": (
+                    "melee-agent debug mutate lifetime-layout -f <function> "
+                    "--operator declaration-use-distance --operator block-scope "
+                    "--operator call-argument-tempization --compile-probes --json"
+                ),
+            },
+            {
+                "kind": "decl-orders",
+                "command": (
+                    "melee-agent debug mutate decl-orders <function> "
+                    "--strategy all --json"
+                ),
+            },
         ],
     }
 

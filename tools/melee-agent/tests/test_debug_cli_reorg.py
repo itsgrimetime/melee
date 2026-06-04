@@ -355,6 +355,10 @@ def test_frame_reservations_cli_text_reports_expected_stack_home_offsets(
     assert "target permutation: c, a, b -> a, c, b" in out
     assert "cycle: c -> a" in out
     assert "reorder verdict: unknown-unvalidated" in out
+    assert (
+        "probe operators: declaration-use-distance, block-scope, "
+        "call-argument-tempization, decl-orders"
+    ) in out
 
 
 def test_frame_reservations_cli_reports_current_low_expansion(tmp_path: Path) -> None:

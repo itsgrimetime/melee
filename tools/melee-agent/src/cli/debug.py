@@ -3538,6 +3538,14 @@ def _print_stack_home_order_summary(current: Mapping[str, object]) -> None:
     verdict = guidance.get("verdict")
     if verdict:
         print(f"reorder verdict: {verdict}")
+    probe_plan = guidance.get("probe_plan")
+    if isinstance(probe_plan, Mapping):
+        operators = probe_plan.get("operator_priority")
+        if isinstance(operators, list) and operators:
+            print(
+                "probe operators: "
+                + ", ".join(str(operator) for operator in operators)
+            )
     levers = guidance.get("candidate_levers")
     if isinstance(levers, list) and levers:
         kinds = [
