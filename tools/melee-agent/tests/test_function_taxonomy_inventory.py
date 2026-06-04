@@ -193,6 +193,7 @@ def test_generate_inventory_classifies_report_functions_and_writes_outputs(
         "match_percent\tfunction\tprimary\tsubcategory\t"
         "frame_cause\tframe_verdict\tframe_closability_tier\t"
         "frame_attribution_status\tframe_source_object_symbol\t"
+        "cast_audit_status\tcast_medium_plus_count\t"
         "source_actionability\theadline_tool\tactionability_reason\t"
         "decl_order_best_delta\tdecl_order_best_ordering\t"
         "decl_order_evaluated_status\tdecl_order_candidate_count\t"
@@ -201,13 +202,13 @@ def test_generate_inventory_classifies_report_functions_and_writes_outputs(
     assert (
         "99.75000\tstack_fn\tstack-slot-layout\tsame-frame-stack-slot-placement\t"
         "stack-object-offset-shift\tsource-reachable-candidate\treorder-gated-362\t"
-        "checkdiff-only\t\tgenerator-gated\tlifetime-layout\t"
+        "checkdiff-only\t\t\t0\tgenerator-gated\tlifetime-layout\t"
     ) in stack_queue
     assert "\t0.12500\tswap a <-> b\tevaluated\t3" in stack_queue
     assert (
         "99.25000\tframe_fn\tstack-layout\tframe-too-large\t"
         "frame-too-large\tunresolved-source-attribution\tgen-gated-366\t"
-        "checkdiff-only\t\tgenerator-gated\tframe-transform-search\t"
+        "checkdiff-only\t\t\t0\tgenerator-gated\tframe-transform-search\t"
     ) in stack_queue
 
     summary = (output / "summary.md").read_text(encoding="utf-8")
@@ -274,6 +275,95 @@ def test_describe_actionability_splits_non_frame_work_buckets() -> None:
         result = describe_actionability(bucket, subcategory)
         assert result["source_actionability"] == actionability
         assert result["headline_tool"] == headline
+
+
+def test_signature_bucket_requires_medium_cast_evidence() -> None:
+    from tools.function_taxonomy_inventory import FunctionCandidate, classify_bucket
+
+    candidate = FunctionCandidate(
+        function="ftDemo_80000000",
+        unit="main/melee/demo/demo",
+        file_path="melee/demo/demo.c",
+        size_bytes=512,
+        match_percent=99.1,
+        address="0x80000000",
+        object_status="NonMatching",
+    )
+    payload = {
+        "classification": {
+            "primary": "signature-type-mismatch",
+            "reasons": ["call shape differs after alignment"],
+        },
+        "structural": {"opcode_similarity": 0.99, "line_delta": 2},
+    }
+
+    assert classify_bucket(candidate, payload, cast_audit={"medium_plus_count": 1}) == (
+        "signature-call-type",
+        "call-shape-or-prototype",
+        False,
+    )
+    assert classify_bucket(candidate, payload, cast_audit={"medium_plus_count": 0}) == (
+        "structural-reconstruction",
+        "branch-or-control-flow-shape",
+        False,
+    )
+
+
+def test_signature_red_herring_rebuckets_by_dominant_residual() -> None:
+    from tools.function_taxonomy_inventory import FunctionCandidate, classify_bucket
+
+    candidate = FunctionCandidate(
+        function="ftCo_800CF6E8",
+        unit="main/melee/ft/ftcommon",
+        file_path="melee/ft/ftcommon.c",
+        size_bytes=2048,
+        match_percent=99.0,
+        address="0x800cf6e8",
+        object_status="NonMatching",
+    )
+
+    frame_payload = {
+        "classification": {
+            "primary": "signature-type-mismatch",
+            "reasons": [
+                "call shape differs; check prototypes",
+                "frame reservation gap is too small",
+            ],
+            "stack_frame_delta": {"missing_stack_bytes": 32},
+        },
+        "structural": {"opcode_similarity": 0.98, "line_delta": 4},
+    }
+    assert classify_bucket(candidate, frame_payload, cast_audit={"medium_plus_count": 0}) == (
+        "stack-local-layout",
+        "frame-too-small",
+        False,
+    )
+
+    data_payload = {
+        "classification": {
+            "primary": "signature-type-mismatch",
+            "reasons": [
+                "call shape differs; check prototypes",
+                "578 differing paired lines reference data/symbol relocations",
+            ],
+        },
+        "structural": {"opcode_similarity": 0.999, "line_delta": 1},
+    }
+    assert classify_bucket(candidate, data_payload, cast_audit={"medium_plus_count": 0}) == (
+        "data-symbol-relocation",
+        "signature-red-herring-data-symbol",
+        False,
+    )
+
+
+def test_inventory_help_renders_literal_percent() -> None:
+    from tools.function_taxonomy_inventory import build_arg_parser
+
+    help_text = build_arg_parser().format_help()
+
+    assert ">=99% stack-" in help_text
+    assert "local-layout rows" in help_text
+    assert "option_strings" not in help_text
 
 
 def test_generate_inventory_honors_limit_before_running_checkdiff(tmp_path: Path) -> None:
@@ -429,6 +519,7 @@ def test_generate_inventory_attaches_stack_frame_closability_fields(
     assert "frame_verdict" in header
     assert "frame_closability_tier" in header
     assert "frame_next_command" in header
+    assert "cast_medium_plus_count" in header
 
 
 def test_generate_inventory_uses_frame_report_source_attribution(

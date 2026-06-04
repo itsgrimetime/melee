@@ -64,6 +64,7 @@ class InventoryResult:
 CheckdiffRunner = Callable[[str], tuple[int, str, str]]
 DeclOrderEvaluator = Callable[[FunctionCandidate, dict[str, Any]], dict[str, Any]]
 FrameReportRunner = Callable[[FunctionCandidate], dict[str, Any] | None]
+CastAuditRunner = Callable[[FunctionCandidate], dict[str, Any]]
 
 
 def parse_int(value: Any, default: int = 0) -> int:
@@ -199,8 +200,47 @@ def is_known_small_candidate(candidate: FunctionCandidate, payload: dict[str, An
     )
 
 
-def classify_bucket(
+def _signature_residual_bucket(
     candidate: FunctionCandidate, payload: dict[str, Any]
+) -> tuple[str, str, bool]:
+    classification = payload.get("classification") or {}
+    reasons = classification.get("reasons") or []
+    reason_text = "\n".join(str(reason).lower() for reason in reasons)
+    payload_text = json.dumps(payload, sort_keys=True).lower()
+    structural = payload.get("structural") or {}
+    line_delta = abs(parse_int(structural.get("line_delta")))
+
+    if (
+        classification.get("stack_frame_delta")
+        or "frame reservation gap" in reason_text
+        or "pad_stack" in reason_text
+    ):
+        if "too small" in reason_text or "missing_stack_bytes" in payload_text:
+            return "stack-local-layout", "frame-too-small", False
+        if "too large" in reason_text or "extra_stack_bytes" in payload_text:
+            return "stack-local-layout", "frame-too-large", False
+        return "stack-local-layout", "frame-size-delta", False
+    if "stack slot" in reason_text:
+        return "stack-local-layout", "same-frame-stack-slot-placement", False
+    if (
+        "relocation" in reason_text
+        or "data/symbol" in reason_text
+        or "name-magic" in reason_text
+        or "sdata" in reason_text
+    ):
+        return "data-symbol-relocation", "signature-red-herring-data-symbol", False
+    if "inline" in reason_text:
+        return "inline-boundary", "signature-red-herring-inline-boundary", False
+    if line_delta > 1:
+        return "structural-reconstruction", "branch-or-control-flow-shape", False
+    return "structural-reconstruction", "opcode-sequence-diff", False
+
+
+def classify_bucket(
+    candidate: FunctionCandidate,
+    payload: dict[str, Any],
+    *,
+    cast_audit: dict[str, Any] | None = None,
 ) -> tuple[str, str, bool]:
     classification = payload.get("classification") or {}
     primary = classification.get("primary") or "unknown"
@@ -208,6 +248,8 @@ def classify_bucket(
     reason_text = "\n".join(str(reason).lower() for reason in reasons)
 
     if primary == "signature-type-mismatch":
+        if parse_int((cast_audit or {}).get("medium_plus_count")) <= 0:
+            return _signature_residual_bucket(candidate, payload)
         return "signature-call-type", "call-shape-or-prototype", False
     if primary == "inline-boundary-toolchain-artifact":
         return "inline-boundary", "missing-reference-call-current-inlined", False
@@ -463,6 +505,44 @@ def default_frame_report_runner(
         return None
 
 
+def default_cast_audit_runner(candidate: FunctionCandidate) -> dict[str, Any]:
+    source_path = REPO_ROOT / "src" / candidate.file_path
+    if not source_path.exists():
+        return {
+            "status": "source-missing",
+            "medium_plus_count": 0,
+            "high_count": 0,
+            "medium_count": 0,
+            "low_count": 0,
+        }
+    try:
+        from src.mwcc_debug.cast_audit import audit_function_casts
+
+        warnings = audit_function_casts(
+            source_path.read_text(encoding="utf-8"),
+            candidate.function,
+        )
+    except Exception as exc:
+        return {
+            "status": "error",
+            "message": str(exc),
+            "medium_plus_count": 0,
+            "high_count": 0,
+            "medium_count": 0,
+            "low_count": 0,
+        }
+    high_count = sum(1 for warning in warnings if warning.severity == "high")
+    medium_count = sum(1 for warning in warnings if warning.severity == "medium")
+    low_count = sum(1 for warning in warnings if warning.severity == "low")
+    return {
+        "status": "ok",
+        "medium_plus_count": high_count + medium_count,
+        "high_count": high_count,
+        "medium_count": medium_count,
+        "low_count": low_count,
+    }
+
+
 def frame_taxonomy_for_candidate(
     candidate: FunctionCandidate,
     classification: dict[str, Any],
@@ -630,6 +710,7 @@ def classify_candidate(
     runner: CheckdiffRunner,
     decl_order_evaluator: DeclOrderEvaluator | None = default_decl_order_evaluator,
     frame_report_runner: FrameReportRunner | None = default_frame_report_runner,
+    cast_audit_runner: CastAuditRunner | None = default_cast_audit_runner,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     started = time.perf_counter()
     returncode, stdout, stderr = runner(candidate.function)
@@ -649,7 +730,24 @@ def classify_candidate(
 
     classification = payload.get("classification") or {}
     primary = classification.get("primary") or "unknown"
-    bucket, subcategory, known_small = classify_bucket(candidate, payload)
+    cast_audit = None
+    if primary == "signature-type-mismatch" and cast_audit_runner is not None:
+        try:
+            cast_audit = cast_audit_runner(candidate)
+        except Exception as exc:
+            cast_audit = {
+                "status": "error",
+                "message": str(exc),
+                "medium_plus_count": 0,
+                "high_count": 0,
+                "medium_count": 0,
+                "low_count": 0,
+            }
+    bucket, subcategory, known_small = classify_bucket(
+        candidate,
+        payload,
+        cast_audit=cast_audit,
+    )
     frame_taxonomy = frame_taxonomy_for_candidate(
         candidate,
         classification,
@@ -681,6 +779,9 @@ def classify_candidate(
         "work_bucket": bucket,
         "subcategory": subcategory,
         "known_small_pattern_candidate": known_small,
+        "cast_audit": cast_audit,
+        "cast_audit_status": (cast_audit or {}).get("status"),
+        "cast_medium_plus_count": parse_int((cast_audit or {}).get("medium_plus_count")),
         **actionability,
         "confidence": "heuristic",
         "elapsed_sec": round(elapsed, 3),
@@ -716,6 +817,8 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "frame_closability_tier",
         "frame_attribution_status",
         "frame_source_object_symbol",
+        "cast_audit_status",
+        "cast_medium_plus_count",
         "source_actionability",
         "headline_tool",
         "actionability_reason",
@@ -740,6 +843,8 @@ def write_queue(path: Path, rows: list[dict[str, Any]]) -> None:
         "frame_closability_tier",
         "frame_attribution_status",
         "frame_source_object_symbol",
+        "cast_audit_status",
+        "cast_medium_plus_count",
         "source_actionability",
         "headline_tool",
         "actionability_reason",
@@ -964,7 +1069,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--skip-decl-order-eval",
         action="store_true",
-        help="Skip bounded decl-orders evaluation for >=99% stack-local-layout rows.",
+        help="Skip bounded decl-orders evaluation for >=99%% stack-local-layout rows.",
     )
     parser.add_argument(
         "--skip-frame-report-attribution",
