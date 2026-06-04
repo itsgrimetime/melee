@@ -211,6 +211,88 @@ def test_frame_reservation_report_finds_current_low_home_realignment_growth() ->
     assert "plus 4 bytes of alignment growth" in report["summary"]
 
 
+def test_frame_reservation_reports_first_occupied_object_divergence() -> None:
+    pcdump = textwrap.dedent("""\
+        Starting function fn_80000000
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        fn_80000000
+        B0: Succ={} Pred={} Labels={}
+            stwu r1,-56(r1)
+            stw r8,28(r1)
+            stmw r28,40(r1)
+            addi r1,r1,56
+    """)
+    expected_asm = textwrap.dedent("""\
+        .fn fn_80000000, global
+        /* 80000000 */    stwu r1, -0x38(r1)
+        /* 80000004 */    stw r8, 0x18(r1)
+        /* 80000008 */    stmw r28, 0x28(r1)
+        /* 8000000c */    addi r1, r1, 0x38
+        .endfn fn_80000000
+    """)
+
+    report = analyze_frame_reservations(
+        pcdump,
+        "fn_80000000",
+        expected_asm_text=expected_asm,
+    )
+
+    divergence = report["frame_first_divergence"]
+    assert divergence["status"] == "diverged"
+    assert divergence["index"] == 0
+    assert divergence["reason"] == "start-differs"
+    assert divergence["current"]["start"] == 28
+    assert divergence["expected"]["start"] == 24
+    assert divergence["source_attribution"]["status"] == "unavailable"
+    assert divergence["verdict"]["status"] == "unknown"
+
+
+def test_frame_reservation_reports_frame_size_only_divergence() -> None:
+    pcdump = textwrap.dedent("""\
+        Starting function fn_80000000
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        fn_80000000
+        B0: Succ={} Pred={} Labels={}
+            stwu r1,-64(r1)
+            stw r8,24(r1)
+            stmw r28,40(r1)
+            addi r1,r1,64
+    """)
+    expected_asm = textwrap.dedent("""\
+        .fn fn_80000000, global
+        /* 80000000 */    stwu r1, -0x38(r1)
+        /* 80000004 */    stw r8, 0x18(r1)
+        /* 80000008 */    stmw r28, 0x28(r1)
+        /* 8000000c */    addi r1, r1, 0x38
+        .endfn fn_80000000
+    """)
+
+    report = analyze_frame_reservations(
+        pcdump,
+        "fn_80000000",
+        expected_asm_text=expected_asm,
+    )
+
+    assert report["frame_delta"] == -8
+    assert report["frame_first_divergence"] == {
+        "status": "frame-size-only",
+        "frame_delta": -8,
+        "source_attribution": {
+            "status": "unavailable",
+            "reason": (
+                "requires current-side MWCC stack-home origin instrumentation"
+            ),
+        },
+        "verdict": {
+            "status": "unknown",
+            "reason": (
+                "frame sizes differ, but no occupied object divergence was "
+                "inferred from final r1 accesses"
+            ),
+        },
+    }
+
+
 def test_frame_reservation_report_labels_callee_save_access_ranges() -> None:
     pcdump = textwrap.dedent("""\
         Starting function fn_80000000

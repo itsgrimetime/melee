@@ -80,6 +80,11 @@ def analyze_frame_reservations(
         if expected is not None
         else None
     )
+    first_divergence = (
+        _first_stack_object_divergence(current, expected, frame_delta)
+        if expected is not None
+        else None
+    )
     summary = _summary(
         function,
         current,
@@ -95,6 +100,7 @@ def analyze_frame_reservations(
         "frame_delta": frame_delta,
         "extra_low_frame_reservation": extra,
         "current_low_frame_expansion": current_low_expansion,
+        "frame_first_divergence": first_divergence,
         "summary": summary,
     }
     return report
@@ -368,6 +374,98 @@ def _stack_objects(
             item["kind"],
         ),
     )
+
+
+def _first_stack_object_divergence(
+    current: dict,
+    expected: dict | None,
+    frame_delta: int | None,
+) -> dict:
+    if expected is None:
+        return {"status": "expected-unavailable"}
+    current_objects = _occupied_stack_objects(current)
+    expected_objects = _occupied_stack_objects(expected)
+    max_len = max(len(current_objects), len(expected_objects))
+    for index in range(max_len):
+        cur = current_objects[index] if index < len(current_objects) else None
+        exp = expected_objects[index] if index < len(expected_objects) else None
+        if cur == exp:
+            continue
+        return {
+            "status": "diverged",
+            "index": index,
+            "reason": _stack_object_divergence_reason(cur, exp),
+            "current": cur,
+            "expected": exp,
+            "source_attribution": {
+                "status": "unavailable",
+                "reason": (
+                    "requires current-side MWCC stack-home origin "
+                    "instrumentation"
+                ),
+            },
+            "verdict": {
+                "status": "unknown",
+                "reason": (
+                    "stack-object maps differ, but source attribution and "
+                    "internal-tiebreak evidence are not available yet"
+                ),
+            },
+        }
+    if frame_delta:
+        return {
+            "status": "frame-size-only",
+            "frame_delta": frame_delta,
+            "source_attribution": {
+                "status": "unavailable",
+                "reason": (
+                    "requires current-side MWCC stack-home origin "
+                    "instrumentation"
+                ),
+            },
+            "verdict": {
+                "status": "unknown",
+                "reason": (
+                    "frame sizes differ, but no occupied object divergence was "
+                    "inferred from final r1 accesses"
+                ),
+            },
+        }
+    return {"status": "matched"}
+
+
+def _occupied_stack_objects(frame: dict) -> list[dict]:
+    return [
+        {
+            key: item[key]
+            for key in (
+                "start",
+                "end",
+                "size",
+                "kind",
+                "source",
+                "boundary_confidence",
+                "ambiguous",
+            )
+            if key in item
+        }
+        for item in frame.get("stack_objects") or []
+        if item.get("kind") not in {"unused", "abi-header"}
+    ]
+
+
+def _stack_object_divergence_reason(
+    current: dict | None,
+    expected: dict | None,
+) -> str:
+    if current is None:
+        return "missing-current-object"
+    if expected is None:
+        return "extra-current-object"
+    for key in ("start", "end", "size", "kind"):
+        if current.get(key) != expected.get(key):
+            return f"{key}-differs"
+    return "metadata-differs"
 
 
 def _resolve_symbolic_stack_homes(

@@ -3427,6 +3427,31 @@ def _print_frame_reservation_report(report: dict) -> None:
     if expected is not None:
         _print_unused_ranges("expected", expected.get("unused_ranges", []))
 
+    first_divergence = report.get("frame_first_divergence")
+    if first_divergence:
+        print()
+        print(f"first frame divergence: {first_divergence.get('status')}")
+        reason = first_divergence.get("reason")
+        if reason:
+            print(f"reason: {reason}")
+        current_obj = first_divergence.get("current")
+        expected_obj = first_divergence.get("expected")
+        if current_obj:
+            print(
+                "current object: "
+                f"{current_obj.get('kind')} "
+                f"{_format_stack_range(current_obj)}"
+            )
+        if expected_obj:
+            print(
+                "expected object: "
+                f"{expected_obj.get('kind')} "
+                f"{_format_stack_range(expected_obj)}"
+            )
+        verdict = first_divergence.get("verdict") or {}
+        if verdict.get("status"):
+            print(f"verdict: {verdict.get('status')} - {verdict.get('reason')}")
+
     current_low = report.get("current_low_frame_expansion")
     if current_low is not None:
         print()
