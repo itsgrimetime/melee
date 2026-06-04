@@ -25,11 +25,13 @@ HARNESS_FRAME_TRANSFORM = "frame-transform-search"
 HARNESS_COALESCE = "coalesce-search"
 HARNESS_SELECT_ORDER = "select-order-search"
 HARNESS_INDEXED_STRUCT = "indexed-struct-search"
+HARNESS_NAME_MAGIC_SOURCE = "name-magic-source-declarations"
 REGISTERED_HARNESSES = {
     HARNESS_FRAME_TRANSFORM,
     HARNESS_COALESCE,
     HARNESS_SELECT_ORDER,
     HARNESS_INDEXED_STRUCT,
+    HARNESS_NAME_MAGIC_SOURCE,
 }
 
 BLOCKER_UNSUPPORTED_HARNESS = "unsupported-harness"
@@ -40,6 +42,7 @@ BLOCKER_HARNESS_INVALID_JSON = "harness-invalid-json"
 BLOCKER_NO_VALIDATED_CANDIDATE = "no-validated-candidate"
 BLOCKER_APPLY_TRANSFER_FAILED = "apply-transfer-failed"
 BLOCKER_APPLY_VALIDATION_FAILED = "apply-validation-failed"
+BLOCKER_DECLARATION_APPLY_UNSUPPORTED = "declaration-apply-unsupported"
 
 
 @dataclass
@@ -256,6 +259,16 @@ def select_harness(request: HarvestRequest) -> str | None:
         harness = str(explicit_harness).strip().lower()
         return harness if harness in REGISTERED_HARNESSES else None
 
+    if request.primary == "data-symbol-relocation":
+        return HARNESS_NAME_MAGIC_SOURCE
+    if request.work_bucket == "data-symbol-relocation" and (
+        request.primary == "data-symbol-or-relocation"
+        or request.subcategory == "persistent-data-symbol-or-relocation"
+        or request.source_actionability == "current-tools-data-symbol"
+        or request.headline_tool == "checkdiff-name-magic"
+    ):
+        return HARNESS_NAME_MAGIC_SOURCE
+
     if request.primary == "indexed-struct-pointer-materialization":
         return HARNESS_INDEXED_STRUCT
     if request.source_actionability == "current-tools-indexed-pointer":
@@ -292,7 +305,7 @@ def _is_c_source_path(value: str) -> bool:
     return Path(value).suffix == ".c"
 
 
-def _candidate_source_path(candidate: dict[str, Any]) -> str | None:
+def _candidate_source_path_any(candidate: dict[str, Any]) -> str | None:
     for key in (
         "source_path",
         "source_retained",
@@ -302,16 +315,23 @@ def _candidate_source_path(candidate: dict[str, Any]) -> str | None:
         "retained_source",
     ):
         value = candidate.get(key)
-        if isinstance(value, str) and value and _is_c_source_path(value):
+        if isinstance(value, str) and value:
             return value
     value = candidate.get("path")
-    if isinstance(value, str) and value and _is_c_source_path(value):
+    if isinstance(value, str) and value:
         return value
     source = candidate.get("source")
     if isinstance(source, dict):
         value = source.get("path")
-        if isinstance(value, str) and value and _is_c_source_path(value):
+        if isinstance(value, str) and value:
             return value
+    return None
+
+
+def _candidate_source_path(candidate: dict[str, Any]) -> str | None:
+    value = _candidate_source_path_any(candidate)
+    if value is not None and _is_c_source_path(value):
+        return value
     return None
 
 
@@ -353,6 +373,52 @@ def best_validated_candidate(payload: Any) -> dict[str, Any] | None:
         if abs(score - VALIDATED_MATCH_PERCENT) <= VALIDATED_EPSILON:
             return candidate
     return None
+
+
+def _name_magic_source_stop_kind(payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    stop = payload.get("stop_condition")
+    if not isinstance(stop, dict):
+        return None
+    kind = stop.get("kind")
+    return kind if isinstance(kind, str) else None
+
+
+def _name_magic_candidate_score(candidate: dict[str, Any]) -> float | None:
+    for key in ("final_match_percent", "match_percent"):
+        score = _float_or_none(candidate.get(key))
+        if score is not None:
+            return score
+    return None
+
+
+def _is_valid_name_magic_candidate(candidate: dict[str, Any]) -> bool:
+    if candidate.get("status") != "ok":
+        return False
+    if candidate.get("no_name_magic_match") is not True:
+        return False
+    score = _name_magic_candidate_score(candidate)
+    if score is None:
+        return False
+    return abs(score - VALIDATED_MATCH_PERCENT) <= VALIDATED_EPSILON
+
+
+def best_validated_name_magic_candidate(
+    payload: Any,
+) -> tuple[dict[str, Any] | None, str | None]:
+    if _name_magic_source_stop_kind(payload) != "validated":
+        return None, None
+    for candidate in _iter_candidates(payload):
+        if not _is_valid_name_magic_candidate(candidate):
+            continue
+        candidate_path = _candidate_source_path(candidate)
+        if candidate_path is not None:
+            return candidate, None
+        raw_path = _candidate_source_path_any(candidate)
+        if raw_path is not None and not _is_c_source_path(raw_path):
+            return None, raw_path
+    return None, None
 
 
 def _default_runner(
@@ -411,6 +477,63 @@ def _default_match_checker(
         function,
         "--format",
         "json",
+    ]
+    completed = subprocess.run(
+        command,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    return HarnessProcessResult(
+        command=command,
+        returncode=completed.returncode,
+        stdout=completed.stdout,
+        stderr=completed.stderr,
+    )
+
+
+def _default_no_name_magic_validator(
+    function: str,
+    *,
+    cwd: Path,
+    timeout: int,
+) -> HarnessProcessResult:
+    command = [
+        sys.executable,
+        "tools/checkdiff.py",
+        function,
+        "--compact",
+        "--no-name-magic",
+    ]
+    completed = subprocess.run(
+        command,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    return HarnessProcessResult(
+        command=command,
+        returncode=completed.returncode,
+        stdout=completed.stdout,
+        stderr=completed.stderr,
+    )
+
+
+def _default_no_name_magic_match_checker(
+    function: str,
+    *,
+    cwd: Path,
+    timeout: int,
+) -> HarnessProcessResult:
+    command = [
+        sys.executable,
+        "tools/checkdiff.py",
+        function,
+        "--format",
+        "json",
+        "--no-name-magic",
     ]
     completed = subprocess.run(
         command,
@@ -505,6 +628,17 @@ def _indexed_struct_command(request: HarvestRequest) -> list[str]:
         str(request.max_probes),
         "--timeout",
         str(request.timeout),
+    ]
+
+
+def _name_magic_source_command(request: HarvestRequest) -> list[str]:
+    return [
+        "debug",
+        "mutate",
+        HARNESS_NAME_MAGIC_SOURCE,
+        "-f",
+        request.function,
+        "--json",
     ]
 
 
@@ -918,6 +1052,145 @@ def _apply_candidate(
     )
 
 
+def _apply_whole_file_candidate(
+    request: HarvestRequest,
+    *,
+    repo_root: Path,
+    candidate_path: str,
+    validator: ValidatorRunner,
+    harness: str,
+    command: list[str],
+    final_match_percent: float,
+) -> HarvestResult:
+    if request.source_file is None:
+        return _base_result(
+            request,
+            harness=harness,
+            status="blocked",
+            blocker=BLOCKER_MISSING_SOURCE_FILE,
+            reason="source file could not be resolved",
+            command=command,
+            candidate_path=candidate_path,
+            final_match_percent=final_match_percent,
+        )
+
+    candidate_file = _candidate_path_for_apply(candidate_path, repo_root)
+    if not _is_c_source_path(str(candidate_file)):
+        return _base_result(
+            request,
+            harness=harness,
+            status="blocked",
+            blocker=BLOCKER_DECLARATION_APPLY_UNSUPPORTED,
+            reason="retained source candidate is not a .c file",
+            command=command,
+            candidate_path=candidate_path,
+            final_match_percent=final_match_percent,
+        )
+
+    try:
+        candidate_text = candidate_file.read_text(encoding="utf-8")
+        target_text = request.source_file.read_text(encoding="utf-8")
+    except OSError as exc:
+        return _base_result(
+            request,
+            harness=harness,
+            status="blocked",
+            blocker=BLOCKER_APPLY_TRANSFER_FAILED,
+            reason="candidate or target source could not be read",
+            command=command,
+            candidate_path=candidate_path,
+            final_match_percent=final_match_percent,
+            details={"error": str(exc)},
+        )
+
+    try:
+        _atomic_write_text(request.source_file, candidate_text)
+        validation = validator(
+            request.function,
+            cwd=repo_root,
+            timeout=request.timeout,
+        )
+    except BaseException as exc:
+        try:
+            _atomic_write_text(request.source_file, target_text)
+        except Exception as rollback_exc:
+            return _base_result(
+                request,
+                harness=harness,
+                status="blocked",
+                blocker=BLOCKER_APPLY_VALIDATION_FAILED,
+                reason="post-apply validation failed and rollback failed",
+                command=command,
+                candidate_path=candidate_path,
+                final_match_percent=final_match_percent,
+                details={
+                    "error": str(exc),
+                    "rollback_error": str(rollback_exc),
+                },
+            )
+        return _base_result(
+            request,
+            harness=harness,
+            status="blocked",
+            blocker=BLOCKER_APPLY_VALIDATION_FAILED,
+            reason="post-apply validation failed to run",
+            command=command,
+            candidate_path=candidate_path,
+            final_match_percent=final_match_percent,
+            details={"error": str(exc)},
+        )
+
+    if validation.returncode != 0:
+        try:
+            _atomic_write_text(request.source_file, target_text)
+        except Exception as rollback_exc:
+            return _base_result(
+                request,
+                harness=harness,
+                status="blocked",
+                blocker=BLOCKER_APPLY_VALIDATION_FAILED,
+                reason="post-apply validation failed and rollback failed",
+                command=command,
+                candidate_path=candidate_path,
+                final_match_percent=final_match_percent,
+                details={
+                    "validator_command": validation.command,
+                    "validator_stdout": _short_output(validation.stdout),
+                    "validator_stderr": _short_output(validation.stderr),
+                    "rollback_error": str(rollback_exc),
+                },
+            )
+        return _base_result(
+            request,
+            harness=harness,
+            status="blocked",
+            blocker=BLOCKER_APPLY_VALIDATION_FAILED,
+            reason="post-apply validation failed",
+            command=command,
+            candidate_path=candidate_path,
+            final_match_percent=final_match_percent,
+            details={
+                "validator_command": validation.command,
+                "validator_stdout": _short_output(validation.stdout),
+                "validator_stderr": _short_output(validation.stderr),
+            },
+        )
+
+
+    return _base_result(
+        request,
+        harness=harness,
+        status="applied",
+        blocker=None,
+        reason="validated candidate applied",
+        command=command,
+        candidate_path=candidate_path,
+        final_match_percent=final_match_percent,
+        applied=True,
+        details={"validator_command": validation.command},
+    )
+
+
 def _adapter_command(request: HarvestRequest, harness: str) -> list[str]:
     if harness == HARNESS_FRAME_TRANSFORM:
         return _frame_transform_command(request)
@@ -927,6 +1200,8 @@ def _adapter_command(request: HarvestRequest, harness: str) -> list[str]:
         return _select_order_command(request)
     if harness == HARNESS_INDEXED_STRUCT:
         return _indexed_struct_command(request)
+    if harness == HARNESS_NAME_MAGIC_SOURCE:
+        return _name_magic_source_command(request)
     raise ValueError(f"unsupported harness: {harness}")
 
 
@@ -939,6 +1214,12 @@ def run_harvest_request(
     match_checker: MatchCheckerRunner = _default_match_checker,
 ) -> HarvestResult:
     harness = select_harness(request)
+    if harness == HARNESS_NAME_MAGIC_SOURCE:
+        if validator is _default_validator:
+            validator = _default_no_name_magic_validator
+        if match_checker is _default_match_checker:
+            match_checker = _default_no_name_magic_match_checker
+
     if request.apply:
         already_matched = _already_matched_result(
             request,
@@ -1024,8 +1305,25 @@ def run_harvest_request(
             details={"error": str(exc), "stdout": _short_output(process.stdout)},
         )
 
-    candidate = best_validated_candidate(harness_json)
+    unsupported_candidate_path = None
+    if harness == HARNESS_NAME_MAGIC_SOURCE:
+        candidate, unsupported_candidate_path = best_validated_name_magic_candidate(
+            harness_json
+        )
+    else:
+        candidate = best_validated_candidate(harness_json)
     if candidate is None:
+        if unsupported_candidate_path is not None:
+            return _base_result(
+                request,
+                harness=harness,
+                status="blocked",
+                blocker=BLOCKER_DECLARATION_APPLY_UNSUPPORTED,
+                reason="retained source candidate is not a .c file",
+                command=command,
+                candidate_path=unsupported_candidate_path,
+                details={"candidate_count": len(_iter_candidates(harness_json))},
+            )
         harness_blocker = _harness_blocker_result(harness_json)
         if harness_blocker is not None:
             status, blocker, reason = harness_blocker
@@ -1061,6 +1359,17 @@ def run_harvest_request(
             reason="validated candidate found",
             command=command,
             candidate_path=candidate_path,
+            final_match_percent=final_match_percent,
+        )
+
+    if harness == HARNESS_NAME_MAGIC_SOURCE:
+        return _apply_whole_file_candidate(
+            request,
+            repo_root=repo_root,
+            candidate_path=candidate_path,
+            validator=validator,
+            harness=harness,
+            command=command,
             final_match_percent=final_match_percent,
         )
 

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import textwrap
 from pathlib import Path
 
+import src.harvest as harvest_module
 from typer.testing import CliRunner
 
 from src.harvest import (
@@ -78,6 +80,18 @@ def _row(
         "frame_next_command": frame_next_command,
         "next_command": next_command,
     }
+
+
+def _name_magic_row(function: str, *, primary: str) -> dict[str, str]:
+    row = _row(
+        function,
+        headline_tool="checkdiff-name-magic",
+        source_actionability="current-tools-data-symbol",
+        frame_closability_tier="",
+    )
+    row["primary"] = primary
+    row["subcategory"] = "persistent-data-symbol-or-relocation"
+    return row
 
 
 def _repo_with_source(tmp_path: Path, rel_path: str = "melee/demo.c") -> Path:
@@ -668,6 +682,152 @@ def test_indexed_struct_harvest_builds_indexed_search_command(tmp_path: Path) ->
     assert ledger["results"][0]["status"] == "validated"
 
 
+def test_data_symbol_relocation_current_queue_row_selects_name_magic_harness(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    _write_queue(
+        queue,
+        [_name_magic_row("demo_fn", primary="data-symbol-or-relocation")],
+    )
+
+    rows = load_queue_rows(
+        queue,
+        work_bucket="data-symbol-relocation",
+        repo_root=repo_root,
+    )
+
+    assert select_harness(rows[0]) == "name-magic-source-declarations"
+
+
+def test_data_symbol_relocation_normalized_primary_selects_name_magic_harness(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    _write_queue(queue, [_name_magic_row("demo_fn", primary="data-symbol-relocation")])
+
+    rows = load_queue_rows(
+        queue,
+        work_bucket="data-symbol-relocation",
+        repo_root=repo_root,
+    )
+
+    assert select_harness(rows[0]) == "name-magic-source-declarations"
+
+
+def test_name_magic_harvest_builds_source_declarations_command(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    _write_queue(queue, [_name_magic_row("demo_fn", primary="data-symbol-relocation")])
+    calls, runner = _json_runner(
+        {
+            "stop_condition": {"kind": "validated"},
+            "variants": [
+                {
+                    "status": "ok",
+                    "source_retained": str(tmp_path / "candidate.c"),
+                    "final_match_percent": 100.0,
+                    "no_name_magic_match": True,
+                }
+            ],
+        }
+    )
+
+    ledger = run_harvest(
+        "data-symbol-relocation",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    assert calls == [
+        [
+            "debug",
+            "mutate",
+            "name-magic-source-declarations",
+            "-f",
+            "demo_fn",
+            "--json",
+        ]
+    ]
+    assert ledger["results"][0]["harness"] == "name-magic-source-declarations"
+    assert ledger["results"][0]["status"] == "validated"
+
+
+def test_name_magic_gate_requires_no_name_magic_match_true(tmp_path: Path) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    _write_queue(queue, [_name_magic_row("demo_fn", primary="data-symbol-relocation")])
+    _, runner = _json_runner(
+        {
+            "blocker": "no-name-magic-candidate",
+            "stop_condition": {
+                "kind": "unvalidated",
+                "blocker": "no-name-magic-candidate",
+                "reason": "no source candidate reached a true --no-name-magic match",
+            },
+            "variants": [
+                {
+                    "status": "ok",
+                    "source_retained": str(tmp_path / "candidate.c"),
+                    "final_match_percent": 100.0,
+                    "no_name_magic_match": False,
+                }
+            ],
+        }
+    )
+
+    ledger = run_harvest(
+        "data-symbol-relocation",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "no_match"
+    assert result["blocker"] == "no-name-magic-candidate"
+
+
+def test_name_magic_gate_requires_validated_stop_condition(tmp_path: Path) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    _write_queue(queue, [_name_magic_row("demo_fn", primary="data-symbol-relocation")])
+    _, runner = _json_runner(
+        {
+            "blocker": "no-name-magic-candidate",
+            "stop_condition": {
+                "kind": "unvalidated",
+                "blocker": "no-name-magic-candidate",
+                "reason": "candidate was not validated",
+            },
+            "variants": [
+                {
+                    "status": "ok",
+                    "source_retained": str(tmp_path / "candidate.c"),
+                    "final_match_percent": 100.0,
+                    "no_name_magic_match": True,
+                }
+            ],
+        }
+    )
+
+    ledger = run_harvest(
+        "data-symbol-relocation",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "no_match"
+    assert result["blocker"] == "no-name-magic-candidate"
+
+
 def test_missing_register_target_returns_stable_blocker(tmp_path: Path) -> None:
     repo_root = _repo_with_source(tmp_path)
     queue = tmp_path / "queues" / "register.tsv"
@@ -1222,6 +1382,256 @@ def test_indexed_struct_apply_rolls_back_when_validation_is_interrupted(
     assert ledger["results"][0]["status"] == "blocked"
     assert ledger["results"][0]["blocker"] == "apply-validation-failed"
     assert target.read_text(encoding="utf-8") == original
+
+
+def test_name_magic_rejects_non_c_retained_source_for_apply(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    target = repo_root / "src" / "melee/demo.c"
+    target.parent.mkdir(parents=True)
+    target.write_text("int demo_fn(void) {\n    return 1;\n}\n", encoding="utf-8")
+    candidate = tmp_path / "candidate.txt"
+    candidate.write_text("int demo_fn(void) {\n    return 2;\n}\n", encoding="utf-8")
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    _write_queue(queue, [_name_magic_row("demo_fn", primary="data-symbol-relocation")])
+    _, runner = _json_runner(
+        {
+            "stop_condition": {"kind": "validated"},
+            "variants": [
+                {
+                    "status": "ok",
+                    "source_retained": str(candidate),
+                    "final_match_percent": 100.0,
+                    "no_name_magic_match": True,
+                }
+            ],
+        }
+    )
+
+    ledger = run_harvest(
+        "data-symbol-relocation",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+        match_checker=lambda function, *, cwd, timeout: HarnessProcessResult(
+            ["checkdiff", function], 1, "", "mismatch"
+        ),
+        apply=True,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "declaration-apply-unsupported"
+    assert target.read_text(encoding="utf-8") == "int demo_fn(void) {\n    return 1;\n}\n"
+
+
+def test_name_magic_apply_replaces_entire_source_file(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    target = repo_root / "src" / "melee/demo.c"
+    target.parent.mkdir(parents=True)
+    original = textwrap.dedent(
+        """\
+        static int keep_only_if_transfer(void) {
+            return 11;
+        }
+
+        int demo_fn(void) {
+            return 1;
+        }
+        """
+    )
+    target.write_text(original, encoding="utf-8")
+    candidate_text = textwrap.dedent(
+        """\
+        static int replacement_file_local = 3;
+
+        int demo_fn(void) {
+            return replacement_file_local + 2;
+        }
+        """
+    )
+    candidate = tmp_path / "candidate.c"
+    candidate.write_text(candidate_text, encoding="utf-8")
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    _write_queue(queue, [_name_magic_row("demo_fn", primary="data-symbol-relocation")])
+    _, runner = _json_runner(
+        {
+            "stop_condition": {"kind": "validated"},
+            "variants": [
+                {
+                    "status": "ok",
+                    "source_retained": str(candidate),
+                    "final_match_percent": 100.0,
+                    "no_name_magic_match": True,
+                }
+            ],
+        }
+    )
+
+    ledger = run_harvest(
+        "data-symbol-relocation",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+        match_checker=lambda function, *, cwd, timeout: HarnessProcessResult(
+            ["checkdiff", function], 1, "", "mismatch"
+        ),
+        validator=lambda function, *, cwd, timeout: HarnessProcessResult(
+            ["checkdiff", function], 0, "", ""
+        ),
+        apply=True,
+    )
+
+    assert ledger["results"][0]["status"] == "applied"
+    assert target.read_text(encoding="utf-8") == candidate_text
+
+
+def test_name_magic_whole_file_apply_rolls_back_when_validation_fails(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    target = repo_root / "src" / "melee/demo.c"
+    target.parent.mkdir(parents=True)
+    original = "int demo_fn(void) {\n    return 1;\n}\n"
+    target.write_text(original, encoding="utf-8")
+    candidate = tmp_path / "candidate.c"
+    candidate.write_text("int demo_fn(void) {\n    return 2;\n}\n", encoding="utf-8")
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    _write_queue(queue, [_name_magic_row("demo_fn", primary="data-symbol-relocation")])
+    _, runner = _json_runner(
+        {
+            "stop_condition": {"kind": "validated"},
+            "variants": [
+                {
+                    "status": "ok",
+                    "source_retained": str(candidate),
+                    "final_match_percent": 100.0,
+                    "no_name_magic_match": True,
+                }
+            ],
+        }
+    )
+
+    ledger = run_harvest(
+        "data-symbol-relocation",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+        match_checker=lambda function, *, cwd, timeout: HarnessProcessResult(
+            ["checkdiff", function], 1, "", "mismatch"
+        ),
+        validator=lambda function, *, cwd, timeout: HarnessProcessResult(
+            ["checkdiff", function], 1, "", "mismatch"
+        ),
+        apply=True,
+    )
+
+    assert ledger["results"][0]["status"] == "blocked"
+    assert ledger["results"][0]["blocker"] == "apply-validation-failed"
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_name_magic_whole_file_apply_rolls_back_when_validation_is_interrupted(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    target = repo_root / "src" / "melee/demo.c"
+    target.parent.mkdir(parents=True)
+    original = "int demo_fn(void) {\n    return 1;\n}\n"
+    target.write_text(original, encoding="utf-8")
+    candidate = tmp_path / "candidate.c"
+    candidate.write_text("int demo_fn(void) {\n    return 2;\n}\n", encoding="utf-8")
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    _write_queue(queue, [_name_magic_row("demo_fn", primary="data-symbol-relocation")])
+    _, runner = _json_runner(
+        {
+            "stop_condition": {"kind": "validated"},
+            "variants": [
+                {
+                    "status": "ok",
+                    "source_retained": str(candidate),
+                    "final_match_percent": 100.0,
+                    "no_name_magic_match": True,
+                }
+            ],
+        }
+    )
+
+    def interrupted_validator(function: str, *, cwd: Path, timeout: int):
+        raise KeyboardInterrupt("stop")
+
+    ledger = run_harvest(
+        "data-symbol-relocation",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+        match_checker=lambda function, *, cwd, timeout: HarnessProcessResult(
+            ["checkdiff", function], 1, "", "mismatch"
+        ),
+        validator=interrupted_validator,
+        apply=True,
+    )
+
+    assert ledger["results"][0]["status"] == "blocked"
+    assert ledger["results"][0]["blocker"] == "apply-validation-failed"
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_name_magic_default_validator_and_match_checker_use_no_name_magic(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    target = repo_root / "src" / "melee/demo.c"
+    target.parent.mkdir(parents=True)
+    target.write_text("int demo_fn(void) {\n    return 1;\n}\n", encoding="utf-8")
+    candidate = tmp_path / "candidate.c"
+    candidate.write_text("int demo_fn(void) {\n    return 2;\n}\n", encoding="utf-8")
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    _write_queue(queue, [_name_magic_row("demo_fn", primary="data-symbol-relocation")])
+    _, runner = _json_runner(
+        {
+            "stop_condition": {"kind": "validated"},
+            "variants": [
+                {
+                    "status": "ok",
+                    "source_retained": str(candidate),
+                    "final_match_percent": 100.0,
+                    "no_name_magic_match": True,
+                }
+            ],
+        }
+    )
+    subprocess_calls: list[list[str]] = []
+
+    def fake_run(
+        command: list[str],
+        *,
+        cwd: Path,
+        capture_output: bool,
+        text: bool,
+        timeout: int,
+    ) -> subprocess.CompletedProcess[str]:
+        subprocess_calls.append(command)
+        if "--format" in command:
+            return subprocess.CompletedProcess(command, 1, '{"match": false}', "")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(harvest_module.subprocess, "run", fake_run)
+
+    ledger = run_harvest(
+        "data-symbol-relocation",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+        apply=True,
+    )
+
+    checkdiff_calls = [
+        command for command in subprocess_calls if "tools/checkdiff.py" in command
+    ]
+    assert ledger["results"][0]["status"] == "applied"
+    assert len(checkdiff_calls) == 2
+    assert all("--no-name-magic" in command for command in checkdiff_calls)
 
 
 def test_apply_rolls_back_when_same_file_matched_function_regresses(
