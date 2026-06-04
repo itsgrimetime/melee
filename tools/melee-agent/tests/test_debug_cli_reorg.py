@@ -232,6 +232,56 @@ def test_frame_reservations_cli_reports_stack_home_assignments(
     }
 
 
+def test_frame_reservations_cli_text_reports_stack_home_order_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    pcdump = tmp_path / "pcdump.txt"
+    pcdump.write_text(textwrap.dedent("""\
+        Starting function fn_80000000
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        fn_80000000
+        B0: Succ={} Pred={} Labels={}
+            stwu    r1,-80(r1)
+            stfs    f4,lenCol+8(r1)
+            stfs    f5,lenCol+12(r1)
+            stfs    f6,q3(r1)
+            addi    r1,r1,80
+    """))
+    current_asm = textwrap.dedent("""\
+        +000: 94 21 ff b0 \tstwu    r1,-80(r1)
+        +004: d0 81 00 30 \tstfs    f4,48(r1)
+        +008: d0 a1 00 34 \tstfs    f5,52(r1)
+        +00c: d0 c1 00 28 \tstfs    f6,40(r1)
+        +010: 38 21 00 50 \taddi    r1,r1,80
+    """)
+    monkeypatch.setattr(
+        debug_cli,
+        "_read_frame_reservation_current_asm",
+        lambda function, melee_root=None: current_asm,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "frame-reservations",
+            "-f",
+            "fn_80000000",
+            str(pcdump),
+            "--no-expected",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    out = result.stdout
+    assert "stack-home assignment order: mismatch" in out
+    assert "assignments: 3, max order delta: 2" in out
+    assert "q3: assign #2, offset #0, delta -2, offset 0x28" in out
+    assert "lenCol+8: assign #0, offset #1, delta +1, offset 0x30" in out
+
+
 def test_frame_reservations_cli_reports_current_low_expansion(tmp_path: Path) -> None:
     pcdump = tmp_path / "pcdump.txt"
     pcdump.write_text(textwrap.dedent("""\

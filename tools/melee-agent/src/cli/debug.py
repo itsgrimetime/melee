@@ -3416,6 +3416,43 @@ def _print_unused_ranges(label: str, ranges: list[dict]) -> None:
         print(f"  {_format_stack_range(item)}")
 
 
+def _print_stack_home_order_summary(current: Mapping[str, object]) -> None:
+    summary = current.get("stack_home_order_summary")
+    if not isinstance(summary, Mapping) or summary.get("status") != "computed":
+        return
+    assignments = summary.get("assignments")
+    if not isinstance(assignments, list) or not assignments:
+        return
+    status = "mismatch" if summary.get("has_order_mismatch") else "matches offsets"
+    print()
+    print(f"stack-home assignment order: {status}")
+    print(
+        "assignments: "
+        f"{summary.get('assignment_count')}, "
+        f"max order delta: {summary.get('max_abs_order_delta')}"
+    )
+    ranked = sorted(
+        (item for item in assignments if isinstance(item, Mapping)),
+        key=lambda item: (
+            abs(int(item.get("order_delta") or 0)),
+            -int(item.get("assignment_order") or 0),
+        ),
+        reverse=True,
+    )
+    for item in ranked[:5]:
+        delta = int(item.get("order_delta") or 0)
+        sign = "+" if delta > 0 else ""
+        offset = item.get("offset")
+        offset_text = "?" if offset is None else f"0x{int(offset):x}"
+        print(
+            f"  {item.get('symbol')}: "
+            f"assign #{item.get('assignment_order')}, "
+            f"offset #{item.get('offset_order')}, "
+            f"delta {sign}{delta}, "
+            f"offset {offset_text}"
+        )
+
+
 def _print_frame_reservation_report(report: dict) -> None:
     print(report["summary"])
     current = report["current"]
@@ -3427,6 +3464,7 @@ def _print_frame_reservation_report(report: dict) -> None:
     _print_unused_ranges("current", current.get("unused_ranges", []))
     if expected is not None:
         _print_unused_ranges("expected", expected.get("unused_ranges", []))
+    _print_stack_home_order_summary(current)
 
     first_divergence = report.get("frame_first_divergence")
     if first_divergence:
