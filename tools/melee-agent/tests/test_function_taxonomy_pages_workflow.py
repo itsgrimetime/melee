@@ -16,6 +16,8 @@ def test_taxonomy_pages_workflow_is_fork_only_and_deploys_pages_artifact() -> No
     assert "actions/configure-pages@" in text
     assert "actions/upload-pages-artifact@" in text
     assert "actions/deploy-pages@" in text
+    assert "rm -rf orig" in text
+    assert "ln -s /orig orig" in text
 
 
 def test_taxonomy_pages_workflow_generates_inventory_then_dashboard() -> None:
