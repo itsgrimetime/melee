@@ -336,6 +336,24 @@ def test_search_plan_transforms_captures_structured_validation_evidence(
     assert first["outcome"] == "retained-source-improvement"
     assert first["match_percent"] == 96.25
     assert first["target_assignment_movement"] == {"ig58->r4": "satisfied"}
+    assert first["evidence"] == {
+        "probe_id": first["probe_id"],
+        "family_id": first["family_id"],
+        "family_label": payload["probes"][0]["family_label"],
+        "outcome": "retained-source-improvement",
+        "semantic_risk": payload["probes"][0]["semantic_risk"],
+        "source_region": payload["probes"][0]["source_region"],
+        "target_assignments": list(payload["probes"][0]["target_assignments"]),
+        "expected_compiler_effect": payload["probes"][0]["expected_compiler_effect"],
+        "match_percent": 96.25,
+        "target_assignment_movement": {"ig58->r4": "satisfied"},
+        "recommendation": None,
+        "source_regions": None,
+        "uncovered_transform_classes": None,
+    }
+    assert payload["validation_summary"]["evidence_counts"] == {
+        "retained-source-improvement": len(payload["validation"])
+    }
     assert payload["ledger_record"]["match_percent"] == 96.25
     data = json.loads(ledger.read_text())
     attempt = data["functions"]["ftCo_8009E7B4"]["attempts"][0]

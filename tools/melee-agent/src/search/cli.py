@@ -562,7 +562,7 @@ def _run_transform_validations(
             uncovered_transform_classes = validation_payload.get(
                 "uncovered_transform_classes"
             )
-        results.append({
+        result = {
             "probe_id": probe.get("probe_id"),
             "family_id": probe.get("family_id"),
             "outcome": outcome,
@@ -576,10 +576,33 @@ def _run_transform_validations(
             "recommendation": recommendation,
             "source_regions": source_regions,
             "uncovered_transform_classes": uncovered_transform_classes,
-        })
+        }
+        result["evidence"] = _transform_validation_evidence(
+            probe,
+            result,
+        )
+        results.append(result)
         if stop_on_retained and outcome == "retained-source-improvement":
             break
     return results
+
+
+def _transform_validation_evidence(probe: dict, result: dict) -> dict:
+    return {
+        "probe_id": result.get("probe_id"),
+        "family_id": result.get("family_id"),
+        "family_label": probe.get("family_label"),
+        "outcome": result.get("outcome"),
+        "semantic_risk": probe.get("semantic_risk"),
+        "source_region": probe.get("source_region"),
+        "target_assignments": list(probe.get("target_assignments") or []),
+        "expected_compiler_effect": probe.get("expected_compiler_effect"),
+        "match_percent": result.get("match_percent"),
+        "target_assignment_movement": result.get("target_assignment_movement"),
+        "recommendation": result.get("recommendation"),
+        "source_regions": result.get("source_regions"),
+        "uncovered_transform_classes": result.get("uncovered_transform_classes"),
+    }
 
 
 def _summarize_transform_validations(
@@ -621,11 +644,19 @@ def _summarize_transform_validations(
         stop_condition = "mixed"
     else:
         stop_condition = "not-run"
+    evidence_counts: dict[str, int] = {}
+    for result in validation_results:
+        evidence = result.get("evidence")
+        if not isinstance(evidence, dict):
+            continue
+        outcome = str(evidence.get("outcome") or "unknown")
+        evidence_counts[outcome] = evidence_counts.get(outcome, 0) + 1
     return {
         "stop_condition": stop_condition,
         "evaluated_probes": len(validation_results),
         "remaining_probe_ids": remaining_ids,
         "outcomes": outcomes,
+        "evidence_counts": evidence_counts,
     }
 
 
