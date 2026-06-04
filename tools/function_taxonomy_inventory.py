@@ -233,7 +233,40 @@ def classify_bucket(
     return "structural-reconstruction", "direct-inspection-needed", False
 
 
-def next_command(bucket: str, candidate: FunctionCandidate) -> str:
+def describe_actionability(bucket: str, subcategory: str) -> dict[str, str]:
+    if bucket == "stack-local-layout":
+        if subcategory == "same-frame-stack-slot-placement":
+            return {
+                "source_actionability": "source-probe",
+                "headline_tool": "lifetime-layout",
+                "actionability_reason": (
+                    "same-frame stack-slot placement can be tested with "
+                    "lifetime-layout and decl-order probes"
+                ),
+            }
+        if subcategory in {"frame-too-small", "frame-too-large", "frame-size-delta"}:
+            return {
+                "source_actionability": "diagnostic-only",
+                "headline_tool": "frame-reservations",
+                "actionability_reason": (
+                    "frame-size residual; inspect the frame model, but no bounded "
+                    "source transform is available yet"
+                ),
+            }
+    if bucket == "known-small-pattern-candidate":
+        return {
+            "source_actionability": "source-probe",
+            "headline_tool": "mismatch-db",
+            "actionability_reason": "small operand/opcode pattern likely has a targeted source edit",
+        }
+    return {
+        "source_actionability": "source-probe",
+        "headline_tool": bucket,
+        "actionability_reason": "heuristic taxonomy bucket has source-inspection next steps",
+    }
+
+
+def next_command(bucket: str, subcategory: str, candidate: FunctionCandidate) -> str:
     function = candidate.function
     source_path = f"src/{candidate.file_path}"
     if bucket == "signature-call-type":
@@ -254,7 +287,15 @@ def next_command(bucket: str, candidate: FunctionCandidate) -> str:
     if bucket == "data-symbol-relocation":
         return f"python tools/checkdiff.py {function} --compact --no-name-magic"
     if bucket == "stack-local-layout":
-        return f"python tools/checkdiff.py {function} --compact --pcdump <pcdump-if-available>"
+        if subcategory == "same-frame-stack-slot-placement":
+            return (
+                f"python tools/checkdiff.py {function} --compact --pcdump <pcdump-if-available> && "
+                f"melee-agent debug mutate lifetime-layout -f {function} --compile-probes"
+            )
+        return (
+            f"melee-agent debug inspect frame-reservations -f {function} && "
+            f"melee-agent debug suggest frame -f {function}"
+        )
     if bucket == "known-small-pattern-candidate":
         return (
             f"python tools/checkdiff.py {function} --compact && "
@@ -366,8 +407,16 @@ def summarize_decl_order_payload(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def should_evaluate_decl_orders(candidate: FunctionCandidate, bucket: str) -> bool:
-    return bucket == "stack-local-layout" and candidate.match_percent >= 99.0
+def should_evaluate_decl_orders(
+    candidate: FunctionCandidate,
+    bucket: str,
+    subcategory: str,
+) -> bool:
+    return (
+        bucket == "stack-local-layout"
+        and subcategory == "same-frame-stack-slot-placement"
+        and candidate.match_percent >= 99.0
+    )
 
 
 def attach_decl_order_summary(
@@ -405,6 +454,7 @@ def classify_candidate(
     classification = payload.get("classification") or {}
     primary = classification.get("primary") or "unknown"
     bucket, subcategory, known_small = classify_bucket(candidate, payload)
+    actionability = describe_actionability(bucket, subcategory)
     record = {
         "ok": True,
         "function": candidate.function,
@@ -425,12 +475,16 @@ def classify_candidate(
         "work_bucket": bucket,
         "subcategory": subcategory,
         "known_small_pattern_candidate": known_small,
+        **actionability,
         "confidence": "heuristic",
         "elapsed_sec": round(elapsed, 3),
         "stderr_tail": stderr[-1000:],
-        "next_command": next_command(bucket, candidate),
+        "next_command": next_command(bucket, subcategory, candidate),
     }
-    if decl_order_evaluator is not None and should_evaluate_decl_orders(candidate, bucket):
+    if (
+        decl_order_evaluator is not None
+        and should_evaluate_decl_orders(candidate, bucket, subcategory)
+    ):
         attach_decl_order_summary(record, decl_order_evaluator(candidate, record))
     return record, None
 
@@ -449,6 +503,9 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "work_bucket",
         "primary",
         "subcategory",
+        "source_actionability",
+        "headline_tool",
+        "actionability_reason",
         "file_path",
         "size_bytes",
         "next_command",
@@ -465,6 +522,9 @@ def write_queue(path: Path, rows: list[dict[str, Any]]) -> None:
         "function",
         "primary",
         "subcategory",
+        "source_actionability",
+        "headline_tool",
+        "actionability_reason",
         "decl_order_best_delta",
         "decl_order_best_ordering",
         "decl_order_evaluated_status",

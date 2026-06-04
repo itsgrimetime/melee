@@ -38,6 +38,12 @@ def write_report(path: Path) -> None:
                         "metadata": {"virtual_address": "2147484044"},
                     },
                     {
+                        "name": "frame_fn",
+                        "size": "420",
+                        "fuzzy_match_percent": 99.25,
+                        "metadata": {"virtual_address": "2147484100"},
+                    },
+                    {
                         "name": "broken_fn",
                         "size": "96",
                         "fuzzy_match_percent": 98.0,
@@ -79,6 +85,19 @@ def fake_checkdiff(function: str):
             "reference_lines": 8,
             "current_lines": 8,
         },
+        "frame_fn": {
+            "function": function,
+            "match": False,
+            "classification": {
+                "primary": "stack-layout",
+                "reasons": [
+                    "frame reservation gap is too large; source-actionable transform unavailable",
+                ],
+            },
+            "structural": {"opcode_similarity": 1.0, "line_delta": 0, "hunk_count": 1},
+            "reference_lines": 32,
+            "current_lines": 32,
+        },
     }
     if function == "broken_fn":
         return 1, "", "error: could not find broken_fn in compiled object"
@@ -86,6 +105,8 @@ def fake_checkdiff(function: str):
 
 
 def fake_decl_order_evaluator(candidate, _record):
+    if candidate.function == "frame_fn":
+        raise AssertionError("frame-size residuals must not run decl-order probes")
     return {
         "evaluated_status": "evaluated",
         "candidate_count": 3,
@@ -125,17 +146,19 @@ def test_generate_inventory_classifies_report_functions_and_writes_outputs(
         workers=1,
     )
 
-    assert result.report_non100_count == 3
-    assert result.classified_count == 2
+    assert result.report_non100_count == 4
+    assert result.classified_count == 3
     assert result.error_count == 1
 
     records = read_jsonl(output / "taxonomy.records.jsonl")
-    assert [row["function"] for row in records] == ["stack_fn", "small_fn"]
+    assert [row["function"] for row in records] == ["stack_fn", "small_fn", "frame_fn"]
     assert records[0]["file_path"] == "melee/demo/demo.c"
     assert records[0]["address"] == "0x8000000c"
     assert records[0]["match_tier"] == ">=99%"
     assert records[0]["work_bucket"] == "stack-local-layout"
     assert records[0]["subcategory"] == "same-frame-stack-slot-placement"
+    assert records[0]["source_actionability"] == "source-probe"
+    assert records[0]["headline_tool"] == "lifetime-layout"
     assert records[0]["decl_order_summary"]["best_decl_delta"] == 0.125
     assert records[0]["decl_order_summary"]["best_ordering"] == "swap a <-> b"
     assert records[0]["decl_order_best_delta"] == 0.125
@@ -144,6 +167,14 @@ def test_generate_inventory_classifies_report_functions_and_writes_outputs(
     assert records[0]["decl_order_candidate_count"] == 3
     assert records[1]["known_small_pattern_candidate"] is True
     assert records[1]["work_bucket"] == "known-small-pattern-candidate"
+    assert records[2]["work_bucket"] == "stack-local-layout"
+    assert records[2]["subcategory"] == "frame-too-large"
+    assert records[2]["source_actionability"] == "diagnostic-only"
+    assert records[2]["headline_tool"] == "frame-reservations"
+    assert "frame-size residual" in records[2]["actionability_reason"]
+    assert "decl_order_summary" not in records[2]
+    assert "debug inspect frame-reservations -f frame_fn" in records[2]["next_command"]
+    assert "debug suggest frame -f frame_fn" in records[2]["next_command"]
 
     errors = read_jsonl(output / "checkdiff-errors.jsonl")
     assert errors[0]["function"] == "broken_fn"
@@ -154,15 +185,24 @@ def test_generate_inventory_classifies_report_functions_and_writes_outputs(
     )
     assert (
         "match_percent\tfunction\tprimary\tsubcategory\t"
+        "source_actionability\theadline_tool\tactionability_reason\t"
         "decl_order_best_delta\tdecl_order_best_ordering\t"
         "decl_order_evaluated_status\tdecl_order_candidate_count\t"
         "file_path\tnext_command"
     ) in stack_queue
-    assert "99.75000\tstack_fn\tstack-slot-layout\tsame-frame-stack-slot-placement\t0.12500\tswap a <-> b\tevaluated\t3" in stack_queue
+    assert (
+        "99.75000\tstack_fn\tstack-slot-layout\tsame-frame-stack-slot-placement\t"
+        "source-probe\tlifetime-layout\t"
+    ) in stack_queue
+    assert "\t0.12500\tswap a <-> b\tevaluated\t3" in stack_queue
+    assert (
+        "99.25000\tframe_fn\tstack-layout\tframe-too-large\t"
+        "diagnostic-only\tframe-reservations\t"
+    ) in stack_queue
 
     summary = (output / "summary.md").read_text(encoding="utf-8")
-    assert "| Report non-100% | 3 |" in summary
-    assert "| stack-local-layout | 1 |" in summary
+    assert "| Report non-100% | 4 |" in summary
+    assert "| stack-local-layout | 2 |" in summary
     assert "| known-small-pattern-candidate | 1 |" in summary
 
 
@@ -187,7 +227,7 @@ def test_generate_inventory_honors_limit_before_running_checkdiff(tmp_path: Path
         limit=1,
     )
 
-    assert result.report_non100_count == 3
+    assert result.report_non100_count == 4
     assert result.attempted_count == 1
     assert seen == ["stack_fn"]
 
