@@ -200,24 +200,49 @@ def is_known_small_candidate(candidate: FunctionCandidate, payload: dict[str, An
     )
 
 
+def _stack_frame_missing_bytes(classification: dict[str, Any]) -> int | None:
+    delta = classification.get("stack_frame_delta")
+    if not isinstance(delta, dict):
+        return None
+    missing = delta.get("missing_stack_bytes")
+    if isinstance(missing, int) and not isinstance(missing, bool):
+        return missing
+    expected = delta.get("expected_frame_size")
+    current = delta.get("current_frame_size")
+    if (
+        isinstance(expected, int)
+        and not isinstance(expected, bool)
+        and isinstance(current, int)
+        and not isinstance(current, bool)
+    ):
+        return expected - current
+    return None
+
+
 def _signature_residual_bucket(
     candidate: FunctionCandidate, payload: dict[str, Any]
 ) -> tuple[str, str, bool]:
     classification = payload.get("classification") or {}
     reasons = classification.get("reasons") or []
     reason_text = "\n".join(str(reason).lower() for reason in reasons)
-    payload_text = json.dumps(payload, sort_keys=True).lower()
     structural = payload.get("structural") or {}
     line_delta = abs(parse_int(structural.get("line_delta")))
+    missing = _stack_frame_missing_bytes(classification)
 
+    if missing == 0:
+        return "stack-local-layout", "same-frame-stack-slot-placement", False
     if (
         classification.get("stack_frame_delta")
         or "frame reservation gap" in reason_text
         or "pad_stack" in reason_text
     ):
-        if "too small" in reason_text or "missing_stack_bytes" in payload_text:
+        if missing is not None and missing > 0:
             return "stack-local-layout", "frame-too-small", False
-        if "too large" in reason_text or "extra_stack_bytes" in payload_text:
+        if missing is not None and missing < 0:
+            return "stack-local-layout", "frame-too-large", False
+        if "too small" in reason_text:
+            return "stack-local-layout", "frame-too-small", False
+        if "too large" in reason_text or "extra_stack_bytes" in reason_text:
             return "stack-local-layout", "frame-too-large", False
         return "stack-local-layout", "frame-size-delta", False
     if "stack slot" in reason_text:
@@ -260,7 +285,14 @@ def classify_bucket(
     if primary == "stack-slot-layout":
         return "stack-local-layout", "same-frame-stack-slot-placement", False
     if primary == "stack-layout":
+        missing = _stack_frame_missing_bytes(classification)
+        if missing == 0:
+            return "stack-local-layout", "same-frame-stack-slot-placement", False
         if "frame reservation gap" in reason_text or "pad_stack" in reason_text:
+            if missing is not None and missing > 0:
+                return "stack-local-layout", "frame-too-small", False
+            if missing is not None and missing < 0:
+                return "stack-local-layout", "frame-too-large", False
             if "too small" in reason_text:
                 return "stack-local-layout", "frame-too-small", False
             if "too large" in reason_text:

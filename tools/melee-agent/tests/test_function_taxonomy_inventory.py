@@ -44,6 +44,12 @@ def write_report(path: Path) -> None:
                         "metadata": {"virtual_address": "2147484100"},
                     },
                     {
+                        "name": "same_frame_fn",
+                        "size": "420",
+                        "fuzzy_match_percent": 99.125,
+                        "metadata": {"virtual_address": "2147484112"},
+                    },
+                    {
                         "name": "broken_fn",
                         "size": "96",
                         "fuzzy_match_percent": 98.0,
@@ -92,6 +98,24 @@ def fake_checkdiff(function: str):
                 "primary": "stack-layout",
                 "reasons": [
                     "frame reservation gap is too large; source-actionable transform unavailable",
+                ],
+            },
+            "structural": {"opcode_similarity": 1.0, "line_delta": 0, "hunk_count": 1},
+            "reference_lines": 32,
+            "current_lines": 32,
+        },
+        "same_frame_fn": {
+            "function": function,
+            "match": False,
+            "classification": {
+                "primary": "stack-layout",
+                "stack_frame_delta": {
+                    "expected_frame_size": 64,
+                    "current_frame_size": 64,
+                    "missing_stack_bytes": 0,
+                },
+                "reasons": [
+                    "frame reservation gap is too large; stale checkdiff-only reason",
                 ],
             },
             "structural": {"opcode_similarity": 1.0, "line_delta": 0, "hunk_count": 1},
@@ -147,12 +171,17 @@ def test_generate_inventory_classifies_report_functions_and_writes_outputs(
         workers=1,
     )
 
-    assert result.report_non100_count == 4
-    assert result.classified_count == 3
+    assert result.report_non100_count == 5
+    assert result.classified_count == 4
     assert result.error_count == 1
 
     records = read_jsonl(output / "taxonomy.records.jsonl")
-    assert [row["function"] for row in records] == ["stack_fn", "small_fn", "frame_fn"]
+    assert [row["function"] for row in records] == [
+        "stack_fn",
+        "small_fn",
+        "frame_fn",
+        "same_frame_fn",
+    ]
     assert records[0]["file_path"] == "melee/demo/demo.c"
     assert records[0]["address"] == "0x8000000c"
     assert records[0]["match_tier"] == ">=99%"
@@ -181,6 +210,12 @@ def test_generate_inventory_classifies_report_functions_and_writes_outputs(
     assert "#366" in records[2]["actionability_reason"]
     assert "decl_order_summary" not in records[2]
     assert "debug mutate frame-transform-search -f frame_fn" in records[2]["next_command"]
+    assert records[3]["work_bucket"] == "stack-local-layout"
+    assert records[3]["subcategory"] == "same-frame-stack-slot-placement"
+    assert records[3]["frame_cause"] == "stack-object-offset-shift"
+    assert records[3]["frame_closability_tier"] == "reorder-gated-362"
+    assert records[3]["headline_tool"] == "lifetime-layout"
+    assert "lifetime-layout -f same_frame_fn" in records[3]["next_command"]
 
     errors = read_jsonl(output / "checkdiff-errors.jsonl")
     assert errors[0]["function"] == "broken_fn"
@@ -212,8 +247,8 @@ def test_generate_inventory_classifies_report_functions_and_writes_outputs(
     ) in stack_queue
 
     summary = (output / "summary.md").read_text(encoding="utf-8")
-    assert "| Report non-100% | 4 |" in summary
-    assert "| stack-local-layout | 2 |" in summary
+    assert "| Report non-100% | 5 |" in summary
+    assert "| stack-local-layout | 3 |" in summary
     assert "| known-small-pattern-candidate | 1 |" in summary
 
 
@@ -388,7 +423,7 @@ def test_generate_inventory_honors_limit_before_running_checkdiff(tmp_path: Path
         limit=1,
     )
 
-    assert result.report_non100_count == 4
+    assert result.report_non100_count == 5
     assert result.attempted_count == 1
     assert seen == ["stack_fn"]
 

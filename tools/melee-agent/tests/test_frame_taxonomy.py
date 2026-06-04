@@ -48,6 +48,32 @@ def test_checkdiff_current_frame_too_large_maps_to_generator_gated() -> None:
     assert result["attribution_status"] == "checkdiff-only"
 
 
+def test_checkdiff_equal_frame_stack_layout_maps_to_lifetime_layout() -> None:
+    classification = {
+        "primary": "stack-layout",
+        "stack_frame_delta": {
+            "expected_frame_size": 64,
+            "current_frame_size": 64,
+            "missing_stack_bytes": 0,
+        },
+        "reasons": [
+            "frame reservation gap is too large; stale checkdiff-only reason",
+        ],
+    }
+
+    result = classify_frame_taxonomy("demo_fn", classification=classification)
+
+    assert result is not None
+    assert result["cause"] == "stack-object-offset-shift"
+    assert result["raw_cause"] == "checkdiff.same_frame_stack_layout"
+    assert result["closability_tier"] == "reorder-gated-362"
+    assert result["verdict"] == "source-reachable-candidate"
+    assert result["next_command"] == (
+        "melee-agent debug mutate lifetime-layout -f demo_fn "
+        "--compile-probes --json"
+    )
+
+
 def test_checkdiff_stack_slot_layout_maps_to_reorder_gated() -> None:
     classification = {
         "primary": "stack-slot-layout",

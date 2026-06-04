@@ -941,6 +941,68 @@ def test_generate_frame_directed_probes_rejects_unsafe_dematerialize_cases(
     assert "frame-local-dematerialize" not in {probe.operator for probe in probes}
 
 
+def test_frame_local_dematerialize_scan_reports_address_taken_blocker() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(int line)
+        {
+            Vec3 normal;
+
+            mpLineGetNormal(line, &normal);
+            sink(normal.y, normal.x);
+        }
+    """)
+
+    probes, status = scan_frame_local_dematerialization_probes(
+        source,
+        "fn_80000000",
+    )
+
+    assert probes == []
+    assert status["status"] == "no-safe-semantic-lever"
+    assert status["operator"] == "frame-local-dematerialize"
+    assert status["blockers"] == [
+        {
+            "kind": "address-taken-local",
+            "local": "normal",
+            "type": "Vec3",
+            "definition_lines": [3, 3],
+            "address_use_lines": [5, 5],
+            "read_lines": [6, 6],
+        }
+    ]
+    assert "address-taken local `normal`" in status["reason"]
+
+
+def test_frame_local_dematerialize_scan_reports_multi_use_blocker() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(int x)
+        {
+            int tmp = x + 1;
+            sink(tmp);
+            sink(tmp);
+        }
+    """)
+
+    probes, status = scan_frame_local_dematerialization_probes(
+        source,
+        "fn_80000000",
+    )
+
+    assert probes == []
+    assert status["status"] == "no-safe-semantic-lever"
+    assert status["blockers"] == [
+        {
+            "kind": "multi-use-local",
+            "local": "tmp",
+            "type": "int",
+            "definition_lines": [3, 3],
+            "use_count": 2,
+            "use_lines": [[4, 4], [5, 5]],
+        }
+    ]
+    assert "multi-use local `tmp`" in status["reason"]
+
+
 def test_frame_local_dematerialize_scan_reports_source_span_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

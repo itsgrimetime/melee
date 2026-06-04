@@ -1510,11 +1510,25 @@ def scan_frame_local_dematerialization_probes(
             "status": "semantic-lever-generated",
             "operator": operator,
             "candidate_count": len(probes),
+    }
+    blockers = _frame_local_dematerialization_blockers(
+        source,
+        spans,
+    )
+    reason = "source scan found no safe semantic local dematerialization"
+    if blockers:
+        labels = ", ".join(_frame_local_blocker_label(item) for item in blockers)
+        reason = f"{reason}; blockers: {labels}"
+        return [], {
+            "status": "no-safe-semantic-lever",
+            "operator": operator,
+            "reason": reason,
+            "blockers": blockers,
         }
     return [], {
         "status": "no-safe-semantic-lever",
         "operator": operator,
-        "reason": "source scan found no safe semantic local dematerialization",
+        "reason": reason,
     }
 
 
@@ -1611,6 +1625,168 @@ def _probe_frame_local_dematerializations_from_spans(
             },
         ))
     return probes
+
+
+def _frame_local_dematerialization_blockers(
+    source: str,
+    spans: list[StatementSpan],
+) -> list[dict]:
+    byte_to_char = _byte_to_char_offsets(source)
+    blockers: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for idx, span in enumerate(spans):
+        initialized = _frame_local_initialized_candidate(
+            source,
+            spans,
+            idx,
+            byte_to_char,
+        )
+        if initialized is not None:
+            (
+                name,
+                type_text,
+                _expr,
+                _action,
+                definition_spans,
+                value_span,
+                next_search_index,
+            ) = initialized
+            use_spans = _later_identifier_spans(
+                source,
+                spans,
+                next_search_index,
+                value_span,
+                name,
+                byte_to_char,
+            )
+            use_count = sum(
+                _identifier_count(_span_source(source, use, byte_to_char), name)
+                for use in use_spans
+            )
+            key = ("multi-use-local", name)
+            if use_count > 1 and key not in seen:
+                seen.add(key)
+                blockers.append({
+                    "kind": "multi-use-local",
+                    "local": name,
+                    "type": type_text,
+                    "definition_lines": [
+                        definition_spans[0].line_range[0],
+                        definition_spans[-1].line_range[1],
+                    ],
+                    "use_count": use_count,
+                    "use_lines": [
+                        [use.line_range[0], use.line_range[1]]
+                        for use in use_spans
+                    ],
+                })
+            continue
+
+        decl_match = _SIMPLE_LOCAL_BARE_DECL_RE.match(
+            _span_source(source, span, byte_to_char)
+        )
+        if decl_match is None:
+            continue
+        name = decl_match.group("name")
+        type_text = " ".join(decl_match.group("type").split())
+        if _is_simple_dematerialize_type(type_text):
+            continue
+        later_spans = _later_same_scope_spans(spans, idx + 1, span)
+        address_uses = [
+            later
+            for later in later_spans
+            if _span_has_address_taken_identifier(
+                source,
+                later,
+                name,
+                byte_to_char,
+            )
+        ]
+        field_reads = [
+            later
+            for later in later_spans
+            if _span_has_member_read(source, later, name, byte_to_char)
+        ]
+        key = ("address-taken-local", name)
+        if address_uses and field_reads and key not in seen:
+            seen.add(key)
+            blockers.append({
+                "kind": "address-taken-local",
+                "local": name,
+                "type": type_text,
+                "definition_lines": [span.line_range[0], span.line_range[1]],
+                "address_use_lines": [
+                    address_uses[0].line_range[0],
+                    address_uses[0].line_range[1],
+                ],
+                "read_lines": [
+                    field_reads[0].line_range[0],
+                    field_reads[0].line_range[1],
+                ],
+            })
+    return blockers
+
+
+def _later_same_scope_spans(
+    spans: list[StatementSpan],
+    start_idx: int,
+    anchor: StatementSpan,
+) -> list[StatementSpan]:
+    out: list[StatementSpan] = []
+    for cursor in range(start_idx, len(spans)):
+        span = spans[cursor]
+        if (
+            span.scope_path != anchor.scope_path
+            or span.scope_byte_range != anchor.scope_byte_range
+        ):
+            break
+        out.append(span)
+    return out
+
+
+def _later_identifier_spans(
+    source: str,
+    spans: list[StatementSpan],
+    start_idx: int,
+    anchor: StatementSpan,
+    name: str,
+    byte_to_char: list[int],
+) -> list[StatementSpan]:
+    return [
+        span
+        for span in _later_same_scope_spans(spans, start_idx, anchor)
+        if _span_mentions_identifier(source, span, name, byte_to_char)
+    ]
+
+
+def _span_has_address_taken_identifier(
+    source: str,
+    span: StatementSpan,
+    name: str,
+    byte_to_char: list[int],
+) -> bool:
+    raw = _span_source(source, span, byte_to_char)
+    return re.search(r"(?<![A-Za-z_])&\s*" + re.escape(name) + r"\b", raw) is not None
+
+
+def _span_has_member_read(
+    source: str,
+    span: StatementSpan,
+    name: str,
+    byte_to_char: list[int],
+) -> bool:
+    raw = _span_source(source, span, byte_to_char)
+    return re.search(r"\b" + re.escape(name) + r"\s*(?:\.|->)\s*[A-Za-z_]\w*", raw) is not None
+
+
+def _frame_local_blocker_label(blocker: dict) -> str:
+    kind = blocker.get("kind")
+    local = blocker.get("local")
+    if kind == "address-taken-local" and local:
+        return f"address-taken local `{local}`"
+    if kind == "multi-use-local" and local:
+        return f"multi-use local `{local}`"
+    return str(kind or "unknown")
 
 
 def _frame_local_initialized_candidate(

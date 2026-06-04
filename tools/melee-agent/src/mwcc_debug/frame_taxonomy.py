@@ -93,6 +93,25 @@ def _classify_checkdiff(
     if primary != "stack-layout":
         return None
 
+    if _same_frame_stack_layout(classification):
+        return _build_result(
+            function,
+            cause="stack-object-offset-shift",
+            raw_cause="checkdiff.same_frame_stack_layout",
+            verdict="source-reachable-candidate",
+            raw_verdict="checkdiff-only",
+            closability_tier="reorder-gated-362",
+            attribution_status="checkdiff-only",
+            source_object=None,
+            source_object_symbol=None,
+            next_command=_lifetime_layout_command(function, source_path),
+            reason=(
+                "checkdiff reports a stack-layout residual, but current and "
+                "expected frame sizes match; treat as same-frame stack-slot "
+                "or lifetime placement"
+            ),
+        )
+
     missing = _missing_stack_bytes(classification)
     reason_text = _reason_text(classification)
     pad_bytes = missing if isinstance(missing, int) and missing > 0 else None
@@ -288,6 +307,24 @@ def _missing_stack_bytes(classification: Mapping[str, Any]) -> int | None:
     if isinstance(missing, int):
         return missing
     return None
+
+
+def _same_frame_stack_layout(classification: Mapping[str, Any]) -> bool:
+    delta = classification.get("stack_frame_delta")
+    if not isinstance(delta, Mapping):
+        return False
+    missing = delta.get("missing_stack_bytes")
+    if isinstance(missing, int) and not isinstance(missing, bool) and missing == 0:
+        return True
+    expected = delta.get("expected_frame_size")
+    current = delta.get("current_frame_size")
+    return (
+        isinstance(expected, int)
+        and not isinstance(expected, bool)
+        and isinstance(current, int)
+        and not isinstance(current, bool)
+        and expected == current
+    )
 
 
 def _normalize_frame_report_cause(raw_cause: str, frame_delta: int | None) -> str:
