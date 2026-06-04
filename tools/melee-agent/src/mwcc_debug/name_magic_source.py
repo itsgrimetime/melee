@@ -118,9 +118,9 @@ def _preprocessor_depth_at(source: str, index: int) -> int:
         if next_position > index:
             break
         stripped = line.lstrip()
-        if stripped.startswith(("#if ", "#ifdef", "#ifndef")):
+        if re.match(r"#\s*(?:if\b|ifdef\b|ifndef\b)", stripped):
             depth += 1
-        elif stripped.startswith("#endif"):
+        elif re.match(r"#\s*endif\b", stripped):
             depth = max(0, depth - 1)
         position = next_position
     return depth
@@ -164,10 +164,55 @@ def _has_top_level_comma(text: str) -> bool:
     return _find_top_level_char(text, ",") is not None
 
 
-def _declaration_names_symbol(declaration: str, symbol: str) -> bool:
+def _has_top_level_paren(text: str) -> bool:
+    brace_depth = 0
+    bracket_depth = 0
+    for char in text:
+        if char == "{" and bracket_depth == 0:
+            brace_depth += 1
+        elif char == "}" and bracket_depth == 0:
+            brace_depth = max(0, brace_depth - 1)
+        elif char == "[" and brace_depth == 0:
+            bracket_depth += 1
+        elif char == "]" and brace_depth == 0:
+            bracket_depth = max(0, bracket_depth - 1)
+        elif char == "(" and brace_depth == 0 and bracket_depth == 0:
+            return True
+    return False
+
+
+def _blank_bracket_contents(text: str) -> str:
+    chars = list(text)
+    depth = 0
+    for index, char in enumerate(chars):
+        if char == "[":
+            depth += 1
+            chars[index] = " "
+        elif char == "]" and depth > 0:
+            chars[index] = " "
+            depth -= 1
+        elif depth > 0:
+            chars[index] = " "
+    return "".join(chars)
+
+
+def _declared_identifier(declaration: str) -> str | None:
     initializer = _find_top_level_char(declaration, "=")
     declarator = declaration if initializer is None else declaration[:initializer]
-    return re.search(rf"\b{re.escape(symbol)}\b", declarator) is not None
+    declarator = declarator.rstrip().rstrip(";")
+
+    first_token = re.match(r"\s*([A-Za-z_]\w*)\b", declarator)
+    if first_token is None or first_token.group(1) != "static":
+        return None
+    declarator_after_static = declarator[first_token.end(1) :]
+    if _has_top_level_paren(declarator_after_static):
+        return None
+
+    without_brackets = _blank_bracket_contents(declarator_after_static)
+    identifiers = re.findall(r"\b[A-Za-z_]\w*\b", without_brackets)
+    if not identifiers:
+        return None
+    return identifiers[-1]
 
 
 def _match_static_definition(
@@ -186,7 +231,7 @@ def _match_static_definition(
     first_token = re.match(r"\s*([A-Za-z_]\w*)\b", declaration)
     if first_token is None or first_token.group(1) != "static":
         return None
-    if not _declaration_names_symbol(declaration, symbol):
+    if _declared_identifier(declaration) != symbol:
         return None
 
     static_start = start + first_token.start(1)
@@ -296,6 +341,8 @@ def _find_simple_literal_sites(
     stripped = _strip_c_comments(source[start:end])
     sites: list[tuple[int, int]] = []
     for match in _FLOAT_LITERAL_RE.finditer(stripped):
+        if _line_is_preprocessor_directive(source, start + match.start()):
+            continue
         literal = match.group("literal")
         suffix = match.group("suffix")
         if size == 4 and suffix.lower() != "f":
@@ -312,8 +359,14 @@ def _find_simple_literal_sites(
     return sites
 
 
+def _line_is_preprocessor_directive(source: str, index: int) -> bool:
+    line_start = source.rfind("\n", 0, index) + 1
+    return source[line_start:index].lstrip().startswith("#")
+
+
 def _sdata2_named_float_probe(
     source: str,
+    insert_at: int,
     body_start: int,
     body_close: int,
     relocation: NameMagicRelocation,
@@ -346,8 +399,8 @@ def _sdata2_named_float_probe(
     literal_start, literal_end = sites[0]
     edits = (
         NameMagicSourceEdit(
-            body_start,
-            body_start,
+            insert_at,
+            insert_at,
             f"extern volatile {c_type} {relocation.expected_symbol};\n",
         ),
         NameMagicSourceEdit(literal_start, literal_end, relocation.expected_symbol),
@@ -503,6 +556,7 @@ def generate_name_magic_source_probes(
             probe, blocker = _sdata2_named_float_probe(
                 source,
                 function_span.sig_start,
+                function_span.body_open + 1,
                 function_span.body_close,
                 relocation,
                 anonymous_sdata2.get(relocation.current_symbol),

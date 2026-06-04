@@ -179,6 +179,62 @@ def test_static_to_global_probe_rejects_multi_declarator_and_preprocessor_region
     )
 
 
+def test_static_to_global_probe_rejects_non_declared_symbol_references() -> None:
+    payload = {
+        "diff": [
+            "-+024: R_PPC_ADDR16_HA\tmn_803EAE68",
+            "++024: R_PPC_ADDR16_HA\t...data.0",
+        ],
+        "classification": {"primary": "data-symbol-or-relocation"},
+    }
+    initializer_only = textwrap.dedent(
+        """\
+        static u16 other_symbol[] = { mn_803EAE68 };
+        void demo_fn(void) {}
+        """
+    )
+    type_name_only = textwrap.dedent(
+        """\
+        static struct mn_803EAE68 other_symbol = { 1 };
+        void demo_fn(void) {}
+        """
+    )
+    array_expr_only = textwrap.dedent(
+        """\
+        static u8 other_symbol[sizeof(mn_803EAE68)] = { 0 };
+        void demo_fn(void) {}
+        """
+    )
+
+    for source in (initializer_only, type_name_only, array_expr_only):
+        assert generate_name_magic_source_probes(source, "demo_fn", payload, {}) == (
+            [],
+            NameMagicBlocker.UNSUPPORTED_SOURCE_SITE,
+        )
+
+
+def test_static_to_global_probe_rejects_function_prototypes_and_tabbed_if() -> None:
+    payload = {
+        "diff": [
+            "-+024: R_PPC_ADDR16_HA\tmn_803EAE68",
+            "++024: R_PPC_ADDR16_HA\t...data.0",
+        ],
+        "classification": {"primary": "data-symbol-or-relocation"},
+    }
+    prototype = "static void mn_803EAE68(void);\nvoid demo_fn(void) {}\n"
+    prototype_param_only = (
+        "static void unrelated(int mn_803EAE68);\nvoid demo_fn(void) {}\n"
+    )
+    tabbed_if = "#if\t1\nstatic u16 mn_803EAE68[] = { 1 };\n#endif\nvoid demo_fn(void) {}\n"
+    paren_if = "#if(1)\nstatic u16 mn_803EAE68[] = { 1 };\n#endif\nvoid demo_fn(void) {}\n"
+
+    for source in (prototype, prototype_param_only, tabbed_if, paren_if):
+        assert generate_name_magic_source_probes(source, "demo_fn", payload, {}) == (
+            [],
+            NameMagicBlocker.UNSUPPORTED_SOURCE_SITE,
+        )
+
+
 def test_sdata2_float_probe_replaces_unique_literal_with_named_volatile_load() -> None:
     source = textwrap.dedent(
         """\
@@ -203,6 +259,56 @@ def test_sdata2_float_probe_replaces_unique_literal_with_named_volatile_load() -
     assert [probe.operator for probe in probes] == ["sdata2-named-float-load"]
     assert "extern volatile f32 mn_804DBDA8;" in probes[0].source_text
     assert "HSD_JObjReqAnimAll(jobj, mn_804DBDA8);" in probes[0].source_text
+
+
+def test_sdata2_float_probe_only_replaces_body_literals() -> None:
+    source = textwrap.dedent(
+        """\
+        void demo_fn(float a[0.0F])
+        {
+            sink(a);
+        }
+        """
+    )
+    payload = {
+        "diff": [
+            "-+af8: R_PPC_EMB_SDA21\tmn_804DBDA8",
+            "++af8: R_PPC_EMB_SDA21\t@267",
+        ],
+        "classification": {"primary": "data-symbol-or-relocation"},
+    }
+    anonymous = {"@267": {"size": 4, "float": 0.0, "value": 0}}
+
+    probes, blocker = generate_name_magic_source_probes(source, "demo_fn", payload, anonymous)
+
+    assert probes == []
+    assert blocker == NameMagicBlocker.UNSUPPORTED_SOURCE_SITE
+
+
+def test_sdata2_float_probe_rejects_preprocessor_body_literals() -> None:
+    source = textwrap.dedent(
+        """\
+        void demo_fn(void)
+        {
+        #if 0.0F
+            sink();
+        #endif
+        }
+        """
+    )
+    payload = {
+        "diff": [
+            "-+af8: R_PPC_EMB_SDA21\tmn_804DBDA8",
+            "++af8: R_PPC_EMB_SDA21\t@267",
+        ],
+        "classification": {"primary": "data-symbol-or-relocation"},
+    }
+    anonymous = {"@267": {"size": 4, "float": 0.0, "value": 0}}
+
+    probes, blocker = generate_name_magic_source_probes(source, "demo_fn", payload, anonymous)
+
+    assert probes == []
+    assert blocker == NameMagicBlocker.UNSUPPORTED_SOURCE_SITE
 
 
 def test_sdata2_double_probe_replaces_unique_literal_with_named_volatile_load() -> None:
