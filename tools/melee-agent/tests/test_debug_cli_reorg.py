@@ -520,6 +520,7 @@ def test_frame_reservations_cli_reports_current_low_expansion(tmp_path: Path) ->
     )
 
     assert result.exit_code == 0, result.stdout
+    assert "frame pass timeline: 1 pass(es)" in result.stdout
     assert "cause: stack-object-offset-shift (medium)" in result.stdout
     assert (
         "frame probe operators: declaration-use-distance, block-scope, "

@@ -3603,6 +3603,21 @@ def _print_frame_reservation_report(report: dict) -> None:
     if expected is not None:
         print(f"expected frame: {expected.get('frame_size')}")
         print(f"frame delta: {report.get('frame_delta')}")
+    timeline = report.get("pass_frame_timeline")
+    if isinstance(timeline, Mapping):
+        print(f"frame pass timeline: {timeline.get('pass_count')} pass(es)")
+        first_change = timeline.get("first_change")
+        if isinstance(first_change, Mapping):
+            status = first_change.get("status")
+            if status == "changed":
+                print(
+                    "first frame-model change: "
+                    f"{first_change.get('previous_pass')} -> "
+                    f"{first_change.get('pass')} "
+                    f"({first_change.get('reason')})"
+                )
+            elif status:
+                print(f"first frame-model change: {status}")
     _print_unused_ranges("current", current.get("unused_ranges", []))
     if expected is not None:
         _print_unused_ranges("expected", expected.get("unused_ranges", []))

@@ -51,7 +51,8 @@ def analyze_frame_reservations(
     functions = parse_pcdump(pcdump_text, function=function)
     if not functions:
         raise ValueError(f"{function} not found in pcdump")
-    current_instructions = _final_instructions(functions[0])
+    fn = functions[0]
+    current_instructions = _final_instructions(fn)
     symbolic_offsets = _resolve_symbolic_stack_homes(
         current_instructions,
         _parse_expected_asm(current_asm_text),
@@ -106,6 +107,7 @@ def analyze_frame_reservations(
         "extra_low_frame_reservation": extra,
         "current_low_frame_expansion": current_low_expansion,
         "frame_first_divergence": first_divergence,
+        "pass_frame_timeline": _pass_frame_timeline(fn),
         "summary": summary,
     }
     _materialize_stack_home_probe_commands(report)
@@ -499,23 +501,107 @@ def _select_final_pass(fn: Function) -> Pass | None:
     return fn.passes[-1] if fn.passes else None
 
 
-def _final_instructions(fn: Function) -> list[_AsmInstruction]:
-    selected = _select_final_pass(fn)
-    if selected is None:
-        return []
+def _pass_frame_timeline(fn: Function) -> dict:
+    rows = []
+    previous: dict | None = None
+    first_change = None
+    for pass_index, pass_ in enumerate(fn.passes):
+        instructions = _instructions_for_pass(pass_)
+        frame = _analyze_instructions(instructions)
+        signature = _stack_object_signature(frame)
+        row = {
+            "pass_index": pass_index,
+            "pass": pass_.name,
+            "frame_size": frame.get("frame_size"),
+            "stack_object_count": len(frame.get("stack_objects") or []),
+            "occupied_stack_object_count": len(_occupied_stack_objects(frame)),
+            "object_signature": signature,
+        }
+        if previous is not None:
+            before = previous.get("frame_size")
+            after = row.get("frame_size")
+            if isinstance(before, int) and isinstance(after, int):
+                row["frame_size_delta_from_previous"] = after - before
+            signature_changed = signature != previous.get("object_signature")
+            row["object_signature_changed_from_previous"] = signature_changed
+            changed = (
+                row.get("frame_size_delta_from_previous") not in (None, 0)
+                or signature_changed
+            )
+            if changed and first_change is None:
+                first_change = {
+                    "status": "changed",
+                    "pass_index": pass_index,
+                    "pass": pass_.name,
+                    "previous_pass": previous.get("pass"),
+                    "frame_size_before": before,
+                    "frame_size_after": after,
+                    "frame_size_delta": row.get("frame_size_delta_from_previous"),
+                    "object_signature_changed": signature_changed,
+                    "reason": _pass_frame_change_reason(
+                        row.get("frame_size_delta_from_previous"),
+                        signature_changed,
+                    ),
+                }
+        rows.append(row)
+        previous = row
+    return {
+        "status": "computed" if rows else "unavailable-no-passes",
+        "pass_count": len(rows),
+        "first_change": first_change or {"status": "unchanged"},
+        "passes": rows,
+    }
+
+
+def _instructions_for_pass(pass_: Pass) -> list[_AsmInstruction]:
     out: list[_AsmInstruction] = []
     ordinal = 0
-    for block in selected.blocks:
+    for block in pass_.blocks:
         for instr_idx, instr in enumerate(block.instructions):
             out.append(_from_parser_instruction(
                 instr,
-                pass_name=selected.name,
+                pass_name=pass_.name,
                 block_idx=block.index,
                 instr_idx=instr_idx,
                 ordinal=ordinal,
             ))
             ordinal += 1
     return out
+
+
+def _stack_object_signature(frame: dict) -> list[dict]:
+    return [
+        {
+            "start": item.get("start"),
+            "end": item.get("end"),
+            "size": item.get("size"),
+            "kind": item.get("kind"),
+            "source": item.get("source"),
+        }
+        for item in frame.get("stack_objects") or []
+        if isinstance(item, dict)
+    ]
+
+
+def _pass_frame_change_reason(
+    frame_delta: Any,
+    object_signature_changed: bool,
+) -> str:
+    frame_changed = isinstance(frame_delta, int) and frame_delta != 0
+    if frame_changed and object_signature_changed:
+        return "frame-size-and-object-layout-changed"
+    if frame_changed:
+        return "frame-size-changed"
+    if object_signature_changed:
+        return "object-layout-changed"
+    return "unchanged"
+
+
+def _final_instructions(fn: Function) -> list[_AsmInstruction]:
+    selected = _select_final_pass(fn)
+    if selected is None:
+        return []
+    return _instructions_for_pass(selected)
 
 
 def _from_parser_instruction(

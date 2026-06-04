@@ -86,6 +86,48 @@ def test_expected_frame_model_exposes_stack_objects_from_target_asm() -> None:
     } in frame["stack_objects"]
 
 
+def test_frame_reservation_report_exposes_pass_frame_timeline() -> None:
+    pcdump = textwrap.dedent("""\
+        Starting function fn_80000000
+        AFTER REGISTER COLORING
+        fn_80000000
+        B0: Succ={} Pred={} Labels={}
+            stwu r1,-72(r1)
+            stw r8,24(r1)
+            addi r1,r1,72
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        fn_80000000
+        B0: Succ={} Pred={} Labels={}
+            stwu r1,-80(r1)
+            stw r8,24(r1)
+            stw r9,32(r1)
+            addi r1,r1,80
+    """)
+
+    report = analyze_frame_reservations(pcdump, "fn_80000000")
+
+    timeline = report["pass_frame_timeline"]
+    assert timeline["status"] == "computed"
+    assert timeline["pass_count"] == 2
+    assert timeline["first_change"] == {
+        "status": "changed",
+        "pass_index": 1,
+        "pass": "FINAL CODE AFTER INSTRUCTION SCHEDULING",
+        "previous_pass": "AFTER REGISTER COLORING",
+        "frame_size_before": 72,
+        "frame_size_after": 80,
+        "frame_size_delta": 8,
+        "object_signature_changed": True,
+        "reason": "frame-size-and-object-layout-changed",
+    }
+    assert timeline["passes"][0]["pass"] == "AFTER REGISTER COLORING"
+    assert timeline["passes"][0]["frame_size"] == 72
+    assert timeline["passes"][1]["pass"] == "FINAL CODE AFTER INSTRUCTION SCHEDULING"
+    assert timeline["passes"][1]["frame_size"] == 80
+    assert timeline["passes"][1]["frame_size_delta_from_previous"] == 8
+    assert timeline["passes"][1]["object_signature_changed_from_previous"] is True
+
+
 def test_frame_reservation_report_finds_extra_unused_low_frame_gap() -> None:
     pcdump = textwrap.dedent("""\
         Starting function grIceMt_801F9ACC
