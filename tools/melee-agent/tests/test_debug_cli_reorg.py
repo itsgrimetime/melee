@@ -284,6 +284,77 @@ def test_frame_reservations_cli_text_reports_stack_home_order_mismatch(
     assert "candidate reorder levers: first-use-order, lifetime-boundary, decl-order-proxy" in out
 
 
+def test_frame_reservations_cli_text_reports_expected_stack_home_offsets(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    pcdump = tmp_path / "pcdump.txt"
+    pcdump.write_text(textwrap.dedent("""\
+        Starting function fn_80000002
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        fn_80000002
+        B0: Succ={} Pred={} Labels={}
+            stwu    r1,-80(r1)
+            stfs    f4,a(r1)
+            stfs    f5,b(r1)
+            stfs    f6,c(r1)
+            addi    r1,r1,80
+    """))
+    expected = tmp_path / "expected.s"
+    expected.write_text(textwrap.dedent("""\
+        .fn fn_80000002, global
+        /* 80000000 */    stwu r1, -80(r1)
+        /* 80000004 */    stfs f4, 40(r1)
+        /* 80000008 */    stfs f5, 52(r1)
+        /* 8000000c */    stfs f6, 48(r1)
+        /* 80000010 */    addi r1, r1, 80
+        .endfn fn_80000002
+    """))
+    current_asm = textwrap.dedent("""\
+        +000: 94 21 ff b0 \tstwu    r1,-80(r1)
+        +004: d0 81 00 30 \tstfs    f4,48(r1)
+        +008: d0 a1 00 34 \tstfs    f5,52(r1)
+        +00c: d0 c1 00 28 \tstfs    f6,40(r1)
+        +010: 38 21 00 50 \taddi    r1,r1,80
+    """)
+    monkeypatch.setattr(
+        debug_cli,
+        "_read_frame_reservation_current_asm",
+        lambda function, melee_root=None: current_asm,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "frame-reservations",
+            "-f",
+            "fn_80000002",
+            str(pcdump),
+            "--expected-asm",
+            str(expected),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    out = result.stdout
+    assert "target stack-home offsets: mismatch" in out
+    assert (
+        "target assignments: 3, max target order delta: 1, max offset delta: 8"
+        in out
+    )
+    assert (
+        "c: assign #2, target offset #1, target order delta -1, "
+        "offset 0x28 -> 0x30 (-8)"
+    ) in out
+    assert (
+        "a: assign #0, target offset #0, target order delta 0, "
+        "offset 0x30 -> 0x28 (+8)"
+    ) in out
+    assert "reorder verdict: unknown-unvalidated" in out
+
+
 def test_frame_reservations_cli_reports_current_low_expansion(tmp_path: Path) -> None:
     pcdump = tmp_path / "pcdump.txt"
     pcdump.write_text(textwrap.dedent("""\

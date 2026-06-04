@@ -455,6 +455,8 @@ def test_frame_reservation_resolves_named_local_stack_homes_from_current_asm() -
             "assignment_order": 0,
             "symbol": "lenCol+8",
             "offset": 0x30,
+            "expected_offset": 0x2C,
+            "offset_delta": 0x4,
             "size": 4,
             "kind": "local-or-temporary",
             "access_count": 1,
@@ -471,6 +473,8 @@ def test_frame_reservation_resolves_named_local_stack_homes_from_current_asm() -
             "assignment_order": 1,
             "symbol": "lenCol+12",
             "offset": 0x34,
+            "expected_offset": 0x30,
+            "offset_delta": 0x4,
             "size": 4,
             "kind": "local-or-temporary",
             "access_count": 1,
@@ -487,6 +491,8 @@ def test_frame_reservation_resolves_named_local_stack_homes_from_current_asm() -
             "assignment_order": 2,
             "symbol": "q3",
             "offset": 0x28,
+            "expected_offset": 0x24,
+            "offset_delta": 0x4,
             "size": 4,
             "kind": "local-or-temporary",
             "access_count": 1,
@@ -503,6 +509,8 @@ def test_frame_reservation_resolves_named_local_stack_homes_from_current_asm() -
             "assignment_order": 3,
             "symbol": "nxt",
             "offset": 0x40,
+            "expected_offset": 0x3C,
+            "offset_delta": 0x4,
             "size": 4,
             "kind": "local-or-temporary",
             "access_count": 1,
@@ -564,7 +572,7 @@ def test_frame_reservation_resolves_named_local_stack_homes_from_current_asm() -
         "status": "source-reorder-probe-needed",
         "verdict": "unknown-unvalidated",
         "reason": (
-            "stack-home assignment order differs from final offset order; "
+            "resolved stack-home offsets differ from target asm offsets; "
             "validate source reorder levers before declaring an internal ceiling"
         ),
         "candidate_levers": [
@@ -573,21 +581,21 @@ def test_frame_reservation_resolves_named_local_stack_homes_from_current_asm() -
                 "description": (
                     "reorder first materialized uses of displaced stack homes"
                 ),
-                "target_symbols": ["q3", "lenCol+8", "lenCol+12"],
+                "target_symbols": ["q3", "lenCol+8", "lenCol+12", "nxt"],
             },
             {
                 "kind": "lifetime-boundary",
                 "description": (
                     "move declarations or use blocks to extend/shorten stack-home lifetimes"
                 ),
-                "target_symbols": ["q3", "lenCol+8", "lenCol+12"],
+                "target_symbols": ["q3", "lenCol+8", "lenCol+12", "nxt"],
             },
             {
                 "kind": "decl-order-proxy",
                 "description": (
                     "try declaration-order changes only as a proxy after first-use/lifetime probes"
                 ),
-                "target_symbols": ["q3", "lenCol+8", "lenCol+12"],
+                "target_symbols": ["q3", "lenCol+8", "lenCol+12", "nxt"],
             },
         ],
         "next_steps": [
@@ -596,6 +604,156 @@ def test_frame_reservation_resolves_named_local_stack_homes_from_current_asm() -
         ],
     }
     assert report["extra_low_frame_reservation"] is None
+
+
+def test_frame_reservation_infers_expected_symbolic_stack_home_order() -> None:
+    pcdump = textwrap.dedent("""\
+        Starting function fn_80000002
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        fn_80000002
+        B0: Succ={} Pred={} Labels={}
+            stwu    r1,-80(r1)
+            stfs    f4,a(r1)
+            stfs    f5,b(r1)
+            stfs    f6,c(r1)
+            addi    r1,r1,80
+    """)
+    current_asm = textwrap.dedent("""\
+        +000: 94 21 ff b0 \tstwu    r1,-80(r1)
+        +004: d0 81 00 30 \tstfs    f4,48(r1)
+        +008: d0 a1 00 34 \tstfs    f5,52(r1)
+        +00c: d0 c1 00 28 \tstfs    f6,40(r1)
+        +010: 38 21 00 50 \taddi    r1,r1,80
+    """)
+    expected_asm = textwrap.dedent("""\
+        .fn fn_80000002, global
+        /* 80000000 */    stwu r1, -80(r1)
+        /* 80000004 */    stfs f4, 40(r1)
+        /* 80000008 */    stfs f5, 52(r1)
+        /* 8000000c */    stfs f6, 48(r1)
+        /* 80000010 */    addi r1, r1, 80
+        .endfn fn_80000002
+    """)
+
+    report = analyze_frame_reservations(
+        pcdump,
+        "fn_80000002",
+        expected_asm_text=expected_asm,
+        current_asm_text=current_asm,
+    )
+
+    assert report["current"]["expected_symbolic_home_map"] == [
+        {"symbol": "a", "offset": 0x28},
+        {"symbol": "b", "offset": 0x34},
+        {"symbol": "c", "offset": 0x30},
+    ]
+    assert report["current"]["stack_home_assignments"] == [
+        {
+            "assignment_order": 0,
+            "symbol": "a",
+            "offset": 0x30,
+            "expected_offset": 0x28,
+            "offset_delta": 0x8,
+            "size": 4,
+            "kind": "local-or-temporary",
+            "access_count": 1,
+            "opcodes": ["stfs"],
+            "first_access": {
+                "opcode": "stfs",
+                "operands": "f4,a(r1)",
+                "pass": "FINAL CODE AFTER INSTRUCTION SCHEDULING",
+                "block_idx": 0,
+                "instr_idx": 1,
+            },
+        },
+        {
+            "assignment_order": 1,
+            "symbol": "b",
+            "offset": 0x34,
+            "expected_offset": 0x34,
+            "offset_delta": 0,
+            "size": 4,
+            "kind": "local-or-temporary",
+            "access_count": 1,
+            "opcodes": ["stfs"],
+            "first_access": {
+                "opcode": "stfs",
+                "operands": "f5,b(r1)",
+                "pass": "FINAL CODE AFTER INSTRUCTION SCHEDULING",
+                "block_idx": 0,
+                "instr_idx": 2,
+            },
+        },
+        {
+            "assignment_order": 2,
+            "symbol": "c",
+            "offset": 0x28,
+            "expected_offset": 0x30,
+            "offset_delta": -0x8,
+            "size": 4,
+            "kind": "local-or-temporary",
+            "access_count": 1,
+            "opcodes": ["stfs"],
+            "first_access": {
+                "opcode": "stfs",
+                "operands": "f6,c(r1)",
+                "pass": "FINAL CODE AFTER INSTRUCTION SCHEDULING",
+                "block_idx": 0,
+                "instr_idx": 3,
+            },
+        },
+    ]
+    assert report["current"]["stack_home_expected_order_summary"] == {
+        "status": "computed",
+        "has_expected_offset_mismatch": True,
+        "has_expected_order_mismatch": True,
+        "assignment_count": 3,
+        "max_abs_expected_order_delta": 1,
+        "max_abs_offset_delta": 8,
+        "assignments": [
+            {
+                "symbol": "a",
+                "assignment_order": 0,
+                "current_offset_order": 1,
+                "expected_offset_order": 0,
+                "expected_order_delta": 0,
+                "offset": 0x30,
+                "expected_offset": 0x28,
+                "offset_delta": 0x8,
+                "size": 4,
+                "kind": "local-or-temporary",
+            },
+            {
+                "symbol": "b",
+                "assignment_order": 1,
+                "current_offset_order": 2,
+                "expected_offset_order": 2,
+                "expected_order_delta": 1,
+                "offset": 0x34,
+                "expected_offset": 0x34,
+                "offset_delta": 0,
+                "size": 4,
+                "kind": "local-or-temporary",
+            },
+            {
+                "symbol": "c",
+                "assignment_order": 2,
+                "current_offset_order": 0,
+                "expected_offset_order": 1,
+                "expected_order_delta": -1,
+                "offset": 0x28,
+                "expected_offset": 0x30,
+                "offset_delta": -0x8,
+                "size": 4,
+                "kind": "local-or-temporary",
+            },
+        ],
+    }
+    guidance = report["current"]["stack_home_reorder_guidance"]
+    assert guidance["status"] == "source-reorder-probe-needed"
+    assert guidance["verdict"] == "unknown-unvalidated"
+    assert "target asm" in guidance["reason"]
+    assert guidance["candidate_levers"][0]["target_symbols"] == ["c", "a"]
 
 
 def test_frame_reservation_stack_home_assignment_merges_repeated_accesses() -> None:

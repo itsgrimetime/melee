@@ -56,9 +56,14 @@ def analyze_frame_reservations(
         current_instructions,
         _parse_expected_asm(current_asm_text),
     )
+    expected_symbolic_offsets = _resolve_symbolic_stack_homes(
+        current_instructions,
+        _parse_expected_asm(expected_asm_text),
+    )
     current = _analyze_instructions(
         current_instructions,
         symbolic_offsets=symbolic_offsets,
+        expected_symbolic_offsets=expected_symbolic_offsets,
     )
     expected = (
         _analyze_instructions(_parse_expected_asm(expected_asm_text))
@@ -196,6 +201,7 @@ def _analyze_instructions(
     instructions: list[_AsmInstruction],
     *,
     symbolic_offsets: dict[str, int] | None = None,
+    expected_symbolic_offsets: dict[str, int] | None = None,
 ) -> dict:
     frame_size = _frame_size(instructions)
     access_ranges: dict[tuple[int, int, str], dict] = {}
@@ -203,6 +209,7 @@ def _analyze_instructions(
     unresolved_symbolic_homes: list[dict] = []
     frame_seen = False
     symbolic_offsets = symbolic_offsets or {}
+    expected_symbolic_offsets = expected_symbolic_offsets or {}
 
     for instr in instructions:
         if _is_frame_alloc(instr):
@@ -282,8 +289,14 @@ def _analyze_instructions(
         unused_ranges=unused,
         access_traces=access_traces,
     )
-    stack_home_assignments = _stack_home_assignments(access_traces)
+    stack_home_assignments = _stack_home_assignments(
+        access_traces,
+        expected_symbolic_offsets=expected_symbolic_offsets,
+    )
     stack_home_order_summary = _stack_home_order_summary(stack_home_assignments)
+    stack_home_expected_order_summary = _stack_home_expected_order_summary(
+        stack_home_assignments
+    )
 
     return {
         "frame_size": frame_size,
@@ -302,12 +315,18 @@ def _analyze_instructions(
             else "unavailable-no-resolved-symbolic-homes"
         ),
         "stack_home_order_summary": stack_home_order_summary,
+        "stack_home_expected_order_summary": stack_home_expected_order_summary,
         "stack_home_reorder_guidance": _stack_home_reorder_guidance(
-            stack_home_order_summary
+            stack_home_order_summary,
+            expected_order_summary=stack_home_expected_order_summary,
         ),
         "symbolic_home_map": [
             {"symbol": symbol, "offset": offset}
             for symbol, offset in sorted(symbolic_offsets.items())
+        ],
+        "expected_symbolic_home_map": [
+            {"symbol": symbol, "offset": offset}
+            for symbol, offset in sorted(expected_symbolic_offsets.items())
         ],
         "unresolved_symbolic_homes": unresolved_symbolic_homes,
     }
@@ -388,8 +407,13 @@ def _stack_objects(
     )
 
 
-def _stack_home_assignments(access_traces: list[dict]) -> list[dict]:
+def _stack_home_assignments(
+    access_traces: list[dict],
+    *,
+    expected_symbolic_offsets: dict[str, int] | None = None,
+) -> list[dict]:
     by_symbol: dict[str, dict] = {}
+    expected_symbolic_offsets = expected_symbolic_offsets or {}
     for trace in access_traces:
         symbol = trace.get("symbolic_home")
         if not symbol or trace.get("pre_frame"):
@@ -437,7 +461,7 @@ def _stack_home_assignments(access_traces: list[dict]) -> list[dict]:
     )
     out: list[dict] = []
     for order, item in enumerate(assignments):
-        out.append({
+        row = {
             "assignment_order": order,
             "symbol": item["symbol"],
             "offset": item["offset"],
@@ -446,7 +470,12 @@ def _stack_home_assignments(access_traces: list[dict]) -> list[dict]:
             "access_count": item["access_count"],
             "opcodes": sorted(item["opcodes"]),
             "first_access": item["first_access"],
-        })
+        }
+        expected_offset = expected_symbolic_offsets.get(item["symbol"])
+        if expected_offset is not None:
+            row["expected_offset"] = expected_offset
+            row["offset_delta"] = int(item["offset"]) - expected_offset
+        out.append(row)
     return out
 
 
@@ -496,7 +525,88 @@ def _stack_home_order_summary(assignments: list[dict]) -> dict:
     }
 
 
-def _stack_home_reorder_guidance(order_summary: dict) -> dict:
+def _stack_home_expected_order_summary(assignments: list[dict]) -> dict:
+    expected_assignments = [
+        item for item in assignments
+        if item.get("expected_offset") is not None
+    ]
+    if not expected_assignments:
+        return {
+            "status": "unavailable-no-expected-symbolic-homes",
+            "has_expected_offset_mismatch": False,
+            "has_expected_order_mismatch": False,
+            "assignment_count": 0,
+            "max_abs_expected_order_delta": 0,
+            "max_abs_offset_delta": 0,
+            "assignments": [],
+        }
+
+    current_order_by_symbol = {
+        item["symbol"]: offset_order
+        for offset_order, item in enumerate(sorted(
+            expected_assignments,
+            key=lambda item: (
+                item.get("offset"),
+                item.get("size"),
+                item.get("assignment_order"),
+                item.get("symbol"),
+            ),
+        ))
+    }
+    expected_order_by_symbol = {
+        item["symbol"]: offset_order
+        for offset_order, item in enumerate(sorted(
+            expected_assignments,
+            key=lambda item: (
+                item.get("expected_offset"),
+                item.get("size"),
+                item.get("assignment_order"),
+                item.get("symbol"),
+            ),
+        ))
+    }
+
+    rows: list[dict] = []
+    max_abs_order_delta = 0
+    max_abs_offset_delta = 0
+    for item in expected_assignments:
+        assignment_order = int(item["assignment_order"])
+        expected_offset_order = expected_order_by_symbol[item["symbol"]]
+        expected_order_delta = expected_offset_order - assignment_order
+        offset_delta = int(item["offset_delta"])
+        max_abs_order_delta = max(max_abs_order_delta, abs(expected_order_delta))
+        max_abs_offset_delta = max(max_abs_offset_delta, abs(offset_delta))
+        rows.append({
+            "symbol": item["symbol"],
+            "assignment_order": assignment_order,
+            "current_offset_order": current_order_by_symbol[item["symbol"]],
+            "expected_offset_order": expected_offset_order,
+            "expected_order_delta": expected_order_delta,
+            "offset": item["offset"],
+            "expected_offset": item["expected_offset"],
+            "offset_delta": offset_delta,
+            "size": item["size"],
+            "kind": item["kind"],
+        })
+
+    return {
+        "status": "computed",
+        "has_expected_offset_mismatch": any(row["offset_delta"] for row in rows),
+        "has_expected_order_mismatch": any(
+            row["expected_order_delta"] for row in rows
+        ),
+        "assignment_count": len(rows),
+        "max_abs_expected_order_delta": max_abs_order_delta,
+        "max_abs_offset_delta": max_abs_offset_delta,
+        "assignments": rows,
+    }
+
+
+def _stack_home_reorder_guidance(
+    order_summary: dict,
+    *,
+    expected_order_summary: dict | None = None,
+) -> dict:
     if order_summary.get("status") != "computed":
         return {
             "status": "unavailable",
@@ -507,6 +617,61 @@ def _stack_home_reorder_guidance(order_summary: dict) -> dict:
             ),
             "candidate_levers": [],
             "next_steps": [],
+        }
+    if (
+        expected_order_summary
+        and expected_order_summary.get("status") == "computed"
+        and expected_order_summary.get("has_expected_offset_mismatch")
+    ):
+        displaced = [
+            row for row in expected_order_summary.get("assignments") or []
+            if row.get("offset_delta")
+        ]
+        displaced.sort(
+            key=lambda row: (
+                abs(int(row.get("offset_delta") or 0)),
+                abs(int(row.get("expected_order_delta") or 0)),
+                -int(row.get("assignment_order") or 0),
+            ),
+            reverse=True,
+        )
+        target_symbols = [str(row.get("symbol")) for row in displaced[:5]]
+        return {
+            "status": "source-reorder-probe-needed",
+            "verdict": "unknown-unvalidated",
+            "reason": (
+                "resolved stack-home offsets differ from target asm offsets; "
+                "validate source reorder levers before declaring an internal ceiling"
+            ),
+            "candidate_levers": [
+                {
+                    "kind": "first-use-order",
+                    "description": (
+                        "reorder first materialized uses of displaced stack homes"
+                    ),
+                    "target_symbols": target_symbols,
+                },
+                {
+                    "kind": "lifetime-boundary",
+                    "description": (
+                        "move declarations or use blocks to extend/shorten "
+                        "stack-home lifetimes"
+                    ),
+                    "target_symbols": target_symbols,
+                },
+                {
+                    "kind": "decl-order-proxy",
+                    "description": (
+                        "try declaration-order changes only as a proxy after "
+                        "first-use/lifetime probes"
+                    ),
+                    "target_symbols": target_symbols,
+                },
+            ],
+            "next_steps": [
+                "melee-agent debug mutate lifetime-layout -f <function> --compile-probes",
+                "melee-agent debug mutate decl-orders <function> --strategy all --json",
+            ],
         }
     if not order_summary.get("has_order_mismatch"):
         return {

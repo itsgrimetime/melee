@@ -3453,6 +3453,60 @@ def _print_stack_home_order_summary(current: Mapping[str, object]) -> None:
             f"delta {sign}{delta}, "
             f"offset {offset_text}"
         )
+    expected_summary = current.get("stack_home_expected_order_summary")
+    if (
+        isinstance(expected_summary, Mapping)
+        and expected_summary.get("status") == "computed"
+    ):
+        expected_assignments = expected_summary.get("assignments")
+        if isinstance(expected_assignments, list) and expected_assignments:
+            target_status = (
+                "mismatch"
+                if expected_summary.get("has_expected_offset_mismatch")
+                else "matches target"
+            )
+            print(f"target stack-home offsets: {target_status}")
+            print(
+                "target assignments: "
+                f"{expected_summary.get('assignment_count')}, "
+                "max target order delta: "
+                f"{expected_summary.get('max_abs_expected_order_delta')}, "
+                "max offset delta: "
+                f"{expected_summary.get('max_abs_offset_delta')}"
+            )
+            target_ranked = sorted(
+                (
+                    item for item in expected_assignments
+                    if isinstance(item, Mapping)
+                ),
+                key=lambda item: (
+                    abs(int(item.get("offset_delta") or 0)),
+                    abs(int(item.get("expected_order_delta") or 0)),
+                    -int(item.get("assignment_order") or 0),
+                ),
+                reverse=True,
+            )
+            for item in target_ranked[:5]:
+                offset_delta = int(item.get("offset_delta") or 0)
+                order_delta = int(item.get("expected_order_delta") or 0)
+                offset_sign = "+" if offset_delta > 0 else ""
+                order_sign = "+" if order_delta > 0 else ""
+                current_offset = item.get("offset")
+                expected_offset = item.get("expected_offset")
+                current_text = (
+                    "?" if current_offset is None else f"0x{int(current_offset):x}"
+                )
+                expected_text = (
+                    "?" if expected_offset is None else f"0x{int(expected_offset):x}"
+                )
+                print(
+                    f"  {item.get('symbol')}: "
+                    f"assign #{item.get('assignment_order')}, "
+                    f"target offset #{item.get('expected_offset_order')}, "
+                    f"target order delta {order_sign}{order_delta}, "
+                    f"offset {current_text} -> {expected_text} "
+                    f"({offset_sign}{offset_delta})"
+                )
     guidance = current.get("stack_home_reorder_guidance")
     if not isinstance(guidance, Mapping):
         return
