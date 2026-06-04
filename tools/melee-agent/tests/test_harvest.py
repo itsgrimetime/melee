@@ -1983,6 +1983,102 @@ def test_name_magic_apply_replaces_entire_source_file(tmp_path: Path) -> None:
     assert target.read_text(encoding="utf-8") == candidate_text
 
 
+def test_name_magic_whole_file_apply_rolls_back_same_file_regression(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    target = repo_root / "src" / "melee/demo.c"
+    target.parent.mkdir(parents=True)
+    original = textwrap.dedent(
+        """\
+        int demo_fn(void) {
+            return 1;
+        }
+
+        int sibling(void) {
+            return 7;
+        }
+        """
+    )
+    target.write_text(original, encoding="utf-8")
+    report = repo_root / "build" / "GALE01" / "report.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(
+        json.dumps(
+            {
+                "units": [
+                    {
+                        "metadata": {"source_path": "src/melee/demo.c"},
+                        "functions": [
+                            {"name": "demo_fn", "fuzzy_match_percent": 99.0},
+                            {"name": "sibling", "fuzzy_match_percent": 100.0},
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    candidate = tmp_path / "candidate.c"
+    candidate.write_text(
+        textwrap.dedent(
+            """\
+            int demo_fn(void) {
+                return 2;
+            }
+
+            int sibling(void) {
+                return 9;
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    _write_queue(queue, [_name_magic_row("demo_fn", primary="data-symbol-relocation")])
+    _, runner = _json_runner(
+        {
+            "stop_condition": {"kind": "validated"},
+            "variants": [
+                {
+                    "status": "ok",
+                    "source_retained": str(candidate),
+                    "final_match_percent": 100.0,
+                    "no_name_magic_match": True,
+                }
+            ],
+        }
+    )
+
+    def validator(
+        function: str,
+        *,
+        cwd: Path,
+        timeout: int,
+    ) -> HarnessProcessResult:
+        if function == "sibling":
+            return HarnessProcessResult(["checkdiff", function], 1, "", "mismatch")
+        return HarnessProcessResult(["checkdiff", function], 0, "", "")
+
+    ledger = run_harvest(
+        "data-symbol-relocation",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+        match_checker=lambda function, *, cwd, timeout: HarnessProcessResult(
+            ["checkdiff", function], 1, "", "mismatch"
+        ),
+        validator=validator,
+        apply=True,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "apply-validation-failed"
+    assert result["reason"] == "post-apply regression guard failed"
+    assert target.read_text(encoding="utf-8") == original
+
+
 def test_name_magic_whole_file_apply_rolls_back_when_validation_fails(
     tmp_path: Path,
 ) -> None:
