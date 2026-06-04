@@ -3453,6 +3453,21 @@ def _print_stack_home_order_summary(current: Mapping[str, object]) -> None:
             f"delta {sign}{delta}, "
             f"offset {offset_text}"
         )
+    guidance = current.get("stack_home_reorder_guidance")
+    if not isinstance(guidance, Mapping):
+        return
+    verdict = guidance.get("verdict")
+    if verdict:
+        print(f"reorder verdict: {verdict}")
+    levers = guidance.get("candidate_levers")
+    if isinstance(levers, list) and levers:
+        kinds = [
+            str(item.get("kind"))
+            for item in levers
+            if isinstance(item, Mapping) and item.get("kind")
+        ]
+        if kinds:
+            print(f"candidate reorder levers: {', '.join(kinds)}")
 
 
 def _print_frame_reservation_report(report: dict) -> None:

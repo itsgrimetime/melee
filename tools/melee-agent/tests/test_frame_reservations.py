@@ -560,6 +560,41 @@ def test_frame_reservation_resolves_named_local_stack_homes_from_current_asm() -
             },
         ],
     }
+    assert report["current"]["stack_home_reorder_guidance"] == {
+        "status": "source-reorder-probe-needed",
+        "verdict": "unknown-unvalidated",
+        "reason": (
+            "stack-home assignment order differs from final offset order; "
+            "validate source reorder levers before declaring an internal ceiling"
+        ),
+        "candidate_levers": [
+            {
+                "kind": "first-use-order",
+                "description": (
+                    "reorder first materialized uses of displaced stack homes"
+                ),
+                "target_symbols": ["q3", "lenCol+8", "lenCol+12"],
+            },
+            {
+                "kind": "lifetime-boundary",
+                "description": (
+                    "move declarations or use blocks to extend/shorten stack-home lifetimes"
+                ),
+                "target_symbols": ["q3", "lenCol+8", "lenCol+12"],
+            },
+            {
+                "kind": "decl-order-proxy",
+                "description": (
+                    "try declaration-order changes only as a proxy after first-use/lifetime probes"
+                ),
+                "target_symbols": ["q3", "lenCol+8", "lenCol+12"],
+            },
+        ],
+        "next_steps": [
+            "melee-agent debug mutate lifetime-layout -f <function> --compile-probes",
+            "melee-agent debug mutate decl-orders <function> --strategy all --json",
+        ],
+    }
     assert report["extra_low_frame_reservation"] is None
 
 
@@ -649,4 +684,11 @@ def test_frame_reservation_stack_home_assignment_merges_repeated_accesses() -> N
                 "kind": "local-or-temporary",
             },
         ],
+    }
+    assert report["current"]["stack_home_reorder_guidance"] == {
+        "status": "not-needed",
+        "verdict": "assignment-order-matches-offset-order",
+        "reason": "resolved stack-home assignment order already matches final offset order",
+        "candidate_levers": [],
+        "next_steps": [],
     }

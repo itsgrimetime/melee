@@ -280,6 +280,8 @@ def test_frame_reservations_cli_text_reports_stack_home_order_mismatch(
     assert "assignments: 3, max order delta: 2" in out
     assert "q3: assign #2, offset #0, delta -2, offset 0x28" in out
     assert "lenCol+8: assign #0, offset #1, delta +1, offset 0x30" in out
+    assert "reorder verdict: unknown-unvalidated" in out
+    assert "candidate reorder levers: first-use-order, lifetime-boundary, decl-order-proxy" in out
 
 
 def test_frame_reservations_cli_reports_current_low_expansion(tmp_path: Path) -> None:

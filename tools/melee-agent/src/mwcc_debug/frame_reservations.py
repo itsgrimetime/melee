@@ -283,6 +283,7 @@ def _analyze_instructions(
         access_traces=access_traces,
     )
     stack_home_assignments = _stack_home_assignments(access_traces)
+    stack_home_order_summary = _stack_home_order_summary(stack_home_assignments)
 
     return {
         "frame_size": frame_size,
@@ -300,8 +301,9 @@ def _analyze_instructions(
             if stack_home_assignments
             else "unavailable-no-resolved-symbolic-homes"
         ),
-        "stack_home_order_summary": _stack_home_order_summary(
-            stack_home_assignments
+        "stack_home_order_summary": stack_home_order_summary,
+        "stack_home_reorder_guidance": _stack_home_reorder_guidance(
+            stack_home_order_summary
         ),
         "symbolic_home_map": [
             {"symbol": symbol, "offset": offset}
@@ -491,6 +493,69 @@ def _stack_home_order_summary(assignments: list[dict]) -> dict:
         "assignment_count": len(rows),
         "max_abs_order_delta": max_abs_delta,
         "assignments": rows,
+    }
+
+
+def _stack_home_reorder_guidance(order_summary: dict) -> dict:
+    if order_summary.get("status") != "computed":
+        return {
+            "status": "unavailable",
+            "verdict": "no-resolved-symbolic-homes",
+            "reason": (
+                "requires resolved symbolic stack homes before source reorder "
+                "or ceiling evidence can be evaluated"
+            ),
+            "candidate_levers": [],
+            "next_steps": [],
+        }
+    if not order_summary.get("has_order_mismatch"):
+        return {
+            "status": "not-needed",
+            "verdict": "assignment-order-matches-offset-order",
+            "reason": "resolved stack-home assignment order already matches final offset order",
+            "candidate_levers": [],
+            "next_steps": [],
+        }
+    displaced = [
+        row for row in order_summary.get("assignments") or []
+        if row.get("order_delta")
+    ]
+    displaced.sort(
+        key=lambda row: (
+            abs(int(row.get("order_delta") or 0)),
+            -int(row.get("assignment_order") or 0),
+        ),
+        reverse=True,
+    )
+    target_symbols = [str(row.get("symbol")) for row in displaced[:5]]
+    return {
+        "status": "source-reorder-probe-needed",
+        "verdict": "unknown-unvalidated",
+        "reason": (
+            "stack-home assignment order differs from final offset order; "
+            "validate source reorder levers before declaring an internal ceiling"
+        ),
+        "candidate_levers": [
+            {
+                "kind": "first-use-order",
+                "description": "reorder first materialized uses of displaced stack homes",
+                "target_symbols": target_symbols,
+            },
+            {
+                "kind": "lifetime-boundary",
+                "description": "move declarations or use blocks to extend/shorten stack-home lifetimes",
+                "target_symbols": target_symbols,
+            },
+            {
+                "kind": "decl-order-proxy",
+                "description": "try declaration-order changes only as a proxy after first-use/lifetime probes",
+                "target_symbols": target_symbols,
+            },
+        ],
+        "next_steps": [
+            "melee-agent debug mutate lifetime-layout -f <function> --compile-probes",
+            "melee-agent debug mutate decl-orders <function> --strategy all --json",
+        ],
     }
 
 
