@@ -466,6 +466,24 @@ def test_call_arg_tempization_preserves_float_argument_type() -> None:
     }
 
 
+def test_call_arg_tempization_ignores_nested_call_in_outer_argument_list() -> None:
+    source = textwrap.dedent("""\
+        void AXDriver_8038BF6C(HSD_SM* v)
+        {
+            HSD_SynthSFXSetPitchRatio(v->vID, 0,
+                                      powf(2.0F, v->x20 / 1200.0F));
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(
+        source,
+        "AXDriver_8038BF6C",
+        max_probes=20,
+    )
+
+    assert "call-argument-tempization" not in {probe.operator for probe in probes}
+
+
 def test_frame_reservation_pad_stack_probe_inserts_requested_pad() -> None:
     source = textwrap.dedent("""\
         void fn_80000000(int flag)

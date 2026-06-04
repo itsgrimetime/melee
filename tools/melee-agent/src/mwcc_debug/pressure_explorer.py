@@ -1208,6 +1208,8 @@ def _probe_call_arg_temp(
         body,
     ):
         indent, call, args_text = match.groups()
+        if not _balanced_expression_delimiters(args_text):
+            continue
         args = list(_split_top_level_args(args_text))
         for index, arg in enumerate(args):
             if not _has_tempizable_arithmetic(arg):
@@ -1236,6 +1238,19 @@ def _probe_call_arg_temp(
                 },
             )
     return None
+
+
+def _balanced_expression_delimiters(text: str) -> bool:
+    stack: list[str] = []
+    pairs = {"(": ")", "[": "]", "{": "}"}
+    closing = set(pairs.values())
+    for char in text:
+        if char in pairs:
+            stack.append(pairs[char])
+        elif char in closing:
+            if not stack or stack.pop() != char:
+                return False
+    return not stack
 
 
 def _probe_frame_reservation_pad_stack(
