@@ -30,6 +30,8 @@ from typing import Iterator, Optional
 # f14-f31 callee.
 _GPR_CALLER_SAVE = set(range(3, 13))  # r3..r12 — but r1, r2 are reserved
 _GPR_CALLEE_SAVE = set(range(13, 32))  # r13..r31
+_FPR_CALLER_SAVE = set(range(0, 14))
+_FPR_CALLEE_SAVE = set(range(14, 32))
 
 
 def _is_virtual(reg_num: int) -> bool:
@@ -129,6 +131,11 @@ class Instruction:
         """Just the GPR physical reg numbers."""
         return {n for (k, n) in self.regs if k == "r" and not _is_virtual(n)}
 
+    @property
+    def virtual_regs(self) -> set[tuple[str, int]]:
+        """All virtual register tokens, preserving register class."""
+        return {(k, n) for (k, n) in self.regs if _is_virtual(n)}
+
 
 @dataclass
 class Block:
@@ -184,7 +191,8 @@ class VirtualRegInfo:
 
     virtual: int  # the virtual reg number, e.g. 35
     physical: Optional[int]  # the physical reg it ended up in, or None if unmapped
-    physical_class: str  # GPR / GPR-cs / GPR-tmp / unknown
+    physical_class: str  # GPR / GPR-cs / GPR-tmp / FPR / FPR-cs / unknown
+    reg_kind: str  # "r" or "f"
     # Linearized instruction-position live range — both inclusive
     first_use: int
     last_use: int
@@ -481,8 +489,8 @@ def _align_nw(pre_insts: list[Instruction],
 
 
 def _align_block(pre_block: Block, post_block: Block, base_pos: int,
-                 mapping: "dict[int, Counter[int]]",
-                 positions: dict[int, list[int]]) -> int:
+                 mapping: "dict[tuple[str, int], Counter[int]]",
+                 positions: dict[tuple[str, int], list[int]]) -> int:
     """Align instructions within a single block using NW. Records each pre
     instruction's linearized position into `positions[vn]` and accumulates
     per-virtual physical-reg observations into `mapping[vn]` (a Counter).
@@ -502,8 +510,8 @@ def _align_block(pre_block: Block, post_block: Block, base_pos: int,
         pos = base_pos + pre_idx
         # Record positions for every virtual in this pre instruction
         for vk, vn in pre_ist.regs:
-            if vk == "r" and _is_virtual(vn):
-                positions.setdefault(vn, []).append(pos)
+            if _is_virtual(vn):
+                positions.setdefault((vk, vn), []).append(pos)
         if post_idx is None:
             # Coalesced/dead-eliminated pre instruction — no mapping recoverable
             continue
@@ -512,8 +520,8 @@ def _align_block(pre_block: Block, post_block: Block, base_pos: int,
         # truncated/extended insns don't blow up; truly anomalous cases would
         # have been filtered by the score function (large disagreement penalty).
         for (pk, pn), (qk, qn) in zip(pre_ist.regs, post_ist.regs):
-            if pk == "r" and _is_virtual(pn) and qk == "r" and not _is_virtual(qn):
-                mapping.setdefault(pn, Counter())[qn] += 1
+            if pk == qk and _is_virtual(pn) and not _is_virtual(qn):
+                mapping.setdefault((pk, pn), Counter())[qn] += 1
     return len(pre_insts)
 
 
@@ -536,8 +544,8 @@ def analyze_function(fn: Function) -> list[VirtualRegInfo]:
     # Build index maps for both passes
     post_blocks_by_idx = {b.index: b for b in post.blocks}
 
-    mapping: dict[int, Counter[int]] = {}
-    positions: dict[int, list[int]] = {}
+    mapping: dict[tuple[str, int], Counter[int]] = {}
+    positions: dict[tuple[str, int], list[int]] = {}
 
     # Walk blocks in pre-pass order, aligning each against its same-index
     # counterpart in the post pass. Blocks present in pre but missing in post
@@ -551,8 +559,8 @@ def analyze_function(fn: Function) -> list[VirtualRegInfo]:
             # Still record positions for live-range data.
             for ist in pre_block.instructions:
                 for vk, vn in ist.regs:
-                    if vk == "r" and _is_virtual(vn):
-                        positions.setdefault(vn, []).append(base_pos)
+                    if _is_virtual(vn):
+                        positions.setdefault((vk, vn), []).append(base_pos)
                 base_pos += 1
             continue
         consumed = _align_block(pre_block, post_block, base_pos, mapping, positions)
@@ -563,13 +571,13 @@ def analyze_function(fn: Function) -> list[VirtualRegInfo]:
         positions[vn] = sorted(set(positions[vn]))
 
     # Build VirtualRegInfo entries (one per virtual seen)
-    infos: dict[int, VirtualRegInfo] = {}
-    for vn, poses in positions.items():
+    infos: dict[tuple[str, int], VirtualRegInfo] = {}
+    for (reg_kind, vn), poses in positions.items():
         first, last = poses[0], poses[-1]
         # Physical: pick the most common observation. If there's a tie or no
         # observations, leave None. The NW alignment makes single-observation
         # noise much less common than the old greedy alignment.
-        counter = mapping.get(vn)
+        counter = mapping.get((reg_kind, vn))
         phys: Optional[int] = None
         if counter:
             ranked = counter.most_common()
@@ -580,11 +588,16 @@ def analyze_function(fn: Function) -> list[VirtualRegInfo]:
                 phys = ranked[0][0]
             elif len(ranked) == 1:
                 phys = ranked[0][0]
-        cls = _classify_physical(phys, is_float=False) if phys is not None else "?"
-        infos[vn] = VirtualRegInfo(
+        cls = (
+            _classify_physical(phys, is_float=reg_kind == "f")
+            if phys is not None
+            else "?"
+        )
+        infos[(reg_kind, vn)] = VirtualRegInfo(
             virtual=vn,
             physical=phys,
             physical_class=cls,
+            reg_kind=reg_kind,
             first_use=first,
             last_use=last,
             use_count=len(poses),
@@ -593,7 +606,7 @@ def analyze_function(fn: Function) -> list[VirtualRegInfo]:
     # Compute interferences: two virtuals interfere iff their live ranges overlap
     for a in infos.values():
         for b in infos.values():
-            if a.virtual == b.virtual:
+            if a.reg_kind != b.reg_kind or a.virtual == b.virtual:
                 continue
             # Live ranges overlap if max(starts) <= min(ends)
             if max(a.first_use, b.first_use) <= min(a.last_use, b.last_use):
@@ -607,14 +620,21 @@ def analyze_function(fn: Function) -> list[VirtualRegInfo]:
         if vinfo.physical is None:
             continue
         # What class is this in? Use whatever physical we got
-        pool = all_callee_save if vinfo.physical in _GPR_CALLEE_SAVE else all_caller_save
+        if vinfo.reg_kind == "f":
+            pool = (
+                set(_FPR_CALLEE_SAVE)
+                if vinfo.physical in _FPR_CALLEE_SAVE
+                else set(_FPR_CALLER_SAVE)
+            )
+        else:
+            pool = all_callee_save if vinfo.physical in _GPR_CALLEE_SAVE else all_caller_save
         used_by_interferers: set[int] = set()
         for other_v in vinfo.interferes_with:
-            other = infos.get(other_v)
+            other = infos.get((vinfo.reg_kind, other_v))
             if other and other.physical is not None and other.physical in pool:
                 used_by_interferers.add(other.physical)
         vinfo.candidates = pool - used_by_interferers
         # Sanity: the actual choice should be in candidates
         vinfo.candidates.add(vinfo.physical)
 
-    return sorted(infos.values(), key=lambda v: v.virtual)
+    return sorted(infos.values(), key=lambda v: (v.reg_kind != "r", v.virtual))

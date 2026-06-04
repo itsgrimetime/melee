@@ -2082,10 +2082,14 @@ PPC_ABI_GPR = {
 }
 
 
-def _abi_hint(physical: Optional[int]) -> str:
+def _abi_hint(physical: Optional[int], reg_kind: str = "r") -> str:
     """Return a short ABI hint for a physical register, or empty string."""
     if physical is None:
         return ""
+    if reg_kind == "f":
+        if physical >= 14:
+            return "callee-save FPR"
+        return "caller-save FPR"
     if physical == 0:
         return "scratch"  # r0 has special semantics in some PPC instructions
     if physical in PPC_ABI_GPR:
@@ -2099,11 +2103,13 @@ def _abi_hint(physical: Optional[int]) -> str:
 
 def _virtreg_to_dict(info) -> dict:
     """Serialize a VirtualRegInfo for JSON output."""
+    reg_kind = getattr(info, "reg_kind", "r")
     return {
+        "reg_kind": reg_kind,
         "virtual": info.virtual,
         "physical": info.physical,
         "physical_class": info.physical_class,
-        "abi_hint": _abi_hint(info.physical),
+        "abi_hint": _abi_hint(info.physical, reg_kind),
         "first_use": info.first_use,
         "last_use": info.last_use,
         "use_count": info.use_count,
@@ -2239,16 +2245,19 @@ def analyze(
     print(f"{'Virtual':>8}  {'Phys':>5}  {'Class':<8}  {'ABI':<14}  {'Live[first..last]':<18}  {'Uses':>5}  Interferes")
     print(f"{'-' * 8:>8}  {'-' * 5:>5}  {'-' * 8:<8}  {'-' * 14:<14}  {'-' * 18:<18}  {'-' * 5:>5}  ----------")
     for info in infos:
-        phys = f"r{info.physical}" if info.physical is not None else "?"
+        reg_kind = getattr(info, "reg_kind", "r")
+        phys = f"{reg_kind}{info.physical}" if info.physical is not None else "?"
         live = f"{info.first_use}..{info.last_use}"
-        abi = _abi_hint(info.physical)
+        abi = _abi_hint(info.physical, reg_kind)
         # Format interferes_with as a compact list
         if info.interferes_with:
-            interferers = ",".join(f"r{v}" for v in sorted(info.interferes_with))
+            interferers = ",".join(
+                f"{reg_kind}{v}" for v in sorted(info.interferes_with)
+            )
         else:
             interferers = "-"
         print(
-            f"     r{info.virtual:<3}  {phys:>5}  {info.physical_class:<8}  "
+            f"     {reg_kind}{info.virtual:<3}  {phys:>5}  {info.physical_class:<8}  "
             f"{abi:<14}  {live:<18}  {info.use_count:>5}  {interferers}"
         )
 
@@ -2269,10 +2278,14 @@ def analyze(
             if info.physical is None or not info.candidates:
                 continue
             cands = sorted(info.candidates)
-            cand_str = "{" + ",".join(f"r{c}" for c in cands) + "}"
-            abi = _abi_hint(info.physical)
+            reg_kind = getattr(info, "reg_kind", "r")
+            cand_str = "{" + ",".join(f"{reg_kind}{c}" for c in cands) + "}"
+            abi = _abi_hint(info.physical, reg_kind)
             abi_note = f"  [{abi}]" if abi else ""
-            print(f"  r{info.virtual} → r{info.physical}{abi_note}.  Candidates: {cand_str}")
+            print(
+                f"  {reg_kind}{info.virtual} → {reg_kind}{info.physical}"
+                f"{abi_note}.  Candidates: {cand_str}"
+            )
 
 
 @inspect_app.command("simulate")
@@ -2327,6 +2340,27 @@ def simulate(
 
     decisions = simulate_function(target)
     if not decisions:
+        infos = analyze_function(target)
+        has_fpr_virtuals = any(
+            getattr(info, "reg_kind", "r") == "f" for info in infos
+        )
+        has_gpr_virtuals = any(
+            getattr(info, "reg_kind", "r") == "r" for info in infos
+        )
+        if has_fpr_virtuals and not has_gpr_virtuals:
+            message = (
+                "FPR virtual registers found, but simulate is GPR-only; "
+                "use `debug inspect analyze` for FPR mapping details."
+            )
+            if json_out:
+                print(json.dumps({
+                    "function": function,
+                    "error": "fpr-virtuals-unsupported-by-gpr-simulator",
+                    "message": message,
+                }))
+            else:
+                print(message)
+            return
         if json_out:
             print(json.dumps({"function": function, "error":
                               "no virtual registers found (or pass alignment failed)"}))

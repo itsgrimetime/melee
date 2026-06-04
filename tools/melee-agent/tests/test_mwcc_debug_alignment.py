@@ -177,3 +177,29 @@ def test_analyze_recovers_mapping_through_coalesce() -> None:
     assert infos[33].physical == 31
     # r34 should map to r0 (from `add r34,...` → `add r0,...`)
     assert infos[34].physical == 0
+
+
+def test_analyze_recovers_fpr_virtual_mappings() -> None:
+    pre_block = Block(index=0, succ=[], pred=[], labels=["L0"])
+    pre_block.instructions = [
+        make_ist("lfs", ("f", 32), ("r", 3)),
+        make_ist("fmuls", ("f", 33), ("f", 32), ("f", 32)),
+        make_ist("stfs", ("f", 33), ("r", 4)),
+    ]
+    post_block = Block(index=0, succ=[], pred=[], labels=["L0"])
+    post_block.instructions = [
+        make_ist("lfs", ("f", 0), ("r", 3)),
+        make_ist("fmuls", ("f", 31), ("f", 0), ("f", 0)),
+        make_ist("stfs", ("f", 31), ("r", 4)),
+    ]
+
+    pre_pass = Pass(name="AFTER PEEPHOLE FORWARD", blocks=[pre_block])
+    post_pass = Pass(name="AFTER REGISTER COLORING", blocks=[post_block])
+    fn = Function(name="fpr_fn", passes=[pre_pass, post_pass])
+
+    infos = {(v.reg_kind, v.virtual): v for v in analyze_function(fn)}
+    assert infos[("f", 32)].physical == 0
+    assert infos[("f", 32)].physical_class == "FPR"
+    assert infos[("f", 33)].physical == 31
+    assert infos[("f", 33)].physical_class == "FPR-cs"
+    assert infos[("f", 32)].interferes_with == {33}

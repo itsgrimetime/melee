@@ -118,7 +118,10 @@ def simulate_function(fn: Function) -> list[SimDecision]:
 
     Returns one SimDecision per virtual.
     """
-    infos = analyze_function(fn)
+    infos = [
+        info for info in analyze_function(fn)
+        if getattr(info, "reg_kind", "r") == "r"
+    ]
     if not infos:
         return []
 

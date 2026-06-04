@@ -277,6 +277,79 @@ def test_frame_reservations_cli_reports_stack_home_assignments(
     }
 
 
+def test_inspect_analyze_reports_fpr_virtuals(tmp_path: Path) -> None:
+    pcdump = tmp_path / "pcdump.txt"
+    pcdump.write_text(textwrap.dedent("""\
+        Starting function fpr_fn
+        AFTER PEEPHOLE FORWARD
+        fpr_fn
+        B0: Succ={} Pred={} Labels={L0 }
+            lfs f32,0(r3)
+            fmuls f33,f32,f32
+            stfs f33,0(r4)
+        AFTER REGISTER COLORING
+        fpr_fn
+        B0: Succ={} Pred={} Labels={L0 }
+            lfs f0,0(r3)
+            fmuls f31,f0,f0
+            stfs f31,0(r4)
+    """))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "analyze",
+            str(pcdump),
+            "-f",
+            "fpr_fn",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert [
+        (item["reg_kind"], item["virtual"], item["physical"])
+        for item in payload["virtuals"]
+    ] == [("f", 32, 0), ("f", 33, 31)]
+
+
+def test_inspect_simulate_reports_fpr_only_unsupported(tmp_path: Path) -> None:
+    pcdump = tmp_path / "pcdump.txt"
+    pcdump.write_text(textwrap.dedent("""\
+        Starting function fpr_fn
+        AFTER PEEPHOLE FORWARD
+        fpr_fn
+        B0: Succ={} Pred={} Labels={L0 }
+            lfs f32,0(r3)
+            fmuls f33,f32,f32
+            stfs f33,0(r4)
+        AFTER REGISTER COLORING
+        fpr_fn
+        B0: Succ={} Pred={} Labels={L0 }
+            lfs f0,0(r3)
+            fmuls f31,f0,f0
+            stfs f31,0(r4)
+    """))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "simulate",
+            str(pcdump),
+            "-f",
+            "fpr_fn",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "FPR virtual registers found, but simulate is GPR-only" in result.stdout
+
+
 def test_frame_reservations_cli_text_reports_stack_home_order_mismatch(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
