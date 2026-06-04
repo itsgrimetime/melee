@@ -708,6 +708,147 @@ def test_indexed_struct_command_text_selects_indexed_search(tmp_path: Path) -> N
     assert select_harness(rows[0]) == "indexed-struct-search"
 
 
+def test_control_flow_structural_branch_selects_control_flow_search(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "structural-reconstruction.tsv"
+    row = _row(
+        "demo_fn",
+        headline_tool="manual-inspection",
+        source_actionability="structural-rebuild",
+        frame_closability_tier="",
+    )
+    row["primary"] = "structural-reconstruction"
+    row["subcategory"] = "branch-or-control-flow-shape"
+    _write_queue(queue, [row])
+
+    rows = load_queue_rows(
+        queue,
+        work_bucket="structural-reconstruction",
+        repo_root=repo_root,
+    )
+
+    assert select_harness(rows[0]) == "control-flow-shape-search"
+
+
+def test_structural_rebuild_alone_does_not_select_control_flow_search(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "known-small-pattern-candidate.tsv"
+    row = _row(
+        "demo_fn",
+        headline_tool="mismatch-db",
+        source_actionability="structural-rebuild",
+        frame_closability_tier="",
+    )
+    row["primary"] = "known-small-pattern-candidate"
+    row["subcategory"] = "operand-order"
+    _write_queue(queue, [row])
+
+    rows = load_queue_rows(
+        queue,
+        work_bucket="known-small-pattern-candidate",
+        repo_root=repo_root,
+    )
+
+    assert select_harness(rows[0]) is None
+
+
+def test_control_flow_explicit_harness_selects_control_flow_search(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "structural-reconstruction.tsv"
+    row = _row(
+        "demo_fn",
+        headline_tool="manual-inspection",
+        source_actionability="",
+        frame_closability_tier="",
+    )
+    row["primary"] = "other-primary"
+    _write_queue(queue, [row])
+
+    rows = load_queue_rows(
+        queue,
+        work_bucket="structural-reconstruction",
+        repo_root=repo_root,
+        target_map={"demo_fn": {"harness": "control-flow-shape-search"}},
+    )
+
+    assert select_harness(rows[0]) == "control-flow-shape-search"
+
+
+def test_control_flow_command_text_selects_control_flow_search(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "structural-reconstruction.tsv"
+    row = _row(
+        "demo_fn",
+        headline_tool="manual-inspection",
+        source_actionability="",
+        frame_closability_tier="",
+        next_command="melee-agent debug mutate control-flow-shape-search -f demo_fn",
+    )
+    row["primary"] = "other-primary"
+    _write_queue(queue, [row])
+
+    rows = load_queue_rows(
+        queue,
+        work_bucket="structural-reconstruction",
+        repo_root=repo_root,
+    )
+
+    assert select_harness(rows[0]) == "control-flow-shape-search"
+
+
+def test_control_flow_harvest_builds_control_flow_search_command(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "structural-reconstruction.tsv"
+    row = _row(
+        "demo_fn",
+        headline_tool="control-flow-shape-search",
+        source_actionability="structural-rebuild",
+        frame_closability_tier="",
+    )
+    row["primary"] = "structural-reconstruction"
+    row["subcategory"] = "branch-or-control-flow-shape"
+    _write_queue(queue, [row])
+    calls, runner = _json_runner(
+        {
+            "variants": [
+                {
+                    "status": "ok",
+                    "source_retained": str(tmp_path / "candidate.c"),
+                    "final_match_percent": 100.0,
+                }
+            ]
+        }
+    )
+
+    ledger = run_harvest(
+        "structural-reconstruction",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    assert calls[0][:5] == [
+        "debug",
+        "mutate",
+        "control-flow-shape-search",
+        "-f",
+        "demo_fn",
+    ]
+    assert "--score-match-percent" in calls[0]
+    assert ledger["results"][0]["harness"] == "control-flow-shape-search"
+    assert ledger["results"][0]["status"] == "validated"
+
+
 def test_indexed_struct_harvest_builds_indexed_search_command(tmp_path: Path) -> None:
     repo_root = _repo_with_source(tmp_path)
     queue = tmp_path / "queues" / "indexed-struct-pointer.tsv"
@@ -1574,6 +1715,45 @@ def test_harvest_propagates_indexed_search_stable_blocker(tmp_path: Path) -> Non
     assert result["status"] == "blocked"
     assert result["blocker"] == "no-safe-materialized-pointer"
     assert result["reason"] == "source scan found no safe materialized pointer"
+
+
+def test_harvest_propagates_control_flow_search_stable_blocker(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "structural-reconstruction.tsv"
+    row = _row(
+        "demo_fn",
+        headline_tool="control-flow-shape-search",
+        source_actionability="structural-rebuild",
+        frame_closability_tier="",
+    )
+    row["primary"] = "structural-reconstruction"
+    row["subcategory"] = "branch-or-control-flow-shape"
+    _write_queue(queue, [row])
+    _, runner = _json_runner(
+        {
+            "blocker": "no-control-flow-shape-probes",
+            "stop_condition": {
+                "kind": "blocked",
+                "blocker": "no-control-flow-shape-probes",
+                "reason": "no safe control-flow source transform matched",
+            },
+            "variants": [],
+        }
+    )
+
+    ledger = run_harvest(
+        "structural-reconstruction",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "no-control-flow-shape-probes"
+    assert result["reason"] == "no safe control-flow source transform matched"
 
 
 def test_harness_failures_and_invalid_json_have_stable_blockers(tmp_path: Path) -> None:

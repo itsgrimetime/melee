@@ -284,7 +284,7 @@ def test_describe_actionability_splits_non_frame_work_buckets() -> None:
             "structural-reconstruction",
             "branch-or-control-flow-shape",
             "structural-rebuild",
-            "extract-opseq-xrefs",
+            "control-flow-shape-search",
         ),
         (
             "structural-reconstruction",
@@ -310,6 +310,31 @@ def test_describe_actionability_splits_non_frame_work_buckets() -> None:
         result = describe_actionability(bucket, subcategory)
         assert result["source_actionability"] == actionability
         assert result["headline_tool"] == headline
+
+
+def test_structural_branch_next_command_uses_control_flow_shape_search() -> None:
+    from tools.function_taxonomy_inventory import FunctionCandidate, next_command
+
+    candidate = FunctionCandidate(
+        function="demo_fn",
+        unit="main/melee/demo",
+        file_path="melee/demo.c",
+        size_bytes=128,
+        match_percent=97.0,
+        address="0x80000000",
+        object_status="NonMatching",
+    )
+
+    command = next_command(
+        "structural-reconstruction",
+        "branch-or-control-flow-shape",
+        candidate,
+    )
+
+    assert "debug mutate control-flow-shape-search -f demo_fn" in command
+    assert "--source-file src/melee/demo.c" in command
+    assert "--compile-probes" in command
+    assert "--json" in command
 
 
 def test_signature_bucket_requires_medium_cast_evidence() -> None:

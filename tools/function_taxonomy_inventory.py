@@ -433,7 +433,7 @@ def describe_actionability(
         if subcategory == "branch-or-control-flow-shape":
             return {
                 "source_actionability": "structural-rebuild",
-                "headline_tool": "extract-opseq-xrefs",
+                "headline_tool": "control-flow-shape-search",
                 "actionability_reason": (
                     "control-flow/source-shape mismatch; rebuild natural branch "
                     "or loop structure before local tuning"
@@ -478,6 +478,11 @@ def next_command(bucket: str, subcategory: str, candidate: FunctionCandidate) ->
             f"melee-agent patterns inlines {source_path}"
         )
     if bucket == "structural-reconstruction":
+        if subcategory == "branch-or-control-flow-shape":
+            return (
+                f"melee-agent debug mutate control-flow-shape-search -f {function} "
+                f"--source-file {source_path} --compile-probes --json"
+            )
         return (
             f"melee-agent extract get {function} && "
             f"python tools/checkdiff.py {function} --compact"

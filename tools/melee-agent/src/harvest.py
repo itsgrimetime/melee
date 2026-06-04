@@ -26,12 +26,14 @@ HARNESS_COALESCE = "coalesce-search"
 HARNESS_SELECT_ORDER = "select-order-search"
 HARNESS_INDEXED_STRUCT = "indexed-struct-search"
 HARNESS_NAME_MAGIC_SOURCE = "name-magic-source-declarations"
+HARNESS_CONTROL_FLOW_SHAPE = "control-flow-shape-search"
 REGISTERED_HARNESSES = {
     HARNESS_FRAME_TRANSFORM,
     HARNESS_COALESCE,
     HARNESS_SELECT_ORDER,
     HARNESS_INDEXED_STRUCT,
     HARNESS_NAME_MAGIC_SOURCE,
+    HARNESS_CONTROL_FLOW_SHAPE,
 }
 
 BLOCKER_UNSUPPORTED_HARNESS = "unsupported-harness"
@@ -269,6 +271,8 @@ def select_harness(request: HarvestRequest) -> str | None:
     ):
         return HARNESS_NAME_MAGIC_SOURCE
 
+    if request.primary == "control-flow-source-shape":
+        return HARNESS_CONTROL_FLOW_SHAPE
     if request.primary == "indexed-struct-pointer-materialization":
         return HARNESS_INDEXED_STRUCT
     if request.source_actionability == "current-tools-indexed-pointer":
@@ -287,6 +291,14 @@ def select_harness(request: HarvestRequest) -> str | None:
 
     if request.frame_closability_tier == "current-tools-padstack":
         return HARNESS_FRAME_TRANSFORM
+    if (
+        request.subcategory == "branch-or-control-flow-shape"
+        and (
+            request.work_bucket == "structural-reconstruction"
+            or request.primary == "structural-reconstruction"
+        )
+    ):
+        return HARNESS_CONTROL_FLOW_SHAPE
     return None
 
 
@@ -673,6 +685,26 @@ def _name_magic_source_command(request: HarvestRequest) -> list[str]:
         "debug",
         "mutate",
         HARNESS_NAME_MAGIC_SOURCE,
+        "-f",
+        request.function,
+        "--source-file",
+        str(request.source_file),
+        "--compile-probes",
+        "--score-match-percent",
+        "--json",
+        "--max-probes",
+        str(request.max_probes),
+        "--timeout",
+        str(request.timeout),
+    ]
+
+
+def _control_flow_shape_command(request: HarvestRequest) -> list[str]:
+    assert request.source_file is not None
+    return [
+        "debug",
+        "mutate",
+        HARNESS_CONTROL_FLOW_SHAPE,
         "-f",
         request.function,
         "--source-file",
@@ -1543,6 +1575,8 @@ def _adapter_command(request: HarvestRequest, harness: str) -> list[str]:
         return _indexed_struct_command(request)
     if harness == HARNESS_NAME_MAGIC_SOURCE:
         return _name_magic_source_command(request)
+    if harness == HARNESS_CONTROL_FLOW_SHAPE:
+        return _control_flow_shape_command(request)
     raise ValueError(f"unsupported harness: {harness}")
 
 
