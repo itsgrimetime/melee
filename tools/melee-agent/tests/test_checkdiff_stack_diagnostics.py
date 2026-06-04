@@ -351,6 +351,51 @@ def test_classify_asm_diff_labels_coalesce_backend_ceiling_before_calls() -> Non
     )
 
 
+def test_classify_asm_diff_labels_divide_rematerialization_backend_ceiling() -> None:
+    checkdiff = _load_checkdiff()
+    expected = [
+        "<fn_80188910>:",
+        "+000: 3c 60 51 ec \tlis r3, 0x51ec",
+        "+004: 38 03 85 1f \tsubi r0, r3, 0x7ae1",
+        "+008: 7c 80 f8 96 \tmulhw r4, r0, r31",
+        "+00c: 7c 80 2e 70 \tsrawi r0, r4, 5",
+        "+010: 54 03 0f fe \tsrwi r3, r0, 31",
+        "+014: 7c 00 1a 15 \tadd. r0, r0, r3",
+        "+018: 41 82 00 38 \tbeq <fn_80188910+0x50>",
+        "+01c: 7c 80 2e 70 \tsrawi r0, r4, 5",
+        "+020: c8 22 9b f0 \tlfd f1, lbl_804DA610@sda21(r0)",
+        "+024: 54 04 0f fe \tsrwi r4, r0, 31",
+        "+028: 7c 00 22 14 \tadd r0, r0, r4",
+        "+02c: 6c 00 80 00 \txoris r0, r0, 32768",
+        "+030: 48 00 00 01 \tbl HSD_JObjReqAnimAll",
+    ]
+    current = [
+        "<fn_80188910>:",
+        "+000: 3c 60 51 ec \tlis r3, 0x51ec",
+        "+004: 38 03 85 1f \tsubi r0, r3, 0x7ae1",
+        "+008: 7c 80 f8 96 \tmulhw r4, r0, r31",
+        "+00c: 7c 80 2e 70 \tsrawi r0, r4, 5",
+        "+010: 54 03 0f fe \tsrwi r3, r0, 31",
+        "+014: 7c 00 1a 15 \tadd. r0, r0, r3",
+        "+018: 41 82 00 2c \tbeq <fn_80188910+0x44>",
+        "+01c: c8 22 9b f0 \tlfd f1, lbl_804DA610@sda21(r0)",
+        "+020: 6c 00 80 00 \txoris r0, r0, 32768",
+        "+024: 48 00 00 01 \tbl HSD_JObjReqAnimAll",
+    ]
+
+    classification = checkdiff.classify_asm_diff(expected, current)
+
+    assert classification["primary"] == "backend-ceiling"
+    assert classification["backend_ceiling"] == {
+        "subclass": "cse-vs-rematerialized-divconst",
+        "confidence": "high",
+    }
+    assert classification["value_numbering_ceiling"]["kind"] == (
+        "signed-magic-divide-rematerialization"
+    )
+    assert any("value-numbering ceiling" in r for r in classification["reasons"])
+
+
 def test_stack_slot_localizer_accepts_pcdump_bridge() -> None:
     checkdiff = _load_checkdiff()
     expected = [

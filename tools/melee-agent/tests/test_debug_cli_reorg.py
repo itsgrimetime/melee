@@ -4865,6 +4865,146 @@ def test_ceiling_requires_fresh_cached_pcdump_before_verdict(monkeypatch, tmp_pa
     assert "PROBABLE CEILING" not in strip_ansi(result.stdout)
 
 
+def _write_divide_remat_diagnose_fixture(tmp_path: Path) -> tuple[Path, Path]:
+    melee_root = tmp_path
+    src_path = melee_root / "src" / "melee" / "gm" / "gm_1832.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text(
+        "void fn_80188910(void)\n"
+        "{\n"
+        "    if ((val / 100) != 0) {\n"
+        "        HSD_JObjReqAnimAll(jobj, (f32) (val / 100));\n"
+        "    }\n"
+        "}\n"
+    )
+    asm_path = melee_root / "build" / "GALE01" / "asm" / "melee" / "gm" / "gm_1832.s"
+    asm_path.parent.mkdir(parents=True)
+    asm_path.write_text(textwrap.dedent("""\
+        .fn fn_80188910, global
+        /* 801889D4 001855B4  3C 60 51 EC */ lis r3, 0x51ec
+        /* 801889DC 001855BC  38 03 85 1F */ subi r0, r3, 0x7ae1
+        /* 801889E0 001855C0  7C 80 F8 96 */ mulhw r4, r0, r31
+        /* 801889E4 001855C4  7C 80 2E 70 */ srawi r0, r4, 5
+        /* 801889E8 001855C8  54 03 0F FE */ srwi r3, r0, 31
+        /* 801889EC 001855CC  7C 00 1A 15 */ add. r0, r0, r3
+        /* 801889F0 001855D0  41 82 00 38 */ beq .L_80188A28
+        /* 801889F4 001855D4  7C 80 2E 70 */ srawi r0, r4, 5
+        /* 801889FC 001855DC  54 04 0F FE */ srwi r4, r0, 31
+        /* 80188A04 001855E4  7C 00 22 14 */ add r0, r0, r4
+        /* 80188A08 001855E8  6C 00 80 00 */ xoris r0, r0, 0x8000
+        .L_80188A28:
+        /* 80188A30 00185610  48 1E 6E 8D */ bl HSD_JObjReqAnimAll
+        .endfn fn_80188910
+    """))
+    pcdump = tmp_path / "gm_1832.pcdump.txt"
+    pcdump.write_text(textwrap.dedent("""\
+        Starting function fn_80188910
+        BEFORE REGISTER COLORING
+        fn_80188910
+        B0: Succ={B1 B2} Pred={} Labels={}
+            lis r32, 0x51ec
+            subi r33, r32, 0x7ae1
+            mulhw r60, r33, r31
+            srawi r64, r60, 5
+            srwi r62, r64, 31
+            add r35, r64, r62
+            bt eq B2
+        B1: Succ={B3} Pred={B0} Labels={}
+            xoris r65, r35, 0x8000
+            b B3
+        B2: Succ={B3} Pred={B0} Labels={}
+            li r65, 0
+        B3: Succ={} Pred={B1 B2} Labels={}
+            blr
+    """))
+    return melee_root, pcdump
+
+
+def test_diagnose_json_reports_divide_rematerialization_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root, pcdump = _write_divide_remat_diagnose_fixture(tmp_path)
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/gm/gm_1832",
+    )
+    monkeypatch.setattr(debug_cli, "_get_match_pct", lambda function, root: 94.89)
+    monkeypatch.setattr(debug_cli, "audit_function_casts", lambda source, function: [])
+    monkeypatch.setattr(debug_cli, "_detect_frame_residual_hint", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        debug_cli,
+        "_resolve_pcdump_path",
+        lambda pcdump_arg, function, melee_root=None, *, require_fresh=False: pcdump,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "diagnose",
+            "fn_80188910",
+            "--skip-decl-orders",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["verdict"] == "INTRINSIC VALUE-NUMBERING CEILING"
+    assert payload["value_numbering_ceiling"]["kind"] == (
+        "signed-magic-divide-rematerialization"
+    )
+    assert payload["value_numbering_ceiling"]["source_lever_status"] == (
+        "no-current-C-source-lever"
+    )
+    assert any("value-numbering ceiling" in item for item in payload["recommendations"])
+
+
+def test_diagnose_text_reports_divide_rematerialization_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root, pcdump = _write_divide_remat_diagnose_fixture(tmp_path)
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/gm/gm_1832",
+    )
+    monkeypatch.setattr(debug_cli, "_get_match_pct", lambda function, root: 94.89)
+    monkeypatch.setattr(debug_cli, "audit_function_casts", lambda source, function: [])
+    monkeypatch.setattr(debug_cli, "_detect_frame_residual_hint", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        debug_cli,
+        "_resolve_pcdump_path",
+        lambda pcdump_arg, function, melee_root=None, *, require_fresh=False: pcdump,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "diagnose",
+            "fn_80188910",
+            "--skip-decl-orders",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    out = strip_ansi(result.stdout)
+    assert "[!] Value-numbering ceiling:" in out
+    assert "signed magic divide" in out
+    assert "== VERDICT: INTRINSIC VALUE-NUMBERING CEILING ==" in out
+    assert "== VERDICT: NO FAST TRANSFORM FOUND ==" not in out
+
+
 def test_inspect_stuck_suppresses_decl_orders_when_no_candidates(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

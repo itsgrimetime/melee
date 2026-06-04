@@ -95,6 +95,7 @@ from ..mwcc_debug.frame_reservations import (
     evaluate_frame_transform_probe_results,
     evaluate_stack_home_probe_results,
 )
+from ..mwcc_debug.value_numbering import detect_divide_rematerialization_ceiling
 
 
 @dataclasses.dataclass(frozen=True)
@@ -9732,6 +9733,50 @@ def _diagnose_call_return_recommendations(
     ]
 
 
+def _read_diagnose_expected_asm(
+    function: str,
+    unit: str,
+    melee_root: Path,
+) -> str | None:
+    asm_path = melee_root / "build" / "GALE01" / "asm" / f"{unit}.s"
+    if asm_path.exists():
+        return asm_path.read_text()
+    try:
+        return _read_frame_reservation_expected_asm(
+            function,
+            expected_asm=None,
+            no_expected=False,
+            melee_root=melee_root,
+        )
+    except Exception:
+        return None
+
+
+def _value_numbering_ceiling_recommendation(finding: Mapping[str, Any]) -> str:
+    recommendation = finding.get("recommendation")
+    if isinstance(recommendation, str) and recommendation:
+        return f"value-numbering ceiling: {recommendation}"
+    return (
+        "value-numbering ceiling: target rematerializes a signed "
+        "magic divide while this compile CSEs the quotient; bank this as a "
+        "current-tooling ceiling unless a new semantic source-transform family "
+        "is added."
+    )
+
+
+def _print_value_numbering_ceiling(finding: Mapping[str, Any]) -> None:
+    print("[!] Value-numbering ceiling:")
+    kind = finding.get("kind") or "unknown"
+    confidence = finding.get("confidence") or "unknown"
+    print(f"    {kind} ({confidence})")
+    print(
+        "    target rematerializes the signed magic divide quotient; "
+        "current compile reuses the value-numbered quotient before xoris"
+    )
+    print(f"    {_value_numbering_ceiling_recommendation(finding)}")
+    print()
+
+
 @dataclasses.dataclass(frozen=True)
 class DeclCandidateFailure:
     status: str
@@ -9875,6 +9920,10 @@ def ceiling(
     Verdict categories:
       - WIN AVAILABLE — a quick fix exists (casts to drop, or a decl-
         order that improves match%)
+      - INTRINSIC VALUE-NUMBERING CEILING — target rematerializes a
+        signed magic divide while this compile CSEs the quotient; current
+        source/allocator levers are not expected to add the missing
+        arithmetic instructions
       - NO FAST TRANSFORM FOUND — current fast heuristics found no
         improvement; recommends force-phys reachability testing and/or
         source-shape search as next steps
@@ -9896,6 +9945,16 @@ def ceiling(
         function,
         melee_root,
         require_fresh=True,
+    )
+    diagnose_pcdump_text = diagnose_pcdump_path.read_text()
+    value_numbering_ceiling = detect_divide_rematerialization_ceiling(
+        function=function,
+        expected_asm_text=_read_diagnose_expected_asm(
+            function,
+            unit,
+            melee_root,
+        ),
+        current_pcdump_text=diagnose_pcdump_text,
     )
     frame_residual_hint = _detect_frame_residual_hint(
         function,
@@ -10188,7 +10247,11 @@ def ceiling(
 
     if _pcdump_path_for_spilled is not None:
         try:
-            _pcdump_text = _pcdump_path_for_spilled.read_text()
+            _pcdump_text = (
+                diagnose_pcdump_text
+                if _pcdump_path_for_spilled == diagnose_pcdump_path
+                else _pcdump_path_for_spilled.read_text()
+            )
             _src_text = src.read_text() if src.exists() else ""
             _source_file = (
                 str(src.relative_to(melee_root))
@@ -10273,6 +10336,9 @@ def ceiling(
         print(f"    {frame_residual_hint['message']}")
         print()
 
+    if value_numbering_ceiling and not json_out:
+        _print_value_numbering_ceiling(value_numbering_ceiling)
+
     # Verdict — use verified cast results (not raw heuristic count) so we
     # don't produce false-positive WIN AVAILABLE on no-op casts.
     #
@@ -10314,6 +10380,11 @@ def ceiling(
             frame_residual_hint["message"],
             *frame_residual_hint["next_steps"],
         ]
+    elif value_numbering_ceiling:
+        verdict = "INTRINSIC VALUE-NUMBERING CEILING"
+        recommendations = [
+            _value_numbering_ceiling_recommendation(value_numbering_ceiling)
+        ]
     else:
         verdict = "NO FAST TRANSFORM FOUND"
         recommendations = _ceiling_recommendations(function, unit)
@@ -10347,6 +10418,7 @@ def ceiling(
             "coupled_force_phys": coupled_force_phys_guidance,
             "register_tiebreak": register_tiebreak_guidance,
             "frame_residual": frame_residual_hint,
+            "value_numbering_ceiling": value_numbering_ceiling,
             "recommendations": recommendations,
         }, indent=2))
         return

@@ -75,6 +75,13 @@ except ImportError:
     explain_stack_slot_localizer = None  # type: ignore
     render_stack_slot_bridge_summary = None  # type: ignore
 
+try:
+    from src.mwcc_debug.value_numbering import (
+        detect_divide_rematerialization_ceiling,
+    )
+except ImportError:
+    detect_divide_rematerialization_ceiling = None  # type: ignore
+
 
 def _is_repo_root(path: Path) -> bool:
     return (
@@ -1542,6 +1549,25 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
         ref_calls,
         our_calls,
     )
+    value_numbering_ceiling = (
+        detect_divide_rematerialization_ceiling(
+            function="<checkdiff>",
+            expected_asm_text="\n".join(ref_lines),
+            current_asm_lines=our_lines,
+        )
+        if detect_divide_rematerialization_ceiling is not None
+        else None
+    )
+    if value_numbering_ceiling:
+        backend_ceiling = {
+            "subclass": "cse-vs-rematerialized-divconst",
+            "confidence": value_numbering_ceiling.get("confidence", "medium"),
+            "reason": (
+                "value-numbering ceiling: target rematerializes a signed "
+                "magic divide quotient while current CSEs the quotient across "
+                "the branch value use"
+            ),
+        }
     if (
         backend_ceiling
         and backend_ceiling.get("subclass") == "coloring-rotation"
@@ -1565,11 +1591,17 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
         primary = "backend-ceiling"
 
     if len(ref_lines) != len(our_lines) and branch_shape_differs:
-        reasons.append(
-            "control-flow/source shape differs: branch shape differs before "
-            "downstream operand, stack, or relocation noise"
-        )
-        primary = "control-flow-source-shape"
+        if backend_ceiling:
+            reasons.append(
+                "control-flow/source shape also differs; inspect separately "
+                "if the backend ceiling does not explain all hunks"
+            )
+        else:
+            reasons.append(
+                "control-flow/source shape differs: branch shape differs before "
+                "downstream operand, stack, or relocation noise"
+            )
+            primary = "control-flow-source-shape"
 
     stack_frame_delta = (
         detect_stack_frame_delta(ref_lines, our_lines)
@@ -1580,10 +1612,20 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
         if ref_mnemonics == our_mnemonics else None
     )
 
-    if ref_calls != our_calls and not backend_ceiling:
-        reasons.append("call shape differs; check prototypes, return types, and inline boundaries")
-        if primary != "control-flow-source-shape":
-            primary = "signature-type-mismatch"
+    if ref_calls != our_calls:
+        if backend_ceiling:
+            reasons.append(
+                "call shape also differs after alignment; inspect prototypes, "
+                "return types, and inline boundaries if the backend ceiling "
+                "does not explain all hunks"
+            )
+        else:
+            reasons.append(
+                "call shape differs; check prototypes, return types, and "
+                "inline boundaries"
+            )
+            if primary != "control-flow-source-shape":
+                primary = "signature-type-mismatch"
 
     paired = list(zip(ref_lines, our_lines))
     stack_offset_diffs = 0
@@ -1671,6 +1713,8 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
         )
     if register_allocation_guidance:
         result["register_allocation_guidance"] = register_allocation_guidance
+    if value_numbering_ceiling:
+        result["value_numbering_ceiling"] = value_numbering_ceiling
     if backend_ceiling:
         result["backend_ceiling"] = {
             "subclass": backend_ceiling["subclass"],
