@@ -294,6 +294,63 @@ def test_register_only_diff_demotes_indexed_pointer_shape_hint() -> None:
     assert "register-allocation guidance" in reason_text
 
 
+def test_classify_asm_diff_labels_register_rotation_backend_ceiling() -> None:
+    checkdiff = _load_checkdiff()
+    expected = [
+        "<fn_80000000>:",
+        "+000: fadds f3, f4, f5",
+        "+004: fmuls f4, f3, f6",
+        "+008: stfs f4, 0(r5)",
+    ]
+    current = [
+        "<fn_80000000>:",
+        "+000: fadds f5, f6, f3",
+        "+004: fmuls f6, f5, f4",
+        "+008: stfs f6, 0(r5)",
+    ]
+
+    classification = checkdiff.classify_asm_diff(expected, current)
+
+    assert classification["primary"] == "backend-ceiling"
+    assert classification["backend_ceiling"] == {
+        "subclass": "coloring-rotation",
+        "confidence": "high",
+    }
+    assert any("register-token-only" in r for r in classification["reasons"])
+
+
+def test_classify_asm_diff_labels_coalesce_backend_ceiling_before_calls() -> None:
+    checkdiff = _load_checkdiff()
+    expected = [
+        "<fn_80175D34>:",
+        "+000: mflr r0",
+        "+004: bl fn_80175D34+0x20",
+        "+008: stw r3, 0x14(r1)",
+        "+00c: bl fn_80175D34+0x34",
+        "+010: blr",
+    ]
+    current = [
+        "<fn_80175D34>:",
+        "+000: mflr r0",
+        "+004: mr r30, r0",
+        "+008: bl fn_80175D34+0x24",
+        "+00c: stw r3, 0x14(r1)",
+        "+010: bl fn_80175D34+0x38",
+        "+014: blr",
+    ]
+
+    classification = checkdiff.classify_asm_diff(expected, current)
+
+    assert classification["primary"] == "backend-ceiling"
+    assert classification["backend_ceiling"] == {
+        "subclass": "coalesce",
+        "confidence": "medium",
+    }
+    assert not any(
+        "check prototypes" in reason for reason in classification["reasons"]
+    )
+
+
 def test_stack_slot_localizer_accepts_pcdump_bridge() -> None:
     checkdiff = _load_checkdiff()
     expected = [

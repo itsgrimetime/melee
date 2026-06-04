@@ -706,6 +706,128 @@ def _call_targets(lines: list[str]) -> list[str]:
     return targets
 
 
+_PHYSICAL_REG_TOKEN_RE = re.compile(r"\b([rf])(?:[0-9]|[12][0-9]|3[01])\b")
+_SELF_RELATIVE_CALL_RE = re.compile(
+    r"^(?P<base>[A-Za-z_.$][A-Za-z0-9_.$]*)(?P<delta>[+-]0x[0-9A-Fa-f]+)?$"
+)
+
+
+def _normalize_physical_register_tokens(body: str) -> str:
+    return _PHYSICAL_REG_TOKEN_RE.sub(r"\1N", body)
+
+
+def _line_diffs_are_register_token_only(
+    ref_lines: list[str],
+    our_lines: list[str],
+) -> bool:
+    if len(ref_lines) != len(our_lines):
+        return False
+    saw_diff = False
+    for ref_line, our_line in zip(ref_lines, our_lines):
+        if ref_line == our_line:
+            continue
+        ref_body = _asm_body(ref_line)
+        our_body = _asm_body(our_line)
+        if not ref_body or ref_body.startswith("<"):
+            continue
+        saw_diff = True
+        if (
+            _normalize_physical_register_tokens(ref_body)
+            != _normalize_physical_register_tokens(our_body)
+        ):
+            return False
+    return saw_diff
+
+
+def _self_relative_call_base(target: str) -> str | None:
+    match = _SELF_RELATIVE_CALL_RE.match(target.strip())
+    if match is None or match.group("delta") is None:
+        return None
+    return match.group("base")
+
+
+def _call_delta_is_self_relative_offset_only(
+    ref_calls: list[str],
+    our_calls: list[str],
+) -> bool:
+    if not ref_calls and not our_calls:
+        return True
+    if len(ref_calls) != len(our_calls):
+        return False
+    saw_offset_delta = False
+    for ref_call, our_call in zip(ref_calls, our_calls):
+        if ref_call == our_call:
+            continue
+        ref_base = _self_relative_call_base(ref_call)
+        our_base = _self_relative_call_base(our_call)
+        if ref_base is None or our_base is None or ref_base != our_base:
+            return False
+        saw_offset_delta = True
+    return saw_offset_delta
+
+
+def _single_coalescible_mnemonic_delta(
+    ref_mnemonics: list[str],
+    our_mnemonics: list[str],
+) -> str | None:
+    if abs(len(ref_mnemonics) - len(our_mnemonics)) != 1:
+        return None
+    longer = ref_mnemonics if len(ref_mnemonics) > len(our_mnemonics) else our_mnemonics
+    shorter = our_mnemonics if longer is ref_mnemonics else ref_mnemonics
+    for idx, mnemonic in enumerate(longer):
+        candidate = longer[:idx] + longer[idx + 1:]
+        if candidate == shorter and mnemonic in {"mr", "addi"}:
+            return mnemonic
+    return None
+
+
+def detect_backend_ceiling(
+    ref_lines: list[str],
+    our_lines: list[str],
+    ref_mnemonics: list[str],
+    our_mnemonics: list[str],
+    ref_calls: list[str],
+    our_calls: list[str],
+) -> dict | None:
+    """Return cheap upfront backend-ceiling classification evidence."""
+    if ref_mnemonics == our_mnemonics and _line_diffs_are_register_token_only(
+        ref_lines,
+        our_lines,
+    ):
+        return {
+            "subclass": "coloring-rotation",
+            "confidence": "high",
+            "reason": (
+                "opcode sequence is identical and all paired differences are "
+                "register-token-only swaps"
+            ),
+        }
+
+    coalescible = _single_coalescible_mnemonic_delta(ref_mnemonics, our_mnemonics)
+    if coalescible and _call_delta_is_self_relative_offset_only(ref_calls, our_calls):
+        return {
+            "subclass": "coalesce",
+            "confidence": "medium",
+            "reason": (
+                f"single coalescible {coalescible} instruction count delta; "
+                "call-shape delta is only self-relative bl offset churn"
+            ),
+        }
+
+    return None
+
+
+def _has_source_actionable_register_guidance(guidance: dict | None) -> bool:
+    if not guidance:
+        return False
+    return bool(
+        guidance.get("volatile_target_registers")
+        or guidance.get("volatile_current_registers")
+        or guidance.get("callee_swap_pairs")
+        or guidance.get("suggestions")
+    )
+
+
 def _branch_shape(lines: list[str]) -> list[str]:
     shape = []
     for mnemonic in _mnemonics(lines):
@@ -1412,6 +1534,20 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
         ref_lines,
         our_lines,
     )
+    backend_ceiling = detect_backend_ceiling(
+        ref_lines,
+        our_lines,
+        ref_mnemonics,
+        our_mnemonics,
+        ref_calls,
+        our_calls,
+    )
+    if (
+        backend_ceiling
+        and backend_ceiling.get("subclass") == "coloring-rotation"
+        and _has_source_actionable_register_guidance(register_allocation_guidance)
+    ):
+        backend_ceiling = None
 
     if len(ref_lines) != len(our_lines):
         reasons.append(f"line count differs: expected {len(ref_lines)}, current {len(our_lines)}")
@@ -1421,6 +1557,12 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
         primary = "operand-register-or-offset"
     else:
         primary = "instruction-sequence"
+
+    if backend_ceiling:
+        reasons.append(
+            "backend ceiling candidate: " + str(backend_ceiling["reason"])
+        )
+        primary = "backend-ceiling"
 
     if len(ref_lines) != len(our_lines) and branch_shape_differs:
         reasons.append(
@@ -1438,7 +1580,7 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
         if ref_mnemonics == our_mnemonics else None
     )
 
-    if ref_calls != our_calls:
+    if ref_calls != our_calls and not backend_ceiling:
         reasons.append("call shape differs; check prototypes, return types, and inline boundaries")
         if primary != "control-flow-source-shape":
             primary = "signature-type-mismatch"
@@ -1529,6 +1671,11 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
         )
     if register_allocation_guidance:
         result["register_allocation_guidance"] = register_allocation_guidance
+    if backend_ceiling:
+        result["backend_ceiling"] = {
+            "subclass": backend_ceiling["subclass"],
+            "confidence": backend_ceiling["confidence"],
+        }
     return result
 
 
