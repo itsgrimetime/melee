@@ -23,6 +23,7 @@ import os
 import platform
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -623,6 +624,66 @@ def collect_section_anchor_aliases(
     )
 
 
+def _read_sdata2_8byte_symbol_values(obj_path: Path) -> dict[str, int]:
+    try:
+        from elftools.common.exceptions import ELFError
+        from elftools.elf.elffile import ELFFile
+    except ImportError:
+        return {}
+
+    try:
+        with obj_path.open("rb") as f:
+            elf = ELFFile(f)
+            sdata2 = elf.get_section_by_name(".sdata2")
+            symtab = elf.get_section_by_name(".symtab")
+            if sdata2 is None or symtab is None:
+                return {}
+            sdata2_idx = elf.get_section_index(".sdata2")
+            data = sdata2.data()
+            values: dict[str, int] = {}
+            for sym in symtab.iter_symbols():
+                if sym["st_shndx"] != sdata2_idx:
+                    continue
+                name = sym.name
+                if not name or name.startswith("."):
+                    continue
+                if sym["st_size"] != 8:
+                    continue
+                offset = int(sym["st_value"])
+                if offset + 8 > len(data):
+                    continue
+                values[name] = struct.unpack(">Q", data[offset:offset + 8])[0]
+            return values
+    except (OSError, KeyError, TypeError, ValueError, ELFError):
+        return {}
+
+
+def collect_sdata2_value_relocation_aliases(
+    *obj_paths: Path,
+) -> dict[str, str]:
+    """Map duplicate-valued 8-byte .sdata2 symbols to value tokens.
+
+    Some TUs contain multiple named labels for the same int-to-float magic
+    constant. A freshly built object can only rename an anonymous literal to
+    one of those labels, while a specific reference function may relocate
+    against another. When both labels point at identical backing bytes, the
+    relocation target name is not useful evidence for a code mismatch.
+    """
+    names_by_value: dict[int, set[str]] = {}
+    for obj_path in obj_paths:
+        for name, value in _read_sdata2_8byte_symbol_values(obj_path).items():
+            names_by_value.setdefault(value, set()).add(name)
+
+    aliases: dict[str, str] = {}
+    for value, names in names_by_value.items():
+        if len(names) < 2:
+            continue
+        token = f"__sdata2_value_{value:016x}"
+        for name in names:
+            aliases[name] = token
+    return aliases
+
+
 def normalize_section_anchor_references(
     lines: list[str],
     aliases: dict[str, str],
@@ -643,6 +704,40 @@ def normalize_section_anchor_references(
         pattern.sub(lambda match: aliases[match.group(1)], line)
         for line in lines
     ]
+
+
+_RELOC_TARGET_NAME_RE = re.compile(
+    r"(?P<name>@\d+|[A-Za-z_.$][A-Za-z0-9_.$]*)"
+    r"(?P<suffix>(?:[+-]0x[0-9A-Fa-f]+)?)$"
+)
+
+
+def normalize_sdata2_value_relocation_aliases(
+    lines: list[str],
+    aliases: dict[str, str],
+) -> list[str]:
+    """Canonicalize relocation targets for equal-valued .sdata2 aliases."""
+    if not aliases:
+        return lines
+
+    out: list[str] = []
+    for line in lines:
+        if not _is_relocation_line(line):
+            out.append(line)
+            continue
+        match = _RELOC_TARGET_NAME_RE.search(line)
+        if match is None:
+            out.append(line)
+            continue
+        replacement = aliases.get(match.group("name"))
+        if replacement is None:
+            out.append(line)
+            continue
+        out.append(
+            f"{line[:match.start('name')]}{replacement}"
+            f"{line[match.end('name'):]}"
+        )
+    return out
 
 
 def normalize_reloc_line_offsets(lines: list[str]) -> list[str]:
@@ -2727,6 +2822,18 @@ def main() -> int:
             our_lines = normalize_section_anchor_references(
                 our_lines,
                 collect_section_anchor_aliases(our_obj_path, ref_obj_path),
+            )
+            sdata2_value_aliases = collect_sdata2_value_relocation_aliases(
+                ref_obj_path,
+                our_obj_path,
+            )
+            ref_lines = normalize_sdata2_value_relocation_aliases(
+                ref_lines,
+                sdata2_value_aliases,
+            )
+            our_lines = normalize_sdata2_value_relocation_aliases(
+                our_lines,
+                sdata2_value_aliases,
             )
         classification = classify_asm_diff(ref_lines, our_lines)
         source_text_for_bridge = None

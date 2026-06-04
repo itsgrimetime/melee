@@ -44,6 +44,7 @@ def checkdiff():
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SRC_O = _REPO_ROOT / "build/GALE01/src/melee/mn/mnvibration.o"
 _TARGET_O = _REPO_ROOT / "build/GALE01/obj/melee/mn/mnvibration.o"
+_GM_1832_TARGET_O = _REPO_ROOT / "build/GALE01/obj/melee/gm/gm_1832.o"
 
 
 def _sdata2_anon_symbol_count(o_path: Path) -> int:
@@ -185,6 +186,47 @@ def test_apply_name_magic_does_not_corrupt_already_matching_function(
     assert before == after, (
         "mnVibration_802474C4 bytes/relocs changed after auto-rename: "
         f"before={before}, after={after}"
+    )
+
+
+@pytest.mark.skipif(
+    not _GM_1832_TARGET_O.exists(),
+    reason="requires built gm_1832 target .o; run `ninja` first",
+)
+def test_duplicate_sdata2_values_normalize_relocation_aliases(checkdiff) -> None:
+    """Duplicate-valued .sdata2 symbols should compare by bytes, not name.
+
+    ``gm_1832.o`` has two named symbols for each int-to-float magic value:
+    ``lbl_804DA598``/``lbl_804DA600`` and
+    ``lbl_804DA560``/``lbl_804DA610``. A compiled .o can only globally rename
+    an anonymous literal to one alias, while a specific reference function may
+    point at the other. Once both aliases are proven to have identical backing
+    bytes, checkdiff should not report a relocation-name mismatch.
+    """
+    aliases = checkdiff.collect_sdata2_value_relocation_aliases(
+        _GM_1832_TARGET_O,
+    )
+
+    assert aliases["lbl_804DA598"] == aliases["lbl_804DA600"]
+    assert aliases["lbl_804DA560"] == aliases["lbl_804DA610"]
+
+    expected = [
+        "+000: c8 20 00 00 \tlfd     f1,0(0)",
+        "+000: R_PPC_EMB_SDA21\tlbl_804DA600",
+        "+004: c8 20 00 00 \tlfd     f1,0(0)",
+        "+004: R_PPC_EMB_SDA21\tlbl_804DA610",
+    ]
+    current = [
+        "+000: c8 20 00 00 \tlfd     f1,0(0)",
+        "+000: R_PPC_EMB_SDA21\tlbl_804DA598",
+        "+004: c8 20 00 00 \tlfd     f1,0(0)",
+        "+004: R_PPC_EMB_SDA21\tlbl_804DA560",
+    ]
+
+    assert checkdiff.normalize_sdata2_value_relocation_aliases(
+        expected, aliases,
+    ) == checkdiff.normalize_sdata2_value_relocation_aliases(
+        current, aliases,
     )
 
 

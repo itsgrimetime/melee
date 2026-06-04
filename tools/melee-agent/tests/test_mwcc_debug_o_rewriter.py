@@ -83,6 +83,8 @@ def test_parse_mapping_rejects_empty_name() -> None:
 # Path to a real .o file from the build (skipped if not present)
 _FIXTURE_O = Path(__file__).parent.parent.parent.parent / \
     "build" / "GALE01" / "src" / "melee" / "mn" / "mnvibration.o"
+_GM_1832_TARGET_O = Path(__file__).parent.parent.parent.parent / \
+    "build" / "GALE01" / "obj" / "melee" / "gm" / "gm_1832.o"
 
 
 @pytest.mark.skipif(not _FIXTURE_O.exists(),
@@ -251,6 +253,18 @@ def test_find_named_sdata2_symbols_by_value_matches_by_bytes() -> None:
             f"find_named_sdata2_symbols_by_value should only return named "
             f"symbols, got {name!r} for value 0x{val:016x}"
         )
+
+
+@pytest.mark.skipif(
+    not _GM_1832_TARGET_O.exists(),
+    reason="requires built gm_1832 target .o; run `ninja` first",
+)
+def test_find_named_sdata2_symbols_by_value_omits_duplicate_values() -> None:
+    """A value lookup must not pick an arbitrary alias for duplicate values."""
+    by_value = find_named_sdata2_symbols_by_value(_GM_1832_TARGET_O)
+
+    assert MAGIC_U32 not in by_value
+    assert MAGIC_S32 not in by_value
 
 
 def test_suggest_name_magic_map_uses_value_not_offset() -> None:

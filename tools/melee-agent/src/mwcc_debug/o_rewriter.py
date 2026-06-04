@@ -158,16 +158,17 @@ def find_named_sdata2_symbols_by_value(
     *actual bytes* stored at the symbol's location rather than the section
     offset.  This is what ``suggest_name_magic_map`` needs: the two .o files
     (compiled vs target) can have different .sdata2 layouts, so offsets don't
-    align.  The magic values (0x4330000080000000 / 0x4330000000000000) are
-    globally unique bit patterns, so matching by value is unambiguous.
+    align.
 
     Only 8-byte symbols are included (magic constants are always 8 bytes).
-    If multiple named symbols happen to contain the same 8-byte value at
-    different offsets (extremely rare), the first one in symtab order wins.
+    If multiple named symbols contain the same 8-byte value at different
+    offsets, that value is omitted rather than picking an arbitrary alias.
+    checkdiff handles those proven duplicate-value aliases by canonicalizing
+    relocation annotations during comparison.
     """
     from elftools.elf.elffile import ELFFile
 
-    out: dict[int, str] = {}
+    names_by_value: dict[int, list[str]] = {}
     with o_path.open("rb") as f:
         elf = ELFFile(f)
         sdata2 = elf.get_section_by_name(".sdata2")
@@ -193,9 +194,12 @@ def find_named_sdata2_symbols_by_value(
             if offset + 8 > len(data):
                 continue
             value = struct.unpack(">Q", data[offset:offset + 8])[0]
-            # Only index magic-constant values to keep lookups unambiguous.
-            out.setdefault(value, name)
-    return out
+            names_by_value.setdefault(value, []).append(name)
+    return {
+        value: names[0]
+        for value, names in names_by_value.items()
+        if len(names) == 1
+    }
 
 
 @dataclass
