@@ -2440,16 +2440,22 @@ def main() -> int:
 
                 asm_content = asm_file.read_text()
 
-            # Parse dtk output format to find the function
-            # dtk outputs standard GNU as format: "func_name:" followed by instructions
+            # Parse dtk output format to find the function. Older dtk emitted
+            # "func_name:" labels; current dtk emits ".fn func_name, global"
+            # blocks with address comments before each instruction.
             lines = asm_content.split("\n")
             in_func = False
             output = []
             instr_offset = 0  # Track offset (each PPC instruction is 4 bytes)
 
             for line in lines:
-                # Function labels in dtk output are like "func_name:" at column 0
-                if line.startswith(f"{func}:"):
+                stripped = line.strip()
+                is_fn_start = (
+                    stripped == f"{func}:"
+                    or stripped.startswith(f".fn {func},")
+                    or stripped == f".fn {func}"
+                )
+                if is_fn_start:
                     in_func = True
                     instr_offset = 0
                     if normalize:
@@ -2457,16 +2463,23 @@ def main() -> int:
                     else:
                         output.append(line)
                 elif in_func:
-                    # End of function: another label at column 0 or .global/.section directive
-                    if line and not line.startswith((" ", "\t")) and (line.endswith(":") or line.startswith(".")):
+                    # End of function: .endfn, another .fn, or section directive.
+                    if (
+                        stripped.startswith(".endfn")
+                        or stripped.startswith(".fn ")
+                        or stripped.startswith(".section")
+                    ):
                         break
-                    if normalize and line.strip():
-                        # dtk outputs like "  lwz r3, 0(r4)"
-                        stripped = line.strip()
-                        if stripped and not stripped.startswith("."):  # Skip directives
-                            output.append(f"+{instr_offset:03x}: {stripped}")
+                    if not stripped:
+                        continue
+                    if stripped.endswith(":"):
+                        continue
+                    if normalize:
+                        body = re.sub(r"^/\*\s*[^*]*\*/\s*", "", stripped)
+                        if body and not body.startswith("."):  # Skip directives
+                            output.append(f"+{instr_offset:03x}: {body}")
                             instr_offset += 4  # PPC instructions are 4 bytes
-                    elif line.strip():
+                    elif stripped:
                         output.append(line)
 
             return "\n".join(output)

@@ -554,7 +554,13 @@ def test_no_build_json_falls_back_to_dtk_when_objdump_extracts_no_function(
         if exe == "bad-objdump":
             return checkdiff.subprocess.CompletedProcess(cmd, 0, "", "")
         if exe == "dtk":
-            Path(cmd[-1]).write_text("fn_alpha:\n  blr\n", encoding="utf-8")
+            Path(cmd[-1]).write_text(
+                "# .text:0x0 | size: 0x4\n"
+                ".fn fn_alpha, global\n"
+                "/* 00000000 00000000  4E 80 00 20 */\tblr\n"
+                ".endfn fn_alpha\n",
+                encoding="utf-8",
+            )
             return checkdiff.subprocess.CompletedProcess(cmd, 0, "", "")
         return checkdiff.subprocess.CompletedProcess(cmd, 0, "", "")
 
