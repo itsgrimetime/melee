@@ -12,10 +12,14 @@ docs/comparison-lukechampine-approach.md
 
 # Fork-specific tooling
 tools/melee-agent/
+tools/function_taxonomy_dashboard.py
+tools/function_taxonomy_dashboard_template.html
+tools/function_taxonomy_inventory.py
 tools/analyze_pr_feedback.py
 tools/fetch_pr_feedback.py
 tools/verify_client.py
 tools/check-fork-files.py
+.github/workflows/taxonomy-pages.yml
 
 # This file itself
 .github/fork-only-files.txt
