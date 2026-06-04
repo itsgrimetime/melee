@@ -488,6 +488,7 @@ def test_frame_reservation_reports_first_occupied_object_divergence() -> None:
         "objective": "reduce frame/local-area divergence toward expected",
         "cause_kind": "lifetime-or-ordering-shift",
         "operator_priority": [
+            "frame-local-dematerialize",
             "declaration-use-distance",
             "block-scope",
             "frame-direct-literal-at-final-fp-call",
@@ -499,9 +500,10 @@ def test_frame_reservation_reports_first_occupied_object_divergence() -> None:
                 "command": "melee-agent debug suggest frame -f fn_80000000 --json",
             },
             {
-                "kind": "lifetime-layout",
+                "kind": "frame-transform-search",
                 "command": (
-                    "melee-agent debug mutate lifetime-layout -f fn_80000000 "
+                    "melee-agent debug mutate frame-transform-search -f fn_80000000 "
+                    "--operator frame-local-dematerialize "
                     "--operator declaration-use-distance --operator block-scope "
                     "--operator frame-direct-literal-at-final-fp-call "
                     "--operator frame-split-fp-const-lifetime --compile-probes --json"
@@ -517,7 +519,7 @@ def test_frame_reservation_reports_first_occupied_object_divergence() -> None:
             "command": (
                 "melee-agent debug inspect frame-reservations -f fn_80000000 "
                 "--expected-asm <expected.s> --probe-results-json "
-                "<lifetime-layout.json> --json"
+                "<frame-transform-search.json> --json"
             ),
         },
     }
@@ -594,6 +596,7 @@ def test_frame_reservation_reports_frame_size_only_divergence() -> None:
             "cause_kind": "extra-frame-reservation-or-alignment",
             "operator_priority": [
                 "frame-reservation-pad-stack",
+                "frame-local-dematerialize",
                 "frame-magic-scratch-relocation",
                 "frame-split-fp-const-lifetime",
                 "declaration-use-distance",
@@ -607,10 +610,11 @@ def test_frame_reservation_reports_frame_size_only_divergence() -> None:
                     ),
                 },
                 {
-                    "kind": "lifetime-layout",
+                    "kind": "frame-transform-search",
                     "command": (
-                        "melee-agent debug mutate lifetime-layout -f fn_80000000 "
+                        "melee-agent debug mutate frame-transform-search -f fn_80000000 "
                         "--operator frame-reservation-pad-stack "
+                        "--operator frame-local-dematerialize "
                         "--operator frame-magic-scratch-relocation "
                         "--operator frame-split-fp-const-lifetime "
                         "--operator declaration-use-distance --operator block-scope "
@@ -629,7 +633,7 @@ def test_frame_reservation_reports_frame_size_only_divergence() -> None:
                 "command": (
                     "melee-agent debug inspect frame-reservations -f fn_80000000 "
                     "--expected-asm <expected.s> --probe-results-json "
-                    "<lifetime-layout.json> --json"
+                    "<frame-transform-search.json> --json"
                 ),
             },
         },
@@ -1421,6 +1425,55 @@ def test_frame_transform_ceiling_requires_frame_size_capable_probe() -> None:
         "reason": "probe evidence is not sufficient for frame transform validation",
         "baseline_remaining_frame_delta": 8,
     }
+
+
+def test_frame_transform_evaluation_reports_no_safe_semantic_lever() -> None:
+    report = {
+        "current": {"frame_size": 80},
+        "expected": {"frame_size": 72},
+        "frame_delta": -8,
+        "semantic_lever_status": {
+            "status": "no-safe-semantic-lever",
+            "operator": "frame-local-dematerialize",
+            "reason": "source scan found no safe semantic local dematerialization",
+        },
+    }
+
+    evaluation = evaluate_frame_transform_probe_results(report, [])
+
+    assert evaluation["verdict"] == "no-safe-semantic-lever"
+    assert evaluation["stop_condition"] == {
+        "status": "not-satisfied",
+        "kind": "no-safe-semantic-lever",
+        "reason": "source scan found no safe semantic local dematerialization",
+        "baseline_remaining_frame_delta": -8,
+    }
+
+
+def test_frame_transform_no_safe_semantic_status_does_not_hide_measured_probe() -> None:
+    report = {
+        "current": {"frame_size": 80},
+        "expected": {"frame_size": 72},
+        "frame_delta": -8,
+        "semantic_lever_status": {
+            "status": "no-safe-semantic-lever",
+            "operator": "frame-local-dematerialize",
+            "reason": "source scan found no safe semantic local dematerialization",
+        },
+    }
+    unchanged = {
+        "label": "frame-reservation-pad-stack-8",
+        "operator": "frame-reservation-pad-stack",
+        "status": "ok",
+        "objective": {
+            "frame_after": 80,
+        },
+    }
+
+    evaluation = evaluate_frame_transform_probe_results(report, [unchanged])
+
+    assert evaluation["verdict"] == "frame-transform-ceiling-candidate"
+    assert evaluation["stop_condition"]["kind"] == "bounded-frame-transform-ceiling"
 
 
 def test_frame_reservation_stack_home_assignment_merges_repeated_accesses() -> None:

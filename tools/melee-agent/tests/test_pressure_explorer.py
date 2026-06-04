@@ -17,6 +17,7 @@ from src.mwcc_debug.pressure_explorer import (
     generate_frame_directed_probes,
     generate_lifetime_layout_probes,
     pressure_signature_from_pcdump,
+    scan_frame_local_dematerialization_probes,
 )
 
 runner = CliRunner()
@@ -689,6 +690,285 @@ def test_generate_frame_directed_probes_does_not_insert_pad_stack_for_too_large_
     )
 
     assert "frame-reservation-pad-stack" not in {probe.operator for probe in probes}
+
+
+def test_generate_frame_directed_probes_dematerializes_initialized_one_use_local() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(int x)
+        {
+            int tmp = x + 1;
+            sink(tmp);
+        }
+    """)
+
+    probes = generate_frame_directed_probes(
+        source,
+        "fn_80000000",
+        current_frame={"frame_size": 80},
+        target_frame={"frame_size": 72},
+        frame_reservation_delta=-8,
+        max_probes=10,
+    )
+    probe = next(
+        probe for probe in probes if probe.operator == "frame-local-dematerialize"
+    )
+
+    assert "int tmp = x + 1;" not in probe.source_text
+    assert "sink(((int) (x + 1)));" in probe.source_text
+    assert probe.provenance == {
+        "kind": "frame-local-dematerialize",
+        "local": "tmp",
+        "action": "inline-initialized-local",
+        "expression": "x + 1",
+        "cast_type": "int",
+        "use_kind": "call-argument",
+        "definition_lines": [3, 3],
+        "use_lines": [4, 4],
+    }
+
+
+def test_generate_frame_directed_probes_dematerializes_adjacent_assignment_local() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(int x)
+        {
+            int tmp;
+            tmp = x + 1;
+            sink(tmp);
+        }
+    """)
+
+    probes = generate_frame_directed_probes(
+        source,
+        "fn_80000000",
+        current_frame={"frame_size": 80},
+        target_frame={"frame_size": 72},
+        frame_reservation_delta=-8,
+        max_probes=10,
+    )
+    probe = next(
+        probe for probe in probes if probe.operator == "frame-local-dematerialize"
+    )
+
+    assert "int tmp;" not in probe.source_text
+    assert "tmp = x + 1;" not in probe.source_text
+    assert "sink(((int) (x + 1)));" in probe.source_text
+    assert probe.provenance["action"] == "inline-assigned-local"
+    assert probe.provenance["definition_lines"] == [3, 4]
+    assert probe.provenance["use_lines"] == [5, 5]
+
+
+def test_generate_frame_directed_probes_dematerializes_after_non_ascii_prefix() -> None:
+    source = "/* unicode prefix: π */\n" + textwrap.dedent("""\
+        void fn_80000000(int x)
+        {
+            int tmp = x + 1;
+            sink(tmp);
+        }
+    """)
+
+    probes = generate_frame_directed_probes(
+        source,
+        "fn_80000000",
+        current_frame={"frame_size": 80},
+        target_frame={"frame_size": 72},
+        frame_reservation_delta=-8,
+        max_probes=10,
+    )
+    probe = next(
+        probe for probe in probes if probe.operator == "frame-local-dematerialize"
+    )
+
+    assert probe.source_text.startswith("/* unicode prefix: π */")
+    assert "int tmp = x + 1;" not in probe.source_text
+    assert "sink(((int) (x + 1)));" in probe.source_text
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        """\
+        void fn_80000000(int x)
+        {
+            int tmp = helper(x);
+            sink(tmp);
+        }
+        """,
+        """\
+        void fn_80000000(int x)
+        {
+            int tmp = x++;
+            sink(tmp);
+        }
+        """,
+        """\
+        void fn_80000000(int x)
+        {
+            int tmp = x + 1;
+            tmp = 3;
+        }
+        """,
+        """\
+        void fn_80000000(int x)
+        {
+            int tmp = x + 1;
+            sink(&tmp);
+        }
+        """,
+        """\
+        void fn_80000000(int x)
+        {
+            int tmp = x + 1;
+            sink(tmp);
+            sink(tmp);
+        }
+        """,
+        """\
+        void fn_80000000(int x)
+        {
+            int tmp = x + 1;
+            if (tmp) {
+                sink(x);
+            }
+        }
+        """,
+        """\
+        int fn_80000000(int x)
+        {
+            int tmp = x + 1;
+            return tmp;
+        }
+        """,
+        """\
+        void fn_80000000(int x)
+        {
+            int tmp = x + 1;
+            sink(tmp, x++);
+        }
+        """,
+        """\
+        void fn_80000000(int x)
+        {
+            int tmp = x + 1;
+            mutate(x);
+            sink(tmp);
+        }
+        """,
+        """\
+        void fn_80000000(int x)
+        {
+            int tmp = x + 1;
+            int other = helper(x);
+            sink(tmp);
+        }
+        """,
+        """\
+        void fn_80000000(int x)
+        {
+            int tmp = x + 1;
+            x = 3;
+            sink(tmp);
+        }
+        """,
+        """\
+        void fn_80000000(int x)
+        {
+            int tmp = x + 1;
+        #if 1
+            sink(tmp);
+        #endif
+        }
+        """,
+        """\
+        void fn_80000000(int x)
+        {
+            int tmp = x + 1;
+            {
+                int tmp = x + 2;
+                sink(tmp);
+            }
+            sink(tmp);
+        }
+        """,
+        """\
+        void fn_80000000(int x)
+        {
+            int tmp = x + 1, other = x + 2;
+            sink(tmp);
+        }
+        """,
+        """\
+        void fn_80000000(int x)
+        {
+            static int tmp = 1;
+            sink(tmp);
+        }
+        """,
+        """\
+        void fn_80000000(int x)
+        {
+            volatile int tmp = x + 1;
+            sink(tmp);
+        }
+        """,
+        """\
+        void fn_80000000(int x)
+        {
+            int tmp[1] = { x };
+            sink(tmp[0]);
+        }
+        """,
+        """\
+        void fn_80000000(Vec v)
+        {
+            Vec tmp = v;
+            sink(tmp);
+        }
+        """,
+    ],
+)
+def test_generate_frame_directed_probes_rejects_unsafe_dematerialize_cases(
+    source: str,
+) -> None:
+    probes = generate_frame_directed_probes(
+        textwrap.dedent(source),
+        "fn_80000000",
+        current_frame={"frame_size": 80},
+        target_frame={"frame_size": 72},
+        frame_reservation_delta=-8,
+        max_probes=20,
+    )
+
+    assert "frame-local-dematerialize" not in {probe.operator for probe in probes}
+
+
+def test_frame_local_dematerialize_scan_reports_source_span_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(int x)
+        {
+            int tmp = x + 1;
+            sink(tmp);
+        }
+    """)
+
+    def fail_scan(*args, **kwargs):
+        raise RuntimeError("tree-sitter unavailable")
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.pressure_explorer.list_statement_spans",
+        fail_scan,
+    )
+
+    probes, status = scan_frame_local_dematerialization_probes(
+        source,
+        "fn_80000000",
+    )
+
+    assert probes == []
+    assert status["status"] == "scan-error"
+    assert status["operator"] == "frame-local-dematerialize"
+    assert "tree-sitter unavailable" in status["reason"]
 
 
 def test_call_return_compare_chain_probes_include_targeted_variants() -> None:

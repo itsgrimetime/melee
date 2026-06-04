@@ -240,9 +240,17 @@ def evaluate_frame_transform_probe_results(
     for rank, variant in enumerate(variants, start=1):
         variant["rank"] = rank
     best = variants[0] if variants else None
+    semantic_lever_status = frame_report.get("semantic_lever_status")
+    no_safe_semantic_lever = _is_no_safe_semantic_lever_status(
+        semantic_lever_status
+    )
 
     if best is None:
-        verdict = "no-probes"
+        verdict = (
+            "no-safe-semantic-lever"
+            if no_safe_semantic_lever
+            else "no-probes"
+        )
     elif best.get("target_frame_fixed"):
         verdict = "source-reachable-frame-transform"
     elif int(best.get("frame_delta_improvement") or 0) > 0:
@@ -261,6 +269,7 @@ def evaluate_frame_transform_probe_results(
             variants,
             expected_frame=expected_frame,
             baseline_delta=baseline_delta,
+            semantic_lever_status=semantic_lever_status,
         ),
         "expected_frame_size": expected_frame,
         "current_frame_size": current_frame,
@@ -336,6 +345,7 @@ def _all_ok_frame_transform_probes_measured(variants: list[dict]) -> bool:
 
 _FRAME_SIZE_TRANSFORM_OPERATORS = {
     "frame-reservation-pad-stack",
+    "frame-local-dematerialize",
     "frame-direct-literal-at-final-fp-call",
     "frame-split-fp-const-lifetime",
     "frame-magic-scratch-relocation",
@@ -346,6 +356,19 @@ def _is_frame_size_transform_operator(operator: Any) -> bool:
     return isinstance(operator, str) and operator in _FRAME_SIZE_TRANSFORM_OPERATORS
 
 
+def _is_no_safe_semantic_lever_status(status: Any) -> bool:
+    return (
+        isinstance(status, dict)
+        and status.get("status") == "no-safe-semantic-lever"
+    )
+
+
+def _semantic_lever_reason(status: Any) -> str:
+    if isinstance(status, dict) and isinstance(status.get("reason"), str):
+        return status["reason"]
+    return "source scan found no safe semantic local dematerialization"
+
+
 def _frame_transform_probe_stop_condition(
     verdict: str,
     best: dict | None,
@@ -353,6 +376,7 @@ def _frame_transform_probe_stop_condition(
     *,
     expected_frame: int,
     baseline_delta: int,
+    semantic_lever_status: Any = None,
 ) -> dict:
     if verdict == "source-reachable-frame-transform" and best is not None:
         label = str(best.get("label") or "<unknown>")
@@ -394,6 +418,13 @@ def _frame_transform_probe_stop_condition(
                 f"{abs(baseline_delta)}-byte frame delta unchanged"
             ),
             "measured_probe_count": len(measured),
+            "baseline_remaining_frame_delta": baseline_delta,
+        }
+    if verdict == "no-safe-semantic-lever":
+        return {
+            "status": "not-satisfied",
+            "kind": "no-safe-semantic-lever",
+            "reason": _semantic_lever_reason(semantic_lever_status),
             "baseline_remaining_frame_delta": baseline_delta,
         }
     return {
@@ -2012,9 +2043,9 @@ def _frame_transform_probe_plan(cause: dict) -> dict:
                 "command": "melee-agent debug suggest frame -f <function> --json",
             },
             {
-                "kind": "lifetime-layout",
+                "kind": "frame-transform-search",
                 "command": (
-                    "melee-agent debug mutate lifetime-layout -f <function> "
+                    "melee-agent debug mutate frame-transform-search -f <function> "
                     f"{operator_flags} --compile-probes --json"
                 ),
             },
@@ -2028,7 +2059,7 @@ def _frame_transform_probe_plan(cause: dict) -> dict:
             "command": (
                 "melee-agent debug inspect frame-reservations -f <function> "
                 "--expected-asm <expected.s> --probe-results-json "
-                "<lifetime-layout.json> --json"
+                "<frame-transform-search.json> --json"
             ),
         },
     }
@@ -2037,6 +2068,7 @@ def _frame_transform_probe_plan(cause: dict) -> dict:
 def _frame_transform_operator_priority(cause_kind: str) -> list[str]:
     if cause_kind in {"stack-object-offset-shift", "lifetime-or-ordering-shift"}:
         return [
+            "frame-local-dematerialize",
             "declaration-use-distance",
             "block-scope",
             "frame-direct-literal-at-final-fp-call",
@@ -2045,6 +2077,7 @@ def _frame_transform_operator_priority(cause_kind: str) -> list[str]:
     if cause_kind == "extra-frame-reservation-or-alignment":
         return [
             "frame-reservation-pad-stack",
+            "frame-local-dematerialize",
             "frame-magic-scratch-relocation",
             "frame-split-fp-const-lifetime",
             "declaration-use-distance",
@@ -2052,6 +2085,7 @@ def _frame_transform_operator_priority(cause_kind: str) -> list[str]:
         ]
     if cause_kind in {"stack-object-size-or-alignment", "type-size-or-alignment"}:
         return [
+            "frame-local-dematerialize",
             "frame-split-fp-const-lifetime",
             "frame-direct-literal-at-final-fp-call",
             "declaration-use-distance",
@@ -2064,6 +2098,7 @@ def _frame_transform_operator_priority(cause_kind: str) -> list[str]:
         "missing-source-local-home",
     }:
         return [
+            "frame-local-dematerialize",
             "declaration-use-distance",
             "block-scope",
             "call-argument-tempization",

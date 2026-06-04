@@ -129,6 +129,15 @@ SOURCE_SIMPLE_FRAME = textwrap.dedent("""\
 """)
 
 
+SOURCE_WITH_SEMANTIC_FRAME_LEVER = textwrap.dedent("""\
+    void fn_80000000(int x)
+    {
+        int tmp = x + 1;
+        sink(tmp);
+    }
+""")
+
+
 def test_frame_transform_search_scores_text_candidates(tmp_path: Path) -> None:
     baseline = tmp_path / "baseline.txt"
     expected = tmp_path / "expected.s"
@@ -218,7 +227,95 @@ def test_frame_transform_search_lists_directed_probes_without_compile(
     assert retained
     assert Path(retained[0]).exists()
     assert payload["variants"] == []
-    assert payload["frame_transform_probe_evaluation"]["verdict"] == "no-probes"
+    assert payload["semantic_lever_status"]["status"] == "no-safe-semantic-lever"
+    assert payload["frame_transform_probe_evaluation"]["verdict"] == (
+        "no-safe-semantic-lever"
+    )
+
+
+def test_frame_transform_search_lists_semantic_dematerialize_probe_without_compile(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "baseline.txt"
+    expected = tmp_path / "expected.s"
+    source = tmp_path / "source.c"
+    baseline.write_text(BASELINE_LARGE_PCDUMP)
+    expected.write_text(EXPECTED_ASM)
+    source.write_text(SOURCE_WITH_SEMANTIC_FRAME_LEVER)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "frame-transform-search",
+            "-f",
+            "fn_80000000",
+            "--pcdump",
+            str(baseline),
+            "--expected-asm",
+            str(expected),
+            "--source-file",
+            str(source),
+            "--no-compile-probes",
+            "--max-probes",
+            "1",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    probe = next(
+        probe for probe in payload["probes"]
+        if probe["operator"] == "frame-local-dematerialize"
+    )
+    assert payload["semantic_lever_status"]["status"] == "semantic-lever-generated"
+    assert probe["provenance"]["local"] == "tmp"
+    assert "sink(((int) (x + 1)));" in Path(probe["source_retained"]).read_text()
+
+
+def test_frame_transform_search_reports_no_safe_semantic_lever_without_ceiling(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "baseline.txt"
+    expected = tmp_path / "expected.s"
+    source = tmp_path / "source.c"
+    baseline.write_text(BASELINE_LARGE_PCDUMP)
+    expected.write_text(EXPECTED_ASM)
+    source.write_text(textwrap.dedent("""\
+        void fn_80000000(int x)
+        {
+            int tmp = helper(x);
+            sink(tmp);
+        }
+    """))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "frame-transform-search",
+            "-f",
+            "fn_80000000",
+            "--pcdump",
+            str(baseline),
+            "--expected-asm",
+            str(expected),
+            "--source-file",
+            str(source),
+            "--no-compile-probes",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["semantic_lever_status"]["status"] == "no-safe-semantic-lever"
+    evaluation = payload["frame_transform_probe_evaluation"]
+    assert evaluation["verdict"] == "no-safe-semantic-lever"
+    assert payload["stop_condition"]["kind"] == "no-safe-semantic-lever"
 
 
 def test_frame_transform_search_lists_forced_pad_stack_probe_for_frame_delta(
@@ -319,6 +416,63 @@ def test_frame_transform_search_compiles_forced_pad_stack_probe(
     assert variant["operator"] == "frame-reservation-pad-stack"
     assert variant["candidate_frame_size"] == 88
     assert variant["probe"]["provenance"]["delta"] == 8
+    assert payload["frame_transform_probe_evaluation"]["verdict"] == (
+        "source-reachable-frame-transform"
+    )
+
+
+def test_frame_transform_search_compiles_semantic_dematerialize_probe(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    baseline = tmp_path / "baseline.txt"
+    expected = tmp_path / "expected.s"
+    source = tmp_path / "source.c"
+    baseline.write_text(BASELINE_LARGE_PCDUMP)
+    expected.write_text(EXPECTED_ASM)
+    source.write_text(SOURCE_WITH_SEMANTIC_FRAME_LEVER)
+
+    def fake_compile(diff_input, *, function, melee_root, timeout) -> str:
+        probe_source = Path(diff_input.path).read_text()
+        assert "int tmp = x + 1;" not in probe_source
+        assert "sink(((int) (x + 1)));" in probe_source
+        return FIXED_PCDUMP
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture.compile_source_variant",
+        fake_compile,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "frame-transform-search",
+            "-f",
+            "fn_80000000",
+            "--pcdump",
+            str(baseline),
+            "--expected-asm",
+            str(expected),
+            "--source-file",
+            str(source),
+            "--operator",
+            "frame-local-dematerialize",
+            "--compile-probes",
+            "--no-score-match-percent",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    variant = payload["variants"][0]
+    assert payload["semantic_lever_status"]["status"] == "semantic-lever-generated"
+    assert variant["status"] == "ok"
+    assert variant["operator"] == "frame-local-dematerialize"
+    assert variant["candidate_frame_size"] == 96
+    assert variant["probe"]["provenance"]["local"] == "tmp"
     assert payload["frame_transform_probe_evaluation"]["verdict"] == (
         "source-reachable-frame-transform"
     )

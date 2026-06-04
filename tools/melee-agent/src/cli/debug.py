@@ -3394,13 +3394,16 @@ def _read_frame_reservation_current_asm(
     return "\n".join(current_asm)
 
 
-def _read_stack_home_probe_results_json(path: Path) -> list[dict[str, Any]]:
+def _read_stack_home_probe_results_json(
+    path: Path,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if not path.exists():
         raise typer.BadParameter(f"probe results JSON not found: {path}")
     try:
         payload = json.loads(path.read_text())
     except json.JSONDecodeError as exc:
         raise typer.BadParameter(f"invalid probe results JSON: {exc}") from exc
+    metadata: dict[str, Any] = {}
     if isinstance(payload, list):
         variants = payload
     elif isinstance(payload, dict):
@@ -3409,6 +3412,13 @@ def _read_stack_home_probe_results_json(path: Path) -> list[dict[str, Any]]:
             evaluation = payload.get("stack_home_probe_evaluation")
             if isinstance(evaluation, dict):
                 variants = evaluation.get("variants")
+        semantic_status = payload.get("semantic_lever_status")
+        if not isinstance(semantic_status, Mapping):
+            frame_report = payload.get("frame_report")
+            if isinstance(frame_report, Mapping):
+                semantic_status = frame_report.get("semantic_lever_status")
+        if isinstance(semantic_status, Mapping):
+            metadata["semantic_lever_status"] = dict(semantic_status)
     else:
         variants = None
     if not isinstance(variants, list):
@@ -3418,7 +3428,7 @@ def _read_stack_home_probe_results_json(path: Path) -> list[dict[str, Any]]:
     return [
         dict(item) for item in variants
         if isinstance(item, Mapping)
-    ]
+    ], metadata
 
 
 def _frame_spec_from_checkdiff_target(checkdiff_json: Path) -> dict:
@@ -3949,7 +3959,12 @@ def frame_reservations(
         raise typer.Exit(2) from exc
 
     if probe_results_json is not None:
-        variants = _read_stack_home_probe_results_json(probe_results_json)
+        variants, probe_metadata = _read_stack_home_probe_results_json(
+            probe_results_json
+        )
+        semantic_status = probe_metadata.get("semantic_lever_status")
+        if isinstance(semantic_status, Mapping):
+            report["semantic_lever_status"] = dict(semantic_status)
         report["stack_home_probe_evaluation"] = evaluate_stack_home_probe_results(
             report,
             variants,
@@ -18767,6 +18782,7 @@ _FRAME_TRANSFORM_RANKING = (
 )
 
 _FRAME_DIRECTED_DEFAULT_OPERATORS = (
+    "frame-local-dematerialize",
     "frame-direct-literal-at-final-fp-call",
     "frame-split-fp-const-lifetime",
     "frame-magic-scratch-relocation",
@@ -18788,6 +18804,42 @@ def _frame_transform_probe_plan(report: Mapping[str, Any]) -> dict[str, Any]:
         "objective": "reduce current-vs-expected stack frame-size delta",
         "operator_priority": list(_FRAME_DIRECTED_DEFAULT_OPERATORS),
         "suggested_commands": [],
+    }
+
+
+def _frame_transform_semantic_lever_status(
+    *,
+    source_text: str | None,
+    operator_filter: tuple[str, ...],
+    frame_reservation_delta: int | None,
+    probes: list[Any],
+    scan_status: Mapping[str, Any] | None,
+) -> dict:
+    operator = "frame-local-dematerialize"
+    if frame_reservation_delta is None or frame_reservation_delta >= 0:
+        return {"status": "not-needed", "operator": operator}
+    if source_text is None:
+        return {"status": "unavailable-no-source", "operator": operator}
+    if operator not in operator_filter:
+        return {"status": "excluded-by-operator-filter", "operator": operator}
+    if isinstance(scan_status, Mapping):
+        status = scan_status.get("status")
+        if status == "semantic-lever-generated":
+            if any(getattr(probe, "operator", None) == operator for probe in probes):
+                return dict(scan_status)
+            return {
+                "status": "semantic-lever-not-emitted",
+                "operator": operator,
+                "reason": (
+                    "source scan found a safe semantic local dematerialization, "
+                    "but it was not emitted by the selected probe budget"
+                ),
+            }
+        return dict(scan_status)
+    return {
+        "status": "scan-unavailable",
+        "operator": operator,
+        "reason": "semantic local dematerialization scan did not run",
     }
 
 
@@ -20454,6 +20506,7 @@ def mutate_frame_transform_search_cmd(
     from ..mwcc_debug.pressure_explorer import (
         generate_frame_directed_probes,
         generate_lifetime_layout_probes,
+        scan_frame_local_dematerialization_probes,
     )
 
     melee_root = DEFAULT_MELEE_ROOT
@@ -20552,6 +20605,25 @@ def mutate_frame_transform_search_cmd(
                 )
             )
         probes = probes[:max_probes]
+
+    semantic_scan_status: Mapping[str, Any] | None = None
+    if (
+        source_text is not None
+        and frame_reservation_delta is not None
+        and frame_reservation_delta < 0
+        and "frame-local-dematerialize" in operator_filter
+    ):
+        _semantic_scan_probes, semantic_scan_status = (
+            scan_frame_local_dematerialization_probes(source_text, function)
+        )
+    semantic_lever_status = _frame_transform_semantic_lever_status(
+        source_text=source_text,
+        operator_filter=operator_filter,
+        frame_reservation_delta=frame_reservation_delta,
+        probes=probes,
+        scan_status=semantic_scan_status,
+    )
+    frame_report["semantic_lever_status"] = semantic_lever_status
 
     variants: list[dict[str, Any]] = []
     generated_source_dir, generated_probe_paths = (
@@ -20719,6 +20791,7 @@ def mutate_frame_transform_search_cmd(
             "frame_report": frame_report,
             "probe_plan": probe_plan,
             "operator_filter": list(operator_filter),
+            "semantic_lever_status": semantic_lever_status,
             "generated_source_dir": (
                 str(generated_source_dir) if generated_source_dir is not None else None
             ),
@@ -20751,6 +20824,12 @@ def mutate_frame_transform_search_cmd(
     print(f"baseline: frame={current_frame if current_frame is not None else '?'}")
     print(f"expected: frame={expected_frame if expected_frame is not None else '?'}")
     print("operator filter: " + ", ".join(operator_filter))
+    if semantic_lever_status.get("status") not in {"not-needed"}:
+        print(
+            "semantic lever: "
+            f"{semantic_lever_status.get('status')}"
+            f" [{semantic_lever_status.get('operator')}]"
+        )
     if generated_source_dir is not None:
         print(f"generated source dir: {generated_source_dir}")
     print(

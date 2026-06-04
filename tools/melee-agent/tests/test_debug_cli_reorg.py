@@ -603,6 +603,62 @@ def test_frame_reservations_cli_evaluates_probe_results_json(
     }
 
 
+def test_frame_reservations_cli_preserves_no_safe_semantic_status_from_probe_json(
+    tmp_path: Path,
+) -> None:
+    pcdump = tmp_path / "pcdump.txt"
+    pcdump.write_text(textwrap.dedent("""\
+        Starting function fn_80000005
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        fn_80000005
+        B0: Succ={} Pred={} Labels={}
+            stwu    r1,-80(r1)
+            stw     r8,48(r1)
+            addi    r1,r1,80
+    """))
+    expected = tmp_path / "expected.s"
+    expected.write_text(textwrap.dedent("""\
+        .fn fn_80000005, global
+        /* 80000000 */    stwu r1, -72(r1)
+        /* 80000004 */    stw r8, 40(r1)
+        /* 80000008 */    addi r1, r1, 72
+        .endfn fn_80000005
+    """))
+    probe_results = tmp_path / "frame-transform-search.json"
+    probe_results.write_text(json.dumps({
+        "semantic_lever_status": {
+            "status": "no-safe-semantic-lever",
+            "operator": "frame-local-dematerialize",
+            "reason": "source scan found no safe semantic local dematerialization",
+        },
+        "variants": [],
+    }))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "frame-reservations",
+            "-f",
+            "fn_80000005",
+            str(pcdump),
+            "--expected-asm",
+            str(expected),
+            "--probe-results-json",
+            str(probe_results),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["semantic_lever_status"]["status"] == "no-safe-semantic-lever"
+    evaluation = payload["frame_transform_probe_evaluation"]
+    assert evaluation["verdict"] == "no-safe-semantic-lever"
+    assert evaluation["stop_condition"]["kind"] == "no-safe-semantic-lever"
+
+
 def test_frame_reservations_cli_ceiling_with_source_object_is_frame_unchanged(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -667,22 +723,15 @@ def test_frame_reservations_cli_ceiling_with_source_object_is_frame_unchanged(
     assert result.exit_code == 0, result.stdout
     payload = json.loads(result.stdout)
     assert payload["frame_transform_probe_evaluation"]["verdict"] == (
-        "frame-transform-ceiling-candidate"
+        "frame-transform-results-inconclusive"
+    )
+    assert payload["frame_transform_probe_evaluation"]["stop_condition"]["kind"] == (
+        "frame-transform-results-inconclusive"
     )
     assert payload["frame_first_divergence"]["source_attribution"]["status"] == (
         "source-object-attributed"
     )
-    assert payload["frame_first_divergence"]["validated_verdict"] == {
-        "status": "attributed-frame-unchanged",
-        "confidence": "medium",
-        "probe_verdict": "frame-transform-ceiling-candidate",
-        "reason": (
-            "bounded frame-size transform probes left the frame delta unchanged "
-            "for an attributed source-object divergence"
-        ),
-        "source_object_symbol": "a",
-        "stop_condition": payload["frame_transform_probe_evaluation"]["stop_condition"],
-    }
+    assert "validated_verdict" not in payload["frame_first_divergence"]
 
 
 def test_frame_reservations_cli_ceiling_without_source_object_is_internal(
@@ -738,23 +787,15 @@ def test_frame_reservations_cli_ceiling_without_source_object_is_internal(
     assert result.exit_code == 0, result.stdout
     payload = json.loads(result.stdout)
     assert payload["frame_transform_probe_evaluation"]["verdict"] == (
-        "frame-transform-ceiling-candidate"
+        "frame-transform-results-inconclusive"
+    )
+    assert payload["frame_transform_probe_evaluation"]["stop_condition"]["kind"] == (
+        "frame-transform-results-inconclusive"
     )
     assert payload["frame_first_divergence"]["source_attribution"]["status"] == (
         "unattributed"
     )
-    assert payload["frame_first_divergence"]["validated_verdict"] == {
-        "status": "internal-tiebreak-ceiling",
-        "confidence": "medium",
-        "probe_verdict": "frame-transform-ceiling-candidate",
-        "reason": (
-            "bounded frame transform probes left an unattributed divergence "
-            "unchanged; likely compiler-internal layout tiebreak or missing "
-            "stack-home origin instrumentation"
-        ),
-        "unresolved_dependency": "mwcc-stack-home-origin-tags",
-        "stop_condition": payload["frame_transform_probe_evaluation"]["stop_condition"],
-    }
+    assert "validated_verdict" not in payload["frame_first_divergence"]
 
 
 def test_frame_reservations_cli_text_reports_primary_source_object(

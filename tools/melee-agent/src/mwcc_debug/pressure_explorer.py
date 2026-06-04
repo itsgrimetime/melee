@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from .colorgraph_parser import find_function, parse_hook_events
 from .parser import Function, Pass, parse_pcdump
 from .simplify_search import baseline_signature
+from .source_spans import StatementSpan, list_statement_spans
 from .virtual_attribution import explain_virtuals
 
 
@@ -151,6 +152,51 @@ _MEMBER_EXPR_RE = (
 _DIFF_EXPR_RE = (
     rf"{_MEMBER_EXPR_RE}\s*-\s*{_MEMBER_EXPR_RE}"
 )
+_SIMPLE_LOCAL_DECL_RE = re.compile(
+    r"^(?P<indent>\s*)"
+    r"(?P<type>(?:const\s+)?[A-Za-z_]\w*(?:\s*\*)*)\s+"
+    r"(?P<name>[A-Za-z_]\w*)\s*=\s*(?P<expr>.+);\s*$",
+    re.DOTALL,
+)
+_SIMPLE_LOCAL_BARE_DECL_RE = re.compile(
+    r"^(?P<indent>\s*)"
+    r"(?P<type>(?:const\s+)?[A-Za-z_]\w*(?:\s*\*)*)\s+"
+    r"(?P<name>[A-Za-z_]\w*)\s*;\s*$",
+    re.DOTALL,
+)
+_SIMPLE_ASSIGN_RE = re.compile(
+    r"^\s*(?P<name>[A-Za-z_]\w*)\s*=\s*(?P<expr>.+);\s*$",
+    re.DOTALL,
+)
+_SIMPLE_CALL_STMT_RE = re.compile(
+    r"^(?P<indent>\s*)(?P<callee>[A-Za-z_]\w*)\s*\(",
+    re.DOTALL,
+)
+_SIMPLE_RHS_ASSIGN_USE_RE = re.compile(
+    r"^(?P<indent>\s*)(?P<lhs>[A-Za-z_]\w*)\s*=\s*(?P<rhs>[A-Za-z_]\w*)\s*;\s*$",
+    re.DOTALL,
+)
+_DEMATERIALIZE_SCALAR_TYPES = {
+    "BOOL",
+    "bool",
+    "char",
+    "double",
+    "f32",
+    "f64",
+    "float",
+    "int",
+    "long",
+    "s8",
+    "s16",
+    "s32",
+    "s64",
+    "short",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+    "unsigned",
+}
 
 
 def pressure_signature_from_pcdump(
@@ -427,6 +473,10 @@ def generate_frame_directed_probes(
     if not shrink_or_unknown:
         return probes
 
+    for probe in _probe_frame_local_dematerializations(source_text, function):
+        _append_probe(probes, probe)
+        if len(probes) >= max_probes:
+            return probes
     for probe in _probe_frame_direct_literal_fp_calls(
         source_text,
         body,
@@ -723,6 +773,175 @@ def _replace_body_slices(
         end = body_start + rel_end
         mutated = mutated[:start] + replacement + mutated[end:]
     return mutated
+
+
+def _replace_absolute_slices(
+    source: str,
+    replacements: list[tuple[int, int, str]],
+) -> str:
+    mutated = source
+    for start, end, replacement in sorted(
+        replacements,
+        key=lambda item: (item[0], item[1]),
+        reverse=True,
+    ):
+        mutated = mutated[:start] + replacement + mutated[end:]
+    return mutated
+
+
+def _expand_statement_removal_range(
+    source: str,
+    start: int,
+    end: int,
+) -> tuple[int, int]:
+    if end < len(source) and source[end] == "\n":
+        end += 1
+    return start, end
+
+
+def _identifier_count(text: str, name: str) -> int:
+    return len(re.findall(r"\b" + re.escape(name) + r"\b", text))
+
+
+def _identifier_count_excluding_ranges(
+    source: str,
+    name: str,
+    excluded_ranges: list[tuple[int, int]],
+) -> int:
+    chars = list(source)
+    for start, end in excluded_ranges:
+        for idx in range(max(0, start), min(len(chars), end)):
+            chars[idx] = " "
+    return _identifier_count("".join(chars), name)
+
+
+def _byte_to_char_offsets(source: str) -> list[int]:
+    mapping = [0] * (len(source.encode("utf-8")) + 1)
+    byte_offset = 0
+    for char_index, char in enumerate(source):
+        encoded_len = len(char.encode("utf-8"))
+        for rel in range(encoded_len):
+            mapping[byte_offset + rel] = char_index
+        byte_offset += encoded_len
+        mapping[byte_offset] = char_index + 1
+    return mapping
+
+
+def _span_char_range(
+    source: str,
+    span: StatementSpan,
+    byte_to_char: list[int] | None = None,
+) -> tuple[int, int]:
+    mapping = byte_to_char if byte_to_char is not None else _byte_to_char_offsets(source)
+    start, end = span.byte_range
+    if start >= len(mapping) or end >= len(mapping):
+        return len(source), len(source)
+    return mapping[start], mapping[end]
+
+
+def _span_source(
+    source: str,
+    span: StatementSpan,
+    byte_to_char: list[int] | None = None,
+) -> str:
+    start, end = _span_char_range(source, span, byte_to_char)
+    return source[start:end]
+
+
+def _is_simple_dematerialize_type(type_text: str) -> bool:
+    stripped = type_text.strip()
+    compact = " ".join(stripped.replace("*", " * ").split())
+    if any(
+        token in compact.split()
+        for token in {"volatile", "static", "register", "extern", "auto"}
+    ):
+        return False
+    if compact.startswith(("struct ", "union ", "enum ")):
+        return False
+    if re.fullmatch(
+        r"(?:const\s+)?[A-Za-z_]\w*(?:\s*\*)*",
+        stripped,
+    ) is None:
+        return False
+    if "*" in stripped:
+        return True
+    scalar_name = stripped.removeprefix("const ").strip()
+    return scalar_name in _DEMATERIALIZE_SCALAR_TYPES
+
+
+def _safe_dematerialize_expr(expr: str) -> bool:
+    expr = expr.strip()
+    if not expr or not _balanced_expression_delimiters(expr):
+        return False
+    if any(token in expr for token in ("++", "--", "?", ",")):
+        return False
+    if re.search(r"(?<![=!<>])=(?!=)", expr):
+        return False
+    if re.search(r"\b[A-Za-z_]\w*\s*\(", expr):
+        return False
+    if "&" in expr or "->" in expr:
+        return False
+    return True
+
+
+def _has_preprocessor_between(source: str, start: int, end: int) -> bool:
+    return re.search(r"(?m)^[ \t]*#", source[start:end]) is not None
+
+
+def _is_inert_intervening_declaration(
+    source: str,
+    span: StatementSpan,
+    byte_to_char: list[int],
+) -> bool:
+    return _SIMPLE_LOCAL_BARE_DECL_RE.match(
+        _span_source(source, span, byte_to_char)
+    ) is not None
+
+
+def _span_mentions_identifier(
+    source: str,
+    span: StatementSpan,
+    name: str,
+    byte_to_char: list[int] | None = None,
+) -> bool:
+    return _identifier_count(_span_source(source, span, byte_to_char), name) > 0
+
+
+def _split_top_level_args_with_ranges(
+    args_text: str,
+    *,
+    absolute_start: int,
+) -> tuple[tuple[str, int, int], ...]:
+    args: list[tuple[str, int, int]] = []
+    start = 0
+    depth = 0
+    pairs = {"(": ")", "[": "]", "{": "}"}
+    closing = set(pairs.values())
+    for idx, char in enumerate(args_text):
+        if char in pairs:
+            depth += 1
+        elif char in closing and depth > 0:
+            depth -= 1
+        elif char == "," and depth == 0:
+            raw = args_text[start:idx]
+            leading = len(raw) - len(raw.lstrip())
+            trailing = len(raw.rstrip())
+            args.append((
+                raw.strip(),
+                absolute_start + start + leading,
+                absolute_start + start + trailing,
+            ))
+            start = idx + 1
+    raw = args_text[start:]
+    if raw.strip():
+        leading = len(raw) - len(raw.lstrip())
+        trailing = len(raw.rstrip())
+        args.append((
+            raw.strip(),
+            absolute_start + start + leading,
+            absolute_start + start + trailing,
+        ))
+    return tuple(args)
 
 
 def _target_pair_states(
@@ -1256,6 +1475,391 @@ def _probe_call_arg_temp(
                 },
             )
     return None
+
+
+def scan_frame_local_dematerialization_probes(
+    source: str,
+    function: str,
+) -> tuple[list[LifetimeLayoutProbe], dict]:
+    operator = "frame-local-dematerialize"
+    body_span = _find_function_body_span(source, function)
+    if body_span is None:
+        return [], {
+            "status": "scan-unavailable",
+            "operator": operator,
+            "reason": f"function body for {function} was not found in source",
+        }
+    try:
+        spans = list_statement_spans(source, function)
+    except Exception as exc:
+        return [], {
+            "status": "scan-error",
+            "operator": operator,
+            "reason": f"source span scan failed: {exc}",
+        }
+    probes = _probe_frame_local_dematerializations_from_spans(
+        source,
+        function,
+        spans,
+        body_span,
+    )
+    if probes:
+        return probes, {
+            "status": "semantic-lever-generated",
+            "operator": operator,
+            "candidate_count": len(probes),
+        }
+    return [], {
+        "status": "no-safe-semantic-lever",
+        "operator": operator,
+        "reason": "source scan found no safe semantic local dematerialization",
+    }
+
+
+def _probe_frame_local_dematerializations(
+    source: str,
+    function: str,
+) -> list[LifetimeLayoutProbe]:
+    probes, _status = scan_frame_local_dematerialization_probes(source, function)
+    return probes
+
+
+def _probe_frame_local_dematerializations_from_spans(
+    source: str,
+    function: str,
+    spans: list[StatementSpan],
+    body_span: tuple[int, int],
+) -> list[LifetimeLayoutProbe]:
+    if not spans:
+        return []
+    byte_to_char = _byte_to_char_offsets(source)
+    probes: list[LifetimeLayoutProbe] = []
+    for idx, span in enumerate(spans):
+        candidate = _frame_local_initialized_candidate(source, spans, idx, byte_to_char)
+        if candidate is None:
+            candidate = _frame_local_assigned_candidate(source, spans, idx, byte_to_char)
+        if candidate is None:
+            continue
+        (
+            name,
+            type_text,
+            expr,
+            action,
+            definition_spans,
+            value_span,
+            next_search_index,
+        ) = candidate
+        use_idx = _find_frame_local_use_index(
+            source,
+            spans,
+            next_search_index,
+            value_span,
+            name,
+            byte_to_char,
+        )
+        if use_idx is None:
+            continue
+        use_span = spans[use_idx]
+        rewrite = _rewrite_frame_local_use(
+            source,
+            use_span,
+            name=name,
+            type_text=type_text,
+            expr=expr,
+            byte_to_char=byte_to_char,
+        )
+        if rewrite is None:
+            continue
+        replacement_start, replacement_end, replacement, use_kind = rewrite
+        removal_ranges = [
+            _expand_statement_removal_range(
+                source,
+                *_span_char_range(source, def_span, byte_to_char),
+            )
+            for def_span in definition_spans
+        ]
+        use_start, use_end = _span_char_range(source, use_span, byte_to_char)
+        if not _frame_local_only_definition_and_use(
+            source,
+            body_span=body_span,
+            name=name,
+            definition_ranges=removal_ranges,
+            use_range=(use_start, use_end),
+        ):
+            continue
+        replacements = [(replacement_start, replacement_end, replacement)]
+        replacements.extend((start, end, "") for start, end in removal_ranges)
+        probes.append(LifetimeLayoutProbe(
+            label=f"frame-local-dematerialize-{name}",
+            operator="frame-local-dematerialize",
+            description=f"Inline one-use local `{name}` into its use.",
+            source_text=_replace_absolute_slices(source, replacements),
+            provenance={
+                "kind": "frame-local-dematerialize",
+                "local": name,
+                "action": action,
+                "expression": expr,
+                "cast_type": type_text,
+                "use_kind": use_kind,
+                "definition_lines": [
+                    definition_spans[0].line_range[0],
+                    definition_spans[-1].line_range[1],
+                ],
+                "use_lines": [use_span.line_range[0], use_span.line_range[1]],
+            },
+        ))
+    return probes
+
+
+def _frame_local_initialized_candidate(
+    source: str,
+    spans: list[StatementSpan],
+    idx: int,
+    byte_to_char: list[int],
+) -> tuple[str, str, str, str, tuple[StatementSpan, ...], StatementSpan, int] | None:
+    span = spans[idx]
+    if span.kind != "declaration":
+        return None
+    match = _SIMPLE_LOCAL_DECL_RE.match(_span_source(source, span, byte_to_char))
+    if match is None:
+        return None
+    type_text = " ".join(match.group("type").split())
+    name = match.group("name")
+    expr = match.group("expr").strip()
+    if not _is_simple_dematerialize_type(type_text):
+        return None
+    if not _safe_dematerialize_expr(expr):
+        return None
+    return (
+        name,
+        type_text,
+        expr,
+        "inline-initialized-local",
+        (span,),
+        span,
+        idx + 1,
+    )
+
+
+def _frame_local_assigned_candidate(
+    source: str,
+    spans: list[StatementSpan],
+    idx: int,
+    byte_to_char: list[int],
+) -> tuple[str, str, str, str, tuple[StatementSpan, ...], StatementSpan, int] | None:
+    decl_span = spans[idx]
+    if decl_span.kind != "declaration":
+        return None
+    match = _SIMPLE_LOCAL_BARE_DECL_RE.match(
+        _span_source(source, decl_span, byte_to_char)
+    )
+    if match is None:
+        return None
+    type_text = " ".join(match.group("type").split())
+    name = match.group("name")
+    if not _is_simple_dematerialize_type(type_text):
+        return None
+    assign_idx = _find_next_executable_span(
+        source,
+        spans,
+        idx + 1,
+        decl_span,
+        byte_to_char,
+    )
+    if assign_idx is None:
+        return None
+    assign_span = spans[assign_idx]
+    if assign_span.kind != "expression_statement":
+        return None
+    assign = _SIMPLE_ASSIGN_RE.match(_span_source(source, assign_span, byte_to_char))
+    if assign is None or assign.group("name") != name:
+        return None
+    expr = assign.group("expr").strip()
+    if not _safe_dematerialize_expr(expr):
+        return None
+    return (
+        name,
+        type_text,
+        expr,
+        "inline-assigned-local",
+        (decl_span, assign_span),
+        assign_span,
+        assign_idx + 1,
+    )
+
+
+def _find_next_executable_span(
+    source: str,
+    spans: list[StatementSpan],
+    start_idx: int,
+    anchor: StatementSpan,
+    byte_to_char: list[int],
+) -> int | None:
+    _, anchor_end = _span_char_range(source, anchor, byte_to_char)
+    for cursor in range(start_idx, len(spans)):
+        span = spans[cursor]
+        span_start, _ = _span_char_range(source, span, byte_to_char)
+        if _has_preprocessor_between(source, anchor_end, span_start):
+            return None
+        if "{" in source[anchor_end:span_start] or "}" in source[anchor_end:span_start]:
+            return None
+        if span.scope_path != anchor.scope_path or span.scope_byte_range != anchor.scope_byte_range:
+            return None
+        if span.kind == "declaration":
+            if not _is_inert_intervening_declaration(source, span, byte_to_char):
+                return None
+            continue
+        return cursor
+    return None
+
+
+def _find_frame_local_use_index(
+    source: str,
+    spans: list[StatementSpan],
+    start_idx: int,
+    value_span: StatementSpan,
+    name: str,
+    byte_to_char: list[int],
+) -> int | None:
+    value_start, value_end = _span_char_range(source, value_span, byte_to_char)
+    del value_start
+    for cursor in range(start_idx, len(spans)):
+        span = spans[cursor]
+        span_start, _ = _span_char_range(source, span, byte_to_char)
+        between = source[value_end:span_start]
+        if _has_preprocessor_between(source, value_end, span_start):
+            return None
+        if "{" in between or "}" in between:
+            return None
+        if span.scope_path != value_span.scope_path or span.scope_byte_range != value_span.scope_byte_range:
+            return None
+        if span.kind == "declaration":
+            if not _is_inert_intervening_declaration(source, span, byte_to_char):
+                return None
+            continue
+        if not _span_mentions_identifier(source, span, name, byte_to_char):
+            return None
+        return cursor
+    return None
+
+
+def _frame_local_only_definition_and_use(
+    source: str,
+    *,
+    body_span: tuple[int, int],
+    name: str,
+    definition_ranges: list[tuple[int, int]],
+    use_range: tuple[int, int],
+) -> bool:
+    use_text = source[use_range[0]:use_range[1]]
+    if _identifier_count(use_text, name) != 1:
+        return False
+    body_start, body_end = body_span
+    relative_excluded = [
+        (max(0, start - body_start), min(body_end, end) - body_start)
+        for start, end in [*definition_ranges, use_range]
+    ]
+    return _identifier_count_excluding_ranges(
+        source[body_start:body_end],
+        name,
+        relative_excluded,
+    ) == 0
+
+
+def _rewrite_frame_local_use(
+    source: str,
+    span: StatementSpan,
+    *,
+    name: str,
+    type_text: str,
+    expr: str,
+    byte_to_char: list[int],
+) -> tuple[int, int, str, str] | None:
+    if span.kind != "expression_statement":
+        return None
+    raw = _span_source(source, span, byte_to_char)
+    if re.search(r"(?<![A-Za-z_])&\s*" + re.escape(name) + r"\b", raw):
+        return None
+    casted_expr = f"(({type_text}) ({expr}))"
+    rhs_rewrite = _rewrite_frame_local_rhs_use(
+        source,
+        span,
+        raw,
+        name=name,
+        replacement=casted_expr,
+        byte_to_char=byte_to_char,
+    )
+    if rhs_rewrite is not None:
+        return rhs_rewrite
+    return _rewrite_frame_local_call_arg_use(
+        source,
+        span,
+        raw,
+        name=name,
+        replacement=casted_expr,
+        byte_to_char=byte_to_char,
+    )
+
+
+def _rewrite_frame_local_rhs_use(
+    source: str,
+    span: StatementSpan,
+    raw: str,
+    *,
+    name: str,
+    replacement: str,
+    byte_to_char: list[int],
+) -> tuple[int, int, str, str] | None:
+    match = _SIMPLE_RHS_ASSIGN_USE_RE.match(raw)
+    if match is None or match.group("rhs") != name or match.group("lhs") == name:
+        return None
+    span_start, _ = _span_char_range(source, span, byte_to_char)
+    return (
+        span_start + match.start("rhs"),
+        span_start + match.end("rhs"),
+        replacement,
+        "assignment-rhs",
+    )
+
+
+def _rewrite_frame_local_call_arg_use(
+    source: str,
+    span: StatementSpan,
+    raw: str,
+    *,
+    name: str,
+    replacement: str,
+    byte_to_char: list[int],
+) -> tuple[int, int, str, str] | None:
+    call = _SIMPLE_CALL_STMT_RE.match(raw)
+    if call is None:
+        return None
+    open_rel = raw.find("(", call.end() - 1)
+    if open_rel < 0:
+        return None
+    close_rel = _find_matching_paren(raw, open_rel)
+    if close_rel is None or raw[close_rel + 1:].strip() != ";":
+        return None
+    args_text = raw[open_rel + 1:close_rel]
+    span_start, _ = _span_char_range(source, span, byte_to_char)
+    args = _split_top_level_args_with_ranges(
+        args_text,
+        absolute_start=span_start + open_rel + 1,
+    )
+    matching_args = [
+        (arg_start, arg_end)
+        for arg, arg_start, arg_end in args
+        if arg == name
+    ]
+    if len(matching_args) != 1:
+        return None
+    for arg, _arg_start, _arg_end in args:
+        if arg == name:
+            continue
+        if not _safe_dematerialize_expr(arg):
+            return None
+    arg_start, arg_end = matching_args[0]
+    return arg_start, arg_end, replacement, "call-argument"
 
 
 def _balanced_expression_delimiters(text: str) -> bool:
