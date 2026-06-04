@@ -66,6 +66,26 @@ jobs:
             --output "$TAXONOMY_DIR" \
             --workers 4
 
+      - name: Validate taxonomy artifacts
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          taxonomy_dir = Path(os.environ["TAXONOMY_DIR"])
+
+          def count_jsonl(path):
+              return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+
+          records = count_jsonl(taxonomy_dir / "taxonomy.records.jsonl")
+          errors = count_jsonl(taxonomy_dir / "checkdiff-errors.jsonl")
+          if records == 0 and errors > 0:
+              raise SystemExit(
+                  f"taxonomy produced 0 classified records and {errors} checkdiff errors"
+              )
+          print(f"taxonomy validation: {records} classified records, {errors} checkdiff errors")
+          PY
+
       - name: Generate dashboard
         run: python3 tools/function_taxonomy_dashboard.py "$TAXONOMY_DIR"
 

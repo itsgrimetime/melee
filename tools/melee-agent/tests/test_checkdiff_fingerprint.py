@@ -535,6 +535,63 @@ def test_no_build_json_suppresses_stale_report_match_percent(
     assert payload["fuzzy_match_percent_source"] == "suppressed_stale_report_no_build"
 
 
+def test_no_build_json_falls_back_to_dtk_when_objdump_extracts_no_function(
+    checkdiff, tmp_path, monkeypatch, capsys,
+):
+    _make_stub_repo(tmp_path, "fn_alpha", match_pct=27.27)
+    _patch_paths(checkdiff, monkeypatch, tmp_path)
+    ref_obj = tmp_path / "build" / "GALE01" / "obj" / "melee" / "mn" / "sample.o"
+    our_obj = tmp_path / "build" / "GALE01" / "src" / "melee" / "mn" / "sample.o"
+    ref_obj.parent.mkdir(parents=True)
+    our_obj.parent.mkdir(parents=True)
+    ref_obj.write_bytes(b"ref")
+    our_obj.write_bytes(b"ours")
+
+    def fake_run(cmd, **kwargs):
+        exe = str(cmd[0])
+        if exe.endswith("python") or exe.endswith("python3"):
+            return checkdiff.subprocess.CompletedProcess(cmd, 0, "", "")
+        if exe == "bad-objdump":
+            return checkdiff.subprocess.CompletedProcess(cmd, 0, "", "")
+        if exe == "dtk":
+            Path(cmd[-1]).write_text("fn_alpha:\n  blr\n", encoding="utf-8")
+            return checkdiff.subprocess.CompletedProcess(cmd, 0, "", "")
+        return checkdiff.subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(
+        checkdiff,
+        "ensure_disassembler",
+        lambda: ("objdump", Path("bad-objdump")),
+    )
+    monkeypatch.setattr(checkdiff, "find_dtk", lambda: Path("dtk"))
+    monkeypatch.setattr(checkdiff.subprocess, "run", fake_run)
+    monkeypatch.setattr(checkdiff, "apply_name_magic_if_available", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        checkdiff,
+        "collect_section_anchor_aliases",
+        lambda path, peer_path=None: {},
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "checkdiff.py",
+            "fn_alpha",
+            "--no-build",
+            "--format",
+            "json",
+            "--no-fingerprint",
+        ],
+    )
+
+    rc = checkdiff.main()
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert rc == 0
+    assert payload["match"] is True
+    assert "fell back to dtk" in captured.err
+
+
 def test_record_post_build_returns_empty_string_for_none_fp(checkdiff, tmp_path, monkeypatch):
     """record_post_build_attempt must defend against fp=None even
     though the current caller guards — future-proofs new callers."""

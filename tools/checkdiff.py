@@ -2373,10 +2373,15 @@ def main() -> int:
 
         disasm_type, disasm_path = ensure_disassembler()
 
-        def get_asm_with_objdump(obj_path: str, func: str, normalize: bool = True) -> str:
+        def get_asm_with_objdump(
+            obj_path: str,
+            func: str,
+            normalize: bool = True,
+            tool_path: Path | str = disasm_path,
+        ) -> str:
             """Extract disassembly for a function using objdump."""
             result = subprocess.run(
-                [str(disasm_path), "-d", "-r", obj_path],
+                [str(tool_path), "-d", "-r", obj_path],
                 cwd=ROOT, capture_output=True, text=True
             )
             lines = result.stdout.split("\n")
@@ -2417,12 +2422,17 @@ def main() -> int:
                         output.append(line)
             return "\n".join(output)
 
-        def get_asm_with_dtk(obj_path: str, func: str, normalize: bool = True) -> str:
+        def get_asm_with_dtk(
+            obj_path: str,
+            func: str,
+            normalize: bool = True,
+            tool_path: Path | str = disasm_path,
+        ) -> str:
             """Extract disassembly for a function using dtk."""
             with tempfile.TemporaryDirectory() as tmpdir:
                 asm_file = Path(tmpdir) / "disasm.s"
                 result = subprocess.run(
-                    [str(disasm_path), "elf", "disasm", obj_path, str(asm_file)],
+                    [str(tool_path), "elf", "disasm", obj_path, str(asm_file)],
                     cwd=ROOT, capture_output=True, text=True
                 )
                 if result.returncode != 0 or not asm_file.exists():
@@ -2461,14 +2471,34 @@ def main() -> int:
 
             return "\n".join(output)
 
-        # Choose the appropriate disassembly function
-        if disasm_type == "objdump":
-            get_asm = get_asm_with_objdump
-        else:
-            get_asm = get_asm_with_dtk
+        def get_asm_pair(
+            kind: str,
+            tool_path: Path | str,
+        ) -> tuple[str, str]:
+            if kind == "objdump":
+                get_asm = get_asm_with_objdump
+            else:
+                get_asm = get_asm_with_dtk
+            return (
+                get_asm(str(ROOT / ref_obj), func_name, tool_path=tool_path),
+                get_asm(str(ROOT / our_obj), func_name, tool_path=tool_path),
+            )
 
-        ref_asm = get_asm(str(ROOT / ref_obj), func_name)
-        our_asm = get_asm(str(ROOT / our_obj), func_name)
+        ref_asm, our_asm = get_asm_pair(disasm_type, disasm_path)
+        if (not ref_asm or not our_asm) and disasm_type == "objdump":
+            try:
+                dtk_path = find_dtk() or download_dtk(TOOLS_CACHE_DIR / "dtk")
+            except Exception:
+                dtk_path = None
+            if dtk_path is not None:
+                fallback_ref_asm, fallback_our_asm = get_asm_pair("dtk", dtk_path)
+                if fallback_ref_asm and fallback_our_asm:
+                    print(
+                        "[checkdiff] objdump did not extract requested "
+                        "function; fell back to dtk",
+                        file=sys.stderr,
+                    )
+                    ref_asm, our_asm = fallback_ref_asm, fallback_our_asm
 
         if not ref_asm:
             print(f"error: could not find {func_name} in reference object", file=sys.stderr)

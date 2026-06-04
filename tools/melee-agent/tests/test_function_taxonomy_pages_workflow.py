@@ -24,9 +24,14 @@ def test_taxonomy_pages_workflow_generates_inventory_then_dashboard() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
 
     inventory = "python3 tools/function_taxonomy_inventory.py"
+    validation = "Validate taxonomy artifacts"
     dashboard = "python3 tools/function_taxonomy_dashboard.py"
     assert inventory in text
+    assert validation in text
     assert dashboard in text
     assert text.index(inventory) < text.index(dashboard)
+    assert text.index(validation) < text.index(dashboard)
+    assert "0 classified records" in text
+    assert "checkdiff errors" in text
     assert "build/function-taxonomy" in text
     assert "_site/taxonomy" in text
