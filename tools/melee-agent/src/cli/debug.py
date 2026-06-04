@@ -3189,11 +3189,13 @@ def _frame_residual_hint_from_checkdiff_classification(
             "subcategory": "same-frame-stack-slot-placement",
             "message": (
                 f"{function}: checkdiff reports same-frame stack-slot "
-                "placement differences. Prefer lifetime/layout probes; "
-                "decl-order search is usually neutral on this class."
+                "placement differences. Inspect the stack-home assignment "
+                "order first, then use lifetime/layout probes; decl-order "
+                "search is usually neutral on this class."
             ),
             "summary": "same-frame stack-slot residual from checkdiff classification",
             "next_steps": [
+                f"melee-agent debug inspect frame-reservations -f {function}",
                 (
                     f"melee-agent debug mutate lifetime-layout -f {function} "
                     "--compile-probes"

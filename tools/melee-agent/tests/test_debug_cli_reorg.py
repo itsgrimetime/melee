@@ -4489,8 +4489,12 @@ def test_inspect_stuck_routes_same_slot_rows_to_lifetime_layout(
     payload = json.loads(result.stdout)
     assert payload["frame_residual"]["kind"] == "same-frame-stack-slot-placement"
     assert payload["next_steps"][0] == (
+        "melee-agent debug inspect frame-reservations -f fn_80000000"
+    )
+    assert payload["next_steps"][1] == (
         "melee-agent debug mutate lifetime-layout -f fn_80000000 --compile-probes"
     )
+    assert "stack-home assignment order" in payload["frame_residual"]["message"]
     assert "Optional cheap probe" in "\n".join(payload["next_steps"])
 
 
