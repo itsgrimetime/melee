@@ -749,6 +749,51 @@ def test_frame_reservation_infers_expected_symbolic_stack_home_order() -> None:
             },
         ],
     }
+    assert report["current"]["stack_home_target_permutation"] == {
+        "status": "computed",
+        "needs_permutation": True,
+        "symbol_count": 3,
+        "misplaced_count": 2,
+        "current_offset_order": ["c", "a", "b"],
+        "expected_offset_order": ["a", "c", "b"],
+        "expected_to_current_positions": [1, 0, 2],
+        "moves": [
+            {
+                "symbol": "a",
+                "current_position": 1,
+                "expected_position": 0,
+                "position_delta": -1,
+                "current_offset": 0x30,
+                "expected_offset": 0x28,
+                "offset_delta": 0x8,
+            },
+            {
+                "symbol": "c",
+                "current_position": 0,
+                "expected_position": 1,
+                "position_delta": 1,
+                "current_offset": 0x28,
+                "expected_offset": 0x30,
+                "offset_delta": -0x8,
+            },
+            {
+                "symbol": "b",
+                "current_position": 2,
+                "expected_position": 2,
+                "position_delta": 0,
+                "current_offset": 0x34,
+                "expected_offset": 0x34,
+                "offset_delta": 0,
+            },
+        ],
+        "cycles": [
+            {
+                "symbols": ["c", "a"],
+                "current_positions": [0, 1],
+                "expected_positions": [1, 0],
+            },
+        ],
+    }
     guidance = report["current"]["stack_home_reorder_guidance"]
     assert guidance["status"] == "source-reorder-probe-needed"
     assert guidance["verdict"] == "unknown-unvalidated"

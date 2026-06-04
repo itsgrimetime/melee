@@ -3507,6 +3507,31 @@ def _print_stack_home_order_summary(current: Mapping[str, object]) -> None:
                     f"offset {current_text} -> {expected_text} "
                     f"({offset_sign}{offset_delta})"
                 )
+            permutation = current.get("stack_home_target_permutation")
+            if (
+                isinstance(permutation, Mapping)
+                and permutation.get("status") == "computed"
+                and permutation.get("needs_permutation")
+            ):
+                current_order = permutation.get("current_offset_order")
+                expected_order = permutation.get("expected_offset_order")
+                if isinstance(current_order, list) and isinstance(expected_order, list):
+                    print(
+                        "target permutation: "
+                        f"{', '.join(str(item) for item in current_order)} -> "
+                        f"{', '.join(str(item) for item in expected_order)}"
+                    )
+                cycles = permutation.get("cycles")
+                if isinstance(cycles, list):
+                    for cycle in cycles[:3]:
+                        if not isinstance(cycle, Mapping):
+                            continue
+                        symbols = cycle.get("symbols")
+                        if isinstance(symbols, list) and symbols:
+                            print(
+                                "  cycle: "
+                                + " -> ".join(str(symbol) for symbol in symbols)
+                            )
     guidance = current.get("stack_home_reorder_guidance")
     if not isinstance(guidance, Mapping):
         return

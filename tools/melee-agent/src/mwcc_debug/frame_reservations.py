@@ -297,6 +297,9 @@ def _analyze_instructions(
     stack_home_expected_order_summary = _stack_home_expected_order_summary(
         stack_home_assignments
     )
+    stack_home_target_permutation = _stack_home_target_permutation(
+        stack_home_expected_order_summary
+    )
 
     return {
         "frame_size": frame_size,
@@ -316,6 +319,7 @@ def _analyze_instructions(
         ),
         "stack_home_order_summary": stack_home_order_summary,
         "stack_home_expected_order_summary": stack_home_expected_order_summary,
+        "stack_home_target_permutation": stack_home_target_permutation,
         "stack_home_reorder_guidance": _stack_home_reorder_guidance(
             stack_home_order_summary,
             expected_order_summary=stack_home_expected_order_summary,
@@ -599,6 +603,107 @@ def _stack_home_expected_order_summary(assignments: list[dict]) -> dict:
         "max_abs_expected_order_delta": max_abs_order_delta,
         "max_abs_offset_delta": max_abs_offset_delta,
         "assignments": rows,
+    }
+
+
+def _stack_home_target_permutation(expected_order_summary: dict) -> dict:
+    if expected_order_summary.get("status") != "computed":
+        return {
+            "status": "unavailable-no-expected-symbolic-homes",
+            "needs_permutation": False,
+            "symbol_count": 0,
+            "misplaced_count": 0,
+            "current_offset_order": [],
+            "expected_offset_order": [],
+            "expected_to_current_positions": [],
+            "moves": [],
+            "cycles": [],
+        }
+
+    rows = [
+        row for row in expected_order_summary.get("assignments") or []
+        if isinstance(row, dict)
+    ]
+    current_rows = sorted(
+        rows,
+        key=lambda row: (
+            row.get("current_offset_order"),
+            row.get("symbol"),
+        ),
+    )
+    expected_rows = sorted(
+        rows,
+        key=lambda row: (
+            row.get("expected_offset_order"),
+            row.get("symbol"),
+        ),
+    )
+    current_order = [str(row["symbol"]) for row in current_rows]
+    expected_order = [str(row["symbol"]) for row in expected_rows]
+    current_position_by_symbol = {
+        symbol: position for position, symbol in enumerate(current_order)
+    }
+    expected_position_by_symbol = {
+        symbol: position for position, symbol in enumerate(expected_order)
+    }
+
+    moves: list[dict] = []
+    for row in expected_rows:
+        symbol = str(row["symbol"])
+        current_position = current_position_by_symbol[symbol]
+        expected_position = expected_position_by_symbol[symbol]
+        moves.append({
+            "symbol": symbol,
+            "current_position": current_position,
+            "expected_position": expected_position,
+            "position_delta": expected_position - current_position,
+            "current_offset": row.get("offset"),
+            "expected_offset": row.get("expected_offset"),
+            "offset_delta": row.get("offset_delta"),
+        })
+
+    current_to_expected_position = {
+        current_position_by_symbol[symbol]: expected_position_by_symbol[symbol]
+        for symbol in current_order
+    }
+    cycles: list[dict] = []
+    visited: set[int] = set()
+    for start in range(len(current_order)):
+        if start in visited:
+            continue
+        cycle_positions: list[int] = []
+        position = start
+        while position not in visited:
+            visited.add(position)
+            cycle_positions.append(position)
+            position = current_to_expected_position[position]
+        if len(cycle_positions) <= 1:
+            continue
+        cycles.append({
+            "symbols": [current_order[position] for position in cycle_positions],
+            "current_positions": cycle_positions,
+            "expected_positions": [
+                current_to_expected_position[position]
+                for position in cycle_positions
+            ],
+        })
+
+    return {
+        "status": "computed",
+        "needs_permutation": current_order != expected_order,
+        "symbol_count": len(current_order),
+        "misplaced_count": sum(
+            1 for move in moves
+            if move["current_position"] != move["expected_position"]
+        ),
+        "current_offset_order": current_order,
+        "expected_offset_order": expected_order,
+        "expected_to_current_positions": [
+            current_position_by_symbol[symbol]
+            for symbol in expected_order
+        ],
+        "moves": moves,
+        "cycles": cycles,
     }
 
 

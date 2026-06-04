@@ -352,6 +352,8 @@ def test_frame_reservations_cli_text_reports_expected_stack_home_offsets(
         "a: assign #0, target offset #0, target order delta 0, "
         "offset 0x30 -> 0x28 (+8)"
     ) in out
+    assert "target permutation: c, a, b -> a, c, b" in out
+    assert "cycle: c -> a" in out
     assert "reorder verdict: unknown-unvalidated" in out
 
 
