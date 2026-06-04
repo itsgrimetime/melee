@@ -516,6 +516,50 @@ def test_frame_reservation_resolves_named_local_stack_homes_from_current_asm() -
             },
         },
     ]
+    assert report["current"]["stack_home_order_summary"] == {
+        "status": "computed",
+        "has_order_mismatch": True,
+        "assignment_count": 4,
+        "max_abs_order_delta": 2,
+        "assignments": [
+            {
+                "symbol": "lenCol+8",
+                "assignment_order": 0,
+                "offset_order": 1,
+                "order_delta": 1,
+                "offset": 0x30,
+                "size": 4,
+                "kind": "local-or-temporary",
+            },
+            {
+                "symbol": "lenCol+12",
+                "assignment_order": 1,
+                "offset_order": 2,
+                "order_delta": 1,
+                "offset": 0x34,
+                "size": 4,
+                "kind": "local-or-temporary",
+            },
+            {
+                "symbol": "q3",
+                "assignment_order": 2,
+                "offset_order": 0,
+                "order_delta": -2,
+                "offset": 0x28,
+                "size": 4,
+                "kind": "local-or-temporary",
+            },
+            {
+                "symbol": "nxt",
+                "assignment_order": 3,
+                "offset_order": 3,
+                "order_delta": 0,
+                "offset": 0x40,
+                "size": 4,
+                "kind": "local-or-temporary",
+            },
+        ],
+    }
     assert report["extra_low_frame_reservation"] is None
 
 
@@ -580,3 +624,29 @@ def test_frame_reservation_stack_home_assignment_merges_repeated_accesses() -> N
             },
         },
     ]
+    assert report["current"]["stack_home_order_summary"] == {
+        "status": "computed",
+        "has_order_mismatch": False,
+        "assignment_count": 2,
+        "max_abs_order_delta": 0,
+        "assignments": [
+            {
+                "symbol": "tmp",
+                "assignment_order": 0,
+                "offset_order": 0,
+                "order_delta": 0,
+                "offset": 0x30,
+                "size": 4,
+                "kind": "local-or-temporary",
+            },
+            {
+                "symbol": "cursor",
+                "assignment_order": 1,
+                "offset_order": 1,
+                "order_delta": 0,
+                "offset": 0x34,
+                "size": 4,
+                "kind": "local-or-temporary",
+            },
+        ],
+    }

@@ -300,6 +300,9 @@ def _analyze_instructions(
             if stack_home_assignments
             else "unavailable-no-resolved-symbolic-homes"
         ),
+        "stack_home_order_summary": _stack_home_order_summary(
+            stack_home_assignments
+        ),
         "symbolic_home_map": [
             {"symbol": symbol, "offset": offset}
             for symbol, offset in sorted(symbolic_offsets.items())
@@ -443,6 +446,52 @@ def _stack_home_assignments(access_traces: list[dict]) -> list[dict]:
             "first_access": item["first_access"],
         })
     return out
+
+
+def _stack_home_order_summary(assignments: list[dict]) -> dict:
+    if not assignments:
+        return {
+            "status": "unavailable-no-resolved-symbolic-homes",
+            "has_order_mismatch": False,
+            "assignment_count": 0,
+            "max_abs_order_delta": 0,
+            "assignments": [],
+        }
+    offset_order_by_symbol = {
+        item["symbol"]: offset_order
+        for offset_order, item in enumerate(sorted(
+            assignments,
+            key=lambda item: (
+                item.get("offset"),
+                item.get("size"),
+                item.get("assignment_order"),
+                item.get("symbol"),
+            ),
+        ))
+    }
+    rows: list[dict] = []
+    max_abs_delta = 0
+    for item in assignments:
+        assignment_order = int(item["assignment_order"])
+        offset_order = offset_order_by_symbol[item["symbol"]]
+        order_delta = offset_order - assignment_order
+        max_abs_delta = max(max_abs_delta, abs(order_delta))
+        rows.append({
+            "symbol": item["symbol"],
+            "assignment_order": assignment_order,
+            "offset_order": offset_order,
+            "order_delta": order_delta,
+            "offset": item["offset"],
+            "size": item["size"],
+            "kind": item["kind"],
+        })
+    return {
+        "status": "computed",
+        "has_order_mismatch": any(row["order_delta"] for row in rows),
+        "assignment_count": len(rows),
+        "max_abs_order_delta": max_abs_delta,
+        "assignments": rows,
+    }
 
 
 def _first_stack_object_divergence(

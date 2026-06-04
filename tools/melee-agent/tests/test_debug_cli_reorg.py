@@ -204,6 +204,32 @@ def test_frame_reservations_cli_reports_stack_home_assignments(
         "lfs",
         "stfs",
     ]
+    assert payload["current"]["stack_home_order_summary"] == {
+        "status": "computed",
+        "has_order_mismatch": False,
+        "assignment_count": 2,
+        "max_abs_order_delta": 0,
+        "assignments": [
+            {
+                "symbol": "tmp",
+                "assignment_order": 0,
+                "offset_order": 0,
+                "order_delta": 0,
+                "offset": 0x30,
+                "size": 4,
+                "kind": "local-or-temporary",
+            },
+            {
+                "symbol": "cursor",
+                "assignment_order": 1,
+                "offset_order": 1,
+                "order_delta": 0,
+                "offset": 0x34,
+                "size": 4,
+                "kind": "local-or-temporary",
+            },
+        ],
+    }
 
 
 def test_frame_reservations_cli_reports_current_low_expansion(tmp_path: Path) -> None:
