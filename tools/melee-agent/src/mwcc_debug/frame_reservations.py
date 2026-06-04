@@ -269,6 +269,13 @@ def _analyze_instructions(
     if frame_size is not None and frame_size >= 8:
         implicit.append({"start": 0, "end": 8, "size": 8, "kind": "abi-header"})
     unused = _unused_ranges(frame_size, [*used, *implicit])
+    stack_objects = _stack_objects(
+        frame_size=frame_size,
+        access_ranges=used,
+        implicit_ranges=implicit,
+        unused_ranges=unused,
+        access_traces=access_traces,
+    )
 
     return {
         "frame_size": frame_size,
@@ -278,12 +285,89 @@ def _analyze_instructions(
         ),
         "accesses": access_traces,
         "unused_ranges": unused,
+        "stack_objects": stack_objects,
+        "stack_object_map_status": "best-effort-from-r1-accesses",
         "symbolic_home_map": [
             {"symbol": symbol, "offset": offset}
             for symbol, offset in sorted(symbolic_offsets.items())
         ],
         "unresolved_symbolic_homes": unresolved_symbolic_homes,
     }
+
+
+def _stack_objects(
+    *,
+    frame_size: int | None,
+    access_ranges: list[dict],
+    implicit_ranges: list[dict],
+    unused_ranges: list[dict],
+    access_traces: list[dict],
+) -> list[dict]:
+    objects: list[dict] = []
+    access_count_by_range: dict[tuple[int, int, str], int] = {}
+    opcodes_by_range: dict[tuple[int, int, str], set[str]] = {}
+    for trace in access_traces:
+        if trace.get("pre_frame"):
+            continue
+        offset = trace.get("offset")
+        size = trace.get("size")
+        kind = trace.get("kind")
+        if offset is None or size is None or kind is None:
+            continue
+        start = max(0, offset)
+        end = offset + size
+        if frame_size is not None:
+            if not (0 <= offset < frame_size):
+                continue
+            end = min(end, frame_size)
+        if end <= start:
+            continue
+        key = (start, end, kind)
+        access_count_by_range[key] = access_count_by_range.get(key, 0) + 1
+        opcodes_by_range.setdefault(key, set()).add(str(trace.get("opcode") or ""))
+
+    for item in implicit_ranges:
+        objects.append({
+            "start": item["start"],
+            "end": item["end"],
+            "size": item["size"],
+            "kind": item["kind"],
+            "source": "implicit",
+            "boundary_confidence": "implicit",
+            "ambiguous": False,
+        })
+    for item in access_ranges:
+        key = (item["start"], item["end"], item["kind"])
+        objects.append({
+            "start": item["start"],
+            "end": item["end"],
+            "size": item["size"],
+            "kind": item["kind"],
+            "source": "r1-access",
+            "boundary_confidence": "access-width",
+            "ambiguous": False,
+            "access_count": access_count_by_range.get(key, 0),
+            "opcodes": sorted(op for op in opcodes_by_range.get(key, set()) if op),
+        })
+    for item in unused_ranges:
+        objects.append({
+            "start": item["start"],
+            "end": item["end"],
+            "size": item["size"],
+            "kind": "unused",
+            "source": "gap",
+            "boundary_confidence": "unused-gap",
+            "ambiguous": False,
+        })
+    return sorted(
+        objects,
+        key=lambda item: (
+            item["start"],
+            item["end"],
+            item["kind"] != "unused",
+            item["kind"],
+        ),
+    )
 
 
 def _resolve_symbolic_stack_homes(

@@ -28,6 +28,62 @@ def test_analyze_frame_from_asm_text_accepts_checkdiff_lines() -> None:
     } in frame["access_ranges"]
 
 
+def test_expected_frame_model_exposes_stack_objects_from_target_asm() -> None:
+    frame = analyze_frame_from_asm_text(textwrap.dedent("""\
+        .fn fn_80000000, global
+        /* 80000000 */    stwu    r1,-0x38(r1)
+        /* 80000004 */    stw     r0,0x4(r1)
+        /* 80000008 */    stw     r8,0x18(r1)
+        /* 8000000c */    lfs     f0,0x20(r1)
+        /* 80000010 */    stmw    r28,0x28(r1)
+        /* 80000014 */    addi    r1,r1,0x38
+        .endfn fn_80000000
+    """))
+
+    assert frame["frame_size"] == 0x38
+    assert frame["stack_object_map_status"] == "best-effort-from-r1-accesses"
+    assert {
+        "start": 0,
+        "end": 8,
+        "size": 8,
+        "kind": "abi-header",
+        "source": "implicit",
+        "boundary_confidence": "implicit",
+        "ambiguous": False,
+    } in frame["stack_objects"]
+    assert {
+        "start": 0x18,
+        "end": 0x1C,
+        "size": 4,
+        "kind": "local-or-temporary",
+        "source": "r1-access",
+        "boundary_confidence": "access-width",
+        "ambiguous": False,
+        "access_count": 1,
+        "opcodes": ["stw"],
+    } in frame["stack_objects"]
+    assert {
+        "start": 0x28,
+        "end": 0x38,
+        "size": 0x10,
+        "kind": "callee-save-gpr",
+        "source": "r1-access",
+        "boundary_confidence": "access-width",
+        "ambiguous": False,
+        "access_count": 1,
+        "opcodes": ["stmw"],
+    } in frame["stack_objects"]
+    assert {
+        "start": 8,
+        "end": 0x18,
+        "size": 0x10,
+        "kind": "unused",
+        "source": "gap",
+        "boundary_confidence": "unused-gap",
+        "ambiguous": False,
+    } in frame["stack_objects"]
+
+
 def test_frame_reservation_report_finds_extra_unused_low_frame_gap() -> None:
     pcdump = textwrap.dedent("""\
         Starting function grIceMt_801F9ACC
