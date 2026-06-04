@@ -3625,6 +3625,7 @@ def _print_frame_reservation_report(report: dict) -> None:
                 )
             elif status:
                 print(f"first frame-model change: {status}")
+    _print_frame_allocation_trace_summary(current.get("frame_allocation_trace"))
     _print_unused_ranges("current", current.get("unused_ranges", []))
     if expected is not None:
         _print_unused_ranges("expected", expected.get("unused_ranges", []))
@@ -3785,6 +3786,61 @@ def _print_frame_reservation_report(report: dict) -> None:
             f"  {access.get('opcode')} {access.get('operands')} "
             f"at 0x{int(access['offset']):x} "
             f"({access.get('kind')})"
+        )
+
+
+def _print_frame_allocation_trace_summary(trace: object) -> None:
+    if not isinstance(trace, Mapping):
+        return
+    status = trace.get("status")
+    object_count = trace.get("object_count")
+    count_text = (
+        f" ({object_count} object(s))"
+        if isinstance(object_count, int)
+        else ""
+    )
+    print(f"frame allocation trace: {status}{count_text}")
+    allocator_status = trace.get("allocator_pass_status")
+    if allocator_status:
+        print(f"allocator pass: {allocator_status}")
+    validation = trace.get("validation")
+    if isinstance(validation, Mapping):
+        frame_status = (
+            "ok" if validation.get("frame_size_matches") is True else "mismatch"
+        )
+        full_layout_status = (
+            "ok"
+            if validation.get("full_interval_coverage_matches") is True
+            else "mismatch"
+        )
+        non_overlap_status = (
+            "ok"
+            if validation.get("object_non_overlap_matches") is True
+            else "mismatch"
+        )
+        access_status = (
+            "ok"
+            if validation.get("r1_access_coverage_matches") is True
+            else "mismatch"
+        )
+        print(
+            "frame allocation validation: "
+            f"frame-size {frame_status}, full-layout {full_layout_status}, "
+            f"non-overlap {non_overlap_status}, "
+            f"r1-access coverage {access_status}"
+        )
+    objects = trace.get("objects")
+    if not isinstance(objects, list):
+        return
+    for obj in objects[:6]:
+        if not isinstance(obj, Mapping):
+            continue
+        layout_order = obj.get("layout_order")
+        origin_tag = obj.get("origin_tag")
+        label = obj.get("symbol") or obj.get("kind")
+        print(
+            f"  #{layout_order} {origin_tag} "
+            f"{_format_stack_range(obj)} {label}"
         )
 
 

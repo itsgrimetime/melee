@@ -145,7 +145,51 @@ def test_frame_reservations_cli_reports_extra_low_gap(tmp_path: Path) -> None:
         "origin": "implicit-frame-reservation",
         "current_accesses_in_range": [],
     }
+    trace = payload["current"]["frame_allocation_trace"]
+    assert trace["status"] == "computed"
+    assert trace["allocator_pass_status"] == "not-located"
+    assert "reconstructed from final pcdump/asm r1 offsets" in (
+        trace["allocator_pass_status_reason"]
+    )
+    assert trace["validation"]["frame_size_matches"] is True
+    assert "objects" in trace
     assert "no current pcode stack access" in payload["summary"]
+
+
+def test_frame_reservations_cli_text_reports_allocation_trace(tmp_path: Path) -> None:
+    pcdump = tmp_path / "pcdump.txt"
+    pcdump.write_text(textwrap.dedent("""\
+        Starting function fn_80000000
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        fn_80000000
+        B0: Succ={} Pred={} Labels={}
+            stwu r1,-56(r1)
+            stw r8,24(r1)
+            stmw r28,40(r1)
+            addi r1,r1,56
+    """))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "frame-reservations",
+            "-f",
+            "fn_80000000",
+            str(pcdump),
+            "--no-expected",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "frame allocation trace: computed" in result.stdout
+    assert "allocator pass: not-located" in result.stdout
+    assert (
+        "frame allocation validation: frame-size ok, full-layout ok, "
+        "non-overlap ok, r1-access coverage ok"
+        in result.stdout
+    )
 
 
 def test_frame_reservations_cli_reports_stack_home_assignments(

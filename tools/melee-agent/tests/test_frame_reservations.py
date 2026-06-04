@@ -128,6 +128,121 @@ def test_frame_reservation_report_exposes_pass_frame_timeline() -> None:
     assert timeline["passes"][1]["object_signature_changed_from_previous"] is True
 
 
+def test_frame_allocation_trace_realizes_symbolic_stack_homes() -> None:
+    pcdump = textwrap.dedent("""\
+        Starting function fn_80000000
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        fn_80000000
+        B0: Succ={} Pred={} Labels={}
+            stwu r1,-56(r1)
+            stw r8,local_temp(r1)
+            stmw r28,40(r1)
+            addi r1,r1,56
+    """)
+    current_asm = textwrap.dedent("""\
+        .fn fn_80000000, global
+        /* 80000000 */    stwu r1, -0x38(r1)
+        /* 80000004 */    stw r8, 0x18(r1)
+        /* 80000008 */    stmw r28, 0x28(r1)
+        /* 8000000c */    addi r1, r1, 0x38
+        .endfn fn_80000000
+    """)
+
+    report = analyze_frame_reservations(
+        pcdump,
+        "fn_80000000",
+        current_asm_text=current_asm,
+    )
+
+    trace = report["current"]["frame_allocation_trace"]
+    assert trace["status"] == "computed"
+    assert trace["instrumentation_source"] == (
+        "pcdump-final-pass-and-emitted-r1-accesses"
+    )
+    assert trace["allocator_pass_status"] == "not-located"
+    assert "reconstructed from final pcdump/asm r1 offsets" in (
+        trace["allocator_pass_status_reason"]
+    )
+    assert trace["validation"]["frame_size_matches"] is True
+    assert trace["validation"]["uncovered_access_count"] == 0
+    assert trace["validation"]["r1_access_coverage_matches"] is True
+    assert trace["validation"]["symbolic_stack_homes_present"] is True
+    assert any(
+        obj["origin_tag"] == "symbolic-stack-home"
+        and obj["symbol"] == "local_temp"
+        and obj["start"] == 0x18
+        and obj["symbolic_assignment_order"] == 0
+        and isinstance(obj["layout_order"], int)
+        for obj in trace["objects"]
+    )
+    assert any(
+        "MWCC stack-frame allocator pass/symbol was not located" in item
+        for item in trace["limitations"]
+    )
+
+
+def test_frame_allocation_trace_preserves_aliased_symbolic_home_orders() -> None:
+    pcdump = textwrap.dedent("""\
+        Starting function fn_80000000
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        fn_80000000
+        B0: Succ={} Pred={} Labels={}
+            stwu r1,-40(r1)
+            stw r8,b_home(r1)
+            lwz r9,a_home(r1)
+            addi r1,r1,40
+    """)
+    current_asm = textwrap.dedent("""\
+        .fn fn_80000000, global
+        /* 80000000 */    stwu r1, -0x28(r1)
+        /* 80000004 */    stw r8, 0x18(r1)
+        /* 80000008 */    lwz r9, 0x18(r1)
+        /* 8000000c */    addi r1, r1, 0x28
+        .endfn fn_80000000
+    """)
+
+    report = analyze_frame_reservations(
+        pcdump,
+        "fn_80000000",
+        current_asm_text=current_asm,
+    )
+
+    symbolic_object = next(
+        obj
+        for obj in report["current"]["frame_allocation_trace"]["objects"]
+        if obj["origin_tag"] == "symbolic-stack-home"
+    )
+    assert symbolic_object["symbol"] == "b_home"
+    assert symbolic_object["symbolic_assignment_order"] == 0
+    assert symbolic_object["symbolic_assignment_orders"] == {
+        "b_home": 0,
+        "a_home": 1,
+    }
+
+
+def test_frame_allocation_trace_covers_raw_asm_objects_and_gaps() -> None:
+    frame = analyze_frame_from_asm_text(textwrap.dedent("""\
+        .fn fn_80000000, global
+        /* 80000000 */    stwu    r1,-0x38(r1)
+        /* 80000004 */    stw     r8,0x18(r1)
+        /* 80000008 */    stmw    r28,0x28(r1)
+        /* 8000000c */    addi    r1,r1,0x38
+        .endfn fn_80000000
+    """))
+
+    trace = frame["frame_allocation_trace"]
+    assert trace["status"] == "computed"
+    assert trace["instrumentation_source"] == "asm-r1-accesses"
+    assert trace["validation"]["frame_size_matches"] is True
+    assert trace["validation"]["uncovered_access_count"] == 0
+    assert {
+        "implicit-abi-header",
+        "r1-access-local-or-temporary",
+        "callee-save-gpr",
+        "frame-gap-or-alignment-pad",
+    } <= {obj["origin_tag"] for obj in trace["objects"]}
+
+
 def test_frame_reservation_report_finds_extra_unused_low_frame_gap() -> None:
     pcdump = textwrap.dedent("""\
         Starting function grIceMt_801F9ACC

@@ -67,7 +67,10 @@ def analyze_frame_reservations(
         expected_symbolic_offsets=expected_symbolic_offsets,
     )
     expected = (
-        _analyze_instructions(_parse_expected_asm(expected_asm_text))
+        _analyze_instructions(
+            _parse_expected_asm(expected_asm_text),
+            instrumentation_source="asm-r1-accesses",
+        )
         if expected_asm_text
         else None
     )
@@ -121,7 +124,10 @@ def analyze_frame_from_function(fn: Function) -> dict:
 
 def analyze_frame_from_asm_text(asm_text: str) -> dict:
     """Return a JSON-friendly frame model for raw target/checkdiff asm text."""
-    return _analyze_instructions(_parse_expected_asm(asm_text))
+    return _analyze_instructions(
+        _parse_expected_asm(asm_text),
+        instrumentation_source="asm-r1-accesses",
+    )
 
 
 def evaluate_stack_home_probe_results(
@@ -659,6 +665,7 @@ def _analyze_instructions(
     *,
     symbolic_offsets: dict[str, int] | None = None,
     expected_symbolic_offsets: dict[str, int] | None = None,
+    instrumentation_source: str = "pcdump-final-pass-and-emitted-r1-accesses",
 ) -> dict:
     frame_size = _frame_size(instructions)
     access_ranges: dict[tuple[int, int, str], dict] = {}
@@ -759,7 +766,7 @@ def _analyze_instructions(
         stack_home_expected_order_summary
     )
 
-    return {
+    frame = {
         "frame_size": frame_size,
         "access_ranges": sorted(
             used,
@@ -793,6 +800,11 @@ def _analyze_instructions(
         ],
         "unresolved_symbolic_homes": unresolved_symbolic_homes,
     }
+    frame["frame_allocation_trace"] = _frame_allocation_trace(
+        frame,
+        instrumentation_source=instrumentation_source,
+    )
+    return frame
 
 
 def _stack_objects(
@@ -899,6 +911,285 @@ def _stack_objects(
             item["kind"],
         ),
     )
+
+
+def _frame_allocation_trace(
+    frame: dict,
+    *,
+    instrumentation_source: str,
+) -> dict:
+    frame_size = frame.get("frame_size")
+    if not isinstance(frame_size, int):
+        return {
+            "status": "unavailable-no-frame-size",
+            "instrumentation_source": instrumentation_source,
+            "allocator_pass_status": "not-located",
+            "allocator_pass_status_reason": (
+                "MWCC stack-frame allocator pass/symbol was not located; "
+                "frame allocation trace could not be computed without a frame "
+                "size"
+            ),
+            "object_count": 0,
+            "objects": [],
+            "validation": {
+                "frame_size": frame_size,
+                "covered_end": None,
+                "frame_size_matches": False,
+                "full_interval_coverage_matches": False,
+                "object_overlap_count": 0,
+                "object_non_overlap_matches": True,
+                "emitted_access_count": len(frame.get("access_ranges") or []),
+                "uncovered_accesses": [],
+                "uncovered_access_count": 0,
+                "r1_access_coverage_matches": False,
+                "symbolic_stack_homes_present": bool(
+                    frame.get("stack_home_assignments")
+                ),
+            },
+            "limitations": _frame_allocation_trace_limitations(
+                frame,
+                instrumentation_source=instrumentation_source,
+            ),
+        }
+
+    symbolic_order = {
+        str(item["symbol"]): int(item["assignment_order"])
+        for item in frame.get("stack_home_assignments") or []
+        if isinstance(item, dict)
+        and item.get("symbol")
+        and isinstance(item.get("assignment_order"), int)
+    }
+    objects = [
+        _frame_allocation_trace_object(item, symbolic_order)
+        for item in frame.get("stack_objects") or []
+        if isinstance(item, dict)
+    ]
+    objects = [
+        item for item in objects
+        if isinstance(item.get("start"), int)
+        and isinstance(item.get("end"), int)
+        and int(item["end"]) > int(item["start"])
+    ]
+    objects.sort(
+        key=lambda item: (
+            int(item["start"]),
+            int(item["end"]),
+            _allocation_origin_sort_key(str(item.get("origin_tag") or "")),
+            str(item.get("symbol") or ""),
+            str(item.get("kind") or ""),
+        )
+    )
+    for index, item in enumerate(objects):
+        item["layout_order"] = index
+
+    validation = _frame_allocation_validation(frame, objects)
+    return {
+        "status": "computed",
+        "instrumentation_source": instrumentation_source,
+        "allocator_pass_status": "not-located",
+        "allocator_pass_status_reason": (
+            "MWCC stack-frame allocator pass/symbol was not located; this "
+            "trace is reconstructed from final pcdump/asm r1 offsets"
+        ),
+        "object_count": len(objects),
+        "objects": objects,
+        "validation": validation,
+        "limitations": _frame_allocation_trace_limitations(
+            frame,
+            instrumentation_source=instrumentation_source,
+        ),
+    }
+
+
+def _frame_allocation_trace_object(
+    obj: dict,
+    symbolic_order: dict[str, int],
+) -> dict:
+    out = {
+        "layout_order": None,
+        "start": obj.get("start"),
+        "end": obj.get("end"),
+        "size": obj.get("size"),
+        "kind": obj.get("kind"),
+        "origin_tag": _allocation_origin_tag(obj),
+        "source": obj.get("source"),
+    }
+
+    source_symbols = _object_source_symbols(obj)
+    if source_symbols:
+        out["source_symbols"] = source_symbols
+        ordered_symbols = sorted(
+            source_symbols,
+            key=lambda symbol: (
+                symbolic_order.get(symbol, 1_000_000),
+                symbol,
+            ),
+        )
+        out["symbol"] = ordered_symbols[0]
+        symbolic_assignment_orders = {
+            symbol: symbolic_order[symbol]
+            for symbol in ordered_symbols
+            if symbol in symbolic_order
+        }
+        if symbolic_assignment_orders:
+            out["symbolic_assignment_order"] = next(
+                iter(symbolic_assignment_orders.values())
+            )
+            out["symbolic_assignment_orders"] = symbolic_assignment_orders
+
+    for key in (
+        "expected_source_symbols",
+        "expected_source_offsets",
+        "access_count",
+        "opcodes",
+        "first_access",
+        "boundary_confidence",
+        "ambiguous",
+    ):
+        if key in obj:
+            out[key] = obj[key]
+    return out
+
+
+def _allocation_origin_tag(obj: dict) -> str:
+    kind = obj.get("kind")
+    if kind == "abi-header":
+        return "implicit-abi-header"
+    if kind == "callee-save-gpr":
+        return "callee-save-gpr"
+    if kind == "callee-save-fpr":
+        return "callee-save-fpr"
+    if kind == "unused":
+        return "frame-gap-or-alignment-pad"
+    if _object_source_symbols(obj):
+        return "symbolic-stack-home"
+    if obj.get("source") == "r1-access":
+        return "r1-access-local-or-temporary"
+    return f"{obj.get('source') or 'unknown'}-{kind or 'stack-object'}"
+
+
+def _allocation_origin_sort_key(origin_tag: str) -> int:
+    order = {
+        "implicit-abi-header": 0,
+        "symbolic-stack-home": 1,
+        "r1-access-local-or-temporary": 2,
+        "callee-save-gpr": 3,
+        "callee-save-fpr": 4,
+        "frame-gap-or-alignment-pad": 5,
+    }
+    return order.get(origin_tag, 99)
+
+
+def _frame_allocation_validation(frame: dict, objects: list[dict]) -> dict:
+    frame_size = frame.get("frame_size")
+    intervals = [
+        (int(obj["start"]), int(obj["end"]), obj)
+        for obj in objects
+        if isinstance(obj.get("start"), int) and isinstance(obj.get("end"), int)
+    ]
+    intervals.sort(key=lambda item: (item[0], item[1]))
+    gaps: list[dict] = []
+    overlaps: list[dict] = []
+    cursor = 0
+    covered_end = 0
+    if isinstance(frame_size, int):
+        for start, end, obj in intervals:
+            clipped_start = max(0, min(start, frame_size))
+            clipped_end = max(0, min(end, frame_size))
+            if clipped_end <= clipped_start:
+                continue
+            if clipped_start > cursor:
+                gaps.append({
+                    "start": cursor,
+                    "end": clipped_start,
+                    "size": clipped_start - cursor,
+                })
+                cursor = clipped_start
+            elif clipped_start < cursor:
+                overlaps.append({
+                    "start": clipped_start,
+                    "end": min(cursor, clipped_end),
+                    "size": min(cursor, clipped_end) - clipped_start,
+                    "object": {
+                        "layout_order": obj.get("layout_order"),
+                        "origin_tag": obj.get("origin_tag"),
+                        "kind": obj.get("kind"),
+                    },
+                })
+            cursor = max(cursor, clipped_end)
+            covered_end = max(covered_end, clipped_end)
+        if cursor < frame_size:
+            gaps.append({"start": cursor, "end": frame_size, "size": frame_size - cursor})
+
+    uncovered_accesses = [
+        dict(access)
+        for access in frame.get("access_ranges") or []
+        if isinstance(access, dict)
+        and not _access_range_covered_by_objects(access, objects)
+    ]
+    full_interval_coverage_matches = (
+        isinstance(frame_size, int)
+        and not gaps
+        and covered_end == frame_size
+    )
+    return {
+        "frame_size": frame_size,
+        "covered_end": covered_end if isinstance(frame_size, int) else None,
+        "frame_size_matches": full_interval_coverage_matches,
+        "full_interval_coverage_matches": full_interval_coverage_matches,
+        "coverage_gaps": gaps,
+        "coverage_gap_count": len(gaps),
+        "object_overlaps": overlaps,
+        "object_overlap_count": len(overlaps),
+        "object_non_overlap_matches": not overlaps,
+        "emitted_access_count": len(frame.get("access_ranges") or []),
+        "uncovered_accesses": uncovered_accesses,
+        "uncovered_access_count": len(uncovered_accesses),
+        "r1_access_coverage_matches": not uncovered_accesses,
+        "symbolic_stack_homes_present": bool(frame.get("stack_home_assignments")),
+    }
+
+
+def _access_range_covered_by_objects(access: dict, objects: list[dict]) -> bool:
+    start = access.get("start")
+    end = access.get("end")
+    if not isinstance(start, int) or not isinstance(end, int):
+        return False
+    for obj in objects:
+        obj_start = obj.get("start")
+        obj_end = obj.get("end")
+        if (
+            isinstance(obj_start, int)
+            and isinstance(obj_end, int)
+            and obj_start <= start
+            and end <= obj_end
+        ):
+            return True
+    return False
+
+
+def _frame_allocation_trace_limitations(
+    frame: dict,
+    *,
+    instrumentation_source: str,
+) -> list[str]:
+    limitations = [
+        (
+            "MWCC stack-frame allocator pass/symbol was not located; trace is "
+            "reconstructed from final pcdump/asm artifacts"
+        )
+    ]
+    if not frame.get("stack_home_assignments"):
+        limitations.append(
+            "No resolved symbolic stack homes were available; access-only "
+            "objects keep conservative local-or-temporary origin tags"
+        )
+    if instrumentation_source == "asm-r1-accesses":
+        limitations.append(
+            "Raw asm input has final r1 offsets only; pcdump symbolic-home "
+            "sequence is unavailable"
+        )
+    return limitations
 
 
 def _stack_home_assignments(
