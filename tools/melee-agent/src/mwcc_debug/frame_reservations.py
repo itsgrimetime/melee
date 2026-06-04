@@ -188,6 +188,12 @@ def _materialize_stack_home_probe_commands(report: dict) -> None:
     function = report.get("function")
     if not isinstance(function, str) or not function:
         return
+    first_divergence = report.get("frame_first_divergence")
+    if isinstance(first_divergence, dict):
+        plan = first_divergence.get("frame_transform_probe_plan")
+        if isinstance(plan, dict):
+            _materialize_probe_plan_commands(plan, function)
+
     current = report.get("current")
     if not isinstance(current, dict):
         return
@@ -202,6 +208,10 @@ def _materialize_stack_home_probe_commands(report: dict) -> None:
     probe_plan = guidance.get("probe_plan")
     if not isinstance(probe_plan, dict):
         return
+    _materialize_probe_plan_commands(probe_plan, function)
+
+
+def _materialize_probe_plan_commands(probe_plan: dict, function: str) -> None:
     commands = []
     for item in probe_plan.get("suggested_commands") or []:
         if not isinstance(item, dict):
@@ -214,6 +224,16 @@ def _materialize_stack_home_probe_commands(report: dict) -> None:
         updated["command"] = _materialize_function_placeholder(command, function)
         commands.append(updated)
     probe_plan["suggested_commands"] = commands
+    validation = probe_plan.get("validation")
+    if isinstance(validation, dict):
+        command = validation.get("command")
+        if isinstance(command, str):
+            updated_validation = dict(validation)
+            updated_validation["command"] = _materialize_function_placeholder(
+                command,
+                function,
+            )
+            probe_plan["validation"] = updated_validation
 
 
 def _materialize_function_placeholder(command: str, function: str) -> str:
@@ -444,6 +464,7 @@ def _analyze_instructions(
         implicit_ranges=implicit,
         unused_ranges=unused,
         access_traces=access_traces,
+        expected_symbolic_offsets=expected_symbolic_offsets,
     )
     stack_home_assignments = _stack_home_assignments(
         access_traces,
@@ -500,10 +521,13 @@ def _stack_objects(
     implicit_ranges: list[dict],
     unused_ranges: list[dict],
     access_traces: list[dict],
+    expected_symbolic_offsets: dict[str, int],
 ) -> list[dict]:
     objects: list[dict] = []
     access_count_by_range: dict[tuple[int, int, str], int] = {}
     opcodes_by_range: dict[tuple[int, int, str], set[str]] = {}
+    symbols_by_range: dict[tuple[int, int, str], set[str]] = {}
+    expected_symbols_by_range: dict[tuple[int, int, str], set[str]] = {}
     for trace in access_traces:
         if trace.get("pre_frame"):
             continue
@@ -523,6 +547,11 @@ def _stack_objects(
         key = (start, end, kind)
         access_count_by_range[key] = access_count_by_range.get(key, 0) + 1
         opcodes_by_range.setdefault(key, set()).add(str(trace.get("opcode") or ""))
+        symbol = trace.get("symbolic_home")
+        if isinstance(symbol, str) and symbol:
+            symbols_by_range.setdefault(key, set()).add(symbol)
+            if symbol in expected_symbolic_offsets:
+                expected_symbols_by_range.setdefault(key, set()).add(symbol)
 
     for item in implicit_ranges:
         objects.append({
@@ -536,7 +565,7 @@ def _stack_objects(
         })
     for item in access_ranges:
         key = (item["start"], item["end"], item["kind"])
-        objects.append({
+        obj = {
             "start": item["start"],
             "end": item["end"],
             "size": item["size"],
@@ -546,7 +575,14 @@ def _stack_objects(
             "ambiguous": False,
             "access_count": access_count_by_range.get(key, 0),
             "opcodes": sorted(op for op in opcodes_by_range.get(key, set()) if op),
-        })
+        }
+        source_symbols = sorted(symbols_by_range.get(key, set()))
+        if source_symbols:
+            obj["source_symbols"] = source_symbols
+        expected_source_symbols = sorted(expected_symbols_by_range.get(key, set()))
+        if expected_source_symbols:
+            obj["expected_source_symbols"] = expected_source_symbols
+        objects.append(obj)
     for item in unused_ranges:
         objects.append({
             "start": item["start"],
@@ -1172,18 +1208,20 @@ def _first_stack_object_divergence(
             "reason": _stack_object_divergence_reason(cur, exp),
             "current": cur,
             "expected": exp,
-            "source_attribution": _heuristic_source_attribution(cause),
+            "source_attribution": _source_attribution(cur, exp),
             "cause_hypothesis": cause,
             "verdict": _frame_divergence_verdict(cause),
+            "frame_transform_probe_plan": _frame_transform_probe_plan(cause),
         }
     if frame_delta:
         cause = _frame_size_only_cause_hypothesis(frame_delta)
         return {
             "status": "frame-size-only",
             "frame_delta": frame_delta,
-            "source_attribution": _heuristic_source_attribution(cause),
+            "source_attribution": _source_attribution(None, None),
             "cause_hypothesis": cause,
             "verdict": _frame_divergence_verdict(cause),
+            "frame_transform_probe_plan": _frame_transform_probe_plan(cause),
         }
     return {"status": "matched"}
 
@@ -1273,7 +1311,110 @@ def _frame_size_only_cause_hypothesis(frame_delta: int) -> dict:
     }
 
 
-def _heuristic_source_attribution(cause: dict) -> dict:
+def _frame_transform_probe_plan(cause: dict) -> dict:
+    kind = str(cause.get("kind") or "unknown")
+    if cause.get("status") != "heuristic":
+        return {
+            "status": "unavailable",
+            "objective": "reduce frame/local-area divergence toward expected",
+            "cause_kind": kind,
+            "reason": "frame divergence cause has not been classified heuristically",
+            "operator_priority": [],
+            "suggested_commands": [],
+        }
+
+    operators = _frame_transform_operator_priority(kind)
+    operator_flags = " ".join(f"--operator {operator}" for operator in operators)
+    return {
+        "status": "ready",
+        "objective": "reduce frame/local-area divergence toward expected",
+        "cause_kind": kind,
+        "operator_priority": operators,
+        "suggested_commands": [
+            {
+                "kind": "suggest-frame",
+                "command": "melee-agent debug suggest frame -f <function> --json",
+            },
+            {
+                "kind": "lifetime-layout",
+                "command": (
+                    "melee-agent debug mutate lifetime-layout -f <function> "
+                    f"{operator_flags} --compile-probes --json"
+                ),
+            },
+            {
+                "kind": "tier3-frame-search",
+                "command": "melee-agent debug mutate search -f <function> --budget 5",
+            },
+        ],
+        "validation": {
+            "status": "required",
+            "command": (
+                "melee-agent debug inspect frame-reservations -f <function> "
+                "--expected-asm <expected.s> --probe-results-json "
+                "<lifetime-layout.json> --json"
+            ),
+        },
+    }
+
+
+def _frame_transform_operator_priority(cause_kind: str) -> list[str]:
+    if cause_kind == "stack-object-offset-shift":
+        return [
+            "declaration-use-distance",
+            "block-scope",
+            "frame-direct-literal-at-final-fp-call",
+            "frame-split-fp-const-lifetime",
+        ]
+    if cause_kind == "extra-frame-reservation-or-alignment":
+        return [
+            "frame-magic-scratch-relocation",
+            "frame-split-fp-const-lifetime",
+            "declaration-use-distance",
+            "block-scope",
+        ]
+    if cause_kind == "stack-object-size-or-alignment":
+        return [
+            "frame-split-fp-const-lifetime",
+            "frame-direct-literal-at-final-fp-call",
+            "declaration-use-distance",
+            "block-scope",
+        ]
+    if cause_kind in {
+        "extra-current-stack-object",
+        "missing-current-stack-object",
+    }:
+        return [
+            "declaration-use-distance",
+            "block-scope",
+            "call-argument-tempization",
+            "frame-directed",
+        ]
+    return [
+        "declaration-use-distance",
+        "block-scope",
+        "decl-orders",
+    ]
+
+
+def _source_attribution(
+    current: dict | None,
+    expected: dict | None,
+) -> dict:
+    current_symbols = _object_source_symbols(current)
+    expected_symbols = (
+        _object_expected_source_symbols(current) or _object_source_symbols(expected)
+    )
+    if current_symbols or expected_symbols:
+        return {
+            "status": "symbolic-stack-home",
+            "current_symbols": current_symbols,
+            "expected_symbols": expected_symbols,
+            "reason": (
+                "diverging stack object maps to resolved symbolic stack homes; "
+                "ObjObject identity is still unavailable"
+            ),
+        }
     return {
         "status": "heuristic-no-source-object",
         "reason": (
@@ -1281,6 +1422,24 @@ def _heuristic_source_attribution(cause: dict) -> dict:
             "identity requires MWCC stack-home origin instrumentation"
         ),
     }
+
+
+def _object_source_symbols(item: dict | None) -> list[str]:
+    if not isinstance(item, dict):
+        return []
+    symbols = item.get("source_symbols")
+    if not isinstance(symbols, list):
+        return []
+    return [str(symbol) for symbol in symbols if symbol]
+
+
+def _object_expected_source_symbols(item: dict | None) -> list[str]:
+    if not isinstance(item, dict):
+        return []
+    symbols = item.get("expected_source_symbols")
+    if not isinstance(symbols, list):
+        return []
+    return [str(symbol) for symbol in symbols if symbol]
 
 
 def _frame_divergence_verdict(cause: dict) -> dict:
@@ -1331,6 +1490,8 @@ def _occupied_stack_objects(frame: dict) -> list[dict]:
                 "source",
                 "boundary_confidence",
                 "ambiguous",
+                "source_symbols",
+                "expected_source_symbols",
             )
             if key in item
         }

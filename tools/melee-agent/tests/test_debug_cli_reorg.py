@@ -503,6 +503,13 @@ def test_frame_reservations_cli_reports_current_low_expansion(tmp_path: Path) ->
 
     assert result.exit_code == 0, result.stdout
     assert "cause: stack-object-offset-shift (medium)" in result.stdout
+    assert (
+        "frame probe operators: declaration-use-distance, block-scope, "
+        "frame-direct-literal-at-final-fp-call, frame-split-fp-const-lifetime"
+    ) in result.stdout
+    assert (
+        "next frame probe: melee-agent debug suggest frame -f gm_801A9DD0 --json"
+    ) in result.stdout
     assert "verdict: source-reachable-candidate" in result.stdout
     assert "current low-frame expansion: 0x18-0x1c (4 bytes)" in result.stdout
     assert "alignment growth bytes: 4" in result.stdout

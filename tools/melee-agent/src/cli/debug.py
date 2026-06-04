@@ -3637,6 +3637,27 @@ def _print_frame_reservation_report(report: dict) -> None:
             confidence = cause.get("confidence")
             suffix = f" ({confidence})" if confidence else ""
             print(f"cause: {cause.get('kind')}{suffix}")
+        probe_plan = first_divergence.get("frame_transform_probe_plan") or {}
+        if isinstance(probe_plan, Mapping):
+            operators = [
+                str(operator)
+                for operator in probe_plan.get("operator_priority") or []
+                if operator
+            ]
+            if operators:
+                print(f"frame probe operators: {', '.join(operators)}")
+            commands = probe_plan.get("suggested_commands") or []
+            first_command = next(
+                (
+                    item.get("command")
+                    for item in commands
+                    if isinstance(item, Mapping)
+                    and isinstance(item.get("command"), str)
+                ),
+                None,
+            )
+            if first_command:
+                print(f"next frame probe: {first_command}")
         current_obj = first_divergence.get("current")
         expected_obj = first_divergence.get("expected")
         if current_obj:

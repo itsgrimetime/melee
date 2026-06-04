@@ -219,9 +219,17 @@ def test_frame_reservation_reports_first_occupied_object_divergence() -> None:
         fn_80000000
         B0: Succ={} Pred={} Labels={}
             stwu r1,-56(r1)
-            stw r8,28(r1)
+            stw r8,local_temp(r1)
             stmw r28,40(r1)
             addi r1,r1,56
+    """)
+    current_asm = textwrap.dedent("""\
+        .fn fn_80000000, global
+        /* 80000000 */    stwu r1, -0x38(r1)
+        /* 80000004 */    stw r8, 0x1c(r1)
+        /* 80000008 */    stmw r28, 0x28(r1)
+        /* 8000000c */    addi r1, r1, 0x38
+        .endfn fn_80000000
     """)
     expected_asm = textwrap.dedent("""\
         .fn fn_80000000, global
@@ -235,6 +243,7 @@ def test_frame_reservation_reports_first_occupied_object_divergence() -> None:
     report = analyze_frame_reservations(
         pcdump,
         "fn_80000000",
+        current_asm_text=current_asm,
         expected_asm_text=expected_asm,
     )
 
@@ -243,6 +252,7 @@ def test_frame_reservation_reports_first_occupied_object_divergence() -> None:
     assert divergence["index"] == 0
     assert divergence["reason"] == "start-differs"
     assert divergence["current"]["start"] == 28
+    assert divergence["current"]["source_symbols"] == ["local_temp"]
     assert divergence["expected"]["start"] == 24
     assert divergence["cause_hypothesis"] == {
         "status": "heuristic",
@@ -256,10 +266,12 @@ def test_frame_reservation_reports_first_occupied_object_divergence() -> None:
         "frame_delta": 0,
     }
     assert divergence["source_attribution"] == {
-        "status": "heuristic-no-source-object",
+        "status": "symbolic-stack-home",
+        "current_symbols": ["local_temp"],
+        "expected_symbols": ["local_temp"],
         "reason": (
-            "stack-object divergence is classified, but exact source object "
-            "identity requires MWCC stack-home origin instrumentation"
+            "diverging stack object maps to resolved symbolic stack homes; "
+            "ObjObject identity is still unavailable"
         ),
     }
     assert divergence["verdict"] == {
@@ -269,6 +281,44 @@ def test_frame_reservation_reports_first_occupied_object_divergence() -> None:
             "frame/lifetime source probes"
         ),
         "confidence": "medium",
+    }
+    assert divergence["frame_transform_probe_plan"] == {
+        "status": "ready",
+        "objective": "reduce frame/local-area divergence toward expected",
+        "cause_kind": "stack-object-offset-shift",
+        "operator_priority": [
+            "declaration-use-distance",
+            "block-scope",
+            "frame-direct-literal-at-final-fp-call",
+            "frame-split-fp-const-lifetime",
+        ],
+        "suggested_commands": [
+            {
+                "kind": "suggest-frame",
+                "command": "melee-agent debug suggest frame -f fn_80000000 --json",
+            },
+            {
+                "kind": "lifetime-layout",
+                "command": (
+                    "melee-agent debug mutate lifetime-layout -f fn_80000000 "
+                    "--operator declaration-use-distance --operator block-scope "
+                    "--operator frame-direct-literal-at-final-fp-call "
+                    "--operator frame-split-fp-const-lifetime --compile-probes --json"
+                ),
+            },
+            {
+                "kind": "tier3-frame-search",
+                "command": "melee-agent debug mutate search -f fn_80000000 --budget 5",
+            },
+        ],
+        "validation": {
+            "status": "required",
+            "command": (
+                "melee-agent debug inspect frame-reservations -f fn_80000000 "
+                "--expected-asm <expected.s> --probe-results-json "
+                "<lifetime-layout.json> --json"
+            ),
+        },
     }
 
 
@@ -327,6 +377,49 @@ def test_frame_reservation_reports_frame_size_only_divergence() -> None:
                 "addressable by targeted frame/lifetime source probes"
             ),
             "confidence": "medium",
+        },
+        "frame_transform_probe_plan": {
+            "status": "ready",
+            "objective": "reduce frame/local-area divergence toward expected",
+            "cause_kind": "extra-frame-reservation-or-alignment",
+            "operator_priority": [
+                "frame-magic-scratch-relocation",
+                "frame-split-fp-const-lifetime",
+                "declaration-use-distance",
+                "block-scope",
+            ],
+            "suggested_commands": [
+                {
+                    "kind": "suggest-frame",
+                    "command": (
+                        "melee-agent debug suggest frame -f fn_80000000 --json"
+                    ),
+                },
+                {
+                    "kind": "lifetime-layout",
+                    "command": (
+                        "melee-agent debug mutate lifetime-layout -f fn_80000000 "
+                        "--operator frame-magic-scratch-relocation "
+                        "--operator frame-split-fp-const-lifetime "
+                        "--operator declaration-use-distance --operator block-scope "
+                        "--compile-probes --json"
+                    ),
+                },
+                {
+                    "kind": "tier3-frame-search",
+                    "command": (
+                        "melee-agent debug mutate search -f fn_80000000 --budget 5"
+                    ),
+                },
+            ],
+            "validation": {
+                "status": "required",
+                "command": (
+                    "melee-agent debug inspect frame-reservations -f fn_80000000 "
+                    "--expected-asm <expected.s> --probe-results-json "
+                    "<lifetime-layout.json> --json"
+                ),
+            },
         },
     }
 
