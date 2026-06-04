@@ -142,6 +142,7 @@ def test_name_magic_source_declarations_json_blocks_without_source(
     payload = json.loads(result.output)
     assert payload["function"] == "fn_80000000"
     assert payload["blocker"] == "source-unavailable"
+    assert payload["evidence"] == {}
     assert payload["stop_condition"]["kind"] == "blocked"
 
 
@@ -441,6 +442,66 @@ def test_name_magic_source_declarations_candidate_requires_no_name_magic_match(
         "blocker": "no-name-magic-candidate",
         "reason": "no source candidate reached a true --no-name-magic match",
     }
+
+
+def test_name_magic_whole_source_score_validates_cleanup_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    source = repo / "src" / "melee" / "demo.c"
+    source.parent.mkdir(parents=True)
+    original = "void fn_80000000(void) { real_call(); }\n"
+    source.write_text(original, encoding="utf-8")
+    candidate = tmp_path / "candidate.c"
+    candidate.write_text(
+        "void fn_80000000(void) { candidate_call(); }\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, melee_root: "melee/demo",
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_run_ninja_with_no_diag_retry",
+        lambda *args, **kwargs: (
+            subprocess.CompletedProcess(["ninja"], 0, "", ""),
+            False,
+        ),
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_refresh_match_pct_after_successful_build",
+        lambda *args, **kwargs: (100.0, None),
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_run_checkdiff_no_name_magic_json",
+        lambda *args, **kwargs: ({"match": True}, None),
+    )
+    monkeypatch.setattr(
+        debug_cli.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0],
+            1,
+            "",
+            "cleanup failed",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        debug_cli._score_whole_source_candidate_no_name_magic(
+            candidate,
+            function="fn_80000000",
+            melee_root=repo,
+            timeout=1,
+        )
+
+    assert source.read_text(encoding="utf-8") == original
 
 
 def test_indexed_struct_search_json_reports_no_source(

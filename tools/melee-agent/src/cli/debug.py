@@ -17694,12 +17694,24 @@ def _score_source_candidate_real_tree(
                         status(
                             f"cleanup rebuild {obj_path} build/GALE01/report.json"
                         )
-                    subprocess.run(
+                    cleanup_result = subprocess.run(
                         ["ninja", obj_path, "build/GALE01/report.json"],
                         cwd=melee_root,
                         capture_output=True,
+                        text=True,
                         timeout=timeout,
                     )
+                    if cleanup_result.returncode != 0:
+                        cleanup_error = _failure_diagnostic_or_fallback(
+                            cleanup_result.stdout,
+                            cleanup_result.stderr,
+                            fallback=(
+                                "failed to rebuild object/report after source "
+                                f"restore: ninja {obj_path} "
+                                f"build/GALE01/report.json exited "
+                                f"{cleanup_result.returncode}"
+                            ),
+                        )
                 except subprocess.TimeoutExpired:
                     cleanup_error = (
                         f"timed out restoring object/report after source restore: "
@@ -17830,12 +17842,24 @@ def _score_whole_source_candidate_no_name_magic(
                         status(
                             f"cleanup rebuild {obj_path} build/GALE01/report.json"
                         )
-                    subprocess.run(
+                    cleanup_result = subprocess.run(
                         ["ninja", obj_path, "build/GALE01/report.json"],
                         cwd=melee_root,
                         capture_output=True,
+                        text=True,
                         timeout=timeout,
                     )
+                    if cleanup_result.returncode != 0:
+                        cleanup_error = _failure_diagnostic_or_fallback(
+                            cleanup_result.stdout,
+                            cleanup_result.stderr,
+                            fallback=(
+                                "failed to rebuild object/report after source "
+                                f"restore: ninja {obj_path} "
+                                f"build/GALE01/report.json exited "
+                                f"{cleanup_result.returncode}"
+                            ),
+                        )
                 except subprocess.TimeoutExpired:
                     cleanup_error = (
                         f"timed out restoring object/report after source restore: "
@@ -21248,11 +21272,10 @@ def _name_magic_source_blocked_payload(
             blocker=blocker,
             reason=reason,
         ),
+        "evidence": evidence or {},
         "probes": [],
         "variants": [],
     }
-    if evidence is not None:
-        payload["evidence"] = evidence
     return payload
 
 
