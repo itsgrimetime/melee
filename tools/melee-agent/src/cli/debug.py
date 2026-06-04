@@ -3394,7 +3394,8 @@ def _frame_spec_from_checkdiff_target(checkdiff_json: Path) -> dict:
 
 def _pcdump_has_symbolic_stack_homes(pcdump_text: str) -> bool:
     return bool(re.search(
-        r"@[A-Za-z0-9_]\w*(?:[+-]\d+)?\s*\(\s*r1\s*\)",
+        r"(?<![@\w])(?:@[A-Za-z0-9_]\w*|[A-Za-z_]\w*)"
+        r"(?:[+-](?:0x[0-9A-Fa-f]+|\d+))?\s*\(\s*r1\s*\)",
         pcdump_text,
     ))
 

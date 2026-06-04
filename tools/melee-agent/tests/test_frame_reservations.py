@@ -450,4 +450,133 @@ def test_frame_reservation_resolves_named_local_stack_homes_from_current_asm() -
         for item in report["current"]["accesses"]
         if item["opcode"] == "stfs"
     ] == [0x30, 0x34, 0x28, 0x40]
+    assert report["current"]["stack_home_assignments"] == [
+        {
+            "assignment_order": 0,
+            "symbol": "lenCol+8",
+            "offset": 0x30,
+            "size": 4,
+            "kind": "local-or-temporary",
+            "access_count": 1,
+            "opcodes": ["stfs"],
+            "first_access": {
+                "opcode": "stfs",
+                "operands": "f4,lenCol+8(r1)",
+                "pass": "FINAL CODE AFTER INSTRUCTION SCHEDULING",
+                "block_idx": 0,
+                "instr_idx": 1,
+            },
+        },
+        {
+            "assignment_order": 1,
+            "symbol": "lenCol+12",
+            "offset": 0x34,
+            "size": 4,
+            "kind": "local-or-temporary",
+            "access_count": 1,
+            "opcodes": ["stfs"],
+            "first_access": {
+                "opcode": "stfs",
+                "operands": "f5,lenCol+12(r1)",
+                "pass": "FINAL CODE AFTER INSTRUCTION SCHEDULING",
+                "block_idx": 0,
+                "instr_idx": 2,
+            },
+        },
+        {
+            "assignment_order": 2,
+            "symbol": "q3",
+            "offset": 0x28,
+            "size": 4,
+            "kind": "local-or-temporary",
+            "access_count": 1,
+            "opcodes": ["stfs"],
+            "first_access": {
+                "opcode": "stfs",
+                "operands": "f6,q3(r1)",
+                "pass": "FINAL CODE AFTER INSTRUCTION SCHEDULING",
+                "block_idx": 0,
+                "instr_idx": 3,
+            },
+        },
+        {
+            "assignment_order": 3,
+            "symbol": "nxt",
+            "offset": 0x40,
+            "size": 4,
+            "kind": "local-or-temporary",
+            "access_count": 1,
+            "opcodes": ["stfs"],
+            "first_access": {
+                "opcode": "stfs",
+                "operands": "f7,nxt(r1)",
+                "pass": "FINAL CODE AFTER INSTRUCTION SCHEDULING",
+                "block_idx": 0,
+                "instr_idx": 4,
+            },
+        },
+    ]
     assert report["extra_low_frame_reservation"] is None
+
+
+def test_frame_reservation_stack_home_assignment_merges_repeated_accesses() -> None:
+    pcdump = textwrap.dedent("""\
+        Starting function fn_80000001
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        fn_80000001
+        B0: Succ={} Pred={} Labels={}
+            stwu    r1,-80(r1)
+            stfs    f0,tmp(r1)
+            lfs     f1,tmp(r1)
+            stw     r3,cursor(r1)
+            addi    r1,r1,80
+    """)
+    current_asm = textwrap.dedent("""\
+        +000: 94 21 ff b0 \tstwu    r1,-80(r1)
+        +004: d0 01 00 30 \tstfs    f0,48(r1)
+        +008: c0 21 00 30 \tlfs     f1,48(r1)
+        +00c: 90 61 00 34 \tstw     r3,52(r1)
+        +010: 38 21 00 50 \taddi    r1,r1,80
+    """)
+
+    report = analyze_frame_reservations(
+        pcdump,
+        "fn_80000001",
+        current_asm_text=current_asm,
+    )
+
+    assert report["current"]["stack_home_assignment_status"] == "resolved-symbolic-homes"
+    assert report["current"]["stack_home_assignments"] == [
+        {
+            "assignment_order": 0,
+            "symbol": "tmp",
+            "offset": 0x30,
+            "size": 4,
+            "kind": "local-or-temporary",
+            "access_count": 2,
+            "opcodes": ["lfs", "stfs"],
+            "first_access": {
+                "opcode": "stfs",
+                "operands": "f0,tmp(r1)",
+                "pass": "FINAL CODE AFTER INSTRUCTION SCHEDULING",
+                "block_idx": 0,
+                "instr_idx": 1,
+            },
+        },
+        {
+            "assignment_order": 1,
+            "symbol": "cursor",
+            "offset": 0x34,
+            "size": 4,
+            "kind": "local-or-temporary",
+            "access_count": 1,
+            "opcodes": ["stw"],
+            "first_access": {
+                "opcode": "stw",
+                "operands": "r3,cursor(r1)",
+                "pass": "FINAL CODE AFTER INSTRUCTION SCHEDULING",
+                "block_idx": 0,
+                "instr_idx": 3,
+            },
+        },
+    ]

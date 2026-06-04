@@ -147,6 +147,65 @@ def test_frame_reservations_cli_reports_extra_low_gap(tmp_path: Path) -> None:
     assert "no current pcode stack access" in payload["summary"]
 
 
+def test_frame_reservations_cli_reports_stack_home_assignments(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    pcdump = tmp_path / "pcdump.txt"
+    pcdump.write_text(textwrap.dedent("""\
+        Starting function fn_80000000
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        fn_80000000
+        B0: Succ={} Pred={} Labels={}
+            stwu    r1,-80(r1)
+            stfs    f0,tmp(r1)
+            lfs     f1,tmp(r1)
+            stw     r3,cursor(r1)
+            addi    r1,r1,80
+    """))
+    current_asm = textwrap.dedent("""\
+        +000: 94 21 ff b0 \tstwu    r1,-80(r1)
+        +004: d0 01 00 30 \tstfs    f0,48(r1)
+        +008: c0 21 00 30 \tlfs     f1,48(r1)
+        +00c: 90 61 00 34 \tstw     r3,52(r1)
+        +010: 38 21 00 50 \taddi    r1,r1,80
+    """)
+    monkeypatch.setattr(
+        debug_cli,
+        "_read_frame_reservation_current_asm",
+        lambda function, melee_root=None: current_asm,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "frame-reservations",
+            "-f",
+            "fn_80000000",
+            str(pcdump),
+            "--no-expected",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["current"]["stack_home_assignment_status"] == (
+        "resolved-symbolic-homes"
+    )
+    assert [
+        item["symbol"]
+        for item in payload["current"]["stack_home_assignments"]
+    ] == ["tmp", "cursor"]
+    assert payload["current"]["stack_home_assignments"][0]["access_count"] == 2
+    assert payload["current"]["stack_home_assignments"][0]["opcodes"] == [
+        "lfs",
+        "stfs",
+    ]
+
+
 def test_frame_reservations_cli_reports_current_low_expansion(tmp_path: Path) -> None:
     pcdump = tmp_path / "pcdump.txt"
     pcdump.write_text(textwrap.dedent("""\

@@ -282,6 +282,7 @@ def _analyze_instructions(
         unused_ranges=unused,
         access_traces=access_traces,
     )
+    stack_home_assignments = _stack_home_assignments(access_traces)
 
     return {
         "frame_size": frame_size,
@@ -293,6 +294,12 @@ def _analyze_instructions(
         "unused_ranges": unused,
         "stack_objects": stack_objects,
         "stack_object_map_status": "best-effort-from-r1-accesses",
+        "stack_home_assignments": stack_home_assignments,
+        "stack_home_assignment_status": (
+            "resolved-symbolic-homes"
+            if stack_home_assignments
+            else "unavailable-no-resolved-symbolic-homes"
+        ),
         "symbolic_home_map": [
             {"symbol": symbol, "offset": offset}
             for symbol, offset in sorted(symbolic_offsets.items())
@@ -374,6 +381,68 @@ def _stack_objects(
             item["kind"],
         ),
     )
+
+
+def _stack_home_assignments(access_traces: list[dict]) -> list[dict]:
+    by_symbol: dict[str, dict] = {}
+    for trace in access_traces:
+        symbol = trace.get("symbolic_home")
+        if not symbol or trace.get("pre_frame"):
+            continue
+        offset = trace.get("offset")
+        size = trace.get("size")
+        kind = trace.get("kind")
+        if offset is None or size is None or kind is None:
+            continue
+        entry = by_symbol.get(symbol)
+        if entry is None:
+            entry = {
+                "symbol": symbol,
+                "offset": offset,
+                "size": size,
+                "kind": kind,
+                "access_count": 0,
+                "opcodes": set(),
+                "first_access": {
+                    "opcode": trace.get("opcode"),
+                    "operands": trace.get("original_operands") or trace.get("operands"),
+                    "pass": trace.get("pass"),
+                    "block_idx": trace.get("block_idx"),
+                    "instr_idx": trace.get("instr_idx"),
+                },
+                "_first_instr_idx": trace.get("instr_idx"),
+            }
+            by_symbol[symbol] = entry
+        entry["access_count"] += 1
+        opcode = trace.get("opcode")
+        if opcode:
+            entry["opcodes"].add(str(opcode))
+
+    assignments = sorted(
+        by_symbol.values(),
+        key=lambda item: (
+            item["first_access"].get("block_idx")
+            if item["first_access"].get("block_idx") is not None
+            else -1,
+            item.get("_first_instr_idx")
+            if item.get("_first_instr_idx") is not None
+            else -1,
+            item["symbol"],
+        ),
+    )
+    out: list[dict] = []
+    for order, item in enumerate(assignments):
+        out.append({
+            "assignment_order": order,
+            "symbol": item["symbol"],
+            "offset": item["offset"],
+            "size": item["size"],
+            "kind": item["kind"],
+            "access_count": item["access_count"],
+            "opcodes": sorted(item["opcodes"]),
+            "first_access": item["first_access"],
+        })
+    return out
 
 
 def _first_stack_object_divergence(
