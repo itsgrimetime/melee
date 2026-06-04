@@ -359,6 +359,11 @@ def test_frame_reservations_cli_text_reports_expected_stack_home_offsets(
         "probe operators: declaration-use-distance, block-scope, "
         "call-argument-tempization, decl-orders"
     ) in out
+    assert (
+        "next probe: melee-agent debug mutate lifetime-layout -f fn_80000002 "
+        "--operator declaration-use-distance --operator block-scope "
+        "--operator call-argument-tempization --compile-probes --json"
+    ) in out
 
 
 def test_frame_reservations_cli_evaluates_probe_results_json(

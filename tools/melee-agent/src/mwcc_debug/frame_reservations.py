@@ -108,6 +108,7 @@ def analyze_frame_reservations(
         "frame_first_divergence": first_divergence,
         "summary": summary,
     }
+    _materialize_stack_home_probe_commands(report)
     return report
 
 
@@ -181,6 +182,42 @@ def evaluate_stack_home_probe_results(
         "best_variant": best,
         "variants": variants,
     }
+
+
+def _materialize_stack_home_probe_commands(report: dict) -> None:
+    function = report.get("function")
+    if not isinstance(function, str) or not function:
+        return
+    current = report.get("current")
+    if not isinstance(current, dict):
+        return
+    guidance = current.get("stack_home_reorder_guidance")
+    if not isinstance(guidance, dict):
+        return
+    guidance["next_steps"] = [
+        _materialize_function_placeholder(step, function)
+        for step in guidance.get("next_steps") or []
+        if isinstance(step, str)
+    ]
+    probe_plan = guidance.get("probe_plan")
+    if not isinstance(probe_plan, dict):
+        return
+    commands = []
+    for item in probe_plan.get("suggested_commands") or []:
+        if not isinstance(item, dict):
+            continue
+        command = item.get("command")
+        if not isinstance(command, str):
+            commands.append(item)
+            continue
+        updated = dict(item)
+        updated["command"] = _materialize_function_placeholder(command, function)
+        commands.append(updated)
+    probe_plan["suggested_commands"] = commands
+
+
+def _materialize_function_placeholder(command: str, function: str) -> str:
+    return command.replace("<function>", function)
 
 
 def _stack_home_probe_stop_condition(

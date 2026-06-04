@@ -3574,6 +3574,15 @@ def _print_stack_home_order_summary(current: Mapping[str, object]) -> None:
                 "probe operators: "
                 + ", ".join(str(operator) for operator in operators)
             )
+        commands = probe_plan.get("suggested_commands")
+        if isinstance(commands, list):
+            for command_item in commands:
+                if not isinstance(command_item, Mapping):
+                    continue
+                command = command_item.get("command")
+                if command:
+                    print(f"next probe: {command}")
+                    break
     levers = guidance.get("candidate_levers")
     if isinstance(levers, list) and levers:
         kinds = [

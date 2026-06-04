@@ -616,7 +616,7 @@ def test_frame_reservation_resolves_named_local_stack_homes_from_current_asm() -
                 {
                     "kind": "lifetime-layout",
                     "command": (
-                        "melee-agent debug mutate lifetime-layout -f <function> "
+                        "melee-agent debug mutate lifetime-layout -f MatToQuat "
                         "--operator declaration-use-distance --operator block-scope "
                         "--operator call-argument-tempization --compile-probes --json"
                     ),
@@ -624,15 +624,15 @@ def test_frame_reservation_resolves_named_local_stack_homes_from_current_asm() -
                 {
                     "kind": "decl-orders",
                     "command": (
-                        "melee-agent debug mutate decl-orders <function> "
+                        "melee-agent debug mutate decl-orders MatToQuat "
                         "--strategy all --json"
                     ),
                 },
             ],
         },
         "next_steps": [
-            "melee-agent debug mutate lifetime-layout -f <function> --compile-probes",
-            "melee-agent debug mutate decl-orders <function> --strategy all --json",
+            "melee-agent debug mutate lifetime-layout -f MatToQuat --compile-probes",
+            "melee-agent debug mutate decl-orders MatToQuat --strategy all --json",
         ],
     }
     assert report["extra_low_frame_reservation"] is None
@@ -854,7 +854,7 @@ def test_frame_reservation_infers_expected_symbolic_stack_home_order() -> None:
             {
                 "kind": "lifetime-layout",
                 "command": (
-                    "melee-agent debug mutate lifetime-layout -f <function> "
+                    "melee-agent debug mutate lifetime-layout -f fn_80000002 "
                     "--operator declaration-use-distance --operator block-scope "
                     "--operator call-argument-tempization --compile-probes --json"
                 ),
@@ -862,7 +862,7 @@ def test_frame_reservation_infers_expected_symbolic_stack_home_order() -> None:
             {
                 "kind": "decl-orders",
                 "command": (
-                    "melee-agent debug mutate decl-orders <function> "
+                    "melee-agent debug mutate decl-orders fn_80000002 "
                     "--strategy all --json"
                 ),
             },
