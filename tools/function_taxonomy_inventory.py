@@ -17,6 +17,12 @@ from typing import Any, Callable
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+MELEE_AGENT_ROOT = REPO_ROOT / "tools" / "melee-agent"
+if str(MELEE_AGENT_ROOT) not in sys.path:
+    sys.path.insert(0, str(MELEE_AGENT_ROOT))
+
+from src.mwcc_debug.frame_taxonomy import classify_frame_taxonomy
+
 DEFAULT_REPORT = REPO_ROOT / "build" / "GALE01" / "report.json"
 DEFAULT_OUTPUT = REPO_ROOT / "build" / "function-taxonomy"
 _DECL_ORDER_EVAL_LOCK = threading.Lock()
@@ -57,6 +63,7 @@ class InventoryResult:
 
 CheckdiffRunner = Callable[[str], tuple[int, str, str]]
 DeclOrderEvaluator = Callable[[FunctionCandidate, dict[str, Any]], dict[str, Any]]
+FrameReportRunner = Callable[[FunctionCandidate], dict[str, Any] | None]
 
 
 def parse_int(value: Any, default: int = 0) -> int:
@@ -233,7 +240,51 @@ def classify_bucket(
     return "structural-reconstruction", "direct-inspection-needed", False
 
 
-def describe_actionability(bucket: str, subcategory: str) -> dict[str, str]:
+def describe_actionability(
+    bucket: str,
+    subcategory: str,
+    *,
+    frame_taxonomy: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    if bucket == "stack-local-layout" and frame_taxonomy is not None:
+        tier = str(frame_taxonomy.get("closability_tier") or "")
+        cause = str(frame_taxonomy.get("cause") or "stack-frame-divergence")
+        if tier == "current-tools-padstack":
+            return {
+                "source_actionability": "current-tools",
+                "headline_tool": "frame-transform-search",
+                "actionability_reason": (
+                    f"{cause}; current frame-reservation probes can test this "
+                    "without committing a source padding edit"
+                ),
+            }
+        if tier == "reorder-gated-362":
+            return {
+                "source_actionability": "generator-gated",
+                "headline_tool": "lifetime-layout",
+                "actionability_reason": (
+                    f"{cause}; needs the #362 lifetime/reorder source lever "
+                    "before it can be closed by current tooling"
+                ),
+            }
+        if tier == "gen-gated-366":
+            return {
+                "source_actionability": "generator-gated",
+                "headline_tool": "frame-transform-search",
+                "actionability_reason": (
+                    f"{cause}; needs the #366 directed frame-transform "
+                    "generator path before it is a bounded source fix"
+                ),
+            }
+        if tier == "ceiling":
+            return {
+                "source_actionability": "ceiling",
+                "headline_tool": "frame-reservations",
+                "actionability_reason": (
+                    f"{cause}; current evidence marks this as a ceiling or "
+                    "unresolved compiler-layout boundary"
+                ),
+            }
     if bucket == "stack-local-layout":
         if subcategory == "same-frame-stack-slot-placement":
             return {
@@ -307,6 +358,77 @@ def next_command(bucket: str, subcategory: str, candidate: FunctionCandidate) ->
             f"melee-agent debug dump local {source_path} --function {function}"
         )
     return f"python tools/checkdiff.py {function} --compact"
+
+
+def default_frame_report_runner(
+    candidate: FunctionCandidate,
+) -> dict[str, Any] | None:
+    cmd = [
+        "melee-agent",
+        "debug",
+        "inspect",
+        "frame-reservations",
+        "-f",
+        candidate.function,
+        "--json",
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            timeout=60,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0 or not proc.stdout:
+        return None
+    try:
+        return parse_json_object(proc.stdout)
+    except Exception:
+        return None
+
+
+def frame_taxonomy_for_candidate(
+    candidate: FunctionCandidate,
+    classification: dict[str, Any],
+    bucket: str,
+    frame_report_runner: FrameReportRunner | None,
+) -> dict[str, Any] | None:
+    if bucket != "stack-local-layout":
+        return None
+    frame_report = None
+    if frame_report_runner is not None:
+        try:
+            frame_report = frame_report_runner(candidate)
+        except Exception:
+            frame_report = None
+    return classify_frame_taxonomy(
+        candidate.function,
+        classification=classification,
+        source_path=f"src/{candidate.file_path}",
+        frame_report=frame_report,
+    )
+
+
+def attach_frame_taxonomy(
+    record: dict[str, Any],
+    frame_taxonomy: dict[str, Any],
+) -> None:
+    record["frame_taxonomy"] = frame_taxonomy
+    record["frame_cause"] = frame_taxonomy.get("cause")
+    record["frame_raw_cause"] = frame_taxonomy.get("raw_cause")
+    record["frame_verdict"] = frame_taxonomy.get("verdict")
+    record["frame_raw_verdict"] = frame_taxonomy.get("raw_verdict")
+    record["frame_closability_tier"] = frame_taxonomy.get("closability_tier")
+    record["frame_attribution_status"] = frame_taxonomy.get("attribution_status")
+    record["frame_source_object"] = frame_taxonomy.get("source_object")
+    record["frame_source_object_symbol"] = frame_taxonomy.get("source_object_symbol")
+    record["frame_next_command"] = frame_taxonomy.get("next_command")
+    record["frame_reason"] = frame_taxonomy.get("reason")
+    if frame_taxonomy.get("next_command"):
+        record["next_command"] = frame_taxonomy["next_command"]
 
 
 def default_decl_order_evaluator(
@@ -434,6 +556,7 @@ def classify_candidate(
     candidate: FunctionCandidate,
     runner: CheckdiffRunner,
     decl_order_evaluator: DeclOrderEvaluator | None = default_decl_order_evaluator,
+    frame_report_runner: FrameReportRunner | None = default_frame_report_runner,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     started = time.perf_counter()
     returncode, stdout, stderr = runner(candidate.function)
@@ -454,7 +577,17 @@ def classify_candidate(
     classification = payload.get("classification") or {}
     primary = classification.get("primary") or "unknown"
     bucket, subcategory, known_small = classify_bucket(candidate, payload)
-    actionability = describe_actionability(bucket, subcategory)
+    frame_taxonomy = frame_taxonomy_for_candidate(
+        candidate,
+        classification,
+        bucket,
+        frame_report_runner,
+    )
+    actionability = describe_actionability(
+        bucket,
+        subcategory,
+        frame_taxonomy=frame_taxonomy,
+    )
     record = {
         "ok": True,
         "function": candidate.function,
@@ -481,6 +614,8 @@ def classify_candidate(
         "stderr_tail": stderr[-1000:],
         "next_command": next_command(bucket, subcategory, candidate),
     }
+    if frame_taxonomy is not None:
+        attach_frame_taxonomy(record, frame_taxonomy)
     if (
         decl_order_evaluator is not None
         and should_evaluate_decl_orders(candidate, bucket, subcategory)
@@ -503,6 +638,11 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "work_bucket",
         "primary",
         "subcategory",
+        "frame_cause",
+        "frame_verdict",
+        "frame_closability_tier",
+        "frame_attribution_status",
+        "frame_source_object_symbol",
         "source_actionability",
         "headline_tool",
         "actionability_reason",
@@ -522,6 +662,11 @@ def write_queue(path: Path, rows: list[dict[str, Any]]) -> None:
         "function",
         "primary",
         "subcategory",
+        "frame_cause",
+        "frame_verdict",
+        "frame_closability_tier",
+        "frame_attribution_status",
+        "frame_source_object_symbol",
         "source_actionability",
         "headline_tool",
         "actionability_reason",
@@ -530,6 +675,7 @@ def write_queue(path: Path, rows: list[dict[str, Any]]) -> None:
         "decl_order_evaluated_status",
         "decl_order_candidate_count",
         "file_path",
+        "frame_next_command",
         "next_command",
     ]
     with path.open("w", newline="", encoding="utf-8") as f:
@@ -583,6 +729,10 @@ def write_summary(
     bucket_counts = count_by(records, "work_bucket")
     primary_counts = count_by(records, "primary")
     tier_counts = count_by(records, "match_tier")
+    frame_closability_counts = count_by(
+        [row for row in records if row.get("frame_closability_tier")],
+        "frame_closability_tier",
+    )
 
     lines = [
         "# Function Mismatch Taxonomy Inventory",
@@ -610,6 +760,17 @@ def write_summary(
     lines.extend(["", "## Match Tiers", "| Tier | Classified |", "| --- | --- |"])
     for tier in TIER_ORDER:
         lines.append(f"| {tier} | {tier_counts.get(tier, 0)} |")
+    if frame_closability_counts:
+        lines.extend(
+            [
+                "",
+                "## Stack Frame Closability",
+                "| Closability tier | Classified |",
+                "| --- | --- |",
+            ]
+        )
+        for tier, count in sorted(frame_closability_counts.items()):
+            lines.append(f"| {tier} | {count} |")
     lines.extend(["", "## High-ROI Queues"])
     for bucket in BUCKET_ORDER:
         lines.append(f"- `build/function-taxonomy/queues/{bucket}.tsv`")
@@ -641,6 +802,7 @@ def generate_inventory(
     *,
     checkdiff_runner: CheckdiffRunner = default_checkdiff_runner,
     decl_order_evaluator: DeclOrderEvaluator | None = default_decl_order_evaluator,
+    frame_report_runner: FrameReportRunner | None = default_frame_report_runner,
     workers: int = 4,
     limit: int | None = None,
 ) -> InventoryResult:
@@ -657,6 +819,7 @@ def generate_inventory(
                 candidate,
                 checkdiff_runner,
                 decl_order_evaluator,
+                frame_report_runner,
             ),
             attempted,
         ):
@@ -730,6 +893,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip bounded decl-orders evaluation for >=99% stack-local-layout rows.",
     )
+    parser.add_argument(
+        "--skip-frame-report-attribution",
+        action="store_true",
+        help=(
+            "Skip best-effort pcdump-backed frame-reservation attribution for "
+            "stack-local-layout rows."
+        ),
+    )
     return parser
 
 
@@ -744,6 +915,11 @@ def main(argv: list[str] | None = None) -> int:
             limit=args.limit,
             decl_order_evaluator=(
                 None if args.skip_decl_order_eval else default_decl_order_evaluator
+            ),
+            frame_report_runner=(
+                None
+                if args.skip_frame_report_attribution
+                else default_frame_report_runner
             ),
         )
     except Exception as exc:

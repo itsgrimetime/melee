@@ -909,7 +909,8 @@ def test_frame_reservations_cli_reports_current_low_expansion(tmp_path: Path) ->
     assert "frame pass timeline: 1 pass(es)" in result.stdout
     assert "cause: stack-object-offset-shift (medium)" in result.stdout
     assert (
-        "frame probe operators: declaration-use-distance, block-scope, "
+        "frame probe operators: frame-local-dematerialize, "
+        "declaration-use-distance, block-scope, "
         "frame-direct-literal-at-final-fp-call, frame-split-fp-const-lifetime"
     ) in result.stdout
     assert (
@@ -5138,8 +5139,9 @@ def test_inspect_stuck_routes_frame_size_rows_to_frame_tools(
                 {
                     "classification": {
                         "primary": "stack-layout",
+                        "stack_frame_delta": {"missing_stack_bytes": 16},
                         "reasons": [
-                            "frame reservation gap is too large; try PAD_STACK"
+                            "frame reservation gap is too small; try frame transform"
                         ],
                     }
                 }
@@ -5165,11 +5167,16 @@ def test_inspect_stuck_routes_frame_size_rows_to_frame_tools(
     assert result.exit_code == 0, result.stdout + result.stderr
     payload = json.loads(result.stdout)
     assert payload["frame_residual"]["kind"] == "frame-size"
-    assert payload["frame_residual"]["subcategory"] == "frame-too-large"
+    assert payload["frame_residual"]["cause"] == "pure-reservation"
+    assert payload["frame_residual"]["closability_tier"] == "current-tools-padstack"
+    assert payload["frame_residual"]["subcategory"] == "frame-too-small"
     assert payload["next_steps"][0] == (
-        "melee-agent debug inspect frame-reservations -f fn_80000000"
+        "melee-agent debug mutate frame-transform-search -f fn_80000000 "
+        "--source-file src/melee/mn/sample.c "
+        "--operator frame-reservation-pad-stack "
+        "--frame-reservation-bytes 16 --compile-probes --json"
     )
-    assert "debug suggest frame -f fn_80000000" in payload["next_steps"][1]
+    assert "debug inspect frame-reservations -f fn_80000000" in payload["next_steps"][1]
     joined = "\n".join(payload["next_steps"][:3])
     assert "debug mutate decl-orders fn_80000000" not in joined
     assert "Optional cheap probe" in "\n".join(payload["next_steps"])
@@ -5228,14 +5235,123 @@ def test_inspect_stuck_routes_same_slot_rows_to_lifetime_layout(
     assert result.exit_code == 0, result.stdout + result.stderr
     payload = json.loads(result.stdout)
     assert payload["frame_residual"]["kind"] == "same-frame-stack-slot-placement"
+    assert payload["frame_residual"]["cause"] == "stack-object-offset-shift"
+    assert payload["frame_residual"]["closability_tier"] == "reorder-gated-362"
     assert payload["next_steps"][0] == (
-        "melee-agent debug inspect frame-reservations -f fn_80000000"
+        "melee-agent debug mutate lifetime-layout -f fn_80000000 "
+        "--source-file src/melee/mn/sample.c --compile-probes --json"
     )
     assert payload["next_steps"][1] == (
-        "melee-agent debug mutate lifetime-layout -f fn_80000000 --compile-probes"
+        "melee-agent debug inspect frame-reservations -f fn_80000000"
     )
     assert "stack-home assignment order" in payload["frame_residual"]["message"]
     assert "Optional cheap probe" in "\n".join(payload["next_steps"])
+
+
+def test_inspect_stuck_routes_reserved_low_spill_to_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text("void fn_80000000(void) { int a; a = 0; }\n")
+
+    def fake_run(cmd, **kwargs):
+        return SimpleNamespace(
+            returncode=1,
+            stdout=json.dumps(
+                {
+                    "classification": {
+                        "primary": "stack-slot-layout",
+                        "stack_slot_localizer": {
+                            "deltas": [12],
+                            "reserved_low_spill_region": {
+                                "kind": "reserved-unused-low-spill-region",
+                                "closability_tier": "ceiling",
+                            },
+                        },
+                        "reasons": [
+                            "reserved-but-unused low spill region candidate"
+                        ],
+                    }
+                }
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/mn/sample",
+    )
+    monkeypatch.setattr(debug_cli, "_get_match_pct", lambda function, root: 99.95)
+    monkeypatch.setattr(debug_cli, "audit_function_casts", lambda source, function: [])
+    monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        ["debug", "inspect", "stuck", "fn_80000000", "--no-pcdump", "--json"],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["frame_residual"]["cause"] == "reserved-unused-low-spill-region"
+    assert payload["frame_residual"]["closability_tier"] == "ceiling"
+    assert "lifetime-layout" not in payload["next_steps"][0]
+    assert "lifetime-layout probes" not in payload["frame_residual"]["message"]
+    assert "reserved-unused-low-spill-region" in payload["next_steps"][0]
+
+
+def test_frame_residual_hint_from_report_includes_closability_fields() -> None:
+    report = {
+        "function": "fn_80000000",
+        "summary": "fn_80000000: frame/local-area reservation differs",
+        "current_low_frame_expansion": {
+            "start": 24,
+            "end": 28,
+            "size": 4,
+            "origin": "implicit-current-low-local-home",
+            "current_accesses_in_range": [],
+        },
+        "frame_first_divergence": {
+            "status": "diverged",
+            "source_attribution": {
+                "status": "source-object-attributed",
+                "primary_source_object": {
+                    "symbol": "local_temp",
+                    "current_offset": 24,
+                    "expected_offset": 28,
+                },
+            },
+            "cause_hypothesis": {
+                "kind": "lifetime-or-ordering-shift",
+                "confidence": "medium",
+                "source_object_symbol": "local_temp",
+            },
+            "verdict": {
+                "status": "source-reachable-candidate",
+                "source_object_symbol": "local_temp",
+            },
+        },
+    }
+
+    hint = debug_cli._frame_residual_hint_from_report(
+        report,
+        unit="melee/mn/sample",
+    )
+
+    assert hint is not None
+    assert hint["kind"] == "frame-local-area"
+    assert hint["cause"] == "lifetime-or-ordering-shift"
+    assert hint["raw_cause"] == "lifetime-or-ordering-shift"
+    assert hint["verdict"] == "source-reachable-candidate"
+    assert hint["closability_tier"] == "gen-gated-366"
+    assert hint["source_object_symbol"] == "local_temp"
+    assert hint["next_steps"][0].startswith(
+        "melee-agent debug mutate frame-transform-search -f fn_80000000"
+    )
 
 
 def test_tier3_search_no_improvement_is_successful_search_outcome(

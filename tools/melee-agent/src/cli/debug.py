@@ -95,6 +95,7 @@ from ..mwcc_debug.frame_reservations import (
     evaluate_frame_transform_probe_results,
     evaluate_stack_home_probe_results,
 )
+from ..mwcc_debug.frame_taxonomy import classify_frame_taxonomy
 from ..mwcc_debug.value_numbering import detect_divide_rematerialization_ceiling
 
 
@@ -3188,20 +3189,24 @@ def _frame_residual_hint_from_checkdiff_classification(
     primary = classification.get("primary")
     reasons = classification.get("reasons") or []
     reason_text = "\n".join(str(reason).lower() for reason in reasons)
-    src_arg = f"src/{unit}.c" if unit else "<source.c>"
+    src_arg = _frame_source_path_for_unit(unit) or "<source.c>"
+    taxonomy = classify_frame_taxonomy(
+        function,
+        classification=classification,
+        source_path=_frame_source_path_for_unit(unit),
+    )
 
     if primary == "stack-layout" and (
         "frame reservation gap" in reason_text
         or "pad_stack" in reason_text
         or "frame size" in reason_text
     ):
-        return {
+        hint = {
             "kind": "frame-size",
             "origin": "checkdiff-classification",
-            "subcategory": (
-                "frame-too-small" if "too small" in reason_text
-                else "frame-too-large" if "too large" in reason_text
-                else "frame-size-delta"
+            "subcategory": _frame_subcategory_from_taxonomy(
+                classification,
+                taxonomy or {},
             ),
             "message": (
                 f"{function}: checkdiff reports a stack frame-size residual. "
@@ -3209,36 +3214,67 @@ def _frame_residual_hint_from_checkdiff_classification(
                 "reserved frame size, so prefer frame-reservation tools first."
             ),
             "summary": "frame-size residual from checkdiff classification",
-            "next_steps": [
-                f"melee-agent debug inspect frame-reservations -f {function}",
-                f"melee-agent debug suggest frame -f {function}",
-                (
-                    f"melee-agent debug dump local {src_arg} -f {function} "
-                    "--diff --force-frame-from-diff"
-                ),
-            ],
+            "next_steps": (
+                _frame_taxonomy_next_steps(function, taxonomy, unit=unit)
+                if taxonomy is not None
+                else [
+                    f"melee-agent debug inspect frame-reservations -f {function}",
+                    f"melee-agent debug suggest frame -f {function}",
+                    (
+                        f"melee-agent debug dump local {src_arg} -f {function} "
+                        "--diff --force-frame-from-diff"
+                    ),
+                ]
+            ),
         }
+        if taxonomy is not None:
+            _attach_frame_taxonomy_hint_fields(hint, taxonomy)
+        return hint
 
     if primary == "stack-slot-layout":
-        return {
+        reserved_ceiling = (
+            taxonomy is not None
+            and taxonomy.get("cause") == "reserved-unused-low-spill-region"
+        )
+        hint = {
             "kind": "same-frame-stack-slot-placement",
             "origin": "checkdiff-classification",
             "subcategory": "same-frame-stack-slot-placement",
             "message": (
-                f"{function}: checkdiff reports same-frame stack-slot "
-                "placement differences. Inspect the stack-home assignment "
-                "order first, then use lifetime/layout probes; decl-order "
-                "search is usually neutral on this class."
-            ),
-            "summary": "same-frame stack-slot residual from checkdiff classification",
-            "next_steps": [
-                f"melee-agent debug inspect frame-reservations -f {function}",
                 (
-                    f"melee-agent debug mutate lifetime-layout -f {function} "
-                    "--compile-probes"
-                ),
-            ],
+                    f"{function}: checkdiff reports a reserved-but-unused "
+                    "low spill region. Bank this as a ceiling/unresolved "
+                    "frame-layout boundary and inspect the frame model rather "
+                    "than running source-layout mutation probes."
+                )
+                if reserved_ceiling
+                else (
+                    f"{function}: checkdiff reports same-frame stack-slot "
+                    "placement differences. Inspect the stack-home assignment "
+                    "order first, then use lifetime/layout probes; decl-order "
+                    "search is usually neutral on this class."
+                )
+            ),
+            "summary": (
+                "reserved low spill region from checkdiff classification"
+                if reserved_ceiling
+                else "same-frame stack-slot residual from checkdiff classification"
+            ),
+            "next_steps": (
+                _frame_taxonomy_next_steps(function, taxonomy, unit=unit)
+                if taxonomy is not None
+                else [
+                    f"melee-agent debug inspect frame-reservations -f {function}",
+                    (
+                        f"melee-agent debug mutate lifetime-layout -f {function} "
+                        "--compile-probes"
+                    ),
+                ]
+            ),
         }
+        if taxonomy is not None:
+            _attach_frame_taxonomy_hint_fields(hint, taxonomy)
+        return hint
     return None
 
 
@@ -4091,6 +4127,78 @@ def _attach_frame_transform_validated_verdict(report: dict) -> None:
             }
 
 
+def _frame_source_path_for_unit(unit: str | None) -> str | None:
+    return f"src/{unit}.c" if unit else None
+
+
+def _frame_taxonomy_next_steps(
+    function: str,
+    taxonomy: Mapping[str, Any],
+    *,
+    unit: str | None,
+) -> list[str]:
+    steps: list[str] = []
+    command = taxonomy.get("next_command")
+    if isinstance(command, str) and command:
+        cause = taxonomy.get("cause")
+        if taxonomy.get("closability_tier") == "ceiling" and cause:
+            steps.append(f"[ceiling: {cause}] {command}")
+        else:
+            steps.append(command)
+
+    inspect_command = f"melee-agent debug inspect frame-reservations -f {function}"
+    if not any(inspect_command in step for step in steps):
+        steps.append(inspect_command)
+
+    if taxonomy.get("closability_tier") != "ceiling":
+        src_arg = _frame_source_path_for_unit(unit) or "<source.c>"
+        steps.append(
+            f"melee-agent debug dump local {src_arg} -f {function} "
+            "--diff --force-frame-from-diff"
+        )
+    return steps
+
+
+def _attach_frame_taxonomy_hint_fields(
+    hint: dict[str, Any],
+    taxonomy: Mapping[str, Any],
+) -> dict[str, Any]:
+    hint.update(
+        {
+            "cause": taxonomy.get("cause"),
+            "raw_cause": taxonomy.get("raw_cause"),
+            "verdict": taxonomy.get("verdict"),
+            "raw_verdict": taxonomy.get("raw_verdict"),
+            "closability_tier": taxonomy.get("closability_tier"),
+            "attribution_status": taxonomy.get("attribution_status"),
+            "source_object": taxonomy.get("source_object"),
+            "source_object_symbol": taxonomy.get("source_object_symbol"),
+            "next_command": taxonomy.get("next_command"),
+            "taxonomy_reason": taxonomy.get("reason"),
+        }
+    )
+    return hint
+
+
+def _frame_subcategory_from_taxonomy(
+    classification: Mapping[str, Any] | None,
+    taxonomy: Mapping[str, Any],
+) -> str:
+    primary = (
+        classification.get("primary")
+        if isinstance(classification, Mapping)
+        else None
+    )
+    cause = taxonomy.get("cause")
+    if primary == "stack-slot-layout":
+        return "same-frame-stack-slot-placement"
+    if cause == "pure-reservation":
+        return "frame-too-small"
+    if cause == "frame-too-large":
+        return "frame-too-large"
+    return "frame-size-delta"
+
+
 def _frame_residual_hint_from_report(
     report: dict,
     *,
@@ -4116,23 +4224,40 @@ def _frame_residual_hint_from_report(
         f"{function}: frame/local-area reservation differs from target"
     )
     src_arg = f"src/{unit}.c" if unit else "<source.c>"
+    taxonomy = classify_frame_taxonomy(
+        function,
+        frame_report=report,
+        source_path=_frame_source_path_for_unit(unit),
+    )
     message = (
         f"{summary}; this residual is frame/local-area, not register "
         "allocation. Prefer frame-reservation inspection or a frame patch "
         "before register allocator tools."
     )
-    return {
+    if taxonomy is not None:
+        message = (
+            f"{message} Normalized frame cause: {taxonomy['cause']} "
+            f"({taxonomy['closability_tier']})."
+        )
+    hint = {
         "kind": "frame-local-area",
         "message": message,
         "summary": summary,
-        "next_steps": [
-            f"melee-agent debug inspect frame-reservations -f {function}",
-            (
-                f"melee-agent debug dump local {src_arg} -f {function} "
-                "--diff --force-frame-from-diff"
-            ),
-        ],
+        "next_steps": (
+            _frame_taxonomy_next_steps(function, taxonomy, unit=unit)
+            if taxonomy is not None
+            else [
+                f"melee-agent debug inspect frame-reservations -f {function}",
+                (
+                    f"melee-agent debug dump local {src_arg} -f {function} "
+                    "--diff --force-frame-from-diff"
+                ),
+            ]
+        ),
     }
+    if taxonomy is not None:
+        _attach_frame_taxonomy_hint_fields(hint, taxonomy)
+    return hint
 
 
 def _detect_frame_residual_hint(
@@ -20489,6 +20614,16 @@ def mutate_frame_transform_search_cmd(
             ),
         ),
     ] = True,
+    frame_reservation_bytes: Annotated[
+        Optional[int],
+        typer.Option(
+            "--frame-reservation-bytes",
+            help=(
+                "Override the inferred frame delta with a positive explicit "
+                "PAD_STACK(N) probe size for frame-reservation-pad-stack."
+            ),
+        ),
+    ] = None,
     timeout: Annotated[
         int,
         typer.Option(
@@ -20560,6 +20695,11 @@ def mutate_frame_transform_search_cmd(
         and current_frame_size != expected_frame_size
         else None
     )
+    if frame_reservation_bytes is not None:
+        if frame_reservation_bytes <= 0:
+            typer.echo("--frame-reservation-bytes must be positive", err=True)
+            raise typer.Exit(2)
+        frame_reservation_delta = frame_reservation_bytes
 
     source_text = None
     source_label = None

@@ -99,3 +99,9 @@ def test_default_dashboard_template_loads_embedded_data() -> None:
     assert "dashboard-data.js" in text
     assert "window.__TAXONOMY_DASHBOARD_DATA__" in text
     assert "Taxonomy guide" in text
+    assert "closabilityFilter" in text
+    assert "frame_closability_tier" in text
+    assert "frame_source_object_symbol" in text
+    assert "Frame closability" in text
+    assert 'for (const id of ["search", "bucketFilter", "tierFilter", "primaryFilter", "closabilityFilter", "minMatch"])' in text
+    assert 'if (closability && row.frame_closability_tier !== closability) return false;' in text

@@ -367,6 +367,46 @@ def test_frame_transform_search_lists_forced_pad_stack_probe_for_frame_delta(
     assert "PAD_STACK(8);" in retained.read_text()
 
 
+def test_frame_transform_search_accepts_explicit_frame_reservation_bytes(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "baseline.txt"
+    source = tmp_path / "source.c"
+    baseline.write_text(BASELINE_PCDUMP)
+    source.write_text(SOURCE_SIMPLE_FRAME)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "frame-transform-search",
+            "-f",
+            "fn_80000000",
+            "--pcdump",
+            str(baseline),
+            "--no-expected",
+            "--source-file",
+            str(source),
+            "--operator",
+            "frame-reservation-pad-stack",
+            "--frame-reservation-bytes",
+            "8",
+            "--no-compile-probes",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    probe = next(
+        probe for probe in payload["probes"]
+        if probe["operator"] == "frame-reservation-pad-stack"
+    )
+    assert probe["provenance"]["bytes"] == 8
+    assert "PAD_STACK(8);" in Path(probe["source_retained"]).read_text()
+
+
 def test_frame_transform_search_compiles_forced_pad_stack_probe(
     tmp_path: Path,
     monkeypatch,

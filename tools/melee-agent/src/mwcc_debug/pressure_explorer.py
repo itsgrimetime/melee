@@ -441,9 +441,11 @@ def generate_frame_directed_probes(
     their final use. They are intentionally conservative and only fire for
     one-use local patterns.
     """
-    if not isinstance(target_frame, dict):
-        return []
-    target_size = _frame_size_from_model(target_frame)
+    target_size = (
+        _frame_size_from_model(target_frame)
+        if isinstance(target_frame, dict)
+        else None
+    )
     current_size = _frame_size_from_model(current_frame or {})
     span = _find_function_body_span(source_text, function)
     if span is None:

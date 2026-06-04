@@ -166,7 +166,7 @@
 
     .filters {
       display: grid;
-      grid-template-columns: minmax(220px, 1.4fr) repeat(4, minmax(130px, 1fr));
+      grid-template-columns: minmax(220px, 1.4fr) repeat(5, minmax(130px, 1fr));
       gap: 10px;
       padding: 14px 16px;
       border-bottom: 1px solid var(--line);
@@ -583,7 +583,7 @@
       .bar-row { grid-template-columns: 132px minmax(80px, 1fr) 36px; }
       .detail-grid { grid-template-columns: 1fr; }
       th:nth-child(4), td:nth-child(4),
-      th:nth-child(6), td:nth-child(6) { display: none; }
+      th:nth-child(7), td:nth-child(7) { display: none; }
     }
   </style>
 </head>
@@ -632,6 +632,10 @@
             <select id="primaryFilter"></select>
           </label>
           <label>
+            Closability
+            <select id="closabilityFilter"></select>
+          </label>
+          <label>
             Min match %
             <input id="minMatch" type="number" min="0" max="100" step="0.01" value="0">
           </label>
@@ -665,6 +669,7 @@
                 <th data-sort="work_bucket">Bucket</th>
                 <th data-sort="primary">Primary</th>
                 <th data-sort="subcategory">Subcategory</th>
+                <th data-sort="frame_closability_tier">Frame closability</th>
                 <th data-sort="file_path">File</th>
               </tr>
             </thead>
@@ -713,6 +718,12 @@
     };
 
     const tierOrder = [">=99%", "97-99%", "95-97%", "90-95%", "<90%"];
+    const closabilityOrder = [
+      "current-tools-padstack",
+      "gen-gated-366",
+      "reorder-gated-362",
+      "ceiling"
+    ];
     const bucketOrder = [
       "signature-call-type",
       "inline-boundary",
@@ -941,8 +952,19 @@
       optionList($("tierFilter"), tierOrder, "tiers");
       const primaries = Array.from(countBy(state.records, "primary").keys()).sort();
       optionList($("primaryFilter"), primaries, "primary classifications", "primary");
+      const closabilityValues = closabilityOrder.filter((value) =>
+        state.records.some((row) => row.frame_closability_tier === value)
+      );
+      const extraClosability = Array.from(countBy(state.records, "frame_closability_tier").keys())
+        .filter((value) => value && !closabilityOrder.includes(value))
+        .sort();
+      optionList(
+        $("closabilityFilter"),
+        closabilityValues.concat(extraClosability),
+        "frame closability tiers"
+      );
 
-      for (const id of ["search", "bucketFilter", "tierFilter", "primaryFilter", "minMatch"]) {
+      for (const id of ["search", "bucketFilter", "tierFilter", "primaryFilter", "closabilityFilter", "minMatch"]) {
         $(id).addEventListener("input", applyFilters);
       }
       $("near99").addEventListener("click", () => toggleButton("near99"));
@@ -975,6 +997,7 @@
       $("bucketFilter").value = "";
       $("tierFilter").value = "";
       $("primaryFilter").value = "";
+      $("closabilityFilter").value = "";
       $("minMatch").value = "0";
       for (const key of Object.keys(state.toggles)) {
         state.toggles[key] = false;
@@ -995,6 +1018,10 @@
         row.work_bucket,
         row.primary,
         row.subcategory,
+        row.frame_cause,
+        row.frame_verdict,
+        row.frame_closability_tier,
+        row.frame_source_object_symbol,
         row.next_command
       ].join(" ").toLowerCase();
       return haystack.includes(query);
@@ -1061,6 +1088,7 @@
       const bucket = $("bucketFilter").value;
       const tier = $("tierFilter").value;
       const primary = $("primaryFilter").value;
+      const closability = $("closabilityFilter").value;
       const minMatch = pct($("minMatch").value);
 
       state.filtered = state.records.filter((row) => {
@@ -1068,6 +1096,7 @@
         if (bucket && row.work_bucket !== bucket) return false;
         if (tier && row.match_tier !== tier) return false;
         if (primary && row.primary !== primary) return false;
+        if (closability && row.frame_closability_tier !== closability) return false;
         if (pct(row.match_percent) < minMatch) return false;
         if (state.toggles.near99 && pct(row.match_percent) < 99) return false;
         if (state.toggles.smallPattern && !row.known_small_pattern_candidate) return false;
@@ -1102,12 +1131,15 @@
       const stack = rows.filter((r) => r.work_bucket === "stack-local-layout").length;
       const data = rows.filter((r) => r.work_bucket === "data-symbol-relocation").length;
       const reg = rows.filter((r) => r.work_bucket === "register-allocator").length;
+      const currentTools = rows.filter((r) => r.frame_closability_tier === "current-tools-padstack").length;
       const med = median(rows.map((r) => r.match_percent));
+      const near99Pct = rows.length ? near99 / rows.length * 100 : 0;
       const metrics = [
         ["Classified", rows.length.toLocaleString(), `${state.errors.length} checkdiff errors`],
-        ["Near 99+", near99.toLocaleString(), `${formatPct(near99 / rows.length * 100)}% of classified`],
+        ["Near 99+", near99.toLocaleString(), `${formatPct(near99Pct)}% of classified`],
         ["Median Match", `${formatPct(med)}%`, `Average ${formatPct(avg(rows, "match_percent"))}%`],
         ["Stack/Data", (stack + data).toLocaleString(), `${stack} stack, ${data} data`],
+        ["Current Frame Tools", currentTools.toLocaleString(), "Frame rows with bounded probes"],
         ["Register", reg.toLocaleString(), "Needs pcdump-backed proof"]
       ];
       $("metrics").innerHTML = metrics.map(([label, value, hint]) => `
@@ -1168,9 +1200,10 @@
           <td>${bucketPill(row.work_bucket)}</td>
           <td title="${escapeHtml(taxonomyTitle("primary", row.primary))}">${escapeHtml(row.primary)}</td>
           <td>${escapeHtml(row.subcategory)}</td>
+          <td>${escapeHtml(row.frame_closability_tier || "-")}</td>
           <td><span class="mono">${escapeHtml(row.file_path)}</span></td>
         </tr>
-      `).join("") || `<tr><td colspan="6"><div class="empty">No rows match the current filters.</div></td></tr>`;
+      `).join("") || `<tr><td colspan="7"><div class="empty">No rows match the current filters.</div></td></tr>`;
 
       document.querySelectorAll("tr[data-fn]").forEach((tr) => {
         tr.addEventListener("click", () => {
@@ -1197,7 +1230,9 @@
       const rowPrimaryInfo = taxonomyInfo("primary", row.primary);
       const taxonomyNotes = [
         rowBucketInfo ? `Bucket: ${rowBucketInfo.description}` : "",
-        rowPrimaryInfo ? `Primary: ${rowPrimaryInfo.description}` : ""
+        rowPrimaryInfo ? `Primary: ${rowPrimaryInfo.description}` : "",
+        row.frame_cause ? `Frame cause: ${row.frame_cause}` : "",
+        row.frame_verdict ? `Frame verdict: ${row.frame_verdict}` : ""
       ].filter(Boolean);
       const deepening = [];
       if (row.static_deepening) {
@@ -1220,6 +1255,8 @@
           <div class="kv"><div class="k">Match</div><div class="v">${formatPct(row.match_percent)}%</div></div>
           <div class="kv"><div class="k">Tier</div><div class="v">${escapeHtml(row.match_tier)}</div></div>
           <div class="kv"><div class="k">Primary</div><div class="v">${escapeHtml(row.primary)}</div></div>
+          <div class="kv"><div class="k">Frame closability</div><div class="v">${escapeHtml(row.frame_closability_tier || "-")}</div></div>
+          <div class="kv"><div class="k">Frame source</div><div class="v">${escapeHtml(row.frame_source_object_symbol || "-")}</div></div>
           <div class="kv"><div class="k">Size</div><div class="v">${escapeHtml(row.size_bytes || "-")} bytes</div></div>
         </div>
         ${taxonomyNotes.length ? `<div class="section-label">Classification meaning</div><ul class="reason-list">${taxonomyNotes.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
@@ -1237,7 +1274,7 @@
         ${deepening.length ? `<div class="section-label">Deepening</div><ul class="reason-list">${deepening.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
         ${opcodePairs ? `<div class="section-label">Opcode pairs</div><div class="command">${escapeHtml(opcodePairs)}</div>` : ""}
         <div class="section-label">Next command</div>
-        <div class="command">${escapeHtml(row.next_command)}</div>
+        <div class="command">${escapeHtml(row.frame_next_command || row.next_command)}</div>
       `;
     }
 
@@ -1312,7 +1349,7 @@
         if (state.records.length) selectRow(state.records[0]);
       } catch (error) {
         $("loadStatus").innerHTML = `<strong>Load failed</strong>${escapeHtml(error.message)}`;
-        $("rows").innerHTML = `<tr><td colspan="6"><div class="empty">Could not load taxonomy files. Open this dashboard through a local HTTP server from the taxonomy directory.</div></td></tr>`;
+        $("rows").innerHTML = `<tr><td colspan="7"><div class="empty">Could not load taxonomy files. Open this dashboard through a local HTTP server from the taxonomy directory.</div></td></tr>`;
       }
     }
 
