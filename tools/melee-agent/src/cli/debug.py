@@ -92,6 +92,7 @@ from ..mwcc_debug.frame_reservations import (
     analyze_frame_from_asm_text,
     analyze_frame_from_function,
     analyze_frame_reservations,
+    evaluate_stack_home_probe_results,
 )
 
 
@@ -3357,6 +3358,33 @@ def _read_frame_reservation_current_asm(
     return "\n".join(current_asm)
 
 
+def _read_stack_home_probe_results_json(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        raise typer.BadParameter(f"probe results JSON not found: {path}")
+    try:
+        payload = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter(f"invalid probe results JSON: {exc}") from exc
+    if isinstance(payload, list):
+        variants = payload
+    elif isinstance(payload, dict):
+        variants = payload.get("variants")
+        if variants is None:
+            evaluation = payload.get("stack_home_probe_evaluation")
+            if isinstance(evaluation, dict):
+                variants = evaluation.get("variants")
+    else:
+        variants = None
+    if not isinstance(variants, list):
+        raise typer.BadParameter(
+            "probe results JSON must be a variants array or an object with variants"
+        )
+    return [
+        dict(item) for item in variants
+        if isinstance(item, Mapping)
+    ]
+
+
 def _frame_spec_from_checkdiff_target(checkdiff_json: Path) -> dict:
     if not checkdiff_json.exists():
         raise typer.BadParameter(
@@ -3569,6 +3597,17 @@ def _print_frame_reservation_report(report: dict) -> None:
     if expected is not None:
         _print_unused_ranges("expected", expected.get("unused_ranges", []))
     _print_stack_home_order_summary(current)
+    probe_evaluation = report.get("stack_home_probe_evaluation")
+    if isinstance(probe_evaluation, Mapping):
+        print()
+        print(f"stack-home probe verdict: {probe_evaluation.get('verdict')}")
+        best = probe_evaluation.get("best_variant")
+        if isinstance(best, Mapping):
+            print(
+                "best probe: "
+                f"{best.get('label')} [{best.get('operator')}] "
+                f"fixed {best.get('fixed_count')}/{best.get('target_count')}"
+            )
 
     first_divergence = report.get("frame_first_divergence")
     if first_divergence:
@@ -3661,6 +3700,16 @@ def frame_reservations(
             help="Inspect only the current pcdump without extracting target asm.",
         ),
     ] = False,
+    probe_results_json: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--probe-results-json",
+            help=(
+                "Path to lifetime-layout --json output or a variants array. "
+                "Attaches source-reorder / ceiling-candidate evaluation."
+            ),
+        ),
+    ] = None,
     json_out: Annotated[
         bool,
         typer.Option("--json", help="Emit the report as JSON."),
@@ -3691,6 +3740,13 @@ def frame_reservations(
     except ValueError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(2) from exc
+
+    if probe_results_json is not None:
+        variants = _read_stack_home_probe_results_json(probe_results_json)
+        report["stack_home_probe_evaluation"] = evaluate_stack_home_probe_results(
+            report,
+            variants,
+        )
 
     if json_out:
         print(json.dumps(report, indent=2))

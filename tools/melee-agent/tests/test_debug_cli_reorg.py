@@ -361,6 +361,85 @@ def test_frame_reservations_cli_text_reports_expected_stack_home_offsets(
     ) in out
 
 
+def test_frame_reservations_cli_evaluates_probe_results_json(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    pcdump = tmp_path / "pcdump.txt"
+    pcdump.write_text(textwrap.dedent("""\
+        Starting function fn_80000002
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        fn_80000002
+        B0: Succ={} Pred={} Labels={}
+            stwu    r1,-80(r1)
+            stfs    f4,a(r1)
+            stfs    f5,b(r1)
+            stfs    f6,c(r1)
+            addi    r1,r1,80
+    """))
+    expected = tmp_path / "expected.s"
+    expected.write_text(textwrap.dedent("""\
+        .fn fn_80000002, global
+        /* 80000000 */    stwu r1, -80(r1)
+        /* 80000004 */    stfs f4, 40(r1)
+        /* 80000008 */    stfs f5, 52(r1)
+        /* 8000000c */    stfs f6, 48(r1)
+        /* 80000010 */    addi r1, r1, 80
+        .endfn fn_80000002
+    """))
+    probe_results = tmp_path / "probes.json"
+    probe_results.write_text(json.dumps({
+        "variants": [
+            {
+                "label": "swap-cycle",
+                "operator": "declaration-use-distance",
+                "status": "ok",
+                "match_percent": 99.91,
+                "stack_slot_localizer": {
+                    "mismatch_count": 0,
+                    "mismatches": [],
+                },
+            }
+        ]
+    }))
+    current_asm = textwrap.dedent("""\
+        +000: 94 21 ff b0 \tstwu    r1,-80(r1)
+        +004: d0 81 00 30 \tstfs    f4,48(r1)
+        +008: d0 a1 00 34 \tstfs    f5,52(r1)
+        +00c: d0 c1 00 28 \tstfs    f6,40(r1)
+        +010: 38 21 00 50 \taddi    r1,r1,80
+    """)
+    monkeypatch.setattr(
+        debug_cli,
+        "_read_frame_reservation_current_asm",
+        lambda function, melee_root=None: current_asm,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "frame-reservations",
+            "-f",
+            "fn_80000002",
+            str(pcdump),
+            "--expected-asm",
+            str(expected),
+            "--probe-results-json",
+            str(probe_results),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    evaluation = payload["stack_home_probe_evaluation"]
+    assert evaluation["verdict"] == "source-reachable-reorder"
+    assert evaluation["best_variant"]["label"] == "swap-cycle"
+    assert evaluation["best_variant"]["target_fixed"] is True
+
+
 def test_frame_reservations_cli_reports_current_low_expansion(tmp_path: Path) -> None:
     pcdump = tmp_path / "pcdump.txt"
     pcdump.write_text(textwrap.dedent("""\

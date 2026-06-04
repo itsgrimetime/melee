@@ -7,6 +7,7 @@ import textwrap
 from src.mwcc_debug.frame_reservations import (
     analyze_frame_from_asm_text,
     analyze_frame_reservations,
+    evaluate_stack_home_probe_results,
 )
 
 
@@ -867,6 +868,73 @@ def test_frame_reservation_infers_expected_symbolic_stack_home_order() -> None:
             },
         ],
     }
+
+
+def test_stack_home_probe_evaluation_classifies_reachable_and_ceiling_candidates() -> None:
+    report = {
+        "current": {
+            "stack_home_target_permutation": {
+                "status": "computed",
+                "moves": [
+                    {
+                        "symbol": "a",
+                        "current_offset": 0x30,
+                        "expected_offset": 0x28,
+                        "offset_delta": 0x8,
+                    },
+                    {
+                        "symbol": "c",
+                        "current_offset": 0x28,
+                        "expected_offset": 0x30,
+                        "offset_delta": -0x8,
+                    },
+                ],
+            }
+        }
+    }
+    fixed = {
+        "label": "swap-cycle",
+        "operator": "declaration-use-distance",
+        "status": "ok",
+        "match_percent": 99.91,
+        "stack_slot_localizer": {"mismatch_count": 0, "mismatches": []},
+    }
+    unchanged = {
+        "label": "decl-order",
+        "operator": "decl-orders",
+        "status": "ok",
+        "match_percent": 99.8,
+        "stack_slot_localizer": {
+            "mismatch_count": 2,
+            "mismatches": [
+                {
+                    "opcode": "stfs",
+                    "current_offset": 0x30,
+                    "expected_offset": 0x28,
+                },
+                {
+                    "opcode": "stfs",
+                    "current_offset": 0x28,
+                    "expected_offset": 0x30,
+                },
+            ],
+        },
+    }
+
+    evaluation = evaluate_stack_home_probe_results(report, [unchanged, fixed])
+
+    assert evaluation["status"] == "evaluated"
+    assert evaluation["verdict"] == "source-reachable-reorder"
+    assert evaluation["best_variant"]["label"] == "swap-cycle"
+    assert evaluation["best_variant"]["target_fixed"] is True
+    assert evaluation["best_variant"]["fixed_count"] == 2
+    assert evaluation["variants"][1]["label"] == "decl-order"
+    assert evaluation["variants"][1]["fixed_count"] == 0
+
+    ceiling = evaluate_stack_home_probe_results(report, [unchanged])
+
+    assert ceiling["verdict"] == "internal-tiebreak-ceiling-candidate"
+    assert ceiling["best_variant"]["fixed_count"] == 0
 
 
 def test_frame_reservation_stack_home_assignment_merges_repeated_accesses() -> None:

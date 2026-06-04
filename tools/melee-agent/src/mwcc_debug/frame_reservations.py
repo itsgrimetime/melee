@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Any, Iterable
 
 from .parser import Function, Instruction, Pass, parse_pcdump
 
@@ -119,6 +119,61 @@ def analyze_frame_from_function(fn: Function) -> dict:
 def analyze_frame_from_asm_text(asm_text: str) -> dict:
     """Return a JSON-friendly frame model for raw target/checkdiff asm text."""
     return _analyze_instructions(_parse_expected_asm(asm_text))
+
+
+def evaluate_stack_home_probe_results(
+    frame_report: dict,
+    variant_results: list[dict[str, Any]],
+) -> dict:
+    """Score compiled source probes against target stack-home movement."""
+    targets = _stack_home_probe_targets(frame_report)
+    if not targets:
+        return {
+            "status": "unavailable-no-target-stack-home-moves",
+            "verdict": "no-targets",
+            "target_count": 0,
+            "variant_count": len(variant_results),
+            "best_variant": None,
+            "variants": [],
+        }
+
+    variants = [
+        _score_stack_home_probe_variant(targets, variant)
+        for variant in variant_results
+    ]
+    variants.sort(
+        key=lambda item: (
+            int(item.get("target_fixed") is True),
+            int(item.get("fixed_count") or 0),
+            -int(item.get("remaining_target_mismatch_count") or 0),
+            float(item.get("match_percent") or -1.0),
+        ),
+        reverse=True,
+    )
+    for rank, variant in enumerate(variants, start=1):
+        variant["rank"] = rank
+    best = variants[0] if variants else None
+
+    if best is None:
+        verdict = "no-probes"
+    elif best.get("target_fixed"):
+        verdict = "source-reachable-reorder"
+    elif int(best.get("fixed_count") or 0) > 0:
+        verdict = "partial-source-reachable-reorder"
+    elif all(variant.get("status") == "ok" for variant in variants):
+        verdict = "internal-tiebreak-ceiling-candidate"
+    else:
+        verdict = "probe-results-inconclusive"
+
+    return {
+        "status": "evaluated" if variants else "no-probes",
+        "verdict": verdict,
+        "target_count": len(targets),
+        "variant_count": len(variants),
+        "targets": targets,
+        "best_variant": best,
+        "variants": variants,
+    }
 
 
 def _select_final_pass(fn: Function) -> Pass | None:
@@ -890,6 +945,108 @@ def _stack_home_probe_plan(
             },
         ],
     }
+
+
+def _stack_home_probe_targets(frame_report: dict) -> list[dict]:
+    current = frame_report.get("current") if isinstance(frame_report, dict) else None
+    if not isinstance(current, dict):
+        return []
+    permutation = current.get("stack_home_target_permutation")
+    if not isinstance(permutation, dict) or permutation.get("status") != "computed":
+        return []
+    targets: list[dict] = []
+    for move in permutation.get("moves") or []:
+        if not isinstance(move, dict):
+            continue
+        current_offset = move.get("current_offset")
+        expected_offset = move.get("expected_offset")
+        if current_offset is None or expected_offset is None:
+            continue
+        if current_offset == expected_offset:
+            continue
+        targets.append({
+            "symbol": move.get("symbol"),
+            "current_offset": current_offset,
+            "expected_offset": expected_offset,
+            "offset_delta": move.get("offset_delta"),
+            "current_position": move.get("current_position"),
+            "expected_position": move.get("expected_position"),
+        })
+    return targets
+
+
+def _score_stack_home_probe_variant(
+    targets: list[dict],
+    variant: dict[str, Any],
+) -> dict:
+    localizer = variant.get("stack_slot_localizer")
+    status = str(variant.get("status", "unknown"))
+    localizer_measured = isinstance(localizer, dict)
+    statuses: list[dict] = []
+    fixed_count = 0
+    for target in targets:
+        observed = _find_stack_home_probe_mismatch(localizer, target)
+        target_fixed = localizer_measured and observed is None
+        if target_fixed:
+            fixed_count += 1
+        statuses.append({
+            "symbol": target.get("symbol"),
+            "current_offset": target.get("current_offset"),
+            "expected_offset": target.get("expected_offset"),
+            "target_fixed": target_fixed,
+            "observed_mismatch": observed,
+        })
+
+    remaining = len(targets) - fixed_count
+    target_fixed = bool(targets) and fixed_count == len(targets)
+    return {
+        "label": variant.get("label") or variant.get("variant_id") or variant.get("id"),
+        "operator": variant.get("operator") or variant.get("kind"),
+        "status": status,
+        "target_movement_measured": localizer_measured,
+        "target_fixed": target_fixed,
+        "fixed_count": fixed_count,
+        "target_count": len(targets),
+        "movement_score": fixed_count / len(targets) if targets else 0.0,
+        "remaining_target_mismatch_count": remaining,
+        "target_statuses": statuses,
+        "match_percent": variant.get("match_percent")
+        if variant.get("match_percent") is not None
+        else variant.get("final_match_percent"),
+        "stack_slot_mismatch_count": _stack_slot_mismatch_count(localizer),
+        "stack_slot_error": variant.get("stack_slot_error"),
+    }
+
+
+def _find_stack_home_probe_mismatch(
+    localizer: Any,
+    target: dict,
+) -> dict | None:
+    if not isinstance(localizer, dict):
+        return None
+    current = target.get("current_offset")
+    expected = target.get("expected_offset")
+    for mismatch in localizer.get("mismatches") or []:
+        if not isinstance(mismatch, dict):
+            continue
+        if mismatch.get("current_offset") != current:
+            continue
+        if mismatch.get("expected_offset") != expected:
+            continue
+        return dict(mismatch)
+    return None
+
+
+def _stack_slot_mismatch_count(localizer: Any) -> int | None:
+    if not isinstance(localizer, dict):
+        return None
+    count = localizer.get("mismatch_count")
+    if isinstance(count, int):
+        return count
+    mismatches = localizer.get("mismatches")
+    if isinstance(mismatches, list):
+        return len(mismatches)
+    return None
 
 
 def _first_stack_object_divergence(
