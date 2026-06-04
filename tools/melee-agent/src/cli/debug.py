@@ -20419,6 +20419,22 @@ def mutate_frame_transform_search_cmd(
         probe_plan=probe_plan,
         operators=operators,
     )
+    current_frame_size = (frame_report.get("current") or {}).get("frame_size")
+    if not isinstance(current_frame_size, int):
+        current_frame_size = None
+    expected_frame_size = None
+    expected_model = frame_report.get("expected")
+    if isinstance(expected_model, Mapping):
+        raw_expected_frame = expected_model.get("frame_size")
+        if isinstance(raw_expected_frame, int):
+            expected_frame_size = raw_expected_frame
+    frame_reservation_delta = (
+        expected_frame_size - current_frame_size
+        if current_frame_size is not None
+        and expected_frame_size is not None
+        and current_frame_size != expected_frame_size
+        else None
+    )
 
     source_text = None
     source_label = None
@@ -20448,6 +20464,7 @@ def mutate_frame_transform_search_cmd(
             function,
             current_frame=frame_report.get("current"),
             target_frame=frame_report.get("expected"),
+            frame_reservation_delta=frame_reservation_delta,
             max_probes=max_probes,
         )
         allowed = frozenset(operator_filter)
@@ -20473,15 +20490,6 @@ def mutate_frame_transform_search_cmd(
         )
     )
     candidate_probe_by_label: dict[str, dict[str, Any]] = {}
-    current_frame_size = (frame_report.get("current") or {}).get("frame_size")
-    if not isinstance(current_frame_size, int):
-        current_frame_size = None
-    expected_frame_size = None
-    expected_model = frame_report.get("expected")
-    if isinstance(expected_model, Mapping):
-        raw_expected_frame = expected_model.get("frame_size")
-        if isinstance(raw_expected_frame, int):
-            expected_frame_size = raw_expected_frame
 
     def _score_candidate(
         *,

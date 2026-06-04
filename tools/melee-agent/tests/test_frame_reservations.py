@@ -593,6 +593,7 @@ def test_frame_reservation_reports_frame_size_only_divergence() -> None:
             "objective": "reduce frame/local-area divergence toward expected",
             "cause_kind": "extra-frame-reservation-or-alignment",
             "operator_priority": [
+                "frame-reservation-pad-stack",
                 "frame-magic-scratch-relocation",
                 "frame-split-fp-const-lifetime",
                 "declaration-use-distance",
@@ -609,6 +610,7 @@ def test_frame_reservation_reports_frame_size_only_divergence() -> None:
                     "kind": "lifetime-layout",
                     "command": (
                         "melee-agent debug mutate lifetime-layout -f fn_80000000 "
+                        "--operator frame-reservation-pad-stack "
                         "--operator frame-magic-scratch-relocation "
                         "--operator frame-split-fp-const-lifetime "
                         "--operator declaration-use-distance --operator block-scope "
@@ -1373,8 +1375,8 @@ def test_frame_transform_probe_evaluation_flags_bounded_ceiling_candidate() -> N
         "frame_delta": -8,
     }
     unchanged = {
-        "label": "block-scope",
-        "operator": "block-scope",
+        "label": "frame-reservation-pad-stack-8",
+        "operator": "frame-reservation-pad-stack",
         "status": "ok",
         "objective": {
             "frame_after": 80,
@@ -1392,6 +1394,32 @@ def test_frame_transform_probe_evaluation_flags_bounded_ceiling_candidate() -> N
         ),
         "measured_probe_count": 1,
         "baseline_remaining_frame_delta": -8,
+    }
+
+
+def test_frame_transform_ceiling_requires_frame_size_capable_probe() -> None:
+    report = {
+        "current": {"frame_size": 80},
+        "expected": {"frame_size": 88},
+        "frame_delta": 8,
+    }
+    unchanged = {
+        "label": "block-scope",
+        "operator": "block-scope",
+        "status": "ok",
+        "objective": {
+            "frame_after": 80,
+        },
+    }
+
+    evaluation = evaluate_frame_transform_probe_results(report, [unchanged])
+
+    assert evaluation["verdict"] == "frame-transform-results-inconclusive"
+    assert evaluation["stop_condition"] == {
+        "status": "not-satisfied",
+        "kind": "frame-transform-results-inconclusive",
+        "reason": "probe evidence is not sufficient for frame transform validation",
+        "baseline_remaining_frame_delta": 8,
     }
 
 

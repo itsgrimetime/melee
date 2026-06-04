@@ -75,6 +75,36 @@ FIXED_PCDUMP = textwrap.dedent("""\
 """)
 
 
+FIXED_88_PCDUMP = textwrap.dedent("""\
+    Starting function fn_80000000
+    FINAL CODE AFTER INSTRUCTION SCHEDULING
+    fn_80000000
+    B0: Succ={} Pred={} Labels={}
+        mflr r0
+        stw r0,4(r1)
+        stwu r1,-88(r1)
+        stfd f31,80(r1)
+        stmw r27,60(r1)
+        lmw r27,60(r1)
+        lfd f31,80(r1)
+        addi r1,r1,88
+""")
+
+
+EXPECTED_88_ASM = textwrap.dedent("""\
+    .fn fn_80000000, global
+    /* 80000000 */    mflr r0
+    /* 80000004 */    stw r0, 0x4(r1)
+    /* 80000008 */    stwu r1, -0x58(r1)
+    /* 8000000C */    stfd f31, 0x50(r1)
+    /* 80000010 */    stmw r27, 0x3c(r1)
+    /* 80000014 */    lmw r27, 0x3c(r1)
+    /* 80000018 */    lfd f31, 0x50(r1)
+    /* 8000001C */    addi r1, r1, 0x58
+    .endfn fn_80000000
+""")
+
+
 SOURCE_WITH_FRAME_LEVERS = textwrap.dedent("""\
     void fn_80000000(HSD_CObj* cobj, int arg1, int arg2)
     {
@@ -86,6 +116,15 @@ SOURCE_WITH_FRAME_LEVERS = textwrap.dedent("""\
         setup();
         HSD_CObjSetFar(cobj, far_val);
         HSD_CObjSetOrtho(cobj, 0.0f, bottom, 0.0f, (f32) arg1);
+    }
+""")
+
+
+SOURCE_SIMPLE_FRAME = textwrap.dedent("""\
+    void fn_80000000(int arg)
+    {
+        int count;
+        sink(arg + count);
     }
 """)
 
@@ -180,6 +219,109 @@ def test_frame_transform_search_lists_directed_probes_without_compile(
     assert Path(retained[0]).exists()
     assert payload["variants"] == []
     assert payload["frame_transform_probe_evaluation"]["verdict"] == "no-probes"
+
+
+def test_frame_transform_search_lists_forced_pad_stack_probe_for_frame_delta(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "baseline.txt"
+    expected = tmp_path / "expected.s"
+    source = tmp_path / "source.c"
+    baseline.write_text(BASELINE_PCDUMP)
+    expected.write_text(EXPECTED_88_ASM)
+    source.write_text(SOURCE_SIMPLE_FRAME)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "frame-transform-search",
+            "-f",
+            "fn_80000000",
+            "--pcdump",
+            str(baseline),
+            "--expected-asm",
+            str(expected),
+            "--source-file",
+            str(source),
+            "--operator",
+            "frame-reservation-pad-stack",
+            "--no-compile-probes",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    probes = [
+        probe for probe in payload["probes"]
+        if probe["operator"] == "frame-reservation-pad-stack"
+    ]
+    assert len(probes) == 1
+    assert probes[0]["provenance"] == {
+        "kind": "frame-reservation-pad-stack",
+        "bytes": 8,
+        "action": "insert",
+        "delta": 8,
+    }
+    retained = Path(probes[0]["source_retained"])
+    assert retained.exists()
+    assert "PAD_STACK(8);" in retained.read_text()
+
+
+def test_frame_transform_search_compiles_forced_pad_stack_probe(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    baseline = tmp_path / "baseline.txt"
+    expected = tmp_path / "expected.s"
+    source = tmp_path / "source.c"
+    baseline.write_text(BASELINE_PCDUMP)
+    expected.write_text(EXPECTED_88_ASM)
+    source.write_text(SOURCE_SIMPLE_FRAME)
+
+    def fake_compile(diff_input, *, function, melee_root, timeout) -> str:
+        assert Path(diff_input.path).read_text().count("PAD_STACK(8);") == 1
+        return FIXED_88_PCDUMP
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture.compile_source_variant",
+        fake_compile,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "frame-transform-search",
+            "-f",
+            "fn_80000000",
+            "--pcdump",
+            str(baseline),
+            "--expected-asm",
+            str(expected),
+            "--source-file",
+            str(source),
+            "--operator",
+            "frame-reservation-pad-stack",
+            "--compile-probes",
+            "--no-score-match-percent",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    variant = payload["variants"][0]
+    assert variant["status"] == "ok"
+    assert variant["operator"] == "frame-reservation-pad-stack"
+    assert variant["candidate_frame_size"] == 88
+    assert variant["probe"]["provenance"]["delta"] == 8
+    assert payload["frame_transform_probe_evaluation"]["verdict"] == (
+        "source-reachable-frame-transform"
+    )
 
 
 def test_frame_transform_search_scores_source_candidate_with_match_percent(

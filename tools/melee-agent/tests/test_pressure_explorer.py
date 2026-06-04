@@ -544,6 +544,153 @@ def test_frame_reservation_pad_stack_probe_replaces_existing_pad() -> None:
     }
 
 
+def test_generate_frame_directed_probes_emits_pad_stack_for_too_small_frame() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(int flag)
+        {
+            int count;
+            sink(flag + count);
+        }
+    """)
+
+    probes = generate_frame_directed_probes(
+        source,
+        "fn_80000000",
+        current_frame={"frame_size": 80},
+        target_frame={"frame_size": 88},
+        frame_reservation_delta=8,
+        max_probes=10,
+    )
+    probe = next(
+        probe for probe in probes if probe.operator == "frame-reservation-pad-stack"
+    )
+
+    assert "    PAD_STACK(8);\n    sink" in probe.source_text
+    assert probe.provenance == {
+        "kind": "frame-reservation-pad-stack",
+        "bytes": 8,
+        "action": "insert",
+        "delta": 8,
+    }
+
+
+def test_generate_frame_directed_probes_decreases_existing_pad_stack_for_too_large_frame() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(int flag)
+        {
+            int count;
+            PAD_STACK(16);
+            sink(flag + count);
+        }
+    """)
+
+    probes = generate_frame_directed_probes(
+        source,
+        "fn_80000000",
+        current_frame={"frame_size": 88},
+        target_frame={"frame_size": 80},
+        frame_reservation_delta=-8,
+        max_probes=10,
+    )
+    probe = next(
+        probe for probe in probes if probe.operator == "frame-reservation-pad-stack"
+    )
+
+    assert "PAD_STACK(16)" not in probe.source_text
+    assert "    PAD_STACK(8);\n    sink" in probe.source_text
+    assert probe.provenance == {
+        "kind": "frame-reservation-pad-stack",
+        "bytes": 8,
+        "action": "decrease",
+        "previous_bytes": 16,
+        "delta": -8,
+    }
+
+
+def test_generate_frame_directed_probes_removes_exact_pad_stack_for_too_large_frame() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(int flag)
+        {
+            int count;
+            PAD_STACK(8);
+            sink(flag + count);
+        }
+    """)
+
+    probes = generate_frame_directed_probes(
+        source,
+        "fn_80000000",
+        current_frame={"frame_size": 88},
+        target_frame={"frame_size": 80},
+        frame_reservation_delta=-8,
+        max_probes=10,
+    )
+    probe = next(
+        probe for probe in probes if probe.operator == "frame-reservation-pad-stack"
+    )
+
+    assert "PAD_STACK(" not in probe.source_text
+    assert "    int count;\n    sink" in probe.source_text
+    assert probe.provenance == {
+        "kind": "frame-reservation-pad-stack",
+        "action": "remove",
+        "previous_bytes": 8,
+        "delta": -8,
+    }
+
+
+def test_generate_frame_directed_probes_removes_smaller_pad_stack_for_too_large_frame() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(int flag)
+        {
+            int count;
+            PAD_STACK(8);
+            sink(flag + count);
+        }
+    """)
+
+    probes = generate_frame_directed_probes(
+        source,
+        "fn_80000000",
+        current_frame={"frame_size": 96},
+        target_frame={"frame_size": 80},
+        frame_reservation_delta=-16,
+        max_probes=10,
+    )
+    probe = next(
+        probe for probe in probes if probe.operator == "frame-reservation-pad-stack"
+    )
+
+    assert "PAD_STACK(" not in probe.source_text
+    assert probe.provenance == {
+        "kind": "frame-reservation-pad-stack",
+        "action": "remove",
+        "previous_bytes": 8,
+        "delta": -16,
+    }
+
+
+def test_generate_frame_directed_probes_does_not_insert_pad_stack_for_too_large_frame() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(int flag)
+        {
+            int count;
+            sink(flag + count);
+        }
+    """)
+
+    probes = generate_frame_directed_probes(
+        source,
+        "fn_80000000",
+        current_frame={"frame_size": 88},
+        target_frame={"frame_size": 80},
+        frame_reservation_delta=-8,
+        max_probes=10,
+    )
+
+    assert "frame-reservation-pad-stack" not in {probe.operator for probe in probes}
+
+
 def test_call_return_compare_chain_probes_include_targeted_variants() -> None:
     source = textwrap.dedent("""\
         void fn_80000000(void* entity, float dist, int teammate_slot)

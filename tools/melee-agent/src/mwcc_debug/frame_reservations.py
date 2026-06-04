@@ -319,14 +319,31 @@ def _all_ok_frame_transform_probes_measured(variants: list[dict]) -> bool:
         if variant.get("status") == "ok"
         and isinstance(variant.get("candidate_frame_size"), int)
     ]
+    frame_size_capable = [
+        variant for variant in measured
+        if _is_frame_size_transform_operator(variant.get("operator"))
+    ]
     return (
         bool(measured)
+        and bool(frame_size_capable)
         and len(measured) == len(variants)
         and all(
             int(variant.get("frame_delta_improvement") or 0) == 0
             for variant in measured
         )
     )
+
+
+_FRAME_SIZE_TRANSFORM_OPERATORS = {
+    "frame-reservation-pad-stack",
+    "frame-direct-literal-at-final-fp-call",
+    "frame-split-fp-const-lifetime",
+    "frame-magic-scratch-relocation",
+}
+
+
+def _is_frame_size_transform_operator(operator: Any) -> bool:
+    return isinstance(operator, str) and operator in _FRAME_SIZE_TRANSFORM_OPERATORS
 
 
 def _frame_transform_probe_stop_condition(
@@ -2027,6 +2044,7 @@ def _frame_transform_operator_priority(cause_kind: str) -> list[str]:
         ]
     if cause_kind == "extra-frame-reservation-or-alignment":
         return [
+            "frame-reservation-pad-stack",
             "frame-magic-scratch-relocation",
             "frame-split-fp-const-lifetime",
             "declaration-use-distance",

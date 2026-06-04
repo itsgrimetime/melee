@@ -384,6 +384,7 @@ def generate_frame_directed_probes(
     *,
     current_frame: dict | None = None,
     target_frame: dict | None = None,
+    frame_reservation_delta: int | None = None,
     max_probes: int = 12,
 ) -> list[LifetimeLayoutProbe]:
     """Generate source variants for frame/local-area residuals.
@@ -398,16 +399,33 @@ def generate_frame_directed_probes(
         return []
     target_size = _frame_size_from_model(target_frame)
     current_size = _frame_size_from_model(current_frame or {})
-    if current_size is not None and target_size is not None:
-        if current_size <= target_size:
-            return []
-
     span = _find_function_body_span(source_text, function)
     if span is None:
         return []
     body_start, body_end = span
     body = source_text[body_start:body_end]
     probes: list[LifetimeLayoutProbe] = []
+
+    if frame_reservation_delta not in (None, 0):
+        _append_probe(
+            probes,
+            _probe_frame_reservation_pad_stack_delta(
+                source_text,
+                body,
+                body_start,
+                int(frame_reservation_delta),
+            ),
+        )
+        if len(probes) >= max_probes:
+            return probes
+
+    shrink_or_unknown = (
+        current_size is None
+        or target_size is None
+        or current_size > target_size
+    )
+    if not shrink_or_unknown:
+        return probes
 
     for probe in _probe_frame_direct_literal_fp_calls(
         source_text,
@@ -1311,6 +1329,124 @@ def _probe_frame_reservation_pad_stack(
             "kind": "frame-reservation-pad-stack",
             "bytes": bytes_,
             "action": "insert",
+        },
+    )
+
+
+def _probe_frame_reservation_pad_stack_delta(
+    source: str,
+    body: str,
+    body_start: int,
+    delta: int,
+) -> LifetimeLayoutProbe | None:
+    existing = re.search(
+        r"(?m)^([ \t]*)PAD_STACK\(\s*(0x[0-9A-Fa-f]+|\d+)\s*\);\n?",
+        body,
+    )
+    if delta > 0:
+        if existing is not None:
+            previous = int(existing.group(2), 0)
+            bytes_ = previous + delta
+            indent = existing.group(1)
+            replacement = f"{indent}PAD_STACK({bytes_});\n"
+            return LifetimeLayoutProbe(
+                label=f"frame-reservation-pad-stack-{bytes_}",
+                operator="frame-reservation-pad-stack",
+                description=(
+                    f"Increase existing PAD_STACK({previous}) by {delta} "
+                    "byte(s) to test a larger implicit no-access frame "
+                    "reservation."
+                ),
+                source_text=_replace_body_slice(
+                    source,
+                    body_start,
+                    existing.start(),
+                    existing.end(),
+                    replacement,
+                ),
+                provenance={
+                    "kind": "frame-reservation-pad-stack",
+                    "bytes": bytes_,
+                    "action": "increase",
+                    "previous_bytes": previous,
+                    "delta": delta,
+                },
+            )
+
+        insert_rel, indent = _pad_stack_insert_position(body)
+        if insert_rel is None:
+            return None
+        line = f"{indent}PAD_STACK({delta});\n"
+        return LifetimeLayoutProbe(
+            label=f"frame-reservation-pad-stack-{delta}",
+            operator="frame-reservation-pad-stack",
+            description=(
+                f"Insert PAD_STACK({delta}) to test an implicit no-access "
+                "frame reservation."
+            ),
+            source_text=(
+                source[: body_start + insert_rel]
+                + line
+                + source[body_start + insert_rel :]
+            ),
+            provenance={
+                "kind": "frame-reservation-pad-stack",
+                "bytes": delta,
+                "action": "insert",
+                "delta": delta,
+            },
+        )
+
+    if existing is None:
+        return None
+    previous = int(existing.group(2), 0)
+    remove_bytes = abs(delta)
+    indent = existing.group(1)
+    if previous <= remove_bytes:
+        return LifetimeLayoutProbe(
+            label=f"frame-reservation-pad-stack-remove-{previous}",
+            operator="frame-reservation-pad-stack",
+            description=(
+                f"Remove existing PAD_STACK({previous}) to test removing an "
+                "implicit no-access frame reservation."
+            ),
+            source_text=_replace_body_slice(
+                source,
+                body_start,
+                existing.start(),
+                existing.end(),
+                "",
+            ),
+            provenance={
+                "kind": "frame-reservation-pad-stack",
+                "action": "remove",
+                "previous_bytes": previous,
+                "delta": delta,
+            },
+        )
+
+    bytes_ = previous - remove_bytes
+    replacement = f"{indent}PAD_STACK({bytes_});\n"
+    return LifetimeLayoutProbe(
+        label=f"frame-reservation-pad-stack-{bytes_}",
+        operator="frame-reservation-pad-stack",
+        description=(
+            f"Decrease existing PAD_STACK({previous}) by {remove_bytes} "
+            "byte(s) to test a smaller implicit no-access frame reservation."
+        ),
+        source_text=_replace_body_slice(
+            source,
+            body_start,
+            existing.start(),
+            existing.end(),
+            replacement,
+        ),
+        provenance={
+            "kind": "frame-reservation-pad-stack",
+            "bytes": bytes_,
+            "action": "decrease",
+            "previous_bytes": previous,
+            "delta": delta,
         },
     )
 
