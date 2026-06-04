@@ -184,6 +184,194 @@ def evaluate_stack_home_probe_results(
     }
 
 
+def evaluate_frame_transform_probe_results(
+    frame_report: dict,
+    variant_results: list[dict[str, Any]],
+) -> dict:
+    """Score compiled source probes against expected frame size."""
+    expected = frame_report.get("expected")
+    current = frame_report.get("current")
+    if not isinstance(expected, dict) or not isinstance(current, dict):
+        return {
+            "status": "unavailable-no-current-or-expected-frame",
+            "verdict": "no-target",
+            "variant_count": len(variant_results),
+            "best_variant": None,
+            "variants": [],
+        }
+    expected_frame = expected.get("frame_size")
+    current_frame = current.get("frame_size")
+    if not isinstance(expected_frame, int) or not isinstance(current_frame, int):
+        return {
+            "status": "unavailable-no-frame-size",
+            "verdict": "no-target",
+            "variant_count": len(variant_results),
+            "best_variant": None,
+            "variants": [],
+        }
+
+    baseline_delta = expected_frame - current_frame
+    variants = [
+        _score_frame_transform_probe_variant(
+            variant,
+            expected_frame=expected_frame,
+            baseline_delta=baseline_delta,
+        )
+        for variant in variant_results
+    ]
+    variants.sort(
+        key=lambda item: (
+            int(item.get("status") == "ok"),
+            int(item.get("target_frame_fixed") is True),
+            int(item.get("frame_delta_improvement") or 0),
+            -abs(int(item.get("remaining_frame_delta") or baseline_delta)),
+            float(item.get("match_percent") or -1.0),
+        ),
+        reverse=True,
+    )
+    for rank, variant in enumerate(variants, start=1):
+        variant["rank"] = rank
+    best = variants[0] if variants else None
+
+    if best is None:
+        verdict = "no-probes"
+    elif best.get("target_frame_fixed"):
+        verdict = "source-reachable-frame-transform"
+    elif int(best.get("frame_delta_improvement") or 0) > 0:
+        verdict = "partial-source-reachable-frame-transform"
+    elif _all_ok_frame_transform_probes_measured(variants):
+        verdict = "frame-transform-ceiling-candidate"
+    else:
+        verdict = "frame-transform-results-inconclusive"
+
+    return {
+        "status": "evaluated" if variants else "no-probes",
+        "verdict": verdict,
+        "stop_condition": _frame_transform_probe_stop_condition(
+            verdict,
+            best,
+            variants,
+            expected_frame=expected_frame,
+            baseline_delta=baseline_delta,
+        ),
+        "expected_frame_size": expected_frame,
+        "current_frame_size": current_frame,
+        "baseline_remaining_frame_delta": baseline_delta,
+        "variant_count": len(variants),
+        "best_variant": best,
+        "variants": variants,
+    }
+
+
+def _score_frame_transform_probe_variant(
+    variant: dict[str, Any],
+    *,
+    expected_frame: int,
+    baseline_delta: int,
+) -> dict:
+    scored = dict(variant)
+    candidate_frame = _variant_frame_size(variant)
+    scored["candidate_frame_size"] = candidate_frame
+    if isinstance(candidate_frame, int):
+        remaining_delta = expected_frame - candidate_frame
+        scored["remaining_frame_delta"] = remaining_delta
+        scored["target_frame_fixed"] = remaining_delta == 0
+        scored["frame_delta_improvement"] = (
+            abs(baseline_delta) - abs(remaining_delta)
+        )
+    else:
+        scored["remaining_frame_delta"] = None
+        scored["target_frame_fixed"] = False
+        scored["frame_delta_improvement"] = 0
+    return scored
+
+
+def _variant_frame_size(variant: dict[str, Any]) -> int | None:
+    for key in ("frame_size", "frame_after", "candidate_frame_size"):
+        value = variant.get(key)
+        if isinstance(value, int):
+            return value
+    objective = variant.get("objective")
+    if isinstance(objective, dict):
+        for key in ("frame_after", "frame_size", "candidate_frame_size"):
+            value = objective.get(key)
+            if isinstance(value, int):
+                return value
+    signature = variant.get("signature")
+    if isinstance(signature, dict):
+        value = signature.get("frame_size")
+        if isinstance(value, int):
+            return value
+    return None
+
+
+def _all_ok_frame_transform_probes_measured(variants: list[dict]) -> bool:
+    measured = [
+        variant for variant in variants
+        if variant.get("status") == "ok"
+        and isinstance(variant.get("candidate_frame_size"), int)
+    ]
+    return bool(measured) and len(measured) == len(variants)
+
+
+def _frame_transform_probe_stop_condition(
+    verdict: str,
+    best: dict | None,
+    variants: list[dict],
+    *,
+    expected_frame: int,
+    baseline_delta: int,
+) -> dict:
+    if verdict == "source-reachable-frame-transform" and best is not None:
+        label = str(best.get("label") or "<unknown>")
+        return {
+            "status": "satisfied",
+            "kind": "validated-frame-transform",
+            "reason": (
+                f"probe {label} moves frame size to expected "
+                f"{expected_frame} bytes"
+            ),
+            "variant_label": label,
+            "remaining_frame_delta": best.get("remaining_frame_delta"),
+        }
+    if verdict == "partial-source-reachable-frame-transform" and best is not None:
+        label = str(best.get("label") or "<unknown>")
+        improvement = int(best.get("frame_delta_improvement") or 0)
+        return {
+            "status": "partial",
+            "kind": "partial-frame-transform",
+            "reason": (
+                f"probe {label} reduces absolute frame delta by "
+                f"{improvement} byte(s)"
+            ),
+            "variant_label": label,
+            "remaining_frame_delta": best.get("remaining_frame_delta"),
+            "frame_delta_improvement": improvement,
+        }
+    if verdict == "frame-transform-ceiling-candidate":
+        measured = [
+            variant for variant in variants
+            if variant.get("status") == "ok"
+            and isinstance(variant.get("candidate_frame_size"), int)
+        ]
+        return {
+            "status": "candidate",
+            "kind": "bounded-frame-transform-ceiling",
+            "reason": (
+                f"{len(measured)} ok frame transform probe(s) left the "
+                f"{abs(baseline_delta)}-byte frame delta unchanged"
+            ),
+            "measured_probe_count": len(measured),
+            "baseline_remaining_frame_delta": baseline_delta,
+        }
+    return {
+        "status": "not-satisfied",
+        "kind": verdict,
+        "reason": "probe evidence is not sufficient for frame transform validation",
+        "baseline_remaining_frame_delta": baseline_delta,
+    }
+
+
 def _materialize_stack_home_probe_commands(report: dict) -> None:
     function = report.get("function")
     if not isinstance(function, str) or not function:

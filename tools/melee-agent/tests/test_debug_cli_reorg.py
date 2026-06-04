@@ -386,11 +386,11 @@ def test_frame_reservations_cli_evaluates_probe_results_json(
     expected = tmp_path / "expected.s"
     expected.write_text(textwrap.dedent("""\
         .fn fn_80000002, global
-        /* 80000000 */    stwu r1, -80(r1)
+        /* 80000000 */    stwu r1, -72(r1)
         /* 80000004 */    stfs f4, 40(r1)
         /* 80000008 */    stfs f5, 52(r1)
         /* 8000000c */    stfs f6, 48(r1)
-        /* 80000010 */    addi r1, r1, 80
+        /* 80000010 */    addi r1, r1, 72
         .endfn fn_80000002
     """))
     probe_results = tmp_path / "probes.json"
@@ -401,9 +401,23 @@ def test_frame_reservations_cli_evaluates_probe_results_json(
                 "operator": "declaration-use-distance",
                 "status": "ok",
                 "match_percent": 99.91,
+                "objective": {
+                    "frame_after": 80,
+                    "frame_delta": 0,
+                },
                 "stack_slot_localizer": {
                     "mismatch_count": 0,
                     "mismatches": [],
+                },
+            },
+            {
+                "label": "frame-shrink",
+                "operator": "frame-magic-scratch-relocation",
+                "status": "ok",
+                "match_percent": 99.95,
+                "objective": {
+                    "frame_after": 72,
+                    "frame_delta": -8,
                 },
             }
         ]
@@ -445,6 +459,10 @@ def test_frame_reservations_cli_evaluates_probe_results_json(
     assert evaluation["stop_condition"]["kind"] == "validated-source-reorder"
     assert evaluation["best_variant"]["label"] == "swap-cycle"
     assert evaluation["best_variant"]["target_fixed"] is True
+    frame_evaluation = payload["frame_transform_probe_evaluation"]
+    assert frame_evaluation["verdict"] == "source-reachable-frame-transform"
+    assert frame_evaluation["stop_condition"]["kind"] == "validated-frame-transform"
+    assert frame_evaluation["best_variant"]["label"] == "frame-shrink"
 
 
 def test_frame_reservations_cli_reports_current_low_expansion(tmp_path: Path) -> None:

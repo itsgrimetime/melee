@@ -7,6 +7,7 @@ import textwrap
 from src.mwcc_debug.frame_reservations import (
     analyze_frame_from_asm_text,
     analyze_frame_reservations,
+    evaluate_frame_transform_probe_results,
     evaluate_stack_home_probe_results,
 )
 
@@ -1083,6 +1084,83 @@ def test_stack_home_probe_evaluation_classifies_reachable_and_ceiling_candidates
         ),
         "measured_probe_count": 1,
         "target_count": 2,
+    }
+
+
+def test_frame_transform_probe_evaluation_ranks_frame_delta_reducers() -> None:
+    report = {
+        "current": {"frame_size": 80},
+        "expected": {"frame_size": 72},
+        "frame_delta": -8,
+    }
+    neutral = {
+        "label": "block-scope",
+        "operator": "block-scope",
+        "status": "ok",
+        "match_percent": 98.5,
+        "objective": {
+            "frame_after": 80,
+            "frame_delta": 0,
+        },
+    }
+    fixed = {
+        "label": "scratch-relocation",
+        "operator": "frame-magic-scratch-relocation",
+        "status": "ok",
+        "match_percent": 99.1,
+        "objective": {
+            "frame_after": 72,
+            "frame_delta": -8,
+        },
+    }
+
+    evaluation = evaluate_frame_transform_probe_results(report, [neutral, fixed])
+
+    assert evaluation["status"] == "evaluated"
+    assert evaluation["verdict"] == "source-reachable-frame-transform"
+    assert evaluation["stop_condition"] == {
+        "status": "satisfied",
+        "kind": "validated-frame-transform",
+        "reason": (
+            "probe scratch-relocation moves frame size to expected 72 bytes"
+        ),
+        "variant_label": "scratch-relocation",
+        "remaining_frame_delta": 0,
+    }
+    assert evaluation["best_variant"]["label"] == "scratch-relocation"
+    assert evaluation["best_variant"]["candidate_frame_size"] == 72
+    assert evaluation["best_variant"]["remaining_frame_delta"] == 0
+    assert evaluation["best_variant"]["frame_delta_improvement"] == 8
+    assert evaluation["variants"][1]["label"] == "block-scope"
+    assert evaluation["variants"][1]["frame_delta_improvement"] == 0
+
+
+def test_frame_transform_probe_evaluation_flags_bounded_ceiling_candidate() -> None:
+    report = {
+        "current": {"frame_size": 80},
+        "expected": {"frame_size": 72},
+        "frame_delta": -8,
+    }
+    unchanged = {
+        "label": "block-scope",
+        "operator": "block-scope",
+        "status": "ok",
+        "objective": {
+            "frame_after": 80,
+        },
+    }
+
+    evaluation = evaluate_frame_transform_probe_results(report, [unchanged])
+
+    assert evaluation["verdict"] == "frame-transform-ceiling-candidate"
+    assert evaluation["stop_condition"] == {
+        "status": "candidate",
+        "kind": "bounded-frame-transform-ceiling",
+        "reason": (
+            "1 ok frame transform probe(s) left the 8-byte frame delta unchanged"
+        ),
+        "measured_probe_count": 1,
+        "baseline_remaining_frame_delta": -8,
     }
 
 

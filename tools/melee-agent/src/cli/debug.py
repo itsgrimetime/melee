@@ -92,6 +92,7 @@ from ..mwcc_debug.frame_reservations import (
     analyze_frame_from_asm_text,
     analyze_frame_from_function,
     analyze_frame_reservations,
+    evaluate_frame_transform_probe_results,
     evaluate_stack_home_probe_results,
 )
 
@@ -3624,6 +3625,25 @@ def _print_frame_reservation_report(report: dict) -> None:
                 f"{best.get('label')} [{best.get('operator')}] "
                 f"fixed {best.get('fixed_count')}/{best.get('target_count')}"
             )
+    frame_evaluation = report.get("frame_transform_probe_evaluation")
+    if isinstance(frame_evaluation, Mapping):
+        print()
+        print(f"frame-transform probe verdict: {frame_evaluation.get('verdict')}")
+        stop_condition = frame_evaluation.get("stop_condition")
+        if isinstance(stop_condition, Mapping):
+            print(
+                "frame stop condition: "
+                f"{stop_condition.get('status')} "
+                f"({stop_condition.get('kind')})"
+            )
+        best = frame_evaluation.get("best_variant")
+        if isinstance(best, Mapping):
+            print(
+                "best frame probe: "
+                f"{best.get('label')} [{best.get('operator')}] "
+                f"frame={best.get('candidate_frame_size')} "
+                f"remaining_delta={best.get('remaining_frame_delta')}"
+            )
 
     first_divergence = report.get("frame_first_divergence")
     if first_divergence:
@@ -3748,7 +3768,7 @@ def frame_reservations(
             "--probe-results-json",
             help=(
                 "Path to lifetime-layout --json output or a variants array. "
-                "Attaches source-reorder / ceiling-candidate evaluation."
+                "Attaches stack-home and frame-transform validation."
             ),
         ),
     ] = None,
@@ -3788,6 +3808,9 @@ def frame_reservations(
         report["stack_home_probe_evaluation"] = evaluate_stack_home_probe_results(
             report,
             variants,
+        )
+        report["frame_transform_probe_evaluation"] = (
+            evaluate_frame_transform_probe_results(report, variants)
         )
 
     if json_out:
