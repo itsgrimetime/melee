@@ -1165,47 +1165,158 @@ def _first_stack_object_divergence(
         exp = expected_objects[index] if index < len(expected_objects) else None
         if cur == exp:
             continue
+        cause = _frame_divergence_cause_hypothesis(cur, exp, frame_delta)
         return {
             "status": "diverged",
             "index": index,
             "reason": _stack_object_divergence_reason(cur, exp),
             "current": cur,
             "expected": exp,
-            "source_attribution": {
-                "status": "unavailable",
-                "reason": (
-                    "requires current-side MWCC stack-home origin "
-                    "instrumentation"
-                ),
-            },
-            "verdict": {
-                "status": "unknown",
-                "reason": (
-                    "stack-object maps differ, but source attribution and "
-                    "internal-tiebreak evidence are not available yet"
-                ),
-            },
+            "source_attribution": _heuristic_source_attribution(cause),
+            "cause_hypothesis": cause,
+            "verdict": _frame_divergence_verdict(cause),
         }
     if frame_delta:
+        cause = _frame_size_only_cause_hypothesis(frame_delta)
         return {
             "status": "frame-size-only",
             "frame_delta": frame_delta,
-            "source_attribution": {
-                "status": "unavailable",
-                "reason": (
-                    "requires current-side MWCC stack-home origin "
-                    "instrumentation"
-                ),
-            },
-            "verdict": {
-                "status": "unknown",
-                "reason": (
-                    "frame sizes differ, but no occupied object divergence was "
-                    "inferred from final r1 accesses"
-                ),
-            },
+            "source_attribution": _heuristic_source_attribution(cause),
+            "cause_hypothesis": cause,
+            "verdict": _frame_divergence_verdict(cause),
         }
     return {"status": "matched"}
+
+
+def _frame_divergence_cause_hypothesis(
+    current: dict | None,
+    expected: dict | None,
+    frame_delta: int | None,
+) -> dict:
+    if current is None:
+        return {
+            "status": "heuristic",
+            "kind": "missing-current-stack-object",
+            "confidence": "medium",
+            "reason": (
+                "expected has an occupied stack object with no current counterpart; "
+                "look for a missing local home, call-argument temp, or saved range"
+            ),
+            "frame_delta": frame_delta,
+        }
+    if expected is None:
+        return {
+            "status": "heuristic",
+            "kind": "extra-current-stack-object",
+            "confidence": "medium",
+            "reason": (
+                "current has an occupied stack object with no expected counterpart; "
+                "look for an extra local home, call-argument temp, or spill"
+            ),
+            "frame_delta": frame_delta,
+        }
+    current_size = current.get("size")
+    expected_size = expected.get("size")
+    current_kind = current.get("kind")
+    expected_kind = expected.get("kind")
+    offset_delta = _object_offset_delta(current, expected)
+    if current_size == expected_size and current_kind == expected_kind:
+        return {
+            "status": "heuristic",
+            "kind": "stack-object-offset-shift",
+            "confidence": "medium",
+            "reason": (
+                "current and expected stack objects have the same shape but "
+                "different offsets; inspect local lifetime, ordering, or alignment"
+            ),
+            "current_expected_offset_delta": offset_delta,
+            "frame_delta": frame_delta,
+        }
+    if current_size != expected_size:
+        return {
+            "status": "heuristic",
+            "kind": "stack-object-size-or-alignment",
+            "confidence": "medium",
+            "reason": (
+                "corresponding stack objects differ in size; inspect type size, "
+                "array extent, struct layout, or alignment"
+            ),
+            "current_size": current_size,
+            "expected_size": expected_size,
+            "frame_delta": frame_delta,
+        }
+    return {
+        "status": "heuristic",
+        "kind": "stack-object-kind-change",
+        "confidence": "low",
+        "reason": (
+            "corresponding stack objects differ in kind; inspect saved-register, "
+            "spill, and local-home attribution"
+        ),
+        "current_kind": current_kind,
+        "expected_kind": expected_kind,
+        "frame_delta": frame_delta,
+    }
+
+
+def _frame_size_only_cause_hypothesis(frame_delta: int) -> dict:
+    return {
+        "status": "heuristic",
+        "kind": "extra-frame-reservation-or-alignment",
+        "confidence": "medium",
+        "reason": (
+            "frame sizes differ without an occupied-object divergence; the "
+            "delta is likely an implicit reservation, alignment gap, or "
+            "unreferenced local home"
+        ),
+        "frame_delta": frame_delta,
+    }
+
+
+def _heuristic_source_attribution(cause: dict) -> dict:
+    return {
+        "status": "heuristic-no-source-object",
+        "reason": (
+            "stack-object divergence is classified, but exact source object "
+            "identity requires MWCC stack-home origin instrumentation"
+        ),
+    }
+
+
+def _frame_divergence_verdict(cause: dict) -> dict:
+    kind = cause.get("kind")
+    confidence = cause.get("confidence", "low")
+    if kind in {
+        "stack-object-offset-shift",
+        "stack-object-size-or-alignment",
+        "extra-frame-reservation-or-alignment",
+        "extra-current-stack-object",
+        "missing-current-stack-object",
+    }:
+        return {
+            "status": "source-reachable-candidate",
+            "reason": (
+                f"heuristic cause {kind} is addressable by targeted "
+                "frame/lifetime source probes"
+            ),
+            "confidence": confidence,
+        }
+    return {
+        "status": "unknown",
+        "reason": (
+            f"heuristic cause {kind} needs source-object attribution before "
+            "source-reachable vs ceiling can be decided"
+        ),
+        "confidence": confidence,
+    }
+
+
+def _object_offset_delta(current: dict, expected: dict) -> int | None:
+    current_start = current.get("start")
+    expected_start = expected.get("start")
+    if not isinstance(current_start, int) or not isinstance(expected_start, int):
+        return None
+    return current_start - expected_start
 
 
 def _occupied_stack_objects(frame: dict) -> list[dict]:

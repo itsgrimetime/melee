@@ -244,8 +244,32 @@ def test_frame_reservation_reports_first_occupied_object_divergence() -> None:
     assert divergence["reason"] == "start-differs"
     assert divergence["current"]["start"] == 28
     assert divergence["expected"]["start"] == 24
-    assert divergence["source_attribution"]["status"] == "unavailable"
-    assert divergence["verdict"]["status"] == "unknown"
+    assert divergence["cause_hypothesis"] == {
+        "status": "heuristic",
+        "kind": "stack-object-offset-shift",
+        "confidence": "medium",
+        "reason": (
+            "current and expected stack objects have the same shape but "
+            "different offsets; inspect local lifetime, ordering, or alignment"
+        ),
+        "current_expected_offset_delta": 4,
+        "frame_delta": 0,
+    }
+    assert divergence["source_attribution"] == {
+        "status": "heuristic-no-source-object",
+        "reason": (
+            "stack-object divergence is classified, but exact source object "
+            "identity requires MWCC stack-home origin instrumentation"
+        ),
+    }
+    assert divergence["verdict"] == {
+        "status": "source-reachable-candidate",
+        "reason": (
+            "heuristic cause stack-object-offset-shift is addressable by targeted "
+            "frame/lifetime source probes"
+        ),
+        "confidence": "medium",
+    }
 
 
 def test_frame_reservation_reports_frame_size_only_divergence() -> None:
@@ -279,17 +303,30 @@ def test_frame_reservation_reports_frame_size_only_divergence() -> None:
         "status": "frame-size-only",
         "frame_delta": -8,
         "source_attribution": {
-            "status": "unavailable",
+            "status": "heuristic-no-source-object",
             "reason": (
-                "requires current-side MWCC stack-home origin instrumentation"
+                "stack-object divergence is classified, but exact source object "
+                "identity requires MWCC stack-home origin instrumentation"
             ),
         },
-        "verdict": {
-            "status": "unknown",
+        "cause_hypothesis": {
+            "status": "heuristic",
+            "kind": "extra-frame-reservation-or-alignment",
+            "confidence": "medium",
             "reason": (
-                "frame sizes differ, but no occupied object divergence was "
-                "inferred from final r1 accesses"
+                "frame sizes differ without an occupied-object divergence; the "
+                "delta is likely an implicit reservation, alignment gap, or "
+                "unreferenced local home"
             ),
+            "frame_delta": -8,
+        },
+        "verdict": {
+            "status": "source-reachable-candidate",
+            "reason": (
+                "heuristic cause extra-frame-reservation-or-alignment is "
+                "addressable by targeted frame/lifetime source probes"
+            ),
+            "confidence": "medium",
         },
     }
 

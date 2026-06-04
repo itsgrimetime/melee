@@ -3632,6 +3632,11 @@ def _print_frame_reservation_report(report: dict) -> None:
         reason = first_divergence.get("reason")
         if reason:
             print(f"reason: {reason}")
+        cause = first_divergence.get("cause_hypothesis") or {}
+        if isinstance(cause, Mapping) and cause.get("kind"):
+            confidence = cause.get("confidence")
+            suffix = f" ({confidence})" if confidence else ""
+            print(f"cause: {cause.get('kind')}{suffix}")
         current_obj = first_divergence.get("current")
         expected_obj = first_divergence.get("expected")
         if current_obj:

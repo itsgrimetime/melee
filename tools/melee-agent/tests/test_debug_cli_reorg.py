@@ -366,6 +366,7 @@ def test_frame_reservations_cli_text_reports_expected_stack_home_offsets(
     ) in out
 
 
+
 def test_frame_reservations_cli_evaluates_probe_results_json(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -501,6 +502,8 @@ def test_frame_reservations_cli_reports_current_low_expansion(tmp_path: Path) ->
     )
 
     assert result.exit_code == 0, result.stdout
+    assert "cause: stack-object-offset-shift (medium)" in result.stdout
+    assert "verdict: source-reachable-candidate" in result.stdout
     assert "current low-frame expansion: 0x18-0x1c (4 bytes)" in result.stdout
     assert "alignment growth bytes: 4" in result.stdout
     assert "current non-save stack accesses in range: none" in result.stdout
