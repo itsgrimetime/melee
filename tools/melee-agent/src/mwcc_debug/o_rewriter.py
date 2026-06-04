@@ -118,7 +118,7 @@ def find_named_sdata2_symbols_by_offset(
     Used to cross-reference an anonymous @N symbol in the base (compiled)
     .o against a named symbol at the same offset in the target .o.
     When they match, we can generate a copy-pastable `--map` for
-    `verify-with-name-magic` without making the agent grep symbols.txt.
+    `debug util verify-name-magic` without making the agent grep symbols.txt.
     """
     from elftools.elf.elffile import ELFFile
 

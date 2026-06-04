@@ -21,7 +21,10 @@ REFERENCE_TEXTS = [
     *[
         path
         for path in sorted((REPO_ROOT / "tools" / "melee-agent" / "tests").glob("test_*.py"))
-        if path.name != "test_mwcc_debug_docs_cli_reorg.py"
+        if path.name not in {
+            "test_debug_cli_reorg.py",
+            "test_mwcc_debug_docs_cli_reorg.py",
+        }
     ],
 ]
 
@@ -81,6 +84,7 @@ STALE_REFERENCE_PATTERNS = [
     r"(?<![\w-])debug pattern-catalog\b",
     r"(?<![\w-])debug name-magic\b",
     r"(?<![\w-])debug verify-with-name-magic\b",
+    r"(?<![\w-])verify-with-name-magic\b",
     r"(?<![\w-])debug var-to-virtual\b",
     r"(?<![\w-])debug virtual-to-var\b",
     r"(?<![\w-])debug virtual-to-ig\b",

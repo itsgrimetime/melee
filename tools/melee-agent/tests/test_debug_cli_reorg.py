@@ -1254,6 +1254,26 @@ def test_dump_remote_quotes_cmd_env_assignments(monkeypatch, tmp_path: Path) -> 
     assert "set MWCC_DEBUG_NO_PULL=1 &&" not in remote_cmd
 
 
+def test_remote_pcdump_script_syncs_detached_default_checkout() -> None:
+    script = (
+        Path(__file__).resolve().parents[3]
+        / "tools"
+        / "mwcc_debug"
+        / "win"
+        / "run_pcdump.ps1"
+    ).read_text()
+
+    assert re.search(
+        r'\$syncBranch\s+= if \(\$branch\) \{ \$branch \} else \{ "master" \}',
+        script,
+    )
+    assert "git branch --show-current" in script
+    assert "default checkout is detached" in script
+    assert "git fetch origin $syncBranch" in script
+    assert 'git reset --hard "origin/$syncBranch"' in script
+    assert "git pull --rebase --autostash" in script
+
+
 def test_removed_top_level_debug_commands_are_not_registered() -> None:
     removed_commands = [
         "pcdump",

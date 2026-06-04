@@ -14,8 +14,8 @@ def test_catalog_has_expected_named_patterns() -> None:
     """The catalog has grown over time:
     - 7 patterns from the original findings doc
     - param-iter-ceiling (Tier 6 structural ceiling)
-    - anon-magic-constant + register-cascade (added when verify-with-name-magic
-      and --force-coalesce shipped)
+    - anon-magic-constant + register-cascade (added when
+      debug util verify-name-magic and --force-coalesce shipped)
     """
     expected = {
         "alias-split",

@@ -57,6 +57,7 @@ $masterRoot  = if ($env:MWCC_DEBUG_REPO) { $env:MWCC_DEBUG_REPO } else { "C:\Use
 # whitespace before `&&` in the value. Defensive trim avoids surprises
 # when this script is invoked via SSH + cmd from the local CLI.
 $branch      = if ($env:MWCC_DEBUG_BRANCH) { $env:MWCC_DEBUG_BRANCH.Trim() } else { "" }
+$syncBranch  = if ($branch) { $branch } else { "master" }
 $worktreesDir = if ($env:MWCC_DEBUG_WORKTREES_DIR) {
     $env:MWCC_DEBUG_WORKTREES_DIR
 } else {
@@ -220,17 +221,51 @@ if ($env:MWCC_DEBUG_NO_PULL -ne "1") {
                 Fail "could not reset worktree to origin/$branch" 70
             }
         } else {
-            # Master checkout — preserve the original pull-rebase behavior.
-            # --autostash to preserve any local mods (the Windows repo
-            # shouldn't have them, but be defensive).
-            $pullOut = & git pull --rebase --autostash 2>&1 | Out-String
+            # The default checkout is normally on master/main and can use
+            # pull --rebase --autostash. If it is detached, branchless
+            # `git pull` fails, so resync it like a read-only worktree.
+            $branchOut = & git branch --show-current 2>&1 | Out-String
             if ($LASTEXITCODE -ne 0) {
-                Write-Err "git pull failed:"
-                Write-Err $pullOut
+                Write-Err "git branch --show-current failed:"
+                Write-Err $branchOut
                 Remove-Item -Force $lockFile -ErrorAction SilentlyContinue
                 Pop-Location
                 $ErrorActionPreference = $savedErrActPref
-                Fail "could not sync repo at $repoRoot" 70
+                Fail "could not inspect repo branch at $repoRoot" 70
+            }
+            $currentBranch = $branchOut.Trim()
+            if (-not $currentBranch) {
+                Write-Err "[mwcc_debug] default checkout is detached; resetting to origin/$syncBranch"
+                $fetchOut = & git fetch origin $syncBranch 2>&1 | Out-String
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Err "git fetch origin $syncBranch failed:"
+                    Write-Err $fetchOut
+                    Remove-Item -Force $lockFile -ErrorAction SilentlyContinue
+                    Pop-Location
+                    $ErrorActionPreference = $savedErrActPref
+                    Fail "could not fetch origin/$syncBranch at $repoRoot" 70
+                }
+                $resetOut = & git reset --hard "origin/$syncBranch" 2>&1 | Out-String
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Err "git reset --hard origin/$syncBranch failed:"
+                    Write-Err $resetOut
+                    Remove-Item -Force $lockFile -ErrorAction SilentlyContinue
+                    Pop-Location
+                    $ErrorActionPreference = $savedErrActPref
+                    Fail "could not reset detached checkout to origin/$syncBranch" 70
+                }
+            } else {
+                # --autostash preserves any local mods (the Windows repo
+                # shouldn't have them, but be defensive).
+                $pullOut = & git pull --rebase --autostash 2>&1 | Out-String
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Err "git pull failed:"
+                    Write-Err $pullOut
+                    Remove-Item -Force $lockFile -ErrorAction SilentlyContinue
+                    Pop-Location
+                    $ErrorActionPreference = $savedErrActPref
+                    Fail "could not sync repo at $repoRoot" 70
+                }
             }
         }
     } finally {
