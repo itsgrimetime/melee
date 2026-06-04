@@ -83,6 +83,14 @@ Same-offset pairing is required because nearby relocation lines can differ for
 unrelated reasons, especially in functions that also have stack offset or data
 layout noise.
 
+Non-relocation hunks in the same raw diff do not automatically block probe
+generation. The canonical reproducer also has a stack-offset residual, and a
+source declaration change can perturb the local layout. The harness blocks
+early only when there are no supported data-symbol relocation pairs to probe.
+Final acceptance still requires a true `checkdiff --no-name-magic` match; if
+non-relocation residuals remain after all source variants, the result is
+`no-name-magic-candidate`.
+
 If more than one expected or current relocation exists at the same instruction
 offset, the pair is ambiguous and blocks as `ambiguous-relocation-pair`. If the
 relocation kinds are incompatible, the harness blocks as `unsupported-reloc-kind`.
@@ -164,7 +172,7 @@ The combined operator must not include unsupported or blocker-only evidence.
 The harness exits successfully and reports a stable blocker when it cannot
 produce a validated candidate. Blockers include:
 
-- `raw-diff-not-data-symbol-only`
+- `raw-diff-no-supported-data-symbol-pair`
 - `target-object-missing`
 - `current-object-missing`
 - `ambiguous-sdata2-value`
