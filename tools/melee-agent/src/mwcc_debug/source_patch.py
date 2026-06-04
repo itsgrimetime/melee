@@ -516,6 +516,113 @@ def _decl_line_ranges_for_scope(
     return out
 
 
+@dataclass(frozen=True)
+class _DeclReorderItem:
+    name: str
+    text: str
+    line_start: int
+    line_end: int
+    byte_range: tuple[int, int]
+    initializer_text: str
+
+
+def _split_decl_items_for_scope(
+    file_text: str,
+    function: str,
+    scope_path: tuple[str, ...],
+) -> list[_DeclReorderItem]:
+    from .ast_walker import walk_function
+
+    decls = [
+        decl for decl in walk_function(file_text, function, path=None)
+        if decl.scope_path == scope_path
+    ]
+    if not decls:
+        return []
+
+    by_line: dict[tuple[int, int], list] = {}
+    for decl in decls:
+        by_line.setdefault(_line_bounds_for_range(file_text, decl.byte_range), []).append(decl)
+
+    out: list[_DeclReorderItem] = []
+    for line_bounds, line_decls in by_line.items():
+        line_start, line_end = line_bounds
+        line_text = file_text[line_start:line_end]
+        ordered = sorted(line_decls, key=lambda decl: decl.byte_range[0])
+        if len(ordered) == 1:
+            decl = ordered[0]
+            out.append(_DeclReorderItem(
+                name=decl.name,
+                text=line_text,
+                line_start=line_start,
+                line_end=line_end,
+                byte_range=decl.byte_range,
+                initializer_text=_initializer_text(file_text, decl.byte_range),
+            ))
+            continue
+
+        first_rel = min(decl.byte_range[0] - line_start for decl in ordered)
+        shared_prefix = line_text[:first_rel]
+        newline = "\n" if line_text.endswith("\n") else ""
+        for decl in ordered:
+            decl_start, decl_end = decl.byte_range
+            declarator = file_text[decl_start:decl_end].strip()
+            out.append(_DeclReorderItem(
+                name=decl.name,
+                text=f"{shared_prefix}{declarator};{newline}",
+                line_start=line_start,
+                line_end=line_end,
+                byte_range=decl.byte_range,
+                initializer_text=_initializer_text(file_text, decl.byte_range),
+            ))
+    return out
+
+
+def _initializer_text(file_text: str, byte_range: tuple[int, int]) -> str:
+    text = file_text[byte_range[0]:byte_range[1]]
+    stripped = _strip_c_comments(text)
+    eq = stripped.find("=")
+    if eq < 0:
+        return ""
+    return stripped[eq + 1:]
+
+
+def _decl_order_initializer_dependency_blocker(
+    items: list[_DeclReorderItem],
+    order: list[int],
+) -> str:
+    original_index = {item.name: idx for idx, item in enumerate(items)}
+    new_index = {items[idx].name: pos for pos, idx in enumerate(order)}
+    for idx in order:
+        item = items[idx]
+        if not item.initializer_text:
+            continue
+        for name, original_pos in original_index.items():
+            if original_pos >= idx:
+                continue
+            if re.search(rf"\b{re.escape(name)}\b", item.initializer_text):
+                if new_index[name] > new_index[item.name]:
+                    return f"{item.name} depends on {name}"
+    return ""
+
+
+def explain_decl_reorder_skip(
+    file_text: str,
+    function: str,
+    scope_path: tuple[str, ...],
+    order: list[int],
+) -> str:
+    """Return a human-readable reason a declaration reorder is unsafe."""
+    items = _split_decl_items_for_scope(file_text, function, scope_path)
+    if not items:
+        return "scope has no declarations"
+    if len(order) != len(items):
+        return "order length does not match declaration count"
+    if sorted(order) != list(range(len(items))):
+        return "order is not a valid permutation"
+    return _decl_order_initializer_dependency_blocker(items, order)
+
+
 def get_decl_names_by_scope(
     file_text: str,
     function: str,
@@ -552,11 +659,14 @@ def reorder_decls_in_function_scope(
         return None
     if sorted(order) != list(range(len(decl_ranges))):
         return None
-    line_ranges = [(start, end) for _name, start, end in decl_ranges]
-    block_start = line_ranges[0][0]
-    block_end = line_ranges[-1][1]
-    original_lines = [file_text[start:end] for start, end in line_ranges]
-    reordered = "".join(original_lines[i] for i in order)
+    items = _split_decl_items_for_scope(file_text, function, scope_path)
+    if len(items) != len(decl_ranges):
+        return None
+    if _decl_order_initializer_dependency_blocker(items, order):
+        return None
+    block_start = min(item.line_start for item in items)
+    block_end = max(item.line_end for item in items)
+    reordered = "".join(items[i].text for i in order)
     return file_text[:block_start] + reordered + file_text[block_end:]
 
 

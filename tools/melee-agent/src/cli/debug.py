@@ -57,6 +57,7 @@ from ..mwcc_debug.patterns import (
     list_patterns,
 )
 from ..mwcc_debug.source_patch import (
+    explain_decl_reorder_skip,
     extract_function,
     find_function as find_source_function,
     find_function_definitions,
@@ -6896,6 +6897,19 @@ def enumerate_decl_orders(
                 current_text, function, selected_scope, perm,
             )
             if patched is None:
+                reason = explain_decl_reorder_skip(
+                    current_text, function, selected_scope, perm,
+                )
+                detail = f"skipped: {reason}" if reason else "skipped"
+                if not json_out:
+                    print(f"  {label}: {detail}")
+                r_results.append({
+                    "label": label,
+                    "match_pct": None,
+                    "delta": None,
+                    "skipped": True,
+                    "skip_reason": reason,
+                })
                 continue
             target_path.write_text(patched)
             pct = _build_and_match(unit, function, melee_root)

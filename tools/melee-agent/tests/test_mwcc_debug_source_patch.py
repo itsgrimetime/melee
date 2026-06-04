@@ -10,6 +10,7 @@ from src.mwcc_debug.source_patch import (
     find_function,
     get_decl_names,
     get_decl_names_by_scope,
+    explain_decl_reorder_skip,
     merge3_function,
     reorder_decls_in_function,
     reorder_decls_in_function_scope,
@@ -496,3 +497,78 @@ def test_reorder_function_scope_handles_struct_pointer_initializers() -> None:
         "var_r8 = CostumeListsForeachCharacter"
     )
     assert "int costume_idx = 0;" in result
+
+
+def test_reorder_function_scope_splits_combined_int_declarators() -> None:
+    source = textwrap.dedent("""\
+        void mnCount_8025092C(void)
+        {
+            CountEntry entries[10];
+            CountEntry tmp;
+            int i, j, min;
+            Use(entries, tmp, i, j, min);
+        }
+    """)
+
+    result = reorder_decls_in_function_scope(
+        source,
+        "mnCount_8025092C",
+        ("mnCount_8025092C",),
+        [0, 1, 4, 2, 3],
+    )
+
+    assert result is not None
+    assert "int min;\n    int i;\n    int j;" in result
+    assert "int i, j, min;" not in result
+    assert "Use(entries, tmp, i, j, min);" in result
+
+
+def test_reorder_function_scope_splits_combined_struct_declarators() -> None:
+    source = textwrap.dedent("""\
+        void lb_80014638(void)
+        {
+            Vec3 sp30, sp24, sp18;
+            Use(&sp30, &sp24, &sp18);
+        }
+    """)
+
+    result = reorder_decls_in_function_scope(
+        source,
+        "lb_80014638",
+        ("lb_80014638",),
+        [2, 0, 1],
+    )
+
+    assert result is not None
+    assert "Vec3 sp18;\n    Vec3 sp30;\n    Vec3 sp24;" in result
+    assert "Vec3 sp30, sp24, sp18;" not in result
+    assert "Use(&sp30, &sp24, &sp18);" in result
+
+
+def test_reorder_function_scope_skips_initializer_dependency() -> None:
+    source = textwrap.dedent("""\
+        void it_3F14_Logic7_DmgReceived(HSD_GObj* gobj)
+        {
+            Item* ip = GET_ITEM(gobj);
+            itDoseiAttributes* attr = ip->xC4_article_data->x4_specialAttributes;
+            Use(ip, attr);
+        }
+    """)
+
+    result = reorder_decls_in_function_scope(
+        source,
+        "it_3F14_Logic7_DmgReceived",
+        ("it_3F14_Logic7_DmgReceived",),
+        [1, 0],
+    )
+
+    assert result is None
+    assert (
+        explain_decl_reorder_skip(
+            source,
+            "it_3F14_Logic7_DmgReceived",
+            ("it_3F14_Logic7_DmgReceived",),
+            [1, 0],
+        )
+        == "attr depends on ip"
+    )
