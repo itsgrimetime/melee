@@ -64,6 +64,7 @@ def _print_text_summary(ledger: dict, ledger_path: Path) -> None:
 def harvest_cmd(
     work_bucket: str,
     apply: bool = typer.Option(False, "--apply"),
+    compose: bool = typer.Option(False, "--compose"),
     min_match: float = typer.Option(0.0, "--min-match"),
     limit: int | None = typer.Option(None, "--limit"),
     taxonomy_dir: Path | None = typer.Option(None, "--taxonomy-dir"),
@@ -97,6 +98,7 @@ def harvest_cmd(
             target_map_path=target_map,
             ledger_path=ledger_path,
             apply=apply,
+            compose=compose,
             timeout=timeout,
             max_probes=max_probes,
             **kwargs,

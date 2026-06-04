@@ -117,6 +117,28 @@ def _json_runner(payload: dict) -> tuple[list[list[str]], object]:
     return calls, runner
 
 
+def _match_process(
+    function: str,
+    *,
+    match: bool,
+    percent: float,
+    primary: str,
+) -> HarnessProcessResult:
+    return HarnessProcessResult(
+        ["checkdiff", function],
+        0 if match else 1,
+        json.dumps(
+            {
+                "function": function,
+                "match": match,
+                "fuzzy_match_percent": percent,
+                "classification": {"primary": primary},
+            }
+        ),
+        "",
+    )
+
+
 def _install_cli_harvest_fakes(
     monkeypatch,
     tmp_path: Path,
@@ -243,6 +265,52 @@ def test_cli_json_output_is_parseable_ledger(
     assert ledger["schema_version"] == 1
     assert ledger["summary"]["by_status"] == {"validated": 1}
     assert ledger == json.loads(ledger_path.read_text(encoding="utf-8"))
+
+
+def test_cli_compose_passes_flag_and_outputs_json(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from src.cli import app
+    from src.cli import harvest as harvest_cli
+
+    repo_root = _repo_with_source(tmp_path)
+    taxonomy_dir = tmp_path / "queues"
+    _write_queue(taxonomy_dir / "stack-local-layout.tsv", [_row("demo_fn")])
+    ledger_path = tmp_path / "ledger.json"
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(harvest_cli, "DEFAULT_MELEE_ROOT", repo_root)
+
+    def fake_run_harvest(*args, **kwargs):
+        calls.append(dict(kwargs))
+        ledger = {
+            "schema_version": 1,
+            "work_bucket": args[0],
+            "summary": {"by_status": {"validated": 1}},
+            "results": [],
+        }
+        Path(kwargs["ledger_path"]).write_text(json.dumps(ledger), encoding="utf-8")
+        return ledger
+
+    monkeypatch.setattr(harvest_cli, "run_harvest", fake_run_harvest)
+
+    result = cli_runner.invoke(
+        app,
+        [
+            "harvest",
+            "stack-local-layout",
+            "--taxonomy-dir",
+            str(taxonomy_dir),
+            "--ledger",
+            str(ledger_path),
+            "--compose",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["schema_version"] == 1
+    assert calls[0]["compose"] is True
 
 
 def test_cli_default_ledger_path_uses_repo_build_harvest(
@@ -742,6 +810,8 @@ def test_name_magic_harvest_builds_source_declarations_command(
         repo_root=repo_root,
         queue_path=queue,
         runner=runner,
+        timeout=9,
+        max_probes=3,
     )
 
     assert calls == [
@@ -751,11 +821,52 @@ def test_name_magic_harvest_builds_source_declarations_command(
             "name-magic-source-declarations",
             "-f",
             "demo_fn",
+            "--source-file",
+            str(repo_root / "src" / "melee/demo.c"),
+            "--compile-probes",
+            "--score-match-percent",
             "--json",
+            "--max-probes",
+            "3",
+            "--timeout",
+            "9",
         ]
     ]
     assert ledger["results"][0]["harness"] == "name-magic-source-declarations"
     assert ledger["results"][0]["status"] == "validated"
+
+
+def test_name_magic_gate_accepts_match_percent_without_final_score(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    _write_queue(queue, [_name_magic_row("demo_fn", primary="data-symbol-relocation")])
+    calls, runner = _json_runner(
+        {
+            "stop_condition": {"kind": "validated"},
+            "variants": [
+                {
+                    "status": "ok",
+                    "source_retained": str(tmp_path / "candidate.c"),
+                    "match_percent": 100.0,
+                    "no_name_magic_match": True,
+                }
+            ],
+        }
+    )
+
+    ledger = run_harvest(
+        "data-symbol-relocation",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert calls[0][2] == "name-magic-source-declarations"
+    assert result["status"] == "validated"
+    assert result["final_match_percent"] == 100.0
 
 
 def test_name_magic_gate_requires_no_name_magic_match_true(tmp_path: Path) -> None:
@@ -826,6 +937,393 @@ def test_name_magic_gate_requires_validated_stop_condition(tmp_path: Path) -> No
     result = ledger["results"][0]
     assert result["status"] == "no_match"
     assert result["blocker"] == "no-name-magic-candidate"
+
+
+def test_name_magic_propagates_blocked_stop_condition(tmp_path: Path) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    _write_queue(queue, [_name_magic_row("demo_fn", primary="data-symbol-relocation")])
+    _, runner = _json_runner(
+        {
+            "blocker": "sdata2-pool-order-dependent",
+            "stop_condition": {
+                "kind": "blocked",
+                "blocker": "sdata2-pool-order-dependent",
+                "reason": "anonymous pool order depends on earlier TU state",
+            },
+            "variants": [],
+        }
+    )
+
+    ledger = run_harvest(
+        "data-symbol-relocation",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "sdata2-pool-order-dependent"
+    assert result["reason"] == "anonymous pool order depends on earlier TU state"
+
+
+def test_compose_dry_run_stops_after_first_candidate_and_records_not_observed(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "composite.tsv"
+    row = _row(
+        "demo_fn",
+        headline_tool="source-shape",
+        source_actionability="",
+        frame_closability_tier="",
+    )
+    row["primary"] = "other-primary"
+    _write_queue(queue, [row])
+    candidate = tmp_path / "candidate.c"
+    candidate.write_text("void demo_fn(void) {}\n", encoding="utf-8")
+    calls, runner = _json_runner(
+        {
+            "variants": [
+                {
+                    "status": "ok",
+                    "source_path": str(candidate),
+                    "final_match_percent": 100.0,
+                }
+            ]
+        }
+    )
+
+    ledger = run_harvest(
+        "composite",
+        repo_root=repo_root,
+        queue_path=queue,
+        target_map={
+            "demo_fn": {
+                "harnesses": [
+                    "indexed-struct-search",
+                    "frame-transform-search",
+                ]
+            }
+        },
+        runner=runner,
+        match_checker=lambda function, *, cwd, timeout: _match_process(
+            function,
+            match=False,
+            percent=90.0,
+            primary="indexed-struct-pointer-materialization",
+        ),
+        compose=True,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "validated"
+    assert result["harness"] == "composed"
+    assert result["details"]["stop_reason"] == "dry-run-first-candidate-layer"
+    assert result["details"]["not_observed_layers"] == ["frame-transform-search"]
+    assert [call[2] for call in calls] == ["indexed-struct-search"]
+
+
+def test_compose_apply_preserves_sub100_improvement_and_continues_to_match(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    target = repo_root / "src" / "melee/demo.c"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("int demo_fn(void) {\n    return 1;\n}\n", encoding="utf-8")
+    indexed_candidate = tmp_path / "indexed.c"
+    indexed_candidate.write_text(
+        "int demo_fn(void) {\n    return 2;\n}\n",
+        encoding="utf-8",
+    )
+    frame_candidate = tmp_path / "frame.c"
+    frame_candidate.write_text(
+        "int demo_fn(void) {\n    return 3;\n}\n",
+        encoding="utf-8",
+    )
+    queue = tmp_path / "queues" / "composite.tsv"
+    row = _row(
+        "demo_fn",
+        headline_tool="source-shape",
+        source_actionability="",
+        frame_closability_tier="",
+    )
+    row["primary"] = "other-primary"
+    _write_queue(queue, [row])
+    calls: list[list[str]] = []
+
+    def runner(args: list[str], *, cwd: Path, timeout: int) -> HarnessProcessResult:
+        calls.append(args)
+        if args[2] == "indexed-struct-search":
+            payload = {
+                "variants": [
+                    {
+                        "status": "ok",
+                        "source_retained": str(indexed_candidate),
+                        "final_match_percent": 95.0,
+                    }
+                ]
+            }
+        else:
+            payload = {
+                "variants": [
+                    {
+                        "status": "ok",
+                        "source_path": str(frame_candidate),
+                        "final_match_percent": 100.0,
+                    }
+                ]
+            }
+        return HarnessProcessResult(args, 0, json.dumps(payload), "")
+
+    match_payloads = iter(
+        [
+            _match_process(
+                "demo_fn",
+                match=False,
+                percent=90.0,
+                primary="indexed-struct-pointer-materialization",
+            ),
+            _match_process(
+                "demo_fn",
+                match=False,
+                percent=95.0,
+                primary="stack-layout",
+            ),
+            _match_process(
+                "demo_fn",
+                match=False,
+                percent=95.0,
+                primary="stack-layout",
+            ),
+            _match_process("demo_fn", match=True, percent=100.0, primary="match"),
+        ]
+    )
+
+    ledger = run_harvest(
+        "composite",
+        repo_root=repo_root,
+        queue_path=queue,
+        target_map={
+            "demo_fn": {
+                "harnesses": [
+                    "indexed-struct-search",
+                    "frame-transform-search",
+                ]
+            }
+        },
+        runner=runner,
+        match_checker=lambda function, *, cwd, timeout: next(match_payloads),
+        validator=lambda function, *, cwd, timeout: HarnessProcessResult(
+            ["checkdiff", function], 0, "", ""
+        ),
+        apply=True,
+        compose=True,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "already-matched"
+    assert result["harness"] == "composed"
+    assert result["details"]["stop_reason"] == "matched-after-layers"
+    assert [call[2] for call in calls] == [
+        "indexed-struct-search",
+        "frame-transform-search",
+    ]
+    assert result["details"]["layers"][0]["details"]["layer_outcome"] == (
+        "verified-improvement"
+    )
+    assert target.read_text(encoding="utf-8") == (
+        "int demo_fn(void) {\n    return 3;\n}\n"
+    )
+
+
+def test_compose_apply_rolls_back_sub100_candidate_without_improvement(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    target = repo_root / "src" / "melee/demo.c"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    original = "int demo_fn(void) {\n    return 1;\n}\n"
+    target.write_text(original, encoding="utf-8")
+    candidate = tmp_path / "indexed.c"
+    candidate.write_text("int demo_fn(void) {\n    return 2;\n}\n", encoding="utf-8")
+    queue = tmp_path / "queues" / "composite.tsv"
+    row = _row(
+        "demo_fn",
+        headline_tool="source-shape",
+        source_actionability="",
+        frame_closability_tier="",
+    )
+    row["primary"] = "other-primary"
+    _write_queue(queue, [row])
+    _, runner = _json_runner(
+        {
+            "variants": [
+                {
+                    "status": "ok",
+                    "source_retained": str(candidate),
+                    "final_match_percent": 89.0,
+                }
+            ]
+        }
+    )
+    match_payloads = iter(
+        [
+            _match_process(
+                "demo_fn",
+                match=False,
+                percent=90.0,
+                primary="indexed-struct-pointer-materialization",
+            ),
+            _match_process(
+                "demo_fn",
+                match=False,
+                percent=89.0,
+                primary="indexed-struct-pointer-materialization",
+            ),
+        ]
+    )
+
+    ledger = run_harvest(
+        "composite",
+        repo_root=repo_root,
+        queue_path=queue,
+        target_map={"demo_fn": {"harnesses": ["indexed-struct-search"]}},
+        runner=runner,
+        match_checker=lambda function, *, cwd, timeout: next(match_payloads),
+        apply=True,
+        compose=True,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "apply-validation-failed"
+    assert result["details"]["layers"][0]["blocker"] == "apply-validation-failed"
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_compose_apply_rolls_back_sub100_candidate_after_invalid_checkdiff_json(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    target = repo_root / "src" / "melee/demo.c"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    original = "int demo_fn(void) {\n    return 1;\n}\n"
+    target.write_text(original, encoding="utf-8")
+    candidate = tmp_path / "indexed.c"
+    candidate.write_text("int demo_fn(void) {\n    return 2;\n}\n", encoding="utf-8")
+    queue = tmp_path / "queues" / "composite.tsv"
+    row = _row(
+        "demo_fn",
+        headline_tool="source-shape",
+        source_actionability="",
+        frame_closability_tier="",
+    )
+    row["primary"] = "other-primary"
+    _write_queue(queue, [row])
+    _, runner = _json_runner(
+        {
+            "variants": [
+                {
+                    "status": "ok",
+                    "source_retained": str(candidate),
+                    "final_match_percent": 92.0,
+                }
+            ]
+        }
+    )
+    match_payloads = iter(
+        [
+            _match_process(
+                "demo_fn",
+                match=False,
+                percent=90.0,
+                primary="indexed-struct-pointer-materialization",
+            ),
+            HarnessProcessResult(["checkdiff", "demo_fn"], 1, "not-json", "boom"),
+            _match_process(
+                "demo_fn",
+                match=False,
+                percent=90.0,
+                primary="indexed-struct-pointer-materialization",
+            ),
+        ]
+    )
+
+    ledger = run_harvest(
+        "composite",
+        repo_root=repo_root,
+        queue_path=queue,
+        target_map={"demo_fn": {"harnesses": ["indexed-struct-search"]}},
+        runner=runner,
+        match_checker=lambda function, *, cwd, timeout: next(match_payloads),
+        validator=lambda function, *, cwd, timeout: HarnessProcessResult(
+            ["checkdiff", function], 0, "", ""
+        ),
+        apply=True,
+        compose=True,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "apply-validation-failed"
+    assert result["details"]["layers"][0]["reason"] == (
+        "candidate did not verify a strict post-apply improvement"
+    )
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_compose_unsupported_future_harness_bubbles_to_top(tmp_path: Path) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "composite.tsv"
+    _write_queue(queue, [_row("demo_fn")])
+
+    ledger = run_harvest(
+        "composite",
+        repo_root=repo_root,
+        queue_path=queue,
+        target_map={"demo_fn": {"harnesses": ["control-flow-search"]}},
+        match_checker=lambda function, *, cwd, timeout: _match_process(
+            function,
+            match=False,
+            percent=90.0,
+            primary="branch-or-control-flow-shape",
+        ),
+        compose=True,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "unsupported"
+    assert result["blocker"] == "unsupported-harness"
+    assert result["details"]["layers"][0]["harness"] == "control-flow-search"
+    assert result["details"]["layers"][0]["blocker"] == "unsupported-harness"
+
+
+def test_compose_missing_register_target_bubbles_to_top(tmp_path: Path) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "composite.tsv"
+    _write_queue(queue, [_row("demo_fn")])
+
+    ledger = run_harvest(
+        "composite",
+        repo_root=repo_root,
+        queue_path=queue,
+        target_map={"demo_fn": {"harnesses": ["coalesce-search"]}},
+        match_checker=lambda function, *, cwd, timeout: _match_process(
+            function,
+            match=False,
+            percent=90.0,
+            primary="register-allocation",
+        ),
+        compose=True,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "missing-register-target"
+    assert result["details"]["layers"][0]["harness"] == "coalesce-search"
+    assert result["details"]["layers"][0]["blocker"] == "missing-register-target"
 
 
 def test_missing_register_target_returns_stable_blocker(tmp_path: Path) -> None:
