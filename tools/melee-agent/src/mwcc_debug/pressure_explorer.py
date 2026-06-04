@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from .colorgraph_parser import find_function, parse_hook_events
@@ -2616,6 +2616,23 @@ class _IndexedStructPointerFieldUse:
     source_lines: tuple[int, int]
 
 
+@dataclass(frozen=True)
+class _IndexedStructDirectFieldUse:
+    start: int
+    end: int
+    line_start: int
+    line_end: int
+    line_indent: str
+    line: str
+    expression: str
+    base_expression: str
+    index_expression: str
+    subindex_expression: str | None
+    direct_expression: str
+    field: str
+    source_lines: tuple[int, int]
+
+
 def _probe_indexed_pointer_loop(
     source: str,
     body: str,
@@ -2827,6 +2844,22 @@ def scan_indexed_struct_pointer_probes(
         if len(probes) < max_probes:
             probes.append(probe)
 
+    direct_probes, direct_supported, direct_rejected, direct_safe = (
+        _indexed_struct_direct_scalar_split_probes(
+            source_text,
+            body,
+            body_start,
+            body_end,
+            function,
+            label_start=safe_candidate_count,
+            max_probes=max(0, max_probes - len(probes)),
+        )
+    )
+    supported_candidate_count += direct_supported
+    rejected_candidate_count += direct_rejected
+    safe_candidate_count += direct_safe
+    probes.extend(direct_probes)
+
     if supported_candidate_count == 0:
         return [], _indexed_struct_pointer_status(
             "indexed-struct-hint-unavailable",
@@ -2869,6 +2902,13 @@ _INDEXED_STRUCT_POINTER_DECL_RE = re.compile(
     r"(?:\s+(?:const|volatile))?)"
     r"\s*\*\s*(?P<pointer>[A-Za-z_]\w*)\s*=\s*"
     r"(?P<initializer>[^;\n]+);[ \t]*$"
+)
+_INDEXED_STRUCT_DIRECT_FIELD_RE = re.compile(
+    r"(?P<direct>"
+    r"(?P<base>\b[A-Za-z_]\w*(?:\s*(?:\.|->)\s*[A-Za-z_]\w*)*)"
+    r"\s*\[\s*(?P<index>[^\[\]\n;]+)\s*\]\s*"
+    r"(?:\[\s*(?P<subindex>[^\[\]\n;]+)\s*\])?"
+    r")\s*\.\s*(?P<field>[A-Za-z_]\w*)"
 )
 
 
@@ -3119,6 +3159,292 @@ def _indexed_struct_pointer_probe_for_candidate(
         source_text=_replace_absolute_slices(source, replacements),
         provenance=provenance,
     )
+
+
+def _indexed_struct_direct_scalar_split_probes(
+    source: str,
+    body: str,
+    body_start: int,
+    body_end: int,
+    function: str,
+    *,
+    label_start: int,
+    max_probes: int,
+) -> tuple[list[LifetimeLayoutProbe], int, int, int]:
+    uses_by_direct: dict[
+        tuple[str, str, str | None, str],
+        list[_IndexedStructDirectFieldUse],
+    ] = {}
+    for use in _indexed_struct_direct_field_uses(source, body_start, body_end):
+        key = (
+            use.base_expression,
+            use.index_expression,
+            use.subindex_expression,
+            use.direct_expression,
+        )
+        uses_by_direct.setdefault(key, []).append(use)
+
+    probes: list[LifetimeLayoutProbe] = []
+    supported_candidate_count = 0
+    rejected_candidate_count = 0
+    safe_candidate_count = 0
+    scoped_types = _scoped_identifier_types(source, body, body_start, function)
+    for group_uses in uses_by_direct.values():
+        if len(group_uses) < 2:
+            continue
+        supported_candidate_count += 1
+        probe = _indexed_struct_direct_scalar_split_probe_for_group(
+            source,
+            body,
+            group_uses,
+            body_start=body_start,
+            scoped_types=scoped_types,
+            label_index=label_start + safe_candidate_count,
+        )
+        if probe is None:
+            rejected_candidate_count += 1
+            continue
+        safe_candidate_count += 1
+        if len(probes) < max_probes:
+            probes.append(probe)
+    return (
+        probes,
+        supported_candidate_count,
+        rejected_candidate_count,
+        safe_candidate_count,
+    )
+
+
+def _indexed_struct_direct_field_uses(
+    source: str,
+    body_start: int,
+    body_end: int,
+) -> list[_IndexedStructDirectFieldUse]:
+    body = source[body_start:body_end]
+    code_body = _mask_c_non_code_text(body)
+    uses: list[_IndexedStructDirectFieldUse] = []
+    for match in _INDEXED_STRUCT_DIRECT_FIELD_RE.finditer(code_body):
+        start = body_start + match.start()
+        end = body_start + match.end()
+        direct_start = body_start + match.start("direct")
+        direct_end = body_start + match.end("direct")
+        if not _indexed_struct_field_use_is_standalone(
+            code_body,
+            match.start(),
+        ):
+            continue
+        if _indexed_struct_field_use_is_address_taken(code_body, match.start()):
+            continue
+        if _indexed_struct_direct_field_use_is_lvalue(code_body, match.end()):
+            continue
+        if _offset_inside_preprocessor_region(source, body_start, start):
+            continue
+        expressions = [
+            source[body_start + match.start("base") : body_start + match.end("base")],
+            source[
+                body_start + match.start("index") : body_start + match.end("index")
+            ],
+        ]
+        if match.group("subindex") is not None:
+            expressions.append(
+                source[
+                    body_start + match.start("subindex") : body_start
+                    + match.end("subindex")
+                ]
+            )
+        if not all(
+            _indexed_struct_expression_is_side_effect_free(expr)
+            for expr in expressions
+        ):
+            continue
+
+        line_start = source.rfind("\n", 0, start) + 1
+        line_end = source.find("\n", end)
+        if line_end < 0:
+            line_end = len(source)
+        else:
+            line_end += 1
+        line = source[line_start:line_end]
+        indent_match = re.match(r"[ \t]*", line)
+        line_indent = "" if indent_match is None else indent_match.group(0)
+        start_line = _line_col(source, start)[0]
+        end_line = _line_col(source, max(start, end - 1))[0]
+        uses.append(
+            _IndexedStructDirectFieldUse(
+                start=start,
+                end=end,
+                line_start=line_start,
+                line_end=line_end,
+                line_indent=line_indent,
+                line=line,
+                expression=source[start:end],
+                base_expression=source[
+                    body_start + match.start("base") : body_start
+                    + match.end("base")
+                ].strip(),
+                index_expression=source[
+                    body_start + match.start("index") : body_start
+                    + match.end("index")
+                ].strip(),
+                subindex_expression=(
+                    source[
+                        body_start + match.start("subindex") : body_start
+                        + match.end("subindex")
+                    ].strip()
+                    if match.group("subindex") is not None
+                    else None
+                ),
+                direct_expression=source[direct_start:direct_end].strip(),
+                field=match.group("field"),
+                source_lines=(start_line, end_line),
+            )
+        )
+    return uses
+
+
+def _indexed_struct_direct_scalar_split_probe_for_group(
+    source: str,
+    body: str,
+    group_uses: list[_IndexedStructDirectFieldUse],
+    *,
+    body_start: int,
+    scoped_types: dict[str, str],
+    label_index: int,
+) -> LifetimeLayoutProbe | None:
+    group_uses = sorted(group_uses, key=lambda use: (use.start, use.end))
+    first_use = group_uses[0]
+    affected_end = max(use.end for use in group_uses)
+    affected_region = source[first_use.end:affected_end]
+    if _indexed_struct_expression_inputs_mutated(
+        affected_region,
+        first_use.base_expression,
+        first_use.index_expression,
+        first_use.subindex_expression,
+    ):
+        return None
+    if _region_has_preprocessor_directive(source[first_use.line_start:affected_end]):
+        return None
+
+    scalar_type = _infer_indexed_struct_direct_scalar_type(
+        first_use,
+        scoped_types,
+    )
+    temp_name = _unique_indexed_struct_probe_name(
+        source,
+        "ll_probe_indexed_field",
+    )
+    line_relative_start = first_use.start - first_use.line_start
+    line_relative_end = first_use.end - first_use.line_start
+    rewritten_line = (
+        first_use.line[:line_relative_start]
+        + temp_name
+        + first_use.line[line_relative_end:]
+    )
+    declaration_insert_rel, declaration_indent = _pad_stack_insert_position(body)
+    declaration_insert = body_start + (declaration_insert_rel or 0)
+    if first_use.line_start < declaration_insert:
+        replacements = [
+            (
+                first_use.line_start,
+                first_use.line_end,
+                (
+                    f"{first_use.line_indent}{scalar_type} {temp_name} = "
+                    f"{first_use.expression};\n"
+                    f"{rewritten_line}"
+                ),
+            )
+        ]
+    else:
+        replacements = [
+            (
+                declaration_insert,
+                declaration_insert,
+                f"{declaration_indent}{scalar_type} {temp_name};\n",
+            ),
+            (
+                first_use.line_start,
+                first_use.line_end,
+                (
+                    f"{first_use.line_indent}{temp_name} = "
+                    f"{first_use.expression};\n"
+                    f"{rewritten_line}"
+                ),
+            ),
+        ]
+    source_line_start = _line_col(source, first_use.line_start)[0]
+    source_line_end = max(use.source_lines[1] for use in group_uses)
+    provenance = {
+        "kind": "indexed-struct-pointer",
+        "diagnostic": "indexed_struct_pointer_materialization",
+        "variant": "direct-field-scalar-split",
+        "source_lines": [source_line_start, source_line_end],
+        "base_expression": first_use.base_expression,
+        "index_expression": first_use.index_expression,
+        "direct_expression": first_use.direct_expression,
+        "field": first_use.field,
+        "scalar_type": scalar_type,
+        "field_uses": [
+            {
+                "field": use.field,
+                "source_lines": list(use.source_lines),
+            }
+            for use in group_uses
+        ],
+        "split_first_field": True,
+    }
+    if first_use.subindex_expression is not None:
+        provenance["subindex_expression"] = first_use.subindex_expression
+
+    return LifetimeLayoutProbe(
+        label=f"indexed-struct-pointer-{label_index}",
+        operator="indexed-struct-pointer",
+        description=(
+            f"Split first direct indexed field `{first_use.expression}` into "
+            f"scalar local `{temp_name}`."
+        ),
+        source_text=_replace_absolute_slices(source, replacements),
+        provenance=provenance,
+    )
+
+
+def _indexed_struct_direct_field_use_is_lvalue(source: str, end: int) -> bool:
+    cursor = end
+    while cursor < len(source) and source[cursor].isspace():
+        cursor += 1
+    if cursor >= len(source):
+        return False
+    return source.startswith(("++", "--"), cursor) or bool(
+        re.match(r"(?:[+\-*/%&|^]|<<|>>)?=(?!=)", source[cursor:])
+    )
+
+
+def _infer_indexed_struct_direct_scalar_type(
+    use: _IndexedStructDirectFieldUse,
+    scoped_types: dict[str, str],
+) -> str:
+    initialized_type = _initialized_decl_type(use.line)
+    if initialized_type is not None:
+        return initialized_type
+
+    before_use = use.line[: use.start - use.line_start]
+    assign = re.search(
+        r"\b(?P<lhs>[A-Za-z_]\w*)\s*(?:[+\-*/%&|^]?=|<<=|>>=)\s*$",
+        before_use,
+    )
+    if assign is not None:
+        lhs_type = scoped_types.get(assign.group("lhs"))
+        if lhs_type is not None:
+            return lhs_type
+    return "f32"
+
+
+def _unique_indexed_struct_probe_name(source: str, prefix: str) -> str:
+    index = 0
+    while True:
+        name = f"{prefix}_{index}"
+        if re.search(rf"\b{re.escape(name)}\b", source) is None:
+            return name
+        index += 1
 
 
 def _indexed_struct_expression_is_side_effect_free(expr: str) -> bool:

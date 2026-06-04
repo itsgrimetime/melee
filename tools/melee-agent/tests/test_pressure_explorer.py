@@ -1435,6 +1435,74 @@ def test_indexed_struct_pointer_probe_rewrites_double_index_address_form() -> No
     assert probes[0].provenance["direct_expression"] == "rows[row][col]"
 
 
+def test_indexed_struct_pointer_probe_splits_direct_indexed_field_access() -> None:
+    source = textwrap.dedent("""\
+        typedef float f32;
+
+        typedef struct Item {
+            f32 x0;
+            f32 x4;
+            f32 x8;
+        } Item;
+
+        typedef struct Vec3 {
+            f32 x;
+            f32 y;
+            f32 z;
+        } Vec3;
+
+        int fn_80000000(Item* items, int i)
+        {
+            Vec3 pos;
+            pos.x += items[i].x0;
+            pos.y += items[i].x4;
+            pos.z += items[i].x8;
+            sink(&pos);
+            return 0;
+        }
+    """)
+
+    from src.mwcc_debug.pressure_explorer import (
+        generate_indexed_struct_pointer_probes,
+        scan_indexed_struct_pointer_probes,
+    )
+
+    probes, status = scan_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert status == {
+        "blocker": None,
+        "reason": "source scan generated safe indexed struct pointer probes",
+        "supported_candidate_count": 1,
+        "rejected_candidate_count": 0,
+    }
+    assert generate_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    ) == probes
+    assert [probe.operator for probe in probes] == ["indexed-struct-pointer"]
+    rewritten = probes[0].source_text
+    assert "    f32 ll_probe_indexed_field_0;\n" in rewritten
+    assert "    ll_probe_indexed_field_0 = items[i].x0;" in rewritten
+    assert "pos.x += ll_probe_indexed_field_0;" in rewritten
+    assert "pos.y += items[i].x4;" in rewritten
+    assert "pos.z += items[i].x8;" in rewritten
+    provenance = probes[0].provenance
+    assert provenance["kind"] == "indexed-struct-pointer"
+    assert provenance["diagnostic"] == "indexed_struct_pointer_materialization"
+    assert provenance["variant"] == "direct-field-scalar-split"
+    assert provenance["base_expression"] == "items"
+    assert provenance["index_expression"] == "i"
+    assert provenance["direct_expression"] == "items[i]"
+    assert provenance["field"] == "x0"
+    assert provenance["scalar_type"] == "f32"
+    assert provenance["split_first_field"] is True
+
+
 def test_indexed_struct_pointer_probe_rejects_escaped_or_mutated_pointer() -> None:
     from src.mwcc_debug.pressure_explorer import (
         generate_indexed_struct_pointer_probes,
