@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import threading
 import time
 from typing import Any, Callable
 
@@ -18,6 +19,7 @@ from typing import Any, Callable
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REPORT = REPO_ROOT / "build" / "GALE01" / "report.json"
 DEFAULT_OUTPUT = REPO_ROOT / "build" / "function-taxonomy"
+_DECL_ORDER_EVAL_LOCK = threading.Lock()
 
 BUCKET_ORDER = [
     "signature-call-type",
@@ -54,6 +56,7 @@ class InventoryResult:
 
 
 CheckdiffRunner = Callable[[str], tuple[int, str, str]]
+DeclOrderEvaluator = Callable[[FunctionCandidate, dict[str, Any]], dict[str, Any]]
 
 
 def parse_int(value: Any, default: int = 0) -> int:
@@ -154,6 +157,22 @@ def parse_checkdiff_stdout(stdout: str) -> dict[str, Any]:
         raise
 
 
+def parse_json_object(stdout: str) -> dict[str, Any]:
+    text = stdout.strip()
+    if not text:
+        raise ValueError("command produced no JSON output")
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        if start < 0:
+            raise
+        parsed = json.loads(text[start:])
+    if not isinstance(parsed, dict):
+        raise ValueError("command JSON output was not an object")
+    return parsed
+
+
 def is_known_small_candidate(candidate: FunctionCandidate, payload: dict[str, Any]) -> bool:
     classification = payload.get("classification") or {}
     primary = classification.get("primary")
@@ -249,8 +268,123 @@ def next_command(bucket: str, candidate: FunctionCandidate) -> str:
     return f"python tools/checkdiff.py {function} --compact"
 
 
+def default_decl_order_evaluator(
+    candidate: FunctionCandidate,
+    _record: dict[str, Any],
+) -> dict[str, Any]:
+    cmd = [
+        "melee-agent",
+        "debug",
+        "mutate",
+        "decl-orders",
+        candidate.function,
+        "--strategy",
+        "all",
+        "--json",
+    ]
+    with _DECL_ORDER_EVAL_LOCK:
+        proc = subprocess.run(
+            cmd,
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+        )
+    if proc.returncode != 0:
+        return {
+            "evaluated_status": "unevaluated: decl-orders command failed",
+            "candidate_count": 0,
+            "best_decl_delta": None,
+            "best_ordering": "",
+            "stdout_tail": proc.stdout[-1000:],
+            "stderr_tail": proc.stderr[-1000:],
+        }
+    try:
+        payload = parse_json_object(proc.stdout)
+    except Exception as exc:
+        status = "unevaluated: decl-orders emitted no JSON"
+        if "no candidate orderings" in proc.stdout.lower():
+            status = "no-candidates"
+        return {
+            "evaluated_status": status,
+            "candidate_count": 0,
+            "best_decl_delta": None,
+            "best_ordering": "",
+            "stdout_tail": proc.stdout[-1000:],
+            "stderr_tail": proc.stderr[-1000:] or str(exc),
+        }
+    return summarize_decl_order_payload(payload)
+
+
+def summarize_decl_order_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    rounds = payload.get("rounds") or []
+    results: list[dict[str, Any]] = []
+    for round_payload in rounds:
+        for result in round_payload.get("results") or []:
+            if isinstance(result, dict):
+                results.append(result)
+    candidate_count = len(results)
+    skipped = [result for result in results if result.get("skipped")]
+    scored = [
+        result for result in results
+        if result.get("match_pct") is not None and result.get("delta") is not None
+    ]
+    best_result = max(
+        scored,
+        key=lambda row: parse_float(row.get("delta")),
+        default=None,
+    )
+    best_delta = (
+        parse_float(best_result.get("delta"))
+        if best_result is not None
+        else None
+    )
+    best_ordering = str(best_result.get("label") or "") if best_result else ""
+    if candidate_count == 0:
+        status = "no-candidates"
+    elif scored:
+        status = "evaluated"
+    elif skipped and len(skipped) == candidate_count:
+        reasons = " ".join(str(item.get("skip_reason") or "") for item in skipped)
+        status = (
+            "no-freedom-init-dependency"
+            if "depends on" in reasons
+            else "unevaluated: all candidates skipped"
+        )
+    else:
+        status = "unevaluated: no scored candidates"
+    return {
+        "evaluated_status": status,
+        "candidate_count": candidate_count,
+        "evaluated_candidate_count": len(scored),
+        "skipped_count": len(skipped),
+        "best_decl_delta": best_delta,
+        "best_ordering": best_ordering,
+        "baseline_pct": payload.get("baseline_pct"),
+        "best_pct": payload.get("best_pct"),
+        "scope": payload.get("scope", ""),
+        "selected_scope_reason": payload.get("selected_scope_reason", ""),
+    }
+
+
+def should_evaluate_decl_orders(candidate: FunctionCandidate, bucket: str) -> bool:
+    return bucket == "stack-local-layout" and candidate.match_percent >= 99.0
+
+
+def attach_decl_order_summary(
+    record: dict[str, Any],
+    summary: dict[str, Any],
+) -> None:
+    record["decl_order_summary"] = summary
+    record["decl_order_evaluated_status"] = summary.get("evaluated_status", "")
+    record["decl_order_candidate_count"] = summary.get("candidate_count", 0)
+    record["decl_order_best_delta"] = summary.get("best_decl_delta")
+    record["decl_order_best_ordering"] = summary.get("best_ordering", "")
+
+
 def classify_candidate(
-    candidate: FunctionCandidate, runner: CheckdiffRunner
+    candidate: FunctionCandidate,
+    runner: CheckdiffRunner,
+    decl_order_evaluator: DeclOrderEvaluator | None = default_decl_order_evaluator,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     started = time.perf_counter()
     returncode, stdout, stderr = runner(candidate.function)
@@ -296,6 +430,8 @@ def classify_candidate(
         "stderr_tail": stderr[-1000:],
         "next_command": next_command(bucket, candidate),
     }
+    if decl_order_evaluator is not None and should_evaluate_decl_orders(candidate, bucket):
+        attach_decl_order_summary(record, decl_order_evaluator(candidate, record))
     return record, None
 
 
@@ -324,7 +460,18 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def write_queue(path: Path, rows: list[dict[str, Any]]) -> None:
-    fields = ["match_percent", "function", "primary", "subcategory", "file_path", "next_command"]
+    fields = [
+        "match_percent",
+        "function",
+        "primary",
+        "subcategory",
+        "decl_order_best_delta",
+        "decl_order_best_ordering",
+        "decl_order_evaluated_status",
+        "decl_order_candidate_count",
+        "file_path",
+        "next_command",
+    ]
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
             f,
@@ -337,6 +484,10 @@ def write_queue(path: Path, rows: list[dict[str, Any]]) -> None:
         for row in rows:
             out = dict(row)
             out["match_percent"] = f"{parse_float(row.get('match_percent')):.5f}"
+            if row.get("decl_order_best_delta") is not None:
+                out["decl_order_best_delta"] = (
+                    f"{parse_float(row.get('decl_order_best_delta')):.5f}"
+                )
             writer.writerow(out)
 
 
@@ -429,6 +580,7 @@ def generate_inventory(
     output_dir: Path | str = DEFAULT_OUTPUT,
     *,
     checkdiff_runner: CheckdiffRunner = default_checkdiff_runner,
+    decl_order_evaluator: DeclOrderEvaluator | None = default_decl_order_evaluator,
     workers: int = 4,
     limit: int | None = None,
 ) -> InventoryResult:
@@ -441,7 +593,11 @@ def generate_inventory(
     errors: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
         for record, error in executor.map(
-            lambda candidate: classify_candidate(candidate, checkdiff_runner),
+            lambda candidate: classify_candidate(
+                candidate,
+                checkdiff_runner,
+                decl_order_evaluator,
+            ),
             attempted,
         ):
             if record is not None:
@@ -509,6 +665,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Only process the first N non-100 report functions.",
     )
+    parser.add_argument(
+        "--skip-decl-order-eval",
+        action="store_true",
+        help="Skip bounded decl-orders evaluation for >=99% stack-local-layout rows.",
+    )
     return parser
 
 
@@ -521,6 +682,9 @@ def main(argv: list[str] | None = None) -> int:
             args.output,
             workers=args.workers,
             limit=args.limit,
+            decl_order_evaluator=(
+                None if args.skip_decl_order_eval else default_decl_order_evaluator
+            ),
         )
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
