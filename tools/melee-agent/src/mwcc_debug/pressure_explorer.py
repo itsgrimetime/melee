@@ -2593,6 +2593,29 @@ class _PointerBaseCallLoopUse:
     value_type: str
 
 
+@dataclass(frozen=True)
+class _IndexedStructPointerCandidate:
+    pointer: str
+    declaration: str
+    decl_start: int
+    decl_end: int
+    base_expression: str
+    index_expression: str
+    subindex_expression: str | None
+    direct_expression: str
+    access_mode: str
+
+
+@dataclass(frozen=True)
+class _IndexedStructPointerFieldUse:
+    start: int
+    end: int
+    field: str
+    syntax: str
+    replacement: str
+    source_lines: tuple[int, int]
+
+
 def _probe_indexed_pointer_loop(
     source: str,
     body: str,
@@ -2757,6 +2780,553 @@ def _probe_indexed_pointer_loop(
         )
 
     return probes
+
+
+def scan_indexed_struct_pointer_probes(
+    source_text: str,
+    function: str,
+    max_probes: int = 12,
+) -> tuple[list[LifetimeLayoutProbe], dict]:
+    """Scan for safe materialized struct pointers that can be de-indexed."""
+    body_span = _find_function_body_span(source_text, function)
+    if body_span is None:
+        return [], _indexed_struct_pointer_status(
+            "indexed-struct-hint-unavailable",
+            "checkdiff hint could not be associated with a supported source "
+            "pointer initializer",
+            supported_candidate_count=0,
+            rejected_candidate_count=0,
+        )
+
+    body_start, body_end = body_span
+    body = source_text[body_start:body_end]
+    probes: list[LifetimeLayoutProbe] = []
+    supported_candidate_count = 0
+    rejected_candidate_count = 0
+    safe_candidate_count = 0
+
+    for candidate in _indexed_struct_pointer_candidates(body, body_start):
+        supported_candidate_count += 1
+        candidate_body_end = _indexed_struct_enclosing_block_end(
+            source_text,
+            body_start,
+            body_end,
+            candidate.decl_start,
+        )
+        probe = _indexed_struct_pointer_probe_for_candidate(
+            source_text,
+            candidate,
+            body_start=body_start,
+            body_end=candidate_body_end,
+            label_index=safe_candidate_count,
+        )
+        if probe is None:
+            rejected_candidate_count += 1
+            continue
+        safe_candidate_count += 1
+        if len(probes) < max_probes:
+            probes.append(probe)
+
+    if supported_candidate_count == 0:
+        return [], _indexed_struct_pointer_status(
+            "indexed-struct-hint-unavailable",
+            "checkdiff hint could not be associated with a supported source "
+            "pointer initializer",
+            supported_candidate_count=supported_candidate_count,
+            rejected_candidate_count=rejected_candidate_count,
+        )
+    if safe_candidate_count == 0:
+        return [], _indexed_struct_pointer_status(
+            "no-safe-materialized-pointer",
+            "source scan found materialized pointers, but all violated safety rules",
+            supported_candidate_count=supported_candidate_count,
+            rejected_candidate_count=rejected_candidate_count,
+        )
+    return probes, _indexed_struct_pointer_status(
+        None,
+        "source scan generated safe indexed struct pointer probes",
+        supported_candidate_count=supported_candidate_count,
+        rejected_candidate_count=rejected_candidate_count,
+    )
+
+
+def generate_indexed_struct_pointer_probes(
+    source_text: str,
+    function: str,
+    max_probes: int = 12,
+) -> list[LifetimeLayoutProbe]:
+    probes, _status = scan_indexed_struct_pointer_probes(
+        source_text,
+        function,
+        max_probes=max_probes,
+    )
+    return probes
+
+
+_INDEXED_STRUCT_POINTER_DECL_RE = re.compile(
+    r"^(?P<indent>[ \t]*)"
+    r"(?P<type>(?:(?:const|volatile)\s+)*(?:struct\s+)?[A-Za-z_]\w*"
+    r"(?:\s+(?:const|volatile))?)"
+    r"\s*\*\s*(?P<pointer>[A-Za-z_]\w*)\s*=\s*"
+    r"(?P<initializer>[^;\n]+);[ \t]*$"
+)
+
+
+def _indexed_struct_pointer_status(
+    blocker: str | None,
+    reason: str,
+    *,
+    supported_candidate_count: int,
+    rejected_candidate_count: int,
+) -> dict:
+    return {
+        "blocker": blocker,
+        "reason": reason,
+        "supported_candidate_count": supported_candidate_count,
+        "rejected_candidate_count": rejected_candidate_count,
+    }
+
+
+def _indexed_struct_pointer_candidates(
+    body: str,
+    body_start: int,
+) -> list[_IndexedStructPointerCandidate]:
+    candidates: list[_IndexedStructPointerCandidate] = []
+    cursor = 0
+    code_body = _mask_c_non_code_text(body)
+    body_lines = body.splitlines(keepends=True)
+    code_lines = code_body.splitlines(keepends=True)
+    for line, code_line in zip(body_lines, code_lines, strict=True):
+        code_line_text = code_line[:-1] if code_line.endswith("\n") else code_line
+        match = _INDEXED_STRUCT_POINTER_DECL_RE.match(code_line_text)
+        if match is not None:
+            parsed = _parse_indexed_struct_pointer_initializer(
+                match.group("initializer").strip()
+            )
+            if parsed is not None:
+                (
+                    base_expression,
+                    index_expression,
+                    subindex_expression,
+                    direct_expression,
+                    access_mode,
+                ) = parsed
+                candidates.append(
+                    _IndexedStructPointerCandidate(
+                        pointer=match.group("pointer"),
+                        declaration=line.strip(),
+                        decl_start=body_start + cursor,
+                        decl_end=body_start + cursor + len(line),
+                        base_expression=base_expression,
+                        index_expression=index_expression,
+                        subindex_expression=subindex_expression,
+                        direct_expression=direct_expression,
+                        access_mode=access_mode,
+                    )
+                )
+        cursor += len(line)
+    return candidates
+
+
+def _indexed_struct_enclosing_block_end(
+    source: str,
+    body_start: int,
+    body_end: int,
+    offset: int,
+) -> int:
+    region = source[body_start:body_end]
+    code_region = _mask_c_non_code_text(region)
+    relative_offset = max(0, min(len(code_region), offset - body_start))
+    stack: list[int] = []
+    for idx, char in enumerate(code_region[:relative_offset]):
+        if char == "{":
+            stack.append(idx)
+        elif char == "}" and stack:
+            stack.pop()
+    if not stack:
+        return body_end
+
+    target_depth = len(stack)
+    for idx in range(relative_offset, len(code_region)):
+        char = code_region[idx]
+        if char == "{":
+            stack.append(idx)
+        elif char == "}" and stack:
+            stack.pop()
+            if len(stack) < target_depth:
+                return body_start + idx
+    return body_end
+
+
+def _parse_indexed_struct_pointer_initializer(
+    initializer: str,
+) -> tuple[str, str, str | None, str, str] | None:
+    if initializer.startswith("&"):
+        indexed = _parse_indexed_struct_address_expression(initializer[1:].strip())
+        if indexed is None:
+            return None
+        base_expression, index_expression, subindex_expression = indexed
+        direct_expression = f"{base_expression}[{index_expression}]"
+        if subindex_expression is not None:
+            direct_expression += f"[{subindex_expression}]"
+        return (
+            base_expression,
+            index_expression,
+            subindex_expression,
+            direct_expression,
+            "struct-value",
+        )
+
+    plus = _split_top_level_plus(initializer)
+    if plus is None:
+        return None
+    base_expression, index_expression = plus
+    return (
+        base_expression,
+        index_expression,
+        None,
+        f"{base_expression} + {index_expression}",
+        "pointer-expression",
+    )
+
+
+def _parse_indexed_struct_address_expression(
+    expression: str,
+) -> tuple[str, str, str | None] | None:
+    match = re.match(
+        r"^(?P<base>[^\[\]]+?)\s*"
+        r"\[\s*(?P<index>[^\[\]]+)\s*\]\s*"
+        r"(?:\[\s*(?P<subindex>[^\[\]]+)\s*\])?\s*$",
+        expression,
+    )
+    if match is None:
+        return None
+    return (
+        match.group("base").strip(),
+        match.group("index").strip(),
+        (
+            match.group("subindex").strip()
+            if match.group("subindex") is not None
+            else None
+        ),
+    )
+
+
+def _split_top_level_plus(expression: str) -> tuple[str, str] | None:
+    paren_depth = 0
+    bracket_depth = 0
+    plus_positions: list[int] = []
+    for idx, char in enumerate(expression):
+        if char == "(":
+            paren_depth += 1
+        elif char == ")":
+            paren_depth = max(0, paren_depth - 1)
+        elif char == "[":
+            bracket_depth += 1
+        elif char == "]":
+            bracket_depth = max(0, bracket_depth - 1)
+        elif char == "+" and paren_depth == 0 and bracket_depth == 0:
+            plus_positions.append(idx)
+    if len(plus_positions) != 1:
+        return None
+    split = plus_positions[0]
+    left = expression[:split].strip()
+    right = expression[split + 1:].strip()
+    if not left or not right:
+        return None
+    return left, right
+
+
+def _indexed_struct_pointer_probe_for_candidate(
+    source: str,
+    candidate: _IndexedStructPointerCandidate,
+    *,
+    body_start: int,
+    body_end: int,
+    label_index: int,
+) -> LifetimeLayoutProbe | None:
+    if _offset_inside_preprocessor_region(source, body_start, candidate.decl_start):
+        return None
+
+    expressions = [
+        candidate.base_expression,
+        candidate.index_expression,
+    ]
+    if candidate.subindex_expression is not None:
+        expressions.append(candidate.subindex_expression)
+    if not all(
+        _indexed_struct_expression_is_side_effect_free(expr) for expr in expressions
+    ):
+        return None
+
+    field_uses = _indexed_struct_pointer_field_uses(
+        source,
+        candidate,
+        candidate.decl_end,
+        body_end,
+    )
+    if not field_uses:
+        return None
+
+    affected_end = max(field_use.end for field_use in field_uses)
+    affected_region = source[candidate.decl_end:affected_end]
+    if _indexed_struct_expression_inputs_mutated(
+        affected_region,
+        candidate.base_expression,
+        candidate.index_expression,
+        candidate.subindex_expression,
+    ):
+        return None
+    if _region_has_preprocessor_directive(source[candidate.decl_start:affected_end]):
+        return None
+
+    source_line_start = _line_col(source, candidate.decl_start)[0]
+    source_line_end = max(field_use.source_lines[1] for field_use in field_uses)
+    replacements = [(candidate.decl_start, candidate.decl_end, "")]
+    replacements.extend(
+        (field_use.start, field_use.end, field_use.replacement)
+        for field_use in field_uses
+    )
+    provenance = {
+        "kind": "indexed-struct-pointer",
+        "diagnostic": "indexed_struct_pointer_materialization",
+        "pointer": candidate.pointer,
+        "source_lines": [source_line_start, source_line_end],
+        "declaration": candidate.declaration,
+        "base_expression": candidate.base_expression,
+        "index_expression": candidate.index_expression,
+        "direct_expression": candidate.direct_expression,
+        "field_uses": [
+            {
+                "field": field_use.field,
+                "syntax": field_use.syntax,
+                "source_lines": list(field_use.source_lines),
+            }
+            for field_use in field_uses
+        ],
+        "split_first_field": False,
+    }
+    if candidate.subindex_expression is not None:
+        provenance["subindex_expression"] = candidate.subindex_expression
+
+    return LifetimeLayoutProbe(
+        label=f"indexed-struct-pointer-{label_index}",
+        operator="indexed-struct-pointer",
+        description=(
+            f"Rewrite materialized struct pointer `{candidate.pointer}` uses "
+            f"through `{candidate.direct_expression}`."
+        ),
+        source_text=_replace_absolute_slices(source, replacements),
+        provenance=provenance,
+    )
+
+
+def _indexed_struct_expression_is_side_effect_free(expr: str) -> bool:
+    expr = expr.strip()
+    if not expr:
+        return False
+    if re.search(r"\b[A-Za-z_]\w*\s*\(", expr):
+        return False
+    if re.search(r"\+\+|--|(?<![=!<>])=(?!=)|<<=|>>=|,", expr):
+        return False
+    return True
+
+
+def _indexed_struct_expression_inputs_mutated(
+    region: str,
+    *expressions: str | None,
+) -> bool:
+    names: set[str] = set()
+    for expression in expressions:
+        if expression is None:
+            continue
+        names.update(re.findall(r"\b[A-Za-z_]\w*\b", expression))
+    if not names:
+        return False
+
+    code_region = _mask_c_non_code_text(region)
+    for name in names:
+        token = re.escape(name)
+        if re.search(rf"(?:\+\+|--)\s*\b{token}\b", code_region):
+            return True
+        if re.search(rf"\b{token}\b\s*(?:\+\+|--)", code_region):
+            return True
+        if re.search(rf"(?<!&)&\s*\(*\s*\b{token}\b", code_region):
+            return True
+        if re.search(
+            rf"\b{token}\b\s*(?:[+\-*/%&|^]=|<<=|>>=|=(?!=))",
+            code_region,
+        ):
+            return True
+    return False
+
+
+def _indexed_struct_pointer_field_uses(
+    source: str,
+    candidate: _IndexedStructPointerCandidate,
+    region_start: int,
+    region_end: int,
+) -> list[_IndexedStructPointerFieldUse] | None:
+    region = source[region_start:region_end]
+    code_region = _mask_c_non_code_text(region)
+    pointer = re.escape(candidate.pointer)
+    field = r"[A-Za-z_]\w*"
+    use_re = re.compile(
+        rf"(?P<deref>\(\s*\*\s*{pointer}\s*\)\s*\.\s*(?P<deref_field>{field}))"
+        rf"|(?P<arrow>\b{pointer}\s*->\s*(?P<arrow_field>{field}))"
+    )
+    uses: list[_IndexedStructPointerFieldUse] = []
+    excluded_ranges: list[tuple[int, int]] = []
+    for match in use_re.finditer(code_region):
+        start = region_start + match.start()
+        end = region_start + match.end()
+        if not _indexed_struct_field_use_is_standalone(code_region, match.start()):
+            return None
+        if _indexed_struct_field_use_is_address_taken(code_region, match.start()):
+            return None
+        if match.group("arrow") is not None:
+            syntax = "arrow"
+            field_name = match.group("arrow_field")
+        else:
+            syntax = "deref-dot"
+            field_name = match.group("deref_field")
+        if candidate.access_mode == "struct-value":
+            replacement = f"{candidate.direct_expression}.{field_name}"
+        else:
+            replacement = f"({candidate.direct_expression})->{field_name}"
+        start_line = _line_col(source, start)[0]
+        end_line = _line_col(source, max(start, end - 1))[0]
+        uses.append(
+            _IndexedStructPointerFieldUse(
+                start=start,
+                end=end,
+                field=field_name,
+                syntax=syntax,
+                replacement=replacement,
+                source_lines=(start_line, end_line),
+            )
+        )
+        excluded_ranges.append((match.start(), match.end()))
+
+    if not uses:
+        return None
+    scrubbed = list(code_region)
+    for start, end in excluded_ranges:
+        for idx in range(start, end):
+            scrubbed[idx] = " "
+    if re.search(rf"\b{pointer}\b", "".join(scrubbed)):
+        return None
+    return uses
+
+
+def _mask_c_non_code_text(text: str) -> str:
+    masked = list(text)
+    idx = 0
+
+    def blank(pos: int) -> None:
+        if masked[pos] != "\n":
+            masked[pos] = " "
+
+    while idx < len(text):
+        char = text[idx]
+        nxt = text[idx + 1] if idx + 1 < len(text) else ""
+        if char == "/" and nxt == "/":
+            blank(idx)
+            blank(idx + 1)
+            idx += 2
+            while idx < len(text) and text[idx] != "\n":
+                blank(idx)
+                idx += 1
+            continue
+        if char == "/" and nxt == "*":
+            blank(idx)
+            blank(idx + 1)
+            idx += 2
+            while idx < len(text):
+                end = text[idx] == "*" and idx + 1 < len(text) and text[idx + 1] == "/"
+                blank(idx)
+                if end:
+                    blank(idx + 1)
+                    idx += 2
+                    break
+                idx += 1
+            continue
+        if char in {'"', "'"}:
+            quote = char
+            blank(idx)
+            idx += 1
+            escaped = False
+            while idx < len(text):
+                current = text[idx]
+                blank(idx)
+                if escaped:
+                    escaped = False
+                elif current == "\\":
+                    escaped = True
+                elif current == quote:
+                    idx += 1
+                    break
+                idx += 1
+            continue
+        idx += 1
+    return "".join(masked)
+
+
+def _indexed_struct_field_use_is_standalone(source: str, start: int) -> bool:
+    cursor = start - 1
+    saw_space = False
+    while cursor >= 0 and source[cursor].isspace():
+        saw_space = True
+        cursor -= 1
+    if cursor < 0:
+        return True
+    if saw_space:
+        return source[cursor] not in ".>"
+    return not (source[cursor].isalnum() or source[cursor] in "_.>")
+
+
+def _indexed_struct_field_use_is_address_taken(source: str, start: int) -> bool:
+    cursor = start - 1
+    while cursor >= 0 and source[cursor].isspace():
+        cursor -= 1
+    while cursor >= 0 and source[cursor] == "(":
+        cursor -= 1
+        while cursor >= 0 and source[cursor].isspace():
+            cursor -= 1
+    if cursor < 0 or source[cursor] != "&":
+        return False
+    if cursor > 0 and source[cursor - 1] == "&":
+        return False
+    before = source[:cursor].rstrip()
+    if not before:
+        return True
+    previous = before[-1]
+    if not (previous.isalnum() or previous in "_])"):
+        return True
+    match = re.search(r"\b([A-Za-z_]\w*)\s*$", before)
+    return bool(match and match.group(1) in {"return", "sizeof"})
+
+
+def _region_has_preprocessor_directive(text: str) -> bool:
+    return re.search(r"(?m)^[ \t]*#", text) is not None
+
+
+def _offset_inside_preprocessor_region(
+    source: str,
+    region_start: int,
+    offset: int,
+) -> bool:
+    depth = 0
+    for line in source[region_start:offset].splitlines():
+        stripped = line.lstrip()
+        if not stripped.startswith("#"):
+            continue
+        directive = stripped[1:].lstrip().split(None, 1)[0] if stripped[1:] else ""
+        if directive in {"if", "ifdef", "ifndef"}:
+            depth += 1
+        elif directive == "endif":
+            depth = max(0, depth - 1)
+    return depth > 0
 
 
 def _probe_pointer_walk_loop(

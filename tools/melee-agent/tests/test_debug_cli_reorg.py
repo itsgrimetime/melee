@@ -75,6 +75,7 @@ def test_representative_grouped_command_help_works() -> None:
         ["debug", "suggest", "inlines", "--help"],
         ["debug", "mutate", "decl-orders", "--help"],
         ["debug", "mutate", "frame-transform-search", "--help"],
+        ["debug", "mutate", "indexed-struct-search", "--help"],
         ["debug", "mutate", "lifetime-layout", "--help"],
         ["debug", "permute", "run", "--help"],
         ["debug", "permute", "doctor", "--help"],
@@ -88,6 +89,543 @@ def test_representative_grouped_command_help_works() -> None:
     for command in commands:
         result = runner.invoke(app, command)
         assert result.exit_code == 0, (command, result.stdout)
+
+
+def test_indexed_struct_search_help_works() -> None:
+    result = runner.invoke(
+        debug_cli.debug_app,
+        ["mutate", "indexed-struct-search", "--help"],
+        env={"COLUMNS": "200"},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "--score-match-percent" in result.output
+    assert "--compile-probes" in result.output
+
+
+def test_indexed_struct_search_json_reports_no_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", tmp_path)
+    monkeypatch.setattr(debug_cli, "_find_unit_for_function", lambda function, root: None)
+
+    result = runner.invoke(
+        debug_cli.debug_app,
+        ["mutate", "indexed-struct-search", "-f", "fn_80000000", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["blocker"] == "source-unavailable"
+    assert payload["function"] == "fn_80000000"
+    assert payload["source"] is None
+    assert payload["generated_source_dir"] is None
+    assert payload["probe_count"] == 0
+    assert payload["probes"] == []
+    assert payload["stop_condition"] == {
+        "kind": "blocked",
+        "blocker": "source-unavailable",
+        "reason": "source file could not be resolved",
+    }
+    assert payload["variants"] == []
+
+
+def test_indexed_struct_search_json_scores_generated_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "repo"
+    source = melee_root / "src" / "melee" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        textwrap.dedent(
+            """\
+            typedef struct Item {
+                int x;
+                int y;
+            } Item;
+
+            int fn_80000000(Item* items, int i)
+            {
+                Item* item = &items[i];
+                int x = item->x;
+                return item->y + x;
+            }
+            """
+        )
+    )
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/demo",
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_indexed_struct_checkdiff_hint",
+        lambda function, *, melee_root, timeout: {
+            "expected_indexed_ops": [{"opcode": "lwzx"}],
+            "current_materialized_pointers": [{"pointer_register": "r4"}],
+        },
+    )
+
+    def fake_compile(diff_input, *, function, melee_root, timeout):
+        return "pcdump text"
+
+    def fake_score(
+        path,
+        *,
+        function,
+        melee_root,
+        timeout=None,
+        status=None,
+        include_stack_slot=False,
+    ):
+        return debug_cli._SourceCandidateRealScore(100.0, None)
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_indexed_struct_compile_source_variant",
+        fake_compile,
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_score_source_candidate_real_tree",
+        fake_score,
+    )
+
+    result = runner.invoke(
+        debug_cli.debug_app,
+        [
+            "mutate",
+            "indexed-struct-search",
+            "-f",
+            "fn_80000000",
+            "--json",
+            "--max-probes",
+            "4",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["blocker"] is None
+    assert payload["function"] == "fn_80000000"
+    assert payload["source"].endswith("src/melee/demo.c")
+    assert Path(payload["generated_source_dir"]).exists()
+    assert payload["stop_condition"]["kind"] == "validated"
+    assert payload["stop_condition"]["blocker"] is None
+    assert payload["probe_count"] == 1
+    assert payload["probes"][0]["operator"] == "indexed-struct-pointer"
+    variant = payload["variants"][0]
+    assert variant["status"] == "ok"
+    assert variant["operator"] == "indexed-struct-pointer"
+    assert Path(variant["path"]).exists()
+    assert variant["match_percent"] == 100.0
+    assert variant["final_match_percent"] == 100.0
+    assert variant["error"] is None
+    assert Path(variant["source_retained"]).exists()
+    assert variant["probe"]["provenance"]["pointer"] == "item"
+    assert variant["probe"]["provenance"]["kind"] == "indexed-struct-pointer"
+    assert variant["probe"]["provenance"]["source_lines"] == [8, 10]
+
+
+def test_indexed_struct_search_json_reports_missing_checkdiff_hint(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "demo.c"
+    source.write_text(
+        textwrap.dedent(
+            """\
+            typedef struct Item {
+                int x;
+            } Item;
+
+            int fn_80000000(Item* items, int i)
+            {
+                Item* item = &items[i];
+                return item->x;
+            }
+            """
+        )
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_indexed_struct_checkdiff_hint",
+        lambda function, *, melee_root, timeout: None,
+    )
+
+    result = runner.invoke(
+        debug_cli.debug_app,
+        [
+            "mutate",
+            "indexed-struct-search",
+            "-f",
+            "fn_80000000",
+            "--source-file",
+            str(source),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["blocker"] == "indexed-struct-hint-unavailable"
+    assert payload["blocker"] == payload["stop_condition"]["blocker"]
+    assert payload["function"] == "fn_80000000"
+    assert payload["source"] == str(source)
+    assert payload["probe_count"] == 0
+    assert payload["probes"] == []
+    assert payload["stop_condition"]["kind"] == "blocked"
+    assert payload["variants"] == []
+
+
+def test_indexed_struct_search_json_reports_unmapped_hint_when_no_supported_initializer(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "demo.c"
+    source.write_text(
+        textwrap.dedent(
+            """\
+            typedef struct Item {
+                int x;
+            } Item;
+
+            int fn_80000000(Item* items, int i)
+            {
+                Item item = items[i];
+                return item.x;
+            }
+            """
+        )
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_indexed_struct_checkdiff_hint",
+        lambda function, *, melee_root, timeout: {
+            "expected_indexed_ops": [{"opcode": "lwzx"}],
+        },
+    )
+
+    result = runner.invoke(
+        debug_cli.debug_app,
+        [
+            "mutate",
+            "indexed-struct-search",
+            "-f",
+            "fn_80000000",
+            "--source-file",
+            str(source),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["blocker"] == "indexed-struct-hint-unavailable"
+    assert payload["blocker"] == payload["stop_condition"]["blocker"]
+    assert payload["stop_condition"]["kind"] == "blocked"
+    assert payload["probe_count"] == 0
+    assert payload["probes"] == []
+    assert payload["variants"] == []
+
+
+def test_indexed_struct_search_json_reports_no_safe_materialized_pointer(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "demo.c"
+    source.write_text(
+        textwrap.dedent(
+            """\
+            typedef struct Item {
+                int x;
+            } Item;
+
+            int fn_80000000(Item* items, int i)
+            {
+                Item* item = &items[i];
+                sink(item);
+                return item->x;
+            }
+            """
+        )
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_indexed_struct_checkdiff_hint",
+        lambda function, *, melee_root, timeout: {
+            "expected_indexed_ops": [{"opcode": "lwzx"}],
+        },
+    )
+
+    result = runner.invoke(
+        debug_cli.debug_app,
+        [
+            "mutate",
+            "indexed-struct-search",
+            "-f",
+            "fn_80000000",
+            "--source-file",
+            str(source),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["blocker"] == "no-safe-materialized-pointer"
+    assert payload["blocker"] == payload["stop_condition"]["blocker"]
+    assert payload["stop_condition"]["kind"] == "blocked"
+    assert payload["probe_count"] == 0
+    assert payload["probes"] == []
+    assert payload["variants"] == []
+
+
+def test_indexed_struct_search_json_reports_unvalidated_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "candidate.c"
+    source.write_text("int fn_80000000(void) { return 1; }\n")
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", tmp_path)
+
+    def fake_compile(diff_input, *, function, melee_root, timeout):
+        return "pcdump text"
+
+    def fake_score(
+        path,
+        *,
+        function,
+        melee_root,
+        timeout=None,
+        status=None,
+        include_stack_slot=False,
+    ):
+        return debug_cli._SourceCandidateRealScore(99.5, None)
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_indexed_struct_compile_source_variant",
+        fake_compile,
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_score_source_candidate_real_tree",
+        fake_score,
+    )
+
+    result = runner.invoke(
+        debug_cli.debug_app,
+        [
+            "mutate",
+            "indexed-struct-search",
+            "-f",
+            "fn_80000000",
+            "--candidate",
+            f"manual:indexed-struct-pointer={source}",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["blocker"] == "no-indexed-struct-candidate"
+    assert payload["blocker"] == payload["stop_condition"]["blocker"]
+    assert payload["stop_condition"]["kind"] == "unvalidated"
+    assert payload["variants"][0]["operator"] == "indexed-struct-pointer"
+    assert payload["variants"][0]["path"] == str(source)
+    assert payload["variants"][0]["error"] is None
+    assert payload["variants"][0]["match_percent"] == 99.5
+
+
+def test_indexed_struct_search_json_reports_build_failed_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from src.mwcc_debug.diff_capture import CompileFailure
+
+    source = tmp_path / "candidate.c"
+    source.write_text("int fn_80000000(void) { return 1; }\n")
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", tmp_path)
+
+    def fake_compile(diff_input, *, function, melee_root, timeout):
+        raise CompileFailure(
+            "candidate",
+            ["compile"],
+            "",
+            "compiler diagnostic",
+            1,
+        )
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_indexed_struct_compile_source_variant",
+        fake_compile,
+    )
+
+    result = runner.invoke(
+        debug_cli.debug_app,
+        [
+            "mutate",
+            "indexed-struct-search",
+            "-f",
+            "fn_80000000",
+            "--candidate",
+            f"manual:indexed-struct-pointer={source}",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["blocker"] == "no-indexed-struct-candidate"
+    assert payload["blocker"] == payload["stop_condition"]["blocker"]
+    variant = payload["variants"][0]
+    assert variant["status"] == "build-failed"
+    assert variant["operator"] == "indexed-struct-pointer"
+    assert variant["path"] == str(source)
+    assert "compiler diagnostic" in variant["error"]
+
+
+def test_indexed_struct_search_json_ranks_validated_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source_a = tmp_path / "candidate_a.c"
+    source_b = tmp_path / "candidate_b.c"
+    source_a.write_text("int fn_80000000(void) { return 1; }\n")
+    source_b.write_text("int fn_80000000(void) { return 2; }\n")
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", tmp_path)
+
+    def fake_compile(diff_input, *, function, melee_root, timeout):
+        return "pcdump text"
+
+    def fake_score(
+        path,
+        *,
+        function,
+        melee_root,
+        timeout=None,
+        status=None,
+        include_stack_slot=False,
+    ):
+        if path == source_b:
+            return debug_cli._SourceCandidateRealScore(100.0, None)
+        return debug_cli._SourceCandidateRealScore(90.0, None)
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_indexed_struct_compile_source_variant",
+        fake_compile,
+    )
+    monkeypatch.setattr(debug_cli, "_score_source_candidate_real_tree", fake_score)
+
+    result = runner.invoke(
+        debug_cli.debug_app,
+        [
+            "mutate",
+            "indexed-struct-search",
+            "-f",
+            "fn_80000000",
+            "--candidate",
+            f"slow:indexed-struct-pointer={source_a}",
+            "--candidate",
+            f"match:indexed-struct-pointer={source_b}",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["stop_condition"]["kind"] == "validated"
+    assert [variant["label"] for variant in payload["variants"]] == [
+        "match",
+        "slow",
+    ]
+    assert payload["variants"][0]["final_match_percent"] == 100.0
+
+
+def test_indexed_struct_search_json_lists_safe_probes_as_unvalidated_when_not_compiled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "demo.c"
+    source.write_text(
+        textwrap.dedent(
+            """\
+            typedef struct Item {
+                int x;
+            } Item;
+
+            int fn_80000000(Item* items, int i)
+            {
+                Item* item = &items[i];
+                return item->x;
+            }
+            """
+        )
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_indexed_struct_checkdiff_hint",
+        lambda function, *, melee_root, timeout: {
+            "expected_indexed_ops": [{"opcode": "lwzx"}],
+        },
+    )
+
+    result = runner.invoke(
+        debug_cli.debug_app,
+        [
+            "mutate",
+            "indexed-struct-search",
+            "-f",
+            "fn_80000000",
+            "--source-file",
+            str(source),
+            "--no-compile-probes",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["probe_count"] == 1
+    assert payload["variants"] == []
+    assert payload["blocker"] == "no-indexed-struct-candidate"
+    assert payload["stop_condition"] == {
+        "kind": "unvalidated",
+        "blocker": "no-indexed-struct-candidate",
+        "reason": "safe indexed-struct probes were generated but not compiled",
+    }
+
+
+def test_indexed_struct_search_rejects_non_indexed_manual_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "candidate.c"
+    source.write_text("int fn_80000000(void) { return 1; }\n")
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", tmp_path)
+
+    result = runner.invoke(
+        debug_cli.debug_app,
+        [
+            "mutate",
+            "indexed-struct-search",
+            "-f",
+            "fn_80000000",
+            "--candidate",
+            f"manual:frame-transform={source}",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "expected indexed-struct-pointer candidate" in result.output
 
 
 def test_frame_reservations_cli_reports_extra_low_gap(tmp_path: Path) -> None:

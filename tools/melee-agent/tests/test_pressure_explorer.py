@@ -1298,6 +1298,580 @@ def test_indexed_pointer_loop_probes_control_base_index_address_and_bound() -> N
     )
 
 
+def test_indexed_struct_pointer_probe_rewrites_arrow_uses_to_direct_index() -> None:
+    source = textwrap.dedent("""\
+        typedef struct Item {
+            int x;
+            int y;
+            int z;
+        } Item;
+
+        int fn_80000000(Item* items, int i)
+        {
+            Item* item = &items[i];
+            int x = item->x;
+            int z = (*item).z;
+            item->y = x + z;
+            return item->y;
+        }
+    """)
+
+    from src.mwcc_debug.pressure_explorer import (
+        generate_indexed_struct_pointer_probes,
+        scan_indexed_struct_pointer_probes,
+    )
+
+    probes, status = scan_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert status == {
+        "blocker": None,
+        "reason": "source scan generated safe indexed struct pointer probes",
+        "supported_candidate_count": 1,
+        "rejected_candidate_count": 0,
+    }
+    assert [probe.operator for probe in probes] == ["indexed-struct-pointer"]
+    assert generate_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    ) == probes
+    rewritten = probes[0].source_text
+    assert "Item* item = &items[i];" not in rewritten
+    assert "int x = items[i].x;" in rewritten
+    assert "int z = items[i].z;" in rewritten
+    assert "items[i].y = x + z;" in rewritten
+    assert "return items[i].y;" in rewritten
+    provenance = probes[0].provenance
+    assert provenance["kind"] == "indexed-struct-pointer"
+    assert provenance["diagnostic"] == "indexed_struct_pointer_materialization"
+    assert provenance["pointer"] == "item"
+    assert provenance["source_lines"] == [9, 13]
+    assert provenance["base_expression"] == "items"
+    assert provenance["index_expression"] == "i"
+    assert provenance["direct_expression"] == "items[i]"
+    assert provenance["split_first_field"] is False
+    assert [use["field"] for use in provenance["field_uses"]] == ["x", "z", "y", "y"]
+    assert [use["syntax"] for use in provenance["field_uses"]] == [
+        "arrow",
+        "deref-dot",
+        "arrow",
+        "arrow",
+    ]
+
+
+def test_indexed_struct_pointer_probe_rewrites_base_plus_index_deref_dot() -> None:
+    source = textwrap.dedent("""\
+        typedef struct Item {
+            int x;
+            int y;
+        } Item;
+
+        int fn_80000000(Item* items, int i)
+        {
+            Item* item = items + i;
+            int x = (*item).x;
+            item->y = x + 1;
+            return (*item).y + x;
+        }
+    """)
+
+    from src.mwcc_debug.pressure_explorer import (
+        generate_indexed_struct_pointer_probes,
+        scan_indexed_struct_pointer_probes,
+    )
+
+    probes = generate_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    rewritten = probes[0].source_text
+    assert "Item* item = items + i;" not in rewritten
+    assert "int x = (items + i)->x;" in rewritten
+    assert "(items + i)->y = x + 1;" in rewritten
+    assert "return (items + i)->y + x;" in rewritten
+    assert probes[0].provenance["direct_expression"] == "items + i"
+    assert [use["syntax"] for use in probes[0].provenance["field_uses"]] == [
+        "deref-dot",
+        "arrow",
+        "deref-dot",
+    ]
+
+
+def test_indexed_struct_pointer_probe_rewrites_double_index_address_form() -> None:
+    source = textwrap.dedent("""\
+        typedef struct Item {
+            int x;
+        } Item;
+
+        int fn_80000000(Item rows[][4], int row, int col)
+        {
+            Item* item = &rows[row][col];
+            return item->x;
+        }
+    """)
+
+    from src.mwcc_debug.pressure_explorer import (
+        generate_indexed_struct_pointer_probes,
+    )
+
+    probes = generate_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    rewritten = probes[0].source_text
+    assert "Item* item = &rows[row][col];" not in rewritten
+    assert "return rows[row][col].x;" in rewritten
+    assert probes[0].provenance["base_expression"] == "rows"
+    assert probes[0].provenance["index_expression"] == "row"
+    assert probes[0].provenance["subindex_expression"] == "col"
+    assert probes[0].provenance["direct_expression"] == "rows[row][col]"
+
+
+def test_indexed_struct_pointer_probe_rejects_escaped_or_mutated_pointer() -> None:
+    from src.mwcc_debug.pressure_explorer import (
+        generate_indexed_struct_pointer_probes,
+        scan_indexed_struct_pointer_probes,
+    )
+
+    cases = [
+        "sink(item);",
+        "item = &items[i + 1];",
+        "if (item == 0) { return 0; }",
+        "item++;",
+        "return item[0].x;",
+        "return (int) item;",
+        "return item;",
+        "return &item != 0;",
+        "return (int) (item + 1);",
+        "return &item->x != 0;",
+        "return &(item->x) != 0;",
+    ]
+
+    for extra in cases:
+        source = textwrap.dedent(f"""\
+            typedef struct Item {{
+                int x;
+            }} Item;
+
+            int fn_80000000(Item* items, int i)
+            {{
+                Item* item = &items[i];
+                {extra}
+                return item->x;
+            }}
+        """)
+
+        assert generate_indexed_struct_pointer_probes(
+            source,
+            "fn_80000000",
+            max_probes=8,
+        ) == []
+        probes, status = scan_indexed_struct_pointer_probes(
+            source,
+            "fn_80000000",
+            max_probes=8,
+        )
+        assert probes == []
+        assert status["blocker"] == "no-safe-materialized-pointer"
+        assert set(status) == {
+            "blocker",
+            "reason",
+            "supported_candidate_count",
+            "rejected_candidate_count",
+        }
+
+
+def test_indexed_struct_pointer_probe_rejects_side_effectful_base_index_and_subindex() -> None:
+    from src.mwcc_debug.pressure_explorer import (
+        generate_indexed_struct_pointer_probes,
+    )
+
+    initializers = [
+        "Item* item = &items[i++];",
+        "Item* item = &items[i = 1];",
+        "Item* item = &items[i <<= 1];",
+        "Item* item = &items[i >>= 1];",
+        "Item* item = &items[i, j];",
+        "Item* item = &get_items()[i];",
+        "Item* item = &rows[i][j++];",
+        "Item* item = get_items() + i;",
+    ]
+
+    for initializer in initializers:
+        source = textwrap.dedent(f"""\
+            typedef struct Item {{
+                int x;
+            }} Item;
+
+            int fn_80000000(Item* items, Item rows[][4], int i, int j)
+            {{
+                {initializer}
+                return item->x;
+            }}
+        """)
+
+        assert generate_indexed_struct_pointer_probes(
+            source,
+            "fn_80000000",
+            max_probes=8,
+        ) == []
+
+
+def test_indexed_struct_pointer_probe_rejects_later_base_index_mutations() -> None:
+    from src.mwcc_debug.pressure_explorer import (
+        generate_indexed_struct_pointer_probes,
+        scan_indexed_struct_pointer_probes,
+    )
+
+    cases = [
+        ("Item* item = &items[i];", "i++;"),
+        ("Item* item = &items[i];", "items = other;"),
+        ("Item* item = &rows[i][j];", "j += 1;"),
+        ("Item* item = &items[i];", "bump(&i);"),
+        ("Item* item = &items[i];", "bump(&items);"),
+        ("Item* item = &rows[i][j];", "bump(&j);"),
+    ]
+
+    for initializer, mutation in cases:
+        source = textwrap.dedent(f"""\
+            typedef struct Item {{
+                int x;
+            }} Item;
+
+            int fn_80000000(Item* items, Item* other, Item rows[][4], int i, int j)
+            {{
+                {initializer}
+                {mutation}
+                return item->x;
+            }}
+        """)
+
+        assert generate_indexed_struct_pointer_probes(
+            source,
+            "fn_80000000",
+            max_probes=8,
+        ) == []
+        probes, status = scan_indexed_struct_pointer_probes(
+            source,
+            "fn_80000000",
+            max_probes=8,
+        )
+        assert probes == []
+        assert status["blocker"] == "no-safe-materialized-pointer"
+        assert status["supported_candidate_count"] == 1
+        assert status["rejected_candidate_count"] == 1
+
+
+def test_indexed_struct_pointer_probe_rejects_member_chain_mentions() -> None:
+    from src.mwcc_debug.pressure_explorer import (
+        generate_indexed_struct_pointer_probes,
+        scan_indexed_struct_pointer_probes,
+    )
+
+    source = textwrap.dedent("""\
+        typedef struct Item {
+            int x;
+        } Item;
+
+        typedef struct Wrapper {
+            Item* item;
+        } Wrapper;
+
+        int fn_80000000(Item* items, Wrapper* wrapper, int i)
+        {
+            Item* item = &items[i];
+            return wrapper->item->x;
+        }
+    """)
+
+    assert generate_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    ) == []
+    probes, status = scan_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+    assert probes == []
+    assert status["blocker"] == "no-safe-materialized-pointer"
+    assert status["supported_candidate_count"] == 1
+    assert status["rejected_candidate_count"] == 1
+
+
+def test_indexed_struct_pointer_probe_stays_within_declaring_block() -> None:
+    from src.mwcc_debug.pressure_explorer import (
+        generate_indexed_struct_pointer_probes,
+        scan_indexed_struct_pointer_probes,
+    )
+
+    source = textwrap.dedent("""\
+        typedef struct Item {
+            int x;
+        } Item;
+
+        int fn_80000000(Item* items, Item* item, int i, int cond)
+        {
+            if (cond) {
+                Item* item = &items[i];
+                sink(item->x);
+            }
+            return item->x;
+        }
+    """)
+
+    probes, status = scan_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert status["blocker"] is None
+    assert generate_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    ) == probes
+    rewritten = probes[0].source_text
+    assert "Item* item = &items[i];" not in rewritten
+    assert "sink(items[i].x);" in rewritten
+    assert "return item->x;" in rewritten
+    assert "return items[i].x;" not in rewritten
+
+
+def test_indexed_struct_pointer_probe_rejects_preprocessor_regions_and_other_functions() -> None:
+    from src.mwcc_debug.pressure_explorer import (
+        generate_indexed_struct_pointer_probes,
+        scan_indexed_struct_pointer_probes,
+    )
+
+    source = textwrap.dedent("""\
+        typedef struct Item {
+            int x;
+        } Item;
+
+        int fn_80000000(Item* items, int i)
+        {
+        #if ENABLED
+            Item* item = &items[i];
+            return item->x;
+        #endif
+        }
+
+        int sibling(Item* items, int i)
+        {
+            Item* item = &items[i];
+            return item->x;
+        }
+    """)
+
+    assert generate_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    ) == []
+    probes, status = scan_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+    assert probes == []
+    assert status == {
+        "blocker": "no-safe-materialized-pointer",
+        "reason": (
+            "source scan found materialized pointers, but all violated safety rules"
+        ),
+        "supported_candidate_count": 1,
+        "rejected_candidate_count": 1,
+    }
+    assert generate_indexed_struct_pointer_probes(
+        source,
+        "missing_function",
+        max_probes=8,
+    ) == []
+    probes, status = scan_indexed_struct_pointer_probes(
+        source,
+        "missing_function",
+        max_probes=8,
+    )
+    assert probes == []
+    assert status == {
+        "blocker": "indexed-struct-hint-unavailable",
+        "reason": (
+            "checkdiff hint could not be associated with a supported source "
+            "pointer initializer"
+        ),
+        "supported_candidate_count": 0,
+        "rejected_candidate_count": 0,
+    }
+
+
+def test_indexed_struct_pointer_probe_ignores_comment_and_string_mentions() -> None:
+    from src.mwcc_debug.pressure_explorer import (
+        generate_indexed_struct_pointer_probes,
+        scan_indexed_struct_pointer_probes,
+    )
+
+    source = textwrap.dedent("""\
+        typedef struct Item {
+            int x;
+        } Item;
+
+        int fn_80000000(Item* items, int i)
+        {
+            Item* item = &items[i];
+            // item->x is mentioned in a comment, not rewritten code.
+            debug("item->x");
+            return 1;
+        }
+    """)
+
+    assert generate_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    ) == []
+    probes, status = scan_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+    assert probes == []
+    assert status == {
+        "blocker": "no-safe-materialized-pointer",
+        "reason": (
+            "source scan found materialized pointers, but all violated safety rules"
+        ),
+        "supported_candidate_count": 1,
+        "rejected_candidate_count": 1,
+    }
+
+
+def test_indexed_struct_pointer_probe_ignores_commented_out_declarations() -> None:
+    from src.mwcc_debug.pressure_explorer import (
+        generate_indexed_struct_pointer_probes,
+        scan_indexed_struct_pointer_probes,
+    )
+
+    source = textwrap.dedent("""\
+        typedef struct Item {
+            int x;
+        } Item;
+
+        int fn_80000000(Item* items, Item* actual, int i)
+        {
+            Item* item = actual;
+            /*
+            Item* item = &items[i];
+            */
+            return item->x;
+        }
+    """)
+
+    assert generate_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    ) == []
+    probes, status = scan_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+    assert probes == []
+    assert status == {
+        "blocker": "indexed-struct-hint-unavailable",
+        "reason": (
+            "checkdiff hint could not be associated with a supported source "
+            "pointer initializer"
+        ),
+        "supported_candidate_count": 0,
+        "rejected_candidate_count": 0,
+    }
+
+
+def test_indexed_struct_pointer_probe_rejects_address_taken_with_comment_gap() -> None:
+    from src.mwcc_debug.pressure_explorer import (
+        generate_indexed_struct_pointer_probes,
+        scan_indexed_struct_pointer_probes,
+    )
+
+    source = textwrap.dedent("""\
+        typedef struct Item {
+            int x;
+        } Item;
+
+        int fn_80000000(Item* items, int i)
+        {
+            Item* item = &items[i];
+            return & /* keep gap */ item->x != 0;
+        }
+    """)
+
+    assert generate_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    ) == []
+    probes, status = scan_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+    assert probes == []
+    assert status["blocker"] == "no-safe-materialized-pointer"
+    assert status["supported_candidate_count"] == 1
+    assert status["rejected_candidate_count"] == 1
+
+
+def test_indexed_struct_pointer_probe_allows_unaffected_preprocessor_regions() -> None:
+    from src.mwcc_debug.pressure_explorer import (
+        generate_indexed_struct_pointer_probes,
+        scan_indexed_struct_pointer_probes,
+    )
+
+    source = textwrap.dedent("""\
+        typedef struct Item {
+            int x;
+        } Item;
+
+        int fn_80000000(Item* items, int i)
+        {
+        #if ENABLED
+            trace();
+        #endif
+            Item* item = &items[i];
+            return item->x;
+        }
+    """)
+
+    probes = generate_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+    assert len(probes) == 1
+    assert "return items[i].x;" in probes[0].source_text
+    scanned, status = scan_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+    assert scanned == probes
+    assert status["blocker"] is None
+    assert status["supported_candidate_count"] == 1
+    assert status["rejected_candidate_count"] == 0
+
+
 def test_pointer_walk_loop_probes_control_tree_index_address_and_end() -> None:
     source = textwrap.dedent("""\
         void fn_80000000(Fighter* fp, FigaTree** trees)

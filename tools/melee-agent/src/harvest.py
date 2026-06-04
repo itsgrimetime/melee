@@ -24,10 +24,12 @@ VALIDATED_EPSILON = 1e-6
 HARNESS_FRAME_TRANSFORM = "frame-transform-search"
 HARNESS_COALESCE = "coalesce-search"
 HARNESS_SELECT_ORDER = "select-order-search"
+HARNESS_INDEXED_STRUCT = "indexed-struct-search"
 REGISTERED_HARNESSES = {
     HARNESS_FRAME_TRANSFORM,
     HARNESS_COALESCE,
     HARNESS_SELECT_ORDER,
+    HARNESS_INDEXED_STRUCT,
 }
 
 BLOCKER_UNSUPPORTED_HARNESS = "unsupported-harness"
@@ -253,6 +255,11 @@ def select_harness(request: HarvestRequest) -> str | None:
     if explicit_harness:
         harness = str(explicit_harness).strip().lower()
         return harness if harness in REGISTERED_HARNESSES else None
+
+    if request.primary == "indexed-struct-pointer-materialization":
+        return HARNESS_INDEXED_STRUCT
+    if request.source_actionability == "current-tools-indexed-pointer":
+        return HARNESS_INDEXED_STRUCT
 
     for value in (
         request.headline_tool,
@@ -481,6 +488,26 @@ def _select_order_command(request: HarvestRequest) -> list[str]:
     ]
 
 
+def _indexed_struct_command(request: HarvestRequest) -> list[str]:
+    assert request.source_file is not None
+    return [
+        "debug",
+        "mutate",
+        HARNESS_INDEXED_STRUCT,
+        "-f",
+        request.function,
+        "--source-file",
+        str(request.source_file),
+        "--compile-probes",
+        "--score-match-percent",
+        "--json",
+        "--max-probes",
+        str(request.max_probes),
+        "--timeout",
+        str(request.timeout),
+    ]
+
+
 def _base_result(
     request: HarvestRequest,
     *,
@@ -531,6 +558,26 @@ def _match_checker_indicates_match(process: HarnessProcessResult) -> bool:
     if isinstance(payload, dict) and "match" in payload:
         return payload.get("match") is True
     return True
+
+
+def _harness_blocker_result(payload: Any) -> tuple[str, str, str] | None:
+    if not isinstance(payload, dict):
+        return None
+    blocker = payload.get("blocker")
+    stop = payload.get("stop_condition")
+    reason = None
+    kind = "no_match"
+    if isinstance(stop, dict):
+        blocker = blocker or stop.get("blocker")
+        reason = stop.get("reason")
+        stop_kind = stop.get("kind")
+        if stop_kind == "blocked":
+            kind = "blocked"
+        elif stop_kind == "unvalidated":
+            kind = "no_match"
+    if isinstance(blocker, str) and blocker:
+        return kind, blocker, str(reason or blocker)
+    return None
 
 
 def _already_matched_result(
@@ -878,6 +925,8 @@ def _adapter_command(request: HarvestRequest, harness: str) -> list[str]:
         return _coalesce_command(request)
     if harness == HARNESS_SELECT_ORDER:
         return _select_order_command(request)
+    if harness == HARNESS_INDEXED_STRUCT:
+        return _indexed_struct_command(request)
     raise ValueError(f"unsupported harness: {harness}")
 
 
@@ -977,6 +1026,18 @@ def run_harvest_request(
 
     candidate = best_validated_candidate(harness_json)
     if candidate is None:
+        harness_blocker = _harness_blocker_result(harness_json)
+        if harness_blocker is not None:
+            status, blocker, reason = harness_blocker
+            return _base_result(
+                request,
+                harness=harness,
+                status=status,
+                blocker=blocker,
+                reason=reason,
+                command=command,
+                details={"candidate_count": len(_iter_candidates(harness_json))},
+            )
         return _base_result(
             request,
             harness=harness,

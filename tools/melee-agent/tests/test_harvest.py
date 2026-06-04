@@ -536,6 +536,138 @@ def test_select_order_search_includes_class_id(tmp_path: Path) -> None:
     ]
 
 
+def test_indexed_struct_primary_selects_indexed_search(tmp_path: Path) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "indexed-struct-pointer.tsv"
+    row = _row(
+        "demo_fn",
+        headline_tool="source-shape",
+        source_actionability="",
+        frame_closability_tier="",
+    )
+    row["primary"] = "indexed-struct-pointer-materialization"
+    _write_queue(queue, [row])
+
+    rows = load_queue_rows(
+        queue,
+        work_bucket="indexed-struct-pointer",
+        repo_root=repo_root,
+    )
+
+    assert select_harness(rows[0]) == "indexed-struct-search"
+
+
+def test_indexed_struct_source_actionability_selects_indexed_search(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "indexed-struct-pointer.tsv"
+    row = _row(
+        "demo_fn",
+        headline_tool="source-shape",
+        source_actionability="current-tools-indexed-pointer",
+        frame_closability_tier="",
+    )
+    row["primary"] = "other-primary"
+    _write_queue(queue, [row])
+
+    rows = load_queue_rows(
+        queue,
+        work_bucket="indexed-struct-pointer",
+        repo_root=repo_root,
+    )
+
+    assert select_harness(rows[0]) == "indexed-struct-search"
+
+
+def test_indexed_struct_target_map_harness_selects_indexed_search(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "indexed-struct-pointer.tsv"
+    row = _row(
+        "demo_fn",
+        headline_tool="source-shape",
+        source_actionability="",
+        frame_closability_tier="",
+    )
+    row["primary"] = "other-primary"
+    _write_queue(queue, [row])
+
+    rows = load_queue_rows(
+        queue,
+        work_bucket="indexed-struct-pointer",
+        repo_root=repo_root,
+        target_map={"demo_fn": {"harness": "indexed-struct-search"}},
+    )
+
+    assert select_harness(rows[0]) == "indexed-struct-search"
+
+
+def test_indexed_struct_command_text_selects_indexed_search(tmp_path: Path) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "indexed-struct-pointer.tsv"
+    row = _row(
+        "demo_fn",
+        headline_tool="source-shape",
+        source_actionability="",
+        frame_closability_tier="",
+        next_command="melee-agent debug mutate indexed-struct-search -f demo_fn",
+    )
+    row["primary"] = "other-primary"
+    _write_queue(queue, [row])
+
+    rows = load_queue_rows(
+        queue,
+        work_bucket="indexed-struct-pointer",
+        repo_root=repo_root,
+    )
+
+    assert select_harness(rows[0]) == "indexed-struct-search"
+
+
+def test_indexed_struct_harvest_builds_indexed_search_command(tmp_path: Path) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "indexed-struct-pointer.tsv"
+    row = _row(
+        "demo_fn",
+        headline_tool="source-shape",
+        source_actionability="current-tools-indexed-pointer",
+        frame_closability_tier="",
+    )
+    row["primary"] = "indexed-struct-pointer-materialization"
+    _write_queue(queue, [row])
+    calls, runner = _json_runner(
+        {
+            "variants": [
+                {
+                    "status": "ok",
+                    "source_retained": str(tmp_path / "candidate.c"),
+                    "final_match_percent": 100.0,
+                }
+            ]
+        }
+    )
+
+    ledger = run_harvest(
+        "indexed-struct-pointer",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    assert calls[0][:5] == [
+        "debug",
+        "mutate",
+        "indexed-struct-search",
+        "-f",
+        "demo_fn",
+    ]
+    assert "--score-match-percent" in calls[0]
+    assert ledger["results"][0]["harness"] == "indexed-struct-search"
+    assert ledger["results"][0]["status"] == "validated"
+
+
 def test_missing_register_target_returns_stable_blocker(tmp_path: Path) -> None:
     repo_root = _repo_with_source(tmp_path)
     queue = tmp_path / "queues" / "register.tsv"
@@ -666,6 +798,42 @@ def test_frame_harness_without_100_candidate_records_no_validated_candidate(
 
     assert ledger["results"][0]["status"] == "no_match"
     assert ledger["results"][0]["blocker"] == "no-validated-candidate"
+
+
+def test_harvest_propagates_indexed_search_stable_blocker(tmp_path: Path) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "indexed-struct-pointer.tsv"
+    row = _row(
+        "demo_fn",
+        headline_tool="source-shape",
+        source_actionability="current-tools-indexed-pointer",
+        frame_closability_tier="",
+    )
+    row["primary"] = "indexed-struct-pointer-materialization"
+    _write_queue(queue, [row])
+    _, runner = _json_runner(
+        {
+            "blocker": "no-safe-materialized-pointer",
+            "stop_condition": {
+                "kind": "blocked",
+                "blocker": "no-safe-materialized-pointer",
+                "reason": "source scan found no safe materialized pointer",
+            },
+            "variants": [],
+        }
+    )
+
+    ledger = run_harvest(
+        "indexed-struct-pointer",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "no-safe-materialized-pointer"
+    assert result["reason"] == "source scan found no safe materialized pointer"
 
 
 def test_harness_failures_and_invalid_json_have_stable_blockers(tmp_path: Path) -> None:
@@ -881,6 +1049,179 @@ def test_apply_skips_already_matched_row_before_running_harness(tmp_path: Path) 
     assert result["blocker"] is None
     assert result["applied"] is False
     assert result["reason"] == "function already matches; stale queue row skipped"
+
+
+def test_indexed_struct_apply_uses_existing_function_only_replacement(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    target = repo_root / "src" / "melee/demo.c"
+    target.parent.mkdir(parents=True)
+    original = textwrap.dedent(
+        """\
+        static int file_local = 3;
+
+        int demo_fn(void) {
+            return 1;
+        }
+
+        int sibling(void) {
+            return file_local + 7;
+        }
+        """
+    )
+    target.write_text(original, encoding="utf-8")
+    candidate = tmp_path / "candidate.c"
+    candidate.write_text("int demo_fn(void) {\n    return 2;\n}\n", encoding="utf-8")
+    queue = tmp_path / "queues" / "indexed-struct-pointer.tsv"
+    row = _row(
+        "demo_fn",
+        headline_tool="source-shape",
+        source_actionability="current-tools-indexed-pointer",
+        frame_closability_tier="",
+    )
+    row["primary"] = "indexed-struct-pointer-materialization"
+    _write_queue(queue, [row])
+    _, runner = _json_runner(
+        {
+            "variants": [
+                {
+                    "status": "ok",
+                    "source_retained": str(candidate),
+                    "final_match_percent": 100.0,
+                }
+            ]
+        }
+    )
+
+    ledger = run_harvest(
+        "indexed-struct-pointer",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+        match_checker=lambda function, *, cwd, timeout: HarnessProcessResult(
+            ["checkdiff", function], 1, "", "mismatch"
+        ),
+        validator=lambda function, *, cwd, timeout: HarnessProcessResult(
+            ["checkdiff", function], 0, "", ""
+        ),
+        apply=True,
+    )
+
+    assert ledger["results"][0]["status"] == "applied"
+    assert ledger["results"][0]["harness"] == "indexed-struct-search"
+    assert target.read_text(encoding="utf-8") == textwrap.dedent(
+        """\
+        static int file_local = 3;
+
+        int demo_fn(void) {
+            return 2;
+        }
+
+        int sibling(void) {
+            return file_local + 7;
+        }
+        """
+    )
+
+
+def test_indexed_struct_apply_rolls_back_when_validation_fails(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    target = repo_root / "src" / "melee/demo.c"
+    target.parent.mkdir(parents=True)
+    original = "int demo_fn(void) {\n    return 1;\n}\n"
+    target.write_text(original, encoding="utf-8")
+    candidate = tmp_path / "candidate.c"
+    candidate.write_text("int demo_fn(void) {\n    return 2;\n}\n", encoding="utf-8")
+    queue = tmp_path / "queues" / "indexed-struct-pointer.tsv"
+    row = _row(
+        "demo_fn",
+        headline_tool="source-shape",
+        source_actionability="current-tools-indexed-pointer",
+        frame_closability_tier="",
+    )
+    row["primary"] = "indexed-struct-pointer-materialization"
+    _write_queue(queue, [row])
+    _, runner = _json_runner(
+        {
+            "variants": [
+                {
+                    "status": "ok",
+                    "source_retained": str(candidate),
+                    "final_match_percent": 100.0,
+                }
+            ]
+        }
+    )
+
+    ledger = run_harvest(
+        "indexed-struct-pointer",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+        match_checker=lambda function, *, cwd, timeout: HarnessProcessResult(
+            ["checkdiff", function], 1, "", "mismatch"
+        ),
+        validator=lambda function, *, cwd, timeout: HarnessProcessResult(
+            ["checkdiff", function], 1, "", "mismatch"
+        ),
+        apply=True,
+    )
+
+    assert ledger["results"][0]["status"] == "blocked"
+    assert ledger["results"][0]["blocker"] == "apply-validation-failed"
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_indexed_struct_apply_rolls_back_when_validation_is_interrupted(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    target = repo_root / "src" / "melee/demo.c"
+    target.parent.mkdir(parents=True)
+    original = "int demo_fn(void) {\n    return 1;\n}\n"
+    target.write_text(original, encoding="utf-8")
+    candidate = tmp_path / "candidate.c"
+    candidate.write_text("int demo_fn(void) {\n    return 2;\n}\n", encoding="utf-8")
+    queue = tmp_path / "queues" / "indexed-struct-pointer.tsv"
+    row = _row(
+        "demo_fn",
+        headline_tool="source-shape",
+        source_actionability="current-tools-indexed-pointer",
+        frame_closability_tier="",
+    )
+    row["primary"] = "indexed-struct-pointer-materialization"
+    _write_queue(queue, [row])
+    _, runner = _json_runner(
+        {
+            "variants": [
+                {
+                    "status": "ok",
+                    "source_retained": str(candidate),
+                    "final_match_percent": 100.0,
+                }
+            ]
+        }
+    )
+
+    def interrupted_validator(function: str, *, cwd: Path, timeout: int):
+        raise KeyboardInterrupt("stop")
+
+    ledger = run_harvest(
+        "indexed-struct-pointer",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+        match_checker=lambda function, *, cwd, timeout: HarnessProcessResult(
+            ["checkdiff", function], 1, "", "mismatch"
+        ),
+        validator=interrupted_validator,
+        apply=True,
+    )
+
+    assert ledger["results"][0]["status"] == "blocked"
+    assert ledger["results"][0]["blocker"] == "apply-validation-failed"
+    assert target.read_text(encoding="utf-8") == original
 
 
 def test_apply_rolls_back_when_same_file_matched_function_regresses(
