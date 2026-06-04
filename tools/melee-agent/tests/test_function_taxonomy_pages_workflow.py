@@ -33,5 +33,6 @@ def test_taxonomy_pages_workflow_generates_inventory_then_dashboard() -> None:
     assert text.index(validation) < text.index(dashboard)
     assert "0 classified records" in text
     assert "checkdiff errors" in text
+    assert "--skip-decl-order-eval" in text
     assert "build/function-taxonomy" in text
     assert "_site/taxonomy" in text

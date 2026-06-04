@@ -64,7 +64,8 @@ jobs:
           python3 tools/function_taxonomy_inventory.py \
             --report build/GALE01/report.json \
             --output "$TAXONOMY_DIR" \
-            --workers 4
+            --workers 4 \
+            --skip-decl-order-eval
 
       - name: Validate taxonomy artifacts
         run: |
