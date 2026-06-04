@@ -928,6 +928,16 @@ def test_stack_home_probe_evaluation_classifies_reachable_and_ceiling_candidates
     assert evaluation["best_variant"]["label"] == "swap-cycle"
     assert evaluation["best_variant"]["target_fixed"] is True
     assert evaluation["best_variant"]["fixed_count"] == 2
+    assert evaluation["stop_condition"] == {
+        "status": "satisfied",
+        "kind": "validated-source-reorder",
+        "reason": (
+            "probe swap-cycle moves all target stack homes to their expected offsets"
+        ),
+        "variant_label": "swap-cycle",
+        "fixed_count": 2,
+        "target_count": 2,
+    }
     assert evaluation["variants"][1]["label"] == "decl-order"
     assert evaluation["variants"][1]["fixed_count"] == 0
 
@@ -935,6 +945,15 @@ def test_stack_home_probe_evaluation_classifies_reachable_and_ceiling_candidates
 
     assert ceiling["verdict"] == "internal-tiebreak-ceiling-candidate"
     assert ceiling["best_variant"]["fixed_count"] == 0
+    assert ceiling["stop_condition"] == {
+        "status": "candidate",
+        "kind": "internal-tiebreak-ceiling",
+        "reason": (
+            "1 measured probe(s) left all 2 target stack-home mismatches in place"
+        ),
+        "measured_probe_count": 1,
+        "target_count": 2,
+    }
 
 
 def test_frame_reservation_stack_home_assignment_merges_repeated_accesses() -> None:

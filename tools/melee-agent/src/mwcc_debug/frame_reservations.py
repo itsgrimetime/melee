@@ -164,15 +164,79 @@ def evaluate_stack_home_probe_results(
         verdict = "internal-tiebreak-ceiling-candidate"
     else:
         verdict = "probe-results-inconclusive"
+    stop_condition = _stack_home_probe_stop_condition(
+        verdict,
+        best,
+        variants,
+        target_count=len(targets),
+    )
 
     return {
         "status": "evaluated" if variants else "no-probes",
         "verdict": verdict,
+        "stop_condition": stop_condition,
         "target_count": len(targets),
         "variant_count": len(variants),
         "targets": targets,
         "best_variant": best,
         "variants": variants,
+    }
+
+
+def _stack_home_probe_stop_condition(
+    verdict: str,
+    best: dict | None,
+    variants: list[dict],
+    *,
+    target_count: int,
+) -> dict:
+    if verdict == "source-reachable-reorder" and best is not None:
+        label = str(best.get("label") or "<unknown>")
+        fixed_count = int(best.get("fixed_count") or 0)
+        return {
+            "status": "satisfied",
+            "kind": "validated-source-reorder",
+            "reason": (
+                f"probe {label} moves all target stack homes to their expected offsets"
+            ),
+            "variant_label": label,
+            "fixed_count": fixed_count,
+            "target_count": target_count,
+        }
+    if verdict == "partial-source-reachable-reorder" and best is not None:
+        label = str(best.get("label") or "<unknown>")
+        fixed_count = int(best.get("fixed_count") or 0)
+        return {
+            "status": "partial",
+            "kind": "partial-source-reorder",
+            "reason": (
+                f"probe {label} moves {fixed_count}/{target_count} target "
+                "stack homes to their expected offsets"
+            ),
+            "variant_label": label,
+            "fixed_count": fixed_count,
+            "target_count": target_count,
+        }
+    if verdict == "internal-tiebreak-ceiling-candidate":
+        measured = [
+            variant for variant in variants
+            if variant.get("target_movement_measured")
+        ]
+        return {
+            "status": "candidate",
+            "kind": "internal-tiebreak-ceiling",
+            "reason": (
+                f"{len(measured)} measured probe(s) left all {target_count} "
+                "target stack-home mismatches in place"
+            ),
+            "measured_probe_count": len(measured),
+            "target_count": target_count,
+        }
+    return {
+        "status": "not-satisfied",
+        "kind": verdict,
+        "reason": "probe evidence is not sufficient for a source-reorder or ceiling stop condition",
+        "target_count": target_count,
     }
 
 

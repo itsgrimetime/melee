@@ -436,6 +436,7 @@ def test_frame_reservations_cli_evaluates_probe_results_json(
     payload = json.loads(result.stdout)
     evaluation = payload["stack_home_probe_evaluation"]
     assert evaluation["verdict"] == "source-reachable-reorder"
+    assert evaluation["stop_condition"]["kind"] == "validated-source-reorder"
     assert evaluation["best_variant"]["label"] == "swap-cycle"
     assert evaluation["best_variant"]["target_fixed"] is True
 

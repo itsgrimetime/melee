@@ -3601,6 +3601,13 @@ def _print_frame_reservation_report(report: dict) -> None:
     if isinstance(probe_evaluation, Mapping):
         print()
         print(f"stack-home probe verdict: {probe_evaluation.get('verdict')}")
+        stop_condition = probe_evaluation.get("stop_condition")
+        if isinstance(stop_condition, Mapping):
+            print(
+                "stop condition: "
+                f"{stop_condition.get('status')} "
+                f"({stop_condition.get('kind')})"
+            )
         best = probe_evaluation.get("best_variant")
         if isinstance(best, Mapping):
             print(
