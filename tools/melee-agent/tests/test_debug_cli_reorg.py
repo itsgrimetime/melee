@@ -74,6 +74,7 @@ def test_representative_grouped_command_help_works() -> None:
         ["debug", "suggest", "schedule", "--help"],
         ["debug", "suggest", "inlines", "--help"],
         ["debug", "mutate", "decl-orders", "--help"],
+        ["debug", "mutate", "frame-transform-search", "--help"],
         ["debug", "mutate", "lifetime-layout", "--help"],
         ["debug", "permute", "run", "--help"],
         ["debug", "permute", "doctor", "--help"],

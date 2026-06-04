@@ -313,7 +313,14 @@ def _all_ok_frame_transform_probes_measured(variants: list[dict]) -> bool:
         if variant.get("status") == "ok"
         and isinstance(variant.get("candidate_frame_size"), int)
     ]
-    return bool(measured) and len(measured) == len(variants)
+    return (
+        bool(measured)
+        and len(measured) == len(variants)
+        and all(
+            int(variant.get("frame_delta_improvement") or 0) == 0
+            for variant in measured
+        )
+    )
 
 
 def _frame_transform_probe_stop_condition(

@@ -18549,6 +18549,142 @@ def _lifetime_layout_variant_sort_key(variant: dict[str, Any]) -> tuple[float, .
     return (0.0,)
 
 
+_FRAME_TRANSFORM_RANKING = (
+    "expected frame-size objective, final match percent tiebreaker"
+)
+
+_FRAME_DIRECTED_DEFAULT_OPERATORS = (
+    "frame-direct-literal-at-final-fp-call",
+    "frame-split-fp-const-lifetime",
+    "frame-magic-scratch-relocation",
+    "declaration-use-distance",
+    "block-scope",
+    "call-argument-tempization",
+    "frame-reservation-pad-stack",
+)
+
+
+def _frame_transform_probe_plan(report: Mapping[str, Any]) -> dict[str, Any]:
+    first_divergence = report.get("frame_first_divergence")
+    if isinstance(first_divergence, Mapping):
+        plan = first_divergence.get("frame_transform_probe_plan")
+        if isinstance(plan, Mapping):
+            return dict(plan)
+    return {
+        "status": "ready",
+        "objective": "reduce current-vs-expected stack frame-size delta",
+        "operator_priority": list(_FRAME_DIRECTED_DEFAULT_OPERATORS),
+        "suggested_commands": [],
+    }
+
+
+def _resolve_frame_transform_operator_filter(
+    *,
+    probe_plan: Mapping[str, Any],
+    operators: list[str] | None,
+) -> tuple[str, ...]:
+    selected: list[str] = []
+    selected.extend(_FRAME_DIRECTED_DEFAULT_OPERATORS)
+    raw_priority = probe_plan.get("operator_priority")
+    if isinstance(raw_priority, list):
+        selected.extend(
+            str(item)
+            for item in raw_priority
+            if isinstance(item, str) and item
+        )
+    for operator in operators or []:
+        for item in operator.split(","):
+            item = item.strip()
+            if item:
+                selected.append(item)
+    return tuple(dict.fromkeys(selected))
+
+
+def _frame_transform_variant_frame_model(
+    candidate_text: str,
+    function: str,
+) -> dict[str, Any]:
+    if f"Starting function {function}" in candidate_text:
+        return analyze_frame_reservations(candidate_text, function)["current"]
+    if re.search(rf"\.fn\s+{re.escape(function)}\b", candidate_text):
+        return analyze_frame_from_asm_text(candidate_text)
+    if "Starting function " in candidate_text:
+        raise ValueError(f"{function} not found in pcdump")
+    return analyze_frame_from_asm_text(candidate_text)
+
+
+def _frame_transform_variant_from_model(
+    *,
+    label: str,
+    operator: str,
+    path: Path,
+    frame_model: Mapping[str, Any],
+    current_frame_size: int | None = None,
+    expected_frame_size: int | None = None,
+    match_percent: float | None = None,
+    match_percent_error: str | None = None,
+    source_retained: Path | None = None,
+) -> dict[str, Any]:
+    frame_size = frame_model.get("frame_size")
+    variant = {
+        "label": label,
+        "operator": operator,
+        "status": "ok",
+        "path": str(path),
+        "frame": dict(frame_model),
+        "frame_size": frame_size if isinstance(frame_size, int) else None,
+        "candidate_frame_size": frame_size if isinstance(frame_size, int) else None,
+        "current_frame_size": current_frame_size,
+        "expected_frame_size": expected_frame_size,
+    }
+    if match_percent is not None:
+        variant["match_percent"] = match_percent
+        variant["final_match_percent"] = match_percent
+    if match_percent_error is not None:
+        variant["match_percent_error"] = match_percent_error
+    if source_retained is not None:
+        variant["source_retained"] = str(source_retained)
+    return variant
+
+
+def _attach_frame_transform_probe_payload(
+    variant: dict[str, Any],
+    probe_payload: Mapping[str, Any] | None,
+) -> None:
+    if probe_payload is None:
+        return
+    payload = dict(probe_payload)
+    variant["probe"] = payload
+    description = payload.get("description")
+    if isinstance(description, str):
+        variant["description"] = description
+    provenance = payload.get("provenance")
+    if isinstance(provenance, Mapping):
+        variant["provenance"] = dict(provenance)
+
+
+def _materialize_frame_transform_probe_sources(
+    probes,
+    *,
+    output_dir: Path | None,
+    json_out: bool,
+) -> tuple[Path | None, dict[str, Path]]:
+    if not probes or not (json_out or output_dir is not None):
+        return None, {}
+    probe_dir = (
+        output_dir
+        if output_dir is not None
+        else Path(tempfile.mkdtemp(prefix="melee_frame_transform_"))
+    )
+    probe_dir.mkdir(parents=True, exist_ok=True)
+    paths: dict[str, Path] = {}
+    for probe in probes:
+        path = probe_dir / f"{probe.label}.c"
+        path.write_text(probe.source_text)
+        paths[probe.label] = path
+    return probe_dir, paths
+
+
 def _pressure_signature_from_pcdump_or_exit(
     signature_func: Callable[..., object],
     pcdump_text: str,
@@ -19982,6 +20118,457 @@ def mutate_lifetime_layout_cmd(
                     print(f"  source: {variant['source_retained']}")
     elif not compile_probes and not candidates:
         print("Variants: none; pass --compile-probes or --candidate OPERATOR=path.")
+
+
+@mutate_app.command(name="frame-transform-search")
+def mutate_frame_transform_search_cmd(
+    function: Annotated[
+        str,
+        typer.Option(
+            "--function", "-f",
+            help="Function to explore.",
+        ),
+    ],
+    pcdump: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--pcdump",
+            help="Baseline pcdump. Auto-resolves from cache when omitted.",
+        ),
+    ] = None,
+    expected_asm: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--expected-asm",
+            help="Path to expected target asm. Omit to extract via function.",
+        ),
+    ] = None,
+    no_expected: Annotated[
+        bool,
+        typer.Option(
+            "--no-expected",
+            help="Allow planning without expected asm; validation will report no target.",
+        ),
+    ] = False,
+    source_file: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--source-file",
+            help="Source file used to generate directed frame probes.",
+        ),
+    ] = None,
+    output_dir: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--output-dir",
+            help=(
+                "Directory for generated --compile-probes source files. "
+                "When omitted, JSON output retains a temp directory because "
+                "variant paths are machine-readable follow-up inputs."
+            ),
+        ),
+    ] = None,
+    candidates: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--candidate",
+            help=(
+                "Candidate pcdump/source to score, repeatable. Format "
+                "OPERATOR=path or LABEL:OPERATOR=path."
+            ),
+        ),
+    ] = None,
+    compile_probes: Annotated[
+        bool,
+        typer.Option(
+            "--compile-probes/--no-compile-probes",
+            help="Compile generated directed source probes.",
+        ),
+    ] = True,
+    score_match_percent: Annotated[
+        bool,
+        typer.Option(
+            "--score-match-percent/--no-score-match-percent",
+            help=(
+                "For source candidates, temporarily transfer into the real "
+                "tree and read final report.json match percent. Enabled by "
+                "default because ranking uses match percent as a tiebreaker."
+            ),
+        ),
+    ] = True,
+    max_probes: Annotated[
+        int,
+        typer.Option(
+            "--max-probes",
+            help="Maximum generated probes to list or compile.",
+        ),
+    ] = 12,
+    operators: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--operator",
+            help=(
+                "Add an operator family to the directed search. Repeat or "
+                "pass comma-separated names; values are unioned with the "
+                "frame-divergence plan."
+            ),
+        ),
+    ] = None,
+    include_lifetime_fallback: Annotated[
+        bool,
+        typer.Option(
+            "--include-lifetime-fallback/--no-include-lifetime-fallback",
+            help=(
+                "Also include existing lifetime-layout probes whose operator "
+                "is selected by the frame-divergence plan."
+            ),
+        ),
+    ] = True,
+    timeout: Annotated[
+        int,
+        typer.Option(
+            "--timeout",
+            help="Per-candidate compile timeout in seconds.",
+        ),
+    ] = 120,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit as JSON."),
+    ] = False,
+) -> None:
+    """Compile and score directed source transforms for frame-size divergence."""
+    from ..mwcc_debug.diff_capture import DiffInput, compile_source_variant
+    from ..mwcc_debug.pressure_explorer import (
+        generate_frame_directed_probes,
+        generate_lifetime_layout_probes,
+    )
+
+    melee_root = DEFAULT_MELEE_ROOT
+    pcdump_path = _resolve_pcdump_path(
+        pcdump,
+        function,
+        melee_root,
+        require_fresh=False,
+    )
+    pcdump_text = pcdump_path.read_text(encoding="utf-8", errors="replace")
+    expected_text = _read_frame_reservation_expected_asm(
+        function,
+        expected_asm=expected_asm,
+        no_expected=no_expected,
+        melee_root=melee_root,
+    )
+    current_text = (
+        _read_frame_reservation_current_asm(function, melee_root=melee_root)
+        if _pcdump_has_symbolic_stack_homes(pcdump_text)
+        else None
+    )
+    try:
+        frame_report = analyze_frame_reservations(
+            pcdump_text,
+            function,
+            expected_asm_text=expected_text,
+            current_asm_text=current_text,
+        )
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2) from exc
+
+    probe_plan = _frame_transform_probe_plan(frame_report)
+    operator_filter = _resolve_frame_transform_operator_filter(
+        probe_plan=probe_plan,
+        operators=operators,
+    )
+
+    source_text = None
+    source_label = None
+    if source_file is not None:
+        source_file = _resolve_existing_cli_file(
+            source_file,
+            melee_root=melee_root,
+            label="source file",
+        )
+        source_text = source_file.read_text(encoding="utf-8", errors="replace")
+        source_label = str(source_file)
+    else:
+        unit = _find_unit_for_function(function, melee_root)
+        if unit is not None:
+            src_path = melee_root / "src" / f"{unit}.c"
+            if src_path.exists():
+                source_text = src_path.read_text(encoding="utf-8", errors="replace")
+                try:
+                    source_label = str(src_path.relative_to(melee_root))
+                except ValueError:
+                    source_label = str(src_path)
+
+    probes = []
+    if source_text is not None:
+        directed = generate_frame_directed_probes(
+            source_text,
+            function,
+            current_frame=frame_report.get("current"),
+            target_frame=frame_report.get("expected"),
+            max_probes=max_probes,
+        )
+        allowed = frozenset(operator_filter)
+        probes.extend(probe for probe in directed if probe.operator in allowed)
+        if include_lifetime_fallback and len(probes) < max_probes:
+            remaining = max_probes - len(probes)
+            probes.extend(
+                generate_lifetime_layout_probes(
+                    source_text,
+                    function,
+                    max_probes=remaining,
+                    operator_filter=operator_filter,
+                )
+            )
+        probes = probes[:max_probes]
+
+    variants: list[dict[str, Any]] = []
+    generated_source_dir, generated_probe_paths = (
+        _materialize_frame_transform_probe_sources(
+            probes,
+            output_dir=output_dir,
+            json_out=json_out,
+        )
+    )
+    candidate_probe_by_label: dict[str, dict[str, Any]] = {}
+    current_frame_size = (frame_report.get("current") or {}).get("frame_size")
+    if not isinstance(current_frame_size, int):
+        current_frame_size = None
+    expected_frame_size = None
+    expected_model = frame_report.get("expected")
+    if isinstance(expected_model, Mapping):
+        raw_expected_frame = expected_model.get("frame_size")
+        if isinstance(raw_expected_frame, int):
+            expected_frame_size = raw_expected_frame
+
+    def _score_candidate(
+        *,
+        label: str,
+        operator: str,
+        path: Path,
+        source_retained: Path | None = None,
+    ) -> None:
+        probe_payload = candidate_probe_by_label.get(label)
+        try:
+            candidate_source_text: str | None = None
+            if path.suffix == ".txt":
+                candidate_text = path.read_text(encoding="utf-8", errors="replace")
+            elif path.suffix == ".c":
+                candidate_source_text, _ = (
+                    _prevalidate_lifetime_layout_source_candidate(
+                        path,
+                        function=function,
+                    )
+                )
+                try:
+                    candidate_text = compile_source_variant(
+                        DiffInput(
+                            label=label,
+                            token=str(path),
+                            kind="source",
+                            path=path,
+                        ),
+                        function=function,
+                        melee_root=melee_root,
+                        timeout=timeout,
+                    )
+                except CompileFailure as exc:
+                    detail = str(exc)
+                    if exc.returncode == 3 and "not found in pcdump" in detail:
+                        raise _MalformedSourceCandidate(
+                            (
+                                f"{detail}; compiled probe pcdump omitted the "
+                                f"target function. Source retained at {path}"
+                            ),
+                            source_hunk=_compact_source_hunk_for_function(
+                                candidate_source_text,
+                                function,
+                            ),
+                        ) from exc
+                    raise
+            else:
+                raise ValueError(f"expected .txt pcdump or .c source, got {path}")
+
+            real_score = _SourceCandidateRealScore(None, None)
+            if score_match_percent and path.suffix == ".c":
+                status = (
+                    _make_real_score_status("frame-transform-search", label)
+                    if not json_out
+                    else None
+                )
+                real_score = _score_source_candidate_real_tree(
+                    path,
+                    function=function,
+                    melee_root=melee_root,
+                    timeout=timeout,
+                    status=status,
+                    include_stack_slot=False,
+                )
+            frame_model = _frame_transform_variant_frame_model(
+                candidate_text,
+                function,
+            )
+            variant = _frame_transform_variant_from_model(
+                label=label,
+                operator=operator,
+                path=path,
+                frame_model=frame_model,
+                current_frame_size=current_frame_size,
+                expected_frame_size=expected_frame_size,
+                match_percent=real_score.match_percent,
+                match_percent_error=real_score.match_percent_error,
+                source_retained=source_retained or (path if path.suffix == ".c" else None),
+            )
+            _attach_frame_transform_probe_payload(variant, probe_payload)
+            variants.append(variant)
+        except Exception as exc:
+            malformed_source = isinstance(exc, _MalformedSourceCandidate)
+            failed = {
+                "label": label,
+                "operator": operator,
+                "status": "malformed-source" if malformed_source else "failed",
+                "path": str(path),
+                "error": str(exc),
+            }
+            if source_retained is not None:
+                failed["source_retained"] = str(source_retained)
+            elif path.suffix == ".c" and path.exists():
+                failed["source_retained"] = str(path)
+            if malformed_source and exc.source_hunk:
+                failed["source_hunk"] = exc.source_hunk
+            _attach_frame_transform_probe_payload(failed, probe_payload)
+            variants.append(failed)
+
+    for spec in candidates or []:
+        label, operator, path = _parse_lifetime_layout_candidate(spec)
+        _score_candidate(label=label, operator=operator, path=path)
+
+    if compile_probes:
+        if source_text is None and not candidates:
+            typer.echo(
+                "--compile-probes requires --source-file, repo source, or "
+                "--candidate OPERATOR=path.",
+                err=True,
+            )
+            raise typer.Exit(2)
+        if probes:
+            probe_dir = generated_source_dir
+            if probe_dir is None:
+                probe_dir = Path(tempfile.mkdtemp(prefix="melee_frame_transform_"))
+                probe_dir.mkdir(parents=True, exist_ok=True)
+                generated_source_dir = probe_dir
+            start_idx = len(variants)
+            try:
+                for probe in probes:
+                    path = generated_probe_paths.get(probe.label)
+                    if path is None:
+                        path = probe_dir / f"{probe.label}.c"
+                        path.write_text(probe.source_text)
+                        generated_probe_paths[probe.label] = path
+                    candidate_probe_by_label[probe.label] = probe.to_dict()
+                    _score_candidate(
+                        label=probe.label,
+                        operator=probe.operator,
+                        path=path,
+                        source_retained=path,
+                    )
+            finally:
+                generated_failed = any(
+                    variant["status"] != "ok" for variant in variants[start_idx:]
+                )
+                retain_generated = generated_failed or json_out or output_dir is not None
+                if not retain_generated:
+                    shutil.rmtree(probe_dir, ignore_errors=True)
+
+    evaluation = evaluate_frame_transform_probe_results(frame_report, variants)
+    ranked_variants = evaluation.get("variants")
+    if not isinstance(ranked_variants, list):
+        ranked_variants = variants
+    elif not ranked_variants and variants:
+        ranked_variants = variants
+    stop_condition = evaluation.get("stop_condition")
+
+    if json_out:
+        payload = {
+            "function": function,
+            "ranking": _FRAME_TRANSFORM_RANKING,
+            "baseline_pcdump": str(pcdump_path),
+            "source": source_label,
+            "frame_report": frame_report,
+            "probe_plan": probe_plan,
+            "operator_filter": list(operator_filter),
+            "generated_source_dir": (
+                str(generated_source_dir) if generated_source_dir is not None else None
+            ),
+            "probes": [
+                {
+                    **probe.to_dict(),
+                    **(
+                        {"source_retained": str(generated_probe_paths[probe.label])}
+                        if probe.label in generated_probe_paths
+                        else {}
+                    ),
+                }
+                for probe in probes
+            ],
+            "variants": ranked_variants,
+            "frame_transform_probe_evaluation": evaluation,
+            "stop_condition": stop_condition,
+        }
+        print(json.dumps(payload, indent=2))
+        return
+
+    current_frame = (frame_report.get("current") or {}).get("frame_size")
+    expected_frame = (
+        (frame_report.get("expected") or {}).get("frame_size")
+        if isinstance(frame_report.get("expected"), Mapping)
+        else None
+    )
+    print(f"frame-transform-search - {function}")
+    print(f"ranking: {_FRAME_TRANSFORM_RANKING}")
+    print(f"baseline: frame={current_frame if current_frame is not None else '?'}")
+    print(f"expected: frame={expected_frame if expected_frame is not None else '?'}")
+    print("operator filter: " + ", ".join(operator_filter))
+    if generated_source_dir is not None:
+        print(f"generated source dir: {generated_source_dir}")
+    print(
+        "verdict: "
+        f"{evaluation.get('verdict')} ({(stop_condition or {}).get('kind')})"
+    )
+    if stop_condition:
+        print(f"stop condition: {stop_condition.get('reason')}")
+    if ranked_variants:
+        print("Variants:")
+        for variant in ranked_variants:
+            if variant.get("status") == "ok":
+                print(
+                    f"{variant.get('rank', '?')}. {variant['label']} "
+                    f"[{variant['operator']}] frame="
+                    f"{variant.get('candidate_frame_size')} remaining_delta="
+                    f"{variant.get('remaining_frame_delta')} improvement="
+                    f"{variant.get('frame_delta_improvement')}"
+                )
+                if variant.get("match_percent") is not None:
+                    print(f"  match_percent: {variant['match_percent']:.6g}")
+                if variant.get("description"):
+                    print(f"  action: {variant['description']}")
+                if variant.get("source_retained"):
+                    print(f"  source: {variant['source_retained']}")
+            else:
+                print(
+                    f"- {variant['label']} [{variant['operator']}] failed: "
+                    f"{variant.get('error')}"
+                )
+                if variant.get("source_retained"):
+                    print(f"  source: {variant['source_retained']}")
+    elif probes:
+        print("Probes:")
+        for probe in probes:
+            print(f"- {probe.label} [{probe.operator}]: {probe.description}")
+        print("Variants: none; pass --compile-probes or --candidate OPERATOR=path.")
+    else:
+        print("Variants: none; pass --source-file or --candidate OPERATOR=path.")
 
 
 def _render_gate_rejected_distribution(
