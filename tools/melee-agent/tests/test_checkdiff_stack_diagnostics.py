@@ -187,6 +187,45 @@ def test_classify_asm_diff_localizes_same_frame_compiler_temp_stack_slot() -> No
     )
 
 
+def test_pad_stack_stack_slot_localizer_marks_reserved_low_spill_ceiling() -> None:
+    checkdiff = _load_checkdiff()
+    expected = [
+        "<fn_80000000>:",
+        "+000: stwu r1, -64(r1)",
+        "+004: stw r0, 0x24(r1)",
+        "+008: lwz r3, 0x24(r1)",
+        "+00c: addi r1, r1, 64",
+    ]
+    current = [
+        "<fn_80000000>:",
+        "+000: stwu r1, -64(r1)",
+        "+004: stw r0, 0x18(r1)",
+        "+008: lwz r3, 0x18(r1)",
+        "+00c: addi r1, r1, 64",
+    ]
+
+    classification = checkdiff.classify_asm_diff(expected, current)
+    checkdiff.add_pad_stack_probe_guidance(
+        classification,
+        {"pad_stack_bytes": [8], "total_pad_stack_bytes": 8},
+    )
+
+    candidate = classification["stack_slot_localizer"][
+        "reserved_low_spill_region"
+    ]
+    assert candidate["kind"] == "reserved-unused-low-spill-region"
+    assert candidate["closability_tier"] == "ceiling"
+    assert candidate["deltas"] == [12]
+    assert any(
+        "reserved-but-unused low spill region" in reason
+        for reason in classification["reasons"]
+    )
+    assert not any(
+        "source-level stack reservation guidance" in reason
+        for reason in classification["reasons"]
+    )
+
+
 def test_classify_asm_diff_detects_indexed_struct_pointer_materialization() -> None:
     checkdiff = _load_checkdiff()
     expected = [

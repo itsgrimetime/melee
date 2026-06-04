@@ -1392,6 +1392,57 @@ def format_stack_slot_localizer_diagnostic(classification: dict) -> Optional[str
     )
 
 
+def _detect_reserved_low_spill_region_candidate(
+    classification: dict,
+    probe: dict,
+) -> Optional[dict]:
+    localizer = classification.get("stack_slot_localizer")
+    if not isinstance(localizer, dict):
+        return None
+    if not probe.get("total_pad_stack_bytes"):
+        return None
+    if localizer.get("frame_size") is None:
+        return None
+    deltas = localizer.get("deltas")
+    if not isinstance(deltas, list) or not deltas:
+        return None
+    if not all(isinstance(delta, int) and delta > 0 for delta in deltas):
+        return None
+
+    return {
+        "status": "heuristic",
+        "kind": "reserved-unused-low-spill-region",
+        "confidence": "medium",
+        "deltas": list(deltas),
+        "diagnostic_pad_stack_bytes": probe.get("total_pad_stack_bytes"),
+        "closability_tier": "ceiling",
+        "source_transform_closability": "no-known-c-source-lever",
+        "reason": (
+            "diagnostic stack padding is present and the frame size already "
+            "matches, but the current stack object remains below the expected "
+            "offset; likely extra reserved-but-unused compiler spill/local "
+            "area below an inlined or address-taken local"
+        ),
+        "next_command": (
+            "melee-agent debug inspect frame-reservations -f <function> "
+            "--expected-asm <expected.s> --json"
+        ),
+    }
+
+
+def format_reserved_low_spill_region_diagnostic(candidate: dict) -> str:
+    deltas = candidate.get("deltas") or []
+    delta_text = ",".join(str(delta) for delta in deltas) or "unknown"
+    return (
+        "reserved-but-unused low spill region candidate: frame size already "
+        "matches after diagnostic padding, but expected stack local offsets "
+        f"remain higher by {delta_text} byte(s). Treat this as a frame/local-area "
+        "ceiling with no known C-source lever; do not keep adding PAD_STACK or "
+        "dummy named locals, because those reserve above the affected object. "
+        f"next: {candidate.get('next_command')}"
+    )
+
+
 def add_stack_slot_pcdump_bridge(
     classification: dict,
     *,
@@ -1477,6 +1528,22 @@ def add_pad_stack_probe_guidance(
     if not probe:
         return
     classification["diagnostic_pad_stack"] = probe
+    reserved_low_spill = _detect_reserved_low_spill_region_candidate(
+        classification,
+        probe,
+    )
+    if reserved_low_spill:
+        localizer = classification.get("stack_slot_localizer")
+        if isinstance(localizer, dict):
+            localizer["reserved_low_spill_region"] = reserved_low_spill
+        classification["stack_slot_layout_cause"] = reserved_low_spill
+        message = format_reserved_low_spill_region_diagnostic(
+            reserved_low_spill,
+        )
+        reasons = classification.setdefault("reasons", [])
+        if message not in reasons:
+            reasons.append(message)
+        return
     message = format_pad_stack_probe_diagnostic(classification)
     if not message:
         return
@@ -2004,7 +2071,17 @@ def format_summary(
     pad_probe = classification.get("diagnostic_pad_stack")
     if pad_probe:
         fields.append(f"diagnostic_pad_stack={pad_probe.get('total_pad_stack_bytes')}")
-        fields.append("source_guidance=natural-frame-reservation")
+        localizer = classification.get("stack_slot_localizer")
+        reserved_low_spill = (
+            localizer.get("reserved_low_spill_region")
+            if isinstance(localizer, dict)
+            else None
+        )
+        if reserved_low_spill:
+            fields.append("source_guidance=reserved-low-spill-ceiling")
+            fields.append("closability_tier=ceiling")
+        else:
+            fields.append("source_guidance=natural-frame-reservation")
     return " ".join(fields)
 
 
