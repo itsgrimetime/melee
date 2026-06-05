@@ -4794,6 +4794,15 @@ def _print_signature_report(
         print(f"source: {source_path}")
     elif source_error:
         print(f"source: unavailable ({source_error})")
+    summary = report.summary or {}
+    stop = summary.get("stop_condition") or {}
+    if stop:
+        print(
+            f"stop: {stop.get('kind')} "
+            f"(patches={summary.get('patch_candidate_count', 0)}, "
+            f"rebucketed={summary.get('rebucketed_audit_only_count', 0)}, "
+            f"unrebucketed={summary.get('audit_only_unrebucketed', 0)})"
+        )
     if not report.findings:
         print("No signature/type call-prep findings.")
         return
@@ -4817,6 +4826,13 @@ def _print_signature_report(
                 print(
                     f"    patch: {action.patch.old!r} -> {action.patch.new!r}"
                 )
+            if action.rebucket:
+                print(
+                    f"    rebucket: {action.rebucket['reason']} -> "
+                    f"{action.rebucket['work_bucket']}/"
+                    f"{action.rebucket['subcategory']}"
+                )
+                print(f"      {action.rebucket['explanation']}")
             if action.validation is not None:
                 status = action.validation.get("status")
                 delta = action.validation.get("delta_match_percent")

@@ -332,6 +332,66 @@ def test_debug_suggest_signatures_json_from_saved_checkdiff(
     assert action["kind"] == "remove-call-arg-cast"
     assert action["patch"]["old"] == "(f32) rumble_setting"
     assert action["patch"]["new"] == "rumble_setting"
+    assert action["rebucket"] is None
+    assert report["summary"]["patch_candidate_count"] == 1
+    assert report["summary"]["stop_condition"]["kind"] == (
+        "unvalidated-patch-candidates"
+    )
+
+
+def test_debug_suggest_signatures_text_prints_summary_and_rebucket(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "repo"
+    source = melee_root / "src" / "melee" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "void caller_fn(int value) { helper_b(value); }\n",
+        encoding="utf-8",
+    )
+    payload_path = tmp_path / "checkdiff.json"
+    payload_path.write_text(
+        json.dumps({
+            "function": "caller_fn",
+            "classification": {"primary": "signature-type-mismatch"},
+            "target_asm": [
+                "/* 0000 */ mr r3, r31",
+                "/* 0004 */ bl helper_a",
+            ],
+            "current_asm": [
+                "/* 0000 */ mr r3, r31",
+                "/* 0004 */ bl helper_b",
+            ],
+            "fuzzy_match_percent": 97.5,
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/demo",
+    )
+
+    result = runner.invoke(
+        debug_cli.debug_app,
+        [
+            "suggest",
+            "signatures",
+            "-f",
+            "caller_fn",
+            "--checkdiff-json",
+            str(payload_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "stop: rebucketed-audit-only" in result.output
+    assert (
+        "rebucket: call-offset-shift -> "
+        "structural-reconstruction/call-target-shape"
+    ) in result.output
 
 
 def test_debug_suggest_signatures_rejects_wrong_checkdiff_function(

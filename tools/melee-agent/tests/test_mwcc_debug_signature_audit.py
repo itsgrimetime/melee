@@ -49,6 +49,11 @@ void caller_fn(int rumble_setting)
     assert action.patch.old == "(f32) rumble_setting"
     assert action.patch.new == "rumble_setting"
     assert action.patch.line == 4
+    assert action.rebucket is None
+    assert report.summary["patch_candidate_count"] == 1
+    assert report.summary["unvalidated_patch_candidate_count"] == 1
+    assert report.summary["validated_patch_candidate_count"] == 0
+    assert report.summary["stop_condition"]["kind"] == "unvalidated-patch-candidates"
     assert report.findings[0].affected_call_sites[0]["line"] == 4
 
 
@@ -159,6 +164,9 @@ void caller_fn(int arg0)
     actions = report.findings[0].actions
     assert any(a.kind == "same-tu-static-prototype-audit" for a in actions)
     assert all(a.patch is None for a in actions)
+    assert report.summary["source_lever_action_count"] == 1
+    assert report.summary["audit_only_unrebucketed"] == 0
+    assert report.summary["stop_condition"]["kind"] == "source-lever-audit"
 
 
 def test_audit_classifies_width_mismatch() -> None:
@@ -184,7 +192,15 @@ void caller_fn(u8 arg0)
         source_file="src/sample.c",
     )
     assert report.findings[0].kind == "argument-width-mismatch"
-    assert report.findings[0].actions[0].kind == "call-argument-type-audit"
+    action = report.findings[0].actions[0]
+    assert action.kind == "call-argument-type-audit"
+    assert action.rebucket["reason"] == "width-prototype-candidate-missing"
+    assert (
+        report.summary["rebucket_reason_counts"][
+            "width-prototype-candidate-missing"
+        ]
+        == 1
+    )
 
 
 def test_audit_reports_unmatched_call_target_shape() -> None:
@@ -213,7 +229,147 @@ void caller_fn(int arg0)
     assert report.findings[0].expected["call_target"] == "helper_a"
     assert report.findings[0].current["call_target"] == "helper_b"
     assert report.findings[0].affected_call_sites[0]["call_target"] == "helper_b"
-    assert report.findings[0].actions[0].kind == "call-target-shape-audit"
+    action = report.findings[0].actions[0]
+    assert action.kind == "call-target-shape-audit"
+    assert action.rebucket == {
+        "reason": "call-offset-shift",
+        "work_bucket": "structural-reconstruction",
+        "subcategory": "call-target-shape",
+        "explanation": (
+            "The call target or ordinal differs; signature audit cannot "
+            "produce a bounded type/prototype patch for this call shape."
+        ),
+    }
+    assert report.summary["audit_only_unrebucketed"] == 0
+    assert report.summary["rebucket_reason_counts"]["call-offset-shift"] == 1
+    assert report.summary["stop_condition"]["kind"] == "rebucketed-audit-only"
+
+
+def test_audit_rebuckets_bank_mismatch_without_source_lever() -> None:
+    source = """
+void caller_fn(void)
+{
+    helper((f32) unknown_expr);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            [
+                "/* 0000 */\tmr r3, r31",
+                "/* 0004 */\tbl helper",
+            ],
+            [
+                "/* 0000 */\tfmr f1, f31",
+                "/* 0004 */\tbl helper",
+            ],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+    action = report.findings[0].actions[0]
+    assert action.kind == "call-argument-type-audit"
+    assert action.rebucket["reason"] == "prototype-candidate-missing"
+    assert action.rebucket["subcategory"] == "argument-bank"
+    assert report.summary["audit_only_unrebucketed"] == 0
+    assert report.summary["stop_condition"]["kind"] == "rebucketed-audit-only"
+
+
+def test_audit_preserves_repeated_rebucket_findings_per_call_site() -> None:
+    source = """
+void caller_fn(void)
+{
+    helper((f32) unknown_first);
+    helper((f32) unknown_second);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            [
+                "/* 0000 */\tmr r3, r31",
+                "/* 0004 */\tbl helper",
+                "/* 0008 */\tmr r3, r30",
+                "/* 000C */\tbl helper",
+            ],
+            [
+                "/* 0000 */\tfmr f1, f31",
+                "/* 0004 */\tbl helper",
+                "/* 0008 */\tfmr f1, f30",
+                "/* 000C */\tbl helper",
+            ],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+
+    assert len(report.findings) == 2
+    assert [finding.source_line for finding in report.findings] == [4, 5]
+    assert report.summary["rebucketed_audit_only_count"] == 2
+    assert report.summary["rebucket_reason_counts"]["prototype-candidate-missing"] == 2
+
+
+def test_audit_rebuckets_argument_source_register_mismatch() -> None:
+    source = """
+void caller_fn(int arg0)
+{
+    helper(arg0);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            [
+                "/* 0000 */\tmr r3, r31",
+                "/* 0004 */\tbl helper",
+            ],
+            [
+                "/* 0000 */\tmr r3, r30",
+                "/* 0004 */\tbl helper",
+            ],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+    action = report.findings[0].actions[0]
+    assert action.rebucket["reason"] == "register-source-cascade"
+    assert action.rebucket["work_bucket"] == "register-allocator"
+    assert report.summary["audit_only_unrebucketed"] == 0
+    assert report.summary["stop_condition"]["kind"] == "rebucketed-audit-only"
+
+
+def test_summary_reports_unclassified_audit_action() -> None:
+    from src.mwcc_debug.signature_audit import (
+        SignatureAction,
+        SignatureFinding,
+        _summarize_report,
+    )
+
+    finding = SignatureFinding(
+        kind="argument-load-kind-mismatch",
+        confidence="low",
+        call_target="helper",
+        call_ordinal=1,
+        arg_register="r3",
+        expected={},
+        current={},
+        source_line=4,
+        arg_index=0,
+        affected_call_sites=[],
+        actions=[
+            SignatureAction(
+                kind="call-argument-type-audit",
+                confidence="low",
+                affected_call_sites=[],
+                reason="unclassified test action",
+            )
+        ],
+    )
+
+    summary = _summarize_report([finding])
+
+    assert summary["audit_only_unrebucketed"] == 1
+    assert summary["stop_condition"]["kind"] == "audit-only-unclassified"
 
 
 def test_audit_maps_mixed_gpr_fpr_argument_to_correct_source_index() -> None:
@@ -453,3 +609,6 @@ void caller_fn(int rumble_setting)
         "delta_match_percent": 1.75,
         "classification": "argument-bank-mismatch",
     }
+    assert report.summary["validated_patch_candidate_count"] == 1
+    assert report.summary["unvalidated_patch_candidate_count"] == 0
+    assert report.summary["stop_condition"]["kind"] == "validated-patch-candidates"

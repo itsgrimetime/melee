@@ -278,8 +278,8 @@ def test_describe_actionability_splits_non_frame_work_buckets() -> None:
         (
             "signature-call-type",
             "call-shape-or-prototype",
-            "manual-signature-guidance",
-            "debug-suggest-casts",
+            "current-tools-signature-audit",
+            "debug-suggest-signatures",
         ),
         (
             "inline-boundary",
@@ -329,6 +329,50 @@ def test_describe_actionability_splits_non_frame_work_buckets() -> None:
         result = describe_actionability(bucket, subcategory)
         assert result["source_actionability"] == actionability
         assert result["headline_tool"] == headline
+
+    signature = describe_actionability("signature-call-type", "argument-bank")
+    assert signature["source_actionability"] == "current-tools-signature-audit"
+    assert signature["headline_tool"] == "debug-suggest-signatures"
+    assert "signature audit" in signature["actionability_reason"]
+
+
+def test_signature_call_type_next_command_routes_to_signature_audit() -> None:
+    from tools.function_taxonomy_inventory import FunctionCandidate, next_command
+
+    candidate = FunctionCandidate(
+        function="fn_80000000",
+        unit="main/melee/demo/demo",
+        file_path="melee/demo/demo.c",
+        address="0x80000000",
+        size_bytes=128,
+        match_percent=98.5,
+        object_status="NonMatching",
+    )
+
+    command = next_command("signature-call-type", "argument-bank", candidate)
+
+    assert command == (
+        "melee-agent debug suggest signatures -f fn_80000000 "
+        "--source-file src/melee/demo/demo.c --json"
+    )
+
+
+def test_signature_call_type_next_command_omits_empty_source_file() -> None:
+    from tools.function_taxonomy_inventory import FunctionCandidate, next_command
+
+    candidate = FunctionCandidate(
+        function="fn_80000000",
+        unit="main/melee/demo/demo",
+        file_path="",
+        address="0x80000000",
+        size_bytes=128,
+        match_percent=98.5,
+        object_status="NonMatching",
+    )
+
+    command = next_command("signature-call-type", "argument-bank", candidate)
+
+    assert command == "melee-agent debug suggest signatures -f fn_80000000 --json"
 
 
 def test_bss_anchor_classification_buckets_as_ceiling() -> None:
@@ -433,10 +477,10 @@ def test_known_small_pattern_queue_has_no_current_tools_harvest_rows(
     assert rows == []
 
 
-def test_signature_and_inline_queues_have_no_current_tools_harvest_rows(
+def test_signature_queue_routes_to_advisory_audit_without_harness(
     tmp_path: Path,
 ) -> None:
-    from src.harvest import HarvestFilters, load_queue_rows
+    from src.harvest import HarvestFilters, load_queue_rows, select_harness
 
     queues = tmp_path / "queues"
     queues.mkdir()
@@ -446,9 +490,10 @@ def test_signature_and_inline_queues_have_no_current_tools_harvest_rows(
             "source_actionability\theadline_tool\tactionability_reason\t"
             "file_path\tnext_command\n"
             "99.5\tsig_fn\tsignature-type-mismatch\tcall-shape-or-prototype\t"
-            "manual-signature-guidance\tdebug-suggest-casts\t"
-            "diagnostic-only signature guidance\tmelee/demo/demo.c\t"
-            "melee-agent debug suggest casts sig_fn\n"
+            "current-tools-signature-audit\tdebug-suggest-signatures\t"
+            "signature audit rebucket guidance\tmelee/demo/demo.c\t"
+            "melee-agent debug suggest signatures -f sig_fn "
+            "--source-file src/melee/demo/demo.c --json\n"
         ),
         encoding="utf-8",
     )
@@ -465,17 +510,18 @@ def test_signature_and_inline_queues_have_no_current_tools_harvest_rows(
         encoding="utf-8",
     )
 
-    assert (
-        load_queue_rows(
-            queues / "signature-call-type.tsv",
-            work_bucket="signature-call-type",
-            repo_root=REPO_ROOT,
-            filters=HarvestFilters(
-                where={"source_actionability": ("current-tools-signature",)}
-            ),
-        )
-        == []
+    signature = load_queue_rows(
+        queues / "signature-call-type.tsv",
+        work_bucket="signature-call-type",
+        repo_root=REPO_ROOT,
+        filters=HarvestFilters(
+            where={"source_actionability": ("current-tools-signature-audit",)}
+        ),
     )
+    assert len(signature) == 1
+    assert signature[0].headline_tool == "debug-suggest-signatures"
+    assert select_harness(signature[0]) is None
+
     assert (
         load_queue_rows(
             queues / "inline-boundary.tsv",

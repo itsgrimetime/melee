@@ -416,12 +416,11 @@ def describe_actionability(
         }
     if bucket == "signature-call-type":
         return {
-            "source_actionability": "manual-signature-guidance",
-            "headline_tool": "debug-suggest-casts",
+            "source_actionability": "current-tools-signature-audit",
+            "headline_tool": "debug-suggest-signatures",
             "actionability_reason": (
-                "call shape or prototype mismatch; inspect casts, typedef widths, "
-                "and declarations with current signature tools, but no "
-                "source-emitting harvest harness is registered yet"
+                "call shape or prototype mismatch; run signature audit to inspect "
+                "call-prep, prototypes, argument widths, and concrete rebucket reasons"
             ),
         }
     if bucket == "inline-boundary":
@@ -510,10 +509,12 @@ def next_command(bucket: str, subcategory: str, candidate: FunctionCandidate) ->
     function = candidate.function
     source_path = f"src/{candidate.file_path}"
     if bucket == "signature-call-type":
-        return (
-            f"melee-agent debug suggest casts {function} && "
-            f"python tools/checkdiff.py {function} --compact"
-        )
+        if candidate.file_path:
+            return (
+                f"melee-agent debug suggest signatures -f {function} "
+                f"--source-file {source_path} --json"
+            )
+        return f"melee-agent debug suggest signatures -f {function} --json"
     if bucket == "inline-boundary":
         return (
             f"python tools/checkdiff.py {function} --compact && "

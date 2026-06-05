@@ -33,6 +33,7 @@ class SignatureAction:
     reason: str
     patch: PatchDescriptor | None = None
     validation: dict | None = None
+    rebucket: dict[str, object] | None = None
 
 
 @dataclass
@@ -55,6 +56,7 @@ class SignatureAuditReport:
     function: str
     classification: str | None
     findings: list[SignatureFinding]
+    summary: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -166,10 +168,12 @@ def audit_signature_call_type(
         _call_prep_findings(target_calls, current_calls, source_context)
     )
 
+    merged = _merge_findings(findings)
     return SignatureAuditReport(
         function=function,
         classification=_classification_primary(checkdiff_payload),
-        findings=_merge_findings(findings),
+        findings=merged,
+        summary=_summarize_report(merged),
     )
 
 
@@ -221,7 +225,129 @@ def validate_signature_patches(
                 "delta_match_percent": delta,
                 "classification": _classification_primary(payload),
             }
+    report.summary = _summarize_report(report.findings)
     return report
+
+
+SOURCE_LEVER_ACTION_KINDS = {
+    "same-tu-static-prototype-audit",
+    "field-type-audit",
+    "local-temp-shape-audit",
+}
+
+
+def _summarize_report(findings: list[SignatureFinding]) -> dict[str, object]:
+    action_kind_counts: dict[str, int] = {}
+    rebucket_reason_counts: dict[str, int] = {}
+    action_count = 0
+    patch_candidate_count = 0
+    validated_patch_candidate_count = 0
+    unvalidated_patch_candidate_count = 0
+    rebucketed_audit_only_count = 0
+    audit_only_unrebucketed = 0
+    source_lever_action_count = 0
+
+    for finding in findings:
+        for action in finding.actions:
+            action_count += 1
+            action_kind_counts[action.kind] = (
+                action_kind_counts.get(action.kind, 0) + 1
+            )
+            if action.patch is not None:
+                patch_candidate_count += 1
+                if _validation_improves(action.validation):
+                    validated_patch_candidate_count += 1
+                else:
+                    unvalidated_patch_candidate_count += 1
+                continue
+            if action.rebucket:
+                rebucketed_audit_only_count += 1
+                reason = str(action.rebucket.get("reason") or "unknown")
+                rebucket_reason_counts[reason] = (
+                    rebucket_reason_counts.get(reason, 0) + 1
+                )
+                continue
+            if action.kind in SOURCE_LEVER_ACTION_KINDS:
+                source_lever_action_count += 1
+                continue
+            audit_only_unrebucketed += 1
+
+    stop_condition = _summary_stop_condition(
+        finding_count=len(findings),
+        patch_candidate_count=patch_candidate_count,
+        validated_patch_candidate_count=validated_patch_candidate_count,
+        audit_only_unrebucketed=audit_only_unrebucketed,
+        source_lever_action_count=source_lever_action_count,
+        rebucketed_audit_only_count=rebucketed_audit_only_count,
+    )
+
+    return {
+        "finding_count": len(findings),
+        "action_count": action_count,
+        "patch_candidate_count": patch_candidate_count,
+        "validated_patch_candidate_count": validated_patch_candidate_count,
+        "unvalidated_patch_candidate_count": unvalidated_patch_candidate_count,
+        "rebucketed_audit_only_count": rebucketed_audit_only_count,
+        "audit_only_unrebucketed": audit_only_unrebucketed,
+        "source_lever_action_count": source_lever_action_count,
+        "action_kind_counts": action_kind_counts,
+        "rebucket_reason_counts": rebucket_reason_counts,
+        "stop_condition": stop_condition,
+    }
+
+
+def _validation_improves(validation: dict | None) -> bool:
+    if not validation:
+        return False
+    if validation.get("match") is True:
+        return True
+    delta = validation.get("delta_match_percent")
+    return isinstance(delta, (int, float)) and delta > 0
+
+
+def _summary_stop_condition(
+    *,
+    finding_count: int,
+    patch_candidate_count: int,
+    validated_patch_candidate_count: int,
+    audit_only_unrebucketed: int,
+    source_lever_action_count: int,
+    rebucketed_audit_only_count: int,
+) -> dict[str, str]:
+    if finding_count == 0:
+        return {
+            "kind": "no-findings",
+            "reason": "signature audit found no call-prep differences",
+        }
+    if validated_patch_candidate_count > 0:
+        return {
+            "kind": "validated-patch-candidates",
+            "reason": "at least one patch candidate validated as matched or improving",
+        }
+    if patch_candidate_count > 0:
+        return {
+            "kind": "unvalidated-patch-candidates",
+            "reason": "patch candidates exist but validation has not proved improvement",
+        }
+    if audit_only_unrebucketed > 0:
+        return {
+            "kind": "audit-only-unclassified",
+            "reason": "some audit-only actions lack a rebucket or source-lever reason",
+        }
+    if source_lever_action_count > 0:
+        return {
+            "kind": "source-lever-audit",
+            "reason": "audit actions identify bounded source levers without automatic patches",
+        }
+    if rebucketed_audit_only_count > 0:
+        return {
+            "kind": "rebucketed-audit-only",
+            "reason": "all audit-only actions have concrete rebucket reasons",
+        }
+    return {
+        "kind": "audit-only-unclassified",
+        "reason": "signature audit produced findings without classifiable actions",
+    }
 
 
 def _apply_patch_descriptor(
@@ -636,6 +762,7 @@ def _call_target_shape_findings(
             confidence="high",
             affected_call_sites=affected,
             reason="Expected and current ASM call targets differ by call ordinal.",
+            rebucket=_call_target_rebucket(source_site),
         )
         findings.append(
             SignatureFinding(
@@ -1093,10 +1220,109 @@ def _actions_for_finding(
                     "No safe source patch was identified; audit the source "
                     "argument type, visible prototype, and ABI argument prep."
                 ),
+                rebucket=_argument_rebucket(kind, source_site),
             )
         )
 
     return actions
+
+
+def _rebucket(
+    reason: str,
+    work_bucket: str,
+    subcategory: str,
+    explanation: str,
+) -> dict[str, object]:
+    return {
+        "reason": reason,
+        "work_bucket": work_bucket,
+        "subcategory": subcategory,
+        "explanation": explanation,
+    }
+
+
+def _call_target_rebucket(source_site: dict | None) -> dict[str, object]:
+    if source_site is None:
+        return _rebucket(
+            "call-not-localized",
+            "structural-reconstruction",
+            "call-source-localization",
+            (
+                "The call shape differs, but signature audit could not map the "
+                "ASM call ordinal back to a source call site."
+            ),
+        )
+    return _rebucket(
+        "call-offset-shift",
+        "structural-reconstruction",
+        "call-target-shape",
+        (
+            "The call target or ordinal differs; signature audit cannot "
+            "produce a bounded type/prototype patch for this call shape."
+        ),
+    )
+
+
+def _argument_rebucket(kind: str, source_site: dict | None) -> dict[str, object]:
+    if source_site is None:
+        return _rebucket(
+            "call-not-localized",
+            "structural-reconstruction",
+            "call-source-localization",
+            (
+                "The argument prep differs, but signature audit could not map "
+                "the ASM call ordinal back to a source call site."
+            ),
+        )
+    if kind == "argument-source-register-mismatch":
+        return _rebucket(
+            "register-source-cascade",
+            "register-allocator",
+            "argument-source-register",
+            (
+                "The ABI register is the same, but the source register differs; "
+                "signature audit has no bounded source patch."
+            ),
+        )
+    if kind == "argument-width-mismatch":
+        return _rebucket(
+            "width-prototype-candidate-missing",
+            "signature-call-type",
+            "argument-width",
+            (
+                "The argument width shaping differs, but no bounded cast or "
+                "prototype source candidate was found."
+            ),
+        )
+    if kind == "argument-load-kind-mismatch":
+        return _rebucket(
+            "type-evidence-missing",
+            "signature-call-type",
+            "argument-load-kind",
+            (
+                "The load kind differs, but source type evidence is too weak "
+                "for a bounded field or prototype patch."
+            ),
+        )
+    if kind == "argument-bank-mismatch":
+        return _rebucket(
+            "prototype-candidate-missing",
+            "signature-call-type",
+            "argument-bank",
+            (
+                "The ABI argument bank differs, but no safe cast removal or "
+                "prototype source candidate was found."
+            ),
+        )
+    return _rebucket(
+        "prototype-candidate-missing",
+        "signature-call-type",
+        "argument-presence",
+        (
+            "The argument register presence differs, but no bounded prototype "
+            "or argument source candidate was found."
+        ),
+    )
 
 
 def _source_arg(source_site: dict | None, arg_index: int) -> dict | None:
@@ -1242,18 +1468,38 @@ def _merge_actions(
     existing: list[SignatureAction],
     incoming: list[SignatureAction],
 ) -> list[SignatureAction]:
-    by_kind = {action.kind: action for action in existing}
+    by_key = {_action_merge_key(action): action for action in existing}
     for action in incoming:
-        current = by_kind.get(action.kind)
+        key = _action_merge_key(action)
+        current = by_key.get(key)
         if current is None:
             existing.append(action)
-            by_kind[action.kind] = action
+            by_key[key] = action
             continue
         current.affected_call_sites = _merge_call_site_lists(
             current.affected_call_sites,
             action.affected_call_sites,
         )
     return existing
+
+
+def _action_merge_key(action: SignatureAction) -> tuple:
+    if action.patch is not None:
+        return (
+            action.kind,
+            action.patch.source_file,
+            action.patch.line,
+            action.patch.old,
+            action.patch.new,
+        )
+    if action.rebucket:
+        return (
+            action.kind,
+            action.rebucket.get("reason"),
+            action.rebucket.get("work_bucket"),
+            action.rebucket.get("subcategory"),
+        )
+    return (action.kind,)
 
 
 def _merge_call_site_lists(first: list[dict], second: list[dict]) -> list[dict]:
