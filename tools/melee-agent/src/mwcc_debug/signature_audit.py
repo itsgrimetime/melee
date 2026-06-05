@@ -81,6 +81,8 @@ class _ArgPrep:
 @dataclass
 class _AsmCall:
     call_target: str
+    display_target: str
+    relocation_target: str | None
     overall_ordinal: int
     target_ordinal: int
     instruction_index: int
@@ -426,16 +428,22 @@ def _parse_asm_calls(lines: list[str], window: int) -> list[_AsmCall]:
     ]
     calls: list[_AsmCall] = []
     target_counts: dict[str, int] = {}
+    rel24_targets = _rel24_targets_by_offset(lines)
     for instr_index, instr in enumerate(instrs):
         if instr.opcode != "bl" or not instr.operands:
             continue
-        target = _normalize_call_target(instr.operands[0])
-        if target is None:
+        display_target = _normalize_call_target(instr.operands[0])
+        if display_target is None:
             continue
+        offset = _asm_line_offset(lines[instr.index])
+        relocation_target = rel24_targets.get(offset) if offset is not None else None
+        target = relocation_target or display_target
         target_counts[target] = target_counts.get(target, 0) + 1
         calls.append(
             _AsmCall(
                 call_target=target,
+                display_target=display_target,
+                relocation_target=relocation_target,
                 overall_ordinal=len(calls) + 1,
                 target_ordinal=target_counts[target],
                 instruction_index=instr.index,
@@ -452,6 +460,44 @@ def _normalize_call_target(raw: str) -> str | None:
     if not target or target.startswith("0x"):
         return None
     return target
+
+
+def _rel24_targets_by_offset(lines: list[str]) -> dict[int, str]:
+    targets: dict[int, str] = {}
+    for line in lines:
+        if "R_PPC_REL24" not in line:
+            continue
+        offset = _asm_line_offset(line)
+        target = _rel24_target(line)
+        if offset is None or target is None:
+            continue
+        targets[offset] = target
+    return targets
+
+
+def _rel24_target(line: str) -> str | None:
+    match = re.search(r"\bR_PPC_REL24\b\s+(?P<target>\S+)", line)
+    if match is None:
+        return None
+    return _normalize_call_target(match.group("target"))
+
+
+def _asm_line_offset(line: str) -> int | None:
+    stripped = line.strip()
+    colon_match = re.match(
+        r"^(?P<sign>[+-]?)(?:0x)?(?P<offset>[0-9A-Fa-f]+):",
+        stripped,
+    )
+    if colon_match is not None:
+        value = int(colon_match.group("offset"), 16)
+        return -value if colon_match.group("sign") == "-" else value
+    comment_match = re.match(
+        r"^/\*\s*(?P<offset>[0-9A-Fa-f]+)\s*\*/",
+        stripped,
+    )
+    if comment_match is not None:
+        return int(comment_match.group("offset"), 16)
+    return None
 
 
 def _collect_arg_preps(
@@ -588,7 +634,9 @@ def _parse_int(text: str) -> int | None:
 
 @dataclass
 class _SourceContext:
+    function: str
     call_sites: dict[tuple[str, int], dict]
+    call_sites_by_overall: dict[int, dict]
     prototypes: dict[str, _PrototypeInfo]
     local_types: dict[str, str]
 
@@ -601,7 +649,9 @@ def _build_source_context(
     span = find_function(source_text, function)
     if span is None:
         return _SourceContext(
+            function=function,
             call_sites={},
+            call_sites_by_overall={},
             prototypes=_parse_visible_prototypes(source_text),
             local_types={},
         )
@@ -610,9 +660,12 @@ def _build_source_context(
     body_text = source_text[span.body_open:span.full_end]
     body_line_offset = source_text[: span.body_open].count("\n")
     call_sites: dict[tuple[str, int], dict] = {}
+    call_sites_by_overall: dict[int, dict] = {}
     target_counts: dict[str, int] = {}
     overall_ordinal = 0
     for site in find_call_sites(body_text):
+        if _is_source_parser_artifact(site.call_target):
+            continue
         overall_ordinal += 1
         target_counts[site.call_target] = target_counts.get(site.call_target, 0) + 1
         target_ordinal = target_counts[site.call_target]
@@ -626,7 +679,7 @@ def _build_source_context(
             }
             for arg in site.args
         ]
-        call_sites[(site.call_target, target_ordinal)] = {
+        call_site = {
             "source_file": source_file,
             "line": abs_line,
             "call_target": site.call_target,
@@ -634,12 +687,20 @@ def _build_source_context(
             "overall_call_ordinal": overall_ordinal,
             "args": args,
         }
+        call_sites[(site.call_target, target_ordinal)] = call_site
+        call_sites_by_overall[overall_ordinal] = call_site
 
     return _SourceContext(
+        function=function,
         call_sites=call_sites,
+        call_sites_by_overall=call_sites_by_overall,
         prototypes=_parse_visible_prototypes(source_text),
         local_types=_extract_local_types(full_function),
     )
+
+
+def _is_source_parser_artifact(call_target: str) -> bool:
+    return call_target in {"PAD_STACK", "void"}
 
 
 def _parse_visible_prototypes(source_text: str) -> dict[str, _PrototypeInfo]:
@@ -749,11 +810,17 @@ def _call_target_shape_findings(
         call_target = current_call.call_target if current_call else None
         if call_target is None and expected_call is not None:
             call_target = expected_call.call_target
-        source_site = _source_site_for_call(
+        call_for_source = current_call or expected_call
+        source_site = None
+        if not _any_unresolved_function_offset_call(
+            (expected_call, current_call),
             source_context,
-            current_call or expected_call,
-            prefer_current=True,
-        )
+        ):
+            source_site = _source_site_for_call(
+                source_context,
+                call_for_source,
+                prefer_current=True,
+            )
         affected = [_call_site_without_args(source_site)] if source_site else []
         expected = _call_shape_dict(expected_call)
         current = _call_shape_dict(current_call)
@@ -762,7 +829,11 @@ def _call_target_shape_findings(
             confidence="high",
             affected_call_sites=affected,
             reason="Expected and current ASM call targets differ by call ordinal.",
-            rebucket=_call_target_rebucket(source_site),
+            rebucket=_call_target_rebucket(
+                source_site,
+                (expected_call, current_call),
+                source_context,
+            ),
         )
         findings.append(
             SignatureFinding(
@@ -787,6 +858,8 @@ def _call_shape_dict(call: _AsmCall | None) -> dict:
         return {"call_target": None}
     return {
         "call_target": call.call_target,
+        "display_target": call.display_target,
+        "relocation_target": call.relocation_target,
         "call_ordinal": call.overall_ordinal,
         "target_ordinal": call.target_ordinal,
     }
@@ -831,6 +904,7 @@ def _call_prep_findings(
                 kind=kind,
                 expected=expected,
                 current=current,
+                call=current_call,
                 source_context=source_context,
                 source_site=source_site,
                 arg_index=arg_index,
@@ -1108,6 +1182,8 @@ def _finding_confidence(kind: str) -> str:
 def _prep_dict(call: _AsmCall, prep: _ArgPrep | None, arg_index: int) -> dict:
     base = {
         "call_target": call.call_target,
+        "display_target": call.display_target,
+        "relocation_target": call.relocation_target,
         "call_ordinal": call.overall_ordinal,
         "target_ordinal": call.target_ordinal,
         "arg_index": arg_index,
@@ -1138,10 +1214,26 @@ def _source_site_for_call(
         return None
     site = source_context.call_sites.get((call.call_target, call.target_ordinal))
     if site is not None:
-        return site
+        return _localized_source_site(site, "target-ordinal")
+    if _is_unresolved_function_offset_call(call, source_context):
+        return None
+    if call.relocation_target is not None:
+        return None
+    site = source_context.call_sites_by_overall.get(call.overall_ordinal)
+    if site is not None:
+        return _localized_source_site(site, "overall-ordinal")
     if prefer_current:
         return None
-    return source_context.call_sites.get((call.call_target, 1))
+    site = source_context.call_sites.get((call.call_target, 1))
+    if site is not None:
+        return _localized_source_site(site, "target-ordinal")
+    return None
+
+
+def _localized_source_site(source_site: dict, localization_kind: str) -> dict:
+    localized = dict(source_site)
+    localized["localization_kind"] = localization_kind
+    return localized
 
 
 def _affected_call_sites(source_site: dict | None, arg_index: int) -> list[dict]:
@@ -1162,6 +1254,7 @@ def _call_site_without_args(source_site: dict) -> dict:
         "call_target": source_site.get("call_target"),
         "target_ordinal": source_site.get("target_ordinal"),
         "overall_call_ordinal": source_site.get("overall_call_ordinal"),
+        "localization_kind": source_site.get("localization_kind"),
     }
 
 
@@ -1170,6 +1263,7 @@ def _actions_for_finding(
     kind: str,
     expected: _ArgPrep | None,
     current: _ArgPrep | None,
+    call: _AsmCall,
     source_context: _SourceContext,
     source_site: dict | None,
     arg_index: int,
@@ -1220,7 +1314,12 @@ def _actions_for_finding(
                     "No safe source patch was identified; audit the source "
                     "argument type, visible prototype, and ABI argument prep."
                 ),
-                rebucket=_argument_rebucket(kind, source_site),
+                rebucket=_argument_rebucket(
+                    kind,
+                    source_site,
+                    call,
+                    source_context,
+                ),
             )
         )
 
@@ -1241,8 +1340,17 @@ def _rebucket(
     }
 
 
-def _call_target_rebucket(source_site: dict | None) -> dict[str, object]:
+def _call_target_rebucket(
+    source_site: dict | None,
+    calls: tuple[_AsmCall | None, ...],
+    source_context: _SourceContext,
+) -> dict[str, object]:
+    if _any_unresolved_function_offset_call(calls, source_context):
+        return _intra_function_branch_link_rebucket()
     if source_site is None:
+        call = next((candidate for candidate in calls if candidate is not None), None)
+        if call is not None and call.relocation_target is not None:
+            return _relocated_call_without_source_rebucket()
         return _rebucket(
             "call-not-localized",
             "structural-reconstruction",
@@ -1263,8 +1371,17 @@ def _call_target_rebucket(source_site: dict | None) -> dict[str, object]:
     )
 
 
-def _argument_rebucket(kind: str, source_site: dict | None) -> dict[str, object]:
+def _argument_rebucket(
+    kind: str,
+    source_site: dict | None,
+    call: _AsmCall | None,
+    source_context: _SourceContext,
+) -> dict[str, object]:
     if source_site is None:
+        if _is_unresolved_function_offset_call(call, source_context):
+            return _intra_function_branch_link_rebucket()
+        if call is not None and call.relocation_target is not None:
+            return _relocated_call_without_source_rebucket()
         return _rebucket(
             "call-not-localized",
             "structural-reconstruction",
@@ -1325,6 +1442,61 @@ def _argument_rebucket(kind: str, source_site: dict | None) -> dict[str, object]
     )
 
 
+def _relocated_call_without_source_rebucket() -> dict[str, object]:
+    return _rebucket(
+        "relocated-call-not-in-source",
+        "structural-reconstruction",
+        "relocated-helper-no-source-call",
+        (
+            "The ASM call resolves through R_PPC_REL24, but no matching source "
+            "call expression was found; treat it as generated helper or "
+            "structural call-shape work before auditing argument types."
+        ),
+    )
+
+
+def _intra_function_branch_link_rebucket() -> dict[str, object]:
+    return _rebucket(
+        "intra-function-branch-link",
+        "structural-reconstruction",
+        "branch-link-control-flow",
+        (
+            "The branch-link target is an unresolved function-local offset; "
+            "treat this as control-flow or structural reconstruction before "
+            "auditing call argument types."
+        ),
+    )
+
+
+def _is_unresolved_function_offset_call(
+    call: _AsmCall | None,
+    source_context: _SourceContext,
+) -> bool:
+    if call is None or call.relocation_target is not None:
+        return False
+    target = call.display_target or call.call_target
+    return _is_function_offset_target(target, source_context.function)
+
+
+def _any_unresolved_function_offset_call(
+    calls: tuple[_AsmCall | None, ...],
+    source_context: _SourceContext,
+) -> bool:
+    return any(
+        _is_unresolved_function_offset_call(call, source_context)
+        for call in calls
+    )
+
+
+def _is_function_offset_target(target: str, function: str) -> bool:
+    return bool(
+        re.fullmatch(
+            rf"{re.escape(function)}\+0x[0-9A-Fa-f]+",
+            target,
+        )
+    )
+
+
 def _source_arg(source_site: dict | None, arg_index: int) -> dict | None:
     if source_site is None:
         return None
@@ -1345,6 +1517,8 @@ def _remove_cast_action(
     arg_index: int,
 ) -> SignatureAction | None:
     if expected is None or source_site is None or source_arg is None:
+        return None
+    if source_site.get("localization_kind") == "overall-ordinal":
         return None
     cast_type = source_arg.get("cast_type")
     inner_expr = source_arg.get("inner_expr")

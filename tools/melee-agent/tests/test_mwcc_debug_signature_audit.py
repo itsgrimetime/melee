@@ -405,6 +405,309 @@ void caller_fn(float value, int count)
     assert finding.actions[0].patch.old == "(f32) count"
 
 
+def test_audit_uses_rel24_target_for_placeholder_branch_link_call() -> None:
+    source = """
+void caller_fn(int arg0)
+{
+    helper((f32) arg0);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            [
+                "+020: 7C 7F 1B 78    mr r3, r31",
+                "+024: 48 00 00 01    bl <caller_fn+0x24>",
+                "+024: R_PPC_REL24     helper",
+            ],
+            [
+                "+020: FC 20 F8 90    fmr f1, f31",
+                "+024: 48 00 00 01    bl <caller_fn+0x24>",
+                "+024: R_PPC_REL24     helper",
+            ],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+
+    assert [finding.kind for finding in report.findings] == [
+        "argument-bank-mismatch"
+    ]
+    finding = report.findings[0]
+    assert finding.call_target == "helper"
+    assert finding.source_line == 4
+    assert finding.current["call_target"] == "helper"
+    assert finding.current["display_target"] == "caller_fn+0x24"
+    assert finding.current["relocation_target"] == "helper"
+    assert finding.affected_call_sites[0]["call_target"] == "helper"
+    assert finding.affected_call_sites[0]["arg_text"] == "(f32) arg0"
+    assert finding.affected_call_sites[0]["localization_kind"] == "target-ordinal"
+
+
+def test_audit_overall_ordinal_localization_is_diagnostic_only() -> None:
+    source = """
+void caller_fn(int first, int second)
+{
+    first_helper(first);
+    source_helper((f32) second);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            [
+                "+000: 7C 7F 1B 78    mr r3, r31",
+                "+004: 48 00 00 01    bl first_helper",
+                "+008: 7C 7E 1B 78    mr r3, r30",
+                "+00C: 48 00 00 01    bl external_helper",
+            ],
+            [
+                "+000: 7C 7F 1B 78    mr r3, r31",
+                "+004: 48 00 00 01    bl first_helper",
+                "+008: FC 20 F0 90    fmr f1, f30",
+                "+00C: 48 00 00 01    bl external_helper",
+            ],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+
+    assert [finding.kind for finding in report.findings] == [
+        "argument-bank-mismatch"
+    ]
+    finding = report.findings[0]
+    assert finding.call_target == "external_helper"
+    assert finding.source_line == 5
+    assert finding.arg_index == 0
+    affected = finding.affected_call_sites[0]
+    assert affected["line"] == 5
+    assert affected["call_target"] == "source_helper"
+    assert affected["arg_text"] == "(f32) second"
+    assert affected["localization_kind"] == "overall-ordinal"
+    assert all(action.patch is None for action in finding.actions)
+    assert finding.actions[0].rebucket["reason"] == "prototype-candidate-missing"
+
+
+def test_audit_does_not_overall_localize_unresolved_local_offset_call() -> None:
+    source = """
+void caller_fn(int arg0)
+{
+    helper((f32) arg0);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            [
+                "+020: 7C 7F 1B 78    mr r3, r31",
+                "+024: 48 00 00 01    bl <caller_fn+0x24>",
+            ],
+            [
+                "+020: FC 20 F8 90    fmr f1, f31",
+                "+024: 48 00 00 01    bl <caller_fn+0x24>",
+            ],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+
+    assert [finding.kind for finding in report.findings] == [
+        "argument-bank-mismatch"
+    ]
+    finding = report.findings[0]
+    assert finding.source_line is None
+    assert finding.affected_call_sites == []
+    action = finding.actions[0]
+    assert action.rebucket == {
+        "reason": "intra-function-branch-link",
+        "work_bucket": "structural-reconstruction",
+        "subcategory": "branch-link-control-flow",
+        "explanation": (
+            "The branch-link target is an unresolved function-local offset; "
+            "treat this as control-flow or structural reconstruction before "
+            "auditing call argument types."
+        ),
+    }
+
+
+def test_audit_rebuckets_relocated_call_without_source_expression() -> None:
+    source = """
+void caller_fn(int arg0)
+{
+    arg0 += 1;
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            [
+                "+020: 7C 7F 1B 78    mr r3, r31",
+                "+024: 48 00 00 01    bl <caller_fn+0x24>",
+                "+024: R_PPC_REL24     generated_helper",
+            ],
+            [
+                "+020: 7C 7E 1B 78    mr r3, r30",
+                "+024: 48 00 00 01    bl <caller_fn+0x24>",
+                "+024: R_PPC_REL24     generated_helper",
+            ],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+
+    assert [finding.kind for finding in report.findings] == [
+        "argument-source-register-mismatch"
+    ]
+    finding = report.findings[0]
+    assert finding.source_line is None
+    action = finding.actions[0]
+    assert action.rebucket == {
+        "reason": "relocated-call-not-in-source",
+        "work_bucket": "structural-reconstruction",
+        "subcategory": "relocated-helper-no-source-call",
+        "explanation": (
+            "The ASM call resolves through R_PPC_REL24, but no matching source "
+            "call expression was found; treat it as generated helper or "
+            "structural call-shape work before auditing argument types."
+        ),
+    }
+
+
+def test_audit_does_not_overall_localize_relocated_generated_helper() -> None:
+    source = """
+void caller_fn(int arg0)
+{
+    real_source_call((f32) arg0);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            [
+                "+020: 7C 7F 1B 78    mr r3, r31",
+                "+024: 48 00 00 01    bl <caller_fn+0x24>",
+                "+024: R_PPC_REL24     generated_helper",
+            ],
+            [
+                "+020: FC 20 F8 90    fmr f1, f31",
+                "+024: 48 00 00 01    bl <caller_fn+0x24>",
+                "+024: R_PPC_REL24     generated_helper",
+            ],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+
+    finding = report.findings[0]
+    assert finding.source_line is None
+    assert finding.affected_call_sites == []
+    action = finding.actions[0]
+    assert action.rebucket["reason"] == "relocated-call-not-in-source"
+    assert action.patch is None
+
+
+def test_audit_rebuckets_unresolved_local_offset_call_target_shape() -> None:
+    source = """
+void caller_fn(int arg0)
+{
+    helper(arg0);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            [
+                "+020: 48 00 00 01    bl <caller_fn+0x20>",
+            ],
+            [
+                "+024: 48 00 00 01    bl <caller_fn+0x24>",
+            ],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+
+    assert [finding.kind for finding in report.findings] == [
+        "call-target-shape-mismatch"
+    ]
+    finding = report.findings[0]
+    assert finding.source_line is None
+    assert finding.affected_call_sites == []
+    action = finding.actions[0]
+    assert action.rebucket == {
+        "reason": "intra-function-branch-link",
+        "work_bucket": "structural-reconstruction",
+        "subcategory": "branch-link-control-flow",
+        "explanation": (
+            "The branch-link target is an unresolved function-local offset; "
+            "treat this as control-flow or structural reconstruction before "
+            "auditing call argument types."
+        ),
+    }
+
+
+def test_audit_rebuckets_one_sided_unresolved_local_offset_call_shape() -> None:
+    source = """
+void caller_fn(int arg0)
+{
+    helper(arg0);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            [
+                "+020: 48 00 00 01    bl <caller_fn+0x20>",
+            ],
+            [
+                "+020: 48 00 00 01    bl external_helper",
+            ],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+
+    assert [finding.kind for finding in report.findings] == [
+        "call-target-shape-mismatch"
+    ]
+    action = report.findings[0].actions[0]
+    assert action.rebucket["reason"] == "intra-function-branch-link"
+
+
+def test_audit_filters_pad_stack_and_void_source_parser_artifacts() -> None:
+    source = """
+void caller_fn(int arg0)
+{
+    PAD_STACK(4);
+    (void) arg0;
+    helper((f32) arg0);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            [
+                "+000: 7C 7F 1B 78    mr r3, r31",
+                "+004: 48 00 00 01    bl external_helper",
+            ],
+            [
+                "+000: FC 20 F8 90    fmr f1, f31",
+                "+004: 48 00 00 01    bl external_helper",
+            ],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+
+    assert [finding.kind for finding in report.findings] == [
+        "argument-bank-mismatch"
+    ]
+    affected = report.findings[0].affected_call_sites[0]
+    assert affected["line"] == 6
+    assert affected["call_target"] == "helper"
+    assert affected["localization_kind"] == "overall-ordinal"
+
+
 def test_audit_keeps_distinct_patches_for_repeated_call_sites() -> None:
     source = """
 void caller_fn(int first, int second)
