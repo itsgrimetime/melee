@@ -34,7 +34,6 @@ TOOLING_PATHS=(
     "docs/"
     ".github/"
     ".vscode/"
-    "configure.py"
     ".gitignore"
     ".pre-commit-config.yaml"
     "CLAUDE.md"
@@ -43,6 +42,119 @@ TOOLING_PATHS=(
     "decomp.yaml"
     "permuter_settings.toml"
 )
+
+apply_configure_overlay() {
+    python3 - "$REPO_ROOT/configure.py" <<'PY'
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+
+
+def replace_once(label: str, old: str, new: str) -> None:
+    global text
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(
+            f"configure.py overlay failed: expected one {label} anchor, found {count}"
+        )
+    text = text.replace(old, new, 1)
+
+
+require_old = '''parser.add_argument(
+    "--require-protos",
+    dest="require_protos",
+    action="store_true",
+    help="require function prototypes",
+)
+'''
+require_new = '''parser.add_argument(
+    "--require-protos",
+    dest="require_protos",
+    action="store_true",
+    default=True,
+    help="require function prototypes (default: enabled)",
+)
+parser.add_argument(
+    "--no-require-protos",
+    dest="require_protos",
+    action="store_false",
+    help="disable function prototype requirement",
+)
+'''
+replace_once("require-protos parser block", require_old, require_new)
+replace_once("wibo tag", 'config.wibo_tag = "0.7.0"', 'config.wibo_tag = "1.0.0"')
+
+helper = r'''def _purge_wrong_arch_wibo(config: ProjectConfig) -> None:
+    """Fork-only: drop build/tools/wibo if it's wrong arch for this host.
+
+    download_tool.py picks the correct wibo binary per platform, but once a
+    binary exists at build/tools/wibo, ninja won't redownload. The wrong-arch
+    binary can land there via cross-host worktree copies, stale state from a
+    prior platform, or an older download_tool.py that used the legacy URL.
+    Removing it lets the next build fetch a fresh one.
+    """
+    import sys
+
+    wibo = config.build_dir / "tools" / "wibo"
+    if not wibo.exists():
+        return
+    try:
+        with open(wibo, "rb") as f:
+            magic = f.read(4)
+    except OSError:
+        return
+    is_macho = magic in (
+        b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf",
+        b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe",
+    )
+    is_elf = magic == b"\x7fELF"
+    correct = is_macho if sys.platform == "darwin" else is_elf
+    if not correct:
+        kind = "Mach-O" if sys.platform == "darwin" else "ELF"
+        print(
+            f"warning: {wibo} is wrong arch (expected {kind} for {sys.platform}); "
+            "removing so it will be re-downloaded"
+        )
+        wibo.unlink()
+
+
+'''
+insert_after = '''config.progress_report_args = [
+    # Marks relocations as mismatching if the target value is different
+    # Default is "functionRelocDiffs=none", which is most lenient
+    # "--config functionRelocDiffs=data_value",
+]
+
+'''
+replace_once("progress report args block", insert_after, insert_after + helper)
+replace_once(
+    "configure mode generate_build call",
+    '''if args.mode == "configure":
+    # Write build.ninja and objdiff.json
+    generate_build(config)
+''',
+    '''if args.mode == "configure":
+    # Write build.ninja and objdiff.json
+    _purge_wrong_arch_wibo(config)
+    generate_build(config)
+''',
+)
+
+path.write_text(text, encoding="utf-8")
+PY
+}
+
+remove_stale_build_configs() {
+    if [[ ! -d "$REPO_ROOT/build" ]]; then
+        return
+    fi
+    find "$REPO_ROOT/build" -mindepth 2 -maxdepth 2 -name config.json -type f -print -delete
+}
 
 echo "=== Upstream Sync Tool ==="
 echo ""
@@ -114,8 +226,10 @@ if [[ "$DRY_RUN" == true ]]; then
     echo "[DRY RUN] Would perform:"
     echo "  1. git checkout master"
     echo "  2. git reset --hard upstream/master"
-    echo "  3. Restore tooling from current master"
-    echo "  4. git commit -m 'restore fork tooling after upstream sync'"
+    echo "  3. Restore fork tooling from current master"
+    echo "  4. Apply fork configure.py overlay"
+    echo "  5. Remove stale build/*/config.json"
+    echo "  6. git commit -m 'restore fork tooling after upstream sync'"
     exit 0
 fi
 
@@ -147,6 +261,12 @@ done
 # Recreate symlinks
 ln -sf CLAUDE.md AGENTS.md 2>/dev/null || true
 mkdir -p .codex && ln -sf ../.claude/skills .codex/skills 2>/dev/null || true
+
+echo "Applying configure.py fork overlay..."
+apply_configure_overlay
+
+echo "Removing stale generated build configs..."
+remove_stale_build_configs
 
 # Commit tooling
 git add -A
