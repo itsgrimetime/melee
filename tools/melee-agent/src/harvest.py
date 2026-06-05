@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 
+from src.mwcc_debug import cache as pcdump_cache
 from src.mwcc_debug.source_patch import extract_function, replace_function
 
 SCHEMA_VERSION = 1
@@ -118,6 +119,21 @@ class HarvestResult:
     subcategory: str = ""
     source_actionability: str = ""
     frame_closability_tier: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class PcdumpPreflightReport:
+    enabled: bool
+    required_units: list[str] = field(default_factory=list)
+    fresh_units: list[str] = field(default_factory=list)
+    stale_units: list[str] = field(default_factory=list)
+    missing_units: list[str] = field(default_factory=list)
+    generated_units: list[str] = field(default_factory=list)
+    setup_command: dict[str, Any] | None = None
+    dump_commands: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -548,6 +564,137 @@ def _default_runner(
         stdout=completed.stdout,
         stderr=completed.stderr,
     )
+
+
+def _command_report(
+    command: list[str],
+    process: HarnessProcessResult,
+) -> dict[str, Any]:
+    return {
+        "command": command,
+        "returncode": process.returncode,
+        "stdout": _short_output(process.stdout),
+        "stderr": _short_output(process.stderr),
+    }
+
+
+def _pcdump_unit_for_source(repo_root: Path, source_file: Path) -> str:
+    try:
+        rel = source_file.resolve().relative_to((repo_root / "src").resolve())
+    except ValueError as exc:
+        raise ValueError(
+            f"pcdump preflight source is not under repo src/: {source_file}"
+        ) from exc
+    if rel.suffix != ".c":
+        raise ValueError(f"pcdump preflight expected .c source: {source_file}")
+    return rel.with_suffix("").as_posix()
+
+
+def _needs_frame_transform_pcdump_preflight(
+    request: HarvestRequest,
+    *,
+    compose: bool,
+) -> bool:
+    if request.source_file is None:
+        return False
+    if request.source_actionability != "current-tools":
+        return False
+    if request.frame_closability_tier != "current-tools-padstack":
+        return False
+    if select_harness(request) == HARNESS_FRAME_TRANSFORM:
+        return True
+    if compose:
+        return any(
+            str(layer.get("harness") or "").strip().lower()
+            == HARNESS_FRAME_TRANSFORM
+            for layer in _normalize_layer_sequence(request)
+        )
+    return False
+
+
+def _run_pcdump_preflight(
+    requests: list[HarvestRequest],
+    *,
+    repo_root: Path,
+    runner: HarnessRunner,
+    timeout: int,
+    compose: bool,
+) -> PcdumpPreflightReport:
+    by_unit: dict[str, HarvestRequest] = {}
+    for request in requests:
+        if not _needs_frame_transform_pcdump_preflight(request, compose=compose):
+            continue
+        assert request.source_file is not None
+        unit = _pcdump_unit_for_source(repo_root, request.source_file)
+        by_unit.setdefault(unit, request)
+
+    if not by_unit:
+        return PcdumpPreflightReport(enabled=False)
+
+    report = PcdumpPreflightReport(
+        enabled=True,
+        required_units=list(by_unit),
+    )
+    units_to_generate: list[str] = []
+    for unit, request in by_unit.items():
+        entry = pcdump_cache.lookup(repo_root, unit)
+        if entry is None:
+            report.missing_units.append(unit)
+            units_to_generate.append(unit)
+        elif entry.fresh:
+            report.fresh_units.append(unit)
+        else:
+            report.stale_units.append(unit)
+            units_to_generate.append(unit)
+
+    if not units_to_generate:
+        return report
+
+    setup_command = ["debug", "dump", "setup"]
+    try:
+        setup_process = runner(
+            setup_command,
+            cwd=repo_root / "tools" / "melee-agent",
+            timeout=timeout,
+        )
+    except Exception as exc:
+        raise ValueError(f"pcdump preflight setup failed to run: {exc}") from exc
+    report.setup_command = _command_report(setup_command, setup_process)
+    if setup_process.returncode != 0:
+        raise ValueError(
+            "pcdump preflight setup failed: "
+            f"{_short_output(setup_process.stderr or setup_process.stdout)}"
+        )
+
+    for unit in units_to_generate:
+        request = by_unit[unit]
+        assert request.source_file is not None
+        dump_command = [
+            "debug",
+            "dump",
+            "local",
+            str(request.source_file),
+            "--function",
+            request.function,
+        ]
+        try:
+            dump_process = runner(
+                dump_command,
+                cwd=repo_root / "tools" / "melee-agent",
+                timeout=timeout,
+            )
+        except Exception as exc:
+            raise ValueError(
+                f"pcdump preflight dump failed to run for {unit}: {exc}"
+            ) from exc
+        report.dump_commands.append(_command_report(dump_command, dump_process))
+        if dump_process.returncode != 0:
+            raise ValueError(
+                "pcdump preflight dump failed for "
+                f"{unit}: {_short_output(dump_process.stderr or dump_process.stdout)}"
+            )
+        report.generated_units.append(unit)
+    return report
 
 
 def _default_validator(
@@ -2723,6 +2870,7 @@ def _build_ledger(
     taxonomy_queue: Path,
     target_map_path: Path | None,
     filters: HarvestFilters | None = None,
+    preflight: dict[str, Any] | None = None,
     results: list[HarvestResult | dict[str, Any]],
 ) -> dict[str, Any]:
     result_dicts = [
@@ -2740,6 +2888,7 @@ def _build_ledger(
         "taxonomy_queue": str(taxonomy_queue),
         "target_map": str(target_map_path) if target_map_path else None,
         "filters": filters.to_dict() if filters is not None else None,
+        "preflight": preflight,
         "summary": summarize_ledger(result_dicts),
         "results": result_dicts,
     }
@@ -2757,6 +2906,7 @@ def write_ledger(
     taxonomy_queue: Path,
     target_map_path: Path | None,
     filters: HarvestFilters | None = None,
+    preflight: dict[str, Any] | None = None,
     results: list[HarvestResult | dict[str, Any]],
 ) -> dict[str, Any]:
     ledger = _build_ledger(
@@ -2769,6 +2919,7 @@ def write_ledger(
         taxonomy_queue=taxonomy_queue,
         target_map_path=target_map_path,
         filters=filters,
+        preflight=preflight,
         results=results,
     )
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -2823,6 +2974,15 @@ def run_harvest(
         max_probes=max_probes,
         filters=filters,
     )
+    preflight = {
+        "pcdump": _run_pcdump_preflight(
+            requests,
+            repo_root=repo_root,
+            runner=runner,
+            timeout=timeout,
+            compose=compose,
+        ).to_dict()
+    }
     request_runner = run_composed_harvest_request if compose else run_harvest_request
     results = [
         request_runner(
@@ -2847,6 +3007,7 @@ def run_harvest(
             taxonomy_queue=queue_path,
             target_map_path=target_map_path,
             filters=filters,
+            preflight=preflight,
             results=results,
         )
     return _build_ledger(
@@ -2859,5 +3020,6 @@ def run_harvest(
         taxonomy_queue=queue_path,
         target_map_path=target_map_path,
         filters=filters,
+        preflight=preflight,
         results=results,
     )

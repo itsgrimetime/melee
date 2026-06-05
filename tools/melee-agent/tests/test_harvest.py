@@ -939,6 +939,323 @@ def test_frame_transform_search_command_is_built_from_frame_row(tmp_path: Path) 
     assert ledger["results"][0]["status"] == "validated"
 
 
+def test_run_harvest_prefetches_missing_current_tools_frame_transform_pcdumps(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path, "melee/demo.c")
+    other_source = repo_root / "src" / "melee" / "other.c"
+    other_source.write_text("void other_fn(void) {}\n", encoding="utf-8")
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(
+        queue,
+        [
+            _row(
+                "demo_fn",
+                file_path="melee/demo.c",
+                source_actionability="current-tools",
+            ),
+            _row(
+                "demo_fn_2",
+                file_path="melee/demo.c",
+                source_actionability="current-tools",
+            ),
+            _row(
+                "other_fn",
+                file_path="melee/other.c",
+                source_actionability="current-tools",
+            ),
+        ],
+    )
+    lookups: list[str] = []
+
+    def fake_lookup(repo: Path, unit: str):
+        lookups.append(unit)
+        return None
+
+    monkeypatch.setattr(harvest_module.pcdump_cache, "lookup", fake_lookup)
+    calls: list[list[str]] = []
+
+    def runner(args: list[str], *, cwd: Path, timeout: int) -> HarnessProcessResult:
+        calls.append(args)
+        if args[:2] == ["debug", "dump"]:
+            return HarnessProcessResult(args, 0, "", "")
+        return HarnessProcessResult(args, 0, json.dumps({"variants": []}), "")
+
+    ledger = run_harvest(
+        "stack-local-layout",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    assert calls[:3] == [
+        ["debug", "dump", "setup"],
+        [
+            "debug",
+            "dump",
+            "local",
+            str(repo_root / "src" / "melee" / "demo.c"),
+            "--function",
+            "demo_fn",
+        ],
+        [
+            "debug",
+            "dump",
+            "local",
+            str(repo_root / "src" / "melee" / "other.c"),
+            "--function",
+            "other_fn",
+        ],
+    ]
+    assert [call[:3] for call in calls[3:]] == [
+        ["debug", "mutate", "frame-transform-search"],
+        ["debug", "mutate", "frame-transform-search"],
+        ["debug", "mutate", "frame-transform-search"],
+    ]
+    assert lookups == ["melee/demo", "melee/other"]
+    assert ledger["preflight"]["pcdump"]["required_units"] == [
+        "melee/demo",
+        "melee/other",
+    ]
+    assert ledger["preflight"]["pcdump"]["generated_units"] == [
+        "melee/demo",
+        "melee/other",
+    ]
+
+
+def test_run_harvest_skips_pcdump_preflight_when_frame_transform_cache_is_fresh(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(
+        queue,
+        [_row("demo_fn", source_actionability="current-tools")],
+    )
+    cache_path = repo_root / "build" / "mwcc_debug_cache" / "melee" / "demo.txt"
+    entry = harvest_module.pcdump_cache.CacheEntry(
+        path=cache_path,
+        source_path=repo_root / "src" / "melee" / "demo.c",
+        fresh=True,
+    )
+    monkeypatch.setattr(harvest_module.pcdump_cache, "lookup", lambda _repo, _unit: entry)
+    calls, runner = _json_runner({"variants": []})
+
+    ledger = run_harvest(
+        "stack-local-layout",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    assert calls == [
+        [
+            "debug",
+            "mutate",
+            "frame-transform-search",
+            "-f",
+            "demo_fn",
+            "--source-file",
+            str(repo_root / "src" / "melee/demo.c"),
+            "--compile-probes",
+            "--json",
+            "--max-probes",
+            "8",
+            "--timeout",
+            "120",
+        ]
+    ]
+    assert ledger["preflight"]["pcdump"]["fresh_units"] == ["melee/demo"]
+    assert ledger["preflight"]["pcdump"]["generated_units"] == []
+
+
+def test_run_harvest_refreshes_stale_frame_transform_pcdumps(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(
+        queue,
+        [_row("demo_fn", source_actionability="current-tools")],
+    )
+    entry = harvest_module.pcdump_cache.CacheEntry(
+        path=repo_root / "build" / "mwcc_debug_cache" / "melee" / "demo.txt",
+        source_path=repo_root / "src" / "melee" / "demo.c",
+        fresh=False,
+    )
+    monkeypatch.setattr(harvest_module.pcdump_cache, "lookup", lambda _repo, _unit: entry)
+    calls: list[list[str]] = []
+
+    def runner(args: list[str], *, cwd: Path, timeout: int) -> HarnessProcessResult:
+        calls.append(args)
+        if args[:2] == ["debug", "dump"]:
+            return HarnessProcessResult(args, 0, "", "")
+        return HarnessProcessResult(args, 0, json.dumps({"variants": []}), "")
+
+    ledger = run_harvest(
+        "stack-local-layout",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    assert calls[:2] == [
+        ["debug", "dump", "setup"],
+        [
+            "debug",
+            "dump",
+            "local",
+            str(repo_root / "src" / "melee" / "demo.c"),
+            "--function",
+            "demo_fn",
+        ],
+    ]
+    assert ledger["preflight"]["pcdump"]["stale_units"] == ["melee/demo"]
+    assert ledger["preflight"]["pcdump"]["generated_units"] == ["melee/demo"]
+
+
+def test_run_harvest_does_not_prefetch_non_current_tools_frame_transform_rows(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(queue, [_row("demo_fn")])
+
+    def fail_lookup(_repo: Path, _unit: str):
+        raise AssertionError("pcdump cache should not be checked")
+
+    monkeypatch.setattr(harvest_module.pcdump_cache, "lookup", fail_lookup)
+    calls, runner = _json_runner({"variants": []})
+
+    ledger = run_harvest(
+        "stack-local-layout",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    assert calls[0][:3] == ["debug", "mutate", "frame-transform-search"]
+    assert ledger["preflight"]["pcdump"]["enabled"] is False
+
+
+def test_run_harvest_prefetches_composed_current_tools_frame_transform_layer(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(
+        queue,
+        [
+            _row(
+                "demo_fn",
+                headline_tool="manual-inspection",
+                source_actionability="current-tools",
+                frame_closability_tier="current-tools-padstack",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        harvest_module.pcdump_cache,
+        "lookup",
+        lambda _repo, _unit: None,
+    )
+    calls: list[list[str]] = []
+
+    def runner(args: list[str], *, cwd: Path, timeout: int) -> HarnessProcessResult:
+        calls.append(args)
+        if args[:2] == ["debug", "dump"]:
+            return HarnessProcessResult(args, 0, "", "")
+        return HarnessProcessResult(args, 0, json.dumps({"variants": []}), "")
+
+    ledger = run_harvest(
+        "stack-local-layout",
+        repo_root=repo_root,
+        queue_path=queue,
+        target_map={
+            "demo_fn": {
+                "harnesses": [
+                    {"harness": "name-magic-source-declarations"},
+                    {"harness": "frame-transform-search"},
+                ]
+            }
+        },
+        compose=True,
+        runner=runner,
+    )
+
+    assert calls[:2] == [
+        ["debug", "dump", "setup"],
+        [
+            "debug",
+            "dump",
+            "local",
+            str(repo_root / "src" / "melee" / "demo.c"),
+            "--function",
+            "demo_fn",
+        ],
+    ]
+    assert ledger["preflight"]["pcdump"]["generated_units"] == ["melee/demo"]
+
+
+def test_run_harvest_pcdump_preflight_setup_failure_stops_before_row_results(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(
+        queue,
+        [_row("demo_fn", source_actionability="current-tools")],
+    )
+    monkeypatch.setattr(harvest_module.pcdump_cache, "lookup", lambda _repo, _unit: None)
+
+    def runner(args: list[str], *, cwd: Path, timeout: int) -> HarnessProcessResult:
+        if args == ["debug", "dump", "setup"]:
+            return HarnessProcessResult(args, 7, "", "setup failed")
+        raise AssertionError(f"unexpected command after setup failure: {args}")
+
+    with pytest.raises(ValueError, match="pcdump preflight setup failed"):
+        run_harvest(
+            "stack-local-layout",
+            repo_root=repo_root,
+            queue_path=queue,
+            runner=runner,
+        )
+
+
+def test_run_harvest_pcdump_preflight_runner_exception_is_clean_value_error(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(
+        queue,
+        [_row("demo_fn", source_actionability="current-tools")],
+    )
+    monkeypatch.setattr(
+        harvest_module.pcdump_cache,
+        "lookup",
+        lambda _repo, _unit: None,
+    )
+
+    def runner(args: list[str], *, cwd: Path, timeout: int) -> HarnessProcessResult:
+        raise RuntimeError(f"could not run {args}")
+
+    with pytest.raises(ValueError, match="pcdump preflight setup failed to run"):
+        run_harvest(
+            "stack-local-layout",
+            repo_root=repo_root,
+            queue_path=queue,
+            runner=runner,
+        )
+
+
 def test_register_target_map_selects_coalesce_search(tmp_path: Path) -> None:
     repo_root = _repo_with_source(tmp_path)
     queue = tmp_path / "queues" / "register.tsv"
