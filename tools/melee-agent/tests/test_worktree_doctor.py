@@ -69,6 +69,55 @@ def test_fix_mode_reinstalls_stale_melee_agent_entrypoint(monkeypatch, tmp_path:
     assert any(result.level == "ok" and "reinstalled melee-agent" in result.message for result in doctor.results)
 
 
+def test_resolve_melee_agent_module_path_uses_launcher_probe(monkeypatch, tmp_path: Path) -> None:
+    doctor_mod = load_worktree_doctor()
+    fake_agent = tmp_path / "melee-agent"
+    fake_agent.write_text("#!/usr/bin/env python\n", encoding="utf-8")
+    local_cli = tmp_path / "tools" / "melee-agent" / "src" / "cli" / "__init__.py"
+    calls: list[tuple[list[str], dict[str, str] | None]] = []
+
+    def fake_run_cmd(
+        args: list[str],
+        timeout: int,
+        *,
+        cwd=None,
+        env: dict[str, str] | None = None,
+        timeout_message: str = "timed out",
+    ):
+        calls.append((args, env))
+        return doctor_mod.subprocess.CompletedProcess(args, 0, str(local_cli) + "\n", "")
+
+    monkeypatch.setattr(doctor_mod, "run_cmd", fake_run_cmd)
+
+    assert doctor_mod.resolve_melee_agent_module_path(fake_agent) == local_cli
+    assert len(calls) == 1
+    assert calls[0][0] == [str(fake_agent)]
+    assert calls[0][1] is not None
+    assert calls[0][1]["MELEE_AGENT_PRINT_SRC_CLI"] == "1"
+
+
+def test_collect_melee_agent_entrypoint_warnings_flags_old_same_worktree_entrypoint(tmp_path: Path) -> None:
+    doctor_mod = load_worktree_doctor()
+    fake_agent = tmp_path / "melee-agent"
+    fake_agent.write_text(
+        "#!/usr/bin/env python\n"
+        "from src.cli import main\n"
+        "main()\n",
+        encoding="utf-8",
+    )
+    expected = (tmp_path / "tools" / "melee-agent" / "src" / "cli" / "__init__.py").resolve()
+
+    results = doctor_mod.collect_melee_agent_entrypoint_warnings(
+        tmp_path,
+        fake_agent,
+        module_path=expected,
+    )
+
+    assert results[0].level == "warn"
+    assert "worktree-resolving launcher" in results[0].message
+    assert "pip install -e" in (results[0].fix or "")
+
+
 def _make_table_typer_dir(tmp_path: Path) -> Path:
     ttdir = tmp_path / "tools" / "table-typer"
     ttdir.mkdir(parents=True)

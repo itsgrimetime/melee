@@ -639,6 +639,7 @@ def run_cmd(
     timeout: float,
     *,
     cwd: Path | None = None,
+    env: dict[str, str] | None = None,
     timeout_message: str = "timed out",
 ) -> subprocess.CompletedProcess[str]:
     cwd = cwd or ROOT
@@ -649,6 +650,7 @@ def run_cmd(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env=env,
             start_new_session=True,
         )
     except FileNotFoundError as exc:
@@ -690,8 +692,13 @@ def build_table_typer(root: Path) -> subprocess.CompletedProcess[str]:
 def is_stale_melee_agent_entrypoint(result: CheckResult) -> bool:
     return (
         result.level == "warn"
-        and "melee-agent imports src.cli from" in result.message
-        and "expected" in result.message
+        and (
+            (
+                "melee-agent imports src.cli from" in result.message
+                and "expected" in result.message
+            )
+            or "does not use the worktree-resolving launcher" in result.message
+        )
     )
 
 
@@ -712,22 +719,59 @@ def collect_melee_agent_entrypoint_warnings(
             CheckResult(
                 "warn",
                 f"could not determine src.cli import path for {executable}",
-                "reinstall with: cd tools/melee-agent && python -m pip install -e .",
+                "install worktree-resolving launcher with: cd tools/melee-agent && python -m pip install -e .",
             )
         ]
     if actual == expected:
+        if not entrypoint_uses_worktree_launcher(executable):
+            return [
+                CheckResult(
+                    "warn",
+                    "melee-agent imports repo-local src.cli but does not use the worktree-resolving launcher",
+                    "install worktree-resolving launcher with: cd tools/melee-agent && python -m pip install -e .",
+                )
+            ]
         return [CheckResult("ok", f"melee-agent imports repo-local src.cli: {actual}")]
     return [
         CheckResult(
             "warn",
             f"melee-agent imports src.cli from {actual}, expected {expected}",
-            "reinstall with: cd tools/melee-agent && python -m pip install -e .",
+            "install worktree-resolving launcher with: cd tools/melee-agent && python -m pip install -e .",
         )
     ]
 
 
+def entrypoint_uses_worktree_launcher(executable: Path) -> bool:
+    try:
+        text = executable.read_text(errors="ignore")
+    except OSError:
+        return False
+    return "src.launcher" in text
+
+
+def _first_absolute_path_line(stdout: str) -> Path | None:
+    for line in reversed(stdout.splitlines()):
+        text = line.strip()
+        if not text:
+            continue
+        path = Path(text)
+        if path.is_absolute():
+            return path
+    return None
+
+
 def resolve_melee_agent_module_path(executable: Path) -> Path | None:
     """Return the src.cli module path used by the installed entrypoint."""
+    launcher_probe = run_cmd(
+        [str(executable)],
+        timeout=10,
+        env={**os.environ, "MELEE_AGENT_PRINT_SRC_CLI": "1"},
+    )
+    if launcher_probe.returncode == 0:
+        probed_path = _first_absolute_path_line(launcher_probe.stdout)
+        if probed_path is not None:
+            return probed_path
+
     interpreter = sys.executable
     try:
         first_line = executable.read_text(errors="ignore").splitlines()[0]
