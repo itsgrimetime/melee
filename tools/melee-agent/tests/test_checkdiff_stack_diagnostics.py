@@ -85,6 +85,56 @@ def test_format_stack_frame_diagnostic_suggests_natural_source_levers() -> None:
     assert "do not commit PAD_STACK" in message
 
 
+def test_make_progress_note_warns_when_match_rises_but_structure_crashes() -> None:
+    checkdiff = _load_checkdiff()
+
+    note = checkdiff.make_progress_note(
+        52.9,
+        {
+            "opcode_similarity": 0.028,
+            "line_delta": 115,
+            "hunk_count": 18,
+        },
+        {
+            "fuzzy_match_percent": 48.2,
+            "opcode_similarity": 0.348,
+            "line_delta": 23,
+            "hunk_count": 6,
+        },
+    )
+
+    assert note is not None
+    assert "false progress" in note
+    assert "opcode similarity" in note
+    assert "authoritative structural signal" in note
+
+
+def test_inline_boundary_artifact_exposes_current_larger_verdict() -> None:
+    checkdiff = _load_checkdiff()
+    expected = [
+        "<fn_80000000>:",
+        "+000: bl fn_80001234",
+        "+004: bl fn_80005678",
+        "+008: bl fn_80009ABC",
+    ]
+    current = [
+        "<fn_80000000>:",
+        "+000: lwz r3, 0(r31)",
+        "+004: addi r4, r3, 1",
+        "+008: stw r4, 0(r31)",
+        "+00c: lwz r5, 4(r31)",
+        "+010: addi r6, r5, 1",
+        "+014: stw r6, 4(r31)",
+    ]
+
+    classification = checkdiff.classify_asm_diff(expected, current)
+
+    assert classification["primary"] == "inline-boundary-toolchain-artifact"
+    assert classification["inline_boundary_artifact"]["size_verdict"] == (
+        "current-larger"
+    )
+
+
 def test_pad_stack_probe_guidance_marks_matched_summary_diagnostic_only() -> None:
     checkdiff = _load_checkdiff()
     classification = {

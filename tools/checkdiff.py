@@ -1006,6 +1006,7 @@ def _detect_inline_boundary_artifact(
     return {
         "missing_ref_calls": missing_ref_calls,
         "line_growth": len(our_lines) - len(ref_lines),
+        "size_verdict": "current-larger",
         "expected_frame_size": expected_frame,
         "current_frame_size": current_frame,
         "frame_growth": frame_growth,
@@ -2053,14 +2054,30 @@ def make_progress_note(
     prev_match = prev.get("fuzzy_match_percent")
     if prev_match is None or fuzzy_pct is None:
         return None
-    if fuzzy_pct >= prev_match - 0.01:  # not really a drop
-        return None
     op_now = metrics["opcode_similarity"]
     op_prev = prev.get("opcode_similarity", 0.0)
     hunks_now = metrics["hunk_count"]
     hunks_prev = prev.get("hunk_count", 1 << 30)
     line_now = metrics["line_delta"]
     line_prev = prev.get("line_delta", 1 << 30)
+
+    if fuzzy_pct > prev_match + 0.01:
+        opcode_drop = op_prev - op_now
+        structural_regression = (
+            opcode_drop >= 0.20
+            and (hunks_now > hunks_prev or line_now > line_prev)
+        )
+        if structural_regression:
+            return (
+                "WARNING: match% rose, but opcode similarity collapsed and "
+                "line/hunk shape regressed. Treat this as likely false "
+                "progress; opcode similarity is the authoritative structural "
+                "signal for this kind of instruction-removal change."
+            )
+        return None
+
+    if fuzzy_pct >= prev_match - 0.01:  # not really a drop
+        return None
 
     structural_progress = (
         op_now > op_prev + 0.005
