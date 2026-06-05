@@ -119,6 +119,40 @@ def test_no_fingerprint_env_var_recognized(checkdiff, monkeypatch):
     assert checkdiff.fingerprint_disabled() is False
 
 
+def test_expected_worktree_guard_rejects_different_root(checkdiff, tmp_path, monkeypatch):
+    current = tmp_path / "main"
+    expected = tmp_path / "agent-worktree"
+    monkeypatch.setattr(checkdiff, "ROOT", current)
+    monkeypatch.setenv("MELEE_AGENT_EXPECTED_WORKTREE", str(expected))
+
+    error = checkdiff.expected_worktree_guard_error()
+
+    assert error is not None
+    assert "refusing to run" in error
+    assert str(current.resolve()) in error
+    assert str(expected.resolve()) in error
+    assert "MELEE_AGENT_EXPECTED_WORKTREE" in error
+
+
+def test_expected_worktree_guard_accepts_matching_root(checkdiff, tmp_path, monkeypatch):
+    monkeypatch.setattr(checkdiff, "ROOT", tmp_path)
+    monkeypatch.setenv("MELEE_AGENT_EXPECTED_WORKTREE", str(tmp_path))
+
+    assert checkdiff.expected_worktree_guard_error() is None
+
+
+def test_expected_worktree_guard_checks_git_work_tree(checkdiff, tmp_path, monkeypatch):
+    current = tmp_path / "main"
+    expected = tmp_path / "agent-worktree"
+    monkeypatch.setattr(checkdiff, "ROOT", current)
+    monkeypatch.setenv("GIT_WORK_TREE", str(expected))
+
+    error = checkdiff.expected_worktree_guard_error()
+
+    assert error is not None
+    assert "GIT_WORK_TREE" in error
+
+
 def test_classify_attempt_novel(checkdiff):
     branch = checkdiff.classify_attempt(prior=None, current_match=87.2)
     assert branch == "novel"

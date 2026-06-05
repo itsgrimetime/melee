@@ -105,6 +105,7 @@ ROOT = _find_cwd_repo_root() or SCRIPT_DIR.parent  # tools/ is in repo root
 REPORT_PATH = ROOT / "build/GALE01/report.json"
 SRC_ROOT = ROOT / "src"
 DEFAULT_BUILD_TIMEOUT_SECONDS = int(os.environ.get("CHECKDIFF_BUILD_TIMEOUT", "300"))
+EXPECTED_WORKTREE_ENV_VARS = ("MELEE_AGENT_EXPECTED_WORKTREE", "GIT_WORK_TREE")
 
 # Tool paths
 TOOLS_CACHE_DIR = Path.home() / ".cache" / "melee-tools"
@@ -163,6 +164,31 @@ def _run_build_command(
         )
     except subprocess.TimeoutExpired:
         return _timeout_completed_process(args, timeout=timeout, hint=hint)
+
+
+def _resolve_expected_worktree(raw_path: str) -> Path:
+    path = Path(os.path.expandvars(raw_path)).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    return path.resolve()
+
+
+def expected_worktree_guard_error() -> str | None:
+    current_root = ROOT.resolve()
+    for env_name in EXPECTED_WORKTREE_ENV_VARS:
+        raw_path = os.environ.get(env_name)
+        if not raw_path:
+            continue
+        expected_root = _resolve_expected_worktree(raw_path)
+        if expected_root == current_root:
+            continue
+        return (
+            "[checkdiff] refusing to run from repo root "
+            f"{current_root} because {env_name} points to {expected_root}. "
+            "Run checkdiff from the isolated worktree, or unset the expected "
+            "worktree environment after confirming this is intentional."
+        )
+    return None
 
 
 def get_dtk_download_url() -> str:
@@ -2586,6 +2612,11 @@ def main() -> int:
     args = _build_arg_parser().parse_args()
     if fingerprint_disabled():
         args.fingerprint = False
+
+    guard_error = expected_worktree_guard_error()
+    if guard_error is not None:
+        print(guard_error, file=sys.stderr)
+        return 2
 
     if args.dry_run:
         if not REPORT_PATH.exists():

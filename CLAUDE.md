@@ -232,6 +232,12 @@ Key resource: `docs/discord-knowledge/DISCORD_KNOWLEDGE.md` - consolidated knowl
 
 ## Build
 
+In isolated worktrees, run build and checkdiff commands from the current
+worktree. Do not `cd` to `/Users/mike/code/melee` from an isolated agent; that
+builds the shared main checkout and can race another agent's edits. If a fresh
+worktree is missing `orig/GALE01/sys/main.dol`, run
+`python tools/worktree-doctor.py --fix` in that worktree before building.
+
 ```bash
 python configure.py && ninja  # Build melee
 ```
