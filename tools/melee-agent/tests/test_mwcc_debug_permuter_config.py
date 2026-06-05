@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import textwrap
+import tomllib
 from pathlib import Path
 
 import pytest
-import toml
 
 from src.mwcc_debug.patterns import PATTERNS, MutationPattern
 from src.mwcc_debug.permuter_config import (
@@ -117,7 +117,7 @@ def test_render_with_weights_parses_back_via_toml() -> None:
     # Header comment present
     assert "# Pattern: alias-split" in text
     # Parses cleanly as TOML
-    parsed = toml.loads(text)
+    parsed = tomllib.loads(text)
     assert parsed["func_name"] == "fn_xyz"
     assert parsed["compiler_type"] == "mwcc"
     assert parsed["objdump_command"] == DEFAULT_OBJDUMP_COMMAND
@@ -129,7 +129,7 @@ def test_render_with_weights_parses_back_via_toml() -> None:
 def test_render_without_weights_omits_section() -> None:
     spec = build_spec("fn_empty", None)
     text = render_settings_toml(spec)
-    parsed = toml.loads(text)
+    parsed = tomllib.loads(text)
     assert parsed["func_name"] == "fn_empty"
     # When there are no overrides, the section is omitted entirely
     assert "weight_overrides" not in parsed
@@ -221,7 +221,7 @@ def test_build_spec_without_scorer_omits_section() -> None:
     text = render_settings_toml(spec)
     assert "[scorer]" not in text
     # Parses cleanly
-    parsed = toml.loads(text)
+    parsed = tomllib.loads(text)
     assert "scorer" not in parsed
 
 
@@ -242,7 +242,7 @@ def test_render_with_scorer_emits_section() -> None:
     spec = build_spec("fn_test", None, scorer=sc)
     text = render_settings_toml(spec)
     assert "[scorer]" in text
-    parsed = toml.loads(text)
+    parsed = tomllib.loads(text)
     assert (
         parsed["scorer"]["command"]
         == "melee-agent debug target score-simplify-order -f fn -t spec.yaml"
@@ -254,7 +254,7 @@ def test_render_scorer_default_timeout() -> None:
     sc = ScorerConfig(command="/bin/true")
     spec = build_spec("fn_test", None, scorer=sc)
     text = render_settings_toml(spec)
-    parsed = toml.loads(text)
+    parsed = tomllib.loads(text)
     assert parsed["scorer"]["timeout_seconds"] == 5.0
 
 
@@ -264,7 +264,7 @@ def test_render_scorer_with_quotes_in_command_is_escaped() -> None:
     )
     spec = build_spec("fn_test", None, scorer=sc)
     text = render_settings_toml(spec)
-    parsed = toml.loads(text)
+    parsed = tomllib.loads(text)
     # Round-trip through toml: the escaped quotes survive
     assert parsed["scorer"]["command"] == '/path/to/cmd -msg "hello world"'
 

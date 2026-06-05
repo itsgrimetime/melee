@@ -94,5 +94,5 @@ def test_gricemt_assert_string_block_precedes_stage_callbacks() -> None:
         in source
     )
     assert "block_num<=BLOCK_COLL_JOBJ_MAX" in source
-    assert "HSD_ASSERT(0x7E3, coll_jobj)" in source
-    assert "HSD_ASSERT(0x7E6, block_jobj)" in source
+    assert 'HSD_ASSERTMSG(0x7E3, coll_jobj, "coll_jobj")' in source
+    assert 'HSD_ASSERTMSG(0x7E6, block_jobj, "block_jobj")' in source

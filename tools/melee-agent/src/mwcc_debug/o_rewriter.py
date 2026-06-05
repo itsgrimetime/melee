@@ -173,12 +173,12 @@ def find_named_sdata2_symbols_by_value(
         elf = ELFFile(f)
         sdata2 = elf.get_section_by_name(".sdata2")
         if sdata2 is None:
-            return out
+            return {}
         sdata2_idx = elf.get_section_index(".sdata2")
         data = sdata2.data()
         symtab = elf.get_section_by_name(".symtab")
         if symtab is None:
-            return out
+            return {}
         for sym in symtab.iter_symbols():
             if sym["st_shndx"] != sdata2_idx:
                 continue

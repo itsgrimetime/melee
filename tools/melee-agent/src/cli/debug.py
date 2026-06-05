@@ -7272,7 +7272,10 @@ def _build_and_match_with_diagnostic(
         melee_root,
     )
     if r.returncode != 0:
-        return None, _failure_diagnostic_or_fallback(
+        return None, _extract_first_diagnostic(
+            r.stdout,
+            r.stderr,
+        ) or _failure_diagnostic_or_fallback(
             r.stdout,
             r.stderr,
             fallback=f"ninja {obj_path} failed with exit {r.returncode}",

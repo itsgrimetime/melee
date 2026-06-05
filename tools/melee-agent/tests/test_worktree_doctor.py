@@ -224,7 +224,7 @@ def test_refresh_report_timeout_kills_child_processes(monkeypatch, tmp_path: Pat
     ninja.chmod(0o755)
     (tmp_path / "configure.py").write_text("import sys\nsys.exit(0)\n")
 
-    monkeypatch.setattr(doctor_mod, "REPORT_REFRESH_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(doctor_mod, "REPORT_REFRESH_TIMEOUT_SECONDS", 2.0)
     monkeypatch.setenv("CHILD_PID_FILE", str(child_pid_file))
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
 

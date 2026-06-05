@@ -19,10 +19,10 @@ import os
 import shutil
 import stat
 import textwrap
+import tomllib
 from pathlib import Path
 
 import pytest
-import toml
 from typer.testing import CliRunner
 
 import src.cli.debug as cli_debug
@@ -180,7 +180,7 @@ def test_setup_writes_spec_settings_and_compile(
     # Settings.toml present with [scorer] section
     settings_path = perm_dir / "settings.toml"
     assert settings_path.exists()
-    parsed = toml.loads(settings_path.read_text())
+    parsed = tomllib.loads(settings_path.read_text())
     assert "scorer" in parsed
     assert "score-simplify-order" in parsed["scorer"]["command"]
     assert "--function" in parsed["scorer"]["command"]
@@ -232,7 +232,7 @@ def test_setup_preserves_existing_weight_overrides(
     )
     assert result.exit_code == 0, result.stdout + "\n" + (result.stderr or "")
 
-    parsed = toml.loads(
+    parsed = tomllib.loads(
         (perm_root / "nonmatchings" / function / "settings.toml").read_text()
     )
     assert parsed["weight_overrides"]["perm_xor_zero"] == 5.0
@@ -260,7 +260,7 @@ def test_setup_passes_custom_scorer_timeout(
         ],
     )
     assert result.exit_code == 0, result.stdout + "\n" + (result.stderr or "")
-    parsed = toml.loads(
+    parsed = tomllib.loads(
         (perm_root / "nonmatchings" / function / "settings.toml").read_text()
     )
     assert parsed["scorer"]["timeout_seconds"] == 15.0
@@ -714,7 +714,7 @@ def test_setup_force_phys_scorer_wires_settings_without_simplify_target(
 
     assert result.exit_code == 0, result.stdout + "\n" + (result.stderr or "")
     perm_dir = perm_root / "nonmatchings" / function
-    parsed = toml.loads((perm_dir / "settings.toml").read_text())
+    parsed = tomllib.loads((perm_dir / "settings.toml").read_text())
     assert "score-force-phys" in parsed["scorer"]["command"]
     assert "score-simplify-order" not in parsed["scorer"]["command"]
     target_yaml = (perm_dir / "simplify_order_target.yaml").read_text()

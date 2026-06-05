@@ -23,8 +23,9 @@ def test_dump_local_help_exposes_force_schedule() -> None:
     assert result.exit_code == 0
     assert "--force-schedule" in result.stdout
     assert "--force-schedule-fn" in result.stdout
-    assert "pin adjacent same-base" in result.stdout
-    assert "loads after instruction" in result.stdout
+    assert "pin adjacent" in result.stdout
+    assert "same-base loads after" in result.stdout
+    assert "instruction scheduling" in result.stdout
     assert "DIAGNOSTIC-ONLY" in result.stdout
 
 
