@@ -96,6 +96,10 @@ from ..mwcc_debug.frame_reservations import (
     evaluate_stack_home_probe_results,
 )
 from ..mwcc_debug.frame_taxonomy import classify_frame_taxonomy
+from ..mwcc_debug.signature_audit import (
+    audit_signature_call_type,
+    validate_signature_patches,
+)
 from ..mwcc_debug.value_numbering import detect_divide_rematerialization_ceiling
 
 
@@ -4524,6 +4528,431 @@ def _print_frame_suggestions(report: dict, suggestions: list[dict]) -> None:
             print("   Commands:")
             for command in commands:
                 print(f"     {command}")
+
+
+def _read_signature_checkdiff_payload(
+    *,
+    function: str,
+    melee_root: Path,
+    checkdiff_json: Path | None,
+    checkdiff_timeout: float,
+    no_build: bool,
+) -> tuple[dict, str]:
+    if checkdiff_json is not None:
+        try:
+            payload = json.loads(checkdiff_json.read_text())
+        except json.JSONDecodeError as exc:
+            typer.echo(
+                f"checkdiff JSON could not be parsed: {exc}",
+                err=True,
+            )
+            raise typer.Exit(2) from exc
+        except OSError as exc:
+            typer.echo(f"checkdiff JSON could not be read: {exc}", err=True)
+            raise typer.Exit(2) from exc
+        if not isinstance(payload, dict):
+            typer.echo("checkdiff JSON root was not an object", err=True)
+            raise typer.Exit(2)
+        _validate_signature_checkdiff_function(payload, function)
+        return payload, str(checkdiff_json)
+
+    cmd = [
+        sys.executable,
+        str(melee_root / "tools" / "checkdiff.py"),
+        function,
+        "--format",
+        "json",
+        "--no-fingerprint",
+    ]
+    if no_build:
+        cmd.append("--no-build")
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=melee_root,
+            capture_output=True,
+            text=True,
+            timeout=checkdiff_timeout,
+            env=_checkdiff_env_without_fingerprint(),
+        )
+    except subprocess.TimeoutExpired as exc:
+        typer.echo(
+            f"checkdiff timed out after {checkdiff_timeout:g}s",
+            err=True,
+        )
+        raise typer.Exit(3) from exc
+    except OSError as exc:
+        typer.echo(f"failed to run checkdiff: {exc}", err=True)
+        raise typer.Exit(3) from exc
+    if proc.returncode not in (0, 1) or not proc.stdout.strip():
+        if proc.stderr:
+            typer.echo(proc.stderr.rstrip(), err=True)
+        if proc.stdout:
+            typer.echo(proc.stdout.rstrip(), err=True)
+        raise typer.Exit(proc.returncode or 3)
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        if proc.stderr:
+            typer.echo(proc.stderr.rstrip(), err=True)
+        typer.echo(f"checkdiff did not emit JSON: {exc}", err=True)
+        raise typer.Exit(3) from exc
+    if not isinstance(payload, dict):
+        typer.echo("checkdiff JSON root was not an object", err=True)
+        raise typer.Exit(3)
+    _validate_signature_checkdiff_function(payload, function)
+    return payload, "checkdiff"
+
+
+def _validate_signature_checkdiff_function(
+    payload: Mapping[str, Any],
+    function: str,
+) -> None:
+    payload_function = payload.get("function")
+    if payload_function is None:
+        return
+    if str(payload_function) == function:
+        return
+    typer.echo(
+        (
+            "checkdiff JSON function mismatch: "
+            f"payload is {payload_function!r}, requested {function!r}"
+        ),
+        err=True,
+    )
+    raise typer.Exit(2)
+
+
+def _signature_source_for_function(
+    *,
+    function: str,
+    source_file: Path | None,
+    melee_root: Path,
+) -> tuple[Path | None, str | None, str | None]:
+    if source_file is not None:
+        resolved = _resolve_existing_cli_file(
+            source_file,
+            melee_root=melee_root,
+            label="source file",
+        )
+        return resolved, resolved.read_text(), None
+    unit = _find_unit_for_function(function, melee_root)
+    if unit is None:
+        return None, None, f"function not found in report.json: {function}"
+    path = melee_root / "src" / f"{unit}.c"
+    if not path.exists():
+        return path, None, f"source file not found: {path}"
+    return path, path.read_text(), None
+
+
+def _signature_payload_match_percent(payload: Mapping[str, Any]) -> float | None:
+    for key in ("fuzzy_match_percent", "match_percent", "percent"):
+        value = payload.get(key)
+        if isinstance(value, (int, float)):
+            return float(value)
+    return None
+
+
+def _run_signature_candidate_checkdiff(
+    *,
+    function: str,
+    candidate_source: str,
+    source_path: Path,
+    unit: str,
+    melee_root: Path,
+    timeout: float,
+) -> dict:
+    probe_dir = (
+        melee_root
+        / "build"
+        / "mwcc_debug_cache"
+        / "probes"
+        / "signature_audit"
+    )
+    probe_dir.mkdir(parents=True, exist_ok=True)
+    safe_function = re.sub(r"[^A-Za-z0-9_.-]+", "_", function)
+    stamp = f"{os.getpid()}.{int(time.time() * 1000)}"
+    probe_path = probe_dir / f"{safe_function}.{stamp}.c"
+    probe_obj = probe_dir / f"{safe_function}.{stamp}.o"
+    probe_pcdump = probe_dir / f"{safe_function}.{stamp}.pcdump.txt"
+    probe_path.write_text(candidate_source)
+
+    cli_cwd = melee_root / "tools" / "melee-agent"
+    if not cli_cwd.exists():
+        cli_cwd = melee_root
+    dump_cmd = [
+        sys.executable,
+        "-m",
+        "src.cli",
+        "debug",
+        "dump",
+        "local",
+        str(probe_path),
+        "--function",
+        function,
+        "--unit-source",
+        str(source_path),
+        "--keep-obj",
+        str(probe_obj),
+        "--no-cache-sync",
+        "--output",
+        str(probe_pcdump),
+    ]
+    dump_proc = subprocess.run(
+        dump_cmd,
+        cwd=cli_cwd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=_checkdiff_env_for_locked_child(disable_fingerprint=True),
+    )
+    if dump_proc.returncode != 0:
+        detail = (dump_proc.stderr or dump_proc.stdout or "").strip()
+        raise RuntimeError(
+            f"candidate compile failed with exit {dump_proc.returncode}"
+            + (f": {detail}" if detail else "")
+        )
+    if not probe_obj.exists():
+        raise RuntimeError(f"candidate compile did not produce object: {probe_obj}")
+
+    unit_for_o = unit[:-2] if unit.endswith(".c") else unit
+    unit_for_o = unit_for_o.removeprefix("src/")
+    build_obj = melee_root / "build" / "GALE01" / "src" / f"{unit_for_o}.o"
+    with _acquire_checkdiff_repo_lock(
+        melee_root,
+        label="signature-audit validation",
+    ):
+        build_obj_existed = build_obj.exists()
+        saved_obj = build_obj.read_bytes() if build_obj_existed else None
+        try:
+            build_obj.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(probe_obj, build_obj)
+            checkdiff_proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(melee_root / "tools" / "checkdiff.py"),
+                    function,
+                    "--format",
+                    "json",
+                    "--no-build",
+                ],
+                cwd=melee_root,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=_checkdiff_env_for_locked_child(disable_fingerprint=True),
+            )
+        finally:
+            if build_obj_existed and saved_obj is not None:
+                build_obj.write_bytes(saved_obj)
+            elif not build_obj_existed and build_obj.exists():
+                build_obj.unlink()
+
+    if checkdiff_proc.returncode not in (0, 1) or not checkdiff_proc.stdout.strip():
+        detail = (checkdiff_proc.stderr or checkdiff_proc.stdout or "").strip()
+        raise RuntimeError(
+            f"candidate checkdiff failed with exit {checkdiff_proc.returncode}"
+            + (f": {detail}" if detail else "")
+        )
+    try:
+        payload = json.loads(checkdiff_proc.stdout)
+    except json.JSONDecodeError as exc:
+        detail = (checkdiff_proc.stderr or checkdiff_proc.stdout or str(exc)).strip()
+        raise RuntimeError(f"candidate checkdiff emitted non-json: {detail}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("candidate checkdiff JSON root was not an object")
+    return payload
+
+
+def _signature_report_payload(
+    report,
+    *,
+    checkdiff_source: str,
+    source_path: Path | None,
+    source_error: str | None,
+    validation_enabled: bool,
+) -> dict[str, Any]:
+    payload = dataclasses.asdict(report)
+    payload["checkdiff_source"] = checkdiff_source
+    payload["source"] = str(source_path) if source_path is not None else None
+    payload["source_error"] = source_error
+    payload["validation_enabled"] = validation_enabled
+    return payload
+
+
+def _print_signature_report(
+    report,
+    *,
+    checkdiff_source: str,
+    source_path: Path | None,
+    source_error: str | None,
+    validation_enabled: bool,
+) -> None:
+    print(f"Signature suggestions for {report.function}")
+    print(f"checkdiff: {checkdiff_source}")
+    if source_path is not None:
+        print(f"source: {source_path}")
+    elif source_error:
+        print(f"source: unavailable ({source_error})")
+    if not report.findings:
+        print("No signature/type call-prep findings.")
+        return
+    for finding in report.findings:
+        line = finding.source_line if finding.source_line is not None else "?"
+        arg = finding.arg_index if finding.arg_index is not None else "?"
+        print(
+            f"- {finding.kind}: {finding.call_target or '?'} "
+            f"arg {arg} at line {line}"
+        )
+        expected_reg = finding.expected.get("register")
+        current_reg = finding.current.get("register")
+        print(
+            f"  expected {expected_reg or '?'} "
+            f"{finding.expected.get('bank') or ''}; "
+            f"current {current_reg or '?'} {finding.current.get('bank') or ''}"
+        )
+        for action in finding.actions:
+            print(f"  action: {action.kind} ({action.confidence})")
+            if action.patch is not None:
+                print(
+                    f"    patch: {action.patch.old!r} -> {action.patch.new!r}"
+                )
+            if action.validation is not None:
+                status = action.validation.get("status")
+                delta = action.validation.get("delta_match_percent")
+                if delta is None:
+                    print(f"    validation: {status}")
+                else:
+                    print(f"    validation: {status}, delta {delta:+.2f}%")
+    if validation_enabled:
+        print("Validation used temp objects and restored the build object after scoring.")
+
+
+@suggest_app.command(name="signatures")
+def suggest_signatures_cmd(
+    function: Annotated[
+        str,
+        typer.Option("--function", "-f", help="Function name to inspect"),
+    ],
+    checkdiff_json: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--checkdiff-json",
+            help=(
+                "Existing tools/checkdiff.py --format json payload. If omitted, "
+                "checkdiff is run for the function."
+            ),
+        ),
+    ] = None,
+    source_file: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--source-file",
+            help="Source file to audit. Defaults to the repo source for the function.",
+        ),
+    ] = None,
+    build: Annotated[
+        bool,
+        typer.Option(
+            "--build",
+            help="Allow the initial checkdiff run to rebuild before auditing.",
+        ),
+    ] = False,
+    validate: Annotated[
+        bool,
+        typer.Option(
+            "--validate",
+            help=(
+                "Compile each safe patch candidate to a temp object, run "
+                "checkdiff --no-build under the repo lock, and attach scores."
+            ),
+        ),
+    ] = False,
+    checkdiff_timeout: Annotated[
+        float,
+        typer.Option(
+            "--checkdiff-timeout",
+            help="Timeout in seconds for checkdiff and validation compile steps.",
+        ),
+    ] = 60.0,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit as JSON."),
+    ] = False,
+) -> None:
+    """Suggest source levers for checkdiff call-prep signature mismatches."""
+    melee_root = DEFAULT_MELEE_ROOT
+    source_path, source_text, source_error = _signature_source_for_function(
+        function=function,
+        source_file=source_file,
+        melee_root=melee_root,
+    )
+    checkdiff_payload, checkdiff_source = _read_signature_checkdiff_payload(
+        function=function,
+        melee_root=melee_root,
+        checkdiff_json=checkdiff_json,
+        checkdiff_timeout=checkdiff_timeout,
+        no_build=not build,
+    )
+    report = audit_signature_call_type(
+        checkdiff_payload,
+        source_text or "",
+        function,
+        source_file=str(source_path) if source_path is not None else None,
+    )
+    if validate:
+        unit = _find_unit_for_function(function, melee_root)
+        if source_text is None or source_path is None:
+            typer.echo(
+                f"--validate requires source text: {source_error or 'unavailable'}",
+                err=True,
+            )
+            raise typer.Exit(2)
+        if unit is None:
+            typer.echo(
+                f"--validate requires report.json unit for {function}",
+                err=True,
+            )
+            raise typer.Exit(2)
+
+        def run_candidate(candidate_source: str) -> dict:
+            return _run_signature_candidate_checkdiff(
+                function=function,
+                candidate_source=candidate_source,
+                source_path=source_path,
+                unit=unit,
+                melee_root=melee_root,
+                timeout=checkdiff_timeout,
+            )
+
+        validate_signature_patches(
+            report,
+            source_text,
+            run_candidate,
+            baseline_match_percent=_signature_payload_match_percent(
+                checkdiff_payload
+            ),
+        )
+
+    if json_out:
+        print(json.dumps(
+            _signature_report_payload(
+                report,
+                checkdiff_source=checkdiff_source,
+                source_path=source_path,
+                source_error=source_error,
+                validation_enabled=validate,
+            ),
+            indent=2,
+        ))
+        return
+    _print_signature_report(
+        report,
+        checkdiff_source=checkdiff_source,
+        source_path=source_path,
+        source_error=source_error,
+        validation_enabled=validate,
+    )
 
 
 @suggest_app.command(name="frame")

@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import textwrap
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -70,6 +71,7 @@ def test_representative_grouped_command_help_works() -> None:
         ["debug", "target", "match-iter-first", "--help"],
         ["debug", "target", "score-source", "--help"],
         ["debug", "suggest", "frame", "--help"],
+        ["debug", "suggest", "signatures", "--help"],
         ["debug", "suggest", "control-flow-shape", "--help"],
         ["debug", "suggest", "coalesce", "--help"],
         ["debug", "suggest", "schedule", "--help"],
@@ -264,6 +266,175 @@ def _control_flow_shape_checkdiff_payload(function: str = "fn_80000000") -> dict
             "/* 0010 */ lwz r7, 0(r3)",
         ],
     }
+
+
+def test_debug_suggest_signatures_json_from_saved_checkdiff(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "repo"
+    source = melee_root / "src" / "melee" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        textwrap.dedent(
+            """\
+            void caller_fn(int rumble_setting)
+            {
+                helper((f32) rumble_setting);
+            }
+            """
+        )
+    )
+    payload_path = tmp_path / "checkdiff.json"
+    payload_path.write_text(json.dumps({
+        "function": "caller_fn",
+        "classification": {"primary": "signature-type-mismatch"},
+        "target_asm": [
+            "/* 0000 */ mr r3, r31",
+            "/* 0004 */ bl helper",
+        ],
+        "current_asm": [
+            "/* 0000 */ fmr f1, f31",
+            "/* 0004 */ bl helper",
+        ],
+        "fuzzy_match_percent": 97.5,
+    }))
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/demo",
+    )
+
+    result = runner.invoke(
+        debug_cli.debug_app,
+        [
+            "suggest",
+            "signatures",
+            "-f",
+            "caller_fn",
+            "--checkdiff-json",
+            str(payload_path),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    report = json.loads(result.output)
+    assert report["function"] == "caller_fn"
+    assert report["checkdiff_source"] == str(payload_path)
+    assert report["source"] == str(source)
+    assert report["validation_enabled"] is False
+    finding = report["findings"][0]
+    assert finding["kind"] == "argument-bank-mismatch"
+    assert finding["arg_index"] == 0
+    action = finding["actions"][0]
+    assert action["kind"] == "remove-call-arg-cast"
+    assert action["patch"]["old"] == "(f32) rumble_setting"
+    assert action["patch"]["new"] == "rumble_setting"
+
+
+def test_debug_suggest_signatures_rejects_wrong_checkdiff_function(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "repo"
+    source = melee_root / "src" / "melee" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text("void caller_fn(int value) { helper(value); }\n")
+    payload_path = tmp_path / "wrong-checkdiff.json"
+    payload_path.write_text(json.dumps({
+        "function": "other_fn",
+        "target_asm": [],
+        "current_asm": [],
+    }))
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/demo",
+    )
+
+    result = runner.invoke(
+        debug_cli.debug_app,
+        [
+            "suggest",
+            "signatures",
+            "-f",
+            "caller_fn",
+            "--checkdiff-json",
+            str(payload_path),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "checkdiff JSON function mismatch" in result.output
+
+
+def test_signature_candidate_checkdiff_restores_build_object(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "repo"
+    source = melee_root / "src" / "melee" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text("void caller_fn(void) {}\n")
+    build_obj = melee_root / "build" / "GALE01" / "src" / "melee" / "demo.o"
+    build_obj.parent.mkdir(parents=True)
+    build_obj.write_bytes(b"original-object")
+    lock_events: list[str] = []
+    captured_dump_cmd: list[str] = []
+
+    @contextmanager
+    def fake_lock(root, *, label="checkdiff build/report"):
+        lock_events.append(f"enter:{label}")
+        yield
+        lock_events.append(f"exit:{label}")
+
+    def fake_run(cmd, **kwargs):
+        cmd_list = [str(part) for part in cmd]
+        if "debug" in cmd_list and "dump" in cmd_list and "local" in cmd_list:
+            captured_dump_cmd[:] = cmd_list
+            keep_obj = Path(cmd_list[cmd_list.index("--keep-obj") + 1])
+            keep_obj.parent.mkdir(parents=True, exist_ok=True)
+            keep_obj.write_bytes(b"candidate-object")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if "checkdiff.py" in " ".join(cmd_list):
+            assert build_obj.read_bytes() == b"candidate-object"
+            return subprocess.CompletedProcess(
+                cmd,
+                1,
+                stdout=json.dumps({
+                    "match": False,
+                    "fuzzy_match_percent": 98.0,
+                }),
+                stderr="",
+            )
+        raise AssertionError(f"unexpected command: {cmd_list}")
+
+    monkeypatch.setattr(debug_cli, "_acquire_checkdiff_repo_lock", fake_lock)
+    monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
+
+    result = debug_cli._run_signature_candidate_checkdiff(
+        function="caller_fn",
+        candidate_source="void caller_fn(void) {}\n",
+        source_path=source,
+        unit="melee/demo",
+        melee_root=melee_root,
+        timeout=5.0,
+    )
+
+    assert result["fuzzy_match_percent"] == 98.0
+    assert build_obj.read_bytes() == b"original-object"
+    assert lock_events == [
+        "enter:signature-audit validation",
+        "exit:signature-audit validation",
+    ]
+    probe_source = Path(captured_dump_cmd[captured_dump_cmd.index("local") + 1])
+    assert probe_source.is_relative_to(
+        melee_root / "build" / "mwcc_debug_cache" / "probes" / "signature_audit"
+    )
 
 
 def _consumer_home_call(symbol: str, offset: int, call_offset: int) -> list[str]:
