@@ -5,6 +5,8 @@ Provides utilities for tracking match score progression over time.
 
 import json
 import os
+import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -156,6 +158,112 @@ def _lock_path(path: Path) -> Path:
     return path.with_name(path.name + ".lock")
 
 
+def _default_melee_root() -> Path:
+    if override := os.environ.get("MELEE_ROOT"):
+        return Path(override).expanduser()
+    # src/cli/tracking.py -> src -> melee-agent -> tools -> repo root
+    return Path(__file__).resolve().parents[4]
+
+
+def _report_match_percent(function_name: str, melee_root: Path) -> float | None:
+    report_path = melee_root / "build" / "GALE01" / "report.json"
+    if not report_path.exists():
+        return None
+    try:
+        report = json.loads(report_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    for unit in report.get("units", []):
+        for function in unit.get("functions", []):
+            if function.get("name") == function_name:
+                value = function.get("fuzzy_match_percent")
+                return float(value) if value is not None else None
+    return None
+
+
+def _checkdiff_match_percent(payload: dict[str, Any]) -> float | None:
+    for key in ("fuzzy_match_percent", "match_percent"):
+        value = payload.get(key)
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _measure_current_source_match(
+    function_name: str,
+    *,
+    timeout: float,
+) -> dict[str, Any]:
+    """Measure the current checked-out source match without recording an attempt."""
+    melee_root = _default_melee_root()
+    checkdiff_path = melee_root / "tools" / "checkdiff.py"
+    if not checkdiff_path.exists():
+        return {
+            "status": "unavailable",
+            "reason": f"missing {checkdiff_path}",
+        }
+    if _report_match_percent(function_name, melee_root) is None:
+        return {
+            "status": "unavailable",
+            "reason": "function not found in build/GALE01/report.json",
+        }
+
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "tools/checkdiff.py",
+                function_name,
+                "--format",
+                "json",
+                "--no-fingerprint",
+            ],
+            cwd=melee_root,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return {"status": "timeout", "reason": f"checkdiff timed out after {timeout:g}s"}
+    except OSError as exc:
+        return {"status": "failed", "reason": str(exc)}
+
+    stdout = (result.stdout or "").strip()
+    if stdout:
+        try:
+            payload = json.loads(stdout)
+        except json.JSONDecodeError:
+            payload = None
+        if isinstance(payload, dict):
+            match_percent = _checkdiff_match_percent(payload)
+            if match_percent is not None:
+                return {
+                    "status": "measured",
+                    "match_percent": match_percent,
+                    "match": payload.get("match"),
+                }
+
+    return {
+        "status": "failed",
+        "reason": (result.stderr or result.stdout or f"exit {result.returncode}").strip(),
+    }
+
+
+def _attach_current_source_match(
+    summary: dict[str, Any],
+    *,
+    timeout: float,
+) -> dict[str, Any]:
+    current = _measure_current_source_match(summary["function"], timeout=timeout)
+    summary["current_source"] = current
+    summary["current_source_match_percent"] = current.get("match_percent")
+    return summary
+
+
 def _empty_ledger() -> dict[str, Any]:
     return {"version": 1, "functions": {}}
 
@@ -210,6 +318,7 @@ def _summarize_entry(entry: dict[str, Any], threshold: int = DEFAULT_STALL_THRES
         "exists": True,
         "function": entry.get("function"),
         "best_match_percent": entry.get("best_match_percent"),
+        "ledger_best_match_percent": entry.get("best_match_percent"),
         "attempt_count": len(attempts),
         "no_progress_count": entry.get("no_progress_count", 0),
         "register_only_no_progress_count": entry.get("register_only_no_progress_count", 0),
@@ -239,6 +348,7 @@ def summarize_attempts(
             "exists": False,
             "function": function_name,
             "best_match_percent": None,
+            "ledger_best_match_percent": None,
             "attempt_count": 0,
             "no_progress_count": 0,
             "register_only_no_progress_count": 0,
@@ -558,7 +668,7 @@ def attempts_record(
 
     best = summary["best_match_percent"]
     console.print(f"[green]Recorded attempt[/green] for [bold]{function_name}[/bold]")
-    console.print(f"Best match: {best:.1f}%" if best is not None else "Best match: n/a")
+    console.print(f"Ledger best: {best:.1f}%" if best is not None else "Ledger best: n/a")
     console.print(f"No-progress streak: {summary['no_progress_count']} / {threshold}")
     if summary["move_on_recommended"]:
         console.print(f"[yellow]Move-on recommended[/yellow]: {summary['recommendation']}")
@@ -571,10 +681,23 @@ def attempts_show(
         int,
         typer.Option("--threshold", help="No-progress attempts before recommending move-on"),
     ] = DEFAULT_STALL_THRESHOLD,
+    measure_current: Annotated[
+        bool,
+        typer.Option(
+            "--measure-current/--no-measure-current",
+            help="Run checkdiff to show the current checked-out source match separately from the ledger best",
+        ),
+    ] = True,
+    current_timeout: Annotated[
+        float,
+        typer.Option("--current-timeout", help="Seconds to wait for current-source checkdiff"),
+    ] = 60.0,
     output_json: Annotated[bool, typer.Option("--json", help="Output summary as JSON")] = False,
 ):
     """Show attempt history for one function."""
     summary = summarize_attempts(function_name, threshold=threshold)
+    if summary["exists"] and measure_current:
+        summary = _attach_current_source_match(summary, timeout=current_timeout)
 
     if output_json:
         print(json.dumps(summary, indent=2))
@@ -603,7 +726,14 @@ def attempts_show(
         )
 
     console.print(table)
-    console.print(f"Best match: {summary['best_match_percent']:.1f}%")
+    console.print(f"Ledger best: {summary['best_match_percent']:.1f}%")
+    current = summary.get("current_source") or {}
+    if measure_current:
+        if current.get("status") == "measured":
+            console.print(f"Current source: {current['match_percent']:.1f}%")
+        else:
+            reason = current.get("reason") or current.get("status") or "unknown"
+            console.print(f"Current source: unavailable ({reason})")
     console.print(f"No-progress streak: {summary['no_progress_count']} / {threshold}")
     if summary["move_on_recommended"]:
         console.print(f"[yellow]Move-on recommended[/yellow]: {summary['recommendation']}")
@@ -632,7 +762,7 @@ def attempts_list(
 
     table = Table(title="Tracked Decomp Attempts", box=box.SIMPLE)
     table.add_column("Function")
-    table.add_column("Best", justify="right")
+    table.add_column("Ledger Best", justify="right")
     table.add_column("Attempts", justify="right")
     table.add_column("Stalled", justify="right")
     table.add_column("Blocker")

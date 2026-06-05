@@ -2,6 +2,8 @@
 
 import json
 import re
+import sys
+from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
@@ -134,6 +136,122 @@ def test_attempt_show_json_summarizes_current_state(tmp_path, monkeypatch):
     assert summary["best_match_percent"] == 91.0
     assert summary["attempt_count"] == 1
     assert summary["retained_improvements"] == 1
+
+
+def test_attempt_show_reports_current_source_separately_from_ledger_best(tmp_path, monkeypatch):
+    """Current committed source is distinct from the historical ledger best."""
+    ledger_path = tmp_path / "attempts.json"
+    monkeypatch.setenv("DECOMP_ATTEMPT_LEDGER_FILE", str(ledger_path))
+
+    import src.cli.tracking as tracking_cli
+
+    monkeypatch.setattr(
+        tracking_cli,
+        "_measure_current_source_match",
+        lambda function_name, *, timeout: {
+            "status": "measured",
+            "match_percent": 81.61,
+        },
+    )
+
+    runner.invoke(
+        app,
+        [
+            "attempts",
+            "record",
+            "Func_80000018",
+            "--match",
+            "35.5",
+            "--outcome",
+            "improved",
+        ],
+    )
+
+    result = runner.invoke(app, ["attempts", "show", "Func_80000018"])
+    assert result.exit_code == 0, result.stdout
+
+    out = strip_ansi(result.stdout)
+    assert "Ledger best: 35.5%" in out
+    assert "Current source: 81.6%" in out
+    assert "Best match: 35.5%" not in out
+
+    json_result = runner.invoke(app, ["attempts", "show", "Func_80000018", "--json"])
+    assert json_result.exit_code == 0, json_result.stdout
+    payload = json.loads(json_result.stdout)
+    assert payload["best_match_percent"] == 35.5
+    assert payload["ledger_best_match_percent"] == 35.5
+    assert payload["current_source_match_percent"] == 81.61
+
+
+def test_measure_current_source_match_runs_checkdiff_without_recording(tmp_path, monkeypatch):
+    import src.cli.tracking as tracking_cli
+
+    melee_root = tmp_path / "melee"
+    checkdiff = melee_root / "tools" / "checkdiff.py"
+    checkdiff.parent.mkdir(parents=True)
+    checkdiff.write_text("#!/usr/bin/env python\n")
+    report = melee_root / "build" / "GALE01" / "report.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps({
+        "units": [
+            {
+                "name": "main/melee/mn/sample",
+                "functions": [
+                    {
+                        "name": "Func_8000001C",
+                        "fuzzy_match_percent": 35.5,
+                    }
+                ],
+            }
+        ],
+    }))
+    monkeypatch.setenv("MELEE_ROOT", str(melee_root))
+
+    captured = {}
+
+    def fake_run(cmd, *, cwd, capture_output, text, timeout):
+        captured.update({
+            "cmd": cmd,
+            "cwd": cwd,
+            "capture_output": capture_output,
+            "text": text,
+            "timeout": timeout,
+        })
+        return SimpleNamespace(
+            returncode=1,
+            stdout=json.dumps({
+                "match": False,
+                "fuzzy_match_percent": 81.61,
+            }),
+            stderr="",
+        )
+
+    monkeypatch.setattr(tracking_cli.subprocess, "run", fake_run)
+
+    result = tracking_cli._measure_current_source_match(
+        "Func_8000001C",
+        timeout=7.0,
+    )
+
+    assert result == {
+        "status": "measured",
+        "match_percent": 81.61,
+        "match": False,
+    }
+    assert captured == {
+        "cmd": [
+            sys.executable,
+            "tools/checkdiff.py",
+            "Func_8000001C",
+            "--format",
+            "json",
+            "--no-fingerprint",
+        ],
+        "cwd": melee_root,
+        "capture_output": True,
+        "text": True,
+        "timeout": 7.0,
+    }
 
 
 def test_attempt_record_snapshots_high_water_source_and_diff(tmp_path, monkeypatch):

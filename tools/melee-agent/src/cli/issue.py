@@ -193,6 +193,7 @@ def _attempt_roi_for_functions(functions: list[str]) -> dict[str, Any]:
             "attempt_count": summary["attempt_count"],
             "retained_improvements": summary["retained_improvements"],
             "best_match_percent": summary["best_match_percent"],
+            "ledger_best_match_percent": summary["ledger_best_match_percent"],
             "move_on_recommended": summary["move_on_recommended"],
             "move_on_reason": summary["move_on_reason"],
             "recent_blockers": summary["recent_blockers"],

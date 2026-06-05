@@ -6363,6 +6363,73 @@ def test_diagnose_text_reports_divide_rematerialization_ceiling(
     assert "== VERDICT: NO FAST TRANSFORM FOUND ==" not in out
 
 
+def test_diagnose_noop_cast_verify_does_not_report_win_available(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from src.mwcc_debug.cast_audit import CastWarning
+
+    melee_root = tmp_path / "melee"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text(textwrap.dedent("""\
+        void fn_80000000(void)
+        {
+            int fighter_id;
+            OSReport("%f", (f32) fighter_id);
+        }
+    """))
+    pcdump = tmp_path / "sample.pcdump.txt"
+    pcdump.write_text("Starting function fn_80000000\n")
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/mn/sample",
+    )
+    monkeypatch.setattr(debug_cli, "_get_match_pct", lambda function, root: 94.44)
+    monkeypatch.setattr(
+        debug_cli,
+        "audit_function_casts",
+        lambda source, function: [
+            CastWarning(
+                line=4,
+                call_target="OSReport",
+                arg_index=1,
+                cast_type="f32",
+                inner_expr="fighter_id",
+                severity="high",
+                reason="integer local cast to float in variadic call",
+            )
+        ],
+    )
+    monkeypatch.setattr(debug_cli, "_build_and_match", lambda unit, function, root: 94.44)
+    monkeypatch.setattr(debug_cli, "_detect_frame_residual_hint", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        debug_cli,
+        "_resolve_pcdump_path",
+        lambda pcdump_arg, function, melee_root=None, *, require_fresh=False: pcdump,
+    )
+    monkeypatch.setattr(
+        debug_cli.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = runner.invoke(
+        app,
+        ["debug", "inspect", "diagnose", "fn_80000000", "--skip-decl-orders"],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    out = strip_ansi(result.stdout)
+    assert "(+0.00%, WIN)" not in out
+    assert "(+0.00%, false positive)" in out
+    assert "== VERDICT: NO FAST TRANSFORM FOUND ==" in out
+    assert "== VERDICT: WIN AVAILABLE ==" not in out
+
+
 def test_inspect_stuck_suppresses_decl_orders_when_no_candidates(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
