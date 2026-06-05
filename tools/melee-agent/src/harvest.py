@@ -10,12 +10,11 @@ import sys
 import tempfile
 from collections import Counter
 from dataclasses import asdict, dataclass, field, replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 
 from src.mwcc_debug.source_patch import extract_function, replace_function
-
 
 SCHEMA_VERSION = 1
 VALIDATED_MATCH_PERCENT = 100.0
@@ -45,6 +44,8 @@ BLOCKER_NO_VALIDATED_CANDIDATE = "no-validated-candidate"
 BLOCKER_APPLY_TRANSFER_FAILED = "apply-transfer-failed"
 BLOCKER_APPLY_VALIDATION_FAILED = "apply-validation-failed"
 BLOCKER_DECLARATION_APPLY_UNSUPPORTED = "declaration-apply-unsupported"
+RETAINED_SOURCE_STATUSES = {"applied", "improved", "validated"}
+NEGATIVE_EVIDENCE_STATUSES = {"blocked", "error", "no_match", "unsupported"}
 
 
 @dataclass
@@ -135,7 +136,7 @@ class MatchCheckerRunner(Protocol):
 
 def _utc_now() -> str:
     return (
-        datetime.now(timezone.utc)
+        datetime.now(UTC)
         .replace(microsecond=0)
         .isoformat()
         .replace("+00:00", "Z")
@@ -2497,6 +2498,132 @@ def summarize_ledger(results: list[HarvestResult | dict[str, Any]]) -> dict[str,
         "by_harness": dict(by_harness),
         "by_tier": dict(by_tier),
         "by_blocker": dict(by_blocker),
+    }
+
+
+def _sorted_counts(counter: Counter[str]) -> dict[str, int]:
+    return {key: counter[key] for key in sorted(counter)}
+
+
+def _sorted_strings(values: set[str]) -> list[str]:
+    return sorted(value for value in values if value)
+
+
+def _read_harvest_ledger(path: Path) -> dict[str, Any]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"harvest ledger must be a JSON object: {path}")
+    results = data.get("results")
+    if not isinstance(results, list):
+        raise ValueError(f"harvest ledger missing results array: {path}")
+    return data
+
+
+def _suggest_ledger_impact(
+    *,
+    applied_count: int,
+    retained_source_count: int,
+    negative_evidence_count: int,
+) -> str:
+    if applied_count > 0:
+        return "matched"
+    if retained_source_count > 0:
+        return "retained-source-improvement"
+    if negative_evidence_count > 0:
+        return "negative-evidence"
+    return "diagnostic-only"
+
+
+def summarize_harvest_ledgers(
+    ledger_paths: list[Path],
+    *,
+    repeated_blocker_threshold: int = 3,
+) -> dict[str, Any]:
+    """Summarize harvest ledger JSON without running builds or DB lookups."""
+    if not ledger_paths:
+        raise ValueError("at least one harvest ledger path is required")
+
+    by_status: Counter[str] = Counter()
+    by_harness: Counter[str] = Counter()
+    by_work_bucket: Counter[str] = Counter()
+    by_blocker: Counter[str] = Counter()
+    blocker_functions: dict[str, set[str]] = {}
+    blocker_harnesses: dict[str, set[str]] = {}
+    blocker_buckets: dict[str, set[str]] = {}
+    applied_functions: set[str] = set()
+    improved_functions: set[str] = set()
+    validated_functions: set[str] = set()
+    retained_source_functions: set[str] = set()
+    negative_evidence_functions: set[str] = set()
+
+    total_rows = 0
+    for path in ledger_paths:
+        ledger = _read_harvest_ledger(path)
+        ledger_bucket = str(ledger.get("work_bucket") or "")
+        for raw_result in ledger["results"]:
+            if not isinstance(raw_result, Mapping):
+                continue
+            total_rows += 1
+            function = str(raw_result.get("function") or "")
+            status = str(raw_result.get("status") or "unknown")
+            harness = str(raw_result.get("harness") or "unsupported")
+            work_bucket = str(raw_result.get("work_bucket") or ledger_bucket or "unknown")
+            blocker = raw_result.get("blocker")
+
+            by_status[status] += 1
+            by_harness[harness] += 1
+            by_work_bucket[work_bucket] += 1
+
+            if status == "applied" and function:
+                applied_functions.add(function)
+            elif status == "improved" and function:
+                improved_functions.add(function)
+            elif status == "validated" and function:
+                validated_functions.add(function)
+            if status in RETAINED_SOURCE_STATUSES and function:
+                retained_source_functions.add(function)
+            if status in NEGATIVE_EVIDENCE_STATUSES and function:
+                negative_evidence_functions.add(function)
+
+            if isinstance(blocker, str) and blocker:
+                by_blocker[blocker] += 1
+                blocker_functions.setdefault(blocker, set()).add(function)
+                blocker_harnesses.setdefault(blocker, set()).add(harness)
+                blocker_buckets.setdefault(blocker, set()).add(work_bucket)
+
+    repeated_blockers = []
+    threshold = max(repeated_blocker_threshold, 1)
+    for blocker, count in sorted(by_blocker.items()):
+        if count < threshold:
+            continue
+        repeated_blockers.append({
+            "blocker": blocker,
+            "count": count,
+            "functions": _sorted_strings(blocker_functions.get(blocker, set())),
+            "harnesses": _sorted_strings(blocker_harnesses.get(blocker, set())),
+            "work_buckets": _sorted_strings(blocker_buckets.get(blocker, set())),
+        })
+
+    return {
+        "ledger_count": len(ledger_paths),
+        "ledgers": [str(path) for path in ledger_paths],
+        "total_rows": total_rows,
+        "by_status": _sorted_counts(by_status),
+        "by_harness": _sorted_counts(by_harness),
+        "by_work_bucket": _sorted_counts(by_work_bucket),
+        "by_blocker": _sorted_counts(by_blocker),
+        "applied_functions": _sorted_strings(applied_functions),
+        "improved_functions": _sorted_strings(improved_functions),
+        "validated_functions": _sorted_strings(validated_functions),
+        "retained_source_functions": _sorted_strings(retained_source_functions),
+        "negative_evidence_functions": _sorted_strings(negative_evidence_functions),
+        "repeated_blocker_threshold": threshold,
+        "repeated_blockers": repeated_blockers,
+        "suggested_impact": _suggest_ledger_impact(
+            applied_count=len(applied_functions),
+            retained_source_count=len(retained_source_functions),
+            negative_evidence_count=len(negative_evidence_functions),
+        ),
     }
 
 

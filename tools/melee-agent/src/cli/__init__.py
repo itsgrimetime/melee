@@ -24,6 +24,7 @@ load_dotenv(Path(__file__).parent.parent.parent / ".env")
 import typer
 
 from ..mismatch_db.cli import mismatch_app
+from ..mwcc_debug.diff_capture import _run_with_process_group_timeout
 
 # Import common utilities for backward compatibility
 from ._common import (
@@ -52,7 +53,6 @@ from .struct import struct_app
 from .stub import stub_app
 from .sync import sync_app
 from .tracking import attempts_app
-from ..mwcc_debug.diff_capture import _run_with_process_group_timeout
 
 
 class ReportingTyper(typer.Typer):
@@ -170,7 +170,10 @@ def _forward_subprocess_output(proc: subprocess.CompletedProcess[str]) -> None:
 
 
 app.command("compilers")(list_compilers)
-app.command("harvest")(harvest_cmd)
+app.command(
+    "harvest",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)(harvest_cmd)
 
 
 def _build_failure_report_command(

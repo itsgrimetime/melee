@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+import glob
 import json
+import os
 from datetime import datetime
 from json import JSONDecodeError
 from pathlib import Path
 
 import typer
 
-from src.harvest import HarnessRunner, ValidatorRunner, run_harvest
+from src.harvest import (
+    HarnessRunner,
+    ValidatorRunner,
+    run_harvest,
+    summarize_harvest_ledgers,
+)
 
 from ._common import DEFAULT_MELEE_ROOT
-
 
 HARVEST_RUNNER: HarnessRunner | None = None
 HARVEST_VALIDATOR: ValidatorRunner | None = None
@@ -61,7 +67,59 @@ def _print_text_summary(ledger: dict, ledger_path: Path) -> None:
         typer.echo(f"blocker counts: {_format_counts(blocker_counts)}")
 
 
+def _expand_ledger_args(args: list[str]) -> list[Path]:
+    if not args:
+        raise ValueError("at least one harvest ledger path is required")
+    paths: list[Path] = []
+    for raw in args:
+        if raw.startswith("-"):
+            raise ValueError(f"unknown summarize option: {raw}")
+        expanded = os.path.expanduser(raw)
+        matches = sorted(glob.glob(expanded)) if glob.has_magic(expanded) else [expanded]
+        if not matches:
+            raise ValueError(f"harvest ledger not found: {raw}")
+        paths.extend(Path(match) for match in matches)
+    return paths
+
+
+def _format_items(values: object, *, limit: int = 8) -> str:
+    if not isinstance(values, list) or not values:
+        return "none"
+    head = [str(value) for value in values[:limit]]
+    suffix = "" if len(values) <= limit else f", +{len(values) - limit} more"
+    return ", ".join(head) + suffix
+
+
+def _print_harvest_roi_summary(summary: dict[str, object]) -> None:
+    typer.echo(f"ledgers: {summary.get('ledger_count', 0)}")
+    typer.echo(f"rows: total={summary.get('total_rows', 0)}")
+    typer.echo(f"status counts: {_format_counts(summary.get('by_status'))}")
+    typer.echo(f"bucket counts: {_format_counts(summary.get('by_work_bucket'))}")
+    typer.echo(f"harness counts: {_format_counts(summary.get('by_harness'))}")
+    blocker_counts = summary.get("by_blocker")
+    if isinstance(blocker_counts, dict) and blocker_counts:
+        typer.echo(f"blocker counts: {_format_counts(blocker_counts)}")
+    typer.echo(
+        "retained source functions: "
+        f"{_format_items(summary.get('retained_source_functions'))}"
+    )
+    repeated = summary.get("repeated_blockers")
+    if isinstance(repeated, list) and repeated:
+        typer.echo("repeated blockers:")
+        for blocker in repeated:
+            if not isinstance(blocker, dict):
+                continue
+            typer.echo(
+                "  "
+                f"{blocker.get('blocker')} "
+                f"count={blocker.get('count')} "
+                f"functions={_format_items(blocker.get('functions'), limit=5)}"
+            )
+    typer.echo(f"suggested impact: impact={summary.get('suggested_impact')}")
+
+
 def harvest_cmd(
+    ctx: typer.Context,
     work_bucket: str,
     apply: bool = typer.Option(False, "--apply"),
     compose: bool = typer.Option(False, "--compose"),
@@ -76,6 +134,24 @@ def harvest_cmd(
 ) -> None:
     """Run a registered harvest harness across a taxonomy work bucket."""
     repo_root = DEFAULT_MELEE_ROOT
+    if work_bucket == "summarize":
+        try:
+            ledger_paths = _expand_ledger_args(list(ctx.args))
+            summary = summarize_harvest_ledgers(ledger_paths)
+        except (OSError, JSONDecodeError, ValueError) as exc:
+            typer.echo(f"harvest summary input error: {exc}", err=True)
+            raise typer.Exit(2) from exc
+
+        if json_out:
+            typer.echo(json.dumps(summary, indent=2, sort_keys=True))
+            return
+        _print_harvest_roi_summary(summary)
+        return
+
+    if ctx.args:
+        typer.echo(f"unexpected harvest arguments: {' '.join(ctx.args)}", err=True)
+        raise typer.Exit(2)
+
     queue = _queue_path(repo_root, taxonomy_dir, work_bucket)
     if not queue.exists():
         typer.echo(f"harvest queue is missing: {queue}", err=True)

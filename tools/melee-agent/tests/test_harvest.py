@@ -6,12 +6,12 @@ import subprocess
 import textwrap
 from pathlib import Path
 
-import src.harvest as harvest_module
 from typer.testing import CliRunner
 
+import src.harvest as harvest_module
 from src.harvest import (
-    HarvestRequest,
     HarnessProcessResult,
+    HarvestRequest,
     best_validated_candidate,
     extract_candidate_score,
     load_queue_rows,
@@ -19,10 +19,10 @@ from src.harvest import (
     resolve_source_file,
     run_harvest,
     select_harness,
+    summarize_harvest_ledgers,
     summarize_ledger,
     write_ledger,
 )
-
 
 cli_runner = CliRunner()
 
@@ -406,6 +406,169 @@ def test_cli_invalid_target_map_exits_with_input_error(
     assert "harvest input error:" in result.output
     assert "Traceback" not in result.output
     assert "issue report" not in result.output
+
+
+def test_summarize_harvest_ledgers_rolls_up_statuses_and_repeated_blockers(
+    tmp_path: Path,
+) -> None:
+    ledger_a = tmp_path / "data-symbol.json"
+    ledger_b = tmp_path / "structural.json"
+    ledger_a.write_text(
+        json.dumps(
+            {
+                "work_bucket": "data-symbol-relocation",
+                "results": [
+                    {
+                        "function": "fn_a",
+                        "work_bucket": "data-symbol-relocation",
+                        "status": "applied",
+                        "harness": "name-magic-source-declarations",
+                        "blocker": None,
+                        "candidate_path": "/tmp/fn_a.c",
+                        "final_match_percent": 100.0,
+                    },
+                    {
+                        "function": "fn_b",
+                        "work_bucket": "data-symbol-relocation",
+                        "status": "improved",
+                        "harness": "name-magic-source-declarations",
+                        "blocker": None,
+                        "candidate_path": "/tmp/fn_b.c",
+                        "final_match_percent": 99.7,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    ledger_b.write_text(
+        json.dumps(
+            {
+                "work_bucket": "structural-reconstruction",
+                "results": [
+                    {
+                        "function": "fn_c",
+                        "work_bucket": "structural-reconstruction",
+                        "status": "no_match",
+                        "harness": "control-flow-shape-search",
+                        "blocker": "no-control-flow-shape-candidate",
+                    },
+                    {
+                        "function": "fn_d",
+                        "work_bucket": "structural-reconstruction",
+                        "status": "blocked",
+                        "harness": "control-flow-shape-search",
+                        "blocker": "no-control-flow-shape-candidate",
+                    },
+                    {
+                        "function": "fn_e",
+                        "work_bucket": "structural-reconstruction",
+                        "status": "no_match",
+                        "harness": "control-flow-shape-search",
+                        "blocker": "no-control-flow-shape-candidate",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = summarize_harvest_ledgers([ledger_a, ledger_b])
+
+    assert summary["ledger_count"] == 2
+    assert summary["total_rows"] == 5
+    assert summary["by_status"] == {
+        "applied": 1,
+        "blocked": 1,
+        "improved": 1,
+        "no_match": 2,
+    }
+    assert summary["by_work_bucket"] == {
+        "data-symbol-relocation": 2,
+        "structural-reconstruction": 3,
+    }
+    assert summary["retained_source_functions"] == ["fn_a", "fn_b"]
+    assert summary["repeated_blockers"] == [
+        {
+            "blocker": "no-control-flow-shape-candidate",
+            "count": 3,
+            "functions": ["fn_c", "fn_d", "fn_e"],
+            "harnesses": ["control-flow-shape-search"],
+            "work_buckets": ["structural-reconstruction"],
+        }
+    ]
+    assert summary["suggested_impact"] == "matched"
+
+
+def test_cli_harvest_summarize_outputs_json_without_running_harnesses(
+    tmp_path: Path,
+) -> None:
+    from src.cli import app
+
+    ledger = tmp_path / "ledger.json"
+    ledger.write_text(
+        json.dumps(
+            {
+                "work_bucket": "stack-local-layout",
+                "results": [
+                    {
+                        "function": "fn_a",
+                        "work_bucket": "stack-local-layout",
+                        "status": "validated",
+                        "harness": "frame-transform-search",
+                        "blocker": None,
+                        "candidate_path": "/tmp/fn_a.c",
+                    },
+                    {
+                        "function": "fn_b",
+                        "work_bucket": "stack-local-layout",
+                        "status": "no_match",
+                        "harness": "frame-transform-search",
+                        "blocker": "no-validated-candidate",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = cli_runner.invoke(app, ["harvest", "summarize", str(ledger), "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["ledger_count"] == 1
+    assert payload["by_status"] == {"no_match": 1, "validated": 1}
+    assert payload["retained_source_functions"] == ["fn_a"]
+    assert payload["suggested_impact"] == "retained-source-improvement"
+
+
+def test_cli_harvest_summarize_keeps_existing_harvest_command_shape(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from src.cli import app
+
+    repo_root, calls = _install_cli_harvest_fakes(monkeypatch, tmp_path)
+    taxonomy_dir = tmp_path / "queues"
+    _write_queue(taxonomy_dir / "stack-local-layout.tsv", [_row("demo_fn")])
+    ledger_path = tmp_path / "ledger.json"
+
+    result = cli_runner.invoke(
+        app,
+        [
+            "harvest",
+            "stack-local-layout",
+            "--taxonomy-dir",
+            str(taxonomy_dir),
+            "--ledger",
+            str(ledger_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls
+    assert ledger_path.exists()
+    assert str(repo_root) in json.loads(ledger_path.read_text())["results"][0]["source_file"]
 
 
 def test_load_queue_rows_filters_by_min_match_and_limit(tmp_path: Path) -> None:
