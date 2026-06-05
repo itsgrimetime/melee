@@ -8,7 +8,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 from rich.table import Table
@@ -20,6 +20,7 @@ from ._common import (
     load_completed_functions,
     save_completed_functions,
 )
+from src.mwcc_debug.source_patch import extract_function, replace_function
 
 audit_app = typer.Typer(help="Audit and recover tracked work")
 
@@ -113,6 +114,25 @@ class NetNewAuditItem:
             "upstream_file": self.upstream_file,
             "upstream_status": self.upstream_status,
         }
+
+
+@dataclass
+class RecoveryPathSnapshot:
+    """Original file contents for a path touched during recovery verification."""
+
+    path: Path
+    existed: bool
+    data: bytes | None
+
+
+@dataclass
+class RecoveryCheckdiffResult:
+    """Parsed result from tools/checkdiff.py for recovery verification."""
+
+    status: str
+    match: bool | None = None
+    match_percent: float | None = None
+    reason: str | None = None
 
 
 NET_NEW_BUCKETS = (
@@ -452,6 +472,377 @@ def _iter_recovery_match_commits(log_output: str) -> list[dict[str, str]]:
                 }
             )
     return commits
+
+
+def _tracked_worktree_status(melee_root: Path) -> str:
+    return _git_stdout(
+        melee_root,
+        ["status", "--porcelain", "--untracked-files=no"],
+    ) or ""
+
+
+def _normalize_recovery_source_path(
+    melee_root: Path,
+    source_path: str,
+) -> tuple[str, Path]:
+    raw = Path(source_path)
+    if raw.is_absolute():
+        try:
+            git_path = raw.resolve().relative_to(melee_root.resolve()).as_posix()
+        except ValueError:
+            git_path = raw.name
+        return git_path, raw
+
+    normalized = raw.as_posix()
+    if normalized.startswith("src/"):
+        return normalized, melee_root / normalized
+    git_path = f"src/{normalized}"
+    return git_path, melee_root / git_path
+
+
+def _candidate_source_at_commit(
+    melee_root: Path,
+    commit: str,
+    source_path: str,
+) -> str | None:
+    return _git_stdout(melee_root, ["show", f"{commit}:{source_path}"])
+
+
+def _snapshot_path(path: Path) -> RecoveryPathSnapshot:
+    if path.exists():
+        return RecoveryPathSnapshot(path=path, existed=True, data=path.read_bytes())
+    return RecoveryPathSnapshot(path=path, existed=False, data=None)
+
+
+def _restore_snapshots(snapshots: list[RecoveryPathSnapshot]) -> None:
+    for snapshot in snapshots:
+        if snapshot.existed:
+            snapshot.path.parent.mkdir(parents=True, exist_ok=True)
+            snapshot.path.write_bytes(snapshot.data or b"")
+        elif snapshot.path.exists():
+            snapshot.path.unlink()
+
+
+def _replace_include_asm_statement(
+    current_text: str,
+    function_name: str,
+    replacement: str,
+) -> str | None:
+    pattern = re.compile(
+        r"^[ \t]*INCLUDE_ASM\w*\s*\([^;]*?,\s*"
+        + re.escape(function_name)
+        + r"\s*\)[ \t]*;[ \t]*(?:\n|$)",
+        re.MULTILINE | re.DOTALL,
+    )
+    matches = list(pattern.finditer(current_text))
+    if len(matches) != 1:
+        return None
+    match = matches[0]
+    replacement_text = replacement.rstrip() + "\n"
+    return current_text[: match.start()] + replacement_text + current_text[match.end() :]
+
+
+def _replace_current_function(
+    current_text: str,
+    function_name: str,
+    replacement: str,
+) -> str | None:
+    patched = replace_function(current_text, function_name, replacement)
+    if patched is not None:
+        return patched
+    return _replace_include_asm_statement(current_text, function_name, replacement)
+
+
+def _apply_candidate_function(
+    melee_root: Path,
+    *,
+    commit: str,
+    source_path: str,
+    function_name: str,
+) -> tuple[bool, str | None]:
+    git_source_path, target_path = _normalize_recovery_source_path(
+        melee_root,
+        source_path,
+    )
+    candidate_text = _candidate_source_at_commit(
+        melee_root,
+        commit,
+        git_source_path,
+    )
+    if candidate_text is None:
+        return False, "no_candidate_function"
+
+    candidate_function = extract_function(candidate_text, function_name)
+    if candidate_function is None:
+        return False, "no_candidate_function"
+
+    try:
+        current_text = target_path.read_text(encoding="utf-8")
+    except OSError:
+        return False, "no_current_source"
+
+    patched = _replace_current_function(current_text, function_name, candidate_function)
+    if patched is None:
+        return False, "no_current_target"
+
+    target_path.write_text(patched, encoding="utf-8")
+    return True, None
+
+
+def _float_from_payload(payload: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        value = payload.get(key)
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _run_recovery_checkdiff(
+    melee_root: Path,
+    function_name: str,
+    timeout: float,
+) -> RecoveryCheckdiffResult:
+    try:
+        result = subprocess.run(
+            [
+                "python",
+                "tools/checkdiff.py",
+                function_name,
+                "--format",
+                "json",
+                "--no-fingerprint",
+            ],
+            cwd=melee_root,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return RecoveryCheckdiffResult(status="checkdiff_failed", reason="timeout")
+    except FileNotFoundError:
+        return RecoveryCheckdiffResult(status="checkdiff_failed", reason="python_not_found")
+
+    payload: dict[str, Any] | None = None
+    stdout = (result.stdout or "").strip()
+    if stdout:
+        try:
+            parsed = json.loads(stdout)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            payload = parsed
+
+    if payload is not None:
+        match_value = payload.get("match")
+        match = match_value if isinstance(match_value, bool) else None
+        match_percent = _float_from_payload(payload, "fuzzy_match_percent", "match_percent")
+        if result.returncode == 0 and match is True:
+            return RecoveryCheckdiffResult(
+                status="verified",
+                match=True,
+                match_percent=match_percent,
+            )
+        if match is False:
+            return RecoveryCheckdiffResult(
+                status="not_match",
+                match=False,
+                match_percent=match_percent,
+            )
+
+    return RecoveryCheckdiffResult(
+        status="checkdiff_failed",
+        reason=(result.stderr or result.stdout or f"exit {result.returncode}").strip(),
+    )
+
+
+def _verification_row(
+    *,
+    function_name: str,
+    commit: dict[str, str],
+    source_path: str,
+    status: str,
+    match: bool | None = None,
+    match_percent: float | None = None,
+    reason: str | None = None,
+) -> dict[str, object]:
+    row: dict[str, object] = {
+        "function": function_name,
+        "commit": commit["commit"],
+        "status": status,
+        "source_path": source_path,
+    }
+    if match is not None:
+        row["match"] = match
+    if match_percent is not None:
+        row["match_percent"] = match_percent
+    if reason:
+        row["reason"] = reason
+    return row
+
+
+def _verify_recovery_candidate(
+    melee_root: Path,
+    *,
+    function_name: str,
+    commit: dict[str, str],
+    source_path: str,
+    checkdiff_timeout: float,
+) -> dict[str, object]:
+    normalized_source_path, target_path = _normalize_recovery_source_path(
+        melee_root,
+        source_path,
+    )
+    snapshot = _snapshot_path(target_path)
+    before_status = _tracked_worktree_status(melee_root)
+    row: dict[str, object]
+
+    try:
+        applied, reason = _apply_candidate_function(
+            melee_root,
+            commit=commit["commit"],
+            source_path=source_path,
+            function_name=function_name,
+        )
+        if not applied:
+            row = _verification_row(
+                function_name=function_name,
+                commit=commit,
+                source_path=normalized_source_path,
+                status="apply_failed",
+                reason=reason,
+            )
+        else:
+            checkdiff = _run_recovery_checkdiff(
+                melee_root,
+                function_name,
+                checkdiff_timeout,
+            )
+            row = _verification_row(
+                function_name=function_name,
+                commit=commit,
+                source_path=normalized_source_path,
+                status=checkdiff.status,
+                match=checkdiff.match,
+                match_percent=checkdiff.match_percent,
+                reason=checkdiff.reason,
+            )
+    finally:
+        _restore_snapshots([snapshot])
+
+    after_status = _tracked_worktree_status(melee_root)
+    if after_status != before_status:
+        return _verification_row(
+            function_name=function_name,
+            commit=commit,
+            source_path=normalized_source_path,
+            status="apply_failed",
+            reason="worktree_status_changed",
+        )
+    return row
+
+
+def _apply_verified_recovery_candidate(
+    melee_root: Path,
+    *,
+    function_name: str,
+    commit: dict[str, str],
+    source_path: str,
+    checkdiff_timeout: float,
+) -> dict[str, object]:
+    normalized_source_path, target_path = _normalize_recovery_source_path(
+        melee_root,
+        source_path,
+    )
+    snapshot = _snapshot_path(target_path)
+    applied, reason = _apply_candidate_function(
+        melee_root,
+        commit=commit["commit"],
+        source_path=source_path,
+        function_name=function_name,
+    )
+    if not applied:
+        _restore_snapshots([snapshot])
+        return _verification_row(
+            function_name=function_name,
+            commit=commit,
+            source_path=normalized_source_path,
+            status="apply_failed",
+            reason=reason,
+        )
+
+    checkdiff = _run_recovery_checkdiff(melee_root, function_name, checkdiff_timeout)
+    if checkdiff.status == "verified" and checkdiff.match is True:
+        return _verification_row(
+            function_name=function_name,
+            commit=commit,
+            source_path=normalized_source_path,
+            status="applied",
+            match=True,
+            match_percent=checkdiff.match_percent,
+        )
+
+    _restore_snapshots([snapshot])
+    return _verification_row(
+        function_name=function_name,
+        commit=commit,
+        source_path=normalized_source_path,
+        status=checkdiff.status,
+        match=checkdiff.match,
+        match_percent=checkdiff.match_percent,
+        reason=checkdiff.reason,
+    )
+
+
+def _verify_recovery_candidates(
+    melee_root: Path,
+    candidates: list[dict[str, object]],
+    *,
+    apply: bool,
+    checkdiff_timeout: float,
+) -> list[dict[str, object]]:
+    verification: list[dict[str, object]] = []
+    for candidate in candidates:
+        function_name = str(candidate["function"])
+        source_path = str(candidate["file_path"])
+        recovered = False
+        for commit in candidate["commits"]:
+            assert isinstance(commit, dict)
+            if recovered:
+                verification.append(
+                    _verification_row(
+                        function_name=function_name,
+                        commit=commit,
+                        source_path=source_path,
+                        status="skipped_after_verified",
+                    )
+                )
+                continue
+
+            trial_row = _verify_recovery_candidate(
+                melee_root,
+                function_name=function_name,
+                commit=commit,
+                source_path=source_path,
+                checkdiff_timeout=checkdiff_timeout,
+            )
+            if apply and trial_row["status"] == "verified":
+                apply_row = _apply_verified_recovery_candidate(
+                    melee_root,
+                    function_name=function_name,
+                    commit=commit,
+                    source_path=source_path,
+                    checkdiff_timeout=checkdiff_timeout,
+                )
+                verification.append(apply_row)
+                recovered = apply_row["status"] == "applied"
+            else:
+                verification.append(trial_row)
+                recovered = trial_row["status"] == "verified"
+    return verification
 
 
 def _parse_function_from_commit_message(subject: str) -> list[tuple[str, float]]:
@@ -967,10 +1358,26 @@ def audit_recover_matches(
         typer.Option("--upstream", help="Upstream ref to exclude from git log"),
     ] = "upstream/master",
     limit: Annotated[int, typer.Option("--limit", "-n", help="Limit candidate functions shown")] = 100,
+    verify: Annotated[bool, typer.Option("--verify", help="Trial-apply candidates and run checkdiff")] = False,
+    apply: Annotated[bool, typer.Option("--apply", help="Leave verified recovered functions applied")] = False,
+    checkdiff_timeout: Annotated[
+        float,
+        typer.Option("--checkdiff-timeout", help="Seconds to wait for each checkdiff run"),
+    ] = 120.0,
     output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ) -> None:
     """Surface still-unmatched functions with stranded local `match:` commits."""
     from src.extractor import extract_unmatched_functions
+
+    verify_requested = verify or apply
+    if apply:
+        tracked_status = _tracked_worktree_status(melee_root)
+        if tracked_status.strip():
+            typer.echo(
+                "tracked worktree has local changes; commit or stash before --apply",
+                err=True,
+            )
+            raise typer.Exit(2)
 
     try:
         log_output = _git_match_log_for_recovery(melee_root, upstream=upstream)
@@ -1024,6 +1431,13 @@ def audit_recover_matches(
         },
         "candidates": limited,
     }
+    if verify_requested:
+        payload["verification"] = _verify_recovery_candidates(
+            melee_root,
+            limited,
+            apply=apply,
+            checkdiff_timeout=checkdiff_timeout,
+        )
     if output_json:
         print(json.dumps(payload, indent=2))
         return
@@ -1042,6 +1456,22 @@ def audit_recover_matches(
             row["file_path"],
         )
     console.print(table)
+    if verify_requested:
+        verification_table = Table(title="Verification")
+        verification_table.add_column("Function", style="cyan")
+        verification_table.add_column("Status")
+        verification_table.add_column("Match %", justify="right")
+        verification_table.add_column("Commit", style="dim")
+        for row in payload["verification"]:
+            assert isinstance(row, dict)
+            match_percent = row.get("match_percent")
+            verification_table.add_row(
+                str(row["function"]),
+                str(row["status"]),
+                "-" if match_percent is None else f"{float(match_percent):.2f}",
+                str(row["commit"])[:12],
+            )
+        console.print(verification_table)
 
 
 # NOTE: The following commands have been moved to 'melee-agent state':
