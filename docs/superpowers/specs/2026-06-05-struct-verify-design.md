@@ -1,8 +1,13 @@
 # struct verify — struct-offset discrepancy detection (design + plan)
 
 Date: 2026-06-05
-Status: READY — independent Codex review complete (2 passes). Pass 1 found 2
-blockers + 4 concerns; pass 2 verdict PROCEED-WITH-CHANGES, all folded in.
+Status: READY — Codex-reviewed (2 passes; PROCEED-WITH-CHANGES, folded in) AND
+premise-validated by prototype. Prototype proved the cascade: 2 struct fixes →
++2 byte-exact THP matches (commit bb81aecd2), 0 regressions; surfaced the
+expected false positives (low-offset dup-body) confirming the confidence model +
+dup-body guard are necessary; and a Phase-1 spike PROVED the MWCC `offsetof`-probe
+resolver (replacing DWARF — see §4c). Also: objdiff/report.json disagreed with
+dtk/checkdiff on byte-exactness (tool must trust dtk).
 Author: Claude (Opus 4.8), reviewed by Codex (codex-cli 0.135.0)
 
 ## 1. Problem & evidence
@@ -128,19 +133,32 @@ pure function `resolve(struct_type, abs_offset) -> {path, type, size,
 elem_index}` (recursive into nested structs, array-aware, e.g.
 `0x864 → components[1].predDC`). `struct offset` becomes a thin CLI over it.
 
-**Strategy — compile-derived, NOT hand-parsed (Codex confirmation item 1b).**
-`thp.h` pulls in `dolphin/os.h` → `dolphin/types.h`, bringing `ATTRIBUTE_ALIGN`,
+**Strategy — MWCC `offsetof`-probe (PROVEN 2026-06-05), not DWARF/regex.**
+`thp.h` pulls in `dolphin/os.h` → `dolphin/types.h` with `ATTRIBUTE_ALIGN`,
 primitive typedefs, MWERKS absolute-address decls and a deep include tree
-(`thp.h:4`, `os.h:4`, `types.h:5-13,25`). Regex/naive C parsing cannot handle
-this and would also have to re-derive the GameCube/MWCC ABI alignment exactly.
-Instead, **derive the layout from the compiler**: compile a tiny probe TU
-(`#include` the header; declare one instance of the struct) with the project's
-MWCC + `-g`, then read the struct's member offsets from DWARF. This inherits the
-exact ABI layout and resolves all includes/macros/typedefs for free. The mwcc
-debug-build path already exists (`debug dump` / `mwcc_debug`); reuse it.
-Acceptance gate = the Phase-0 golden offsets. Fallback if DWARF is impractical:
-preprocess (`mwcceppc -E`) then parse the flattened struct — still ABI-aware via
-a layout pass, never naive regex on raw headers.
+(`thp.h:4`, `os.h:4`, `types.h:5-13,25`). Regex/naive parsing can't handle this,
+and host-compiler `offsetof` is wrong (GC pointers are 4 bytes vs 8 on host;
+`THPFileInfo` is pointer-heavy). So **let MWCC compute the layout**: generate a
+probe TU that `#include`s the header and emits `offsetof(T, field-path)` for each
+field, compile it with the project's MWCC and the TU's real layout flags
+(`-proc gekko -align powerpc -enum int` etc.), and read the offsets back. The
+compiler resolves every include/macro/typedef and the exact GC/EABI ABI — no
+DWARF, no hand-rolled alignment pass.
+
+Verified: a probe asserting `predDC@0x83e`, `RST@0x900`, `dLC@0x8f0`,
+`decompressedY@0x8ec`, `validHuffmanTabs@0x78`, … compiled clean under MWCC
+GC/1.2.5, independently cross-confirming the THP fix. Two read-out forms:
+- **discovery** — emit `unsigned long t[] = { offsetof(...), ... };` and read the
+  initialized values from the probe `.o` (one compile yields the full map);
+- **verify** — `char a[offsetof(...) == EXPECTED ? 1 : -1];` compiles iff the
+  offset is right, giving a **cheap pre-rebuild layout check** (a primitive the
+  DWARF plan lacked; lets the tool confirm a proposed repair before a full
+  ninja+checkdiff cycle).
+
+Field-NAME enumeration still parses the struct defs (names + nested struct/array
+types only, to build the `field-path` list — the compiler does all the math, so
+no ABI/layout logic in the parser). DWARF remains a fallback if a header can't be
+isolated into a probe TU.
 
 ## 5. Implementation plan (phased)
 
@@ -157,7 +175,10 @@ cluster (the repeated `stw r0,0x0(r28)`) → expect no mispaired discrepancy;
 (c) known-field-vs-known-field → expect `ambiguous`, not a silent fix.
 
 **Phase 1 — layout resolver (4c) + tests.** Prerequisite for everything else.
-Golden: `0x900→RST`, `0x8fc→nMCU`, `0x864→components[1].predDC`.
+Implement as the MWCC `offsetof`-probe (proven), with both read-out forms
+(discovery array + verify-assertion). Golden: `0x900→RST`, `0x8fc→nMCU`,
+`0x864→components[1].predDC`. Reuse the build's per-TU cflags (parse from
+`build.ninja`) so the probe matches the target's ABI/enum/align flags exactly.
 
 **Phase 2 — checkdiff extension (4a) + tests.** `_paired_struct_offset_delta`
 (unit: offset-only, same/diff base, r1/r2/r13 exclusion, `+2` halfword reloc).
