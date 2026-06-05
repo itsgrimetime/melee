@@ -5663,6 +5663,18 @@ def remote_list() -> None:
         )
 
 
+def _remote_score_with_iteration(
+    score: float | None,
+    iteration: int | None,
+    *,
+    compact: bool = False,
+) -> str:
+    if score is None or iteration is None:
+        return "-"
+    separator = "@" if compact else " @iter"
+    return f"{permuter_remote.format_score(score)}{separator}{iteration}"
+
+
 @remote_app.command(name="status")
 def remote_status(
     job_id: Annotated[str, typer.Argument(help="Remote permuter job id.")],
@@ -5711,7 +5723,26 @@ def remote_status(
         idle_h = None
         detail = f" - {log_status.detail}" if log_status.detail else ""
         print(f"log idle: unknown{detail}")
-    if log_status.best_score:
+    if log_status.global_best_score is not None:
+        print(
+            "best (global-min): "
+            + _remote_score_with_iteration(
+                log_status.global_best_score,
+                log_status.global_best_iteration,
+            )
+        )
+        if log_status.latest_score is not None:
+            print(
+                "latest: "
+                + _remote_score_with_iteration(
+                    log_status.latest_score,
+                    log_status.latest_iteration,
+                )
+            )
+        print(f"match: {'yes' if log_status.match_found else 'no'}")
+        print(f"output candidate: {'yes' if log_status.output_candidate_saved else 'no'}")
+        print(f"verdict: {log_status.verdict}")
+    elif log_status.best_score:
         print(f"best score: {log_status.best_score}")
     reasons: list[str] = []
     if status.state == "active":
@@ -5728,6 +5759,46 @@ def remote_status(
         print("recommendation: stopped")
     if status.detail:
         typer.echo(status.detail, err=True)
+
+
+@remote_app.command(name="triage")
+def remote_triage() -> None:
+    """Summarize all local remote permuter jobs for convergence triage."""
+    try:
+        jobs = permuter_remote.list_jobs(permuter_remote.JOBS_DIR)
+    except permuter_remote.RemoteJobError as exc:
+        _remote_error(exc)
+
+    print("fn\tjob\tstate\titers\tglobal-min\tlatest\tmatch\toutput\tverdict")
+    for job in jobs:
+        status = permuter_remote.status_job(job)
+        log_status = permuter_remote.remote_log_status(job)
+        iters = (
+            str(log_status.latest_iteration)
+            if log_status.latest_iteration is not None
+            else str(log_status.iteration_count) if log_status.iteration_count else "-"
+        )
+        global_min = _remote_score_with_iteration(
+            log_status.global_best_score,
+            log_status.global_best_iteration,
+            compact=True,
+        )
+        latest = _remote_score_with_iteration(
+            log_status.latest_score,
+            log_status.latest_iteration,
+            compact=True,
+        )
+        print(
+            f"{job.function}\t{job.job_id}\t{status.state}\t{iters}\t"
+            f"{global_min}\t{latest}\t"
+            f"{'yes' if log_status.match_found else 'no'}\t"
+            f"{'yes' if log_status.output_candidate_saved else 'no'}\t"
+            f"{log_status.verdict}"
+        )
+        if status.detail:
+            typer.echo(f"{job.job_id}: {status.detail}", err=True)
+        if log_status.detail:
+            typer.echo(f"{job.job_id}: {log_status.detail}", err=True)
 
 
 @remote_app.command(name="fetch")

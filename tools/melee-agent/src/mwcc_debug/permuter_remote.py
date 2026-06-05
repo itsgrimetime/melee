@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import posixpath
 import re
@@ -81,11 +82,35 @@ class RemoteStatus:
 
 
 @dataclass(frozen=True)
+class PermuterLogSummary:
+    latest_iteration: int | None = None
+    latest_score: float | None = None
+    latest_errors: int | None = None
+    global_best_iteration: int | None = None
+    global_best_score: float | None = None
+    global_best_errors: int | None = None
+    iteration_count: int = 0
+    match_found: bool = False
+    output_candidate_saved: bool = False
+    verdict: str = "unknown"
+
+
+@dataclass(frozen=True)
 class RemoteLogStatus:
     exists: bool
     modified_at: datetime | None = None
     best_score: str | None = None
     detail: str = ""
+    latest_iteration: int | None = None
+    latest_score: float | None = None
+    latest_errors: int | None = None
+    global_best_iteration: int | None = None
+    global_best_score: float | None = None
+    global_best_errors: int | None = None
+    iteration_count: int = 0
+    match_found: bool = False
+    output_candidate_saved: bool = False
+    verdict: str = "unknown"
 
 
 @dataclass(frozen=True)
@@ -298,23 +323,145 @@ def utcnow() -> datetime:
     return datetime.utcnow().replace(microsecond=0)
 
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_ITERATION_SCORE_RE = re.compile(
+    r"\biteration\s+(?P<iteration>\d+),\s*"
+    r"(?P<errors>\d+)\s+errors?,\s*"
+    r"score\s*=\s*(?P<score>inf|[-+]?\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+_OUTPUT_CANDIDATE_RE = re.compile(r"\b(?:wrote to .*|[\w./-]*/)?output-[^\s/]+", re.IGNORECASE)
+
+
+def format_score(score: float | None) -> str:
+    """Format decomp-permuter scores compactly for status output."""
+    if score is None:
+        return "-"
+    if math.isinf(score):
+        return "inf"
+    numeric = float(score)
+    if numeric.is_integer():
+        return str(int(numeric))
+    return f"{numeric:g}"
+
+
+def _parse_score(raw_score: str) -> float:
+    if raw_score.lower() == "inf":
+        return math.inf
+    return float(raw_score)
+
+
+def _classify_log_summary(
+    *,
+    match_found: bool,
+    iteration_count: int,
+    global_best_score: float | None,
+    latest_score: float | None,
+    record_improvements: int,
+    best_occurrences: int,
+) -> str:
+    if match_found:
+        return "match"
+    if iteration_count == 0 or global_best_score is None:
+        return "unknown"
+    if math.isinf(global_best_score):
+        return "unknown"
+    if record_improvements > 0:
+        return "descending"
+    if (
+        (latest_score is not None and latest_score == global_best_score)
+        or best_occurrences > 1
+    ):
+        return "plateau"
+    return "ceiling"
+
+
+def parse_permuter_log_summary(
+    text: str,
+    *,
+    has_output_candidate: bool = False,
+) -> PermuterLogSummary:
+    """Parse a full decomp-permuter log into global-min/latest status."""
+    normalized = _ANSI_RE.sub("", text).replace("\r", "\n").replace("\b", "")
+    latest_iteration: int | None = None
+    latest_score: float | None = None
+    latest_errors: int | None = None
+    global_best_iteration: int | None = None
+    global_best_score: float | None = None
+    global_best_errors: int | None = None
+    iteration_count = 0
+    match_found = False
+    record_improvements = 0
+    best_occurrences = 0
+
+    for match in _ITERATION_SCORE_RE.finditer(normalized):
+        iteration_count += 1
+        iteration = int(match.group("iteration"))
+        errors = int(match.group("errors"))
+        score = _parse_score(match.group("score"))
+        latest_iteration = iteration
+        latest_score = score
+        latest_errors = errors
+        if score == 0:
+            match_found = True
+        if global_best_score is None or score < global_best_score:
+            if global_best_score is not None:
+                record_improvements += 1
+            global_best_iteration = iteration
+            global_best_score = score
+            global_best_errors = errors
+            best_occurrences = 1
+        elif score == global_best_score:
+            best_occurrences += 1
+
+    output_candidate_saved = (
+        has_output_candidate
+        or bool(_OUTPUT_CANDIDATE_RE.search(normalized))
+    )
+    verdict = _classify_log_summary(
+        match_found=match_found,
+        iteration_count=iteration_count,
+        global_best_score=global_best_score,
+        latest_score=latest_score,
+        record_improvements=record_improvements,
+        best_occurrences=best_occurrences,
+    )
+    return PermuterLogSummary(
+        latest_iteration=latest_iteration,
+        latest_score=latest_score,
+        latest_errors=latest_errors,
+        global_best_iteration=global_best_iteration,
+        global_best_score=global_best_score,
+        global_best_errors=global_best_errors,
+        iteration_count=iteration_count,
+        match_found=match_found,
+        output_candidate_saved=output_candidate_saved,
+        verdict=verdict,
+    )
+
+
 def remote_log_status(
     job: RemoteJob,
     runner: Callable[..., CommandResult] = run_command,
 ) -> RemoteLogStatus:
-    """Read bounded remote log metadata for stale-job decisions."""
+    """Read remote log metadata and full-log score summary for a job."""
     log_path = f"{job.remote_run_dir}/permuter.log"
+    perm_path = job.remote_perm_dir
     script = (
         f"log={shlex.quote(log_path)}; "
+        f"perm={shlex.quote(perm_path)}; "
         "if [ ! -f \"$log\" ]; then printf 'exists\t0\n'; exit 0; fi; "
         "printf 'exists\t1\n'; "
         "printf 'mtime\t'; "
         "(stat -c %Y \"$log\" 2>/dev/null || stat -f %m \"$log\" 2>/dev/null || printf 0); "
         "printf '\n'; "
-        "printf 'best\t'; "
-        "tail -c 65536 \"$log\" | tr '\r' '\n' | "
-        "grep -E 'best|score|match' | tail -n 1 | head -c 240; "
-        "printf '\n'"
+        "printf 'has_output\t'; "
+        "if [ -f \"$perm/best.c\" ] || "
+        "find \"$perm\" -maxdepth 1 -type d -name 'output-*' -print -quit 2>/dev/null | "
+        "grep -q .; then printf '1'; else printf '0'; fi; "
+        "printf '\n'; "
+        "printf 'log_begin\n'; "
+        "cat \"$log\""
     )
     result = runner(["ssh", job.ssh, _remote_sh(script)], check=False)
     if result.returncode != 0:
@@ -322,8 +469,9 @@ def remote_log_status(
             exists=False,
             detail=result.stderr.strip() or result.stdout.strip(),
         )
+    header, sep, log_text = result.stdout.partition("log_begin\n")
     fields: dict[str, str] = {}
-    for line in result.stdout.splitlines():
+    for line in header.splitlines():
         if "\t" not in line:
             continue
         key, value = line.split("\t", 1)
@@ -336,8 +484,33 @@ def remote_log_status(
             modified_at = datetime.fromtimestamp(int(raw_mtime))
         except ValueError:
             modified_at = None
-    best = fields.get("best") or None
-    return RemoteLogStatus(exists=exists, modified_at=modified_at, best_score=best)
+    if not exists:
+        return RemoteLogStatus(exists=False, modified_at=modified_at)
+    summary = parse_permuter_log_summary(
+        log_text if sep else "",
+        has_output_candidate=fields.get("has_output") == "1",
+    )
+    best = None
+    if summary.global_best_score is not None:
+        best = (
+            f"{format_score(summary.global_best_score)} "
+            f"@iter{summary.global_best_iteration}"
+        )
+    return RemoteLogStatus(
+        exists=True,
+        modified_at=modified_at,
+        best_score=best,
+        latest_iteration=summary.latest_iteration,
+        latest_score=summary.latest_score,
+        latest_errors=summary.latest_errors,
+        global_best_iteration=summary.global_best_iteration,
+        global_best_score=summary.global_best_score,
+        global_best_errors=summary.global_best_errors,
+        iteration_count=summary.iteration_count,
+        match_found=summary.match_found,
+        output_candidate_saved=summary.output_candidate_saved,
+        verdict=summary.verdict,
+    )
 
 
 def sanitize_log_tail(text: str, *, lines: int) -> str:

@@ -85,6 +85,7 @@ def test_representative_grouped_command_help_works() -> None:
         ["debug", "permute", "remote", "doctor", "--help"],
         ["debug", "permute", "remote", "submit", "--help"],
         ["debug", "permute", "remote", "fetch", "--help"],
+        ["debug", "permute", "remote", "triage", "--help"],
         ["debug", "util", "name-magic", "--help"],
     ]
     for command in commands:

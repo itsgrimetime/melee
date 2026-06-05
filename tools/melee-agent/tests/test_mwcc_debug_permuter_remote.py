@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -220,6 +221,182 @@ def test_remote_status_reports_stale_age_and_cleanup_guidance(
     assert "best score: 99.71%" in result.stdout
     assert "recommendation: stop" in result.stdout
     assert f"melee-agent debug permute remote stop {job.job_id}" in result.stdout
+
+
+def test_parse_permuter_log_summary_uses_global_min_not_latest() -> None:
+    summary = pr.parse_permuter_log_summary(
+        (
+            "[fn_80169900] base score = 1000\n"
+            "iteration 5726, 1 errors, score = 20\r"
+            "iteration 7679, 1 errors, score = 1390\r"
+            "wrote to remote-runs/job/nonmatchings/fn_80169900/output-20-1\n"
+        )
+    )
+
+    assert summary.global_best_score == 20
+    assert summary.global_best_iteration == 5726
+    assert summary.latest_score == 1390
+    assert summary.latest_iteration == 7679
+    assert summary.match_found is False
+    assert summary.output_candidate_saved is True
+
+
+def test_parse_permuter_log_summary_detects_zero_match() -> None:
+    summary = pr.parse_permuter_log_summary(
+        (
+            "iteration 10, 1 errors, score = 50\r"
+            "iteration 12, 0 errors, score = 0\n"
+            "wrote to remote-runs/job/nonmatchings/fn_8001EBF0/output-0-0\n"
+        )
+    )
+
+    assert summary.global_best_score == 0
+    assert summary.global_best_iteration == 12
+    assert summary.match_found is True
+    assert summary.output_candidate_saved is True
+    assert summary.verdict == "match"
+
+
+def test_remote_log_status_reads_full_log_summary(tmp_path: Path) -> None:
+    job = _sample_job(tmp_path)
+    scripts: list[str] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        scripts.append(argv[2])
+        return pr.CommandResult(
+            returncode=0,
+            stdout=(
+                "exists\t1\n"
+                "mtime\t1770000000\n"
+                "has_output\t1\n"
+                "log_begin\n"
+                "iteration 1, 1 errors, score = 50\r"
+                "iteration 2, 1 errors, score = 1155\r"
+                "iteration 3, 1 errors, score = 20\r"
+                "iteration 4, 1 errors, score = 1390\r"
+            ),
+            stderr="",
+        )
+
+    status = pr.remote_log_status(job, runner=fake_runner)
+
+    assert "cat \"$log\"" in scripts[0]
+    assert "tail -c 65536" not in scripts[0]
+    assert status.exists is True
+    assert status.global_best_score == 20
+    assert status.global_best_iteration == 3
+    assert status.latest_score == 1390
+    assert status.latest_iteration == 4
+    assert status.output_candidate_saved is True
+
+
+def test_remote_status_prints_global_min_latest_match_and_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+
+    def fake_read_job(job_id: str, jobs_dir: Path = pr.JOBS_DIR) -> pr.RemoteJob:
+        assert job_id == job.job_id
+        return job
+
+    def fake_status_job(loaded_job: pr.RemoteJob) -> pr.RemoteStatus:
+        assert loaded_job == job
+        return pr.RemoteStatus(job_id=job.job_id, state="active")
+
+    def fake_remote_log_status(loaded_job: pr.RemoteJob) -> pr.RemoteLogStatus:
+        assert loaded_job == job
+        return pr.RemoteLogStatus(
+            exists=True,
+            modified_at=pr.parse_timestamp("2026-05-27T15:00:00"),
+            global_best_score=20,
+            global_best_iteration=5726,
+            latest_score=1390,
+            latest_iteration=7679,
+            match_found=False,
+            output_candidate_saved=True,
+            verdict="ceiling",
+        )
+
+    monkeypatch.setattr(pr, "read_job", fake_read_job)
+    monkeypatch.setattr(pr, "status_job", fake_status_job)
+    monkeypatch.setattr(pr, "remote_log_status", fake_remote_log_status)
+    monkeypatch.setattr(pr, "utcnow", lambda: pr.parse_timestamp("2026-05-27T15:30:00"))
+
+    result = CliRunner().invoke(
+        app,
+        ["debug", "permute", "remote", "status", job.job_id],
+    )
+
+    assert result.exit_code == 0
+    assert "best (global-min): 20 @iter5726" in result.stdout
+    assert "latest: 1390 @iter7679" in result.stdout
+    assert "match: no" in result.stdout
+    assert "output candidate: yes" in result.stdout
+    assert "verdict: ceiling" in result.stdout
+
+
+def test_remote_triage_summarizes_local_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    first = _sample_job(tmp_path)
+    second = replace(
+        first,
+        job_id="fn_80000010-coder64-20260525-143012",
+        function="fn_80000010",
+    )
+
+    def fake_list_jobs(jobs_dir: Path = pr.JOBS_DIR) -> list[pr.RemoteJob]:
+        assert jobs_dir == pr.JOBS_DIR
+        return [first, second]
+
+    def fake_status_job(job: pr.RemoteJob) -> pr.RemoteStatus:
+        return pr.RemoteStatus(job_id=job.job_id, state="active")
+
+    def fake_remote_log_status(job: pr.RemoteJob) -> pr.RemoteLogStatus:
+        if job == first:
+            return pr.RemoteLogStatus(
+                exists=True,
+                global_best_score=20,
+                global_best_iteration=5726,
+                latest_score=1390,
+                latest_iteration=7679,
+                match_found=False,
+                output_candidate_saved=True,
+                verdict="ceiling",
+            )
+        return pr.RemoteLogStatus(
+            exists=True,
+            global_best_score=0,
+            global_best_iteration=22,
+            latest_score=0,
+            latest_iteration=22,
+            match_found=True,
+            output_candidate_saved=True,
+            verdict="match",
+        )
+
+    monkeypatch.setattr(pr, "list_jobs", fake_list_jobs)
+    monkeypatch.setattr(pr, "status_job", fake_status_job)
+    monkeypatch.setattr(pr, "remote_log_status", fake_remote_log_status)
+
+    result = CliRunner().invoke(app, ["debug", "permute", "remote", "triage"])
+
+    assert result.exit_code == 0
+    assert "fn\tjob\tstate\titers\tglobal-min\tlatest\tmatch\toutput\tverdict" in result.stdout
+    assert "fn_80000000" in result.stdout
+    assert "20@5726" in result.stdout
+    assert "1390@7679" in result.stdout
+    assert "no\tyes\tceiling" in result.stdout
+    assert "fn_80000010" in result.stdout
+    assert "0@22" in result.stdout
+    assert "yes\tyes\tmatch" in result.stdout
 
 
 def test_permute_local_orphans_cli_reports_uninterruptible_wibo(
