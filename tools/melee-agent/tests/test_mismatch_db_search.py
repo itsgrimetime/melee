@@ -120,3 +120,77 @@ def test_register_keyword_stale_pattern_is_corrected(tmp_path):
         ]
     )
     assert "MWCC respects" not in stale_text
+
+
+def test_cmd_buffer_and_for_condition_reload_patterns_are_searchable(tmp_path):
+    db = PatternDB(init_db(tmp_path / "patterns.db"))
+    load_samples(db)
+
+    cmd_buffer_results = db.search_fulltext(
+        "fixed-size scratch array no zero initialization"
+    )
+    reload_results = db.search_fulltext(
+        "for-condition comma assignment reload coalescing"
+    )
+    inverse_results = db.search_fulltext(
+        "inverse CSE rematerialize non-volatile global read"
+    )
+
+    assert "sparse-scratch-array-no-zero-init" in {
+        p.id for p in cmd_buffer_results
+    }
+    assert "loop-field-reload-comma-assignment" in {
+        p.id for p in reload_results
+    }
+    assert "inverse-cse-rematerialized-global-read" in {
+        p.id for p in inverse_results
+    }
+
+
+def test_new_mismatch_patterns_are_migrated_into_existing_db(tmp_path):
+    db = PatternDB(init_db(tmp_path / "patterns.db"))
+
+    cmd_buffer_results = db.search_fulltext(
+        "fixed-size scratch array no zero initialization"
+    )
+    reload_results = db.search_fulltext(
+        "for-condition comma assignment reload coalescing"
+    )
+    inverse_results = db.search_fulltext(
+        "inverse CSE rematerialize non-volatile global read"
+    )
+
+    assert "sparse-scratch-array-no-zero-init" in {
+        p.id for p in cmd_buffer_results
+    }
+    assert "loop-field-reload-comma-assignment" in {
+        p.id for p in reload_results
+    }
+    assert "inverse-cse-rematerialized-global-read" in {
+        p.id for p in inverse_results
+    }
+
+
+def test_migrated_patterns_preserve_recorded_success_on_reopen(tmp_path):
+    db_path = tmp_path / "patterns.db"
+    db = PatternDB(init_db(db_path))
+    db.record_success("sparse-scratch-array-no-zero-init", "fn_80000000")
+
+    reopened = PatternDB(init_db(db_path))
+    pattern = reopened.get("sparse-scratch-array-no-zero-init")
+
+    assert pattern is not None
+    assert [entry.function for entry in pattern.provenance.helped_match] == [
+        "fn_80000000"
+    ]
+
+
+def test_load_samples_keeps_rich_payload_for_migrated_patterns(tmp_path):
+    db = PatternDB(init_db(tmp_path / "patterns.db"))
+    load_samples(db)
+
+    pattern = db.get("sparse-scratch-array-no-zero-init")
+
+    assert pattern is not None
+    assert pattern.examples[0].before is not None
+    assert pattern.examples[0].after is not None

@@ -607,6 +607,144 @@ typedef struct THPComponent {
         categories=["calling-conv", "type", "control-flow"],
         notes="Accept only localized direct-vs-indirect call diffs. If register allocation differences sprawl beyond the call, treat it as compound.",
     ),
+    Pattern(
+        id="sparse-scratch-array-no-zero-init",
+        name="Sparse Scratch Array Without Zero Initialization",
+        description="A fixed-size scratch array passed to a type-dispatched consumer should be declared bare, not initialized with `= {0}`, when the target only stores selected fields.",
+        root_cause="m2c often reconstructs command buffers as zero-initialized records, but MWCC emits a separate zeroing block and then overwrites fields. The original source writes only the fields required by the command type, leaving omitted fields dirty.",
+        signals=[
+            Signal(
+                type="instruction_sequence",
+                data={"sequence": ["stw", "stw", "bl"]},
+                description="Sparse stores into a stack array immediately before a consumer call",
+            ),
+            Signal(
+                type="code_smell",
+                data={"pattern": "s32 cmd[N] = {0}"},
+                description="Zero-initialized fixed-size local command buffer",
+            ),
+        ],
+        examples=[
+            Example(
+                function="fn_803B0E9C",
+                context="hsd_3AA7.c command buffer builder, type-dispatched through fn_803AC168",
+                before="""\
+s32 cmd[9] = { 0 };
+cmd[0] = type;
+cmd[1] = arg1;
+cmd[2] = arg2;
+fn_803AC168(cmd);""",
+                after="""\
+s32 cmd[9];
+cmd[0] = type;
+cmd[1] = arg1;
+cmd[2] = arg2;
+fn_803AC168(cmd);""",
+            ),
+            Example(
+                function="fn_803ADF90",
+                context="Same sparse scratch array class; field set varies by command type",
+            ),
+            Example(
+                function="fn_803AD16C",
+                context="Opcode similarity improved after removing zero initialization",
+            ),
+        ],
+        fixes=[
+            Fix(
+                description="Drop `= {0}`, declare the fixed-size array bare, and write exactly the fields the target stores, including explicit zero stores that are present in the target.",
+                before="s32 cmd[9] = { 0 };",
+                after="s32 cmd[9];",
+                success_rate=0.75,
+            ),
+        ],
+        provenance=Provenance(
+            discovered_from=[
+                ProvenanceEntry(function="fn_803B0E9C", date="2026-06-04"),
+                ProvenanceEntry(function="fn_803ADF90", date="2026-06-04"),
+                ProvenanceEntry(function="fn_803AD16C", date="2026-06-04"),
+            ],
+        ),
+        opcodes=["stw", "bl"],
+        categories=["stack", "array", "source-transform"],
+        notes="Use this only when checkdiff says current is larger. If expected is larger or an inline boundary dominates, removing instructions can falsely raise fuzzy match while collapsing opcode similarity.",
+    ),
+    Pattern(
+        id="loop-field-reload-comma-assignment",
+        name="Loop Field Reload Via For-Condition Comma Assignment",
+        description="A struct field reloaded every loop iteration and reused in the loop body can be modeled with a for-condition comma assignment so one reload feeds both condition and body, coalescing the uses into one callee-save.",
+        root_cause="Plain C that reads `state->field` in both the condition and body can make MWCC emit two reloads. Assigning a local in the for condition, such as `for (i = 0; size = state->x8, i < bound / size; i++)`, creates the target's single per-iteration reload and callee-save reuse.",
+        signals=[
+            Signal(
+                type="instruction_sequence",
+                data={"sequence": ["lwz", "divw", "mullw", "bl"]},
+                description="One field reload reused for loop bound, offset math, and callee argument",
+            ),
+        ],
+        examples=[
+            Example(
+                function="fn_803ACD58",
+                context="CardState loop reloads state->x8 each iteration and reuses it for CARDRead size",
+                before="""\
+for (i = 0; i < state->x4 / state->x8; i++) {
+    offset = i * state->x8;
+    CARDRead(file, dst, state->x8, offset);
+}""",
+                after="""\
+for (i = 0; size = state->x8, i < state->x4 / size; i++) {
+    offset = i * size;
+    CARDRead(file, dst, size, offset);
+}""",
+            ),
+        ],
+        fixes=[
+            Fix(
+                description="Introduce a loop-local size variable assigned in the for-condition comma expression, then reuse that local in the condition and body.",
+                success_rate=0.6,
+            ),
+        ],
+        provenance=Provenance(
+            discovered_from=[
+                ProvenanceEntry(function="fn_803ACD58", date="2026-06-04"),
+            ],
+        ),
+        opcodes=["lwz", "mullw", "divw"],
+        categories=["loop", "register", "source-transform"],
+        notes="This is useful when the target reloads the field once per iteration and coalesces the reload into one callee-save. Remaining differences may still be register numbering.",
+    ),
+    Pattern(
+        id="inverse-cse-rematerialized-global-read",
+        name="Inverse CSE Rematerialized Global Read",
+        description="The target rematerializes or must rematerialize a non-volatile global read, while source forms that reuse the obvious local make MWCC CSE the reads and collapse distinct register roles.",
+        root_cause="Some targets intentionally or incidentally reload a non-volatile global for a later array index while keeping a prior value live across a call. Natural C expressions that index by the saved local can make MWCC common-subexpression-eliminate the second read, causing a register cascade.",
+        signals=[
+            Signal(
+                type="instruction_sequence",
+                data={"sequence": ["lwz", "bl", "lwz"]},
+                description="A global is read, a call occurs, then the same global is read again for indexing",
+            ),
+        ],
+        examples=[
+            Example(
+                function="fn_803AC168",
+                context="CardState read index is kept across OSRestoreInterrupts while hsd_804D1148 indexing rematerializes the non-volatile global read",
+            ),
+        ],
+        fixes=[
+            Fix(
+                description="First confirm the target really rematerializes instead of CSEing. If ordinary locals CSE the reads, try source forms that force a distinct reload; if no C lever exists, bank the ceiling rather than chasing register cascades.",
+                success_rate=0.2,
+            ),
+        ],
+        provenance=Provenance(
+            discovered_from=[
+                ProvenanceEntry(function="fn_803AC168", date="2026-06-04"),
+            ],
+        ),
+        opcodes=["lwz", "bl"],
+        categories=["global", "register", "ceiling"],
+        notes="This is a ceiling characterization as much as a lever. It is the inverse of the usual source-rematerializes/target-CSEs mismatch.",
+    ),
     # ==========================================================================
     # ANTI-PATTERNS: Overcomplicated code that should be simpler
     # ==========================================================================
@@ -802,6 +940,21 @@ HSD_SisLib_803A5CC4(ptr->row_labels[i]);""",
 ]
 
 
+_MIGRATED_SAMPLE_PATTERN_IDS = {
+    "sparse-scratch-array-no-zero-init",
+    "loop-field-reload-comma-assignment",
+    "inverse-cse-rematerialized-global-read",
+}
+
+
+def _replace_migrated_sample(db, pattern: Pattern) -> None:
+    existing = db.get(pattern.id)
+    if existing is not None:
+        pattern.provenance.helped_match = existing.provenance.helped_match
+    db.delete(pattern.id)
+    db.insert(pattern)
+
+
 def load_samples(db) -> None:
     """Load all sample patterns into the database."""
     for pattern in SAMPLE_PATTERNS:
@@ -809,4 +962,12 @@ def load_samples(db) -> None:
             db.insert(pattern)
             print(f"  Inserted: {pattern.id}")
         except Exception as e:
+            if pattern.id in _MIGRATED_SAMPLE_PATTERN_IDS:
+                try:
+                    _replace_migrated_sample(db, pattern)
+                    print(f"  Updated: {pattern.id}")
+                    continue
+                except Exception as update_error:
+                    print(f"  Skipped {pattern.id}: {update_error}")
+                    continue
             print(f"  Skipped {pattern.id}: {e}")

@@ -68,6 +68,29 @@ class HarvestRequest:
     max_probes: int = 8
 
 
+@dataclass(frozen=True)
+class HarvestFilters:
+    where: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    exclude_source_actionability: tuple[str, ...] = ()
+
+    def is_active(self) -> bool:
+        return bool(self.where or self.exclude_source_actionability)
+
+    def to_dict(self) -> dict[str, Any] | None:
+        if not self.is_active():
+            return None
+        data: dict[str, Any] = {}
+        if self.where:
+            data["where"] = {
+                key: list(values) for key, values in sorted(self.where.items())
+            }
+        if self.exclude_source_actionability:
+            data["exclude_source_actionability"] = sorted(
+                self.exclude_source_actionability
+            )
+        return data
+
+
 @dataclass
 class HarnessProcessResult:
     command: list[str]
@@ -189,6 +212,37 @@ def load_target_map(path: Path | None) -> dict[str, dict[str, Any]]:
     return target_map
 
 
+def _validate_filter_fields(
+    filters: HarvestFilters | None,
+    fieldnames: list[str] | None,
+) -> None:
+    if filters is None or not filters.is_active():
+        return
+    available = set(fieldnames or [])
+    for field_name in filters.where:
+        if field_name not in available:
+            raise ValueError(f"unknown harvest filter field: {field_name}")
+    if "source_actionability" not in available and filters.exclude_source_actionability:
+        raise ValueError("unknown harvest filter field: source_actionability")
+
+
+def _row_matches_filters(
+    raw: Mapping[str, str],
+    filters: HarvestFilters | None,
+) -> bool:
+    if filters is None or not filters.is_active():
+        return True
+    for field_name, allowed_values in filters.where.items():
+        if (raw.get(field_name) or "").strip() not in set(allowed_values):
+            return False
+    if (
+        (raw.get("source_actionability") or "").strip()
+        in set(filters.exclude_source_actionability)
+    ):
+        return False
+    return True
+
+
 def load_queue_rows(
     queue_path: Path,
     *,
@@ -200,12 +254,16 @@ def load_queue_rows(
     apply: bool = False,
     timeout: int = 120,
     max_probes: int = 8,
+    filters: HarvestFilters | None = None,
 ) -> list[HarvestRequest]:
     rows: list[HarvestRequest] = []
     facts_by_function = target_map or {}
     with queue_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
+        _validate_filter_fields(filters, reader.fieldnames)
         for raw in reader:
+            if not _row_matches_filters(raw, filters):
+                continue
             if limit is not None and len(rows) >= limit:
                 break
             match_percent = _float_or_none(raw.get("match_percent")) or 0.0
@@ -2555,11 +2613,26 @@ def summarize_harvest_ledgers(
     validated_functions: set[str] = set()
     retained_source_functions: set[str] = set()
     negative_evidence_functions: set[str] = set()
+    filter_counts: Counter[str] = Counter()
+    filter_buckets: dict[str, set[str]] = {}
+    filter_values: dict[str, Any] = {}
+    filtered_ledger_count = 0
+    raw_ledger_count = 0
 
     total_rows = 0
     for path in ledger_paths:
         ledger = _read_harvest_ledger(path)
         ledger_bucket = str(ledger.get("work_bucket") or "")
+        filters = ledger.get("filters")
+        if filters is None:
+            raw_ledger_count += 1
+        else:
+            filtered_ledger_count += 1
+            filter_key = json.dumps(filters, sort_keys=True)
+            filter_counts[filter_key] += 1
+            filter_values[filter_key] = filters
+            if ledger_bucket:
+                filter_buckets.setdefault(filter_key, set()).add(ledger_bucket)
         for raw_result in ledger["results"]:
             if not isinstance(raw_result, Mapping):
                 continue
@@ -2604,6 +2677,15 @@ def summarize_harvest_ledgers(
             "work_buckets": _sorted_strings(blocker_buckets.get(blocker, set())),
         })
 
+    filter_summaries = [
+        {
+            "count": filter_counts[key],
+            "filters": filter_values[key],
+            "work_buckets": _sorted_strings(filter_buckets.get(key, set())),
+        }
+        for key in sorted(filter_counts)
+    ]
+
     return {
         "ledger_count": len(ledger_paths),
         "ledgers": [str(path) for path in ledger_paths],
@@ -2619,6 +2701,9 @@ def summarize_harvest_ledgers(
         "negative_evidence_functions": _sorted_strings(negative_evidence_functions),
         "repeated_blocker_threshold": threshold,
         "repeated_blockers": repeated_blockers,
+        "filtered_ledger_count": filtered_ledger_count,
+        "raw_ledger_count": raw_ledger_count,
+        "filters": filter_summaries,
         "suggested_impact": _suggest_ledger_impact(
             applied_count=len(applied_functions),
             retained_source_count=len(retained_source_functions),
@@ -2637,6 +2722,7 @@ def _build_ledger(
     limit: int | None,
     taxonomy_queue: Path,
     target_map_path: Path | None,
+    filters: HarvestFilters | None = None,
     results: list[HarvestResult | dict[str, Any]],
 ) -> dict[str, Any]:
     result_dicts = [
@@ -2653,6 +2739,7 @@ def _build_ledger(
         "limit": limit,
         "taxonomy_queue": str(taxonomy_queue),
         "target_map": str(target_map_path) if target_map_path else None,
+        "filters": filters.to_dict() if filters is not None else None,
         "summary": summarize_ledger(result_dicts),
         "results": result_dicts,
     }
@@ -2669,6 +2756,7 @@ def write_ledger(
     limit: int | None,
     taxonomy_queue: Path,
     target_map_path: Path | None,
+    filters: HarvestFilters | None = None,
     results: list[HarvestResult | dict[str, Any]],
 ) -> dict[str, Any]:
     ledger = _build_ledger(
@@ -2680,6 +2768,7 @@ def write_ledger(
         limit=limit,
         taxonomy_queue=taxonomy_queue,
         target_map_path=target_map_path,
+        filters=filters,
         results=results,
     )
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -2705,6 +2794,7 @@ def run_harvest(
     compose: bool = False,
     timeout: int = 120,
     max_probes: int = 8,
+    filters: HarvestFilters | None = None,
     runner: HarnessRunner = _default_runner,
     validator: ValidatorRunner = _default_validator,
     match_checker: MatchCheckerRunner = _default_match_checker,
@@ -2731,6 +2821,7 @@ def run_harvest(
         apply=apply,
         timeout=timeout,
         max_probes=max_probes,
+        filters=filters,
     )
     request_runner = run_composed_harvest_request if compose else run_harvest_request
     results = [
@@ -2755,6 +2846,7 @@ def run_harvest(
             limit=limit,
             taxonomy_queue=queue_path,
             target_map_path=target_map_path,
+            filters=filters,
             results=results,
         )
     return _build_ledger(
@@ -2766,5 +2858,6 @@ def run_harvest(
         limit=limit,
         taxonomy_queue=queue_path,
         target_map_path=target_map_path,
+        filters=filters,
         results=results,
     )

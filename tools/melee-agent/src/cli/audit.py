@@ -1,5 +1,6 @@
 """Audit commands - audit and recover tracked work."""
 
+import asyncio
 import json
 import re
 import subprocess
@@ -132,6 +133,10 @@ _FUNC_DEF_START_RE = re.compile(
     r"(?:(?:unsigned|signed)\s+)?"
     r"[A-Za-z_]\w*(?:\s*\*)?(?:\s+[A-Za-z_]\w*(?:\s*\*)?)*\s+"
     r"\*?(?P<name>[A-Za-z_]\w*)\s*\("
+)
+_LOWERCASE_MATCH_SEGMENT_RE = re.compile(
+    r"(?:^|[;])\s*match:\s*(?P<function>[A-Za-z_]\w*)",
+    re.IGNORECASE,
 )
 
 
@@ -393,6 +398,60 @@ def _is_valid_function_name(name: str) -> bool:
         return True
 
     return False
+
+
+def _parse_lowercase_match_subject(subject: str) -> list[str]:
+    """Parse conservative lowercase `match:` commit subjects."""
+    functions: list[str] = []
+    seen: set[str] = set()
+    for match in _LOWERCASE_MATCH_SEGMENT_RE.finditer(subject):
+        function_name = match.group("function")
+        if function_name in seen or not _is_valid_function_name(function_name):
+            continue
+        seen.add(function_name)
+        functions.append(function_name)
+    return functions
+
+
+def _git_match_log_for_recovery(
+    melee_root: Path,
+    *,
+    upstream: str,
+) -> str:
+    log_output = _git_stdout(
+        melee_root,
+        [
+            "log",
+            "--all",
+            "--grep=match:",
+            "--not",
+            upstream,
+            "--format=%H%x09%D%x09%s",
+        ],
+        timeout=60,
+    )
+    if log_output is None:
+        raise ValueError(f"could not read match commits; check upstream ref: {upstream}")
+    return log_output
+
+
+def _iter_recovery_match_commits(log_output: str) -> list[dict[str, str]]:
+    commits: list[dict[str, str]] = []
+    for line in log_output.splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) != 3:
+            continue
+        commit_hash, refs, subject = parts
+        for function_name in _parse_lowercase_match_subject(subject):
+            commits.append(
+                {
+                    "function": function_name,
+                    "commit": commit_hash,
+                    "refs": refs,
+                    "subject": subject,
+                }
+            )
+    return commits
 
 
 def _parse_function_from_commit_message(subject: str) -> list[tuple[str, float]]:
@@ -896,6 +955,93 @@ def audit_net_new(
             table.add_row(f"... ({len(items) - limit} more)", "", "", "")
         console.print(table)
         console.print()
+
+
+@audit_app.command("recover-matches")
+def audit_recover_matches(
+    melee_root: Annotated[
+        Path, typer.Option("--melee-root", "-m", help="Path to melee checkout")
+    ] = DEFAULT_MELEE_ROOT,
+    upstream: Annotated[
+        str,
+        typer.Option("--upstream", help="Upstream ref to exclude from git log"),
+    ] = "upstream/master",
+    limit: Annotated[int, typer.Option("--limit", "-n", help="Limit candidate functions shown")] = 100,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
+) -> None:
+    """Surface still-unmatched functions with stranded local `match:` commits."""
+    from src.extractor import extract_unmatched_functions
+
+    try:
+        log_output = _git_match_log_for_recovery(melee_root, upstream=upstream)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2) from exc
+    unmatched = asyncio.run(
+        extract_unmatched_functions(melee_root, include_asm=False)
+    )
+    unmatched_by_name = {
+        function.name: function for function in unmatched.functions
+    }
+
+    grouped: dict[str, list[dict[str, str]]] = defaultdict(list)
+    seen_commit_pairs: set[tuple[str, str]] = set()
+    for commit in _iter_recovery_match_commits(log_output):
+        function_name = commit["function"]
+        if function_name not in unmatched_by_name:
+            continue
+        key = (function_name, commit["commit"])
+        if key in seen_commit_pairs:
+            continue
+        seen_commit_pairs.add(key)
+        grouped[function_name].append(
+            {
+                "commit": commit["commit"],
+                "refs": commit["refs"],
+                "subject": commit["subject"],
+            }
+        )
+
+    candidates = []
+    for function_name in sorted(grouped):
+        function = unmatched_by_name[function_name]
+        candidates.append(
+            {
+                "function": function_name,
+                "file_path": function.file_path,
+                "current_match_percent": round(function.current_match * 100.0, 6),
+                "commits": grouped[function_name],
+            }
+        )
+    limited = candidates[: max(limit, 0)]
+    payload = {
+        "upstream": upstream,
+        "summary": {
+            "unmatched_functions": len(unmatched_by_name),
+            "candidate_functions": len(candidates),
+            "candidate_commits": sum(len(row["commits"]) for row in candidates),
+            "shown": len(limited),
+        },
+        "candidates": limited,
+    }
+    if output_json:
+        print(json.dumps(payload, indent=2))
+        return
+
+    console.print(f"[bold]Recoverable stranded matches:[/bold] {len(candidates)}")
+    table = Table()
+    table.add_column("Function", style="cyan")
+    table.add_column("Match %", justify="right")
+    table.add_column("Commits", justify="right")
+    table.add_column("File", style="dim")
+    for row in limited:
+        table.add_row(
+            row["function"],
+            f'{row["current_match_percent"]:.2f}',
+            str(len(row["commits"])),
+            row["file_path"],
+        )
+    console.print(table)
 
 
 # NOTE: The following commands have been moved to 'melee-agent state':

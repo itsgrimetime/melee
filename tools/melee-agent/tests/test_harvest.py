@@ -6,11 +6,13 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 import src.harvest as harvest_module
 from src.harvest import (
     HarnessProcessResult,
+    HarvestFilters,
     HarvestRequest,
     best_validated_candidate,
     extract_candidate_score,
@@ -408,6 +410,90 @@ def test_cli_invalid_target_map_exits_with_input_error(
     assert "issue report" not in result.output
 
 
+def test_cli_parses_harvest_filters_and_forwards_to_run_harvest(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from src.cli import app
+    from src.cli import harvest as harvest_cli
+
+    repo_root = _repo_with_source(tmp_path)
+    taxonomy_dir = tmp_path / "queues"
+    _write_queue(taxonomy_dir / "structural-reconstruction.tsv", [_row("demo_fn")])
+    monkeypatch.setattr(harvest_cli, "DEFAULT_MELEE_ROOT", repo_root)
+    calls: list[dict[str, object]] = []
+
+    def fake_run_harvest(*args, **kwargs):
+        calls.append(dict(kwargs))
+        ledger = {
+            "schema_version": 1,
+            "work_bucket": args[0],
+            "summary": {"by_status": {}},
+            "results": [],
+            "filters": kwargs["filters"].to_dict(),
+        }
+        Path(kwargs["ledger_path"]).write_text(json.dumps(ledger), encoding="utf-8")
+        return ledger
+
+    monkeypatch.setattr(harvest_cli, "run_harvest", fake_run_harvest)
+
+    result = cli_runner.invoke(
+        app,
+        [
+            "harvest",
+            "structural-reconstruction",
+            "--taxonomy-dir",
+            str(taxonomy_dir),
+            "--where",
+            "headline_tool=control-flow-shape-search",
+            "--where",
+            "source_actionability=structural-rebuild",
+            "--exclude-source-actionability",
+            "backend-ceiling,generator-gated",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    filters = calls[0]["filters"]
+    assert filters.to_dict() == {
+        "exclude_source_actionability": [
+            "backend-ceiling",
+            "generator-gated",
+        ],
+        "where": {
+            "headline_tool": ["control-flow-shape-search"],
+            "source_actionability": ["structural-rebuild"],
+        },
+    }
+
+
+def test_cli_rejects_malformed_where_filter(monkeypatch, tmp_path: Path) -> None:
+    from src.cli import app
+    from src.cli import harvest as harvest_cli
+
+    repo_root = _repo_with_source(tmp_path)
+    taxonomy_dir = tmp_path / "queues"
+    _write_queue(taxonomy_dir / "stack-local-layout.tsv", [_row("demo_fn")])
+    monkeypatch.setattr(harvest_cli, "DEFAULT_MELEE_ROOT", repo_root)
+
+    result = cli_runner.invoke(
+        app,
+        [
+            "harvest",
+            "stack-local-layout",
+            "--taxonomy-dir",
+            str(taxonomy_dir),
+            "--where",
+            "source_actionability",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "harvest input error:" in result.output
+    assert "FIELD=VALUE" in result.output
+
+
 def test_summarize_harvest_ledgers_rolls_up_statuses_and_repeated_blockers(
     tmp_path: Path,
 ) -> None:
@@ -498,6 +584,49 @@ def test_summarize_harvest_ledgers_rolls_up_statuses_and_repeated_blockers(
         }
     ]
     assert summary["suggested_impact"] == "matched"
+
+
+def test_summarize_harvest_ledgers_reports_filter_usage(tmp_path: Path) -> None:
+    filtered = tmp_path / "filtered.json"
+    raw = tmp_path / "raw.json"
+    filtered.write_text(
+        json.dumps(
+            {
+                "work_bucket": "structural-reconstruction",
+                "filters": {
+                    "where": {"headline_tool": ["control-flow-shape-search"]},
+                    "exclude_source_actionability": ["backend-ceiling"],
+                },
+                "results": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    raw.write_text(
+        json.dumps(
+            {
+                "work_bucket": "stack-local-layout",
+                "filters": None,
+                "results": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = summarize_harvest_ledgers([filtered, raw])
+
+    assert summary["filtered_ledger_count"] == 1
+    assert summary["raw_ledger_count"] == 1
+    assert summary["filters"] == [
+        {
+            "count": 1,
+            "filters": {
+                "exclude_source_actionability": ["backend-ceiling"],
+                "where": {"headline_tool": ["control-flow-shape-search"]},
+            },
+            "work_buckets": ["structural-reconstruction"],
+        }
+    ]
 
 
 def test_cli_harvest_summarize_outputs_json_without_running_harnesses(
@@ -609,6 +738,131 @@ def test_load_queue_rows_limit_zero_processes_no_rows(tmp_path: Path) -> None:
     )
 
     assert rows == []
+
+
+def test_load_queue_rows_applies_where_filters_before_limit(tmp_path: Path) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "structural-reconstruction.tsv"
+    _write_queue(
+        queue,
+        [
+            _row(
+                "noise",
+                headline_tool="manual-inspection",
+                source_actionability="backend-ceiling",
+            ),
+            _row(
+                "first_match",
+                headline_tool="control-flow-shape-search",
+                source_actionability="structural-rebuild",
+            ),
+            _row(
+                "second_match",
+                headline_tool="control-flow-shape-search",
+                source_actionability="structural-rebuild",
+            ),
+        ],
+    )
+
+    rows = load_queue_rows(
+        queue,
+        work_bucket="structural-reconstruction",
+        repo_root=repo_root,
+        limit=1,
+        filters=HarvestFilters(
+            where={"headline_tool": ("control-flow-shape-search",)}
+        ),
+    )
+
+    assert [row.function for row in rows] == ["first_match"]
+
+
+def test_load_queue_rows_ands_where_fields_and_ors_repeated_values(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "structural-reconstruction.tsv"
+    _write_queue(
+        queue,
+        [
+            _row(
+                "wrong_tool",
+                headline_tool="manual-inspection",
+                source_actionability="structural-rebuild",
+            ),
+            _row(
+                "current_tools",
+                headline_tool="control-flow-shape-search",
+                source_actionability="current-tools",
+            ),
+            _row(
+                "structural",
+                headline_tool="control-flow-shape-search",
+                source_actionability="structural-rebuild",
+            ),
+        ],
+    )
+
+    rows = load_queue_rows(
+        queue,
+        work_bucket="structural-reconstruction",
+        repo_root=repo_root,
+        filters=HarvestFilters(
+            where={
+                "headline_tool": ("control-flow-shape-search",),
+                "source_actionability": ("current-tools", "structural-rebuild"),
+            }
+        ),
+    )
+
+    assert [row.function for row in rows] == ["current_tools", "structural"]
+
+
+def test_load_queue_rows_excludes_source_actionability_before_limit(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(
+        queue,
+        [
+            _row("backend", source_actionability="backend-ceiling"),
+            _row("generator", source_actionability="generator-gated"),
+            _row("usable", source_actionability="current-tools"),
+        ],
+    )
+
+    rows = load_queue_rows(
+        queue,
+        work_bucket="stack-local-layout",
+        repo_root=repo_root,
+        limit=1,
+        filters=HarvestFilters(
+            exclude_source_actionability=(
+                "backend-ceiling",
+                "generator-gated",
+            )
+        ),
+    )
+
+    assert [row.function for row in rows] == ["usable"]
+
+
+def test_load_queue_rows_rejects_unknown_filter_field_even_with_zero_limit(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(queue, [_row("demo_fn")])
+
+    with pytest.raises(ValueError, match="unknown harvest filter field"):
+        load_queue_rows(
+            queue,
+            work_bucket="stack-local-layout",
+            repo_root=repo_root,
+            limit=0,
+            filters=HarvestFilters(where={"missing": ("value",)}),
+        )
 
 
 def test_resolve_source_file_rejects_paths_outside_repo(tmp_path: Path) -> None:
@@ -2032,6 +2286,34 @@ def test_write_ledger_adds_schema_version_and_summary(tmp_path: Path) -> None:
     assert ledger == on_disk
     assert on_disk["schema_version"] == 1
     assert on_disk["summary"]["by_status"] == {"validated": 1}
+
+
+def test_write_ledger_records_harvest_filters(tmp_path: Path) -> None:
+    ledger_path = tmp_path / "ledger.json"
+    ledger = write_ledger(
+        ledger_path,
+        work_bucket="bucket",
+        started_at="2026-06-04T00:00:00Z",
+        finished_at="2026-06-04T00:00:01Z",
+        apply=False,
+        min_match=90.0,
+        limit=5,
+        taxonomy_queue=tmp_path / "queue.tsv",
+        target_map_path=None,
+        filters=HarvestFilters(
+            where={"headline_tool": ("control-flow-shape-search",)},
+            exclude_source_actionability=("backend-ceiling",),
+        ),
+        results=[],
+    )
+
+    assert ledger["filters"] == {
+        "exclude_source_actionability": ["backend-ceiling"],
+        "where": {"headline_tool": ["control-flow-shape-search"]},
+    }
+    assert json.loads(ledger_path.read_text(encoding="utf-8"))["filters"] == (
+        ledger["filters"]
+    )
 
 
 def test_apply_replaces_only_target_function_when_validation_passes(

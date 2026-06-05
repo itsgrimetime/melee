@@ -13,6 +13,7 @@ import typer
 
 from src.harvest import (
     HarnessRunner,
+    HarvestFilters,
     ValidatorRunner,
     run_harvest,
     summarize_harvest_ledgers,
@@ -41,6 +42,39 @@ def _default_ledger_path(repo_root: Path, work_bucket: str) -> Path:
         if not path.exists():
             return path
     raise RuntimeError(f"could not allocate unique ledger path in {harvest_dir}")
+
+
+def _split_csv_values(values: list[str]) -> tuple[str, ...]:
+    parsed = []
+    for raw in values:
+        parsed.extend(part.strip() for part in raw.split(",") if part.strip())
+    return tuple(dict.fromkeys(parsed))
+
+
+def _parse_harvest_filters(
+    where: list[str],
+    exclude_source_actionability: list[str],
+) -> HarvestFilters | None:
+    where_map: dict[str, list[str]] = {}
+    for raw in where:
+        if "=" not in raw:
+            raise ValueError("--where must use FIELD=VALUE")
+        field_name, value = raw.split("=", 1)
+        field_name = field_name.strip()
+        value = value.strip()
+        if not field_name or not value:
+            raise ValueError("--where must use FIELD=VALUE")
+        where_map.setdefault(field_name, []).append(value)
+    filters = HarvestFilters(
+        where={
+            field_name: tuple(dict.fromkeys(values))
+            for field_name, values in where_map.items()
+        },
+        exclude_source_actionability=_split_csv_values(
+            exclude_source_actionability
+        ),
+    )
+    return filters if filters.is_active() else None
 
 
 def _format_counts(counts: object) -> str:
@@ -130,6 +164,11 @@ def harvest_cmd(
     target_map: Path | None = typer.Option(None, "--target-map"),
     max_probes: int = typer.Option(8, "--max-probes"),
     timeout: int = typer.Option(120, "--timeout"),
+    where: list[str] = typer.Option([], "--where"),
+    exclude_source_actionability: list[str] = typer.Option(
+        [],
+        "--exclude-source-actionability",
+    ),
     json_out: bool = typer.Option(False, "--json"),
 ) -> None:
     """Run a registered harvest harness across a taxonomy work bucket."""
@@ -158,6 +197,7 @@ def harvest_cmd(
         raise typer.Exit(2)
 
     ledger_path = ledger if ledger is not None else _default_ledger_path(repo_root, work_bucket)
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
     kwargs = {}
     if HARVEST_RUNNER is not None:
         kwargs["runner"] = HARVEST_RUNNER
@@ -165,6 +205,7 @@ def harvest_cmd(
         kwargs["validator"] = HARVEST_VALIDATOR
 
     try:
+        filters = _parse_harvest_filters(where, exclude_source_actionability)
         ledger_data = run_harvest(
             work_bucket,
             repo_root=repo_root,
@@ -177,6 +218,7 @@ def harvest_cmd(
             compose=compose,
             timeout=timeout,
             max_probes=max_probes,
+            filters=filters,
             **kwargs,
         )
     except (OSError, JSONDecodeError, ValueError) as exc:
