@@ -27,12 +27,14 @@ DEFAULT_CONTROL_FLOW_OPERATORS = (
     "ternary-to-if-else",
     "if-else-to-ternary",
     "bool-condition-spelling",
+    "if-equality-to-single-case-switch",
 )
 
 _DELEGATED_OPERATORS = frozenset(DEFAULT_CONTROL_FLOW_OPERATORS) - {
     "ternary-to-if-else",
     "if-else-to-ternary",
     "bool-condition-spelling",
+    "if-equality-to-single-case-switch",
 }
 _LOCAL_OPERATORS = frozenset(DEFAULT_CONTROL_FLOW_OPERATORS) - _DELEGATED_OPERATORS
 
@@ -45,6 +47,16 @@ _CONTROL_FLOW_TOKENS = re.compile(r"\b(?:return|goto|break|continue)\b")
 _ASSIGNMENT_TOKEN_RE = re.compile(r"(?<![=!<>])=(?!=)")
 _PREPROCESSOR_IF_RE = re.compile(r"#\s*(?:if|ifdef|ifndef)\b")
 _PREPROCESSOR_ENDIF_RE = re.compile(r"#\s*endif\b")
+_FLOAT_LITERAL_RE = re.compile(
+    r"^\s*(?:\d+\.\d*|\.\d+|\d+[eE][+-]?\d+|\d+\.\d*[eE][+-]?\d+|\.\d+[eE][+-]?\d+)(?:[fFlL])?\s*$"
+)
+_MOVED_BODY_REJECT_NODE_TYPES = {
+    "labeled_statement",
+    "case_statement",
+    "break_statement",
+    "continue_statement",
+    "goto_statement",
+}
 
 
 def generate_control_flow_shape_probes(
@@ -181,6 +193,10 @@ def _local_control_flow_probes(
             candidates = _if_else_to_ternary_probes(source, source_bytes, function_node)
         elif operator == "bool-condition-spelling":
             candidates = _bool_condition_spelling_probes(source, source_bytes, function_node)
+        elif operator == "if-equality-to-single-case-switch":
+            candidates = _if_equality_to_single_case_switch_probes(
+                source, source_bytes, function_node
+            )
         else:
             candidates = []
         probes.extend(candidates[: max_probes - len(probes)])
@@ -329,6 +345,51 @@ def _bool_condition_spelling_probes(source: str, source_bytes: bytes, function_n
     return probes
 
 
+def _if_equality_to_single_case_switch_probes(
+    source: str,
+    source_bytes: bytes,
+    function_node: Any,
+) -> list[LifetimeLayoutProbe]:
+    probes: list[LifetimeLayoutProbe] = []
+    for node in _walk_nodes(function_node, {"if_statement"}):
+        start, end = node.start_byte, node.end_byte
+        if _span_touches_preprocessor(source, start, end):
+            continue
+        condition = node.child_by_field_name("condition")
+        consequence = node.child_by_field_name("consequence")
+        alternative = node.child_by_field_name("alternative")
+        if (
+            condition is None
+            or consequence is None
+            or consequence.type != "compound_statement"
+            or alternative is not None
+        ):
+            continue
+        comparison = _if_equality_operands(condition, source_bytes)
+        if comparison is None:
+            continue
+        switch_case = _if_equality_switch_case(comparison)
+        if switch_case is None or _compound_body_has_unsafe_control_flow(consequence):
+            continue
+        switch_expr, case_expr = switch_case
+
+        indent = _line_indent(source, start)
+        body = _compound_body_text(source, consequence).rstrip()
+        replacement = _render_single_case_switch(indent, switch_expr, case_expr, body)
+        probes.append(
+            _probe(
+                "if-equality-to-single-case-switch",
+                len(probes),
+                "Rewrite equality if statement as a single-case switch.",
+                _replace_slice(source, start, end, replacement),
+                source,
+                start,
+                end,
+            )
+        )
+    return probes
+
+
 def _boolean_condition_alternative(cond_text: str) -> str | None:
     cond_text = cond_text.strip()
     if cond_text.startswith("!"):
@@ -387,6 +448,110 @@ def _single_assignment_statement(compound: Any, source_bytes: bytes) -> tuple[st
     if lhs is None or rhs is None:
         return None
     return node_text(source_bytes, lhs).strip(), node_text(source_bytes, rhs).strip()
+
+
+def _if_equality_operands(condition: Any, source_bytes: bytes) -> tuple[str, str] | None:
+    comparison = condition
+    while comparison is not None and comparison.type == "parenthesized_expression":
+        comparison = _single_named_child(comparison)
+    if comparison is None or comparison.type != "binary_expression":
+        return None
+    operator = comparison.child_by_field_name("operator")
+    left = comparison.child_by_field_name("left")
+    right = comparison.child_by_field_name("right")
+    if (
+        operator is None
+        or left is None
+        or right is None
+        or node_text(source_bytes, operator).strip() != "=="
+    ):
+        return None
+    return node_text(source_bytes, left).strip(), node_text(source_bytes, right).strip()
+
+
+def _if_equality_switch_case(comparison: tuple[str, str]) -> tuple[str, str] | None:
+    left, right = comparison
+    if _integer_constant_like_expression(right) and _safe_switch_case_pair(left, right):
+        return left, right
+    if _integer_constant_like_expression(left) and _safe_switch_case_pair(right, left):
+        return right, left
+    return None
+
+
+def _single_named_child(node: Any) -> Any | None:
+    named_children = [
+        child for child in node.children if child.is_named and child.type != "comment"
+    ]
+    if len(named_children) != 1:
+        return None
+    return named_children[0]
+
+
+def _integer_constant_like_expression(expr: str) -> bool:
+    return re.fullmatch(r"(?:0[xX][0-9A-Fa-f]+|[0-9]+)(?:[uUlL]*)?", expr.strip()) is not None
+
+
+def _safe_switch_case_pair(switch_expr: str, case_expr: str) -> bool:
+    switch_expr = _strip_outer_parens(switch_expr.strip())
+    case_expr = case_expr.strip()
+    if _integer_constant_value(case_expr) == 0 and not _safe_unary_deref_switch_expression(switch_expr):
+        return False
+    return _safe_switch_expression(switch_expr)
+
+
+def _integer_constant_value(expr: str) -> int | None:
+    text = re.sub(r"[uUlL]+$", "", expr.strip())
+    try:
+        return int(text, 0)
+    except ValueError:
+        return None
+
+
+def _safe_switch_expression(expr: str) -> bool:
+    expr = _strip_outer_parens(expr.strip())
+    if expr in {"NULL", "nullptr"}:
+        return False
+    if expr.startswith('"') or expr.startswith('L"') or _FLOAT_LITERAL_RE.fullmatch(expr):
+        return False
+    if _safe_unary_deref_switch_expression(expr):
+        return True
+    if re.fullmatch(_IDENT, expr):
+        return False
+    return _safe_expr(expr, allow_lhs=True)
+
+
+def _safe_unary_deref_switch_expression(expr: str) -> bool:
+    if not expr.startswith("*"):
+        return False
+    operand = expr[1:].strip()
+    if not operand or operand.startswith("*"):
+        return False
+    return _safe_expr(operand, allow_lhs=True)
+
+
+def _compound_body_has_unsafe_control_flow(compound: Any) -> bool:
+    return bool(_walk_nodes(compound, _MOVED_BODY_REJECT_NODE_TYPES))
+
+
+def _compound_body_text(source: str, compound: Any) -> str:
+    start = _byte_to_char_range(source, compound.start_byte, compound.start_byte)[0]
+    end = _byte_to_char_range(source, compound.end_byte, compound.end_byte)[0]
+    text = source[start:end]
+    open_brace = text.find("{")
+    close_brace = text.rfind("}")
+    if open_brace == -1 or close_brace == -1 or close_brace <= open_brace:
+        return ""
+    return text[open_brace + 1 : close_brace]
+
+
+def _render_single_case_switch(indent: str, switch_expr: str, case_expr: str, body: str) -> str:
+    return (
+        f"{indent}switch ({switch_expr}) {{\n"
+        f"{indent}case {case_expr}: {{{body}\n"
+        f"{indent}    break;\n"
+        f"{indent}}}\n"
+        f"{indent}}}"
+    )
 
 
 def _safe_expr(expr: str, *, allow_lhs: bool = False) -> bool:

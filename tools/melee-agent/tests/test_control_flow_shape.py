@@ -24,6 +24,262 @@ def test_default_control_flow_operators_include_local_rewrites() -> None:
     assert "bool-condition-spelling" in DEFAULT_CONTROL_FLOW_OPERATORS
 
 
+def test_default_control_flow_operators_include_if_equality_switch() -> None:
+    assert "if-equality-to-single-case-switch" in DEFAULT_CONTROL_FLOW_OPERATORS
+
+
+def test_if_equality_to_single_case_switch_rewrites_constant_rhs() -> None:
+    source = _source(
+        "    if (state->mode == 0x13) {\n"
+        "        call_state(state);\n"
+        "    }\n"
+        "    return b;\n"
+    ).replace(
+        "int fn_80000000(int cond, int a, int b)",
+        "int fn_80000000(struct State *state, int a, int b)",
+    )
+
+    probes, status = scan_control_flow_shape_probes(
+        source,
+        "fn_80000000",
+        operator_filter=("if-equality-to-single-case-switch",),
+    )
+
+    assert status["blocker"] is None
+    assert len(probes) == 1
+    rewritten = probes[0].source_text
+    assert "switch (state->mode)" in rewritten
+    assert "case 0x13: {" in rewritten
+    assert "call_state(state);" in rewritten
+    assert "break;" in rewritten
+    assert probes[0].operator == "if-equality-to-single-case-switch"
+
+
+def test_if_equality_to_single_case_switch_rewrites_dereference_expression() -> None:
+    source = _source(
+        "    if (*state == 0x13) {\n"
+        "        fn_8019B458(state);\n"
+        "    }\n"
+        "    return b;\n"
+    ).replace(
+        "int fn_80000000(int cond, int a, int b)",
+        "int fn_80000000(int *state, int a, int b)",
+    )
+
+    probes, status = scan_control_flow_shape_probes(
+        source,
+        "fn_80000000",
+        operator_filter=("if-equality-to-single-case-switch",),
+    )
+
+    assert status["blocker"] is None
+    assert len(probes) == 1
+    rewritten = probes[0].source_text
+    assert "switch (*state)" in rewritten
+    assert "case 0x13: {" in rewritten
+    assert "fn_8019B458(state);" in rewritten
+
+
+def test_if_equality_to_single_case_switch_rewrites_constant_lhs() -> None:
+    source = _source(
+        "    if (0x13 == state->mode) {\n"
+        "        call_state(state);\n"
+        "    }\n"
+        "    return b;\n"
+    ).replace(
+        "int fn_80000000(int cond, int a, int b)",
+        "int fn_80000000(struct State *state, int a, int b)",
+    )
+
+    probes, status = scan_control_flow_shape_probes(
+        source,
+        "fn_80000000",
+        operator_filter=("if-equality-to-single-case-switch",),
+    )
+
+    assert status["blocker"] is None
+    assert len(probes) == 1
+    rewritten = probes[0].source_text
+    assert "switch (state->mode)" in rewritten
+    assert "case 0x13: {" in rewritten
+
+
+def test_if_equality_to_single_case_switch_preserves_scope_for_declarations() -> None:
+    source = _source(
+        "    if (state->mode == 7) {\n"
+        "        int local = a;\n"
+        "        call_state(state, local);\n"
+        "    }\n"
+        "    return b;\n"
+    ).replace(
+        "int fn_80000000(int cond, int a, int b)",
+        "int fn_80000000(struct State *state, int a, int b)",
+    )
+
+    probes, status = scan_control_flow_shape_probes(
+        source,
+        "fn_80000000",
+        operator_filter=("if-equality-to-single-case-switch",),
+    )
+
+    assert status["blocker"] is None
+    assert len(probes) == 1
+    rewritten = probes[0].source_text
+    case_index = rewritten.index("case 7: {")
+    declaration_index = rewritten.index("int local = a;")
+    break_index = rewritten.index("break;")
+    assert case_index < declaration_index < break_index
+
+
+def test_if_equality_to_single_case_switch_rejects_else_clause() -> None:
+    source = _source(
+        "    if (state->mode == 7) {\n"
+        "        call_state(state);\n"
+        "    } else {\n"
+        "        call_other(state);\n"
+        "    }\n"
+        "    return b;\n"
+    ).replace(
+        "int fn_80000000(int cond, int a, int b)",
+        "int fn_80000000(struct State *state, int a, int b)",
+    )
+
+    probes, status = scan_control_flow_shape_probes(
+        source,
+        "fn_80000000",
+        operator_filter=("if-equality-to-single-case-switch",),
+    )
+
+    assert probes == []
+    assert status["blocker"] == "no-control-flow-shape-probes"
+
+
+def test_if_equality_to_single_case_switch_rejects_non_integral_comparisons() -> None:
+    sources = [
+        _source("    if (ptr == NULL) {\n        return a;\n    }\n    return b;\n").replace(
+            "int fn_80000000(int cond, int a, int b)",
+            "int fn_80000000(void *ptr, int a, int b)",
+        ),
+        _source("    if (f == 0.0f) {\n        return a;\n    }\n    return b;\n").replace(
+            "int fn_80000000(int cond, int a, int b)",
+            "int fn_80000000(float f, int a, int b)",
+        ),
+        _source("    if (ptr == 0) {\n        return a;\n    }\n    return b;\n").replace(
+            "int fn_80000000(int cond, int a, int b)",
+            "int fn_80000000(void *ptr, int a, int b)",
+        ),
+        _source("    if (f == 0) {\n        return a;\n    }\n    return b;\n").replace(
+            "int fn_80000000(int cond, int a, int b)",
+            "int fn_80000000(float f, int a, int b)",
+        ),
+        _source("    if (state->ptr == 0) {\n        return a;\n    }\n    return b;\n").replace(
+            "int fn_80000000(int cond, int a, int b)",
+            "int fn_80000000(struct State *state, int a, int b)",
+        ),
+        _source("    if (state->f == 0) {\n        return a;\n    }\n    return b;\n").replace(
+            "int fn_80000000(int cond, int a, int b)",
+            "int fn_80000000(struct State *state, int a, int b)",
+        ),
+        _source("    if (x == y) {\n        return a;\n    }\n    return b;\n").replace(
+            "int fn_80000000(int cond, int a, int b)",
+            "int fn_80000000(int x, int y, int b)",
+        ),
+        _source(
+            '    if (state->name == "run") {\n'
+            "        return a;\n"
+            "    }\n"
+            "    return b;\n"
+        ).replace(
+            "int fn_80000000(int cond, int a, int b)",
+            "int fn_80000000(struct State *state, int a, int b)",
+        ),
+    ]
+
+    for source in sources:
+        probes, status = scan_control_flow_shape_probes(
+            source,
+            "fn_80000000",
+            operator_filter=("if-equality-to-single-case-switch",),
+        )
+
+        assert probes == []
+        assert status["blocker"] == "no-control-flow-shape-probes"
+
+
+def test_if_equality_to_single_case_switch_rejects_side_effectful_dereferences() -> None:
+    sources = [
+        _source("    if (*state++ == 0x13) {\n        return a;\n    }\n    return b;\n").replace(
+            "int fn_80000000(int cond, int a, int b)",
+            "int fn_80000000(int *state, int a, int b)",
+        ),
+        _source("    if (*poll() == 0x13) {\n        return a;\n    }\n    return b;\n"),
+    ]
+
+    for source in sources:
+        probes, status = scan_control_flow_shape_probes(
+            source,
+            "fn_80000000",
+            operator_filter=("if-equality-to-single-case-switch",),
+        )
+
+        assert probes == []
+        assert status["blocker"] == "no-control-flow-shape-probes"
+
+
+def test_if_equality_to_single_case_switch_rejects_preprocessor_touched_regions() -> None:
+    source = _source(
+        "    if (state->mode == 7) {\n"
+        "#if 1\n"
+        "        call_state(state);\n"
+        "#endif\n"
+        "    }\n"
+        "    return b;\n"
+    ).replace(
+        "int fn_80000000(int cond, int a, int b)",
+        "int fn_80000000(struct State *state, int a, int b)",
+    )
+
+    probes, status = scan_control_flow_shape_probes(
+        source,
+        "fn_80000000",
+        operator_filter=("if-equality-to-single-case-switch",),
+    )
+
+    assert probes == []
+    assert status["blocker"] == "no-control-flow-shape-probes"
+
+
+def test_if_equality_to_single_case_switch_rejects_moved_body_control_flow() -> None:
+    unsafe_bodies = [
+        "label:\n        call_state(state);",
+        "break;",
+        "continue;",
+        "goto label;",
+        "switch (a) {\n        case 1:\n            call_state(state);\n        }",
+        "switch (a) {\n        default:\n            call_state(state);\n        }",
+    ]
+
+    for unsafe_body in unsafe_bodies:
+        source = _source(
+            "    if (state->mode == 7) {\n"
+            f"        {unsafe_body}\n"
+            "    }\n"
+            "    return b;\n"
+        ).replace(
+            "int fn_80000000(int cond, int a, int b)",
+            "int fn_80000000(struct State *state, int a, int b)",
+        )
+
+        probes, status = scan_control_flow_shape_probes(
+            source,
+            "fn_80000000",
+            operator_filter=("if-equality-to-single-case-switch",),
+        )
+
+        assert probes == []
+        assert status["blocker"] == "no-control-flow-shape-probes"
+
+
 def test_ternary_assignment_expands_to_if_else() -> None:
     source = _source("    int x;\n    x = cond ? a : b;\n    return x;\n")
 
