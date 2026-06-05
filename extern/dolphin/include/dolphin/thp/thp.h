@@ -25,11 +25,12 @@ typedef struct _THPHuffmanTab {
 } THPHuffmanTab;
 
 typedef struct _THPComponent {
-    THPCoeff predDC;
+    u8 unk0[2];
     u8 pad;
     u8 quantizationTableSelector;
     u8 DCTableSelector;
     u8 ACTableSelector;
+    THPCoeff predDC;
     u32 pad2[9];
 } THPComponent;
 
@@ -44,16 +45,18 @@ typedef struct _THPFileInfo {
     u8 pad3[0xb];
     THPHuffmanTab huffmanTabs[4];
     THPQuantTab quantTabs[3];
-    u16 xPixelSize;
-    u16 yPixelSize;
-    u16 MCUsPerRow;
-    u16 decompressedY;
-    u8 RST;
-    u16 nMCU;
-    u16 currMCU;
-    u8* dLC[3];
-    u32 pad2[(0x83d - 0x756) / 4];
-    THPComponent components[3];
+    u16 xPixelSize;      // 0x738
+    u16 yPixelSize;      // 0x73a
+    u16 MCUsPerRow;      // 0x73c
+    u8 pad_mid[0x838 - 0x73e];   // 0x73e..0x837
+    THPComponent components[3];  // 0x838..0x8bb
+    u8 pad_after[0x8ec - 0x8bc]; // 0x8bc..0x8eb
+    u16 decompressedY;   // 0x8ec
+    u16 pad_dy;          // 0x8ee
+    u8* dLC[3];          // 0x8f0..0x8fb
+    u16 nMCU;            // 0x8fc
+    u16 currMCU;         // 0x8fe
+    u8 RST;              // 0x900
 } THPFileInfo;
 
 typedef struct {    
