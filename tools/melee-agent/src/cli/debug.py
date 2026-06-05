@@ -21863,6 +21863,72 @@ def _rank_name_magic_source_variants(
     return ranked
 
 
+def _name_magic_section_anchor_offsets_from_payload(
+    payload: Mapping[str, Any],
+) -> list[str]:
+    from ..mwcc_debug.name_magic_source import parse_name_magic_relocation_evidence
+
+    parsed = parse_name_magic_relocation_evidence(dict(payload))
+    return sorted(
+        {
+            relocation.offset
+            for relocation in parsed.relocations
+            if relocation.current_symbol.startswith("...data.")
+        }
+    )
+
+
+def _name_magic_section_anchor_verdict(
+    evidence: Mapping[str, Any],
+    variants: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    raw_relocations = evidence.get("raw_relocations")
+    if not isinstance(raw_relocations, list):
+        return None
+    initial_offsets = sorted(
+        {
+            str(relocation.get("offset"))
+            for relocation in raw_relocations
+            if isinstance(relocation, Mapping)
+            and str(relocation.get("current_symbol") or "").startswith("...data.")
+        }
+    )
+    if not initial_offsets:
+        return None
+
+    for variant in variants:
+        if variant.get("status") != "ok":
+            continue
+        if variant.get("operator") not in {
+            "data-symbol-static-to-global",
+            "name-magic-source-combined",
+        }:
+            continue
+        checkdiff_payload = variant.get("checkdiff_payload")
+        if not isinstance(checkdiff_payload, Mapping):
+            continue
+        remaining_offsets = _name_magic_section_anchor_offsets_from_payload(
+            checkdiff_payload
+        )
+        resolved_offsets = [
+            offset for offset in initial_offsets if offset not in remaining_offsets
+        ]
+        if not resolved_offsets:
+            continue
+        return {
+            "status": (
+                "source-fixable"
+                if not remaining_offsets
+                else "partially-source-fixable"
+            ),
+            "candidate_label": variant.get("label"),
+            "operator": variant.get("operator"),
+            "resolved_offsets": resolved_offsets,
+            "remaining_offsets": remaining_offsets,
+        }
+    return None
+
+
 _NAME_MAGIC_SOURCE_CANDIDATE_OPERATORS = {
     "data-symbol-static-to-global",
     "sdata2-named-float-load",
@@ -21981,6 +22047,9 @@ def mutate_name_magic_source_declarations_cmd(
             f"stop: {stop.get('kind')}"
             + (f" ({stop.get('blocker')})" if stop.get("blocker") else "")
         )
+        section_anchor = payload.get("section_anchor_verdict")
+        if isinstance(section_anchor, Mapping):
+            print(f"section-anchor verdict: {section_anchor.get('status')}")
         if payload.get("generated_source_dir"):
             print(f"generated_source_dir: {payload['generated_source_dir']}")
         for variant in payload.get("variants", []):
@@ -22246,6 +22315,10 @@ def mutate_name_magic_source_declarations_cmd(
             )
 
     ranked_variants = _rank_name_magic_source_variants(variants)
+    section_anchor_verdict = _name_magic_section_anchor_verdict(
+        evidence,
+        ranked_variants,
+    )
     validated = any(
         variant.get("status") == "ok"
         and _name_magic_source_match_percent(variant) == 100.0
@@ -22260,12 +22333,28 @@ def mutate_name_magic_source_declarations_cmd(
             reason="validated candidate found",
         )
     elif ranked_variants:
-        blocker = NameMagicBlocker.NO_NAME_MAGIC_CANDIDATE.value
-        stop_condition = _name_magic_source_stop_condition(
-            "unvalidated",
-            blocker=blocker,
-            reason="no source candidate reached a true --no-name-magic match",
-        )
+        if (
+            section_anchor_verdict is not None
+            and section_anchor_verdict.get("status") == "source-fixable"
+        ):
+            blocker = (
+                NameMagicBlocker.SECTION_ANCHOR_SOURCE_FIXABLE_RESIDUAL.value
+            )
+            stop_condition = _name_magic_source_stop_condition(
+                "blocked",
+                blocker=blocker,
+                reason=(
+                    "section-anchor relocations were source-fixable, but "
+                    "residual no-name-magic mismatch remains"
+                ),
+            )
+        else:
+            blocker = NameMagicBlocker.NO_NAME_MAGIC_CANDIDATE.value
+            stop_condition = _name_magic_source_stop_condition(
+                "unvalidated",
+                blocker=blocker,
+                reason="no source candidate reached a true --no-name-magic match",
+            )
     elif probes and not compile_probes and not candidate_specs:
         blocker = NameMagicBlocker.NO_NAME_MAGIC_CANDIDATE.value
         stop_condition = _name_magic_source_stop_condition(
@@ -22298,6 +22387,8 @@ def mutate_name_magic_source_declarations_cmd(
         "probes": probe_payloads,
         "variants": ranked_variants,
     }
+    if section_anchor_verdict is not None:
+        payload["section_anchor_verdict"] = section_anchor_verdict
     _emit(payload)
 
 

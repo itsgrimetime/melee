@@ -16,6 +16,7 @@ class NameMagicBlocker(str, enum.Enum):
     UNSUPPORTED_SOURCE_SITE = "unsupported-source-site"
     AMBIGUOUS_SDATA2_VALUE = "ambiguous-sdata2-value"
     SDATA2_POOL_ORDER_DEPENDENT = "sdata2-pool-order-dependent"
+    SECTION_ANCHOR_SOURCE_FIXABLE_RESIDUAL = "section-anchor-source-fixable-residual"
     DECLARATION_APPLY_UNSUPPORTED = "declaration-apply-unsupported"
     NO_NAME_MAGIC_VALIDATION_FAILED = "no-name-magic-validation-failed"
     NO_NAME_MAGIC_CANDIDATE = "no-name-magic-candidate"

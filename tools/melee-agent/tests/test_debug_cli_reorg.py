@@ -575,6 +575,125 @@ def test_name_magic_source_declarations_candidate_requires_no_name_magic_match(
     }
 
 
+def test_name_magic_source_declarations_reports_section_anchor_partial_success(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from src.cli import debug as debug_cli
+
+    repo = tmp_path / "repo"
+    source = repo / "src" / "melee" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        textwrap.dedent(
+            """\
+            static u16 mn_803EAE68[] = { 1, 2, 3 };
+
+            void fn_80000000(void)
+            {
+                sink(mn_803EAE68);
+                sink_float(0.0F);
+                sink_float(0.0F);
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    current_obj = repo / "build" / "GALE01" / "src" / "melee" / "demo.o"
+    target_obj = repo / "build" / "GALE01" / "obj" / "melee" / "demo.o"
+    current_obj.parent.mkdir(parents=True)
+    target_obj.parent.mkdir(parents=True)
+    current_obj.write_bytes(b"fake")
+    target_obj.write_bytes(b"fake")
+    initial_payload = {
+        "diff": [
+            "-+024: R_PPC_ADDR16_HA\tmn_803EAE68",
+            "++024: R_PPC_ADDR16_HA\t...data.0",
+            "-+02c: R_PPC_ADDR16_LO\tmn_803EAE68",
+            "++02c: R_PPC_ADDR16_LO\t...data.0",
+            "-+af8: R_PPC_EMB_SDA21\tmn_804DBDA8",
+            "++af8: R_PPC_EMB_SDA21\t@267",
+        ],
+        "classification": {"primary": "data-symbol-or-relocation"},
+    }
+    after_payload = {
+        "match": False,
+        "diff": [
+            "-+af8: R_PPC_EMB_SDA21\tmn_804DBDA8",
+            "++af8: R_PPC_EMB_SDA21\t@267",
+        ],
+        "classification": {"primary": "data-symbol-or-relocation"},
+        "fuzzy_match_percent": 99.99866,
+    }
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", repo)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, melee_root: "melee/demo",
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_run_checkdiff_no_name_magic_json",
+        lambda *args, **kwargs: (initial_payload, None),
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_name_magic_object_evidence",
+        lambda unit, melee_root: (
+            {
+                "anonymous_sdata2": {
+                    "@267": {"size": 4, "float": 0.0, "value": 0}
+                },
+                "name_magic_suggestions": [],
+            },
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_score_whole_source_candidate_no_name_magic",
+        lambda *args, **kwargs: debug_cli._NameMagicWholeSourceScore(
+            99.99866,
+            None,
+            False,
+            after_payload,
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "name-magic-source-declarations",
+            "-f",
+            "fn_80000000",
+            "--source-file",
+            str(source),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["blocker"] == "section-anchor-source-fixable-residual"
+    assert payload["stop_condition"] == {
+        "kind": "blocked",
+        "blocker": "section-anchor-source-fixable-residual",
+        "reason": (
+            "section-anchor relocations were source-fixable, but residual "
+            "no-name-magic mismatch remains"
+        ),
+    }
+    assert payload["section_anchor_verdict"] == {
+        "status": "source-fixable",
+        "candidate_label": "data-symbol-static-to-global-0",
+        "operator": "data-symbol-static-to-global",
+        "resolved_offsets": ["024", "02c"],
+        "remaining_offsets": [],
+    }
+
+
 def test_name_magic_source_declarations_retains_header_externs(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
