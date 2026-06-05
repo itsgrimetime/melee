@@ -1,0 +1,1769 @@
+"""Audit commands - audit and recover tracked work."""
+
+import asyncio
+import json
+import re
+import subprocess
+import time
+from collections import defaultdict
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Annotated, Any
+
+import typer
+from rich.table import Table
+
+from ._common import (
+    DEFAULT_MELEE_ROOT,
+    console,
+    db_upsert_function,
+    load_completed_functions,
+    save_completed_functions,
+)
+from src.mwcc_debug.source_patch import extract_function, replace_function
+
+audit_app = typer.Typer(help="Audit and recover tracked work")
+
+
+# ============================================================================
+# Duplicate detection utilities
+# ============================================================================
+
+
+@dataclass
+class MatchCommit:
+    """A commit that matches a function."""
+
+    commit_hash: str
+    function_name: str
+    match_percent: float
+    branch: str
+    is_in_upstream: bool = False
+    commit_date: str = ""
+    subject: str = ""
+
+
+@dataclass
+class FunctionDuplicateInfo:
+    """Information about duplicates for a single function."""
+
+    function_name: str
+    commits: list[MatchCommit] = field(default_factory=list)
+
+    @property
+    def is_duplicate(self) -> bool:
+        return len(self.commits) > 1
+
+    @property
+    def branches(self) -> set[str]:
+        return {c.branch for c in self.commits}
+
+    @property
+    def is_in_upstream(self) -> bool:
+        return any(c.is_in_upstream for c in self.commits)
+
+    @property
+    def upstream_commit(self) -> MatchCommit | None:
+        for c in self.commits:
+            if c.is_in_upstream:
+                return c
+        return None
+
+    @property
+    def pending_commits(self) -> list[MatchCommit]:
+        return [c for c in self.commits if not c.is_in_upstream]
+
+
+@dataclass
+class RefFunctionIndex:
+    """Function-level source status for a single git ref."""
+
+    bodies: dict[str, str] = field(default_factory=dict)
+    markers: dict[str, str] = field(default_factory=dict)
+    include_asms: dict[str, str] = field(default_factory=dict)
+
+    def upstream_status_for(self, function_name: str) -> str:
+        if function_name in self.bodies and function_name in self.markers:
+            return "matched-but-unnamed"
+        if function_name in self.bodies:
+            return "body"
+        if function_name in self.include_asms:
+            return "include-asm"
+        if function_name in self.markers:
+            return "placeholder"
+        return "absent"
+
+
+@dataclass
+class NetNewAuditItem:
+    """One function classified by audit net-new."""
+
+    function: str
+    bucket: str
+    match_percent: float | None
+    origin_file: str
+    upstream_file: str | None
+    upstream_status: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "function": self.function,
+            "bucket": self.bucket,
+            "match_percent": self.match_percent,
+            "origin_file": self.origin_file,
+            "upstream_file": self.upstream_file,
+            "upstream_status": self.upstream_status,
+        }
+
+
+@dataclass
+class RecoveryPathSnapshot:
+    """Original file contents for a path touched during recovery verification."""
+
+    path: Path
+    existed: bool
+    data: bytes | None
+
+
+@dataclass
+class RecoveryCheckdiffResult:
+    """Parsed result from tools/checkdiff.py for recovery verification."""
+
+    status: str
+    match: bool | None = None
+    match_percent: float | None = None
+    reason: str | None = None
+
+
+NET_NEW_BUCKETS = (
+    "net_new_100",
+    "net_new_wip",
+    "dup_upstream_has_body",
+    "dup_matched_but_unnamed",
+)
+
+_MARKER_RE = re.compile(r"^\s*///\s+#(?P<name>[A-Za-z_]\w*)\b", re.MULTILINE)
+_INCLUDE_ASM_RE = re.compile(
+    r"\bINCLUDE_ASM\w*\s*\([^;]*?,\s*(?P<name>[A-Za-z_]\w*)\s*\)",
+    re.DOTALL,
+)
+_FUNC_DEF_START_RE = re.compile(
+    r"^(?!(?:typedef|struct|union|enum|return|if|for|while|switch|else|do|case|#)\b)"
+    r"(?:static\s+)?(?:inline\s+)?(?:const\s+)?(?:volatile\s+)?"
+    r"(?:(?:unsigned|signed)\s+)?"
+    r"[A-Za-z_]\w*(?:\s*\*)?(?:\s+[A-Za-z_]\w*(?:\s*\*)?)*\s+"
+    r"\*?(?P<name>[A-Za-z_]\w*)\s*\("
+)
+_LOWERCASE_MATCH_SEGMENT_RE = re.compile(
+    r"(?:^|[;])\s*match:\s*(?P<function>[A-Za-z_]\w*)",
+    re.IGNORECASE,
+)
+
+
+def _git_stdout(melee_root: Path, args: list[str], timeout: int = 30) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=melee_root,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
+def _fetch_refs(melee_root: Path, refs: list[str]) -> dict[str, str]:
+    remotes_text = _git_stdout(melee_root, ["remote"]) or ""
+    remotes = {line.strip() for line in remotes_text.splitlines() if line.strip()}
+    fetched: set[str] = set()
+    errors: dict[str, str] = {}
+    for ref in refs:
+        remote = ref.split("/", 1)[0] if "/" in ref else ""
+        if remote and remote in remotes and remote not in fetched:
+            try:
+                result = subprocess.run(
+                    ["git", "fetch", remote],
+                    cwd=melee_root,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+            except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+                errors[remote] = str(exc)
+                fetched.add(remote)
+                continue
+            if result.returncode != 0:
+                errors[remote] = (result.stderr or result.stdout).strip()
+            fetched.add(remote)
+    return errors
+
+
+def _list_c_files_at_ref(melee_root: Path, ref: str) -> list[str]:
+    output = _git_stdout(melee_root, ["ls-tree", "-r", "--name-only", ref, "--", "src/melee"])
+    if output is None:
+        return []
+    return [line for line in output.splitlines() if line.endswith(".c")]
+
+
+def _show_file_at_ref(melee_root: Path, ref: str, rel_path: str) -> str | None:
+    return _git_stdout(melee_root, ["show", f"{ref}:{rel_path}"])
+
+
+def _find_col0_function_bodies(source: str) -> set[str]:
+    """Find C function definitions that start at column zero."""
+    bodies: set[str] = set()
+    lines = source.splitlines()
+
+    for idx, line in enumerate(lines):
+        if not line or line[0].isspace() or "(" not in line:
+            continue
+
+        match = _FUNC_DEF_START_RE.match(line)
+        if not match:
+            continue
+
+        saw_body = False
+        saw_declaration = False
+        signature_parts = []
+        for sig_line in lines[idx : min(idx + 20, len(lines))]:
+            stripped = sig_line.strip()
+            signature_parts.append(stripped)
+            before_brace = stripped.split("{", 1)[0]
+            if "{" in stripped and ";" not in before_brace:
+                saw_body = True
+                break
+            if ";" in stripped:
+                saw_declaration = True
+                break
+            if stripped.startswith("/// #"):
+                break
+
+        signature = " ".join(signature_parts)
+        if saw_body and not saw_declaration and not signature.lstrip().startswith("asm "):
+            bodies.add(match.group("name"))
+
+    return bodies
+
+
+def _index_functions_at_ref(melee_root: Path, ref: str) -> RefFunctionIndex:
+    index = RefFunctionIndex()
+    for c_file in _list_c_files_at_ref(melee_root, ref):
+        source = _show_file_at_ref(melee_root, ref, c_file)
+        if source is None:
+            continue
+        for function_name in _find_col0_function_bodies(source):
+            index.bodies.setdefault(function_name, c_file)
+        for match in _MARKER_RE.finditer(source):
+            index.markers.setdefault(match.group("name"), c_file)
+        for match in _INCLUDE_ASM_RE.finditer(source):
+            index.include_asms.setdefault(match.group("name"), c_file)
+    return index
+
+
+def _read_report_percentages(report_path: Path) -> dict[str, float]:
+    if not report_path.exists():
+        return {}
+    try:
+        report = json.loads(report_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+    percentages: dict[str, float] = {}
+    for unit in report.get("units", []):
+        for function in unit.get("functions", []):
+            name = function.get("name")
+            if not name:
+                continue
+            try:
+                percentages[name] = float(function.get("fuzzy_match_percent") or 0.0)
+            except (TypeError, ValueError):
+                percentages[name] = 0.0
+    return percentages
+
+
+def _classify_net_new_functions(
+    origin_index: RefFunctionIndex,
+    upstream_index: RefFunctionIndex,
+    report_percentages: dict[str, float],
+) -> tuple[dict[str, list[NetNewAuditItem]], int]:
+    buckets: dict[str, list[NetNewAuditItem]] = {bucket: [] for bucket in NET_NEW_BUCKETS}
+    unreported_origin_helpers = 0
+
+    for function_name, origin_file in sorted(origin_index.bodies.items()):
+        upstream_status = upstream_index.upstream_status_for(function_name)
+        if report_percentages and upstream_status == "absent" and function_name not in report_percentages:
+            unreported_origin_helpers += 1
+            continue
+
+        if upstream_status == "matched-but-unnamed":
+            bucket = "dup_matched_but_unnamed"
+        elif upstream_status == "body":
+            bucket = "dup_upstream_has_body"
+        else:
+            match_percent = report_percentages.get(function_name)
+            bucket = "net_new_100" if match_percent is not None and match_percent >= 100.0 else "net_new_wip"
+
+        upstream_file = (
+            upstream_index.bodies.get(function_name)
+            or upstream_index.markers.get(function_name)
+            or upstream_index.include_asms.get(function_name)
+        )
+        buckets[bucket].append(
+            NetNewAuditItem(
+                function=function_name,
+                bucket=bucket,
+                match_percent=report_percentages.get(function_name),
+                origin_file=origin_file,
+                upstream_file=upstream_file,
+                upstream_status=upstream_status,
+            )
+        )
+
+    return buckets, unreported_origin_helpers
+
+
+def _net_new_summary(
+    origin_index: RefFunctionIndex,
+    buckets: dict[str, list[NetNewAuditItem]],
+    unreported_origin_helpers: int,
+) -> dict[str, int]:
+    classified_origin_bodies = sum(len(items) for items in buckets.values())
+    return {
+        "origin_bodies": len(origin_index.bodies),
+        "classified_origin_bodies": classified_origin_bodies,
+        "unreported_origin_helpers": unreported_origin_helpers,
+        "net_new_100": len(buckets["net_new_100"]),
+        "net_new_wip": len(buckets["net_new_wip"]),
+        "dup_upstream_has_body": len(buckets["dup_upstream_has_body"]),
+        "dup_matched_but_unnamed": len(buckets["dup_matched_but_unnamed"]),
+    }
+
+
+def _is_valid_function_name(name: str) -> bool:
+    """Check if a string looks like a valid function name.
+
+    Filters out common words that might appear in commit messages.
+    Valid function names typically:
+    - Contain underscores (like fn_8001234 or ftCo_Function)
+    - Start with common prefixes (ft, fn, gr, it, lb, hsd, etc.)
+    - Contain hex addresses (8001234)
+    """
+    # Common words that appear in commit messages but aren't functions
+    common_words = {
+        "some",
+        "all",
+        "most",
+        "several",
+        "the",
+        "and",
+        "or",
+        "a",
+        "an",
+        "many",
+        "few",
+        "various",
+        "multiple",
+        "other",
+        "more",
+        "less",
+        "functions",
+        "function",
+        "match",
+        "matched",
+        "matching",
+        "matches",
+        "pass",
+        "ongoing",
+        "partially",
+        "modules",
+        "module",
+        "file",
+        "files",
+        "this",
+        "that",
+        "these",
+        "those",
+        "with",
+        "from",
+        "into",
+        "onto",
+        "work",
+        "works",
+        "working",
+        "wip",
+        "done",
+        "complete",
+        "completed",
+    }
+
+    name_lower = name.lower()
+    if name_lower in common_words:
+        return False
+
+    # Must have at least one of: underscore, or look like a hex address, or valid prefix
+    if "_" in name:
+        return True
+
+    # Check for hex-address-like patterns (e.g., 80012345)
+    if re.match(r"^[0-9a-fA-F]{6,8}$", name):
+        return True
+
+    # Check for known Melee function prefixes
+    valid_prefixes = ("ft", "fn", "gr", "it", "lb", "hsd", "gm", "if", "mn", "db", "vi", "pl")
+    if name_lower.startswith(valid_prefixes):
+        return True
+
+    return False
+
+
+def _parse_lowercase_match_subject(subject: str) -> list[str]:
+    """Parse conservative lowercase `match:` commit subjects."""
+    functions: list[str] = []
+    seen: set[str] = set()
+    for match in _LOWERCASE_MATCH_SEGMENT_RE.finditer(subject):
+        function_name = match.group("function")
+        if function_name in seen or not _is_valid_function_name(function_name):
+            continue
+        seen.add(function_name)
+        functions.append(function_name)
+    return functions
+
+
+def _git_match_log_for_recovery(
+    melee_root: Path,
+    *,
+    upstream: str,
+) -> str:
+    log_output = _git_stdout(
+        melee_root,
+        [
+            "log",
+            "--all",
+            "--grep=match:",
+            "--not",
+            upstream,
+            "--format=%H%x09%D%x09%s",
+        ],
+        timeout=60,
+    )
+    if log_output is None:
+        raise ValueError(f"could not read match commits; check upstream ref: {upstream}")
+    return log_output
+
+
+def _iter_recovery_match_commits(log_output: str) -> list[dict[str, str]]:
+    commits: list[dict[str, str]] = []
+    for line in log_output.splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) != 3:
+            continue
+        commit_hash, refs, subject = parts
+        for function_name in _parse_lowercase_match_subject(subject):
+            commits.append(
+                {
+                    "function": function_name,
+                    "commit": commit_hash,
+                    "refs": refs,
+                    "subject": subject,
+                }
+            )
+    return commits
+
+
+def _tracked_worktree_status(melee_root: Path) -> str:
+    return _git_stdout(
+        melee_root,
+        ["status", "--porcelain", "--untracked-files=no"],
+    ) or ""
+
+
+def _normalize_recovery_source_path(
+    melee_root: Path,
+    source_path: str,
+) -> tuple[str, Path]:
+    raw = Path(source_path)
+    if raw.is_absolute():
+        try:
+            git_path = raw.resolve().relative_to(melee_root.resolve()).as_posix()
+        except ValueError:
+            git_path = raw.name
+        return git_path, raw
+
+    normalized = raw.as_posix()
+    if normalized.startswith("src/"):
+        return normalized, melee_root / normalized
+    git_path = f"src/{normalized}"
+    return git_path, melee_root / git_path
+
+
+def _candidate_source_at_commit(
+    melee_root: Path,
+    commit: str,
+    source_path: str,
+) -> str | None:
+    return _git_stdout(melee_root, ["show", f"{commit}:{source_path}"])
+
+
+def _snapshot_path(path: Path) -> RecoveryPathSnapshot:
+    if path.exists():
+        return RecoveryPathSnapshot(path=path, existed=True, data=path.read_bytes())
+    return RecoveryPathSnapshot(path=path, existed=False, data=None)
+
+
+def _restore_snapshots(snapshots: list[RecoveryPathSnapshot]) -> None:
+    for snapshot in snapshots:
+        if snapshot.existed:
+            snapshot.path.parent.mkdir(parents=True, exist_ok=True)
+            snapshot.path.write_bytes(snapshot.data or b"")
+        elif snapshot.path.exists():
+            snapshot.path.unlink()
+
+
+def _replace_include_asm_statement(
+    current_text: str,
+    function_name: str,
+    replacement: str,
+) -> str | None:
+    pattern = re.compile(
+        r"^[ \t]*INCLUDE_ASM\w*\s*\([^;]*?,\s*"
+        + re.escape(function_name)
+        + r"\s*\)[ \t]*;[ \t]*(?:\n|$)",
+        re.MULTILINE | re.DOTALL,
+    )
+    matches = list(pattern.finditer(current_text))
+    if len(matches) != 1:
+        return None
+    match = matches[0]
+    replacement_text = replacement.rstrip() + "\n"
+    return current_text[: match.start()] + replacement_text + current_text[match.end() :]
+
+
+def _replace_current_function(
+    current_text: str,
+    function_name: str,
+    replacement: str,
+) -> str | None:
+    patched = replace_function(current_text, function_name, replacement)
+    if patched is not None:
+        return patched
+    return _replace_include_asm_statement(current_text, function_name, replacement)
+
+
+def _apply_candidate_function(
+    melee_root: Path,
+    *,
+    commit: str,
+    source_path: str,
+    function_name: str,
+) -> tuple[bool, str | None]:
+    git_source_path, target_path = _normalize_recovery_source_path(
+        melee_root,
+        source_path,
+    )
+    candidate_text = _candidate_source_at_commit(
+        melee_root,
+        commit,
+        git_source_path,
+    )
+    if candidate_text is None:
+        return False, "no_candidate_function"
+
+    candidate_function = extract_function(candidate_text, function_name)
+    if candidate_function is None:
+        return False, "no_candidate_function"
+
+    try:
+        current_text = target_path.read_text(encoding="utf-8")
+    except OSError:
+        return False, "no_current_source"
+
+    patched = _replace_current_function(current_text, function_name, candidate_function)
+    if patched is None:
+        return False, "no_current_target"
+
+    target_path.write_text(patched, encoding="utf-8")
+    return True, None
+
+
+def _float_from_payload(payload: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        value = payload.get(key)
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _run_recovery_checkdiff(
+    melee_root: Path,
+    function_name: str,
+    timeout: float,
+) -> RecoveryCheckdiffResult:
+    try:
+        result = subprocess.run(
+            [
+                "python",
+                "tools/checkdiff.py",
+                function_name,
+                "--format",
+                "json",
+                "--no-fingerprint",
+            ],
+            cwd=melee_root,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return RecoveryCheckdiffResult(status="checkdiff_failed", reason="timeout")
+    except FileNotFoundError:
+        return RecoveryCheckdiffResult(status="checkdiff_failed", reason="python_not_found")
+
+    payload: dict[str, Any] | None = None
+    stdout = (result.stdout or "").strip()
+    if stdout:
+        try:
+            parsed = json.loads(stdout)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            payload = parsed
+
+    if payload is not None:
+        match_value = payload.get("match")
+        match = match_value if isinstance(match_value, bool) else None
+        match_percent = _float_from_payload(payload, "fuzzy_match_percent", "match_percent")
+        if result.returncode == 0 and match is True:
+            return RecoveryCheckdiffResult(
+                status="verified",
+                match=True,
+                match_percent=match_percent,
+            )
+        if match is False:
+            return RecoveryCheckdiffResult(
+                status="not_match",
+                match=False,
+                match_percent=match_percent,
+            )
+
+    return RecoveryCheckdiffResult(
+        status="checkdiff_failed",
+        reason=(result.stderr or result.stdout or f"exit {result.returncode}").strip(),
+    )
+
+
+def _verification_row(
+    *,
+    function_name: str,
+    commit: dict[str, str],
+    source_path: str,
+    status: str,
+    match: bool | None = None,
+    match_percent: float | None = None,
+    reason: str | None = None,
+) -> dict[str, object]:
+    row: dict[str, object] = {
+        "function": function_name,
+        "commit": commit["commit"],
+        "status": status,
+        "source_path": source_path,
+    }
+    if match is not None:
+        row["match"] = match
+    if match_percent is not None:
+        row["match_percent"] = match_percent
+    if reason:
+        row["reason"] = reason
+    return row
+
+
+def _verify_recovery_candidate(
+    melee_root: Path,
+    *,
+    function_name: str,
+    commit: dict[str, str],
+    source_path: str,
+    checkdiff_timeout: float,
+) -> dict[str, object]:
+    normalized_source_path, target_path = _normalize_recovery_source_path(
+        melee_root,
+        source_path,
+    )
+    snapshot = _snapshot_path(target_path)
+    before_status = _tracked_worktree_status(melee_root)
+    row: dict[str, object]
+
+    try:
+        applied, reason = _apply_candidate_function(
+            melee_root,
+            commit=commit["commit"],
+            source_path=source_path,
+            function_name=function_name,
+        )
+        if not applied:
+            row = _verification_row(
+                function_name=function_name,
+                commit=commit,
+                source_path=normalized_source_path,
+                status="apply_failed",
+                reason=reason,
+            )
+        else:
+            checkdiff = _run_recovery_checkdiff(
+                melee_root,
+                function_name,
+                checkdiff_timeout,
+            )
+            row = _verification_row(
+                function_name=function_name,
+                commit=commit,
+                source_path=normalized_source_path,
+                status=checkdiff.status,
+                match=checkdiff.match,
+                match_percent=checkdiff.match_percent,
+                reason=checkdiff.reason,
+            )
+    finally:
+        _restore_snapshots([snapshot])
+
+    after_status = _tracked_worktree_status(melee_root)
+    if after_status != before_status:
+        return _verification_row(
+            function_name=function_name,
+            commit=commit,
+            source_path=normalized_source_path,
+            status="apply_failed",
+            reason="worktree_status_changed",
+        )
+    return row
+
+
+def _apply_verified_recovery_candidate(
+    melee_root: Path,
+    *,
+    function_name: str,
+    commit: dict[str, str],
+    source_path: str,
+    checkdiff_timeout: float,
+) -> dict[str, object]:
+    normalized_source_path, target_path = _normalize_recovery_source_path(
+        melee_root,
+        source_path,
+    )
+    snapshot = _snapshot_path(target_path)
+    applied, reason = _apply_candidate_function(
+        melee_root,
+        commit=commit["commit"],
+        source_path=source_path,
+        function_name=function_name,
+    )
+    if not applied:
+        _restore_snapshots([snapshot])
+        return _verification_row(
+            function_name=function_name,
+            commit=commit,
+            source_path=normalized_source_path,
+            status="apply_failed",
+            reason=reason,
+        )
+
+    checkdiff = _run_recovery_checkdiff(melee_root, function_name, checkdiff_timeout)
+    if checkdiff.status == "verified" and checkdiff.match is True:
+        return _verification_row(
+            function_name=function_name,
+            commit=commit,
+            source_path=normalized_source_path,
+            status="applied",
+            match=True,
+            match_percent=checkdiff.match_percent,
+        )
+
+    _restore_snapshots([snapshot])
+    return _verification_row(
+        function_name=function_name,
+        commit=commit,
+        source_path=normalized_source_path,
+        status=checkdiff.status,
+        match=checkdiff.match,
+        match_percent=checkdiff.match_percent,
+        reason=checkdiff.reason,
+    )
+
+
+def _verify_recovery_candidates(
+    melee_root: Path,
+    candidates: list[dict[str, object]],
+    *,
+    apply: bool,
+    checkdiff_timeout: float,
+) -> list[dict[str, object]]:
+    verification: list[dict[str, object]] = []
+    for candidate in candidates:
+        function_name = str(candidate["function"])
+        source_path = str(candidate["file_path"])
+        recovered = False
+        for commit in candidate["commits"]:
+            assert isinstance(commit, dict)
+            if recovered:
+                verification.append(
+                    _verification_row(
+                        function_name=function_name,
+                        commit=commit,
+                        source_path=source_path,
+                        status="skipped_after_verified",
+                    )
+                )
+                continue
+
+            trial_row = _verify_recovery_candidate(
+                melee_root,
+                function_name=function_name,
+                commit=commit,
+                source_path=source_path,
+                checkdiff_timeout=checkdiff_timeout,
+            )
+            if apply and trial_row["status"] == "verified":
+                apply_row = _apply_verified_recovery_candidate(
+                    melee_root,
+                    function_name=function_name,
+                    commit=commit,
+                    source_path=source_path,
+                    checkdiff_timeout=checkdiff_timeout,
+                )
+                verification.append(apply_row)
+                recovered = apply_row["status"] == "applied"
+            else:
+                verification.append(trial_row)
+                recovered = trial_row["status"] == "verified"
+    return verification
+
+
+def _parse_function_from_commit_message(subject: str) -> list[tuple[str, float]]:
+    """Parse function name(s) and match percentage from commit message.
+
+    Returns list of (function_name, match_percent) tuples.
+    """
+    results = []
+    seen = set()
+
+    def add_if_valid(func: str, pct: float):
+        if func not in seen and _is_valid_function_name(func):
+            seen.add(func)
+            results.append((func, pct))
+
+    # Pattern: "Match func_name (100%)" or "Match func_name (95.5%)"
+    pattern1 = re.compile(r"Match\s+(\w+)\s*\((\d+(?:\.\d+)?)%\)")
+    for match in pattern1.finditer(subject):
+        func = match.group(1)
+        pct = float(match.group(2))
+        add_if_valid(func, pct)
+
+    # Pattern: "Match func1 and func2 (98.1%)" - multiple functions
+    pattern2 = re.compile(r"Match\s+(\w+)\s+and\s+(\w+)\s*\((\d+(?:\.\d+)?)%\)")
+    for match in pattern2.finditer(subject):
+        pct = float(match.group(3))
+        add_if_valid(match.group(1), pct)
+        add_if_valid(match.group(2), pct)
+
+    # Pattern: "Match func_name" without percentage (assume 100%)
+    if not results:
+        pattern3 = re.compile(r"^[a-f0-9]+\s+Match\s+(\w+)(?:\s|$)")
+        match = pattern3.match(subject)
+        if match:
+            add_if_valid(match.group(1), 100.0)
+
+    return results
+
+
+def _get_upstream_commits(melee_root: Path) -> set[str]:
+    """Get set of commit hashes in upstream/master."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-list", "upstream/master"],
+            cwd=melee_root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            return set(result.stdout.strip().split("\n"))
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    return set()
+
+
+def _get_all_match_commits(melee_root: Path) -> dict[str, FunctionDuplicateInfo]:
+    """Scan all branches for Match commits and group by function."""
+    functions: dict[str, FunctionDuplicateInfo] = {}
+
+    # Get upstream commits for comparison
+    upstream_commits = _get_upstream_commits(melee_root)
+
+    # Get all Match commits from all branches
+    try:
+        result = subprocess.run(
+            ["git", "log", "--all", "--oneline", "--format=%h|%s|%D|%ci", "--grep=Match", "--", "src/melee/*.c"],
+            cwd=melee_root,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            return functions
+
+        # Build a commit -> branches mapping
+        commit_branches: dict[str, list[str]] = defaultdict(list)
+        branch_result = subprocess.run(
+            ["git", "branch", "-a", "--contains", "--format=%(refname:short)"],
+            cwd=melee_root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        # This is slow, so we'll use a different approach
+
+        # Get all branch heads
+        branch_heads: dict[str, str] = {}
+        br_result = subprocess.run(
+            ["git", "for-each-ref", "--format=%(objectname:short) %(refname:short)", "refs/heads/"],
+            cwd=melee_root,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if br_result.returncode == 0:
+            for line in br_result.stdout.strip().split("\n"):
+                if line:
+                    parts = line.split(" ", 1)
+                    if len(parts) == 2:
+                        branch_heads[parts[0]] = parts[1]
+
+        for line in result.stdout.strip().split("\n"):
+            if not line or "|" not in line:
+                continue
+
+            parts = line.split("|")
+            if len(parts) < 4:
+                continue
+
+            commit_hash = parts[0]
+            subject = parts[1]
+            refs = parts[2] if len(parts) > 2 else ""
+            commit_date = parts[3] if len(parts) > 3 else ""
+
+            # Determine which branch this commit is on
+            # First check refs field
+            branch = "unknown"
+            if refs:
+                # Parse refs like "HEAD -> branch, origin/branch, tag: v1.0"
+                for ref in refs.split(","):
+                    ref = ref.strip()
+                    if "->" in ref:
+                        ref = ref.split("->")[1].strip()
+                    if ref.startswith("origin/"):
+                        ref = ref[7:]
+                    if ref and not ref.startswith("tag:"):
+                        branch = ref
+                        break
+
+            # If no branch from refs, try to find which branch contains this commit
+            if branch == "unknown":
+                # Check agent branches first
+                check_result = subprocess.run(
+                    ["git", "branch", "-a", "--contains", commit_hash, "--format=%(refname:short)"],
+                    cwd=melee_root,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if check_result.returncode == 0 and check_result.stdout.strip():
+                    branches = check_result.stdout.strip().split("\n")
+                    # Prefer agent branches
+                    for b in branches:
+                        if b.startswith("agent/"):
+                            branch = b
+                            break
+                    if branch == "unknown" and branches:
+                        branch = branches[0]
+
+            is_upstream = commit_hash in upstream_commits
+
+            # Parse function names from subject
+            parsed_funcs = _parse_function_from_commit_message(f"{commit_hash} {subject}")
+
+            for func_name, match_pct in parsed_funcs:
+                if func_name not in functions:
+                    functions[func_name] = FunctionDuplicateInfo(function_name=func_name)
+
+                # Check if we already have this exact commit
+                existing_hashes = {c.commit_hash for c in functions[func_name].commits}
+                if commit_hash not in existing_hashes:
+                    functions[func_name].commits.append(
+                        MatchCommit(
+                            commit_hash=commit_hash,
+                            function_name=func_name,
+                            match_percent=match_pct,
+                            branch=branch,
+                            is_in_upstream=is_upstream,
+                            commit_date=commit_date,
+                            subject=subject,
+                        )
+                    )
+
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        console.print(f"[yellow]Warning: {e}[/yellow]")
+
+    return functions
+
+
+@audit_app.command("duplicates")
+def audit_duplicates(
+    melee_root: Annotated[
+        Path, typer.Option("--melee-root", "-m", help="Path to melee submodule")
+    ] = DEFAULT_MELEE_ROOT,
+    show_all: Annotated[bool, typer.Option("--all", "-a", help="Show all functions, not just duplicates")] = False,
+    show_safe: Annotated[
+        bool, typer.Option("--safe", "-s", help="Show duplicates that are safe to ignore (already in upstream)")
+    ] = False,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show detailed commit info")] = False,
+):
+    """Find duplicate function matches across branches and worktrees.
+
+    Scans all branches (including agent worktrees) for commits that match the
+    same function. This helps identify:
+
+    1. CONFLICTS: Same function matched in multiple pending branches (needs resolution)
+    2. REDUNDANT: Same function matched in pending branch but already in upstream
+    3. SAFE: Multiple commits for same function, but all in upstream (historical)
+
+    Use this to clean up after incidents where agents committed to wrong branches.
+
+    Examples:
+        melee-agent audit duplicates              # Show conflicts needing attention
+        melee-agent audit duplicates --all        # Show all matched functions
+        melee-agent audit duplicates --safe       # Include already-merged duplicates
+        melee-agent audit duplicates --json       # Output for scripting
+    """
+    if not output_json:
+        console.print("[bold]Scanning for duplicate matches...[/bold]\n")
+
+    functions = _get_all_match_commits(melee_root)
+
+    if not functions:
+        if output_json:
+            print(json.dumps({"summary": {"total_functions": 0}, "conflicts": [], "redundant": []}))
+        else:
+            console.print("[yellow]No Match commits found[/yellow]")
+        return
+
+    # Categorize duplicates
+    conflicts: list[FunctionDuplicateInfo] = []  # Multiple pending branches
+    redundant: list[FunctionDuplicateInfo] = []  # Pending but already upstream
+    safe: list[FunctionDuplicateInfo] = []  # All in upstream
+    unique: list[FunctionDuplicateInfo] = []  # Only one commit
+
+    for func_info in functions.values():
+        if not func_info.is_duplicate:
+            unique.append(func_info)
+            continue
+
+        if func_info.is_in_upstream:
+            pending = func_info.pending_commits
+            if pending:
+                # Has both upstream and pending - redundant work
+                redundant.append(func_info)
+            else:
+                # All commits in upstream - safe historical duplicate
+                safe.append(func_info)
+        else:
+            # Multiple pending commits, none in upstream - conflict!
+            conflicts.append(func_info)
+
+    # JSON output
+    if output_json:
+        output = {
+            "summary": {
+                "total_functions": len(functions),
+                "unique": len(unique),
+                "conflicts": len(conflicts),
+                "redundant": len(redundant),
+                "safe": len(safe),
+            },
+            "conflicts": [
+                {
+                    "function": f.function_name,
+                    "commits": [
+                        {
+                            "hash": c.commit_hash,
+                            "branch": c.branch,
+                            "match_percent": c.match_percent,
+                            "date": c.commit_date,
+                        }
+                        for c in f.commits
+                    ],
+                }
+                for f in conflicts
+            ],
+            "redundant": [
+                {
+                    "function": f.function_name,
+                    "upstream_commit": f.upstream_commit.commit_hash if f.upstream_commit else None,
+                    "pending_branches": [c.branch for c in f.pending_commits],
+                }
+                for f in redundant
+            ],
+        }
+        print(json.dumps(output, indent=2))
+        return
+
+    # Summary table
+    summary = Table(title="Duplicate Analysis Summary")
+    summary.add_column("Category", style="bold")
+    summary.add_column("Count", justify="right")
+    summary.add_column("Description")
+
+    summary.add_row("[red]Conflicts[/red]", str(len(conflicts)), "Multiple pending branches - needs resolution")
+    summary.add_row("[yellow]Redundant[/yellow]", str(len(redundant)), "Pending work already in upstream")
+    if show_safe:
+        summary.add_row("[green]Safe[/green]", str(len(safe)), "Historical duplicates (all merged)")
+    summary.add_row("[dim]Unique[/dim]", str(len(unique)), "Single commit per function")
+    summary.add_row("[bold]Total[/bold]", str(len(functions)), "Total matched functions found")
+
+    console.print(summary)
+    console.print()
+
+    # Show conflicts (always)
+    if conflicts:
+        console.print("[bold red]⚠ CONFLICTS - Same function in multiple pending branches:[/bold red]\n")
+
+        for func_info in sorted(conflicts, key=lambda f: -len(f.commits)):
+            console.print(f"[bold cyan]{func_info.function_name}[/bold cyan] ({len(func_info.commits)} commits)")
+            for commit in func_info.commits:
+                branch_style = "yellow" if commit.branch.startswith("agent/") else "dim"
+                console.print(
+                    f"  [{branch_style}]{commit.branch}[/{branch_style}] "
+                    f"{commit.commit_hash} ({commit.match_percent:.0f}%)"
+                )
+                if verbose:
+                    console.print(f"    [dim]{commit.commit_date}[/dim]")
+            console.print()
+
+        console.print("[bold]Resolution options:[/bold]")
+        console.print("  1. Keep best match and drop others")
+        console.print("  2. Cherry-pick preferred commit to batch branch")
+        console.print("  3. Reset agent branches that have duplicate work")
+        console.print()
+
+    # Show redundant work
+    if redundant:
+        console.print("[bold yellow]⚡ REDUNDANT - Already in upstream but also pending:[/bold yellow]\n")
+
+        for func_info in redundant[:20]:  # Limit display
+            upstream = func_info.upstream_commit
+            pending_branches = [c.branch for c in func_info.pending_commits]
+            console.print(
+                f"[cyan]{func_info.function_name}[/cyan]: "
+                f"upstream={upstream.commit_hash if upstream else '?'}, "
+                f"also in: {', '.join(pending_branches)}"
+            )
+
+        if len(redundant) > 20:
+            console.print(f"  [dim]... and {len(redundant) - 20} more[/dim]")
+
+        console.print()
+        console.print("[bold]These pending branches have work that's already merged.[/bold]")
+        console.print("They can be safely reset or pruned.\n")
+
+    # Show safe duplicates if requested
+    if show_safe and safe:
+        console.print("[bold green]✓ SAFE - Historical duplicates (all merged):[/bold green]\n")
+
+        for func_info in safe[:10]:
+            branches = list(func_info.branches)[:3]
+            console.print(f"  {func_info.function_name}: {', '.join(branches)}")
+
+        if len(safe) > 10:
+            console.print(f"  [dim]... and {len(safe) - 10} more[/dim]")
+        console.print()
+
+    # Show unique functions if --all
+    if show_all and unique:
+        console.print("[bold]Unique matches (no duplicates):[/bold]\n")
+
+        table = Table()
+        table.add_column("Function", style="cyan")
+        table.add_column("Branch")
+        table.add_column("Status")
+        table.add_column("Hash", style="dim")
+
+        for func_info in sorted(unique, key=lambda f: f.function_name)[:50]:
+            commit = func_info.commits[0]
+            status = "[green]merged[/green]" if commit.is_in_upstream else "[yellow]pending[/yellow]"
+            table.add_row(
+                func_info.function_name,
+                commit.branch,
+                status,
+                commit.commit_hash,
+            )
+
+        console.print(table)
+        if len(unique) > 50:
+            console.print(f"[dim]... and {len(unique) - 50} more[/dim]")
+
+    # Final summary
+    if not conflicts and not redundant:
+        console.print("[bold green]✓ No duplicate conflicts found![/bold green]")
+    elif conflicts:
+        console.print(f"[bold red]Found {len(conflicts)} functions with conflicting commits[/bold red]")
+        console.print("Run with --json to get machine-readable output for scripting")
+
+
+@audit_app.command("net-new")
+def audit_net_new(
+    melee_root: Annotated[
+        Path, typer.Option("--melee-root", "-m", help="Path to melee checkout")
+    ] = DEFAULT_MELEE_ROOT,
+    origin: Annotated[str, typer.Option("--origin", help="Branch/ref to audit")] = "HEAD",
+    upstream: Annotated[
+        str,
+        typer.Option("--upstream", help="Fresh upstream branch/ref to compare against"),
+    ] = "upstream/master",
+    report_path: Annotated[Path | None, typer.Option("--report", help="report.json for the origin branch")] = None,
+    fetch: Annotated[
+        bool,
+        typer.Option("--fetch/--no-fetch", help="Fetch remotes referenced by --origin/--upstream before comparing"),
+    ] = True,
+    limit: Annotated[int, typer.Option("--limit", "-n", help="Limit rows shown per bucket")] = 50,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
+):
+    """Classify branch functions as net-new or duplicate against upstream.
+
+    This is stricter than source-only remote diffs: a `/// #func` marker only
+    counts as unmatched when there is no col-0 C body for that function.
+    Match percentages are read from report.json to separate 100% matches from
+    WIP bodies.
+    """
+    if report_path is None:
+        report_path = melee_root / "build" / "GALE01" / "report.json"
+
+    fetch_errors: dict[str, str] = {}
+    if fetch:
+        fetch_errors = _fetch_refs(melee_root, [origin, upstream])
+
+    origin_index = _index_functions_at_ref(melee_root, origin)
+    upstream_index = _index_functions_at_ref(melee_root, upstream)
+    if not origin_index.bodies:
+        message = f"Could not find any col-0 C bodies in {origin}"
+        if output_json:
+            print(json.dumps({"error": message}))
+        else:
+            console.print(f"[red]{message}[/red]")
+        raise typer.Exit(1)
+
+    report_percentages = _read_report_percentages(report_path)
+    buckets, unreported_origin_helpers = _classify_net_new_functions(
+        origin_index,
+        upstream_index,
+        report_percentages,
+    )
+    summary = _net_new_summary(origin_index, buckets, unreported_origin_helpers)
+
+    if output_json:
+        print(
+            json.dumps(
+                {
+                    "origin": origin,
+                    "upstream": upstream,
+                    "report": str(report_path),
+                    "fetch_errors": fetch_errors,
+                    "summary": summary,
+                    "buckets": {
+                        bucket: [item.to_dict() for item in items]
+                        for bucket, items in buckets.items()
+                    },
+                },
+                indent=2,
+            )
+        )
+        return
+
+    console.print(f"[bold]Net-new audit:[/bold] {origin} vs {upstream}")
+    console.print(f"[dim]Report: {report_path}[/dim]")
+    for remote, error in fetch_errors.items():
+        console.print(f"[yellow]Warning: failed to fetch {remote}: {error}[/yellow]")
+    if not report_percentages:
+        console.print("[yellow]No usable report.json found; net-new bodies without a report entry are shown as WIP.[/yellow]")
+    console.print()
+
+    summary_table = Table(title="Net-New Summary")
+    summary_table.add_column("Bucket", style="bold")
+    summary_table.add_column("Count", justify="right")
+    summary_table.add_column("Meaning")
+    summary_table.add_row("net-new 100", str(summary["net_new_100"]), "Origin has a body; upstream has no body; report is 100%")
+    summary_table.add_row("net-new <100 WIP", str(summary["net_new_wip"]), "Origin has a body; upstream has no body; report is below 100 or missing")
+    summary_table.add_row("dup upstream body", str(summary["dup_upstream_has_body"]), "Upstream already has a col-0 C body")
+    summary_table.add_row(
+        "dup matched marker",
+        str(summary["dup_matched_but_unnamed"]),
+        "Upstream has both a /// # marker and a C body",
+    )
+    summary_table.add_row(
+        "unreported helpers",
+        str(summary["unreported_origin_helpers"]),
+        "Origin-only bodies skipped because they are absent from report.json",
+    )
+    summary_table.add_row(
+        "classified bodies",
+        str(summary["classified_origin_bodies"]),
+        "Origin bodies included in the buckets above",
+    )
+    summary_table.add_row("origin bodies", str(summary["origin_bodies"]), "Total col-0 C bodies scanned in origin")
+    console.print(summary_table)
+    console.print()
+
+    for bucket in NET_NEW_BUCKETS:
+        items = buckets[bucket]
+        if not items:
+            continue
+        title = bucket.replace("_", " ")
+        table = Table(title=title)
+        table.add_column("Function", style="cyan")
+        table.add_column("Match %", justify="right")
+        table.add_column("Upstream")
+        table.add_column("File", style="dim")
+        for item in items[:limit]:
+            match_text = "-" if item.match_percent is None else f"{item.match_percent:.2f}"
+            table.add_row(item.function, match_text, item.upstream_status, item.origin_file)
+        if len(items) > limit:
+            table.add_row(f"... ({len(items) - limit} more)", "", "", "")
+        console.print(table)
+        console.print()
+
+
+@audit_app.command("recover-matches")
+def audit_recover_matches(
+    melee_root: Annotated[
+        Path, typer.Option("--melee-root", "-m", help="Path to melee checkout")
+    ] = DEFAULT_MELEE_ROOT,
+    upstream: Annotated[
+        str,
+        typer.Option("--upstream", help="Upstream ref to exclude from git log"),
+    ] = "upstream/master",
+    limit: Annotated[int, typer.Option("--limit", "-n", help="Limit candidate functions shown")] = 100,
+    verify: Annotated[bool, typer.Option("--verify", help="Trial-apply candidates and run checkdiff")] = False,
+    apply: Annotated[bool, typer.Option("--apply", help="Leave verified recovered functions applied")] = False,
+    checkdiff_timeout: Annotated[
+        float,
+        typer.Option("--checkdiff-timeout", help="Seconds to wait for each checkdiff run"),
+    ] = 120.0,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
+) -> None:
+    """Surface still-unmatched functions with stranded local `match:` commits."""
+    from src.extractor import extract_unmatched_functions
+
+    verify_requested = verify or apply
+    if apply:
+        tracked_status = _tracked_worktree_status(melee_root)
+        if tracked_status.strip():
+            typer.echo(
+                "tracked worktree has local changes; commit or stash before --apply",
+                err=True,
+            )
+            raise typer.Exit(2)
+
+    try:
+        log_output = _git_match_log_for_recovery(melee_root, upstream=upstream)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2) from exc
+    unmatched = asyncio.run(
+        extract_unmatched_functions(melee_root, include_asm=False)
+    )
+    unmatched_by_name = {
+        function.name: function for function in unmatched.functions
+    }
+
+    grouped: dict[str, list[dict[str, str]]] = defaultdict(list)
+    seen_commit_pairs: set[tuple[str, str]] = set()
+    for commit in _iter_recovery_match_commits(log_output):
+        function_name = commit["function"]
+        if function_name not in unmatched_by_name:
+            continue
+        key = (function_name, commit["commit"])
+        if key in seen_commit_pairs:
+            continue
+        seen_commit_pairs.add(key)
+        grouped[function_name].append(
+            {
+                "commit": commit["commit"],
+                "refs": commit["refs"],
+                "subject": commit["subject"],
+            }
+        )
+
+    candidates = []
+    for function_name in sorted(grouped):
+        function = unmatched_by_name[function_name]
+        candidates.append(
+            {
+                "function": function_name,
+                "file_path": function.file_path,
+                "current_match_percent": round(function.current_match * 100.0, 6),
+                "commits": grouped[function_name],
+            }
+        )
+    limited = candidates[: max(limit, 0)]
+    payload = {
+        "upstream": upstream,
+        "summary": {
+            "unmatched_functions": len(unmatched_by_name),
+            "candidate_functions": len(candidates),
+            "candidate_commits": sum(len(row["commits"]) for row in candidates),
+            "shown": len(limited),
+        },
+        "candidates": limited,
+    }
+    if verify_requested:
+        payload["verification"] = _verify_recovery_candidates(
+            melee_root,
+            limited,
+            apply=apply,
+            checkdiff_timeout=checkdiff_timeout,
+        )
+    if output_json:
+        print(json.dumps(payload, indent=2))
+        return
+
+    console.print(f"[bold]Recoverable stranded matches:[/bold] {len(candidates)}")
+    table = Table()
+    table.add_column("Function", style="cyan")
+    table.add_column("Match %", justify="right")
+    table.add_column("Commits", justify="right")
+    table.add_column("File", style="dim")
+    for row in limited:
+        table.add_row(
+            row["function"],
+            f'{row["current_match_percent"]:.2f}',
+            str(len(row["commits"])),
+            row["file_path"],
+        )
+    console.print(table)
+    if verify_requested:
+        verification_table = Table(title="Verification")
+        verification_table.add_column("Function", style="cyan")
+        verification_table.add_column("Status")
+        verification_table.add_column("Match %", justify="right")
+        verification_table.add_column("Commit", style="dim")
+        for row in payload["verification"]:
+            assert isinstance(row, dict)
+            match_percent = row.get("match_percent")
+            verification_table.add_row(
+                str(row["function"]),
+                str(row["status"]),
+                "-" if match_percent is None else f"{float(match_percent):.2f}",
+                str(row["commit"])[:12],
+            )
+        console.print(verification_table)
+
+
+# NOTE: The following commands have been moved to 'melee-agent state':
+#   - audit status  -> state status
+#   - audit recover -> state status --category matched
+#   - audit list    -> state status
+#   - audit rebuild -> state rebuild
+
+
+def _list_github_prs(repo: str, author: str, state: str, limit: int) -> list[dict]:
+    """List PRs from GitHub using gh CLI."""
+    try:
+        cmd = [
+            "gh",
+            "pr",
+            "list",
+            "--repo",
+            repo,
+            "--author",
+            author,
+            "--state",
+            state,
+            "--limit",
+            str(limit),
+            "--json",
+            "number,title,body,state,mergedAt,url",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if result.returncode != 0:
+            return []
+        return json.loads(result.stdout)
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
+        return []
+
+
+def _get_pr_diff(repo: str, pr_number: int) -> str:
+    """Get the diff for a PR."""
+    try:
+        result = subprocess.run(
+            ["gh", "pr", "diff", str(pr_number), "--repo", repo],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            return result.stdout
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    return ""
+
+
+def _extract_functions_from_pr(pr: dict, repo: str = "doldecomp/melee") -> list[dict]:
+    """Extract function matches from PR diff.
+
+    Looks for functions that were implemented (stub removed, definition added):
+    - Removed stub comment: -/// #func_name
+    - Added function definition: +type func_name(
+
+    Also falls back to parsing PR body for percentages if available.
+    """
+    functions = []
+    seen = set()
+
+    pr_number = pr.get("number")
+    if not pr_number:
+        return functions
+
+    # Get the actual diff
+    diff = _get_pr_diff(repo, pr_number)
+
+    if diff:
+        # Pattern 1: Look for removed stub comments (most reliable indicator of a match)
+        # Format: -/// #func_name or -// #func_name
+        for match in re.finditer(r"^-\s*///?\s*#(\w+)", diff, re.MULTILINE):
+            func_name = match.group(1)
+            if func_name not in seen and "_" in func_name:
+                seen.add(func_name)
+                functions.append(
+                    {
+                        "function": func_name,
+                        "match_percent": 100.0,  # Stub removed = matched
+                    }
+                )
+
+        # Pattern 2: Look for added C function definitions in .c files
+        # Must be in a C file context (after diff --git a/.../*.c)
+        # Function names must match melee patterns: prefix_address or camelCase_name
+        # Only match lines with C-style return types, not Python def
+        c_types = r"(?:void|s8|s16|s32|s64|u8|u16|u32|u64|f32|f64|int|char|float|double|bool|BOOL|size_t|UNK_T|HSD_\w+|Fighter\w*|Item\w*|Ground\w*|\w+_t\*?)"
+        for match in re.finditer(rf"^\+\s*{c_types}\s+(\w+_\w+)\s*\(", diff, re.MULTILINE):
+            func_name = match.group(1)
+            # Melee function names: lowercase prefix + underscore + hex OR CamelCase_name
+            if func_name not in seen and re.match(r"^[a-z]+[A-Z_]", func_name):
+                seen.add(func_name)
+                functions.append(
+                    {
+                        "function": func_name,
+                        "match_percent": 100.0,
+                    }
+                )
+
+    # Fallback: Parse PR body for explicit percentages
+    body = pr.get("body", "") or ""
+    if body:
+        # Pattern: func_name (100%) or func_name (95.5%)
+        for match in re.finditer(r"(\w+_\w+)\s*\((\d+(?:\.\d+)?%)\)", body):
+            func_name = match.group(1)
+            pct_str = match.group(2).rstrip("%")
+            if func_name not in seen:
+                seen.add(func_name)
+                functions.append(
+                    {
+                        "function": func_name,
+                        "match_percent": float(pct_str),
+                    }
+                )
+
+    return functions
+
+
+@audit_app.command("discover-prs")
+def audit_discover_prs(
+    author: Annotated[str, typer.Option("--author", "-a", help="GitHub username to search for")] = "itsgrimetime",
+    repo: Annotated[str, typer.Option("--repo", "-r", help="GitHub repository")] = "doldecomp/melee",
+    state: Annotated[str, typer.Option("--state", "-s", help="PR state: open, merged, closed, all")] = "all",
+    limit: Annotated[int, typer.Option("--limit", "-n", help="Maximum PRs to scan")] = 50,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be linked")] = False,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
+):
+    """Discover functions from GitHub PRs and link them.
+
+    Scans PRs by the specified author and parses function names from
+    PR diffs to find matched functions. Updates state database with PR associations.
+
+    Example: melee-agent audit discover-prs --author itsgrimetime --state merged
+    """
+    console.print("[bold]Scanning GitHub PRs[/bold]")
+    console.print(f"  Repo: {repo}")
+    console.print(f"  Author: {author}")
+    console.print(f"  State: {state}")
+    console.print()
+
+    # Handle 'all' state by querying merged, open, and closed
+    if state == "all":
+        states_to_query = ["merged", "open", "closed"]
+    else:
+        states_to_query = [state]
+
+    all_prs = []
+    for s in states_to_query:
+        prs = _list_github_prs(repo, author, s, limit)
+        for pr in prs:
+            pr["_queried_state"] = s  # Track which query found it
+        all_prs.extend(prs)
+
+    if not all_prs:
+        console.print("[yellow]No PRs found or gh CLI not available[/yellow]")
+        console.print("[dim]Make sure 'gh' CLI is installed and authenticated[/dim]")
+        return
+
+    console.print(f"Found {len(all_prs)} PRs\n")
+
+    completed = load_completed_functions()
+    results = []  # PRs with updates (for display)
+    all_discovered = []  # All PRs with functions (for JSON)
+    total_linked = 0
+    total_updated = 0
+
+    for pr in all_prs:
+        pr_url = pr.get("url", "")
+        pr_number = pr.get("number", 0)
+        pr_state = pr.get("state", "UNKNOWN")
+        is_merged = pr.get("mergedAt") is not None or pr.get("_queried_state") == "merged"
+
+        # Determine actual PR state
+        actual_pr_state = "MERGED" if is_merged else pr_state.upper() if pr_state else "OPEN"
+
+        # First, update any functions already linked to this PR (even if not in diff)
+        # This handles cases where a PR is closed but the function wasn't matched
+        for func, current in completed.items():
+            if current.get("pr_url") == pr_url and current.get("pr_state") != actual_pr_state:
+                current["pr_state"] = actual_pr_state
+                total_updated += 1
+
+        functions = _extract_functions_from_pr(pr, repo)
+        if not functions:
+            continue
+
+        linked_funcs = []
+        all_funcs_in_pr = []
+
+        for func_info in functions:
+            func = func_info["function"]
+            match_pct = func_info.get("match_percent")
+            func_entry = {
+                "function": func,
+                "match_percent": match_pct,
+                "in_db": func in completed,
+                "action": None,
+            }
+
+            if func in completed:
+                current = completed[func]
+                needs_update = False
+
+                # Link if no PR currently
+                if not current.get("pr_url"):
+                    current["pr_url"] = pr_url
+                    current["pr_number"] = pr_number
+                    current["pr_repo"] = repo
+                    current["pr_state"] = actual_pr_state
+                    needs_update = True
+                    total_linked += 1
+                    func_entry["action"] = "linked"
+
+                # Update state if this is the same PR and state changed
+                elif current.get("pr_url") == pr_url:
+                    if current.get("pr_state") != actual_pr_state:
+                        current["pr_state"] = actual_pr_state
+                        needs_update = True
+                        total_updated += 1
+                        func_entry["action"] = "updated"
+                    else:
+                        func_entry["action"] = "already_linked"
+                else:
+                    func_entry["action"] = "linked_to_other_pr"
+                    func_entry["other_pr"] = current.get("pr_url")
+
+                if needs_update:
+                    linked_funcs.append(func)
+            else:
+                func_entry["action"] = "not_in_db"
+
+            all_funcs_in_pr.append(func_entry)
+
+        # Track all discovered PRs with functions
+        all_discovered.append(
+            {
+                "pr_number": pr_number,
+                "pr_url": pr_url,
+                "pr_title": pr.get("title", ""),
+                "state": actual_pr_state,
+                "functions": all_funcs_in_pr,
+            }
+        )
+
+        if linked_funcs:
+            results.append(
+                {
+                    "pr_number": pr_number,
+                    "pr_url": pr_url,
+                    "state": actual_pr_state,
+                    "functions": linked_funcs,
+                }
+            )
+
+    if output_json:
+        print(json.dumps(all_discovered, indent=2))
+        return
+
+    if results:
+        for r in results:
+            state_color = "green" if r["state"] == "MERGED" else "cyan"
+            console.print(f"[bold]PR #{r['pr_number']}[/bold] [{state_color}]{r['state']}[/{state_color}]")
+            console.print(f"  {r['pr_url']}")
+            for func in r["functions"][:5]:
+                console.print(f"    → {func}")
+            if len(r["functions"]) > 5:
+                console.print(f"    [dim]... and {len(r['functions']) - 5} more[/dim]")
+            console.print()
+
+    console.print("[bold]Summary:[/bold]")
+    console.print(f"  PRs scanned: {len(all_prs)}")
+    console.print(f"  Functions newly linked: {total_linked}")
+    console.print(f"  PR states updated: {total_updated}")
+
+    if not dry_run and (total_linked > 0 or total_updated > 0):
+        save_completed_functions(completed)
+
+        # Also update state database
+        for func_name, info in completed.items():
+            if info.get("pr_url"):
+                update_fields = {
+                    "pr_url": info.get("pr_url"),
+                    "pr_number": info.get("pr_number"),
+                    "pr_state": info.get("pr_state"),
+                }
+                # Only set status to merged when PR is merged; don't clear status otherwise
+                if info.get("pr_state") == "MERGED":
+                    update_fields["status"] = "merged"
+                db_upsert_function(func_name, **update_fields)
+
+        console.print("\n[green]Saved changes to state database[/green]")
+    elif dry_run:
+        console.print("\n[cyan](dry run - no changes saved)[/cyan]")

@@ -4,7 +4,7 @@ from typing import Optional
 
 
 def get_exe_suffix():
-    if (system := platform.system()) == "Linux":
+    if (system := platform.system()) in ("Linux", "Darwin"):
         return ""
     elif system == "Windows":
         return ".exe"
