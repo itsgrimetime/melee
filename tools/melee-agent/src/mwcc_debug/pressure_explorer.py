@@ -1539,6 +1539,30 @@ def _line_is_case_or_default_label(source: str, line_start: int) -> bool:
     return _line_contains_case_or_default_label(source[line_start:line_end])
 
 
+def _line_is_plain_label(source: str, line_start: int) -> bool:
+    line_end = source.find("\n", line_start)
+    if line_end < 0:
+        line_end = len(source)
+    return _line_contains_plain_label(source[line_start:line_end])
+
+
+def _line_follows_plain_label(source: str, line_start: int) -> bool:
+    cursor = max(0, line_start - 1)
+    while cursor >= 0:
+        prev_start = source.rfind("\n", 0, cursor) + 1
+        prev_end = source.find("\n", prev_start)
+        if prev_end < 0:
+            prev_end = len(source)
+        stripped = source[prev_start:prev_end].strip()
+        if not stripped:
+            if prev_start == 0:
+                return False
+            cursor = prev_start - 1
+            continue
+        return _line_contains_plain_label(stripped)
+    return False
+
+
 def _line_follows_case_or_default_label(source: str, line_start: int) -> bool:
     cursor = max(0, line_start - 1)
     while cursor >= 0:
@@ -1617,6 +1641,16 @@ def _line_contains_case_or_default_label(text: str) -> bool:
     ) is not None
 
 
+def _line_contains_plain_label(text: str) -> bool:
+    stripped = text.strip()
+    if _line_contains_case_or_default_label(stripped):
+        return False
+    return re.search(
+        r"(?:^|[{};])\s*[A-Za-z_]\w*\s*:(?!:)",
+        stripped,
+    ) is not None
+
+
 def _case_label_wraps_block(text: str) -> bool:
     stripped = text.strip()
     match = re.search(r"(case\b[^:\n]*:|default:)(?P<rest>.*)$", stripped)
@@ -1631,6 +1665,14 @@ def _repeated_helper_occurrence_blocker(
 ) -> tuple[str, str] | None:
     for call in occurrences:
         line_start = _line_start(source, call.start)
+        if _line_is_plain_label(source, line_start) or _line_follows_plain_label(
+            source,
+            line_start,
+        ):
+            return (
+                "label-declaration-unsafe",
+                "helper result declaration would land directly under a C label",
+            )
         if (
             _line_is_case_or_default_label(source, line_start)
             or _line_follows_case_or_default_label(source, line_start)
