@@ -552,6 +552,38 @@ def show_command(
             console.print(f"[bold]Resolution:[/bold] {issue['resolution_note']}")
 
 
+@issue_app.command("note")
+def note_command(
+    issue_id: Annotated[int, typer.Argument(help="Issue ID")],
+    body: Annotated[str, typer.Option("--body", "-b", help="Note text to append")],
+    agent_id: Annotated[
+        str | None,
+        typer.Option("--agent-id", help="Noting agent ID; auto-detected when omitted"),
+    ] = None,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
+):
+    """Append context to an open tooling issue without resolving it."""
+    try:
+        issue = get_db().note_tool_issue(
+            issue_id,
+            body=body,
+            agent_id=agent_id or _get_agent_id(),
+        )
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from exc
+
+    if issue is None:
+        console.print(f"[red]Issue not found: {issue_id}[/red]")
+        raise typer.Exit(1)
+
+    if output_json:
+        _echo_json(issue)
+        return
+
+    console.print(f"[green]Noted issue #{issue['id']}[/green]: {issue['summary']}")
+
+
 @issue_app.command("resolve")
 def resolve_command(
     issue_id: Annotated[int, typer.Argument(help="Issue ID")],

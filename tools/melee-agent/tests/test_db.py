@@ -700,6 +700,43 @@ class TestToolIssues:
         open_issues = db.list_tool_issues(status="open")
         assert open_issues == []
 
+    def test_note_tool_issue_appends_body_without_resolving(self, db):
+        """Adding a note should preserve open status and append audit history."""
+        issue = db.report_tool_issue(
+            "mwcc-debug score-source needs JSON output",
+            kind="feature",
+            body="Initial investigation.",
+        )
+
+        noted = db.note_tool_issue(
+            issue["id"],
+            body="Second agent reproduced this with fn_80000000.",
+            agent_id="note-agent",
+        )
+
+        assert noted is not None
+        assert noted["status"] == "open"
+        assert noted["resolution_note"] is None
+        assert noted["resolved_at"] is None
+        assert "Initial investigation." in noted["body"]
+        assert "Note by note-agent" in noted["body"]
+        assert "Second agent reproduced" in noted["body"]
+        assert noted["updated_at"] >= issue["updated_at"]
+
+        history = db.get_history(entity_type="tool_issue", entity_id=str(issue["id"]))
+        assert sorted(entry["action"] for entry in history) == ["noted", "reported"]
+        noted_history = [entry for entry in history if entry["action"] == "noted"]
+        assert len(noted_history) == 1
+        assert noted_history[0]["agent_id"] == "note-agent"
+
+    def test_note_tool_issue_rejects_resolved_issues(self, db):
+        """Closed issue threads should not receive open-status notes."""
+        issue = db.report_tool_issue("mwcc-debug score-source needs JSON output")
+        db.resolve_tool_issue(issue["id"], agent_id="fixer", resolution_note="fixed")
+
+        with pytest.raises(ValueError, match="cannot note resolved issue"):
+            db.note_tool_issue(issue["id"], body="follow-up note", agent_id="note-agent")
+
 
 class TestDatabaseIntegrity:
     """Tests for database schema and integrity."""
