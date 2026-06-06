@@ -6922,6 +6922,68 @@ def test_inspect_explain_schedule_json_reads_pcdump(
     assert decision["window_gap"] == 1
 
 
+def test_inspect_explain_schedule_reads_checkdiff_json_for_addi_window(
+    tmp_path: Path,
+) -> None:
+    pcdump = tmp_path / "pcdump.txt"
+    pcdump.write_text(
+        "Starting function it_802BCB88\n"
+        "FINAL CODE AFTER INSTRUCTION SCHEDULING\n"
+        "it_802BCB88\n"
+        ":{0000}::::LOOPWEIGHT=0\n"
+        "B0: Succ={} Pred={} Labels={}\n\n"
+        "    addi    r3,r1,72\n"
+        "    lfs     f0,108(r1)\n"
+        "    addi    r28,r28,1\n"
+    )
+    checkdiff_json = tmp_path / "checkdiff.json"
+    checkdiff_json.write_text(json.dumps({
+        "function": "it_802BCB88",
+        "classification": {
+            "primary": "operand-register-or-offset",
+            "reasons": [
+                "opcode sequence matches; differences are operands, registers, "
+                "labels, or offsets"
+            ],
+        },
+        "target_asm": [
+            "<it_802BCB88>:",
+            "+1fc: 3b 9c 00 01 \taddi    r28,r28,1",
+            "+200: c0 01 00 6c \tlfs     f0,108(r1)",
+            "+204: 38 61 00 48 \taddi    r3,r1,72",
+        ],
+        "current_asm": [
+            "<it_802BCB88>:",
+            "+1fc: 38 61 00 48 \taddi    r3,r1,72",
+            "+200: c0 01 00 6c \tlfs     f0,108(r1)",
+            "+204: 3b 9c 00 01 \taddi    r28,r28,1",
+        ],
+    }))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "explain-schedule",
+            "--function",
+            "it_802BCB88",
+            "--pcdump",
+            str(pcdump),
+            "--checkdiff-json",
+            str(checkdiff_json),
+            "--force-schedule",
+            "addi:0x204>0x1fc",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert "status=matched" in result.stdout
+    assert "window_kind=asm-code-offset" in result.stdout
+    assert "source_shape_verdict=source-shape-controllable" in result.stdout
+    assert "not-forceable-by-current-hook" in result.stdout
+
+
 def test_inspect_explain_schedule_source_file_adds_provenance(
     tmp_path: Path,
 ) -> None:

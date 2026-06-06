@@ -15620,11 +15620,14 @@ def pcdump_local(
         Optional[str],
         typer.Option(
             "--force-schedule",
-            help="Tier 7: pin adjacent same-base loads after instruction "
-                 "scheduling. Format 'op:beforeOffset>afterOffset[,...]'. "
-                 "E.g. 'lwz:0x74>0x70' forces an adjacent same-base lwz pair "
-                 "at offsets 0x70/0x74 to emit 0x74 first. By default "
-                 "applies globally — scope with --force-schedule-fn. "
+            help="Tier 7: pin adjacent or one-instruction-straddled "
+                 "same-base load order after MWCC instruction scheduling. "
+                 "Format 'op:beforeOffset>afterOffset[,...]'. E.g. "
+                 "'lwz:0x74>0x70' forces a same-base lwz pair at offsets "
+                 "0x70/0x74 to emit 0x74 first. Non-load code-offset "
+                 "windows are explain-only via `debug inspect "
+                 "explain-schedule --checkdiff-json`. By default applies "
+                 "globally — scope with --force-schedule-fn. "
                  "DIAGNOSTIC-ONLY: uses the patched debug compiler and does "
                  "not affect production ninja builds.",
         ),
@@ -20102,6 +20105,16 @@ def inspect_explain_schedule(
             ),
         ),
     ] = None,
+    checkdiff_json: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--checkdiff-json",
+            help=(
+                "Path to `tools/checkdiff.py <function> --format json` "
+                "output; enables non-load code-offset schedule windows."
+            ),
+        ),
+    ] = None,
     json_out: Annotated[
         bool,
         typer.Option("--json", help="Emit as JSON."),
@@ -20138,12 +20151,41 @@ def inspect_explain_schedule(
                     source_label = str(candidate.relative_to(DEFAULT_MELEE_ROOT))
                 except ValueError:
                     source_label = str(candidate)
+    target_asm = None
+    current_asm = None
+    classification = None
+    if checkdiff_json is not None:
+        if not checkdiff_json.is_file():
+            raise typer.BadParameter(f"checkdiff JSON not found: {checkdiff_json}")
+        try:
+            payload = json.loads(checkdiff_json.read_text())
+        except json.JSONDecodeError as exc:
+            raise typer.BadParameter(
+                f"invalid checkdiff JSON: {exc.msg}"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise typer.BadParameter("checkdiff JSON must be an object")
+        payload_function = payload.get("function")
+        if payload_function not in {None, function}:
+            raise typer.BadParameter(
+                f"checkdiff JSON is for {payload_function!r}, not {function!r}"
+            )
+        target_asm = payload.get("target_asm")
+        current_asm = payload.get("current_asm")
+        classification = payload.get("classification")
+        if not isinstance(target_asm, list) or not isinstance(current_asm, list):
+            raise typer.BadParameter(
+                "checkdiff JSON must contain target_asm and current_asm arrays"
+            )
     report = explain_schedule(
         pcdump_path.read_text(),
         function=function,
         force_schedule=force_schedule,
         source_text=source_text,
         source_file=source_label,
+        target_asm=target_asm,
+        current_asm=current_asm,
+        checkdiff_classification=classification,
     )
     print(render_json(report) if json_out else render_text(report))
 

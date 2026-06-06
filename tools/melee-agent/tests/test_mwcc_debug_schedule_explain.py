@@ -1,9 +1,14 @@
 """Tests for scheduler decision explanation helpers."""
 from __future__ import annotations
 
+from src.mwcc_debug.asm_windows import (
+    explain_code_offset_window,
+    parse_asm_lines,
+)
 from src.mwcc_debug.schedule_explain import (
     diff_schedule,
     explain_schedule,
+    parse_schedule_rules,
     render_diff_text,
     render_text,
 )
@@ -73,6 +78,140 @@ def test_explain_schedule_records_straddled_load_window_gap() -> None:
     assert decision.window_gap == 1
     assert "intervening instruction" in decision.rationale
     assert "priority data unavailable" in decision.rationale
+
+
+def test_explain_schedule_records_straddled_addi_code_offset_window() -> None:
+    target_asm = [
+        "<it_802BCB88>:",
+        "+1f8: c0 21 00 60 \tlfs     f1,96(r1)",
+        "+1fc: 3b 9c 00 01 \taddi    r28,r28,1",
+        "+200: c0 01 00 6c \tlfs     f0,108(r1)",
+        "+204: 38 61 00 48 \taddi    r3,r1,72",
+    ]
+    current_asm = [
+        "<it_802BCB88>:",
+        "+1f8: c0 21 00 60 \tlfs     f1,96(r1)",
+        "+1fc: 38 61 00 48 \taddi    r3,r1,72",
+        "+200: c0 01 00 6c \tlfs     f0,108(r1)",
+        "+204: 3b 9c 00 01 \taddi    r28,r28,1",
+    ]
+    source = (
+        "void it_802BCB88(void) {\n"
+        "    int count;\n"
+        "    Vec3 dir;\n"
+        "    count++;\n"
+        "    lbVector_Normalize(&dir);\n"
+        "}\n"
+    )
+
+    report = explain_schedule(
+        _pcdump_for(
+            "    addi    r3,r1,72\n"
+            "    lfs     f0,108(r1)\n"
+            "    addi    r28,r28,1\n"
+        ),
+        function="it_802BCB88",
+        force_schedule="addi:0x204>0x1fc",
+        target_asm=target_asm,
+        current_asm=current_asm,
+        source_text=source,
+        source_file="src/melee/it/items/itseakchain.c",
+    )
+
+    decision = report.decisions[0]
+    assert decision.status == "matched"
+    assert decision.window_kind == "asm-code-offset"
+    assert decision.window_gap == 1
+    assert decision.forceability == "not-forceable-by-current-hook"
+    assert decision.source_shape_verdict == "source-shape-controllable"
+    assert decision.heuristic_verdict == "SOURCE_SHAPE_CONTROLLABLE"
+    assert [cand.role for cand in decision.candidates] == [
+        "observed-first",
+        "intervening",
+        "target-first",
+    ]
+    assert decision.candidates[0].instruction_class == (
+        "local-address-materialization"
+    )
+    assert decision.candidates[2].instruction_class == "counter-increment"
+    assert [item.kind for item in decision.source_reshapes][:2] == [
+        "delay-local-address-materialization",
+        "anchor-counter-increment",
+    ]
+
+    out = render_text(report)
+    assert "window_kind=asm-code-offset" in out
+    assert "forceability=not-forceable-by-current-hook" in out
+    assert "local-address-materialization" in out
+    assert "counter-increment" in out
+    assert "delay-local-address-materialization" in out
+
+
+def test_checkdiff_json_does_not_reinterpret_missing_load_operand_rules() -> None:
+    target_asm = [
+        "<fn_80000000>:",
+        "+090: 80 64 00 00 \tlwz     r3,0(r4)",
+        "+094: 80 a4 00 04 \tlwz     r5,4(r4)",
+    ]
+    current_asm = [
+        "<fn_80000000>:",
+        "+090: 80 a4 00 04 \tlwz     r5,4(r4)",
+        "+094: 80 64 00 00 \tlwz     r3,0(r4)",
+    ]
+
+    report = explain_schedule(
+        _pcdump_for("    addi    r3,r3,1\n"),
+        function="fn_80000000",
+        force_schedule="lwz:0x94>0x90",
+        target_asm=target_asm,
+        current_asm=current_asm,
+    )
+
+    decision = report.decisions[0]
+    assert decision.status == "missing"
+    assert decision.window_kind is None
+    assert "same-base load window" in decision.rationale
+
+
+def test_parse_asm_lines_ignores_relocation_records() -> None:
+    instructions = parse_asm_lines([
+        "+010: 3c 60 00 00 \tlis     r3,lbl_804D0000@ha",
+        "        R_PPC_ADDR16_HA lbl_804D0000",
+        "+014: 38 63 00 00 \taddi    r3,r3,lbl_804D0000@l",
+        "        R_PPC_ADDR16_LO lbl_804D0000",
+    ])
+
+    assert [inst.opcode for inst in instructions] == ["lis", "addi"]
+    assert [inst.offset for inst in instructions] == [0x10, 0x14]
+
+
+def test_addi_code_offset_window_disambiguates_duplicate_target_bodies_by_order() -> None:
+    rule = parse_schedule_rules("addi:0x204>0x1fc")[0]
+    target_asm = [
+        "<it_802BCB88>:",
+        "+010: 3b 9c 00 01 \taddi    r28,r28,1",
+        "+014: 38 61 00 48 \taddi    r3,r1,72",
+        "+100: 3b 9c 00 01 \taddi    r28,r28,1",
+        "+104: c0 01 00 6c \tlfs     f0,108(r1)",
+        "+108: 38 61 00 48 \taddi    r3,r1,72",
+    ]
+    current_asm = [
+        "<it_802BCB88>:",
+        "+1fc: 38 61 00 48 \taddi    r3,r1,72",
+        "+200: c0 01 00 6c \tlfs     f0,108(r1)",
+        "+204: 3b 9c 00 01 \taddi    r28,r28,1",
+    ]
+
+    result = explain_code_offset_window(rule, target_asm, current_asm)
+
+    assert result is not None
+    assert result.status == "matched"
+    assert [cand.role for cand in result.candidates] == [
+        "observed-first",
+        "intervening",
+        "target-first",
+    ]
+    assert [cand.target_index for cand in result.candidates] == [4, 3, 2]
 
 
 def test_explain_schedule_records_already_target_straddled_window_gap() -> None:
