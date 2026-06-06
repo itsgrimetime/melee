@@ -169,6 +169,41 @@ void caller_fn(int arg0)
     assert report.summary["stop_condition"]["kind"] == "source-lever-audit"
 
 
+def test_audit_rebuckets_same_tu_static_source_register_mismatch() -> None:
+    source = """
+static void helper(int* first, int* second) {}
+
+void caller_fn(int* first, int* second)
+{
+    helper(first, second);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            [
+                "/* 0000 */ addi r3, r30, 0",
+                "/* 0004 */ addi r4, r31, 0",
+                "/* 0008 */ bl helper",
+            ],
+            [
+                "/* 0000 */ addi r3, r29, 0",
+                "/* 0004 */ addi r4, r30, 0",
+                "/* 0008 */ bl helper",
+            ],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+
+    action = report.findings[0].actions[0]
+    assert action.kind == "call-argument-type-audit"
+    assert action.rebucket["reason"] == "register-source-cascade"
+    assert action.rebucket["subcategory"] == "argument-source-register"
+    assert report.summary["source_lever_action_count"] == 0
+    assert report.summary["stop_condition"]["kind"] == "rebucketed-audit-only"
+
+
 def test_audit_classifies_width_mismatch() -> None:
     source = """
 void caller_fn(u8 arg0)
@@ -347,6 +382,107 @@ void caller_fn(int value)
     assert report.summary["stop_condition"]["kind"] == "source-lever-audit"
 
 
+def test_audit_rebuckets_presence_when_global_prototype_bank_already_matches() -> None:
+    source = """
+void helper(void* obj);
+
+void caller_fn(void* obj)
+{
+    helper(obj);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            ["/* 0000 */ bl helper"],
+            ["/* 0000 */ bl helper"],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+
+    action = report.findings[0].actions[0]
+    assert action.kind == "call-argument-type-audit"
+    assert action.rebucket["reason"] == "prototype-already-matches-abi-bank"
+    assert action.rebucket["subcategory"] == "argument-presence"
+    assert action.rebucket["prototype_context"] == {
+        "call_target": "helper",
+        "arg_index": 0,
+        "current_type": "void*",
+        "proposed_type": None,
+        "current_bank": "GPR",
+        "expected_bank": "GPR",
+        "expected_register": "r3",
+        "current_register": "r3",
+        "prototype_scope": "visible-nonstatic",
+        "candidate_source": "register-presence-bank",
+        "decision_reason": "visible prototype already matches expected ABI bank",
+    }
+    assert report.summary["source_lever_action_count"] == 0
+    assert report.summary["stop_condition"]["kind"] == "rebucketed-audit-only"
+
+
+def test_audit_rebuckets_presence_when_global_prototype_bank_differs() -> None:
+    source = """
+void helper(float value);
+
+void caller_fn(int value)
+{
+    helper(value);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            ["/* 0000 */ bl helper"],
+            ["/* 0000 */ bl helper"],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+
+    action = report.findings[0].actions[0]
+    assert action.kind == "call-argument-type-audit"
+    assert action.rebucket["reason"] == "prototype-candidate-unsupported"
+    assert action.rebucket["prototype_context"]["current_type"] == "float"
+    assert action.rebucket["prototype_context"]["proposed_type"] is None
+    assert action.rebucket["prototype_context"]["current_bank"] == "FPR"
+    assert action.rebucket["prototype_context"]["expected_bank"] == "GPR"
+    assert action.rebucket["prototype_context"]["candidate_source"] == (
+        "register-presence-bank"
+    )
+    assert report.summary["source_lever_action_count"] == 0
+    assert report.summary["stop_condition"]["kind"] == "rebucketed-audit-only"
+
+
+def test_audit_rebuckets_same_tu_presence_bank_difference_without_type_evidence() -> None:
+    source = """
+static void helper(float value) {}
+
+void caller_fn(int value)
+{
+    helper(value);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            ["/* 0000 */ bl helper"],
+            ["/* 0000 */ bl helper"],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+
+    action = report.findings[0].actions[0]
+    assert action.kind == "call-argument-type-audit"
+    assert action.rebucket["reason"] == "prototype-candidate-unsupported"
+    assert action.rebucket["prototype_context"]["current_bank"] == "FPR"
+    assert action.rebucket["prototype_context"]["expected_bank"] == "GPR"
+    assert report.summary["source_lever_action_count"] == 0
+    assert report.summary["stop_condition"]["kind"] == "rebucketed-audit-only"
+
+
 def test_audit_reports_duplicate_same_tu_declarations_without_patch() -> None:
     source = """
 static void helper(int value);
@@ -510,10 +646,12 @@ void caller_fn(int value)
     )
 
     action = report.findings[0].actions[0]
-    assert action.kind == "same-tu-static-prototype-candidate"
+    assert action.kind == "call-argument-type-audit"
     assert action.patch is None
-    assert action.candidate["proposed_type"] is None
-    assert action.candidate["patch_status"] == "unsupported-type-shape"
+    assert action.rebucket["reason"] == "prototype-candidate-unsupported"
+    assert action.rebucket["prototype_context"]["current_type"] == "int"
+    assert action.rebucket["prototype_context"]["proposed_type"] is None
+    assert action.rebucket["prototype_context"]["candidate_source"] == "prep-width"
 
 
 def test_audit_presence_mismatch_does_not_patch_gpr_alias_type() -> None:
@@ -546,11 +684,15 @@ void caller_fn(int first, int second)
     assert finding.kind == "argument-register-presence-mismatch"
     assert finding.arg_index == 1
     action = finding.actions[0]
-    assert action.kind == "same-tu-static-prototype-candidate"
+    assert action.kind == "call-argument-type-audit"
     assert action.patch is None
-    assert action.candidate["current_type"] == "int"
-    assert action.candidate["proposed_type"] == "s32"
-    assert action.candidate["patch_status"] == "already-matches"
+    assert action.rebucket["reason"] == "prototype-already-matches-abi-bank"
+    assert action.rebucket["prototype_context"]["current_type"] == "int"
+    assert action.rebucket["prototype_context"]["proposed_type"] is None
+    assert action.rebucket["prototype_context"]["current_bank"] == "GPR"
+    assert action.rebucket["prototype_context"]["expected_bank"] == "GPR"
+    assert action.rebucket["prototype_context"]["expected_register"] == "r4"
+    assert action.rebucket["prototype_context"]["current_register"] is None
 
 
 def test_audit_unsupported_parameter_shape_reports_patch_status() -> None:

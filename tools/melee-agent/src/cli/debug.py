@@ -4836,6 +4836,13 @@ def _print_signature_report(
                     f"({candidate.get('blast_radius') or '?'}, "
                     f"{candidate.get('patch_status') or 'diagnostic'})"
                 )
+                if candidate.get("candidate_source") or candidate.get("expected_bank"):
+                    print(
+                        "      "
+                        f"source={candidate.get('candidate_source') or '?'}, "
+                        f"expected_bank={candidate.get('expected_bank') or '?'}, "
+                        f"current_bank={candidate.get('current_bank') or '?'}"
+                    )
             if action.rebucket:
                 print(
                     f"    rebucket: {action.rebucket['reason']} -> "
@@ -4843,6 +4850,15 @@ def _print_signature_report(
                     f"{action.rebucket['subcategory']}"
                 )
                 print(f"      {action.rebucket['explanation']}")
+                context = action.rebucket.get("prototype_context")
+                if isinstance(context, dict):
+                    print(
+                        "      prototype: "
+                        f"{context.get('current_type') or '?'} -> "
+                        f"{context.get('proposed_type') or 'no-change'} "
+                        f"({context.get('current_bank') or '?'} -> "
+                        f"{context.get('expected_bank') or '?'})"
+                    )
             if action.validation is not None:
                 status = action.validation.get("status")
                 delta = action.validation.get("delta_match_percent")

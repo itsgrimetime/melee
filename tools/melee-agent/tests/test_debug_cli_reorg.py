@@ -456,6 +456,10 @@ def test_debug_suggest_signatures_json_includes_prototype_candidate(
     action = report["findings"][0]["actions"][0]
     assert action["kind"] == "same-tu-static-prototype-candidate"
     assert action["candidate"]["proposed_type"] == "s8"
+    assert action["candidate"]["expected_bank"] == "GPR"
+    assert action["candidate"]["current_bank"] == "GPR"
+    assert action["candidate"]["candidate_source"] == "prep-width"
+    assert "decision_reason" in action["candidate"]
     assert action["patch"]["old"] == "int value"
 
 
@@ -520,6 +524,128 @@ def test_debug_suggest_signatures_text_prints_candidate_summary(
         "candidate: prototype-parameter-type int -> s8 "
         "(same-translation-unit, generated)"
     ) in result.output
+    assert (
+        "source=prep-width, expected_bank=GPR, current_bank=GPR"
+    ) in result.output
+
+
+def test_debug_suggest_signatures_json_includes_rebucket_prototype_context(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "repo"
+    source = melee_root / "src" / "melee" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        textwrap.dedent(
+            """\
+            void helper(void* obj);
+
+            void caller_fn(void* obj)
+            {
+                helper(obj);
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    payload_path = tmp_path / "checkdiff.json"
+    payload_path.write_text(
+        json.dumps({
+            "function": "caller_fn",
+            "classification": {"primary": "signature-type-mismatch"},
+            "target_asm": ["/* 0000 */ bl helper"],
+            "current_asm": ["/* 0000 */ bl helper"],
+            "fuzzy_match_percent": 97.5,
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/demo",
+    )
+
+    result = runner.invoke(
+        debug_cli.debug_app,
+        [
+            "suggest",
+            "signatures",
+            "-f",
+            "caller_fn",
+            "--checkdiff-json",
+            str(payload_path),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    report = json.loads(result.output)
+    action = report["findings"][0]["actions"][0]
+    context = action["rebucket"]["prototype_context"]
+    assert context["current_type"] == "void*"
+    assert context["proposed_type"] is None
+    assert context["current_bank"] == "GPR"
+    assert context["expected_bank"] == "GPR"
+
+
+def test_debug_suggest_signatures_text_prints_rebucket_prototype_context(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "repo"
+    source = melee_root / "src" / "melee" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        textwrap.dedent(
+            """\
+            void helper(void* obj);
+
+            void caller_fn(void* obj)
+            {
+                helper(obj);
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    payload_path = tmp_path / "checkdiff.json"
+    payload_path.write_text(
+        json.dumps({
+            "function": "caller_fn",
+            "classification": {"primary": "signature-type-mismatch"},
+            "target_asm": ["/* 0000 */ bl helper"],
+            "current_asm": ["/* 0000 */ bl helper"],
+            "fuzzy_match_percent": 97.5,
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/demo",
+    )
+
+    result = runner.invoke(
+        debug_cli.debug_app,
+        [
+            "suggest",
+            "signatures",
+            "-f",
+            "caller_fn",
+            "--checkdiff-json",
+            str(payload_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (
+        "rebucket: prototype-already-matches-abi-bank -> "
+        "signature-call-type/argument-presence"
+    ) in result.output
+    assert "prototype: void* -> no-change (GPR -> GPR)" in result.output
 
 
 def test_debug_suggest_signatures_rejects_wrong_checkdiff_function(

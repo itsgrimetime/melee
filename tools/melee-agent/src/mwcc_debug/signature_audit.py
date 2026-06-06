@@ -1033,6 +1033,8 @@ def _call_prep_findings(
                 kind=kind,
                 expected=expected,
                 current=current,
+                expected_register=comparison.expected_register,
+                current_register=comparison.current_register,
                 call=current_call,
                 source_context=source_context,
                 source_site=source_site,
@@ -1403,6 +1405,8 @@ def _actions_for_finding(
     kind: str,
     expected: _ArgPrep | None,
     current: _ArgPrep | None,
+    expected_register: str | None,
+    current_register: str | None,
     call: _AsmCall,
     source_context: _SourceContext,
     source_site: dict | None,
@@ -1434,6 +1438,8 @@ def _actions_for_finding(
         kind=kind,
         expected=expected,
         current=current,
+        expected_register=expected_register,
+        current_register=current_register,
         call=call,
         source_context=source_context,
         source_site=source_site,
@@ -1445,7 +1451,12 @@ def _actions_for_finding(
     if candidate_action is not None:
         actions.append(candidate_action)
 
-    if candidate_action is None and prototype is not None and prototype.is_static:
+    if (
+        candidate_action is None
+        and prototype is not None
+        and prototype.is_static
+        and kind != "argument-source-register-mismatch"
+    ):
         actions.append(
             SignatureAction(
                 kind="same-tu-static-prototype-audit",
@@ -1486,6 +1497,8 @@ def _prototype_candidate_action(
     kind: str,
     expected: _ArgPrep | None,
     current: _ArgPrep | None,
+    expected_register: str | None,
+    current_register: str | None,
     call: _AsmCall,
     source_context: _SourceContext,
     source_site: dict | None,
@@ -1542,12 +1555,84 @@ def _prototype_candidate_action(
             rebucket=_external_prototype_unavailable_rebucket(kind),
         )
 
-    proposed_type = _candidate_type_for_prep(expected)
     current_type = (
         prototype.param_types[arg_index]
         if arg_index < len(prototype.param_types)
         else None
     )
+    current_bank = _type_abi_bank(current_type) if current_type is not None else None
+    if kind == "argument-register-presence-mismatch":
+        context_expected_register = (
+            expected_register if expected is not None or current is None else None
+        )
+        context_current_register = (
+            current_register if current is not None or expected is None else None
+        )
+        expected_bank = _register_abi_bank(context_expected_register)
+        context = _prototype_context(
+            call_target=call.call_target,
+            arg_index=arg_index,
+            current_type=current_type,
+            proposed_type=None,
+            current_bank=current_bank,
+            expected_bank=expected_bank,
+            expected_register=context_expected_register,
+            current_register=context_current_register,
+            prototype_scope=prototype.source_scope,
+            candidate_source="register-presence-bank",
+            decision_reason=(
+                "visible prototype already matches expected ABI bank"
+                if current_bank == expected_bank
+                else "register-presence evidence is insufficient for a safe type edit"
+            ),
+        )
+        if current_bank == expected_bank:
+            return SignatureAction(
+                kind="call-argument-type-audit",
+                confidence="low",
+                affected_call_sites=affected,
+                reason="Visible prototype already matches the expected ABI bank.",
+                rebucket=_prototype_already_matches_rebucket(context),
+            )
+        return SignatureAction(
+            kind="call-argument-type-audit",
+            confidence="low",
+            affected_call_sites=affected,
+            reason=(
+                "Visible prototype bank differs from the expected register bank, "
+                "but register-presence evidence alone is not a safe type proposal."
+            ),
+            rebucket=_prototype_candidate_unsupported_rebucket(context),
+        )
+
+    candidate_source = "prep-width"
+    proposed_type = _candidate_type_for_prep(expected)
+    expected_bank = expected.bank if expected is not None else None
+    if proposed_type is None:
+        context = _prototype_context(
+            call_target=call.call_target,
+            arg_index=arg_index,
+            current_type=current_type,
+            proposed_type=None,
+            current_bank=current_bank,
+            expected_bank=expected_bank,
+            expected_register=expected_register,
+            current_register=current_register,
+            prototype_scope=prototype.source_scope,
+            candidate_source=candidate_source,
+            decision_reason="prep evidence is insufficient for a safe type edit",
+        )
+        return SignatureAction(
+            kind="call-argument-type-audit",
+            confidence="low",
+            affected_call_sites=affected,
+            reason=(
+                "The expected argument prep does not map to a safe concrete "
+                "prototype type."
+            ),
+            rebucket=_prototype_candidate_unsupported_rebucket(context),
+        )
+
     blast_radius = (
         "same-translation-unit"
         if prototype.source_scope == "same-tu-static"
@@ -1594,10 +1679,16 @@ def _prototype_candidate_action(
         "arg_index": arg_index,
         "current_type": current_type,
         "proposed_type": proposed_type,
+        "current_bank": current_bank,
+        "expected_bank": expected_bank,
+        "current_register": current_register,
+        "expected_register": expected_register,
         "prototype_scope": prototype.source_scope,
+        "candidate_source": candidate_source,
         "blast_radius": blast_radius,
         "patch_status": patch_status,
         "localization_kind": source_site.get("localization_kind"),
+        "decision_reason": "prep evidence maps to a concrete prototype type",
         "reason": _prototype_candidate_reason(kind, patch_status),
     }
     return SignatureAction(
@@ -1663,6 +1754,45 @@ def _types_are_abi_equivalent(current_type: str, proposed_type: str) -> bool:
     return current_width is not None and current_width == proposed_width
 
 
+def _register_abi_bank(register: str | None) -> str | None:
+    if register is None:
+        return None
+    if register.startswith("f"):
+        return "FPR"
+    if register.startswith("r"):
+        return "GPR"
+    return None
+
+
+def _prototype_context(
+    *,
+    call_target: str,
+    arg_index: int,
+    current_type: str | None,
+    proposed_type: str | None,
+    current_bank: str | None,
+    expected_bank: str | None,
+    expected_register: str | None,
+    current_register: str | None,
+    prototype_scope: str,
+    candidate_source: str,
+    decision_reason: str,
+) -> dict[str, object]:
+    return {
+        "call_target": call_target,
+        "arg_index": arg_index,
+        "current_type": current_type,
+        "proposed_type": proposed_type,
+        "current_bank": current_bank,
+        "expected_bank": expected_bank,
+        "expected_register": expected_register,
+        "current_register": current_register,
+        "prototype_scope": prototype_scope,
+        "candidate_source": candidate_source,
+        "decision_reason": decision_reason,
+    }
+
+
 def _prototype_candidate_reason(kind: str, patch_status: str) -> str:
     if patch_status == "generated":
         return "safe same-translation-unit static parameter type patch"
@@ -1678,13 +1808,45 @@ def _rebucket(
     work_bucket: str,
     subcategory: str,
     explanation: str,
+    **extra: object,
 ) -> dict[str, object]:
-    return {
+    payload = {
         "reason": reason,
         "work_bucket": work_bucket,
         "subcategory": subcategory,
         "explanation": explanation,
     }
+    payload.update(extra)
+    return payload
+
+
+def _prototype_already_matches_rebucket(context: dict[str, object]) -> dict[str, object]:
+    return _rebucket(
+        "prototype-already-matches-abi-bank",
+        "signature-call-type",
+        "argument-presence",
+        (
+            "The localized visible prototype already uses the ABI bank implied "
+            "by the expected register, so there is no bounded prototype type edit."
+        ),
+        prototype_context=context,
+    )
+
+
+def _prototype_candidate_unsupported_rebucket(
+    context: dict[str, object],
+) -> dict[str, object]:
+    return _rebucket(
+        "prototype-candidate-unsupported",
+        "signature-call-type",
+        "argument-presence",
+        (
+            "The localized visible prototype cannot be turned into a safe "
+            "concrete parameter type edit with the available argument-prep "
+            "evidence."
+        ),
+        prototype_context=context,
+    )
 
 
 def _call_target_rebucket(
