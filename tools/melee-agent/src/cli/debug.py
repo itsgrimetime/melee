@@ -45,6 +45,7 @@ from ..mwcc_debug import (
 )
 from ..mwcc_debug import candidate_audit
 from ..mwcc_debug import cache as pcdump_cache
+from ..mwcc_debug import local_safety
 from ..mwcc_debug import permuter_remote
 from ..mwcc_debug.cast_audit import (
     audit_function_casts,
@@ -15753,6 +15754,21 @@ def pcdump_local(
         else src_rel
     )
     same_tu_probe = unit_src_rel != src_rel
+    lane_guard = local_safety.guard_local_pcdump_lane(
+        source_rel=src_rel,
+        function=function,
+        allow_unsafe=local_safety.allow_unsafe_local_pcdump(),
+    )
+    if lane_guard.unsafe:
+        typer.echo(
+            local_safety.format_unsafe_lane_message(
+                source_rel=src_rel,
+                function=function,
+                processes=lane_guard.processes,
+            ),
+            err=True,
+        )
+        raise typer.Exit(125)
 
     if force_frame_from_diff and not diff:
         typer.echo(
@@ -15980,6 +15996,7 @@ def pcdump_local(
     last_progress = time.time()
     pcdump_progress_marker: tuple[int, int] | None = None
     killed_by_watchdog = False
+    watchdog_lane_guard: local_safety.LocalLaneGuardResult | None = None
     while True:
         if proc_handle.poll() is not None:
             # Drain remaining output
@@ -16023,6 +16040,11 @@ def pcdump_local(
             except subprocess.TimeoutExpired:
                 # wibo is in UE state — can't reap. Move on.
                 pass
+            watchdog_lane_guard = local_safety.guard_local_pcdump_lane(
+                source_rel=src_rel,
+                function=function,
+                allow_unsafe=False,
+            )
             break
 
     # Shim into the old proc.stderr/stdout/returncode contract so the
@@ -16046,9 +16068,15 @@ def pcdump_local(
         hang_msg = (
             f"[debug dump local] no compile progress for "
             f"{WATCHDOG_TIMEOUT_S:.0f}s — likely wibo hang (UE state). "
-            f"Subprocess killed; check `ps aux | grep wibo` for zombie. "
+            f"Subprocess kill requested; check `ps aux | grep wibo` for zombie. "
             f"Override via MWCC_DEBUG_HANG_TIMEOUT=<seconds>."
         )
+        if watchdog_lane_guard is not None and watchdog_lane_guard.unsafe:
+            hang_msg += (
+                "\n[debug dump local] unsafe local pcdump lane now has "
+                "unreaped uninterruptible wibo process(es):\n"
+                f"{local_safety.format_unsafe_processes(watchdog_lane_guard.processes)}"
+            )
         if force_coalesce:
             hang_msg += (
                 f"\n[debug dump local] --force-coalesce '{force_coalesce}' was "
@@ -16370,6 +16398,9 @@ def pcdump_local(
         cache_skip_reason = (
             f"requested function {function!r} was not emitted in pcdump"
         )
+    elif killed_by_watchdog:
+        skip_cache_sync = True
+        cache_skip_reason = "watchdog timed out local dump"
     elif not skip_cache_sync:
         source_current, _current_digest = _compiled_source_snapshot_still_current(
             src_path_for_cache,

@@ -30,6 +30,10 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
+from src.mwcc_debug.diff_capture import (
+    _env_with_child_hang_timeout,
+    _run_with_process_group_timeout,
+)
 from src.search.adapters import _acquire_repo_build_lock
 from src.search.artifact import (
     CandidateArtifact,
@@ -53,8 +57,10 @@ class PcdumpLocalBackend:
                      Callable(SourceVariant) -> CompileSpec; builds the
                      CompileSpec for a given variant (injected so callers
                      supply toolchain fingerprints, cflags hashes, etc.).
-        runner:      Callable with ``subprocess.run`` signature.  Injectable
-                     for tests; defaults to ``subprocess.run``.
+        runner:      Callable with ``subprocess.run``-like signature.
+                     Injectable for tests; defaults to a process-group timeout
+                     runner.
+        timeout:     Outer timeout in seconds for the local pcdump subprocess.
     """
 
     def __init__(
@@ -65,7 +71,8 @@ class PcdumpLocalBackend:
         target: TargetSpec,
         store: Any,
         compile_spec_factory: Callable[[SourceVariant], CompileSpec],
-        runner: Callable = subprocess.run,
+        runner: Callable = _run_with_process_group_timeout,
+        timeout: int = 120,
     ) -> None:
         self._melee_root = Path(melee_root)
         self._unit = unit
@@ -73,6 +80,7 @@ class PcdumpLocalBackend:
         self._store = store
         self._compile_spec_factory = compile_spec_factory
         self._runner = runner
+        self._timeout = timeout
 
     # ------------------------------------------------------------------
     # BackendCaps
@@ -135,12 +143,25 @@ class PcdumpLocalBackend:
                     str(obj_tmp),
                     "--no-cache-sync",
                 ]
-                proc = self._runner(
-                    argv,
-                    cwd=self._melee_root / "tools" / "melee-agent",
-                    capture_output=True,
-                    text=True,
-                )
+                try:
+                    proc = self._runner(
+                        argv,
+                        cwd=self._melee_root / "tools" / "melee-agent",
+                        timeout=self._timeout,
+                        env=_env_with_child_hang_timeout(self._timeout),
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    stdout = "" if exc.output is None else str(exc.output)
+                    stderr = "" if exc.stderr is None else str(exc.stderr)
+                    if stderr and not stderr.endswith("\n"):
+                        stderr += "\n"
+                    stderr += f"dump local timed out after {self._timeout}s"
+                    proc = subprocess.CompletedProcess(
+                        argv,
+                        124,
+                        stdout,
+                        stderr,
+                    )
             finally:
                 # Always restore the TU .c on every path.
                 if original_c:

@@ -2190,6 +2190,13 @@ def run_cmd(
             ),
         ),
     ] = 60.0,
+    directed_pcdump_timeout: Annotated[
+        int,
+        typer.Option(
+            "--directed-pcdump-timeout",
+            help="Timeout in seconds for directed local pcdump compilation.",
+        ),
+    ] = 120,
 ) -> None:
     """Run a search over source variants for FUNCTION in UNIT.
 
@@ -2396,6 +2403,7 @@ def run_cmd(
             target=target,
             store=artifact_store,
             compile_spec_factory=lambda variant: _make_spec("pcdump-local"),
+            timeout=directed_pcdump_timeout,
         )
         try:
             objective = build_directed_objective(
@@ -2624,6 +2632,13 @@ def directed_cmd(
             help="Timeout in seconds for directed proof derivation.",
         ),
     ] = 60.0,
+    directed_pcdump_timeout: Annotated[
+        int,
+        typer.Option(
+            "--directed-pcdump-timeout",
+            help="Timeout in seconds for directed local pcdump compilation.",
+        ),
+    ] = 120,
 ) -> None:
     """Run the directed (pcdump-guided) search layer for FUNCTION in UNIT.
 
@@ -2675,6 +2690,7 @@ def directed_cmd(
         proof_force_phys=proof_force_phys,
         class_id=class_id,
         source_file=source_file,
+        pcdump_timeout=directed_pcdump_timeout,
     )
     typer.echo(_json.dumps(res, indent=2))
 

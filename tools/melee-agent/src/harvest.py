@@ -15,6 +15,11 @@ from pathlib import Path
 from typing import Any, Mapping, Protocol
 
 from src.mwcc_debug import cache as pcdump_cache
+from src.mwcc_debug import local_safety
+from src.mwcc_debug.diff_capture import (
+    _env_with_child_hang_timeout,
+    _run_with_process_group_timeout,
+)
 from src.mwcc_debug.source_patch import extract_function, replace_function
 
 SCHEMA_VERSION = 1
@@ -82,6 +87,7 @@ BLOCKER_HARNESS_EXIT_NONZERO = "harness-exit-nonzero"
 BLOCKER_HARNESS_INVALID_JSON = "harness-invalid-json"
 BLOCKER_NO_VALIDATED_CANDIDATE = "no-validated-candidate"
 BLOCKER_MALFORMED_SOURCE_CANDIDATE = "malformed-source-candidate"
+BLOCKER_UNSAFE_LOCAL_PCDUMP_LANE = "unsafe-local-pcdump-lane"
 MALFORMED_SOURCE_CANDIDATE_ACTIONABILITY = "candidate-generation-fidelity"
 BLOCKER_APPLY_TRANSFER_FAILED = "apply-transfer-failed"
 BLOCKER_APPLY_VALIDATION_FAILED = "apply-validation-failed"
@@ -185,6 +191,9 @@ class PcdumpPreflightReport:
     missing_units: list[str] = field(default_factory=list)
     generated_units: list[str] = field(default_factory=list)
     failed_units: list[str] = field(default_factory=list)
+    unsafe_units: list[str] = field(default_factory=list)
+    unsafe_sources: list[str] = field(default_factory=list)
+    unsafe_processes: list[dict[str, Any]] = field(default_factory=list)
     setup_command: dict[str, Any] | None = None
     dump_commands: list[dict[str, Any]] = field(default_factory=list)
     dump_failures: list[dict[str, Any]] = field(default_factory=list)
@@ -1066,13 +1075,25 @@ def _default_runner(
     timeout: int,
 ) -> HarnessProcessResult:
     command = [sys.executable, "-m", "src.cli", *args]
-    completed = subprocess.run(
-        command,
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        timeout=timeout + 30,
-    )
+    try:
+        completed = _run_with_process_group_timeout(
+            command,
+            cwd=cwd,
+            timeout=timeout + 30,
+            env=_env_with_child_hang_timeout(timeout),
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = "" if exc.output is None else str(exc.output)
+        stderr = "" if exc.stderr is None else str(exc.stderr)
+        if stderr and not stderr.endswith("\n"):
+            stderr += "\n"
+        stderr += f"harvest subprocess timed out after {timeout + 30}s"
+        return HarnessProcessResult(
+            command=list(args),
+            returncode=124,
+            stdout=stdout,
+            stderr=stderr,
+        )
     return HarnessProcessResult(
         command=list(args),
         returncode=completed.returncode,
@@ -1093,6 +1114,17 @@ def _command_report(
     }
 
 
+def _process_reports_unsafe_local_pcdump(process: HarnessProcessResult) -> bool:
+    if process.returncode not in {124, 125}:
+        return False
+    output = f"{process.stderr}\n{process.stdout}".lower()
+    return (
+        "unsafe local pcdump lane" in output
+        or "unsafe local mwcc-debug lane" in output
+        or "uninterruptible wibo" in output
+    )
+
+
 def _pcdump_unit_for_source(repo_root: Path, source_file: Path) -> str:
     try:
         rel = source_file.resolve().relative_to((repo_root / "src").resolve())
@@ -1103,6 +1135,14 @@ def _pcdump_unit_for_source(repo_root: Path, source_file: Path) -> str:
     if rel.suffix != ".c":
         raise ValueError(f"pcdump preflight expected .c source: {source_file}")
     return rel.with_suffix("").as_posix()
+
+
+def _source_rel_for_local_pcdump_guard(repo_root: Path, source_file: Path) -> str:
+    try:
+        rel = source_file.resolve().relative_to(repo_root.resolve())
+    except ValueError:
+        return source_file.as_posix()
+    return rel.as_posix()
 
 
 def _needs_pcdump_preflight(
@@ -1176,15 +1216,12 @@ def _run_pcdump_preflight(
     compose: bool,
 ) -> PcdumpPreflightReport:
     by_unit: dict[str, HarvestRequest] = {}
-    setup_required = False
     for request in requests:
         if not _needs_pcdump_preflight(request, compose=compose):
             continue
         assert request.source_file is not None
         unit = _pcdump_unit_for_source(repo_root, request.source_file)
         by_unit.setdefault(unit, request)
-        if _requires_pcdump_setup_preflight(request, compose=compose):
-            setup_required = True
 
     if not by_unit:
         return PcdumpPreflightReport(enabled=False)
@@ -1193,8 +1230,43 @@ def _run_pcdump_preflight(
         enabled=True,
         required_units=list(by_unit),
     )
-    units_to_generate: list[str] = []
+    allow_unsafe = local_safety.allow_unsafe_local_pcdump()
+    observed_processes = (
+        []
+        if allow_unsafe
+        else local_safety.scan_local_wibo_processes()
+    )
+    safe_by_unit: dict[str, HarvestRequest] = {}
+    seen_unsafe_pids: set[int] = set()
     for unit, request in by_unit.items():
+        assert request.source_file is not None
+        source_rel = _source_rel_for_local_pcdump_guard(repo_root, request.source_file)
+        guard = local_safety.guard_local_pcdump_lane(
+            source_rel=source_rel,
+            function=request.function,
+            processes=observed_processes,
+            allow_unsafe=allow_unsafe,
+        )
+        if guard.unsafe:
+            report.unsafe_units.append(unit)
+            report.unsafe_sources.append(source_rel)
+            for process in guard.processes:
+                if process.pid in seen_unsafe_pids:
+                    continue
+                seen_unsafe_pids.add(process.pid)
+                report.unsafe_processes.append(process.to_dict())
+            continue
+        safe_by_unit[unit] = request
+
+    if not safe_by_unit:
+        return report
+
+    setup_required = any(
+        _requires_pcdump_setup_preflight(request, compose=compose)
+        for request in safe_by_unit.values()
+    )
+    units_to_generate: list[str] = []
+    for unit, request in safe_by_unit.items():
         entry = pcdump_cache.lookup(repo_root, unit)
         if entry is None:
             report.missing_units.append(unit)
@@ -1228,7 +1300,7 @@ def _run_pcdump_preflight(
         return report
 
     for unit in units_to_generate:
-        request = by_unit[unit]
+        request = safe_by_unit[unit]
         assert request.source_file is not None
         dump_command = [
             "debug",
@@ -1261,6 +1333,16 @@ def _run_pcdump_preflight(
             failure = _command_report(dump_command, dump_process)
             failure["unit"] = unit
             report.dump_failures.append(failure)
+            if _process_reports_unsafe_local_pcdump(dump_process):
+                if unit not in report.unsafe_units:
+                    report.unsafe_units.append(unit)
+                source_rel = _source_rel_for_local_pcdump_guard(
+                    repo_root,
+                    request.source_file,
+                )
+                if source_rel not in report.unsafe_sources:
+                    report.unsafe_sources.append(source_rel)
+                continue
             entry = pcdump_cache.lookup(repo_root, unit)
             if entry is not None and entry.fresh:
                 report.generated_units.append(unit)
@@ -1566,6 +1648,44 @@ def _base_result(
         subcategory=request.subcategory,
         source_actionability=source_actionability or request.source_actionability,
         frame_closability_tier=request.frame_closability_tier,
+    )
+
+
+def _unsafe_local_pcdump_result(
+    request: HarvestRequest,
+    *,
+    repo_root: Path,
+    preflight_report: PcdumpPreflightReport,
+) -> HarvestResult | None:
+    if request.source_file is None:
+        return None
+    try:
+        unit = _pcdump_unit_for_source(repo_root, request.source_file)
+    except ValueError:
+        return None
+    if unit not in set(preflight_report.unsafe_units):
+        return None
+    source_rel = _source_rel_for_local_pcdump_guard(repo_root, request.source_file)
+    source_aliases = {source_rel, source_rel.removeprefix("src/")}
+    matching_processes = [
+        process
+        for process in preflight_report.unsafe_processes
+        if process.get("source_rel") in source_aliases
+    ]
+    return _base_result(
+        request,
+        harness=select_harness(request),
+        status="blocked",
+        blocker=BLOCKER_UNSAFE_LOCAL_PCDUMP_LANE,
+        reason=(
+            f"uninterruptible wibo process already exists for {source_rel}; "
+            "local pcdump lane marked unsafe and candidate scoring was skipped"
+        ),
+        details={
+            "unit": unit,
+            "source_rel": source_rel,
+            "unsafe_processes": matching_processes or preflight_report.unsafe_processes,
+        },
     )
 
 
@@ -4083,26 +4203,36 @@ def run_harvest(
     )
     source_snapshots = {} if apply else _snapshot_source_files(requests)
     try:
+        pcdump_preflight = _run_pcdump_preflight(
+            requests,
+            repo_root=repo_root,
+            runner=runner,
+            timeout=timeout,
+            compose=compose,
+        )
         preflight = {
-            "pcdump": _run_pcdump_preflight(
-                requests,
-                repo_root=repo_root,
-                runner=runner,
-                timeout=timeout,
-                compose=compose,
-            ).to_dict()
+            "pcdump": pcdump_preflight.to_dict()
         }
         request_runner = run_composed_harvest_request if compose else run_harvest_request
-        results = [
-            request_runner(
+        results: list[HarvestResult] = []
+        for request in requests:
+            unsafe_result = _unsafe_local_pcdump_result(
                 request,
                 repo_root=repo_root,
-                runner=runner,
-                validator=validator,
-                match_checker=match_checker,
+                preflight_report=pcdump_preflight,
             )
-            for request in requests
-        ]
+            if unsafe_result is not None:
+                results.append(unsafe_result)
+                continue
+            results.append(
+                request_runner(
+                    request,
+                    repo_root=repo_root,
+                    runner=runner,
+                    validator=validator,
+                    match_checker=match_checker,
+                )
+            )
         finished_at = _utc_now()
         if ledger_path is not None:
             return write_ledger(

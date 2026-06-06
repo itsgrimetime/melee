@@ -1,5 +1,6 @@
 """Tests for PcdumpLocalBackend (Task 2)."""
 
+import subprocess
 from pathlib import Path
 
 from src.search.directed.pcdump_backend import PcdumpLocalBackend
@@ -101,3 +102,41 @@ def test_compile_failed_when_obj_missing(tmp_path):
     )
     art = be.compile(SourceVariant("CAND", None), want_pcdump=True)
     assert art.status == "compile_failed"
+
+
+def test_compile_timeout_returns_failed_artifact_and_restores(tmp_path):
+    (tmp_path / "src/melee/gr").mkdir(parents=True)
+    tu = tmp_path / "src/melee/gr/gricemt.c"
+    tu.write_text("orig")
+    captured = {}
+
+    def runner(argv, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        captured["env"] = kwargs.get("env")
+        raise subprocess.TimeoutExpired(
+            argv,
+            kwargs.get("timeout"),
+            output="partial stdout",
+            stderr="unreaped uninterruptible wibo process",
+        )
+
+    be = PcdumpLocalBackend(
+        melee_root=tmp_path,
+        unit="melee/gr/gricemt",
+        target=TargetSpec("grIceMt_801F9ACC", "melee/gr/gricemt", tmp_path / "e.o"),
+        store=_FakeStore(tmp_path),
+        compile_spec_factory=lambda v: _spec(),
+        runner=runner,
+        timeout=17,
+    )
+
+    art = be.compile(SourceVariant("CAND", None), want_pcdump=True)
+
+    assert captured["timeout"] == 17
+    assert captured["env"] is not None
+    assert float(captured["env"]["MWCC_DEBUG_HANG_TIMEOUT"]) < 17
+    assert tu.read_text() == "orig"
+    assert art.status == "compile_failed"
+    assert art.object_path is None
+    assert art.pcdump_path is None
+    assert "unreaped uninterruptible wibo process" in art.compiler_stderr

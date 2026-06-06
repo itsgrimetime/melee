@@ -6719,6 +6719,71 @@ def test_dump_local_watchdog_uses_process_tree_killer(
     assert "no compile progress" in result.stderr
 
 
+def test_dump_local_refuses_uninterruptible_matching_wibo_lane(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from src.mwcc_debug.local_safety import LocalWiboProcess
+
+    melee_root = tmp_path / "melee"
+    src_path = melee_root / "src" / "sysdolphin" / "baselib" / "particle.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text("void hsd_80391AC8(void)\n{\n}\n")
+    compiler_dir = melee_root / "build" / "compilers" / "GC" / "1.2.5n"
+    compiler_dir.mkdir(parents=True)
+    (compiler_dir / "mwcceppc_debug.exe").write_text("")
+    wibo = tmp_path / "wibo"
+    launched_marker = tmp_path / "wibo-launched"
+    wibo.write_text(
+        "#!/usr/bin/env python3\n"
+        "from pathlib import Path\n"
+        f"Path({str(launched_marker)!r}).write_text('launched')\n"
+    )
+    wibo.chmod(0o755)
+    unsafe = LocalWiboProcess(
+        pid=80283,
+        ppid=1,
+        stat="UEs",
+        elapsed="10:27",
+        command=(
+            "wibo mwcceppc_debug.exe "
+            "-c src/sysdolphin/baselib/particle.c"
+        ),
+        source_rel="src/sysdolphin/baselib/particle.c",
+    )
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+    monkeypatch.setattr(debug_cli, "_find_compiler_dir", lambda: compiler_dir)
+    monkeypatch.setattr(debug_cli, "_ninja_cflags_for_unit", lambda src_rel: ("", "mwcc"))
+    monkeypatch.setattr(
+        debug_cli.local_safety,
+        "scan_local_wibo_processes",
+        lambda: [unsafe],
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "dump",
+            "local",
+            str(src_path),
+            "--function",
+            "hsd_80391AC8",
+            "--output",
+            str(tmp_path / "pcdump.out"),
+            "--no-cache-sync",
+        ],
+    )
+
+    assert result.exit_code == 125
+    assert "unsafe local pcdump lane" in result.stderr
+    assert "80283" in result.stderr
+    assert "src/sysdolphin/baselib/particle.c" in result.stderr
+    assert not launched_marker.exists()
+
+
 def test_dump_local_watchdog_treats_pcdump_growth_as_progress(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

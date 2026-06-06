@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -1277,6 +1278,70 @@ def test_load_queue_rows_rejects_unknown_filter_field_even_with_zero_limit(
         )
 
 
+def test_default_runner_uses_process_group_timeout_with_child_watchdog(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[list[str], Path, int, dict[str, str] | None]] = []
+
+    def fake_process_group_runner(cmd, *, cwd, timeout, env=None):
+        calls.append(([str(part) for part in cmd], cwd, timeout, env))
+        return subprocess.CompletedProcess(cmd, 0, "ok", "")
+
+    def fail_subprocess_run(*args, **kwargs):
+        raise AssertionError("harvest runner must use process-group timeout")
+
+    monkeypatch.setattr(
+        harvest_module,
+        "_run_with_process_group_timeout",
+        fake_process_group_runner,
+        raising=False,
+    )
+    monkeypatch.setattr(harvest_module.subprocess, "run", fail_subprocess_run)
+
+    result = harvest_module._default_runner(
+        ["debug", "dump", "local", "src/sysdolphin/baselib/particle.c"],
+        cwd=tmp_path,
+        timeout=45,
+    )
+
+    assert result.returncode == 0
+    assert calls[0][0][:3] == [sys.executable, "-m", "src.cli"]
+    assert calls[0][2] == 75
+    assert calls[0][3] is not None
+    assert float(calls[0][3]["MWCC_DEBUG_HANG_TIMEOUT"]) < 45
+
+
+def test_default_runner_converts_timeout_to_process_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def fake_process_group_runner(cmd, *, cwd, timeout, env=None):
+        raise subprocess.TimeoutExpired(
+            cmd,
+            timeout,
+            output="partial stdout",
+            stderr="unsafe local pcdump lane",
+        )
+
+    monkeypatch.setattr(
+        harvest_module,
+        "_run_with_process_group_timeout",
+        fake_process_group_runner,
+        raising=False,
+    )
+
+    result = harvest_module._default_runner(
+        ["debug", "dump", "local", "src/sysdolphin/baselib/particle.c"],
+        cwd=tmp_path,
+        timeout=45,
+    )
+
+    assert result.returncode == 124
+    assert result.stdout == "partial stdout"
+    assert "unsafe local pcdump lane" in result.stderr
+
+
 def test_preview_harvest_queue_counts_facets_and_sample_before_limit(
     tmp_path: Path,
 ) -> None:
@@ -2117,6 +2182,167 @@ def test_run_harvest_prefetches_indexed_struct_compile_probe_pcdumps(
     assert lookups == ["melee/demo"]
     assert ledger["preflight"]["pcdump"]["required_units"] == ["melee/demo"]
     assert ledger["preflight"]["pcdump"]["generated_units"] == ["melee/demo"]
+
+
+def test_run_harvest_blocks_unsafe_indexed_pcdump_lane(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from src.mwcc_debug.local_safety import LocalWiboProcess
+
+    repo_root = _repo_with_source(tmp_path, "sysdolphin/baselib/particle.c")
+    queue = tmp_path / "queues" / "indexed-struct-pointer.tsv"
+    row = _row(
+        "hsd_80391AC8",
+        file_path="sysdolphin/baselib/particle.c",
+        headline_tool="source-shape",
+        source_actionability="current-tools-indexed-pointer",
+        frame_closability_tier="",
+    )
+    row["primary"] = "indexed-struct-pointer-materialization"
+    _write_queue(queue, [row])
+    unsafe = LocalWiboProcess(
+        pid=80283,
+        ppid=1,
+        stat="UEs",
+        elapsed="10:27",
+        command=(
+            "wibo mwcceppc_debug.exe "
+            "-c src/sysdolphin/baselib/particle.c"
+        ),
+        source_rel="src/sysdolphin/baselib/particle.c",
+    )
+    monkeypatch.setattr(harvest_module.pcdump_cache, "lookup", lambda _repo, _unit: None)
+    monkeypatch.setattr(
+        harvest_module.local_safety,
+        "scan_local_wibo_processes",
+        lambda: [unsafe],
+    )
+    calls: list[list[str]] = []
+
+    def runner(args: list[str], *, cwd: Path, timeout: int) -> HarnessProcessResult:
+        calls.append(args)
+        return HarnessProcessResult(args, 0, json.dumps({"variants": []}), "")
+
+    ledger = run_harvest(
+        "indexed-struct-pointer",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    assert calls == []
+    assert ledger["preflight"]["pcdump"]["unsafe_units"] == [
+        "sysdolphin/baselib/particle"
+    ]
+    assert ledger["preflight"]["pcdump"]["unsafe_processes"][0]["pid"] == 80283
+    result = ledger["results"][0]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "unsafe-local-pcdump-lane"
+    assert result["harness"] == "indexed-struct-search"
+    assert "uninterruptible wibo" in result["reason"]
+
+
+def test_run_harvest_marks_dump_local_unsafe_returncode_before_scoring(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path, "sysdolphin/baselib/particle.c")
+    queue = tmp_path / "queues" / "indexed-struct-pointer.tsv"
+    row = _row(
+        "hsd_80391AC8",
+        file_path="sysdolphin/baselib/particle.c",
+        headline_tool="source-shape",
+        source_actionability="current-tools-indexed-pointer",
+        frame_closability_tier="",
+    )
+    row["primary"] = "indexed-struct-pointer-materialization"
+    _write_queue(queue, [row])
+    monkeypatch.setattr(harvest_module.pcdump_cache, "lookup", lambda _repo, _unit: None)
+    monkeypatch.setattr(
+        harvest_module.local_safety,
+        "scan_local_wibo_processes",
+        lambda: [],
+    )
+    calls: list[list[str]] = []
+
+    def runner(args: list[str], *, cwd: Path, timeout: int) -> HarnessProcessResult:
+        calls.append(args)
+        if args == ["debug", "dump", "setup"]:
+            return HarnessProcessResult(args, 0, "", "")
+        if args[:3] == ["debug", "dump", "local"]:
+            return HarnessProcessResult(
+                args,
+                125,
+                "",
+                (
+                    "unsafe local pcdump lane for hsd_80391AC8: "
+                    "existing uninterruptible wibo process"
+                ),
+            )
+        raise AssertionError(f"candidate scoring should be skipped: {args}")
+
+    ledger = run_harvest(
+        "indexed-struct-pointer",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    assert [call[:3] for call in calls] == [
+        ["debug", "dump", "setup"],
+        ["debug", "dump", "local"],
+    ]
+    assert ledger["preflight"]["pcdump"]["unsafe_units"] == [
+        "sysdolphin/baselib/particle"
+    ]
+    result = ledger["results"][0]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "unsafe-local-pcdump-lane"
+
+
+def test_run_harvest_does_not_overblock_same_unit_without_pcdump_preflight(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from src.mwcc_debug.local_safety import LocalWiboProcess
+
+    repo_root = _repo_with_source(tmp_path, "sysdolphin/baselib/particle.c")
+    queue = tmp_path / "queues" / "inline-boundary.tsv"
+    row = _row(
+        "hsd_80391AC8",
+        file_path="sysdolphin/baselib/particle.c",
+        headline_tool="patterns-inlines",
+        source_actionability="manual-inline-guidance",
+        frame_closability_tier="",
+    )
+    row["primary"] = "missing-reference-call-current-inlined"
+    _write_queue(queue, [row])
+    unsafe = LocalWiboProcess(
+        pid=80283,
+        ppid=1,
+        stat="UEs",
+        elapsed="10:27",
+        command=(
+            "wibo mwcceppc_debug.exe "
+            "-c src/sysdolphin/baselib/particle.c"
+        ),
+        source_rel="src/sysdolphin/baselib/particle.c",
+    )
+    monkeypatch.setattr(
+        harvest_module.local_safety,
+        "scan_local_wibo_processes",
+        lambda: [unsafe],
+    )
+
+    ledger = run_harvest(
+        "inline-boundary",
+        repo_root=repo_root,
+        queue_path=queue,
+    )
+
+    assert ledger["preflight"]["pcdump"]["enabled"] is False
+    assert ledger["results"][0]["blocker"] == "unsupported-harness"
 
 
 def test_indexed_struct_pcdump_setup_failure_stops_before_compile_probe_scoring(
