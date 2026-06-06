@@ -338,6 +338,13 @@ def _structural_with_deltas(
     candidate: dict[str, Any],
 ) -> dict[str, Any]:
     structural = dict(candidate)
+    if "opcode_similarity" in candidate:
+        try:
+            structural["opcode_shape_preserved"] = (
+                float(candidate["opcode_similarity"]) >= 1.0
+            )
+        except (TypeError, ValueError):
+            pass
     for key in ("opcode_similarity", "line_delta", "hunk_count"):
         if key not in candidate or key not in baseline:
             continue

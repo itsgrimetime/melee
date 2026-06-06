@@ -23,6 +23,13 @@ DEFAULT_STRUCTURE_AXES = (
     "case-order",
     "statement-order",
 )
+OPTIONAL_STRUCTURE_AXES = (
+    "source-lifetime",
+)
+SUPPORTED_STRUCTURE_AXES = (
+    *DEFAULT_STRUCTURE_AXES,
+    *OPTIONAL_STRUCTURE_AXES,
+)
 SCORE_CAP_UNSCORED_REASON = "not scored due max-candidates cap"
 
 
@@ -33,9 +40,14 @@ class AxisSummary:
     candidate_count: int = 0
     blocker: str | None = None
     reason: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        return {k: v for k, v in asdict(self).items() if v not in (None, "")}
+        return {
+            k: v
+            for k, v in asdict(self).items()
+            if v not in (None, "", {})
+        }
 
 
 @dataclass
@@ -100,6 +112,7 @@ def rank_structure_variants(variants: list[StructureVariant]) -> list[StructureV
         variants,
         key=lambda variant: (
             0 if variant.score_percent() >= 100.0 and variant.status == "ok" else 1,
+            _source_lifetime_shape_rank(variant),
             -variant.score_percent(),
             -(variant.delta if variant.delta is not None else -9999.0),
             0 if variant.status == "ok" else 1,
@@ -112,6 +125,27 @@ def rank_structure_variants(variants: list[StructureVariant]) -> list[StructureV
     for index, variant in enumerate(ranked, 1):
         variant.rank = index
     return ranked
+
+
+def _source_lifetime_shape_rank(variant: StructureVariant) -> int:
+    if variant.axis != "source-lifetime":
+        return 0
+    if variant.unscored_reason == SCORE_CAP_UNSCORED_REASON:
+        return 4
+    if variant.status == "unscored" or variant.compile_status not in (None, "ok"):
+        return 3
+    if variant.status != "ok":
+        return 4
+    if variant.unscored_reason:
+        return 3
+    structural = variant.metadata.get("structural")
+    if not isinstance(structural, dict):
+        return 3
+    if structural.get("opcode_shape_preserved") is True:
+        return 0
+    if structural.get("opcode_shape_preserved") is False:
+        return 2
+    return 3
 
 
 def run_structure_search(
@@ -325,6 +359,25 @@ def run_structure_search(
             variants.extend(axis_variants)
             continue
 
+        if axis == "source-lifetime":
+            if source is None:
+                summary, axis_variants = _blocked_axis(
+                    axis,
+                    "source-unavailable",
+                    source_read_error or "source file was not provided",
+                )
+            else:
+                summary, axis_variants = generate_source_lifetime_variants(
+                    source,
+                    function,
+                    output_path / "source-lifetime",
+                    baseline_percent=baseline_percent,
+                    max_candidates=max_candidates,
+                )
+            axis_summaries.append(summary)
+            variants.extend(axis_variants)
+            continue
+
         if axis == "statement-order":
             if source is None:
                 summary, axis_variants = _blocked_axis(
@@ -349,7 +402,7 @@ def run_structure_search(
                 axis=axis or "<empty>",
                 status="blocked",
                 blocker="unsupported-axis",
-                reason="supported axes: " + ", ".join(DEFAULT_STRUCTURE_AXES),
+                reason="supported axes: " + ", ".join(SUPPORTED_STRUCTURE_AXES),
             )
         )
 
@@ -632,6 +685,78 @@ def generate_control_flow_variants(
             axis="control-flow",
             status="evaluated",
             candidate_count=len(variants),
+        ),
+        variants,
+    )
+
+
+def generate_source_lifetime_variants(
+    source: str,
+    function: str,
+    output_dir: Path,
+    *,
+    baseline_percent: float | None,
+    max_candidates: int,
+) -> tuple[AxisSummary, list[StructureVariant]]:
+    from src.mwcc_debug.pressure_explorer import generate_source_lifetime_probes
+
+    max_candidates = max(0, int(max_candidates))
+    probes, family_summaries = generate_source_lifetime_probes(
+        source,
+        function,
+        max_probes=max_candidates,
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    command = (
+        f"melee-agent debug search structure -f {function} "
+        f"--axis source-lifetime --max-candidates {max_candidates}"
+    )
+
+    variants: list[StructureVariant] = []
+    for probe in probes[:max_candidates]:
+        path = output_dir / f"{_safe_candidate_label(probe.label)}.c"
+        path.write_text(probe.source_text, encoding="utf-8")
+        variants.append(
+            StructureVariant(
+                axis="source-lifetime",
+                operator=probe.operator,
+                label=probe.label,
+                status="candidate",
+                baseline_percent=baseline_percent,
+                path=str(path),
+                source_retained=str(path),
+                command=command,
+                metadata={
+                    "probe": probe.to_dict(),
+                    "live_mutation": False,
+                },
+            )
+        )
+
+    metadata = {"families": family_summaries}
+    if not variants:
+        reason = (
+            "max-candidates was 0, so no source-lifetime candidates were retained"
+            if max_candidates == 0
+            else "no safe source-lifetime helper-inline probe generated"
+        )
+        return (
+            AxisSummary(
+                axis="source-lifetime",
+                status="blocked",
+                blocker="no-source-lifetime-candidates",
+                reason=reason,
+                metadata=metadata,
+            ),
+            [],
+        )
+
+    return (
+        AxisSummary(
+            axis="source-lifetime",
+            status="evaluated",
+            candidate_count=len(variants),
+            metadata=metadata,
         ),
         variants,
     )

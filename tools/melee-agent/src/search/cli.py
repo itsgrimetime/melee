@@ -21,6 +21,7 @@ import typer
 
 from src.search.structure import (
     DEFAULT_STRUCTURE_AXES,
+    SUPPORTED_STRUCTURE_AXES,
     render_structure_text,
     run_structure_search,
 )
@@ -798,8 +799,9 @@ def structure_cmd(
         typer.Option(
             "--axis",
             help=(
-                "Structure axis to run; repeatable. Defaults to decl-order, "
-                "control-flow, case-order, and statement-order."
+                "Structure axis to run; repeatable. Supported axes: "
+                f"{', '.join(SUPPORTED_STRUCTURE_AXES)}. Defaults to "
+                f"{', '.join(DEFAULT_STRUCTURE_AXES)}."
             ),
         ),
     ] = None,

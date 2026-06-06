@@ -27,6 +27,22 @@ def _write_report(path: Path, percent: float) -> None:
     )
 
 
+def test_structural_metrics_include_opcode_shape_preserved() -> None:
+    structural = scoring_mod._structural_with_deltas(
+        {"opcode_similarity": 1.0, "line_delta": 0, "hunk_count": 1},
+        {"opcode_similarity": 1.0, "line_delta": 0, "hunk_count": 1},
+    )
+
+    assert structural["opcode_shape_preserved"] is True
+
+    structural = scoring_mod._structural_with_deltas(
+        {"opcode_similarity": 1.0},
+        {"opcode_similarity": 0.98},
+    )
+
+    assert structural["opcode_shape_preserved"] is False
+
+
 def test_score_structure_variants_restores_files_and_sets_checkdiff_env(
     monkeypatch,
     tmp_path: Path,

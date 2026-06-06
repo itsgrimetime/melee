@@ -58,6 +58,31 @@ def test_rank_structure_variants_prefers_exact_then_match_then_delta() -> None:
     assert [row.rank for row in ranked] == [1, 2, 3]
 
 
+def test_source_lifetime_ranking_prefers_shape_preserved_candidate() -> None:
+    ranked = rank_structure_variants([
+        StructureVariant(
+            axis="source-lifetime",
+            operator="helper-result-dematerialize",
+            label="shape-break",
+            status="ok",
+            final_match_percent=99.0,
+            delta=1.0,
+            metadata={"structural": {"opcode_shape_preserved": False}},
+        ),
+        StructureVariant(
+            axis="source-lifetime",
+            operator="repeated-helper-result-reuse",
+            label="shape-preserved",
+            status="ok",
+            final_match_percent=98.0,
+            delta=0.5,
+            metadata={"structural": {"opcode_shape_preserved": True}},
+        ),
+    ])
+
+    assert [variant.label for variant in ranked] == ["shape-preserved", "shape-break"]
+
+
 def test_normalize_control_flow_payload_preserves_retained_sources() -> None:
     payload = {
         "function": "fn_80000000",
@@ -748,6 +773,68 @@ def test_run_structure_search_supports_statement_order_axis(tmp_path: Path) -> N
     assert Path(payload["variants"][0]["source_retained"]).exists()
     assert "statement-order" not in {row["axis"] for row in payload["future_axes"]}
     assert payload["stop_condition"]["kind"] == "candidates-generated"
+
+
+def test_run_structure_search_source_lifetime_axis_emits_retained_candidates(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "demo.c"
+    source_path.write_text(
+        "s32 fn_803AC7DC(CardState* state, s32 i)\n"
+        "{\n"
+        "    s32 total = 0;\n"
+        "    total += fn_803AC634(state, i);\n"
+        "    if (total < (s32) fn_803AC634(state, i)) {\n"
+        "        total = (s32) fn_803AC634(state, i);\n"
+        "    }\n"
+        "    return total;\n"
+        "}\n"
+    )
+
+    payload = run_structure_search(
+        "fn_803AC7DC",
+        source_path,
+        tmp_path / "structure",
+        axes=("source-lifetime",),
+        max_candidates=2,
+        score_variants=False,
+    )
+
+    assert payload["axes"][0]["axis"] == "source-lifetime"
+    assert payload["axes"][0]["status"] == "evaluated"
+    assert payload["axes"][0]["metadata"]["families"]
+    assert payload["variants"]
+    assert all(row["axis"] == "source-lifetime" for row in payload["variants"])
+    assert all(Path(row["source_retained"]).exists() for row in payload["variants"])
+
+
+def test_source_lifetime_axis_prioritizes_targeted_probes_under_small_cap(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "demo.c"
+    source_path.write_text(
+        "s32 fn_803ACD58(CardState* state)\n"
+        "{\n"
+        "    s32 i;\n"
+        "    s32 size;\n"
+        "    s32 total;\n"
+        "    for (i = 0; size = state->x8, i < (0x2F + state->x24 + size) / size; i++) {\n"
+        "        total += i;\n"
+        "    }\n"
+        "    return total;\n"
+        "}\n"
+    )
+
+    payload = run_structure_search(
+        "fn_803ACD58",
+        source_path,
+        tmp_path / "structure",
+        axes=("source-lifetime",),
+        max_candidates=1,
+        score_variants=False,
+    )
+
+    assert payload["variants"][0]["operator"] == "for-condition-field-reload"
 
 
 def test_run_structure_search_stop_condition_uses_hidden_unscored_candidates(
