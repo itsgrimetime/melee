@@ -587,6 +587,32 @@ def test_source_lifetime_repeated_helper_result_reuse_rejects_member_arg_mutatio
     assert blocked[0]["blocker"] == "helper-arg-mutation-between-uses"
 
 
+def test_source_lifetime_repeated_helper_result_reuse_rejects_descendant_member_arg_mutation() -> None:
+    source = textwrap.dedent("""\
+        s32 fn_80000000(CardState* state, s32 i)
+        {
+            s32 total = 0;
+            total += fn_803AC634(state->x4C[i], i);
+            state->x4C[i].x = 0;
+            total = fn_803AC634(state->x4C[i], i);
+            return total;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "repeated-helper-result-reuse" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "repeated-helper-result-reuse"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] == "helper-arg-mutation-between-uses"
+
+
 def test_source_lifetime_simple_helper_inline_body_parenthesizes_non_atomic_actuals() -> None:
     source = textwrap.dedent("""\
         static inline s32 helper(s32 value)
@@ -1078,6 +1104,32 @@ def test_source_lifetime_helper_result_dematerialize_rejects_element_arg_mutatio
             s32 result;
             result = fn_803AC634(arr[i], i);
             arr[i] = 0;
+            sink(result);
+            return result;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "helper-result-dematerialize" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "helper-result-dematerialize"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] == "helper-arg-mutation-between-uses"
+
+
+def test_source_lifetime_helper_result_dematerialize_rejects_descendant_element_arg_mutation() -> None:
+    source = textwrap.dedent("""\
+        s32 fn_80000000(Node* arr, s32 i)
+        {
+            s32 result;
+            result = fn_803AC634(arr[i], i);
+            arr[i].x = 0;
             sink(result);
             return result;
         }

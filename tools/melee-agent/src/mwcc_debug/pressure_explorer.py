@@ -1706,11 +1706,15 @@ def _complex_lvalue_mutated_in_region(region: str, expr: str) -> bool:
     expr_pattern = _whitespace_tolerant_expr_pattern(expr)
     if not expr_pattern:
         return False
+    descendant_suffix = (
+        r"(?:\s*(?:->|\.)\s*[A-Za-z_]\w*|\s*\[[^\]\n]+\])*"
+    )
+    target_pattern = expr_pattern + descendant_suffix
     write_suffix = r"\s*(?:\+\+|--|(?:[\+\-\*/%&|^]|<<|>>)?=)"
     return (
-        re.search(expr_pattern + write_suffix, region) is not None
-        or re.search(r"(?:\+\+|--)\s*" + expr_pattern, region) is not None
-        or re.search(r"&\s*" + expr_pattern, region) is not None
+        re.search(target_pattern + write_suffix, region) is not None
+        or re.search(r"(?:\+\+|--)\s*" + target_pattern, region) is not None
+        or re.search(r"&\s*" + target_pattern, region) is not None
     )
 
 
