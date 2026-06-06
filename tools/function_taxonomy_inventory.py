@@ -510,7 +510,7 @@ def describe_actionability(
         }
     if bucket == "signature-call-type":
         return {
-            "source_actionability": "current-tools-signature-audit",
+            "source_actionability": "advisory-signature-audit",
             "headline_tool": "debug-suggest-signatures",
             "actionability_reason": (
                 "call shape or prototype mismatch; run signature audit to inspect "

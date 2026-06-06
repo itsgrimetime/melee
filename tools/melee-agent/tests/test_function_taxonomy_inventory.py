@@ -675,7 +675,7 @@ def test_describe_actionability_splits_non_frame_work_buckets() -> None:
         (
             "signature-call-type",
             "call-shape-or-prototype",
-            "current-tools-signature-audit",
+            "advisory-signature-audit",
             "debug-suggest-signatures",
         ),
         (
@@ -734,7 +734,7 @@ def test_describe_actionability_splits_non_frame_work_buckets() -> None:
         assert result["headline_tool"] == headline
 
     signature = describe_actionability("signature-call-type", "argument-bank")
-    assert signature["source_actionability"] == "current-tools-signature-audit"
+    assert signature["source_actionability"] == "advisory-signature-audit"
     assert signature["headline_tool"] == "debug-suggest-signatures"
     assert "signature audit" in signature["actionability_reason"]
 
@@ -893,7 +893,7 @@ def test_signature_queue_routes_to_advisory_audit_without_harness(
             "source_actionability\theadline_tool\tactionability_reason\t"
             "file_path\tnext_command\n"
             "99.5\tsig_fn\tsignature-type-mismatch\tcall-shape-or-prototype\t"
-            "current-tools-signature-audit\tdebug-suggest-signatures\t"
+            "advisory-signature-audit\tdebug-suggest-signatures\t"
             "signature audit rebucket guidance\tmelee/demo/demo.c\t"
             "melee-agent debug suggest signatures -f sig_fn "
             "--source-file src/melee/demo/demo.c --json\n"
@@ -918,12 +918,24 @@ def test_signature_queue_routes_to_advisory_audit_without_harness(
         work_bucket="signature-call-type",
         repo_root=REPO_ROOT,
         filters=HarvestFilters(
-            where={"source_actionability": ("current-tools-signature-audit",)}
+            where={"source_actionability": ("advisory-signature-audit",)}
         ),
     )
     assert len(signature) == 1
     assert signature[0].headline_tool == "debug-suggest-signatures"
     assert select_harness(signature[0]) is None
+
+    assert (
+        load_queue_rows(
+            queues / "signature-call-type.tsv",
+            work_bucket="signature-call-type",
+            repo_root=REPO_ROOT,
+            filters=HarvestFilters(
+                where={"source_actionability": ("current-tools-signature-audit",)}
+            ),
+        )
+        == []
+    )
 
     assert (
         load_queue_rows(
