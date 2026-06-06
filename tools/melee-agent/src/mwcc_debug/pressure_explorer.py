@@ -1362,7 +1362,7 @@ def _repeated_helper_occurrence_blocker(
     source: str,
     occurrences: list[_SimpleHelperCall],
 ) -> tuple[str, str] | None:
-    for idx, call in enumerate(occurrences):
+    for call in occurrences:
         line_start = _line_start(source, call.start)
         if (
             _line_is_case_or_default_label(source, line_start)
@@ -1372,48 +1372,12 @@ def _repeated_helper_occurrence_blocker(
                 "case-arm-declaration-unsafe",
                 "helper result declaration would land directly under a case label",
             )
-        if _line_has_supported_reuse_anchor_shape(source, line_start):
-            continue
-        if _condition_occurrence_has_companion_in_body(
-            source,
-            call,
-            occurrences[idx + 1:],
-        ):
-            continue
-        return (
-            "unsupported-call-site-shape",
-            "repeated helper reuse occurrence is not a supported simple statement",
-        )
+        if not _line_has_supported_reuse_anchor_shape(source, line_start):
+            return (
+                "unsupported-call-site-shape",
+                "repeated helper reuse occurrence is not a supported simple statement",
+            )
     return None
-
-
-def _condition_occurrence_has_companion_in_body(
-    source: str,
-    call: _SimpleHelperCall,
-    later_occurrences: list[_SimpleHelperCall],
-) -> bool:
-    line_start = _line_start(source, call.start)
-    line_end = source.find("\n", line_start)
-    if line_end < 0:
-        line_end = len(source)
-    line = source[line_start:line_end]
-    if re.match(r"^\s*if\s*\(", line) is None:
-        return False
-    open_index = source.find("(", line_start, line_end)
-    if open_index < 0:
-        return False
-    close_index = _find_matching_paren(source, open_index)
-    if close_index is None:
-        return False
-    cursor = close_index + 1
-    while cursor < len(source) and source[cursor].isspace():
-        cursor += 1
-    if cursor >= len(source) or source[cursor] != "{":
-        return False
-    body_end = _find_matching_brace(source, cursor)
-    if body_end is None:
-        return False
-    return any(cursor < other.start < body_end for other in later_occurrences)
 
 
 def _inline_helper_call_requires_outer_parens(
