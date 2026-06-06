@@ -1,7 +1,9 @@
 """Struct commands - lookup struct layouts, field offsets, and callback signatures."""
 
 import asyncio
+import json as _json
 import re
+import subprocess
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -447,3 +449,150 @@ def struct_callback(
     console.print("\n[bold]Example implementation:[/bold]")
     console.print(f"[green]{cb_info['example']}[/green]")
     console.print(f"\n[dim]Include {cb_info['header']} to use this type.[/dim]")
+
+
+# ---------------------------------------------------------------------------
+# struct verify command
+# ---------------------------------------------------------------------------
+
+def _render_verify_table(agg: list[dict], skipped: list[tuple]) -> None:
+    """Render struct offset discrepancies as a Rich table to console."""
+    t = Table(title="struct offset discrepancies")
+    for col in ("field", "current", "expected", "delta", "n", "confidence"):
+        t.add_column(col)
+    for a in agg:
+        if a["conflict"]:
+            exp_str = "CONFLICT " + ",".join(hex(e) for e in a["expecteds"])
+            delta_str = ""
+        else:
+            exp_str = hex(a["expected"])
+            delta_str = f"{a['expected'] - a['current']:+d}"
+        t.add_row(
+            a["field"],
+            hex(a["current"]),
+            exp_str,
+            delta_str,
+            str(a["n_functions"]),
+            a["confidence"],
+        )
+    console.print(t)
+    if skipped:
+        items = ", ".join(f"{fn}({why})" for fn, why in skipped[:20])
+        console.print(f"[yellow]skipped {len(skipped)}:[/] {items}")
+
+
+@struct_app.command("verify")
+def struct_verify_cmd(
+    target: Annotated[
+        str,
+        typer.Argument(help="Function name or TU substring (e.g. thp/THPDec)"),
+    ],
+    struct: Annotated[
+        str,
+        typer.Option("--struct", help="Struct type name"),
+    ],
+    base: Annotated[
+        Optional[str],
+        typer.Option("--base", help="Base register, e.g. r3 (single function or TU default)"),
+    ] = None,
+    base_map: Annotated[
+        Optional[str],
+        typer.Option("--base-map", help="JSON file mapping {function: register}"),
+    ] = None,
+    tu_src: Annotated[
+        str,
+        typer.Option("--tu-src", help="Path to the TU .c file (for cflags lookup)"),
+    ] = ...,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Emit JSON instead of a table"),
+    ] = False,
+) -> None:
+    """Detect wrong struct-field offsets by comparing per-function displacements.
+
+    Runs checkdiff on each function, maps current displacements to field paths
+    via the MWCC offsetof-probe resolver, and aggregates findings across the TU.
+
+    Examples:
+        melee-agent struct verify __THPRestartDefinition --struct THPFileInfo --base r3 --tu-src extern/dolphin/src/dolphin/thp/THPDec.c
+        melee-agent struct verify thp/THPDec --struct THPFileInfo --base r3 --tu-src extern/dolphin/src/dolphin/thp/THPDec.c
+        melee-agent struct verify thp/THPDec --struct THPFileInfo --base-map bases.json --tu-src extern/dolphin/src/dolphin/thp/THPDec.c --json
+    """
+    from ..common import struct_layout, struct_verify
+    from ..extractor.report import functions_for_unit
+
+    repo = get_agent_melee_root()
+
+    # Resolve the layout once (compile probe)
+    try:
+        layout = struct_layout.resolve_layout(repo, struct, tu_src)
+    except Exception as exc:
+        console.print(f"[red]Failed to resolve layout for {struct!r}: {exc}[/red]")
+        raise typer.Exit(1)
+
+    # Load per-function base-register map if provided
+    bmap: dict[str, str] = {}
+    if base_map:
+        try:
+            bmap = _json.loads(Path(base_map).read_text())
+        except Exception as exc:
+            console.print(f"[red]Failed to read --base-map {base_map!r}: {exc}[/red]")
+            raise typer.Exit(1)
+
+    # Resolve function list
+    if "/" in target:
+        try:
+            fns = functions_for_unit(repo / "build/GALE01/report.json", target)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1)
+    else:
+        fns = [target]
+
+    findings: list[dict] = []
+    skipped: list[tuple] = []
+
+    for fn in fns:
+        reg = bmap.get(fn, base)
+        if reg is None:
+            skipped.append((fn, "no base"))
+            continue
+
+        # Run checkdiff in JSON mode (no-build: use existing .o)
+        result = subprocess.run(
+            ["python", "tools/checkdiff.py", fn, "--no-tty", "--format", "json", "--no-build"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+        )
+        try:
+            data = _json.loads(result.stdout)
+            cls = data["classification"]
+        except Exception:
+            skipped.append((fn, "checkdiff failed"))
+            continue
+
+        for d in cls.get("offset_discrepancies", []):
+            if d["base_reg"] != reg:
+                continue
+            field = struct_layout.offset_to_field(layout, d["cur_disp"])
+            if field is None:
+                # unmapped: likely interior-pointer or genuine register diff, not struct bug
+                skipped.append((fn, f"unmapped cur 0x{d['cur_disp']:x}"))
+                continue
+            findings.append({
+                "function": fn,
+                "field": field,
+                "current": d["cur_disp"],
+                "expected": d["ref_disp"],
+            })
+
+    agg = struct_verify.aggregate(findings)
+
+    if as_json:
+        import sys
+        _json.dump({"findings": agg, "skipped": [[fn, why] for fn, why in skipped]}, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return
+
+    _render_verify_table(agg, skipped)
