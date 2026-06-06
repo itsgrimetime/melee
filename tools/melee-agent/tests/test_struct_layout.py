@@ -1,5 +1,4 @@
 # tests/test_struct_layout.py
-import os
 import pytest
 from pathlib import Path
 
@@ -7,9 +6,16 @@ from src.common import struct_layout
 
 REPO = Path(__file__).resolve().parents[3]
 
+# The resolver tests compile a real offsetof probe; they run by default when the
+# MWCC compiler + wibo are present (as in this worktree), and skip on a bare
+# checkout that has not built the compilers yet.
+_COMPILER_PRESENT = (
+    (REPO / "build/tools/wibo").exists()
+    and (REPO / "build/compilers/GC/1.2.5/mwcceppc.exe").exists()
+)
 _LIVE_GUARD = pytest.mark.skipif(
-    not os.environ.get("LIVE_9ACC_TESTS"),
-    reason="Set LIVE_9ACC_TESTS=1 to run live compiler tests",
+    not _COMPILER_PRESENT,
+    reason="MWCC not built (build/tools/wibo + build/compilers/GC/1.2.5/mwcceppc.exe)",
 )
 
 
