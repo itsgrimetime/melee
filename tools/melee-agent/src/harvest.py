@@ -49,6 +49,9 @@ ALLOCATOR_PCDUMP_TRIAGE_DETAIL_FIELDS = (
     "force_vector_recommended",
     "force_phys_csv",
     "force_vector_conflicts",
+    "force_vector_verify",
+    "force_vector_status",
+    "force_vector_match",
     "unit",
     "targets",
     "results",
@@ -76,6 +79,11 @@ BLOCKER_ALLOCATOR_SOURCE_LIFETIME = "source-lifetime-callee-save-shape"
 BLOCKER_ALLOCATOR_CURRENT_UNKNOWN = "allocator-current-unknown"
 BLOCKER_ALLOCATOR_NO_TARGETS = "allocator-no-targets"
 BLOCKER_ALLOCATOR_VECTOR_NOT_RUNNABLE = "allocator-vector-not-runnable"
+BLOCKER_ALLOCATOR_FORCE_VECTOR_MATCH = "allocator-force-vector-match"
+BLOCKER_ALLOCATOR_FORCE_VECTOR_NO_MATCH = "allocator-force-vector-no-match"
+BLOCKER_ALLOCATOR_FORCE_VECTOR_VERIFY_FAILED = (
+    "allocator-force-vector-verify-failed"
+)
 BLOCKER_ALLOCATOR_TRIAGE_UNCLASSIFIED = "allocator-triage-unclassified"
 RETAINED_SOURCE_STATUSES = {"applied", "improved", "validated"}
 NEGATIVE_EVIDENCE_STATUSES = {"blocked", "error", "no_match", "unsupported"}
@@ -1357,6 +1365,8 @@ def _allocator_pcdump_triage_command(request: HarvestRequest) -> list[str]:
         request.function,
         "--regs",
         ALLOCATOR_PCDUMP_TRIAGE_REGS,
+        "--force-vector",
+        "auto",
         "--json",
     ]
 
@@ -1612,6 +1622,111 @@ def _allocator_payload_has_targets(
     return False
 
 
+def _force_vector_probe_matches(probe: Any) -> bool:
+    return isinstance(probe, Mapping) and probe.get("match") is True
+
+
+def _force_vector_probe_failed(probe: Any) -> bool:
+    if not isinstance(probe, Mapping):
+        return False
+    if str(probe.get("status") or "") == "failed":
+        return True
+    returncode = probe.get("returncode")
+    if returncode in (None, 0, "0"):
+        return False
+    try:
+        return int(returncode) != 0
+    except (TypeError, ValueError):
+        return True
+
+
+def _compact_force_vector_probe(probe: Mapping[str, Any]) -> dict[str, Any]:
+    compact: dict[str, Any] = {}
+    for field_name in ("label", "ordinal", "status", "entries"):
+        if field_name in probe:
+            compact[field_name] = probe[field_name]
+    return compact
+
+
+def _force_vector_verify_probes(
+    verify: Mapping[str, Any],
+) -> list[Mapping[str, Any]]:
+    probes: list[Mapping[str, Any]] = []
+    union = verify.get("union")
+    if isinstance(union, Mapping):
+        probes.append(union)
+    raw_probes = verify.get("probes")
+    if isinstance(raw_probes, list):
+        probes.extend(probe for probe in raw_probes if isinstance(probe, Mapping))
+    return probes
+
+
+def _allocator_force_vector_verify_result(
+    request: HarvestRequest,
+    *,
+    command: list[str],
+    payload: Mapping[str, Any],
+    details: dict[str, Any],
+) -> HarvestResult | None:
+    verify = payload.get("force_vector_verify")
+    if not isinstance(verify, Mapping) or verify.get("ran") is not True:
+        return None
+
+    probes = _force_vector_verify_probes(verify)
+    matched_probes = [
+        _compact_force_vector_probe(probe)
+        for probe in probes
+        if _force_vector_probe_matches(probe)
+    ]
+    details["force_vector_matched_probes"] = matched_probes
+    if matched_probes:
+        matched_labels = [
+            str(probe.get("label") or "probe")
+            for probe in matched_probes
+        ]
+        details["source_transform_hint"] = {
+            "kind": BLOCKER_ALLOCATOR_FORCE_VECTOR_MATCH,
+            "matched_probe_labels": matched_labels,
+            "force_vector": payload.get("force_vector"),
+            "unit": payload.get("unit"),
+            "targets": payload.get("targets", []),
+        }
+        labels = ", ".join(matched_labels)
+        return _base_result(
+            request,
+            harness=HARNESS_ALLOCATOR_PCDUMP_TRIAGE,
+            status="diagnostic_match",
+            blocker=BLOCKER_ALLOCATOR_FORCE_VECTOR_MATCH,
+            reason=(
+                f"force-vector {labels} matched; translate diagnostic "
+                "allocator proof into source-shape work"
+            ),
+            command=command,
+            details=details,
+        )
+
+    if any(_force_vector_probe_failed(probe) for probe in probes):
+        return _base_result(
+            request,
+            harness=HARNESS_ALLOCATOR_PCDUMP_TRIAGE,
+            status="blocked",
+            blocker=BLOCKER_ALLOCATOR_FORCE_VECTOR_VERIFY_FAILED,
+            reason="force-vector verification ran but one or more probes failed",
+            command=command,
+            details=details,
+        )
+
+    return _base_result(
+        request,
+        harness=HARNESS_ALLOCATOR_PCDUMP_TRIAGE,
+        status="no_match",
+        blocker=BLOCKER_ALLOCATOR_FORCE_VECTOR_NO_MATCH,
+        reason="no force-vector probe matched the target function",
+        command=command,
+        details=details,
+    )
+
+
 def _allocator_pcdump_triage_result(
     request: HarvestRequest,
     *,
@@ -1660,6 +1775,15 @@ def _allocator_pcdump_triage_result(
         )
 
     reason = _allocator_actionability_reason(actionability, status_value)
+    force_vector_result = _allocator_force_vector_verify_result(
+        request,
+        command=command,
+        payload=payload,
+        details=details,
+    )
+    if force_vector_result is not None:
+        return force_vector_result
+
     if status_value == "already-satisfied":
         return _base_result(
             request,

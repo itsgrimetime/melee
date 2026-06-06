@@ -196,6 +196,45 @@ def _allocator_triage_payload(
     }
 
 
+def _force_vector_verify_payload(
+    *,
+    union_match: bool = False,
+    probes: list[dict] | None = None,
+) -> dict:
+    return {
+        "ran": True,
+        "probe_count": 1 + len(probes or []),
+        "entries": [
+            {
+                "raw": "class0:ig36:phys=r6",
+                "kind": "force_phys",
+                "class_id": 0,
+                "ig_idx": 36,
+                "phys": 6,
+            }
+        ],
+        "union": {
+            "label": "union",
+            "ordinal": None,
+            "entries": [
+                {
+                    "raw": "class0:ig36:phys=r6",
+                    "kind": "force_phys",
+                    "class_id": 0,
+                    "ig_idx": 36,
+                    "phys": 6,
+                }
+            ],
+            "returncode": 0,
+            "match": union_match,
+            "status": "match" if union_match else "no_match",
+            "stdout_tail": "[diff] MATCH" if union_match else "diff remained",
+            "stderr_tail": "",
+        },
+        "probes": probes or [],
+    }
+
+
 def _install_fresh_pcdump_cache(monkeypatch, repo_root: Path) -> None:
     def lookup(_repo: Path, unit: str):
         return harvest_module.pcdump_cache.CacheEntry(
@@ -961,6 +1000,41 @@ def test_summarize_harvest_ledgers_keeps_dry_run_improvements_out_of_retained_so
     assert summary["validated_functions"] == []
     assert summary["retained_source_functions"] == []
     assert summary["suggested_impact"] == "positive-candidate/no-retained-source"
+
+
+def test_summarize_harvest_ledgers_keeps_allocator_diagnostic_matches_out_of_negative_evidence(
+    tmp_path: Path,
+) -> None:
+    ledger = tmp_path / "allocator-diagnostic.json"
+    ledger.write_text(
+        json.dumps(
+            {
+                "work_bucket": "register-allocator",
+                "results": [
+                    {
+                        "function": "ftCo_LightThrowDash_Phys",
+                        "work_bucket": "register-allocator",
+                        "status": "diagnostic_match",
+                        "harness": "allocator-pcdump-triage",
+                        "blocker": "allocator-force-vector-match",
+                    },
+                    {
+                        "function": "un_803147C4",
+                        "work_bucket": "register-allocator",
+                        "status": "no_match",
+                        "harness": "allocator-pcdump-triage",
+                        "blocker": "allocator-force-vector-no-match",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = summarize_harvest_ledgers([ledger])
+
+    assert summary["by_status"] == {"diagnostic_match": 1, "no_match": 1}
+    assert summary["negative_evidence_functions"] == ["un_803147C4"]
 
 
 def test_cli_harvest_summarize_outputs_json_without_running_harnesses(
@@ -2164,6 +2238,8 @@ def test_allocator_pcdump_triage_builds_match_iter_first_command(
             "demo_fn",
             "--regs",
             "gpr-callee,gpr-volatile,r0",
+            "--force-vector",
+            "auto",
             "--json",
         ]
     ]
@@ -2236,6 +2312,8 @@ def test_run_harvest_prefetches_allocator_pcdump_triage(
             function,
             "--regs",
             "gpr-callee,gpr-volatile,r0",
+            "--force-vector",
+            "auto",
             "--json",
         ]
         for function in ("demo_fn", "demo_fn_2", "other_fn")
@@ -2289,6 +2367,158 @@ def test_allocator_pcdump_triage_records_target_vector_blocker(
     )
     assert "needs-move summary" in result["reason"]
     assert "needs-move next step" in result["reason"]
+
+
+def test_allocator_pcdump_triage_records_force_vector_diagnostic_match(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("demo_fn")])
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    payload = _allocator_triage_payload()
+    payload["force_vector_verify"] = _force_vector_verify_payload(union_match=True)
+    _, runner = _json_runner(payload)
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "diagnostic_match"
+    assert result["blocker"] == "allocator-force-vector-match"
+    assert result["candidate_path"] is None
+    assert result["details"]["force_vector_verify"] == payload["force_vector_verify"]
+    assert result["details"]["force_vector_matched_probes"] == [
+        {
+            "label": "union",
+            "ordinal": None,
+            "status": "match",
+            "entries": payload["force_vector_verify"]["union"]["entries"],
+        }
+    ]
+    assert result["details"]["source_transform_hint"]["kind"] == (
+        "allocator-force-vector-match"
+    )
+    assert result["details"]["source_transform_hint"]["matched_probe_labels"] == [
+        "union"
+    ]
+    assert "force-vector union matched" in result["reason"]
+
+
+def test_allocator_pcdump_triage_records_singleton_force_vector_diagnostic_match(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("demo_fn")])
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    singleton = {
+        "label": "single[1]",
+        "ordinal": 1,
+        "entries": [
+            {
+                "raw": "class0:ig36:phys=r6",
+                "kind": "force_phys",
+                "class_id": 0,
+                "ig_idx": 36,
+                "phys": 6,
+            }
+        ],
+        "returncode": 0,
+        "match": True,
+        "status": "match",
+        "stdout_tail": "[diff] MATCH",
+        "stderr_tail": "",
+    }
+    payload = _allocator_triage_payload()
+    payload["force_vector_verify"] = _force_vector_verify_payload(
+        union_match=False,
+        probes=[singleton],
+    )
+    _, runner = _json_runner(payload)
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "diagnostic_match"
+    assert result["blocker"] == "allocator-force-vector-match"
+    assert result["details"]["force_vector_matched_probes"] == [
+        {
+            "label": "single[1]",
+            "ordinal": 1,
+            "status": "match",
+            "entries": singleton["entries"],
+        }
+    ]
+    assert result["details"]["source_transform_hint"]["matched_probe_labels"] == [
+        "single[1]"
+    ]
+
+
+def test_allocator_pcdump_triage_records_force_vector_no_match_evidence(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("demo_fn")])
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    payload = _allocator_triage_payload()
+    payload["force_vector_verify"] = _force_vector_verify_payload(union_match=False)
+    _, runner = _json_runner(payload)
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "no_match"
+    assert result["blocker"] == "allocator-force-vector-no-match"
+    assert result["details"]["force_vector_verify"] == payload["force_vector_verify"]
+    assert result["details"]["force_vector_matched_probes"] == []
+    assert "no force-vector probe matched" in result["reason"]
+
+
+def test_allocator_pcdump_triage_records_force_vector_verify_failure(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("demo_fn")])
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    payload = _allocator_triage_payload()
+    payload["force_vector_verify"] = _force_vector_verify_payload(union_match=False)
+    payload["force_vector_verify"]["union"]["status"] = "failed"
+    payload["force_vector_verify"]["union"]["returncode"] = 1
+    _, runner = _json_runner(payload)
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "allocator-force-vector-verify-failed"
+    assert result["details"]["force_vector_matched_probes"] == []
+    assert "one or more probes failed" in result["reason"]
 
 
 def test_allocator_pcdump_triage_records_source_lifetime_blocker(
@@ -2597,6 +2827,8 @@ def test_allocator_pcdump_triage_apply_does_not_attempt_source_application(
             "demo_fn",
             "--regs",
             "gpr-callee,gpr-volatile,r0",
+            "--force-vector",
+            "auto",
             "--json",
         ]
     ]

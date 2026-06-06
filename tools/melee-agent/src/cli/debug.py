@@ -13011,30 +13011,39 @@ def match_iter_first(
     force_vector_entries: list[_ForceVectorEntry] | None = None
     force_vector_result: Optional[dict] = None
     if force_vector is not None:
-        try:
-            force_vector_entries = _parse_force_vector(force_vector)
-        except ValueError as exc:
-            typer.echo(str(exc), err=True)
-            raise typer.Exit(2) from exc
-        src_path = melee_root / "src" / f"{unit}.c"
-        if not src_path.exists():
-            force_vector_result = {
-                "ran": False,
-                "reason": f"source not found: {src_path}",
-            }
-        else:
+        effective_force_vector = force_vector
+        if force_vector == "auto":
+            effective_force_vector = target_vector["force_vector"]
+            if not effective_force_vector:
+                force_vector_result = {
+                    "ran": False,
+                    "reason": "no force-vector targets were derived",
+                }
+        if force_vector_result is None:
             try:
-                force_vector_result = _run_force_vector_auto_verify(
-                    src_path=src_path,
-                    function=function,
-                    entries=force_vector_entries,
-                    melee_root=melee_root,
-                    checkdiff_timeout=force_vector_checkdiff_timeout,
-                    run_diagnostic_probes=force_vector_probes,
-                )
-                force_vector_result["ran"] = True
-            except Exception as exc:
-                force_vector_result = {"ran": False, "reason": str(exc)}
+                force_vector_entries = _parse_force_vector(effective_force_vector)
+            except ValueError as exc:
+                typer.echo(str(exc), err=True)
+                raise typer.Exit(2) from exc
+            src_path = melee_root / "src" / f"{unit}.c"
+            if not src_path.exists():
+                force_vector_result = {
+                    "ran": False,
+                    "reason": f"source not found: {src_path}",
+                }
+            else:
+                try:
+                    force_vector_result = _run_force_vector_auto_verify(
+                        src_path=src_path,
+                        function=function,
+                        entries=force_vector_entries,
+                        melee_root=melee_root,
+                        checkdiff_timeout=force_vector_checkdiff_timeout,
+                        run_diagnostic_probes=force_vector_probes,
+                    )
+                    force_vector_result["ran"] = True
+                except Exception as exc:
+                    force_vector_result = {"ran": False, "reason": str(exc)}
 
     # Optional auto-verify: run debug dump local with the proposed iter-first
     # list, compare per-function match% against the baseline, and surface
