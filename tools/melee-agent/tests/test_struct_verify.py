@@ -1,10 +1,26 @@
 # tests/test_struct_verify.py
-"""Tests for struct verify Phase 3: functions_for_unit, aggregation, CLI command, renderer."""
+"""Tests for struct verify Phase 3+4: functions_for_unit, aggregation, CLI command, renderer,
+and end-to-end THPDec dogfood against the pre-fix layout (Task 4.1)."""
 from __future__ import annotations
 
+import json
+import shutil
+import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[3]
+
+# Gate slow compiler-dependent tests on MWCC + wibo being present.
+_COMPILER_PRESENT = (
+    (REPO / "build/tools/wibo").exists()
+    and (REPO / "build/compilers/GC/1.2.5/mwcceppc.exe").exists()
+)
+_LIVE_GUARD = pytest.mark.skipif(
+    not _COMPILER_PRESENT,
+    reason="MWCC not built (build/tools/wibo + build/compilers/GC/1.2.5/mwcceppc.exe)",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -173,3 +189,108 @@ def test_render_verify_table_ambiguous(capsys):
     )
     out = capsys.readouterr().out
     assert "predDC" in out and "AMBIGUOUS" in out
+
+
+# ---------------------------------------------------------------------------
+# Task 4.1: End-to-end golden against the pre-fix THPDec layout
+# ---------------------------------------------------------------------------
+
+@pytest.mark.slow
+@_LIVE_GUARD
+def test_struct_verify_thpdec_reports_known_discrepancies(tmp_path):
+    """Dogfood: pre-fix thp.h must trigger detection of components[*].predDC offset bug.
+
+    The struct fix is committed at bb81aecd2.  We use 'git show bb81aecd2^:...'
+    to get the exact pre-fix header — more robust than string-replace.  The
+    finally block ALWAYS restores thp.h to HEAD and rebuilds THPDec.o, even if
+    the assertions fail, so the working tree is left clean.
+    """
+    hdr = REPO / "extern/dolphin/include/dolphin/thp/thp.h"
+    thp_src = "extern/dolphin/src/dolphin/thp/THPDec.c"
+    thp_obj = "build/GALE01/src/dolphin/thp/THPDec.o"
+
+    # Back up the current (fixed) header to a temp file so we can restore.
+    backup = tmp_path / "thp.h.fixed"
+    shutil.copy(hdr, backup)
+
+    try:
+        # --- Install the pre-fix header (bb81aecd2's parent) ---
+        pre_fix_content = subprocess.run(
+            ["git", "show", "bb81aecd2^:extern/dolphin/include/dolphin/thp/thp.h"],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        hdr.write_text(pre_fix_content)
+
+        # Rebuild THPDec.o with the pre-fix struct layout.
+        subprocess.run(["touch", thp_src], cwd=REPO, check=True)
+        subprocess.run(
+            ["ninja", thp_obj],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        # --- Run struct verify via CliRunner (JSON mode) ---
+        from typer.testing import CliRunner
+        from src.cli.struct import struct_app
+
+        runner = CliRunner()
+        result = runner.invoke(
+            struct_app,
+            [
+                "verify",
+                "thp/THPDec",
+                "--struct", "THPFileInfo",
+                "--base", "r3",
+                "--tu-src", thp_src,
+                "--json",
+            ],
+        )
+        assert result.exit_code == 0, f"struct verify failed:\n{result.output}"
+        data = json.loads(result.output)
+        fields = {f["field"]: f for f in data["findings"]}
+
+        # Known discrepancies from the pre-fix layout:
+        # 1. components[*].predDC: was at offset +0 inside THPComponent, now +6
+        assert "components[0].predDC" in fields, (
+            f"Expected 'components[0].predDC' discrepancy not found; got: {list(fields)}"
+        )
+        pre_dc = fields["components[0].predDC"]
+        assert pre_dc["current"] == 0x838, f"components[0].predDC current should be 0x838, got 0x{pre_dc['current']:x}"
+        assert pre_dc["expected"] == 0x83e, f"components[0].predDC expected should be 0x83e, got 0x{pre_dc['expected']:x}"
+
+        # 2. RST / nMCU / currMCU at wrong offsets (from __THPRestartDefinition / __THPHuffGenerateCodeTable etc.)
+        # At minimum one of these should appear (they appear in __THPRestartDefinition
+        # which uses base r3 directly).
+        rst_or_nmcu = {"RST", "nMCU", "currMCU"}
+        found = rst_or_nmcu & set(fields)
+        assert found, (
+            f"Expected at least one of {rst_or_nmcu} in discrepancies; got: {list(fields)}"
+        )
+
+        # Low-offset false positives for 'file', 'currByte', 'cnt' (from the bit-reader)
+        # should be ABSENT from the non-ambiguous, non-conflict findings.
+        low_fp = {"file", "currByte", "cnt"}
+        for fp_field in low_fp:
+            if fp_field in fields:
+                entry = fields[fp_field]
+                # If present, it must be marked ambiguous or conflict — NOT a clean finding.
+                assert entry.get("conflict") or entry.get("ambiguous"), (
+                    f"Low-offset field {fp_field!r} appeared as a clean finding: {entry}"
+                )
+
+    finally:
+        # ALWAYS restore the fixed header and rebuild, even on assertion failure.
+        shutil.copy(backup, hdr)
+        subprocess.run(["touch", thp_src], cwd=REPO, check=False)
+        subprocess.run(
+            ["ninja", thp_obj],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
