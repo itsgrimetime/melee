@@ -1370,6 +1370,8 @@ def _same_tu_helper_reads_through_param(
             return True
         if re.search(rf"(?<![A-Za-z0-9_])\*\s*{re.escape(name)}\b", masked):
             return True
+        if re.search(rf"(?<![A-Za-z0-9_])\*\s*\([^)\n]*\b{re.escape(name)}\b[^)\n]*\)", masked):
+            return True
         if re.search(rf"\(\s*\*\s*{re.escape(name)}\s*\)\s*(?:\.|\[)", masked):
             return True
     return False
