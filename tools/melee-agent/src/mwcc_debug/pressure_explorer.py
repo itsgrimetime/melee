@@ -200,6 +200,32 @@ _DEMATERIALIZE_SCALAR_TYPES = {
     "unsigned",
 }
 
+SOURCE_LIFETIME_TARGETED_OPERATORS = (
+    "for-condition-field-reload",
+    "repeated-helper-result-reuse",
+    "helper-result-dematerialize",
+    "simple-helper-inline-body",
+)
+
+SOURCE_LIFETIME_GENERIC_OPERATORS = (
+    "declaration-order",
+    "loop-counter-hoist",
+    "loop-counter-type",
+    "temp-introduction",
+    "temp-removal",
+    "declaration-use-distance",
+    "block-scope",
+    "call-argument-tempization",
+    "expression-shape",
+)
+
+HELPER_INLINE_LIFETIME_OPERATORS = (
+    *SOURCE_LIFETIME_TARGETED_OPERATORS,
+    *SOURCE_LIFETIME_GENERIC_OPERATORS,
+)
+
+_READ_ONLY_SOURCE_LIFETIME_HELPERS = frozenset({"fn_803AC634"})
+
 
 def pressure_signature_from_pcdump(
     pcdump_text: str,
@@ -509,6 +535,723 @@ def generate_frame_directed_probes(
         if len(probes) >= max_probes:
             return probes
     return probes
+
+
+def generate_source_lifetime_probes(
+    source_text: str,
+    function: str,
+    *,
+    max_probes: int = 12,
+) -> tuple[list[LifetimeLayoutProbe], list[dict]]:
+    max_probes = max(0, int(max_probes))
+    if max_probes == 0:
+        return [], []
+    targeted_budget = max(1, (max_probes + 1) // 2)
+    targeted_generators = (
+        ("for-condition-field-reload", _probe_for_condition_field_reload),
+        ("repeated-helper-result-reuse", _probe_repeated_helper_result_reuse),
+        ("helper-result-dematerialize", _probe_helper_result_dematerialize),
+        ("simple-helper-inline-body", _probe_simple_helper_inline_body),
+    )
+    targeted: list[LifetimeLayoutProbe] = []
+    summaries: list[dict] = []
+    for operator, generator in targeted_generators:
+        candidates, summary = generator(source_text, function)
+        summaries.append(summary)
+        for probe in candidates:
+            if len(targeted) < targeted_budget:
+                _append_probe(targeted, probe)
+            else:
+                summary["retained_candidates"] = targeted_budget
+                break
+    generic = generate_lifetime_layout_probes(
+        source_text,
+        function,
+        max_probes=max_probes,
+        operator_filter=SOURCE_LIFETIME_GENERIC_OPERATORS,
+    )
+    probes: list[LifetimeLayoutProbe] = []
+    for probe in [*targeted, *generic]:
+        _append_probe(probes, probe)
+        if len(probes) >= max_probes:
+            break
+    return probes, summaries
+
+
+@dataclass(frozen=True)
+class _SimpleHelperCall:
+    callee: str
+    args_text: str
+    start: int
+    end: int
+    call_text: str
+
+
+def _source_lifetime_summary(
+    operator: str,
+    *,
+    status: str,
+    candidate_count: int,
+    blocker: str | None,
+    reason: str,
+) -> dict:
+    return {
+        "operator": operator,
+        "status": status,
+        "candidate_count": candidate_count,
+        "blocker": blocker,
+        "reason": reason,
+    }
+
+
+def _probe_for_condition_field_reload(
+    source_text: str,
+    function: str,
+) -> tuple[list[LifetimeLayoutProbe], dict]:
+    operator = "for-condition-field-reload"
+    span = _find_function_body_span(source_text, function)
+    if span is None:
+        return [], _source_lifetime_summary(
+            operator,
+            status="blocked",
+            candidate_count=0,
+            blocker="function-body-unavailable",
+            reason=f"function body for {function} was not found in source",
+        )
+    body_start, body_end = span
+    body = source_text[body_start:body_end]
+    code_body = _mask_c_non_code_text(body)
+    for match in re.finditer(r"\bfor\s*\(", code_body):
+        open_rel = code_body.find("(", match.start())
+        if open_rel < 0:
+            continue
+        open_abs = body_start + open_rel
+        close_abs = _find_matching_paren(source_text, open_abs)
+        if close_abs is None or close_abs > body_end:
+            continue
+        header_text = source_text[open_abs + 1:close_abs]
+        if _region_has_preprocessor_directive(source_text[body_start + match.start():close_abs]):
+            continue
+        clauses = _split_top_level_delimited(header_text, ";")
+        if len(clauses) != 3 or not all(
+            _balanced_expression_delimiters(clause) for clause in clauses
+        ):
+            continue
+        init, condition, increment = clauses
+        condition_parts = _split_top_level_delimited(condition, ",")
+        if len(condition_parts) != 2:
+            continue
+        assign_expr, remaining_condition = condition_parts
+        assign_match = re.fullmatch(
+            r"\s*(?P<name>[A-Za-z_]\w*)\s*=\s*(?P<rhs>.+?)\s*",
+            assign_expr,
+            re.DOTALL,
+        )
+        if assign_match is None:
+            continue
+        reload_name = assign_match.group("name")
+        reload_rhs = assign_match.group("rhs").strip()
+        if not _for_condition_reload_rhs_is_safe(reload_rhs):
+            continue
+        if re.search(rf"\b{re.escape(reload_name)}\b", remaining_condition) is None:
+            continue
+        new_init = _join_nonempty_clauses(init.strip(), f"{reload_name} = {reload_rhs}")
+        new_increment = _join_nonempty_clauses(
+            increment.strip(),
+            f"{reload_name} = {reload_rhs}",
+        )
+        line_start = _line_start(source_text, body_start + match.start())
+        loop_indent = _line_indent_at(source_text, line_start)
+        inner_indent = loop_indent + "    "
+        replacement = (
+            f"{loop_indent}for (\n"
+            f"{inner_indent}{new_init};\n"
+            f"{inner_indent}{remaining_condition.strip()};\n"
+            f"{inner_indent}{new_increment}\n"
+            f"{loop_indent})"
+        )
+        probe = LifetimeLayoutProbe(
+            label="for-condition-field-reload-0",
+            operator=operator,
+            description=(
+                "Move a for-condition field reload into init/increment clauses."
+            ),
+            source_text=(
+                source_text[:line_start]
+                + replacement
+                + source_text[close_abs + 1:]
+            ),
+            provenance={
+                "kind": operator,
+                "local": reload_name,
+                "reload_rhs": reload_rhs,
+            },
+        )
+        return [probe], _source_lifetime_summary(
+            operator,
+            status="generated",
+            candidate_count=1,
+            blocker=None,
+            reason="generated safe for-condition field reload candidate",
+        )
+    return [], _source_lifetime_summary(
+        operator,
+        status="blocked",
+        candidate_count=0,
+        blocker="no-for-condition-field-reload",
+        reason="source scan found no supported for-condition field reload pattern",
+    )
+
+
+def _probe_repeated_helper_result_reuse(
+    source_text: str,
+    function: str,
+) -> tuple[list[LifetimeLayoutProbe], dict]:
+    operator = "repeated-helper-result-reuse"
+    span = _find_function_body_span(source_text, function)
+    if span is None:
+        return [], _source_lifetime_summary(
+            operator,
+            status="blocked",
+            candidate_count=0,
+            blocker="function-body-unavailable",
+            reason=f"function body for {function} was not found in source",
+        )
+    body_start, body_end = span
+    body = source_text[body_start:body_end]
+    calls = _scan_simple_helper_calls(body, absolute_start=body_start)
+    groups: dict[str, list[_SimpleHelperCall]] = {}
+    for call in calls:
+        groups.setdefault(call.call_text, []).append(call)
+    first_blocker: tuple[str, str] | None = None
+    for occurrences in groups.values():
+        if len(occurrences) < 2:
+            continue
+        first = occurrences[0]
+        if not _helper_call_args_are_simple(first.args_text):
+            first_blocker = first_blocker or (
+                "helper-call-args-unsafe",
+                "repeated helper call arguments are not simple enough to rewrite",
+            )
+            continue
+        if not _helper_call_is_read_only(first.callee, source_text, function):
+            first_blocker = first_blocker or (
+                "callee-not-read-only",
+                f"helper `{first.callee}` is not known read-only",
+            )
+            continue
+        line_start = _line_start(source_text, first.start)
+        if _line_is_case_or_default_label(source_text, line_start):
+            first_blocker = first_blocker or (
+                "case-arm-declaration-unsafe",
+                "helper result declaration would land directly under a case label",
+            )
+            continue
+        affected_end = _line_end(source_text, occurrences[-1].end)
+        if _region_has_preprocessor_directive(source_text[line_start:affected_end]):
+            first_blocker = first_blocker or (
+                "preprocessor-region-unsafe",
+                "helper call region crosses a preprocessor directive",
+            )
+            continue
+        indent = _line_indent_at(source_text, line_start)
+        replacements = [(line_start, line_start, (
+            f"{indent}s32 ll_probe_helper_result_0 = (s32) {first.call_text};\n"
+        ))]
+        for call in occurrences:
+            replace_start, replace_end = _cast_prefixed_call_range(
+                source_text,
+                call.start,
+                call.end,
+            )
+            replacements.append((
+                replace_start,
+                replace_end,
+                "ll_probe_helper_result_0",
+            ))
+        probe = LifetimeLayoutProbe(
+            label="repeated-helper-result-reuse-0",
+            operator=operator,
+            description=(
+                f"Materialize repeated helper call `{first.callee}` into one local."
+            ),
+            source_text=_replace_absolute_slices(source_text, replacements),
+            provenance={
+                "kind": operator,
+                "callee": first.callee,
+                "call": first.call_text,
+                "occurrences": len(occurrences),
+            },
+        )
+        return [probe], _source_lifetime_summary(
+            operator,
+            status="generated",
+            candidate_count=1,
+            blocker=None,
+            reason="generated safe repeated helper result reuse candidate",
+        )
+    blocker, reason = first_blocker or (
+        "no-repeated-helper-call",
+        "source scan found no supported repeated helper calls",
+    )
+    return [], _source_lifetime_summary(
+        operator,
+        status="blocked",
+        candidate_count=0,
+        blocker=blocker,
+        reason=reason,
+    )
+
+
+def _probe_helper_result_dematerialize(
+    source_text: str,
+    function: str,
+) -> tuple[list[LifetimeLayoutProbe], dict]:
+    operator = "helper-result-dematerialize"
+    span = _find_function_body_span(source_text, function)
+    if span is None:
+        return [], _source_lifetime_summary(
+            operator,
+            status="blocked",
+            candidate_count=0,
+            blocker="function-body-unavailable",
+            reason=f"function body for {function} was not found in source",
+        )
+    body_start, body_end = span
+    body = source_text[body_start:body_end]
+    first_blocker: tuple[str, str] | None = None
+    for match in re.finditer(
+        r"(?m)^(?P<indent>[ \t]*)(?P<name>[A-Za-z_]\w*)\s*=\s*(?P<expr>[^;\n]+);\s*$",
+        body,
+    ):
+        local = match.group("name")
+        expr = match.group("expr").strip()
+        call = _standalone_helper_call(expr)
+        if call is None:
+            continue
+        if not _helper_call_args_are_simple(call.args_text):
+            first_blocker = first_blocker or (
+                "helper-call-args-unsafe",
+                "helper result assignment arguments are not simple enough to rewrite",
+            )
+            continue
+        if not _helper_call_is_read_only(call.callee, source_text, function):
+            first_blocker = first_blocker or (
+                "callee-not-read-only",
+                f"helper `{call.callee}` is not known read-only",
+            )
+            continue
+        trailing = body[match.end():]
+        use_count = _identifier_count(trailing, local)
+        if use_count not in {1, 2}:
+            continue
+        replacements: list[tuple[int, int, str]] = []
+        unsupported = False
+        for line_match in re.finditer(r"(?m)^.*\n?", trailing):
+            line = line_match.group(0)
+            if not line:
+                continue
+            absolute_start = body_start + match.end() + line_match.start()
+            absolute_end = absolute_start + len(line)
+            if _region_has_preprocessor_directive(line):
+                unsupported = True
+                first_blocker = first_blocker or (
+                    "preprocessor-region-unsafe",
+                    "helper result use crosses a preprocessor directive",
+                )
+                break
+            if _identifier_count(line, local) == 0:
+                continue
+            rewritten = _rewrite_helper_result_use_line(
+                line.rstrip("\n"),
+                local,
+                call.call_text,
+            )
+            if rewritten is None:
+                unsupported = True
+                first_blocker = first_blocker or (
+                    "use-statement-unsafe",
+                    "helper result use statement is not safe to rewrite",
+                )
+                break
+            suffix = "\n" if line.endswith("\n") else ""
+            replacements.append((absolute_start, absolute_end, rewritten + suffix))
+        if unsupported or len(replacements) != use_count:
+            continue
+        assign_start, assign_end = _expand_statement_removal_range(
+            source_text,
+            body_start + match.start(),
+            body_start + match.end(),
+        )
+        probe = LifetimeLayoutProbe(
+            label="helper-result-dematerialize-0",
+            operator=operator,
+            description=(
+                f"Repeat helper call `{call.callee}` at one or two near uses."
+            ),
+            source_text=_replace_absolute_slices(
+                source_text,
+                [(assign_start, assign_end, ""), *replacements],
+            ),
+            provenance={
+                "kind": operator,
+                "callee": call.callee,
+                "local": local,
+                "use_count": use_count,
+            },
+        )
+        return [probe], _source_lifetime_summary(
+            operator,
+            status="generated",
+            candidate_count=1,
+            blocker=None,
+            reason="generated safe helper result dematerialization candidate",
+        )
+    blocker, reason = first_blocker or (
+        "no-helper-result-local",
+        "source scan found no supported helper-result local",
+    )
+    return [], _source_lifetime_summary(
+        operator,
+        status="blocked",
+        candidate_count=0,
+        blocker=blocker,
+        reason=reason,
+    )
+
+
+def _probe_simple_helper_inline_body(
+    source_text: str,
+    function: str,
+) -> tuple[list[LifetimeLayoutProbe], dict]:
+    operator = "simple-helper-inline-body"
+    span = _find_function_body_span(source_text, function)
+    if span is None:
+        return [], _source_lifetime_summary(
+            operator,
+            status="blocked",
+            candidate_count=0,
+            blocker="function-body-unavailable",
+            reason=f"function body for {function} was not found in source",
+        )
+    body_start, body_end = span
+    calls = _scan_simple_helper_calls(
+        source_text[body_start:body_end],
+        absolute_start=body_start,
+    )
+    first_blocker: tuple[str, str] | None = None
+    for call in calls:
+        if call.callee == function:
+            continue
+        helper_expr = _simple_helper_expression_body(source_text, call.callee)
+        if helper_expr is None:
+            if re.search(rf"\b{re.escape(call.callee)}\s*\(", source_text):
+                first_blocker = first_blocker or (
+                    "helper-body-too-complex",
+                    f"helper `{call.callee}` body is not a simple pure expression",
+                )
+            continue
+        if not _helper_call_args_are_simple(call.args_text):
+            first_blocker = first_blocker or (
+                "helper-call-args-unsafe",
+                "helper inline call arguments are not simple enough to substitute",
+            )
+            continue
+        if not _helper_expression_is_pure(helper_expr):
+            first_blocker = first_blocker or (
+                "helper-body-too-complex",
+                f"helper `{call.callee}` body is not a simple pure expression",
+            )
+            continue
+        params = _simple_helper_parameter_names(source_text, call.callee)
+        args = tuple(arg.strip() for arg in _split_top_level_args(call.args_text))
+        if len(params) != len(args):
+            continue
+        replacement = helper_expr
+        for param, arg in zip(params, args, strict=True):
+            replacement = re.sub(rf"\b{re.escape(param)}\b", arg, replacement)
+        probe = LifetimeLayoutProbe(
+            label="simple-helper-inline-body-0",
+            operator=operator,
+            description=f"Inline simple same-TU helper `{call.callee}` once.",
+            source_text=_replace_absolute_slices(
+                source_text,
+                [(call.start, call.end, replacement)],
+            ),
+            provenance={
+                "kind": operator,
+                "callee": call.callee,
+                "parameters": list(params),
+            },
+        )
+        return [probe], _source_lifetime_summary(
+            operator,
+            status="generated",
+            candidate_count=1,
+            blocker=None,
+            reason="generated simple helper inline-body candidate",
+        )
+    blocker, reason = first_blocker or (
+        "no-simple-helper-inline-body",
+        "source scan found no supported same-TU simple helper inline candidate",
+    )
+    return [], _source_lifetime_summary(
+        operator,
+        status="blocked",
+        candidate_count=0,
+        blocker=blocker,
+        reason=reason,
+    )
+
+
+def _for_condition_reload_rhs_is_safe(expr: str) -> bool:
+    masked = _mask_c_non_code_text(expr).strip()
+    if not masked or not _balanced_expression_delimiters(masked):
+        return False
+    if any(token in masked for token in ("++", "--", "?")):
+        return False
+    if re.search(r"(?<![=!<>])=(?!=)", masked):
+        return False
+    return re.fullmatch(
+        r"[A-Za-z_]\w*(?:\s*(?:->|\.)\s*[A-Za-z_]\w*)+",
+        masked,
+    ) is not None
+
+
+def _helper_call_args_are_simple(args_text: str) -> bool:
+    masked = _mask_c_non_code_text(args_text)
+    if not _balanced_expression_delimiters(masked):
+        return False
+    if _region_has_preprocessor_directive(masked):
+        return False
+    stripped = args_text.strip()
+    if not stripped:
+        return True
+    parts = _split_top_level_args(args_text)
+    if not parts:
+        parts = (stripped,)
+    return all(_helper_expression_fragment_is_simple(part) for part in parts)
+
+
+def _helper_expression_fragment_is_simple(expr: str) -> bool:
+    masked = _mask_c_non_code_text(expr).strip()
+    if not masked:
+        return False
+    if any(token in masked for token in ("++", "--", "?", "#")):
+        return False
+    if re.search(r"(?<![=!<>])=(?!=)", masked):
+        return False
+    if "&" in masked:
+        return False
+    if re.search(r"\b[A-Za-z_]\w*\s*\(", masked):
+        return False
+    return True
+
+
+def _helper_expression_is_pure(expr: str) -> bool:
+    if not _balanced_expression_delimiters(_mask_c_non_code_text(expr)):
+        return False
+    if len(_split_top_level_args(expr)) > 1:
+        return False
+    return _helper_expression_fragment_is_simple(expr)
+
+
+def _helper_call_is_read_only(callee: str, source: str, function: str) -> bool:
+    del function
+    if callee in _READ_ONLY_SOURCE_LIFETIME_HELPERS:
+        return True
+    body_expr = _simple_helper_expression_body(source, callee)
+    return body_expr is not None and _helper_expression_is_pure(body_expr)
+
+
+def _simple_helper_expression_body(source: str, function: str) -> str | None:
+    span = _find_function_body_span(source, function)
+    if span is None:
+        return None
+    body_start, body_end = span
+    body = source[body_start:body_end]
+    if _region_has_preprocessor_directive(body):
+        return None
+    masked = _mask_c_non_code_text(body)
+    match = re.fullmatch(r"\s*return\s+(?P<expr>.+?);\s*", masked, re.DOTALL)
+    if match is None:
+        return None
+    return body[match.start("expr"):match.end("expr")].strip()
+
+
+def _simple_helper_parameter_names(source: str, function: str) -> tuple[str, ...]:
+    span = _find_function_body_span(source, function)
+    if span is None:
+        return ()
+    params = _function_param_text(source, function, span[0])
+    if params is None:
+        return ()
+    names: list[str] = []
+    for part in _split_top_level_args(params):
+        if part.strip() == "void":
+            continue
+        parsed = _parse_simple_decl(part)
+        if parsed is not None:
+            names.append(parsed[0])
+    return tuple(names)
+
+
+def _scan_simple_helper_calls(
+    text: str,
+    *,
+    absolute_start: int = 0,
+) -> list[_SimpleHelperCall]:
+    calls: list[_SimpleHelperCall] = []
+    masked = _mask_c_non_code_text(text)
+    cursor = 0
+    keywords = {"if", "for", "while", "switch", "return", "sizeof"}
+    pattern = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
+    while cursor < len(masked):
+        match = pattern.search(masked, cursor)
+        if match is None:
+            break
+        start = match.start()
+        callee = match.group(1)
+        open_index = masked.find("(", start, match.end())
+        if open_index < 0:
+            break
+        if callee in keywords:
+            cursor = open_index + 1
+            continue
+        close_index = _find_matching_paren(masked, open_index)
+        if close_index is None:
+            break
+        calls.append(_SimpleHelperCall(
+            callee=callee,
+            args_text=text[open_index + 1:close_index],
+            start=absolute_start + start,
+            end=absolute_start + close_index + 1,
+            call_text=text[start:close_index + 1],
+        ))
+        cursor = close_index + 1
+    return calls
+
+
+def _standalone_helper_call(expr: str) -> _SimpleHelperCall | None:
+    stripped = expr.strip()
+    cast_match = re.match(r"^\(\s*[A-Za-z_]\w*\s*\)\s*", stripped)
+    if cast_match is not None:
+        stripped = stripped[cast_match.end():]
+    calls = _scan_simple_helper_calls(stripped)
+    if len(calls) != 1:
+        return None
+    call = calls[0]
+    if call.start != 0 or call.end != len(stripped):
+        return None
+    return call
+
+
+def _rewrite_helper_result_use_line(
+    line: str,
+    name: str,
+    replacement: str,
+) -> str | None:
+    if _identifier_count(line, name) != 1:
+        return None
+    return_match = re.match(
+        rf"^(?P<prefix>\s*return\s+){re.escape(name)}(?P<suffix>\s*;\s*)$",
+        line,
+    )
+    if return_match is not None:
+        return (
+            f"{return_match.group('prefix')}{replacement}"
+            f"{return_match.group('suffix')}"
+        )
+    assign_match = _SIMPLE_RHS_ASSIGN_USE_RE.match(line)
+    if assign_match is not None and assign_match.group("rhs") == name:
+        return (
+            f"{assign_match.group('indent')}{assign_match.group('lhs')} = "
+            f"{replacement};"
+        )
+    call_match = re.match(
+        r"^(?P<indent>\s*)(?P<callee>[A-Za-z_]\w*)\((?P<args>[^;\n]*)\);\s*$",
+        line,
+    )
+    if call_match is None:
+        return None
+    args = list(_split_top_level_args(call_match.group("args")))
+    matches = [idx for idx, arg in enumerate(args) if arg.strip() == name]
+    if len(matches) != 1:
+        return None
+    for idx, arg in enumerate(args):
+        if idx == matches[0]:
+            continue
+        if not _helper_expression_fragment_is_simple(arg):
+            return None
+    args[matches[0]] = replacement
+    return (
+        f"{call_match.group('indent')}{call_match.group('callee')}"
+        f"({', '.join(args)});"
+    )
+
+
+def _split_top_level_delimited(text: str, delimiter: str) -> tuple[str, ...]:
+    parts: list[str] = []
+    start = 0
+    stack: list[str] = []
+    pairs = {"(": ")", "[": "]", "{": "}"}
+    closing = set(pairs.values())
+    for idx, char in enumerate(text):
+        if char in pairs:
+            stack.append(pairs[char])
+        elif char in closing:
+            if not stack or stack.pop() != char:
+                return ()
+        elif char == delimiter and not stack:
+            parts.append(text[start:idx])
+            start = idx + 1
+    if stack:
+        return ()
+    parts.append(text[start:])
+    return tuple(parts)
+
+
+def _join_nonempty_clauses(left: str, right: str) -> str:
+    if left and right:
+        return f"{left}, {right}"
+    return left or right
+
+
+def _line_start(source: str, offset: int) -> int:
+    return source.rfind("\n", 0, offset) + 1
+
+
+def _line_end(source: str, offset: int) -> int:
+    end = source.find("\n", offset)
+    if end < 0:
+        return len(source)
+    return end + 1
+
+
+def _line_indent_at(source: str, line_start: int) -> str:
+    match = re.match(r"[ \t]*", source[line_start:])
+    return "" if match is None else match.group(0)
+
+
+def _line_is_case_or_default_label(source: str, line_start: int) -> bool:
+    line_end = source.find("\n", line_start)
+    if line_end < 0:
+        line_end = len(source)
+    stripped = source[line_start:line_end].strip()
+    return stripped.startswith("case ") or stripped == "default:"
+
+
+def _cast_prefixed_call_range(
+    source: str,
+    call_start: int,
+    call_end: int,
+) -> tuple[int, int]:
+    line_start = _line_start(source, call_start)
+    prefix = source[line_start:call_start]
+    match = re.search(r"\(\s*s32\s*\)\s*$", prefix)
+    if match is None:
+        return call_start, call_end
+    return line_start + match.start(), call_end
 
 
 def _frame_size_from_model(model: dict) -> int | None:

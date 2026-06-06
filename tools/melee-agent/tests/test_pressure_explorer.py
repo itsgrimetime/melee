@@ -16,6 +16,7 @@ from src.mwcc_debug.pressure_explorer import (
     compare_pressure_signatures,
     generate_frame_directed_probes,
     generate_lifetime_layout_probes,
+    generate_source_lifetime_probes,
     pressure_signature_from_pcdump,
     scan_frame_local_dematerialization_probes,
 )
@@ -168,6 +169,160 @@ def test_generate_lifetime_layout_probes_includes_core_operator_families() -> No
     assert "condition-nesting" in operators
     assert "call-argument-tempization" in operators
     assert all("fn_80000000" in probe.source_text for probe in probes)
+
+
+def _for_condition_line(source: str) -> str:
+    return next(line for line in source.splitlines() if line.strip().startswith("for ("))
+
+
+def test_source_lifetime_for_condition_field_reload_probe() -> None:
+    source = textwrap.dedent("""\
+        s32 fn_803ACD58(CardState* state)
+        {
+            s32 i;
+            s32 size;
+            for (i = 0; size = state->x8, i < (0x2F + state->x24 + size) / size; i++) {
+                sink(i, size);
+            }
+            return 0;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_803ACD58",
+        max_probes=8,
+    )
+
+    by_operator = {probe.operator: probe for probe in probes}
+    assert "for-condition-field-reload" in by_operator
+    probe = by_operator["for-condition-field-reload"]
+    assert "size = state->x8" not in _for_condition_line(probe.source_text)
+    assert probe.provenance["kind"] == "for-condition-field-reload"
+    assert any(row["operator"] == "for-condition-field-reload" for row in summaries)
+
+
+def test_source_lifetime_repeated_helper_result_reuse_probe() -> None:
+    source = textwrap.dedent("""\
+        s32 fn_803AC7DC(CardState* state, s32 i)
+        {
+            s32 total = 0;
+            s32 extra = 0;
+            total += fn_803AC634(state, i);
+            if (extra < (s32) fn_803AC634(state, i)) {
+                extra = (s32) fn_803AC634(state, i);
+            }
+            return total + extra;
+        }
+    """)
+
+    probes, _summaries = generate_source_lifetime_probes(
+        source,
+        "fn_803AC7DC",
+        max_probes=8,
+    )
+
+    probe = next(
+        probe
+        for probe in probes
+        if probe.operator == "repeated-helper-result-reuse"
+    )
+    assert "s32 ll_probe_helper_result_0 = (s32) fn_803AC634(state, i);" in (
+        probe.source_text
+    )
+    assert probe.source_text.count("fn_803AC634(state, i)") == 1
+    assert probe.provenance["callee"] == "fn_803AC634"
+
+
+def test_source_lifetime_helper_result_dematerialize_probe() -> None:
+    source = textwrap.dedent("""\
+        s32 fn_80000000(CardState* state, s32 i)
+        {
+            s32 result;
+            result = fn_803AC634(state, i);
+            sink(result);
+            return result;
+        }
+    """)
+
+    probes, _summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    probe = next(
+        probe for probe in probes if probe.operator == "helper-result-dematerialize"
+    )
+    assert "result = fn_803AC634(state, i);" not in probe.source_text
+    assert "sink(fn_803AC634(state, i));" in probe.source_text
+    assert "return fn_803AC634(state, i);" in probe.source_text
+
+
+def test_source_lifetime_simple_helper_inline_body_probe() -> None:
+    source = textwrap.dedent("""\
+        static inline s32 helper(CardState* state, s32 i)
+        {
+            return state->x4C[i] + 1;
+        }
+
+        s32 fn_80000000(CardState* state, s32 i)
+        {
+            return helper(state, i);
+        }
+    """)
+
+    probes, _summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    probe = next(
+        probe for probe in probes if probe.operator == "simple-helper-inline-body"
+    )
+    assert "return state->x4C[i] + 1;" in probe.source_text
+    assert "return helper(state, i);" not in probe.source_text
+
+
+def test_source_lifetime_rejects_unsafe_helper_call_rewrites() -> None:
+    source = textwrap.dedent("""\
+        s32 fn_80000000(CardState* state, s32 i)
+        {
+            s32 a = mutating_helper(state, i);
+            s32 b = mutating_helper(state, i);
+            return a + b;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "repeated-helper-result-reuse" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "repeated-helper-result-reuse"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] == "callee-not-read-only"
+
+
+def test_source_lifetime_preserves_generic_lifetime_layout_fallback() -> None:
+    probes, summaries = generate_source_lifetime_probes(
+        SOURCE,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "temp-introduction" in {probe.operator for probe in probes}
+    assert {row["operator"] for row in summaries} == {
+        "for-condition-field-reload",
+        "repeated-helper-result-reuse",
+        "helper-result-dematerialize",
+        "simple-helper-inline-body",
+    }
 
 
 def test_generate_frame_directed_probes_materializes_frame_levers() -> None:
