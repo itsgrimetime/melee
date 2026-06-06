@@ -225,6 +225,21 @@ HELPER_INLINE_LIFETIME_OPERATORS = (
 )
 
 _READ_ONLY_SOURCE_LIFETIME_HELPERS = frozenset({"fn_803AC634"})
+_REUSE_INTLIKE_RETURN_TYPES = frozenset({
+    "BOOL",
+    "bool",
+    "char",
+    "int",
+    "long",
+    "s8",
+    "s16",
+    "s32",
+    "short",
+    "u8",
+    "u16",
+    "u32",
+    "unsigned",
+})
 
 
 def pressure_signature_from_pcdump(
@@ -1182,7 +1197,36 @@ def _helper_call_is_read_only(callee: str, source: str, function: str) -> bool:
 def _helper_callee_supported_for_reuse(callee: str, source: str) -> bool:
     if callee in _READ_ONLY_SOURCE_LIFETIME_HELPERS:
         return True
-    return _find_function_body_span(source, callee) is None
+    if _find_function_body_span(source, callee) is None:
+        return True
+    body_expr = _simple_helper_expression_body(source, callee)
+    if body_expr is None or not _helper_expression_is_pure(body_expr):
+        return False
+    return_type = _function_return_type(source, callee)
+    return return_type in _REUSE_INTLIKE_RETURN_TYPES
+
+
+def _function_return_type(source: str, function: str) -> str | None:
+    span = _find_function_body_span(source, function)
+    if span is None:
+        return None
+    body_start, _body_end = span
+    prefix = source[:body_start]
+    matches = list(re.finditer(rf"\b{re.escape(function)}\s*\(", prefix))
+    if not matches:
+        return None
+    name_start = matches[-1].start()
+    line_start = _line_start(prefix, name_start)
+    signature = prefix[line_start:name_start].strip()
+    signature = re.sub(
+        r"\b(?:static|inline|extern|auto|register|__inline__)\b",
+        " ",
+        signature,
+    )
+    signature = re.sub(r"\s+", " ", signature).strip()
+    if not signature:
+        return None
+    return _normalize_type_spelling(signature)
 
 
 def _next_unique_repeated_helper_temp_name(source: str, function: str) -> str:

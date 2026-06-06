@@ -268,6 +268,40 @@ def test_source_lifetime_repeated_helper_result_reuse_supports_seed_style_compar
     assert probe.source_text.count("fn_803AC634(state, i)") == 1
 
 
+def test_source_lifetime_repeated_helper_result_reuse_supports_same_tu_scalar_helper() -> None:
+    source = textwrap.dedent("""\
+        static inline s32 helper(CardState* state, s32 i)
+        {
+            return state->x4C[i] + 1;
+        }
+
+        s32 fn_80000000(CardState* state, s32 i)
+        {
+            s32 total = 0;
+            total += helper(state, i);
+            total = helper(state, i);
+            return total;
+        }
+    """)
+
+    probes, _summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    probe = next(
+        probe
+        for probe in probes
+        if probe.operator == "repeated-helper-result-reuse"
+    )
+    assert "s32 ll_probe_helper_result_0 = (s32) helper(state, i);" in (
+        probe.source_text
+    )
+    assert "total += ll_probe_helper_result_0;" in probe.source_text
+    assert "total = ll_probe_helper_result_0;" in probe.source_text
+
+
 def test_source_lifetime_repeated_helper_result_reuse_rejects_same_tu_pointer_helper() -> None:
     source = textwrap.dedent("""\
         static inline Node* helper(Node** table, s32 i)
