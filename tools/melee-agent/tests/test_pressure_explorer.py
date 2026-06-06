@@ -2725,6 +2725,34 @@ def test_loop_init_probe_uses_c89_compatible_enclosing_block() -> None:
     assert "    {\n        int i;\n        for (i = 0;" in probe.source_text
 
 
+def test_loop_init_probe_rejects_counter_used_after_first_loop() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(void)
+        {
+            int i;
+            int total;
+
+            total = 0;
+            for (i = 0; i < 8; i++) {
+                total += i;
+            }
+            for (i = 0; i < 4; i++) {
+                total += i;
+            }
+            sink(total);
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(
+        source,
+        "fn_80000000",
+        operator_filter=("loop-init",),
+        max_probes=20,
+    )
+
+    assert [probe.operator for probe in probes] == []
+
+
 def test_declaration_order_probes_include_adjacent_swap_and_loop_counter_hoist() -> None:
     source = textwrap.dedent("""\
         void fn_80000000(int flag)

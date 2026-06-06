@@ -2985,6 +2985,9 @@ def _probe_loop_init(
     abs_for_close = _find_matching_brace(source, abs_for_open)
     if abs_for_close is None or abs_for_close > body_start + len(body):
         return None
+    after_loop = source[abs_for_close + 1:body_start + len(body)]
+    if _identifier_count(after_loop, var) > 0:
+        return None
 
     decl_abs_start = body_start + decl.start()
     decl_abs_end = body_start + decl.end()
