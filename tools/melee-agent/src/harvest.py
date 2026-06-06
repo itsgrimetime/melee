@@ -62,7 +62,13 @@ PREVIEW_FACET_FIELDS = (
     "source_actionability",
     "headline_tool",
     "frame_closability_tier",
+    "name_magic_blocker",
 )
+DATA_SYMBOL_BLOCKED_SOURCE_ACTIONABILITIES = {
+    "blocked-data-symbol-no-name-magic-candidate",
+    "blocked-data-symbol-ambiguous-sdata2-value",
+    "blocked-data-symbol-sdata2-pool-order-dependent",
+}
 
 BLOCKER_UNSUPPORTED_HARNESS = "unsupported-harness"
 BLOCKER_MISSING_SOURCE_FILE = "missing-source-file"
@@ -534,7 +540,8 @@ def preview_harvest_queue(
             near_miss_rows = [
                 raw
                 for raw in eligible_rows
-                if _row_matches_filters_with_relaxed_field(
+                if raw not in matching_rows
+                and _row_matches_filters_with_relaxed_field(
                     raw,
                     filters,
                     field_name,
@@ -543,6 +550,18 @@ def preview_harvest_queue(
             near_miss_facets[field_name] = _top_facet_values(
                 near_miss_rows,
                 field_name,
+                limit=facet_limit,
+            )
+        name_magic_blocker_rows = [
+            raw
+            for raw in eligible_rows
+            if raw not in matching_rows
+            and (raw.get("name_magic_blocker") or "").strip()
+        ]
+        if name_magic_blocker_rows:
+            near_miss_facets["name_magic_blocker"] = _top_facet_values(
+                name_magic_blocker_rows,
+                "name_magic_blocker",
                 limit=facet_limit,
             )
 
@@ -594,11 +613,18 @@ def _is_allocator_pcdump_triage_request(request: HarvestRequest) -> bool:
     )
 
 
+def _is_blocked_data_symbol_request(request: HarvestRequest) -> bool:
+    return request.source_actionability in DATA_SYMBOL_BLOCKED_SOURCE_ACTIONABILITIES
+
+
 def select_harness(request: HarvestRequest) -> str | None:
     explicit_harness = request.facts.get("harness")
     if explicit_harness:
         harness = str(explicit_harness).strip().lower()
         return harness if harness in REGISTERED_HARNESSES else None
+
+    if _is_blocked_data_symbol_request(request):
+        return None
 
     if _is_allocator_pcdump_triage_request(request):
         return HARNESS_ALLOCATOR_PCDUMP_TRIAGE
@@ -2596,10 +2622,13 @@ def _normalize_layer_sequence(request: HarvestRequest) -> list[dict[str, Any]]:
 
     selected: list[str] = []
     if (
-        request.work_bucket == "data-symbol-relocation"
-        or request.primary in {"data-symbol-or-relocation", "data-symbol-relocation"}
-        or request.source_actionability == "current-tools-data-symbol"
-        or request.headline_tool == "checkdiff-name-magic"
+        not _is_blocked_data_symbol_request(request)
+        and (
+            request.work_bucket == "data-symbol-relocation"
+            or request.primary in {"data-symbol-or-relocation", "data-symbol-relocation"}
+            or request.source_actionability == "current-tools-data-symbol"
+            or request.headline_tool == "checkdiff-name-magic"
+        )
     ):
         selected.append(HARNESS_NAME_MAGIC_SOURCE)
     if (

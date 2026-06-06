@@ -47,6 +47,10 @@ HEADER = [
     "decl_order_best_ordering",
     "decl_order_evaluated_status",
     "decl_order_candidate_count",
+    "name_magic_blocker",
+    "name_magic_stop_kind",
+    "name_magic_probe_count",
+    "name_magic_reason",
     "file_path",
     "frame_next_command",
     "next_command",
@@ -1339,6 +1343,99 @@ def test_preview_harvest_queue_counts_facets_and_sample_before_limit(
     assert preview["sample"][0]["next_command"] == (
         "melee-agent extract get first_match"
     )
+
+
+def test_preview_harvest_queue_facets_name_magic_blocker(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    blocked = _name_magic_row("blocked_fn", primary="data-symbol-or-relocation")
+    blocked["source_actionability"] = (
+        "blocked-data-symbol-no-name-magic-candidate"
+    )
+    blocked["name_magic_blocker"] = "no-name-magic-candidate"
+    blocked["name_magic_stop_kind"] = "blocked"
+    blocked["name_magic_probe_count"] = "0"
+    blocked["name_magic_reason"] = "no source-addressable relocation pair"
+    ready = _name_magic_row("ready_fn", primary="data-symbol-or-relocation")
+    ready["name_magic_probe_count"] = "1"
+    _write_queue(queue, [blocked, ready])
+
+    preview = preview_harvest_queue(
+        queue,
+        work_bucket="data-symbol-relocation",
+        repo_root=repo_root,
+        filters=HarvestFilters(
+            where={"source_actionability": ("current-tools-data-symbol",)}
+        ),
+    )
+
+    assert preview["counts"]["matching_rows"] == 1
+    assert [row["function"] for row in preview["sample"]] == ["ready_fn"]
+    assert preview["near_miss_facets"]["name_magic_blocker"] == [
+        {"value": "no-name-magic-candidate", "count": 1}
+    ]
+
+
+def test_blocked_data_symbol_rows_do_not_select_name_magic_harness(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    row = _name_magic_row("blocked_fn", primary="data-symbol-or-relocation")
+    row["source_actionability"] = "blocked-data-symbol-sdata2-pool-order-dependent"
+    row["name_magic_blocker"] = "sdata2-pool-order-dependent"
+    _write_queue(queue, [row])
+
+    rows = load_queue_rows(
+        queue,
+        work_bucket="data-symbol-relocation",
+        repo_root=repo_root,
+    )
+
+    assert select_harness(rows[0]) is None
+    assert harvest_module._normalize_layer_sequence(rows[0]) == []
+
+
+def test_blocked_data_symbol_subqueue_rows_do_not_compose_name_magic(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "data-symbol-relocation.no-name-magic-candidate.tsv"
+    row = _name_magic_row("blocked_fn", primary="data-symbol-or-relocation")
+    row["source_actionability"] = "blocked-data-symbol-no-name-magic-candidate"
+    row["name_magic_blocker"] = "no-name-magic-candidate"
+    _write_queue(queue, [row])
+
+    rows = load_queue_rows(
+        queue,
+        work_bucket="data-symbol-relocation.no-name-magic-candidate",
+        repo_root=repo_root,
+    )
+
+    assert select_harness(rows[0]) is None
+    assert harvest_module._normalize_layer_sequence(rows[0]) == []
+
+
+def test_blocked_data_symbol_target_map_can_explicitly_select_harness(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    row = _name_magic_row("blocked_fn", primary="data-symbol-or-relocation")
+    row["source_actionability"] = "blocked-data-symbol-no-name-magic-candidate"
+    row["name_magic_blocker"] = "no-name-magic-candidate"
+    _write_queue(queue, [row])
+
+    rows = load_queue_rows(
+        queue,
+        work_bucket="data-symbol-relocation",
+        repo_root=repo_root,
+        target_map={"blocked_fn": {"harness": "name-magic-source-declarations"}},
+    )
+
+    assert select_harness(rows[0]) == "name-magic-source-declarations"
 
 
 def test_preview_harvest_queue_zero_match_reports_near_miss_facets(

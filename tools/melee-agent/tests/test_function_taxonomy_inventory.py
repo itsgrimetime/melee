@@ -162,6 +162,50 @@ def read_jsonl(path: Path) -> list[dict]:
     ]
 
 
+def write_data_symbol_report(path: Path, functions: list[str]) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "units": [
+                    {
+                        "name": "main/melee/demo/data",
+                        "metadata": {
+                            "source_path": "src/melee/demo/data.c",
+                            "complete": False,
+                        },
+                        "functions": [
+                            {
+                                "name": function,
+                                "size": "128",
+                                "fuzzy_match_percent": 99.0,
+                                "metadata": {
+                                    "virtual_address": str(2147483648 + index * 16)
+                                },
+                            }
+                            for index, function in enumerate(functions)
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def data_symbol_checkdiff(function: str):
+    return 1, json.dumps(
+        {
+            "function": function,
+            "match": False,
+            "classification": {
+                "primary": "data-symbol-or-relocation",
+                "reasons": ["data/symbol relocation mismatch"],
+            },
+            "structural": {"opcode_similarity": 1.0, "line_delta": 0},
+        }
+    ), ""
+
+
 def test_generate_inventory_classifies_report_functions_and_writes_outputs(
     tmp_path: Path,
 ) -> None:
@@ -244,11 +288,13 @@ def test_generate_inventory_classifies_report_functions_and_writes_outputs(
         "frame_match_relevance\tframe_match_relevance_reason\t"
         "frame_attribution_status\tframe_source_object_symbol\t"
         "cast_audit_status\tcast_medium_plus_count\t"
-        "source_actionability\theadline_tool\tactionability_reason\t"
-        "decl_order_best_delta\tdecl_order_best_ordering\t"
-        "decl_order_evaluated_status\tdecl_order_candidate_count\t"
-        "file_path\tframe_next_command\tnext_command"
-    ) in stack_queue
+            "source_actionability\theadline_tool\tactionability_reason\t"
+            "decl_order_best_delta\tdecl_order_best_ordering\t"
+            "decl_order_evaluated_status\tdecl_order_candidate_count\t"
+            "name_magic_blocker\tname_magic_stop_kind\t"
+            "name_magic_probe_count\tname_magic_reason\t"
+            "file_path\tframe_next_command\tnext_command"
+        ) in stack_queue
     assert (
         "99.75000\tstack_fn\tstack-slot-layout\tsame-frame-stack-slot-placement\t"
         "\t\t\t\t"
@@ -270,6 +316,10 @@ def test_generate_inventory_classifies_report_functions_and_writes_outputs(
     assert "| Report audit candidates | 5 |" in summary
     assert "| stack-local-layout | 3 |" in summary
     assert "| known-small-pattern-candidate | 1 |" in summary
+    assert (
+        "`build/function-taxonomy/queues/"
+        "data-symbol-relocation.no-name-magic-candidate.tsv`"
+    ) in summary
 
 
 def test_generate_inventory_writes_completed_run_status_last(tmp_path: Path) -> None:
@@ -1318,6 +1368,236 @@ def test_generate_inventory_honors_limit_before_running_checkdiff(tmp_path: Path
     assert result.report_non100_count == 5
     assert result.attempted_count == 1
     assert seen == ["stack_fn"]
+
+
+def test_data_symbol_name_magic_preflight_rebuckets_non_candidate_rows(
+    tmp_path: Path,
+) -> None:
+    from src.harvest import HarvestFilters, load_queue_rows, preview_harvest_queue
+    from tools.function_taxonomy_inventory import generate_inventory
+
+    report = tmp_path / "report.json"
+    output = tmp_path / "taxonomy"
+    write_data_symbol_report(report, ["blocked_fn", "ready_fn"])
+
+    def name_magic_preflight(candidate):
+        if candidate.function == "ready_fn":
+            return {
+                "blocker": "no-name-magic-candidate",
+                "stop_condition": {
+                    "kind": "unvalidated",
+                    "blocker": "no-name-magic-candidate",
+                    "reason": "safe name-magic probes were generated but not compiled",
+                },
+                "probe_count": 1,
+                "probes": [{"label": "data-symbol-static-to-global-0"}],
+            }
+        return {
+            "blocker": "no-name-magic-candidate",
+            "stop_condition": {
+                "kind": "blocked",
+                "blocker": "no-name-magic-candidate",
+                "reason": "no source-addressable relocation pair",
+            },
+            "probe_count": 0,
+            "probes": [],
+        }
+
+    result = generate_inventory(
+        report,
+        output,
+        checkdiff_runner=data_symbol_checkdiff,
+        decl_order_evaluator=None,
+        frame_report_runner=None,
+        name_magic_preflight_runner=name_magic_preflight,
+        workers=1,
+    )
+
+    assert result.classified_count == 2
+    records = {row["function"]: row for row in read_jsonl(output / "taxonomy.records.jsonl")}
+    assert records["blocked_fn"]["source_actionability"] == (
+        "blocked-data-symbol-no-name-magic-candidate"
+    )
+    assert records["blocked_fn"]["name_magic_blocker"] == "no-name-magic-candidate"
+    assert records["blocked_fn"]["name_magic_stop_kind"] == "blocked"
+    assert records["blocked_fn"]["name_magic_probe_count"] == 0
+    assert records["blocked_fn"]["name_magic_reason"] == (
+        "no source-addressable relocation pair"
+    )
+    assert "no source-emitting name-magic candidate" in records[
+        "blocked_fn"
+    ]["actionability_reason"]
+    assert records["ready_fn"]["source_actionability"] == "current-tools-data-symbol"
+    assert records["ready_fn"]["name_magic_probe_count"] == 1
+
+    main_queue = (output / "queues" / "data-symbol-relocation.tsv").read_text(
+        encoding="utf-8"
+    )
+    assert "name_magic_blocker" in main_queue.splitlines()[0]
+    assert "blocked-data-symbol-no-name-magic-candidate" in main_queue
+    subqueue = (
+        output / "queues" / "data-symbol-relocation.no-name-magic-candidate.tsv"
+    ).read_text(encoding="utf-8")
+    assert "blocked_fn" in subqueue
+    assert "ready_fn" not in subqueue
+
+    current_rows = load_queue_rows(
+        output / "queues" / "data-symbol-relocation.tsv",
+        work_bucket="data-symbol-relocation",
+        repo_root=REPO_ROOT,
+        filters=HarvestFilters(
+            where={"source_actionability": ("current-tools-data-symbol",)}
+        ),
+    )
+    assert [row.function for row in current_rows] == ["ready_fn"]
+    preview = preview_harvest_queue(
+        output / "queues" / "data-symbol-relocation.tsv",
+        work_bucket="data-symbol-relocation",
+        repo_root=REPO_ROOT,
+        filters=HarvestFilters(
+            where={"source_actionability": ("current-tools-data-symbol",)}
+        ),
+    )
+    assert preview["sample"][0]["function"] == "ready_fn"
+    assert preview["near_miss_facets"]["name_magic_blocker"] == [
+        {"value": "no-name-magic-candidate", "count": 1}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("blocker", "expected_actionability"),
+    [
+        (
+            "ambiguous-sdata2-value",
+            "blocked-data-symbol-ambiguous-sdata2-value",
+        ),
+        (
+            "sdata2-pool-order-dependent",
+            "blocked-data-symbol-sdata2-pool-order-dependent",
+        ),
+    ],
+)
+def test_data_symbol_name_magic_preflight_rebuckets_sdata2_blockers(
+    tmp_path: Path,
+    blocker: str,
+    expected_actionability: str,
+) -> None:
+    from tools.function_taxonomy_inventory import generate_inventory
+
+    report = tmp_path / "report.json"
+    output = tmp_path / "taxonomy"
+    write_data_symbol_report(report, ["blocked_fn"])
+
+    def name_magic_preflight(_candidate):
+        return {
+            "blocker": blocker,
+            "stop_condition": {
+                "kind": "blocked",
+                "blocker": blocker,
+                "reason": f"{blocker} has no source lever",
+            },
+            "probe_count": 0,
+            "probes": [],
+        }
+
+    generate_inventory(
+        report,
+        output,
+        checkdiff_runner=data_symbol_checkdiff,
+        decl_order_evaluator=None,
+        frame_report_runner=None,
+        name_magic_preflight_runner=name_magic_preflight,
+        workers=1,
+    )
+
+    records = read_jsonl(output / "taxonomy.records.jsonl")
+    assert records[0]["source_actionability"] == expected_actionability
+    assert records[0]["name_magic_blocker"] == blocker
+    subqueue = output / "queues" / f"data-symbol-relocation.{blocker}.tsv"
+    assert subqueue.exists()
+    assert "blocked_fn" in subqueue.read_text(encoding="utf-8")
+
+
+def test_data_symbol_blocker_subqueues_are_rewritten_empty(
+    tmp_path: Path,
+) -> None:
+    from tools.function_taxonomy_inventory import generate_inventory
+
+    report = tmp_path / "report.json"
+    output = tmp_path / "taxonomy"
+    write_data_symbol_report(report, ["data_fn"])
+
+    generate_inventory(
+        report,
+        output,
+        checkdiff_runner=data_symbol_checkdiff,
+        decl_order_evaluator=None,
+        frame_report_runner=None,
+        name_magic_preflight_runner=lambda _candidate: {
+            "blocker": "no-name-magic-candidate",
+            "stop_condition": {
+                "kind": "blocked",
+                "blocker": "no-name-magic-candidate",
+                "reason": "no source-addressable relocation pair",
+            },
+            "probe_count": 0,
+            "probes": [],
+        },
+        workers=1,
+    )
+
+    subqueue = output / "queues" / "data-symbol-relocation.no-name-magic-candidate.tsv"
+    assert "data_fn" in subqueue.read_text(encoding="utf-8")
+
+    generate_inventory(
+        report,
+        output,
+        checkdiff_runner=data_symbol_checkdiff,
+        decl_order_evaluator=None,
+        frame_report_runner=None,
+        name_magic_preflight_runner=lambda _candidate: {
+            "blocker": "no-name-magic-candidate",
+            "stop_condition": {
+                "kind": "unvalidated",
+                "blocker": "no-name-magic-candidate",
+                "reason": "safe name-magic probes were generated but not compiled",
+            },
+            "probe_count": 1,
+            "probes": [{"label": "data-symbol-static-to-global-0"}],
+        },
+        workers=1,
+    )
+
+    rewritten = subqueue.read_text(encoding="utf-8")
+    assert "name_magic_blocker" in rewritten.splitlines()[0]
+    assert "data_fn" not in rewritten
+
+
+def test_data_symbol_name_magic_preflight_failure_does_not_rebucket(
+    tmp_path: Path,
+) -> None:
+    from tools.function_taxonomy_inventory import generate_inventory
+
+    report = tmp_path / "report.json"
+    output = tmp_path / "taxonomy"
+    write_data_symbol_report(report, ["data_fn"])
+
+    def failing_preflight(_candidate):
+        raise RuntimeError("preflight unavailable")
+
+    generate_inventory(
+        report,
+        output,
+        checkdiff_runner=data_symbol_checkdiff,
+        decl_order_evaluator=None,
+        frame_report_runner=None,
+        name_magic_preflight_runner=failing_preflight,
+        workers=1,
+    )
+
+    records = read_jsonl(output / "taxonomy.records.jsonl")
+    assert records[0]["source_actionability"] == "current-tools-data-symbol"
+    assert records[0].get("name_magic_blocker") is None
 
 
 def test_generate_inventory_attaches_stack_frame_closability_fields(
