@@ -339,3 +339,31 @@ def offset_to_field(layout: dict[str, int], offset: int) -> str | None:
         if o == offset:
             return p
     return None
+
+
+def verify_offsets(
+    repo: Path,
+    struct_name: str,
+    tu_src: str,
+    expect: dict[str, int],
+) -> bool:
+    """Compile a static-assertion probe to verify expected field offsets.
+
+    Returns True if all expected offsets match, False if any do not.
+    This is cheaper than resolve_layout() when you only need a pass/fail check
+    on a known set of offsets.
+    """
+    spec = parse_tu_cflags(repo, tu_src)
+    incl = _tu_include_of(repo, struct_name)
+
+    # Use typedef char[1] (ok) / typedef char[-1] (compiler error) trick.
+    body = f"#include {incl}\n"
+    body += f"#define OFF(f) ((unsigned long)&((({struct_name}*)0)->f))\n"
+    for i, (path, off) in enumerate(expect.items()):
+        body += f"typedef char _chk{i}[OFF({path}) == {off} ? 1 : -1];\n"
+
+    try:
+        _compile_probe(repo, spec, body)
+        return True
+    except RuntimeError:
+        return False
