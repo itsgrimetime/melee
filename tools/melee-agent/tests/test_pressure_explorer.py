@@ -302,6 +302,39 @@ def test_source_lifetime_repeated_helper_result_reuse_supports_same_tu_scalar_he
     assert "total = ll_probe_helper_result_0;" in probe.source_text
 
 
+def test_source_lifetime_repeated_helper_result_reuse_rejects_same_tu_unsigned_helper() -> None:
+    source = textwrap.dedent("""\
+        static inline u32 helper(u32 x)
+        {
+            return x;
+        }
+
+        u32 fn_80000000(u32 x)
+        {
+            u32 total = 0;
+            total += helper(x);
+            total = helper(x);
+            return total;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "repeated-helper-result-reuse" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "repeated-helper-result-reuse"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] in {
+        "helper-return-type-unsafe",
+        "callee-not-supported-for-reuse",
+    }
+
+
 def test_source_lifetime_repeated_helper_result_reuse_rejects_same_tu_pointer_helper() -> None:
     source = textwrap.dedent("""\
         static inline Node* helper(Node** table, s32 i)
@@ -432,6 +465,40 @@ def test_source_lifetime_helper_result_dematerialize_preserves_assignment_cast()
         ]
         assert blocked
         assert blocked[0]["blocker"] is not None
+
+
+def test_source_lifetime_helper_result_dematerialize_rejects_same_tu_pointer_helper() -> None:
+    source = textwrap.dedent("""\
+        static inline Node* helper(Node** table, s32 i)
+        {
+            return table[i];
+        }
+
+        Node* fn_80000000(Node** table, s32 i)
+        {
+            Node* result;
+            result = helper(table, i);
+            i++;
+            sink(result);
+            return result;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "helper-result-dematerialize" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "helper-result-dematerialize"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] in {
+        "helper-return-type-unsafe",
+        "callee-not-supported-for-dematerialize",
+    }
 
 
 def test_source_lifetime_simple_helper_inline_body_probe() -> None:

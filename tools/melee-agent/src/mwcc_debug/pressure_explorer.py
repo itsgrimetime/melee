@@ -226,9 +226,21 @@ HELPER_INLINE_LIFETIME_OPERATORS = (
 
 _READ_ONLY_SOURCE_LIFETIME_HELPERS = frozenset({"fn_803AC634"})
 _REUSE_INTLIKE_RETURN_TYPES = frozenset({
+    "int",
+    "long",
+    "s8",
+    "s16",
+    "s32",
+    "short",
+})
+_DEMATERIALIZE_SCALAR_RETURN_TYPES = frozenset({
     "BOOL",
     "bool",
     "char",
+    "double",
+    "f32",
+    "f64",
+    "float",
     "int",
     "long",
     "s8",
@@ -238,6 +250,7 @@ _REUSE_INTLIKE_RETURN_TYPES = frozenset({
     "u8",
     "u16",
     "u32",
+    "u64",
     "unsigned",
 })
 
@@ -898,6 +911,12 @@ def _probe_helper_result_dematerialize(
                 "helper result assignment arguments are not simple enough to rewrite",
             )
             continue
+        if not _helper_callee_supported_for_dematerialize(call.callee, source_text):
+            first_blocker = first_blocker or (
+                "helper-return-type-unsafe",
+                f"helper `{call.callee}` is not supported for dematerialization",
+            )
+            continue
         if not _helper_call_is_read_only(call.callee, source_text, function):
             first_blocker = first_blocker or (
                 "callee-not-read-only",
@@ -1204,6 +1223,18 @@ def _helper_callee_supported_for_reuse(callee: str, source: str) -> bool:
         return False
     return_type = _function_return_type(source, callee)
     return return_type in _REUSE_INTLIKE_RETURN_TYPES
+
+
+def _helper_callee_supported_for_dematerialize(callee: str, source: str) -> bool:
+    if callee in _READ_ONLY_SOURCE_LIFETIME_HELPERS:
+        return True
+    if _find_function_body_span(source, callee) is None:
+        return True
+    body_expr = _simple_helper_expression_body(source, callee)
+    if body_expr is None or not _helper_expression_is_pure(body_expr):
+        return False
+    return_type = _function_return_type(source, callee)
+    return return_type in _DEMATERIALIZE_SCALAR_RETURN_TYPES
 
 
 def _function_return_type(source: str, function: str) -> str | None:
