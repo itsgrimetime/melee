@@ -12,6 +12,7 @@ import tempfile
 from collections import Counter
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 
@@ -84,6 +85,12 @@ SOURCE_ACTIONABILITY_REBUCKET_FINGERPRINT_FIELDS = (
     "name_magic_reason",
     "file_path",
 )
+SOURCE_ACTIONABILITY_REBUCKET_ROW_TOOL_FIELDS = (
+    "headline_tool",
+    "frame_closability_tier",
+    "next_command",
+    "frame_next_command",
+)
 DATA_SYMBOL_NO_NAME_MAGIC_CANDIDATE_ACTIONABILITY = (
     "blocked-data-symbol-no-name-magic-candidate"
 )
@@ -122,6 +129,9 @@ BLOCKER_ALLOCATOR_FORCE_VECTOR_VERIFY_FAILED = (
     "allocator-force-vector-verify-failed"
 )
 BLOCKER_ALLOCATOR_TRIAGE_UNCLASSIFIED = "allocator-triage-unclassified"
+ALLOCATOR_TARGET_CONFLICT_ACTIONABILITY = "allocator-target-conflict"
+FRAME_TRANSFORM_DIAGNOSTIC_ACTIONABILITY = "diagnostic-only"
+FRAME_TRANSFORM_SOURCE_PROBE_ACTIONABILITY = "source-probe"
 RETAINED_SOURCE_STATUSES = {"applied", "improved", "validated"}
 NEGATIVE_EVIDENCE_STATUSES = {"blocked", "error", "no_match", "unsupported"}
 
@@ -335,6 +345,43 @@ def _queue_row_taxonomy_fingerprint(
     return _hash_json(fields)
 
 
+def _queue_row_tool_fingerprint(
+    raw: Mapping[str, str],
+    *,
+    work_bucket: str,
+) -> str:
+    fields: dict[str, str] = {"work_bucket": work_bucket}
+    for field_name in SOURCE_ACTIONABILITY_REBUCKET_ROW_TOOL_FIELDS:
+        fields[field_name] = str(raw.get(field_name) or "").strip()
+    return _hash_json(fields)
+
+
+@lru_cache(maxsize=None)
+def _harvest_tool_fingerprint(work_bucket: str) -> str | None:
+    if work_bucket not in {"register-allocator", "stack-local-layout"}:
+        return None
+    src_root = Path(__file__).resolve().parent
+    tool_paths = [src_root / "cli" / "debug.py"]
+    if work_bucket == "stack-local-layout":
+        tool_paths.extend(
+            [
+                src_root / "mwcc_debug" / "pressure_explorer.py",
+                src_root / "mwcc_debug" / "frame_reservations.py",
+            ]
+        )
+    hasher = hashlib.sha256()
+    for path in tool_paths:
+        try:
+            data = path.read_bytes()
+        except OSError:
+            return None
+        hasher.update(str(path.relative_to(src_root)).encode("utf-8"))
+        hasher.update(b"\0")
+        hasher.update(data)
+        hasher.update(b"\0")
+    return hasher.hexdigest()
+
+
 def _rebucket_fingerprint_from_raw(
     raw: Mapping[str, str],
     *,
@@ -345,8 +392,15 @@ def _rebucket_fingerprint_from_raw(
         "taxonomy_sha256": _queue_row_taxonomy_fingerprint(
             raw,
             work_bucket=work_bucket,
-        )
+        ),
+        "row_tool_sha256": _queue_row_tool_fingerprint(
+            raw,
+            work_bucket=work_bucket,
+        ),
     }
+    tool_sha256 = _harvest_tool_fingerprint(work_bucket)
+    if tool_sha256 is not None:
+        fingerprint["tool_sha256"] = tool_sha256
     source_sha256 = _source_file_sha256(
         resolve_source_file(repo_root, (raw.get("file_path") or "").strip())
     )
@@ -357,9 +411,10 @@ def _rebucket_fingerprint_from_raw(
 
 def _rebucket_fingerprint_from_request(request: HarvestRequest) -> dict[str, str]:
     fingerprint: dict[str, str] = {}
-    taxonomy_sha256 = request.rebucket_fingerprint.get("taxonomy_sha256")
-    if taxonomy_sha256:
-        fingerprint["taxonomy_sha256"] = taxonomy_sha256
+    for key in ("taxonomy_sha256", "row_tool_sha256", "tool_sha256"):
+        value = request.rebucket_fingerprint.get(key)
+        if value:
+            fingerprint[key] = value
     source_sha256 = _source_file_sha256(request.source_file)
     if source_sha256 is not None:
         fingerprint["source_sha256"] = source_sha256
@@ -534,8 +589,14 @@ def _apply_source_actionability_rebucket(
             repo_root=repo_root,
             work_bucket=work_bucket,
         )
+        comparable_keys = {
+            "source_sha256",
+            "taxonomy_sha256",
+            "row_tool_sha256",
+            "tool_sha256",
+        }
         for key, value in rebucket_fingerprint.items():
-            if key not in {"source_sha256", "taxonomy_sha256"}:
+            if key not in comparable_keys:
                 continue
             if not value:
                 continue
@@ -860,6 +921,38 @@ def _is_allocator_pcdump_triage_request(request: HarvestRequest) -> bool:
     )
 
 
+def _is_exhausted_allocator_rebucket_request(request: HarvestRequest) -> bool:
+    if request.work_bucket != "register-allocator":
+        return False
+    if request.source_actionability not in {
+        BLOCKER_ALLOCATOR_SOURCE_LIFETIME,
+        BLOCKER_ALLOCATOR_TARGET_VECTOR,
+        ALLOCATOR_TARGET_CONFLICT_ACTIONABILITY,
+    }:
+        return False
+    return (
+        request.headline_tool == "mwcc-debug"
+        or _contains_debug_dump_local(request.next_command)
+        or _contains_debug_dump_local(request.frame_next_command)
+    )
+
+
+def _is_exhausted_frame_transform_rebucket_request(request: HarvestRequest) -> bool:
+    if request.work_bucket != "stack-local-layout":
+        return False
+    if request.source_actionability not in {
+        FRAME_TRANSFORM_DIAGNOSTIC_ACTIONABILITY,
+        FRAME_TRANSFORM_SOURCE_PROBE_ACTIONABILITY,
+    }:
+        return False
+    return (
+        request.headline_tool == HARNESS_FRAME_TRANSFORM
+        or request.frame_closability_tier == "current-tools-padstack"
+        or HARNESS_FRAME_TRANSFORM in request.next_command
+        or HARNESS_FRAME_TRANSFORM in request.frame_next_command
+    )
+
+
 def _is_blocked_data_symbol_request(request: HarvestRequest) -> bool:
     return (
         request.source_actionability in DATA_SYMBOL_BLOCKED_SOURCE_ACTIONABILITIES
@@ -877,6 +970,9 @@ def select_harness(request: HarvestRequest) -> str | None:
         return None
 
     if request.source_actionability == MALFORMED_SOURCE_CANDIDATE_ACTIONABILITY:
+        return None
+
+    if _is_exhausted_allocator_rebucket_request(request):
         return None
 
     if _is_allocator_pcdump_triage_request(request):
@@ -908,6 +1004,9 @@ def select_harness(request: HarvestRequest) -> str | None:
         )
     ):
         return HARNESS_LIFETIME_LAYOUT
+
+    if _is_exhausted_frame_transform_rebucket_request(request):
+        return None
 
     for value in (
         request.headline_tool,
@@ -2027,6 +2126,113 @@ def _no_name_magic_candidate_rebucket(
     return DATA_SYMBOL_NO_NAME_MAGIC_CANDIDATE_ACTIONABILITY
 
 
+def _allocator_force_vector_no_match_rebucket(
+    request: HarvestRequest,
+    *,
+    payload: Mapping[str, Any],
+    details: dict[str, Any],
+) -> str | None:
+    remove_from = "pcdump-proof-needed"
+    if request.work_bucket != "register-allocator":
+        return None
+    if request.source_actionability != remove_from:
+        return None
+    actionability = payload.get("target_vector_actionability")
+    status = ""
+    if isinstance(actionability, Mapping):
+        status = str(actionability.get("status") or "").strip()
+
+    if status == "already-satisfied":
+        to_actionability = BLOCKER_ALLOCATOR_SOURCE_LIFETIME
+        reason = (
+            "force-vector probes did not match and target vector is already "
+            "satisfied; pivot to source lifetime/callee-save shape"
+        )
+    elif (
+        payload.get("force_vector_runnable") is False
+        or payload.get("force_vector_recommended") is False
+        or _has_force_vector_conflicts(payload.get("force_vector_conflicts"))
+    ):
+        to_actionability = ALLOCATOR_TARGET_CONFLICT_ACTIONABILITY
+        reason = (
+            "force-vector probes did not match and target-vector override "
+            "conflicts or is not runnable"
+        )
+    elif status == "needs-move":
+        to_actionability = BLOCKER_ALLOCATOR_TARGET_VECTOR
+        reason = (
+            "force-vector probes did not match; target-vector movement remains "
+            "the next allocator lever"
+        )
+    else:
+        return None
+
+    details["source_actionability_rebucket"] = {
+        "from": request.source_actionability,
+        "to": to_actionability,
+        "remove_from": remove_from,
+        "blocker": BLOCKER_ALLOCATOR_FORCE_VECTOR_NO_MATCH,
+        "reason": reason,
+        "fingerprint": _rebucket_fingerprint_from_request(request),
+    }
+    return to_actionability
+
+
+def _is_padstack_diagnostic_candidate(candidate: Mapping[str, Any]) -> bool:
+    label = str(candidate.get("label") or "").strip().lower()
+    operator = str(candidate.get("operator") or "").strip().lower()
+    combined = f"{label} {operator}".replace("_", "-")
+    return "pad-stack" in combined or "padstack" in combined
+
+
+def _frame_transform_no_validated_rebucket(
+    request: HarvestRequest,
+    *,
+    harness: str,
+    blocker: str,
+    details: dict[str, Any],
+) -> str | None:
+    if harness != HARNESS_FRAME_TRANSFORM:
+        return None
+    if blocker != BLOCKER_NO_VALIDATED_CANDIDATE:
+        return None
+    if request.work_bucket != "stack-local-layout":
+        return None
+    remove_from = "current-tools"
+    if request.source_actionability != remove_from:
+        return None
+    if request.frame_closability_tier != "current-tools-padstack":
+        return None
+    scored_candidate_count = _float_or_none(details.get("scored_candidate_count"))
+    if scored_candidate_count is None or scored_candidate_count <= 0:
+        return None
+    best_candidate = details.get("best_candidate")
+    if not isinstance(best_candidate, Mapping):
+        return None
+    if _is_padstack_diagnostic_candidate(best_candidate):
+        to_actionability = FRAME_TRANSFORM_DIAGNOSTIC_ACTIONABILITY
+        reason = (
+            "frame-transform scored PAD_STACK diagnostic candidates but no "
+            "validated 100% source"
+        )
+    else:
+        to_actionability = FRAME_TRANSFORM_SOURCE_PROBE_ACTIONABILITY
+        reason = (
+            "frame-transform scored source-shape candidates but no validated "
+            "100% source"
+        )
+
+    details["source_actionability_rebucket"] = {
+        "from": request.source_actionability,
+        "to": to_actionability,
+        "remove_from": remove_from,
+        "blocker": blocker,
+        "reason": reason,
+        "fingerprint": _rebucket_fingerprint_from_request(request),
+    }
+    return to_actionability
+
+
 def _allocator_triage_details(
     payload: Any,
     *,
@@ -2203,6 +2409,11 @@ def _allocator_force_vector_verify_result(
             details=details,
         )
 
+    source_actionability = _allocator_force_vector_no_match_rebucket(
+        request,
+        payload=payload,
+        details=details,
+    )
     return _base_result(
         request,
         harness=HARNESS_ALLOCATOR_PCDUMP_TRIAGE,
@@ -2211,6 +2422,7 @@ def _allocator_force_vector_verify_result(
         reason="no force-vector probe matched the target function",
         command=command,
         details=details,
+        source_actionability=source_actionability,
     )
 
 
@@ -3774,6 +3986,13 @@ def run_composed_harvest_request(
                         details=details,
                         payload=payload,
                     )
+                if source_actionability is None:
+                    source_actionability = _frame_transform_no_validated_rebucket(
+                        layer_request,
+                        harness=harness,
+                        blocker=blocker,
+                        details=details,
+                    )
                 layer = _base_result(
                     layer_request,
                     harness=harness,
@@ -3787,6 +4006,13 @@ def run_composed_harvest_request(
             elif last_failed_layer is not None:
                 layer = last_failed_layer
             else:
+                details = no_validated_candidate_details(payload)
+                source_actionability = _frame_transform_no_validated_rebucket(
+                    layer_request,
+                    harness=harness,
+                    blocker=BLOCKER_NO_VALIDATED_CANDIDATE,
+                    details=details,
+                )
                 layer = _base_result(
                     layer_request,
                     harness=harness,
@@ -3794,7 +4020,8 @@ def run_composed_harvest_request(
                     blocker=BLOCKER_NO_VALIDATED_CANDIDATE,
                     reason="no validated 100% candidate was found",
                     command=command,
-                    details=no_validated_candidate_details(payload),
+                    details=details,
+                    source_actionability=source_actionability,
                 )
             layers.append(layer)
             return _compose_result(
@@ -3987,6 +4214,13 @@ def run_harvest_request(
                     details=details,
                     payload=harness_json,
                 )
+            if source_actionability is None:
+                source_actionability = _frame_transform_no_validated_rebucket(
+                    request,
+                    harness=harness,
+                    blocker=blocker,
+                    details=details,
+                )
             return _base_result(
                 request,
                 harness=harness,
@@ -3997,6 +4231,13 @@ def run_harvest_request(
                 details=details,
                 source_actionability=source_actionability,
             )
+        details = no_validated_candidate_details(harness_json)
+        source_actionability = _frame_transform_no_validated_rebucket(
+            request,
+            harness=harness,
+            blocker=BLOCKER_NO_VALIDATED_CANDIDATE,
+            details=details,
+        )
         return _base_result(
             request,
             harness=harness,
@@ -4004,7 +4245,8 @@ def run_harvest_request(
             blocker=BLOCKER_NO_VALIDATED_CANDIDATE,
             reason="no validated 100% candidate was found",
             command=command,
-            details=no_validated_candidate_details(harness_json),
+            details=details,
+            source_actionability=source_actionability,
         )
 
     final_match_percent = extract_candidate_score(candidate)

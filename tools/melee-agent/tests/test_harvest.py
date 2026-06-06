@@ -3255,6 +3255,239 @@ def test_allocator_pcdump_triage_records_force_vector_no_match_evidence(
     assert "no force-vector probe matched" in result["reason"]
 
 
+def test_allocator_force_vector_no_match_rebuckets_already_satisfied(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("demo_fn")])
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    payload = _allocator_triage_payload(status="already-satisfied")
+    payload["force_vector_verify"] = _force_vector_verify_payload(union_match=False)
+    _, runner = _json_runner(payload)
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "no_match"
+    assert result["blocker"] == "allocator-force-vector-no-match"
+    assert result["source_actionability"] == "source-lifetime-callee-save-shape"
+    assert ledger["summary"]["by_tier"] == {
+        "source-lifetime-callee-save-shape": 1
+    }
+    rebucket = result["details"]["source_actionability_rebucket"]
+    assert rebucket["fingerprint"].keys() >= {
+        "source_sha256",
+        "taxonomy_sha256",
+        "row_tool_sha256",
+        "tool_sha256",
+    }
+    assert {key: value for key, value in rebucket.items() if key != "fingerprint"} == {
+        "from": "pcdump-proof-needed",
+        "to": "source-lifetime-callee-save-shape",
+        "remove_from": "pcdump-proof-needed",
+        "blocker": "allocator-force-vector-no-match",
+        "reason": (
+            "force-vector probes did not match and target vector is already "
+            "satisfied; pivot to source lifetime/callee-save shape"
+        ),
+    }
+
+
+def test_allocator_force_vector_no_match_rebuckets_conflict(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("demo_fn")])
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    payload = _allocator_triage_payload(
+        force_vector_conflicts=["r26 conflicts with requested vector"]
+    )
+    payload["force_vector_verify"] = _force_vector_verify_payload(union_match=False)
+    _, runner = _json_runner(payload)
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "no_match"
+    assert result["blocker"] == "allocator-force-vector-no-match"
+    assert result["source_actionability"] == "allocator-target-conflict"
+    rebucket = result["details"]["source_actionability_rebucket"]
+    assert rebucket["fingerprint"].keys() >= {
+        "source_sha256",
+        "taxonomy_sha256",
+        "row_tool_sha256",
+        "tool_sha256",
+    }
+    assert {key: value for key, value in rebucket.items() if key != "fingerprint"} == {
+        "from": "pcdump-proof-needed",
+        "to": "allocator-target-conflict",
+        "remove_from": "pcdump-proof-needed",
+        "blocker": "allocator-force-vector-no-match",
+        "reason": (
+            "force-vector probes did not match and target-vector override "
+            "conflicts or is not runnable"
+        ),
+    }
+
+
+def test_allocator_force_vector_no_match_rebuckets_needs_move_target_vector(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("demo_fn")])
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    payload = _allocator_triage_payload()
+    payload["force_vector_verify"] = _force_vector_verify_payload(union_match=False)
+    _, runner = _json_runner(payload)
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "no_match"
+    assert result["source_actionability"] == "allocator-target-vector"
+    assert result["details"]["source_actionability_rebucket"]["to"] == (
+        "allocator-target-vector"
+    )
+
+
+def test_allocator_force_vector_no_match_rebuckets_non_runnable_conflict(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("demo_fn")])
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    payload = _allocator_triage_payload(force_vector_runnable=False)
+    payload["force_vector_verify"] = _force_vector_verify_payload(union_match=False)
+    _, runner = _json_runner(payload)
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "no_match"
+    assert result["source_actionability"] == "allocator-target-conflict"
+    assert result["details"]["source_actionability_rebucket"]["to"] == (
+        "allocator-target-conflict"
+    )
+
+
+def test_allocator_force_vector_no_match_rebucket_requires_pcdump_proof_lane(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(
+        queue,
+        [_allocator_row("demo_fn", source_actionability="source-probe")],
+    )
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    payload = _allocator_triage_payload(status="already-satisfied")
+    payload["force_vector_verify"] = _force_vector_verify_payload(union_match=False)
+    _, runner = _json_runner(payload)
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "no_match"
+    assert result["source_actionability"] == "source-probe"
+    assert "source_actionability_rebucket" not in result["details"]
+
+
+def test_allocator_force_vector_rebucket_fingerprint_filters_preview(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("answered_fn"), _allocator_row("ready_fn")])
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    payload = _allocator_triage_payload(status="already-satisfied")
+    payload["force_vector_verify"] = _force_vector_verify_payload(union_match=False)
+
+    initial = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=_json_runner(payload)[1],
+        limit=1,
+    )
+    ledger_dir = repo_root / "build" / "harvest"
+    ledger_dir.mkdir(parents=True)
+    (ledger_dir / "register-allocator-ledger.json").write_text(
+        json.dumps(initial),
+        encoding="utf-8",
+    )
+
+    current_rows = load_queue_rows(
+        queue,
+        work_bucket="register-allocator",
+        repo_root=repo_root,
+        filters=HarvestFilters(
+            where={"source_actionability": ("pcdump-proof-needed",)}
+        ),
+    )
+    preview = preview_harvest_queue(
+        queue,
+        work_bucket="register-allocator",
+        repo_root=repo_root,
+        filters=HarvestFilters(
+            where={"source_actionability": ("pcdump-proof-needed",)}
+        ),
+    )
+    all_rows = load_queue_rows(
+        queue,
+        work_bucket="register-allocator",
+        repo_root=repo_root,
+    )
+
+    assert initial["results"][0]["function"] == "answered_fn"
+    assert initial["results"][0]["source_actionability"] == (
+        "source-lifetime-callee-save-shape"
+    )
+    assert [row.function for row in current_rows] == ["ready_fn"]
+    assert [row.source_actionability for row in all_rows] == [
+        "source-lifetime-callee-save-shape",
+        "pcdump-proof-needed",
+    ]
+    assert select_harness(all_rows[0]) is None
+    assert select_harness(all_rows[1]) == "allocator-pcdump-triage"
+    assert preview["counts"]["matching_rows"] == 1
+    assert [row["function"] for row in preview["sample"]] == ["ready_fn"]
+
+
 def test_allocator_pcdump_triage_records_force_vector_verify_failure(
     monkeypatch,
     tmp_path: Path,
@@ -5081,6 +5314,230 @@ def test_frame_harness_without_100_candidate_records_no_validated_candidate(
             "score_percent": 99.9,
         },
     }
+
+
+def test_frame_transform_no_validated_current_tools_rebuckets_padstack_diagnostic(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(queue, [_row("demo_fn", source_actionability="current-tools")])
+    _, runner = _json_runner(
+        {
+            "variants": [
+                {
+                    "label": "frame-reservation-pad-stack-16",
+                    "operator": "frame-reservation-pad-stack",
+                    "status": "ok",
+                    "source_path": str(tmp_path / "candidate.c"),
+                    "final_match_percent": 99.933334,
+                }
+            ]
+        }
+    )
+
+    ledger = run_harvest(
+        "stack-local-layout",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "no_match"
+    assert result["blocker"] == "no-validated-candidate"
+    assert result["source_actionability"] == "diagnostic-only"
+    assert result["details"]["best_candidate"]["label"] == (
+        "frame-reservation-pad-stack-16"
+    )
+    assert result["details"]["best_candidate"]["score_percent"] == 99.933334
+    rebucket = result["details"]["source_actionability_rebucket"]
+    assert rebucket["fingerprint"].keys() >= {
+        "source_sha256",
+        "taxonomy_sha256",
+        "row_tool_sha256",
+        "tool_sha256",
+    }
+    assert {key: value for key, value in rebucket.items() if key != "fingerprint"} == {
+        "from": "current-tools",
+        "to": "diagnostic-only",
+        "remove_from": "current-tools",
+        "blocker": "no-validated-candidate",
+        "reason": (
+            "frame-transform scored PAD_STACK diagnostic candidates but no "
+            "validated 100% source"
+        ),
+    }
+
+
+def test_frame_transform_no_validated_current_tools_rebuckets_source_probe(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(queue, [_row("demo_fn", source_actionability="current-tools")])
+    _, runner = _json_runner(
+        {
+            "variants": [
+                {
+                    "label": "block-scope-0",
+                    "operator": "block-scope",
+                    "status": "ok",
+                    "source_path": str(tmp_path / "candidate.c"),
+                    "final_match_percent": 42.03846,
+                }
+            ]
+        }
+    )
+
+    ledger = run_harvest(
+        "stack-local-layout",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "no_match"
+    assert result["blocker"] == "no-validated-candidate"
+    assert result["source_actionability"] == "source-probe"
+    rebucket = result["details"]["source_actionability_rebucket"]
+    assert rebucket["fingerprint"].keys() >= {
+        "source_sha256",
+        "taxonomy_sha256",
+        "row_tool_sha256",
+        "tool_sha256",
+    }
+    assert {key: value for key, value in rebucket.items() if key != "fingerprint"} == {
+        "from": "current-tools",
+        "to": "source-probe",
+        "remove_from": "current-tools",
+        "blocker": "no-validated-candidate",
+        "reason": (
+            "frame-transform scored source-shape candidates but no validated "
+            "100% source"
+        ),
+    }
+
+
+def test_frame_transform_no_validated_rebucket_fingerprint_filters_preview(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(
+        queue,
+        [
+            _row("answered_fn", source_actionability="current-tools"),
+            _row("ready_fn", source_actionability="current-tools"),
+        ],
+    )
+    payload = {
+        "variants": [
+            {
+                "label": "frame-reservation-pad-stack-8",
+                "operator": "frame-reservation-pad-stack",
+                "status": "ok",
+                "source_path": str(tmp_path / "candidate.c"),
+                "final_match_percent": 99.91549,
+            }
+        ]
+    }
+
+    initial = run_harvest(
+        "stack-local-layout",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=_json_runner(payload)[1],
+        limit=1,
+    )
+    ledger_dir = repo_root / "build" / "harvest"
+    ledger_dir.mkdir(parents=True)
+    (ledger_dir / "stack-ledger.json").write_text(
+        json.dumps(initial),
+        encoding="utf-8",
+    )
+
+    current_rows = load_queue_rows(
+        queue,
+        work_bucket="stack-local-layout",
+        repo_root=repo_root,
+        filters=HarvestFilters(where={"source_actionability": ("current-tools",)}),
+    )
+    all_rows = load_queue_rows(
+        queue,
+        work_bucket="stack-local-layout",
+        repo_root=repo_root,
+    )
+    preview = preview_harvest_queue(
+        queue,
+        work_bucket="stack-local-layout",
+        repo_root=repo_root,
+        filters=HarvestFilters(where={"source_actionability": ("current-tools",)}),
+    )
+
+    assert initial["results"][0]["function"] == "answered_fn"
+    assert initial["results"][0]["source_actionability"] == "diagnostic-only"
+    assert [row.function for row in current_rows] == ["ready_fn"]
+    assert [row.source_actionability for row in all_rows] == [
+        "diagnostic-only",
+        "current-tools",
+    ]
+    assert select_harness(all_rows[0]) is None
+    assert select_harness(all_rows[1]) == "frame-transform-search"
+    assert preview["counts"]["matching_rows"] == 1
+    assert [row["function"] for row in preview["sample"]] == ["ready_fn"]
+
+
+@pytest.mark.parametrize(
+    ("source_actionability", "variants"),
+    [
+        (
+            "source-reachable-candidate",
+            [
+                {
+                    "label": "frame-reservation-pad-stack-16",
+                    "operator": "frame-reservation-pad-stack",
+                    "status": "ok",
+                    "source_path": "candidate.c",
+                    "final_match_percent": 99.9,
+                }
+            ],
+        ),
+        (
+            "current-tools",
+            [
+                {
+                    "label": "frame-reservation-pad-stack-16",
+                    "operator": "frame-reservation-pad-stack",
+                    "status": "build-failed",
+                }
+            ],
+        ),
+    ],
+)
+def test_frame_transform_no_validated_rebucket_requires_current_tools_scored_row(
+    tmp_path: Path,
+    source_actionability: str,
+    variants: list[dict],
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(queue, [_row("demo_fn", source_actionability=source_actionability)])
+    _, runner = _json_runner({"variants": variants})
+
+    ledger = run_harvest(
+        "stack-local-layout",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "no_match"
+    assert result["blocker"] == "no-validated-candidate"
+    assert result["source_actionability"] == source_actionability
+    assert "source_actionability_rebucket" not in result["details"]
 
 
 def test_harvest_propagates_indexed_search_stable_blocker(tmp_path: Path) -> None:
