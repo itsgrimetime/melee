@@ -636,6 +636,108 @@ def test_classify_candidate_restores_source_after_decl_order_side_effect(
     assert source.read_text(encoding="utf-8") == original
 
 
+def test_classify_candidate_serializes_decl_order_snapshot_restore(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    import tools.function_taxonomy_inventory as inventory
+    from tools.function_taxonomy_inventory import FunctionCandidate, classify_candidate
+
+    repo_root = tmp_path / "repo"
+    source = repo_root / "src" / "melee" / "demo" / "demo.c"
+    source.parent.mkdir(parents=True)
+    original = "void same_frame_fn(void) { int stable = 0; }\n"
+    mutated_a = "void same_frame_fn(void) { int leaked_a = 1; }\n"
+    mutated_b = "void same_frame_fn(void) { int leaked_b = 2; }\n"
+    source.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(inventory, "REPO_ROOT", repo_root)
+
+    def candidate(function: str) -> FunctionCandidate:
+        return FunctionCandidate(
+            function=function,
+            unit="main/melee/demo/demo",
+            file_path="melee/demo/demo.c",
+            size_bytes=420,
+            match_percent=99.125,
+            address="0x80000000",
+            object_status="NonMatching",
+        )
+
+    a_entered = threading.Event()
+    b_entered = threading.Event()
+    a_done = threading.Event()
+
+    def same_frame_checkdiff(function: str):
+        if function == "same_frame_b":
+            assert a_entered.wait(timeout=5), "worker A never entered evaluator"
+        payload = {
+            "function": function,
+            "match": False,
+            "classification": {
+                "primary": "stack-layout",
+                "stack_frame_delta": {
+                    "expected_frame_size": 64,
+                    "current_frame_size": 64,
+                    "missing_stack_bytes": 0,
+                },
+                "reasons": ["same frame; declaration order probe candidate"],
+            },
+            "structural": {"opcode_similarity": 1.0, "line_delta": 0, "hunk_count": 1},
+            "reference_lines": 32,
+            "current_lines": 32,
+        }
+        return 1, json.dumps(payload), "checkdiff stderr"
+
+    def interleaving_decl_order_evaluator(candidate, record):
+        if candidate.function == "same_frame_a":
+            source.write_text(mutated_a, encoding="utf-8")
+            a_entered.set()
+            b_entered.wait(timeout=0.5)
+        else:
+            source.write_text(mutated_b, encoding="utf-8")
+            b_entered.set()
+            assert a_done.wait(timeout=5), "worker A never restored source"
+        return fake_decl_order_evaluator(candidate, record)
+
+    results = {}
+
+    def run_a() -> None:
+        try:
+            results["a"] = classify_candidate(
+                candidate("same_frame_a"),
+                same_frame_checkdiff,
+                decl_order_evaluator=interleaving_decl_order_evaluator,
+                frame_report_runner=None,
+                cast_audit_runner=None,
+                struct_verify_runner=None,
+            )
+        finally:
+            a_done.set()
+
+    def run_b() -> None:
+        results["b"] = classify_candidate(
+            candidate("same_frame_b"),
+            same_frame_checkdiff,
+            decl_order_evaluator=interleaving_decl_order_evaluator,
+            frame_report_runner=None,
+            cast_audit_runner=None,
+            struct_verify_runner=None,
+        )
+
+    thread_a = threading.Thread(target=run_a)
+    thread_b = threading.Thread(target=run_b)
+    thread_a.start()
+    thread_b.start()
+    thread_a.join(timeout=10)
+    thread_b.join(timeout=10)
+
+    assert not thread_a.is_alive()
+    assert not thread_b.is_alive()
+    assert results["a"][1] is None
+    assert results["b"][1] is None
+    assert source.read_text(encoding="utf-8") == original
+
+
 def test_offset_discrepancies_do_not_override_root_cause_buckets() -> None:
     from tools.function_taxonomy_inventory import FunctionCandidate, classify_candidate
 

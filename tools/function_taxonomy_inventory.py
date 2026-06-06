@@ -35,7 +35,7 @@ DEFAULT_STRUCT_VERIFY_TIMEOUT = 180.0
 DEFAULT_PROGRESS_INTERVAL = 30.0
 RUN_STATUS_FILENAME = "run-status.json"
 RUN_STATUS_SCHEMA_VERSION = 1
-_DECL_ORDER_EVAL_LOCK = threading.Lock()
+_DECL_ORDER_EVAL_LOCK = threading.RLock()
 NON_STRUCT_BASE_REGS = {"r1", "r2", "r13"}
 DATA_SYMBOL_NAME_MAGIC_REBUCKET_BLOCKERS = {
     "no-name-magic-candidate": "blocked-data-symbol-no-name-magic-candidate",
@@ -1365,11 +1365,12 @@ def classify_candidate(
         decl_order_evaluator is not None
         and should_evaluate_decl_orders(candidate, bucket, subcategory)
     ):
-        source_snapshot = _snapshot_candidate_source(candidate)
-        try:
-            decl_order_summary = decl_order_evaluator(candidate, record)
-        finally:
-            _restore_candidate_source(source_snapshot)
+        with _DECL_ORDER_EVAL_LOCK:
+            source_snapshot = _snapshot_candidate_source(candidate)
+            try:
+                decl_order_summary = decl_order_evaluator(candidate, record)
+            finally:
+                _restore_candidate_source(source_snapshot)
         attach_decl_order_summary(record, decl_order_summary)
     return record, None
 
