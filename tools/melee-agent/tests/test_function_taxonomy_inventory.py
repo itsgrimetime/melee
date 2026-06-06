@@ -284,6 +284,10 @@ def test_generate_inventory_classifies_report_functions_and_writes_outputs(
         "match_percent\tfunction\tprimary\tsubcategory\t"
         "offset_discrepancy_count\toffset_discrepancy_bases\t"
         "offset_discrepancy_disps\toffset_discrepancy_opcodes\t"
+        "struct_verify_status\tstruct_verify_finding_count\t"
+        "struct_verify_verified_count\tstruct_verify_structs\t"
+        "struct_verify_fields\tstruct_verify_skipped\t"
+        "struct_verify_reason\t"
         "frame_cause\tframe_verdict\tframe_closability_tier\t"
         "frame_match_relevance\tframe_match_relevance_reason\t"
         "frame_attribution_status\tframe_source_object_symbol\t"
@@ -296,8 +300,8 @@ def test_generate_inventory_classifies_report_functions_and_writes_outputs(
             "file_path\tframe_next_command\tnext_command"
         ) in stack_queue
     assert (
-        "99.75000\tstack_fn\tstack-slot-layout\tsame-frame-stack-slot-placement\t"
-        "\t\t\t\t"
+        "99.75000\tstack_fn\tstack-slot-layout\tsame-frame-stack-slot-placement"
+        + ("\t" * 12) +
         "stack-object-offset-shift\tsource-reachable-candidate\treorder-gated-362\t"
         "match-neutral\tsame-frame stack-slot offset-only residual; closing this "
         "frame residual should not be treated as the match gate\tcheckdiff-only\t"
@@ -305,8 +309,8 @@ def test_generate_inventory_classifies_report_functions_and_writes_outputs(
     ) in stack_queue
     assert "\t0.12500\tswap a <-> b\tevaluated\t3" in stack_queue
     assert (
-        "99.25000\tframe_fn\tstack-layout\tframe-too-large\t"
-        "\t\t\t\t"
+        "99.25000\tframe_fn\tstack-layout\tframe-too-large"
+        + ("\t" * 12) +
         "frame-too-large\tunresolved-source-attribution\tgen-gated-366\t"
         "unknown\tframe relevance is not proven by the current frame taxonomy "
         "evidence\tcheckdiff-only\t\t\t0\tgenerator-gated\tframe-transform-search\t"
@@ -646,6 +650,7 @@ def test_offset_discrepancies_do_not_override_root_cause_buckets() -> None:
                 if primary == "signature-type-mismatch"
                 else None
             ),
+            struct_verify_runner=None,
         )
 
         assert error is None
@@ -693,6 +698,7 @@ def test_offset_discrepancies_route_to_struct_offset_bucket_for_offset_residuals
         decl_order_evaluator=None,
         frame_report_runner=None,
         cast_audit_runner=None,
+        struct_verify_runner=None,
     )
 
     assert error is None
@@ -707,6 +713,530 @@ def test_offset_discrepancies_route_to_struct_offset_bucket_for_offset_residuals
     assert "melee-agent struct verify struct_fn" in record["next_command"]
     assert "--struct <struct-name>" not in record["next_command"]
     assert "--base r31" in record["next_command"]
+
+
+def test_struct_verify_command_includes_unique_base() -> None:
+    from tools.function_taxonomy_inventory import FunctionCandidate, _struct_verify_command
+
+    candidate = FunctionCandidate(
+        function="struct_fn",
+        unit="main/melee/demo/demo",
+        file_path="melee/demo/demo.c",
+        size_bytes=128,
+        match_percent=99.5,
+        address="0x80000000",
+        object_status="NonMatching",
+    )
+
+    cmd = _struct_verify_command(
+        candidate,
+        {
+            "offset_discrepancies": [
+                {"base_reg": "r31", "cur_disp": 260, "ref_disp": 264},
+            ],
+        },
+    )
+
+    assert cmd == [
+        "melee-agent",
+        "struct",
+        "verify",
+        "struct_fn",
+        "--base",
+        "r31",
+        "--tu-src",
+        "src/melee/demo/demo.c",
+        "--json",
+    ]
+
+
+def test_struct_verify_command_omits_base_for_multiple_bases() -> None:
+    from tools.function_taxonomy_inventory import FunctionCandidate, _struct_verify_command
+
+    candidate = FunctionCandidate(
+        function="struct_fn",
+        unit="main/melee/demo/demo",
+        file_path="melee/demo/demo.c",
+        size_bytes=128,
+        match_percent=99.5,
+        address="0x80000000",
+        object_status="NonMatching",
+    )
+
+    cmd = _struct_verify_command(
+        candidate,
+        {
+            "offset_discrepancies": [
+                {"base_reg": "r30", "cur_disp": 260, "ref_disp": 264},
+                {"base_reg": "r31", "cur_disp": 260, "ref_disp": 264},
+            ],
+        },
+    )
+
+    assert "--base" not in cmd
+    assert cmd == [
+        "melee-agent",
+        "struct",
+        "verify",
+        "struct_fn",
+        "--tu-src",
+        "src/melee/demo/demo.c",
+        "--json",
+    ]
+
+
+def test_struct_verify_gate_summary_reports_verified_named_fields() -> None:
+    from tools.function_taxonomy_inventory import summarize_struct_verify_payload
+
+    summary = summarize_struct_verify_payload(
+        {
+            "findings": [
+                {
+                    "struct": "Fake",
+                    "field": "x0",
+                    "conflict": False,
+                    "ambiguous": False,
+                },
+            ],
+            "skipped": [],
+        }
+    )
+
+    assert summary["struct_verify_status"] == "verified"
+    assert summary["struct_verify_finding_count"] == 1
+    assert summary["struct_verify_verified_count"] == 1
+    assert summary["struct_verify_structs"] == "Fake"
+    assert summary["struct_verify_fields"] == "x0"
+
+
+def test_struct_verify_gate_summary_reports_unverified_for_resolver_negative() -> None:
+    from tools.function_taxonomy_inventory import summarize_struct_verify_payload
+
+    summary = summarize_struct_verify_payload(
+        {
+            "findings": [],
+            "skipped": [["struct_fn", "auto-struct unresolved: no source candidates"]],
+        }
+    )
+
+    assert summary["struct_verify_status"] == "unverified"
+    assert summary["struct_verify_verified_count"] == 0
+    assert "auto-struct unresolved" in summary["struct_verify_reason"]
+
+
+def test_struct_verify_gate_summary_reports_unverified_for_ambiguous_or_conflicting() -> None:
+    from tools.function_taxonomy_inventory import summarize_struct_verify_payload
+
+    ambiguous = summarize_struct_verify_payload(
+        {
+            "findings": [
+                {
+                    "struct": "Fake",
+                    "field": "x0",
+                    "conflict": False,
+                    "ambiguous": True,
+                },
+            ],
+            "skipped": [],
+        }
+    )
+    conflicting = summarize_struct_verify_payload(
+        {
+            "findings": [
+                {
+                    "struct": "Fake",
+                    "field": "x0",
+                    "conflict": True,
+                    "ambiguous": False,
+                },
+            ],
+            "skipped": [],
+        }
+    )
+
+    assert ambiguous["struct_verify_status"] == "unverified"
+    assert conflicting["struct_verify_status"] == "unverified"
+
+
+def test_struct_verify_gate_summary_reports_unverified_for_missing_struct_or_field() -> None:
+    from tools.function_taxonomy_inventory import summarize_struct_verify_payload
+
+    summary = summarize_struct_verify_payload(
+        {
+            "findings": [
+                {"struct": "Fake", "conflict": False, "ambiguous": False},
+                {"field": "x0", "conflict": False, "ambiguous": False},
+            ],
+            "skipped": [],
+        }
+    )
+
+    assert summary["struct_verify_status"] == "unverified"
+    assert summary["struct_verify_finding_count"] == 2
+    assert summary["struct_verify_verified_count"] == 0
+
+
+def test_struct_verify_gate_summary_reports_unavailable_for_runner_or_checkdiff_failures() -> None:
+    from tools.function_taxonomy_inventory import summarize_struct_verify_payload
+
+    no_payload = summarize_struct_verify_payload(None)
+    failed_checkdiff = summarize_struct_verify_payload(
+        {
+            "findings": [],
+            "skipped": [["struct_fn", "checkdiff failed"]],
+        }
+    )
+
+    assert no_payload["struct_verify_status"] == "unavailable"
+    assert failed_checkdiff["struct_verify_status"] == "unavailable"
+    assert "checkdiff failed" in failed_checkdiff["struct_verify_reason"]
+
+
+def _offset_candidate_for_struct_verify_gate():
+    from tools.function_taxonomy_inventory import FunctionCandidate
+
+    return FunctionCandidate(
+        function="struct_fn",
+        unit="main/melee/demo/demo",
+        file_path="melee/demo/demo.c",
+        size_bytes=128,
+        match_percent=99.5,
+        address="0x80000000",
+        object_status="NonMatching",
+    )
+
+
+def _offset_checkdiff_runner(function: str):
+    return 1, json.dumps(
+        {
+            "function": function,
+            "match": False,
+            "classification": {
+                "primary": "operand-register-or-offset",
+                "offset_discrepancies": [
+                    {"base_reg": "r31", "cur_disp": 260, "ref_disp": 264, "opcode": "lwz"},
+                ],
+                "reasons": ["offset-only field displacement mismatch"],
+            },
+            "structural": {"opcode_similarity": 1.0, "line_delta": 0},
+        }
+    ), ""
+
+
+def test_struct_verify_gate_keeps_verified_struct_offset_bucket() -> None:
+    from tools.function_taxonomy_inventory import classify_candidate
+
+    record, error = classify_candidate(
+        _offset_candidate_for_struct_verify_gate(),
+        _offset_checkdiff_runner,
+        decl_order_evaluator=None,
+        frame_report_runner=None,
+        cast_audit_runner=None,
+        name_magic_preflight_runner=None,
+        struct_verify_runner=lambda _candidate, _classification: {
+            "findings": [
+                {"struct": "Fake", "field": "x0", "conflict": False, "ambiguous": False},
+            ],
+            "skipped": [],
+        },
+    )
+
+    assert error is None
+    assert record is not None
+    assert record["work_bucket"] == "struct-offset-discrepancy"
+    assert record["confidence"] == "resolver-verified"
+    assert record["struct_verify_status"] == "verified"
+    assert record["struct_verify_verified_count"] == 1
+    assert record["struct_verify_structs"] == "Fake"
+    assert record["struct_verify_fields"] == "x0"
+
+
+def test_struct_verify_gate_rebuckets_unverified_to_data_symbol() -> None:
+    from tools.function_taxonomy_inventory import classify_candidate
+
+    record, error = classify_candidate(
+        _offset_candidate_for_struct_verify_gate(),
+        _offset_checkdiff_runner,
+        decl_order_evaluator=None,
+        frame_report_runner=None,
+        cast_audit_runner=None,
+        name_magic_preflight_runner=None,
+        struct_verify_runner=lambda _candidate, _classification: {
+            "findings": [],
+            "skipped": [["struct_fn", "auto-struct unresolved: no source candidates"]],
+        },
+    )
+
+    assert error is None
+    assert record is not None
+    assert record["work_bucket"] == "data-symbol-relocation"
+    assert record["subcategory"] == "unverified-struct-offset-displacement"
+    assert record["confidence"] == "resolver-rebucketed"
+    assert record["source_actionability"] == "current-tools-data-symbol"
+    assert record["headline_tool"] == "checkdiff-name-magic"
+    assert record["offset_discrepancy_count"] == 1
+    assert record["offset_discrepancy_bases"] == "r31"
+    assert record["struct_verify_status"] == "unverified"
+
+
+def test_struct_verify_gate_keeps_unavailable_in_heuristic_struct_bucket() -> None:
+    from tools.function_taxonomy_inventory import classify_candidate
+
+    record, error = classify_candidate(
+        _offset_candidate_for_struct_verify_gate(),
+        _offset_checkdiff_runner,
+        decl_order_evaluator=None,
+        frame_report_runner=None,
+        cast_audit_runner=None,
+        name_magic_preflight_runner=None,
+        struct_verify_runner=lambda _candidate, _classification: None,
+    )
+
+    assert error is None
+    assert record is not None
+    assert record["work_bucket"] == "struct-offset-discrepancy"
+    assert record["confidence"] == "heuristic"
+    assert record["struct_verify_status"] == "unavailable"
+
+
+def test_struct_verify_gate_none_preserves_legacy_struct_offset_behavior() -> None:
+    from tools.function_taxonomy_inventory import classify_candidate
+
+    record, error = classify_candidate(
+        _offset_candidate_for_struct_verify_gate(),
+        _offset_checkdiff_runner,
+        decl_order_evaluator=None,
+        frame_report_runner=None,
+        cast_audit_runner=None,
+        name_magic_preflight_runner=None,
+        struct_verify_runner=None,
+    )
+
+    assert error is None
+    assert record is not None
+    assert record["work_bucket"] == "struct-offset-discrepancy"
+    assert record["confidence"] == "heuristic"
+    assert "struct_verify_status" not in record
+
+
+def test_struct_verify_gate_rebucket_runs_name_magic_preflight() -> None:
+    from tools.function_taxonomy_inventory import classify_candidate
+
+    record, error = classify_candidate(
+        _offset_candidate_for_struct_verify_gate(),
+        _offset_checkdiff_runner,
+        decl_order_evaluator=None,
+        frame_report_runner=None,
+        cast_audit_runner=None,
+        name_magic_preflight_runner=lambda _candidate: {
+            "blocker": "no-name-magic-candidate",
+            "stop_condition": {
+                "kind": "blocked",
+                "blocker": "no-name-magic-candidate",
+                "reason": "no source-addressable relocation pair",
+            },
+            "probe_count": 0,
+        },
+        struct_verify_runner=lambda _candidate, _classification: {
+            "findings": [],
+            "skipped": [["struct_fn", "auto-struct unresolved: no source candidates"]],
+        },
+    )
+
+    assert error is None
+    assert record is not None
+    assert record["work_bucket"] == "data-symbol-relocation"
+    assert record["name_magic_blocker"] == "no-name-magic-candidate"
+    assert record["source_actionability"] == "blocked-data-symbol-no-name-magic-candidate"
+
+
+def test_taxonomy_csv_and_queue_include_struct_verify_columns(tmp_path: Path) -> None:
+    from tools.function_taxonomy_inventory import write_csv, write_queue
+
+    rows = [
+        {
+            "match_percent": 99.5,
+            "function": "struct_fn",
+            "work_bucket": "data-symbol-relocation",
+            "primary": "operand-register-or-offset",
+            "subcategory": "unverified-struct-offset-displacement",
+            "struct_verify_status": "unverified",
+            "struct_verify_verified_count": 0,
+            "struct_verify_structs": "",
+            "struct_verify_fields": "",
+            "struct_verify_reason": "auto-struct unresolved: no source candidates",
+        }
+    ]
+
+    csv_path = tmp_path / "records.csv"
+    queue_path = tmp_path / "queue.tsv"
+    write_csv(csv_path, rows)
+    write_queue(queue_path, rows)
+
+    csv_header = csv_path.read_text(encoding="utf-8").splitlines()[0]
+    queue_header = queue_path.read_text(encoding="utf-8").splitlines()[0]
+    for header in (csv_header, queue_header):
+        assert "struct_verify_status" in header
+        assert "struct_verify_verified_count" in header
+        assert "struct_verify_structs" in header
+        assert "struct_verify_fields" in header
+        assert "struct_verify_reason" in header
+
+
+def test_generate_inventory_writes_struct_verify_evidence_to_queue(tmp_path: Path) -> None:
+    from tools.function_taxonomy_inventory import generate_inventory
+
+    report = tmp_path / "report.json"
+    output = tmp_path / "taxonomy"
+    report.write_text(
+        json.dumps(
+            {
+                "units": [
+                    {
+                        "name": "main/melee/demo/demo",
+                        "metadata": {
+                            "source_path": "src/melee/demo/demo.c",
+                            "complete": False,
+                        },
+                        "functions": [
+                            {
+                                "name": "struct_fn",
+                                "size": "128",
+                                "fuzzy_match_percent": 99.5,
+                                "metadata": {"virtual_address": "2147483648"},
+                            },
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = generate_inventory(
+        report,
+        output,
+        checkdiff_runner=_offset_checkdiff_runner,
+        decl_order_evaluator=None,
+        frame_report_runner=None,
+        cast_audit_runner=None,
+        name_magic_preflight_runner=None,
+        struct_verify_runner=lambda _candidate, _classification: {
+            "findings": [
+                {"struct": "Fake", "field": "x0", "conflict": False, "ambiguous": False},
+            ],
+            "skipped": [],
+        },
+        workers=1,
+    )
+
+    assert result.classified_count == 1
+    queue_text = (output / "queues" / "struct-offset-discrepancy.tsv").read_text(
+        encoding="utf-8"
+    )
+    assert "struct_verify_status" in queue_text.splitlines()[0]
+    assert "\tverified\t1\t1\tFake\tx0\t" in queue_text
+
+
+def test_generate_inventory_rebucketed_unverified_struct_rows_land_in_data_symbol_queue(
+    tmp_path: Path,
+) -> None:
+    from tools.function_taxonomy_inventory import generate_inventory
+
+    report = tmp_path / "report.json"
+    output = tmp_path / "taxonomy"
+    report.write_text(
+        json.dumps(
+            {
+                "units": [
+                    {
+                        "name": "main/melee/demo/demo",
+                        "metadata": {
+                            "source_path": "src/melee/demo/demo.c",
+                            "complete": False,
+                        },
+                        "functions": [
+                            {
+                                "name": "struct_fn",
+                                "size": "128",
+                                "fuzzy_match_percent": 99.5,
+                                "metadata": {"virtual_address": "2147483648"},
+                            },
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = generate_inventory(
+        report,
+        output,
+        checkdiff_runner=_offset_checkdiff_runner,
+        decl_order_evaluator=None,
+        frame_report_runner=None,
+        cast_audit_runner=None,
+        name_magic_preflight_runner=None,
+        struct_verify_runner=lambda _candidate, _classification: {
+            "findings": [],
+            "skipped": [["struct_fn", "auto-struct unresolved: no source candidates"]],
+        },
+        workers=1,
+    )
+
+    assert result.classified_count == 1
+    data_symbol_queue = (
+        output / "queues" / "data-symbol-relocation.tsv"
+    ).read_text(encoding="utf-8")
+    struct_queue = (
+        output / "queues" / "struct-offset-discrepancy.tsv"
+    ).read_text(encoding="utf-8")
+    assert "struct_fn" in data_symbol_queue
+    assert "unverified-struct-offset-displacement" in data_symbol_queue
+    assert "auto-struct unresolved: no source candidates" in data_symbol_queue
+    assert "struct_fn" not in struct_queue
+
+
+def test_default_struct_verify_runner_returns_none_for_subprocess_failures(monkeypatch) -> None:
+    from tools import function_taxonomy_inventory as inventory
+
+    candidate = _offset_candidate_for_struct_verify_gate()
+
+    class Result:
+        returncode = 1
+        stdout = ""
+
+    monkeypatch.setattr(inventory.subprocess, "run", lambda *args, **kwargs: Result())
+
+    assert inventory.default_struct_verify_runner(candidate, {}) is None
+
+
+def test_default_struct_verify_runner_returns_none_for_invalid_json(monkeypatch) -> None:
+    from tools import function_taxonomy_inventory as inventory
+
+    candidate = _offset_candidate_for_struct_verify_gate()
+
+    class Result:
+        returncode = 0
+        stdout = "not json"
+
+    monkeypatch.setattr(inventory.subprocess, "run", lambda *args, **kwargs: Result())
+
+    assert inventory.default_struct_verify_runner(candidate, {}) is None
+
+
+def test_default_struct_verify_runner_returns_none_for_timeout(monkeypatch) -> None:
+    from tools import function_taxonomy_inventory as inventory
+
+    candidate = _offset_candidate_for_struct_verify_gate()
+
+    def timeout_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs.get("timeout"))
+
+    monkeypatch.setattr(inventory.subprocess, "run", timeout_run)
+
+    assert inventory.default_struct_verify_runner(candidate, {}, timeout=1.0) is None
 
 
 def test_fuzzy_100_noncomplete_functions_are_audited_but_exact_matches_skip(
@@ -1341,7 +1871,82 @@ def test_inventory_help_renders_literal_percent() -> None:
 
     assert ">=99% stack-" in help_text
     assert "local-layout rows" in help_text
+    assert "--skip-struct-verify-gate" in help_text
+    assert "--struct-verify-timeout" in help_text
     assert "option_strings" not in help_text
+
+
+def test_main_skip_struct_verify_gate_passes_no_runner(tmp_path: Path, monkeypatch) -> None:
+    from tools import function_taxonomy_inventory as inventory
+
+    seen: dict[str, object] = {}
+
+    def fake_generate_inventory(*args, **kwargs):
+        seen.update(kwargs)
+        return inventory.InventoryResult(
+            report_non100_count=0,
+            attempted_count=0,
+            classified_count=0,
+            error_count=0,
+            output_dir=Path(args[1]).resolve(),
+        )
+
+    monkeypatch.setattr(inventory, "generate_inventory", fake_generate_inventory)
+
+    rc = inventory.main(
+        [
+            "--report", str(tmp_path / "report.json"),
+            "--output", str(tmp_path / "taxonomy"),
+            "--skip-struct-verify-gate",
+        ]
+    )
+
+    assert rc == 0
+    assert seen["struct_verify_runner"] is None
+
+
+def test_main_struct_verify_timeout_reaches_default_runner(tmp_path: Path, monkeypatch) -> None:
+    from tools import function_taxonomy_inventory as inventory
+
+    seen: dict[str, object] = {}
+
+    def fake_default_struct_verify_runner(candidate, classification, *, timeout):
+        seen["timeout"] = timeout
+        return None
+
+    def fake_generate_inventory(*args, **kwargs):
+        runner = kwargs["struct_verify_runner"]
+        candidate = inventory.FunctionCandidate(
+            function="struct_fn",
+            unit="main/melee/demo/demo",
+            file_path="melee/demo/demo.c",
+            size_bytes=128,
+            match_percent=99.5,
+            address="0x80000000",
+            object_status="NonMatching",
+        )
+        runner(candidate, {})
+        return inventory.InventoryResult(
+            report_non100_count=0,
+            attempted_count=0,
+            classified_count=0,
+            error_count=0,
+            output_dir=Path(args[1]).resolve(),
+        )
+
+    monkeypatch.setattr(inventory, "default_struct_verify_runner", fake_default_struct_verify_runner)
+    monkeypatch.setattr(inventory, "generate_inventory", fake_generate_inventory)
+
+    rc = inventory.main(
+        [
+            "--report", str(tmp_path / "report.json"),
+            "--output", str(tmp_path / "taxonomy"),
+            "--struct-verify-timeout", "12.5",
+        ]
+    )
+
+    assert rc == 0
+    assert seen["timeout"] == 12.5
 
 
 def test_generate_inventory_honors_limit_before_running_checkdiff(tmp_path: Path) -> None:
