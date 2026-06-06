@@ -6,9 +6,29 @@ fuzzy match percentages and other metadata.
 
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 from .models import FunctionMatch
+
+
+def functions_for_unit(report_path: Union[str, Path], unit_substr: str) -> list[str]:
+    """Return the function names belonging to the unit whose name ends with unit_substr.
+
+    Args:
+        report_path: Path to build/GALE01/report.json
+        unit_substr: Suffix of the unit name, e.g. "thp/THPDec"
+
+    Returns:
+        List of function name strings for that unit.
+
+    Raises:
+        ValueError: If no unit whose name ends with unit_substr is found.
+    """
+    data = json.loads(Path(report_path).read_text())
+    for unit in data.get("units", []):
+        if unit.get("name", "").endswith(unit_substr):
+            return [f["name"] for f in unit.get("functions", [])]
+    raise ValueError(f"unit ending with {unit_substr!r} not found in {report_path}")
 
 
 class ReportParser:
