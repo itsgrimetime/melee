@@ -238,11 +238,13 @@ def test_source_lifetime_repeated_helper_result_reuse_supports_seed_style_compar
     source = textwrap.dedent("""\
         s32 fn_803AC7DC(CardState* state, s32 i)
         {
+            s32 total = 0;
             s32 extra = 0;
+            total += fn_803AC634(state, i);
             if (extra < (s32) fn_803AC634(state, i)) {
                 extra = (s32) fn_803AC634(state, i);
             }
-            return extra;
+            return total + extra;
         }
     """)
 
@@ -260,6 +262,7 @@ def test_source_lifetime_repeated_helper_result_reuse_supports_seed_style_compar
     assert "s32 ll_probe_helper_result_0 = (s32) fn_803AC634(state, i);" in (
         probe.source_text
     )
+    assert "total += ll_probe_helper_result_0;" in probe.source_text
     assert "if (extra < ll_probe_helper_result_0) {" in probe.source_text
     assert "extra = ll_probe_helper_result_0;" in probe.source_text
     assert probe.source_text.count("fn_803AC634(state, i)") == 1

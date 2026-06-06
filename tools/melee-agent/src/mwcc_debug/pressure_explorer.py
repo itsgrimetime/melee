@@ -1504,41 +1504,57 @@ def _occurrences_match_seed_if_compare_update(
     occurrence_scopes: list[tuple[int, ...] | None],
     first_scope: tuple[int, ...],
 ) -> bool:
-    if len(occurrences) != 2 or len(occurrence_scopes) != 2:
+    del function
+    if len(occurrences) not in {2, 3} or len(occurrence_scopes) != len(occurrences):
         return False
-    first, second = occurrences
+    first = occurrences[0]
+    if occurrence_scopes[0] is None or occurrence_scopes[0] != first_scope:
+        return False
+    compare_occurrence = occurrences[-2]
+    assign_occurrence = occurrences[-1]
     compare_var = _if_condition_occurrence_compare_var(
         source,
-        _line_start(source, first.start),
-        call_start=first.start,
-        call_end=first.end,
+        _line_start(source, compare_occurrence.start),
+        call_start=compare_occurrence.start,
+        call_end=compare_occurrence.end,
     )
     if compare_var is None:
         return False
-    line_start = _line_start(source, first.start)
-    line_end = _line_end(source, first.end)
+    line_start = _line_start(source, compare_occurrence.start)
+    line_end = _line_end(source, compare_occurrence.end)
     open_paren = source.find("(", line_start, line_end)
     if open_paren < 0:
         return False
     close_paren = _find_matching_paren(source, open_paren)
     if close_paren is None:
         return False
-    open_brace = source.find("{", close_paren, second.start + 1)
+    open_brace = source.find("{", close_paren, assign_occurrence.start + 1)
     if open_brace < 0:
         return False
     close_brace = _find_matching_brace(source, open_brace)
-    if close_brace is None or second.start <= open_brace or second.end >= close_brace:
+    if (
+        close_brace is None
+        or assign_occurrence.start <= open_brace
+        or assign_occurrence.end >= close_brace
+    ):
         return False
-    second_scope = occurrence_scopes[1]
-    if second_scope is None or second_scope != (*first_scope, open_brace):
+    nested_scope = (*first_scope, open_brace)
+    if any(scope is None for scope in occurrence_scopes):
+        return False
+    if any(scope != first_scope for scope in occurrence_scopes[:-1]):
+        return False
+    if occurrence_scopes[-1] != nested_scope:
         return False
     occurrence_start, occurrence_end = _cast_prefixed_call_range(
         source,
-        second.start,
-        second.end,
+        assign_occurrence.start,
+        assign_occurrence.end,
     )
     occurrence_text = source[occurrence_start:occurrence_end].strip()
-    line = source[_line_start(source, second.start):_line_end(source, second.end)]
+    line = source[_line_start(source, assign_occurrence.start):_line_end(
+        source,
+        assign_occurrence.end,
+    )]
     assign_match = re.match(
         rf"^\s*{re.escape(compare_var)}\s*=\s*(?P<rhs>.+);\s*$",
         line,
