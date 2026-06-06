@@ -2034,10 +2034,7 @@ def _structure_stop_condition(variants: list[StructureVariant]) -> dict[str, Any
             "reason": "one or more structure variants improved over baseline or reached 100% match",
         }
     if any(
-        variant.status in {"candidate", "unscored"}
-        and variant.match_percent is None
-        and variant.final_match_percent is None
-        and variant.delta is None
+        _structure_variant_needs_verification(variant)
         for variant in variants
     ):
         return {
@@ -2050,6 +2047,20 @@ def _structure_stop_condition(variants: list[StructureVariant]) -> dict[str, Any
         "blocker": None,
         "reason": "no structure variant improved over baseline",
     }
+
+
+def _structure_variant_needs_verification(variant: StructureVariant) -> bool:
+    if (
+        variant.match_percent is not None
+        or variant.final_match_percent is not None
+        or variant.delta is not None
+    ):
+        return False
+    if variant.status == "candidate":
+        return True
+    if variant.status != "unscored":
+        return False
+    return variant.compile_status in (None, "not-run")
 
 
 class _AxisCommandFailed(RuntimeError):

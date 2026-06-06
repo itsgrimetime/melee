@@ -409,6 +409,28 @@ def test_structure_payload_reports_future_axes_and_stop_condition() -> None:
     assert candidate_payload["stop_condition"]["kind"] == "candidates-generated"
 
 
+def test_structure_payload_treats_compile_failed_candidates_as_verified() -> None:
+    payload = structure_payload(
+        function="fn_80000000",
+        source="src/melee/demo.c",
+        generated_source_dir="/tmp/structure",
+        baseline_percent=80.0,
+        axes=[],
+        variants=[
+            StructureVariant(
+                axis="source-lifetime",
+                operator="temp-introduction",
+                label="compile-failed",
+                status="unscored",
+                compile_status="failed",
+                unscored_reason="candidate compile failed: syntax error",
+            )
+        ],
+    )
+
+    assert payload["stop_condition"]["kind"] == "no-improvement"
+
+
 def test_run_structure_search_applies_fake_scores_and_ranks_variants(
     tmp_path: Path,
 ) -> None:
