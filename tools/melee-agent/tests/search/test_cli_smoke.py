@@ -181,6 +181,109 @@ def test_search_structure_json_uses_injected_runner(
     assert payload["stop_condition"]["kind"] == "improved"
 
 
+def test_search_structure_scores_by_default(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from src.search import cli as search_cli
+
+    source = tmp_path / "demo.c"
+    source.write_text("int fn_80000000(void) { return 0; }\n")
+    captured: dict = {}
+
+    def fake_score_structure_variants(**kwargs):
+        return []
+
+    def fake_run_structure_search(**kwargs):
+        captured.update(kwargs)
+        return {
+            "function": kwargs["function"],
+            "source": str(source),
+            "generated_source_dir": str(tmp_path),
+            "baseline_percent": None,
+            "axes": [],
+            "variants": [],
+            "future_axes": [],
+            "stop_condition": {
+                "kind": "no-improvement",
+                "blocker": None,
+                "reason": "test",
+            },
+        }
+
+    monkeypatch.setattr(
+        search_cli,
+        "score_structure_variants",
+        fake_score_structure_variants,
+    )
+    monkeypatch.setattr(search_cli, "run_structure_search", fake_run_structure_search)
+
+    result = CliRunner().invoke(
+        search_app,
+        [
+            "structure",
+            "-f",
+            "fn_80000000",
+            "--source-file",
+            str(source),
+            "--score-timeout",
+            "7.5",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["score_variants"] is True
+    assert callable(captured["score_runner"])
+
+
+def test_search_structure_no_score_disables_scorer(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from src.search import cli as search_cli
+
+    source = tmp_path / "demo.c"
+    source.write_text("int fn_80000000(void) { return 0; }\n")
+    captured: dict = {}
+
+    def fake_run_structure_search(**kwargs):
+        captured.update(kwargs)
+        return {
+            "function": kwargs["function"],
+            "source": str(source),
+            "generated_source_dir": str(tmp_path),
+            "baseline_percent": None,
+            "axes": [],
+            "variants": [],
+            "future_axes": [],
+            "stop_condition": {
+                "kind": "no-improvement",
+                "blocker": None,
+                "reason": "test",
+            },
+        }
+
+    monkeypatch.setattr(search_cli, "run_structure_search", fake_run_structure_search)
+
+    result = CliRunner().invoke(
+        search_app,
+        [
+            "structure",
+            "-f",
+            "fn_80000000",
+            "--source-file",
+            str(source),
+            "--no-score",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["score_variants"] is False
+    assert captured["score_runner"] is None
+
+
 def test_search_structure_text_renders_top_variant(
     monkeypatch,
     tmp_path: Path,

@@ -47,6 +47,8 @@ class StructureVariant:
     match_percent: float | None = None
     final_match_percent: float | None = None
     delta: float | None = None
+    compile_status: str | None = None
+    unscored_reason: str | None = None
     path: str | None = None
     source_retained: str | None = None
     command: str = ""
@@ -63,6 +65,16 @@ class StructureVariant:
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         return {k: v for k, v in data.items() if v is not None and v != ""}
+
+
+@dataclass(frozen=True)
+class StructureScoreResult:
+    label: str
+    baseline_percent: float | None
+    candidate_percent: float | None
+    compile_status: str
+    unscored_reason: str | None = None
+    structural: dict[str, Any] = field(default_factory=dict)
 
 
 def _float_or_none(value: Any) -> float | None:
@@ -108,6 +120,10 @@ def run_structure_search(
     timeout: int = 120,
     decl_order_runner: Callable[..., Any] | None = None,
     control_flow_runner: Callable[..., Any] | None = None,
+    score_runner: (
+        Callable[[list[StructureVariant]], list[StructureScoreResult]] | None
+    ) = None,
+    score_variants: bool = False,
 ) -> dict[str, Any]:
     output_path = Path(output_dir).expanduser()
     output_path.mkdir(parents=True, exist_ok=True)
@@ -333,6 +349,13 @@ def run_structure_search(
             )
         )
 
+    if score_variants and score_runner is not None:
+        _score_generated_variants(variants, score_runner)
+    else:
+        _mark_generated_variants_unscored(variants, "scoring disabled")
+    if baseline_percent is None:
+        baseline_percent = _variant_baseline_percent(variants)
+
     payload = structure_payload(
         function=function,
         source=source_display,
@@ -343,6 +366,93 @@ def run_structure_search(
     )
     payload["variants"] = payload["variants"][:max_candidates]
     return payload
+
+
+def _variant_baseline_percent(variants: list[StructureVariant]) -> float | None:
+    for variant in variants:
+        if variant.baseline_percent is not None:
+            return variant.baseline_percent
+    return None
+
+
+def _score_generated_variants(
+    variants: list[StructureVariant],
+    score_runner: Callable[[list[StructureVariant]], list[StructureScoreResult]],
+) -> None:
+    scoreable = [
+        variant for variant in variants if _variant_needs_structure_score(variant)
+    ]
+    if not scoreable:
+        return
+    try:
+        score_results = score_runner(scoreable)
+    except Exception as exc:
+        _mark_generated_variants_unscored(
+            scoreable,
+            f"score runner failed: {exc}",
+        )
+        return
+    _apply_structure_scores(scoreable, score_results)
+
+
+def _variant_needs_structure_score(variant: StructureVariant) -> bool:
+    return (
+        variant.source_retained is not None
+        and variant.status in {"candidate", "unscored"}
+        and variant.final_match_percent is None
+        and variant.match_percent is None
+    )
+
+
+def _mark_generated_variants_unscored(
+    variants: list[StructureVariant],
+    reason: str,
+) -> None:
+    for variant in variants:
+        if not _variant_needs_structure_score(variant):
+            continue
+        variant.status = "unscored"
+        variant.compile_status = variant.compile_status or "not-run"
+        variant.unscored_reason = variant.unscored_reason or reason
+
+
+def _apply_structure_scores(
+    variants: list[StructureVariant],
+    score_results: list[StructureScoreResult],
+) -> None:
+    scores_by_label = {result.label: result for result in score_results}
+    for variant in variants:
+        result = scores_by_label.get(variant.label)
+        if result is None:
+            variant.status = "unscored"
+            variant.compile_status = variant.compile_status or "not-run"
+            variant.unscored_reason = (
+                variant.unscored_reason or "score result missing"
+            )
+            continue
+        variant.compile_status = result.compile_status
+        if result.baseline_percent is not None:
+            variant.baseline_percent = result.baseline_percent
+        if (
+            result.compile_status == "ok"
+            and result.candidate_percent is not None
+            and result.unscored_reason is None
+        ):
+            variant.status = "ok"
+            variant.match_percent = result.candidate_percent
+            variant.final_match_percent = result.candidate_percent
+            variant.delta = _delta(result.candidate_percent, variant.baseline_percent)
+            if result.structural:
+                variant.metadata = {
+                    **variant.metadata,
+                    "structural": dict(result.structural),
+                }
+            continue
+        variant.status = "unscored"
+        variant.unscored_reason = (
+            result.unscored_reason
+            or f"candidate scoring did not produce a match percent ({result.compile_status})"
+        )
 
 
 def generate_decl_order_variants(
@@ -1743,7 +1853,7 @@ def _structure_stop_condition(variants: list[StructureVariant]) -> dict[str, Any
             "reason": "one or more structure variants improved over baseline or reached 100% match",
         }
     if any(
-        variant.status == "candidate"
+        variant.status in {"candidate", "unscored"}
         and variant.match_percent is None
         and variant.final_match_percent is None
         and variant.delta is None

@@ -24,6 +24,7 @@ from src.search.structure import (
     render_structure_text,
     run_structure_search,
 )
+from src.search.structure_scoring import score_structure_variants
 
 search_app = typer.Typer(
     help="Fast+directed match-search substrate (Spec 1).",
@@ -826,6 +827,20 @@ def structure_cmd(
             help="Per-axis subprocess timeout in seconds.",
         ),
     ] = 120,
+    score: Annotated[
+        bool,
+        typer.Option(
+            "--score/--no-score",
+            help="Compile and score retained candidate source variants.",
+        ),
+    ] = True,
+    score_timeout: Annotated[
+        float,
+        typer.Option(
+            "--score-timeout",
+            help="Per-build/checkdiff scoring timeout in seconds.",
+        ),
+    ] = 120.0,
     json_out: Annotated[
         bool,
         typer.Option("--json", help="Emit structure search payload as JSON."),
@@ -843,6 +858,17 @@ def structure_cmd(
         function=function,
         melee_root=melee_root,
     )
+    score_runner = None
+    if score:
+        def score_runner(variants):
+            return score_structure_variants(
+                melee_root=melee_root,
+                function=function,
+                source_path=resolved_source,
+                variants=variants,
+                timeout=score_timeout,
+            )
+
     payload = run_structure_search(
         function=function,
         source_path=resolved_source,
@@ -850,6 +876,8 @@ def structure_cmd(
         axes=tuple(axes) if axes else DEFAULT_STRUCTURE_AXES,
         max_candidates=max_candidates,
         timeout=timeout,
+        score_runner=score_runner,
+        score_variants=score,
     )
     if json_out:
         typer.echo(json.dumps(payload, indent=2))

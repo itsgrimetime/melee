@@ -6,6 +6,7 @@ from pathlib import Path
 import src.search.structure as structure_mod
 from src.search.structure import (
     AxisSummary,
+    StructureScoreResult,
     StructureVariant,
     generate_case_order_variants,
     generate_statement_order_variants,
@@ -206,12 +207,130 @@ def test_structure_payload_reports_future_axes_and_stop_condition() -> None:
                 axis="statement-order",
                 operator="statement-order-split-shift-or",
                 label="unscored",
-                status="candidate",
+                status="unscored",
+                unscored_reason="scoring disabled",
             ),
         ],
     )
 
     assert candidate_payload["stop_condition"]["kind"] == "candidates-generated"
+
+
+def test_run_structure_search_applies_fake_scores_and_ranks_variants(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "demo.c"
+    source_path.write_text(
+        "int fn_80000000(void)\n"
+        "{\n"
+        "    int first;\n"
+        "    int second;\n"
+        "    return 0;\n"
+        "}\n"
+    )
+
+    def fake_score_runner(
+        variants: list[StructureVariant],
+    ) -> list[StructureScoreResult]:
+        assert len(variants) >= 2
+        return [
+            StructureScoreResult(
+                label=variants[0].label,
+                baseline_percent=90.0,
+                candidate_percent=88.0,
+                compile_status="failed",
+                unscored_reason="candidate compile failed: syntax error",
+            ),
+            StructureScoreResult(
+                label=variants[1].label,
+                baseline_percent=90.0,
+                candidate_percent=92.5,
+                compile_status="ok",
+                structural={
+                    "opcode_similarity": 0.97,
+                    "line_delta": 0,
+                    "hunk_count": 4,
+                    "opcode_similarity_delta": 0.02,
+                },
+            ),
+        ]
+
+    payload = run_structure_search(
+        "fn_80000000",
+        source_path,
+        tmp_path / "structure",
+        axes=("decl-order",),
+        max_candidates=6,
+        score_variants=True,
+        score_runner=fake_score_runner,
+    )
+
+    assert payload["stop_condition"]["kind"] == "improved"
+    assert [row["status"] for row in payload["variants"][:2]] == ["ok", "unscored"]
+    assert payload["variants"][0]["compile_status"] == "ok"
+    assert payload["variants"][0]["baseline_percent"] == 90.0
+    assert payload["variants"][0]["match_percent"] == 92.5
+    assert payload["variants"][0]["final_match_percent"] == 92.5
+    assert payload["variants"][0]["delta"] == 2.5
+    assert payload["variants"][0]["metadata"]["structural"]["hunk_count"] == 4
+    assert payload["variants"][1]["compile_status"] == "failed"
+    assert payload["variants"][1]["unscored_reason"] == (
+        "candidate compile failed: syntax error"
+    )
+
+
+def test_run_structure_search_marks_generated_candidates_unscored_without_runner(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "demo.c"
+    source_path.write_text(
+        "int fn_80000000(void)\n"
+        "{\n"
+        "    int first;\n"
+        "    int second;\n"
+        "    return 0;\n"
+        "}\n"
+    )
+
+    payload = run_structure_search(
+        "fn_80000000",
+        source_path,
+        tmp_path / "structure",
+        axes=("decl-order",),
+        max_candidates=2,
+    )
+
+    assert payload["variants"]
+    assert {row["status"] for row in payload["variants"]} == {"unscored"}
+    assert {row["unscored_reason"] for row in payload["variants"]} == {
+        "scoring disabled"
+    }
+    assert payload["stop_condition"]["kind"] == "candidates-generated"
+
+
+def test_structure_payload_reports_no_improvement_when_all_candidates_scored() -> None:
+    payload = structure_payload(
+        function="fn_80000000",
+        source="src/melee/demo.c",
+        generated_source_dir="/tmp/structure",
+        baseline_percent=80.0,
+        axes=[],
+        variants=[
+            StructureVariant(
+                axis="case-order",
+                operator="case-order-adjacent-swap",
+                label="worse",
+                status="ok",
+                baseline_percent=80.0,
+                match_percent=79.0,
+                final_match_percent=79.0,
+                delta=-1.0,
+                compile_status="ok",
+            )
+        ],
+    )
+
+    assert payload["stop_condition"]["kind"] == "no-improvement"
 
 
 def test_run_structure_search_generates_candidates_without_live_mutation(

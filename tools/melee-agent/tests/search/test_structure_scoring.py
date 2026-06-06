@@ -1,0 +1,176 @@
+from __future__ import annotations
+
+import json
+import subprocess
+from pathlib import Path
+
+from src.search.structure import StructureVariant
+from src.search.structure_scoring import score_structure_variants
+
+
+def _write_report(path: Path, percent: float) -> None:
+    path.write_text(
+        json.dumps({
+            "units": [
+                {
+                    "name": "main/melee/demo",
+                    "functions": [
+                        {
+                            "name": "fn_80000000",
+                            "fuzzy_match_percent": percent,
+                        }
+                    ],
+                }
+            ]
+        })
+    )
+
+
+def test_score_structure_variants_restores_files_and_sets_checkdiff_env(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path
+    source_path = melee_root / "src" / "melee" / "demo.c"
+    obj_path = melee_root / "build" / "GALE01" / "src" / "melee" / "demo.o"
+    report_path = melee_root / "build" / "GALE01" / "report.json"
+    objdiff_path = melee_root / "build" / "tools" / "objdiff-cli"
+    candidate_path = tmp_path / "candidate.c"
+
+    source_path.parent.mkdir(parents=True)
+    obj_path.parent.mkdir(parents=True)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    objdiff_path.parent.mkdir(parents=True)
+    source_path.write_text("int fn_80000000(void) { return 0; }\n")
+    obj_path.write_bytes(b"original object")
+    _write_report(report_path, 12.0)
+    objdiff_path.write_text("# fake objdiff\n")
+    candidate_path.write_text("int fn_80000000(void) { return 1; }\n")
+
+    original_source = source_path.read_bytes()
+    original_obj = obj_path.read_bytes()
+    original_report = report_path.read_bytes()
+    report_percents = iter([90.0, 92.5])
+    checkdiff_envs: list[dict[str, str]] = []
+
+    def fake_run(cmd, **kwargs):
+        argv = [str(part) for part in cmd]
+        if argv[:2] == ["ninja", "build/GALE01/src/melee/demo.o"]:
+            obj_path.write_bytes(b"candidate object")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if "objdiff-cli" in argv[0]:
+            _write_report(report_path, next(report_percents))
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if argv[:3] == ["python", "tools/checkdiff.py", "fn_80000000"]:
+            checkdiff_envs.append(kwargs["env"])
+            payload = {
+                "opcode_similarity": 0.95 + len(checkdiff_envs) / 100,
+                "line_delta": 1,
+                "hunk_count": len(checkdiff_envs),
+            }
+            return subprocess.CompletedProcess(
+                cmd,
+                1,
+                stdout=json.dumps(payload),
+                stderr="",
+            )
+        raise AssertionError(f"unexpected command: {argv}")
+
+    monkeypatch.setattr("src.search.structure_scoring.subprocess.run", fake_run)
+
+    results = score_structure_variants(
+        melee_root=melee_root,
+        function="fn_80000000",
+        source_path=source_path,
+        variants=[
+            StructureVariant(
+                axis="decl-order",
+                operator="decl-order-swap",
+                label="swap locals",
+                status="unscored",
+                source_retained=str(candidate_path),
+            )
+        ],
+        timeout=5.0,
+    )
+
+    assert source_path.read_bytes() == original_source
+    assert obj_path.read_bytes() == original_obj
+    assert report_path.read_bytes() == original_report
+    assert len(checkdiff_envs) == 2
+    assert all(env["CHECKDIFF_NO_LOCK"] == "1" for env in checkdiff_envs)
+    assert all(env["CHECKDIFF_NO_FINGERPRINT"] == "1" for env in checkdiff_envs)
+    assert results[0].label == "swap locals"
+    assert results[0].compile_status == "ok"
+    assert results[0].baseline_percent == 90.0
+    assert results[0].candidate_percent == 92.5
+    assert results[0].structural["opcode_similarity_delta"] == 0.01
+    assert results[0].structural["line_delta_delta"] == 0
+    assert results[0].structural["hunk_count_delta"] == 1
+
+
+def test_score_structure_variants_returns_unscored_on_compile_failure(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path
+    source_path = melee_root / "src" / "melee" / "demo.c"
+    obj_path = melee_root / "build" / "GALE01" / "src" / "melee" / "demo.o"
+    report_path = melee_root / "build" / "GALE01" / "report.json"
+    objdiff_path = melee_root / "build" / "tools" / "objdiff-cli"
+    candidate_path = tmp_path / "candidate.c"
+
+    source_path.parent.mkdir(parents=True)
+    obj_path.parent.mkdir(parents=True)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    objdiff_path.parent.mkdir(parents=True)
+    source_path.write_text("int fn_80000000(void) { return 0; }\n")
+    obj_path.write_bytes(b"original object")
+    _write_report(report_path, 12.0)
+    objdiff_path.write_text("# fake objdiff\n")
+    candidate_path.write_text("int fn_80000000(void) { return 1; }\n")
+
+    def fake_run(cmd, **kwargs):
+        argv = [str(part) for part in cmd]
+        if argv[:2] == ["ninja", "build/GALE01/src/melee/demo.o"]:
+            if source_path.read_text() == candidate_path.read_text():
+                return subprocess.CompletedProcess(
+                    cmd,
+                    1,
+                    stdout="",
+                    stderr="syntax error",
+                )
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if "objdiff-cli" in argv[0]:
+            _write_report(report_path, 90.0)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if argv[:3] == ["python", "tools/checkdiff.py", "fn_80000000"]:
+            return subprocess.CompletedProcess(
+                cmd,
+                1,
+                stdout=json.dumps({"opcode_similarity": 0.96}),
+                stderr="",
+            )
+        raise AssertionError(f"unexpected command: {argv}")
+
+    monkeypatch.setattr("src.search.structure_scoring.subprocess.run", fake_run)
+
+    results = score_structure_variants(
+        melee_root=melee_root,
+        function="fn_80000000",
+        source_path=source_path,
+        variants=[
+            StructureVariant(
+                axis="decl-order",
+                operator="decl-order-swap",
+                label="bad candidate",
+                status="unscored",
+                source_retained=str(candidate_path),
+            )
+        ],
+        timeout=5.0,
+    )
+
+    assert results[0].label == "bad candidate"
+    assert results[0].compile_status == "failed"
+    assert results[0].unscored_reason == "candidate compile failed: syntax error"
