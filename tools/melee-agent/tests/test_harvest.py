@@ -1534,6 +1534,152 @@ def test_run_harvest_prefetches_missing_current_tools_frame_transform_pcdumps(
     ]
 
 
+def test_lifetime_layout_source_probe_selects_harness(tmp_path: Path) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(
+        queue,
+        [
+            _row(
+                "demo_fn",
+                headline_tool="lifetime-layout",
+                source_actionability="source-probe",
+                frame_closability_tier="",
+                next_command=(
+                    "melee-agent debug mutate lifetime-layout -f demo_fn "
+                    "--compile-probes --score-match-percent --json"
+                ),
+            )
+        ],
+    )
+
+    rows = load_queue_rows(
+        queue,
+        work_bucket="stack-local-layout",
+        repo_root=repo_root,
+    )
+
+    assert select_harness(rows[0]) == "lifetime-layout"
+
+
+def test_lifetime_layout_harvest_builds_scored_mutate_command(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(
+        queue,
+        [
+            _row(
+                "demo_fn",
+                headline_tool="lifetime-layout",
+                source_actionability="source-probe",
+                frame_closability_tier="",
+            )
+        ],
+    )
+    calls, runner = _json_runner(
+        {
+            "variants": [
+                {
+                    "status": "ok",
+                    "source_retained": str(tmp_path / "candidate.c"),
+                    "final_match_percent": 100.0,
+                }
+            ]
+        }
+    )
+    entry = harvest_module.pcdump_cache.CacheEntry(
+        path=repo_root / "build" / "mwcc_debug_cache" / "melee" / "demo.txt",
+        source_path=repo_root / "src" / "melee" / "demo.c",
+        fresh=True,
+    )
+    monkeypatch.setattr(harvest_module.pcdump_cache, "lookup", lambda _repo, _unit: entry)
+
+    ledger = run_harvest(
+        "stack-local-layout",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    assert calls[0] == [
+        "debug",
+        "mutate",
+        "lifetime-layout",
+        "-f",
+        "demo_fn",
+        "--source-file",
+        str(repo_root / "src" / "melee/demo.c"),
+        "--compile-probes",
+        "--score-match-percent",
+        "--json",
+        "--max-probes",
+        "8",
+        "--timeout",
+        "120",
+    ]
+    assert ledger["results"][0]["harness"] == "lifetime-layout"
+    assert ledger["results"][0]["status"] == "validated"
+
+
+def test_run_harvest_prefetches_lifetime_layout_source_probe_pcdumps(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path, "melee/demo.c")
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(
+        queue,
+        [
+            _row(
+                "demo_fn",
+                file_path="melee/demo.c",
+                headline_tool="lifetime-layout",
+                source_actionability="source-probe",
+                frame_closability_tier="",
+            ),
+        ],
+    )
+    lookups: list[str] = []
+
+    def fake_lookup(repo: Path, unit: str):
+        lookups.append(unit)
+        return None
+
+    monkeypatch.setattr(harvest_module.pcdump_cache, "lookup", fake_lookup)
+    calls: list[list[str]] = []
+
+    def runner(args: list[str], *, cwd: Path, timeout: int) -> HarnessProcessResult:
+        calls.append(args)
+        if args[:2] == ["debug", "dump"]:
+            return HarnessProcessResult(args, 0, "", "")
+        return HarnessProcessResult(args, 0, json.dumps({"variants": []}), "")
+
+    ledger = run_harvest(
+        "stack-local-layout",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    assert calls[:2] == [
+        ["debug", "dump", "setup"],
+        [
+            "debug",
+            "dump",
+            "local",
+            str(repo_root / "src" / "melee" / "demo.c"),
+            "--function",
+            "demo_fn",
+        ],
+    ]
+    assert calls[2][:3] == ["debug", "mutate", "lifetime-layout"]
+    assert lookups == ["melee/demo"]
+    assert ledger["preflight"]["pcdump"]["generated_units"] == ["melee/demo"]
+
+
 def test_run_harvest_skips_pcdump_preflight_when_frame_transform_cache_is_fresh(
     monkeypatch,
     tmp_path: Path,

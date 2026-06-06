@@ -29,6 +29,7 @@ HARNESS_SELECT_ORDER = "select-order-search"
 HARNESS_INDEXED_STRUCT = "indexed-struct-search"
 HARNESS_NAME_MAGIC_SOURCE = "name-magic-source-declarations"
 HARNESS_CONTROL_FLOW_SHAPE = "control-flow-shape-search"
+HARNESS_LIFETIME_LAYOUT = "lifetime-layout"
 REGISTERED_HARNESSES = {
     HARNESS_FRAME_TRANSFORM,
     HARNESS_COALESCE,
@@ -36,6 +37,7 @@ REGISTERED_HARNESSES = {
     HARNESS_INDEXED_STRUCT,
     HARNESS_NAME_MAGIC_SOURCE,
     HARNESS_CONTROL_FLOW_SHAPE,
+    HARNESS_LIFETIME_LAYOUT,
 }
 PREVIEW_FACET_FIELDS = (
     "primary",
@@ -568,6 +570,16 @@ def select_harness(request: HarvestRequest) -> str | None:
         return HARNESS_INDEXED_STRUCT
     if request.source_actionability == "current-tools-indexed-pointer":
         return HARNESS_INDEXED_STRUCT
+    if request.work_bucket == "stack-local-layout" and (
+        request.headline_tool == HARNESS_LIFETIME_LAYOUT
+        or HARNESS_LIFETIME_LAYOUT in request.next_command
+        or HARNESS_LIFETIME_LAYOUT in request.frame_next_command
+        or (
+            request.source_actionability == "source-probe"
+            and request.subcategory == "same-frame-stack-slot-placement"
+        )
+    ):
+        return HARNESS_LIFETIME_LAYOUT
 
     for value in (
         request.headline_tool,
@@ -806,24 +818,42 @@ def _pcdump_unit_for_source(repo_root: Path, source_file: Path) -> str:
     return rel.with_suffix("").as_posix()
 
 
-def _needs_frame_transform_pcdump_preflight(
+def _needs_pcdump_preflight(
     request: HarvestRequest,
     *,
     compose: bool,
 ) -> bool:
     if request.source_file is None:
         return False
-    if request.source_actionability != "current-tools":
-        return False
-    if request.frame_closability_tier != "current-tools-padstack":
-        return False
-    if select_harness(request) == HARNESS_FRAME_TRANSFORM:
+    harness = select_harness(request)
+    lifetime_layout_source_probe = request.work_bucket == "stack-local-layout" and (
+        request.headline_tool == HARNESS_LIFETIME_LAYOUT
+        or HARNESS_LIFETIME_LAYOUT in request.next_command
+        or HARNESS_LIFETIME_LAYOUT in request.frame_next_command
+        or (
+            request.source_actionability == "source-probe"
+            and request.subcategory == "same-frame-stack-slot-placement"
+        )
+    )
+    if harness == HARNESS_LIFETIME_LAYOUT:
+        return lifetime_layout_source_probe
+    frame_transform_current_tools = (
+        request.source_actionability == "current-tools"
+        and request.frame_closability_tier == "current-tools-padstack"
+    )
+    if frame_transform_current_tools and harness == HARNESS_FRAME_TRANSFORM:
         return True
     if compose:
-        return any(
+        layer_harnesses = {
             str(layer.get("harness") or "").strip().lower()
-            == HARNESS_FRAME_TRANSFORM
             for layer in _normalize_layer_sequence(request)
+        }
+        return (
+            HARNESS_FRAME_TRANSFORM in layer_harnesses
+            and frame_transform_current_tools
+        ) or (
+            HARNESS_LIFETIME_LAYOUT in layer_harnesses
+            and lifetime_layout_source_probe
         )
     return False
 
@@ -838,7 +868,7 @@ def _run_pcdump_preflight(
 ) -> PcdumpPreflightReport:
     by_unit: dict[str, HarvestRequest] = {}
     for request in requests:
-        if not _needs_frame_transform_pcdump_preflight(request, compose=compose):
+        if not _needs_pcdump_preflight(request, compose=compose):
             continue
         assert request.source_file is not None
         unit = _pcdump_unit_for_source(repo_root, request.source_file)
@@ -1127,6 +1157,26 @@ def _control_flow_shape_command(request: HarvestRequest) -> list[str]:
         "debug",
         "mutate",
         HARNESS_CONTROL_FLOW_SHAPE,
+        "-f",
+        request.function,
+        "--source-file",
+        str(request.source_file),
+        "--compile-probes",
+        "--score-match-percent",
+        "--json",
+        "--max-probes",
+        str(request.max_probes),
+        "--timeout",
+        str(request.timeout),
+    ]
+
+
+def _lifetime_layout_command(request: HarvestRequest) -> list[str]:
+    assert request.source_file is not None
+    return [
+        "debug",
+        "mutate",
+        HARNESS_LIFETIME_LAYOUT,
         "-f",
         request.function,
         "--source-file",
@@ -1999,6 +2049,8 @@ def _adapter_command(request: HarvestRequest, harness: str) -> list[str]:
         return _name_magic_source_command(request)
     if harness == HARNESS_CONTROL_FLOW_SHAPE:
         return _control_flow_shape_command(request)
+    if harness == HARNESS_LIFETIME_LAYOUT:
+        return _lifetime_layout_command(request)
     raise ValueError(f"unsupported harness: {harness}")
 
 
