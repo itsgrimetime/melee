@@ -17,6 +17,7 @@ Remote environment support:
 from __future__ import annotations
 
 import argparse
+import difflib
 import hashlib
 import json
 import os
@@ -2234,10 +2235,9 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
 
     # Compute offset_discrepancies via body-level alignment (SequenceMatcher on
     # _struct_key bodies, not raw lines with +offset: prefixes).
-    import difflib as _difflib
     _ref_bodies = [_asm_body(l) for l in ref_lines if not _is_relocation_line(l)]
     _our_bodies = [_asm_body(l) for l in our_lines if not _is_relocation_line(l)]
-    _sm = _difflib.SequenceMatcher(
+    _sm = difflib.SequenceMatcher(
         None,
         [_struct_key(b) for b in _ref_bodies],
         [_struct_key(b) for b in _our_bodies],
@@ -2249,10 +2249,16 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
             continue
         if (_i2 - _i1) != (_j2 - _j1):
             continue  # unequal-length replace block: can't pair positionally
-        # dup-body guard: if a _struct_key repeats within this block, skip it
-        _block_keys = [_struct_key(_ref_bodies[_i1 + _k]) for _k in range(_i2 - _i1)]
-        if len(set(_block_keys)) != len(_block_keys):
-            continue
+        # Dup-body guard applies ONLY to `replace` blocks. In an `equal` block
+        # SequenceMatcher guarantees ref_key[i1+k] == cur_key[j1+k] for all k,
+        # so position k <-> position k is the authoritative correspondence and
+        # repeated keys cannot mispair (this is the matched-opcode case that
+        # finds real struct-offset bugs). In a `replace` block instructions may
+        # be reordered, so a repeated key CAN mispair -> skip the block.
+        if _tag == "replace":
+            _block_keys = [_struct_key(_ref_bodies[_i1 + _k]) for _k in range(_i2 - _i1)]
+            if len(set(_block_keys)) != len(_block_keys):
+                continue
         for _k in range(_i2 - _i1):
             _d = _paired_struct_offset_delta(_ref_bodies[_i1 + _k], _our_bodies[_j1 + _k])
             if _d:

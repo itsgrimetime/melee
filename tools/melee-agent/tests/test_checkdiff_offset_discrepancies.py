@@ -61,16 +61,73 @@ def test_offset_discrepancies_clean():
     assert any(d["ref_disp"] == 2304 and d["cur_disp"] == 1856 and d["base_reg"] == "r3" for d in od)
 
 
-def test_offset_discrepancies_dupbody_guard():
-    # identical repeated bodies — dup-body guard must suppress mispaired discrepancies
-    ref = _lines(["stw r0,0(r28)", "stw r0,4(r28)", "stw r0,0(r28)"])
-    cur = _lines(["stw r0,0(r28)", "stw r0,8(r28)", "stw r0,0(r28)"])
+def test_offset_discrepancies_matched_opcode_equal_block_with_repeats():
+    """A matched-opcode function (the tool's main target).
+
+    Displacement masking makes the ref/cur _struct_key sequences identical
+    element-wise, so SequenceMatcher returns the whole function as ONE `equal`
+    block that contains REPEATED instruction shapes (two `sth DISP(r3)`). The
+    dup-body guard must NOT suppress here: position k <-> position k is the
+    authoritative correspondence and repeated keys cannot mispair. This is the
+    `__THPRestartDefinition` shape and MUST yield every offset discrepancy.
+    Regression for the bug where the guard fired on the whole-function equal
+    block and `struct verify` found nothing on exactly the functions it is for.
+    """
+    ref = _lines([
+        "li r0,1",
+        "stb r0,2304(r3)",
+        "sth r0,2300(r3)",
+        "lhz r0,2300(r3)",
+        "sth r0,2302(r3)",
+        "blr",
+    ])
+    cur = _lines([
+        "li r0,1",
+        "stb r0,1856(r3)",
+        "sth r0,1858(r3)",
+        "lhz r0,1858(r3)",
+        "sth r0,1860(r3)",
+        "blr",
+    ])
     c = checkdiff.classify_asm_diff(ref, cur)
     od = c.get("offset_discrepancies", [])
-    # The guard suppresses blocks where the same key repeats.
-    # All three lines have the same _struct_key (DISP(r28)), so the dup-body
-    # guard fires on the whole block and must not emit any r28 discrepancies.
-    assert all(d["base_reg"] != "r28" for d in od)
+    # all four memory-op discrepancies must be present, paired positionally
+    found = {(d["mnemonic"], d["ref_disp"], d["cur_disp"], d["base_reg"]) for d in od}
+    assert ("stb", 2304, 1856, "r3") in found
+    assert ("sth", 2300, 1858, "r3") in found
+    assert ("lhz", 2300, 1858, "r3") in found
+    assert ("sth", 2302, 1860, "r3") in found
+    # exactly those four (no spurious extras)
+    assert len(od) == 4
+
+
+def test_offset_discrepancies_dupbody_guard_replace_block():
+    """Dup-body guard fires ONLY on `replace` blocks with a repeated key.
+
+    Here the ref region [stw(r28), stw(r28)] is replaced by cur's
+    [lwz(r29), lwz(r29)] (a shape that never matches ref's, so it cannot be
+    pulled into an `equal` block); it is a genuine equal-length `replace`
+    block whose ref side has a REPEATED `_struct_key`. Because instructions in
+    a replace block may be reordered, a repeated key could mispair, so the
+    guard skips the block -> no discrepancy emitted for r28/r29.
+    """
+    ref = _lines([
+        "cmpwi r3,0",
+        "stw r0,16(r28)",
+        "stw r0,32(r28)",
+        "lwz r5,8(r30)",
+    ])
+    cur = _lines([
+        "cmpwi r3,0",
+        "lwz r0,40(r29)",
+        "lwz r0,48(r29)",
+        "lwz r5,8(r30)",
+    ])
+    c = checkdiff.classify_asm_diff(ref, cur)
+    od = c.get("offset_discrepancies", [])
+    # the repeated-key replace block is suppressed; the matching lwz(r30)
+    # anchor has identical displacement so it is not a discrepancy either
+    assert od == []
 
 
 def test_offset_discrepancies_stack_excluded():
