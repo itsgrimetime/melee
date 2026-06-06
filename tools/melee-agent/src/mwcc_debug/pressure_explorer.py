@@ -732,6 +732,12 @@ def _probe_repeated_helper_result_reuse(
         first = occurrences[0]
         if not _helper_call_args_are_simple(first.args_text):
             continue
+        if not _helper_callee_supported_for_reuse(first.callee, source_text):
+            first_blocker = first_blocker or (
+                "callee-not-supported-for-reuse",
+                f"helper `{first.callee}` is not supported for repeated-result reuse",
+            )
+            continue
         if not _helper_call_is_read_only(first.callee, source_text, function):
             first_blocker = first_blocker or (
                 "callee-not-read-only",
@@ -795,8 +801,9 @@ def _probe_repeated_helper_result_reuse(
             )
             continue
         indent = _line_indent_at(source_text, line_start)
+        temp_name = _next_unique_repeated_helper_temp_name(source_text, function)
         replacements = [(line_start, line_start, (
-            f"{indent}s32 ll_probe_helper_result_0 = (s32) {first.call_text};\n"
+            f"{indent}s32 {temp_name} = (s32) {first.call_text};\n"
         ))]
         for call in occurrences:
             replace_start, replace_end = _cast_prefixed_call_range(
@@ -807,7 +814,7 @@ def _probe_repeated_helper_result_reuse(
             replacements.append((
                 replace_start,
                 replace_end,
-                "ll_probe_helper_result_0",
+                temp_name,
             ))
         probe = LifetimeLayoutProbe(
             label="repeated-helper-result-reuse-0",
@@ -821,6 +828,7 @@ def _probe_repeated_helper_result_reuse(
                 "callee": first.callee,
                 "call": first.call_text,
                 "occurrences": len(occurrences),
+                "temp_name": temp_name,
             },
         )
         return [probe], _source_lifetime_summary(
@@ -1169,6 +1177,28 @@ def _helper_call_is_read_only(callee: str, source: str, function: str) -> bool:
         return True
     body_expr = _simple_helper_expression_body(source, callee)
     return body_expr is not None and _helper_expression_is_pure(body_expr)
+
+
+def _helper_callee_supported_for_reuse(callee: str, source: str) -> bool:
+    if callee in _READ_ONLY_SOURCE_LIFETIME_HELPERS:
+        return True
+    return _find_function_body_span(source, callee) is None
+
+
+def _next_unique_repeated_helper_temp_name(source: str, function: str) -> str:
+    span = _find_function_body_span(source, function)
+    if span is None:
+        return "ll_probe_helper_result_0"
+    body_start, body_end = span
+    function_source = source[_line_start(source, body_start):body_end]
+    used = {
+        int(match.group(1))
+        for match in re.finditer(r"\bll_probe_helper_result_(\d+)\b", function_source)
+    }
+    suffix = 0
+    while suffix in used:
+        suffix += 1
+    return f"ll_probe_helper_result_{suffix}"
 
 
 def _simple_helper_expression_body(source: str, function: str) -> str | None:

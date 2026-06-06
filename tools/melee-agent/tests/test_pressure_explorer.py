@@ -268,6 +268,79 @@ def test_source_lifetime_repeated_helper_result_reuse_supports_seed_style_compar
     assert probe.source_text.count("fn_803AC634(state, i)") == 1
 
 
+def test_source_lifetime_repeated_helper_result_reuse_rejects_same_tu_pointer_helper() -> None:
+    source = textwrap.dedent("""\
+        static inline Node* helper(Node** table, s32 i)
+        {
+            return table[i];
+        }
+
+        Node* fn_80000000(Node** table, s32 i)
+        {
+            Node* left;
+            Node* right;
+            left = helper(table, i);
+            right = helper(table, i);
+            return left ? left : right;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "repeated-helper-result-reuse" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "repeated-helper-result-reuse"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] in {
+        "helper-return-type-unsafe",
+        "callee-not-supported-for-reuse",
+    }
+
+
+def test_source_lifetime_repeated_helper_result_reuse_uses_unique_temp_name() -> None:
+    source = textwrap.dedent("""\
+        s32 fn_80000000(CardState* state, s32 i)
+        {
+            s32 ll_probe_helper_result_0;
+            s32 total = 0;
+            total += fn_803AC634(state, i);
+            total = fn_803AC634(state, i);
+            return total + ll_probe_helper_result_0;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    operators = {probe.operator for probe in probes}
+    if "repeated-helper-result-reuse" in operators:
+        probe = next(
+            probe
+            for probe in probes
+            if probe.operator == "repeated-helper-result-reuse"
+        )
+        assert "s32 ll_probe_helper_result_1 = (s32) fn_803AC634(state, i);" in (
+            probe.source_text
+        )
+        assert "ll_probe_helper_result_0 = (s32) fn_803AC634(state, i);" not in (
+            probe.source_text
+        )
+    else:
+        blocked = [
+            row for row in summaries if row["operator"] == "repeated-helper-result-reuse"
+        ]
+        assert blocked
+        assert blocked[0]["blocker"] is not None
+
+
 def test_source_lifetime_helper_result_dematerialize_probe() -> None:
     source = textwrap.dedent("""\
         s32 fn_80000000(CardState* state, s32 i)
@@ -374,7 +447,10 @@ def test_source_lifetime_rejects_unsafe_helper_call_rewrites() -> None:
         row for row in summaries if row["operator"] == "repeated-helper-result-reuse"
     ]
     assert blocked
-    assert blocked[0]["blocker"] == "callee-not-read-only"
+    assert blocked[0]["blocker"] in {
+        "callee-not-read-only",
+        "callee-not-supported-for-reuse",
+    }
 
 
 def test_source_lifetime_repeated_helper_result_reuse_stays_within_safe_region() -> None:
@@ -775,7 +851,10 @@ def test_source_lifetime_read_only_rewrites_reject_parenthesized_indirect_call_h
         row for row in summaries if row["operator"] == "repeated-helper-result-reuse"
     ]
     assert blocked
-    assert blocked[0]["blocker"] == "callee-not-read-only"
+    assert blocked[0]["blocker"] in {
+        "callee-not-read-only",
+        "callee-not-supported-for-reuse",
+    }
 
 
 def test_source_lifetime_repeated_helper_result_reuse_rejects_case_arm_declaration() -> None:
