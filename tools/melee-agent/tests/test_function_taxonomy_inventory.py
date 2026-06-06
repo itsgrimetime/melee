@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import threading
 from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -263,6 +266,202 @@ def test_generate_inventory_classifies_report_functions_and_writes_outputs(
     assert "| Report non-100% | 5 |" in summary
     assert "| stack-local-layout | 3 |" in summary
     assert "| known-small-pattern-candidate | 1 |" in summary
+
+
+def test_generate_inventory_writes_completed_run_status_last(tmp_path: Path) -> None:
+    from tools.function_taxonomy_inventory import generate_inventory
+
+    report = tmp_path / "report.json"
+    output = tmp_path / "taxonomy"
+    write_report(report)
+
+    result = generate_inventory(
+        report,
+        output,
+        checkdiff_runner=fake_checkdiff,
+        decl_order_evaluator=None,
+        frame_report_runner=None,
+        workers=1,
+        limit=2,
+    )
+
+    status_path = output / "run-status.json"
+    assert status_path.exists()
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    assert status["status"] == "completed"
+    assert status["attempted_count"] == result.attempted_count == 2
+    assert status["classified_count"] == result.classified_count == 2
+    assert status["error_count"] == result.error_count == 0
+    assert status["report_non100_count"] == result.report_non100_count == 5
+    assert status["started_at"]
+    assert status["completed_at"]
+    assert "failed_at" not in status
+
+
+def test_generate_inventory_marks_failed_status_when_classification_crashes(
+    tmp_path: Path,
+) -> None:
+    from tools.function_taxonomy_inventory import generate_inventory
+
+    report = tmp_path / "report.json"
+    output = tmp_path / "taxonomy"
+    queues = output / "queues"
+    queues.mkdir(parents=True)
+    stale_queue = queues / "signature-call-type.tsv"
+    stale_queue.write_text(
+        "match_percent\tfunction\tnext_command\n"
+        "99.0\told_fn\tmelee-agent debug suggest casts old_fn\n",
+        encoding="utf-8",
+    )
+    write_report(report)
+
+    def crashing_runner(function: str):
+        raise RuntimeError(f"boom while classifying {function}")
+
+    with pytest.raises(RuntimeError, match="boom while classifying stack_fn"):
+        generate_inventory(
+            report,
+            output,
+            checkdiff_runner=crashing_runner,
+            decl_order_evaluator=None,
+            frame_report_runner=None,
+            workers=1,
+            limit=1,
+        )
+
+    status = json.loads((output / "run-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "failed"
+    assert status["attempted_count"] == 1
+    assert "boom while classifying stack_fn" in status["error"]
+    assert status["started_at"]
+    assert status["failed_at"]
+    assert "completed_at" not in status
+    assert "debug suggest casts old_fn" in stale_queue.read_text(encoding="utf-8")
+
+
+def test_generate_inventory_marks_failed_status_when_report_load_fails(
+    tmp_path: Path,
+) -> None:
+    from tools.function_taxonomy_inventory import generate_inventory
+
+    report = tmp_path / "broken-report.json"
+    output = tmp_path / "taxonomy"
+    output.mkdir()
+    (output / "run-status.json").write_text(
+        json.dumps({"status": "completed", "completed_at": "old"}),
+        encoding="utf-8",
+    )
+    report.write_text("{not-json", encoding="utf-8")
+
+    with pytest.raises(json.JSONDecodeError):
+        generate_inventory(
+            report,
+            output,
+            checkdiff_runner=fake_checkdiff,
+            decl_order_evaluator=None,
+            frame_report_runner=None,
+            workers=1,
+        )
+
+    status = json.loads((output / "run-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "failed"
+    assert status["attempted_count"] == 0
+    assert status["error_type"] == "JSONDecodeError"
+    assert "completed_at" not in status
+
+
+def test_generate_inventory_marks_failed_before_waiting_for_sibling_worker(
+    tmp_path: Path,
+) -> None:
+    from tools.function_taxonomy_inventory import generate_inventory
+
+    report = tmp_path / "report.json"
+    output = tmp_path / "taxonomy"
+    write_report(report)
+    slow_started = threading.Event()
+    release_slow = threading.Event()
+    worker_done = threading.Event()
+    worker_errors: list[BaseException] = []
+
+    def runner(function: str):
+        if function == "stack_fn":
+            raise RuntimeError("boom before sibling finishes")
+        if function == "small_fn":
+            slow_started.set()
+            release_slow.wait(timeout=2)
+        return fake_checkdiff(function)
+
+    def invoke_inventory() -> None:
+        try:
+            with pytest.raises(RuntimeError, match="boom before sibling finishes"):
+                generate_inventory(
+                    report,
+                    output,
+                    checkdiff_runner=runner,
+                    decl_order_evaluator=None,
+                    frame_report_runner=None,
+                    workers=2,
+                    limit=2,
+                )
+        except BaseException as exc:
+            worker_errors.append(exc)
+        finally:
+            worker_done.set()
+
+    thread = threading.Thread(target=invoke_inventory)
+    thread.start()
+    try:
+        assert slow_started.wait(timeout=1)
+        status_path = output / "run-status.json"
+        for _ in range(100):
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+            if status.get("status") == "failed":
+                break
+            threading.Event().wait(timeout=0.01)
+        else:
+            pytest.fail("inventory did not mark failed before sibling worker finished")
+        assert status["error_type"] == "RuntimeError"
+    finally:
+        release_slow.set()
+        thread.join(timeout=2)
+    assert worker_errors == []
+    assert worker_done.is_set()
+
+
+def test_generate_inventory_consumes_later_completed_worker_before_slow_earlier_one(
+    tmp_path: Path,
+) -> None:
+    from tools.function_taxonomy_inventory import generate_inventory
+
+    report = tmp_path / "report.json"
+    output = tmp_path / "taxonomy"
+    write_report(report)
+    completed: list[str] = []
+    small_done = threading.Event()
+
+    def runner(function: str):
+        if function == "stack_fn":
+            assert small_done.wait(timeout=2)
+        elif function == "small_fn":
+            small_done.set()
+        return fake_checkdiff(function)
+
+    def progress(event: dict[str, object]) -> None:
+        if event.get("event") == "candidate_done":
+            completed.append(str(event["function"]))
+
+    generate_inventory(
+        report,
+        output,
+        checkdiff_runner=runner,
+        decl_order_evaluator=None,
+        frame_report_runner=None,
+        workers=2,
+        limit=2,
+        progress_callback=progress,
+    )
+
+    assert completed[:2] == ["small_fn", "stack_fn"]
 
 
 def test_describe_actionability_splits_non_frame_work_buckets() -> None:
@@ -532,6 +731,91 @@ def test_signature_queue_routes_to_advisory_audit_without_harness(
             ),
         )
         == []
+    )
+
+
+def test_completed_inventory_signature_queue_routes_to_debug_suggest_signatures(
+    tmp_path: Path,
+) -> None:
+    from src.harvest import preview_harvest_queue
+    from tools.function_taxonomy_inventory import generate_inventory
+
+    report = tmp_path / "report.json"
+    output = tmp_path / "taxonomy"
+    report.write_text(
+        json.dumps(
+            {
+                "units": [
+                    {
+                        "name": "main/melee/demo/signature_demo",
+                        "metadata": {
+                            "source_path": "src/melee/demo/signature_demo.c",
+                            "complete": False,
+                        },
+                        "functions": [
+                            {
+                                "name": "signature_fn",
+                                "size": "128",
+                                "fuzzy_match_percent": 99.5,
+                                "metadata": {"virtual_address": "2147487000"},
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def runner(function: str):
+        return 1, json.dumps(
+            {
+                "function": function,
+                "classification": {
+                    "primary": "signature-type-mismatch",
+                    "reasons": ["call shape differs after signature audit"],
+                },
+                "structural": {"opcode_similarity": 0.999, "line_delta": 0},
+            }
+        ), ""
+
+    def cast_audit_runner(_candidate):
+        return {
+            "status": "ok",
+            "medium_plus_count": 1,
+            "high_count": 0,
+            "medium_count": 1,
+            "low_count": 0,
+        }
+
+    result = generate_inventory(
+        report,
+        output,
+        checkdiff_runner=runner,
+        decl_order_evaluator=None,
+        frame_report_runner=None,
+        cast_audit_runner=cast_audit_runner,
+        workers=1,
+    )
+
+    assert result.classified_count == 1
+    status = json.loads((output / "run-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "completed"
+
+    queue_text = (output / "queues" / "signature-call-type.tsv").read_text(
+        encoding="utf-8"
+    )
+    assert "debug suggest signatures -f signature_fn" in queue_text
+    assert "debug suggest casts" not in queue_text
+
+    preview = preview_harvest_queue(
+        output / "queues" / "signature-call-type.tsv",
+        work_bucket="signature-call-type",
+        repo_root=REPO_ROOT,
+    )
+    assert preview["sample"][0]["next_command"] == (
+        "melee-agent debug suggest signatures -f signature_fn "
+        "--source-file src/melee/demo/signature_demo.c --json"
     )
 
 

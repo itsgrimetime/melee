@@ -4826,6 +4826,16 @@ def _print_signature_report(
                 print(
                     f"    patch: {action.patch.old!r} -> {action.patch.new!r}"
                 )
+            candidate = getattr(action, "candidate", None)
+            if candidate:
+                print(
+                    "    candidate: "
+                    f"{candidate.get('kind')} "
+                    f"{candidate.get('current_type') or '?'} -> "
+                    f"{candidate.get('proposed_type') or '?'} "
+                    f"({candidate.get('blast_radius') or '?'}, "
+                    f"{candidate.get('patch_status') or 'diagnostic'})"
+                )
             if action.rebucket:
                 print(
                     f"    rebucket: {action.rebucket['reason']} -> "

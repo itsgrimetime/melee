@@ -28,6 +28,7 @@ from src.harvest import (
 )
 
 cli_runner = CliRunner()
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 HEADER = [
     "match_percent",
@@ -58,6 +59,29 @@ def _write_queue(path: Path, rows: list[dict[str, str]]) -> None:
     for row in rows:
         lines.append("\t".join(row.get(field, "") for field in HEADER))
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def write_minimal_taxonomy_queue(taxonomy_root: Path, status: dict | None) -> Path:
+    queues = taxonomy_root / "queues"
+    queues.mkdir(parents=True)
+    queue = queues / "signature-call-type.tsv"
+    queue.write_text(
+        "match_percent\tfunction\tprimary\tsubcategory\t"
+        "source_actionability\theadline_tool\tfile_path\tnext_command\n"
+        "99.0\tsig_fn\tsignature-type-mismatch\tcall-shape-or-prototype\t"
+        "current-tools-signature-audit\tdebug-suggest-signatures\t"
+        "melee/demo/demo.c\t"
+        "melee-agent debug suggest signatures -f sig_fn "
+        "--source-file src/melee/demo/demo.c --json\n",
+        encoding="utf-8",
+    )
+    (taxonomy_root / "taxonomy.records.jsonl").write_text("", encoding="utf-8")
+    if status is not None:
+        (taxonomy_root / "run-status.json").write_text(
+            json.dumps(status),
+            encoding="utf-8",
+        )
+    return queue
 
 
 def _row(
@@ -1183,6 +1207,107 @@ def test_preview_harvest_queue_zero_match_reports_near_miss_facets(
     assert preview["near_miss_facets"]["source_actionability"] == [
         {"value": "backend-ceiling", "count": 1}
     ]
+
+
+def test_preview_harvest_queue_rejects_taxonomy_artifacts_missing_run_status(
+    tmp_path: Path,
+) -> None:
+    queue = write_minimal_taxonomy_queue(tmp_path / "function-taxonomy", None)
+
+    with pytest.raises(ValueError, match="taxonomy inventory status is missing"):
+        preview_harvest_queue(
+            queue,
+            work_bucket="signature-call-type",
+            repo_root=REPO_ROOT,
+        )
+
+
+def test_preview_harvest_queue_rejects_incomplete_taxonomy_run(
+    tmp_path: Path,
+) -> None:
+    for status in (
+        {"status": "running", "started_at": "2026-06-05T12:00:00Z"},
+        {
+            "status": "failed",
+            "started_at": "2026-06-05T12:00:00Z",
+            "failed_at": "2026-06-05T12:01:00Z",
+            "error": "boom",
+        },
+    ):
+        taxonomy_root = tmp_path / status["status"] / "function-taxonomy"
+        queue = write_minimal_taxonomy_queue(taxonomy_root, status)
+
+        with pytest.raises(ValueError, match="taxonomy inventory has not completed"):
+            preview_harvest_queue(
+                queue,
+                work_bucket="signature-call-type",
+                repo_root=REPO_ROOT,
+            )
+
+
+def test_preview_harvest_queue_allows_completed_manifest_and_ad_hoc_queue(
+    tmp_path: Path,
+) -> None:
+    completed_queue = write_minimal_taxonomy_queue(
+        tmp_path / "completed" / "function-taxonomy",
+        {
+            "status": "completed",
+            "started_at": "2026-06-05T12:00:00Z",
+            "completed_at": "2026-06-05T12:02:00Z",
+            "attempted_count": 1,
+            "classified_count": 1,
+            "error_count": 0,
+        },
+    )
+
+    completed_preview = preview_harvest_queue(
+        completed_queue,
+        work_bucket="signature-call-type",
+        repo_root=REPO_ROOT,
+    )
+    assert completed_preview["counts"]["matching_rows"] == 1
+
+    ad_hoc_dir = tmp_path / "ad-hoc-queues"
+    ad_hoc_dir.mkdir()
+    ad_hoc_queue = ad_hoc_dir / "signature-call-type.tsv"
+    ad_hoc_queue.write_text(completed_queue.read_text(encoding="utf-8"), encoding="utf-8")
+
+    ad_hoc_preview = preview_harvest_queue(
+        ad_hoc_queue,
+        work_bucket="signature-call-type",
+        repo_root=REPO_ROOT,
+    )
+    assert ad_hoc_preview["counts"]["matching_rows"] == 1
+
+
+def test_preview_harvest_queue_allows_ad_hoc_queues_with_unrelated_status(
+    tmp_path: Path,
+) -> None:
+    queue_dir = tmp_path / "queues"
+    queue_dir.mkdir()
+    queue = queue_dir / "signature-call-type.tsv"
+    queue.write_text(
+        "match_percent\tfunction\tprimary\tsubcategory\t"
+        "source_actionability\theadline_tool\tfile_path\tnext_command\n"
+        "99.0\tsig_fn\tsignature-type-mismatch\tcall-shape-or-prototype\t"
+        "current-tools-signature-audit\tdebug-suggest-signatures\t"
+        "melee/demo/demo.c\t"
+        "melee-agent debug suggest signatures -f sig_fn "
+        "--source-file src/melee/demo/demo.c --json\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "run-status.json").write_text(
+        json.dumps({"status": "running"}),
+        encoding="utf-8",
+    )
+
+    preview = preview_harvest_queue(
+        queue,
+        work_bucket="signature-call-type",
+        repo_root=REPO_ROOT,
+    )
+
+    assert preview["counts"]["matching_rows"] == 1
 
 
 def test_run_harvest_filtered_limit_zero_keeps_filter_smoke_behavior(

@@ -394,6 +394,134 @@ def test_debug_suggest_signatures_text_prints_summary_and_rebucket(
     ) in result.output
 
 
+def test_debug_suggest_signatures_json_includes_prototype_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "repo"
+    source = melee_root / "src" / "melee" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        textwrap.dedent(
+            """\
+            static void helper(int value) {}
+
+            void caller_fn(int value)
+            {
+                helper(value);
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    payload_path = tmp_path / "checkdiff.json"
+    payload_path.write_text(
+        json.dumps({
+            "function": "caller_fn",
+            "classification": {"primary": "signature-type-mismatch"},
+            "target_asm": [
+                "/* 0000 */ extsb r3, r31",
+                "/* 0004 */ bl helper",
+            ],
+            "current_asm": [
+                "/* 0000 */ mr r3, r31",
+                "/* 0004 */ bl helper",
+            ],
+            "fuzzy_match_percent": 97.5,
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/demo",
+    )
+
+    result = runner.invoke(
+        debug_cli.debug_app,
+        [
+            "suggest",
+            "signatures",
+            "-f",
+            "caller_fn",
+            "--checkdiff-json",
+            str(payload_path),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    report = json.loads(result.output)
+    action = report["findings"][0]["actions"][0]
+    assert action["kind"] == "same-tu-static-prototype-candidate"
+    assert action["candidate"]["proposed_type"] == "s8"
+    assert action["patch"]["old"] == "int value"
+
+
+def test_debug_suggest_signatures_text_prints_candidate_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "repo"
+    source = melee_root / "src" / "melee" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        textwrap.dedent(
+            """\
+            static void helper(int value) {}
+
+            void caller_fn(int value)
+            {
+                helper(value);
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    payload_path = tmp_path / "checkdiff.json"
+    payload_path.write_text(
+        json.dumps({
+            "function": "caller_fn",
+            "classification": {"primary": "signature-type-mismatch"},
+            "target_asm": [
+                "/* 0000 */ extsb r3, r31",
+                "/* 0004 */ bl helper",
+            ],
+            "current_asm": [
+                "/* 0000 */ mr r3, r31",
+                "/* 0004 */ bl helper",
+            ],
+            "fuzzy_match_percent": 97.5,
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/demo",
+    )
+
+    result = runner.invoke(
+        debug_cli.debug_app,
+        [
+            "suggest",
+            "signatures",
+            "-f",
+            "caller_fn",
+            "--checkdiff-json",
+            str(payload_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (
+        "candidate: prototype-parameter-type int -> s8 "
+        "(same-translation-unit, generated)"
+    ) in result.output
+
+
 def test_debug_suggest_signatures_rejects_wrong_checkdiff_function(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

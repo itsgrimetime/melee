@@ -34,6 +34,7 @@ class SignatureAction:
     patch: PatchDescriptor | None = None
     validation: dict | None = None
     rebucket: dict[str, object] | None = None
+    candidate: dict[str, object] | None = None
 
 
 @dataclass
@@ -98,12 +99,18 @@ class _ArgPrepComparison:
     current: _ArgPrep | None
 
 
-@dataclass(frozen=True)
+@dataclass
 class _PrototypeInfo:
     has_prototype: bool
     is_static: bool
     is_variadic: bool
     param_types: tuple[str, ...]
+    is_definition: bool = False
+    line: int | None = None
+    param_texts: tuple[str, ...] = ()
+    param_names: tuple[str | None, ...] = ()
+    declaration_count: int = 1
+    source_scope: str = "unknown"
 
 
 GPR_ARG_ORDER = tuple(f"r{i}" for i in range(3, 11))
@@ -233,6 +240,8 @@ def validate_signature_patches(
 
 SOURCE_LEVER_ACTION_KINDS = {
     "same-tu-static-prototype-audit",
+    "same-tu-static-prototype-candidate",
+    "global-prototype-candidate",
     "field-type-audit",
     "local-temp-shape-audit",
 }
@@ -730,16 +739,37 @@ def _parse_visible_prototypes(source_text: str) -> dict[str, _PrototypeInfo]:
         if not suffix or suffix[0] not in ";{":
             continue
         params = source_text[open_idx + 1 : close_idx].strip()
+        param_texts = tuple(
+            param.strip()
+            for param in _split_args(params)
+            if param.strip() and param.strip() not in {"void", "..."}
+        )
+        if param_texts and param_texts[-1].endswith("..."):
+            param_texts = tuple(param_texts[:-1])
         is_variadic = "..." in params
         param_types = tuple(_extract_param_types(params))
         existing = prototypes.get(name)
+        is_static = "static" in prefix.split()
+        declaration_count = (
+            existing.declaration_count + 1 if existing is not None else 1
+        )
         info = _PrototypeInfo(
             has_prototype=True,
-            is_static="static" in prefix.split(),
+            is_static=is_static,
             is_variadic=is_variadic,
             param_types=param_types,
+            is_definition=suffix[0] == "{",
+            line=source_text[: match.start("name")].count("\n") + 1,
+            param_texts=param_texts,
+            param_names=tuple(_extract_param_name(param) for param in param_texts),
+            declaration_count=declaration_count,
+            source_scope="same-tu-static" if is_static else "visible-nonstatic",
         )
-        if existing is None or info.is_static:
+        if existing is None:
+            prototypes[name] = info
+            continue
+        existing.declaration_count = declaration_count
+        if info.is_static and not existing.is_static:
             prototypes[name] = info
     return prototypes
 
@@ -789,6 +819,80 @@ def _extract_param_types(params: str) -> list[str]:
                 cleaned = f"{cleaned} {match.group('stars')}"
         param_types.append(cleaned)
     return param_types
+
+
+def _extract_param_name(param_text: str) -> str | None:
+    split = _split_param_type_name(param_text)
+    if split is None:
+        return None
+    return split[1]
+
+
+def _split_param_type_name(param_text: str) -> tuple[str, str] | None:
+    if "\n" in param_text or "\r" in param_text:
+        return None
+    cleaned = " ".join(param_text.strip().split())
+    if not cleaned or cleaned in {"void", "..."}:
+        return None
+    if "[" in cleaned or "]" in cleaned or "(*" in cleaned:
+        return None
+    match = re.match(r"^(?P<type>.+?)(?:\s+|\s*)(?P<name>[A-Za-z_]\w*)$", cleaned)
+    if match is None:
+        return None
+    type_text = match.group("type").strip()
+    name = match.group("name").strip()
+    if not type_text or not name:
+        return None
+    return type_text, name
+
+
+def _is_simple_scalar_integer_type(type_text: str) -> bool:
+    normalized = " ".join(type_text.replace("volatile", "").split())
+    if "*" in normalized or "[" in normalized or "]" in normalized or "(*" in normalized:
+        return False
+    return normalized in INTEGER_CAST_TYPES
+
+
+def _prototype_patch_status(
+    prototype: _PrototypeInfo,
+    arg_index: int,
+    source_site: dict | None,
+    call: _AsmCall,
+) -> str:
+    if prototype.declaration_count != 1:
+        return "duplicate-visible-declarations"
+    if not _trusted_patch_localization(source_site, call):
+        return "untrusted-localization"
+    if arg_index >= len(prototype.param_texts):
+        return "parameter-unavailable"
+    param_text = prototype.param_texts[arg_index]
+    if (
+        "\n" in param_text
+        or "\r" in param_text
+        or "[" in param_text
+        or "]" in param_text
+        or "(*" in param_text
+    ):
+        return "unsupported-parameter-shape"
+    split = _split_param_type_name(param_text)
+    if split is None:
+        return "unsupported-parameter-shape"
+    current_type, _ = split
+    if not _is_simple_scalar_integer_type(current_type):
+        return "unsupported-type-shape"
+    return "generated"
+
+
+def _trusted_patch_localization(
+    source_site: dict | None,
+    call: _AsmCall,
+) -> bool:
+    if source_site is None:
+        return False
+    return (
+        source_site.get("localization_kind") == "target-ordinal"
+        and source_site.get("call_target") == call.call_target
+    )
 
 
 def _call_target_shape_findings(
@@ -989,17 +1093,28 @@ def _arg_prep_comparisons(
         call=current_call,
         expected=False,
     )
+    expected_args = _ordered_arg_preps(expected_call)
+    current_args = _ordered_arg_preps(current_call)
     comparisons: list[_ArgPrepComparison] = []
-    max_args = max(len(expected_registers), len(current_registers))
+    max_args = max(
+        len(expected_registers),
+        len(current_registers),
+        len(expected_args),
+        len(current_args),
+    )
     for arg_index in range(max_args):
         expected_register = (
             expected_registers[arg_index]
             if arg_index < len(expected_registers)
+            else expected_args[arg_index].register
+            if arg_index < len(expected_args)
             else None
         )
         current_register = (
             current_registers[arg_index]
             if arg_index < len(current_registers)
+            else current_args[arg_index].register
+            if arg_index < len(current_args)
             else None
         )
         comparisons.append(
@@ -1290,7 +1405,22 @@ def _actions_for_finding(
     if patch_action is not None:
         actions.append(patch_action)
 
-    if prototype is not None and prototype.is_static:
+    candidate_action = _prototype_candidate_action(
+        kind=kind,
+        expected=expected,
+        current=current,
+        call=call,
+        source_context=source_context,
+        source_site=source_site,
+        source_arg=source_arg,
+        prototype=prototype,
+        affected=affected,
+        arg_index=arg_index,
+    )
+    if candidate_action is not None:
+        actions.append(candidate_action)
+
+    if candidate_action is None and prototype is not None and prototype.is_static:
         actions.append(
             SignatureAction(
                 kind="same-tu-static-prototype-audit",
@@ -1324,6 +1454,198 @@ def _actions_for_finding(
         )
 
     return actions
+
+
+def _prototype_candidate_action(
+    *,
+    kind: str,
+    expected: _ArgPrep | None,
+    current: _ArgPrep | None,
+    call: _AsmCall,
+    source_context: _SourceContext,
+    source_site: dict | None,
+    source_arg: dict | None,
+    prototype: _PrototypeInfo | None,
+    affected: list[dict],
+    arg_index: int,
+) -> SignatureAction | None:
+    if kind not in {
+        "argument-width-mismatch",
+        "argument-register-presence-mismatch",
+    }:
+        return None
+    if source_site is None:
+        return None
+    if kind == "argument-register-presence-mismatch" and source_arg is None:
+        return SignatureAction(
+            kind="call-argument-type-audit",
+            confidence="low",
+            affected_call_sites=affected,
+            reason=(
+                "The ABI prep has an argument beyond the parsed source call "
+                "arguments; treat this as a call arity or macro/source shape "
+                "mismatch rather than a prototype type edit."
+            ),
+            rebucket=_source_call_arity_rebucket(),
+        )
+    if (
+        kind == "argument-register-presence-mismatch"
+        and prototype is not None
+        and prototype.is_variadic
+        and arg_index >= len(prototype.param_types)
+    ):
+        return SignatureAction(
+            kind="call-argument-type-audit",
+            confidence="low",
+            affected_call_sites=affected,
+            reason=(
+                "The mismatched ABI prep is in a variadic argument tail, where "
+                "default promotions and call shape are not bounded prototype "
+                "type edits."
+            ),
+            rebucket=_variadic_tail_rebucket(),
+        )
+    if prototype is None:
+        return SignatureAction(
+            kind="call-argument-type-audit",
+            confidence="medium" if kind == "argument-width-mismatch" else "low",
+            affected_call_sites=affected,
+            reason=(
+                "The localized source call has no visible callee prototype, so "
+                "the audit cannot produce a bounded prototype candidate."
+            ),
+            rebucket=_external_prototype_unavailable_rebucket(kind),
+        )
+
+    proposed_type = _candidate_type_for_prep(expected)
+    current_type = (
+        prototype.param_types[arg_index]
+        if arg_index < len(prototype.param_types)
+        else None
+    )
+    blast_radius = (
+        "same-translation-unit"
+        if prototype.source_scope == "same-tu-static"
+        else "cross-translation-unit"
+    )
+    patch_status = "diagnostic"
+    patch: PatchDescriptor | None = None
+    if prototype.source_scope == "same-tu-static":
+        patch_status = _prototype_patch_status(
+            prototype,
+            arg_index,
+            source_site,
+            call,
+        )
+        if proposed_type is None:
+            patch_status = "unsupported-type-shape"
+        elif current_type is None or not _is_simple_scalar_integer_type(current_type):
+            patch_status = "unsupported-type-shape"
+        elif _types_are_abi_equivalent(current_type, proposed_type):
+            patch_status = "already-matches"
+        elif patch_status == "generated":
+            split = _split_param_type_name(prototype.param_texts[arg_index])
+            if split is None:
+                patch_status = "unsupported-parameter-shape"
+            else:
+                _, param_name = split
+                patch = PatchDescriptor(
+                    source_file=source_site.get("source_file"),
+                    line=int(prototype.line or source_site.get("line") or 0),
+                    old=prototype.param_texts[arg_index],
+                    new=f"{proposed_type} {param_name}",
+                )
+    else:
+        patch_status = "cross-translation-unit"
+
+    action_kind = (
+        "same-tu-static-prototype-candidate"
+        if prototype.source_scope == "same-tu-static"
+        else "global-prototype-candidate"
+    )
+    candidate = {
+        "kind": "prototype-parameter-type",
+        "call_target": call.call_target,
+        "arg_index": arg_index,
+        "current_type": current_type,
+        "proposed_type": proposed_type,
+        "prototype_scope": prototype.source_scope,
+        "blast_radius": blast_radius,
+        "patch_status": patch_status,
+        "localization_kind": source_site.get("localization_kind"),
+        "reason": _prototype_candidate_reason(kind, patch_status),
+    }
+    return SignatureAction(
+        kind=action_kind,
+        confidence="medium" if action_kind.startswith("same-tu-static") else "low",
+        affected_call_sites=affected,
+        reason=(
+            "Localized argument prep evidence points at the visible callee "
+            "prototype as the bounded source lever."
+        ),
+        patch=patch,
+        candidate=candidate,
+    )
+
+
+def _candidate_type_for_prep(prep: _ArgPrep | None) -> str | None:
+    if prep is None or prep.bank != "GPR":
+        return None
+    if prep.opcode == "extsb":
+        return "s8"
+    if prep.opcode == "lbz":
+        return "u8"
+    if prep.opcode in {"extsh", "lha"}:
+        return "s16"
+    if prep.opcode == "lhz":
+        return "u16"
+    if prep.width == 32 and prep.opcode in {"mr", "lwz", "li", "addi"}:
+        return "s32"
+    return None
+
+
+def _normalize_type_text(type_text: str) -> str:
+    return " ".join(type_text.split())
+
+
+def _integer_abi_width(type_text: str) -> int | None:
+    normalized = _normalize_type_text(type_text)
+    if normalized in {"s8", "u8", "char", "signed char", "unsigned char"}:
+        return 8
+    if normalized in {"s16", "u16", "short", "signed short", "unsigned short"}:
+        return 16
+    if normalized in {
+        "s32",
+        "u32",
+        "int",
+        "signed int",
+        "unsigned int",
+        "long",
+        "signed long",
+        "unsigned long",
+    }:
+        return 32
+    if normalized in {"s64", "u64", "long long"}:
+        return 64
+    return None
+
+
+def _types_are_abi_equivalent(current_type: str, proposed_type: str) -> bool:
+    if _normalize_type_text(current_type) == _normalize_type_text(proposed_type):
+        return True
+    current_width = _integer_abi_width(current_type)
+    proposed_width = _integer_abi_width(proposed_type)
+    return current_width is not None and current_width == proposed_width
+
+
+def _prototype_candidate_reason(kind: str, patch_status: str) -> str:
+    if patch_status == "generated":
+        return "safe same-translation-unit static parameter type patch"
+    if patch_status == "cross-translation-unit":
+        return "visible non-static prototype requires cross-translation-unit review"
+    if kind == "argument-register-presence-mismatch":
+        return "argument presence mismatch localized to visible prototype"
+    return "argument width mismatch localized to visible prototype"
 
 
 def _rebucket(
@@ -1402,15 +1724,7 @@ def _argument_rebucket(
             ),
         )
     if kind == "argument-width-mismatch":
-        return _rebucket(
-            "width-prototype-candidate-missing",
-            "signature-call-type",
-            "argument-width",
-            (
-                "The argument width shaping differs, but no bounded cast or "
-                "prototype source candidate was found."
-            ),
-        )
+        return _external_prototype_unavailable_rebucket(kind)
     if kind == "argument-load-kind-mismatch":
         return _rebucket(
             "type-evidence-missing",
@@ -1438,6 +1752,47 @@ def _argument_rebucket(
         (
             "The argument register presence differs, but no bounded prototype "
             "or argument source candidate was found."
+        ),
+    )
+
+
+def _external_prototype_unavailable_rebucket(kind: str) -> dict[str, object]:
+    subcategory = (
+        "argument-width"
+        if kind == "argument-width-mismatch"
+        else "argument-presence"
+    )
+    return _rebucket(
+        "external-prototype-unavailable",
+        "signature-call-type",
+        subcategory,
+        (
+            "The localized call target has no visible prototype or same-TU "
+            "definition, so a bounded prototype candidate cannot be produced."
+        ),
+    )
+
+
+def _variadic_tail_rebucket() -> dict[str, object]:
+    return _rebucket(
+        "variadic-prototype-tail",
+        "signature-call-type",
+        "argument-presence",
+        (
+            "The argument presence mismatch is in a variadic tail where "
+            "default promotions and callsite shape must be audited manually."
+        ),
+    )
+
+
+def _source_call_arity_rebucket() -> dict[str, object]:
+    return _rebucket(
+        "source-call-arity-mismatch",
+        "signature-call-type",
+        "argument-presence",
+        (
+            "The ABI prep contains an argument position that is not present in "
+            "the parsed source call expression."
         ),
     )
 

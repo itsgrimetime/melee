@@ -194,13 +194,331 @@ void caller_fn(u8 arg0)
     assert report.findings[0].kind == "argument-width-mismatch"
     action = report.findings[0].actions[0]
     assert action.kind == "call-argument-type-audit"
-    assert action.rebucket["reason"] == "width-prototype-candidate-missing"
-    assert (
-        report.summary["rebucket_reason_counts"][
-            "width-prototype-candidate-missing"
-        ]
-        == 1
+    assert action.rebucket["reason"] == "external-prototype-unavailable"
+    assert report.summary["rebucket_reason_counts"][
+        "external-prototype-unavailable"
+    ] == 1
+
+
+def test_audit_generates_same_tu_static_width_prototype_patch() -> None:
+    source = """
+static void helper(int value) {}
+
+void caller_fn(int value)
+{
+    helper(value);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            ["/* 0000 */ extsb r3, r31", "/* 0004 */ bl helper"],
+            ["/* 0000 */ mr r3, r31", "/* 0004 */ bl helper"],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
     )
+    finding = report.findings[0]
+    assert finding.kind == "argument-width-mismatch"
+    action = finding.actions[0]
+    assert action.kind == "same-tu-static-prototype-candidate"
+    assert action.candidate["kind"] == "prototype-parameter-type"
+    assert action.candidate["current_type"] == "int"
+    assert action.candidate["proposed_type"] == "s8"
+    assert action.candidate["prototype_scope"] == "same-tu-static"
+    assert action.candidate["patch_status"] == "generated"
+    assert action.patch is not None
+    assert action.patch.old == "int value"
+    assert action.patch.new == "s8 value"
+    assert report.summary["patch_candidate_count"] == 1
+
+
+def test_validate_signature_prototype_patch_attaches_candidate_delta() -> None:
+    source = """
+static void helper(int value) {}
+
+void caller_fn(int value)
+{
+    helper(value);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            ["/* 0000 */ extsb r3, r31", "/* 0004 */ bl helper"],
+            ["/* 0000 */ mr r3, r31", "/* 0004 */ bl helper"],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+
+    seen_sources: list[str] = []
+
+    def fake_runner(candidate_source: str) -> dict:
+        seen_sources.append(candidate_source)
+        return {"match": False, "fuzzy_match_percent": 99.0}
+
+    validate_signature_patches(report, source, fake_runner, baseline_match_percent=97.5)
+
+    assert "static void helper(s8 value) {}" in seen_sources[0]
+    assert report.findings[0].actions[0].validation["status"] == "scored"
+    assert report.summary["validated_patch_candidate_count"] == 1
+
+
+def test_audit_reports_global_width_prototype_candidate_without_patch() -> None:
+    source = """
+void helper(int value);
+
+void caller_fn(int value)
+{
+    helper(value);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            ["/* 0000 */ extsb r3, r31", "/* 0004 */ bl helper"],
+            ["/* 0000 */ mr r3, r31", "/* 0004 */ bl helper"],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+    action = report.findings[0].actions[0]
+    assert action.kind == "global-prototype-candidate"
+    assert action.patch is None
+    assert action.candidate["blast_radius"] == "cross-translation-unit"
+    assert report.summary["source_lever_action_count"] == 1
+    assert report.summary["audit_only_unrebucketed"] == 0
+    assert report.summary["stop_condition"]["kind"] == "source-lever-audit"
+
+
+def test_audit_reports_duplicate_same_tu_declarations_without_patch() -> None:
+    source = """
+static void helper(int value);
+static void helper(int value) {}
+
+void caller_fn(int value)
+{
+    helper(value);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            ["/* 0000 */ extsb r3, r31", "/* 0004 */ bl helper"],
+            ["/* 0000 */ mr r3, r31", "/* 0004 */ bl helper"],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+    action = report.findings[0].actions[0]
+    assert action.kind == "same-tu-static-prototype-candidate"
+    assert action.patch is None
+    assert action.candidate["patch_status"] == "duplicate-visible-declarations"
+
+
+def test_audit_rebuckets_width_mismatch_without_visible_prototype() -> None:
+    source = """
+void caller_fn(int value)
+{
+    helper(value);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            ["/* 0000 */ extsb r3, r31", "/* 0004 */ bl helper"],
+            ["/* 0000 */ mr r3, r31", "/* 0004 */ bl helper"],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+    action = report.findings[0].actions[0]
+    assert action.rebucket["reason"] == "external-prototype-unavailable"
+    assert "width-prototype-candidate-missing" not in (
+        report.summary["rebucket_reason_counts"]
+    )
+
+
+def test_audit_rebuckets_variadic_presence_mismatch_tail() -> None:
+    source = """
+void helper(const char *fmt, ...);
+
+void caller_fn(int value)
+{
+    helper("%d", value);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            [
+                "/* 0000 */ mr r3, r31",
+                "/* 0004 */ mr r4, r30",
+                "/* 0008 */ bl helper",
+            ],
+            [
+                "/* 0000 */ mr r3, r31",
+                "/* 0008 */ bl helper",
+            ],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+    action = report.findings[0].actions[0]
+    assert action.rebucket["reason"] == "variadic-prototype-tail"
+
+
+def test_audit_rebuckets_surplus_abi_prep_as_source_call_arity_mismatch() -> None:
+    source = """
+void helper(int first);
+
+void caller_fn(int first, int second)
+{
+    helper(first);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            [
+                "/* 0000 */ mr r3, r31",
+                "/* 0004 */ mr r4, r30",
+                "/* 0008 */ bl helper",
+            ],
+            [
+                "/* 0000 */ mr r3, r31",
+                "/* 0008 */ bl helper",
+            ],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+    assert report.findings[0].kind == "argument-register-presence-mismatch"
+    assert report.findings[0].arg_index == 1
+    assert report.findings[0].actions[0].rebucket["reason"] == (
+        "source-call-arity-mismatch"
+    )
+
+
+def test_audit_overall_ordinal_prototype_candidate_never_patches() -> None:
+    source = """
+static void source_helper(int value) {}
+
+void caller_fn(int first, int second)
+{
+    first_helper(first);
+    source_helper(second);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            [
+                "/* 0000 */ mr r3, r31",
+                "/* 0004 */ bl first_helper",
+                "/* 0008 */ extsb r3, r30",
+                "/* 000C */ bl external_helper",
+            ],
+            [
+                "/* 0000 */ mr r3, r31",
+                "/* 0004 */ bl first_helper",
+                "/* 0008 */ mr r3, r30",
+                "/* 000C */ bl external_helper",
+            ],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+    action = report.findings[0].actions[0]
+    assert action.candidate["localization_kind"] == "overall-ordinal"
+    assert action.patch is None
+
+
+def test_audit_clrlwi_width_candidate_is_unsupported_not_signed_patch() -> None:
+    source = """
+static void helper(int value) {}
+
+void caller_fn(int value)
+{
+    helper(value);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            ["/* 0000 */ clrlwi r3, r31, 24", "/* 0004 */ bl helper"],
+            ["/* 0000 */ mr r3, r31", "/* 0004 */ bl helper"],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+
+    action = report.findings[0].actions[0]
+    assert action.kind == "same-tu-static-prototype-candidate"
+    assert action.patch is None
+    assert action.candidate["proposed_type"] is None
+    assert action.candidate["patch_status"] == "unsupported-type-shape"
+
+
+def test_audit_presence_mismatch_does_not_patch_gpr_alias_type() -> None:
+    source = """
+static void helper(int first, int second) {}
+
+void caller_fn(int first, int second)
+{
+    helper(first, second);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            [
+                "/* 0000 */ mr r3, r31",
+                "/* 0004 */ mr r4, r30",
+                "/* 0008 */ bl helper",
+            ],
+            [
+                "/* 0000 */ mr r3, r31",
+                "/* 0008 */ bl helper",
+            ],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+
+    finding = report.findings[0]
+    assert finding.kind == "argument-register-presence-mismatch"
+    assert finding.arg_index == 1
+    action = finding.actions[0]
+    assert action.kind == "same-tu-static-prototype-candidate"
+    assert action.patch is None
+    assert action.candidate["current_type"] == "int"
+    assert action.candidate["proposed_type"] == "s32"
+    assert action.candidate["patch_status"] == "already-matches"
+
+
+def test_audit_unsupported_parameter_shape_reports_patch_status() -> None:
+    source = """
+static void helper(int values[2]) {}
+
+void caller_fn(int *values)
+{
+    helper(values);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            ["/* 0000 */ extsb r3, r31", "/* 0004 */ bl helper"],
+            ["/* 0000 */ mr r3, r31", "/* 0004 */ bl helper"],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+    action = report.findings[0].actions[0]
+    assert action.patch is None
+    assert action.candidate["patch_status"] == "unsupported-parameter-shape"
 
 
 def test_audit_reports_unmatched_call_target_shape() -> None:

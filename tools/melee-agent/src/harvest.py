@@ -18,6 +18,8 @@ from src.mwcc_debug import cache as pcdump_cache
 from src.mwcc_debug.source_patch import extract_function, replace_function
 
 SCHEMA_VERSION = 1
+TAXONOMY_RUN_STATUS_FILENAME = "run-status.json"
+TAXONOMY_RECORDS_FILENAME = "taxonomy.records.jsonl"
 VALIDATED_MATCH_PERCENT = 100.0
 VALIDATED_EPSILON = 1e-6
 
@@ -320,6 +322,36 @@ def _request_from_queue_row(
     )
 
 
+def assert_taxonomy_queue_is_completed(queue_path: Path) -> None:
+    if queue_path.parent.name != "queues":
+        return
+    taxonomy_root = queue_path.parent.parent
+    status_path = taxonomy_root / TAXONOMY_RUN_STATUS_FILENAME
+    records_path = taxonomy_root / TAXONOMY_RECORDS_FILENAME
+    is_taxonomy_artifact_root = records_path.exists()
+    if not status_path.exists():
+        if is_taxonomy_artifact_root:
+            raise ValueError(
+                f"taxonomy inventory status is missing for {taxonomy_root}; "
+                "rerun tools/function_taxonomy_inventory.py before using queues"
+            )
+        return
+    if not is_taxonomy_artifact_root:
+        return
+    try:
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"taxonomy inventory status is unreadable for {taxonomy_root}: {exc}"
+        ) from exc
+    if status.get("status") != "completed":
+        detail = status.get("error") or status.get("started_at") or "unknown state"
+        raise ValueError(
+            f"taxonomy inventory has not completed for {taxonomy_root} "
+            f"(status={status.get('status')!r}, detail={detail})"
+        )
+
+
 def load_queue_rows(
     queue_path: Path,
     *,
@@ -335,6 +367,7 @@ def load_queue_rows(
 ) -> list[HarvestRequest]:
     rows: list[HarvestRequest] = []
     facts_by_function = target_map or {}
+    assert_taxonomy_queue_is_completed(queue_path)
     with queue_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
         _validate_filter_fields(filters, reader.fieldnames)
@@ -422,6 +455,7 @@ def preview_harvest_queue(
     matching_rows: list[dict[str, str]] = []
     sample: list[dict[str, Any]] = []
 
+    assert_taxonomy_queue_is_completed(queue_path)
     with queue_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
         _validate_filter_fields(filters, reader.fieldnames)

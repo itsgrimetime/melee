@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import argparse
 import csv
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
+from datetime import UTC, datetime
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -27,6 +29,8 @@ DEFAULT_REPORT = REPO_ROOT / "build" / "GALE01" / "report.json"
 DEFAULT_OUTPUT = REPO_ROOT / "build" / "function-taxonomy"
 DEFAULT_CHECKDIFF_TIMEOUT = 120.0
 DEFAULT_DECL_ORDER_TIMEOUT = 180.0
+RUN_STATUS_FILENAME = "run-status.json"
+RUN_STATUS_SCHEMA_VERSION = 1
 _DECL_ORDER_EVAL_LOCK = threading.Lock()
 
 BUCKET_ORDER = [
@@ -1091,6 +1095,82 @@ def write_placeholder_auxiliary_files(output_dir: Path) -> None:
         (queues / name).write_text("match_percent\tfunction\tfile_path\tobject_status\n", encoding="utf-8")
 
 
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(tmp, path)
+
+
+def _base_run_status(
+    *,
+    report_path: Path,
+    output_dir: Path,
+    candidates: list[FunctionCandidate],
+    attempted: list[FunctionCandidate],
+    started_at: str,
+) -> dict[str, Any]:
+    return {
+        "schema_version": RUN_STATUS_SCHEMA_VERSION,
+        "status": "running",
+        "started_at": started_at,
+        "report_path": str(report_path),
+        "output_dir": str(output_dir),
+        "report_non100_count": len(candidates),
+        "attempted_count": len(attempted),
+    }
+
+
+def _initial_run_status(
+    *,
+    report_path: Path,
+    output_dir: Path,
+    started_at: str,
+) -> dict[str, Any]:
+    return {
+        "schema_version": RUN_STATUS_SCHEMA_VERSION,
+        "status": "running",
+        "started_at": started_at,
+        "report_path": str(report_path),
+        "output_dir": str(output_dir),
+        "report_non100_count": 0,
+        "attempted_count": 0,
+    }
+
+
+def write_run_status(output_dir: Path, payload: dict[str, Any]) -> None:
+    write_json_atomic(output_dir / RUN_STATUS_FILENAME, payload)
+
+
+def _mark_run_failed(
+    output_dir: Path,
+    run_status: dict[str, Any],
+    exc: BaseException,
+    *,
+    records: list[dict[str, Any]] | None = None,
+    errors: list[dict[str, Any]] | None = None,
+) -> None:
+    failed_status = dict(run_status)
+    failed_status.update(
+        {
+            "status": "failed",
+            "failed_at": _utc_now_iso(),
+            "error": str(exc) or exc.__class__.__name__,
+            "error_type": exc.__class__.__name__,
+            "classified_count": len(records or []),
+            "error_count": len(errors or []),
+        }
+    )
+    write_run_status(output_dir, failed_status)
+
+
 def generate_inventory(
     report_path: Path | str = DEFAULT_REPORT,
     output_dir: Path | str = DEFAULT_OUTPUT,
@@ -1098,53 +1178,148 @@ def generate_inventory(
     checkdiff_runner: CheckdiffRunner = default_checkdiff_runner,
     decl_order_evaluator: DeclOrderEvaluator | None = default_decl_order_evaluator,
     frame_report_runner: FrameReportRunner | None = default_frame_report_runner,
+    cast_audit_runner: CastAuditRunner | None = default_cast_audit_runner,
     workers: int = 4,
     limit: int | None = None,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> InventoryResult:
     report_path = Path(report_path).resolve()
     output_dir = Path(output_dir).resolve()
-    candidates = load_report_candidates(report_path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "queues").mkdir(exist_ok=True)
+    started_at = _utc_now_iso()
+    run_status = _initial_run_status(
+        report_path=report_path,
+        output_dir=output_dir,
+        started_at=started_at,
+    )
+    write_run_status(output_dir, run_status)
+    try:
+        candidates = load_report_candidates(report_path)
+    except BaseException as exc:
+        _mark_run_failed(output_dir, run_status, exc)
+        raise
     attempted = candidates[:limit] if limit is not None else candidates
+
+    run_status = _base_run_status(
+        report_path=report_path,
+        output_dir=output_dir,
+        candidates=candidates,
+        attempted=attempted,
+        started_at=started_at,
+    )
+    write_run_status(output_dir, run_status)
 
     records: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
-        for record, error in executor.map(
-            lambda candidate: classify_candidate(
+    try:
+        max_workers = max(1, workers)
+        pending: dict[
+            Future[tuple[dict[str, Any] | None, dict[str, Any] | None]],
+            FunctionCandidate,
+        ] = {}
+        candidate_iter = iter(attempted)
+
+        def emit_progress(event: dict[str, Any]) -> None:
+            if progress_callback is not None:
+                progress_callback(event)
+
+        def submit_next(executor: ThreadPoolExecutor) -> None:
+            try:
+                candidate = next(candidate_iter)
+            except StopIteration:
+                return
+            future = executor.submit(
+                classify_candidate,
                 candidate,
                 checkdiff_runner,
                 decl_order_evaluator,
                 frame_report_runner,
-            ),
-            attempted,
-        ):
-            if record is not None:
-                records.append(record)
-            if error is not None:
-                errors.append(error)
+                cast_audit_runner,
+            )
+            pending[future] = candidate
+            emit_progress({"event": "candidate_submitted", "function": candidate.function})
 
-    records.sort(key=lambda row: (-parse_float(row.get("match_percent")), row.get("function", "")))
-    errors.sort(key=lambda row: row.get("function", ""))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for _ in range(min(max_workers, len(attempted))):
+                submit_next(executor)
+            while pending:
+                done, _not_done = wait(pending, return_when=FIRST_COMPLETED)
+                for future in done:
+                    candidate = pending.pop(future)
+                    try:
+                        record, error = future.result()
+                    except BaseException as exc:
+                        _mark_run_failed(
+                            output_dir,
+                            run_status,
+                            exc,
+                            records=records,
+                            errors=errors,
+                        )
+                        for remaining in pending:
+                            remaining.cancel()
+                        raise
+                    if record is not None:
+                        records.append(record)
+                    if error is not None:
+                        errors.append(error)
+                    emit_progress(
+                        {
+                            "event": "candidate_done",
+                            "function": candidate.function,
+                            "classified_count": len(records),
+                            "error_count": len(errors),
+                        }
+                    )
+                    submit_next(executor)
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    queues = output_dir / "queues"
-    queues.mkdir(exist_ok=True)
+        records.sort(key=lambda row: (-parse_float(row.get("match_percent")), row.get("function", "")))
+        errors.sort(key=lambda row: row.get("function", ""))
 
-    write_jsonl(output_dir / "taxonomy.records.jsonl", records)
-    write_csv(output_dir / "taxonomy.records.csv", records)
-    write_jsonl(output_dir / "checkdiff-errors.jsonl", errors)
-    write_placeholder_auxiliary_files(output_dir)
+        queues = output_dir / "queues"
 
-    for bucket in BUCKET_ORDER:
-        bucket_rows = [row for row in records if row.get("work_bucket") == bucket]
-        write_queue(queues / f"{bucket}.tsv", bucket_rows)
-    write_error_queue(queues / "checkdiff-errors.tsv", errors)
-    write_summary(
-        output_dir / "summary.md",
-        report_non100_count=len(candidates),
-        records=records,
-        errors=errors,
-    )
+        write_jsonl(output_dir / "taxonomy.records.jsonl", records)
+        write_csv(output_dir / "taxonomy.records.csv", records)
+        write_jsonl(output_dir / "checkdiff-errors.jsonl", errors)
+        write_placeholder_auxiliary_files(output_dir)
+
+        for bucket in BUCKET_ORDER:
+            bucket_rows = [row for row in records if row.get("work_bucket") == bucket]
+            write_queue(queues / f"{bucket}.tsv", bucket_rows)
+        write_error_queue(queues / "checkdiff-errors.tsv", errors)
+        write_summary(
+            output_dir / "summary.md",
+            report_non100_count=len(candidates),
+            records=records,
+            errors=errors,
+        )
+        completed_status = dict(run_status)
+        completed_status.update(
+            {
+                "status": "completed",
+                "completed_at": _utc_now_iso(),
+                "classified_count": len(records),
+                "error_count": len(errors),
+            }
+        )
+        write_run_status(output_dir, completed_status)
+    except BaseException as exc:
+        current_status = {}
+        status_path = output_dir / RUN_STATUS_FILENAME
+        try:
+            current_status = json.loads(status_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        if current_status.get("status") != "failed":
+            _mark_run_failed(
+                output_dir,
+                run_status,
+                exc,
+                records=records,
+                errors=errors,
+            )
+        raise
 
     return InventoryResult(
         report_non100_count=len(candidates),
