@@ -1397,13 +1397,16 @@ HSD_GObj* grKongo_801D5340(s32 gobj_id)
 void fn_801D542C(HSD_GObj* arg0)
 {
     Ground* temp_r31;
+    f32 temp_f1;
     f32 temp_f2;
+    f32 temp_f0;
 
     temp_r31 = arg0->user_data;
     mpJointSetCb1(4, temp_r31, fn_801D7700);
+    temp_f1 = HSD_Randf();
     temp_f2 = grKg_804D6980->unk0;
-    temp_r31->gv.kongo.xE4 =
-        (s16) (((grKg_804D6980->unk4 - temp_f2) * HSD_Randf()) + temp_f2);
+    temp_f0 = grKg_804D6980->unk4 - temp_f2;
+    temp_r31->gv.kongo.xE4 = (s16) ((temp_f0 * temp_f1) + temp_f2);
 }
 
 /// #grKongo_801D5490
