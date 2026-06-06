@@ -768,20 +768,12 @@ def _probe_repeated_helper_result_reuse(
             )
             continue
         line_start = _line_start(source_text, first.start)
-        if (
-            _line_is_case_or_default_label(source_text, line_start)
-            or _line_follows_case_or_default_label(source_text, line_start)
-        ):
-            first_blocker = first_blocker or (
-                "case-arm-declaration-unsafe",
-                "helper result declaration would land directly under a case label",
-            )
-            continue
-        if not _line_has_supported_reuse_anchor_shape(source_text, line_start):
-            first_blocker = first_blocker or (
-                "unsupported-call-site-shape",
-                "repeated helper reuse anchor is not a supported simple statement",
-            )
+        occurrence_blocker = _repeated_helper_occurrence_blocker(
+            source_text,
+            occurrences,
+        )
+        if occurrence_blocker is not None:
+            first_blocker = first_blocker or occurrence_blocker
             continue
         affected_end = _line_end(source_text, occurrences[-1].end)
         if _region_has_preprocessor_directive(source_text[line_start:affected_end]):
@@ -1086,6 +1078,8 @@ def _helper_expression_fragment_is_simple(expr: str) -> bool:
         return False
     if _contains_comma_operator(masked):
         return False
+    if _contains_indirect_call_shape(masked):
+        return False
     if "&" in masked:
         return False
     if re.search(r"\b[A-Za-z_]\w*\s*\(", masked):
@@ -1364,6 +1358,64 @@ def _line_contains_case_or_default_label(text: str) -> bool:
     ) is not None
 
 
+def _repeated_helper_occurrence_blocker(
+    source: str,
+    occurrences: list[_SimpleHelperCall],
+) -> tuple[str, str] | None:
+    for idx, call in enumerate(occurrences):
+        line_start = _line_start(source, call.start)
+        if (
+            _line_is_case_or_default_label(source, line_start)
+            or _line_follows_case_or_default_label(source, line_start)
+        ):
+            return (
+                "case-arm-declaration-unsafe",
+                "helper result declaration would land directly under a case label",
+            )
+        if _line_has_supported_reuse_anchor_shape(source, line_start):
+            continue
+        if _condition_occurrence_has_companion_in_body(
+            source,
+            call,
+            occurrences[idx + 1:],
+        ):
+            continue
+        return (
+            "unsupported-call-site-shape",
+            "repeated helper reuse occurrence is not a supported simple statement",
+        )
+    return None
+
+
+def _condition_occurrence_has_companion_in_body(
+    source: str,
+    call: _SimpleHelperCall,
+    later_occurrences: list[_SimpleHelperCall],
+) -> bool:
+    line_start = _line_start(source, call.start)
+    line_end = source.find("\n", line_start)
+    if line_end < 0:
+        line_end = len(source)
+    line = source[line_start:line_end]
+    if re.match(r"^\s*if\s*\(", line) is None:
+        return False
+    open_index = source.find("(", line_start, line_end)
+    if open_index < 0:
+        return False
+    close_index = _find_matching_paren(source, open_index)
+    if close_index is None:
+        return False
+    cursor = close_index + 1
+    while cursor < len(source) and source[cursor].isspace():
+        cursor += 1
+    if cursor >= len(source) or source[cursor] != "{":
+        return False
+    body_end = _find_matching_brace(source, cursor)
+    if body_end is None:
+        return False
+    return any(cursor < other.start < body_end for other in later_occurrences)
+
+
 def _inline_helper_call_requires_outer_parens(
     source: str,
     call_start: int,
@@ -1393,6 +1445,13 @@ def _contains_comma_operator(expr: str) -> bool:
             break
         stripped = stripped[1:-1].strip()
     return len(_split_top_level_delimited(stripped, ",")) > 1
+
+
+def _contains_indirect_call_shape(expr: str) -> bool:
+    return (
+        re.search(r"\([^()]*\)\s*\(", expr) is not None
+        or re.search(r"\(\s*\([^()]+\)\s*\)\s*\(", expr) is not None
+    )
 
 
 def _brace_scope_stack_for_offset(
