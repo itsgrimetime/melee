@@ -3634,6 +3634,17 @@ def test_frame_harness_without_100_candidate_records_no_validated_candidate(
 
     assert ledger["results"][0]["status"] == "no_match"
     assert ledger["results"][0]["blocker"] == "no-validated-candidate"
+    assert ledger["results"][0]["details"] == {
+        "candidate_count": 1,
+        "scored_candidate_count": 1,
+        "unscored_candidate_count": 0,
+        "best_candidate": {
+            "status": "ok",
+            "final_match_percent": 99.9,
+            "source_path": str(tmp_path / "candidate.c"),
+            "score_percent": 99.9,
+        },
+    }
 
 
 def test_harvest_propagates_indexed_search_stable_blocker(tmp_path: Path) -> None:

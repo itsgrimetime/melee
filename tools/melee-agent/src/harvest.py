@@ -768,6 +768,83 @@ def best_validated_candidate(payload: Any) -> dict[str, Any] | None:
     return None
 
 
+def _candidate_delta(candidate: dict[str, Any]) -> float | None:
+    for key in ("delta_match_percent", "delta", "match_delta"):
+        delta = _float_or_none(candidate.get(key))
+        if delta is not None:
+            return delta
+    objective = candidate.get("objective")
+    if isinstance(objective, dict):
+        for key in ("delta_match_percent", "delta", "match_delta"):
+            delta = _float_or_none(objective.get(key))
+            if delta is not None:
+                return delta
+    return None
+
+
+def _candidate_detail(candidate: dict[str, Any]) -> dict[str, Any]:
+    detail: dict[str, Any] = {}
+    for key in (
+        "label",
+        "operator",
+        "status",
+        "reason",
+        "blocker",
+        "final_match_percent",
+        "match_percent",
+        "match_pct",
+        "score",
+        "match_percent_error",
+        "error",
+    ):
+        value = candidate.get(key)
+        if value is not None:
+            detail[key] = value
+    source_path = _candidate_source_path_any(candidate)
+    if source_path is not None:
+        detail["source_path"] = source_path
+    score = extract_candidate_score(candidate)
+    if score is not None:
+        detail["score_percent"] = score
+    delta = _candidate_delta(candidate)
+    if delta is not None:
+        detail["delta_match_percent"] = delta
+    return detail
+
+
+def best_scored_candidate(payload: Any) -> dict[str, Any] | None:
+    scored = [
+        candidate
+        for candidate in _iter_candidates(payload)
+        if extract_candidate_score(candidate) is not None
+    ]
+    if not scored:
+        return None
+    return max(
+        scored,
+        key=lambda candidate: extract_candidate_score(candidate) or 0.0,
+    )
+
+
+def no_validated_candidate_details(payload: Any) -> dict[str, Any]:
+    candidates = _iter_candidates(payload)
+    details: dict[str, Any] = {"candidate_count": len(candidates)}
+    scored_count = sum(
+        1
+        for candidate in candidates
+        if extract_candidate_score(candidate) is not None
+    )
+    if candidates:
+        details["scored_candidate_count"] = scored_count
+        details["unscored_candidate_count"] = len(candidates) - scored_count
+    best_candidate = best_scored_candidate(payload)
+    if best_candidate is not None:
+        details["best_candidate"] = _candidate_detail(best_candidate)
+    elif candidates:
+        details["unscored_candidate"] = _candidate_detail(candidates[0])
+    return details
+
+
 def _name_magic_source_stop_kind(payload: Any) -> str | None:
     if not isinstance(payload, dict):
         return None
@@ -2938,7 +3015,7 @@ def run_composed_harvest_request(
                 reason="retained source candidate is not a .c file",
                 command=command,
                 candidate_path=unsupported_candidate_path,
-                details={"candidate_count": len(_iter_candidates(payload))},
+                details=no_validated_candidate_details(payload),
             )
             layers.append(layer)
             return _compose_result(
@@ -3000,7 +3077,7 @@ def run_composed_harvest_request(
                     blocker=blocker,
                     reason=reason,
                     command=command,
-                    details={"candidate_count": len(_iter_candidates(payload))},
+                    details=no_validated_candidate_details(payload),
                 )
             elif last_failed_layer is not None:
                 layer = last_failed_layer
@@ -3012,7 +3089,7 @@ def run_composed_harvest_request(
                     blocker=BLOCKER_NO_VALIDATED_CANDIDATE,
                     reason="no validated 100% candidate was found",
                     command=command,
-                    details={"candidate_count": len(_iter_candidates(payload))},
+                    details=no_validated_candidate_details(payload),
                 )
             layers.append(layer)
             return _compose_result(
@@ -3185,7 +3262,7 @@ def run_harvest_request(
                 reason="retained source candidate is not a .c file",
                 command=command,
                 candidate_path=unsupported_candidate_path,
-                details={"candidate_count": len(_iter_candidates(harness_json))},
+                details=no_validated_candidate_details(harness_json),
             )
         harness_blocker = _harness_blocker_result(harness_json)
         if harness_blocker is not None:
@@ -3197,7 +3274,7 @@ def run_harvest_request(
                 blocker=blocker,
                 reason=reason,
                 command=command,
-                details={"candidate_count": len(_iter_candidates(harness_json))},
+                details=no_validated_candidate_details(harness_json),
             )
         return _base_result(
             request,
@@ -3206,7 +3283,7 @@ def run_harvest_request(
             blocker=BLOCKER_NO_VALIDATED_CANDIDATE,
             reason="no validated 100% candidate was found",
             command=command,
-            details={"candidate_count": len(_iter_candidates(harness_json))},
+            details=no_validated_candidate_details(harness_json),
         )
 
     final_match_percent = extract_candidate_score(candidate)
