@@ -108,35 +108,77 @@ def _delta(value: float | None, baseline: float | None) -> float | None:
 
 
 def rank_structure_variants(variants: list[StructureVariant]) -> list[StructureVariant]:
-    ranked = sorted(
+    ranked = _rank_source_lifetime_runs(sorted(
         variants,
-        key=lambda variant: (
-            0 if variant.score_percent() >= 100.0 and variant.status == "ok" else 1,
-            _source_lifetime_shape_rank(variant),
-            -variant.score_percent(),
-            -(variant.delta if variant.delta is not None else -9999.0),
-            0 if variant.status == "ok" else 1,
-            1 if variant.unscored_reason == SCORE_CAP_UNSCORED_REASON else 0,
-            variant.axis,
-            variant.operator,
-            variant.label,
-        ),
-    )
+        key=_structure_variant_base_sort_key,
+    ))
     for index, variant in enumerate(ranked, 1):
         variant.rank = index
     return ranked
 
 
+def _exact_match_bucket(variant: StructureVariant) -> int:
+    return 0 if variant.score_percent() >= 100.0 and variant.status == "ok" else 1
+
+
+def _structure_variant_base_sort_key(variant: StructureVariant) -> tuple[Any, ...]:
+    return (
+        _exact_match_bucket(variant),
+        *_structure_variant_common_sort_key(variant),
+    )
+
+
+def _structure_variant_common_sort_key(variant: StructureVariant) -> tuple[Any, ...]:
+    return (
+        -variant.score_percent(),
+        -(variant.delta if variant.delta is not None else -9999.0),
+        0 if variant.status == "ok" else 1,
+        1 if variant.unscored_reason == SCORE_CAP_UNSCORED_REASON else 0,
+        variant.axis,
+        variant.operator,
+        variant.label,
+    )
+
+
+def _rank_source_lifetime_runs(
+    variants: list[StructureVariant],
+) -> list[StructureVariant]:
+    ranked: list[StructureVariant] = []
+    index = 0
+    while index < len(variants):
+        variant = variants[index]
+        if variant.axis != "source-lifetime":
+            ranked.append(variant)
+            index += 1
+            continue
+        run_start = index
+        while index < len(variants) and variants[index].axis == "source-lifetime":
+            index += 1
+        ranked.extend(
+            sorted(
+                variants[run_start:index],
+                key=_source_lifetime_in_axis_sort_key,
+            )
+        )
+    return ranked
+
+
+def _source_lifetime_in_axis_sort_key(variant: StructureVariant) -> tuple[Any, ...]:
+    return (
+        _exact_match_bucket(variant),
+        _source_lifetime_shape_rank(variant),
+        *_structure_variant_common_sort_key(variant),
+    )
+
+
 def _source_lifetime_shape_rank(variant: StructureVariant) -> int:
     if variant.axis != "source-lifetime":
         return 0
-    if variant.unscored_reason == SCORE_CAP_UNSCORED_REASON:
-        return 4
-    if variant.status == "unscored" or variant.compile_status not in (None, "ok"):
-        return 3
     if variant.status != "ok":
         return 4
-    if variant.unscored_reason:
+    if variant.unscored_reason == SCORE_CAP_UNSCORED_REASON:
+        return 4
+    if variant.unscored_reason or variant.compile_status not in (None, "ok"):
         return 3
     structural = variant.metadata.get("structural")
     if not isinstance(structural, dict):

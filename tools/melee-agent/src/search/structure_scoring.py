@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -330,6 +331,12 @@ def _extract_structural_metrics(payload: dict[str, Any]) -> dict[str, Any]:
     for key in ("opcode_similarity", "line_delta", "hunk_count"):
         if key in source:
             metrics[key] = source[key]
+    current_asm = source.get("current_asm")
+    if current_asm is None:
+        current_asm = payload.get("current_asm")
+    opcode_sequence = _opcode_sequence_from_checkdiff_asm(current_asm)
+    if opcode_sequence is not None:
+        metrics["_opcode_sequence"] = opcode_sequence
     return metrics
 
 
@@ -337,8 +344,21 @@ def _structural_with_deltas(
     baseline: dict[str, Any],
     candidate: dict[str, Any],
 ) -> dict[str, Any]:
-    structural = dict(candidate)
-    if "opcode_similarity" in candidate:
+    structural = {
+        key: value
+        for key, value in candidate.items()
+        if not str(key).startswith("_")
+    }
+    baseline_opcode_sequence = baseline.get("_opcode_sequence")
+    candidate_opcode_sequence = candidate.get("_opcode_sequence")
+    if (
+        isinstance(baseline_opcode_sequence, tuple)
+        and isinstance(candidate_opcode_sequence, tuple)
+    ):
+        structural["opcode_shape_preserved"] = (
+            baseline_opcode_sequence == candidate_opcode_sequence
+        )
+    elif "opcode_similarity" in candidate:
         try:
             structural["opcode_shape_preserved"] = (
                 float(candidate["opcode_similarity"]) >= 1.0
@@ -351,6 +371,46 @@ def _structural_with_deltas(
         delta_key = f"{key}_delta"
         structural[delta_key] = _numeric_delta(candidate[key], baseline[key])
     return structural
+
+
+def _opcode_sequence_from_checkdiff_asm(value: Any) -> tuple[str, ...] | None:
+    if isinstance(value, str):
+        lines = value.splitlines()
+    elif isinstance(value, list) and all(isinstance(line, str) for line in value):
+        lines = value
+    else:
+        return None
+    opcodes = [
+        opcode
+        for line in lines
+        if (opcode := _opcode_from_checkdiff_asm_line(line)) is not None
+    ]
+    return tuple(opcodes) if opcodes else None
+
+
+def _opcode_from_checkdiff_asm_line(line: str) -> str | None:
+    text = line.strip()
+    if not text:
+        return None
+    if re.search(r"\bR_PPC_[A-Za-z0-9_]+\b", text):
+        return None
+    if "*/" in text:
+        text = text.split("*/", 1)[1].strip()
+    if "\t" in text:
+        text = text.rsplit("\t", 1)[1].strip()
+    elif ":" in text:
+        text = text.split(":", 1)[1].strip()
+    tokens = text.split()
+    while tokens and re.fullmatch(r"[0-9A-Fa-f]{2}", tokens[0]):
+        tokens.pop(0)
+    text = " ".join(tokens)
+    match = re.match(r"(?P<opcode>[A-Za-z_.][A-Za-z0-9_.+-]*)\b", text)
+    if match is None:
+        return None
+    opcode = match.group("opcode")
+    if opcode.endswith(":"):
+        return None
+    return opcode
 
 
 def _numeric_delta(value: Any, baseline: Any) -> float | int:

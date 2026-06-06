@@ -83,6 +83,83 @@ def test_source_lifetime_ranking_prefers_shape_preserved_candidate() -> None:
     assert [variant.label for variant in ranked] == ["shape-preserved", "shape-break"]
 
 
+def test_source_lifetime_ranking_keeps_unscored_behind_ok_missing_structural() -> None:
+    ranked = rank_structure_variants([
+        StructureVariant(
+            axis="source-lifetime",
+            operator="helper-result-dematerialize",
+            label="unscored-high-percent",
+            status="unscored",
+            final_match_percent=99.0,
+            delta=9.0,
+            compile_status="not-run",
+            unscored_reason="scoring disabled",
+        ),
+        StructureVariant(
+            axis="source-lifetime",
+            operator="repeated-helper-result-reuse",
+            label="ok-missing-structural",
+            status="ok",
+            final_match_percent=90.0,
+            delta=1.0,
+            compile_status="ok",
+        ),
+    ])
+
+    assert [variant.label for variant in ranked] == [
+        "ok-missing-structural",
+        "unscored-high-percent",
+    ]
+
+
+def test_source_lifetime_shape_rank_does_not_affect_other_axes() -> None:
+    ranked = rank_structure_variants([
+        StructureVariant(
+            axis="decl-order",
+            operator="decl-order-swap",
+            label="unrelated-low-unscored",
+            status="unscored",
+            final_match_percent=10.0,
+            delta=-80.0,
+        ),
+        StructureVariant(
+            axis="source-lifetime",
+            operator="helper-result-dematerialize",
+            label="source-lifetime-high-shape-break",
+            status="ok",
+            final_match_percent=99.0,
+            delta=9.0,
+            compile_status="ok",
+            metadata={"structural": {"opcode_shape_preserved": False}},
+        ),
+        StructureVariant(
+            axis="case-order",
+            operator="case-order-adjacent-swap",
+            label="unrelated-higher-percent",
+            status="ok",
+            final_match_percent=99.5,
+            delta=9.5,
+        ),
+        StructureVariant(
+            axis="source-lifetime",
+            operator="repeated-helper-result-reuse",
+            label="source-lifetime-shape-preserved",
+            status="ok",
+            final_match_percent=98.0,
+            delta=8.0,
+            compile_status="ok",
+            metadata={"structural": {"opcode_shape_preserved": True}},
+        ),
+    ])
+
+    assert [variant.label for variant in ranked] == [
+        "unrelated-higher-percent",
+        "source-lifetime-shape-preserved",
+        "source-lifetime-high-shape-break",
+        "unrelated-low-unscored",
+    ]
+
+
 def test_normalize_control_flow_payload_preserves_retained_sources() -> None:
     payload = {
         "function": "fn_80000000",

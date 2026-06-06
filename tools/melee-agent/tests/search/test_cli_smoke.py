@@ -118,6 +118,7 @@ def test_search_structure_help() -> None:
     assert result.exit_code == 0, result.output
     assert "--axis" in result.stdout
     assert "statement-order" in result.stdout
+    assert "source-lifetime" in result.stdout
     assert "--max-candidates" in result.stdout
     assert "--json" in result.stdout
 
