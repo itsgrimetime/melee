@@ -41,6 +41,49 @@ def test_enumerate_field_paths_thpfileinfo():
     assert "components[0].DCTableSelector" in paths
 
 
+def test_parse_c_fields_pointer_detection():
+    # The '*' may attach to the type, the name, or stand alone — all are pointers.
+    body = """
+        u8 plain;
+        HSD_GObj* attached_to_type;
+        HSD_GObj *attached_to_name;
+        HSD_GObj * standalone_star;
+        u8* ptr_array[3];
+    """
+    fields = {f["name"]: f for f in struct_layout._parse_c_fields(body)}
+    assert fields["plain"]["is_pointer"] is False
+    assert fields["attached_to_type"]["is_pointer"] is True
+    assert fields["attached_to_name"]["is_pointer"] is True
+    assert fields["standalone_star"]["is_pointer"] is True
+    # pointer types resolve to the underlying type name (no stray '*')
+    assert fields["attached_to_type"]["type"] == "HSD_GObj"
+    assert fields["attached_to_name"]["type"] == "HSD_GObj"
+    # pointer array is both a pointer and an array
+    assert fields["ptr_array"]["is_pointer"] is True
+    assert fields["ptr_array"]["is_array"] is True
+    assert fields["ptr_array"]["array_size"] == 3
+
+
+def test_parse_c_fields_hex_array_size():
+    # Hex array sizes must be parsed, not silently dropped (m-5).
+    body = "u8 data[0x10]; s32 vals[4];"
+    fields = {f["name"]: f for f in struct_layout._parse_c_fields(body)}
+    assert fields["data"]["array_size"] == 0x10
+    assert fields["vals"]["array_size"] == 4
+
+
+def test_enumerate_field_paths_pointer_to_struct_is_leaf():
+    # HSD_GObj is self-referential: `HSD_GObj* next` etc. A pointer-to-struct
+    # field must be emitted as a LEAF, never recursed into (I-1). Otherwise the
+    # probe would deref a null pointer: &(((HSD_GObj*)0)->next.classifier).
+    paths = struct_layout.enumerate_field_paths(REPO, "HSD_GObj")
+    assert "next" in paths  # pointer field present as a leaf
+    assert "prev" in paths
+    # no path dereferences through the pointer field
+    assert not any(p.startswith("next.") for p in paths)
+    assert not any(p.startswith("prev.") for p in paths)
+
+
 @_LIVE_GUARD
 @pytest.mark.slow
 def test_resolve_layout_thpfileinfo():
@@ -65,3 +108,13 @@ def test_verify_offsets():
     bad = struct_layout.verify_offsets(REPO, "THPFileInfo",
         "extern/dolphin/src/dolphin/thp/THPDec.c", {"RST": 0x999})
     assert bad is False
+
+
+@_LIVE_GUARD
+@pytest.mark.slow
+def test_verify_offsets_bogus_path_raises():
+    # A typo'd field path must RAISE (not silently return False as if it were
+    # an offset mismatch) — otherwise a correctness tool is silent-wrong (I-2).
+    with pytest.raises(ValueError):
+        struct_layout.verify_offsets(REPO, "THPFileInfo",
+            "extern/dolphin/src/dolphin/thp/THPDec.c", {"RSTt": 0x900})

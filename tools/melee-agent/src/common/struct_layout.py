@@ -72,9 +72,12 @@ def _find_struct_body(repo: Path, name: str) -> str | None:
 def _parse_c_fields(body: str) -> list[dict]:
     """Parse C struct fields from raw body text (no offset-comment required).
 
-    Returns a list of dicts with keys: name, type, is_array, array_size.
-    Skips fields whose names start with 'pad' or 'unk' (padding/unknown).
-    Handles simple declarations, array declarations, and pointer types.
+    Returns a list of dicts with keys: name, type, is_pointer, is_array,
+    array_size. Does NOT filter padding/unknown fields — callers that want
+    that filtering do it themselves (see enumerate_field_paths).
+
+    Handles simple declarations, array declarations, and pointer types
+    (the ``*`` may attach to the type, the name, or stand alone).
     """
     fields = []
     # Strip C comments
@@ -88,38 +91,40 @@ def _parse_c_fields(body: str) -> list[dict]:
         if not line:
             continue
 
-        # Match: optional leading pointer stars, optional const, type, optional stars/const, name, optional [N]
-        # Pattern: type_tokens... name [array_size]?
-        # Example lines:
+        # Example lines (pointer ``*`` may be anywhere before the name):
         #   u8 RST
-        #   u8* dLC[3]
+        #   u8* dLC[3]          -> pointer (array of pointers)
+        #   HSD_GObj* next      -> pointer
+        #   HSD_GObj *next      -> pointer (star on name)
         #   THPComponent components[3]
         #   u32 pad2[9]
-        #   u8 validHuffmanTabs
+        #   u8 data[0x10]       -> hex array size
 
-        # Simplify: find the last token as the name (with optional array suffix)
-        # Split by whitespace, last token = name (possibly name[N])
-        tokens = line.split()
+        # A pointer field has a '*' somewhere in the declaration.
+        is_pointer = "*" in line
+
+        # Drop all '*' so the name token is clean regardless of star placement,
+        # then the last whitespace token is the name (possibly with array suffix).
+        no_star = line.replace("*", " ")
+        tokens = no_star.split()
         if len(tokens) < 2:
             continue
 
-        # Last token is name possibly with array suffix
         raw_name = tokens[-1]
-        arr_match = re.match(r"^([a-zA-Z_][a-zA-Z0-9_]*)(?:\[(\d+)\])?$", raw_name)
+        arr_match = re.match(r"^([a-zA-Z_][a-zA-Z0-9_]*)(?:\[(0x[0-9a-fA-F]+|\d+)\])?$", raw_name)
         if not arr_match:
             continue
 
         field_name = arr_match.group(1)
-        array_size = int(arr_match.group(2)) if arr_match.group(2) else None
+        array_size = int(arr_match.group(2), 0) if arr_match.group(2) else None
 
-        # Type is everything except the last token, stripped of pointer stars from the end
-        type_str = " ".join(tokens[:-1]).rstrip("*").strip()
-        # Also strip pointer from name-start (e.g. "u8*" split oddly)
-        type_str = re.sub(r"\*+$", "", type_str).strip()
+        # Type is everything except the last token.
+        type_str = " ".join(tokens[:-1]).strip()
 
         fields.append({
             "name": field_name,
             "type": type_str,
+            "is_pointer": is_pointer,
             "is_array": array_size is not None,
             "array_size": array_size,
         })
@@ -149,9 +154,13 @@ def enumerate_field_paths(repo: Path, struct_name: str, _depth: int = 0) -> list
         arr = f["array_size"]
         elem_type = f["type"]
 
-        # Recurse into nested struct types (one level only)
+        # Recurse into nested struct types (one level only).
+        # NEVER recurse into pointer fields: a pointer-to-struct field is a
+        # single scalar slot; expanding its members would emit paths like
+        # `next.classifier` which the probe would dereference through a null
+        # pointer (`&(((S*)0)->next.classifier)`) — wrong / undefined.
         nested: list[str] = []
-        if _depth < 1 and _find_struct_body(repo, elem_type) is not None:
+        if _depth < 1 and not f["is_pointer"] and _find_struct_body(repo, elem_type) is not None:
             try:
                 nested = enumerate_field_paths(repo, elem_type, _depth + 1)
             except ValueError:
@@ -247,8 +256,15 @@ def _compile_probe(repo: Path, spec: CflagsSpec, src: str) -> bytes:
         cpath.write_text(src)
         cc = repo / "build/compilers" / spec.mw_version / "mwcceppc.exe"
         wibo = repo / "build/tools/wibo"
+        if not wibo.exists():
+            raise RuntimeError(f"wibo not found at {wibo} (build the tools first)")
+        if not cc.exists():
+            raise RuntimeError(f"mwcceppc.exe not found at {cc} (build the compilers first)")
         cmd = [str(wibo), str(cc), *_probe_cflags(spec), "-c", str(cpath), "-o", str(opath)]
-        r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True)
+        try:
+            r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True)
+        except FileNotFoundError as e:
+            raise RuntimeError(f"probe compile could not launch: {e}") from e
         if not opath.exists():
             raise RuntimeError(
                 f"probe compile failed:\n--- stdout ---\n{r.stdout}\n--- stderr ---\n{r.stderr}"
@@ -258,7 +274,8 @@ def _compile_probe(repo: Path, spec: CflagsSpec, src: str) -> bytes:
 
 def _read_symbol_u32s(obj: bytes, symbol: str) -> list[int]:
     """Read an array of u32 values from a named symbol in an ELF32 object file."""
-    assert obj[:4] == b"\x7fELF", "not an ELF file"
+    if obj[:4] != b"\x7fELF":
+        raise ValueError("not an ELF file (bad magic)")
     end = ">" if obj[5] == 2 else "<"  # ELFDATA2MSB = 2 → big-endian
     (e_shoff,) = struct.unpack(end + "I", obj[0x20:0x24])
     (e_shentsize,) = struct.unpack(end + "H", obj[0x2E:0x30])
@@ -349,21 +366,43 @@ def verify_offsets(
 ) -> bool:
     """Compile a static-assertion probe to verify expected field offsets.
 
-    Returns True if all expected offsets match, False if any do not.
+    Returns True if all expected offsets match, False if any offset is wrong.
     This is cheaper than resolve_layout() when you only need a pass/fail check
     on a known set of offsets.
+
+    Raises ValueError if any path in ``expect`` is not a real member of the
+    struct (e.g. a typo) — this is distinct from "offset wrong", so a typo'd
+    field is never silently reported as a mismatch.
     """
+    if not expect:
+        return True  # nothing to verify
     spec = parse_tu_cflags(repo, tu_src)
     incl = _tu_include_of(repo, struct_name)
+    header = (
+        f"#include {incl}\n"
+        f"#define OFF(f) ((unsigned long)&((({struct_name}*)0)->f))\n"
+    )
 
-    # Use typedef char[1] (ok) / typedef char[-1] (compiler error) trick.
-    body = f"#include {incl}\n"
-    body += f"#define OFF(f) ((unsigned long)&((({struct_name}*)0)->f))\n"
-    for i, (path, off) in enumerate(expect.items()):
-        body += f"typedef char _chk{i}[OFF({path}) == {off} ? 1 : -1];\n"
-
+    # Phase 1: validate every path is a real member (no assertion). If this
+    # fails, the paths themselves are bad — surface that as an error rather
+    # than masquerading as an offset mismatch.
+    probe_paths = header + "unsigned long __off[] = {\n"
+    probe_paths += ",\n".join(f"  OFF({p})" for p in expect)
+    probe_paths += "\n};\n"
     try:
-        _compile_probe(repo, spec, body)
+        _compile_probe(repo, spec, probe_paths)
+    except RuntimeError as e:
+        raise ValueError(
+            f"verify_offsets: one or more field paths are not valid members "
+            f"of {struct_name!r}: {sorted(expect)}\n{e}"
+        ) from e
+
+    # Phase 2: assertion form — typedef char[1] (ok) / char[-1] (compile error).
+    probe_assert = header
+    for i, (path, off) in enumerate(expect.items()):
+        probe_assert += f"typedef char _chk{i}[OFF({path}) == {off} ? 1 : -1];\n"
+    try:
+        _compile_probe(repo, spec, probe_assert)
         return True
     except RuntimeError:
         return False
