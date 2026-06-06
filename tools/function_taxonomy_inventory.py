@@ -1625,7 +1625,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         output_dir.mkdir(parents=True, exist_ok=True)
         write_run_status(output_dir, interrupted_status)
-        raise SystemExit(128 + signum)
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
 
     previous_handlers: dict[int, Any] = {}
     for signum in (signal.SIGINT, signal.SIGTERM):
