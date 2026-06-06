@@ -913,7 +913,7 @@ def _probe_helper_result_dematerialize(
             continue
         if not _helper_callee_supported_for_dematerialize(call.callee, source_text):
             first_blocker = first_blocker or (
-                "helper-return-type-unsafe",
+                "callee-not-supported-for-dematerialize",
                 f"helper `{call.callee}` is not supported for dematerialization",
             )
             continue
@@ -1044,6 +1044,12 @@ def _probe_simple_helper_inline_body(
                     "helper-body-too-complex",
                     f"helper `{call.callee}` body is not a simple pure expression",
                 )
+            continue
+        if _call_site_is_in_preprocessor_region(source_text, function, call.start, call.end):
+            first_blocker = first_blocker or (
+                "preprocessor-region-unsafe",
+                "helper inline call site is under conditional preprocessor control",
+            )
             continue
         if not _helper_call_args_are_simple(call.args_text):
             first_blocker = first_blocker or (
@@ -1225,6 +1231,8 @@ def _helper_reuse_temp_spec(
     body_expr = _simple_helper_expression_body(source, callee)
     if body_expr is None or not _helper_expression_is_pure(body_expr):
         return None
+    if _same_tu_helper_reads_through_param(source, callee, body_expr):
+        return None
     return_type = _function_return_type(source, callee)
     if _canonical_scalar_return_type(return_type) not in _REUSE_SCALAR_RETURN_TYPES:
         return None
@@ -1238,6 +1246,8 @@ def _helper_callee_supported_for_dematerialize(callee: str, source: str) -> bool
         return True
     body_expr = _simple_helper_expression_body(source, callee)
     if body_expr is None or not _helper_expression_is_pure(body_expr):
+        return False
+    if _same_tu_helper_reads_through_param(source, callee, body_expr):
         return False
     return_type = _function_return_type(source, callee)
     return _canonical_scalar_return_type(return_type) in _DEMATERIALIZE_SCALAR_RETURN_TYPES
@@ -1344,6 +1354,21 @@ def _simple_helper_parameter_names(source: str, function: str) -> tuple[str, ...
         if parsed is not None:
             names.append(parsed[0])
     return tuple(names)
+
+
+def _same_tu_helper_reads_through_param(
+    source: str,
+    function: str,
+    helper_expr: str | None = None,
+) -> bool:
+    expr = helper_expr if helper_expr is not None else _simple_helper_expression_body(source, function)
+    if expr is None:
+        return False
+    masked = _mask_c_non_code_text(expr)
+    for name in _simple_helper_parameter_names(source, function):
+        if re.search(rf"\b{re.escape(name)}\b\s*(?:->|\.|\[)", masked):
+            return True
+    return False
 
 
 def _scan_simple_helper_calls(
@@ -1481,6 +1506,24 @@ def _line_end(source: str, offset: int) -> int:
 def _line_indent_at(source: str, line_start: int) -> str:
     match = re.match(r"[ \t]*", source[line_start:])
     return "" if match is None else match.group(0)
+
+
+def _call_site_is_in_preprocessor_region(
+    source: str,
+    function: str,
+    call_start: int,
+    call_end: int,
+) -> bool:
+    span = _find_function_body_span(source, function)
+    if span is None:
+        return False
+    body_start, _body_end = span
+    stmt_start = _line_start(source, call_start)
+    stmt_end = _line_end(source, call_end)
+    return (
+        _region_has_preprocessor_directive(source[stmt_start:stmt_end])
+        or _offset_inside_preprocessor_region(source, body_start, stmt_start)
+    )
 
 
 def _line_is_case_or_default_label(source: str, line_start: int) -> bool:

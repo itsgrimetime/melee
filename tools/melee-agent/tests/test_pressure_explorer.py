@@ -270,16 +270,16 @@ def test_source_lifetime_repeated_helper_result_reuse_supports_seed_style_compar
 
 def test_source_lifetime_repeated_helper_result_reuse_supports_same_tu_scalar_helper() -> None:
     source = textwrap.dedent("""\
-        static inline s32 helper(CardState* state, s32 i)
+        static inline s32 helper(s32 x)
         {
-            return state->x4C[i] + 1;
+            return x + 1;
         }
 
-        s32 fn_80000000(CardState* state, s32 i)
+        s32 fn_80000000(s32 x)
         {
             s32 total = 0;
-            total += helper(state, i);
-            total = helper(state, i);
+            total += helper(x);
+            total = helper(x);
             return total;
         }
     """)
@@ -295,11 +295,43 @@ def test_source_lifetime_repeated_helper_result_reuse_supports_same_tu_scalar_he
         for probe in probes
         if probe.operator == "repeated-helper-result-reuse"
     )
-    assert "s32 ll_probe_helper_result_0 = helper(state, i);" in (
-        probe.source_text
-    )
+    assert "s32 ll_probe_helper_result_0 = helper(x);" in probe.source_text
     assert "total += ll_probe_helper_result_0;" in probe.source_text
     assert "total = ll_probe_helper_result_0;" in probe.source_text
+
+
+def test_source_lifetime_repeated_helper_result_reuse_rejects_same_tu_state_reader() -> None:
+    source = textwrap.dedent("""\
+        static inline s32 helper(State* state)
+        {
+            return state->x;
+        }
+
+        s32 fn_80000000(State* state)
+        {
+            s32 total = 0;
+            total += helper(state);
+            mutate(state);
+            total = helper(state);
+            return total;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "repeated-helper-result-reuse" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "repeated-helper-result-reuse"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] in {
+        "callee-not-supported-for-reuse",
+        "same-tu-helper-reads-mutable-param",
+    }
 
 
 def test_source_lifetime_repeated_helper_result_reuse_supports_same_tu_unsigned_helper() -> None:
@@ -533,6 +565,40 @@ def test_source_lifetime_helper_result_dematerialize_rejects_same_tu_pointer_hel
     }
 
 
+def test_source_lifetime_helper_result_dematerialize_rejects_same_tu_state_reader() -> None:
+    source = textwrap.dedent("""\
+        static inline s32 helper(State* state)
+        {
+            return state->x;
+        }
+
+        s32 fn_80000000(State* state)
+        {
+            s32 result;
+            result = helper(state);
+            mutate(state);
+            sink(result);
+            return result;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "helper-result-dematerialize" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "helper-result-dematerialize"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] in {
+        "callee-not-supported-for-dematerialize",
+        "same-tu-helper-reads-mutable-param",
+    }
+
+
 def test_source_lifetime_helper_result_dematerialize_supports_unsigned_int_helper() -> None:
     source = textwrap.dedent("""\
         static inline unsigned int helper(unsigned int x)
@@ -596,6 +662,35 @@ def test_source_lifetime_simple_helper_inline_body_probe() -> None:
     )
     assert "return state->x4C[i] + 1;" in probe.source_text
     assert "return helper(state, i);" not in probe.source_text
+
+
+def test_source_lifetime_simple_helper_inline_body_rejects_preprocessor_guarded_call_site() -> None:
+    source = textwrap.dedent("""\
+        static inline s32 helper(s32 x)
+        {
+            return x + 1;
+        }
+
+        s32 fn_80000000(s32 x)
+        {
+        #if FOO
+            return helper(x);
+        #endif
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "simple-helper-inline-body" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "simple-helper-inline-body"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] == "preprocessor-region-unsafe"
 
 
 def test_source_lifetime_rejects_unsafe_helper_call_rewrites() -> None:
