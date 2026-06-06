@@ -1559,7 +1559,14 @@ def _line_follows_plain_label(source: str, line_start: int) -> bool:
                 return False
             cursor = prev_start - 1
             continue
-        return _line_contains_plain_label(stripped)
+        if _line_is_comment_only(stripped):
+            if prev_start == 0:
+                return False
+            cursor = prev_start - 1
+            continue
+        if _line_contains_plain_label(stripped):
+            return not _plain_label_wraps_block(stripped)
+        return False
     return False
 
 
@@ -1651,9 +1658,26 @@ def _line_contains_plain_label(text: str) -> bool:
     ) is not None
 
 
+def _line_is_comment_only(text: str) -> bool:
+    stripped = text.strip()
+    return stripped.startswith("//") or (
+        stripped.startswith("/*") and stripped.endswith("*/")
+    )
+
+
 def _case_label_wraps_block(text: str) -> bool:
     stripped = text.strip()
     match = re.search(r"(case\b[^:\n]*:|default:)(?P<rest>.*)$", stripped)
+    if match is None:
+        return False
+    return "{" in match.group("rest")
+
+
+def _plain_label_wraps_block(text: str) -> bool:
+    stripped = text.strip()
+    if _line_contains_case_or_default_label(stripped):
+        return False
+    match = re.search(r"(?:^|[{};])\s*[A-Za-z_]\w*\s*:(?!:)(?P<rest>.*)$", stripped)
     if match is None:
         return False
     return "{" in match.group("rest")
