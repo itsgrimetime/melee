@@ -45,9 +45,8 @@ def test_aggregate_keeps_singletons_and_flags_ambiguous():
     assert rst["conflict"] is True              # RST has two expecteds
     assert nmcu["n_functions"] == 2 and nmcu["conflict"] is False
     assert nmcu["confidence"] == "high"         # >=2 agreeing
-    # singleton kept at lower confidence
-    single = [a for a in agg if a["field"] == "nMCU"][0]
-    assert single["expected"] == 0x8fc
+    # agreeing functions collapse to a single expected value
+    assert nmcu["expected"] == 0x8fc
 
 
 def test_aggregate_singleton_confidence_low():
@@ -77,6 +76,38 @@ def test_aggregate_sorted_by_current():
 def test_aggregate_empty():
     from src.common import struct_verify as sv
     assert sv.aggregate([]) == []
+
+
+def test_aggregate_flags_ambiguous_when_ref_field_differs():
+    from src.common import struct_verify as sv
+    findings = [
+        # ambiguous: cur_disp maps to "predDC" but ref_disp maps to a DIFFERENT
+        # known field "nextField" -> could be a deliberate different-field access
+        {"function": "f1", "field": "predDC", "current": 0x100, "expected": 0x110,
+         "ref_field": "nextField"},
+        # normal: ref_field is None -> not ambiguous
+        {"function": "f2", "field": "RST", "current": 0x740, "expected": 0x900,
+         "ref_field": None},
+        # normal: ref_field == field (plain offset shift of the SAME field) -> not ambiguous
+        {"function": "f3", "field": "nMCU", "current": 0x742, "expected": 0x8fc,
+         "ref_field": "nMCU"},
+    ]
+    agg = sv.aggregate(findings)
+    by_field = {a["field"]: a for a in agg}
+    assert by_field["predDC"]["ambiguous"] is True
+    assert by_field["RST"]["ambiguous"] is False
+    assert by_field["nMCU"]["ambiguous"] is False
+
+
+def test_aggregate_ambiguous_defaults_false_when_key_absent():
+    # Findings produced before the ref_field enrichment (or for a non-mapping
+    # path) must still aggregate, defaulting ambiguous to False.
+    from src.common import struct_verify as sv
+    findings = [
+        {"function": "f1", "field": "RST", "current": 0x740, "expected": 0x900},
+    ]
+    agg = sv.aggregate(findings)
+    assert agg[0]["ambiguous"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -130,3 +161,15 @@ def test_render_verify_table_high_confidence(capsys):
     )
     out = capsys.readouterr().out
     assert "nMCU" in out and "high" in out
+
+
+def test_render_verify_table_ambiguous(capsys):
+    from src.cli.struct import _render_verify_table
+    _render_verify_table(
+        [{"field": "predDC", "current": 0x100, "expected": 0x110,
+          "expecteds": [0x110], "n_functions": 1, "functions": ["f1"],
+          "conflict": False, "confidence": "low", "ambiguous": True}],
+        [],
+    )
+    out = capsys.readouterr().out
+    assert "predDC" in out and "AMBIGUOUS" in out

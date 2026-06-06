@@ -467,13 +467,17 @@ def _render_verify_table(agg: list[dict], skipped: list[tuple]) -> None:
         else:
             exp_str = hex(a["expected"])
             delta_str = f"{a['expected'] - a['current']:+d}"
+        conf_str = a["confidence"]
+        if a.get("ambiguous"):
+            # Expected offset maps to a different known field: flag, don't drop.
+            conf_str = f"{conf_str} AMBIGUOUS"
         t.add_row(
             a["field"],
             hex(a["current"]),
             exp_str,
             delta_str,
             str(a["n_functions"]),
-            a["confidence"],
+            conf_str,
         )
     console.print(t)
     if skipped:
@@ -580,11 +584,16 @@ def struct_verify_cmd(
                 # unmapped: likely interior-pointer or genuine register diff, not struct bug
                 skipped.append((fn, f"unmapped cur 0x{d['cur_disp']:x}"))
                 continue
+            # Map the EXPECTED offset too: if it resolves to a different known
+            # field, this may be a deliberate different-field access (design §6),
+            # which aggregate() will flag as ambiguous.
+            ref_field = struct_layout.offset_to_field(layout, d["ref_disp"])
             findings.append({
                 "function": fn,
                 "field": field,
                 "current": d["cur_disp"],
                 "expected": d["ref_disp"],
+                "ref_field": ref_field,
             })
 
     agg = struct_verify.aggregate(findings)
