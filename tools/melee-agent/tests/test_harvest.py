@@ -1963,6 +1963,127 @@ def test_run_harvest_prefetches_lifetime_layout_source_probe_pcdumps(
     assert ledger["preflight"]["pcdump"]["generated_units"] == ["melee/demo"]
 
 
+def test_run_harvest_prefetches_indexed_struct_compile_probe_pcdumps(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path, "melee/demo.c")
+    queue = tmp_path / "queues" / "indexed-struct-pointer.tsv"
+    row = _row(
+        "demo_fn",
+        file_path="melee/demo.c",
+        headline_tool="source-shape",
+        source_actionability="current-tools-indexed-pointer",
+        frame_closability_tier="",
+    )
+    row["primary"] = "indexed-struct-pointer-materialization"
+    _write_queue(queue, [row])
+    lookups: list[str] = []
+
+    def fake_lookup(repo: Path, unit: str):
+        lookups.append(unit)
+        return None
+
+    monkeypatch.setattr(harvest_module.pcdump_cache, "lookup", fake_lookup)
+    calls: list[list[str]] = []
+
+    def runner(args: list[str], *, cwd: Path, timeout: int) -> HarnessProcessResult:
+        calls.append(args)
+        if args[:2] == ["debug", "dump"]:
+            return HarnessProcessResult(args, 0, "", "")
+        return HarnessProcessResult(args, 0, json.dumps({"variants": []}), "")
+
+    ledger = run_harvest(
+        "indexed-struct-pointer",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    assert calls[:2] == [
+        ["debug", "dump", "setup"],
+        [
+            "debug",
+            "dump",
+            "local",
+            str(repo_root / "src" / "melee" / "demo.c"),
+            "--function",
+            "demo_fn",
+        ],
+    ]
+    assert calls[2][:3] == ["debug", "mutate", "indexed-struct-search"]
+    assert lookups == ["melee/demo"]
+    assert ledger["preflight"]["pcdump"]["required_units"] == ["melee/demo"]
+    assert ledger["preflight"]["pcdump"]["generated_units"] == ["melee/demo"]
+
+
+def test_indexed_struct_pcdump_setup_failure_stops_before_compile_probe_scoring(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path, "melee/demo.c")
+    queue = tmp_path / "queues" / "indexed-struct-pointer.tsv"
+    row = _row(
+        "demo_fn",
+        file_path="melee/demo.c",
+        headline_tool="source-shape",
+        source_actionability="current-tools-indexed-pointer",
+        frame_closability_tier="",
+    )
+    row["primary"] = "indexed-struct-pointer-materialization"
+    _write_queue(queue, [row])
+    monkeypatch.setattr(harvest_module.pcdump_cache, "lookup", lambda _repo, _unit: None)
+
+    def runner(args: list[str], *, cwd: Path, timeout: int) -> HarnessProcessResult:
+        if args == ["debug", "dump", "setup"]:
+            return HarnessProcessResult(args, 7, "", "missing mwcceppc_debug.exe")
+        raise AssertionError(f"unexpected command after setup failure: {args}")
+
+    with pytest.raises(ValueError, match="pcdump preflight setup failed"):
+        run_harvest(
+            "indexed-struct-pointer",
+            repo_root=repo_root,
+            queue_path=queue,
+            runner=runner,
+        )
+
+
+def test_indexed_struct_preflight_runs_setup_when_cache_is_fresh(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path, "melee/demo.c")
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    queue = tmp_path / "queues" / "indexed-struct-pointer.tsv"
+    row = _row(
+        "demo_fn",
+        file_path="melee/demo.c",
+        headline_tool="source-shape",
+        source_actionability="current-tools-indexed-pointer",
+        frame_closability_tier="",
+    )
+    row["primary"] = "indexed-struct-pointer-materialization"
+    _write_queue(queue, [row])
+    calls: list[list[str]] = []
+
+    def runner(args: list[str], *, cwd: Path, timeout: int) -> HarnessProcessResult:
+        calls.append(args)
+        return HarnessProcessResult(args, 0, json.dumps({"variants": []}), "")
+
+    ledger = run_harvest(
+        "indexed-struct-pointer",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    assert calls[0] == ["debug", "dump", "setup"]
+    assert all(call[:3] != ["debug", "dump", "local"] for call in calls)
+    assert calls[1][:3] == ["debug", "mutate", "indexed-struct-search"]
+    assert ledger["preflight"]["pcdump"]["fresh_units"] == ["melee/demo"]
+    assert ledger["preflight"]["pcdump"]["setup_command"]["returncode"] == 0
+
+
 def test_run_harvest_skips_pcdump_preflight_when_frame_transform_cache_is_fresh(
     monkeypatch,
     tmp_path: Path,
@@ -3262,8 +3383,12 @@ def test_control_flow_harvest_builds_control_flow_search_command(
     assert ledger["results"][0]["status"] == "validated"
 
 
-def test_indexed_struct_harvest_builds_indexed_search_command(tmp_path: Path) -> None:
+def test_indexed_struct_harvest_builds_indexed_search_command(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     repo_root = _repo_with_source(tmp_path)
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
     queue = tmp_path / "queues" / "indexed-struct-pointer.tsv"
     row = _row(
         "demo_fn",
@@ -3292,14 +3417,14 @@ def test_indexed_struct_harvest_builds_indexed_search_command(tmp_path: Path) ->
         runner=runner,
     )
 
-    assert calls[0][:5] == [
+    assert calls[-1][:5] == [
         "debug",
         "mutate",
         "indexed-struct-search",
         "-f",
         "demo_fn",
     ]
-    assert "--score-match-percent" in calls[0]
+    assert "--score-match-percent" in calls[-1]
     assert ledger["results"][0]["harness"] == "indexed-struct-search"
     assert ledger["results"][0]["status"] == "validated"
 
@@ -3523,9 +3648,11 @@ def test_name_magic_propagates_blocked_stop_condition(tmp_path: Path) -> None:
 
 
 def test_compose_dry_run_stops_after_first_candidate_and_records_not_observed(
+    monkeypatch,
     tmp_path: Path,
 ) -> None:
     repo_root = _repo_with_source(tmp_path)
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
     queue = tmp_path / "queues" / "composite.tsv"
     row = _row(
         "demo_fn",
@@ -3576,16 +3703,19 @@ def test_compose_dry_run_stops_after_first_candidate_and_records_not_observed(
     assert result["harness"] == "composed"
     assert result["details"]["stop_reason"] == "dry-run-first-candidate-layer"
     assert result["details"]["not_observed_layers"] == ["frame-transform-search"]
-    assert [call[2] for call in calls] == ["indexed-struct-search"]
+    mutate_calls = [call for call in calls if call[:2] == ["debug", "mutate"]]
+    assert [call[2] for call in mutate_calls] == ["indexed-struct-search"]
 
 
 def test_compose_apply_preserves_sub100_improvement_and_continues_to_match(
+    monkeypatch,
     tmp_path: Path,
 ) -> None:
     repo_root = tmp_path / "repo"
     target = repo_root / "src" / "melee/demo.c"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("int demo_fn(void) {\n    return 1;\n}\n", encoding="utf-8")
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
     indexed_candidate = tmp_path / "indexed.c"
     indexed_candidate.write_text(
         "int demo_fn(void) {\n    return 2;\n}\n",
@@ -3680,7 +3810,8 @@ def test_compose_apply_preserves_sub100_improvement_and_continues_to_match(
     assert result["status"] == "already-matched"
     assert result["harness"] == "composed"
     assert result["details"]["stop_reason"] == "matched-after-layers"
-    assert [call[2] for call in calls] == [
+    mutate_calls = [call for call in calls if call[:2] == ["debug", "mutate"]]
+    assert [call[2] for call in mutate_calls] == [
         "indexed-struct-search",
         "frame-transform-search",
     ]
@@ -3689,6 +3820,81 @@ def test_compose_apply_preserves_sub100_improvement_and_continues_to_match(
     )
     assert target.read_text(encoding="utf-8") == (
         "int demo_fn(void) {\n    return 3;\n}\n"
+    )
+
+
+def test_compose_indexed_malformed_source_candidate_rebuckets_top_level(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    queue = tmp_path / "queues" / "composite.tsv"
+    candidate = tmp_path / "indexed-candidate.c"
+    candidate.write_text("int sibling(void) { return 2; }\n", encoding="utf-8")
+    row = _row(
+        "demo_fn",
+        headline_tool="source-shape",
+        source_actionability="current-tools-indexed-pointer",
+        frame_closability_tier="",
+    )
+    row["primary"] = "indexed-struct-pointer-materialization"
+    _write_queue(queue, [row])
+    _, runner = _json_runner(
+        {
+            "blocker": "no-indexed-struct-candidate",
+            "stop_condition": {
+                "kind": "unvalidated",
+                "blocker": "no-indexed-struct-candidate",
+                "reason": "no indexed-struct candidate reached a true 100% match",
+            },
+            "variants": [
+                {
+                    "label": "indexed-struct-pointer-0",
+                    "operator": "indexed-struct-pointer",
+                    "status": "build-failed",
+                    "source_retained": str(candidate),
+                    "error": (
+                        "function 'demo_fn' not found in pcdump; "
+                        "did you mean sibling"
+                    ),
+                }
+            ],
+        }
+    )
+
+    ledger = run_harvest(
+        "composite",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+        match_checker=lambda function, *, cwd, timeout: _match_process(
+            function,
+            match=False,
+            percent=90.0,
+            primary="indexed-struct-pointer-materialization",
+        ),
+        compose=True,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "malformed-source-candidate"
+    assert result["source_actionability"] == "candidate-generation-fidelity"
+    assert ledger["summary"]["by_tier"] == {"candidate-generation-fidelity": 1}
+    assert result["details"]["source_actionability_rebucket"] == {
+        "from": "current-tools-indexed-pointer",
+        "to": "candidate-generation-fidelity",
+        "remove_from": "current-tools-indexed-pointer",
+        "blocker": "malformed-source-candidate",
+        "reason": "candidate pcdump omitted the requested function",
+    }
+    layer = result["details"]["layers"][0]
+    assert layer["source_actionability"] == "candidate-generation-fidelity"
+    assert layer["details"]["malformed_source_candidate"]["source_path"] == str(candidate)
+    assert (
+        layer["details"]["malformed_source_candidate"]["error"]
+        == "function 'demo_fn' not found in pcdump; did you mean sibling"
     )
 
 
@@ -4190,7 +4396,20 @@ def test_harvest_classifies_indexed_candidate_that_omits_target_from_pcdump(
     assert result["status"] == "blocked"
     assert result["blocker"] == "malformed-source-candidate"
     assert result["reason"] == "generated source candidate did not preserve the requested function"
+    assert result["source_actionability"] == "candidate-generation-fidelity"
+    assert result["details"]["source_actionability_rebucket"] == {
+        "from": "current-tools-indexed-pointer",
+        "to": "candidate-generation-fidelity",
+        "remove_from": "current-tools-indexed-pointer",
+        "blocker": "malformed-source-candidate",
+        "reason": "candidate pcdump omitted the requested function",
+    }
     assert result["details"]["malformed_source_candidate"]["source_path"] == str(candidate)
+    assert (
+        result["details"]["malformed_source_candidate"]["error"]
+        == "function 'demo_fn' not found in pcdump; did you mean sibling"
+    )
+    assert ledger["summary"]["by_tier"] == {"candidate-generation-fidelity": 1}
 
 
 def test_harvest_classifies_lifetime_malformed_source_candidate(

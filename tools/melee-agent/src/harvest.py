@@ -77,6 +77,7 @@ BLOCKER_HARNESS_EXIT_NONZERO = "harness-exit-nonzero"
 BLOCKER_HARNESS_INVALID_JSON = "harness-invalid-json"
 BLOCKER_NO_VALIDATED_CANDIDATE = "no-validated-candidate"
 BLOCKER_MALFORMED_SOURCE_CANDIDATE = "malformed-source-candidate"
+MALFORMED_INDEXED_SOURCE_ACTIONABILITY = "candidate-generation-fidelity"
 BLOCKER_APPLY_TRANSFER_FAILED = "apply-transfer-failed"
 BLOCKER_APPLY_VALIDATION_FAILED = "apply-validation-failed"
 BLOCKER_DECLARATION_APPLY_UNSUPPORTED = "declaration-apply-unsupported"
@@ -1004,6 +1005,8 @@ def _needs_pcdump_preflight(
     harness = select_harness(request)
     if harness == HARNESS_ALLOCATOR_PCDUMP_TRIAGE:
         return True
+    if harness == HARNESS_INDEXED_STRUCT:
+        return True
     lifetime_layout_source_probe = request.work_bucket == "stack-local-layout" and (
         request.headline_tool == HARNESS_LIFETIME_LAYOUT
         or HARNESS_LIFETIME_LAYOUT in request.next_command
@@ -1032,8 +1035,26 @@ def _needs_pcdump_preflight(
         ) or (
             HARNESS_LIFETIME_LAYOUT in layer_harnesses
             and lifetime_layout_source_probe
+        ) or (
+            HARNESS_INDEXED_STRUCT in layer_harnesses
         ) or (HARNESS_ALLOCATOR_PCDUMP_TRIAGE in layer_harnesses)
     return False
+
+
+def _requires_pcdump_setup_preflight(
+    request: HarvestRequest,
+    *,
+    compose: bool,
+) -> bool:
+    if select_harness(request) == HARNESS_INDEXED_STRUCT:
+        return True
+    if not compose:
+        return False
+    layer_harnesses = {
+        str(layer.get("harness") or "").strip().lower()
+        for layer in _normalize_layer_sequence(request)
+    }
+    return HARNESS_INDEXED_STRUCT in layer_harnesses
 
 
 def _run_pcdump_preflight(
@@ -1045,12 +1066,15 @@ def _run_pcdump_preflight(
     compose: bool,
 ) -> PcdumpPreflightReport:
     by_unit: dict[str, HarvestRequest] = {}
+    setup_required = False
     for request in requests:
         if not _needs_pcdump_preflight(request, compose=compose):
             continue
         assert request.source_file is not None
         unit = _pcdump_unit_for_source(repo_root, request.source_file)
         by_unit.setdefault(unit, request)
+        if _requires_pcdump_setup_preflight(request, compose=compose):
+            setup_required = True
 
     if not by_unit:
         return PcdumpPreflightReport(enabled=False)
@@ -1071,7 +1095,7 @@ def _run_pcdump_preflight(
             report.stale_units.append(unit)
             units_to_generate.append(unit)
 
-    if not units_to_generate:
+    if not units_to_generate and not setup_required:
         return report
 
     setup_command = ["debug", "dump", "setup"]
@@ -1089,6 +1113,9 @@ def _run_pcdump_preflight(
             "pcdump preflight setup failed: "
             f"{_short_output(setup_process.stderr or setup_process.stdout)}"
         )
+
+    if not units_to_generate:
+        return report
 
     for unit in units_to_generate:
         request = by_unit[unit]
@@ -1409,6 +1436,7 @@ def _base_result(
     final_match_percent: float | None = None,
     applied: bool = False,
     details: dict[str, Any] | None = None,
+    source_actionability: str | None = None,
 ) -> HarvestResult:
     return HarvestResult(
         function=request.function,
@@ -1426,7 +1454,7 @@ def _base_result(
         harness=harness,
         primary=request.primary,
         subcategory=request.subcategory,
-        source_actionability=request.source_actionability,
+        source_actionability=source_actionability or request.source_actionability,
         frame_closability_tier=request.frame_closability_tier,
     )
 
@@ -1564,6 +1592,29 @@ def _harness_blocker_result(payload: Any) -> tuple[str, str, str] | None:
     if isinstance(blocker, str) and blocker:
         return kind, blocker, str(reason or blocker)
     return None
+
+
+def _malformed_source_rebucket(
+    request: HarvestRequest,
+    *,
+    harness: str,
+    blocker: str,
+    details: dict[str, Any],
+) -> str | None:
+    if blocker != BLOCKER_MALFORMED_SOURCE_CANDIDATE:
+        return None
+    if harness != HARNESS_INDEXED_STRUCT:
+        return None
+    if request.source_actionability != "current-tools-indexed-pointer":
+        return None
+    details["source_actionability_rebucket"] = {
+        "from": request.source_actionability,
+        "to": MALFORMED_INDEXED_SOURCE_ACTIONABILITY,
+        "remove_from": "current-tools-indexed-pointer",
+        "blocker": blocker,
+        "reason": "candidate pcdump omitted the requested function",
+    }
+    return MALFORMED_INDEXED_SOURCE_ACTIONABILITY
 
 
 def _allocator_triage_details(
@@ -3004,6 +3055,13 @@ def _compose_result(
         "harness_sequence": harness_sequence,
         "not_observed_layers": not_observed_layers or [],
     }
+    source_actionability = None
+    if final_layer is not None:
+        if final_layer.source_actionability != request.source_actionability:
+            source_actionability = final_layer.source_actionability
+        for key in ("source_actionability_rebucket", "malformed_source_candidate"):
+            if key in final_layer.details:
+                details[key] = final_layer.details[key]
     return _base_result(
         request,
         harness="composed",
@@ -3021,6 +3079,7 @@ def _compose_result(
             else applied
         ),
         details=details,
+        source_actionability=source_actionability,
     )
 
 
@@ -3265,6 +3324,13 @@ def run_composed_harvest_request(
             harness_blocker = _harness_blocker_result(payload)
             if harness_blocker is not None:
                 status, blocker, reason = harness_blocker
+                details = no_validated_candidate_details(payload)
+                source_actionability = _malformed_source_rebucket(
+                    layer_request,
+                    harness=harness,
+                    blocker=blocker,
+                    details=details,
+                )
                 layer = _base_result(
                     layer_request,
                     harness=harness,
@@ -3272,7 +3338,8 @@ def run_composed_harvest_request(
                     blocker=blocker,
                     reason=reason,
                     command=command,
-                    details=no_validated_candidate_details(payload),
+                    details=details,
+                    source_actionability=source_actionability,
                 )
             elif last_failed_layer is not None:
                 layer = last_failed_layer
@@ -3462,6 +3529,13 @@ def run_harvest_request(
         harness_blocker = _harness_blocker_result(harness_json)
         if harness_blocker is not None:
             status, blocker, reason = harness_blocker
+            details = no_validated_candidate_details(harness_json)
+            source_actionability = _malformed_source_rebucket(
+                request,
+                harness=harness,
+                blocker=blocker,
+                details=details,
+            )
             return _base_result(
                 request,
                 harness=harness,
@@ -3469,7 +3543,8 @@ def run_harvest_request(
                 blocker=blocker,
                 reason=reason,
                 command=command,
-                details=no_validated_candidate_details(harness_json),
+                details=details,
+                source_actionability=source_actionability,
             )
         return _base_result(
             request,
