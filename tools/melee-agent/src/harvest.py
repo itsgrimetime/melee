@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import os
 import subprocess
@@ -69,8 +70,25 @@ PREVIEW_FACET_FIELDS = (
     "frame_closability_tier",
     "name_magic_blocker",
 )
+SOURCE_ACTIONABILITY_REBUCKET_FINGERPRINT_FIELDS = (
+    "function",
+    "match_percent",
+    "primary",
+    "subcategory",
+    "source_actionability",
+    "headline_tool",
+    "actionability_reason",
+    "name_magic_blocker",
+    "name_magic_stop_kind",
+    "name_magic_probe_count",
+    "name_magic_reason",
+    "file_path",
+)
+DATA_SYMBOL_NO_NAME_MAGIC_CANDIDATE_ACTIONABILITY = (
+    "blocked-data-symbol-no-name-magic-candidate"
+)
 DATA_SYMBOL_BLOCKED_SOURCE_ACTIONABILITIES = {
-    "blocked-data-symbol-no-name-magic-candidate",
+    DATA_SYMBOL_NO_NAME_MAGIC_CANDIDATE_ACTIONABILITY,
     "blocked-data-symbol-unsupported-source-site",
     "blocked-data-symbol-ambiguous-relocation-pair",
     "blocked-data-symbol-unsupported-reloc-kind",
@@ -86,6 +104,7 @@ BLOCKER_MISSING_REGISTER_TARGET = "missing-register-target"
 BLOCKER_HARNESS_EXIT_NONZERO = "harness-exit-nonzero"
 BLOCKER_HARNESS_INVALID_JSON = "harness-invalid-json"
 BLOCKER_NO_VALIDATED_CANDIDATE = "no-validated-candidate"
+BLOCKER_NO_NAME_MAGIC_CANDIDATE = "no-name-magic-candidate"
 BLOCKER_MALFORMED_SOURCE_CANDIDATE = "malformed-source-candidate"
 BLOCKER_UNSAFE_LOCAL_PCDUMP_LANE = "unsafe-local-pcdump-lane"
 MALFORMED_SOURCE_CANDIDATE_ACTIONABILITY = "candidate-generation-fidelity"
@@ -122,6 +141,7 @@ class HarvestRequest:
     next_command: str = ""
     frame_next_command: str = ""
     facts: dict[str, Any] = field(default_factory=dict)
+    rebucket_fingerprint: dict[str, str] = field(default_factory=dict)
     apply: bool = False
     timeout: int = 120
     max_probes: int = 8
@@ -258,6 +278,24 @@ def _float_or_none(value: Any) -> float | None:
         return None
 
 
+def _hash_json(value: Any, *, length: int = 16) -> str:
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8", errors="replace")
+    return hashlib.sha256(encoded).hexdigest()[:length]
+
+
+def _source_file_sha256(source_file: Path | None, *, length: int = 16) -> str | None:
+    if source_file is None:
+        return None
+    try:
+        return hashlib.sha256(source_file.read_bytes()).hexdigest()[:length]
+    except OSError:
+        return None
+
+
 def resolve_source_file(repo_root: Path, file_path: str) -> Path | None:
     """Resolve a taxonomy row source path against repo src first, then root."""
     if not file_path:
@@ -274,6 +312,58 @@ def resolve_source_file(repo_root: Path, file_path: str) -> Path | None:
         if resolved.exists() and resolved.is_relative_to(repo_root):
             return resolved
     return None
+
+
+def _fingerprint_match_percent(value: Any) -> str:
+    score = _float_or_none(value)
+    if score is None:
+        return ""
+    return f"{score:.6f}"
+
+
+def _queue_row_taxonomy_fingerprint(
+    raw: Mapping[str, str],
+    *,
+    work_bucket: str,
+) -> str:
+    fields: dict[str, str] = {"work_bucket": work_bucket}
+    for field_name in SOURCE_ACTIONABILITY_REBUCKET_FINGERPRINT_FIELDS:
+        if field_name == "match_percent":
+            fields[field_name] = _fingerprint_match_percent(raw.get(field_name))
+        else:
+            fields[field_name] = str(raw.get(field_name) or "").strip()
+    return _hash_json(fields)
+
+
+def _rebucket_fingerprint_from_raw(
+    raw: Mapping[str, str],
+    *,
+    repo_root: Path,
+    work_bucket: str,
+) -> dict[str, str]:
+    fingerprint = {
+        "taxonomy_sha256": _queue_row_taxonomy_fingerprint(
+            raw,
+            work_bucket=work_bucket,
+        )
+    }
+    source_sha256 = _source_file_sha256(
+        resolve_source_file(repo_root, (raw.get("file_path") or "").strip())
+    )
+    if source_sha256 is not None:
+        fingerprint["source_sha256"] = source_sha256
+    return fingerprint
+
+
+def _rebucket_fingerprint_from_request(request: HarvestRequest) -> dict[str, str]:
+    fingerprint: dict[str, str] = {}
+    taxonomy_sha256 = request.rebucket_fingerprint.get("taxonomy_sha256")
+    if taxonomy_sha256:
+        fingerprint["taxonomy_sha256"] = taxonomy_sha256
+    source_sha256 = _source_file_sha256(request.source_file)
+    if source_sha256 is not None:
+        fingerprint["source_sha256"] = source_sha256
+    return fingerprint
 
 
 def load_target_map(path: Path | None) -> dict[str, dict[str, Any]]:
@@ -340,9 +430,22 @@ def _row_matches_filters_with_relaxed_field(
     return True
 
 
+def _normalized_rebucket_fingerprint(value: Any) -> dict[str, str] | None:
+    if not isinstance(value, Mapping):
+        return None
+    fingerprint = {
+        str(key): str(raw_value)
+        for key, raw_value in value.items()
+        if isinstance(raw_value, (str, int, float))
+        and str(key)
+        and str(raw_value)
+    }
+    return fingerprint or None
+
+
 def _result_source_actionability_rebucket(
     result: Mapping[str, Any],
-) -> dict[str, str] | None:
+) -> dict[str, Any] | None:
     details = result.get("details")
     if not isinstance(details, Mapping):
         return None
@@ -355,18 +458,22 @@ def _result_source_actionability_rebucket(
     to_actionability = str(rebucket.get("to") or "").strip()
     if not remove_from or not to_actionability:
         return None
-    return {
+    parsed: dict[str, Any] = {
         "remove_from": remove_from,
         "to": to_actionability,
         "blocker": str(rebucket.get("blocker") or "").strip(),
         "reason": str(rebucket.get("reason") or "").strip(),
     }
+    fingerprint = _normalized_rebucket_fingerprint(rebucket.get("fingerprint"))
+    if fingerprint is not None:
+        parsed["fingerprint"] = fingerprint
+    return parsed
 
 
 def _load_source_actionability_rebuckets(
     repo_root: Path,
     work_bucket: str,
-) -> dict[str, dict[str, str]]:
+) -> dict[str, dict[str, Any]]:
     harvest_dir = repo_root / "build" / "harvest"
     if not harvest_dir.is_dir():
         return {}
@@ -378,7 +485,7 @@ def _load_source_actionability_rebuckets(
     ]
     ledgers.sort(key=lambda path: (path.stat().st_mtime, path.name))
 
-    rebuckets: dict[str, dict[str, str]] = {}
+    rebuckets: dict[str, dict[str, Any]] = {}
     for path in ledgers:
         try:
             ledger = _read_harvest_ledger(path)
@@ -405,7 +512,10 @@ def _load_source_actionability_rebuckets(
 
 def _apply_source_actionability_rebucket(
     raw: Mapping[str, str],
-    rebuckets: Mapping[str, Mapping[str, str]],
+    rebuckets: Mapping[str, Mapping[str, Any]],
+    *,
+    repo_root: Path,
+    work_bucket: str,
 ) -> dict[str, str]:
     updated = {key: "" if value is None else value for key, value in raw.items()}
     function = (updated.get("function") or "").strip()
@@ -417,6 +527,20 @@ def _apply_source_actionability_rebucket(
     current_actionability = (updated.get("source_actionability") or "").strip()
     if current_actionability != rebucket.get("remove_from"):
         return updated
+    rebucket_fingerprint = rebucket.get("fingerprint")
+    if isinstance(rebucket_fingerprint, Mapping):
+        current_fingerprint = _rebucket_fingerprint_from_raw(
+            updated,
+            repo_root=repo_root,
+            work_bucket=work_bucket,
+        )
+        for key, value in rebucket_fingerprint.items():
+            if key not in {"source_sha256", "taxonomy_sha256"}:
+                continue
+            if not value:
+                continue
+            if current_fingerprint.get(str(key)) != str(value):
+                return updated
     updated["source_actionability"] = str(rebucket.get("to") or "").strip()
     reason = str(rebucket.get("reason") or "").strip()
     blocker = str(rebucket.get("blocker") or "").strip()
@@ -457,6 +581,11 @@ def _request_from_queue_row(
         next_command=(raw.get("next_command") or "").strip(),
         frame_next_command=(raw.get("frame_next_command") or "").strip(),
         facts=dict(facts_by_function.get(function, {})),
+        rebucket_fingerprint=_rebucket_fingerprint_from_raw(
+            raw,
+            repo_root=repo_root,
+            work_bucket=work_bucket,
+        ),
         apply=apply,
         timeout=timeout,
         max_probes=max_probes,
@@ -520,6 +649,8 @@ def load_queue_rows(
             raw = _apply_source_actionability_rebucket(
                 raw_row,
                 source_actionability_rebuckets,
+                repo_root=repo_root,
+                work_bucket=work_bucket,
             )
             if not _row_matches_filters(raw, filters):
                 continue
@@ -616,6 +747,8 @@ def preview_harvest_queue(
             raw = _apply_source_actionability_rebucket(
                 raw_row,
                 source_actionability_rebuckets,
+                repo_root=repo_root,
+                work_bucket=work_bucket,
             )
             function = (raw.get("function") or "").strip()
             if not function:
@@ -951,6 +1084,7 @@ def _candidate_detail(candidate: dict[str, Any]) -> dict[str, Any]:
         "match_percent",
         "match_pct",
         "score",
+        "no_name_magic_match",
         "match_percent_error",
         "error",
     ):
@@ -1020,6 +1154,18 @@ def no_validated_candidate_details(payload: Any) -> dict[str, Any]:
     if malformed_candidate is not None:
         details["malformed_source_candidate"] = malformed_candidate
     return details
+
+
+def _has_source_emitting_no_name_magic_candidate(payload: Any) -> bool:
+    for candidate in _iter_candidates(payload):
+        if extract_candidate_score(candidate) is None:
+            continue
+        if _candidate_source_path_any(candidate) is None:
+            continue
+        if candidate.get("no_name_magic_match") is True:
+            continue
+        return True
+    return False
 
 
 def _name_magic_source_stop_kind(payload: Any) -> str | None:
@@ -1848,6 +1994,37 @@ def _malformed_source_rebucket(
         "reason": "candidate pcdump omitted the requested function",
     }
     return MALFORMED_SOURCE_CANDIDATE_ACTIONABILITY
+
+
+def _no_name_magic_candidate_rebucket(
+    request: HarvestRequest,
+    *,
+    harness: str,
+    blocker: str,
+    details: dict[str, Any],
+    payload: Any,
+) -> str | None:
+    if harness != HARNESS_NAME_MAGIC_SOURCE:
+        return None
+    if blocker != BLOCKER_NO_NAME_MAGIC_CANDIDATE:
+        return None
+    remove_from = "current-tools-data-symbol"
+    if request.source_actionability != remove_from:
+        return None
+    scored_candidate_count = _float_or_none(details.get("scored_candidate_count"))
+    if scored_candidate_count is None or scored_candidate_count <= 0:
+        return None
+    if not _has_source_emitting_no_name_magic_candidate(payload):
+        return None
+    details["source_actionability_rebucket"] = {
+        "from": request.source_actionability,
+        "to": DATA_SYMBOL_NO_NAME_MAGIC_CANDIDATE_ACTIONABILITY,
+        "remove_from": remove_from,
+        "blocker": blocker,
+        "reason": "no scored source candidate reached a true --no-name-magic match",
+        "fingerprint": _rebucket_fingerprint_from_request(request),
+    }
+    return DATA_SYMBOL_NO_NAME_MAGIC_CANDIDATE_ACTIONABILITY
 
 
 def _allocator_triage_details(
@@ -3589,6 +3766,14 @@ def run_composed_harvest_request(
                     blocker=blocker,
                     details=details,
                 )
+                if source_actionability is None:
+                    source_actionability = _no_name_magic_candidate_rebucket(
+                        layer_request,
+                        harness=harness,
+                        blocker=blocker,
+                        details=details,
+                        payload=payload,
+                    )
                 layer = _base_result(
                     layer_request,
                     harness=harness,
@@ -3794,6 +3979,14 @@ def run_harvest_request(
                 blocker=blocker,
                 details=details,
             )
+            if source_actionability is None:
+                source_actionability = _no_name_magic_candidate_rebucket(
+                    request,
+                    harness=harness,
+                    blocker=blocker,
+                    details=details,
+                    payload=harness_json,
+                )
             return _base_result(
                 request,
                 harness=harness,

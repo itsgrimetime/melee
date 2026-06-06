@@ -1529,6 +1529,222 @@ def test_indexed_malformed_rebucket_ledgers_are_applied_to_queue_preview(
     ]
 
 
+def test_data_symbol_no_name_magic_rebucket_ledgers_are_applied_to_queue_preview(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    exhausted = _name_magic_row("exhausted_fn", primary="data-symbol-relocation")
+    ready = _name_magic_row("ready_fn", primary="data-symbol-relocation")
+    _write_queue(queue, [exhausted, ready])
+    ledger_dir = repo_root / "build" / "harvest"
+    ledger_dir.mkdir(parents=True)
+    (ledger_dir / "data-symbol-ledger.json").write_text(
+        json.dumps(
+            {
+                "work_bucket": "data-symbol-relocation",
+                "results": [
+                    {
+                        "function": "exhausted_fn",
+                        "work_bucket": "data-symbol-relocation",
+                        "source_actionability": (
+                            "blocked-data-symbol-no-name-magic-candidate"
+                        ),
+                        "blocker": "no-name-magic-candidate",
+                        "details": {
+                            "source_actionability_rebucket": {
+                                "from": "current-tools-data-symbol",
+                                "to": (
+                                    "blocked-data-symbol-no-name-magic-candidate"
+                                ),
+                                "remove_from": "current-tools-data-symbol",
+                                "blocker": "no-name-magic-candidate",
+                                "reason": (
+                                    "no scored source candidate reached a true "
+                                    "--no-name-magic match"
+                                ),
+                            }
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    current_rows = load_queue_rows(
+        queue,
+        work_bucket="data-symbol-relocation",
+        repo_root=repo_root,
+        filters=HarvestFilters(
+            where={"source_actionability": ("current-tools-data-symbol",)}
+        ),
+    )
+    all_rows = load_queue_rows(
+        queue,
+        work_bucket="data-symbol-relocation",
+        repo_root=repo_root,
+    )
+    preview = preview_harvest_queue(
+        queue,
+        work_bucket="data-symbol-relocation",
+        repo_root=repo_root,
+        filters=HarvestFilters(
+            where={"source_actionability": ("current-tools-data-symbol",)}
+        ),
+    )
+
+    assert [row.function for row in current_rows] == ["ready_fn"]
+    assert [row.source_actionability for row in all_rows] == [
+        "blocked-data-symbol-no-name-magic-candidate",
+        "current-tools-data-symbol",
+    ]
+    assert select_harness(all_rows[0]) is None
+    assert preview["counts"]["matching_rows"] == 1
+    assert [row["function"] for row in preview["sample"]] == ["ready_fn"]
+    assert preview["near_miss_facets"]["source_actionability"] == [
+        {"value": "blocked-data-symbol-no-name-magic-candidate", "count": 1}
+    ]
+
+
+def test_data_symbol_no_name_magic_rebucket_fingerprint_mismatch_keeps_row_current(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    exhausted = _name_magic_row("exhausted_fn", primary="data-symbol-relocation")
+    ready = _name_magic_row("ready_fn", primary="data-symbol-relocation")
+    _write_queue(queue, [exhausted, ready])
+    ledger_dir = repo_root / "build" / "harvest"
+    ledger_dir.mkdir(parents=True)
+    (ledger_dir / "data-symbol-ledger.json").write_text(
+        json.dumps(
+            {
+                "work_bucket": "data-symbol-relocation",
+                "results": [
+                    {
+                        "function": "exhausted_fn",
+                        "work_bucket": "data-symbol-relocation",
+                        "source_actionability": (
+                            "blocked-data-symbol-no-name-magic-candidate"
+                        ),
+                        "blocker": "no-name-magic-candidate",
+                        "details": {
+                            "source_actionability_rebucket": {
+                                "from": "current-tools-data-symbol",
+                                "to": (
+                                    "blocked-data-symbol-no-name-magic-candidate"
+                                ),
+                                "remove_from": "current-tools-data-symbol",
+                                "blocker": "no-name-magic-candidate",
+                                "reason": "stale name-magic evidence",
+                                "fingerprint": {
+                                    "source_sha256": "stale-source",
+                                    "taxonomy_sha256": "stale-taxonomy",
+                                },
+                            }
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    current_rows = load_queue_rows(
+        queue,
+        work_bucket="data-symbol-relocation",
+        repo_root=repo_root,
+        filters=HarvestFilters(
+            where={"source_actionability": ("current-tools-data-symbol",)}
+        ),
+    )
+    preview = preview_harvest_queue(
+        queue,
+        work_bucket="data-symbol-relocation",
+        repo_root=repo_root,
+        filters=HarvestFilters(
+            where={"source_actionability": ("current-tools-data-symbol",)}
+        ),
+    )
+
+    assert [row.function for row in current_rows] == ["exhausted_fn", "ready_fn"]
+    assert [select_harness(row) for row in current_rows] == [
+        "name-magic-source-declarations",
+        "name-magic-source-declarations",
+    ]
+    assert preview["counts"]["matching_rows"] == 2
+
+
+def test_data_symbol_no_name_magic_rebucket_matching_fingerprint_applies_to_preview(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    exhausted = _name_magic_row("exhausted_fn", primary="data-symbol-relocation")
+    ready = _name_magic_row("ready_fn", primary="data-symbol-relocation")
+    _write_queue(queue, [exhausted, ready])
+
+    initial = run_harvest(
+        "data-symbol-relocation",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=_json_runner(
+            {
+                "blocker": "no-name-magic-candidate",
+                "stop_condition": {
+                    "kind": "unvalidated",
+                    "blocker": "no-name-magic-candidate",
+                    "reason": (
+                        "no source candidate reached a true --no-name-magic match"
+                    ),
+                },
+                "variants": [
+                    {
+                        "status": "ok",
+                        "source_retained": str(tmp_path / "candidate.c"),
+                        "final_match_percent": 100.0,
+                        "no_name_magic_match": False,
+                    }
+                ],
+            }
+        )[1],
+        limit=1,
+    )
+    ledger_dir = repo_root / "build" / "harvest"
+    ledger_dir.mkdir(parents=True)
+    (ledger_dir / "data-symbol-ledger.json").write_text(
+        json.dumps(initial),
+        encoding="utf-8",
+    )
+
+    current_rows = load_queue_rows(
+        queue,
+        work_bucket="data-symbol-relocation",
+        repo_root=repo_root,
+        filters=HarvestFilters(
+            where={"source_actionability": ("current-tools-data-symbol",)}
+        ),
+    )
+    preview = preview_harvest_queue(
+        queue,
+        work_bucket="data-symbol-relocation",
+        repo_root=repo_root,
+        filters=HarvestFilters(
+            where={"source_actionability": ("current-tools-data-symbol",)}
+        ),
+    )
+
+    assert initial["results"][0]["function"] == "exhausted_fn"
+    assert (
+        initial["results"][0]["source_actionability"]
+        == "blocked-data-symbol-no-name-magic-candidate"
+    )
+    assert [row.function for row in current_rows] == ["ready_fn"]
+    assert preview["counts"]["matching_rows"] == 1
+    assert [row["function"] for row in preview["sample"]] == ["ready_fn"]
+
+
 @pytest.mark.parametrize(
     "source_actionability",
     [
@@ -3909,6 +4125,68 @@ def test_name_magic_gate_requires_no_name_magic_match_true(tmp_path: Path) -> No
     result = ledger["results"][0]
     assert result["status"] == "no_match"
     assert result["blocker"] == "no-name-magic-candidate"
+    assert (
+        result["source_actionability"]
+        == "blocked-data-symbol-no-name-magic-candidate"
+    )
+    assert ledger["summary"]["by_tier"] == {
+        "blocked-data-symbol-no-name-magic-candidate": 1
+    }
+    assert result["details"]["best_candidate"]["no_name_magic_match"] is False
+    rebucket = result["details"]["source_actionability_rebucket"]
+    assert rebucket["fingerprint"].keys() >= {"source_sha256", "taxonomy_sha256"}
+    assert {key: value for key, value in rebucket.items() if key != "fingerprint"} == {
+        "from": "current-tools-data-symbol",
+        "to": "blocked-data-symbol-no-name-magic-candidate",
+        "remove_from": "current-tools-data-symbol",
+        "blocker": "no-name-magic-candidate",
+        "reason": "no scored source candidate reached a true --no-name-magic match",
+    }
+
+
+def test_name_magic_rebucket_scans_past_best_candidate_without_source(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    _write_queue(queue, [_name_magic_row("demo_fn", primary="data-symbol-relocation")])
+    _, runner = _json_runner(
+        {
+            "blocker": "no-name-magic-candidate",
+            "stop_condition": {
+                "kind": "unvalidated",
+                "blocker": "no-name-magic-candidate",
+                "reason": "no source candidate reached a true --no-name-magic match",
+            },
+            "variants": [
+                {
+                    "status": "ok",
+                    "final_match_percent": 100.0,
+                    "no_name_magic_match": False,
+                },
+                {
+                    "status": "ok",
+                    "source_retained": str(tmp_path / "lower-score.c"),
+                    "final_match_percent": 99.5,
+                    "no_name_magic_match": False,
+                },
+            ],
+        }
+    )
+
+    ledger = run_harvest(
+        "data-symbol-relocation",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert (
+        result["source_actionability"]
+        == "blocked-data-symbol-no-name-magic-candidate"
+    )
+    assert "source_actionability_rebucket" in result["details"]
 
 
 def test_name_magic_gate_requires_validated_stop_condition(tmp_path: Path) -> None:
@@ -3944,6 +4222,66 @@ def test_name_magic_gate_requires_validated_stop_condition(tmp_path: Path) -> No
     result = ledger["results"][0]
     assert result["status"] == "no_match"
     assert result["blocker"] == "no-name-magic-candidate"
+    assert result["source_actionability"] == "current-tools-data-symbol"
+    assert "source_actionability_rebucket" not in result["details"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "blocker": "no-name-magic-candidate",
+            "stop_condition": {
+                "kind": "unvalidated",
+                "blocker": "no-name-magic-candidate",
+                "reason": "candidate had no retained source",
+            },
+            "variants": [
+                {
+                    "status": "ok",
+                    "final_match_percent": 100.0,
+                    "no_name_magic_match": False,
+                }
+            ],
+        },
+        {
+            "blocker": "section-anchor-source-fixable-residual",
+            "stop_condition": {
+                "kind": "unvalidated",
+                "blocker": "section-anchor-source-fixable-residual",
+                "reason": "needs section anchor source fix",
+            },
+            "variants": [
+                {
+                    "status": "ok",
+                    "source_retained": "candidate.c",
+                    "final_match_percent": 100.0,
+                    "no_name_magic_match": False,
+                }
+            ],
+        },
+    ],
+)
+def test_name_magic_rebucket_requires_source_emitting_no_name_magic_exhaustion(
+    tmp_path: Path,
+    payload: dict,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    _write_queue(queue, [_name_magic_row("demo_fn", primary="data-symbol-relocation")])
+    _, runner = _json_runner(payload)
+
+    ledger = run_harvest(
+        "data-symbol-relocation",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "no_match"
+    assert result["source_actionability"] == "current-tools-data-symbol"
+    assert "source_actionability_rebucket" not in result["details"]
 
 
 def test_name_magic_propagates_blocked_stop_condition(tmp_path: Path) -> None:
@@ -4224,6 +4562,67 @@ def test_compose_indexed_malformed_source_candidate_rebuckets_top_level(
         layer["details"]["malformed_source_candidate"]["error"]
         == "function 'demo_fn' not found in pcdump; did you mean sibling"
     )
+
+
+def test_compose_name_magic_no_match_rebuckets_top_level(tmp_path: Path) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    _write_queue(queue, [_name_magic_row("demo_fn", primary="data-symbol-relocation")])
+    _, runner = _json_runner(
+        {
+            "blocker": "no-name-magic-candidate",
+            "stop_condition": {
+                "kind": "unvalidated",
+                "blocker": "no-name-magic-candidate",
+                "reason": "no source candidate reached a true --no-name-magic match",
+            },
+            "variants": [
+                {
+                    "status": "ok",
+                    "source_retained": str(tmp_path / "candidate.c"),
+                    "final_match_percent": 100.0,
+                    "no_name_magic_match": False,
+                }
+            ],
+        }
+    )
+
+    ledger = run_harvest(
+        "data-symbol-relocation",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+        match_checker=lambda function, *, cwd, timeout: _match_process(
+            function,
+            match=False,
+            percent=99.0,
+            primary="data-symbol-relocation",
+        ),
+        compose=True,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "no_match"
+    assert result["blocker"] == "no-name-magic-candidate"
+    assert (
+        result["source_actionability"]
+        == "blocked-data-symbol-no-name-magic-candidate"
+    )
+    rebucket = result["details"]["source_actionability_rebucket"]
+    assert rebucket["fingerprint"].keys() >= {"source_sha256", "taxonomy_sha256"}
+    assert {key: value for key, value in rebucket.items() if key != "fingerprint"} == {
+        "from": "current-tools-data-symbol",
+        "to": "blocked-data-symbol-no-name-magic-candidate",
+        "remove_from": "current-tools-data-symbol",
+        "blocker": "no-name-magic-candidate",
+        "reason": "no scored source candidate reached a true --no-name-magic match",
+    }
+    assert result["details"]["layers"][0]["details"][
+        "source_actionability_rebucket"
+    ] == result["details"]["source_actionability_rebucket"]
+    assert ledger["summary"]["by_tier"] == {
+        "blocked-data-symbol-no-name-magic-candidate": 1
+    }
 
 
 def test_compose_dry_run_restores_harness_source_mutation_when_ledger_write_fails(
