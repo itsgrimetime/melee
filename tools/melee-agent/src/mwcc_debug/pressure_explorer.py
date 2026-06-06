@@ -225,14 +225,6 @@ HELPER_INLINE_LIFETIME_OPERATORS = (
 )
 
 _READ_ONLY_SOURCE_LIFETIME_HELPERS = frozenset({"fn_803AC634"})
-_REUSE_INTLIKE_RETURN_TYPES = frozenset({
-    "int",
-    "long",
-    "s8",
-    "s16",
-    "s32",
-    "short",
-})
 _DEMATERIALIZE_SCALAR_RETURN_TYPES = frozenset({
     "BOOL",
     "bool",
@@ -253,6 +245,7 @@ _DEMATERIALIZE_SCALAR_RETURN_TYPES = frozenset({
     "u64",
     "unsigned",
 })
+_REUSE_SCALAR_RETURN_TYPES = _DEMATERIALIZE_SCALAR_RETURN_TYPES
 
 
 def pressure_signature_from_pcdump(
@@ -760,16 +753,21 @@ def _probe_repeated_helper_result_reuse(
         first = occurrences[0]
         if not _helper_call_args_are_simple(first.args_text):
             continue
-        if not _helper_callee_supported_for_reuse(first.callee, source_text):
-            first_blocker = first_blocker or (
-                "callee-not-supported-for-reuse",
-                f"helper `{first.callee}` is not supported for repeated-result reuse",
-            )
-            continue
         if not _helper_call_is_read_only(first.callee, source_text, function):
             first_blocker = first_blocker or (
                 "callee-not-read-only",
                 f"helper `{first.callee}` is not known read-only",
+            )
+            continue
+        reuse_temp_spec = _helper_reuse_temp_spec(
+            first.callee,
+            source_text,
+            first.call_text,
+        )
+        if reuse_temp_spec is None:
+            first_blocker = first_blocker or (
+                "callee-not-supported-for-reuse",
+                f"helper `{first.callee}` is not supported for repeated-result reuse",
             )
             continue
         occurrence_blocker = _repeated_helper_occurrence_blocker(
@@ -830,8 +828,9 @@ def _probe_repeated_helper_result_reuse(
             continue
         indent = _line_indent_at(source_text, line_start)
         temp_name = _next_unique_repeated_helper_temp_name(source_text, function)
+        temp_type, temp_initializer = reuse_temp_spec
         replacements = [(line_start, line_start, (
-            f"{indent}s32 {temp_name} = (s32) {first.call_text};\n"
+            f"{indent}{temp_type} {temp_name} = {temp_initializer};\n"
         ))]
         for call in occurrences:
             replace_start, replace_end = _cast_prefixed_call_range(
@@ -857,6 +856,7 @@ def _probe_repeated_helper_result_reuse(
                 "call": first.call_text,
                 "occurrences": len(occurrences),
                 "temp_name": temp_name,
+                "temp_type": temp_type,
             },
         )
         return [probe], _source_lifetime_summary(
@@ -1213,16 +1213,22 @@ def _helper_call_is_read_only(callee: str, source: str, function: str) -> bool:
     return body_expr is not None and _helper_expression_is_pure(body_expr)
 
 
-def _helper_callee_supported_for_reuse(callee: str, source: str) -> bool:
+def _helper_reuse_temp_spec(
+    callee: str,
+    source: str,
+    call_text: str,
+) -> tuple[str, str] | None:
     if callee in _READ_ONLY_SOURCE_LIFETIME_HELPERS:
-        return True
+        return "s32", f"(s32) {call_text}"
     if _find_function_body_span(source, callee) is None:
-        return True
+        return None
     body_expr = _simple_helper_expression_body(source, callee)
     if body_expr is None or not _helper_expression_is_pure(body_expr):
-        return False
+        return None
     return_type = _function_return_type(source, callee)
-    return return_type in _REUSE_INTLIKE_RETURN_TYPES
+    if return_type not in _REUSE_SCALAR_RETURN_TYPES:
+        return None
+    return return_type, call_text
 
 
 def _helper_callee_supported_for_dematerialize(callee: str, source: str) -> bool:

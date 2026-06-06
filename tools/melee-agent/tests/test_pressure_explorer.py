@@ -295,14 +295,14 @@ def test_source_lifetime_repeated_helper_result_reuse_supports_same_tu_scalar_he
         for probe in probes
         if probe.operator == "repeated-helper-result-reuse"
     )
-    assert "s32 ll_probe_helper_result_0 = (s32) helper(state, i);" in (
+    assert "s32 ll_probe_helper_result_0 = helper(state, i);" in (
         probe.source_text
     )
     assert "total += ll_probe_helper_result_0;" in probe.source_text
     assert "total = ll_probe_helper_result_0;" in probe.source_text
 
 
-def test_source_lifetime_repeated_helper_result_reuse_rejects_same_tu_unsigned_helper() -> None:
+def test_source_lifetime_repeated_helper_result_reuse_supports_same_tu_unsigned_helper() -> None:
     source = textwrap.dedent("""\
         static inline u32 helper(u32 x)
         {
@@ -324,15 +324,15 @@ def test_source_lifetime_repeated_helper_result_reuse_rejects_same_tu_unsigned_h
         max_probes=8,
     )
 
-    assert "repeated-helper-result-reuse" not in {probe.operator for probe in probes}
-    blocked = [
-        row for row in summaries if row["operator"] == "repeated-helper-result-reuse"
-    ]
-    assert blocked
-    assert blocked[0]["blocker"] in {
-        "helper-return-type-unsafe",
-        "callee-not-supported-for-reuse",
-    }
+    del summaries
+    probe = next(
+        probe
+        for probe in probes
+        if probe.operator == "repeated-helper-result-reuse"
+    )
+    assert "u32 ll_probe_helper_result_0 = helper(x);" in probe.source_text
+    assert "total += ll_probe_helper_result_0;" in probe.source_text
+    assert "total = ll_probe_helper_result_0;" in probe.source_text
 
 
 def test_source_lifetime_repeated_helper_result_reuse_rejects_same_tu_pointer_helper() -> None:
