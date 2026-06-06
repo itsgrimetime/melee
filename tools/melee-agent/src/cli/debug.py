@@ -89,6 +89,9 @@ from ..mwcc_debug.diff_report import (
     compare_function_dumps,
     render_text_report,
 )
+from ..mwcc_debug.temp_scratch import mkdtemp as mwcc_debug_mkdtemp
+from ..mwcc_debug.temp_scratch import reaped_scratch_root as mwcc_debug_scratch_root
+from ..mwcc_debug.temp_scratch import scratch_path as mwcc_debug_scratch_path
 from ..mwcc_debug.frame_reservations import (
     analyze_frame_from_asm_text,
     analyze_frame_from_function,
@@ -15797,24 +15800,29 @@ def pcdump_local(
     if pcdump_path.exists():
         pcdump_path.unlink()
 
-    # Resolve where the .o lands. Default: discard via /tmp. When the
+    # Resolve where the .o lands. Default: discard via managed scratch. When the
     # agent wants to inspect/diff the output, --keep-obj routes it to a
     # specific path. --diff implies keeping (a temp path if no --keep-obj
     # was given) so we have something to diff against.
+    scratch_root = mwcc_debug_scratch_root()
     if keep_obj is not None:
         obj_target = keep_obj if keep_obj.is_absolute() else (melee_root / keep_obj)
         obj_target.parent.mkdir(parents=True, exist_ok=True)
         obj_out = str(obj_target)
         discard_obj_after = False
     elif diff:
-        obj_target = Path(
-            f"/tmp/pcdump_local_keep_{os.getpid()}_{int(time.time() * 1000)}.o"
+        obj_target = mwcc_debug_scratch_path(
+            "pcdump_local_keep",
+            suffix=".o",
+            root=scratch_root,
         )
         obj_out = str(obj_target)
         discard_obj_after = True  # remove after diff if not user-requested
     else:
-        obj_target = Path(
-            f"/tmp/pcdump_local_discard_{os.getpid()}_{int(time.time() * 1000)}.o"
+        obj_target = mwcc_debug_scratch_path(
+            "pcdump_local_discard",
+            suffix=".o",
+            root=scratch_root,
         )
         obj_out = str(obj_target)
         discard_obj_after = True
@@ -16381,8 +16389,10 @@ def pcdump_local(
                 else "forced" if any_forced
                 else "nocache"
             )
-            output = Path(
-                f"/tmp/pcdump_{prefix}_{os.getpid()}_{int(time.time() * 1000)}.txt"
+            output = mwcc_debug_scratch_path(
+                f"pcdump_{prefix}",
+                suffix=".txt",
+                root=scratch_root,
             )
             output.parent.mkdir(parents=True, exist_ok=True)
             pcdump_path.rename(output)
@@ -16582,8 +16592,8 @@ def score_source(
     if pcdump_path.exists():
         pcdump_path.unlink()
 
-    # Use unique discard .o to avoid races across parallel scorers
-    discard_o = f"/tmp/score_source_discard_{os.getpid()}_{int(time.time()*1000)}.o"
+    # Use unique discard .o to avoid races across parallel scorers.
+    discard_o = str(mwcc_debug_scratch_path("score_source_discard", suffix=".o"))
 
     args = (
         [str(wibo_path), str(debug_compiler)]
@@ -20692,7 +20702,7 @@ def intervene_coalesce_cmd(
             melee_root=DEFAULT_MELEE_ROOT,
             label="source file",
         )
-        run_dir = output_dir or Path(tempfile.mkdtemp(prefix="melee_intervene_"))
+        run_dir = output_dir or mwcc_debug_mkdtemp(prefix="melee_intervene_")
         run_dir.mkdir(parents=True, exist_ok=True)
         if baseline_pcdump is None:
             baseline_pcdump = run_dir / f"{function}.baseline.pcdump.txt"

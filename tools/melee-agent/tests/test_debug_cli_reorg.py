@@ -6613,6 +6613,60 @@ def test_dump_local_requested_function_missing_exits_nonzero_and_preserves_dump(
     assert "Starting function fn_80000001" in output.read_text()
 
 
+def test_dump_local_forced_default_output_uses_managed_scratch_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text("void fn_80000000(void)\n{\n}\n")
+    compiler_dir = melee_root / "build" / "compilers" / "GC" / "1.2.5n"
+    compiler_dir.mkdir(parents=True)
+    (compiler_dir / "mwcceppc_debug.exe").write_text("")
+    wibo = tmp_path / "wibo"
+    wibo.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os\n"
+        "from pathlib import Path\n"
+        "pcdump = Path.cwd() / os.environ['MWCC_DEBUG_PCDUMP_PATH']\n"
+        "pcdump.write_text('Starting function fn_80000000\\n')\n"
+    )
+    wibo.chmod(0o755)
+    scratch_root = tmp_path / "mwcc-debug-tmp"
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+    monkeypatch.setattr(debug_cli, "_find_compiler_dir", lambda: compiler_dir)
+    monkeypatch.setattr(debug_cli, "_ninja_cflags_for_unit", lambda src_rel: ("", "mwcc"))
+    monkeypatch.setattr(debug_cli, "_cache_settle_seconds", lambda env=None: 0.0)
+    monkeypatch.setenv("MWCC_DEBUG_TMP_ROOT", str(scratch_root))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "dump",
+            "local",
+            str(src_path),
+            "--force-phys",
+            "1:4",
+            "--force-phys-fn",
+            "fn_80000000",
+            "--function",
+            "fn_80000000",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    match = re.search(r"Dump at: (.+)", result.stderr)
+    assert match is not None
+    output = Path(match.group(1).strip())
+    assert output.parent == scratch_root
+    assert output.name.startswith("pcdump_forced_")
+    assert output.exists()
+
+
 def test_dump_local_watchdog_uses_process_tree_killer(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

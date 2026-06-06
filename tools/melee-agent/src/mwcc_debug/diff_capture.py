@@ -7,7 +7,6 @@ import re
 import signal
 import subprocess
 import sys
-import tempfile
 import threading
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
@@ -15,6 +14,7 @@ from pathlib import Path
 from typing import Iterator
 
 from .source_patch import transfer_candidate
+from .temp_scratch import temporary_directory
 
 
 @dataclass(frozen=True)
@@ -108,7 +108,7 @@ def compile_source_variant(
     timeout: int,
     unit_source: Path | None = None,
 ) -> str:
-    with tempfile.TemporaryDirectory(prefix="mwcc_diff_") as td:
+    with temporary_directory(prefix="mwcc_diff_") as td:
         out_path = Path(td) / f"{diff_input.label.lower()}.pcdump.txt"
         if unit_source is None:
             source_context = _source_path_for_compile(
