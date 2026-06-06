@@ -30,6 +30,148 @@ def _join_continuations(block: str) -> str:
     return re.sub(r"\$\n\s*", " ", block)
 
 
+_HEADER_DIRS = [
+    "include",
+    "src",
+    "extern/dolphin/include",
+    "extern/dolphin/src",
+]
+
+
+def _find_struct_body(repo: Path, name: str) -> str | None:
+    """Find the body of a C struct (or typedef struct) by name.
+
+    Handles both:
+      struct Name { ... }
+      typedef struct _Name { ... } Name;
+    Returns the raw content between the outermost braces, or None.
+    """
+    pats = [
+        re.compile(rf"struct\s+_?{re.escape(name)}\s*\{{(.*?)\}}", re.S),
+        re.compile(rf"struct\s*\{{(.*?)\}}\s*{re.escape(name)}\s*;", re.S),
+    ]
+    for d in _HEADER_DIRS:
+        root = repo / d
+        if not root.exists():
+            continue
+        for hp in root.rglob("*.h"):
+            try:
+                txt = hp.read_text(errors="ignore")
+            except OSError:
+                continue
+            if name not in txt:
+                continue
+            for pat in pats:
+                m = pat.search(txt)
+                if m:
+                    return m.group(1)
+    return None
+
+
+def _parse_c_fields(body: str) -> list[dict]:
+    """Parse C struct fields from raw body text (no offset-comment required).
+
+    Returns a list of dicts with keys: name, type, is_array, array_size.
+    Skips fields whose names start with 'pad' or 'unk' (padding/unknown).
+    Handles simple declarations, array declarations, and pointer types.
+    """
+    fields = []
+    # Strip C comments
+    cleaned = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
+    cleaned = re.sub(r"//[^\n]*", "", cleaned)
+
+    # Split into statements by semicolons; handle nested braces (anonymous structs etc)
+    # We parse line-by-line within a flat struct body
+    for line in cleaned.split(";"):
+        line = line.strip()
+        if not line:
+            continue
+
+        # Match: optional leading pointer stars, optional const, type, optional stars/const, name, optional [N]
+        # Pattern: type_tokens... name [array_size]?
+        # Example lines:
+        #   u8 RST
+        #   u8* dLC[3]
+        #   THPComponent components[3]
+        #   u32 pad2[9]
+        #   u8 validHuffmanTabs
+
+        # Simplify: find the last token as the name (with optional array suffix)
+        # Split by whitespace, last token = name (possibly name[N])
+        tokens = line.split()
+        if len(tokens) < 2:
+            continue
+
+        # Last token is name possibly with array suffix
+        raw_name = tokens[-1]
+        arr_match = re.match(r"^([a-zA-Z_][a-zA-Z0-9_]*)(?:\[(\d+)\])?$", raw_name)
+        if not arr_match:
+            continue
+
+        field_name = arr_match.group(1)
+        array_size = int(arr_match.group(2)) if arr_match.group(2) else None
+
+        # Type is everything except the last token, stripped of pointer stars from the end
+        type_str = " ".join(tokens[:-1]).rstrip("*").strip()
+        # Also strip pointer from name-start (e.g. "u8*" split oddly)
+        type_str = re.sub(r"\*+$", "", type_str).strip()
+
+        fields.append({
+            "name": field_name,
+            "type": type_str,
+            "is_array": array_size is not None,
+            "array_size": array_size,
+        })
+
+    return fields
+
+
+def enumerate_field_paths(repo: Path, struct_name: str, _depth: int = 0) -> list[str]:
+    """Enumerate offsetof-able field paths for a struct.
+
+    Returns strings like "RST", "components[0].predDC", etc.
+    Recurses one level into struct-typed fields.
+    Skips fields whose names start with 'pad' or 'unk'.
+    """
+    body = _find_struct_body(repo, struct_name)
+    if body is None:
+        raise ValueError(f"struct {struct_name!r} not found in header dirs")
+
+    fields = _parse_c_fields(body)
+    out: list[str] = []
+
+    for f in fields:
+        nm = f["name"]
+        if not nm or nm.startswith("pad") or nm.startswith("unk"):
+            continue
+
+        arr = f["array_size"]
+        elem_type = f["type"]
+
+        # Recurse into nested struct types (one level only)
+        nested: list[str] = []
+        if _depth < 1 and _find_struct_body(repo, elem_type) is not None:
+            try:
+                nested = enumerate_field_paths(repo, elem_type, _depth + 1)
+            except ValueError:
+                nested = []
+
+        # Determine indices to emit
+        if arr is not None:
+            indices: list[int | None] = list(range(min(arr, 2)))  # 0 and 1 (or just 0 for size-1)
+        else:
+            indices = [None]
+
+        for idx in indices:
+            base = nm if idx is None else f"{nm}[{idx}]"
+            if nested:
+                out.extend(f"{base}.{sub}" for sub in nested)
+            else:
+                out.append(base)
+
+    return out
+
+
 def parse_tu_cflags(repo: Path, tu_src: str) -> CflagsSpec:
     """Extract mw_version + cflags for the build edge that compiles `tu_src`."""
     text = _read_ninja(repo)
