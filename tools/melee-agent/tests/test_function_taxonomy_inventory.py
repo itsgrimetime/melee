@@ -2117,6 +2117,26 @@ def test_data_symbol_name_magic_preflight_rebuckets_non_candidate_rows(
     ("blocker", "expected_actionability"),
     [
         (
+            "unsupported-source-site",
+            "blocked-data-symbol-unsupported-source-site",
+        ),
+        (
+            "ambiguous-relocation-pair",
+            "blocked-data-symbol-ambiguous-relocation-pair",
+        ),
+        (
+            "unsupported-reloc-kind",
+            "blocked-data-symbol-unsupported-reloc-kind",
+        ),
+        (
+            "raw-diff-no-supported-data-symbol-pair",
+            "blocked-data-symbol-raw-diff-no-supported-data-symbol-pair",
+        ),
+        (
+            "no-name-magic-validation-failed",
+            "blocked-data-symbol-no-name-magic-validation-failed",
+        ),
+        (
             "ambiguous-sdata2-value",
             "blocked-data-symbol-ambiguous-sdata2-value",
         ),
@@ -2126,7 +2146,7 @@ def test_data_symbol_name_magic_preflight_rebuckets_non_candidate_rows(
         ),
     ],
 )
-def test_data_symbol_name_magic_preflight_rebuckets_sdata2_blockers(
+def test_data_symbol_name_magic_preflight_rebuckets_zero_probe_blockers(
     tmp_path: Path,
     blocker: str,
     expected_actionability: str,

@@ -66,6 +66,11 @@ PREVIEW_FACET_FIELDS = (
 )
 DATA_SYMBOL_BLOCKED_SOURCE_ACTIONABILITIES = {
     "blocked-data-symbol-no-name-magic-candidate",
+    "blocked-data-symbol-unsupported-source-site",
+    "blocked-data-symbol-ambiguous-relocation-pair",
+    "blocked-data-symbol-unsupported-reloc-kind",
+    "blocked-data-symbol-raw-diff-no-supported-data-symbol-pair",
+    "blocked-data-symbol-no-name-magic-validation-failed",
     "blocked-data-symbol-ambiguous-sdata2-value",
     "blocked-data-symbol-sdata2-pool-order-dependent",
 }
@@ -326,6 +331,93 @@ def _row_matches_filters_with_relaxed_field(
     return True
 
 
+def _result_source_actionability_rebucket(
+    result: Mapping[str, Any],
+) -> dict[str, str] | None:
+    details = result.get("details")
+    if not isinstance(details, Mapping):
+        return None
+    rebucket = details.get("source_actionability_rebucket")
+    if not isinstance(rebucket, Mapping):
+        return None
+    remove_from = str(
+        rebucket.get("remove_from") or rebucket.get("from") or ""
+    ).strip()
+    to_actionability = str(rebucket.get("to") or "").strip()
+    if not remove_from or not to_actionability:
+        return None
+    return {
+        "remove_from": remove_from,
+        "to": to_actionability,
+        "blocker": str(rebucket.get("blocker") or "").strip(),
+        "reason": str(rebucket.get("reason") or "").strip(),
+    }
+
+
+def _load_source_actionability_rebuckets(
+    repo_root: Path,
+    work_bucket: str,
+) -> dict[str, dict[str, str]]:
+    harvest_dir = repo_root / "build" / "harvest"
+    if not harvest_dir.is_dir():
+        return {}
+
+    ledgers = [
+        path
+        for path in harvest_dir.glob("*.json")
+        if path.is_file()
+    ]
+    ledgers.sort(key=lambda path: (path.stat().st_mtime, path.name))
+
+    rebuckets: dict[str, dict[str, str]] = {}
+    for path in ledgers:
+        try:
+            ledger = _read_harvest_ledger(path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        ledger_bucket = str(ledger.get("work_bucket") or "")
+        for raw_result in ledger["results"]:
+            if not isinstance(raw_result, Mapping):
+                continue
+            function = str(raw_result.get("function") or "").strip()
+            if not function:
+                continue
+            result_bucket = str(
+                raw_result.get("work_bucket") or ledger_bucket or ""
+            ).strip()
+            if result_bucket != work_bucket:
+                continue
+            rebucket = _result_source_actionability_rebucket(raw_result)
+            if rebucket is None:
+                continue
+            rebuckets[function] = rebucket
+    return rebuckets
+
+
+def _apply_source_actionability_rebucket(
+    raw: Mapping[str, str],
+    rebuckets: Mapping[str, Mapping[str, str]],
+) -> dict[str, str]:
+    updated = {key: "" if value is None else value for key, value in raw.items()}
+    function = (updated.get("function") or "").strip()
+    if not function:
+        return updated
+    rebucket = rebuckets.get(function)
+    if rebucket is None:
+        return updated
+    current_actionability = (updated.get("source_actionability") or "").strip()
+    if current_actionability != rebucket.get("remove_from"):
+        return updated
+    updated["source_actionability"] = str(rebucket.get("to") or "").strip()
+    reason = str(rebucket.get("reason") or "").strip()
+    blocker = str(rebucket.get("blocker") or "").strip()
+    if reason:
+        updated["actionability_reason"] = reason
+    if blocker:
+        updated["rebucket_blocker"] = blocker
+    return updated
+
+
 def _request_from_queue_row(
     raw: Mapping[str, str],
     *,
@@ -407,11 +499,19 @@ def load_queue_rows(
 ) -> list[HarvestRequest]:
     rows: list[HarvestRequest] = []
     facts_by_function = target_map or {}
+    source_actionability_rebuckets = _load_source_actionability_rebuckets(
+        repo_root,
+        work_bucket,
+    )
     assert_taxonomy_queue_is_completed(queue_path)
     with queue_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
         _validate_filter_fields(filters, reader.fieldnames)
-        for raw in reader:
+        for raw_row in reader:
+            raw = _apply_source_actionability_rebucket(
+                raw_row,
+                source_actionability_rebuckets,
+            )
             if not _row_matches_filters(raw, filters):
                 continue
             if limit is not None and len(rows) >= limit:
@@ -494,16 +594,20 @@ def preview_harvest_queue(
     eligible_rows: list[dict[str, str]] = []
     matching_rows: list[dict[str, str]] = []
     sample: list[dict[str, Any]] = []
+    source_actionability_rebuckets = _load_source_actionability_rebuckets(
+        repo_root,
+        work_bucket,
+    )
 
     assert_taxonomy_queue_is_completed(queue_path)
     with queue_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
         _validate_filter_fields(filters, reader.fieldnames)
         for raw_row in reader:
-            raw = {
-                key: "" if value is None else value
-                for key, value in raw_row.items()
-            }
+            raw = _apply_source_actionability_rebucket(
+                raw_row,
+                source_actionability_rebuckets,
+            )
             function = (raw.get("function") or "").strip()
             if not function:
                 continue
@@ -615,7 +719,10 @@ def _is_allocator_pcdump_triage_request(request: HarvestRequest) -> bool:
 
 
 def _is_blocked_data_symbol_request(request: HarvestRequest) -> bool:
-    return request.source_actionability in DATA_SYMBOL_BLOCKED_SOURCE_ACTIONABILITIES
+    return (
+        request.source_actionability in DATA_SYMBOL_BLOCKED_SOURCE_ACTIONABILITIES
+        or request.source_actionability.startswith("blocked-data-symbol-")
+    )
 
 
 def select_harness(request: HarvestRequest) -> str | None:
@@ -625,6 +732,9 @@ def select_harness(request: HarvestRequest) -> str | None:
         return harness if harness in REGISTERED_HARNESSES else None
 
     if _is_blocked_data_symbol_request(request):
+        return None
+
+    if request.source_actionability == MALFORMED_SOURCE_CANDIDATE_ACTIONABILITY:
         return None
 
     if _is_allocator_pcdump_triage_request(request):

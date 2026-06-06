@@ -39,6 +39,17 @@ _DECL_ORDER_EVAL_LOCK = threading.Lock()
 NON_STRUCT_BASE_REGS = {"r1", "r2", "r13"}
 DATA_SYMBOL_NAME_MAGIC_REBUCKET_BLOCKERS = {
     "no-name-magic-candidate": "blocked-data-symbol-no-name-magic-candidate",
+    "unsupported-source-site": "blocked-data-symbol-unsupported-source-site",
+    "ambiguous-relocation-pair": (
+        "blocked-data-symbol-ambiguous-relocation-pair"
+    ),
+    "unsupported-reloc-kind": "blocked-data-symbol-unsupported-reloc-kind",
+    "raw-diff-no-supported-data-symbol-pair": (
+        "blocked-data-symbol-raw-diff-no-supported-data-symbol-pair"
+    ),
+    "no-name-magic-validation-failed": (
+        "blocked-data-symbol-no-name-magic-validation-failed"
+    ),
     "ambiguous-sdata2-value": "blocked-data-symbol-ambiguous-sdata2-value",
     "sdata2-pool-order-dependent": (
         "blocked-data-symbol-sdata2-pool-order-dependent"

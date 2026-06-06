@@ -1378,14 +1378,116 @@ def test_preview_harvest_queue_facets_name_magic_blocker(
     ]
 
 
+def test_indexed_malformed_rebucket_ledgers_are_applied_to_queue_preview(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "indexed-struct-pointer.tsv"
+    malformed = _row(
+        "malformed_fn",
+        headline_tool="source-shape",
+        source_actionability="current-tools-indexed-pointer",
+        frame_closability_tier="",
+    )
+    malformed["primary"] = "indexed-struct-pointer-materialization"
+    ready = _row(
+        "ready_fn",
+        headline_tool="source-shape",
+        source_actionability="current-tools-indexed-pointer",
+        frame_closability_tier="",
+    )
+    ready["primary"] = "indexed-struct-pointer-materialization"
+    _write_queue(queue, [malformed, ready])
+    ledger_dir = repo_root / "build" / "harvest"
+    ledger_dir.mkdir(parents=True)
+    (ledger_dir / "indexed-ledger.json").write_text(
+        json.dumps(
+            {
+                "work_bucket": "indexed-struct-pointer",
+                "results": [
+                    {
+                        "function": "malformed_fn",
+                        "work_bucket": "indexed-struct-pointer",
+                        "source_actionability": "candidate-generation-fidelity",
+                        "blocker": "malformed-source-candidate",
+                        "details": {
+                            "source_actionability_rebucket": {
+                                "from": "current-tools-indexed-pointer",
+                                "to": "candidate-generation-fidelity",
+                                "remove_from": "current-tools-indexed-pointer",
+                                "blocker": "malformed-source-candidate",
+                                "reason": (
+                                    "candidate pcdump omitted the requested "
+                                    "function"
+                                ),
+                            }
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    current_rows = load_queue_rows(
+        queue,
+        work_bucket="indexed-struct-pointer",
+        repo_root=repo_root,
+        filters=HarvestFilters(
+            where={"source_actionability": ("current-tools-indexed-pointer",)}
+        ),
+    )
+    all_rows = load_queue_rows(
+        queue,
+        work_bucket="indexed-struct-pointer",
+        repo_root=repo_root,
+    )
+    preview = preview_harvest_queue(
+        queue,
+        work_bucket="indexed-struct-pointer",
+        repo_root=repo_root,
+        filters=HarvestFilters(
+            where={"source_actionability": ("current-tools-indexed-pointer",)}
+        ),
+    )
+
+    assert [row.function for row in current_rows] == ["ready_fn"]
+    assert [row.source_actionability for row in all_rows] == [
+        "candidate-generation-fidelity",
+        "current-tools-indexed-pointer",
+    ]
+    assert select_harness(all_rows[0]) is None
+    assert preview["counts"]["matching_rows"] == 1
+    assert [row["function"] for row in preview["sample"]] == ["ready_fn"]
+    assert preview["near_miss_facets"]["source_actionability"] == [
+        {"value": "candidate-generation-fidelity", "count": 1}
+    ]
+
+
+@pytest.mark.parametrize(
+    "source_actionability",
+    [
+        "blocked-data-symbol-no-name-magic-candidate",
+        "blocked-data-symbol-unsupported-source-site",
+        "blocked-data-symbol-ambiguous-relocation-pair",
+        "blocked-data-symbol-unsupported-reloc-kind",
+        "blocked-data-symbol-raw-diff-no-supported-data-symbol-pair",
+        "blocked-data-symbol-no-name-magic-validation-failed",
+        "blocked-data-symbol-ambiguous-sdata2-value",
+        "blocked-data-symbol-sdata2-pool-order-dependent",
+    ],
+)
 def test_blocked_data_symbol_rows_do_not_select_name_magic_harness(
+    source_actionability: str,
     tmp_path: Path,
 ) -> None:
     repo_root = _repo_with_source(tmp_path)
     queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
     row = _name_magic_row("blocked_fn", primary="data-symbol-or-relocation")
-    row["source_actionability"] = "blocked-data-symbol-sdata2-pool-order-dependent"
-    row["name_magic_blocker"] = "sdata2-pool-order-dependent"
+    row["source_actionability"] = source_actionability
+    row["name_magic_blocker"] = source_actionability.removeprefix(
+        "blocked-data-symbol-"
+    )
     _write_queue(queue, [row])
 
     rows = load_queue_rows(
