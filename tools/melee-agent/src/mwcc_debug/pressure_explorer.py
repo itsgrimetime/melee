@@ -1368,6 +1368,10 @@ def _same_tu_helper_reads_through_param(
     for name in _simple_helper_parameter_names(source, function):
         if re.search(rf"\b{re.escape(name)}\b\s*(?:->|\.|\[)", masked):
             return True
+        if re.search(rf"(?<![A-Za-z0-9_])\*\s*{re.escape(name)}\b", masked):
+            return True
+        if re.search(rf"\(\s*\*\s*{re.escape(name)}\s*\)\s*(?:\.|\[)", masked):
+            return True
     return False
 
 

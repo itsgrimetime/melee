@@ -334,6 +334,40 @@ def test_source_lifetime_repeated_helper_result_reuse_rejects_same_tu_state_read
     }
 
 
+def test_source_lifetime_repeated_helper_result_reuse_rejects_same_tu_deref_reader() -> None:
+    source = textwrap.dedent("""\
+        static inline s32 helper(s32* ptr)
+        {
+            return *ptr;
+        }
+
+        s32 fn_80000000(s32* ptr)
+        {
+            s32 total = 0;
+            total += helper(ptr);
+            mutate(ptr);
+            total = helper(ptr);
+            return total;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "repeated-helper-result-reuse" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "repeated-helper-result-reuse"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] in {
+        "callee-not-supported-for-reuse",
+        "same-tu-helper-reads-mutable-param",
+    }
+
+
 def test_source_lifetime_repeated_helper_result_reuse_supports_same_tu_unsigned_helper() -> None:
     source = textwrap.dedent("""\
         static inline u32 helper(u32 x)
@@ -577,6 +611,40 @@ def test_source_lifetime_helper_result_dematerialize_rejects_same_tu_state_reade
             s32 result;
             result = helper(state);
             mutate(state);
+            sink(result);
+            return result;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "helper-result-dematerialize" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "helper-result-dematerialize"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] in {
+        "callee-not-supported-for-dematerialize",
+        "same-tu-helper-reads-mutable-param",
+    }
+
+
+def test_source_lifetime_helper_result_dematerialize_rejects_same_tu_deref_reader() -> None:
+    source = textwrap.dedent("""\
+        static inline s32 helper(s32* ptr)
+        {
+            return *ptr;
+        }
+
+        s32 fn_80000000(s32* ptr)
+        {
+            s32 result;
+            result = helper(ptr);
+            mutate(ptr);
             sink(result);
             return result;
         }
