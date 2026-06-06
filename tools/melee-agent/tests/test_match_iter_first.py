@@ -266,6 +266,43 @@ def test_match_iter_first_vector_marks_all_already_target_as_dead_end() -> None:
     assert "force-vector" in actionability["avoid"]
 
 
+def test_auto_verify_no_improvement_demotes_target_vector_guidance() -> None:
+    vector = {
+        "force_vector": "class0:ig33:phys=r4",
+        "force_vector_recommended": True,
+        "actionability": {
+            "status": "needs-move",
+            "work_bucket": "allocator-target-vector",
+            "summary": "target vector has runnable entries that need movement",
+            "next_step": "Use the force-vector probe as a diagnostic test.",
+            "target_count": 1,
+            "runnable_target_count": 1,
+            "already_target_count": 0,
+            "needs_move_count": 1,
+            "unknown_current_count": 0,
+        },
+    }
+    auto_verify = {
+        "ran": True,
+        "baseline_pct": 98.0,
+        "new_pct": 98.0,
+        "delta": 0.0,
+    }
+
+    debug_cli._annotate_auto_verify_actionability(auto_verify)
+    effective = debug_cli._target_vector_after_auto_verify(vector, auto_verify)
+
+    assert effective["force_vector_recommended"] is False
+    assert effective["actionability"]["status"] == "auto-verify-no-improvement"
+    assert effective["actionability"]["work_bucket"] == (
+        "source-lifetime/callee-save-shape"
+    )
+    assert "no improvement" in effective["actionability"]["summary"]
+    assert "source-shape" in effective["actionability"]["next_step"]
+    assert "force-vector" in effective["actionability"]["avoid"]
+    assert vector["force_vector_recommended"] is True
+
+
 def test_match_iter_first_vector_suppresses_conflicting_duplicate_ig_force_phys() -> None:
     events = FunctionEvents(
         name="fn_test",

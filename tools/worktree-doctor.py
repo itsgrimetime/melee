@@ -47,6 +47,16 @@ TOOLING_FILES = [
     "tools/workflow/update-pr.sh",
     "tools/workflow/pr-worktree.sh",
 ]
+TRACKED_TOOLING_EXCLUDE_PATTERNS = {
+    "tools",
+    "tools/",
+    "tools/melee-agent",
+    "tools/melee-agent/",
+    "tools/workflow",
+    "tools/workflow/",
+    "tools/mwcc_debug",
+    "tools/mwcc_debug/",
+}
 
 DOL_CANDIDATES = [
     Path.home() / "code" / "melee" / "orig" / "GALE01" / "sys" / "main.dol",
@@ -274,6 +284,7 @@ class Doctor:
                 self.ok(f"remote {remote}: {url}")
             else:
                 self.warn(f"remote {remote} is not configured")
+        self.results.extend(collect_local_exclude_warnings(ROOT, fix=self.fix))
 
     def check_tooling_overlay(self) -> None:
         for rel_path in TOOLING_FILES:
@@ -574,6 +585,97 @@ class Doctor:
             print(f"[{labels[result.level]}] {result.message}")
             if result.fix:
                 print(f"      fix: {result.fix}")
+
+
+def _git_for_root(root: Path, args: list[str], allow_fail: bool = False) -> str:
+    result = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True)
+    if result.returncode != 0 and not allow_fail:
+        raise RuntimeError(result.stderr.strip())
+    return result.stdout if result.returncode == 0 else ""
+
+
+def local_exclude_path(root: Path) -> Path | None:
+    path_text = _git_for_root(
+        root,
+        ["rev-parse", "--git-path", "info/exclude"],
+        allow_fail=True,
+    ).strip()
+    if not path_text:
+        return None
+    path = Path(path_text)
+    if not path.is_absolute():
+        path = root / path
+    return path
+
+
+def has_tracked_path_under(root: Path, rel_path: str) -> bool:
+    return bool(
+        _git_for_root(root, ["ls-files", "--", rel_path], allow_fail=True).strip()
+    )
+
+
+def _normalized_exclude_pattern(line: str) -> str | None:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return None
+    return stripped.lstrip("/")
+
+
+def blocked_tracked_tooling_exclude_patterns(root: Path) -> list[str]:
+    exclude = local_exclude_path(root)
+    if exclude is None or not exclude.exists():
+        return []
+    blocked: list[str] = []
+    for line in exclude.read_text(encoding="utf-8").splitlines():
+        pattern = _normalized_exclude_pattern(line)
+        if pattern is None:
+            continue
+        if pattern not in TRACKED_TOOLING_EXCLUDE_PATTERNS:
+            continue
+        tracked_path = pattern.rstrip("/")
+        if has_tracked_path_under(root, tracked_path):
+            blocked.append(pattern)
+    return blocked
+
+
+def remove_blocked_tracked_tooling_excludes(root: Path) -> list[str]:
+    exclude = local_exclude_path(root)
+    if exclude is None or not exclude.exists():
+        return []
+    blocked = set(blocked_tracked_tooling_exclude_patterns(root))
+    if not blocked:
+        return []
+    lines = exclude.read_text(encoding="utf-8").splitlines()
+    kept = [
+        line for line in lines
+        if (_normalized_exclude_pattern(line) not in blocked)
+    ]
+    exclude.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+    return sorted(blocked)
+
+
+def collect_local_exclude_warnings(root: Path, *, fix: bool = False) -> list[CheckResult]:
+    blocked = blocked_tracked_tooling_exclude_patterns(root)
+    if not blocked:
+        return []
+    joined = ", ".join(sorted(set(blocked)))
+    if fix:
+        removed = remove_blocked_tracked_tooling_excludes(root)
+        if removed:
+            return [
+                CheckResult(
+                    "ok",
+                    "removed local exclude pattern(s) that hid tracked tooling: "
+                    + ", ".join(removed),
+                )
+            ]
+    return [
+        CheckResult(
+            "warn",
+            "local .git/info/exclude hides tracked tooling path(s): " + joined,
+            "run python tools/worktree-doctor.py --fix or remove those local exclude entries",
+        )
+    ]
 
 
 def run_git(args: list[str], allow_fail: bool = False) -> str:

@@ -238,6 +238,8 @@ def test_generate_inventory_classifies_report_functions_and_writes_outputs(
     )
     assert (
         "match_percent\tfunction\tprimary\tsubcategory\t"
+        "offset_discrepancy_count\toffset_discrepancy_bases\t"
+        "offset_discrepancy_disps\toffset_discrepancy_opcodes\t"
         "frame_cause\tframe_verdict\tframe_closability_tier\t"
         "frame_match_relevance\tframe_match_relevance_reason\t"
         "frame_attribution_status\tframe_source_object_symbol\t"
@@ -249,6 +251,7 @@ def test_generate_inventory_classifies_report_functions_and_writes_outputs(
     ) in stack_queue
     assert (
         "99.75000\tstack_fn\tstack-slot-layout\tsame-frame-stack-slot-placement\t"
+        "\t\t\t\t"
         "stack-object-offset-shift\tsource-reachable-candidate\treorder-gated-362\t"
         "match-neutral\tsame-frame stack-slot offset-only residual; closing this "
         "frame residual should not be treated as the match gate\tcheckdiff-only\t"
@@ -257,13 +260,14 @@ def test_generate_inventory_classifies_report_functions_and_writes_outputs(
     assert "\t0.12500\tswap a <-> b\tevaluated\t3" in stack_queue
     assert (
         "99.25000\tframe_fn\tstack-layout\tframe-too-large\t"
+        "\t\t\t\t"
         "frame-too-large\tunresolved-source-attribution\tgen-gated-366\t"
         "unknown\tframe relevance is not proven by the current frame taxonomy "
         "evidence\tcheckdiff-only\t\t\t0\tgenerator-gated\tframe-transform-search\t"
     ) in stack_queue
 
     summary = (output / "summary.md").read_text(encoding="utf-8")
-    assert "| Report non-100% | 5 |" in summary
+    assert "| Report audit candidates | 5 |" in summary
     assert "| stack-local-layout | 3 |" in summary
     assert "| known-small-pattern-candidate | 1 |" in summary
 
@@ -464,6 +468,200 @@ def test_generate_inventory_consumes_later_completed_worker_before_slow_earlier_
     assert completed[:2] == ["small_fn", "stack_fn"]
 
 
+def test_generate_inventory_emits_periodic_progress_when_workers_are_busy(
+    tmp_path: Path,
+) -> None:
+    from tools.function_taxonomy_inventory import generate_inventory
+
+    report = tmp_path / "report.json"
+    output = tmp_path / "taxonomy"
+    write_report(report)
+    events: list[dict[str, object]] = []
+
+    def slow_runner(function: str):
+        threading.Event().wait(timeout=0.05)
+        return fake_checkdiff(function)
+
+    generate_inventory(
+        report,
+        output,
+        checkdiff_runner=slow_runner,
+        decl_order_evaluator=None,
+        frame_report_runner=None,
+        workers=1,
+        limit=1,
+        progress_callback=events.append,
+        progress_interval=0.01,
+    )
+
+    progress_events = [
+        event for event in events if event.get("event") == "inventory_progress"
+    ]
+    assert progress_events
+    assert progress_events[0]["completed_count"] == 0
+    assert progress_events[0]["pending_count"] == 1
+    assert progress_events[0]["active_functions"] == ["stack_fn"]
+
+
+def test_offset_discrepancies_route_to_struct_offset_bucket_before_registers() -> None:
+    from tools.function_taxonomy_inventory import FunctionCandidate, classify_candidate
+
+    candidate = FunctionCandidate(
+        function="struct_fn",
+        unit="main/melee/demo/demo",
+        file_path="melee/demo/demo.c",
+        size_bytes=128,
+        match_percent=99.5,
+        address="0x80000000",
+        object_status="NonMatching",
+    )
+
+    def runner(function: str):
+        return 1, json.dumps(
+            {
+                "function": function,
+                "match": False,
+                "classification": {
+                    "primary": "register-allocation",
+                    "offset_discrepancies": [
+                        {
+                            "base_reg": "r31",
+                            "cur_disp": 260,
+                            "ref_disp": 264,
+                            "opcode": "lwz",
+                        }
+                    ],
+                    "reasons": ["offset-only field displacement mismatch"],
+                },
+                "structural": {"opcode_similarity": 1.0, "line_delta": 0},
+            }
+        ), ""
+
+    record, error = classify_candidate(
+        candidate,
+        runner,
+        decl_order_evaluator=None,
+        frame_report_runner=None,
+        cast_audit_runner=None,
+    )
+
+    assert error is None
+    assert record is not None
+    assert record["work_bucket"] == "struct-offset-discrepancy"
+    assert record["subcategory"] == "struct-field-offset-displacement"
+    assert record["source_actionability"] == "current-tools-struct-verify"
+    assert record["headline_tool"] == "struct-verify"
+    assert record["offset_discrepancy_count"] == 1
+    assert record["offset_discrepancy_bases"] == "r31"
+    assert record["offset_discrepancy_disps"] == "current:260 expected:264"
+    assert "melee-agent struct verify struct_fn" in record["next_command"]
+    assert "--base r31" in record["next_command"]
+
+
+def test_fuzzy_100_noncomplete_functions_are_audited_but_exact_matches_skip(
+    tmp_path: Path,
+) -> None:
+    from tools.function_taxonomy_inventory import generate_inventory
+
+    report = tmp_path / "report.json"
+    output = tmp_path / "taxonomy"
+    report.write_text(
+        json.dumps(
+            {
+                "units": [
+                    {
+                        "name": "main/melee/demo/demo",
+                        "metadata": {
+                            "source_path": "src/melee/demo/demo.c",
+                            "complete": False,
+                        },
+                        "measures": {
+                            "matched_functions": 1,
+                            "total_functions": 2,
+                        },
+                        "functions": [
+                            {
+                                "name": "fuzzy_exact",
+                                "size": "64",
+                                "fuzzy_match_percent": 100.0,
+                                "metadata": {"virtual_address": "2147483648"},
+                            },
+                            {
+                                "name": "fuzzy_offset",
+                                "size": "64",
+                                "fuzzy_match_percent": 100.0,
+                                "metadata": {"virtual_address": "2147483712"},
+                            },
+                        ],
+                    },
+                    {
+                        "name": "main/melee/demo/complete",
+                        "metadata": {
+                            "source_path": "src/melee/demo/complete.c",
+                            "complete": True,
+                        },
+                        "functions": [
+                            {
+                                "name": "complete_fuzzy_100",
+                                "size": "64",
+                                "fuzzy_match_percent": 100.0,
+                                "metadata": {"virtual_address": "2147483776"},
+                            }
+                        ],
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    seen: list[str] = []
+
+    def runner(function: str):
+        seen.append(function)
+        if function == "fuzzy_exact":
+            return 0, json.dumps(
+                {
+                    "function": function,
+                    "match": True,
+                    "classification": {"primary": "instruction-identical"},
+                    "structural": {},
+                }
+            ), ""
+        return 1, json.dumps(
+            {
+                "function": function,
+                "match": False,
+                "classification": {
+                    "primary": "operand-register-or-offset",
+                    "offset_discrepancies": [
+                        {
+                            "base_reg": "r30",
+                            "cur_disp": 12,
+                            "ref_disp": 16,
+                        }
+                    ],
+                },
+                "structural": {"opcode_similarity": 1.0, "line_delta": 0},
+            }
+        ), ""
+
+    result = generate_inventory(
+        report,
+        output,
+        checkdiff_runner=runner,
+        decl_order_evaluator=None,
+        frame_report_runner=None,
+        workers=1,
+    )
+
+    assert seen == ["fuzzy_exact", "fuzzy_offset"]
+    assert result.attempted_count == 2
+    assert result.classified_count == 1
+    records = read_jsonl(output / "taxonomy.records.jsonl")
+    assert [row["function"] for row in records] == ["fuzzy_offset"]
+    assert records[0]["work_bucket"] == "struct-offset-discrepancy"
+
+
 def test_describe_actionability_splits_non_frame_work_buckets() -> None:
     from tools.function_taxonomy_inventory import describe_actionability
 
@@ -497,6 +695,12 @@ def test_describe_actionability_splits_non_frame_work_buckets() -> None:
             "array-indexed-vs-element-pointer",
             "current-tools-indexed-pointer",
             "source-shape",
+        ),
+        (
+            "struct-offset-discrepancy",
+            "struct-field-offset-displacement",
+            "current-tools-struct-verify",
+            "struct-verify",
         ),
         (
             "structural-reconstruction",

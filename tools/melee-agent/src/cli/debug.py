@@ -252,6 +252,45 @@ def _target_vector_actionability(targets: list[dict]) -> dict:
     }
 
 
+def _target_vector_after_auto_verify(
+    target_vector: dict,
+    auto_verify_result: dict | None,
+) -> dict:
+    if (
+        not isinstance(auto_verify_result, dict)
+        or auto_verify_result.get("actionability") != "no_improvement"
+    ):
+        return target_vector
+    actionability = dict(target_vector.get("actionability") or {})
+    if actionability.get("status") != "needs-move":
+        return target_vector
+
+    effective = dict(target_vector)
+    actionability.update(
+        {
+            "status": "auto-verify-no-improvement",
+            "work_bucket": "source-lifetime/callee-save-shape",
+            "summary": (
+                "auto-verify proved the force-vector override made no "
+                "improvement to the function match%"
+            ),
+            "next_step": (
+                "Pivot to source-shape, temporary lifetime, helper-inline, "
+                "or subset target analysis; treat the force-vector as "
+                "diagnostic evidence, not the next action."
+            ),
+            "avoid": (
+                "Do not continue full force-vector probing after auto-verify "
+                "reports no improvement."
+            ),
+            "auto_verify_actionability": "no_improvement",
+        }
+    )
+    effective["actionability"] = actionability
+    effective["force_vector_recommended"] = False
+    return effective
+
+
 def _print_target_vector_actionability(actionability: dict) -> None:
     status = actionability.get("status")
     summary = actionability.get("summary")
@@ -13135,6 +13174,10 @@ def match_iter_first(
 
     if isinstance(auto_verify_result, dict):
         _annotate_auto_verify_actionability(auto_verify_result)
+        target_vector = _target_vector_after_auto_verify(
+            target_vector,
+            auto_verify_result,
+        )
 
     if json_out:
         payload: dict = {

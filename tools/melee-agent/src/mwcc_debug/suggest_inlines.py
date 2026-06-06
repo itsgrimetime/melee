@@ -766,15 +766,19 @@ def render_text(report: SourceShapeReport) -> str:
                     "n/a" if candidate is None else f"{candidate:.3f}"
                 )
                 lines.append(
-                    f"- {score.candidate_id}: compile={score.compile_ok} "
+                    f"- {score.candidate_id}: status={score.status} "
+                    f"compile={score.compile_ok} "
                     f"baseline={baseline_text} candidate={candidate_text} "
                     f"delta={delta_text}"
                 )
             else:
                 lines.append(
-                    f"- {score.candidate_id}: compile={score.compile_ok} "
+                    f"- {score.candidate_id}: status={score.status} "
+                    f"compile={score.compile_ok} "
                     f"delta={delta_text}"
                 )
+            if score.score_reason:
+                lines.append(f"  reason: {score.score_reason}")
             display_traces = score.copy_trace_highlights or score.copy_traces
             total_traces = score.copy_trace_total_count or len(display_traces)
             if total_traces:

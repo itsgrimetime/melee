@@ -562,6 +562,49 @@ def test_render_json_includes_scores() -> None:
     assert payload["scores"][0]["checkdiff_delta"] == 0.1
 
 
+def test_verify_real_tree_patches_marks_null_checkdiff_scores_unscored(tmp_path) -> None:
+    from src.mwcc_debug.candidate_verify import (
+        CheckdiffResult,
+        verify_real_tree_patches,
+    )
+    from src.mwcc_debug.source_shape import CandidatePatch, SourceShapeReport
+
+    source_path = tmp_path / "demo.c"
+    source_path.write_text("void f(void) {}\n", encoding="utf-8")
+    patches = [
+        CandidatePatch(
+            candidate_id="arg-temp-0001",
+            patched_source="void f(void) { helper(); }\n",
+            summary="extract helper",
+            touched_ranges=((0, 1),),
+        )
+    ]
+
+    scores = verify_real_tree_patches(
+        function="f",
+        source_path=source_path,
+        patches=patches,
+        checkdiff_runner=lambda _function: CheckdiffResult(None, None),
+        apply_best=False,
+        threshold=0.05,
+        baseline_result=CheckdiffResult(None, None),
+    )
+
+    assert len(scores) == 1
+    score = scores[0]
+    assert score.compile_ok is True
+    assert score.status == "unscored"
+    assert score.score_reason == "candidate checkdiff did not return a match percent"
+    payload = json.loads(render_json(SourceShapeReport(function="f", scores=scores)))
+    assert payload["scores"][0]["status"] == "unscored"
+    assert payload["scores"][0]["score_reason"] == (
+        "candidate checkdiff did not return a match percent"
+    )
+    text = render_text(SourceShapeReport(function="f", scores=scores))
+    assert "status=unscored" in text
+    assert "candidate checkdiff did not return a match percent" in text
+
+
 def test_render_text_scores_include_baseline_candidate_and_delta() -> None:
     from src.mwcc_debug import source_shape
     from src.mwcc_debug.source_shape import CandidateScore, SourceShapeReport

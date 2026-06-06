@@ -29,9 +29,11 @@ DEFAULT_REPORT = REPO_ROOT / "build" / "GALE01" / "report.json"
 DEFAULT_OUTPUT = REPO_ROOT / "build" / "function-taxonomy"
 DEFAULT_CHECKDIFF_TIMEOUT = 120.0
 DEFAULT_DECL_ORDER_TIMEOUT = 180.0
+DEFAULT_PROGRESS_INTERVAL = 30.0
 RUN_STATUS_FILENAME = "run-status.json"
 RUN_STATUS_SCHEMA_VERSION = 1
 _DECL_ORDER_EVAL_LOCK = threading.Lock()
+NON_STRUCT_BASE_REGS = {"r1", "r2", "r13"}
 
 BUCKET_ORDER = [
     "signature-call-type",
@@ -40,6 +42,7 @@ BUCKET_ORDER = [
     "data-symbol-relocation",
     "stack-local-layout",
     "indexed-struct-pointer",
+    "struct-offset-discrepancy",
     "known-small-pattern-candidate",
     "register-allocator",
 ]
@@ -125,6 +128,18 @@ def match_tier(match_percent: float) -> str:
     return "<90%"
 
 
+def _unit_has_auditable_fuzzy_100(unit: dict[str, Any], metadata: dict[str, Any]) -> bool:
+    if metadata.get("complete"):
+        return False
+    measures = unit.get("measures") or {}
+    matched = parse_int(measures.get("matched_functions"), -1)
+    total = parse_int(
+        measures.get("total_functions", measures.get("functions")),
+        -1,
+    )
+    return total > 0 and 0 <= matched < total
+
+
 def load_report_candidates(report_path: Path) -> list[FunctionCandidate]:
     report = json.loads(report_path.read_text(encoding="utf-8"))
     candidates: list[FunctionCandidate] = []
@@ -134,9 +149,10 @@ def load_report_candidates(report_path: Path) -> list[FunctionCandidate]:
         metadata = unit.get("metadata") or {}
         file_path = strip_src_prefix(metadata.get("source_path") or unit_name)
         object_status = "Matching" if metadata.get("complete") else "NonMatching"
+        audit_fuzzy_100 = _unit_has_auditable_fuzzy_100(unit, metadata)
         for func in unit.get("functions") or []:
             match_percent = parse_float(func.get("fuzzy_match_percent"), 100.0)
-            if match_percent >= 100:
+            if match_percent >= 100 and not audit_fuzzy_100:
                 continue
             func_metadata = func.get("metadata") or {}
             candidates.append(
@@ -287,6 +303,78 @@ def _signature_residual_bucket(
     return "structural-reconstruction", "opcode-sequence-diff", False
 
 
+def _offset_displacement(value: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in value:
+            return value.get(key)
+    return None
+
+
+def struct_offset_discrepancies(
+    classification: dict[str, Any],
+) -> list[dict[str, Any]]:
+    raw = classification.get("offset_discrepancies") or []
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        base = str(item.get("base_reg") or item.get("base") or "").strip()
+        if not base or base.lower() in NON_STRUCT_BASE_REGS:
+            continue
+        cur_disp = _offset_displacement(
+            item,
+            "cur_disp",
+            "current_disp",
+            "current_offset",
+            "cur_offset",
+        )
+        ref_disp = _offset_displacement(
+            item,
+            "ref_disp",
+            "expected_disp",
+            "reference_disp",
+            "ref_offset",
+        )
+        normalized = dict(item)
+        normalized["base_reg"] = base
+        normalized["cur_disp"] = cur_disp
+        normalized["ref_disp"] = ref_disp
+        out.append(normalized)
+    return out
+
+
+def offset_discrepancy_summary(
+    classification: dict[str, Any],
+) -> dict[str, Any]:
+    discrepancies = struct_offset_discrepancies(classification)
+    bases = list(
+        dict.fromkeys(str(item.get("base_reg") or "") for item in discrepancies)
+    )
+    disp_parts: list[str] = []
+    for item in discrepancies:
+        cur_disp = item.get("cur_disp")
+        ref_disp = item.get("ref_disp")
+        if cur_disp is None and ref_disp is None:
+            continue
+        disp_parts.append(f"current:{cur_disp} expected:{ref_disp}")
+    opcodes = list(
+        dict.fromkeys(
+            str(item.get("opcode") or "")
+            for item in discrepancies
+            if item.get("opcode")
+        )
+    )
+    return {
+        "offset_discrepancies": discrepancies,
+        "offset_discrepancy_count": len(discrepancies),
+        "offset_discrepancy_bases": ",".join(bases),
+        "offset_discrepancy_disps": "; ".join(disp_parts),
+        "offset_discrepancy_opcodes": ",".join(opcodes),
+    }
+
+
 def classify_bucket(
     candidate: FunctionCandidate,
     payload: dict[str, Any],
@@ -298,6 +386,8 @@ def classify_bucket(
     reasons = classification.get("reasons") or []
     reason_text = "\n".join(str(reason).lower() for reason in reasons)
 
+    if struct_offset_discrepancies(classification):
+        return "struct-offset-discrepancy", "struct-field-offset-displacement", False
     if primary == "bss-anchor-ceiling" or classification.get(
         "bss_anchor_relocations"
     ):
@@ -465,6 +555,16 @@ def describe_actionability(
                 "try pointer temporary and indexed-access rewrites"
             ),
         }
+    if bucket == "struct-offset-discrepancy":
+        return {
+            "source_actionability": "current-tools-struct-verify",
+            "headline_tool": "struct-verify",
+            "actionability_reason": (
+                "base-register field displacement mismatch; run struct verify "
+                "with the reported base register and offsets before treating "
+                "this as allocator noise"
+            ),
+        }
     if bucket == "register-allocator":
         return {
             "source_actionability": "pcdump-proof-needed",
@@ -509,7 +609,12 @@ def describe_actionability(
     }
 
 
-def next_command(bucket: str, subcategory: str, candidate: FunctionCandidate) -> str:
+def next_command(
+    bucket: str,
+    subcategory: str,
+    candidate: FunctionCandidate,
+    classification: dict[str, Any] | None = None,
+) -> str:
     function = candidate.function
     source_path = f"src/{candidate.file_path}"
     if bucket == "signature-call-type":
@@ -550,6 +655,18 @@ def next_command(bucket: str, subcategory: str, candidate: FunctionCandidate) ->
         return (
             f"python tools/checkdiff.py {function} --compact && "
             "melee-agent mismatch search '<opcode/type clue>'"
+        )
+    if bucket == "struct-offset-discrepancy":
+        summary = offset_discrepancy_summary(classification or {})
+        bases = [
+            base
+            for base in str(summary.get("offset_discrepancy_bases") or "").split(",")
+            if base
+        ]
+        base_arg = f" --base {bases[0]}" if len(bases) == 1 else " --base <base-reg>"
+        return (
+            f"melee-agent struct verify {function} --struct <struct-name>"
+            f"{base_arg} --tu-src {source_path} --json"
         )
     if bucket == "register-allocator":
         return (
@@ -847,6 +964,8 @@ def classify_candidate(
 
     classification = payload.get("classification") or {}
     primary = classification.get("primary") or "unknown"
+    if payload.get("match") is True or primary == "instruction-identical":
+        return None, None
     cast_audit = None
     if primary == "signature-type-mismatch" and cast_audit_runner is not None:
         try:
@@ -907,6 +1026,15 @@ def classify_candidate(
     }
     if frame_taxonomy is not None:
         attach_frame_taxonomy(record, frame_taxonomy)
+    offset_summary = offset_discrepancy_summary(classification)
+    if offset_summary["offset_discrepancy_count"]:
+        record.update(offset_summary)
+        record["next_command"] = next_command(
+            bucket,
+            subcategory,
+            candidate,
+            classification,
+        )
     if (
         decl_order_evaluator is not None
         and should_evaluate_decl_orders(candidate, bucket, subcategory)
@@ -929,6 +1057,10 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "work_bucket",
         "primary",
         "subcategory",
+        "offset_discrepancy_count",
+        "offset_discrepancy_bases",
+        "offset_discrepancy_disps",
+        "offset_discrepancy_opcodes",
         "frame_cause",
         "frame_verdict",
         "frame_closability_tier",
@@ -957,6 +1089,10 @@ def write_queue(path: Path, rows: list[dict[str, Any]]) -> None:
         "function",
         "primary",
         "subcategory",
+        "offset_discrepancy_count",
+        "offset_discrepancy_bases",
+        "offset_discrepancy_disps",
+        "offset_discrepancy_opcodes",
         "frame_cause",
         "frame_verdict",
         "frame_closability_tier",
@@ -1041,7 +1177,7 @@ def write_summary(
         "## Population",
         "| Population | Count |",
         "| --- | --- |",
-        f"| Report non-100% | {report_non100_count} |",
+        f"| Report audit candidates | {report_non100_count} |",
         f"| Successfully classified by checkdiff | {len(records)} |",
         f"| Checkdiff extraction errors | {len(errors)} |",
         "| Report-only not extract-backed | 0 |",
@@ -1182,6 +1318,7 @@ def generate_inventory(
     workers: int = 4,
     limit: int | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    progress_interval: float | None = DEFAULT_PROGRESS_INTERVAL,
 ) -> InventoryResult:
     report_path = Path(report_path).resolve()
     output_dir = Path(output_dir).resolve()
@@ -1224,6 +1361,39 @@ def generate_inventory(
             if progress_callback is not None:
                 progress_callback(event)
 
+        def emit_periodic_progress() -> None:
+            completed_count = len(records) + len(errors)
+            active_functions = [candidate.function for candidate in pending.values()]
+            event = {
+                "event": "inventory_progress",
+                "attempted_count": len(attempted),
+                "submitted_count": completed_count + len(pending),
+                "completed_count": completed_count,
+                "classified_count": len(records),
+                "error_count": len(errors),
+                "pending_count": len(pending),
+                "remaining_count": max(
+                    0,
+                    len(attempted) - completed_count - len(pending),
+                ),
+                "active_functions": active_functions,
+            }
+            progress_status = dict(run_status)
+            progress_status.update(
+                {
+                    "status": "running",
+                    "updated_at": _utc_now_iso(),
+                    "submitted_count": event["submitted_count"],
+                    "completed_count": completed_count,
+                    "classified_count": len(records),
+                    "error_count": len(errors),
+                    "pending_count": len(pending),
+                    "active_functions": active_functions,
+                }
+            )
+            write_run_status(output_dir, progress_status)
+            emit_progress(event)
+
         def submit_next(executor: ThreadPoolExecutor) -> None:
             try:
                 candidate = next(candidate_iter)
@@ -1244,7 +1414,19 @@ def generate_inventory(
             for _ in range(min(max_workers, len(attempted))):
                 submit_next(executor)
             while pending:
-                done, _not_done = wait(pending, return_when=FIRST_COMPLETED)
+                wait_timeout = (
+                    None
+                    if progress_interval is None or progress_interval <= 0
+                    else progress_interval
+                )
+                done, _not_done = wait(
+                    pending,
+                    timeout=wait_timeout,
+                    return_when=FIRST_COMPLETED,
+                )
+                if not done:
+                    emit_periodic_progress()
+                    continue
                 for future in done:
                     candidate = pending.pop(future)
                     try:
@@ -1356,7 +1538,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--limit",
         type=int,
         default=None,
-        help="Only process the first N non-100 report functions.",
+        help="Only process the first N report mismatch/audit candidate functions.",
     )
     parser.add_argument(
         "--skip-decl-order-eval",
@@ -1389,6 +1571,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
             f"(default: {DEFAULT_DECL_ORDER_TIMEOUT:g}; 0 disables)."
         ),
     )
+    parser.add_argument(
+        "--progress-interval",
+        type=float,
+        default=DEFAULT_PROGRESS_INTERVAL,
+        help=(
+            "Print and persist running progress every N seconds while all "
+            f"workers are busy (default: {DEFAULT_PROGRESS_INTERVAL:g}; "
+            "0 disables periodic progress)."
+        ),
+    )
     return parser
 
 
@@ -1397,6 +1589,24 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     checkdiff_timeout = None if args.checkdiff_timeout <= 0 else args.checkdiff_timeout
     decl_order_timeout = None if args.decl_order_timeout <= 0 else args.decl_order_timeout
+    progress_interval = None if args.progress_interval <= 0 else args.progress_interval
+
+    def progress(event: dict[str, Any]) -> None:
+        if event.get("event") != "inventory_progress":
+            return
+        active = ", ".join(str(fn) for fn in event.get("active_functions") or [])
+        active_suffix = f"; active: {active}" if active else ""
+        print(
+            "[taxonomy] "
+            f"{event.get('completed_count', 0)}/{event.get('attempted_count', 0)} "
+            f"done, {event.get('pending_count', 0)} running, "
+            f"{event.get('classified_count', 0)} classified, "
+            f"{event.get('error_count', 0)} errors"
+            f"{active_suffix}",
+            file=sys.stderr,
+            flush=True,
+        )
+
     try:
         result = generate_inventory(
             args.report,
@@ -1421,6 +1631,8 @@ def main(argv: list[str] | None = None) -> int:
                 if args.skip_frame_report_attribution
                 else default_frame_report_runner
             ),
+            progress_callback=progress,
+            progress_interval=progress_interval,
         )
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -1429,7 +1641,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Generated taxonomy artifacts in {result.output_dir}")
     print(
         "Rows: "
-        f"{result.report_non100_count} report non-100, "
+        f"{result.report_non100_count} report audit candidates, "
         f"{result.attempted_count} attempted, "
         f"{result.classified_count} classified, "
         f"{result.error_count} errors"

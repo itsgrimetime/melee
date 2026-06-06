@@ -226,7 +226,12 @@ cmd_create() {
         cat >> "$GITDIR/info/exclude" << 'EOF'
 # Symlinked tooling (not part of PR)
 .claude/
-tools/
+tools/checkdiff.py
+tools/decomp.py
+tools/workflow/
+tools/worktree-doctor.py
+tools/melee-agent/
+tools/table-typer/
 docs/
 .vscode/
 CLAUDE.md

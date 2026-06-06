@@ -35,6 +35,25 @@ CopyTraceRunner = Callable[
 ]
 
 
+def _score_status(
+    result: CheckdiffResult,
+    *,
+    baseline_pct: Optional[float],
+    delta: Optional[float],
+) -> tuple[str, Optional[str]]:
+    if result.match_pct is None:
+        return "unscored", "candidate checkdiff did not return a match percent"
+    if delta is None:
+        return (
+            "unscored",
+            "baseline checkdiff did not return a match percent and candidate "
+            "checkdiff did not return a delta",
+        )
+    if delta > 0.01:
+        return "improved", None
+    return "no_match", None
+
+
 def stage_patch(stage_root: Path, function: str, patch: CandidatePatch) -> StagedCandidate:
     seed_dir = stage_root / function / patch.candidate_id
     seed_dir.mkdir(parents=True, exist_ok=True)
@@ -68,6 +87,11 @@ def verify_patches(
         staged = stage_patch(stage_root, function, patch)
         try:
             result = checkdiff_runner(patch, staged.source_path)
+            status, score_reason = _score_status(
+                result,
+                baseline_pct=None,
+                delta=result.delta,
+            )
             scores.append(CandidateScore(
                 candidate_id=patch.candidate_id,
                 compile_ok=True,
@@ -75,6 +99,8 @@ def verify_patches(
                 checkdiff_delta=result.delta,
                 pcdump_score_delta=None,
                 diagnostics_path=None,
+                status=status,
+                score_reason=score_reason,
                 candidate_size=len(patch.patched_source.splitlines()),
                 helper_param_count=0,
             ))
@@ -88,6 +114,8 @@ def verify_patches(
                 checkdiff_delta=None,
                 pcdump_score_delta=None,
                 diagnostics_path=log_path,
+                status="failed",
+                score_reason=f"{type(exc).__name__}: {exc}",
                 candidate_size=len(patch.patched_source.splitlines()),
                 helper_param_count=0,
             ))
@@ -133,6 +161,11 @@ def verify_real_tree_patches(
                 if score_delta >= best_delta:
                     best_delta = score_delta
                     best_patch = patch
+                status, score_reason = _score_status(
+                    result,
+                    baseline_pct=baseline_pct,
+                    delta=checkdiff_delta,
+                )
                 copy_traces: tuple[CandidateCopyTrace, ...] = ()
                 copy_trace_highlights: tuple[CandidateCopyTrace, ...] = ()
                 copy_trace_total_count = 0
@@ -166,6 +199,8 @@ def verify_real_tree_patches(
                     checkdiff_delta=checkdiff_delta,
                     pcdump_score_delta=None,
                     diagnostics_path=None,
+                    status=status,
+                    score_reason=score_reason,
                     checkdiff_baseline_pct=baseline_pct,
                     candidate_size=len(patch.patched_source.splitlines()),
                     helper_param_count=0,
@@ -188,6 +223,8 @@ def verify_real_tree_patches(
                     checkdiff_delta=None,
                     pcdump_score_delta=None,
                     diagnostics_path=log_path,
+                    status="failed",
+                    score_reason=f"{type(exc).__name__}: {exc}",
                     checkdiff_baseline_pct=baseline_pct,
                     candidate_size=len(patch.patched_source.splitlines()),
                     helper_param_count=0,

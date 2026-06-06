@@ -72,5 +72,8 @@ def test_pr_worktree_create_overlays_missing_fork_tools(tmp_path: Path) -> None:
     gitdir = _git(worktree, "rev-parse", "--git-dir").stdout.strip()
     exclude = (worktree / gitdir / "info" / "exclude").resolve()
     assert exclude.exists()
-    assert "tools/" in exclude.read_text(encoding="utf-8")
-
+    exclude_text = exclude.read_text(encoding="utf-8")
+    assert "tools/checkdiff.py" in exclude_text
+    assert "tools/worktree-doctor.py" in exclude_text
+    assert "tools/melee-agent/" in exclude_text
+    assert "\ntools/\n" not in exclude_text

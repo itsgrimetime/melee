@@ -146,6 +146,40 @@ def test_collect_melee_agent_entrypoint_warnings_flags_old_same_worktree_entrypo
     assert "pip install -e" in (results[0].fix or "")
 
 
+def test_fix_removes_local_exclude_that_hides_tracked_melee_agent(tmp_path: Path) -> None:
+    doctor_mod = load_worktree_doctor()
+    subprocess.run(["git", "init", "-b", "master"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "agent@example.test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Agent"], cwd=tmp_path, check=True)
+    agent_file = tmp_path / "tools" / "melee-agent" / "pyproject.toml"
+    agent_file.parent.mkdir(parents=True)
+    agent_file.write_text("[project]\nname = 'melee-agent'\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tools/melee-agent/pyproject.toml"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "track melee agent"], cwd=tmp_path, check=True, capture_output=True)
+    exclude = doctor_mod.local_exclude_path(tmp_path)
+    assert exclude is not None
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    exclude.write_text("tools/melee-agent\n", encoding="utf-8")
+
+    warnings = doctor_mod.collect_local_exclude_warnings(tmp_path, fix=False)
+
+    assert warnings
+    assert warnings[0].level == "warn"
+    assert "tools/melee-agent" in warnings[0].message
+
+    fixed = doctor_mod.collect_local_exclude_warnings(tmp_path, fix=True)
+
+    assert fixed[0].level == "ok"
+    assert "tools/melee-agent" not in exclude.read_text(encoding="utf-8")
+    probe = subprocess.run(
+        ["git", "check-ignore", "tools/melee-agent/new_file.py"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+    assert probe.returncode != 0
+
+
 def _make_table_typer_dir(tmp_path: Path) -> Path:
     ttdir = tmp_path / "tools" / "table-typer"
     ttdir.mkdir(parents=True)
