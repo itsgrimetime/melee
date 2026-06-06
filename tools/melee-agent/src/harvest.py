@@ -164,8 +164,10 @@ class PcdumpPreflightReport:
     stale_units: list[str] = field(default_factory=list)
     missing_units: list[str] = field(default_factory=list)
     generated_units: list[str] = field(default_factory=list)
+    failed_units: list[str] = field(default_factory=list)
     setup_command: dict[str, Any] | None = None
     dump_commands: list[dict[str, Any]] = field(default_factory=list)
+    dump_failures: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -1072,15 +1074,28 @@ def _run_pcdump_preflight(
                 timeout=timeout,
             )
         except Exception as exc:
-            raise ValueError(
-                f"pcdump preflight dump failed to run for {unit}: {exc}"
-            ) from exc
+            report.dump_failures.append({
+                "unit": unit,
+                "command": dump_command,
+                "error": str(exc),
+            })
+            entry = pcdump_cache.lookup(repo_root, unit)
+            if entry is not None and entry.fresh:
+                report.generated_units.append(unit)
+            else:
+                report.failed_units.append(unit)
+            continue
         report.dump_commands.append(_command_report(dump_command, dump_process))
         if dump_process.returncode != 0:
-            raise ValueError(
-                "pcdump preflight dump failed for "
-                f"{unit}: {_short_output(dump_process.stderr or dump_process.stdout)}"
-            )
+            failure = _command_report(dump_command, dump_process)
+            failure["unit"] = unit
+            report.dump_failures.append(failure)
+            entry = pcdump_cache.lookup(repo_root, unit)
+            if entry is not None and entry.fresh:
+                report.generated_units.append(unit)
+            else:
+                report.failed_units.append(unit)
+            continue
         report.generated_units.append(unit)
     return report
 

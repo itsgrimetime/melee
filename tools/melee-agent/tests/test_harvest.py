@@ -1885,6 +1885,88 @@ def test_run_harvest_refreshes_stale_frame_transform_pcdumps(
     assert ledger["preflight"]["pcdump"]["generated_units"] == ["melee/demo"]
 
 
+def test_run_harvest_pcdump_preflight_accepts_cache_written_before_dump_failure(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(
+        queue,
+        [_row("demo_fn", source_actionability="current-tools")],
+    )
+    cache_path = repo_root / "build" / "mwcc_debug_cache" / "melee" / "demo.txt"
+    lookups: list[str] = []
+
+    def fake_lookup(repo: Path, unit: str):
+        lookups.append(unit)
+        if len(lookups) == 1:
+            return None
+        return harvest_module.pcdump_cache.CacheEntry(
+            path=cache_path,
+            source_path=repo_root / "src" / "melee" / "demo.c",
+            fresh=True,
+        )
+
+    monkeypatch.setattr(harvest_module.pcdump_cache, "lookup", fake_lookup)
+    calls: list[list[str]] = []
+
+    def runner(args: list[str], *, cwd: Path, timeout: int) -> HarnessProcessResult:
+        calls.append(args)
+        if args == ["debug", "dump", "setup"]:
+            return HarnessProcessResult(args, 0, "", "")
+        if args[:3] == ["debug", "dump", "local"]:
+            return HarnessProcessResult(args, 3, "wrote cache then failed", "wibo UE")
+        return HarnessProcessResult(args, 0, json.dumps({"variants": []}), "")
+
+    ledger = run_harvest(
+        "stack-local-layout",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    assert calls[-1][:3] == ["debug", "mutate", "frame-transform-search"]
+    assert lookups == ["melee/demo", "melee/demo"]
+    assert ledger["preflight"]["pcdump"]["generated_units"] == ["melee/demo"]
+    assert ledger["preflight"]["pcdump"]["failed_units"] == []
+
+
+def test_run_harvest_pcdump_preflight_records_dump_failure_and_continues(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(
+        queue,
+        [_row("demo_fn", source_actionability="current-tools")],
+    )
+    monkeypatch.setattr(harvest_module.pcdump_cache, "lookup", lambda _repo, _unit: None)
+    calls: list[list[str]] = []
+
+    def runner(args: list[str], *, cwd: Path, timeout: int) -> HarnessProcessResult:
+        calls.append(args)
+        if args == ["debug", "dump", "setup"]:
+            return HarnessProcessResult(args, 0, "", "")
+        if args[:3] == ["debug", "dump", "local"]:
+            return HarnessProcessResult(args, 3, "", "wibo stayed UE")
+        return HarnessProcessResult(args, 0, json.dumps({"variants": []}), "")
+
+    ledger = run_harvest(
+        "stack-local-layout",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    assert calls[-1][:3] == ["debug", "mutate", "frame-transform-search"]
+    assert ledger["preflight"]["pcdump"]["generated_units"] == []
+    assert ledger["preflight"]["pcdump"]["failed_units"] == ["melee/demo"]
+    assert ledger["preflight"]["pcdump"]["dump_failures"][0]["unit"] == "melee/demo"
+    assert "wibo stayed UE" in ledger["preflight"]["pcdump"]["dump_failures"][0]["stderr"]
+
+
 def test_run_harvest_does_not_prefetch_non_current_tools_frame_transform_rows(
     monkeypatch,
     tmp_path: Path,
