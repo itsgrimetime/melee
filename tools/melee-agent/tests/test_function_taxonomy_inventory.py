@@ -503,7 +503,107 @@ def test_generate_inventory_emits_periodic_progress_when_workers_are_busy(
     assert progress_events[0]["active_functions"] == ["stack_fn"]
 
 
-def test_offset_discrepancies_route_to_struct_offset_bucket_before_registers() -> None:
+def test_generate_inventory_emits_progress_during_steady_completion(
+    tmp_path: Path,
+) -> None:
+    from tools.function_taxonomy_inventory import generate_inventory
+
+    report = tmp_path / "report.json"
+    output = tmp_path / "taxonomy"
+    write_report(report)
+    events: list[dict[str, object]] = []
+
+    def runner(function: str):
+        threading.Event().wait(timeout=0.02)
+        return fake_checkdiff(function)
+
+    generate_inventory(
+        report,
+        output,
+        checkdiff_runner=runner,
+        decl_order_evaluator=None,
+        frame_report_runner=None,
+        workers=1,
+        limit=4,
+        progress_callback=events.append,
+        progress_interval=0.03,
+    )
+
+    progress_events = [
+        event for event in events if event.get("event") == "inventory_progress"
+    ]
+    assert progress_events
+    assert any(int(event["completed_count"]) > 0 for event in progress_events)
+
+    status = json.loads((output / "run-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "completed"
+
+
+def test_offset_discrepancies_do_not_override_root_cause_buckets() -> None:
+    from tools.function_taxonomy_inventory import FunctionCandidate, classify_candidate
+
+    candidate = FunctionCandidate(
+        function="root_cause_fn",
+        unit="main/melee/demo/demo",
+        file_path="melee/demo/demo.c",
+        size_bytes=128,
+        match_percent=99.5,
+        address="0x80000000",
+        object_status="NonMatching",
+    )
+
+    expected = {
+        "signature-type-mismatch": "signature-call-type",
+        "inline-boundary-toolchain-artifact": "inline-boundary",
+        "data-symbol-or-relocation": "data-symbol-relocation",
+        "indexed-struct-pointer-materialization": "indexed-struct-pointer",
+        "stack-slot-layout": "stack-local-layout",
+        "stack-layout": "stack-local-layout",
+        "register-allocation": "register-allocator",
+        "control-flow-source-shape": "structural-reconstruction",
+        "instruction-sequence": "structural-reconstruction",
+    }
+
+    for primary, bucket in expected.items():
+        def runner(function: str, primary: str = primary):
+            return 1, json.dumps(
+                {
+                    "function": function,
+                    "match": False,
+                    "classification": {
+                        "primary": primary,
+                        "offset_discrepancies": [
+                            {
+                                "base_reg": "r31",
+                                "cur_disp": 260,
+                                "ref_disp": 264,
+                                "opcode": "lwz",
+                            }
+                        ],
+                        "reasons": ["offset-only field displacement mismatch"],
+                    },
+                    "structural": {"opcode_similarity": 1.0, "line_delta": 0},
+                }
+            ), ""
+
+        record, error = classify_candidate(
+            candidate,
+            runner,
+            decl_order_evaluator=None,
+            frame_report_runner=None,
+            cast_audit_runner=(
+                (lambda _candidate: {"medium_plus_count": 1})
+                if primary == "signature-type-mismatch"
+                else None
+            ),
+        )
+
+        assert error is None
+        assert record is not None
+        assert record["work_bucket"] == bucket
+
+
+def test_offset_discrepancies_route_to_struct_offset_bucket_for_offset_residuals() -> None:
     from tools.function_taxonomy_inventory import FunctionCandidate, classify_candidate
 
     candidate = FunctionCandidate(
@@ -522,7 +622,7 @@ def test_offset_discrepancies_route_to_struct_offset_bucket_before_registers() -
                 "function": function,
                 "match": False,
                 "classification": {
-                    "primary": "register-allocation",
+                    "primary": "operand-register-or-offset",
                     "offset_discrepancies": [
                         {
                             "base_reg": "r31",

@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import threading
@@ -386,8 +387,6 @@ def classify_bucket(
     reasons = classification.get("reasons") or []
     reason_text = "\n".join(str(reason).lower() for reason in reasons)
 
-    if struct_offset_discrepancies(classification):
-        return "struct-offset-discrepancy", "struct-field-offset-displacement", False
     if primary == "bss-anchor-ceiling" or classification.get(
         "bss_anchor_relocations"
     ):
@@ -423,12 +422,14 @@ def classify_bucket(
         if "hsd_assert" in reason_text or "assert" in reason_text:
             return "register-allocator", "register-plus-hsd-assert-data", False
         return "register-allocator", "register-only-needs-pcdump-proof", False
-    if is_known_small_candidate(candidate, payload):
-        return "known-small-pattern-candidate", "small-opcode-or-operand-pattern", True
     if primary == "control-flow-source-shape":
         return "structural-reconstruction", "branch-or-control-flow-shape", False
     if primary == "instruction-sequence":
         return "structural-reconstruction", "opcode-sequence-diff", False
+    if struct_offset_discrepancies(classification):
+        return "struct-offset-discrepancy", "struct-field-offset-displacement", False
+    if is_known_small_candidate(candidate, payload):
+        return "known-small-pattern-candidate", "small-opcode-or-operand-pattern", True
     if primary == "operand-register-or-offset":
         return "known-small-pattern-candidate", "operand-register-offset-small", True
     return "structural-reconstruction", "direct-inspection-needed", False
@@ -1356,6 +1357,7 @@ def generate_inventory(
             FunctionCandidate,
         ] = {}
         candidate_iter = iter(attempted)
+        last_progress_at = 0.0
 
         def emit_progress(event: dict[str, Any]) -> None:
             if progress_callback is not None:
@@ -1394,6 +1396,16 @@ def generate_inventory(
             write_run_status(output_dir, progress_status)
             emit_progress(event)
 
+        def emit_progress_if_due() -> None:
+            nonlocal last_progress_at
+            if progress_interval is None or progress_interval <= 0:
+                return
+            now = time.monotonic()
+            if now - last_progress_at < progress_interval:
+                return
+            emit_periodic_progress()
+            last_progress_at = now
+
         def submit_next(executor: ThreadPoolExecutor) -> None:
             try:
                 candidate = next(candidate_iter)
@@ -1426,6 +1438,7 @@ def generate_inventory(
                 )
                 if not done:
                     emit_periodic_progress()
+                    last_progress_at = time.monotonic()
                     continue
                 for future in done:
                     candidate = pending.pop(future)
@@ -1455,6 +1468,7 @@ def generate_inventory(
                         }
                     )
                     submit_next(executor)
+                emit_progress_if_due()
 
         records.sort(key=lambda row: (-parse_float(row.get("match_percent")), row.get("function", "")))
         errors.sort(key=lambda row: row.get("function", ""))
@@ -1590,6 +1604,33 @@ def main(argv: list[str] | None = None) -> int:
     checkdiff_timeout = None if args.checkdiff_timeout <= 0 else args.checkdiff_timeout
     decl_order_timeout = None if args.decl_order_timeout <= 0 else args.decl_order_timeout
     progress_interval = None if args.progress_interval <= 0 else args.progress_interval
+    output_dir = Path(args.output).resolve()
+
+    def mark_interrupted(signum: int, _frame: Any) -> None:
+        status_path = output_dir / RUN_STATUS_FILENAME
+        current_status: dict[str, Any] = {}
+        try:
+            current_status = json.loads(status_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        interrupted_status = dict(current_status)
+        interrupted_status.update(
+            {
+                "schema_version": RUN_STATUS_SCHEMA_VERSION,
+                "status": "failed",
+                "failed_at": _utc_now_iso(),
+                "error": f"interrupted by signal {signum}",
+                "error_type": "SignalInterrupt",
+            }
+        )
+        output_dir.mkdir(parents=True, exist_ok=True)
+        write_run_status(output_dir, interrupted_status)
+        raise SystemExit(128 + signum)
+
+    previous_handlers: dict[int, Any] = {}
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        previous_handlers[signum] = signal.getsignal(signum)
+        signal.signal(signum, mark_interrupted)
 
     def progress(event: dict[str, Any]) -> None:
         if event.get("event") != "inventory_progress":
@@ -1637,6 +1678,9 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
 
     print(f"Generated taxonomy artifacts in {result.output_dir}")
     print(
