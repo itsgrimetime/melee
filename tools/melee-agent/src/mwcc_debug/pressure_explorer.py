@@ -719,6 +719,8 @@ def _probe_repeated_helper_result_reuse(
         )
     body_start, body_end = span
     body = source_text[body_start:body_end]
+    spans = list_statement_spans(source_text, function)
+    byte_to_char = _byte_to_char_offsets(source_text)
     calls = _scan_simple_helper_calls(body, absolute_start=body_start)
     groups: dict[str, list[_SimpleHelperCall]] = {}
     for call in calls:
@@ -729,15 +731,40 @@ def _probe_repeated_helper_result_reuse(
             continue
         first = occurrences[0]
         if not _helper_call_args_are_simple(first.args_text):
-            first_blocker = first_blocker or (
-                "helper-call-args-unsafe",
-                "repeated helper call arguments are not simple enough to rewrite",
-            )
             continue
         if not _helper_call_is_read_only(first.callee, source_text, function):
             first_blocker = first_blocker or (
                 "callee-not-read-only",
                 f"helper `{first.callee}` is not known read-only",
+            )
+            continue
+        first_scope = _brace_scope_stack_for_offset(source_text, function, first.start)
+        if first_scope is None:
+            continue
+        occurrence_scopes = [
+            _brace_scope_stack_for_offset(source_text, function, call.start)
+            for call in occurrences
+        ]
+        if any(
+            scope is None or not _brace_scope_contains(first_scope, scope)
+            for scope in occurrence_scopes
+        ):
+            first_blocker = first_blocker or (
+                "cross-statement-region",
+                "repeated helper calls do not stay within one safe statement region",
+            )
+            continue
+        if _brace_scope_has_prior_executable_statement(
+            spans,
+            source_text,
+            function,
+            first_scope,
+            first.start,
+            byte_to_char,
+        ):
+            first_blocker = first_blocker or (
+                "mixed-declaration-c89-unsafe",
+                "C89 blocks cannot add a new helper temp after executable statements",
             )
             continue
         line_start = _line_start(source_text, first.start)
@@ -969,7 +996,12 @@ def _probe_simple_helper_inline_body(
             continue
         replacement = helper_expr
         for param, arg in zip(params, args, strict=True):
-            replacement = re.sub(rf"\b{re.escape(param)}\b", arg, replacement)
+            rendered_arg = _render_helper_substitution_arg(arg)
+            replacement = re.sub(
+                rf"\b{re.escape(param)}\b",
+                rendered_arg,
+                replacement,
+            )
         probe = LifetimeLayoutProbe(
             label="simple-helper-inline-body-0",
             operator=operator,
@@ -1056,6 +1088,38 @@ def _helper_expression_is_pure(expr: str) -> bool:
     return _helper_expression_fragment_is_simple(expr)
 
 
+def _render_helper_substitution_arg(arg: str) -> str:
+    stripped = arg.strip()
+    if _helper_actual_is_atomic(stripped):
+        return stripped
+    return f"({stripped})"
+
+
+def _helper_actual_is_atomic(expr: str) -> bool:
+    if not expr:
+        return False
+    masked = _mask_c_non_code_text(expr).strip()
+    if not masked or not _balanced_expression_delimiters(masked):
+        return False
+    if masked.startswith("("):
+        close = _find_matching_paren(masked, 0)
+        if close == len(masked) - 1:
+            return True
+    if re.fullmatch(r"[A-Za-z_]\w*", masked):
+        return True
+    if re.fullmatch(
+        r"[A-Za-z_]\w*(?:\s*(?:->|\.)\s*[A-Za-z_]\w*|\s*\[[^\[\]\n]+\])*",
+        masked,
+    ):
+        return True
+    if re.fullmatch(
+        r"[-+]?(?:0x[0-9A-Fa-f]+|\d+(?:\.\d*)?|\d*\.\d+)(?:[fFlLuU]+)?",
+        masked,
+    ):
+        return True
+    return False
+
+
 def _helper_call_is_read_only(callee: str, source: str, function: str) -> bool:
     del function
     if callee in _READ_ONLY_SOURCE_LIFETIME_HELPERS:
@@ -1128,7 +1192,7 @@ def _scan_simple_helper_calls(
             end=absolute_start + close_index + 1,
             call_text=text[start:close_index + 1],
         ))
-        cursor = close_index + 1
+        cursor = start + 1
     return calls
 
 
@@ -1239,6 +1303,53 @@ def _line_is_case_or_default_label(source: str, line_start: int) -> bool:
         line_end = len(source)
     stripped = source[line_start:line_end].strip()
     return stripped.startswith("case ") or stripped == "default:"
+
+
+def _brace_scope_stack_for_offset(
+    source: str,
+    function: str,
+    offset: int,
+) -> tuple[int, ...] | None:
+    span = _find_function_body_span(source, function)
+    if span is None:
+        return None
+    body_start, body_end = span
+    open_brace = body_start - 1
+    if open_brace < 0 or source[open_brace] != "{":
+        return None
+    masked = _mask_c_non_code_text(source)
+    stack: list[int] = []
+    for idx in range(open_brace, min(offset, body_end)):
+        char = masked[idx]
+        if char == "{":
+            stack.append(idx)
+        elif char == "}" and stack:
+            stack.pop()
+    return tuple(stack)
+
+
+def _brace_scope_contains(parent: tuple[int, ...], child: tuple[int, ...]) -> bool:
+    return len(child) >= len(parent) and child[:len(parent)] == parent
+
+
+def _brace_scope_has_prior_executable_statement(
+    spans: list[StatementSpan],
+    source: str,
+    function: str,
+    scope_stack: tuple[int, ...],
+    first_offset: int,
+    byte_to_char: list[int],
+) -> bool:
+    for span in spans:
+        span_start, span_end = _span_char_range(source, span, byte_to_char)
+        if span_end > first_offset:
+            continue
+        span_scope = _brace_scope_stack_for_offset(source, function, span_start)
+        if span_scope != scope_stack:
+            continue
+        if span.kind != "declaration":
+            return True
+    return False
 
 
 def _cast_prefixed_call_range(
