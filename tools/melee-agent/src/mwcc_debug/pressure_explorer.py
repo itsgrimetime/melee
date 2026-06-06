@@ -745,6 +745,15 @@ def _probe_repeated_helper_result_reuse(
         if occurrence_blocker is not None:
             first_blocker = first_blocker or occurrence_blocker
             continue
+        mutation_blocker = _helper_arg_mutation_blocker(
+            source_text,
+            first.args_text,
+            region_start=first.end,
+            region_end=occurrences[-1].start,
+        )
+        if mutation_blocker is not None:
+            first_blocker = first_blocker or mutation_blocker
+            continue
         first_scope = _brace_scope_stack_for_offset(source_text, function, first.start)
         if first_scope is None:
             continue
@@ -875,6 +884,7 @@ def _probe_helper_result_dematerialize(
             continue
         replacements: list[tuple[int, int, str]] = []
         unsupported = False
+        last_use_start: int | None = None
         for line_match in re.finditer(r"(?m)^.*\n?", trailing):
             line = line_match.group(0)
             if not line:
@@ -890,6 +900,7 @@ def _probe_helper_result_dematerialize(
                 break
             if _identifier_count(line, local) == 0:
                 continue
+            last_use_start = absolute_start
             rewritten = _rewrite_helper_result_use_line(
                 line.rstrip("\n"),
                 local,
@@ -904,6 +915,16 @@ def _probe_helper_result_dematerialize(
                 break
             suffix = "\n" if line.endswith("\n") else ""
             replacements.append((absolute_start, absolute_end, rewritten + suffix))
+        if last_use_start is not None:
+            mutation_blocker = _helper_arg_mutation_blocker(
+                source_text,
+                call.args_text,
+                region_start=body_start + match.end(),
+                region_end=last_use_start,
+            )
+            if mutation_blocker is not None:
+                first_blocker = first_blocker or mutation_blocker
+                continue
         if unsupported or len(replacements) != use_count:
             continue
         assign_start, assign_end = _expand_statement_removal_range(
@@ -995,14 +1016,7 @@ def _probe_simple_helper_inline_body(
         args = tuple(arg.strip() for arg in _split_top_level_args(call.args_text))
         if len(params) != len(args):
             continue
-        replacement = helper_expr
-        for param, arg in zip(params, args, strict=True):
-            rendered_arg = _render_helper_substitution_arg(arg)
-            replacement = re.sub(
-                rf"\b{re.escape(param)}\b",
-                rendered_arg,
-                replacement,
-            )
+        replacement = _substitute_helper_params(helper_expr, params, args)
         if _inline_helper_call_requires_outer_parens(source_text, call.start, call.end):
             replacement = f"({replacement})"
         probe = LifetimeLayoutProbe(
@@ -1093,6 +1107,25 @@ def _helper_expression_is_pure(expr: str) -> bool:
     if len(_split_top_level_args(expr)) > 1:
         return False
     return _helper_expression_fragment_is_simple(expr)
+
+
+def _substitute_helper_params(
+    helper_expr: str,
+    params: tuple[str, ...],
+    args: tuple[str, ...],
+) -> str:
+    rendered_args = {
+        param: _render_helper_substitution_arg(arg)
+        for param, arg in zip(params, args, strict=True)
+    }
+    if not rendered_args:
+        return helper_expr
+    token_re = re.compile(
+        r"\b(?:"
+        + "|".join(re.escape(param) for param in sorted(rendered_args, key=len, reverse=True))
+        + r")\b"
+    )
+    return token_re.sub(lambda match: rendered_args[match.group(0)], helper_expr)
 
 
 def _render_helper_substitution_arg(arg: str) -> str:
@@ -1415,6 +1448,61 @@ def _repeated_helper_occurrence_blocker(
                 "repeated helper reuse occurrence is not a supported simple statement",
             )
     return None
+
+
+def _helper_arg_mutation_blocker(
+    source: str,
+    args_text: str,
+    *,
+    region_start: int,
+    region_end: int,
+) -> tuple[str, str] | None:
+    if region_end <= region_start:
+        return None
+    identifiers = _helper_arg_identifier_names(args_text)
+    if not identifiers:
+        return None
+    region = _mask_c_non_code_text(source[region_start:region_end])
+    for name in sorted(identifiers):
+        if _identifier_mutated_in_region(region, name):
+            return (
+                "helper-arg-mutation-between-uses",
+                f"helper argument identifier `{name}` is mutated between rewritten uses",
+            )
+    return None
+
+
+def _helper_arg_identifier_names(args_text: str) -> set[str]:
+    identifiers: set[str] = set()
+    parts = _split_top_level_args(args_text)
+    if not parts:
+        stripped = args_text.strip()
+        parts = (stripped,) if stripped else ()
+    for part in parts:
+        masked = _mask_c_non_code_text(part)
+        for match in re.finditer(r"\b([A-Za-z_]\w*)\b", masked):
+            name = match.group(1)
+            cursor = match.start() - 1
+            while cursor >= 0 and masked[cursor].isspace():
+                cursor -= 1
+            if cursor >= 0 and masked[cursor] in ".>":
+                continue
+            identifiers.add(name)
+    return identifiers
+
+
+def _identifier_mutated_in_region(region: str, name: str) -> bool:
+    token = rf"(?<![.>])\b{re.escape(name)}\b"
+    assignment_re = re.compile(
+        token + r"\s*(?:\+\+|--|(?:[\+\-\*/%&|^]|<<|>>)?=)"
+    )
+    prefix_incdec_re = re.compile(r"(?:\+\+|--)\s*" + token)
+    address_taken_re = re.compile(r"&\s*" + token)
+    return (
+        assignment_re.search(region) is not None
+        or prefix_incdec_re.search(region) is not None
+        or address_taken_re.search(region) is not None
+    )
 
 
 def _inline_helper_call_requires_outer_parens(
