@@ -443,6 +443,32 @@ def test_source_lifetime_repeated_helper_result_reuse_rejects_case_arm_declarati
     assert blocked[0]["blocker"] == "case-arm-declaration-unsafe"
 
 
+def test_source_lifetime_repeated_helper_result_reuse_rejects_same_line_case_label() -> None:
+    source = textwrap.dedent("""\
+        s32 fn_80000000(CardState* state, s32 i, s32 flag) {
+         switch (flag) { case 1:
+            sink(fn_803AC634(state, i));
+            sink(fn_803AC634(state, i));
+            break;
+         }
+         return 0;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "repeated-helper-result-reuse" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "repeated-helper-result-reuse"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] == "case-arm-declaration-unsafe"
+
+
 def test_source_lifetime_repeated_helper_result_reuse_rejects_condition_only_anchor() -> None:
     source = textwrap.dedent("""\
         s32 fn_80000000(CardState* state, s32 i)
@@ -454,6 +480,29 @@ def test_source_lifetime_repeated_helper_result_reuse_rejects_condition_only_anc
                 sink(state);
             }
             return 0;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "repeated-helper-result-reuse" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "repeated-helper-result-reuse"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] == "unsupported-call-site-shape"
+
+
+def test_source_lifetime_repeated_helper_result_reuse_rejects_same_line_condition_anchor() -> None:
+    source = textwrap.dedent("""\
+        s32 fn_80000000(CardState* state, s32 i) {
+         if (fn_803AC634(state, i)) sink(1);
+         if (fn_803AC634(state, i)) sink(2);
+         return 0;
         }
     """)
 

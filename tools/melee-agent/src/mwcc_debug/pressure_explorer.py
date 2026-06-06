@@ -1314,8 +1314,7 @@ def _line_is_case_or_default_label(source: str, line_start: int) -> bool:
     line_end = source.find("\n", line_start)
     if line_end < 0:
         line_end = len(source)
-    stripped = source[line_start:line_end].strip()
-    return stripped.startswith("case ") or stripped == "default:"
+    return _line_contains_case_or_default_label(source[line_start:line_end])
 
 
 def _line_follows_case_or_default_label(source: str, line_start: int) -> bool:
@@ -1331,7 +1330,7 @@ def _line_follows_case_or_default_label(source: str, line_start: int) -> bool:
                 return False
             cursor = prev_start - 1
             continue
-        return stripped.startswith("case ") or stripped == "default:"
+        return _line_contains_case_or_default_label(stripped)
     return False
 
 
@@ -1346,9 +1345,23 @@ def _line_has_supported_reuse_anchor_shape(source: str, line_start: int) -> bool
         return True
     if re.match(r"^[A-Za-z_]\w*\s*[\+\-\*/%&|^]?=\s*.*;\s*$", stripped):
         return True
-    if re.match(r"^[A-Za-z_]\w*\s*\(.*\);\s*$", stripped):
+    call_stmt = re.match(r"^(?P<callee>[A-Za-z_]\w*)\s*\(.*\);\s*$", stripped)
+    if call_stmt is not None and call_stmt.group("callee") not in {
+        "if",
+        "for",
+        "while",
+        "switch",
+    }:
         return True
     return False
+
+
+def _line_contains_case_or_default_label(text: str) -> bool:
+    stripped = text.strip()
+    return re.search(
+        r"(?:^|[{};])\s*(?:case\b[^:\n]*:|default:)",
+        stripped,
+    ) is not None
 
 
 def _inline_helper_call_requires_outer_parens(
