@@ -400,6 +400,32 @@ def test_record_post_build_handles_negative_match(checkdiff, tmp_path, monkeypat
     assert a["match_percent"] == 0.0
 
 
+def test_find_unit_retries_transient_report_json_decode(
+    checkdiff,
+    tmp_path,
+    monkeypatch,
+):
+    import io
+
+    _make_stub_repo(tmp_path, "fn_alpha", match_pct=87.2)
+    _patch_paths(checkdiff, monkeypatch, tmp_path)
+    report = checkdiff.REPORT_PATH
+    valid_report = report.read_text()
+    reads = iter(["{\"units\": [", valid_report])
+
+    class FlakyReport:
+        def open(self, *args, **kwargs):
+            return io.StringIO(next(reads))
+
+        def read_text(self, *args, **kwargs):
+            return next(reads)
+
+    monkeypatch.setattr(checkdiff, "REPORT_PATH", FlakyReport())
+    monkeypatch.setattr(checkdiff.time, "sleep", lambda seconds: None)
+
+    assert checkdiff.find_unit_for_function("fn_alpha") == "melee/mn/sample"
+
+
 def _make_stub_repo(tmp_path: Path, fn_name: str, match_pct: float,
                     body: str = "int y = x + 1;\n") -> Path:
     (tmp_path / "src" / "melee" / "mn").mkdir(parents=True)

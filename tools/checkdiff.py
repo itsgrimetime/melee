@@ -106,6 +106,10 @@ ROOT = _find_cwd_repo_root() or SCRIPT_DIR.parent  # tools/ is in repo root
 REPORT_PATH = ROOT / "build/GALE01/report.json"
 SRC_ROOT = ROOT / "src"
 DEFAULT_BUILD_TIMEOUT_SECONDS = int(os.environ.get("CHECKDIFF_BUILD_TIMEOUT", "300"))
+REPORT_JSON_READ_RETRIES = int(os.environ.get("CHECKDIFF_REPORT_JSON_READ_RETRIES", "5"))
+REPORT_JSON_READ_RETRY_DELAY_SECONDS = float(
+    os.environ.get("CHECKDIFF_REPORT_JSON_READ_RETRY_DELAY", "0.05")
+)
 EXPECTED_WORKTREE_ENV_VARS = ("MELEE_AGENT_EXPECTED_WORKTREE", "GIT_WORK_TREE")
 
 # Tool paths
@@ -2667,12 +2671,25 @@ def format_side_by_side(ref_lines: list[str], our_lines: list[str], width: int =
     return "\n".join(output)
 
 
+def load_report_json(path=None) -> dict:
+    """Load report.json with a short retry for concurrent partial reads."""
+    report_path = REPORT_PATH if path is None else path
+    attempts = max(1, REPORT_JSON_READ_RETRIES)
+    for attempt in range(attempts):
+        try:
+            return json.loads(report_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            if attempt + 1 >= attempts:
+                raise
+            time.sleep(REPORT_JSON_READ_RETRY_DELAY_SECONDS)
+    return {}
+
+
 def find_unit_for_function(func_name: str) -> Optional[str]:
-    with REPORT_PATH.open("r") as f:
-        for unit in json.load(f).get("units", []):
-            for function in unit.get("functions", []):
-                if function.get("name") == func_name:
-                    return unit.get("name", "").removeprefix("main/")
+    for unit in load_report_json().get("units", []):
+        for function in unit.get("functions", []):
+            if function.get("name") == func_name:
+                return unit.get("name", "").removeprefix("main/")
     return None
 
 
@@ -2998,11 +3015,10 @@ def record_post_build_attempt(
 
 def get_fuzzy_match_percent(func_name: str) -> Optional[float]:
     """Get the fuzzy_match_percent for a function from report.json."""
-    with REPORT_PATH.open("r") as f:
-        for unit in json.load(f).get("units", []):
-            for function in unit.get("functions", []):
-                if function.get("name") == func_name:
-                    return function.get("fuzzy_match_percent")
+    for unit in load_report_json().get("units", []):
+        for function in unit.get("functions", []):
+            if function.get("name") == func_name:
+                return function.get("fuzzy_match_percent")
     return None
 
 
