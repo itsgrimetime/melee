@@ -142,6 +142,71 @@ def _structural_row(
     return row
 
 
+def _allocator_row(
+    function: str,
+    *,
+    file_path: str = "melee/demo.c",
+    headline_tool: str = "mwcc-debug",
+    source_actionability: str = "pcdump-proof-needed",
+    next_command: str | None = None,
+) -> dict[str, str]:
+    row = _row(
+        function,
+        file_path=file_path,
+        headline_tool=headline_tool,
+        source_actionability=source_actionability,
+        frame_closability_tier="",
+        next_command=(
+            next_command
+            if next_command is not None
+            else f"melee-agent debug dump local src/{file_path} --function {function}"
+        ),
+    )
+    row["primary"] = "register-allocator"
+    row["subcategory"] = "register-allocator"
+    return row
+
+
+def _allocator_triage_payload(
+    *,
+    status: str = "needs-move",
+    unit: str = "melee/demo",
+    targets: list[dict[str, str]] | None = None,
+    force_vector: str | None = "r26=r31",
+    force_vector_runnable: bool | None = True,
+    force_vector_recommended: bool | None = True,
+    force_vector_conflicts: list[str] | None = None,
+) -> dict:
+    return {
+        "target_vector_actionability": {
+            "status": status,
+            "summary": f"{status} summary",
+            "next_step": f"{status} next step",
+        },
+        "force_vector": force_vector,
+        "force_vector_runnable": force_vector_runnable,
+        "force_vector_recommended": force_vector_recommended,
+        "force_phys_csv": "r26,r31",
+        "force_vector_conflicts": (
+            force_vector_conflicts if force_vector_conflicts is not None else []
+        ),
+        "unit": unit,
+        "targets": targets if targets is not None else [{"from": "r26", "to": "r31"}],
+        "results": [{"target": "r26=r31", "status": "ok"}],
+    }
+
+
+def _install_fresh_pcdump_cache(monkeypatch, repo_root: Path) -> None:
+    def lookup(_repo: Path, unit: str):
+        return harvest_module.pcdump_cache.CacheEntry(
+            path=harvest_module.pcdump_cache.cache_path(repo_root, unit),
+            source_path=repo_root / "src" / f"{unit}.c",
+            fresh=True,
+        )
+
+    monkeypatch.setattr(harvest_module.pcdump_cache, "lookup", lookup)
+
+
 def _repo_with_source(tmp_path: Path, rel_path: str = "melee/demo.c") -> Path:
     repo_root = tmp_path / "repo"
     source_path = repo_root / "src" / rel_path
@@ -1910,6 +1975,506 @@ def test_run_harvest_pcdump_preflight_runner_exception_is_clean_value_error(
             queue_path=queue,
             runner=runner,
         )
+
+
+def test_allocator_pcdump_triage_selects_harness(tmp_path: Path) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("demo_fn")])
+
+    rows = load_queue_rows(
+        queue,
+        work_bucket="register-allocator",
+        repo_root=repo_root,
+    )
+    override_rows = load_queue_rows(
+        queue,
+        work_bucket="register-allocator",
+        repo_root=repo_root,
+        target_map={"demo_fn": {"harness": "coalesce-search", "target": "37=40"}},
+    )
+    non_allocator = HarvestRequest(
+        function="demo_fn",
+        work_bucket="stack-local-layout",
+        match_percent=99.0,
+        file_path="melee/demo.c",
+        headline_tool="mwcc-debug",
+        source_file=repo_root / "src" / "melee" / "demo.c",
+        source_actionability="pcdump-proof-needed",
+        next_command="melee-agent debug dump local src/melee/demo.c --function demo_fn",
+    )
+
+    assert select_harness(rows[0]) == "allocator-pcdump-triage"
+    assert select_harness(override_rows[0]) == "coalesce-search"
+    assert select_harness(non_allocator) is None
+
+
+def test_allocator_pcdump_triage_builds_match_iter_first_command(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("demo_fn")])
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    calls, runner = _json_runner(_allocator_triage_payload())
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    assert calls == [
+        [
+            "debug",
+            "target",
+            "match-iter-first",
+            "-f",
+            "demo_fn",
+            "--regs",
+            "gpr-callee,gpr-volatile,r0",
+            "--json",
+        ]
+    ]
+    assert ledger["results"][0]["harness"] == "allocator-pcdump-triage"
+
+
+def test_run_harvest_prefetches_allocator_pcdump_triage(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path, "melee/demo.c")
+    other_source = repo_root / "src" / "melee" / "other.c"
+    other_source.write_text("void other_fn(void) {}\n", encoding="utf-8")
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(
+        queue,
+        [
+            _allocator_row("demo_fn", file_path="melee/demo.c"),
+            _allocator_row("demo_fn_2", file_path="melee/demo.c"),
+            _allocator_row("other_fn", file_path="melee/other.c"),
+        ],
+    )
+    lookups: list[str] = []
+
+    def fake_lookup(_repo: Path, unit: str):
+        lookups.append(unit)
+        return None
+
+    monkeypatch.setattr(harvest_module.pcdump_cache, "lookup", fake_lookup)
+    calls: list[list[str]] = []
+
+    def runner(args: list[str], *, cwd: Path, timeout: int) -> HarnessProcessResult:
+        calls.append(args)
+        if args[:2] == ["debug", "dump"]:
+            return HarnessProcessResult(args, 0, "", "")
+        return HarnessProcessResult(args, 0, json.dumps(_allocator_triage_payload()), "")
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    assert calls[:3] == [
+        ["debug", "dump", "setup"],
+        [
+            "debug",
+            "dump",
+            "local",
+            str(repo_root / "src" / "melee" / "demo.c"),
+            "--function",
+            "demo_fn",
+        ],
+        [
+            "debug",
+            "dump",
+            "local",
+            str(repo_root / "src" / "melee" / "other.c"),
+            "--function",
+            "other_fn",
+        ],
+    ]
+    assert calls[3:] == [
+        [
+            "debug",
+            "target",
+            "match-iter-first",
+            "-f",
+            function,
+            "--regs",
+            "gpr-callee,gpr-volatile,r0",
+            "--json",
+        ]
+        for function in ("demo_fn", "demo_fn_2", "other_fn")
+    ]
+    assert lookups == ["melee/demo", "melee/other"]
+    assert ledger["preflight"]["pcdump"]["required_units"] == [
+        "melee/demo",
+        "melee/other",
+    ]
+    assert ledger["preflight"]["pcdump"]["generated_units"] == [
+        "melee/demo",
+        "melee/other",
+    ]
+
+
+def test_allocator_pcdump_triage_records_target_vector_blocker(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("demo_fn")])
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    payload = _allocator_triage_payload()
+    _, runner = _json_runner(payload)
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "allocator-target-vector"
+    assert result["candidate_path"] is None
+    assert result["details"]["target_vector_actionability"] == payload[
+        "target_vector_actionability"
+    ]
+    assert result["details"]["force_vector"] == "r26=r31"
+    assert result["details"]["force_vector_runnable"] is True
+    assert result["details"]["force_vector_recommended"] is True
+    assert result["details"]["force_phys_csv"] == "r26,r31"
+    assert result["details"]["force_vector_conflicts"] == []
+    assert result["details"]["unit"] == "melee/demo"
+    assert result["details"]["targets"] == [{"from": "r26", "to": "r31"}]
+    assert result["details"]["results"] == [{"target": "r26=r31", "status": "ok"}]
+    assert result["details"]["pcdump"] == str(
+        harvest_module.pcdump_cache.cache_path(repo_root, "melee/demo")
+    )
+    assert "needs-move summary" in result["reason"]
+    assert "needs-move next step" in result["reason"]
+
+
+def test_allocator_pcdump_triage_records_source_lifetime_blocker(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("demo_fn")])
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    payload = _allocator_triage_payload(
+        status="already-satisfied",
+        force_vector_recommended=False,
+    )
+    payload["variants"] = [
+        {
+            "status": "ok",
+            "source_path": str(tmp_path / "candidate.c"),
+            "final_match_percent": 100.0,
+        }
+    ]
+    _, runner = _json_runner(payload)
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "source-lifetime-callee-save-shape"
+    assert result["candidate_path"] is None
+
+
+def test_allocator_pcdump_triage_uses_actionability_counts_without_targets(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("demo_fn")])
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    payload = _allocator_triage_payload(force_vector_conflicts=["ig32 conflicts"])
+    payload.pop("targets")
+    payload["target_vector_actionability"]["target_count"] = 8
+    payload["target_vector_actionability"]["runnable_target_count"] = 6
+    _, runner = _json_runner(payload)
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "allocator-vector-not-runnable"
+    assert result["details"]["force_vector_conflicts"] == ["ig32 conflicts"]
+    assert "targets" not in result["details"]
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_blocker"),
+    [
+        (
+            _allocator_triage_payload(status="current-unknown"),
+            "allocator-current-unknown",
+        ),
+        (
+            _allocator_triage_payload(
+                status="current-unknown",
+                force_vector_recommended=False,
+            ),
+            "allocator-current-unknown",
+        ),
+        (
+            _allocator_triage_payload(
+                status="already-satisfied",
+                force_vector_conflicts=["already target but conflict metadata exists"],
+            ),
+            "source-lifetime-callee-save-shape",
+        ),
+        (
+            _allocator_triage_payload(targets=[]),
+            "allocator-no-targets",
+        ),
+        (
+            _allocator_triage_payload(force_vector_runnable=False),
+            "allocator-vector-not-runnable",
+        ),
+        (
+            _allocator_triage_payload(force_vector_recommended=False),
+            "allocator-vector-not-runnable",
+        ),
+        (
+            _allocator_triage_payload(force_vector_recommended=None),
+            "allocator-vector-not-runnable",
+        ),
+        (
+            _allocator_triage_payload(force_vector_runnable=None),
+            "allocator-vector-not-runnable",
+        ),
+        (
+            _allocator_triage_payload(force_vector=""),
+            "allocator-vector-not-runnable",
+        ),
+        (
+            _allocator_triage_payload(
+                status="no-runnable-targets",
+                force_vector="",
+                force_vector_runnable=False,
+            ),
+            "allocator-vector-not-runnable",
+        ),
+        (
+            _allocator_triage_payload(
+                status="future-status",
+                force_vector_runnable=False,
+            ),
+            "allocator-vector-not-runnable",
+        ),
+        (
+            _allocator_triage_payload(
+                force_vector_conflicts=["r26 conflicts with requested vector"],
+            ),
+            "allocator-vector-not-runnable",
+        ),
+    ],
+)
+def test_allocator_pcdump_triage_records_narrow_blockers(
+    monkeypatch,
+    tmp_path: Path,
+    payload: dict,
+    expected_blocker: str,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("demo_fn")])
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    _, runner = _json_runner(payload)
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == expected_blocker
+    if payload.get("force_vector_conflicts"):
+        assert result["details"]["force_vector_conflicts"] == payload[
+            "force_vector_conflicts"
+        ]
+
+
+def test_allocator_pcdump_triage_missing_source_is_blocked(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("demo_fn", file_path="melee/missing.c")])
+    calls, runner = _json_runner(_allocator_triage_payload())
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert calls == []
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "missing-source-file"
+    assert result["harness"] == "allocator-pcdump-triage"
+
+
+def test_allocator_pcdump_triage_unclassified_payload_is_blocked(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("demo_fn")])
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    payload = {
+        "target_vector_actionability": {"unexpected": "shape"},
+        "unit": "melee/demo",
+        "targets": [{"from": "r26", "to": "r31"}],
+        "results": [{"status": "unknown"}],
+        "warning": "future match-iter-first diagnostic",
+        "target_vector": {"future": "metadata"},
+    }
+    _, runner = _json_runner(payload)
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "allocator-triage-unclassified"
+    assert result["details"]["target_vector_actionability"] == {
+        "unexpected": "shape"
+    }
+    assert result["details"]["payload"] == payload
+
+
+def test_composed_allocator_pcdump_triage_translates_payload_before_candidates(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("demo_fn")])
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    payload = _allocator_triage_payload(status="already-satisfied")
+    payload["variants"] = [
+        {
+            "status": "ok",
+            "source_path": str(tmp_path / "candidate.c"),
+            "final_match_percent": 100.0,
+        }
+    ]
+    _, runner = _json_runner(payload)
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        target_map={"demo_fn": {"harnesses": ["allocator-pcdump-triage"]}},
+        compose=True,
+        runner=runner,
+        match_checker=lambda function, *, cwd, timeout: _match_process(
+            function,
+            match=False,
+            percent=99.0,
+            primary="register-allocation",
+        ),
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "source-lifetime-callee-save-shape"
+    assert result["details"]["layers"][0]["harness"] == "allocator-pcdump-triage"
+    assert (
+        result["details"]["layers"][0]["blocker"]
+        == "source-lifetime-callee-save-shape"
+    )
+
+
+def test_allocator_pcdump_triage_apply_does_not_attempt_source_application(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("demo_fn")])
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    payload = _allocator_triage_payload()
+    payload["variants"] = [
+        {
+            "status": "ok",
+            "source_path": str(tmp_path / "candidate.c"),
+            "final_match_percent": 100.0,
+        }
+    ]
+    calls, runner = _json_runner(payload)
+
+    def fail_validator(
+        function: str,
+        *,
+        cwd: Path,
+        timeout: int,
+    ) -> HarnessProcessResult:
+        raise AssertionError(f"diagnostic harness must not validate {function}")
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        apply=True,
+        runner=runner,
+        validator=fail_validator,
+        match_checker=lambda function, *, cwd, timeout: _match_process(
+            function,
+            match=False,
+            percent=99.0,
+            primary="register-allocation",
+        ),
+    )
+
+    result = ledger["results"][0]
+    assert calls == [
+        [
+            "debug",
+            "target",
+            "match-iter-first",
+            "-f",
+            "demo_fn",
+            "--regs",
+            "gpr-callee,gpr-volatile,r0",
+            "--json",
+        ]
+    ]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "allocator-target-vector"
+    assert result["applied"] is False
+    assert result["candidate_path"] is None
 
 
 def test_register_target_map_selects_coalesce_search(tmp_path: Path) -> None:

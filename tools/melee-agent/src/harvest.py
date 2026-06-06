@@ -30,6 +30,7 @@ HARNESS_INDEXED_STRUCT = "indexed-struct-search"
 HARNESS_NAME_MAGIC_SOURCE = "name-magic-source-declarations"
 HARNESS_CONTROL_FLOW_SHAPE = "control-flow-shape-search"
 HARNESS_LIFETIME_LAYOUT = "lifetime-layout"
+HARNESS_ALLOCATOR_PCDUMP_TRIAGE = "allocator-pcdump-triage"
 REGISTERED_HARNESSES = {
     HARNESS_FRAME_TRANSFORM,
     HARNESS_COALESCE,
@@ -38,7 +39,20 @@ REGISTERED_HARNESSES = {
     HARNESS_NAME_MAGIC_SOURCE,
     HARNESS_CONTROL_FLOW_SHAPE,
     HARNESS_LIFETIME_LAYOUT,
+    HARNESS_ALLOCATOR_PCDUMP_TRIAGE,
 }
+ALLOCATOR_PCDUMP_TRIAGE_REGS = "gpr-callee,gpr-volatile,r0"
+ALLOCATOR_PCDUMP_TRIAGE_DETAIL_FIELDS = (
+    "target_vector_actionability",
+    "force_vector",
+    "force_vector_runnable",
+    "force_vector_recommended",
+    "force_phys_csv",
+    "force_vector_conflicts",
+    "unit",
+    "targets",
+    "results",
+)
 PREVIEW_FACET_FIELDS = (
     "primary",
     "subcategory",
@@ -56,6 +70,12 @@ BLOCKER_NO_VALIDATED_CANDIDATE = "no-validated-candidate"
 BLOCKER_APPLY_TRANSFER_FAILED = "apply-transfer-failed"
 BLOCKER_APPLY_VALIDATION_FAILED = "apply-validation-failed"
 BLOCKER_DECLARATION_APPLY_UNSUPPORTED = "declaration-apply-unsupported"
+BLOCKER_ALLOCATOR_TARGET_VECTOR = "allocator-target-vector"
+BLOCKER_ALLOCATOR_SOURCE_LIFETIME = "source-lifetime-callee-save-shape"
+BLOCKER_ALLOCATOR_CURRENT_UNKNOWN = "allocator-current-unknown"
+BLOCKER_ALLOCATOR_NO_TARGETS = "allocator-no-targets"
+BLOCKER_ALLOCATOR_VECTOR_NOT_RUNNABLE = "allocator-vector-not-runnable"
+BLOCKER_ALLOCATOR_TRIAGE_UNCLASSIFIED = "allocator-triage-unclassified"
 RETAINED_SOURCE_STATUSES = {"applied", "improved", "validated"}
 NEGATIVE_EVIDENCE_STATUSES = {"blocked", "error", "no_match", "unsupported"}
 
@@ -548,11 +568,29 @@ def _extract_registered_harness(text: Any) -> str | None:
     return None
 
 
+def _contains_debug_dump_local(value: str) -> bool:
+    return "debug dump local" in value.lower()
+
+
+def _is_allocator_pcdump_triage_request(request: HarvestRequest) -> bool:
+    if request.work_bucket != "register-allocator":
+        return False
+    return (
+        request.source_actionability == "pcdump-proof-needed"
+        or request.headline_tool == "mwcc-debug"
+        or _contains_debug_dump_local(request.next_command)
+        or _contains_debug_dump_local(request.frame_next_command)
+    )
+
+
 def select_harness(request: HarvestRequest) -> str | None:
     explicit_harness = request.facts.get("harness")
     if explicit_harness:
         harness = str(explicit_harness).strip().lower()
         return harness if harness in REGISTERED_HARNESSES else None
+
+    if _is_allocator_pcdump_triage_request(request):
+        return HARNESS_ALLOCATOR_PCDUMP_TRIAGE
 
     if request.primary == "data-symbol-relocation":
         return HARNESS_NAME_MAGIC_SOURCE
@@ -590,6 +628,10 @@ def select_harness(request: HarvestRequest) -> str | None:
     ):
         harness = _extract_registered_harness(value)
         if harness is not None:
+            if harness == HARNESS_ALLOCATOR_PCDUMP_TRIAGE:
+                if _is_allocator_pcdump_triage_request(request):
+                    return harness
+                continue
             return harness
 
     if request.frame_closability_tier == "current-tools-padstack":
@@ -826,6 +868,8 @@ def _needs_pcdump_preflight(
     if request.source_file is None:
         return False
     harness = select_harness(request)
+    if harness == HARNESS_ALLOCATOR_PCDUMP_TRIAGE:
+        return True
     lifetime_layout_source_probe = request.work_bucket == "stack-local-layout" and (
         request.headline_tool == HARNESS_LIFETIME_LAYOUT
         or HARNESS_LIFETIME_LAYOUT in request.next_command
@@ -854,7 +898,7 @@ def _needs_pcdump_preflight(
         ) or (
             HARNESS_LIFETIME_LAYOUT in layer_harnesses
             and lifetime_layout_source_probe
-        )
+        ) or (HARNESS_ALLOCATOR_PCDUMP_TRIAGE in layer_harnesses)
     return False
 
 
@@ -1191,6 +1235,19 @@ def _lifetime_layout_command(request: HarvestRequest) -> list[str]:
     ]
 
 
+def _allocator_pcdump_triage_command(request: HarvestRequest) -> list[str]:
+    return [
+        "debug",
+        "target",
+        "match-iter-first",
+        "-f",
+        request.function,
+        "--regs",
+        ALLOCATOR_PCDUMP_TRIAGE_REGS,
+        "--json",
+    ]
+
+
 def _base_result(
     request: HarvestRequest,
     *,
@@ -1352,6 +1409,227 @@ def _harness_blocker_result(payload: Any) -> tuple[str, str, str] | None:
     if isinstance(blocker, str) and blocker:
         return kind, blocker, str(reason or blocker)
     return None
+
+
+def _allocator_triage_details(
+    payload: Any,
+    *,
+    repo_root: Path,
+) -> dict[str, Any]:
+    details: dict[str, Any] = {}
+    if not isinstance(payload, Mapping):
+        return details
+    for field_name in ALLOCATOR_PCDUMP_TRIAGE_DETAIL_FIELDS:
+        if field_name in payload:
+            details[field_name] = payload[field_name]
+    unit = payload.get("unit")
+    if isinstance(unit, str) and unit:
+        details["pcdump"] = str(pcdump_cache.cache_path(repo_root, unit))
+    return details
+
+
+def _compact_allocator_triage_payload(payload: Any) -> Any:
+    if not isinstance(payload, Mapping):
+        return payload
+    return dict(payload)
+
+
+def _allocator_actionability_reason(
+    actionability: Mapping[str, Any],
+    fallback: str,
+) -> str:
+    parts = []
+    for field_name in ("summary", "next_step"):
+        value = actionability.get(field_name)
+        if isinstance(value, str) and value:
+            parts.append(value)
+    return "; ".join(parts) if parts else fallback
+
+
+def _has_force_vector_conflicts(value: Any) -> bool:
+    if value is None or value is False:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, set, dict)):
+        return bool(value)
+    return bool(value)
+
+
+def _has_runnable_recommended_force_vector(payload: Mapping[str, Any]) -> bool:
+    force_vector = payload.get("force_vector")
+    return (
+        isinstance(force_vector, str)
+        and bool(force_vector.strip())
+        and payload.get("force_vector_runnable") is True
+        and payload.get("force_vector_recommended") is True
+        and not _has_force_vector_conflicts(payload.get("force_vector_conflicts"))
+    )
+
+
+def _allocator_payload_has_targets(
+    payload: Mapping[str, Any],
+    actionability: Mapping[str, Any],
+) -> bool:
+    targets = payload.get("targets")
+    if isinstance(targets, list):
+        return bool(targets)
+    for field_name in (
+        "target_count",
+        "runnable_target_count",
+        "needs_move_count",
+        "already_target_count",
+        "unknown_current_count",
+    ):
+        value = actionability.get(field_name)
+        if isinstance(value, int) and value > 0:
+            return True
+    results = payload.get("results")
+    if isinstance(results, list):
+        return any(
+            isinstance(row, Mapping) and row.get("status") == "ok"
+            for row in results
+        )
+    return False
+
+
+def _allocator_pcdump_triage_result(
+    request: HarvestRequest,
+    *,
+    command: list[str],
+    payload: Any,
+    repo_root: Path,
+) -> HarvestResult:
+    details = _allocator_triage_details(payload, repo_root=repo_root)
+    unclassified_reason = "target vector actionability was missing or malformed"
+    if not isinstance(payload, Mapping):
+        details["payload"] = _compact_allocator_triage_payload(payload)
+        return _base_result(
+            request,
+            harness=HARNESS_ALLOCATOR_PCDUMP_TRIAGE,
+            status="blocked",
+            blocker=BLOCKER_ALLOCATOR_TRIAGE_UNCLASSIFIED,
+            reason=unclassified_reason,
+            command=command,
+            details=details,
+        )
+
+    actionability = payload.get("target_vector_actionability")
+    if not isinstance(actionability, Mapping):
+        details["payload"] = _compact_allocator_triage_payload(payload)
+        return _base_result(
+            request,
+            harness=HARNESS_ALLOCATOR_PCDUMP_TRIAGE,
+            status="blocked",
+            blocker=BLOCKER_ALLOCATOR_TRIAGE_UNCLASSIFIED,
+            reason=unclassified_reason,
+            command=command,
+            details=details,
+        )
+
+    status_value = actionability.get("status")
+    if not isinstance(status_value, str) or not status_value:
+        details["payload"] = _compact_allocator_triage_payload(payload)
+        return _base_result(
+            request,
+            harness=HARNESS_ALLOCATOR_PCDUMP_TRIAGE,
+            status="blocked",
+            blocker=BLOCKER_ALLOCATOR_TRIAGE_UNCLASSIFIED,
+            reason=unclassified_reason,
+            command=command,
+            details=details,
+        )
+
+    reason = _allocator_actionability_reason(actionability, status_value)
+    if status_value == "already-satisfied":
+        return _base_result(
+            request,
+            harness=HARNESS_ALLOCATOR_PCDUMP_TRIAGE,
+            status="blocked",
+            blocker=BLOCKER_ALLOCATOR_SOURCE_LIFETIME,
+            reason=reason,
+            command=command,
+            details=details,
+        )
+    if status_value == "current-unknown":
+        return _base_result(
+            request,
+            harness=HARNESS_ALLOCATOR_PCDUMP_TRIAGE,
+            status="blocked",
+            blocker=BLOCKER_ALLOCATOR_CURRENT_UNKNOWN,
+            reason=reason,
+            command=command,
+            details=details,
+        )
+
+    if not _allocator_payload_has_targets(payload, actionability):
+        return _base_result(
+            request,
+            harness=HARNESS_ALLOCATOR_PCDUMP_TRIAGE,
+            status="blocked",
+            blocker=BLOCKER_ALLOCATOR_NO_TARGETS,
+            reason="match-iter-first returned no allocator targets",
+            command=command,
+            details=details,
+        )
+
+    if (
+        payload.get("force_vector_runnable") is False
+        or payload.get("force_vector_recommended") is False
+        or _has_force_vector_conflicts(payload.get("force_vector_conflicts"))
+    ):
+        return _base_result(
+            request,
+            harness=HARNESS_ALLOCATOR_PCDUMP_TRIAGE,
+            status="blocked",
+            blocker=BLOCKER_ALLOCATOR_VECTOR_NOT_RUNNABLE,
+            reason=reason,
+            command=command,
+            details=details,
+        )
+
+    if status_value == "no-runnable-targets":
+        return _base_result(
+            request,
+            harness=HARNESS_ALLOCATOR_PCDUMP_TRIAGE,
+            status="blocked",
+            blocker=BLOCKER_ALLOCATOR_VECTOR_NOT_RUNNABLE,
+            reason=reason,
+            command=command,
+            details=details,
+        )
+
+    if status_value == "needs-move":
+        if not _has_runnable_recommended_force_vector(payload):
+            return _base_result(
+                request,
+                harness=HARNESS_ALLOCATOR_PCDUMP_TRIAGE,
+                status="blocked",
+                blocker=BLOCKER_ALLOCATOR_VECTOR_NOT_RUNNABLE,
+                reason=reason,
+                command=command,
+                details=details,
+            )
+        return _base_result(
+            request,
+            harness=HARNESS_ALLOCATOR_PCDUMP_TRIAGE,
+            status="blocked",
+            blocker=BLOCKER_ALLOCATOR_TARGET_VECTOR,
+            reason=reason,
+            command=command,
+            details=details,
+        )
+
+    details["payload"] = _compact_allocator_triage_payload(payload)
+    return _base_result(
+        request,
+        harness=HARNESS_ALLOCATOR_PCDUMP_TRIAGE,
+        status="blocked",
+        blocker=BLOCKER_ALLOCATOR_TRIAGE_UNCLASSIFIED,
+        reason=f"unclassified allocator actionability status: {status_value}",
+        command=command,
+        details=details,
+    )
 
 
 def _already_matched_result(
@@ -2051,6 +2329,8 @@ def _adapter_command(request: HarvestRequest, harness: str) -> list[str]:
         return _control_flow_shape_command(request)
     if harness == HARNESS_LIFETIME_LAYOUT:
         return _lifetime_layout_command(request)
+    if harness == HARNESS_ALLOCATOR_PCDUMP_TRIAGE:
+        return _allocator_pcdump_triage_command(request)
     raise ValueError(f"unsupported harness: {harness}")
 
 
@@ -2558,6 +2838,25 @@ def run_composed_harvest_request(
             )
 
         assert payload is not None
+        if harness == HARNESS_ALLOCATOR_PCDUMP_TRIAGE:
+            layer = _allocator_pcdump_triage_result(
+                layer_request,
+                command=command,
+                payload=payload,
+                repo_root=repo_root,
+            )
+            layers.append(layer)
+            return _compose_result(
+                request,
+                status=layer.status,
+                blocker=layer.blocker,
+                reason=layer.reason,
+                layers=layers,
+                harness_sequence=harness_sequence,
+                stop_reason=f"layer-{layer.status}",
+                final_layer=layer,
+            )
+
         if harness == HARNESS_NAME_MAGIC_SOURCE:
             candidate, unsupported_candidate_path = best_validated_name_magic_candidate(
                 payload
@@ -2859,6 +3158,14 @@ def run_harvest_request(
             reason="harness did not emit valid JSON",
             command=command,
             details={"error": str(exc), "stdout": _short_output(process.stdout)},
+        )
+
+    if harness == HARNESS_ALLOCATOR_PCDUMP_TRIAGE:
+        return _allocator_pcdump_triage_result(
+            request,
+            command=command,
+            payload=harness_json,
+            repo_root=repo_root,
         )
 
     unsupported_candidate_path = None
