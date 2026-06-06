@@ -1436,6 +1436,45 @@ def _stack_frame_size(lines: list[str]) -> Optional[int]:
     return None
 
 
+def _struct_key(body: str) -> str:
+    """Mask displacement + branch targets so equal-shape instructions align."""
+    k = re.sub(r"-?(?:0x[0-9a-fA-F]+|\d+)\((r\d+)\)", r"DISP(\1)", body)
+    k = re.sub(r"<[^>]*>", "TGT", k)
+    return re.sub(r"\s+", " ", k).strip()
+
+
+_MEMOP_RE = re.compile(r"^([a-z][a-z0-9.]*)\s+.*?(-?(?:0x[0-9a-fA-F]+|\d+))\((r\d+)\)")
+
+
+def _paired_struct_offset_delta(ref_body: str, our_body: str):
+    """Return a struct-offset discrepancy dict, or None.
+
+    Same mnemonic + same base register (not r1/r2/r13) + differing displacement.
+    """
+    rm = _MEMOP_RE.match(ref_body.strip())
+    cm = _MEMOP_RE.match(our_body.strip())
+    if not rm or not cm:
+        return None
+    if rm.group(1) != cm.group(1):         # mnemonic must match
+        return None
+    if rm.group(3) != cm.group(3):         # base reg must match
+        return None
+    base = rm.group(3)
+    if base in ("r1", "r2", "r13"):        # stack / sda2 / sda
+        return None
+
+    def _d(s: str) -> int:
+        s = s.strip()
+        if s.lower().startswith(("0x", "-0x")):
+            return int(s, 16)
+        return int(s)
+
+    rd, cd = _d(rm.group(2)), _d(cm.group(2))
+    if rd == cd:
+        return None
+    return {"base_reg": base, "mnemonic": rm.group(1), "ref_disp": rd, "cur_disp": cd}
+
+
 def _paired_stack_delta(ref_body: str, our_body: str) -> Optional[int]:
     ref_frame = _STACK_FRAME_ALLOC_RE.search(ref_body)
     our_frame = _STACK_FRAME_ALLOC_RE.search(our_body)
@@ -2193,6 +2232,32 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
     if not reasons:
         reasons.append("differences require direct inspection")
 
+    # Compute offset_discrepancies via body-level alignment (SequenceMatcher on
+    # _struct_key bodies, not raw lines with +offset: prefixes).
+    import difflib as _difflib
+    _ref_bodies = [_asm_body(l) for l in ref_lines if not _is_relocation_line(l)]
+    _our_bodies = [_asm_body(l) for l in our_lines if not _is_relocation_line(l)]
+    _sm = _difflib.SequenceMatcher(
+        None,
+        [_struct_key(b) for b in _ref_bodies],
+        [_struct_key(b) for b in _our_bodies],
+        autojunk=False,
+    )
+    offset_discrepancies: list[dict] = []
+    for _tag, _i1, _i2, _j1, _j2 in _sm.get_opcodes():
+        if _tag not in ("equal", "replace"):
+            continue
+        if (_i2 - _i1) != (_j2 - _j1):
+            continue  # unequal-length replace block: can't pair positionally
+        # dup-body guard: if a _struct_key repeats within this block, skip it
+        _block_keys = [_struct_key(_ref_bodies[_i1 + _k]) for _k in range(_i2 - _i1)]
+        if len(set(_block_keys)) != len(_block_keys):
+            continue
+        for _k in range(_i2 - _i1):
+            _d = _paired_struct_offset_delta(_ref_bodies[_i1 + _k], _our_bodies[_j1 + _k])
+            if _d:
+                offset_discrepancies.append(_d)
+
     result = {"primary": primary, "reasons": reasons}
     if stack_frame_delta:
         result["stack_frame_delta"] = stack_frame_delta
@@ -2215,6 +2280,7 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
             "subclass": backend_ceiling["subclass"],
             "confidence": backend_ceiling["confidence"],
         }
+    result["offset_discrepancies"] = offset_discrepancies
     return result
 
 
