@@ -121,6 +121,29 @@ def strip_src_prefix(path: str) -> str:
     return path[4:] if path.startswith("src/") else path
 
 
+def _candidate_source_path(candidate: FunctionCandidate) -> Path | None:
+    if not candidate.file_path:
+        return None
+    return REPO_ROOT / "src" / candidate.file_path
+
+
+def _snapshot_candidate_source(candidate: FunctionCandidate) -> tuple[Path, str] | None:
+    source_path = _candidate_source_path(candidate)
+    if source_path is None:
+        return None
+    try:
+        return source_path, source_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def _restore_candidate_source(snapshot: tuple[Path, str] | None) -> None:
+    if snapshot is None:
+        return
+    source_path, original = snapshot
+    source_path.write_text(original, encoding="utf-8")
+
+
 def format_address(value: Any) -> str:
     try:
         return f"0x{int(value):08x}"
@@ -1331,7 +1354,12 @@ def classify_candidate(
         decl_order_evaluator is not None
         and should_evaluate_decl_orders(candidate, bucket, subcategory)
     ):
-        attach_decl_order_summary(record, decl_order_evaluator(candidate, record))
+        source_snapshot = _snapshot_candidate_source(candidate)
+        try:
+            decl_order_summary = decl_order_evaluator(candidate, record)
+        finally:
+            _restore_candidate_source(source_snapshot)
+        attach_decl_order_summary(record, decl_order_summary)
     return record, None
 
 

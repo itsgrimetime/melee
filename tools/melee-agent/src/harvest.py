@@ -77,7 +77,7 @@ BLOCKER_HARNESS_EXIT_NONZERO = "harness-exit-nonzero"
 BLOCKER_HARNESS_INVALID_JSON = "harness-invalid-json"
 BLOCKER_NO_VALIDATED_CANDIDATE = "no-validated-candidate"
 BLOCKER_MALFORMED_SOURCE_CANDIDATE = "malformed-source-candidate"
-MALFORMED_INDEXED_SOURCE_ACTIONABILITY = "candidate-generation-fidelity"
+MALFORMED_SOURCE_CANDIDATE_ACTIONABILITY = "candidate-generation-fidelity"
 BLOCKER_APPLY_TRANSFER_FAILED = "apply-transfer-failed"
 BLOCKER_APPLY_VALIDATION_FAILED = "apply-validation-failed"
 BLOCKER_DECLARATION_APPLY_UNSUPPORTED = "declaration-apply-unsupported"
@@ -1603,18 +1603,21 @@ def _malformed_source_rebucket(
 ) -> str | None:
     if blocker != BLOCKER_MALFORMED_SOURCE_CANDIDATE:
         return None
-    if harness != HARNESS_INDEXED_STRUCT:
-        return None
-    if request.source_actionability != "current-tools-indexed-pointer":
+    rebucketable_source_actionabilities = {
+        HARNESS_INDEXED_STRUCT: "current-tools-indexed-pointer",
+        HARNESS_LIFETIME_LAYOUT: "source-probe",
+    }
+    remove_from = rebucketable_source_actionabilities.get(harness)
+    if remove_from is None or request.source_actionability != remove_from:
         return None
     details["source_actionability_rebucket"] = {
         "from": request.source_actionability,
-        "to": MALFORMED_INDEXED_SOURCE_ACTIONABILITY,
-        "remove_from": "current-tools-indexed-pointer",
+        "to": MALFORMED_SOURCE_CANDIDATE_ACTIONABILITY,
+        "remove_from": remove_from,
         "blocker": blocker,
         "reason": "candidate pcdump omitted the requested function",
     }
-    return MALFORMED_INDEXED_SOURCE_ACTIONABILITY
+    return MALFORMED_SOURCE_CANDIDATE_ACTIONABILITY
 
 
 def _allocator_triage_details(
@@ -2088,6 +2091,31 @@ def _atomic_write_text(path: Path, text: str) -> None:
     finally:
         if temp_name is not None:
             Path(temp_name).unlink(missing_ok=True)
+
+
+def _snapshot_source_files(requests: list[HarvestRequest]) -> dict[Path, str]:
+    snapshots: dict[Path, str] = {}
+    for request in requests:
+        if request.source_file is None:
+            continue
+        path = request.source_file
+        if path in snapshots:
+            continue
+        try:
+            snapshots[path] = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+    return snapshots
+
+
+def _restore_source_files(snapshots: Mapping[Path, str]) -> list[str]:
+    errors: list[str] = []
+    for path, text in snapshots.items():
+        try:
+            _atomic_write_text(path, text)
+        except Exception as exc:
+            errors.append(f"{path}: {exc}")
+    return errors
 
 
 @dataclass(frozen=True)
@@ -3943,30 +3971,45 @@ def run_harvest(
         max_probes=max_probes,
         filters=filters,
     )
-    preflight = {
-        "pcdump": _run_pcdump_preflight(
-            requests,
-            repo_root=repo_root,
-            runner=runner,
-            timeout=timeout,
-            compose=compose,
-        ).to_dict()
-    }
-    request_runner = run_composed_harvest_request if compose else run_harvest_request
-    results = [
-        request_runner(
-            request,
-            repo_root=repo_root,
-            runner=runner,
-            validator=validator,
-            match_checker=match_checker,
-        )
-        for request in requests
-    ]
-    finished_at = _utc_now()
-    if ledger_path is not None:
-        return write_ledger(
-            ledger_path,
+    source_snapshots = {} if apply else _snapshot_source_files(requests)
+    try:
+        preflight = {
+            "pcdump": _run_pcdump_preflight(
+                requests,
+                repo_root=repo_root,
+                runner=runner,
+                timeout=timeout,
+                compose=compose,
+            ).to_dict()
+        }
+        request_runner = run_composed_harvest_request if compose else run_harvest_request
+        results = [
+            request_runner(
+                request,
+                repo_root=repo_root,
+                runner=runner,
+                validator=validator,
+                match_checker=match_checker,
+            )
+            for request in requests
+        ]
+        finished_at = _utc_now()
+        if ledger_path is not None:
+            return write_ledger(
+                ledger_path,
+                work_bucket=work_bucket,
+                started_at=started_at,
+                finished_at=finished_at,
+                apply=apply,
+                min_match=min_match,
+                limit=limit,
+                taxonomy_queue=queue_path,
+                target_map_path=target_map_path,
+                filters=filters,
+                preflight=preflight,
+                results=results,
+            )
+        return _build_ledger(
             work_bucket=work_bucket,
             started_at=started_at,
             finished_at=finished_at,
@@ -3979,16 +4022,9 @@ def run_harvest(
             preflight=preflight,
             results=results,
         )
-    return _build_ledger(
-        work_bucket=work_bucket,
-        started_at=started_at,
-        finished_at=finished_at,
-        apply=apply,
-        min_match=min_match,
-        limit=limit,
-        taxonomy_queue=queue_path,
-        target_map_path=target_map_path,
-        filters=filters,
-        preflight=preflight,
-        results=results,
-    )
+    finally:
+        restore_errors = _restore_source_files(source_snapshots)
+        if restore_errors and sys.exc_info()[0] is None:
+            raise RuntimeError(
+                "dry-run source restore failed: " + "; ".join(restore_errors)
+            )

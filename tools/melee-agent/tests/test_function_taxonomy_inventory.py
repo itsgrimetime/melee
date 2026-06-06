@@ -593,6 +593,49 @@ def test_generate_inventory_emits_progress_during_steady_completion(
     assert status["status"] == "completed"
 
 
+def test_classify_candidate_restores_source_after_decl_order_side_effect(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    import tools.function_taxonomy_inventory as inventory
+    from tools.function_taxonomy_inventory import FunctionCandidate, classify_candidate
+
+    repo_root = tmp_path / "repo"
+    source = repo_root / "src" / "melee" / "demo" / "demo.c"
+    source.parent.mkdir(parents=True)
+    original = "void same_frame_fn(void) { int stable = 0; }\n"
+    mutated = "void same_frame_fn(void) { int leaked_decl_order = 1; }\n"
+    source.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(inventory, "REPO_ROOT", repo_root)
+    candidate = FunctionCandidate(
+        function="same_frame_fn",
+        unit="main/melee/demo/demo",
+        file_path="melee/demo/demo.c",
+        size_bytes=420,
+        match_percent=99.125,
+        address="0x80000000",
+        object_status="NonMatching",
+    )
+
+    def mutating_decl_order_evaluator(candidate, _record):
+        source.write_text(mutated, encoding="utf-8")
+        return fake_decl_order_evaluator(candidate, _record)
+
+    record, error = classify_candidate(
+        candidate,
+        fake_checkdiff,
+        decl_order_evaluator=mutating_decl_order_evaluator,
+        frame_report_runner=None,
+        cast_audit_runner=None,
+        struct_verify_runner=None,
+    )
+
+    assert error is None
+    assert record is not None
+    assert record["decl_order_evaluated_status"] == "evaluated"
+    assert source.read_text(encoding="utf-8") == original
+
+
 def test_offset_discrepancies_do_not_override_root_cause_buckets() -> None:
     from tools.function_taxonomy_inventory import FunctionCandidate, classify_candidate
 

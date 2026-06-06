@@ -3898,6 +3898,51 @@ def test_compose_indexed_malformed_source_candidate_rebuckets_top_level(
     )
 
 
+def test_compose_dry_run_restores_harness_source_mutation_when_ledger_write_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    target = repo_root / "src" / "melee" / "demo.c"
+    original = target.read_text(encoding="utf-8")
+    mutated = "void demo_fn(void) { int leaked_mutation = 1; }\n"
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(
+        queue,
+        [_row("demo_fn", source_actionability="current-tools")],
+    )
+
+    def runner(args: list[str], *, cwd: Path, timeout: int) -> HarnessProcessResult:
+        if args[:2] == ["debug", "mutate"]:
+            target.write_text(mutated, encoding="utf-8")
+            return HarnessProcessResult(args, 0, json.dumps({"variants": []}), "")
+        return HarnessProcessResult(args, 0, "", "")
+
+    def fail_write_ledger(*args, **kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(harvest_module, "write_ledger", fail_write_ledger)
+
+    with pytest.raises(OSError, match="No space left on device"):
+        run_harvest(
+            "stack-local-layout",
+            repo_root=repo_root,
+            queue_path=queue,
+            runner=runner,
+            match_checker=lambda function, *, cwd, timeout: _match_process(
+                function,
+                match=False,
+                percent=90.0,
+                primary="stack-layout",
+            ),
+            ledger_path=tmp_path / "ledger.json",
+            compose=True,
+        )
+
+    assert target.read_text(encoding="utf-8") == original
+
+
 def test_compose_apply_preserves_name_magic_sub100_source_and_header(
     tmp_path: Path,
 ) -> None:
@@ -4464,7 +4509,16 @@ def test_harvest_classifies_lifetime_malformed_source_candidate(
     result = ledger["results"][0]
     assert result["status"] == "blocked"
     assert result["blocker"] == "malformed-source-candidate"
+    assert result["source_actionability"] == "candidate-generation-fidelity"
+    assert result["details"]["source_actionability_rebucket"] == {
+        "from": "source-probe",
+        "to": "candidate-generation-fidelity",
+        "remove_from": "source-probe",
+        "blocker": "malformed-source-candidate",
+        "reason": "candidate pcdump omitted the requested function",
+    }
     assert result["details"]["malformed_source_candidate"]["source_path"] == str(candidate)
+    assert ledger["summary"]["by_tier"] == {"candidate-generation-fidelity": 1}
 
 
 def test_harvest_propagates_control_flow_search_stable_blocker(
