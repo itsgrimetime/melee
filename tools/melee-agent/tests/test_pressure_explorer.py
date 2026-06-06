@@ -3059,6 +3059,141 @@ def test_indexed_struct_pointer_probe_rewrites_double_index_address_form() -> No
     assert probes[0].provenance["direct_expression"] == "rows[row][col]"
 
 
+def test_indexed_struct_pointer_probe_rewrites_casted_pointer_plus_array_uses() -> None:
+    source = textwrap.dedent("""\
+        typedef unsigned char u8;
+
+        int fn_80000000(char* str, int i)
+        {
+            u8* p;
+            p = (u8*) (str + i);
+            return p[2] + p[1];
+        }
+    """)
+
+    from src.mwcc_debug.pressure_explorer import scan_indexed_struct_pointer_probes
+
+    probes, status = scan_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert status["blocker"] is None
+    assert status["supported_candidate_count"] == 1
+    assert status["rejected_candidate_count"] == 0
+    assert len(probes) == 1
+    rewritten = probes[0].source_text
+    assert "    u8* p;\n" in rewritten
+    assert "p = (u8*) (str + i);" not in rewritten
+    assert "return ((u8*) (str + i))[2] + ((u8*) (str + i))[1];" in rewritten
+    provenance = probes[0].provenance
+    assert provenance["pointer"] == "p"
+    assert provenance["direct_expression"] == "(u8*) (str + i)"
+    assert [use["syntax"] for use in provenance["field_uses"]] == [
+        "array-subscript",
+        "array-subscript",
+    ]
+
+
+def test_indexed_struct_pointer_probe_rejects_unsafe_casted_array_uses() -> None:
+    from src.mwcc_debug.pressure_explorer import scan_indexed_struct_pointer_probes
+
+    cases = [
+        "p[2] = value;\n    return 0;",
+        "(p[2]) = value;\n    return 0;",
+        "++p[2];\n    return 0;",
+        "++(p[2]);\n    return 0;",
+        "(p[2])++;\n    return 0;",
+        "return &p[2] != 0;",
+        "return p != 0;",
+    ]
+
+    for body_tail in cases:
+        source = textwrap.dedent(f"""\
+            typedef unsigned char u8;
+
+            int fn_80000000(char* str, int i, int value)
+            {{
+                u8* p;
+                p = (u8*) (str + i);
+                {body_tail}
+            }}
+        """)
+
+        probes, status = scan_indexed_struct_pointer_probes(
+            source,
+            "fn_80000000",
+            max_probes=8,
+        )
+
+        assert probes == []
+        assert status["blocker"] == "no-safe-materialized-pointer"
+        assert status["supported_candidate_count"] == 1
+        assert status["rejected_candidate_count"] == 1
+
+
+def test_indexed_struct_pointer_probe_rejects_out_of_scope_casted_array_assignment() -> None:
+    source = textwrap.dedent("""\
+        typedef unsigned char u8;
+
+        int fn_80000000(char* str, int i)
+        {
+            {
+                u8* p;
+            }
+            p = (u8*) (str + i);
+            return p[2];
+        }
+    """)
+
+    from src.mwcc_debug.pressure_explorer import scan_indexed_struct_pointer_probes
+
+    probes, status = scan_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert probes == []
+    assert status["blocker"] == "indexed-struct-hint-unavailable"
+    assert status["supported_candidate_count"] == 0
+    assert status["rejected_candidate_count"] == 0
+
+
+def test_indexed_struct_pointer_probe_accepts_outer_scope_nested_casted_array_assignment() -> None:
+    source = textwrap.dedent("""\
+        typedef unsigned char u8;
+
+        int fn_80000000(char* str, int i)
+        {
+            u8* p;
+            if (i != 0) {
+                p = (u8*) (str + i);
+                return p[2] + p[1];
+            }
+            return 0;
+        }
+    """)
+
+    from src.mwcc_debug.pressure_explorer import scan_indexed_struct_pointer_probes
+
+    probes, status = scan_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert status["blocker"] is None
+    assert status["supported_candidate_count"] == 1
+    assert status["rejected_candidate_count"] == 0
+    assert len(probes) == 1
+    rewritten = probes[0].source_text
+    assert "    u8* p;\n" in rewritten
+    assert "p = (u8*) (str + i);" not in rewritten
+    assert "return ((u8*) (str + i))[2] + ((u8*) (str + i))[1];" in rewritten
+
+
 def test_indexed_struct_pointer_probe_splits_direct_indexed_field_access() -> None:
     source = textwrap.dedent("""\
         typedef float f32;
@@ -3125,6 +3260,179 @@ def test_indexed_struct_pointer_probe_splits_direct_indexed_field_access() -> No
     assert provenance["field"] == "x0"
     assert provenance["scalar_type"] == "f32"
     assert provenance["split_first_field"] is True
+
+
+def test_indexed_struct_pointer_probe_splits_single_direct_indexed_field() -> None:
+    source = textwrap.dedent("""\
+        typedef struct HSD_AnimJoint HSD_AnimJoint;
+
+        typedef struct Entry {
+            HSD_AnimJoint* anim;
+        } Entry;
+
+        typedef struct Attr {
+            Entry* entries;
+        } Attr;
+
+        HSD_AnimJoint* fn_80000000(Attr* attr, int picked)
+        {
+            return attr->entries[picked].anim;
+        }
+    """)
+
+    from src.mwcc_debug.pressure_explorer import scan_indexed_struct_pointer_probes
+
+    probes, status = scan_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert status["blocker"] is None
+    assert status["supported_candidate_count"] == 1
+    assert status["rejected_candidate_count"] == 0
+    assert len(probes) == 1
+    rewritten = probes[0].source_text
+    assert "HSD_AnimJoint* ll_probe_indexed_field_0;" in rewritten
+    assert (
+        "ll_probe_indexed_field_0 = attr->entries[picked].anim;" in rewritten
+    )
+    assert "return ll_probe_indexed_field_0;" in rewritten
+    assert probes[0].provenance["scalar_type"] == "HSD_AnimJoint*"
+
+
+def test_indexed_struct_pointer_probe_splits_direct_indexed_element() -> None:
+    source = textwrap.dedent("""\
+        typedef struct HSD_JObj HSD_JObj;
+
+        typedef struct MnItemSwData {
+            HSD_JObj* jobjs[9];
+        } MnItemSwData;
+
+        float fn_80000000(MnItemSwData* data)
+        {
+            return HSD_JObjGetTranslationY(data->jobjs[5]) -
+                   HSD_JObjGetTranslationY(data->jobjs[4]);
+        }
+    """)
+
+    from src.mwcc_debug.pressure_explorer import scan_indexed_struct_pointer_probes
+
+    probes, status = scan_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert status["blocker"] is None
+    assert status["supported_candidate_count"] == 1
+    assert status["rejected_candidate_count"] == 0
+    assert len(probes) == 1
+    rewritten = probes[0].source_text
+    assert "HSD_JObj* ll_probe_indexed_element_0;" in rewritten
+    assert "ll_probe_indexed_element_0 = data->jobjs[5];" in rewritten
+    assert "HSD_JObjGetTranslationY(ll_probe_indexed_element_0)" in rewritten
+    assert "HSD_JObjGetTranslationY(data->jobjs[4])" in rewritten
+    provenance = probes[0].provenance
+    assert provenance["variant"] == "direct-element-scalar-split"
+    assert provenance["element_type"] == "HSD_JObj*"
+
+
+def test_indexed_struct_pointer_probe_splits_direct_indexed_element_with_void_pointer_fallback() -> None:
+    source = textwrap.dedent("""\
+        typedef struct MnItemSwData MnItemSwData;
+
+        float fn_80000000(MnItemSwData* data)
+        {
+            return HSD_JObjGetTranslationY(data->jobjs[5]) -
+                   HSD_JObjGetTranslationY(data->jobjs[4]);
+        }
+    """)
+
+    from src.mwcc_debug.pressure_explorer import scan_indexed_struct_pointer_probes
+
+    probes, status = scan_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert status["blocker"] is None
+    assert status["supported_candidate_count"] == 1
+    assert status["rejected_candidate_count"] == 0
+    assert len(probes) == 1
+    rewritten = probes[0].source_text
+    assert "void* ll_probe_indexed_element_0;" in rewritten
+    assert "ll_probe_indexed_element_0 = data->jobjs[5];" in rewritten
+    assert "HSD_JObjGetTranslationY(ll_probe_indexed_element_0)" in rewritten
+    assert probes[0].provenance["element_type"] == "void*"
+
+
+def test_indexed_struct_pointer_probe_rejects_void_fallback_for_parenthesized_return() -> None:
+    source = textwrap.dedent("""\
+        typedef struct MnItemSwData MnItemSwData;
+
+        void* fn_80000000(MnItemSwData* data)
+        {
+            return (data->jobjs[5]);
+        }
+    """)
+
+    from src.mwcc_debug.pressure_explorer import scan_indexed_struct_pointer_probes
+
+    probes, status = scan_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert probes == []
+    assert status["blocker"] == "indexed-struct-hint-unavailable"
+    assert status["supported_candidate_count"] == 0
+    assert status["rejected_candidate_count"] == 0
+
+
+def test_indexed_struct_pointer_probe_rejects_unsafe_direct_indexed_elements() -> None:
+    from src.mwcc_debug.pressure_explorer import scan_indexed_struct_pointer_probes
+
+    cases = [
+        "data->jobjs[5] = jobj;\n    return 0;",
+        "(data->jobjs[5]) = jobj;\n    return 0;",
+        "++data->jobjs[5];\n    return 0;",
+        "++(data->jobjs[5]);\n    return 0;",
+        "(data->jobjs[5])++;\n    return 0;",
+        "return &data->jobjs[5] != 0;",
+        "if (data->jobjs[5]) { return 1; }\n    return 0;",
+        "if /* comment */ (data->jobjs[5]) { return 1; }\n    return 0;",
+        "if\n    (data->jobjs[5]) { return 1; }\n    return 0;",
+        "return sizeof(data->jobjs[5]);",
+        "return sizeof /* comment */ (data->jobjs[5]);",
+    ]
+
+    for body_tail in cases:
+        source = textwrap.dedent(f"""\
+            typedef struct HSD_JObj HSD_JObj;
+
+            typedef struct MnItemSwData {{
+                HSD_JObj* jobjs[9];
+            }} MnItemSwData;
+
+            int fn_80000000(MnItemSwData* data, HSD_JObj* jobj)
+            {{
+                {body_tail}
+            }}
+        """)
+
+        probes, status = scan_indexed_struct_pointer_probes(
+            source,
+            "fn_80000000",
+            max_probes=8,
+        )
+
+        assert probes == []
+        assert status["blocker"] == "indexed-struct-hint-unavailable"
+        assert status["supported_candidate_count"] == 0
+        assert status["rejected_candidate_count"] == 0
 
 
 def test_indexed_struct_pointer_probe_rejects_escaped_or_mutated_pointer() -> None:
