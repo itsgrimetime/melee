@@ -230,6 +230,426 @@ def test_finding_from_offset_discrepancy_normalizes_interior_offset():
     assert finding["ref_field"] == "components[0].quantTableSelector"
 
 
+def test_trace_registers_tracks_alias_addi_and_global():
+    from src.cli.struct import _trace_registers_from_asm
+
+    traces = _trace_registers_from_asm([
+        "mr r28,r3",
+        "addi r31,r28,0x20",
+        "lwz r30,__THPInfo@sda21(r13)",
+    ])
+
+    assert traces["r28"].root == "arg3"
+    assert traces["r31"].root == "arg3"
+    assert traces["r31"].offset == 0x20
+    assert traces["r30"].root == "global:__THPInfo"
+
+
+def test_trace_registers_invalidates_unknown_writes():
+    from src.cli.struct import _trace_registers_from_asm
+
+    traces = _trace_registers_from_asm(["mr r28,r3", "lwz r28,0(r4)"])
+
+    assert "r28" not in traces
+
+
+def test_trace_registers_invalidates_argument_register_writes():
+    from src.cli.struct import _trace_registers_from_asm
+
+    traces = _trace_registers_from_asm(["lwz r3,0(r4)", "mr r28,r3"])
+
+    assert "r3" not in traces
+    assert "r28" not in traces
+
+
+def test_trace_registers_invalidates_symbolic_addi():
+    from src.cli.struct import _trace_registers_from_asm
+
+    traces = _trace_registers_from_asm(["mr r28,r3", "addi r28,r28,THPDec_80400B28@l"])
+
+    assert "r28" not in traces
+
+
+def test_trace_registers_invalidates_volatile_regs_on_call():
+    from src.cli.struct import _trace_registers_from_asm
+
+    traces = _trace_registers_from_asm(["mr r12,r3", "mr r28,r3", "bl helper", "mr r29,r12", "mr r30,r3"])
+
+    assert "r12" not in traces
+    assert traces["r28"].root == "arg3"
+    assert "r29" not in traces
+    assert "r30" not in traces
+
+
+def test_function_asm_lines_skips_local_labels(tmp_path):
+    from src.cli.struct import _function_asm_lines
+
+    asm = tmp_path / "build/GALE01/asm/melee/demo.s"
+    asm.parent.mkdir(parents=True)
+    asm.write_text(
+        "\n".join(
+            [
+                ".fn demo_fn, global",
+                "/* 80000000 00000000 */\tmr r28,r3",
+                ".L_80000004:",
+                "/* 80000004 00000004 */\taddi r31,r28,0x20",
+                ".L_80000008:",
+                "/* 80000008 00000008 */\tlwz r4,0x4(r31)",
+                ".endfn demo_fn",
+                ".fn next_fn, global",
+                "/* 8000000c 0000000c */\tmr r3,r4",
+                ".endfn next_fn",
+            ]
+        )
+    )
+
+    assert _function_asm_lines(tmp_path, "src/melee/demo.c", "demo_fn") == [
+        "mr r28,r3",
+        "addi r31,r28,0x20",
+        "lwz r4,0x4(r31)",
+    ]
+
+
+def test_resolve_rows_from_dataflow_accepts_same_root_different_regs():
+    from src.cli.struct import RegisterTrace, _resolve_discrepancy_rows
+
+    rows, skipped = _resolve_discrepancy_rows(
+        "fn",
+        [{"ref_base_reg": "r28", "cur_base_reg": "r31", "base_reg": "r31", "cur_disp": 4, "ref_disp": 8}],
+        {"field": 0x24},
+        traces={
+            "r28": RegisterTrace("arg3", 0, "mr"),
+            "r31": RegisterTrace("arg3", 0x20, "addi"),
+        },
+    )
+
+    assert not skipped
+    assert rows[0]["base_offset"] == 0x20
+    assert rows[0]["expected_base_offset"] == 0
+
+
+def test_resolve_rows_uses_access_index_not_final_trace():
+    from src.cli.struct import _resolve_discrepancy_rows, _trace_registers_by_index
+
+    snapshots, traces = _trace_registers_by_index([
+        "lwz r4,0x4(r31)",
+        "mr r28,r3",
+        "addi r31,r28,0x20",
+    ])
+
+    rows, skipped = _resolve_discrepancy_rows(
+        "fn",
+        [
+            {
+                "ref_base_reg": "r28",
+                "cur_base_reg": "r31",
+                "base_reg": "r31",
+                "cur_disp": 4,
+                "ref_disp": 8,
+                "cur_index": 0,
+            }
+        ],
+        {"field": 0x24},
+        traces=traces,
+        trace_snapshots=snapshots,
+    )
+
+    assert rows == []
+    assert skipped
+    assert "unresolved mismatched bases" in skipped[0][1]
+
+
+def test_resolve_rows_uses_snapshot_at_access():
+    from src.cli.struct import _resolve_discrepancy_rows, _trace_registers_by_index
+
+    snapshots, traces = _trace_registers_by_index([
+        "mr r28,r3",
+        "addi r31,r28,0x20",
+        "lwz r4,0x4(r31)",
+    ])
+
+    rows, skipped = _resolve_discrepancy_rows(
+        "fn",
+        [
+            {
+                "ref_base_reg": "r28",
+                "cur_base_reg": "r31",
+                "base_reg": "r31",
+                "cur_disp": 4,
+                "ref_disp": 8,
+                "cur_index": 2,
+            }
+        ],
+        {"field": 0x24},
+        traces=traces,
+        trace_snapshots=snapshots,
+    )
+
+    assert not skipped
+    assert rows[0]["base_offset"] == 0x20
+    assert rows[0]["expected_base_offset"] == 0
+
+
+def test_resolve_rows_uses_separate_ref_side_trace():
+    from src.cli.struct import _resolve_discrepancy_rows, _trace_registers_by_index
+
+    ref_snapshots, ref_traces = _trace_registers_by_index([
+        "mr r28,r3",
+        "lwz r4,0x8(r28)",
+    ])
+    cur_snapshots, cur_traces = _trace_registers_by_index([
+        "addi r28,r3,0x80",
+        "addi r31,r3,0x20",
+        "lwz r4,0x4(r31)",
+    ])
+
+    rows, skipped = _resolve_discrepancy_rows(
+        "fn",
+        [
+            {
+                "ref_base_reg": "r28",
+                "cur_base_reg": "r31",
+                "base_reg": "r31",
+                "cur_disp": 4,
+                "ref_disp": 8,
+                "ref_index": 1,
+                "cur_index": 2,
+            }
+        ],
+        {"field": 0x24},
+        ref_traces=ref_traces,
+        ref_trace_snapshots=ref_snapshots,
+        cur_traces=cur_traces,
+        cur_trace_snapshots=cur_snapshots,
+    )
+
+    assert not skipped
+    assert rows[0]["base_offset"] == 0x20
+    assert rows[0]["expected_base_offset"] == 0
+
+
+def test_resolve_rows_uses_ref_offset_for_same_physical_base():
+    from src.cli.struct import _resolve_discrepancy_rows, _trace_registers_by_index
+
+    ref_snapshots, ref_traces = _trace_registers_by_index([
+        "addi r31,r3,0x10",
+        "lwz r4,0x8(r31)",
+    ])
+    cur_snapshots, cur_traces = _trace_registers_by_index([
+        "addi r31,r3,0x20",
+        "lwz r4,0x4(r31)",
+    ])
+
+    rows, skipped = _resolve_discrepancy_rows(
+        "fn",
+        [
+            {
+                "ref_base_reg": "r31",
+                "cur_base_reg": "r31",
+                "base_reg": "r31",
+                "cur_disp": 4,
+                "ref_disp": 8,
+                "ref_index": 1,
+                "cur_index": 1,
+            }
+        ],
+        {"field": 0x24},
+        ref_traces=ref_traces,
+        ref_trace_snapshots=ref_snapshots,
+        cur_traces=cur_traces,
+        cur_trace_snapshots=cur_snapshots,
+    )
+
+    assert not skipped
+    assert rows[0]["base_offset"] == 0x20
+    assert rows[0]["expected_base_offset"] == 0x10
+
+
+def test_resolve_rows_explicit_base_uses_ref_offset_for_same_physical_base():
+    from src.cli.struct import _resolve_discrepancy_rows, _trace_registers_by_index
+
+    ref_snapshots, ref_traces = _trace_registers_by_index([
+        "addi r31,r3,0x10",
+        "lwz r4,0x8(r31)",
+    ])
+    cur_snapshots, cur_traces = _trace_registers_by_index([
+        "addi r31,r3,0x20",
+        "lwz r4,0x4(r31)",
+    ])
+
+    rows, skipped = _resolve_discrepancy_rows(
+        "fn",
+        [
+            {
+                "ref_base_reg": "r31",
+                "cur_base_reg": "r31",
+                "base_reg": "r31",
+                "cur_disp": 4,
+                "ref_disp": 8,
+                "ref_index": 1,
+                "cur_index": 1,
+            }
+        ],
+        {"field": 0x24},
+        base_reg="r31",
+        base_offset=0x20,
+        base_offset_source="cli",
+        ref_traces=ref_traces,
+        ref_trace_snapshots=ref_snapshots,
+        cur_traces=cur_traces,
+        cur_trace_snapshots=cur_snapshots,
+    )
+
+    assert not skipped
+    assert rows[0]["base_offset"] == 0x20
+    assert rows[0]["base_offset_source"] == "cli"
+    assert rows[0]["expected_base_offset"] == 0x10
+    assert rows[0]["expected_base_offset_source"] == "asm-dataflow"
+
+
+def test_resolve_rows_explicit_base_rejects_mixed_same_and_alias_roots():
+    from src.cli.struct import _resolve_discrepancy_rows, _trace_registers_by_index
+
+    ref_snapshots, ref_traces = _trace_registers_by_index([
+        "addi r31,r3,0x10",
+        "lwz r6,0x8(r31)",
+        "mr r28,r4",
+        "lwz r7,0x8(r28)",
+    ])
+    cur_snapshots, cur_traces = _trace_registers_by_index([
+        "addi r31,r3,0x20",
+        "lwz r6,0x4(r31)",
+        "addi r31,r4,0x20",
+        "lwz r7,0x4(r31)",
+    ])
+
+    rows, skipped = _resolve_discrepancy_rows(
+        "fn",
+        [
+            {
+                "ref_base_reg": "r31",
+                "cur_base_reg": "r31",
+                "base_reg": "r31",
+                "cur_disp": 4,
+                "ref_disp": 8,
+                "ref_index": 1,
+                "cur_index": 1,
+            },
+            {
+                "ref_base_reg": "r28",
+                "cur_base_reg": "r31",
+                "base_reg": "r31",
+                "cur_disp": 4,
+                "ref_disp": 8,
+                "ref_index": 3,
+                "cur_index": 3,
+            },
+        ],
+        {"field": 0x24},
+        base_reg="r31",
+        base_offset=0x20,
+        base_offset_source="cli",
+        ref_traces=ref_traces,
+        ref_trace_snapshots=ref_snapshots,
+        cur_traces=cur_traces,
+        cur_trace_snapshots=cur_snapshots,
+    )
+
+    assert rows == []
+    assert skipped == [("fn", "ambiguous dataflow roots: arg3, arg4")]
+
+
+def test_instruction_lines_from_checkdiff_asm_are_instruction_only():
+    from src.cli.struct import _instruction_lines_from_checkdiff_asm
+
+    assert _instruction_lines_from_checkdiff_asm(
+        [
+            "<fn>:",
+            "+000: 7C 7C 1B 78 \tmr r28,r3",
+            "+004: 38 7C 00 20 \taddi r3,r28,0x20",
+            "+008: R_PPC_ADDR16_LO symbol",
+            "+00c: 80 83 00 04 \tlwz r4,0x4(r3)",
+        ]
+    ) == [
+        "mr r28,r3",
+        "addi r3,r28,0x20",
+        "lwz r4,0x4(r3)",
+    ]
+
+
+def test_resolve_rows_skips_mismatched_bases_without_proof():
+    from src.cli.struct import _resolve_discrepancy_rows
+
+    rows, skipped = _resolve_discrepancy_rows(
+        "fn",
+        [{"ref_base_reg": "r28", "cur_base_reg": "r31", "base_reg": "r31", "cur_disp": 4, "ref_disp": 8}],
+        {"field": 4},
+    )
+
+    assert rows == []
+    assert skipped
+    assert "unresolved mismatched bases" in skipped[0][1]
+
+
+def test_resolve_rows_explicit_base_keeps_ref_side_base_offset():
+    from src.cli.struct import _resolve_discrepancy_rows, _trace_registers_by_index
+
+    snapshots, traces = _trace_registers_by_index([
+        "mr r28,r3",
+        "addi r31,r28,0x20",
+        "lwz r4,0x4(r31)",
+    ])
+
+    rows, skipped = _resolve_discrepancy_rows(
+        "fn",
+        [
+            {
+                "ref_base_reg": "r28",
+                "cur_base_reg": "r31",
+                "base_reg": "r31",
+                "cur_disp": 4,
+                "ref_disp": 8,
+                "cur_index": 2,
+            }
+        ],
+        {"field": 0x44},
+        base_reg="r31",
+        base_reg_source="cli",
+        base_offset=0x40,
+        base_offset_source="cli",
+        traces=traces,
+        trace_snapshots=snapshots,
+    )
+
+    assert not skipped
+    assert rows[0]["base_offset"] == 0x40
+    assert rows[0]["base_offset_source"] == "cli"
+    assert rows[0]["expected_base_offset"] == 0
+    assert rows[0]["expected_base_offset_source"] == "asm-dataflow"
+
+
+def test_finding_from_offset_discrepancy_uses_ref_side_base_offset():
+    from src.cli.struct import _finding_from_offset_discrepancy
+
+    finding = _finding_from_offset_discrepancy(
+        "fn",
+        {
+            "base_reg": "r31",
+            "cur_disp": 0x4,
+            "ref_disp": 0x8,
+            "expected_base_offset": 0,
+        },
+        {"field": 0x24},
+        base_offset=0x20,
+        base_offset_source="asm-dataflow",
+        base_reg="r31",
+        base_reg_source="dataflow:arg3",
+    )
+
+    assert finding["current"] == 0x24
+    assert finding["expected"] == 0x8
+
+
 def test_struct_verify_cli_infers_base_without_option(monkeypatch):
     from typer.testing import CliRunner
     from src.cli import struct as struct_mod
@@ -260,6 +680,65 @@ def test_struct_verify_cli_infers_base_without_option(monkeypatch):
     assert data["findings"][0]["field"] == "field"
     assert data["findings"][0]["base_reg"] == "r31"
     assert data["findings"][0]["base_reg_source"] == "unique-offset-discrepancy"
+
+
+def test_struct_verify_cli_uses_asm_trace_for_alias_and_interior_offset(monkeypatch):
+    from typer.testing import CliRunner
+    from src.cli import struct as struct_mod
+    from src.cli.struct import struct_app
+    from src.common import struct_layout
+
+    monkeypatch.setattr(struct_mod, "get_agent_melee_root", lambda: REPO)
+    monkeypatch.setattr(
+        struct_layout,
+        "resolve_layout",
+        lambda repo, name, tu: {"field": 0x24, "same_disp_other_base": 0x34},
+    )
+
+    class Result:
+        stdout = json.dumps({
+            "target_asm": [
+                "<fn_80000000>:",
+                "+000: 7C 7C 1B 78 \tmr r28,r3",
+                "+004: 80 9C 00 08 \tlwz r4,0x8(r28)",
+            ],
+            "current_asm": [
+                "<fn_80000000>:",
+                "+000: 7C 7C 1B 78 \tmr r28,r3",
+                "+004: 3B FC 00 20 \taddi r31,r28,0x20",
+                "+008: 80 9F 00 04 \tlwz r4,0x4(r31)",
+            ],
+            "classification": {
+                "offset_discrepancies": [
+                    {
+                        "ref_base_reg": "r28",
+                        "cur_base_reg": "r31",
+                        "base_reg": "r31",
+                        "mnemonic": "lwz",
+                        "cur_disp": 0x4,
+                        "ref_disp": 0x8,
+                        "ref_index": 1,
+                        "cur_index": 2,
+                    },
+                ],
+            },
+        })
+
+    monkeypatch.setattr(struct_mod.subprocess, "run", lambda *args, **kwargs: Result())
+
+    r = CliRunner().invoke(
+        struct_app,
+        ["verify", "fn_80000000", "--struct", "Fake", "--tu-src", "fake.c", "--json"],
+    )
+
+    assert r.exit_code == 0
+    data = json.loads(r.output)
+    assert data["findings"][0]["field"] == "field"
+    assert data["findings"][0]["current"] == 0x24
+    assert data["findings"][0]["expected"] == 0x8
+    assert data["findings"][0]["base_reg"] == "r31"
+    assert data["findings"][0]["base_offset"] == 0x20
+    assert data["findings"][0]["base_offset_source"] == "asm-dataflow"
 
 
 def test_struct_verify_cli_applies_base_offset(monkeypatch):
@@ -385,6 +864,181 @@ def test_apply_padding_scopes_duplicate_field_to_target_struct(tmp_path):
     text = header.read_text()
     assert text.count("pad_struct_verify_target") == 1
     assert text.index("struct Fake") < text.index("pad_struct_verify_target")
+
+
+def test_apply_repair_shrinks_preceding_pad_when_verified(tmp_path):
+    from src.cli.struct import _apply_struct_repair
+
+    header = tmp_path / "fake.h"
+    header.write_text(
+        "typedef unsigned char u8;\n"
+        "struct Fake {\n"
+        "    int before;\n"
+        "    u8 pad0[8];\n"
+        "    int target;\n"
+        "    int after;\n"
+        "};\n"
+    )
+
+    seen_expect: list[dict[str, int]] = []
+
+    def verify(expect: dict[str, int]) -> bool:
+        seen_expect.append(expect)
+        return "u8 pad0[4];" in header.read_text()
+
+    result = _apply_struct_repair(
+        header,
+        "target",
+        current=0xC,
+        expected=0x8,
+        verify=verify,
+        struct_name="Fake",
+    )
+
+    assert result["status"] == "applied"
+    assert result["candidate"] == "pad-shrink"
+    assert seen_expect[-1] == {"target": 0x8}
+    text = header.read_text()
+    assert "u8 pad0[4];" in text
+    assert "u8 pad0[8];" not in text
+
+
+def test_apply_repair_removes_preceding_pad_when_verified(tmp_path):
+    from src.cli.struct import _apply_struct_repair
+
+    header = tmp_path / "fake.h"
+    header.write_text(
+        "typedef unsigned char u8;\n"
+        "struct Fake {\n"
+        "    int before;\n"
+        "    u8 pad0[4];\n"
+        "    int target;\n"
+        "};\n"
+    )
+
+    result = _apply_struct_repair(
+        header,
+        "target",
+        current=0x8,
+        expected=0x4,
+        verify=lambda expect: "pad0" not in header.read_text(),
+        struct_name="Fake",
+    )
+
+    assert result["status"] == "applied"
+    assert result["candidate"] == "pad-remove"
+    assert "pad0" not in header.read_text()
+
+
+def test_apply_repair_moves_top_level_field_when_verified(tmp_path):
+    from src.cli.struct import _apply_struct_repair
+
+    header = tmp_path / "fake.h"
+    header.write_text(
+        "struct Fake {\n"
+        "    int first;\n"
+        "    int anchor;\n"
+        "    int target;\n"
+        "    int after;\n"
+        "};\n"
+    )
+
+    result = _apply_struct_repair(
+        header,
+        "target",
+        current=0x8,
+        expected=0x4,
+        verify=lambda expect: (
+            expect == {"target": 0x4, "anchor": 0x8}
+            and header.read_text().index("target;") < header.read_text().index("anchor;")
+        ),
+        struct_name="Fake",
+        layout={"first": 0x0, "anchor": 0x4, "target": 0x8, "after": 0xC},
+    )
+
+    assert result["status"] == "applied"
+    assert result["candidate"] == "field-move"
+    text = header.read_text()
+    assert text.index("target;") < text.index("anchor;")
+
+
+def test_apply_repair_field_move_ignores_pad_shift_expect_map(tmp_path):
+    from src.cli.struct import _apply_struct_repair
+
+    header = tmp_path / "fake.h"
+    header.write_text(
+        "struct Fake {\n"
+        "    int first;\n"
+        "    int anchor;\n"
+        "    int target;\n"
+        "    int after;\n"
+        "};\n"
+    )
+
+    result = _apply_struct_repair(
+        header,
+        "target",
+        current=0x8,
+        expected=0x4,
+        verify=lambda expect: expect == {"target": 0x4, "anchor": 0x8},
+        struct_name="Fake",
+        layout={"first": 0x0, "anchor": 0x4, "target": 0x8, "after": 0xC},
+        expect_map={"target": 0x4, "anchor": 0x8, "after": 0x8},
+    )
+
+    assert result["status"] == "applied"
+    assert result["candidate"] == "field-move"
+
+
+def test_affected_apply_expect_map_verifies_all_later_top_level_fields():
+    from src.cli.struct import _affected_apply_expect_map
+
+    expect = _affected_apply_expect_map(
+        {
+            "first": 0x0,
+            "target": 0x4,
+            "after": 0x8,
+            "nested.child": 0xC,
+            "far": 0x20,
+        },
+        "target",
+        current=0x4,
+        expected=0x8,
+    )
+
+    assert expect == {
+        "target": 0x8,
+        "after": 0xC,
+        "far": 0x24,
+    }
+
+
+def test_apply_repair_restores_original_header_after_failed_candidates(tmp_path):
+    from src.cli.struct import _apply_struct_repair
+
+    header = tmp_path / "fake.h"
+    original = (
+        "typedef unsigned char u8;\n"
+        "struct Fake {\n"
+        "    int before;\n"
+        "    u8 pad0[8];\n"
+        "    int target;\n"
+        "};\n"
+    )
+    header.write_text(original)
+
+    result = _apply_struct_repair(
+        header,
+        "target",
+        current=0xC,
+        expected=0x8,
+        verify=lambda expect: False,
+        struct_name="Fake",
+    )
+
+    assert result["status"] == "failed"
+    assert "verification" in result["reason"]
+    assert header.read_text() == original
 
 
 # ---------------------------------------------------------------------------

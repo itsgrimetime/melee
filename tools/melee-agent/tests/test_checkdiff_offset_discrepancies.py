@@ -20,7 +20,23 @@ _spec.loader.exec_module(checkdiff)
 def test_paired_struct_offset_delta_basic():
     # same mnemonic, same base, different displacement -> discrepancy
     d = checkdiff._paired_struct_offset_delta("stb     r0,2304(r3)", "stb     r0,1856(r3)")
-    assert d == {"base_reg": "r3", "mnemonic": "stb", "ref_disp": 2304, "cur_disp": 1856}
+    assert d == {
+        "base_reg": "r3",
+        "ref_base_reg": "r3",
+        "cur_base_reg": "r3",
+        "mnemonic": "stb",
+        "ref_disp": 2304,
+        "cur_disp": 1856,
+    }
+
+
+def test_paired_struct_offset_delta_keeps_per_side_bases():
+    d = checkdiff._paired_struct_offset_delta("lwz r0,16(r28)", "lwz r0,24(r31)")
+    assert d["base_reg"] == "r31"
+    assert d["ref_base_reg"] == "r28"
+    assert d["cur_base_reg"] == "r31"
+    assert d["ref_disp"] == 16
+    assert d["cur_disp"] == 24
 
 
 def test_paired_struct_offset_delta_excludes_stack_and_sda():
@@ -40,8 +56,11 @@ def test_paired_struct_offset_delta_diff_mnemonic_none():
     assert checkdiff._paired_struct_offset_delta("stb r0,8(r3)", "sth r0,16(r3)") is None
 
 
-def test_paired_struct_offset_delta_diff_base_none():
-    assert checkdiff._paired_struct_offset_delta("stw r0,8(r3)", "stw r0,16(r4)") is None
+def test_paired_struct_offset_delta_diff_base_uses_current_base_for_legacy_key():
+    d = checkdiff._paired_struct_offset_delta("stw r0,8(r3)", "stw r0,16(r4)")
+    assert d["base_reg"] == "r4"
+    assert d["ref_base_reg"] == "r3"
+    assert d["cur_base_reg"] == "r4"
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +78,34 @@ def test_offset_discrepancies_clean():
     c = checkdiff.classify_asm_diff(ref, cur)
     od = c.get("offset_discrepancies", [])
     assert any(d["ref_disp"] == 2304 and d["cur_disp"] == 1856 and d["base_reg"] == "r3" for d in od)
+
+
+def test_offset_discrepancies_different_physical_bases_are_reported():
+    ref = _lines(["mr r28,r3", "lwz r0,16(r28)", "blr"])
+    cur = _lines(["mr r31,r3", "lwz r0,24(r31)", "blr"])
+    c = checkdiff.classify_asm_diff(ref, cur)
+    od = c.get("offset_discrepancies", [])
+    assert any(d["ref_base_reg"] == "r28" and d["cur_base_reg"] == "r31" for d in od)
+
+
+def test_offset_discrepancies_include_instruction_indices():
+    ref = _lines(["mr r28,r3", "lwz r0,16(r28)", "blr"])
+    cur = _lines(["mr r31,r3", "lwz r0,24(r31)", "blr"])
+    c = checkdiff.classify_asm_diff(ref, cur)
+    d = next(d for d in c.get("offset_discrepancies", []) if d["ref_base_reg"] == "r28")
+
+    assert d["ref_index"] == 1
+    assert d["cur_index"] == 1
+
+
+def test_offset_discrepancy_indices_skip_function_header():
+    ref = ["<fn>:", *_lines(["mr r28,r3", "lwz r0,16(r28)", "blr"])]
+    cur = ["<fn>:", *_lines(["mr r31,r3", "lwz r0,24(r31)", "blr"])]
+    c = checkdiff.classify_asm_diff(ref, cur)
+    d = next(d for d in c.get("offset_discrepancies", []) if d["ref_base_reg"] == "r28")
+
+    assert d["ref_index"] == 1
+    assert d["cur_index"] == 1
 
 
 def test_offset_discrepancies_matched_opcode_equal_block_with_repeats():

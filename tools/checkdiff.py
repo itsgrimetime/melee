@@ -1450,7 +1450,7 @@ _MEMOP_RE = re.compile(r"^([a-z][a-z0-9.]*)\s+.*?(-?(?:0x[0-9a-fA-F]+|\d+))\((r\
 def _paired_struct_offset_delta(ref_body: str, our_body: str):
     """Return a struct-offset discrepancy dict, or None.
 
-    Same mnemonic + same base register (not r1/r2/r13) + differing displacement.
+    Same mnemonic + non-stack/SDA bases + differing displacement.
     """
     rm = _MEMOP_RE.match(ref_body.strip())
     cm = _MEMOP_RE.match(our_body.strip())
@@ -1458,10 +1458,9 @@ def _paired_struct_offset_delta(ref_body: str, our_body: str):
         return None
     if rm.group(1) != cm.group(1):         # mnemonic must match
         return None
-    if rm.group(3) != cm.group(3):         # base reg must match
-        return None
-    base = rm.group(3)
-    if base in ("r1", "r2", "r13"):        # stack / sda2 / sda
+    ref_base = rm.group(3)
+    cur_base = cm.group(3)
+    if ref_base in ("r1", "r2", "r13") or cur_base in ("r1", "r2", "r13"):
         return None
 
     def _d(s: str) -> int:
@@ -1473,7 +1472,31 @@ def _paired_struct_offset_delta(ref_body: str, our_body: str):
     rd, cd = _d(rm.group(2)), _d(cm.group(2))
     if rd == cd:
         return None
-    return {"base_reg": base, "mnemonic": rm.group(1), "ref_disp": rd, "cur_disp": cd}
+    return {
+        "base_reg": cur_base,
+        "ref_base_reg": ref_base,
+        "cur_base_reg": cur_base,
+        "mnemonic": rm.group(1),
+        "ref_disp": rd,
+        "cur_disp": cd,
+    }
+
+
+def _offset_discrepancy_bodies(lines: list[str]) -> list[str]:
+    """Return instruction bodies used for struct offset pairing.
+
+    Normalized disassembly includes a function header line. Offset indices must
+    refer to instruction rows so downstream access-index traces line up.
+    """
+    bodies: list[str] = []
+    for line in lines:
+        if _is_relocation_line(line):
+            continue
+        body = _asm_body(line)
+        if not body or body.startswith("<"):
+            continue
+        bodies.append(body)
+    return bodies
 
 
 def _paired_stack_delta(ref_body: str, our_body: str) -> Optional[int]:
@@ -2235,8 +2258,8 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
 
     # Compute offset_discrepancies via body-level alignment (SequenceMatcher on
     # _struct_key bodies, not raw lines with +offset: prefixes).
-    _ref_bodies = [_asm_body(l) for l in ref_lines if not _is_relocation_line(l)]
-    _our_bodies = [_asm_body(l) for l in our_lines if not _is_relocation_line(l)]
+    _ref_bodies = _offset_discrepancy_bodies(ref_lines)
+    _our_bodies = _offset_discrepancy_bodies(our_lines)
     _sm = difflib.SequenceMatcher(
         None,
         [_struct_key(b) for b in _ref_bodies],
@@ -2262,6 +2285,8 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
         for _k in range(_i2 - _i1):
             _d = _paired_struct_offset_delta(_ref_bodies[_i1 + _k], _our_bodies[_j1 + _k])
             if _d:
+                _d["ref_index"] = _i1 + _k
+                _d["cur_index"] = _j1 + _k
                 offset_discrepancies.append(_d)
 
     result = {"primary": primary, "reasons": reasons}

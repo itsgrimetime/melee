@@ -1,9 +1,11 @@
 """Struct commands - lookup struct layouts, field offsets, and callback signatures."""
 
 import asyncio
+import inspect
 import json as _json
 import re
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Callable, Optional
 
@@ -488,6 +490,13 @@ def _render_verify_table(agg: list[dict], skipped: list[tuple]) -> None:
 _NON_STRUCT_BASE_REGS = {"r1", "r2", "r13"}
 
 
+@dataclass(frozen=True)
+class RegisterTrace:
+    root: str
+    offset: int = 0
+    source: str = "arg"
+
+
 def _normalize_reg(reg: object) -> str:
     text = str(reg).strip().lower()
     if text.isdigit():
@@ -504,12 +513,321 @@ def _parse_int_literal(value: object, label: str) -> int:
         raise ValueError(f"invalid {label}: {value!r}") from exc
 
 
+def _asm_path_for_tu(repo: Path, tu_src: str) -> Path:
+    """Map a TU source path to its built assembly listing."""
+    src = Path(tu_src)
+    parts = list(src.with_suffix(".s").parts)
+    if parts and parts[0] == ".":
+        parts = parts[1:]
+    if parts and parts[0] == "/":
+        try:
+            parts = list(src.relative_to(repo).with_suffix(".s").parts)
+        except ValueError:
+            pass
+
+    if parts and parts[0] == "src":
+        rel_parts = parts[1:]
+    elif "src" in parts:
+        rel_parts = parts[parts.index("src") + 1 :]
+    else:
+        rel_parts = parts
+
+    candidate = repo / "build/GALE01/asm" / Path(*rel_parts)
+    if candidate.exists():
+        return candidate
+
+    matches = sorted((repo / "build/GALE01/asm").glob(f"**/{src.with_suffix('.s').name}"))
+    if matches:
+        return matches[0]
+    return candidate
+
+
+def _asm_instruction_body(line: str) -> str:
+    body = re.sub(r"^/\*\s*[^*]*\*/\s*", "", line.strip())
+    body = re.sub(r"^\+?[0-9a-fA-F]+:\s*", "", body)
+    body = re.sub(r"^(?:[0-9a-fA-F]{2}\s+){4}", "", body)
+    body = re.sub(r"^[0-9a-fA-F]{8}\s+", "", body)
+    return body.strip()
+
+
+def _function_asm_lines(repo: Path, tu_src: str, fn: str) -> list[str]:
+    """Extract one function's instruction lines from the built assembly file."""
+    asm_path = _asm_path_for_tu(repo, tu_src)
+    if not asm_path.exists():
+        return []
+
+    lines: list[str] = []
+    in_fn = False
+    for line in asm_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        stripped = line.strip()
+        if stripped == f"{fn}:" or stripped.startswith(f".fn {fn},"):
+            in_fn = True
+            continue
+        if not in_fn:
+            continue
+        if stripped.startswith(".endfn") or stripped.startswith(".fn "):
+            break
+        if stripped.endswith(":"):
+            if stripped.startswith(".L_"):
+                continue
+            break
+        body = _asm_instruction_body(stripped)
+        if body and not body.startswith("."):
+            lines.append(body)
+    return lines
+
+
+def _instruction_lines_from_checkdiff_asm(lines: list[object]) -> list[str]:
+    """Convert checkdiff JSON asm lines into instruction bodies."""
+    result: list[str] = []
+    for line in lines:
+        body = _asm_instruction_body(str(line))
+        if (
+            not body
+            or body.startswith("<")
+            or body.startswith(".")
+            or body.endswith(":")
+            or "R_PPC_" in body
+        ):
+            continue
+        result.append(body)
+    return result
+
+
+def _split_operands(operands: str) -> list[str]:
+    return [part.strip() for part in operands.split(",") if part.strip()]
+
+
+def _trace_for_source(traces: dict[str, RegisterTrace], reg: object) -> RegisterTrace | None:
+    norm = _normalize_reg(reg)
+    return traces.get(norm)
+
+
+def _parse_signed_int(value: str) -> int:
+    return int(value.replace("+", ""), 0)
+
+
+def _initial_argument_traces() -> dict[str, RegisterTrace]:
+    return {f"r{i}": RegisterTrace(f"arg{i}", 0, "arg") for i in range(3, 11)}
+
+
+def _apply_trace_instruction(traces: dict[str, RegisterTrace], raw: str) -> None:
+    """Mutate trace state for one simple assembly instruction."""
+    body = _asm_instruction_body(raw)
+    if not body:
+        return
+    parts = body.split(None, 1)
+    mnemonic = parts[0].lower()
+    operands = _split_operands(parts[1]) if len(parts) > 1 else []
+
+    if mnemonic in {"bl", "bctrl", "blrl"}:
+        for i in range(13):
+            traces.pop(f"r{i}", None)
+        return
+
+    if mnemonic == "mr" and len(operands) == 2:
+        dst = _normalize_reg(operands[0])
+        src_trace = _trace_for_source(traces, operands[1])
+        if src_trace is None:
+            traces.pop(dst, None)
+        else:
+            traces[dst] = RegisterTrace(src_trace.root, src_trace.offset, "mr")
+        return
+
+    if mnemonic == "addi" and len(operands) == 3:
+        dst = _normalize_reg(operands[0])
+        src_trace = _trace_for_source(traces, operands[1])
+        if src_trace is None:
+            traces.pop(dst, None)
+        else:
+            try:
+                imm = _parse_signed_int(operands[2])
+            except ValueError:
+                traces.pop(dst, None)
+            else:
+                traces[dst] = RegisterTrace(src_trace.root, src_trace.offset + imm, "addi")
+        return
+
+    if mnemonic == "lwz" and len(operands) == 2:
+        dst = _normalize_reg(operands[0])
+        global_match = re.fullmatch(r"([A-Za-z_.$][\w.$]*)@sda21\(r13\)", operands[1])
+        if global_match:
+            traces[dst] = RegisterTrace(f"global:{global_match.group(1)}", 0, "lwz-sda21")
+        else:
+            traces.pop(dst, None)
+        return
+
+    if operands and not mnemonic.startswith(("b", "cmp", "cr", "st")):
+        dst = _normalize_reg(operands[0])
+        if re.fullmatch(r"r(?:[0-9]|[12][0-9]|3[01])", dst):
+            traces.pop(dst, None)
+
+
+def _trace_registers_by_index(lines: list[str]) -> tuple[list[dict[str, RegisterTrace]], dict[str, RegisterTrace]]:
+    """Return trace snapshots before each instruction plus final trace state."""
+    traces = _initial_argument_traces()
+    snapshots: list[dict[str, RegisterTrace]] = []
+
+    for raw in lines:
+        body = _asm_instruction_body(raw)
+        if not body:
+            continue
+        snapshots.append(dict(traces))
+        _apply_trace_instruction(traces, body)
+    return snapshots, traces
+
+
+def _trace_registers_from_asm(lines: list[str]) -> dict[str, RegisterTrace]:
+    """Track simple register roots through argument aliases and constant addi."""
+    _, traces = _trace_registers_by_index(lines)
+    return traces
+
+
+def _row_cur_base(row: dict) -> str:
+    return _normalize_reg(row.get("cur_base_reg") or row.get("base_reg") or "")
+
+
+def _row_ref_base(row: dict) -> str:
+    return _normalize_reg(row.get("ref_base_reg") or row.get("base_reg") or "")
+
+
+def _coerce_trace(value: RegisterTrace | tuple | list) -> RegisterTrace:
+    if isinstance(value, RegisterTrace):
+        return value
+    return RegisterTrace(str(value[0]), int(value[1]), str(value[2]) if len(value) > 2 else "dataflow")
+
+
+def _normalize_trace_map(traces: dict[str, RegisterTrace | tuple | list]) -> dict[str, RegisterTrace]:
+    return {
+        _normalize_reg(reg): _coerce_trace(trace)
+        for reg, trace in traces.items()
+    }
+
+
+def _same_physical_base(row: dict) -> bool:
+    return _row_ref_base(row) == _row_cur_base(row)
+
+
+def _trace_map_for_row(
+    row: dict,
+    *,
+    traces: dict[str, RegisterTrace] | None = None,
+    trace_snapshots: list[dict[str, RegisterTrace]] | None = None,
+    index_key: str = "cur_index",
+) -> dict[str, RegisterTrace]:
+    if trace_snapshots is not None and row.get(index_key) is not None:
+        try:
+            idx = _parse_int_literal(row[index_key], index_key)
+        except ValueError:
+            return {}
+        if 0 <= idx < len(trace_snapshots):
+            return trace_snapshots[idx]
+        return {}
+    if trace_snapshots is not None:
+        return {}
+    return traces or {}
+
+
+def _resolve_row_from_dataflow(
+    row: dict,
+    *,
+    traces: dict[str, RegisterTrace] | None = None,
+    trace_snapshots: list[dict[str, RegisterTrace]] | None = None,
+    ref_traces: dict[str, RegisterTrace] | None = None,
+    ref_trace_snapshots: list[dict[str, RegisterTrace]] | None = None,
+    cur_traces: dict[str, RegisterTrace] | None = None,
+    cur_trace_snapshots: list[dict[str, RegisterTrace]] | None = None,
+    base_offset: int | None = None,
+    base_offset_source: str | None = None,
+    base_reg_source: str | None = None,
+) -> tuple[dict | None, str | None, str | None]:
+    cur_reg = _row_cur_base(row)
+    ref_reg = _row_ref_base(row)
+    if cur_reg in _NON_STRUCT_BASE_REGS or ref_reg in _NON_STRUCT_BASE_REGS:
+        return None, None, "non-struct base register"
+
+    cur_trace_map = _trace_map_for_row(
+        row,
+        traces=cur_traces if cur_traces is not None else traces,
+        trace_snapshots=cur_trace_snapshots if cur_trace_snapshots is not None else trace_snapshots,
+        index_key="cur_index",
+    )
+    if ref_traces is not None or ref_trace_snapshots is not None:
+        ref_trace_map = _trace_map_for_row(
+            row,
+            traces=ref_traces,
+            trace_snapshots=ref_trace_snapshots,
+            index_key="ref_index",
+        )
+    else:
+        ref_trace_map = _trace_map_for_row(
+            row,
+            traces=traces,
+            trace_snapshots=trace_snapshots,
+            index_key="cur_index",
+        )
+
+    cur_trace = cur_trace_map.get(cur_reg)
+    ref_trace = ref_trace_map.get(ref_reg)
+    if cur_trace is None or ref_trace is None:
+        return None, None, "missing dataflow proof"
+    if cur_trace.root != ref_trace.root:
+        return None, None, f"dataflow roots differ: {ref_trace.root} vs {cur_trace.root}"
+
+    current_base_offset = base_offset if base_offset is not None else cur_trace.offset
+    current_base_offset_source = base_offset_source or "asm-dataflow"
+    has_separate_ref_trace = ref_traces is not None or ref_trace_snapshots is not None
+    if has_separate_ref_trace:
+        expected_base_offset = ref_trace.offset
+        expected_base_offset_source = "asm-dataflow"
+    elif ref_reg == cur_reg:
+        expected_base_offset = current_base_offset
+        expected_base_offset_source = current_base_offset_source
+    else:
+        expected_base_offset = ref_trace.offset
+        expected_base_offset_source = "asm-dataflow"
+    return (
+        _with_resolved_base(
+            row,
+            base_reg=cur_reg,
+            base_reg_source=base_reg_source or f"dataflow:{cur_trace.root}",
+            base_offset=current_base_offset,
+            base_offset_source=current_base_offset_source,
+            expected_base_offset=expected_base_offset,
+            expected_base_offset_source=expected_base_offset_source,
+        ),
+        cur_trace.root,
+        None,
+    )
+
+
+def _with_resolved_base(
+    row: dict,
+    *,
+    base_reg: str,
+    base_reg_source: str,
+    base_offset: int,
+    base_offset_source: str,
+    expected_base_offset: int | None = None,
+    expected_base_offset_source: str | None = None,
+) -> dict:
+    resolved = dict(row)
+    resolved["base_reg"] = base_reg
+    resolved["base_reg_source"] = base_reg_source
+    resolved["base_offset"] = base_offset
+    resolved["base_offset_source"] = base_offset_source
+    if expected_base_offset is not None:
+        resolved["expected_base_offset"] = expected_base_offset
+        resolved["expected_base_offset_source"] = expected_base_offset_source or base_offset_source
+    return resolved
+
+
 def _infer_base_reg_from_discrepancies(discrepancies: list[dict]) -> tuple[str | None, str | None, str | None]:
     """Infer a usable base register from checkdiff offset rows."""
     regs = sorted({
-        _normalize_reg(d.get("base_reg", ""))
+        _row_cur_base(d)
         for d in discrepancies
-        if _normalize_reg(d.get("base_reg", "")) and _normalize_reg(d.get("base_reg", "")) not in _NON_STRUCT_BASE_REGS
+        if _row_cur_base(d) and _row_cur_base(d) not in _NON_STRUCT_BASE_REGS
     })
     if len(regs) == 1:
         return regs[0], "unique-offset-discrepancy", None
@@ -550,6 +868,178 @@ def _offset_to_field(layout: dict[str, int], offset: int) -> str | None:
     return None
 
 
+def _resolve_discrepancy_rows(
+    function: str,
+    discrepancies: list[dict],
+    layout: dict[str, int],
+    *,
+    base_reg: str | None = None,
+    base_reg_source: str | None = None,
+    base_offset: int | None = None,
+    base_offset_source: str | None = None,
+    traces: dict[str, RegisterTrace | tuple | list] | None = None,
+    trace_snapshots: list[dict[str, RegisterTrace | tuple | list]] | None = None,
+    ref_traces: dict[str, RegisterTrace | tuple | list] | None = None,
+    ref_trace_snapshots: list[dict[str, RegisterTrace | tuple | list]] | None = None,
+    cur_traces: dict[str, RegisterTrace | tuple | list] | None = None,
+    cur_trace_snapshots: list[dict[str, RegisterTrace | tuple | list]] | None = None,
+) -> tuple[list[dict], list[tuple[str, str]]]:
+    if not discrepancies:
+        return [], [(function, "no offset discrepancies")]
+
+    normalized_traces = _normalize_trace_map(traces or {})
+    normalized_snapshots = [
+        _normalize_trace_map(snapshot)
+        for snapshot in (trace_snapshots or [])
+    ] if trace_snapshots is not None else None
+    normalized_ref_traces = _normalize_trace_map(ref_traces or {}) if ref_traces is not None else None
+    normalized_ref_snapshots = [
+        _normalize_trace_map(snapshot)
+        for snapshot in (ref_trace_snapshots or [])
+    ] if ref_trace_snapshots is not None else None
+    normalized_cur_traces = _normalize_trace_map(cur_traces or {}) if cur_traces is not None else None
+    normalized_cur_snapshots = [
+        _normalize_trace_map(snapshot)
+        for snapshot in (cur_trace_snapshots or [])
+    ] if cur_trace_snapshots is not None else None
+
+    if base_reg is not None:
+        reg = _normalize_reg(base_reg)
+        selected = [d for d in discrepancies if _row_cur_base(d) == reg]
+        if not selected:
+            return [], [(function, f"no offset discrepancies for base {reg}")]
+
+        same_base_rows = [d for d in selected if _same_physical_base(d)]
+        mismatched_rows = [d for d in selected if not _same_physical_base(d)]
+        resolved: list[dict] = []
+        skipped: list[tuple[str, str]] = []
+
+        same_base_fallback_rows: list[dict] = []
+        same_base_roots: set[str] = set()
+        for d in same_base_rows:
+            row, root, _reason = _resolve_row_from_dataflow(
+                d,
+                traces=normalized_traces,
+                trace_snapshots=normalized_snapshots,
+                ref_traces=normalized_ref_traces,
+                ref_trace_snapshots=normalized_ref_snapshots,
+                cur_traces=normalized_cur_traces,
+                cur_trace_snapshots=normalized_cur_snapshots,
+                base_offset=base_offset,
+                base_offset_source=base_offset_source,
+                base_reg_source=base_reg_source or "cli",
+            )
+            if row is None:
+                same_base_fallback_rows.append(d)
+                continue
+            same_base_roots.add(root or "")
+            resolved.append(row)
+        if len(same_base_roots) > 1:
+            return [], [(function, "ambiguous dataflow roots: " + ", ".join(sorted(same_base_roots)))]
+
+        if same_base_fallback_rows:
+            if base_offset is None:
+                mapped_offset, mapped_offset_source, _ = _infer_base_offset_from_layout(layout, same_base_fallback_rows)
+            else:
+                mapped_offset = base_offset
+                mapped_offset_source = base_offset_source or "cli"
+            resolved.extend(
+                _with_resolved_base(
+                    d,
+                    base_reg=reg,
+                    base_reg_source=base_reg_source or "cli",
+                    base_offset=mapped_offset,
+                    base_offset_source=mapped_offset_source,
+                )
+                for d in same_base_fallback_rows
+            )
+
+        roots: set[str] = set()
+        for d in mismatched_rows:
+            row, root, reason = _resolve_row_from_dataflow(
+                d,
+                traces=normalized_traces,
+                trace_snapshots=normalized_snapshots,
+                ref_traces=normalized_ref_traces,
+                ref_trace_snapshots=normalized_ref_snapshots,
+                cur_traces=normalized_cur_traces,
+                cur_trace_snapshots=normalized_cur_snapshots,
+                base_offset=base_offset,
+                base_offset_source=base_offset_source,
+                base_reg_source=base_reg_source or "cli",
+            )
+            if row is None:
+                skipped.append((function, f"unresolved mismatched bases {_row_ref_base(d)}->{_row_cur_base(d)}: {reason}"))
+                continue
+            roots.add(root or "")
+            resolved.append(row)
+        if len(roots) > 1:
+            return [], [(function, "ambiguous dataflow roots: " + ", ".join(sorted(roots)))]
+        all_roots = same_base_roots | roots
+        if len(all_roots) > 1:
+            return [], [(function, "ambiguous dataflow roots: " + ", ".join(sorted(all_roots)))]
+        return resolved, skipped
+
+    dataflow_rows: list[dict] = []
+    dataflow_roots: set[str] = set()
+    skipped: list[tuple[str, str]] = []
+    for d in discrepancies:
+        row, root, reason = _resolve_row_from_dataflow(
+            d,
+            traces=normalized_traces,
+            trace_snapshots=normalized_snapshots,
+            ref_traces=normalized_ref_traces,
+            ref_trace_snapshots=normalized_ref_snapshots,
+            cur_traces=normalized_cur_traces,
+            cur_trace_snapshots=normalized_cur_snapshots,
+            base_offset=base_offset,
+            base_offset_source=base_offset_source,
+        )
+        if row is None:
+            if not _same_physical_base(d):
+                skipped.append(
+                    (function, f"unresolved mismatched bases {_row_ref_base(d)}->{_row_cur_base(d)}: {reason}")
+                )
+            continue
+        dataflow_roots.add(root or "")
+        dataflow_rows.append(row)
+
+    if len(dataflow_roots) == 1 and dataflow_rows:
+        return dataflow_rows, skipped
+    if len(dataflow_roots) > 1:
+        return [], [(function, "ambiguous dataflow roots: " + ", ".join(sorted(dataflow_roots)))]
+
+    fallback_discrepancies = [d for d in discrepancies if _same_physical_base(d)]
+    if not fallback_discrepancies:
+        if skipped:
+            return [], skipped
+        return [], [(function, "no same-base offset discrepancies")]
+
+    reg, reg_source, reason = _infer_base_reg_from_discrepancies(fallback_discrepancies)
+    if reg is None:
+        return [], [(function, reason or "no base")]
+    selected = [d for d in fallback_discrepancies if _row_cur_base(d) == reg]
+    if base_offset is None:
+        mapped_offset, mapped_offset_source, candidates = _infer_base_offset_from_layout(layout, selected)
+    else:
+        mapped_offset = base_offset
+        mapped_offset_source = base_offset_source or "cli"
+        candidates = [mapped_offset]
+    rows = [
+        _with_resolved_base(
+            d,
+            base_reg=reg,
+            base_reg_source=reg_source or "unique-offset-discrepancy",
+            base_offset=mapped_offset,
+            base_offset_source=mapped_offset_source,
+        )
+        for d in selected
+    ]
+    if mapped_offset_source == "ambiguous-layout-fit":
+        rows[0]["base_offset_candidates"] = candidates
+    return rows, skipped
+
+
 def _finding_from_offset_discrepancy(
     function: str,
     discrepancy: dict,
@@ -562,8 +1052,12 @@ def _finding_from_offset_discrepancy(
 ) -> dict | None:
     cur_disp = _parse_int_literal(discrepancy["cur_disp"], "cur_disp")
     ref_disp = _parse_int_literal(discrepancy["ref_disp"], "ref_disp")
+    expected_base_offset = _parse_int_literal(
+        discrepancy.get("expected_base_offset", base_offset),
+        "expected_base_offset",
+    )
     current_abs = base_offset + cur_disp
-    expected_abs = base_offset + ref_disp
+    expected_abs = expected_base_offset + ref_disp
     field = _offset_to_field(layout, current_abs)
     if field is None:
         return None
@@ -624,19 +1118,120 @@ def _struct_body_span(content: str, struct_name: str) -> tuple[int, int] | None:
     return None
 
 
-def _apply_struct_padding(
+def _all_struct_body_spans(content: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    pattern = r"(?:typedef\s+)?struct(?:\s+_?[A-Za-z_][A-Za-z0-9_]*)?\s*\{"
+    for match in re.finditer(pattern, content):
+        start = match.end()
+        brace_count = 1
+        end = start
+        for i, char in enumerate(content[start:], start):
+            if char == "{":
+                brace_count += 1
+            elif char == "}":
+                brace_count -= 1
+                if brace_count == 0:
+                    end = i
+                    break
+        if brace_count == 0:
+            spans.append((start, end))
+    return spans
+
+
+def _top_level_struct_decls(content: str, search_start: int, search_end: int) -> list[dict]:
+    """Return conservative top-level declaration lines inside a struct body."""
+    body = content[search_start:search_end]
+    decls: list[dict] = []
+    depth = 0
+    line_start = 0
+    decl_re = re.compile(
+        r"^(?P<indent>[ \t]*)(?P<decl>[^{}\n;]*?\b(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\]]+\])?\s*;)"
+        r"(?P<trailing>[ \t]*(?://.*)?)$"
+    )
+
+    for line in body.splitlines(keepends=True):
+        line_end = line_start + len(line)
+        code = re.sub(r"/\*.*?\*/", "", line.rstrip("\n"), flags=re.S)
+        if depth == 0 and "{" not in code and "}" not in code:
+            match = decl_re.match(code.rstrip())
+            if match:
+                decls.append({
+                    "name": match.group("name"),
+                    "indent": match.group("indent"),
+                    "text": line,
+                    "start": search_start + line_start,
+                    "end": search_start + line_end,
+                    "body_start": line_start,
+                    "body_end": line_end,
+                })
+        depth += line.count("{") - line.count("}")
+        line_start = line_end
+
+    return decls
+
+
+def _pad_decl_size(line: str) -> tuple[str, int] | None:
+    match = re.search(
+        r"\bu8\s+(?P<name>pad[A-Za-z0-9_]*)\s*\[\s*(?P<size>0x[0-9A-Fa-f]+|\d+)\s*\]\s*;",
+        line,
+    )
+    if not match:
+        return None
+    return match.group("name"), int(match.group("size"), 0)
+
+
+def _replace_pad_size(line: str, new_size: int) -> str:
+    return re.sub(r"(\bu8\s+pad[A-Za-z0-9_]*\s*\[\s*)(0x[0-9A-Fa-f]+|\d+)(\s*\]\s*;)", rf"\g<1>{new_size}\g<3>", line, count=1)
+
+
+def _call_struct_repair_verify(verify: Callable, expect_map: dict[str, int]) -> bool:
+    try:
+        signature = inspect.signature(verify)
+    except (TypeError, ValueError):
+        return bool(verify(expect_map))
+
+    accepts_arg = any(
+        param.kind in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD, param.VAR_POSITIONAL)
+        and param.default is param.empty
+        for param in signature.parameters.values()
+    )
+    if accepts_arg:
+        return bool(verify(expect_map))
+    return bool(verify())
+
+
+def _repair_expect_map(
+    field: str,
+    expected: int,
+    *,
+    expect_map: dict[str, int] | None = None,
+    extra: dict[str, int] | None = None,
+) -> dict[str, int]:
+    result = dict(expect_map or {field: expected})
+    result[field] = expected
+    if extra:
+        result.update(extra)
+    return result
+
+
+def _apply_struct_repair(
     header: Path,
     field: str,
     *,
-    delta: int,
-    verify: Callable[[], bool],
+    current: int,
+    expected: int,
+    verify: Callable,
     struct_name: str | None = None,
+    layout: dict[str, int] | None = None,
+    expect_map: dict[str, int] | None = None,
 ) -> dict:
-    """Insert positive padding before a top-level field and verify the result."""
+    """Try one conservative top-level struct repair at a time and verify it."""
     if "." in field or "[" in field:
         return {"status": "not_applicable", "reason": "only top-level fields can be applied safely"}
-    if delta <= 0:
-        return {"status": "not_applicable", "reason": "only positive padding deltas can be applied safely"}
+
+    delta = expected - current
+    if delta == 0:
+        return {"status": "not_applicable", "reason": "field already has expected offset"}
 
     original = header.read_text()
     search_start = 0
@@ -646,34 +1241,144 @@ def _apply_struct_padding(
         if span is None:
             return {"status": "not_applicable", "reason": f"struct {struct_name!r} body not found"}
         search_start, search_end = span
+    else:
+        candidate_spans = [
+            span for span in _all_struct_body_spans(original)
+            if any(decl["name"] == field for decl in _top_level_struct_decls(original, span[0], span[1]))
+        ]
+        if len(candidate_spans) == 1:
+            search_start, search_end = candidate_spans[0]
 
-    body = original[search_start:search_end]
-    decl_re = re.compile(rf"(?m)^([ \t]*).*?\b{re.escape(field)}\b(?:\s*\[[^\]]+\])?\s*;")
-    matches = list(decl_re.finditer(body))
-    if len(matches) != 1:
+    decls = _top_level_struct_decls(original, search_start, search_end)
+    targets = [decl for decl in decls if decl["name"] == field]
+    if len(targets) != 1:
         return {
             "status": "not_applicable",
-            "reason": f"expected one declaration line for {field!r}, found {len(matches)}",
+            "reason": f"expected one declaration line for {field!r}, found {len(targets)}",
         }
 
-    match = matches[0]
-    absolute_insert = search_start + match.start()
-    indent = match.group(1)
-    pad_name = re.sub(r"[^a-zA-Z0-9_]", "_", field)
-    pad_line = f"{indent}u8 pad_struct_verify_{pad_name}[{delta}];\n"
-    if pad_line in original:
-        return {"status": "not_applicable", "reason": "padding line already present"}
+    target = targets[0]
+    target_index = decls.index(target)
+    candidates: list[tuple[str, str, dict[str, int]]] = []
+    base_expect = _repair_expect_map(field, expected, expect_map=expect_map)
 
-    updated = original[:absolute_insert] + pad_line + original[absolute_insert:]
-    header.write_text(updated)
-    try:
-        if verify():
-            return {"status": "applied", "field": field, "delta": delta, "header": str(header)}
-        header.write_text(original)
-        return {"status": "failed", "reason": "post-edit offset verification failed"}
-    except Exception as exc:
-        header.write_text(original)
-        return {"status": "failed", "reason": f"post-edit offset verification raised: {exc}"}
+    if delta > 0:
+        indent = target["indent"]
+        pad_name = re.sub(r"[^a-zA-Z0-9_]", "_", field)
+        pad_line = f"{indent}u8 pad_struct_verify_{pad_name}[{delta}];\n"
+        if pad_line not in original:
+            updated = original[: target["start"]] + pad_line + original[target["start"] :]
+            candidates.append(("pad-insert", updated, base_expect))
+
+    if delta < 0 and target_index > 0:
+        amount = -delta
+        previous = decls[target_index - 1]
+        pad_info = _pad_decl_size(previous["text"])
+        if pad_info is not None:
+            _, pad_size = pad_info
+            if pad_size >= amount:
+                if pad_size == amount:
+                    updated = original[: previous["start"]] + original[previous["end"] :]
+                    candidates.append(("pad-remove", updated, base_expect))
+                else:
+                    replacement = _replace_pad_size(previous["text"], pad_size - amount)
+                    updated = original[: previous["start"]] + replacement + original[previous["end"] :]
+                    candidates.append(("pad-shrink", updated, base_expect))
+
+    if delta < 0 and layout:
+        anchors = [
+            decl for decl in decls
+            if decl["name"] != field and layout.get(decl["name"]) == expected and decl["start"] < target["start"]
+        ]
+        if len(anchors) == 1:
+            anchor = anchors[0]
+            without_target = original[: target["start"]] + original[target["end"] :]
+            anchor_start = anchor["start"]
+            updated = without_target[:anchor_start] + target["text"] + without_target[anchor_start:]
+            moved_expect = _repair_expect_map(
+                field,
+                expected,
+                extra={anchor["name"]: current},
+            )
+            candidates.append(("field-move", updated, moved_expect))
+
+    if not candidates:
+        return {"status": "not_applicable", "reason": "no conservative repair candidate found"}
+
+    failures: list[str] = []
+    for candidate_name, updated, candidate_expect in candidates:
+        header.write_text(updated)
+        verified = False
+        try:
+            if _call_struct_repair_verify(verify, candidate_expect):
+                verified = True
+                return {
+                    "status": "applied",
+                    "candidate": candidate_name,
+                    "field": field,
+                    "current": current,
+                    "expected": expected,
+                    "delta": delta,
+                    "header": str(header),
+                }
+            failures.append(f"{candidate_name}: verification failed")
+        except Exception as exc:
+            failures.append(f"{candidate_name}: verification raised: {exc}")
+        finally:
+            if not verified and header.read_text() != original:
+                header.write_text(original)
+
+    return {
+        "status": "failed",
+        "reason": "post-edit offset verification failed; " + "; ".join(failures),
+        "candidates": [name for name, _, _ in candidates],
+    }
+
+
+def _apply_struct_padding(
+    header: Path,
+    field: str,
+    *,
+    delta: int,
+    verify: Callable[[], bool],
+    struct_name: str | None = None,
+) -> dict:
+    """Insert positive padding before a top-level field and verify the result."""
+    if delta <= 0:
+        return {"status": "not_applicable", "reason": "only positive padding deltas can be applied safely"}
+    return _apply_struct_repair(
+        header,
+        field,
+        current=0,
+        expected=delta,
+        verify=verify,
+        struct_name=struct_name,
+        expect_map={field: delta},
+    )
+
+
+def _affected_apply_expect_map(layout: dict[str, int], field: str, current: int, expected: int) -> dict[str, int]:
+    """Build a small verification map around a top-level repair target."""
+    result = {field: expected}
+    if "." in field or "[" in field:
+        return result
+
+    top_level = sorted(
+        ((name, offset) for name, offset in layout.items() if "." not in name and "[" not in name),
+        key=lambda item: item[1],
+    )
+    indexes = [idx for idx, (name, _) in enumerate(top_level) if name == field]
+    if not indexes:
+        return result
+
+    delta = expected - current
+    idx = indexes[0]
+    for name, offset in top_level:
+        if name == field:
+            continue
+        if offset >= current:
+            result[name] = offset + delta
+    return result
 
 
 @struct_app.command("verify")
@@ -712,7 +1417,7 @@ def struct_verify_cmd(
     ] = False,
     apply: Annotated[
         bool,
-        typer.Option("--apply", help="Apply a guarded top-level padding edit when safely verifiable"),
+        typer.Option("--apply", help="Apply a guarded top-level layout repair when safely verifiable"),
     ] = False,
 ) -> None:
     """Detect wrong struct-field offsets by comparing per-function displacements.
@@ -817,11 +1522,6 @@ def struct_verify_cmd(
         if reg is None and base is not None:
             reg = _normalize_reg(base)
             reg_source = "cli"
-        if reg is None:
-            reg, reg_source, reason = _infer_base_reg_from_discrepancies(discrepancies)
-            if reg is None:
-                skipped.append((fn, reason or "no base"))
-                continue
 
         if fn in offset_map:
             try:
@@ -837,38 +1537,49 @@ def struct_verify_cmd(
             mapped_offset = cli_base_offset
             mapped_offset_source = "cli"
 
-        selected = [
-            d for d in discrepancies
-            if _normalize_reg(d.get("base_reg", "")) == reg
-        ]
-        if not selected:
-            skipped.append((fn, f"no offset discrepancies for base {reg}"))
-            continue
+        cur_lines = _instruction_lines_from_checkdiff_asm(data.get("current_asm") or [])
+        if not cur_lines:
+            cur_lines = _function_asm_lines(repo, tu_src, fn)
+        ref_lines = _instruction_lines_from_checkdiff_asm(data.get("target_asm") or [])
+        cur_trace_snapshots, cur_traces = _trace_registers_by_index(cur_lines)
+        ref_trace_snapshots, ref_traces = (
+            _trace_registers_by_index(ref_lines)
+            if ref_lines else (None, None)
+        )
+        resolved_rows, row_skipped = _resolve_discrepancy_rows(
+            fn,
+            discrepancies,
+            layout,
+            base_reg=reg,
+            base_reg_source=reg_source,
+            base_offset=mapped_offset,
+            base_offset_source=mapped_offset_source,
+            ref_traces=ref_traces,
+            ref_trace_snapshots=ref_trace_snapshots,
+            cur_traces=cur_traces,
+            cur_trace_snapshots=cur_trace_snapshots,
+        )
+        skipped.extend(row_skipped)
 
-        if mapped_offset is None:
-            mapped_offset, mapped_offset_source, candidates = _infer_base_offset_from_layout(layout, selected)
-        else:
-            candidates = [mapped_offset]
-        assert reg_source is not None
-        assert mapped_offset_source is not None
-
-        for d in selected:
+        for d in resolved_rows:
             finding = _finding_from_offset_discrepancy(
                 fn,
                 d,
                 layout,
-                base_offset=mapped_offset,
-                base_offset_source=mapped_offset_source,
-                base_reg=reg,
-                base_reg_source=reg_source,
+                base_offset=d["base_offset"],
+                base_offset_source=d["base_offset_source"],
+                base_reg=d["base_reg"],
+                base_reg_source=d["base_reg_source"],
             )
             if finding is None:
                 # unmapped: likely interior-pointer or genuine register diff, not struct bug
                 cur_disp = _parse_int_literal(d["cur_disp"], "cur_disp")
-                cur_abs = mapped_offset + cur_disp
+                cur_abs = d["base_offset"] + cur_disp
                 note = f"unmapped cur 0x{cur_abs:x} (disp 0x{cur_disp:x})"
-                if mapped_offset_source == "ambiguous-layout-fit":
-                    note += "; base-offset candidates " + ",".join(hex(c) for c in candidates[:8])
+                if d.get("base_offset_source") == "ambiguous-layout-fit":
+                    note += "; base-offset candidates " + ",".join(
+                        hex(c) for c in d.get("base_offset_candidates", [])[:8]
+                    )
                 skipped.append((fn, note))
                 continue
             findings.append(finding)
@@ -890,15 +1601,23 @@ def struct_verify_cmd(
             else:
                 field = item["field"]
                 expected = item["expected"]
-                delta = expected - item["current"]
                 try:
                     header = struct_layout.find_struct_header(repo, struct)
-                    apply_result = _apply_struct_padding(
+                    expect_map = _affected_apply_expect_map(layout, field, item["current"], expected)
+                    apply_result = _apply_struct_repair(
                         header,
                         field,
-                        delta=delta,
-                        verify=lambda: struct_layout.verify_offsets(repo, struct, tu_src, {field: expected}),
+                        current=item["current"],
+                        expected=expected,
+                        verify=lambda candidate_expect: struct_layout.verify_offsets(
+                            repo,
+                            struct,
+                            tu_src,
+                            candidate_expect,
+                        ),
                         struct_name=struct,
+                        layout=layout,
+                        expect_map=expect_map,
                     )
                 except Exception as exc:
                     apply_result = {"status": "failed", "reason": str(exc)}
