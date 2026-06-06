@@ -220,6 +220,52 @@ def test_match_iter_first_vector_keeps_full_target_order_and_current_regs() -> N
     assert vector["conflicts"] == []
 
 
+def test_match_iter_first_vector_marks_all_already_target_as_dead_end() -> None:
+    events = FunctionEvents(
+        name="fn_test",
+        colorgraph_sections=[
+            ColorgraphSection(
+                class_id=0,
+                result=1,
+                n_nodes=3,
+                decisions=[
+                    ColorgraphDecision(
+                        iter_idx=0,
+                        ig_idx=33,
+                        assigned_reg=4,
+                        degree=0,
+                        n_interferers=0,
+                        flags=0,
+                    ),
+                    ColorgraphDecision(
+                        iter_idx=1,
+                        ig_idx=40,
+                        assigned_reg=5,
+                        degree=0,
+                        n_interferers=0,
+                        flags=0,
+                    ),
+                ],
+            ),
+        ],
+    )
+    results = [
+        {"status": "ok", "kind": "r", "reg": 4, "reg_name": "r4", "ig_idx": 33},
+        {"status": "ok", "kind": "r", "reg": 5, "reg_name": "r5", "ig_idx": 40},
+    ]
+
+    vector = debug_cli._build_match_iter_first_target_vector(results, events)
+
+    actionability = vector["actionability"]
+    assert actionability["status"] == "already-satisfied"
+    assert actionability["work_bucket"] == "source-lifetime/callee-save-shape"
+    assert actionability["already_target_count"] == 2
+    assert actionability["needs_move_count"] == 0
+    assert "target vector already satisfied" in actionability["summary"]
+    assert "source lifetime" in actionability["next_step"]
+    assert "force-vector" in actionability["avoid"]
+
+
 def test_match_iter_first_vector_suppresses_conflicting_duplicate_ig_force_phys() -> None:
     events = FunctionEvents(
         name="fn_test",

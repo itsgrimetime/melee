@@ -348,6 +348,8 @@ def test_classify_asm_diff_guides_volatile_and_loop_counter_reg_swaps() -> None:
     reason_text = "\n".join(classification["reasons"])
     assert "--regs gpr-volatile,r0" in reason_text
     assert "flag/reload predicate" in reason_text
+    assert "target vector already satisfied" in reason_text
+    assert "source lifetime" in reason_text
     assert "loop-counter reuse" in reason_text
 
 

@@ -1938,9 +1938,11 @@ def detect_register_allocation_guidance(
     if volatile_targets:
         suggestions.append(
             "inspect volatile targets with `debug target match-iter-first "
-            "-f <function> --regs gpr-volatile,r0`; for flag/reload predicate "
-            "diffs, try u8/bool/int flag type, pointer-vs-bool predicate, "
-            "or short liveness nudges"
+            "-f <function> --regs gpr-volatile,r0`; if the target vector "
+            "already satisfied all requested registers, pivot to source "
+            "lifetime/callee-save shape instead of force-vector probes; for "
+            "flag/reload predicate diffs, try u8/bool/int flag type, "
+            "pointer-vs-bool predicate, or short liveness nudges"
         )
     if callee_swap_pairs:
         pairs = ", ".join("<->".join(pair) for pair in callee_swap_pairs)
@@ -1965,7 +1967,10 @@ def format_register_allocation_guidance(guidance: dict) -> str:
             "volatile target regs "
             f"{','.join(volatile_targets)}; run "
             "`debug target match-iter-first -f <function> --regs "
-            "gpr-volatile,r0` and inspect flag/reload predicate bindings"
+            "gpr-volatile,r0`; if the target vector already satisfied all "
+            "requested registers, pivot to source lifetime/callee-save shape "
+            "instead of force-vector probes; otherwise inspect flag/reload "
+            "predicate bindings"
         )
     callee_swaps = guidance.get("callee_swap_pairs") or []
     if callee_swaps:

@@ -168,6 +168,106 @@ def _match_iter_first_class_id(kind: str) -> int | None:
     return None
 
 
+def _target_vector_actionability(targets: list[dict]) -> dict:
+    runnable = [
+        target for target in targets
+        if target.get("force_vector_runnable", True)
+    ]
+    already = [
+        target for target in runnable
+        if target.get("already_target") is True
+    ]
+    needs_move = [
+        target for target in runnable
+        if target.get("already_target") is False
+    ]
+    unknown = [
+        target for target in runnable
+        if target.get("already_target") is None
+    ]
+
+    common = {
+        "target_count": len(targets),
+        "runnable_target_count": len(runnable),
+        "already_target_count": len(already),
+        "needs_move_count": len(needs_move),
+        "unknown_current_count": len(unknown),
+    }
+    if runnable and not needs_move and not unknown:
+        return {
+            **common,
+            "status": "already-satisfied",
+            "work_bucket": "source-lifetime/callee-save-shape",
+            "summary": (
+                "target vector already satisfied: every runnable target "
+                "already has its requested physical register"
+            ),
+            "next_step": (
+                "Treat this as source lifetime or callee-save shape evidence; "
+                "inspect locals live across calls, inlined loops, and saved "
+                "object pointers before trying allocator overrides."
+            ),
+            "avoid": (
+                "Do not spend more time on force-vector probes for this vector; "
+                "the requested physical-register assignments are already true."
+            ),
+        }
+    if needs_move:
+        return {
+            **common,
+            "status": "needs-move",
+            "work_bucket": "allocator-target-vector",
+            "summary": (
+                "target vector has runnable entries that are not assigned to "
+                "their requested physical registers"
+            ),
+            "next_step": (
+                "Use the force-vector or force-iter-first probe as a diagnostic "
+                "test, then translate useful hits into source shape changes."
+            ),
+        }
+    if unknown:
+        return {
+            **common,
+            "status": "current-unknown",
+            "work_bucket": "allocator-target-vector",
+            "summary": (
+                "target vector has entries whose current physical register "
+                "could not be read from colorgraph events"
+            ),
+            "next_step": (
+                "Refresh or inspect the pcdump colorgraph before deciding "
+                "whether force-vector probes are actionable."
+            ),
+        }
+    return {
+        **common,
+        "status": "no-runnable-targets",
+        "work_bucket": "allocator-target-vector",
+        "summary": "no runnable target-vector entries were derived",
+        "next_step": (
+            "Use another diagnostic surface; this vector cannot drive a "
+            "force-vector probe."
+        ),
+    }
+
+
+def _print_target_vector_actionability(actionability: dict) -> None:
+    status = actionability.get("status")
+    summary = actionability.get("summary")
+    if not status or not summary:
+        return
+    print()
+    print(f"Target-vector status: {status}")
+    print(f"  {summary}")
+    next_step = actionability.get("next_step")
+    if next_step:
+        print(f"  next: {next_step}")
+    avoid = actionability.get("avoid")
+    if avoid:
+        print(f"  avoid: {avoid}")
+
+
 def _build_match_iter_first_target_vector(
     results: list[dict],
     events: FunctionEvents | None,
@@ -268,6 +368,7 @@ def _build_match_iter_first_target_vector(
         force_vector_parts.append(str(target["force_vector_entry"]))
 
     conflicts = list(conflict_by_key.values())
+    actionability = _target_vector_actionability(targets)
     return {
         "force_iter_first": force_iter_first,
         "force_iter_first_csv": ",".join(str(i) for i in force_iter_first),
@@ -278,6 +379,13 @@ def _build_match_iter_first_target_vector(
         "force_vector_runnable": not conflicts,
         "conflicts": conflicts,
         "targets": targets,
+        "actionability": actionability,
+        "force_vector_recommended": (
+            actionability.get("status") not in {
+                "already-satisfied",
+                "no-runnable-targets",
+            }
+        ),
     }
 
 
@@ -706,6 +814,7 @@ def _derive_force_phys_from_register_diff_lines(
     runnable_targets = [
         target for target in targets if target["force_vector_runnable"]
     ]
+    actionability = _target_vector_actionability(targets)
 
     return {
         "force_phys": {
@@ -722,6 +831,13 @@ def _derive_force_phys_from_register_diff_lines(
         "conflicts": conflicts,
         "register_only_target_count": sum(
             target["occurrence_count"] for target in targets
+        ),
+        "actionability": actionability,
+        "force_vector_recommended": (
+            actionability.get("status") not in {
+                "already-satisfied",
+                "no-runnable-targets",
+            }
         ),
         "frame_alignment": {
             "target_frame_size": target_frame_size,
@@ -12501,6 +12617,8 @@ def force_phys_from_diff(
         "force_phys": vector["force_phys"],
         "force_phys_csv": vector["force_phys_csv"],
         "force_vector": vector["force_vector"],
+        "force_vector_recommended": vector.get("force_vector_recommended", True),
+        "target_vector_actionability": vector["actionability"],
         "targets": vector["targets"],
         "conflicts": vector["conflicts"],
         "register_only_target_count": vector["register_only_target_count"],
@@ -12547,6 +12665,7 @@ def force_phys_from_diff(
                 f"{target['occurrence_count']} occurrence"
                 f"{'' if target['occurrence_count'] == 1 else 's'})"
             )
+    _print_target_vector_actionability(vector["actionability"])
     if vector["conflicts"]:
         print()
         print("Conflicting targets skipped:")
@@ -12562,8 +12681,13 @@ def force_phys_from_diff(
     if vector["force_phys_csv"]:
         print()
         print(f"Force-phys vector: {vector['force_phys_csv']}")
-    if vector["force_vector"]:
+    if vector["force_vector"] and vector.get("force_vector_recommended", True):
         print(f"Force-vector: {vector['force_vector']}")
+    elif vector["force_vector"]:
+        print(
+            "Force-vector not recommended: "
+            f"{vector['actionability'].get('summary')}"
+        )
     if force_vector_result is not None:
         print()
         print("== force-vector verify ==")
@@ -13027,7 +13151,11 @@ def match_iter_first(
             "force_vector_runnable": target_vector.get(
                 "force_vector_runnable", True,
             ),
+            "force_vector_recommended": target_vector.get(
+                "force_vector_recommended", True,
+            ),
             "force_vector_conflicts": target_vector.get("conflicts", []),
+            "target_vector_actionability": target_vector["actionability"],
         }
         if warning_message:
             payload["warning"] = warning_message
@@ -13088,22 +13216,29 @@ def match_iter_first(
                 f"  {target['target_reg_name']} <- ig_idx "
                 f"{target['ig_idx']} (current {current}; {status})"
             )
+        _print_target_vector_actionability(target_vector["actionability"])
         print()
-        print(f"Try:")
-        print(
-            f"  melee-agent debug dump local <source.c> "
-            f"--force-iter-first {ig_csv} "
-            f"--force-iter-first-fn {function} --diff"
-        )
-        if target_vector["force_phys_csv"]:
+        if target_vector.get("force_vector_recommended", True):
+            print(f"Try:")
             print(
-                f"Force-phys vector for scorer setup: "
-                f"{target_vector['force_phys_csv']}"
+                f"  melee-agent debug dump local <source.c> "
+                f"--force-iter-first {ig_csv} "
+                f"--force-iter-first-fn {function} --diff"
             )
-        if target_vector["force_vector"]:
+            if target_vector["force_phys_csv"]:
+                print(
+                    f"Force-phys vector for scorer setup: "
+                    f"{target_vector['force_phys_csv']}"
+                )
+            if target_vector["force_vector"]:
+                print(
+                    f"Force-vector for diagnostic probes: "
+                    f"{target_vector['force_vector']}"
+                )
+        else:
             print(
-                f"Force-vector for diagnostic probes: "
-                f"{target_vector['force_vector']}"
+                "No allocator override probe recommended for this vector; "
+                f"{target_vector['actionability'].get('next_step')}"
             )
         if target_vector.get("conflicts"):
             print("Force-vector conflicts omitted from runnable vector:")
