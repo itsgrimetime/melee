@@ -1548,6 +1548,7 @@ def _line_is_plain_label(source: str, line_start: int) -> bool:
 
 def _line_follows_plain_label(source: str, line_start: int) -> bool:
     cursor = max(0, line_start - 1)
+    in_block_comment = False
     while cursor >= 0:
         prev_start = source.rfind("\n", 0, cursor) + 1
         prev_end = source.find("\n", prev_start)
@@ -1555,6 +1556,19 @@ def _line_follows_plain_label(source: str, line_start: int) -> bool:
             prev_end = len(source)
         stripped = source[prev_start:prev_end].strip()
         if not stripped:
+            if prev_start == 0:
+                return False
+            cursor = prev_start - 1
+            continue
+        if in_block_comment:
+            if "/*" in stripped:
+                in_block_comment = False
+            if prev_start == 0:
+                return False
+            cursor = prev_start - 1
+            continue
+        if "*/" in stripped and "/*" not in stripped:
+            in_block_comment = True
             if prev_start == 0:
                 return False
             cursor = prev_start - 1
