@@ -160,6 +160,97 @@ def test_source_lifetime_shape_rank_does_not_affect_other_axes() -> None:
     ]
 
 
+def test_source_lifetime_ordering_spans_interleaved_other_axes_for_status() -> None:
+    ranked = rank_structure_variants([
+        StructureVariant(
+            axis="source-lifetime",
+            operator="helper-result-dematerialize",
+            label="source-lifetime-unscored-high",
+            status="unscored",
+            final_match_percent=99.0,
+            delta=9.0,
+            compile_status="not-run",
+            unscored_reason="scoring disabled",
+        ),
+        StructureVariant(
+            axis="decl-order",
+            operator="decl-order-swap",
+            label="decl-order-middle",
+            status="ok",
+            final_match_percent=95.0,
+            delta=5.0,
+        ),
+        StructureVariant(
+            axis="source-lifetime",
+            operator="repeated-helper-result-reuse",
+            label="source-lifetime-ok-missing-structural",
+            status="ok",
+            final_match_percent=90.0,
+            delta=1.0,
+            compile_status="ok",
+        ),
+    ])
+
+    source_lifetime_labels = [
+        variant.label for variant in ranked if variant.axis == "source-lifetime"
+    ]
+    assert source_lifetime_labels == [
+        "source-lifetime-ok-missing-structural",
+        "source-lifetime-unscored-high",
+    ]
+    assert [variant.label for variant in ranked] == [
+        "source-lifetime-ok-missing-structural",
+        "decl-order-middle",
+        "source-lifetime-unscored-high",
+    ]
+
+
+def test_source_lifetime_ordering_spans_interleaved_other_axes_for_shape() -> None:
+    ranked = rank_structure_variants([
+        StructureVariant(
+            axis="source-lifetime",
+            operator="helper-result-dematerialize",
+            label="source-lifetime-shape-break",
+            status="ok",
+            final_match_percent=99.0,
+            delta=9.0,
+            compile_status="ok",
+            metadata={"structural": {"opcode_shape_preserved": False}},
+        ),
+        StructureVariant(
+            axis="case-order",
+            operator="case-order-adjacent-swap",
+            label="case-order-middle",
+            status="ok",
+            final_match_percent=98.5,
+            delta=8.5,
+        ),
+        StructureVariant(
+            axis="source-lifetime",
+            operator="repeated-helper-result-reuse",
+            label="source-lifetime-shape-preserved",
+            status="ok",
+            final_match_percent=98.0,
+            delta=8.0,
+            compile_status="ok",
+            metadata={"structural": {"opcode_shape_preserved": True}},
+        ),
+    ])
+
+    source_lifetime_labels = [
+        variant.label for variant in ranked if variant.axis == "source-lifetime"
+    ]
+    assert source_lifetime_labels == [
+        "source-lifetime-shape-preserved",
+        "source-lifetime-shape-break",
+    ]
+    assert [variant.label for variant in ranked] == [
+        "source-lifetime-shape-preserved",
+        "case-order-middle",
+        "source-lifetime-shape-break",
+    ]
+
+
 def test_normalize_control_flow_payload_preserves_retained_sources() -> None:
     payload = {
         "function": "fn_80000000",

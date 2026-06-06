@@ -360,7 +360,13 @@ def test_score_structure_variants_marks_baseline_checkdiff_failure(
             return subprocess.CompletedProcess(
                 cmd,
                 1,
-                stdout=json.dumps({"opcode_similarity": 0.97}),
+                stdout=json.dumps({
+                    "opcode_similarity": 0.97,
+                    "current_asm": [
+                        "/* 0000 */ mr r3, r4",
+                        "/* 0004 */ bl helper",
+                    ],
+                }),
                 stderr="",
             )
         raise AssertionError(f"unexpected command: {argv}")
@@ -391,6 +397,7 @@ def test_score_structure_variants_marks_baseline_checkdiff_failure(
         "baseline checkdiff failed: baseline checkdiff failed"
     )
     assert results[0].structural["opcode_similarity"] == 0.97
+    assert "_opcode_sequence" not in results[0].structural
 
 
 def test_score_structure_variants_uses_process_group_runner(

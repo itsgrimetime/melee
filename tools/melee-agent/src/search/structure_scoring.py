@@ -219,7 +219,7 @@ def _score_one_variant(
             compile_status="ok",
             checkdiff_status="failed",
             unscored_reason=f"baseline checkdiff failed: {baseline_checkdiff_reason}",
-            structural=candidate_structural,
+            structural=_public_structural_metrics(candidate_structural),
         )
 
     return StructureScoreResult(
@@ -228,7 +228,9 @@ def _score_one_variant(
         candidate_percent=candidate_percent,
         compile_status="ok",
         checkdiff_status="ok",
-        structural=_structural_with_deltas(baseline_structural, candidate_structural),
+        structural=_public_structural_metrics(
+            _structural_with_deltas(baseline_structural, candidate_structural)
+        ),
     )
 
 
@@ -371,6 +373,14 @@ def _structural_with_deltas(
         delta_key = f"{key}_delta"
         structural[delta_key] = _numeric_delta(candidate[key], baseline[key])
     return structural
+
+
+def _public_structural_metrics(structural: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in structural.items()
+        if not str(key).startswith("_")
+    }
 
 
 def _opcode_sequence_from_checkdiff_asm(value: Any) -> tuple[str, ...] | None:

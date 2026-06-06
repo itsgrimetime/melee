@@ -108,7 +108,7 @@ def _delta(value: float | None, baseline: float | None) -> float | None:
 
 
 def rank_structure_variants(variants: list[StructureVariant]) -> list[StructureVariant]:
-    ranked = _rank_source_lifetime_runs(sorted(
+    ranked = _rank_source_lifetime_slots(sorted(
         variants,
         key=_structure_variant_base_sort_key,
     ))
@@ -140,26 +140,23 @@ def _structure_variant_common_sort_key(variant: StructureVariant) -> tuple[Any, 
     )
 
 
-def _rank_source_lifetime_runs(
+def _rank_source_lifetime_slots(
     variants: list[StructureVariant],
 ) -> list[StructureVariant]:
+    source_lifetime_ranked = iter(sorted(
+        (
+            variant
+            for variant in variants
+            if variant.axis == "source-lifetime"
+        ),
+        key=_source_lifetime_in_axis_sort_key,
+    ))
     ranked: list[StructureVariant] = []
-    index = 0
-    while index < len(variants):
-        variant = variants[index]
-        if variant.axis != "source-lifetime":
+    for variant in variants:
+        if variant.axis == "source-lifetime":
+            ranked.append(next(source_lifetime_ranked))
+        else:
             ranked.append(variant)
-            index += 1
-            continue
-        run_start = index
-        while index < len(variants) and variants[index].axis == "source-lifetime":
-            index += 1
-        ranked.extend(
-            sorted(
-                variants[run_start:index],
-                key=_source_lifetime_in_axis_sort_key,
-            )
-        )
     return ranked
 
 
