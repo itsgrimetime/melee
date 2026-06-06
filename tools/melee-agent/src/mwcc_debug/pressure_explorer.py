@@ -1324,21 +1324,40 @@ def _line_follows_case_or_default_label(source: str, line_start: int) -> bool:
                 return False
             cursor = prev_start - 1
             continue
+        if _line_contains_case_or_default_label(stripped):
+            return not _case_label_wraps_block(stripped)
         return _line_contains_case_or_default_label(stripped)
     return False
 
 
-def _line_has_supported_reuse_anchor_shape(source: str, line_start: int) -> bool:
+def _line_has_supported_reuse_anchor_shape(
+    source: str,
+    line_start: int,
+    *,
+    call_start: int,
+    call_end: int,
+) -> bool:
     line_end = source.find("\n", line_start)
     if line_end < 0:
         line_end = len(source)
     stripped = source[line_start:line_end].strip()
     if not stripped:
         return False
-    if re.match(r"^return\b.*;\s*$", stripped):
-        return True
-    if re.match(r"^[A-Za-z_]\w*\s*[\+\-\*/%&|^]?=\s*.*;\s*$", stripped):
-        return True
+    occurrence_start, occurrence_end = _cast_prefixed_call_range(
+        source,
+        call_start,
+        call_end,
+    )
+    occurrence_text = source[occurrence_start:occurrence_end].strip()
+    return_match = re.match(r"^\s*return\s+(?P<expr>.+);\s*$", source[line_start:line_end])
+    if return_match is not None:
+        return return_match.group("expr").strip() == occurrence_text
+    assign_match = re.match(
+        r"^\s*[A-Za-z_]\w*\s*[\+\-\*/%&|^]?=\s*(?P<rhs>.+);\s*$",
+        source[line_start:line_end],
+    )
+    if assign_match is not None:
+        return assign_match.group("rhs").strip() == occurrence_text
     call_stmt = re.match(r"^(?P<callee>[A-Za-z_]\w*)\s*\(.*\);\s*$", stripped)
     if call_stmt is not None and call_stmt.group("callee") not in {
         "if",
@@ -1346,7 +1365,12 @@ def _line_has_supported_reuse_anchor_shape(source: str, line_start: int) -> bool
         "while",
         "switch",
     }:
-        return True
+        open_paren = source.find("(", line_start, line_end)
+        close_paren = _find_matching_paren(source, open_paren) if open_paren >= 0 else None
+        if close_paren is None or close_paren > line_end:
+            return False
+        args_text = source[open_paren + 1:close_paren]
+        return occurrence_text in {arg.strip() for arg in _split_top_level_args(args_text)}
     return False
 
 
@@ -1356,6 +1380,14 @@ def _line_contains_case_or_default_label(text: str) -> bool:
         r"(?:^|[{};])\s*(?:case\b[^:\n]*:|default:)",
         stripped,
     ) is not None
+
+
+def _case_label_wraps_block(text: str) -> bool:
+    stripped = text.strip()
+    match = re.search(r"(case\b[^:\n]*:|default:)(?P<rest>.*)$", stripped)
+    if match is None:
+        return False
+    return "{" in match.group("rest")
 
 
 def _repeated_helper_occurrence_blocker(
@@ -1372,7 +1404,12 @@ def _repeated_helper_occurrence_blocker(
                 "case-arm-declaration-unsafe",
                 "helper result declaration would land directly under a case label",
             )
-        if not _line_has_supported_reuse_anchor_shape(source, line_start):
+        if not _line_has_supported_reuse_anchor_shape(
+            source,
+            line_start,
+            call_start=call.start,
+            call_end=call.end,
+        ):
             return (
                 "unsupported-call-site-shape",
                 "repeated helper reuse occurrence is not a supported simple statement",
