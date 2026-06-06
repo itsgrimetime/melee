@@ -3380,15 +3380,34 @@ def _suggest_ledger_impact(
     *,
     applied_count: int,
     retained_source_count: int,
+    positive_candidate_count: int,
     negative_evidence_count: int,
 ) -> str:
     if applied_count > 0:
         return "matched"
     if retained_source_count > 0:
         return "retained-source-improvement"
+    if positive_candidate_count > 0:
+        return "positive-candidate/no-retained-source"
     if negative_evidence_count > 0:
         return "negative-evidence"
     return "diagnostic-only"
+
+
+def _result_retained_source_status(
+    result: Mapping[str, Any],
+    *,
+    status: str,
+    ledger_apply: Any,
+) -> bool:
+    if status == "applied":
+        return True
+    applied_marker = result.get("applied")
+    if applied_marker is True:
+        return True
+    if applied_marker is False or ledger_apply is False:
+        return False
+    return status in RETAINED_SOURCE_STATUSES
 
 
 def summarize_harvest_ledgers(
@@ -3422,6 +3441,7 @@ def summarize_harvest_ledgers(
     for path in ledger_paths:
         ledger = _read_harvest_ledger(path)
         ledger_bucket = str(ledger.get("work_bucket") or "")
+        ledger_apply = ledger.get("apply")
         filters = ledger.get("filters")
         if filters is None:
             raw_ledger_count += 1
@@ -3452,7 +3472,14 @@ def summarize_harvest_ledgers(
                 improved_functions.add(function)
             elif status == "validated" and function:
                 validated_functions.add(function)
-            if status in RETAINED_SOURCE_STATUSES and function:
+            if (
+                function
+                and _result_retained_source_status(
+                    raw_result,
+                    status=status,
+                    ledger_apply=ledger_apply,
+                )
+            ):
                 retained_source_functions.add(function)
             if status in NEGATIVE_EVIDENCE_STATUSES and function:
                 negative_evidence_functions.add(function)
@@ -3506,6 +3533,9 @@ def summarize_harvest_ledgers(
         "suggested_impact": _suggest_ledger_impact(
             applied_count=len(applied_functions),
             retained_source_count=len(retained_source_functions),
+            positive_candidate_count=len(
+                (improved_functions | validated_functions) - retained_source_functions
+            ),
             negative_evidence_count=len(negative_evidence_functions),
         ),
     }

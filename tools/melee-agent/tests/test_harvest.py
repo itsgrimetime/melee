@@ -916,6 +916,53 @@ def test_summarize_harvest_ledgers_reports_filter_usage(tmp_path: Path) -> None:
     ]
 
 
+def test_summarize_harvest_ledgers_keeps_dry_run_improvements_out_of_retained_source(
+    tmp_path: Path,
+) -> None:
+    ledger = tmp_path / "dry-run-data-symbol.json"
+    ledger.write_text(
+        json.dumps(
+            {
+                "work_bucket": "data-symbol-relocation",
+                "apply": False,
+                "applied_functions": [],
+                "validated_functions": [],
+                "results": [
+                    {
+                        "function": "un_80317A60",
+                        "work_bucket": "data-symbol-relocation",
+                        "status": "improved",
+                        "harness": "name-magic-source-declarations",
+                        "blocker": None,
+                        "candidate_path": "/tmp/un_80317A60.c",
+                        "final_match_percent": 92.4,
+                        "applied": False,
+                    },
+                    {
+                        "function": "fn_801AA854",
+                        "work_bucket": "data-symbol-relocation",
+                        "status": "improved",
+                        "harness": "name-magic-source-declarations",
+                        "blocker": None,
+                        "candidate_path": "/tmp/fn_801AA854.c",
+                        "final_match_percent": 91.2,
+                        "applied": False,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = summarize_harvest_ledgers([ledger])
+
+    assert summary["improved_functions"] == ["fn_801AA854", "un_80317A60"]
+    assert summary["applied_functions"] == []
+    assert summary["validated_functions"] == []
+    assert summary["retained_source_functions"] == []
+    assert summary["suggested_impact"] == "positive-candidate/no-retained-source"
+
+
 def test_cli_harvest_summarize_outputs_json_without_running_harnesses(
     tmp_path: Path,
 ) -> None:
