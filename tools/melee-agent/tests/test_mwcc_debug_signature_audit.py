@@ -265,6 +265,61 @@ void caller_fn(int value)
     assert report.summary["validated_patch_candidate_count"] == 1
 
 
+def test_validate_signature_patch_marks_missing_checkdiff_score_unscored() -> None:
+    source = """
+void caller_fn(int rumble_setting)
+{
+    helper((f32) rumble_setting);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            [
+                "+000: 7C 7F 1B 78    mr r3, r31",
+                "+004: 48 00 00 01    bl helper",
+            ],
+            [
+                "+000: FC 20 F8 90    fmr f1, f31",
+                "+004: 48 00 00 01    bl helper",
+            ],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+
+    def fake_runner(candidate_source: str) -> dict:
+        assert "helper(rumble_setting);" in candidate_source
+        return {
+            "match": False,
+            "fuzzy_match_percent": None,
+            "fuzzy_match_percent_source": "suppressed_stale_report_no_build",
+            "classification": {"primary": "signature-type-mismatch"},
+        }
+
+    validate_signature_patches(
+        report,
+        source,
+        fake_runner,
+        baseline_match_percent=None,
+    )
+
+    validation = report.findings[0].actions[0].validation
+    assert validation == {
+        "status": "unscored",
+        "match": False,
+        "baseline_match_percent": None,
+        "candidate_match_percent": None,
+        "delta_match_percent": None,
+        "classification": "signature-type-mismatch",
+        "candidate_match_percent_source": "suppressed_stale_report_no_build",
+        "score_reason": "candidate checkdiff did not return a match percent",
+    }
+    assert report.summary["validated_patch_candidate_count"] == 0
+    assert report.summary["unvalidated_patch_candidate_count"] == 1
+    assert report.summary["stop_condition"]["kind"] == "unvalidated-patch-candidates"
+
+
 def test_audit_reports_global_width_prototype_candidate_without_patch() -> None:
     source = """
 void helper(int value);

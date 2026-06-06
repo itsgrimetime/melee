@@ -223,10 +223,15 @@ def validate_signature_patches(
                 if candidate_match is not None and baseline_match_percent is not None
                 else None
             )
-            status = "validated" if match else "scored"
+            if match:
+                status = "validated"
+            elif candidate_match is None:
+                status = "unscored"
+            else:
+                status = "scored"
             if delta is not None and delta <= 0 and not match:
                 status = "non-improving"
-            action.validation = {
+            validation = {
                 "status": status,
                 "match": match,
                 "baseline_match_percent": baseline_match_percent,
@@ -234,6 +239,14 @@ def validate_signature_patches(
                 "delta_match_percent": delta,
                 "classification": _classification_primary(payload),
             }
+            candidate_match_source = _payload_match_percent_source(payload)
+            if candidate_match_source is not None:
+                validation["candidate_match_percent_source"] = candidate_match_source
+            if candidate_match is None and not match:
+                validation["score_reason"] = (
+                    "candidate checkdiff did not return a match percent"
+                )
+            action.validation = validation
     report.summary = _summarize_report(report.findings)
     return report
 
@@ -385,6 +398,18 @@ def _payload_match_percent(payload: dict) -> float | None:
         value = payload.get(key)
         if isinstance(value, (int, float)):
             return float(value)
+    return None
+
+
+def _payload_match_percent_source(payload: dict) -> str | None:
+    for key in (
+        "fuzzy_match_percent_source",
+        "match_percent_source",
+        "percent_source",
+    ):
+        value = payload.get(key)
+        if value is not None:
+            return str(value)
     return None
 
 
