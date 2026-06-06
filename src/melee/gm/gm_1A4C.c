@@ -249,7 +249,7 @@ void fn_801A851C(HSD_GObj* gobj)
 
 void gm_801A85E4(HSD_JObj* jobj, s32 arg1, s32 arg2)
 {
-    s32 idx;
+    int idx;
     f32 angle;
     f32 x;
     f32 z;
