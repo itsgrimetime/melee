@@ -328,6 +328,30 @@ def _tu_include_of(repo: Path, struct_name: str) -> str:
     raise ValueError(f"no header found for struct {struct_name!r}")
 
 
+def find_struct_header(repo: Path, struct_name: str) -> Path:
+    """Return the header path that defines ``struct_name``.
+
+    This mirrors _tu_include_of() but returns a filesystem path for guarded
+    local edits.
+    """
+    pats = [
+        re.compile(rf"struct\s+_?{re.escape(struct_name)}\s*\{{"),
+        re.compile(rf"\}}\s*{re.escape(struct_name)}\s*;"),
+    ]
+    for d in _HEADER_DIRS:
+        root = repo / d
+        if not root.exists():
+            continue
+        for hp in root.rglob("*.h"):
+            try:
+                txt = hp.read_text(errors="ignore")
+            except OSError:
+                continue
+            if any(p.search(txt) for p in pats):
+                return hp
+    raise ValueError(f"no header found for struct {struct_name!r}")
+
+
 def resolve_layout(repo: Path, struct_name: str, tu_src: str) -> dict[str, int]:
     """Compile an offsetof-probe and return a mapping of field-path → byte offset.
 

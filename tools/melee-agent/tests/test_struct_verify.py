@@ -136,6 +136,255 @@ def test_struct_verify_help():
     r = CliRunner().invoke(struct_app, ["verify", "--help"])
     assert r.exit_code == 0
     assert "--struct" in r.output and "--base" in r.output
+    assert "--base-offset" in r.output
+    assert "--base-offset-map" in r.output
+    assert "--apply" in r.output
+
+
+def test_infer_base_reg_from_unique_offset_discrepancy():
+    from src.cli.struct import _infer_base_reg_from_discrepancies
+
+    reg, source, reason = _infer_base_reg_from_discrepancies([
+        {"base_reg": "r31", "cur_disp": 0x10, "ref_disp": 0x18},
+        {"base_reg": "r31", "cur_disp": 0x14, "ref_disp": 0x1C},
+        {"base_reg": "r1", "cur_disp": 0x8, "ref_disp": 0x8},
+    ])
+
+    assert reg == "r31"
+    assert source == "unique-offset-discrepancy"
+    assert reason is None
+
+
+def test_infer_base_reg_reports_ambiguous_candidates():
+    from src.cli.struct import _infer_base_reg_from_discrepancies
+
+    reg, source, reason = _infer_base_reg_from_discrepancies([
+        {"base_reg": "r30", "cur_disp": 0x10, "ref_disp": 0x18},
+        {"base_reg": "r31", "cur_disp": 0x14, "ref_disp": 0x1C},
+    ])
+
+    assert reg is None
+    assert source is None
+    assert "ambiguous" in reason
+    assert "r30" in reason and "r31" in reason
+
+
+def test_infer_base_offset_from_layout_unique_fit():
+    from src.cli.struct import _infer_base_offset_from_layout
+
+    layout = {
+        "components[0].predDC": 0x838,
+        "components[0].DCTableSelector": 0x83C,
+        "RST": 0x900,
+    }
+    offset, source, candidates = _infer_base_offset_from_layout(
+        layout,
+        [
+            {"cur_disp": 0x0, "ref_disp": 0x6},
+            {"cur_disp": 0x4, "ref_disp": 0xA},
+        ],
+    )
+
+    assert offset == 0x838
+    assert source == "unique-layout-fit"
+    assert candidates == [0x838]
+
+
+def test_infer_base_offset_from_layout_keeps_zero_when_ambiguous():
+    from src.cli.struct import _infer_base_offset_from_layout
+
+    layout = {
+        "a": 0x10,
+        "b": 0x20,
+    }
+    offset, source, candidates = _infer_base_offset_from_layout(
+        layout,
+        [{"cur_disp": 0x0, "ref_disp": 0x4}],
+    )
+
+    assert offset == 0
+    assert source == "ambiguous-layout-fit"
+    assert candidates == [0x10, 0x20]
+
+
+def test_finding_from_offset_discrepancy_normalizes_interior_offset():
+    from src.cli.struct import _finding_from_offset_discrepancy
+
+    finding = _finding_from_offset_discrepancy(
+        "fn",
+        {"base_reg": "r29", "cur_disp": 0x0, "ref_disp": 0x6},
+        {"components[0].predDC": 0x838, "components[0].quantTableSelector": 0x83E},
+        base_offset=0x838,
+        base_offset_source="cli",
+        base_reg="r29",
+        base_reg_source="unique-offset-discrepancy",
+    )
+
+    assert finding["field"] == "components[0].predDC"
+    assert finding["current"] == 0x838
+    assert finding["expected"] == 0x83E
+    assert finding["cur_disp"] == 0
+    assert finding["ref_disp"] == 6
+    assert finding["base_reg"] == "r29"
+    assert finding["base_offset"] == 0x838
+    assert finding["ref_field"] == "components[0].quantTableSelector"
+
+
+def test_struct_verify_cli_infers_base_without_option(monkeypatch):
+    from typer.testing import CliRunner
+    from src.cli import struct as struct_mod
+    from src.cli.struct import struct_app
+    from src.common import struct_layout
+
+    monkeypatch.setattr(struct_mod, "get_agent_melee_root", lambda: REPO)
+    monkeypatch.setattr(struct_layout, "resolve_layout", lambda repo, name, tu: {"field": 0x10})
+
+    class Result:
+        stdout = json.dumps({
+            "classification": {
+                "offset_discrepancies": [
+                    {"base_reg": "r31", "mnemonic": "lwz", "cur_disp": 0x10, "ref_disp": 0x18},
+                ],
+            },
+        })
+
+    monkeypatch.setattr(struct_mod.subprocess, "run", lambda *args, **kwargs: Result())
+
+    r = CliRunner().invoke(
+        struct_app,
+        ["verify", "fn_80000000", "--struct", "Fake", "--tu-src", "fake.c", "--json"],
+    )
+
+    assert r.exit_code == 0
+    data = json.loads(r.output)
+    assert data["findings"][0]["field"] == "field"
+    assert data["findings"][0]["base_reg"] == "r31"
+    assert data["findings"][0]["base_reg_source"] == "unique-offset-discrepancy"
+
+
+def test_struct_verify_cli_applies_base_offset(monkeypatch):
+    from typer.testing import CliRunner
+    from src.cli import struct as struct_mod
+    from src.cli.struct import struct_app
+    from src.common import struct_layout
+
+    monkeypatch.setattr(struct_mod, "get_agent_melee_root", lambda: REPO)
+    monkeypatch.setattr(struct_layout, "resolve_layout", lambda repo, name, tu: {"inner.field": 0x120})
+
+    class Result:
+        stdout = json.dumps({
+            "classification": {
+                "offset_discrepancies": [
+                    {"base_reg": "r30", "mnemonic": "stw", "cur_disp": 0x20, "ref_disp": 0x24},
+                ],
+            },
+        })
+
+    monkeypatch.setattr(struct_mod.subprocess, "run", lambda *args, **kwargs: Result())
+
+    r = CliRunner().invoke(
+        struct_app,
+        [
+            "verify",
+            "fn_80000000",
+            "--struct", "Fake",
+            "--base", "r30",
+            "--base-offset", "0x100",
+            "--tu-src", "fake.c",
+            "--json",
+        ],
+    )
+
+    assert r.exit_code == 0
+    data = json.loads(r.output)
+    assert data["findings"][0]["current"] == 0x120
+    assert data["findings"][0]["expected"] == 0x124
+    assert data["findings"][0]["base_offset"] == 0x100
+    assert data["findings"][0]["base_offset_source"] == "cli"
+
+
+def test_apply_padding_rejects_nested_field(tmp_path):
+    from src.cli.struct import _apply_struct_padding
+
+    header = tmp_path / "fake.h"
+    header.write_text("typedef unsigned char u8;\nstruct Fake {\n    int parent;\n};\n")
+
+    result = _apply_struct_padding(
+        header,
+        "nested.field",
+        delta=4,
+        verify=lambda: True,
+    )
+
+    assert result["status"] == "not_applicable"
+    assert "top-level" in result["reason"]
+    assert header.read_text() == "typedef unsigned char u8;\nstruct Fake {\n    int parent;\n};\n"
+
+
+def test_apply_padding_restores_header_when_verify_fails(tmp_path):
+    from src.cli.struct import _apply_struct_padding
+
+    header = tmp_path / "fake.h"
+    original = "typedef unsigned char u8;\nstruct Fake {\n    int target;\n};\n"
+    header.write_text(original)
+
+    result = _apply_struct_padding(
+        header,
+        "target",
+        delta=4,
+        verify=lambda: False,
+    )
+
+    assert result["status"] == "failed"
+    assert "verification" in result["reason"]
+    assert header.read_text() == original
+
+
+def test_apply_padding_inserts_top_level_pad_when_verified(tmp_path):
+    from src.cli.struct import _apply_struct_padding
+
+    header = tmp_path / "fake.h"
+    header.write_text("typedef unsigned char u8;\nstruct Fake {\n    int target;\n};\n")
+
+    result = _apply_struct_padding(
+        header,
+        "target",
+        delta=4,
+        verify=lambda: True,
+    )
+
+    assert result["status"] == "applied"
+    text = header.read_text()
+    assert "u8 pad_struct_verify_target[4];" in text
+    assert text.index("pad_struct_verify_target") < text.index("target;")
+
+
+def test_apply_padding_scopes_duplicate_field_to_target_struct(tmp_path):
+    from src.cli.struct import _apply_struct_padding
+
+    header = tmp_path / "fake.h"
+    header.write_text(
+        "typedef unsigned char u8;\n"
+        "struct Other {\n"
+        "    int target;\n"
+        "};\n"
+        "struct Fake {\n"
+        "    int target;\n"
+        "};\n"
+    )
+
+    result = _apply_struct_padding(
+        header,
+        "target",
+        delta=4,
+        verify=lambda: True,
+        struct_name="Fake",
+    )
+
+    assert result["status"] == "applied"
+    text = header.read_text()
+    assert text.count("pad_struct_verify_target") == 1
+    assert text.index("struct Fake") < text.index("pad_struct_verify_target")
 
 
 # ---------------------------------------------------------------------------

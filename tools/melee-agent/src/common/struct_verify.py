@@ -53,7 +53,7 @@ def aggregate(findings: list[dict]) -> list[dict]:
             it.get("ref_field") is not None and it["ref_field"] != field
             for it in items
         )
-        out.append({
+        item = {
             "field": field,
             "current": current,
             "expected": expecteds[0] if not conflict else None,
@@ -63,6 +63,26 @@ def aggregate(findings: list[dict]) -> list[dict]:
             "conflict": conflict,
             "confidence": confidence,
             "ambiguous": ambiguous,
-        })
+        }
+
+        # Preserve v2 diagnostic fields when all contributing per-function
+        # findings agree. Older callers only read the core fields above.
+        for key in (
+            "base_reg",
+            "base_reg_source",
+            "base_offset",
+            "base_offset_source",
+            "cur_disp",
+            "ref_disp",
+            "current_abs",
+            "expected_abs",
+        ):
+            values = {it.get(key) for it in items if key in it}
+            if len(values) == 1:
+                item[key] = values.pop()
+            elif len(values) > 1:
+                item[f"{key}s"] = sorted(values)
+
+        out.append(item)
 
     return sorted(out, key=lambda a: a["current"])

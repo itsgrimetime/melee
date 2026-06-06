@@ -5,7 +5,7 @@ import json as _json
 import re
 import subprocess
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Callable, Optional
 
 import typer
 from rich.panel import Panel
@@ -485,6 +485,197 @@ def _render_verify_table(agg: list[dict], skipped: list[tuple]) -> None:
         console.print(f"[yellow]skipped {len(skipped)}:[/] {items}")
 
 
+_NON_STRUCT_BASE_REGS = {"r1", "r2", "r13"}
+
+
+def _normalize_reg(reg: object) -> str:
+    text = str(reg).strip().lower()
+    if text.isdigit():
+        text = f"r{text}"
+    return text
+
+
+def _parse_int_literal(value: object, label: str) -> int:
+    if isinstance(value, int):
+        return value
+    try:
+        return int(str(value).strip(), 0)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid {label}: {value!r}") from exc
+
+
+def _infer_base_reg_from_discrepancies(discrepancies: list[dict]) -> tuple[str | None, str | None, str | None]:
+    """Infer a usable base register from checkdiff offset rows."""
+    regs = sorted({
+        _normalize_reg(d.get("base_reg", ""))
+        for d in discrepancies
+        if _normalize_reg(d.get("base_reg", "")) and _normalize_reg(d.get("base_reg", "")) not in _NON_STRUCT_BASE_REGS
+    })
+    if len(regs) == 1:
+        return regs[0], "unique-offset-discrepancy", None
+    if not regs:
+        return None, None, "no offset base candidates"
+    return None, None, f"ambiguous offset base candidates: {', '.join(regs)}"
+
+
+def _infer_base_offset_from_layout(layout: dict[str, int], discrepancies: list[dict]) -> tuple[int, str, list[int]]:
+    """Infer an interior-pointer base offset from current displacements."""
+    if not discrepancies:
+        return 0, "zero-default", []
+    offsets = set(layout.values())
+    cur_disps = [_parse_int_literal(d["cur_disp"], "cur_disp") for d in discrepancies]
+    if all(disp in offsets for disp in cur_disps):
+        return 0, "exact-layout", [0]
+
+    candidates: list[int] = []
+    for field_offset in sorted(offsets):
+        for cur in cur_disps:
+            candidate = field_offset - cur
+            if candidate < 0:
+                continue
+            if all((candidate + disp) in offsets for disp in cur_disps):
+                candidates.append(candidate)
+    unique = sorted(set(candidates))
+    if len(unique) == 1:
+        return unique[0], "unique-layout-fit", unique
+    if len(unique) > 1:
+        return 0, "ambiguous-layout-fit", unique
+    return 0, "zero-default", []
+
+
+def _offset_to_field(layout: dict[str, int], offset: int) -> str | None:
+    for field, field_offset in layout.items():
+        if field_offset == offset:
+            return field
+    return None
+
+
+def _finding_from_offset_discrepancy(
+    function: str,
+    discrepancy: dict,
+    layout: dict[str, int],
+    *,
+    base_offset: int,
+    base_offset_source: str,
+    base_reg: str,
+    base_reg_source: str,
+) -> dict | None:
+    cur_disp = _parse_int_literal(discrepancy["cur_disp"], "cur_disp")
+    ref_disp = _parse_int_literal(discrepancy["ref_disp"], "ref_disp")
+    current_abs = base_offset + cur_disp
+    expected_abs = base_offset + ref_disp
+    field = _offset_to_field(layout, current_abs)
+    if field is None:
+        return None
+    ref_field = _offset_to_field(layout, expected_abs)
+    return {
+        "function": function,
+        "field": field,
+        "current": current_abs,
+        "expected": expected_abs,
+        "ref_field": ref_field,
+        "base_reg": base_reg,
+        "base_reg_source": base_reg_source,
+        "base_offset": base_offset,
+        "base_offset_source": base_offset_source,
+        "cur_disp": cur_disp,
+        "ref_disp": ref_disp,
+        "current_abs": current_abs,
+        "expected_abs": expected_abs,
+    }
+
+
+def _load_json_map(path: str, option: str) -> dict:
+    try:
+        data = _json.loads(Path(path).read_text())
+    except Exception as exc:
+        raise ValueError(f"failed to read {option} {path!r}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"{option} must be a JSON object")
+    return data
+
+
+def _struct_body_span(content: str, struct_name: str) -> tuple[int, int] | None:
+    """Return the character span of a struct body in a header."""
+    patterns = [
+        rf"struct\s+_?{re.escape(struct_name)}\s*\{{",
+        rf"typedef\s+struct\s+_?{re.escape(struct_name)}\s*\{{",
+        rf"typedef\s+struct\s*\{{",
+    ]
+    for pattern in patterns:
+        for match in re.finditer(pattern, content):
+            start = match.end()
+            brace_count = 1
+            end = start
+            for i, char in enumerate(content[start:], start):
+                if char == "{":
+                    brace_count += 1
+                elif char == "}":
+                    brace_count -= 1
+                    if brace_count == 0:
+                        end = i
+                        break
+            if brace_count != 0:
+                continue
+            suffix = content[end : min(len(content), end + 128)]
+            if pattern == patterns[-1] and not re.search(rf"\}}\s*{re.escape(struct_name)}\s*;", suffix):
+                continue
+            return start, end
+    return None
+
+
+def _apply_struct_padding(
+    header: Path,
+    field: str,
+    *,
+    delta: int,
+    verify: Callable[[], bool],
+    struct_name: str | None = None,
+) -> dict:
+    """Insert positive padding before a top-level field and verify the result."""
+    if "." in field or "[" in field:
+        return {"status": "not_applicable", "reason": "only top-level fields can be applied safely"}
+    if delta <= 0:
+        return {"status": "not_applicable", "reason": "only positive padding deltas can be applied safely"}
+
+    original = header.read_text()
+    search_start = 0
+    search_end = len(original)
+    if struct_name is not None:
+        span = _struct_body_span(original, struct_name)
+        if span is None:
+            return {"status": "not_applicable", "reason": f"struct {struct_name!r} body not found"}
+        search_start, search_end = span
+
+    body = original[search_start:search_end]
+    decl_re = re.compile(rf"(?m)^([ \t]*).*?\b{re.escape(field)}\b(?:\s*\[[^\]]+\])?\s*;")
+    matches = list(decl_re.finditer(body))
+    if len(matches) != 1:
+        return {
+            "status": "not_applicable",
+            "reason": f"expected one declaration line for {field!r}, found {len(matches)}",
+        }
+
+    match = matches[0]
+    absolute_insert = search_start + match.start()
+    indent = match.group(1)
+    pad_name = re.sub(r"[^a-zA-Z0-9_]", "_", field)
+    pad_line = f"{indent}u8 pad_struct_verify_{pad_name}[{delta}];\n"
+    if pad_line in original:
+        return {"status": "not_applicable", "reason": "padding line already present"}
+
+    updated = original[:absolute_insert] + pad_line + original[absolute_insert:]
+    header.write_text(updated)
+    try:
+        if verify():
+            return {"status": "applied", "field": field, "delta": delta, "header": str(header)}
+        header.write_text(original)
+        return {"status": "failed", "reason": "post-edit offset verification failed"}
+    except Exception as exc:
+        header.write_text(original)
+        return {"status": "failed", "reason": f"post-edit offset verification raised: {exc}"}
+
+
 @struct_app.command("verify")
 def struct_verify_cmd(
     target: Annotated[
@@ -503,6 +694,14 @@ def struct_verify_cmd(
         Optional[str],
         typer.Option("--base-map", help="JSON file mapping {function: register}"),
     ] = None,
+    base_offset: Annotated[
+        Optional[str],
+        typer.Option("--base-offset", help="Interior-pointer base offset to add before field lookup"),
+    ] = None,
+    base_offset_map: Annotated[
+        Optional[str],
+        typer.Option("--base-offset-map", help="JSON file mapping {function: interior offset}"),
+    ] = None,
     tu_src: Annotated[
         str,
         typer.Option("--tu-src", help="Path to the TU .c file (for cflags lookup)"),
@@ -510,6 +709,10 @@ def struct_verify_cmd(
     as_json: Annotated[
         bool,
         typer.Option("--json", help="Emit JSON instead of a table"),
+    ] = False,
+    apply: Annotated[
+        bool,
+        typer.Option("--apply", help="Apply a guarded top-level padding edit when safely verifiable"),
     ] = False,
 ) -> None:
     """Detect wrong struct-field offsets by comparing per-function displacements.
@@ -521,6 +724,7 @@ def struct_verify_cmd(
         melee-agent struct verify __THPRestartDefinition --struct THPFileInfo --base r3 --tu-src extern/dolphin/src/dolphin/thp/THPDec.c
         melee-agent struct verify thp/THPDec --struct THPFileInfo --base r3 --tu-src extern/dolphin/src/dolphin/thp/THPDec.c
         melee-agent struct verify thp/THPDec --struct THPFileInfo --base-map bases.json --tu-src extern/dolphin/src/dolphin/thp/THPDec.c --json
+        melee-agent struct verify fn --struct THPFileInfo --base-offset 0x838 --tu-src extern/dolphin/src/dolphin/thp/THPDec.c --json
     """
     from ..common import struct_layout, struct_verify
     from ..extractor.report import functions_for_unit
@@ -534,13 +738,30 @@ def struct_verify_cmd(
         console.print(f"[red]Failed to resolve layout for {struct!r}: {exc}[/red]")
         raise typer.Exit(1)
 
-    # Load per-function base-register map if provided
-    bmap: dict[str, str] = {}
+    # Load per-function maps if provided. --base-map accepts either
+    # {function: "r31"} or {function: {"base": "r31", "offset": "0x20"}}.
+    bmap: dict = {}
     if base_map:
         try:
-            bmap = _json.loads(Path(base_map).read_text())
-        except Exception as exc:
-            console.print(f"[red]Failed to read --base-map {base_map!r}: {exc}[/red]")
+            bmap = _load_json_map(base_map, "--base-map")
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1)
+
+    offset_map: dict = {}
+    if base_offset_map:
+        try:
+            offset_map = _load_json_map(base_offset_map, "--base-offset-map")
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1)
+
+    cli_base_offset: int | None = None
+    if base_offset is not None:
+        try:
+            cli_base_offset = _parse_int_literal(base_offset, "--base-offset")
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
             raise typer.Exit(1)
 
     # Resolve function list
@@ -557,11 +778,6 @@ def struct_verify_cmd(
     skipped: list[tuple] = []
 
     for fn in fns:
-        reg = bmap.get(fn, base)
-        if reg is None:
-            skipped.append((fn, "no base"))
-            continue
-
         # Run checkdiff in JSON mode (no-build: use existing .o)
         result = subprocess.run(
             ["python", "tools/checkdiff.py", fn, "--no-tty", "--format", "json", "--no-build"],
@@ -576,32 +792,126 @@ def struct_verify_cmd(
             skipped.append((fn, "checkdiff failed"))
             continue
 
-        for d in cls.get("offset_discrepancies", []):
-            if d["base_reg"] != reg:
+        discrepancies = cls.get("offset_discrepancies", [])
+        base_entry = bmap.get(fn)
+        reg: str | None = None
+        reg_source: str | None = None
+        mapped_offset: int | None = None
+        mapped_offset_source: str | None = None
+
+        if isinstance(base_entry, dict):
+            if base_entry.get("base") is not None:
+                reg = _normalize_reg(base_entry["base"])
+                reg_source = "base-map"
+            if base_entry.get("offset") is not None:
+                try:
+                    mapped_offset = _parse_int_literal(base_entry["offset"], "--base-map offset")
+                    mapped_offset_source = "base-map"
+                except ValueError as exc:
+                    skipped.append((fn, str(exc)))
+                    continue
+        elif base_entry is not None:
+            reg = _normalize_reg(base_entry)
+            reg_source = "base-map"
+
+        if reg is None and base is not None:
+            reg = _normalize_reg(base)
+            reg_source = "cli"
+        if reg is None:
+            reg, reg_source, reason = _infer_base_reg_from_discrepancies(discrepancies)
+            if reg is None:
+                skipped.append((fn, reason or "no base"))
                 continue
-            field = struct_layout.offset_to_field(layout, d["cur_disp"])
-            if field is None:
+
+        if fn in offset_map:
+            try:
+                raw_offset = offset_map[fn]
+                if isinstance(raw_offset, dict):
+                    raw_offset = raw_offset.get("offset", 0)
+                mapped_offset = _parse_int_literal(raw_offset, "--base-offset-map")
+                mapped_offset_source = "base-offset-map"
+            except ValueError as exc:
+                skipped.append((fn, str(exc)))
+                continue
+        elif mapped_offset is None and cli_base_offset is not None:
+            mapped_offset = cli_base_offset
+            mapped_offset_source = "cli"
+
+        selected = [
+            d for d in discrepancies
+            if _normalize_reg(d.get("base_reg", "")) == reg
+        ]
+        if not selected:
+            skipped.append((fn, f"no offset discrepancies for base {reg}"))
+            continue
+
+        if mapped_offset is None:
+            mapped_offset, mapped_offset_source, candidates = _infer_base_offset_from_layout(layout, selected)
+        else:
+            candidates = [mapped_offset]
+        assert reg_source is not None
+        assert mapped_offset_source is not None
+
+        for d in selected:
+            finding = _finding_from_offset_discrepancy(
+                fn,
+                d,
+                layout,
+                base_offset=mapped_offset,
+                base_offset_source=mapped_offset_source,
+                base_reg=reg,
+                base_reg_source=reg_source,
+            )
+            if finding is None:
                 # unmapped: likely interior-pointer or genuine register diff, not struct bug
-                skipped.append((fn, f"unmapped cur 0x{d['cur_disp']:x}"))
+                cur_disp = _parse_int_literal(d["cur_disp"], "cur_disp")
+                cur_abs = mapped_offset + cur_disp
+                note = f"unmapped cur 0x{cur_abs:x} (disp 0x{cur_disp:x})"
+                if mapped_offset_source == "ambiguous-layout-fit":
+                    note += "; base-offset candidates " + ",".join(hex(c) for c in candidates[:8])
+                skipped.append((fn, note))
                 continue
-            # Map the EXPECTED offset too: if it resolves to a different known
-            # field, this may be a deliberate different-field access (design §6),
-            # which aggregate() will flag as ambiguous.
-            ref_field = struct_layout.offset_to_field(layout, d["ref_disp"])
-            findings.append({
-                "function": fn,
-                "field": field,
-                "current": d["cur_disp"],
-                "expected": d["ref_disp"],
-                "ref_field": ref_field,
-            })
+            findings.append(finding)
 
     agg = struct_verify.aggregate(findings)
+    apply_result: dict | None = None
+    if apply:
+        if len(agg) != 1:
+            apply_result = {
+                "status": "not_applicable",
+                "reason": f"--apply requires exactly one aggregate finding, got {len(agg)}",
+            }
+        else:
+            item = agg[0]
+            if item.get("conflict"):
+                apply_result = {"status": "not_applicable", "reason": "conflicting expected offsets"}
+            elif item.get("ambiguous"):
+                apply_result = {"status": "not_applicable", "reason": "expected offset maps to a different known field"}
+            else:
+                field = item["field"]
+                expected = item["expected"]
+                delta = expected - item["current"]
+                try:
+                    header = struct_layout.find_struct_header(repo, struct)
+                    apply_result = _apply_struct_padding(
+                        header,
+                        field,
+                        delta=delta,
+                        verify=lambda: struct_layout.verify_offsets(repo, struct, tu_src, {field: expected}),
+                        struct_name=struct,
+                    )
+                except Exception as exc:
+                    apply_result = {"status": "failed", "reason": str(exc)}
 
     if as_json:
         import sys
-        _json.dump({"findings": agg, "skipped": [[fn, why] for fn, why in skipped]}, sys.stdout, indent=2)
+        payload = {"findings": agg, "skipped": [[fn, why] for fn, why in skipped]}
+        if apply_result is not None:
+            payload["apply"] = apply_result
+        _json.dump(payload, sys.stdout, indent=2)
         sys.stdout.write("\n")
         return
 
     _render_verify_table(agg, skipped)
+    if apply_result is not None:
+        console.print(Panel(_json.dumps(apply_result, indent=2), title="apply"))
