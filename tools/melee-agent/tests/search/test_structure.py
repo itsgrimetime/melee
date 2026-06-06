@@ -348,17 +348,20 @@ def test_run_structure_search_scores_no_more_than_max_candidates(
         "}\n"
     )
     scored_counts: list[int] = []
+    scored_labels: list[str] = []
 
     def fake_score_runner(
         variants: list[StructureVariant],
     ) -> list[StructureScoreResult]:
         scored_counts.append(len(variants))
+        scored_labels.extend(variant.label for variant in variants)
         return [
             StructureScoreResult(
                 label=variant.label,
                 baseline_percent=90.0,
-                candidate_percent=89.0,
-                compile_status="ok",
+                candidate_percent=None,
+                compile_status="failed",
+                unscored_reason="candidate compile failed: syntax error",
             )
             for variant in variants
         ]
@@ -375,7 +378,11 @@ def test_run_structure_search_scores_no_more_than_max_candidates(
 
     assert scored_counts == [1]
     assert len(payload["variants"]) == 1
-    assert payload["variants"][0]["compile_status"] == "ok"
+    assert payload["variants"][0]["label"] == scored_labels[0]
+    assert payload["variants"][0]["compile_status"] == "failed"
+    assert payload["variants"][0]["unscored_reason"] == (
+        "candidate compile failed: syntax error"
+    )
     assert payload["stop_condition"]["kind"] == "candidates-generated"
 
 

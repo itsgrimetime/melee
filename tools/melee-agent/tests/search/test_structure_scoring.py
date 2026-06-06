@@ -252,6 +252,83 @@ def test_score_structure_variants_keeps_candidate_percent_when_checkdiff_fails(
     assert results[0].unscored_reason == "candidate checkdiff failed: checkdiff failed"
 
 
+def test_score_structure_variants_marks_baseline_checkdiff_failure(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path
+    source_path = melee_root / "src" / "melee" / "demo.c"
+    obj_path = melee_root / "build" / "GALE01" / "src" / "melee" / "demo.o"
+    report_path = melee_root / "build" / "GALE01" / "report.json"
+    objdiff_path = melee_root / "build" / "tools" / "objdiff-cli"
+    candidate_path = tmp_path / "candidate.c"
+
+    source_path.parent.mkdir(parents=True)
+    obj_path.parent.mkdir(parents=True)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    objdiff_path.parent.mkdir(parents=True)
+    source_path.write_text("int fn_80000000(void) { return 0; }\n")
+    obj_path.write_bytes(b"original object")
+    _write_report(report_path, 12.0)
+    objdiff_path.write_text("# fake objdiff\n")
+    candidate_path.write_text("int fn_80000000(void) { return 1; }\n")
+
+    report_percents = iter([90.0, 91.25])
+    checkdiff_calls = 0
+
+    def fake_run(cmd, **kwargs):
+        nonlocal checkdiff_calls
+        argv = [str(part) for part in cmd]
+        if argv[:2] == ["ninja", "build/GALE01/src/melee/demo.o"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if "objdiff-cli" in argv[0]:
+            _write_report(report_path, next(report_percents))
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if argv[:3] == ["python", "tools/checkdiff.py", "fn_80000000"]:
+            checkdiff_calls += 1
+            if checkdiff_calls == 1:
+                return subprocess.CompletedProcess(
+                    cmd,
+                    2,
+                    stdout="",
+                    stderr="baseline checkdiff failed",
+                )
+            return subprocess.CompletedProcess(
+                cmd,
+                1,
+                stdout=json.dumps({"opcode_similarity": 0.97}),
+                stderr="",
+            )
+        raise AssertionError(f"unexpected command: {argv}")
+
+    monkeypatch.setattr(scoring_mod, "_run_child", fake_run)
+
+    results = score_structure_variants(
+        melee_root=melee_root,
+        function="fn_80000000",
+        source_path=source_path,
+        variants=[
+            StructureVariant(
+                axis="decl-order",
+                operator="decl-order-swap",
+                label="baseline checkdiff fail",
+                status="unscored",
+                source_retained=str(candidate_path),
+            )
+        ],
+        timeout=5.0,
+    )
+
+    assert results[0].compile_status == "ok"
+    assert results[0].checkdiff_status == "failed"
+    assert results[0].baseline_percent == 90.0
+    assert results[0].candidate_percent == 91.25
+    assert results[0].unscored_reason == (
+        "baseline checkdiff failed: baseline checkdiff failed"
+    )
+    assert results[0].structural["opcode_similarity"] == 0.97
+
+
 def test_score_structure_variants_uses_process_group_runner(
     monkeypatch,
     tmp_path: Path,

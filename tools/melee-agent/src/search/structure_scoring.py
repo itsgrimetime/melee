@@ -124,10 +124,11 @@ def score_structure_variants(
                     for variant in scoreable
                 ]
             baseline_structural: dict[str, Any] = {}
+            baseline_checkdiff_reason: str | None = None
             try:
                 baseline_structural = _run_checkdiff(context, timeout)
-            except RuntimeError:
-                pass
+            except RuntimeError as exc:
+                baseline_checkdiff_reason = str(exc)
 
             results: list[StructureScoreResult] = []
             for variant in scoreable:
@@ -137,6 +138,7 @@ def score_structure_variants(
                         variant,
                         baseline_percent=baseline_percent,
                         baseline_structural=baseline_structural,
+                        baseline_checkdiff_reason=baseline_checkdiff_reason,
                         timeout=timeout,
                     )
                 )
@@ -158,6 +160,7 @@ def _score_one_variant(
     *,
     baseline_percent: float | None,
     baseline_structural: dict[str, Any],
+    baseline_checkdiff_reason: str | None,
     timeout: float,
 ) -> StructureScoreResult:
     assert variant.source_retained is not None
@@ -205,6 +208,17 @@ def _score_one_variant(
             compile_status="ok",
             checkdiff_status="failed",
             unscored_reason=f"candidate checkdiff failed: {exc}",
+        )
+
+    if baseline_checkdiff_reason is not None:
+        return StructureScoreResult(
+            label=variant.label,
+            baseline_percent=baseline_percent,
+            candidate_percent=candidate_percent,
+            compile_status="ok",
+            checkdiff_status="failed",
+            unscored_reason=f"baseline checkdiff failed: {baseline_checkdiff_reason}",
+            structural=candidate_structural,
         )
 
     return StructureScoreResult(

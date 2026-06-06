@@ -23,6 +23,7 @@ DEFAULT_STRUCTURE_AXES = (
     "case-order",
     "statement-order",
 )
+SCORE_CAP_UNSCORED_REASON = "not scored due max-candidates cap"
 
 
 @dataclass
@@ -102,6 +103,7 @@ def rank_structure_variants(variants: list[StructureVariant]) -> list[StructureV
             -variant.score_percent(),
             -(variant.delta if variant.delta is not None else -9999.0),
             0 if variant.status == "ok" else 1,
+            1 if variant.unscored_reason == SCORE_CAP_UNSCORED_REASON else 0,
             variant.axis,
             variant.operator,
             variant.label,
@@ -392,7 +394,7 @@ def _score_generated_variants(
     overflow = scoreable[max_score_candidates:]
     _mark_generated_variants_unscored(
         overflow,
-        "not scored due max-candidates cap",
+        SCORE_CAP_UNSCORED_REASON,
     )
     if not to_score:
         return

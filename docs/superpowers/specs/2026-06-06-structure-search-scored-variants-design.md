@@ -122,7 +122,6 @@ Unscored variants include:
 {
   "status": "unscored",
   "compile_status": "failed",
-  "checkdiff_status": null,
   "unscored_reason": "candidate compile failed: ..."
 }
 ```
