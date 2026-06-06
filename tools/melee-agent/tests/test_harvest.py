@@ -3730,6 +3730,113 @@ def test_harvest_propagates_indexed_search_stable_blocker(tmp_path: Path) -> Non
     assert result["reason"] == "source scan found no safe materialized pointer"
 
 
+def test_harvest_classifies_indexed_candidate_that_omits_target_from_pcdump(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "indexed-struct-pointer.tsv"
+    candidate = tmp_path / "indexed-candidate.c"
+    candidate.write_text("int sibling(void) { return 2; }\n", encoding="utf-8")
+    row = _row(
+        "demo_fn",
+        headline_tool="source-shape",
+        source_actionability="current-tools-indexed-pointer",
+        frame_closability_tier="",
+    )
+    row["primary"] = "indexed-struct-pointer-materialization"
+    _write_queue(queue, [row])
+    _, runner = _json_runner(
+        {
+            "blocker": "no-indexed-struct-candidate",
+            "stop_condition": {
+                "kind": "unvalidated",
+                "blocker": "no-indexed-struct-candidate",
+                "reason": "no indexed-struct candidate reached a true 100% match",
+            },
+            "variants": [
+                {
+                    "label": "indexed-struct-pointer-0",
+                    "operator": "indexed-struct-pointer",
+                    "status": "build-failed",
+                    "source_retained": str(candidate),
+                    "error": (
+                        "function 'demo_fn' not found in pcdump; "
+                        "did you mean sibling"
+                    ),
+                }
+            ],
+        }
+    )
+
+    ledger = run_harvest(
+        "indexed-struct-pointer",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "malformed-source-candidate"
+    assert result["reason"] == "generated source candidate did not preserve the requested function"
+    assert result["details"]["malformed_source_candidate"]["source_path"] == str(candidate)
+
+
+def test_harvest_classifies_lifetime_malformed_source_candidate(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    candidate = tmp_path / "lifetime-candidate.c"
+    candidate.write_text("int sibling(void) { return 2; }\n", encoding="utf-8")
+    _write_queue(
+        queue,
+        [
+            _row(
+                "demo_fn",
+                headline_tool="lifetime-layout",
+                source_actionability="source-probe",
+                frame_closability_tier="",
+            )
+        ],
+    )
+    entry = harvest_module.pcdump_cache.CacheEntry(
+        path=repo_root / "build" / "mwcc_debug_cache" / "melee" / "demo.txt",
+        source_path=repo_root / "src" / "melee" / "demo.c",
+        fresh=True,
+    )
+    monkeypatch.setattr(harvest_module.pcdump_cache, "lookup", lambda _repo, _unit: entry)
+    _, runner = _json_runner(
+        {
+            "variants": [
+                {
+                    "label": "temp-introduction-0",
+                    "operator": "temp-introduction",
+                    "status": "malformed-source",
+                    "source_retained": str(candidate),
+                    "error": (
+                        "function 'demo_fn' not found in pcdump; "
+                        "compiled probe pcdump omitted the target function"
+                    ),
+                }
+            ],
+        }
+    )
+
+    ledger = run_harvest(
+        "stack-local-layout",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "malformed-source-candidate"
+    assert result["details"]["malformed_source_candidate"]["source_path"] == str(candidate)
+
+
 def test_harvest_propagates_control_flow_search_stable_blocker(
     tmp_path: Path,
 ) -> None:

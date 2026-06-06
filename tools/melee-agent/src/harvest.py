@@ -67,6 +67,7 @@ BLOCKER_MISSING_REGISTER_TARGET = "missing-register-target"
 BLOCKER_HARNESS_EXIT_NONZERO = "harness-exit-nonzero"
 BLOCKER_HARNESS_INVALID_JSON = "harness-invalid-json"
 BLOCKER_NO_VALIDATED_CANDIDATE = "no-validated-candidate"
+BLOCKER_MALFORMED_SOURCE_CANDIDATE = "malformed-source-candidate"
 BLOCKER_APPLY_TRANSFER_FAILED = "apply-transfer-failed"
 BLOCKER_APPLY_VALIDATION_FAILED = "apply-validation-failed"
 BLOCKER_DECLARATION_APPLY_UNSUPPORTED = "declaration-apply-unsupported"
@@ -812,6 +813,23 @@ def _candidate_detail(candidate: dict[str, Any]) -> dict[str, Any]:
     return detail
 
 
+def _candidate_omits_target_function(candidate: dict[str, Any]) -> bool:
+    status = str(candidate.get("status") or "")
+    if status == "malformed-source":
+        return True
+    error = str(candidate.get("error") or candidate.get("match_percent_error") or "")
+    if "not found in pcdump" not in error:
+        return False
+    return _candidate_source_path_any(candidate) is not None
+
+
+def _malformed_source_candidate_detail(payload: Any) -> dict[str, Any] | None:
+    for candidate in _iter_candidates(payload):
+        if _candidate_omits_target_function(candidate):
+            return _candidate_detail(candidate)
+    return None
+
+
 def best_scored_candidate(payload: Any) -> dict[str, Any] | None:
     scored = [
         candidate
@@ -842,6 +860,9 @@ def no_validated_candidate_details(payload: Any) -> dict[str, Any]:
         details["best_candidate"] = _candidate_detail(best_candidate)
     elif candidates:
         details["unscored_candidate"] = _candidate_detail(candidates[0])
+    malformed_candidate = _malformed_source_candidate_detail(payload)
+    if malformed_candidate is not None:
+        details["malformed_source_candidate"] = malformed_candidate
     return details
 
 
@@ -1471,6 +1492,12 @@ def _payload_verifies_layer_improvement(
 def _harness_blocker_result(payload: Any) -> tuple[str, str, str] | None:
     if not isinstance(payload, dict):
         return None
+    if _malformed_source_candidate_detail(payload) is not None:
+        return (
+            "blocked",
+            BLOCKER_MALFORMED_SOURCE_CANDIDATE,
+            "generated source candidate did not preserve the requested function",
+        )
     blocker = payload.get("blocker")
     stop = payload.get("stop_condition")
     reason = None
