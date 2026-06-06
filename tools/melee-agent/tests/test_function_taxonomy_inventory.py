@@ -705,6 +705,7 @@ def test_offset_discrepancies_route_to_struct_offset_bucket_for_offset_residuals
     assert record["offset_discrepancy_bases"] == "r31"
     assert record["offset_discrepancy_disps"] == "current:260 expected:264"
     assert "melee-agent struct verify struct_fn" in record["next_command"]
+    assert "--struct <struct-name>" not in record["next_command"]
     assert "--base r31" in record["next_command"]
 
 

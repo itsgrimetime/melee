@@ -126,6 +126,21 @@ def test_aggregate_ambiguous_defaults_false_when_key_absent():
     assert agg[0]["ambiguous"] is False
 
 
+def test_aggregate_separates_same_field_from_different_structs():
+    from src.common import struct_verify as sv
+    findings = [
+        {"function": "f1", "struct": "FakeA", "field": "x0", "current": 0x10, "expected": 0x14},
+        {"function": "f2", "struct": "FakeB", "field": "x0", "current": 0x20, "expected": 0x24},
+    ]
+
+    agg = sv.aggregate(findings)
+
+    assert [(item.get("struct"), item["field"]) for item in agg] == [
+        ("FakeA", "x0"),
+        ("FakeB", "x0"),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Task 3.3: struct verify CLI help test
 # ---------------------------------------------------------------------------
@@ -136,9 +151,283 @@ def test_struct_verify_help():
     r = CliRunner().invoke(struct_app, ["verify", "--help"])
     assert r.exit_code == 0
     assert "--struct" in r.output and "--base" in r.output
+    assert "--struct                 TEXT  Struct type name; inferred" in r.output
+    assert "--struct                 TEXT  Struct type name [required]" not in r.output
     assert "--base-offset" in r.output
     assert "--base-offset-map" in r.output
     assert "--apply" in r.output
+
+
+def _candidate_by_struct_and_root(source_text: str, function: str) -> set[tuple[str, str | None]]:
+    from src.cli.struct import _struct_identity_candidates_from_source
+
+    return {
+        (candidate.struct, candidate.root)
+        for candidate in _struct_identity_candidates_from_source(source_text, function)
+    }
+
+
+def test_struct_identity_candidates_from_second_pointer_arg():
+    source = """
+void fn(CameraBounds* bounds, CameraTransformState* state)
+{
+    state->x0 = bounds->x0;
+}
+"""
+
+    assert ("CameraTransformState", "arg4") in _candidate_by_struct_and_root(source, "fn")
+
+
+def test_struct_identity_candidates_from_get_fighter_and_user_data():
+    source = """
+void fn(HSD_GObj* gobj)
+{
+    Fighter* fp = GET_FIGHTER(gobj);
+    fp->x0 = 1;
+}
+
+void fn_user_data(HSD_GObj* gobj)
+{
+    Fighter* fp = gobj->user_data;
+    fp->x0 = 1;
+}
+"""
+
+    assert ("Fighter", "arg3:user_data") in _candidate_by_struct_and_root(source, "fn")
+    assert ("Fighter", "arg3:user_data") in _candidate_by_struct_and_root(source, "fn_user_data")
+
+
+def test_struct_identity_candidates_from_direct_user_data_cast():
+    source = """
+int fn(HSD_GObj* gobj)
+{
+    return ((Fighter*) gobj->user_data)->x0;
+}
+"""
+
+    assert ("Fighter", "arg3:user_data") in _candidate_by_struct_and_root(source, "fn")
+
+
+def test_struct_identity_candidates_from_global_pointer_assignment():
+    source = """
+static THPFileInfo* __THPInfo;
+
+int fn(void)
+{
+    THPFileInfo* info = __THPInfo;
+    return info->cnt;
+}
+"""
+
+    assert ("THPFileInfo", "global:__THPInfo") in _candidate_by_struct_and_root(source, "fn")
+
+
+def test_struct_identity_candidates_from_returned_call_pointer():
+    source = """
+TmData* gm_8018F634(void);
+
+int fn(void)
+{
+    return gm_8018F634()->cur_option;
+}
+"""
+
+    assert ("TmData", "call:gm_8018F634") in _candidate_by_struct_and_root(source, "fn")
+
+
+def test_struct_identity_candidates_from_returned_call_definition():
+    source = """
+TmData* gm_8018F634(void)
+{
+    return &lbl_804D1234;
+}
+
+int fn(void)
+{
+    return gm_8018F634()->cur_option;
+}
+"""
+
+    assert ("TmData", "call:gm_8018F634") in _candidate_by_struct_and_root(source, "fn")
+
+
+def test_struct_identity_candidates_from_direct_global_object_access():
+    source = """
+typedef struct lbl_8046DBD8_t {
+    int x0;
+} lbl_8046DBD8_t;
+
+static lbl_8046DBD8_t lbl_8046DBD8;
+
+int fn(void)
+{
+    return lbl_8046DBD8.x0;
+}
+"""
+
+    assert ("lbl_8046DBD8_t", "global:lbl_8046DBD8") in _candidate_by_struct_and_root(source, "fn")
+
+
+def test_struct_identity_candidates_ignore_line_commented_declarations():
+    source = """
+// static Fake fake_global;
+
+int fn(void)
+{
+    return fake_global.x0;
+}
+"""
+
+    assert ("Fake", "global:fake_global") not in _candidate_by_struct_and_root(source, "fn")
+
+
+def test_read_tu_with_local_includes_appends_direct_quoted_include(tmp_path):
+    from src.cli.struct import _read_tu_with_local_includes
+
+    repo = tmp_path
+    tu = repo / "src/melee/demo/demo.c"
+    header = tu.parent / "local.h"
+    tu.parent.mkdir(parents=True)
+    tu.write_text('#include "local.h"\nint fn(void) { return LOCAL_VALUE; }\n')
+    header.write_text("#define LOCAL_VALUE 7\n")
+
+    text = _read_tu_with_local_includes(repo, "src/melee/demo/demo.c")
+
+    assert "int fn(void)" in text
+    assert "#define LOCAL_VALUE 7" in text
+
+
+def test_read_tu_with_local_includes_appends_nested_quoted_include(tmp_path):
+    from src.cli.struct import _read_tu_with_local_includes
+
+    repo = tmp_path
+    tu = repo / "src/melee/demo/demo.c"
+    outer = tu.parent / "outer.h"
+    inner = tu.parent / "inner.h"
+    tu.parent.mkdir(parents=True)
+    tu.write_text('#include "outer.h"\nint fn(void) { return INNER_VALUE; }\n')
+    outer.write_text('#include "inner.h"\n')
+    inner.write_text("#define INNER_VALUE 9\n")
+
+    text = _read_tu_with_local_includes(repo, "src/melee/demo/demo.c")
+
+    assert "#define INNER_VALUE 9" in text
+
+
+def test_auto_struct_selects_unique_root_matching_candidate(tmp_path):
+    from src.cli.struct import (
+        RegisterTrace,
+        StructIdentityCandidate,
+        _auto_struct_findings_for_function,
+    )
+
+    findings, skipped = _auto_struct_findings_for_function(
+        "fn",
+        [
+            StructIdentityCandidate("Wrong", "arg3", "Wrong* wrong"),
+            StructIdentityCandidate("Fake", "arg4", "Fake* state"),
+        ],
+        [{"base_reg": "r31", "cur_disp": 0x10, "ref_disp": 0x14}],
+        tmp_path,
+        "fake.c",
+        layout_resolver=lambda _repo, _name, _tu: {"field": 0x10},
+        traces={"r31": RegisterTrace("arg4")},
+    )
+
+    assert skipped == []
+    assert len(findings) == 1
+    assert findings[0]["struct"] == "Fake"
+    assert findings[0]["struct_source"] == "Fake* state"
+    assert findings[0]["field"] == "field"
+
+
+def test_auto_struct_rejects_wrong_root_even_when_offsets_map(tmp_path):
+    from src.cli.struct import (
+        RegisterTrace,
+        StructIdentityCandidate,
+        _auto_struct_findings_for_function,
+    )
+
+    findings, skipped = _auto_struct_findings_for_function(
+        "fn",
+        [StructIdentityCandidate("Wrong", "arg3", "Wrong* wrong")],
+        [{"base_reg": "r31", "cur_disp": 0x10, "ref_disp": 0x14}],
+        tmp_path,
+        "fake.c",
+        layout_resolver=lambda _repo, _name, _tu: {"field": 0x10},
+        traces={"r31": RegisterTrace("arg4")},
+    )
+
+    assert findings == []
+    assert skipped == [("fn", "auto-struct unresolved: no candidates mapped named fields")]
+
+
+def test_auto_struct_rejects_wrong_root_when_base_is_explicit(tmp_path):
+    from src.cli.struct import (
+        RegisterTrace,
+        StructIdentityCandidate,
+        _auto_struct_findings_for_function,
+    )
+
+    findings, skipped = _auto_struct_findings_for_function(
+        "fn",
+        [StructIdentityCandidate("Wrong", "arg3", "Wrong* wrong")],
+        [{"base_reg": "r31", "cur_disp": 0x10, "ref_disp": 0x14}],
+        tmp_path,
+        "fake.c",
+        layout_resolver=lambda _repo, _name, _tu: {"field": 0x10},
+        base_reg="r31",
+        base_reg_source="cli",
+        traces={"r31": RegisterTrace("arg4")},
+    )
+
+    assert findings == []
+    assert skipped == [("fn", "auto-struct unresolved: no candidates mapped named fields")]
+
+
+def test_auto_struct_reports_ambiguous_equal_score_candidates(tmp_path):
+    from src.cli.struct import (
+        RegisterTrace,
+        StructIdentityCandidate,
+        _auto_struct_findings_for_function,
+    )
+
+    findings, skipped = _auto_struct_findings_for_function(
+        "fn",
+        [
+            StructIdentityCandidate("FakeA", "arg4", "FakeA* state"),
+            StructIdentityCandidate("FakeB", "arg4", "FakeB* state"),
+        ],
+        [{"base_reg": "r31", "cur_disp": 0x10, "ref_disp": 0x14}],
+        tmp_path,
+        "fake.c",
+        layout_resolver=lambda _repo, _name, _tu: {"field": 0x10},
+        traces={"r31": RegisterTrace("arg4")},
+    )
+
+    assert findings == []
+    assert skipped == [("fn", "auto-struct ambiguous: FakeA, FakeB")]
+
+
+def test_auto_struct_reports_unresolved_when_no_named_fields_map(tmp_path):
+    from src.cli.struct import (
+        RegisterTrace,
+        StructIdentityCandidate,
+        _auto_struct_findings_for_function,
+    )
+
+    findings, skipped = _auto_struct_findings_for_function(
+        "fn",
+        [StructIdentityCandidate("Fake", "arg4", "Fake* state")],
+        [{"base_reg": "r31", "cur_disp": 0x10, "ref_disp": 0x14}],
+        tmp_path,
+        "fake.c",
+        layout_resolver=lambda _repo, _name, _tu: {"other": 0x20},
+        traces={"r31": RegisterTrace("arg4")},
+    )
+
+    assert findings == []
+    assert skipped == [("fn", "auto-struct unresolved: no candidates mapped named fields")]
 
 
 def test_infer_base_reg_from_unique_offset_discrepancy():
@@ -678,8 +967,103 @@ def test_struct_verify_cli_infers_base_without_option(monkeypatch):
     assert r.exit_code == 0
     data = json.loads(r.output)
     assert data["findings"][0]["field"] == "field"
+    assert data["findings"][0]["struct"] == "Fake"
     assert data["findings"][0]["base_reg"] == "r31"
     assert data["findings"][0]["base_reg_source"] == "unique-offset-discrepancy"
+
+
+def test_struct_verify_cli_infers_struct_from_source_candidates(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+    from src.cli import struct as struct_mod
+    from src.cli.struct import struct_app
+    from src.common import struct_layout
+
+    tu = tmp_path / "fake.c"
+    tu.write_text(
+        """
+void fn_80000000(CameraBounds* bounds, Fake* state)
+{
+    state->field = bounds->x0;
+}
+""",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(struct_mod, "get_agent_melee_root", lambda: tmp_path)
+    monkeypatch.setattr(struct_layout, "resolve_layout", lambda repo, name, tu_src: {"field": 0x10})
+
+    class Result:
+        stdout = json.dumps({
+            "target_asm": [
+                "<fn_80000000>:",
+                "+000: 7C 9F 23 78 \tmr r31,r4",
+                "+004: 80 BF 00 14 \tlwz r5,0x14(r31)",
+            ],
+            "current_asm": [
+                "<fn_80000000>:",
+                "+000: 7C 9F 23 78 \tmr r31,r4",
+                "+004: 80 BF 00 10 \tlwz r5,0x10(r31)",
+            ],
+            "classification": {
+                "offset_discrepancies": [
+                    {
+                        "base_reg": "r31",
+                        "mnemonic": "lwz",
+                        "cur_disp": 0x10,
+                        "ref_disp": 0x14,
+                        "cur_index": 1,
+                        "ref_index": 1,
+                    },
+                ],
+            },
+        })
+
+    monkeypatch.setattr(struct_mod.subprocess, "run", lambda *args, **kwargs: Result())
+
+    r = CliRunner().invoke(
+        struct_app,
+        ["verify", "fn_80000000", "--tu-src", str(tu), "--json"],
+    )
+
+    assert r.exit_code == 0
+    data = json.loads(r.output)
+    assert data["skipped"] == []
+    assert data["findings"][0]["struct"] == "Fake"
+    assert data["findings"][0]["field"] == "field"
+    assert data["findings"][0]["struct_source"] == "Fake* state"
+    assert data["findings"][0]["base_reg_source"] == "dataflow:arg4"
+
+
+def test_struct_verify_cli_reports_auto_struct_no_candidates(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+    from src.cli import struct as struct_mod
+    from src.cli.struct import struct_app
+
+    tu = tmp_path / "fake.c"
+    tu.write_text("void fn_80000000(int value) { (void) value; }\n", encoding="utf-8")
+
+    monkeypatch.setattr(struct_mod, "get_agent_melee_root", lambda: tmp_path)
+
+    class Result:
+        stdout = json.dumps({
+            "classification": {
+                "offset_discrepancies": [
+                    {"base_reg": "r31", "mnemonic": "lwz", "cur_disp": 0x10, "ref_disp": 0x14},
+                ],
+            },
+        })
+
+    monkeypatch.setattr(struct_mod.subprocess, "run", lambda *args, **kwargs: Result())
+
+    r = CliRunner().invoke(
+        struct_app,
+        ["verify", "fn_80000000", "--tu-src", str(tu), "--json"],
+    )
+
+    assert r.exit_code == 0
+    data = json.loads(r.output)
+    assert data["findings"] == []
+    assert data["skipped"] == [["fn_80000000", "auto-struct unresolved: no source candidates"]]
 
 
 def test_struct_verify_cli_uses_asm_trace_for_alias_and_interior_offset(monkeypatch):

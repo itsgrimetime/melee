@@ -36,12 +36,12 @@ def aggregate(findings: list[dict]) -> list[dict]:
         ambiguous (bool): True when any contributing finding's ``ref_field`` is a
             known field that differs from ``field`` (default False)
     """
-    by_field: dict[str, list[dict]] = defaultdict(list)
+    by_field: dict[tuple[str | None, str], list[dict]] = defaultdict(list)
     for f in findings:
-        by_field[f["field"]].append(f)
+        by_field[(f.get("struct"), f["field"])].append(f)
 
     out = []
-    for field, items in by_field.items():
+    for (struct, field), items in by_field.items():
         expecteds = sorted({it["expected"] for it in items})
         current = items[0]["current"]
         conflict = len(expecteds) > 1
@@ -64,10 +64,13 @@ def aggregate(findings: list[dict]) -> list[dict]:
             "confidence": confidence,
             "ambiguous": ambiguous,
         }
+        if struct is not None:
+            item["struct"] = struct
 
         # Preserve v2 diagnostic fields when all contributing per-function
         # findings agree. Older callers only read the core fields above.
         for key in (
+            "struct_source",
             "base_reg",
             "base_reg_source",
             "base_offset",

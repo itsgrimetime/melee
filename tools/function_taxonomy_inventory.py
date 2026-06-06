@@ -675,8 +675,8 @@ def next_command(
         ]
         base_arg = f" --base {bases[0]}" if len(bases) == 1 else " --base <base-reg>"
         return (
-            f"melee-agent struct verify {function} --struct <struct-name>"
-            f"{base_arg} --tu-src {source_path} --json"
+            f"melee-agent struct verify {function}{base_arg} "
+            f"--tu-src {source_path} --json"
         )
     if bucket == "register-allocator":
         return (
