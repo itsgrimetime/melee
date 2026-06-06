@@ -11,6 +11,7 @@ from typing import Any
 
 from src.search.adapters import _acquire_repo_build_lock
 from src.search.structure import StructureScoreResult, StructureVariant
+from src.mwcc_debug.diff_capture import _run_with_process_group_timeout
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,13 @@ def score_structure_variants(
             if context.report_path.exists()
             else None
         )
+        history_path = _checkdiff_history_path(context)
+        history_dir_existed = history_path.parent.exists()
+        original_history = (
+            history_path.read_bytes()
+            if history_path.exists()
+            else None
+        )
         try:
             context.source_path.write_bytes(original_source)
             baseline_status, baseline_reason = _build_unit(context, timeout)
@@ -115,19 +123,11 @@ def score_structure_variants(
                     )
                     for variant in scoreable
                 ]
+            baseline_structural: dict[str, Any] = {}
             try:
                 baseline_structural = _run_checkdiff(context, timeout)
-            except RuntimeError as exc:
-                return [
-                    StructureScoreResult(
-                        label=variant.label,
-                        baseline_percent=baseline_percent,
-                        candidate_percent=None,
-                        compile_status="checkdiff-failed",
-                        unscored_reason=f"baseline checkdiff failed: {exc}",
-                    )
-                    for variant in scoreable
-                ]
+            except RuntimeError:
+                pass
 
             results: list[StructureScoreResult] = []
             for variant in scoreable:
@@ -145,6 +145,11 @@ def score_structure_variants(
             context.source_path.write_bytes(original_source)
             _restore_optional_file(context.build_obj_path, original_obj)
             _restore_optional_file(context.report_path, original_report)
+            _restore_checkdiff_history(
+                history_path,
+                original_history,
+                history_dir_existed=history_dir_existed,
+            )
 
 
 def _score_one_variant(
@@ -197,7 +202,8 @@ def _score_one_variant(
             label=variant.label,
             baseline_percent=baseline_percent,
             candidate_percent=candidate_percent,
-            compile_status="checkdiff-failed",
+            compile_status="ok",
+            checkdiff_status="failed",
             unscored_reason=f"candidate checkdiff failed: {exc}",
         )
 
@@ -206,6 +212,7 @@ def _score_one_variant(
         baseline_percent=baseline_percent,
         candidate_percent=candidate_percent,
         compile_status="ok",
+        checkdiff_status="ok",
         structural=_structural_with_deltas(baseline_structural, candidate_structural),
     )
 
@@ -216,11 +223,9 @@ def _build_unit(
 ) -> tuple[str, str]:
     obj_rel = f"build/GALE01/src/{context.unit}.o"
     try:
-        proc = subprocess.run(
+        proc = _run_child(
             ["ninja", obj_rel],
             cwd=context.melee_root,
-            capture_output=True,
-            text=True,
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:
@@ -248,11 +253,9 @@ def _refresh_report_percent(
     else:
         cmd = ["ninja", "build/GALE01/report.json"]
     try:
-        proc = subprocess.run(
+        proc = _run_child(
             cmd,
             cwd=context.melee_root,
-            capture_output=True,
-            text=True,
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
@@ -277,7 +280,7 @@ def _run_checkdiff(
     env["CHECKDIFF_NO_LOCK"] = "1"
     env["CHECKDIFF_NO_FINGERPRINT"] = "1"
     try:
-        proc = subprocess.run(
+        proc = _run_child(
             [
                 "python",
                 "tools/checkdiff.py",
@@ -287,8 +290,6 @@ def _run_checkdiff(
                 "--no-build",
             ],
             cwd=context.melee_root,
-            capture_output=True,
-            text=True,
             timeout=timeout,
             env=env,
         )
@@ -392,6 +393,45 @@ def _restore_optional_file(path: Path, original: bytes | None) -> None:
     else:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(original)
+
+
+def _checkdiff_history_path(context: StructureScoreContext) -> Path:
+    return (
+        context.melee_root
+        / "build"
+        / ".checkdiff-history"
+        / f"{context.function}.json"
+    )
+
+
+def _restore_checkdiff_history(
+    path: Path,
+    original: bytes | None,
+    *,
+    history_dir_existed: bool,
+) -> None:
+    _restore_optional_file(path, original)
+    if history_dir_existed:
+        return
+    try:
+        path.parent.rmdir()
+    except OSError:
+        pass
+
+
+def _run_child(
+    cmd: list[str],
+    *,
+    cwd: Path,
+    timeout: float,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    return _run_with_process_group_timeout(
+        [str(part) for part in cmd],
+        cwd=cwd,
+        timeout=timeout,
+        env=env,
+    )
 
 
 def _process_detail(proc: subprocess.CompletedProcess) -> str:

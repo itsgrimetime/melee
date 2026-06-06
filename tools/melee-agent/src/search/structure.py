@@ -48,6 +48,7 @@ class StructureVariant:
     final_match_percent: float | None = None
     delta: float | None = None
     compile_status: str | None = None
+    checkdiff_status: str | None = None
     unscored_reason: str | None = None
     path: str | None = None
     source_retained: str | None = None
@@ -73,6 +74,7 @@ class StructureScoreResult:
     baseline_percent: float | None
     candidate_percent: float | None
     compile_status: str
+    checkdiff_status: str | None = None
     unscored_reason: str | None = None
     structural: dict[str, Any] = field(default_factory=dict)
 
@@ -350,7 +352,7 @@ def run_structure_search(
         )
 
     if score_variants and score_runner is not None:
-        _score_generated_variants(variants, score_runner)
+        _score_generated_variants(variants, score_runner, max_candidates)
     else:
         _mark_generated_variants_unscored(variants, "scoring disabled")
     if baseline_percent is None:
@@ -378,21 +380,31 @@ def _variant_baseline_percent(variants: list[StructureVariant]) -> float | None:
 def _score_generated_variants(
     variants: list[StructureVariant],
     score_runner: Callable[[list[StructureVariant]], list[StructureScoreResult]],
+    max_score_candidates: int,
 ) -> None:
     scoreable = [
         variant for variant in variants if _variant_needs_structure_score(variant)
     ]
     if not scoreable:
         return
+    max_score_candidates = max(0, int(max_score_candidates))
+    to_score = scoreable[:max_score_candidates]
+    overflow = scoreable[max_score_candidates:]
+    _mark_generated_variants_unscored(
+        overflow,
+        "not scored due max-candidates cap",
+    )
+    if not to_score:
+        return
     try:
-        score_results = score_runner(scoreable)
+        score_results = score_runner(to_score)
     except Exception as exc:
         _mark_generated_variants_unscored(
-            scoreable,
+            to_score,
             f"score runner failed: {exc}",
         )
         return
-    _apply_structure_scores(scoreable, score_results)
+    _apply_structure_scores(to_score, score_results)
 
 
 def _variant_needs_structure_score(variant: StructureVariant) -> bool:
@@ -431,22 +443,25 @@ def _apply_structure_scores(
             )
             continue
         variant.compile_status = result.compile_status
+        if result.checkdiff_status is not None:
+            variant.checkdiff_status = result.checkdiff_status
         if result.baseline_percent is not None:
             variant.baseline_percent = result.baseline_percent
+        if result.candidate_percent is not None:
+            variant.match_percent = result.candidate_percent
+            variant.final_match_percent = result.candidate_percent
+            variant.delta = _delta(result.candidate_percent, variant.baseline_percent)
+        if result.structural:
+            variant.metadata = {
+                **variant.metadata,
+                "structural": dict(result.structural),
+            }
         if (
             result.compile_status == "ok"
             and result.candidate_percent is not None
             and result.unscored_reason is None
         ):
             variant.status = "ok"
-            variant.match_percent = result.candidate_percent
-            variant.final_match_percent = result.candidate_percent
-            variant.delta = _delta(result.candidate_percent, variant.baseline_percent)
-            if result.structural:
-                variant.metadata = {
-                    **variant.metadata,
-                    "structural": dict(result.structural),
-                }
             continue
         variant.status = "unscored"
         variant.unscored_reason = (

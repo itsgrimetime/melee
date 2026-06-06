@@ -279,6 +279,106 @@ def test_run_structure_search_applies_fake_scores_and_ranks_variants(
     )
 
 
+def test_run_structure_search_keeps_score_when_checkdiff_metadata_fails(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "demo.c"
+    source_path.write_text(
+        "int fn_80000000(void)\n"
+        "{\n"
+        "    int first;\n"
+        "    int second;\n"
+        "    return 0;\n"
+        "}\n"
+    )
+
+    def fake_score_runner(
+        variants: list[StructureVariant],
+    ) -> list[StructureScoreResult]:
+        return [
+            StructureScoreResult(
+                label=variants[0].label,
+                baseline_percent=90.0,
+                candidate_percent=91.25,
+                compile_status="ok",
+                checkdiff_status="failed",
+                unscored_reason="candidate checkdiff failed: non-json",
+            )
+        ]
+
+    payload = run_structure_search(
+        "fn_80000000",
+        source_path,
+        tmp_path / "structure",
+        axes=("decl-order",),
+        max_candidates=1,
+        score_variants=True,
+        score_runner=fake_score_runner,
+    )
+
+    variant = payload["variants"][0]
+    assert variant["status"] == "unscored"
+    assert variant["compile_status"] == "ok"
+    assert variant["checkdiff_status"] == "failed"
+    assert variant["baseline_percent"] == 90.0
+    assert variant["match_percent"] == 91.25
+    assert variant["final_match_percent"] == 91.25
+    assert variant["delta"] == 1.25
+    assert variant["unscored_reason"] == "candidate checkdiff failed: non-json"
+    assert payload["stop_condition"]["kind"] == "improved"
+
+
+def test_run_structure_search_scores_no_more_than_max_candidates(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "demo.c"
+    source_path.write_text(
+        "int fn_80000000(int mode)\n"
+        "{\n"
+        "    int first;\n"
+        "    int second;\n"
+        "    int third;\n"
+        "    switch (mode) {\n"
+        "    case 0:\n"
+        "        return first;\n"
+        "    case 1:\n"
+        "        return second;\n"
+        "    }\n"
+        "    return third;\n"
+        "}\n"
+    )
+    scored_counts: list[int] = []
+
+    def fake_score_runner(
+        variants: list[StructureVariant],
+    ) -> list[StructureScoreResult]:
+        scored_counts.append(len(variants))
+        return [
+            StructureScoreResult(
+                label=variant.label,
+                baseline_percent=90.0,
+                candidate_percent=89.0,
+                compile_status="ok",
+            )
+            for variant in variants
+        ]
+
+    payload = run_structure_search(
+        "fn_80000000",
+        source_path,
+        tmp_path / "structure",
+        axes=("decl-order", "case-order"),
+        max_candidates=1,
+        score_variants=True,
+        score_runner=fake_score_runner,
+    )
+
+    assert scored_counts == [1]
+    assert len(payload["variants"]) == 1
+    assert payload["variants"][0]["compile_status"] == "ok"
+    assert payload["stop_condition"]["kind"] == "candidates-generated"
+
+
 def test_run_structure_search_marks_generated_candidates_unscored_without_runner(
     tmp_path: Path,
 ) -> None:

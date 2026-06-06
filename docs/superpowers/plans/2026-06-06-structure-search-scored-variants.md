@@ -15,7 +15,7 @@
 - Modify `tools/melee-agent/src/search/structure.py`
   - Add `StructureScoreResult`.
   - Add scoring application after candidate generation.
-  - Add `compile_status` and `unscored_reason` to variant payloads.
+  - Add `compile_status`, `checkdiff_status`, and `unscored_reason` to variant payloads.
   - Update stop-condition logic to distinguish scored no-improvement from unscored generated candidates.
 - Create `tools/melee-agent/src/search/structure_scoring.py`
   - Resolve report entries.
@@ -65,6 +65,7 @@ class StructureScoreResult:
     baseline_percent: float | None
     candidate_percent: float | None
     compile_status: str
+    checkdiff_status: str | None = None
     unscored_reason: str | None = None
     structural: dict[str, Any] = field(default_factory=dict)
 ```
@@ -73,6 +74,7 @@ Extend `StructureVariant` with these optional fields:
 
 ```python
 compile_status: str | None = None
+checkdiff_status: str | None = None
 unscored_reason: str | None = None
 ```
 
@@ -85,7 +87,7 @@ score_variants: bool = False
 
 Add `_apply_structure_scores(variants, score_results)` that maps score results
 by `label`, updates `baseline_percent`, `match_percent`, `final_match_percent`,
-`delta`, `compile_status`, and `metadata["structural"]`, and sets
+`delta`, `compile_status`, `checkdiff_status`, and `metadata["structural"]`, and sets
 `status="unscored"` plus a concrete `unscored_reason` when a variant has
 retained source but no usable score.
 
@@ -174,6 +176,17 @@ original_source = source_path.read_bytes()
 original_obj = build_obj_path.read_bytes() if build_obj_path.exists() else None
 original_report = report_path.read_bytes() if report_path.exists() else None
 ```
+
+Also snapshot and restore:
+
+```python
+history_path = melee_root / "build" / ".checkdiff-history" / f"{function}.json"
+```
+
+Run all child build/report/checkdiff commands through the existing
+`src.mwcc_debug.diff_capture._run_with_process_group_timeout` helper, not plain
+`subprocess.run`, so timeout cleanup kills descendant compiler processes before
+source/object/report restoration.
 
 - [x] **Step 4: Run focused scorer tests**
 

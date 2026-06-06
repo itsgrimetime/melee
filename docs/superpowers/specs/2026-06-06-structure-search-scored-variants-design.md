@@ -41,7 +41,8 @@ ranks the variants that structure search already produces.
 payload module. It gains a small scoring contract:
 
 - `StructureScoreResult` captures baseline percent, candidate percent, delta,
-  compile status, optional checkdiff structural metrics, and failure reason.
+  compile status, optional checkdiff status, optional checkdiff structural
+  metrics, and failure reason.
 - `run_structure_search(..., score_runner=None, score_variants=False)` generates
   candidates first, then scores candidates with retained source when a runner is
   provided and scoring is enabled.
@@ -54,7 +55,8 @@ the large debug CLI module from the search payload layer. The scorer:
 
 1. Resolves the function unit and source path from `build/GALE01/report.json`.
 2. Acquires the shared repo build/checkdiff lock.
-3. Saves the original source, current build object, and `report.json`.
+3. Saves the original source, current build object, `report.json`, and the
+   function's checkdiff history file.
 4. Builds the original source and regenerates `report.json` once to obtain the
    fresh baseline percent.
 5. Runs no-build checkdiff for baseline structural metrics.
@@ -63,7 +65,12 @@ the large debug CLI module from the search payload layer. The scorer:
    reads the candidate percent, runs `checkdiff.py --format json --no-build`
    with `CHECKDIFF_NO_LOCK=1` and `CHECKDIFF_NO_FINGERPRINT=1`, and computes
    delta from the fresh baseline.
-7. Restores the saved source, object, and `report.json` in `finally`.
+7. Restores the saved source, object, `report.json`, and checkdiff history in
+   `finally`.
+
+Child build/report/checkdiff commands run through a process-group timeout path
+so descendant compiler processes are killed before the scorer restores files and
+releases the repo lock.
 
 This uses `checkdiff --no-build` only for structural metrics such as
 `opcode_similarity`, `line_delta`, and `hunk_count`; the fuzzy percent always
@@ -91,6 +98,7 @@ Scored variants include:
 {
   "status": "ok",
   "compile_status": "ok",
+  "checkdiff_status": "ok",
   "baseline_percent": 98.48,
   "match_percent": 98.00,
   "final_match_percent": 98.00,
@@ -114,9 +122,15 @@ Unscored variants include:
 {
   "status": "unscored",
   "compile_status": "failed",
+  "checkdiff_status": null,
   "unscored_reason": "candidate compile failed: ..."
 }
 ```
+
+When compile/report scoring succeeds but no-build checkdiff fails, the variant
+still reports `baseline_percent`, `match_percent`, `final_match_percent`, and
+`delta`, with `compile_status: "ok"`, `checkdiff_status: "failed"`, and an
+`unscored_reason` explaining the structural-metric failure.
 
 `stop_condition.kind` is:
 
