@@ -1394,6 +1394,111 @@ def _offset_to_field(layout: dict[str, int], offset: int) -> str | None:
     return None
 
 
+def _non_struct_source_shape_reason(
+    row: dict,
+    layout: dict[str, int],
+    *,
+    base_offset: int | None = None,
+) -> str | None:
+    try:
+        cur_disp = _parse_int_literal(row["cur_disp"], "cur_disp")
+        ref_disp = _parse_int_literal(row["ref_disp"], "ref_disp")
+    except (KeyError, ValueError):
+        return None
+
+    cur_field = _offset_to_field(layout, cur_disp)
+    if (
+        base_offset is not None
+        and _offset_to_field(layout, base_offset + cur_disp) is not None
+    ):
+        return None
+    ref_field = _offset_to_field(layout, ref_disp)
+    ref_base = _row_ref_base(row)
+    cur_base = _row_cur_base(row)
+    base_pair = f"{ref_base}->{cur_base}"
+    cur_desc = f"current disp 0x{cur_disp:X} on {cur_base}"
+    ref_desc = f"ref disp 0x{ref_disp:X} on {ref_base}"
+
+    if cur_field is None:
+        return f"non-struct-source-shape: {base_pair}: {cur_desc} is not a named field; {ref_desc}"
+    if ref_field is not None and ref_field != cur_field:
+        return (
+            f"non-struct-source-shape: {base_pair}: {cur_desc} maps to {cur_field}; "
+            f"{ref_desc} maps to {ref_field}"
+        )
+    if ref_field is None and abs(cur_disp - ref_disp) > 0x20:
+        return (
+            f"non-struct-source-shape: {base_pair}: {cur_desc} maps to {cur_field}; "
+            f"{ref_desc} is outside nearby field-layout range"
+        )
+    return None
+
+
+def _final_traces_prove_same_root(
+    row: dict,
+    *,
+    traces: dict[str, RegisterTrace] | None = None,
+    ref_traces: dict[str, RegisterTrace] | None = None,
+    cur_traces: dict[str, RegisterTrace] | None = None,
+) -> bool:
+    cur_map = cur_traces if cur_traces is not None else traces
+    ref_map = ref_traces if ref_traces is not None else traces
+    if not cur_map or not ref_map:
+        return False
+    cur_trace = cur_map.get(_row_cur_base(row))
+    ref_trace = ref_map.get(_row_ref_base(row))
+    return cur_trace is not None and ref_trace is not None and cur_trace.root == ref_trace.root
+
+
+def _mismatched_base_skip_reason(
+    row: dict,
+    layout: dict[str, int],
+    reason: str | None,
+    *,
+    base_offset: int | None = None,
+    traces: dict[str, RegisterTrace] | None = None,
+    ref_traces: dict[str, RegisterTrace] | None = None,
+    cur_traces: dict[str, RegisterTrace] | None = None,
+) -> str:
+    if not _final_traces_prove_same_root(
+        row,
+        traces=traces,
+        ref_traces=ref_traces,
+        cur_traces=cur_traces,
+    ):
+        detail = _non_struct_source_shape_reason(row, layout, base_offset=base_offset)
+        if detail is not None:
+            return detail
+    return f"unresolved mismatched bases {_row_ref_base(row)}->{_row_cur_base(row)}: {reason}"
+
+
+def _has_plausible_layout_fit(
+    rows: list[dict],
+    layout: dict[str, int],
+    *,
+    base_offset: int | None = None,
+) -> bool:
+    def row_matches(row: dict, offset: int) -> bool:
+        cur_disp = _parse_int_literal(row["cur_disp"], "cur_disp")
+        ref_disp = _parse_int_literal(row["ref_disp"], "ref_disp")
+        cur_abs = offset + cur_disp
+        ref_abs = offset + ref_disp
+        cur_field = _offset_to_field(layout, cur_abs)
+        if cur_field is None:
+            return False
+        ref_field = _offset_to_field(layout, ref_abs)
+        return ref_field is not None or abs(cur_abs - ref_abs) <= 0x20
+
+    if base_offset is not None:
+        return any(row_matches(row, base_offset) for row in rows)
+    mapped_offset, mapped_offset_source, candidates = _infer_base_offset_from_layout(layout, rows)
+    if mapped_offset_source in {"zero-default", "ambiguous-layout-fit"}:
+        return False
+    if not candidates:
+        candidates = [mapped_offset]
+    return any(all(row_matches(row, candidate) for row in rows) for candidate in candidates)
+
+
 def _resolve_discrepancy_rows(
     function: str,
     discrepancies: list[dict],
@@ -1495,7 +1600,16 @@ def _resolve_discrepancy_rows(
                 base_reg_source=base_reg_source or "cli",
             )
             if row is None:
-                skipped.append((function, f"unresolved mismatched bases {_row_ref_base(d)}->{_row_cur_base(d)}: {reason}"))
+                detail = _mismatched_base_skip_reason(
+                    d,
+                    layout,
+                    reason,
+                    base_offset=base_offset,
+                    traces=normalized_traces,
+                    ref_traces=normalized_ref_traces,
+                    cur_traces=normalized_cur_traces,
+                )
+                skipped.append((function, detail))
                 continue
             roots.add(root or "")
             resolved.append(row)
@@ -1523,8 +1637,17 @@ def _resolve_discrepancy_rows(
         )
         if row is None:
             if not _same_physical_base(d):
+                detail = _mismatched_base_skip_reason(
+                    d,
+                    layout,
+                    reason,
+                    base_offset=base_offset,
+                    traces=normalized_traces,
+                    ref_traces=normalized_ref_traces,
+                    cur_traces=normalized_cur_traces,
+                )
                 skipped.append(
-                    (function, f"unresolved mismatched bases {_row_ref_base(d)}->{_row_cur_base(d)}: {reason}")
+                    (function, detail)
                 )
             continue
         dataflow_roots.add(root or "")
@@ -1543,6 +1666,29 @@ def _resolve_discrepancy_rows(
 
     reg, reg_source, reason = _infer_base_reg_from_discrepancies(fallback_discrepancies)
     if reg is None:
+        if reason and reason.startswith("ambiguous offset base candidates"):
+            candidate_regs = sorted({_row_cur_base(d) for d in fallback_discrepancies})
+            if any(
+                _has_plausible_layout_fit(
+                    [d for d in fallback_discrepancies if _row_cur_base(d) == candidate],
+                    layout,
+                    base_offset=base_offset,
+                )
+                for candidate in candidate_regs
+            ):
+                return [], [(function, reason)]
+            non_struct_skips: list[tuple[str, str]] = []
+            for d in fallback_discrepancies:
+                detail = _non_struct_source_shape_reason(
+                    d,
+                    layout,
+                    base_offset=base_offset,
+                )
+                if detail is None:
+                    break
+                non_struct_skips.append((function, detail))
+            if len(non_struct_skips) == len(fallback_discrepancies):
+                return [], skipped + non_struct_skips
         return [], [(function, reason or "no base")]
     selected = [d for d in fallback_discrepancies if _row_cur_base(d) == reg]
     if base_offset is None:

@@ -880,6 +880,215 @@ def test_resolve_rows_skips_mismatched_bases_without_proof():
     assert "unresolved mismatched bases" in skipped[0][1]
 
 
+def test_resolve_rows_marks_unnamed_current_mismatch_as_non_struct_source_shape():
+    from src.cli.struct import _resolve_discrepancy_rows
+
+    rows, skipped = _resolve_discrepancy_rows(
+        "fn",
+        [
+            {
+                "ref_base_reg": "r28",
+                "cur_base_reg": "r31",
+                "base_reg": "r31",
+                "cur_disp": 0x40,
+                "ref_disp": 0x10,
+            }
+        ],
+        {"field": 0x4},
+    )
+
+    assert rows == []
+    assert skipped
+    assert "non-struct-source-shape" in skipped[0][1]
+    assert "missing dataflow proof" not in skipped[0][1]
+
+
+def test_resolve_rows_marks_far_named_current_mismatch_as_non_struct_source_shape():
+    from src.cli.struct import _resolve_discrepancy_rows
+
+    rows, skipped = _resolve_discrepancy_rows(
+        "fn",
+        [
+            {
+                "ref_base_reg": "r28",
+                "cur_base_reg": "r31",
+                "base_reg": "r31",
+                "cur_disp": 0x114,
+                "ref_disp": 0x18,
+            }
+        ],
+        {"huffmanTabs[0].valPtr[0]": 0x114},
+    )
+
+    assert rows == []
+    assert skipped
+    assert "non-struct-source-shape" in skipped[0][1]
+
+
+def test_resolve_rows_marks_different_named_fields_as_non_struct_source_shape():
+    from src.cli.struct import _resolve_discrepancy_rows
+
+    rows, skipped = _resolve_discrepancy_rows(
+        "fn",
+        [
+            {
+                "ref_base_reg": "r28",
+                "cur_base_reg": "r31",
+                "base_reg": "r31",
+                "cur_disp": 0x40,
+                "ref_disp": 0x10,
+            }
+        ],
+        {"buffer": 0x40, "info": 0x10},
+    )
+
+    assert rows == []
+    assert skipped
+    assert "non-struct-source-shape" in skipped[0][1]
+    assert "buffer" in skipped[0][1]
+    assert "info" in skipped[0][1]
+
+
+def test_resolve_rows_keeps_nearby_named_current_mismatch_unresolved():
+    from src.cli.struct import _resolve_discrepancy_rows
+
+    rows, skipped = _resolve_discrepancy_rows(
+        "fn",
+        [
+            {
+                "ref_base_reg": "r28",
+                "cur_base_reg": "r31",
+                "base_reg": "r31",
+                "cur_disp": 0x24,
+                "ref_disp": 0x20,
+            }
+        ],
+        {"field": 0x24},
+    )
+
+    assert rows == []
+    assert skipped
+    assert "unresolved mismatched bases" in skipped[0][1]
+    assert "non-struct-source-shape" not in skipped[0][1]
+
+
+def test_resolve_rows_keeps_explicit_base_offset_field_mismatch_unresolved():
+    from src.cli.struct import _resolve_discrepancy_rows
+
+    rows, skipped = _resolve_discrepancy_rows(
+        "fn",
+        [
+            {
+                "ref_base_reg": "r28",
+                "cur_base_reg": "r31",
+                "base_reg": "r31",
+                "cur_disp": 0x4,
+                "ref_disp": 0x8,
+            }
+        ],
+        {"field": 0x24},
+        base_offset=0x20,
+        base_offset_source="cli",
+    )
+
+    assert rows == []
+    assert skipped
+    assert "unresolved mismatched bases" in skipped[0][1]
+    assert "non-struct-source-shape" not in skipped[0][1]
+
+
+def test_resolve_rows_marks_ambiguous_non_struct_sources_explicitly():
+    from src.cli.struct import _resolve_discrepancy_rows
+
+    rows, skipped = _resolve_discrepancy_rows(
+        "fn",
+        [
+            {
+                "ref_base_reg": "r4",
+                "cur_base_reg": "r4",
+                "base_reg": "r4",
+                "cur_disp": 1,
+                "ref_disp": 0,
+            },
+            {
+                "ref_base_reg": "r3",
+                "cur_base_reg": "r3",
+                "base_reg": "r3",
+                "cur_disp": 0,
+                "ref_disp": 0x7C,
+            },
+        ],
+        {"file": 0},
+    )
+
+    assert rows == []
+    assert len(skipped) == 2
+    assert all("non-struct-source-shape" in reason for _fn, reason in skipped)
+
+
+def test_resolve_rows_keeps_plausible_ambiguous_sources_ambiguous():
+    from src.cli.struct import _resolve_discrepancy_rows
+
+    rows, skipped = _resolve_discrepancy_rows(
+        "fn",
+        [
+            {
+                "ref_base_reg": "r4",
+                "cur_base_reg": "r4",
+                "base_reg": "r4",
+                "cur_disp": 0x24,
+                "ref_disp": 0x20,
+            },
+            {
+                "ref_base_reg": "r3",
+                "cur_base_reg": "r3",
+                "base_reg": "r3",
+                "cur_disp": 0x28,
+                "ref_disp": 0x24,
+            },
+        ],
+        {"field0": 0x24, "field1": 0x28},
+    )
+
+    assert rows == []
+    assert skipped == [("fn", "ambiguous offset base candidates: r3, r4")]
+
+
+def test_resolve_rows_keeps_inferable_interior_ambiguous_sources_ambiguous():
+    from src.cli.struct import _resolve_discrepancy_rows
+
+    rows, skipped = _resolve_discrepancy_rows(
+        "fn",
+        [
+            {
+                "ref_base_reg": "r4",
+                "cur_base_reg": "r4",
+                "base_reg": "r4",
+                "cur_disp": 0x4,
+                "ref_disp": 0x8,
+            },
+            {
+                "ref_base_reg": "r4",
+                "cur_base_reg": "r4",
+                "base_reg": "r4",
+                "cur_disp": 0x8,
+                "ref_disp": 0xC,
+            },
+            {
+                "ref_base_reg": "r3",
+                "cur_base_reg": "r3",
+                "base_reg": "r3",
+                "cur_disp": 0x40,
+                "ref_disp": 0x10,
+            },
+        ],
+        {"field0": 0x104, "field1": 0x108},
+    )
+
+    assert rows == []
+    assert skipped == [("fn", "ambiguous offset base candidates: r3, r4")]
+
+
 def test_resolve_rows_explicit_base_keeps_ref_side_base_offset():
     from src.cli.struct import _resolve_discrepancy_rows, _trace_registers_by_index
 
