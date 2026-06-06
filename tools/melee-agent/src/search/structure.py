@@ -2060,7 +2060,13 @@ def _structure_variant_needs_verification(variant: StructureVariant) -> bool:
         return True
     if variant.status != "unscored":
         return False
-    return variant.compile_status in (None, "not-run")
+    if variant.compile_status in (None, "not-run"):
+        return True
+    if variant.compile_status == "failed" and (
+        variant.unscored_reason or ""
+    ).startswith("candidate compile failed:"):
+        return False
+    return True
 
 
 class _AxisCommandFailed(RuntimeError):

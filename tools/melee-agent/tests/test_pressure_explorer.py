@@ -1754,6 +1754,46 @@ def test_source_lifetime_preserves_generic_lifetime_layout_fallback() -> None:
     }
 
 
+def test_source_lifetime_filter_limits_probes_and_family_summaries() -> None:
+    probes, summaries = generate_source_lifetime_probes(
+        SOURCE,
+        "fn_80000000",
+        max_probes=8,
+        operator_filter=("temp-introduction",),
+    )
+
+    assert probes
+    assert {probe.operator for probe in probes} == {"temp-introduction"}
+    assert summaries == []
+
+
+def test_source_lifetime_family_summaries_track_retained_candidates_per_operator() -> None:
+    source = textwrap.dedent("""\
+        s32 fn_80000000(CardState* state, s32 i)
+        {
+            s32 total = 0;
+            total += fn_803AC634(state, i);
+            if (total < (s32) fn_803AC634(state, i)) {
+                total = (s32) fn_803AC634(state, i);
+            }
+            return total;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=1,
+    )
+
+    retained_by_operator = {
+        operator: sum(1 for probe in probes if probe.operator == operator)
+        for operator in {row["operator"] for row in summaries}
+    }
+    for row in summaries:
+        assert row.get("retained_candidates", 0) == retained_by_operator[row["operator"]]
+
+
 def test_generate_frame_directed_probes_materializes_frame_levers() -> None:
     source = textwrap.dedent("""\
         void fn_80000000(HSD_CObj* cobj, int arg1, int arg2)
@@ -4456,3 +4496,32 @@ def test_lifetime_layout_cli_focuses_helper_inline_lifetime_probe_families(
     assert "repeated-helper-result-reuse" in {
         probe["operator"] for probe in payload["probes"]
     }
+
+    filtered = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "lifetime-layout",
+            "-f",
+            "fn_80000000",
+            "--pcdump",
+            str(baseline),
+            "--source-file",
+            str(source),
+            "--focus",
+            "helper-inline-lifetime",
+            "--operator",
+            "block-scope",
+            "--max-probes",
+            "4",
+            "--json",
+        ],
+    )
+
+    assert filtered.exit_code == 0, filtered.stdout + filtered.stderr
+    filtered_payload = json.loads(filtered.stdout)
+    assert {probe["operator"] for probe in filtered_payload["probes"]} == {
+        "block-scope"
+    }
+    assert filtered_payload["source_lifetime_families"] == []

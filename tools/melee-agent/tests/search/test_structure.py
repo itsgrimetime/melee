@@ -431,6 +431,33 @@ def test_structure_payload_treats_compile_failed_candidates_as_verified() -> Non
     assert payload["stop_condition"]["kind"] == "no-improvement"
 
 
+def test_structure_payload_keeps_baseline_failures_unverified() -> None:
+    for compile_status, reason in (
+        ("failed", "baseline compile failed: compiler unavailable"),
+        ("report-failed", "baseline report failed: report unavailable"),
+        ("report-failed", "candidate report failed: report unavailable"),
+    ):
+        payload = structure_payload(
+            function="fn_80000000",
+            source="src/melee/demo.c",
+            generated_source_dir="/tmp/structure",
+            baseline_percent=None,
+            axes=[],
+            variants=[
+                StructureVariant(
+                    axis="source-lifetime",
+                    operator="temp-introduction",
+                    label="verification-failed",
+                    status="unscored",
+                    compile_status=compile_status,
+                    unscored_reason=reason,
+                )
+            ],
+        )
+
+        assert payload["stop_condition"]["kind"] == "candidates-generated"
+
+
 def test_run_structure_search_applies_fake_scores_and_ranks_variants(
     tmp_path: Path,
 ) -> None:

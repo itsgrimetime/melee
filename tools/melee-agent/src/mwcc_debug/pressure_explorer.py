@@ -563,10 +563,16 @@ def generate_source_lifetime_probes(
     function: str,
     *,
     max_probes: int = 12,
+    operator_filter: tuple[str, ...] | list[str] | set[str] | None = None,
 ) -> tuple[list[LifetimeLayoutProbe], list[dict]]:
     max_probes = max(0, int(max_probes))
     if max_probes == 0:
         return [], []
+    selected_operators = (
+        {operator for operator in operator_filter}
+        if operator_filter is not None
+        else None
+    )
     targeted_budget = max(1, (max_probes + 1) // 2)
     targeted_generators = (
         ("for-condition-field-reload", _probe_for_condition_field_reload),
@@ -577,25 +583,43 @@ def generate_source_lifetime_probes(
     targeted: list[LifetimeLayoutProbe] = []
     summaries: list[dict] = []
     for operator, generator in targeted_generators:
+        if selected_operators is not None and operator not in selected_operators:
+            continue
         candidates, summary = generator(source_text, function)
         summaries.append(summary)
         for probe in candidates:
             if len(targeted) < targeted_budget:
                 _append_probe(targeted, probe)
             else:
-                summary["retained_candidates"] = targeted_budget
                 break
-    generic = generate_lifetime_layout_probes(
-        source_text,
-        function,
-        max_probes=max_probes,
-        operator_filter=SOURCE_LIFETIME_GENERIC_OPERATORS,
+    generic_operator_filter = (
+        SOURCE_LIFETIME_GENERIC_OPERATORS
+        if selected_operators is None
+        else tuple(
+            operator
+            for operator in SOURCE_LIFETIME_GENERIC_OPERATORS
+            if operator in selected_operators
+        )
+    )
+    generic = (
+        generate_lifetime_layout_probes(
+            source_text,
+            function,
+            max_probes=max_probes,
+            operator_filter=generic_operator_filter,
+        )
+        if generic_operator_filter
+        else []
     )
     probes: list[LifetimeLayoutProbe] = []
     for probe in [*targeted, *generic]:
         _append_probe(probes, probe)
         if len(probes) >= max_probes:
             break
+    for summary in summaries:
+        summary["retained_candidates"] = sum(
+            1 for probe in probes if probe.operator == summary["operator"]
+        )
     return probes, summaries
 
 

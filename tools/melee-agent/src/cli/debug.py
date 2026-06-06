@@ -22532,7 +22532,8 @@ def mutate_lifetime_layout_cmd(
             "--operator",
             help=(
                 "Only generate/compile probes from this operator family. "
-                "Repeat or pass comma-separated names; combines with --focus."
+                "Repeat or pass comma-separated names; combines with most "
+                "focuses and narrows --focus helper-inline-lifetime."
             ),
         ),
     ] = None,
@@ -22601,10 +22602,15 @@ def mutate_lifetime_layout_cmd(
 
     source_lifetime_families: list[dict] | None = None
     if source_text and focus == "helper-inline-lifetime":
+        operator_filter = _resolve_lifetime_layout_operator_filter(
+            focus=None,
+            operators=operators,
+        ) or operator_filter
         probes, source_lifetime_families = generate_source_lifetime_probes(
             source_text,
             function,
             max_probes=max_probes,
+            operator_filter=operator_filter,
         )
     elif source_text:
         probes = generate_lifetime_layout_probes(
