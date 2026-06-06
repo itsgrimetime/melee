@@ -1226,7 +1226,7 @@ def _helper_reuse_temp_spec(
     if body_expr is None or not _helper_expression_is_pure(body_expr):
         return None
     return_type = _function_return_type(source, callee)
-    if return_type not in _REUSE_SCALAR_RETURN_TYPES:
+    if _canonical_scalar_return_type(return_type) not in _REUSE_SCALAR_RETURN_TYPES:
         return None
     return return_type, call_text
 
@@ -1240,7 +1240,7 @@ def _helper_callee_supported_for_dematerialize(callee: str, source: str) -> bool
     if body_expr is None or not _helper_expression_is_pure(body_expr):
         return False
     return_type = _function_return_type(source, callee)
-    return return_type in _DEMATERIALIZE_SCALAR_RETURN_TYPES
+    return _canonical_scalar_return_type(return_type) in _DEMATERIALIZE_SCALAR_RETURN_TYPES
 
 
 def _function_return_type(source: str, function: str) -> str | None:
@@ -1264,6 +1264,19 @@ def _function_return_type(source: str, function: str) -> str | None:
     if not signature:
         return None
     return _normalize_type_spelling(signature)
+
+
+def _canonical_scalar_return_type(type_name: str | None) -> str | None:
+    if type_name is None:
+        return None
+    normalized = re.sub(r"\s+", " ", type_name.strip())
+    canonical_map = {
+        "unsigned int": "unsigned",
+        "signed int": "int",
+        "long int": "long",
+        "short int": "short",
+    }
+    return canonical_map.get(normalized, normalized)
 
 
 def _next_unique_repeated_helper_temp_name(source: str, function: str) -> str:

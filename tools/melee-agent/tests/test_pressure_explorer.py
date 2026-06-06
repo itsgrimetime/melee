@@ -335,6 +335,38 @@ def test_source_lifetime_repeated_helper_result_reuse_supports_same_tu_unsigned_
     assert "total = ll_probe_helper_result_0;" in probe.source_text
 
 
+def test_source_lifetime_repeated_helper_result_reuse_supports_unsigned_int_helper() -> None:
+    source = textwrap.dedent("""\
+        static inline unsigned int helper(unsigned int x)
+        {
+            return x;
+        }
+
+        unsigned int fn_80000000(unsigned int x)
+        {
+            unsigned int total = 0;
+            total += helper(x);
+            total = helper(x);
+            return total;
+        }
+    """)
+
+    probes, _summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    probe = next(
+        probe
+        for probe in probes
+        if probe.operator == "repeated-helper-result-reuse"
+    )
+    assert "unsigned int ll_probe_helper_result_0 = helper(x);" in probe.source_text
+    assert "total += ll_probe_helper_result_0;" in probe.source_text
+    assert "total = ll_probe_helper_result_0;" in probe.source_text
+
+
 def test_source_lifetime_repeated_helper_result_reuse_rejects_same_tu_pointer_helper() -> None:
     source = textwrap.dedent("""\
         static inline Node* helper(Node** table, s32 i)
@@ -499,6 +531,45 @@ def test_source_lifetime_helper_result_dematerialize_rejects_same_tu_pointer_hel
         "helper-return-type-unsafe",
         "callee-not-supported-for-dematerialize",
     }
+
+
+def test_source_lifetime_helper_result_dematerialize_supports_unsigned_int_helper() -> None:
+    source = textwrap.dedent("""\
+        static inline unsigned int helper(unsigned int x)
+        {
+            return x;
+        }
+
+        unsigned int fn_80000000(unsigned int x)
+        {
+            unsigned int result;
+            result = helper(x);
+            sink(result);
+            return result;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    operators = {probe.operator for probe in probes}
+    if "helper-result-dematerialize" in operators:
+        probe = next(
+            probe
+            for probe in probes
+            if probe.operator == "helper-result-dematerialize"
+        )
+        assert "sink(helper(x));" in probe.source_text
+        assert "return helper(x);" in probe.source_text
+    else:
+        blocked = [
+            row for row in summaries if row["operator"] == "helper-result-dematerialize"
+        ]
+        assert blocked
+        assert blocked[0]["blocker"] != "helper-return-type-unsafe"
 
 
 def test_source_lifetime_simple_helper_inline_body_probe() -> None:
