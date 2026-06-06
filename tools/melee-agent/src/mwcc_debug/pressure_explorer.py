@@ -761,9 +761,12 @@ def _probe_repeated_helper_result_reuse(
             _brace_scope_stack_for_offset(source_text, function, call.start)
             for call in occurrences
         ]
-        if any(
-            scope is None or scope != first_scope
-            for scope in occurrence_scopes
+        if not _repeated_helper_occurrences_share_safe_region(
+            source_text,
+            function,
+            occurrences,
+            occurrence_scopes,
+            first_scope,
         ):
             first_blocker = first_blocker or (
                 "cross-statement-region",
@@ -1178,9 +1181,28 @@ def _simple_helper_expression_body(source: str, function: str) -> str | None:
         return None
     masked = _mask_c_non_code_text(body)
     match = re.fullmatch(r"\s*return\s+(?P<expr>.+?);\s*", masked, re.DOTALL)
-    if match is None:
+    if match is not None:
+        return body[match.start("expr"):match.end("expr")].strip()
+    local_match = re.fullmatch(
+        r"\s*"
+        r"(?:(?:const\s+|volatile\s+)*"
+        r"(?:struct\s+[A-Za-z_]\w*|[A-Za-z_]\w+)(?:\s*\*)*"
+        r"\s+(?P<decl_name>[A-Za-z_]\w*)\s*;\s*)?"
+        r"(?P<assign_name>[A-Za-z_]\w*)\s*=\s*(?P<expr>.+?);\s*"
+        r"return\s+(?P<return_name>[A-Za-z_]\w*)\s*;\s*",
+        masked,
+        re.DOTALL,
+    )
+    if local_match is None:
         return None
-    return body[match.start("expr"):match.end("expr")].strip()
+    decl_name = local_match.group("decl_name")
+    assign_name = local_match.group("assign_name")
+    return_name = local_match.group("return_name")
+    if assign_name != return_name:
+        return None
+    if decl_name is not None and decl_name != assign_name:
+        return None
+    return body[local_match.start("expr"):local_match.end("expr")].strip()
 
 
 def _simple_helper_parameter_names(source: str, function: str) -> tuple[str, ...]:
@@ -1391,6 +1413,13 @@ def _line_has_supported_reuse_anchor_shape(
     )
     if assign_match is not None:
         return assign_match.group("rhs").strip() == occurrence_text
+    if _if_condition_occurrence_compare_var(
+        source,
+        line_start,
+        call_start=call_start,
+        call_end=call_end,
+    ) is not None:
+        return True
     call_stmt = re.match(r"^(?P<callee>[A-Za-z_]\w*)\s*\(.*\);\s*$", stripped)
     if call_stmt is not None and call_stmt.group("callee") not in {
         "if",
@@ -1450,6 +1479,153 @@ def _repeated_helper_occurrence_blocker(
     return None
 
 
+def _repeated_helper_occurrences_share_safe_region(
+    source: str,
+    function: str,
+    occurrences: list[_SimpleHelperCall],
+    occurrence_scopes: list[tuple[int, ...] | None],
+    first_scope: tuple[int, ...],
+) -> bool:
+    if all(scope is not None and scope == first_scope for scope in occurrence_scopes):
+        return True
+    return _occurrences_match_seed_if_compare_update(
+        source,
+        function,
+        occurrences,
+        occurrence_scopes,
+        first_scope,
+    )
+
+
+def _occurrences_match_seed_if_compare_update(
+    source: str,
+    function: str,
+    occurrences: list[_SimpleHelperCall],
+    occurrence_scopes: list[tuple[int, ...] | None],
+    first_scope: tuple[int, ...],
+) -> bool:
+    if len(occurrences) != 2 or len(occurrence_scopes) != 2:
+        return False
+    first, second = occurrences
+    compare_var = _if_condition_occurrence_compare_var(
+        source,
+        _line_start(source, first.start),
+        call_start=first.start,
+        call_end=first.end,
+    )
+    if compare_var is None:
+        return False
+    line_start = _line_start(source, first.start)
+    line_end = _line_end(source, first.end)
+    open_paren = source.find("(", line_start, line_end)
+    if open_paren < 0:
+        return False
+    close_paren = _find_matching_paren(source, open_paren)
+    if close_paren is None:
+        return False
+    open_brace = source.find("{", close_paren, second.start + 1)
+    if open_brace < 0:
+        return False
+    close_brace = _find_matching_brace(source, open_brace)
+    if close_brace is None or second.start <= open_brace or second.end >= close_brace:
+        return False
+    second_scope = occurrence_scopes[1]
+    if second_scope is None or second_scope != (*first_scope, open_brace):
+        return False
+    occurrence_start, occurrence_end = _cast_prefixed_call_range(
+        source,
+        second.start,
+        second.end,
+    )
+    occurrence_text = source[occurrence_start:occurrence_end].strip()
+    line = source[_line_start(source, second.start):_line_end(source, second.end)]
+    assign_match = re.match(
+        rf"^\s*{re.escape(compare_var)}\s*=\s*(?P<rhs>.+);\s*$",
+        line,
+    )
+    if assign_match is None:
+        return False
+    return assign_match.group("rhs").strip() == occurrence_text
+
+
+def _if_condition_occurrence_compare_var(
+    source: str,
+    line_start: int,
+    *,
+    call_start: int,
+    call_end: int,
+) -> str | None:
+    line_end = source.find("\n", line_start)
+    if line_end < 0:
+        line_end = len(source)
+    line = source[line_start:line_end]
+    if re.match(r"^\s*if\s*\(", line) is None:
+        return None
+    open_paren = source.find("(", line_start, line_end)
+    if open_paren < 0:
+        return None
+    close_paren = _find_matching_paren(source, open_paren)
+    if close_paren is None or close_paren > line_end:
+        return None
+    if "{" not in source[close_paren + 1:line_end]:
+        return None
+    condition = source[open_paren + 1:close_paren]
+    if _condition_has_unsafe_control_ops(condition):
+        return None
+    occurrence_start, occurrence_end = _cast_prefixed_call_range(
+        source,
+        call_start,
+        call_end,
+    )
+    occurrence_text = source[occurrence_start:occurrence_end].strip()
+    comparison = _top_level_comparison_parts(condition)
+    if comparison is None:
+        return None
+    left, _operator, right = comparison
+    left = left.strip()
+    right = right.strip()
+    if left == occurrence_text and re.fullmatch(r"[A-Za-z_]\w*", right):
+        return right
+    if right == occurrence_text and re.fullmatch(r"[A-Za-z_]\w*", left):
+        return left
+    return None
+
+
+def _condition_has_unsafe_control_ops(condition: str) -> bool:
+    masked = _mask_c_non_code_text(condition)
+    if "?" in masked:
+        return True
+    if _contains_comma_operator(masked):
+        return True
+    return any(token in masked for token in ("&&", "||"))
+
+
+def _top_level_comparison_parts(condition: str) -> tuple[str, str, str] | None:
+    masked = _mask_c_non_code_text(condition)
+    depth = 0
+    idx = 0
+    while idx < len(masked):
+        char = masked[idx]
+        if char in "([{":
+            depth += 1
+            idx += 1
+            continue
+        if char in ")]}":
+            depth = max(0, depth - 1)
+            idx += 1
+            continue
+        if depth == 0:
+            for operator in ("<=", ">=", "==", "!=", "<", ">"):
+                if masked.startswith(operator, idx):
+                    return (
+                        condition[:idx],
+                        operator,
+                        condition[idx + len(operator):],
+                    )
+        idx += 1
+    return None
+
+
 def _helper_arg_mutation_blocker(
     source: str,
     args_text: str,
@@ -1461,13 +1637,19 @@ def _helper_arg_mutation_blocker(
         return None
     identifiers = _helper_arg_identifier_names(args_text)
     if not identifiers:
-        return None
+        identifiers = set()
     region = _mask_c_non_code_text(source[region_start:region_end])
     for name in sorted(identifiers):
         if _identifier_mutated_in_region(region, name):
             return (
                 "helper-arg-mutation-between-uses",
                 f"helper argument identifier `{name}` is mutated between rewritten uses",
+            )
+    for part in _helper_arg_complex_lvalues(args_text):
+        if _complex_lvalue_mutated_in_region(region, part):
+            return (
+                "helper-arg-mutation-between-uses",
+                f"helper argument expression `{part}` is mutated between rewritten uses",
             )
     return None
 
@@ -1489,6 +1671,48 @@ def _helper_arg_identifier_names(args_text: str) -> set[str]:
                 continue
             identifiers.add(name)
     return identifiers
+
+
+def _helper_arg_complex_lvalues(args_text: str) -> tuple[str, ...]:
+    parts = _split_top_level_args(args_text)
+    if not parts:
+        stripped = args_text.strip()
+        parts = (stripped,) if stripped else ()
+    return tuple(
+        part.strip()
+        for part in parts
+        if re.search(r"[A-Za-z_]\w*\s*(?:->|\.)", _mask_c_non_code_text(part))
+        or "[" in _mask_c_non_code_text(part)
+    )
+
+
+def _complex_lvalue_mutated_in_region(region: str, expr: str) -> bool:
+    expr_pattern = _whitespace_tolerant_expr_pattern(expr)
+    if not expr_pattern:
+        return False
+    write_suffix = r"\s*(?:\+\+|--|(?:[\+\-\*/%&|^]|<<|>>)?=)"
+    return (
+        re.search(expr_pattern + write_suffix, region) is not None
+        or re.search(r"(?:\+\+|--)\s*" + expr_pattern, region) is not None
+        or re.search(r"&\s*" + expr_pattern, region) is not None
+    )
+
+
+def _whitespace_tolerant_expr_pattern(expr: str) -> str:
+    masked = _mask_c_non_code_text(expr).strip()
+    if not masked:
+        return ""
+    pieces: list[str] = []
+    idx = 0
+    while idx < len(masked):
+        if masked[idx].isspace():
+            while idx < len(masked) and masked[idx].isspace():
+                idx += 1
+            pieces.append(r"\s*")
+            continue
+        pieces.append(re.escape(masked[idx]))
+        idx += 1
+    return "".join(pieces)
 
 
 def _identifier_mutated_in_region(region: str, name: str) -> bool:

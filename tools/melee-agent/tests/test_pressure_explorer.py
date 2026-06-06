@@ -234,6 +234,37 @@ def test_source_lifetime_repeated_helper_result_reuse_probe() -> None:
     assert probe.provenance["callee"] == "fn_803AC634"
 
 
+def test_source_lifetime_repeated_helper_result_reuse_supports_seed_style_compare_update() -> None:
+    source = textwrap.dedent("""\
+        s32 fn_803AC7DC(CardState* state, s32 i)
+        {
+            s32 extra = 0;
+            if (extra < (s32) fn_803AC634(state, i)) {
+                extra = (s32) fn_803AC634(state, i);
+            }
+            return extra;
+        }
+    """)
+
+    probes, _summaries = generate_source_lifetime_probes(
+        source,
+        "fn_803AC7DC",
+        max_probes=8,
+    )
+
+    probe = next(
+        probe
+        for probe in probes
+        if probe.operator == "repeated-helper-result-reuse"
+    )
+    assert "s32 ll_probe_helper_result_0 = (s32) fn_803AC634(state, i);" in (
+        probe.source_text
+    )
+    assert "if (extra < ll_probe_helper_result_0) {" in probe.source_text
+    assert "extra = ll_probe_helper_result_0;" in probe.source_text
+    assert probe.source_text.count("fn_803AC634(state, i)") == 1
+
+
 def test_source_lifetime_helper_result_dematerialize_probe() -> None:
     source = textwrap.dedent("""\
         s32 fn_80000000(CardState* state, s32 i)
@@ -527,6 +558,32 @@ def test_source_lifetime_repeated_helper_result_reuse_rejects_arg_identifier_mut
     assert blocked[0]["blocker"] == "helper-arg-mutation-between-uses"
 
 
+def test_source_lifetime_repeated_helper_result_reuse_rejects_member_arg_mutation() -> None:
+    source = textwrap.dedent("""\
+        s32 fn_80000000(CardState* state, s32 i)
+        {
+            s32 total = 0;
+            total += fn_803AC634(state->x4C[i], i);
+            state->x4C[i] = 0;
+            total = fn_803AC634(state->x4C[i], i);
+            return total;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "repeated-helper-result-reuse" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "repeated-helper-result-reuse"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] == "helper-arg-mutation-between-uses"
+
+
 def test_source_lifetime_simple_helper_inline_body_parenthesizes_non_atomic_actuals() -> None:
     source = textwrap.dedent("""\
         static inline s32 helper(s32 value)
@@ -577,6 +634,34 @@ def test_source_lifetime_simple_helper_inline_body_substitutes_args_simultaneous
     )
     assert "return b - a;" in probe.source_text
     assert "return a - a;" not in probe.source_text
+
+
+def test_source_lifetime_simple_helper_inline_body_supports_assign_then_return_local() -> None:
+    source = textwrap.dedent("""\
+        static inline s32 helper(s32 x)
+        {
+            s32 tmp;
+            tmp = x + 1;
+            return tmp;
+        }
+
+        s32 fn_80000000(s32 x)
+        {
+            return helper(x);
+        }
+    """)
+
+    probes, _summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    probe = next(
+        probe for probe in probes if probe.operator == "simple-helper-inline-body"
+    )
+    assert "return x + 1;" in probe.source_text
+    assert "return helper(x);" not in probe.source_text
 
 
 def test_source_lifetime_simple_helper_inline_body_wraps_embedded_expression() -> None:
@@ -833,6 +918,33 @@ def test_source_lifetime_repeated_helper_result_rejects_short_circuit_condition_
     assert blocked[0]["blocker"] == "unsupported-call-site-shape"
 
 
+def test_source_lifetime_repeated_helper_result_rejects_loop_condition_occurrence() -> None:
+    source = textwrap.dedent("""\
+        s32 fn_80000000(CardState* state, s32 i)
+        {
+            s32 extra = 0;
+            while (extra < (s32) fn_803AC634(state, i)) {
+                extra = (s32) fn_803AC634(state, i);
+                break;
+            }
+            return extra;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "repeated-helper-result-reuse" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "repeated-helper-result-reuse"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] == "unsupported-call-site-shape"
+
+
 def test_source_lifetime_repeated_helper_result_rejects_short_circuit_assignment_and_return() -> None:
     source = textwrap.dedent("""\
         s32 fn_80000000(CardState* state, s32 i, s32 flag)
@@ -937,6 +1049,32 @@ def test_source_lifetime_helper_result_dematerialize_rejects_arg_identifier_muta
             s32 result;
             result = fn_803AC634(state, i);
             i++;
+            sink(result);
+            return result;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "helper-result-dematerialize" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "helper-result-dematerialize"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] == "helper-arg-mutation-between-uses"
+
+
+def test_source_lifetime_helper_result_dematerialize_rejects_element_arg_mutation() -> None:
+    source = textwrap.dedent("""\
+        s32 fn_80000000(s32* arr, s32 i)
+        {
+            s32 result;
+            result = fn_803AC634(arr[i], i);
+            arr[i] = 0;
             sink(result);
             return result;
         }
