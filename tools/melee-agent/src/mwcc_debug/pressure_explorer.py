@@ -738,6 +738,13 @@ def _probe_repeated_helper_result_reuse(
                 f"helper `{first.callee}` is not known read-only",
             )
             continue
+        occurrence_blocker = _repeated_helper_occurrence_blocker(
+            source_text,
+            occurrences,
+        )
+        if occurrence_blocker is not None:
+            first_blocker = first_blocker or occurrence_blocker
+            continue
         first_scope = _brace_scope_stack_for_offset(source_text, function, first.start)
         if first_scope is None:
             continue
@@ -746,7 +753,7 @@ def _probe_repeated_helper_result_reuse(
             for call in occurrences
         ]
         if any(
-            scope is None or not _brace_scope_contains(first_scope, scope)
+            scope is None or scope != first_scope
             for scope in occurrence_scopes
         ):
             first_blocker = first_blocker or (
@@ -768,13 +775,6 @@ def _probe_repeated_helper_result_reuse(
             )
             continue
         line_start = _line_start(source_text, first.start)
-        occurrence_blocker = _repeated_helper_occurrence_blocker(
-            source_text,
-            occurrences,
-        )
-        if occurrence_blocker is not None:
-            first_blocker = first_blocker or occurrence_blocker
-            continue
         affected_end = _line_end(source_text, occurrences[-1].end)
         if _region_has_preprocessor_directive(source_text[line_start:affected_end]):
             first_blocker = first_blocker or (
@@ -893,7 +893,7 @@ def _probe_helper_result_dematerialize(
             rewritten = _rewrite_helper_result_use_line(
                 line.rstrip("\n"),
                 local,
-                call.call_text,
+                expr,
             )
             if rewritten is None:
                 unsupported = True
@@ -1439,10 +1439,6 @@ def _brace_scope_stack_for_offset(
         elif char == "}" and stack:
             stack.pop()
     return tuple(stack)
-
-
-def _brace_scope_contains(parent: tuple[int, ...], child: tuple[int, ...]) -> bool:
-    return len(child) >= len(parent) and child[:len(parent)] == parent
 
 
 def _brace_scope_has_prior_executable_statement(

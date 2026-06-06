@@ -259,6 +259,40 @@ def test_source_lifetime_helper_result_dematerialize_probe() -> None:
     assert "return fn_803AC634(state, i);" in probe.source_text
 
 
+def test_source_lifetime_helper_result_dematerialize_preserves_assignment_cast() -> None:
+    source = textwrap.dedent("""\
+        s32 fn_80000000(CardState* state, s32 i)
+        {
+            s32 result;
+            result = (s32) fn_803AC634(state, i);
+            sink(result);
+            return result;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    operators = {probe.operator for probe in probes}
+    if "helper-result-dematerialize" in operators:
+        probe = next(
+            probe
+            for probe in probes
+            if probe.operator == "helper-result-dematerialize"
+        )
+        assert "sink((s32) fn_803AC634(state, i));" in probe.source_text
+        assert "return (s32) fn_803AC634(state, i);" in probe.source_text
+    else:
+        blocked = [
+            row for row in summaries if row["operator"] == "helper-result-dematerialize"
+        ]
+        assert blocked
+        assert blocked[0]["blocker"] is not None
+
+
 def test_source_lifetime_simple_helper_inline_body_probe() -> None:
     source = textwrap.dedent("""\
         static inline s32 helper(CardState* state, s32 i)
@@ -317,6 +351,59 @@ def test_source_lifetime_repeated_helper_result_reuse_stays_within_safe_region()
                 sink(fn_803AC634(state, i));
             } else {
                 sink(fn_803AC634(state, i));
+            }
+            return 0;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "repeated-helper-result-reuse" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "repeated-helper-result-reuse"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] == "cross-statement-region"
+
+
+def test_source_lifetime_repeated_helper_result_reuse_rejects_parent_and_nested_if_occurrences() -> None:
+    source = textwrap.dedent("""\
+        s32 fn_80000000(CardState* state, s32 i, s32 flag)
+        {
+            sink(fn_803AC634(state, i));
+            if (flag) {
+                sink(fn_803AC634(state, i));
+            }
+            return 0;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "repeated-helper-result-reuse" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "repeated-helper-result-reuse"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] == "cross-statement-region"
+
+
+def test_source_lifetime_repeated_helper_result_reuse_rejects_parent_and_nested_while_occurrences() -> None:
+    source = textwrap.dedent("""\
+        s32 fn_80000000(CardState* state, s32 i, s32 flag)
+        {
+            sink(fn_803AC634(state, i));
+            while (flag) {
+                sink(fn_803AC634(state, i));
+                flag = 0;
             }
             return 0;
         }
