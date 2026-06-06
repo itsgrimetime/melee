@@ -771,9 +771,46 @@ def _asm_candidate(
     )
 
 
+def _matching_brace_index(source_text: str, open_index: int) -> int | None:
+    depth = 0
+    for index in range(open_index, len(source_text)):
+        char = source_text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
+def _function_source_scope(
+    source_text: str | None,
+    function: str,
+) -> tuple[str | None, int]:
+    if not source_text:
+        return None, 1
+    pattern = re.compile(rf"\b{re.escape(function)}\s*\(")
+    for match in pattern.finditer(source_text):
+        brace = source_text.find("{", match.end())
+        if brace < 0:
+            continue
+        if ";" in source_text[match.end():brace]:
+            continue
+        end = _matching_brace_index(source_text, brace)
+        if end is None:
+            continue
+        body_start = brace + 1
+        line_base = source_text.count("\n", 0, body_start) + 1
+        return source_text[body_start:end], line_base
+    return None, 1
+
+
 def _source_hint(
     source_text: str | None,
     pattern: re.Pattern[str],
+    *,
+    line_base: int = 1,
 ) -> tuple[str | None, int | None, int | None]:
     if not source_text:
         return None, None, None
@@ -781,12 +818,13 @@ def _source_hint(
     if not match:
         return None, None, None
     line, col = _line_col(source_text, match.start())
-    return re.sub(r"\s+", "", match.group(0)), line, col
+    return re.sub(r"\s+", "", match.group(0)), line + line_base - 1, col
 
 
 def _source_reshapes_for_addi_pair(
     result: AsmWindowResult,
     *,
+    function: str,
     source_text: str | None,
     source_file: str | None,
 ) -> tuple[ScheduleSourceReshape, ...]:
@@ -804,17 +842,21 @@ def _source_reshapes_for_addi_pair(
         cand for cand in result.candidates
         if cand.instruction_class == "counter-increment"
     )
+    scoped_source, line_base = _function_source_scope(source_text, function)
     local_expr, local_line, local_col = _source_hint(
-        source_text,
+        scoped_source,
         re.compile(r"&\s*[A-Za-z_][A-Za-z0-9_]*"),
+        line_base=line_base,
     )
     counter_expr, counter_line, counter_col = _source_hint(
-        source_text,
+        scoped_source,
         re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\s*(?:\+\+|\+=\s*1)"),
+        line_base=line_base,
     )
     vector_expr, vector_line, vector_col = _source_hint(
-        source_text,
+        scoped_source,
         re.compile(r"\bVec3\s+[A-Za-z_][A-Za-z0-9_]*\b"),
+        line_base=line_base,
     )
     local_observed = f"{local.opcode} {local.operands}"
     counter_observed = f"{counter.opcode} {counter.operands}"
@@ -908,6 +950,7 @@ def _decision_from_asm_window(
     decision: ScheduleDecision,
     result: AsmWindowResult,
     *,
+    function: str,
     source_text: str | None,
     source_file: str | None,
 ) -> ScheduleDecision:
@@ -927,6 +970,7 @@ def _decision_from_asm_window(
         source_shape_verdict=result.source_shape_verdict,
         source_reshapes=_source_reshapes_for_addi_pair(
             result,
+            function=function,
             source_text=source_text,
             source_file=source_file,
         ),
@@ -964,6 +1008,7 @@ def _attach_asm_windows(
         decisions.append(_decision_from_asm_window(
             decision,
             result,
+            function=report.function,
             source_text=source_text,
             source_file=source_file,
         ))

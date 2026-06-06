@@ -147,6 +147,57 @@ def test_explain_schedule_records_straddled_addi_code_offset_window() -> None:
     assert "delay-local-address-materialization" in out
 
 
+def test_addi_source_reshapes_are_limited_to_requested_function() -> None:
+    target_asm = [
+        "<it_802BCB88>:",
+        "+1fc: 3b 9c 00 01 \taddi    r28,r28,1",
+        "+200: c0 01 00 6c \tlfs     f0,108(r1)",
+        "+204: 38 61 00 48 \taddi    r3,r1,72",
+    ]
+    current_asm = [
+        "<it_802BCB88>:",
+        "+1fc: 38 61 00 48 \taddi    r3,r1,72",
+        "+200: c0 01 00 6c \tlfs     f0,108(r1)",
+        "+204: 3b 9c 00 01 \taddi    r28,r28,1",
+    ]
+    source = (
+        "void it_802BAF2C(void) {\n"
+        "    Vec3 wrong;\n"
+        "    i++;\n"
+        "    use(&wrong);\n"
+        "}\n"
+        "\n"
+        "void it_802BCB88(void) {\n"
+        "    int count;\n"
+        "    Vec3 dir;\n"
+        "    count++;\n"
+        "    lbVector_Normalize(&dir);\n"
+        "}\n"
+    )
+
+    report = explain_schedule(
+        _pcdump_for(
+            "    addi    r3,r1,72\n"
+            "    lfs     f0,108(r1)\n"
+            "    addi    r28,r28,1\n"
+        ),
+        function="it_802BCB88",
+        force_schedule="addi:0x204>0x1fc",
+        target_asm=target_asm,
+        current_asm=current_asm,
+        source_text=source,
+        source_file="src/melee/it/items/itseakchain.c",
+    )
+
+    reshapes = {reshape.kind: reshape for reshape in report.decisions[0].source_reshapes}
+    assert reshapes["delay-local-address-materialization"].source_line == 11
+    assert reshapes["delay-local-address-materialization"].target_expression == "&dir"
+    assert reshapes["anchor-counter-increment"].source_line == 10
+    assert reshapes["anchor-counter-increment"].target_expression == "count++"
+    assert reshapes["split-local-vector-lifetime"].source_line == 9
+    assert reshapes["split-local-vector-lifetime"].target_expression == "Vec3dir"
+
+
 def test_checkdiff_json_does_not_reinterpret_missing_load_operand_rules() -> None:
     target_asm = [
         "<fn_80000000>:",
