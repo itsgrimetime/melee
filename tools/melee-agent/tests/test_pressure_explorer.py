@@ -4409,3 +4409,50 @@ def test_lifetime_layout_cli_focuses_b4_tree_loop_probe_families(
     operators = {probe["operator"] for probe in payload["probes"]}
     assert operators == {"pointer-walk-loop"}
     assert len(payload["probes"]) == 3
+
+
+def test_lifetime_layout_cli_focuses_helper_inline_lifetime_probe_families(
+    tmp_path: pathlib.Path,
+) -> None:
+    baseline = tmp_path / "baseline.txt"
+    source = tmp_path / "source.c"
+    baseline.write_text(BASELINE)
+    source.write_text(textwrap.dedent("""\
+        s32 fn_80000000(CardState* state, s32 i)
+        {
+            s32 total = 0;
+            total += fn_803AC634(state, i);
+            if (total < (s32) fn_803AC634(state, i)) {
+                total = (s32) fn_803AC634(state, i);
+            }
+            return total;
+        }
+    """))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "lifetime-layout",
+            "-f",
+            "fn_80000000",
+            "--pcdump",
+            str(baseline),
+            "--source-file",
+            str(source),
+            "--focus",
+            "helper-inline-lifetime",
+            "--max-probes",
+            "4",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["focus"] == "helper-inline-lifetime"
+    assert "source_lifetime_families" in payload
+    assert "repeated-helper-result-reuse" in {
+        probe["operator"] for probe in payload["probes"]
+    }

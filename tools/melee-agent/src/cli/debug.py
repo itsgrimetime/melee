@@ -56,6 +56,7 @@ from ..mwcc_debug.patterns import (
     PATTERNS,
     list_patterns,
 )
+from ..mwcc_debug.pressure_explorer import HELPER_INLINE_LIFETIME_OPERATORS
 from ..mwcc_debug.source_patch import (
     explain_decl_reorder_skip,
     extract_function,
@@ -21131,6 +21132,7 @@ _LIFETIME_LAYOUT_FOCUSES: dict[str, tuple[str, ...]] = {
         "pointer-base-call-loop",
         "pointer-walk-loop",
     ),
+    "helper-inline-lifetime": HELPER_INLINE_LIFETIME_OPERATORS,
 }
 
 
@@ -22519,8 +22521,8 @@ def mutate_lifetime_layout_cmd(
             "--focus",
             help=(
                 "Named probe-family bundle. `b4-tree-loop` focuses the "
-                "x594_b4 tree loop problem space: pointer/indexed tree loops "
-                "plus loop-counter declaration/type/scope probes."
+                "x594_b4 tree loop problem space; `helper-inline-lifetime` "
+                "focuses helper-inline/source-lifetime register cascades."
             ),
         ),
     ] = None,
@@ -22551,6 +22553,7 @@ def mutate_lifetime_layout_cmd(
     from ..mwcc_debug.pressure_explorer import (
         compare_pressure_signatures,
         generate_lifetime_layout_probes,
+        generate_source_lifetime_probes,
         pressure_signature_from_pcdump,
         render_pressure_delta,
     )
@@ -22596,17 +22599,23 @@ def mutate_lifetime_layout_cmd(
                 source_text = src_path.read_text()
                 source_path_for_probes = src_path
 
-    probes = (
-        generate_lifetime_layout_probes(
+    source_lifetime_families: list[dict] | None = None
+    if source_text and focus == "helper-inline-lifetime":
+        probes, source_lifetime_families = generate_source_lifetime_probes(
+            source_text,
+            function,
+            max_probes=max_probes,
+        )
+    elif source_text:
+        probes = generate_lifetime_layout_probes(
             source_text,
             function,
             frame_reservation_bytes=frame_reservation_bytes,
             max_probes=max_probes,
             operator_filter=operator_filter,
         )
-        if source_text
-        else []
-    )
+    else:
+        probes = []
 
     variants: list[dict] = []
     generated_source_dir: Path | None = None
@@ -22861,6 +22870,8 @@ def mutate_lifetime_layout_cmd(
             payload["focus"] = focus
         if operator_filter is not None:
             payload["operator_filter"] = list(operator_filter)
+        if source_lifetime_families is not None:
+            payload["source_lifetime_families"] = source_lifetime_families
         if generated_source_dir is not None:
             payload["generated_source_dir"] = str(generated_source_dir)
         print(json.dumps(payload, indent=2))
