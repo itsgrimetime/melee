@@ -768,10 +768,19 @@ def _probe_repeated_helper_result_reuse(
             )
             continue
         line_start = _line_start(source_text, first.start)
-        if _line_is_case_or_default_label(source_text, line_start):
+        if (
+            _line_is_case_or_default_label(source_text, line_start)
+            or _line_follows_case_or_default_label(source_text, line_start)
+        ):
             first_blocker = first_blocker or (
                 "case-arm-declaration-unsafe",
                 "helper result declaration would land directly under a case label",
+            )
+            continue
+        if not _line_has_supported_reuse_anchor_shape(source_text, line_start):
+            first_blocker = first_blocker or (
+                "unsupported-call-site-shape",
+                "repeated helper reuse anchor is not a supported simple statement",
             )
             continue
         affected_end = _line_end(source_text, occurrences[-1].end)
@@ -1002,6 +1011,8 @@ def _probe_simple_helper_inline_body(
                 rendered_arg,
                 replacement,
             )
+        if _inline_helper_call_requires_outer_parens(source_text, call.start, call.end):
+            replacement = f"({replacement})"
         probe = LifetimeLayoutProbe(
             label="simple-helper-inline-body-0",
             operator=operator,
@@ -1072,6 +1083,8 @@ def _helper_expression_fragment_is_simple(expr: str) -> bool:
     if any(token in masked for token in ("++", "--", "?", "#")):
         return False
     if re.search(r"(?<![=!<>])=(?!=)", masked):
+        return False
+    if _contains_comma_operator(masked):
         return False
     if "&" in masked:
         return False
@@ -1303,6 +1316,70 @@ def _line_is_case_or_default_label(source: str, line_start: int) -> bool:
         line_end = len(source)
     stripped = source[line_start:line_end].strip()
     return stripped.startswith("case ") or stripped == "default:"
+
+
+def _line_follows_case_or_default_label(source: str, line_start: int) -> bool:
+    cursor = max(0, line_start - 1)
+    while cursor >= 0:
+        prev_start = source.rfind("\n", 0, cursor) + 1
+        prev_end = source.find("\n", prev_start)
+        if prev_end < 0:
+            prev_end = len(source)
+        stripped = source[prev_start:prev_end].strip()
+        if not stripped:
+            if prev_start == 0:
+                return False
+            cursor = prev_start - 1
+            continue
+        return stripped.startswith("case ") or stripped == "default:"
+    return False
+
+
+def _line_has_supported_reuse_anchor_shape(source: str, line_start: int) -> bool:
+    line_end = source.find("\n", line_start)
+    if line_end < 0:
+        line_end = len(source)
+    stripped = source[line_start:line_end].strip()
+    if not stripped:
+        return False
+    if re.match(r"^return\b.*;\s*$", stripped):
+        return True
+    if re.match(r"^[A-Za-z_]\w*\s*[\+\-\*/%&|^]?=\s*.*;\s*$", stripped):
+        return True
+    if re.match(r"^[A-Za-z_]\w*\s*\(.*\);\s*$", stripped):
+        return True
+    return False
+
+
+def _inline_helper_call_requires_outer_parens(
+    source: str,
+    call_start: int,
+    call_end: int,
+) -> bool:
+    line_start = _line_start(source, call_start)
+    line_end = source.find("\n", call_end)
+    if line_end < 0:
+        line_end = len(source)
+    line = source[line_start:line_end].strip()
+    call_text = source[call_start:call_end]
+    if re.fullmatch(rf"return\s+{re.escape(call_text)}\s*;", line):
+        return False
+    if re.fullmatch(
+        rf"[A-Za-z_]\w*\s*[\+\-\*/%&|^]?=\s*{re.escape(call_text)}\s*;",
+        line,
+    ):
+        return False
+    return True
+
+
+def _contains_comma_operator(expr: str) -> bool:
+    stripped = expr.strip()
+    while stripped.startswith("("):
+        close = _find_matching_paren(stripped, 0)
+        if close != len(stripped) - 1:
+            break
+        stripped = stripped[1:-1].strip()
+    return len(_split_top_level_delimited(stripped, ",")) > 1
 
 
 def _brace_scope_stack_for_offset(

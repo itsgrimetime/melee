@@ -387,6 +387,140 @@ def test_source_lifetime_simple_helper_inline_body_parenthesizes_non_atomic_actu
     assert "return x + 1 * 2;" not in probe.source_text
 
 
+def test_source_lifetime_simple_helper_inline_body_wraps_embedded_expression() -> None:
+    source = textwrap.dedent("""\
+        static inline s32 helper(s32 value)
+        {
+            return value + 1;
+        }
+
+        s32 fn_80000000(s32 x)
+        {
+            return 2 * helper(x);
+        }
+    """)
+
+    probes, _summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    probe = next(
+        probe for probe in probes if probe.operator == "simple-helper-inline-body"
+    )
+    assert "return 2 * (x + 1);" in probe.source_text
+    assert "return 2 * x + 1;" not in probe.source_text
+
+
+def test_source_lifetime_repeated_helper_result_reuse_rejects_case_arm_declaration() -> None:
+    source = textwrap.dedent("""\
+        s32 fn_80000000(CardState* state, s32 i, s32 kind)
+        {
+            switch (kind) {
+            case 1:
+                sink(fn_803AC634(state, i));
+                sink(fn_803AC634(state, i));
+                break;
+            default:
+                break;
+            }
+            return 0;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "repeated-helper-result-reuse" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "repeated-helper-result-reuse"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] == "case-arm-declaration-unsafe"
+
+
+def test_source_lifetime_repeated_helper_result_reuse_rejects_condition_only_anchor() -> None:
+    source = textwrap.dedent("""\
+        s32 fn_80000000(CardState* state, s32 i)
+        {
+            if (fn_803AC634(state, i)) {
+                sink(i);
+            }
+            if (fn_803AC634(state, i)) {
+                sink(state);
+            }
+            return 0;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "repeated-helper-result-reuse" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "repeated-helper-result-reuse"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] == "unsupported-call-site-shape"
+
+
+def test_source_lifetime_rejects_comma_operator_actuals() -> None:
+    inline_source = textwrap.dedent("""\
+        static inline s32 helper(s32 value)
+        {
+            return value + 1;
+        }
+
+        s32 fn_80000000(s32 x, s32 y)
+        {
+            return helper((x, y));
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        inline_source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "simple-helper-inline-body" not in {probe.operator for probe in probes}
+    inline_blocked = [
+        row for row in summaries if row["operator"] == "simple-helper-inline-body"
+    ]
+    assert inline_blocked
+    assert inline_blocked[0]["blocker"] == "helper-call-args-unsafe"
+
+    dematerialize_source = textwrap.dedent("""\
+        s32 fn_80000000(s32 x, s32 y)
+        {
+            s32 result;
+            result = fn_803AC634((x, y));
+            sink(result);
+            return result;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        dematerialize_source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "helper-result-dematerialize" not in {probe.operator for probe in probes}
+    demat_blocked = [
+        row for row in summaries if row["operator"] == "helper-result-dematerialize"
+    ]
+    assert demat_blocked
+    assert demat_blocked[0]["blocker"] == "helper-call-args-unsafe"
+
+
 def test_source_lifetime_preserves_generic_lifetime_layout_fallback() -> None:
     probes, summaries = generate_source_lifetime_probes(
         SOURCE,
