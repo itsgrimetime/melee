@@ -89,3 +89,58 @@ func TestParseAsmFileSkipsDataAndComments(t *testing.T) {
 		t.Fatalf("blr should have no operands, got %v", funcs[0].instrs[1].operands)
 	}
 }
+
+func TestParsePattern(t *testing.T) {
+	pat, err := parsePattern([]string{"lfs", "*{0..3}", "fsubs", "?", "bne"}, 6)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(pat) != 5 {
+		t.Fatalf("want 5 tokens, got %d", len(pat))
+	}
+	if pat[0].isGap || pat[0].opcode != "lfs" {
+		t.Fatalf("token0: %+v", pat[0])
+	}
+	if !pat[1].isGap || pat[1].gapMin != 0 || pat[1].gapMax != 3 {
+		t.Fatalf("token1 gap: %+v", pat[1])
+	}
+	if !pat[3].isGap || pat[3].gapMin != 1 || pat[3].gapMax != 1 {
+		t.Fatalf("token3 '?': %+v", pat[3])
+	}
+	// bare "*" uses the cap
+	star, _ := parsePattern([]string{"a", "*", "b"}, 6)
+	if star[1].gapMax != 6 {
+		t.Fatalf("bare * cap: %+v", star[1])
+	}
+	// open upper bound uses the ceiling
+	open, _ := parsePattern([]string{"a", "*{5..}", "b"}, 6)
+	if open[1].gapMin != 5 || open[1].gapMax != 32 {
+		t.Fatalf("open upper: %+v", open[1])
+	}
+	// operand-bearing concrete token (space-separated operands)
+	op, _ := parsePattern([]string{"addi x y _"}, 6)
+	if op[0].opcode != "addi" || len(op[0].operands) != 3 || op[0].operands[0] != "x" || op[0].operands[2] != "_" {
+		t.Fatalf("operands: %+v", op[0])
+	}
+	// trailing commas are stripped from operands
+	cs, _ := parsePattern([]string{"addi r3, r4, r5"}, 6)
+	if len(cs[0].operands) != 3 || cs[0].operands[1] != "r4" {
+		t.Fatalf("comma strip: %+v", cs[0])
+	}
+}
+
+func TestParsePatternErrors(t *testing.T) {
+	cases := [][]string{
+		{"*", "lfs"},             // leading gap
+		{"lfs", "*"},             // trailing gap
+		{"lfs", "*{0..99}", "b"}, // upper bound over ceiling (32)
+		{"lfs", "*{3..1}", "b"},  // min > max
+		{"lfs", "*{0,3}", "b"},   // comma form rejected (use ..)
+		{},                       // empty
+	}
+	for _, c := range cases {
+		if _, err := parsePattern(c, 6); err == nil {
+			t.Fatalf("expected error for %v", c)
+		}
+	}
+}
