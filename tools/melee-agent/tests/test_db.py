@@ -959,3 +959,16 @@ class TestToolIssueClaims:
         assert resolved["status"] == "resolved"
         assert resolved["claimed_by"] is None
         assert resolved["claimed_at"] is None
+
+    def test_list_unclaimed_only_filters_claimed(self, db):
+        claimed = db.report_tool_issue(summary="claimed one", agent_id="r")
+        free = db.report_tool_issue(summary="free one", agent_id="r")
+        db.claim_tool_issue(claimed["id"], "agent-1")
+
+        available_ids = {i["id"] for i in db.list_tool_issues(unclaimed_only=True)}
+        assert free["id"] in available_ids
+        assert claimed["id"] not in available_ids
+
+        # Default list still shows both (claimed-by-others stays visible).
+        all_ids = {i["id"] for i in db.list_tool_issues()}
+        assert {claimed["id"], free["id"]} <= all_ids

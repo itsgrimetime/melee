@@ -469,6 +469,7 @@ class StateDB:
         tool: str | None = None,
         kind: str | None = None,
         limit: int = 50,
+        unclaimed_only: bool = False,
     ) -> list[dict]:
         """List reported tool issues, newest first."""
         if status in ("all", ""):
@@ -491,6 +492,8 @@ class StateDB:
         if kind:
             query += " AND kind = ?"
             params.append(kind)
+        if unclaimed_only:
+            query += " AND claimed_by IS NULL"
         query += " ORDER BY created_at DESC LIMIT ?"
         params.append(limit)
 
