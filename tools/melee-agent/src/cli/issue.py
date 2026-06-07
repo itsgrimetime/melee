@@ -653,3 +653,35 @@ def claim_command(
     console.print(
         f"[green]Claimed issue #{issue['id']}[/green] ({issue['claimed_by']}): {issue['summary']}"
     )
+
+
+@issue_app.command("release")
+def release_command(
+    issue_id: Annotated[int, typer.Argument(help="Issue ID")],
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Release a claim held by another agent"),
+    ] = False,
+    agent_id: Annotated[
+        str | None,
+        typer.Option("--agent-id", help="Releasing agent ID; auto-detected when omitted"),
+    ] = None,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
+):
+    """Release your claim on an issue without resolving it."""
+    resolved_agent = agent_id or _get_agent_id()
+    try:
+        issue = get_db().release_tool_issue(issue_id, agent_id=resolved_agent, force=force)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from exc
+
+    if issue is None:
+        console.print(f"[red]Issue not found: {issue_id}[/red]")
+        raise typer.Exit(1)
+
+    if output_json:
+        _echo_json(issue)
+        return
+
+    console.print(f"[green]Released issue #{issue['id']}[/green]: {issue['summary']}")

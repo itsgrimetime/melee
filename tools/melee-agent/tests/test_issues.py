@@ -569,3 +569,33 @@ def test_issue_claim_missing_issue(tmp_path):
     result = runner.invoke(app, ["issue", "claim", "9999", "--agent-id", "agent-1"])
     assert result.exit_code == 1
     assert "not found" in strip_ansi(result.stdout).lower()
+
+
+def test_issue_release_from_cli(tmp_path):
+    """Owner releases; non-owner needs --force."""
+    reset_db()
+    db = get_db(tmp_path / "state.db")
+    issue = db.report_tool_issue(summary="releasable", agent_id="reporter")
+    db.claim_tool_issue(issue["id"], "agent-1")
+
+    # Non-owner without --force fails.
+    result = runner.invoke(
+        app, ["issue", "release", str(issue["id"]), "--agent-id", "agent-2"]
+    )
+    assert result.exit_code == 2
+    assert "agent-1" in strip_ansi(result.stdout)
+
+    # Owner releases.
+    result = runner.invoke(
+        app, ["issue", "release", str(issue["id"]), "--agent-id", "agent-1"]
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "Released issue" in strip_ansi(result.stdout)
+    assert db.get_tool_issue(issue["id"])["claimed_by"] is None
+
+    # Releasing an unclaimed issue errors.
+    result = runner.invoke(
+        app, ["issue", "release", str(issue["id"]), "--agent-id", "agent-1"]
+    )
+    assert result.exit_code == 2
+    assert "not claimed" in strip_ansi(result.stdout)
