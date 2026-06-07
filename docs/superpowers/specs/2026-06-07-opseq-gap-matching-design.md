@@ -170,8 +170,9 @@ Used by Component 3 to rank ops by rarity.
    share of functions. Before running, estimate selectivity from the landmarks'
    corpus frequencies; if the pattern lacks any sufficiently-rare non-control-flow
    landmark, the derive step (a) prefers retaining the rarest available non-CF op
-   even past the nominal fill target, and (b) warns and reports the estimated hit
-   count so the user knows the result is broad rather than precise.
+   even past the nominal fill target, and (b) warns, reporting the rarest
+   landmark's corpus frequency as a selectivity proxy, so the user knows the
+   result is broad rather than precise.
 6. v1 derives **opcode-only** landmarks (no operands): operands vary across
    structural cousins, so binding them would over-constrain. `--with-operands`
    opts in by emitting register operands as **consistency variables** (matching
@@ -250,7 +251,8 @@ Go tests in `tools/table-typer` (new `*_test.go`):
   leading/trailing gaps, results ranked by least slack, control-flow anchoring +
   the specificity guard keep patterns selective.
 - **Over-matching from common-branch-only derived patterns** → specificity guard
-  estimates hit count, retains the rarest non-CF landmark, and warns.
+  reports a rarest-landmark frequency proxy, retains the rarest non-CF landmark,
+  and warns.
 - **Backtracking / large-gap blowup** → every upper bound clamped to the hard
   ceiling, oversized patterns rejected, memoized DP avoids re-exploring states.
 - **Matching across function boundaries** → Component 0 confines every match to a

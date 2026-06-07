@@ -88,12 +88,32 @@ func TestParseAsmFile(t *testing.T) {
 		t.Fatalf("fn_b[1] opcode: %q", funcs[1].instrs[1].opcode)
 	}
 }
+
+func TestParseAsmFileSkipsDataAndComments(t *testing.T) {
+	const asm = `.fn fn_c, global
+/* 80000000 00000000  39 00 00 00 */	li r8, 0x0
+/* 80000004 00000004  43 00 00 00 */	.4byte 0x43000000 /* illegal */
+/* 80000008 00000008  4E 80 00 20 */	blr /* return */
+.endfn fn_c
+`
+	funcs := parseAsmFile(asm)
+	if len(funcs) != 1 || len(funcs[0].instrs) != 2 {
+		t.Fatalf("want 2 instrs (.4byte data line skipped), got %d", len(funcs[0].instrs))
+	}
+	if funcs[0].instrs[0].opcode != "li" || funcs[0].instrs[1].opcode != "blr" {
+		t.Fatalf("opcodes: %v", funcs[0].instrs)
+	}
+	// trailing "/* return */" comment must not leak into operands
+	if len(funcs[0].instrs[1].operands) != 0 {
+		t.Fatalf("blr should have no operands, got %v", funcs[0].instrs[1].operands)
+	}
+}
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cd tools/table-typer && go test -run TestParseAsmFile ./...`
-Expected: FAIL — `undefined: parseAsmFile`.
+Expected: FAIL — `undefined: parseAsmFile` (covers both `TestParseAsmFile` and `TestParseAsmFileSkipsDataAndComments`).
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -151,8 +171,22 @@ func parseAsmFile(content string) []asmFunc {
 			if !found {
 				continue // label, directive, comment, or blank
 			}
+			// Strip any trailing comment (inline data lines and annotated
+			// branches can carry "/* ... */" or "# ..." after the mnemonic).
+			if c := strings.Index(after, "/*"); c >= 0 {
+				after = after[:c]
+			}
+			if c := strings.Index(after, "#"); c >= 0 {
+				after = after[:c]
+			}
 			fields := strings.Fields(after)
 			if len(fields) == 0 {
+				continue
+			}
+			// Skip inline data emitted in instruction-line format (.4byte,
+			// .byte, .float, ...): these are not real opcodes and would pollute
+			// the frequency table and derive heuristic.
+			if strings.HasPrefix(fields[0], ".") {
 				continue
 			}
 			ops := make([]string, 0, len(fields)-1)
@@ -562,20 +596,24 @@ func TestMatchPatternPrefersTightest(t *testing.T) {
 }
 
 func TestMatchPatternVarNoLeak(t *testing.T) {
-	// First "or" binds x; a failed candidate must not leak x to the winning path.
+	// Within ONE start, the first gap branch (g=0) tries "or x x" against
+	// "or r5,r6": matchInstr binds x=r5 on operand 0, then fails on operand 1.
+	// The second gap branch (g=1) must see x UNBOUND so "or r9,r9" can match.
+	// A matcher that mutates a shared vars map (no clone-per-candidate) leaks
+	// x=r5 and wrongly fails the whole pattern. This single-start backtracking
+	// case is what actually exercises the spec's correctness-critical invariant.
 	body := []asmInstr{
-		{opcode: "or", operands: []string{"r9", "r9"}, srcLine: 1}, // x=r9 would fail at next
-		{opcode: "or", operands: []string{"r5", "r5"}, srcLine: 2}, // x=r5 path that should win
-		{opcode: "and", operands: []string{"r5", "r5"}, srcLine: 3},
+		{opcode: "mflr", srcLine: 1},
+		{opcode: "or", operands: []string{"r5", "r6"}, srcLine: 2}, // partial-bind then fail
+		{opcode: "or", operands: []string{"r9", "r9"}, srcLine: 3}, // clean path must win
 	}
-	// pattern: or x x , and x x   (x must be consistent within an alignment)
-	pat, _ := parsePattern([]string{"or x x", "and x x"}, 6)
+	pat, _ := parsePattern([]string{"mflr", "*{0..1}", "or x x"}, 6)
 	a := matchPattern(body, pat)
 	if !a.ok {
-		t.Fatal("alignment from line 2 (x=r5) should succeed")
+		t.Fatal("should match via the second gap branch (x=r9)")
 	}
-	if a.startSrcLine != 2 {
-		t.Fatalf("want start line 2, got %d", a.startSrcLine)
+	if a.endSrcLine != 3 || a.slackConsumed != 1 {
+		t.Fatalf("want end line 3 slack 1, got end %d slack %d", a.endSrcLine, a.slackConsumed)
 	}
 }
 ```
@@ -769,10 +807,12 @@ Append to `opseq.go`:
 ```go
 // opseqResult is one ranked match for display.
 type opseqResult struct {
-	asmLoc string // "path/to/file.s:LINE"
-	fnName string
-	slack  int
-	size   int
+	asmLoc    string // "path/to/file.s:STARTLINE"
+	fnName    string
+	slack     int
+	size      int
+	startLine int
+	endLine   int
 }
 
 // sortResults orders by tightest match first (least gap slack), then smallest
@@ -895,6 +935,7 @@ var controlFlowOps = map[string]bool{
 	"beq": true, "bne": true, "blt": true, "ble": true, "bgt": true, "bge": true,
 	"bso": true, "bns": true, "bdnz": true, "bdz": true,
 	"bctr": true, "bctrl": true, "blr": true, "blrl": true,
+	"bclr": true, "bcctr": true, "bcctrl": true,
 	"mtctr": true, "mtlr": true,
 }
 
@@ -1008,7 +1049,7 @@ func landmarkToken(ins asmInstr, withOperands bool, regVars map[string]string) s
 		if registerRe.MatchString(op) {
 			v, ok := regVars[op]
 			if !ok {
-				v = string(rune('a' + len(regVars)))
+				v = fmt.Sprintf("v%d", len(regVars)) // safe past 26 distinct registers
 				regVars[op] = v
 			}
 			parts = append(parts, v)
@@ -1058,7 +1099,51 @@ git commit -m "feat(opseq): control-flow-anchored + rarity derive heuristic"
 
 This task has no new unit test (it is IO/CLI wiring over already-tested pure functions); it is verified by `go build` and a manual smoke run. The pure logic it calls is covered by Tasks 1–7.
 
-- [ ] **Step 1: Register the new flags**
+> **Important:** `locateFuncDef` currently exists ONLY as a closure *inside* the `case cmdOpSeq:` body you are about to replace (original `main.go` ~lines 407-439). Step 1 below relocates it to a package-level function FIRST, so the rewrite in Step 3 can call it. Do Step 1 before deleting the old block.
+
+- [ ] **Step 1: Relocate `locateFuncDef` to a package-level function in `opseq.go`**
+
+Append to `tools/table-typer/opseq.go` (add `"os"` to its import block — it becomes `fmt`, `os`, `regexp`, `sort`, `strconv`, `strings`):
+
+```go
+// locateFuncDef returns "path:line" of the C definition (or placeholder) for
+// name across cFiles, or a not-found note. This is the original cmdOpSeq closure
+// lifted to package level (using strings instead of bytes) so the handler and
+// tests can share it.
+func locateFuncDef(cFiles []string, name string) string {
+	for _, path := range cFiles {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err.Error()
+		}
+		for i, line := range strings.Split(string(content), "\n") {
+			off := strings.Index(line, name)
+			if off == -1 {
+				continue
+			}
+			if off == 0 || strings.Contains(line, "/// #"+name) {
+				return fmt.Sprintf("%s:%d", path, i+1)
+			}
+			// look for a type immediately prior
+			parts := strings.Fields(line[:off])
+			ok := len(parts) > 0
+			for _, p := range parts {
+				c := p[0]
+				if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_' || c == '*') {
+					ok = false
+					break
+				}
+			}
+			if ok {
+				return fmt.Sprintf("%s:%d", path, i+1)
+			}
+		}
+	}
+	return "(no definition or placeholder for " + name + ")"
+}
+```
+
+- [ ] **Step 2: Register the new flags**
 
 In `main.go`, find (around line 33-34):
 
@@ -1076,15 +1161,15 @@ Replace with:
 	var gapCap, deriveSlack, maxLandmarks int
 	var withOperands bool
 	cmdOpSeq.StringVar(&likeTarget, "like", "", "derive a gap pattern from <func>[:start-end] instead of taking a pattern arg")
-	cmdOpSeq.IntVar(&gapCap, "gap-cap", 6, "default max instructions a bare '*' gap may span")
+	cmdOpSeq.IntVar(&gapCap, "gap-cap", 6, "default max instructions a bare '*' gap may span (clamped to 32)")
 	cmdOpSeq.IntVar(&deriveSlack, "slack", 2, "extra gap tolerance added when deriving (--like)")
 	cmdOpSeq.IntVar(&maxLandmarks, "max-landmarks", 12, "target landmark count when deriving (--like)")
 	cmdOpSeq.BoolVar(&withOperands, "with-operands", false, "include register operands as consistency vars when deriving (--like)")
 ```
 
-- [ ] **Step 2: Replace the `case cmdOpSeq:` body**
+- [ ] **Step 3: Replace the `case cmdOpSeq:` body**
 
-In `main.go`, replace the entire `case cmdOpSeq:` block (from `case cmdOpSeq:` through the closing of its `for _, res := range results { … }` loop, currently lines ~343-463) with:
+In `main.go`, replace the entire `case cmdOpSeq:` block (from `case cmdOpSeq:` through the closing of its `for _, res := range results { … }` loop, currently lines ~343-463 — this span includes the old `locateFuncDef` closure, which is now superseded by the package-level function from Step 1) with:
 
 ```go
 	case cmdOpSeq:
@@ -1155,12 +1240,11 @@ In `main.go`, replace the entire `case cmdOpSeq:` block (from `case cmdOpSeq:` t
 			}
 			arg := cmd.Arg(0)
 			if content, err := os.ReadFile(arg); err == nil {
-				for _, line := range strings.Split(strings.TrimSpace(string(content)), "\n") {
-					tokens = append(tokens, line)
-				}
-			} else {
-				tokens = strings.Split(arg, ",")
+				// File input: treat newlines and commas equivalently so file and
+				// inline patterns tokenize identically.
+				arg = strings.ReplaceAll(strings.TrimSpace(string(content)), "\n", ",")
 			}
+			tokens = strings.Split(arg, ",")
 		}
 
 		pat, err := parsePattern(tokens, gapCap)
@@ -1178,21 +1262,26 @@ In `main.go`, replace the entire `case cmdOpSeq:` block (from `case cmdOpSeq:` t
 				continue
 			}
 			results = append(results, opseqResult{
-				asmLoc: fmt.Sprintf("%s:%d", lf.file, a.startSrcLine),
-				fnName: lf.fn.name,
-				size:   report.size(lf.fn.name),
-				slack:  a.slackConsumed,
+				asmLoc:    fmt.Sprintf("%s:%d", lf.file, a.startSrcLine),
+				fnName:    lf.fn.name,
+				size:      report.size(lf.fn.name),
+				slack:     a.slackConsumed,
+				startLine: a.startSrcLine,
+				endLine:   a.endSrcLine,
 			})
 		}
 		sortResults(results)
 		for _, res := range results {
-			fmt.Printf("%s %s\n", res.asmLoc, locateFuncDef(res.fnName))
+			// Print the asm location + C definition, plus the matched span and gap
+			// slack so the user can judge how tight each match is (spec Component 4).
+			fmt.Printf("%s %s [slack %d, lines %d-%d]\n",
+				res.asmLoc, locateFuncDef(cFiles, res.fnName), res.slack, res.startLine, res.endLine)
 		}
 ```
 
-Note: `locateFuncDef` is a closure defined earlier in the original handler. Keep its definition (move it above this block if needed); it is unchanged. If the compiler reports `locateFuncDef` unused-or-undefined after the rewrite, ensure its `func locateFuncDef(name string) string { … }` definition (original lines ~407-439) remains present above the result loop.
+(The old `locateFuncDef` closure no longer exists after this replacement — it was relocated to package level in Step 1, and the call site above passes `cFiles` explicitly.)
 
-- [ ] **Step 3: Add the `parseLikeTarget` helper to `opseq.go`**
+- [ ] **Step 4: Add the `parseLikeTarget` helper to `opseq.go`**
 
 Append to `opseq.go`:
 
@@ -1212,7 +1301,7 @@ func parseLikeTarget(s string) (name string, lo, hi int) {
 }
 ```
 
-- [ ] **Step 4: Add a test for `parseLikeTarget`**
+- [ ] **Step 5: Add a test for `parseLikeTarget`**
 
 Append to `opseq_test.go`:
 
@@ -1229,12 +1318,12 @@ func TestParseLikeTarget(t *testing.T) {
 }
 ```
 
-- [ ] **Step 5: Build and run the full test suite**
+- [ ] **Step 6: Build and run the full test suite**
 
 Run: `cd tools/table-typer && go build ./... && go test ./...`
 Expected: build succeeds; all tests PASS.
 
-- [ ] **Step 6: Manual smoke test against a real build**
+- [ ] **Step 7: Manual smoke test against a real build**
 
 This requires built asm. Run from the worktree root:
 
@@ -1244,15 +1333,15 @@ python configure.py && ninja
 cd tools/table-typer && go run . opseq 'lfs,*{0..3},fsubs'
 ```
 
-Expected: prints zero or more `path.s:LINE src.c:LINE` lines, no crash. Then:
+Expected: prints zero or more `path.s:LINE src.c:LINE [slack N, lines X-Y]` lines, no crash. Then pick any real function name from `melee-agent extract list` (do not copy a literal name from this plan — it may not exist in the current build) and run:
 
 ```bash
-go run . opseq --like pl_80037B2C
+go run . opseq --like <some_function_name>
 ```
 
-Expected: prints a `derived pattern: …` line (comma-separated landmarks with `*{0..N}` gaps) followed by ranked matches.
+Expected: prints a `derived pattern: …` line (comma-separated landmarks with `*{0..N}` gaps), an optional `warning: …` line, then ranked matches.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add tools/table-typer/main.go tools/table-typer/opseq.go tools/table-typer/opseq_test.go
@@ -1295,9 +1384,13 @@ opseq derives an editable, gap-tolerant pattern — keeping control-flow anchors
 
 ```bash
 melee-agent opseq --like fn_80247510
-melee-agent opseq --like fn_80247510:80247540-80247590   # just the stuck region
+melee-agent opseq --like fn_80247510:512-540   # just the stuck region (see note)
 melee-agent opseq --like fn_80247510 --with-operands     # also bind register-reuse
 ```
+
+The optional `:start-end` range is **`.s` file line numbers** — the same
+coordinate opseq prints in its results (`path.s:LINE`), not instruction
+addresses.
 
 Flags: `--gap-cap N` (bare `*` width, default 6), `--slack N` (derive tolerance,
 default 2), `--max-landmarks N` (default 12), `--with-operands`. The derived
@@ -1328,18 +1421,20 @@ git commit -m "docs(opseq): document gap tokens, --like, and shell quoting"
 
 ---
 
-## Self-Review (completed during plan authoring)
+## Self-Review (completed during plan authoring; updated after plan review)
 
 **Spec coverage:**
-- Component 0 (normalized model) → Task 1. ✔
+- Component 0 (normalized model; data-directive + comment exclusion) → Task 1. ✔
 - Component 1 (gap matcher: tokens, ceiling, no leading/trailing gap, best-alignment, vars clone, memo) → Tasks 3, 4, 5. ✔
 - Component 2 (frequency) → Task 2. ✔
 - Component 3 (derive: control-flow anchors, rarity fill, cap precedence, specificity guard, `--with-operands`, range) → Tasks 7, 8. ✔
-- Component 4 (ranking by slack then size; one result per function) → Task 6 + Task 8 wiring. ✔
+- Component 4 (ranking by slack then size; one result per function; span + slack printed) → Task 6 + Task 8 wiring. ✔
 - Function-boundary safety → Task 6 test + Task 8 per-body matching. ✔
 - CLI surface + shell guard → Task 8. ✔
 - Docs + capabilities → Task 9. ✔
 
 **Placeholder scan:** No TBD/TODO; every code step shows full code; every command shows expected output.
 
-**Type consistency:** `asmInstr`/`asmFunc` (Task 1) reused everywhere; `patToken` (Task 3) consumed by `matchInstr` (Task 4) and `solve`/`matchPattern` (Task 5); `alignment.slackConsumed`/`startSrcLine`/`endSrcLine` (Task 5) consumed by Task 8 wiring; `opseqResult`/`sortResults` (Task 6) consumed by Task 8; `deriveOpts`/`derivePattern` (Task 7) consumed by Task 8; `parseLikeTarget` (Task 8). Names are consistent across tasks.
+**Type consistency:** `asmInstr`/`asmFunc` (Task 1) reused everywhere; `patToken` (Task 3) consumed by `matchInstr` (Task 4) and `solve`/`matchPattern` (Task 5); `alignment.slackConsumed`/`startSrcLine`/`endSrcLine` (Task 5) consumed by Task 8 wiring; `opseqResult`/`sortResults` (Task 6, with `startLine`/`endLine`) consumed by Task 8; `deriveOpts`/`derivePattern` (Task 7) consumed by Task 8; `parseLikeTarget` and package-level `locateFuncDef(cFiles, name)` (Task 8). Names are consistent across tasks.
+
+**Plan-review findings incorporated (Claude subagent):** locateFuncDef relocated to package level before the handler rewrite (C1); `:start-end` documented as `.s` line numbers (C2); parser skips `.4byte`/data directives and trailing comments (I3/I4); register-var naming uses `v%d` (I5); matched span + slack printed and warning wording reconciled to a frequency proxy (I6); file/inline pattern tokenization unified (I7); var-no-leak test strengthened to a single-start backtracking case (N8); `bclr`/`bcctr` added to control-flow set (N10); gap-cap clamp documented (N11); smoke-test function name de-hardcoded (N12).
