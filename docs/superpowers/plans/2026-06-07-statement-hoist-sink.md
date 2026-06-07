@@ -945,6 +945,17 @@ def generate_statement_hoist_sink_variants(
             continue
         legal = legal_destinations(sibs, unit, escaped, locs)
         for dest in select_positions(sibs, unit, legal, strategy, locs):
+            # hoist-sink owns NON-adjacent relocations. A singleton crossing exactly
+            # one sibling is a plain adjacent swap, already produced by the
+            # adjacent-swap operator — skip it so that operator keeps its labeled
+            # candidate. Clusters are exempt (a multi-statement cluster move is never
+            # an adjacent swap). (Refinement found during Task 7 build: without this,
+            # emit-first hoist-sink dedup-steals adjacent-swap's labeled output and
+            # regresses test_statement_order_generates_only_safe_local_scalar_swaps.)
+            lo, hi = unit.index_range
+            crossed = (dest - hi - 1) if dest > hi + 1 else (lo - dest)
+            if not unit.is_cluster and crossed == 1:
+                continue
             if len(out) >= max_candidates:
                 return out
             candidate = apply_move(source, sibs, unit, dest)
