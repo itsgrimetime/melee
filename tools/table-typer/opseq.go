@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -313,4 +314,146 @@ func sortResults(rs []opseqResult) {
 		}
 		return rs[i].size < rs[j].size
 	})
+}
+
+// broadLandmarkFreq: if the rarest landmark occurs more often than this in the
+// corpus, the derived pattern is considered broad and a warning is emitted.
+const broadLandmarkFreq = 150
+
+var registerRe = regexp.MustCompile(`^([rf][0-9]+|cr[0-7])$`)
+
+var controlFlowOps = map[string]bool{
+	"b": true, "ba": true, "bl": true, "bla": true,
+	"beq": true, "bne": true, "blt": true, "ble": true, "bgt": true, "bge": true,
+	"bso": true, "bns": true, "bdnz": true, "bdz": true,
+	"bctr": true, "bctrl": true, "blr": true, "blrl": true,
+	"bclr": true, "bcctr": true, "bcctrl": true,
+	"mtctr": true, "mtlr": true,
+}
+
+// isControlFlow reports whether opcode is a branch/structural op kept as an
+// anchor. Branch-prediction hints (beq+, bne-) are stripped first.
+func isControlFlow(opcode string) bool {
+	return controlFlowOps[strings.TrimRight(opcode, "+-")]
+}
+
+type deriveOpts struct {
+	// slack is added to each inter-landmark gap window (*{0..gap+slack}) to
+	// tolerate minor codegen differences between similar functions.
+	slack int
+	// maxLandmarks is the target cap for total landmarks (CF anchors + rarity
+	// fill). CF anchors are always kept, so the actual count may exceed this.
+	maxLandmarks int
+	// withOperands, when set, renders register operands as consistency variables
+	// (v0, v1, …) on landmark tokens instead of bare opcodes.
+	withOperands bool
+}
+
+// derivePattern builds a gap-tolerant pattern from a function body: control-flow
+// anchors are always kept, the rarest non-control-flow ops fill toward
+// maxLandmarks, and everything else collapses to bounded gaps. Returns the
+// pattern tokens (for display via comma-join and for re-parsing) and a warning
+// string (empty unless the specificity guard fires).
+func derivePattern(instrs []asmInstr, freq map[string]int, opts deriveOpts) ([]string, string) {
+	kept := make(map[int]bool)
+	for i, ins := range instrs {
+		if isControlFlow(ins.opcode) {
+			kept[i] = true
+		}
+	}
+
+	// Rarity fill: rarest non-control-flow ops first, up to the cap.
+	type idxFreq struct{ idx, f int }
+	var cand []idxFreq
+	for i, ins := range instrs {
+		if !kept[i] {
+			cand = append(cand, idxFreq{i, freq[ins.opcode]})
+		}
+	}
+	sort.Slice(cand, func(a, b int) bool {
+		if cand[a].f != cand[b].f {
+			return cand[a].f < cand[b].f
+		}
+		return cand[a].idx < cand[b].idx
+	})
+	for _, c := range cand {
+		if len(kept) >= opts.maxLandmarks {
+			break
+		}
+		kept[c.idx] = true
+	}
+
+	// Specificity guard: ensure at least one non-control-flow landmark (force the
+	// rarest in, even past the cap), then warn if the rarest landmark is common.
+	hasNonCF := false
+	for i := range kept {
+		if !isControlFlow(instrs[i].opcode) {
+			hasNonCF = true
+			break
+		}
+	}
+	if !hasNonCF && len(cand) > 0 {
+		kept[cand[0].idx] = true
+	}
+
+	// Ordered landmark indices.
+	idxs := make([]int, 0, len(kept))
+	for i := range kept {
+		idxs = append(idxs, i)
+	}
+	sort.Ints(idxs)
+
+	warning := ""
+	minFreq, rarest := 1<<62, ""
+	for _, i := range idxs {
+		if f := freq[instrs[i].opcode]; f < minFreq {
+			minFreq, rarest = f, instrs[i].opcode
+		}
+	}
+	if rarest != "" && minFreq > broadLandmarkFreq {
+		warning = fmt.Sprintf("derived pattern is broad: rarest landmark %q occurs %d times; results may be noisy", rarest, minFreq)
+	}
+
+	// Emit tokens with bounded gaps between consecutive landmarks.
+	regVars := map[string]string{}
+	var toks []string
+	prev := -1
+	for _, i := range idxs {
+		if prev >= 0 {
+			gap := i - prev - 1
+			window := gap + opts.slack
+			if window > gapCeiling {
+				window = gapCeiling
+			}
+			if window > 0 {
+				toks = append(toks, fmt.Sprintf("*{0..%d}", window))
+			}
+		}
+		toks = append(toks, landmarkToken(instrs[i], opts.withOperands, regVars))
+		prev = i
+	}
+	return toks, warning
+}
+
+// landmarkToken renders one landmark as a pattern token. With operands off it is
+// just the opcode; with operands on, register operands become stable consistency
+// variables (v0, v1, v2, …) and everything else becomes "_".
+func landmarkToken(ins asmInstr, withOperands bool, regVars map[string]string) string {
+	if !withOperands || len(ins.operands) == 0 {
+		return ins.opcode
+	}
+	parts := []string{ins.opcode}
+	for _, op := range ins.operands {
+		if registerRe.MatchString(op) {
+			v, ok := regVars[op]
+			if !ok {
+				v = fmt.Sprintf("v%d", len(regVars)) // safe past 26 distinct registers
+				regVars[op] = v
+			}
+			parts = append(parts, v)
+		} else {
+			parts = append(parts, "_")
+		}
+	}
+	return strings.Join(parts, " ")
 }

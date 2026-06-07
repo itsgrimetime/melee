@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 const sampleAsm = `.include "macros.inc"
 .file "x.c"
@@ -271,5 +274,76 @@ func TestMatchDoesNotCrossFunctionBoundary(t *testing.T) {
 		if matchPattern(f.instrs, pat).ok {
 			t.Fatalf("pattern should not match within a single body (%s)", f.name)
 		}
+	}
+}
+
+func TestIsControlFlow(t *testing.T) {
+	for _, op := range []string{"b", "bl", "beq", "bne", "bdnz", "bctr", "blr", "mtctr", "mtlr", "beq+", "bne-"} {
+		if !isControlFlow(op) {
+			t.Fatalf("%q should be control-flow", op)
+		}
+	}
+	for _, op := range []string{"addi", "lfs", "stw", "fsubs"} {
+		if isControlFlow(op) {
+			t.Fatalf("%q should not be control-flow", op)
+		}
+	}
+}
+
+func TestDerivePattern(t *testing.T) {
+	// lfs is rare (freq 1), addi is common (freq 100); bne is control-flow.
+	body := instrs("lfs", "addi", "addi", "bne")
+	freq := map[string]int{"lfs": 1, "addi": 100, "bne": 50}
+	toks, warn := derivePattern(body, freq, deriveOpts{slack: 2, maxLandmarks: 2})
+
+	// Control-flow (bne) kept; rarest non-CF (lfs) kept; common addi dropped to gap.
+	joined := strings.Join(toks, ",")
+	if !strings.Contains(joined, "lfs") || !strings.Contains(joined, "bne") {
+		t.Fatalf("expected lfs and bne as landmarks: %q", joined)
+	}
+	if strings.Contains(joined, "addi") {
+		t.Fatalf("common addi should have been gapped out: %q", joined)
+	}
+	if !strings.Contains(joined, "*{0..") {
+		t.Fatalf("expected a gap token between landmarks: %q", joined)
+	}
+	if warn != "" {
+		t.Fatalf("rare lfs present: expected no broad-pattern warning, got %q", warn)
+	}
+}
+
+func TestDeriveSpecificityGuardWarns(t *testing.T) {
+	// cmpwi is a non-CF landmark but very common (freq 5000 >> broadLandmarkFreq 150),
+	// so the pattern lacks a sufficiently-rare landmark and must warn.
+	body := instrs("cmpwi", "beq", "bl", "b")
+	freq := map[string]int{"cmpwi": 5000, "beq": 6000, "bl": 9000, "b": 9000}
+	_, warn := derivePattern(body, freq, deriveOpts{slack: 2, maxLandmarks: 12})
+	if warn == "" {
+		t.Fatal("expected a broad-pattern warning")
+	}
+}
+
+func TestDeriveWithOperands(t *testing.T) {
+	body := []asmInstr{
+		{opcode: "lwz", operands: []string{"r3", "0x4(r31)"}, srcLine: 1},
+		{opcode: "blr", srcLine: 2},
+	}
+	freq := map[string]int{"lwz": 1, "blr": 1}
+	toks, _ := derivePattern(body, freq, deriveOpts{slack: 1, maxLandmarks: 12, withOperands: true})
+	// lwz's register operand becomes a consistency variable; the displacement becomes "_".
+	if !strings.HasPrefix(toks[0], "lwz ") {
+		t.Fatalf("token0 should carry operands: %q", toks[0])
+	}
+	if strings.Contains(toks[0], "0x4(r31)") {
+		t.Fatalf("displacement should be replaced by _: %q", toks[0])
+	}
+	if len(toks) != 3 {
+		t.Fatalf("expected 3 tokens (landmark, gap, cf-anchor), got %d: %v", len(toks), toks)
+	}
+	if !strings.Contains(toks[1], "*{0..") {
+		t.Fatalf("token1 should be a gap: %q", toks[1])
+	}
+	if toks[2] != "blr" {
+		t.Fatalf("token2 should be the blr anchor: %q", toks[2])
 	}
 }
