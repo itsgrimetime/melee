@@ -86,3 +86,18 @@ def test_production_flag_present_in_help():
     assert "--production" in result.output
     assert "--dry-run" in result.output
     assert "--force" in result.output
+
+
+def test_owner_is_account_none():
+    from src.cli.scratch_production import _owner_is_account
+    assert _owner_is_account(None) is False
+
+
+def test_owner_is_account_anonymous():
+    from src.cli.scratch_production import _owner_is_account
+    assert _owner_is_account({"id": 1, "is_anonymous": True, "username": "X (anon)"}) is False
+
+
+def test_owner_is_account_real():
+    from src.cli.scratch_production import _owner_is_account
+    assert _owner_is_account({"id": 2, "is_anonymous": False, "username": "realuser"}) is True

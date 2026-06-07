@@ -64,6 +64,16 @@ def _seed_source_from_repo(name: str, file_path: str, melee_root: Path) -> str:
     return "// TODO: Decompile this function\n"
 
 
+def _owner_is_account(owner) -> bool:
+    """True only if `owner` is a real (non-anonymous) decomp.me account.
+
+    decomp.me returns owner as None (unclaimed) or a user dict with an
+    `is_anonymous` flag. A claim made without a logged-in session yields an
+    anonymous owner, which does NOT satisfy "owned by the user's account".
+    """
+    return bool(owner) and not owner.get("is_anonymous", False)
+
+
 def _make_production_client(cookies: dict) -> httpx.AsyncClient:
     """Build an httpx client configured for production (cf_clearance + sessionid + UA)."""
     jar = httpx.Cookies()
@@ -97,6 +107,17 @@ async def _preflight_auth(cookies: dict) -> None:
         console.print("[red]Production auth failed (403): cf_clearance expired or invalid[/red]")
         console.print("[dim]Run 'melee-agent sync auth' to refresh[/dim]")
         raise typer.Exit(1)
+    if cookies.get("sessionid"):
+        try:
+            user = resp.json()
+        except Exception:
+            user = {}
+        if user.get("is_anonymous", False):
+            console.print(
+                "[yellow]Note: your stored sessionid is anonymous/expired — the scratch "
+                "will NOT be owned by your account. Re-run 'melee-agent sync auth' with a "
+                "fresh sessionid (logged into decomp.me) for account ownership.[/yellow]"
+            )
 
 
 async def _create_claim_record(create_data: dict, func_name: str, cookies: dict) -> None:
@@ -122,19 +143,19 @@ async def _create_claim_record(create_data: dict, func_name: str, cookies: dict)
         if result.claim_token:
             _save_scratch_token(slug, result.claim_token)
 
-        owned = result.claimed
-        if owned:
-            try:
-                verify = await client.get(f"/api/scratch/{slug}")
-                if verify.status_code == 200 and verify.json().get("owner") is None:
-                    owned = False
-            except Exception:
-                pass
+        owned_by_account = False
+        try:
+            verify = await client.get(f"/api/scratch/{slug}")
+            if verify.status_code == 200:
+                owned_by_account = _owner_is_account(verify.json().get("owner"))
+        except Exception:
+            pass
 
-        if not owned:
+        if not owned_by_account:
             console.print(
-                "[yellow]Warning: scratch created but NOT owned (sessionid may be expired). "
-                "Re-run 'melee-agent sync auth', then "
+                "[yellow]Warning: scratch is NOT owned by your account (it is anonymous "
+                "or unclaimed). Your stored sessionid is likely expired or not logged in. "
+                "Re-run 'melee-agent sync auth' with a fresh sessionid, then "
                 f"'melee-agent sync fix-ownership --function {func_name}'.[/yellow]"
             )
 
