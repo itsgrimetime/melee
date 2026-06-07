@@ -184,6 +184,21 @@ INTEGER_CAST_TYPES = {
     "signed long",
 }
 FLOAT_CAST_TYPES = {"f32", "f64", "float", "double"}
+# Bare C type keywords that can appear as the trailing word of a multi-word
+# UNNAMED type (e.g. ``unsigned char``, ``long long``). When the trailing word
+# of a parameter token is one of these and there are no pointer stars, the
+# token has no parameter name and the whole token is the type.
+TYPE_KEYWORD_WORDS = {
+    "unsigned",
+    "signed",
+    "int",
+    "char",
+    "short",
+    "long",
+    "void",
+    "float",
+    "double",
+}
 
 
 def audit_signature_call_type(
@@ -1266,10 +1281,13 @@ def _extract_param_types(params: str) -> list[str]:
             cleaned = cleaned[:-3].strip().rstrip(",").strip()
         cleaned = re.sub(r"\[[^\]]*\]\s*$", "", cleaned).strip()
         match = re.match(
-            r"^(.+?)(?:\s+(?P<stars>\*+)?\s*[A-Za-z_]\w*)$",
+            r"^(.+?)(?:\s+(?P<stars>\*+)?\s*(?P<name>[A-Za-z_]\w*))$",
             cleaned,
         )
-        if match is not None:
+        if match is not None and (
+            match.group("stars")
+            or match.group("name") not in TYPE_KEYWORD_WORDS
+        ):
             cleaned = match.group(1).strip()
             if match.group("stars"):
                 cleaned = f"{cleaned} {match.group('stars')}"
@@ -1292,12 +1310,16 @@ def _split_param_type_name(param_text: str) -> tuple[str, str] | None:
         return None
     if "[" in cleaned or "]" in cleaned or "(*" in cleaned:
         return None
-    match = re.match(r"^(?P<type>.+?)(?:\s+|\s*)(?P<name>[A-Za-z_]\w*)$", cleaned)
+    match = re.match(r"^(?P<type>.+?)\s+(?P<name>[A-Za-z_]\w*)$", cleaned)
     if match is None:
         return None
     type_text = match.group("type").strip()
     name = match.group("name").strip()
     if not type_text or not name:
+        return None
+    # An unnamed multi-word type (e.g. ``long long``, ``unsigned char``) has no
+    # parameter name; do not split the trailing type keyword off as a name.
+    if "*" not in cleaned and name in TYPE_KEYWORD_WORDS:
         return None
     return type_text, name
 
@@ -1332,6 +1354,12 @@ def _prototype_patch_status(
         return "unsupported-parameter-shape"
     split = _split_param_type_name(param_text)
     if split is None:
+        # Unnamed parameter: the whole token is the type. Still patchable when
+        # it is a simple scalar integer type (the bare proposed type replaces
+        # the token); otherwise unsupported.
+        whole_type = " ".join(param_text.split())
+        if _is_simple_scalar_integer_type(whole_type):
+            return "generated"
         return "unsupported-parameter-shape"
     current_type, _ = split
     if not _is_simple_scalar_integer_type(current_type):
@@ -1712,14 +1740,25 @@ def _simple_call_assignment(
     if line_no > len(lines):
         return None
     line = lines[line_no - 1]
-    pattern = re.compile(
+    prefix = re.compile(
         rf"^\s*(?P<receiver>[A-Za-z_]\w*)\s*=\s*"
-        rf"(?P<call>{re.escape(call_target)}\s*\([^;]*\))\s*;\s*$"
+        rf"(?P<call_open>{re.escape(call_target)}\s*\()"
     )
-    match = pattern.match(line)
+    match = prefix.match(line)
     if match is None:
         return None
-    return match.group("receiver"), match.group("call")
+    open_idx = match.end("call_open") - 1
+    close_idx = _matching_paren(line, open_idx)
+    if close_idx is None:
+        return None
+    # Accept only when the call is the COMPLETE right-hand side, i.e. nothing
+    # but the statement terminator follows the matching close paren.
+    if line[close_idx + 1 :].strip() != ";":
+        return None
+    return (
+        match.group("receiver"),
+        line[match.start("call_open") : close_idx + 1].strip(),
+    )
 
 
 def _local_temp_widen_patches(
@@ -2614,15 +2653,18 @@ def _prototype_candidate_action(
         elif patch_status == "generated":
             split = _split_param_type_name(prototype.param_texts[arg_index])
             if split is None:
-                patch_status = "unsupported-parameter-shape"
+                # Unnamed simple scalar parameter (e.g. ``long long``): emit the
+                # bare proposed type, never a corrupt ``<type> <typeword>`` form.
+                new_param = proposed_type
             else:
                 _, param_name = split
-                patch = PatchDescriptor(
-                    source_file=source_site.get("source_file"),
-                    line=int(prototype.line or source_site.get("line") or 0),
-                    old=prototype.param_texts[arg_index],
-                    new=f"{proposed_type} {param_name}",
-                )
+                new_param = f"{proposed_type} {param_name}"
+            patch = PatchDescriptor(
+                source_file=source_site.get("source_file"),
+                line=int(prototype.line or source_site.get("line") or 0),
+                old=prototype.param_texts[arg_index],
+                new=new_param,
+            )
     else:
         patch_status = "cross-translation-unit"
 

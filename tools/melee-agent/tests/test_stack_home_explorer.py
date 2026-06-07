@@ -365,14 +365,14 @@ def test_stack_home_explorer_derives_named_local_deltas_from_checkdiff_context()
     assert variant["named_local_deltas"] == [
         {
             "name": "other_pos",
-            "delta": 4,
+            "delta": -4,
             "expected_offset": 0x44,
             "current_offset": 0x48,
             "call": "Player_LoadPlayerCoords",
         },
         {
             "name": "cam_pos",
-            "delta": 4,
+            "delta": -4,
             "expected_offset": 0x38,
             "current_offset": 0x3C,
             "call": "Stage_UnkSetVec3TCam_Offset",
@@ -383,20 +383,20 @@ def test_stack_home_explorer_derives_named_local_deltas_from_checkdiff_context()
             "opcode": "lfs",
             "expected_offset": 0x44,
             "current_offset": 0x48,
-            "delta": 4,
+            "delta": -4,
             "line_index": 3,
         },
         {
             "opcode": "lfs",
             "expected_offset": 0x38,
             "current_offset": 0x3C,
-            "delta": 4,
+            "delta": -4,
             "line_index": 6,
         },
     ]
     assert "new local layout deltas remain" in variant["summary"]
-    assert "other_pos +4" in variant["summary"]
-    assert "cam_pos +4" in variant["summary"]
+    assert "other_pos -4" in variant["summary"]
+    assert "cam_pos -4" in variant["summary"]
 
 
 def test_stack_home_explorer_cli_scores_seeded_sqrt_variants(
@@ -495,16 +495,78 @@ def test_stack_home_explorer_cli_scores_seeded_sqrt_variants(
     assert payload["variant_rankings"][0]["named_local_deltas"] == [
         {
             "name": "other_pos",
-            "delta": 4,
+            "delta": -4,
             "expected_offset": 0x44,
             "current_offset": 0x48,
             "call": "Player_LoadPlayerCoords",
         },
         {
             "name": "cam_pos",
-            "delta": 4,
+            "delta": -4,
             "expected_offset": 0x38,
             "current_offset": 0x3C,
             "call": "Stage_UnkSetVec3TCam_Offset",
         },
     ]
+
+
+def test_local_layout_deltas_use_expected_minus_current_convention() -> None:
+    """raw_local_deltas / named_local_deltas must report delta as
+    expected_offset - current_offset, the same sign convention the localizer
+    (remaining_stack_slot_deltas, from checkdiff) uses, so one report never
+    describes the same slot with opposite signs."""
+    report = explore_stack_homes(
+        PCDUMP,
+        "fn_80000001",
+        LOCALIZER,
+        source_text=textwrap.dedent("""\
+            void fn_80000001(int i, Vec3* pos)
+            {
+                Vec3 other_pos;
+                Vec3 cam_pos;
+                Player_LoadPlayerCoords(i, &other_pos);
+                sink(other_pos.x);
+                Stage_UnkSetVec3TCam_Offset(&cam_pos);
+                sink(cam_pos.x);
+            }
+        """),
+        source_file="src/melee/pl/plbonuslib.c",
+    )
+    checkdiff_payload = {
+        "target_asm": [
+            "+294: c0 01 00 44 \tlfs     f1,68(r1)",
+            "+3ac: c0 21 00 38 \tlfs     f2,56(r1)",
+        ],
+        "current_asm": [
+            "+294: c0 01 00 48 \tlfs     f1,72(r1)",
+            "+3ac: c0 21 00 3c \tlfs     f2,60(r1)",
+        ],
+    }
+    attach_variant_rankings(
+        report,
+        [
+            {
+                "variant_id": "v",
+                "kind": "local-array-sqrt-slot",
+                "description": "d",
+                "match_percent": 99.0,
+                "stack_slot_localizer": {"mismatch_count": 0, "mismatches": []},
+                "checkdiff_payload": checkdiff_payload,
+            },
+        ],
+        source_text=textwrap.dedent("""\
+            void fn_80000001(int i, Vec3* pos)
+            {
+                Vec3 other_pos;
+                Vec3 cam_pos;
+                Player_LoadPlayerCoords(i, &other_pos);
+                sink(other_pos.x);
+                Stage_UnkSetVec3TCam_Offset(&cam_pos);
+                sink(cam_pos.x);
+            }
+        """),
+        function="fn_80000001",
+    )
+    variant = report["variant_rankings"][0]
+    for entry in variant["raw_local_deltas"] + variant["named_local_deltas"]:
+        assert entry["delta"] == entry["expected_offset"] - entry["current_offset"], entry

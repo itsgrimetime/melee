@@ -140,10 +140,11 @@ def detect_pointer_arithmetic(source_code: str) -> list[CodeIssue]:
                 continue
 
             # Check for cast + arithmetic pattern
-            # Pattern: *(type*)((type*)base + offset)
+            # Pattern: *(type*)(base + offset) — the OUTER pointer cast already
+            # establishes pointer context, so any binary +/- inside counts.
             if operand.type == "cast_expression":
                 cast_value = operand.child_by_field_name("value")
-                if cast_value and _is_pointer_arithmetic_expr(cast_value, source_bytes):
+                if cast_value and _has_arith_in_pointer_cast(cast_value):
                     snippet = _get_node_text(node, source_bytes)
                     issues.append(
                         CodeIssue(
@@ -160,7 +161,7 @@ def detect_pointer_arithmetic(source_code: str) -> list[CodeIssue]:
                 inner = _unwrap_parens(operand)
                 if inner and inner.type == "cast_expression":
                     cast_value = inner.child_by_field_name("value")
-                    if cast_value and _is_pointer_arithmetic_expr(cast_value, source_bytes):
+                    if cast_value and _has_arith_in_pointer_cast(cast_value):
                         snippet = _get_node_text(node, source_bytes)
                         issues.append(
                             CodeIssue(
@@ -180,19 +181,28 @@ def detect_pointer_arithmetic(source_code: str) -> list[CodeIssue]:
             continue
 
         base = _unwrap_parens(argument)
+        # Two shapes count as pointer arithmetic at a field base:
+        #   ((Type*)(ptr + 0x10))->member  -> base is a cast over a binary +/-
+        #   ((u8*)ptr + offset)->field     -> base is itself a binary +/-
+        flag_base = False
         if base and base.type == "cast_expression":
             cast_value = base.child_by_field_name("value")
-            if cast_value and _is_pointer_arithmetic_expr(cast_value, source_bytes):
-                snippet = _get_node_text(node, source_bytes)
-                issues.append(
-                    CodeIssue(
-                        message="Pointer arithmetic for struct field access",
-                        line=node.start_point[0] + 1,
-                        column=node.start_point[1] + 1,
-                        snippet=snippet,
-                        suggestion="Use proper struct definition or M2C_FIELD macro",
-                    )
+            if cast_value and _has_arith_in_pointer_cast(cast_value):
+                flag_base = True
+        elif base and base.type == "binary_expression":
+            if _is_pointer_arithmetic(base, source_bytes):
+                flag_base = True
+        if flag_base:
+            snippet = _get_node_text(node, source_bytes)
+            issues.append(
+                CodeIssue(
+                    message="Pointer arithmetic for struct field access",
+                    line=node.start_point[0] + 1,
+                    column=node.start_point[1] + 1,
+                    snippet=snippet,
+                    suggestion="Use proper struct definition or M2C_FIELD macro",
                 )
+            )
 
     # Find subscript access with pointer cast: ((u8*)ptr)[offset]
     for node in _find_nodes_by_type(tree.root_node, "subscript_expression"):
@@ -205,8 +215,11 @@ def detect_pointer_arithmetic(source_code: str) -> list[CodeIssue]:
             type_node = base.child_by_field_name("type")
             if type_node:
                 type_text = _get_node_text(type_node, source_bytes)
-                # Check if casting to byte pointer (common pattern for offset access)
-                if any(t in type_text for t in ("u8*", "s8*", "char*", "uint8_t*")):
+                # Check if casting to byte pointer (common pattern for offset
+                # access). Normalize whitespace so '(u8 *)' (clang-format
+                # spelling) matches like '(u8*)'.
+                normalized_type = type_text.replace(" ", "")
+                if any(t in normalized_type for t in ("u8*", "s8*", "char*", "uint8_t*")):
                     index = node.child_by_field_name("index")
                     if index:
                         index_text = _get_node_text(index, source_bytes)
@@ -236,16 +249,23 @@ def _unwrap_parens(node: "Node") -> "Node | None":
     return node
 
 
-def _is_pointer_arithmetic_expr(node: "Node", source: bytes) -> bool:
-    """Check if an expression involves pointer arithmetic."""
-    node = _unwrap_parens(node)
-    if node is None:
+def _is_binary_add_sub(node: "Node") -> bool:
+    """Check if a node is a binary +/- expression."""
+    if node is None or node.type != "binary_expression":
         return False
+    return any(child.type in ("+", "-") for child in node.children)
 
-    if node.type == "binary_expression":
-        return _is_pointer_arithmetic(node, source)
 
-    return False
+def _has_arith_in_pointer_cast(node: "Node") -> bool:
+    """Check for a binary +/- inside an already-established pointer context.
+
+    Call this when an OUTER pointer cast has already been unwrapped (e.g. a
+    dereference of `(type*)...` or a field access on `(type*)...`). In that
+    case any binary +/- inside is pointer arithmetic, regardless of whether
+    its left operand is itself a cast.
+    """
+    node = _unwrap_parens(node)
+    return _is_binary_add_sub(node)
 
 
 def detect_lowercase_hex(source_code: str) -> list[CodeIssue]:
