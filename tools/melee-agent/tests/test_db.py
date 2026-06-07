@@ -924,3 +924,30 @@ class TestToolIssueClaims:
             ).fetchone()
         old = _json.loads(row["old_value"])
         assert old["claimed_by"] == "agent-1"
+
+    def test_release_clears_claim(self, db):
+        issue = db.report_tool_issue(summary="x", agent_id="reporter")
+        db.claim_tool_issue(issue["id"], "agent-1")
+        released = db.release_tool_issue(issue["id"], "agent-1")
+        assert released["claimed_by"] is None
+        assert released["claimed_at"] is None
+
+    def test_release_unclaimed_errors(self, db):
+        issue = db.report_tool_issue(summary="x", agent_id="reporter")
+        with pytest.raises(ValueError, match="is not claimed"):
+            db.release_tool_issue(issue["id"], "agent-1")
+
+    def test_release_non_owner_errors(self, db):
+        issue = db.report_tool_issue(summary="x", agent_id="reporter")
+        db.claim_tool_issue(issue["id"], "agent-1")
+        with pytest.raises(ValueError, match="claimed by agent-1"):
+            db.release_tool_issue(issue["id"], "agent-2")
+
+    def test_release_force_non_owner(self, db):
+        issue = db.report_tool_issue(summary="x", agent_id="reporter")
+        db.claim_tool_issue(issue["id"], "agent-1")
+        released = db.release_tool_issue(issue["id"], "agent-2", force=True)
+        assert released["claimed_by"] is None
+
+    def test_release_missing_returns_none(self, db):
+        assert db.release_tool_issue(99999, "agent-1") is None

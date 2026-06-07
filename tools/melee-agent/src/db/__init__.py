@@ -647,6 +647,58 @@ class StateDB:
 
         return issue
 
+    def release_tool_issue(
+        self,
+        issue_id: int,
+        agent_id: str | None = None,
+        force: bool = False,
+    ) -> dict | None:
+        """Release a claim on a tool issue without resolving it.
+
+        Returns the updated issue, or None if the issue does not exist.
+        Raises ValueError if the issue is not claimed, or claimed by a
+        different agent without ``force``.
+        """
+        now = time.time()
+
+        with self.transaction() as conn:
+            old_row = conn.execute("SELECT * FROM tool_issues WHERE id = ?", (issue_id,)).fetchone()
+            old_value = self._decode_tool_issue_row(old_row)
+            if old_value is None:
+                return None
+
+            current = old_value.get("claimed_by")
+            if not current:
+                raise ValueError(f"issue #{issue_id} is not claimed")
+            if current != agent_id and not force:
+                raise ValueError(
+                    f"issue #{issue_id} claimed by {current}; use --force to release"
+                )
+
+            conn.execute(
+                """
+                UPDATE tool_issues
+                SET claimed_by = NULL,
+                    claimed_at = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (now, issue_id),
+            )
+            new_row = conn.execute("SELECT * FROM tool_issues WHERE id = ?", (issue_id,)).fetchone()
+            issue = self._decode_tool_issue_row(new_row)
+
+            self.log_audit(
+                "tool_issue",
+                str(issue_id),
+                "released",
+                agent_id=agent_id,
+                old_value=old_value,
+                new_value=issue,
+            )
+
+        return issue
+
     # =========================================================================
     # Address Tracking Operations
     # =========================================================================
