@@ -25,3 +25,10 @@ repos:
     always_run: true
     stages: [pre-push]
     description: Blocks pushing fork-specific files to doldecomp/melee upstream
+
+  - id: capabilities-drift
+    name: capabilities index up to date
+    entry: bash -c 'melee-agent capabilities generate && git diff --exit-code -- .claude/capabilities-brief.md docs/CAPABILITIES.md'
+    language: system
+    pass_filenames: false
+    files: '^(tools/melee-agent/src/cli/|\.claude/skills/|\.claude/hooks/|\.claude/settings\.json|CLAUDE\.md|docs/agent-tool-manifest\.md)'
