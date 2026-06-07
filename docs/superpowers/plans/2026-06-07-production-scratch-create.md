@@ -1197,6 +1197,18 @@ Then open the printed `https://decomp.me/scratch/<slug>` URL and confirm:
 - the scratch **compiles** and shows a **score/diff** (production's gc_wii assembler accepted the DTK `target_asm`), and
 - the scratch is **owned** by your account (no "created but NOT owned" warning).
 
+**GATE RESULT (2026-06-07): PASSED.** Built the worktree, dry-ran, then created
+scratch `DFGFF` for `grZebes_801DA0C4`. Production assembled the 5502-byte DTK
+`target_asm` and the scratch scores `10000/10000` against the target — DTK is
+accepted; **conversion contingency NOT needed**. The gate also surfaced that the
+machine's stored `sessionid` is anonymous/expired (`/api/user` →
+`is_anonymous: true`), so the scratch was claimed under an anonymous profile, not
+the account. Fix (commit `2fa48b826`): `_owner_is_account` helper + strengthened
+post-create verification (warns on anonymous owner, not just `None`) + a
+pre-create preflight warning when the sessionid is anonymous. **User action to get
+account ownership:** re-run `melee-agent sync auth` with a fresh logged-in
+sessionid.
+
 **If production rejects the DTK ASM** (assembler error, no score): implement the conversion contingency — in `run_production_create`, convert before building the payload:
 
 ```python

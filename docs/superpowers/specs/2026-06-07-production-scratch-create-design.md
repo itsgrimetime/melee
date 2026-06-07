@@ -1,7 +1,8 @@
 # Production scratch creation from a worktree function
 
 - **Date:** 2026-06-07
-- **Status:** Approved (design); revised after grounded multi-lens review
+- **Status:** Implemented + verified (2026-06-07). DTK target-ASM gate PASSED
+  (production's gc_wii assembler accepts raw DTK; no conversion needed).
 - **Component:** `melee-agent scratch` / `melee-agent sync`
 
 ## Problem
@@ -211,9 +212,14 @@ reusing existing steps where noted:
    `follow_redirects=True`, `timeout≈60s`. **No `X-API-Client` header.**
 9. **Create + claim:** Unit A. Persist the `claim_token` via
    `_save_scratch_token(slug, token)` so a later re-claim is possible.
-10. **Verify ownership:** `GET /api/scratch/{slug}`; if `owner` is `None`, warn
-    loudly (scratch created but **not** owned — sessionid likely expired;
-    re-run `sync auth`, then `melee-agent sync fix-ownership --function <func>`).
+10. **Verify ownership:** `GET /api/scratch/{slug}`; treat as account-owned only
+    if `owner` is non-null **and not anonymous** (`owner.is_anonymous == false`)
+    — a claim made with a logged-out/expired `sessionid` yields a non-null but
+    *anonymous* owner, which does NOT satisfy "owned by the user's account".
+    Otherwise warn loudly (re-run `sync auth` with a fresh logged-in sessionid,
+    then `melee-agent sync fix-ownership --function <func>`). The preflight also
+    inspects `GET /api/user` and warns *before* creating if the configured
+    sessionid is anonymous.
 11. **DB bookkeeping:** `db_upsert_scratch(slug, instance="production",
     base_url=PRODUCTION_DECOMP_ME, function_name=...)` and
     `db_upsert_function(func, production_scratch_slug=slug,
@@ -237,6 +243,11 @@ implementation plan must **empirically confirm it before relying on it**:
    take the converted ASM. This is a contingency, scoped but not built unless the
    gate fails.
 
+**Outcome (2026-06-07):** Gate PASSED. Created scratch `DFGFF` for
+`grZebes_801DA0C4` (5502-byte DTK `target_asm`); production assembled the target
+and the scratch scores `10000/10000` against it. The DTK→objdump conversion
+contingency is **NOT needed**.
+
 ### Ownership (corrected)
 
 A newly created scratch is **always created unowned/claimable**; sending
@@ -257,12 +268,13 @@ correctly does **not** persist the returned session).
 | No `cf_clearance` in prod cookies | Error → run `melee-agent sync auth`; exit |
 | Preflight `GET /api/user` 403 | Fail fast (before build): cf_clearance/sessionid expired → `sync auth`; exit |
 | UA looks like a bot (curl/requests) | Warn: ownership will fail; fix UA via `sync auth` |
+| Preflight: configured sessionid is anonymous (`/api/user` `is_anonymous`) | Warn before create: scratch will not be account-owned → `sync auth` with a fresh logged-in sessionid |
 | DB already has `production_scratch_slug` (no `--force`) | Print existing URL; exit without duplicate |
 | `not func.asm` (unbuilt worktree) | Error: build first (`ninja` / `worktree-doctor --fix`); do **not** POST |
 | ninja `.ctx` build fails | Existing exit path; hint `worktree-doctor --fix` for fresh worktrees |
 | Function has no repo C | Seed `// TODO` stub + warning; still create |
 | Create-path `403` | `DecompMeAuthError`: Cloudflare/cf_clearance expired → `sync auth`; exit |
-| Claim-path `403` / `success=false` / owner `None` | Loud warning: created but **not owned** → `sync auth` then `sync fix-ownership --function <func>` |
+| Claim-path `403` / `success=false` / owner `None` **or anonymous** | Loud warning: created but **not account-owned** → `sync auth` then `sync fix-ownership --function <func>` |
 | `429` | `rate_limited_request` exponential backoff |
 
 ## Testing
