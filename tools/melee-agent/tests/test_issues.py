@@ -652,3 +652,29 @@ def test_issue_show_unclaimed_has_no_claim_line(tmp_path):
     result = runner.invoke(app, ["issue", "show", str(issue["id"])])
     assert result.exit_code == 0, result.stdout
     assert "Claimed by:" not in strip_ansi(result.stdout)
+
+
+def test_note_allowed_on_claimed_issue_by_other_agent(tmp_path):
+    """note is not ownership-gated: any agent may annotate a claimed (open)
+    issue, and noting does not disturb the claim."""
+    reset_db()
+    db = get_db(tmp_path / "state.db")
+    issue = db.report_tool_issue(summary="x", agent_id="r")
+    db.claim_tool_issue(issue["id"], "agent-1")
+
+    result = runner.invoke(
+        app,
+        [
+            "issue",
+            "note",
+            str(issue["id"]),
+            "--body",
+            "extra context from a passer-by",
+            "--agent-id",
+            "agent-2",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    updated = db.get_tool_issue(issue["id"])
+    assert "extra context from a passer-by" in (updated["body"] or "")
+    assert updated["claimed_by"] == "agent-1"

@@ -62,8 +62,11 @@ melee-agent stub add <func>           # Add missing stub marker
 # Tool issue reporting (bugs, feature requests, papercuts, blockers)
 melee-agent issue report "short summary" --tool mwcc-debug --kind bug --function <func>
 melee-agent issue list --status open
+melee-agent issue list --available          # only unclaimed open issues (grab one of these)
 melee-agent issue show <id>
-melee-agent issue resolve <id> --note "fixed in <commit-or-summary>"
+melee-agent issue claim <id>                # claim before working it; fails if already claimed
+melee-agent issue release <id>              # give a claim back without resolving
+melee-agent issue resolve <id> --note "fixed in <commit-or-summary>"  # also clears the claim
 ```
 
 ## Tooling Feedback
@@ -77,6 +80,11 @@ melee-agent issue report "mwcc-debug local dump hung after COLORGRAPH DECISIONS"
   --tool mwcc-debug --kind bug --function fn_80247510 \
   --body "Command, observed output, timeout, and what this blocked"
 ```
+
+Before starting work on an issue, run `melee-agent issue claim <id>` so other
+parallel agents skip it; there is no auto-expiry, so if an agent abandons a
+claim, recover it with `melee-agent issue release <id> --force` (or
+`melee-agent issue claim <id> --force` to take it over directly).
 
 If a `melee-agent` command exits with an error through the wrapped entrypoint,
 it prints a copyable `melee-agent issue report ...` command. If a command
