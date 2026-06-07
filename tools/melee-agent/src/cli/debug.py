@@ -4821,6 +4821,7 @@ def _run_signature_candidate_checkdiff(
     unit: str,
     melee_root: Path,
     timeout: float,
+    rebuild_source: bool = False,
 ) -> dict:
     return _run_signature_candidate_checkdiff_many(
         functions=[function],
@@ -4829,6 +4830,7 @@ def _run_signature_candidate_checkdiff(
         unit=unit,
         melee_root=melee_root,
         timeout=timeout,
+        rebuild_source=rebuild_source,
     )[function]
 
 
@@ -4840,9 +4842,19 @@ def _run_signature_candidate_checkdiff_many(
     unit: str,
     melee_root: Path,
     timeout: float,
+    rebuild_source: bool = False,
 ) -> dict[str, dict]:
     if not functions:
         raise RuntimeError("candidate checkdiff requires at least one function")
+    if rebuild_source:
+        return _run_signature_candidate_checkdiff_many_rebuild(
+            functions=functions,
+            candidate_source=candidate_source,
+            source_path=source_path,
+            unit=unit,
+            melee_root=melee_root,
+            timeout=timeout,
+        )
     primary_function = functions[0]
     probe_dir = (
         melee_root
@@ -4965,6 +4977,141 @@ def _run_signature_candidate_checkdiff_many(
                 build_obj.unlink()
 
     return payloads
+
+
+def _run_signature_candidate_checkdiff_many_rebuild(
+    *,
+    functions: list[str],
+    candidate_source: str,
+    source_path: Path,
+    unit: str,
+    melee_root: Path,
+    timeout: float,
+) -> dict[str, dict]:
+    unit_for_o = unit[:-2] if unit.endswith(".c") else unit
+    unit_for_o = unit_for_o.removeprefix("src/")
+    validation_source_path = melee_root / "src" / f"{unit_for_o}.c"
+    build_obj = melee_root / "build" / "GALE01" / "src" / f"{unit_for_o}.o"
+    report_json = melee_root / "build" / "GALE01" / "report.json"
+    payloads: dict[str, dict] = {}
+    build_timeout = max(0.1, timeout * 0.4)
+    with _acquire_checkdiff_repo_lock(
+        melee_root,
+        label="signature-audit validation",
+    ):
+        original_source = validation_source_path.read_text()
+        build_obj_existed = build_obj.exists()
+        saved_obj = build_obj.read_bytes() if build_obj_existed else None
+        report_existed = report_json.exists()
+        saved_report = report_json.read_bytes() if report_existed else None
+        try:
+            validation_source_path.write_text(candidate_source)
+            for function in functions:
+                checkdiff_proc = subprocess.run(
+                    [
+                        sys.executable,
+                        str(melee_root / "tools" / "checkdiff.py"),
+                        function,
+                        "--format",
+                        "json",
+                        "--no-fingerprint",
+                        "--build-timeout",
+                        f"{build_timeout:g}",
+                    ],
+                    cwd=melee_root,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    env=_checkdiff_env_for_locked_child(disable_fingerprint=True),
+                )
+                if (
+                    checkdiff_proc.returncode not in (0, 1)
+                    or not checkdiff_proc.stdout.strip()
+                ):
+                    detail = (
+                        checkdiff_proc.stderr
+                        or checkdiff_proc.stdout
+                        or ""
+                    ).strip()
+                    raise RuntimeError(
+                        "candidate checkdiff failed for "
+                        f"{function} with exit {checkdiff_proc.returncode}"
+                        + (f": {detail}" if detail else "")
+                    )
+                try:
+                    payload = json.loads(checkdiff_proc.stdout)
+                except json.JSONDecodeError as exc:
+                    detail = (
+                        checkdiff_proc.stderr
+                        or checkdiff_proc.stdout
+                        or str(exc)
+                    ).strip()
+                    raise RuntimeError(
+                        "candidate checkdiff emitted non-json for "
+                        f"{function}: {detail}"
+                    ) from exc
+                if not isinstance(payload, dict):
+                    raise RuntimeError(
+                        "candidate checkdiff JSON root was not an object "
+                        f"for {function}"
+                    )
+                payloads[function] = payload
+        finally:
+            _restore_signature_candidate_validation_state(
+                source_path=validation_source_path,
+                source_text=original_source,
+                build_obj=build_obj,
+                build_obj_existed=build_obj_existed,
+                build_obj_bytes=saved_obj,
+                report_json=report_json,
+                report_existed=report_existed,
+                report_bytes=saved_report,
+            )
+
+    return payloads
+
+
+def _restore_signature_candidate_validation_state(
+    *,
+    source_path: Path,
+    source_text: str,
+    build_obj: Path,
+    build_obj_existed: bool,
+    build_obj_bytes: bytes | None,
+    report_json: Path,
+    report_existed: bool,
+    report_bytes: bytes | None,
+) -> None:
+    errors: list[str] = []
+    try:
+        source_path.write_text(source_text)
+    except OSError as exc:
+        errors.append(f"source: {exc}")
+    try:
+        if build_obj_existed and build_obj_bytes is not None:
+            build_obj.parent.mkdir(parents=True, exist_ok=True)
+            build_obj.write_bytes(build_obj_bytes)
+        elif not build_obj_existed and build_obj.exists():
+            build_obj.unlink()
+    except OSError as exc:
+        errors.append(f"object: {exc}")
+    try:
+        if report_existed and report_bytes is not None:
+            report_json.parent.mkdir(parents=True, exist_ok=True)
+            report_json.write_bytes(report_bytes)
+        elif not report_existed and report_json.exists():
+            report_json.unlink()
+    except OSError as exc:
+        errors.append(f"report: {exc}")
+    if errors:
+        message = (
+            "failed to restore signature validation state: " + "; ".join(errors)
+        )
+        active_exc = sys.exc_info()[1]
+        if active_exc is not None:
+            active_exc.add_note(message)
+        else:
+            raise RuntimeError(message)
 
 
 def _signature_report_payload(
@@ -5173,6 +5320,8 @@ def _signature_sibling_baselines(
 ) -> dict[str, float | None]:
     baselines: dict[str, float | None] = {}
     for sibling in sibling_functions:
+        if _find_unit_for_function(sibling, melee_root) is None:
+            continue
         try:
             payload, _ = _read_signature_checkdiff_payload(
                 function=sibling,
@@ -5299,6 +5448,7 @@ def suggest_signatures_cmd(
                 unit=unit,
                 melee_root=melee_root,
                 timeout=checkdiff_timeout,
+                rebuild_source=build,
             )
 
         sibling_functions = _signature_sibling_functions(
@@ -5328,6 +5478,7 @@ def suggest_signatures_cmd(
                 unit=unit,
                 melee_root=melee_root,
                 timeout=checkdiff_timeout,
+                rebuild_source=build,
             )
 
         validate_signature_patches(

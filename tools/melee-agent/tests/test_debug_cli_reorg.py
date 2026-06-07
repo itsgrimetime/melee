@@ -952,6 +952,348 @@ def test_signature_candidate_checkdiff_many_restores_build_object_once(
     ]
 
 
+def test_signature_candidate_checkdiff_many_build_restores_source_object_and_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "repo"
+    source = melee_root / "src" / "melee" / "demo.c"
+    source.parent.mkdir(parents=True)
+    original_source = "void caller_fn(void) { original(); }\n"
+    candidate_source = "void caller_fn(void) { candidate(); }\n"
+    source.write_text(original_source)
+    build_obj = melee_root / "build" / "GALE01" / "src" / "melee" / "demo.o"
+    build_obj.parent.mkdir(parents=True)
+    build_obj.write_bytes(b"original-object")
+    report_json = melee_root / "build" / "GALE01" / "report.json"
+    report_json.parent.mkdir(parents=True, exist_ok=True)
+    report_json.write_bytes(b'{"original": true}')
+    lock_events: list[str] = []
+    checked_functions: list[str] = []
+
+    @contextmanager
+    def fake_lock(root, *, label="checkdiff build/report"):
+        lock_events.append(f"enter:{label}")
+        yield
+        lock_events.append(f"exit:{label}")
+
+    def fake_run(cmd, **kwargs):
+        cmd_list = [str(part) for part in cmd]
+        if "checkdiff.py" in " ".join(cmd_list):
+            assert "--no-build" not in cmd_list
+            assert source.read_text() == candidate_source
+            build_obj.write_bytes(b"candidate-object")
+            report_json.write_bytes(b'{"candidate": true}')
+            checkdiff_index = next(
+                i for i, part in enumerate(cmd_list) if part.endswith("checkdiff.py")
+            )
+            function = cmd_list[checkdiff_index + 1]
+            checked_functions.append(function)
+            score = 98.0 if function == "caller_fn" else 95.0
+            return subprocess.CompletedProcess(
+                cmd,
+                1,
+                stdout=json.dumps({
+                    "function": function,
+                    "match": False,
+                    "fuzzy_match_percent": score,
+                }),
+                stderr="",
+            )
+        raise AssertionError(f"unexpected command: {cmd_list}")
+
+    monkeypatch.setattr(debug_cli, "_acquire_checkdiff_repo_lock", fake_lock)
+    monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
+
+    result = debug_cli._run_signature_candidate_checkdiff_many(
+        functions=["caller_fn", "sibling_fn"],
+        candidate_source=candidate_source,
+        source_path=source,
+        unit="melee/demo",
+        melee_root=melee_root,
+        timeout=5.0,
+        rebuild_source=True,
+    )
+
+    assert result["caller_fn"]["fuzzy_match_percent"] == 98.0
+    assert result["sibling_fn"]["fuzzy_match_percent"] == 95.0
+    assert checked_functions == ["caller_fn", "sibling_fn"]
+    assert source.read_text() == original_source
+    assert build_obj.read_bytes() == b"original-object"
+    assert report_json.read_bytes() == b'{"original": true}'
+    assert lock_events == [
+        "enter:signature-audit validation",
+        "exit:signature-audit validation",
+    ]
+
+
+def test_signature_candidate_checkdiff_many_build_uses_repo_unit_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "repo"
+    override_source = tmp_path / "override.c"
+    repo_source = melee_root / "src" / "melee" / "demo.c"
+    repo_source.parent.mkdir(parents=True)
+    original_source = "void caller_fn(void) { original(); }\n"
+    candidate_source = "void caller_fn(void) { candidate(); }\n"
+    override_source.write_text("void caller_fn(void) { override(); }\n")
+    repo_source.write_text(original_source)
+
+    @contextmanager
+    def fake_lock(root, *, label="checkdiff build/report"):
+        yield
+
+    def fake_run(cmd, **kwargs):
+        cmd_list = [str(part) for part in cmd]
+        if "checkdiff.py" in " ".join(cmd_list):
+            assert override_source.read_text() != candidate_source
+            assert repo_source.read_text() == candidate_source
+            return subprocess.CompletedProcess(
+                cmd,
+                1,
+                stdout=json.dumps({
+                    "function": "caller_fn",
+                    "match": False,
+                    "fuzzy_match_percent": 98.0,
+                }),
+                stderr="",
+            )
+        raise AssertionError(f"unexpected command: {cmd_list}")
+
+    monkeypatch.setattr(debug_cli, "_acquire_checkdiff_repo_lock", fake_lock)
+    monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
+
+    result = debug_cli._run_signature_candidate_checkdiff_many(
+        functions=["caller_fn"],
+        candidate_source=candidate_source,
+        source_path=override_source,
+        unit="melee/demo",
+        melee_root=melee_root,
+        timeout=5.0,
+        rebuild_source=True,
+    )
+
+    assert result["caller_fn"]["fuzzy_match_percent"] == 98.0
+    assert override_source.read_text() == "void caller_fn(void) { override(); }\n"
+    assert repo_source.read_text() == original_source
+
+
+def test_signature_candidate_checkdiff_many_build_passes_bounded_build_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "repo"
+    source = melee_root / "src" / "melee" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text("void caller_fn(void) {}\n")
+    captured_cmd: list[str] = []
+
+    @contextmanager
+    def fake_lock(root, *, label="checkdiff build/report"):
+        yield
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = [str(part) for part in cmd]
+        return subprocess.CompletedProcess(
+            cmd,
+            1,
+            stdout=json.dumps({
+                "function": "caller_fn",
+                "match": False,
+                "fuzzy_match_percent": 98.0,
+            }),
+            stderr="",
+        )
+
+    monkeypatch.setattr(debug_cli, "_acquire_checkdiff_repo_lock", fake_lock)
+    monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
+
+    debug_cli._run_signature_candidate_checkdiff_many(
+        functions=["caller_fn"],
+        candidate_source="void caller_fn(void) { candidate(); }\n",
+        source_path=source,
+        unit="melee/demo",
+        melee_root=melee_root,
+        timeout=5.0,
+        rebuild_source=True,
+    )
+
+    assert "--build-timeout" in captured_cmd
+    build_timeout = float(captured_cmd[captured_cmd.index("--build-timeout") + 1])
+    assert 0 < build_timeout < 5.0
+
+
+def test_signature_candidate_checkdiff_many_build_attempts_all_restores(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "repo"
+    source = melee_root / "src" / "melee" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text("void caller_fn(void) { original(); }\n")
+    build_obj = melee_root / "build" / "GALE01" / "src" / "melee" / "demo.o"
+    build_obj.parent.mkdir(parents=True)
+    build_obj.write_bytes(b"original-object")
+    report_json = melee_root / "build" / "GALE01" / "report.json"
+    report_json.parent.mkdir(parents=True, exist_ok=True)
+    report_json.write_bytes(b"original-report")
+
+    @contextmanager
+    def fake_lock(root, *, label="checkdiff build/report"):
+        yield
+
+    def fake_run(cmd, **kwargs):
+        build_obj.write_bytes(b"candidate-object")
+        report_json.write_bytes(b"candidate-report")
+        raise RuntimeError("candidate failed")
+
+    monkeypatch.setattr(debug_cli, "_acquire_checkdiff_repo_lock", fake_lock)
+    monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
+    original_write_text = Path.write_text
+
+    def flaky_write_text(self, *args, **kwargs):
+        if self == source and args and "original" in str(args[0]):
+            raise OSError("source restore failed")
+        return original_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", flaky_write_text)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        debug_cli._run_signature_candidate_checkdiff_many(
+            functions=["caller_fn"],
+            candidate_source="void caller_fn(void) { candidate(); }\n",
+            source_path=source,
+            unit="melee/demo",
+            melee_root=melee_root,
+            timeout=5.0,
+            rebuild_source=True,
+        )
+
+    assert "candidate failed" in str(excinfo.value)
+    assert any(
+        "failed to restore signature validation state" in note
+        and "source restore failed" in note
+        for note in getattr(excinfo.value, "__notes__", [])
+    )
+    assert build_obj.read_bytes() == b"original-object"
+    assert report_json.read_bytes() == b"original-report"
+
+
+def test_debug_suggest_signatures_build_validate_uses_rebuild_scoring(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "repo"
+    source = melee_root / "src" / "melee" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        textwrap.dedent(
+            """\
+            u8 helper(int idx);
+            void sink(u8 value);
+
+            void caller_fn(int idx)
+            {
+                u8 value;
+                value = helper(idx);
+                sink(value);
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    payload_path = tmp_path / "checkdiff.json"
+    payload_path.write_text(
+        json.dumps({
+            "function": "caller_fn",
+            "classification": {"primary": "signature-return-width"},
+            "target_asm": [
+                "/* 0000 */ mr r3, r31",
+                "/* 0004 */ bl helper",
+                "/* 0008 */ mr r30, r3",
+            ],
+            "current_asm": [
+                "/* 0000 */ mr r3, r31",
+                "/* 0004 */ bl helper",
+                "/* 0008 */ clrlwi r30, r3, 24",
+            ],
+            "fuzzy_match_percent": 97.5,
+        }),
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    def fake_many(**kwargs):
+        captured.update(kwargs)
+        return {
+            "caller_fn": {
+                "function": "caller_fn",
+                "match": False,
+                "fuzzy_match_percent": 97.5,
+            },
+        }
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/demo",
+    )
+    monkeypatch.setattr(debug_cli, "_signature_sibling_functions", lambda **kwargs: [])
+    monkeypatch.setattr(debug_cli, "_run_signature_candidate_checkdiff_many", fake_many)
+
+    result = runner.invoke(
+        debug_cli.debug_app,
+        [
+            "suggest",
+            "signatures",
+            "-f",
+            "caller_fn",
+            "--checkdiff-json",
+            str(payload_path),
+            "--build",
+            "--validate",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["rebuild_source"] is True
+    report = json.loads(result.output)
+    validation = report["findings"][0]["actions"][0]["validation"]
+    assert validation["primary"]["status"] == "non-improving"
+    assert validation["primary"]["candidate_match_percent"] == 97.5
+
+
+def test_signature_sibling_baselines_skip_missing_report_functions(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: None if function == "missing_fn" else "melee/demo",
+    )
+
+    def fake_read(**kwargs):
+        calls.append(kwargs["function"])
+        return {"fuzzy_match_percent": 95.0}, "fixture"
+
+    monkeypatch.setattr(debug_cli, "_read_signature_checkdiff_payload", fake_read)
+
+    baselines = debug_cli._signature_sibling_baselines(
+        sibling_functions=["missing_fn", "sibling_fn"],
+        melee_root=tmp_path,
+        checkdiff_timeout=5.0,
+    )
+
+    assert calls == ["sibling_fn"]
+    assert baselines == {"sibling_fn": 95.0}
+
+
 def _consumer_home_call(symbol: str, offset: int, call_offset: int) -> list[str]:
     return [
         f"/* {call_offset:04X} */ addi r3, r1, 0x{offset:X}",
