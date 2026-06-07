@@ -1,5 +1,6 @@
 from typer.testing import CliRunner
 
+from src.cli import capabilities as cap
 from src.cli.capabilities import capabilities_app
 
 runner = CliRunner()
@@ -12,9 +13,6 @@ def test_capabilities_help_lists_subcommands():
     assert "search" in out
     assert "show" in out
     assert "generate" in out
-
-
-from src.cli import capabilities as cap
 
 
 def test_command_capabilities_include_known_commands():

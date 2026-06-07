@@ -31,7 +31,9 @@ def _walk_click(cmd, ctx, prefix: str = ""):
 
     try:
         names = cmd.list_commands(ctx)
-    except Exception:
+    except Exception as exc:
+        import sys
+        print(f"capabilities: list_commands failed ({exc}); falling back to .commands", file=sys.stderr)
         names = list(getattr(cmd, "commands", {}).keys())
     for name in sorted(names):
         sub = cmd.get_command(ctx, name)
@@ -48,13 +50,14 @@ def _help_text(click_cmd) -> str:
     """short_help -> first line of help/docstring -> ''. Typer folds the command
     callback docstring into `.help`, so get_short_help_str covers the chain."""
     try:
-        short = click_cmd.get_short_help_str(limit=100)
+        short = click_cmd.get_short_help_str(limit=200)
     except Exception:
         short = ""
     if short:
         return short.strip()
     if click_cmd.help:
-        return click_cmd.help.strip().splitlines()[0].strip()
+        lines = click_cmd.help.strip().splitlines()
+        return lines[0].strip() if lines else ""
     return ""
 
 
@@ -79,6 +82,7 @@ def command_capabilities(root_app=None) -> list[Capability]:
                 summary=_help_text(cmd),
                 invoke=f"melee-agent {full_name}",
                 group=group,
+                # keywords = command-path tokens only (search ranks help text separately)
                 keywords=full_name.replace("-", " ").split(),
             )
         )
