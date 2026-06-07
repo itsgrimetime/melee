@@ -12,3 +12,19 @@ def test_capabilities_help_lists_subcommands():
     assert "search" in out
     assert "show" in out
     assert "generate" in out
+
+
+from src.cli import capabilities as cap
+
+
+def test_command_capabilities_include_known_commands():
+    caps = cap.command_capabilities()
+    names = {c.name for c in caps}
+    # Known leaf commands from the real tree (verified against live introspection):
+    assert "debug target score-source" in names   # NOTE: there is NO `debug score`
+    assert "extract files" in names
+    assert "struct verify" in names
+    # Every command has a non-empty invoke string and a summary fallback.
+    for c in caps:
+        assert c.invoke.startswith("melee-agent ")
+        assert isinstance(c.summary, str)
