@@ -35,4 +35,7 @@ def audit_cmd(
     repo = Path(root).resolve() if root else find_melee_root()
     res = audit_tu(repo, c, check_binding=check_binding)
     typer.echo(render_json(res) if json_out else render_text(res))
-    raise typer.Exit(1 if res.enriched else 0)
+    # A successful audit exits 0 even when discrepancies are found — findings are
+    # normal output, not an error. (Reserving nonzero for usage errors also keeps
+    # the CLI's failure-report footer from firing on the common "found" case.)
+    raise typer.Exit(0)
