@@ -791,3 +791,65 @@ class TestDatabaseIntegrity:
 
         db1.close()
         db2.close()
+
+
+def test_tool_issues_claim_columns_migrate_from_v9(tmp_path):
+    """An existing pre-claim (v9) DB with a row upgrades to gain
+    claimed_by/claimed_at (NULL on the pre-existing row), and the migrated table
+    shape matches a freshly created one."""
+    import sqlite3
+
+    from src.db import StateDB, reset_db
+    from src.db.schema import SCHEMA_VERSION, get_migrations
+
+    reset_db()
+
+    # Seed a real v9 DB: run the frozen migrations[8] DDL to create tool_issues
+    # at the v9 shape (no claim columns), insert a row, and stamp version 9.
+    v9_path = tmp_path / "v9.db"
+    seed = sqlite3.connect(v9_path)
+    seed.execute(
+        "CREATE TABLE db_meta (key TEXT PRIMARY KEY, value TEXT, updated_at REAL)"
+    )
+    seed.executescript(get_migrations()[8])  # creates v9 tool_issues + indexes
+    seed.execute(
+        "INSERT INTO tool_issues (status, kind, summary) VALUES ('open', 'bug', 'legacy issue')"
+    )
+    seed.execute("INSERT INTO db_meta (key, value) VALUES ('schema_version', '9')")
+    seed.commit()
+    seed.close()
+
+    # Instantiating StateDB runs _run_migrations 9 -> 10 (the ALTERs).
+    migrated_db = StateDB(v9_path)
+    with migrated_db.connection() as conn:
+        migrated_cols = [
+            (row["name"], row["type"])
+            for row in conn.execute("PRAGMA table_info(tool_issues)")
+        ]
+        version = conn.execute(
+            "SELECT value FROM db_meta WHERE key = 'schema_version'"
+        ).fetchone()[0]
+
+    names = [name for name, _ in migrated_cols]
+    assert names[-2:] == ["claimed_by", "claimed_at"]
+    assert version == str(SCHEMA_VERSION) == "10"
+
+    # The pre-existing row gained the columns as NULL.
+    legacy = migrated_db.get_tool_issue(1)
+    assert legacy["summary"] == "legacy issue"
+    assert legacy["claimed_by"] is None
+    assert legacy["claimed_at"] is None
+
+    migrated_db.close()
+    reset_db()
+
+    # A fresh DB (built from SCHEMA_SQL) has the identical column shape.
+    fresh_db = StateDB(tmp_path / "fresh.db")
+    with fresh_db.connection() as conn:
+        fresh_cols = [
+            (row["name"], row["type"])
+            for row in conn.execute("PRAGMA table_info(tool_issues)")
+        ]
+    assert fresh_cols == migrated_cols
+    fresh_db.close()
+    reset_db()
