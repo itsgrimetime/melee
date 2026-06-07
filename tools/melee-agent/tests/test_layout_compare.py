@@ -68,3 +68,11 @@ def test_foreign_name_occupies_slot():
     reorders = [x for x in f if x.kind == "reorder"]
     assert any(x.target[0] == "a" and x.current[0][0] == "b" for x in reorders), \
         "expected foreign-name reorder: b occupies slot of a"
+
+
+def test_section_mismatch_when_old_slot_is_anonymous():
+    # g moved to .sdata; its old .data slot is covered by anonymous @1
+    t = {".data": [I("g", 0, 0x4)]}
+    c = {".sdata": [I("g", 0, 0x4)],
+         ".data": [I("@1", 0, 0x4, anonymous=True)]}
+    assert any(x.kind == "section-mismatch" for x in compare_layout(t, c))

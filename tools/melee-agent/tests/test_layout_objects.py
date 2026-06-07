@@ -16,6 +16,9 @@ def test_anonymous_and_gap_detection():
     assert _is_anonymous("...data.0")
     assert not _is_anonymous("mnEvent_803EF758")
     assert not _is_gap("mnEvent_803EF758")
+    # lbl_<ADDR> are real production data symbols, not anonymous
+    assert not _is_anonymous("lbl_803BCF20")
+    assert not _is_anonymous("lbl_80000000")
 
 
 def test_section_intervals_filters_and_maps(monkeypatch):

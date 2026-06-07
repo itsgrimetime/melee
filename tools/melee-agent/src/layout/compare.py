@@ -127,7 +127,7 @@ def compare_layout(
         for f in compare_section(sec, target_by_section.get(sec, []),
                                  current_by_section.get(sec, []),
                                  check_binding=check_binding):
-            if f.kind == "missing" and f.target:
+            if f.kind in ("missing", "anonymous") and f.target:
                 name = f.target[0]
                 if name in cur_global and cur_global[name][0] != sec:
                     osec, oiv = cur_global[name]

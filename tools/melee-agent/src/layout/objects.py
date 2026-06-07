@@ -7,7 +7,7 @@ from pathlib import Path
 from ..common.elf_symbols import read_object_symbols
 from .compare import DATA_ELF_SECTIONS, Interval
 
-_ANON_PREFIXES = ("@", "...", "lbl_", "$")
+_ANON_PREFIXES = ("@", "...", "$")
 
 
 @dataclass(frozen=True)
@@ -44,7 +44,8 @@ def _is_anonymous(name: str) -> bool:
 def section_intervals(obj: Path) -> dict[str, list[Interval]]:
     """Group a .o's data-section object symbols into Intervals by ELF section.
 
-    Skips `gap_*` padding markers; marks @N/...data./lbl_/$ as anonymous.
+    Skips `gap_*` padding markers; marks @N/...data./$... as anonymous.
+    lbl_<ADDR> symbols are real production data and are NOT treated as anonymous.
     """
     out: dict[str, list[Interval]] = {}
     for s in read_object_symbols(obj):

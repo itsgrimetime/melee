@@ -51,6 +51,12 @@ def audit_tu(repo: Path, c_file: Path, *, check_binding: bool = False) -> AuditR
         return AuditResult(up.obj_path, degraded=True,
             warnings=[f"current object missing: {up.our_obj}; build it first"])
 
+    try:
+        import elftools  # noqa: F401
+    except ImportError:
+        return AuditResult(up.obj_path, degraded=True,
+            warnings=["pyelftools not installed; cannot read object symbols"])
+
     warnings: list[str] = []
     try:
         if up.our_obj.stat().st_mtime < Path(c_file).stat().st_mtime:
@@ -60,6 +66,10 @@ def audit_tu(repo: Path, c_file: Path, *, check_binding: bool = False) -> AuditR
 
     target = section_intervals(up.ref_obj)
     current = section_intervals(up.our_obj)
+    if not target and not current:
+        warnings.append(
+            "no data symbols read from either object; they may be unreadable or contain no data"
+        )
     decls = map_decls(c_file)
     findings = compare_layout(target, current, check_binding=check_binding)
 
