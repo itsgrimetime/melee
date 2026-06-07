@@ -70,17 +70,32 @@ stop showing in-flight work). Not chosen.
 
 ## Schema migration
 
+How the runner works (`_init_schema` / `_run_migrations` in `db/__init__.py`):
+a **fresh** DB executes the canonical `SCHEMA_SQL` once and stamps
+`schema_version = SCHEMA_VERSION` (migrations are **not** run); an **existing**
+DB applies `migrations[v]` for each `v` in `range(current_version,
+SCHEMA_VERSION)`. This dictates exactly which DDL gets the new columns:
+
 - `SCHEMA_VERSION`: `9 → 10`.
-- Add migration entry keyed `9` in `get_migrations()`:
+- **Canonical `CREATE TABLE tool_issues` in `SCHEMA_SQL` (near line 172):** ADD
+  the two columns here. This is the only DDL a fresh DB ever sees.
+  ```sql
+  claimed_by TEXT,
+  claimed_at REAL,
+  ```
+- **New migration entry keyed `9`** in `get_migrations()`:
   ```sql
   ALTER TABLE tool_issues ADD COLUMN claimed_by TEXT;
   ALTER TABLE tool_issues ADD COLUMN claimed_at REAL;
   ```
-- Add the same two columns to the canonical `CREATE TABLE tool_issues` in
-  `schema.py` (both the inline DDL near line 172 and the version-8 migration's
-  embedded `CREATE TABLE IF NOT EXISTS` — keep fresh-DB and migrated-DB shapes
-  identical).
-- No index needed; claim lookups are by primary key `id` or full-table scans
+- **Do NOT touch the version-8 migration's embedded `CREATE TABLE IF NOT EXISTS
+  tool_issues` (near line 796).** It is the frozen v9 shape. On the 8 → 10
+  upgrade path the runner executes `migrations[8]` (this embedded create,
+  *without* the claim columns) and then `migrations[9]` (the `ALTER`s); if the
+  embedded create already had the columns, the `ALTER ADD COLUMN` would fail
+  with a duplicate-column error. Leaving it frozen makes 8→10 and 9→10 both
+  land on the same final shape.
+- No index needed; claim lookups are by primary key `id`, or full-table scans
   already bounded by the existing `LIMIT`.
 
 ## DB methods (`StateDB`, beside the other `*_tool_issue` methods)
@@ -133,9 +148,10 @@ Symmetric to claim; prints `Released issue #<id>`.
 
 - New **Claimed** column rendering `claimed_by` or `-`.
 - New `--available` / `--unclaimed` boolean flag → only open issues with
-  `claimed_by IS NULL`. Implemented as a filter param on `list_tool_issues`
-  (e.g. `unclaimed_only: bool`) applied as `AND claimed_by IS NULL`, or as a
-  post-filter in the CLI — DB-level keeps it consistent with `--json`.
+  `claimed_by IS NULL`. Implemented **at the DB level** as a new
+  `unclaimed_only: bool = False` param on `list_tool_issues`, appended to the
+  query as `AND claimed_by IS NULL`. DB-level (not CLI post-filter) so `--json`
+  and the table render identically.
 - Default `list` is unchanged except for the new column (claimed-by-others stay
   visible, annotated).
 
@@ -179,8 +195,9 @@ and gains the two columns with NULL defaults on existing rows.
 
 ## Files touched
 
-- `tools/melee-agent/src/db/schema.py` — `SCHEMA_VERSION`, migration `9`,
-  canonical + embedded `CREATE TABLE`.
+- `tools/melee-agent/src/db/schema.py` — bump `SCHEMA_VERSION` to 10, add
+  migration `9` (two `ALTER`s), add the two columns to the **canonical**
+  `CREATE TABLE` only (leave the migration-8 embedded create frozen).
 - `tools/melee-agent/src/db/__init__.py` — `claim_tool_issue`,
   `release_tool_issue`, `resolve_tool_issue` (clear claim).
 - `tools/melee-agent/src/cli/issue.py` — `claim` + `release` commands, `list`
