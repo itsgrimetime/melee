@@ -10,6 +10,27 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/build-intent-nudge.py"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/build-intent-tooluse-nudge.py"
+          }
+        ]
+      }
     ]
   }
 }
