@@ -366,6 +366,8 @@ def test_403_stops_the_batch(tmp_path, monkeypatch):
         calls["create"] += 1
         raise DecompMeAuthError("403")
 
+    # Keep the test hermetic: synced_scratches.json is written next to this path.
+    monkeypatch.setattr(prod, "PRODUCTION_COOKIES_FILE", tmp_path / "production_cookies.json")
     monkeypatch.setattr("src.db.get_db", lambda *a, **k: db)
     monkeypatch.setattr(prod, "load_production_cookies", lambda: {"cf_clearance": "x", "sessionid": "y"})
     monkeypatch.setattr(prod, "rate_limited_request", _fake_rate_limited_request)
@@ -681,7 +683,7 @@ def _build_stripped_context(function_name, func, melee_root, context_file):
 
 - [ ] **Step 2: Replace the inline context-building in `scratch_create` with a call**
 
-In `scratch_create`, find the inline region that builds + strips the context — it starts after `func` is extracted, at the `# Get context file using the function's source file path` line (`ctx_path = context_file or _get_context_file(source_file=func.file_path)`, ~line 181) and ends at the `console.print(f"[dim]Stripped {function_name} definition from context[/dim]")` line (~line 267). Replace that entire region with:
+In `scratch_create`, find the inline region that builds + strips the context — it starts at the `# Get context file using the function's source file path` comment (~line 180, the line **above** `ctx_path = context_file or _get_context_file(source_file=func.file_path)`) and ends at the `console.print(f"[dim]Stripped {function_name} definition from context[/dim]")` line (~line 267). Include that leading comment in the replaced region so no orphan comment is left. Replace that entire region with:
 
 ```python
     # Build + strip the per-file context (worktree-aware).

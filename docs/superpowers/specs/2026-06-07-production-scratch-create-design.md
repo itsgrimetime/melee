@@ -112,8 +112,9 @@ melee-agent scratch create <function_name> --production [--force] [--dry-run]
   `extract_function` and the ninja `.ctx` build, so it requires a built
   worktree; it is not a zero-cost seam — see Testing.)
 - `--decompile/-d` is **ignored** under `--production` (source is seeded from
-  repo C, not m2c). If the user passes `-d`/`--api-url` explicitly with
-  `--production`, print a one-line notice that they are ignored.
+  repo C, not m2c). It is ignored silently — it defaults on, so Typer cannot
+  distinguish an explicit `-d` from the default. `--api-url` is also ignored;
+  a one-line notice is printed when `--api-url` was passed.
 
 ### Components / units
 
