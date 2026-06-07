@@ -1216,14 +1216,30 @@ melee-agent issue release <id>              # give a claim back without resolvin
 melee-agent issue resolve <id> --note "fixed in <commit-or-summary>"  # also clears the claim
 ```
 
-Then add this sentence to the Tooling Feedback prose paragraph (right after the
-heredoc example that ends with `... and what this blocked`):
+Then, in the same `CLAUDE.md`, add a claiming paragraph to the Tooling Feedback
+section. Find this exact block (the closing ``` of the report example followed
+by the "If a `melee-agent` command exits..." paragraph):
 
 ```
+  --body "Command, observed output, timeout, and what this blocked"
+```
+
+If a `melee-agent` command exits with an error through the wrapped entrypoint,
+```
+
+and change it to insert the new paragraph between the code fence and the "If a
+`melee-agent`..." line:
+
+```
+  --body "Command, observed output, timeout, and what this blocked"
+```
+
 Before starting work on an issue, run `melee-agent issue claim <id>` so other
 parallel agents skip it; there is no auto-expiry, so if an agent abandons a
 claim, recover it with `melee-agent issue release <id> --force` (or
 `melee-agent issue claim <id> --force` to take it over directly).
+
+If a `melee-agent` command exits with an error through the wrapped entrypoint,
 ```
 
 - [ ] **Step 4: Run the full test suite for the touched files**
