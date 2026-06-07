@@ -42,12 +42,16 @@ void f(int idx, float spacing)
     Vec3 translate;
     Vec3 pos;
     Vec3 result;
-    int pad;
+    int tag;
+    int mid;
+    int echo;
     pos.x = translate.x;
     pos.y = spacing;
     pos.z = translate.z;
-    pad = idx;
+    tag = idx;
+    mid = idx;
     result.x = pos.x;
+    echo = tag;
 }
 '''
 
