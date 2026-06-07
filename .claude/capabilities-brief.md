@@ -15,7 +15,7 @@ Before building any tool/script/command, run `melee-agent capabilities search <t
 - ghidra: cache-build, decompile, func, setup, status, strings, xrefs
 - harvest: (direct)
 - hook: install, uninstall, validate
-- issue: campaign-report, list, note, report, resolve, show
+- issue: campaign-report, claim, list, note, release, report, resolve, show
 - layout: audit
 - mismatch: backfill, get, init, list, m2c, migrate, opcode, record-success, review, search, show, stats
 - opseq: (direct)

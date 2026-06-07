@@ -123,8 +123,10 @@
 - `melee-agent hook uninstall` — Remove git pre-commit hooks installed by melee-agent.
 - `melee-agent hook validate` — Validate staged changes against project guidelines.
 - `melee-agent issue campaign-report` — Report tooling-campaign ROI, generality, and remaining gaps.
+- `melee-agent issue claim` — Claim an open issue so other agents skip it.
 - `melee-agent issue list` — List reported tooling issues.
 - `melee-agent issue note` — Append context to an open tooling issue without resolving it.
+- `melee-agent issue release` — Release your claim on an issue without resolving it.
 - `melee-agent issue report` — Report a tooling issue, feature request, papercut, or blocker.
 - `melee-agent issue resolve` — Mark a reported tooling issue as resolved.
 - `melee-agent issue show` — Show one reported tooling issue.
