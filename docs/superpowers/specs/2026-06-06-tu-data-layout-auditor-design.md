@@ -23,8 +23,8 @@ whole TU's data layout against the target object.
 |---|---|---|
 | `mnEvent_803EF758` size **0x30** (one object) | four objects `_758`+`_764`+`_770`+`_77C` (0xC each) | **split** |
 | `mnEvent_803EF788` size **0xA** | size **0xC** | **size-mismatch** |
-| `mnEvent_804A0908` (.bss) size **0x10** | size **0x4** | **size-mismatch** (BSS tentative) |
-| `.sdata` `_5030,_5038,_5040,_5044` | `_5040` lands in the `_5030` slot; `_5030/_5038` absent | **reorder + missing** |
+| `mnEvent_804A0908` **.bss** size **0x10** | **.sbss** size **0x4** | **section-mismatch** (.bss→.sbss; cross-section move detected by `compare_layout`) |
+| `.sdata` `_5030,_5038,_5040,_5044` | `_5040` lands in the `_5030` slot | **reorder** (+ a merge around `_5040`) |
 
 Confirmed via `nm -S` on both objects; not visible from source names (which
 already equal the symbols.txt addresses). **The compiled objects are ground
@@ -33,9 +33,9 @@ truth for layout.**
 ## Goal / Non-goals
 
 - GOAL: a read-only **analyzer** that, for a TU, reports every data-layout
-  discrepancy (split / merge / size-mismatch / reorder / binding / missing /
-  anonymous / gap-change), each with source location, confidence, and a concrete
-  suggested change.
+  discrepancy (split / merge / size-mismatch / reorder / section-mismatch /
+  missing / anonymous; binding is opt-in; gap-change deferred to phase-2), each
+  with source location, confidence, and a concrete suggested change.
 - GOAL: TU-agnostic; works on any `<file.c>` via the same logic.
 - NON-GOAL (this phase): auto-applying fixes (documented phase 2).
 - NON-GOAL: `.text` codegen ceilings (separate tooling).

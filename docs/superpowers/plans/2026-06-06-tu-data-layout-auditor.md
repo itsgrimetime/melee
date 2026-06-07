@@ -981,7 +981,7 @@ Expected: all PASS — including `test_mnevent_acceptance_flags_known_issues` (n
 - [ ] **Step 2: Run the auditor on mnevent and eyeball output**
 
 Run: `cd tools/melee-agent && python -m src.cli layout audit ../../src/melee/mn/mnevent.c`
-Expected: reports `[split] mnEvent_803EF758`, `[size-mismatch] mnEvent_803EF788`, `[section-mismatch] mnEvent_804A0908`, plus `.sdata` reorder/missing; each with a suggestion; no `gap_*` noise; no binding noise.
+Expected: reports `[split] mnEvent_803EF758`, `[size-mismatch] mnEvent_803EF788`, `[section-mismatch] mnEvent_804A0908`, plus `.sdata` discrepancies (reorder, and a merge around `mnEvent_804D5040`); each with a suggestion; no `gap_*` noise; no binding noise.
 
 - [ ] **Step 3: Generalization — run on a second TU**
 
