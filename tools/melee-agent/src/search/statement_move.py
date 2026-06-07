@@ -271,3 +271,50 @@ def extract_movable_units(sibs: list[SiblingStmt], locals_: set[str]) -> list[Mo
         ))
         i = j + 1
     return units
+
+
+def _sibling_rw(stmt: SiblingStmt, locals_: set[str]) -> tuple[frozenset, frozenset, bool]:
+    """(reads, writes, is_hard_barrier). A statement we cannot classify as a
+    pure-local movable assignment is an unconditional hard barrier.
+
+    Note: re-classifies via classify_movable rather than reusing
+    extract_movable_units' precomputed infos — kept intentionally independent;
+    classify_movable is a cheap pure pass over tiny per-function statements."""
+    info = classify_movable(stmt, locals_)
+    if info is not None:
+        return info.reads, info.writes, False
+    return frozenset(), frozenset(), True
+
+
+def legal_destinations(sibs: list[SiblingStmt], unit: MoveUnit,
+                       escaped: set[str], locals_: set[str]) -> list[int]:
+    lo, hi = unit.index_range
+    unit_escape_sensitive = bool((set(unit.reads) | set(unit.writes)) & escaped)
+
+    def crosses_ok(t: SiblingStmt) -> bool:
+        t_reads, t_writes, hard = _sibling_rw(t, locals_)
+        if hard:
+            return False    # clarification A: opaque/immovable = unconditional barrier
+        if t_writes & (unit.reads | unit.writes):   # WAR / WAW
+            return False
+        if t_reads & unit.writes:                    # RAW (t reads what unit writes)
+            return False
+        # defense-in-depth (currently always satisfied since movable siblings are pure-local):
+        if unit_escape_sensitive and (t_writes & escaped):
+            return False
+        return True
+
+    legal: list[int] = []
+    d = hi + 1                          # sink (down)
+    while d <= len(sibs):
+        legal.append(d)
+        if d == len(sibs) or not crosses_ok(sibs[d]):
+            break
+        d += 1
+    d = lo - 1                          # hoist (up)
+    while d >= 0:
+        if not crosses_ok(sibs[d]):
+            break
+        legal.append(d)
+        d -= 1
+    return sorted(x for x in set(legal) if x < lo or x > hi + 1)   # exclude identity window

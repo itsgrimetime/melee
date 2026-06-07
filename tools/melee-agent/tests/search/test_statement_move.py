@@ -112,3 +112,56 @@ def test_extract_units_clusters_aggregate_fields_and_keeps_singletons():
     assert {"pos", "pad", "result"} <= bases       # pad and result are separate singletons
     # cluster self-reads are NOT subtracted away
     assert pos_units[0].reads == frozenset({"translate", "spacing"})
+
+
+from src.search.statement_move import legal_destinations
+
+def _idx_of(sibs, needle):
+    return next(i for i, s in enumerate(sibs) if needle in s.text)
+
+def test_legal_destinations_raw_dependency_blocks_moving_past_use():
+    src = '''\
+void f(int idx)
+{
+    int a;
+    int b;
+    int c;
+    a = idx;
+    b = idx;
+    c = a;
+}
+'''
+    sibs = toplevel_siblings(src, "f")
+    if sibs is None:
+        import pytest; pytest.skip("tree-sitter unavailable")
+    locs = local_names(src, "f")
+    units = extract_movable_units(sibs, locs)
+    a_unit = next(u for u in units if u.write_base == "a")
+    legal = legal_destinations(sibs, a_unit, escaped=set(), locals_=locs)
+    ci = _idx_of(sibs, "c = a")
+    assert ci in legal              # may move down to just BEFORE c (a still precedes its use)
+    assert (ci + 1) not in legal    # may NOT move past c (would break c's read of a)
+    bi = _idx_of(sibs, "b = idx")
+    assert any(d > bi for d in legal)   # proves it crossed the independent `b = idx`
+
+def test_legal_destinations_call_is_unconditional_hard_barrier():
+    src = '''\
+void f(int a, int b)
+{
+    int x;
+    int y;
+    x = a;
+    y = b;
+    g(b);
+}
+'''
+    sibs = toplevel_siblings(src, "f")
+    if sibs is None:
+        import pytest; pytest.skip("tree-sitter unavailable")
+    locs = local_names(src, "f")
+    units = extract_movable_units(sibs, locs)
+    x_unit = next(u for u in units if u.write_base == "x")
+    legal = legal_destinations(sibs, x_unit, escaped=set(), locals_=locs)
+    gi = _idx_of(sibs, "g(b)")
+    assert gi in legal              # may move to just before the call (after y = b)
+    assert (gi + 1) not in legal    # may NOT cross the call (unconditional barrier)
