@@ -10,6 +10,8 @@ def main() -> int:
         data = json.load(sys.stdin)
     except Exception:
         return 0
+    if not isinstance(data, dict):
+        return 0
     if data.get("tool_name") not in ("Write", "Edit"):
         return 0
     path = str((data.get("tool_input") or {}).get("file_path", "")).replace("\\", "/")

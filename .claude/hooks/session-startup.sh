@@ -1,7 +1,8 @@
 #!/bin/bash
 #
 # Session startup hook for Melee decompilation project.
-# Only runs in remote/containerized environments (Claude Code web).
+# Always injects the capabilities brief into session context (local and remote);
+# additionally bootstraps the build environment in remote/containerized sessions.
 #
 
 set -e

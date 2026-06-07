@@ -25,6 +25,8 @@ def main() -> int:
         data = json.load(sys.stdin)
     except Exception:
         return 0
+    if not isinstance(data, dict):
+        return 0
     prompt = str(data.get("prompt", ""))
     if not BUILD_INTENT.search(prompt):
         return 0
