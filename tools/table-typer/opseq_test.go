@@ -144,3 +144,34 @@ func TestParsePatternErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestMatchInstr(t *testing.T) {
+	ins := asmInstr{opcode: "addi", operands: []string{"r3", "r4", "0x8"}}
+
+	// opcode-only token matches regardless of operands
+	if !matchInstr(ins, patToken{opcode: "addi"}, map[string]string{}) {
+		t.Fatal("opcode-only should match")
+	}
+	// wrong opcode
+	if matchInstr(ins, patToken{opcode: "subi"}, map[string]string{}) {
+		t.Fatal("wrong opcode should not match")
+	}
+	// "_" wildcards each operand; count must still match
+	if !matchInstr(ins, patToken{opcode: "addi", operands: []string{"_", "_", "_"}}, map[string]string{}) {
+		t.Fatal("all-wildcard should match")
+	}
+	if matchInstr(ins, patToken{opcode: "addi", operands: []string{"_", "_"}}, map[string]string{}) {
+		t.Fatal("operand count mismatch should fail")
+	}
+	// consistency variable binds, then must stay consistent
+	vars := map[string]string{}
+	if !matchInstr(asmInstr{opcode: "or", operands: []string{"r5", "r5"}}, patToken{opcode: "or", operands: []string{"x", "x"}}, vars) {
+		t.Fatal("x=r5 twice should match")
+	}
+	if vars["x"] != "r5" {
+		t.Fatalf("x should bind r5, got %q", vars["x"])
+	}
+	if matchInstr(asmInstr{opcode: "or", operands: []string{"r5", "r6"}}, patToken{opcode: "or", operands: []string{"x", "x"}}, map[string]string{}) {
+		t.Fatal("x=r5 then x=r6 should fail")
+	}
+}

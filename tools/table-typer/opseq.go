@@ -164,3 +164,33 @@ func parsePattern(tokens []string, gapCap int) ([]patToken, error) {
 	}
 	return pat, nil
 }
+
+// matchInstr reports whether ins satisfies concrete token tok under the current
+// variable bindings. It may add bindings to vars; callers that need rollback
+// must pass a clone (see solve). An opcode-only token (no operands) treats
+// operands as don't-care.
+func matchInstr(ins asmInstr, tok patToken, vars map[string]string) bool {
+	if ins.opcode != tok.opcode {
+		return false
+	}
+	if len(tok.operands) == 0 {
+		return true
+	}
+	if len(ins.operands) != len(tok.operands) {
+		return false
+	}
+	for i, p := range tok.operands {
+		if p == "_" {
+			continue
+		}
+		actual := ins.operands[i]
+		if bound, ok := vars[p]; ok {
+			if bound != actual {
+				return false
+			}
+		} else {
+			vars[p] = actual
+		}
+	}
+	return true
+}
