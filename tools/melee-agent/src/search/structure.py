@@ -25,6 +25,7 @@ DEFAULT_STRUCTURE_AXES = (
 )
 OPTIONAL_STRUCTURE_AXES = (
     "source-lifetime",
+    "inline-boundary",
 )
 SUPPORTED_STRUCTURE_AXES = (
     *DEFAULT_STRUCTURE_AXES,
@@ -417,6 +418,25 @@ def run_structure_search(
             variants.extend(axis_variants)
             continue
 
+        if axis == "inline-boundary":
+            if source is None:
+                summary, axis_variants = _blocked_axis(
+                    axis,
+                    "source-unavailable",
+                    source_read_error or "source file was not provided",
+                )
+            else:
+                summary, axis_variants = generate_inline_boundary_variants(
+                    source,
+                    function,
+                    output_path / "inline-boundary",
+                    baseline_percent=baseline_percent,
+                    max_candidates=max_candidates,
+                )
+            axis_summaries.append(summary)
+            variants.extend(axis_variants)
+            continue
+
         if axis == "statement-order":
             if source is None:
                 summary, axis_variants = _blocked_axis(
@@ -799,6 +819,456 @@ def generate_source_lifetime_variants(
         ),
         variants,
     )
+
+
+def generate_inline_boundary_variants(
+    source: str,
+    function: str,
+    output_dir: Path,
+    *,
+    baseline_percent: float | None,
+    max_candidates: int,
+) -> tuple[AxisSummary, list[StructureVariant]]:
+    function_span = find_function(source, function)
+    if function_span is None:
+        return _blocked_axis(
+            "inline-boundary",
+            "source-unavailable",
+            "function was not found in source",
+        )
+    function_body = source[function_span.body_open + 1:function_span.body_close]
+    if re.search(r"(?m)^\s*#", function_body):
+        return _blocked_axis(
+            "inline-boundary",
+            "unsafe-inline-boundary-preprocessor",
+            "preprocessor directives inside the function make source spans unsafe",
+        )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    max_candidates = max(0, int(max_candidates))
+    command = (
+        f"melee-agent debug search structure -f {function} "
+        f"--axis inline-boundary --max-candidates {max_candidates}"
+    )
+    variants: list[StructureVariant] = []
+    seen_sources: set[str] = {source}
+    family_counts: dict[str, int] = {}
+
+    def add_variant(
+        *,
+        operator: str,
+        label: str,
+        candidate_source: str,
+        metadata: dict[str, Any],
+        start: int,
+        end: int,
+    ) -> None:
+        if len(variants) >= max_candidates:
+            return
+        if candidate_source in seen_sources:
+            return
+        seen_sources.add(candidate_source)
+        family_counts[operator] = family_counts.get(operator, 0) + 1
+        path = output_dir / f"{_safe_candidate_label(label)}.c"
+        path.write_text(candidate_source, encoding="utf-8")
+        variants.append(
+            StructureVariant(
+                axis="inline-boundary",
+                operator=operator,
+                label=label,
+                status="candidate",
+                baseline_percent=baseline_percent,
+                path=str(path),
+                source_retained=str(path),
+                command=command,
+                metadata={
+                    **metadata,
+                    "touched_lines": _line_span(source, start, end),
+                    "source_diff": _source_diff(source, candidate_source, label),
+                    "live_mutation": False,
+                },
+            )
+        )
+
+    _generate_inline_boundary_axis_setter_variants(
+        source,
+        function_span,
+        add_variant,
+    )
+    _generate_inline_boundary_call_arg_temp_variants(
+        source,
+        function,
+        add_variant,
+    )
+    _generate_inline_boundary_user_data_cast_variants(
+        source,
+        function_span,
+        add_variant,
+    )
+    _generate_inline_boundary_cleanup_helper_variants(
+        source,
+        function_span,
+        add_variant,
+    )
+
+    metadata = {"families": family_counts}
+    if not variants:
+        return (
+            AxisSummary(
+                axis="inline-boundary",
+                status="blocked",
+                blocker="no-inline-boundary-candidates",
+                reason="no supported inline-boundary source transform matched",
+                metadata=metadata,
+            ),
+            [],
+        )
+    return (
+        AxisSummary(
+            axis="inline-boundary",
+            status="evaluated",
+            candidate_count=len(variants),
+            metadata=metadata,
+        ),
+        variants,
+    )
+
+
+def _generate_inline_boundary_axis_setter_variants(
+    source: str,
+    function_span,
+    add_variant: Callable[..., None],
+) -> None:
+    wrappers = _inline_boundary_fake_axis_wrappers(source)
+    if not wrappers:
+        return
+    masked_source = _mask_c_comments_and_literals(source)
+    body_start = function_span.body_open + 1
+    body = masked_source[body_start:function_span.body_close]
+    for axis, wrapper in wrappers.items():
+        direct_name = f"HSD_JObjSetTranslate{axis}"
+        fake_name = f"{direct_name}_Fake"
+        pattern = re.compile(rf"\b{re.escape(direct_name)}\s*\(")
+        for index, match in enumerate(pattern.finditer(body)):
+            call_start = body_start + match.start()
+            call_end = call_start + len(direct_name)
+            replacements = [(call_start, call_end, fake_name)]
+            insert_at = _line_start_index(source, function_span.sig_start)
+            if wrapper["start"] > function_span.sig_start and not _has_prior_prototype(
+                source,
+                insert_at,
+                wrapper["prototype"],
+            ):
+                replacements.append((insert_at, insert_at, wrapper["prototype"] + "\n"))
+            candidate_source = _replace_source_slices(source, replacements)
+            add_variant(
+                operator="inline-boundary-axis-setter-wrapper",
+                label=f"inline-boundary-axis-setter-wrapper-{axis.lower()}-{index}",
+                candidate_source=candidate_source,
+                metadata={
+                    "family": "axis-setter-wrapper",
+                    "axis": axis,
+                    "direct_call": direct_name,
+                    "wrapper": fake_name,
+                    "prototype_inserted": len(replacements) > 1,
+                },
+                start=call_start,
+                end=call_end,
+            )
+
+
+def _inline_boundary_fake_axis_wrappers(source: str) -> dict[str, dict[str, Any]]:
+    wrappers: dict[str, dict[str, Any]] = {}
+    masked_source = _mask_c_comments_and_literals(source)
+    pattern = re.compile(
+        rf"(?m)^[ \t]*static\s+inline\s+void\s+"
+        rf"(?P<name>HSD_JObjSetTranslate(?P<axis>[XYZ])_Fake)\s*"
+        rf"\(\s*HSD_JObj\s*\*\s*jobj\s*,\s*f32\s*(?P<param>{_C_IDENT})\s*\)"
+    )
+    for match in pattern.finditer(masked_source):
+        axis = match.group("axis")
+        name = match.group("name")
+        param = match.group("param")
+        wrappers.setdefault(
+            axis,
+            {
+                "name": name,
+                "param": param,
+                "start": match.start(),
+                "prototype": (
+                    f"static inline void {name}(HSD_JObj* jobj, f32 {param});"
+                ),
+            },
+        )
+    return wrappers
+
+
+def _has_prior_prototype(source: str, insert_at: int, prototype: str) -> bool:
+    return prototype in source[:insert_at]
+
+
+def _generate_inline_boundary_call_arg_temp_variants(
+    source: str,
+    function: str,
+    add_variant: Callable[..., None],
+) -> None:
+    try:
+        from src.mwcc_debug.pressure_explorer import generate_lifetime_layout_probes
+    except ImportError:
+        return
+
+    probes = generate_lifetime_layout_probes(
+        source,
+        function,
+        max_probes=4,
+        operator_filter=("call-argument-tempization",),
+    )
+    for index, probe in enumerate(probes):
+        diff_start, diff_end = _first_source_diff_span(source, probe.source_text)
+        add_variant(
+            operator="inline-boundary-call-arg-temp",
+            label=f"inline-boundary-call-arg-temp-{index}",
+            candidate_source=probe.source_text,
+            metadata={
+                "family": "call-argument-temp",
+                "probe": probe.to_dict(),
+            },
+            start=diff_start,
+            end=diff_end,
+        )
+
+
+def _generate_inline_boundary_user_data_cast_variants(
+    source: str,
+    function_span,
+    add_variant: Callable[..., None],
+) -> None:
+    pointer_types = _inline_boundary_pointer_decls(source, function_span)
+    if not pointer_types:
+        return
+    masked_source = _mask_c_comments_and_literals(source)
+    body_start = function_span.body_open + 1
+    masked_body = masked_source[body_start:function_span.body_close]
+    names = "|".join(re.escape(name) for name in sorted(pointer_types))
+    pattern = re.compile(
+        rf"(?m)^(?P<indent>[ \t]*)(?P<lhs>{names})\s*=\s*"
+        rf"(?P<rhs>{_C_IDENT}\s*(?:->|\.)\s*user_data)\s*;"
+    )
+    for index, match in enumerate(pattern.finditer(masked_body)):
+        lhs = match.group("lhs")
+        type_name = pointer_types[lhs]
+        rhs = source[
+            body_start + match.start("rhs"):body_start + match.end("rhs")
+        ].strip()
+        if rhs.startswith("("):
+            continue
+        replacement = f"({type_name}*) {rhs}"
+        start = body_start + match.start("rhs")
+        end = body_start + match.end("rhs")
+        candidate_source = _replace_source_slices(source, [(start, end, replacement)])
+        add_variant(
+            operator="inline-boundary-user-data-cast",
+            label=f"inline-boundary-user-data-cast-{index}",
+            candidate_source=candidate_source,
+            metadata={
+                "family": "user-data-cast",
+                "lhs": lhs,
+                "type": type_name,
+                "rhs": rhs,
+            },
+            start=start,
+            end=end,
+        )
+
+
+def _inline_boundary_pointer_decls(source: str, function_span) -> dict[str, str]:
+    body = source[function_span.body_open + 1:function_span.body_close]
+    masked_body = _mask_c_comments_and_literals(body)
+    pattern = re.compile(
+        rf"(?m)^[ \t]*(?P<type>(?:const\s+)?(?:struct\s+)?{_C_IDENT})"
+        rf"\s*\*\s*(?P<name>{_C_IDENT})\s*;"
+    )
+    pointer_types: dict[str, str] = {}
+    for match in pattern.finditer(masked_body):
+        type_text = body[match.start("type"):match.end("type")].strip()
+        name = match.group("name")
+        pointer_types.setdefault(name, type_text)
+    return pointer_types
+
+
+def _generate_inline_boundary_cleanup_helper_variants(
+    source: str,
+    function_span,
+    add_variant: Callable[..., None],
+) -> None:
+    matches = _inline_boundary_cleanup_matches(source, function_span)
+    if not matches:
+        return
+    insert_at = _line_start_index(source, function_span.sig_start)
+    for index, match in enumerate(matches):
+        helper_name = f"ll_probe_sislib_clear_text_{index}"
+        helper = (
+            f"static inline void {helper_name}(HSD_Text** slot)\n"
+            "{\n"
+            "    if (*slot != NULL) {\n"
+            "        HSD_SisLib_803A5CC4(*slot);\n"
+            "        *slot = NULL;\n"
+            "    }\n"
+            "}\n"
+            "\n"
+        )
+        replacement = f"{match['indent']}{helper_name}(&{match['slot']});"
+        candidate_source = _replace_source_slices(
+            source,
+            [
+                (match["if_start"], match["if_end"], replacement),
+                (insert_at, insert_at, helper),
+            ],
+        )
+        add_variant(
+            operator="inline-boundary-sislib-cleanup-helper",
+            label=f"inline-boundary-sislib-cleanup-helper-{index}",
+            candidate_source=candidate_source,
+            metadata={
+                "family": "sislib-cleanup-helper",
+                "slot": match["slot"],
+                "callee": "HSD_SisLib_803A5CC4",
+                "helper": helper_name,
+            },
+            start=match["if_start"],
+            end=match["if_end"],
+        )
+
+
+def _inline_boundary_cleanup_matches(
+    source: str,
+    function_span,
+) -> list[dict[str, Any]]:
+    masked_source = _mask_c_comments_and_literals(source)
+    body_start = function_span.body_open + 1
+    body_end = function_span.body_close
+    masked_body = masked_source[body_start:body_end]
+    matches: list[dict[str, Any]] = []
+    for if_match in re.finditer(r"\bif\s*\(", masked_body):
+        if_start = body_start + if_match.start()
+        if_open_paren = body_start + if_match.end() - 1
+        if_close_paren = _find_matching(masked_source, if_open_paren, "(", ")")
+        if if_close_paren is None or if_close_paren > body_end:
+            continue
+        condition = source[if_open_paren + 1:if_close_paren]
+        slot = _inline_boundary_cleanup_slot_from_condition(condition)
+        if slot is None:
+            continue
+        if_open_brace = _skip_whitespace(masked_source, if_close_paren + 1)
+        if if_open_brace >= body_end or masked_source[if_open_brace] != "{":
+            continue
+        if_close_brace = _find_matching(masked_source, if_open_brace, "{", "}")
+        if if_close_brace is None or if_close_brace > body_end:
+            continue
+        if_body = source[if_open_brace + 1:if_close_brace]
+        if not _inline_boundary_cleanup_body_matches(if_body, slot):
+            continue
+        matches.append(
+            {
+                "if_start": if_start,
+                "if_end": if_close_brace + 1,
+                "slot": slot,
+                "indent": _line_indent_at_index(source, if_start),
+            }
+        )
+    return matches
+
+
+def _inline_boundary_cleanup_slot_from_condition(condition: str) -> str | None:
+    text = _strip_outer_parens_inline(condition.strip())
+    match = re.fullmatch(
+        r"(?P<left>.+?)\s*!=\s*NULL|NULL\s*!=\s*(?P<right>.+)",
+        text,
+        re.DOTALL,
+    )
+    if match is None:
+        return None
+    slot = (match.group("left") or match.group("right") or "").strip()
+    if not slot or "[" not in slot or "]" not in slot:
+        return None
+    if not _inline_boundary_expr_is_simple(slot):
+        return None
+    return slot
+
+
+def _inline_boundary_cleanup_body_matches(body: str, slot: str) -> bool:
+    match = re.fullmatch(
+        r"\s*HSD_SisLib_803A5CC4\s*\(\s*(?P<arg>[^;]+?)\s*\)\s*;\s*"
+        r"(?P<lhs>[^;]+?)\s*=\s*NULL\s*;\s*",
+        _mask_c_comments_and_literals(body),
+        re.DOTALL,
+    )
+    if match is None:
+        return False
+    arg = body[match.start("arg"):match.end("arg")].strip()
+    lhs = body[match.start("lhs"):match.end("lhs")].strip()
+    compact_slot = re.sub(r"\s+", "", slot)
+    return (
+        re.sub(r"\s+", "", arg) == compact_slot
+        and re.sub(r"\s+", "", lhs) == compact_slot
+    )
+
+
+def _inline_boundary_expr_is_simple(expr: str) -> bool:
+    return (
+        re.fullmatch(
+            rf"{_C_IDENT}(?:\s*(?:->|\.)\s*{_C_IDENT})*"
+            rf"\s*\[\s*{_C_IDENT}\s*\]",
+            expr,
+            re.DOTALL,
+        )
+        is not None
+    )
+
+
+def _strip_outer_parens_inline(text: str) -> str:
+    current = text.strip()
+    while current.startswith("(") and current.endswith(")"):
+        close = _find_matching(current, 0, "(", ")")
+        if close != len(current) - 1:
+            break
+        current = current[1:-1].strip()
+    return current
+
+
+def _line_start_index(source: str, position: int) -> int:
+    return source.rfind("\n", 0, position) + 1
+
+
+def _line_indent_at_index(source: str, position: int) -> str:
+    line_start = _line_start_index(source, position)
+    index = line_start
+    while index < len(source) and source[index] in " \t":
+        index += 1
+    return source[line_start:index]
+
+
+def _replace_source_slices(
+    source: str,
+    replacements: list[tuple[int, int, str]],
+) -> str:
+    patched = source
+    for start, end, replacement in sorted(replacements, reverse=True):
+        patched = patched[:start] + replacement + patched[end:]
+    return patched
+
+
+def _first_source_diff_span(source: str, candidate_source: str) -> tuple[int, int]:
+    limit = min(len(source), len(candidate_source))
+    start = 0
+    while start < limit and source[start] == candidate_source[start]:
+        start += 1
+    end = len(source)
+    candidate_end = len(candidate_source)
+    while end > start and candidate_end > start and source[end - 1] == candidate_source[candidate_end - 1]:
+        end -= 1
+        candidate_end -= 1
+    return start, max(start, end)
 
 
 _C_IDENT = r"[A-Za-z_][A-Za-z0-9_]*"
@@ -1549,7 +2019,6 @@ def structure_payload(
         "axes": [axis.to_dict() for axis in axes],
         "variants": [variant.to_dict() for variant in ranked],
         "future_axes": [
-            {"axis": "inline-boundary", "status": "not-implemented"},
             {"axis": "loop-shape-expanded", "status": "not-implemented"},
         ],
         "stop_condition": stop_condition,

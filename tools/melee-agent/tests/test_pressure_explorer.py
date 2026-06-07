@@ -1686,6 +1686,140 @@ def test_source_lifetime_helper_result_dematerialize_rejects_arg_identifier_muta
     assert blocked[0]["blocker"] == "helper-arg-mutation-between-uses"
 
 
+def test_source_lifetime_cleanup_loop_role_shape_probes() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(Diagram3* data)
+        {
+            int i;
+            for (i = 0; i < 0xA; i++) {
+                if (data->row_labels[i] != NULL) {
+                    HSD_SisLib_803A5CC4(data->row_labels[i]);
+                    data->row_labels[i] = NULL;
+                }
+            }
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=12,
+    )
+
+    assert "cleanup-loop-role-shape" in {probe.operator for probe in probes}
+    by_label = {probe.label: probe for probe in probes}
+    assert "cleanup-loop-slot-base-temp-0" in by_label
+    assert "cleanup-loop-counter-block-0" in by_label
+    assert "cleanup-loop-value-temp-0" in by_label
+    assert "cleanup-loop-slot-cursor-0" in by_label
+    assert "cleanup-loop-null-sentinel-0" in by_label
+    assert (
+        "HSD_Text** ll_probe_base_0 = data->row_labels;"
+        in by_label["cleanup-loop-slot-base-temp-0"].source_text
+    )
+    assert (
+        "{\n"
+        "        int ll_probe_i_0;\n"
+        "        for (ll_probe_i_0 = 0; ll_probe_i_0 < 0xA; ll_probe_i_0++)"
+        in by_label["cleanup-loop-counter-block-0"].source_text
+    )
+    assert "        i = ll_probe_i_0;\n" in by_label[
+        "cleanup-loop-counter-block-0"
+    ].source_text
+    assert (
+        "HSD_Text* ll_probe_text_0 = data->row_labels[i];"
+        in by_label["cleanup-loop-value-temp-0"].source_text
+    )
+    assert (
+        "{\n"
+        "        HSD_Text** ll_probe_cursor_0;\n"
+        "        for (i = 0, ll_probe_cursor_0 = data->row_labels;"
+        in by_label["cleanup-loop-slot-cursor-0"].source_text
+    )
+    assert (
+        "HSD_Text* ll_probe_null_0 = NULL;"
+        in by_label["cleanup-loop-null-sentinel-0"].source_text
+    )
+    assert (
+        "if (data->row_labels[i] != ll_probe_null_0)"
+        in by_label["cleanup-loop-null-sentinel-0"].source_text
+    )
+    family = [
+        row for row in summaries if row["operator"] == "cleanup-loop-role-shape"
+    ]
+    assert family
+    assert family[0]["candidate_count"] >= 3
+
+
+def test_source_lifetime_cleanup_loop_all_repeated_precedes_per_occurrence() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(Diagram3* data)
+        {
+            int i;
+            for (i = 0; i < 0xA; i++) {
+                if (data->row_labels[i] != NULL) {
+                    HSD_SisLib_803A5CC4(data->row_labels[i]);
+                    data->row_labels[i] = NULL;
+                }
+            }
+            for (i = 0; i < 0xA; i++) {
+                if (data->column_labels[i] != NULL) {
+                    HSD_SisLib_803A5CC4(data->column_labels[i]);
+                    data->column_labels[i] = NULL;
+                }
+            }
+        }
+    """)
+
+    probes, _summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=12,
+    )
+
+    labels = [probe.label for probe in probes]
+    assert "cleanup-loop-all-null-sentinel-0" in labels
+    first_per_occurrence = min(
+        index
+        for index, label in enumerate(labels)
+        if label.startswith("cleanup-loop-")
+        and not label.startswith("cleanup-loop-all-")
+    )
+    assert labels.index("cleanup-loop-all-null-sentinel-0") < first_per_occurrence
+    all_probe = next(
+        probe for probe in probes if probe.label == "cleanup-loop-all-null-sentinel-0"
+    )
+    assert all_probe.source_text.count("HSD_Text* ll_probe_null_0 = NULL;") == 2
+    assert all_probe.source_text.count("!= ll_probe_null_0") == 2
+    assert all_probe.source_text.count("= ll_probe_null_0;") == 2
+
+
+def test_source_lifetime_cleanup_loop_skips_parenthesized_guard_spans() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(Diagram3* data)
+        {
+            int i;
+            for (i = 0; i < 0xA; i++) {
+                if ((data->row_labels[i] != NULL)) {
+                    HSD_SisLib_803A5CC4(data->row_labels[i]);
+                    data->row_labels[i] = NULL;
+                }
+            }
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=4,
+        operator_filter=("cleanup-loop-role-shape",),
+    )
+
+    assert not probes
+    assert summaries[0]["operator"] == "cleanup-loop-role-shape"
+    assert summaries[0]["blocker"] == "no-cleanup-loop-role-shape"
+
+
 def test_source_lifetime_helper_result_dematerialize_rejects_element_arg_mutation() -> None:
     source = textwrap.dedent("""\
         s32 fn_80000000(s32* arr, s32 i)
@@ -1747,6 +1881,7 @@ def test_source_lifetime_preserves_generic_lifetime_layout_fallback() -> None:
 
     assert "temp-introduction" in {probe.operator for probe in probes}
     assert {row["operator"] for row in summaries} == {
+        "cleanup-loop-role-shape",
         "for-condition-field-reload",
         "repeated-helper-result-reuse",
         "helper-result-dematerialize",

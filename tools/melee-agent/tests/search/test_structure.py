@@ -9,6 +9,7 @@ from src.search.structure import (
     StructureScoreResult,
     StructureVariant,
     generate_case_order_variants,
+    generate_inline_boundary_variants,
     generate_statement_order_variants,
     normalize_control_flow_payload,
     normalize_decl_order_payload,
@@ -354,7 +355,6 @@ def test_structure_payload_reports_future_axes_and_stop_condition() -> None:
     assert payload["stop_condition"]["kind"] == "no-improvement"
     assert payload["axes"][0]["blocker"] == "no-case-order-probes"
     assert {row["axis"] for row in payload["future_axes"]} == {
-        "inline-boundary",
         "loop-shape-expanded",
     }
     json.dumps(payload)
@@ -1052,6 +1052,233 @@ def test_source_lifetime_axis_prioritizes_targeted_probes_under_small_cap(
     )
 
     assert payload["variants"][0]["operator"] == "for-condition-field-reload"
+
+
+def test_source_lifetime_axis_retains_cleanup_loop_role_shape_under_small_cap(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "demo.c"
+    source_path.write_text(
+        "void fn_80000000(Diagram3* data)\n"
+        "{\n"
+        "    int i;\n"
+        "    for (i = 0; i < 0xA; i++) {\n"
+        "        if (data->row_labels[i] != NULL) {\n"
+        "            HSD_SisLib_803A5CC4(data->row_labels[i]);\n"
+        "            data->row_labels[i] = NULL;\n"
+        "        }\n"
+        "    }\n"
+        "    for (i = 0; i < 0xA; i++) {\n"
+        "        if (data->column_labels[i] != NULL) {\n"
+        "            HSD_SisLib_803A5CC4(data->column_labels[i]);\n"
+        "            data->column_labels[i] = NULL;\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+
+    payload = run_structure_search(
+        "fn_80000000",
+        source_path,
+        tmp_path / "structure",
+        axes=("source-lifetime",),
+        max_candidates=3,
+        score_variants=False,
+    )
+
+    assert [row["axis"] for row in payload["variants"][:3]] == [
+        "source-lifetime",
+        "source-lifetime",
+        "source-lifetime",
+    ]
+    cleanup_labels = [
+        row["label"]
+        for row in payload["variants"]
+        if row["operator"] == "cleanup-loop-role-shape"
+    ]
+    assert cleanup_labels
+    assert cleanup_labels[0].startswith("cleanup-loop-all-")
+    assert all(Path(row["source_retained"]).exists() for row in payload["variants"])
+
+
+def test_inline_boundary_wraps_late_fake_axis_setter_with_prototype(
+    tmp_path: Path,
+) -> None:
+    source = (
+        "void fn_80000000(HSD_JObj* jobj, f32 y)\n"
+        "{\n"
+        "    HSD_JObjSetTranslateY(jobj, y);\n"
+        "}\n"
+        "\n"
+        "static inline void HSD_JObjSetTranslateY_Fake(HSD_JObj* jobj, f32 y)\n"
+        "{\n"
+        "    jobj->translate.y = y;\n"
+        "}\n"
+    )
+
+    axis, variants = generate_inline_boundary_variants(
+        source,
+        "fn_80000000",
+        tmp_path,
+        baseline_percent=42.0,
+        max_candidates=4,
+    )
+
+    assert axis.status == "evaluated"
+    wrapper = next(
+        row for row in variants if row.operator == "inline-boundary-axis-setter-wrapper"
+    )
+    retained = Path(wrapper.source_retained or "")
+    retained_text = retained.read_text()
+    prototype = (
+        "static inline void HSD_JObjSetTranslateY_Fake(HSD_JObj* jobj, f32 y);"
+    )
+    assert retained_text.index(prototype) < retained_text.index(
+        "void fn_80000000"
+    )
+    assert "HSD_JObjSetTranslateY_Fake(jobj, y);" in retained_text
+
+
+def test_inline_boundary_generates_user_data_and_cleanup_helper_candidates(
+    tmp_path: Path,
+) -> None:
+    source = (
+        "void fn_80000000(GObj* gobj)\n"
+        "{\n"
+        "    Diagram3* data;\n"
+        "    int i;\n"
+        "    data = gobj->user_data;\n"
+        "    for (i = 0; i < 0xA; i++) {\n"
+        "        if (data->row_labels[i] != NULL) {\n"
+        "            HSD_SisLib_803A5CC4(data->row_labels[i]);\n"
+        "            data->row_labels[i] = NULL;\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+
+    axis, variants = generate_inline_boundary_variants(
+        source,
+        "fn_80000000",
+        tmp_path,
+        baseline_percent=None,
+        max_candidates=8,
+    )
+
+    assert axis.status == "evaluated"
+    by_operator = {row.operator: row for row in variants}
+    cast = by_operator["inline-boundary-user-data-cast"]
+    helper = by_operator["inline-boundary-sislib-cleanup-helper"]
+    assert "(Diagram3*) gobj->user_data" in Path(
+        cast.source_retained or ""
+    ).read_text()
+    helper_text = Path(helper.source_retained or "").read_text()
+    assert helper_text.index("ll_probe_sislib_clear_text_0") < helper_text.index(
+        "void fn_80000000"
+    )
+    assert "ll_probe_sislib_clear_text_0(&data->row_labels[i]);" in helper_text
+
+
+def test_run_structure_search_supports_inline_boundary_axis(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "demo.c"
+    source_path.write_text(
+        "void fn_80000000(HSD_JObj* jobj, f32 y)\n"
+        "{\n"
+        "    HSD_JObjSetTranslateY(jobj, y);\n"
+        "}\n"
+        "\n"
+        "static inline void HSD_JObjSetTranslateY_Fake(HSD_JObj* jobj, f32 y)\n"
+        "{\n"
+        "    jobj->translate.y = y;\n"
+        "}\n"
+    )
+
+    payload = run_structure_search(
+        "fn_80000000",
+        source_path,
+        tmp_path / "structure",
+        axes=("inline-boundary",),
+        max_candidates=4,
+        score_variants=False,
+    )
+
+    assert payload["axes"][0]["axis"] == "inline-boundary"
+    assert payload["axes"][0]["status"] == "evaluated"
+    assert payload["variants"][0]["axis"] == "inline-boundary"
+    assert "inline-boundary" not in {row["axis"] for row in payload["future_axes"]}
+
+
+def test_inline_boundary_rejects_preprocessor_regions(tmp_path: Path) -> None:
+    source = (
+        "void fn_80000000(HSD_JObj* jobj, f32 y)\n"
+        "{\n"
+        "#if 1\n"
+        "    HSD_JObjSetTranslateY(jobj, y);\n"
+        "#endif\n"
+        "}\n"
+        "\n"
+        "static inline void HSD_JObjSetTranslateY_Fake(HSD_JObj* jobj, f32 y)\n"
+        "{\n"
+        "    jobj->translate.y = y;\n"
+        "}\n"
+    )
+
+    axis, variants = generate_inline_boundary_variants(
+        source,
+        "fn_80000000",
+        tmp_path,
+        baseline_percent=None,
+        max_candidates=4,
+    )
+
+    assert not variants
+    assert axis.status == "blocked"
+    assert axis.blocker == "unsafe-inline-boundary-preprocessor"
+
+
+def test_inline_boundary_scoring_retains_compile_and_checkdiff_status(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "demo.c"
+    source_path.write_text(
+        "void fn_80000000(HSD_JObj* jobj, f32 y)\n"
+        "{\n"
+        "    HSD_JObjSetTranslateY(jobj, y);\n"
+        "}\n"
+        "\n"
+        "static inline void HSD_JObjSetTranslateY_Fake(HSD_JObj* jobj, f32 y)\n"
+        "{\n"
+        "    jobj->translate.y = y;\n"
+        "}\n"
+    )
+
+    def score_runner(variants: list[StructureVariant]) -> list[StructureScoreResult]:
+        return [
+            StructureScoreResult(
+                label=variant.label,
+                baseline_percent=80.0,
+                candidate_percent=81.0,
+                compile_status="ok",
+                checkdiff_status="ok",
+            )
+            for variant in variants
+        ]
+
+    payload = run_structure_search(
+        "fn_80000000",
+        source_path,
+        tmp_path / "structure",
+        axes=("inline-boundary",),
+        max_candidates=2,
+        score_variants=True,
+        score_runner=score_runner,
+    )
+
+    assert payload["variants"]
+    assert all(row["compile_status"] == "ok" for row in payload["variants"])
+    assert all(row["checkdiff_status"] == "ok" for row in payload["variants"])
 
 
 def test_run_structure_search_stop_condition_uses_hidden_unscored_candidates(

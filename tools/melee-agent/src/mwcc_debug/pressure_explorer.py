@@ -201,6 +201,7 @@ _DEMATERIALIZE_SCALAR_TYPES = {
 }
 
 SOURCE_LIFETIME_TARGETED_OPERATORS = (
+    "cleanup-loop-role-shape",
     "for-condition-field-reload",
     "repeated-helper-result-reuse",
     "helper-result-dematerialize",
@@ -575,6 +576,7 @@ def generate_source_lifetime_probes(
     )
     targeted_budget = max(1, (max_probes + 1) // 2)
     targeted_generators = (
+        ("cleanup-loop-role-shape", _probe_cleanup_loop_role_shape),
         ("for-condition-field-reload", _probe_for_condition_field_reload),
         ("repeated-helper-result-reuse", _probe_repeated_helper_result_reuse),
         ("helper-result-dematerialize", _probe_helper_result_dematerialize),
@@ -632,6 +634,38 @@ class _SimpleHelperCall:
     call_text: str
 
 
+@dataclass(frozen=True)
+class _CleanupLoopMatch:
+    line_start: int
+    loop_start: int
+    loop_open: int
+    loop_close: int
+    loop_indent: str
+    header_start: int
+    header_end: int
+    counter: str
+    bound: str
+    slot: str
+    slot_base: str
+    callee: str
+    value_type: str
+    slot_type: str
+    condition_slot_start: int
+    condition_slot_end: int
+    condition_null_start: int
+    condition_null_end: int
+    call_arg_start: int
+    call_arg_end: int
+    assign_lhs_start: int
+    assign_lhs_end: int
+    assign_rhs_start: int
+    assign_rhs_end: int
+    loop_body_insert: int
+    loop_body_indent: str
+    if_body_insert: int
+    if_body_indent: str
+
+
 def _source_lifetime_summary(
     operator: str,
     *,
@@ -646,6 +680,668 @@ def _source_lifetime_summary(
         "candidate_count": candidate_count,
         "blocker": blocker,
         "reason": reason,
+    }
+
+
+def _probe_cleanup_loop_role_shape(
+    source_text: str,
+    function: str,
+) -> tuple[list[LifetimeLayoutProbe], dict]:
+    operator = "cleanup-loop-role-shape"
+    span = _find_function_body_span(source_text, function)
+    if span is None:
+        return [], _source_lifetime_summary(
+            operator,
+            status="blocked",
+            candidate_count=0,
+            blocker="function-body-unavailable",
+            reason=f"function body for {function} was not found in source",
+        )
+
+    body_start, body_end = span
+    body = source_text[body_start:body_end]
+    matches: list[_CleanupLoopMatch] = []
+    first_blocker: tuple[str, str] | None = None
+    code_body = _mask_c_non_code_text(body)
+    for match in re.finditer(r"\bfor\s*\(", code_body):
+        loop, blocker = _parse_cleanup_loop_match(
+            source_text,
+            body_start,
+            body_end,
+            match.start(),
+        )
+        if blocker is not None:
+            first_blocker = first_blocker or blocker
+        if loop is not None:
+            matches.append(loop)
+
+    probes: list[LifetimeLayoutProbe] = []
+    if len(matches) > 1:
+        _append_probe(
+            probes,
+            _cleanup_loop_null_sentinel_probe(
+                source_text,
+                matches,
+                label="cleanup-loop-all-null-sentinel-0",
+                description="Name NULL sentinel values across repeated cleanup loops.",
+                label_index=0,
+                all_repeated=True,
+            ),
+        )
+    for index, loop in enumerate(matches):
+        _append_probe(probes, _cleanup_loop_slot_base_temp_probe(source_text, loop, index))
+        _append_probe(probes, _cleanup_loop_slot_cursor_probe(source_text, loop, index))
+        _append_probe(probes, _cleanup_loop_counter_block_probe(source_text, loop, index))
+        _append_probe(probes, _cleanup_loop_value_temp_probe(source_text, loop, index))
+        _append_probe(
+            probes,
+            _cleanup_loop_null_sentinel_probe(
+                source_text,
+                [loop],
+                label=f"cleanup-loop-null-sentinel-{index}",
+                description=(
+                    f"Name the NULL sentinel assigned after `{loop.callee}`."
+                ),
+                label_index=index,
+                all_repeated=False,
+            ),
+        )
+
+    if probes:
+        return probes, _source_lifetime_summary(
+            operator,
+            status="generated",
+            candidate_count=len(probes),
+            blocker=None,
+            reason="generated safe cleanup-loop role-shape candidates",
+        )
+    blocker, reason = first_blocker or (
+        "no-cleanup-loop-role-shape",
+        "source scan found no supported SisLib cleanup loop pattern",
+    )
+    return [], _source_lifetime_summary(
+        operator,
+        status="blocked",
+        candidate_count=0,
+        blocker=blocker,
+        reason=reason,
+    )
+
+
+def _parse_cleanup_loop_match(
+    source: str,
+    body_start: int,
+    body_end: int,
+    for_rel_start: int,
+) -> tuple[_CleanupLoopMatch | None, tuple[str, str] | None]:
+    for_start = body_start + for_rel_start
+    open_paren = source.find("(", for_start, body_end)
+    if open_paren < 0:
+        return None, None
+    close_paren = _find_matching_paren(source, open_paren)
+    if close_paren is None or close_paren > body_end:
+        return None, None
+    header_text = source[open_paren + 1:close_paren]
+    if _region_has_preprocessor_directive(
+        source[_line_start(source, for_start):close_paren]
+    ):
+        return None, (
+            "preprocessor-region-unsafe",
+            "cleanup loop header crosses a preprocessor directive",
+        )
+    clauses = _split_top_level_delimited(header_text, ";")
+    if len(clauses) != 3:
+        return None, None
+    parsed_header = _parse_cleanup_loop_header(*clauses)
+    if parsed_header is None:
+        return None, None
+    counter, bound = parsed_header
+
+    loop_open = _skip_horizontal_and_vertical_space(source, close_paren + 1, body_end)
+    if loop_open >= body_end or source[loop_open] != "{":
+        return None, None
+    loop_close = _find_matching_brace(source, loop_open)
+    if loop_close is None or loop_close > body_end:
+        return None, None
+    if _region_has_preprocessor_directive(source[for_start:loop_close + 1]):
+        return None, (
+            "preprocessor-region-unsafe",
+            "cleanup loop body crosses a preprocessor directive",
+        )
+
+    parsed_body = _parse_cleanup_loop_body(
+        source,
+        loop_open + 1,
+        loop_close,
+        counter,
+    )
+    if parsed_body is None:
+        return None, None
+    if isinstance(parsed_body, tuple) and len(parsed_body) == 2:
+        return None, parsed_body
+
+    (
+        slot,
+        slot_base,
+        callee,
+        condition_slot_start,
+        condition_slot_end,
+        condition_null_start,
+        condition_null_end,
+        call_arg_start,
+        call_arg_end,
+        assign_lhs_start,
+        assign_lhs_end,
+        assign_rhs_start,
+        assign_rhs_end,
+        if_body_insert,
+        if_body_indent,
+    ) = parsed_body
+    type_spec = _cleanup_loop_type_spec(callee)
+    if type_spec is None:
+        return None, (
+            "cleanup-callee-type-unsupported",
+            f"cleanup callee `{callee}` needs type information before role-shape probes",
+        )
+    value_type, slot_type = type_spec
+    line_start = _line_start(source, for_start)
+    return _CleanupLoopMatch(
+        line_start=line_start,
+        loop_start=for_start,
+        loop_open=loop_open,
+        loop_close=loop_close,
+        loop_indent=_line_indent_at(source, line_start),
+        header_start=for_start,
+        header_end=close_paren + 1,
+        counter=counter,
+        bound=bound,
+        slot=slot,
+        slot_base=slot_base,
+        callee=callee,
+        value_type=value_type,
+        slot_type=slot_type,
+        condition_slot_start=condition_slot_start,
+        condition_slot_end=condition_slot_end,
+        condition_null_start=condition_null_start,
+        condition_null_end=condition_null_end,
+        call_arg_start=call_arg_start,
+        call_arg_end=call_arg_end,
+        assign_lhs_start=assign_lhs_start,
+        assign_lhs_end=assign_lhs_end,
+        assign_rhs_start=assign_rhs_start,
+        assign_rhs_end=assign_rhs_end,
+        loop_body_insert=_insert_position_after_open_brace(source, loop_open),
+        loop_body_indent=_line_indent_at(source, _line_start(source, condition_slot_start)),
+        if_body_insert=if_body_insert,
+        if_body_indent=if_body_indent,
+    ), None
+
+
+def _parse_cleanup_loop_header(
+    init: str,
+    condition: str,
+    increment: str,
+) -> tuple[str, str] | None:
+    init_match = re.fullmatch(
+        r"\s*(?P<counter>[A-Za-z_]\w*)\s*=\s*(?:0|0x0)\s*",
+        init,
+    )
+    if init_match is None:
+        return None
+    counter = init_match.group("counter")
+    condition_text = _strip_outer_parens(condition.strip())
+    condition_match = re.fullmatch(
+        rf"{re.escape(counter)}\s*<\s*(?P<bound>.+)",
+        condition_text,
+        re.DOTALL,
+    )
+    if condition_match is None:
+        return None
+    bound = condition_match.group("bound").strip()
+    if not _cleanup_loop_expression_is_safe(bound):
+        return None
+    increment_text = increment.strip()
+    if re.fullmatch(rf"{re.escape(counter)}\s*\+\+", increment_text):
+        return counter, bound
+    if re.fullmatch(rf"\+\+\s*{re.escape(counter)}", increment_text):
+        return counter, bound
+    if re.fullmatch(rf"{re.escape(counter)}\s*\+=\s*1", increment_text):
+        return counter, bound
+    return None
+
+
+def _parse_cleanup_loop_body(
+    source: str,
+    body_start: int,
+    body_end: int,
+    counter: str,
+) -> tuple[
+    str,
+    str,
+    str,
+    int,
+    int,
+    int,
+    int,
+    int,
+    int,
+    int,
+    int,
+    int,
+    int,
+    int,
+    str,
+] | tuple[str, str] | None:
+    body = source[body_start:body_end]
+    code_body = _mask_c_non_code_text(body)
+    if_match = re.search(r"\bif\s*\(", code_body)
+    if if_match is None:
+        return None
+    if_open_paren = body_start + code_body.find("(", if_match.start())
+    if_close_paren = _find_matching_paren(source, if_open_paren)
+    if if_close_paren is None or if_close_paren > body_end:
+        return None
+    condition = source[if_open_paren + 1:if_close_paren]
+    condition_slot = _parse_cleanup_null_condition(condition)
+    if condition_slot is None:
+        return None
+    slot, cond_rel_start, cond_rel_end, null_rel_start, null_rel_end = condition_slot
+    slot_base = _cleanup_loop_slot_base(slot, counter)
+    if slot_base is None:
+        return None
+
+    if_open_brace = _skip_horizontal_and_vertical_space(source, if_close_paren + 1, body_end)
+    if if_open_brace >= body_end or source[if_open_brace] != "{":
+        return None
+    if_close_brace = _find_matching_brace(source, if_open_brace)
+    if if_close_brace is None or if_close_brace > body_end:
+        return None
+    if _region_has_preprocessor_directive(source[if_open_paren:if_close_brace + 1]):
+        return (
+            "preprocessor-region-unsafe",
+            "cleanup loop if-body crosses a preprocessor directive",
+        )
+
+    prefix = source[body_start:body_start + if_match.start()]
+    suffix = source[if_close_brace + 1:body_end]
+    if prefix.strip() or suffix.strip():
+        return None
+
+    if_body_start = if_open_brace + 1
+    if_body = source[if_body_start:if_close_brace]
+    code_if_body = _mask_c_non_code_text(if_body)
+    body_match = re.fullmatch(
+        r"\s*(?P<callee>[A-Za-z_]\w*)\s*\(\s*(?P<arg>[^;]+?)\s*\)\s*;\s*"
+        r"(?P<lhs>[^;]+?)\s*=\s*(?P<rhs>NULL)\s*;\s*",
+        code_if_body,
+        re.DOTALL,
+    )
+    if body_match is None:
+        return None
+    callee = body_match.group("callee")
+    arg = if_body[body_match.start("arg"):body_match.end("arg")].strip()
+    lhs = if_body[body_match.start("lhs"):body_match.end("lhs")].strip()
+    if _compact_cleanup_expr(arg) != _compact_cleanup_expr(slot):
+        return None
+    if _compact_cleanup_expr(lhs) != _compact_cleanup_expr(slot):
+        return None
+    if _cleanup_loop_type_spec(callee) is None:
+        return (
+            "cleanup-callee-type-unsupported",
+            f"cleanup callee `{callee}` needs type information before role-shape probes",
+        )
+    return (
+        slot,
+        slot_base,
+        callee,
+        if_open_paren + 1 + cond_rel_start,
+        if_open_paren + 1 + cond_rel_end,
+        if_open_paren + 1 + null_rel_start,
+        if_open_paren + 1 + null_rel_end,
+        if_body_start + body_match.start("arg"),
+        if_body_start + body_match.end("arg"),
+        if_body_start + body_match.start("lhs"),
+        if_body_start + body_match.end("lhs"),
+        if_body_start + body_match.start("rhs"),
+        if_body_start + body_match.end("rhs"),
+        _insert_position_after_open_brace(source, if_open_brace),
+        _line_indent_at(source, _line_start(source, if_body_start + body_match.start("callee"))),
+    )
+
+
+def _cleanup_loop_value_temp_probe(
+    source: str,
+    loop: _CleanupLoopMatch,
+    label_index: int,
+) -> LifetimeLayoutProbe:
+    temp_name = f"ll_probe_text_{label_index}"
+    replacements = [
+        (
+            loop.loop_body_insert,
+            loop.loop_body_insert,
+            f"{loop.loop_body_indent}{loop.value_type} {temp_name} = {loop.slot};\n",
+        ),
+        (loop.condition_slot_start, loop.condition_slot_end, temp_name),
+        (loop.call_arg_start, loop.call_arg_end, temp_name),
+    ]
+    return LifetimeLayoutProbe(
+        label=f"cleanup-loop-value-temp-{label_index}",
+        operator="cleanup-loop-role-shape",
+        description=f"Name cleanup loop value `{loop.slot}` before the null guard.",
+        source_text=_replace_absolute_slices(source, replacements),
+        provenance=_cleanup_loop_provenance(loop, "value-temp"),
+    )
+
+
+def _cleanup_loop_slot_base_temp_probe(
+    source: str,
+    loop: _CleanupLoopMatch,
+    label_index: int,
+) -> LifetimeLayoutProbe | None:
+    base_name = f"ll_probe_base_{label_index}"
+    slot_replacement = _replace_indexed_slot_base(loop.slot, loop.counter, base_name)
+    if slot_replacement is None:
+        return None
+    replacements = [
+        (
+            loop.loop_body_insert,
+            loop.loop_body_insert,
+            f"{loop.loop_body_indent}{loop.slot_type} {base_name} = {loop.slot_base};\n",
+        ),
+        (loop.condition_slot_start, loop.condition_slot_end, slot_replacement),
+        (loop.call_arg_start, loop.call_arg_end, slot_replacement),
+        (loop.assign_lhs_start, loop.assign_lhs_end, slot_replacement),
+    ]
+    return LifetimeLayoutProbe(
+        label=f"cleanup-loop-slot-base-temp-{label_index}",
+        operator="cleanup-loop-role-shape",
+        description=f"Name cleanup loop slot base `{loop.slot_base}`.",
+        source_text=_replace_absolute_slices(source, replacements),
+        provenance=_cleanup_loop_provenance(loop, "slot-base-temp"),
+    )
+
+
+def _cleanup_loop_slot_cursor_probe(
+    source: str,
+    loop: _CleanupLoopMatch,
+    label_index: int,
+) -> LifetimeLayoutProbe:
+    cursor_name = f"ll_probe_cursor_{label_index}"
+    header = (
+        f"for ({loop.counter} = 0, {cursor_name} = {loop.slot_base}; "
+        f"{loop.counter} < {loop.bound}; {loop.counter}++, {cursor_name}++)"
+    )
+    loop_text = source[loop.line_start:loop.loop_close + 1]
+    replacements = [
+        (loop.header_start - loop.line_start, loop.header_end - loop.line_start, header),
+        (
+            loop.condition_slot_start - loop.line_start,
+            loop.condition_slot_end - loop.line_start,
+            f"*{cursor_name}",
+        ),
+        (
+            loop.call_arg_start - loop.line_start,
+            loop.call_arg_end - loop.line_start,
+            f"*{cursor_name}",
+        ),
+        (
+            loop.assign_lhs_start - loop.line_start,
+            loop.assign_lhs_end - loop.line_start,
+            f"*{cursor_name}",
+        ),
+    ]
+    rewritten_loop = _replace_absolute_slices(loop_text, replacements)
+    replacement = (
+        f"{loop.loop_indent}{{\n"
+        f"{loop.loop_indent}    {loop.slot_type} {cursor_name};\n"
+        f"{_indent_block_lines(rewritten_loop, loop.loop_indent)}"
+        f"{loop.loop_indent}}}"
+    )
+    return LifetimeLayoutProbe(
+        label=f"cleanup-loop-slot-cursor-{label_index}",
+        operator="cleanup-loop-role-shape",
+        description=f"Walk cleanup loop slots through cursor `{cursor_name}`.",
+        source_text=_replace_absolute_slices(
+            source,
+            [(loop.line_start, loop.loop_close + 1, replacement)],
+        ),
+        provenance=_cleanup_loop_provenance(loop, "slot-cursor"),
+    )
+
+
+def _cleanup_loop_counter_block_probe(
+    source: str,
+    loop: _CleanupLoopMatch,
+    label_index: int,
+) -> LifetimeLayoutProbe | None:
+    counter_name = f"ll_probe_i_{label_index}"
+    loop_text = source[loop.line_start:loop.loop_close + 1]
+    slot_replacement = _replace_indexed_slot_counter(
+        loop.slot,
+        loop.counter,
+        counter_name,
+    )
+    if slot_replacement is None:
+        return None
+    header = (
+        f"for ({counter_name} = 0; {counter_name} < {loop.bound}; "
+        f"{counter_name}++)"
+    )
+    replacements = [
+        (loop.header_start - loop.line_start, loop.header_end - loop.line_start, header),
+        (
+            loop.condition_slot_start - loop.line_start,
+            loop.condition_slot_end - loop.line_start,
+            slot_replacement,
+        ),
+        (
+            loop.call_arg_start - loop.line_start,
+            loop.call_arg_end - loop.line_start,
+            slot_replacement,
+        ),
+        (
+            loop.assign_lhs_start - loop.line_start,
+            loop.assign_lhs_end - loop.line_start,
+            slot_replacement,
+        ),
+    ]
+    rewritten_loop = _replace_absolute_slices(loop_text, replacements)
+    replacement = (
+        f"{loop.loop_indent}{{\n"
+        f"{loop.loop_indent}    int {counter_name};\n"
+        f"{_indent_block_lines(rewritten_loop, loop.loop_indent)}"
+        f"{loop.loop_indent}    {loop.counter} = {counter_name};\n"
+        f"{loop.loop_indent}}}"
+    )
+    return LifetimeLayoutProbe(
+        label=f"cleanup-loop-counter-block-{label_index}",
+        operator="cleanup-loop-role-shape",
+        description=f"Give cleanup loop counter `{loop.counter}` a scoped role.",
+        source_text=_replace_absolute_slices(
+            source,
+            [(loop.line_start, loop.loop_close + 1, replacement)],
+        ),
+        provenance=_cleanup_loop_provenance(loop, "counter-block"),
+    )
+
+
+def _cleanup_loop_null_sentinel_probe(
+    source: str,
+    loops: list[_CleanupLoopMatch],
+    *,
+    label: str,
+    description: str,
+    label_index: int,
+    all_repeated: bool,
+) -> LifetimeLayoutProbe:
+    null_name = f"ll_probe_null_{label_index}"
+    replacements: list[tuple[int, int, str]] = []
+    for loop in loops:
+        loop_text = source[loop.line_start:loop.loop_close + 1]
+        rewritten_loop = _replace_absolute_slices(
+            loop_text,
+            [
+                (
+                    loop.condition_null_start - loop.line_start,
+                    loop.condition_null_end - loop.line_start,
+                    null_name,
+                ),
+                (
+                    loop.assign_rhs_start - loop.line_start,
+                    loop.assign_rhs_end - loop.line_start,
+                    null_name,
+                ),
+            ],
+        )
+        replacement = (
+            f"{loop.loop_indent}{{\n"
+            f"{loop.loop_indent}    {loop.value_type} {null_name} = NULL;\n"
+            f"{_indent_block_lines(rewritten_loop, loop.loop_indent)}"
+            f"{loop.loop_indent}}}"
+        )
+        replacements.append((loop.line_start, loop.loop_close + 1, replacement))
+    first = loops[0]
+    provenance = _cleanup_loop_provenance(
+        first,
+        "all-null-sentinel" if all_repeated else "null-sentinel",
+    )
+    if all_repeated:
+        provenance["occurrences"] = len(loops)
+        provenance["slots"] = [loop.slot for loop in loops]
+    return LifetimeLayoutProbe(
+        label=label,
+        operator="cleanup-loop-role-shape",
+        description=description,
+        source_text=_replace_absolute_slices(source, replacements),
+        provenance=provenance,
+    )
+
+
+def _parse_cleanup_null_condition(
+    condition: str,
+) -> tuple[str, int, int, int, int] | None:
+    # Returned spans are relative to the original condition text. Parenthesized
+    # wrappers are skipped until we need exact span remapping for that shape.
+    if condition.strip() != condition:
+        return None
+    match = re.fullmatch(
+        r"(?P<left>.+?)\s*!=\s*(?P<right>NULL)|"
+        r"(?P<left_null>NULL)\s*!=\s*(?P<right_expr>.+)",
+        condition,
+        re.DOTALL,
+    )
+    if match is None:
+        return None
+    if match.group("right") == "NULL":
+        slot, start, end = _trimmed_group_span(match, "left")
+        return (slot, start, end, match.start("right"), match.end("right"))
+    slot, start, end = _trimmed_group_span(match, "right_expr")
+    return (slot, start, end, match.start("left_null"), match.end("left_null"))
+
+
+def _trimmed_group_span(match: re.Match[str], group: str) -> tuple[str, int, int]:
+    raw = match.group(group)
+    left_trimmed = raw.lstrip()
+    right_trimmed = left_trimmed.rstrip()
+    start = match.start(group) + len(raw) - len(left_trimmed)
+    end = start + len(right_trimmed)
+    return right_trimmed, start, end
+
+
+def _cleanup_loop_slot_base(slot: str, counter: str) -> str | None:
+    slot = slot.strip()
+    match = re.fullmatch(
+        rf"(?P<base>.+?)\[\s*{re.escape(counter)}\s*\]",
+        slot,
+        re.DOTALL,
+    )
+    if match is None:
+        return None
+    base = match.group("base").strip()
+    if not _cleanup_loop_expression_is_safe(base):
+        return None
+    if not re.fullmatch(
+        r"[A-Za-z_]\w*(?:\s*(?:->|\.)\s*[A-Za-z_]\w*)*",
+        base,
+    ):
+        return None
+    return base
+
+
+def _cleanup_loop_expression_is_safe(expr: str) -> bool:
+    masked = _mask_c_non_code_text(expr).strip()
+    if not masked or not _balanced_expression_delimiters(masked):
+        return False
+    if any(token in masked for token in ("++", "--", "?", ",")):
+        return False
+    if re.search(r"(?<![=!<>])=(?!=)", masked):
+        return False
+    if re.search(r"\b[A-Za-z_]\w*\s*\(", masked):
+        return False
+    return True
+
+
+def _cleanup_loop_type_spec(callee: str) -> tuple[str, str] | None:
+    if callee == "HSD_SisLib_803A5CC4":
+        return "HSD_Text*", "HSD_Text**"
+    return None
+
+
+def _compact_cleanup_expr(expr: str) -> str:
+    return re.sub(r"\s+", "", expr.strip())
+
+
+def _replace_indexed_slot_base(slot: str, counter: str, base_name: str) -> str | None:
+    match = re.fullmatch(
+        rf"(?P<base>.+?)\[\s*{re.escape(counter)}\s*\]",
+        slot.strip(),
+        re.DOTALL,
+    )
+    if match is None:
+        return None
+    return f"{base_name}[{counter}]"
+
+
+def _replace_indexed_slot_counter(
+    slot: str,
+    counter: str,
+    counter_name: str,
+) -> str | None:
+    match = re.fullmatch(
+        rf"(?P<base>.+?)\[\s*{re.escape(counter)}\s*\]",
+        slot.strip(),
+        re.DOTALL,
+    )
+    if match is None:
+        return None
+    return f"{match.group('base').strip()}[{counter_name}]"
+
+
+def _insert_position_after_open_brace(source: str, open_brace: int) -> int:
+    insert = open_brace + 1
+    if insert < len(source) and source[insert] == "\n":
+        insert += 1
+    return insert
+
+
+def _skip_horizontal_and_vertical_space(source: str, start: int, end: int) -> int:
+    cursor = start
+    while cursor < end and source[cursor].isspace():
+        cursor += 1
+    return cursor
+
+
+def _cleanup_loop_provenance(loop: _CleanupLoopMatch, variant: str) -> dict[str, object]:
+    return {
+        "kind": "cleanup-loop-role-shape",
+        "variant": variant,
+        "callee": loop.callee,
+        "counter": loop.counter,
+        "bound": loop.bound,
+        "slot": loop.slot,
+        "slot_base": loop.slot_base,
+        "value_type": loop.value_type,
+        "slot_type": loop.slot_type,
     }
 
 
