@@ -62,3 +62,14 @@ def test_seed_source_stub_when_function_absent(tmp_path):
 
 def test_compiler_flags_constant():
     assert PRODUCTION_COMPILER_FLAGS.startswith("-O4,p")
+
+
+def test_run_production_create_exits_without_cf_clearance(tmp_path, monkeypatch):
+    import typer
+
+    import src.cli.scratch_production as sp
+
+    # No cf_clearance configured -> must exit before any network/build.
+    monkeypatch.setattr(sp, "load_production_cookies", lambda: {})
+    with pytest.raises(typer.Exit):
+        sp.run_production_create("fn_1", tmp_path, force=False, dry_run=False)
