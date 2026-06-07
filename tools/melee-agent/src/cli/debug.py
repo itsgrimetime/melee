@@ -23945,6 +23945,7 @@ def _name_magic_section_anchor_verdict(
 
 
 _NAME_MAGIC_SOURCE_CANDIDATE_OPERATORS = {
+    "bss-anchor-source-binding",
     "data-symbol-static-to-global",
     "sdata2-named-float-load",
     "name-magic-source-combined",
@@ -24180,7 +24181,10 @@ def mutate_name_magic_source_declarations_cmd(
 
     probes = []
     probe_blocker = parsed.blocker
-    if source_text is not None and parsed.blocker is None:
+    if source_text is not None and (
+        parsed.blocker is None
+        or parsed.blocker == NameMagicBlocker.AMBIGUOUS_RELOCATION_PAIR
+    ):
         probes, probe_blocker = generate_name_magic_source_probes(
             source_text,
             function,
@@ -24336,6 +24340,7 @@ def mutate_name_magic_source_declarations_cmd(
     )
     validated = any(
         variant.get("status") == "ok"
+        and variant.get("operator") != "bss-anchor-source-binding"
         and _name_magic_source_match_percent(variant) == 100.0
         and variant.get("no_name_magic_match") is True
         for variant in ranked_variants

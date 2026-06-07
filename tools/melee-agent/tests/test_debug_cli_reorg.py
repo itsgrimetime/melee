@@ -1621,7 +1621,7 @@ def test_name_magic_source_declarations_reports_section_anchor_partial_success(
     }
 
 
-def test_name_magic_source_declarations_reports_bss_anchor_ceiling(
+def test_name_magic_source_declarations_reports_unsupported_bss_source_site(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1695,11 +1695,11 @@ def test_name_magic_source_declarations_reports_bss_anchor_ceiling(
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert payload["blocker"] == "bss-anchor-ceiling"
+    assert payload["blocker"] == "unsupported-source-site"
     assert payload["stop_condition"] == {
         "kind": "blocked",
-        "blocker": "bss-anchor-ceiling",
-        "reason": "bss-anchor-ceiling",
+        "blocker": "unsupported-source-site",
+        "reason": "unsupported-source-site",
     }
     assert payload["evidence"]["raw_relocations"] == [
         {
@@ -1717,6 +1717,178 @@ def test_name_magic_source_declarations_reports_bss_anchor_ceiling(
             "operator_family": "bss-anchor-ceiling",
         },
     ]
+
+
+def test_name_magic_source_declarations_scores_generated_bss_binding(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from src.cli import debug as debug_cli
+
+    repo = tmp_path / "repo"
+    source = repo / "src" / "melee" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        (
+            "DemoBss mnDiagram_804A0750;\n"
+            "void fn_80000000(void) { sink(&mnDiagram_804A0750); }\n"
+        ),
+        encoding="utf-8",
+    )
+    current_obj = repo / "build" / "GALE01" / "src" / "melee" / "demo.o"
+    target_obj = repo / "build" / "GALE01" / "obj" / "melee" / "demo.o"
+    current_obj.parent.mkdir(parents=True)
+    target_obj.parent.mkdir(parents=True)
+    current_obj.write_bytes(b"fake")
+    target_obj.write_bytes(b"fake")
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", repo)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, melee_root: "melee/demo",
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_run_checkdiff_no_name_magic_json",
+        lambda *args, **kwargs: (
+            {
+                "diff": [
+                    "-+038: R_PPC_ADDR16_LO\tmnDiagram_804A0750",
+                    "-+038: R_PPC_ADDR16_LO\tmnDiagram_804A076C",
+                    "++038: R_PPC_ADDR16_LO\t...bss.0",
+                ],
+                "classification": {"primary": "data-symbol-or-relocation"},
+            },
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_name_magic_object_evidence",
+        lambda unit, melee_root: (
+            {"anonymous_sdata2": {}, "name_magic_suggestions": []},
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_score_whole_source_candidate_no_name_magic",
+        lambda *args, **kwargs: debug_cli._NameMagicWholeSourceScore(
+            92.70412,
+            None,
+            False,
+            {"match": False, "fuzzy_match_percent": 92.70412},
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "name-magic-source-declarations",
+            "-f",
+            "fn_80000000",
+            "--source-file",
+            str(source),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["probe_count"] == 1
+    assert payload["blocker"] == "no-name-magic-candidate"
+    assert payload["stop_condition"]["kind"] == "unvalidated"
+    assert payload["probes"][0]["operator"] == "bss-anchor-source-binding"
+    assert payload["variants"][0]["operator"] == "bss-anchor-source-binding"
+    assert payload["variants"][0]["final_match_percent"] == 92.70412
+
+
+def test_name_magic_source_declarations_bss_binding_is_not_validated_fix(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from src.cli import debug as debug_cli
+
+    repo = tmp_path / "repo"
+    source = repo / "src" / "melee" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        (
+            "DemoBss mnDiagram_804A0750;\n"
+            "void fn_80000000(void) { sink(&mnDiagram_804A0750); }\n"
+        ),
+        encoding="utf-8",
+    )
+    current_obj = repo / "build" / "GALE01" / "src" / "melee" / "demo.o"
+    target_obj = repo / "build" / "GALE01" / "obj" / "melee" / "demo.o"
+    current_obj.parent.mkdir(parents=True)
+    target_obj.parent.mkdir(parents=True)
+    current_obj.write_bytes(b"fake")
+    target_obj.write_bytes(b"fake")
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", repo)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, melee_root: "melee/demo",
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_run_checkdiff_no_name_magic_json",
+        lambda *args, **kwargs: (
+            {
+                "diff": [
+                    "-+038: R_PPC_ADDR16_LO\tmnDiagram_804A0750",
+                    "-+038: R_PPC_ADDR16_LO\tmnDiagram_804A076C",
+                    "++038: R_PPC_ADDR16_LO\t...bss.0",
+                ],
+                "classification": {"primary": "data-symbol-or-relocation"},
+            },
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_name_magic_object_evidence",
+        lambda unit, melee_root: (
+            {"anonymous_sdata2": {}, "name_magic_suggestions": []},
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_score_whole_source_candidate_no_name_magic",
+        lambda *args, **kwargs: debug_cli._NameMagicWholeSourceScore(
+            100.0,
+            None,
+            True,
+            {"match": True, "fuzzy_match_percent": 100.0},
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "name-magic-source-declarations",
+            "-f",
+            "fn_80000000",
+            "--source-file",
+            str(source),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["blocker"] == "no-name-magic-candidate"
+    assert payload["stop_condition"]["kind"] == "unvalidated"
+    assert payload["variants"][0]["operator"] == "bss-anchor-source-binding"
+    assert payload["variants"][0]["no_name_magic_match"] is True
 
 
 def test_name_magic_source_declarations_retains_header_externs(
