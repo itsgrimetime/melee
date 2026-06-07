@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 from .cast_audit import (
@@ -26,6 +27,14 @@ class PatchDescriptor:
 
 
 @dataclass
+class SourceVariant:
+    variant_id: str
+    label: str
+    patches: list[PatchDescriptor]
+    candidate: dict[str, object]
+
+
+@dataclass
 class SignatureAction:
     kind: str
     confidence: str
@@ -35,6 +44,7 @@ class SignatureAction:
     validation: dict | None = None
     rebucket: dict[str, object] | None = None
     candidate: dict[str, object] | None = None
+    source_variant: SourceVariant | None = None
 
 
 @dataclass
@@ -79,6 +89,17 @@ class _ArgPrep:
     text: str
 
 
+@dataclass(frozen=True)
+class _ReturnUse:
+    register: str
+    source_register: str
+    shape: str
+    width: int | None
+    opcode: str
+    text: str
+    through_copy: bool
+
+
 @dataclass
 class _AsmCall:
     call_target: str
@@ -88,6 +109,7 @@ class _AsmCall:
     target_ordinal: int
     instruction_index: int
     arg_preps: dict[str, _ArgPrep]
+    return_use: _ReturnUse | None = None
 
 
 @dataclass(frozen=True)
@@ -105,12 +127,19 @@ class _PrototypeInfo:
     is_static: bool
     is_variadic: bool
     param_types: tuple[str, ...]
+    return_type: str | None = None
     is_definition: bool = False
     line: int | None = None
     param_texts: tuple[str, ...] = ()
     param_names: tuple[str | None, ...] = ()
     declaration_count: int = 1
     source_scope: str = "unknown"
+
+
+@dataclass(frozen=True)
+class _CallAlias:
+    alias: str
+    target: str
 
 
 GPR_ARG_ORDER = tuple(f"r{i}" for i in range(3, 11))
@@ -174,6 +203,9 @@ def audit_signature_call_type(
         _call_target_shape_findings(target_calls, current_calls, source_context)
     )
     findings.extend(
+        _return_width_findings(target_calls, current_calls, source_context)
+    )
+    findings.extend(
         _call_prep_findings(target_calls, current_calls, source_context)
     )
 
@@ -192,10 +224,56 @@ def validate_signature_patches(
     run_candidate: Callable[[str], dict],
     *,
     baseline_match_percent: float | None = None,
+    primary_function: str | None = None,
+    sibling_functions: list[str] | None = None,
+    sibling_baseline_match_percent: dict[str, float | None] | None = None,
+    run_candidate_multi: Callable[[str, list[str]], dict[str, dict]] | None = None,
 ) -> SignatureAuditReport:
     """Run candidate source patches and attach checkdiff validation metadata."""
     for finding in report.findings:
         for action in finding.actions:
+            if action.source_variant is not None:
+                patched_source, patch_error = _apply_source_variant(
+                    source_text,
+                    action.source_variant,
+                )
+                if patch_error is not None:
+                    action.validation = {
+                        "status": "skipped",
+                        "retained": False,
+                        "rejection_reason": "patch-application-failed",
+                        "error": patch_error,
+                    }
+                    continue
+                functions = _validation_function_list(
+                    primary_function or report.function,
+                    sibling_functions or [],
+                )
+                try:
+                    if run_candidate_multi is not None:
+                        payloads = run_candidate_multi(patched_source, functions)
+                    else:
+                        payloads = {
+                            functions[0]: run_candidate(patched_source),
+                        }
+                except Exception as exc:  # pragma: no cover - subprocess errors vary
+                    action.validation = {
+                        "status": "failed",
+                        "retained": False,
+                        "rejection_reason": "compile-failed",
+                        "error": str(exc),
+                    }
+                    continue
+                action.validation = _source_variant_validation(
+                    primary_function=functions[0],
+                    sibling_functions=functions[1:],
+                    payloads=payloads,
+                    baseline_match_percent=baseline_match_percent,
+                    sibling_baseline_match_percent=(
+                        sibling_baseline_match_percent or {}
+                    ),
+                )
+                continue
             if action.patch is None:
                 continue
             patched_source, patch_error = _apply_patch_descriptor(
@@ -216,39 +294,114 @@ def validate_signature_patches(
                     "error": str(exc),
                 }
                 continue
-            candidate_match = _payload_match_percent(payload)
-            match = bool(payload.get("match") is True)
-            delta = (
-                candidate_match - baseline_match_percent
-                if candidate_match is not None and baseline_match_percent is not None
-                else None
+            action.validation = _single_candidate_validation(
+                payload,
+                baseline_match_percent=baseline_match_percent,
             )
-            if match:
-                status = "validated"
-            elif candidate_match is None:
-                status = "unscored"
-            else:
-                status = "scored"
-            if delta is not None and delta <= 0 and not match:
-                status = "non-improving"
-            validation = {
-                "status": status,
-                "match": match,
-                "baseline_match_percent": baseline_match_percent,
-                "candidate_match_percent": candidate_match,
-                "delta_match_percent": delta,
-                "classification": _classification_primary(payload),
-            }
-            candidate_match_source = _payload_match_percent_source(payload)
-            if candidate_match_source is not None:
-                validation["candidate_match_percent_source"] = candidate_match_source
-            if candidate_match is None and not match:
-                validation["score_reason"] = (
-                    "candidate checkdiff did not return a match percent"
-                )
-            action.validation = validation
     report.summary = _summarize_report(report.findings)
     return report
+
+
+def _validation_function_list(primary: str, siblings: list[str]) -> list[str]:
+    functions = [primary]
+    seen = {primary}
+    for sibling in siblings:
+        if sibling in seen:
+            continue
+        functions.append(sibling)
+        seen.add(sibling)
+    return functions
+
+
+def _single_candidate_validation(
+    payload: dict,
+    *,
+    baseline_match_percent: float | None,
+) -> dict:
+    candidate_match = _payload_match_percent(payload)
+    match = bool(payload.get("match") is True)
+    delta = (
+        candidate_match - baseline_match_percent
+        if candidate_match is not None and baseline_match_percent is not None
+        else None
+    )
+    if match:
+        status = "validated"
+    elif candidate_match is None:
+        status = "unscored"
+    else:
+        status = "scored"
+    if delta is not None and delta <= 0 and not match:
+        status = "non-improving"
+    validation = {
+        "status": status,
+        "match": match,
+        "baseline_match_percent": baseline_match_percent,
+        "candidate_match_percent": candidate_match,
+        "delta_match_percent": delta,
+        "classification": _classification_primary(payload),
+    }
+    candidate_match_source = _payload_match_percent_source(payload)
+    if candidate_match_source is not None:
+        validation["candidate_match_percent_source"] = candidate_match_source
+    if candidate_match is None and not match:
+        validation["score_reason"] = (
+            "candidate checkdiff did not return a match percent"
+        )
+    return validation
+
+
+def _source_variant_validation(
+    *,
+    primary_function: str,
+    sibling_functions: list[str],
+    payloads: dict[str, dict],
+    baseline_match_percent: float | None,
+    sibling_baseline_match_percent: dict[str, float | None],
+) -> dict:
+    primary_payload = payloads.get(primary_function, {})
+    primary = _single_candidate_validation(
+        primary_payload,
+        baseline_match_percent=baseline_match_percent,
+    )
+    primary["function"] = primary_function
+    siblings = []
+    for sibling in sibling_functions:
+        sibling_validation = _single_candidate_validation(
+            payloads.get(sibling, {}),
+            baseline_match_percent=sibling_baseline_match_percent.get(sibling),
+        )
+        sibling_validation["function"] = sibling
+        siblings.append(sibling_validation)
+
+    rejection_reason = _source_variant_rejection_reason(primary, siblings)
+    retained = rejection_reason is None
+    return {
+        "status": "retained" if retained else "rejected",
+        "retained": retained,
+        "rejection_reason": rejection_reason,
+        "primary": primary,
+        "siblings": siblings,
+    }
+
+
+def _source_variant_rejection_reason(
+    primary: dict,
+    siblings: list[dict],
+) -> str | None:
+    if primary.get("match") is not True:
+        primary_delta = primary.get("delta_match_percent")
+        if not isinstance(primary_delta, (int, float)) or primary_delta <= 0:
+            if primary.get("candidate_match_percent") is None:
+                return "candidate-unscored"
+            return "primary-non-improving"
+    for sibling in siblings:
+        delta = sibling.get("delta_match_percent")
+        if delta is None:
+            continue
+        if isinstance(delta, (int, float)) and delta < 0:
+            return "sibling-regressed"
+    return None
 
 
 SOURCE_LEVER_ACTION_KINDS = {
@@ -270,6 +423,10 @@ def _summarize_report(findings: list[SignatureFinding]) -> dict[str, object]:
     rebucketed_audit_only_count = 0
     audit_only_unrebucketed = 0
     source_lever_action_count = 0
+    source_variant_candidate_count = 0
+    local_return_width_candidate_count = 0
+    validated_local_return_width_candidate_count = 0
+    retained_local_return_width_candidate_count = 0
 
     for finding in findings:
         for action in finding.actions:
@@ -277,6 +434,16 @@ def _summarize_report(findings: list[SignatureFinding]) -> dict[str, object]:
             action_kind_counts[action.kind] = (
                 action_kind_counts.get(action.kind, 0) + 1
             )
+            if action.source_variant is not None:
+                source_variant_candidate_count += 1
+                if action.kind == "call-site-local-return-width":
+                    local_return_width_candidate_count += 1
+                    if _source_variant_validation_completed(action.validation):
+                        validated_local_return_width_candidate_count += 1
+                    if _validation_retained(action.validation):
+                        retained_local_return_width_candidate_count += 1
+                source_lever_action_count += 1
+                continue
             if action.patch is not None:
                 patch_candidate_count += 1
                 if _validation_improves(action.validation):
@@ -303,6 +470,13 @@ def _summarize_report(findings: list[SignatureFinding]) -> dict[str, object]:
         audit_only_unrebucketed=audit_only_unrebucketed,
         source_lever_action_count=source_lever_action_count,
         rebucketed_audit_only_count=rebucketed_audit_only_count,
+        local_return_width_candidate_count=local_return_width_candidate_count,
+        validated_local_return_width_candidate_count=(
+            validated_local_return_width_candidate_count
+        ),
+        retained_local_return_width_candidate_count=(
+            retained_local_return_width_candidate_count
+        ),
     )
 
     return {
@@ -314,6 +488,14 @@ def _summarize_report(findings: list[SignatureFinding]) -> dict[str, object]:
         "rebucketed_audit_only_count": rebucketed_audit_only_count,
         "audit_only_unrebucketed": audit_only_unrebucketed,
         "source_lever_action_count": source_lever_action_count,
+        "source_variant_candidate_count": source_variant_candidate_count,
+        "local_return_width_candidate_count": local_return_width_candidate_count,
+        "validated_local_return_width_candidate_count": (
+            validated_local_return_width_candidate_count
+        ),
+        "retained_local_return_width_candidate_count": (
+            retained_local_return_width_candidate_count
+        ),
         "action_kind_counts": action_kind_counts,
         "rebucket_reason_counts": rebucket_reason_counts,
         "stop_condition": stop_condition,
@@ -329,6 +511,18 @@ def _validation_improves(validation: dict | None) -> bool:
     return isinstance(delta, (int, float)) and delta > 0
 
 
+def _validation_retained(validation: dict | None) -> bool:
+    if not validation:
+        return False
+    return validation.get("retained") is True or _validation_improves(validation)
+
+
+def _source_variant_validation_completed(validation: dict | None) -> bool:
+    if not validation:
+        return False
+    return validation.get("status") in {"retained", "rejected"}
+
+
 def _summary_stop_condition(
     *,
     finding_count: int,
@@ -337,6 +531,9 @@ def _summary_stop_condition(
     audit_only_unrebucketed: int,
     source_lever_action_count: int,
     rebucketed_audit_only_count: int,
+    local_return_width_candidate_count: int,
+    validated_local_return_width_candidate_count: int,
+    retained_local_return_width_candidate_count: int,
 ) -> dict[str, str]:
     if finding_count == 0:
         return {
@@ -357,6 +554,22 @@ def _summary_stop_condition(
         return {
             "kind": "audit-only-unclassified",
             "reason": "some audit-only actions lack a rebucket or source-lever reason",
+        }
+    if (
+        local_return_width_candidate_count > 0
+        and retained_local_return_width_candidate_count > 0
+    ):
+        return {
+            "kind": "retained-local-return-width-candidates",
+            "reason": "at least one local return-width candidate was retained",
+        }
+    if (
+        local_return_width_candidate_count > 0
+        and validated_local_return_width_candidate_count > 0
+    ):
+        return {
+            "kind": "local-return-width-exhausted",
+            "reason": "local return-width candidates were validated but none were retained",
         }
     if source_lever_action_count > 0:
         return {
@@ -391,6 +604,21 @@ def _apply_patch_descriptor(
     if count == 0:
         return None, f"patch text not found: {patch.old!r}"
     return None, f"patch text was ambiguous ({count} occurrences): {patch.old!r}"
+
+
+def _apply_source_variant(
+    source_text: str,
+    variant: SourceVariant,
+) -> tuple[str | None, str | None]:
+    patched = source_text
+    for idx, patch in enumerate(variant.patches, start=1):
+        next_source, error = _apply_patch_descriptor(patched, patch)
+        if error is not None:
+            return None, f"patch {idx} failed: {error}"
+        if next_source is None:
+            return None, f"patch {idx} failed: patch produced no source"
+        patched = next_source
+    return patched, None
 
 
 def _payload_match_percent(payload: dict) -> float | None:
@@ -482,6 +710,7 @@ def _parse_asm_calls(lines: list[str], window: int) -> list[_AsmCall]:
                 target_ordinal=target_counts[target],
                 instruction_index=instr.index,
                 arg_preps=_collect_arg_preps(instrs, instr_index, window),
+                return_use=_collect_return_use(instrs, instr_index, window),
             )
         )
     return calls
@@ -548,6 +777,87 @@ def _collect_arg_preps(
         if prep is not None and prep.register not in preps:
             preps[prep.register] = prep
     return preps
+
+
+def _collect_return_use(
+    instrs: list[_AsmInstr],
+    call_instr_pos: int,
+    window: int,
+) -> _ReturnUse | None:
+    first_plain: _ReturnUse | None = None
+    copied_register: str | None = None
+    end = min(len(instrs), call_instr_pos + window + 1)
+    for instr in instrs[call_instr_pos + 1 : end]:
+        if _is_arg_prep_boundary(instr):
+            break
+        return_use = _return_use_from_instr(instr, copied_register)
+        if return_use is None:
+            continue
+        if return_use.shape != "plain-move":
+            return return_use
+        if first_plain is None:
+            first_plain = return_use
+        if return_use.source_register == "r3" and copied_register is None:
+            copied_register = return_use.register
+    return first_plain
+
+
+def _return_use_from_instr(
+    instr: _AsmInstr,
+    copied_register: str | None,
+) -> _ReturnUse | None:
+    if len(instr.operands) < 2:
+        return None
+    dest = _normalize_register(instr.operands[0])
+    src = _normalize_register(instr.operands[1])
+    through_copy = copied_register is not None and src == copied_register
+    if src != "r3" and not through_copy:
+        return None
+    if instr.opcode == "mr":
+        return _ReturnUse(
+            register=dest,
+            source_register=src,
+            shape="plain-move",
+            width=32,
+            opcode=instr.opcode,
+            text=instr.text,
+            through_copy=through_copy,
+        )
+    shape_width = _return_shape_width(instr)
+    if shape_width is None:
+        return None
+    shape, width = shape_width
+    return _ReturnUse(
+        register=dest,
+        source_register=src,
+        shape=shape,
+        width=width,
+        opcode=instr.opcode,
+        text=instr.text,
+        through_copy=through_copy,
+    )
+
+
+def _return_shape_width(instr: _AsmInstr) -> tuple[str, int] | None:
+    if instr.opcode == "clrlwi" and len(instr.operands) >= 3:
+        shift = _parse_int(instr.operands[2])
+        if shift == 24:
+            return "zero-extend-8", 8
+        if shift == 16:
+            return "zero-extend-16", 16
+    if instr.opcode == "rlwinm" and len(instr.operands) >= 5:
+        shift = _parse_int(instr.operands[2])
+        mask_begin = _parse_int(instr.operands[3])
+        mask_end = _parse_int(instr.operands[4])
+        if shift == 0 and mask_begin == 24 and mask_end == 31:
+            return "zero-extend-8", 8
+        if shift == 0 and mask_begin == 16 and mask_end == 31:
+            return "zero-extend-16", 16
+    if instr.opcode == "extsb":
+        return "sign-extend-8", 8
+    if instr.opcode == "extsh":
+        return "sign-extend-16", 16
+    return None
 
 
 def _is_arg_prep_boundary(instr: _AsmInstr) -> bool:
@@ -669,10 +979,12 @@ def _parse_int(text: str) -> int | None:
 @dataclass
 class _SourceContext:
     function: str
+    source_text: str
     call_sites: dict[tuple[str, int], dict]
     call_sites_by_overall: dict[int, dict]
     prototypes: dict[str, _PrototypeInfo]
     local_types: dict[str, str]
+    call_aliases: dict[str, _CallAlias]
 
 
 def _build_source_context(
@@ -680,14 +992,18 @@ def _build_source_context(
     function: str,
     source_file: str | None,
 ) -> _SourceContext:
+    combined_source = _source_with_direct_includes(source_text, source_file)
+    call_aliases = _parse_call_aliases(combined_source)
     span = find_function(source_text, function)
     if span is None:
         return _SourceContext(
             function=function,
+            source_text=source_text,
             call_sites={},
             call_sites_by_overall={},
-            prototypes=_parse_visible_prototypes(source_text),
+            prototypes=_parse_visible_prototypes(combined_source),
             local_types={},
+            call_aliases=call_aliases,
         )
 
     full_function = source_text[span.sig_start:span.full_end]
@@ -717,19 +1033,30 @@ def _build_source_context(
             "source_file": source_file,
             "line": abs_line,
             "call_target": site.call_target,
+            "source_call_target": site.call_target,
+            "underlying_call_target": site.call_target,
             "target_ordinal": target_ordinal,
             "overall_call_ordinal": overall_ordinal,
             "args": args,
         }
         call_sites[(site.call_target, target_ordinal)] = call_site
+        alias = call_aliases.get(site.call_target)
+        if alias is not None:
+            aliased_site = dict(call_site)
+            aliased_site["call_target"] = alias.target
+            aliased_site["source_call_target"] = site.call_target
+            aliased_site["underlying_call_target"] = alias.target
+            call_sites[(alias.target, target_ordinal)] = aliased_site
         call_sites_by_overall[overall_ordinal] = call_site
 
     return _SourceContext(
         function=function,
+        source_text=source_text,
         call_sites=call_sites,
         call_sites_by_overall=call_sites_by_overall,
-        prototypes=_parse_visible_prototypes(source_text),
+        prototypes=_parse_visible_prototypes(combined_source),
         local_types=_extract_local_types(full_function),
+        call_aliases=call_aliases,
     )
 
 
@@ -737,8 +1064,77 @@ def _is_source_parser_artifact(call_target: str) -> bool:
     return call_target in {"PAD_STACK", "void"}
 
 
+def _source_with_direct_includes(
+    source_text: str,
+    source_file: str | None,
+) -> str:
+    include_texts = _direct_include_texts(source_text, source_file)
+    if not include_texts:
+        return source_text
+    return source_text + "\n" + "\n".join(include_texts)
+
+
+def _direct_include_texts(source_text: str, source_file: str | None) -> list[str]:
+    source_path = Path(source_file).expanduser() if source_file else None
+    if source_path is not None and not source_path.is_absolute():
+        source_path = Path.cwd() / source_path
+    repo_root = _repo_root_for_source(source_path)
+    include_dir = source_path.parent if source_path is not None else repo_root
+    texts: list[str] = []
+    for match in re.finditer(r'^\s*#\s*include\s+([<"])([^>"]+)[>"]', source_text, re.MULTILINE):
+        delimiter, include_name = match.groups()
+        include_path: Path | None = None
+        if delimiter == '"':
+            include_path = include_dir / include_name
+        elif include_name.startswith("melee/"):
+            include_path = repo_root / "src" / include_name
+        elif include_name.startswith("baselib/"):
+            include_path = repo_root / "src" / "sysdolphin" / include_name
+        if include_path is None:
+            continue
+        try:
+            texts.append(include_path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+    return texts
+
+
+def _repo_root_for_source(source_path: Path | None) -> Path:
+    candidates = []
+    if source_path is not None:
+        candidates.extend([source_path.parent, *source_path.parents])
+    candidates.extend([Path.cwd(), *Path.cwd().parents])
+    for candidate in candidates:
+        if (candidate / "configure.py").exists() and (candidate / "src").exists():
+            return candidate
+    return Path.cwd()
+
+
+def _parse_call_aliases(source_text: str) -> dict[str, _CallAlias]:
+    aliases: dict[str, _CallAlias] = {}
+    pattern = re.compile(
+        r"^\s*#\s*define\s+"
+        r"(?P<alias>[A-Za-z_]\w*)\s*\([^)]*\)\s+"
+        r"(?P<body>.+)$",
+        re.MULTILINE,
+    )
+    for match in pattern.finditer(source_text):
+        alias = match.group("alias")
+        body = match.group("body")
+        targets = [
+            target
+            for target in re.findall(r"\b([A-Za-z_]\w*)\s*\(", body)
+            if target not in {alias, "int", "u8", "s8", "u16", "s16"}
+        ]
+        if not targets:
+            continue
+        aliases[alias] = _CallAlias(alias=alias, target=targets[-1])
+    return aliases
+
+
 def _parse_visible_prototypes(source_text: str) -> dict[str, _PrototypeInfo]:
     prototypes: dict[str, _PrototypeInfo] = {}
+    source_text = _strip_block_comments_preserve_lines(source_text)
     pattern = re.compile(
         r"(?P<prefix>(?:^|[;\n}])\s*(?:static\s+)?[A-Za-z_][\w\s\*]*?)"
         r"\b(?P<name>[A-Za-z_]\w*)\s*\(",
@@ -754,6 +1150,19 @@ def _parse_visible_prototypes(source_text: str) -> dict[str, _PrototypeInfo]:
             "switch",
             "return",
             "sizeof",
+        }:
+            continue
+        cleaned_prefix = re.sub(r"^[;\n}\s]+", "", prefix)
+        prefix_first_word = (
+            cleaned_prefix.split()[0] if cleaned_prefix.split() else ""
+        )
+        if prefix_first_word in {
+            "case",
+            "return",
+            "if",
+            "for",
+            "while",
+            "switch",
         }:
             continue
         open_idx = match.end() - 1
@@ -783,6 +1192,7 @@ def _parse_visible_prototypes(source_text: str) -> dict[str, _PrototypeInfo]:
             is_static=is_static,
             is_variadic=is_variadic,
             param_types=param_types,
+            return_type=_extract_return_type(prefix),
             is_definition=suffix[0] == "{",
             line=source_text[: match.start("name")].count("\n") + 1,
             param_texts=param_texts,
@@ -797,6 +1207,27 @@ def _parse_visible_prototypes(source_text: str) -> dict[str, _PrototypeInfo]:
         if info.is_static and not existing.is_static:
             prototypes[name] = info
     return prototypes
+
+
+def _strip_block_comments_preserve_lines(source_text: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        text = match.group(0)
+        return "\n" * text.count("\n") + " "
+
+    return re.sub(r"/\*.*?\*/", replace, source_text, flags=re.DOTALL)
+
+
+def _extract_return_type(prefix: str) -> str | None:
+    cleaned = prefix.strip()
+    cleaned = re.sub(r"^[;\n}\s]+", "", cleaned)
+    words = [
+        word
+        for word in cleaned.split()
+        if word not in {"static", "extern", "inline"}
+    ]
+    if not words:
+        return None
+    return " ".join(words)
 
 
 def _matching_paren(text: str, open_idx: int) -> int | None:
@@ -992,6 +1423,533 @@ def _call_shape_dict(call: _AsmCall | None) -> dict:
         "call_ordinal": call.overall_ordinal,
         "target_ordinal": call.target_ordinal,
     }
+
+
+def _return_width_findings(
+    target_calls: list[_AsmCall],
+    current_calls: list[_AsmCall],
+    source_context: _SourceContext,
+) -> list[SignatureFinding]:
+    findings: list[SignatureFinding] = []
+    current_by_target_ordinal = {
+        (call.call_target, call.target_ordinal): call for call in current_calls
+    }
+    for expected_call in target_calls:
+        current_call = current_by_target_ordinal.get(
+            (expected_call.call_target, expected_call.target_ordinal)
+        )
+        if current_call is None:
+            continue
+        if expected_call.return_use is None or current_call.return_use is None:
+            continue
+        if not _return_uses_differ(expected_call.return_use, current_call.return_use):
+            continue
+        source_site = _source_site_for_call(source_context, current_call)
+        helper_target = _underlying_call_target(source_site, current_call.call_target)
+        prototype = source_context.prototypes.get(helper_target)
+        if not _is_narrow_integer_return(prototype):
+            continue
+        affected = [_call_site_without_args(source_site)] if source_site else []
+        action = _return_width_action(
+            expected_call=expected_call,
+            current_call=current_call,
+            source_context=source_context,
+            source_site=source_site,
+            prototype=prototype,
+            affected=affected,
+        )
+        findings.append(
+            SignatureFinding(
+                kind="helper-return-width-mismatch",
+                confidence="medium",
+                call_target=current_call.call_target,
+                call_ordinal=current_call.overall_ordinal,
+                arg_register=None,
+                expected=_return_call_dict(expected_call),
+                current=_return_call_dict(current_call),
+                source_line=source_site.get("line") if source_site else None,
+                arg_index=None,
+                affected_call_sites=affected,
+                actions=[action],
+            )
+        )
+    return findings
+
+
+def _return_uses_differ(expected: _ReturnUse, current: _ReturnUse) -> bool:
+    if expected.shape != current.shape:
+        return True
+    return expected.width != current.width
+
+
+def _return_call_dict(call: _AsmCall) -> dict:
+    payload = _call_shape_dict(call)
+    payload["return_use"] = _return_use_dict(call.return_use)
+    return payload
+
+
+def _return_use_dict(return_use: _ReturnUse | None) -> dict | None:
+    if return_use is None:
+        return None
+    return {
+        "register": return_use.register,
+        "source_register": return_use.source_register,
+        "shape": return_use.shape,
+        "width": return_use.width,
+        "opcode": return_use.opcode,
+        "text": return_use.text,
+        "through_copy": return_use.through_copy,
+    }
+
+
+def _underlying_call_target(source_site: dict | None, call_target: str) -> str:
+    if source_site is None:
+        return call_target
+    target = source_site.get("underlying_call_target") or source_site.get("call_target")
+    return str(target) if target is not None else call_target
+
+
+def _return_width_action(
+    *,
+    expected_call: _AsmCall,
+    current_call: _AsmCall,
+    source_context: _SourceContext,
+    source_site: dict | None,
+    prototype: _PrototypeInfo | None,
+    affected: list[dict],
+) -> SignatureAction:
+    helper = _underlying_call_target(source_site, current_call.call_target)
+    candidate = {
+        "kind": "call-site-local-return-width",
+        "helper": helper,
+        "call_target": current_call.call_target,
+        "source_line": source_site.get("line") if source_site else None,
+        "localization_kind": (
+            source_site.get("localization_kind") if source_site else None
+        ),
+        "expected_return_use": _return_use_dict(expected_call.return_use),
+        "current_return_use": _return_use_dict(current_call.return_use),
+        "helper_return_type": prototype.return_type if prototype else None,
+    }
+    if not _trusted_return_width_localization(source_site, current_call):
+        return SignatureAction(
+            kind="call-site-local-return-width",
+            confidence="low",
+            affected_call_sites=affected,
+            reason=(
+                "The helper return-width mismatch was found, but the source call "
+                "was not localized by helper target ordinal."
+            ),
+            rebucket=_return_width_rebucket(
+                "return-width-source-localization-unsafe",
+                "source localization is not trusted for a local return-width edit",
+                candidate,
+            ),
+            candidate=candidate,
+        )
+
+    variant = _source_variant_for_return_width(
+        source_context=source_context,
+        source_site=source_site,
+        helper=helper,
+        prototype=prototype,
+        candidate=candidate,
+    )
+    if variant is None:
+        return SignatureAction(
+            kind="call-site-local-return-width",
+            confidence="low",
+            affected_call_sites=affected,
+            reason=(
+                "The helper return-width mismatch was localized, but the source "
+                "shape is not one of the conservative local rewrite forms."
+            ),
+            rebucket=_return_width_rebucket(
+                "return-width-source-shape-unsupported",
+                "source assignment or consumer shape is unsupported",
+                candidate,
+            ),
+            candidate=candidate,
+        )
+    return SignatureAction(
+        kind="call-site-local-return-width",
+        confidence="medium",
+        affected_call_sites=affected,
+        reason="Localized helper return-width mismatch has a bounded source variant.",
+        candidate=variant.candidate,
+        source_variant=variant,
+    )
+
+
+def _trusted_return_width_localization(
+    source_site: dict | None,
+    call: _AsmCall,
+) -> bool:
+    if source_site is None:
+        return False
+    return (
+        source_site.get("localization_kind") == "target-ordinal"
+        and source_site.get("call_target") == call.call_target
+    )
+
+
+def _return_width_rebucket(
+    reason: str,
+    explanation: str,
+    candidate: dict[str, object],
+) -> dict[str, object]:
+    return _rebucket(
+        reason,
+        "signature-call-type",
+        "helper-return-width",
+        explanation,
+        candidate=candidate,
+    )
+
+
+def _is_narrow_integer_return(prototype: _PrototypeInfo | None) -> bool:
+    if prototype is None or prototype.return_type is None:
+        return False
+    return _integer_abi_width(prototype.return_type) in {8, 16}
+
+
+def _is_narrow_integer_local(type_text: str | None) -> bool:
+    if type_text is None:
+        return False
+    return _integer_abi_width(type_text) in {8, 16}
+
+
+def _source_variant_for_return_width(
+    *,
+    source_context: _SourceContext,
+    source_site: dict,
+    helper: str,
+    prototype: _PrototypeInfo | None,
+    candidate: dict[str, object],
+) -> SourceVariant | None:
+    assignment = _simple_call_assignment(
+        source_context.source_text,
+        int(source_site.get("line") or 0),
+        str(source_site.get("source_call_target") or helper),
+    )
+    if assignment is None:
+        return None
+
+    receiver, call_text = assignment
+    receiver_type = source_context.local_types.get(receiver)
+    if _is_narrow_integer_local(receiver_type):
+        patches = _local_temp_widen_patches(
+            source_context=source_context,
+            receiver=receiver,
+            receiver_type=str(receiver_type),
+            assignment_line=int(source_site.get("line") or 0),
+        )
+        if patches:
+            return _return_width_source_variant(
+                label="local-temp-widen-consumer-cast",
+                helper=helper,
+                source_line=int(source_site.get("line") or 0),
+                patches=patches,
+                candidate=candidate,
+            )
+
+    source_call_target = str(source_site.get("source_call_target") or "")
+    if receiver_type == "int" and source_call_target and source_call_target != helper:
+        raw_call = re.sub(
+            rf"\b{re.escape(source_call_target)}\s*\(",
+            f"{helper}(",
+            call_text,
+            count=1,
+        )
+        if raw_call != call_text:
+            return _return_width_source_variant(
+                label="raw-helper-call",
+                helper=helper,
+                source_line=int(source_site.get("line") or 0),
+                patches=[
+                    PatchDescriptor(
+                        source_file=source_site.get("source_file"),
+                        line=int(source_site.get("line") or 0),
+                        old=call_text,
+                        new=raw_call,
+                    )
+                ],
+                candidate=candidate,
+            )
+    return None
+
+
+def _return_width_source_variant(
+    *,
+    label: str,
+    helper: str,
+    source_line: int,
+    patches: list[PatchDescriptor],
+    candidate: dict[str, object],
+) -> SourceVariant:
+    variant_candidate = dict(candidate)
+    variant_candidate.update({
+        "variant_label": label,
+        "patch_status": "generated",
+        "decision_reason": "bounded local helper return-width source variant",
+    })
+    return SourceVariant(
+        variant_id=f"local-return-width:{helper}:{source_line}:{label}",
+        label=label,
+        patches=patches,
+        candidate=variant_candidate,
+    )
+
+
+def _simple_call_assignment(
+    source_text: str,
+    line_no: int,
+    call_target: str,
+) -> tuple[str, str] | None:
+    if line_no <= 0:
+        return None
+    lines = source_text.splitlines()
+    if line_no > len(lines):
+        return None
+    line = lines[line_no - 1]
+    pattern = re.compile(
+        rf"^\s*(?P<receiver>[A-Za-z_]\w*)\s*=\s*"
+        rf"(?P<call>{re.escape(call_target)}\s*\([^;]*\))\s*;\s*$"
+    )
+    match = pattern.match(line)
+    if match is None:
+        return None
+    return match.group("receiver"), match.group("call")
+
+
+def _local_temp_widen_patches(
+    *,
+    source_context: _SourceContext,
+    receiver: str,
+    receiver_type: str,
+    assignment_line: int,
+) -> list[PatchDescriptor]:
+    decl_patch = _local_declaration_patch(
+        source_context=source_context,
+        receiver=receiver,
+        current_type=receiver_type,
+        assignment_line=assignment_line,
+    )
+    if decl_patch is None:
+        return []
+    consumer_patches = _direct_narrow_consumer_patches(
+        source_context=source_context,
+        receiver=receiver,
+        assignment_line=assignment_line,
+    )
+    if not consumer_patches:
+        return []
+    return [decl_patch, *consumer_patches]
+
+
+def _local_declaration_patch(
+    *,
+    source_context: _SourceContext,
+    assignment_line: int,
+    receiver: str,
+    current_type: str,
+) -> PatchDescriptor | None:
+    bounds = _function_line_bounds(source_context.source_text, source_context.function)
+    if bounds is None:
+        return None
+    start_line, end_line = bounds
+    pattern = re.compile(
+        rf"^\s*{re.escape(current_type)}\s+{re.escape(receiver)}\s*;\s*$"
+    )
+    for line_no, line in enumerate(source_context.source_text.splitlines(), start=1):
+        if line_no < start_line or line_no > end_line or line_no >= assignment_line:
+            continue
+        if pattern.match(line):
+            return PatchDescriptor(
+                source_file=None,
+                line=line_no,
+                old=f"{current_type} {receiver};",
+                new=f"int {receiver};",
+            )
+    return None
+
+
+def _direct_narrow_consumer_patches(
+    *,
+    source_context: _SourceContext,
+    receiver: str,
+    assignment_line: int,
+) -> list[PatchDescriptor]:
+    patches: list[PatchDescriptor] = []
+    seen_lines: set[int] = set()
+    for site in source_context.call_sites_by_overall.values():
+        line_no = int(site.get("line") or 0)
+        if line_no <= assignment_line or line_no in seen_lines:
+            continue
+        prototype = source_context.prototypes.get(str(site.get("call_target") or ""))
+        if prototype is None:
+            continue
+        for arg in site.get("args", []):
+            if str(arg.get("text") or "").strip() != receiver:
+                continue
+            arg_index = int(arg.get("arg_index") or 0)
+            if arg_index >= len(prototype.param_types):
+                continue
+            param_type = prototype.param_types[arg_index]
+            if not _is_narrow_integer_local(param_type):
+                continue
+            patch = _consumer_argument_cast_patch(
+                source_context.source_text,
+                line_no=line_no,
+                call_target=str(site.get("source_call_target") or site.get("call_target")),
+                receiver=receiver,
+                param_type=param_type,
+                arg_index=arg_index,
+            )
+            if patch is None:
+                continue
+            patches.append(patch)
+            seen_lines.add(line_no)
+            break
+    return patches
+
+
+def _function_line_bounds(
+    source_text: str,
+    function: str,
+) -> tuple[int, int] | None:
+    span = find_function(source_text, function)
+    if span is None:
+        return None
+    start_line = source_text[: span.sig_start].count("\n") + 1
+    end_line = source_text[: span.body_close].count("\n") + 1
+    return start_line, end_line
+
+
+def _consumer_argument_cast_patch(
+    source_text: str,
+    *,
+    line_no: int,
+    call_target: str,
+    receiver: str,
+    param_type: str,
+    arg_index: int,
+) -> PatchDescriptor | None:
+    lines = source_text.splitlines()
+    if line_no <= 0 or line_no > len(lines):
+        return None
+    line = lines[line_no - 1]
+    for _, open_index, close_index in _call_spans_in_line(line, call_target):
+        arg_spans = _top_level_argument_spans(line, open_index + 1, close_index)
+        if arg_index >= len(arg_spans):
+            continue
+        arg_start, arg_end = arg_spans[arg_index]
+        value_start, value_end = _trim_span(line, arg_start, arg_end)
+        if line[value_start:value_end] != receiver:
+            continue
+        new_line = (
+            line[:value_start]
+            + f"({param_type}) {receiver}"
+            + line[value_end:]
+        )
+        if new_line == line:
+            return None
+        return PatchDescriptor(
+            source_file=None,
+            line=line_no,
+            old=line,
+            new=new_line,
+        )
+    return None
+
+
+def _call_spans_in_line(
+    line: str,
+    call_target: str,
+) -> list[tuple[int, int, int]]:
+    spans: list[tuple[int, int, int]] = []
+    pattern = re.compile(rf"\b{re.escape(call_target)}\s*\(")
+    for match in pattern.finditer(line):
+        open_index = line.find("(", match.start(), match.end())
+        if open_index < 0:
+            continue
+        close_index = _matching_paren_index(line, open_index)
+        if close_index is None:
+            continue
+        spans.append((match.start(), open_index, close_index))
+    return spans
+
+
+def _matching_paren_index(line: str, open_index: int) -> int | None:
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    for index in range(open_index, len(line)):
+        ch = line[index]
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            continue
+        if ch in {"'", '"'}:
+            quote = ch
+            continue
+        if ch == "(":
+            depth += 1
+            continue
+        if ch == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
+def _top_level_argument_spans(
+    line: str,
+    start: int,
+    end: int,
+) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    arg_start = start
+    for index in range(start, end):
+        ch = line[index]
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            continue
+        if ch in {"'", '"'}:
+            quote = ch
+            continue
+        if ch in "([{":
+            depth += 1
+            continue
+        if ch in ")]}":
+            depth = max(depth - 1, 0)
+            continue
+        if ch == "," and depth == 0:
+            spans.append((arg_start, index))
+            arg_start = index + 1
+    if arg_start < end:
+        spans.append((arg_start, end))
+    return spans
+
+
+def _trim_span(line: str, start: int, end: int) -> tuple[int, int]:
+    while start < end and line[start].isspace():
+        start += 1
+    while end > start and line[end - 1].isspace():
+        end -= 1
+    return start, end
 
 
 def _call_prep_findings(
@@ -2164,6 +3122,15 @@ def _merge_findings(findings: list[SignatureFinding]) -> list[SignatureFinding]:
 def _finding_patch_key(finding: SignatureFinding) -> tuple:
     patch_parts = []
     for action in finding.actions:
+        if action.source_variant is not None:
+            patch_parts.append(
+                (
+                    action.kind,
+                    action.source_variant.variant_id,
+                    action.source_variant.label,
+                )
+            )
+            continue
         if action.patch is None:
             continue
         patch_parts.append(
@@ -2200,6 +3167,12 @@ def _merge_actions(
 
 
 def _action_merge_key(action: SignatureAction) -> tuple:
+    if action.source_variant is not None:
+        return (
+            action.kind,
+            action.source_variant.variant_id,
+            action.source_variant.label,
+        )
     if action.patch is not None:
         return (
             action.kind,

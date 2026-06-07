@@ -19,6 +19,461 @@ def _payload(target_asm: list[str], current_asm: list[str]) -> dict:
     }
 
 
+def test_source_variant_applies_ordered_patches_atomically() -> None:
+    from src.mwcc_debug.signature_audit import (
+        PatchDescriptor,
+        SourceVariant,
+        _apply_source_variant,
+    )
+
+    source = "int value;\nvalue = helper();\nuse(value);\n"
+    variant = SourceVariant(
+        variant_id="test-variant",
+        label="local-temp-widen-consumer-cast",
+        patches=[
+            PatchDescriptor(None, 1, "int value;", "long value;"),
+            PatchDescriptor(None, 3, "use(value);", "use((u8) value);"),
+        ],
+        candidate={
+            "kind": "call-site-local-return-width",
+            "helper": "helper",
+        },
+    )
+
+    patched, error = _apply_source_variant(source, variant)
+
+    assert error is None
+    assert patched == "long value;\nvalue = helper();\nuse((u8) value);\n"
+
+
+def test_source_variant_reports_ambiguous_patch_without_partial_output() -> None:
+    from src.mwcc_debug.signature_audit import (
+        PatchDescriptor,
+        SourceVariant,
+        _apply_source_variant,
+    )
+
+    source = "value = helper();\nvalue = helper();\n"
+    variant = SourceVariant(
+        variant_id="ambiguous",
+        label="raw-helper-call",
+        patches=[PatchDescriptor(None, 0, "value = helper();", "value = raw();")],
+        candidate={"kind": "call-site-local-return-width"},
+    )
+
+    patched, error = _apply_source_variant(source, variant)
+
+    assert patched is None
+    assert error == (
+        "patch 1 failed: patch text was ambiguous (2 occurrences): "
+        "'value = helper();'"
+    )
+
+
+def test_validate_source_variant_rejects_sibling_regression() -> None:
+    from src.mwcc_debug.signature_audit import (
+        PatchDescriptor,
+        SignatureAction,
+        SignatureAuditReport,
+        SignatureFinding,
+        SourceVariant,
+    )
+
+    action = SignatureAction(
+        kind="call-site-local-return-width",
+        confidence="medium",
+        affected_call_sites=[],
+        reason="test",
+        source_variant=SourceVariant(
+            variant_id="v1",
+            label="local-temp-widen-consumer-cast",
+            patches=[PatchDescriptor(None, 1, "u8 value;", "int value;")],
+            candidate={"kind": "call-site-local-return-width"},
+        ),
+    )
+    report = SignatureAuditReport(
+        function="caller_fn",
+        classification=None,
+        findings=[
+            SignatureFinding(
+                kind="helper-return-width-mismatch",
+                confidence="medium",
+                call_target="helper",
+                call_ordinal=1,
+                arg_register=None,
+                expected={},
+                current={},
+                source_line=1,
+                arg_index=None,
+                affected_call_sites=[],
+                actions=[action],
+            )
+        ],
+    )
+
+    def fake_runner(candidate_source: str, functions: list[str]) -> dict[str, dict]:
+        assert candidate_source == "int value;\n"
+        assert functions == ["caller_fn", "sibling_fn"]
+        return {
+            "caller_fn": {"match": False, "fuzzy_match_percent": 99.0},
+            "sibling_fn": {"match": False, "fuzzy_match_percent": 94.0},
+        }
+
+    validate_signature_patches(
+        report,
+        "u8 value;\n",
+        lambda candidate_source: {"match": False},
+        baseline_match_percent=97.5,
+        primary_function="caller_fn",
+        sibling_functions=["sibling_fn"],
+        sibling_baseline_match_percent={"sibling_fn": 95.0},
+        run_candidate_multi=fake_runner,
+    )
+
+    validation = action.validation
+    assert validation["retained"] is False
+    assert validation["rejection_reason"] == "sibling-regressed"
+    assert validation["primary"]["delta_match_percent"] == 1.5
+    assert validation["siblings"][0]["function"] == "sibling_fn"
+    assert validation["siblings"][0]["delta_match_percent"] == -1.0
+    assert report.summary["retained_local_return_width_candidate_count"] == 0
+    assert report.summary["stop_condition"]["kind"] == "local-return-width-exhausted"
+
+
+def test_validate_source_variant_failure_is_not_counted_exhausted() -> None:
+    from src.mwcc_debug.signature_audit import (
+        PatchDescriptor,
+        SignatureAction,
+        SignatureAuditReport,
+        SignatureFinding,
+        SourceVariant,
+    )
+
+    action = SignatureAction(
+        kind="call-site-local-return-width",
+        confidence="medium",
+        affected_call_sites=[],
+        reason="test",
+        source_variant=SourceVariant(
+            variant_id="v1",
+            label="raw-helper-call",
+            patches=[PatchDescriptor(None, 1, "value = helper();", "value = raw();")],
+            candidate={"kind": "call-site-local-return-width"},
+        ),
+    )
+    report = SignatureAuditReport(
+        function="caller_fn",
+        classification=None,
+        findings=[
+            SignatureFinding(
+                kind="helper-return-width-mismatch",
+                confidence="medium",
+                call_target="helper",
+                call_ordinal=1,
+                arg_register=None,
+                expected={},
+                current={},
+                source_line=1,
+                arg_index=None,
+                affected_call_sites=[],
+                actions=[action],
+            )
+        ],
+    )
+
+    validate_signature_patches(
+        report,
+        "value = helper();\n",
+        lambda candidate_source: (_ for _ in ()).throw(RuntimeError("compile failed")),
+        baseline_match_percent=90.0,
+    )
+
+    assert action.validation["status"] == "failed"
+    assert action.validation["rejection_reason"] == "compile-failed"
+    assert report.summary["validated_local_return_width_candidate_count"] == 0
+    assert report.summary["stop_condition"]["kind"] == "source-lever-audit"
+
+
+def test_visible_prototypes_ignore_return_calls_and_parse_comment_prefix() -> None:
+    from src.mwcc_debug.signature_audit import _parse_visible_prototypes
+
+    source = """
+/* 123456 */ u8 helper(int idx);
+
+static inline u8 wrapper(int idx)
+{
+    return helper(idx);
+}
+"""
+
+    prototypes = _parse_visible_prototypes(source)
+
+    assert prototypes["helper"].return_type == "u8"
+    assert prototypes["helper"].param_types == ("int",)
+    assert prototypes["wrapper"].return_type == "u8"
+
+
+def test_audit_reports_helper_return_width_mismatch_after_call() -> None:
+    source = """
+u8 helper(int idx);
+
+void caller_fn(int idx)
+{
+    value = helper(idx);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            [
+                "/* 0000 */ mr r3, r31",
+                "/* 0004 */ bl helper",
+                "/* 0008 */ mr r30, r3",
+            ],
+            [
+                "/* 0000 */ mr r3, r31",
+                "/* 0004 */ bl helper",
+                "/* 0008 */ clrlwi r30, r3, 24",
+            ],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+
+    finding = report.findings[0]
+    assert finding.kind == "helper-return-width-mismatch"
+    assert finding.call_target == "helper"
+    assert finding.expected["return_use"]["shape"] == "plain-move"
+    assert finding.current["return_use"]["shape"] == "zero-extend-8"
+    assert finding.actions[0].kind == "call-site-local-return-width"
+
+
+def test_audit_follows_one_hop_return_copy_to_mask() -> None:
+    source = """
+u8 helper(int idx);
+
+void caller_fn(int idx)
+{
+    value = helper(idx);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            [
+                "/* 0000 */ bl helper",
+                "/* 0004 */ mr r29, r3",
+                "/* 0008 */ mr r30, r29",
+            ],
+            [
+                "/* 0000 */ bl helper",
+                "/* 0004 */ mr r29, r3",
+                "/* 0008 */ rlwinm r30, r29, 0, 24, 31",
+            ],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+
+    finding = report.findings[0]
+    assert finding.kind == "helper-return-width-mismatch"
+    assert finding.current["return_use"]["shape"] == "zero-extend-8"
+    assert finding.current["return_use"]["through_copy"] is True
+
+
+def test_return_width_action_generates_local_temp_widen_variant() -> None:
+    from src.mwcc_debug.signature_audit import _apply_source_variant
+
+    source = """
+u8 helper(int idx);
+void sink(u8 value);
+
+void caller_fn(int idx)
+{
+    u8 value;
+    value = helper(idx);
+    sink(value);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            ["/* 0000 */ bl helper", "/* 0004 */ mr r30, r3"],
+            ["/* 0000 */ bl helper", "/* 0004 */ clrlwi r30, r3, 24"],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+
+    action = report.findings[0].actions[0]
+    assert action.kind == "call-site-local-return-width"
+    assert action.source_variant is not None
+    assert action.source_variant.label == "local-temp-widen-consumer-cast"
+    patched, error = _apply_source_variant(source, action.source_variant)
+    assert error is None
+    assert "int value;" in patched
+    assert "sink((u8) value);" in patched
+
+
+def test_return_width_local_temp_widen_scopes_declaration_to_target_function() -> None:
+    from src.mwcc_debug.signature_audit import _apply_source_variant
+
+    source = """
+u8 helper(int idx);
+void sink(u8 value);
+
+void earlier_fn(int idx)
+{
+    u8 value;
+    value = 0;
+}
+
+void caller_fn(int idx)
+{
+    u8 value;
+    value = helper(idx);
+    sink(value);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            ["/* 0000 */ bl helper", "/* 0004 */ mr r30, r3"],
+            ["/* 0000 */ bl helper", "/* 0004 */ clrlwi r30, r3, 24"],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+
+    action = report.findings[0].actions[0]
+    patched, error = _apply_source_variant(source, action.source_variant)
+
+    assert error is None
+    assert "void earlier_fn(int idx)\n{\n    u8 value;" in patched
+    assert "void caller_fn(int idx)\n{\n    int value;" in patched
+
+
+def test_return_width_consumer_cast_patches_call_argument_not_first_line_occurrence() -> None:
+    from src.mwcc_debug.signature_audit import _apply_source_variant
+
+    source = """
+u8 helper(int idx);
+void sink(u8 value);
+
+void caller_fn(int idx)
+{
+    u8 value;
+    value = helper(idx);
+    value = sink(value);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            ["/* 0000 */ bl helper", "/* 0004 */ mr r30, r3"],
+            ["/* 0000 */ bl helper", "/* 0004 */ clrlwi r30, r3, 24"],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+
+    action = report.findings[0].actions[0]
+    patched, error = _apply_source_variant(source, action.source_variant)
+
+    assert error is None
+    assert "value = sink((u8) value);" in patched
+    assert "(u8) value = sink(value);" not in patched
+
+
+def test_return_width_consumer_cast_uses_narrow_argument_index() -> None:
+    from src.mwcc_debug.signature_audit import _apply_source_variant
+
+    source = """
+u8 helper(int idx);
+void sink(int wide, u8 narrow);
+
+void caller_fn(int idx)
+{
+    u8 value;
+    value = helper(idx);
+    sink(value, value);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            ["/* 0000 */ bl helper", "/* 0004 */ mr r30, r3"],
+            ["/* 0000 */ bl helper", "/* 0004 */ clrlwi r30, r3, 24"],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+
+    action = report.findings[0].actions[0]
+    patched, error = _apply_source_variant(source, action.source_variant)
+
+    assert error is None
+    assert "sink(value, (u8) value);" in patched
+    assert "sink((u8) value, value);" not in patched
+
+
+def test_return_width_action_generates_raw_helper_call_for_macro_alias() -> None:
+    from src.mwcc_debug.signature_audit import _apply_source_variant
+
+    source = """
+u8 helper(int idx);
+#define helper_s(x) ((int) helper(x))
+
+void caller_fn(int idx)
+{
+    int value;
+    value = helper_s(idx);
+    sink(value);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            ["/* 0000 */ bl helper", "/* 0004 */ mr r30, r3"],
+            ["/* 0000 */ bl helper", "/* 0004 */ clrlwi r30, r3, 24"],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+
+    action = report.findings[0].actions[0]
+    assert action.source_variant is not None
+    assert action.source_variant.label == "raw-helper-call"
+    patched, error = _apply_source_variant(source, action.source_variant)
+    assert error is None
+    assert "value = helper(idx);" in patched
+
+
+def test_return_width_action_rejects_overall_ordinal_localization() -> None:
+    source = """
+u8 helper_alias(int idx);
+u8 helper(int idx);
+
+void caller_fn(int idx)
+{
+    helper_alias(idx);
+}
+"""
+    report = audit_signature_call_type(
+        _payload(
+            ["/* 0000 */ bl helper", "/* 0004 */ mr r30, r3"],
+            ["/* 0000 */ bl helper", "/* 0004 */ clrlwi r30, r3, 24"],
+        ),
+        source,
+        "caller_fn",
+        source_file="src/sample.c",
+    )
+
+    action = report.findings[0].actions[0]
+    assert action.source_variant is None
+    assert action.rebucket["reason"] == "return-width-source-localization-unsafe"
+
+
 def test_audit_suggests_removing_explicit_float_cast_for_gpr_target() -> None:
     source = """
 void caller_fn(int rumble_setting)

@@ -4822,6 +4822,28 @@ def _run_signature_candidate_checkdiff(
     melee_root: Path,
     timeout: float,
 ) -> dict:
+    return _run_signature_candidate_checkdiff_many(
+        functions=[function],
+        candidate_source=candidate_source,
+        source_path=source_path,
+        unit=unit,
+        melee_root=melee_root,
+        timeout=timeout,
+    )[function]
+
+
+def _run_signature_candidate_checkdiff_many(
+    *,
+    functions: list[str],
+    candidate_source: str,
+    source_path: Path,
+    unit: str,
+    melee_root: Path,
+    timeout: float,
+) -> dict[str, dict]:
+    if not functions:
+        raise RuntimeError("candidate checkdiff requires at least one function")
+    primary_function = functions[0]
     probe_dir = (
         melee_root
         / "build"
@@ -4830,7 +4852,7 @@ def _run_signature_candidate_checkdiff(
         / "signature_audit"
     )
     probe_dir.mkdir(parents=True, exist_ok=True)
-    safe_function = re.sub(r"[^A-Za-z0-9_.-]+", "_", function)
+    safe_function = re.sub(r"[^A-Za-z0-9_.-]+", "_", primary_function)
     stamp = f"{os.getpid()}.{int(time.time() * 1000)}"
     probe_path = probe_dir / f"{safe_function}.{stamp}.c"
     probe_obj = probe_dir / f"{safe_function}.{stamp}.o"
@@ -4849,7 +4871,7 @@ def _run_signature_candidate_checkdiff(
         "local",
         str(probe_path),
         "--function",
-        function,
+        primary_function,
         "--unit-source",
         str(source_path),
         "--keep-obj",
@@ -4878,6 +4900,7 @@ def _run_signature_candidate_checkdiff(
     unit_for_o = unit[:-2] if unit.endswith(".c") else unit
     unit_for_o = unit_for_o.removeprefix("src/")
     build_obj = melee_root / "build" / "GALE01" / "src" / f"{unit_for_o}.o"
+    payloads: dict[str, dict] = {}
     with _acquire_checkdiff_repo_lock(
         melee_root,
         label="signature-audit validation",
@@ -4887,41 +4910,61 @@ def _run_signature_candidate_checkdiff(
         try:
             build_obj.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(probe_obj, build_obj)
-            checkdiff_proc = subprocess.run(
-                [
-                    sys.executable,
-                    str(melee_root / "tools" / "checkdiff.py"),
-                    function,
-                    "--format",
-                    "json",
-                    "--no-build",
-                ],
-                cwd=melee_root,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                env=_checkdiff_env_for_locked_child(disable_fingerprint=True),
-            )
+            for function in functions:
+                checkdiff_proc = subprocess.run(
+                    [
+                        sys.executable,
+                        str(melee_root / "tools" / "checkdiff.py"),
+                        function,
+                        "--format",
+                        "json",
+                        "--no-build",
+                    ],
+                    cwd=melee_root,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    env=_checkdiff_env_for_locked_child(disable_fingerprint=True),
+                )
+                if (
+                    checkdiff_proc.returncode not in (0, 1)
+                    or not checkdiff_proc.stdout.strip()
+                ):
+                    detail = (
+                        checkdiff_proc.stderr
+                        or checkdiff_proc.stdout
+                        or ""
+                    ).strip()
+                    raise RuntimeError(
+                        "candidate checkdiff failed for "
+                        f"{function} with exit {checkdiff_proc.returncode}"
+                        + (f": {detail}" if detail else "")
+                    )
+                try:
+                    payload = json.loads(checkdiff_proc.stdout)
+                except json.JSONDecodeError as exc:
+                    detail = (
+                        checkdiff_proc.stderr
+                        or checkdiff_proc.stdout
+                        or str(exc)
+                    ).strip()
+                    raise RuntimeError(
+                        "candidate checkdiff emitted non-json for "
+                        f"{function}: {detail}"
+                    ) from exc
+                if not isinstance(payload, dict):
+                    raise RuntimeError(
+                        "candidate checkdiff JSON root was not an object "
+                        f"for {function}"
+                    )
+                payloads[function] = payload
         finally:
             if build_obj_existed and saved_obj is not None:
                 build_obj.write_bytes(saved_obj)
             elif not build_obj_existed and build_obj.exists():
                 build_obj.unlink()
 
-    if checkdiff_proc.returncode not in (0, 1) or not checkdiff_proc.stdout.strip():
-        detail = (checkdiff_proc.stderr or checkdiff_proc.stdout or "").strip()
-        raise RuntimeError(
-            f"candidate checkdiff failed with exit {checkdiff_proc.returncode}"
-            + (f": {detail}" if detail else "")
-        )
-    try:
-        payload = json.loads(checkdiff_proc.stdout)
-    except json.JSONDecodeError as exc:
-        detail = (checkdiff_proc.stderr or checkdiff_proc.stdout or str(exc)).strip()
-        raise RuntimeError(f"candidate checkdiff emitted non-json: {detail}") from exc
-    if not isinstance(payload, dict):
-        raise RuntimeError("candidate checkdiff JSON root was not an object")
-    return payload
+    return payloads
 
 
 def _signature_report_payload(
@@ -4987,7 +5030,22 @@ def _print_signature_report(
                     f"    patch: {action.patch.old!r} -> {action.patch.new!r}"
                 )
             candidate = getattr(action, "candidate", None)
-            if candidate:
+            source_variant = getattr(action, "source_variant", None)
+            if source_variant is not None:
+                variant_candidate = source_variant.candidate or candidate or {}
+                print(
+                    "    candidate: "
+                    f"{variant_candidate.get('kind') or action.kind} "
+                    f"{variant_candidate.get('helper') or '?'} "
+                    f"({source_variant.label}, "
+                    f"{variant_candidate.get('patch_status') or 'diagnostic'})"
+                )
+                print(
+                    "      "
+                    f"variant_id={source_variant.variant_id}, "
+                    f"patches={len(source_variant.patches)}"
+                )
+            elif candidate:
                 print(
                     "    candidate: "
                     f"{candidate.get('kind')} "
@@ -5022,12 +5080,118 @@ def _print_signature_report(
             if action.validation is not None:
                 status = action.validation.get("status")
                 delta = action.validation.get("delta_match_percent")
-                if delta is None:
+                primary = action.validation.get("primary")
+                if isinstance(primary, dict):
+                    primary_delta = primary.get("delta_match_percent")
+                    siblings = action.validation.get("siblings") or []
+                    sibling_summary = (
+                        f"{len(siblings)} scored" if siblings else "none"
+                    )
+                    if primary_delta is None:
+                        print(
+                            f"    validation: {status}, "
+                            f"retained={action.validation.get('retained')}, "
+                            f"siblings {sibling_summary}"
+                        )
+                    else:
+                        print(
+                            f"    validation: {status}, "
+                            f"primary delta {primary_delta:+.2f}%, "
+                            f"retained={action.validation.get('retained')}, "
+                            f"siblings {sibling_summary}"
+                        )
+                elif delta is None:
                     print(f"    validation: {status}")
                 else:
                     print(f"    validation: {status}, delta {delta:+.2f}%")
     if validation_enabled:
         print("Validation used temp objects and restored the build object after scoring.")
+
+
+def _signature_sibling_functions(
+    *,
+    function: str,
+    source_text: str,
+    explicit_siblings: list[str],
+    report: Any | None = None,
+    limit: int = 8,
+) -> list[str]:
+    known: list[str] = []
+    if function in {"mnDiagram2_UpdateHeader", "mnDiagram2_Create"}:
+        for sibling in ("mnDiagram2_GetRankedName", "mnDiagram2_GetRankedFighter"):
+            if find_source_function(source_text, sibling) is not None:
+                known.append(sibling)
+    inferred: list[str] = []
+    helper_names = _signature_report_return_width_helpers(report)
+    if helper_names:
+        helper_patterns = [
+            re.compile(rf"\b{re.escape(helper)}\s*\(") for helper in sorted(helper_names)
+        ]
+        for span in find_function_definitions(source_text):
+            if span.name == function:
+                continue
+            body = source_text[span.body_open : span.body_close]
+            if any(pattern.search(body) for pattern in helper_patterns):
+                inferred.append(span.name)
+    functions: list[str] = []
+    seen = {function}
+    for sibling in [*explicit_siblings, *inferred, *known]:
+        if sibling in seen:
+            continue
+        functions.append(sibling)
+        seen.add(sibling)
+        if len(functions) >= limit:
+            break
+    return functions
+
+
+def _signature_report_return_width_helpers(report: Any | None) -> set[str]:
+    helpers: set[str] = set()
+    if report is None:
+        return helpers
+    for finding in getattr(report, "findings", []) or []:
+        for action in getattr(finding, "actions", []) or []:
+            if getattr(action, "kind", None) != "call-site-local-return-width":
+                continue
+            for candidate in (
+                getattr(action, "candidate", None),
+                getattr(getattr(action, "source_variant", None), "candidate", None),
+            ):
+                if not isinstance(candidate, dict):
+                    continue
+                helper = candidate.get("helper")
+                if helper:
+                    helpers.add(str(helper))
+    return helpers
+
+
+def _signature_sibling_baselines(
+    *,
+    sibling_functions: list[str],
+    melee_root: Path,
+    checkdiff_timeout: float,
+) -> dict[str, float | None]:
+    baselines: dict[str, float | None] = {}
+    for sibling in sibling_functions:
+        try:
+            payload, _ = _read_signature_checkdiff_payload(
+                function=sibling,
+                melee_root=melee_root,
+                checkdiff_json=None,
+                checkdiff_timeout=checkdiff_timeout,
+                no_build=True,
+            )
+        except typer.Exit:
+            continue
+        baselines[sibling] = _signature_payload_match_percent(payload)
+    return baselines
+
+
+def _signature_scoreable_sibling_functions(
+    sibling_functions: list[str],
+    sibling_baselines: dict[str, float | None],
+) -> list[str]:
+    return [sibling for sibling in sibling_functions if sibling in sibling_baselines]
 
 
 @suggest_app.command(name="signatures")
@@ -5070,6 +5234,16 @@ def suggest_signatures_cmd(
             ),
         ),
     ] = False,
+    sibling_function: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--sibling-function",
+            help=(
+                "Additional sibling function to score against validated "
+                "source variants. Can be passed multiple times."
+            ),
+        ),
+    ] = None,
     checkdiff_timeout: Annotated[
         float,
         typer.Option(
@@ -5127,6 +5301,35 @@ def suggest_signatures_cmd(
                 timeout=checkdiff_timeout,
             )
 
+        sibling_functions = _signature_sibling_functions(
+            function=function,
+            source_text=source_text,
+            explicit_siblings=list(sibling_function or []),
+            report=report,
+        )
+        sibling_baselines = _signature_sibling_baselines(
+            sibling_functions=sibling_functions,
+            melee_root=melee_root,
+            checkdiff_timeout=checkdiff_timeout,
+        )
+        sibling_functions = _signature_scoreable_sibling_functions(
+            sibling_functions,
+            sibling_baselines,
+        )
+
+        def run_candidate_multi(
+            candidate_source: str,
+            functions: list[str],
+        ) -> dict[str, dict]:
+            return _run_signature_candidate_checkdiff_many(
+                functions=functions,
+                candidate_source=candidate_source,
+                source_path=source_path,
+                unit=unit,
+                melee_root=melee_root,
+                timeout=checkdiff_timeout,
+            )
+
         validate_signature_patches(
             report,
             source_text,
@@ -5134,6 +5337,10 @@ def suggest_signatures_cmd(
             baseline_match_percent=_signature_payload_match_percent(
                 checkdiff_payload
             ),
+            primary_function=function,
+            sibling_functions=sibling_functions,
+            sibling_baseline_match_percent=sibling_baselines,
+            run_candidate_multi=run_candidate_multi,
         )
 
     if json_out:

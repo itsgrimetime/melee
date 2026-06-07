@@ -463,6 +463,134 @@ def test_debug_suggest_signatures_json_includes_prototype_candidate(
     assert action["patch"]["old"] == "int value"
 
 
+def test_debug_suggest_signatures_json_includes_local_return_width_variant(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "repo"
+    source = melee_root / "src" / "melee" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        textwrap.dedent(
+            """\
+            u8 helper(int idx);
+            void sink(u8 value);
+
+            void caller_fn(int idx)
+            {
+                u8 value;
+                value = helper(idx);
+                sink(value);
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    payload_path = tmp_path / "checkdiff.json"
+    payload_path.write_text(
+        json.dumps({
+            "function": "caller_fn",
+            "classification": {"primary": "signature-return-width"},
+            "target_asm": [
+                "/* 0000 */ mr r3, r31",
+                "/* 0004 */ bl helper",
+                "/* 0008 */ mr r30, r3",
+            ],
+            "current_asm": [
+                "/* 0000 */ mr r3, r31",
+                "/* 0004 */ bl helper",
+                "/* 0008 */ clrlwi r30, r3, 24",
+            ],
+            "fuzzy_match_percent": 97.5,
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/demo",
+    )
+
+    result = runner.invoke(
+        debug_cli.debug_app,
+        [
+            "suggest",
+            "signatures",
+            "-f",
+            "caller_fn",
+            "--checkdiff-json",
+            str(payload_path),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    report = json.loads(result.output)
+    action = report["findings"][0]["actions"][0]
+    assert action["kind"] == "call-site-local-return-width"
+    assert action["source_variant"]["label"] == "local-temp-widen-consumer-cast"
+    assert action["candidate"]["kind"] == "call-site-local-return-width"
+    assert report["summary"]["local_return_width_candidate_count"] == 1
+
+
+def test_signature_sibling_functions_infers_same_file_helper_callers() -> None:
+    source = textwrap.dedent(
+        """\
+        u8 helper(int idx);
+
+        void caller_fn(int idx)
+        {
+            value = helper(idx);
+        }
+
+        void sibling_a(int idx)
+        {
+            other = helper(idx);
+        }
+
+        void unrelated(int idx)
+        {
+            other = different(idx);
+        }
+        """
+    )
+    report = SimpleNamespace(
+        findings=[
+            SimpleNamespace(
+                actions=[
+                    SimpleNamespace(
+                        kind="call-site-local-return-width",
+                        candidate={"helper": "helper"},
+                        source_variant=None,
+                    )
+                ]
+            )
+        ]
+    )
+
+    siblings = debug_cli._signature_sibling_functions(
+        function="caller_fn",
+        source_text=source,
+        explicit_siblings=[],
+        report=report,
+    )
+
+    assert siblings == ["sibling_a"]
+
+
+def test_signature_scoreable_siblings_drop_missing_report_entries() -> None:
+    siblings = debug_cli._signature_scoreable_sibling_functions(
+        ["ranked_name", "missing_report", "unscored_but_runnable"],
+        {
+            "ranked_name": 97.5,
+            "unscored_but_runnable": None,
+        },
+    )
+
+    assert siblings == ["ranked_name", "unscored_but_runnable"]
+
+
 def test_debug_suggest_signatures_text_prints_candidate_summary(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -749,6 +877,79 @@ def test_signature_candidate_checkdiff_restores_build_object(
     assert probe_source.is_relative_to(
         melee_root / "build" / "mwcc_debug_cache" / "probes" / "signature_audit"
     )
+
+
+def test_signature_candidate_checkdiff_many_restores_build_object_once(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "repo"
+    source = melee_root / "src" / "melee" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text("void caller_fn(void) {}\n")
+    build_obj = melee_root / "build" / "GALE01" / "src" / "melee" / "demo.o"
+    build_obj.parent.mkdir(parents=True)
+    build_obj.write_bytes(b"original-object")
+    lock_events: list[str] = []
+    dump_count = 0
+    checked_functions: list[str] = []
+
+    @contextmanager
+    def fake_lock(root, *, label="checkdiff build/report"):
+        lock_events.append(f"enter:{label}")
+        yield
+        lock_events.append(f"exit:{label}")
+
+    def fake_run(cmd, **kwargs):
+        nonlocal dump_count
+        cmd_list = [str(part) for part in cmd]
+        if "debug" in cmd_list and "dump" in cmd_list and "local" in cmd_list:
+            dump_count += 1
+            keep_obj = Path(cmd_list[cmd_list.index("--keep-obj") + 1])
+            keep_obj.parent.mkdir(parents=True, exist_ok=True)
+            keep_obj.write_bytes(b"candidate-object")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if "checkdiff.py" in " ".join(cmd_list):
+            assert build_obj.read_bytes() == b"candidate-object"
+            checkdiff_index = next(
+                i for i, part in enumerate(cmd_list) if part.endswith("checkdiff.py")
+            )
+            function = cmd_list[checkdiff_index + 1]
+            checked_functions.append(function)
+            score = 98.0 if function == "caller_fn" else 95.0
+            return subprocess.CompletedProcess(
+                cmd,
+                1,
+                stdout=json.dumps({
+                    "function": function,
+                    "match": False,
+                    "fuzzy_match_percent": score,
+                }),
+                stderr="",
+            )
+        raise AssertionError(f"unexpected command: {cmd_list}")
+
+    monkeypatch.setattr(debug_cli, "_acquire_checkdiff_repo_lock", fake_lock)
+    monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
+
+    result = debug_cli._run_signature_candidate_checkdiff_many(
+        functions=["caller_fn", "sibling_fn"],
+        candidate_source="void caller_fn(void) {}\n",
+        source_path=source,
+        unit="melee/demo",
+        melee_root=melee_root,
+        timeout=5.0,
+    )
+
+    assert result["caller_fn"]["fuzzy_match_percent"] == 98.0
+    assert result["sibling_fn"]["fuzzy_match_percent"] == 95.0
+    assert checked_functions == ["caller_fn", "sibling_fn"]
+    assert dump_count == 1
+    assert build_obj.read_bytes() == b"original-object"
+    assert lock_events == [
+        "enter:signature-audit validation",
+        "exit:signature-audit validation",
+    ]
 
 
 def _consumer_home_call(symbol: str, offset: int, call_offset: int) -> list[str]:
