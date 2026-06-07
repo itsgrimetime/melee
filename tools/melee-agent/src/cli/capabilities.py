@@ -12,6 +12,8 @@ from pathlib import Path
 
 import typer
 
+from ._common import DEFAULT_MELEE_ROOT
+
 
 @dataclass
 class Capability:
@@ -139,6 +141,79 @@ def skill_capabilities(repo_root: Path) -> list[Capability]:
     return caps
 
 
+# Task-intent -> in-scope capability ids (CLI commands + skills only).
+# Standalone tools/*.py targets are intentionally excluded (see manifest cross-link).
+# Every target below was verified to resolve to a real CLI leaf or skill name.
+TASK_ALIASES: dict[str, list[str]] = {
+    "find callers": ["ghidra", "commit check-callers"],
+    "cross reference": ["ghidra", "commit check-callers"],
+    "debug registers": ["mwcc-debug", "mwcc-inspect"],
+    "register allocation": ["mwcc-debug", "mwcc-inspect"],
+    "score candidate": ["debug target score-source", "debug target score-dump"],
+    "scorer": ["debug target score-source", "debug target score-dump"],
+    "permuter scorer": ["debug target score-source", "debug permute run"],
+    "per-file progress": ["extract files"],
+    "per-file stats": ["extract files"],
+    "find similar functions": ["opseq", "patterns similar"],
+}
+
+
+def all_capabilities(repo_root: Path | None = None) -> list[Capability]:
+    repo_root = repo_root or DEFAULT_MELEE_ROOT
+    return command_capabilities() + skill_capabilities(repo_root)
+
+
+def _score(query: str, c: Capability) -> int:
+    q_tokens = [t for t in re.split(r"[\s\-_/]+", query.lower()) if t]
+    name_tokens = set(re.split(r"[\s\-_/]+", c.name.lower()))
+    hay_tokens = set(re.split(r"[^\w]+", f"{c.summary} {' '.join(c.keywords)}".lower()))
+    score = 0
+    for t in q_tokens:
+        if t in name_tokens:
+            score += 5
+        elif t in hay_tokens:
+            score += 2
+    return score
+
+
+def run_search(query: str, repo_root: Path | None = None, limit: int = 8) -> list[Capability]:
+    repo_root = repo_root or DEFAULT_MELEE_ROOT
+    caps = all_capabilities(repo_root)
+    by_name = {c.name: c for c in caps}
+
+    # Alias boost: if the query contains an alias key, pull its targets to the top.
+    boosted: list[Capability] = []
+    ql = query.lower()
+    for key, targets in TASK_ALIASES.items():
+        if key in ql or all(tok in ql for tok in key.split()):
+            for t in targets:
+                if t in by_name and by_name[t] not in boosted:
+                    boosted.append(by_name[t])
+
+    scored = sorted(
+        ((_score(query, c), c) for c in caps if c not in boosted),
+        key=lambda pair: pair[0],
+        reverse=True,
+    )
+    ranked = boosted + [c for s, c in scored if s >= 4]
+    return ranked[:limit]
+
+
+def _log_search(query: str, results: list[Capability]) -> None:
+    """Best-effort: record search usage to audit_log for phase-2 measurement."""
+    try:
+        from src.db import StateDB
+
+        StateDB().log_audit(
+            entity_type="capability",
+            entity_id=query[:200],
+            action="capability_search",
+            metadata={"results": [c.name for c in results]},
+        )
+    except Exception:
+        pass  # never let measurement break search
+
+
 capabilities_app = typer.Typer(
     help="Discover existing CLI commands and skills before building new ones.",
     no_args_is_help=True,
@@ -148,7 +223,16 @@ capabilities_app = typer.Typer(
 @capabilities_app.command("search")
 def search(task: str = typer.Argument(..., help="What you are trying to do.")) -> None:
     """Find existing commands/skills matching a task description."""
-    typer.echo(f"(not yet implemented) search: {task}")
+    results = run_search(task)
+    _log_search(task, results)
+    if not results:
+        typer.echo(
+            "No existing capability found via indexed search; check the nearest "
+            "`--help` group and relevant docs before building."
+        )
+        return
+    for c in results:
+        typer.echo(f"{c.name:30}  {c.summary}\n{'':30}  -> {c.invoke}")
 
 
 @capabilities_app.command("show")
