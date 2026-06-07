@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -476,12 +477,18 @@ def list_command(
     tool: Annotated[str | None, typer.Option("--tool", "-t", help="Filter by tool")] = None,
     kind: Annotated[str | None, typer.Option("--kind", "-k", help="Filter by kind")] = None,
     limit: Annotated[int, typer.Option("--limit", "-n", help="Maximum issues to show")] = 50,
+    available: Annotated[
+        bool,
+        typer.Option("--available", "--unclaimed", help="Show only unclaimed open issues"),
+    ] = False,
     output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
     """List reported tooling issues."""
     db = get_db()
     try:
-        issues = db.list_tool_issues(status=status, tool=tool, kind=kind, limit=limit)
+        issues = db.list_tool_issues(
+            status=status, tool=tool, kind=kind, limit=limit, unclaimed_only=available
+        )
     except ValueError as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(2)
@@ -499,8 +506,9 @@ def list_command(
     table.add_column("Status")
     table.add_column("Kind")
     table.add_column("Tool")
-    table.add_column("Summary", max_width=60)
-    table.add_column("Functions", max_width=28)
+    table.add_column("Summary", max_width=48)
+    table.add_column("Functions", max_width=22)
+    table.add_column("Claimed", max_width=16)
 
     for issue in issues:
         table.add_row(
@@ -510,6 +518,7 @@ def list_command(
             issue.get("tool") or "-",
             issue["summary"],
             ", ".join(issue.get("functions") or []) or "-",
+            issue.get("claimed_by") or "-",
         )
 
     console.print(table)
@@ -544,6 +553,13 @@ def show_command(
         console.print(f"[bold]Worktree:[/bold] {issue['worktree_path']}")
     if issue.get("branch"):
         console.print(f"[bold]Branch:[/bold] {issue['branch']}")
+    if issue.get("claimed_by"):
+        stamp = (
+            time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(issue["claimed_at"]))
+            if issue.get("claimed_at")
+            else "-"
+        )
+        console.print(f"[bold]Claimed by:[/bold] {issue['claimed_by']} (at {stamp})")
     if issue.get("body"):
         console.print(f"\n{issue['body']}")
     if issue.get("status") == "resolved":
@@ -619,3 +635,69 @@ def resolve_command(
         return
 
     console.print(f"[green]Resolved issue #{issue['id']}[/green]: {issue['summary']}")
+
+
+@issue_app.command("claim")
+def claim_command(
+    issue_id: Annotated[int, typer.Argument(help="Issue ID")],
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Take over a claim held by another agent"),
+    ] = False,
+    agent_id: Annotated[
+        str | None,
+        typer.Option("--agent-id", help="Claiming agent ID; auto-detected when omitted"),
+    ] = None,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
+):
+    """Claim an open issue so other agents skip it."""
+    resolved_agent = agent_id or _get_agent_id()
+    try:
+        issue = get_db().claim_tool_issue(issue_id, agent_id=resolved_agent, force=force)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from exc
+
+    if issue is None:
+        console.print(f"[red]Issue not found: {issue_id}[/red]")
+        raise typer.Exit(1)
+
+    if output_json:
+        _echo_json(issue)
+        return
+
+    console.print(
+        f"[green]Claimed issue #{issue['id']}[/green] ({issue['claimed_by']}): {issue['summary']}"
+    )
+
+
+@issue_app.command("release")
+def release_command(
+    issue_id: Annotated[int, typer.Argument(help="Issue ID")],
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Release a claim held by another agent"),
+    ] = False,
+    agent_id: Annotated[
+        str | None,
+        typer.Option("--agent-id", help="Releasing agent ID; auto-detected when omitted"),
+    ] = None,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
+):
+    """Release your claim on an issue without resolving it."""
+    resolved_agent = agent_id or _get_agent_id()
+    try:
+        issue = get_db().release_tool_issue(issue_id, agent_id=resolved_agent, force=force)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from exc
+
+    if issue is None:
+        console.print(f"[red]Issue not found: {issue_id}[/red]")
+        raise typer.Exit(1)
+
+    if output_json:
+        _echo_json(issue)
+        return
+
+    console.print(f"[green]Released issue #{issue['id']}[/green]: {issue['summary']}")

@@ -791,3 +791,184 @@ class TestDatabaseIntegrity:
 
         db1.close()
         db2.close()
+
+
+def test_tool_issues_claim_columns_migrate_from_v9(tmp_path):
+    """An existing pre-claim (v9) DB with a row upgrades to gain
+    claimed_by/claimed_at (NULL on the pre-existing row), and the migrated table
+    shape matches a freshly created one."""
+    import sqlite3
+
+    from src.db import StateDB, reset_db
+    from src.db.schema import SCHEMA_VERSION, get_migrations
+
+    reset_db()
+
+    # Seed a real v9 DB: run the frozen migrations[8] DDL to create tool_issues
+    # at the v9 shape (no claim columns), insert a row, and stamp version 9.
+    v9_path = tmp_path / "v9.db"
+    seed = sqlite3.connect(v9_path)
+    seed.execute(
+        "CREATE TABLE db_meta (key TEXT PRIMARY KEY, value TEXT, updated_at REAL)"
+    )
+    seed.executescript(get_migrations()[8])  # creates v9 tool_issues + indexes
+    seed.execute(
+        "INSERT INTO tool_issues (status, kind, summary) VALUES ('open', 'bug', 'legacy issue')"
+    )
+    seed.execute("INSERT INTO db_meta (key, value) VALUES ('schema_version', '9')")
+    seed.commit()
+    seed.close()
+
+    # Instantiating StateDB runs _run_migrations 9 -> 10 (the ALTERs).
+    migrated_db = StateDB(v9_path)
+    with migrated_db.connection() as conn:
+        migrated_cols = [
+            (row["name"], row["type"])
+            for row in conn.execute("PRAGMA table_info(tool_issues)")
+        ]
+        version = conn.execute(
+            "SELECT value FROM db_meta WHERE key = 'schema_version'"
+        ).fetchone()[0]
+
+    names = [name for name, _ in migrated_cols]
+    assert names[-2:] == ["claimed_by", "claimed_at"]
+    assert version == str(SCHEMA_VERSION) == "10"
+
+    # The pre-existing row gained the columns as NULL.
+    legacy = migrated_db.get_tool_issue(1)
+    assert legacy["summary"] == "legacy issue"
+    assert legacy["claimed_by"] is None
+    assert legacy["claimed_at"] is None
+
+    migrated_db.close()
+    reset_db()
+
+    # A fresh DB (built from SCHEMA_SQL) has the identical column shape.
+    fresh_db = StateDB(tmp_path / "fresh.db")
+    with fresh_db.connection() as conn:
+        fresh_cols = [
+            (row["name"], row["type"])
+            for row in conn.execute("PRAGMA table_info(tool_issues)")
+        ]
+    assert fresh_cols == migrated_cols
+    fresh_db.close()
+    reset_db()
+
+
+def test_connection_sets_busy_timeout(tmp_path):
+    """Writers must wait on contention instead of failing fast with
+    'database is locked', so a claim race reports cleanly."""
+    from src.db import StateDB, reset_db
+
+    reset_db()
+    db = StateDB(tmp_path / "bt.db")
+    with db.connection() as conn:
+        timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+    assert timeout == 5000
+    db.close()
+    reset_db()
+
+
+class TestToolIssueClaims:
+    """Tests for cooperative claiming of tool issues."""
+
+    def test_claim_sets_owner(self, db):
+        issue = db.report_tool_issue(summary="fix the thing", agent_id="reporter")
+        claimed = db.claim_tool_issue(issue["id"], "agent-1")
+        assert claimed["claimed_by"] == "agent-1"
+        assert claimed["claimed_at"] is not None
+
+    def test_claim_conflict_different_agent(self, db):
+        issue = db.report_tool_issue(summary="x", agent_id="reporter")
+        db.claim_tool_issue(issue["id"], "agent-1")
+        with pytest.raises(ValueError, match="already claimed by agent-1"):
+            db.claim_tool_issue(issue["id"], "agent-2")
+
+    def test_claim_force_takes_over(self, db):
+        issue = db.report_tool_issue(summary="x", agent_id="reporter")
+        db.claim_tool_issue(issue["id"], "agent-1")
+        taken = db.claim_tool_issue(issue["id"], "agent-2", force=True)
+        assert taken["claimed_by"] == "agent-2"
+
+    def test_claim_same_agent_is_idempotent(self, db):
+        issue = db.report_tool_issue(summary="x", agent_id="reporter")
+        first = db.claim_tool_issue(issue["id"], "agent-1")
+        second = db.claim_tool_issue(issue["id"], "agent-1")
+        assert second["claimed_by"] == "agent-1"
+        assert second["claimed_at"] >= first["claimed_at"]
+
+    def test_claim_resolved_errors(self, db):
+        issue = db.report_tool_issue(summary="x", agent_id="reporter")
+        db.resolve_tool_issue(issue["id"], agent_id="agent-1")
+        with pytest.raises(ValueError, match="cannot claim resolved"):
+            db.claim_tool_issue(issue["id"], "agent-1")
+
+    def test_claim_missing_returns_none(self, db):
+        assert db.claim_tool_issue(99999, "agent-1") is None
+
+    def test_claim_force_records_displaced_owner_in_audit(self, db):
+        import json as _json
+
+        issue = db.report_tool_issue(summary="x", agent_id="reporter")
+        db.claim_tool_issue(issue["id"], "agent-1")
+        db.claim_tool_issue(issue["id"], "agent-2", force=True)
+
+        with db.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT old_value FROM audit_log
+                WHERE entity_type = 'tool_issue' AND entity_id = ? AND action = 'claimed'
+                ORDER BY id DESC LIMIT 1
+                """,
+                (str(issue["id"]),),
+            ).fetchone()
+        old = _json.loads(row["old_value"])
+        assert old["claimed_by"] == "agent-1"
+
+    def test_release_clears_claim(self, db):
+        issue = db.report_tool_issue(summary="x", agent_id="reporter")
+        db.claim_tool_issue(issue["id"], "agent-1")
+        released = db.release_tool_issue(issue["id"], "agent-1")
+        assert released["claimed_by"] is None
+        assert released["claimed_at"] is None
+
+    def test_release_unclaimed_errors(self, db):
+        issue = db.report_tool_issue(summary="x", agent_id="reporter")
+        with pytest.raises(ValueError, match="is not claimed"):
+            db.release_tool_issue(issue["id"], "agent-1")
+
+    def test_release_non_owner_errors(self, db):
+        issue = db.report_tool_issue(summary="x", agent_id="reporter")
+        db.claim_tool_issue(issue["id"], "agent-1")
+        with pytest.raises(ValueError, match="claimed by agent-1"):
+            db.release_tool_issue(issue["id"], "agent-2")
+
+    def test_release_force_non_owner(self, db):
+        issue = db.report_tool_issue(summary="x", agent_id="reporter")
+        db.claim_tool_issue(issue["id"], "agent-1")
+        released = db.release_tool_issue(issue["id"], "agent-2", force=True)
+        assert released["claimed_by"] is None
+
+    def test_release_missing_returns_none(self, db):
+        assert db.release_tool_issue(99999, "agent-1") is None
+
+    def test_resolve_clears_claim(self, db):
+        issue = db.report_tool_issue(summary="x", agent_id="reporter")
+        db.claim_tool_issue(issue["id"], "agent-1")
+        resolved = db.resolve_tool_issue(issue["id"], agent_id="agent-1")
+        assert resolved["status"] == "resolved"
+        assert resolved["claimed_by"] is None
+        assert resolved["claimed_at"] is None
+
+    def test_list_unclaimed_only_filters_claimed(self, db):
+        claimed = db.report_tool_issue(summary="claimed one", agent_id="r")
+        free = db.report_tool_issue(summary="free one", agent_id="r")
+        db.claim_tool_issue(claimed["id"], "agent-1")
+
+        available_ids = {i["id"] for i in db.list_tool_issues(unclaimed_only=True)}
+        assert free["id"] in available_ids
+        assert claimed["id"] not in available_ids
+
+        # Default list still shows both (claimed-by-others stays visible).
+        all_ids = {i["id"] for i in db.list_tool_issues()}
+        assert {claimed["id"], free["id"]} <= all_ids

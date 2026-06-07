@@ -531,3 +531,150 @@ def test_failure_report_hint_is_suppressed_for_json_mode_errors():
         ],
         exit_code=7,
     )
+
+
+def test_issue_claim_from_cli(tmp_path):
+    """claim sets the owner; a second agent conflicts; --force takes over."""
+    reset_db()
+    db = get_db(tmp_path / "state.db")
+    issue = db.report_tool_issue(summary="claimable issue", agent_id="reporter")
+
+    result = runner.invoke(
+        app, ["issue", "claim", str(issue["id"]), "--agent-id", "agent-1"]
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "Claimed issue" in strip_ansi(result.stdout)
+    assert db.get_tool_issue(issue["id"])["claimed_by"] == "agent-1"
+
+    # Second agent conflicts (exit 2), message names owner and --force.
+    result = runner.invoke(
+        app, ["issue", "claim", str(issue["id"]), "--agent-id", "agent-2"]
+    )
+    assert result.exit_code == 2
+    out = strip_ansi(result.stdout)
+    assert "agent-1" in out
+    assert "--force" in out
+
+    # Force takeover succeeds.
+    result = runner.invoke(
+        app, ["issue", "claim", str(issue["id"]), "--agent-id", "agent-2", "--force"]
+    )
+    assert result.exit_code == 0, result.stdout
+    assert db.get_tool_issue(issue["id"])["claimed_by"] == "agent-2"
+
+
+def test_issue_claim_missing_issue(tmp_path):
+    reset_db()
+    get_db(tmp_path / "state.db")
+    result = runner.invoke(app, ["issue", "claim", "9999", "--agent-id", "agent-1"])
+    assert result.exit_code == 1
+    assert "not found" in strip_ansi(result.stdout).lower()
+
+
+def test_issue_release_from_cli(tmp_path):
+    """Owner releases; non-owner needs --force."""
+    reset_db()
+    db = get_db(tmp_path / "state.db")
+    issue = db.report_tool_issue(summary="releasable", agent_id="reporter")
+    db.claim_tool_issue(issue["id"], "agent-1")
+
+    # Non-owner without --force fails.
+    result = runner.invoke(
+        app, ["issue", "release", str(issue["id"]), "--agent-id", "agent-2"]
+    )
+    assert result.exit_code == 2
+    assert "agent-1" in strip_ansi(result.stdout)
+
+    # Owner releases.
+    result = runner.invoke(
+        app, ["issue", "release", str(issue["id"]), "--agent-id", "agent-1"]
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "Released issue" in strip_ansi(result.stdout)
+    assert db.get_tool_issue(issue["id"])["claimed_by"] is None
+
+    # Releasing an unclaimed issue errors.
+    result = runner.invoke(
+        app, ["issue", "release", str(issue["id"]), "--agent-id", "agent-1"]
+    )
+    assert result.exit_code == 2
+    assert "not claimed" in strip_ansi(result.stdout)
+
+
+def test_issue_list_claim_column_and_available_filter(tmp_path):
+    """list annotates the owner and --available hides claimed-by-others
+    identically in --json and table modes."""
+    reset_db()
+    db = get_db(tmp_path / "state.db")
+    claimed = db.report_tool_issue(summary="claimed one", agent_id="r")
+    free = db.report_tool_issue(summary="free one", agent_id="r")
+    db.claim_tool_issue(claimed["id"], "agent-1")
+
+    # Plain table render works.
+    assert runner.invoke(app, ["issue", "list"]).exit_code == 0
+
+    # Default --json shows both and annotates the owner.
+    payload = json.loads(runner.invoke(app, ["issue", "list", "--json"]).stdout)
+    by_id = {i["id"]: i for i in payload}
+    assert by_id[claimed["id"]]["claimed_by"] == "agent-1"
+    assert by_id[free["id"]]["claimed_by"] is None
+
+    # --available hides claimed-by-others.
+    payload = json.loads(
+        runner.invoke(app, ["issue", "list", "--available", "--json"]).stdout
+    )
+    ids = {i["id"] for i in payload}
+    assert free["id"] in ids
+    assert claimed["id"] not in ids
+
+    # The --unclaimed alias behaves the same and the table render works.
+    assert runner.invoke(app, ["issue", "list", "--unclaimed"]).exit_code == 0
+
+
+def test_issue_show_displays_claim_owner(tmp_path):
+    reset_db()
+    db = get_db(tmp_path / "state.db")
+    issue = db.report_tool_issue(summary="x", agent_id="r")
+    db.claim_tool_issue(issue["id"], "agent-1")
+
+    result = runner.invoke(app, ["issue", "show", str(issue["id"])])
+    assert result.exit_code == 0, result.stdout
+    out = strip_ansi(result.stdout)
+    assert "Claimed by:" in out
+    assert "agent-1" in out
+
+
+def test_issue_show_unclaimed_has_no_claim_line(tmp_path):
+    reset_db()
+    db = get_db(tmp_path / "state.db")
+    issue = db.report_tool_issue(summary="x", agent_id="r")
+
+    result = runner.invoke(app, ["issue", "show", str(issue["id"])])
+    assert result.exit_code == 0, result.stdout
+    assert "Claimed by:" not in strip_ansi(result.stdout)
+
+
+def test_note_allowed_on_claimed_issue_by_other_agent(tmp_path):
+    """note is not ownership-gated: any agent may annotate a claimed (open)
+    issue, and noting does not disturb the claim."""
+    reset_db()
+    db = get_db(tmp_path / "state.db")
+    issue = db.report_tool_issue(summary="x", agent_id="r")
+    db.claim_tool_issue(issue["id"], "agent-1")
+
+    result = runner.invoke(
+        app,
+        [
+            "issue",
+            "note",
+            str(issue["id"]),
+            "--body",
+            "extra context from a passer-by",
+            "--agent-id",
+            "agent-2",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    updated = db.get_tool_issue(issue["id"])
+    assert "extra context from a passer-by" in (updated["body"] or "")
+    assert updated["claimed_by"] == "agent-1"
