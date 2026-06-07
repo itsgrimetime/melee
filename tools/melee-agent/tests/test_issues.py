@@ -599,3 +599,33 @@ def test_issue_release_from_cli(tmp_path):
     )
     assert result.exit_code == 2
     assert "not claimed" in strip_ansi(result.stdout)
+
+
+def test_issue_list_claim_column_and_available_filter(tmp_path):
+    """list annotates the owner and --available hides claimed-by-others
+    identically in --json and table modes."""
+    reset_db()
+    db = get_db(tmp_path / "state.db")
+    claimed = db.report_tool_issue(summary="claimed one", agent_id="r")
+    free = db.report_tool_issue(summary="free one", agent_id="r")
+    db.claim_tool_issue(claimed["id"], "agent-1")
+
+    # Plain table render works.
+    assert runner.invoke(app, ["issue", "list"]).exit_code == 0
+
+    # Default --json shows both and annotates the owner.
+    payload = json.loads(runner.invoke(app, ["issue", "list", "--json"]).stdout)
+    by_id = {i["id"]: i for i in payload}
+    assert by_id[claimed["id"]]["claimed_by"] == "agent-1"
+    assert by_id[free["id"]]["claimed_by"] is None
+
+    # --available hides claimed-by-others.
+    payload = json.loads(
+        runner.invoke(app, ["issue", "list", "--available", "--json"]).stdout
+    )
+    ids = {i["id"] for i in payload}
+    assert free["id"] in ids
+    assert claimed["id"] not in ids
+
+    # The --unclaimed alias behaves the same and the table render works.
+    assert runner.invoke(app, ["issue", "list", "--unclaimed"]).exit_code == 0

@@ -476,12 +476,18 @@ def list_command(
     tool: Annotated[str | None, typer.Option("--tool", "-t", help="Filter by tool")] = None,
     kind: Annotated[str | None, typer.Option("--kind", "-k", help="Filter by kind")] = None,
     limit: Annotated[int, typer.Option("--limit", "-n", help="Maximum issues to show")] = 50,
+    available: Annotated[
+        bool,
+        typer.Option("--available", "--unclaimed", help="Show only unclaimed open issues"),
+    ] = False,
     output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
     """List reported tooling issues."""
     db = get_db()
     try:
-        issues = db.list_tool_issues(status=status, tool=tool, kind=kind, limit=limit)
+        issues = db.list_tool_issues(
+            status=status, tool=tool, kind=kind, limit=limit, unclaimed_only=available
+        )
     except ValueError as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(2)
@@ -499,8 +505,9 @@ def list_command(
     table.add_column("Status")
     table.add_column("Kind")
     table.add_column("Tool")
-    table.add_column("Summary", max_width=60)
-    table.add_column("Functions", max_width=28)
+    table.add_column("Summary", max_width=48)
+    table.add_column("Functions", max_width=22)
+    table.add_column("Claimed", max_width=16)
 
     for issue in issues:
         table.add_row(
@@ -510,6 +517,7 @@ def list_command(
             issue.get("tool") or "-",
             issue["summary"],
             ", ".join(issue.get("functions") or []) or "-",
+            issue.get("claimed_by") or "-",
         )
 
     console.print(table)
