@@ -85,6 +85,14 @@ class DecompMeAPIError(Exception):
     pass
 
 
+class DecompMeAuthError(DecompMeAPIError):
+    """Raised when production rejects authentication (403 / Cloudflare challenge /
+    expired cf_clearance). Distinct so a batch caller can stop on it while
+    continuing past ordinary create failures."""
+
+    pass
+
+
 def _load_cookies() -> dict[str, str]:
     """Load persistent cookies from file with locking."""
     cookies_path = Path(DECOMP_COOKIES_FILE)

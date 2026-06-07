@@ -42,7 +42,7 @@ Example:
     ...         print("Perfect match!")
 """
 
-from .api import DecompMeAPIClient, DecompMeAPIError
+from .api import DecompMeAPIClient, DecompMeAPIError, DecompMeAuthError
 from .models import (
     CompilationResult,
     CompileRequest,
@@ -65,6 +65,7 @@ __all__ = [
     # API Client
     "DecompMeAPIClient",
     "DecompMeAPIError",
+    "DecompMeAuthError",
     # High-level Manager
     "ScratchManager",
     # Models - Request
