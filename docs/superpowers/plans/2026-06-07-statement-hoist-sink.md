@@ -1208,7 +1208,7 @@ from src.search.statement_move import (
     toplevel_siblings, local_names, escaped_locals, extract_movable_units,
     legal_destinations, generate_statement_hoist_sink_variants)
 
-REPO = Path(__file__).resolve().parents[3]
+REPO = Path(__file__).resolve().parents[4]  # tools/melee-agent/tests/search/<file> -> repo root
 MNEVENT = REPO / "src/melee/mn/mnevent.c"
 FN = "mnEvent_8024D15C"
 
