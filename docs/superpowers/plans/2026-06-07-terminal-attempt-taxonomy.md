@@ -1,5 +1,12 @@
 # Terminal Attempt Taxonomy Implementation Plan
 
+> **SUPERSEDED — feature removed 2026-06-07.** The terminal-attempt taxonomy
+> overlay this plan implements has been disabled: the attempt ledger no longer
+> marks any function as a terminal dead end, and taxonomy/harvest no longer
+> demote rows from ledger evidence (`tools/melee-agent/src/attempt_evidence.py`
+> is inert — `load_terminal_attempt_evidence` returns nothing). Kept for
+> historical design context only.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Prevent taxonomy and harvest campaigns from selecting rows whose attempt ledger evidence already marks them terminal.

@@ -145,7 +145,7 @@ Param virtual fails to get top callee-save?
 │           ├── Works → confirmed Tier 7 (need natural-source coalesce)
 │           │   → search for C-source patterns that make MWCC naturally
 │           │     coalesce them (move instructions, common subexpressions)
-│           └── Doesn't help → likely Tier 8 (structurally unreachable)
+│           └── Doesn't help → Tier 8 (no source coalesce found via force-coalesce; needs new evidence or tooling)
 └── Resort: --force-phys (last resort, risks data corruption)
 ```
 

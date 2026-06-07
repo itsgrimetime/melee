@@ -65,9 +65,9 @@ For large state machines or asset-heavy functions, use `docs/large-function-chec
 
 If `docs/discord-knowledge` is missing, use `docs/discord-search-recipes.md` and the installed `discord-search` skill/tooling fallback with focused terms from the mismatch, compiler symptom, function family, or API name. Record useful hits in the attempt note instead of relying on memory.
 
-## Stop Conditions
+## When To Shift Focus
 
-If `melee-agent attempts show <func>` recommends moving on, preserve notes and switch to a fresh function or translation unit unless new evidence appears. Pure register-allocation loops are not progress.
+If you have exhausted distinct source shapes without progress, preserve your notes and shift to a fresh function or translation unit until new evidence appears (a caller signature change, discovered inline, type correction, or symbol/data placement change). Pure register-allocation loops are not progress. The function is never a dead end — source exists for it; this is about working in a productive order, not abandoning it.
 
 ## PR Bar
 

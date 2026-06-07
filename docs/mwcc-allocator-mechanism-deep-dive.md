@@ -132,9 +132,9 @@ BEFORE GLOBAL OPTIMIZATION pass:
   Different block, later: lbz rB, X(rN)  ← "runtime-load" use
 ```
 
-These two virtuals (rA and rB) CANNOT be unified through pure C-source changes if both are derived from the same C-level variable name. The constant-inlining happens at IR construction time, before any pass we can influence via source.
+These two virtuals (rA and rB) are not unified by any of the source levers we know (decl/stmt order, aliasing, volatile, CSE) when both derive from the same C-level variable name. The constant-inlining happens at IR construction time, before any pass those source changes can influence.
 
-This is a definitive answer to "can I write C that defeats MWCC's live-range splitting for this pattern?" — **no, when the splitting is constant-inlining at PCode generation, the C source can't reach inside to merge them.**
+This characterizes "can I write C that defeats MWCC's live-range splitting for this pattern?" — **no known C-source lever reaches it, because the splitting is constant-inlining at PCode generation, below where source reorder/aliasing/CSE operate.** That bounds the levers tried, not the source space: a different source shape or new tooling could still find one, so keep the function in the pool.
 
 ## What we'd need for Tier 5
 

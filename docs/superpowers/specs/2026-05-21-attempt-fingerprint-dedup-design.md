@@ -1,5 +1,12 @@
 # Attempt Fingerprint Dedup
 
+> **Note (2026-06-07):** The fingerprint dedup and replay-counting mechanism
+> described here is still active. Its integration with the **move-on recommender**
+> is not — `_move_on_state()` no longer emits a recommendation, so the parts of
+> this design about keeping the no-progress streak "meaningful for move-on" and
+> avoiding spurious move-on triggers are now moot. Treat `move_on_recommended`
+> references below as historical; the core dedup/replay behavior is unchanged.
+
 ## Problem
 
 Long-running matching sessions repeatedly apply the same source change to the

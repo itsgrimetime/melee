@@ -226,9 +226,12 @@ melee-agent debug suggest-casts my_fn
 # 5. If exhausted: permuter → triage-perm
 ```
 
-The big-picture change: agents now get an early "stop investigating,
-it's structural" signal instead of grinding for hours on functions
-where no source change can help.
+The big-picture change: agents now get an early "this is an
+allocator-order ceiling under current tooling" signal — confirm
+reachability with force-phys, bank the evidence, and pursue a
+source-shape or hook path instead of grinding for hours on local edits
+that don't move the allocator. The function stays in the pool: "no
+lever found yet" is not "no lever exists."
 
 ## Tests
 

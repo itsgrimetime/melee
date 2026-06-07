@@ -191,8 +191,9 @@ _MIGRATED_PATTERN_ROWS = [
                 "description": (
                     "Confirm the target really rematerializes instead of "
                     "CSEing. If ordinary locals CSE the reads, try source "
-                    "forms that force a distinct reload; if no C lever exists, "
-                    "bank the ceiling rather than chasing register cascades."
+                    "forms that force a distinct reload; if no C lever is found, "
+                    "bank it as a current-tooling register ceiling rather than "
+                    "chasing register cascades."
                 ),
                 "success_rate": 0.2,
             }
