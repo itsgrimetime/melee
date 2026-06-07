@@ -58,3 +58,13 @@ def test_section_mismatch_name_in_other_section():
     t = {".bss": [I("g", 0x10, 0x10)]}
     c = {".sbss": [I("g", 0, 0x4)]}
     assert any(x.kind == "section-mismatch" for x in compare_layout(t, c))
+
+
+def test_foreign_name_occupies_slot():
+    # 'b' (a known target name) sits at 'a's slot; 'a' is absent from current
+    t = [I("a", 0, 0x8), I("b", 0x10, 0x8)]
+    c = [I("b", 0, 0x8)]
+    f = compare_section(".sdata", t, c)
+    reorders = [x for x in f if x.kind == "reorder"]
+    assert any(x.target[0] == "a" and x.current[0][0] == "b" for x in reorders), \
+        "expected foreign-name reorder: b occupies slot of a"
