@@ -16,7 +16,7 @@ Grounded in concrete incidents from session history, not hypothetical:
   MinGW Makefile, wibo patch, wrapper scripts) before discovering mid-session
   that `RootCubed/mwcc-inspector` already existed and was strictly better.
 - An agent drafted a "custom permuter scorer" design before finding
-  `melee-agent debug score` already does exactly that.
+  `melee-agent debug target score-source` already does exactly that.
 - An agent planned a Ghidra cross-reference tool, then a skill-list refresh
   revealed the `/ghidra` skill was already live.
 - An agent re-analyzed permuter structure-search axes that had documented
@@ -33,7 +33,7 @@ The agents had access; they lacked the reflex to check before building.
 2. **Most of the surface isn't in auto-loaded context.** A fresh agent auto-sees
    CLAUDE.md (~13 of 20 skills, ~15 of 150+ CLI subcommands) and skill
    frontmatter. The entire `debug` subsystem (80+ subcommands, including the
-   `debug score` that got re-proposed) is documented nowhere auto-loaded.
+   `debug target score-source` that got re-proposed) is documented nowhere auto-loaded.
 3. **What is surfaced is stale, which is worse than missing.** CLAUDE.md's
    command list is significantly out of date, creating false confidence that the
    ~15 listed commands are the whole inventory. At least one skill doc references
@@ -41,7 +41,7 @@ The agents had access; they lacked the reflex to check before building.
 4. **No single "what can I do?" entry point.** No `capabilities` command, no
    generated index. A diligent agent must union 4+ partial, disagreeing surfaces.
 5. **Tools are named by implementation, not task.** `ghidra` not `find-callers`;
-   `mwcc-debug` not `debug-registers`; `debug score` not "score a candidate".
+   `mwcc-debug` not `debug-registers`; `debug target score-source` not "score a candidate".
 
 ## Decisions
 
@@ -135,7 +135,7 @@ capability id, bridging the implementation-vs-task naming gap. Seeds use CLI
 commands + skills only (Codex B3 — no standalone-script targets):
 - `find callers` / `cross reference` → `ghidra` skill, `commit check-callers`
 - `debug registers` / `register allocation` → `mwcc-debug`, `mwcc-inspect`
-- `score candidate` / `scorer` → `debug score`
+- `score candidate` / `scorer` → `debug target score-source`
 - `per-file progress` / `per-file stats` → `extract files`
 - `find similar functions` → `opseq` skill, `patterns similar`, `debug search`
 
@@ -186,7 +186,7 @@ Short, prominent block at the top of `CLAUDE.md` (auto-loaded) and in the
 `decomp` and `workflow` skills: "Before building a new tool/script/command,
 `capabilities search` first. There are 150+ CLI subcommands and 20 skills; assume
 your need may already exist." Include the real cautionary examples
-(mwcc-inspector, `debug score`).
+(mwcc-inspector, `debug target score-source`).
 
 ### 7. Freshness guard (Codex B5)
 A **dedicated** CI workflow (not piggybacked on `build.yml`/`melee-agent.yml`)
@@ -247,7 +247,7 @@ commit / CI ─► `capabilities generate` + `git diff --exit-code` over .claude
   `python3` degrade paths emit valid (or no) JSON without erroring.
 - **Search-relevance regression (tests the actual failures):** queries "scorer",
   "find callers", "register allocation", "per-file progress" return the right
-  tool in top results; spot-check `debug score`, `ghidra`, `mwcc-inspect`.
+  tool in top results; spot-check `debug target score-source`, `ghidra`, `mwcc-inspect`.
 - **Drift guard:** `capabilities generate` output is stable; the CI/pre-commit
   check fails when source changes without regeneration.
 - **Worktree-safe invocation:** introspection targets the launcher-resolved tree,

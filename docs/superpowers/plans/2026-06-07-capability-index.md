@@ -4,7 +4,7 @@
 
 **Goal:** Stop agents from rebuilding tools that already exist by shipping a generated, tiered-auto-loaded, queryable `melee-agent capabilities` index (CLI commands + skills), a soft build-intent nudge hook, an audit-first rule, and a drift guard.
 
-**Architecture:** A new Typer sub-app (`capabilities`) introspects the LIVE root Typer tree (via `typer.main.get_command` → click walk, so it can never go stale) plus `.claude/skills/*/SKILL.md` metadata. `search`/`show` are live; `generate` writes a compact `.claude/capabilities-brief.md` (auto-loaded by the session hook) and a full `docs/CAPABILITIES.md`. A `UserPromptSubmit` hook injects a non-blocking "search first" nudge on build-intent. A dedicated CI workflow + pre-commit hook fail on artifact drift.
+**Architecture:** A new Typer sub-app (`capabilities`) introspects the LIVE root Typer tree (via `typer.main.get_command` → click walk, so it can never go stale) plus `.claude/skills/*/SKILL.md` metadata. `search`/`show` are live; `generate` writes a compact `.claude/capabilities-brief.md` (auto-loaded by the session hook) and a full `docs/CAPABILITIES.md`. Two non-blocking nudge hooks (`UserPromptSubmit` for build-intent prompts, `PreToolUse` for writing a new tool file under `tools/`) inject "search first" context. A dedicated CI workflow + pre-commit hook fail on artifact drift.
 
 **Tech Stack:** Python 3.11, Typer/Click, pytest + `typer.testing.CliRunner`, PyYAML, bash + python3 hooks, GitHub Actions.
 
@@ -25,8 +25,9 @@
 | `docs/agent-tool-manifest.md` | Add bidirectional cross-link (modify, do NOT delete). |
 | `.claude/hooks/emit-capabilities-context.py` | Builds the SessionStart `additionalContext` JSON (escaped) from the brief. |
 | `.claude/hooks/session-startup.sh` | Call the emitter unconditionally (modify). |
-| `.claude/hooks/build-intent-nudge.py` | Soft `UserPromptSubmit` nudge on build-intent. |
-| `.claude/settings.json` | Register the `UserPromptSubmit` hook (modify). |
+| `.claude/hooks/build-intent-nudge.py` | Soft `UserPromptSubmit` nudge on build-intent prompts. |
+| `.claude/hooks/build-intent-tooluse-nudge.py` | Soft `PreToolUse` nudge on Write/Edit of a new tool file under `tools/`. |
+| `.claude/settings.json` | Register the `UserPromptSubmit` + `PreToolUse` hooks (modify). |
 | `CLAUDE.md` | Add the audit-first rule block (modify). |
 | `.claude/skills/decomp/SKILL.md`, `.claude/skills/workflow/SKILL.md` | Add an audit-first line (modify). |
 | `.github/workflows/capabilities-drift.yml` | CI drift guard. |
@@ -153,8 +154,8 @@ from src.cli import capabilities as cap
 def test_command_capabilities_include_known_commands():
     caps = cap.command_capabilities()
     names = {c.name for c in caps}
-    # Known leaf commands from the real tree (spec grounding):
-    assert "debug score" in names
+    # Known leaf commands from the real tree (verified against live introspection):
+    assert "debug target score-source" in names   # NOTE: there is NO `debug score`
     assert "extract files" in names
     assert "struct verify" in names
     # Every command has a non-empty invoke string and a summary fallback.
@@ -179,27 +180,39 @@ from dataclasses import dataclass, field
 @dataclass
 class Capability:
     kind: str                       # "command" | "skill"
-    name: str                       # e.g. "debug score" or "ghidra"
+    name: str                       # e.g. "debug target score-source" or "ghidra"
     summary: str                    # one-line description
     invoke: str                     # how to run it
     group: str = ""                 # top-level group for commands; "" for skills
     keywords: list[str] = field(default_factory=list)
 
 
-def _iter_click_commands(click_cmd, prefix: str = ""):
-    """Yield (full_name, click_command) for every LEAF command in the tree."""
+# CRITICAL (verified): Typer sub-apps are lazily-populated TyperGroups — walking
+# `.commands` directly yields only 3 leaves. Use the lazy-safe list_commands(ctx)
+# + get_command(ctx, name) API (yields the real 215 leaves) and skip hidden cmds
+# (the `issues` alias, `debug inspect ceiling`, etc.).
+def _walk_click(cmd, ctx, prefix: str = ""):
+    """Yield (full_name, click_command) for every VISIBLE leaf command."""
     import click
 
-    for name, sub in sorted(getattr(click_cmd, "commands", {}).items()):
+    try:
+        names = cmd.list_commands(ctx)
+    except Exception:
+        names = list(getattr(cmd, "commands", {}).keys())
+    for name in sorted(names):
+        sub = cmd.get_command(ctx, name)
+        if sub is None or getattr(sub, "hidden", False):
+            continue
         full = f"{prefix}{name}"
-        if isinstance(sub, click.Group) and getattr(sub, "commands", None):
-            yield from _iter_click_commands(sub, prefix=f"{full} ")
+        if isinstance(sub, click.Group):
+            yield from _walk_click(sub, ctx, prefix=f"{full} ")
         else:
             yield full, sub
 
 
 def _help_text(click_cmd) -> str:
-    """Reliable help extraction: short_help -> help first line -> ''."""
+    """short_help -> first line of help/docstring -> ''. Typer folds the command
+    callback docstring into `.help`, so get_short_help_str covers the chain."""
     try:
         short = click_cmd.get_short_help_str(limit=100)
     except Exception:
@@ -211,15 +224,19 @@ def _help_text(click_cmd) -> str:
     return ""
 
 
-def command_capabilities() -> list[Capability]:
-    """Introspect the LIVE root Typer app into a flat list of command capabilities."""
+def command_capabilities(root_app=None) -> list[Capability]:
+    """Introspect the LIVE root Typer app into a flat list of command capabilities.
+    `root_app` is injectable for tests; defaults to the real CLI app."""
     import typer.main
+    import click
 
-    from src.cli import app  # lazy import to avoid circular import at module load
+    if root_app is None:
+        from src.cli import app as root_app  # lazy import avoids circular import
 
-    root = typer.main.get_command(app)
+    root = typer.main.get_command(root_app)
+    ctx = click.Context(root, info_name="melee-agent")
     caps: list[Capability] = []
-    for full_name, cmd in _iter_click_commands(root):
+    for full_name, cmd in _walk_click(root, ctx):
         group = full_name.split(" ", 1)[0]
         caps.append(
             Capability(
@@ -406,7 +423,7 @@ def test_all_alias_targets_resolve_to_real_capabilities():
 
 def test_search_relevance_regression():
     """Each documented near-rebuild query must surface the right tool."""
-    assert "debug score" in [c.name for c in cap.run_search("scorer", REPO)]
+    assert "debug target score-source" in [c.name for c in cap.run_search("scorer", REPO)]
     assert "extract files" in [c.name for c in cap.run_search("per-file progress", REPO)]
     assert any(c.name in {"ghidra", "commit check-callers"} for c in cap.run_search("find callers", REPO))
     assert any(c.name in {"mwcc-debug", "mwcc-inspect"} for c in cap.run_search("register allocation", REPO))
@@ -421,7 +438,7 @@ def test_search_cli_no_match_wording():
 def test_search_cli_reports_hits():
     res = runner.invoke(capabilities_app, ["search", "scorer"])
     assert res.exit_code == 0
-    assert "debug score" in res.output
+    assert "debug target score-source" in res.output
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -438,16 +455,18 @@ from ._common import DEFAULT_MELEE_ROOT
 
 # Task-intent -> in-scope capability ids (CLI commands + skills only).
 # Standalone tools/*.py targets are intentionally excluded (see manifest cross-link).
+# Every target below was verified to resolve to a real CLI leaf or skill name.
 TASK_ALIASES: dict[str, list[str]] = {
     "find callers": ["ghidra", "commit check-callers"],
     "cross reference": ["ghidra", "commit check-callers"],
     "debug registers": ["mwcc-debug", "mwcc-inspect"],
     "register allocation": ["mwcc-debug", "mwcc-inspect"],
-    "score candidate": ["debug score"],
-    "scorer": ["debug score"],
+    "score candidate": ["debug target score-source", "debug target score-dump"],
+    "scorer": ["debug target score-source", "debug target score-dump"],
+    "permuter scorer": ["debug target score-source", "debug permute run"],
     "per-file progress": ["extract files"],
     "per-file stats": ["extract files"],
-    "find similar functions": ["opseq", "patterns similar", "debug search"],
+    "find similar functions": ["opseq", "patterns similar"],
 }
 
 
@@ -558,7 +577,7 @@ def test_show_all_lists_groups_and_skills():
 def test_show_group_filters():
     res = runner.invoke(capabilities_app, ["show", "debug"])
     assert res.exit_code == 0
-    assert "debug score" in res.output
+    assert "debug target score-source" in res.output
     assert "extract files" not in res.output
 ```
 
@@ -617,14 +636,16 @@ def test_render_brief_is_compact_and_grouped():
     assert brief.startswith("# melee-agent capabilities")
     assert "debug:" in brief                     # grouped by top-level group
     assert "/decomp" in brief or "decomp" in brief
-    assert len(brief.encode("utf-8")) < 12_000   # stays small enough to auto-load
+    # Stays small enough to auto-load every session (emitter appends ~700 bytes
+    # of nudge/remote text on top of this).
+    assert len(brief.encode("utf-8")) < 9_000
 
 
-def test_find_unregistered_apps_flags_known_unregistered():
-    flagged = cap.find_unregistered_apps(REPO)
-    joined = " ".join(flagged)
-    # claim_app / complete_app / workflow_app exist but are not root-registered.
-    assert "workflow_app" in joined
+def test_find_unregistered_apps_flags_exactly_the_known_three():
+    flagged_vars = {f.split(" ", 1)[0] for f in cap.find_unregistered_apps(REPO)}
+    # claim_app / complete_app / workflow_app exist under src/cli but are never
+    # add_typer'd anywhere — nested debug sub-apps must NOT be false-positived.
+    assert flagged_vars == {"claim_app", "complete_app", "workflow_app"}
 
 
 def test_generate_writes_both_artifacts(tmp_path, monkeypatch):
@@ -678,7 +699,9 @@ def render_brief(caps: list[Capability]) -> str:
     keyfn = lambda c: c.group
     for group, members in itertools.groupby(sorted(cmds, key=keyfn), key=keyfn):
         members = list(members)
-        verbs = ", ".join(sorted({m.name.split(" ", 1)[1] for m in members if " " in m.name})) or "(direct)"
+        # Immediate second-level token only (e.g. "debug target score-source" -> "target"),
+        # deduped — keeps the brief compact instead of dumping every nested leaf path.
+        verbs = ", ".join(sorted({m.name.split()[1] for m in members if " " in m.name})) or "(direct)"
         lines.append(f"- {group}: {verbs}")
     lines.append("\n## Skills (invoke `/<name>`)")
     for s in sorted(skills, key=lambda c: c.name):
@@ -704,16 +727,21 @@ def render_full(caps: list[Capability]) -> str:
 
 
 def find_unregistered_apps(repo_root: Path) -> list[str]:
-    """Static scan: *_app Typer instances declared under src/cli but never
-    add_typer'd at root are invisible to introspection — surface them."""
+    """Static scan: *_app Typer instances declared under src/cli that are never
+    add_typer'd ANYWHERE (root OR nested) are invisible to introspection.
+
+    NOTE (verified): scan ALL cli files for add_typer, not just __init__.py —
+    debug.py and others register nested sub-apps; scanning only __init__.py
+    false-positives those nested apps. This yields exactly claim/complete/workflow.
+    """
     cli_dir = repo_root / "tools" / "melee-agent" / "src" / "cli"
     declared: dict[str, Path] = {}
+    registered: set[str] = {"capabilities_app"}
     for py in cli_dir.rglob("*.py"):
-        for m in re.finditer(r"^(\w+_app)\s*=\s*typer\.Typer\(", py.read_text(errors="replace"), re.MULTILINE):
+        text = py.read_text(errors="replace")
+        for m in re.finditer(r"^(\w+_app)\s*=\s*typer\.Typer\(", text, re.MULTILINE):
             declared.setdefault(m.group(1), py)
-    init_text = (cli_dir / "__init__.py").read_text(errors="replace")
-    registered = set(re.findall(r"add_typer\(\s*(\w+_app)", init_text))
-    registered.add("capabilities_app")
+        registered |= set(re.findall(r"add_typer\(\s*(\w+_app)", text))
     return [
         f"{var} ({path.relative_to(repo_root)})"
         for var, path in sorted(declared.items())
@@ -955,10 +983,11 @@ git commit -m "feat(hooks): auto-load capabilities context in all sessions"
 
 ---
 
-### Task 9: Soft build-intent nudge (UserPromptSubmit hook)
+### Task 9: Soft build-intent nudges (UserPromptSubmit + PreToolUse hooks)
 
 **Files:**
-- Create: `.claude/hooks/build-intent-nudge.py`
+- Create: `.claude/hooks/build-intent-nudge.py` (UserPromptSubmit)
+- Create: `.claude/hooks/build-intent-tooluse-nudge.py` (PreToolUse)
 - Modify: `.claude/settings.json`
 - Test: `tools/melee-agent/tests/test_capabilities_hooks.py`
 
@@ -1026,7 +1055,7 @@ CONTEXT = (
     "`melee-agent capabilities search <task>` — an equivalent CLI command or "
     "skill may already exist (this repo has 150+ subcommands and ~20 skills). "
     "Past sessions wasted hours rebuilding mwcc-inspector and a permuter scorer "
-    "(`debug score`) that already existed."
+    "(`debug target score-source`) that already existed."
 )
 
 
@@ -1072,16 +1101,114 @@ Read `.claude/settings.json` and add a sibling key to the existing `SessionStart
 ]
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [ ] **Step 5: Add the PreToolUse nudge (catches mid-session tool creation)**
 
-Run: `cd tools/melee-agent && python -m pytest tests/test_capabilities_hooks.py -k nudge -v`
-Expected: PASS
+> Spec Component 5 / Codex must-fix: the dominant failure is an agent *mid-design*
+> writing a new tool file — which a prompt-only hook misses. Add a second
+> non-blocking nudge on Write/Edit of a new `.py`/`.sh` file under `tools/`.
+> It only injects context (no `permissionDecision`), so it never blocks.
 
-- [ ] **Step 6: Commit**
+Create `.claude/hooks/build-intent-tooluse-nudge.py`:
+
+```python
+# .claude/hooks/build-intent-tooluse-nudge.py
+#!/usr/bin/env python3
+"""PreToolUse hook: nudge to search capabilities before creating a new tool
+file (a .py/.sh under tools/). Non-blocking — emits additionalContext only."""
+import json
+import sys
+
+
+def main() -> int:
+    try:
+        data = json.load(sys.stdin)
+    except Exception:
+        return 0
+    if data.get("tool_name") not in ("Write", "Edit"):
+        return 0
+    path = str((data.get("tool_input") or {}).get("file_path", "")).replace("\\", "/")
+    if "tools/" not in path or not path.endswith((".py", ".sh")):
+        return 0
+    if "/tests/" in path or "capabilities" in path:
+        return 0
+    ctx = (
+        "About to write a file under tools/. Before building new tooling, run "
+        "`melee-agent capabilities search <task>` — an equivalent may already "
+        "exist (150+ subcommands, ~20 skills)."
+    )
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "additionalContext": ctx,
+        }
+    }))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
 
 ```bash
-git add .claude/hooks/build-intent-nudge.py .claude/settings.json tools/melee-agent/tests/test_capabilities_hooks.py
-git commit -m "feat(hooks): soft build-intent nudge to search capabilities first"
+chmod +x .claude/hooks/build-intent-tooluse-nudge.py
+```
+
+- [ ] **Step 6: Write the PreToolUse hook test**
+
+```python
+# add to tools/melee-agent/tests/test_capabilities_hooks.py
+TOOLUSE_HOOK = REPO / ".claude/hooks/build-intent-tooluse-nudge.py"
+
+
+def _run_tooluse(tool, file_path):
+    return subprocess.run(
+        [sys.executable, str(TOOLUSE_HOOK)],
+        input=json.dumps({"tool_name": tool, "tool_input": {"file_path": file_path}}),
+        capture_output=True, text=True,
+    )
+
+
+def test_tooluse_fires_on_new_tool_file():
+    res = _run_tooluse("Write", "tools/melee-agent/src/cli/myscorer.py")
+    obj = json.loads(res.stdout)
+    assert obj["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
+    assert "capabilities search" in obj["hookSpecificOutput"]["additionalContext"]
+
+
+def test_tooluse_silent_on_non_tool_paths():
+    assert _run_tooluse("Write", "src/melee/mn/mnvibration.c").stdout.strip() == ""
+    assert _run_tooluse("Write", "tools/melee-agent/tests/test_x.py").stdout.strip() == ""
+    assert _run_tooluse("Read", "tools/melee-agent/src/cli/foo.py").stdout.strip() == ""
+```
+
+- [ ] **Step 7: Register both hooks in `.claude/settings.json`**
+
+Read `.claude/settings.json` and add both keys as siblings of `SessionStart` (inside the same `"hooks"` object). Add the `UserPromptSubmit` block from Step 4 AND:
+
+```json
+"PreToolUse": [
+  {
+    "matcher": "Write|Edit",
+    "hooks": [
+      {
+        "type": "command",
+        "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/build-intent-tooluse-nudge.py"
+      }
+    ]
+  }
+]
+```
+
+- [ ] **Step 8: Run tests to verify they pass**
+
+Run: `cd tools/melee-agent && python -m pytest tests/test_capabilities_hooks.py -k "nudge or tooluse" -v`
+Expected: PASS
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add .claude/hooks/build-intent-nudge.py .claude/hooks/build-intent-tooluse-nudge.py .claude/settings.json tools/melee-agent/tests/test_capabilities_hooks.py
+git commit -m "feat(hooks): soft build-intent nudges (UserPromptSubmit + PreToolUse) to search capabilities first"
 ```
 
 ---
@@ -1100,8 +1227,9 @@ git commit -m "feat(hooks): soft build-intent nudge to search capabilities first
 **Audit-first rule:** before writing a new tool, script, or CLI command, run
 `melee-agent capabilities search <task>`. This repo has 150+ CLI subcommands and
 ~20 skills; assume your need may already exist. Past sessions wasted hours
-rebuilding `mwcc-inspector` and a permuter scorer (`melee-agent debug score`)
-that already existed. The session also auto-loads a capability brief — skim it.
+rebuilding `mwcc-inspector` and a permuter scorer (`melee-agent debug target
+score-source`) that already existed. The session also auto-loads a capability
+brief — skim it.
 ```
 
 - [ ] **Step 2: Add one line to `.claude/skills/decomp/SKILL.md`** (in its "getting unstuck"/tools area):
@@ -1125,7 +1253,7 @@ git commit -m "docs: add audit-first capabilities rule to CLAUDE.md and skills"
 
 **Files:**
 - Create: `.github/workflows/capabilities-drift.yml`
-- Modify/Create: `.pre-commit-config.yaml`
+- Modify: `.pre-commit-config.yaml` (it ALREADY EXISTS with a `- repo: local` block — MERGE, do not clobber)
 
 - [ ] **Step 1: Create the CI workflow**
 
@@ -1168,21 +1296,21 @@ jobs:
           fi
 ```
 
-- [ ] **Step 2: Add a pre-commit hook**
+- [ ] **Step 2: Merge a pre-commit hook into the existing `.pre-commit-config.yaml`**
 
-If `.pre-commit-config.yaml` exists, add this under `repos:`; otherwise create the file with this content:
+> The file already exists with a `- repo: local` block (containing `melee-style-check`,
+> `check-fork-files`). Add the hook below as a new item in that block's `hooks:` list —
+> do NOT replace the file. The `files:` regex covers every source that can change the
+> generated index: CLI source, skills, hooks, settings, CLAUDE.md, and the manifest.
 
 ```yaml
-# .pre-commit-config.yaml (add this repo entry if file already exists)
-repos:
-  - repo: local
-    hooks:
+# Append under the EXISTING `- repo: local` block's `hooks:` list:
       - id: capabilities-drift
         name: capabilities index up to date
         entry: bash -c 'melee-agent capabilities generate && git diff --exit-code -- .claude/capabilities-brief.md docs/CAPABILITIES.md'
         language: system
         pass_filenames: false
-        files: '^(tools/melee-agent/src/cli/|\.claude/skills/|CLAUDE\.md)'
+        files: '^(tools/melee-agent/src/cli/|\.claude/skills/|\.claude/hooks/|\.claude/settings\.json|CLAUDE\.md|docs/agent-tool-manifest\.md)'
 ```
 
 - [ ] **Step 3: Verify the workflow file is valid YAML**
@@ -1217,7 +1345,7 @@ Expected: "Wrote …/.claude/capabilities-brief.md and …/docs/CAPABILITIES.md"
 - [ ] **Step 2: Sanity-check the brief size and content**
 
 Run: `wc -c .claude/capabilities-brief.md && head -40 .claude/capabilities-brief.md` (from repo root)
-Expected: under ~12 KB; groups + skills present; `debug:` line lists `score`.
+Expected: under ~9 KB; groups + skills present; the `debug:` line lists second-level groups like `target, permute, inspect, suggest` (NOT every nested leaf).
 
 - [ ] **Step 3: Run the entire melee-agent test suite**
 
@@ -1250,10 +1378,25 @@ git commit -m "feat(capabilities): generate initial brief and full inventory"
 
 ## Self-Review
 
-- **Spec coverage:** Component 1 (search/show/generate) → Tasks 1,2,4,5,6; Component 2 (alias map) → Task 4; Component 3 (artifacts + manifest cross-link) → Task 6,12; Component 4 (session hook auto-load + JSON escaping) → Tasks 7,8; Component 5 (soft nudge) → Task 9; Component 6 (audit-first rule) → Task 10; Component 7 (drift guard + sync-upstream) → Task 11; Component 8 (audit_log measurement) → Task 4. Introspection caveats (unregistered apps, help fallback, worktree entrypoint) → Tasks 2,6. Frontmatter fallback → Task 3. All covered.
+- **Spec coverage:** Component 1 (search/show/generate) → Tasks 1,2,4,5,6; Component 2 (alias map) → Task 4; Component 3 (artifacts + manifest cross-link) → Task 6,12; Component 4 (session hook auto-load + JSON escaping) → Tasks 7,8; Component 5 (soft nudge — UserPromptSubmit + PreToolUse) → Task 9; Component 6 (audit-first rule) → Task 10; Component 7 (drift guard + sync-upstream) → Task 11; Component 8 (audit_log measurement) → Task 4. Introspection caveats (unregistered apps, help fallback, worktree entrypoint) → Tasks 2,6. Frontmatter fallback → Task 3. All covered.
 - **No placeholders:** every code/test step contains complete code and exact commands.
 - **Type consistency:** `Capability` dataclass fields (`kind/name/summary/invoke/group/keywords`) are used consistently; helpers `command_capabilities`, `skill_capabilities`, `all_capabilities`, `parse_skill`, `run_search`, `render_brief`, `render_full`, `find_unregistered_apps`, `_artifact_paths`, `_repo_root` are defined before use and referenced by the same names in tests.
 
+## Codex plan-review incorporation (changelog)
+
+Independent Codex review (line-cited; findings verified against the live tree before applying):
+- **Introspection (must-fix):** `.commands` walk yielded only 3 leaves → rewrote to lazy-safe `list_commands(ctx)`/`get_command(ctx, name)` (215 leaves) + hidden-command filtering (Task 2). Verified: 215 leaves, `issues`/`debug inspect ceiling` excluded.
+- **Stale `debug score` (must-fix):** there is no `debug score`; real scorers are `debug target score-source`/`score-dump`/`score-force-phys`/`score-simplify-order`. Fixed every test/alias/nudge/CLAUDE.md/spec reference. Verified all alias targets resolve.
+- **`find_unregistered_apps` (must-fix):** regex scanned only `__init__.py` → false-positived nested debug sub-apps. Rewrote to scan ALL cli files for `add_typer`. Verified: flags exactly `claim_app/complete_app/workflow_app`.
+- **PreToolUse coverage gap (must-fix):** added a second non-blocking `PreToolUse` nudge on Write/Edit of a new `tools/` `.py`/`.sh` file (Task 9), since prompt-only missed the mid-design case the spec calls out.
+- **Pre-commit clobber (must-fix):** `.pre-commit-config.yaml` already exists → Task 11 now MERGES into its `- repo: local` block and broadens the `files:` trigger.
+- **Should-fix:** help fallback documented (`short_help → help/docstring`); brief-size guard tightened to <9 KB; `render_brief` lists second-level tokens only (compact); `command_capabilities(root_app=…)` injectable; exact unregistered-apps assertion added.
+- **Verified non-issue:** `DEFAULT_MELEE_ROOT` is detection-based and resolves to the current worktree, so `generate`/`_repo_root()` are worktree-correct.
+
 ## Phase 2 (explicitly deferred — do NOT build now)
 
-Hard, blocking pre-build gate (PreToolUse) — only if measurement (audit_log `capability_search` rate vs. near-rebuild incident tally) shows the soft nudge is insufficient.
+A hard, **blocking** pre-build gate — a `PreToolUse` hook that returns
+`permissionDecision: "ask"`/`"deny"` (distinct from the phase-1 *soft* PreToolUse
+nudge, which only injects context) — only if measurement (audit_log
+`capability_search` rate vs. near-rebuild incident tally) shows the soft nudges
+are insufficient.
