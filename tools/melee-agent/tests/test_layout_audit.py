@@ -23,6 +23,18 @@ def test_audit_degraded_when_objects_missing(tmp_path):
     assert res.obj_path == "melee/xx/foo"
 
 
+def test_audit_degraded_when_our_obj_missing(tmp_path):
+    c = tmp_path / "src" / "melee" / "xx" / "foo.c"
+    c.parent.mkdir(parents=True)
+    c.write_text("static int foo_8000 = 0;\n")
+    ref = tmp_path / "build/GALE01/obj/melee/xx/foo.o"
+    ref.parent.mkdir(parents=True)
+    ref.write_bytes(b"")
+    res = audit_tu(tmp_path, c)
+    assert res.degraded is True
+    assert "build it first" in res.warnings[0]
+
+
 @pytest.mark.skipif(
     not (REPO / "build/GALE01/obj/melee/mn/mnevent.o").exists()
     or not (REPO / "build/GALE01/src/melee/mn/mnevent.o").exists(),
