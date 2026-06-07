@@ -77,3 +77,14 @@ func parseAsmFile(content string) []asmFunc {
 	flush()
 	return funcs
 }
+
+// opcodeFrequencies tallies opcode -> occurrence count across all bodies.
+func opcodeFrequencies(funcs []asmFunc) map[string]int {
+	freq := make(map[string]int)
+	for _, f := range funcs {
+		for _, ins := range f.instrs {
+			freq[ins.opcode]++
+		}
+	}
+	return freq
+}

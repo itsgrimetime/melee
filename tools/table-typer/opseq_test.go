@@ -57,6 +57,19 @@ func TestParseAsmFileEmpty(t *testing.T) {
 	}
 }
 
+func TestOpcodeFrequencies(t *testing.T) {
+	funcs := parseAsmFile(sampleAsm)
+	freq := opcodeFrequencies(funcs)
+	// fn_a: mflr, stw, li, blr ; fn_b: lfs, fsubs
+	if freq["mflr"] != 1 || freq["stw"] != 1 || freq["li"] != 1 || freq["blr"] != 1 ||
+		freq["lfs"] != 1 || freq["fsubs"] != 1 {
+		t.Fatalf("freq: %v", freq)
+	}
+	if freq["nonexistent"] != 0 {
+		t.Fatalf("missing opcode should be 0, got %d", freq["nonexistent"])
+	}
+}
+
 func TestParseAsmFileSkipsDataAndComments(t *testing.T) {
 	const asm = `.fn fn_c, global
 /* 80000000 00000000  39 00 00 00 */	li r8, 0x0
