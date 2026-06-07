@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import subprocess
 import sys
@@ -162,6 +163,11 @@ def read_jsonl(path: Path) -> list[dict]:
     ]
 
 
+def read_tsv(path: Path) -> list[dict[str, str]]:
+    with path.open(newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f, delimiter="\t"))
+
+
 def write_data_symbol_report(path: Path, functions: list[str]) -> None:
     path.write_text(
         json.dumps(
@@ -280,6 +286,28 @@ def test_generate_inventory_classifies_report_functions_and_writes_outputs(
     stack_queue = (output / "queues" / "stack-local-layout.tsv").read_text(
         encoding="utf-8"
     )
+    from src.attempt_evidence import TERMINAL_ATTEMPT_FIELDS
+
+    assert (
+        "match_percent\tfunction\tprimary\tsubcategory\t"
+        "offset_discrepancy_count\toffset_discrepancy_bases\t"
+        "offset_discrepancy_disps\toffset_discrepancy_opcodes\t"
+        "struct_verify_status\tstruct_verify_finding_count\t"
+        "struct_verify_verified_count\tstruct_verify_structs\t"
+        "struct_verify_fields\tstruct_verify_skipped\t"
+        "struct_verify_reason\t"
+        "frame_cause\tframe_verdict\tframe_closability_tier\t"
+        "frame_match_relevance\tframe_match_relevance_reason\t"
+        "frame_attribution_status\tframe_source_object_symbol\t"
+        "cast_audit_status\tcast_medium_plus_count\t"
+            "source_actionability\theadline_tool\tactionability_reason\t"
+            + "\t".join(TERMINAL_ATTEMPT_FIELDS) + "\t"
+            "decl_order_best_delta\tdecl_order_best_ordering\t"
+            "decl_order_evaluated_status\tdecl_order_candidate_count\t"
+            "name_magic_blocker\tname_magic_stop_kind\t"
+            "name_magic_probe_count\tname_magic_reason\t"
+            "file_path\tframe_next_command\tnext_command"
+        ) in stack_queue
     assert (
         "match_percent\tfunction\tprimary\tsubcategory\t"
         "offset_discrepancy_count\toffset_discrepancy_bases\t"
@@ -298,7 +326,7 @@ def test_generate_inventory_classifies_report_functions_and_writes_outputs(
             "name_magic_blocker\tname_magic_stop_kind\t"
             "name_magic_probe_count\tname_magic_reason\t"
             "file_path\tframe_next_command\tnext_command"
-        ) in stack_queue
+        ) not in stack_queue
     assert (
         "99.75000\tstack_fn\tstack-slot-layout\tsame-frame-stack-slot-placement"
         + ("\t" * 12) +
@@ -324,6 +352,393 @@ def test_generate_inventory_classifies_report_functions_and_writes_outputs(
         "`build/function-taxonomy/queues/"
         "data-symbol-relocation.no-name-magic-candidate.tsv`"
     ) in summary
+
+
+def test_generate_inventory_applies_terminal_attempt_evidence(
+    tmp_path: Path,
+) -> None:
+    from tools.function_taxonomy_inventory import generate_inventory
+
+    report = tmp_path / "report.json"
+    output = tmp_path / "taxonomy"
+    ledger = tmp_path / "attempt_ledger.json"
+    report.write_text(
+        json.dumps(
+            {
+                "units": [
+                    {
+                        "name": "main/melee/demo/indexed",
+                        "metadata": {
+                            "source_path": "src/melee/demo/indexed.c",
+                            "complete": False,
+                        },
+                        "functions": [
+                            {
+                                "name": "indexed_fn",
+                                "size": "256",
+                                "fuzzy_match_percent": 99.0,
+                                "metadata": {"virtual_address": "2147483648"},
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    ledger.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "functions": {
+                    "indexed_fn": {
+                        "function": "indexed_fn",
+                        "move_on_recommended": True,
+                        "move_on_reason": "repeated no-progress attempts",
+                        "suspected_blocker": "no-safe-materialized-pointer",
+                        "attempts": [
+                            {
+                                "index": 2,
+                                "timestamp": 20.0,
+                                "timestamp_utc": "2026-06-07T00:00:20+00:00",
+                                "outcome": "blocked",
+                                "classification": "indexed-struct-pointer",
+                                "blocker": "no-safe-materialized-pointer",
+                                "retained": False,
+                                "note": "no source retained",
+                            }
+                        ],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def indexed_checkdiff(function: str):
+        return 1, json.dumps(
+            {
+                "function": function,
+                "match": False,
+                "classification": {
+                    "primary": "indexed-struct-pointer-materialization",
+                    "reasons": ["array indexed versus element pointer mismatch"],
+                },
+                "structural": {"opcode_similarity": 1.0, "line_delta": 0},
+            }
+        ), ""
+
+    generate_inventory(
+        report,
+        output,
+        checkdiff_runner=indexed_checkdiff,
+        decl_order_evaluator=None,
+        frame_report_runner=None,
+        cast_audit_runner=None,
+        name_magic_preflight_runner=None,
+        struct_verify_runner=None,
+        workers=1,
+        attempt_ledger_path=ledger,
+    )
+
+    records = read_jsonl(output / "taxonomy.records.jsonl")
+    assert len(records) == 1
+    record = records[0]
+    assert record["work_bucket"] == "indexed-struct-pointer"
+    assert record["primary"] == "indexed-struct-pointer-materialization"
+    assert record["subcategory"] == "array-indexed-vs-element-pointer"
+    assert isinstance(record["classification"], dict)
+    assert isinstance(record["structural"], dict)
+    assert isinstance(record["match"], float)
+    assert record["source_actionability"] == "tooling-blocked"
+    assert record["headline_tool"] == "attempt-ledger"
+    assert record["terminal_attempt_status"] == "active"
+    assert record["terminal_attempt_blocker"] == "no-safe-materialized-pointer"
+    assert "attempt ledger terminal evidence" in record["actionability_reason"]
+
+    queue_rows = read_tsv(output / "queues" / "indexed-struct-pointer.tsv")
+    assert len(queue_rows) == 1
+    queue_row = queue_rows[0]
+    assert queue_row["source_actionability"] == "tooling-blocked"
+    assert queue_row["headline_tool"] == "attempt-ledger"
+    assert queue_row["terminal_attempt_status"] == "active"
+    assert queue_row["terminal_attempt_blocker"] == "no-safe-materialized-pointer"
+    assert "attempt ledger terminal evidence" in queue_row["actionability_reason"]
+
+
+def test_generate_inventory_can_disable_terminal_attempt_overlay(
+    tmp_path: Path,
+) -> None:
+    from tools.function_taxonomy_inventory import generate_inventory
+
+    report = tmp_path / "report.json"
+    output = tmp_path / "taxonomy"
+    ledger = tmp_path / "attempt_ledger.json"
+    report.write_text(
+        json.dumps(
+            {
+                "units": [
+                    {
+                        "name": "main/melee/demo/indexed",
+                        "metadata": {
+                            "source_path": "src/melee/demo/indexed.c",
+                            "complete": False,
+                        },
+                        "functions": [
+                            {
+                                "name": "indexed_fn",
+                                "size": "256",
+                                "fuzzy_match_percent": 99.0,
+                                "metadata": {"virtual_address": "2147483648"},
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    ledger.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "functions": {
+                    "indexed_fn": {
+                        "function": "indexed_fn",
+                        "move_on_recommended": True,
+                        "suspected_blocker": "no-safe-materialized-pointer",
+                        "attempts": [
+                            {
+                                "index": 2,
+                                "timestamp": 20.0,
+                                "outcome": "blocked",
+                                "blocker": "no-safe-materialized-pointer",
+                            }
+                        ],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def indexed_checkdiff(function: str):
+        return 1, json.dumps(
+            {
+                "function": function,
+                "match": False,
+                "classification": {
+                    "primary": "indexed-struct-pointer-materialization",
+                    "reasons": ["array indexed versus element pointer mismatch"],
+                },
+                "structural": {"opcode_similarity": 1.0, "line_delta": 0},
+            }
+        ), ""
+
+    generate_inventory(
+        report,
+        output,
+        checkdiff_runner=indexed_checkdiff,
+        decl_order_evaluator=None,
+        frame_report_runner=None,
+        cast_audit_runner=None,
+        name_magic_preflight_runner=None,
+        struct_verify_runner=None,
+        workers=1,
+        attempt_ledger_path=ledger,
+        include_terminal_attempts=False,
+    )
+
+    records = read_jsonl(output / "taxonomy.records.jsonl")
+    assert records[0]["source_actionability"] == "current-tools-indexed-pointer"
+    assert records[0]["headline_tool"] == "source-shape"
+    assert "terminal_attempt_status" not in records[0]
+
+
+def test_generate_inventory_keeps_stale_terminal_attempt_rows_executable(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import tools.function_taxonomy_inventory as inventory
+
+    report = tmp_path / "report.json"
+    output = tmp_path / "taxonomy"
+    ledger = tmp_path / "attempt_ledger.json"
+    report.write_text(
+        json.dumps(
+            {
+                "units": [
+                    {
+                        "name": "main/melee/demo/indexed",
+                        "metadata": {
+                            "source_path": "src/melee/demo/indexed.c",
+                            "complete": False,
+                        },
+                        "functions": [
+                            {
+                                "name": "indexed_fn",
+                                "size": "256",
+                                "fuzzy_match_percent": 99.0,
+                                "metadata": {"virtual_address": "2147483648"},
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    ledger.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "functions": {
+                    "indexed_fn": {
+                        "function": "indexed_fn",
+                        "move_on_recommended": True,
+                        "suspected_blocker": "no-safe-materialized-pointer",
+                        "attempts": [
+                            {
+                                "index": 2,
+                                "timestamp": 20.0,
+                                "outcome": "blocked",
+                                "blocker": "no-safe-materialized-pointer",
+                                "taxonomy_tool_sha256": "old-taxonomy-tool",
+                            }
+                        ],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(inventory, "_taxonomy_tool_sha256", lambda: "new-taxonomy-tool")
+
+    def indexed_checkdiff(function: str):
+        return 1, json.dumps(
+            {
+                "function": function,
+                "match": False,
+                "classification": {
+                    "primary": "indexed-struct-pointer-materialization",
+                    "reasons": ["array indexed versus element pointer mismatch"],
+                },
+                "structural": {"opcode_similarity": 1.0, "line_delta": 0},
+            }
+        ), ""
+
+    inventory.generate_inventory(
+        report,
+        output,
+        checkdiff_runner=indexed_checkdiff,
+        decl_order_evaluator=None,
+        frame_report_runner=None,
+        cast_audit_runner=None,
+        name_magic_preflight_runner=None,
+        struct_verify_runner=None,
+        workers=1,
+        attempt_ledger_path=ledger,
+    )
+
+    records = read_jsonl(output / "taxonomy.records.jsonl")
+    record = records[0]
+    assert record["source_actionability"] == "current-tools-indexed-pointer"
+    assert record["headline_tool"] == "source-shape"
+    assert record["terminal_attempt_status"] == "stale"
+    assert record["terminal_attempt_stale_check"] == "stale-taxonomy_tool_sha256"
+    assert record["terminal_attempt_taxonomy_tool_sha256"] == "old-taxonomy-tool"
+
+
+def test_generate_inventory_exports_tooling_sha256_terminal_metadata(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import tools.function_taxonomy_inventory as inventory
+
+    report = tmp_path / "report.json"
+    output = tmp_path / "taxonomy"
+    ledger = tmp_path / "attempt_ledger.json"
+    report.write_text(
+        json.dumps(
+            {
+                "units": [
+                    {
+                        "name": "main/melee/demo/indexed",
+                        "metadata": {
+                            "source_path": "src/melee/demo/indexed.c",
+                            "complete": False,
+                        },
+                        "functions": [
+                            {
+                                "name": "indexed_fn",
+                                "size": "256",
+                                "fuzzy_match_percent": 99.0,
+                                "metadata": {"virtual_address": "2147483648"},
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    ledger.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "functions": {
+                    "indexed_fn": {
+                        "function": "indexed_fn",
+                        "move_on_recommended": True,
+                        "suspected_blocker": "no-safe-materialized-pointer",
+                        "attempts": [
+                            {
+                                "index": 2,
+                                "timestamp": 20.0,
+                                "outcome": "blocked",
+                                "blocker": "no-safe-materialized-pointer",
+                                "tooling_sha256": "old-tooling",
+                            }
+                        ],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(inventory, "_taxonomy_tool_sha256", lambda: "taxonomy-tool")
+
+    def indexed_checkdiff(function: str):
+        return 1, json.dumps(
+            {
+                "function": function,
+                "match": False,
+                "classification": {
+                    "primary": "indexed-struct-pointer-materialization",
+                    "reasons": ["array indexed versus element pointer mismatch"],
+                },
+                "structural": {"opcode_similarity": 1.0, "line_delta": 0},
+            }
+        ), ""
+
+    inventory.generate_inventory(
+        report,
+        output,
+        checkdiff_runner=indexed_checkdiff,
+        decl_order_evaluator=None,
+        frame_report_runner=None,
+        cast_audit_runner=None,
+        name_magic_preflight_runner=None,
+        struct_verify_runner=None,
+        workers=1,
+        attempt_ledger_path=ledger,
+    )
+
+    records = read_jsonl(output / "taxonomy.records.jsonl")
+    assert records[0]["terminal_attempt_tooling_sha256"] == "old-tooling"
+
+    queue_rows = read_tsv(output / "queues" / "indexed-struct-pointer.tsv")
+    assert queue_rows[0]["terminal_attempt_tooling_sha256"] == "old-tooling"
 
 
 def test_generate_inventory_writes_completed_run_status_last(tmp_path: Path) -> None:
