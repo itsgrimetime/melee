@@ -150,6 +150,98 @@ async def _verify_scratch_ownership(client, slug: str) -> tuple[bool, str]:
         return False, f"Could not verify: {e}"
 
 
+def _build_stripped_context(function_name, func, melee_root, context_file):
+    """Build the per-file .ctx context via ninja and strip the target function's
+    definition (keeping its declaration) to avoid redefinition errors.
+
+    Shared by the local `scratch create` path and the `--production` path.
+    Returns the stripped context string. Exits (typer.Exit) on build failure.
+    """
+    import subprocess
+
+    ctx_path = context_file or _get_context_file(source_file=func.file_path)
+
+    # Build the context file - need relative path from melee_root
+    try:
+        ctx_relative = ctx_path.relative_to(melee_root)
+        ninja_cwd = melee_root
+    except ValueError:
+        # ctx_path might be in a worktree; run ninja from that worktree root.
+        parts = ctx_path.parts
+        ninja_cwd = None
+        for i, part in enumerate(parts):
+            if part == "build" and i > 0:
+                ninja_cwd = Path(*parts[:i])
+                ctx_relative = Path(*parts[i:])
+                break
+        if ninja_cwd is None:
+            console.print(f"[red]Cannot determine ninja target for: {ctx_path}[/red]")
+            raise typer.Exit(1)
+
+    try:
+        result = subprocess.run(
+            ["ninja", str(ctx_relative)],
+            cwd=ninja_cwd,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if result.returncode != 0:
+            console.print("[red]Failed to build context file:[/red]")
+            console.print(result.stderr or result.stdout)
+            console.print("[dim]Fresh worktree? Try: python tools/worktree-doctor.py --fix[/dim]")
+            raise typer.Exit(1)
+        if "no work to do" not in result.stdout.lower():
+            console.print("[green]Built context file[/green]")
+    except subprocess.TimeoutExpired:
+        console.print("[red]Timeout building context file[/red]")
+        raise typer.Exit(1)
+    except FileNotFoundError:
+        console.print("[red]ninja not found - please install it[/red]")
+        raise typer.Exit(1)
+
+    if not ctx_path.exists():
+        console.print(f"[red]Context file not found after build: {ctx_path}[/red]")
+        raise typer.Exit(1)
+
+    melee_context = ctx_path.read_text()
+    console.print(f"[dim]Loaded {len(melee_context):,} bytes of context from {ctx_path.name}[/dim]")
+
+    # Strip function definition (but keep declaration) to avoid redefinition errors
+    if function_name in melee_context:
+        lines = melee_context.split("\n")
+        filtered = []
+        in_func = False
+        depth = 0
+        for line in lines:
+            if not in_func and function_name in line and "(" in line:
+                s = line.strip()
+                if s.startswith("//") or s.startswith("if") or s.startswith("while"):
+                    filtered.append(line)
+                    continue
+                if s.endswith(";"):
+                    filtered.append(line)
+                    continue
+                in_func = True
+                depth = line.count("{") - line.count("}")
+                filtered.append(f"// {function_name} definition stripped")
+                if "{" not in line:
+                    depth = 0
+                elif depth <= 0:
+                    in_func = False
+                continue
+            if in_func:
+                depth += line.count("{") - line.count("}")
+                if depth <= 0:
+                    in_func = False
+                continue
+            filtered.append(line)
+        melee_context = "\n".join(filtered)
+        console.print(f"[dim]Stripped {function_name} definition from context[/dim]")
+
+    return melee_context
+
+
 @scratch_app.command("create")
 def scratch_create(
     function_name: Annotated[str, typer.Argument(help="Name of the function")],
@@ -177,94 +269,8 @@ def scratch_create(
         console.print(f"[red]Function '{function_name}' not found[/red]")
         raise typer.Exit(1)
 
-    # Get context file using the function's source file path
-    ctx_path = context_file or _get_context_file(source_file=func.file_path)
-
-    # Always rebuild context to pick up header changes
-    import subprocess
-
-    # Build the context file - need relative path from melee_root
-    try:
-        ctx_relative = ctx_path.relative_to(melee_root)
-        ninja_cwd = melee_root
-    except ValueError:
-        # ctx_path might be in a worktree, find the melee root for that worktree
-        # The ctx_path looks like: .../melee-worktrees/<name>/build/GALE01/src/...
-        # We need to run ninja from the worktree root
-        parts = ctx_path.parts
-        ninja_cwd = None
-        for i, part in enumerate(parts):
-            if part == "build" and i > 0:
-                ninja_cwd = Path(*parts[:i])
-                ctx_relative = Path(*parts[i:])
-                break
-        if ninja_cwd is None:
-            console.print(f"[red]Cannot determine ninja target for: {ctx_path}[/red]")
-            raise typer.Exit(1)
-
-    try:
-        result = subprocess.run(
-            ["ninja", str(ctx_relative)],
-            cwd=ninja_cwd,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        if result.returncode != 0:
-            console.print("[red]Failed to build context file:[/red]")
-            console.print(result.stderr or result.stdout)
-            raise typer.Exit(1)
-        # Only show message if ninja actually did something
-        if "no work to do" not in result.stdout.lower():
-            console.print("[green]Built context file[/green]")
-    except subprocess.TimeoutExpired:
-        console.print("[red]Timeout building context file[/red]")
-        raise typer.Exit(1)
-    except FileNotFoundError:
-        console.print("[red]ninja not found - please install it[/red]")
-        raise typer.Exit(1)
-
-    if not ctx_path.exists():
-        console.print(f"[red]Context file not found after build: {ctx_path}[/red]")
-        raise typer.Exit(1)
-
-    melee_context = ctx_path.read_text()
-    console.print(f"[dim]Loaded {len(melee_context):,} bytes of context from {ctx_path.name}[/dim]")
-
-    # Strip function definition (but keep declaration) to avoid redefinition errors
-    if function_name in melee_context:
-        lines = melee_context.split("\n")
-        filtered = []
-        in_func = False
-        depth = 0
-        for line in lines:
-            if not in_func and function_name in line and "(" in line:
-                s = line.strip()
-                # Skip comments, control flow
-                if s.startswith("//") or s.startswith("if") or s.startswith("while"):
-                    filtered.append(line)
-                    continue
-                # Keep declarations (prototypes) - they end with );
-                if s.endswith(";"):
-                    filtered.append(line)
-                    continue
-                # This is a function definition
-                in_func = True
-                depth = line.count("{") - line.count("}")
-                filtered.append(f"// {function_name} definition stripped")
-                if "{" not in line:
-                    depth = 0
-                elif depth <= 0:
-                    in_func = False
-                continue
-            if in_func:
-                depth += line.count("{") - line.count("}")
-                if depth <= 0:
-                    in_func = False
-                continue
-            filtered.append(line)
-        melee_context = "\n".join(filtered)
-        console.print(f"[dim]Stripped {function_name} definition from context[/dim]")
+    # Build + strip the per-file context (worktree-aware).
+    melee_context = _build_stripped_context(function_name, func, melee_root, context_file)
 
     # Detect correct compiler for this source file
     compiler = get_compiler_for_source(func.file_path, melee_root)
