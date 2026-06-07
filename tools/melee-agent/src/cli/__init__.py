@@ -54,6 +54,7 @@ from .stub import stub_app
 from .sync import sync_app
 from .tracking import attempts_app
 from .layout import layout_app
+from .capabilities import capabilities_app
 
 
 class ReportingTyper(typer.Typer):
@@ -100,6 +101,7 @@ app.add_typer(mismatch_app, name="mismatch")
 app.add_typer(ghidra_app, name="ghidra")
 app.add_typer(patterns_app, name="patterns")
 app.add_typer(layout_app, name="layout")
+app.add_typer(capabilities_app, name="capabilities")
 
 # Register standalone commands
 
