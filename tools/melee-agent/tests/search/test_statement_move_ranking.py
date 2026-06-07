@@ -61,11 +61,16 @@ def test_run_structure_search_ranks_statement_order_by_shape(tmp_path):
     src.write_text(RANK_SRC)
 
     def fake_score(variants):
-        # mark the FIRST generated candidate as shape-breaking, the rest preserved,
-        # all same %, so shape ranking (not generation order) must decide the top slot.
+        # Mark the candidate that WINS the base (non-shape) tiebreak — alphabetically
+        # smallest (operator, label) — as shape-breaking. Without the Task 8 shape
+        # ranking, that candidate would occupy variants[0] and FAIL the assertion;
+        # only shape ranking can demote it and float a shape-preserved variant to the
+        # top. This makes the test a real guard, not just a production-path smoke.
+        base_winner = min(range(len(variants)),
+                          key=lambda i: (variants[i].operator, variants[i].label))
         results = []
         for i, v in enumerate(variants):
-            preserved = (i != 0)
+            preserved = (i != base_winner)
             results.append(StructureScoreResult(
                 label=v.label, baseline_percent=80.0, candidate_percent=80.0,
                 compile_status="ok", checkdiff_status="ok",
