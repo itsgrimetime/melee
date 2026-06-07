@@ -5,6 +5,7 @@ from __future__ import annotations
 import pathlib
 import subprocess
 import sys
+from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
@@ -22,6 +23,97 @@ from src.mwcc_debug.parser import Block, Instruction, Pass
 CLI_CWD = pathlib.Path(__file__).parent.parent
 MELEE_ROOT = CLI_CWD.parent.parent
 runner = CliRunner()
+
+
+def _patch_match_iter_first_cli_inputs(
+    monkeypatch,
+    tmp_path: pathlib.Path,
+    *,
+    expected_def: bool = True,
+) -> tuple[pathlib.Path, pathlib.Path]:
+    melee_root = tmp_path / "melee"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text("void fn_test(void) {}\n", encoding="utf-8")
+    pcdump_path = tmp_path / "pcdump.txt"
+    pcdump_path.write_text("Starting function fn_test\n", encoding="utf-8")
+    asm_path = tmp_path / "expected.s"
+    asm_path.write_text("fn_test:\n", encoding="utf-8")
+    instruction = Instruction(
+        opcode="mr",
+        operands="r31,r3",
+        annotations=[],
+        regs=[("r", 31), ("r", 3)],
+    )
+    events = FunctionEvents(
+        name="fn_test",
+        colorgraph_sections=[
+            ColorgraphSection(
+                class_id=0,
+                result=1,
+                n_nodes=1,
+                decisions=[
+                    ColorgraphDecision(
+                        iter_idx=0,
+                        ig_idx=33,
+                        assigned_reg=27,
+                        degree=0,
+                        n_interferers=0,
+                        flags=0,
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    class FakePcdumpFunction:
+        name = "fn_test"
+
+        def last_precolor_pass(self):
+            return Pass(name="BEFORE REGISTER COLORING", blocks=[])
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_resolve_pcdump_path",
+        lambda pcdump, function, melee_root, require_fresh=True: pcdump_path,
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/mn/sample",
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "asm_extract_function",
+        lambda text, function: SimpleNamespace(instructions=[instruction]),
+    )
+    monkeypatch.setattr(debug_cli, "asm_parse_prologue_end", lambda _instrs: 0)
+    monkeypatch.setattr(
+        debug_cli,
+        "asm_find_first_def",
+        lambda body, target_reg, reg_kind: (
+            (0, instruction) if expected_def else None
+        ),
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "match_virtual_for_expected_def",
+        lambda **_kwargs: SimpleNamespace(
+            ig_idx=33,
+            virtual=33,
+            instruction_index=0,
+            confidence="exact",
+        ),
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "parse_pcdump",
+        lambda _text: [FakePcdumpFunction()],
+    )
+    monkeypatch.setattr(debug_cli, "parse_hook_events", lambda _text: [])
+    monkeypatch.setattr(debug_cli, "find_function", lambda _events, function: events)
+    return pcdump_path, asm_path
 
 
 def test_pcdump_local_help_exposes_force_iter_first_function_scope() -> None:
@@ -119,6 +211,102 @@ def test_match_iter_first_rejects_stale_auto_cache_by_default(
     assert result.exit_code == 4
     assert "cached pcdump is stale" in result.stdout + result.stderr
     assert "--allow-stale-pcdump" in result.stdout + result.stderr
+
+
+def test_match_iter_first_force_vector_auto_uses_derived_vector(
+    monkeypatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    pcdump_path, asm_path = _patch_match_iter_first_cli_inputs(
+        monkeypatch,
+        tmp_path,
+    )
+    captured: dict[str, list[debug_cli._ForceVectorEntry]] = {}
+
+    def fake_run_force_vector_auto_verify(**kwargs):
+        captured["entries"] = kwargs["entries"]
+        return {"union": {"status": "match", "match": True}, "probes": []}
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_run_force_vector_auto_verify",
+        fake_run_force_vector_auto_verify,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "target",
+            "match-iter-first",
+            "-f",
+            "fn_test",
+            str(pcdump_path),
+            "--asm",
+            str(asm_path),
+            "--regs",
+            "r31",
+            "--force-vector",
+            "auto",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    entries = captured["entries"]
+    assert [
+        (entry.kind, entry.class_id, entry.ig_idx, entry.phys)
+        for entry in entries
+    ] == [
+        ("force_phys", 0, 33, 31),
+    ]
+    assert '"force_vector": "class0:ig33:phys=r31"' in result.stdout
+    assert '"ran": true' in result.stdout
+
+
+def test_match_iter_first_force_vector_auto_reports_empty_derived_vector(
+    monkeypatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    pcdump_path, asm_path = _patch_match_iter_first_cli_inputs(
+        monkeypatch,
+        tmp_path,
+        expected_def=False,
+    )
+
+    def fail_run_force_vector_auto_verify(**_kwargs):
+        raise AssertionError("empty auto vector must not run verification")
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_run_force_vector_auto_verify",
+        fail_run_force_vector_auto_verify,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "target",
+            "match-iter-first",
+            "-f",
+            "fn_test",
+            str(pcdump_path),
+            "--asm",
+            str(asm_path),
+            "--regs",
+            "r31",
+            "--force-vector",
+            "auto",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert '"force_vector": ""' in result.stdout
+    assert '"force_vector_verify": {' in result.stdout
+    assert '"ran": false' in result.stdout
+    assert "no force-vector targets were derived" in result.stdout
 
 
 def test_match_iter_first_reg_parser_accepts_fpr_tokens() -> None:

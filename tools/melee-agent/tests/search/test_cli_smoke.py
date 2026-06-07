@@ -118,6 +118,7 @@ def test_search_structure_help() -> None:
     assert result.exit_code == 0, result.output
     assert "--axis" in result.stdout
     assert "statement-order" in result.stdout
+    assert "source-lifetime" in result.stdout
     assert "--max-candidates" in result.stdout
     assert "--json" in result.stdout
 
@@ -1226,6 +1227,7 @@ def test_search_run_directed_force_phys_emits_objective_and_telemetry(
             store,
             compile_spec_factory,
             runner=None,
+            timeout=120,
         ):
             self._store = store
             self._compile_spec_factory = compile_spec_factory
@@ -1514,6 +1516,7 @@ def test_search_run_directed_force_phys_continues_after_abstained_preflight(
             store,
             compile_spec_factory,
             runner=None,
+            timeout=120,
         ):
             self._store = store
             self._compile_spec_factory = compile_spec_factory
@@ -1696,6 +1699,45 @@ def test_search_directed_command_accepts_seed_source_override(
 
     assert result.exit_code == 0, result.output
     assert calls[0]["source_file"] == source
+
+
+def test_search_directed_command_accepts_pcdump_timeout(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    calls = []
+
+    def fake_run_directed(**kwargs):
+        calls.append(kwargs)
+        return {
+            "gate": {"passed": False, "reason": "no_smooth_gradient"},
+            "directed_telemetry": [],
+            "accounting": {},
+        }
+
+    monkeypatch.setattr(
+        "src.search.cli._compute_melee_root",
+        lambda: tmp_path,
+    )
+    monkeypatch.setattr(
+        "src.search.directed.run.run_directed",
+        fake_run_directed,
+    )
+
+    result = CliRunner().invoke(
+        search_app,
+        [
+            "directed",
+            "--function", "ftCo_8009E7B4",
+            "--unit", "melee/ft/ftdynamics",
+            "--store", str(tmp_path / "store"),
+            "--directed-force-phys", "0:58:4",
+            "--directed-pcdump-timeout", "17",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls[0]["pcdump_timeout"] == 17
 
 
 def test_expected_obj_resolves_original_obj_not_current_build_obj(tmp_path: Path) -> None:

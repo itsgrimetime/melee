@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import os
 import subprocess
@@ -11,10 +12,16 @@ import tempfile
 from collections import Counter
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 
 from src.mwcc_debug import cache as pcdump_cache
+from src.mwcc_debug import local_safety
+from src.mwcc_debug.diff_capture import (
+    _env_with_child_hang_timeout,
+    _run_with_process_group_timeout,
+)
 from src.mwcc_debug.source_patch import extract_function, replace_function
 
 SCHEMA_VERSION = 1
@@ -49,6 +56,9 @@ ALLOCATOR_PCDUMP_TRIAGE_DETAIL_FIELDS = (
     "force_vector_recommended",
     "force_phys_csv",
     "force_vector_conflicts",
+    "force_vector_verify",
+    "force_vector_status",
+    "force_vector_match",
     "unit",
     "targets",
     "results",
@@ -59,7 +69,41 @@ PREVIEW_FACET_FIELDS = (
     "source_actionability",
     "headline_tool",
     "frame_closability_tier",
+    "name_magic_blocker",
 )
+SOURCE_ACTIONABILITY_REBUCKET_FINGERPRINT_FIELDS = (
+    "function",
+    "match_percent",
+    "primary",
+    "subcategory",
+    "source_actionability",
+    "headline_tool",
+    "actionability_reason",
+    "name_magic_blocker",
+    "name_magic_stop_kind",
+    "name_magic_probe_count",
+    "name_magic_reason",
+    "file_path",
+)
+SOURCE_ACTIONABILITY_REBUCKET_ROW_TOOL_FIELDS = (
+    "headline_tool",
+    "frame_closability_tier",
+    "next_command",
+    "frame_next_command",
+)
+DATA_SYMBOL_NO_NAME_MAGIC_CANDIDATE_ACTIONABILITY = (
+    "blocked-data-symbol-no-name-magic-candidate"
+)
+DATA_SYMBOL_BLOCKED_SOURCE_ACTIONABILITIES = {
+    DATA_SYMBOL_NO_NAME_MAGIC_CANDIDATE_ACTIONABILITY,
+    "blocked-data-symbol-unsupported-source-site",
+    "blocked-data-symbol-ambiguous-relocation-pair",
+    "blocked-data-symbol-unsupported-reloc-kind",
+    "blocked-data-symbol-raw-diff-no-supported-data-symbol-pair",
+    "blocked-data-symbol-no-name-magic-validation-failed",
+    "blocked-data-symbol-ambiguous-sdata2-value",
+    "blocked-data-symbol-sdata2-pool-order-dependent",
+}
 
 BLOCKER_UNSUPPORTED_HARNESS = "unsupported-harness"
 BLOCKER_MISSING_SOURCE_FILE = "missing-source-file"
@@ -67,6 +111,10 @@ BLOCKER_MISSING_REGISTER_TARGET = "missing-register-target"
 BLOCKER_HARNESS_EXIT_NONZERO = "harness-exit-nonzero"
 BLOCKER_HARNESS_INVALID_JSON = "harness-invalid-json"
 BLOCKER_NO_VALIDATED_CANDIDATE = "no-validated-candidate"
+BLOCKER_NO_NAME_MAGIC_CANDIDATE = "no-name-magic-candidate"
+BLOCKER_MALFORMED_SOURCE_CANDIDATE = "malformed-source-candidate"
+BLOCKER_UNSAFE_LOCAL_PCDUMP_LANE = "unsafe-local-pcdump-lane"
+MALFORMED_SOURCE_CANDIDATE_ACTIONABILITY = "candidate-generation-fidelity"
 BLOCKER_APPLY_TRANSFER_FAILED = "apply-transfer-failed"
 BLOCKER_APPLY_VALIDATION_FAILED = "apply-validation-failed"
 BLOCKER_DECLARATION_APPLY_UNSUPPORTED = "declaration-apply-unsupported"
@@ -75,7 +123,15 @@ BLOCKER_ALLOCATOR_SOURCE_LIFETIME = "source-lifetime-callee-save-shape"
 BLOCKER_ALLOCATOR_CURRENT_UNKNOWN = "allocator-current-unknown"
 BLOCKER_ALLOCATOR_NO_TARGETS = "allocator-no-targets"
 BLOCKER_ALLOCATOR_VECTOR_NOT_RUNNABLE = "allocator-vector-not-runnable"
+BLOCKER_ALLOCATOR_FORCE_VECTOR_MATCH = "allocator-force-vector-match"
+BLOCKER_ALLOCATOR_FORCE_VECTOR_NO_MATCH = "allocator-force-vector-no-match"
+BLOCKER_ALLOCATOR_FORCE_VECTOR_VERIFY_FAILED = (
+    "allocator-force-vector-verify-failed"
+)
 BLOCKER_ALLOCATOR_TRIAGE_UNCLASSIFIED = "allocator-triage-unclassified"
+ALLOCATOR_TARGET_CONFLICT_ACTIONABILITY = "allocator-target-conflict"
+FRAME_TRANSFORM_DIAGNOSTIC_ACTIONABILITY = "diagnostic-only"
+FRAME_TRANSFORM_SOURCE_PROBE_ACTIONABILITY = "source-probe"
 RETAINED_SOURCE_STATUSES = {"applied", "improved", "validated"}
 NEGATIVE_EVIDENCE_STATUSES = {"blocked", "error", "no_match", "unsupported"}
 
@@ -95,6 +151,7 @@ class HarvestRequest:
     next_command: str = ""
     frame_next_command: str = ""
     facts: dict[str, Any] = field(default_factory=dict)
+    rebucket_fingerprint: dict[str, str] = field(default_factory=dict)
     apply: bool = False
     timeout: int = 120
     max_probes: int = 8
@@ -163,8 +220,13 @@ class PcdumpPreflightReport:
     stale_units: list[str] = field(default_factory=list)
     missing_units: list[str] = field(default_factory=list)
     generated_units: list[str] = field(default_factory=list)
+    failed_units: list[str] = field(default_factory=list)
+    unsafe_units: list[str] = field(default_factory=list)
+    unsafe_sources: list[str] = field(default_factory=list)
+    unsafe_processes: list[dict[str, Any]] = field(default_factory=list)
     setup_command: dict[str, Any] | None = None
     dump_commands: list[dict[str, Any]] = field(default_factory=list)
+    dump_failures: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -226,6 +288,24 @@ def _float_or_none(value: Any) -> float | None:
         return None
 
 
+def _hash_json(value: Any, *, length: int = 16) -> str:
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8", errors="replace")
+    return hashlib.sha256(encoded).hexdigest()[:length]
+
+
+def _source_file_sha256(source_file: Path | None, *, length: int = 16) -> str | None:
+    if source_file is None:
+        return None
+    try:
+        return hashlib.sha256(source_file.read_bytes()).hexdigest()[:length]
+    except OSError:
+        return None
+
+
 def resolve_source_file(repo_root: Path, file_path: str) -> Path | None:
     """Resolve a taxonomy row source path against repo src first, then root."""
     if not file_path:
@@ -242,6 +322,103 @@ def resolve_source_file(repo_root: Path, file_path: str) -> Path | None:
         if resolved.exists() and resolved.is_relative_to(repo_root):
             return resolved
     return None
+
+
+def _fingerprint_match_percent(value: Any) -> str:
+    score = _float_or_none(value)
+    if score is None:
+        return ""
+    return f"{score:.6f}"
+
+
+def _queue_row_taxonomy_fingerprint(
+    raw: Mapping[str, str],
+    *,
+    work_bucket: str,
+) -> str:
+    fields: dict[str, str] = {"work_bucket": work_bucket}
+    for field_name in SOURCE_ACTIONABILITY_REBUCKET_FINGERPRINT_FIELDS:
+        if field_name == "match_percent":
+            fields[field_name] = _fingerprint_match_percent(raw.get(field_name))
+        else:
+            fields[field_name] = str(raw.get(field_name) or "").strip()
+    return _hash_json(fields)
+
+
+def _queue_row_tool_fingerprint(
+    raw: Mapping[str, str],
+    *,
+    work_bucket: str,
+) -> str:
+    fields: dict[str, str] = {"work_bucket": work_bucket}
+    for field_name in SOURCE_ACTIONABILITY_REBUCKET_ROW_TOOL_FIELDS:
+        fields[field_name] = str(raw.get(field_name) or "").strip()
+    return _hash_json(fields)
+
+
+@lru_cache(maxsize=None)
+def _harvest_tool_fingerprint(work_bucket: str) -> str | None:
+    if work_bucket not in {"register-allocator", "stack-local-layout"}:
+        return None
+    src_root = Path(__file__).resolve().parent
+    tool_paths = [src_root / "cli" / "debug.py"]
+    if work_bucket == "stack-local-layout":
+        tool_paths.extend(
+            [
+                src_root / "mwcc_debug" / "pressure_explorer.py",
+                src_root / "mwcc_debug" / "frame_reservations.py",
+            ]
+        )
+    hasher = hashlib.sha256()
+    for path in tool_paths:
+        try:
+            data = path.read_bytes()
+        except OSError:
+            return None
+        hasher.update(str(path.relative_to(src_root)).encode("utf-8"))
+        hasher.update(b"\0")
+        hasher.update(data)
+        hasher.update(b"\0")
+    return hasher.hexdigest()
+
+
+def _rebucket_fingerprint_from_raw(
+    raw: Mapping[str, str],
+    *,
+    repo_root: Path,
+    work_bucket: str,
+) -> dict[str, str]:
+    fingerprint = {
+        "taxonomy_sha256": _queue_row_taxonomy_fingerprint(
+            raw,
+            work_bucket=work_bucket,
+        ),
+        "row_tool_sha256": _queue_row_tool_fingerprint(
+            raw,
+            work_bucket=work_bucket,
+        ),
+    }
+    tool_sha256 = _harvest_tool_fingerprint(work_bucket)
+    if tool_sha256 is not None:
+        fingerprint["tool_sha256"] = tool_sha256
+    source_sha256 = _source_file_sha256(
+        resolve_source_file(repo_root, (raw.get("file_path") or "").strip())
+    )
+    if source_sha256 is not None:
+        fingerprint["source_sha256"] = source_sha256
+    return fingerprint
+
+
+def _rebucket_fingerprint_from_request(request: HarvestRequest) -> dict[str, str]:
+    fingerprint: dict[str, str] = {}
+    for key in ("taxonomy_sha256", "row_tool_sha256", "tool_sha256"):
+        value = request.rebucket_fingerprint.get(key)
+        if value:
+            fingerprint[key] = value
+    source_sha256 = _source_file_sha256(request.source_file)
+    if source_sha256 is not None:
+        fingerprint["source_sha256"] = source_sha256
+    return fingerprint
 
 
 def load_target_map(path: Path | None) -> dict[str, dict[str, Any]]:
@@ -308,6 +485,133 @@ def _row_matches_filters_with_relaxed_field(
     return True
 
 
+def _normalized_rebucket_fingerprint(value: Any) -> dict[str, str] | None:
+    if not isinstance(value, Mapping):
+        return None
+    fingerprint = {
+        str(key): str(raw_value)
+        for key, raw_value in value.items()
+        if isinstance(raw_value, (str, int, float))
+        and str(key)
+        and str(raw_value)
+    }
+    return fingerprint or None
+
+
+def _result_source_actionability_rebucket(
+    result: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    details = result.get("details")
+    if not isinstance(details, Mapping):
+        return None
+    rebucket = details.get("source_actionability_rebucket")
+    if not isinstance(rebucket, Mapping):
+        return None
+    remove_from = str(
+        rebucket.get("remove_from") or rebucket.get("from") or ""
+    ).strip()
+    to_actionability = str(rebucket.get("to") or "").strip()
+    if not remove_from or not to_actionability:
+        return None
+    parsed: dict[str, Any] = {
+        "remove_from": remove_from,
+        "to": to_actionability,
+        "blocker": str(rebucket.get("blocker") or "").strip(),
+        "reason": str(rebucket.get("reason") or "").strip(),
+    }
+    fingerprint = _normalized_rebucket_fingerprint(rebucket.get("fingerprint"))
+    if fingerprint is not None:
+        parsed["fingerprint"] = fingerprint
+    return parsed
+
+
+def _load_source_actionability_rebuckets(
+    repo_root: Path,
+    work_bucket: str,
+) -> dict[str, dict[str, Any]]:
+    harvest_dir = repo_root / "build" / "harvest"
+    if not harvest_dir.is_dir():
+        return {}
+
+    ledgers = [
+        path
+        for path in harvest_dir.glob("*.json")
+        if path.is_file()
+    ]
+    ledgers.sort(key=lambda path: (path.stat().st_mtime, path.name))
+
+    rebuckets: dict[str, dict[str, Any]] = {}
+    for path in ledgers:
+        try:
+            ledger = _read_harvest_ledger(path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        ledger_bucket = str(ledger.get("work_bucket") or "")
+        for raw_result in ledger["results"]:
+            if not isinstance(raw_result, Mapping):
+                continue
+            function = str(raw_result.get("function") or "").strip()
+            if not function:
+                continue
+            result_bucket = str(
+                raw_result.get("work_bucket") or ledger_bucket or ""
+            ).strip()
+            if result_bucket != work_bucket:
+                continue
+            rebucket = _result_source_actionability_rebucket(raw_result)
+            if rebucket is None:
+                continue
+            rebuckets[function] = rebucket
+    return rebuckets
+
+
+def _apply_source_actionability_rebucket(
+    raw: Mapping[str, str],
+    rebuckets: Mapping[str, Mapping[str, Any]],
+    *,
+    repo_root: Path,
+    work_bucket: str,
+) -> dict[str, str]:
+    updated = {key: "" if value is None else value for key, value in raw.items()}
+    function = (updated.get("function") or "").strip()
+    if not function:
+        return updated
+    rebucket = rebuckets.get(function)
+    if rebucket is None:
+        return updated
+    current_actionability = (updated.get("source_actionability") or "").strip()
+    if current_actionability != rebucket.get("remove_from"):
+        return updated
+    rebucket_fingerprint = rebucket.get("fingerprint")
+    if isinstance(rebucket_fingerprint, Mapping):
+        current_fingerprint = _rebucket_fingerprint_from_raw(
+            updated,
+            repo_root=repo_root,
+            work_bucket=work_bucket,
+        )
+        comparable_keys = {
+            "source_sha256",
+            "taxonomy_sha256",
+            "row_tool_sha256",
+            "tool_sha256",
+        }
+        for key, value in rebucket_fingerprint.items():
+            if key not in comparable_keys:
+                continue
+            if not value:
+                continue
+            if current_fingerprint.get(str(key)) != str(value):
+                return updated
+    updated["source_actionability"] = str(rebucket.get("to") or "").strip()
+    reason = str(rebucket.get("reason") or "").strip()
+    blocker = str(rebucket.get("blocker") or "").strip()
+    if reason:
+        updated["actionability_reason"] = reason
+    if blocker:
+        updated["rebucket_blocker"] = blocker
+    return updated
+
+
 def _request_from_queue_row(
     raw: Mapping[str, str],
     *,
@@ -338,6 +642,11 @@ def _request_from_queue_row(
         next_command=(raw.get("next_command") or "").strip(),
         frame_next_command=(raw.get("frame_next_command") or "").strip(),
         facts=dict(facts_by_function.get(function, {})),
+        rebucket_fingerprint=_rebucket_fingerprint_from_raw(
+            raw,
+            repo_root=repo_root,
+            work_bucket=work_bucket,
+        ),
         apply=apply,
         timeout=timeout,
         max_probes=max_probes,
@@ -389,11 +698,21 @@ def load_queue_rows(
 ) -> list[HarvestRequest]:
     rows: list[HarvestRequest] = []
     facts_by_function = target_map or {}
+    source_actionability_rebuckets = _load_source_actionability_rebuckets(
+        repo_root,
+        work_bucket,
+    )
     assert_taxonomy_queue_is_completed(queue_path)
     with queue_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
         _validate_filter_fields(filters, reader.fieldnames)
-        for raw in reader:
+        for raw_row in reader:
+            raw = _apply_source_actionability_rebucket(
+                raw_row,
+                source_actionability_rebuckets,
+                repo_root=repo_root,
+                work_bucket=work_bucket,
+            )
             if not _row_matches_filters(raw, filters):
                 continue
             if limit is not None and len(rows) >= limit:
@@ -476,16 +795,22 @@ def preview_harvest_queue(
     eligible_rows: list[dict[str, str]] = []
     matching_rows: list[dict[str, str]] = []
     sample: list[dict[str, Any]] = []
+    source_actionability_rebuckets = _load_source_actionability_rebuckets(
+        repo_root,
+        work_bucket,
+    )
 
     assert_taxonomy_queue_is_completed(queue_path)
     with queue_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
         _validate_filter_fields(filters, reader.fieldnames)
         for raw_row in reader:
-            raw = {
-                key: "" if value is None else value
-                for key, value in raw_row.items()
-            }
+            raw = _apply_source_actionability_rebucket(
+                raw_row,
+                source_actionability_rebuckets,
+                repo_root=repo_root,
+                work_bucket=work_bucket,
+            )
             function = (raw.get("function") or "").strip()
             if not function:
                 continue
@@ -523,7 +848,8 @@ def preview_harvest_queue(
             near_miss_rows = [
                 raw
                 for raw in eligible_rows
-                if _row_matches_filters_with_relaxed_field(
+                if raw not in matching_rows
+                and _row_matches_filters_with_relaxed_field(
                     raw,
                     filters,
                     field_name,
@@ -532,6 +858,18 @@ def preview_harvest_queue(
             near_miss_facets[field_name] = _top_facet_values(
                 near_miss_rows,
                 field_name,
+                limit=facet_limit,
+            )
+        name_magic_blocker_rows = [
+            raw
+            for raw in eligible_rows
+            if raw not in matching_rows
+            and (raw.get("name_magic_blocker") or "").strip()
+        ]
+        if name_magic_blocker_rows:
+            near_miss_facets["name_magic_blocker"] = _top_facet_values(
+                name_magic_blocker_rows,
+                "name_magic_blocker",
                 limit=facet_limit,
             )
 
@@ -583,11 +921,59 @@ def _is_allocator_pcdump_triage_request(request: HarvestRequest) -> bool:
     )
 
 
+def _is_exhausted_allocator_rebucket_request(request: HarvestRequest) -> bool:
+    if request.work_bucket != "register-allocator":
+        return False
+    if request.source_actionability not in {
+        BLOCKER_ALLOCATOR_SOURCE_LIFETIME,
+        BLOCKER_ALLOCATOR_TARGET_VECTOR,
+        ALLOCATOR_TARGET_CONFLICT_ACTIONABILITY,
+    }:
+        return False
+    return (
+        request.headline_tool == "mwcc-debug"
+        or _contains_debug_dump_local(request.next_command)
+        or _contains_debug_dump_local(request.frame_next_command)
+    )
+
+
+def _is_exhausted_frame_transform_rebucket_request(request: HarvestRequest) -> bool:
+    if request.work_bucket != "stack-local-layout":
+        return False
+    if request.source_actionability not in {
+        FRAME_TRANSFORM_DIAGNOSTIC_ACTIONABILITY,
+        FRAME_TRANSFORM_SOURCE_PROBE_ACTIONABILITY,
+    }:
+        return False
+    return (
+        request.headline_tool == HARNESS_FRAME_TRANSFORM
+        or request.frame_closability_tier == "current-tools-padstack"
+        or HARNESS_FRAME_TRANSFORM in request.next_command
+        or HARNESS_FRAME_TRANSFORM in request.frame_next_command
+    )
+
+
+def _is_blocked_data_symbol_request(request: HarvestRequest) -> bool:
+    return (
+        request.source_actionability in DATA_SYMBOL_BLOCKED_SOURCE_ACTIONABILITIES
+        or request.source_actionability.startswith("blocked-data-symbol-")
+    )
+
+
 def select_harness(request: HarvestRequest) -> str | None:
     explicit_harness = request.facts.get("harness")
     if explicit_harness:
         harness = str(explicit_harness).strip().lower()
         return harness if harness in REGISTERED_HARNESSES else None
+
+    if _is_blocked_data_symbol_request(request):
+        return None
+
+    if request.source_actionability == MALFORMED_SOURCE_CANDIDATE_ACTIONABILITY:
+        return None
+
+    if _is_exhausted_allocator_rebucket_request(request):
+        return None
 
     if _is_allocator_pcdump_triage_request(request):
         return HARNESS_ALLOCATOR_PCDUMP_TRIAGE
@@ -618,6 +1004,9 @@ def select_harness(request: HarvestRequest) -> str | None:
         )
     ):
         return HARNESS_LIFETIME_LAYOUT
+
+    if _is_exhausted_frame_transform_rebucket_request(request):
+        return None
 
     for value in (
         request.headline_tool,
@@ -794,6 +1183,7 @@ def _candidate_detail(candidate: dict[str, Any]) -> dict[str, Any]:
         "match_percent",
         "match_pct",
         "score",
+        "no_name_magic_match",
         "match_percent_error",
         "error",
     ):
@@ -810,6 +1200,23 @@ def _candidate_detail(candidate: dict[str, Any]) -> dict[str, Any]:
     if delta is not None:
         detail["delta_match_percent"] = delta
     return detail
+
+
+def _candidate_omits_target_function(candidate: dict[str, Any]) -> bool:
+    status = str(candidate.get("status") or "")
+    if status == "malformed-source":
+        return True
+    error = str(candidate.get("error") or candidate.get("match_percent_error") or "")
+    if "not found in pcdump" not in error:
+        return False
+    return _candidate_source_path_any(candidate) is not None
+
+
+def _malformed_source_candidate_detail(payload: Any) -> dict[str, Any] | None:
+    for candidate in _iter_candidates(payload):
+        if _candidate_omits_target_function(candidate):
+            return _candidate_detail(candidate)
+    return None
 
 
 def best_scored_candidate(payload: Any) -> dict[str, Any] | None:
@@ -842,7 +1249,22 @@ def no_validated_candidate_details(payload: Any) -> dict[str, Any]:
         details["best_candidate"] = _candidate_detail(best_candidate)
     elif candidates:
         details["unscored_candidate"] = _candidate_detail(candidates[0])
+    malformed_candidate = _malformed_source_candidate_detail(payload)
+    if malformed_candidate is not None:
+        details["malformed_source_candidate"] = malformed_candidate
     return details
+
+
+def _has_source_emitting_no_name_magic_candidate(payload: Any) -> bool:
+    for candidate in _iter_candidates(payload):
+        if extract_candidate_score(candidate) is None:
+            continue
+        if _candidate_source_path_any(candidate) is None:
+            continue
+        if candidate.get("no_name_magic_match") is True:
+            continue
+        return True
+    return False
 
 
 def _name_magic_source_stop_kind(payload: Any) -> str | None:
@@ -898,13 +1320,25 @@ def _default_runner(
     timeout: int,
 ) -> HarnessProcessResult:
     command = [sys.executable, "-m", "src.cli", *args]
-    completed = subprocess.run(
-        command,
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        timeout=timeout + 30,
-    )
+    try:
+        completed = _run_with_process_group_timeout(
+            command,
+            cwd=cwd,
+            timeout=timeout + 30,
+            env=_env_with_child_hang_timeout(timeout),
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = "" if exc.output is None else str(exc.output)
+        stderr = "" if exc.stderr is None else str(exc.stderr)
+        if stderr and not stderr.endswith("\n"):
+            stderr += "\n"
+        stderr += f"harvest subprocess timed out after {timeout + 30}s"
+        return HarnessProcessResult(
+            command=list(args),
+            returncode=124,
+            stdout=stdout,
+            stderr=stderr,
+        )
     return HarnessProcessResult(
         command=list(args),
         returncode=completed.returncode,
@@ -925,6 +1359,17 @@ def _command_report(
     }
 
 
+def _process_reports_unsafe_local_pcdump(process: HarnessProcessResult) -> bool:
+    if process.returncode not in {124, 125}:
+        return False
+    output = f"{process.stderr}\n{process.stdout}".lower()
+    return (
+        "unsafe local pcdump lane" in output
+        or "unsafe local mwcc-debug lane" in output
+        or "uninterruptible wibo" in output
+    )
+
+
 def _pcdump_unit_for_source(repo_root: Path, source_file: Path) -> str:
     try:
         rel = source_file.resolve().relative_to((repo_root / "src").resolve())
@@ -937,6 +1382,14 @@ def _pcdump_unit_for_source(repo_root: Path, source_file: Path) -> str:
     return rel.with_suffix("").as_posix()
 
 
+def _source_rel_for_local_pcdump_guard(repo_root: Path, source_file: Path) -> str:
+    try:
+        rel = source_file.resolve().relative_to(repo_root.resolve())
+    except ValueError:
+        return source_file.as_posix()
+    return rel.as_posix()
+
+
 def _needs_pcdump_preflight(
     request: HarvestRequest,
     *,
@@ -946,6 +1399,8 @@ def _needs_pcdump_preflight(
         return False
     harness = select_harness(request)
     if harness == HARNESS_ALLOCATOR_PCDUMP_TRIAGE:
+        return True
+    if harness == HARNESS_INDEXED_STRUCT:
         return True
     lifetime_layout_source_probe = request.work_bucket == "stack-local-layout" and (
         request.headline_tool == HARNESS_LIFETIME_LAYOUT
@@ -975,8 +1430,26 @@ def _needs_pcdump_preflight(
         ) or (
             HARNESS_LIFETIME_LAYOUT in layer_harnesses
             and lifetime_layout_source_probe
+        ) or (
+            HARNESS_INDEXED_STRUCT in layer_harnesses
         ) or (HARNESS_ALLOCATOR_PCDUMP_TRIAGE in layer_harnesses)
     return False
+
+
+def _requires_pcdump_setup_preflight(
+    request: HarvestRequest,
+    *,
+    compose: bool,
+) -> bool:
+    if select_harness(request) == HARNESS_INDEXED_STRUCT:
+        return True
+    if not compose:
+        return False
+    layer_harnesses = {
+        str(layer.get("harness") or "").strip().lower()
+        for layer in _normalize_layer_sequence(request)
+    }
+    return HARNESS_INDEXED_STRUCT in layer_harnesses
 
 
 def _run_pcdump_preflight(
@@ -1002,8 +1475,43 @@ def _run_pcdump_preflight(
         enabled=True,
         required_units=list(by_unit),
     )
-    units_to_generate: list[str] = []
+    allow_unsafe = local_safety.allow_unsafe_local_pcdump()
+    observed_processes = (
+        []
+        if allow_unsafe
+        else local_safety.scan_local_wibo_processes()
+    )
+    safe_by_unit: dict[str, HarvestRequest] = {}
+    seen_unsafe_pids: set[int] = set()
     for unit, request in by_unit.items():
+        assert request.source_file is not None
+        source_rel = _source_rel_for_local_pcdump_guard(repo_root, request.source_file)
+        guard = local_safety.guard_local_pcdump_lane(
+            source_rel=source_rel,
+            function=request.function,
+            processes=observed_processes,
+            allow_unsafe=allow_unsafe,
+        )
+        if guard.unsafe:
+            report.unsafe_units.append(unit)
+            report.unsafe_sources.append(source_rel)
+            for process in guard.processes:
+                if process.pid in seen_unsafe_pids:
+                    continue
+                seen_unsafe_pids.add(process.pid)
+                report.unsafe_processes.append(process.to_dict())
+            continue
+        safe_by_unit[unit] = request
+
+    if not safe_by_unit:
+        return report
+
+    setup_required = any(
+        _requires_pcdump_setup_preflight(request, compose=compose)
+        for request in safe_by_unit.values()
+    )
+    units_to_generate: list[str] = []
+    for unit, request in safe_by_unit.items():
         entry = pcdump_cache.lookup(repo_root, unit)
         if entry is None:
             report.missing_units.append(unit)
@@ -1014,7 +1522,7 @@ def _run_pcdump_preflight(
             report.stale_units.append(unit)
             units_to_generate.append(unit)
 
-    if not units_to_generate:
+    if not units_to_generate and not setup_required:
         return report
 
     setup_command = ["debug", "dump", "setup"]
@@ -1033,8 +1541,11 @@ def _run_pcdump_preflight(
             f"{_short_output(setup_process.stderr or setup_process.stdout)}"
         )
 
+    if not units_to_generate:
+        return report
+
     for unit in units_to_generate:
-        request = by_unit[unit]
+        request = safe_by_unit[unit]
         assert request.source_file is not None
         dump_command = [
             "debug",
@@ -1051,15 +1562,38 @@ def _run_pcdump_preflight(
                 timeout=timeout,
             )
         except Exception as exc:
-            raise ValueError(
-                f"pcdump preflight dump failed to run for {unit}: {exc}"
-            ) from exc
+            report.dump_failures.append({
+                "unit": unit,
+                "command": dump_command,
+                "error": str(exc),
+            })
+            entry = pcdump_cache.lookup(repo_root, unit)
+            if entry is not None and entry.fresh:
+                report.generated_units.append(unit)
+            else:
+                report.failed_units.append(unit)
+            continue
         report.dump_commands.append(_command_report(dump_command, dump_process))
         if dump_process.returncode != 0:
-            raise ValueError(
-                "pcdump preflight dump failed for "
-                f"{unit}: {_short_output(dump_process.stderr or dump_process.stdout)}"
-            )
+            failure = _command_report(dump_command, dump_process)
+            failure["unit"] = unit
+            report.dump_failures.append(failure)
+            if _process_reports_unsafe_local_pcdump(dump_process):
+                if unit not in report.unsafe_units:
+                    report.unsafe_units.append(unit)
+                source_rel = _source_rel_for_local_pcdump_guard(
+                    repo_root,
+                    request.source_file,
+                )
+                if source_rel not in report.unsafe_sources:
+                    report.unsafe_sources.append(source_rel)
+                continue
+            entry = pcdump_cache.lookup(repo_root, unit)
+            if entry is not None and entry.fresh:
+                report.generated_units.append(unit)
+            else:
+                report.failed_units.append(unit)
+            continue
         report.generated_units.append(unit)
     return report
 
@@ -1321,6 +1855,8 @@ def _allocator_pcdump_triage_command(request: HarvestRequest) -> list[str]:
         request.function,
         "--regs",
         ALLOCATOR_PCDUMP_TRIAGE_REGS,
+        "--force-vector",
+        "auto",
         "--json",
     ]
 
@@ -1337,6 +1873,7 @@ def _base_result(
     final_match_percent: float | None = None,
     applied: bool = False,
     details: dict[str, Any] | None = None,
+    source_actionability: str | None = None,
 ) -> HarvestResult:
     return HarvestResult(
         function=request.function,
@@ -1354,8 +1891,46 @@ def _base_result(
         harness=harness,
         primary=request.primary,
         subcategory=request.subcategory,
-        source_actionability=request.source_actionability,
+        source_actionability=source_actionability or request.source_actionability,
         frame_closability_tier=request.frame_closability_tier,
+    )
+
+
+def _unsafe_local_pcdump_result(
+    request: HarvestRequest,
+    *,
+    repo_root: Path,
+    preflight_report: PcdumpPreflightReport,
+) -> HarvestResult | None:
+    if request.source_file is None:
+        return None
+    try:
+        unit = _pcdump_unit_for_source(repo_root, request.source_file)
+    except ValueError:
+        return None
+    if unit not in set(preflight_report.unsafe_units):
+        return None
+    source_rel = _source_rel_for_local_pcdump_guard(repo_root, request.source_file)
+    source_aliases = {source_rel, source_rel.removeprefix("src/")}
+    matching_processes = [
+        process
+        for process in preflight_report.unsafe_processes
+        if process.get("source_rel") in source_aliases
+    ]
+    return _base_result(
+        request,
+        harness=select_harness(request),
+        status="blocked",
+        blocker=BLOCKER_UNSAFE_LOCAL_PCDUMP_LANE,
+        reason=(
+            f"uninterruptible wibo process already exists for {source_rel}; "
+            "local pcdump lane marked unsafe and candidate scoring was skipped"
+        ),
+        details={
+            "unit": unit,
+            "source_rel": source_rel,
+            "unsafe_processes": matching_processes or preflight_report.unsafe_processes,
+        },
     )
 
 
@@ -1471,6 +2046,12 @@ def _payload_verifies_layer_improvement(
 def _harness_blocker_result(payload: Any) -> tuple[str, str, str] | None:
     if not isinstance(payload, dict):
         return None
+    if _malformed_source_candidate_detail(payload) is not None:
+        return (
+            "blocked",
+            BLOCKER_MALFORMED_SOURCE_CANDIDATE,
+            "generated source candidate did not preserve the requested function",
+        )
     blocker = payload.get("blocker")
     stop = payload.get("stop_condition")
     reason = None
@@ -1486,6 +2067,170 @@ def _harness_blocker_result(payload: Any) -> tuple[str, str, str] | None:
     if isinstance(blocker, str) and blocker:
         return kind, blocker, str(reason or blocker)
     return None
+
+
+def _malformed_source_rebucket(
+    request: HarvestRequest,
+    *,
+    harness: str,
+    blocker: str,
+    details: dict[str, Any],
+) -> str | None:
+    if blocker != BLOCKER_MALFORMED_SOURCE_CANDIDATE:
+        return None
+    rebucketable_source_actionabilities = {
+        HARNESS_INDEXED_STRUCT: "current-tools-indexed-pointer",
+        HARNESS_LIFETIME_LAYOUT: "source-probe",
+    }
+    remove_from = rebucketable_source_actionabilities.get(harness)
+    if remove_from is None or request.source_actionability != remove_from:
+        return None
+    details["source_actionability_rebucket"] = {
+        "from": request.source_actionability,
+        "to": MALFORMED_SOURCE_CANDIDATE_ACTIONABILITY,
+        "remove_from": remove_from,
+        "blocker": blocker,
+        "reason": "candidate pcdump omitted the requested function",
+    }
+    return MALFORMED_SOURCE_CANDIDATE_ACTIONABILITY
+
+
+def _no_name_magic_candidate_rebucket(
+    request: HarvestRequest,
+    *,
+    harness: str,
+    blocker: str,
+    details: dict[str, Any],
+    payload: Any,
+) -> str | None:
+    if harness != HARNESS_NAME_MAGIC_SOURCE:
+        return None
+    if blocker != BLOCKER_NO_NAME_MAGIC_CANDIDATE:
+        return None
+    remove_from = "current-tools-data-symbol"
+    if request.source_actionability != remove_from:
+        return None
+    scored_candidate_count = _float_or_none(details.get("scored_candidate_count"))
+    if scored_candidate_count is None or scored_candidate_count <= 0:
+        return None
+    if not _has_source_emitting_no_name_magic_candidate(payload):
+        return None
+    details["source_actionability_rebucket"] = {
+        "from": request.source_actionability,
+        "to": DATA_SYMBOL_NO_NAME_MAGIC_CANDIDATE_ACTIONABILITY,
+        "remove_from": remove_from,
+        "blocker": blocker,
+        "reason": "no scored source candidate reached a true --no-name-magic match",
+        "fingerprint": _rebucket_fingerprint_from_request(request),
+    }
+    return DATA_SYMBOL_NO_NAME_MAGIC_CANDIDATE_ACTIONABILITY
+
+
+def _allocator_force_vector_no_match_rebucket(
+    request: HarvestRequest,
+    *,
+    payload: Mapping[str, Any],
+    details: dict[str, Any],
+) -> str | None:
+    remove_from = "pcdump-proof-needed"
+    if request.work_bucket != "register-allocator":
+        return None
+    if request.source_actionability != remove_from:
+        return None
+    actionability = payload.get("target_vector_actionability")
+    status = ""
+    if isinstance(actionability, Mapping):
+        status = str(actionability.get("status") or "").strip()
+
+    if status == "already-satisfied":
+        to_actionability = BLOCKER_ALLOCATOR_SOURCE_LIFETIME
+        reason = (
+            "force-vector probes did not match and target vector is already "
+            "satisfied; pivot to source lifetime/callee-save shape"
+        )
+    elif (
+        payload.get("force_vector_runnable") is False
+        or payload.get("force_vector_recommended") is False
+        or _has_force_vector_conflicts(payload.get("force_vector_conflicts"))
+    ):
+        to_actionability = ALLOCATOR_TARGET_CONFLICT_ACTIONABILITY
+        reason = (
+            "force-vector probes did not match and target-vector override "
+            "conflicts or is not runnable"
+        )
+    elif status == "needs-move":
+        to_actionability = BLOCKER_ALLOCATOR_TARGET_VECTOR
+        reason = (
+            "force-vector probes did not match; target-vector movement remains "
+            "the next allocator lever"
+        )
+    else:
+        return None
+
+    details["source_actionability_rebucket"] = {
+        "from": request.source_actionability,
+        "to": to_actionability,
+        "remove_from": remove_from,
+        "blocker": BLOCKER_ALLOCATOR_FORCE_VECTOR_NO_MATCH,
+        "reason": reason,
+        "fingerprint": _rebucket_fingerprint_from_request(request),
+    }
+    return to_actionability
+
+
+def _is_padstack_diagnostic_candidate(candidate: Mapping[str, Any]) -> bool:
+    label = str(candidate.get("label") or "").strip().lower()
+    operator = str(candidate.get("operator") or "").strip().lower()
+    combined = f"{label} {operator}".replace("_", "-")
+    return "pad-stack" in combined or "padstack" in combined
+
+
+def _frame_transform_no_validated_rebucket(
+    request: HarvestRequest,
+    *,
+    harness: str,
+    blocker: str,
+    details: dict[str, Any],
+) -> str | None:
+    if harness != HARNESS_FRAME_TRANSFORM:
+        return None
+    if blocker != BLOCKER_NO_VALIDATED_CANDIDATE:
+        return None
+    if request.work_bucket != "stack-local-layout":
+        return None
+    remove_from = "current-tools"
+    if request.source_actionability != remove_from:
+        return None
+    if request.frame_closability_tier != "current-tools-padstack":
+        return None
+    scored_candidate_count = _float_or_none(details.get("scored_candidate_count"))
+    if scored_candidate_count is None or scored_candidate_count <= 0:
+        return None
+    best_candidate = details.get("best_candidate")
+    if not isinstance(best_candidate, Mapping):
+        return None
+    if _is_padstack_diagnostic_candidate(best_candidate):
+        to_actionability = FRAME_TRANSFORM_DIAGNOSTIC_ACTIONABILITY
+        reason = (
+            "frame-transform scored PAD_STACK diagnostic candidates but no "
+            "validated 100% source"
+        )
+    else:
+        to_actionability = FRAME_TRANSFORM_SOURCE_PROBE_ACTIONABILITY
+        reason = (
+            "frame-transform scored source-shape candidates but no validated "
+            "100% source"
+        )
+
+    details["source_actionability_rebucket"] = {
+        "from": request.source_actionability,
+        "to": to_actionability,
+        "remove_from": remove_from,
+        "blocker": blocker,
+        "reason": reason,
+        "fingerprint": _rebucket_fingerprint_from_request(request),
+    }
+    return to_actionability
 
 
 def _allocator_triage_details(
@@ -1570,6 +2315,117 @@ def _allocator_payload_has_targets(
     return False
 
 
+def _force_vector_probe_matches(probe: Any) -> bool:
+    return isinstance(probe, Mapping) and probe.get("match") is True
+
+
+def _force_vector_probe_failed(probe: Any) -> bool:
+    if not isinstance(probe, Mapping):
+        return False
+    if str(probe.get("status") or "") == "failed":
+        return True
+    returncode = probe.get("returncode")
+    if returncode in (None, 0, "0"):
+        return False
+    try:
+        return int(returncode) != 0
+    except (TypeError, ValueError):
+        return True
+
+
+def _compact_force_vector_probe(probe: Mapping[str, Any]) -> dict[str, Any]:
+    compact: dict[str, Any] = {}
+    for field_name in ("label", "ordinal", "status", "entries"):
+        if field_name in probe:
+            compact[field_name] = probe[field_name]
+    return compact
+
+
+def _force_vector_verify_probes(
+    verify: Mapping[str, Any],
+) -> list[Mapping[str, Any]]:
+    probes: list[Mapping[str, Any]] = []
+    union = verify.get("union")
+    if isinstance(union, Mapping):
+        probes.append(union)
+    raw_probes = verify.get("probes")
+    if isinstance(raw_probes, list):
+        probes.extend(probe for probe in raw_probes if isinstance(probe, Mapping))
+    return probes
+
+
+def _allocator_force_vector_verify_result(
+    request: HarvestRequest,
+    *,
+    command: list[str],
+    payload: Mapping[str, Any],
+    details: dict[str, Any],
+) -> HarvestResult | None:
+    verify = payload.get("force_vector_verify")
+    if not isinstance(verify, Mapping) or verify.get("ran") is not True:
+        return None
+
+    probes = _force_vector_verify_probes(verify)
+    matched_probes = [
+        _compact_force_vector_probe(probe)
+        for probe in probes
+        if _force_vector_probe_matches(probe)
+    ]
+    details["force_vector_matched_probes"] = matched_probes
+    if matched_probes:
+        matched_labels = [
+            str(probe.get("label") or "probe")
+            for probe in matched_probes
+        ]
+        details["source_transform_hint"] = {
+            "kind": BLOCKER_ALLOCATOR_FORCE_VECTOR_MATCH,
+            "matched_probe_labels": matched_labels,
+            "force_vector": payload.get("force_vector"),
+            "unit": payload.get("unit"),
+            "targets": payload.get("targets", []),
+        }
+        labels = ", ".join(matched_labels)
+        return _base_result(
+            request,
+            harness=HARNESS_ALLOCATOR_PCDUMP_TRIAGE,
+            status="diagnostic_match",
+            blocker=BLOCKER_ALLOCATOR_FORCE_VECTOR_MATCH,
+            reason=(
+                f"force-vector {labels} matched; translate diagnostic "
+                "allocator proof into source-shape work"
+            ),
+            command=command,
+            details=details,
+        )
+
+    if any(_force_vector_probe_failed(probe) for probe in probes):
+        return _base_result(
+            request,
+            harness=HARNESS_ALLOCATOR_PCDUMP_TRIAGE,
+            status="blocked",
+            blocker=BLOCKER_ALLOCATOR_FORCE_VECTOR_VERIFY_FAILED,
+            reason="force-vector verification ran but one or more probes failed",
+            command=command,
+            details=details,
+        )
+
+    source_actionability = _allocator_force_vector_no_match_rebucket(
+        request,
+        payload=payload,
+        details=details,
+    )
+    return _base_result(
+        request,
+        harness=HARNESS_ALLOCATOR_PCDUMP_TRIAGE,
+        status="no_match",
+        blocker=BLOCKER_ALLOCATOR_FORCE_VECTOR_NO_MATCH,
+        reason="no force-vector probe matched the target function",
+        command=command,
+        details=details,
+        source_actionability=source_actionability,
+    )
+
+
 def _allocator_pcdump_triage_result(
     request: HarvestRequest,
     *,
@@ -1618,6 +2474,15 @@ def _allocator_pcdump_triage_result(
         )
 
     reason = _allocator_actionability_reason(actionability, status_value)
+    force_vector_result = _allocator_force_vector_verify_result(
+        request,
+        command=command,
+        payload=payload,
+        details=details,
+    )
+    if force_vector_result is not None:
+        return force_vector_result
+
     if status_value == "already-satisfied":
         return _base_result(
             request,
@@ -1845,6 +2710,31 @@ def _atomic_write_text(path: Path, text: str) -> None:
     finally:
         if temp_name is not None:
             Path(temp_name).unlink(missing_ok=True)
+
+
+def _snapshot_source_files(requests: list[HarvestRequest]) -> dict[Path, str]:
+    snapshots: dict[Path, str] = {}
+    for request in requests:
+        if request.source_file is None:
+            continue
+        path = request.source_file
+        if path in snapshots:
+            continue
+        try:
+            snapshots[path] = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+    return snapshots
+
+
+def _restore_source_files(snapshots: Mapping[Path, str]) -> list[str]:
+    errors: list[str] = []
+    for path, text in snapshots.items():
+        try:
+            _atomic_write_text(path, text)
+        except Exception as exc:
+            errors.append(f"{path}: {exc}")
+    return errors
 
 
 @dataclass(frozen=True)
@@ -2430,10 +3320,13 @@ def _normalize_layer_sequence(request: HarvestRequest) -> list[dict[str, Any]]:
 
     selected: list[str] = []
     if (
-        request.work_bucket == "data-symbol-relocation"
-        or request.primary in {"data-symbol-or-relocation", "data-symbol-relocation"}
-        or request.source_actionability == "current-tools-data-symbol"
-        or request.headline_tool == "checkdiff-name-magic"
+        not _is_blocked_data_symbol_request(request)
+        and (
+            request.work_bucket == "data-symbol-relocation"
+            or request.primary in {"data-symbol-or-relocation", "data-symbol-relocation"}
+            or request.source_actionability == "current-tools-data-symbol"
+            or request.headline_tool == "checkdiff-name-magic"
+        )
     ):
         selected.append(HARNESS_NAME_MAGIC_SOURCE)
     if (
@@ -2809,6 +3702,13 @@ def _compose_result(
         "harness_sequence": harness_sequence,
         "not_observed_layers": not_observed_layers or [],
     }
+    source_actionability = None
+    if final_layer is not None:
+        if final_layer.source_actionability != request.source_actionability:
+            source_actionability = final_layer.source_actionability
+        for key in ("source_actionability_rebucket", "malformed_source_candidate"):
+            if key in final_layer.details:
+                details[key] = final_layer.details[key]
     return _base_result(
         request,
         harness="composed",
@@ -2826,6 +3726,7 @@ def _compose_result(
             else applied
         ),
         details=details,
+        source_actionability=source_actionability,
     )
 
 
@@ -3070,6 +3971,28 @@ def run_composed_harvest_request(
             harness_blocker = _harness_blocker_result(payload)
             if harness_blocker is not None:
                 status, blocker, reason = harness_blocker
+                details = no_validated_candidate_details(payload)
+                source_actionability = _malformed_source_rebucket(
+                    layer_request,
+                    harness=harness,
+                    blocker=blocker,
+                    details=details,
+                )
+                if source_actionability is None:
+                    source_actionability = _no_name_magic_candidate_rebucket(
+                        layer_request,
+                        harness=harness,
+                        blocker=blocker,
+                        details=details,
+                        payload=payload,
+                    )
+                if source_actionability is None:
+                    source_actionability = _frame_transform_no_validated_rebucket(
+                        layer_request,
+                        harness=harness,
+                        blocker=blocker,
+                        details=details,
+                    )
                 layer = _base_result(
                     layer_request,
                     harness=harness,
@@ -3077,11 +4000,19 @@ def run_composed_harvest_request(
                     blocker=blocker,
                     reason=reason,
                     command=command,
-                    details=no_validated_candidate_details(payload),
+                    details=details,
+                    source_actionability=source_actionability,
                 )
             elif last_failed_layer is not None:
                 layer = last_failed_layer
             else:
+                details = no_validated_candidate_details(payload)
+                source_actionability = _frame_transform_no_validated_rebucket(
+                    layer_request,
+                    harness=harness,
+                    blocker=BLOCKER_NO_VALIDATED_CANDIDATE,
+                    details=details,
+                )
                 layer = _base_result(
                     layer_request,
                     harness=harness,
@@ -3089,7 +4020,8 @@ def run_composed_harvest_request(
                     blocker=BLOCKER_NO_VALIDATED_CANDIDATE,
                     reason="no validated 100% candidate was found",
                     command=command,
-                    details=no_validated_candidate_details(payload),
+                    details=details,
+                    source_actionability=source_actionability,
                 )
             layers.append(layer)
             return _compose_result(
@@ -3267,6 +4199,28 @@ def run_harvest_request(
         harness_blocker = _harness_blocker_result(harness_json)
         if harness_blocker is not None:
             status, blocker, reason = harness_blocker
+            details = no_validated_candidate_details(harness_json)
+            source_actionability = _malformed_source_rebucket(
+                request,
+                harness=harness,
+                blocker=blocker,
+                details=details,
+            )
+            if source_actionability is None:
+                source_actionability = _no_name_magic_candidate_rebucket(
+                    request,
+                    harness=harness,
+                    blocker=blocker,
+                    details=details,
+                    payload=harness_json,
+                )
+            if source_actionability is None:
+                source_actionability = _frame_transform_no_validated_rebucket(
+                    request,
+                    harness=harness,
+                    blocker=blocker,
+                    details=details,
+                )
             return _base_result(
                 request,
                 harness=harness,
@@ -3274,8 +4228,16 @@ def run_harvest_request(
                 blocker=blocker,
                 reason=reason,
                 command=command,
-                details=no_validated_candidate_details(harness_json),
+                details=details,
+                source_actionability=source_actionability,
             )
+        details = no_validated_candidate_details(harness_json)
+        source_actionability = _frame_transform_no_validated_rebucket(
+            request,
+            harness=harness,
+            blocker=BLOCKER_NO_VALIDATED_CANDIDATE,
+            details=details,
+        )
         return _base_result(
             request,
             harness=harness,
@@ -3283,7 +4245,8 @@ def run_harvest_request(
             blocker=BLOCKER_NO_VALIDATED_CANDIDATE,
             reason="no validated 100% candidate was found",
             command=command,
-            details=no_validated_candidate_details(harness_json),
+            details=details,
+            source_actionability=source_actionability,
         )
 
     final_match_percent = extract_candidate_score(candidate)
@@ -3380,15 +4343,34 @@ def _suggest_ledger_impact(
     *,
     applied_count: int,
     retained_source_count: int,
+    positive_candidate_count: int,
     negative_evidence_count: int,
 ) -> str:
     if applied_count > 0:
         return "matched"
     if retained_source_count > 0:
         return "retained-source-improvement"
+    if positive_candidate_count > 0:
+        return "positive-candidate/no-retained-source"
     if negative_evidence_count > 0:
         return "negative-evidence"
     return "diagnostic-only"
+
+
+def _result_retained_source_status(
+    result: Mapping[str, Any],
+    *,
+    status: str,
+    ledger_apply: Any,
+) -> bool:
+    if status == "applied":
+        return True
+    applied_marker = result.get("applied")
+    if applied_marker is True:
+        return True
+    if applied_marker is False or ledger_apply is False:
+        return False
+    return status in RETAINED_SOURCE_STATUSES
 
 
 def summarize_harvest_ledgers(
@@ -3422,6 +4404,7 @@ def summarize_harvest_ledgers(
     for path in ledger_paths:
         ledger = _read_harvest_ledger(path)
         ledger_bucket = str(ledger.get("work_bucket") or "")
+        ledger_apply = ledger.get("apply")
         filters = ledger.get("filters")
         if filters is None:
             raw_ledger_count += 1
@@ -3452,7 +4435,14 @@ def summarize_harvest_ledgers(
                 improved_functions.add(function)
             elif status == "validated" and function:
                 validated_functions.add(function)
-            if status in RETAINED_SOURCE_STATUSES and function:
+            if (
+                function
+                and _result_retained_source_status(
+                    raw_result,
+                    status=status,
+                    ledger_apply=ledger_apply,
+                )
+            ):
                 retained_source_functions.add(function)
             if status in NEGATIVE_EVIDENCE_STATUSES and function:
                 negative_evidence_functions.add(function)
@@ -3506,6 +4496,9 @@ def summarize_harvest_ledgers(
         "suggested_impact": _suggest_ledger_impact(
             applied_count=len(applied_functions),
             retained_source_count=len(retained_source_functions),
+            positive_candidate_count=len(
+                (improved_functions | validated_functions) - retained_source_functions
+            ),
             negative_evidence_count=len(negative_evidence_functions),
         ),
     }
@@ -3643,30 +4636,55 @@ def run_harvest(
         max_probes=max_probes,
         filters=filters,
     )
-    preflight = {
-        "pcdump": _run_pcdump_preflight(
+    source_snapshots = {} if apply else _snapshot_source_files(requests)
+    try:
+        pcdump_preflight = _run_pcdump_preflight(
             requests,
             repo_root=repo_root,
             runner=runner,
             timeout=timeout,
             compose=compose,
-        ).to_dict()
-    }
-    request_runner = run_composed_harvest_request if compose else run_harvest_request
-    results = [
-        request_runner(
-            request,
-            repo_root=repo_root,
-            runner=runner,
-            validator=validator,
-            match_checker=match_checker,
         )
-        for request in requests
-    ]
-    finished_at = _utc_now()
-    if ledger_path is not None:
-        return write_ledger(
-            ledger_path,
+        preflight = {
+            "pcdump": pcdump_preflight.to_dict()
+        }
+        request_runner = run_composed_harvest_request if compose else run_harvest_request
+        results: list[HarvestResult] = []
+        for request in requests:
+            unsafe_result = _unsafe_local_pcdump_result(
+                request,
+                repo_root=repo_root,
+                preflight_report=pcdump_preflight,
+            )
+            if unsafe_result is not None:
+                results.append(unsafe_result)
+                continue
+            results.append(
+                request_runner(
+                    request,
+                    repo_root=repo_root,
+                    runner=runner,
+                    validator=validator,
+                    match_checker=match_checker,
+                )
+            )
+        finished_at = _utc_now()
+        if ledger_path is not None:
+            return write_ledger(
+                ledger_path,
+                work_bucket=work_bucket,
+                started_at=started_at,
+                finished_at=finished_at,
+                apply=apply,
+                min_match=min_match,
+                limit=limit,
+                taxonomy_queue=queue_path,
+                target_map_path=target_map_path,
+                filters=filters,
+                preflight=preflight,
+                results=results,
+            )
+        return _build_ledger(
             work_bucket=work_bucket,
             started_at=started_at,
             finished_at=finished_at,
@@ -3679,16 +4697,9 @@ def run_harvest(
             preflight=preflight,
             results=results,
         )
-    return _build_ledger(
-        work_bucket=work_bucket,
-        started_at=started_at,
-        finished_at=finished_at,
-        apply=apply,
-        min_match=min_match,
-        limit=limit,
-        taxonomy_queue=queue_path,
-        target_map_path=target_map_path,
-        filters=filters,
-        preflight=preflight,
-        results=results,
-    )
+    finally:
+        restore_errors = _restore_source_files(source_snapshots)
+        if restore_errors and sys.exc_info()[0] is None:
+            raise RuntimeError(
+                "dry-run source restore failed: " + "; ".join(restore_errors)
+            )

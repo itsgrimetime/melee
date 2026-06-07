@@ -890,6 +890,69 @@ def test_debug_suggest_control_flow_shape_text_reports_buffer_lifetime(
     assert "fn_803AC168" in output
 
 
+def test_debug_suggest_control_flow_shape_preflights_source_materialization(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    payload = _control_flow_shape_checkdiff_payload()
+    payload["target_asm"] = [
+        "/* 0000 */ lwz r4, 0(r3)",
+        "/* 0004 */ addi r3, r3, 0x24",
+        "/* 0008 */ lwz r4, 0(r3)",
+        "/* 000C */ addi r3, r3, 0x24",
+        "/* 0010 */ mtctr r5",
+        "/* 0014 */ lwz r4, 0(r3)",
+        "/* 0018 */ bdnz lbl_loop",
+    ]
+    payload["current_asm"] = [
+        "/* 0000 */ mtctr r5",
+        "/* 0004 */ lwz r4, 0(r3)",
+        "/* 0008 */ bdnz lbl_loop",
+    ]
+    source = tmp_path / "src" / "melee" / "mn" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        textwrap.dedent(
+            """
+            void fn_80000000(void)
+            {
+                int x;
+                x = 0;
+            }
+            """
+        )
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_read_control_flow_shape_checkdiff_payload",
+        lambda **kwargs: (payload, "fixture"),
+        raising=False,
+    )
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", tmp_path)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, melee_root: "melee/mn/demo",
+    )
+
+    result = runner.invoke(
+        app,
+        ["debug", "suggest", "control-flow-shape", "-f", "fn_80000000", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    report = json.loads(result.output)
+    suggestion = next(
+        item
+        for item in report["suggestions"]
+        if item["kind"] == "loop-peel-unroll"
+    )
+    assert report["source_preflight"]["status"] == "ran"
+    assert suggestion["follow_up_commands"] == []
+    assert suggestion["source_materialization"]["status"] == "non-materializable"
+    assert suggestion["source_materialization"]["operator"] == "loop-init"
+
+
 def test_debug_suggest_control_flow_shape_rejects_wrong_function_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -6613,6 +6676,60 @@ def test_dump_local_requested_function_missing_exits_nonzero_and_preserves_dump(
     assert "Starting function fn_80000001" in output.read_text()
 
 
+def test_dump_local_forced_default_output_uses_managed_scratch_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text("void fn_80000000(void)\n{\n}\n")
+    compiler_dir = melee_root / "build" / "compilers" / "GC" / "1.2.5n"
+    compiler_dir.mkdir(parents=True)
+    (compiler_dir / "mwcceppc_debug.exe").write_text("")
+    wibo = tmp_path / "wibo"
+    wibo.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os\n"
+        "from pathlib import Path\n"
+        "pcdump = Path.cwd() / os.environ['MWCC_DEBUG_PCDUMP_PATH']\n"
+        "pcdump.write_text('Starting function fn_80000000\\n')\n"
+    )
+    wibo.chmod(0o755)
+    scratch_root = tmp_path / "mwcc-debug-tmp"
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+    monkeypatch.setattr(debug_cli, "_find_compiler_dir", lambda: compiler_dir)
+    monkeypatch.setattr(debug_cli, "_ninja_cflags_for_unit", lambda src_rel: ("", "mwcc"))
+    monkeypatch.setattr(debug_cli, "_cache_settle_seconds", lambda env=None: 0.0)
+    monkeypatch.setenv("MWCC_DEBUG_TMP_ROOT", str(scratch_root))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "dump",
+            "local",
+            str(src_path),
+            "--force-phys",
+            "1:4",
+            "--force-phys-fn",
+            "fn_80000000",
+            "--function",
+            "fn_80000000",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    match = re.search(r"Dump at: (.+)", result.stderr)
+    assert match is not None
+    output = Path(match.group(1).strip())
+    assert output.parent == scratch_root
+    assert output.name.startswith("pcdump_forced_")
+    assert output.exists()
+
+
 def test_dump_local_watchdog_uses_process_tree_killer(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -6663,6 +6780,71 @@ def test_dump_local_watchdog_uses_process_tree_killer(
     assert result.exit_code == 124
     assert killed
     assert "no compile progress" in result.stderr
+
+
+def test_dump_local_refuses_uninterruptible_matching_wibo_lane(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from src.mwcc_debug.local_safety import LocalWiboProcess
+
+    melee_root = tmp_path / "melee"
+    src_path = melee_root / "src" / "sysdolphin" / "baselib" / "particle.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text("void hsd_80391AC8(void)\n{\n}\n")
+    compiler_dir = melee_root / "build" / "compilers" / "GC" / "1.2.5n"
+    compiler_dir.mkdir(parents=True)
+    (compiler_dir / "mwcceppc_debug.exe").write_text("")
+    wibo = tmp_path / "wibo"
+    launched_marker = tmp_path / "wibo-launched"
+    wibo.write_text(
+        "#!/usr/bin/env python3\n"
+        "from pathlib import Path\n"
+        f"Path({str(launched_marker)!r}).write_text('launched')\n"
+    )
+    wibo.chmod(0o755)
+    unsafe = LocalWiboProcess(
+        pid=80283,
+        ppid=1,
+        stat="UEs",
+        elapsed="10:27",
+        command=(
+            "wibo mwcceppc_debug.exe "
+            "-c src/sysdolphin/baselib/particle.c"
+        ),
+        source_rel="src/sysdolphin/baselib/particle.c",
+    )
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+    monkeypatch.setattr(debug_cli, "_find_compiler_dir", lambda: compiler_dir)
+    monkeypatch.setattr(debug_cli, "_ninja_cflags_for_unit", lambda src_rel: ("", "mwcc"))
+    monkeypatch.setattr(
+        debug_cli.local_safety,
+        "scan_local_wibo_processes",
+        lambda: [unsafe],
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "dump",
+            "local",
+            str(src_path),
+            "--function",
+            "hsd_80391AC8",
+            "--output",
+            str(tmp_path / "pcdump.out"),
+            "--no-cache-sync",
+        ],
+    )
+
+    assert result.exit_code == 125
+    assert "unsafe local pcdump lane" in result.stderr
+    assert "80283" in result.stderr
+    assert "src/sysdolphin/baselib/particle.c" in result.stderr
+    assert not launched_marker.exists()
 
 
 def test_dump_local_watchdog_treats_pcdump_growth_as_progress(
@@ -6801,6 +6983,68 @@ def test_inspect_explain_schedule_json_reads_pcdump(
     decision = payload["decisions"][0]
     assert decision["heuristic_verdict"] == "PRIORITY_UNAVAILABLE"
     assert decision["window_gap"] == 1
+
+
+def test_inspect_explain_schedule_reads_checkdiff_json_for_addi_window(
+    tmp_path: Path,
+) -> None:
+    pcdump = tmp_path / "pcdump.txt"
+    pcdump.write_text(
+        "Starting function it_802BCB88\n"
+        "FINAL CODE AFTER INSTRUCTION SCHEDULING\n"
+        "it_802BCB88\n"
+        ":{0000}::::LOOPWEIGHT=0\n"
+        "B0: Succ={} Pred={} Labels={}\n\n"
+        "    addi    r3,r1,72\n"
+        "    lfs     f0,108(r1)\n"
+        "    addi    r28,r28,1\n"
+    )
+    checkdiff_json = tmp_path / "checkdiff.json"
+    checkdiff_json.write_text(json.dumps({
+        "function": "it_802BCB88",
+        "classification": {
+            "primary": "operand-register-or-offset",
+            "reasons": [
+                "opcode sequence matches; differences are operands, registers, "
+                "labels, or offsets"
+            ],
+        },
+        "target_asm": [
+            "<it_802BCB88>:",
+            "+1fc: 3b 9c 00 01 \taddi    r28,r28,1",
+            "+200: c0 01 00 6c \tlfs     f0,108(r1)",
+            "+204: 38 61 00 48 \taddi    r3,r1,72",
+        ],
+        "current_asm": [
+            "<it_802BCB88>:",
+            "+1fc: 38 61 00 48 \taddi    r3,r1,72",
+            "+200: c0 01 00 6c \tlfs     f0,108(r1)",
+            "+204: 3b 9c 00 01 \taddi    r28,r28,1",
+        ],
+    }))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "explain-schedule",
+            "--function",
+            "it_802BCB88",
+            "--pcdump",
+            str(pcdump),
+            "--checkdiff-json",
+            str(checkdiff_json),
+            "--force-schedule",
+            "addi:0x204>0x1fc",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert "status=matched" in result.stdout
+    assert "window_kind=asm-code-offset" in result.stdout
+    assert "source_shape_verdict=source-shape-controllable" in result.stdout
+    assert "not-forceable-by-current-hook" in result.stdout
 
 
 def test_inspect_explain_schedule_source_file_adds_provenance(

@@ -7,14 +7,15 @@ import re
 import signal
 import subprocess
 import sys
-import tempfile
 import threading
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
+from . import local_safety
 from .source_patch import transfer_candidate
+from .temp_scratch import temporary_directory
 
 
 @dataclass(frozen=True)
@@ -108,7 +109,7 @@ def compile_source_variant(
     timeout: int,
     unit_source: Path | None = None,
 ) -> str:
-    with tempfile.TemporaryDirectory(prefix="mwcc_diff_") as td:
+    with temporary_directory(prefix="mwcc_diff_") as td:
         out_path = Path(td) / f"{diff_input.label.lower()}.pcdump.txt"
         if unit_source is None:
             source_context = _source_path_for_compile(
@@ -353,11 +354,18 @@ def _run_with_process_group_timeout(
             proc.kill()
         if thread.is_alive():
             thread.join(1)
+        stderr = getattr(exc, "stderr", None)
+        survivor_note = _unreaped_wibo_timeout_note()
+        if survivor_note:
+            stderr_text = "" if stderr is None else str(stderr)
+            if stderr_text and not stderr_text.endswith("\n"):
+                stderr_text += "\n"
+            stderr = stderr_text + survivor_note
         raise subprocess.TimeoutExpired(
             cmd=cmd,
             timeout=timeout,
             output=getattr(exc, "output", None),
-            stderr=getattr(exc, "stderr", None),
+            stderr=stderr,
         ) from exc
 
     if "exc" in result:
@@ -370,6 +378,21 @@ def _run_with_process_group_timeout(
         proc.returncode,
         str(stdout),
         str(stderr),
+    )
+
+
+def _unreaped_wibo_timeout_note() -> str:
+    processes = [
+        process
+        for process in local_safety.scan_local_wibo_processes()
+        if process.uninterruptible
+    ]
+    if not processes:
+        return ""
+    return (
+        "unreaped uninterruptible wibo process(es) remain after timeout; "
+        "local pcdump lanes for these sources should be treated as unsafe:\n"
+        f"{local_safety.format_unsafe_processes(processes)}"
     )
 
 

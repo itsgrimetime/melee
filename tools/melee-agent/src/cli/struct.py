@@ -491,10 +491,529 @@ _NON_STRUCT_BASE_REGS = {"r1", "r2", "r13"}
 
 
 @dataclass(frozen=True)
+class StructIdentityCandidate:
+    struct: str
+    root: str | None
+    evidence: str
+
+
+@dataclass(frozen=True)
 class RegisterTrace:
     root: str
     offset: int = 0
     source: str = "arg"
+
+
+_PRIMITIVE_STRUCT_IDENTITY_TYPES = {
+    "_Bool",
+    "bool",
+    "char",
+    "double",
+    "f32",
+    "f64",
+    "float",
+    "int",
+    "intptr_t",
+    "long",
+    "long double",
+    "long int",
+    "long long",
+    "long long int",
+    "s8",
+    "s16",
+    "s32",
+    "s64",
+    "short",
+    "short int",
+    "signed",
+    "signed char",
+    "signed int",
+    "signed long",
+    "signed long int",
+    "signed long long",
+    "signed long long int",
+    "signed short",
+    "signed short int",
+    "size_t",
+    "ssize_t",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+    "uintptr_t",
+    "unsigned",
+    "unsigned char",
+    "unsigned int",
+    "unsigned long",
+    "unsigned long int",
+    "unsigned long long",
+    "unsigned long long int",
+    "unsigned short",
+    "unsigned short int",
+    "void",
+}
+
+
+def _split_top_level_commas(text: str) -> list[str]:
+    parts: list[str] = []
+    depth = 0
+    start = 0
+    for idx, char in enumerate(text):
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth = max(0, depth - 1)
+        elif char == "," and depth == 0:
+            parts.append(text[start:idx].strip())
+            start = idx + 1
+    tail = text[start:].strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def _matching_paren(text: str, open_idx: int) -> int | None:
+    depth = 1
+    for idx in range(open_idx + 1, len(text)):
+        if text[idx] == "(":
+            depth += 1
+        elif text[idx] == ")":
+            depth -= 1
+            if depth == 0:
+                return idx
+    return None
+
+
+def _normalize_struct_identity_type(type_text: str) -> str | None:
+    text = re.sub(r"/\*.*?\*/", " ", type_text, flags=re.S)
+    text = text.replace("*", " ")
+    text = re.sub(
+        r"\b(?:auto|const|extern|inline|register|restrict|static|volatile)\b",
+        " ",
+        text,
+    )
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return None
+    if text.startswith("enum "):
+        return None
+
+    primitive_key = text.strip()
+    if primitive_key in _PRIMITIVE_STRUCT_IDENTITY_TYPES:
+        return None
+
+    tokens = text.split()
+    if len(tokens) >= 2 and tokens[0] in {"struct", "union"}:
+        name = tokens[1]
+    elif len(tokens) == 1:
+        name = tokens[0]
+    else:
+        name = tokens[-1]
+
+    if name in _PRIMITIVE_STRUCT_IDENTITY_TYPES:
+        return None
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+        return None
+    return name
+
+
+def _parse_typed_name(decl: str) -> tuple[str, str] | None:
+    clean = re.sub(r"/\*.*?\*/", " ", decl, flags=re.S).strip()
+    clean = clean.rstrip(";").strip()
+    if not clean or clean == "void":
+        return None
+    clean = clean.split("=", 1)[0].strip()
+    clean = re.sub(r"\[[^\]]*\]\s*$", "", clean).strip()
+    if any(token in clean for token in ("->", ".", "+", "-", "(", ")")):
+        return None
+
+    match = re.match(r"(?P<type>.+?)\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)$", clean)
+    if not match:
+        return None
+    struct_name = _normalize_struct_identity_type(match.group("type"))
+    if struct_name is None:
+        return None
+    return struct_name, match.group("name")
+
+
+def _strip_c_comments(text: str) -> str:
+    text = re.sub(
+        r"/\*.*?\*/",
+        lambda match: "\n" * match.group(0).count("\n"),
+        text,
+        flags=re.S,
+    )
+    return re.sub(r"//[^\n]*", "", text)
+
+
+def _function_param_decls(signature_text: str, function: str) -> list[str]:
+    match = re.search(r"\b" + re.escape(function) + r"\s*\(", signature_text)
+    if not match:
+        return []
+    paren_open = match.end() - 1
+    paren_close = _matching_paren(signature_text, paren_open)
+    if paren_close is None:
+        return []
+    params_text = signature_text[paren_open + 1 : paren_close].strip()
+    if not params_text or params_text == "void":
+        return []
+    return _split_top_level_commas(params_text)
+
+
+def _source_statement_at(text: str, idx: int) -> str:
+    start = text.rfind("\n", 0, idx) + 1
+    end = text.find(";", idx)
+    if end == -1:
+        end = text.find("\n", idx)
+    if end == -1:
+        end = len(text)
+    else:
+        end += 1
+    return text[start:end].strip()
+
+
+def _blank_function_definitions(source_text: str) -> str:
+    from ..mwcc_debug import source_patch
+
+    chars = list(source_text)
+    for span in source_patch.find_function_definitions(source_text):
+        for idx in range(span.sig_start, span.full_end):
+            if chars[idx] != "\n":
+                chars[idx] = " "
+    return "".join(chars)
+
+
+def _top_level_declarations(source_text: str) -> list[str]:
+    decls: list[str] = []
+    depth = 0
+    start = 0
+    for idx, char in enumerate(source_text):
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth = max(0, depth - 1)
+        elif char == ";" and depth == 0:
+            decl = source_text[start:idx + 1].strip()
+            start = idx + 1
+            if decl:
+                decls.append(decl)
+    return decls
+
+
+def _global_identity_declarations(source_text: str) -> tuple[dict[str, tuple[str, str]], dict[str, tuple[str, str]]]:
+    from ..mwcc_debug import source_patch
+
+    globals_by_name: dict[str, tuple[str, str]] = {}
+    returns_by_name: dict[str, tuple[str, str]] = {}
+    clean_source = _strip_c_comments(source_text)
+
+    for span in source_patch.find_function_definitions(clean_source):
+        signature = clean_source[span.sig_start : span.body_open].strip()
+        fn_match = re.match(
+            r"(?P<ret>.+?)\b(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\([^;{}]*\)\s*$",
+            signature,
+            flags=re.S,
+        )
+        if fn_match:
+            struct_name = _normalize_struct_identity_type(fn_match.group("ret"))
+            if struct_name is not None:
+                returns_by_name.setdefault(fn_match.group("name"), (struct_name, signature))
+
+    for decl in _top_level_declarations(_blank_function_definitions(clean_source)):
+        if decl.lstrip().startswith("typedef"):
+            continue
+        fn_match = re.match(
+            r"(?P<ret>.+?)\b(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\([^;{}]*\)\s*;",
+            decl,
+            flags=re.S,
+        )
+        if fn_match:
+            struct_name = _normalize_struct_identity_type(fn_match.group("ret"))
+            if struct_name is not None:
+                returns_by_name[fn_match.group("name")] = (struct_name, decl.strip())
+            continue
+        parsed = _parse_typed_name(decl)
+        if parsed is not None:
+            struct_name, name = parsed
+            globals_by_name[name] = (struct_name, decl.strip())
+    return globals_by_name, returns_by_name
+
+
+def _root_with_user_data(root: str | None) -> str | None:
+    if root is None:
+        return None
+    return f"{root}:user_data"
+
+
+def _initializer_identity_root(
+    init: str,
+    *,
+    var_roots: dict[str, str],
+    globals_by_name: dict[str, tuple[str, str]],
+    returns_by_name: dict[str, tuple[str, str]],
+) -> str | None:
+    text = init.strip()
+    text = re.sub(r"^\((?:const\s+|volatile\s+|struct\s+)?[A-Za-z_][A-Za-z0-9_]*\s*\*?\)\s*", "", text)
+
+    match = re.match(r"GET_FIGHTER\s*\(\s*(?P<arg>[A-Za-z_][A-Za-z0-9_]*)\s*\)\s*$", text)
+    if match:
+        return _root_with_user_data(var_roots.get(match.group("arg")))
+
+    match = re.match(r"(?P<base>[A-Za-z_][A-Za-z0-9_]*)\s*->\s*user_data\s*$", text)
+    if match:
+        return _root_with_user_data(var_roots.get(match.group("base")))
+
+    match = re.match(r"(?P<func>[A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*$", text)
+    if match and match.group("func") in returns_by_name:
+        return f"call:{match.group('func')}"
+
+    match = re.match(r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*$", text)
+    if match:
+        name = match.group("name")
+        if name in var_roots:
+            return var_roots[name]
+        if name in globals_by_name:
+            return f"global:{name}"
+    return None
+
+
+def _struct_identity_candidates_from_source(source_text: str, function: str) -> list[StructIdentityCandidate]:
+    from ..mwcc_debug import source_patch
+
+    span = source_patch.find_function(source_text, function)
+    if span is None:
+        return []
+
+    globals_by_name, returns_by_name = _global_identity_declarations(source_text)
+    signature_text = _strip_c_comments(source_text[span.sig_start : span.body_open])
+    body_text = _strip_c_comments(source_text[span.body_open : span.full_end])
+    candidates: list[StructIdentityCandidate] = []
+    seen: set[tuple[str, str | None]] = set()
+    var_roots: dict[str, str] = {}
+
+    def add_candidate(struct_name: str | None, root: str | None, evidence: str) -> None:
+        if struct_name is None:
+            return
+        key = (struct_name, root)
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(StructIdentityCandidate(struct_name, root, evidence.strip()))
+
+    for idx, param in enumerate(_function_param_decls(signature_text, function), start=3):
+        parsed = _parse_typed_name(param)
+        if parsed is None:
+            continue
+        struct_name, name = parsed
+        root = f"arg{idx}"
+        var_roots[name] = root
+        add_candidate(struct_name, root, param)
+
+    local_decl_re = re.compile(
+        r"(?m)^[ \t]*(?P<stmt>(?P<decl>[^;\n{}]+?)\s*=\s*(?P<init>[^;]+));"
+    )
+    for match in local_decl_re.finditer(body_text):
+        parsed = _parse_typed_name(match.group("decl"))
+        if parsed is None:
+            continue
+        struct_name, name = parsed
+        root = _initializer_identity_root(
+            match.group("init"),
+            var_roots=var_roots,
+            globals_by_name=globals_by_name,
+            returns_by_name=returns_by_name,
+        )
+        if root is None:
+            continue
+        var_roots[name] = root
+        add_candidate(struct_name, root, match.group("stmt"))
+
+    cast_user_data_re = re.compile(
+        r"\(\s*(?P<type>(?:struct\s+)?[A-Za-z_][A-Za-z0-9_]*\s*\*)\s*\)"
+        r"\s*(?P<base>[A-Za-z_][A-Za-z0-9_]*)\s*->\s*user_data"
+    )
+    for match in cast_user_data_re.finditer(body_text):
+        root = _root_with_user_data(var_roots.get(match.group("base")))
+        add_candidate(
+            _normalize_struct_identity_type(match.group("type")),
+            root,
+            _source_statement_at(body_text, match.start()),
+        )
+
+    for name, (struct_name, evidence) in globals_by_name.items():
+        if re.search(r"\b" + re.escape(name) + r"\s*(?:\.|->)", body_text):
+            add_candidate(struct_name, f"global:{name}", evidence)
+
+    for name, (struct_name, evidence) in returns_by_name.items():
+        call_match = re.search(r"\b" + re.escape(name) + r"\s*\([^;{}]*\)\s*->", body_text)
+        if call_match:
+            add_candidate(struct_name, f"call:{name}", _source_statement_at(body_text, call_match.start()) or evidence)
+
+    return candidates
+
+
+def _read_tu_with_local_includes(repo: Path, tu_src: str) -> str:
+    tu_path = Path(tu_src)
+    if not tu_path.is_absolute():
+        tu_path = repo / tu_path
+    text = tu_path.read_text(encoding="utf-8", errors="replace")
+    seen = {tu_path.resolve()}
+    appended: list[str] = []
+
+    def append_local_includes(current_path: Path, current_text: str, depth: int) -> None:
+        if depth >= 2:
+            return
+        source_roots = [
+            current_path.parent,
+            repo,
+            repo / "src",
+            repo / "include",
+            repo / "extern/dolphin/include",
+            repo / "extern/dolphin/src",
+            repo / "src/melee",
+            repo / "src/sysdolphin",
+        ]
+        for match in re.finditer(r'(?m)^\s*#\s*include\s+"([^"]+)"', current_text):
+            include_name = match.group(1)
+            include_path = Path(include_name)
+            if include_path.is_absolute():
+                continue
+            resolved = None
+            for root in source_roots:
+                candidate = root / include_path
+                if candidate.exists():
+                    resolved = candidate
+                    break
+            if resolved is None:
+                continue
+            resolved_key = resolved.resolve()
+            if resolved_key in seen:
+                continue
+            seen.add(resolved_key)
+            try:
+                display_path = resolved.relative_to(repo)
+            except ValueError:
+                display_path = resolved
+            include_text = resolved.read_text(encoding="utf-8", errors="replace")
+            appended.append(f"\n/* local include: {display_path} */\n")
+            appended.append(include_text)
+            if not include_text.endswith("\n"):
+                appended.append("\n")
+            append_local_includes(resolved, include_text, depth + 1)
+
+    append_local_includes(tu_path, text, 0)
+
+    return text + "".join(appended)
+
+
+def _candidate_matches_resolved_roots(
+    candidate: StructIdentityCandidate,
+    rows: list[dict],
+) -> bool:
+    for row in rows:
+        source = row.get("base_reg_source")
+        if not isinstance(source, str) or not source.startswith("dataflow:"):
+            continue
+        if candidate.root != source[len("dataflow:") :]:
+            return False
+    return True
+
+
+def _auto_struct_findings_for_function(
+    function: str,
+    candidates: list[StructIdentityCandidate],
+    discrepancies: list[dict],
+    repo: Path,
+    tu_src: str,
+    *,
+    layout_resolver: Callable[[Path, str, str], dict[str, int]] | None = None,
+    layout_cache: dict[str, dict[str, int]] | None = None,
+    base_reg: str | None = None,
+    base_reg_source: str | None = None,
+    base_offset: int | None = None,
+    base_offset_source: str | None = None,
+    traces: dict[str, RegisterTrace | tuple | list] | None = None,
+    trace_snapshots: list[dict[str, RegisterTrace | tuple | list]] | None = None,
+    ref_traces: dict[str, RegisterTrace | tuple | list] | None = None,
+    ref_trace_snapshots: list[dict[str, RegisterTrace | tuple | list]] | None = None,
+    cur_traces: dict[str, RegisterTrace | tuple | list] | None = None,
+    cur_trace_snapshots: list[dict[str, RegisterTrace | tuple | list]] | None = None,
+) -> tuple[list[dict], list[tuple[str, str]]]:
+    if not candidates:
+        return [], [(function, "auto-struct unresolved: no source candidates")]
+
+    if layout_resolver is None:
+        from ..common import struct_layout
+
+        layout_resolver = struct_layout.resolve_layout
+    if layout_cache is None:
+        layout_cache = {}
+
+    scored: list[tuple[StructIdentityCandidate, list[dict], list[tuple[str, str]]]] = []
+    for candidate in candidates:
+        try:
+            if candidate.struct not in layout_cache:
+                layout_cache[candidate.struct] = layout_resolver(
+                    repo,
+                    candidate.struct,
+                    tu_src,
+                )
+            layout = layout_cache[candidate.struct]
+        except Exception:
+            continue
+
+        rows, row_skipped = _resolve_discrepancy_rows(
+            function,
+            discrepancies,
+            layout,
+            base_reg=base_reg,
+            base_reg_source=base_reg_source,
+            base_offset=base_offset,
+            base_offset_source=base_offset_source,
+            traces=traces,
+            trace_snapshots=trace_snapshots,
+            ref_traces=ref_traces,
+            ref_trace_snapshots=ref_trace_snapshots,
+            cur_traces=cur_traces,
+            cur_trace_snapshots=cur_trace_snapshots,
+        )
+        if not _candidate_matches_resolved_roots(candidate, rows):
+            continue
+
+        findings: list[dict] = []
+        for row in rows:
+            finding = _finding_from_offset_discrepancy(
+                function,
+                row,
+                layout,
+                base_offset=row["base_offset"],
+                base_offset_source=row["base_offset_source"],
+                base_reg=row["base_reg"],
+                base_reg_source=row["base_reg_source"],
+            )
+            if finding is None:
+                continue
+            finding["struct"] = candidate.struct
+            finding["struct_source"] = candidate.evidence
+            findings.append(finding)
+        if findings:
+            scored.append((candidate, findings, row_skipped))
+
+    if not scored:
+        return [], [(function, "auto-struct unresolved: no candidates mapped named fields")]
+
+    best_score = max(len(findings) for _candidate, findings, _skipped in scored)
+    best = [
+        (candidate, findings, skipped)
+        for candidate, findings, skipped in scored
+        if len(findings) == best_score
+    ]
+    if len(best) != 1:
+        names = ", ".join(sorted(candidate.struct for candidate, _findings, _skipped in best))
+        return [], [(function, f"auto-struct ambiguous: {names}")]
+
+    _candidate, findings, skipped = best[0]
+    return findings, skipped
 
 
 def _normalize_reg(reg: object) -> str:
@@ -786,11 +1305,18 @@ def _resolve_row_from_dataflow(
     else:
         expected_base_offset = ref_trace.offset
         expected_base_offset_source = "asm-dataflow"
+    resolved_base_reg_source = f"dataflow:{cur_trace.root}"
+    if (
+        base_reg_source is not None
+        and base_reg_source not in {"cli", "base-map"}
+        and not base_reg_source.startswith("dataflow:")
+    ):
+        resolved_base_reg_source = base_reg_source
     return (
         _with_resolved_base(
             row,
             base_reg=cur_reg,
-            base_reg_source=base_reg_source or f"dataflow:{cur_trace.root}",
+            base_reg_source=resolved_base_reg_source,
             base_offset=current_base_offset,
             base_offset_source=current_base_offset_source,
             expected_base_offset=expected_base_offset,
@@ -866,6 +1392,111 @@ def _offset_to_field(layout: dict[str, int], offset: int) -> str | None:
         if field_offset == offset:
             return field
     return None
+
+
+def _non_struct_source_shape_reason(
+    row: dict,
+    layout: dict[str, int],
+    *,
+    base_offset: int | None = None,
+) -> str | None:
+    try:
+        cur_disp = _parse_int_literal(row["cur_disp"], "cur_disp")
+        ref_disp = _parse_int_literal(row["ref_disp"], "ref_disp")
+    except (KeyError, ValueError):
+        return None
+
+    cur_field = _offset_to_field(layout, cur_disp)
+    if (
+        base_offset is not None
+        and _offset_to_field(layout, base_offset + cur_disp) is not None
+    ):
+        return None
+    ref_field = _offset_to_field(layout, ref_disp)
+    ref_base = _row_ref_base(row)
+    cur_base = _row_cur_base(row)
+    base_pair = f"{ref_base}->{cur_base}"
+    cur_desc = f"current disp 0x{cur_disp:X} on {cur_base}"
+    ref_desc = f"ref disp 0x{ref_disp:X} on {ref_base}"
+
+    if cur_field is None:
+        return f"non-struct-source-shape: {base_pair}: {cur_desc} is not a named field; {ref_desc}"
+    if ref_field is not None and ref_field != cur_field:
+        return (
+            f"non-struct-source-shape: {base_pair}: {cur_desc} maps to {cur_field}; "
+            f"{ref_desc} maps to {ref_field}"
+        )
+    if ref_field is None and abs(cur_disp - ref_disp) > 0x20:
+        return (
+            f"non-struct-source-shape: {base_pair}: {cur_desc} maps to {cur_field}; "
+            f"{ref_desc} is outside nearby field-layout range"
+        )
+    return None
+
+
+def _final_traces_prove_same_root(
+    row: dict,
+    *,
+    traces: dict[str, RegisterTrace] | None = None,
+    ref_traces: dict[str, RegisterTrace] | None = None,
+    cur_traces: dict[str, RegisterTrace] | None = None,
+) -> bool:
+    cur_map = cur_traces if cur_traces is not None else traces
+    ref_map = ref_traces if ref_traces is not None else traces
+    if not cur_map or not ref_map:
+        return False
+    cur_trace = cur_map.get(_row_cur_base(row))
+    ref_trace = ref_map.get(_row_ref_base(row))
+    return cur_trace is not None and ref_trace is not None and cur_trace.root == ref_trace.root
+
+
+def _mismatched_base_skip_reason(
+    row: dict,
+    layout: dict[str, int],
+    reason: str | None,
+    *,
+    base_offset: int | None = None,
+    traces: dict[str, RegisterTrace] | None = None,
+    ref_traces: dict[str, RegisterTrace] | None = None,
+    cur_traces: dict[str, RegisterTrace] | None = None,
+) -> str:
+    if not _final_traces_prove_same_root(
+        row,
+        traces=traces,
+        ref_traces=ref_traces,
+        cur_traces=cur_traces,
+    ):
+        detail = _non_struct_source_shape_reason(row, layout, base_offset=base_offset)
+        if detail is not None:
+            return detail
+    return f"unresolved mismatched bases {_row_ref_base(row)}->{_row_cur_base(row)}: {reason}"
+
+
+def _has_plausible_layout_fit(
+    rows: list[dict],
+    layout: dict[str, int],
+    *,
+    base_offset: int | None = None,
+) -> bool:
+    def row_matches(row: dict, offset: int) -> bool:
+        cur_disp = _parse_int_literal(row["cur_disp"], "cur_disp")
+        ref_disp = _parse_int_literal(row["ref_disp"], "ref_disp")
+        cur_abs = offset + cur_disp
+        ref_abs = offset + ref_disp
+        cur_field = _offset_to_field(layout, cur_abs)
+        if cur_field is None:
+            return False
+        ref_field = _offset_to_field(layout, ref_abs)
+        return ref_field is not None or abs(cur_abs - ref_abs) <= 0x20
+
+    if base_offset is not None:
+        return any(row_matches(row, base_offset) for row in rows)
+    mapped_offset, mapped_offset_source, candidates = _infer_base_offset_from_layout(layout, rows)
+    if mapped_offset_source in {"zero-default", "ambiguous-layout-fit"}:
+        return False
+    if not candidates:
+        candidates = [mapped_offset]
+    return any(all(row_matches(row, candidate) for row in rows) for candidate in candidates)
 
 
 def _resolve_discrepancy_rows(
@@ -969,7 +1600,16 @@ def _resolve_discrepancy_rows(
                 base_reg_source=base_reg_source or "cli",
             )
             if row is None:
-                skipped.append((function, f"unresolved mismatched bases {_row_ref_base(d)}->{_row_cur_base(d)}: {reason}"))
+                detail = _mismatched_base_skip_reason(
+                    d,
+                    layout,
+                    reason,
+                    base_offset=base_offset,
+                    traces=normalized_traces,
+                    ref_traces=normalized_ref_traces,
+                    cur_traces=normalized_cur_traces,
+                )
+                skipped.append((function, detail))
                 continue
             roots.add(root or "")
             resolved.append(row)
@@ -997,8 +1637,17 @@ def _resolve_discrepancy_rows(
         )
         if row is None:
             if not _same_physical_base(d):
+                detail = _mismatched_base_skip_reason(
+                    d,
+                    layout,
+                    reason,
+                    base_offset=base_offset,
+                    traces=normalized_traces,
+                    ref_traces=normalized_ref_traces,
+                    cur_traces=normalized_cur_traces,
+                )
                 skipped.append(
-                    (function, f"unresolved mismatched bases {_row_ref_base(d)}->{_row_cur_base(d)}: {reason}")
+                    (function, detail)
                 )
             continue
         dataflow_roots.add(root or "")
@@ -1017,6 +1666,29 @@ def _resolve_discrepancy_rows(
 
     reg, reg_source, reason = _infer_base_reg_from_discrepancies(fallback_discrepancies)
     if reg is None:
+        if reason and reason.startswith("ambiguous offset base candidates"):
+            candidate_regs = sorted({_row_cur_base(d) for d in fallback_discrepancies})
+            if any(
+                _has_plausible_layout_fit(
+                    [d for d in fallback_discrepancies if _row_cur_base(d) == candidate],
+                    layout,
+                    base_offset=base_offset,
+                )
+                for candidate in candidate_regs
+            ):
+                return [], [(function, reason)]
+            non_struct_skips: list[tuple[str, str]] = []
+            for d in fallback_discrepancies:
+                detail = _non_struct_source_shape_reason(
+                    d,
+                    layout,
+                    base_offset=base_offset,
+                )
+                if detail is None:
+                    break
+                non_struct_skips.append((function, detail))
+            if len(non_struct_skips) == len(fallback_discrepancies):
+                return [], skipped + non_struct_skips
         return [], [(function, reason or "no base")]
     selected = [d for d in fallback_discrepancies if _row_cur_base(d) == reg]
     if base_offset is None:
@@ -1388,9 +2060,9 @@ def struct_verify_cmd(
         typer.Argument(help="Function name or TU substring (e.g. thp/THPDec)"),
     ],
     struct: Annotated[
-        str,
-        typer.Option("--struct", help="Struct type name"),
-    ],
+        Optional[str],
+        typer.Option("--struct", help="Struct type name; inferred from source when omitted"),
+    ] = None,
     base: Annotated[
         Optional[str],
         typer.Option("--base", help="Base register, e.g. r3 (single function or TU default)"),
@@ -1436,12 +2108,24 @@ def struct_verify_cmd(
 
     repo = get_agent_melee_root()
 
-    # Resolve the layout once (compile probe)
-    try:
-        layout = struct_layout.resolve_layout(repo, struct, tu_src)
-    except Exception as exc:
-        console.print(f"[red]Failed to resolve layout for {struct!r}: {exc}[/red]")
-        raise typer.Exit(1)
+    # Resolve explicit layouts once. In auto mode, candidates are resolved per
+    # inferred struct and cached because each function may identify a different
+    # source-root type.
+    layout: dict[str, int] | None = None
+    auto_layout_cache: dict[str, dict[str, int]] = {}
+    source_text: str | None = None
+    source_read_error: str | None = None
+    if struct is not None:
+        try:
+            layout = struct_layout.resolve_layout(repo, struct, tu_src)
+        except Exception as exc:
+            console.print(f"[red]Failed to resolve layout for {struct!r}: {exc}[/red]")
+            raise typer.Exit(1)
+    else:
+        try:
+            source_text = _read_tu_with_local_includes(repo, tu_src)
+        except Exception as exc:
+            source_read_error = f"auto-struct source read failed: {exc}"
 
     # Load per-function maps if provided. --base-map accepts either
     # {function: "r31"} or {function: {"base": "r31", "offset": "0x20"}}.
@@ -1546,6 +2230,30 @@ def struct_verify_cmd(
             _trace_registers_by_index(ref_lines)
             if ref_lines else (None, None)
         )
+        if layout is None:
+            if source_text is None:
+                skipped.append((fn, source_read_error or "auto-struct source unavailable"))
+                continue
+            auto_findings, auto_skipped = _auto_struct_findings_for_function(
+                fn,
+                _struct_identity_candidates_from_source(source_text, fn),
+                discrepancies,
+                repo,
+                tu_src,
+                layout_cache=auto_layout_cache,
+                base_reg=reg,
+                base_reg_source=reg_source,
+                base_offset=mapped_offset,
+                base_offset_source=mapped_offset_source,
+                ref_traces=ref_traces,
+                ref_trace_snapshots=ref_trace_snapshots,
+                cur_traces=cur_traces,
+                cur_trace_snapshots=cur_trace_snapshots,
+            )
+            findings.extend(auto_findings)
+            skipped.extend(auto_skipped)
+            continue
+
         resolved_rows, row_skipped = _resolve_discrepancy_rows(
             fn,
             discrepancies,
@@ -1582,6 +2290,7 @@ def struct_verify_cmd(
                     )
                 skipped.append((fn, note))
                 continue
+            finding["struct"] = struct
             findings.append(finding)
 
     agg = struct_verify.aggregate(findings)
@@ -1601,26 +2310,35 @@ def struct_verify_cmd(
             else:
                 field = item["field"]
                 expected = item["expected"]
-                try:
-                    header = struct_layout.find_struct_header(repo, struct)
-                    expect_map = _affected_apply_expect_map(layout, field, item["current"], expected)
-                    apply_result = _apply_struct_repair(
-                        header,
-                        field,
-                        current=item["current"],
-                        expected=expected,
-                        verify=lambda candidate_expect: struct_layout.verify_offsets(
-                            repo,
-                            struct,
-                            tu_src,
-                            candidate_expect,
-                        ),
-                        struct_name=struct,
-                        layout=layout,
-                        expect_map=expect_map,
-                    )
-                except Exception as exc:
-                    apply_result = {"status": "failed", "reason": str(exc)}
+                apply_struct = struct or item.get("struct")
+                if apply_struct is None:
+                    apply_result = {"status": "not_applicable", "reason": "struct identity is unresolved"}
+                else:
+                    try:
+                        apply_layout = layout
+                        if apply_layout is None or apply_struct != struct:
+                            apply_layout = auto_layout_cache.get(apply_struct)
+                            if apply_layout is None:
+                                apply_layout = struct_layout.resolve_layout(repo, apply_struct, tu_src)
+                        header = struct_layout.find_struct_header(repo, apply_struct)
+                        expect_map = _affected_apply_expect_map(apply_layout, field, item["current"], expected)
+                        apply_result = _apply_struct_repair(
+                            header,
+                            field,
+                            current=item["current"],
+                            expected=expected,
+                            verify=lambda candidate_expect: struct_layout.verify_offsets(
+                                repo,
+                                apply_struct,
+                                tu_src,
+                                candidate_expect,
+                            ),
+                            struct_name=apply_struct,
+                            layout=apply_layout,
+                            expect_map=expect_map,
+                        )
+                    except Exception as exc:
+                        apply_result = {"status": "failed", "reason": str(exc)}
 
     if as_json:
         import sys

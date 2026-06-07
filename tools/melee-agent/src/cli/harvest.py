@@ -185,7 +185,7 @@ def _print_harvest_preview(preview: dict[str, object]) -> None:
                 f"{_format_preview_facet_entries(facets[field_name])}"
             )
     near_miss = preview.get("near_miss_facets")
-    if counts.get("matching_rows", 0) == 0 and isinstance(near_miss, dict):
+    if isinstance(near_miss, dict) and any(near_miss.values()):
         typer.echo("near misses:")
         for field_name in sorted(near_miss):
             typer.echo(

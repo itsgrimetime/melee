@@ -78,6 +78,7 @@ def run_directed(
     proof_force_phys: dict[int, int] | None = None,
     class_id: int = 0,
     source_file: Any = None,
+    pcdump_timeout: int = 120,
 ) -> dict:
     """Run the directed search layer for *function* in *unit*.
 
@@ -125,6 +126,7 @@ def run_directed(
         proof_force_phys=proof_force_phys,
         class_id=class_id,
         source_file=source_file,
+        pcdump_timeout=pcdump_timeout,
     )
 
 
@@ -467,6 +469,7 @@ def _run_live(
     proof_force_phys: dict[int, int] | None = None,
     class_id: int = 0,
     source_file: Any = None,
+    pcdump_timeout: int = 120,
 ) -> dict:
     """Live run: real mwcc compile + analysis + scoring."""
     import hashlib as _hashlib
@@ -553,6 +556,7 @@ def _run_live(
         target=target,
         store=store,
         compile_spec_factory=_make_spec,
+        timeout=pcdump_timeout,
     )
 
     # Build the DirectedObjective

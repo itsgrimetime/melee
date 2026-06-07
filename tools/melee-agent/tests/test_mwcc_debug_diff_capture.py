@@ -726,3 +726,67 @@ def test_process_group_timeout_kills_descendant_process_groups(
         (5000, signal.SIGKILL),
         (4321, signal.SIGKILL),
     ]
+
+
+def test_process_group_timeout_reports_unreaped_uninterruptible_wibo(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from src.mwcc_debug import diff_capture
+    from src.mwcc_debug.local_safety import LocalWiboProcess
+
+    unblock = threading.Event()
+
+    class FakePipe:
+        def close(self) -> None:
+            unblock.set()
+
+    class FakeProc:
+        pid = 4321
+        returncode = None
+        stdout = FakePipe()
+        stderr = FakePipe()
+
+        def communicate(self, timeout: float):
+            unblock.wait(30)
+            return "", ""
+
+        def wait(self, timeout: int):
+            raise subprocess.TimeoutExpired(["python", "-c", "hang"], timeout)
+
+        def kill(self):
+            pass
+
+    def fake_popen(cmd, cwd, env, stdout, stderr, text, start_new_session):
+        return FakeProc()
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    monkeypatch.setattr(diff_capture, "_kill_process_tree", lambda pid, proc: None)
+    monkeypatch.setattr(
+        diff_capture.local_safety,
+        "scan_local_wibo_processes",
+        lambda: [
+            LocalWiboProcess(
+                pid=4321,
+                ppid=1,
+                stat="UEs",
+                elapsed="10:27",
+                command=(
+                    "wibo mwcceppc_debug.exe "
+                    "-c src/sysdolphin/baselib/particle.c"
+                ),
+                source_rel="src/sysdolphin/baselib/particle.c",
+            )
+        ],
+    )
+
+    with pytest.raises(subprocess.TimeoutExpired) as excinfo:
+        _run_with_process_group_timeout(
+            ["python", "-c", "hang"],
+            cwd=tmp_path,
+            timeout=0.01,
+        )
+
+    assert "unreaped uninterruptible wibo process" in excinfo.value.stderr
+    assert "4321" in excinfo.value.stderr
+    assert "src/sysdolphin/baselib/particle.c" in excinfo.value.stderr

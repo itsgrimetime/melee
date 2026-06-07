@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -47,6 +48,10 @@ HEADER = [
     "decl_order_best_ordering",
     "decl_order_evaluated_status",
     "decl_order_candidate_count",
+    "name_magic_blocker",
+    "name_magic_stop_kind",
+    "name_magic_probe_count",
+    "name_magic_reason",
     "file_path",
     "frame_next_command",
     "next_command",
@@ -193,6 +198,45 @@ def _allocator_triage_payload(
         "unit": unit,
         "targets": targets if targets is not None else [{"from": "r26", "to": "r31"}],
         "results": [{"target": "r26=r31", "status": "ok"}],
+    }
+
+
+def _force_vector_verify_payload(
+    *,
+    union_match: bool = False,
+    probes: list[dict] | None = None,
+) -> dict:
+    return {
+        "ran": True,
+        "probe_count": 1 + len(probes or []),
+        "entries": [
+            {
+                "raw": "class0:ig36:phys=r6",
+                "kind": "force_phys",
+                "class_id": 0,
+                "ig_idx": 36,
+                "phys": 6,
+            }
+        ],
+        "union": {
+            "label": "union",
+            "ordinal": None,
+            "entries": [
+                {
+                    "raw": "class0:ig36:phys=r6",
+                    "kind": "force_phys",
+                    "class_id": 0,
+                    "ig_idx": 36,
+                    "phys": 6,
+                }
+            ],
+            "returncode": 0,
+            "match": union_match,
+            "status": "match" if union_match else "no_match",
+            "stdout_tail": "[diff] MATCH" if union_match else "diff remained",
+            "stderr_tail": "",
+        },
+        "probes": probes or [],
     }
 
 
@@ -916,6 +960,88 @@ def test_summarize_harvest_ledgers_reports_filter_usage(tmp_path: Path) -> None:
     ]
 
 
+def test_summarize_harvest_ledgers_keeps_dry_run_improvements_out_of_retained_source(
+    tmp_path: Path,
+) -> None:
+    ledger = tmp_path / "dry-run-data-symbol.json"
+    ledger.write_text(
+        json.dumps(
+            {
+                "work_bucket": "data-symbol-relocation",
+                "apply": False,
+                "applied_functions": [],
+                "validated_functions": [],
+                "results": [
+                    {
+                        "function": "un_80317A60",
+                        "work_bucket": "data-symbol-relocation",
+                        "status": "improved",
+                        "harness": "name-magic-source-declarations",
+                        "blocker": None,
+                        "candidate_path": "/tmp/un_80317A60.c",
+                        "final_match_percent": 92.4,
+                        "applied": False,
+                    },
+                    {
+                        "function": "fn_801AA854",
+                        "work_bucket": "data-symbol-relocation",
+                        "status": "improved",
+                        "harness": "name-magic-source-declarations",
+                        "blocker": None,
+                        "candidate_path": "/tmp/fn_801AA854.c",
+                        "final_match_percent": 91.2,
+                        "applied": False,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = summarize_harvest_ledgers([ledger])
+
+    assert summary["improved_functions"] == ["fn_801AA854", "un_80317A60"]
+    assert summary["applied_functions"] == []
+    assert summary["validated_functions"] == []
+    assert summary["retained_source_functions"] == []
+    assert summary["suggested_impact"] == "positive-candidate/no-retained-source"
+
+
+def test_summarize_harvest_ledgers_keeps_allocator_diagnostic_matches_out_of_negative_evidence(
+    tmp_path: Path,
+) -> None:
+    ledger = tmp_path / "allocator-diagnostic.json"
+    ledger.write_text(
+        json.dumps(
+            {
+                "work_bucket": "register-allocator",
+                "results": [
+                    {
+                        "function": "ftCo_LightThrowDash_Phys",
+                        "work_bucket": "register-allocator",
+                        "status": "diagnostic_match",
+                        "harness": "allocator-pcdump-triage",
+                        "blocker": "allocator-force-vector-match",
+                    },
+                    {
+                        "function": "un_803147C4",
+                        "work_bucket": "register-allocator",
+                        "status": "no_match",
+                        "harness": "allocator-pcdump-triage",
+                        "blocker": "allocator-force-vector-no-match",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = summarize_harvest_ledgers([ledger])
+
+    assert summary["by_status"] == {"diagnostic_match": 1, "no_match": 1}
+    assert summary["negative_evidence_functions"] == ["un_803147C4"]
+
+
 def test_cli_harvest_summarize_outputs_json_without_running_harnesses(
     tmp_path: Path,
 ) -> None:
@@ -1152,6 +1278,70 @@ def test_load_queue_rows_rejects_unknown_filter_field_even_with_zero_limit(
         )
 
 
+def test_default_runner_uses_process_group_timeout_with_child_watchdog(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[list[str], Path, int, dict[str, str] | None]] = []
+
+    def fake_process_group_runner(cmd, *, cwd, timeout, env=None):
+        calls.append(([str(part) for part in cmd], cwd, timeout, env))
+        return subprocess.CompletedProcess(cmd, 0, "ok", "")
+
+    def fail_subprocess_run(*args, **kwargs):
+        raise AssertionError("harvest runner must use process-group timeout")
+
+    monkeypatch.setattr(
+        harvest_module,
+        "_run_with_process_group_timeout",
+        fake_process_group_runner,
+        raising=False,
+    )
+    monkeypatch.setattr(harvest_module.subprocess, "run", fail_subprocess_run)
+
+    result = harvest_module._default_runner(
+        ["debug", "dump", "local", "src/sysdolphin/baselib/particle.c"],
+        cwd=tmp_path,
+        timeout=45,
+    )
+
+    assert result.returncode == 0
+    assert calls[0][0][:3] == [sys.executable, "-m", "src.cli"]
+    assert calls[0][2] == 75
+    assert calls[0][3] is not None
+    assert float(calls[0][3]["MWCC_DEBUG_HANG_TIMEOUT"]) < 45
+
+
+def test_default_runner_converts_timeout_to_process_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def fake_process_group_runner(cmd, *, cwd, timeout, env=None):
+        raise subprocess.TimeoutExpired(
+            cmd,
+            timeout,
+            output="partial stdout",
+            stderr="unsafe local pcdump lane",
+        )
+
+    monkeypatch.setattr(
+        harvest_module,
+        "_run_with_process_group_timeout",
+        fake_process_group_runner,
+        raising=False,
+    )
+
+    result = harvest_module._default_runner(
+        ["debug", "dump", "local", "src/sysdolphin/baselib/particle.c"],
+        cwd=tmp_path,
+        timeout=45,
+    )
+
+    assert result.returncode == 124
+    assert result.stdout == "partial stdout"
+    assert "unsafe local pcdump lane" in result.stderr
+
+
 def test_preview_harvest_queue_counts_facets_and_sample_before_limit(
     tmp_path: Path,
 ) -> None:
@@ -1218,6 +1408,417 @@ def test_preview_harvest_queue_counts_facets_and_sample_before_limit(
     assert preview["sample"][0]["next_command"] == (
         "melee-agent extract get first_match"
     )
+
+
+def test_preview_harvest_queue_facets_name_magic_blocker(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    blocked = _name_magic_row("blocked_fn", primary="data-symbol-or-relocation")
+    blocked["source_actionability"] = (
+        "blocked-data-symbol-no-name-magic-candidate"
+    )
+    blocked["name_magic_blocker"] = "no-name-magic-candidate"
+    blocked["name_magic_stop_kind"] = "blocked"
+    blocked["name_magic_probe_count"] = "0"
+    blocked["name_magic_reason"] = "no source-addressable relocation pair"
+    ready = _name_magic_row("ready_fn", primary="data-symbol-or-relocation")
+    ready["name_magic_probe_count"] = "1"
+    _write_queue(queue, [blocked, ready])
+
+    preview = preview_harvest_queue(
+        queue,
+        work_bucket="data-symbol-relocation",
+        repo_root=repo_root,
+        filters=HarvestFilters(
+            where={"source_actionability": ("current-tools-data-symbol",)}
+        ),
+    )
+
+    assert preview["counts"]["matching_rows"] == 1
+    assert [row["function"] for row in preview["sample"]] == ["ready_fn"]
+    assert preview["near_miss_facets"]["name_magic_blocker"] == [
+        {"value": "no-name-magic-candidate", "count": 1}
+    ]
+
+
+def test_indexed_malformed_rebucket_ledgers_are_applied_to_queue_preview(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "indexed-struct-pointer.tsv"
+    malformed = _row(
+        "malformed_fn",
+        headline_tool="source-shape",
+        source_actionability="current-tools-indexed-pointer",
+        frame_closability_tier="",
+    )
+    malformed["primary"] = "indexed-struct-pointer-materialization"
+    ready = _row(
+        "ready_fn",
+        headline_tool="source-shape",
+        source_actionability="current-tools-indexed-pointer",
+        frame_closability_tier="",
+    )
+    ready["primary"] = "indexed-struct-pointer-materialization"
+    _write_queue(queue, [malformed, ready])
+    ledger_dir = repo_root / "build" / "harvest"
+    ledger_dir.mkdir(parents=True)
+    (ledger_dir / "indexed-ledger.json").write_text(
+        json.dumps(
+            {
+                "work_bucket": "indexed-struct-pointer",
+                "results": [
+                    {
+                        "function": "malformed_fn",
+                        "work_bucket": "indexed-struct-pointer",
+                        "source_actionability": "candidate-generation-fidelity",
+                        "blocker": "malformed-source-candidate",
+                        "details": {
+                            "source_actionability_rebucket": {
+                                "from": "current-tools-indexed-pointer",
+                                "to": "candidate-generation-fidelity",
+                                "remove_from": "current-tools-indexed-pointer",
+                                "blocker": "malformed-source-candidate",
+                                "reason": (
+                                    "candidate pcdump omitted the requested "
+                                    "function"
+                                ),
+                            }
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    current_rows = load_queue_rows(
+        queue,
+        work_bucket="indexed-struct-pointer",
+        repo_root=repo_root,
+        filters=HarvestFilters(
+            where={"source_actionability": ("current-tools-indexed-pointer",)}
+        ),
+    )
+    all_rows = load_queue_rows(
+        queue,
+        work_bucket="indexed-struct-pointer",
+        repo_root=repo_root,
+    )
+    preview = preview_harvest_queue(
+        queue,
+        work_bucket="indexed-struct-pointer",
+        repo_root=repo_root,
+        filters=HarvestFilters(
+            where={"source_actionability": ("current-tools-indexed-pointer",)}
+        ),
+    )
+
+    assert [row.function for row in current_rows] == ["ready_fn"]
+    assert [row.source_actionability for row in all_rows] == [
+        "candidate-generation-fidelity",
+        "current-tools-indexed-pointer",
+    ]
+    assert select_harness(all_rows[0]) is None
+    assert preview["counts"]["matching_rows"] == 1
+    assert [row["function"] for row in preview["sample"]] == ["ready_fn"]
+    assert preview["near_miss_facets"]["source_actionability"] == [
+        {"value": "candidate-generation-fidelity", "count": 1}
+    ]
+
+
+def test_data_symbol_no_name_magic_rebucket_ledgers_are_applied_to_queue_preview(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    exhausted = _name_magic_row("exhausted_fn", primary="data-symbol-relocation")
+    ready = _name_magic_row("ready_fn", primary="data-symbol-relocation")
+    _write_queue(queue, [exhausted, ready])
+    ledger_dir = repo_root / "build" / "harvest"
+    ledger_dir.mkdir(parents=True)
+    (ledger_dir / "data-symbol-ledger.json").write_text(
+        json.dumps(
+            {
+                "work_bucket": "data-symbol-relocation",
+                "results": [
+                    {
+                        "function": "exhausted_fn",
+                        "work_bucket": "data-symbol-relocation",
+                        "source_actionability": (
+                            "blocked-data-symbol-no-name-magic-candidate"
+                        ),
+                        "blocker": "no-name-magic-candidate",
+                        "details": {
+                            "source_actionability_rebucket": {
+                                "from": "current-tools-data-symbol",
+                                "to": (
+                                    "blocked-data-symbol-no-name-magic-candidate"
+                                ),
+                                "remove_from": "current-tools-data-symbol",
+                                "blocker": "no-name-magic-candidate",
+                                "reason": (
+                                    "no scored source candidate reached a true "
+                                    "--no-name-magic match"
+                                ),
+                            }
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    current_rows = load_queue_rows(
+        queue,
+        work_bucket="data-symbol-relocation",
+        repo_root=repo_root,
+        filters=HarvestFilters(
+            where={"source_actionability": ("current-tools-data-symbol",)}
+        ),
+    )
+    all_rows = load_queue_rows(
+        queue,
+        work_bucket="data-symbol-relocation",
+        repo_root=repo_root,
+    )
+    preview = preview_harvest_queue(
+        queue,
+        work_bucket="data-symbol-relocation",
+        repo_root=repo_root,
+        filters=HarvestFilters(
+            where={"source_actionability": ("current-tools-data-symbol",)}
+        ),
+    )
+
+    assert [row.function for row in current_rows] == ["ready_fn"]
+    assert [row.source_actionability for row in all_rows] == [
+        "blocked-data-symbol-no-name-magic-candidate",
+        "current-tools-data-symbol",
+    ]
+    assert select_harness(all_rows[0]) is None
+    assert preview["counts"]["matching_rows"] == 1
+    assert [row["function"] for row in preview["sample"]] == ["ready_fn"]
+    assert preview["near_miss_facets"]["source_actionability"] == [
+        {"value": "blocked-data-symbol-no-name-magic-candidate", "count": 1}
+    ]
+
+
+def test_data_symbol_no_name_magic_rebucket_fingerprint_mismatch_keeps_row_current(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    exhausted = _name_magic_row("exhausted_fn", primary="data-symbol-relocation")
+    ready = _name_magic_row("ready_fn", primary="data-symbol-relocation")
+    _write_queue(queue, [exhausted, ready])
+    ledger_dir = repo_root / "build" / "harvest"
+    ledger_dir.mkdir(parents=True)
+    (ledger_dir / "data-symbol-ledger.json").write_text(
+        json.dumps(
+            {
+                "work_bucket": "data-symbol-relocation",
+                "results": [
+                    {
+                        "function": "exhausted_fn",
+                        "work_bucket": "data-symbol-relocation",
+                        "source_actionability": (
+                            "blocked-data-symbol-no-name-magic-candidate"
+                        ),
+                        "blocker": "no-name-magic-candidate",
+                        "details": {
+                            "source_actionability_rebucket": {
+                                "from": "current-tools-data-symbol",
+                                "to": (
+                                    "blocked-data-symbol-no-name-magic-candidate"
+                                ),
+                                "remove_from": "current-tools-data-symbol",
+                                "blocker": "no-name-magic-candidate",
+                                "reason": "stale name-magic evidence",
+                                "fingerprint": {
+                                    "source_sha256": "stale-source",
+                                    "taxonomy_sha256": "stale-taxonomy",
+                                },
+                            }
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    current_rows = load_queue_rows(
+        queue,
+        work_bucket="data-symbol-relocation",
+        repo_root=repo_root,
+        filters=HarvestFilters(
+            where={"source_actionability": ("current-tools-data-symbol",)}
+        ),
+    )
+    preview = preview_harvest_queue(
+        queue,
+        work_bucket="data-symbol-relocation",
+        repo_root=repo_root,
+        filters=HarvestFilters(
+            where={"source_actionability": ("current-tools-data-symbol",)}
+        ),
+    )
+
+    assert [row.function for row in current_rows] == ["exhausted_fn", "ready_fn"]
+    assert [select_harness(row) for row in current_rows] == [
+        "name-magic-source-declarations",
+        "name-magic-source-declarations",
+    ]
+    assert preview["counts"]["matching_rows"] == 2
+
+
+def test_data_symbol_no_name_magic_rebucket_matching_fingerprint_applies_to_preview(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    exhausted = _name_magic_row("exhausted_fn", primary="data-symbol-relocation")
+    ready = _name_magic_row("ready_fn", primary="data-symbol-relocation")
+    _write_queue(queue, [exhausted, ready])
+
+    initial = run_harvest(
+        "data-symbol-relocation",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=_json_runner(
+            {
+                "blocker": "no-name-magic-candidate",
+                "stop_condition": {
+                    "kind": "unvalidated",
+                    "blocker": "no-name-magic-candidate",
+                    "reason": (
+                        "no source candidate reached a true --no-name-magic match"
+                    ),
+                },
+                "variants": [
+                    {
+                        "status": "ok",
+                        "source_retained": str(tmp_path / "candidate.c"),
+                        "final_match_percent": 100.0,
+                        "no_name_magic_match": False,
+                    }
+                ],
+            }
+        )[1],
+        limit=1,
+    )
+    ledger_dir = repo_root / "build" / "harvest"
+    ledger_dir.mkdir(parents=True)
+    (ledger_dir / "data-symbol-ledger.json").write_text(
+        json.dumps(initial),
+        encoding="utf-8",
+    )
+
+    current_rows = load_queue_rows(
+        queue,
+        work_bucket="data-symbol-relocation",
+        repo_root=repo_root,
+        filters=HarvestFilters(
+            where={"source_actionability": ("current-tools-data-symbol",)}
+        ),
+    )
+    preview = preview_harvest_queue(
+        queue,
+        work_bucket="data-symbol-relocation",
+        repo_root=repo_root,
+        filters=HarvestFilters(
+            where={"source_actionability": ("current-tools-data-symbol",)}
+        ),
+    )
+
+    assert initial["results"][0]["function"] == "exhausted_fn"
+    assert (
+        initial["results"][0]["source_actionability"]
+        == "blocked-data-symbol-no-name-magic-candidate"
+    )
+    assert [row.function for row in current_rows] == ["ready_fn"]
+    assert preview["counts"]["matching_rows"] == 1
+    assert [row["function"] for row in preview["sample"]] == ["ready_fn"]
+
+
+@pytest.mark.parametrize(
+    "source_actionability",
+    [
+        "blocked-data-symbol-no-name-magic-candidate",
+        "blocked-data-symbol-unsupported-source-site",
+        "blocked-data-symbol-ambiguous-relocation-pair",
+        "blocked-data-symbol-unsupported-reloc-kind",
+        "blocked-data-symbol-raw-diff-no-supported-data-symbol-pair",
+        "blocked-data-symbol-no-name-magic-validation-failed",
+        "blocked-data-symbol-ambiguous-sdata2-value",
+        "blocked-data-symbol-sdata2-pool-order-dependent",
+    ],
+)
+def test_blocked_data_symbol_rows_do_not_select_name_magic_harness(
+    source_actionability: str,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    row = _name_magic_row("blocked_fn", primary="data-symbol-or-relocation")
+    row["source_actionability"] = source_actionability
+    row["name_magic_blocker"] = source_actionability.removeprefix(
+        "blocked-data-symbol-"
+    )
+    _write_queue(queue, [row])
+
+    rows = load_queue_rows(
+        queue,
+        work_bucket="data-symbol-relocation",
+        repo_root=repo_root,
+    )
+
+    assert select_harness(rows[0]) is None
+    assert harvest_module._normalize_layer_sequence(rows[0]) == []
+
+
+def test_blocked_data_symbol_subqueue_rows_do_not_compose_name_magic(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "data-symbol-relocation.no-name-magic-candidate.tsv"
+    row = _name_magic_row("blocked_fn", primary="data-symbol-or-relocation")
+    row["source_actionability"] = "blocked-data-symbol-no-name-magic-candidate"
+    row["name_magic_blocker"] = "no-name-magic-candidate"
+    _write_queue(queue, [row])
+
+    rows = load_queue_rows(
+        queue,
+        work_bucket="data-symbol-relocation.no-name-magic-candidate",
+        repo_root=repo_root,
+    )
+
+    assert select_harness(rows[0]) is None
+    assert harvest_module._normalize_layer_sequence(rows[0]) == []
+
+
+def test_blocked_data_symbol_target_map_can_explicitly_select_harness(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    row = _name_magic_row("blocked_fn", primary="data-symbol-or-relocation")
+    row["source_actionability"] = "blocked-data-symbol-no-name-magic-candidate"
+    row["name_magic_blocker"] = "no-name-magic-candidate"
+    _write_queue(queue, [row])
+
+    rows = load_queue_rows(
+        queue,
+        work_bucket="data-symbol-relocation",
+        repo_root=repo_root,
+        target_map={"blocked_fn": {"harness": "name-magic-source-declarations"}},
+    )
+
+    assert select_harness(rows[0]) == "name-magic-source-declarations"
 
 
 def test_preview_harvest_queue_zero_match_reports_near_miss_facets(
@@ -1745,6 +2346,288 @@ def test_run_harvest_prefetches_lifetime_layout_source_probe_pcdumps(
     assert ledger["preflight"]["pcdump"]["generated_units"] == ["melee/demo"]
 
 
+def test_run_harvest_prefetches_indexed_struct_compile_probe_pcdumps(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path, "melee/demo.c")
+    queue = tmp_path / "queues" / "indexed-struct-pointer.tsv"
+    row = _row(
+        "demo_fn",
+        file_path="melee/demo.c",
+        headline_tool="source-shape",
+        source_actionability="current-tools-indexed-pointer",
+        frame_closability_tier="",
+    )
+    row["primary"] = "indexed-struct-pointer-materialization"
+    _write_queue(queue, [row])
+    lookups: list[str] = []
+
+    def fake_lookup(repo: Path, unit: str):
+        lookups.append(unit)
+        return None
+
+    monkeypatch.setattr(harvest_module.pcdump_cache, "lookup", fake_lookup)
+    calls: list[list[str]] = []
+
+    def runner(args: list[str], *, cwd: Path, timeout: int) -> HarnessProcessResult:
+        calls.append(args)
+        if args[:2] == ["debug", "dump"]:
+            return HarnessProcessResult(args, 0, "", "")
+        return HarnessProcessResult(args, 0, json.dumps({"variants": []}), "")
+
+    ledger = run_harvest(
+        "indexed-struct-pointer",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    assert calls[:2] == [
+        ["debug", "dump", "setup"],
+        [
+            "debug",
+            "dump",
+            "local",
+            str(repo_root / "src" / "melee" / "demo.c"),
+            "--function",
+            "demo_fn",
+        ],
+    ]
+    assert calls[2][:3] == ["debug", "mutate", "indexed-struct-search"]
+    assert lookups == ["melee/demo"]
+    assert ledger["preflight"]["pcdump"]["required_units"] == ["melee/demo"]
+    assert ledger["preflight"]["pcdump"]["generated_units"] == ["melee/demo"]
+
+
+def test_run_harvest_blocks_unsafe_indexed_pcdump_lane(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from src.mwcc_debug.local_safety import LocalWiboProcess
+
+    repo_root = _repo_with_source(tmp_path, "sysdolphin/baselib/particle.c")
+    queue = tmp_path / "queues" / "indexed-struct-pointer.tsv"
+    row = _row(
+        "hsd_80391AC8",
+        file_path="sysdolphin/baselib/particle.c",
+        headline_tool="source-shape",
+        source_actionability="current-tools-indexed-pointer",
+        frame_closability_tier="",
+    )
+    row["primary"] = "indexed-struct-pointer-materialization"
+    _write_queue(queue, [row])
+    unsafe = LocalWiboProcess(
+        pid=80283,
+        ppid=1,
+        stat="UEs",
+        elapsed="10:27",
+        command=(
+            "wibo mwcceppc_debug.exe "
+            "-c src/sysdolphin/baselib/particle.c"
+        ),
+        source_rel="src/sysdolphin/baselib/particle.c",
+    )
+    monkeypatch.setattr(harvest_module.pcdump_cache, "lookup", lambda _repo, _unit: None)
+    monkeypatch.setattr(
+        harvest_module.local_safety,
+        "scan_local_wibo_processes",
+        lambda: [unsafe],
+    )
+    calls: list[list[str]] = []
+
+    def runner(args: list[str], *, cwd: Path, timeout: int) -> HarnessProcessResult:
+        calls.append(args)
+        return HarnessProcessResult(args, 0, json.dumps({"variants": []}), "")
+
+    ledger = run_harvest(
+        "indexed-struct-pointer",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    assert calls == []
+    assert ledger["preflight"]["pcdump"]["unsafe_units"] == [
+        "sysdolphin/baselib/particle"
+    ]
+    assert ledger["preflight"]["pcdump"]["unsafe_processes"][0]["pid"] == 80283
+    result = ledger["results"][0]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "unsafe-local-pcdump-lane"
+    assert result["harness"] == "indexed-struct-search"
+    assert "uninterruptible wibo" in result["reason"]
+
+
+def test_run_harvest_marks_dump_local_unsafe_returncode_before_scoring(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path, "sysdolphin/baselib/particle.c")
+    queue = tmp_path / "queues" / "indexed-struct-pointer.tsv"
+    row = _row(
+        "hsd_80391AC8",
+        file_path="sysdolphin/baselib/particle.c",
+        headline_tool="source-shape",
+        source_actionability="current-tools-indexed-pointer",
+        frame_closability_tier="",
+    )
+    row["primary"] = "indexed-struct-pointer-materialization"
+    _write_queue(queue, [row])
+    monkeypatch.setattr(harvest_module.pcdump_cache, "lookup", lambda _repo, _unit: None)
+    monkeypatch.setattr(
+        harvest_module.local_safety,
+        "scan_local_wibo_processes",
+        lambda: [],
+    )
+    calls: list[list[str]] = []
+
+    def runner(args: list[str], *, cwd: Path, timeout: int) -> HarnessProcessResult:
+        calls.append(args)
+        if args == ["debug", "dump", "setup"]:
+            return HarnessProcessResult(args, 0, "", "")
+        if args[:3] == ["debug", "dump", "local"]:
+            return HarnessProcessResult(
+                args,
+                125,
+                "",
+                (
+                    "unsafe local pcdump lane for hsd_80391AC8: "
+                    "existing uninterruptible wibo process"
+                ),
+            )
+        raise AssertionError(f"candidate scoring should be skipped: {args}")
+
+    ledger = run_harvest(
+        "indexed-struct-pointer",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    assert [call[:3] for call in calls] == [
+        ["debug", "dump", "setup"],
+        ["debug", "dump", "local"],
+    ]
+    assert ledger["preflight"]["pcdump"]["unsafe_units"] == [
+        "sysdolphin/baselib/particle"
+    ]
+    result = ledger["results"][0]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "unsafe-local-pcdump-lane"
+
+
+def test_run_harvest_does_not_overblock_same_unit_without_pcdump_preflight(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from src.mwcc_debug.local_safety import LocalWiboProcess
+
+    repo_root = _repo_with_source(tmp_path, "sysdolphin/baselib/particle.c")
+    queue = tmp_path / "queues" / "inline-boundary.tsv"
+    row = _row(
+        "hsd_80391AC8",
+        file_path="sysdolphin/baselib/particle.c",
+        headline_tool="patterns-inlines",
+        source_actionability="manual-inline-guidance",
+        frame_closability_tier="",
+    )
+    row["primary"] = "missing-reference-call-current-inlined"
+    _write_queue(queue, [row])
+    unsafe = LocalWiboProcess(
+        pid=80283,
+        ppid=1,
+        stat="UEs",
+        elapsed="10:27",
+        command=(
+            "wibo mwcceppc_debug.exe "
+            "-c src/sysdolphin/baselib/particle.c"
+        ),
+        source_rel="src/sysdolphin/baselib/particle.c",
+    )
+    monkeypatch.setattr(
+        harvest_module.local_safety,
+        "scan_local_wibo_processes",
+        lambda: [unsafe],
+    )
+
+    ledger = run_harvest(
+        "inline-boundary",
+        repo_root=repo_root,
+        queue_path=queue,
+    )
+
+    assert ledger["preflight"]["pcdump"]["enabled"] is False
+    assert ledger["results"][0]["blocker"] == "unsupported-harness"
+
+
+def test_indexed_struct_pcdump_setup_failure_stops_before_compile_probe_scoring(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path, "melee/demo.c")
+    queue = tmp_path / "queues" / "indexed-struct-pointer.tsv"
+    row = _row(
+        "demo_fn",
+        file_path="melee/demo.c",
+        headline_tool="source-shape",
+        source_actionability="current-tools-indexed-pointer",
+        frame_closability_tier="",
+    )
+    row["primary"] = "indexed-struct-pointer-materialization"
+    _write_queue(queue, [row])
+    monkeypatch.setattr(harvest_module.pcdump_cache, "lookup", lambda _repo, _unit: None)
+
+    def runner(args: list[str], *, cwd: Path, timeout: int) -> HarnessProcessResult:
+        if args == ["debug", "dump", "setup"]:
+            return HarnessProcessResult(args, 7, "", "missing mwcceppc_debug.exe")
+        raise AssertionError(f"unexpected command after setup failure: {args}")
+
+    with pytest.raises(ValueError, match="pcdump preflight setup failed"):
+        run_harvest(
+            "indexed-struct-pointer",
+            repo_root=repo_root,
+            queue_path=queue,
+            runner=runner,
+        )
+
+
+def test_indexed_struct_preflight_runs_setup_when_cache_is_fresh(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path, "melee/demo.c")
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    queue = tmp_path / "queues" / "indexed-struct-pointer.tsv"
+    row = _row(
+        "demo_fn",
+        file_path="melee/demo.c",
+        headline_tool="source-shape",
+        source_actionability="current-tools-indexed-pointer",
+        frame_closability_tier="",
+    )
+    row["primary"] = "indexed-struct-pointer-materialization"
+    _write_queue(queue, [row])
+    calls: list[list[str]] = []
+
+    def runner(args: list[str], *, cwd: Path, timeout: int) -> HarnessProcessResult:
+        calls.append(args)
+        return HarnessProcessResult(args, 0, json.dumps({"variants": []}), "")
+
+    ledger = run_harvest(
+        "indexed-struct-pointer",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    assert calls[0] == ["debug", "dump", "setup"]
+    assert all(call[:3] != ["debug", "dump", "local"] for call in calls)
+    assert calls[1][:3] == ["debug", "mutate", "indexed-struct-search"]
+    assert ledger["preflight"]["pcdump"]["fresh_units"] == ["melee/demo"]
+    assert ledger["preflight"]["pcdump"]["setup_command"]["returncode"] == 0
+
+
 def test_run_harvest_skips_pcdump_preflight_when_frame_transform_cache_is_fresh(
     monkeypatch,
     tmp_path: Path,
@@ -1836,6 +2719,88 @@ def test_run_harvest_refreshes_stale_frame_transform_pcdumps(
     ]
     assert ledger["preflight"]["pcdump"]["stale_units"] == ["melee/demo"]
     assert ledger["preflight"]["pcdump"]["generated_units"] == ["melee/demo"]
+
+
+def test_run_harvest_pcdump_preflight_accepts_cache_written_before_dump_failure(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(
+        queue,
+        [_row("demo_fn", source_actionability="current-tools")],
+    )
+    cache_path = repo_root / "build" / "mwcc_debug_cache" / "melee" / "demo.txt"
+    lookups: list[str] = []
+
+    def fake_lookup(repo: Path, unit: str):
+        lookups.append(unit)
+        if len(lookups) == 1:
+            return None
+        return harvest_module.pcdump_cache.CacheEntry(
+            path=cache_path,
+            source_path=repo_root / "src" / "melee" / "demo.c",
+            fresh=True,
+        )
+
+    monkeypatch.setattr(harvest_module.pcdump_cache, "lookup", fake_lookup)
+    calls: list[list[str]] = []
+
+    def runner(args: list[str], *, cwd: Path, timeout: int) -> HarnessProcessResult:
+        calls.append(args)
+        if args == ["debug", "dump", "setup"]:
+            return HarnessProcessResult(args, 0, "", "")
+        if args[:3] == ["debug", "dump", "local"]:
+            return HarnessProcessResult(args, 3, "wrote cache then failed", "wibo UE")
+        return HarnessProcessResult(args, 0, json.dumps({"variants": []}), "")
+
+    ledger = run_harvest(
+        "stack-local-layout",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    assert calls[-1][:3] == ["debug", "mutate", "frame-transform-search"]
+    assert lookups == ["melee/demo", "melee/demo"]
+    assert ledger["preflight"]["pcdump"]["generated_units"] == ["melee/demo"]
+    assert ledger["preflight"]["pcdump"]["failed_units"] == []
+
+
+def test_run_harvest_pcdump_preflight_records_dump_failure_and_continues(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(
+        queue,
+        [_row("demo_fn", source_actionability="current-tools")],
+    )
+    monkeypatch.setattr(harvest_module.pcdump_cache, "lookup", lambda _repo, _unit: None)
+    calls: list[list[str]] = []
+
+    def runner(args: list[str], *, cwd: Path, timeout: int) -> HarnessProcessResult:
+        calls.append(args)
+        if args == ["debug", "dump", "setup"]:
+            return HarnessProcessResult(args, 0, "", "")
+        if args[:3] == ["debug", "dump", "local"]:
+            return HarnessProcessResult(args, 3, "", "wibo stayed UE")
+        return HarnessProcessResult(args, 0, json.dumps({"variants": []}), "")
+
+    ledger = run_harvest(
+        "stack-local-layout",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    assert calls[-1][:3] == ["debug", "mutate", "frame-transform-search"]
+    assert ledger["preflight"]["pcdump"]["generated_units"] == []
+    assert ledger["preflight"]["pcdump"]["failed_units"] == ["melee/demo"]
+    assert ledger["preflight"]["pcdump"]["dump_failures"][0]["unit"] == "melee/demo"
+    assert "wibo stayed UE" in ledger["preflight"]["pcdump"]["dump_failures"][0]["stderr"]
 
 
 def test_run_harvest_does_not_prefetch_non_current_tools_frame_transform_rows(
@@ -2035,6 +3000,8 @@ def test_allocator_pcdump_triage_builds_match_iter_first_command(
             "demo_fn",
             "--regs",
             "gpr-callee,gpr-volatile,r0",
+            "--force-vector",
+            "auto",
             "--json",
         ]
     ]
@@ -2107,6 +3074,8 @@ def test_run_harvest_prefetches_allocator_pcdump_triage(
             function,
             "--regs",
             "gpr-callee,gpr-volatile,r0",
+            "--force-vector",
+            "auto",
             "--json",
         ]
         for function in ("demo_fn", "demo_fn_2", "other_fn")
@@ -2160,6 +3129,391 @@ def test_allocator_pcdump_triage_records_target_vector_blocker(
     )
     assert "needs-move summary" in result["reason"]
     assert "needs-move next step" in result["reason"]
+
+
+def test_allocator_pcdump_triage_records_force_vector_diagnostic_match(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("demo_fn")])
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    payload = _allocator_triage_payload()
+    payload["force_vector_verify"] = _force_vector_verify_payload(union_match=True)
+    _, runner = _json_runner(payload)
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "diagnostic_match"
+    assert result["blocker"] == "allocator-force-vector-match"
+    assert result["candidate_path"] is None
+    assert result["details"]["force_vector_verify"] == payload["force_vector_verify"]
+    assert result["details"]["force_vector_matched_probes"] == [
+        {
+            "label": "union",
+            "ordinal": None,
+            "status": "match",
+            "entries": payload["force_vector_verify"]["union"]["entries"],
+        }
+    ]
+    assert result["details"]["source_transform_hint"]["kind"] == (
+        "allocator-force-vector-match"
+    )
+    assert result["details"]["source_transform_hint"]["matched_probe_labels"] == [
+        "union"
+    ]
+    assert "force-vector union matched" in result["reason"]
+
+
+def test_allocator_pcdump_triage_records_singleton_force_vector_diagnostic_match(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("demo_fn")])
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    singleton = {
+        "label": "single[1]",
+        "ordinal": 1,
+        "entries": [
+            {
+                "raw": "class0:ig36:phys=r6",
+                "kind": "force_phys",
+                "class_id": 0,
+                "ig_idx": 36,
+                "phys": 6,
+            }
+        ],
+        "returncode": 0,
+        "match": True,
+        "status": "match",
+        "stdout_tail": "[diff] MATCH",
+        "stderr_tail": "",
+    }
+    payload = _allocator_triage_payload()
+    payload["force_vector_verify"] = _force_vector_verify_payload(
+        union_match=False,
+        probes=[singleton],
+    )
+    _, runner = _json_runner(payload)
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "diagnostic_match"
+    assert result["blocker"] == "allocator-force-vector-match"
+    assert result["details"]["force_vector_matched_probes"] == [
+        {
+            "label": "single[1]",
+            "ordinal": 1,
+            "status": "match",
+            "entries": singleton["entries"],
+        }
+    ]
+    assert result["details"]["source_transform_hint"]["matched_probe_labels"] == [
+        "single[1]"
+    ]
+
+
+def test_allocator_pcdump_triage_records_force_vector_no_match_evidence(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("demo_fn")])
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    payload = _allocator_triage_payload()
+    payload["force_vector_verify"] = _force_vector_verify_payload(union_match=False)
+    _, runner = _json_runner(payload)
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "no_match"
+    assert result["blocker"] == "allocator-force-vector-no-match"
+    assert result["details"]["force_vector_verify"] == payload["force_vector_verify"]
+    assert result["details"]["force_vector_matched_probes"] == []
+    assert "no force-vector probe matched" in result["reason"]
+
+
+def test_allocator_force_vector_no_match_rebuckets_already_satisfied(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("demo_fn")])
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    payload = _allocator_triage_payload(status="already-satisfied")
+    payload["force_vector_verify"] = _force_vector_verify_payload(union_match=False)
+    _, runner = _json_runner(payload)
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "no_match"
+    assert result["blocker"] == "allocator-force-vector-no-match"
+    assert result["source_actionability"] == "source-lifetime-callee-save-shape"
+    assert ledger["summary"]["by_tier"] == {
+        "source-lifetime-callee-save-shape": 1
+    }
+    rebucket = result["details"]["source_actionability_rebucket"]
+    assert rebucket["fingerprint"].keys() >= {
+        "source_sha256",
+        "taxonomy_sha256",
+        "row_tool_sha256",
+        "tool_sha256",
+    }
+    assert {key: value for key, value in rebucket.items() if key != "fingerprint"} == {
+        "from": "pcdump-proof-needed",
+        "to": "source-lifetime-callee-save-shape",
+        "remove_from": "pcdump-proof-needed",
+        "blocker": "allocator-force-vector-no-match",
+        "reason": (
+            "force-vector probes did not match and target vector is already "
+            "satisfied; pivot to source lifetime/callee-save shape"
+        ),
+    }
+
+
+def test_allocator_force_vector_no_match_rebuckets_conflict(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("demo_fn")])
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    payload = _allocator_triage_payload(
+        force_vector_conflicts=["r26 conflicts with requested vector"]
+    )
+    payload["force_vector_verify"] = _force_vector_verify_payload(union_match=False)
+    _, runner = _json_runner(payload)
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "no_match"
+    assert result["blocker"] == "allocator-force-vector-no-match"
+    assert result["source_actionability"] == "allocator-target-conflict"
+    rebucket = result["details"]["source_actionability_rebucket"]
+    assert rebucket["fingerprint"].keys() >= {
+        "source_sha256",
+        "taxonomy_sha256",
+        "row_tool_sha256",
+        "tool_sha256",
+    }
+    assert {key: value for key, value in rebucket.items() if key != "fingerprint"} == {
+        "from": "pcdump-proof-needed",
+        "to": "allocator-target-conflict",
+        "remove_from": "pcdump-proof-needed",
+        "blocker": "allocator-force-vector-no-match",
+        "reason": (
+            "force-vector probes did not match and target-vector override "
+            "conflicts or is not runnable"
+        ),
+    }
+
+
+def test_allocator_force_vector_no_match_rebuckets_needs_move_target_vector(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("demo_fn")])
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    payload = _allocator_triage_payload()
+    payload["force_vector_verify"] = _force_vector_verify_payload(union_match=False)
+    _, runner = _json_runner(payload)
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "no_match"
+    assert result["source_actionability"] == "allocator-target-vector"
+    assert result["details"]["source_actionability_rebucket"]["to"] == (
+        "allocator-target-vector"
+    )
+
+
+def test_allocator_force_vector_no_match_rebuckets_non_runnable_conflict(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("demo_fn")])
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    payload = _allocator_triage_payload(force_vector_runnable=False)
+    payload["force_vector_verify"] = _force_vector_verify_payload(union_match=False)
+    _, runner = _json_runner(payload)
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "no_match"
+    assert result["source_actionability"] == "allocator-target-conflict"
+    assert result["details"]["source_actionability_rebucket"]["to"] == (
+        "allocator-target-conflict"
+    )
+
+
+def test_allocator_force_vector_no_match_rebucket_requires_pcdump_proof_lane(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(
+        queue,
+        [_allocator_row("demo_fn", source_actionability="source-probe")],
+    )
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    payload = _allocator_triage_payload(status="already-satisfied")
+    payload["force_vector_verify"] = _force_vector_verify_payload(union_match=False)
+    _, runner = _json_runner(payload)
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "no_match"
+    assert result["source_actionability"] == "source-probe"
+    assert "source_actionability_rebucket" not in result["details"]
+
+
+def test_allocator_force_vector_rebucket_fingerprint_filters_preview(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("answered_fn"), _allocator_row("ready_fn")])
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    payload = _allocator_triage_payload(status="already-satisfied")
+    payload["force_vector_verify"] = _force_vector_verify_payload(union_match=False)
+
+    initial = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=_json_runner(payload)[1],
+        limit=1,
+    )
+    ledger_dir = repo_root / "build" / "harvest"
+    ledger_dir.mkdir(parents=True)
+    (ledger_dir / "register-allocator-ledger.json").write_text(
+        json.dumps(initial),
+        encoding="utf-8",
+    )
+
+    current_rows = load_queue_rows(
+        queue,
+        work_bucket="register-allocator",
+        repo_root=repo_root,
+        filters=HarvestFilters(
+            where={"source_actionability": ("pcdump-proof-needed",)}
+        ),
+    )
+    preview = preview_harvest_queue(
+        queue,
+        work_bucket="register-allocator",
+        repo_root=repo_root,
+        filters=HarvestFilters(
+            where={"source_actionability": ("pcdump-proof-needed",)}
+        ),
+    )
+    all_rows = load_queue_rows(
+        queue,
+        work_bucket="register-allocator",
+        repo_root=repo_root,
+    )
+
+    assert initial["results"][0]["function"] == "answered_fn"
+    assert initial["results"][0]["source_actionability"] == (
+        "source-lifetime-callee-save-shape"
+    )
+    assert [row.function for row in current_rows] == ["ready_fn"]
+    assert [row.source_actionability for row in all_rows] == [
+        "source-lifetime-callee-save-shape",
+        "pcdump-proof-needed",
+    ]
+    assert select_harness(all_rows[0]) is None
+    assert select_harness(all_rows[1]) == "allocator-pcdump-triage"
+    assert preview["counts"]["matching_rows"] == 1
+    assert [row["function"] for row in preview["sample"]] == ["ready_fn"]
+
+
+def test_allocator_pcdump_triage_records_force_vector_verify_failure(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "register-allocator.tsv"
+    _write_queue(queue, [_allocator_row("demo_fn")])
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    payload = _allocator_triage_payload()
+    payload["force_vector_verify"] = _force_vector_verify_payload(union_match=False)
+    payload["force_vector_verify"]["union"]["status"] = "failed"
+    payload["force_vector_verify"]["union"]["returncode"] = 1
+    _, runner = _json_runner(payload)
+
+    ledger = run_harvest(
+        "register-allocator",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "allocator-force-vector-verify-failed"
+    assert result["details"]["force_vector_matched_probes"] == []
+    assert "one or more probes failed" in result["reason"]
 
 
 def test_allocator_pcdump_triage_records_source_lifetime_blocker(
@@ -2468,6 +3822,8 @@ def test_allocator_pcdump_triage_apply_does_not_attempt_source_application(
             "demo_fn",
             "--regs",
             "gpr-callee,gpr-volatile,r0",
+            "--force-vector",
+            "auto",
             "--json",
         ]
     ]
@@ -2804,8 +4160,12 @@ def test_control_flow_harvest_builds_control_flow_search_command(
     assert ledger["results"][0]["status"] == "validated"
 
 
-def test_indexed_struct_harvest_builds_indexed_search_command(tmp_path: Path) -> None:
+def test_indexed_struct_harvest_builds_indexed_search_command(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     repo_root = _repo_with_source(tmp_path)
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
     queue = tmp_path / "queues" / "indexed-struct-pointer.tsv"
     row = _row(
         "demo_fn",
@@ -2834,14 +4194,14 @@ def test_indexed_struct_harvest_builds_indexed_search_command(tmp_path: Path) ->
         runner=runner,
     )
 
-    assert calls[0][:5] == [
+    assert calls[-1][:5] == [
         "debug",
         "mutate",
         "indexed-struct-search",
         "-f",
         "demo_fn",
     ]
-    assert "--score-match-percent" in calls[0]
+    assert "--score-match-percent" in calls[-1]
     assert ledger["results"][0]["harness"] == "indexed-struct-search"
     assert ledger["results"][0]["status"] == "validated"
 
@@ -2998,6 +4358,68 @@ def test_name_magic_gate_requires_no_name_magic_match_true(tmp_path: Path) -> No
     result = ledger["results"][0]
     assert result["status"] == "no_match"
     assert result["blocker"] == "no-name-magic-candidate"
+    assert (
+        result["source_actionability"]
+        == "blocked-data-symbol-no-name-magic-candidate"
+    )
+    assert ledger["summary"]["by_tier"] == {
+        "blocked-data-symbol-no-name-magic-candidate": 1
+    }
+    assert result["details"]["best_candidate"]["no_name_magic_match"] is False
+    rebucket = result["details"]["source_actionability_rebucket"]
+    assert rebucket["fingerprint"].keys() >= {"source_sha256", "taxonomy_sha256"}
+    assert {key: value for key, value in rebucket.items() if key != "fingerprint"} == {
+        "from": "current-tools-data-symbol",
+        "to": "blocked-data-symbol-no-name-magic-candidate",
+        "remove_from": "current-tools-data-symbol",
+        "blocker": "no-name-magic-candidate",
+        "reason": "no scored source candidate reached a true --no-name-magic match",
+    }
+
+
+def test_name_magic_rebucket_scans_past_best_candidate_without_source(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    _write_queue(queue, [_name_magic_row("demo_fn", primary="data-symbol-relocation")])
+    _, runner = _json_runner(
+        {
+            "blocker": "no-name-magic-candidate",
+            "stop_condition": {
+                "kind": "unvalidated",
+                "blocker": "no-name-magic-candidate",
+                "reason": "no source candidate reached a true --no-name-magic match",
+            },
+            "variants": [
+                {
+                    "status": "ok",
+                    "final_match_percent": 100.0,
+                    "no_name_magic_match": False,
+                },
+                {
+                    "status": "ok",
+                    "source_retained": str(tmp_path / "lower-score.c"),
+                    "final_match_percent": 99.5,
+                    "no_name_magic_match": False,
+                },
+            ],
+        }
+    )
+
+    ledger = run_harvest(
+        "data-symbol-relocation",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert (
+        result["source_actionability"]
+        == "blocked-data-symbol-no-name-magic-candidate"
+    )
+    assert "source_actionability_rebucket" in result["details"]
 
 
 def test_name_magic_gate_requires_validated_stop_condition(tmp_path: Path) -> None:
@@ -3033,6 +4455,66 @@ def test_name_magic_gate_requires_validated_stop_condition(tmp_path: Path) -> No
     result = ledger["results"][0]
     assert result["status"] == "no_match"
     assert result["blocker"] == "no-name-magic-candidate"
+    assert result["source_actionability"] == "current-tools-data-symbol"
+    assert "source_actionability_rebucket" not in result["details"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "blocker": "no-name-magic-candidate",
+            "stop_condition": {
+                "kind": "unvalidated",
+                "blocker": "no-name-magic-candidate",
+                "reason": "candidate had no retained source",
+            },
+            "variants": [
+                {
+                    "status": "ok",
+                    "final_match_percent": 100.0,
+                    "no_name_magic_match": False,
+                }
+            ],
+        },
+        {
+            "blocker": "section-anchor-source-fixable-residual",
+            "stop_condition": {
+                "kind": "unvalidated",
+                "blocker": "section-anchor-source-fixable-residual",
+                "reason": "needs section anchor source fix",
+            },
+            "variants": [
+                {
+                    "status": "ok",
+                    "source_retained": "candidate.c",
+                    "final_match_percent": 100.0,
+                    "no_name_magic_match": False,
+                }
+            ],
+        },
+    ],
+)
+def test_name_magic_rebucket_requires_source_emitting_no_name_magic_exhaustion(
+    tmp_path: Path,
+    payload: dict,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    _write_queue(queue, [_name_magic_row("demo_fn", primary="data-symbol-relocation")])
+    _, runner = _json_runner(payload)
+
+    ledger = run_harvest(
+        "data-symbol-relocation",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "no_match"
+    assert result["source_actionability"] == "current-tools-data-symbol"
+    assert "source_actionability_rebucket" not in result["details"]
 
 
 def test_name_magic_propagates_blocked_stop_condition(tmp_path: Path) -> None:
@@ -3065,9 +4547,11 @@ def test_name_magic_propagates_blocked_stop_condition(tmp_path: Path) -> None:
 
 
 def test_compose_dry_run_stops_after_first_candidate_and_records_not_observed(
+    monkeypatch,
     tmp_path: Path,
 ) -> None:
     repo_root = _repo_with_source(tmp_path)
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
     queue = tmp_path / "queues" / "composite.tsv"
     row = _row(
         "demo_fn",
@@ -3118,16 +4602,19 @@ def test_compose_dry_run_stops_after_first_candidate_and_records_not_observed(
     assert result["harness"] == "composed"
     assert result["details"]["stop_reason"] == "dry-run-first-candidate-layer"
     assert result["details"]["not_observed_layers"] == ["frame-transform-search"]
-    assert [call[2] for call in calls] == ["indexed-struct-search"]
+    mutate_calls = [call for call in calls if call[:2] == ["debug", "mutate"]]
+    assert [call[2] for call in mutate_calls] == ["indexed-struct-search"]
 
 
 def test_compose_apply_preserves_sub100_improvement_and_continues_to_match(
+    monkeypatch,
     tmp_path: Path,
 ) -> None:
     repo_root = tmp_path / "repo"
     target = repo_root / "src" / "melee/demo.c"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("int demo_fn(void) {\n    return 1;\n}\n", encoding="utf-8")
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
     indexed_candidate = tmp_path / "indexed.c"
     indexed_candidate.write_text(
         "int demo_fn(void) {\n    return 2;\n}\n",
@@ -3222,7 +4709,8 @@ def test_compose_apply_preserves_sub100_improvement_and_continues_to_match(
     assert result["status"] == "already-matched"
     assert result["harness"] == "composed"
     assert result["details"]["stop_reason"] == "matched-after-layers"
-    assert [call[2] for call in calls] == [
+    mutate_calls = [call for call in calls if call[:2] == ["debug", "mutate"]]
+    assert [call[2] for call in mutate_calls] == [
         "indexed-struct-search",
         "frame-transform-search",
     ]
@@ -3232,6 +4720,187 @@ def test_compose_apply_preserves_sub100_improvement_and_continues_to_match(
     assert target.read_text(encoding="utf-8") == (
         "int demo_fn(void) {\n    return 3;\n}\n"
     )
+
+
+def test_compose_indexed_malformed_source_candidate_rebuckets_top_level(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    queue = tmp_path / "queues" / "composite.tsv"
+    candidate = tmp_path / "indexed-candidate.c"
+    candidate.write_text("int sibling(void) { return 2; }\n", encoding="utf-8")
+    row = _row(
+        "demo_fn",
+        headline_tool="source-shape",
+        source_actionability="current-tools-indexed-pointer",
+        frame_closability_tier="",
+    )
+    row["primary"] = "indexed-struct-pointer-materialization"
+    _write_queue(queue, [row])
+    _, runner = _json_runner(
+        {
+            "blocker": "no-indexed-struct-candidate",
+            "stop_condition": {
+                "kind": "unvalidated",
+                "blocker": "no-indexed-struct-candidate",
+                "reason": "no indexed-struct candidate reached a true 100% match",
+            },
+            "variants": [
+                {
+                    "label": "indexed-struct-pointer-0",
+                    "operator": "indexed-struct-pointer",
+                    "status": "build-failed",
+                    "source_retained": str(candidate),
+                    "error": (
+                        "function 'demo_fn' not found in pcdump; "
+                        "did you mean sibling"
+                    ),
+                }
+            ],
+        }
+    )
+
+    ledger = run_harvest(
+        "composite",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+        match_checker=lambda function, *, cwd, timeout: _match_process(
+            function,
+            match=False,
+            percent=90.0,
+            primary="indexed-struct-pointer-materialization",
+        ),
+        compose=True,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "malformed-source-candidate"
+    assert result["source_actionability"] == "candidate-generation-fidelity"
+    assert ledger["summary"]["by_tier"] == {"candidate-generation-fidelity": 1}
+    assert result["details"]["source_actionability_rebucket"] == {
+        "from": "current-tools-indexed-pointer",
+        "to": "candidate-generation-fidelity",
+        "remove_from": "current-tools-indexed-pointer",
+        "blocker": "malformed-source-candidate",
+        "reason": "candidate pcdump omitted the requested function",
+    }
+    layer = result["details"]["layers"][0]
+    assert layer["source_actionability"] == "candidate-generation-fidelity"
+    assert layer["details"]["malformed_source_candidate"]["source_path"] == str(candidate)
+    assert (
+        layer["details"]["malformed_source_candidate"]["error"]
+        == "function 'demo_fn' not found in pcdump; did you mean sibling"
+    )
+
+
+def test_compose_name_magic_no_match_rebuckets_top_level(tmp_path: Path) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "data-symbol-relocation.tsv"
+    _write_queue(queue, [_name_magic_row("demo_fn", primary="data-symbol-relocation")])
+    _, runner = _json_runner(
+        {
+            "blocker": "no-name-magic-candidate",
+            "stop_condition": {
+                "kind": "unvalidated",
+                "blocker": "no-name-magic-candidate",
+                "reason": "no source candidate reached a true --no-name-magic match",
+            },
+            "variants": [
+                {
+                    "status": "ok",
+                    "source_retained": str(tmp_path / "candidate.c"),
+                    "final_match_percent": 100.0,
+                    "no_name_magic_match": False,
+                }
+            ],
+        }
+    )
+
+    ledger = run_harvest(
+        "data-symbol-relocation",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+        match_checker=lambda function, *, cwd, timeout: _match_process(
+            function,
+            match=False,
+            percent=99.0,
+            primary="data-symbol-relocation",
+        ),
+        compose=True,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "no_match"
+    assert result["blocker"] == "no-name-magic-candidate"
+    assert (
+        result["source_actionability"]
+        == "blocked-data-symbol-no-name-magic-candidate"
+    )
+    rebucket = result["details"]["source_actionability_rebucket"]
+    assert rebucket["fingerprint"].keys() >= {"source_sha256", "taxonomy_sha256"}
+    assert {key: value for key, value in rebucket.items() if key != "fingerprint"} == {
+        "from": "current-tools-data-symbol",
+        "to": "blocked-data-symbol-no-name-magic-candidate",
+        "remove_from": "current-tools-data-symbol",
+        "blocker": "no-name-magic-candidate",
+        "reason": "no scored source candidate reached a true --no-name-magic match",
+    }
+    assert result["details"]["layers"][0]["details"][
+        "source_actionability_rebucket"
+    ] == result["details"]["source_actionability_rebucket"]
+    assert ledger["summary"]["by_tier"] == {
+        "blocked-data-symbol-no-name-magic-candidate": 1
+    }
+
+
+def test_compose_dry_run_restores_harness_source_mutation_when_ledger_write_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    _install_fresh_pcdump_cache(monkeypatch, repo_root)
+    target = repo_root / "src" / "melee" / "demo.c"
+    original = target.read_text(encoding="utf-8")
+    mutated = "void demo_fn(void) { int leaked_mutation = 1; }\n"
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(
+        queue,
+        [_row("demo_fn", source_actionability="current-tools")],
+    )
+
+    def runner(args: list[str], *, cwd: Path, timeout: int) -> HarnessProcessResult:
+        if args[:2] == ["debug", "mutate"]:
+            target.write_text(mutated, encoding="utf-8")
+            return HarnessProcessResult(args, 0, json.dumps({"variants": []}), "")
+        return HarnessProcessResult(args, 0, "", "")
+
+    def fail_write_ledger(*args, **kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(harvest_module, "write_ledger", fail_write_ledger)
+
+    with pytest.raises(OSError, match="No space left on device"):
+        run_harvest(
+            "stack-local-layout",
+            repo_root=repo_root,
+            queue_path=queue,
+            runner=runner,
+            match_checker=lambda function, *, cwd, timeout: _match_process(
+                function,
+                match=False,
+                percent=90.0,
+                primary="stack-layout",
+            ),
+            ledger_path=tmp_path / "ledger.json",
+            compose=True,
+        )
+
+    assert target.read_text(encoding="utf-8") == original
 
 
 def test_compose_apply_preserves_name_magic_sub100_source_and_header(
@@ -3647,6 +5316,230 @@ def test_frame_harness_without_100_candidate_records_no_validated_candidate(
     }
 
 
+def test_frame_transform_no_validated_current_tools_rebuckets_padstack_diagnostic(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(queue, [_row("demo_fn", source_actionability="current-tools")])
+    _, runner = _json_runner(
+        {
+            "variants": [
+                {
+                    "label": "frame-reservation-pad-stack-16",
+                    "operator": "frame-reservation-pad-stack",
+                    "status": "ok",
+                    "source_path": str(tmp_path / "candidate.c"),
+                    "final_match_percent": 99.933334,
+                }
+            ]
+        }
+    )
+
+    ledger = run_harvest(
+        "stack-local-layout",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "no_match"
+    assert result["blocker"] == "no-validated-candidate"
+    assert result["source_actionability"] == "diagnostic-only"
+    assert result["details"]["best_candidate"]["label"] == (
+        "frame-reservation-pad-stack-16"
+    )
+    assert result["details"]["best_candidate"]["score_percent"] == 99.933334
+    rebucket = result["details"]["source_actionability_rebucket"]
+    assert rebucket["fingerprint"].keys() >= {
+        "source_sha256",
+        "taxonomy_sha256",
+        "row_tool_sha256",
+        "tool_sha256",
+    }
+    assert {key: value for key, value in rebucket.items() if key != "fingerprint"} == {
+        "from": "current-tools",
+        "to": "diagnostic-only",
+        "remove_from": "current-tools",
+        "blocker": "no-validated-candidate",
+        "reason": (
+            "frame-transform scored PAD_STACK diagnostic candidates but no "
+            "validated 100% source"
+        ),
+    }
+
+
+def test_frame_transform_no_validated_current_tools_rebuckets_source_probe(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(queue, [_row("demo_fn", source_actionability="current-tools")])
+    _, runner = _json_runner(
+        {
+            "variants": [
+                {
+                    "label": "block-scope-0",
+                    "operator": "block-scope",
+                    "status": "ok",
+                    "source_path": str(tmp_path / "candidate.c"),
+                    "final_match_percent": 42.03846,
+                }
+            ]
+        }
+    )
+
+    ledger = run_harvest(
+        "stack-local-layout",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "no_match"
+    assert result["blocker"] == "no-validated-candidate"
+    assert result["source_actionability"] == "source-probe"
+    rebucket = result["details"]["source_actionability_rebucket"]
+    assert rebucket["fingerprint"].keys() >= {
+        "source_sha256",
+        "taxonomy_sha256",
+        "row_tool_sha256",
+        "tool_sha256",
+    }
+    assert {key: value for key, value in rebucket.items() if key != "fingerprint"} == {
+        "from": "current-tools",
+        "to": "source-probe",
+        "remove_from": "current-tools",
+        "blocker": "no-validated-candidate",
+        "reason": (
+            "frame-transform scored source-shape candidates but no validated "
+            "100% source"
+        ),
+    }
+
+
+def test_frame_transform_no_validated_rebucket_fingerprint_filters_preview(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(
+        queue,
+        [
+            _row("answered_fn", source_actionability="current-tools"),
+            _row("ready_fn", source_actionability="current-tools"),
+        ],
+    )
+    payload = {
+        "variants": [
+            {
+                "label": "frame-reservation-pad-stack-8",
+                "operator": "frame-reservation-pad-stack",
+                "status": "ok",
+                "source_path": str(tmp_path / "candidate.c"),
+                "final_match_percent": 99.91549,
+            }
+        ]
+    }
+
+    initial = run_harvest(
+        "stack-local-layout",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=_json_runner(payload)[1],
+        limit=1,
+    )
+    ledger_dir = repo_root / "build" / "harvest"
+    ledger_dir.mkdir(parents=True)
+    (ledger_dir / "stack-ledger.json").write_text(
+        json.dumps(initial),
+        encoding="utf-8",
+    )
+
+    current_rows = load_queue_rows(
+        queue,
+        work_bucket="stack-local-layout",
+        repo_root=repo_root,
+        filters=HarvestFilters(where={"source_actionability": ("current-tools",)}),
+    )
+    all_rows = load_queue_rows(
+        queue,
+        work_bucket="stack-local-layout",
+        repo_root=repo_root,
+    )
+    preview = preview_harvest_queue(
+        queue,
+        work_bucket="stack-local-layout",
+        repo_root=repo_root,
+        filters=HarvestFilters(where={"source_actionability": ("current-tools",)}),
+    )
+
+    assert initial["results"][0]["function"] == "answered_fn"
+    assert initial["results"][0]["source_actionability"] == "diagnostic-only"
+    assert [row.function for row in current_rows] == ["ready_fn"]
+    assert [row.source_actionability for row in all_rows] == [
+        "diagnostic-only",
+        "current-tools",
+    ]
+    assert select_harness(all_rows[0]) is None
+    assert select_harness(all_rows[1]) == "frame-transform-search"
+    assert preview["counts"]["matching_rows"] == 1
+    assert [row["function"] for row in preview["sample"]] == ["ready_fn"]
+
+
+@pytest.mark.parametrize(
+    ("source_actionability", "variants"),
+    [
+        (
+            "source-reachable-candidate",
+            [
+                {
+                    "label": "frame-reservation-pad-stack-16",
+                    "operator": "frame-reservation-pad-stack",
+                    "status": "ok",
+                    "source_path": "candidate.c",
+                    "final_match_percent": 99.9,
+                }
+            ],
+        ),
+        (
+            "current-tools",
+            [
+                {
+                    "label": "frame-reservation-pad-stack-16",
+                    "operator": "frame-reservation-pad-stack",
+                    "status": "build-failed",
+                }
+            ],
+        ),
+    ],
+)
+def test_frame_transform_no_validated_rebucket_requires_current_tools_scored_row(
+    tmp_path: Path,
+    source_actionability: str,
+    variants: list[dict],
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    _write_queue(queue, [_row("demo_fn", source_actionability=source_actionability)])
+    _, runner = _json_runner({"variants": variants})
+
+    ledger = run_harvest(
+        "stack-local-layout",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "no_match"
+    assert result["blocker"] == "no-validated-candidate"
+    assert result["source_actionability"] == source_actionability
+    assert "source_actionability_rebucket" not in result["details"]
+
+
 def test_harvest_propagates_indexed_search_stable_blocker(tmp_path: Path) -> None:
     repo_root = _repo_with_source(tmp_path)
     queue = tmp_path / "queues" / "indexed-struct-pointer.tsv"
@@ -3681,6 +5574,135 @@ def test_harvest_propagates_indexed_search_stable_blocker(tmp_path: Path) -> Non
     assert result["status"] == "blocked"
     assert result["blocker"] == "no-safe-materialized-pointer"
     assert result["reason"] == "source scan found no safe materialized pointer"
+
+
+def test_harvest_classifies_indexed_candidate_that_omits_target_from_pcdump(
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "indexed-struct-pointer.tsv"
+    candidate = tmp_path / "indexed-candidate.c"
+    candidate.write_text("int sibling(void) { return 2; }\n", encoding="utf-8")
+    row = _row(
+        "demo_fn",
+        headline_tool="source-shape",
+        source_actionability="current-tools-indexed-pointer",
+        frame_closability_tier="",
+    )
+    row["primary"] = "indexed-struct-pointer-materialization"
+    _write_queue(queue, [row])
+    _, runner = _json_runner(
+        {
+            "blocker": "no-indexed-struct-candidate",
+            "stop_condition": {
+                "kind": "unvalidated",
+                "blocker": "no-indexed-struct-candidate",
+                "reason": "no indexed-struct candidate reached a true 100% match",
+            },
+            "variants": [
+                {
+                    "label": "indexed-struct-pointer-0",
+                    "operator": "indexed-struct-pointer",
+                    "status": "build-failed",
+                    "source_retained": str(candidate),
+                    "error": (
+                        "function 'demo_fn' not found in pcdump; "
+                        "did you mean sibling"
+                    ),
+                }
+            ],
+        }
+    )
+
+    ledger = run_harvest(
+        "indexed-struct-pointer",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "malformed-source-candidate"
+    assert result["reason"] == "generated source candidate did not preserve the requested function"
+    assert result["source_actionability"] == "candidate-generation-fidelity"
+    assert result["details"]["source_actionability_rebucket"] == {
+        "from": "current-tools-indexed-pointer",
+        "to": "candidate-generation-fidelity",
+        "remove_from": "current-tools-indexed-pointer",
+        "blocker": "malformed-source-candidate",
+        "reason": "candidate pcdump omitted the requested function",
+    }
+    assert result["details"]["malformed_source_candidate"]["source_path"] == str(candidate)
+    assert (
+        result["details"]["malformed_source_candidate"]["error"]
+        == "function 'demo_fn' not found in pcdump; did you mean sibling"
+    )
+    assert ledger["summary"]["by_tier"] == {"candidate-generation-fidelity": 1}
+
+
+def test_harvest_classifies_lifetime_malformed_source_candidate(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = _repo_with_source(tmp_path)
+    queue = tmp_path / "queues" / "stack-local-layout.tsv"
+    candidate = tmp_path / "lifetime-candidate.c"
+    candidate.write_text("int sibling(void) { return 2; }\n", encoding="utf-8")
+    _write_queue(
+        queue,
+        [
+            _row(
+                "demo_fn",
+                headline_tool="lifetime-layout",
+                source_actionability="source-probe",
+                frame_closability_tier="",
+            )
+        ],
+    )
+    entry = harvest_module.pcdump_cache.CacheEntry(
+        path=repo_root / "build" / "mwcc_debug_cache" / "melee" / "demo.txt",
+        source_path=repo_root / "src" / "melee" / "demo.c",
+        fresh=True,
+    )
+    monkeypatch.setattr(harvest_module.pcdump_cache, "lookup", lambda _repo, _unit: entry)
+    _, runner = _json_runner(
+        {
+            "variants": [
+                {
+                    "label": "temp-introduction-0",
+                    "operator": "temp-introduction",
+                    "status": "malformed-source",
+                    "source_retained": str(candidate),
+                    "error": (
+                        "function 'demo_fn' not found in pcdump; "
+                        "compiled probe pcdump omitted the target function"
+                    ),
+                }
+            ],
+        }
+    )
+
+    ledger = run_harvest(
+        "stack-local-layout",
+        repo_root=repo_root,
+        queue_path=queue,
+        runner=runner,
+    )
+
+    result = ledger["results"][0]
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "malformed-source-candidate"
+    assert result["source_actionability"] == "candidate-generation-fidelity"
+    assert result["details"]["source_actionability_rebucket"] == {
+        "from": "source-probe",
+        "to": "candidate-generation-fidelity",
+        "remove_from": "source-probe",
+        "blocker": "malformed-source-candidate",
+        "reason": "candidate pcdump omitted the requested function",
+    }
+    assert result["details"]["malformed_source_candidate"]["source_path"] == str(candidate)
+    assert ledger["summary"]["by_tier"] == {"candidate-generation-fidelity": 1}
 
 
 def test_harvest_propagates_control_flow_search_stable_blocker(

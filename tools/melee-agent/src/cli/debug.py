@@ -45,6 +45,7 @@ from ..mwcc_debug import (
 )
 from ..mwcc_debug import candidate_audit
 from ..mwcc_debug import cache as pcdump_cache
+from ..mwcc_debug import local_safety
 from ..mwcc_debug import permuter_remote
 from ..mwcc_debug.cast_audit import (
     audit_function_casts,
@@ -56,6 +57,7 @@ from ..mwcc_debug.patterns import (
     PATTERNS,
     list_patterns,
 )
+from ..mwcc_debug.pressure_explorer import HELPER_INLINE_LIFETIME_OPERATORS
 from ..mwcc_debug.source_patch import (
     explain_decl_reorder_skip,
     extract_function,
@@ -88,6 +90,9 @@ from ..mwcc_debug.diff_report import (
     compare_function_dumps,
     render_text_report,
 )
+from ..mwcc_debug.temp_scratch import mkdtemp as mwcc_debug_mkdtemp
+from ..mwcc_debug.temp_scratch import reaped_scratch_root as mwcc_debug_scratch_root
+from ..mwcc_debug.temp_scratch import scratch_path as mwcc_debug_scratch_path
 from ..mwcc_debug.frame_reservations import (
     analyze_frame_from_asm_text,
     analyze_frame_from_function,
@@ -13010,30 +13015,39 @@ def match_iter_first(
     force_vector_entries: list[_ForceVectorEntry] | None = None
     force_vector_result: Optional[dict] = None
     if force_vector is not None:
-        try:
-            force_vector_entries = _parse_force_vector(force_vector)
-        except ValueError as exc:
-            typer.echo(str(exc), err=True)
-            raise typer.Exit(2) from exc
-        src_path = melee_root / "src" / f"{unit}.c"
-        if not src_path.exists():
-            force_vector_result = {
-                "ran": False,
-                "reason": f"source not found: {src_path}",
-            }
-        else:
+        effective_force_vector = force_vector
+        if force_vector == "auto":
+            effective_force_vector = target_vector["force_vector"]
+            if not effective_force_vector:
+                force_vector_result = {
+                    "ran": False,
+                    "reason": "no force-vector targets were derived",
+                }
+        if force_vector_result is None:
             try:
-                force_vector_result = _run_force_vector_auto_verify(
-                    src_path=src_path,
-                    function=function,
-                    entries=force_vector_entries,
-                    melee_root=melee_root,
-                    checkdiff_timeout=force_vector_checkdiff_timeout,
-                    run_diagnostic_probes=force_vector_probes,
-                )
-                force_vector_result["ran"] = True
-            except Exception as exc:
-                force_vector_result = {"ran": False, "reason": str(exc)}
+                force_vector_entries = _parse_force_vector(effective_force_vector)
+            except ValueError as exc:
+                typer.echo(str(exc), err=True)
+                raise typer.Exit(2) from exc
+            src_path = melee_root / "src" / f"{unit}.c"
+            if not src_path.exists():
+                force_vector_result = {
+                    "ran": False,
+                    "reason": f"source not found: {src_path}",
+                }
+            else:
+                try:
+                    force_vector_result = _run_force_vector_auto_verify(
+                        src_path=src_path,
+                        function=function,
+                        entries=force_vector_entries,
+                        melee_root=melee_root,
+                        checkdiff_timeout=force_vector_checkdiff_timeout,
+                        run_diagnostic_probes=force_vector_probes,
+                    )
+                    force_vector_result["ran"] = True
+                except Exception as exc:
+                    force_vector_result = {"ran": False, "reason": str(exc)}
 
     # Optional auto-verify: run debug dump local with the proposed iter-first
     # list, compare per-function match% against the baseline, and surface
@@ -15606,11 +15620,14 @@ def pcdump_local(
         Optional[str],
         typer.Option(
             "--force-schedule",
-            help="Tier 7: pin adjacent same-base loads after instruction "
-                 "scheduling. Format 'op:beforeOffset>afterOffset[,...]'. "
-                 "E.g. 'lwz:0x74>0x70' forces an adjacent same-base lwz pair "
-                 "at offsets 0x70/0x74 to emit 0x74 first. By default "
-                 "applies globally — scope with --force-schedule-fn. "
+            help="Tier 7: pin adjacent or one-instruction-straddled "
+                 "same-base load order after MWCC instruction scheduling. "
+                 "Format 'op:beforeOffset>afterOffset[,...]'. E.g. "
+                 "'lwz:0x74>0x70' forces a same-base lwz pair at offsets "
+                 "0x70/0x74 to emit 0x74 first. Non-load code-offset "
+                 "windows are explain-only via `debug inspect "
+                 "explain-schedule --checkdiff-json`. By default applies "
+                 "globally — scope with --force-schedule-fn. "
                  "DIAGNOSTIC-ONLY: uses the patched debug compiler and does "
                  "not affect production ninja builds.",
         ),
@@ -15740,6 +15757,21 @@ def pcdump_local(
         else src_rel
     )
     same_tu_probe = unit_src_rel != src_rel
+    lane_guard = local_safety.guard_local_pcdump_lane(
+        source_rel=src_rel,
+        function=function,
+        allow_unsafe=local_safety.allow_unsafe_local_pcdump(),
+    )
+    if lane_guard.unsafe:
+        typer.echo(
+            local_safety.format_unsafe_lane_message(
+                source_rel=src_rel,
+                function=function,
+                processes=lane_guard.processes,
+            ),
+            err=True,
+        )
+        raise typer.Exit(125)
 
     if force_frame_from_diff and not diff:
         typer.echo(
@@ -15787,24 +15819,29 @@ def pcdump_local(
     if pcdump_path.exists():
         pcdump_path.unlink()
 
-    # Resolve where the .o lands. Default: discard via /tmp. When the
+    # Resolve where the .o lands. Default: discard via managed scratch. When the
     # agent wants to inspect/diff the output, --keep-obj routes it to a
     # specific path. --diff implies keeping (a temp path if no --keep-obj
     # was given) so we have something to diff against.
+    scratch_root = mwcc_debug_scratch_root()
     if keep_obj is not None:
         obj_target = keep_obj if keep_obj.is_absolute() else (melee_root / keep_obj)
         obj_target.parent.mkdir(parents=True, exist_ok=True)
         obj_out = str(obj_target)
         discard_obj_after = False
     elif diff:
-        obj_target = Path(
-            f"/tmp/pcdump_local_keep_{os.getpid()}_{int(time.time() * 1000)}.o"
+        obj_target = mwcc_debug_scratch_path(
+            "pcdump_local_keep",
+            suffix=".o",
+            root=scratch_root,
         )
         obj_out = str(obj_target)
         discard_obj_after = True  # remove after diff if not user-requested
     else:
-        obj_target = Path(
-            f"/tmp/pcdump_local_discard_{os.getpid()}_{int(time.time() * 1000)}.o"
+        obj_target = mwcc_debug_scratch_path(
+            "pcdump_local_discard",
+            suffix=".o",
+            root=scratch_root,
         )
         obj_out = str(obj_target)
         discard_obj_after = True
@@ -15962,6 +15999,7 @@ def pcdump_local(
     last_progress = time.time()
     pcdump_progress_marker: tuple[int, int] | None = None
     killed_by_watchdog = False
+    watchdog_lane_guard: local_safety.LocalLaneGuardResult | None = None
     while True:
         if proc_handle.poll() is not None:
             # Drain remaining output
@@ -16005,6 +16043,11 @@ def pcdump_local(
             except subprocess.TimeoutExpired:
                 # wibo is in UE state — can't reap. Move on.
                 pass
+            watchdog_lane_guard = local_safety.guard_local_pcdump_lane(
+                source_rel=src_rel,
+                function=function,
+                allow_unsafe=False,
+            )
             break
 
     # Shim into the old proc.stderr/stdout/returncode contract so the
@@ -16028,9 +16071,15 @@ def pcdump_local(
         hang_msg = (
             f"[debug dump local] no compile progress for "
             f"{WATCHDOG_TIMEOUT_S:.0f}s — likely wibo hang (UE state). "
-            f"Subprocess killed; check `ps aux | grep wibo` for zombie. "
+            f"Subprocess kill requested; check `ps aux | grep wibo` for zombie. "
             f"Override via MWCC_DEBUG_HANG_TIMEOUT=<seconds>."
         )
+        if watchdog_lane_guard is not None and watchdog_lane_guard.unsafe:
+            hang_msg += (
+                "\n[debug dump local] unsafe local pcdump lane now has "
+                "unreaped uninterruptible wibo process(es):\n"
+                f"{local_safety.format_unsafe_processes(watchdog_lane_guard.processes)}"
+            )
         if force_coalesce:
             hang_msg += (
                 f"\n[debug dump local] --force-coalesce '{force_coalesce}' was "
@@ -16352,6 +16401,9 @@ def pcdump_local(
         cache_skip_reason = (
             f"requested function {function!r} was not emitted in pcdump"
         )
+    elif killed_by_watchdog:
+        skip_cache_sync = True
+        cache_skip_reason = "watchdog timed out local dump"
     elif not skip_cache_sync:
         source_current, _current_digest = _compiled_source_snapshot_still_current(
             src_path_for_cache,
@@ -16371,8 +16423,10 @@ def pcdump_local(
                 else "forced" if any_forced
                 else "nocache"
             )
-            output = Path(
-                f"/tmp/pcdump_{prefix}_{os.getpid()}_{int(time.time() * 1000)}.txt"
+            output = mwcc_debug_scratch_path(
+                f"pcdump_{prefix}",
+                suffix=".txt",
+                root=scratch_root,
             )
             output.parent.mkdir(parents=True, exist_ok=True)
             pcdump_path.rename(output)
@@ -16572,8 +16626,8 @@ def score_source(
     if pcdump_path.exists():
         pcdump_path.unlink()
 
-    # Use unique discard .o to avoid races across parallel scorers
-    discard_o = f"/tmp/score_source_discard_{os.getpid()}_{int(time.time()*1000)}.o"
+    # Use unique discard .o to avoid races across parallel scorers.
+    discard_o = str(mwcc_debug_scratch_path("score_source_discard", suffix=".o"))
 
     args = (
         [str(wibo_path), str(debug_compiler)]
@@ -17645,6 +17699,16 @@ def suggest_control_flow_shape(
             help="Pass --no-build to live checkdiff for a fast stale-object read.",
         ),
     ] = False,
+    source_file: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--source-file",
+            help=(
+                "Source file used to preflight whether suggested generated "
+                "operators can materialize probes."
+            ),
+        ),
+    ] = None,
     top: Annotated[
         int,
         typer.Option("--top", help="Maximum number of ranked suggestions."),
@@ -17656,6 +17720,7 @@ def suggest_control_flow_shape(
 ) -> None:
     """Suggest source-level control-flow shape transforms from ASM diff JSON."""
     from ..mwcc_debug.suggest_control_flow_shape import (
+        annotate_source_materialization,
         analyze_control_flow_shape,
         render_json,
         render_text,
@@ -17694,6 +17759,40 @@ def suggest_control_flow_shape(
         classification=classification,
         top=top,
     )
+    source_preflight: dict[str, Any]
+    resolved_source: Path | None = None
+    source_text: str | None = None
+    if source_file is not None:
+        resolved_source = _resolve_existing_cli_file(
+            source_file,
+            melee_root=DEFAULT_MELEE_ROOT,
+            label="source file",
+        )
+    else:
+        unit = _find_unit_for_function(function, DEFAULT_MELEE_ROOT)
+        if unit is not None:
+            candidate_source = DEFAULT_MELEE_ROOT / "src" / f"{unit}.c"
+            if candidate_source.exists():
+                resolved_source = candidate_source
+    if resolved_source is not None:
+        source_text = resolved_source.read_text(encoding="utf-8", errors="replace")
+        annotate_source_materialization(
+            report,
+            function=function,
+            source_text=source_text,
+        )
+        source_preflight = {
+            "status": "ran",
+            "source": str(resolved_source),
+            "reason": "source operators were checked against the probe generator",
+        }
+    else:
+        source_preflight = {
+            "status": "source-unavailable",
+            "source": None,
+            "reason": "source file could not be resolved for preflight",
+        }
+    report["source_preflight"] = source_preflight
     report["checkdiff_source"] = checkdiff_source
     print(render_json(report) if json_out else render_text(report))
 
@@ -20051,6 +20150,16 @@ def inspect_explain_schedule(
             ),
         ),
     ] = None,
+    checkdiff_json: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--checkdiff-json",
+            help=(
+                "Path to `tools/checkdiff.py <function> --format json` "
+                "output; enables non-load code-offset schedule windows."
+            ),
+        ),
+    ] = None,
     json_out: Annotated[
         bool,
         typer.Option("--json", help="Emit as JSON."),
@@ -20087,12 +20196,41 @@ def inspect_explain_schedule(
                     source_label = str(candidate.relative_to(DEFAULT_MELEE_ROOT))
                 except ValueError:
                     source_label = str(candidate)
+    target_asm = None
+    current_asm = None
+    classification = None
+    if checkdiff_json is not None:
+        if not checkdiff_json.is_file():
+            raise typer.BadParameter(f"checkdiff JSON not found: {checkdiff_json}")
+        try:
+            payload = json.loads(checkdiff_json.read_text())
+        except json.JSONDecodeError as exc:
+            raise typer.BadParameter(
+                f"invalid checkdiff JSON: {exc.msg}"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise typer.BadParameter("checkdiff JSON must be an object")
+        payload_function = payload.get("function")
+        if payload_function not in {None, function}:
+            raise typer.BadParameter(
+                f"checkdiff JSON is for {payload_function!r}, not {function!r}"
+            )
+        target_asm = payload.get("target_asm")
+        current_asm = payload.get("current_asm")
+        classification = payload.get("classification")
+        if not isinstance(target_asm, list) or not isinstance(current_asm, list):
+            raise typer.BadParameter(
+                "checkdiff JSON must contain target_asm and current_asm arrays"
+            )
     report = explain_schedule(
         pcdump_path.read_text(),
         function=function,
         force_schedule=force_schedule,
         source_text=source_text,
         source_file=source_label,
+        target_asm=target_asm,
+        current_asm=current_asm,
+        checkdiff_classification=classification,
     )
     print(render_json(report) if json_out else render_text(report))
 
@@ -20682,7 +20820,7 @@ def intervene_coalesce_cmd(
             melee_root=DEFAULT_MELEE_ROOT,
             label="source file",
         )
-        run_dir = output_dir or Path(tempfile.mkdtemp(prefix="melee_intervene_"))
+        run_dir = output_dir or mwcc_debug_mkdtemp(prefix="melee_intervene_")
         run_dir.mkdir(parents=True, exist_ok=True)
         if baseline_pcdump is None:
             baseline_pcdump = run_dir / f"{function}.baseline.pcdump.txt"
@@ -21131,6 +21269,7 @@ _LIFETIME_LAYOUT_FOCUSES: dict[str, tuple[str, ...]] = {
         "pointer-base-call-loop",
         "pointer-walk-loop",
     ),
+    "helper-inline-lifetime": HELPER_INLINE_LIFETIME_OPERATORS,
 }
 
 
@@ -22519,8 +22658,8 @@ def mutate_lifetime_layout_cmd(
             "--focus",
             help=(
                 "Named probe-family bundle. `b4-tree-loop` focuses the "
-                "x594_b4 tree loop problem space: pointer/indexed tree loops "
-                "plus loop-counter declaration/type/scope probes."
+                "x594_b4 tree loop problem space; `helper-inline-lifetime` "
+                "focuses helper-inline/source-lifetime register cascades."
             ),
         ),
     ] = None,
@@ -22530,7 +22669,8 @@ def mutate_lifetime_layout_cmd(
             "--operator",
             help=(
                 "Only generate/compile probes from this operator family. "
-                "Repeat or pass comma-separated names; combines with --focus."
+                "Repeat or pass comma-separated names; combines with most "
+                "focuses and narrows --focus helper-inline-lifetime."
             ),
         ),
     ] = None,
@@ -22551,6 +22691,7 @@ def mutate_lifetime_layout_cmd(
     from ..mwcc_debug.pressure_explorer import (
         compare_pressure_signatures,
         generate_lifetime_layout_probes,
+        generate_source_lifetime_probes,
         pressure_signature_from_pcdump,
         render_pressure_delta,
     )
@@ -22577,8 +22718,11 @@ def mutate_lifetime_layout_cmd(
     source_text = None
     source_path_for_probes: Path | None = None
     if source_file is not None:
-        if not source_file.is_file():
-            raise typer.BadParameter(f"source file not found: {source_file}")
+        source_file = _resolve_existing_cli_file(
+            source_file,
+            melee_root=DEFAULT_MELEE_ROOT,
+            label="source file",
+        )
         source_text = source_file.read_text()
         if _path_inside_repo(source_file, DEFAULT_MELEE_ROOT):
             source_path_for_probes = source_file
@@ -22596,17 +22740,28 @@ def mutate_lifetime_layout_cmd(
                 source_text = src_path.read_text()
                 source_path_for_probes = src_path
 
-    probes = (
-        generate_lifetime_layout_probes(
+    source_lifetime_families: list[dict] | None = None
+    if source_text and focus == "helper-inline-lifetime":
+        operator_filter = _resolve_lifetime_layout_operator_filter(
+            focus=None,
+            operators=operators,
+        ) or operator_filter
+        probes, source_lifetime_families = generate_source_lifetime_probes(
+            source_text,
+            function,
+            max_probes=max_probes,
+            operator_filter=operator_filter,
+        )
+    elif source_text:
+        probes = generate_lifetime_layout_probes(
             source_text,
             function,
             frame_reservation_bytes=frame_reservation_bytes,
             max_probes=max_probes,
             operator_filter=operator_filter,
         )
-        if source_text
-        else []
-    )
+    else:
+        probes = []
 
     variants: list[dict] = []
     generated_source_dir: Path | None = None
@@ -22861,6 +23016,8 @@ def mutate_lifetime_layout_cmd(
             payload["focus"] = focus
         if operator_filter is not None:
             payload["operator_filter"] = list(operator_filter)
+        if source_lifetime_families is not None:
+            payload["source_lifetime_families"] = source_lifetime_families
         if generated_source_dir is not None:
             payload["generated_source_dir"] = str(generated_source_dir)
         print(json.dumps(payload, indent=2))

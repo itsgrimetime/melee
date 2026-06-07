@@ -538,6 +538,59 @@ class StateDB:
 
         return issue
 
+    def note_tool_issue(
+        self,
+        issue_id: int,
+        body: str,
+        agent_id: str | None = None,
+    ) -> dict | None:
+        """Append a note to an open tool issue without resolving it.
+
+        Returns the updated issue, or None if the issue does not exist.
+        """
+        note_body = body.strip()
+        if not note_body:
+            raise ValueError("note body is required")
+
+        now = time.time()
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+        author = agent_id or "unknown-agent"
+        note_section = f"Note by {author} at {stamp}:\n{note_body}"
+
+        with self.transaction() as conn:
+            old_row = conn.execute("SELECT * FROM tool_issues WHERE id = ?", (issue_id,)).fetchone()
+            old_value = self._decode_tool_issue_row(old_row)
+            if old_value is None:
+                return None
+            if old_value["status"] != "open":
+                raise ValueError("cannot note resolved issue")
+
+            existing_body = (old_value.get("body") or "").strip()
+            new_body = f"{existing_body}\n\n{note_section}" if existing_body else note_section
+
+            conn.execute(
+                """
+                UPDATE tool_issues
+                SET body = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (new_body, now, issue_id),
+            )
+            new_row = conn.execute("SELECT * FROM tool_issues WHERE id = ?", (issue_id,)).fetchone()
+            issue = self._decode_tool_issue_row(new_row)
+
+            self.log_audit(
+                "tool_issue",
+                str(issue_id),
+                "noted",
+                agent_id=agent_id,
+                old_value=old_value,
+                new_value=issue,
+            )
+
+        return issue
+
     # =========================================================================
     # Address Tracking Operations
     # =========================================================================

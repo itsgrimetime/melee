@@ -27,6 +27,70 @@ def _write_report(path: Path, percent: float) -> None:
     )
 
 
+def test_structural_metrics_include_opcode_shape_preserved() -> None:
+    structural = scoring_mod._structural_with_deltas(
+        {"opcode_similarity": 1.0, "line_delta": 0, "hunk_count": 1},
+        {"opcode_similarity": 1.0, "line_delta": 0, "hunk_count": 1},
+    )
+
+    assert structural["opcode_shape_preserved"] is True
+
+    structural = scoring_mod._structural_with_deltas(
+        {"opcode_similarity": 1.0},
+        {"opcode_similarity": 0.98},
+    )
+
+    assert structural["opcode_shape_preserved"] is False
+
+
+def test_structural_metrics_preserve_shape_from_current_asm_sequences() -> None:
+    baseline = scoring_mod._extract_structural_metrics({
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 1,
+        "current_asm": [
+            "/* 0000 */ mr r3, r4",
+            "/* 0004 */ bl helper",
+        ],
+    })
+    same_shape_candidate = scoring_mod._extract_structural_metrics({
+        "opcode_similarity": 0.98,
+        "line_delta": 0,
+        "hunk_count": 1,
+        "current_asm": [
+            "/* 0000 */ mr r5, r6",
+            "/* 0004 */ bl helper",
+        ],
+    })
+
+    structural = scoring_mod._structural_with_deltas(
+        baseline,
+        same_shape_candidate,
+    )
+
+    assert structural["opcode_shape_preserved"] is True
+    assert "current_asm" not in structural
+    assert "_opcode_sequence" not in structural
+
+    changed_shape_candidate = scoring_mod._extract_structural_metrics({
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 1,
+        "current_asm": [
+            "/* 0000 */ li r3, 0",
+            "/* 0004 */ bl helper",
+        ],
+    })
+
+    structural = scoring_mod._structural_with_deltas(
+        baseline,
+        changed_shape_candidate,
+    )
+
+    assert structural["opcode_shape_preserved"] is False
+    assert "_opcode_sequence" not in structural
+
+
 def test_score_structure_variants_restores_files_and_sets_checkdiff_env(
     monkeypatch,
     tmp_path: Path,
@@ -296,7 +360,13 @@ def test_score_structure_variants_marks_baseline_checkdiff_failure(
             return subprocess.CompletedProcess(
                 cmd,
                 1,
-                stdout=json.dumps({"opcode_similarity": 0.97}),
+                stdout=json.dumps({
+                    "opcode_similarity": 0.97,
+                    "current_asm": [
+                        "/* 0000 */ mr r3, r4",
+                        "/* 0004 */ bl helper",
+                    ],
+                }),
                 stderr="",
             )
         raise AssertionError(f"unexpected command: {argv}")
@@ -327,6 +397,7 @@ def test_score_structure_variants_marks_baseline_checkdiff_failure(
         "baseline checkdiff failed: baseline checkdiff failed"
     )
     assert results[0].structural["opcode_similarity"] == 0.97
+    assert "_opcode_sequence" not in results[0].structural
 
 
 def test_score_structure_variants_uses_process_group_runner(

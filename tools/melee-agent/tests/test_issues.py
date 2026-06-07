@@ -134,6 +134,71 @@ def test_issue_list_and_resolve_work_from_cli(tmp_path):
     reset_db()
 
 
+def test_issue_note_appends_context_without_resolving_from_cli(tmp_path):
+    """Agents should be able to annotate an open issue without closing it."""
+    reset_db()
+    db = StateDB(tmp_path / "state.db")
+    issue = db.report_tool_issue(
+        "mwcc-debug score-source lacks useful timeout output",
+        tool="mwcc-debug",
+        body="Initial report.",
+    )
+    db.close()
+    reset_db()
+    get_db(tmp_path / "state.db")
+
+    result = runner.invoke(
+        app,
+        [
+            "issue",
+            "note",
+            str(issue["id"]),
+            "--body",
+            "Reproduced after refreshing the scratch context.",
+            "--agent-id",
+            "annotator-agent",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "open"
+    assert payload["resolution_note"] is None
+    assert "Initial report." in payload["body"]
+    assert "Note by annotator-agent" in payload["body"]
+    assert "Reproduced after refreshing" in payload["body"]
+
+    reset_db()
+
+
+def test_issue_note_rejects_resolved_issue_from_cli(tmp_path):
+    """Notes should be reserved for still-open issue threads."""
+    reset_db()
+    db = StateDB(tmp_path / "state.db")
+    issue = db.report_tool_issue("mwcc-debug score-source lacks useful timeout output")
+    db.resolve_tool_issue(issue["id"], agent_id="fixer", resolution_note="fixed")
+    db.close()
+    reset_db()
+    get_db(tmp_path / "state.db")
+
+    result = runner.invoke(
+        app,
+        [
+            "issue",
+            "note",
+            str(issue["id"]),
+            "--body",
+            "Follow-up after close.",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "cannot note resolved issue" in strip_ansi(result.stdout)
+
+    reset_db()
+
+
 def test_feature_issue_requires_governance_metadata(tmp_path):
     """Feature requests should carry reuse/source-actionability metadata."""
     reset_db()

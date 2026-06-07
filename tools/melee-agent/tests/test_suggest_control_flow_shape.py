@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from src.mwcc_debug.suggest_control_flow_shape import (
     analyze_control_flow_shape,
+    annotate_source_materialization,
 )
 
 
@@ -673,6 +674,59 @@ def test_analyze_detects_loop_peel_unroll_repeated_body() -> None:
     )
     assert suggestion["evidence"]["repeated_signature_count"] >= 2
     assert "peel" in suggestion["recommendation"]
+
+
+def test_annotate_source_materialization_suppresses_dead_generated_followup() -> None:
+    report = analyze_control_flow_shape(
+        function="fn_80000000",
+        target_asm=[
+            "/* 0000 */ lwz r4, 0(r3)",
+            "/* 0004 */ addi r3, r3, 0x24",
+            "/* 0008 */ lwz r4, 0(r3)",
+            "/* 000C */ addi r3, r3, 0x24",
+            "/* 0010 */ mtctr r5",
+            "/* 0014 */ lwz r4, 0(r3)",
+            "/* 0018 */ bdnz lbl_loop",
+        ],
+        current_asm=[
+            "/* 0000 */ mtctr r5",
+            "/* 0004 */ lwz r4, 0(r3)",
+            "/* 0008 */ bdnz lbl_loop",
+        ],
+        classification=_classification(),
+    )
+    suggestion = next(
+        item
+        for item in report["suggestions"]
+        if item["kind"] == "loop-peel-unroll"
+    )
+    assert suggestion["follow_up_commands"]
+
+    annotate_source_materialization(
+        report,
+        function="fn_80000000",
+        source_text="""
+void fn_80000000(void)
+{
+    int x;
+    x = 0;
+}
+""",
+    )
+
+    suggestion = next(
+        item
+        for item in report["suggestions"]
+        if item["kind"] == "loop-peel-unroll"
+    )
+    assert suggestion["follow_up_commands"] == []
+    assert suggestion["source_materialization"]["status"] == "non-materializable"
+    assert suggestion["source_materialization"]["blocker"] == (
+        "no-control-flow-shape-probes"
+    )
+    assert "no safe control-flow source transform matched" in (
+        suggestion["non_materializable_reason"]
+    )
 
 
 def test_analyze_non_control_flow_classification_marks_not_applicable() -> None:

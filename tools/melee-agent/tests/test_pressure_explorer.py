@@ -270,16 +270,16 @@ def test_source_lifetime_repeated_helper_result_reuse_supports_seed_style_compar
 
 def test_source_lifetime_repeated_helper_result_reuse_supports_same_tu_scalar_helper() -> None:
     source = textwrap.dedent("""\
-        static inline s32 helper(CardState* state, s32 i)
+        static inline s32 helper(s32 x)
         {
-            return state->x4C[i] + 1;
+            return x + 1;
         }
 
-        s32 fn_80000000(CardState* state, s32 i)
+        s32 fn_80000000(s32 x)
         {
             s32 total = 0;
-            total += helper(state, i);
-            total = helper(state, i);
+            total += helper(x);
+            total = helper(x);
             return total;
         }
     """)
@@ -295,14 +295,114 @@ def test_source_lifetime_repeated_helper_result_reuse_supports_same_tu_scalar_he
         for probe in probes
         if probe.operator == "repeated-helper-result-reuse"
     )
-    assert "s32 ll_probe_helper_result_0 = (s32) helper(state, i);" in (
-        probe.source_text
-    )
+    assert "s32 ll_probe_helper_result_0 = helper(x);" in probe.source_text
     assert "total += ll_probe_helper_result_0;" in probe.source_text
     assert "total = ll_probe_helper_result_0;" in probe.source_text
 
 
-def test_source_lifetime_repeated_helper_result_reuse_rejects_same_tu_unsigned_helper() -> None:
+def test_source_lifetime_repeated_helper_result_reuse_rejects_same_tu_state_reader() -> None:
+    source = textwrap.dedent("""\
+        static inline s32 helper(State* state)
+        {
+            return state->x;
+        }
+
+        s32 fn_80000000(State* state)
+        {
+            s32 total = 0;
+            total += helper(state);
+            mutate(state);
+            total = helper(state);
+            return total;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "repeated-helper-result-reuse" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "repeated-helper-result-reuse"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] in {
+        "callee-not-supported-for-reuse",
+        "same-tu-helper-reads-mutable-param",
+    }
+
+
+def test_source_lifetime_repeated_helper_result_reuse_rejects_same_tu_deref_reader() -> None:
+    source = textwrap.dedent("""\
+        static inline s32 helper(s32* ptr)
+        {
+            return *ptr;
+        }
+
+        s32 fn_80000000(s32* ptr)
+        {
+            s32 total = 0;
+            total += helper(ptr);
+            mutate(ptr);
+            total = helper(ptr);
+            return total;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "repeated-helper-result-reuse" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "repeated-helper-result-reuse"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] in {
+        "callee-not-supported-for-reuse",
+        "same-tu-helper-reads-mutable-param",
+    }
+
+
+def test_source_lifetime_repeated_helper_result_reuse_rejects_same_tu_offset_deref_reader() -> None:
+    source = textwrap.dedent("""\
+        static inline s32 helper(s32* ptr, s32 i)
+        {
+            return *(ptr + i);
+        }
+
+        s32 fn_80000000(s32* ptr, s32 i)
+        {
+            s32 total = 0;
+            total += helper(ptr, i);
+            mutate(ptr);
+            total = helper(ptr, i);
+            return total;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "repeated-helper-result-reuse" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "repeated-helper-result-reuse"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] in {
+        "callee-not-supported-for-reuse",
+        "same-tu-helper-reads-mutable-param",
+    }
+
+
+def test_source_lifetime_repeated_helper_result_reuse_supports_same_tu_unsigned_helper() -> None:
     source = textwrap.dedent("""\
         static inline u32 helper(u32 x)
         {
@@ -324,15 +424,47 @@ def test_source_lifetime_repeated_helper_result_reuse_rejects_same_tu_unsigned_h
         max_probes=8,
     )
 
-    assert "repeated-helper-result-reuse" not in {probe.operator for probe in probes}
-    blocked = [
-        row for row in summaries if row["operator"] == "repeated-helper-result-reuse"
-    ]
-    assert blocked
-    assert blocked[0]["blocker"] in {
-        "helper-return-type-unsafe",
-        "callee-not-supported-for-reuse",
-    }
+    del summaries
+    probe = next(
+        probe
+        for probe in probes
+        if probe.operator == "repeated-helper-result-reuse"
+    )
+    assert "u32 ll_probe_helper_result_0 = helper(x);" in probe.source_text
+    assert "total += ll_probe_helper_result_0;" in probe.source_text
+    assert "total = ll_probe_helper_result_0;" in probe.source_text
+
+
+def test_source_lifetime_repeated_helper_result_reuse_supports_unsigned_int_helper() -> None:
+    source = textwrap.dedent("""\
+        static inline unsigned int helper(unsigned int x)
+        {
+            return x;
+        }
+
+        unsigned int fn_80000000(unsigned int x)
+        {
+            unsigned int total = 0;
+            total += helper(x);
+            total = helper(x);
+            return total;
+        }
+    """)
+
+    probes, _summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    probe = next(
+        probe
+        for probe in probes
+        if probe.operator == "repeated-helper-result-reuse"
+    )
+    assert "unsigned int ll_probe_helper_result_0 = helper(x);" in probe.source_text
+    assert "total += ll_probe_helper_result_0;" in probe.source_text
+    assert "total = ll_probe_helper_result_0;" in probe.source_text
 
 
 def test_source_lifetime_repeated_helper_result_reuse_rejects_same_tu_pointer_helper() -> None:
@@ -501,6 +633,147 @@ def test_source_lifetime_helper_result_dematerialize_rejects_same_tu_pointer_hel
     }
 
 
+def test_source_lifetime_helper_result_dematerialize_rejects_same_tu_state_reader() -> None:
+    source = textwrap.dedent("""\
+        static inline s32 helper(State* state)
+        {
+            return state->x;
+        }
+
+        s32 fn_80000000(State* state)
+        {
+            s32 result;
+            result = helper(state);
+            mutate(state);
+            sink(result);
+            return result;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "helper-result-dematerialize" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "helper-result-dematerialize"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] in {
+        "callee-not-supported-for-dematerialize",
+        "same-tu-helper-reads-mutable-param",
+    }
+
+
+def test_source_lifetime_helper_result_dematerialize_rejects_same_tu_deref_reader() -> None:
+    source = textwrap.dedent("""\
+        static inline s32 helper(s32* ptr)
+        {
+            return *ptr;
+        }
+
+        s32 fn_80000000(s32* ptr)
+        {
+            s32 result;
+            result = helper(ptr);
+            mutate(ptr);
+            sink(result);
+            return result;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "helper-result-dematerialize" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "helper-result-dematerialize"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] in {
+        "callee-not-supported-for-dematerialize",
+        "same-tu-helper-reads-mutable-param",
+    }
+
+
+def test_source_lifetime_helper_result_dematerialize_rejects_same_tu_offset_deref_reader() -> None:
+    source = textwrap.dedent("""\
+        static inline s32 helper(s32* ptr, s32 i)
+        {
+            return *(ptr + i);
+        }
+
+        s32 fn_80000000(s32* ptr, s32 i)
+        {
+            s32 result;
+            result = helper(ptr, i);
+            mutate(ptr);
+            sink(result);
+            return result;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "helper-result-dematerialize" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "helper-result-dematerialize"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] in {
+        "callee-not-supported-for-dematerialize",
+        "same-tu-helper-reads-mutable-param",
+    }
+
+
+def test_source_lifetime_helper_result_dematerialize_supports_unsigned_int_helper() -> None:
+    source = textwrap.dedent("""\
+        static inline unsigned int helper(unsigned int x)
+        {
+            return x;
+        }
+
+        unsigned int fn_80000000(unsigned int x)
+        {
+            unsigned int result;
+            result = helper(x);
+            sink(result);
+            return result;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    operators = {probe.operator for probe in probes}
+    if "helper-result-dematerialize" in operators:
+        probe = next(
+            probe
+            for probe in probes
+            if probe.operator == "helper-result-dematerialize"
+        )
+        assert "sink(helper(x));" in probe.source_text
+        assert "return helper(x);" in probe.source_text
+    else:
+        blocked = [
+            row for row in summaries if row["operator"] == "helper-result-dematerialize"
+        ]
+        assert blocked
+        assert blocked[0]["blocker"] != "helper-return-type-unsafe"
+
+
 def test_source_lifetime_simple_helper_inline_body_probe() -> None:
     source = textwrap.dedent("""\
         static inline s32 helper(CardState* state, s32 i)
@@ -525,6 +798,35 @@ def test_source_lifetime_simple_helper_inline_body_probe() -> None:
     )
     assert "return state->x4C[i] + 1;" in probe.source_text
     assert "return helper(state, i);" not in probe.source_text
+
+
+def test_source_lifetime_simple_helper_inline_body_rejects_preprocessor_guarded_call_site() -> None:
+    source = textwrap.dedent("""\
+        static inline s32 helper(s32 x)
+        {
+            return x + 1;
+        }
+
+        s32 fn_80000000(s32 x)
+        {
+        #if FOO
+            return helper(x);
+        #endif
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "simple-helper-inline-body" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "simple-helper-inline-body"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] == "preprocessor-region-unsafe"
 
 
 def test_source_lifetime_rejects_unsafe_helper_call_rewrites() -> None:
@@ -1048,6 +1350,113 @@ def test_source_lifetime_repeated_helper_result_reuse_rejects_same_line_case_lab
     assert blocked[0]["blocker"] == "case-arm-declaration-unsafe"
 
 
+def test_source_lifetime_repeated_helper_result_reuse_rejects_plain_label_declaration() -> None:
+    source = textwrap.dedent("""\
+        s32 fn_80000000(CardState* state, s32 i, s32 flag)
+        {
+        retry:
+            sink(fn_803AC634(state, i));
+            sink(fn_803AC634(state, i));
+            return 0;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "repeated-helper-result-reuse" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "repeated-helper-result-reuse"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] == "label-declaration-unsafe"
+
+
+def test_source_lifetime_repeated_helper_result_reuse_rejects_plain_label_with_comment() -> None:
+    source = textwrap.dedent("""\
+        s32 fn_80000000(CardState* state, s32 i, s32 flag)
+        {
+        retry:
+            /* keep label */
+            sink(fn_803AC634(state, i));
+            sink(fn_803AC634(state, i));
+            return 0;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "repeated-helper-result-reuse" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "repeated-helper-result-reuse"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] == "label-declaration-unsafe"
+
+
+def test_source_lifetime_repeated_helper_result_reuse_rejects_plain_label_with_multiline_comment() -> None:
+    source = textwrap.dedent("""\
+        s32 fn_80000000(CardState* state, s32 i, s32 flag)
+        {
+        retry:
+            /* keep label
+             * across lines */
+            sink(fn_803AC634(state, i));
+            sink(fn_803AC634(state, i));
+            return 0;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert "repeated-helper-result-reuse" not in {probe.operator for probe in probes}
+    blocked = [
+        row for row in summaries if row["operator"] == "repeated-helper-result-reuse"
+    ]
+    assert blocked
+    assert blocked[0]["blocker"] == "label-declaration-unsafe"
+
+
+def test_source_lifetime_repeated_helper_result_reuse_allows_block_wrapped_plain_label() -> None:
+    source = textwrap.dedent("""\
+        s32 fn_80000000(CardState* state, s32 i, s32 flag)
+        {
+        retry: {
+            sink(fn_803AC634(state, i));
+            sink(fn_803AC634(state, i));
+            return 0;
+        }
+        }
+    """)
+
+    probes, _summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    probe = next(
+        probe
+        for probe in probes
+        if probe.operator == "repeated-helper-result-reuse"
+    )
+    assert "retry: {\n    s32 ll_probe_helper_result_0 = (s32) fn_803AC634(state, i);\n" in (
+        probe.source_text
+    )
+    assert "sink(ll_probe_helper_result_0);" in probe.source_text
+
+
 def test_source_lifetime_repeated_helper_result_reuse_rejects_condition_only_anchor() -> None:
     source = textwrap.dedent("""\
         s32 fn_80000000(CardState* state, s32 i)
@@ -1345,6 +1754,46 @@ def test_source_lifetime_preserves_generic_lifetime_layout_fallback() -> None:
     }
 
 
+def test_source_lifetime_filter_limits_probes_and_family_summaries() -> None:
+    probes, summaries = generate_source_lifetime_probes(
+        SOURCE,
+        "fn_80000000",
+        max_probes=8,
+        operator_filter=("temp-introduction",),
+    )
+
+    assert probes
+    assert {probe.operator for probe in probes} == {"temp-introduction"}
+    assert summaries == []
+
+
+def test_source_lifetime_family_summaries_track_retained_candidates_per_operator() -> None:
+    source = textwrap.dedent("""\
+        s32 fn_80000000(CardState* state, s32 i)
+        {
+            s32 total = 0;
+            total += fn_803AC634(state, i);
+            if (total < (s32) fn_803AC634(state, i)) {
+                total = (s32) fn_803AC634(state, i);
+            }
+            return total;
+        }
+    """)
+
+    probes, summaries = generate_source_lifetime_probes(
+        source,
+        "fn_80000000",
+        max_probes=1,
+    )
+
+    retained_by_operator = {
+        operator: sum(1 for probe in probes if probe.operator == operator)
+        for operator in {row["operator"] for row in summaries}
+    }
+    for row in summaries:
+        assert row.get("retained_candidates", 0) == retained_by_operator[row["operator"]]
+
+
 def test_generate_frame_directed_probes_materializes_frame_levers() -> None:
     source = textwrap.dedent("""\
         void fn_80000000(HSD_CObj* cobj, int arg1, int arg2)
@@ -1553,6 +2002,53 @@ def test_declaration_use_distance_keeps_later_uses_inside_moved_block() -> None:
     assert block_start < fn.index("sink(count);") < block_end
 
 
+def test_declaration_use_distance_skips_region_crossing_label_or_goto() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(int flag)
+        {
+            int count;
+            if (flag) {
+                goto found;
+            }
+
+            count = get_count();
+        found:
+            sink(count);
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(
+        source,
+        "fn_80000000",
+        operator_filter=("declaration-use-distance",),
+        max_probes=20,
+    )
+
+    assert [probe.operator for probe in probes] == []
+
+
+def test_declaration_use_distance_skips_inline_label_and_conditional_goto() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(int flag)
+        {
+            int count;
+            if (flag) goto found;
+
+            count = get_count();
+        found: sink(count);
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(
+        source,
+        "fn_80000000",
+        operator_filter=("declaration-use-distance",),
+        max_probes=20,
+    )
+
+    assert [probe.operator for probe in probes] == []
+
+
 def test_early_guard_return_probe_unwraps_top_level_if_body() -> None:
     source = textwrap.dedent("""\
         void fn_80000000(int flag, int index)
@@ -1640,6 +2136,109 @@ def test_call_arg_tempization_preserves_float_argument_type() -> None:
         "argument_index": 0,
         "temp_type": "f32",
     }
+
+
+def test_call_arg_tempization_preserves_float_literal_arithmetic_type() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(float x)
+        {
+            sinkf(x + 1.0f);
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(
+        source,
+        "fn_80000000",
+        operator_filter=("call-argument-tempization",),
+        max_probes=20,
+    )
+    probe = next(probe for probe in probes if probe.operator == "call-argument-tempization")
+
+    assert "float ll_probe_arg_0 = x + 1.0f;" in probe.source_text
+    assert "sinkf(ll_probe_arg_0);" in probe.source_text
+
+
+def test_temp_introduction_uses_lhs_type_for_assignment_temp() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(HSD_GObj* gobj)
+        {
+            Diagram3* data;
+            f32 frame;
+
+            data = gobj->user_data;
+            frame = mn_8022ED6C(data->jobjs[1], (AnimLoopSettings*) &settings);
+            sink(frame, data);
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(
+        source,
+        "fn_80000000",
+        operator_filter=("temp-introduction",),
+        max_probes=20,
+    )
+    probe = next(probe for probe in probes if probe.operator == "temp-introduction")
+
+    assert "Diagram3* ll_probe_temp_0 = gobj->user_data;" in probe.source_text
+    assert "int ll_probe_temp_0 = gobj->user_data;" not in probe.source_text
+
+
+def test_call_arg_tempization_rejects_pointer_expr_without_safe_type() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(Data* data, int* idx_ptr)
+        {
+            HSD_JObjSetFlagsAll(data->jobjs[*idx_ptr], 0x10);
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(
+        source,
+        "fn_80000000",
+        operator_filter=("call-argument-tempization",),
+        max_probes=20,
+    )
+
+    assert [probe.operator for probe in probes] == []
+
+
+def test_call_arg_tempization_preserves_simple_cast_pointer_type() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(void)
+        {
+            setup((AnimLoopSettings*) &settings);
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(
+        source,
+        "fn_80000000",
+        operator_filter=("call-argument-tempization",),
+        max_probes=20,
+    )
+    probe = next(probe for probe in probes if probe.operator == "call-argument-tempization")
+
+    assert "AnimLoopSettings* ll_probe_arg_0 = (AnimLoopSettings*) &settings;" in (
+        probe.source_text
+    )
+    assert "int ll_probe_arg_0" not in probe.source_text
+
+
+def test_call_arg_tempization_rejects_function_pointer_cast() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(HSD_GObj* gobj)
+        {
+            HSD_GObj_SetupProc(gobj, (void (*)(HSD_GObj*)) mnDiagram_OnFrame, 0);
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(
+        source,
+        "fn_80000000",
+        operator_filter=("call-argument-tempization",),
+        max_probes=20,
+    )
+
+    assert [probe.operator for probe in probes] == []
 
 
 def test_call_arg_tempization_ignores_nested_call_in_outer_argument_list() -> None:
@@ -2276,6 +2875,34 @@ def test_loop_init_probe_uses_c89_compatible_enclosing_block() -> None:
     assert "    {\n        int i;\n        for (i = 0;" in probe.source_text
 
 
+def test_loop_init_probe_rejects_counter_used_after_first_loop() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(void)
+        {
+            int i;
+            int total;
+
+            total = 0;
+            for (i = 0; i < 8; i++) {
+                total += i;
+            }
+            for (i = 0; i < 4; i++) {
+                total += i;
+            }
+            sink(total);
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(
+        source,
+        "fn_80000000",
+        operator_filter=("loop-init",),
+        max_probes=20,
+    )
+
+    assert [probe.operator for probe in probes] == []
+
+
 def test_declaration_order_probes_include_adjacent_swap_and_loop_counter_hoist() -> None:
     source = textwrap.dedent("""\
         void fn_80000000(int flag)
@@ -2610,6 +3237,141 @@ def test_indexed_struct_pointer_probe_rewrites_double_index_address_form() -> No
     assert probes[0].provenance["direct_expression"] == "rows[row][col]"
 
 
+def test_indexed_struct_pointer_probe_rewrites_casted_pointer_plus_array_uses() -> None:
+    source = textwrap.dedent("""\
+        typedef unsigned char u8;
+
+        int fn_80000000(char* str, int i)
+        {
+            u8* p;
+            p = (u8*) (str + i);
+            return p[2] + p[1];
+        }
+    """)
+
+    from src.mwcc_debug.pressure_explorer import scan_indexed_struct_pointer_probes
+
+    probes, status = scan_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert status["blocker"] is None
+    assert status["supported_candidate_count"] == 1
+    assert status["rejected_candidate_count"] == 0
+    assert len(probes) == 1
+    rewritten = probes[0].source_text
+    assert "    u8* p;\n" in rewritten
+    assert "p = (u8*) (str + i);" not in rewritten
+    assert "return ((u8*) (str + i))[2] + ((u8*) (str + i))[1];" in rewritten
+    provenance = probes[0].provenance
+    assert provenance["pointer"] == "p"
+    assert provenance["direct_expression"] == "(u8*) (str + i)"
+    assert [use["syntax"] for use in provenance["field_uses"]] == [
+        "array-subscript",
+        "array-subscript",
+    ]
+
+
+def test_indexed_struct_pointer_probe_rejects_unsafe_casted_array_uses() -> None:
+    from src.mwcc_debug.pressure_explorer import scan_indexed_struct_pointer_probes
+
+    cases = [
+        "p[2] = value;\n    return 0;",
+        "(p[2]) = value;\n    return 0;",
+        "++p[2];\n    return 0;",
+        "++(p[2]);\n    return 0;",
+        "(p[2])++;\n    return 0;",
+        "return &p[2] != 0;",
+        "return p != 0;",
+    ]
+
+    for body_tail in cases:
+        source = textwrap.dedent(f"""\
+            typedef unsigned char u8;
+
+            int fn_80000000(char* str, int i, int value)
+            {{
+                u8* p;
+                p = (u8*) (str + i);
+                {body_tail}
+            }}
+        """)
+
+        probes, status = scan_indexed_struct_pointer_probes(
+            source,
+            "fn_80000000",
+            max_probes=8,
+        )
+
+        assert probes == []
+        assert status["blocker"] == "no-safe-materialized-pointer"
+        assert status["supported_candidate_count"] == 1
+        assert status["rejected_candidate_count"] == 1
+
+
+def test_indexed_struct_pointer_probe_rejects_out_of_scope_casted_array_assignment() -> None:
+    source = textwrap.dedent("""\
+        typedef unsigned char u8;
+
+        int fn_80000000(char* str, int i)
+        {
+            {
+                u8* p;
+            }
+            p = (u8*) (str + i);
+            return p[2];
+        }
+    """)
+
+    from src.mwcc_debug.pressure_explorer import scan_indexed_struct_pointer_probes
+
+    probes, status = scan_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert probes == []
+    assert status["blocker"] == "indexed-struct-hint-unavailable"
+    assert status["supported_candidate_count"] == 0
+    assert status["rejected_candidate_count"] == 0
+
+
+def test_indexed_struct_pointer_probe_accepts_outer_scope_nested_casted_array_assignment() -> None:
+    source = textwrap.dedent("""\
+        typedef unsigned char u8;
+
+        int fn_80000000(char* str, int i)
+        {
+            u8* p;
+            if (i != 0) {
+                p = (u8*) (str + i);
+                return p[2] + p[1];
+            }
+            return 0;
+        }
+    """)
+
+    from src.mwcc_debug.pressure_explorer import scan_indexed_struct_pointer_probes
+
+    probes, status = scan_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert status["blocker"] is None
+    assert status["supported_candidate_count"] == 1
+    assert status["rejected_candidate_count"] == 0
+    assert len(probes) == 1
+    rewritten = probes[0].source_text
+    assert "    u8* p;\n" in rewritten
+    assert "p = (u8*) (str + i);" not in rewritten
+    assert "return ((u8*) (str + i))[2] + ((u8*) (str + i))[1];" in rewritten
+
+
 def test_indexed_struct_pointer_probe_splits_direct_indexed_field_access() -> None:
     source = textwrap.dedent("""\
         typedef float f32;
@@ -2676,6 +3438,179 @@ def test_indexed_struct_pointer_probe_splits_direct_indexed_field_access() -> No
     assert provenance["field"] == "x0"
     assert provenance["scalar_type"] == "f32"
     assert provenance["split_first_field"] is True
+
+
+def test_indexed_struct_pointer_probe_splits_single_direct_indexed_field() -> None:
+    source = textwrap.dedent("""\
+        typedef struct HSD_AnimJoint HSD_AnimJoint;
+
+        typedef struct Entry {
+            HSD_AnimJoint* anim;
+        } Entry;
+
+        typedef struct Attr {
+            Entry* entries;
+        } Attr;
+
+        HSD_AnimJoint* fn_80000000(Attr* attr, int picked)
+        {
+            return attr->entries[picked].anim;
+        }
+    """)
+
+    from src.mwcc_debug.pressure_explorer import scan_indexed_struct_pointer_probes
+
+    probes, status = scan_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert status["blocker"] is None
+    assert status["supported_candidate_count"] == 1
+    assert status["rejected_candidate_count"] == 0
+    assert len(probes) == 1
+    rewritten = probes[0].source_text
+    assert "HSD_AnimJoint* ll_probe_indexed_field_0;" in rewritten
+    assert (
+        "ll_probe_indexed_field_0 = attr->entries[picked].anim;" in rewritten
+    )
+    assert "return ll_probe_indexed_field_0;" in rewritten
+    assert probes[0].provenance["scalar_type"] == "HSD_AnimJoint*"
+
+
+def test_indexed_struct_pointer_probe_splits_direct_indexed_element() -> None:
+    source = textwrap.dedent("""\
+        typedef struct HSD_JObj HSD_JObj;
+
+        typedef struct MnItemSwData {
+            HSD_JObj* jobjs[9];
+        } MnItemSwData;
+
+        float fn_80000000(MnItemSwData* data)
+        {
+            return HSD_JObjGetTranslationY(data->jobjs[5]) -
+                   HSD_JObjGetTranslationY(data->jobjs[4]);
+        }
+    """)
+
+    from src.mwcc_debug.pressure_explorer import scan_indexed_struct_pointer_probes
+
+    probes, status = scan_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert status["blocker"] is None
+    assert status["supported_candidate_count"] == 1
+    assert status["rejected_candidate_count"] == 0
+    assert len(probes) == 1
+    rewritten = probes[0].source_text
+    assert "HSD_JObj* ll_probe_indexed_element_0;" in rewritten
+    assert "ll_probe_indexed_element_0 = data->jobjs[5];" in rewritten
+    assert "HSD_JObjGetTranslationY(ll_probe_indexed_element_0)" in rewritten
+    assert "HSD_JObjGetTranslationY(data->jobjs[4])" in rewritten
+    provenance = probes[0].provenance
+    assert provenance["variant"] == "direct-element-scalar-split"
+    assert provenance["element_type"] == "HSD_JObj*"
+
+
+def test_indexed_struct_pointer_probe_splits_direct_indexed_element_with_void_pointer_fallback() -> None:
+    source = textwrap.dedent("""\
+        typedef struct MnItemSwData MnItemSwData;
+
+        float fn_80000000(MnItemSwData* data)
+        {
+            return HSD_JObjGetTranslationY(data->jobjs[5]) -
+                   HSD_JObjGetTranslationY(data->jobjs[4]);
+        }
+    """)
+
+    from src.mwcc_debug.pressure_explorer import scan_indexed_struct_pointer_probes
+
+    probes, status = scan_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert status["blocker"] is None
+    assert status["supported_candidate_count"] == 1
+    assert status["rejected_candidate_count"] == 0
+    assert len(probes) == 1
+    rewritten = probes[0].source_text
+    assert "void* ll_probe_indexed_element_0;" in rewritten
+    assert "ll_probe_indexed_element_0 = data->jobjs[5];" in rewritten
+    assert "HSD_JObjGetTranslationY(ll_probe_indexed_element_0)" in rewritten
+    assert probes[0].provenance["element_type"] == "void*"
+
+
+def test_indexed_struct_pointer_probe_rejects_void_fallback_for_parenthesized_return() -> None:
+    source = textwrap.dedent("""\
+        typedef struct MnItemSwData MnItemSwData;
+
+        void* fn_80000000(MnItemSwData* data)
+        {
+            return (data->jobjs[5]);
+        }
+    """)
+
+    from src.mwcc_debug.pressure_explorer import scan_indexed_struct_pointer_probes
+
+    probes, status = scan_indexed_struct_pointer_probes(
+        source,
+        "fn_80000000",
+        max_probes=8,
+    )
+
+    assert probes == []
+    assert status["blocker"] == "indexed-struct-hint-unavailable"
+    assert status["supported_candidate_count"] == 0
+    assert status["rejected_candidate_count"] == 0
+
+
+def test_indexed_struct_pointer_probe_rejects_unsafe_direct_indexed_elements() -> None:
+    from src.mwcc_debug.pressure_explorer import scan_indexed_struct_pointer_probes
+
+    cases = [
+        "data->jobjs[5] = jobj;\n    return 0;",
+        "(data->jobjs[5]) = jobj;\n    return 0;",
+        "++data->jobjs[5];\n    return 0;",
+        "++(data->jobjs[5]);\n    return 0;",
+        "(data->jobjs[5])++;\n    return 0;",
+        "return &data->jobjs[5] != 0;",
+        "if (data->jobjs[5]) { return 1; }\n    return 0;",
+        "if /* comment */ (data->jobjs[5]) { return 1; }\n    return 0;",
+        "if\n    (data->jobjs[5]) { return 1; }\n    return 0;",
+        "return sizeof(data->jobjs[5]);",
+        "return sizeof /* comment */ (data->jobjs[5]);",
+    ]
+
+    for body_tail in cases:
+        source = textwrap.dedent(f"""\
+            typedef struct HSD_JObj HSD_JObj;
+
+            typedef struct MnItemSwData {{
+                HSD_JObj* jobjs[9];
+            }} MnItemSwData;
+
+            int fn_80000000(MnItemSwData* data, HSD_JObj* jobj)
+            {{
+                {body_tail}
+            }}
+        """)
+
+        probes, status = scan_indexed_struct_pointer_probes(
+            source,
+            "fn_80000000",
+            max_probes=8,
+        )
+
+        assert probes == []
+        assert status["blocker"] == "indexed-struct-hint-unavailable"
+        assert status["supported_candidate_count"] == 0
+        assert status["rejected_candidate_count"] == 0
 
 
 def test_indexed_struct_pointer_probe_rejects_escaped_or_mutated_pointer() -> None:
@@ -3909,6 +4844,56 @@ def test_lifetime_layout_compile_probes_use_same_tu_unit_source(
     assert calls[0]["unit_source"] == source
 
 
+def test_lifetime_layout_compile_probes_normalizes_relative_source_file(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    melee_root = tmp_path / "melee"
+    tool_dir = melee_root / "tools" / "melee-agent"
+    baseline = tmp_path / "baseline.txt"
+    source = melee_root / "src" / "melee" / "mn" / "source.c"
+    tool_dir.mkdir(parents=True)
+    source.parent.mkdir(parents=True)
+    baseline.write_text(BASELINE)
+    source.write_text(SOURCE)
+    calls: list[dict[str, object]] = []
+
+    def fake_compile(diff_input, *, function, melee_root, timeout, unit_source=None) -> str:
+        calls.append({"diff_input": diff_input, "unit_source": unit_source})
+        return CANDIDATE
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture.compile_source_variant",
+        fake_compile,
+    )
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.chdir(tool_dir)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "lifetime-layout",
+            "-f",
+            "fn_80000000",
+            "--pcdump",
+            str(baseline),
+            "--source-file",
+            "../../src/melee/mn/source.c",
+            "--compile-probes",
+            "--no-score-match-percent",
+            "--max-probes",
+            "1",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert calls
+    assert calls[0]["unit_source"] == source.resolve()
+
+
 def test_lifetime_layout_cli_exposes_frame_reservation_probe(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -4000,3 +4985,79 @@ def test_lifetime_layout_cli_focuses_b4_tree_loop_probe_families(
     operators = {probe["operator"] for probe in payload["probes"]}
     assert operators == {"pointer-walk-loop"}
     assert len(payload["probes"]) == 3
+
+
+def test_lifetime_layout_cli_focuses_helper_inline_lifetime_probe_families(
+    tmp_path: pathlib.Path,
+) -> None:
+    baseline = tmp_path / "baseline.txt"
+    source = tmp_path / "source.c"
+    baseline.write_text(BASELINE)
+    source.write_text(textwrap.dedent("""\
+        s32 fn_80000000(CardState* state, s32 i)
+        {
+            s32 total = 0;
+            total += fn_803AC634(state, i);
+            if (total < (s32) fn_803AC634(state, i)) {
+                total = (s32) fn_803AC634(state, i);
+            }
+            return total;
+        }
+    """))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "lifetime-layout",
+            "-f",
+            "fn_80000000",
+            "--pcdump",
+            str(baseline),
+            "--source-file",
+            str(source),
+            "--focus",
+            "helper-inline-lifetime",
+            "--max-probes",
+            "4",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["focus"] == "helper-inline-lifetime"
+    assert "source_lifetime_families" in payload
+    assert "repeated-helper-result-reuse" in {
+        probe["operator"] for probe in payload["probes"]
+    }
+
+    filtered = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "lifetime-layout",
+            "-f",
+            "fn_80000000",
+            "--pcdump",
+            str(baseline),
+            "--source-file",
+            str(source),
+            "--focus",
+            "helper-inline-lifetime",
+            "--operator",
+            "block-scope",
+            "--max-probes",
+            "4",
+            "--json",
+        ],
+    )
+
+    assert filtered.exit_code == 0, filtered.stdout + filtered.stderr
+    filtered_payload = json.loads(filtered.stdout)
+    assert {probe["operator"] for probe in filtered_payload["probes"]} == {
+        "block-scope"
+    }
+    assert filtered_payload["source_lifetime_families"] == []

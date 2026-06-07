@@ -259,18 +259,45 @@ def evaluate_frame_transform_probe_results(
         verdict = "frame-transform-ceiling-candidate"
     else:
         verdict = "frame-transform-results-inconclusive"
+    natural_source_attribution = _frame_transform_natural_source_attribution(
+        verdict,
+        variants,
+        frame_report=frame_report,
+        semantic_lever_status=semantic_lever_status,
+    )
+    stop_variant = best
+    if best is not None and _is_diagnostic_frame_transform_operator(
+        best.get("operator")
+    ):
+        if natural_source_attribution.get("status") == "validated-natural-source":
+            verdict = "source-reachable-frame-transform"
+            stop_variant = _best_natural_frame_transform_variant(
+                variants,
+                require_target_fixed=True,
+            ) or best
+        elif natural_source_attribution.get("status") == "partial-natural-source":
+            verdict = "partial-source-reachable-frame-transform"
+            stop_variant = _best_natural_frame_transform_variant(variants) or best
+        elif int(best.get("frame_delta_improvement") or 0) > 0:
+            verdict = "diagnostic-pad-stack-frame-transform"
+            stop_variant = _best_diagnostic_frame_transform_variant(variants) or best
+    elif natural_source_attribution.get("status") == "diagnostic-pad-stack-only":
+        verdict = "diagnostic-pad-stack-frame-transform"
+        stop_variant = _best_diagnostic_frame_transform_variant(variants) or best
 
     return {
         "status": "evaluated" if variants else "no-probes",
         "verdict": verdict,
         "stop_condition": _frame_transform_probe_stop_condition(
             verdict,
-            best,
+            stop_variant,
             variants,
             expected_frame=expected_frame,
             baseline_delta=baseline_delta,
             semantic_lever_status=semantic_lever_status,
+            natural_source_attribution=natural_source_attribution,
         ),
+        "natural_source_attribution": natural_source_attribution,
         "expected_frame_size": expected_frame,
         "current_frame_size": current_frame,
         "baseline_remaining_frame_delta": baseline_delta,
@@ -356,6 +383,175 @@ def _is_frame_size_transform_operator(operator: Any) -> bool:
     return isinstance(operator, str) and operator in _FRAME_SIZE_TRANSFORM_OPERATORS
 
 
+def _is_diagnostic_frame_transform_operator(operator: Any) -> bool:
+    return operator == "frame-reservation-pad-stack"
+
+
+def _is_natural_frame_transform_operator(operator: Any) -> bool:
+    return _is_frame_size_transform_operator(
+        operator
+    ) and not _is_diagnostic_frame_transform_operator(operator)
+
+
+def _best_natural_frame_transform_variant(
+    variants: list[dict],
+    *,
+    require_target_fixed: bool = False,
+) -> dict | None:
+    for variant in variants:
+        if not _is_natural_frame_transform_operator(variant.get("operator")):
+            continue
+        if variant.get("status") != "ok":
+            continue
+        if require_target_fixed and not variant.get("target_frame_fixed"):
+            continue
+        if int(variant.get("frame_delta_improvement") or 0) > 0:
+            return variant
+    return None
+
+
+def _best_diagnostic_frame_transform_variant(variants: list[dict]) -> dict | None:
+    for variant in variants:
+        if not _is_diagnostic_frame_transform_operator(variant.get("operator")):
+            continue
+        if variant.get("status") == "ok":
+            return variant
+    return None
+
+
+def _frame_transform_variant_summary(variant: dict | None) -> dict | None:
+    if not isinstance(variant, dict):
+        return None
+    summary = {
+        "label": variant.get("label"),
+        "operator": variant.get("operator"),
+        "status": variant.get("status"),
+        "candidate_frame_size": variant.get("candidate_frame_size"),
+        "remaining_frame_delta": variant.get("remaining_frame_delta"),
+        "frame_delta_improvement": variant.get("frame_delta_improvement"),
+    }
+    if variant.get("match_percent") is not None:
+        summary["match_percent"] = variant.get("match_percent")
+    return summary
+
+
+def _frame_transform_natural_source_attribution(
+    verdict: str,
+    variants: list[dict],
+    *,
+    frame_report: dict | None = None,
+    semantic_lever_status: Any = None,
+) -> dict:
+    measured = [
+        variant for variant in variants
+        if variant.get("status") == "ok"
+        and isinstance(variant.get("candidate_frame_size"), int)
+    ]
+    natural_measured = [
+        variant for variant in measured
+        if _is_natural_frame_transform_operator(variant.get("operator"))
+    ]
+    diagnostic_measured = [
+        variant for variant in measured
+        if _is_diagnostic_frame_transform_operator(variant.get("operator"))
+    ]
+    natural_improved = [
+        variant for variant in natural_measured
+        if int(variant.get("frame_delta_improvement") or 0) > 0
+    ]
+    diagnostic_improved = [
+        variant for variant in diagnostic_measured
+        if int(variant.get("frame_delta_improvement") or 0) > 0
+    ]
+    best_natural = natural_improved[0] if natural_improved else None
+    best_diagnostic = diagnostic_improved[0] if diagnostic_improved else (
+        diagnostic_measured[0] if diagnostic_measured else None
+    )
+
+    base = {
+        "best_natural_variant": _frame_transform_variant_summary(best_natural),
+        "best_diagnostic_variant": _frame_transform_variant_summary(best_diagnostic),
+        "measured_natural_operator_count": len(natural_measured),
+        "measured_diagnostic_operator_count": len(diagnostic_measured),
+    }
+    if best_natural and best_natural.get("target_frame_fixed"):
+        return {
+            **base,
+            "status": "validated-natural-source",
+            "verdict": "source-reachable",
+            "missing_reason": None,
+        }
+    if best_natural is not None:
+        return {
+            **base,
+            "status": "partial-natural-source",
+            "verdict": "source-probe",
+            "missing_reason": (
+                "best non-PAD_STACK source transform improved the frame but "
+                "did not reach the target frame size"
+            ),
+        }
+    if diagnostic_improved:
+        reason = (
+            "best frame improvement is PAD_STACK diagnostic; no validated "
+            "non-PAD_STACK source transform improved the frame"
+        )
+        unresolved_reason = _frame_transform_unresolved_attribution_reason(
+            frame_report,
+        )
+        if unresolved_reason:
+            reason = f"{reason}; unresolved source attribution: {unresolved_reason}"
+        return {
+            **base,
+            "status": "diagnostic-pad-stack-only",
+            "verdict": "diagnostic-only",
+            "missing_reason": reason,
+        }
+    if _is_no_safe_semantic_lever_status(semantic_lever_status):
+        return {
+            **base,
+            "status": "no-source-lever",
+            "verdict": "diagnostic-only",
+            "missing_reason": _semantic_lever_reason(semantic_lever_status),
+        }
+    if measured:
+        return {
+            **base,
+            "status": "no-source-lever",
+            "verdict": "diagnostic-only",
+            "missing_reason": (
+                "measured frame-transform probes did not validate a "
+                "non-PAD_STACK source transform"
+            ),
+        }
+    return {
+        **base,
+        "status": "inconclusive",
+        "verdict": verdict,
+        "missing_reason": "no measured frame-size-capable source probes",
+    }
+
+
+def _frame_transform_unresolved_attribution_reason(
+    frame_report: dict | None,
+) -> str | None:
+    if not isinstance(frame_report, dict):
+        return None
+    first_divergence = frame_report.get("frame_first_divergence")
+    if not isinstance(first_divergence, dict):
+        return None
+    verdict = first_divergence.get("verdict")
+    if isinstance(verdict, dict) and isinstance(verdict.get("reason"), str):
+        return verdict["reason"]
+    source_attribution = first_divergence.get("source_attribution")
+    if (
+        isinstance(source_attribution, dict)
+        and isinstance(source_attribution.get("reason"), str)
+    ):
+        return source_attribution["reason"]
+    return None
+
+
 def _is_no_safe_semantic_lever_status(status: Any) -> bool:
     return (
         isinstance(status, dict)
@@ -377,10 +573,11 @@ def _frame_transform_probe_stop_condition(
     expected_frame: int,
     baseline_delta: int,
     semantic_lever_status: Any = None,
+    natural_source_attribution: dict | None = None,
 ) -> dict:
     if verdict == "source-reachable-frame-transform" and best is not None:
         label = str(best.get("label") or "<unknown>")
-        return {
+        condition = {
             "status": "satisfied",
             "kind": "validated-frame-transform",
             "reason": (
@@ -390,10 +587,15 @@ def _frame_transform_probe_stop_condition(
             "variant_label": label,
             "remaining_frame_delta": best.get("remaining_frame_delta"),
         }
+        _attach_natural_source_stop_condition(
+            condition,
+            natural_source_attribution,
+        )
+        return condition
     if verdict == "partial-source-reachable-frame-transform" and best is not None:
         label = str(best.get("label") or "<unknown>")
         improvement = int(best.get("frame_delta_improvement") or 0)
-        return {
+        condition = {
             "status": "partial",
             "kind": "partial-frame-transform",
             "reason": (
@@ -404,13 +606,36 @@ def _frame_transform_probe_stop_condition(
             "remaining_frame_delta": best.get("remaining_frame_delta"),
             "frame_delta_improvement": improvement,
         }
+        _attach_natural_source_stop_condition(
+            condition,
+            natural_source_attribution,
+        )
+        return condition
+    if verdict == "diagnostic-pad-stack-frame-transform" and best is not None:
+        label = str(best.get("label") or "<unknown>")
+        condition = {
+            "status": "diagnostic",
+            "kind": "diagnostic-pad-stack-only",
+            "reason": (
+                f"probe {label} changes frame size via PAD_STACK diagnostic; "
+                "no validated non-PAD_STACK source transform improved the frame"
+            ),
+            "variant_label": label,
+            "remaining_frame_delta": best.get("remaining_frame_delta"),
+            "frame_delta_improvement": best.get("frame_delta_improvement"),
+        }
+        _attach_natural_source_stop_condition(
+            condition,
+            natural_source_attribution,
+        )
+        return condition
     if verdict == "frame-transform-ceiling-candidate":
         measured = [
             variant for variant in variants
             if variant.get("status") == "ok"
             and isinstance(variant.get("candidate_frame_size"), int)
         ]
-        return {
+        condition = {
             "status": "candidate",
             "kind": "bounded-frame-transform-ceiling",
             "reason": (
@@ -420,19 +645,50 @@ def _frame_transform_probe_stop_condition(
             "measured_probe_count": len(measured),
             "baseline_remaining_frame_delta": baseline_delta,
         }
+        _attach_natural_source_stop_condition(
+            condition,
+            natural_source_attribution,
+        )
+        return condition
     if verdict == "no-safe-semantic-lever":
-        return {
+        condition = {
             "status": "not-satisfied",
             "kind": "no-safe-semantic-lever",
             "reason": _semantic_lever_reason(semantic_lever_status),
             "baseline_remaining_frame_delta": baseline_delta,
         }
-    return {
+        _attach_natural_source_stop_condition(
+            condition,
+            natural_source_attribution,
+        )
+        return condition
+    condition = {
         "status": "not-satisfied",
         "kind": verdict,
         "reason": "probe evidence is not sufficient for frame transform validation",
         "baseline_remaining_frame_delta": baseline_delta,
     }
+    _attach_natural_source_stop_condition(condition, natural_source_attribution)
+    return condition
+
+
+def _attach_natural_source_stop_condition(
+    condition: dict,
+    attribution: dict | None,
+) -> None:
+    if not isinstance(attribution, dict):
+        return
+    if attribution.get("status") not in {
+        "diagnostic-pad-stack-only",
+        "no-source-lever",
+    }:
+        return
+    if (
+        attribution.get("status") == "no-source-lever"
+        and condition.get("kind") != "no-safe-semantic-lever"
+    ):
+        return
+    condition["natural_source_attribution"] = attribution
 
 
 def _materialize_stack_home_probe_commands(report: dict) -> None:

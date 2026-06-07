@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import threading
@@ -29,11 +30,31 @@ DEFAULT_REPORT = REPO_ROOT / "build" / "GALE01" / "report.json"
 DEFAULT_OUTPUT = REPO_ROOT / "build" / "function-taxonomy"
 DEFAULT_CHECKDIFF_TIMEOUT = 120.0
 DEFAULT_DECL_ORDER_TIMEOUT = 180.0
+DEFAULT_NAME_MAGIC_PREFLIGHT_TIMEOUT = 60.0
+DEFAULT_STRUCT_VERIFY_TIMEOUT = 180.0
 DEFAULT_PROGRESS_INTERVAL = 30.0
 RUN_STATUS_FILENAME = "run-status.json"
 RUN_STATUS_SCHEMA_VERSION = 1
-_DECL_ORDER_EVAL_LOCK = threading.Lock()
+_DECL_ORDER_EVAL_LOCK = threading.RLock()
 NON_STRUCT_BASE_REGS = {"r1", "r2", "r13"}
+DATA_SYMBOL_NAME_MAGIC_REBUCKET_BLOCKERS = {
+    "no-name-magic-candidate": "blocked-data-symbol-no-name-magic-candidate",
+    "unsupported-source-site": "blocked-data-symbol-unsupported-source-site",
+    "ambiguous-relocation-pair": (
+        "blocked-data-symbol-ambiguous-relocation-pair"
+    ),
+    "unsupported-reloc-kind": "blocked-data-symbol-unsupported-reloc-kind",
+    "raw-diff-no-supported-data-symbol-pair": (
+        "blocked-data-symbol-raw-diff-no-supported-data-symbol-pair"
+    ),
+    "no-name-magic-validation-failed": (
+        "blocked-data-symbol-no-name-magic-validation-failed"
+    ),
+    "ambiguous-sdata2-value": "blocked-data-symbol-ambiguous-sdata2-value",
+    "sdata2-pool-order-dependent": (
+        "blocked-data-symbol-sdata2-pool-order-dependent"
+    ),
+}
 
 BUCKET_ORDER = [
     "signature-call-type",
@@ -74,6 +95,8 @@ CheckdiffRunner = Callable[[str], tuple[int, str, str]]
 DeclOrderEvaluator = Callable[[FunctionCandidate, dict[str, Any]], dict[str, Any]]
 FrameReportRunner = Callable[[FunctionCandidate], dict[str, Any] | None]
 CastAuditRunner = Callable[[FunctionCandidate], dict[str, Any]]
+NameMagicPreflightRunner = Callable[[FunctionCandidate], dict[str, Any] | None]
+StructVerifyRunner = Callable[[FunctionCandidate, dict[str, Any]], dict[str, Any] | None]
 
 
 def _tail_text(value: Any, limit: int = 1000) -> str:
@@ -107,6 +130,29 @@ def parse_float(value: Any, default: float = 0.0) -> float:
 
 def strip_src_prefix(path: str) -> str:
     return path[4:] if path.startswith("src/") else path
+
+
+def _candidate_source_path(candidate: FunctionCandidate) -> Path | None:
+    if not candidate.file_path:
+        return None
+    return REPO_ROOT / "src" / candidate.file_path
+
+
+def _snapshot_candidate_source(candidate: FunctionCandidate) -> tuple[Path, str] | None:
+    source_path = _candidate_source_path(candidate)
+    if source_path is None:
+        return None
+    try:
+        return source_path, source_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def _restore_candidate_source(snapshot: tuple[Path, str] | None) -> None:
+    if snapshot is None:
+        return
+    source_path, original = snapshot
+    source_path.write_text(original, encoding="utf-8")
 
 
 def format_address(value: Any) -> str:
@@ -386,8 +432,6 @@ def classify_bucket(
     reasons = classification.get("reasons") or []
     reason_text = "\n".join(str(reason).lower() for reason in reasons)
 
-    if struct_offset_discrepancies(classification):
-        return "struct-offset-discrepancy", "struct-field-offset-displacement", False
     if primary == "bss-anchor-ceiling" or classification.get(
         "bss_anchor_relocations"
     ):
@@ -423,12 +467,14 @@ def classify_bucket(
         if "hsd_assert" in reason_text or "assert" in reason_text:
             return "register-allocator", "register-plus-hsd-assert-data", False
         return "register-allocator", "register-only-needs-pcdump-proof", False
-    if is_known_small_candidate(candidate, payload):
-        return "known-small-pattern-candidate", "small-opcode-or-operand-pattern", True
     if primary == "control-flow-source-shape":
         return "structural-reconstruction", "branch-or-control-flow-shape", False
     if primary == "instruction-sequence":
         return "structural-reconstruction", "opcode-sequence-diff", False
+    if struct_offset_discrepancies(classification):
+        return "struct-offset-discrepancy", "struct-field-offset-displacement", False
+    if is_known_small_candidate(candidate, payload):
+        return "known-small-pattern-candidate", "small-opcode-or-operand-pattern", True
     if primary == "operand-register-or-offset":
         return "known-small-pattern-candidate", "operand-register-offset-small", True
     return "structural-reconstruction", "direct-inspection-needed", False
@@ -665,8 +711,8 @@ def next_command(
         ]
         base_arg = f" --base {bases[0]}" if len(bases) == 1 else " --base <base-reg>"
         return (
-            f"melee-agent struct verify {function} --struct <struct-name>"
-            f"{base_arg} --tu-src {source_path} --json"
+            f"melee-agent struct verify {function}{base_arg} "
+            f"--tu-src {source_path} --json"
         )
     if bucket == "register-allocator":
         return (
@@ -674,6 +720,264 @@ def next_command(
             f"melee-agent debug dump local {source_path} --function {function}"
         )
     return f"python tools/checkdiff.py {function} --compact"
+
+
+def _name_magic_preflight_command(candidate: FunctionCandidate) -> list[str]:
+    return [
+        "melee-agent",
+        "debug",
+        "mutate",
+        "name-magic-source-declarations",
+        "-f",
+        candidate.function,
+        "--source-file",
+        f"src/{candidate.file_path}",
+        "--no-compile-probes",
+        "--no-score-match-percent",
+        "--json",
+    ]
+
+
+def default_name_magic_preflight_runner(
+    candidate: FunctionCandidate,
+    *,
+    timeout: float | None = DEFAULT_NAME_MAGIC_PREFLIGHT_TIMEOUT,
+) -> dict[str, Any] | None:
+    source_path = REPO_ROOT / "src" / candidate.file_path
+    if not source_path.exists():
+        return None
+    try:
+        proc = subprocess.run(
+            _name_magic_preflight_command(candidate),
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0 or not proc.stdout:
+        return None
+    try:
+        return parse_json_object(proc.stdout)
+    except Exception:
+        return None
+
+
+def _struct_verify_command(
+    candidate: FunctionCandidate,
+    classification: dict[str, Any],
+) -> list[str]:
+    cmd = [
+        "melee-agent",
+        "struct",
+        "verify",
+        candidate.function,
+    ]
+    summary = offset_discrepancy_summary(classification)
+    bases = [
+        base
+        for base in str(summary.get("offset_discrepancy_bases") or "").split(",")
+        if base
+    ]
+    if len(bases) == 1:
+        cmd.extend(["--base", bases[0]])
+    cmd.extend(["--tu-src", f"src/{candidate.file_path}", "--json"])
+    return cmd
+
+
+def default_struct_verify_runner(
+    candidate: FunctionCandidate,
+    classification: dict[str, Any],
+    *,
+    timeout: float | None = DEFAULT_STRUCT_VERIFY_TIMEOUT,
+) -> dict[str, Any] | None:
+    try:
+        proc = subprocess.run(
+            _struct_verify_command(candidate, classification),
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0 or not proc.stdout:
+        return None
+    try:
+        return parse_json_object(proc.stdout)
+    except Exception:
+        return None
+
+
+def _string_join_unique(values: list[str]) -> str:
+    return ",".join(dict.fromkeys(value for value in values if value))
+
+
+def _struct_verify_skipped_text(payload: dict[str, Any]) -> str:
+    parts: list[str] = []
+    raw_skipped = payload.get("skipped") or []
+    if isinstance(raw_skipped, list):
+        for item in raw_skipped:
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                parts.append(f"{item[0]}: {item[1]}")
+            elif item:
+                parts.append(str(item))
+    return "; ".join(parts)
+
+
+def _verified_struct_findings(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_findings = payload.get("findings") or []
+    if not isinstance(raw_findings, list):
+        return []
+    verified = []
+    for finding in raw_findings:
+        if not isinstance(finding, dict):
+            continue
+        if not finding.get("struct") or not finding.get("field"):
+            continue
+        if finding.get("conflict") or finding.get("ambiguous"):
+            continue
+        verified.append(finding)
+    return verified
+
+
+def _struct_verify_skip_unavailable(reason: str) -> bool:
+    lowered = reason.lower()
+    return (
+        "checkdiff failed" in lowered
+        or "source read failed" in lowered
+        or "source unavailable" in lowered
+    )
+
+
+def summarize_struct_verify_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+    if payload is None:
+        return {
+            "struct_verify_status": "unavailable",
+            "struct_verify_finding_count": 0,
+            "struct_verify_verified_count": 0,
+            "struct_verify_structs": "",
+            "struct_verify_fields": "",
+            "struct_verify_skipped": "",
+            "struct_verify_reason": "struct verify unavailable",
+        }
+
+    raw_findings = payload.get("findings") or []
+    findings = raw_findings if isinstance(raw_findings, list) else []
+    verified = _verified_struct_findings(payload)
+    skipped = _struct_verify_skipped_text(payload)
+    if verified:
+        status = "verified"
+        reason = f"{len(verified)} verified named field finding(s)"
+    elif skipped and _struct_verify_skip_unavailable(skipped):
+        status = "unavailable"
+        reason = skipped
+    else:
+        status = "unverified"
+        reason = skipped or "no verified named field findings"
+
+    return {
+        "struct_verify_status": status,
+        "struct_verify_finding_count": len(findings),
+        "struct_verify_verified_count": len(verified),
+        "struct_verify_structs": _string_join_unique(
+            [str(finding.get("struct") or "") for finding in verified]
+        ),
+        "struct_verify_fields": _string_join_unique(
+            [str(finding.get("field") or "") for finding in verified]
+        ),
+        "struct_verify_skipped": skipped,
+        "struct_verify_reason": reason,
+    }
+
+
+def _payload_probe_count(payload: dict[str, Any]) -> int:
+    raw_count = payload.get("probe_count")
+    if raw_count is not None:
+        return parse_int(raw_count)
+    probes = payload.get("probes")
+    if isinstance(probes, list):
+        return len(probes)
+    variants = payload.get("variants")
+    if isinstance(variants, list):
+        return len(variants)
+    return 0
+
+
+def attach_name_magic_preflight(
+    record: dict[str, Any],
+    candidate: FunctionCandidate,
+    payload: dict[str, Any] | None,
+) -> None:
+    if payload is None:
+        return
+    stop_condition = payload.get("stop_condition")
+    if not isinstance(stop_condition, dict):
+        stop_condition = {}
+    blocker = str(
+        payload.get("blocker") or stop_condition.get("blocker") or ""
+    ).strip()
+    stop_kind = str(stop_condition.get("kind") or "").strip()
+    reason = str(
+        stop_condition.get("reason") or payload.get("reason") or blocker
+    ).strip()
+    probe_count = _payload_probe_count(payload)
+
+    record["name_magic_blocker"] = blocker
+    record["name_magic_stop_kind"] = stop_kind
+    record["name_magic_probe_count"] = probe_count
+    record["name_magic_reason"] = reason
+
+    if not blocker or probe_count > 0:
+        return
+    source_actionability = DATA_SYMBOL_NAME_MAGIC_REBUCKET_BLOCKERS.get(blocker)
+    if source_actionability is None:
+        return
+
+    detail = reason or blocker
+    record["source_actionability"] = source_actionability
+    record["headline_tool"] = "checkdiff-name-magic"
+    record["actionability_reason"] = (
+        f"{blocker}; {detail}; no source-emitting name-magic candidate was "
+        "produced by current tooling"
+    )
+    record["next_command"] = " ".join(_name_magic_preflight_command(candidate))
+
+
+def attach_struct_verify_gate(
+    record: dict[str, Any],
+    candidate: FunctionCandidate,
+    classification: dict[str, Any],
+    payload: dict[str, Any] | None,
+) -> None:
+    summary = summarize_struct_verify_payload(payload)
+    record.update(summary)
+    status = summary["struct_verify_status"]
+    if status == "verified":
+        record["confidence"] = "resolver-verified"
+        return
+    if status == "unavailable":
+        return
+
+    record["work_bucket"] = "data-symbol-relocation"
+    record["subcategory"] = "unverified-struct-offset-displacement"
+    record["confidence"] = "resolver-rebucketed"
+    actionability = describe_actionability(
+        record["work_bucket"],
+        record["subcategory"],
+    )
+    record.update(actionability)
+    record["actionability_reason"] = (
+        "raw struct offset discrepancy did not resolve to a non-ambiguous "
+        f"named struct field; {summary['struct_verify_reason']}"
+    )
+    record["next_command"] = next_command(
+        record["work_bucket"],
+        record["subcategory"],
+        candidate,
+        classification,
+    )
 
 
 def default_frame_report_runner(
@@ -930,6 +1234,10 @@ def classify_candidate(
     decl_order_evaluator: DeclOrderEvaluator | None = default_decl_order_evaluator,
     frame_report_runner: FrameReportRunner | None = default_frame_report_runner,
     cast_audit_runner: CastAuditRunner | None = default_cast_audit_runner,
+    name_magic_preflight_runner: NameMagicPreflightRunner | None = (
+        default_name_magic_preflight_runner
+    ),
+    struct_verify_runner: StructVerifyRunner | None = default_struct_verify_runner,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     started = time.perf_counter()
     try:
@@ -1024,8 +1332,6 @@ def classify_candidate(
         "stderr_tail": stderr[-1000:],
         "next_command": next_command(bucket, subcategory, candidate),
     }
-    if frame_taxonomy is not None:
-        attach_frame_taxonomy(record, frame_taxonomy)
     offset_summary = offset_discrepancy_summary(classification)
     if offset_summary["offset_discrepancy_count"]:
         record.update(offset_summary)
@@ -1035,11 +1341,37 @@ def classify_candidate(
             candidate,
             classification,
         )
+    if frame_taxonomy is not None:
+        attach_frame_taxonomy(record, frame_taxonomy)
+    if (
+        record["work_bucket"] == "struct-offset-discrepancy"
+        and struct_verify_runner is not None
+    ):
+        try:
+            struct_verify_payload = struct_verify_runner(candidate, classification)
+        except Exception:
+            struct_verify_payload = None
+        attach_struct_verify_gate(record, candidate, classification, struct_verify_payload)
+    if (
+        record["work_bucket"] == "data-symbol-relocation"
+        and name_magic_preflight_runner is not None
+    ):
+        try:
+            name_magic_payload = name_magic_preflight_runner(candidate)
+        except Exception:
+            name_magic_payload = None
+        attach_name_magic_preflight(record, candidate, name_magic_payload)
     if (
         decl_order_evaluator is not None
         and should_evaluate_decl_orders(candidate, bucket, subcategory)
     ):
-        attach_decl_order_summary(record, decl_order_evaluator(candidate, record))
+        with _DECL_ORDER_EVAL_LOCK:
+            source_snapshot = _snapshot_candidate_source(candidate)
+            try:
+                decl_order_summary = decl_order_evaluator(candidate, record)
+            finally:
+                _restore_candidate_source(source_snapshot)
+        attach_decl_order_summary(record, decl_order_summary)
     return record, None
 
 
@@ -1061,6 +1393,13 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "offset_discrepancy_bases",
         "offset_discrepancy_disps",
         "offset_discrepancy_opcodes",
+        "struct_verify_status",
+        "struct_verify_finding_count",
+        "struct_verify_verified_count",
+        "struct_verify_structs",
+        "struct_verify_fields",
+        "struct_verify_skipped",
+        "struct_verify_reason",
         "frame_cause",
         "frame_verdict",
         "frame_closability_tier",
@@ -1073,6 +1412,10 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "source_actionability",
         "headline_tool",
         "actionability_reason",
+        "name_magic_blocker",
+        "name_magic_stop_kind",
+        "name_magic_probe_count",
+        "name_magic_reason",
         "file_path",
         "size_bytes",
         "next_command",
@@ -1093,6 +1436,13 @@ def write_queue(path: Path, rows: list[dict[str, Any]]) -> None:
         "offset_discrepancy_bases",
         "offset_discrepancy_disps",
         "offset_discrepancy_opcodes",
+        "struct_verify_status",
+        "struct_verify_finding_count",
+        "struct_verify_verified_count",
+        "struct_verify_structs",
+        "struct_verify_fields",
+        "struct_verify_skipped",
+        "struct_verify_reason",
         "frame_cause",
         "frame_verdict",
         "frame_closability_tier",
@@ -1109,6 +1459,10 @@ def write_queue(path: Path, rows: list[dict[str, Any]]) -> None:
         "decl_order_best_ordering",
         "decl_order_evaluated_status",
         "decl_order_candidate_count",
+        "name_magic_blocker",
+        "name_magic_stop_kind",
+        "name_magic_probe_count",
+        "name_magic_reason",
         "file_path",
         "frame_next_command",
         "next_command",
@@ -1130,6 +1484,21 @@ def write_queue(path: Path, rows: list[dict[str, Any]]) -> None:
                     f"{parse_float(row.get('decl_order_best_delta')):.5f}"
                 )
             writer.writerow(out)
+
+
+def write_data_symbol_blocker_subqueues(
+    queues: Path,
+    records: list[dict[str, Any]],
+) -> None:
+    for blocker, source_actionability in DATA_SYMBOL_NAME_MAGIC_REBUCKET_BLOCKERS.items():
+        rows = [
+            row
+            for row in records
+            if row.get("work_bucket") == "data-symbol-relocation"
+            and row.get("source_actionability") == source_actionability
+            and row.get("name_magic_blocker") == blocker
+        ]
+        write_queue(queues / f"data-symbol-relocation.{blocker}.tsv", rows)
 
 
 def write_error_queue(path: Path, errors: list[dict[str, Any]]) -> None:
@@ -1209,6 +1578,11 @@ def write_summary(
     lines.extend(["", "## High-ROI Queues"])
     for bucket in BUCKET_ORDER:
         lines.append(f"- `build/function-taxonomy/queues/{bucket}.tsv`")
+    for blocker in DATA_SYMBOL_NAME_MAGIC_REBUCKET_BLOCKERS:
+        lines.append(
+            "- "
+            f"`build/function-taxonomy/queues/data-symbol-relocation.{blocker}.tsv`"
+        )
     lines.extend(
         [
             "- `build/function-taxonomy/queues/checkdiff-errors.tsv`",
@@ -1315,6 +1689,10 @@ def generate_inventory(
     decl_order_evaluator: DeclOrderEvaluator | None = default_decl_order_evaluator,
     frame_report_runner: FrameReportRunner | None = default_frame_report_runner,
     cast_audit_runner: CastAuditRunner | None = default_cast_audit_runner,
+    name_magic_preflight_runner: NameMagicPreflightRunner | None = (
+        default_name_magic_preflight_runner
+    ),
+    struct_verify_runner: StructVerifyRunner | None = default_struct_verify_runner,
     workers: int = 4,
     limit: int | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
@@ -1356,6 +1734,7 @@ def generate_inventory(
             FunctionCandidate,
         ] = {}
         candidate_iter = iter(attempted)
+        last_progress_at = 0.0
 
         def emit_progress(event: dict[str, Any]) -> None:
             if progress_callback is not None:
@@ -1394,6 +1773,16 @@ def generate_inventory(
             write_run_status(output_dir, progress_status)
             emit_progress(event)
 
+        def emit_progress_if_due() -> None:
+            nonlocal last_progress_at
+            if progress_interval is None or progress_interval <= 0:
+                return
+            now = time.monotonic()
+            if now - last_progress_at < progress_interval:
+                return
+            emit_periodic_progress()
+            last_progress_at = now
+
         def submit_next(executor: ThreadPoolExecutor) -> None:
             try:
                 candidate = next(candidate_iter)
@@ -1406,6 +1795,8 @@ def generate_inventory(
                 decl_order_evaluator,
                 frame_report_runner,
                 cast_audit_runner,
+                name_magic_preflight_runner,
+                struct_verify_runner,
             )
             pending[future] = candidate
             emit_progress({"event": "candidate_submitted", "function": candidate.function})
@@ -1426,6 +1817,7 @@ def generate_inventory(
                 )
                 if not done:
                     emit_periodic_progress()
+                    last_progress_at = time.monotonic()
                     continue
                 for future in done:
                     candidate = pending.pop(future)
@@ -1455,6 +1847,7 @@ def generate_inventory(
                         }
                     )
                     submit_next(executor)
+                emit_progress_if_due()
 
         records.sort(key=lambda row: (-parse_float(row.get("match_percent")), row.get("function", "")))
         errors.sort(key=lambda row: row.get("function", ""))
@@ -1469,6 +1862,7 @@ def generate_inventory(
         for bucket in BUCKET_ORDER:
             bucket_rows = [row for row in records if row.get("work_bucket") == bucket]
             write_queue(queues / f"{bucket}.tsv", bucket_rows)
+        write_data_symbol_blocker_subqueues(queues, records)
         write_error_queue(queues / "checkdiff-errors.tsv", errors)
         write_summary(
             output_dir / "summary.md",
@@ -1554,6 +1948,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--skip-name-magic-preflight",
+        action="store_true",
+        help=(
+            "Skip no-compile name-magic preflight for data-symbol rows. "
+            "This is faster, but leaves stable non-candidate blockers in the "
+            "current-tools-data-symbol queue."
+        ),
+    )
+    parser.add_argument(
+        "--skip-struct-verify-gate",
+        action="store_true",
+        help=(
+            "Skip resolver gating for struct-offset-discrepancy rows. This "
+            "preserves the legacy raw offset bucket and is faster but noisier."
+        ),
+    )
+    parser.add_argument(
         "--checkdiff-timeout",
         type=float,
         default=DEFAULT_CHECKDIFF_TIMEOUT,
@@ -1569,6 +1980,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Per-function decl-orders evaluation timeout in seconds "
             f"(default: {DEFAULT_DECL_ORDER_TIMEOUT:g}; 0 disables)."
+        ),
+    )
+    parser.add_argument(
+        "--name-magic-preflight-timeout",
+        type=float,
+        default=DEFAULT_NAME_MAGIC_PREFLIGHT_TIMEOUT,
+        help=(
+            "Per-function name-magic preflight timeout in seconds "
+            f"(default: {DEFAULT_NAME_MAGIC_PREFLIGHT_TIMEOUT:g}; 0 disables)."
+        ),
+    )
+    parser.add_argument(
+        "--struct-verify-timeout",
+        type=float,
+        default=DEFAULT_STRUCT_VERIFY_TIMEOUT,
+        help=(
+            "Per-function struct verify gate timeout in seconds "
+            f"(default: {DEFAULT_STRUCT_VERIFY_TIMEOUT:g}; 0 disables)."
         ),
     )
     parser.add_argument(
@@ -1589,7 +2018,45 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     checkdiff_timeout = None if args.checkdiff_timeout <= 0 else args.checkdiff_timeout
     decl_order_timeout = None if args.decl_order_timeout <= 0 else args.decl_order_timeout
+    name_magic_preflight_timeout = (
+        None
+        if args.name_magic_preflight_timeout <= 0
+        else args.name_magic_preflight_timeout
+    )
+    struct_verify_timeout = (
+        None
+        if args.struct_verify_timeout <= 0
+        else args.struct_verify_timeout
+    )
     progress_interval = None if args.progress_interval <= 0 else args.progress_interval
+    output_dir = Path(args.output).resolve()
+
+    def mark_interrupted(signum: int, _frame: Any) -> None:
+        status_path = output_dir / RUN_STATUS_FILENAME
+        current_status: dict[str, Any] = {}
+        try:
+            current_status = json.loads(status_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        interrupted_status = dict(current_status)
+        interrupted_status.update(
+            {
+                "schema_version": RUN_STATUS_SCHEMA_VERSION,
+                "status": "failed",
+                "failed_at": _utc_now_iso(),
+                "error": f"interrupted by signal {signum}",
+                "error_type": "SignalInterrupt",
+            }
+        )
+        output_dir.mkdir(parents=True, exist_ok=True)
+        write_run_status(output_dir, interrupted_status)
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+
+    previous_handlers: dict[int, Any] = {}
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        previous_handlers[signum] = signal.getsignal(signum)
+        signal.signal(signum, mark_interrupted)
 
     def progress(event: dict[str, Any]) -> None:
         if event.get("event") != "inventory_progress":
@@ -1631,12 +2098,32 @@ def main(argv: list[str] | None = None) -> int:
                 if args.skip_frame_report_attribution
                 else default_frame_report_runner
             ),
+            name_magic_preflight_runner=(
+                None
+                if args.skip_name_magic_preflight
+                else lambda candidate: default_name_magic_preflight_runner(
+                    candidate,
+                    timeout=name_magic_preflight_timeout,
+                )
+            ),
+            struct_verify_runner=(
+                None
+                if args.skip_struct_verify_gate
+                else lambda candidate, classification: default_struct_verify_runner(
+                    candidate,
+                    classification,
+                    timeout=struct_verify_timeout,
+                )
+            ),
             progress_callback=progress,
             progress_interval=progress_interval,
         )
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
 
     print(f"Generated taxonomy artifacts in {result.output_dir}")
     print(

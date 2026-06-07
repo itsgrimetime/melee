@@ -5,6 +5,12 @@ import json
 import re
 from dataclasses import asdict, dataclass, replace
 
+from .asm_windows import (
+    AsmWindowCandidate,
+    AsmWindowResult,
+    explain_code_offset_window,
+    is_memory_load_opcode,
+)
 from .parser import Function, Instruction, Pass, parse_pcdump
 
 
@@ -33,6 +39,21 @@ class ScheduleSource:
 
 
 @dataclass(frozen=True)
+class ScheduleSourceReshape:
+    rank: int
+    kind: str
+    title: str
+    mechanically_applicable: bool
+    target_expression: str | None
+    observed_expression: str | None
+    source_file: str | None
+    source_line: int | None
+    source_col: int | None
+    patch_hint: str
+    rationale: str
+
+
+@dataclass(frozen=True)
 class ScheduleCandidate:
     role: str
     opcode: str
@@ -43,6 +64,8 @@ class ScheduleCandidate:
     block: int
     index: int
     source: ScheduleSource | None = None
+    code_offset: int | None = None
+    instruction_class: str | None = None
 
 
 @dataclass(frozen=True)
@@ -54,6 +77,10 @@ class ScheduleDecision:
     rationale: str
     block: int | None = None
     candidates: tuple[ScheduleCandidate, ...] = ()
+    window_kind: str | None = None
+    forceability: str | None = None
+    source_shape_verdict: str | None = None
+    source_reshapes: tuple[ScheduleSourceReshape, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -494,6 +521,7 @@ def _candidate(
         window_rank=window_rank,
         block=block,
         index=index,
+        instruction_class="same-base-load",
     )
 
 
@@ -709,6 +737,284 @@ def _explain_rule_in_pass(function_pass, rule: ScheduleRule) -> ScheduleDecision
     )
 
 
+def _annotate_load_window(decision: ScheduleDecision) -> ScheduleDecision:
+    if decision.status not in {"matched", "already-target"}:
+        return decision
+    if not any(
+        cand.instruction_class == "same-base-load"
+        for cand in decision.candidates
+    ):
+        return decision
+    return replace(
+        decision,
+        window_kind="same-base-load",
+        forceability="forceable-by-load-hook",
+    )
+
+
+def _asm_candidate(
+    cand: AsmWindowCandidate,
+    *,
+    window_rank: int,
+) -> ScheduleCandidate:
+    return ScheduleCandidate(
+        role=cand.role,
+        opcode=cand.opcode,
+        operands=cand.operands,
+        offset=None,
+        base=None,
+        window_rank=window_rank,
+        block=0,
+        index=cand.current_index,
+        code_offset=cand.code_offset,
+        instruction_class=cand.instruction_class,
+    )
+
+
+def _matching_brace_index(source_text: str, open_index: int) -> int | None:
+    depth = 0
+    for index in range(open_index, len(source_text)):
+        char = source_text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
+def _function_source_scope(
+    source_text: str | None,
+    function: str,
+) -> tuple[str | None, int]:
+    if not source_text:
+        return None, 1
+    pattern = re.compile(rf"\b{re.escape(function)}\s*\(")
+    for match in pattern.finditer(source_text):
+        brace = source_text.find("{", match.end())
+        if brace < 0:
+            continue
+        if ";" in source_text[match.end():brace]:
+            continue
+        end = _matching_brace_index(source_text, brace)
+        if end is None:
+            continue
+        body_start = brace + 1
+        line_base = source_text.count("\n", 0, body_start) + 1
+        return source_text[body_start:end], line_base
+    return None, 1
+
+
+def _source_hint(
+    source_text: str | None,
+    pattern: re.Pattern[str],
+    *,
+    line_base: int = 1,
+) -> tuple[str | None, int | None, int | None]:
+    if not source_text:
+        return None, None, None
+    match = pattern.search(source_text)
+    if not match:
+        return None, None, None
+    line, col = _line_col(source_text, match.start())
+    return re.sub(r"\s+", "", match.group(0)), line + line_base - 1, col
+
+
+def _source_reshapes_for_addi_pair(
+    result: AsmWindowResult,
+    *,
+    function: str,
+    source_text: str | None,
+    source_file: str | None,
+) -> tuple[ScheduleSourceReshape, ...]:
+    if result.source_shape_verdict != "source-shape-controllable":
+        return ()
+    classes = {cand.instruction_class for cand in result.candidates}
+    if {"local-address-materialization", "counter-increment"} - classes:
+        return ()
+
+    local = next(
+        cand for cand in result.candidates
+        if cand.instruction_class == "local-address-materialization"
+    )
+    counter = next(
+        cand for cand in result.candidates
+        if cand.instruction_class == "counter-increment"
+    )
+    scoped_source, line_base = _function_source_scope(source_text, function)
+    local_expr, local_line, local_col = _source_hint(
+        scoped_source,
+        re.compile(r"&\s*[A-Za-z_][A-Za-z0-9_]*"),
+        line_base=line_base,
+    )
+    counter_expr, counter_line, counter_col = _source_hint(
+        scoped_source,
+        re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\s*(?:\+\+|\+=\s*1)"),
+        line_base=line_base,
+    )
+    vector_expr, vector_line, vector_col = _source_hint(
+        scoped_source,
+        re.compile(r"\bVec3\s+[A-Za-z_][A-Za-z0-9_]*\b"),
+        line_base=line_base,
+    )
+    local_observed = f"{local.opcode} {local.operands}"
+    counter_observed = f"{counter.opcode} {counter.operands}"
+
+    return (
+        ScheduleSourceReshape(
+            rank=1,
+            kind="delay-local-address-materialization",
+            title="Delay local stack address materialization",
+            mechanically_applicable=False,
+            target_expression=local_expr,
+            observed_expression=local_observed,
+            source_file=source_file if local_line is not None else None,
+            source_line=local_line,
+            source_col=local_col,
+            patch_hint=(
+                "Materialize the stack-local address as close as possible to "
+                "the call that consumes it; for example keep &dir inside the "
+                "lbVector_Normalize(&dir) statement instead of creating an "
+                "earlier pointer-like temporary."
+            ),
+            rationale=(
+                "the observed-first addi materializes a stack-local address "
+                "before the target counter increment"
+            ),
+        ),
+        ScheduleSourceReshape(
+            rank=2,
+            kind="anchor-counter-increment",
+            title="Anchor the counter increment before local-vector work",
+            mechanically_applicable=False,
+            target_expression=counter_expr,
+            observed_expression=counter_observed,
+            source_file=source_file if counter_line is not None else None,
+            source_line=counter_line,
+            source_col=counter_col,
+            patch_hint=(
+                "Keep count++ as its own statement immediately before the "
+                "local-vector work, or try count += 1 / preincrement as a "
+                "source-shape probe if MWCC still sinks it."
+            ),
+            rationale=(
+                "the target-first addi is a self increment that should anchor "
+                "before local address materialization"
+            ),
+        ),
+        ScheduleSourceReshape(
+            rank=3,
+            kind="split-local-vector-lifetime",
+            title="Split the local vector lifetime",
+            mechanically_applicable=False,
+            target_expression=vector_expr,
+            observed_expression=local_observed,
+            source_file=source_file if vector_line is not None else None,
+            source_line=vector_line,
+            source_col=vector_col,
+            patch_hint=(
+                "Narrow the Vec3 dir lifetime by declaring it in the smallest "
+                "block that contains the stores and first address-taking call."
+            ),
+            rationale=(
+                "a narrower stack-local lifetime can delay the address-taking "
+                "addi without changing the load window"
+            ),
+        ),
+        ScheduleSourceReshape(
+            rank=4,
+            kind="reorder-counter-and-local-block",
+            title="Check counter/local source order",
+            mechanically_applicable=False,
+            target_expression=counter_expr,
+            observed_expression=local_expr,
+            source_file=source_file if counter_line is not None else None,
+            source_line=counter_line,
+            source_col=counter_col,
+            patch_hint=(
+                "If the source already has count++ before Vec3 dir work, the "
+                "natural source order is already target-like and stronger "
+                "source reshapes are needed before calling this a backend "
+                "ceiling."
+            ),
+            rationale=(
+                "source order is a useful first probe, but this pattern may "
+                "also require lifetime or expression-shape changes"
+            ),
+        ),
+    )
+
+
+def _decision_from_asm_window(
+    decision: ScheduleDecision,
+    result: AsmWindowResult,
+    *,
+    function: str,
+    source_text: str | None,
+    source_file: str | None,
+) -> ScheduleDecision:
+    candidates = tuple(
+        _asm_candidate(cand, window_rank=rank)
+        for rank, cand in enumerate(result.candidates)
+    )
+    return replace(
+        decision,
+        status=result.status,
+        heuristic_verdict=result.heuristic_verdict,
+        window_gap=result.window_gap,
+        rationale=result.rationale,
+        candidates=candidates,
+        window_kind="asm-code-offset",
+        forceability=result.forceability,
+        source_shape_verdict=result.source_shape_verdict,
+        source_reshapes=_source_reshapes_for_addi_pair(
+            result,
+            function=function,
+            source_text=source_text,
+            source_file=source_file,
+        ),
+    )
+
+
+def _attach_asm_windows(
+    report: ScheduleExplainReport,
+    *,
+    target_asm: list[str] | None,
+    current_asm: list[str] | None,
+    source_text: str | None,
+    source_file: str | None,
+) -> ScheduleExplainReport:
+    if target_asm is None or current_asm is None:
+        return report
+    decisions: list[ScheduleDecision] = []
+    for decision in report.decisions:
+        if decision.status != "missing":
+            decisions.append(decision)
+            continue
+        if is_memory_load_opcode(decision.rule.opcode):
+            decisions.append(decision)
+            continue
+        result = explain_code_offset_window(
+            decision.rule,
+            target_asm,
+            current_asm,
+            source_text=source_text,
+            source_file=source_file,
+        )
+        if result is None or result.status == "missing":
+            decisions.append(decision)
+            continue
+        decisions.append(_decision_from_asm_window(
+            decision,
+            result,
+            function=report.function,
+            source_text=source_text,
+            source_file=source_file,
+        ))
+    return replace(report, decisions=tuple(decisions))
+
+
 def explain_schedule(
     pcdump_text: str,
     *,
@@ -716,11 +1022,15 @@ def explain_schedule(
     force_schedule: str,
     source_text: str | None = None,
     source_file: str | None = None,
+    target_asm: list[str] | None = None,
+    current_asm: list[str] | None = None,
+    checkdiff_classification: dict | None = None,
 ) -> ScheduleExplainReport:
+    _ = checkdiff_classification
     rules = parse_schedule_rules(force_schedule)
     functions = parse_pcdump(pcdump_text, function=function)
     if not functions:
-        return ScheduleExplainReport(function=function, pass_name=None, decisions=(
+        report = ScheduleExplainReport(function=function, pass_name=None, decisions=tuple(
             ScheduleDecision(
                 rule=rule,
                 status="missing",
@@ -730,6 +1040,13 @@ def explain_schedule(
             )
             for rule in rules
         ))
+        return _attach_asm_windows(
+            report,
+            target_asm=target_asm,
+            current_asm=current_asm,
+            source_text=source_text,
+            source_file=source_file,
+        )
 
     fn = functions[0]
     selected = (
@@ -737,7 +1054,7 @@ def explain_schedule(
         or fn.get_pass("AFTER INSTRUCTION SCHEDULING")
     )
     if selected is None:
-        return ScheduleExplainReport(function=function, pass_name=None, decisions=(
+        report = ScheduleExplainReport(function=function, pass_name=None, decisions=tuple(
             ScheduleDecision(
                 rule=rule,
                 status="missing",
@@ -747,10 +1064,27 @@ def explain_schedule(
             )
             for rule in rules
         ))
+        return _attach_asm_windows(
+            report,
+            target_asm=target_asm,
+            current_asm=current_asm,
+            source_text=source_text,
+            source_file=source_file,
+        )
     report = ScheduleExplainReport(
         function=function,
         pass_name=selected.name,
-        decisions=tuple(_explain_rule_in_pass(selected, rule) for rule in rules),
+        decisions=tuple(
+            _annotate_load_window(_explain_rule_in_pass(selected, rule))
+            for rule in rules
+        ),
+    )
+    report = _attach_asm_windows(
+        report,
+        target_asm=target_asm,
+        current_asm=current_asm,
+        source_text=source_text,
+        source_file=source_file,
     )
     return _attach_source_provenance(
         report,
@@ -772,16 +1106,36 @@ def render_text(report: ScheduleExplainReport) -> str:
             else str(decision.window_gap)
         )
         lines.append("")
-        lines.append(
-            f"rule {rule.raw}: status={decision.status} "
-            f"heuristic_verdict={decision.heuristic_verdict} window_gap={window_gap}"
-        )
+        rule_bits = [
+            f"status={decision.status}",
+            f"heuristic_verdict={decision.heuristic_verdict}",
+            f"window_gap={window_gap}",
+        ]
+        if decision.window_kind:
+            rule_bits.append(f"window_kind={decision.window_kind}")
+        if decision.forceability:
+            rule_bits.append(f"forceability={decision.forceability}")
+        if decision.source_shape_verdict:
+            rule_bits.append(
+                f"source_shape_verdict={decision.source_shape_verdict}"
+            )
+        lines.append(f"rule {rule.raw}: " + " ".join(rule_bits))
         if decision.block is not None:
             lines.append(f"  block: B{decision.block}")
         lines.append(f"  rationale: {decision.rationale}")
         for cand in decision.candidates:
             offset = "?" if cand.offset is None else f"0x{cand.offset:X}"
             base = cand.base or "?"
+            cand_bits = [
+                f"offset={offset}",
+                f"base={base}",
+                f"window_rank={cand.window_rank}",
+                f"index={cand.index}",
+            ]
+            if cand.code_offset is not None:
+                cand_bits.append(f"code_offset=0x{cand.code_offset:X}")
+            if cand.instruction_class:
+                cand_bits.append(f"class={cand.instruction_class}")
             source_suffix = ""
             if cand.source is not None:
                 src = cand.source
@@ -803,9 +1157,21 @@ def render_text(report: ScheduleExplainReport) -> str:
                 source_suffix = " " + " ".join(bits)
             lines.append(
                 f"  - {cand.role}: {cand.opcode} {cand.operands} "
-                f"offset={offset} base={base} window_rank={cand.window_rank} "
-                f"index={cand.index}{source_suffix}"
+                f"{' '.join(cand_bits)}{source_suffix}"
             )
+        if decision.source_reshapes:
+            lines.append("  source reshapes:")
+            for reshape in decision.source_reshapes:
+                loc = ""
+                if reshape.source_file and reshape.source_line is not None:
+                    loc = f" source={reshape.source_file}:{reshape.source_line}"
+                    if reshape.source_col is not None:
+                        loc += f":{reshape.source_col}"
+                lines.append(
+                    f"    {reshape.rank}. {reshape.kind}: "
+                    f"{reshape.title}{loc}"
+                )
+                lines.append(f"       hint: {reshape.patch_hint}")
     return "\n".join(lines)
 
 

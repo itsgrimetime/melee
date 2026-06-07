@@ -58,6 +58,199 @@ def test_rank_structure_variants_prefers_exact_then_match_then_delta() -> None:
     assert [row.rank for row in ranked] == [1, 2, 3]
 
 
+def test_source_lifetime_ranking_prefers_shape_preserved_candidate() -> None:
+    ranked = rank_structure_variants([
+        StructureVariant(
+            axis="source-lifetime",
+            operator="helper-result-dematerialize",
+            label="shape-break",
+            status="ok",
+            final_match_percent=99.0,
+            delta=1.0,
+            metadata={"structural": {"opcode_shape_preserved": False}},
+        ),
+        StructureVariant(
+            axis="source-lifetime",
+            operator="repeated-helper-result-reuse",
+            label="shape-preserved",
+            status="ok",
+            final_match_percent=98.0,
+            delta=0.5,
+            metadata={"structural": {"opcode_shape_preserved": True}},
+        ),
+    ])
+
+    assert [variant.label for variant in ranked] == ["shape-preserved", "shape-break"]
+
+
+def test_source_lifetime_ranking_keeps_unscored_behind_ok_missing_structural() -> None:
+    ranked = rank_structure_variants([
+        StructureVariant(
+            axis="source-lifetime",
+            operator="helper-result-dematerialize",
+            label="unscored-high-percent",
+            status="unscored",
+            final_match_percent=99.0,
+            delta=9.0,
+            compile_status="not-run",
+            unscored_reason="scoring disabled",
+        ),
+        StructureVariant(
+            axis="source-lifetime",
+            operator="repeated-helper-result-reuse",
+            label="ok-missing-structural",
+            status="ok",
+            final_match_percent=90.0,
+            delta=1.0,
+            compile_status="ok",
+        ),
+    ])
+
+    assert [variant.label for variant in ranked] == [
+        "ok-missing-structural",
+        "unscored-high-percent",
+    ]
+
+
+def test_source_lifetime_shape_rank_does_not_affect_other_axes() -> None:
+    ranked = rank_structure_variants([
+        StructureVariant(
+            axis="decl-order",
+            operator="decl-order-swap",
+            label="unrelated-low-unscored",
+            status="unscored",
+            final_match_percent=10.0,
+            delta=-80.0,
+        ),
+        StructureVariant(
+            axis="source-lifetime",
+            operator="helper-result-dematerialize",
+            label="source-lifetime-high-shape-break",
+            status="ok",
+            final_match_percent=99.0,
+            delta=9.0,
+            compile_status="ok",
+            metadata={"structural": {"opcode_shape_preserved": False}},
+        ),
+        StructureVariant(
+            axis="case-order",
+            operator="case-order-adjacent-swap",
+            label="unrelated-higher-percent",
+            status="ok",
+            final_match_percent=99.5,
+            delta=9.5,
+        ),
+        StructureVariant(
+            axis="source-lifetime",
+            operator="repeated-helper-result-reuse",
+            label="source-lifetime-shape-preserved",
+            status="ok",
+            final_match_percent=98.0,
+            delta=8.0,
+            compile_status="ok",
+            metadata={"structural": {"opcode_shape_preserved": True}},
+        ),
+    ])
+
+    assert [variant.label for variant in ranked] == [
+        "unrelated-higher-percent",
+        "source-lifetime-shape-preserved",
+        "source-lifetime-high-shape-break",
+        "unrelated-low-unscored",
+    ]
+
+
+def test_source_lifetime_ordering_spans_interleaved_other_axes_for_status() -> None:
+    ranked = rank_structure_variants([
+        StructureVariant(
+            axis="source-lifetime",
+            operator="helper-result-dematerialize",
+            label="source-lifetime-unscored-high",
+            status="unscored",
+            final_match_percent=99.0,
+            delta=9.0,
+            compile_status="not-run",
+            unscored_reason="scoring disabled",
+        ),
+        StructureVariant(
+            axis="decl-order",
+            operator="decl-order-swap",
+            label="decl-order-middle",
+            status="ok",
+            final_match_percent=95.0,
+            delta=5.0,
+        ),
+        StructureVariant(
+            axis="source-lifetime",
+            operator="repeated-helper-result-reuse",
+            label="source-lifetime-ok-missing-structural",
+            status="ok",
+            final_match_percent=90.0,
+            delta=1.0,
+            compile_status="ok",
+        ),
+    ])
+
+    source_lifetime_labels = [
+        variant.label for variant in ranked if variant.axis == "source-lifetime"
+    ]
+    assert source_lifetime_labels == [
+        "source-lifetime-ok-missing-structural",
+        "source-lifetime-unscored-high",
+    ]
+    assert [variant.label for variant in ranked] == [
+        "source-lifetime-ok-missing-structural",
+        "decl-order-middle",
+        "source-lifetime-unscored-high",
+    ]
+
+
+def test_source_lifetime_ordering_spans_interleaved_other_axes_for_shape() -> None:
+    ranked = rank_structure_variants([
+        StructureVariant(
+            axis="source-lifetime",
+            operator="helper-result-dematerialize",
+            label="source-lifetime-shape-break",
+            status="ok",
+            final_match_percent=99.0,
+            delta=9.0,
+            compile_status="ok",
+            metadata={"structural": {"opcode_shape_preserved": False}},
+        ),
+        StructureVariant(
+            axis="case-order",
+            operator="case-order-adjacent-swap",
+            label="case-order-middle",
+            status="ok",
+            final_match_percent=98.5,
+            delta=8.5,
+        ),
+        StructureVariant(
+            axis="source-lifetime",
+            operator="repeated-helper-result-reuse",
+            label="source-lifetime-shape-preserved",
+            status="ok",
+            final_match_percent=98.0,
+            delta=8.0,
+            compile_status="ok",
+            metadata={"structural": {"opcode_shape_preserved": True}},
+        ),
+    ])
+
+    source_lifetime_labels = [
+        variant.label for variant in ranked if variant.axis == "source-lifetime"
+    ]
+    assert source_lifetime_labels == [
+        "source-lifetime-shape-preserved",
+        "source-lifetime-shape-break",
+    ]
+    assert [variant.label for variant in ranked] == [
+        "source-lifetime-shape-preserved",
+        "case-order-middle",
+        "source-lifetime-shape-break",
+    ]
+
+
 def test_normalize_control_flow_payload_preserves_retained_sources() -> None:
     payload = {
         "function": "fn_80000000",
@@ -214,6 +407,55 @@ def test_structure_payload_reports_future_axes_and_stop_condition() -> None:
     )
 
     assert candidate_payload["stop_condition"]["kind"] == "candidates-generated"
+
+
+def test_structure_payload_treats_compile_failed_candidates_as_verified() -> None:
+    payload = structure_payload(
+        function="fn_80000000",
+        source="src/melee/demo.c",
+        generated_source_dir="/tmp/structure",
+        baseline_percent=80.0,
+        axes=[],
+        variants=[
+            StructureVariant(
+                axis="source-lifetime",
+                operator="temp-introduction",
+                label="compile-failed",
+                status="unscored",
+                compile_status="failed",
+                unscored_reason="candidate compile failed: syntax error",
+            )
+        ],
+    )
+
+    assert payload["stop_condition"]["kind"] == "no-improvement"
+
+
+def test_structure_payload_keeps_baseline_failures_unverified() -> None:
+    for compile_status, reason in (
+        ("failed", "baseline compile failed: compiler unavailable"),
+        ("report-failed", "baseline report failed: report unavailable"),
+        ("report-failed", "candidate report failed: report unavailable"),
+    ):
+        payload = structure_payload(
+            function="fn_80000000",
+            source="src/melee/demo.c",
+            generated_source_dir="/tmp/structure",
+            baseline_percent=None,
+            axes=[],
+            variants=[
+                StructureVariant(
+                    axis="source-lifetime",
+                    operator="temp-introduction",
+                    label="verification-failed",
+                    status="unscored",
+                    compile_status=compile_status,
+                    unscored_reason=reason,
+                )
+            ],
+        )
+
+        assert payload["stop_condition"]["kind"] == "candidates-generated"
 
 
 def test_run_structure_search_applies_fake_scores_and_ranks_variants(
@@ -748,6 +990,68 @@ def test_run_structure_search_supports_statement_order_axis(tmp_path: Path) -> N
     assert Path(payload["variants"][0]["source_retained"]).exists()
     assert "statement-order" not in {row["axis"] for row in payload["future_axes"]}
     assert payload["stop_condition"]["kind"] == "candidates-generated"
+
+
+def test_run_structure_search_source_lifetime_axis_emits_retained_candidates(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "demo.c"
+    source_path.write_text(
+        "s32 fn_803AC7DC(CardState* state, s32 i)\n"
+        "{\n"
+        "    s32 total = 0;\n"
+        "    total += fn_803AC634(state, i);\n"
+        "    if (total < (s32) fn_803AC634(state, i)) {\n"
+        "        total = (s32) fn_803AC634(state, i);\n"
+        "    }\n"
+        "    return total;\n"
+        "}\n"
+    )
+
+    payload = run_structure_search(
+        "fn_803AC7DC",
+        source_path,
+        tmp_path / "structure",
+        axes=("source-lifetime",),
+        max_candidates=2,
+        score_variants=False,
+    )
+
+    assert payload["axes"][0]["axis"] == "source-lifetime"
+    assert payload["axes"][0]["status"] == "evaluated"
+    assert payload["axes"][0]["metadata"]["families"]
+    assert payload["variants"]
+    assert all(row["axis"] == "source-lifetime" for row in payload["variants"])
+    assert all(Path(row["source_retained"]).exists() for row in payload["variants"])
+
+
+def test_source_lifetime_axis_prioritizes_targeted_probes_under_small_cap(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "demo.c"
+    source_path.write_text(
+        "s32 fn_803ACD58(CardState* state)\n"
+        "{\n"
+        "    s32 i;\n"
+        "    s32 size;\n"
+        "    s32 total;\n"
+        "    for (i = 0; size = state->x8, i < (0x2F + state->x24 + size) / size; i++) {\n"
+        "        total += i;\n"
+        "    }\n"
+        "    return total;\n"
+        "}\n"
+    )
+
+    payload = run_structure_search(
+        "fn_803ACD58",
+        source_path,
+        tmp_path / "structure",
+        axes=("source-lifetime",),
+        max_candidates=1,
+        score_variants=False,
+    )
+
+    assert payload["variants"][0]["operator"] == "for-condition-field-reload"
 
 
 def test_run_structure_search_stop_condition_uses_hidden_unscored_candidates(

@@ -225,14 +225,6 @@ HELPER_INLINE_LIFETIME_OPERATORS = (
 )
 
 _READ_ONLY_SOURCE_LIFETIME_HELPERS = frozenset({"fn_803AC634"})
-_REUSE_INTLIKE_RETURN_TYPES = frozenset({
-    "int",
-    "long",
-    "s8",
-    "s16",
-    "s32",
-    "short",
-})
 _DEMATERIALIZE_SCALAR_RETURN_TYPES = frozenset({
     "BOOL",
     "bool",
@@ -253,6 +245,7 @@ _DEMATERIALIZE_SCALAR_RETURN_TYPES = frozenset({
     "u64",
     "unsigned",
 })
+_REUSE_SCALAR_RETURN_TYPES = _DEMATERIALIZE_SCALAR_RETURN_TYPES
 
 
 def pressure_signature_from_pcdump(
@@ -570,10 +563,16 @@ def generate_source_lifetime_probes(
     function: str,
     *,
     max_probes: int = 12,
+    operator_filter: tuple[str, ...] | list[str] | set[str] | None = None,
 ) -> tuple[list[LifetimeLayoutProbe], list[dict]]:
     max_probes = max(0, int(max_probes))
     if max_probes == 0:
         return [], []
+    selected_operators = (
+        {operator for operator in operator_filter}
+        if operator_filter is not None
+        else None
+    )
     targeted_budget = max(1, (max_probes + 1) // 2)
     targeted_generators = (
         ("for-condition-field-reload", _probe_for_condition_field_reload),
@@ -584,25 +583,43 @@ def generate_source_lifetime_probes(
     targeted: list[LifetimeLayoutProbe] = []
     summaries: list[dict] = []
     for operator, generator in targeted_generators:
+        if selected_operators is not None and operator not in selected_operators:
+            continue
         candidates, summary = generator(source_text, function)
         summaries.append(summary)
         for probe in candidates:
             if len(targeted) < targeted_budget:
                 _append_probe(targeted, probe)
             else:
-                summary["retained_candidates"] = targeted_budget
                 break
-    generic = generate_lifetime_layout_probes(
-        source_text,
-        function,
-        max_probes=max_probes,
-        operator_filter=SOURCE_LIFETIME_GENERIC_OPERATORS,
+    generic_operator_filter = (
+        SOURCE_LIFETIME_GENERIC_OPERATORS
+        if selected_operators is None
+        else tuple(
+            operator
+            for operator in SOURCE_LIFETIME_GENERIC_OPERATORS
+            if operator in selected_operators
+        )
+    )
+    generic = (
+        generate_lifetime_layout_probes(
+            source_text,
+            function,
+            max_probes=max_probes,
+            operator_filter=generic_operator_filter,
+        )
+        if generic_operator_filter
+        else []
     )
     probes: list[LifetimeLayoutProbe] = []
     for probe in [*targeted, *generic]:
         _append_probe(probes, probe)
         if len(probes) >= max_probes:
             break
+    for summary in summaries:
+        summary["retained_candidates"] = sum(
+            1 for probe in probes if probe.operator == summary["operator"]
+        )
     return probes, summaries
 
 
@@ -760,16 +777,21 @@ def _probe_repeated_helper_result_reuse(
         first = occurrences[0]
         if not _helper_call_args_are_simple(first.args_text):
             continue
-        if not _helper_callee_supported_for_reuse(first.callee, source_text):
-            first_blocker = first_blocker or (
-                "callee-not-supported-for-reuse",
-                f"helper `{first.callee}` is not supported for repeated-result reuse",
-            )
-            continue
         if not _helper_call_is_read_only(first.callee, source_text, function):
             first_blocker = first_blocker or (
                 "callee-not-read-only",
                 f"helper `{first.callee}` is not known read-only",
+            )
+            continue
+        reuse_temp_spec = _helper_reuse_temp_spec(
+            first.callee,
+            source_text,
+            first.call_text,
+        )
+        if reuse_temp_spec is None:
+            first_blocker = first_blocker or (
+                "callee-not-supported-for-reuse",
+                f"helper `{first.callee}` is not supported for repeated-result reuse",
             )
             continue
         occurrence_blocker = _repeated_helper_occurrence_blocker(
@@ -830,8 +852,9 @@ def _probe_repeated_helper_result_reuse(
             continue
         indent = _line_indent_at(source_text, line_start)
         temp_name = _next_unique_repeated_helper_temp_name(source_text, function)
+        temp_type, temp_initializer = reuse_temp_spec
         replacements = [(line_start, line_start, (
-            f"{indent}s32 {temp_name} = (s32) {first.call_text};\n"
+            f"{indent}{temp_type} {temp_name} = {temp_initializer};\n"
         ))]
         for call in occurrences:
             replace_start, replace_end = _cast_prefixed_call_range(
@@ -857,6 +880,7 @@ def _probe_repeated_helper_result_reuse(
                 "call": first.call_text,
                 "occurrences": len(occurrences),
                 "temp_name": temp_name,
+                "temp_type": temp_type,
             },
         )
         return [probe], _source_lifetime_summary(
@@ -913,7 +937,7 @@ def _probe_helper_result_dematerialize(
             continue
         if not _helper_callee_supported_for_dematerialize(call.callee, source_text):
             first_blocker = first_blocker or (
-                "helper-return-type-unsafe",
+                "callee-not-supported-for-dematerialize",
                 f"helper `{call.callee}` is not supported for dematerialization",
             )
             continue
@@ -1044,6 +1068,12 @@ def _probe_simple_helper_inline_body(
                     "helper-body-too-complex",
                     f"helper `{call.callee}` body is not a simple pure expression",
                 )
+            continue
+        if _call_site_is_in_preprocessor_region(source_text, function, call.start, call.end):
+            first_blocker = first_blocker or (
+                "preprocessor-region-unsafe",
+                "helper inline call site is under conditional preprocessor control",
+            )
             continue
         if not _helper_call_args_are_simple(call.args_text):
             first_blocker = first_blocker or (
@@ -1213,16 +1243,24 @@ def _helper_call_is_read_only(callee: str, source: str, function: str) -> bool:
     return body_expr is not None and _helper_expression_is_pure(body_expr)
 
 
-def _helper_callee_supported_for_reuse(callee: str, source: str) -> bool:
+def _helper_reuse_temp_spec(
+    callee: str,
+    source: str,
+    call_text: str,
+) -> tuple[str, str] | None:
     if callee in _READ_ONLY_SOURCE_LIFETIME_HELPERS:
-        return True
+        return "s32", f"(s32) {call_text}"
     if _find_function_body_span(source, callee) is None:
-        return True
+        return None
     body_expr = _simple_helper_expression_body(source, callee)
     if body_expr is None or not _helper_expression_is_pure(body_expr):
-        return False
+        return None
+    if _same_tu_helper_reads_through_param(source, callee, body_expr):
+        return None
     return_type = _function_return_type(source, callee)
-    return return_type in _REUSE_INTLIKE_RETURN_TYPES
+    if _canonical_scalar_return_type(return_type) not in _REUSE_SCALAR_RETURN_TYPES:
+        return None
+    return return_type, call_text
 
 
 def _helper_callee_supported_for_dematerialize(callee: str, source: str) -> bool:
@@ -1233,8 +1271,10 @@ def _helper_callee_supported_for_dematerialize(callee: str, source: str) -> bool
     body_expr = _simple_helper_expression_body(source, callee)
     if body_expr is None or not _helper_expression_is_pure(body_expr):
         return False
+    if _same_tu_helper_reads_through_param(source, callee, body_expr):
+        return False
     return_type = _function_return_type(source, callee)
-    return return_type in _DEMATERIALIZE_SCALAR_RETURN_TYPES
+    return _canonical_scalar_return_type(return_type) in _DEMATERIALIZE_SCALAR_RETURN_TYPES
 
 
 def _function_return_type(source: str, function: str) -> str | None:
@@ -1258,6 +1298,19 @@ def _function_return_type(source: str, function: str) -> str | None:
     if not signature:
         return None
     return _normalize_type_spelling(signature)
+
+
+def _canonical_scalar_return_type(type_name: str | None) -> str | None:
+    if type_name is None:
+        return None
+    normalized = re.sub(r"\s+", " ", type_name.strip())
+    canonical_map = {
+        "unsigned int": "unsigned",
+        "signed int": "int",
+        "long int": "long",
+        "short int": "short",
+    }
+    return canonical_map.get(normalized, normalized)
 
 
 def _next_unique_repeated_helper_temp_name(source: str, function: str) -> str:
@@ -1325,6 +1378,27 @@ def _simple_helper_parameter_names(source: str, function: str) -> tuple[str, ...
         if parsed is not None:
             names.append(parsed[0])
     return tuple(names)
+
+
+def _same_tu_helper_reads_through_param(
+    source: str,
+    function: str,
+    helper_expr: str | None = None,
+) -> bool:
+    expr = helper_expr if helper_expr is not None else _simple_helper_expression_body(source, function)
+    if expr is None:
+        return False
+    masked = _mask_c_non_code_text(expr)
+    for name in _simple_helper_parameter_names(source, function):
+        if re.search(rf"\b{re.escape(name)}\b\s*(?:->|\.|\[)", masked):
+            return True
+        if re.search(rf"(?<![A-Za-z0-9_])\*\s*{re.escape(name)}\b", masked):
+            return True
+        if re.search(rf"(?<![A-Za-z0-9_])\*\s*\([^)\n]*\b{re.escape(name)}\b[^)\n]*\)", masked):
+            return True
+        if re.search(rf"\(\s*\*\s*{re.escape(name)}\s*\)\s*(?:\.|\[)", masked):
+            return True
+    return False
 
 
 def _scan_simple_helper_calls(
@@ -1464,11 +1538,74 @@ def _line_indent_at(source: str, line_start: int) -> str:
     return "" if match is None else match.group(0)
 
 
+def _call_site_is_in_preprocessor_region(
+    source: str,
+    function: str,
+    call_start: int,
+    call_end: int,
+) -> bool:
+    span = _find_function_body_span(source, function)
+    if span is None:
+        return False
+    body_start, _body_end = span
+    stmt_start = _line_start(source, call_start)
+    stmt_end = _line_end(source, call_end)
+    return (
+        _region_has_preprocessor_directive(source[stmt_start:stmt_end])
+        or _offset_inside_preprocessor_region(source, body_start, stmt_start)
+    )
+
+
 def _line_is_case_or_default_label(source: str, line_start: int) -> bool:
     line_end = source.find("\n", line_start)
     if line_end < 0:
         line_end = len(source)
     return _line_contains_case_or_default_label(source[line_start:line_end])
+
+
+def _line_is_plain_label(source: str, line_start: int) -> bool:
+    line_end = source.find("\n", line_start)
+    if line_end < 0:
+        line_end = len(source)
+    return _line_contains_plain_label(source[line_start:line_end])
+
+
+def _line_follows_plain_label(source: str, line_start: int) -> bool:
+    cursor = max(0, line_start - 1)
+    in_block_comment = False
+    while cursor >= 0:
+        prev_start = source.rfind("\n", 0, cursor) + 1
+        prev_end = source.find("\n", prev_start)
+        if prev_end < 0:
+            prev_end = len(source)
+        stripped = source[prev_start:prev_end].strip()
+        if not stripped:
+            if prev_start == 0:
+                return False
+            cursor = prev_start - 1
+            continue
+        if in_block_comment:
+            if "/*" in stripped:
+                in_block_comment = False
+            if prev_start == 0:
+                return False
+            cursor = prev_start - 1
+            continue
+        if "*/" in stripped and "/*" not in stripped:
+            in_block_comment = True
+            if prev_start == 0:
+                return False
+            cursor = prev_start - 1
+            continue
+        if _line_is_comment_only(stripped):
+            if prev_start == 0:
+                return False
+            cursor = prev_start - 1
+            continue
+        if _line_contains_plain_label(stripped):
+            return not _plain_label_wraps_block(stripped)
+        return False
+    return False
 
 
 def _line_follows_case_or_default_label(source: str, line_start: int) -> bool:
@@ -1549,9 +1686,36 @@ def _line_contains_case_or_default_label(text: str) -> bool:
     ) is not None
 
 
+def _line_contains_plain_label(text: str) -> bool:
+    stripped = text.strip()
+    if _line_contains_case_or_default_label(stripped):
+        return False
+    return re.search(
+        r"(?:^|[{};])\s*[A-Za-z_]\w*\s*:(?!:)",
+        stripped,
+    ) is not None
+
+
+def _line_is_comment_only(text: str) -> bool:
+    stripped = text.strip()
+    return stripped.startswith("//") or (
+        stripped.startswith("/*") and stripped.endswith("*/")
+    )
+
+
 def _case_label_wraps_block(text: str) -> bool:
     stripped = text.strip()
     match = re.search(r"(case\b[^:\n]*:|default:)(?P<rest>.*)$", stripped)
+    if match is None:
+        return False
+    return "{" in match.group("rest")
+
+
+def _plain_label_wraps_block(text: str) -> bool:
+    stripped = text.strip()
+    if _line_contains_case_or_default_label(stripped):
+        return False
+    match = re.search(r"(?:^|[{};])\s*[A-Za-z_]\w*\s*:(?!:)(?P<rest>.*)$", stripped)
     if match is None:
         return False
     return "{" in match.group("rest")
@@ -1563,6 +1727,14 @@ def _repeated_helper_occurrence_blocker(
 ) -> tuple[str, str] | None:
     for call in occurrences:
         line_start = _line_start(source, call.start)
+        if _line_is_plain_label(source, line_start) or _line_follows_plain_label(
+            source,
+            line_start,
+        ):
+            return (
+                "label-declaration-unsafe",
+                "helper result declaration would land directly under a C label",
+            )
         if (
             _line_is_case_or_default_label(source, line_start)
             or _line_follows_case_or_default_label(source, line_start)
@@ -2256,6 +2428,14 @@ def _identifier_count_excluding_ranges(
     return _identifier_count("".join(chars), name)
 
 
+def _region_has_label_or_goto(text: str) -> bool:
+    return re.search(
+        r"(?m)^[ \t]*(?:[A-Za-z_]\w*|case\b[^:\n]*|default)\s*:"
+        r"|\bgoto\s+[A-Za-z_]\w*\s*;",
+        text,
+    ) is not None
+
+
 def _byte_to_char_offsets(source: str) -> list[int]:
     mapping = [0] * (len(source.encode("utf-8")) + 1)
     byte_offset = 0
@@ -2530,6 +2710,7 @@ def _probe_temp_introduction(
     body_start: int,
     function: str,
 ) -> LifetimeLayoutProbe | None:
+    scoped_types = _scoped_identifier_types(source, body, body_start, function)
     match = re.search(
         r"(?m)^([ \t]*)([A-Za-z_]\w*)\s*=\s*([^;\n]*(?:\+|-|\*|/)[^;\n]*);",
         body,
@@ -2549,15 +2730,18 @@ def _probe_temp_introduction(
         indent, decl_lhs, lhs, expr = match.groups()
         if _has_later_decl_before_statement(body, match.end(), indent):
             return None
+        parsed_decl = _parse_simple_decl(decl_lhs)
+        temp_type = parsed_decl[1] if parsed_decl is not None else "int"
         replacement = (
             f"{indent}{decl_lhs};\n"
-            f"{indent}int {temp} = {expr.strip()};\n"
+            f"{indent}{temp_type} {temp} = {expr.strip()};\n"
             f"{indent}{lhs} = {temp};"
         )
     else:
         indent, lhs, expr = match.groups()
+        temp_type = scoped_types.get(lhs, "int")
         replacement = (
-            f"{indent}int {temp} = {expr.strip()};\n"
+            f"{indent}{temp_type} {temp} = {expr.strip()};\n"
             f"{indent}{lhs} = {temp};"
         )
     return LifetimeLayoutProbe(
@@ -2677,6 +2861,8 @@ def _probe_declaration_use_distance(
             continue
         use_block = body[use_start:use_end]
         if _block_crosses_shallower_else(use_block, use_line):
+            continue
+        if _region_has_label_or_goto(body[match.start():use_end]):
             continue
         decl_text = match.group(0).strip()
         wrapped = (
@@ -2813,6 +2999,9 @@ def _probe_loop_init(
     abs_for_close = _find_matching_brace(source, abs_for_open)
     if abs_for_close is None or abs_for_close > body_start + len(body):
         return None
+    after_loop = source[abs_for_close + 1:body_start + len(body)]
+    if _identifier_count(after_loop, var) > 0:
+        return None
 
     decl_abs_start = body_start + decl.start()
     decl_abs_end = body_start + decl.end()
@@ -2894,6 +3083,8 @@ def _probe_call_arg_temp(
                 continue
             temp = "ll_probe_arg_0"
             temp_type = _infer_call_arg_temp_type(arg, scoped_types)
+            if temp_type is None:
+                continue
             args[index] = temp
             replacement = (
                 f"{indent}{{\n"
@@ -3759,9 +3950,41 @@ def _parse_simple_decl(text: str) -> tuple[str, str] | None:
     return match.group("name"), typ
 
 
-def _infer_call_arg_temp_type(expr: str, scoped_types: dict[str, str]) -> str:
+def _simple_leading_cast_type(expr: str) -> str | None:
+    stripped = expr.strip()
+    if not stripped.startswith("("):
+        return None
+    close = _find_matching_paren(stripped, 0)
+    if close is None:
+        return None
+    cast_type = stripped[1:close].strip()
+    if "(*" in cast_type or ")" in cast_type or "(" in cast_type:
+        return None
+    parsed = _parse_simple_decl(f"{cast_type} ll_probe_cast")
+    if parsed is None:
+        return None
+    return parsed[1]
+
+
+def _call_arg_temp_expr_needs_known_type(expr: str) -> bool:
+    if any(token in expr for token in ("->", "[", "&", "(*")):
+        return True
+    return (
+        re.search(r"(?:\b[A-Za-z_]\w*|\)|\])\s*\.\s*[A-Za-z_]\w*", expr)
+        is not None
+    )
+
+
+def _infer_call_arg_temp_type(expr: str, scoped_types: dict[str, str]) -> str | None:
+    cast_type = _simple_leading_cast_type(expr)
+    if cast_type is not None:
+        return cast_type
+    if _call_arg_temp_expr_needs_known_type(expr):
+        return None
     names = set(re.findall(r"\b[A-Za-z_]\w*\b", expr))
     referenced_types = {scoped_types[name] for name in names if name in scoped_types}
+    if any(type_name.endswith("*") for type_name in referenced_types):
+        return None
     if "double" in referenced_types:
         return "double"
     if "f32" in referenced_types:
@@ -4043,6 +4266,7 @@ class _IndexedStructPointerCandidate:
     subindex_expression: str | None
     direct_expression: str
     access_mode: str
+    scan_end: int | None = None
 
 
 @dataclass(frozen=True)
@@ -4069,6 +4293,23 @@ class _IndexedStructDirectFieldUse:
     subindex_expression: str | None
     direct_expression: str
     field: str
+    source_lines: tuple[int, int]
+
+
+@dataclass(frozen=True)
+class _IndexedStructDirectElementUse:
+    start: int
+    end: int
+    line_start: int
+    line_end: int
+    line_indent: str
+    line: str
+    expression: str
+    base_expression: str
+    index_expression: str
+    subindex_expression: str | None
+    direct_expression: str
+    element_type: str
     source_lines: tuple[int, int]
 
 
@@ -4269,6 +4510,8 @@ def scan_indexed_struct_pointer_probes(
             body_end,
             candidate.decl_start,
         )
+        if candidate.scan_end is not None:
+            candidate_body_end = min(candidate.scan_end, body_end)
         probe = _indexed_struct_pointer_probe_for_candidate(
             source_text,
             candidate,
@@ -4298,6 +4541,22 @@ def scan_indexed_struct_pointer_probes(
     rejected_candidate_count += direct_rejected
     safe_candidate_count += direct_safe
     probes.extend(direct_probes)
+
+    element_probes, element_supported, element_rejected, element_safe = (
+        _indexed_struct_direct_element_split_probes(
+            source_text,
+            body,
+            body_start,
+            body_end,
+            function,
+            label_start=safe_candidate_count,
+            max_probes=max(0, max_probes - len(probes)),
+        )
+    )
+    supported_candidate_count += element_supported
+    rejected_candidate_count += element_rejected
+    safe_candidate_count += element_safe
+    probes.extend(element_probes)
 
     if supported_candidate_count == 0:
         return [], _indexed_struct_pointer_status(
@@ -4342,12 +4601,29 @@ _INDEXED_STRUCT_POINTER_DECL_RE = re.compile(
     r"\s*\*\s*(?P<pointer>[A-Za-z_]\w*)\s*=\s*"
     r"(?P<initializer>[^;\n]+);[ \t]*$"
 )
+_INDEXED_STRUCT_POINTER_BARE_DECL_RE = re.compile(
+    r"^(?P<indent>[ \t]*)"
+    r"(?P<type>(?:(?:const|volatile)\s+)*(?:struct\s+)?[A-Za-z_]\w*"
+    r"(?:\s+(?:const|volatile))?)"
+    r"\s*\*\s*(?P<pointer>[A-Za-z_]\w*)\s*;[ \t]*$"
+)
+_INDEXED_STRUCT_POINTER_ASSIGN_RE = re.compile(
+    r"^(?P<indent>[ \t]*)(?P<pointer>[A-Za-z_]\w*)\s*=\s*"
+    r"(?P<initializer>[^;\n]+);[ \t]*$"
+)
 _INDEXED_STRUCT_DIRECT_FIELD_RE = re.compile(
     r"(?P<direct>"
     r"(?P<base>\b[A-Za-z_]\w*(?:\s*(?:\.|->)\s*[A-Za-z_]\w*)*)"
     r"\s*\[\s*(?P<index>[^\[\]\n;]+)\s*\]\s*"
     r"(?:\[\s*(?P<subindex>[^\[\]\n;]+)\s*\])?"
     r")\s*\.\s*(?P<field>[A-Za-z_]\w*)"
+)
+_INDEXED_STRUCT_DIRECT_ELEMENT_RE = re.compile(
+    r"(?P<direct>"
+    r"(?P<base>\b[A-Za-z_]\w*(?:\s*(?:\.|->)\s*[A-Za-z_]\w*)*)"
+    r"\s*\[\s*(?P<index>[^\[\]\n;]+)\s*\]"
+    r"(?:\s*\[\s*(?P<subindex>[^\[\]\n;]+)\s*\])?"
+    r")"
 )
 
 
@@ -4375,8 +4651,14 @@ def _indexed_struct_pointer_candidates(
     code_body = _mask_c_non_code_text(body)
     body_lines = body.splitlines(keepends=True)
     code_lines = code_body.splitlines(keepends=True)
+    pointer_decls: dict[str, list[int]] = {}
+    depth = 0
     for line, code_line in zip(body_lines, code_lines, strict=True):
         code_line_text = code_line[:-1] if code_line.endswith("\n") else code_line
+        line_depth = depth
+        bare_decl = _INDEXED_STRUCT_POINTER_BARE_DECL_RE.match(code_line_text)
+        if bare_decl is not None:
+            pointer_decls.setdefault(bare_decl.group("pointer"), []).append(line_depth)
         match = _INDEXED_STRUCT_POINTER_DECL_RE.match(code_line_text)
         if match is not None:
             parsed = _parse_indexed_struct_pointer_initializer(
@@ -4403,6 +4685,68 @@ def _indexed_struct_pointer_candidates(
                         access_mode=access_mode,
                     )
                 )
+        assign = _INDEXED_STRUCT_POINTER_ASSIGN_RE.match(code_line_text)
+        visible_decl_depth = None
+        if assign is not None:
+            decl_depths = pointer_decls.get(assign.group("pointer"), [])
+            visible_depths = [
+                decl_depth for decl_depth in decl_depths if decl_depth <= line_depth
+            ]
+            if visible_depths:
+                visible_decl_depth = max(visible_depths)
+        if assign is not None and visible_decl_depth is not None:
+            parsed = _parse_indexed_struct_pointer_initializer(
+                assign.group("initializer").strip()
+            )
+            if parsed is not None:
+                (
+                    base_expression,
+                    index_expression,
+                    subindex_expression,
+                    direct_expression,
+                    access_mode,
+                ) = parsed
+                candidates.append(
+                    _IndexedStructPointerCandidate(
+                        pointer=assign.group("pointer"),
+                        declaration=line.strip(),
+                        decl_start=body_start + cursor,
+                        decl_end=body_start + cursor + len(line),
+                        base_expression=base_expression,
+                        index_expression=index_expression,
+                        subindex_expression=subindex_expression,
+                        direct_expression=direct_expression,
+                        access_mode=access_mode,
+                        scan_end=(
+                            body_start + len(body)
+                            if visible_decl_depth < line_depth
+                            else None
+                        ),
+                    )
+                )
+        closed_depths: set[int] = set()
+        next_depth = depth
+        for char in code_line_text:
+            if char == "{":
+                next_depth += 1
+            elif char == "}":
+                if next_depth > 0:
+                    closed_depths.add(next_depth)
+                    next_depth -= 1
+                else:
+                    next_depth = 0
+        depth = next_depth
+        if closed_depths:
+            for pointer, decl_depths in list(pointer_decls.items()):
+                active_depths = [
+                    decl_depth
+                    for decl_depth in decl_depths
+                    if decl_depth <= depth and decl_depth not in closed_depths
+                ]
+                if active_depths:
+                    pointer_decls[pointer] = active_depths
+                else:
+                    del pointer_decls[pointer]
         cursor += len(line)
     return candidates
 
@@ -4440,6 +4784,7 @@ def _indexed_struct_enclosing_block_end(
 def _parse_indexed_struct_pointer_initializer(
     initializer: str,
 ) -> tuple[str, str, str | None, str, str] | None:
+    initializer = initializer.strip()
     if initializer.startswith("&"):
         indexed = _parse_indexed_struct_address_expression(initializer[1:].strip())
         if indexed is None:
@@ -4456,6 +4801,20 @@ def _parse_indexed_struct_pointer_initializer(
             "struct-value",
         )
 
+    unwrapped = _unwrap_simple_cast_expression(initializer)
+    if unwrapped is not None:
+        plus = _split_top_level_plus(_strip_outer_parens(unwrapped))
+        if plus is None:
+            return None
+        base_expression, index_expression = plus
+        return (
+            base_expression,
+            index_expression,
+            None,
+            initializer,
+            "array-pointer-expression",
+        )
+
     plus = _split_top_level_plus(initializer)
     if plus is None:
         return None
@@ -4467,6 +4826,36 @@ def _parse_indexed_struct_pointer_initializer(
         f"{base_expression} + {index_expression}",
         "pointer-expression",
     )
+
+
+def _strip_outer_parens(expression: str) -> str:
+    expression = expression.strip()
+    while expression.startswith("(") and expression.endswith(")"):
+        close = _find_matching_paren(expression, 0)
+        if close != len(expression) - 1:
+            break
+        expression = expression[1:-1].strip()
+    return expression
+
+
+def _unwrap_simple_cast_expression(expression: str) -> str | None:
+    expression = expression.strip()
+    if not expression.startswith("("):
+        return None
+    close = _find_matching_paren(expression, 0)
+    if close is None:
+        return None
+    cast_type = expression[1:close].strip()
+    if "*" not in cast_type:
+        return None
+    if not re.fullmatch(
+        r"(?:const\s+|volatile\s+)*(?:struct\s+)?[A-Za-z_]\w*"
+        r"(?:\s*\*)+(?:\s+const|\s+volatile)*",
+        cast_type,
+    ):
+        return None
+    tail = expression[close + 1:].strip()
+    return tail or None
 
 
 def _parse_indexed_struct_address_expression(
@@ -4628,8 +5017,12 @@ def _indexed_struct_direct_scalar_split_probes(
     rejected_candidate_count = 0
     safe_candidate_count = 0
     scoped_types = _scoped_identifier_types(source, body, body_start, function)
+    return_type = _function_return_type(source, function)
     for group_uses in uses_by_direct.values():
-        if len(group_uses) < 2:
+        if len(group_uses) < 2 and not (
+            "->" in group_uses[0].base_expression
+            or "." in group_uses[0].base_expression
+        ):
             continue
         supported_candidate_count += 1
         probe = _indexed_struct_direct_scalar_split_probe_for_group(
@@ -4638,6 +5031,7 @@ def _indexed_struct_direct_scalar_split_probes(
             group_uses,
             body_start=body_start,
             scoped_types=scoped_types,
+            return_type=return_type,
             label_index=label_start + safe_candidate_count,
         )
         if probe is None:
@@ -4673,6 +5067,8 @@ def _indexed_struct_direct_field_uses(
         ):
             continue
         if _indexed_struct_field_use_is_address_taken(code_body, match.start()):
+            continue
+        if _indexed_struct_field_use_has_prefix_lvalue(code_body, match.start()):
             continue
         if _indexed_struct_direct_field_use_is_lvalue(code_body, match.end()):
             continue
@@ -4748,6 +5144,7 @@ def _indexed_struct_direct_scalar_split_probe_for_group(
     *,
     body_start: int,
     scoped_types: dict[str, str],
+    return_type: str | None,
     label_index: int,
 ) -> LifetimeLayoutProbe | None:
     group_uses = sorted(group_uses, key=lambda use: (use.start, use.end))
@@ -4764,9 +5161,16 @@ def _indexed_struct_direct_scalar_split_probe_for_group(
     if _region_has_preprocessor_directive(source[first_use.line_start:affected_end]):
         return None
 
+    if len(group_uses) < 2 and not _indexed_struct_direct_field_has_type_context(
+        first_use,
+        scoped_types,
+        return_type=return_type,
+    ):
+        return None
     scalar_type = _infer_indexed_struct_direct_scalar_type(
         first_use,
         scoped_types,
+        return_type=return_type,
     )
     temp_name = _unique_indexed_struct_probe_name(
         source,
@@ -4846,10 +5250,396 @@ def _indexed_struct_direct_scalar_split_probe_for_group(
     )
 
 
-def _indexed_struct_direct_field_use_is_lvalue(source: str, end: int) -> bool:
+def _indexed_struct_direct_field_has_type_context(
+    use: _IndexedStructDirectFieldUse,
+    scoped_types: dict[str, str],
+    *,
+    return_type: str | None,
+) -> bool:
+    if _initialized_decl_type(use.line) is not None:
+        return True
+    before_use = use.line[: use.start - use.line_start]
+    if return_type is not None and re.search(r"\breturn\s*$", before_use):
+        return True
+    assign = re.search(
+        r"\b(?P<lhs>[A-Za-z_]\w*)\s*(?:[+\-*/%&|^]?=|<<=|>>=)\s*$",
+        before_use,
+    )
+    return bool(assign is not None and assign.group("lhs") in scoped_types)
+
+
+def _indexed_struct_direct_element_split_probes(
+    source: str,
+    body: str,
+    body_start: int,
+    body_end: int,
+    function: str,
+    *,
+    label_start: int,
+    max_probes: int,
+) -> tuple[list[LifetimeLayoutProbe], int, int, int]:
+    scoped_types = _scoped_identifier_types(source, body, body_start, function)
+    uses_by_base: dict[tuple[str, str], list[_IndexedStructDirectElementUse]] = {}
+    for use in _indexed_struct_direct_element_uses(
+        source,
+        body_start,
+        body_end,
+        scoped_types,
+    ):
+        uses_by_base.setdefault(
+            (use.base_expression, use.element_type),
+            [],
+        ).append(use)
+
+    probes: list[LifetimeLayoutProbe] = []
+    supported_candidate_count = 0
+    rejected_candidate_count = 0
+    safe_candidate_count = 0
+    for group_uses in uses_by_base.values():
+        supported_candidate_count += 1
+        probe = _indexed_struct_direct_element_split_probe_for_group(
+            source,
+            body,
+            group_uses,
+            body_start=body_start,
+            label_index=label_start + safe_candidate_count,
+        )
+        if probe is None:
+            rejected_candidate_count += 1
+            continue
+        safe_candidate_count += 1
+        if len(probes) < max_probes:
+            probes.append(probe)
+    return (
+        probes,
+        supported_candidate_count,
+        rejected_candidate_count,
+        safe_candidate_count,
+    )
+
+
+def _indexed_struct_direct_element_uses(
+    source: str,
+    body_start: int,
+    body_end: int,
+    scoped_types: dict[str, str],
+) -> list[_IndexedStructDirectElementUse]:
+    body = source[body_start:body_end]
+    code_body = _mask_c_non_code_text(body)
+    uses: list[_IndexedStructDirectElementUse] = []
+    for match in _INDEXED_STRUCT_DIRECT_ELEMENT_RE.finditer(code_body):
+        start = body_start + match.start()
+        end = body_start + match.end()
+        direct_start = body_start + match.start("direct")
+        direct_end = body_start + match.end("direct")
+        base_expression = source[
+            body_start + match.start("base") : body_start + match.end("base")
+        ].strip()
+        if "->" not in base_expression and "." not in base_expression:
+            continue
+        if _indexed_struct_element_followed_by_member_access(code_body, match.end()):
+            continue
+        if not _indexed_struct_field_use_is_standalone(code_body, match.start()):
+            continue
+        if _indexed_struct_field_use_is_address_taken(code_body, match.start()):
+            continue
+        if _indexed_struct_field_use_has_prefix_lvalue(code_body, match.start()):
+            continue
+        if _indexed_struct_direct_field_use_is_lvalue(code_body, match.end()):
+            continue
+        if _offset_inside_preprocessor_region(source, body_start, start):
+            continue
+        if _indexed_struct_element_is_disallowed_call_context(source, start, end):
+            continue
+        index_expression = source[
+            body_start + match.start("index") : body_start + match.end("index")
+        ].strip()
+        subindex_expression = (
+            source[
+                body_start + match.start("subindex") : body_start
+                + match.end("subindex")
+            ].strip()
+            if match.group("subindex") is not None
+            else None
+        )
+        expressions = [base_expression, index_expression]
+        if subindex_expression is not None:
+            expressions.append(subindex_expression)
+        if not all(
+            _indexed_struct_expression_is_side_effect_free(expr)
+            for expr in expressions
+        ):
+            continue
+
+        element_type = _infer_indexed_struct_element_type(
+            source,
+            base_expression,
+            scoped_types,
+        )
+        if element_type is None:
+            if not _indexed_struct_element_is_call_argument(source, start, end):
+                continue
+            element_type = "void*"
+
+        line_start = source.rfind("\n", 0, start) + 1
+        line_end = source.find("\n", end)
+        if line_end < 0:
+            line_end = len(source)
+        else:
+            line_end += 1
+        line = source[line_start:line_end]
+        indent_match = re.match(r"[ \t]*", line)
+        line_indent = "" if indent_match is None else indent_match.group(0)
+        start_line = _line_col(source, start)[0]
+        end_line = _line_col(source, max(start, end - 1))[0]
+        uses.append(
+            _IndexedStructDirectElementUse(
+                start=start,
+                end=end,
+                line_start=line_start,
+                line_end=line_end,
+                line_indent=line_indent,
+                line=line,
+                expression=source[start:end],
+                base_expression=base_expression,
+                index_expression=index_expression,
+                subindex_expression=subindex_expression,
+                direct_expression=source[direct_start:direct_end].strip(),
+                element_type=element_type,
+                source_lines=(start_line, end_line),
+            )
+        )
+    return uses
+
+
+def _indexed_struct_direct_element_split_probe_for_group(
+    source: str,
+    body: str,
+    group_uses: list[_IndexedStructDirectElementUse],
+    *,
+    body_start: int,
+    label_index: int,
+) -> LifetimeLayoutProbe | None:
+    group_uses = sorted(group_uses, key=lambda use: (use.start, use.end))
+    first_use = group_uses[0]
+    affected_end = max(use.end for use in group_uses)
+    affected_region = source[first_use.end:affected_end]
+    if _indexed_struct_expression_inputs_mutated(
+        affected_region,
+        first_use.base_expression,
+        first_use.index_expression,
+        first_use.subindex_expression,
+    ):
+        return None
+    if _region_has_preprocessor_directive(source[first_use.line_start:affected_end]):
+        return None
+
+    temp_name = _unique_indexed_struct_probe_name(
+        source,
+        "ll_probe_indexed_element",
+    )
+    line_relative_start = first_use.start - first_use.line_start
+    line_relative_end = first_use.end - first_use.line_start
+    rewritten_line = (
+        first_use.line[:line_relative_start]
+        + temp_name
+        + first_use.line[line_relative_end:]
+    )
+    declaration_insert_rel, declaration_indent = _pad_stack_insert_position(body)
+    declaration_insert = body_start + (declaration_insert_rel or 0)
+    if first_use.line_start < declaration_insert:
+        replacements = [
+            (
+                first_use.line_start,
+                first_use.line_end,
+                (
+                    f"{first_use.line_indent}{first_use.element_type} "
+                    f"{temp_name} = {first_use.expression};\n"
+                    f"{rewritten_line}"
+                ),
+            )
+        ]
+    else:
+        replacements = [
+            (
+                declaration_insert,
+                declaration_insert,
+                f"{declaration_indent}{first_use.element_type} {temp_name};\n",
+            ),
+            (
+                first_use.line_start,
+                first_use.line_end,
+                (
+                    f"{first_use.line_indent}{temp_name} = "
+                    f"{first_use.expression};\n"
+                    f"{rewritten_line}"
+                ),
+            ),
+        ]
+    source_line_start = _line_col(source, first_use.line_start)[0]
+    source_line_end = max(use.source_lines[1] for use in group_uses)
+    provenance = {
+        "kind": "indexed-struct-pointer",
+        "diagnostic": "indexed_struct_pointer_materialization",
+        "variant": "direct-element-scalar-split",
+        "source_lines": [source_line_start, source_line_end],
+        "base_expression": first_use.base_expression,
+        "index_expression": first_use.index_expression,
+        "direct_expression": first_use.direct_expression,
+        "element_type": first_use.element_type,
+        "field_uses": [
+            {
+                "source_lines": list(use.source_lines),
+            }
+            for use in group_uses
+        ],
+        "split_first_field": True,
+    }
+    if first_use.subindex_expression is not None:
+        provenance["subindex_expression"] = first_use.subindex_expression
+
+    return LifetimeLayoutProbe(
+        label=f"indexed-struct-pointer-{label_index}",
+        operator="indexed-struct-pointer",
+        description=(
+            f"Split first direct indexed element `{first_use.expression}` into "
+            f"scalar local `{temp_name}`."
+        ),
+        source_text=_replace_absolute_slices(source, replacements),
+        provenance=provenance,
+    )
+
+
+def _indexed_struct_element_followed_by_member_access(source: str, end: int) -> bool:
     cursor = end
     while cursor < len(source) and source[cursor].isspace():
         cursor += 1
+    return source.startswith((".", "->"), cursor)
+
+
+def _indexed_struct_element_call_context(
+    source: str,
+    start: int,
+    end: int,
+) -> str | None:
+    code_source = _mask_c_non_code_text(source)
+    cursor = start - 1
+    saw_open_paren = False
+    while True:
+        while cursor >= 0 and code_source[cursor].isspace():
+            cursor -= 1
+        if cursor >= 0 and code_source[cursor] == "(":
+            saw_open_paren = True
+            cursor -= 1
+            continue
+        break
+    if not saw_open_paren:
+        return None
+    call_match = re.search(r"\b(?P<callee>[A-Za-z_]\w*)\s*$", code_source[: cursor + 1])
+    return None if call_match is None else call_match.group("callee")
+
+
+def _indexed_struct_element_is_disallowed_call_context(
+    source: str,
+    start: int,
+    end: int,
+) -> bool:
+    callee = _indexed_struct_element_call_context(source, start, end)
+    return callee in {
+        "for",
+        "if",
+        "sizeof",
+        "switch",
+        "while",
+    }
+
+
+def _indexed_struct_element_is_call_argument(
+    source: str,
+    start: int,
+    end: int,
+) -> bool:
+    callee = _indexed_struct_element_call_context(source, start, end)
+    if callee is None or _indexed_struct_element_is_disallowed_call_context(
+        source,
+        start,
+        end,
+    ) or callee == "return":
+        return False
+    code_source = _mask_c_non_code_text(source)
+    statement_end = len(code_source)
+    for delimiter in (";", "{", "}"):
+        delimiter_pos = code_source.find(delimiter, end)
+        if delimiter_pos >= 0:
+            statement_end = min(statement_end, delimiter_pos)
+    return ")" in code_source[end:statement_end]
+
+
+def _infer_indexed_struct_element_type(
+    source: str,
+    base_expression: str,
+    scoped_types: dict[str, str],
+) -> str | None:
+    member = re.match(
+        r"^(?P<root>[A-Za-z_]\w*)\s*(?P<op>->|\.)\s*(?P<field>[A-Za-z_]\w*)$",
+        base_expression.strip(),
+    )
+    if member is None:
+        return None
+    root_type = scoped_types.get(member.group("root"))
+    if root_type is None:
+        return None
+    if member.group("op") == "->":
+        struct_type = _remove_pointer_from_type(root_type)
+    else:
+        struct_type = root_type
+    if struct_type is None:
+        return None
+    return _find_struct_array_field_element_type(
+        source,
+        struct_type,
+        member.group("field"),
+    )
+
+
+def _find_struct_array_field_element_type(
+    source: str,
+    struct_type: str,
+    field: str,
+) -> str | None:
+    normalized = _normalize_type_spelling(struct_type)
+    if normalized.startswith("struct "):
+        normalized = normalized[len("struct ") :]
+    name = re.escape(normalized)
+    struct_patterns = [
+        rf"typedef\s+struct\s+{name}\s*\{{(?P<body>.*?)\}}\s*{name}\s*;",
+        rf"typedef\s+struct\s*\{{(?P<body>.*?)\}}\s*{name}\s*;",
+        rf"struct\s+{name}\s*\{{(?P<body>.*?)\}}\s*;",
+    ]
+    field_name = re.escape(field)
+    for pattern in struct_patterns:
+        for match in re.finditer(pattern, source, flags=re.DOTALL):
+            body = _mask_c_non_code_text(match.group("body"))
+            field_match = re.search(
+                rf"(?m)^[ \t]*(?P<type>(?:const\s+|volatile\s+)*"
+                rf"(?:struct\s+[A-Za-z_]\w*|[A-Za-z_]\w+)(?:\s*\*)*)"
+                rf"\s+{field_name}\s*\[[^\]]+\]\s*;",
+                body,
+            )
+            if field_match is not None:
+                return _normalize_type_spelling(field_match.group("type"))
+    return None
+
+
+def _indexed_struct_direct_field_use_is_lvalue(source: str, end: int) -> bool:
+    cursor = end
+    while True:
+        while cursor < len(source) and source[cursor].isspace():
+            cursor += 1
+        if cursor < len(source) and source[cursor] == ")":
+            cursor += 1
+            continue
+        break
     if cursor >= len(source):
         return False
     return source.startswith(("++", "--"), cursor) or bool(
@@ -4860,12 +5650,16 @@ def _indexed_struct_direct_field_use_is_lvalue(source: str, end: int) -> bool:
 def _infer_indexed_struct_direct_scalar_type(
     use: _IndexedStructDirectFieldUse,
     scoped_types: dict[str, str],
+    *,
+    return_type: str | None = None,
 ) -> str:
     initialized_type = _initialized_decl_type(use.line)
     if initialized_type is not None:
         return initialized_type
 
     before_use = use.line[: use.start - use.line_start]
+    if return_type is not None and re.search(r"\breturn\s*$", before_use):
+        return _normalize_type_spelling(return_type)
     assign = re.search(
         r"\b(?P<lhs>[A-Za-z_]\w*)\s*(?:[+\-*/%&|^]?=|<<=|>>=)\s*$",
         before_use,
@@ -4932,6 +5726,14 @@ def _indexed_struct_pointer_field_uses(
     region_start: int,
     region_end: int,
 ) -> list[_IndexedStructPointerFieldUse] | None:
+    if candidate.access_mode == "array-pointer-expression":
+        return _indexed_struct_pointer_array_uses(
+            source,
+            candidate,
+            region_start,
+            region_end,
+        )
+
     region = source[region_start:region_end]
     code_region = _mask_c_non_code_text(region)
     pointer = re.escape(candidate.pointer)
@@ -4948,6 +5750,8 @@ def _indexed_struct_pointer_field_uses(
         if not _indexed_struct_field_use_is_standalone(code_region, match.start()):
             return None
         if _indexed_struct_field_use_is_address_taken(code_region, match.start()):
+            return None
+        if _indexed_struct_field_use_has_prefix_lvalue(code_region, match.start()):
             return None
         if match.group("arrow") is not None:
             syntax = "arrow"
@@ -4967,6 +5771,62 @@ def _indexed_struct_pointer_field_uses(
                 end=end,
                 field=field_name,
                 syntax=syntax,
+                replacement=replacement,
+                source_lines=(start_line, end_line),
+            )
+        )
+        excluded_ranges.append((match.start(), match.end()))
+
+    if not uses:
+        return None
+    scrubbed = list(code_region)
+    for start, end in excluded_ranges:
+        for idx in range(start, end):
+            scrubbed[idx] = " "
+    if re.search(rf"\b{pointer}\b", "".join(scrubbed)):
+        return None
+    return uses
+
+
+def _indexed_struct_pointer_array_uses(
+    source: str,
+    candidate: _IndexedStructPointerCandidate,
+    region_start: int,
+    region_end: int,
+) -> list[_IndexedStructPointerFieldUse] | None:
+    region = source[region_start:region_end]
+    code_region = _mask_c_non_code_text(region)
+    pointer = re.escape(candidate.pointer)
+    use_re = re.compile(
+        rf"\b{pointer}\s*\[\s*(?P<index>[^\[\]\n;]+)\s*\]"
+    )
+    uses: list[_IndexedStructPointerFieldUse] = []
+    excluded_ranges: list[tuple[int, int]] = []
+    for match in use_re.finditer(code_region):
+        index_expr = source[
+            region_start + match.start("index") : region_start + match.end("index")
+        ].strip()
+        if not _indexed_struct_expression_is_side_effect_free(index_expr):
+            return None
+        if not _indexed_struct_field_use_is_standalone(code_region, match.start()):
+            return None
+        if _indexed_struct_field_use_is_address_taken(code_region, match.start()):
+            return None
+        if _indexed_struct_field_use_has_prefix_lvalue(code_region, match.start()):
+            return None
+        if _indexed_struct_direct_field_use_is_lvalue(code_region, match.end()):
+            return None
+        start = region_start + match.start()
+        end = region_start + match.end()
+        replacement = f"({candidate.direct_expression})[{index_expr}]"
+        start_line = _line_col(source, start)[0]
+        end_line = _line_col(source, max(start, end - 1))[0]
+        uses.append(
+            _IndexedStructPointerFieldUse(
+                start=start,
+                end=end,
+                field=index_expr,
+                syntax="array-subscript",
                 replacement=replacement,
                 source_lines=(start_line, end_line),
             )
@@ -5070,6 +5930,20 @@ def _indexed_struct_field_use_is_address_taken(source: str, start: int) -> bool:
         return True
     match = re.search(r"\b([A-Za-z_]\w*)\s*$", before)
     return bool(match and match.group(1) in {"return", "sizeof"})
+
+
+def _indexed_struct_field_use_has_prefix_lvalue(source: str, start: int) -> bool:
+    cursor = start - 1
+    while True:
+        while cursor >= 0 and source[cursor].isspace():
+            cursor -= 1
+        if cursor >= 0 and source[cursor] == "(":
+            cursor -= 1
+            continue
+        break
+    if cursor <= 0:
+        return False
+    return source[cursor - 1 : cursor + 1] in {"++", "--"}
 
 
 def _region_has_preprocessor_directive(text: str) -> bool:

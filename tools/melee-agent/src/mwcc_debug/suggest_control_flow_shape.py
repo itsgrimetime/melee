@@ -166,6 +166,14 @@ def render_text(report: dict[str, Any]) -> str:
             lines.append("evidence:")
             for key, value in evidence.items():
                 lines.append(f"  - {key}: {_format_evidence_value(value)}")
+        materialization = suggestion.get("source_materialization")
+        if isinstance(materialization, dict):
+            status = materialization.get("status") or "unknown"
+            reason = materialization.get("reason") or materialization.get("blocker")
+            detail = f"source-preflight: {status}"
+            if reason:
+                detail += f" ({reason})"
+            lines.append(detail)
         commands = suggestion.get("follow_up_commands") or []
         if commands:
             lines.append("follow-up:")
@@ -648,13 +656,64 @@ def _suggestion(
             "melee-agent debug mutate control-flow-shape-search "
             f"-f {function} --operator {operator} --json"
         ]
-    return {
+    payload = {
         "kind": kind,
         "confidence": confidence,
         "recommendation": recommendation,
         "evidence": evidence,
         "follow_up_commands": commands or [],
     }
+    if operator:
+        payload["operator"] = operator
+    return payload
+
+
+def annotate_source_materialization(
+    report: dict[str, Any],
+    *,
+    function: str | None = None,
+    source_text: str,
+    max_probes_per_operator: int = 1,
+) -> dict[str, Any]:
+    """Annotate generated-operator suggestions with source probe availability."""
+    from .control_flow_shape import scan_control_flow_shape_probes
+
+    report_function = function or report.get("function")
+    if not isinstance(report_function, str) or not report_function:
+        return report
+    suggestions = report.get("suggestions")
+    if not isinstance(suggestions, list):
+        return report
+
+    for suggestion in suggestions:
+        if not isinstance(suggestion, dict):
+            continue
+        operator = suggestion.get("operator")
+        if not isinstance(operator, str) or not operator:
+            continue
+        probes, scan_status = scan_control_flow_shape_probes(
+            source_text,
+            report_function,
+            operator_filter=(operator,),
+            max_probes=max(1, max_probes_per_operator),
+        )
+        reason = str(scan_status.get("reason") or "")
+        blocker = scan_status.get("blocker")
+        materialization = {
+            "operator": operator,
+            "status": "materializable" if probes else "non-materializable",
+            "probe_count": len(probes),
+            "blocker": blocker,
+            "reason": reason,
+        }
+        if probes:
+            materialization["example_probe_label"] = probes[0].label
+        else:
+            non_materializable_reason = reason or str(blocker or "no probes")
+            suggestion["follow_up_commands"] = []
+            suggestion["non_materializable_reason"] = non_materializable_reason
+        suggestion["source_materialization"] = materialization
+    return report
 
 
 def _is_conditional_branch(opcode: str) -> bool:
