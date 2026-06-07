@@ -954,11 +954,11 @@ void mnDiagram_InputProc(HSD_GObj* gobj)
         {
             Diagram* d = mnDiagram_804D6C10->user_data;
             mn_804A04F0.entering_menu = 0;
-        gmMainLib_8015CC34()->xE = (u8) (d->fighter_cursor_pos >> 8);
-        gmMainLib_8015CC34()->xF = (u8) d->fighter_cursor_pos;
-        gmMainLib_8015CC34()->unk_x10 = (u8) (d->name_cursor_pos >> 8);
-        gmMainLib_8015CC34()->x11 = (u8) d->name_cursor_pos;
-        gmMainLib_8015CC34()->xD = d->is_name_mode;
+            gmMainLib_8015CC34()->xE = (u8) (d->fighter_cursor_pos >> 8);
+            gmMainLib_8015CC34()->xF = (u8) d->fighter_cursor_pos;
+            gmMainLib_8015CC34()->unk_x10 = (u8) (d->name_cursor_pos >> 8);
+            gmMainLib_8015CC34()->x11 = (u8) d->name_cursor_pos;
+            gmMainLib_8015CC34()->xD = d->is_name_mode;
             mn_80229894(0x1C, 0, 3);
         }
         return;
@@ -967,16 +967,16 @@ void mnDiagram_InputProc(HSD_GObj* gobj)
         lbAudioAx_80024030(1);
         {
             Diagram* d = mnDiagram_804D6C10->user_data;
-        gmMainLib_8015CC34()->xE = (u8) (d->fighter_cursor_pos >> 8);
-        gmMainLib_8015CC34()->xF = (u8) d->fighter_cursor_pos;
-        gmMainLib_8015CC34()->unk_x10 = (u8) (d->name_cursor_pos >> 8);
-        gmMainLib_8015CC34()->x11 = (u8) d->name_cursor_pos;
-        gmMainLib_8015CC34()->xD = d->is_name_mode;
-        HSD_GObjPLink_80390228(gobj);
-        if (input & 0x40) {
-            mnDiagram3_8024714C(NULL);
-            return;
-        }
+            gmMainLib_8015CC34()->xE = (u8) (d->fighter_cursor_pos >> 8);
+            gmMainLib_8015CC34()->xF = (u8) d->fighter_cursor_pos;
+            gmMainLib_8015CC34()->unk_x10 = (u8) (d->name_cursor_pos >> 8);
+            gmMainLib_8015CC34()->x11 = (u8) d->name_cursor_pos;
+            gmMainLib_8015CC34()->xD = d->is_name_mode;
+            HSD_GObjPLink_80390228(gobj);
+            if (input & 0x40) {
+                mnDiagram3_8024714C(NULL);
+                return;
+            }
             mnDiagram2_Init();
         }
         return;
@@ -992,7 +992,8 @@ void mnDiagram_InputProc(HSD_GObj* gobj)
             count = GetNameCount();
             if ((s32) (u8) mn_804A04F0.hovered_selection >= count) {
                 mn_804A04F0.hovered_selection =
-                    (mn_804A04F0.hovered_selection & 0xFF00) | (u8) (count - 1);
+                    (mn_804A04F0.hovered_selection & 0xFF00) |
+                    (u8) (count - 1);
             }
             if ((mn_804A04F0.hovered_selection >> 8) >= count) {
                 mn_804A04F0.hovered_selection =
@@ -2261,6 +2262,7 @@ static inline u8 mnDiagram_GetVisibleFighterCursorFrom(u8* sorted, int start,
 
 void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
 {
+    s32 var_r22_2;
     void* gobj = arg0;
     s32 arg1_r = arg1;
     s32 arg2_r = arg2;
@@ -2281,7 +2283,6 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
     s32 var_r19_2;
     s32 var_r19_3;
     s32 var_r22;
-    s32 var_r22_2;
     s32 var_r22_3;
     s32 var_r30;
     s32 var_r3;
