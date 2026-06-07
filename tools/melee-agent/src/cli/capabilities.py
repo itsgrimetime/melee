@@ -240,7 +240,15 @@ def search(task: str = typer.Argument(..., help="What you are trying to do.")) -
 @capabilities_app.command("show")
 def show(group: str = typer.Argument(None, help="Command group or skill to detail.")) -> None:
     """Show full detail for a group (or everything)."""
-    typer.echo("(not yet implemented) show")
+    caps = all_capabilities()
+    if group:
+        caps = [c for c in caps if c.group == group or c.name == group or c.name.startswith(f"{group} ")]
+        if not caps:
+            typer.echo(f"No commands or skills match '{group}'.")
+            raise typer.Exit(1)
+    for c in caps:
+        tag = "skill" if c.kind == "skill" else "cmd"
+        typer.echo(f"[{tag}] {c.name:30}  {c.summary}")
 
 
 @capabilities_app.command("generate")

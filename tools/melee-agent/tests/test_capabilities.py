@@ -100,3 +100,17 @@ def test_search_cli_reports_hits():
     res = runner.invoke(capabilities_app, ["search", "scorer"])
     assert res.exit_code == 0
     assert "debug target score-source" in res.output
+
+
+def test_show_all_lists_groups_and_skills():
+    res = runner.invoke(capabilities_app, ["show"])
+    assert res.exit_code == 0
+    assert "debug" in res.output
+    assert "ghidra" in res.output
+
+
+def test_show_group_filters():
+    res = runner.invoke(capabilities_app, ["show", "debug"])
+    assert res.exit_code == 0
+    assert "debug target score-source" in res.output
+    assert "extract files" not in res.output
