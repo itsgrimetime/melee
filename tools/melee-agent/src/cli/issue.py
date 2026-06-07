@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -552,6 +553,13 @@ def show_command(
         console.print(f"[bold]Worktree:[/bold] {issue['worktree_path']}")
     if issue.get("branch"):
         console.print(f"[bold]Branch:[/bold] {issue['branch']}")
+    if issue.get("claimed_by"):
+        stamp = (
+            time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(issue["claimed_at"]))
+            if issue.get("claimed_at")
+            else "-"
+        )
+        console.print(f"[bold]Claimed by:[/bold] {issue['claimed_by']} (at {stamp})")
     if issue.get("body"):
         console.print(f"\n{issue['body']}")
     if issue.get("status") == "resolved":

@@ -629,3 +629,26 @@ def test_issue_list_claim_column_and_available_filter(tmp_path):
 
     # The --unclaimed alias behaves the same and the table render works.
     assert runner.invoke(app, ["issue", "list", "--unclaimed"]).exit_code == 0
+
+
+def test_issue_show_displays_claim_owner(tmp_path):
+    reset_db()
+    db = get_db(tmp_path / "state.db")
+    issue = db.report_tool_issue(summary="x", agent_id="r")
+    db.claim_tool_issue(issue["id"], "agent-1")
+
+    result = runner.invoke(app, ["issue", "show", str(issue["id"])])
+    assert result.exit_code == 0, result.stdout
+    out = strip_ansi(result.stdout)
+    assert "Claimed by:" in out
+    assert "agent-1" in out
+
+
+def test_issue_show_unclaimed_has_no_claim_line(tmp_path):
+    reset_db()
+    db = get_db(tmp_path / "state.db")
+    issue = db.report_tool_issue(summary="x", agent_id="r")
+
+    result = runner.invoke(app, ["issue", "show", str(issue["id"])])
+    assert result.exit_code == 0, result.stdout
+    assert "Claimed by:" not in strip_ansi(result.stdout)
