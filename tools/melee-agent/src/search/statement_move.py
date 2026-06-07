@@ -289,7 +289,7 @@ def _sibling_rw(stmt: SiblingStmt, locals_: set[str]) -> tuple[frozenset, frozen
 def legal_destinations(sibs: list[SiblingStmt], unit: MoveUnit,
                        escaped: set[str], locals_: set[str]) -> list[int]:
     lo, hi = unit.index_range
-    unit_escape_sensitive = bool((set(unit.reads) | set(unit.writes)) & escaped)
+    unit_escape_sensitive = bool((unit.reads | unit.writes) & escaped)
 
     def crosses_ok(t: SiblingStmt) -> bool:
         t_reads, t_writes, hard = _sibling_rw(t, locals_)
@@ -307,6 +307,7 @@ def legal_destinations(sibs: list[SiblingStmt], unit: MoveUnit,
     legal: list[int] = []
     d = hi + 1                          # sink (down)
     while d <= len(sibs):
+        # append the pre-T slot, THEN test T: you may land just before a barrier, never past it
         legal.append(d)
         if d == len(sibs) or not crosses_ok(sibs[d]):
             break
@@ -318,3 +319,27 @@ def legal_destinations(sibs: list[SiblingStmt], unit: MoveUnit,
         legal.append(d)
         d -= 1
     return sorted(x for x in set(legal) if x < lo or x > hi + 1)   # exclude identity window
+
+
+def select_positions(sibs: list[SiblingStmt], unit: MoveUnit,
+                     legal: list[int], strategy: str, locals_: set[str]) -> list[int]:
+    if strategy == "exhaustive":
+        return list(legal)
+    legal_set = set(legal)
+    picks: list[int] = []
+    lo, hi = unit.index_range
+    # sink: the legal slot at the first sibling AFTER the unit that reads unit.writes
+    for i in range(hi + 1, len(sibs)):
+        r, _, _ = _sibling_rw(sibs[i], locals_)
+        if r & unit.writes:
+            if i in legal_set:
+                picks.append(i)
+            break
+    # hoist: just after the last sibling BEFORE the unit that writes any of unit.reads
+    for i in range(lo - 1, -1, -1):
+        _, w, _ = _sibling_rw(sibs[i], locals_)
+        if w & unit.reads:
+            if (i + 1) in legal_set:
+                picks.append(i + 1)
+            break
+    return sorted(set(picks))

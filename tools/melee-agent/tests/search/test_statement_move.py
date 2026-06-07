@@ -165,3 +165,21 @@ void f(int a, int b)
     gi = _idx_of(sibs, "g(b)")
     assert gi in legal              # may move to just before the call (after y = b)
     assert (gi + 1) not in legal    # may NOT cross the call (unconditional barrier)
+
+
+from src.search.statement_move import select_positions
+
+def test_select_positions_targeted_sinks_to_first_use_and_exhaustive_is_full():
+    sibs = toplevel_siblings(POS_SRC, "f")
+    if sibs is None:
+        import pytest; pytest.skip("tree-sitter unavailable")
+    locs = local_names(POS_SRC, "f")
+    units = extract_movable_units(sibs, locs)
+    pos_unit = next(u for u in units if u.write_base == "pos")
+    legal = legal_destinations(sibs, pos_unit, escaped=set(), locals_=locs)
+    ri = _idx_of(sibs, "result.x = pos.x")
+    assert legal == [ri]                       # only legal move: sink past `pad = idx;`
+    targeted = select_positions(sibs, pos_unit, legal, "targeted", locs)
+    exhaustive = select_positions(sibs, pos_unit, legal, "exhaustive", locs)
+    assert targeted == [ri]                    # sink-to-first-use of `pos`
+    assert set(exhaustive) == set(legal)       # seam: exhaustive consumes full legal set
