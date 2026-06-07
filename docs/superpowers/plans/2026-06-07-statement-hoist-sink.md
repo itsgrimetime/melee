@@ -789,7 +789,28 @@ def test_unit_owns_its_lines_rejects_shared_line():
     units = extract_movable_units(sibs, locs)
     sb = src.encode("utf-8")
     # the `a = idx;` and `b = idx;` share one physical line -> not movable by line
-    assert any(not _unit_owns_its_lines(sibs, u, sb) for u in units)
+    assert any(not _unit_owns_its_lines(u, sb) for u in units)
+
+def test_unit_owns_its_lines_rejects_brace_sharing_line():
+    # the close brace shares the last statement's physical line; a line move would drag `}`
+    src = "void f(int idx){\n    int a;\n    a = idx; }\n"
+    sibs = toplevel_siblings(src, "f")
+    if sibs is None:
+        import pytest; pytest.skip("tree-sitter unavailable")
+    locs = local_names(src, "f")
+    sb = src.encode("utf-8")
+    a_unit = next(u for u in extract_movable_units(sibs, locs) if u.write_base == "a")
+    assert not _unit_owns_its_lines(a_unit, sb)
+
+def test_unit_owns_its_lines_allows_trailing_comment():
+    src = "void f(int idx){\n    int a;\n    int b;\n    a = idx; // note\n    b = idx;\n}\n"
+    sibs = toplevel_siblings(src, "f")
+    if sibs is None:
+        import pytest; pytest.skip("tree-sitter unavailable")
+    locs = local_names(src, "f")
+    sb = src.encode("utf-8")
+    a_unit = next(u for u in extract_movable_units(sibs, locs) if u.write_base == "a")
+    assert _unit_owns_its_lines(a_unit, sb)   # trailing comment masks to whitespace -> allowed
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -811,18 +832,17 @@ def _line_bounds(source_bytes: bytes, start: int, end: int) -> tuple[int, int]:
     return ls, le
 
 
-def _unit_owns_its_lines(sibs: list[SiblingStmt], unit: MoveUnit, source_bytes: bytes) -> bool:
-    """True iff no OTHER sibling overlaps the unit's full-line byte span (rejects
-    multiple statements sharing a physical line, which line-granular moves corrupt)."""
-    ls, le = _line_bounds(source_bytes, unit.byte_range[0], unit.byte_range[1])
-    lo, hi = unit.index_range
-    for k, s in enumerate(sibs):
-        if lo <= k <= hi:
-            continue
-        a, b = s.byte_range
-        if a < le and b > ls:        # ranges overlap
-            return False
-    return True
+def _unit_owns_its_lines(unit: MoveUnit, source_bytes: bytes) -> bool:
+    """True iff the bytes OUTSIDE the unit on its first/last physical lines are
+    only whitespace/comments. Rejects multiple statements sharing a line
+    (`a; b;`) AND a statement sharing its line with a brace (`b = idx; }`) —
+    both corrupt a full-line move. A trailing comment IS allowed (it masks to
+    whitespace and travels with the moved line)."""
+    u0, u1 = unit.byte_range
+    ls, le = _line_bounds(source_bytes, u0, u1)
+    prefix = source_bytes[ls:u0].decode("utf-8", "replace")   # before unit on first line
+    suffix = source_bytes[u1:le].decode("utf-8", "replace")   # after unit on last line
+    return _mask(prefix).strip() == "" and _mask(suffix).strip() == ""
 
 
 def apply_move(source: str, sibs: list[SiblingStmt], unit: MoveUnit, dest: int) -> str:
@@ -921,7 +941,7 @@ def generate_statement_hoist_sink_variants(
     out: list[dict[str, Any]] = []
     seen = {source}
     for unit in extract_movable_units(sibs, locs):
-        if not _unit_owns_its_lines(sibs, unit, source_bytes):
+        if not _unit_owns_its_lines(unit, source_bytes):
             continue
         legal = legal_destinations(sibs, unit, escaped, locs)
         for dest in select_positions(sibs, unit, legal, strategy, locs):
@@ -1009,12 +1029,14 @@ def test_statement_order_breaks_ties_by_smaller_line_delta():
     assert ranked[0].label == "near"
 
 def test_source_lifetime_ranking_unaffected_by_line_delta():
-    # line_delta participates ONLY for statement-order; source-lifetime order is
-    # by shape then match% as before (smaller line_delta must NOT reorder these)
-    a = _v("a", 84.0, True, 9, axis="source-lifetime")
-    b = _v("b", 90.0, True, 0, axis="source-lifetime")
-    ranked = rank_structure_variants([a, b])
-    assert [v.label for v in ranked] == ["b", "a"]   # higher % wins regardless of line_delta
+    # line_delta participates ONLY for statement-order. Construct the DISTINGUISHING
+    # case: the higher-% variant has the LARGER line_delta. If line_delta were wrongly
+    # applied to source-lifetime it would rank before match% and put `b` (line_delta 0)
+    # first; correct behavior ignores line_delta here, so higher-% `a` wins.
+    a = _v("a", 90.0, True, 9, axis="source-lifetime")   # higher %, LARGER line_delta
+    b = _v("b", 84.0, True, 0, axis="source-lifetime")   # lower %, smaller line_delta
+    ranked = rank_structure_variants([b, a])             # input order must not matter
+    assert [v.label for v in ranked] == ["a", "b"]
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -1255,5 +1277,5 @@ git commit -m "test(search): D15C statement-move safety validation (non-vacuous)
   - Ranking ignored `line_delta` → Task 8 adds **`_line_delta_rank`** (statement-order only) + a tie-break test.
   - Task 8 inert-in-production risk → verified axis-agnostic (`structure_scoring.py:230/345`, `structure.py:548`) + a **fake-scored `run_structure_search` integration test**.
   - D15C test vacuity → Task 9 asserts pos.x/pos.z **are extracted** AND have **zero legal destinations** (non-vacuous safety).
-- **Beyond Codex:** dropped the dead `touches_escaped_or_nonlocal`; documented that `escaped` is **subsumed** by the unconditional-opaque-barrier rule in v1 (kept as tested telemetry + defense-in-depth + v2 hook); added a **line-ownership guard** (`_unit_owns_its_lines`) so multi-statement physical lines are never line-moved (byte-corruption hazard).
+- **Beyond Codex:** dropped the dead `touches_escaped_or_nonlocal`; documented that `escaped` is **subsumed** by the unconditional-opaque-barrier rule in v1 (kept as tested telemetry + defense-in-depth + v2 hook); added a **line-ownership guard** (`_unit_owns_its_lines`) that requires whitespace/comments-only outside the unit on its physical lines, so neither multi-statement lines (`a; b;`) nor brace-sharing lines (`b = idx; }`) are ever line-moved (byte-corruption hazard), while trailing comments remain allowed.
 - **Type consistency:** `SiblingStmt(text, byte_range, line_range, kind, node_type)`, `MovableInfo(write_base, is_field, reads, writes)` (frozensets), `MoveUnit(write_base, is_cluster, reads, writes, index_range, byte_range)`; `legal_destinations(sibs, unit, escaped, locals_)`, `select_positions(sibs, unit, legal, strategy, locals_)`, `apply_move(source, sibs, unit, dest)`, `generate_statement_hoist_sink_variants(source, function, max_candidates=12, strategy="targeted") -> list[dict]` used consistently; host adapts dicts via `add_variant(*, operator, start, end, candidate_source, metadata)`.
