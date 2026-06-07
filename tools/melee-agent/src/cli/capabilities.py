@@ -141,6 +141,8 @@ def skill_capabilities(repo_root: Path) -> list[Capability]:
     return caps
 
 
+_SCORE_THRESHOLD = 4  # >=4 requires either one name-token hit (score 5) or two keyword hits (2+2)
+
 # Task-intent -> in-scope capability ids (CLI commands + skills only).
 # Standalone tools/*.py targets are intentionally excluded (see manifest cross-link).
 # Every target below was verified to resolve to a real CLI leaf or skill name.
@@ -195,7 +197,7 @@ def run_search(query: str, repo_root: Path | None = None, limit: int = 8) -> lis
         key=lambda pair: pair[0],
         reverse=True,
     )
-    ranked = boosted + [c for s, c in scored if s >= 4]
+    ranked = boosted + [c for s, c in scored if s >= _SCORE_THRESHOLD]
     return ranked[:limit]
 
 
