@@ -32,6 +32,12 @@ SUPPORTED_STRUCTURE_AXES = (
     *OPTIONAL_STRUCTURE_AXES,
 )
 SCORE_CAP_UNSCORED_REASON = "not scored due max-candidates cap"
+_INLINE_BOUNDARY_CALL_RESULT_RETURNS = {
+    "GetNameText": "char*",
+    "GetPersistentNameData": "struct NameTagData*",
+    "GetPersistentFighterData": "struct FighterData*",
+    "mnDiagram_GetFighterByIndex": "u8",
+}
 
 
 @dataclass
@@ -202,6 +208,8 @@ def run_structure_search(
         Callable[[list[StructureVariant]], list[StructureScoreResult]] | None
     ) = None,
     score_variants: bool = False,
+    *,
+    baseline_classification: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     output_path = Path(output_dir).expanduser()
     output_path.mkdir(parents=True, exist_ok=True)
@@ -432,6 +440,7 @@ def run_structure_search(
                     output_path / "inline-boundary",
                     baseline_percent=baseline_percent,
                     max_candidates=max_candidates,
+                    baseline_classification=baseline_classification,
                 )
             axis_summaries.append(summary)
             variants.extend(axis_variants)
@@ -828,6 +837,7 @@ def generate_inline_boundary_variants(
     *,
     baseline_percent: float | None,
     max_candidates: int,
+    baseline_classification: dict[str, Any] | None = None,
 ) -> tuple[AxisSummary, list[StructureVariant]]:
     function_span = find_function(source, function)
     if function_span is None:
@@ -895,6 +905,26 @@ def generate_inline_boundary_variants(
         function_span,
         add_variant,
     )
+    _generate_inline_boundary_call_result_temp_variants(
+        source,
+        function_span,
+        add_variant,
+    )
+    _generate_inline_boundary_popup_text_setup_variants(
+        source,
+        function_span,
+        add_variant,
+    )
+    _generate_inline_boundary_popup_number_format_variants(
+        source,
+        function_span,
+        add_variant,
+    )
+    _generate_inline_boundary_sort_entry_init_variants(
+        source,
+        function_span,
+        add_variant,
+    )
     _generate_inline_boundary_call_arg_temp_variants(
         source,
         function,
@@ -912,6 +942,12 @@ def generate_inline_boundary_variants(
     )
 
     metadata = {"families": family_counts}
+    artifact = _inline_boundary_artifact_metadata(
+        baseline_classification,
+        function=function,
+    )
+    if artifact is not None:
+        metadata["inline_boundary_artifact"] = artifact
     if not variants:
         return (
             AxisSummary(
@@ -932,6 +968,37 @@ def generate_inline_boundary_variants(
         ),
         variants,
     )
+
+
+def _inline_boundary_artifact_metadata(
+    classification: dict[str, Any] | None,
+    *,
+    function: str,
+) -> dict[str, Any] | None:
+    if not isinstance(classification, dict):
+        return None
+    artifact = classification.get("inline_boundary_artifact")
+    if not isinstance(artifact, dict):
+        return None
+    calls = [
+        str(call)
+        for call in artifact.get("missing_ref_calls", [])
+        if call is not None
+    ]
+    marker = f"<{function}+"
+    same_function = [call for call in calls if call.startswith(marker)]
+    if same_function and len(same_function) == len(calls):
+        source_class = "shifted-same-target-calls"
+    elif same_function:
+        source_class = "mixed"
+    else:
+        source_class = "true-missing-reference-calls"
+    return {
+        "missing_ref_calls": calls,
+        "missing_ref_call_count": len(calls),
+        "same_function_offset_count": len(same_function),
+        "source_lever_classification": source_class,
+    }
 
 
 def _generate_inline_boundary_axis_setter_variants(
@@ -1005,6 +1072,1116 @@ def _inline_boundary_fake_axis_wrappers(source: str) -> dict[str, dict[str, Any]
 
 def _has_prior_prototype(source: str, insert_at: int, prototype: str) -> bool:
     return prototype in source[:insert_at]
+
+
+def _generate_inline_boundary_call_result_temp_variants(
+    source: str,
+    function_span,
+    add_variant: Callable[..., None],
+) -> None:
+    masked_source = _mask_c_comments_and_literals(source)
+    body_start = function_span.body_open + 1
+    body_end = function_span.body_close
+    callees = "|".join(
+        re.escape(name) for name in _INLINE_BOUNDARY_CALL_RESULT_RETURNS
+    )
+    pattern = re.compile(rf"\b(?P<callee>{callees})\s*\(")
+    candidate_index = 0
+    for match in pattern.finditer(masked_source[body_start:body_end]):
+        callee = match.group("callee")
+        return_type = _INLINE_BOUNDARY_CALL_RESULT_RETURNS[callee]
+        call_start = body_start + match.start("callee")
+        paren_open = body_start + match.end() - 1
+        paren_close = _find_matching(masked_source, paren_open, "(", ")")
+        if paren_close is None or paren_close >= body_end:
+            continue
+        call_end = paren_close + 1
+        statement_span = _inline_boundary_statement_span(
+            masked_source,
+            function_span,
+            call_start,
+            call_end,
+        )
+        if statement_span is None:
+            continue
+        statement_start, statement_end = statement_span
+        if _inline_boundary_is_declaration_statement(
+            masked_source[statement_start:statement_end]
+        ):
+            continue
+        if _inline_boundary_call_on_assignment_lhs(
+            masked_source,
+            statement_start,
+            statement_end,
+            call_start,
+        ):
+            continue
+        temp_name = f"ib_probe_call_result_{candidate_index}"
+        call_expr = source[call_start:call_end]
+        statement_text = source[statement_start:statement_end]
+        rewritten_statement = (
+            statement_text[: call_start - statement_start]
+            + temp_name
+            + statement_text[call_end - statement_start :]
+        )
+        if not rewritten_statement.endswith("\n"):
+            rewritten_statement += "\n"
+        indent = _line_indent_at_index(source, statement_start)
+        replacement = (
+            f"{indent}{{\n"
+            f"{indent}    {return_type} {temp_name} = {call_expr};\n"
+            f"{rewritten_statement}"
+            f"{indent}}}\n"
+        )
+        candidate_source = (
+            source[:statement_start] + replacement + source[statement_end:]
+        )
+        add_variant(
+            operator="inline-boundary-call-result-temp",
+            label=f"inline-boundary-call-result-temp-{callee}-{candidate_index}",
+            candidate_source=candidate_source,
+            metadata={
+                "family": "call-result-temp",
+                "callee": callee,
+                "return_type": return_type,
+                "temp": temp_name,
+                "call_expr": call_expr,
+                "statement_span": _line_span(source, statement_start, statement_end),
+            },
+            start=statement_start,
+            end=statement_end,
+        )
+        candidate_index += 1
+
+
+def _inline_boundary_statement_span(
+    masked_source: str,
+    function_span,
+    call_start: int,
+    call_end: int,
+) -> tuple[int, int] | None:
+    control_span = _inline_boundary_control_statement_span(
+        masked_source,
+        function_span,
+        call_start,
+        call_end,
+    )
+    if control_span is not None:
+        return control_span
+    if _inline_boundary_call_inside_control_header(
+        masked_source,
+        function_span,
+        call_start,
+        call_end,
+    ):
+        return None
+    return _inline_boundary_expression_statement_span(
+        masked_source,
+        function_span,
+        call_start,
+    )
+
+
+def _inline_boundary_call_inside_control_header(
+    masked_source: str,
+    function_span,
+    call_start: int,
+    call_end: int,
+) -> bool:
+    body_start = function_span.body_open + 1
+    body_end = function_span.body_close
+    for match in re.finditer(
+        r"\b(?:if|while|for|switch)\s*\(",
+        masked_source[body_start:body_end],
+    ):
+        control_start = body_start + match.start()
+        if control_start > call_start:
+            break
+        paren_open = body_start + match.end() - 1
+        paren_close = _find_matching(masked_source, paren_open, "(", ")")
+        if paren_close is None or paren_close >= body_end:
+            continue
+        if paren_open < call_start and call_end <= paren_close + 1:
+            return True
+    return False
+
+
+def _inline_boundary_control_statement_span(
+    masked_source: str,
+    function_span,
+    call_start: int,
+    call_end: int,
+) -> tuple[int, int] | None:
+    body_start = function_span.body_open + 1
+    body_end = function_span.body_close
+    selected: tuple[int, str, int] | None = None
+    for match in re.finditer(
+        r"\b(?P<kind>if|while|for)\s*\(",
+        masked_source[body_start:body_end],
+    ):
+        control_start = body_start + match.start()
+        if control_start > call_start:
+            break
+        paren_open = body_start + match.end() - 1
+        paren_close = _find_matching(masked_source, paren_open, "(", ")")
+        if paren_close is None or paren_close >= body_end:
+            continue
+        if paren_open < call_start and call_end <= paren_close + 1:
+            if match.group("kind") != "if":
+                continue
+            if re.search(r"\belse\s*$", masked_source[body_start:control_start]):
+                continue
+            selected = (control_start, match.group("kind"), paren_close)
+    if selected is None:
+        return None
+    control_start, kind, paren_close = selected
+    statement_end = _inline_boundary_control_statement_end(
+        masked_source,
+        kind,
+        paren_close,
+        body_end,
+    )
+    if statement_end is None:
+        return None
+    statement_start = _line_start_index(masked_source, control_start)
+    return (
+        statement_start,
+        _include_trailing_newline(masked_source, statement_end, body_end),
+    )
+
+
+def _inline_boundary_control_statement_end(
+    masked_source: str,
+    kind: str,
+    paren_close: int,
+    body_end: int,
+) -> int | None:
+    statement_start = _skip_whitespace(masked_source, paren_close + 1)
+    statement_end = _inline_boundary_control_body_end(
+        masked_source,
+        statement_start,
+        body_end,
+    )
+    if statement_end is None:
+        return None
+    if kind == "if":
+        statement_end = _inline_boundary_extend_else_statement(
+            masked_source,
+            statement_end,
+            body_end,
+        )
+    return statement_end
+
+
+def _inline_boundary_control_body_end(
+    masked_source: str,
+    statement_start: int,
+    body_end: int,
+) -> int | None:
+    if statement_start >= body_end:
+        return None
+    if masked_source[statement_start] == "{":
+        close = _find_matching(masked_source, statement_start, "{", "}")
+        if close is None or close > body_end:
+            return None
+        return close + 1
+    return _inline_boundary_expression_statement_end(
+        masked_source,
+        statement_start,
+        body_end,
+    )
+
+
+def _inline_boundary_extend_else_statement(
+    masked_source: str,
+    statement_end: int,
+    body_end: int,
+) -> int:
+    else_start = _skip_whitespace(masked_source, statement_end)
+    match = re.match(r"else\b", masked_source[else_start:body_end])
+    if match is None:
+        return statement_end
+    else_body_start = _skip_whitespace(masked_source, else_start + len("else"))
+    if re.match(r"if\s*\(", masked_source[else_body_start:body_end]):
+        paren_open = masked_source.find("(", else_body_start, body_end)
+        if paren_open < 0:
+            return statement_end
+        paren_close = _find_matching(masked_source, paren_open, "(", ")")
+        if paren_close is None:
+            return statement_end
+        return (
+            _inline_boundary_control_statement_end(
+                masked_source,
+                "if",
+                paren_close,
+                body_end,
+            )
+            or statement_end
+        )
+    return (
+        _inline_boundary_control_body_end(
+            masked_source,
+            else_body_start,
+            body_end,
+        )
+        or statement_end
+    )
+
+
+def _inline_boundary_expression_statement_span(
+    masked_source: str,
+    function_span,
+    call_start: int,
+) -> tuple[int, int] | None:
+    block_open, block_close = _inline_boundary_enclosing_block(
+        masked_source,
+        function_span,
+        call_start,
+    )
+    statement_start = _inline_boundary_expression_statement_start(
+        masked_source,
+        block_open,
+        call_start,
+    )
+    statement_end = _inline_boundary_expression_statement_end(
+        masked_source,
+        call_start,
+        block_close,
+    )
+    if statement_end is None:
+        return None
+    return (
+        statement_start,
+        _include_trailing_newline(masked_source, statement_end, block_close),
+    )
+
+
+def _inline_boundary_enclosing_block(
+    masked_source: str,
+    function_span,
+    position: int,
+) -> tuple[int, int]:
+    stack: list[int] = []
+    index = function_span.body_open
+    while index < position:
+        ch = masked_source[index]
+        if ch == "{":
+            stack.append(index)
+        elif ch == "}" and stack:
+            stack.pop()
+        index += 1
+    block_open = stack[-1] if stack else function_span.body_open
+    block_close = _find_matching(masked_source, block_open, "{", "}")
+    if block_close is None or block_close > function_span.body_close:
+        block_close = function_span.body_close
+    return block_open, block_close
+
+
+def _inline_boundary_expression_statement_start(
+    masked_source: str,
+    block_open: int,
+    call_start: int,
+) -> int:
+    delimiter_end = block_open + 1
+    paren_depth = 0
+    bracket_depth = 0
+    brace_depth = 0
+    index = block_open + 1
+    while index < call_start:
+        ch = masked_source[index]
+        if ch == "(":
+            paren_depth += 1
+        elif ch == ")":
+            paren_depth = max(0, paren_depth - 1)
+        elif ch == "[":
+            bracket_depth += 1
+        elif ch == "]":
+            bracket_depth = max(0, bracket_depth - 1)
+        elif ch == "{" and paren_depth == 0 and bracket_depth == 0:
+            brace_depth += 1
+        elif ch == "}" and paren_depth == 0 and bracket_depth == 0:
+            brace_depth = max(0, brace_depth - 1)
+            if brace_depth == 0:
+                delimiter_end = index + 1
+        elif (
+            ch == ";"
+            and paren_depth == 0
+            and bracket_depth == 0
+            and brace_depth == 0
+        ):
+            delimiter_end = index + 1
+        index += 1
+    first_token = _skip_whitespace(masked_source, delimiter_end)
+    return _line_start_index(masked_source, first_token)
+
+
+def _inline_boundary_expression_statement_end(
+    masked_source: str,
+    start: int,
+    limit: int,
+) -> int | None:
+    paren_depth = 0
+    bracket_depth = 0
+    brace_depth = 0
+    index = start
+    while index < limit:
+        ch = masked_source[index]
+        if ch == "(":
+            paren_depth += 1
+        elif ch == ")":
+            paren_depth = max(0, paren_depth - 1)
+        elif ch == "[":
+            bracket_depth += 1
+        elif ch == "]":
+            bracket_depth = max(0, bracket_depth - 1)
+        elif ch == "{" and paren_depth == 0 and bracket_depth == 0:
+            brace_depth += 1
+        elif ch == "}" and paren_depth == 0 and bracket_depth == 0:
+            if brace_depth == 0:
+                return None
+            brace_depth -= 1
+        elif (
+            ch == ";"
+            and paren_depth == 0
+            and bracket_depth == 0
+            and brace_depth == 0
+        ):
+            return index + 1
+        index += 1
+    return None
+
+
+def _include_trailing_newline(text: str, end: int, limit: int) -> int:
+    return end + 1 if end < limit and text[end] == "\n" else end
+
+
+def _inline_boundary_is_declaration_statement(masked_statement: str) -> bool:
+    text = masked_statement.lstrip()
+    if re.match(r"(?:if|while|for|switch|return|break|continue|goto)\b", text):
+        return False
+    return (
+        re.match(
+            rf"(?:(?:const|volatile|static|register|extern)\s+)*"
+            rf"(?:(?:struct|union|enum)\s+{_C_IDENT}|{_C_IDENT})"
+            rf"(?:\s*\*+\s*|\s+)+{_C_IDENT}\b",
+            text,
+        )
+        is not None
+    )
+
+
+def _inline_boundary_call_on_assignment_lhs(
+    masked_source: str,
+    statement_start: int,
+    statement_end: int,
+    call_start: int,
+) -> bool:
+    call_end = _inline_boundary_call_expression_end(masked_source, call_start)
+    if call_end is not None and _inline_boundary_call_chain_assignment_lhs(
+        masked_source,
+        call_end,
+        statement_end,
+    ):
+        return True
+    paren_depth = 0
+    bracket_depth = 0
+    brace_depth = 0
+    index = statement_start
+    while index < statement_end:
+        ch = masked_source[index]
+        if ch == "(":
+            paren_depth += 1
+        elif ch == ")":
+            paren_depth = max(0, paren_depth - 1)
+        elif ch == "[":
+            bracket_depth += 1
+        elif ch == "]":
+            bracket_depth = max(0, bracket_depth - 1)
+        elif ch == "{" and paren_depth == 0 and bracket_depth == 0:
+            brace_depth += 1
+        elif ch == "}" and paren_depth == 0 and bracket_depth == 0:
+            brace_depth = max(0, brace_depth - 1)
+        elif paren_depth == 0 and bracket_depth == 0 and brace_depth == 0:
+            op_len = _assignment_operator_length(masked_source, index)
+            if op_len:
+                return call_start < index
+            index += max(0, op_len - 1)
+        index += 1
+    return False
+
+
+def _inline_boundary_call_expression_end(
+    masked_source: str,
+    call_start: int,
+) -> int | None:
+    paren_open = masked_source.find("(", call_start)
+    if paren_open < 0:
+        return None
+    callee_text = masked_source[call_start:paren_open].strip()
+    if not re.fullmatch(_C_IDENT, callee_text):
+        return None
+    paren_close = _find_matching(masked_source, paren_open, "(", ")")
+    return None if paren_close is None else paren_close + 1
+
+
+def _inline_boundary_call_chain_assignment_lhs(
+    masked_source: str,
+    call_end: int,
+    statement_end: int,
+) -> bool:
+    index = _skip_whitespace(masked_source, call_end)
+    saw_chain = False
+    while index < statement_end:
+        if masked_source.startswith("->", index):
+            member_start = _skip_whitespace(masked_source, index + 2)
+            match = re.match(_C_IDENT, masked_source[member_start:statement_end])
+            if match is None:
+                return False
+            index = member_start + match.end()
+            saw_chain = True
+            continue
+        if masked_source.startswith(".", index):
+            member_start = _skip_whitespace(masked_source, index + 1)
+            match = re.match(_C_IDENT, masked_source[member_start:statement_end])
+            if match is None:
+                return False
+            index = member_start + match.end()
+            saw_chain = True
+            continue
+        if masked_source.startswith("[", index):
+            close = _find_matching(masked_source, index, "[", "]")
+            if close is None or close >= statement_end:
+                return False
+            index = close + 1
+            saw_chain = True
+            continue
+        index = _skip_whitespace(masked_source, index)
+        op_len = _assignment_operator_length(masked_source, index)
+        return saw_chain and op_len > 0
+    return False
+
+
+def _assignment_operator_length(text: str, index: int) -> int:
+    for op in ("<<=", ">>=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^="):
+        if text.startswith(op, index):
+            return len(op)
+    if text[index] != "=":
+        return 0
+    prev_ch = text[index - 1] if index > 0 else ""
+    next_ch = text[index + 1] if index + 1 < len(text) else ""
+    if prev_ch in "!<=>":
+        return 0
+    if next_ch == "=":
+        return 0
+    return 1
+
+
+def _generate_inline_boundary_popup_text_setup_variants(
+    source: str,
+    function_span,
+    add_variant: Callable[..., None],
+) -> None:
+    statements = _inline_boundary_direct_statement_spans(source, function_span)
+    insert_at = _line_start_index(source, function_span.sig_start)
+    candidate_index = 0
+    for offset in range(0, max(0, len(statements) - 5)):
+        window = statements[offset:offset + 6]
+        match = _inline_boundary_popup_text_setup_match(
+            source,
+            function_span,
+            window,
+        )
+        if match is None:
+            continue
+        helper_name = f"ib_probe_popup_text_setup_{candidate_index}"
+        helper = _inline_boundary_popup_text_setup_helper(helper_name, match)
+        replacement = (
+            f"{match['indent']}{match['text_var']} = {helper_name}("
+            f"{match['data_var']}, {match['table_var']}, {match['pos_arg']}, "
+            f"{match['text_slot']}, {match['jobj_slot']}, "
+            f"{match['point_slot']}, {match['font_x']}, {match['font_y']}, "
+            f"{match['align']});\n"
+        )
+        candidate_source = _replace_source_slices(
+            source,
+            [
+                (match["group_start"], match["group_end"], replacement),
+                (insert_at, insert_at, helper),
+            ],
+        )
+        add_variant(
+            operator="inline-boundary-popup-text-setup-helper",
+            label=f"inline-boundary-popup-text-setup-helper-{candidate_index}",
+            candidate_source=candidate_source,
+            metadata={
+                "family": "popup-text-setup-helper",
+                "helper": helper_name,
+                "text": match["text_var"],
+                "data": match["data_var"],
+                "table": match["table_var"],
+                "position": match["pos_arg"],
+                "text_slot": match["text_slot"],
+                "jobj_slot": match["jobj_slot"],
+                "point_slot": match["point_slot"],
+            },
+            start=match["group_start"],
+            end=match["group_end"],
+        )
+        candidate_index += 1
+
+
+def _inline_boundary_popup_text_setup_match(
+    source: str,
+    function_span,
+    window: list[tuple[int, int]],
+) -> dict[str, Any] | None:
+    texts = [source[start:end].strip() for start, end in window]
+    create = re.fullmatch(
+        rf"(?P<text>{_C_IDENT})\s*=\s*HSD_SisLib_803A6754\s*"
+        r"\((?P<args>.*)\)\s*;",
+        texts[0],
+        re.DOTALL,
+    )
+    if create is None:
+        return None
+    text_var = create.group("text")
+    create_args = create.group("args").strip()
+    store = re.fullmatch(
+        rf"(?P<data>{_C_IDENT})\s*->\s*text\s*\[\s*"
+        rf"(?P<text_slot>[^\]]+?)\s*\]\s*=\s*{re.escape(text_var)}\s*;",
+        texts[1],
+        re.DOTALL,
+    )
+    if store is None:
+        return None
+    data_var = store.group("data")
+    lb_call = _inline_boundary_call_statement_args(texts[2], "lb_8000B1CC")
+    if lb_call is None or len(lb_call) != 3:
+        return None
+    jobj = re.fullmatch(
+        rf"{re.escape(data_var)}\s*->\s*jobjs\s*\[\s*(?P<slot>.+?)\s*\]",
+        lb_call[0],
+        re.DOTALL,
+    )
+    point = re.fullmatch(
+        rf"&\s*(?P<table>{_C_IDENT})\s*->\s*points\s*"
+        r"\[\s*(?P<slot>.+?)\s*\]",
+        lb_call[1],
+        re.DOTALL,
+    )
+    if jobj is None or point is None:
+        return None
+    font_x = re.fullmatch(
+        rf"{re.escape(text_var)}\s*->\s*font_size\s*\.\s*x\s*=\s*"
+        r"(?P<value>.+?)\s*;",
+        texts[3],
+        re.DOTALL,
+    )
+    font_y = re.fullmatch(
+        rf"{re.escape(text_var)}\s*->\s*font_size\s*\.\s*y\s*=\s*"
+        r"(?P<value>.+?)\s*;",
+        texts[4],
+        re.DOTALL,
+    )
+    align = re.fullmatch(
+        rf"{re.escape(text_var)}\s*->\s*default_alignment\s*=\s*"
+        r"(?P<value>.+?)\s*;",
+        texts[5],
+        re.DOTALL,
+    )
+    if font_x is None or font_y is None or align is None:
+        return None
+    pos_arg = lb_call[2].strip()
+    pos_name = pos_arg[1:].strip() if pos_arg.startswith("&") else pos_arg
+    if re.fullmatch(_C_IDENT, pos_name) is None:
+        return None
+    data_type = _inline_boundary_local_value_type(
+        source,
+        function_span,
+        data_var,
+        pointer=True,
+    )
+    table_var = point.group("table")
+    table_type = _inline_boundary_local_value_type(
+        source,
+        function_span,
+        table_var,
+        pointer=True,
+    )
+    pos_type = _inline_boundary_local_value_type(
+        source,
+        function_span,
+        pos_name,
+        pointer=False,
+    )
+    if data_type is None or table_type is None or pos_type is None:
+        return None
+    group_start = window[0][0]
+    group_end = window[-1][1]
+    return {
+        "group_start": group_start,
+        "group_end": group_end,
+        "indent": _line_indent_at_index(source, group_start),
+        "text_var": text_var,
+        "data_var": data_var,
+        "data_type": data_type,
+        "table_var": table_var,
+        "table_type": table_type,
+        "pos_arg": pos_arg,
+        "pos_type": pos_type,
+        "create_args": create_args,
+        "text_slot": store.group("text_slot").strip(),
+        "jobj_slot": jobj.group("slot").strip(),
+        "point_slot": point.group("slot").strip(),
+        "font_x": font_x.group("value").strip(),
+        "font_y": font_y.group("value").strip(),
+        "align": align.group("value").strip(),
+    }
+
+
+def _inline_boundary_popup_text_setup_helper(
+    helper_name: str,
+    match: dict[str, Any],
+) -> str:
+    return (
+        f"static inline HSD_Text* {helper_name}(\n"
+        f"    {match['data_type']}* data,\n"
+        f"    {match['table_type']}* tbl,\n"
+        f"    {match['pos_type']}* pos,\n"
+        "    int text_slot,\n"
+        "    int jobj_slot,\n"
+        "    int point_slot,\n"
+        "    f32 font_x,\n"
+        "    f32 font_y,\n"
+        "    int align)\n"
+        "{\n"
+        "    HSD_Text* text;\n"
+        "\n"
+        f"    text = HSD_SisLib_803A6754({match['create_args']});\n"
+        "    data->text[text_slot] = text;\n"
+        "    lb_8000B1CC(data->jobjs[jobj_slot], &tbl->points[point_slot], pos);\n"
+        "    text->font_size.x = font_x;\n"
+        "    text->font_size.y = font_y;\n"
+        "    text->default_alignment = align;\n"
+        "    return text;\n"
+        "}\n"
+        "\n"
+    )
+
+
+def _generate_inline_boundary_popup_number_format_variants(
+    source: str,
+    function_span,
+    add_variant: Callable[..., None],
+) -> None:
+    statements = _inline_boundary_direct_statement_spans(source, function_span)
+    insert_at = _line_start_index(source, function_span.sig_start)
+    candidate_index = 0
+    for offset in range(0, max(0, len(statements) - 2)):
+        window = statements[offset:offset + 3]
+        match = _inline_boundary_popup_number_format_match(
+            source,
+            function_span,
+            window,
+        )
+        if match is None:
+            continue
+        helper_name = f"ib_probe_popup_number_format_{candidate_index}"
+        helper = _inline_boundary_popup_number_format_helper(helper_name, match)
+        replacement = (
+            f"{match['indent']}{helper_name}("
+            f"{match['text_var']}, {match['buf_var']}, {match['value_var']});\n"
+        )
+        candidate_source = _replace_source_slices(
+            source,
+            [
+                (match["format_start"], match["format_end"], replacement),
+                (insert_at, insert_at, helper),
+            ],
+        )
+        add_variant(
+            operator="inline-boundary-popup-number-format-helper",
+            label=f"inline-boundary-popup-number-format-helper-{candidate_index}",
+            candidate_source=candidate_source,
+            metadata={
+                "family": "popup-number-format-helper",
+                "helper": helper_name,
+                "text": match["text_var"],
+                "buffer": match["buf_var"],
+                "value": match["value_var"],
+                "value_type": match["value_type"],
+            },
+            start=match["format_start"],
+            end=match["format_end"],
+        )
+        candidate_index += 1
+
+
+def _inline_boundary_popup_number_format_match(
+    source: str,
+    function_span,
+    window: list[tuple[int, int]],
+) -> dict[str, Any] | None:
+    value_statement = source[window[0][0]:window[0][1]].strip()
+    value_match = re.fullmatch(
+        rf"(?P<value>{_C_IDENT})\s*=\s*(?P<rhs>.+?)\s*;",
+        value_statement,
+        re.DOTALL,
+    )
+    if value_match is None:
+        return None
+    value_var = value_match.group("value")
+    int_to_str = _inline_boundary_call_statement_args(
+        source[window[1][0]:window[1][1]].strip(),
+        "mnDiagram_IntToStr",
+    )
+    if (
+        int_to_str is None
+        or len(int_to_str) != 2
+        or _inline_boundary_compact(int_to_str[1]) != value_var
+    ):
+        return None
+    buf_var = int_to_str[0].strip()
+    if re.fullmatch(_C_IDENT, buf_var) is None:
+        return None
+    text_call = _inline_boundary_call_statement_args(
+        source[window[2][0]:window[2][1]].strip(),
+        "HSD_SisLib_803A6B98",
+    )
+    if (
+        text_call is None
+        or len(text_call) != 4
+        or _inline_boundary_compact(text_call[3]) != buf_var
+    ):
+        return None
+    text_var = text_call[0].strip()
+    if re.fullmatch(_C_IDENT, text_var) is None:
+        return None
+    value_type = _inline_boundary_local_value_type(
+        source,
+        function_span,
+        value_var,
+        pointer=False,
+    )
+    if value_type is None:
+        return None
+    return {
+        "format_start": window[1][0],
+        "format_end": window[2][1],
+        "indent": _line_indent_at_index(source, window[1][0]),
+        "text_var": text_var,
+        "buf_var": buf_var,
+        "value_var": value_var,
+        "value_type": value_type,
+        "x_arg": text_call[1].strip(),
+        "y_arg": text_call[2].strip(),
+    }
+
+
+def _inline_boundary_popup_number_format_helper(
+    helper_name: str,
+    match: dict[str, Any],
+) -> str:
+    return (
+        f"static inline void {helper_name}("
+        f"HSD_Text* text, char* buf, {match['value_type']} value)\n"
+        "{\n"
+        "    mnDiagram_IntToStr(buf, value);\n"
+        f"    HSD_SisLib_803A6B98(text, {match['x_arg']}, {match['y_arg']}, buf);\n"
+        "}\n"
+        "\n"
+    )
+
+
+def _generate_inline_boundary_sort_entry_init_variants(
+    source: str,
+    function_span,
+    add_variant: Callable[..., None],
+) -> None:
+    matches = _inline_boundary_sort_entry_init_matches(source, function_span)
+    insert_at = _line_start_index(source, function_span.sig_start)
+    for candidate_index, match in enumerate(matches):
+        helper_name = f"ib_probe_sort_entry_init_{candidate_index}"
+        helper = _inline_boundary_sort_entry_init_helper(helper_name)
+        replacement = (
+            f"{match['indent']}{match['zero_var']} = 0;\n"
+            f"{match['indent']}{helper_name}("
+            f"{match['entry_array']}, {match['zero_var']});\n"
+            f"{match['indent']}{match['ptr_var']} = "
+            f"{match['entry_array']} + 25;\n"
+            f"{match['indent']}{match['index_var']} = 25;\n"
+        )
+        candidate_source = _replace_source_slices(
+            source,
+            [
+                (match["group_start"], match["group_end"], replacement),
+                (insert_at, insert_at, helper),
+            ],
+        )
+        add_variant(
+            operator="inline-boundary-sort-entry-init-helper",
+            label=f"inline-boundary-sort-entry-init-helper-{candidate_index}",
+            candidate_source=candidate_source,
+            metadata={
+                "family": "sort-entry-init-helper",
+                "helper": helper_name,
+                "entry_array": match["entry_array"],
+                "pointer_variable": match["ptr_var"],
+                "index_variable": match["index_var"],
+                "zero_variable": match["zero_var"],
+                "loop_span": _line_span(
+                    source,
+                    match["loop_start"],
+                    match["group_end"],
+                ),
+            },
+            start=match["group_start"],
+            end=match["group_end"],
+        )
+
+
+def _inline_boundary_sort_entry_init_matches(
+    source: str,
+    function_span,
+) -> list[dict[str, Any]]:
+    masked_source = _mask_c_comments_and_literals(source)
+    body_start = function_span.body_open + 1
+    body_end = function_span.body_close
+    pattern = re.compile(
+        rf"(?m)^(?P<indent>[ \t]*)(?P<ptr>{_C_IDENT})\s*=\s*"
+        rf"(?P<entries>{_C_IDENT})\s*;\s*\n"
+        rf"(?P=indent)(?P<index>{_C_IDENT})\s*=\s*0\s*;\s*\n"
+        rf"(?P=indent)(?P<zero>{_C_IDENT})\s*=\s*0\s*;\s*\n"
+        rf"(?P<loop_start>(?P=indent)do\s*\{{\s*\n"
+        rf"(?P=indent)[ \t]+(?P=ptr)\s*->\s*name\s*=\s*"
+        rf"mnDiagram_GetFighterByIndex\s*\(\s*(?P=index)\s*\)\s*;\s*\n"
+        rf"(?P=indent)[ \t]+(?P=index)\s*\+\+\s*;\s*\n"
+        rf"(?P=indent)[ \t]+(?P=ptr)\s*->\s*xC\s*=\s*"
+        rf"(?P=zero)\s*;\s*\n"
+        rf"(?P=indent)[ \t]+(?P=ptr)\s*->\s*x8\s*=\s*"
+        rf"(?P=zero)\s*;\s*\n"
+        rf"(?P=indent)[ \t]+(?P=ptr)\s*\+\+\s*;\s*\n"
+        rf"(?P=indent)\}}\s*while\s*\(\s*(?P=index)\s*<\s*25\s*\)"
+        rf"\s*;\s*(?:\n|$))"
+    )
+    matches: list[dict[str, Any]] = []
+    for match in pattern.finditer(masked_source, body_start, body_end):
+        block_open, _ = _inline_boundary_enclosing_block(
+            masked_source,
+            function_span,
+            match.start(),
+        )
+        if block_open != function_span.body_open:
+            continue
+        entry_array = match.group("entries")
+        ptr_var = match.group("ptr")
+        index_var = match.group("index")
+        zero_var = match.group("zero")
+        if not _inline_boundary_sort_entry_array_declared(
+            source,
+            function_span,
+            entry_array,
+        ):
+            continue
+        if (
+            _inline_boundary_local_value_type(
+                source,
+                function_span,
+                ptr_var,
+                pointer=True,
+            )
+            != "mnDiagram2_SortEntry"
+        ):
+            continue
+        if (
+            _inline_boundary_local_value_type(
+                source,
+                function_span,
+                index_var,
+                pointer=False,
+            )
+            != "int"
+        ):
+            continue
+        if (
+            _inline_boundary_local_value_type(
+                source,
+                function_span,
+                zero_var,
+                pointer=False,
+            )
+            != "int"
+        ):
+            continue
+        matches.append(
+            {
+                "group_start": match.start(),
+                "group_end": match.end(),
+                "loop_start": match.start("loop_start"),
+                "indent": match.group("indent"),
+                "entry_array": entry_array,
+                "ptr_var": ptr_var,
+                "index_var": index_var,
+                "zero_var": zero_var,
+            }
+        )
+    return matches
+
+
+def _inline_boundary_sort_entry_array_declared(
+    source: str,
+    function_span,
+    name: str,
+) -> bool:
+    body = source[function_span.body_open + 1:function_span.body_close]
+    masked_body = _mask_c_comments_and_literals(body)
+    return (
+        re.search(
+            rf"(?m)^[ \t]*mnDiagram2_SortEntry\s+"
+            rf"{re.escape(name)}\s*\[\s*25\s*\]\s*;",
+            masked_body,
+        )
+        is not None
+    )
+
+
+def _inline_boundary_sort_entry_init_helper(helper_name: str) -> str:
+    return (
+        f"static inline void {helper_name}(mnDiagram2_SortEntry* entries, int zero)\n"
+        "{\n"
+        "    int i = 0;\n"
+        "    mnDiagram2_SortEntry* ptr = entries;\n"
+        "\n"
+        "    do {\n"
+        "        ptr->name = mnDiagram_GetFighterByIndex(i);\n"
+        "        i++;\n"
+        "        ptr->xC = zero;\n"
+        "        ptr->x8 = zero;\n"
+        "        ptr++;\n"
+        "    } while (i < 25);\n"
+        "}\n"
+        "\n"
+    )
+
+
+def _inline_boundary_direct_statement_spans(
+    source: str,
+    function_span,
+) -> list[tuple[int, int]]:
+    masked_source = _mask_c_comments_and_literals(source)
+    spans: list[tuple[int, int]] = []
+    for block_open, start, end in _collect_direct_statement_spans(
+        masked_source,
+        function_span.body_open,
+        function_span.body_close,
+    ):
+        if block_open != function_span.body_open:
+            continue
+        token_start = _skip_whitespace(masked_source, start)
+        if token_start >= end:
+            continue
+        line_start = _line_start_index(source, token_start)
+        line_end = _include_trailing_newline(
+            source,
+            end,
+            function_span.body_close,
+        )
+        spans.append((line_start, line_end))
+    return spans
+
+
+def _inline_boundary_call_statement_args(
+    statement: str,
+    callee: str,
+) -> list[str] | None:
+    text = statement.strip()
+    match = re.match(rf"{re.escape(callee)}\s*\(", text)
+    if match is None:
+        return None
+    paren_open = match.end() - 1
+    paren_close = _find_matching(text, paren_open, "(", ")")
+    if paren_close is None:
+        return None
+    if text[paren_close + 1:].strip() != ";":
+        return None
+    return _split_top_level_args(text[paren_open + 1:paren_close])
+
+
+def _split_top_level_args(args: str) -> list[str]:
+    result: list[str] = []
+    start = 0
+    paren_depth = 0
+    bracket_depth = 0
+    brace_depth = 0
+    quote = ""
+    index = 0
+    while index < len(args):
+        ch = args[index]
+        if quote:
+            if ch == "\\":
+                index += 2
+                continue
+            if ch == quote:
+                quote = ""
+        elif ch in ("'", '"'):
+            quote = ch
+        elif ch == "(":
+            paren_depth += 1
+        elif ch == ")":
+            paren_depth = max(0, paren_depth - 1)
+        elif ch == "[":
+            bracket_depth += 1
+        elif ch == "]":
+            bracket_depth = max(0, bracket_depth - 1)
+        elif ch == "{":
+            brace_depth += 1
+        elif ch == "}":
+            brace_depth = max(0, brace_depth - 1)
+        elif (
+            ch == ","
+            and paren_depth == 0
+            and bracket_depth == 0
+            and brace_depth == 0
+        ):
+            result.append(args[start:index].strip())
+            start = index + 1
+        index += 1
+    tail = args[start:].strip()
+    if tail or args.strip():
+        result.append(tail)
+    return result
+
+
+def _inline_boundary_local_value_type(
+    source: str,
+    function_span,
+    name: str,
+    *,
+    pointer: bool,
+) -> str | None:
+    body = source[function_span.body_open + 1:function_span.body_close]
+    masked_body = _mask_c_comments_and_literals(body)
+    stars = r"\s*\*+\s*" if pointer else r"\s+"
+    pattern = re.compile(
+        rf"(?m)^[ \t]*(?P<type>.+?){stars}{re.escape(name)}\s*(?:;|=)"
+    )
+    for match in pattern.finditer(masked_body):
+        type_text = body[match.start("type"):match.end("type")].strip()
+        if _inline_boundary_type_prefix_is_plausible(type_text):
+            return re.sub(r"\s+", " ", type_text)
+    return None
+
+
+def _inline_boundary_type_prefix_is_plausible(type_text: str) -> bool:
+    if not type_text or any(ch in type_text for ch in "=;{}()"):
+        return False
+    if re.search(r"\b(?:if|for|while|switch|return|do)\b", type_text):
+        return False
+    return True
+
+
+def _inline_boundary_compact(text: str) -> str:
+    return re.sub(r"\s+", "", text)
 
 
 def _generate_inline_boundary_call_arg_temp_variants(

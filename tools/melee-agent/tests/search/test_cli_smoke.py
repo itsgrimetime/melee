@@ -239,6 +239,64 @@ def test_search_structure_scores_by_default(
     assert callable(captured["score_runner"])
 
 
+def test_search_structure_passes_inline_boundary_baseline_classification(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from src.search import cli as search_cli
+
+    source = tmp_path / "demo.c"
+    source.write_text("int fn_80000000(void) { return 0; }\n")
+    classification = {
+        "primary": "inline-boundary-toolchain-artifact",
+        "inline_boundary_artifact": {
+            "missing_ref_calls": ["<fn_80000000+0x10>"],
+        },
+    }
+    captured: dict = {}
+
+    def fake_run_structure_search(**kwargs):
+        captured.update(kwargs)
+        return {
+            "function": kwargs["function"],
+            "source": str(source),
+            "generated_source_dir": str(tmp_path),
+            "baseline_percent": None,
+            "axes": [],
+            "variants": [],
+            "future_axes": [],
+            "stop_condition": {
+                "kind": "no-improvement",
+                "blocker": None,
+                "reason": "test",
+            },
+        }
+
+    monkeypatch.setattr(
+        search_cli,
+        "_structure_baseline_classification",
+        lambda *, function, melee_root, timeout: classification,
+    )
+    monkeypatch.setattr(search_cli, "run_structure_search", fake_run_structure_search)
+
+    result = CliRunner().invoke(
+        search_app,
+        [
+            "structure",
+            "-f",
+            "fn_80000000",
+            "--source-file",
+            str(source),
+            "--axis",
+            "inline-boundary",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["baseline_classification"] == classification
+
+
 def test_search_structure_no_score_disables_scorer(
     monkeypatch,
     tmp_path: Path,

@@ -73,6 +73,78 @@ def test_parse_name_magic_relocations_blocks_ambiguous_same_offset_pairs() -> No
     assert evidence.blocker == NameMagicBlocker.AMBIGUOUS_RELOCATION_PAIR
 
 
+def test_parse_name_magic_relocations_retains_ambiguous_compatible_alternatives() -> None:
+    payload = {
+        "diff": [
+            "-+038: R_PPC_ADDR16_LO\tmnDiagram_804A0750",
+            "-+038: R_PPC_ADDR16_LO\tmnDiagram_804A076C",
+            "++038: R_PPC_ADDR16_LO\t...bss.0",
+        ],
+        "classification": {"primary": "data-symbol-or-relocation"},
+    }
+
+    evidence = parse_name_magic_relocation_evidence(payload)
+
+    assert evidence.blocker == NameMagicBlocker.AMBIGUOUS_RELOCATION_PAIR
+    assert evidence.reason == "multiple relocation lines at offset 038"
+    assert [
+        (reloc.offset, reloc.kind, reloc.expected_symbol, reloc.current_symbol)
+        for reloc in evidence.relocations
+    ] == [
+        ("038", "R_PPC_ADDR16_LO", "mnDiagram_804A0750", "...bss.0"),
+        ("038", "R_PPC_ADDR16_LO", "mnDiagram_804A076C", "...bss.0"),
+    ]
+
+
+def test_parse_name_magic_relocations_orders_ambiguous_offsets_lexicographically() -> None:
+    payload = {
+        "diff": [
+            "-+038: R_PPC_ADDR16_LO\tmnDiagram_804A076C",
+            "-+038: R_PPC_ADDR16_LO\tmnDiagram_804A0788",
+            "++038: R_PPC_ADDR16_LO\t...bss.0",
+            "-+024: R_PPC_ADDR16_LO\tmnDiagram_804A0750",
+            "-+024: R_PPC_ADDR16_LO\tmnDiagram_804A0758",
+            "++024: R_PPC_ADDR16_LO\t...bss.1",
+        ],
+        "classification": {"primary": "data-symbol-or-relocation"},
+    }
+
+    evidence = parse_name_magic_relocation_evidence(payload)
+
+    assert evidence.blocker == NameMagicBlocker.AMBIGUOUS_RELOCATION_PAIR
+    assert [
+        (reloc.offset, reloc.expected_symbol, reloc.current_symbol)
+        for reloc in evidence.relocations
+    ] == [
+        ("024", "mnDiagram_804A0750", "...bss.1"),
+        ("024", "mnDiagram_804A0758", "...bss.1"),
+        ("038", "mnDiagram_804A076C", "...bss.0"),
+        ("038", "mnDiagram_804A0788", "...bss.0"),
+    ]
+
+
+def test_parse_name_magic_relocations_preserves_unambiguous_when_ambiguous_retains_none() -> None:
+    payload = {
+        "diff": [
+            "-+024: R_PPC_ADDR16_HA\tmn_803EAE68",
+            "++024: R_PPC_ADDR16_HA\t...data.0",
+            "-+038: R_PPC_ADDR16_LO\t@901",
+            "-+038: R_PPC_ADDR16_LO\t@902",
+            "++038: R_PPC_ADDR16_LO\t@267",
+        ],
+        "classification": {"primary": "data-symbol-or-relocation"},
+    }
+
+    evidence = parse_name_magic_relocation_evidence(payload)
+
+    assert evidence.blocker == NameMagicBlocker.AMBIGUOUS_RELOCATION_PAIR
+    assert evidence.reason == "multiple relocation lines at offset 038"
+    assert [
+        (reloc.offset, reloc.kind, reloc.expected_symbol, reloc.current_symbol)
+        for reloc in evidence.relocations
+    ] == [("024", "R_PPC_ADDR16_HA", "mn_803EAE68", "...data.0")]
+
+
 def test_parse_name_magic_relocations_blocks_incompatible_kinds() -> None:
     payload = {
         "diff": [
@@ -477,7 +549,7 @@ def test_parse_name_magic_relocations_pairs_named_bss_anchor() -> None:
     ]
 
 
-def test_generate_name_magic_source_probes_reports_bss_anchor_ceiling() -> None:
+def test_generate_name_magic_source_probes_reports_unsupported_bss_source_site() -> None:
     source = textwrap.dedent(
         """\
         void fn_80181C80(void)
@@ -504,10 +576,236 @@ def test_generate_name_magic_source_probes_reports_bss_anchor_ceiling() -> None:
     )
 
     assert probes == []
-    assert blocker == NameMagicBlocker.BSS_ANCHOR_CEILING
+    assert blocker == NameMagicBlocker.UNSUPPORTED_SOURCE_SITE
 
 
-def test_generate_name_magic_source_probes_blocks_mixed_bss_anchor_residual() -> None:
+def test_generate_name_magic_source_probes_materializes_ambiguous_bss_binding() -> None:
+    source = textwrap.dedent(
+        """\
+        typedef struct DemoBss {
+            u8 values[0x20];
+        } DemoBss;
+
+        DemoBss mnDiagram_804A0750;
+
+        void demo_fn(void)
+        {
+            sink(&mnDiagram_804A0750);
+        }
+        """
+    )
+    payload = {
+        "diff": [
+            "-+038: R_PPC_ADDR16_LO\tmnDiagram_804A0750",
+            "-+038: R_PPC_ADDR16_LO\tmnDiagram_804A076C",
+            "++038: R_PPC_ADDR16_LO\t...bss.0",
+        ],
+        "classification": {"primary": "data-symbol-or-relocation"},
+    }
+
+    probes, blocker = generate_name_magic_source_probes(
+        source,
+        "demo_fn",
+        payload,
+        {},
+    )
+
+    assert blocker is None
+    assert [probe.operator for probe in probes] == ["bss-anchor-source-binding"]
+    assert probes[0].source_text == source
+    assert probes[0].edits == ()
+    assert probes[0].provenance["expected_symbol"] == "mnDiagram_804A0750"
+    assert probes[0].provenance["current_symbol"] == "...bss.0"
+    assert probes[0].provenance["declaration_start"] == source.index(
+        "DemoBss mnDiagram_804A0750;"
+    )
+
+
+def test_generate_name_magic_source_probes_orders_ambiguous_bss_offsets() -> None:
+    source = textwrap.dedent(
+        """\
+        typedef struct DemoBss {
+            u8 values[0x20];
+        } DemoBss;
+
+        DemoBss mnDiagram_804A0750;
+        DemoBss mnDiagram_804A0758;
+        DemoBss mnDiagram_804A076C;
+        DemoBss mnDiagram_804A0788;
+
+        void demo_fn(void)
+        {
+            sink(&mnDiagram_804A0750);
+            sink(&mnDiagram_804A0758);
+            sink(&mnDiagram_804A076C);
+            sink(&mnDiagram_804A0788);
+        }
+        """
+    )
+    payload = {
+        "diff": [
+            "-+038: R_PPC_ADDR16_LO\tmnDiagram_804A076C",
+            "-+038: R_PPC_ADDR16_LO\tmnDiagram_804A0788",
+            "++038: R_PPC_ADDR16_LO\t...bss.0",
+            "-+024: R_PPC_ADDR16_LO\tmnDiagram_804A0750",
+            "-+024: R_PPC_ADDR16_LO\tmnDiagram_804A0758",
+            "++024: R_PPC_ADDR16_LO\t...bss.1",
+        ],
+        "classification": {"primary": "data-symbol-or-relocation"},
+    }
+
+    probes, blocker = generate_name_magic_source_probes(
+        source,
+        "demo_fn",
+        payload,
+        {},
+    )
+
+    assert blocker is None
+    assert [
+        (
+            probe.provenance["offset"],
+            probe.provenance["expected_symbol"],
+            probe.provenance["current_symbol"],
+        )
+        for probe in probes
+    ] == [
+        ("024", "mnDiagram_804A0750", "...bss.1"),
+        ("024", "mnDiagram_804A0758", "...bss.1"),
+        ("038", "mnDiagram_804A076C", "...bss.0"),
+        ("038", "mnDiagram_804A0788", "...bss.0"),
+    ]
+
+
+def test_generate_name_magic_source_probes_caps_ambiguous_retention_by_max_probes() -> None:
+    source = textwrap.dedent(
+        """\
+        typedef struct DemoBss {
+            u8 values[0x20];
+        } DemoBss;
+
+        DemoBss mnDiagram_804A0760;
+
+        void demo_fn(void)
+        {
+            sink(&mnDiagram_804A0760);
+        }
+        """
+    )
+    payload = {
+        "diff": [
+            "-+038: R_PPC_ADDR16_LO\tmnDiagram_804A0750",
+            "-+038: R_PPC_ADDR16_LO\tmnDiagram_804A0758",
+            "-+038: R_PPC_ADDR16_LO\tmnDiagram_804A0760",
+            "++038: R_PPC_ADDR16_LO\t...bss.0",
+        ],
+        "classification": {"primary": "data-symbol-or-relocation"},
+    }
+
+    probes, blocker = generate_name_magic_source_probes(
+        source,
+        "demo_fn",
+        payload,
+        {},
+        max_probes=2,
+    )
+
+    assert probes == []
+    assert blocker == NameMagicBlocker.UNSUPPORTED_SOURCE_SITE
+
+
+def test_bss_anchor_source_binding_rejects_unsafe_declarations() -> None:
+    payload = {
+        "diff": [
+            "-+038: R_PPC_ADDR16_LO\tmnDiagram_804A0750",
+            "-+038: R_PPC_ADDR16_LO\tmnDiagram_804A076C",
+            "++038: R_PPC_ADDR16_LO\t...bss.0",
+        ],
+        "classification": {"primary": "data-symbol-or-relocation"},
+    }
+    function_local = textwrap.dedent(
+        """\
+        void demo_fn(void)
+        {
+            DemoBss mnDiagram_804A0750;
+            sink(&mnDiagram_804A0750);
+        }
+        """
+    )
+    prototype = "void mnDiagram_804A0750(void);\nvoid demo_fn(void) {}\n"
+    multi = "DemoBss mnDiagram_804A0750, other;\nvoid demo_fn(void) {}\n"
+    macro = "#if 1\nDemoBss mnDiagram_804A0750;\n#endif\nvoid demo_fn(void) {}\n"
+
+    for source in (function_local, prototype, multi, macro):
+        assert generate_name_magic_source_probes(source, "demo_fn", payload, {}) == (
+            [],
+            NameMagicBlocker.UNSUPPORTED_SOURCE_SITE,
+        )
+
+
+def test_bss_anchor_source_binding_rejects_type_only_declarations() -> None:
+    payload = {
+        "diff": [
+            "-+038: R_PPC_ADDR16_LO\tmnDiagram_804A0750",
+            "-+038: R_PPC_ADDR16_LO\tmnDiagram_804A076C",
+            "++038: R_PPC_ADDR16_LO\t...bss.0",
+        ],
+        "classification": {"primary": "data-symbol-or-relocation"},
+    }
+    struct_field = textwrap.dedent(
+        """\
+        struct DemoBss {
+            int mnDiagram_804A0750;
+        };
+        void demo_fn(void) { sink(); }
+        """
+    )
+    struct_forward = "struct mnDiagram_804A0750;\nvoid demo_fn(void) { sink(); }\n"
+    enum_value = textwrap.dedent(
+        """\
+        enum Demo {
+            mnDiagram_804A0750 = 1
+        };
+        void demo_fn(void) { sink(); }
+        """
+    )
+
+    for source in (struct_field, struct_forward, enum_value):
+        assert generate_name_magic_source_probes(source, "demo_fn", payload, {}) == (
+            [],
+            NameMagicBlocker.UNSUPPORTED_SOURCE_SITE,
+        )
+
+
+def test_bss_anchor_source_binding_accepts_object_declarations() -> None:
+    payload = {
+        "diff": [
+            "-+038: R_PPC_ADDR16_LO\tmnDiagram_804A0750",
+            "-+038: R_PPC_ADDR16_LO\tmnDiagram_804A076C",
+            "++038: R_PPC_ADDR16_LO\t...bss.0",
+        ],
+        "classification": {"primary": "data-symbol-or-relocation"},
+    }
+    sources = (
+        "DemoBss mnDiagram_804A0750;\nvoid demo_fn(void) { sink(); }\n",
+        "static DemoBss mnDiagram_804A0750;\nvoid demo_fn(void) { sink(); }\n",
+        "struct DemoBss mnDiagram_804A0750;\nvoid demo_fn(void) { sink(); }\n",
+    )
+
+    for source in sources:
+        probes, blocker = generate_name_magic_source_probes(
+            source,
+            "demo_fn",
+            payload,
+            {},
+        )
+
+        assert blocker is None
+        assert [probe.operator for probe in probes] == ["bss-anchor-source-binding"]
+        assert probes[0].provenance["expected_symbol"] == "mnDiagram_804A0750"
+
+
+def test_generate_name_magic_source_probes_preserves_non_bss_probe_when_bss_missing() -> None:
     source = textwrap.dedent(
         """\
         static u16 mn_803EAE68[] = { 1, 2, 3 };
@@ -540,5 +838,5 @@ def test_generate_name_magic_source_probes_blocks_mixed_bss_anchor_residual() ->
         {},
     )
 
-    assert probes == []
-    assert blocker == NameMagicBlocker.BSS_ANCHOR_CEILING
+    assert blocker is None
+    assert [probe.operator for probe in probes] == ["data-symbol-static-to-global"]

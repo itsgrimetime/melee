@@ -871,20 +871,67 @@ def structure_cmd(
                 timeout=score_timeout,
             )
 
+    selected_axes = tuple(axes) if axes else DEFAULT_STRUCTURE_AXES
+    baseline_classification = (
+        _structure_baseline_classification(
+            function=function,
+            melee_root=melee_root,
+            timeout=score_timeout,
+        )
+        if score and "inline-boundary" in selected_axes
+        else None
+    )
     payload = run_structure_search(
         function=function,
         source_path=resolved_source,
         output_dir=resolved_output_dir,
-        axes=tuple(axes) if axes else DEFAULT_STRUCTURE_AXES,
+        axes=selected_axes,
         max_candidates=max_candidates,
         timeout=timeout,
         score_runner=score_runner,
         score_variants=score,
+        baseline_classification=baseline_classification,
     )
     if json_out:
         typer.echo(json.dumps(payload, indent=2))
     else:
         typer.echo(render_structure_text(payload))
+
+
+def _structure_baseline_classification(
+    *,
+    function: str,
+    melee_root: Path,
+    timeout: float,
+) -> dict | None:
+    try:
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(melee_root / "tools" / "checkdiff.py"),
+                function,
+                "--format",
+                "json",
+                "--no-build",
+                "--no-fingerprint",
+            ],
+            cwd=melee_root,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode not in (0, 1) or not proc.stdout.strip():
+        return None
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    classification = payload.get("classification")
+    return classification if isinstance(classification, dict) else None
 
 
 @search_app.command("plan-transforms")

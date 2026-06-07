@@ -1,6 +1,6 @@
 """SQLite schema for agent state management."""
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 SCHEMA_SQL = """
 -- Core function tracking
@@ -185,7 +185,9 @@ CREATE TABLE IF NOT EXISTS tool_issues (
     updated_at REAL DEFAULT (unixepoch('now', 'subsec')),
     resolved_at REAL,
     resolved_by_agent TEXT,
-    resolution_note TEXT
+    resolution_note TEXT,
+    claimed_by TEXT,
+    claimed_at REAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_tool_issues_status ON tool_issues(status, created_at DESC);
@@ -815,5 +817,10 @@ def get_migrations() -> dict[int, str]:
             CREATE INDEX IF NOT EXISTS idx_tool_issues_status ON tool_issues(status, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_tool_issues_tool ON tool_issues(tool, status);
             CREATE INDEX IF NOT EXISTS idx_tool_issues_kind ON tool_issues(kind, status);
+        """,
+        # Version 9 -> 10: Add claim columns to tool_issues for cooperative claiming
+        9: """
+            ALTER TABLE tool_issues ADD COLUMN claimed_by TEXT;
+            ALTER TABLE tool_issues ADD COLUMN claimed_at REAL;
         """,
     }

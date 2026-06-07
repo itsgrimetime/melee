@@ -1210,6 +1210,411 @@ def test_run_structure_search_supports_inline_boundary_axis(
     assert "inline-boundary" not in {row["axis"] for row in payload["future_axes"]}
 
 
+def test_inline_boundary_axis_reports_shifted_missing_reference_metadata(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "demo.c"
+    source_path.write_text(
+        "void fn_80000000(void)\n"
+        "{\n"
+        "    sink(GetNameText(0));\n"
+        "}\n"
+    )
+    classification = {
+        "primary": "inline-boundary-toolchain-artifact",
+        "inline_boundary_artifact": {
+            "missing_ref_calls": [
+                "<fn_80000000+0x10>",
+                "<fn_80000000+0x24>",
+            ],
+        },
+    }
+
+    payload = run_structure_search(
+        "fn_80000000",
+        source_path,
+        tmp_path / "structure",
+        axes=("inline-boundary",),
+        max_candidates=4,
+        score_variants=False,
+        baseline_classification=classification,
+    )
+
+    metadata = payload["axes"][0]["metadata"]["inline_boundary_artifact"]
+    assert metadata["missing_ref_call_count"] == 2
+    assert metadata["same_function_offset_count"] == 2
+    assert metadata["source_lever_classification"] == "shifted-same-target-calls"
+
+
+def test_inline_boundary_generates_call_result_temp_for_if_condition(
+    tmp_path: Path,
+) -> None:
+    source = (
+        "void fn_80000000(int j)\n"
+        "{\n"
+        "    if (GetNameText((u8) j) != NULL) {\n"
+        "        total++;\n"
+        "    }\n"
+        "}\n"
+    )
+
+    axis, variants = generate_inline_boundary_variants(
+        source,
+        "fn_80000000",
+        tmp_path,
+        baseline_percent=None,
+        max_candidates=4,
+    )
+
+    assert axis.status == "evaluated"
+    variant = next(
+        row for row in variants if row.operator == "inline-boundary-call-result-temp"
+    )
+    text = Path(variant.source_retained or "").read_text()
+    assert "char* ib_probe_call_result_0 = GetNameText((u8) j);" in text
+    assert "if (ib_probe_call_result_0 != NULL)" in text
+    assert "        total++;" in text
+    assert variant.metadata["callee"] == "GetNameText"
+    assert variant.metadata["return_type"] == "char*"
+
+
+def test_inline_boundary_generates_call_result_temp_for_member_access(
+    tmp_path: Path,
+) -> None:
+    source = (
+        "void fn_80000000(int i, int j)\n"
+        "{\n"
+        "    total += GetPersistentNameData((u8) i)->vs_kos[(u8) j];\n"
+        "}\n"
+    )
+
+    _, variants = generate_inline_boundary_variants(
+        source,
+        "fn_80000000",
+        tmp_path,
+        baseline_percent=None,
+        max_candidates=4,
+    )
+
+    variant = next(
+        row for row in variants if row.operator == "inline-boundary-call-result-temp"
+    )
+    text = Path(variant.source_retained or "").read_text()
+    assert (
+        "struct NameTagData* ib_probe_call_result_0 = "
+        "GetPersistentNameData((u8) i);"
+    ) in text
+    assert "total += ib_probe_call_result_0->vs_kos[(u8) j];" in text
+
+
+def test_inline_boundary_skips_call_result_temp_for_else_if_condition(
+    tmp_path: Path,
+) -> None:
+    source = (
+        "void fn_80000000(int j)\n"
+        "{\n"
+        "    if (j == 0) {\n"
+        "        total++;\n"
+        "    } else if (GetNameText((u8) j) != NULL) {\n"
+        "        total += 2;\n"
+        "    }\n"
+        "}\n"
+    )
+
+    _, variants = generate_inline_boundary_variants(
+        source,
+        "fn_80000000",
+        tmp_path,
+        baseline_percent=None,
+        max_candidates=4,
+    )
+
+    assert not any(
+        row.operator == "inline-boundary-call-result-temp" for row in variants
+    )
+
+
+def test_inline_boundary_skips_call_result_temp_for_loop_header(
+    tmp_path: Path,
+) -> None:
+    source = (
+        "void fn_80000000(int j)\n"
+        "{\n"
+        "    while (GetNameText((u8) j) != NULL) {\n"
+        "        j++;\n"
+        "    }\n"
+        "}\n"
+    )
+
+    _, variants = generate_inline_boundary_variants(
+        source,
+        "fn_80000000",
+        tmp_path,
+        baseline_percent=None,
+        max_candidates=4,
+    )
+
+    assert not any(
+        row.operator == "inline-boundary-call-result-temp" for row in variants
+    )
+
+
+def test_inline_boundary_skips_call_result_temp_for_for_loop_header(
+    tmp_path: Path,
+) -> None:
+    source = (
+        "void fn_80000000(int j)\n"
+        "{\n"
+        "    for (; GetNameText((u8) j) != NULL; j++) {\n"
+        "        total++;\n"
+        "    }\n"
+        "}\n"
+    )
+
+    _, variants = generate_inline_boundary_variants(
+        source,
+        "fn_80000000",
+        tmp_path,
+        baseline_percent=None,
+        max_candidates=4,
+    )
+
+    assert not any(
+        row.operator == "inline-boundary-call-result-temp" for row in variants
+    )
+
+
+def test_inline_boundary_generates_call_result_temp_for_multiline_if(
+    tmp_path: Path,
+) -> None:
+    source = (
+        "void fn_80000000(int j)\n"
+        "{\n"
+        "    if (\n"
+        "        GetNameText((u8) j) != NULL\n"
+        "    ) {\n"
+        "        total += 2;\n"
+        "    }\n"
+        "}\n"
+    )
+
+    _, variants = generate_inline_boundary_variants(
+        source,
+        "fn_80000000",
+        tmp_path,
+        baseline_percent=None,
+        max_candidates=4,
+    )
+
+    variant = next(
+        row for row in variants if row.operator == "inline-boundary-call-result-temp"
+    )
+    text = Path(variant.source_retained or "").read_text()
+    assert "char* ib_probe_call_result_0 = GetNameText((u8) j);" in text
+    assert "ib_probe_call_result_0 != NULL" in text
+    assert "        total += 2;" in text
+
+
+def test_inline_boundary_skips_call_result_temp_for_declaration_and_lhs(
+    tmp_path: Path,
+) -> None:
+    source = (
+        "void fn_80000000(int i, int j, int value)\n"
+        "{\n"
+        "    char* text = GetNameText((u8) j);\n"
+        "    GetPersistentNameData((u8) i)->slot = value;\n"
+        "    sink(text);\n"
+        "}\n"
+    )
+
+    _, variants = generate_inline_boundary_variants(
+        source,
+        "fn_80000000",
+        tmp_path,
+        baseline_percent=None,
+        max_candidates=4,
+    )
+
+    assert not any(
+        row.operator == "inline-boundary-call-result-temp" for row in variants
+    )
+
+
+def test_inline_boundary_skips_call_result_temp_for_nested_lhs_assignment(
+    tmp_path: Path,
+) -> None:
+    source = (
+        "void fn_80000000(int i, int value)\n"
+        "{\n"
+        "    if ((GetPersistentNameData((u8) i)->slot = value) != 0) {\n"
+        "        total++;\n"
+        "    }\n"
+        "}\n"
+    )
+
+    _, variants = generate_inline_boundary_variants(
+        source,
+        "fn_80000000",
+        tmp_path,
+        baseline_percent=None,
+        max_candidates=4,
+    )
+
+    assert not any(
+        row.operator == "inline-boundary-call-result-temp" for row in variants
+    )
+
+
+def test_inline_boundary_call_result_temp_covers_allowlisted_return_types(
+    tmp_path: Path,
+) -> None:
+    source = (
+        "void fn_80000000(int i, int j)\n"
+        "{\n"
+        "    total += GetPersistentFighterData((u8) i)->ko_count;\n"
+        "    sink(mnDiagram_GetFighterByIndex((u8) j));\n"
+        "}\n"
+    )
+
+    _, variants = generate_inline_boundary_variants(
+        source,
+        "fn_80000000",
+        tmp_path,
+        baseline_percent=None,
+        max_candidates=8,
+    )
+
+    generated = [
+        row for row in variants if row.operator == "inline-boundary-call-result-temp"
+    ]
+    assert {row.metadata["return_type"] for row in generated} >= {
+        "struct FighterData*",
+        "u8",
+    }
+    text = "\n".join(Path(row.source_retained or "").read_text() for row in generated)
+    assert (
+        "struct FighterData* ib_probe_call_result_0 = "
+        "GetPersistentFighterData((u8) i);"
+    ) in text
+    assert (
+        "u8 ib_probe_call_result_1 = mnDiagram_GetFighterByIndex((u8) j);"
+    ) in text
+
+
+def test_inline_boundary_generates_popup_text_setup_helper(tmp_path: Path) -> None:
+    source = (
+        "void fn_80000000(HSD_GObj* gobj, int slot)\n"
+        "{\n"
+        "    PopupData* data = gobj->user_data;\n"
+        "    AnimTable* tbl = &table;\n"
+        "    Point3d pos;\n"
+        "    HSD_Text* text;\n"
+        "    text = HSD_SisLib_803A6754(0, 1);\n"
+        "    data->text[0] = text;\n"
+        "    lb_8000B1CC(data->jobjs[8], &tbl->points[0], &pos);\n"
+        "    text->font_size.x = 0.0521f;\n"
+        "    text->font_size.y = 0.0521f;\n"
+        "    text->default_alignment = 0;\n"
+        "}\n"
+    )
+
+    _, variants = generate_inline_boundary_variants(
+        source,
+        "fn_80000000",
+        tmp_path,
+        baseline_percent=None,
+        max_candidates=8,
+    )
+
+    variant = next(
+        row
+        for row in variants
+        if row.operator == "inline-boundary-popup-text-setup-helper"
+    )
+    text = Path(variant.source_retained or "").read_text()
+    assert "static inline HSD_Text* ib_probe_popup_text_setup_0" in text
+    assert "ib_probe_popup_text_setup_0(data, tbl, &pos" in text
+    assert variant.metadata["family"] == "popup-text-setup-helper"
+
+
+def test_inline_boundary_generates_popup_number_format_helper(tmp_path: Path) -> None:
+    source = (
+        "void fn_80000000(HSD_Text* text, char* buf, int arg1, int arg2)\n"
+        "{\n"
+        "    u16 kos;\n"
+        "    kos = GetPersistentNameData((u8) arg1)->vs_kos[(u8) arg2];\n"
+        "    mnDiagram_IntToStr(buf, kos);\n"
+        "    HSD_SisLib_803A6B98(text, 0.0f, 0.0f, buf);\n"
+        "}\n"
+    )
+
+    _, variants = generate_inline_boundary_variants(
+        source,
+        "fn_80000000",
+        tmp_path,
+        baseline_percent=None,
+        max_candidates=8,
+    )
+
+    variant = next(
+        row
+        for row in variants
+        if row.operator == "inline-boundary-popup-number-format-helper"
+    )
+    text = Path(variant.source_retained or "").read_text()
+    assert "static inline void ib_probe_popup_number_format_0" in text
+    assert "ib_probe_popup_number_format_0(text, buf, kos);" in text
+    assert variant.metadata["family"] == "popup-number-format-helper"
+
+
+def test_inline_boundary_generates_sort_entry_init_helper(tmp_path: Path) -> None:
+    source = (
+        "void fn_80000000(void)\n"
+        "{\n"
+        "    mnDiagram2_SortEntry entries[25];\n"
+        "    mnDiagram2_SortEntry* ptr;\n"
+        "    int i;\n"
+        "    int zero;\n"
+        "    ptr = entries;\n"
+        "    i = 0;\n"
+        "    zero = 0;\n"
+        "    do {\n"
+        "        ptr->name = mnDiagram_GetFighterByIndex(i);\n"
+        "        i++;\n"
+        "        ptr->xC = zero;\n"
+        "        ptr->x8 = zero;\n"
+        "        ptr++;\n"
+        "    } while (i < 25);\n"
+        "}\n"
+    )
+
+    _, variants = generate_inline_boundary_variants(
+        source,
+        "fn_80000000",
+        tmp_path,
+        baseline_percent=None,
+        max_candidates=8,
+    )
+
+    variant = next(
+        row
+        for row in variants
+        if row.operator == "inline-boundary-sort-entry-init-helper"
+    )
+    text = Path(variant.source_retained or "").read_text()
+    assert "static inline void ib_probe_sort_entry_init_0" in text
+    assert "ib_probe_sort_entry_init_0(entries, zero);" in text
+    assert "ptr = entries + 25;" in text
+    assert "i = 25;" in text
+    assert variant.metadata["family"] == "sort-entry-init-helper"
+    assert variant.metadata["helper"] == "ib_probe_sort_entry_init_0"
+    assert variant.metadata["entry_array"] == "entries"
+    assert variant.metadata["pointer_variable"] == "ptr"
+    assert variant.metadata["index_variable"] == "i"
+    assert variant.metadata["zero_variable"] == "zero"
+    assert variant.metadata["touched_lines"] == {"start": 7, "end": 16}
+
+
 def test_inline_boundary_rejects_preprocessor_regions(tmp_path: Path) -> None:
     source = (
         "void fn_80000000(HSD_JObj* jobj, f32 y)\n"

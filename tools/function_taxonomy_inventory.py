@@ -8,6 +8,7 @@ import csv
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -24,6 +25,12 @@ MELEE_AGENT_ROOT = REPO_ROOT / "tools" / "melee-agent"
 if str(MELEE_AGENT_ROOT) not in sys.path:
     sys.path.insert(0, str(MELEE_AGENT_ROOT))
 
+import src.attempt_evidence as attempt_evidence
+from src.attempt_evidence import (
+    TERMINAL_ATTEMPT_FIELDS,
+    apply_terminal_attempt_overlay,
+    load_terminal_attempt_evidence,
+)
 from src.mwcc_debug.frame_taxonomy import classify_frame_taxonomy
 
 DEFAULT_REPORT = REPO_ROOT / "build" / "GALE01" / "report.json"
@@ -1382,6 +1389,49 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     )
 
 
+def _taxonomy_tool_sha256() -> str:
+    digest = hashlib.sha256()
+    for path in [Path(__file__), Path(attempt_evidence.__file__)]:
+        digest.update(path.name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def apply_terminal_attempt_evidence(
+    records: list[dict[str, Any]],
+    *,
+    attempt_ledger_path: Path | None,
+) -> list[dict[str, Any]]:
+    evidence = load_terminal_attempt_evidence(attempt_ledger_path)
+    if not evidence:
+        return records
+    current_tool_fingerprints = {"taxonomy_tool_sha256": _taxonomy_tool_sha256()}
+    overlaid: list[dict[str, Any]] = []
+    for record in records:
+        updated = apply_terminal_attempt_overlay(
+            record,
+            evidence,
+            current_tool_fingerprints=current_tool_fingerprints,
+        )
+        if record.get("function") not in evidence:
+            overlaid.append(record)
+            continue
+        merged = dict(record)
+        for field in (
+            "source_actionability",
+            "headline_tool",
+            "actionability_reason",
+            "next_command",
+            *TERMINAL_ATTEMPT_FIELDS,
+        ):
+            if field in updated:
+                merged[field] = updated[field]
+        overlaid.append(merged)
+    return overlaid
+
+
 def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     fields = [
         "match_percent",
@@ -1412,6 +1462,7 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "source_actionability",
         "headline_tool",
         "actionability_reason",
+        *TERMINAL_ATTEMPT_FIELDS,
         "name_magic_blocker",
         "name_magic_stop_kind",
         "name_magic_probe_count",
@@ -1455,6 +1506,7 @@ def write_queue(path: Path, rows: list[dict[str, Any]]) -> None:
         "source_actionability",
         "headline_tool",
         "actionability_reason",
+        *TERMINAL_ATTEMPT_FIELDS,
         "decl_order_best_delta",
         "decl_order_best_ordering",
         "decl_order_evaluated_status",
@@ -1697,9 +1749,14 @@ def generate_inventory(
     limit: int | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     progress_interval: float | None = DEFAULT_PROGRESS_INTERVAL,
+    attempt_ledger_path: Path | str | None = None,
+    include_terminal_attempts: bool = True,
 ) -> InventoryResult:
     report_path = Path(report_path).resolve()
     output_dir = Path(output_dir).resolve()
+    resolved_attempt_ledger_path = (
+        Path(attempt_ledger_path).resolve() if attempt_ledger_path is not None else None
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "queues").mkdir(exist_ok=True)
     started_at = _utc_now_iso()
@@ -1848,6 +1905,12 @@ def generate_inventory(
                     )
                     submit_next(executor)
                 emit_progress_if_due()
+
+        if include_terminal_attempts:
+            records = apply_terminal_attempt_evidence(
+                records,
+                attempt_ledger_path=resolved_attempt_ledger_path,
+            )
 
         records.sort(key=lambda row: (-parse_float(row.get("match_percent")), row.get("function", "")))
         errors.sort(key=lambda row: row.get("function", ""))

@@ -16,6 +16,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 
+from src.attempt_evidence import (
+    apply_terminal_attempt_overlay,
+    is_active_terminal_attempt_row,
+    load_terminal_attempt_evidence,
+)
 from src.mwcc_debug import cache as pcdump_cache
 from src.mwcc_debug import local_safety
 from src.mwcc_debug.diff_capture import (
@@ -70,6 +75,11 @@ PREVIEW_FACET_FIELDS = (
     "headline_tool",
     "frame_closability_tier",
     "name_magic_blocker",
+)
+TERMINAL_ATTEMPT_FACET_FIELDS = (
+    "terminal_attempt_actionability",
+    "terminal_attempt_blocker",
+    "terminal_attempt_stale_check",
 )
 SOURCE_ACTIONABILITY_REBUCKET_FINGERPRINT_FIELDS = (
     "function",
@@ -152,6 +162,7 @@ class HarvestRequest:
     frame_next_command: str = ""
     facts: dict[str, Any] = field(default_factory=dict)
     rebucket_fingerprint: dict[str, str] = field(default_factory=dict)
+    terminal_attempt_status: str = ""
     apply: bool = False
     timeout: int = 120
     max_probes: int = 8
@@ -612,6 +623,26 @@ def _apply_source_actionability_rebucket(
     return updated
 
 
+def _apply_terminal_attempt_overlay(
+    raw: Mapping[str, str],
+    evidence: Mapping[str, Mapping[str, Any]],
+    *,
+    repo_root: Path,
+    work_bucket: str,
+) -> dict[str, str]:
+    if not evidence:
+        return dict(raw)
+    return apply_terminal_attempt_overlay(
+        raw,
+        evidence,
+        current_tool_fingerprints=_rebucket_fingerprint_from_raw(
+            raw,
+            repo_root=repo_root,
+            work_bucket=work_bucket,
+        ),
+    )
+
+
 def _request_from_queue_row(
     raw: Mapping[str, str],
     *,
@@ -647,6 +678,9 @@ def _request_from_queue_row(
             repo_root=repo_root,
             work_bucket=work_bucket,
         ),
+        terminal_attempt_status=(
+            raw.get("terminal_attempt_status") or ""
+        ).strip(),
         apply=apply,
         timeout=timeout,
         max_probes=max_probes,
@@ -695,6 +729,8 @@ def load_queue_rows(
     timeout: int = 120,
     max_probes: int = 8,
     filters: HarvestFilters | None = None,
+    attempt_ledger_path: Path | None = None,
+    include_terminal_attempts: bool = False,
 ) -> list[HarvestRequest]:
     rows: list[HarvestRequest] = []
     facts_by_function = target_map or {}
@@ -702,6 +738,7 @@ def load_queue_rows(
         repo_root,
         work_bucket,
     )
+    terminal_attempt_evidence = load_terminal_attempt_evidence(attempt_ledger_path)
     assert_taxonomy_queue_is_completed(queue_path)
     with queue_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
@@ -713,6 +750,17 @@ def load_queue_rows(
                 repo_root=repo_root,
                 work_bucket=work_bucket,
             )
+            raw = _apply_terminal_attempt_overlay(
+                raw,
+                terminal_attempt_evidence,
+                repo_root=repo_root,
+                work_bucket=work_bucket,
+            )
+            if (
+                not include_terminal_attempts
+                and is_active_terminal_attempt_row(raw)
+            ):
+                continue
             if not _row_matches_filters(raw, filters):
                 continue
             if limit is not None and len(rows) >= limit:
@@ -770,6 +818,7 @@ def _preview_sample_entry(request: HarvestRequest) -> dict[str, Any]:
         "frame_closability_tier": request.frame_closability_tier,
         "next_command": request.next_command,
         "frame_next_command": request.frame_next_command,
+        "terminal_attempt_status": request.terminal_attempt_status,
         "harness": select_harness(request),
     }
 
@@ -786,6 +835,8 @@ def preview_harvest_queue(
     filters: HarvestFilters | None = None,
     sample_limit: int = 10,
     facet_limit: int = 8,
+    attempt_ledger_path: Path | None = None,
+    include_terminal_attempts: bool = False,
 ) -> dict[str, Any]:
     if target_map is None:
         target_map = load_target_map(target_map_path)
@@ -794,11 +845,13 @@ def preview_harvest_queue(
     queue_rows = 0
     eligible_rows: list[dict[str, str]] = []
     matching_rows: list[dict[str, str]] = []
+    terminal_attempt_rows: list[dict[str, str]] = []
     sample: list[dict[str, Any]] = []
     source_actionability_rebuckets = _load_source_actionability_rebuckets(
         repo_root,
         work_bucket,
     )
+    terminal_attempt_evidence = load_terminal_attempt_evidence(attempt_ledger_path)
 
     assert_taxonomy_queue_is_completed(queue_path)
     with queue_path.open("r", encoding="utf-8", newline="") as handle:
@@ -811,6 +864,12 @@ def preview_harvest_queue(
                 repo_root=repo_root,
                 work_bucket=work_bucket,
             )
+            raw = _apply_terminal_attempt_overlay(
+                raw,
+                terminal_attempt_evidence,
+                repo_root=repo_root,
+                work_bucket=work_bucket,
+            )
             function = (raw.get("function") or "").strip()
             if not function:
                 continue
@@ -818,6 +877,10 @@ def preview_harvest_queue(
             match_percent = _float_or_none(raw.get("match_percent")) or 0.0
             if match_percent < min_match:
                 continue
+            if is_active_terminal_attempt_row(raw):
+                terminal_attempt_rows.append(raw)
+                if not include_terminal_attempts:
+                    continue
             eligible_rows.append(raw)
             if not _row_matches_filters(raw, filters):
                 continue
@@ -841,6 +904,14 @@ def preview_harvest_queue(
     facets = {
         field_name: _top_facet_values(facet_rows, field_name, limit=facet_limit)
         for field_name in PREVIEW_FACET_FIELDS
+    }
+    terminal_attempt_facets = {
+        field_name: _top_facet_values(
+            terminal_attempt_rows,
+            field_name,
+            limit=facet_limit,
+        )
+        for field_name in TERMINAL_ATTEMPT_FACET_FIELDS
     }
     near_miss_facets: dict[str, list[dict[str, Any]]] = {}
     if filters is not None and filters.where:
@@ -886,9 +957,11 @@ def preview_harvest_queue(
             "eligible_rows": len(eligible_rows),
             "matching_rows": matching_count,
             "would_process_rows": would_process_rows,
+            "terminal_attempt_rows": len(terminal_attempt_rows),
         },
         "facet_source": "matching_rows" if matching_rows else "eligible_rows",
         "facets": facets,
+        "terminal_attempt_facets": terminal_attempt_facets,
         "near_miss_facets": near_miss_facets,
         "sample": sample,
     }
@@ -961,6 +1034,16 @@ def _is_blocked_data_symbol_request(request: HarvestRequest) -> bool:
 
 
 def select_harness(request: HarvestRequest) -> str | None:
+    if request.terminal_attempt_status == "active":
+        return None
+
+    if request.source_actionability in {
+        "source-ceiling",
+        "tooling-blocked",
+        "manual-review",
+    }:
+        return None
+
     explicit_harness = request.facts.get("harness")
     if explicit_harness:
         harness = str(explicit_harness).strip().lower()

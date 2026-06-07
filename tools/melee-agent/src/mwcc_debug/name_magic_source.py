@@ -84,11 +84,18 @@ class _StaticDefinition:
     static_end: int
 
 
+@dataclasses.dataclass(frozen=True)
+class _NamedDefinition:
+    decl_start: int
+    decl_end: int
+
+
 _RELOC_DIFF_RE = re.compile(
     r"^(?P<side>[-+])\+(?P<offset>[0-9a-fA-F]+):\s+"
     r"(?P<kind>R_PPC_[A-Za-z0-9_]+)\t(?P<symbol>\S+)"
 )
 _DIFF_OFFSET_RE = re.compile(r"^[+-]\+(?P<offset>[0-9a-fA-F]+):")
+_DEFAULT_MAX_RETAINED_AMBIGUOUS_RELOCATIONS = 12
 
 
 def _supported_current_symbol(symbol: str) -> bool:
@@ -97,6 +104,16 @@ def _supported_current_symbol(symbol: str) -> bool:
         or symbol.startswith("...data.")
         or symbol.startswith("...bss.")
     )
+
+
+def _is_named_source_symbol(symbol: str) -> bool:
+    return re.fullmatch(r"[A-Za-z_]\w*", symbol) is not None
+
+
+def _is_section_anchor_offset_expression(symbol: str) -> bool:
+    return symbol.startswith(("...data.", "...bss.")) and re.search(
+        r"[+-](?:0x)?[0-9a-fA-F]+$", symbol
+    ) is not None
 
 
 def _apply_source_edits(
@@ -208,6 +225,19 @@ def _blank_bracket_contents(text: str) -> str:
     return "".join(chars)
 
 
+def _matching_brace_index(text: str, open_index: int) -> int | None:
+    depth = 0
+    for index in range(open_index, len(text)):
+        char = text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
 def _declared_identifier(declaration: str) -> str | None:
     initializer = _find_top_level_char(declaration, "=")
     declarator = declaration if initializer is None else declaration[:initializer]
@@ -221,6 +251,43 @@ def _declared_identifier(declaration: str) -> str | None:
         return None
 
     without_brackets = _blank_bracket_contents(declarator_after_static)
+    identifiers = re.findall(r"\b[A-Za-z_]\w*\b", without_brackets)
+    if not identifiers:
+        return None
+    return identifiers[-1]
+
+
+def _declared_identifier_with_optional_static(declaration: str) -> str | None:
+    initializer = _find_top_level_char(declaration, "=")
+    declarator = declaration if initializer is None else declaration[:initializer]
+    declarator = declarator.rstrip().rstrip(";").strip()
+
+    if _has_top_level_paren(declarator):
+        return None
+
+    static_match = re.match(r"static\b", declarator)
+    if static_match is not None:
+        declarator = declarator[static_match.end() :].lstrip()
+    if re.match(r"typedef\b", declarator):
+        return None
+
+    tag_match = re.match(r"(?:struct|union|enum)\b", declarator)
+    if tag_match is not None:
+        brace_open = declarator.find("{", tag_match.end())
+        if brace_open != -1:
+            brace_close = _matching_brace_index(declarator, brace_open)
+            if brace_close is None:
+                return None
+            declarator = declarator[brace_close + 1 :].strip()
+        else:
+            tag_name = re.match(r"\s*[A-Za-z_]\w*\b", declarator[tag_match.end() :])
+            if tag_name is None:
+                return None
+            declarator = declarator[tag_match.end() + tag_name.end() :].strip()
+        if not declarator:
+            return None
+
+    without_brackets = _blank_bracket_contents(declarator)
     identifiers = re.findall(r"\b[A-Za-z_]\w*\b", without_brackets)
     if not identifiers:
         return None
@@ -251,6 +318,23 @@ def _match_static_definition(
     while static_end < end and source[static_end] in " \t":
         static_end += 1
     return _StaticDefinition(start, end, static_start, static_end)
+
+
+def _match_named_definition(
+    source: str, stripped: str, start: int, end: int, symbol: str
+) -> _NamedDefinition | None:
+    declaration = stripped[start:end]
+    if re.search(rf"\b{re.escape(symbol)}\b", declaration) is None:
+        return None
+    if _preprocessor_depth_at(source, start) > 0:
+        return None
+    if _declaration_spans_preprocessor_line(source, start, end):
+        return None
+    if _has_top_level_comma(declaration):
+        return None
+    if _declared_identifier_with_optional_static(declaration) != symbol:
+        return None
+    return _NamedDefinition(start, end)
 
 
 def _top_level_static_definition_span(
@@ -298,6 +382,49 @@ def _top_level_static_definition_span(
     return None
 
 
+def _top_level_named_definition_span(source: str, symbol: str) -> _NamedDefinition | None:
+    from .source_patch import _strip_c_comments
+
+    stripped = _strip_c_comments(source)
+    candidate_start: int | None = None
+    brace_depth = 0
+    index = 0
+    while index < len(stripped):
+        char = stripped[index]
+        if brace_depth == 0 and candidate_start is None:
+            if char.isspace():
+                index += 1
+                continue
+            if char == "#" and _is_preprocessor_line(stripped, index):
+                newline = stripped.find("\n", index)
+                if newline == -1:
+                    break
+                index = newline + 1
+                continue
+            candidate_start = index
+
+        if char == "{":
+            brace_depth += 1
+        elif char == "}":
+            if brace_depth > 0:
+                brace_depth -= 1
+            if brace_depth == 0 and candidate_start is not None:
+                lookahead = index + 1
+                while lookahead < len(stripped) and stripped[lookahead].isspace():
+                    lookahead += 1
+                if lookahead >= len(stripped) or stripped[lookahead] != ";":
+                    candidate_start = None
+        elif char == ";" and brace_depth == 0 and candidate_start is not None:
+            match = _match_named_definition(
+                source, stripped, candidate_start, index + 1, symbol
+            )
+            if match is not None:
+                return match
+            candidate_start = None
+        index += 1
+    return None
+
+
 def _probe_provenance(relocation: NameMagicRelocation) -> dict[str, Any]:
     return {
         "offset": relocation.offset,
@@ -328,6 +455,33 @@ def _static_to_global_probe(
             source_text=source_text,
             edits=(edit,),
             provenance=_probe_provenance(relocation),
+        ),
+        None,
+    )
+
+
+def _bss_anchor_source_binding_probe(
+    source: str, relocation: NameMagicRelocation, index: int
+) -> tuple[NameMagicSourceProbe | None, NameMagicBlocker | None]:
+    declaration = _top_level_named_definition_span(source, relocation.expected_symbol)
+    if declaration is None:
+        return None, NameMagicBlocker.UNSUPPORTED_SOURCE_SITE
+
+    return (
+        NameMagicSourceProbe(
+            label=f"bss-anchor-source-binding-{index}",
+            operator="bss-anchor-source-binding",
+            description=(
+                f"bind {relocation.current_symbol} to "
+                f"{relocation.expected_symbol} source declaration"
+            ),
+            source_text=source,
+            edits=(),
+            provenance={
+                **_probe_provenance(relocation),
+                "declaration_start": declaration.decl_start,
+                "declaration_end": declaration.decl_end,
+            },
         ),
         None,
     )
@@ -460,7 +614,50 @@ def _combined_probe(
     )
 
 
-def parse_name_magic_relocation_evidence(payload: dict[str, Any]) -> NameMagicEvidence:
+def _compatible_name_magic_relocations(
+    offset: str,
+    expected: list[tuple[str, str]],
+    current: list[tuple[str, str]],
+    *,
+    limit: int,
+) -> list[NameMagicRelocation]:
+    relocations: list[NameMagicRelocation] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    if limit <= 0:
+        return relocations
+
+    for expected_kind, expected_symbol in expected:
+        if not _is_named_source_symbol(expected_symbol):
+            continue
+        for current_kind, current_symbol in current:
+            if expected_kind != current_kind:
+                continue
+            if _is_section_anchor_offset_expression(current_symbol):
+                continue
+            if not _supported_current_symbol(current_symbol):
+                continue
+            key = (offset, expected_kind, expected_symbol, current_symbol)
+            if key in seen:
+                continue
+            seen.add(key)
+            relocations.append(
+                NameMagicRelocation(
+                    offset=offset,
+                    kind=expected_kind,
+                    expected_symbol=expected_symbol,
+                    current_symbol=current_symbol,
+                )
+            )
+            if len(relocations) >= limit:
+                return relocations
+    return relocations
+
+
+def parse_name_magic_relocation_evidence(
+    payload: dict[str, Any],
+    *,
+    max_ambiguous_relocations: int = _DEFAULT_MAX_RETAINED_AMBIGUOUS_RELOCATIONS,
+) -> NameMagicEvidence:
     diff = payload.get("diff")
     if not isinstance(diff, list):
         return NameMagicEvidence(
@@ -481,52 +678,62 @@ def parse_name_magic_relocation_evidence(payload: dict[str, Any]) -> NameMagicEv
             if diff_offset is not None:
                 residual_offsets.add(diff_offset.group("offset").lower())
             continue
-        by_offset.setdefault(match.group("offset").lower(), {"-": [], "+": []})[
-            match.group("side")
-        ].append((match.group("kind"), match.group("symbol")))
+        offset = match.group("offset").lower()
+        if offset not in by_offset:
+            by_offset[offset] = {"-": [], "+": []}
+        by_offset[offset][match.group("side")].append(
+            (match.group("kind"), match.group("symbol"))
+        )
 
     relocations: list[NameMagicRelocation] = []
-    for offset, sides in sorted(by_offset.items()):
+    ambiguous_reason: str | None = None
+    hard_blocker: tuple[NameMagicBlocker, str] | None = None
+    retained_ambiguous = 0
+    for offset in sorted(by_offset):
+        sides = by_offset[offset]
         expected = sides["-"]
         current = sides["+"]
         if len(expected) != 1 or len(current) != 1:
-            return NameMagicEvidence(
-                [],
-                len(residual_offsets),
-                NameMagicBlocker.AMBIGUOUS_RELOCATION_PAIR,
-                f"multiple relocation lines at offset {offset}",
+            remaining = max_ambiguous_relocations - retained_ambiguous
+            compatible = _compatible_name_magic_relocations(
+                offset,
+                expected,
+                current,
+                limit=remaining,
             )
+            relocations.extend(compatible)
+            retained_ambiguous += len(compatible)
+            if ambiguous_reason is None:
+                ambiguous_reason = f"multiple relocation lines at offset {offset}"
+            continue
         expected_kind, expected_symbol = expected[0]
         current_kind, current_symbol = current[0]
         if expected_kind != current_kind:
-            return NameMagicEvidence(
-                [],
-                len(residual_offsets),
-                NameMagicBlocker.UNSUPPORTED_RELOC_KIND,
-                f"relocation kind mismatch at offset {offset}",
-            )
-        if (
-            expected_symbol.startswith("@")
-            or expected_symbol.startswith("...")
-            or expected_symbol.startswith(".")
-        ):
-            return NameMagicEvidence(
-                [],
-                len(residual_offsets),
-                NameMagicBlocker.UNSUPPORTED_RELOC_KIND,
-                f"expected relocation at offset {offset} is not a named symbol",
-            )
+            if hard_blocker is None:
+                hard_blocker = (
+                    NameMagicBlocker.UNSUPPORTED_RELOC_KIND,
+                    f"relocation kind mismatch at offset {offset}",
+                )
+            continue
+        if not _is_named_source_symbol(expected_symbol):
+            if hard_blocker is None:
+                hard_blocker = (
+                    NameMagicBlocker.UNSUPPORTED_RELOC_KIND,
+                    f"expected relocation at offset {offset} is not a named symbol",
+                )
+            continue
+        if _is_section_anchor_offset_expression(current_symbol):
+            if hard_blocker is None:
+                hard_blocker = (
+                    NameMagicBlocker.UNSUPPORTED_SECTION_ANCHOR_OFFSET,
+                    (
+                        "section-anchor relocation at offset "
+                        f"{offset} needs an offset field path"
+                    ),
+                )
+            continue
         if not _supported_current_symbol(current_symbol):
             continue
-        if current_symbol.startswith("...data.") and re.search(
-            r"[+-](?:0x)?[0-9a-fA-F]+$", current_symbol
-        ):
-            return NameMagicEvidence(
-                [],
-                len(residual_offsets),
-                NameMagicBlocker.UNSUPPORTED_SECTION_ANCHOR_OFFSET,
-                f"section-anchor relocation at offset {offset} needs an offset field path",
-            )
         relocations.append(
             NameMagicRelocation(
                 offset=offset,
@@ -536,7 +743,24 @@ def parse_name_magic_relocation_evidence(payload: dict[str, Any]) -> NameMagicEv
             )
         )
 
+    if ambiguous_reason is not None:
+        if not relocations:
+            return NameMagicEvidence(
+                [],
+                len(residual_offsets),
+                NameMagicBlocker.AMBIGUOUS_RELOCATION_PAIR,
+                ambiguous_reason,
+            )
+        return NameMagicEvidence(
+            relocations,
+            len(residual_offsets),
+            NameMagicBlocker.AMBIGUOUS_RELOCATION_PAIR,
+            ambiguous_reason,
+        )
     if not relocations:
+        if hard_blocker is not None:
+            blocker, reason = hard_blocker
+            return NameMagicEvidence([], len(residual_offsets), blocker, reason)
         return NameMagicEvidence(
             [],
             len(residual_offsets),
@@ -556,14 +780,16 @@ def generate_name_magic_source_probes(
 ) -> tuple[list[NameMagicSourceProbe], NameMagicBlocker | None]:
     from .source_patch import find_function
 
-    evidence = parse_name_magic_relocation_evidence(checkdiff_payload)
+    evidence = parse_name_magic_relocation_evidence(
+        checkdiff_payload,
+        max_ambiguous_relocations=max_probes,
+    )
     if evidence.blocker is not None:
-        return [], evidence.blocker
-    if any(
-        relocation.current_symbol.startswith("...bss.")
-        for relocation in evidence.relocations
-    ):
-        return [], NameMagicBlocker.BSS_ANCHOR_CEILING
+        if (
+            evidence.blocker != NameMagicBlocker.AMBIGUOUS_RELOCATION_PAIR
+            or not evidence.relocations
+        ):
+            return [], evidence.blocker
     function_span = find_function(source, function)
     if function_span is None:
         return [], NameMagicBlocker.UNSUPPORTED_SOURCE_SITE
@@ -571,12 +797,16 @@ def generate_name_magic_source_probes(
     probes: list[NameMagicSourceProbe] = []
     blockers: list[NameMagicBlocker] = []
     seen_text: set[str] = set()
+    seen_probe_keys: set[tuple[Any, ...]] = set()
     for relocation in evidence.relocations:
         probe = None
+        blocker = None
         if relocation.current_symbol.startswith("...data."):
             probe, blocker = _static_to_global_probe(source, relocation, len(probes))
         elif relocation.current_symbol.startswith("...bss."):
-            blocker = NameMagicBlocker.BSS_ANCHOR_CEILING
+            probe, blocker = _bss_anchor_source_binding_probe(
+                source, relocation, len(probes)
+            )
         elif relocation.current_symbol.startswith("@"):
             probe, blocker = _sdata2_named_float_probe(
                 source,
@@ -594,16 +824,30 @@ def generate_name_magic_source_probes(
             continue
         if probe is None:
             continue
-        if probe.source_text in seen_text:
+        if probe.operator == "bss-anchor-source-binding":
+            probe_key = (
+                probe.operator,
+                probe.provenance["offset"],
+                probe.provenance["kind"],
+                probe.provenance["expected_symbol"],
+                probe.provenance["current_symbol"],
+                probe.provenance["declaration_start"],
+                probe.provenance["declaration_end"],
+            )
+        else:
+            probe_key = ("source", probe.source_text)
+        if probe_key in seen_probe_keys:
             continue
-        seen_text.add(probe.source_text)
+        seen_probe_keys.add(probe_key)
+        if probe.edits:
+            seen_text.add(probe.source_text)
         probes.append(probe)
         if len(probes) >= max_probes:
             break
 
     if not probes:
         return [], blockers[0] if blockers else NameMagicBlocker.UNSUPPORTED_SOURCE_SITE
-    if len(probes) > 1:
+    if len(probes) > 1 and any(probe.edits for probe in probes):
         combined = _combined_probe(source, probes)
         if combined is not None and combined.source_text not in seen_text:
             probes.append(combined)
