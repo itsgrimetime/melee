@@ -1,0 +1,236 @@
+# melee-agent Capabilities (auto-generated — run `melee-agent capabilities generate`)
+
+> Standalone `tools/*.py` scripts and setup paths are documented in [agent-tool-manifest.md](agent-tool-manifest.md), not here.
+
+## CLI commands
+- `melee-agent analytics errors` — Show detailed error breakdown with examples.
+- `melee-agent analytics export` — Export full analytics data to JSON for external analysis.
+- `melee-agent analytics functions` — List individual function attempts with detailed metrics.
+- `melee-agent analytics sessions` — List analyzed decomp sessions with per-session metrics.
+- `melee-agent analytics summary` — Show summary metrics for decomp agent performance.
+- `melee-agent analytics trends` — Show trends of key metrics over time with TUI graphs.
+- `melee-agent attempts list` — List functions with tracked attempts.
+- `melee-agent attempts record` — Record one attempt independent of scratch score history.
+- `melee-agent attempts show` — Show attempt history for one function.
+- `melee-agent audit discover-prs` — Discover functions from GitHub PRs and link them.
+- `melee-agent audit duplicates` — Find duplicate function matches across branches and worktrees.
+- `melee-agent audit net-new` — Classify branch functions as net-new or duplicate against upstream.
+- `melee-agent audit recover-matches` — Surface still-unmatched functions with stranded local `match:` commits.
+- `melee-agent capabilities generate` — Regenerate the capability brief and full inventory doc.
+- `melee-agent capabilities search` — Find existing commands/skills matching a task description.
+- `melee-agent capabilities show` — Show full detail for a group (or everything).
+- `melee-agent commit apply` — Apply a matched function to the melee project.
+- `melee-agent commit check-callers` — Find all callers of a function in the codebase.
+- `melee-agent commit format` — Run clang-format on staged changes.
+- `melee-agent compilers` — List available compilers.
+- `melee-agent debug coalesce-search` — Search source-shape probes by target coalescing/interference objective.
+- `melee-agent debug diff-schedule` — Diff real vs forced scheduler-window decisions.
+- `melee-agent debug dump doctor` — Diagnose local mwcc_debug setup before dump/inspect workflows fail.
+- `melee-agent debug dump local` — Local mwcc_debug pcdump (macOS+wibo+Zig-built DLL, no SSH).
+- `melee-agent debug dump remote` — Dump MWCC's internal IR + codegen for a TU and emit pcdump.txt to stdout.
+- `melee-agent debug dump restore-object-report` — Safely restore one source's object and build report.
+- `melee-agent debug dump setup` — One-time setup for local mwcc_debug pcdump (macOS+wibo).
+- `melee-agent debug inspect analyze` — Summarize a pcdump.txt: per-virtual register live ranges, use counts, interferences, and 'could have been' candidate sets.
+- `melee-agent debug inspect asm` — Show the current compiled assembly for a function.
+- `melee-agent debug inspect diagnose` — Current-tooling diagnosis: is there a quick win we haven't tried?
+- `melee-agent debug inspect diff` — Compare two source or pcdump inputs through the mwcc-debug pipeline.
+- `melee-agent debug inspect explain-schedule` — Explain observed scheduler windows for known force-schedule targets.
+- `melee-agent debug inspect explain-virtual` — Explain virtual-register source/interference attribution.
+- `melee-agent debug inspect first-divergence` — Find the earliest allocator decision diverging from a same-source target.
+- `melee-agent debug inspect frame-reservations` — Inspect stack-frame gaps and implicit reserved ranges.
+- `melee-agent debug inspect guide` — Tier 4: human-readable diagnostic for stuck-function debugging.
+- `melee-agent debug inspect rank-callees` — Predict the callee-save cascade for a function before compiling.
+- `melee-agent debug inspect simulate` — Simulate MWCC's coloring algorithm on a function and diff against actuals.
+- `melee-agent debug inspect stack-homes` — Explain final-only FPR stack-home targets and source-shape leads.
+- `melee-agent debug inspect stuck` — One-shot diagnostic for a stuck function.
+- `melee-agent debug inspect trace-copy` — Trace where a pcode copy appears and why it disappears.
+- `melee-agent debug inspect var-to-virtual` — Bridge: given a source variable name, predict its MWCC virtual.
+- `melee-agent debug inspect virtual-to-ig` — Map a visible pcode virtual register to allocator graph identity.
+- `melee-agent debug inspect virtual-to-var` — Bridge inverse: given a virtual register, predict the source variable name (decl-order heuristic), including the variable's scope path (function-top vs nested-block).
+- `melee-agent debug intervene coalesce` — Run/report a scoped coalesce intervention backed by the mwcc_debug DLL.
+- `melee-agent debug mutate control-flow-shape-search` — Compile and score conservative control-flow shape source probes.
+- `melee-agent debug mutate decl-orders` — Tier 7b: enumerate local-decl orderings, find ones that improve match%.
+- `melee-agent debug mutate frame-transform-search` — Compile and score directed source transforms for frame-size divergence.
+- `melee-agent debug mutate indexed-struct-search` — Compile and score indexed struct pointer dematerialization probes.
+- `melee-agent debug mutate insert-alias` — Insert a fresh local copy of a variable before the N-th reading statement and rewrite that statement to use the alias.
+- `melee-agent debug mutate lifetime-layout` — Explore lifetime/layout source probes and attribute pressure deltas.
+- `melee-agent debug mutate name-magic-source-declarations` — Generate source declarations/references for name-magic relocation mismatches.
+- `melee-agent debug mutate search` — Tier 3: multi-start search over targeted mutation seeds.
+- `melee-agent debug mutate simplify-order` — Search for source variants that produce a desired simplify order.
+- `melee-agent debug mutate type-change` — Change a local variable's declared type.
+- `melee-agent debug permute bootstrap` — Bootstrap a decomp-permuter function dir from the current repo source.
+- `melee-agent debug permute config` — Generate a decomp-permuter settings.toml tuned for the detected pattern.
+- `melee-agent debug permute doctor` — Validate local decomp-permuter paths before run/config/verify.
+- `melee-agent debug permute fix-compile` — Fix decomp-permuter's `compile.sh` for macOS+wine compatibility.
+- `melee-agent debug permute local-orphans` — Detect orphaned local wibo/MWCC compile processes.
+- `melee-agent debug permute remote doctor` — Check whether a remote target is ready to run decomp-permuter.
+- `melee-agent debug permute remote fetch` — Fetch remote permuter outputs into the local permuter directory.
+- `melee-agent debug permute remote list` — List local remote permuter job metadata.
+- `melee-agent debug permute remote status` — Show remote permuter job activity and stale cleanup guidance.
+- `melee-agent debug permute remote stop` — Stop a remote permuter tmux session.
+- `melee-agent debug permute remote submit` — Submit a local decomp-permuter function directory to a remote target.
+- `melee-agent debug permute remote tail` — Print a remote permuter job log snapshot.
+- `melee-agent debug permute remote targets` — List configured remote permuter targets.
+- `melee-agent debug permute remote triage` — Summarize all local remote permuter jobs for convergence triage.
+- `melee-agent debug permute run` — Tier 2: run decomp-permuter with mwcc-debug score blended in.
+- `melee-agent debug permute setup-simplify-order-scorer` — Wire decomp-permuter to save candidates that improve simplify-order.
+- `melee-agent debug permute triage` — Tier 7e: batch-triage decomp-permuter output candidates.
+- `melee-agent debug permute verify` — Tier 7a: apply a permuter candidate to the real source and verify.
+- `melee-agent debug search combine` — Recombine complementary directed-search candidate source hunks.
+- `melee-agent debug search directed` — Run the directed (pcdump-guided) search layer for FUNCTION in UNIT.
+- `melee-agent debug search minimize` — Delta-reduce candidate subhunks while preserving proof assignments.
+- `melee-agent debug search plan-transforms` — Plan source-transform families and instantiate bounded probes.
+- `melee-agent debug search run` — Run a search over source variants for FUNCTION in UNIT.
+- `melee-agent debug search status` — Show status of the search substrate (store, config).
+- `melee-agent debug search structure` — Run structure-search axes and rank candidate variants.
+- `melee-agent debug search triage` — Triage directed-search candidates by source delta and proof movement.
+- `melee-agent debug select-order-search` — Search source-shape probes by target COLORGRAPH select-order objective.
+- `melee-agent debug suggest casts` — Tier 7d: static lint for cast-mismatch and signedness patterns.
+- `melee-agent debug suggest coalesce` — Suggest C-source patterns producing a specific coalesce, or discover candidate coalesces that would shorten the cascade.
+- `melee-agent debug suggest control-flow-shape` — Suggest source-level control-flow shape transforms from ASM diff JSON.
+- `melee-agent debug suggest frame` — Suggest source/probe levers for stack-frame/local-area residuals.
+- `melee-agent debug suggest inlines` — Suggest hidden inline/helper/source-shape candidates.
+- `melee-agent debug suggest register-tiebreak` — Suggest source levers for compiler-temp register tiebreaks.
+- `melee-agent debug suggest schedule` — Suggest C source reshapes for a divergent scheduler decision.
+- `melee-agent debug suggest signatures` — Suggest source levers for checkdiff call-prep signature mismatches.
+- `melee-agent debug target derive` — Tier 4: extract the current virtual→physical mapping as a target spec.
+- `melee-agent debug target dtk-objdump` — Emit GNU objdump-shaped PPC disassembly using the project dtk binary.
+- `melee-agent debug target force-phys-from-diff` — Derive --force-phys targets from a register-only checkdiff.
+- `melee-agent debug target match-iter-first` — Recommend --force-iter-first arguments by reading the expected .s.
+- `melee-agent debug target reanchor` — Express a saved TargetSpec in a new compile's ig-numbering (Unit 3).
+- `melee-agent debug target score-dump` — Tier 4: score a pcdump's coloring decisions against a target spec.
+- `melee-agent debug target score-force-phys` — Permuter scorer: lex-encoded force-phys assignment hits.
+- `melee-agent debug target score-simplify-order` — Permuter scorer: lex-encoded simplify-order + precolor distance.
+- `melee-agent debug target score-source` — Compile a source via debug dump local, then score against a target.
+- `melee-agent debug util name-magic` — Rename anonymous @N symbols in a .o's .sdata2 to user-supplied names.
+- `melee-agent debug util patterns` — Tier 7c: dump the catalog of recurring MWCC mutation patterns.
+- `melee-agent debug util verify-name-magic` — Compile, optionally rename anonymous SDA2 constants, then checkdiff.
+- `melee-agent docker down` — Stop local decomp.me instance.
+- `melee-agent docker status` — Check status of local decomp.me instance.
+- `melee-agent docker up` — Start local decomp.me instance.
+- `melee-agent extract files` — List all source files with matching statistics.
+- `melee-agent extract get` — Extract a specific function's ASM and context.
+- `melee-agent extract list` — List unmatched functions from the melee project.
+- `melee-agent ghidra cache-build` — Build the SQLite cache from the Ghidra project (one-time, ~minutes).
+- `melee-agent ghidra decompile` — Decompile a function using Ghidra's decompiler.
+- `melee-agent ghidra func` — Get function metadata from the cache (name, size, callers/callees count).
+- `melee-agent ghidra setup` — Guide one-time Ghidra project creation (manual GUI import).
+- `melee-agent ghidra status` — Check Ghidra installation, project, and DOL availability.
+- `melee-agent ghidra strings` — Find string references in a function, or search all strings by pattern.
+- `melee-agent ghidra xrefs` — Find callers (--dir to) or callees (--dir from) via the cache.
+- `melee-agent harvest` — Run a registered harvest harness across a taxonomy work bucket.
+- `melee-agent hook install` — Install git pre-commit hooks for validation.
+- `melee-agent hook uninstall` — Remove git pre-commit hooks installed by melee-agent.
+- `melee-agent hook validate` — Validate staged changes against project guidelines.
+- `melee-agent issue campaign-report` — Report tooling-campaign ROI, generality, and remaining gaps.
+- `melee-agent issue list` — List reported tooling issues.
+- `melee-agent issue note` — Append context to an open tooling issue without resolving it.
+- `melee-agent issue report` — Report a tooling issue, feature request, papercut, or blocker.
+- `melee-agent issue resolve` — Mark a reported tooling issue as resolved.
+- `melee-agent issue show` — Show one reported tooling issue.
+- `melee-agent layout audit` — Report data-layout discrepancies for a TU's .c file.
+- `melee-agent mismatch backfill claim-task` — Claim a pending task for analysis.
+- `melee-agent mismatch backfill complete-task` — Complete a task with analysis results from a JSON file.
+- `melee-agent mismatch backfill create-job` — Create a new backfill job.
+- `melee-agent mismatch backfill get-task` — Get details for a specific task.
+- `melee-agent mismatch backfill job-status` — Show detailed status for a backfill job.
+- `melee-agent mismatch backfill list-jobs` — List all backfill jobs.
+- `melee-agent mismatch backfill list-tasks` — List tasks for a backfill job.
+- `melee-agent mismatch get` — Get details for a specific pattern.
+- `melee-agent mismatch init` — Initialize the database with schema and sample patterns.
+- `melee-agent mismatch list` — List all patterns.
+- `melee-agent mismatch m2c` — Find patterns related to an m2c artifact (e.g., M2C_STRUCT_COPY).
+- `melee-agent mismatch migrate` — Migrate patterns from a markdown file.
+- `melee-agent mismatch opcode` — Find patterns by opcode mismatch (expected vs actual).
+- `melee-agent mismatch record-success` — Record that a pattern helped match a function.
+- `melee-agent mismatch review approve` — Approve a candidate as a new pattern.
+- `melee-agent mismatch review list` — List pending candidate patterns.
+- `melee-agent mismatch review merge` — Merge a candidate into an existing pattern.
+- `melee-agent mismatch review reject` — Reject a candidate pattern.
+- `melee-agent mismatch review show` — Show details for a candidate pattern.
+- `melee-agent mismatch search` — Full-text search across patterns.
+- `melee-agent mismatch show` — Alias for `get`; show details for a specific pattern.
+- `melee-agent mismatch stats` — Show database statistics.
+- `melee-agent opseq` — Alias for tools/table-typer opseq opcode-sequence search.
+- `melee-agent patterns anti-pattern` — Check if code uses known anti-patterns and suggest fixes.
+- `melee-agent patterns anti-patterns` — Check if code uses known anti-patterns and suggest fixes.
+- `melee-agent patterns api` — Show how APIs are commonly used in matched code.
+- `melee-agent patterns check` — Check a source file for common anti-patterns and suggest simplifications.
+- `melee-agent patterns inlines` — Find patterns that could be extracted into inline functions.
+- `melee-agent patterns similar` — Find matched functions with similar structure to a target function.
+- `melee-agent patterns wrapper` — Find wrapper functions for common field access patterns.
+- `melee-agent patterns wrappers` — Find wrapper functions for common field access patterns.
+- `melee-agent pr check` — Check PR status and validate description.
+- `melee-agent pr describe` — Generate PR description showing matched functions.
+- `melee-agent pr feedback` — Get comprehensive feedback on a PR including reviews, checks, and decomp.dev report.
+- `melee-agent pr link` — Link functions to a GitHub PR.
+- `melee-agent pr link-batch` — Link all functions in a category to a PR.
+- `melee-agent pr list` — List functions by PR association.
+- `melee-agent pr status` — Show PR status summary for all tracked functions.
+- `melee-agent pr unlink` — Remove PR association from functions.
+- `melee-agent scratch compile` — Compile a scratch and show the diff.
+- `melee-agent scratch create` — Create a new scratch for a function on decomp.me.
+- `melee-agent scratch decompile` — Get m2c automatic decompilation for a scratch.
+- `melee-agent scratch get` — Get full scratch information.
+- `melee-agent scratch recover-best` — Recover the best retained high-water source snapshot for a function.
+- `melee-agent scratch search` — Search for scratches on decomp.me.
+- `melee-agent scratch search-context` — Search through a scratch's context for patterns.
+- `melee-agent scratch sync-from-repo` — Update a scratch's source code from the repo.
+- `melee-agent scratch update` — Update a scratch's source code from a file.
+- `melee-agent scratch update-context` — Update a scratch's context from the repo.
+- `melee-agent setup dol` — Register the base DOL file for builds.
+- `melee-agent setup status` — Show current setup status.
+- `melee-agent state agents` — Show active agents and their work.
+- `melee-agent state cleanup` — Identify and clean up orphaned tracking entries.
+- `melee-agent state diff-remotes` — Show functions that differ between origin and upstream.
+- `melee-agent state export` — Export database state to JSON for backup/debugging.
+- `melee-agent state history` — Show audit history for a function.
+- `melee-agent state populate-addresses` — Populate canonical_address for existing functions.
+- `melee-agent state prs` — Show all PRs and their associated functions.
+- `melee-agent state rebuild` — Rebuild database from underlying sources.
+- `melee-agent state refresh-prs` — Refresh PR states from GitHub.
+- `melee-agent state stale` — Show data that may be stale and needs verification.
+- `melee-agent state status` — Show current state of tracked work.
+- `melee-agent state sync-report` — Sync function match percentages from report.json.
+- `melee-agent state urls` — Show all URLs for a function (local scratch, production scratch, PR).
+- `melee-agent state validate` — Validate database state for consistency and correctness (bidirectional).
+- `melee-agent struct callback` — Look up callback function signatures.
+- `melee-agent struct issues` — Show known type issues in struct definitions.
+- `melee-agent struct offset` — Look up what field is at a specific offset.
+- `melee-agent struct show` — Show struct layout with field offsets.
+- `melee-agent struct verify` — Detect wrong struct-field offsets by comparing per-function displacements.
+- `melee-agent stub add` — Add a stub marker for a function in the correct source file.
+- `melee-agent stub check` — Check if a function needs a stub marker.
+- `melee-agent stub list` — List stub markers in source files.
+- `melee-agent sync auth` — Configure authentication for production decomp.me.
+- `melee-agent sync clear` — Clear cached production cookies.
+- `melee-agent sync dedup` — De-duplicate scratches - pick best scratch when multiple exist for same function.
+- `melee-agent sync fetch` — Fetch a scratch from production decomp.me.
+- `melee-agent sync find-duplicates` — Find functions with multiple scratches on the server.
+- `melee-agent sync fix-ownership` — Fix ownership of synced scratches that have no owner.
+- `melee-agent sync list` — List functions that can be synced to production.
+- `melee-agent sync production` — Sync completed functions from local instance to production decomp.me.
+- `melee-agent sync slugs` — Show the local->production slug mapping.
+- `melee-agent sync status` — Check cf_clearance cookie status and test connection to production.
+- `melee-agent sync validate` — Validate scratches before syncing to production.
+
+## Skills
+- `/backfill-analysis` — Analyze matched functions to discover mismatch patterns. Use when backfilling the mismatch-db from git history.
+- `/collect-for-pr` — Collect pending worktree commits into a PR for review. Use this skill when subdirectory worktrees have accumulated 4-7+ commits that should be batched together and submitted for review. Invoked with /collect-for-pr or automatically when monitoring worktree status.
+- `/decomp` — Use when decompiling or matching Super Smash Bros. Melee functions in this repo, especially when iterating on C source against assembly diffs.
+- `/decomp-fixup` — Fix build issues for matched functions in the Melee decompilation project. Use this skill when builds are failing due to header mismatches, signature issues, or caller updates needed after a function has been matched. Invoked with /decomp-fixup [function_name] or automatically when diagnosing build failures.
+- `/decomp-remote` — Match decompiled C code using the remote decomp.me server workflow. Use this skill when you want to iterate on a scratch using the remote server. For most tasks, prefer /decomp which uses the faster local workflow.
+- `/discord-knowledge` — Search Discord knowledge base for decompilation patterns, compiler tricks, and historical context. Use when stuck on matching or need background on a technique.
+- `/first-pass-decomp` — Generate initial C code from assembly using local m2c. Use this skill to get first-pass decompilations for unmatched functions before manual refinement.
+- `/ghidra` — Use cached Ghidra-derived xrefs and string lookups (fast SQLite queries) for cross-reference discovery and string-based naming. Also offers live Ghidra decompile as a heavy fallback. Use when finding callers across the whole binary or naming functions from debug strings.
+- `/item-decomp` — Conventions and domain knowledge for item-related code in Melee. Use when decompiling item functions (it_* prefix).
+- `/melee-debug` — [EXPERIMENTAL] Debug Melee in Dolphin emulator. Breakpoints are unreliable with JIT mode. Use for memory inspection only until stability improves.
+- `/mismatch-db` — Knowledge base for common assembly mismatches. Use to interpret diffs when matching functions.
+- `/mwcc-debug` — Dump MWCC's internal codegen passes (BEFORE/AFTER REGISTER COLORING, instruction scheduling, etc.) for a Melee TU. Runs locally on macOS (via wibo+Zig-built DLL) by default, or on a remote Windows host as a fallback. Use when stuck on register-allocation cascades or other last-mile matching issues; complement to mwcc-inspect (which shows front-end IR / ENodes / ObjObjects).
+- `/mwcc-inspect` — Inspect MWCC's internal IR (ENodes, ObjObjects, Statements) for a Melee TU by running RootCubed/mwcc-inspector on a remote Windows host. Use when stuck on register-allocation cascades or other last-mile matching issues that mismatch-db, opseq, ghidra, and discord-knowledge haven't explained — this is the next tool to reach for, not the first.
+- `/opseq` — Find functions by opcode sequence patterns. Use when stuck on a function and want to find similar already-decompiled code for reference.
+- `/ppc-ref` — Look up PowerPC instruction set documentation. Use when you need to understand what a specific instruction does, its operands, or behavior.
+- `/prepare-pr` — Use this skill when the user wants to prepare decomp work for an upstream PR.
+- `/sync-upstream` — Use this skill when the user wants to sync their fork with the upstream doldecomp/melee repository.
+- `/understand` — Document and name functions, structs, and fields in Melee decompilation. Use for improving readability, discovering function purposes, and naming unknown fields. Invoked with /understand <target> where target is a function, file, or struct name.
+- `/workflow` — Use this skill to manage git branches and prepare changes for upstream PRs.
