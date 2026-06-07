@@ -370,6 +370,11 @@ def _unit_owns_its_lines(unit: MoveUnit, source_bytes: bytes) -> bool:
 
 
 def apply_move(source: str, sibs: list[SiblingStmt], unit: MoveUnit, dest: int) -> str:
+    """Relocate `unit` (its full physical lines) to before sibling `dest`, returning
+    the new source. PRECONDITION: the caller must have verified
+    `_unit_owns_its_lines(unit, source.encode("utf-8"))` — apply_move performs a raw
+    full-line splice and will corrupt lines it does not own. `dest` uses the slot
+    semantics of `legal_destinations` (identity window `lo..hi+1` returns source unchanged)."""
     lo, hi = unit.index_range
     if lo <= dest <= hi + 1:
         return source                # identity window
@@ -389,3 +394,51 @@ def apply_move(source: str, sibs: list[SiblingStmt], unit: MoveUnit, dest: int) 
         ins_anchor -= (mv_end - mv_start)        # downward move: account for removal
     out = removed[:ins_anchor] + block + removed[ins_anchor:]
     return out.decode("utf-8")
+
+
+def generate_statement_hoist_sink_variants(
+    source: str, function: str, max_candidates: int = 12, strategy: str = "targeted",
+) -> list[dict[str, Any]]:
+    """Return candidate dicts {operator, candidate_source, byte_range, metadata}.
+    Does NOT write files (the host add_variant closure persists them). [] on
+    ast-unavailable."""
+    sibs = toplevel_siblings(source, function)
+    if sibs is None:
+        return []
+    source_bytes = source.encode("utf-8")
+    locs = local_names(source, function)
+    escaped = escaped_locals(source, function)
+    out: list[dict[str, Any]] = []
+    seen = {source}
+    for unit in extract_movable_units(sibs, locs):
+        if not _unit_owns_its_lines(unit, source_bytes):
+            continue
+        legal = legal_destinations(sibs, unit, escaped, locs)
+        for dest in select_positions(sibs, unit, legal, strategy, locs):
+            # hoist-sink owns NON-adjacent relocations. A singleton crossing exactly one
+            # sibling is a plain adjacent swap, already produced by the adjacent-swap
+            # operator — skip it so that operator keeps its labeled candidate. Clusters
+            # are exempt (a multi-statement cluster move is never an adjacent swap).
+            lo, hi = unit.index_range
+            crossed = (dest - hi - 1) if dest > hi + 1 else (lo - dest)
+            if not unit.is_cluster and crossed == 1:
+                continue
+            if len(out) >= max_candidates:
+                return out
+            candidate = apply_move(source, sibs, unit, dest)
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            out.append({
+                "operator": "statement-order-hoist-sink",
+                "candidate_source": candidate,
+                "byte_range": unit.byte_range,
+                "metadata": {
+                    "base": unit.write_base,
+                    "dest": dest,
+                    "direction": "sink" if dest > unit.index_range[1] else "hoist",
+                    "is_cluster": unit.is_cluster,
+                    "escape_sensitive": bool((set(unit.reads) | set(unit.writes)) & escaped),
+                },
+            })
+    return out

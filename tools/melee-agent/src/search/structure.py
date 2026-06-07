@@ -897,6 +897,18 @@ def generate_statement_order_variants(
             )
         )
 
+    from .statement_move import generate_statement_hoist_sink_variants
+    for cand in generate_statement_hoist_sink_variants(
+        source, function, max_candidates=max_candidates):
+        br = cand["byte_range"]
+        add_variant(
+            operator=cand["operator"],
+            start=br[0],
+            end=br[1],
+            candidate_source=cand["candidate_source"],
+            metadata=cand["metadata"],
+        )
+
     _generate_split_shift_or_statement_variants(
         source,
         function_span,

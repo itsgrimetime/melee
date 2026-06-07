@@ -299,3 +299,30 @@ def test_unit_owns_its_lines_allows_trailing_comment():
     sb = src.encode("utf-8")
     a_unit = next(u for u in extract_movable_units(sibs, locs) if u.write_base == "a")
     assert _unit_owns_its_lines(a_unit, sb)   # trailing comment masks to whitespace -> allowed
+
+
+from src.search.statement_move import generate_statement_hoist_sink_variants
+
+def test_operator_emits_distinct_candidates_with_metadata():
+    if toplevel_siblings(POS_SRC, "f") is None:
+        import pytest; pytest.skip("tree-sitter unavailable")
+    variants = generate_statement_hoist_sink_variants(POS_SRC, "f", max_candidates=12)
+    assert variants, "expected at least one hoist-sink candidate"
+    seen = set()
+    for v in variants:
+        assert v["operator"] == "statement-order-hoist-sink"
+        assert v["candidate_source"] != POS_SRC
+        assert v["candidate_source"] not in seen
+        seen.add(v["candidate_source"])
+        assert set(v["metadata"]) >= {"base", "dest", "direction", "is_cluster",
+                                      "escape_sensitive"}
+        assert len(v["byte_range"]) == 2
+
+def test_operator_skips_units_not_owning_their_lines():
+    src = "void f(int idx){\n    int a; int b;\n    a = idx; b = idx;\n}\n"
+    if toplevel_siblings(src, "f") is None:
+        import pytest; pytest.skip("tree-sitter unavailable")
+    variants = generate_statement_hoist_sink_variants(src, "f", max_candidates=12)
+    # shared-line statements must never be emitted as line moves
+    assert all("a = idx; b = idx;" not in v["candidate_source"] or
+               v["candidate_source"] == src for v in variants)
