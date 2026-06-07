@@ -26,6 +26,7 @@ DEFAULT_STRUCTURE_AXES = (
 OPTIONAL_STRUCTURE_AXES = (
     "source-lifetime",
     "inline-boundary",
+    "loop-shape-expanded",
 )
 SUPPORTED_STRUCTURE_AXES = (
     *DEFAULT_STRUCTURE_AXES,
@@ -441,6 +442,25 @@ def run_structure_search(
                     baseline_percent=baseline_percent,
                     max_candidates=max_candidates,
                     baseline_classification=baseline_classification,
+                )
+            axis_summaries.append(summary)
+            variants.extend(axis_variants)
+            continue
+
+        if axis == "loop-shape-expanded":
+            if source is None:
+                summary, axis_variants = _blocked_axis(
+                    axis,
+                    "source-unavailable",
+                    source_read_error or "source file was not provided",
+                )
+            else:
+                summary, axis_variants = generate_loop_shape_expanded_variants(
+                    source,
+                    function,
+                    output_path / "loop-shape-expanded",
+                    baseline_percent=baseline_percent,
+                    max_candidates=max_candidates,
                 )
             axis_summaries.append(summary)
             variants.extend(axis_variants)
@@ -968,6 +988,1293 @@ def generate_inline_boundary_variants(
         ),
         variants,
     )
+
+
+@dataclass(frozen=True)
+class _LoopShapeScan:
+    source_kind: str
+    list_kind: str
+    predicate: str
+    expr: str
+    expr_start: int
+    expr_end: int
+    source_expr: str
+    source_ref_start: int
+    source_ref_end: int
+    index_expr: str
+    scan_start: int
+    scan_end: int
+    cursor_var: str | None
+    anchor_start: int
+    anchor_end: int
+    clean: bool
+
+
+_LOOP_SHAPE_PREDICATE_RETURNS = {
+    "GetNameText": "char*",
+    "mn_IsFighterUnlocked": "int",
+}
+_LOOP_SHAPE_SOURCE_LISTS = {
+    "assets->sorted_names": "names",
+    "assets->sorted_fighters": "fighters",
+    "mnDiagram_804A0750.sorted_names": "names",
+    "mnDiagram_804A0750.sorted_fighters": "fighters",
+}
+
+
+def generate_loop_shape_expanded_variants(
+    source: str,
+    function: str,
+    output_dir: Path,
+    *,
+    baseline_percent: float | None,
+    max_candidates: int = 12,
+) -> tuple[AxisSummary, list[StructureVariant]]:
+    function_span = find_function(source, function)
+    if function_span is None:
+        return _blocked_axis(
+            "loop-shape-expanded",
+            "source-unavailable",
+            "function was not found in source",
+        )
+
+    body_text = source[function_span.body_open + 1:function_span.body_close]
+    if re.search(r"(?m)^\s*#", body_text):
+        return _blocked_axis(
+            "loop-shape-expanded",
+            "unsafe-loop-shape-preprocessor",
+            "preprocessor directives inside the function make loop spans unsafe",
+        )
+
+    max_candidates = max(0, int(max_candidates))
+    scans = _loop_shape_find_scans(source, function_span)
+    if not scans:
+        return _blocked_axis(
+            "loop-shape-expanded",
+            "no-loop-shape-expanded-candidates",
+            "no supported MN sorted-list visible-entry scan matched",
+        )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    command = (
+        f"melee-agent debug search structure -f {function} "
+        f"--axis loop-shape-expanded --max-candidates {max_candidates}"
+    )
+    variants: list[StructureVariant] = []
+    seen_sources: set[str] = {source}
+    family_counts: dict[str, int] = {}
+    pending: list[list[tuple[str, str, str, dict[str, Any], int, int]]] = []
+    for scan_index, scan in enumerate(scans):
+        pending.append(
+            _loop_shape_candidate_sources(
+                source,
+                function_span,
+                scan,
+                scan_index,
+            )
+        )
+
+    for candidate in _interleave_loop_shape_candidates(pending):
+        if len(variants) >= max_candidates:
+            break
+        operator, label, candidate_source, metadata, start, end = candidate
+        if candidate_source in seen_sources:
+            continue
+        seen_sources.add(candidate_source)
+        family_counts[operator] = family_counts.get(operator, 0) + 1
+        path = output_dir / f"{_safe_candidate_label(label)}.c"
+        path.write_text(candidate_source, encoding="utf-8")
+        variants.append(
+            StructureVariant(
+                axis="loop-shape-expanded",
+                operator=operator,
+                label=label,
+                status="candidate",
+                baseline_percent=baseline_percent,
+                path=str(path),
+                source_retained=str(path),
+                command=command,
+                metadata={
+                    **metadata,
+                    "touched_lines": _line_span(source, start, end),
+                    "source_diff": _source_diff(source, candidate_source, label),
+                    "live_mutation": False,
+                },
+            )
+        )
+
+    metadata = {
+        "scan_count": len(scans),
+        "families": family_counts,
+    }
+    if not variants:
+        return (
+            AxisSummary(
+                axis="loop-shape-expanded",
+                status="blocked",
+                blocker="no-loop-shape-expanded-candidates",
+                reason="loop-shape scans matched, but all source transforms deduped",
+                metadata=metadata,
+            ),
+            [],
+        )
+    return (
+        AxisSummary(
+            axis="loop-shape-expanded",
+            status="evaluated",
+            candidate_count=len(variants),
+            metadata=metadata,
+        ),
+        variants,
+    )
+
+
+def _loop_shape_find_scans(source: str, function_span) -> list[_LoopShapeScan]:
+    masked_source = _mask_c_comments_and_literals(source)
+    body_start = function_span.body_open + 1
+    body_end = function_span.body_close
+    body = masked_source[body_start:body_end]
+    aliases = _loop_shape_aliases(source, masked_source, function_span)
+    scans: list[_LoopShapeScan] = []
+    seen: set[tuple[str, int, int]] = set()
+
+    predicate_re = re.compile(r"\b(GetNameText|mn_IsFighterUnlocked)\s*\(")
+    for match in predicate_re.finditer(body):
+        predicate = match.group(1)
+        call_start = body_start + match.start(1)
+        paren_open = body_start + match.end() - 1
+        paren_close = _find_matching(masked_source, paren_open, "(", ")")
+        if paren_close is None or paren_close > body_end:
+            continue
+        expr_start = paren_open + 1
+        expr_end = paren_close
+        expr = source[expr_start:expr_end].strip()
+        list_kind = "names" if predicate == "GetNameText" else "fighters"
+        scan = _loop_shape_scan_from_predicate(
+            source,
+            masked_source,
+            function_span,
+            aliases,
+            predicate=predicate,
+            list_kind=list_kind,
+            expr=expr,
+            expr_start=expr_start,
+            expr_end=expr_end,
+            call_start=call_start,
+            call_end=paren_close + 1,
+        )
+        if scan is None:
+            continue
+        key = (scan.source_kind, expr_start, expr_end)
+        if key in seen:
+            continue
+        seen.add(key)
+        scans.append(scan)
+        for related in _loop_shape_related_source_scans(
+            source,
+            masked_source,
+            function_span,
+            aliases,
+            scan,
+        ):
+            related_key = (related.source_kind, related.expr_start, related.expr_end)
+            if related_key in seen:
+                continue
+            seen.add(related_key)
+            scans.append(related)
+
+    return _loop_shape_dedupe_scans(scans)
+
+
+def _loop_shape_related_source_scans(
+    source: str,
+    masked_source: str,
+    function_span,
+    aliases: dict[str, str],
+    scan: _LoopShapeScan,
+) -> list[_LoopShapeScan]:
+    search_start = scan.anchor_end
+    search_end = min(function_span.body_close, max(scan.scan_end, scan.anchor_end) + 360)
+    related: list[_LoopShapeScan] = []
+    for source_kind, list_kind, start, end, expr, index_expr, source_expr in (
+        _loop_shape_related_source_refs(
+            source,
+            masked_source,
+            search_start,
+            search_end,
+            aliases,
+        )
+    ):
+        if start == scan.source_ref_start and end == scan.source_ref_end:
+            continue
+        related.append(
+            _LoopShapeScan(
+                source_kind=source_kind,
+                list_kind=list_kind,
+                predicate=(
+                    "GetNameText" if list_kind == "names" else "mn_IsFighterUnlocked"
+                ),
+                expr=expr,
+                expr_start=start,
+                expr_end=end,
+                source_expr=source_expr,
+                source_ref_start=start,
+                source_ref_end=end,
+                index_expr=index_expr,
+                scan_start=scan.scan_start,
+                scan_end=scan.scan_end,
+                cursor_var=None,
+                anchor_start=scan.anchor_start,
+                anchor_end=scan.anchor_end,
+                clean=scan.clean,
+            )
+        )
+    return related
+
+
+def _loop_shape_related_source_refs(
+    source: str,
+    masked_source: str,
+    start: int,
+    end: int,
+    aliases: dict[str, str],
+) -> list[tuple[str, str, int, int, str, str, str]]:
+    refs: list[tuple[str, str, int, int, str, str, str]] = []
+    direct_re = re.compile(
+        r"(?P<expr>(?P<source>(?:assets->|mnDiagram_804A0750\.)"
+        r"sorted_(?:names|fighters))\s*\[\s*(?P<idx>[^\]\n]+?)\s*\])"
+    )
+    for match in direct_re.finditer(masked_source, start, end):
+        source_expr = match.group("source")
+        refs.append(
+            (
+                source_expr,
+                _loop_shape_list_kind_from_source(source_expr),
+                match.start("expr"),
+                match.end("expr"),
+                source[match.start("expr"):match.end("expr")].strip(),
+                match.group("idx").strip(),
+                source_expr,
+            )
+        )
+    for alias, alias_kind in aliases.items():
+        alias_offset_re = re.compile(
+            rf"(?P<expr>\*\s*\(\s*{re.escape(alias)}\s*\+\s*0x1C\s*\+\s*"
+            rf"(?P<idx>[^\)\n]+?)\s*\))"
+        )
+        for match in alias_offset_re.finditer(masked_source, start, end):
+            refs.append(
+                (
+                    "alias-offset-sorted-names",
+                    "names",
+                    match.start("expr"),
+                    match.end("expr"),
+                    source[match.start("expr"):match.end("expr")].strip(),
+                    match.group("idx").strip(),
+                    f"{alias} + 0x1C",
+                )
+            )
+        alias_index_re = re.compile(
+            rf"(?P<expr>{re.escape(alias)}\s*\[\s*(?P<idx>[^\]\n]+?)\s*\])"
+        )
+        for match in alias_index_re.finditer(masked_source, start, end):
+            refs.append(
+                (
+                    f"local-alias-sorted-{alias_kind}",
+                    alias_kind,
+                    match.start("expr"),
+                    match.end("expr"),
+                    source[match.start("expr"):match.end("expr")].strip(),
+                    match.group("idx").strip(),
+                    alias,
+                )
+            )
+    refs.sort(key=lambda row: row[2])
+    return refs
+
+
+def _loop_shape_scan_from_predicate(
+    source: str,
+    masked_source: str,
+    function_span,
+    aliases: dict[str, str],
+    *,
+    predicate: str,
+    list_kind: str,
+    expr: str,
+    expr_start: int,
+    expr_end: int,
+    call_start: int,
+    call_end: int,
+) -> _LoopShapeScan | None:
+    clean = not _loop_shape_is_goto_heavy(source, function_span)
+    direct = _loop_shape_direct_source_ref(expr, list_kind, aliases)
+    if direct is not None:
+        source_kind, source_expr, index_expr = direct
+        statement_span = (
+            _inline_boundary_control_statement_span(
+                masked_source,
+                function_span,
+                call_start,
+                call_end,
+            )
+            or _inline_boundary_expression_statement_span(
+                masked_source,
+                function_span,
+                call_start,
+            )
+        )
+        scan_start, scan_end = statement_span or (
+            _line_start_index(source, expr_start),
+            _include_trailing_newline(
+                source,
+                _inline_boundary_expression_statement_end(
+                    masked_source,
+                    expr_start,
+                    function_span.body_close,
+                )
+                or expr_end,
+                function_span.body_close,
+            ),
+        )
+        return _LoopShapeScan(
+            source_kind=source_kind,
+            list_kind=list_kind,
+            predicate=predicate,
+            expr=expr,
+            expr_start=expr_start,
+            expr_end=expr_end,
+            source_expr=source_expr,
+            source_ref_start=expr_start,
+            source_ref_end=expr_end,
+            index_expr=index_expr,
+            scan_start=scan_start,
+            scan_end=scan_end,
+            cursor_var=None,
+            anchor_start=call_start,
+            anchor_end=call_end,
+            clean=clean,
+        )
+
+    cursor_var = _loop_shape_pointer_cursor_arg(expr)
+    if cursor_var is None:
+        return None
+    context = _loop_shape_pointer_context(
+        source,
+        masked_source,
+        function_span,
+        aliases,
+        list_kind=list_kind,
+        cursor_var=cursor_var,
+        call_start=call_start,
+    )
+    if context is None:
+        return None
+    return _LoopShapeScan(
+        source_kind=context["source_kind"],
+        list_kind=list_kind,
+        predicate=predicate,
+        expr=expr,
+        expr_start=expr_start,
+        expr_end=expr_end,
+        source_expr=context["source_expr"],
+        source_ref_start=context["source_ref_start"],
+        source_ref_end=context["source_ref_end"],
+        index_expr=context["index_expr"],
+        scan_start=context["scan_start"],
+        scan_end=context["scan_end"],
+        cursor_var=cursor_var,
+        anchor_start=call_start,
+        anchor_end=call_end,
+        clean=clean,
+    )
+
+
+def _loop_shape_dedupe_scans(scans: list[_LoopShapeScan]) -> list[_LoopShapeScan]:
+    result: list[_LoopShapeScan] = []
+    seen: set[tuple[str, str, str, str, int, int]] = set()
+    for scan in scans:
+        key = (
+            scan.source_kind,
+            scan.list_kind,
+            scan.predicate,
+            _inline_boundary_compact(scan.expr),
+            scan.source_ref_start,
+            scan.anchor_start,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(scan)
+    return result
+
+
+def _loop_shape_aliases(
+    source: str,
+    masked_source: str,
+    function_span,
+) -> dict[str, str]:
+    body_start = function_span.body_open + 1
+    body_end = function_span.body_close
+    aliases: dict[str, str] = {}
+    pattern = re.compile(
+        rf"(?m)^[ \t]*(?:u8|unsigned\s+char)\s*\*\s*(?P<name>{_C_IDENT})\s*"
+        rf"(?:=\s*(?P<base>mnDiagram_804A0750\.sorted_(?:fighters|names)|"
+        rf"assets->sorted_(?:fighters|names)))?\s*;"
+    )
+    for match in pattern.finditer(masked_source, body_start, body_end):
+        if match.group("base"):
+            aliases[match.group("name")] = _loop_shape_list_kind_from_source(
+                match.group("base")
+            )
+    assign_pattern = re.compile(
+        rf"(?m)^[ \t]*(?P<name>{_C_IDENT})\s*=\s*"
+        rf"(?P<base>mnDiagram_804A0750\.sorted_(?:fighters|names)|"
+        rf"assets->sorted_(?:fighters|names))\s*(?:\+\s*{_C_IDENT})?\s*;"
+    )
+    for match in assign_pattern.finditer(masked_source, body_start, body_end):
+        aliases.setdefault(
+            match.group("name"),
+            _loop_shape_list_kind_from_source(match.group("base")),
+        )
+    return aliases
+
+
+def _loop_shape_list_kind_from_source(source_expr: str) -> str:
+    return "names" if "sorted_names" in source_expr else "fighters"
+
+
+def _loop_shape_direct_source_ref(
+    expr: str,
+    list_kind: str,
+    aliases: dict[str, str],
+) -> tuple[str, str, str] | None:
+    text = _strip_outer_parens_inline(expr.strip())
+    cast_match = re.fullmatch(
+        r"\(\s*(?:s32|u32|int|u8)\s*\)\s*(?P<inner>.+)",
+        text,
+        re.DOTALL,
+    )
+    if cast_match is not None:
+        text = _strip_outer_parens_inline(cast_match.group("inner").strip())
+    list_match = re.fullmatch(
+        r"(?P<source>(?:assets->|mnDiagram_804A0750\.)sorted_(?:names|fighters))"
+        r"\s*\[\s*(?P<idx>.+?)\s*\]",
+        text,
+        re.DOTALL,
+    )
+    if list_match is not None:
+        source_expr = list_match.group("source")
+        if _loop_shape_list_kind_from_source(source_expr) != list_kind:
+            return None
+        return source_expr, source_expr, list_match.group("idx").strip()
+    deref_match = re.fullmatch(
+        r"\*\s*\(\s*(?P<source>(?:assets->|mnDiagram_804A0750\.)"
+        r"sorted_(?:names|fighters))\s*\+\s*(?P<idx>.+?)\s*\)",
+        text,
+        re.DOTALL,
+    )
+    if deref_match is not None:
+        source_expr = deref_match.group("source")
+        if _loop_shape_list_kind_from_source(source_expr) != list_kind:
+            return None
+        return source_expr, source_expr, deref_match.group("idx").strip()
+    for alias, alias_list_kind in aliases.items():
+        alias_index = re.fullmatch(
+            rf"{re.escape(alias)}\s*\[\s*(?P<idx>.+?)\s*\]",
+            text,
+            re.DOTALL,
+        )
+        if alias_index is not None and alias_list_kind == list_kind:
+            return (
+                f"local-alias-sorted-{alias_list_kind}",
+                alias,
+                alias_index.group("idx").strip(),
+            )
+        alias_offset = re.fullmatch(
+            rf"\*\s*\(\s*{re.escape(alias)}\s*\+\s*0x1C\s*\+\s*"
+            rf"(?P<idx>.+?)\s*\)",
+            text,
+            re.DOTALL,
+        )
+        if (
+            alias_offset is not None
+            and alias_list_kind == "fighters"
+            and list_kind == "names"
+        ):
+            return "alias-offset-sorted-names", f"{alias} + 0x1C", alias_offset.group("idx").strip()
+    return None
+
+
+def _loop_shape_pointer_cursor_arg(expr: str) -> str | None:
+    text = _strip_outer_parens_inline(expr.strip())
+    cast_match = re.fullmatch(
+        r"\(\s*(?:s32|u32|int|u8)\s*\)\s*(?P<inner>.+)",
+        text,
+        re.DOTALL,
+    )
+    if cast_match is not None:
+        text = _strip_outer_parens_inline(cast_match.group("inner").strip())
+    match = re.fullmatch(rf"\*\s*(?P<cursor>{_C_IDENT})", text)
+    return None if match is None else match.group("cursor")
+
+
+def _loop_shape_pointer_context(
+    source: str,
+    masked_source: str,
+    function_span,
+    aliases: dict[str, str],
+    *,
+    list_kind: str,
+    cursor_var: str,
+    call_start: int,
+) -> dict[str, Any] | None:
+    window_start = _loop_shape_window_start(source, function_span, call_start)
+    window = masked_source[window_start:call_start]
+    pointer_aliases = _loop_shape_pointer_aliases(window)
+    base_refs = _loop_shape_base_pointer_refs(
+        source,
+        masked_source,
+        window_start,
+        call_start,
+        aliases,
+    )
+    for ref in reversed(base_refs):
+        if ref["list_kind"] != list_kind:
+            continue
+        if not _loop_shape_pointer_reaches_source(
+            cursor_var,
+            ref["pointer"],
+            pointer_aliases,
+            source,
+            window_start,
+            call_start,
+        ):
+            continue
+        pointer_vars = _loop_shape_pointer_chain_vars(
+            cursor_var,
+            ref["pointer"],
+            pointer_aliases,
+        )
+        index_expr = _loop_shape_scan_index_expr(
+            masked_source,
+            ref["source_ref_end"],
+            call_start,
+            pointer_vars,
+            fallback=ref["base_index"],
+        )
+        scan_end = _loop_shape_scan_end(masked_source, function_span, call_start)
+        return {
+            **ref,
+            "index_expr": index_expr,
+            "scan_start": _line_start_index(source, ref["statement_start"]),
+            "scan_end": scan_end,
+        }
+    return None
+
+
+def _loop_shape_window_start(
+    source: str,
+    function_span,
+    call_start: int,
+) -> int:
+    line_start = _line_start_index(source, call_start)
+    start = line_start
+    for _ in range(24):
+        previous = source.rfind("\n", 0, max(function_span.body_open + 1, start - 1))
+        if previous < function_span.body_open:
+            return function_span.body_open + 1
+        start = previous + 1
+    return max(function_span.body_open + 1, start)
+
+
+def _loop_shape_pointer_aliases(window: str) -> dict[str, list[str]]:
+    aliases: dict[str, list[str]] = {}
+    pattern = re.compile(rf"(?m)^[ \t]*(?P<lhs>{_C_IDENT})\s*=\s*(?P<rhs>{_C_IDENT})\s*;")
+    for match in pattern.finditer(window):
+        aliases.setdefault(match.group("lhs"), []).append(match.group("rhs"))
+    return aliases
+
+
+def _loop_shape_base_pointer_refs(
+    source: str,
+    masked_source: str,
+    start: int,
+    end: int,
+    aliases: dict[str, str],
+) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    direct_re = re.compile(
+        rf"(?m)^(?P<indent>[ \t]*)(?P<ptr>{_C_IDENT})\s*=\s*"
+        rf"(?P<ref>&\s*(?P<source>(?:assets->|mnDiagram_804A0750\.)"
+        rf"sorted_(?:names|fighters))\s*\[\s*(?P<idx>[^\]\n]+?)\s*\])\s*;"
+    )
+    for match in direct_re.finditer(masked_source, start, end):
+        source_expr = match.group("source")
+        refs.append(
+            {
+                "pointer": match.group("ptr"),
+                "source_kind": source_expr,
+                "list_kind": _loop_shape_list_kind_from_source(source_expr),
+                "source_expr": source_expr,
+                "base_index": match.group("idx").strip(),
+                "source_ref_start": match.start("ref"),
+                "source_ref_end": match.end("ref"),
+                "statement_start": match.start(),
+            }
+        )
+    alias_re = re.compile(
+        rf"(?m)^(?P<indent>[ \t]*)(?P<ptr>{_C_IDENT})\s*=\s*"
+        rf"(?P<ref>(?P<alias>{_C_IDENT})\s*\+\s*(?P<idx>{_C_IDENT}))\s*;"
+    )
+    alias_offset_re = re.compile(
+        rf"(?m)^(?P<indent>[ \t]*)(?P<ptr>{_C_IDENT})\s*=\s*"
+        rf"(?P<ref>(?P=ptr)\s*\+\s*0x1C)\s*;"
+    )
+    alias_offset_by_ptr: dict[str, tuple[int, int, str]] = {}
+    for match in alias_offset_re.finditer(masked_source, start, end):
+        alias_offset_by_ptr[match.group("ptr")] = (
+            match.start("ref"),
+            match.end("ref"),
+            source[match.start("ref"):match.end("ref")].strip(),
+        )
+    for match in alias_re.finditer(masked_source, start, end):
+        alias = match.group("alias")
+        alias_kind = aliases.get(alias)
+        if alias_kind is None:
+            continue
+        ptr = match.group("ptr")
+        source_kind = f"local-alias-sorted-{alias_kind}"
+        list_kind = alias_kind
+        source_expr = alias
+        ref_start = match.start("ref")
+        ref_end = match.end("ref")
+        if ptr in alias_offset_by_ptr and alias_kind == "fighters":
+            ref_start, ref_end, source_expr = alias_offset_by_ptr[ptr]
+            source_kind = "alias-offset-sorted-names"
+            list_kind = "names"
+            source_expr = f"{alias} + 0x1C"
+        refs.append(
+            {
+                "pointer": ptr,
+                "source_kind": source_kind,
+                "list_kind": list_kind,
+                "source_expr": source_expr,
+                "base_index": match.group("idx").strip(),
+                "source_ref_start": ref_start,
+                "source_ref_end": ref_end,
+                "statement_start": match.start(),
+            }
+        )
+    refs.sort(key=lambda row: row["source_ref_start"])
+    return refs
+
+
+def _loop_shape_pointer_reaches_source(
+    cursor_var: str,
+    source_ptr: str,
+    pointer_aliases: dict[str, list[str]],
+    source: str,
+    start: int,
+    end: int,
+) -> bool:
+    if cursor_var == source_ptr:
+        return True
+    stack = [cursor_var]
+    seen: set[str] = set()
+    while stack:
+        var = stack.pop()
+        if var in seen:
+            continue
+        seen.add(var)
+        for parent in pointer_aliases.get(var, []):
+            if parent == source_ptr:
+                return True
+            stack.append(parent)
+    text = source[start:end]
+    return re.search(
+        rf"(?m)^[ \t]*{re.escape(cursor_var)}\s*=\s*{re.escape(source_ptr)}\s*;",
+        text,
+    ) is not None
+
+
+def _loop_shape_pointer_chain_vars(
+    cursor_var: str,
+    source_ptr: str,
+    pointer_aliases: dict[str, list[str]],
+) -> set[str]:
+    result = {cursor_var, source_ptr}
+    stack = [cursor_var]
+    while stack:
+        var = stack.pop()
+        for parent in pointer_aliases.get(var, []):
+            if parent not in result:
+                result.add(parent)
+                stack.append(parent)
+    return result
+
+
+def _loop_shape_scan_index_expr(
+    masked_source: str,
+    start: int,
+    end: int,
+    pointer_vars: set[str],
+    *,
+    fallback: str,
+) -> str:
+    candidates: list[str] = []
+    pattern = re.compile(rf"(?m)^[ \t]*(?P<name>{_C_IDENT})\s*(?:\+\+|\+=\s*1)\s*;")
+    for match in pattern.finditer(masked_source, start, end):
+        name = match.group("name")
+        if name not in pointer_vars:
+            candidates.append(name)
+    return candidates[-1] if candidates else fallback
+
+
+def _loop_shape_scan_end(masked_source: str, function_span, call_start: int) -> int:
+    statement_span = (
+        _inline_boundary_control_statement_span(
+            masked_source,
+            function_span,
+            call_start,
+            call_start,
+        )
+        or _inline_boundary_expression_statement_span(
+            masked_source,
+            function_span,
+            call_start,
+        )
+    )
+    return statement_span[1] if statement_span is not None else call_start
+
+
+def _loop_shape_is_goto_heavy(source: str, function_span) -> bool:
+    body = source[function_span.body_open + 1:function_span.body_close]
+    return "register " in body or len(re.findall(r"\bgoto\s+", body)) > 6
+
+
+def _loop_shape_candidate_sources(
+    source: str,
+    function_span,
+    scan: _LoopShapeScan,
+    scan_index: int,
+) -> list[tuple[str, str, str, dict[str, Any], int, int]]:
+    candidates: list[tuple[str, str, str, dict[str, Any], int, int]] = []
+    for family, builder in (
+        ("direct-index", _loop_shape_direct_index_candidate),
+        ("predicate-temp", _loop_shape_predicate_temp_candidate),
+        ("inverted-predicate", _loop_shape_inverted_predicate_candidate),
+        ("helper", _loop_shape_helper_candidate),
+        ("base-pointer", _loop_shape_base_pointer_candidate),
+    ):
+        built = builder(source, function_span, scan, scan_index)
+        if built is None:
+            continue
+        operator = f"loop-shape-expanded-{family}"
+        label = f"{operator}-{scan_index}"
+        candidate_source, metadata, start, end = built
+        candidates.append((operator, label, candidate_source, metadata, start, end))
+    return candidates
+
+
+def _loop_shape_metadata(
+    scan: _LoopShapeScan,
+    scan_index: int,
+    family: str,
+) -> dict[str, Any]:
+    return {
+        "family": family,
+        "scan": {
+            "index": scan_index,
+            "source_kind": scan.source_kind,
+            "list_kind": scan.list_kind,
+            "predicate": scan.predicate,
+            "expr": scan.expr,
+            "source_expr": scan.source_expr,
+            "index_expr": scan.index_expr,
+            "clean": scan.clean,
+        },
+    }
+
+
+def _loop_shape_direct_index_candidate(
+    source: str,
+    function_span,
+    scan: _LoopShapeScan,
+    scan_index: int,
+) -> tuple[str, dict[str, Any], int, int] | None:
+    replacement = _loop_shape_direct_index_expr(scan)
+    if replacement is None or replacement == scan.expr:
+        return None
+    replacements = [(scan.expr_start, scan.expr_end, replacement)]
+    replacements.extend(_loop_shape_cursor_statement_removals(source, scan))
+    final_replacement = _loop_shape_final_load_replacement(source, scan)
+    if final_replacement is not None and not _loop_shape_replacement_overlaps(
+        final_replacement,
+        replacements,
+    ):
+        replacements.append(final_replacement)
+    candidate_source = _replace_source_slices(source, replacements)
+    touched_start = min(start for start, _, _ in replacements)
+    touched_end = max(end for _, end, _ in replacements)
+    return (
+        candidate_source,
+        {
+            **_loop_shape_metadata(scan, scan_index, "direct-index"),
+            "replacement": replacement,
+        },
+        touched_start,
+        touched_end,
+    )
+
+
+def _loop_shape_direct_index_expr(scan: _LoopShapeScan) -> str | None:
+    text = scan.expr.strip()
+    cast_match = re.fullmatch(
+        r"(?P<cast>\(\s*(?:s32|u32|int|u8)\s*\)\s*)(?P<inner>.+)",
+        text,
+        re.DOTALL,
+    )
+    cast = ""
+    inner = text
+    if cast_match is not None:
+        cast = cast_match.group("cast")
+        inner = cast_match.group("inner").strip()
+    if re.fullmatch(rf"\*\s*{_C_IDENT}", inner):
+        return f"{cast}{_loop_shape_indexed_expr(scan)}"
+    match = re.fullmatch(rf"\*\s*\(\s*(?P<base>{_C_IDENT})\s*\+\s*(?P<idx>.+)\)", inner)
+    if match is not None:
+        return f"{cast}{_loop_shape_indexed_expr(scan)}"
+    match = re.fullmatch(
+        r"(?P<base>(?:assets->|mnDiagram_804A0750\.)sorted_(?:names|fighters))"
+        r"\s*\[\s*(?P<idx>.+?)\s*\]",
+        inner,
+    )
+    if match is not None:
+        return f"{cast}({match.group('base')})[{match.group('idx').strip()}]"
+    return None
+
+
+def _loop_shape_indexed_expr(scan: _LoopShapeScan) -> str:
+    if scan.source_kind == "alias-offset-sorted-names":
+        return f"*({scan.source_expr} + {scan.index_expr})"
+    return f"{scan.source_expr}[{scan.index_expr}]"
+
+
+def _loop_shape_cursor_statement_removals(
+    source: str,
+    scan: _LoopShapeScan,
+) -> list[tuple[int, int, str]]:
+    if scan.cursor_var is None:
+        return []
+    removals: list[tuple[int, int, str]] = []
+    span_text = source[scan.scan_start:scan.anchor_start]
+    patterns = (
+        rf"(?m)^[ \t]*{re.escape(scan.cursor_var)}\s*=\s*{_C_IDENT}\s*;\s*\n?",
+        rf"(?m)^[ \t]*{re.escape(scan.cursor_var)}\s*\+\+\s*;\s*\n?",
+        rf"(?m)^[ \t]*{re.escape(scan.cursor_var)}\s*\+=\s*1\s*;\s*\n?",
+    )
+    for pattern in patterns:
+        for match in re.finditer(pattern, span_text):
+            removals.append((scan.scan_start + match.start(), scan.scan_start + match.end(), ""))
+    return removals
+
+
+def _loop_shape_final_load_replacement(
+    source: str,
+    scan: _LoopShapeScan,
+) -> tuple[int, int, str] | None:
+    if scan.source_kind == "alias-offset-sorted-names":
+        return None
+    search_end = min(len(source), scan.scan_end + 240)
+    final_re = re.compile(
+        rf"(?m)^(?P<indent>[ \t]*)(?P<lhs>{_C_IDENT})\s*=\s*"
+        rf"{re.escape(scan.source_expr)}\s*\[\s*{re.escape(scan.index_expr)}\s*\]\s*;"
+    )
+    for match in final_re.finditer(source, scan.anchor_end, search_end):
+        start, end = match.start(), match.end()
+        replacement = (
+            f"{match.group('indent')}{match.group('lhs')} = "
+            f"*({scan.source_expr} + {scan.index_expr});"
+        )
+        return start, end, replacement
+    return None
+
+
+def _loop_shape_replacement_overlaps(
+    candidate: tuple[int, int, str],
+    replacements: list[tuple[int, int, str]],
+) -> bool:
+    start, end, _ = candidate
+    return any(start < existing_end and existing_start < end for existing_start, existing_end, _ in replacements)
+
+
+def _loop_shape_base_pointer_candidate(
+    source: str,
+    function_span,
+    scan: _LoopShapeScan,
+    scan_index: int,
+) -> tuple[str, dict[str, Any], int, int] | None:
+    ref_text = source[scan.source_ref_start:scan.source_ref_end].strip()
+    amp_match = re.fullmatch(
+        r"&\s*(?P<base>(?:assets->|mnDiagram_804A0750\.)sorted_(?:names|fighters))"
+        r"\s*\[\s*(?P<idx>.+?)\s*\]",
+        ref_text,
+        re.DOTALL,
+    )
+    if amp_match is not None:
+        replacement = f"{amp_match.group('base')} + {amp_match.group('idx').strip()}"
+        return (
+            source[:scan.source_ref_start] + replacement + source[scan.source_ref_end:],
+            {
+                **_loop_shape_metadata(scan, scan_index, "base-pointer"),
+                "replacement": replacement,
+            },
+            scan.source_ref_start,
+            scan.source_ref_end,
+        )
+    direct_match = re.fullmatch(
+        r"(?P<base>(?:assets->|mnDiagram_804A0750\.)sorted_(?:names|fighters))"
+        r"\s*\[\s*(?P<idx>.+?)\s*\]",
+        ref_text,
+        re.DOTALL,
+    )
+    if direct_match is not None:
+        replacement = f"*({direct_match.group('base')} + {direct_match.group('idx').strip()})"
+        return (
+            source[:scan.source_ref_start] + replacement + source[scan.source_ref_end:],
+            {
+                **_loop_shape_metadata(scan, scan_index, "base-pointer"),
+                "replacement": replacement,
+            },
+            scan.source_ref_start,
+            scan.source_ref_end,
+        )
+    alias_match = re.fullmatch(
+        rf"(?P<alias>{_C_IDENT})\s*\+\s*(?P<idx>{_C_IDENT})",
+        ref_text,
+        re.DOTALL,
+    )
+    if alias_match is not None and "local-alias" in scan.source_kind:
+        replacement = f"&{alias_match.group('alias')}[{alias_match.group('idx')}]"
+        return (
+            source[:scan.source_ref_start] + replacement + source[scan.source_ref_end:],
+            {
+                **_loop_shape_metadata(scan, scan_index, "base-pointer"),
+                "replacement": replacement,
+            },
+            scan.source_ref_start,
+            scan.source_ref_end,
+        )
+    return None
+
+
+def _loop_shape_predicate_temp_candidate(
+    source: str,
+    function_span,
+    scan: _LoopShapeScan,
+    scan_index: int,
+) -> tuple[str, dict[str, Any], int, int] | None:
+    if scan.anchor_start == scan.expr_start:
+        return None
+    masked_source = _mask_c_comments_and_literals(source)
+    statement_span = _inline_boundary_control_statement_span(
+        masked_source,
+        function_span,
+        scan.anchor_start,
+        scan.anchor_end,
+    )
+    if statement_span is None:
+        return None
+    statement_start, statement_end = statement_span
+    if re.search(r"\belse\s+if\s*\(", masked_source[statement_start:scan.anchor_start]):
+        return None
+    temp_name = f"lse_probe_pred_{scan_index}"
+    return_type = _LOOP_SHAPE_PREDICATE_RETURNS[scan.predicate]
+    call_expr = source[scan.anchor_start:scan.anchor_end]
+    statement_text = source[statement_start:statement_end]
+    rewritten = (
+        statement_text[: scan.anchor_start - statement_start]
+        + temp_name
+        + statement_text[scan.anchor_end - statement_start :]
+    )
+    if not rewritten.endswith("\n"):
+        rewritten += "\n"
+    indent = _line_indent_at_index(source, statement_start)
+    replacement = (
+        f"{indent}{{\n"
+        f"{indent}    {return_type} {temp_name} = {call_expr};\n"
+        f"{rewritten}"
+        f"{indent}}}\n"
+    )
+    return (
+        source[:statement_start] + replacement + source[statement_end:],
+        {
+            **_loop_shape_metadata(scan, scan_index, "predicate-temp"),
+            "temp": temp_name,
+            "return_type": return_type,
+            "call_expr": call_expr,
+        },
+        statement_start,
+        statement_end,
+    )
+
+
+def _loop_shape_inverted_predicate_candidate(
+    source: str,
+    function_span,
+    scan: _LoopShapeScan,
+    scan_index: int,
+) -> tuple[str, dict[str, Any], int, int] | None:
+    if scan.anchor_start == scan.expr_start:
+        return None
+    masked_source = _mask_c_comments_and_literals(source)
+    simple_goto = _loop_shape_simple_goto_if(
+        source,
+        masked_source,
+        function_span,
+        scan.anchor_start,
+        scan.anchor_end,
+    )
+    if simple_goto is None:
+        return None
+    if_start, if_end, cond_start, cond_end, goto_statement = simple_goto
+    condition_text = source[cond_start:cond_end].strip()
+    call_expr = source[scan.anchor_start:scan.anchor_end]
+    inverted = _loop_shape_invert_condition(condition_text, call_expr)
+    if inverted is None or inverted == condition_text:
+        return None
+    indent = _line_indent_at_index(source, if_start)
+    replacement = (
+        f"{indent}if ({inverted}) {{\n"
+        f"{indent}}} else {{\n"
+        f"{indent}    {goto_statement}\n"
+        f"{indent}}}"
+    )
+    candidate_source = source[:if_start] + replacement + source[if_end:]
+    return (
+        candidate_source,
+        {
+            **_loop_shape_metadata(scan, scan_index, "inverted-predicate"),
+            "condition": condition_text,
+            "replacement": inverted,
+        },
+        if_start,
+        if_end,
+    )
+
+
+def _loop_shape_simple_goto_if(
+    source: str,
+    masked_source: str,
+    function_span,
+    call_start: int,
+    call_end: int,
+) -> tuple[int, int, int, int, str] | None:
+    body_start = function_span.body_open + 1
+    body_end = function_span.body_close
+    selected: tuple[int, int, int, int, str] | None = None
+    for match in re.finditer(r"\bif\s*\(", masked_source[body_start:body_end]):
+        if_start = body_start + match.start()
+        if if_start > call_start:
+            break
+        paren_open = body_start + match.end() - 1
+        paren_close = _find_matching(masked_source, paren_open, "(", ")")
+        if paren_close is None or paren_close > body_end:
+            continue
+        if paren_open < call_start and call_end <= paren_close:
+            body_open = _skip_whitespace(masked_source, paren_close + 1)
+            if body_open >= body_end or masked_source[body_open] != "{":
+                continue
+            body_close = _find_matching(masked_source, body_open, "{", "}")
+            if body_close is None or body_close > body_end:
+                continue
+            body_text = source[body_open + 1:body_close].strip()
+            goto_match = re.fullmatch(r"goto\s+[A-Za-z_][A-Za-z0-9_]*\s*;", body_text)
+            if goto_match is None:
+                continue
+            selected = (
+                _line_start_index(source, if_start),
+                _include_trailing_newline(source, body_close + 1, body_end),
+                paren_open + 1,
+                paren_close,
+                body_text,
+            )
+    return selected
+
+
+def _loop_shape_invert_condition(condition_text: str, call_expr: str) -> str | None:
+    escaped = re.escape(call_expr)
+    null_eq = re.fullmatch(rf"{escaped}\s*==\s*NULL", condition_text, re.DOTALL)
+    if null_eq is not None:
+        return f"{call_expr} != NULL"
+    null_ne = re.fullmatch(rf"{escaped}\s*!=\s*NULL", condition_text, re.DOTALL)
+    if null_ne is not None:
+        return f"{call_expr} == NULL"
+    zero_eq = re.fullmatch(rf"{escaped}\s*==\s*0", condition_text, re.DOTALL)
+    if zero_eq is not None:
+        return f"{call_expr} != 0"
+    zero_ne = re.fullmatch(rf"{escaped}\s*!=\s*0", condition_text, re.DOTALL)
+    if zero_ne is not None:
+        return f"{call_expr} == 0"
+    return None
+
+
+def _loop_shape_helper_candidate(
+    source: str,
+    function_span,
+    scan: _LoopShapeScan,
+    scan_index: int,
+) -> tuple[str, dict[str, Any], int, int] | None:
+    if not scan.clean:
+        return None
+    result_assignment = _loop_shape_result_assignment(source, scan)
+    if result_assignment is None:
+        return None
+    result_var, result_start, result_end = result_assignment
+    remaining_var = _loop_shape_remaining_var(source, scan)
+    if remaining_var is None:
+        return None
+    base_arg = _loop_shape_helper_base_arg(scan)
+    if base_arg is None:
+        return None
+    base_index = _loop_shape_base_index_expr(source, scan)
+    limit = _loop_shape_limit_literal(source, scan, result_end)
+    helper_name = f"lse_probe_visible_entry_{scan_index}"
+    helper = _loop_shape_visible_entry_helper(
+        helper_name,
+        predicate=scan.predicate,
+    )
+    insert_at = _line_start_index(source, function_span.sig_start)
+    indent = _line_indent_at_index(source, scan.scan_start)
+    replacement = (
+        f"{indent}{result_var} = {helper_name}("
+        f"{base_arg}, {base_index}, {remaining_var}, {limit});\n"
+    )
+    candidate_source = _replace_source_slices(
+        source,
+        [
+            (scan.scan_start, result_end, replacement),
+            (insert_at, insert_at, helper),
+        ],
+    )
+    return (
+        candidate_source,
+        {
+            **_loop_shape_metadata(scan, scan_index, "helper"),
+            "helper": helper_name,
+            "result_var": result_var,
+            "base_arg": base_arg,
+            "base_index": base_index,
+            "remaining_var": remaining_var,
+            "limit": limit,
+        },
+        scan.scan_start,
+        result_end,
+    )
+
+
+def _loop_shape_result_assignment(
+    source: str,
+    scan: _LoopShapeScan,
+) -> tuple[str, int, int] | None:
+    search_end = min(len(source), max(scan.scan_end, scan.anchor_end) + 360)
+    assignment_re = re.compile(
+        rf"(?m)^[ \t]*(?P<lhs>{_C_IDENT})\s*=\s*(?P<rhs>[^;\n]+)\s*;",
+    )
+    for match in assignment_re.finditer(source, scan.anchor_end, search_end):
+        rhs = match.group("rhs")
+        if scan.source_expr in rhs or scan.source_kind in rhs:
+            return match.group("lhs"), match.start(), match.end()
+        if scan.source_kind == "alias-offset-sorted-names" and "0x1C" in rhs:
+            return match.group("lhs"), match.start(), match.end()
+    return None
+
+
+def _loop_shape_remaining_var(source: str, scan: _LoopShapeScan) -> str | None:
+    span = source[scan.scan_start:scan.anchor_start]
+    while_match = re.search(
+        rf"\bwhile\s*\(\s*(?P<name>{_C_IDENT})\s*(?:>|>=)",
+        span,
+    )
+    if while_match is not None:
+        return while_match.group("name")
+    assignments = list(re.finditer(
+        rf"(?m)^[ \t]*(?P<name>{_C_IDENT})\s*=\s*[^;\n]+;",
+        span,
+    ))
+    for match in reversed(assignments):
+        name = match.group("name")
+        if name != scan.index_expr and name != scan.cursor_var:
+            return name
+    return None
+
+
+def _loop_shape_helper_base_arg(scan: _LoopShapeScan) -> str | None:
+    if scan.source_kind == "alias-offset-sorted-names":
+        return scan.source_expr
+    if scan.source_expr:
+        return scan.source_expr
+    return None
+
+
+def _loop_shape_base_index_expr(source: str, scan: _LoopShapeScan) -> str:
+    ref_text = source[scan.source_ref_start:scan.source_ref_end]
+    match = re.search(r"\[\s*(?P<idx>[^\]\n]+?)\s*\]", ref_text)
+    if match is not None:
+        return match.group("idx").strip()
+    match = re.search(r"\+\s*(?P<idx>[A-Za-z_][A-Za-z0-9_]*)\s*$", ref_text.strip())
+    if match is not None:
+        return match.group("idx")
+    return scan.index_expr
+
+
+def _loop_shape_limit_literal(source: str, scan: _LoopShapeScan, end: int) -> str:
+    span = source[scan.scan_start:end]
+    match = re.search(
+        rf"\b{re.escape(scan.index_expr)}\s*>=\s*(?P<limit>0x[0-9A-Fa-f]+|\d+)",
+        span,
+    )
+    if match is not None:
+        return match.group("limit")
+    return "0x78" if scan.list_kind == "names" else "0x19"
+
+
+def _loop_shape_visible_entry_helper(
+    helper_name: str,
+    *,
+    predicate: str,
+) -> str:
+    visible = (
+        "GetNameText(base[idx]) != NULL"
+        if predicate == "GetNameText"
+        else "mn_IsFighterUnlocked(base[idx]) != 0"
+    )
+    return (
+        f"static inline u8 {helper_name}(u8* base, int idx, int remaining, int limit)\n"
+        "{\n"
+        "    while (remaining > 0) {\n"
+        "        idx++;\n"
+        "        if (idx >= limit) {\n"
+        "            return (u8) limit;\n"
+        "        }\n"
+        f"        if ({visible}) {{\n"
+        "            remaining--;\n"
+        "        }\n"
+        "    }\n"
+        "    return base[idx];\n"
+        "}\n"
+        "\n"
+    )
+
+
+def _interleave_loop_shape_candidates(
+    candidates_by_scan: list[list[tuple[str, str, str, dict[str, Any], int, int]]],
+) -> list[tuple[str, str, str, dict[str, Any], int, int]]:
+    result: list[tuple[str, str, str, dict[str, Any], int, int]] = []
+    for scan_candidates in candidates_by_scan:
+        result.extend(scan_candidates)
+    return result
 
 
 def _inline_boundary_artifact_metadata(
@@ -3195,9 +4502,7 @@ def structure_payload(
         "baseline_percent": baseline_percent,
         "axes": [axis.to_dict() for axis in axes],
         "variants": [variant.to_dict() for variant in ranked],
-        "future_axes": [
-            {"axis": "loop-shape-expanded", "status": "not-implemented"},
-        ],
+        "future_axes": [],
         "stop_condition": stop_condition,
     }
 

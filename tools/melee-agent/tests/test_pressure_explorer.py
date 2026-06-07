@@ -2318,6 +2318,63 @@ def test_temp_introduction_uses_lhs_type_for_assignment_temp() -> None:
     assert "int ll_probe_temp_0 = gobj->user_data;" not in probe.source_text
 
 
+def test_temp_introduction_wraps_late_assignment_temp_in_block() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(HSD_JObj* j)
+        {
+            f32 dy;
+
+            HSD_JObjSetFlags(j, 0x10);
+            dy = mnDiagram_804DBFAC - HSD_JObjGetTranslationY(j);
+            sink(dy);
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(
+        source,
+        "fn_80000000",
+        operator_filter=("temp-introduction",),
+        max_probes=20,
+    )
+    probe = next(probe for probe in probes if probe.operator == "temp-introduction")
+
+    assert (
+        "    HSD_JObjSetFlags(j, 0x10);\n"
+        "    {\n"
+        "        f32 ll_probe_temp_0 = "
+        "mnDiagram_804DBFAC - HSD_JObjGetTranslationY(j);\n"
+        "        dy = ll_probe_temp_0;\n"
+        "    }\n"
+    ) in probe.source_text
+    assert (
+        "    HSD_JObjSetFlags(j, 0x10);\n"
+        "    f32 ll_probe_temp_0 = "
+        "mnDiagram_804DBFAC - HSD_JObjGetTranslationY(j);"
+    ) not in probe.source_text
+
+
+def test_call_arg_tempization_ignores_call_in_assignment_continuation() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(HSD_JObj* jobj)
+        {
+            f32 frame;
+
+            frame =
+                mn_8022ED6C(jobj, (AnimLoopSettings*) &settings);
+            sink(frame);
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(
+        source,
+        "fn_80000000",
+        operator_filter=("call-argument-tempization",),
+        max_probes=20,
+    )
+
+    assert [probe.operator for probe in probes] == []
+
+
 def test_call_arg_tempization_rejects_pointer_expr_without_safe_type() -> None:
     source = textwrap.dedent("""\
         void fn_80000000(Data* data, int* idx_ptr)

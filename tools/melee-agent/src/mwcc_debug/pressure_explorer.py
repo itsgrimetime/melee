@@ -3436,10 +3436,18 @@ def _probe_temp_introduction(
     else:
         indent, lhs, expr = match.groups()
         temp_type = scoped_types.get(lhs, "int")
-        replacement = (
-            f"{indent}{temp_type} {temp} = {expr.strip()};\n"
-            f"{indent}{lhs} = {temp};"
-        )
+        if _can_insert_local_declaration_at(body, match.start(), indent):
+            replacement = (
+                f"{indent}{temp_type} {temp} = {expr.strip()};\n"
+                f"{indent}{lhs} = {temp};"
+            )
+        else:
+            replacement = (
+                f"{indent}{{\n"
+                f"{indent}    {temp_type} {temp} = {expr.strip()};\n"
+                f"{indent}    {lhs} = {temp};\n"
+                f"{indent}}}"
+            )
     return LifetimeLayoutProbe(
         label="temp-introduction-0",
         operator="temp-introduction",
@@ -3448,6 +3456,24 @@ def _probe_temp_introduction(
             source, body_start, match.start(), match.end(), replacement
         ),
     )
+
+
+def _can_insert_local_declaration_at(body: str, start: int, indent: str) -> bool:
+    for line in reversed(body[:start].splitlines()):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(("/*", "*", "//")):
+            continue
+        line_indent = line[: len(line) - len(line.lstrip(" \t"))]
+        if len(line_indent) < len(indent):
+            return stripped.endswith("{")
+        if not line.startswith(indent):
+            continue
+        if _LOCAL_DECL_RE.match(line):
+            continue
+        return False
+    return True
 
 
 def _has_later_decl_before_statement(body: str, start: int, indent: str) -> bool:
@@ -3771,6 +3797,8 @@ def _probe_call_arg_temp(
         body,
     ):
         indent, call, args_text = match.groups()
+        if not _is_standalone_call_statement_match(body, match.start()):
+            continue
         if not _balanced_expression_delimiters(args_text):
             continue
         args = list(_split_top_level_args(args_text))
@@ -3803,6 +3831,15 @@ def _probe_call_arg_temp(
                 },
             )
     return None
+
+
+def _is_standalone_call_statement_match(body: str, start: int) -> bool:
+    cursor = start - 1
+    while cursor >= 0 and body[cursor].isspace():
+        cursor -= 1
+    if cursor < 0:
+        return True
+    return body[cursor] in "{;}"
 
 
 def scan_frame_local_dematerialization_probes(

@@ -10,6 +10,7 @@ from src.search.structure import (
     StructureVariant,
     generate_case_order_variants,
     generate_inline_boundary_variants,
+    generate_loop_shape_expanded_variants,
     generate_statement_order_variants,
     normalize_control_flow_payload,
     normalize_decl_order_payload,
@@ -354,9 +355,7 @@ def test_structure_payload_reports_future_axes_and_stop_condition() -> None:
 
     assert payload["stop_condition"]["kind"] == "no-improvement"
     assert payload["axes"][0]["blocker"] == "no-case-order-probes"
-    assert {row["axis"] for row in payload["future_axes"]} == {
-        "loop-shape-expanded",
-    }
+    assert payload["future_axes"] == []
     json.dumps(payload)
 
     exact_payload = structure_payload(
@@ -1208,6 +1207,564 @@ def test_run_structure_search_supports_inline_boundary_axis(
     assert payload["axes"][0]["status"] == "evaluated"
     assert payload["variants"][0]["axis"] == "inline-boundary"
     assert "inline-boundary" not in {row["axis"] for row in payload["future_axes"]}
+
+
+def _loop_shape_source(body: str) -> str:
+    return (
+        "void fn_80000000(int arg1, int arg2, mnDiagram_Assets* assets)\n"
+        "{\n"
+        f"{body}"
+        "}\n"
+    )
+
+
+def test_loop_shape_expanded_generates_clean_name_scan_families(
+    tmp_path: Path,
+) -> None:
+    source = _loop_shape_source(
+        "    int i;\n"
+        "    s32 idx;\n"
+        "    s32 remaining;\n"
+        "    u8 name_id;\n"
+        "    u8* p;\n"
+        "    u8* p2;\n"
+        "    for (i = 0; i < 7; i++) {\n"
+        "        idx = arg2;\n"
+        "        remaining = i;\n"
+        "        p = &assets->sorted_names[arg2];\n"
+        "        while (remaining > 0) {\n"
+        "            p2 = p;\n"
+        "        col_inner:\n"
+        "            idx++;\n"
+        "            p2++;\n"
+        "            p++;\n"
+        "            if (idx >= 0x78) {\n"
+        "                name_id = 0x78;\n"
+        "                goto col_found;\n"
+        "            }\n"
+        "            if (GetNameText(*p2) == NULL) {\n"
+        "                goto col_inner;\n"
+        "            }\n"
+        "            remaining--;\n"
+        "        }\n"
+        "        name_id = assets->sorted_names[idx];\n"
+        "    col_found:\n"
+        "        sink(GetNameText(name_id));\n"
+        "    }\n"
+    )
+
+    axis, variants = generate_loop_shape_expanded_variants(
+        source,
+        "fn_80000000",
+        tmp_path,
+        baseline_percent=None,
+        max_candidates=12,
+    )
+
+    assert axis.status == "evaluated"
+    operators = {variant.operator for variant in variants}
+    assert operators >= {
+        "loop-shape-expanded-direct-index",
+        "loop-shape-expanded-base-pointer",
+        "loop-shape-expanded-predicate-temp",
+        "loop-shape-expanded-inverted-predicate",
+        "loop-shape-expanded-helper",
+    }
+    assert all(variant.metadata["live_mutation"] is False for variant in variants)
+    assert all(Path(variant.source_retained or "").exists() for variant in variants)
+    text = "\n".join(Path(variant.source_retained or "").read_text() for variant in variants)
+    assert "assets->sorted_names" in text
+    assert "GetNameText" in text
+    helper = next(
+        variant
+        for variant in variants
+        if variant.operator == "loop-shape-expanded-helper"
+    )
+    helper_text = Path(helper.source_retained or "").read_text()
+    assert "static inline u8 lse_probe_visible_entry_0(" in helper_text
+    assert "name_id = lse_probe_visible_entry_0(" in helper_text
+    assert "GetNameText(base[idx]) != NULL" in helper_text
+    assert len({Path(variant.source_retained or "").read_text() for variant in variants}) == len(variants)
+
+
+def test_loop_shape_expanded_ignores_unrelated_sorted_refs_without_predicate_evidence(
+    tmp_path: Path,
+) -> None:
+    source = _loop_shape_source(
+        "    int idx = arg2;\n"
+        "    u8 name_id;\n"
+        "    sink(GetNameText(7));\n"
+        "    name_id = assets->sorted_names[idx];\n"
+        "    sink(name_id);\n"
+    )
+
+    axis, variants = generate_loop_shape_expanded_variants(
+        source,
+        "fn_80000000",
+        tmp_path,
+        baseline_percent=None,
+        max_candidates=8,
+    )
+
+    assert variants == []
+    assert axis.status == "blocked"
+    assert axis.blocker == "no-loop-shape-expanded-candidates"
+
+
+def test_loop_shape_expanded_rewrites_detected_row_occurrence_not_first_column(
+    tmp_path: Path,
+) -> None:
+    source = _loop_shape_source(
+        "    int idx;\n"
+        "    u8* p;\n"
+        "    u8* p2;\n"
+        "    idx = arg2;\n"
+        "    p = &assets->sorted_names[arg2];\n"
+        "    p2 = p;\n"
+        "    sink(assets->sorted_names[arg2]);\n"
+        "    idx = arg1;\n"
+        "    p = &assets->sorted_names[arg1];\n"
+        "    p2 = p;\n"
+        "row_inner:\n"
+        "    idx++;\n"
+        "    p2++;\n"
+        "    if (GetNameText(*p2) == NULL) {\n"
+        "        goto row_inner;\n"
+        "    }\n"
+    )
+
+    _, variants = generate_loop_shape_expanded_variants(
+        source,
+        "fn_80000000",
+        tmp_path,
+        baseline_percent=None,
+        max_candidates=12,
+    )
+
+    base = next(
+        variant
+        for variant in variants
+        if variant.operator == "loop-shape-expanded-base-pointer"
+    )
+    direct = next(
+        variant
+        for variant in variants
+        if variant.operator == "loop-shape-expanded-direct-index"
+    )
+    base_text = Path(base.source_retained or "").read_text()
+    direct_text = Path(direct.source_retained or "").read_text()
+    assert "p = &assets->sorted_names[arg2];" in base_text
+    assert "p = assets->sorted_names + arg1;" in base_text
+    assert "GetNameText(assets->sorted_names[idx])" in direct_text
+    assert "GetNameText(p2[0])" not in direct_text
+
+
+def test_loop_shape_expanded_helper_replaces_scan_and_goto_heavy_skips_helper(
+    tmp_path: Path,
+) -> None:
+    source = _loop_shape_source(
+        "    int i = 3;\n"
+        "    int idx = arg2;\n"
+        "    u8 name_id;\n"
+        "    u8* p;\n"
+        "    u8* p2;\n"
+        "    p = &assets->sorted_names[arg2];\n"
+        "    while (i > 0) {\n"
+        "        p2 = p;\n"
+        "    loop:\n"
+        "        idx++;\n"
+        "        p2++;\n"
+        "        p++;\n"
+        "        if (idx >= 0x78) {\n"
+        "            name_id = 0x78;\n"
+        "            goto found;\n"
+        "        }\n"
+        "        if (GetNameText(*p2) == NULL) {\n"
+        "            goto loop;\n"
+        "        }\n"
+        "        i--;\n"
+        "    }\n"
+        "    name_id = assets->sorted_names[idx];\n"
+        "found:\n"
+        "    sink(name_id);\n"
+    )
+
+    _, variants = generate_loop_shape_expanded_variants(
+        source,
+        "fn_80000000",
+        tmp_path,
+        baseline_percent=None,
+        max_candidates=8,
+    )
+    helper = next(
+        variant
+        for variant in variants
+        if variant.operator == "loop-shape-expanded-helper"
+    )
+    helper_text = Path(helper.source_retained or "").read_text()
+    assert "static inline u8 lse_probe_visible_entry_0(u8* base, int idx, int remaining, int limit)" in helper_text
+    assert "name_id = lse_probe_visible_entry_0(assets->sorted_names, arg2, i, 0x78);" in helper_text
+
+    actual_source = Path("src/melee/mn/mndiagram.c").read_text()
+    _, heavy_variants = generate_loop_shape_expanded_variants(
+        actual_source,
+        "mnDiagram_8024227C",
+        tmp_path / "heavy",
+        baseline_percent=None,
+        max_candidates=40,
+    )
+    assert heavy_variants
+    assert not any(
+        variant.operator == "loop-shape-expanded-helper"
+        for variant in heavy_variants
+    )
+
+
+def test_loop_shape_expanded_inverts_simple_goto_condition_to_else_goto(
+    tmp_path: Path,
+) -> None:
+    source = _loop_shape_source(
+        "    int idx = arg2;\n"
+        "loop:\n"
+        "    idx++;\n"
+        "    if (GetNameText(assets->sorted_names[idx]) == NULL) {\n"
+        "        goto loop;\n"
+        "    }\n"
+    )
+
+    _, variants = generate_loop_shape_expanded_variants(
+        source,
+        "fn_80000000",
+        tmp_path,
+        baseline_percent=None,
+        max_candidates=8,
+    )
+    inverted = next(
+        variant
+        for variant in variants
+        if variant.operator == "loop-shape-expanded-inverted-predicate"
+    )
+    text = Path(inverted.source_retained or "").read_text()
+    assert "if (GetNameText(assets->sorted_names[idx]) != NULL) {" in text
+    assert "} else {\n        goto loop;\n    }" in text
+    assert "!(" not in text
+
+
+def test_loop_shape_expanded_small_cap_interleaves_families_for_scan(
+    tmp_path: Path,
+) -> None:
+    source = _loop_shape_source(
+        "    int idx = arg2;\n"
+        "    int k;\n"
+        "    int remaining = 3;\n"
+        "    u8 name_id;\n"
+        "    u8* p;\n"
+        "    u8* p2;\n"
+        "    for (k = 0; k < 0x78; k++) {\n"
+        "        if (GetNameText(k) != NULL) {\n"
+        "            sink(k);\n"
+        "        }\n"
+        "    }\n"
+        "    p = &assets->sorted_names[arg2];\n"
+        "    while (remaining > 0) {\n"
+        "        p2 = p;\n"
+        "loop:\n"
+        "    idx++;\n"
+        "        p2++;\n"
+        "        p++;\n"
+        "        if (GetNameText(*p2) == NULL) {\n"
+        "        goto loop;\n"
+        "    }\n"
+        "        remaining--;\n"
+        "    }\n"
+        "    name_id = assets->sorted_names[idx];\n"
+        "    sink(name_id);\n"
+    )
+
+    _, variants = generate_loop_shape_expanded_variants(
+        source,
+        "fn_80000000",
+        tmp_path,
+        baseline_percent=None,
+        max_candidates=4,
+    )
+
+    operators = {variant.operator for variant in variants}
+    assert len(variants) == 4
+    assert operators >= {
+        "loop-shape-expanded-direct-index",
+        "loop-shape-expanded-predicate-temp",
+        "loop-shape-expanded-inverted-predicate",
+        "loop-shape-expanded-helper",
+    }
+    assert all(variant.metadata["scan"]["expr"] != "k" for variant in variants)
+
+
+def test_loop_shape_expanded_direct_index_avoids_overlapping_final_load_rewrite(
+    tmp_path: Path,
+) -> None:
+    source = _loop_shape_source(
+        "    int idx = arg2;\n"
+        "    u8 name_id;\n"
+        "loop:\n"
+        "    idx++;\n"
+        "    if (GetNameText(assets->sorted_names[idx]) == NULL) {\n"
+        "        goto loop;\n"
+        "    }\n"
+        "    name_id = assets->sorted_names[idx];\n"
+        "    sink(name_id);\n"
+    )
+
+    axis, variants = generate_loop_shape_expanded_variants(
+        source,
+        "fn_80000000",
+        tmp_path,
+        baseline_percent=None,
+        max_candidates=12,
+    )
+
+    assert axis.metadata["scan_count"] >= 2
+    direct_sources = [
+        Path(variant.source_retained or "").read_text()
+        for variant in variants
+        if variant.operator == "loop-shape-expanded-direct-index"
+    ]
+    assert direct_sources
+    assert all("];" not in text[text.find("name_id = *("):text.find("sink(name_id);")] for text in direct_sources)
+    assert any(
+        "name_id = *(assets->sorted_names + idx);" in text
+        for text in direct_sources
+    )
+
+
+def test_loop_shape_expanded_keeps_repeated_scans_that_reuse_locals(
+    tmp_path: Path,
+) -> None:
+    source = _loop_shape_source(
+        "    int idx;\n"
+        "    u8* p;\n"
+        "    u8* p2;\n"
+        "    idx = arg1;\n"
+        "    p = &assets->sorted_names[arg1];\n"
+        "    p2 = p;\n"
+        "row_inner:\n"
+        "    idx++;\n"
+        "    p2++;\n"
+        "    if (GetNameText(*p2) == NULL) {\n"
+        "        goto row_inner;\n"
+        "    }\n"
+        "    idx = arg2;\n"
+        "    p = &assets->sorted_names[arg2];\n"
+        "    p2 = p;\n"
+        "col_inner:\n"
+        "    idx++;\n"
+        "    p2++;\n"
+        "    if (GetNameText(*p2) == NULL) {\n"
+        "        goto col_inner;\n"
+        "    }\n"
+    )
+
+    axis, variants = generate_loop_shape_expanded_variants(
+        source,
+        "fn_80000000",
+        tmp_path,
+        baseline_percent=None,
+        max_candidates=20,
+    )
+
+    assert axis.metadata["scan_count"] >= 2
+    direct_sources = [
+        Path(variant.source_retained or "").read_text()
+        for variant in variants
+        if variant.operator == "loop-shape-expanded-base-pointer"
+    ]
+    assert any("p = assets->sorted_names + arg1;" in text for text in direct_sources)
+    assert any("p = assets->sorted_names + arg2;" in text for text in direct_sources)
+
+
+def test_loop_shape_expanded_detects_fighter_global_and_alias_sources(
+    tmp_path: Path,
+) -> None:
+    source = (
+        "void fn_80000000(int arg1, int arg2)\n"
+        "{\n"
+        "    int i;\n"
+        "    int idx;\n"
+        "    int remaining;\n"
+        "    u8 fighter_id;\n"
+        "    u8 name_id;\n"
+        "    u8* sorted = mnDiagram_804A0750.sorted_fighters;\n"
+        "    for (i = 0; i < 7; i++) {\n"
+        "        idx = arg2;\n"
+        "        remaining = i;\n"
+        "        while (remaining >= 0) {\n"
+        "            if (mn_IsFighterUnlocked(sorted[idx]) != 0) {\n"
+        "                remaining--;\n"
+        "            }\n"
+        "            idx++;\n"
+        "        }\n"
+        "        fighter_id = mnDiagram_804A0750.sorted_fighters[idx];\n"
+        "        name_id = *(sorted + 0x1C + idx);\n"
+        "        sink(fighter_id, name_id);\n"
+        "    }\n"
+        "}\n"
+    )
+
+    axis, variants = generate_loop_shape_expanded_variants(
+        source,
+        "fn_80000000",
+        tmp_path,
+        baseline_percent=80.0,
+        max_candidates=12,
+    )
+
+    assert axis.status == "evaluated"
+    source_kinds = {
+        variant.metadata["scan"]["source_kind"] for variant in variants
+    }
+    assert "mnDiagram_804A0750.sorted_fighters" in source_kinds
+    assert "local-alias-sorted-fighters" in source_kinds
+    assert "alias-offset-sorted-names" in source_kinds
+    assert any(
+        variant.metadata["scan"]["predicate"] == "mn_IsFighterUnlocked"
+        for variant in variants
+    )
+
+
+def test_loop_shape_expanded_blocks_when_source_is_unsafe(
+    tmp_path: Path,
+) -> None:
+    missing = run_structure_search(
+        "fn_80000000",
+        None,
+        tmp_path / "missing-source",
+        axes=("loop-shape-expanded",),
+    )
+    assert missing["axes"][0]["blocker"] == "source-unavailable"
+
+    source_path = tmp_path / "demo.c"
+    source_path.write_text("void other(void) {}\n")
+    not_found = run_structure_search(
+        "fn_80000000",
+        source_path,
+        tmp_path / "not-found",
+        axes=("loop-shape-expanded",),
+    )
+    assert not_found["axes"][0]["blocker"] == "source-unavailable"
+
+    source_path.write_text(
+        "void fn_80000000(mnDiagram_Assets* assets, int idx)\n"
+        "{\n"
+        "#if 1\n"
+        "    sink(assets->sorted_names[idx]);\n"
+        "#endif\n"
+        "}\n"
+    )
+    preprocessor = run_structure_search(
+        "fn_80000000",
+        source_path,
+        tmp_path / "preprocessor",
+        axes=("loop-shape-expanded",),
+    )
+    assert preprocessor["axes"][0]["blocker"] == "unsafe-loop-shape-preprocessor"
+
+
+def test_run_structure_search_supports_loop_shape_expanded_axis(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "demo.c"
+    source_path.write_text(
+        _loop_shape_source(
+            "    int idx = arg2;\n"
+            "    int remaining = 3;\n"
+            "    u8 name_id;\n"
+            "    while (remaining > 0) {\n"
+            "        idx++;\n"
+            "        if (idx >= 0x78) {\n"
+            "            name_id = 0x78;\n"
+            "            goto found;\n"
+            "        }\n"
+            "        if (GetNameText(assets->sorted_names[idx]) != NULL) {\n"
+            "            remaining--;\n"
+            "        }\n"
+            "    }\n"
+            "    name_id = assets->sorted_names[idx];\n"
+            "found:\n"
+            "    sink(name_id);\n"
+        )
+    )
+
+    payload = run_structure_search(
+        "fn_80000000",
+        source_path,
+        tmp_path / "structure",
+        axes=("loop-shape-expanded",),
+        max_candidates=8,
+        score_variants=False,
+    )
+
+    assert payload["axes"][0]["axis"] == "loop-shape-expanded"
+    assert payload["axes"][0]["status"] == "evaluated"
+    assert payload["variants"]
+    assert all(row["axis"] == "loop-shape-expanded" for row in payload["variants"])
+    assert all(row["metadata"]["live_mutation"] is False for row in payload["variants"])
+    assert "loop-shape-expanded" not in {row["axis"] for row in payload["future_axes"]}
+
+
+def test_loop_shape_expanded_covers_actual_mndiagram_visible_scans(
+    tmp_path: Path,
+) -> None:
+    source_path = Path("src/melee/mn/mndiagram.c")
+    source = source_path.read_text()
+    expected = {
+        "mnDiagram_802427B4": {"assets->sorted_names", "GetNameText"},
+        "mnDiagram_80242C0C": {"assets->sorted_fighters", "mn_IsFighterUnlocked"},
+        "mnDiagram_8024227C": {"assets->sorted_names", "assets->sorted_fighters"},
+        "mnDiagram_802417D0": {"local-alias-sorted-fighters", "alias-offset-sorted-names"},
+    }
+
+    for function, required in expected.items():
+        axis, variants = generate_loop_shape_expanded_variants(
+            source,
+            function,
+            tmp_path / function,
+            baseline_percent=None,
+            max_candidates=32,
+        )
+        assert axis.status == "evaluated", function
+        assert variants, function
+        haystack = {
+            variant.metadata["scan"].get("source_kind") for variant in variants
+        } | {
+            variant.metadata["scan"].get("predicate") for variant in variants
+        }
+        assert required <= haystack
+        assert all(Path(variant.source_retained or "").exists() for variant in variants)
+
+    variants_417d0 = generate_loop_shape_expanded_variants(
+        source,
+        "mnDiagram_802417D0",
+        tmp_path / "mnDiagram_802417D0-snippets",
+        baseline_percent=None,
+        max_candidates=32,
+    )[1]
+    assert any(
+        "sorted + 0x1C" in Path(variant.source_retained or "").read_text()
+        for variant in variants_417d0
+    )
+
+    variants_4227c = generate_loop_shape_expanded_variants(
+        source,
+        "mnDiagram_8024227C",
+        tmp_path / "mnDiagram_8024227C-snippets",
+        baseline_percent=None,
+        max_candidates=40,
+    )[1]
+    assert any(
+        "loop_7" in Path(variant.source_retained or "").read_text()
+        and "var_r17" in Path(variant.source_retained or "").read_text()
+        for variant in variants_4227c
+    )
 
 
 def test_inline_boundary_axis_reports_shifted_missing_reference_metadata(
