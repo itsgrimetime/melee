@@ -47,8 +47,9 @@ ensure_base_dol() {
 
 ensure_base_dol
 
-# Only continue with remote/container bootstrap in Claude Code remote.
+# Local sessions: emit the capabilities context, then stop (no remote bootstrap).
 if [ "$CLAUDE_CODE_REMOTE" != "true" ]; then
+    python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/emit-capabilities-context.py" 2>/dev/null || true
     exit 0
 fi
 
@@ -98,14 +99,7 @@ if [ "$NEEDS_BOOTSTRAP" = "true" ]; then
     fi
 fi
 
-# Output workflow context for Claude
-cat << 'EOF'
-{
-  "hookSpecificOutput": {
-    "hookEventName": "SessionStart",
-    "additionalContext": "REMOTE ENVIRONMENT DETECTED\n\nCompilation is LIMITED (wibo blocked by container security).\n\nWORKING:\n- View target assembly: build/tools/dtk elf disasm build/GALE01/obj/<path>.o /tmp/out.s\n- Build context files: ninja build/GALE01/src/<path>.ctx\n- Read/edit source: src/melee/, include/melee/\n- Reference objects exist in build/GALE01/obj/\n\nNOT WORKING:\n- Compiling C code (requires mwcc via wibo)\n- checkdiff.py, ninja <path>.o targets"
-  }
-}
-EOF
+# Output workflow context for Claude (capabilities brief + remote notice).
+python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/emit-capabilities-context.py" --remote 2>/dev/null || true
 
 exit 0
