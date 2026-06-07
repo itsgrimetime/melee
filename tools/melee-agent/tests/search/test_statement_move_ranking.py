@@ -33,7 +33,6 @@ def test_source_lifetime_ranking_unaffected_by_line_delta():
     assert [v.label for v in ranked] == ["a", "b"]
 
 
-from pathlib import Path
 from src.search.structure import run_structure_search, StructureScoreResult
 
 RANK_SRC = '''\
