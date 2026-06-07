@@ -24,7 +24,7 @@ class SiblingStmt:
     text: str
     byte_range: tuple[int, int]
     line_range: tuple[int, int]
-    kind: str  # "simple" (assignment-shaped candidate) | "opaque" (barrier)
+    kind: str  # "simple" (non-barrier; movability refined by classify_movable) | "opaque" (barrier)
     node_type: str
 
 
@@ -39,7 +39,10 @@ def _body_node(source: str, function: str):
     fn = _ts.find_function_definition(tree.root_node, source_bytes, function)
     if fn is None:
         return None, source_bytes
-    return fn.child_by_field_name("body"), source_bytes
+    body = fn.child_by_field_name("body")
+    if body is not None and body.type != "compound_statement":
+        return None, source_bytes
+    return body, source_bytes
 
 
 def toplevel_siblings(source: str, function: str) -> Optional[list[SiblingStmt]]:
@@ -66,3 +69,103 @@ def toplevel_siblings(source: str, function: str) -> Optional[list[SiblingStmt]]
             node_type=child.type,
         ))
     return sibs
+
+
+_IDENT_RE = re.compile(r"[A-Za-z_]\w*")
+_ADDR_RE = re.compile(r"&\s*\(?\s*([A-Za-z_]\w*)")
+# RHS markers that forbid movement: ptr/array/member-deref, addr-of, call, ternary, comma,
+# increment/decrement.  Multiply/bitwise-and use the same chars (`*`,`&`) and are also
+# rejected (conservative: we cannot cheaply distinguish them from deref/addr-of).
+_UNSAFE_RHS_RE = re.compile(r"\+\+|--|->|\[|\]|\*|&|\?|,|\b[A-Za-z_]\w*\s*\(")
+_ASSIGN_PREV_FORBID = set("+-*/%&|^<>=!~")   # char before '=' that means it isn't plain assignment
+_C_KEYWORDS = {"sizeof", "return", "if", "for", "while", "do", "switch", "else", "case"}
+
+
+@dataclass(frozen=True)
+class MovableInfo:
+    write_base: str       # the local being written (aggregate base or scalar)
+    is_field: bool        # True if `base.field = ...`
+    reads: frozenset      # local identifiers read on the RHS
+    writes: frozenset     # {write_base}
+
+
+def _mask(text: str) -> str:
+    """Blank out comment and string/char-literal CONTENT with spaces, preserving
+    length and offsets, so `&`/`=`/identifiers inside them are not misread."""
+    out = list(text)
+    i, n, state = 0, len(text), None
+    while i < n:
+        c = text[i]
+        if state is None:
+            if c == "/" and i + 1 < n and text[i + 1] == "/":
+                out[i] = out[i + 1] = " "; state = "line"; i += 2; continue
+            if c == "/" and i + 1 < n and text[i + 1] == "*":
+                out[i] = out[i + 1] = " "; state = "block"; i += 2; continue
+            if c == '"': state = "str"; i += 1; continue
+            if c == "'": state = "char"; i += 1; continue
+            i += 1; continue
+        if state == "line":
+            if c == "\n": state = None
+            else: out[i] = " "
+            i += 1; continue
+        if state == "block":
+            if c == "*" and i + 1 < n and text[i + 1] == "/":
+                out[i] = out[i + 1] = " "; state = None; i += 2; continue
+            if c != "\n": out[i] = " "
+            i += 1; continue
+        # str/char
+        q = '"' if state == "str" else "'"
+        if c == "\\" and i + 1 < n:
+            out[i] = out[i + 1] = " "; i += 2; continue
+        if c == q: state = None; i += 1; continue
+        out[i] = " "; i += 1; continue
+    return "".join(out)
+
+
+def escaped_locals(source: str, function: str) -> set[str]:
+    """Locals whose address is taken anywhere in the function body (conservative
+    superset). v1 does not use this for legality (immovable barriers subsume it),
+    but it is surfaced in unit metadata and reserved for v2 nested-block relaxation."""
+    return set(_ADDR_RE.findall(_mask(source)))
+
+
+def classify_movable(stmt: SiblingStmt, locals_: set[str]) -> Optional[MovableInfo]:
+    if stmt.kind != "simple":
+        return None
+    text = _mask(stmt.text).strip()
+    if not text.endswith(";"):
+        return None
+    text = text[:-1]
+    # locate the single plain-assignment '='; reject compound/comparison
+    eq = -1
+    for i, ch in enumerate(text):
+        if ch == "=":
+            prev = text[i - 1] if i > 0 else ""
+            nxt = text[i + 1] if i + 1 < len(text) else ""
+            if prev in _ASSIGN_PREV_FORBID or nxt == "=":
+                return None     # +=, ==, <=, >=, != ... not a plain assignment
+            eq = i
+            break
+    if eq == -1:
+        return None
+    lhs, rhs = text[:eq].strip(), text[eq + 1:].strip()
+    # LHS must be `base` or `base.field`, base a local
+    m = re.fullmatch(r"([A-Za-z_]\w*)(?:\.([A-Za-z_]\w*))?", lhs)
+    if m is None:
+        return None
+    base, fld = m.group(1), m.group(2)
+    if base not in locals_:
+        return None
+    # RHS: no nested assignment/comparison ('=' of any kind), no unsafe memory/call ops
+    if "=" in rhs:
+        return None
+    if _UNSAFE_RHS_RE.search(rhs):
+        return None
+    # extract reads: drop `.member` accesses and numeric literals first
+    rhs_clean = re.sub(r"\.\s*[A-Za-z_]\w*", "", rhs)
+    rhs_clean = re.sub(r"\b\d[\w.]*", "", rhs_clean)
+    reads = {tok for tok in _IDENT_RE.findall(rhs_clean) if tok not in _C_KEYWORDS}
+    if not reads <= locals_:        # any non-local read (global / type-cast name) -> reject
+        return None
+    return MovableInfo(write_base=base, is_field=fld is not None,
+                       reads=frozenset(reads), writes=frozenset({base}))
