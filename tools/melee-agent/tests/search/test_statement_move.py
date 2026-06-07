@@ -183,3 +183,119 @@ def test_select_positions_targeted_sinks_to_first_use_and_exhaustive_is_full():
     exhaustive = select_positions(sibs, pos_unit, legal, "exhaustive", locs)
     assert targeted == [ri]                    # sink-to-first-use of `pos`
     assert set(exhaustive) == set(legal)       # seam: exhaustive consumes full legal set
+
+
+def test_select_positions_targeted_hoists_to_last_def():
+    src = '''\
+void f(int seed)
+{
+    int a;
+    int pad;
+    int x;
+    a = seed;
+    pad = seed;
+    x = a;
+}
+'''
+    sibs = toplevel_siblings(src, "f")
+    if sibs is None:
+        import pytest; pytest.skip("tree-sitter unavailable")
+    locs = local_names(src, "f")
+    units = extract_movable_units(sibs, locs)
+    x_unit = next(u for u in units if u.write_base == "x")
+    legal = legal_destinations(sibs, x_unit, escaped=set(), locals_=locs)
+    targeted = select_positions(sibs, x_unit, legal, "targeted", locs)
+    ai = _idx_of(sibs, "a = seed")
+    # x = a hoists UP to just after its last def `a = seed` (slot ai+1), past independent `pad = seed`
+    assert (ai + 1) in targeted
+    assert all(d <= x_unit.index_range[0] for d in targeted)   # all picks are hoists (above the unit)
+
+
+from src.search.statement_move import apply_move, _unit_owns_its_lines
+
+def test_apply_move_identity_window_is_noop():
+    sibs = toplevel_siblings(POS_SRC, "f")
+    if sibs is None:
+        import pytest; pytest.skip("tree-sitter unavailable")
+    locs = local_names(POS_SRC, "f")
+    pos_unit = next(u for u in extract_movable_units(sibs, locs) if u.write_base == "pos")
+    lo, hi = pos_unit.index_range
+    for dest in range(lo, hi + 2):
+        assert apply_move(POS_SRC, sibs, pos_unit, dest) == POS_SRC
+
+def test_apply_move_real_sink_preserves_lines_and_order():
+    sibs = toplevel_siblings(POS_SRC, "f")
+    if sibs is None:
+        import pytest; pytest.skip("tree-sitter unavailable")
+    locs = local_names(POS_SRC, "f")
+    pos_unit = next(u for u in extract_movable_units(sibs, locs) if u.write_base == "pos")
+    ri = _idx_of(sibs, "result.x = pos.x")
+    moved = apply_move(POS_SRC, sibs, pos_unit, ri)
+    assert moved.count("pos.x = translate.x;") == 1            # moved, not duplicated
+    assert "    pos.x = translate.x;" in moved                 # indentation preserved
+    assert moved.index("pad = idx;") < moved.index("pos.x = translate.x;")  # sank past pad
+    assert moved.index("pos.z = translate.z;") < moved.index("result.x = pos.x;")
+    assert moved.rstrip().endswith("}")                        # nothing escaped past `}`
+
+def test_apply_move_to_end_of_block_stays_before_close_brace():
+    src = '''\
+void f(int idx)
+{
+    int a;
+    int b;
+    a = idx;
+    b = idx;
+}
+'''
+    sibs = toplevel_siblings(src, "f")
+    if sibs is None:
+        import pytest; pytest.skip("tree-sitter unavailable")
+    locs = local_names(src, "f")
+    a_unit = next(u for u in extract_movable_units(sibs, locs) if u.write_base == "a")
+    moved = apply_move(src, sibs, a_unit, len(sibs))   # to end of block
+    assert moved.count("a = idx;") == 1
+    assert moved.index("b = idx;") < moved.index("a = idx;")
+    assert moved.rstrip().endswith("}")
+    assert moved.rstrip().splitlines()[-1].strip() == "}"   # `a = idx;` is BEFORE the close brace
+
+def test_apply_move_non_ascii_is_byte_correct():
+    src = "void f(){\n    int a;\n    int b;\n    a = 1; // café\n    b = 2;\n}\n"
+    sibs = toplevel_siblings(src, "f")
+    if sibs is None:
+        import pytest; pytest.skip("tree-sitter unavailable")
+    locs = local_names(src, "f")
+    a_unit = next(u for u in extract_movable_units(sibs, locs) if u.write_base == "a")
+    moved = apply_move(src, sibs, a_unit, _idx_of(sibs, "b = 2"))
+    assert "café" in moved and moved.count("a = 1;") == 1
+
+def test_unit_owns_its_lines_rejects_shared_line():
+    src = "void f(int idx){\n    int a; int b;\n    a = idx; b = idx;\n}\n"
+    sibs = toplevel_siblings(src, "f")
+    if sibs is None:
+        import pytest; pytest.skip("tree-sitter unavailable")
+    locs = local_names(src, "f")
+    units = extract_movable_units(sibs, locs)
+    sb = src.encode("utf-8")
+    # the `a = idx;` and `b = idx;` share one physical line -> not movable by line
+    assert any(not _unit_owns_its_lines(u, sb) for u in units)
+
+def test_unit_owns_its_lines_rejects_brace_sharing_line():
+    # the close brace shares the last statement's physical line; a line move would drag `}`
+    src = "void f(int idx){\n    int a;\n    a = idx; }\n"
+    sibs = toplevel_siblings(src, "f")
+    if sibs is None:
+        import pytest; pytest.skip("tree-sitter unavailable")
+    locs = local_names(src, "f")
+    sb = src.encode("utf-8")
+    a_unit = next(u for u in extract_movable_units(sibs, locs) if u.write_base == "a")
+    assert not _unit_owns_its_lines(a_unit, sb)
+
+def test_unit_owns_its_lines_allows_trailing_comment():
+    src = "void f(int idx){\n    int a;\n    int b;\n    a = idx; // note\n    b = idx;\n}\n"
+    sibs = toplevel_siblings(src, "f")
+    if sibs is None:
+        import pytest; pytest.skip("tree-sitter unavailable")
+    locs = local_names(src, "f")
+    sb = src.encode("utf-8")
+    a_unit = next(u for u in extract_movable_units(sibs, locs) if u.write_base == "a")
+    assert _unit_owns_its_lines(a_unit, sb)   # trailing comment masks to whitespace -> allowed

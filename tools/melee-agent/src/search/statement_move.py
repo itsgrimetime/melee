@@ -323,6 +323,8 @@ def legal_destinations(sibs: list[SiblingStmt], unit: MoveUnit,
 
 def select_positions(sibs: list[SiblingStmt], unit: MoveUnit,
                      legal: list[int], strategy: str, locals_: set[str]) -> list[int]:
+    """Pick destinations for `unit` among `legal`. exhaustive -> all legal;
+    targeted -> sink-to-first-use + hoist-to-last-def, each gated on legality."""
     if strategy == "exhaustive":
         return list(legal)
     legal_set = set(legal)
@@ -343,3 +345,47 @@ def select_positions(sibs: list[SiblingStmt], unit: MoveUnit,
                 picks.append(i + 1)
             break
     return sorted(set(picks))
+
+
+def _line_bounds(source_bytes: bytes, start: int, end: int) -> tuple[int, int]:
+    """Expand [start,end) to full-line byte bounds: line start .. just past the
+    trailing newline (or EOF)."""
+    ls = source_bytes.rfind(b"\n", 0, start) + 1          # 0 if no preceding newline
+    le = source_bytes.find(b"\n", end)
+    le = len(source_bytes) if le == -1 else le + 1        # include the newline
+    return ls, le
+
+
+def _unit_owns_its_lines(unit: MoveUnit, source_bytes: bytes) -> bool:
+    """True iff the bytes OUTSIDE the unit on its first/last physical lines are
+    only whitespace/comments. Rejects multiple statements sharing a line
+    (`a; b;`) AND a statement sharing its line with a brace (`b = idx; }`) —
+    both corrupt a full-line move. A trailing comment IS allowed (it masks to
+    whitespace and travels with the moved line)."""
+    u0, u1 = unit.byte_range
+    ls, le = _line_bounds(source_bytes, u0, u1)
+    prefix = source_bytes[ls:u0].decode("utf-8", "replace")   # before unit on first line
+    suffix = source_bytes[u1:le].decode("utf-8", "replace")   # after unit on last line
+    return _mask(prefix).strip() == "" and _mask(suffix).strip() == ""
+
+
+def apply_move(source: str, sibs: list[SiblingStmt], unit: MoveUnit, dest: int) -> str:
+    lo, hi = unit.index_range
+    if lo <= dest <= hi + 1:
+        return source                # identity window
+    b = source.encode("utf-8")
+    mv_start, mv_end = _line_bounds(b, unit.byte_range[0], unit.byte_range[1])
+    block = b[mv_start:mv_end]
+    if not block.endswith(b"\n"):
+        block = block + b"\n"
+    if dest >= len(sibs):
+        # end of block == just past the LAST sibling's line (before the closing brace),
+        # never EOF.  (dest>=len with the unit already last is an identity, handled above.)
+        _, ins_anchor = _line_bounds(b, sibs[-1].byte_range[0], sibs[-1].byte_range[1])
+    else:
+        ins_anchor, _ = _line_bounds(b, sibs[dest].byte_range[0], sibs[dest].byte_range[1])
+    removed = b[:mv_start] + b[mv_end:]
+    if ins_anchor >= mv_end:
+        ins_anchor -= (mv_end - mv_start)        # downward move: account for removal
+    out = removed[:ins_anchor] + block + removed[ins_anchor:]
+    return out.decode("utf-8")
