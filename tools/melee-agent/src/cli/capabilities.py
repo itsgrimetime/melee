@@ -6,7 +6,9 @@ writes the auto-loaded brief and the full inventory doc.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import typer
 
@@ -87,6 +89,55 @@ def command_capabilities(root_app=None) -> list[Capability]:
             )
         )
     return caps
+
+def parse_skill(skill_md: Path) -> Capability:
+    """Parse a SKILL.md into a Capability. Uses YAML frontmatter when present,
+    else falls back to the H1 title and first prose paragraph (3 repo skills
+    have no frontmatter)."""
+    text = skill_md.read_text(encoding="utf-8", errors="replace")
+    dir_name = skill_md.parent.name
+    name = dir_name
+    desc = ""
+
+    if text.lstrip().startswith("---"):
+        body_start = text.find("---") + 3
+        end = text.find("\n---", body_start)
+        if end != -1:
+            import yaml
+
+            try:
+                meta = yaml.safe_load(text[body_start:end]) or {}
+            except yaml.YAMLError:
+                meta = {}
+            name = str(meta.get("name") or dir_name).strip() or dir_name
+            desc = str(meta.get("description") or "").strip()
+
+    if not desc:
+        for line in text.splitlines():
+            s = line.strip()
+            if not s or s.startswith("#") or s.startswith("---"):
+                continue
+            desc = s
+            break
+
+    return Capability(
+        kind="skill",
+        name=name,
+        summary=desc,
+        invoke=f"/{dir_name}",
+        keywords=[dir_name] + dir_name.replace("-", " ").split(),
+    )
+
+
+def skill_capabilities(repo_root: Path) -> list[Capability]:
+    skills_dir = repo_root / ".claude" / "skills"
+    caps: list[Capability] = []
+    if not skills_dir.is_dir():
+        return caps
+    for skill_md in sorted(skills_dir.glob("*/SKILL.md")):
+        caps.append(parse_skill(skill_md))
+    return caps
+
 
 capabilities_app = typer.Typer(
     help="Discover existing CLI commands and skills before building new ones.",
