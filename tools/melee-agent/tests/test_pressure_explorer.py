@@ -4979,6 +4979,67 @@ def test_lifetime_layout_compile_probes_use_same_tu_unit_source(
     assert calls[0]["unit_source"] == source
 
 
+def test_lifetime_layout_compile_probes_restores_source_after_real_score_leak(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    melee_root = tmp_path / "melee"
+    baseline = tmp_path / "baseline.txt"
+    source = melee_root / "src" / "melee" / "mn" / "source.c"
+    source.parent.mkdir(parents=True)
+    baseline.write_text(BASELINE)
+    original_source = SOURCE
+    source.write_text(original_source)
+
+    def fake_compile(*args, **kwargs) -> str:
+        return CANDIDATE
+
+    def fake_real_score(*args, **kwargs):
+        source.write_text("void fn_80000000(void) { int leaked = 1; }\n")
+        return debug_cli._SourceCandidateRealScore(
+            match_percent=88.0,
+            match_percent_error=None,
+            stack_slot_localizer=None,
+            stack_slot_error=None,
+        )
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture.compile_source_variant",
+        fake_compile,
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_score_source_candidate_real_tree",
+        fake_real_score,
+    )
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "lifetime-layout",
+            "-f",
+            "fn_80000000",
+            "--pcdump",
+            str(baseline),
+            "--source-file",
+            str(source),
+            "--compile-probes",
+            "--max-probes",
+            "1",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert source.read_text() == original_source
+    variant = json.loads(result.stdout)["variants"][0]
+    assert variant["status"] == "ok"
+    assert variant["final_match_percent"] == 88.0
+
+
 def test_lifetime_layout_compile_probes_normalizes_relative_source_file(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,

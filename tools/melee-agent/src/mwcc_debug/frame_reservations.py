@@ -251,7 +251,12 @@ def evaluate_frame_transform_probe_results(
             if no_safe_semantic_lever
             else "no-probes"
         )
-    elif best.get("target_frame_fixed"):
+    elif baseline_delta == 0:
+        verdict = "frame-transform-already-at-target"
+    elif (
+        best.get("target_frame_fixed")
+        and int(best.get("frame_delta_improvement") or 0) > 0
+    ):
         verdict = "source-reachable-frame-transform"
     elif int(best.get("frame_delta_improvement") or 0) > 0:
         verdict = "partial-source-reachable-frame-transform"
@@ -650,6 +655,21 @@ def _frame_transform_probe_stop_condition(
             natural_source_attribution,
         )
         return condition
+    if verdict == "frame-transform-already-at-target":
+        condition = {
+            "status": "not-satisfied",
+            "kind": "already-at-target-frame",
+            "reason": (
+                f"current frame size already matches expected {expected_frame} "
+                "bytes; neutral probes do not validate a source transform"
+            ),
+            "baseline_remaining_frame_delta": baseline_delta,
+        }
+        _attach_natural_source_stop_condition(
+            condition,
+            natural_source_attribution,
+        )
+        return condition
     if verdict == "no-safe-semantic-lever":
         condition = {
             "status": "not-satisfied",
@@ -685,7 +705,10 @@ def _attach_natural_source_stop_condition(
         return
     if (
         attribution.get("status") == "no-source-lever"
-        and condition.get("kind") != "no-safe-semantic-lever"
+        and condition.get("kind") not in {
+            "no-safe-semantic-lever",
+            "already-at-target-frame",
+        }
     ):
         return
     condition["natural_source_attribution"] = attribution

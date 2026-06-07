@@ -1552,6 +1552,45 @@ def test_frame_transform_probe_evaluation_flags_bounded_ceiling_candidate() -> N
     }
 
 
+def test_frame_transform_neutral_tie_does_not_validate_frame_transform() -> None:
+    report = {
+        "current": {"frame_size": 176},
+        "expected": {"frame_size": 176},
+        "frame_delta": 0,
+    }
+    declaration_use_distance = {
+        "label": "declaration-use-distance-0",
+        "operator": "declaration-use-distance",
+        "status": "ok",
+        "match_percent": 99.605736,
+        "objective": {
+            "frame_after": 176,
+        },
+    }
+    block_scope = {
+        "label": "block-scope-0",
+        "operator": "block-scope",
+        "status": "ok",
+        "match_percent": 99.605736,
+        "objective": {
+            "frame_after": 176,
+        },
+    }
+
+    evaluation = evaluate_frame_transform_probe_results(
+        report,
+        [declaration_use_distance, block_scope],
+    )
+
+    assert evaluation["verdict"] == "frame-transform-already-at-target"
+    assert evaluation["natural_source_attribution"]["status"] == "no-source-lever"
+    assert evaluation["stop_condition"]["kind"] == "already-at-target-frame"
+    assert evaluation["stop_condition"]["status"] == "not-satisfied"
+    assert evaluation["stop_condition"]["natural_source_attribution"] == (
+        evaluation["natural_source_attribution"]
+    )
+
+
 def test_frame_transform_ceiling_requires_frame_size_capable_probe() -> None:
     report = {
         "current": {"frame_size": 80},

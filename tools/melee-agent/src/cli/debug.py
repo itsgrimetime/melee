@@ -22869,14 +22869,35 @@ def mutate_lifetime_layout_cmd(
                     if not json_out
                     else None
                 )
-                real_score = _score_source_candidate_real_tree(
-                    path,
-                    function=function,
-                    melee_root=DEFAULT_MELEE_ROOT,
-                    timeout=timeout,
-                    status=status,
-                    include_stack_slot=True,
+                restore_guard_path = source_path_for_probes
+                restore_guard_original = (
+                    restore_guard_path.read_text()
+                    if restore_guard_path is not None
+                    and restore_guard_path.exists()
+                    else None
                 )
+                try:
+                    real_score = _score_source_candidate_real_tree(
+                        path,
+                        function=function,
+                        melee_root=DEFAULT_MELEE_ROOT,
+                        timeout=timeout,
+                        status=status,
+                        include_stack_slot=True,
+                    )
+                finally:
+                    if (
+                        restore_guard_path is not None
+                        and restore_guard_original is not None
+                        and restore_guard_path.exists()
+                        and restore_guard_path.read_text() != restore_guard_original
+                    ):
+                        restore_error = _restore_source_snapshot(
+                            restore_guard_path,
+                            restore_guard_original,
+                        )
+                        if restore_error:
+                            raise RuntimeError(restore_error)
             try:
                 candidate_sig = pressure_signature_from_pcdump(
                     candidate_text,
