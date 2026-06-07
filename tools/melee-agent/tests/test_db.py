@@ -867,3 +867,60 @@ def test_connection_sets_busy_timeout(tmp_path):
     assert timeout == 5000
     db.close()
     reset_db()
+
+
+class TestToolIssueClaims:
+    """Tests for cooperative claiming of tool issues."""
+
+    def test_claim_sets_owner(self, db):
+        issue = db.report_tool_issue(summary="fix the thing", agent_id="reporter")
+        claimed = db.claim_tool_issue(issue["id"], "agent-1")
+        assert claimed["claimed_by"] == "agent-1"
+        assert claimed["claimed_at"] is not None
+
+    def test_claim_conflict_different_agent(self, db):
+        issue = db.report_tool_issue(summary="x", agent_id="reporter")
+        db.claim_tool_issue(issue["id"], "agent-1")
+        with pytest.raises(ValueError, match="already claimed by agent-1"):
+            db.claim_tool_issue(issue["id"], "agent-2")
+
+    def test_claim_force_takes_over(self, db):
+        issue = db.report_tool_issue(summary="x", agent_id="reporter")
+        db.claim_tool_issue(issue["id"], "agent-1")
+        taken = db.claim_tool_issue(issue["id"], "agent-2", force=True)
+        assert taken["claimed_by"] == "agent-2"
+
+    def test_claim_same_agent_is_idempotent(self, db):
+        issue = db.report_tool_issue(summary="x", agent_id="reporter")
+        first = db.claim_tool_issue(issue["id"], "agent-1")
+        second = db.claim_tool_issue(issue["id"], "agent-1")
+        assert second["claimed_by"] == "agent-1"
+        assert second["claimed_at"] >= first["claimed_at"]
+
+    def test_claim_resolved_errors(self, db):
+        issue = db.report_tool_issue(summary="x", agent_id="reporter")
+        db.resolve_tool_issue(issue["id"], agent_id="agent-1")
+        with pytest.raises(ValueError, match="cannot claim resolved"):
+            db.claim_tool_issue(issue["id"], "agent-1")
+
+    def test_claim_missing_returns_none(self, db):
+        assert db.claim_tool_issue(99999, "agent-1") is None
+
+    def test_claim_force_records_displaced_owner_in_audit(self, db):
+        import json as _json
+
+        issue = db.report_tool_issue(summary="x", agent_id="reporter")
+        db.claim_tool_issue(issue["id"], "agent-1")
+        db.claim_tool_issue(issue["id"], "agent-2", force=True)
+
+        with db.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT old_value FROM audit_log
+                WHERE entity_type = 'tool_issue' AND entity_id = ? AND action = 'claimed'
+                ORDER BY id DESC LIMIT 1
+                """,
+                (str(issue["id"]),),
+            ).fetchone()
+        old = _json.loads(row["old_value"])
+        assert old["claimed_by"] == "agent-1"
