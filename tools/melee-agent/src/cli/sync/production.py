@@ -20,8 +20,13 @@ from .._common import (
     load_slug_map,
     save_slug_map,
 )
-from ._helpers import load_production_cookies, rate_limited_request
+from ._helpers import (
+    create_and_claim_production_scratch,
+    load_production_cookies,
+    rate_limited_request,
+)
 from .auth import get_production_user_agent
+from src.client import DecompMeAPIError, DecompMeAuthError
 
 
 def production_command(
@@ -383,81 +388,64 @@ def production_command(
                             console.print("[yellow]  Warning: No target ASM, scratch may not work correctly[/yellow]")
 
                         console.print("[dim]  Creating scratch on production...[/dim]")
-                        resp = await rate_limited_request(prod_client, "post", "/api/scratch", json=create_data)
-                        console.print(f"[dim]  Create complete (status {resp.status_code})[/dim]")
-
-                        if resp.status_code == 201 or resp.status_code == 200:
-                            prod_data = resp.json()
-                            prod_slug = prod_data.get("slug", "unknown")
-                            claim_token = prod_data.get("claim_token")
-                            console.print(f"[green]  Created: {PRODUCTION_DECOMP_ME}/scratch/{prod_slug}[/green]")
-
-                            # Claim ownership of the scratch
-                            if claim_token:
-                                console.print("[dim]  Claiming ownership...[/dim]")
-                                try:
-                                    claim_resp = await rate_limited_request(
-                                        prod_client,
-                                        "post",
-                                        f"/api/scratch/{prod_slug}/claim",
-                                        json={"token": claim_token},
-                                    )
-                                    if claim_resp.status_code == 200:
-                                        claim_result = claim_resp.json()
-                                        if claim_result.get("success"):
-                                            console.print("[green]  Ownership claimed[/green]")
-                                        else:
-                                            console.print("[yellow]  Claim returned success=false[/yellow]")
-                                    else:
-                                        console.print(f"[yellow]  Claim failed: {claim_resp.status_code}[/yellow]")
-                                except Exception as claim_err:
-                                    console.print(f"[yellow]  Claim error: {claim_err}[/yellow]")
-                            else:
-                                console.print("[yellow]  No claim_token returned, scratch will be anonymous[/yellow]")
-
-                            # Update slug map
-                            current_slug_map = load_slug_map()
-                            current_slug_map[prod_slug] = {
-                                "local_slug": local_slug,
-                                "function": func_name,
-                                "match_percent": match_pct,
-                                "synced_at": time.time(),
-                            }
-                            save_slug_map(current_slug_map)
-
-                            # Update state database
-                            db_record_sync(local_slug, prod_slug, func_name)
-                            db_upsert_scratch(
-                                prod_slug,
-                                "production",
-                                PRODUCTION_DECOMP_ME,
-                                function_name=func_name,
-                                match_percent=match_pct,
+                        try:
+                            create_result = await create_and_claim_production_scratch(
+                                prod_client, create_data
                             )
-                            db_upsert_function(func_name, production_scratch_slug=prod_slug)
-
-                            synced[local_slug] = {
-                                "production_slug": prod_slug,
-                                "function": func_name,
-                                "match_percent": match_pct,
-                                "timestamp": time.time(),
-                            }
-                            results["success"] += 1
-                            results["details"].append(
-                                {
-                                    "function": func_name,
-                                    "local_slug": local_slug,
-                                    "production_slug": prod_slug,
-                                }
-                            )
-                        elif resp.status_code == 403:
+                        except DecompMeAuthError:
                             console.print("[red]  Failed: Cloudflare blocked (cf_clearance expired?)[/red]")
                             results["failed"] += 1
                             break
-                        else:
-                            error_text = resp.text[:200]
-                            console.print(f"[red]  Failed: {resp.status_code} - {error_text}[/red]")
+                        except DecompMeAPIError as create_err:
+                            console.print(f"[red]  Failed: {create_err}[/red]")
                             results["failed"] += 1
+                            continue
+
+                        prod_slug = create_result.slug
+                        claim_token = create_result.claim_token
+                        console.print(f"[green]  Created: {PRODUCTION_DECOMP_ME}/scratch/{prod_slug}[/green]")
+                        if claim_token and create_result.claimed:
+                            console.print("[green]  Ownership claimed[/green]")
+                        elif claim_token:
+                            console.print("[yellow]  Claim did not confirm ownership[/yellow]")
+                        else:
+                            console.print("[yellow]  No claim_token returned, scratch will be anonymous[/yellow]")
+
+                        # Update slug map
+                        current_slug_map = load_slug_map()
+                        current_slug_map[prod_slug] = {
+                            "local_slug": local_slug,
+                            "function": func_name,
+                            "match_percent": match_pct,
+                            "synced_at": time.time(),
+                        }
+                        save_slug_map(current_slug_map)
+
+                        # Update state database
+                        db_record_sync(local_slug, prod_slug, func_name)
+                        db_upsert_scratch(
+                            prod_slug,
+                            "production",
+                            PRODUCTION_DECOMP_ME,
+                            function_name=func_name,
+                            match_percent=match_pct,
+                        )
+                        db_upsert_function(func_name, production_scratch_slug=prod_slug)
+
+                        synced[local_slug] = {
+                            "production_slug": prod_slug,
+                            "function": func_name,
+                            "match_percent": match_pct,
+                            "timestamp": time.time(),
+                        }
+                        results["success"] += 1
+                        results["details"].append(
+                            {
+                                "function": func_name,
+                                "local_slug": local_slug,
+                                "production_slug": prod_slug,
+                            }
+                        )
 
                     except Exception as e:
                         console.print(f"[red]  Error: {e}[/red]")
