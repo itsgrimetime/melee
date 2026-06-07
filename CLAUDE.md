@@ -84,7 +84,10 @@ melee-agent issue report "mwcc-debug local dump hung after COLORGRAPH DECISIONS"
 Before starting work on an issue, run `melee-agent issue claim <id>` so other
 parallel agents skip it; there is no auto-expiry, so if an agent abandons a
 claim, recover it with `melee-agent issue release <id> --force` (or
-`melee-agent issue claim <id> --force` to take it over directly).
+`melee-agent issue claim <id> --force` to take it over directly). Claiming only
+works reliably when each agent has a stable identity — set a unique
+`DECOMP_AGENT_ID` (or rely on `TERM_SESSION_ID`) per parallel agent, otherwise
+the id falls back to a per-invocation PID and ownership checks break.
 
 If a `melee-agent` command exits with an error through the wrapped entrypoint,
 it prints a copyable `melee-agent issue report ...` command. If a command
