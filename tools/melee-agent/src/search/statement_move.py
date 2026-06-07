@@ -169,3 +169,105 @@ def classify_movable(stmt: SiblingStmt, locals_: set[str]) -> Optional[MovableIn
         return None
     return MovableInfo(write_base=base, is_field=fld is not None,
                        reads=frozenset(reads), writes=frozenset({base}))
+
+
+@dataclass(frozen=True)
+class MoveUnit:
+    write_base: str
+    is_cluster: bool
+    reads: frozenset
+    writes: frozenset
+    index_range: tuple[int, int]   # inclusive sibling indices [i, j]
+    byte_range: tuple[int, int]    # spanning byte range
+
+
+def _leftmost_identifier(node):
+    if node is None:
+        return None
+    if node.type == "identifier":
+        return node
+    d = node.child_by_field_name("declarator")
+    if d is not None:
+        r = _leftmost_identifier(d)
+        if r is not None:
+            return r
+    for c in node.named_children:
+        r = _leftmost_identifier(c)
+        if r is not None:
+            return r
+    return None
+
+
+def _declared_names(decl_node, source_bytes) -> set[str]:
+    names: set[str] = set()
+    type_node = decl_node.child_by_field_name("type")
+    type_id = type_node.id if type_node is not None else None
+    for child in decl_node.named_children:
+        if type_id is not None and child.id == type_id:
+            continue
+        if child.type == "comment":
+            continue
+        ident = _leftmost_identifier(child)
+        if ident is not None:
+            names.add(_ts.node_text(source_bytes, ident))
+    return names
+
+
+def local_names(source: str, function: str) -> set[str]:
+    """Param names + the function's TOP-LEVEL local declarations (NOT nested-block
+    locals — a nested-only name is out of scope for a top-level statement)."""
+    body, source_bytes = _body_node(source, function)
+    names: set[str] = set()
+    if body is None:
+        return names
+    for child in body.named_children:
+        if child.type == "declaration":
+            names |= _declared_names(child, source_bytes)
+    fn = body.parent  # function_definition
+    stack = [fn] if fn is not None else []
+    param_list = None
+    while stack:
+        n = stack.pop()
+        if n.type == "parameter_list":
+            param_list = n
+            break
+        stack.extend(n.children)
+    if param_list is not None:
+        for p in param_list.named_children:
+            if p.type == "parameter_declaration":
+                ident = _leftmost_identifier(p)
+                if ident is not None:
+                    names.add(_ts.node_text(source_bytes, ident))
+    return names
+
+
+def extract_movable_units(sibs: list[SiblingStmt], locals_: set[str]) -> list[MoveUnit]:
+    infos = [classify_movable(s, locals_) for s in sibs]
+    units: list[MoveUnit] = []
+    i, n = 0, len(sibs)
+    while i < n:
+        info = infos[i]
+        if info is None:
+            i += 1
+            continue
+        j = i
+        if info.is_field:
+            while (j + 1 < n and infos[j + 1] is not None
+                   and infos[j + 1].is_field
+                   and infos[j + 1].write_base == info.write_base):
+                j += 1
+        reads: set[str] = set()
+        writes: set[str] = set()
+        for k in range(i, j + 1):
+            reads |= set(infos[k].reads)
+            writes |= set(infos[k].writes)
+        units.append(MoveUnit(
+            write_base=info.write_base,
+            is_cluster=(j > i),
+            reads=frozenset(reads),     # NOTE: do NOT subtract writes (keeps aggregate self-reads)
+            writes=frozenset(writes),
+            index_range=(i, j),
+            byte_range=(sibs[i].byte_range[0], sibs[j].byte_range[1]),
+        ))
+        i = j + 1
+    return units

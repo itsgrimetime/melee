@@ -13,6 +13,21 @@ void f(int idx)
 }
 '''
 
+POS_SRC = '''\
+void f(int idx, float spacing)
+{
+    Vec3 translate;
+    Vec3 pos;
+    Vec3 result;
+    int pad;
+    pos.x = translate.x;
+    pos.y = spacing;
+    pos.z = translate.z;
+    pad = idx;
+    result.x = pos.x;
+}
+'''
+
 def test_toplevel_siblings_does_not_flatten_nested_blocks():
     sibs = toplevel_siblings(SRC, "f")
     if sibs is None:
@@ -61,3 +76,39 @@ def test_escaped_locals_finds_address_taken():
     src = "void f(){ Vec3 t; g(x, &t); h(& u); k(&(w)); }"
     esc = escaped_locals(src, "f")
     assert {"t", "u", "w"} <= esc
+
+
+from src.search.statement_move import extract_movable_units, local_names
+
+def test_local_names_excludes_nested_block_decls():
+    src = '''\
+void f(int idx)
+{
+    int top;
+    top = idx;
+    if (idx != 0) {
+        int inner;
+        inner = idx;
+    }
+}
+'''
+    if toplevel_siblings(src, "f") is None:
+        import pytest; pytest.skip("tree-sitter unavailable")
+    names = local_names(src, "f")
+    assert "top" in names and "idx" in names
+    assert "inner" not in names          # nested-block local is NOT a top-level local
+
+def test_extract_units_clusters_aggregate_fields_and_keeps_singletons():
+    sibs = toplevel_siblings(POS_SRC, "f")
+    if sibs is None:
+        import pytest; pytest.skip("tree-sitter unavailable")
+    locs = local_names(POS_SRC, "f")
+    units = extract_movable_units(sibs, locs)
+    pos_units = [u for u in units if u.write_base == "pos"]
+    assert len(pos_units) == 1
+    assert pos_units[0].is_cluster is True
+    assert pos_units[0].index_range[1] - pos_units[0].index_range[0] == 2  # 3 stmts inclusive
+    bases = {u.write_base for u in units}
+    assert {"pos", "pad", "result"} <= bases       # pad and result are separate singletons
+    # cluster self-reads are NOT subtracted away
+    assert pos_units[0].reads == frozenset({"translate", "spacing"})
