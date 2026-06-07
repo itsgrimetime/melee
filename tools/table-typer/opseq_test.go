@@ -244,3 +244,32 @@ func TestMatchPatternVarNoLeak(t *testing.T) {
 		t.Fatalf("want end line 3 slack 1, got end %d slack %d", a.endSrcLine, a.slackConsumed)
 	}
 }
+
+func TestSortResults(t *testing.T) {
+	in := []opseqResult{
+		{fnName: "big_loose", slack: 3, size: 10},
+		{fnName: "small_tight", slack: 0, size: 200},
+		{fnName: "tie_small", slack: 1, size: 4},
+		{fnName: "tie_big", slack: 1, size: 99},
+	}
+	sortResults(in)
+	got := []string{in[0].fnName, in[1].fnName, in[2].fnName, in[3].fnName}
+	want := []string{"small_tight", "tie_small", "tie_big", "big_loose"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("order: got %v want %v", got, want)
+		}
+	}
+}
+
+func TestMatchDoesNotCrossFunctionBoundary(t *testing.T) {
+	// "blr" ends fn_a; "lfs" begins fn_b. A pattern spanning both must not match
+	// because matchPattern is only ever called per-body.
+	funcs := parseAsmFile(sampleAsm)
+	pat, _ := parsePattern([]string{"blr", "*{0..4}", "fsubs"}, 6)
+	for _, f := range funcs {
+		if matchPattern(f.instrs, pat).ok {
+			t.Fatalf("pattern should not match within a single body (%s)", f.name)
+		}
+	}
+}

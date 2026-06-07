@@ -293,3 +293,24 @@ func varSig(v map[string]string) string {
 	}
 	return b.String()
 }
+
+// opseqResult is one ranked match for display.
+type opseqResult struct {
+	asmLoc    string // "path/to/file.s:STARTLINE"
+	fnName    string
+	slack     int
+	size      int
+	startLine int
+	endLine   int
+}
+
+// sortResults orders by tightest match first (least gap slack), then smallest
+// function (the historical tiebreak).
+func sortResults(rs []opseqResult) {
+	sort.SliceStable(rs, func(i, j int) bool {
+		if rs[i].slack != rs[j].slack {
+			return rs[i].slack < rs[j].slack
+		}
+		return rs[i].size < rs[j].size
+	})
+}
