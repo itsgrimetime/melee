@@ -17699,6 +17699,16 @@ def suggest_control_flow_shape(
             help="Pass --no-build to live checkdiff for a fast stale-object read.",
         ),
     ] = False,
+    source_file: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--source-file",
+            help=(
+                "Source file used to preflight whether suggested generated "
+                "operators can materialize probes."
+            ),
+        ),
+    ] = None,
     top: Annotated[
         int,
         typer.Option("--top", help="Maximum number of ranked suggestions."),
@@ -17710,6 +17720,7 @@ def suggest_control_flow_shape(
 ) -> None:
     """Suggest source-level control-flow shape transforms from ASM diff JSON."""
     from ..mwcc_debug.suggest_control_flow_shape import (
+        annotate_source_materialization,
         analyze_control_flow_shape,
         render_json,
         render_text,
@@ -17748,6 +17759,40 @@ def suggest_control_flow_shape(
         classification=classification,
         top=top,
     )
+    source_preflight: dict[str, Any]
+    resolved_source: Path | None = None
+    source_text: str | None = None
+    if source_file is not None:
+        resolved_source = _resolve_existing_cli_file(
+            source_file,
+            melee_root=DEFAULT_MELEE_ROOT,
+            label="source file",
+        )
+    else:
+        unit = _find_unit_for_function(function, DEFAULT_MELEE_ROOT)
+        if unit is not None:
+            candidate_source = DEFAULT_MELEE_ROOT / "src" / f"{unit}.c"
+            if candidate_source.exists():
+                resolved_source = candidate_source
+    if resolved_source is not None:
+        source_text = resolved_source.read_text(encoding="utf-8", errors="replace")
+        annotate_source_materialization(
+            report,
+            function=function,
+            source_text=source_text,
+        )
+        source_preflight = {
+            "status": "ran",
+            "source": str(resolved_source),
+            "reason": "source operators were checked against the probe generator",
+        }
+    else:
+        source_preflight = {
+            "status": "source-unavailable",
+            "source": None,
+            "reason": "source file could not be resolved for preflight",
+        }
+    report["source_preflight"] = source_preflight
     report["checkdiff_source"] = checkdiff_source
     print(render_json(report) if json_out else render_text(report))
 
@@ -22673,8 +22718,11 @@ def mutate_lifetime_layout_cmd(
     source_text = None
     source_path_for_probes: Path | None = None
     if source_file is not None:
-        if not source_file.is_file():
-            raise typer.BadParameter(f"source file not found: {source_file}")
+        source_file = _resolve_existing_cli_file(
+            source_file,
+            melee_root=DEFAULT_MELEE_ROOT,
+            label="source file",
+        )
         source_text = source_file.read_text()
         if _path_inside_repo(source_file, DEFAULT_MELEE_ROOT):
             source_path_for_probes = source_file

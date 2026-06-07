@@ -513,8 +513,9 @@ def test_frame_transform_search_compiles_forced_pad_stack_probe(
     assert variant["candidate_frame_size"] == 88
     assert variant["probe"]["provenance"]["delta"] == 8
     assert payload["frame_transform_probe_evaluation"]["verdict"] == (
-        "source-reachable-frame-transform"
+        "diagnostic-pad-stack-frame-transform"
     )
+    assert payload["stop_condition"]["kind"] == "diagnostic-pad-stack-only"
 
 
 def test_frame_transform_search_compiles_semantic_dematerialize_probe(

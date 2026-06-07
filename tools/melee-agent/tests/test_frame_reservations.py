@@ -1372,6 +1372,157 @@ def test_frame_transform_probe_evaluation_ranks_frame_delta_reducers() -> None:
     assert evaluation["variants"][1]["frame_delta_improvement"] == 0
 
 
+def test_frame_transform_evaluation_reports_validated_natural_source_attribution() -> None:
+    report = {
+        "current": {"frame_size": 80},
+        "expected": {"frame_size": 72},
+        "frame_delta": -8,
+    }
+    natural = {
+        "label": "frame-local-dematerialize-0",
+        "operator": "frame-local-dematerialize",
+        "status": "ok",
+        "objective": {"frame_after": 72},
+    }
+
+    evaluation = evaluate_frame_transform_probe_results(report, [natural])
+
+    attribution = evaluation["natural_source_attribution"]
+    assert attribution["status"] == "validated-natural-source"
+    assert attribution["verdict"] == "source-reachable"
+    assert attribution["best_natural_variant"]["label"] == "frame-local-dematerialize-0"
+    assert attribution["best_diagnostic_variant"] is None
+
+
+def test_frame_transform_evaluation_reports_partial_natural_source_attribution() -> None:
+    report = {
+        "current": {"frame_size": 96},
+        "expected": {"frame_size": 80},
+        "frame_delta": -16,
+    }
+    natural = {
+        "label": "frame-split-fp-const-lifetime-0",
+        "operator": "frame-split-fp-const-lifetime",
+        "status": "ok",
+        "objective": {"frame_after": 88},
+    }
+
+    evaluation = evaluate_frame_transform_probe_results(report, [natural])
+
+    attribution = evaluation["natural_source_attribution"]
+    assert attribution["status"] == "partial-natural-source"
+    assert attribution["verdict"] == "source-probe"
+    assert attribution["best_natural_variant"]["label"] == (
+        "frame-split-fp-const-lifetime-0"
+    )
+    assert attribution["best_natural_variant"]["frame_delta_improvement"] == 8
+
+
+def test_frame_transform_evaluation_reports_padstack_only_diagnostic_attribution() -> None:
+    report = {
+        "current": {"frame_size": 96},
+        "expected": {"frame_size": 80},
+        "frame_delta": -16,
+        "frame_first_divergence": {
+            "verdict": {
+                "status": "unresolved-source-attribution",
+                "reason": "No resolved symbolic stack homes were available",
+            },
+        },
+    }
+    padstack = {
+        "label": "frame-reservation-pad-stack-16",
+        "operator": "frame-reservation-pad-stack",
+        "status": "ok",
+        "objective": {"frame_after": 80},
+    }
+    block_scope = {
+        "label": "block-scope",
+        "operator": "block-scope",
+        "status": "ok",
+        "objective": {"frame_after": 96},
+    }
+
+    evaluation = evaluate_frame_transform_probe_results(
+        report,
+        [padstack, block_scope],
+    )
+
+    assert evaluation["verdict"] == "diagnostic-pad-stack-frame-transform"
+    attribution = evaluation["natural_source_attribution"]
+    assert attribution["status"] == "diagnostic-pad-stack-only"
+    assert attribution["verdict"] == "diagnostic-only"
+    assert attribution["best_diagnostic_variant"]["label"] == (
+        "frame-reservation-pad-stack-16"
+    )
+    assert attribution["best_natural_variant"] is None
+    assert "PAD_STACK diagnostic" in attribution["missing_reason"]
+    assert "No resolved symbolic stack homes were available" in (
+        attribution["missing_reason"]
+    )
+    assert evaluation["stop_condition"]["kind"] == "diagnostic-pad-stack-only"
+    assert evaluation["stop_condition"]["natural_source_attribution"] == attribution
+
+
+def test_frame_transform_evaluation_does_not_validate_padstack_over_partial_natural_source() -> None:
+    report = {
+        "current": {"frame_size": 96},
+        "expected": {"frame_size": 80},
+        "frame_delta": -16,
+    }
+    padstack = {
+        "label": "frame-reservation-pad-stack-16",
+        "operator": "frame-reservation-pad-stack",
+        "status": "ok",
+        "objective": {"frame_after": 80},
+    }
+    natural = {
+        "label": "frame-local-dematerialize-0",
+        "operator": "frame-local-dematerialize",
+        "status": "ok",
+        "objective": {"frame_after": 88},
+    }
+
+    evaluation = evaluate_frame_transform_probe_results(
+        report,
+        [padstack, natural],
+    )
+
+    assert evaluation["verdict"] == "partial-source-reachable-frame-transform"
+    assert evaluation["best_variant"]["label"] == "frame-reservation-pad-stack-16"
+    attribution = evaluation["natural_source_attribution"]
+    assert attribution["status"] == "partial-natural-source"
+    assert evaluation["stop_condition"]["kind"] == "partial-frame-transform"
+    assert evaluation["stop_condition"]["variant_label"] == (
+        "frame-local-dematerialize-0"
+    )
+
+
+def test_frame_transform_evaluation_reports_no_source_lever_attribution() -> None:
+    report = {
+        "current": {"frame_size": 80},
+        "expected": {"frame_size": 72},
+        "frame_delta": -8,
+        "semantic_lever_status": {
+            "status": "no-safe-semantic-lever",
+            "operator": "frame-local-dematerialize",
+            "reason": "source scan found no safe semantic local dematerialization",
+        },
+    }
+
+    evaluation = evaluate_frame_transform_probe_results(report, [])
+
+    attribution = evaluation["natural_source_attribution"]
+    assert attribution["status"] == "no-source-lever"
+    assert attribution["verdict"] == "diagnostic-only"
+    assert attribution["best_natural_variant"] is None
+    assert attribution["best_diagnostic_variant"] is None
+    assert attribution["missing_reason"] == (
+        "source scan found no safe semantic local dematerialization"
+    )
+    assert evaluation["stop_condition"]["natural_source_attribution"] == attribution
+
+
 def test_frame_transform_probe_evaluation_flags_bounded_ceiling_candidate() -> None:
     report = {
         "current": {"frame_size": 80},
@@ -1442,11 +1593,14 @@ def test_frame_transform_evaluation_reports_no_safe_semantic_lever() -> None:
     evaluation = evaluate_frame_transform_probe_results(report, [])
 
     assert evaluation["verdict"] == "no-safe-semantic-lever"
+    attribution = evaluation["natural_source_attribution"]
+    assert attribution["status"] == "no-source-lever"
     assert evaluation["stop_condition"] == {
         "status": "not-satisfied",
         "kind": "no-safe-semantic-lever",
         "reason": "source scan found no safe semantic local dematerialization",
         "baseline_remaining_frame_delta": -8,
+        "natural_source_attribution": attribution,
     }
 
 

@@ -2002,6 +2002,53 @@ def test_declaration_use_distance_keeps_later_uses_inside_moved_block() -> None:
     assert block_start < fn.index("sink(count);") < block_end
 
 
+def test_declaration_use_distance_skips_region_crossing_label_or_goto() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(int flag)
+        {
+            int count;
+            if (flag) {
+                goto found;
+            }
+
+            count = get_count();
+        found:
+            sink(count);
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(
+        source,
+        "fn_80000000",
+        operator_filter=("declaration-use-distance",),
+        max_probes=20,
+    )
+
+    assert [probe.operator for probe in probes] == []
+
+
+def test_declaration_use_distance_skips_inline_label_and_conditional_goto() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(int flag)
+        {
+            int count;
+            if (flag) goto found;
+
+            count = get_count();
+        found: sink(count);
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(
+        source,
+        "fn_80000000",
+        operator_filter=("declaration-use-distance",),
+        max_probes=20,
+    )
+
+    assert [probe.operator for probe in probes] == []
+
+
 def test_early_guard_return_probe_unwraps_top_level_if_body() -> None:
     source = textwrap.dedent("""\
         void fn_80000000(int flag, int index)
@@ -2089,6 +2136,109 @@ def test_call_arg_tempization_preserves_float_argument_type() -> None:
         "argument_index": 0,
         "temp_type": "f32",
     }
+
+
+def test_call_arg_tempization_preserves_float_literal_arithmetic_type() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(float x)
+        {
+            sinkf(x + 1.0f);
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(
+        source,
+        "fn_80000000",
+        operator_filter=("call-argument-tempization",),
+        max_probes=20,
+    )
+    probe = next(probe for probe in probes if probe.operator == "call-argument-tempization")
+
+    assert "float ll_probe_arg_0 = x + 1.0f;" in probe.source_text
+    assert "sinkf(ll_probe_arg_0);" in probe.source_text
+
+
+def test_temp_introduction_uses_lhs_type_for_assignment_temp() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(HSD_GObj* gobj)
+        {
+            Diagram3* data;
+            f32 frame;
+
+            data = gobj->user_data;
+            frame = mn_8022ED6C(data->jobjs[1], (AnimLoopSettings*) &settings);
+            sink(frame, data);
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(
+        source,
+        "fn_80000000",
+        operator_filter=("temp-introduction",),
+        max_probes=20,
+    )
+    probe = next(probe for probe in probes if probe.operator == "temp-introduction")
+
+    assert "Diagram3* ll_probe_temp_0 = gobj->user_data;" in probe.source_text
+    assert "int ll_probe_temp_0 = gobj->user_data;" not in probe.source_text
+
+
+def test_call_arg_tempization_rejects_pointer_expr_without_safe_type() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(Data* data, int* idx_ptr)
+        {
+            HSD_JObjSetFlagsAll(data->jobjs[*idx_ptr], 0x10);
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(
+        source,
+        "fn_80000000",
+        operator_filter=("call-argument-tempization",),
+        max_probes=20,
+    )
+
+    assert [probe.operator for probe in probes] == []
+
+
+def test_call_arg_tempization_preserves_simple_cast_pointer_type() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(void)
+        {
+            setup((AnimLoopSettings*) &settings);
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(
+        source,
+        "fn_80000000",
+        operator_filter=("call-argument-tempization",),
+        max_probes=20,
+    )
+    probe = next(probe for probe in probes if probe.operator == "call-argument-tempization")
+
+    assert "AnimLoopSettings* ll_probe_arg_0 = (AnimLoopSettings*) &settings;" in (
+        probe.source_text
+    )
+    assert "int ll_probe_arg_0" not in probe.source_text
+
+
+def test_call_arg_tempization_rejects_function_pointer_cast() -> None:
+    source = textwrap.dedent("""\
+        void fn_80000000(HSD_GObj* gobj)
+        {
+            HSD_GObj_SetupProc(gobj, (void (*)(HSD_GObj*)) mnDiagram_OnFrame, 0);
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(
+        source,
+        "fn_80000000",
+        operator_filter=("call-argument-tempization",),
+        max_probes=20,
+    )
+
+    assert [probe.operator for probe in probes] == []
 
 
 def test_call_arg_tempization_ignores_nested_call_in_outer_argument_list() -> None:
@@ -4692,6 +4842,56 @@ def test_lifetime_layout_compile_probes_use_same_tu_unit_source(
     assert result.exit_code == 0, result.stdout + result.stderr
     assert calls
     assert calls[0]["unit_source"] == source
+
+
+def test_lifetime_layout_compile_probes_normalizes_relative_source_file(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    melee_root = tmp_path / "melee"
+    tool_dir = melee_root / "tools" / "melee-agent"
+    baseline = tmp_path / "baseline.txt"
+    source = melee_root / "src" / "melee" / "mn" / "source.c"
+    tool_dir.mkdir(parents=True)
+    source.parent.mkdir(parents=True)
+    baseline.write_text(BASELINE)
+    source.write_text(SOURCE)
+    calls: list[dict[str, object]] = []
+
+    def fake_compile(diff_input, *, function, melee_root, timeout, unit_source=None) -> str:
+        calls.append({"diff_input": diff_input, "unit_source": unit_source})
+        return CANDIDATE
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture.compile_source_variant",
+        fake_compile,
+    )
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.chdir(tool_dir)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "lifetime-layout",
+            "-f",
+            "fn_80000000",
+            "--pcdump",
+            str(baseline),
+            "--source-file",
+            "../../src/melee/mn/source.c",
+            "--compile-probes",
+            "--no-score-match-percent",
+            "--max-probes",
+            "1",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert calls
+    assert calls[0]["unit_source"] == source.resolve()
 
 
 def test_lifetime_layout_cli_exposes_frame_reservation_probe(

@@ -2428,6 +2428,14 @@ def _identifier_count_excluding_ranges(
     return _identifier_count("".join(chars), name)
 
 
+def _region_has_label_or_goto(text: str) -> bool:
+    return re.search(
+        r"(?m)^[ \t]*(?:[A-Za-z_]\w*|case\b[^:\n]*|default)\s*:"
+        r"|\bgoto\s+[A-Za-z_]\w*\s*;",
+        text,
+    ) is not None
+
+
 def _byte_to_char_offsets(source: str) -> list[int]:
     mapping = [0] * (len(source.encode("utf-8")) + 1)
     byte_offset = 0
@@ -2702,6 +2710,7 @@ def _probe_temp_introduction(
     body_start: int,
     function: str,
 ) -> LifetimeLayoutProbe | None:
+    scoped_types = _scoped_identifier_types(source, body, body_start, function)
     match = re.search(
         r"(?m)^([ \t]*)([A-Za-z_]\w*)\s*=\s*([^;\n]*(?:\+|-|\*|/)[^;\n]*);",
         body,
@@ -2721,15 +2730,18 @@ def _probe_temp_introduction(
         indent, decl_lhs, lhs, expr = match.groups()
         if _has_later_decl_before_statement(body, match.end(), indent):
             return None
+        parsed_decl = _parse_simple_decl(decl_lhs)
+        temp_type = parsed_decl[1] if parsed_decl is not None else "int"
         replacement = (
             f"{indent}{decl_lhs};\n"
-            f"{indent}int {temp} = {expr.strip()};\n"
+            f"{indent}{temp_type} {temp} = {expr.strip()};\n"
             f"{indent}{lhs} = {temp};"
         )
     else:
         indent, lhs, expr = match.groups()
+        temp_type = scoped_types.get(lhs, "int")
         replacement = (
-            f"{indent}int {temp} = {expr.strip()};\n"
+            f"{indent}{temp_type} {temp} = {expr.strip()};\n"
             f"{indent}{lhs} = {temp};"
         )
     return LifetimeLayoutProbe(
@@ -2849,6 +2861,8 @@ def _probe_declaration_use_distance(
             continue
         use_block = body[use_start:use_end]
         if _block_crosses_shallower_else(use_block, use_line):
+            continue
+        if _region_has_label_or_goto(body[match.start():use_end]):
             continue
         decl_text = match.group(0).strip()
         wrapped = (
@@ -3069,6 +3083,8 @@ def _probe_call_arg_temp(
                 continue
             temp = "ll_probe_arg_0"
             temp_type = _infer_call_arg_temp_type(arg, scoped_types)
+            if temp_type is None:
+                continue
             args[index] = temp
             replacement = (
                 f"{indent}{{\n"
@@ -3934,9 +3950,41 @@ def _parse_simple_decl(text: str) -> tuple[str, str] | None:
     return match.group("name"), typ
 
 
-def _infer_call_arg_temp_type(expr: str, scoped_types: dict[str, str]) -> str:
+def _simple_leading_cast_type(expr: str) -> str | None:
+    stripped = expr.strip()
+    if not stripped.startswith("("):
+        return None
+    close = _find_matching_paren(stripped, 0)
+    if close is None:
+        return None
+    cast_type = stripped[1:close].strip()
+    if "(*" in cast_type or ")" in cast_type or "(" in cast_type:
+        return None
+    parsed = _parse_simple_decl(f"{cast_type} ll_probe_cast")
+    if parsed is None:
+        return None
+    return parsed[1]
+
+
+def _call_arg_temp_expr_needs_known_type(expr: str) -> bool:
+    if any(token in expr for token in ("->", "[", "&", "(*")):
+        return True
+    return (
+        re.search(r"(?:\b[A-Za-z_]\w*|\)|\])\s*\.\s*[A-Za-z_]\w*", expr)
+        is not None
+    )
+
+
+def _infer_call_arg_temp_type(expr: str, scoped_types: dict[str, str]) -> str | None:
+    cast_type = _simple_leading_cast_type(expr)
+    if cast_type is not None:
+        return cast_type
+    if _call_arg_temp_expr_needs_known_type(expr):
+        return None
     names = set(re.findall(r"\b[A-Za-z_]\w*\b", expr))
     referenced_types = {scoped_types[name] for name in names if name in scoped_types}
+    if any(type_name.endswith("*") for type_name in referenced_types):
+        return None
     if "double" in referenced_types:
         return "double"
     if "f32" in referenced_types:

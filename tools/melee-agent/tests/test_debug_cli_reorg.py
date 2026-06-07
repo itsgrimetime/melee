@@ -890,6 +890,69 @@ def test_debug_suggest_control_flow_shape_text_reports_buffer_lifetime(
     assert "fn_803AC168" in output
 
 
+def test_debug_suggest_control_flow_shape_preflights_source_materialization(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    payload = _control_flow_shape_checkdiff_payload()
+    payload["target_asm"] = [
+        "/* 0000 */ lwz r4, 0(r3)",
+        "/* 0004 */ addi r3, r3, 0x24",
+        "/* 0008 */ lwz r4, 0(r3)",
+        "/* 000C */ addi r3, r3, 0x24",
+        "/* 0010 */ mtctr r5",
+        "/* 0014 */ lwz r4, 0(r3)",
+        "/* 0018 */ bdnz lbl_loop",
+    ]
+    payload["current_asm"] = [
+        "/* 0000 */ mtctr r5",
+        "/* 0004 */ lwz r4, 0(r3)",
+        "/* 0008 */ bdnz lbl_loop",
+    ]
+    source = tmp_path / "src" / "melee" / "mn" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        textwrap.dedent(
+            """
+            void fn_80000000(void)
+            {
+                int x;
+                x = 0;
+            }
+            """
+        )
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_read_control_flow_shape_checkdiff_payload",
+        lambda **kwargs: (payload, "fixture"),
+        raising=False,
+    )
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", tmp_path)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, melee_root: "melee/mn/demo",
+    )
+
+    result = runner.invoke(
+        app,
+        ["debug", "suggest", "control-flow-shape", "-f", "fn_80000000", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    report = json.loads(result.output)
+    suggestion = next(
+        item
+        for item in report["suggestions"]
+        if item["kind"] == "loop-peel-unroll"
+    )
+    assert report["source_preflight"]["status"] == "ran"
+    assert suggestion["follow_up_commands"] == []
+    assert suggestion["source_materialization"]["status"] == "non-materializable"
+    assert suggestion["source_materialization"]["operator"] == "loop-init"
+
+
 def test_debug_suggest_control_flow_shape_rejects_wrong_function_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
