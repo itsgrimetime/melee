@@ -107,8 +107,7 @@ The claim must be race-safe against two agents claiming the same issue at once.
 The relevant infrastructure, verified in `db/__init__.py`:
 
 - `connection()` (`:83-100`) opens the thread-local connection in autocommit
-  (`isolation_level=None`), WAL mode, `foreign_keys=ON` — **but sets no
-  `busy_timeout`.**
+  (`isolation_level=None`), WAL mode, `foreign_keys=ON`.
 - `transaction()` (`:102-112`) wraps the body in `BEGIN IMMEDIATE … COMMIT`.
 
 `BEGIN IMMEDIATE` takes the database write lock at `BEGIN` time, so a
@@ -117,20 +116,24 @@ read-then-write inside the transaction (SELECT current claim → decide → UPDA
 committed between its `BEGIN` and its `SELECT` (WAL snapshot + exclusive write
 lock). There is no lost-update once a writer is in.
 
-**The real hazard** is the *loser* of the race: with no `busy_timeout`, a second
-concurrent `BEGIN IMMEDIATE` fails immediately with
-`sqlite3.OperationalError: database is locked` instead of blocking. That would
-surface to the agent as a stack trace / exit 1 — **not** the intended
-`ValueError("already claimed … use --force")` / exit 2. So "concurrent claim
-fails loudly" is only met by accident, with the wrong error.
+The *loser* of the race must **block** until the winner commits (then re-read
+and report "already claimed"), rather than fail immediately with
+`sqlite3.OperationalError: database is locked`. Blocking requires a non-zero
+`busy_timeout`.
 
-**Fix (required):** set `PRAGMA busy_timeout = 5000` in `connection()` right
-after the WAL pragma. The loser then blocks until the winner commits, re-reads
-under its own `BEGIN IMMEDIATE`, sees the claim, and returns the correct
-`ValueError`. This is a one-line, globally-beneficial change (every writer in
-this DB currently shares the same latent gap — `add_claim` (`:167`) included, so
-it is *not* a clean correctness precedent to copy without this). Claim/release
-transactions are tiny, so 5 s is ample headroom and effectively never reached.
+**Correction (verified during implementation):** the original draft claimed
+`connection()` "sets no `busy_timeout`" and therefore a concurrent loser would
+error immediately. That premise was wrong. Python's `sqlite3.connect()` applies
+its default `timeout=5.0` via `sqlite3_busy_timeout`, so a fresh connection
+already reports `PRAGMA busy_timeout == 5000` even though `connection()` never
+issued the pragma — the loser already blocked, not errored. The implementation
+therefore keeps an **explicit** `PRAGMA busy_timeout = 5000` in `connection()`
+right after the WAL pragma as *defensive, self-documenting hardening*: it pins
+the value at the connection level so the behavior survives any future change to
+the `sqlite3.connect(...)` call (e.g. someone passing `timeout=0`). It is not
+fixing a live bug. Note the corresponding test asserts the effective value
+(`busy_timeout == 5000`) rather than a behavior delta, so it passes with or
+without the pragma — that's acceptable for a value-pinning guard.
 
 Defense-in-depth (optional, low priority): the CLI may also translate a residual
 `OperationalError` into a clean "issue queue is busy, retry" message, but with
