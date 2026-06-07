@@ -222,6 +222,9 @@ def local_names(source: str, function: str) -> set[str]:
         return names
     for child in body.named_children:
         if child.type == "declaration":
+            decl_text = _ts.node_text(source_bytes, child)
+            if re.search(r"\bvolatile\b", _mask(decl_text)):
+                continue  # volatile-qualified locals are excluded -> their statements become barriers
             names |= _declared_names(child, source_bytes)
     fn = body.parent  # function_definition
     stack = [fn] if fn is not None else []
@@ -235,6 +238,8 @@ def local_names(source: str, function: str) -> set[str]:
     if param_list is not None:
         for p in param_list.named_children:
             if p.type == "parameter_declaration":
+                if re.search(r"\bvolatile\b", _mask(_ts.node_text(source_bytes, p))):
+                    continue
                 ident = _leftmost_identifier(p)
                 if ident is not None:
                     names.add(_ts.node_text(source_bytes, ident))
@@ -369,6 +374,24 @@ def _unit_owns_its_lines(unit: MoveUnit, source_bytes: bytes) -> bool:
     return _mask(prefix).strip() == "" and _mask(suffix).strip() == ""
 
 
+def _dest_line_boundary_clean(sibs: list[SiblingStmt], dest: int, source_bytes: bytes) -> bool:
+    """A full-line move inserts at a physical-line boundary. Reject destinations
+    whose insertion point would cross a sibling/brace sharing that line:
+    - dest < len: insert before sibs[dest]'s line -> that sibling must OWN its line
+      start (only whitespace/comments before it on its line).
+    - dest == len: insert after the last sibling's line -> that sibling must OWN
+      its line end (only whitespace/comments after it, e.g. no `}` on the line)."""
+    if dest >= len(sibs):
+        s0, s1 = sibs[-1].byte_range
+        _, le = _line_bounds(source_bytes, s0, s1)
+        suffix = source_bytes[s1:le].decode("utf-8", "replace")
+        return _mask(suffix).strip() == ""
+    s0, s1 = sibs[dest].byte_range
+    ls, _ = _line_bounds(source_bytes, s0, s1)
+    prefix = source_bytes[ls:s0].decode("utf-8", "replace")
+    return _mask(prefix).strip() == ""
+
+
 def apply_move(source: str, sibs: list[SiblingStmt], unit: MoveUnit, dest: int) -> str:
     """Relocate `unit` (its full physical lines) to before sibling `dest`, returning
     the new source. PRECONDITION: the caller must have verified
@@ -425,6 +448,8 @@ def generate_statement_hoist_sink_variants(
                 continue
             if len(out) >= max_candidates:
                 return out
+            if not _dest_line_boundary_clean(sibs, dest, source_bytes):
+                continue
             candidate = apply_move(source, sibs, unit, dest)
             if candidate in seen:
                 continue

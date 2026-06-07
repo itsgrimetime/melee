@@ -326,3 +326,37 @@ def test_operator_skips_units_not_owning_their_lines():
     # shared-line statements must never be emitted as line moves
     assert all("a = idx; b = idx;" not in v["candidate_source"] or
                v["candidate_source"] == src for v in variants)
+
+
+def test_operator_skips_dest_sharing_a_line():
+    # destination boundary shares a physical line with another sibling -> a full-line
+    # splice would cross it; the operator must NOT emit a candidate that reorders the
+    # cluster before `c = idx;` (which it reads).
+    src = ("void f(int idx){\n"
+           "    int c;\n"
+           "    int d;\n"
+           "    Vec3 pos;\n"
+           "    c = idx; d = idx;\n"
+           "    pos.x = c;\n"
+           "    pos.y = c;\n"
+           "}\n")
+    if toplevel_siblings(src, "f") is None:
+        import pytest; pytest.skip("tree-sitter unavailable")
+    variants = generate_statement_hoist_sink_variants(src, "f", max_candidates=24)
+    for v in variants:
+        cs = v["candidate_source"]
+        assert cs.index("c = idx;") < cs.index("pos.x = c;"), cs   # never read c before its def
+
+def test_volatile_locals_are_immovable():
+    src = ("void f(int idx){\n"
+           "    volatile int v;\n"
+           "    volatile int w;\n"
+           "    v = idx;\n"
+           "    w = idx;\n"
+           "}\n")
+    if toplevel_siblings(src, "f") is None:
+        import pytest; pytest.skip("tree-sitter unavailable")
+    locs = local_names(src, "f")
+    assert "v" not in locs and "w" not in locs        # volatile locals excluded
+    variants = generate_statement_hoist_sink_variants(src, "f", max_candidates=24)
+    assert variants == []                              # nothing volatile is movable
