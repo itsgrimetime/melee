@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -193,4 +194,102 @@ func matchInstr(ins asmInstr, tok patToken, vars map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// alignment is the result of matching a pattern within one function body.
+type alignment struct {
+	ok            bool
+	slackConsumed int // total instructions absorbed by gaps
+	startSrcLine  int
+	endSrcLine    int
+	lastIdx       int // internal: index of the last matched instruction
+	bindings      map[string]string
+}
+
+// matchPattern returns the tightest (minimum slack) alignment of pat anywhere in
+// instrs, or ok=false if none. One result per body (overlapping starts collapse
+// to the single best alignment). pat[0] and pat[last] are concrete (guaranteed
+// by parsePattern).
+func matchPattern(instrs []asmInstr, pat []patToken) alignment {
+	memo := map[string]alignment{}
+	var best alignment
+	for start := range instrs {
+		res := solve(instrs, pat, start, 0, map[string]string{}, memo)
+		if !res.ok {
+			continue
+		}
+		res.startSrcLine = instrs[start].srcLine
+		res.endSrcLine = instrs[res.lastIdx].srcLine
+		if !best.ok || res.slackConsumed < best.slackConsumed {
+			best = res
+		}
+	}
+	if best.ok {
+		best.bindings = cloneVars(best.bindings)
+	}
+	return best
+}
+
+// solve returns the best completion of pat[pi:] starting at instrs[ii] under the
+// given bindings. Memoized by (ii, pi, binding-signature). vars is never mutated:
+// concrete tokens clone before attempting a candidate match.
+func solve(instrs []asmInstr, pat []patToken, ii, pi int, vars map[string]string, memo map[string]alignment) alignment {
+	if pi == len(pat) {
+		return alignment{ok: true, lastIdx: ii - 1, bindings: cloneVars(vars)}
+	}
+	key := fmt.Sprintf("%d|%d|%s", ii, pi, varSig(vars))
+	if m, ok := memo[key]; ok {
+		return m
+	}
+	var best alignment
+	tok := pat[pi]
+	if tok.isGap {
+		maxG := tok.gapMax
+		if rem := len(instrs) - ii; maxG > rem {
+			maxG = rem // not enough instructions left; if gapMin > maxG the loop is a no-op
+		}
+		for g := tok.gapMin; g <= maxG; g++ {
+			res := solve(instrs, pat, ii+g, pi+1, vars, memo)
+			if res.ok {
+				res.slackConsumed += g
+				if !best.ok || res.slackConsumed < best.slackConsumed {
+					best = res
+				}
+			}
+		}
+	} else if ii < len(instrs) {
+		v2 := cloneVars(vars)
+		if matchInstr(instrs[ii], tok, v2) {
+			best = solve(instrs, pat, ii+1, pi+1, v2, memo)
+		}
+	}
+	memo[key] = best
+	return best
+}
+
+func cloneVars(v map[string]string) map[string]string {
+	c := make(map[string]string, len(v))
+	for k, val := range v {
+		c[k] = val
+	}
+	return c
+}
+
+func varSig(v map[string]string) string {
+	if len(v) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(v))
+	for k := range v {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for _, k := range keys {
+		b.WriteString(k)
+		b.WriteByte('=')
+		b.WriteString(v[k])
+		b.WriteByte(';')
+	}
+	return b.String()
 }

@@ -175,3 +175,72 @@ func TestMatchInstr(t *testing.T) {
 		t.Fatal("x=r5 then x=r6 should fail")
 	}
 }
+
+func instrs(ops ...string) []asmInstr {
+	out := make([]asmInstr, len(ops))
+	for i, op := range ops {
+		out[i] = asmInstr{opcode: op, srcLine: i + 1}
+	}
+	return out
+}
+
+func TestMatchPattern(t *testing.T) {
+	body := instrs("lfs", "mr", "mr", "fsubs", "bne") // gap of 2 between lfs and fsubs
+
+	// exact gap window matches
+	pat, _ := parsePattern([]string{"lfs", "*{0..3}", "fsubs", "bne"}, 6)
+	a := matchPattern(body, pat)
+	if !a.ok {
+		t.Fatal("should match")
+	}
+	if a.slackConsumed != 2 {
+		t.Fatalf("slack: want 2, got %d", a.slackConsumed)
+	}
+	if a.startSrcLine != 1 || a.endSrcLine != 5 {
+		t.Fatalf("span: %d-%d", a.startSrcLine, a.endSrcLine)
+	}
+
+	// too-tight gap window fails
+	tight, _ := parsePattern([]string{"lfs", "*{0..1}", "fsubs", "bne"}, 6)
+	if matchPattern(body, tight).ok {
+		t.Fatal("gap of 2 should not fit in *{0..1}")
+	}
+}
+
+func TestMatchPatternPrefersTightest(t *testing.T) {
+	// "a ... a b": pattern a,*{0..5},b can align from index 0 (slack 2) or index 2 (slack 0).
+	body := instrs("a", "x", "a", "b")
+	pat, _ := parsePattern([]string{"a", "*{0..5}", "b"}, 6)
+	a := matchPattern(body, pat)
+	if !a.ok {
+		t.Fatal("should match")
+	}
+	if a.slackConsumed != 0 {
+		t.Fatalf("should pick tightest alignment (slack 0), got %d", a.slackConsumed)
+	}
+	if a.startSrcLine != 3 {
+		t.Fatalf("tightest start is line 3, got %d", a.startSrcLine)
+	}
+}
+
+func TestMatchPatternVarNoLeak(t *testing.T) {
+	// Within ONE start, the first gap branch (g=0) tries "or x x" against
+	// "or r5,r6": matchInstr binds x=r5 on operand 0, then fails on operand 1.
+	// The second gap branch (g=1) must see x UNBOUND so "or r9,r9" can match.
+	// A matcher that mutates a shared vars map (no clone-per-candidate) leaks
+	// x=r5 and wrongly fails the whole pattern. This single-start backtracking
+	// case is what actually exercises the spec's correctness-critical invariant.
+	body := []asmInstr{
+		{opcode: "mflr", srcLine: 1},
+		{opcode: "or", operands: []string{"r5", "r6"}, srcLine: 2}, // partial-bind then fail
+		{opcode: "or", operands: []string{"r9", "r9"}, srcLine: 3}, // clean path must win
+	}
+	pat, _ := parsePattern([]string{"mflr", "*{0..1}", "or x x"}, 6)
+	a := matchPattern(body, pat)
+	if !a.ok {
+		t.Fatal("should match via the second gap branch (x=r9)")
+	}
+	if a.endSrcLine != 3 || a.slackConsumed != 1 {
+		t.Fatalf("want end line 3 slack 1, got end %d slack %d", a.endSrcLine, a.slackConsumed)
+	}
+}
