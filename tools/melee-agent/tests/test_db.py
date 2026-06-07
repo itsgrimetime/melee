@@ -951,3 +951,11 @@ class TestToolIssueClaims:
 
     def test_release_missing_returns_none(self, db):
         assert db.release_tool_issue(99999, "agent-1") is None
+
+    def test_resolve_clears_claim(self, db):
+        issue = db.report_tool_issue(summary="x", agent_id="reporter")
+        db.claim_tool_issue(issue["id"], "agent-1")
+        resolved = db.resolve_tool_issue(issue["id"], agent_id="agent-1")
+        assert resolved["status"] == "resolved"
+        assert resolved["claimed_by"] is None
+        assert resolved["claimed_at"] is None

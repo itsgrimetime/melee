@@ -520,6 +520,8 @@ class StateDB:
                 """
                 UPDATE tool_issues
                 SET status = 'resolved',
+                    claimed_by = NULL,
+                    claimed_at = NULL,
                     updated_at = ?,
                     resolved_at = ?,
                     resolved_by_agent = ?,
