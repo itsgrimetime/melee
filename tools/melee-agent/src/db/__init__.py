@@ -96,6 +96,10 @@ class StateDB:
             # Enable foreign keys and WAL mode for better concurrency
             _local.connection.execute("PRAGMA foreign_keys = ON")
             _local.connection.execute("PRAGMA journal_mode = WAL")
+            # Wait up to 5s on write contention instead of failing fast with
+            # "database is locked" — lets BEGIN IMMEDIATE losers retry and read
+            # the committed claim rather than raising OperationalError.
+            _local.connection.execute("PRAGMA busy_timeout = 5000")
 
         yield _local.connection
 

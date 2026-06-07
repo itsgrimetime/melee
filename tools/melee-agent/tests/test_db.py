@@ -853,3 +853,17 @@ def test_tool_issues_claim_columns_migrate_from_v9(tmp_path):
     assert fresh_cols == migrated_cols
     fresh_db.close()
     reset_db()
+
+
+def test_connection_sets_busy_timeout(tmp_path):
+    """Writers must wait on contention instead of failing fast with
+    'database is locked', so a claim race reports cleanly."""
+    from src.db import StateDB, reset_db
+
+    reset_db()
+    db = StateDB(tmp_path / "bt.db")
+    with db.connection() as conn:
+        timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+    assert timeout == 5000
+    db.close()
+    reset_db()
