@@ -110,6 +110,10 @@ Flags: `--gap-cap N` (bare `*` width, default 6), `--slack N` (derive tolerance,
 default 2), `--max-landmarks N` (default 12), `--with-operands`. The derived
 pattern is printed so you can tweak it and re-run it manually.
 
+Note: `--with-operands` is significantly more expensive to match (it adds
+register-reuse constraints); on large functions prefer a `:start-end` range, or
+the search budget will skip the largest bodies with a warning.
+
 ## Tips
 
 - Shorter patterns (3-4 opcodes) give more results

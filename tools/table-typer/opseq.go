@@ -198,74 +198,124 @@ func matchInstr(ins asmInstr, tok patToken, vars map[string]string) bool {
 	return true
 }
 
+// maxSolveNodes bounds the matcher's search per function body. Opcode-only
+// patterns never approach it (their binding signature is empty, so the memo is
+// fully effective). Patterns with consistency variables (e.g. --with-operands)
+// can otherwise search exponentially many binding-distinct states; this cap makes
+// the matcher abort that body gracefully instead of hanging. (A future
+// optimization could decouple structural matching from binding verification to
+// stay polynomial; for now the budget guarantees termination.)
+//
+// Tests may lower this to a small value to exercise the abort path quickly.
+var maxSolveNodes = 2_000_000
+
 // alignment is the result of matching a pattern within one function body.
 type alignment struct {
 	ok            bool
-	slackConsumed int // total instructions absorbed by gaps
+	aborted       bool // search budget exhausted before this body finished; result may be incomplete
+	slackConsumed int  // total instructions absorbed by gaps
 	startSrcLine  int
 	endSrcLine    int
 	lastIdx       int // internal: index of the last matched instruction
 	bindings      map[string]string
 }
 
+// matcher holds the per-body search state so the node budget can be tracked
+// across the recursion and across start positions.
+type matcher struct {
+	instrs  []asmInstr
+	pat     []patToken
+	memo    map[string]alignment
+	nodes   int
+	aborted bool
+	keyBuf  []byte // reused scratch buffer for memo key construction (avoids fmt.Sprintf alloc)
+}
+
+// memoKey returns a unique string key for the (ii, pi, vars) triple. It reuses
+// m.keyBuf to avoid a heap allocation on every call.
+func (m *matcher) memoKey(ii, pi int, vars map[string]string) string {
+	m.keyBuf = m.keyBuf[:0]
+	m.keyBuf = strconv.AppendInt(m.keyBuf, int64(ii), 10)
+	m.keyBuf = append(m.keyBuf, '|')
+	m.keyBuf = strconv.AppendInt(m.keyBuf, int64(pi), 10)
+	m.keyBuf = append(m.keyBuf, '|')
+	m.keyBuf = append(m.keyBuf, varSig(vars)...)
+	return string(m.keyBuf)
+}
+
 // matchPattern returns the tightest (minimum slack) alignment of pat anywhere in
 // instrs, or ok=false if none. One result per body (overlapping starts collapse
 // to the single best alignment). pat[0] and pat[last] are concrete (guaranteed
-// by parsePattern).
+// by parsePattern). If the search budget is exhausted, the returned alignment's
+// aborted flag is set and its match result may be incomplete.
 func matchPattern(instrs []asmInstr, pat []patToken) alignment {
-	memo := map[string]alignment{}
+	m := &matcher{instrs: instrs, pat: pat, memo: map[string]alignment{}}
 	var best alignment
 	for start := range instrs {
-		res := solve(instrs, pat, start, 0, map[string]string{}, memo)
-		if !res.ok {
-			continue
+		res := m.solve(start, 0, map[string]string{})
+		if res.ok {
+			res.startSrcLine = instrs[start].srcLine
+			res.endSrcLine = instrs[res.lastIdx].srcLine
+			if !best.ok || res.slackConsumed < best.slackConsumed {
+				best = res
+			}
 		}
-		res.startSrcLine = instrs[start].srcLine
-		res.endSrcLine = instrs[res.lastIdx].srcLine
-		if !best.ok || res.slackConsumed < best.slackConsumed {
-			best = res
+		if m.aborted {
+			break
 		}
 	}
 	if best.ok {
 		best.bindings = cloneVars(best.bindings)
 	}
+	best.aborted = m.aborted
 	return best
 }
 
 // solve returns the best completion of pat[pi:] starting at instrs[ii] under the
 // given bindings. Memoized by (ii, pi, binding-signature). vars is never mutated:
-// concrete tokens clone before attempting a candidate match.
-func solve(instrs []asmInstr, pat []patToken, ii, pi int, vars map[string]string, memo map[string]alignment) alignment {
-	if pi == len(pat) {
+// concrete tokens clone before attempting a candidate match. Aborts (setting
+// m.aborted) once the node budget is exhausted.
+func (m *matcher) solve(ii, pi int, vars map[string]string) alignment {
+	if m.nodes >= maxSolveNodes {
+		m.aborted = true
+		return alignment{}
+	}
+	m.nodes++
+	if pi == len(m.pat) {
 		return alignment{ok: true, lastIdx: ii - 1, bindings: cloneVars(vars)}
 	}
-	key := fmt.Sprintf("%d|%d|%s", ii, pi, varSig(vars))
-	if m, ok := memo[key]; ok {
-		return m
+	key := m.memoKey(ii, pi, vars)
+	if mm, ok := m.memo[key]; ok {
+		return mm
 	}
 	var best alignment
-	tok := pat[pi]
+	tok := m.pat[pi]
 	if tok.isGap {
 		maxG := tok.gapMax
-		if rem := len(instrs) - ii; maxG > rem {
+		if rem := len(m.instrs) - ii; maxG > rem {
 			maxG = rem // not enough instructions left; if gapMin > maxG the loop is a no-op
 		}
 		for g := tok.gapMin; g <= maxG; g++ {
-			res := solve(instrs, pat, ii+g, pi+1, vars, memo)
+			res := m.solve(ii+g, pi+1, vars)
 			if res.ok {
 				res.slackConsumed += g
 				if !best.ok || res.slackConsumed < best.slackConsumed {
 					best = res
 				}
 			}
+			if m.aborted {
+				return best // bail out; do not cache a partial result
+			}
 		}
-	} else if ii < len(instrs) {
+	} else if ii < len(m.instrs) {
 		v2 := cloneVars(vars)
-		if matchInstr(instrs[ii], tok, v2) {
-			best = solve(instrs, pat, ii+1, pi+1, v2, memo)
+		if matchInstr(m.instrs[ii], tok, v2) {
+			best = m.solve(ii+1, pi+1, v2)
 		}
 	}
-	memo[key] = best
+	if !m.aborted {
+		m.memo[key] = best // never cache results computed under an abort
+	}
 	return best
 }
 

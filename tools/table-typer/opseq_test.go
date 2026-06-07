@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -362,5 +363,44 @@ func TestParseLikeTarget(t *testing.T) {
 	}
 	if _, _, _, err := parseLikeTarget("fn_foo:120"); err == nil {
 		t.Fatal("range without dash should error")
+	}
+}
+
+func TestMatchPatternBudgetGuard(t *testing.T) {
+	// A var-heavy pattern over a body with many distinct register values produces
+	// exponentially many binding-distinct states (each distinct variable can bind
+	// to any of the rotating registers, so the binding-signature space grows
+	// exponentially with the number of landmarks). Without the node budget this
+	// would hang; with it the search must abort promptly with aborted=true.
+	//
+	// We temporarily lower maxSolveNodes so the test exercises the abort path
+	// without needing to run 2M iterations (which would be slow in the test suite).
+	// The real value (2M) is restored after the test.
+	old := maxSolveNodes
+	maxSolveNodes = 500
+	defer func() { maxSolveNodes = old }()
+
+	body := make([]asmInstr, 60)
+	for i := range body {
+		reg := fmt.Sprintf("r%d", i%8) // cycles r0..r7 so many distinct bindings exist
+		body[i] = asmInstr{opcode: "or", operands: []string{reg, reg}, srcLine: i + 1}
+	}
+	// Ten distinct consistency variables (v0..v9), each with a *{0..5} gap between.
+	// Each var independently binds to whichever register is seen at its position,
+	// so binding-signature space = 8^10 ≈ 10^9; the memo cannot collapse it.
+	var toks []string
+	for k := 0; k < 10; k++ {
+		if k > 0 {
+			toks = append(toks, "*{0..5}")
+		}
+		toks = append(toks, fmt.Sprintf("or v%d v%d", k, k))
+	}
+	pat, err := parsePattern(toks, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := matchPattern(body, pat) // must return without hanging
+	if !a.aborted {
+		t.Fatal("expected the search budget to abort this pathological var-pattern")
 	}
 }

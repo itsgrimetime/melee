@@ -432,11 +432,15 @@ func main() {
 		}
 
 		var results []opseqResult
+		aborted := 0
 		for _, lf := range all {
 			if seqCandidates == report.isMatched(lf.fn.name) {
 				continue
 			}
 			a := matchPattern(lf.fn.instrs, pat)
+			if a.aborted {
+				aborted++
+			}
 			if !a.ok {
 				continue
 			}
@@ -455,6 +459,9 @@ func main() {
 			// slack so the user can judge how tight each match is.
 			fmt.Printf("%s %s [slack %d, lines %d-%d]\n",
 				res.asmLoc, locateFuncDef(cFiles, res.fnName), res.slack, res.startLine, res.endLine)
+		}
+		if aborted > 0 {
+			log.Printf("warning: %d function(s) exceeded the match-search budget and were skipped (this happens with consistency-variable patterns like --with-operands on large functions; narrow the target with a :start-end range)", aborted)
 		}
 
 	case cmdDups:
