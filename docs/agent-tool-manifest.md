@@ -1,5 +1,10 @@
 # Agent Tool Manifest
 
+> **CLI commands and skills** are inventoried in
+> [CAPABILITIES.md](CAPABILITIES.md) (generated; query with
+> `melee-agent capabilities search <task>`). This manifest covers standalone
+> `tools/*.py` scripts and setup paths the generated index does not.
+
 Canonical commands for this fork. Prefer these names over remembered aliases or
 older paths.
 

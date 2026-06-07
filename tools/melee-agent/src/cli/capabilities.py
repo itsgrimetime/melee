@@ -6,6 +6,7 @@ writes the auto-loaded brief and the full inventory doc.
 """
 from __future__ import annotations
 
+import itertools
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -216,6 +217,80 @@ def _log_search(query: str, results: list[Capability]) -> None:
         pass  # never let measurement break search
 
 
+_BRIEF_HEADER = (
+    "# melee-agent capabilities (auto-generated — DO NOT EDIT; run "
+    "`melee-agent capabilities generate`)\n\n"
+    "Before building any tool/script/command, run "
+    "`melee-agent capabilities search <task>`.\n"
+)
+
+
+def _repo_root() -> Path:
+    return DEFAULT_MELEE_ROOT
+
+
+def _artifact_paths() -> tuple[Path, Path]:
+    root = _repo_root()
+    return root / ".claude" / "capabilities-brief.md", root / "docs" / "CAPABILITIES.md"
+
+
+def render_brief(caps: list[Capability]) -> str:
+    cmds = [c for c in caps if c.kind == "command"]
+    skills = [c for c in caps if c.kind == "skill"]
+    lines = [_BRIEF_HEADER, "## CLI command groups (`melee-agent <group> --help`)"]
+    keyfn = lambda c: c.group
+    for group, members in itertools.groupby(sorted(cmds, key=keyfn), key=keyfn):
+        members = list(members)
+        # Immediate second-level token only (e.g. "debug target score-source" -> "target"),
+        # deduped — keeps the brief compact instead of dumping every nested leaf path.
+        verbs = ", ".join(sorted({m.name.split()[1] for m in members if " " in m.name})) or "(direct)"
+        lines.append(f"- {group}: {verbs}")
+    lines.append("\n## Skills (invoke `/<name>`)")
+    for s in sorted(skills, key=lambda c: c.name):
+        lines.append(f"- {s.name} — {s.summary}")
+    return "\n".join(lines) + "\n"
+
+
+def render_full(caps: list[Capability]) -> str:
+    lines = [
+        "# melee-agent Capabilities (auto-generated — run `melee-agent capabilities generate`)",
+        "",
+        "> Standalone `tools/*.py` scripts and setup paths are documented in "
+        "[agent-tool-manifest.md](agent-tool-manifest.md), not here.",
+        "",
+        "## CLI commands",
+    ]
+    for c in sorted([c for c in caps if c.kind == "command"], key=lambda c: c.name):
+        lines.append(f"- `{c.invoke}` — {c.summary}")
+    lines.append("\n## Skills")
+    for c in sorted([c for c in caps if c.kind == "skill"], key=lambda c: c.name):
+        lines.append(f"- `/{c.name}` — {c.summary}")
+    return "\n".join(lines) + "\n"
+
+
+def find_unregistered_apps(repo_root: Path) -> list[str]:
+    """Static scan: *_app Typer instances declared under src/cli that are never
+    add_typer'd ANYWHERE (root OR nested) are invisible to introspection.
+
+    NOTE (verified): scan ALL cli files for add_typer, not just __init__.py —
+    debug.py and others register nested sub-apps; scanning only __init__.py
+    false-positives those nested apps. This yields exactly claim/complete/workflow.
+    """
+    cli_dir = repo_root / "tools" / "melee-agent" / "src" / "cli"
+    declared: dict[str, Path] = {}
+    registered: set[str] = {"capabilities_app"}
+    for py in cli_dir.rglob("*.py"):
+        text = py.read_text(errors="replace")
+        for m in re.finditer(r"^(\w+_app)\s*=\s*typer\.Typer\(", text, re.MULTILINE):
+            declared.setdefault(m.group(1), py)
+        registered |= set(re.findall(r"add_typer\(\s*(\w+_app)", text))
+    return [
+        f"{var} ({path.relative_to(repo_root)})"
+        for var, path in sorted(declared.items())
+        if var not in registered
+    ]
+
+
 capabilities_app = typer.Typer(
     help="Discover existing CLI commands and skills before building new ones.",
     no_args_is_help=True,
@@ -254,4 +329,15 @@ def show(group: str = typer.Argument(None, help="Command group or skill to detai
 @capabilities_app.command("generate")
 def generate() -> None:
     """Regenerate the capability brief and full inventory doc."""
-    typer.echo("(not yet implemented) generate")
+    caps = all_capabilities(_repo_root())
+    brief_path, full_path = _artifact_paths()
+    brief_path.write_text(render_brief(caps), encoding="utf-8")
+    full_path.write_text(render_full(caps), encoding="utf-8")
+    typer.echo(f"Wrote {brief_path} and {full_path}")
+    unregistered = find_unregistered_apps(_repo_root())
+    if unregistered:
+        typer.echo(
+            "WARNING: Typer apps declared but NOT registered at root (invisible to "
+            "the index): " + ", ".join(unregistered),
+            err=True,
+        )

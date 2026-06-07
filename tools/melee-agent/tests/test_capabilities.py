@@ -114,3 +114,36 @@ def test_show_group_filters():
     assert res.exit_code == 0
     assert "debug target score-source" in res.output
     assert "extract files" not in res.output
+
+
+def test_render_brief_is_compact_and_grouped():
+    caps = cap.all_capabilities(REPO)
+    brief = cap.render_brief(caps)
+    assert brief.startswith("# melee-agent capabilities")
+    assert "debug:" in brief                     # grouped by top-level group
+    assert "/decomp" in brief or "decomp" in brief
+    # Stays small enough to auto-load every session (emitter appends ~700 bytes
+    # of nudge/remote text on top of this).
+    assert len(brief.encode("utf-8")) < 9_000
+
+
+def test_find_unregistered_apps_flags_exactly_the_known_three():
+    flagged_vars = {f.split(" ", 1)[0] for f in cap.find_unregistered_apps(REPO)}
+    # claim_app / complete_app / workflow_app exist under src/cli but are never
+    # add_typer'd anywhere — nested debug sub-apps must NOT be false-positived.
+    assert flagged_vars == {"claim_app", "complete_app", "workflow_app"}
+
+
+def test_generate_writes_both_artifacts(tmp_path, monkeypatch):
+    # Redirect outputs into a temp repo skeleton.
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / "docs").mkdir()
+    monkeypatch.setattr(cap, "_artifact_paths", lambda: (
+        tmp_path / ".claude/capabilities-brief.md",
+        tmp_path / "docs/CAPABILITIES.md",
+    ))
+    monkeypatch.setattr(cap, "_repo_root", lambda: REPO)
+    res = runner.invoke(capabilities_app, ["generate"])
+    assert res.exit_code == 0
+    assert (tmp_path / ".claude/capabilities-brief.md").exists()
+    assert (tmp_path / "docs/CAPABILITIES.md").exists()
