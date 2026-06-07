@@ -253,12 +253,31 @@ def scratch_create(
     auto_decompile: Annotated[
         bool, typer.Option("--decompile", "-d", help="Run m2c decompiler for initial code (recommended)")
     ] = True,
+    production: Annotated[
+        bool, typer.Option("--production", help="Create on production decomp.me instead of the local server")
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="With --production: create even if a production scratch already exists"),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="With --production: build and show the payload without creating"),
+    ] = False,
 ):
     """Create a new scratch for a function on decomp.me.
 
     By default, runs the m2c decompiler to generate initial C code.
     Use --no-decompile to skip auto-decompilation and start with an empty stub.
     """
+    if production:
+        if api_url:
+            console.print("[dim]--api-url ignored with --production[/dim]")
+        from .scratch_production import run_production_create
+
+        run_production_create(function_name, melee_root, force=force, dry_run=dry_run)
+        return
+
     api_url = api_url or get_local_api_url()
     from src.client import DecompMeAPIClient
     from src.extractor import extract_function

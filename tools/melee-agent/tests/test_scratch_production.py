@@ -73,3 +73,16 @@ def test_run_production_create_exits_without_cf_clearance(tmp_path, monkeypatch)
     monkeypatch.setattr(sp, "load_production_cookies", lambda: {})
     with pytest.raises(typer.Exit):
         sp.run_production_create("fn_1", tmp_path, force=False, dry_run=False)
+
+
+def test_production_flag_present_in_help():
+    from typer.testing import CliRunner
+
+    from src.cli.scratch import scratch_app
+
+    runner = CliRunner()
+    result = runner.invoke(scratch_app, ["create", "--help"])
+    assert result.exit_code == 0
+    assert "--production" in result.output
+    assert "--dry-run" in result.output
+    assert "--force" in result.output
