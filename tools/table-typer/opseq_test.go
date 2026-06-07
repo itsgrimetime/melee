@@ -347,3 +347,20 @@ func TestDeriveWithOperands(t *testing.T) {
 		t.Fatalf("token2 should be the blr anchor: %q", toks[2])
 	}
 }
+
+func TestParseLikeTarget(t *testing.T) {
+	n, lo, hi, err := parseLikeTarget("fn_foo")
+	if err != nil || n != "fn_foo" || lo != 0 || hi != 0 {
+		t.Fatalf("plain: %q %d %d err=%v", n, lo, hi, err)
+	}
+	n, lo, hi, err = parseLikeTarget("fn_foo:120-145")
+	if err != nil || n != "fn_foo" || lo != 120 || hi != 145 {
+		t.Fatalf("ranged: %q %d %d err=%v", n, lo, hi, err)
+	}
+	if _, _, _, err := parseLikeTarget("fn_foo:abc-def"); err == nil {
+		t.Fatal("malformed range should error")
+	}
+	if _, _, _, err := parseLikeTarget("fn_foo:120"); err == nil {
+		t.Fatal("range without dash should error")
+	}
+}

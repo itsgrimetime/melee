@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -456,4 +457,62 @@ func landmarkToken(ins asmInstr, withOperands bool, regVars map[string]string) s
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+// locateFuncDef returns "path:line" of the C definition (or placeholder) for
+// name across cFiles, or a not-found note. This is the original cmdOpSeq closure
+// lifted to package level (using strings instead of bytes) so the handler and
+// tests can share it.
+func locateFuncDef(cFiles []string, name string) string {
+	for _, path := range cFiles {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err.Error()
+		}
+		for i, line := range strings.Split(string(content), "\n") {
+			off := strings.Index(line, name)
+			if off == -1 {
+				continue
+			}
+			if off == 0 || strings.Contains(line, "/// #"+name) {
+				return fmt.Sprintf("%s:%d", path, i+1)
+			}
+			// look for a type immediately prior
+			parts := strings.Fields(line[:off])
+			ok := len(parts) > 0
+			for _, p := range parts {
+				c := p[0]
+				if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_' || c == '*') {
+					ok = false
+					break
+				}
+			}
+			if ok {
+				return fmt.Sprintf("%s:%d", path, i+1)
+			}
+		}
+	}
+	return "(no definition or placeholder for " + name + ")"
+}
+
+// parseLikeTarget splits "<func>" or "<func>:lo-hi" into the name and an
+// inclusive absolute asm-line range. A ":" with a malformed range is an error
+// (function symbols never contain ":"). No ":" means no range (lo=hi=0).
+func parseLikeTarget(s string) (name string, lo, hi int, err error) {
+	i := strings.LastIndexByte(s, ':')
+	if i < 0 {
+		return s, 0, 0, nil
+	}
+	name = s[:i]
+	a, b, ok := strings.Cut(s[i+1:], "-")
+	if !ok {
+		return name, 0, 0, fmt.Errorf("range %q must be lo-hi", s[i+1:])
+	}
+	if lo, err = strconv.Atoi(strings.TrimSpace(a)); err != nil {
+		return name, 0, 0, fmt.Errorf("range lower bound in %q: %v", s, err)
+	}
+	if hi, err = strconv.Atoi(strings.TrimSpace(b)); err != nil {
+		return name, 0, 0, fmt.Errorf("range upper bound in %q: %v", s, err)
+	}
+	return name, lo, hi, nil
 }
