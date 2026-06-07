@@ -531,3 +531,41 @@ def test_failure_report_hint_is_suppressed_for_json_mode_errors():
         ],
         exit_code=7,
     )
+
+
+def test_issue_claim_from_cli(tmp_path):
+    """claim sets the owner; a second agent conflicts; --force takes over."""
+    reset_db()
+    db = get_db(tmp_path / "state.db")
+    issue = db.report_tool_issue(summary="claimable issue", agent_id="reporter")
+
+    result = runner.invoke(
+        app, ["issue", "claim", str(issue["id"]), "--agent-id", "agent-1"]
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "Claimed issue" in strip_ansi(result.stdout)
+    assert db.get_tool_issue(issue["id"])["claimed_by"] == "agent-1"
+
+    # Second agent conflicts (exit 2), message names owner and --force.
+    result = runner.invoke(
+        app, ["issue", "claim", str(issue["id"]), "--agent-id", "agent-2"]
+    )
+    assert result.exit_code == 2
+    out = strip_ansi(result.stdout)
+    assert "agent-1" in out
+    assert "--force" in out
+
+    # Force takeover succeeds.
+    result = runner.invoke(
+        app, ["issue", "claim", str(issue["id"]), "--agent-id", "agent-2", "--force"]
+    )
+    assert result.exit_code == 0, result.stdout
+    assert db.get_tool_issue(issue["id"])["claimed_by"] == "agent-2"
+
+
+def test_issue_claim_missing_issue(tmp_path):
+    reset_db()
+    get_db(tmp_path / "state.db")
+    result = runner.invoke(app, ["issue", "claim", "9999", "--agent-id", "agent-1"])
+    assert result.exit_code == 1
+    assert "not found" in strip_ansi(result.stdout).lower()

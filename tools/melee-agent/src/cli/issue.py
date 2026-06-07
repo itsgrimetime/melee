@@ -619,3 +619,37 @@ def resolve_command(
         return
 
     console.print(f"[green]Resolved issue #{issue['id']}[/green]: {issue['summary']}")
+
+
+@issue_app.command("claim")
+def claim_command(
+    issue_id: Annotated[int, typer.Argument(help="Issue ID")],
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Take over a claim held by another agent"),
+    ] = False,
+    agent_id: Annotated[
+        str | None,
+        typer.Option("--agent-id", help="Claiming agent ID; auto-detected when omitted"),
+    ] = None,
+    output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
+):
+    """Claim an open issue so other agents skip it."""
+    resolved_agent = agent_id or _get_agent_id()
+    try:
+        issue = get_db().claim_tool_issue(issue_id, agent_id=resolved_agent, force=force)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from exc
+
+    if issue is None:
+        console.print(f"[red]Issue not found: {issue_id}[/red]")
+        raise typer.Exit(1)
+
+    if output_json:
+        _echo_json(issue)
+        return
+
+    console.print(
+        f"[green]Claimed issue #{issue['id']}[/green] ({issue['claimed_by']}): {issue['summary']}"
+    )
