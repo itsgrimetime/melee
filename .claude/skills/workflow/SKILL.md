@@ -112,6 +112,8 @@ The `create-pr.sh` script captures ALL changes in src/, config/, and include/.
 
 ## For Agents
 
+- **Before building any helper or tool**, run `melee-agent capabilities search <task>` — it probably already exists.
+
 When helping with workflow:
 
 1. **Always check status first**: Run `./tools/workflow/status.sh` to understand current state

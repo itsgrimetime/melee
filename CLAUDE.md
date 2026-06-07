@@ -2,6 +2,15 @@
 
 Reverse-engineering Super Smash Bros. Melee (GameCube) to matching C code using a self-hosted decomp.me instance.
 
+## Before You Build Anything
+
+**Audit-first rule:** before writing a new tool, script, or CLI command, run
+`melee-agent capabilities search <task>`. This repo has 150+ CLI subcommands and
+~20 skills; assume your need may already exist. Past sessions wasted hours
+rebuilding `mwcc-inspector` and a permuter scorer (`melee-agent debug target
+score-source`) that already existed. The session also auto-loads a capability
+brief — skim it.
+
 ## Architecture
 
 ```

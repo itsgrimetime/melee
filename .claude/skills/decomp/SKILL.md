@@ -47,6 +47,8 @@ melee-agent issue report "short feature summary" \
 
 Use `--governance-waiver "<reason>"` only for a true exploratory exception.
 
+- **Before building any helper or tool**, run `melee-agent capabilities search <task>` — it probably already exists.
+
 ## Before Chasing Registers
 
 Use shape-discovery tools after 2-3 failed source experiments:
