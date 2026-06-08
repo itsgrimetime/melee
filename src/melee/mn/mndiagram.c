@@ -1658,17 +1658,17 @@ void mnDiagram_80240D94(void* arg0, s32 arg1, s32 arg2, s32 arg3)
 void mnDiagram_80241310(s32 arg0, s32 arg1, s32 arg2)
 {
     int i;
-    Diagram* data;
     mnDiagram_AnimTable* tbl;
     void** joint_data;
+    Diagram* data;
     HSD_GObj* gobj;
     HSD_JObj* jobj;
     mnDiagram_PopupData* user_data;
     PAD_STACK(8);
 
-    data = mnDiagram_804D6C10->user_data;
     tbl = (mnDiagram_AnimTable*) &mnDiagram_803EE728;
     joint_data = mnDiagram_804A07E4;
+    data = mnDiagram_804D6C10->user_data;
 
     gobj = GObj_Create(6, 7, 0x80);
     data->popup_gobj = gobj;
