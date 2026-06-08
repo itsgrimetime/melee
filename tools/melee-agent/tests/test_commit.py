@@ -589,6 +589,34 @@ class TestFunctionExtraction:
 
         assert result is None
 
+    def test_skips_forward_declaration(self, extract_function):
+        """Should extract the DEFINITION, not a forward declaration that precedes it.
+
+        Regression: when a function has a ``name(...);`` prototype before its
+        definition (as in real repo .c files), the extractor must not match the
+        prototype and run forward to the next unrelated ``{`` (e.g. a struct
+        typedef), capturing prototypes + struct instead of the body.
+        """
+        code = """static void my_func(f32 level);
+
+typedef struct ColorEntry {
+    f32 threshold;
+} ColorEntry;
+
+void my_func(f32 level)
+{
+    s32 idx = 42;
+    return;
+}
+"""
+        result = extract_function(code, "my_func")
+
+        assert result is not None
+        assert result.strip().startswith("void my_func(f32 level)")
+        assert "idx = 42" in result
+        assert "typedef struct" not in result
+        assert "ColorEntry" not in result
+
 
 class TestUndefinedIdentifierExtraction:
     """Tests for extract_undefined_identifiers - finds undefined symbols in errors."""
