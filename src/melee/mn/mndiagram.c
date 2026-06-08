@@ -95,8 +95,8 @@ typedef struct mnDiagram_AnimTable {
     /* 0x24 */ u8 pad_24[0x1C];
     /* 0x40 */ AnimLoopSettings x40;
     /* 0x4C */ u8 pad_4C[0xC];
-    /* 0x58 */ AnimLoopSettings x58;
-    /* 0x64 */ AnimLoopSettings x64;
+    /* 0x58 */ AnimLoopSettings arrow_anim;
+    /* 0x64 */ AnimLoopSettings cursor_anim;
     /* 0x70 */ char x70[0x18];
     /* 0x88 */ char x88[0xC];
     /* 0x94 */ char x94[0x14];
@@ -1488,7 +1488,7 @@ void mnDiagram_PopupAnimProc(void* arg0)
         text->default_alignment = 1;
     }
 
-    anim_frame = mn_8022EFD8(data->jobjs[12], &tbl->x64);
+    anim_frame = mn_8022EFD8(data->jobjs[12], &tbl->cursor_anim);
     {
         HSD_Text* t;
         f32 y;
@@ -1504,7 +1504,7 @@ void mnDiagram_PopupAnimProc(void* arg0)
     }
     text->default_alignment = 1;
 
-    if (anim_frame == tbl->x64.end_frame) {
+    if (anim_frame == tbl->cursor_anim.end_frame) {
         HSD_GObjProc_8038FE24(HSD_GObj_804D7838);
     }
 }
@@ -1791,6 +1791,12 @@ void mnDiagram_80241730(void* arg0, int arg1, int arg2)
 
 #pragma push
 #pragma dont_reuse_strings off
+/// @brief Updates scroll arrow visibility based on cursor position and
+///        available entries beyond the visible range.
+/// @param[in] gobj The diagram GObj containing arrow JObjs in user_data.
+/// @details Checks 4 arrows: right (10 more cols?), left (cursor > 0?),
+///          up (cursor row > 0?), down (7 more rows?). Hides arrows when
+///          there's nothing to scroll to, shows them when there is.
 void mnDiagram_802417D0(HSD_GObj* gobj)
 {
     u8 result2;
@@ -1808,7 +1814,7 @@ void mnDiagram_802417D0(HSD_GObj* gobj)
 
     // Right arrow (jobjs[3])
     jobj = data->jobjs[3];
-    mn_8022ED6C(jobj, &tbl->x58);
+    mn_8022ED6C(jobj, &tbl->arrow_anim);
     if (data->is_name_mode != 0) {
         // Name mode - check if 10 more names exist
         count = 10;
@@ -1872,7 +1878,7 @@ void mnDiagram_802417D0(HSD_GObj* gobj)
 
     // Left arrow (jobjs[4])
     jobj2 = data->jobjs[4];
-    mn_8022ED6C(jobj2, &tbl->x58);
+    mn_8022ED6C(jobj2, &tbl->arrow_anim);
     if (data->is_name_mode != 0) {
         result = (u8) data->name_cursor_pos;
     } else {
@@ -1886,7 +1892,7 @@ void mnDiagram_802417D0(HSD_GObj* gobj)
 
     // Up arrow (jobjs[5])
     jobj2 = data->jobjs[5];
-    mn_8022ED6C(jobj2, &tbl->x58);
+    mn_8022ED6C(jobj2, &tbl->arrow_anim);
     if (data->is_name_mode != 0) {
         i = data->name_cursor_pos >> 8;
     } else {
@@ -1900,7 +1906,7 @@ void mnDiagram_802417D0(HSD_GObj* gobj)
 
     // Down arrow (jobjs[6])
     jobj = data->jobjs[6];
-    mn_8022ED6C(jobj, &tbl->x58);
+    mn_8022ED6C(jobj, &tbl->arrow_anim);
     if (data->is_name_mode != 0) {
         // Name mode - check if 7 more rows exist
         count = 7;
