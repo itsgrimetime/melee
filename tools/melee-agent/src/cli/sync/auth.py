@@ -103,6 +103,10 @@ def auth_command(
         elif not cookies.get("user_agent"):
             console.print("[yellow]Warning: No User-Agent provided. cf_clearance may not work.[/yellow]")
             console.print("[dim]Use --user-agent to specify, or run without --cf-clearance to use interactive mode[/dim]")
+    elif session_id and cookies.get("cf_clearance"):
+        # Refreshing only the sessionid — keep the existing cf_clearance/User-Agent,
+        # don't force a cf_clearance re-prompt.
+        console.print("[dim]Keeping existing cf_clearance/User-Agent; updating sessionid only.[/dim]")
     else:
         cf_val, ua_val = _prompt_cf_clearance()
         cookies["cf_clearance"] = cf_val
@@ -110,13 +114,23 @@ def auth_command(
 
     if session_id:
         cookies["sessionid"] = session_id.strip()
-    elif not cookies.get("sessionid"):
-        if typer.confirm("Do you want to add a sessionid cookie? (allows uploads under your account)"):
+    else:
+        # Offer the prompt even when a sessionid already exists, so a stale/expired
+        # (e.g. anonymous) sessionid can be refreshed interactively.
+        existing_sid = cookies.get("sessionid")
+        question = (
+            "Replace the existing sessionid cookie?"
+            if existing_sid
+            else "Do you want to add a sessionid cookie? (allows uploads under your account)"
+        )
+        if typer.confirm(question, default=not existing_sid):
             console.print("\n[bold]To get your sessionid:[/bold]")
             console.print("1. Log into https://decomp.me with GitHub")
             console.print("2. Open DevTools -> Application -> Cookies -> decomp.me")
             console.print("3. Copy the value of 'sessionid'\n")
-            cookies["sessionid"] = typer.prompt("Enter sessionid cookie value").strip()
+            new_sid = typer.prompt("Enter sessionid cookie value").strip()
+            if new_sid:
+                cookies["sessionid"] = new_sid
 
     save_production_cookies(cookies)
     console.print(f"\n[green]Cookies saved to {PRODUCTION_COOKIES_FILE}[/green]")
