@@ -2150,7 +2150,8 @@ static inline u8 mnDiagram_GetVisibleNameFrom(u8* sorted, int start, int rank)
     int remaining;
     int idx;
 
-    p = sorted + start;
+    p = sorted;
+    p = p + start;
     remaining = rank;
     idx = start;
     p = p + 0x1C;
@@ -2471,9 +2472,9 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
 
 void mnDiagram_802427B4(void* arg0, s32 arg1, s32 arg2)
 {
+    u8* sorted = (0, mnDiagram_804A0750.sorted_fighters);
     int i;
     Diagram* data = ((HSD_GObj*) arg0)->user_data;
-    u8* sorted = mnDiagram_804A0750.sorted_fighters;
     HSD_Text* text;
     HSD_Text* row_text;
     Vec3 pos;
@@ -2488,7 +2489,7 @@ void mnDiagram_802427B4(void* arg0, s32 arg1, s32 arg2)
     {
         HSD_JObj* j = data->jobjs[7];
         pos.z = HSD_JObjGetTranslationZ(j);
-        pos.y = mnDiagram_804DBFAC - HSD_JObjGetTranslationY(j);
+        pos.y = (0, mnDiagram_804DBFAC) - HSD_JObjGetTranslationY(j);
         pos.x = mnDiagram_804DBFB0 + HSD_JObjGetTranslationX(j);
         text->pos_x = pos.x;
         text->pos_y = pos.y;
