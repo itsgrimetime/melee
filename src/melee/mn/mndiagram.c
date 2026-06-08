@@ -2504,11 +2504,9 @@ void mnDiagram_802427B4(void* arg0, s32 arg1, s32 arg2)
             name_id = name_byte;
             x_spacing = HSD_JObjGetTranslationX(data->jobjs[8]) -
                         HSD_JObjGetTranslationX(data->jobjs[7]);
-            {
-                char* name_text = GetNameText(name_id);
-                HSD_SisLib_803A6B98(text, (x_spacing * i) / 0.02f,
-                                    mnDiagram_804DBF84, name_text);
-            }
+            HSD_SisLib_803A6B98(text, (x_spacing * i) / 0.02f,
+                                mnDiagram_804DBF84,
+                                GetNameText(name_id));
         }
     }
 
