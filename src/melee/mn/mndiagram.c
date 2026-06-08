@@ -2472,9 +2472,9 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
 
 void mnDiagram_802427B4(void* arg0, s32 arg1, s32 arg2)
 {
-    u8* sorted = (0, mnDiagram_804A0750.sorted_fighters);
     int i;
     Diagram* data = ((HSD_GObj*) arg0)->user_data;
+    u8* sorted = mnDiagram_804A0750.sorted_fighters;
     HSD_Text* text;
     HSD_Text* row_text;
     Vec3 pos;
@@ -2505,8 +2505,7 @@ void mnDiagram_802427B4(void* arg0, s32 arg1, s32 arg2)
             x_spacing = HSD_JObjGetTranslationX(data->jobjs[8]) -
                         HSD_JObjGetTranslationX(data->jobjs[7]);
             HSD_SisLib_803A6B98(text, (x_spacing * i) / 0.02f,
-                                mnDiagram_804DBF84,
-                                GetNameText(name_id));
+                                mnDiagram_804DBF84, GetNameText(name_id));
         }
     }
 
