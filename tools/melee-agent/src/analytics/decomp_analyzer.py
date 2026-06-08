@@ -123,7 +123,12 @@ class FunctionAttempt:
 
     @property
     def had_thrashing(self) -> bool:
-        """Detect if match % oscillated (went down then up or vice versa)."""
+        """Detect repeated oscillation of the match %.
+
+        Thrashing requires at least TWO direction reversals (e.g. up→down→up
+        or down→up→down). A single down-then-up (a dip then recovery) is not
+        thrashing — it is net progress, not churn — so it returns False.
+        """
         if len(self.match_history) < 3:
             return False
 
@@ -309,10 +314,25 @@ class DecompAnalyzer:
         except (ValueError, TypeError):
             return None
 
+    @staticmethod
+    def _normalize_content(raw) -> str:
+        """Normalize a tool_result 'content' value to text.
+
+        Anthropic allows 'content' to be a list of content blocks
+        (e.g. [{"type": "text", "text": "..."}]) as well as a plain string.
+        Flatten lists to text so downstream string operations never crash.
+        """
+        if isinstance(raw, str):
+            return raw
+        if isinstance(raw, list):
+            return "".join(b.get("text", "") for b in raw if isinstance(b, dict))
+        return ""
+
     def extract_tool_calls(self, entries: list[dict]) -> list[dict]:
         """Extract all tool calls with their results."""
         tools = []
         pending = {}  # tool_id -> tool info
+        seen_message_ids: set[str] = set()  # message.ids whose usage was already counted
 
         for entry in entries:
             ts = self.parse_timestamp(entry.get("timestamp"))
@@ -321,6 +341,19 @@ class DecompAnalyzer:
                 msg = entry.get("message", {})
                 content = msg.get("content", [])
                 usage = msg.get("usage", {})
+
+                # Claude Code splits parallel tool calls into separate assistant entries
+                # that share one message.id, each carrying the FULL identical usage. Count
+                # each message's usage exactly once to avoid summing it N times.
+                message_id = msg.get("id", "")
+                if message_id and message_id in seen_message_ids:
+                    input_tokens = 0
+                    output_tokens = 0
+                else:
+                    input_tokens = usage.get("input_tokens", 0) + usage.get("cache_read_input_tokens", 0)
+                    output_tokens = usage.get("output_tokens", 0)
+                    if message_id:
+                        seen_message_ids.add(message_id)
 
                 if isinstance(content, list):
                     for item in content:
@@ -333,9 +366,13 @@ class DecompAnalyzer:
                                 "timestamp": ts,
                                 "result": None,
                                 "is_error": False,
-                                "input_tokens": usage.get("input_tokens", 0) + usage.get("cache_read_input_tokens", 0),
-                                "output_tokens": usage.get("output_tokens", 0),
+                                "input_tokens": input_tokens,
+                                "output_tokens": output_tokens,
                             }
+                            # Only the first tool_use in an entry gets this entry's usage;
+                            # additional tool_uses in the same entry must not re-add it.
+                            input_tokens = 0
+                            output_tokens = 0
 
             elif entry.get("type") == "user":
                 msg = entry.get("message", {})
@@ -347,7 +384,7 @@ class DecompAnalyzer:
                             tool_id = item.get("tool_use_id", "")
                             if tool_id in pending:
                                 tool_info = pending.pop(tool_id)
-                                tool_info["result"] = item.get("content", "")
+                                tool_info["result"] = self._normalize_content(item.get("content", ""))
                                 tool_info["is_error"] = item.get("is_error", False)
                                 tools.append(tool_info)
 
@@ -606,7 +643,7 @@ class DecompAnalyzer:
         self.sessions = []
 
         cutoff = None
-        if since_days:
+        if since_days is not None:
             cutoff = datetime.now() - timedelta(days=since_days)
 
         for project_dir in self.find_project_dirs():
@@ -654,6 +691,8 @@ class DecompAnalyzer:
             metrics.overall_success_rate = metrics.total_functions_completed / metrics.total_functions_attempted
 
             committed_attempts = [f for f in all_functions if f.committed]
+            metrics.commit_success_rate = len(committed_attempts) / len(all_functions)
+
             worktree_users = [f for f in all_functions if f.used_worktree]
 
             if worktree_users:
@@ -661,9 +700,17 @@ class DecompAnalyzer:
                     worktree_users
                 )
 
-            metrics.build_first_try_rate = sum(1 for f in all_functions if f.build_passed_first_try) / len(
-                all_functions
-            )
+            # build_passed_first_try defaults True and is only flipped on a build error,
+            # so functions that never built must be excluded from this rate.
+            builders = [
+                f
+                for f in all_functions
+                if WorkflowStage.COMMIT in f.stages_completed or not f.build_passed_first_try
+            ]
+            if builders:
+                metrics.build_first_try_rate = sum(1 for f in builders if f.build_passed_first_try) / len(
+                    builders
+                )
             metrics.dry_run_usage_rate = sum(1 for f in all_functions if f.dry_run_used) / len(all_functions)
 
         # Efficiency metrics

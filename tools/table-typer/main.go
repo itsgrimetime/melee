@@ -32,6 +32,14 @@ func main() {
 	cmdUnk := flagg.New("unk", "Search for UNK_RET functions in asm data")
 	cmdOpSeq := flagg.New("opseq", "Search for a sequence of opcodes")
 	cmdOpSeq.BoolVar(&seqCandidates, "candidates", false, "list non-matching candidates instead of matching functions")
+	var likeTarget string
+	var gapCap, deriveSlack, maxLandmarks int
+	var withOperands bool
+	cmdOpSeq.StringVar(&likeTarget, "like", "", "derive a gap pattern from <func>[:start-end] instead of taking a pattern arg")
+	cmdOpSeq.IntVar(&gapCap, "gap-cap", 6, "default max instructions a bare '*' gap may span (clamped to 32)")
+	cmdOpSeq.IntVar(&deriveSlack, "slack", 2, "extra gap tolerance added when deriving (--like)")
+	cmdOpSeq.IntVar(&maxLandmarks, "max-landmarks", 12, "target landmark count when deriving (--like)")
+	cmdOpSeq.BoolVar(&withOperands, "with-operands", false, "include register operands as consistency vars when deriving (--like)")
 	cmdDups := flagg.New("dups", "Find duplicated functions")
 	cmd := flagg.Parse(flagg.Tree{
 		Cmd: root,
@@ -341,125 +349,119 @@ func main() {
 		}
 
 	case cmdOpSeq:
-		if cmd.NArg() != 1 {
-			cmd.Usage()
-			return
-		}
-
 		report := loadReport(rootDir)
 
-		var ops [][]byte
-		if _, err := os.Stat(cmd.Arg(0)); err == nil {
-			content, err := os.ReadFile(cmd.Arg(0))
-			if err != nil {
-				log.Fatalln("Failed to read file:", cmd.Arg(0), err)
-			}
-			ops = bytes.Split(bytes.TrimSpace(content), []byte("\n"))
-		} else {
-			ops = bytes.Split([]byte(cmd.Arg(0)), []byte(","))
+		// Build the normalized model once: located function bodies + frequency.
+		type locatedFunc struct {
+			file string
+			fn   asmFunc
 		}
-
-		matchOp := func(line []byte, op []byte, vars map[string]string) bool {
-			_, line, _ = bytes.Cut(line, []byte("*/\t"))
-			lineParts := bytes.Fields(line)
-			opParts := bytes.Fields(op)
-			if len(lineParts) == 0 || !bytes.Equal(lineParts[0], opParts[0]) {
-				return false
-			} else if len(opParts) == 1 {
-				return true
-			} else if len(lineParts) != len(opParts) {
-				return false
-			}
-			for i := 1; i < len(lineParts); i++ {
-				lp := bytes.TrimSuffix(lineParts[i], []byte(","))
-				op := bytes.TrimSuffix(opParts[i], []byte(","))
-				if bytes.Equal(op, []byte("_")) {
-					continue
-				}
-				v, ok := vars[string(op)]
-				if !ok {
-					vars[string(op)] = string(lp)
-				} else if v != string(lp) {
-					return false
-				}
-			}
-			return true
-		}
-		matchLines := func(lines [][]byte) bool {
-			if bytes.HasPrefix(lines[0], []byte(".L_")) {
-				return false
-			}
-			vars := make(map[string]string)
-			skip := 0
-			for j := 0; j < len(ops); j++ {
-				if skip+j >= len(lines) {
-					return false
-				}
-				for bytes.HasPrefix(lines[skip+j], []byte(".L_")) {
-					skip++
-				}
-				if !matchOp(lines[skip+j], ops[j], vars) {
-					return false
-				}
-			}
-			return true
-		}
-		locateFuncDef := func(name string) string {
-			for _, path := range cFiles {
-				content, err := os.ReadFile(path)
-				if err != nil {
-					return err.Error()
-				}
-				lines := bytes.Split(content, []byte("\n"))
-				for i, line := range lines {
-					off := bytes.Index(line, []byte(name))
-					if off == -1 {
-						continue
-					}
-					if off == 0 || bytes.Contains(line, []byte("/// #"+name)) {
-						return fmt.Sprintf("%s:%d", path, i+1)
-					}
-					// look for a type immediately prior
-					parts := bytes.Fields(line[:off])
-					ok := len(parts) > 0
-					for _, p := range parts {
-						// each part should start with a letter
-						c := p[0]
-						if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_' || c == '*') {
-							ok = false
-							break
-						}
-					}
-					if ok {
-						return fmt.Sprintf("%s:%d", path, i+1)
-					}
-				}
-			}
-			return "(no definition or placeholder for " + name + ")"
-		}
-
-		var results [][2]string
+		var all []locatedFunc
+		var modelFuncs []asmFunc
 		for _, path := range asmFiles {
-			contents, err := os.ReadFile(path)
+			content, err := os.ReadFile(path)
 			if err != nil {
 				log.Fatalln("Failed to read file:", path, err)
 			}
-			lines := bytes.Split(contents, []byte("\n"))
-			var decl []byte
-			for i := range lines {
-				if bytes.HasPrefix(lines[i], []byte(".fn")) {
-					decl, _, _ = bytes.Cut(bytes.TrimPrefix(lines[i], []byte(".fn ")), []byte(","))
-				}
-				if matchLines(lines[i:]) && (seqCandidates == !report.isMatched(string(decl))) {
-					results = append(results, [2]string{fmt.Sprintf("%s:%d", path, i+1), string(decl)})
-				}
+			for _, fn := range parseAsmFile(string(content)) {
+				all = append(all, locatedFunc{file: path, fn: fn})
+				modelFuncs = append(modelFuncs, fn)
 			}
 		}
-		sort.Slice(results, func(i, j int) bool {
-			return report.size(results[i][1]) < report.size(results[j][1])
-		})
+
+		// Determine the pattern tokens: either derived (--like) or from the arg.
+		var tokens []string
+		if likeTarget != "" {
+			if cmd.NArg() != 0 {
+				log.Fatalln("--like takes no positional pattern argument")
+			}
+			name, lo, hi, err := parseLikeTarget(likeTarget)
+			if err != nil {
+				log.Fatalf("--like %q: %v", likeTarget, err)
+			}
+			var target *asmFunc
+			for i := range all {
+				if all[i].fn.name == name {
+					target = &all[i].fn
+					break
+				}
+			}
+			if target == nil {
+				log.Fatalf("function %q not found in asm", name)
+			}
+			body := target.instrs
+			if lo > 0 || hi > 0 {
+				var sub []asmInstr
+				for _, ins := range body {
+					if ins.srcLine >= lo && ins.srcLine <= hi {
+						sub = append(sub, ins)
+					}
+				}
+				if len(sub) == 0 {
+					log.Fatalf("line range %d-%d selects no instructions in %q", lo, hi, name)
+				}
+				body = sub
+			}
+			freq := opcodeFrequencies(modelFuncs)
+			var warn string
+			tokens, warn = derivePattern(body, freq, deriveOpts{slack: deriveSlack, maxLandmarks: maxLandmarks, withOperands: withOperands})
+			fmt.Printf("derived pattern: %s\n", strings.Join(tokens, ","))
+			if warn != "" {
+				fmt.Printf("warning: %s\n", warn)
+			}
+		} else {
+			if cmd.NArg() != 1 {
+				if cmd.NArg() > 1 {
+					log.Fatalln("opseq takes a single pattern argument — did the shell expand it? Quote it, e.g. opseq 'lfs,*{0..3},fsubs'")
+				}
+				cmd.Usage()
+				return
+			}
+			arg := cmd.Arg(0)
+			if content, err := os.ReadFile(arg); err == nil {
+				// File input: treat newlines and commas equivalently so file and
+				// inline patterns tokenize identically.
+				arg = strings.ReplaceAll(strings.TrimSpace(string(content)), "\n", ",")
+			}
+			tokens = strings.Split(arg, ",")
+		}
+
+		pat, err := parsePattern(tokens, gapCap)
+		if err != nil {
+			log.Fatalln("invalid pattern:", err)
+		}
+
+		var results []opseqResult
+		aborted := 0
+		for _, lf := range all {
+			if seqCandidates == report.isMatched(lf.fn.name) {
+				continue
+			}
+			a := matchPattern(lf.fn.instrs, pat)
+			if a.aborted {
+				aborted++
+			}
+			if !a.ok {
+				continue
+			}
+			results = append(results, opseqResult{
+				asmLoc:    fmt.Sprintf("%s:%d", lf.file, a.startSrcLine),
+				fnName:    lf.fn.name,
+				size:      report.size(lf.fn.name),
+				slack:     a.slackConsumed,
+				startLine: a.startSrcLine,
+				endLine:   a.endSrcLine,
+			})
+		}
+		sortResults(results)
 		for _, res := range results {
-			fmt.Printf("%s %s\n", res[0], locateFuncDef(res[1]))
+			// Print the asm location + C definition, plus the matched span and gap
+			// slack so the user can judge how tight each match is.
+			fmt.Printf("%s %s [slack %d, lines %d-%d]\n",
+				res.asmLoc, locateFuncDef(cFiles, res.fnName), res.slack, res.startLine, res.endLine)
+		}
+		if aborted > 0 {
+			log.Printf("warning: %d function(s) exceeded the match-search budget and were skipped (this happens with consistency-variable patterns like --with-operands on large functions; narrow the target with a :start-end range)", aborted)
 		}
 
 	case cmdDups:

@@ -158,20 +158,22 @@ def fetch_command(
             console.print(f"  Source: {len(source_code):,} bytes")
             console.print(f"  Context: {len(context_code):,} bytes")
 
-            # Show source if requested
+            # Show source if requested.
+            # markup=False/highlight=False so C subscripts like `table[idx]` aren't
+            # eaten as rich markup tags (numeric `[0]` survives, alphabetic `[idx]` would not).
             if source:
                 console.print("\n[bold]Source Code:[/bold]")
-                console.print(source_code)
+                console.print(source_code, markup=False, highlight=False)
 
             # Show context if requested
             if context:
                 console.print("\n[bold]Context:[/bold]")
                 # Truncate if very long
                 if len(context_code) > 10000:
-                    console.print(context_code[:10000])
+                    console.print(context_code[:10000], markup=False, highlight=False)
                     console.print(f"\n[dim]... truncated ({len(context_code):,} bytes total)[/dim]")
                 else:
-                    console.print(context_code)
+                    console.print(context_code, markup=False, highlight=False)
 
             # Compile and show diff if requested
             if diff:

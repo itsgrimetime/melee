@@ -465,18 +465,12 @@ def _is_register_classification(classification: str) -> bool:
 
 
 def _move_on_state(entry: dict[str, Any], threshold: int) -> dict[str, Any]:
-    if entry.get("register_only_no_progress_count", 0) >= threshold:
-        return {
-            "recommended": True,
-            "reason": "repeated register-allocation mismatch attempts",
-            "recommendation": "Move to a fresh function or TU; keep the current notes and return only with new source evidence.",
-        }
-    if entry.get("no_progress_count", 0) >= threshold:
-        return {
-            "recommended": True,
-            "reason": "repeated no-progress attempts",
-            "recommendation": "Move to a fresh function or TU; preserve the blocker and retained edits first.",
-        }
+    # Move-on recommendations were removed: the attempt ledger no longer tells
+    # agents to stop working on a function. Source provably exists for every
+    # function, so a function is never flagged as a dead end. The no-progress
+    # counters are still tracked as telemetry, but they never trigger a
+    # recommendation to abandon the function.
+    del entry, threshold
     return {"recommended": False, "reason": "", "recommendation": ""}
 
 
@@ -633,7 +627,7 @@ def attempts_record(
     ] = "",
     threshold: Annotated[
         int,
-        typer.Option("--threshold", help="No-progress attempts before recommending move-on"),
+        typer.Option("--threshold", help="Retained for compatibility; no longer triggers a move-on recommendation"),
     ] = DEFAULT_STALL_THRESHOLD,
     output_json: Annotated[bool, typer.Option("--json", help="Output updated summary as JSON")] = False,
 ):
@@ -669,9 +663,7 @@ def attempts_record(
     best = summary["best_match_percent"]
     console.print(f"[green]Recorded attempt[/green] for [bold]{function_name}[/bold]")
     console.print(f"Ledger best: {best:.1f}%" if best is not None else "Ledger best: n/a")
-    console.print(f"No-progress streak: {summary['no_progress_count']} / {threshold}")
-    if summary["move_on_recommended"]:
-        console.print(f"[yellow]Move-on recommended[/yellow]: {summary['recommendation']}")
+    console.print(f"No-progress streak: {summary['no_progress_count']}")
 
 
 @attempts_app.command("show")
@@ -679,7 +671,7 @@ def attempts_show(
     function_name: Annotated[str, typer.Argument(help="Function name to inspect")],
     threshold: Annotated[
         int,
-        typer.Option("--threshold", help="No-progress attempts before recommending move-on"),
+        typer.Option("--threshold", help="Retained for compatibility; no longer triggers a move-on recommendation"),
     ] = DEFAULT_STALL_THRESHOLD,
     measure_current: Annotated[
         bool,
@@ -734,9 +726,7 @@ def attempts_show(
         else:
             reason = current.get("reason") or current.get("status") or "unknown"
             console.print(f"Current source: unavailable ({reason})")
-    console.print(f"No-progress streak: {summary['no_progress_count']} / {threshold}")
-    if summary["move_on_recommended"]:
-        console.print(f"[yellow]Move-on recommended[/yellow]: {summary['recommendation']}")
+    console.print(f"No-progress streak: {summary['no_progress_count']}")
 
 
 @attempts_app.command("list")

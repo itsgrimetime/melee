@@ -354,7 +354,7 @@ def test_generate_inventory_classifies_report_functions_and_writes_outputs(
     ) in summary
 
 
-def test_generate_inventory_applies_terminal_attempt_evidence(
+def test_generate_inventory_no_longer_overlays_terminal_attempt_evidence(
     tmp_path: Path,
 ) -> None:
     from tools.function_taxonomy_inventory import generate_inventory
@@ -450,20 +450,21 @@ def test_generate_inventory_applies_terminal_attempt_evidence(
     assert isinstance(record["classification"], dict)
     assert isinstance(record["structural"], dict)
     assert isinstance(record["match"], float)
-    assert record["source_actionability"] == "tooling-blocked"
-    assert record["headline_tool"] == "attempt-ledger"
-    assert record["terminal_attempt_status"] == "active"
-    assert record["terminal_attempt_blocker"] == "no-safe-materialized-pointer"
-    assert "attempt ledger terminal evidence" in record["actionability_reason"]
+    # The attempt ledger no longer overlays terminal "dead end" evidence: the
+    # record keeps its source-derived actionability and is not demoted, even
+    # though the ledger entry recommends move-on with a known blocker.
+    assert record["source_actionability"] == "current-tools-indexed-pointer"
+    assert record["headline_tool"] == "source-shape"
+    assert "terminal_attempt_status" not in record
 
     queue_rows = read_tsv(output / "queues" / "indexed-struct-pointer.tsv")
     assert len(queue_rows) == 1
     queue_row = queue_rows[0]
-    assert queue_row["source_actionability"] == "tooling-blocked"
-    assert queue_row["headline_tool"] == "attempt-ledger"
-    assert queue_row["terminal_attempt_status"] == "active"
-    assert queue_row["terminal_attempt_blocker"] == "no-safe-materialized-pointer"
-    assert "attempt ledger terminal evidence" in queue_row["actionability_reason"]
+    assert queue_row["source_actionability"] == "current-tools-indexed-pointer"
+    assert queue_row["headline_tool"] == "source-shape"
+    # The terminal-attempt columns remain in the schema but are emitted empty.
+    assert queue_row["terminal_attempt_status"] == ""
+    assert queue_row["terminal_attempt_blocker"] == ""
 
 
 def test_generate_inventory_can_disable_terminal_attempt_overlay(
@@ -555,7 +556,7 @@ def test_generate_inventory_can_disable_terminal_attempt_overlay(
     assert "terminal_attempt_status" not in records[0]
 
 
-def test_generate_inventory_keeps_stale_terminal_attempt_rows_executable(
+def test_generate_inventory_ignores_ledger_tool_fingerprints(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -644,12 +645,14 @@ def test_generate_inventory_keeps_stale_terminal_attempt_rows_executable(
     record = records[0]
     assert record["source_actionability"] == "current-tools-indexed-pointer"
     assert record["headline_tool"] == "source-shape"
-    assert record["terminal_attempt_status"] == "stale"
-    assert record["terminal_attempt_stale_check"] == "stale-taxonomy_tool_sha256"
-    assert record["terminal_attempt_taxonomy_tool_sha256"] == "old-taxonomy-tool"
+    # Terminal evidence is disabled, so tool-fingerprint staleness is moot: the
+    # record is never overlaid regardless of the ledger's recorded fingerprint.
+    assert "terminal_attempt_status" not in record
+    assert "terminal_attempt_stale_check" not in record
+    assert "terminal_attempt_taxonomy_tool_sha256" not in record
 
 
-def test_generate_inventory_exports_tooling_sha256_terminal_metadata(
+def test_generate_inventory_does_not_export_terminal_metadata(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -734,11 +737,13 @@ def test_generate_inventory_exports_tooling_sha256_terminal_metadata(
         attempt_ledger_path=ledger,
     )
 
+    # Terminal evidence is disabled: ledger tool fingerprints are never copied
+    # onto the record, and the queue's terminal columns stay empty.
     records = read_jsonl(output / "taxonomy.records.jsonl")
-    assert records[0]["terminal_attempt_tooling_sha256"] == "old-tooling"
+    assert "terminal_attempt_tooling_sha256" not in records[0]
 
     queue_rows = read_tsv(output / "queues" / "indexed-struct-pointer.tsv")
-    assert queue_rows[0]["terminal_attempt_tooling_sha256"] == "old-tooling"
+    assert queue_rows[0]["terminal_attempt_tooling_sha256"] == ""
 
 
 def test_generate_inventory_writes_completed_run_status_last(tmp_path: Path) -> None:

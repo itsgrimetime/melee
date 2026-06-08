@@ -116,7 +116,7 @@ def _delta(value: float | None, baseline: float | None) -> float | None:
 
 
 def rank_structure_variants(variants: list[StructureVariant]) -> list[StructureVariant]:
-    ranked = _rank_source_lifetime_slots(sorted(
+    ranked = _rank_shape_aware_slots(sorted(
         variants,
         key=_structure_variant_base_sort_key,
     ))
@@ -148,36 +148,11 @@ def _structure_variant_common_sort_key(variant: StructureVariant) -> tuple[Any, 
     )
 
 
-def _rank_source_lifetime_slots(
-    variants: list[StructureVariant],
-) -> list[StructureVariant]:
-    source_lifetime_ranked = iter(sorted(
-        (
-            variant
-            for variant in variants
-            if variant.axis == "source-lifetime"
-        ),
-        key=_source_lifetime_in_axis_sort_key,
-    ))
-    ranked: list[StructureVariant] = []
-    for variant in variants:
-        if variant.axis == "source-lifetime":
-            ranked.append(next(source_lifetime_ranked))
-        else:
-            ranked.append(variant)
-    return ranked
+_SHAPE_AWARE_AXES = {"source-lifetime", "statement-order"}
 
 
-def _source_lifetime_in_axis_sort_key(variant: StructureVariant) -> tuple[Any, ...]:
-    return (
-        _exact_match_bucket(variant),
-        _source_lifetime_shape_rank(variant),
-        *_structure_variant_common_sort_key(variant),
-    )
-
-
-def _source_lifetime_shape_rank(variant: StructureVariant) -> int:
-    if variant.axis != "source-lifetime":
+def _shape_rank(variant: StructureVariant) -> int:
+    if variant.axis not in _SHAPE_AWARE_AXES:
         return 0
     if variant.status != "ok":
         return 4
@@ -193,6 +168,44 @@ def _source_lifetime_shape_rank(variant: StructureVariant) -> int:
     if structural.get("opcode_shape_preserved") is False:
         return 2
     return 3
+
+
+def _line_delta_rank(variant: StructureVariant) -> int:
+    # participate ONLY for statement-order (preserves existing source-lifetime order)
+    if variant.axis != "statement-order":
+        return 0
+    structural = variant.metadata.get("structural")
+    if isinstance(structural, dict) and "line_delta" in structural:
+        try:
+            return abs(int(structural["line_delta"]))
+        except (TypeError, ValueError):
+            return 9999
+    return 9999
+
+
+def _shape_aware_in_axis_sort_key(variant: StructureVariant) -> tuple[Any, ...]:
+    return (
+        _exact_match_bucket(variant),
+        _shape_rank(variant),
+        _line_delta_rank(variant),
+        *_structure_variant_common_sort_key(variant),
+    )
+
+
+def _rank_shape_aware_slots(
+    variants: list[StructureVariant],
+) -> list[StructureVariant]:
+    ranked_iters = {
+        axis: iter(sorted(
+            (v for v in variants if v.axis == axis),
+            key=_shape_aware_in_axis_sort_key,
+        ))
+        for axis in _SHAPE_AWARE_AXES
+    }
+    out: list[StructureVariant] = []
+    for v in variants:
+        out.append(next(ranked_iters[v.axis]) if v.axis in _SHAPE_AWARE_AXES else v)
+    return out
 
 
 def run_structure_search(
@@ -3849,6 +3862,18 @@ def generate_statement_order_variants(
                 command=command,
                 metadata=metadata,
             )
+        )
+
+    from .statement_move import generate_statement_hoist_sink_variants
+    for cand in generate_statement_hoist_sink_variants(
+        source, function, max_candidates=max_candidates):
+        br = cand["byte_range"]
+        add_variant(
+            operator=cand["operator"],
+            start=br[0],
+            end=br[1],
+            candidate_source=cand["candidate_source"],
+            metadata=cand["metadata"],
         )
 
     _generate_split_shift_or_statement_variants(

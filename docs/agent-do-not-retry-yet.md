@@ -2,12 +2,15 @@
 
 Use this list for functions or mismatch shapes that have saturated without new
 evidence. The goal is to stop agents from repeating source-equivalent probes
-that already failed.
+that already failed. These functions are never dead ends — source exists for
+every function; the list only prevents re-running the *same* failed experiment
+without new evidence, not abandoning the function.
 
 ## How To Add An Entry
 
-Add an entry when `melee-agent attempts show <func>` recommends moving on or
-when a reviewer identifies a blocked pattern.
+Add an entry when a reviewer identifies a blocked pattern, or when the attempt
+fingerprint dedup keeps flagging the same source-equivalent probe as already
+tried. (The ledger itself no longer recommends moving on.)
 
 Record:
 
@@ -33,7 +36,7 @@ below until the attempt ledger accumulates durable blockers.
 
 ### Pure Register-Allocation Loops
 
-Do not keep retrying source-equivalent forms after the move-on threshold fires.
+Do not keep retrying source-equivalent forms without new evidence.
 Return only with new evidence: a caller signature change, discovered inline,
 type correction, or symbol/data placement change.
 

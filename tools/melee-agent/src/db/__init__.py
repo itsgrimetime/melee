@@ -86,20 +86,30 @@ class StateDB:
         Connections are reused within the same thread for efficiency.
         Uses autocommit mode by default.
         """
-        if not hasattr(_local, "connection") or _local.connection is None:
-            _local.connection = sqlite3.connect(
-                str(self.db_path),
+        # The cached connection is keyed by db_path: a thread that touches more
+        # than one StateDB (e.g. the real agent_state.db plus a temp DB in
+        # tests) must NOT reuse a connection opened for a different path, or it
+        # would silently read/write the wrong database.
+        current_path = str(self.db_path)
+        cached = getattr(_local, "connection", None)
+        if cached is None or getattr(_local, "connection_path", None) != current_path:
+            if cached is not None:
+                cached.close()
+            cached = sqlite3.connect(
+                current_path,
                 check_same_thread=False,
                 isolation_level=None,  # Autocommit by default
             )
-            _local.connection.row_factory = sqlite3.Row
+            cached.row_factory = sqlite3.Row
             # Enable foreign keys and WAL mode for better concurrency
-            _local.connection.execute("PRAGMA foreign_keys = ON")
-            _local.connection.execute("PRAGMA journal_mode = WAL")
+            cached.execute("PRAGMA foreign_keys = ON")
+            cached.execute("PRAGMA journal_mode = WAL")
             # Wait up to 5s on write contention instead of failing fast with
             # "database is locked" — lets BEGIN IMMEDIATE losers retry and read
             # the committed claim rather than raising OperationalError.
-            _local.connection.execute("PRAGMA busy_timeout = 5000")
+            cached.execute("PRAGMA busy_timeout = 5000")
+            _local.connection = cached
+            _local.connection_path = current_path
 
         yield _local.connection
 
@@ -120,6 +130,7 @@ class StateDB:
         if hasattr(_local, "connection") and _local.connection is not None:
             _local.connection.close()
             _local.connection = None
+            _local.connection_path = None
 
     # =========================================================================
     # Audit Logging
@@ -1762,3 +1773,12 @@ def reset_db() -> None:
     if _db is not None:
         _db.close()
         _db = None
+    # Also drop any thread-local connection left by a directly-constructed
+    # StateDB on this thread. close() only runs for the global singleton, so a
+    # direct StateDB(path) would otherwise leak its cached connection (and its
+    # db_path) into later code that constructs a different StateDB.
+    cached = getattr(_local, "connection", None)
+    if cached is not None:
+        cached.close()
+        _local.connection = None
+        _local.connection_path = None

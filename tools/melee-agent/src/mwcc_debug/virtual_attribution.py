@@ -625,7 +625,11 @@ def explain_virtuals(
     fn: Function | None = fns[0] if fns else None
     pre_pass = None if fn is None else fn.last_precolor_pass()
     pre_passes = _precolor_passes(fn)
-    infos = {} if fn is None else {info.virtual: info for info in analyze_function(fn)}
+    infos = (
+        {}
+        if fn is None
+        else {(info.reg_kind, info.virtual): info for info in analyze_function(fn)}
+    )
     bindings = _bindings_by_virtual(source_text, function, pre_pass)
     events = find_function(parse_hook_events(pcdump_text), function)
 
@@ -640,9 +644,9 @@ def explain_virtuals(
             source_text=source_text,
             source_file=source_file,
         )
-        info = infos.get(virtual)
-        live_range = None if info is None else (info.first_use, info.last_use)
         reg_kind = _reg_kind_for_class(mapping.class_id)
+        info = infos.get((reg_kind, virtual))
+        live_range = None if info is None else (info.first_use, info.last_use)
         pre_occurrences = _pre_occurrence_sites(
             virtual,
             pre_passes,

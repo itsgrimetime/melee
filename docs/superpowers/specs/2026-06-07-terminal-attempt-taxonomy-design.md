@@ -1,5 +1,12 @@
 # Terminal Attempt Taxonomy Design
 
+> **SUPERSEDED — feature removed 2026-06-07.** This design described an overlay
+> that demoted functions the attempt ledger marked as source-ceiling /
+> tooling-blocked / diagnostic-only / manual-review. That overlay has been made
+> inert (`load_terminal_attempt_evidence` returns nothing; rows are never
+> demoted) because the ledger must never tell agents a function is a dead end.
+> Kept for historical design context only.
+
 ## Problem
 
 Function taxonomy queues currently describe only the latest static checkdiff

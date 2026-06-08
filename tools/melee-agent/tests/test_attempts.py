@@ -66,8 +66,12 @@ def test_attempt_record_persists_best_score_and_regression(tmp_path, monkeypatch
     assert entry["attempts"][1]["classification"] == "stack-layout"
 
 
-def test_attempt_record_recommends_moving_on_after_stalled_attempts(tmp_path, monkeypatch):
-    """Repeated no-progress attempts eventually produce a move-on recommendation."""
+def test_attempt_record_never_recommends_moving_on(tmp_path, monkeypatch):
+    """The ledger never tells agents to stop working on a function.
+
+    Repeated no-progress attempts still track a no-progress streak as telemetry,
+    but they must not produce a move-on recommendation.
+    """
     ledger_path = tmp_path / "attempts.json"
     monkeypatch.setenv("DECOMP_ATTEMPT_LEDGER_FILE", str(ledger_path))
 
@@ -100,12 +104,12 @@ def test_attempt_record_recommends_moving_on_after_stalled_attempts(tmp_path, mo
         ],
     )
     assert final.exit_code == 0, final.stdout
-    assert "Move-on recommended" in strip_ansi(final.stdout)
+    assert "Move-on recommended" not in strip_ansi(final.stdout)
 
     data = json.loads(ledger_path.read_text())
     entry = data["functions"]["Func_80000004"]
     assert entry["no_progress_count"] == 3
-    assert entry["move_on_recommended"] is True
+    assert entry["move_on_recommended"] is False
     assert entry["suspected_blocker"] == "signature/type uncertainty"
 
 
@@ -323,8 +327,8 @@ def test_scratch_recover_best_emits_best_source_and_diff(tmp_path, monkeypatch):
     assert payload["verdict"] == "new high-water"
 
 
-def test_register_only_stall_records_specific_move_on_reason(tmp_path, monkeypatch):
-    """Register-allocation churn gets a specific move-on reason."""
+def test_register_only_stall_does_not_recommend_move_on(tmp_path, monkeypatch):
+    """Register-allocation churn is tracked but never recommends moving on."""
     ledger_path = tmp_path / "attempts.json"
     monkeypatch.setenv("DECOMP_ATTEMPT_LEDGER_FILE", str(ledger_path))
 
@@ -365,9 +369,13 @@ def test_register_only_stall_records_specific_move_on_reason(tmp_path, monkeypat
         ],
     )
 
-    result = runner.invoke(app, ["attempts", "show", "Func_8000000C", "--threshold", "2", "--json"])
+    result = runner.invoke(app, ["attempts", "show", "Func_8000000C", "--threshold", "2", "--json", "--no-measure-current"])
     assert result.exit_code == 0, result.stdout
 
     summary = json.loads(result.stdout)
-    assert summary["move_on_reason"] == "repeated register-allocation mismatch attempts"
-    assert "fresh function or TU" in summary["recommendation"]
+    # The no-progress streak is still tracked as telemetry...
+    assert summary["register_only_no_progress_count"] == 2
+    # ...but the ledger never recommends abandoning the function.
+    assert summary["move_on_recommended"] is False
+    assert summary["move_on_reason"] == ""
+    assert summary["recommendation"] == ""

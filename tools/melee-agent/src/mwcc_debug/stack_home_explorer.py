@@ -302,7 +302,14 @@ def _variant_target_objective(
         current = _int_or_none(target.get("current_offset"))
         expected = _int_or_none(target.get("expected_offset"))
         opcode = target.get("opcode")
-        observed = _find_matching_mismatch(localizer, opcode, current, expected)
+        # A target is fixed only when no remaining mismatch exists for its
+        # (opcode, expected_offset) regardless of the variant's measured
+        # current_offset. A localizer mismatch by construction means
+        # current != expected, so the absence of any (opcode, expected)
+        # mismatch means the slot reached the expected offset. Keying on the
+        # baseline current_offset would miss a slot that merely moved to a
+        # different still-wrong offset.
+        observed = _find_matching_mismatch(localizer, opcode, expected)
         target_fixed = observed is None
         fixed += 1 if target_fixed else 0
         statuses.append({
@@ -329,7 +336,6 @@ def _variant_target_objective(
 def _find_matching_mismatch(
     localizer: Any,
     opcode: Any,
-    current: int | None,
     expected: int | None,
 ) -> dict[str, Any] | None:
     if not isinstance(localizer, dict):
@@ -338,8 +344,6 @@ def _find_matching_mismatch(
         if not isinstance(mismatch, dict):
             continue
         if str(mismatch.get("opcode")).lower() != str(opcode).lower():
-            continue
-        if _int_or_none(mismatch.get("current_offset")) != current:
             continue
         if _int_or_none(mismatch.get("expected_offset")) != expected:
             continue
@@ -382,7 +386,7 @@ def _variant_local_layout_deltas(
             "opcode": mismatch.get("opcode"),
             "expected_offset": expected,
             "current_offset": current,
-            "delta": current - expected,
+            "delta": expected - current,
             "line_index": mismatch.get("line_index"),
         })
 
@@ -544,7 +548,7 @@ def _name_local_deltas_from_context(
         seen.add(key)
         named.append({
             "name": name,
-            "delta": current - expected,
+            "delta": expected - current,
             "expected_offset": expected,
             "current_offset": current,
             "call": call,
@@ -649,17 +653,32 @@ def _variant_sort_key(variant: dict[str, Any]) -> tuple[float, float, float]:
 
 
 def _find_function_bounds(source_text: str, function: str) -> tuple[int, int] | None:
-    match = re.search(rf"\b{re.escape(function)}\s*\(", source_text)
-    if match is None:
-        return None
-    open_brace = source_text.find("{", match.end())
-    if open_brace < 0:
-        return None
-    close_brace = _find_matching(source_text, open_brace, "{", "}")
-    if close_brace is None:
-        return None
-    line_start = source_text.rfind("\n", 0, match.start()) + 1
-    return line_start, close_brace + 1
+    # Iterate every 'name(' occurrence and pick the one that is a definition
+    # (next non-space char after the closing paren is '{'), skipping
+    # prototypes (next non-space char is ';'). Taking the first textual match
+    # would otherwise capture an unrelated function body when a forward
+    # declaration precedes the real definition.
+    pattern = re.compile(rf"\b{re.escape(function)}\s*\(")
+    for match in pattern.finditer(source_text):
+        open_paren = source_text.find("(", match.end() - 1)
+        if open_paren < 0:
+            continue
+        close_paren = _find_matching(source_text, open_paren, "(", ")")
+        if close_paren is None:
+            continue
+        next_idx = close_paren + 1
+        while next_idx < len(source_text) and source_text[next_idx].isspace():
+            next_idx += 1
+        if next_idx >= len(source_text) or source_text[next_idx] != "{":
+            # Prototype (';') or some other non-definition use; keep scanning.
+            continue
+        open_brace = next_idx
+        close_brace = _find_matching(source_text, open_brace, "{", "}")
+        if close_brace is None:
+            continue
+        line_start = source_text.rfind("\n", 0, match.start()) + 1
+        return line_start, close_brace + 1
+    return None
 
 
 def _find_first_sqrt_assignment(function_text: str) -> dict[str, Any] | None:

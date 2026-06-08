@@ -1530,8 +1530,7 @@ def test_indexed_malformed_rebucket_ledgers_are_applied_to_queue_preview(
     ]
 
 
-def test_terminal_attempt_evidence_filters_stale_queue_rows(
-    monkeypatch: pytest.MonkeyPatch,
+def test_attempt_ledger_no_longer_demotes_queue_rows(
     tmp_path: Path,
 ) -> None:
     repo_root = _repo_with_source(tmp_path)
@@ -1587,141 +1586,25 @@ def test_terminal_attempt_evidence_filters_stale_queue_rows(
         repo_root=repo_root,
         attempt_ledger_path=ledger,
     )
-    monkeypatch.setenv("DECOMP_ATTEMPT_LEDGER_FILE", str(ledger))
-    default_ledger_rows = load_queue_rows(
-        queue,
-        work_bucket="indexed-struct-pointer",
-        repo_root=repo_root,
-    )
     preview = preview_harvest_queue(
         queue,
         work_bucket="indexed-struct-pointer",
         repo_root=repo_root,
         attempt_ledger_path=ledger,
     )
-    included = load_queue_rows(
-        queue,
-        work_bucket="indexed-struct-pointer",
-        repo_root=repo_root,
-        attempt_ledger_path=ledger,
-        include_terminal_attempts=True,
-    )
 
-    assert [row.function for row in rows] == ["ready_fn"]
-    assert [row.function for row in default_ledger_rows] == ["ready_fn"]
-    assert preview["counts"]["terminal_attempt_rows"] == 1
-    assert preview["terminal_attempt_facets"]["terminal_attempt_blocker"] == [
-        {"value": "no-safe-materialized-pointer", "count": 1}
-    ]
-    assert [row.function for row in included] == ["blocked_fn", "ready_fn"]
-    assert included[0].terminal_attempt_status == "active"
-    assert included[0].source_actionability == "tooling-blocked"
-    assert select_harness(included[0]) is None
-    for source_actionability in (
-        "source-ceiling",
-        "tooling-blocked",
-        "manual-review",
-    ):
-        assert (
-            select_harness(
-                HarvestRequest(
-                    function=f"{source_actionability}_fn",
-                    work_bucket="indexed-struct-pointer",
-                    match_percent=99.0,
-                    file_path="melee/demo.c",
-                    headline_tool="source-shape",
-                    source_file=None,
-                    primary="indexed-struct-pointer-materialization",
-                    source_actionability=source_actionability,
-                )
-            )
-            is None
-        )
-    assert (
-        select_harness(
-            HarvestRequest(
-                function="diagnostic_terminal_fn",
-                work_bucket="indexed-struct-pointer",
-                match_percent=99.0,
-                file_path="melee/demo.c",
-                headline_tool="source-shape",
-                source_file=None,
-                primary="indexed-struct-pointer-materialization",
-                source_actionability="diagnostic-only",
-                terminal_attempt_status="active",
-            )
-        )
-        is None
-    )
+    # The ledger no longer demotes or filters the "blocked" function: both rows
+    # are returned, in queue order, and neither is treated as a terminal
+    # dead-end attempt.
+    assert [row.function for row in rows] == ["blocked_fn", "ready_fn"]
+    assert all(row.terminal_attempt_status == "" for row in rows)
+    assert preview["counts"]["terminal_attempt_rows"] == 0
 
-    stale_queue = tmp_path / "queues" / "stale-indexed-struct-pointer.tsv"
-    stale_row = _row(
-        "stale_fn",
-        headline_tool="source-shape",
-        source_actionability="current-tools-indexed-pointer",
-        frame_closability_tier="",
-    )
-    stale_row["primary"] = "indexed-struct-pointer-materialization"
-    _write_queue(stale_queue, [stale_row])
-    stale_ledger = tmp_path / "stale_attempt_ledger.json"
-    stale_ledger.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "functions": {
-                    "stale_fn": {
-                        "function": "stale_fn",
-                        "move_on_recommended": True,
-                        "suspected_blocker": "no-safe-materialized-pointer",
-                        "attempts": [
-                            {
-                                "index": 1,
-                                "timestamp": 1.0,
-                                "outcome": "blocked",
-                                "blocker": "no-safe-materialized-pointer",
-                                "tool_sha256": "old-tool",
-                            }
-                        ],
-                    }
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    monkeypatch.setattr(
-        harvest_module,
-        "_harvest_tool_fingerprint",
-        lambda work_bucket: "new-tool",
-    )
-    stale_rows = load_queue_rows(
-        stale_queue,
-        work_bucket="indexed-struct-pointer",
-        repo_root=repo_root,
-        attempt_ledger_path=stale_ledger,
-    )
-
-    assert [row.function for row in stale_rows] == ["stale_fn"]
-    assert stale_rows[0].terminal_attempt_status == "stale"
-    assert stale_rows[0].source_actionability == "current-tools-indexed-pointer"
-    assert select_harness(stale_rows[0]) == "indexed-struct-search"
-
-    monkeypatch.setattr(
-        harvest_module,
-        "_harvest_tool_fingerprint",
-        lambda work_bucket: None,
-    )
-    incomparable_rows = load_queue_rows(
-        stale_queue,
-        work_bucket="indexed-struct-pointer",
-        repo_root=repo_root,
-        attempt_ledger_path=stale_ledger,
-        include_terminal_attempts=True,
-    )
-
-    assert incomparable_rows[0].terminal_attempt_status == "active"
-    assert incomparable_rows[0].source_actionability == "tooling-blocked"
-    assert select_harness(incomparable_rows[0]) is None
+    # The previously-"blocked" function keeps its original actionability and a
+    # runnable harness — it is not routed away from agents.
+    blocked_row = next(row for row in rows if row.function == "blocked_fn")
+    assert blocked_row.source_actionability == "current-tools-indexed-pointer"
+    assert select_harness(blocked_row) is not None
 
 
 def test_data_symbol_no_name_magic_rebucket_ledgers_are_applied_to_queue_preview(

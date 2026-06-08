@@ -22,6 +22,49 @@ from typing import Optional
 
 from .schema import get_db
 
+# Stopwords that can immediately follow "match" but are never function names.
+_FUNC_NAME_STOPWORDS = ("the", "a", "to", "for", "with")
+
+# Melee function identifier shapes, e.g. fn_801D542C, if_2F72, ftCo_8009C744,
+# grCastle_801CDFD8. Either a raw fn_<hex> or a <prefix>_<hex-suffix> token.
+_MELEE_IDENT_RE = re.compile(
+    r"\b(?:fn_[0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]*_[0-9A-Fa-f]{4,})\b"
+)
+
+
+def _extract_function_name(message: str) -> str | None:
+    """Extract a function name from a commit subject.
+
+    Handles the dominant 'match: <func>' / 'Matched <func>' conventions
+    (colon or whitespace), bare melee identifiers anywhere in the subject
+    (fn_*, prefixed names like ftCo_*, grCastle_*, if_*), and finally the
+    legacy '<name> 100%' form. Returns None when no function-like token is
+    found.
+    """
+    if not message:
+        return None
+
+    # 1. Token immediately after match/matched + colon or whitespace.
+    m = re.search(r"[Mm]atch(?:ed)?[:\s]+(\w+)", message)
+    if m:
+        name = m.group(1)
+        if name and name.lower() not in _FUNC_NAME_STOPWORDS:
+            return name
+
+    # 2. Any melee-identifier-shaped token anywhere in the subject.
+    ident = _MELEE_IDENT_RE.search(message)
+    if ident:
+        return ident.group(0)
+
+    # 3. Legacy "<name> 100%" form.
+    pct = re.search(r"(\w+)\s*\(?\s*100%", message)
+    if pct:
+        name = pct.group(1)
+        if name and name.lower() not in _FUNC_NAME_STOPWORDS:
+            return name
+
+    return None
+
 
 class JobStatus(str, Enum):
     PENDING = "pending"
@@ -177,8 +220,9 @@ class BackfillOrchestrator:
         commit_range = config.get("commit_range", "HEAD~50..HEAD")
         filter_pattern = config.get("filter_pattern", r"[Mm]atch|100%")
 
-        # Get commits in range
-        cmd = ["git", "log", "--format=%H|%s|%ai", commit_range, "--", "src/melee/**/*.c"]
+        # Get commits in range. Use the ASCII unit separator (\x1f) as the
+        # field delimiter so a '|' in the commit subject can't shift fields.
+        cmd = ["git", "log", "--format=%H%x1f%s%x1f%ai", commit_range, "--", "src/melee/**/*.c"]
         result = subprocess.run(cmd, cwd=melee_repo, capture_output=True, text=True)
 
         tasks_created = 0
@@ -186,7 +230,7 @@ class BackfillOrchestrator:
             if not line:
                 continue
 
-            parts = line.split("|")
+            parts = line.split("\x1f")
             if len(parts) < 3:
                 continue
 
@@ -197,12 +241,7 @@ class BackfillOrchestrator:
                 continue
 
             # Extract function name from commit message
-            func_match = re.search(r"[Mm]atch\s+(\w+)|(\w+)\s*\(?\s*100%", message)
-            func_name = None
-            if func_match:
-                func_name = func_match.group(1) or func_match.group(2)
-                if func_name and func_name.lower() in ("the", "a", "to", "for", "with"):
-                    func_name = None
+            func_name = _extract_function_name(message)
 
             # Get file path from commit
             file_cmd = ["git", "show", "--name-only", "--format=", sha, "--", "src/melee/**/*.c"]
@@ -846,7 +885,7 @@ Report your findings as JSON with this structure:
       ],
       "examples": [
         {{
-          "function": "{task.function_name}",
+          "function": "{task.function_name or "Unknown"}",
           "before": "code before fix",
           "after": "code after fix",
           "context": "brief description"

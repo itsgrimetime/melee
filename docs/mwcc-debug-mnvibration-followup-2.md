@@ -64,7 +64,7 @@ The mechanism I'm hoping for: with a lower IGNode index, scroll_offset might get
 
 This is speculative — I'm guessing at MWCC's simplification heuristics. But it's a one-line edit to test.
 
-**If it doesn't work**, the agent's conclusion stands: pure C source can't force this allocation through MWCC's live-range splitting.
+**If it doesn't work**, the agent's conclusion stands for the levers tried so far: no C-source form found yet forces this allocation through MWCC's live-range splitting (force-* diagnostics would confirm whether the target is reachable). Keep it in the pool for a later source-shape search rather than calling it impossible.
 
 ## What I'd accept as the structural ceiling
 

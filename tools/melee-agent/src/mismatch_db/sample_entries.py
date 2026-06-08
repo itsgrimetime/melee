@@ -732,7 +732,7 @@ for (i = 0; size = state->x8, i < state->x4 / size; i++) {
         ],
         fixes=[
             Fix(
-                description="First confirm the target really rematerializes instead of CSEing. If ordinary locals CSE the reads, try source forms that force a distinct reload; if no C lever exists, bank the ceiling rather than chasing register cascades.",
+                description="First confirm the target really rematerializes instead of CSEing. If ordinary locals CSE the reads, try source forms that force a distinct reload; if no C lever is found, bank it as a current-tooling register ceiling rather than chasing register cascades.",
                 success_rate=0.2,
             ),
         ],

@@ -39,6 +39,24 @@ _HEADER_DIRS = [
 ]
 
 
+def _balanced_body(txt: str, open_brace: int) -> str | None:
+    """Return the text between ``txt[open_brace]`` ('{') and its matching '}'.
+
+    Scans counting '{'/'}' so nested struct/union bodies are captured in full
+    (a non-greedy regex would stop at the first inner '}').
+    """
+    depth = 0
+    for i in range(open_brace, len(txt)):
+        c = txt[i]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return txt[open_brace + 1 : i]
+    return None
+
+
 def _find_struct_body(repo: Path, name: str) -> str | None:
     """Find the body of a C struct (or typedef struct) by name.
 
@@ -47,9 +65,11 @@ def _find_struct_body(repo: Path, name: str) -> str | None:
       typedef struct _Name { ... } Name;
     Returns the raw content between the outermost braces, or None.
     """
+    # Match only up to the opening brace; the body is captured by a
+    # brace-balanced scan so nested struct/union members are not truncated.
     pats = [
-        re.compile(rf"struct\s+_?{re.escape(name)}\s*\{{(.*?)\}}", re.S),
-        re.compile(rf"struct\s*\{{(.*?)\}}\s*{re.escape(name)}\s*;", re.S),
+        re.compile(rf"struct\s+_?{re.escape(name)}\s*\{{"),
+        re.compile(rf"struct\s*\{{(?P<body>.*?)\}}\s*{re.escape(name)}\s*;", re.S),
     ]
     for d in _HEADER_DIRS:
         root = repo / d
@@ -62,10 +82,22 @@ def _find_struct_body(repo: Path, name: str) -> str | None:
                 continue
             if name not in txt:
                 continue
-            for pat in pats:
-                m = pat.search(txt)
-                if m:
-                    return m.group(1)
+            # named form: struct Name { ... } — brace-balanced scan
+            m = pats[0].search(txt)
+            if m:
+                body = _balanced_body(txt, m.end() - 1)
+                if body is not None:
+                    return body
+            # typedef anonymous form: struct { ... } Name;
+            # the trailing `} Name;` anchor already bounds the body, but scan
+            # from the opening brace so a nested aggregate is captured in full.
+            for am in re.finditer(r"struct\s*\{", txt):
+                body = _balanced_body(txt, am.end() - 1)
+                if body is None:
+                    continue
+                after = txt[am.end() - 1 + len(body) + 2 :]
+                if re.match(rf"\s*{re.escape(name)}\s*;", after):
+                    return body
     return None
 
 
@@ -84,12 +116,41 @@ def _parse_c_fields(body: str) -> list[dict]:
     cleaned = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
     cleaned = re.sub(r"//[^\n]*", "", cleaned)
 
-    # Split into statements by semicolons; handle nested braces (anonymous structs etc)
-    # We parse line-by-line within a flat struct body
-    for line in cleaned.split(";"):
+    # Split into statements at brace-depth-0 semicolons only, so a NAMED nested
+    # struct/union (`struct/union { ... } member;`) stays a SINGLE statement and
+    # its inner members are not spliced up as bogus top-level fields.
+    statements: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    for ch in cleaned:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+        if ch == ";" and depth == 0:
+            statements.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    if buf:
+        statements.append("".join(buf))
+
+    # Parse line-by-line within the (now brace-aware) statement list.
+    for line in statements:
         line = line.strip()
         if not line:
             continue
+
+        # A NAMED nested aggregate (`struct/union { ... } member`) is one leaf
+        # field named after the trailing member; drop the inner body so we do
+        # not splice its members into the parent. Only the member name(s) remain
+        # after the closing brace, so there is no separate type token.
+        nested_aggregate = False
+        if "{" in line and "}" in line:
+            line = line[line.rindex("}") + 1 :].strip()
+            if not line:
+                continue
+            nested_aggregate = True
 
         # Example lines (pointer ``*`` may be anywhere before the name):
         #   u8 RST
@@ -107,16 +168,26 @@ def _parse_c_fields(body: str) -> list[dict]:
         # then the last whitespace token is the name (possibly with array suffix).
         no_star = line.replace("*", " ")
         tokens = no_star.split()
-        if len(tokens) < 2:
+        # A regular declaration needs at least a type and a name; a nested
+        # aggregate leaves only the member name token(s).
+        if len(tokens) < (1 if nested_aggregate else 2):
             continue
 
         raw_name = tokens[-1]
-        arr_match = re.match(r"^([a-zA-Z_][a-zA-Z0-9_]*)(?:\[(0x[0-9a-fA-F]+|\d+)\])?$", raw_name)
+        # The array size may be numeric (0xNN / decimal) OR a macro/enum/const
+        # expression (e.g. NUM_CHARACTERS). Accept any non-empty bracket body;
+        # only numeric sizes resolve to a concrete array_size, others stay None.
+        arr_match = re.match(r"^([a-zA-Z_][a-zA-Z0-9_]*)(?:\[([^\]]+)\])?$", raw_name)
         if not arr_match:
             continue
 
         field_name = arr_match.group(1)
-        array_size = int(arr_match.group(2), 0) if arr_match.group(2) else None
+        raw_size = arr_match.group(2)
+        is_array = raw_size is not None
+        if raw_size is not None and re.fullmatch(r"0x[0-9a-fA-F]+|\d+", raw_size.strip()):
+            array_size = int(raw_size, 0)
+        else:
+            array_size = None
 
         # Type is everything except the last token.
         type_str = " ".join(tokens[:-1]).strip()
@@ -125,7 +196,7 @@ def _parse_c_fields(body: str) -> list[dict]:
             "name": field_name,
             "type": type_str,
             "is_pointer": is_pointer,
-            "is_array": array_size is not None,
+            "is_array": is_array,
             "array_size": array_size,
         })
 
@@ -153,6 +224,13 @@ def enumerate_field_paths(repo: Path, struct_name: str, _depth: int = 0) -> list
 
         arr = f["array_size"]
         elem_type = f["type"]
+
+        # An array with an unresolved (macro/enum) size has is_array True but
+        # array_size None. Emit it as a bare leaf path rather than dropping it
+        # or recursing (we cannot index it without a concrete element offset).
+        if f["is_array"] and arr is None:
+            out.append(nm)
+            continue
 
         # Recurse into nested struct types (one level only).
         # NEVER recurse into pointer fields: a pointer-to-struct field is a

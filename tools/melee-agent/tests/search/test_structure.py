@@ -114,7 +114,7 @@ def test_source_lifetime_ranking_keeps_unscored_behind_ok_missing_structural() -
     ]
 
 
-def test_source_lifetime_shape_rank_does_not_affect_other_axes() -> None:
+def test_source_lifetime_shape_ranking_does_not_affect_other_axes() -> None:
     ranked = rank_structure_variants([
         StructureVariant(
             axis="decl-order",

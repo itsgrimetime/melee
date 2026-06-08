@@ -7,6 +7,13 @@ This checklist comes from reviewing the long-running Codex sessions
 The goal is to make agents faster and more reliable without lowering the bar
 for clean, PR-ready decompilation diffs.
 
+> **Update (2026-06-07):** The move-on recommender and the later terminal-attempt
+> evidence overlay (referenced below) have since been **removed**. `melee-agent
+> attempts` still records attempt history and scores as telemetry, but the ledger
+> no longer recommends moving on or marks any function as a dead end — source
+> exists for every function. The checklist items below are kept as a historical
+> record of what was built.
+
 ## Priority 1: Remove False Failures
 
 - [x] Add per-TU/object serialization to `tools/checkdiff.py` so parallel

@@ -3,7 +3,10 @@
 import asyncio
 import json
 import random
+from dataclasses import dataclass
 from pathlib import Path
+
+from src.client import DecompMeAPIError, DecompMeAuthError
 
 from .._common import (
     PRODUCTION_COOKIES_FILE,
@@ -84,3 +87,51 @@ def save_production_cookies(cookies: dict[str, str]) -> None:
     PRODUCTION_COOKIES_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(PRODUCTION_COOKIES_FILE, "w") as f:
         json.dump(cookies, f, indent=2)
+
+
+@dataclass
+class ProductionCreateResult:
+    """Outcome of creating + claiming a production scratch."""
+
+    slug: str
+    claim_token: str | None
+    claimed: bool
+
+
+async def claim_production_scratch(prod_client, slug: str, token: str) -> bool:
+    """Claim ownership of a production scratch. Returns True iff ownership took.
+
+    Claim failure is non-fatal (the scratch still exists, claimable later), so
+    this returns False rather than raising.
+    """
+    resp = await rate_limited_request(
+        prod_client, "post", f"/api/scratch/{slug}/claim", json={"token": token}
+    )
+    if resp.status_code == 200:
+        try:
+            return bool(resp.json().get("success"))
+        except Exception:
+            return False
+    return False
+
+
+async def create_and_claim_production_scratch(prod_client, create_data: dict) -> ProductionCreateResult:
+    """POST a scratch to production and claim it.
+
+    Raises ``DecompMeAuthError`` on 403 (Cloudflare / expired cf_clearance) so a
+    batch caller can stop; raises ``DecompMeAPIError`` on other non-2xx. Claim
+    failures are reported via ``ProductionCreateResult.claimed`` (not raised).
+    """
+    resp = await rate_limited_request(prod_client, "post", "/api/scratch", json=create_data)
+    if resp.status_code == 403:
+        raise DecompMeAuthError(f"Production create blocked (403): {resp.text[:200]}")
+    if resp.status_code not in (200, 201):
+        raise DecompMeAPIError(f"Production create failed: {resp.status_code} - {resp.text[:200]}")
+
+    data = resp.json()
+    slug = data.get("slug")
+    token = data.get("claim_token")
+    claimed = False
+    if token:
+        claimed = await claim_production_scratch(prod_client, slug, token)
+    return ProductionCreateResult(slug=slug, claim_token=token, claimed=claimed)

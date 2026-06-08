@@ -602,9 +602,12 @@ def normalize_signature(sig: str) -> str:
     sig = re.sub(r"/\*[^*]*\*/", "", sig)
     # Normalize whitespace
     sig = " ".join(sig.split())
-    # Remove parameter names (keep just types)
-    # This is a simplified version - handles common cases
-    sig = re.sub(r"(\w+)\s+\w+\s*([,)])", r"\1\2", sig)
+    # Normalize '*'/'&' spacing so pointer/reference placement is canonical:
+    # attach to the type, e.g. "T* x", "T *x", "T * x" -> "T* x".
+    sig = re.sub(r"\s*([*&]+)\s*", r"\1 ", sig)
+    # Remove parameter names (keep just types), accounting for one or more
+    # leading '*'/'&' attached to the type before the parameter name
+    sig = re.sub(r"(\w+\s*[*&]*)\s+\w+\s*([,)])", r"\1\2", sig)
     return sig
 
 

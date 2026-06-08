@@ -20,8 +20,11 @@ melee-agent attempts record <func> --match <pct> --outcome neutral \
   --note "checkpoint: callers/callees, data layout, asset loads, varargs lists, intended behavior reviewed"
 ```
 
-## Move-On Rule
+## Gather Evidence Before Grinding
 
 If the checkpoint reveals unresolved data or signature uncertainty, do not grind
-register allocation. Record the blocker and switch to a smaller caller/callee or
-neighboring data symbol until new evidence appears.
+register allocation against incomplete information. Record what is blocking
+progress and build evidence from a smaller caller/callee or neighboring data
+symbol, then return to this function once the data layout or signature is
+clearer. The function stays workable — source exists for every function; this is
+about investigation order, not giving up.
