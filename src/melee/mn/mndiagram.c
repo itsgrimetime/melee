@@ -694,7 +694,6 @@ void mnDiagram_8023FA6C(void)
 {
     u32 totals[0x19];
     u8* dst = mnDiagram_804A0750.sorted_fighters;
-    u32* totals_base;
     u8* dst_iter;
     u8* candidate;
     int i, j;
@@ -708,7 +707,6 @@ void mnDiagram_8023FA6C(void)
         totals[mnDiagram_803EE74C[i]] = mnDiagram_SumFighterKOs(fighter);
     }
 
-    totals_base = totals;
     for (i = 0; i < 0x19; i++) {
         int max_idx;
         j = i;
@@ -716,8 +714,8 @@ void mnDiagram_8023FA6C(void)
         max_idx = i;
         for (; j < 0x19; candidate++, j++) {
             if (mn_IsFighterUnlocked(*candidate) != 0) {
-                if ((totals_base[mnDiagram_804A0750.sorted_fighters[max_idx]] <
-                     totals_base[*candidate]) ||
+                if ((totals[mnDiagram_804A0750.sorted_fighters[max_idx]] <
+                     totals[*candidate]) ||
                     ((mn_IsFighterUnlocked(
                           mnDiagram_804A0750.sorted_fighters[max_idx]) == 0) &&
                      (mn_IsFighterUnlocked(*candidate) != 0)))
