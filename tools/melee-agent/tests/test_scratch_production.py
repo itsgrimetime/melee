@@ -101,3 +101,73 @@ def test_owner_is_account_anonymous():
 def test_owner_is_account_real():
     from src.cli.scratch_production import _owner_is_account
     assert _owner_is_account({"id": 2, "is_anonymous": False, "username": "realuser"}) is True
+
+
+def _fake_console_collector(monkeypatch):
+    """Patch scratch_production.console with a collector; return the list of printed strings."""
+    import src.cli.scratch_production as sp
+
+    printed: list[str] = []
+
+    class _FakeConsole:
+        def print(self, *a, **k):
+            printed.append(" ".join(str(x) for x in a))
+
+    monkeypatch.setattr(sp, "console", _FakeConsole())
+    monkeypatch.setattr(sp, "db_upsert_scratch", lambda *a, **k: True)
+    monkeypatch.setattr(sp, "db_upsert_function", lambda *a, **k: True)
+    monkeypatch.setattr("src.cli.scratch._save_scratch_token", lambda *a, **k: None)
+    monkeypatch.setattr("src.cli.sync._helpers.RATE_LIMIT_DELAY", 0.0)
+    return printed
+
+
+import respx  # noqa: E402
+import httpx  # noqa: E402
+
+
+@respx.mock
+async def test_create_claim_record_warns_on_anonymous_owner(monkeypatch):
+    import src.cli.scratch_production as sp
+
+    printed = _fake_console_collector(monkeypatch)
+
+    respx.post("https://decomp.me/api/scratch").mock(
+        return_value=httpx.Response(201, json={"slug": "AAAAA", "claim_token": "tok"})
+    )
+    respx.post("https://decomp.me/api/scratch/AAAAA/claim").mock(
+        return_value=httpx.Response(200, json={"success": True})
+    )
+    respx.get("https://decomp.me/api/scratch/AAAAA").mock(
+        return_value=httpx.Response(200, json={"slug": "AAAAA", "owner": {"id": 1, "is_anonymous": True}})
+    )
+
+    await sp._create_claim_record({"name": "fn_1"}, "fn_1", {"cf_clearance": "x", "sessionid": "y"})
+
+    blob = "\n".join(printed)
+    assert "Created scratch" in blob
+    assert "NOT owned by your account" in blob
+
+
+@respx.mock
+async def test_create_claim_record_silent_on_account_owner(monkeypatch):
+    import src.cli.scratch_production as sp
+
+    printed = _fake_console_collector(monkeypatch)
+
+    respx.post("https://decomp.me/api/scratch").mock(
+        return_value=httpx.Response(201, json={"slug": "BBBBB", "claim_token": "tok"})
+    )
+    respx.post("https://decomp.me/api/scratch/BBBBB/claim").mock(
+        return_value=httpx.Response(200, json={"success": True})
+    )
+    respx.get("https://decomp.me/api/scratch/BBBBB").mock(
+        return_value=httpx.Response(
+            200, json={"slug": "BBBBB", "owner": {"id": 2, "is_anonymous": False, "username": "real"}}
+        )
+    )
+
+    await sp._create_claim_record({"name": "fn_1"}, "fn_1", {"cf_clearance": "x", "sessionid": "y"})
+
+    blob = "\n".join(printed)
+    assert "Created scratch" in blob
+    assert "NOT owned" not in blob
