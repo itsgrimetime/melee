@@ -1812,7 +1812,8 @@ void mnDiagram_802417D0(HSD_GObj* gobj)
     if (data->is_name_mode != 0) {
         // Name mode - check if 10 more names exist
         count = 10;
-        i = (u8) data->name_cursor_pos;
+        i = data->name_cursor_pos;
+        i = (u8) i;
         ptr = sorted + i;
         ptr = ptr + 0x1C;
     loop1:
