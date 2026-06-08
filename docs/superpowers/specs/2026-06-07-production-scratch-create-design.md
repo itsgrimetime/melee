@@ -158,21 +158,29 @@ stops the batch (the generic `except Exception` at 462–464 keeps `continue`-in
 on ordinary create failures).
 
 **Unit B — pure payload builder**
-`build_production_create_data(func, context, source_code, compiler, flags) -> dict`
-in `cli/scratch.py` (or a small `cli/scratch_production.py`). No I/O, no network —
-fully unit-testable. Produces:
+`build_production_create_data(*, name, target_asm, context, source_code, compiler, flags, preset=None) -> dict`
+in `cli/scratch_production.py`. No I/O, no network — fully unit-testable. Produces:
 `{name, target_asm, context, compiler, compiler_flags, diff_label, source_code,
-platform, diff_flags}` with `platform="gc_wii"` and `diff_flags=[]` set
-**explicitly** (matching the proven `sync production` payload at
-[production.py:179](../../../tools/melee-agent/src/cli/sync/production.py); the
-prod path POSTs a raw dict, so `ScratchCreate`'s field defaults never apply —
-omitting `platform` would rely on server-side defaulting, which we avoid by being
-explicit). `compiler_flags` reuses the existing local-create default string
-([scratch.py:295](../../../tools/melee-agent/src/cli/scratch.py)):
-`-O4,p -nodefaults -fp hard -Cpp_exceptions off -enum int -fp_contract on -inline auto`
-(note: differs from CLAUDE.md canonical — `-fp hard` not `-fp hardware`, no
-`-proc gekko`; reused for consistency with local create since there is no source
-scratch to copy flags from — see Open caveats).
+platform, diff_flags}` (plus `preset` when given) with `platform="gc_wii"` and
+`diff_flags=[]` set **explicitly** (matching the proven `sync production` payload).
+
+`compiler_flags` are the **verified decomp.me "Super Smash Bros. Melee" flags**
+(confirmed against real production preset-63 scratches):
+`-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -enum int -fp_contract on -inline auto`.
+Critically this is the Melee preset's flags **WITHOUT `-DM2CTX`**: our context is
+`tools/decompctx.py` output (real, non-M2CTX types **including sibling function
+bodies**); `-DM2CTX` flips the header `#if defined(__MWERKS__) && !defined(M2CTX)`
+branches to m2c stub types (`UNK_T`→`long`) that the sibling bodies then fail to
+type-check against (empirically reproduced: with `-DM2CTX` the context errors;
+without it, it compiles). `-DM2CTX` is for the separate `tools/m2ctx/m2ctx.py`
+(the m2c decompiler context), not for compiling decompctx context.
+
+**Preset label.** `preset` is the decomp.me Melee preset id, resolved by name
+(`"Super Smash Bros. Melee"`, gc_wii) at create time via `GET /api/preset` and
+set on the payload so the scratch shows as the Melee preset in the UI. We still
+send explicit `compiler_flags` so the preset's own `-DM2CTX` default does not
+override them (this is exactly how real production preset-63 scratches are
+configured).
 
 **Unit C — `--production` branch in `scratch_create`**
 ([`cli/scratch.py`](../../../tools/melee-agent/src/cli/scratch.py)). Orchestrates,
@@ -295,10 +303,11 @@ correctly does **not** persist the returned session).
 
 ## Open caveats (disclosed, not blocking)
 
-- **compiler_flags** reuse the local-create default (`-fp hard`, no `-proc
-  gekko`), which diverges from CLAUDE.md canonical. Acceptable for parity with
-  local create; if produced scratches must reproduce melee's exact build codegen,
-  a follow-up can derive flags from the build config per TU.
+- **compiler_flags** are the verified decomp.me Melee set
+  (`-proc gekko -fp hard`, **no `-DM2CTX`**) — see Unit B. (The local
+  `scratch create` default in `scratch.py:295` is still missing `-proc gekko`;
+  a separate fix could align it, out of scope here.) If a specific TU needs
+  non-standard build flags, a follow-up can derive them from the build config.
 - **Idempotency** is DB-based (`production_scratch_slug`) + `--force`; a
   create-201-then-claim-fail still leaves one unowned scratch (mitigated by the
   loud warning + saved claim_token + `fix-ownership`).
