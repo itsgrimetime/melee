@@ -84,7 +84,9 @@ def _extract_function_from_code(code: str, function_name: str) -> str | None:
     """
     # Pattern to find the function definition
     # Match: return_type function_name(params) {
-    func_pattern = re.compile(rf"^([^\n]*?)\s+{re.escape(function_name)}\s*\([^)]*\)[^{{]*\{{", re.MULTILINE)
+    # Disallow ';' between ')' and '{' so a forward declaration ("name(...);")
+    # is NOT matched and run forward to the next unrelated '{' (e.g. a struct).
+    func_pattern = re.compile(rf"^([^\n]*?)\s+{re.escape(function_name)}\s*\([^)]*\)[^{{;]*\{{", re.MULTILINE)
 
     match = func_pattern.search(code)
     if not match:

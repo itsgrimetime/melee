@@ -150,47 +150,23 @@ async def _verify_scratch_ownership(client, slug: str) -> tuple[bool, str]:
         return False, f"Could not verify: {e}"
 
 
-@scratch_app.command("create")
-def scratch_create(
-    function_name: Annotated[str, typer.Argument(help="Name of the function")],
-    melee_root: Annotated[
-        Path, typer.Option("--melee-root", "-m", help="Path to melee submodule")
-    ] = DEFAULT_MELEE_ROOT,
-    api_url: Annotated[str | None, typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")] = None,
-    context_file: Annotated[Path | None, typer.Option("--context", "-c", help="Path to context file")] = None,
-    auto_decompile: Annotated[
-        bool, typer.Option("--decompile", "-d", help="Run m2c decompiler for initial code (recommended)")
-    ] = True,
-):
-    """Create a new scratch for a function on decomp.me.
+def _build_stripped_context(function_name, func, melee_root, context_file):
+    """Build the per-file .ctx context via ninja and strip the target function's
+    definition (keeping its declaration) to avoid redefinition errors.
 
-    By default, runs the m2c decompiler to generate initial C code.
-    Use --no-decompile to skip auto-decompilation and start with an empty stub.
+    Shared by the local `scratch create` path and the `--production` path.
+    Returns the stripped context string. Exits (typer.Exit) on build failure.
     """
-    api_url = api_url or get_local_api_url()
-    from src.client import DecompMeAPIClient
-    from src.extractor import extract_function
-
-    # Extract function first to get source file path for context
-    func = asyncio.run(extract_function(melee_root, function_name))
-    if func is None:
-        console.print(f"[red]Function '{function_name}' not found[/red]")
-        raise typer.Exit(1)
-
-    # Get context file using the function's source file path
-    ctx_path = context_file or _get_context_file(source_file=func.file_path)
-
-    # Always rebuild context to pick up header changes
     import subprocess
+
+    ctx_path = context_file or _get_context_file(source_file=func.file_path)
 
     # Build the context file - need relative path from melee_root
     try:
         ctx_relative = ctx_path.relative_to(melee_root)
         ninja_cwd = melee_root
     except ValueError:
-        # ctx_path might be in a worktree, find the melee root for that worktree
-        # The ctx_path looks like: .../melee-worktrees/<name>/build/GALE01/src/...
-        # We need to run ninja from the worktree root
+        # ctx_path might be in a worktree; run ninja from that worktree root.
         parts = ctx_path.parts
         ninja_cwd = None
         for i, part in enumerate(parts):
@@ -213,8 +189,8 @@ def scratch_create(
         if result.returncode != 0:
             console.print("[red]Failed to build context file:[/red]")
             console.print(result.stderr or result.stdout)
+            console.print("[dim]Fresh worktree? Try: python tools/worktree-doctor.py --fix[/dim]")
             raise typer.Exit(1)
-        # Only show message if ninja actually did something
         if "no work to do" not in result.stdout.lower():
             console.print("[green]Built context file[/green]")
     except subprocess.TimeoutExpired:
@@ -240,15 +216,12 @@ def scratch_create(
         for line in lines:
             if not in_func and function_name in line and "(" in line:
                 s = line.strip()
-                # Skip comments, control flow
                 if s.startswith("//") or s.startswith("if") or s.startswith("while"):
                     filtered.append(line)
                     continue
-                # Keep declarations (prototypes) - they end with );
                 if s.endswith(";"):
                     filtered.append(line)
                     continue
-                # This is a function definition
                 in_func = True
                 depth = line.count("{") - line.count("}")
                 filtered.append(f"// {function_name} definition stripped")
@@ -265,6 +238,58 @@ def scratch_create(
             filtered.append(line)
         melee_context = "\n".join(filtered)
         console.print(f"[dim]Stripped {function_name} definition from context[/dim]")
+
+    return melee_context
+
+
+@scratch_app.command("create")
+def scratch_create(
+    function_name: Annotated[str, typer.Argument(help="Name of the function")],
+    melee_root: Annotated[
+        Path, typer.Option("--melee-root", "-m", help="Path to melee submodule")
+    ] = DEFAULT_MELEE_ROOT,
+    api_url: Annotated[str | None, typer.Option("--api-url", help="Decomp.me API URL (auto-detected)")] = None,
+    context_file: Annotated[Path | None, typer.Option("--context", "-c", help="Path to context file")] = None,
+    auto_decompile: Annotated[
+        bool, typer.Option("--decompile", "-d", help="Run m2c decompiler for initial code (recommended)")
+    ] = True,
+    production: Annotated[
+        bool, typer.Option("--production", help="Create on production decomp.me instead of the local server")
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="With --production: create even if a production scratch already exists"),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="With --production: build and show the payload without creating"),
+    ] = False,
+):
+    """Create a new scratch for a function on decomp.me.
+
+    By default, runs the m2c decompiler to generate initial C code.
+    Use --no-decompile to skip auto-decompilation and start with an empty stub.
+    """
+    if production:
+        if api_url:
+            console.print("[dim]--api-url ignored with --production[/dim]")
+        from .scratch_production import run_production_create
+
+        run_production_create(function_name, melee_root, force=force, dry_run=dry_run)
+        return
+
+    api_url = api_url or get_local_api_url()
+    from src.client import DecompMeAPIClient
+    from src.extractor import extract_function
+
+    # Extract function first to get source file path for context
+    func = asyncio.run(extract_function(melee_root, function_name))
+    if func is None:
+        console.print(f"[red]Function '{function_name}' not found[/red]")
+        raise typer.Exit(1)
+
+    # Build + strip the per-file context (worktree-aware).
+    melee_context = _build_stripped_context(function_name, func, melee_root, context_file)
 
     # Detect correct compiler for this source file
     compiler = get_compiler_for_source(func.file_path, melee_root)
@@ -292,7 +317,7 @@ def scratch_create(
                 target_asm=func.asm,
                 context=decompile_context if auto_decompile else melee_context,
                 compiler=compiler,
-                compiler_flags="-O4,p -nodefaults -fp hard -Cpp_exceptions off -enum int -fp_contract on -inline auto",
+                compiler_flags="-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -enum int -fp_contract on -inline auto",
                 diff_label=func.name,
             )
 
