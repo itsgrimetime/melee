@@ -26,6 +26,8 @@ def test_build_payload_fields():
     assert data["platform"] == "gc_wii"
     assert data["diff_flags"] == []
     assert data["compiler_flags"] == PRODUCTION_COMPILER_FLAGS
+    # No preset key unless explicitly requested.
+    assert "preset" not in data
 
 
 def test_build_payload_flags_override():
@@ -33,6 +35,13 @@ def test_build_payload_flags_override():
         name="f", target_asm="x", context="", source_code="", compiler="c", flags="-O0"
     )
     assert data["compiler_flags"] == "-O0"
+
+
+def test_build_payload_includes_preset_when_given():
+    data = build_production_create_data(
+        name="f", target_asm="x", context="", source_code="", compiler="c", preset=63
+    )
+    assert data["preset"] == 63
 
 
 def test_seed_source_extracts_from_repo(tmp_path):
@@ -62,6 +71,10 @@ def test_seed_source_stub_when_function_absent(tmp_path):
 
 def test_compiler_flags_constant():
     assert PRODUCTION_COMPILER_FLAGS.startswith("-O4,p")
+    # -proc gekko is required for correct PPC codegen; -DM2CTX must NOT be present
+    # (it breaks the decompctx context — flips headers to m2c stub types).
+    assert "-proc gekko" in PRODUCTION_COMPILER_FLAGS
+    assert "-DM2CTX" not in PRODUCTION_COMPILER_FLAGS
 
 
 def test_run_production_create_exits_without_cf_clearance(tmp_path, monkeypatch):

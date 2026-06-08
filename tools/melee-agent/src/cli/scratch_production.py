@@ -21,11 +21,17 @@ from ._common import (
 from .sync._helpers import create_and_claim_production_scratch, load_production_cookies
 from .sync.auth import get_production_user_agent
 
-# Matches the local `scratch create` default. Diverges from CLAUDE.md canonical
-# (-fp hard not -fp hardware, no -proc gekko); reused for parity with local
-# create since there is no source scratch to copy flags from.
+# Name of the decomp.me preset to label production scratches with.
+MELEE_PRESET_NAME = "Super Smash Bros. Melee"
+
+# decomp.me "Super Smash Bros. Melee" compiler flags, verified against real
+# production preset-63 scratches. This is the preset's flags WITHOUT -DM2CTX:
+# the decompctx.py context we send contains real (non-M2CTX) types, and -DM2CTX
+# would flip the header `#if defined(__MWERKS__) && !defined(M2CTX)` branches to
+# m2c stub types (UNK_T -> long) that the sibling function bodies in the context
+# then fail to type-check against. (-fp hard == -fp hardware in mwcc.)
 PRODUCTION_COMPILER_FLAGS = (
-    "-O4,p -nodefaults -fp hard -Cpp_exceptions off -enum int -fp_contract on -inline auto"
+    "-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -enum int -fp_contract on -inline auto"
 )
 
 
@@ -37,9 +43,15 @@ def build_production_create_data(
     source_code: str,
     compiler: str,
     flags: str = PRODUCTION_COMPILER_FLAGS,
+    preset: int | None = None,
 ) -> dict:
-    """Build the /api/scratch POST body for a production scratch (pure)."""
-    return {
+    """Build the /api/scratch POST body for a production scratch (pure).
+
+    When ``preset`` is given it labels the scratch with that decomp.me preset
+    (e.g. the Melee preset) while still sending explicit ``compiler_flags`` so
+    the preset's own ``-DM2CTX`` default does not override them.
+    """
+    data = {
         "name": name,
         "target_asm": target_asm,
         "context": context,
@@ -50,6 +62,9 @@ def build_production_create_data(
         "platform": "gc_wii",
         "diff_flags": [],
     }
+    if preset is not None:
+        data["preset"] = preset
+    return data
 
 
 def _seed_source_from_repo(name: str, file_path: str, melee_root: Path) -> str:
@@ -89,6 +104,24 @@ def _make_production_client(cookies: dict) -> httpx.AsyncClient:
     )
 
 
+async def _resolve_melee_preset_id(client) -> int | None:
+    """Look up the decomp.me Melee preset id (gc_wii) by name, or None if absent."""
+    url = "/api/preset?page_size=100"
+    try:
+        while url:
+            r = await client.get(url)
+            if r.status_code != 200:
+                return None
+            d = r.json()
+            for p in d.get("results", []):
+                if p.get("platform") == "gc_wii" and p.get("name") == MELEE_PRESET_NAME:
+                    return p.get("id")
+            url = d.get("next")
+    except Exception:
+        return None
+    return None
+
+
 async def _preflight_auth(cookies: dict) -> None:
     """Cheap authenticated probe before the expensive build. Exit on 403."""
     ua = get_production_user_agent()
@@ -126,6 +159,14 @@ async def _create_claim_record(create_data: dict, func_name: str, cookies: dict)
     from .scratch import _save_scratch_token
 
     async with _make_production_client(cookies) as client:
+        # Label the scratch with the Melee preset (kept separate from compiler_flags
+        # so the preset's -DM2CTX default does not clobber our explicit flags).
+        if "preset" not in create_data:
+            preset_id = await _resolve_melee_preset_id(client)
+            if preset_id is not None:
+                create_data["preset"] = preset_id
+            else:
+                console.print("[yellow]Could not resolve the Melee preset id; creating without preset label.[/yellow]")
         try:
             result = await create_and_claim_production_scratch(client, create_data)
         except DecompMeAuthError:
@@ -238,6 +279,7 @@ def run_production_create(
             f"platform={create_data['platform']}"
         )
         console.print(f"  flags={create_data['compiler_flags']}")
+        console.print(f"  preset={MELEE_PRESET_NAME!r} (id resolved at create)")
         console.print(
             f"  sizes: source={len(create_data['source_code'])} "
             f"context={len(create_data['context'])} target_asm={len(create_data['target_asm'])}"
