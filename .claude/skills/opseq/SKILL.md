@@ -74,10 +74,52 @@ When you've successfully matched one function, find similar unmatched ones:
 melee-agent opseq -candidates <pattern_from_matched_func>
 ```
 
+## Gap-tolerant patterns
+
+Tokens are comma-separated. Between landmarks you can insert a **bounded gap** to
+tolerate scheduler/register noise. Quote the pattern — `*`, `?`, and `{}` are
+shell metacharacters:
+
+```bash
+melee-agent opseq 'lfs,*{0..3},fsubs,bne'   # up to 3 instructions between lfs and fsubs
+melee-agent opseq 'cmplwi,*,bne'            # bare * = up to --gap-cap (default 6)
+melee-agent opseq 'mtctr,?,bctr'            # ? = exactly one instruction
+```
+
+Rules: bounds use `..` (not a comma); the upper bound is capped at 32; a pattern
+must begin and end with a real opcode (no leading/trailing gap). Results are
+ranked tightest-match-first.
+
+## Derive a pattern from a function (`--like`)
+
+Stop hand-authoring. Point `--like` at a function (optionally a line range) and
+opseq derives an editable, gap-tolerant pattern — keeping control-flow anchors
+(loops/returns/switches) plus the rarest distinctive ops, gapping out filler:
+
+```bash
+melee-agent opseq --like fn_80247510
+melee-agent opseq --like fn_80247510:512-540   # just the stuck region (see note)
+melee-agent opseq --like fn_80247510 --with-operands     # also bind register-reuse
+```
+
+The optional `:start-end` range is **`.s` file line numbers** — the same
+coordinate opseq prints in its results (`path.s:LINE`), not instruction
+addresses.
+
+Flags: `--gap-cap N` (bare `*` width, default 6), `--slack N` (derive tolerance,
+default 2), `--max-landmarks N` (default 12), `--with-operands`. The derived
+pattern is printed so you can tweak it and re-run it manually.
+
+Note: `--with-operands` is significantly more expensive to match (it adds
+register-reuse constraints); on large functions prefer a `:start-end` range, or
+the search budget will skip the largest bodies with a warning.
+
 ## Tips
 
 - Shorter patterns (3-4 opcodes) give more results
 - Longer patterns (5-6 opcodes) are more specific
+- Always single-quote patterns that contain `*`, `?`, or `{}` so the shell does
+  not expand them: `melee-agent opseq 'lfs,*{0..3},fsubs'`.
 - `melee-agent opseq` runs `tools/table-typer` from the current checkout and
   falls back to `go run` when the helper binary is not built.
 - The tool searches `build/GALE01/asm/melee/` for asm files
