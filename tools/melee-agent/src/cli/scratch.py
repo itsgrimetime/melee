@@ -317,7 +317,7 @@ def scratch_create(
                 target_asm=func.asm,
                 context=decompile_context if auto_decompile else melee_context,
                 compiler=compiler,
-                compiler_flags="-O4,p -nodefaults -fp hard -Cpp_exceptions off -enum int -fp_contract on -inline auto",
+                compiler_flags="-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -enum int -fp_contract on -inline auto",
                 diff_label=func.name,
             )
 
