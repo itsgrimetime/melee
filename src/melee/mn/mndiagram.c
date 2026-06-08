@@ -2060,7 +2060,7 @@ void mnDiagram_OnFrame(HSD_GObj* gobj)
                 row_idx = indices >> 8;
                 col_idx = (u8) indices;
                 mnDiagram_80241668(gobj);
-                mnDiagram_8024227C(gobj, col_idx, row_idx,
+                mnDiagram_8024227C(gobj, col_idx, indices >> 8,
                                    (u8) (data2->is_name_mode == 1));
                 if (data2->is_name_mode == 0) {
                     mnDiagram_80242C0C(gobj, col_idx, row_idx);
