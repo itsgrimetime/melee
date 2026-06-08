@@ -1822,23 +1822,21 @@ void mnDiagram_802417D0(HSD_GObj* gobj)
         i = (u8) i;
         ptr = sorted + i;
         ptr = ptr + 0x1C;
-    loop1:
-        ptr2 = ptr;
-    loop2:
-        i++;
-        ptr2++;
-        ptr++;
-        if (i >= 0x78) {
-            result = 0x78;
-        } else if (GetNameText(*ptr2) == NULL) {
-            goto loop2;
-        } else {
+        while (count > 0) {
+            ptr2 = ptr;
+            do {
+                i++;
+                ptr2++;
+                ptr++;
+                if (i >= 0x78) {
+                    result = 0x78;
+                    goto right_done;
+                }
+            } while (GetNameText(*ptr2) == NULL);
             count--;
-            if (count > 0) {
-                goto loop1;
-            }
-            result = sorted[i + 0x1C];
         }
+        result = sorted[i + 0x1C];
+    right_done:;
         if ((u8) result != 0x78) {
             HSD_JObjClearFlagsAll(jobj, 0x10U);
         } else {
@@ -1849,26 +1847,24 @@ void mnDiagram_802417D0(HSD_GObj* gobj)
         count = 10;
         i = (u8) data->fighter_cursor_pos;
         ptr = sorted + i;
-    loop3:
-        if (count == 0) {
-            result = sorted[i];
-        } else {
-            ptr2 = ptr;
-        loop4:
-            i++;
-            ptr2++;
-            ptr++;
-            if (i >= 0x19) {
-                result = 0x19;
-            } else if (mn_IsFighterUnlocked(*ptr2) == 0) {
-                goto loop4;
-            } else {
-                count--;
-                if (count >= 0) {
-                    goto loop3;
-                }
+        do {
+            if (count == 0) {
+                result = sorted[i];
+                break;
             }
-        }
+            ptr2 = ptr;
+            do {
+                i++;
+                ptr2++;
+                ptr++;
+                if (i >= 0x19) {
+                    result = 0x19;
+                    goto fc_right_done;
+                }
+            } while (mn_IsFighterUnlocked(*ptr2) == 0);
+            count--;
+        } while (count >= 0);
+    fc_right_done:
         if ((u8) result != 0x19) {
             HSD_JObjClearFlagsAll(jobj, 0x10U);
         } else {
@@ -1913,23 +1909,21 @@ void mnDiagram_802417D0(HSD_GObj* gobj)
         i = data->name_cursor_pos >> 8;
         ptr = sorted + i;
         ptr = ptr + 0x1C;
-    loop5:
-        ptr2 = ptr;
-    loop6:
-        i++;
-        ptr2++;
-        ptr++;
-        if (i >= 0x78) {
-            result2 = 0x78;
-        } else if (GetNameText(*ptr2) == NULL) {
-            goto loop6;
-        } else {
+        while (count > 0) {
+            ptr2 = ptr;
+            do {
+                i++;
+                ptr2++;
+                ptr++;
+                if (i >= 0x78) {
+                    result2 = 0x78;
+                    goto dn_name_done;
+                }
+            } while (GetNameText(*ptr2) == NULL);
             count--;
-            if (count > 0) {
-                goto loop5;
-            }
-            result2 = sorted[i + 0x1C];
         }
+        result2 = sorted[i + 0x1C];
+    dn_name_done:
         if (result2 != 0x78) {
             HSD_JObjClearFlagsAll(jobj, 0x10U);
         } else {
@@ -1940,26 +1934,24 @@ void mnDiagram_802417D0(HSD_GObj* gobj)
         count = 7;
         i = data->fighter_cursor_pos >> 8;
         ptr = sorted + i;
-    loop7:
-        if (count == 0) {
-            result2 = sorted[i];
-        } else {
-            ptr2 = ptr;
-        loop8:
-            i++;
-            ptr2++;
-            ptr++;
-            if (i >= 0x19) {
-                result2 = 0x19;
-            } else if (mn_IsFighterUnlocked(*ptr2) == 0) {
-                goto loop8;
-            } else {
-                count--;
-                if (count >= 0) {
-                    goto loop7;
-                }
+        do {
+            if (count == 0) {
+                result2 = sorted[i];
+                break;
             }
-        }
+            ptr2 = ptr;
+            do {
+                i++;
+                ptr2++;
+                ptr++;
+                if (i >= 0x19) {
+                    result2 = 0x19;
+                    goto dn_fc_done;
+                }
+            } while (mn_IsFighterUnlocked(*ptr2) == 0);
+            count--;
+        } while (count >= 0);
+    dn_fc_done:
         if (result2 != 0x19) {
             HSD_JObjClearFlagsAll(jobj, 0x10U);
         } else {
