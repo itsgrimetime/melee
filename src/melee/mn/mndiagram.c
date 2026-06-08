@@ -616,7 +616,7 @@ int mnDiagram_GetRankedFighterForName(int rank, int name_idx,
     return 0x19;
 }
 
-static inline int mnDiagram_AllPlayTimesZero(int name)
+static inline int mnDiagram_AllPlayTimesZero(u8 name)
 {
     int i;
     int offset;
@@ -638,22 +638,20 @@ static inline int mnDiagram_AllPlayTimesZero(int name)
 u8 mnDiagram_GetLeastPlayedFighter(u8 name_idx)
 {
     int i;
-    int name;
     int min_fighter;
     int count;
 
     if (mnDiagram_AllPlayTimesZero(name_idx)) {
         return 0x19;
     }
-    name = name_idx;
 
     // Find fighter with minimum play time
     min_fighter = 0;
     for (i = 1; i < 0x19; i++) {
         if (mn_IsFighterUnlocked(i) != 0) {
-            if (GetPersistentNameData(name)
+            if (GetPersistentNameData(name_idx)
                     ->play_time_by_fighter[min_fighter] >
-                GetPersistentNameData(name)->play_time_by_fighter[i])
+                GetPersistentNameData(name_idx)->play_time_by_fighter[i])
             {
                 min_fighter = i;
             }
@@ -664,7 +662,7 @@ u8 mnDiagram_GetLeastPlayedFighter(u8 name_idx)
     count = 0;
     for (i = 0; i < 0x19; i++) {
         if (mn_IsFighterUnlocked(i) != 0 &&
-            GetPersistentNameData(name)->play_time_by_fighter[i] == 0U)
+            GetPersistentNameData(name_idx)->play_time_by_fighter[i] == 0U)
         {
             count++;
         }
@@ -677,8 +675,9 @@ u8 mnDiagram_GetLeastPlayedFighter(u8 name_idx)
     count = 0;
     for (i = 0; i < 0x19; i++) {
         if (mn_IsFighterUnlocked(i) != 0 && i != min_fighter) {
-            if (GetPersistentNameData(name)->play_time_by_fighter[i] ==
-                GetPersistentNameData(name)->play_time_by_fighter[min_fighter])
+            if (GetPersistentNameData(name_idx)->play_time_by_fighter[i] ==
+                GetPersistentNameData(name_idx)
+                    ->play_time_by_fighter[min_fighter])
             {
                 count++;
             }
