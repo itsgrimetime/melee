@@ -716,8 +716,10 @@ void mnDiagram_8023FA6C(void)
         max_idx = i;
         for (; j < 0x19; candidate++, j++) {
             if (mn_IsFighterUnlocked(*candidate) != 0) {
-                if ((totals_base[dst[max_idx]] < totals_base[*candidate]) ||
-                    ((mn_IsFighterUnlocked(dst[max_idx]) == 0) &&
+                if ((totals_base[mnDiagram_804A0750.sorted_fighters[max_idx]] <
+                     totals_base[*candidate]) ||
+                    ((mn_IsFighterUnlocked(
+                          mnDiagram_804A0750.sorted_fighters[max_idx]) == 0) &&
                      (mn_IsFighterUnlocked(*candidate) != 0)))
                 {
                     max_idx = j;
@@ -725,14 +727,13 @@ void mnDiagram_8023FA6C(void)
             }
         }
         if (max_idx != i) {
-            u8* p = &dst[max_idx];
-            u8 temp = *p;
+            u8 temp = mnDiagram_804A0750.sorted_fighters[max_idx];
             while (max_idx > i) {
-                *p = *(p - 1);
-                p--;
+                mnDiagram_804A0750.sorted_fighters[max_idx] =
+                    mnDiagram_804A0750.sorted_fighters[max_idx - 1];
                 max_idx--;
             }
-            dst[i] = temp;
+            mnDiagram_804A0750.sorted_fighters[i] = temp;
         }
     }
 }
