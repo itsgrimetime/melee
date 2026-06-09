@@ -1,0 +1,196 @@
+"""Regression tests for mismatch-db full-text search."""
+
+from typer.testing import CliRunner
+
+from src.cli import app
+from src.mismatch_db.models import Fix, Pattern, PatternDB
+from src.mismatch_db.sample_entries import load_samples
+from src.mismatch_db.schema import init_db
+
+
+runner = CliRunner()
+
+
+def test_fulltext_search_handles_hyphenated_query(tmp_path):
+    db = PatternDB(init_db(tmp_path / "patterns.db"))
+    db.insert(
+        Pattern(
+            id="stack-layout",
+            name="Stack layout mismatch",
+            description="Stack layout changes shift local variable offsets.",
+            root_cause="A local variable or inline shape changed stack allocation.",
+            categories=["stack"],
+        )
+    )
+
+    patterns = db.search_fulltext("stack-layout")
+
+    assert [pattern.id for pattern in patterns] == ["stack-layout"]
+
+
+def test_mismatch_show_alias_displays_pattern_details(tmp_path):
+    db_path = tmp_path / "patterns.db"
+    db = PatternDB(init_db(db_path))
+    db.insert(
+        Pattern(
+            id="stack-layout",
+            name="Stack layout mismatch",
+            description="Stack layout changes shift local variable offsets.",
+            root_cause="A local variable or inline shape changed stack allocation.",
+            categories=["stack"],
+        )
+    )
+
+    result = runner.invoke(app, ["mismatch", "show", "stack-layout", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "Stack layout mismatch" in result.stdout
+    assert "ID: stack-layout" in result.stdout
+
+
+def test_search_prints_retrieval_hint(tmp_path):
+    """`mismatch search` should tell agents how to fetch a pattern's details.
+
+    Issue #30: search returns IDs but agents didn't know `mismatch get <id>`
+    is the retrieval command. The results footer must surface it.
+    """
+    db_path = tmp_path / "patterns.db"
+    db = PatternDB(init_db(db_path))
+    db.insert(
+        Pattern(
+            id="stack-layout",
+            name="Stack layout mismatch",
+            description="Stack layout changes shift local variable offsets.",
+            root_cause="A local variable or inline shape changed stack allocation.",
+            categories=["stack"],
+        )
+    )
+
+    result = runner.invoke(app, ["mismatch", "search", "stack", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "stack-layout" in result.stdout
+    assert "mismatch get" in result.stdout
+
+
+def test_quick_win_harvest_patterns_are_searchable(tmp_path):
+    db = PatternDB(init_db(tmp_path / "patterns.db"))
+    load_samples(db)
+
+    thp_results = db.search_fulltext("THP predDC restart padding")
+    cast_results = db.search_fulltext("function pointer cast blrl")
+
+    assert "thp-component-layout-pred-dc-padding" in {p.id for p in thp_results}
+    assert "function-pointer-cast-forces-indirect-call" in {p.id for p in cast_results}
+
+
+def test_register_keyword_stale_pattern_is_corrected(tmp_path):
+    db = PatternDB(init_db(tmp_path / "patterns.db"))
+    db.insert(
+        Pattern(
+            id="register-keyword-respected-by-mwcc",
+            name="`register` keyword still respected by MWCC for allocation hints",
+            description="MWCC (1.2.5n) honors register as an allocation hint.",
+            root_cause="MWCC respects register as a hint.",
+            fixes=[
+                Fix(
+                    description=(
+                        "When target keeps a loop temp in a dedicated register, "
+                        "try adding register keyword. MWCC respects it as a hint."
+                    ),
+                    success_rate=0.5,
+                )
+            ],
+            categories=["register"],
+            opcodes=["lwz", "mr"],
+        )
+    )
+
+    corrected = PatternDB(db.conn).get("register-keyword-respected-by-mwcc")
+
+    assert corrected is not None
+    assert "does not respect" in corrected.description
+    assert "do not spend time" in corrected.fixes[0].description.lower()
+    stale_text = " ".join(
+        [
+            corrected.name,
+            corrected.description,
+            corrected.root_cause,
+            corrected.fixes[0].description,
+        ]
+    )
+    assert "MWCC respects" not in stale_text
+
+
+def test_cmd_buffer_and_for_condition_reload_patterns_are_searchable(tmp_path):
+    db = PatternDB(init_db(tmp_path / "patterns.db"))
+    load_samples(db)
+
+    cmd_buffer_results = db.search_fulltext(
+        "fixed-size scratch array no zero initialization"
+    )
+    reload_results = db.search_fulltext(
+        "for-condition comma assignment reload coalescing"
+    )
+    inverse_results = db.search_fulltext(
+        "inverse CSE rematerialize non-volatile global read"
+    )
+
+    assert "sparse-scratch-array-no-zero-init" in {
+        p.id for p in cmd_buffer_results
+    }
+    assert "loop-field-reload-comma-assignment" in {
+        p.id for p in reload_results
+    }
+    assert "inverse-cse-rematerialized-global-read" in {
+        p.id for p in inverse_results
+    }
+
+
+def test_new_mismatch_patterns_are_migrated_into_existing_db(tmp_path):
+    db = PatternDB(init_db(tmp_path / "patterns.db"))
+
+    cmd_buffer_results = db.search_fulltext(
+        "fixed-size scratch array no zero initialization"
+    )
+    reload_results = db.search_fulltext(
+        "for-condition comma assignment reload coalescing"
+    )
+    inverse_results = db.search_fulltext(
+        "inverse CSE rematerialize non-volatile global read"
+    )
+
+    assert "sparse-scratch-array-no-zero-init" in {
+        p.id for p in cmd_buffer_results
+    }
+    assert "loop-field-reload-comma-assignment" in {
+        p.id for p in reload_results
+    }
+    assert "inverse-cse-rematerialized-global-read" in {
+        p.id for p in inverse_results
+    }
+
+
+def test_migrated_patterns_preserve_recorded_success_on_reopen(tmp_path):
+    db_path = tmp_path / "patterns.db"
+    db = PatternDB(init_db(db_path))
+    db.record_success("sparse-scratch-array-no-zero-init", "fn_80000000")
+
+    reopened = PatternDB(init_db(db_path))
+    pattern = reopened.get("sparse-scratch-array-no-zero-init")
+
+    assert pattern is not None
+    assert [entry.function for entry in pattern.provenance.helped_match] == [
+        "fn_80000000"
+    ]
+
+
+def test_load_samples_keeps_rich_payload_for_migrated_patterns(tmp_path):
+    db = PatternDB(init_db(tmp_path / "patterns.db"))
+    load_samples(db)
+
+    pattern = db.get("sparse-scratch-array-no-zero-init")
+
+    assert pattern is not None
+    assert pattern.examples[0].before is not None
+    assert pattern.examples[0].after is not None

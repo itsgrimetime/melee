@@ -1,0 +1,10 @@
+platform: gc
+versions:
+  - name: usa
+    paths:
+      build_dir: build
+      nonmatchings: build/GALE01/asm
+tools:
+  m2c:
+    contextPath: build/ctx.c
+    otherFlags: "--knr --pointer left --target ppc-mwcc-c"
