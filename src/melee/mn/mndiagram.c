@@ -977,292 +977,310 @@ static inline void mnDiagram_SaveCursorToGameRules(Diagram* d)
 /// The "visible entry" scans skip locked fighters / empty name slots, and are
 /// factored into the mnDiagram_GetVisible*From / mnDiagram_Get{Prev,Next}*Index
 /// helpers shared with mndiagram2.
-void mnDiagram_InputProc(HSD_GObj* gobj)
+void mnDiagram_InputProc(HSD_GObj *gobj)
 {
-    HSD_GObjProc* proc;
-    u8 row_result;
-    int i;
-    u8* sorted = mnDiagram_804A0750.sorted_fighters;
-    Diagram* data = GET_DIAGRAM(mnDiagram_804D6C10);
-    u32 input = Menu_GetAllInputs();
-    int count;
-    int col;
-    int row;
-    u8 col_result;
-    int cur;
-    int found;
+  HSD_GObjProc *proc;
+  u8 row_result;
+  int i;
+  u8 *sorted = mnDiagram_804A0750.sorted_fighters;
+  Diagram *data = (Diagram *) HSD_GObjGetUserData(mnDiagram_804D6C10);
+  u32 input = Menu_GetAllInputs();
+  int count;
+  int col;
+  int row;
+  u8 col_result;
+  int cur;
+  int found;
+  if (input & 0x10)
+  {
+    lbAudioAx_80024030(1);
+    HSD_GObjProc_8038FE24(HSD_GObj_804D7838);
+    proc = HSD_GObj_SetupProc(gobj, (void (*)(HSD_GObj *)) mnDiagram_PopupInputProc, 0);
+    proc->flags_3 = HSD_GObj_804D783C;
+    if (data->is_name_mode != 0)
+    {
+      col_result = mnDiagram_GetVisibleNameFrom(sorted, (u8) data->name_cursor_pos, (u8) mn_804A04F0.hovered_selection);
+      row_result = mnDiagram_GetVisibleNameFrom(sorted, data->name_cursor_pos >> 8, mn_804A04F0.hovered_selection >> 8);
+      mnDiagram_80241310(col_result, row_result, 1);
+      return;
+    }
+    col_result = mnDiagram_GetVisibleFighterFrom(sorted, (u8) data->fighter_cursor_pos, (u8) mn_804A04F0.hovered_selection);
+    row_result = mnDiagram_GetVisibleFighterFrom(sorted, data->fighter_cursor_pos >> 8, mn_804A04F0.hovered_selection >> 8);
+    mnDiagram_80241310(col_result, row_result, 0);
+    return;
+  }
+  if (input & 0x20)
+  {
+    lbAudioAx_80024030(0);
+    {
+      Diagram *d;
+      mn_804A04F0.entering_menu = 0;
+      mnDiagram_SaveCursorToGameRules((Diagram *) HSD_GObjGetUserData(mnDiagram_804D6C10));
+      mn_80229894(0x1C, 0, 3);
+    }
+    return;
+  }
+  if (input & 0xC0)
+  {
+    lbAudioAx_80024030(1);
+    {
+      Diagram *d = (Diagram *) HSD_GObjGetUserData(mnDiagram_804D6C10);
+      mnDiagram_SaveCursorToGameRules(d);
+      HSD_GObjPLink_80390228(gobj);
+      if (input & 0x40)
+      {
+        mnDiagram3_8024714C(0L);
+        return;
+      }
+      mnDiagram2_Init();
+    }
+    return;
+  }
+  if (input & 0xC00)
+  {
+    if (GetNameCount() == 0)
+    {
+      lbAudioAx_80024030(3);
+      return;
+    }
+    lbAudioAx_80024030(1);
+    data->is_name_mode = (data->is_name_mode == 0) ? (1) : (0);
+    if (data->is_name_mode != 0)
+    {
+      count = GetNameCount();
+      if (((s32) ((u8) mn_804A04F0.hovered_selection)) >= count)
+      {
+        mn_804A04F0.hovered_selection = (mn_804A04F0.hovered_selection & 0xFF00) | ((u8) (count - 1));
+      }
+      if ((mn_804A04F0.hovered_selection >> 8) >= count)
+      {
+        mn_804A04F0.hovered_selection = ((u8) mn_804A04F0.hovered_selection) | ((count - 1) << 8);
+      }
+      mnDiagram_UpdateScrollArrowVisibility(mnDiagram_804D6C10, count);
+      mnDiagram_80241730(mnDiagram_804D6C10, (u8) data->name_cursor_pos, data->name_cursor_pos >> 8);
+      return;
+    }
+    count = 0;
+    for (i = 0; i < 0x19; i++)
+    {
+      if (mn_IsFighterUnlocked(i) != 0)
+      {
+        count++;
+      }
+    }
 
-    if (input & 0x10) {
-        lbAudioAx_80024030(1);
-        HSD_GObjProc_8038FE24(HSD_GObj_804D7838);
-        proc = HSD_GObj_SetupProc(
-            gobj, (void (*)(HSD_GObj*)) mnDiagram_PopupInputProc, 0);
-        proc->flags_3 = HSD_GObj_804D783C;
-        if (data->is_name_mode != 0) {
-            col_result = mnDiagram_GetVisibleNameFrom(
-                sorted, (u8) data->name_cursor_pos,
-                (u8) mn_804A04F0.hovered_selection);
-            row_result = mnDiagram_GetVisibleNameFrom(
-                sorted, data->name_cursor_pos >> 8,
-                mn_804A04F0.hovered_selection >> 8);
-            mnDiagram_80241310(col_result, row_result, 1);
-            return;
-        }
-        col_result = mnDiagram_GetVisibleFighterFrom(
-            sorted, (u8) data->fighter_cursor_pos,
-            (u8) mn_804A04F0.hovered_selection);
-        row_result = mnDiagram_GetVisibleFighterFrom(
-            sorted, data->fighter_cursor_pos >> 8,
-            mn_804A04F0.hovered_selection >> 8);
-        mnDiagram_80241310(col_result, row_result, 0);
-        return;
+    if (((s32) ((u8) mn_804A04F0.hovered_selection)) >= count)
+    {
+      mn_804A04F0.hovered_selection = (mn_804A04F0.hovered_selection & 0xFF00) | ((u8) (count - 1));
     }
-    if (input & 0x20) {
-        lbAudioAx_80024030(0);
+    if ((mn_804A04F0.hovered_selection >> 8) >= count)
+    {
+      mn_804A04F0.hovered_selection = ((u8) mn_804A04F0.hovered_selection) | ((count - 1) << 8);
+    }
+    mnDiagram_UpdateScrollArrowVisibility(mnDiagram_804D6C10, count);
+    mnDiagram_80241730(mnDiagram_804D6C10, (u8) data->fighter_cursor_pos, data->fighter_cursor_pos >> 8);
+    return;
+  }
+  if (data->is_name_mode != 0)
+  {
+    count = GetNameCount();
+    if (input & 1)
+    {
+      col = (u8) mn_804A04F0.hovered_selection;
+      if ((col > 0) && (count > (col - 1)))
+      {
+        lbAudioAx_80024030(2);
+        mn_804A04F0.hovered_selection = (mn_804A04F0.hovered_selection & 0xFF00) | ((col - 1) & 0xFF);
+        return;
+      }
+      if (count > 0xA)
+      {
+        cur = (u8) data->name_cursor_pos;
+        found = mnDiagram_GetPrevNameIndex(cur);
+        if (cur != found)
         {
-            Diagram* d = GET_DIAGRAM(mnDiagram_804D6C10);
-            mn_804A04F0.entering_menu = 0;
-            mnDiagram_SaveCursorToGameRules(d);
-            mn_80229894(0x1C, 0, 3);
+          lbAudioAx_80024030(2);
+          data->name_cursor_pos = (data->name_cursor_pos & 0xFF00) | found;
+          mnDiagram_80241730(mnDiagram_804D6C10, (u8) data->name_cursor_pos, data->name_cursor_pos >> 8);
         }
-        return;
+      }
     }
-    if (input & 0xC0) {
-        lbAudioAx_80024030(1);
+    else
+      if (input & 2)
+    {
+      col = (u8) mn_804A04F0.hovered_selection;
+      if ((col < 9) && (count > (col + 1)))
+      {
+        lbAudioAx_80024030(2);
+        mn_804A04F0.hovered_selection = (mn_804A04F0.hovered_selection & 0xFF00) | ((col + 1) & 0xFF);
+        return;
+      }
+      if (count > 0xA)
+      {
+        cur = (u8) data->name_cursor_pos;
+        found = mnDiagram_GetNextNameIndex(cur);
+        if (cur != found)
         {
-            Diagram* d = GET_DIAGRAM(mnDiagram_804D6C10);
-            mnDiagram_SaveCursorToGameRules(d);
-            HSD_GObjPLink_80390228(gobj);
-            if (input & 0x40) {
-                mnDiagram3_8024714C(NULL);
-                return;
-            }
-            mnDiagram2_Init();
+          col_result = mnDiagram_GetVisibleNameFrom(sorted, cur, 0xA);
+          if (col_result != 0x78)
+          {
+            lbAudioAx_80024030(2);
+            data->name_cursor_pos = (data->name_cursor_pos & 0xFF00) | found;
+            mnDiagram_80241730(mnDiagram_804D6C10, (u8) data->name_cursor_pos, data->name_cursor_pos >> 8);
+          }
         }
+      }
+    }
+    else
+      if (input & 4)
+    {
+      row = mn_804A04F0.hovered_selection >> 8;
+      if ((row > 0) && (count > (row - 1)))
+      {
+        lbAudioAx_80024030(2);
+        mn_804A04F0.hovered_selection = ((u8) mn_804A04F0.hovered_selection) | ((row - 1) << 8);
         return;
+      }
+      if (count > 7)
+      {
+        cur = data->name_cursor_pos >> 8;
+        found = mnDiagram_GetPrevNameIndex(cur);
+        if (cur != found)
+        {
+          lbAudioAx_80024030(2);
+          data->name_cursor_pos = ((u8) data->name_cursor_pos) | (found << 8);
+          mnDiagram_80241730(mnDiagram_804D6C10, (u8) data->name_cursor_pos, data->name_cursor_pos >> 8);
+        }
+      }
     }
-    if (input & 0xC00) {
-        if (GetNameCount() == 0) {
-            lbAudioAx_80024030(3);
-            return;
-        }
-        lbAudioAx_80024030(1);
-        data->is_name_mode = (data->is_name_mode == 0) ? 1 : 0;
-        if (data->is_name_mode != 0) {
-            count = GetNameCount();
-            if ((s32) (u8) mn_804A04F0.hovered_selection >= count) {
-                mn_804A04F0.hovered_selection =
-                    (mn_804A04F0.hovered_selection & 0xFF00) |
-                    (u8) (count - 1);
-            }
-            if ((mn_804A04F0.hovered_selection >> 8) >= count) {
-                mn_804A04F0.hovered_selection =
-                    (u8) mn_804A04F0.hovered_selection | ((count - 1) << 8);
-            }
-            mnDiagram_UpdateScrollArrowVisibility(mnDiagram_804D6C10, count);
-            mnDiagram_80241730(mnDiagram_804D6C10, (u8) data->name_cursor_pos,
-                               data->name_cursor_pos >> 8);
-            return;
-        }
-        count = 0;
-        for (i = 0; i < 0x19; i++) {
-            if (mn_IsFighterUnlocked(i) != 0) {
-                count++;
-            }
-        }
-        if ((s32) (u8) mn_804A04F0.hovered_selection >= count) {
-            mn_804A04F0.hovered_selection =
-                (mn_804A04F0.hovered_selection & 0xFF00) | (u8) (count - 1);
-        }
-        if ((mn_804A04F0.hovered_selection >> 8) >= count) {
-            mn_804A04F0.hovered_selection =
-                (u8) mn_804A04F0.hovered_selection | ((count - 1) << 8);
-        }
-        mnDiagram_UpdateScrollArrowVisibility(mnDiagram_804D6C10, count);
-        mnDiagram_80241730(mnDiagram_804D6C10, (u8) data->fighter_cursor_pos,
-                           data->fighter_cursor_pos >> 8);
+    else
+      if (input & 8)
+    {
+      row = mn_804A04F0.hovered_selection >> 8;
+      if ((row < 6) && (count > (row + 1)))
+      {
+        lbAudioAx_80024030(2);
+        mn_804A04F0.hovered_selection = ((u8) mn_804A04F0.hovered_selection) | ((row + 1) << 8);
         return;
+      }
+      if (count > 7)
+      {
+        cur = data->name_cursor_pos >> 8;
+        found = mnDiagram_GetNextNameIndex(cur);
+        if (cur != found)
+        {
+          row_result = mnDiagram_GetVisibleNameFrom(sorted, cur, 7);
+          if (row_result != 0x78)
+          {
+            lbAudioAx_80024030(2);
+            data->name_cursor_pos = ((u8) data->name_cursor_pos) | (found << 8);
+            mnDiagram_80241730(mnDiagram_804D6C10, (u8) data->name_cursor_pos, data->name_cursor_pos >> 8);
+          }
+        }
+      }
     }
-    if (data->is_name_mode != 0) {
-        count = GetNameCount();
-        if (input & 1) {
-            col = (u8) mn_804A04F0.hovered_selection;
-            if (col > 0 && count > col - 1) {
-                lbAudioAx_80024030(2);
-                mn_804A04F0.hovered_selection =
-                    (mn_804A04F0.hovered_selection & 0xFF00) | ((col - 1) & 0xFF);
-                return;
-            }
-            if (count > 0xA) {
-                cur = (u8) data->name_cursor_pos;
-                found = mnDiagram_GetPrevNameIndex(cur);
-                if (cur != found) {
-                    lbAudioAx_80024030(2);
-                    data->name_cursor_pos =
-                        (data->name_cursor_pos & 0xFF00) | found;
-                    mnDiagram_80241730(mnDiagram_804D6C10,
-                                       (u8) data->name_cursor_pos,
-                                       data->name_cursor_pos >> 8);
-                }
-            }
-        } else if (input & 2) {
-            col = (u8) mn_804A04F0.hovered_selection;
-            if (col < 9 && count > col + 1) {
-                lbAudioAx_80024030(2);
-                mn_804A04F0.hovered_selection =
-                    (mn_804A04F0.hovered_selection & 0xFF00) | ((col + 1) & 0xFF);
-                return;
-            }
-            if (count > 0xA) {
-                cur = (u8) data->name_cursor_pos;
-                found = mnDiagram_GetNextNameIndex(cur);
-                if (cur != found) {
-                    col_result = mnDiagram_GetVisibleNameFrom(sorted, cur, 0xA);
-                    if (col_result != 0x78) {
-                        lbAudioAx_80024030(2);
-                        data->name_cursor_pos =
-                            (data->name_cursor_pos & 0xFF00) | found;
-                        mnDiagram_80241730(mnDiagram_804D6C10,
-                                           (u8) data->name_cursor_pos,
-                                           data->name_cursor_pos >> 8);
-                    }
-                }
-            }
-        } else if (input & 4) {
-            row = mn_804A04F0.hovered_selection >> 8;
-            if (row > 0 && count > row - 1) {
-                lbAudioAx_80024030(2);
-                mn_804A04F0.hovered_selection =
-                    (u8) mn_804A04F0.hovered_selection | ((row - 1) << 8);
-                return;
-            }
-            if (count > 7) {
-                cur = data->name_cursor_pos >> 8;
-                found = mnDiagram_GetPrevNameIndex(cur);
-                if (cur != found) {
-                    lbAudioAx_80024030(2);
-                    data->name_cursor_pos =
-                        (u8) data->name_cursor_pos | (found << 8);
-                    mnDiagram_80241730(mnDiagram_804D6C10,
-                                       (u8) data->name_cursor_pos,
-                                       data->name_cursor_pos >> 8);
-                }
-            }
-        } else if (input & 8) {
-            row = mn_804A04F0.hovered_selection >> 8;
-            if (row < 6 && count > row + 1) {
-                lbAudioAx_80024030(2);
-                mn_804A04F0.hovered_selection =
-                    (u8) mn_804A04F0.hovered_selection | ((row + 1) << 8);
-                return;
-            }
-            if (count > 7) {
-                cur = data->name_cursor_pos >> 8;
-                found = mnDiagram_GetNextNameIndex(cur);
-                if (cur != found) {
-                    row_result = mnDiagram_GetVisibleNameFrom(sorted, cur, 7);
-                    if (row_result != 0x78) {
-                        lbAudioAx_80024030(2);
-                        data->name_cursor_pos =
-                            (u8) data->name_cursor_pos | (found << 8);
-                        mnDiagram_80241730(mnDiagram_804D6C10,
-                                           (u8) data->name_cursor_pos,
-                                           data->name_cursor_pos >> 8);
-                    }
-                }
-            }
-        }
-    } else {
-        count = 0;
-        for (i = 0; i < 0x19; i++) {
-            if (mn_IsFighterUnlocked(i) != 0) {
-                count++;
-            }
-        }
-        if (input & 1) {
-            col = (u8) mn_804A04F0.hovered_selection;
-            if (col > 0 && count > col - 1) {
-                lbAudioAx_80024030(2);
-                mn_804A04F0.hovered_selection =
-                    (mn_804A04F0.hovered_selection & 0xFF00) | ((col - 1) & 0xFF);
-                return;
-            }
-            if (count > 0xA) {
-                cur = (u8) data->fighter_cursor_pos;
-                found = mnDiagram_GetPrevFighterIndex(cur);
-                if (cur != found) {
-                    lbAudioAx_80024030(2);
-                    data->fighter_cursor_pos =
-                        (data->fighter_cursor_pos & 0xFF00) | found;
-                    mnDiagram_80241730(mnDiagram_804D6C10,
-                                       (u8) data->fighter_cursor_pos,
-                                       data->fighter_cursor_pos >> 8);
-                }
-            }
-        } else if (input & 2) {
-            col = (u8) mn_804A04F0.hovered_selection;
-            if (col < 9 && count > col + 1) {
-                lbAudioAx_80024030(2);
-                mn_804A04F0.hovered_selection =
-                    (mn_804A04F0.hovered_selection & 0xFF00) | ((col + 1) & 0xFF);
-                return;
-            }
-            if (count > 0xA) {
-                cur = (u8) data->fighter_cursor_pos;
-                found = mnDiagram_GetNextFighterIndex(cur);
-                col_result = mnDiagram_GetVisibleFighterFrom(sorted, cur, 0xA);
-                if (col_result != 0x19) {
-                    lbAudioAx_80024030(2);
-                    data->fighter_cursor_pos =
-                        (data->fighter_cursor_pos & 0xFF00) | found;
-                    mnDiagram_80241730(mnDiagram_804D6C10,
-                                       (u8) data->fighter_cursor_pos,
-                                       data->fighter_cursor_pos >> 8);
-                }
-            }
-        } else if (input & 4) {
-            row = mn_804A04F0.hovered_selection >> 8;
-            if (row > 0 && count > row - 1) {
-                lbAudioAx_80024030(2);
-                mn_804A04F0.hovered_selection =
-                    (u8) mn_804A04F0.hovered_selection | ((row - 1) << 8);
-                return;
-            }
-            if (count > 7) {
-                cur = data->fighter_cursor_pos >> 8;
-                found = mnDiagram_GetPrevFighterIndex(cur);
-                if (cur != found) {
-                    lbAudioAx_80024030(2);
-                    data->fighter_cursor_pos =
-                        (u8) data->fighter_cursor_pos | (found << 8);
-                    mnDiagram_80241730(mnDiagram_804D6C10,
-                                       (u8) data->fighter_cursor_pos,
-                                       data->fighter_cursor_pos >> 8);
-                }
-            }
-        } else if (input & 8) {
-            row = mn_804A04F0.hovered_selection >> 8;
-            if (row < 6 && count > row + 1) {
-                lbAudioAx_80024030(2);
-                mn_804A04F0.hovered_selection =
-                    (u8) mn_804A04F0.hovered_selection | ((row + 1) << 8);
-                return;
-            }
-            if (count > 7) {
-                cur = data->fighter_cursor_pos >> 8;
-                found = mnDiagram_GetNextFighterIndex(cur);
-                row_result = mnDiagram_GetVisibleFighterFrom(sorted, cur, 7);
-                if (row_result != 0x19) {
-                    lbAudioAx_80024030(2);
-                    data->fighter_cursor_pos =
-                        (u8) data->fighter_cursor_pos | (found << 8);
-                    mnDiagram_80241730(mnDiagram_804D6C10,
-                                       (u8) data->fighter_cursor_pos,
-                                       data->fighter_cursor_pos >> 8);
-                }
-            }
-        }
+  }
+  else
+  {
+    count = 0;
+    for (i = 0; i < 0x19; i++)
+    {
+      if (mn_IsFighterUnlocked(i) != 0)
+      {
+        count++;
+      }
     }
+
+    if (input & 1)
+    {
+      col = (u8) mn_804A04F0.hovered_selection;
+      if ((col > 0) && (count > (col - 1)))
+      {
+        lbAudioAx_80024030(2);
+        mn_804A04F0.hovered_selection = (mn_804A04F0.hovered_selection & 0xFF00) | ((col - 1) & 0xFF);
+        return;
+      }
+      if (count > 0xA)
+      {
+        cur = (u8) data->fighter_cursor_pos;
+        found = mnDiagram_GetPrevFighterIndex(cur);
+        if (cur != found)
+        {
+          lbAudioAx_80024030(2);
+          data->fighter_cursor_pos = (data->fighter_cursor_pos & 0xFF00) | found;
+          mnDiagram_80241730(mnDiagram_804D6C10, (u8) data->fighter_cursor_pos, data->fighter_cursor_pos >> 8);
+        }
+      }
+    }
+    else
+      if (input & 2)
+    {
+      col = (u8) mn_804A04F0.hovered_selection;
+      if ((col < 9) && (count > (col + 1)))
+      {
+        lbAudioAx_80024030(2);
+        mn_804A04F0.hovered_selection = (mn_804A04F0.hovered_selection & 0xFF00) | ((col + 1) & 0xFF);
+        return;
+      }
+      if (count > 0xA)
+      {
+        cur = (u8) data->fighter_cursor_pos;
+        found = mnDiagram_GetNextFighterIndex(cur);
+        col_result = mnDiagram_GetVisibleFighterFrom(sorted, cur, 0xA);
+        if (col_result != 0x19)
+        {
+          lbAudioAx_80024030(2);
+          data->fighter_cursor_pos = (data->fighter_cursor_pos & 0xFF00) | found;
+          mnDiagram_80241730(mnDiagram_804D6C10, (u8) data->fighter_cursor_pos, data->fighter_cursor_pos >> 8);
+        }
+      }
+    }
+    else
+      if (input & 4)
+    {
+      row = mn_804A04F0.hovered_selection >> 8;
+      if ((row > 0) && (count > (row - 1)))
+      {
+        lbAudioAx_80024030(2);
+        mn_804A04F0.hovered_selection = ((u8) mn_804A04F0.hovered_selection) | ((row - 1) << 8);
+        return;
+      }
+      if (count > 7)
+      {
+        cur = data->fighter_cursor_pos >> 8;
+        found = mnDiagram_GetPrevFighterIndex(cur);
+        if (cur != found)
+        {
+          lbAudioAx_80024030(2);
+          data->fighter_cursor_pos = ((u8) data->fighter_cursor_pos) | (found << 8);
+          mnDiagram_80241730(mnDiagram_804D6C10, (u8) data->fighter_cursor_pos, data->fighter_cursor_pos >> 8);
+        }
+      }
+    }
+    else
+      if (input & 8)
+    {
+      row = mn_804A04F0.hovered_selection >> 8;
+      if ((row < 6) && (count > (row + 1)))
+      {
+        lbAudioAx_80024030(2);
+        mn_804A04F0.hovered_selection = ((u8) mn_804A04F0.hovered_selection) | ((row + 1) << 8);
+        return;
+      }
+      if (count > 7)
+      {
+        cur = data->fighter_cursor_pos >> 8;
+        found = mnDiagram_GetNextFighterIndex(cur);
+        row_result = mnDiagram_GetVisibleFighterFrom(sorted, cur, 7);
+        if (row_result != 0x19)
+        {
+          lbAudioAx_80024030(2);
+          data->fighter_cursor_pos = ((u8) data->fighter_cursor_pos) | (found << 8);
+          mnDiagram_80241730(mnDiagram_804D6C10, (u8) data->fighter_cursor_pos, data->fighter_cursor_pos >> 8);
+        }
+      }
+    }
+  }
 }
 
 void mnDiagram_PopupCleanup(void* arg0)
