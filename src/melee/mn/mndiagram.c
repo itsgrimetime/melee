@@ -26,6 +26,8 @@
 #include "mn/mnmain.h"
 #include "mn/mnname.h"
 
+#define GET_DIAGRAM(gobj) ((Diagram*) HSD_GObjGetUserData(gobj))
+
 /// Sorted fighter indices array (25 fighters + padding)
 typedef struct mnDiagram_804A0750_t {
     u8 sorted_fighters[0x19];
@@ -981,7 +983,7 @@ void mnDiagram_InputProc(HSD_GObj* gobj)
     u8 row_result;
     int i;
     u8* sorted = mnDiagram_804A0750.sorted_fighters;
-    Diagram* data = mnDiagram_804D6C10->user_data;
+    Diagram* data = GET_DIAGRAM(mnDiagram_804D6C10);
     u32 input = Menu_GetAllInputs();
     int count;
     int col;
@@ -1018,7 +1020,7 @@ void mnDiagram_InputProc(HSD_GObj* gobj)
     if (input & 0x20) {
         lbAudioAx_80024030(0);
         {
-            Diagram* d = mnDiagram_804D6C10->user_data;
+            Diagram* d = GET_DIAGRAM(mnDiagram_804D6C10);
             mn_804A04F0.entering_menu = 0;
             mnDiagram_SaveCursorToGameRules(d);
             mn_80229894(0x1C, 0, 3);
@@ -1028,7 +1030,7 @@ void mnDiagram_InputProc(HSD_GObj* gobj)
     if (input & 0xC0) {
         lbAudioAx_80024030(1);
         {
-            Diagram* d = mnDiagram_804D6C10->user_data;
+            Diagram* d = GET_DIAGRAM(mnDiagram_804D6C10);
             mnDiagram_SaveCursorToGameRules(d);
             HSD_GObjPLink_80390228(gobj);
             if (input & 0x40) {
@@ -1562,11 +1564,10 @@ void mnDiagram_80241310(s32 arg0, s32 arg1, s32 arg2)
     HSD_GObj* gobj;
     HSD_JObj* jobj;
     mnDiagram_PopupData* user_data;
-    PAD_STACK(8);
 
     tbl = (mnDiagram_AnimTable*) &mnDiagram_803EE728;
     joint_data = mnDiagram_804A07E4;
-    data = mnDiagram_804D6C10->user_data;
+    data = GET_DIAGRAM(mnDiagram_804D6C10);
 
     gobj = GObj_Create(6, 7, 0x80);
     data->popup_gobj = gobj;
@@ -1901,11 +1902,10 @@ void mnDiagram_UpdateScrollArrowVisibility(void* gobj, int count)
 
 void mnDiagram_OnFrame(HSD_GObj* gobj)
 {
-    Diagram* data = gobj->user_data;
+    Diagram* data = GET_DIAGRAM(gobj);
     HSD_GObjProc* proc;
     Diagram* data2;
     int count;
-    PAD_STACK(8);
 
     if ((mn_804A04F0.cur_menu != 0x1E) || (mn_804A04F0.x10 != 0)) {
         if (mn_804A04F0.cur_menu == 0x1E) {
@@ -2347,7 +2347,7 @@ void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
     int count;
     u8* p2;
     int fighter_id;
-    Diagram* data = ((HSD_GObj*) arg0)->user_data;
+    Diagram* data = GET_DIAGRAM(arg0);
     mnDiagram_Assets* assets = (mnDiagram_Assets*) &mnDiagram_804A0750;
     void** joint_data = assets->ConB3;
     HSD_JObj* jobj;
@@ -2359,7 +2359,7 @@ void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
     u8* p;
     f32 x_spacing;
     f32 y_spacing;
-    PAD_STACK(40);
+    PAD_STACK(32);
 
     // Column headers (fighter icons)
     for (i = 0; i < 7; i++) {
@@ -2519,7 +2519,7 @@ void mnDiagram_80243434(u8 arg0)
     int count;
     u16 indices;
     u8 col_idx;
-    PAD_STACK(32);
+    PAD_STACK(16);
 
     joint_data = (void**) &mnDiagram_804A0824;
     gobj = GObj_Create(6, 7, 0x80);
@@ -2576,7 +2576,7 @@ void mnDiagram_80243434(u8 arg0)
             count = mnDiagram_CountUnlockedFighters();
         }
 
-        user_data = gobj->user_data;
+        user_data = GET_DIAGRAM(gobj);
         if (count <= 7) {
             HSD_JObjSetFlagsAll(((HSD_JObj**) user_data)[7], 0x10);
             HSD_JObjSetFlagsAll(((HSD_JObj**) user_data)[8], 0x10);
@@ -2597,7 +2597,7 @@ void mnDiagram_80243434(u8 arg0)
             indices = user_data->name_cursor_pos;
             col_idx = (u8) indices;
             row_idx = indices >> 8;
-            user_data = gobj->user_data;
+            user_data = GET_DIAGRAM(gobj);
             mnDiagram_80241668(gobj);
             mnDiagram_8024227C(gobj, col_idx, row_idx,
                                (u8) (user_data->is_name_mode == 1));
@@ -2610,7 +2610,7 @@ void mnDiagram_80243434(u8 arg0)
             indices = user_data->fighter_cursor_pos;
             col_idx = (u8) indices;
             row_idx = indices >> 8;
-            user_data = gobj->user_data;
+            user_data = GET_DIAGRAM(gobj);
             mnDiagram_80241668(gobj);
             mnDiagram_8024227C(gobj, col_idx, row_idx,
                                (u8) (user_data->is_name_mode == 1));
