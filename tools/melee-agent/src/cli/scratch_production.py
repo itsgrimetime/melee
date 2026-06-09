@@ -18,7 +18,11 @@ from ._common import (
     db_upsert_scratch,
     get_compiler_for_source,
 )
-from .sync._helpers import create_and_claim_production_scratch, load_production_cookies
+from .sync._helpers import (
+    create_and_claim_production_scratch,
+    load_production_cookies,
+    rate_limited_request,
+)
 from .sync.auth import get_production_user_agent
 
 # Name of the decomp.me preset to label production scratches with.
@@ -77,6 +81,25 @@ def _seed_source_from_repo(name: str, file_path: str, melee_root: Path) -> str:
         if extracted:
             return extracted
     return "// TODO: Decompile this function\n"
+
+
+def _existing_production_slug(function_name: str) -> str | None:
+    """Return the recorded production scratch slug for a function, or None.
+
+    Shared by the create idempotency check and the ``--update`` target lookup so
+    both resolve the same slug from ``functions.production_scratch_slug``.
+    """
+    from src.db import get_db
+
+    try:
+        with get_db().connection() as conn:
+            row = conn.execute(
+                "SELECT production_scratch_slug FROM functions WHERE function_name = ?",
+                (function_name,),
+            ).fetchone()
+            return row["production_scratch_slug"] if row else None
+    except Exception:
+        return None
 
 
 def _owner_is_account(owner) -> bool:
@@ -226,22 +249,11 @@ def run_production_create(
 
     # Idempotency: don't create duplicate prod scratches for the same function.
     if not force:
-        from src.db import get_db
-
-        existing = None
-        try:
-            with get_db().connection() as conn:
-                row = conn.execute(
-                    "SELECT production_scratch_slug FROM functions WHERE function_name = ?",
-                    (function_name,),
-                ).fetchone()
-                existing = row["production_scratch_slug"] if row else None
-        except Exception:
-            existing = None
+        existing = _existing_production_slug(function_name)
         if existing:
             console.print(f"[yellow]{function_name} already has a production scratch:[/yellow]")
             console.print(f"  {PRODUCTION_DECOMP_ME}/scratch/{existing}")
-            console.print("[dim]Use --force to create another[/dim]")
+            console.print("[dim]Use --update to update it, or --force to create another[/dim]")
             raise typer.Exit(0)
 
     func = asyncio.run(extract_function(melee_root, function_name))
@@ -287,3 +299,171 @@ def run_production_create(
         return
 
     asyncio.run(_create_claim_record(create_data, func.name, cookies))
+
+
+async def _update_production_scratch(
+    *,
+    slug: str,
+    function_name: str,
+    melee_root: Path,
+    cookies: dict,
+    refresh_context: bool = True,
+    compile_after: bool = True,
+    dry_run: bool = False,
+) -> None:
+    """PATCH an existing production scratch from the worktree, then report match %.
+
+    Ownership is verified BEFORE the (potentially slow) context build so we fail
+    fast on auth problems. ``target_asm`` / ``compiler`` / ``compiler_flags`` are
+    left untouched (immutable for an existing scratch); only ``source_code`` (plus
+    ``context`` unless ``refresh_context`` is False) is sent.
+    """
+    from src.extractor import extract_function
+
+    from .scratch import _build_stripped_context
+
+    async with _make_production_client(cookies) as client:
+        # 1. Verify the target exists and is owned by this account (cheap, pre-build).
+        try:
+            resp = await rate_limited_request(client, "get", f"/api/scratch/{slug}")
+        except Exception as e:
+            console.print(f"[red]Could not reach production: {e}[/red]")
+            raise typer.Exit(1)
+        if resp.status_code == 404:
+            console.print(f"[red]Recorded production scratch {slug} no longer exists.[/red]")
+            console.print("[dim]Run without --update to create a new one.[/dim]")
+            raise typer.Exit(1)
+        if resp.status_code == 403:
+            console.print("[red]Production auth failed (403): cf_clearance expired or invalid[/red]")
+            console.print("[dim]Run 'melee-agent sync auth' to refresh[/dim]")
+            raise typer.Exit(1)
+        if resp.status_code != 200:
+            console.print(f"[red]Could not fetch scratch {slug}: {resp.status_code}[/red]")
+            raise typer.Exit(1)
+        if not _owner_is_account(resp.json().get("owner")):
+            console.print(
+                f"[red]Scratch {slug} is not owned by your account (anonymous or unclaimed); "
+                "an update would be rejected.[/red]"
+            )
+            console.print(
+                "[dim]Re-run 'melee-agent sync auth' with a fresh logged-in sessionid, then "
+                f"'melee-agent sync fix-ownership --function {function_name}'.[/dim]"
+            )
+            raise typer.Exit(1)
+
+        # 2. Build the payload from the worktree (after the ownership gate).
+        func = await extract_function(melee_root, function_name)
+        if func is None:
+            console.print(f"[red]Function '{function_name}' not found in the worktree[/red]")
+            raise typer.Exit(1)
+
+        source_code = _seed_source_from_repo(func.name, func.file_path, melee_root)
+        if source_code.startswith("// TODO"):
+            console.print(
+                f"[yellow]No repo C found for {function_name}; the update would overwrite "
+                f"{slug} with a stub.[/yellow]"
+            )
+
+        payload: dict = {"source_code": source_code}
+        if refresh_context:
+            payload["context"] = _build_stripped_context(function_name, func, melee_root, None)
+
+        # 3. Dry run: show the plan, change nothing.
+        if dry_run:
+            console.print("[cyan]DRY RUN — not updating[/cyan]")
+            console.print(f"  Target: PATCH {PRODUCTION_DECOMP_ME}/api/scratch/{slug}")
+            console.print(f"  fields: {', '.join(payload.keys())}")
+            sizes = f"source={len(payload['source_code'])}"
+            if "context" in payload:
+                sizes += f" context={len(payload['context'])}"
+            console.print(f"  sizes: {sizes}")
+            return
+
+        # 4. PATCH the existing scratch in place.
+        patch_resp = await rate_limited_request(client, "patch", f"/api/scratch/{slug}", json=payload)
+        if patch_resp.status_code == 403:
+            console.print(
+                "[red]Update blocked (403): cf_clearance expired or you do not own this scratch.[/red]"
+            )
+            console.print(
+                "[dim]Run 'melee-agent sync auth', then "
+                f"'melee-agent sync fix-ownership --function {function_name}'.[/dim]"
+            )
+            raise typer.Exit(1)
+        if patch_resp.status_code not in (200, 201):
+            console.print(f"[red]Update failed: {patch_resp.status_code} - {patch_resp.text[:200]}[/red]")
+            raise typer.Exit(1)
+
+        console.print(f"[green]Updated scratch:[/green] {PRODUCTION_DECOMP_ME}/scratch/{slug}")
+
+        # 5. Compile + report match % (GET also saves the score on the scratch).
+        match_percent = None
+        if compile_after:
+            comp_resp = None
+            try:
+                comp_resp = await rate_limited_request(client, "get", f"/api/scratch/{slug}/compile")
+            except Exception as e:
+                console.print(f"[yellow]Updated, but could not compile to read the score: {e}[/yellow]")
+            if comp_resp is not None and comp_resp.status_code == 200:
+                from src.client.models import CompilationResult
+
+                result = CompilationResult.model_validate(comp_resp.json())
+                if result.diff_output is not None:
+                    score = result.diff_output.current_score
+                    max_score = result.diff_output.max_score
+                    match_percent = 100.0 if score == 0 else (1.0 - score / max_score) * 100
+                    console.print(f"[green]Match:[/green] {match_percent:.1f}%  ({score}/{max_score})")
+                else:
+                    console.print("[yellow]Updated, but compile returned no diff to score.[/yellow]")
+            elif comp_resp is not None:
+                console.print(f"[yellow]Updated, but compile request returned {comp_resp.status_code}.[/yellow]")
+
+        # 6. Record state.
+        if match_percent is not None:
+            db_upsert_scratch(
+                slug, "production", PRODUCTION_DECOMP_ME, function_name=function_name, match_percent=match_percent
+            )
+        else:
+            db_upsert_scratch(slug, "production", PRODUCTION_DECOMP_ME, function_name=function_name)
+        db_upsert_function(function_name, production_scratch_slug=slug, status="in_progress")
+
+
+def run_production_update(
+    function_name: str,
+    melee_root: Path,
+    *,
+    refresh_context: bool = True,
+    compile_after: bool = True,
+    dry_run: bool = False,
+) -> None:
+    """Update the existing production scratch for a function from the worktree.
+
+    Resolves the recorded production slug (strict: errors if none exists), then
+    PATCHes it in place. No new scratch is created and ``--force`` is not involved.
+    """
+    cookies = load_production_cookies()
+    if not cookies.get("cf_clearance"):
+        console.print("[red]No cf_clearance cookie configured[/red]")
+        console.print("[dim]Run 'melee-agent sync auth' first[/dim]")
+        raise typer.Exit(1)
+
+    # Cheap auth probe BEFORE resolving/building anything.
+    asyncio.run(_preflight_auth(cookies))
+
+    slug = _existing_production_slug(function_name)
+    if not slug:
+        console.print(f"[yellow]No production scratch for {function_name}.[/yellow]")
+        console.print("[dim]Run without --update to create one.[/dim]")
+        raise typer.Exit(1)
+
+    asyncio.run(
+        _update_production_scratch(
+            slug=slug,
+            function_name=function_name,
+            melee_root=melee_root,
+            cookies=cookies,
+            refresh_context=refresh_context,
+            compile_after=compile_after,
+            dry_run=dry_run,
+        )
+    )

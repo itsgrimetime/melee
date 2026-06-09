@@ -217,6 +217,18 @@ def scratch_create(
         bool,
         typer.Option("--force", help="With --production: create even if a production scratch already exists"),
     ] = False,
+    update: Annotated[
+        bool,
+        typer.Option("--update", help="With --production: update the existing scratch in place instead of creating"),
+    ] = False,
+    no_context: Annotated[
+        bool,
+        typer.Option("--no-context", help="With --update: push source only, leave the scratch's context unchanged"),
+    ] = False,
+    no_compile: Annotated[
+        bool,
+        typer.Option("--no-compile", help="With --update: skip compiling on production after the update"),
+    ] = False,
     dry_run: Annotated[
         bool,
         typer.Option("--dry-run", help="With --production: build and show the payload without creating"),
@@ -227,12 +239,36 @@ def scratch_create(
     By default, runs the m2c decompiler to generate initial C code.
     Use --no-decompile to skip auto-decompilation and start with an empty stub.
     """
+    if update and not production:
+        console.print(
+            "[red]--update requires --production[/red] "
+            "(use 'scratch update <slug> <file>' for the local server)"
+        )
+        raise typer.Exit(1)
+    if update and force:
+        console.print(
+            "[red]--update and --force are mutually exclusive[/red] "
+            "(--update modifies the existing scratch; --force creates a new one)"
+        )
+        raise typer.Exit(1)
+
     if production:
         if api_url:
             console.print("[dim]--api-url ignored with --production[/dim]")
-        from .scratch_production import run_production_create
+        if update:
+            from .scratch_production import run_production_update
 
-        run_production_create(function_name, melee_root, force=force, dry_run=dry_run)
+            run_production_update(
+                function_name,
+                melee_root,
+                refresh_context=not no_context,
+                compile_after=not no_compile,
+                dry_run=dry_run,
+            )
+        else:
+            from .scratch_production import run_production_create
+
+            run_production_create(function_name, melee_root, force=force, dry_run=dry_run)
         return
 
     api_url = api_url or get_local_api_url()
