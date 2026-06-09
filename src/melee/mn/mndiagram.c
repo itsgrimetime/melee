@@ -1809,6 +1809,7 @@ void mnDiagram_80241730(void* arg0, int arg1, int arg2)
 ///          there's nothing to scroll to, shows them when there is.
 void mnDiagram_802417D0(HSD_GObj* gobj)
 {
+    u8* ptr2;
     u8 result2;
     Diagram* data = gobj->user_data;
     mnDiagram_AnimTable* tbl = (mnDiagram_AnimTable*) &mnDiagram_803EE728;
@@ -1816,7 +1817,6 @@ void mnDiagram_802417D0(HSD_GObj* gobj)
     u8* sorted = mnDiagram_804A0750.sorted_fighters;
     s32 i;
     u8* ptr;
-    u8* ptr2;
     s32 count;
     u8 result;
     HSD_JObj* jobj2;
