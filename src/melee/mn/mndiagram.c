@@ -736,27 +736,36 @@ void mnDiagram_8023FA6C(void)
     }
 }
 
+static inline int mnDiagram_SumNameKOs(u8 field_index)
+{
+    int total;
+    int j;
+    total = 0;
+    for (j = total; j < 0x78; j++) {
+        if (GetNameText(j & 0xFF)) {
+            total += GetPersistentNameData(field_index)->vs_kos[(u8) j];
+        }
+    }
+    return total;
+}
+
+
 void mnDiagram_8023FC28(void)
 {
     u32 totals[0x78];
-    int j;
     mnDiagram_Assets* assets = (mnDiagram_Assets*) &mnDiagram_804A0750;
     u8* dst = assets->sorted_names;
+    u8* dst_iter;
+    u32* tp;
     int i;
-    PAD_STACK(8);
+    int j;
+    PAD_STACK(12);
 
-    {
-        u8* dst_iter = dst;
-        for (i = 0; i < 0x78; i++, dst_iter++) {
-            u32 total = 0;
-            *dst_iter = (u8) i;
-            for (j = 0; j < 0x78; j++) {
-                if (GetNameText(j & 0xFF) != NULL) {
-                    total += GetPersistentNameData(i & 0xFF)->vs_kos[j & 0xFF];
-                }
-            }
-            totals[i] = total;
-        }
+    dst_iter = dst;
+    tp = totals;
+    for (i = 0; i < 0x78; i++, dst_iter++, tp++) {
+        *dst_iter = (u8) i;
+        *tp = mnDiagram_SumNameKOs(i & 0xFF);
     }
 
     for (i = 0; i < 0x78; i++) {
@@ -784,6 +793,7 @@ void mnDiagram_8023FC28(void)
         }
     }
 }
+
 
 /// @brief Counts the number of unlocked fighters.
 /// @return Number of unlocked fighters.
@@ -2004,8 +2014,8 @@ void mnDiagram_UpdateScrollArrowVisibility(void* gobj, int count)
 void mnDiagram_OnFrame(HSD_GObj* gobj)
 {
     Diagram* data = gobj->user_data;
-    Diagram* data2;
     HSD_GObjProc* proc;
+    Diagram* data2;
     int count;
     PAD_STACK(8);
 
