@@ -1,0 +1,96 @@
+"""Post-process retail IRO trace streams into per-phase files + a summary.
+
+The retail compiler emits, when IRO logging is on:
+  Starting function <fn>
+  ... optional preamble ...
+  Dumping function <fn> after <PHASE>
+  ----...
+  Flowgraph node N  First=.., Last=..
+  Succ = ...
+  Pred = ...
+     <idx>: <linear node>
+  (blank line between nodes; phases separated by the next "Dumping function")
+The fixpoint optimizer prints "*****************\nDumps for pass=N\n****..." markers
+between iterations; phases after a marker belong to that iteration.
+"""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+
+_PHASE_RE = re.compile(r"^Dumping function .+? after (?P<phase>.+?)\s*$")
+_PASS_RE = re.compile(r"^Dumps for pass=(?P<n>\d+)\s*$")
+_NODE_RE = re.compile(r"^\s*(?P<idx>\d+):\s")
+
+
+def slug(phase: str) -> str:
+    s = re.sub(r"[^A-Za-z0-9]+", "-", phase).strip("-").lower()
+    return s[:60]
+
+
+@dataclass
+class Phase:
+    phase: str
+    pass_iter: int | None
+    body: str
+    node_indices: set[int] = field(default_factory=set)
+
+
+def parse_phases(text: str) -> list[Phase]:
+    lines = text.splitlines()
+    phases: list[Phase] = []
+    cur_iter: int | None = None
+    i = 0
+    while i < len(lines):
+        m_pass = _PASS_RE.match(lines[i])
+        if m_pass:
+            cur_iter = int(m_pass.group("n"))
+            i += 1
+            continue
+        m = _PHASE_RE.match(lines[i])
+        if m:
+            phase = m.group("phase")
+            body_lines: list[str] = []
+            i += 1
+            while i < len(lines) and not _PHASE_RE.match(lines[i]) and not _PASS_RE.match(lines[i]):
+                body_lines.append(lines[i])
+                i += 1
+            body = "\n".join(body_lines)
+            idxs = {int(mm.group("idx")) for mm in (_NODE_RE.match(l) for l in body_lines) if mm}
+            phases.append(Phase(phase=phase, pass_iter=cur_iter, body=body, node_indices=idxs))
+        else:
+            i += 1
+    return phases
+
+
+def split_phase_files(text: str, out_dir) -> list[str]:
+    from pathlib import Path
+
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    written: list[str] = []
+    for n, p in enumerate(parse_phases(text)):
+        fname = f"iro-{n:02d}-{slug(p.phase)}.txt"
+        (out / fname).write_text(f"after {p.phase} (pass={p.pass_iter})\n{p.body}\n")
+        written.append(fname)
+    return written
+
+
+def build_summary(text: str) -> str:
+    phases = parse_phases(text)
+    out: list[str] = ["IRO pass sequence (temp/node ledger v1):", ""]
+    prev: set[int] | None = None
+    prev_name = None
+    for n, p in enumerate(phases):
+        tag = f"pass={p.pass_iter}" if p.pass_iter is not None else "pre-loop"
+        out.append(f"[{n:02d}] after {p.phase} ({tag}) — {len(p.node_indices)} nodes")
+        if prev is not None:
+            added = sorted(p.node_indices - prev)
+            removed = sorted(prev - p.node_indices)
+            if added:
+                out.append(f"     added: {added}")
+            if removed:
+                out.append(f"     removed: {removed} (vs {prev_name})")
+        prev = p.node_indices
+        prev_name = p.phase
+    return "\n".join(out) + "\n"
