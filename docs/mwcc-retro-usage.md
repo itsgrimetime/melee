@@ -98,6 +98,14 @@ IRO pass sequence (node ledger v1):
 Use it as an index: find the pass where node count or membership changes sharply,
 then open the matching `iro-NN-<phase>.txt` to see the actual IR.
 
+`iro-summary.txt` also ends with a **named-leaf creation-order timeline** (#544):
+every front-end temp (`temp_rN`), var (`var_rN`), source local, and data symbol
+in the order it **first appears** across the trace, with the introducing phase,
+plus a one-line **synthesized-temp creation sequence** (e.g. `temp_r4 -> var_r4`).
+This is the front-end materialization order — the signal upstream of back-end
+vreg/`ig_idx` ordering. Node indices renumber every phase so they're not stable
+across phases; the temp/var *names* are, which is why the timeline keys on them.
+
 ## Interpreting the backend output (GC/1.1)
 
 `regalloc-gpr-pass-1-assigned.txt` is the most useful for matching:
