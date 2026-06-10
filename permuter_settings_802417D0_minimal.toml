@@ -1,0 +1,60 @@
+# Permuter config for mnDiagram_802417D0 — MINIMAL PRODUCTIVE PASSES ONLY
+#
+# Analysis of best-ever score (355) showed three productive passes:
+#   1. perm_pad_var_decl — volatile pad shifts register cascade
+#   2. perm_reorder_decls — aligns shifted cascade with expected
+#   3. perm_randomize_internal_type — type changes fine-tune reg class
+#
+# All other passes produced only garbage: dead blocks, self-assignments,
+# chained masks, comma exprs, broken expressions. Zeroed out.
+
+compiler_type = "mwcc"
+compiler_command = "build/tools/wibo build/tools/sjiswrap.exe build/compilers/GC/1.2.5n/mwcceppc.exe -nowraplines -cwd source -Cpp_exceptions off -proc gekko -fp hardware -align powerpc -nosyspath -fp_contract on -O4,p -multibyte -enum int -nodefaults -inline auto -pragma 'cats off' -pragma 'warn_notinlined off' -RTTI off -str reuse -DBUILD_VERSION=0 -DVERSION_GALE01 -maxerrors 1 -msgstyle std -warn off -warn iserror -i src -i src/MSL -i src/Runtime -i extern/dolphin/include -i src/melee -i src/melee/ft/chara -i src/sysdolphin -lang=c -c"
+assembler_command = "/opt/devkitpro/devkitPPC/bin/powerpc-eabi-as -mgekko"
+asm_prelude_file = "nonmatchings/prelude_ppc.inc"
+asm_pattern = "/src/ -> /build/GALE01/asm/"
+
+[randomize_funcs]
+"mnDiagram_802417D0" = true
+
+[weight_overrides]
+# Slide the register cascade by inserting dummy variables
+perm_pad_var_decl = 40.0
+
+# Explore declaration orderings (primary productive pass)
+perm_reorder_decls = 40.0
+
+# Type changes fine-tune register class assignment
+perm_randomize_internal_type = 20.0
+
+# Everything else: zero — proven to produce only garbage
+perm_dummy_comma_expr = 0.0
+perm_split_assignment = 0.0
+perm_duplicate_assignment = 0.0
+perm_add_self_assignment = 0.0
+perm_cast_simple = 0.0
+perm_inline = 0.0
+perm_temp_for_expr = 0.0
+perm_chain_assignment = 0.0
+perm_long_chain_assignment = 0.0
+perm_randomize_external_type = 0.0
+perm_randomize_function_type = 0.0
+perm_reorder_stmts = 0.0
+perm_condition = 0.0
+perm_add_mask = 0.0
+perm_xor_zero = 0.0
+perm_refer_to_var = 0.0
+perm_empty_stmt = 0.0
+perm_ins_block = 0.0
+perm_mult_zero = 0.0
+perm_factor_mult = 0.0
+perm_factor_shift = 0.0
+perm_commutative = 0.0
+perm_add_sub = 0.0
+perm_inequalities = 0.0
+perm_compound_assignment = 0.0
+perm_remove_ast = 0.0
+perm_sameline = 0.0
+perm_struct_ref = 0.0
+perm_float_literal = 0.0
+perm_expand_expr = 0.0

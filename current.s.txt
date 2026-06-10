@@ -1,0 +1,1080 @@
+  4398:    mflr    r0
+  439c:    lis     r5,...bss.0@ha
+  43a0:    stw     r0,4(r1)
+s 43a4:    stwu    r1,-0x68(r1)
+r 43a8:    stmw    r25,0x4c(r1)
+r 43ac:    addi    r26,r3,0
+  43b0:    addi    r30,r5,...bss.0@l
+  43b4:    li      r3,4
+  43b8:    lwz     r4,mnDiagram_804D6C10@sda21(0)
+  43bc:    lwz     r31,0x2c(r4)
+  43c0:    bl      mn_80229624
+  43c4:    lis     r4,mn_804A04F0@ha
+  43c8:    addi    r28,r3,0
+  43cc:    addi    r29,r4,mn_804A04F0@l
+  43d0:    stw     r28,0xc(r29)
+r 43d4:    li      r27,0
+  43d8:    rlwinm. r0,r3,0,0x1b,0x1b
+r 43dc:    stw     r27,8(r29)
+  43e0:    beq     45c4 ~>
+  43e4:    li      r3,1
+  43e8:    bl      lbAudioAx_80024030
+  43ec:    lwz     r3,HSD_GObj_804D7838@sda21(0)
+  43f0:    bl      HSD_GObjProc_8038FE24
+  43f4:    lis     r3,mnDiagram_PopupInputProc@ha
+  43f8:    addi    r4,r3,mnDiagram_PopupInputProc@l
+r 43fc:    addi    r3,r26,0
+  4400:    li      r5,0
+  4404:    bl      HSD_GObj_SetupProc
+  4408:    lwz     r4,HSD_GObj_804D783C@sda21(0)
+  440c:    lbz     r0,0xd(r3)
+  4410:    rlwimi  r0,r4,4,0x1a,0x1b
+  4414:    stb     r0,0xd(r3)
+  4418:    lbz     r0,0x44(r31)
+  441c:    cmplwi  r0,0
+  4420:    beq     44fc ~>
+r 4424:    lhz     r3,0x3e(r31)
+r 4428:    addi    r25,r29,2
+r 442c:    lhz     r0,2(r29)
+r 4430:    clrlwi  r29,r3,0x18
+r 4434:    add     r28,r30,r29
+r 4438:    clrlwi  r26,r0,0x18
+r 443c:    addi    r28,r28,0x1c
+  4440:    b       4478 ~>
+r 4444: ~> mr      r27,r28
+r 4448: ~> addi    r29,r29,1
+r 444c:    cmpwi   r29,0x78
+r 4450:    addi    r27,r27,1
+r 4454:    addi    r28,r28,1
+  4458:    blt     4464 ~>
+r 445c:    li      r26,0x78
+  4460:    b       4488 ~>
+r 4464: ~> lbz     r3,0(r27)
+  4468:    bl      GetNameText
+  446c:    cmplwi  r3,0
+  4470:    beq     4448 ~>
+r 4474:    addi    r26,r26,-1
+r 4478: ~> cmpwi   r26,0
+  447c:    bgt     4444 ~>
+r 4480:    add     r3,r30,r29
+r 4484:    lbz     r26,0x1c(r3)
+r 4488: ~> lhz     r3,0x3e(r31)
+r 448c:    lhz     r0,0(r25)
+r 4490:    srawi   r31,r3,8
+> 4494:    add     r29,r30,r31
+r 4498:    srawi   r27,r0,8
+< 
+r 449c:    addi    r29,r29,0x1c
+  44a0:    b       44d8 ~>
+r 44a4: ~> mr      r28,r29
+r 44a8: ~> addi    r31,r31,1
+r 44ac:    cmpwi   r31,0x78
+r 44b0:    addi    r28,r28,1
+r 44b4:    addi    r29,r29,1
+  44b8:    blt     44c4 ~>
+  44bc:    li      r0,0x78
+  44c0:    b       44e8 ~>
+r 44c4: ~> lbz     r3,0(r28)
+  44c8:    bl      GetNameText
+  44cc:    cmplwi  r3,0
+  44d0:    beq     44a8 ~>
+r 44d4:    addi    r27,r27,-1
+r 44d8: ~> cmpwi   r27,0
+  44dc:    bgt     44a4 ~>
+r 44e0:    add     r3,r30,r31
+  44e4:    lbz     r0,0x1c(r3)
+r 44e8: ~> clrlwi  r3,r26,0x18
+  44ec:    clrlwi  r4,r0,0x18
+  44f0:    li      r5,1
+  44f4:    bl      mnDiagram_80241310
+  44f8:    b       5418 ~>
+r 44fc: ~> lhz     r3,0x3c(r31)
+> 4500:    addi    r25,r29,2
+| 4504:    lhz     r0,2(r29)
+r 4508:    clrlwi  r29,r3,0x18
+r 450c:    clrlwi  r26,r0,0x18
+r 4510:    add     r28,r30,r29
+  4514:    b       454c ~>
+< 
+< 
+< 
+< 
+r 4518: ~> mr      r27,r28
+r 451c: ~> addi    r29,r29,1
+r 4520:    cmpwi   r29,0x19
+r 4524:    addi    r27,r27,1
+  4528:    addi    r28,r28,1
+  452c:    blt     4538 ~>
+r 4530:    li      r26,0x19
+  4534:    b       4558 ~>
+r 4538: ~> lbz     r3,0(r27)
+  453c:    bl      mn_IsFighterUnlocked
+  4540:    cmpwi   r3,0
+  4544:    beq     451c ~>
+r 4548:    addi    r26,r26,-1
+r 454c: ~> cmpwi   r26,0
+> 4550:    bgt     4518 ~>
+| 4554:    lbzx    r26,r30,r29
+r 4558: ~> lhz     r3,0x3c(r31)
+r 455c:    lhz     r0,0(r25)
+r 4560:    srawi   r31,r3,8
+< 
+r 4564:    add     r29,r30,r31
+| 4568:    srawi   r27,r0,8
+< 
+< 
+< 
+i 456c:    b       45a4 ~>
+r 4570: ~> mr      r28,r29
+r 4574: ~> addi    r31,r31,1
+r 4578:    cmpwi   r31,0x19
+r 457c:    addi    r28,r28,1
+r 4580:    addi    r29,r29,1
+  4584:    blt     4590 ~>
+r 4588:    li      r0,0x19
+  458c:    b       45b0 ~>
+r 4590: ~> lbz     r3,0(r28)
+  4594:    bl      mn_IsFighterUnlocked
+  4598:    cmpwi   r3,0
+  459c:    beq     4574 ~>
+r 45a0:    addi    r27,r27,-1
+r 45a4: ~> cmpwi   r27,0
+> 45a8:    bgt     4570 ~>
+| 45ac:    lbzx    r0,r30,r31
+r 45b0: ~> clrlwi  r3,r26,0x18
+r 45b4:    clrlwi  r4,r0,0x18
+  45b8:    li      r5,0
+  45bc:    bl      mnDiagram_80241310
+  45c0:    b       5418 ~>
+  45c4: ~> rlwinm. r0,r28,0,0x1a,0x1a
+  45c8:    beq     4648 ~>
+  45cc:    li      r3,0
+  45d0:    bl      lbAudioAx_80024030
+| 45d4:    lwz     r3,mnDiagram_804D6C10@sda21(0)
+| 45d8:    lwz     r25,0x2c(r3)
+| 45dc:    stb     r27,0x11(r29)
+  45e0:    lhz     r0,0x3c(r25)
+  45e4:    srawi   r0,r0,8
+r 45e8:    clrlwi  r26,r0,0x18
+  45ec:    bl      gmMainLib_8015CC34
+r 45f0:    stb     r26,0xe(r3)
+  45f4:    lhz     r0,0x3c(r25)
+r 45f8:    clrlwi  r26,r0,0x18
+  45fc:    bl      gmMainLib_8015CC34
+r 4600:    stb     r26,0xf(r3)
+  4604:    lhz     r0,0x3e(r25)
+  4608:    srawi   r0,r0,8
+r 460c:    clrlwi  r26,r0,0x18
+  4610:    bl      gmMainLib_8015CC34
+r 4614:    stb     r26,0x10(r3)
+  4618:    lhz     r0,0x3e(r25)
+r 461c:    clrlwi  r26,r0,0x18
+  4620:    bl      gmMainLib_8015CC34
+r 4624:    stb     r26,0x11(r3)
+r 4628:    lbz     r26,0x44(r25)
+  462c:    bl      gmMainLib_8015CC34
+r 4630:    stb     r26,0xd(r3)
+  4634:    li      r3,0x1c
+  4638:    li      r4,0
+  463c:    li      r5,3
+  4640:    bl      mn_80229894
+  4644:    b       5418 ~>
+  4648: ~> rlwinm. r0,r28,0,0x18,0x19
+  464c:    beq     46d8 ~>
+  4650:    li      r3,1
+  4654:    bl      lbAudioAx_80024030
+  4658:    lwz     r3,mnDiagram_804D6C10@sda21(0)
+r 465c:    lwz     r25,0x2c(r3)
+r 4660:    lhz     r0,0x3c(r25)
+  4664:    srawi   r0,r0,8
+r 4668:    clrlwi  r27,r0,0x18
+  466c:    bl      gmMainLib_8015CC34
+r 4670:    stb     r27,0xe(r3)
+r 4674:    lhz     r0,0x3c(r25)
+r 4678:    clrlwi  r27,r0,0x18
+  467c:    bl      gmMainLib_8015CC34
+r 4680:    stb     r27,0xf(r3)
+r 4684:    lhz     r0,0x3e(r25)
+  4688:    srawi   r0,r0,8
+r 468c:    clrlwi  r27,r0,0x18
+  4690:    bl      gmMainLib_8015CC34
+r 4694:    stb     r27,0x10(r3)
+r 4698:    lhz     r0,0x3e(r25)
+r 469c:    clrlwi  r27,r0,0x18
+  46a0:    bl      gmMainLib_8015CC34
+r 46a4:    stb     r27,0x11(r3)
+r 46a8:    lbz     r27,0x44(r25)
+  46ac:    bl      gmMainLib_8015CC34
+r 46b0:    stb     r27,0xd(r3)
+r 46b4:    mr      r3,r26
+  46b8:    bl      HSD_GObjPLink_80390228
+  46bc:    rlwinm. r0,r28,0,0x19,0x19
+  46c0:    beq     46d0 ~>
+  46c4:    li      r3,0
+  46c8:    bl      mnDiagram3_8024714C
+  46cc:    b       5418 ~>
+  46d0: ~> bl      mnDiagram2_Init
+  46d4:    b       5418 ~>
+  46d8: ~> rlwinm. r0,r28,0,0x14,0x15
+  46dc:    beq     49c8 ~>
+  46e0:    bl      GetNameCount
+  46e4:    cmpwi   r3,0
+  46e8:    bne     46f8 ~>
+  46ec:    li      r3,3
+  46f0:    bl      lbAudioAx_80024030
+  46f4:    b       5418 ~>
+  46f8: ~> li      r3,1
+  46fc:    bl      lbAudioAx_80024030
+  4700:    lbz     r0,0x44(r31)
+  4704:    cmplwi  r0,0
+  4708:    bne     4710 ~>
+r 470c:    li      r27,1
+r 4710: ~> stb     r27,0x44(r31)
+  4714:    lbz     r0,0x44(r31)
+  4718:    cmplwi  r0,0
+  471c:    beq     4864 ~>
+  4720:    bl      GetNameCount
+  4724:    lis     r4,mn_804A04F0@ha
+  4728:    addi    r4,r4,mn_804A04F0@l
+> 472c:    addi    r5,r4,2
+r 4730:    lhz     r4,2(r4)
+r 4734:    addi    r26,r3,0
+< 
+r 4738:    clrlwi  r0,r4,0x18
+r 473c:    cmpw    r0,r26
+  4740:    blt     4754 ~>
+r 4744:    addi    r0,r26,-1
+  4748:    clrlwi  r0,r0,0x18
+r 474c:    rlwimi  r0,r4,0,0x10,0x17
+r 4750:    sth     r0,0(r5)
+r 4754: ~> lhz     r3,0(r5)
+  4758:    srawi   r0,r3,8
+r 475c:    cmpw    r0,r26
+  4760:    blt     4774 ~>
+r 4764:    addi    r0,r26,-1
+  4768:    slwi    r0,r0,8
+  476c:    rlwimi  r0,r3,0,0x18,0x1f
+r 4770:    sth     r0,0(r5)
+  4774: ~> lwz     r3,mnDiagram_804D6C10@sda21(0)
+> 4778:    cmpwi   r26,7
+> 477c:    lwz     r27,0x2c(r3)
+> 4780:    bgt     47a0 ~>
+> 4784:    lwz     r3,0x1c(r27)
+> 4788:    li      r4,0x10
+i 478c:    bl      HSD_JObjSetFlagsAll
+> 4790:    lwz     r3,0x20(r27)
+> 4794:    li      r4,0x10
+> 4798:    bl      HSD_JObjSetFlagsAll
+> 479c:    b       47b8 ~>
+> 47a0: ~> lwz     r3,0x1c(r27)
+> 47a4:    li      r4,0x10
+> 47a8:    bl      HSD_JObjClearFlagsAll
+> 47ac:    lwz     r3,0x20(r27)
+> 47b0:    li      r4,0x10
+> 47b4:    bl      HSD_JObjClearFlagsAll
+> 47b8: ~> cmpwi   r26,0xa
+> 47bc:    bgt     47dc ~>
+> 47c0:    lwz     r3,0x18(r27)
+> 47c4:    li      r4,0x10
+> 47c8:    bl      HSD_JObjSetFlagsAll
+> 47cc:    lwz     r3,0x14(r27)
+> 47d0:    li      r4,0x10
+> 47d4:    bl      HSD_JObjSetFlagsAll
+> 47d8:    b       47f4 ~>
+> 47dc: ~> lwz     r3,0x18(r27)
+> 47e0:    li      r4,0x10
+> 47e4:    bl      HSD_JObjClearFlagsAll
+> 47e8:    lwz     r3,0x14(r27)
+> 47ec:    li      r4,0x10
+> 47f0:    bl      HSD_JObjClearFlagsAll
+> 47f4: ~> lwz     r25,mnDiagram_804D6C10@sda21(0)
+  47f8:    lhz     r0,0x3e(r31)
+| 47fc:    lwz     r26,0x2c(r25)
+> 4800:    addi    r3,r25,0
+r 4804:    clrlwi  r27,r0,0x18
+r 4808:    srawi   r28,r0,8
+i 480c:    bl      mnDiagram_80241668
+> 4810:    lbz     r0,0x44(r26)
+> 4814:    addi    r3,r25,0
+> 4818:    addi    r4,r27,0
+> 481c:    subfic  r0,r0,1
+> 4820:    cntlzw  r0,r0
+> 4824:    addi    r5,r28,0
+> 4828:    rlwinm  r6,r0,0x1b,0x18,0x1f
+> 482c:    bl      mnDiagram_8024227C
+> 4830:    lbz     r0,0x44(r26)
+> 4834:    cmplwi  r0,0
+> 4838:    bne     4850 ~>
+> 483c:    addi    r3,r25,0
+> 4840:    addi    r4,r27,0
+> 4844:    addi    r5,r28,0
+> 4848:    bl      mnDiagram_80242C0C
+  484c:    b       5418 ~>
+> 4850: ~> addi    r3,r25,0
+> 4854:    addi    r4,r27,0
+> 4858:    addi    r5,r28,0
+> 485c:    bl      mnDiagram_802427B4
+> 4860:    b       5418 ~>
+r 4864: ~> li      r25,0
+| 4868:    li      r26,0
+r 486c: ~> mr      r3,r26
+  4870:    bl      mn_IsFighterUnlocked
+  4874:    cmpwi   r3,0
+  4878:    beq     4880 ~>
+r 487c:    addi    r25,r25,1
+r 4880: ~> addi    r26,r26,1
+r 4884:    cmpwi   r26,0x19
+  4888:    blt     486c ~>
+  488c:    lis     r3,mn_804A04F0@ha
+  4890:    addi    r3,r3,mn_804A04F0@l
+r 4894:    addi    r4,r3,2
+  4898:    lhz     r3,2(r3)
+< 
+  489c:    clrlwi  r0,r3,0x18
+r 48a0:    cmpw    r0,r25
+  48a4:    blt     48b8 ~>
+r 48a8:    addi    r0,r25,-1
+  48ac:    clrlwi  r0,r0,0x18
+  48b0:    rlwimi  r0,r3,0,0x10,0x17
+r 48b4:    sth     r0,0(r4)
+r 48b8: ~> lhz     r3,0(r4)
+  48bc:    srawi   r0,r3,8
+r 48c0:    cmpw    r0,r25
+  48c4:    blt     48d8 ~>
+r 48c8:    addi    r0,r25,-1
+  48cc:    slwi    r0,r0,8
+  48d0:    rlwimi  r0,r3,0,0x18,0x1f
+r 48d4:    sth     r0,0(r4)
+  48d8: ~> lwz     r3,mnDiagram_804D6C10@sda21(0)
+> 48dc:    cmpwi   r25,7
+> 48e0:    lwz     r26,0x2c(r3)
+> 48e4:    bgt     4904 ~>
+> 48e8:    lwz     r3,0x1c(r26)
+> 48ec:    li      r4,0x10
+i 48f0:    bl      HSD_JObjSetFlagsAll
+> 48f4:    lwz     r3,0x20(r26)
+> 48f8:    li      r4,0x10
+> 48fc:    bl      HSD_JObjSetFlagsAll
+> 4900:    b       491c ~>
+> 4904: ~> lwz     r3,0x1c(r26)
+> 4908:    li      r4,0x10
+> 490c:    bl      HSD_JObjClearFlagsAll
+> 4910:    lwz     r3,0x20(r26)
+> 4914:    li      r4,0x10
+> 4918:    bl      HSD_JObjClearFlagsAll
+> 491c: ~> cmpwi   r25,0xa
+> 4920:    bgt     4940 ~>
+> 4924:    lwz     r3,0x18(r26)
+> 4928:    li      r4,0x10
+> 492c:    bl      HSD_JObjSetFlagsAll
+> 4930:    lwz     r3,0x14(r26)
+> 4934:    li      r4,0x10
+> 4938:    bl      HSD_JObjSetFlagsAll
+> 493c:    b       4958 ~>
+> 4940: ~> lwz     r3,0x18(r26)
+> 4944:    li      r4,0x10
+> 4948:    bl      HSD_JObjClearFlagsAll
+> 494c:    lwz     r3,0x14(r26)
+> 4950:    li      r4,0x10
+> 4954:    bl      HSD_JObjClearFlagsAll
+> 4958: ~> lwz     r25,mnDiagram_804D6C10@sda21(0)
+  495c:    lhz     r0,0x3c(r31)
+| 4960:    lwz     r26,0x2c(r25)
+> 4964:    addi    r3,r25,0
+r 4968:    clrlwi  r27,r0,0x18
+r 496c:    srawi   r28,r0,8
+i 4970:    bl      mnDiagram_80241668
+> 4974:    lbz     r0,0x44(r26)
+> 4978:    addi    r3,r25,0
+> 497c:    addi    r4,r27,0
+> 4980:    subfic  r0,r0,1
+> 4984:    cntlzw  r0,r0
+> 4988:    addi    r5,r28,0
+> 498c:    rlwinm  r6,r0,0x1b,0x18,0x1f
+> 4990:    bl      mnDiagram_8024227C
+> 4994:    lbz     r0,0x44(r26)
+> 4998:    cmplwi  r0,0
+> 499c:    bne     49b4 ~>
+> 49a0:    addi    r3,r25,0
+> 49a4:    addi    r4,r27,0
+> 49a8:    addi    r5,r28,0
+> 49ac:    bl      mnDiagram_80242C0C
+  49b0:    b       5418 ~>
+> 49b4: ~> addi    r3,r25,0
+> 49b8:    addi    r4,r27,0
+> 49bc:    addi    r5,r28,0
+> 49c0:    bl      mnDiagram_802427B4
+> 49c4:    b       5418 ~>
+  49c8: ~> lbz     r0,0x44(r31)
+  49cc:    cmplwi  r0,0
+  49d0:    beq     4ed8 ~>
+  49d4:    bl      GetNameCount
+  49d8:    clrlwi. r0,r28,0x1f
+  49dc:    beq     4ae8 ~>
+  49e0:    lhz     r0,2(r29)
+  49e4:    addi    r25,r29,2
+  49e8:    clrlwi. r4,r0,0x18
+  49ec:    ble     4a18 ~>
+r 49f0:    addi    r26,r4,-1
+r 49f4:    cmpw    r3,r26
+  49f8:    ble     4a18 ~>
+  49fc:    li      r3,2
+  4a00:    bl      lbAudioAx_80024030
+  4a04:    lhz     r0,0(r25)
+  4a08:    rlwinm  r0,r0,0,0x10,0x17
+r 4a0c:    rlwimi  r0,r26,0,0x18,0x1f
+  4a10:    sth     r0,0(r25)
+  4a14:    b       5418 ~>
+  4a18: ~> cmpwi   r3,0xa
+  4a1c:    ble     5418 ~>
+  4a20:    lhz     r0,0x3e(r31)
+r 4a24:    clrlwi  r25,r0,0x18
+r 4a28:    addi    r26,r25,0
+> 4a2c:    addi    r27,r26,0
+r 4a30: ~> addic.  r26,r26,-1
+  4a34:    bge     4a40 ~>
+| 4a38:    clrlwi  r0,r27,0x18
+  4a3c:    b       4a54 ~>
+r 4a40: ~> clrlwi  r3,r26,0x18
+  4a44:    bl      GetNameText
+  4a48:    cmplwi  r3,0
+  4a4c:    beq     4a30 ~>
+r 4a50:    clrlwi  r0,r26,0x18
+r 4a54: ~> clrlwi  r26,r0,0x18
+r 4a58:    cmpw    r25,r26
+  4a5c:    beq     5418 ~>
+  4a60:    li      r3,2
+  4a64:    bl      lbAudioAx_80024030
+  4a68:    lhz     r0,0x3e(r31)
+  4a6c:    rlwinm  r0,r0,0,0x10,0x17
+r 4a70:    or      r0,r0,r26
+  4a74:    sth     r0,0x3e(r31)
+> 4a78:    lwz     r25,mnDiagram_804D6C10@sda21(0)
+  4a7c:    lhz     r0,0x3e(r31)
+| 4a80:    lwz     r26,0x2c(r25)
+> 4a84:    addi    r3,r25,0
+r 4a88:    clrlwi  r27,r0,0x18
+r 4a8c:    srawi   r28,r0,8
+i 4a90:    bl      mnDiagram_80241668
+> 4a94:    lbz     r0,0x44(r26)
+> 4a98:    addi    r3,r25,0
+> 4a9c:    addi    r4,r27,0
+> 4aa0:    subfic  r0,r0,1
+> 4aa4:    cntlzw  r0,r0
+> 4aa8:    addi    r5,r28,0
+> 4aac:    rlwinm  r6,r0,0x1b,0x18,0x1f
+> 4ab0:    bl      mnDiagram_8024227C
+> 4ab4:    lbz     r0,0x44(r26)
+> 4ab8:    cmplwi  r0,0
+> 4abc:    bne     4ad4 ~>
+> 4ac0:    addi    r3,r25,0
+> 4ac4:    addi    r4,r27,0
+> 4ac8:    addi    r5,r28,0
+> 4acc:    bl      mnDiagram_80242C0C
+  4ad0:    b       5418 ~>
+> 4ad4: ~> addi    r3,r25,0
+> 4ad8:    addi    r4,r27,0
+> 4adc:    addi    r5,r28,0
+> 4ae0:    bl      mnDiagram_802427B4
+> 4ae4:    b       5418 ~>
+  4ae8: ~> rlwinm. r0,r28,0,0x1e,0x1e
+  4aec:    beq     4c58 ~>
+  4af0:    addi    r25,r29,2
+  4af4:    lhz     r0,2(r29)
+  4af8:    clrlwi  r4,r0,0x18
+  4afc:    cmpwi   r4,9
+  4b00:    bge     4b2c ~>
+r 4b04:    addi    r26,r4,1
+r 4b08:    cmpw    r3,r26
+  4b0c:    ble     4b2c ~>
+  4b10:    li      r3,2
+  4b14:    bl      lbAudioAx_80024030
+  4b18:    lhz     r0,0(r25)
+  4b1c:    rlwinm  r0,r0,0,0x10,0x17
+r 4b20:    rlwimi  r0,r26,0,0x18,0x1f
+  4b24:    sth     r0,0(r25)
+  4b28:    b       5418 ~>
+  4b2c: ~> cmpwi   r3,0xa
+  4b30:    ble     5418 ~>
+  4b34:    lhz     r0,0x3e(r31)
+r 4b38:    clrlwi  r25,r0,0x18
+r 4b3c:    addi    r29,r25,0
+r 4b40:    addi    r26,r25,0
+> 4b44: ~> addi    r25,r25,1
+r 4b48:    cmpwi   r25,0x78
+  4b4c:    blt     4b58 ~>
+r 4b50:    clrlwi  r0,r26,0x18
+  4b54:    b       4b6c ~>
+r 4b58: ~> clrlwi  r3,r25,0x18
+  4b5c:    bl      GetNameText
+  4b60:    cmplwi  r3,0
+i 4b64:    beq     4b44 ~>
+r 4b68:    clrlwi  r0,r25,0x18
+r 4b6c: ~> clrlwi  r25,r0,0x18
+r 4b70:    cmpw    r29,r25
+  4b74:    beq     5418 ~>
+r 4b78:    add     r28,r30,r29
+r 4b7c:    li      r26,0xa
+r 4b80:    addi    r28,r28,0x1c
+r 4b84: ~> mr      r27,r28
+r 4b88: ~> addi    r29,r29,1
+r 4b8c:    cmpwi   r29,0x78
+r 4b90:    addi    r27,r27,1
+r 4b94:    addi    r28,r28,1
+  4b98:    blt     4ba4 ~>
+  4b9c:    li      r0,0x78
+  4ba0:    b       4bc4 ~>
+r 4ba4: ~> lbz     r3,0(r27)
+  4ba8:    bl      GetNameText
+  4bac:    cmplwi  r3,0
+  4bb0:    beq     4b88 ~>
+r 4bb4:    addic.  r26,r26,-1
+  4bb8:    bgt     4b84 ~>
+r 4bbc:    add     r3,r30,r29
+  4bc0:    lbz     r0,0x1c(r3)
+  4bc4: ~> clrlwi  r0,r0,0x18
+  4bc8:    cmplwi  r0,0x78
+  4bcc:    beq     5418 ~>
+  4bd0:    li      r3,2
+  4bd4:    bl      lbAudioAx_80024030
+  4bd8:    lhz     r0,0x3e(r31)
+  4bdc:    rlwinm  r0,r0,0,0x10,0x17
+r 4be0:    or      r0,r0,r25
+  4be4:    sth     r0,0x3e(r31)
+> 4be8:    lwz     r25,mnDiagram_804D6C10@sda21(0)
+  4bec:    lhz     r0,0x3e(r31)
+| 4bf0:    lwz     r26,0x2c(r25)
+> 4bf4:    addi    r3,r25,0
+r 4bf8:    clrlwi  r27,r0,0x18
+r 4bfc:    srawi   r28,r0,8
+i 4c00:    bl      mnDiagram_80241668
+> 4c04:    lbz     r0,0x44(r26)
+> 4c08:    addi    r3,r25,0
+> 4c0c:    addi    r4,r27,0
+> 4c10:    subfic  r0,r0,1
+> 4c14:    cntlzw  r0,r0
+> 4c18:    addi    r5,r28,0
+> 4c1c:    rlwinm  r6,r0,0x1b,0x18,0x1f
+> 4c20:    bl      mnDiagram_8024227C
+> 4c24:    lbz     r0,0x44(r26)
+> 4c28:    cmplwi  r0,0
+> 4c2c:    bne     4c44 ~>
+> 4c30:    addi    r3,r25,0
+> 4c34:    addi    r4,r27,0
+> 4c38:    addi    r5,r28,0
+> 4c3c:    bl      mnDiagram_80242C0C
+  4c40:    b       5418 ~>
+> 4c44: ~> addi    r3,r25,0
+> 4c48:    addi    r4,r27,0
+> 4c4c:    addi    r5,r28,0
+> 4c50:    bl      mnDiagram_802427B4
+> 4c54:    b       5418 ~>
+  4c58: ~> rlwinm. r0,r28,0,0x1d,0x1d
+  4c5c:    beq     4d68 ~>
+  4c60:    lhz     r0,2(r29)
+  4c64:    addi    r25,r29,2
+  4c68:    srawi.  r4,r0,8
+  4c6c:    ble     4c98 ~>
+r 4c70:    addi    r26,r4,-1
+r 4c74:    cmpw    r3,r26
+  4c78:    ble     4c98 ~>
+  4c7c:    li      r3,2
+  4c80:    bl      lbAudioAx_80024030
+  4c84:    lhz     r0,0(r25)
+  4c88:    clrlwi  r0,r0,0x18
+r 4c8c:    rlwimi  r0,r26,8,0,0x17
+  4c90:    sth     r0,0(r25)
+  4c94:    b       5418 ~>
+  4c98: ~> cmpwi   r3,7
+  4c9c:    ble     5418 ~>
+  4ca0:    lhz     r0,0x3e(r31)
+r 4ca4:    srawi   r25,r0,8
+r 4ca8:    addi    r26,r25,0
+> 4cac:    addi    r27,r26,0
+r 4cb0: ~> addic.  r26,r26,-1
+  4cb4:    bge     4cc0 ~>
+r 4cb8:    clrlwi  r0,r27,0x18
+  4cbc:    b       4cd4 ~>
+r 4cc0: ~> clrlwi  r3,r26,0x18
+  4cc4:    bl      GetNameText
+  4cc8:    cmplwi  r3,0
+  4ccc:    beq     4cb0 ~>
+r 4cd0:    clrlwi  r0,r26,0x18
+r 4cd4: ~> clrlwi  r26,r0,0x18
+r 4cd8:    cmpw    r25,r26
+  4cdc:    beq     5418 ~>
+  4ce0:    li      r3,2
+  4ce4:    bl      lbAudioAx_80024030
+  4ce8:    lhz     r0,0x3e(r31)
+  4cec:    clrlwi  r0,r0,0x18
+r 4cf0:    rlwimi  r0,r26,8,0,0x17
+  4cf4:    sth     r0,0x3e(r31)
+> 4cf8:    lwz     r25,mnDiagram_804D6C10@sda21(0)
+  4cfc:    lhz     r0,0x3e(r31)
+| 4d00:    lwz     r26,0x2c(r25)
+> 4d04:    addi    r3,r25,0
+r 4d08:    clrlwi  r27,r0,0x18
+r 4d0c:    srawi   r28,r0,8
+i 4d10:    bl      mnDiagram_80241668
+> 4d14:    lbz     r0,0x44(r26)
+> 4d18:    addi    r3,r25,0
+> 4d1c:    addi    r4,r27,0
+> 4d20:    subfic  r0,r0,1
+> 4d24:    cntlzw  r0,r0
+> 4d28:    addi    r5,r28,0
+> 4d2c:    rlwinm  r6,r0,0x1b,0x18,0x1f
+> 4d30:    bl      mnDiagram_8024227C
+> 4d34:    lbz     r0,0x44(r26)
+> 4d38:    cmplwi  r0,0
+> 4d3c:    bne     4d54 ~>
+> 4d40:    addi    r3,r25,0
+> 4d44:    addi    r4,r27,0
+> 4d48:    addi    r5,r28,0
+> 4d4c:    bl      mnDiagram_80242C0C
+  4d50:    b       5418 ~>
+> 4d54: ~> addi    r3,r25,0
+> 4d58:    addi    r4,r27,0
+> 4d5c:    addi    r5,r28,0
+> 4d60:    bl      mnDiagram_802427B4
+> 4d64:    b       5418 ~>
+  4d68: ~> rlwinm. r0,r28,0,0x1c,0x1c
+  4d6c:    beq     5418 ~>
+  4d70:    addi    r25,r29,2
+  4d74:    lhz     r0,2(r29)
+  4d78:    srawi   r4,r0,8
+  4d7c:    cmpwi   r4,6
+  4d80:    bge     4dac ~>
+r 4d84:    addi    r26,r4,1
+r 4d88:    cmpw    r3,r26
+  4d8c:    ble     4dac ~>
+  4d90:    li      r3,2
+  4d94:    bl      lbAudioAx_80024030
+  4d98:    lhz     r0,0(r25)
+  4d9c:    clrlwi  r0,r0,0x18
+r 4da0:    rlwimi  r0,r26,8,0,0x17
+  4da4:    sth     r0,0(r25)
+  4da8:    b       5418 ~>
+  4dac: ~> cmpwi   r3,7
+  4db0:    ble     5418 ~>
+  4db4:    lhz     r0,0x3e(r31)
+r 4db8:    srawi   r25,r0,8
+r 4dbc:    addi    r29,r25,0
+r 4dc0:    addi    r26,r25,0
+> 4dc4: ~> addi    r25,r25,1
+r 4dc8:    cmpwi   r25,0x78
+  4dcc:    blt     4dd8 ~>
+r 4dd0:    clrlwi  r0,r26,0x18
+  4dd4:    b       4dec ~>
+r 4dd8: ~> clrlwi  r3,r25,0x18
+  4ddc:    bl      GetNameText
+  4de0:    cmplwi  r3,0
+i 4de4:    beq     4dc4 ~>
+r 4de8:    clrlwi  r0,r25,0x18
+r 4dec: ~> clrlwi  r25,r0,0x18
+r 4df0:    cmpw    r29,r25
+  4df4:    beq     5418 ~>
+r 4df8:    add     r28,r30,r29
+r 4dfc:    li      r26,7
+r 4e00:    addi    r28,r28,0x1c
+r 4e04: ~> mr      r27,r28
+r 4e08: ~> addi    r29,r29,1
+r 4e0c:    cmpwi   r29,0x78
+r 4e10:    addi    r27,r27,1
+r 4e14:    addi    r28,r28,1
+  4e18:    blt     4e24 ~>
+  4e1c:    li      r0,0x78
+  4e20:    b       4e44 ~>
+r 4e24: ~> lbz     r3,0(r27)
+  4e28:    bl      GetNameText
+  4e2c:    cmplwi  r3,0
+  4e30:    beq     4e08 ~>
+r 4e34:    addic.  r26,r26,-1
+  4e38:    bgt     4e04 ~>
+r 4e3c:    add     r3,r30,r29
+  4e40:    lbz     r0,0x1c(r3)
+  4e44: ~> clrlwi  r0,r0,0x18
+  4e48:    cmplwi  r0,0x78
+  4e4c:    beq     5418 ~>
+  4e50:    li      r3,2
+  4e54:    bl      lbAudioAx_80024030
+  4e58:    lhz     r0,0x3e(r31)
+  4e5c:    clrlwi  r0,r0,0x18
+r 4e60:    rlwimi  r0,r25,8,0,0x17
+  4e64:    sth     r0,0x3e(r31)
+> 4e68:    lwz     r25,mnDiagram_804D6C10@sda21(0)
+  4e6c:    lhz     r0,0x3e(r31)
+| 4e70:    lwz     r26,0x2c(r25)
+> 4e74:    addi    r3,r25,0
+r 4e78:    clrlwi  r27,r0,0x18
+r 4e7c:    srawi   r28,r0,8
+i 4e80:    bl      mnDiagram_80241668
+> 4e84:    lbz     r0,0x44(r26)
+> 4e88:    addi    r3,r25,0
+> 4e8c:    addi    r4,r27,0
+> 4e90:    subfic  r0,r0,1
+> 4e94:    cntlzw  r0,r0
+> 4e98:    addi    r5,r28,0
+> 4e9c:    rlwinm  r6,r0,0x1b,0x18,0x1f
+> 4ea0:    bl      mnDiagram_8024227C
+> 4ea4:    lbz     r0,0x44(r26)
+> 4ea8:    cmplwi  r0,0
+> 4eac:    bne     4ec4 ~>
+> 4eb0:    addi    r3,r25,0
+> 4eb4:    addi    r4,r27,0
+> 4eb8:    addi    r5,r28,0
+> 4ebc:    bl      mnDiagram_80242C0C
+  4ec0:    b       5418 ~>
+> 4ec4: ~> addi    r3,r25,0
+> 4ec8:    addi    r4,r27,0
+> 4ecc:    addi    r5,r28,0
+> 4ed0:    bl      mnDiagram_802427B4
+> 4ed4:    b       5418 ~>
+r 4ed8: ~> mr      r25,r27
+r 4edc: ~> mr      r3,r25
+  4ee0:    bl      mn_IsFighterUnlocked
+  4ee4:    cmpwi   r3,0
+  4ee8:    beq     4ef0 ~>
+r 4eec:    addi    r27,r27,1
+r 4ef0: ~> addi    r25,r25,1
+r 4ef4:    cmpwi   r25,0x19
+  4ef8:    blt     4edc ~>
+  4efc:    clrlwi. r0,r28,0x1f
+  4f00:    beq     501c ~>
+  4f04:    lis     r3,mn_804A04F0@ha
+  4f08:    addi    r3,r3,mn_804A04F0@l
+  4f0c:    lhz     r0,2(r3)
+r 4f10:    addi    r25,r3,2
+  4f14:    clrlwi. r3,r0,0x18
+  4f18:    ble     4f44 ~>
+r 4f1c:    addi    r26,r3,-1
+r 4f20:    cmpw    r27,r26
+  4f24:    ble     4f44 ~>
+  4f28:    li      r3,2
+  4f2c:    bl      lbAudioAx_80024030
+r 4f30:    lhz     r0,0(r25)
+  4f34:    rlwinm  r0,r0,0,0x10,0x17
+r 4f38:    rlwimi  r0,r26,0,0x18,0x1f
+r 4f3c:    sth     r0,0(r25)
+  4f40:    b       5418 ~>
+r 4f44: ~> cmpwi   r27,0xa
+  4f48:    ble     5418 ~>
+  4f4c:    lhz     r0,0x3c(r31)
+r 4f50:    clrlwi  r25,r0,0x18
+r 4f54:    addi    r28,r25,0
+> 4f58:    addi    r26,r28,0
+r 4f5c:    add     r27,r30,r28
+r 4f60: ~> addic.  r28,r28,-1
+r 4f64:    addi    r27,r27,-1
+  4f68:    bge     4f74 ~>
+| 4f6c:    clrlwi  r0,r26,0x18
+  4f70:    b       4f88 ~>
+r 4f74: ~> lbz     r3,0(r27)
+  4f78:    bl      mn_IsFighterUnlocked
+  4f7c:    cmpwi   r3,0
+  4f80:    beq     4f60 ~>
+r 4f84:    clrlwi  r0,r28,0x18
+r 4f88: ~> clrlwi  r26,r0,0x18
+r 4f8c:    cmpw    r25,r26
+  4f90:    beq     5418 ~>
+  4f94:    li      r3,2
+  4f98:    bl      lbAudioAx_80024030
+  4f9c:    lhz     r0,0x3c(r31)
+  4fa0:    rlwinm  r0,r0,0,0x10,0x17
+r 4fa4:    or      r0,r0,r26
+  4fa8:    sth     r0,0x3c(r31)
+> 4fac:    lwz     r25,mnDiagram_804D6C10@sda21(0)
+  4fb0:    lhz     r0,0x3c(r31)
+| 4fb4:    lwz     r26,0x2c(r25)
+> 4fb8:    addi    r3,r25,0
+r 4fbc:    clrlwi  r27,r0,0x18
+r 4fc0:    srawi   r28,r0,8
+i 4fc4:    bl      mnDiagram_80241668
+> 4fc8:    lbz     r0,0x44(r26)
+> 4fcc:    addi    r3,r25,0
+> 4fd0:    addi    r4,r27,0
+> 4fd4:    subfic  r0,r0,1
+> 4fd8:    cntlzw  r0,r0
+> 4fdc:    addi    r5,r28,0
+> 4fe0:    rlwinm  r6,r0,0x1b,0x18,0x1f
+> 4fe4:    bl      mnDiagram_8024227C
+> 4fe8:    lbz     r0,0x44(r26)
+> 4fec:    cmplwi  r0,0
+> 4ff0:    bne     5008 ~>
+> 4ff4:    addi    r3,r25,0
+> 4ff8:    addi    r4,r27,0
+> 4ffc:    addi    r5,r28,0
+> 5000:    bl      mnDiagram_80242C0C
+  5004:    b       5418 ~>
+> 5008: ~> addi    r3,r25,0
+> 500c:    addi    r4,r27,0
+> 5010:    addi    r5,r28,0
+> 5014:    bl      mnDiagram_802427B4
+> 5018:    b       5418 ~>
+  501c: ~> rlwinm. r0,r28,0,0x1e,0x1e
+  5020:    beq     518c ~>
+  5024:    lis     r3,mn_804A04F0@ha
+  5028:    addi    r3,r3,mn_804A04F0@l
+r 502c:    addi    r25,r3,2
+  5030:    lhz     r0,2(r3)
+  5034:    clrlwi  r3,r0,0x18
+  5038:    cmpwi   r3,9
+  503c:    bge     5068 ~>
+r 5040:    addi    r26,r3,1
+r 5044:    cmpw    r27,r26
+  5048:    ble     5068 ~>
+  504c:    li      r3,2
+  5050:    bl      lbAudioAx_80024030
+r 5054:    lhz     r0,0(r25)
+  5058:    rlwinm  r0,r0,0,0x10,0x17
+r 505c:    rlwimi  r0,r26,0,0x18,0x1f
+r 5060:    sth     r0,0(r25)
+  5064:    b       5418 ~>
+r 5068: ~> cmpwi   r27,0xa
+  506c:    ble     5418 ~>
+  5070:    lhz     r0,0x3c(r31)
+r 5074:    clrlwi  r25,r0,0x18
+| 5078:    addi    r29,r25,0
+r 507c:    addi    r26,r25,0
+| 5080:    add     r27,r30,r25
+r 5084: ~> addi    r25,r25,1
+r 5088:    cmpwi   r25,0x19
+r 508c:    addi    r27,r27,1
+  5090:    blt     509c ~>
+r 5094:    clrlwi  r0,r26,0x18
+  5098:    b       50b0 ~>
+r 509c: ~> lbz     r3,0(r27)
+  50a0:    bl      mn_IsFighterUnlocked
+  50a4:    cmpwi   r3,0
+  50a8:    beq     5084 ~>
+r 50ac:    clrlwi  r0,r25,0x18
+r 50b0: ~> clrlwi  r25,r0,0x18
+> 50b4:    add     r28,r30,r29
+r 50b8:    li      r26,0xa
+< 
+< 
+< 
+< 
+r 50bc: ~> mr      r27,r28
+r 50c0: ~> addi    r29,r29,1
+r 50c4:    cmpwi   r29,0x19
+r 50c8:    addi    r27,r27,1
+r 50cc:    addi    r28,r28,1
+  50d0:    blt     50dc ~>
+r 50d4:    li      r0,0x19
+  50d8:    b       50f8 ~>
+r 50dc: ~> lbz     r3,0(r27)
+  50e0:    bl      mn_IsFighterUnlocked
+  50e4:    cmpwi   r3,0
+  50e8:    beq     50c0 ~>
+r 50ec:    addic.  r26,r26,-1
+> 50f0:    bgt     50bc ~>
+| 50f4:    lbzx    r0,r30,r29
+r 50f8: ~> clrlwi  r0,r0,0x18
+  50fc:    cmplwi  r0,0x19
+  5100:    beq     5418 ~>
+  5104:    li      r3,2
+  5108:    bl      lbAudioAx_80024030
+  510c:    lhz     r0,0x3c(r31)
+  5110:    rlwinm  r0,r0,0,0x10,0x17
+r 5114:    or      r0,r0,r25
+  5118:    sth     r0,0x3c(r31)
+> 511c:    lwz     r25,mnDiagram_804D6C10@sda21(0)
+  5120:    lhz     r0,0x3c(r31)
+| 5124:    lwz     r26,0x2c(r25)
+> 5128:    addi    r3,r25,0
+r 512c:    clrlwi  r27,r0,0x18
+r 5130:    srawi   r28,r0,8
+i 5134:    bl      mnDiagram_80241668
+> 5138:    lbz     r0,0x44(r26)
+> 513c:    addi    r3,r25,0
+> 5140:    addi    r4,r27,0
+> 5144:    subfic  r0,r0,1
+> 5148:    cntlzw  r0,r0
+> 514c:    addi    r5,r28,0
+> 5150:    rlwinm  r6,r0,0x1b,0x18,0x1f
+> 5154:    bl      mnDiagram_8024227C
+> 5158:    lbz     r0,0x44(r26)
+> 515c:    cmplwi  r0,0
+> 5160:    bne     5178 ~>
+> 5164:    addi    r3,r25,0
+> 5168:    addi    r4,r27,0
+> 516c:    addi    r5,r28,0
+> 5170:    bl      mnDiagram_80242C0C
+  5174:    b       5418 ~>
+> 5178: ~> addi    r3,r25,0
+> 517c:    addi    r4,r27,0
+> 5180:    addi    r5,r28,0
+> 5184:    bl      mnDiagram_802427B4
+> 5188:    b       5418 ~>
+  518c: ~> rlwinm. r0,r28,0,0x1d,0x1d
+  5190:    beq     52ac ~>
+  5194:    lis     r3,mn_804A04F0@ha
+  5198:    addi    r3,r3,mn_804A04F0@l
+  519c:    lhz     r0,2(r3)
+r 51a0:    addi    r25,r3,2
+  51a4:    srawi.  r3,r0,8
+  51a8:    ble     51d4 ~>
+r 51ac:    addi    r26,r3,-1
+r 51b0:    cmpw    r27,r26
+  51b4:    ble     51d4 ~>
+  51b8:    li      r3,2
+  51bc:    bl      lbAudioAx_80024030
+r 51c0:    lhz     r0,0(r25)
+  51c4:    clrlwi  r0,r0,0x18
+r 51c8:    rlwimi  r0,r26,8,0,0x17
+r 51cc:    sth     r0,0(r25)
+  51d0:    b       5418 ~>
+r 51d4: ~> cmpwi   r27,7
+  51d8:    ble     5418 ~>
+  51dc:    lhz     r0,0x3c(r31)
+r 51e0:    srawi   r25,r0,8
+r 51e4:    addi    r28,r25,0
+> 51e8:    addi    r26,r28,0
+r 51ec:    add     r27,r30,r28
+r 51f0: ~> addic.  r28,r28,-1
+r 51f4:    addi    r27,r27,-1
+  51f8:    bge     5204 ~>
+r 51fc:    clrlwi  r0,r26,0x18
+  5200:    b       5218 ~>
+r 5204: ~> lbz     r3,0(r27)
+  5208:    bl      mn_IsFighterUnlocked
+  520c:    cmpwi   r3,0
+  5210:    beq     51f0 ~>
+r 5214:    clrlwi  r0,r28,0x18
+r 5218: ~> clrlwi  r26,r0,0x18
+r 521c:    cmpw    r25,r26
+  5220:    beq     5418 ~>
+  5224:    li      r3,2
+  5228:    bl      lbAudioAx_80024030
+  522c:    lhz     r0,0x3c(r31)
+  5230:    clrlwi  r0,r0,0x18
+r 5234:    rlwimi  r0,r26,8,0,0x17
+  5238:    sth     r0,0x3c(r31)
+> 523c:    lwz     r25,mnDiagram_804D6C10@sda21(0)
+  5240:    lhz     r0,0x3c(r31)
+| 5244:    lwz     r26,0x2c(r25)
+> 5248:    addi    r3,r25,0
+r 524c:    clrlwi  r27,r0,0x18
+r 5250:    srawi   r28,r0,8
+i 5254:    bl      mnDiagram_80241668
+> 5258:    lbz     r0,0x44(r26)
+> 525c:    addi    r3,r25,0
+> 5260:    addi    r4,r27,0
+> 5264:    subfic  r0,r0,1
+> 5268:    cntlzw  r0,r0
+> 526c:    addi    r5,r28,0
+> 5270:    rlwinm  r6,r0,0x1b,0x18,0x1f
+> 5274:    bl      mnDiagram_8024227C
+> 5278:    lbz     r0,0x44(r26)
+> 527c:    cmplwi  r0,0
+> 5280:    bne     5298 ~>
+> 5284:    addi    r3,r25,0
+> 5288:    addi    r4,r27,0
+> 528c:    addi    r5,r28,0
+> 5290:    bl      mnDiagram_80242C0C
+  5294:    b       5418 ~>
+> 5298: ~> addi    r3,r25,0
+> 529c:    addi    r4,r27,0
+> 52a0:    addi    r5,r28,0
+> 52a4:    bl      mnDiagram_802427B4
+> 52a8:    b       5418 ~>
+  52ac: ~> rlwinm. r0,r28,0,0x1c,0x1c
+  52b0:    beq     5418 ~>
+  52b4:    lis     r3,mn_804A04F0@ha
+  52b8:    addi    r3,r3,mn_804A04F0@l
+r 52bc:    addi    r25,r3,2
+  52c0:    lhz     r0,2(r3)
+  52c4:    srawi   r3,r0,8
+  52c8:    cmpwi   r3,6
+  52cc:    bge     52f8 ~>
+r 52d0:    addi    r26,r3,1
+r 52d4:    cmpw    r27,r26
+  52d8:    ble     52f8 ~>
+  52dc:    li      r3,2
+  52e0:    bl      lbAudioAx_80024030
+r 52e4:    lhz     r0,0(r25)
+  52e8:    clrlwi  r0,r0,0x18
+r 52ec:    rlwimi  r0,r26,8,0,0x17
+r 52f0:    sth     r0,0(r25)
+  52f4:    b       5418 ~>
+r 52f8: ~> cmpwi   r27,7
+  52fc:    ble     5418 ~>
+  5300:    lhz     r0,0x3c(r31)
+r 5304:    srawi   r25,r0,8
+| 5308:    addi    r29,r25,0
+r 530c:    addi    r26,r25,0
+| 5310:    add     r27,r30,r25
+r 5314: ~> addi    r25,r25,1
+r 5318:    cmpwi   r25,0x19
+r 531c:    addi    r27,r27,1
+  5320:    blt     532c ~>
+r 5324:    clrlwi  r0,r26,0x18
+  5328:    b       5340 ~>
+r 532c: ~> lbz     r3,0(r27)
+  5330:    bl      mn_IsFighterUnlocked
+  5334:    cmpwi   r3,0
+  5338:    beq     5314 ~>
+r 533c:    clrlwi  r0,r25,0x18
+r 5340: ~> clrlwi  r25,r0,0x18
+> 5344:    add     r28,r30,r29
+r 5348:    li      r26,7
+< 
+< 
+< 
+< 
+r 534c: ~> mr      r27,r28
+r 5350: ~> addi    r29,r29,1
+r 5354:    cmpwi   r29,0x19
+r 5358:    addi    r27,r27,1
+r 535c:    addi    r28,r28,1
+  5360:    blt     536c ~>
+r 5364:    li      r0,0x19
+  5368:    b       5388 ~>
+r 536c: ~> lbz     r3,0(r27)
+  5370:    bl      mn_IsFighterUnlocked
+  5374:    cmpwi   r3,0
+  5378:    beq     5350 ~>
+r 537c:    addic.  r26,r26,-1
+> 5380:    bgt     534c ~>
+| 5384:    lbzx    r0,r30,r29
+r 5388: ~> clrlwi  r0,r0,0x18
+  538c:    cmplwi  r0,0x19
+  5390:    beq     5418 ~>
+  5394:    li      r3,2
+  5398:    bl      lbAudioAx_80024030
+  539c:    lhz     r0,0x3c(r31)
+  53a0:    clrlwi  r0,r0,0x18
+r 53a4:    rlwimi  r0,r25,8,0,0x17
+  53a8:    sth     r0,0x3c(r31)
+> 53ac:    lwz     r25,mnDiagram_804D6C10@sda21(0)
+  53b0:    lhz     r0,0x3c(r31)
+| 53b4:    lwz     r26,0x2c(r25)
+> 53b8:    addi    r3,r25,0
+r 53bc:    clrlwi  r27,r0,0x18
+r 53c0:    srawi   r28,r0,8
+> 53c4:    bl      mnDiagram_80241668
+> 53c8:    lbz     r0,0x44(r26)
+> 53cc:    addi    r3,r25,0
+> 53d0:    addi    r4,r27,0
+> 53d4:    subfic  r0,r0,1
+> 53d8:    cntlzw  r0,r0
+> 53dc:    addi    r5,r28,0
+> 53e0:    rlwinm  r6,r0,0x1b,0x18,0x1f
+> 53e4:    bl      mnDiagram_8024227C
+> 53e8:    lbz     r0,0x44(r26)
+> 53ec:    cmplwi  r0,0
+> 53f0:    bne     5408 ~>
+> 53f4:    addi    r3,r25,0
+> 53f8:    addi    r4,r27,0
+> 53fc:    addi    r5,r28,0
+> 5400:    bl      mnDiagram_80242C0C
+> 5404:    b       5418 ~>
+> 5408: ~> addi    r3,r25,0
+> 540c:    addi    r4,r27,0
+> 5410:    addi    r5,r28,0
+i 5414:    bl      mnDiagram_802427B4
+r 5418: ~> lmw     r25,0x4c(r1)
+s 541c:    lwz     r0,0x6c(r1)
+i 5420:    addi    r1,r1,0x68
+  5424:    mtlr    r0
+  5428:    blr     

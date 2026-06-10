@@ -7063,17 +7063,29 @@ def remote_status(
 
 
 @remote_app.command(name="triage")
-def remote_triage() -> None:
+def remote_triage(
+    function: Annotated[
+        Optional[str],
+        typer.Option("--function", "-f", help="Only summarize jobs for this function."),
+    ] = None,
+    timeout: Annotated[
+        float,
+        typer.Option("--timeout", help="Per-job remote status/log probe timeout in seconds."),
+    ] = 30.0,
+) -> None:
     """Summarize all local remote permuter jobs for convergence triage."""
     try:
         jobs = permuter_remote.list_jobs(permuter_remote.JOBS_DIR)
     except permuter_remote.RemoteJobError as exc:
         _remote_error(exc)
+    if function is not None:
+        jobs = [job for job in jobs if job.function == function]
 
     print("fn\tjob\tstate\titers\tglobal-min\tlatest\tmatch\toutput\tverdict")
     for job in jobs:
-        status = permuter_remote.status_job(job)
-        log_status = permuter_remote.remote_log_status(job)
+        typer.echo(f"[remote-triage] probing {job.job_id}", err=True)
+        status = _remote_status_job_for_triage(job, timeout=timeout)
+        log_status = _remote_log_status_for_triage(job, timeout=timeout)
         iters = (
             str(log_status.latest_iteration)
             if log_status.latest_iteration is not None
@@ -7100,6 +7112,32 @@ def remote_triage() -> None:
             typer.echo(f"{job.job_id}: {status.detail}", err=True)
         if log_status.detail:
             typer.echo(f"{job.job_id}: {log_status.detail}", err=True)
+
+
+def _remote_status_job_for_triage(
+    job: permuter_remote.RemoteJob,
+    *,
+    timeout: float,
+) -> permuter_remote.RemoteStatus:
+    try:
+        return permuter_remote.status_job(job, timeout=timeout)
+    except TypeError as exc:
+        if "timeout" not in str(exc):
+            raise
+        return permuter_remote.status_job(job)
+
+
+def _remote_log_status_for_triage(
+    job: permuter_remote.RemoteJob,
+    *,
+    timeout: float,
+) -> permuter_remote.RemoteLogStatus:
+    try:
+        return permuter_remote.remote_log_status(job, timeout=timeout)
+    except TypeError as exc:
+        if "timeout" not in str(exc):
+            raise
+        return permuter_remote.remote_log_status(job)
 
 
 @remote_app.command(name="fetch")
@@ -18499,7 +18537,7 @@ def suggest_inlines_cmd(
         str,
         typer.Option(
             "--seed-source",
-            help="Candidate seed source: all, repeated, guide, coalesce, or patterns.",
+            help="Candidate seed source: all, repeated, guide, coalesce, patterns, or duplicate-block.",
         ),
     ] = "all",
     budget: Annotated[
@@ -18585,9 +18623,9 @@ def suggest_inlines_cmd(
     ] = False,
 ) -> None:
     """Suggest hidden inline/helper/source-shape candidates."""
-    if seed_source not in {"all", "repeated", "guide", "coalesce", "patterns"}:
+    if seed_source not in {"all", "repeated", "guide", "coalesce", "patterns", "duplicate-block"}:
         raise typer.BadParameter(
-            "--seed-source must be one of: all, repeated, guide, coalesce, patterns"
+            "--seed-source must be one of: all, repeated, guide, coalesce, patterns, duplicate-block"
         )
     if apply_best and not verify:
         typer.echo("--apply-best requires --verify", err=True)

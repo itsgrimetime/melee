@@ -1,0 +1,60 @@
+# Permuter config for mnDiagram_802417D0 — DECLARATION ORDER ONLY
+#
+# Data from 6+ hours / 290 candidates across 2 runs:
+#   - 82% of candidates are preamble-only noise (zero body changes)
+#   - The only productive pass is perm_reorder_decls (declaration reordering)
+#   - All other passes produce garbage: volatile pads, self-assignments,
+#     dead if-blocks, broken expressions (x * 0, chained & 0xFF masks)
+#   - Best genuine improvement: 3 decls reordered → 450→395 (delta 55)
+#
+# Strategy: zero-weight every pass except perm_reorder_decls.
+# Pure exploration of the 11! ≈ 40M declaration orderings.
+# No combinatorial garbage combos wasting iterations.
+
+compiler_type = "mwcc"
+compiler_command = "build/tools/wibo build/tools/sjiswrap.exe build/compilers/GC/1.2.5n/mwcceppc.exe -nowraplines -cwd source -Cpp_exceptions off -proc gekko -fp hardware -align powerpc -nosyspath -fp_contract on -O4,p -multibyte -enum int -nodefaults -inline auto -pragma 'cats off' -pragma 'warn_notinlined off' -RTTI off -str reuse -DBUILD_VERSION=0 -DVERSION_GALE01 -maxerrors 1 -msgstyle std -warn off -warn iserror -i src -i src/MSL -i src/Runtime -i extern/dolphin/include -i src/melee -i src/melee/ft/chara -i src/sysdolphin -lang=c -c"
+assembler_command = "/opt/devkitpro/devkitPPC/bin/powerpc-eabi-as -mgekko"
+asm_prelude_file = "nonmatchings/prelude_ppc.inc"
+asm_pattern = "/src/ -> /build/GALE01/asm/"
+
+[randomize_funcs]
+"mnDiagram_802417D0" = true
+
+[weight_overrides]
+# This is the ONLY pass that produced genuine improvements.
+# 11 locals × 11! orderings = massive search space.
+perm_reorder_decls = 100.0
+
+# Everything else zeroed — proven to produce only garbage for this function.
+perm_dummy_comma_expr = 0.0
+perm_split_assignment = 0.0
+perm_duplicate_assignment = 0.0
+perm_pad_var_decl = 0.0
+perm_add_self_assignment = 0.0
+perm_randomize_internal_type = 0.0
+perm_cast_simple = 0.0
+perm_inline = 0.0
+perm_temp_for_expr = 0.0
+perm_chain_assignment = 0.0
+perm_long_chain_assignment = 0.0
+perm_randomize_external_type = 0.0
+perm_randomize_function_type = 0.0
+perm_reorder_stmts = 0.0
+perm_condition = 0.0
+perm_add_mask = 0.0
+perm_xor_zero = 0.0
+perm_refer_to_var = 0.0
+perm_empty_stmt = 0.0
+perm_ins_block = 0.0
+perm_mult_zero = 0.0
+perm_factor_mult = 0.0
+perm_factor_shift = 0.0
+perm_commutative = 0.0
+perm_add_sub = 0.0
+perm_inequalities = 0.0
+perm_compound_assignment = 0.0
+perm_remove_ast = 0.0
+perm_sameline = 0.0
+perm_struct_ref = 0.0
+perm_float_literal = 0.0
+perm_expand_expr = 0.0

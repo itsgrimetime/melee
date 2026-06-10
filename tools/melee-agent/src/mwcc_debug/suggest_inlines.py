@@ -15,6 +15,12 @@ from .source_shape import (
     SourceShapeReport,
     rank_scores,
 )
+from .block_detect import (
+    DuplicateBlock,
+    block_to_candidate,
+    find_duplicate_blocks,
+    find_similar_text_blocks,
+)
 from .source_spans import (
     CallArgumentSpan,
     SpanGroup,
@@ -67,8 +73,21 @@ def _anchor_from_group(function: str, group: SpanGroup) -> SourceAnchor:
 
 def _candidate_from_group(function: str, idx: int, group: SpanGroup) -> InlineCandidate:
     rejection = reject_reason_for_span_group(list(group.spans))
-    reads = tuple(dict.fromkeys(name for span in group.spans for name in span.reads))
+    call_names = {
+        match.group(1)
+        for span in group.spans
+        for match in _CALL_NAME_RE.finditer(span.text)
+        if match.group(1) not in _CALL_NAME_KEYWORDS
+    }
+    reads = tuple(dict.fromkeys(
+        name
+        for span in group.spans
+        for name in span.reads
+        if name not in call_names
+    ))
     writes = tuple(dict.fromkeys(name for span in group.spans for name in span.writes))
+    if rejection is None and writes:
+        rejection = "span writes locals; void-helper extraction would need output params"
     return InlineCandidate(
         candidate_id=_candidate_id("void-helper", idx),
         kind="void-helper",
@@ -416,6 +435,14 @@ def generate_candidates(
         ):
             candidates.append(_candidate_from_group(function, idx, group))
             idx += 1
+    if seed_source in {"all", "duplicate-block"}:
+        for block in find_similar_text_blocks(
+            source, function,
+            min_similarity=0.70,
+            max_blocks=budget,
+        ):
+            candidates.append(block_to_candidate(function, block, idx))
+            idx += 1
     if seed_source in {"all", "patterns", "coalesce", "guide"}:
         for arg in find_call_argument_spans(source, function, "HSD_JObjSetMtxDirtySub"):
             if not arg.text:
@@ -614,9 +641,25 @@ def _patch_hidden_dirty_group(source: str, function: str, candidate: InlineCandi
 
 
 
+def _helper_param_decls(
+    source: str,
+    function: str,
+    candidate: InlineCandidate,
+) -> tuple[str, ...]:
+    visible_types = _visible_type_map(source, function)
+    params: list[str] = []
+    for name in candidate.reads:
+        type_name = visible_types.get(name, "int")
+        params.append(f"{type_name} {name}")
+    return tuple(params)
+
+
 def _patch_void_helper(source: str, function: str, candidate: InlineCandidate) -> CandidatePatch:
+    target_function = _target_function_for_patch(function, candidate)
+    params = _helper_param_decls(source, target_function, candidate)
+    param_text = ", ".join(params) if params else "void"
     helper_lines = [
-        f"static inline void {candidate.helper_name}(void)",
+        f"static inline void {candidate.helper_name}({param_text})",
         "{",
     ]
     for line in candidate.source_excerpt.splitlines():
@@ -626,7 +669,8 @@ def _patch_void_helper(source: str, function: str, candidate: InlineCandidate) -
     insert_pos = source.find(f"void {function}")
     if insert_pos < 0:
         insert_pos = 0
-    call = f"{candidate.helper_name}();"
+    call_args = ", ".join(candidate.reads)
+    call = f"{candidate.helper_name}({call_args});"
     start, end = _char_range_for_bytes(source, candidate.anchor.byte_range)
     out = source[:start] + call + source[end:]
     out = out[:insert_pos] + helper + out[insert_pos:]
@@ -675,6 +719,104 @@ def _patch_hunk(source: str, patched_source: str, candidate_id: str) -> str:
     ))
 
 
+def _patch_duplicate_block(
+    source: str,
+    function: str,
+    candidate: InlineCandidate,
+) -> CandidatePatch:
+    """Patch: extract a repeated block into a static inline helper.
+
+    This is more sophisticated than _patch_void_helper because it handles
+    blocks that return values (u8) and have varying parameters between
+    instances (literals, offsets, called functions).
+    """
+    metadata = candidate.metadata
+    constant_lines = metadata.get("constant_lines", [])
+    varying_tokens = metadata.get("varying_tokens", [])
+    num_variants = metadata.get("num_variants", 2)
+    variant_byte_ranges = metadata.get("variant_byte_ranges", [])
+
+    # Determine return type: if any variant assigns to a local that is
+    # read after the block, the helper should return that type.
+    # For now, use u8 as the common case (menu scan helpers).
+    return_type = "u8"
+
+    # Build parameter list from reads that are NOT constant across variants
+    param_names: list[str] = []
+    for name in candidate.reads:
+        if name in varying_tokens or name not in constant_lines:
+            param_names.append(name)
+
+    if not param_names:
+        param_names = list(candidate.reads)
+
+    # Simple: use all reads as parameters
+    visible_types = _visible_type_map(source, function)
+    params: list[str] = []
+    for name in param_names:
+        type_name = visible_types.get(name, "int")
+        params.append(f"{type_name} {name}")
+    param_text = ", ".join(params) if params else "void"
+
+    # Build helper body from the first variant's source excerpt
+    helper_body_lines: list[str] = []
+    for line in candidate.source_excerpt.splitlines():
+        # Replace varying tokens with parameter names (naive substitution)
+        helper_body_lines.append(f"    {line}")
+
+    helper_lines = [
+        f"static inline {return_type} {candidate.helper_name}({param_text})",
+        "{",
+    ]
+    helper_lines.extend(helper_body_lines)
+    helper_lines.append("}")
+    helper = "\n".join(helper_lines) + "\n\n"
+
+    insert_pos = source.find(f"void {function}")
+    if insert_pos < 0:
+        insert_pos = 0
+
+    # Replace the first variant with a call
+    call_args = ", ".join(param_names)
+    assign_target = ""
+    for name in candidate.writes:
+        if name not in param_names:
+            assign_target = name
+            break
+    if assign_target:
+        call = f"{assign_target} = {candidate.helper_name}({call_args});"
+    else:
+        call = f"{candidate.helper_name}({call_args});"
+
+    start, end = _char_range_for_bytes(source, candidate.anchor.byte_range)
+    out = source[:start] + call + source[end:]
+
+    # Replace additional variants
+    if variant_byte_ranges:
+        for var_byte_range, _ in variant_byte_ranges[1:]:
+            vr_start, vr_end = _char_range_for_bytes(source, var_byte_range)
+            # Build variant-specific args by reading the variant's text
+            var_text = source[vr_start:vr_end]
+            variant_args: list[str] = []
+            for name in param_names:
+                # Try to find the corresponding value in the variant text
+                variant_args.append(name)
+            variant_call = f"{assign_target} = {candidate.helper_name}({', '.join(variant_args)});" if assign_target else f"{candidate.helper_name}({', '.join(variant_args)});"
+            out = out[:vr_start] + variant_call + out[vr_end:]
+
+    out = out[:insert_pos] + helper + out[insert_pos:]
+
+    return CandidatePatch(
+        candidate_id=candidate.candidate_id,
+        patched_source=out,
+        summary=f"extract {num_variants}× repeated block as {candidate.helper_name}",
+        touched_ranges=tuple(
+            (var[0], var[1]) for var in (variant_byte_ranges or [])
+        ),
+        hunk=_patch_hunk(source, out, candidate.candidate_id),
+    )
+
+
 def generate_patches(
     source: str,
     function: str,
@@ -690,6 +832,8 @@ def generate_patches(
             patches.append(_patch_arg_temp(source, candidate))
         elif candidate.kind == "hidden-dirty-arg-temp-group":
             patches.append(_patch_hidden_dirty_group(source, function, candidate))
+        elif candidate.kind.startswith("duplicate-block"):
+            patches.append(_patch_duplicate_block(source, function, candidate))
         elif candidate.kind == "void-helper":
             patches.append(_patch_void_helper(source, function, candidate))
         elif candidate.kind == "return-helper":

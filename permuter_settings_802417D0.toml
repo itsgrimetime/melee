@@ -1,0 +1,55 @@
+# Permuter config for mnDiagram_802417D0
+# Pure register-coloring ceiling (58 reg-only diffs, 99.5% opcode similarity)
+# Callee-save cascade: r31->r30->r29->r28->r27->r26->r25 (7 regs)
+# Key targets: r50=r35 (ptr↔count), r35=r60, r40=r58 (cross-path coalesces)
+# Goal: perturb MWCC's callee-save register allocation interference graph
+
+compiler_type = "mwcc"
+compiler_command = "build/tools/wibo build/tools/sjiswrap.exe build/compilers/GC/1.2.5n/mwcceppc.exe -nowraplines -cwd source -Cpp_exceptions off -proc gekko -fp hardware -align powerpc -nosyspath -fp_contract on -O4,p -multibyte -enum int -nodefaults -inline auto -pragma 'cats off' -pragma 'warn_notinlined off' -RTTI off -str reuse -DBUILD_VERSION=0 -DVERSION_GALE01 -maxerrors 1 -msgstyle std -warn off -warn iserror -i src -i src/MSL -i src/Runtime -i extern/dolphin/include -i src/melee -i src/melee/ft/chara -i src/sysdolphin -lang=c -c"
+assembler_command = "/opt/devkitpro/devkitPPC/bin/powerpc-eabi-as -mgekko"
+asm_prelude_file = "nonmatchings/prelude_ppc.inc"
+asm_pattern = "/src/ -> /build/GALE01/asm/"
+
+# Only permute this function
+[randomize_funcs]
+"mnDiagram_802417D0" = true
+
+[weight_overrides]
+# PRIMARY: reorder declarations to shift callee-save register cascade
+# 11 locals: result2, data, tbl, jobj, sorted, i, ptr, ptr2, count, result, jobj2
+perm_reorder_decls = 45.0
+
+# Comma expressions perturb register binding (proven on sibling 802427B4)
+perm_dummy_comma_expr = 25.0
+
+# Split assignments to create intermediate virtual regs with new interference
+perm_split_assignment = 15.0
+
+# Duplicate assignments to introduce copy/identity edges (helps coalescing)
+perm_duplicate_assignment = 12.0
+
+# Pad declarations to slide the entire callee-save cascade
+perm_pad_var_decl = 12.0
+
+# Self-assignments change liveness ranges without changing semantics
+perm_add_self_assignment = 12.0
+
+# s32↔int changes register class assignment in MWCC's allocator
+perm_randomize_internal_type = 10.0
+
+# Casts perturb register type expectations
+perm_cast_simple = 10.0
+
+# Inline helpers constrain register pressure at call site
+perm_inline = 8.0
+
+# Extract temps to create new interference edges
+perm_temp_for_expr = 8.0
+
+# Chain assignments create copy edges
+perm_chain_assignment = 6.0
+perm_long_chain_assignment = 4.0
+
+# Lower-priority: type perturbation
+perm_randomize_external_type = 4.0
+perm_randomize_function_type = 3.0
