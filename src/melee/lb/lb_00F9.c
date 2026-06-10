@@ -70,6 +70,11 @@ const struct {
     0.0f,
 };
 
+char lb_803BA150[] = "active deffect:\0[NULL]\n\n\0\0\0\0"
+                      "free deffect:\0\0\0[NULL]\n\n\n\0\0\0"
+                      "translate\0\0\0"
+                      "!(jobj->flags & JOBJ_USE_QUATERNION)\0\0\0\0\0\0";
+
 lb_803BA248_fn lb_803BA248[] = {
     lb_80013BB0, lb_80013BB8, lb_80013BE4, lb_80013C18, lb_80013D68,
     lb_80013E3C, lb_80013F78, lb_80013FF0, lb_80014014, lb_800140F8,
@@ -398,7 +403,7 @@ void lb_8001044C(DynamicsDesc* desc, void* colliders_raw, int num_colliders,
     Vec3 cross_vec, local_axis;
     Vec3 gnd_norm;
     Quaternion angle_quat, euler_quat, result_quat;
-    Vec3 euler_angles;
+    Quaternion euler_angles;
     Vec3 collision_point;
     Vec3 floor_point, floor_normal;
     int line_id;
@@ -416,6 +421,7 @@ void lb_8001044C(DynamicsDesc* desc, void* colliders_raw, int num_colliders,
     struct lb_Collider* collider;
     s32 on_ground;
     s32 idx;
+    s32 skip_count;
 
     if ((u8) lb_804D63B8 != 0) {
         return;
@@ -434,9 +440,9 @@ void lb_8001044C(DynamicsDesc* desc, void* colliders_raw, int num_colliders,
 
     on_ground = 0;
     idx = 0;
+    skip_count = 0;
 
     if ((s32) part > 0) {
-        s32 skip_count = 0;
         s32 rem8 = (s32) part - 8;
         if ((s32) part > 8) {
             s32 n = (u32) (rem8 + 7) >> 3;
@@ -452,6 +458,7 @@ void lb_8001044C(DynamicsDesc* desc, void* colliders_raw, int num_colliders,
             s32 rem = (s32) part - skip_count;
             do {
                 cur = cur->next;
+                idx++;
                 skip_count++;
             } while (--rem);
         }
@@ -525,10 +532,7 @@ void lb_8001044C(DynamicsDesc* desc, void* colliders_raw, int num_colliders,
 
             /* Apply stiffness blend toward natural direction */
             if (cur->desc.lb_unk0.unk_4C * desc->pos.x < 1.0f) {
-                f32 stiff_angle = lbVector_Angle(&link_dir, &current_dir);
-                if (stiff_angle < 0.0f) {
-                    stiff_angle = -stiff_angle;
-                }
+                f32 stiff_angle = ABS(lbVector_Angle(&link_dir, &current_dir));
                 if (stiff_angle != 0.0f) {
                     PSVECCrossProduct(&link_dir, &current_dir, &cross_vec);
                     lbVector_Normalize(&cross_vec);
@@ -880,14 +884,11 @@ void lb_8001044C(DynamicsDesc* desc, void* colliders_raw, int num_colliders,
                 euler_angles.x = jobj->rotate.x;
                 euler_angles.y = jobj->rotate.y;
                 euler_angles.z = jobj->rotate.z;
-                EulerToQuat(&euler_angles, &euler_quat);
+                EulerToQuat((Vec3*) &euler_angles, &euler_quat);
                 HSD_QuatLib_8037EC4C(&angle_quat, &euler_quat, &result_quat);
                 PSMTXQuat(bone_mtx, &result_quat);
-                HSD_QuatLib_8037EB28(bone_mtx, &euler_angles);
-                HSD_JObjSetRotation(jobj, &euler_quat);
-                if (!(jobj->flags & JOBJ_MTX_INDEP_SRT)) {
-                    HSD_JObjSetMtxDirty(jobj);
-                }
+                HSD_QuatLib_8037EB28(bone_mtx, (Vec3*) &euler_angles);
+                HSD_JObjSetRotation(jobj, &euler_angles);
                 HSD_JObjClearFlagsAll(jobj, 0x20000U);
             }
         }
@@ -1188,20 +1189,19 @@ void lb_80011C18(HSD_JObj* jobj, u32 flags)
 int lb_80011E24(HSD_JObj* root, HSD_JObj** result, ...)
 {
     va_list ap;
-    HSD_JObj** out;
+    int found;
+    int prev;
     HSD_JObj* jobj;
     HSD_JObj* saved;
     HSD_JObj* next_node;
-    int found;
-    int prev;
     int cur;
     s32 target;
+    PAD_STACK(4);
 
-    out = result;
     found = 0;
     prev = -1;
 
-    if (root == NULL || out == NULL) {
+    if (root == NULL || result == NULL) {
         return 0;
     }
 
@@ -1236,7 +1236,7 @@ int lb_80011E24(HSD_JObj* root, HSD_JObj** result, ...)
                         break;
                     }
                     if (HSD_JObjGetNext(HSD_JObjGetParent(saved)) != NULL) {
-                        next_node = HSD_JObjGetNext(HSD_JObjGetParent(saved));
+                        next_node = saved = HSD_JObjGetNext(HSD_JObjGetParent(saved));
                         break;
                     }
                     saved = HSD_JObjGetParent(saved);
@@ -1246,9 +1246,9 @@ int lb_80011E24(HSD_JObj* root, HSD_JObj** result, ...)
             cur++;
         }
 
-        *out = jobj;
+        *result = jobj;
         prev = cur;
-        out++;
+        result++;
         if (jobj != NULL) {
             found++;
         }
@@ -1519,10 +1519,10 @@ void lb_80012994(HSD_ImageDesc* img, u8 alpha, u8 blur_size, f32 x, f32 y,
     GXColor color;
     u16 w = img->width;
     u16 h = img->height;
-    f32 off1 = (f32) blur_size * 0.015625f;
-    f32 off2 = 2.0f * off1;
     f32 x_p1, x_m1, y_p1, y_m1;
     f32 x_p2, x_m2, y_p2, y_m2;
+    f32 off1 = (f32) blur_size / 64.0f;
+    f32 off2 = 2.0f * off1;
 
     lb_800122F0(img, &tex, color_factor);
     PAD_STACK(88);
@@ -1716,8 +1716,8 @@ void fn_80013614(HSD_GObj* gobj)
     struct CameraBlurData* data = gobj->user_data;
     Mtx view_mtx;
     Mtx view_mtx2;
-    GXTexObj tex_obj;
     GXColor color;
+    GXTexObj tex_obj;
     PAD_STACK(16);
 
     if (data->x18 != NULL) {
@@ -1726,14 +1726,23 @@ void fn_80013614(HSD_GObj* gobj)
 
     if (data->x12 == 1) {
         HSD_CObj* cobj = (HSD_CObj*) gobj->hsd_obj;
-        f32 alpha = data->x20;
-        u8 x11 = data->x11;
-        u8 x10 = data->x10;
-        f32 xC = data->xC;
-        f32 x8 = data->x8;
-        f32 x4 = data->x4;
-        f32 x0 = data->x0;
-        HSD_ImageDesc* image = data->x1C;
+        HSD_ImageDesc* image;
+        f32 x0;
+        f32 x4;
+        f32 x8;
+        f32 xC;
+        u8 x10;
+        u8 x11;
+        f32 alpha;
+
+        alpha = data->x20;
+        x11 = data->x11;
+        x10 = data->x10;
+        xC = data->xC;
+        x8 = data->x8;
+        x4 = data->x4;
+        x0 = data->x0;
+        image = data->x1C;
 
         HSD_CObjSetCurrent(cobj);
         HSD_StateSetZMode(0, 7, 0);
@@ -1753,14 +1762,21 @@ void fn_80013614(HSD_GObj* gobj)
         lb_80012994(image, x10, x11, x0, x4, x8, xC, alpha);
     } else {
         HSD_CObj* cobj = (HSD_CObj*) gobj->hsd_obj;
-        u8 x10 = data->x10;
-        f32 xC = data->xC;
-        f32 x8 = data->x8;
-        f32 x4 = data->x4;
-        f32 x0 = data->x0;
-        HSD_ImageDesc* image = data->x1C;
+        HSD_ImageDesc* image;
+        f32 x0;
+        f32 x4;
+        f32 x8;
+        f32 xC;
+        u8 x10;
         u16 width;
         u16 height;
+
+        x10 = data->x10;
+        xC = data->xC;
+        x8 = data->x8;
+        x4 = data->x4;
+        x0 = data->x0;
+        image = data->x1C;
 
         HSD_CObjSetCurrent(cobj);
         HSD_StateSetZMode(0, 7, 0);

@@ -925,91 +925,37 @@ s32 fn_80161154(MatchEnd* arg0)
     MatchPlayerData* var_r31;
     s32 idx;
     s32 cnt;
+    MatchPlayerData* player;
+    s32 i;
     s32 var_r3 = fn_80161004(arg0);
 
     idx = 4;
     cnt = 0;
     if (arg0->is_teams == 1) {
-        if (arg0->player_standings[0].slot_type != 3 &&
-            arg0->team_standings[arg0->player_standings[0].team].is_big_loser ==
-                var_r3) {
-            spC[0] = 1;
-            cnt = 1;
-            idx = 0;
-        } else {
-            spC[0] = 0;
-        }
-        if (arg0->player_standings[1].slot_type != 3 &&
-            arg0->team_standings[arg0->player_standings[1].team].is_big_loser ==
-                var_r3) {
-            spC[1] = 1;
-            cnt = 1;
-            idx = 1;
-        } else {
-            spC[1] = 0;
-        }
-        if (arg0->player_standings[2].slot_type != 3 &&
-            arg0->team_standings[arg0->player_standings[2].team].is_big_loser ==
-                var_r3) {
-            spC[2] = 1;
-            cnt = 1;
-            idx = 2;
-        } else {
-            spC[2] = 0;
-        }
-        if (arg0->player_standings[3].slot_type != 3 &&
-            arg0->team_standings[arg0->player_standings[3].team].is_big_loser ==
-                var_r3) {
-            spC[3] = 1;
-            cnt = 1;
-            idx = 3;
-        } else {
-            spC[3] = 0;
+        for (i = 0; i < 4; i++) {
+            player = &arg0->player_standings[i];
+            if (player->slot_type != 3 &&
+                arg0->team_standings[player->team].is_big_loser == var_r3) {
+                spC[i] = 1;
+                cnt = 1;
+                idx = i;
+            } else {
+                spC[i] = 0;
+            }
         }
     } else {
-        if (arg0->player_standings[0].slot_type != 3 &&
-            arg0->player_standings[0].is_big_loser == var_r3) {
-            if (idx != 4) {
-                cnt = 1;
+        for (i = 0; i < 4; i++) {
+            player = &arg0->player_standings[i];
+            if (player->slot_type != 3 && player->is_big_loser == var_r3) {
+                if (idx != 4) {
+                    cnt = 1;
+                } else {
+                    idx = i;
+                }
+                spC[i] = 1;
             } else {
-                idx = 0;
+                spC[i] = 0;
             }
-            spC[0] = 1;
-        } else {
-            spC[0] = 0;
-        }
-        if (arg0->player_standings[1].slot_type != 3 &&
-            arg0->player_standings[1].is_big_loser == var_r3) {
-            if (idx != 4) {
-                cnt = 1;
-            } else {
-                idx = 1;
-            }
-            spC[1] = 1;
-        } else {
-            spC[1] = 0;
-        }
-        if (arg0->player_standings[2].slot_type != 3 &&
-            arg0->player_standings[2].is_big_loser == var_r3) {
-            if (idx != 4) {
-                cnt = 1;
-            } else {
-                idx = 2;
-            }
-            spC[2] = 1;
-        } else {
-            spC[2] = 0;
-        }
-        if (arg0->player_standings[3].slot_type != 3 &&
-            arg0->player_standings[3].is_big_loser == var_r3) {
-            if (idx != 4) {
-                cnt = 1;
-            } else {
-                idx = 3;
-            }
-            spC[3] = 1;
-        } else {
-            spC[3] = 0;
         }
     }
     if (cnt == 0) {
@@ -1017,69 +963,26 @@ s32 fn_80161154(MatchEnd* arg0)
     }
 
     idx = 4;
-    if (spC[0]) {
-        if (idx == 4) {
-            idx = 0;
-        } else if (arg0->player_standings[idx].x20 >
-                   arg0->player_standings[0].x20) {
-            idx = 0;
+    for (i = 0; i < 4; i++) {
+        if (spC[i]) {
+            player = &arg0->player_standings[i];
+            if (idx == 4 ||
+                (u32) arg0->player_standings[idx].x20 > (u32) player->x20)
+            {
+                idx = i;
+            }
+            var_r31 = &arg0->player_standings[idx];
         }
-        var_r31 = &arg0->player_standings[idx];
-    }
-    if (spC[1]) {
-        if (idx == 4) {
-            idx = 1;
-        } else if (arg0->player_standings[idx].x20 >
-                   arg0->player_standings[1].x20) {
-            idx = 1;
-        }
-        var_r31 = &arg0->player_standings[idx];
-    }
-    if (spC[2]) {
-        if (idx == 4) {
-            idx = 2;
-        } else if (arg0->player_standings[idx].x20 >
-                   arg0->player_standings[2].x20) {
-            idx = 2;
-        }
-        var_r31 = &arg0->player_standings[idx];
-    }
-    if (spC[3]) {
-        if (idx == 4) {
-            idx = 3;
-        } else if (arg0->player_standings[idx].x20 >
-                   arg0->player_standings[3].x20) {
-            idx = 3;
-        }
-        var_r31 = &arg0->player_standings[idx];
     }
     cnt = 0;
-    if (spC[0] && idx != 0) {
-        if (arg0->player_standings[0].x20 == var_r31->x20) {
-            cnt = 1;
-        } else {
-            spC[0] = 0;
-        }
-    }
-    if (spC[1] && idx != 1) {
-        if (arg0->player_standings[1].x20 == var_r31->x20) {
-            cnt += 1;
-        } else {
-            spC[1] = 0;
-        }
-    }
-    if (spC[2] && idx != 2) {
-        if (arg0->player_standings[2].x20 == var_r31->x20) {
-            cnt += 1;
-        } else {
-            spC[2] = 0;
-        }
-    }
-    if (spC[3] && idx != 3) {
-        if (arg0->player_standings[3].x20 == var_r31->x20) {
-            cnt += 1;
-        } else {
-            spC[3] = 0;
+    for (i = 0; i < 4; i++) {
+        if (spC[i] && idx != i) {
+            player = &arg0->player_standings[i];
+            if ((u32) player->x20 == (u32) var_r31->x20) {
+                cnt += 1;
+            } else {
+                spC[i] = 0;
+            }
         }
     }
     if (cnt == 0) {
@@ -1087,69 +990,26 @@ s32 fn_80161154(MatchEnd* arg0)
     }
 
     idx = 4;
-    if (spC[0]) {
-        if (idx == 4) {
-            idx = 0;
-        } else if (arg0->player_standings[idx].x24 <
-                   arg0->player_standings[0].x24) {
-            idx = 0;
+    for (i = 0; i < 4; i++) {
+        if (spC[i]) {
+            player = &arg0->player_standings[i];
+            if (idx == 4 ||
+                (u32) arg0->player_standings[idx].x24 < (u32) player->x24)
+            {
+                idx = i;
+            }
+            var_r31 = &arg0->player_standings[idx];
         }
-        var_r31 = &arg0->player_standings[idx];
-    }
-    if (spC[1]) {
-        if (idx == 4) {
-            idx = 1;
-        } else if (arg0->player_standings[idx].x24 <
-                   arg0->player_standings[1].x24) {
-            idx = 1;
-        }
-        var_r31 = &arg0->player_standings[idx];
-    }
-    if (spC[2]) {
-        if (idx == 4) {
-            idx = 2;
-        } else if (arg0->player_standings[idx].x24 <
-                   arg0->player_standings[2].x24) {
-            idx = 2;
-        }
-        var_r31 = &arg0->player_standings[idx];
-    }
-    if (spC[3]) {
-        if (idx == 4) {
-            idx = 3;
-        } else if (arg0->player_standings[idx].x24 <
-                   arg0->player_standings[3].x24) {
-            idx = 3;
-        }
-        var_r31 = &arg0->player_standings[idx];
     }
     cnt = 0;
-    if (spC[0] && idx != 0) {
-        if (arg0->player_standings[0].x24 == var_r31->x24) {
-            cnt = 1;
-        } else {
-            spC[0] = 0;
-        }
-    }
-    if (spC[1] && idx != 1) {
-        if (arg0->player_standings[1].x24 == var_r31->x24) {
-            cnt += 1;
-        } else {
-            spC[1] = 0;
-        }
-    }
-    if (spC[2] && idx != 2) {
-        if (arg0->player_standings[2].x24 == var_r31->x24) {
-            cnt += 1;
-        } else {
-            spC[2] = 0;
-        }
-    }
-    if (spC[3] && idx != 3) {
-        if (arg0->player_standings[3].x24 == var_r31->x24) {
-            cnt += 1;
-        } else {
-            spC[3] = 0;
+    for (i = 0; i < 4; i++) {
+        if (spC[i] && idx != i) {
+            player = &arg0->player_standings[i];
+            if ((u32) player->x24 == (u32) var_r31->x24) {
+                cnt += 1;
+            } else {
+                spC[i] = 0;
+            }
         }
     }
     if (cnt == 0) {
@@ -1157,69 +1017,24 @@ s32 fn_80161154(MatchEnd* arg0)
     }
 
     idx = 4;
-    if (spC[0]) {
-        if (idx == 4) {
-            idx = 0;
-        } else if (arg0->player_standings[idx].x44 >
-                   arg0->player_standings[0].x44) {
-            idx = 0;
+    for (i = 0; i < 4; i++) {
+        if (spC[i]) {
+            player = &arg0->player_standings[i];
+            if (idx == 4 || arg0->player_standings[idx].x44 > player->x44) {
+                idx = i;
+            }
+            var_r31 = &arg0->player_standings[idx];
         }
-        var_r31 = &arg0->player_standings[idx];
-    }
-    if (spC[1]) {
-        if (idx == 4) {
-            idx = 1;
-        } else if (arg0->player_standings[idx].x44 >
-                   arg0->player_standings[1].x44) {
-            idx = 1;
-        }
-        var_r31 = &arg0->player_standings[idx];
-    }
-    if (spC[2]) {
-        if (idx == 4) {
-            idx = 2;
-        } else if (arg0->player_standings[idx].x44 >
-                   arg0->player_standings[2].x44) {
-            idx = 2;
-        }
-        var_r31 = &arg0->player_standings[idx];
-    }
-    if (spC[3]) {
-        if (idx == 4) {
-            idx = 3;
-        } else if (arg0->player_standings[idx].x44 >
-                   arg0->player_standings[3].x44) {
-            idx = 3;
-        }
-        var_r31 = &arg0->player_standings[idx];
     }
     cnt = 0;
-    if (spC[0] && idx != 0) {
-        if (arg0->player_standings[0].x44 == var_r31->x44) {
-            cnt = 1;
-        } else {
-            spC[0] = 0;
-        }
-    }
-    if (spC[1] && idx != 1) {
-        if (arg0->player_standings[1].x44 == var_r31->x44) {
-            cnt += 1;
-        } else {
-            spC[1] = 0;
-        }
-    }
-    if (spC[2] && idx != 2) {
-        if (arg0->player_standings[2].x44 == var_r31->x44) {
-            cnt += 1;
-        } else {
-            spC[2] = 0;
-        }
-    }
-    if (spC[3] && idx != 3) {
-        if (arg0->player_standings[3].x44 == var_r31->x44) {
-            cnt += 1;
-        } else {
-            spC[3] = 0;
+    for (i = 0; i < 4; i++) {
+        if (spC[i] && idx != i) {
+            player = &arg0->player_standings[i];
+            if (player->x44 == var_r31->x44) {
+                cnt += 1;
+            } else {
+                spC[i] = 0;
+            }
         }
     }
     if (cnt == 0) {
@@ -1227,69 +1042,24 @@ s32 fn_80161154(MatchEnd* arg0)
     }
 
     idx = 4;
-    if (spC[0]) {
-        if (idx == 4) {
-            idx = 0;
-        } else if (arg0->player_standings[idx].x50 <
-                   arg0->player_standings[0].x50) {
-            idx = 0;
+    for (i = 0; i < 4; i++) {
+        if (spC[i]) {
+            player = &arg0->player_standings[i];
+            if (idx == 4 || arg0->player_standings[idx].x50 < player->x50) {
+                idx = i;
+            }
+            var_r31 = &arg0->player_standings[idx];
         }
-        var_r31 = &arg0->player_standings[idx];
-    }
-    if (spC[1]) {
-        if (idx == 4) {
-            idx = 1;
-        } else if (arg0->player_standings[idx].x50 <
-                   arg0->player_standings[1].x50) {
-            idx = 1;
-        }
-        var_r31 = &arg0->player_standings[idx];
-    }
-    if (spC[2]) {
-        if (idx == 4) {
-            idx = 2;
-        } else if (arg0->player_standings[idx].x50 <
-                   arg0->player_standings[2].x50) {
-            idx = 2;
-        }
-        var_r31 = &arg0->player_standings[idx];
-    }
-    if (spC[3]) {
-        if (idx == 4) {
-            idx = 3;
-        } else if (arg0->player_standings[idx].x50 <
-                   arg0->player_standings[3].x50) {
-            idx = 3;
-        }
-        var_r31 = &arg0->player_standings[idx];
     }
     cnt = 0;
-    if (spC[0] && idx != 0) {
-        if (arg0->player_standings[0].x50 == var_r31->x50) {
-            cnt = 1;
-        } else {
-            spC[0] = 0;
-        }
-    }
-    if (spC[1] && idx != 1) {
-        if (arg0->player_standings[1].x50 == var_r31->x50) {
-            cnt += 1;
-        } else {
-            spC[1] = 0;
-        }
-    }
-    if (spC[2] && idx != 2) {
-        if (arg0->player_standings[2].x50 == var_r31->x50) {
-            cnt += 1;
-        } else {
-            spC[2] = 0;
-        }
-    }
-    if (spC[3] && idx != 3) {
-        if (arg0->player_standings[3].x50 == var_r31->x50) {
-            cnt += 1;
-        } else {
-            spC[3] = 0;
+    for (i = 0; i < 4; i++) {
+        if (spC[i] && idx != i) {
+            player = &arg0->player_standings[i];
+            if (player->x50 == var_r31->x50) {
+                cnt += 1;
+            } else {
+                spC[i] = 0;
+            }
         }
     }
     if (cnt == 0) {
@@ -1501,8 +1271,6 @@ s32 gm_8016247C(s32 arg0)
     u32* temp_r5;
     u32* temp_r30_2;
     u32* temp_r3;
-    u32 temp_r0;
-    u32 temp_r0_2;
     s32 temp_r29 = *gmMainLib_8015CCF0();
     u32* temp_r30 = gmMainLib_8015CCFC();
     s32 ret;
@@ -1515,7 +1283,11 @@ s32 gm_8016247C(s32 arg0)
     var_r3 = MAX(-1U, *temp_r5 + arg0);
     *temp_r5 = var_r3;
 
-    var_r28 = MIN(0x270FU, temp_r29 + arg0);
+    var_r28 = temp_r29;
+    var_r28 += arg0;
+    if (var_r28 > 0x270FU) {
+        var_r28 = 0x270FU;
+    }
     ret = (s32) var_r28;
     var_r29 = var_r28;
 
@@ -1723,7 +1495,7 @@ void gm_80162B4C(s32 amount)
 void gm_IncrementPowerCount(void)
 {
     u32 result;
-    u32 val;
+    s32 val;
     u32* ptr;
 
     ptr = gmMainLib_GetPowerCount();
@@ -2407,7 +2179,6 @@ bool fn_801642A0(void)
 bool gm_80164330(s32 arg0)
 {
     s32 total_stages_on;
-    struct gmm_x1CB0* temp_ret;
     s32 i;
     u8 var_r0;
 
@@ -2421,8 +2192,7 @@ bool gm_80164330(s32 arg0)
     total_stages_on = 0;
     i = 0;
     for (i = 0; i < 0x1D; i++) {
-        temp_ret = gmMainLib_8015CC58();
-        if (temp_ret->stage_mask & (1 << (u16) i)) {
+        if ((1 << (u16) i) & gmMainLib_8015CC58()->stage_mask) {
             var_r0 = 1;
         } else {
             var_r0 = 0;
@@ -2434,10 +2204,7 @@ bool gm_80164330(s32 arg0)
     if (total_stages_on == 0) {
         OSReport("RandomStageSwitch All-Off!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
     }
-    if ((1 << (u16) arg0) & gmMainLib_8015CC58()->stage_mask) {
-        return true;
-    }
-    return false;
+    return ((1 << (u16) arg0) & gmMainLib_8015CC58()->stage_mask) ? true : false;
 }
 
 bool gm_80164430(u16 arg0)
@@ -2573,23 +2340,16 @@ static inline bool gm_80164840_noinline(u8 ckind)
 void gm_80164910(int arg0)
 {
     u16* char_unlock_mask;
-    u8 internal_id;
-    s32 i;
+    s32 internal_id;
+    int i;
     u8 unlock_idx;
     u8 notify_val;
 
     char_unlock_mask = gmMainLib_8015ED8C();
     internal_id = lbl_803B78A4[(u8) arg0];
 
-    for (i = 0; i < NUM_UNLOCKABLE_CHARACTERS; i++) {
-        if ((s32) internal_id == (s32) lbl_803B78C8[i].ckind) {
-            unlock_idx = lbl_803B78C8[i].idx;
-            goto found_char;
-        }
-    }
-    unlock_idx = NUM_UNLOCKABLE_CHARACTERS;
+    unlock_idx = fn_801605EC(internal_id);
 
-found_char:
     if (unlock_idx != NUM_UNLOCKABLE_CHARACTERS) {
         for (i = 0; i < NUM_UNLOCKABLE_CHARACTERS; i++) {
             if ((s32) unlock_idx == (s32) lbl_803B78C8[i].idx) {
@@ -3099,30 +2859,34 @@ s32 fn_8016588C(lbl_8046B6A0_24C_t* arg0, s32 arg1)
     return v;
 }
 
+struct fn_80165AC0_loser_bits {
+    u8 hi : 4;
+    u8 lo : 4;
+};
+
 s32 fn_80165AC0(MatchEnd* arg0)
 {
-    s32 max_loser;
-    s32 count;
     s32 i;
     s32 j;
-    MatchPlayerData* p;
+    s32 max_loser;
+    s32 count;
 
     max_loser = 0;
     for (i = 0; i < 6; i++) {
-        p = &arg0->player_standings[i];
-        if (p->slot_type != 3) {
+        if (arg0->player_standings[i].slot_type != 3) {
             for (j = 0; j < 6; j++) {
-                if (arg0->player_standings[j].slot_type != 3 && j != i &&
-                    (s32) p->score < (s32) arg0->player_standings[j].score) {
-                    p->is_big_loser += 1;
+                if (arg0->player_standings[j].slot_type != 3 && i != j &&
+                    arg0->player_standings[i].score <
+                        arg0->player_standings[j].score) {
+                    arg0->player_standings[i].is_big_loser += 1;
                 }
             }
-            if (max_loser < (s32) p->is_big_loser) {
-                max_loser = p->is_big_loser;
+            if (max_loser < arg0->player_standings[i].is_big_loser) {
+                max_loser = arg0->player_standings[i].is_big_loser;
             }
         }
     }
-    arg0->loser = (arg0->loser & ~0xF0) | ((max_loser << 4) & 0xF0);
+    ((struct fn_80165AC0_loser_bits*) &arg0->loser)->hi = max_loser;
     count = 0;
     for (j = 0; j < 6; j++) {
         if (arg0->player_standings[j].slot_type != 3 &&

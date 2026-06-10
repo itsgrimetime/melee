@@ -146,7 +146,7 @@ void un_8032074C(HSD_GObj* gobj)
     HSD_JObj* jobj = GET_JOBJ(gobj);
     char pad[24];
     HSD_JObjAnimAll(jobj);
-    if (mn_8022F298(jobj) == 1.0F) {
+    if (mn_8022F298(jobj) == 251.0F) {
         if (un_804D7030 != NULL) {
             HSD_GObjPLink_80390228(un_804D7030);
             un_804D7030 = NULL;
@@ -229,72 +229,6 @@ void fn_80320A1C(HSD_GObj* gobj)
     HSD_FogInterpretAnim(gobj->hsd_obj);
 }
 
-static void HSD_JObjSetRotationY_2(HSD_JObj* jobj, f32 y)
-{
-    ((jobj) ? ((void) 0) : __assert("jobj.h", 660, "jobj"));
-    ((!(jobj->flags & JOBJ_USE_QUATERNION))
-         ? ((void) 0)
-         : __assert("jobj.h", 661, (char*) &un_804002F8 + 0x18));
-    jobj->rotate.y = y;
-    if (!(jobj->flags & JOBJ_MTX_INDEP_SRT)) {
-        (HSD_JObjSetMtxDirty)(jobj);
-    }
-}
-
-static void HSD_JObjSetScaleX_2(HSD_JObj* jobj, f32 x)
-{
-    ((jobj) ? ((void) 0) : __assert("jobj.h", 776, "jobj"));
-    jobj->scale.x = x;
-    if (!(jobj->flags & JOBJ_MTX_INDEP_SRT)) {
-        (HSD_JObjSetMtxDirty)(jobj);
-    }
-}
-
-static void HSD_JObjSetScaleY_2(HSD_JObj* jobj, f32 y)
-{
-    ((jobj) ? ((void) 0) : __assert("jobj.h", 791, "jobj"));
-    jobj->scale.y = y;
-    if (!(jobj->flags & JOBJ_MTX_INDEP_SRT)) {
-        (HSD_JObjSetMtxDirty)(jobj);
-    }
-}
-
-static void HSD_JObjSetScaleZ_2(HSD_JObj* jobj, f32 z)
-{
-    ((jobj) ? ((void) 0) : __assert("jobj.h", 806, "jobj"));
-    jobj->scale.z = z;
-    if (!(jobj->flags & JOBJ_MTX_INDEP_SRT)) {
-        (HSD_JObjSetMtxDirty)(jobj);
-    }
-}
-
-static void HSD_JObjSetTranslateX_2(HSD_JObj* jobj, f32 x)
-{
-    ((jobj) ? ((void) 0) : __assert("jobj.h", 932, "jobj"));
-    jobj->translate.x = x;
-    if (!(jobj->flags & JOBJ_MTX_INDEP_SRT)) {
-        (HSD_JObjSetMtxDirty)(jobj);
-    }
-}
-
-static void HSD_JObjSetTranslateY_2(HSD_JObj* jobj, f32 y)
-{
-    ((jobj) ? ((void) 0) : __assert("jobj.h", 947, "jobj"));
-    jobj->translate.y = y;
-    if (!(jobj->flags & JOBJ_MTX_INDEP_SRT)) {
-        (HSD_JObjSetMtxDirty)(jobj);
-    }
-}
-
-static void HSD_JObjSetTranslateZ_2(HSD_JObj* jobj, f32 z)
-{
-    ((jobj) ? ((void) 0) : __assert("jobj.h", 962, "jobj"));
-    jobj->translate.z = z;
-    if (!(jobj->flags & JOBJ_MTX_INDEP_SRT)) {
-        (HSD_JObjSetMtxDirty)(jobj);
-    }
-}
-
 void un_80320A40_OnEnter(void* arg)
 {
     u8* input = arg;
@@ -305,8 +239,9 @@ void un_80320A40_OnEnter(void* arg)
     HSD_GObj* gobj;
     HSD_JObj* child;
     HSD_JObj* jobj;
+    HSD_LObj* lobj;
     f32 scale;
-    PAD_STACK(24);
+    char pad[24];
 
     efLib_Init();
     efAsync_LoadSync(0);
@@ -361,16 +296,16 @@ void un_80320A40_OnEnter(void* arg)
         child = jobj->child;
     }
 
-    HSD_JObjSetTranslateX_2(child, -un_803060BC(0x1E, 0));
-    HSD_JObjSetTranslateY_2(child, -un_803060BC(0x1E, 1));
-    HSD_JObjSetTranslateZ_2(child, -un_803060BC(0x1E, 2));
-    HSD_JObjSetRotationY_2(child, -un_803060BC(0x1E, 5));
+    HSD_JObjSetTranslateXWithMtxDirty(child, -un_803060BC(0x1E, 0));
+    HSD_JObjSetTranslateYWithMtxDirty(child, -un_803060BC(0x1E, 1));
+    HSD_JObjSetTranslateZWithMtxDirty(child, -un_803060BC(0x1E, 2));
+    HSD_JObjSetRotationYWithMtxDirty(child, -un_803060BC(0x1E, 5));
 
     scale = 0.55f * (un_803060BC(0x1E, 4) * (1.0f / un_803060BC(0x1E, 3)));
 
-    HSD_JObjSetScaleX_2(child, scale);
-    HSD_JObjSetScaleY_2(child, scale);
-    HSD_JObjSetScaleZ_2(child, scale);
+    HSD_JObjSetScaleXWithMtxDirty(child, scale);
+    HSD_JObjSetScaleYWithMtxDirty(child, scale);
+    HSD_JObjSetScaleZWithMtxDirty(child, scale);
 
     lb_8000C1C0(jobj, un_804D7024);
     lb_8000C290(jobj, un_804D7024);
@@ -387,8 +322,8 @@ void un_80320A40_OnEnter(void* arg)
     un_804D702C = 0;
 
     gobj = GObj_Create(0xB, 3, 0);
-    HSD_GObjObject_80390A70(gobj, HSD_GObj_804D784A,
-                            lb_80011AC4(un_804D7010->lights));
+    lobj = lb_80011AC4(un_804D7010->lights);
+    HSD_GObjObject_80390A70(gobj, HSD_GObj_804D784A, lobj);
     GObj_SetupGXLink(gobj, HSD_GObj_LObjCallback, 0, 0);
 
     lbAudioAx_80024E50(0);

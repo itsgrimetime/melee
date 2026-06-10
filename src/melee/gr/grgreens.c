@@ -151,25 +151,26 @@ grGr_StageData grGr_803E76D0 = {
 
 char grGr_803E7728[] = "grgreens.c";
 
-static const s32 grGr_803E7734[] = {
+static s32 grGr_803E7734[] = {
     0, 1, 0, 1, 0, 2, 0, 1, 0, 2,
 };
-static const s32 grGr_803E775C[] = {
+static s32 grGr_803E775C[] = {
     0, 0, 0, 14, 0, 0, 0, 14,
 };
-static const s32 grGr_803E777C[] = {
+static s32 grGr_803E777C[] = {
     1, 8, 15, 16, 2, 9, 3, 10, 4, 11, 5, 12, 6, 13,
 };
-static const s32 grGr_803E77B4[] = {
+static s32 grGr_803E77B4[] = {
     0, 0, 0, 14, 0, 0, 0, 14,
 };
-static const s32 grGr_803E77D4[] = {
+static s32 grGr_803E77D4[] = {
     1, 8, 15, 16, 2, 9, 3, 10, 4, 11, 5, 12, 6, 13,
 };
-static const Vec3 grGr_803E780C[] = {
+static Vec3 grGr_803E780C[] = {
     { -1.0f, 0.0f, 0.0f },
     { 1.0f, 0.0f, 0.0f },
 };
+static u8 grGr_803E7824[0x1C] = { 0 };
 static s16 grGr_803E7840[30] = {
     5,    6,    7,    8,    9,    0xA,  0xB,  0xC,  0xD,  0xE,
     0xF,  0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
@@ -442,6 +443,7 @@ void grGreens_80213C10(Ground_GObj* gobj)
     Ground* gp = GET_GROUND(gobj);
     Ground* bg_gp = GET_GROUND(bg_gobj);
 
+    PAD_STACK(0x50);
     gp->gv.greens2.x18 = 0;
 
     if (grGr_804D6AAC != 0) {
@@ -458,8 +460,8 @@ void grGreens_80213C10(Ground_GObj* gobj)
         if (gp->gv.greens2.x10 != 0) {
             gp->gv.greens2.x10 = 0;
             gp->gv.greens2.x8 = HSD_Randi(8);
-            gp->gv.greens2.xC = randrange(grGr_params->x34_windTimerMin,
-                                          grGr_params->x38_windTimerMax);
+            gp->gv.greens2.xC = randrange(grGr_params->x38_windTimerMax,
+                                          grGr_params->x34_windTimerMin);
             grAnime_801C8138(gobj, gp->map_id,
                              grGr_803E775C[gp->gv.greens2.x8]);
             grAnime_801C8138(bg_gobj, bg_gp->map_id,
@@ -478,9 +480,12 @@ void grGreens_80213C10(Ground_GObj* gobj)
                 return;
             }
 
-            gp->gv.greens2.x0 = (gp->gv.greens2.x0 + 1) % 10;
-            gp->gv.greens2.x4 = grGr_803E7734[gp->gv.greens2.x0];
-            gp->gv.greens2.x10 = 1;
+            {
+                Ground* cur_gp = GET_GROUND(gobj);
+                cur_gp->gv.greens2.x0 = (cur_gp->gv.greens2.x0 + 1) % 10;
+                cur_gp->gv.greens2.x4 = grGr_803E7734[cur_gp->gv.greens2.x0];
+                cur_gp->gv.greens2.x10 = 1;
+            }
         }
         break;
 
@@ -493,7 +498,11 @@ void grGreens_80213C10(Ground_GObj* gobj)
             gp->gv.greens2.x8 = 0;
             jobj = gobj->hsd_obj;
             HSD_JObjGetTranslation(jobj, &pos);
-            gp->gv.greens2.x14 = ftLib_800864A8(&pos, NULL) == 1.0f;
+            if (ftLib_800864A8(&pos, NULL) == 1.0f) {
+                gp->gv.greens2.x14 = 1;
+            } else {
+                gp->gv.greens2.x14 = 0;
+            }
             gp->gv.greens2.xC = 0;
             grAnime_801C8138(
                 gobj, gp->map_id,
@@ -624,9 +633,12 @@ void grGreens_80213C10(Ground_GObj* gobj)
 
         case 6:
             if (grAnime_801C83D0(gobj, 0, 7) != 0) {
-                gp->gv.greens2.x0 = (gp->gv.greens2.x0 + 1) % 10;
-                gp->gv.greens2.x4 = grGr_803E7734[gp->gv.greens2.x0];
-                gp->gv.greens2.x10 = 1;
+                {
+                    Ground* cur_gp = GET_GROUND(gobj);
+                    cur_gp->gv.greens2.x0 = (cur_gp->gv.greens2.x0 + 1) % 10;
+                    cur_gp->gv.greens2.x4 = grGr_803E7734[cur_gp->gv.greens2.x0];
+                    cur_gp->gv.greens2.x10 = 1;
+                }
                 return;
             }
             break;
@@ -646,9 +658,12 @@ void grGreens_80213C10(Ground_GObj* gobj)
             gp->gv.greens2.x24 = HSD_Randi(2);
         } else if (grAnime_801C83D0(gobj, 0, 7) != 0) {
             if (gp->gv.greens2.x20 < 0) {
-                gp->gv.greens2.x0 = (gp->gv.greens2.x0 + 1) % 10;
-                gp->gv.greens2.x4 = grGr_803E7734[gp->gv.greens2.x0];
-                gp->gv.greens2.x10 = 1;
+                {
+                    Ground* cur_gp = GET_GROUND(gobj);
+                    cur_gp->gv.greens2.x0 = (cur_gp->gv.greens2.x0 + 1) % 10;
+                    cur_gp->gv.greens2.x4 = grGr_803E7734[cur_gp->gv.greens2.x0];
+                    cur_gp->gv.greens2.x10 = 1;
+                }
             } else {
                 grAnime_801C8138(gobj, gp->map_id, 7);
                 grAnime_801C8138(bg_gobj, bg_gp->map_id, 7);
@@ -755,6 +770,8 @@ void grGreens_8021483C(Ground_GObj* gobj)
     float right_min = 3.4028235e38f;
     float right_bottom = 3.4028235e38f;
     int i;
+    int row_count = 5;
+    float y;
 
     for (i = 0; i < 30; i++) {
         HSD_JObj* jobj = Ground_801C3FA4(gobj, grGr_803E7840[i]);
@@ -790,34 +807,32 @@ void grGreens_8021483C(Ground_GObj* gobj)
         }
     }
     left_max = (left_max - left_min) * 0.5f;
-    for (i = 0; i < 5; i++) {
-        float y = ((left_top - left_bottom) * 0.25f * i) + left_bottom;
-        Vec* row = &gp->gv.greens.x4[i * 6];
+    for (i = 0; i < row_count; i++) {
+        y = ((left_top - left_bottom) * 0.25f * i) + left_bottom;
 
-        row[0].x = (left_max * 0.0f) + left_min;
-        row[0].y = y;
-        row[0].z = 0.0f;
-        row[1].x = (left_max * 1.0f) + left_min;
-        row[1].y = y;
-        row[1].z = 0.0f;
-        row[2].x = (left_max * 2.0f) + left_min;
-        row[2].y = y;
-        row[2].z = 0.0f;
+        getVec(gp, i, 0)->x = (left_max * 0.0f) + left_min;
+        getVec(gp, i, 0)->y = y;
+        getVec(gp, i, 0)->z = 0.0f;
+        getVec(gp, i, 1)->x = (left_max * 1.0f) + left_min;
+        getVec(gp, i, 1)->y = y;
+        getVec(gp, i, 1)->z = 0.0f;
+        getVec(gp, i, 2)->x = (left_max * 2.0f) + left_min;
+        getVec(gp, i, 2)->y = y;
+        getVec(gp, i, 2)->z = 0.0f;
     }
     right_max = (right_max - right_min) * 0.5f;
-    for (i = 0; i < 5; i++) {
-        float y = ((right_top - right_bottom) * 0.25f * i) + right_bottom;
-        Vec* row = &gp->gv.greens.x4[i * 6];
+    for (i = 0; i < row_count; i++) {
+        y = ((right_top - right_bottom) * 0.25f * i) + right_bottom;
 
-        row[3].x = (right_max * 0.0f) + right_min;
-        row[3].y = y;
-        row[3].z = 0.0f;
-        row[4].x = (right_max * 1.0f) + right_min;
-        row[4].y = y;
-        row[4].z = 0.0f;
-        row[5].x = (right_max * 2.0f) + right_min;
-        row[5].y = y;
-        row[5].z = 0.0f;
+        getVec(gp, i, 3)->x = (right_max * 0.0f) + right_min;
+        getVec(gp, i, 3)->y = y;
+        getVec(gp, i, 3)->z = 0.0f;
+        getVec(gp, i, 4)->x = (right_max * 1.0f) + right_min;
+        getVec(gp, i, 4)->y = y;
+        getVec(gp, i, 4)->z = 0.0f;
+        getVec(gp, i, 5)->x = (right_max * 2.0f) + right_min;
+        getVec(gp, i, 5)->y = y;
+        getVec(gp, i, 5)->z = 0.0f;
     }
 }
 
@@ -867,7 +882,8 @@ void grGreens_80214FA8(Ground_GObj* gobj)
     int j;
     unsigned int i;
     Ground* gp = GET_GROUND(gobj);
-    int k;
+    int row;
+    int col;
 
     for (i = 0; i < 30; i++) {
         mpJointSetCb2(grGr_803E787C[i], gp, fn_80216DE4);
@@ -880,12 +896,13 @@ void grGreens_80214FA8(Ground_GObj* gobj)
             HSD_ASSERT(1203, NULL);
         }
     }
-    for (k = 0; k < 5; k++) {
-        for (j = 0; j < 6; j++) {
-            switch (grGr_8049F9E0[k * 6 + j]) {
+    for (row = 0; row < 5; row++) {
+        for (col = 0; col < 6; col++) {
+            switch (grGr_8049F9E0[row * 6 + col]) {
             case 1:
             case 2:
-                grGreens_80215358(gobj, j, k, grGr_8049F9E0[k * 6 + j], 3);
+                grGreens_80215358(gobj, col, row,
+                                   grGr_8049F9E0[row * 6 + col], 3);
                 break;
             }
         }
@@ -957,7 +974,8 @@ void grGreens_80215358(Ground_GObj* gobj, int col, int row, int arg3, int arg4)
     float grMaterial_801C8DE0_paramB;
     Vec vec;
     float f;
-    HSD_ASSERT(1305, block->status==Gr_Greens_Block_Status_None);
+    PAD_STACK(0x10);
+    HSD_ASSERT(1305, block->status == Gr_Greens_Block_Status_None);
     for (n = 0; n < 30; n++) {
         arr[n] = 0;
     }
@@ -973,7 +991,7 @@ void grGreens_80215358(Ground_GObj* gobj, int col, int row, int arg3, int arg4)
             break;
         }
     }
-    HSD_ASSERT(1316, num<Gr_Greens_Block_Max);
+    HSD_ASSERT(1316, num < Gr_Greens_Block_Max);
     if (arg3 == 1) {
         type = 1;
     } else if (arg3 == 2) {
@@ -1132,6 +1150,8 @@ void grGreens_80215ED8(Ground_GObj* gobj, int col, int row)
 {
     Ground* gp = GET_GROUND(gobj);
     struct grGreens_BlockVars* block = getBlock(gp, row, col);
+    Vec pos;
+    float scale;
 
     if (block->status == Gr_Greens_Block_Status_None || block->x1_3) {
         return;
@@ -1144,7 +1164,10 @@ void grGreens_80215ED8(Ground_GObj* gobj, int col, int row)
         return;
     }
 
-    if (block->status == 1) {
+    switch (block->status) {
+    case 2:
+        return;
+    case 1:
         if (block->x1_4) {
             block->x4 = 0.0f;
             block->x1_4 = 0;
@@ -1185,19 +1208,15 @@ void grGreens_80215ED8(Ground_GObj* gobj, int col, int row)
                 next->x8 = getVec(gp, next_row, col)->y;
                 next->status = 3;
                 next->x1_5 = 1;
-                {
-                    Vec pos;
-                    float scale;
-                    pos.x = getVec(gp, next_row, col)->x;
-                    pos.y = next->x8;
-                    pos.z = 0.0f;
-                    HSD_JObjSetTranslate(next->xC->hsd_obj, &pos);
-                    scale = 1.0f / Ground_801C0498();
-                    pos.x *= scale;
-                    pos.y *= scale;
-                    pos.z *= scale;
-                    HSD_JObjSetTranslate(next->x14, &pos);
-                }
+                pos.x = getVec(gp, next_row, col)->x;
+                pos.y = next->x8;
+                pos.z = 0.0f;
+                HSD_JObjSetTranslate(next->xC->hsd_obj, &pos);
+                scale = 1.0f / Ground_801C0498();
+                pos.x *= scale;
+                pos.y *= scale;
+                pos.z *= scale;
+                HSD_JObjSetTranslate(next->x14, &pos);
             }
         } else {
             int next_row;
@@ -1211,36 +1230,29 @@ void grGreens_80215ED8(Ground_GObj* gobj, int col, int row)
                 next->x8 = getVec(gp, next_row, col)->y -
                            getVec(gp, next_row - 1, col)->y +
                            getBlock(gp, next_row - 1, col)->x8;
-                {
-                    Vec pos;
-                    float scale;
-                    pos.x = getVec(gp, next_row, col)->x;
-                    pos.y = next->x8;
-                    pos.z = 0.0f;
-                    HSD_JObjSetTranslate(next->xC->hsd_obj, &pos);
-                    scale = 1.0f / Ground_801C0498();
-                    pos.x *= scale;
-                    pos.y *= scale;
-                    pos.z *= scale;
-                    HSD_JObjSetTranslate(next->x14, &pos);
-                }
+                pos.x = getVec(gp, next_row, col)->x;
+                pos.y = next->x8;
+                pos.z = 0.0f;
+                HSD_JObjSetTranslate(next->xC->hsd_obj, &pos);
+                scale = 1.0f / Ground_801C0498();
+                pos.x *= scale;
+                pos.y *= scale;
+                pos.z *= scale;
+                HSD_JObjSetTranslate(next->x14, &pos);
             }
         }
+        break;
     }
 
-    {
-        Vec pos;
-        float scale;
-        pos.x = getVec(gp, row, col)->x;
-        pos.y = block->x8;
-        pos.z = 0.0f;
-        HSD_JObjSetTranslate(block->xC->hsd_obj, &pos);
-        scale = 1.0f / Ground_801C0498();
-        pos.x *= scale;
-        pos.y *= scale;
-        pos.z *= scale;
-        HSD_JObjSetTranslate(block->x14, &pos);
-    }
+    pos.x = getVec(gp, row, col)->x;
+    pos.y = block->x8;
+    pos.z = 0.0f;
+    HSD_JObjSetTranslate(block->xC->hsd_obj, &pos);
+    scale = 1.0f / Ground_801C0498();
+    pos.x *= scale;
+    pos.y *= scale;
+    pos.z *= scale;
+    HSD_JObjSetTranslate(block->x14, &pos);
 }
 
 void grGreens_802166C4(Ground_GObj* gobj)
@@ -1251,8 +1263,8 @@ void grGreens_802166C4(Ground_GObj* gobj)
 
     if (gp->gv.greens.xC-- < 0) {
         u8 weights[6];
-        bool left_has_zero;
-        bool right_has_zero;
+        bool left_has_nonzero;
+        bool right_has_nonzero;
         int choice = -1;
 
         for (col = 0; col < 6; col++) {
@@ -1283,50 +1295,78 @@ void grGreens_802166C4(Ground_GObj* gobj)
             }
         }
 
-        left_has_zero = weights[0] == 0 || weights[1] == 0 || weights[2] == 0;
-        right_has_zero = weights[3] == 0 || weights[4] == 0 || weights[5] == 0;
+        left_has_nonzero = weights[0] != 0 || weights[1] != 0 ||
+                           weights[2] != 0;
+        right_has_nonzero = weights[3] != 0 || weights[4] != 0 ||
+                            weights[5] != 0;
 
-        if (!left_has_zero) {
-            int total = 0;
+        if (left_has_nonzero) {
+            int total;
             int pick;
-            int i;
-            int start = 0;
-            int count = !right_has_zero ? 6 : 3;
 
-            for (i = 0; i < count; i++) {
-                total += weights[start + i];
-            }
-            pick = total != 0 ? HSD_Randi(total) : 0;
-            choice = start + count;
-            for (i = 0; i < count; i++) {
-                pick -= weights[start + i];
-                if (pick < 0) {
-                    choice = start + i;
-                    break;
+            if (right_has_nonzero) {
+                total = weights[0] + weights[1] + weights[2] + weights[3] +
+                        weights[4] + weights[5];
+                pick = total != 0 ? HSD_Randi(total) : 0;
+                choice = 0;
+                pick -= weights[0];
+                if (pick >= 0) {
+                    choice = 1;
+                    pick -= weights[1];
+                    if (pick >= 0) {
+                        choice = 2;
+                        pick -= weights[2];
+                        if (pick >= 0) {
+                            choice = 3;
+                            pick -= weights[3];
+                            if (pick >= 0) {
+                                choice = 4;
+                                pick -= weights[4];
+                                if (pick >= 0) {
+                                    choice = 5;
+                                    pick -= weights[5];
+                                    if (pick >= 0) {
+                                        choice = 6;
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
-            }
-            if (!right_has_zero) {
                 HSD_ASSERT(1693, choice < 6);
             } else {
+                total = weights[0] + weights[1] + weights[2];
+                pick = total != 0 ? HSD_Randi(total) : 0;
+                choice = 0;
+                pick -= weights[0];
+                if (pick >= 0) {
+                    choice = 1;
+                    pick -= weights[1];
+                    if (pick >= 0) {
+                        choice = 2;
+                        pick -= weights[2];
+                        if (pick >= 0) {
+                            choice = 3;
+                        }
+                    }
+                }
                 HSD_ASSERT(1702, choice < 3);
             }
-        } else if (!right_has_zero) {
-            int total = 0;
-            int pick;
-            int i;
-            int start = 3;
-            int count = 3;
+        } else if (right_has_nonzero) {
+            int total = weights[3] + weights[4] + weights[5];
+            int pick = total != 0 ? HSD_Randi(total) : 0;
 
-            for (i = 0; i < count; i++) {
-                total += weights[start + i];
-            }
-            pick = total != 0 ? HSD_Randi(total) : 0;
-            choice = start + count;
-            for (i = 0; i < count; i++) {
-                pick -= weights[start + i];
-                if (pick < 0) {
-                    choice = start + i;
-                    break;
+            choice = 3;
+            pick -= weights[3];
+            if (pick >= 0) {
+                choice = 4;
+                pick -= weights[4];
+                if (pick >= 0) {
+                    choice = 5;
+                    pick -= weights[5];
+                    if (pick >= 0) {
+                        choice = 6;
+                    }
                 }
             }
             HSD_ASSERT(1711, choice < 6);
@@ -1334,29 +1374,19 @@ void grGreens_802166C4(Ground_GObj* gobj)
 
         if (choice != -1) {
             int spawn_row = 4;
-            int type_roll =
-                grGr_params->x20 != 0 ? HSD_Randi(grGr_params->x20) : 0;
-            int type = type_roll != 0 ? 1 : 2;
+            int type_roll;
+            int type;
 
-            if (getBlock(gp, 3, choice)->status == Gr_Greens_Block_Status_None)
-            {
-                spawn_row = 3;
-                if (getBlock(gp, 2, choice)->status ==
+            while (spawn_row > 0) {
+                if (getBlock(gp, spawn_row - 1, choice)->status !=
                     Gr_Greens_Block_Status_None)
                 {
-                    spawn_row = 2;
-                    if (getBlock(gp, 1, choice)->status ==
-                        Gr_Greens_Block_Status_None)
-                    {
-                        spawn_row = 1;
-                        if (getBlock(gp, 0, choice)->status ==
-                            Gr_Greens_Block_Status_None)
-                        {
-                            spawn_row = 0;
-                        }
-                    }
+                    break;
                 }
+                spawn_row -= 1;
             }
+            type_roll = grGr_params->x20 != 0 ? HSD_Randi(grGr_params->x20) : 0;
+            type = type_roll != 0 ? 1 : 2;
             grGreens_80215358(gobj, choice, spawn_row, type, 1);
         }
 

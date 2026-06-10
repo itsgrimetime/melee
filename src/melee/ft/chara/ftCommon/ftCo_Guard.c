@@ -244,7 +244,8 @@ void ftCo_80092158(Fighter_GObj* gobj, int arg1, HSD_JObj* arg2)
 void ftCo_800921DC(HSD_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
-    PAD_STACK(8);
+    Vec3 trans;
+    PAD_STACK(12);
     ftCo_80092158(gobj, 1047, fp->parts[fp->ft_data->x8->x11].joint);
     fp->x2219_b0 = true;
     fp->mv.co.guard.xC = false;
@@ -254,18 +255,16 @@ void ftCo_800921DC(HSD_GObj* gobj)
     fp->mv.co.guard.x4 = 0;
     fp->mv.co.guard.x2C = 0;
     {
-        float lightshield_amount = fp->input.x650 / (1 - p_ftCommonData->x10);
+        float lightshield_amount = (fp->input.x650 - p_ftCommonData->x10) /
+                                   (1 - p_ftCommonData->x10);
         if (lightshield_amount < 0) {
             lightshield_amount = fp->mv.co.guard.x2C;
         }
         fp->lightshield_amount = lightshield_amount;
     }
     fp->mv.co.guard.x20 = fp->mv.co.guard.x24 = 0;
-    {
-        Vec3 trans;
-        trans.x = trans.y = trans.z = 0;
-        HSD_JObjSetTranslate(fp->parts[fp->ft_data->x8->x11].joint, &trans);
-    }
+    trans.x = trans.y = trans.z = 0;
+    HSD_JObjSetTranslate(fp->parts[fp->ft_data->x8->x11].joint, &trans);
     ftCo_80091E78(gobj, 0);
     ft_PlaySFX(fp, 110, 127, 64);
 }
@@ -429,6 +428,7 @@ void ftCo_80092908(Fighter_GObj* gobj)
         HSD_JObj* jobj = fp->parts[fp->ft_data->x8->x11].joint;
         ftCo_80092158(gobj, 1048, jobj);
         fp->x2219_b0 = true;
+        PAD_STACK(8);
         ftCo_80092450(gobj);
         ftCo_80091E78(gobj, 1);
     }
@@ -648,7 +648,7 @@ void ftCo_800932DC(Fighter_GObj* gobj)
 void ftCo_GuardSetOff_Anim(HSD_GObj* gobj)
 {
     Fighter* fp = gobj->user_data;
-    PAD_STACK(8);
+    PAD_STACK(16);
     ftCo_80093BC0(gobj);
     if (!ftAnim_IsFramesRemaining(gobj)) {
         if (fp->mv.co.guard.xC) {
@@ -787,7 +787,7 @@ void ftCo_80093A50(Fighter_GObj* gobj)
 
 void ftCo_80093BC0(Fighter_GObj* gobj)
 {
-    Fighter* fp = gobj->user_data;
+    Fighter* fp = GET_FIGHTER(gobj);
     if (fp->x221C_b3) {
         fp->x221C_b3 = false;
     }
@@ -809,7 +809,7 @@ void ftCo_80093BC0(Fighter_GObj* gobj)
 
 void ftCo_GuardReflect_Anim(HSD_GObj* gobj)
 {
-    PAD_STACK(16);
+    PAD_STACK(12);
     ftCo_80093BC0(gobj);
     ftCo_GuardOn_Anim(gobj);
 }

@@ -3,14 +3,14 @@
 #include "baselib/jobj.h"
 #include "ef/eflib.h"
 #include "ef/efsync.h"
-#include "ft/chara/ftKirby/ftKb_Init.h"
+#include "ft/chara/ftKirby/ftkirbyspecialmewtwo.h"
 #include "ft/chara/ftMewtwo/ftMt_SpecialN.h"
 #include "ft/ftlib.h"
 #include "it/inlines.h"
-#include "it/it_266F.h"
 #include "it/it_26B1.h"
 #include "it/it_2725.h"
 #include "it/item.h"
+#include "it/itgroundcoll.h"
 #include "lb/lb_00B0.h"
 #include "lb/lbvector.h"
 
@@ -248,7 +248,7 @@ void it_802C53F0(Item_GObj* gobj, Vec3* pos, float angle, float charge,
     ip->xDD4_itemVar.mewtwoshadowball.x18 = charge;
     ip->xDD4_itemVar.mewtwoshadowball.x1C = max_charge;
 
-    if (ip->xDD4_itemVar.mewtwoshadowball.x2C != NULL &&
+    if (NULL != ip->xDD4_itemVar.mewtwoshadowball.x2C &&
         ip->owner == ip->xDD4_itemVar.mewtwoshadowball.x2C)
     {
         it_802C5B18(gobj);
@@ -316,6 +316,8 @@ void it_2725_Logic101_Destroyed(Item_GObj* gobj)
                 case It_Kind_Kirby_MewtwoShadowBall:
                     ftKb_SpecialNMt_80107040(
                         ip->xDD4_itemVar.mewtwoshadowball.x2C);
+                    break;
+                default:
                     break;
                 }
             }

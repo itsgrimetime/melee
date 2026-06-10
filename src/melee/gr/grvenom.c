@@ -59,6 +59,7 @@ typedef struct grVe_TimingData {
 extern u32 grVe_804D6A34;
 extern grVe_TimingData* grVe_804D6A30;
 extern s32 grVe_804D6A38;
+extern s32 grVe_804D6A3C;
 extern s32 grVe_804D6A40;
 
 typedef struct grVe_Lighting {
@@ -305,13 +306,12 @@ void grVenom_80203B18(void)
     Ground_GObj* obj;
     Ground_GObj* temp;
     Ground* gp;
-    f32 f0;
-    f32 f2;
     s32 i0;
     s32 i1;
     s32 flag;
     HSD_GObj* gobj;
     HSD_LObj* lobj;
+    HSD_LObj* next;
 
     data = (s32*) &grVe_803E5348;
     grVe_804D6A30 = Ground_801C49F8();
@@ -329,19 +329,15 @@ void grVenom_80203B18(void)
     data[10] = 0;
     data[13] = 0;
     data[16] = 0;
-    if (Stage_80225194() == 0xE9) {
-        goto skip;
+    if (Stage_80225194() != 0xE9) {
+        flag = 0;
     }
-    flag = 0;
-skip:
     grVe_804D6A40 = flag;
     if (flag == 1) {
         grVe_804D6A38 = 0x78;
     } else {
-        f0 = grVe_804D6A30->x0;
-        f2 = grVe_804D6A30->x4;
-        i0 = (s32) f0;
-        i1 = (s32) f2;
+        i0 = (s32) grVe_804D6A30->x0;
+        i1 = (s32) grVe_804D6A30->x4;
         if (i1 > i0) {
             i1 = i1 - i0;
             if (i1 != 0) {
@@ -398,10 +394,11 @@ skip:
                                     HSD_AObjSetFlags, AOBJ_ARG_AU, AOBJ_LOOP);
                 }
                 if (lobj == NULL) {
-                    lobj = NULL;
+                    next = NULL;
                 } else {
-                    lobj = lobj->next;
+                    next = lobj->next;
                 }
+                lobj = next;
             }
         }
     }
@@ -1268,22 +1265,21 @@ void grVenom_80205AD0(Ground_GObj* arg) {}
 void grVenom_80205AD4(Ground_GObj* gobj)
 {
     s32 zero;
-    u8* base;
-    HSD_JObj* jobj;
+    s32* base;
     Ground* gp;
+    HSD_JObj* jobj;
     f32 scale;
-    u8* data;
+    s32* data;
     s32 type;
     Ground_GObj* other;
     Ground* other_gp;
     HSD_JObj* jobj2;
-    f32 scl;
     void* attr;
 
     zero = 0;
-    base = (u8*) &grVe_803E5348;
     gp = gobj->user_data;
     jobj = gobj->hsd_obj;
+    base = (s32*) &grVe_803E5348;
     scale = Ground_801C0498();
 
     gp->gv.venom.xC8 = grVe_804D6A34;
@@ -1296,8 +1292,8 @@ void grVenom_80205AD4(Ground_GObj* gobj)
     grAnime_801C7FF8(gobj, 8, 7, 0, 0.0F, 1.0F);
     grAnime_801C8098(gobj, 2, 7, 3, 0.0F, 1.0F);
 
-    data = base + gp->gv.venom.xC8 * 4;
-    type = *(s32*) (data + 0x2C);
+    data = base + gp->gv.venom.xC8;
+    type = data[11];
 
     if (type < 8) {
         if (type >= 1) {
@@ -1311,9 +1307,9 @@ void grVenom_80205AD4(Ground_GObj* gobj)
     goto venom_80205AD4_link;
 
 venom_80205AD4_spawn: {
-    s32 idx = *(s32*) (data + 0x38);
-    u8* data2 = base + idx * 4;
-    other = (Ground_GObj*) grVenom_80203EAC(*(s32*) (data2 + 0x324));
+    s32 idx = data[14];
+    s32* data2 = base + idx;
+    other = (Ground_GObj*) grVenom_80203EAC(data2[0xC9]);
     *(s32*) &gp->gv.venom.xDC = (s32) other;
     if (other != NULL) {
         other = *(Ground_GObj**) &gp->gv.venom.xDC;
@@ -1326,7 +1322,7 @@ venom_80205AD4_spawn: {
 }
 
 venom_80205AD4_link:
-    jobj2 = Ground_801C3FA4((HSD_GObj*) *(s32*) (data + 0x20), 5);
+    jobj2 = Ground_801C3FA4((HSD_GObj*) data[8], 5);
     lb_8000C2F8(Ground_801C3FA4(gobj, 0), jobj2);
     *(s32*) &gp->gv.venom.xDC = zero;
     goto venom_80205AD4_done;
@@ -1338,16 +1334,13 @@ venom_80205AD4_default:
 venom_80205AD4_done:
 
     attr = grVe_804D6A30;
-    scl = scale * *(f32*) ((u8*) attr + 0x34);
-    HSD_JObjSetScaleX(jobj, scl);
+    HSD_JObjSetScaleX(jobj, scale * *(f32*) ((u8*) attr + 0x34));
 
     attr = grVe_804D6A30;
-    scl = scale * *(f32*) ((u8*) attr + 0x34);
-    HSD_JObjSetScaleY(jobj, scl);
+    HSD_JObjSetScaleY(jobj, scale * *(f32*) ((u8*) attr + 0x34));
 
     attr = grVe_804D6A30;
-    scl = scale * *(f32*) ((u8*) attr + 0x34);
-    HSD_JObjSetScaleZ(jobj, scl);
+    HSD_JObjSetScaleZ(jobj, scale * *(f32*) ((u8*) attr + 0x34));
 
     ((struct grCorneria_GroundVars2*) &gp->gv.venom)->xC4.flags.b0 = false;
     *(s32*) &gp->gv.venom.xD4 = zero;
@@ -1429,18 +1422,17 @@ void grVenom_80205F30(Ground_GObj* gobj)
     s32 fire_kind;
     s32 slot;
     s32 retries;
-    u8* base_b;
     s32 type_idx;
     HSD_JObj* helper;
 
     base = (s32*) &grVe_803E5348;
-    base_b = (u8*) &grVe_803E5348;
     gp = gobj->user_data;
     jobj = gobj->hsd_obj;
     sp94 = grVe_803B82D0;
     sp88 = grVe_803B82DC;
+    PAD_STACK(0x3C);
 
-    if (grVe_804D6A40 != 0) {
+    if (grVe_804D6A3C != 0) {
         return;
     }
 
@@ -1448,119 +1440,69 @@ void grVenom_80205F30(Ground_GObj* gobj)
     if ((u32) entry[8] != 0U) {
         if (entry[14] == 4) {
             tmp_jobj = Ground_801C3FA4((HSD_GObj*) gobj, 1);
-            if (tmp_jobj == NULL) {
-                __assert("jobj.h", 0x2A9, "jobj");
-            }
-            if (tmp_jobj->flags & 0x20000) {
-                __assert("jobj.h", 0x2AA, (char*) base + 0x2D4);
-            }
-            tmp_jobj->rotate.z = 0.0F;
-            if (!(tmp_jobj->flags & 0x02000000)) {
-                if (tmp_jobj != NULL) {
-                    s32 dirty = 0;
-                    u32 f = tmp_jobj->flags;
-                    if (!(f & 0x800000) && (f & 0x40)) {
-                        dirty = 1;
-                    }
-                    if (dirty == 0) {
-                        HSD_JObjSetMtxDirtySub(tmp_jobj);
-                    }
-                }
-            }
+            HSD_JObjSetRotationZ(tmp_jobj, 0.0F);
         }
 
         state = base[gp->gv.venom.xC8 + 11];
-        if (state < 8) {
-            if (state >= 1) {
-                if (jobj == NULL) {
-                    __assert("jobj.h", 0x294, "jobj");
-                }
-                if (jobj->flags & 0x20000) {
-                    __assert("jobj.h", 0x295, (char*) base + 0x2D4);
-                }
-                jobj->rotate.y = 0.0F;
-                if (!(jobj->flags & 0x02000000)) {
-                    if (jobj != NULL) {
-                        s32 dirty = 0;
-                        u32 f = jobj->flags;
-                        if (!(f & 0x800000) && (f & 0x40)) {
-                            dirty = 1;
-                        }
-                        if (dirty == 0) {
-                            HSD_JObjSetMtxDirtySub(jobj);
-                        }
-                    }
-                }
+        if (state >= 8) {
+            if (state < 0xC) {
+                goto venom_80205F30_far_type;
+            }
+        } else if (state >= 1) {
+                HSD_JObjSetRotationY(jobj, 0.0F);
 
-                if (gp->gv.venom.xF4 != 0) {
-                    if (gp->gv.venom.xF4 < 0 || gp->gv.venom.xF4 >= 5) {
-                        /* nothing */
-                    } else {
-                        if (grAnime_801C83D0((HSD_GObj*) gobj, 0, 7) != 0) {
-                            gp->gv.venom.xF4 = 0;
-                            gp->gv.venom.xF8 =
-                                (s32) * (f32*) ((u8*) grVe_804D6A30 + 0x2C);
-                        }
+                {
+                    s32 anim_state = gp->gv.venom.xF4;
+                    if (anim_state == 0) {
+                        goto venom_80205F30_anim_zero;
                     }
-                } else {
-                    if (gp->gv.venom.xF8 <= 0) {
-                        gp->gv.venom.xF4 = HSD_Randi(4) + 1;
-                        fire_kind = -1;
-                        {
-                            Ground* gp_re = gobj->user_data;
-                            s32 v = base[gp_re->gv.venom.xC8 + 14];
-                            if (v == 4) {
+                    if (anim_state < 0) {
+                        goto venom_80205F30_anim_done;
+                    }
+                    if (anim_state >= 5) {
+                        goto venom_80205F30_anim_done;
+                    }
+                    goto venom_80205F30_check_anim;
+                venom_80205F30_anim_zero:
+                    {
+                        if (gp->gv.venom.xF8 <= 0) {
+                            gp->gv.venom.xF4 = HSD_Randi(4) + 1;
+                            fire_kind = -1;
+                            switch (base[GET_GROUND(gobj)->gv.venom.xC8 + 14]) {
+                            case 0:
+                                break;
+                            case 4:
                                 fire_kind = 1;
-                            } else if (v >= 4) {
-                                /* default branch (>= 4 but != 4 - shouldn't
-                                 * happen for s32 == 4 case) */
-                            } else if (v == 0) {
-                                /* case 0: no change */
-                            } else if (v >= 0) {
+                                break;
+                            default:
                                 fire_kind = 0;
+                                break;
                             }
-                        }
-                        {
+                            {
+                                s32 idx0 = base[gp->gv.venom.xC8 + 14];
+                                s32 anim_id = base[idx0 * 4 + 0xD6];
+                                grAnime_801C8098(
+                                    (HSD_GObj*) gobj, anim_id, 7,
+                                    *(s32*) ((u8*) base + gp->gv.venom.xF4 * 8 +
+                                             fire_kind * 4 + 0x2FC),
+                                    0.0F, 1.0F);
+                            }
+                        } else {
                             s32 idx0 = base[gp->gv.venom.xC8 + 14];
-                            s32 anim_id =
-                                base[idx0 * 4 +
-                                     0xD6]; /* +0x358 = +0xD6 in s32 */
-                            f32 frame = ((
-                                f32*) ((u8*) base + gp->gv.venom.xF4 * 8 +
-                                       fire_kind * 4))[0xBF]; /* 0x2FC offset;
-                                                                 but better: */
-                            (void) frame;
-                            grAnime_801C8098((HSD_GObj*) gobj, anim_id, 7,
-                                             *(s32*) ((u8*) base +
-                                                      gp->gv.venom.xF4 * 8 +
-                                                      fire_kind * 4 + 0x2FC),
-                                             0.0F, 1.0F);
+                            s32 anim_id = base[idx0 * 4 + 0xD6];
+                            tmp_jobj = Ground_801C3FA4((HSD_GObj*) gobj, anim_id);
+                            HSD_JObjSetRotationZ(tmp_jobj, 0.0F);
                         }
-                    } else {
-                        s32 idx0 = base[gp->gv.venom.xC8 + 14];
-                        s32 anim_id = base[idx0 * 4 + 0xD6];
-                        tmp_jobj = Ground_801C3FA4((HSD_GObj*) gobj, anim_id);
-                        if (tmp_jobj == NULL) {
-                            __assert("jobj.h", 0x2A9, "jobj");
-                        }
-                        if (tmp_jobj->flags & 0x20000) {
-                            __assert("jobj.h", 0x2AA, (char*) base + 0x2D4);
-                        }
-                        tmp_jobj->rotate.z = 0.0F;
-                        if (!(tmp_jobj->flags & 0x02000000)) {
-                            if (tmp_jobj != NULL) {
-                                s32 dirty = 0;
-                                u32 f = tmp_jobj->flags;
-                                if (!(f & 0x800000) && (f & 0x40)) {
-                                    dirty = 1;
-                                }
-                                if (dirty == 0) {
-                                    HSD_JObjSetMtxDirtySub(tmp_jobj);
-                                }
-                            }
-                        }
+                        gp->gv.venom.xF8 = gp->gv.venom.xF8 - 1;
                     }
-                    gp->gv.venom.xF8 = gp->gv.venom.xF8 - 1;
+                    goto venom_80205F30_anim_done;
+                venom_80205F30_check_anim:
+                    if (grAnime_801C83D0((HSD_GObj*) gobj, 0, 7) != 0) {
+                        gp->gv.venom.xF4 = 0;
+                        gp->gv.venom.xF8 =
+                            (s32) * (f32*) ((u8*) grVe_804D6A30 + 0x2C);
+                    }
+                venom_80205F30_anim_done:;
                 }
 
                 other = (HSD_GObj*) base[gp->gv.venom.xC8 + 8];
@@ -1583,24 +1525,7 @@ void grVenom_80205F30(Ground_GObj* gobj)
                     sp94.z = 0.0F;
                 }
 
-                if (jobj == NULL) {
-                    __assert("jobj.h", 0x394, "jobj");
-                }
-                jobj->translate.x = sp94.x;
-                jobj->translate.y = sp94.y;
-                jobj->translate.z = sp94.z;
-                if (!(jobj->flags & 0x02000000)) {
-                    if (jobj != NULL) {
-                        s32 dirty = 0;
-                        u32 f = jobj->flags;
-                        if (!(f & 0x800000) && (f & 0x40)) {
-                            dirty = 1;
-                        }
-                        if (dirty == 0) {
-                            HSD_JObjSetMtxDirtySub(jobj);
-                        }
-                    }
-                }
+                HSD_JObjSetTranslate(jobj, &sp94);
 
                 {
                     s32 idx0 = base[gp->gv.venom.xC8 + 14];
@@ -1634,7 +1559,9 @@ void grVenom_80205F30(Ground_GObj* gobj)
                     }
                 }
             }
-        } else if (state < 0xC) {
+        goto venom_80205F30_type_done;
+    venom_80205F30_far_type:
+        {
             if (!(gp->gv.venom.xF0 & 7) && HSD_Randi(8) == 0) {
                 gp->gv.venom.xFC = 0;
                 type_idx = base[gp->gv.venom.xC8 + 11];
@@ -1738,6 +1665,7 @@ void grVenom_80205F30(Ground_GObj* gobj)
                 }
             }
         }
+    venom_80205F30_type_done:
 
         gp->gv.venom.xF0 = gp->gv.venom.xF0 + 1;
     } else {
@@ -1766,22 +1694,21 @@ void grVenom_80206870(Ground_GObj* arg) {}
 void grVenom_80206874(Ground_GObj* gobj)
 {
     s32 zero;
+    s32* base;
     Ground* gp;
     HSD_JObj* jobj;
     f32 scale;
-    u8* base;
-    u8* data;
+    s32* data;
     s32 type;
     Ground_GObj* other;
     Ground* other_gp;
     HSD_JObj* jobj2;
-    f32 scl;
     void* attr;
 
     zero = 0;
-    base = (u8*) &grVe_803E5348;
     gp = gobj->user_data;
     jobj = gobj->hsd_obj;
+    base = (s32*) &grVe_803E5348;
     scale = Ground_801C0498();
 
     gp->gv.venom.xC8 = grVe_804D6A34;
@@ -1793,8 +1720,8 @@ void grVenom_80206874(Ground_GObj* gobj)
     grAnime_801C7FF8(gobj, 0, 7, 1, 0.0F, 1.0F);
     grAnime_801C8098(gobj, 2, 7, 3, 0.0F, 1.0F);
 
-    data = base + gp->gv.venom.xC8 * 4;
-    type = *(s32*) (data + 0x2C);
+    data = base + gp->gv.venom.xC8;
+    type = data[11];
 
     if (type < 8) {
         if (type >= 1) {
@@ -1808,10 +1735,10 @@ void grVenom_80206874(Ground_GObj* gobj)
     goto venom_80206874_link;
 
 venom_80206874_spawn: {
-    s32 idx = *(s32*) (data + 0x38);
-    u8* data2 = base + idx * 4;
+    s32 idx = data[14];
+    s32* data2 = base + idx;
 
-    other = (Ground_GObj*) grVenom_80203EAC(*(s32*) (data2 + 0x324));
+    other = (Ground_GObj*) grVenom_80203EAC(data2[0xC9]);
     *(s32*) &gp->gv.venom.xDC = (s32) other;
     if (other != NULL) {
         other = *(Ground_GObj**) &gp->gv.venom.xDC;
@@ -1824,7 +1751,7 @@ venom_80206874_spawn: {
 }
 
 venom_80206874_link:
-    jobj2 = Ground_801C3FA4((HSD_GObj*) *(s32*) (data + 0x20), 5);
+    jobj2 = Ground_801C3FA4((HSD_GObj*) data[8], 5);
     lb_8000C2F8(Ground_801C3FA4(gobj, 0), jobj2);
     *(s32*) &gp->gv.venom.xDC = zero;
     goto venom_80206874_done;
@@ -1836,22 +1763,21 @@ venom_80206874_default:
 venom_80206874_done:
 
     attr = grVe_804D6A30;
-    scl = scale * *(f32*) ((u8*) attr + 0x34);
-    HSD_JObjSetScaleX(jobj, scl);
+    HSD_JObjSetScaleX(jobj, scale * *(f32*) ((u8*) attr + 0x34));
 
     attr = grVe_804D6A30;
-    scl = scale * *(f32*) ((u8*) attr + 0x34);
-    HSD_JObjSetScaleY(jobj, scl);
+    HSD_JObjSetScaleY(jobj, scale * *(f32*) ((u8*) attr + 0x34));
 
     attr = grVe_804D6A30;
-    scl = scale * *(f32*) ((u8*) attr + 0x34);
-    HSD_JObjSetScaleZ(jobj, scl);
+    HSD_JObjSetScaleZ(jobj, scale * *(f32*) ((u8*) attr + 0x34));
 
     ((struct grCorneria_GroundVars2*) &gp->gv.venom)->xC4.flags.b0 = false;
     *(s32*) &gp->gv.venom.xD4 = zero;
     gp->gv.venom.xF0 = zero;
     gp->gv.venom.xF4 = zero;
-    gp->gv.venom.xF8 = (s32) * (f32*) ((u8*) grVe_804D6A30 + 0x2C);
+
+    attr = grVe_804D6A30;
+    gp->gv.venom.xF8 = (s32) * (f32*) ((u8*) attr + 0x2C);
     gp->gv.venom.xFC = zero;
 }
 

@@ -57,7 +57,7 @@
 #include <melee/ft/chara/ftCommon/ftCo_SpecialS.h>
 #include <melee/ft/chara/ftCommon/ftpickupitem.h>
 #include <melee/ft/chara/ftGameWatch/ftGw_Attack100.h>
-#include <melee/ft/chara/ftKirby/ftKb_Init.h>
+#include <melee/ft/chara/ftKirby/ftkirby.h>
 #include <melee/ft/chara/ftLink/ftLk_Init.h>
 #include <melee/ft/chara/ftYoshi/ftYs_Init.h>
 #include <melee/ft/ft_0877.h>
@@ -443,12 +443,13 @@ void ftCo_800D71D8(Fighter_GObj* gobj)
 
 bool ftCo_800D730C(Fighter_GObj* gobj, bool arg1)
 {
+    extern f32 ftCo_804D9018;
     s32 unused1;
-    Fighter* fp = GET_FIGHTER(gobj);
-    struct Fighter_x2D0_t* x2d0 = fp->x2D0;
-    Vec3 vel;
+    struct Fighter_x2D0_t* x2d0;
     s32 canJump;
     s32 r29;
+    Fighter* fp;
+    Vec3 vel;
     s32 r4;
     s32 result;
     s32 unused2;
@@ -458,6 +459,8 @@ bool ftCo_800D730C(Fighter_GObj* gobj, bool arg1)
     s32 unused6;
     s32 unused7;
 
+    fp = GET_FIGHTER(gobj);
+    x2d0 = fp->x2D0;
     if (fp->motion_id == 0x9B) {
         if (ft_did_jump(fp, arg1)) {
             ftCo_800D74A4(gobj);
@@ -470,7 +473,7 @@ bool ftCo_800D730C(Fighter_GObj* gobj, bool arg1)
             if (ft_800D2D0C(gobj)) {
                 vel.x = fp->input.lstick.x * x2d0->x8;
                 vel.y = x2d0->x14[0];
-                vel.z = 0.0f;
+                vel.z = ftCo_804D9018;
                 ft_800D2E7C(gobj, &vel);
             } else {
                 ftCommon_8007D5D4(fp);
@@ -486,7 +489,8 @@ bool ftCo_800D730C(Fighter_GObj* gobj, bool arg1)
         }
         r4 = 1;
         if (!(fp->input.lstick.y >= p_ftCommonData->tap_jump_threshold) &&
-            !(fp->input.held_inputs & 0xC00)) {
+            !(fp->input.held_inputs & 0xC00))
+        {
             r4 = 0;
         }
         if (canJump && r29 && r4) {
@@ -1500,10 +1504,10 @@ bool fn_800D9558(Fighter_GObj* gobj)
 bool fn_800D8EC8(Fighter_GObj* gobj)
 {
     Fighter* fp = GET_FIGHTER(gobj);
-    struct ftLk_DatAttrs* attrs;
+    ftCo_LinkCatchAttrs* attrs;
+    Item_GObj* item;
     HSD_JObj* jobj;
     itLinkHookshotAttributes* hookAttrs;
-    Item_GObj* item;
     Vec3 bonePos;
     f32 grav;
     Vec3 vel;
@@ -1573,7 +1577,7 @@ bool fn_800D8EC8(Fighter_GObj* gobj)
                         ft_PlaySFX(fp, 0x2714C, 0x7F, 0x40);
                     }
                 } else if (grav == (f32) attrs->x90) {
-                    it_802A2B10(item);
+                    it_802A2B10(fp->fv.lk.xC);
                 }
             }
         }
@@ -1884,8 +1888,7 @@ static void fn_800D9CE8(Fighter_GObj* gobj)
         fp->mv.co.capturedamage.x18 = it->xDD4_itemVar.samusgrapple.xC;
         break;
     default:
-        fp->mv.co.capturedamage.x18 =
-            fp->parts[fp->ft_data->x8->x11].joint;
+        fp->mv.co.capturedamage.x18 = fp->parts[fp->ft_data->x8->x11].joint;
         break;
     }
 
@@ -2310,7 +2313,36 @@ void fn_800DAA40(Fighter_GObj* arg0, Fighter_GObj* arg1)
 
 void fn_800DAADC(Fighter_GObj* arg0, Fighter_GObj* arg1)
 {
-    NOT_IMPLEMENTED;
+    Fighter* fp = GET_FIGHTER(arg0);
+    Fighter* temp_r30;
+    Fighter* temp_r31;
+    volatile u8 pad8[8];
+    Vec3 sp24;
+    FtMotionId msid;
+
+    PAD_STACK(4);
+
+    if (fp->ground_or_air == GA_Ground) {
+        msid = ftCo_MS_CapturePulledLw;
+    } else {
+        msid = ftCo_MS_CapturePulledHi;
+    }
+    fn_800DA8E4(arg0, arg1, msid);
+
+    temp_r30 = GET_FIGHTER(arg0);
+    temp_r31 = GET_FIGHTER(arg1);
+    fn_800DAC78(arg0, &sp24);
+    if (temp_r30->ground_or_air == GA_Ground) {
+        temp_r31->x2170 = sp24.y + temp_r30->cur_pos.y - temp_r31->cur_pos.y;
+    } else {
+        temp_r31->x2170 = 0.0F;
+        temp_r30->cur_pos.x += sp24.x;
+        temp_r30->cur_pos.y += sp24.y;
+        temp_r30->cur_pos.z += sp24.z;
+    }
+
+    fp->coll_cb(arg0);
+    HSD_JObjSetTranslate(GET_JOBJ(arg0), &fp->cur_pos);
 }
 
 void ftCo_CapturePulledHi_Anim(Fighter_GObj* gobj) {}

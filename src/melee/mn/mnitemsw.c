@@ -309,13 +309,13 @@ HSD_JObj* mnItemSw_8023405C(MnItemSwData* data, u8 idx)
 
 void mnItemSw_80234104(HSD_GObj* gobj)
 {
-    MnItemSwData* data = gobj->user_data;
     HSD_JObj* sp38;
     u8* order;
     s32 i;
     u8 cursor;
     HSD_JObj* cjobj;
     f32 y_spacing;
+    MnItemSwData* data = gobj->user_data;
 
     HSD_JObjClearFlagsAll(data->jobjs[4], 0x10);
     HSD_JObjClearFlagsAll(data->jobjs[6], 0x10);
@@ -367,16 +367,17 @@ void mnItemSw_80234104(HSD_GObj* gobj)
 
 void mnItemSw_8023453C(HSD_GObj* gobj, u8 arg1, u8 arg2)
 {
-    MnItemSwData* data = gobj->user_data;
-    struct MnItemSwTable* tbl = &mnItemSw_803ED340;
     HSD_JObj* sp44;
-    s32 sp40;
     HSD_JObj* sp3C;
     f32 anim_val;
     u8 new_cursor;
     HSD_JObj* cjobj;
+    MnItemSwData* data = gobj->user_data;
+    struct MnItemSwTable* tbl = &mnItemSw_803ED340;
+    u8 arg1_ = arg1;
+    u8 arg2_ = arg2;
 
-    if (arg1 != 0) {
+    if (arg1_ != 0) {
         u8 old_cursor = data->cursor;
 
         if (old_cursor == 0x1F || old_cursor == 0x20) {
@@ -457,7 +458,7 @@ void mnItemSw_8023453C(HSD_GObj* gobj, u8 arg1, u8 arg2)
         }
     }
 
-    if (arg2 != 0) {
+    if (arg2_ != 0) {
         if (mn_804A04F0.hovered_selection == 0x1F ||
             mn_804A04F0.hovered_selection == 0x20)
         {
@@ -502,13 +503,13 @@ void mnItemSw_8023453C(HSD_GObj* gobj, u8 arg1, u8 arg2)
 void fn_80234C24(HSD_GObj* gobj)
 {
     MnItemSwData* data;
+    struct MnItemSwTable* tbl = &mnItemSw_803ED340;
     f32* anims;
     HSD_JObj* jobj;
     HSD_Text* text;
     s32 menu_changed;
     s32 hovered_changed;
     s32 confirmed_changed;
-    struct MnItemSwTable* tbl = &mnItemSw_803ED340;
 
     PAD_STACK(0x18);
 

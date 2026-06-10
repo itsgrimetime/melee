@@ -1905,17 +1905,19 @@ s32 un_8031BBF4(s8 arg0)
 HSD_GObj* un_8031BC54(s32 arg0)
 {
     char buf[44];
-    TyDspArchNames jobj_names;
-    TyDspArchNames matanim_names;
     HSD_GObj* gobj;
+    s32 id = arg0;
     TyDspEntry* entry;
     TyDspBgData* data = un_804D6F1C;
+    TyDspArchNames jobj_names;
+    TyDspArchNames matanim_names;
     HSD_JObj* root;
     HSD_JObj* child;
     u8 cat;
     u32 c;
+    u32 c2;
 
-    entry = un_8031B9DC(arg0);
+    entry = un_8031B9DC(id);
     gobj = GObj_Create(6, 7, 0);
     root = HSD_JObjAlloc();
     HSD_GObjObject_80390A70(gobj, HSD_GObj_804D7849, root);
@@ -1935,16 +1937,17 @@ HSD_GObj* un_8031BC54(s32 arg0)
 
     HSD_JObjAddChild(root, child);
 
-    c = (cat = entry->x04);
+    c2 = entry->x04;
+    cat = c2;
     matanim_names = un_803B8A34;
-    if ((s8) c == -1) {
+    if ((s8) c2 == -1) {
         cat = 0;
     }
 
     {
         char* temp2;
         temp2 = (char*) matanim_names.entries[(s8) cat];
-        un_80306A48(child, NULL, temp2, NULL, data->archives[c],
+        un_80306A48(child, NULL, temp2, NULL, data->archives[c2],
                     (long) entry->x05);
     }
     HSD_JObjRemoveAnimAll(child);
@@ -1960,7 +1963,7 @@ HSD_GObj* un_8031BC54(s32 arg0)
         DevText_SetCursorXY(un_804D6F24, 0, 0);
         sprintf(buf, un_803FF19C, entry->x08, entry->x0C);
         DevText_Print(un_804D6F24, buf);
-        un_8031BF34(arg0);
+        un_8031BF34(id);
     }
 
     return gobj;

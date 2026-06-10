@@ -653,7 +653,7 @@ void mn_80229860(s8 pending_mode)
     gm_801A4B60();
 }
 
-static char null_terminator[1] = "\0";
+extern char null_terminator[1];
 
 void mn_8022EA08(char* buf, u32 num)
 {
@@ -1016,8 +1016,9 @@ void mn_8022A440(HSD_GObj* gp, HSD_JObj* root, MainMenuSelection selection)
     mn_8022F3D8(r29, 0x12, TOBJ_MASK);
     mn_8022F3D8(r29, 0x13, TOBJ_MASK);
     HSD_JObjAnim(r29);
-    f = (mn_8022F298(sp24[0]) - mn_803EB360[1].start_frame);
-    HSD_JObjReqAnimAll(sp24[0], f + mn_803EB360[0].start_frame);
+    f = mn_8022F298(sp24[0]);
+    HSD_JObjReqAnimAll(sp24[0], (f - mn_803EB360[1].start_frame) +
+                                     mn_803EB360[0].start_frame);
     HSD_JObjAnimAll(sp24[0]);
     mn_8022F298(sp24[2]);
     HSD_JObjReqAnimAll(sp24[2], mn_803EB378[0].start_frame);
@@ -1217,19 +1218,20 @@ void fn_8022AF10(HSD_GObj* gp)
 void fn_8022AFEC(HSD_GObj* gp)
 {
     /// @todo figure out the inlines
+    AnimLoopSettings* anim_loop;
+    HSD_JObj* jobj;
     MainMenuData* data;
     MainMenuData* data2;
     HSD_GObjProc* think;
     bool selection_changed;
-    HSD_JObj* jobj;
     HSD_JObj* temp_jobj;
     u8 var_r26;
-    AnimLoopSettings* anim_loop;
     MainMenuSelection hovered_selection;
     u8 state;
     u8 option_count;
+    u8 pad[0x20];
     HSD_JObj* sp20[4];
-    PAD_STACK(50);
+    PAD_STACK(18);
 
     var_r26 = 0;
     selection_changed = false;
@@ -1335,7 +1337,7 @@ void fn_8022AFEC(HSD_GObj* gp)
             mn_8022A440(gp,
                         sp20[mn_80229A04_dontinline(mn_804A04F0.cur_menu,
                                                     data->hovered_selection)],
-                        mn_804A04F0.prev_menu);
+                        data->hovered_selection);
         }
         if ((u8) selection_changed != false) {
             hovered_selection = mn_804A04F0.hovered_selection;
@@ -1384,9 +1386,10 @@ HSD_GObj* mn_8022B3A0(u8 state)
 {
     HSD_JObj* sp48[12];
     HSD_JObj* sp2C[7];
+    StaticModelDesc* top = &MenMainConTop_Top;
+    HSD_GObj* gobj;
     HSD_JObj* cursor_jobj;
     int temp_r31;
-    HSD_GObj* gobj;
     HSD_JObj* temp_r16_2;
     u8 hovered_selection;
     int idx;
@@ -1403,7 +1406,6 @@ HSD_GObj* mn_8022B3A0(u8 state)
     u8 var_r17;
     u32 var_r17_int;
     HSD_JObj* root_jobj;
-    StaticModelDesc* top = &MenMainConTop_Top;
     PAD_STACK(16);
 
     cur_menu = mn_804A04F0.cur_menu;
@@ -1637,13 +1639,29 @@ void fn_8022BDB4(HSD_GObj* gobj, int unused)
 
 HSD_GObj* mn_8022BE34(void)
 {
+    HSD_GObj* gobj = GObj_Create(2, 3, 0x80);
+    HSD_CObj* cobj;
+    Vec3 pos;
+
+    mn_804D6BAC = gobj;
+    cobj = HSD_CObjLoadDesc(MenMain_cam);
+    HSD_CObjGetEyePosition(cobj, &pos);
+    HSD_GObjObject_80390A70(gobj, HSD_GObj_804D784B, cobj);
+    GObj_SetupGXLinkMax(gobj, fn_8022BDB4, 0);
+    gobj->gxlink_prios = 0x7F;
+    HSD_GObj_SetupProc(gobj, mn_8022BA1C, 0);
+    return gobj;
+}
+
+static inline HSD_GObj* mn_8022BE34_OnEnter(void)
+{
     Vec3 pos;
     HSD_GObj* gobj = GObj_Create(2, 3, 0x80);
     HSD_CObj* cobj;
 
     mn_804D6BAC = gobj;
     cobj = HSD_CObjLoadDesc(MenMain_cam);
-    HSD_CObjGetEyePosition(cobj, &pos);
+    HSD_CObjGetEyePosition(cobj, (Vec3*) ((u8*) &pos + 0x14));
     HSD_GObjObject_80390A70(gobj, HSD_GObj_804D784B, cobj);
     GObj_SetupGXLinkMax(gobj, fn_8022BDB4, 0);
     gobj->gxlink_prios = 0x7F;
@@ -2889,7 +2907,7 @@ void mn_8022DDA8_OnEnter(MenuEnterData* data)
 
     mn_8022DDA8_inline(hovered_selection);
     mn_8022BCF8();
-    mn_8022BEDC(mn_8022BE34());
+    mn_8022BEDC(mn_8022BE34_OnEnter());
     mn_80229B2C();
     mn_80229DC0();
 
@@ -2912,6 +2930,8 @@ void mn_8022DDA8_OnEnter(MenuEnterData* data)
     lbAudioAx_80023F28(gmMainLib_8015ECB0());
     lb_8001CE00();
 }
+
+char null_terminator[1] = "\0";
 
 bool mn_IsFighterUnlocked(int arg0)
 {

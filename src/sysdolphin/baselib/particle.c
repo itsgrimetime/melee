@@ -294,21 +294,21 @@ static inline int hexval(int ch)
 {
     if (ch < 0x47) {
         if (ch < 0x0A) {
-            if (ch < 0) {
-                goto ret_zero;
+            if (ch >= 0) {
+                goto sub_30;
             }
-            goto sub_30;
-        }
-        if (ch < 0x41) {
             goto ret_zero;
         }
-        goto sub_37;
+        if (ch >= 0x41) {
+            goto sub_37;
+        }
+        goto ret_zero;
     }
     if (ch < 0x67) {
-        if (ch < 0x61) {
-            goto ret_zero;
+        if (ch >= 0x61) {
+            goto sub_57;
         }
-        goto sub_57;
+        goto ret_zero;
     }
     goto ret_zero;
 sub_30:
@@ -1695,7 +1695,8 @@ s32 hsd_80393D2C(s32 enable)
 void hsd_80393DA0(u8* buf, size_t size)
 {
     PAD_STACK(4);
-    memset(&hsd_804CF7E8, 0, sizeof(hsd_804CF7E8));
+    memset(&hsd_804CF7E8, 0,
+           sizeof(hsd_804CF7E8) - sizeof(hsd_804CF7E8.x24));
     hsd_804CF7E8.out_buf = buf;
     hsd_804CF7E8.buf_size = size;
     memset(buf, 0, size);
@@ -2969,8 +2970,8 @@ static inline void ps_remove_node(struct ParticleScreenState* sp, void* node)
 // allocation
 s32 hsd_80395D88(void* data)
 {
-    struct ParticleScreenState* sp = &hsd_804CF810;
     char* msg = (char*) lbl_8040AB00;
+    struct ParticleScreenState* sp = &hsd_804CF810;
     s32 result;
 
     result = hsd_80395550(data);
@@ -3001,13 +3002,16 @@ s32 hsd_80395D88(void* data)
         remove_return_0:
             ps_remove_node(sp, data);
             return 0;
-        case 6:
-            if (sp->xD4 != NULL) {
-                OSContext* ctx = sp->xD4;
-                s32 saved;
-                s32 i;
+        case 6: {
+            OSContext* ctx;
+            OSContext** ctx_ptr;
+            s32 saved;
+            s32 i;
 
+            ctx_ptr = &sp->xD4;
+            if (*ctx_ptr != NULL) {
                 saved = hsd_80393D2C(1);
+                ctx = *ctx_ptr;
                 OSReport(msg + 0x728);
                 i = 0;
                 do {
@@ -3016,7 +3020,8 @@ s32 hsd_80395D88(void* data)
                              ((u32*) ctx)[i + 0x10]);
                     i++;
                 } while (i < 0x10);
-                hsd_80394950(ctx);
+                hsd_80394950(*ctx_ptr);
+                ctx = *ctx_ptr;
                 OSReport(msg + 0x828);
                 OSReport(msg + 0x860, ((u32*) ctx)[0x198 / 4],
                          ((u32*) ctx)[0x19C / 4]);
@@ -3035,6 +3040,7 @@ s32 hsd_80395D88(void* data)
             }
             ps_remove_node(sp, data);
             return 1;
+        }
         case 7:
             hsd_80394E8C(lbl_8040BEC4);
             return 1;
@@ -3373,10 +3379,7 @@ s32 hsd_80396A20(void* data)
                 hsd_80394E8C(lbl_8040BC3C.x18);
                 return 1;
             }
-            /* fallthrough */
-        default:
-            bit <<= 1;
-            break;
+            goto default_case;
         case 0x400:
             lbl_8040BC3C.x10 = val & ~mask;
             return 1;
@@ -3385,18 +3388,21 @@ s32 hsd_80396A20(void* data)
             return 1;
         case 0x1000: {
             extern u8 lbl_8040BD74[];
-            ExcptNode* node = (ExcptNode*) lbl_8040BD74;
-            if (node != NULL) {
-                fn_80394DF4(node);
-                node->next = sp->xD0;
-                sp->xD0 = node;
-                if (node->callback != NULL) {
-                    node->callback(node);
+            data = (ExcptNode*) lbl_8040BD74;
+            if (data != NULL) {
+                fn_80394DF4(data);
+                ((ExcptNode*) data)->next = sp->xD0;
+                sp->xD0 = data;
+                if (((ExcptNode*) data)->callback != NULL) {
+                    ((ExcptNode*) data)->callback(data);
                 }
                 sp->x0_b5 = 1;
             }
             return 1;
         }
+        default: default_case:
+            bit <<= 1;
+            break;
         }
     }
     return 0;
@@ -4834,7 +4840,6 @@ void hsd_80398A08(u32 unused)
     base[7] = 0;
 }
 
-// @TODO: Currently 99.63% match - asm bytes identical, relocation differences
 HSD_Particle* hsd_80398C04(HSD_Particle** head, int linkNo, int bank, u32 kind,
                            u16 texGroup, u8* list, int life, int palflag,
                            f32 x, f32 y, f32 z, f32 vx, f32 vy, f32 vz,
@@ -4870,7 +4875,7 @@ HSD_Particle* hsd_80398C04(HSD_Particle** head, int linkNo, int bank, u32 kind,
     }
 
     if (head == NULL) {
-        slot = (HSD_Particle**) ((s32*) hsd_804D08E8 + 0x20 / 4 + linkNo);
+        slot = (HSD_Particle**) &hsd_804D0908[linkNo];
         pp->next = *slot;
         *slot = pp;
     } else {
@@ -4908,14 +4913,14 @@ HSD_Particle* hsd_80398C04(HSD_Particle** head, int linkNo, int bank, u32 kind,
     pp->cmdWait = cmd_wait;
     pp->poseNum = 0;
     pp->palNum = 0xFF;
-    pp->envCol.a = 0xFF;
-    pp->envCol.b = 0xFF;
-    pp->envCol.g = 0xFF;
-    pp->envCol.r = 0xFF;
-    pp->envColTarget.a = 0;
-    pp->envColTarget.b = 0;
-    pp->envColTarget.g = 0;
-    pp->envColTarget.r = 0;
+    pp->primCol.a = 0xFF;
+    pp->primCol.b = 0xFF;
+    pp->primCol.g = 0xFF;
+    pp->primCol.r = 0xFF;
+    pp->envCol.a = 0;
+    pp->envCol.b = 0;
+    pp->envCol.g = 0;
+    pp->envCol.r = 0;
     pp->envColCount = 0;
     pp->primColCount = 0;
     pp->sizeCount = 0;
@@ -4927,7 +4932,7 @@ HSD_Particle* hsd_80398C04(HSD_Particle** head, int linkNo, int bank, u32 kind,
     pp->aCmpRemain = 0;
     pp->aCmpCount = 0;
     pp->rotateCount = 0;
-    pp->sizeTarget = 0.0F;
+    pp->rotateTarget = 0.0F;
     pp->rotate = 0.0F;
     pp->gen = gp;
     if (gp != NULL) {

@@ -1482,12 +1482,12 @@ void lbColl_800077A0(Vec3* a, MtxPtr arg1, Vec3* b, Vec3* c, Vec3* d, Vec3* e,
 
         offset_dist = dist + dist_offset;
 
-        dot_diff_cb = diff_cb.x * diff_cb.x + diff_cb.y * diff_cb.y +
-                      diff_cb.z * diff_cb.z;
-
         diff_ba.x = b->x - a->x;
         diff_ba.y = b->y - a->y;
         diff_ba.z = b->z - a->z;
+
+        dot_diff_cb = diff_cb.x * diff_cb.x + diff_cb.y * diff_cb.y +
+                      diff_cb.z * diff_cb.z;
 
         if (nearzero(dot_diff_cb)) {
             scl = 0.0f;
@@ -2580,7 +2580,6 @@ bool lbColl_8000A584(HurtCapsule* hurt, u32 arg1, u32 arg2, Mtx arg3, f32 arg8)
         Vec3 sp88;
         f32 temp_f31;
         GXColor* temp_r31_2;
-        MtxPtr var_r28;
         u32 var_r0;
         u32 var_r4;
         GXColor* temp_r3;
@@ -2613,12 +2612,12 @@ bool lbColl_8000A584(HurtCapsule* hurt, u32 arg1, u32 arg2, Mtx arg3, f32 arg8)
             sp88 = hurt->b_pos;
             sp94 = hurt->a_pos;
             if (arg3 != NULL) {
-                var_r28 = spA0;
+                hurt = (HurtCapsule*) spA0;
             } else {
-                var_r28 = HSD_JObjGetMtxPtr(hurt->bone);
+                hurt = (HurtCapsule*) HSD_JObjGetMtxPtr(hurt->bone);
             }
-            lbColl_DrawHitResult(var_r28, &sp94, &sp88, temp_r3, temp_r31_2,
-                                 temp_f31);
+            lbColl_DrawHitResult((MtxPtr) hurt, &sp94, &sp88, temp_r3,
+                                 temp_r31_2, temp_f31);
             return true;
         }
         return false;

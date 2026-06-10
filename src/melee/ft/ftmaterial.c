@@ -7,15 +7,12 @@
 #include "ft/forward.h"
 
 #include "ft/ft_0C8C.h"
-#include "ft/ft_0D4D.h"
 #include "ft/ftCo_800C7CA0.h"
 #include "ft/ftdevice.h"
 #include "ft/types.h"
 #include "ftCommon/ftCo_09F4.h"
-#include "gm/gm_unsplit.h"
 #include "lb/lb_00B0.h"
 #include "lb/lbrefract.h"
-#include "pl/player.h"
 
 #include <baselib/class.h>
 #include <baselib/debug.h>
@@ -26,17 +23,31 @@
 #include <baselib/tev.h>
 #include <baselib/tobj.h>
 
-/* literal */ extern char* ftCo_804D3C00;
-/* literal */ extern char* ftCo_804D3C08;
-/* literal */ float const ftCo_804D8C20 = 0;
-/* literal */ float const ftCo_804D8C24 = 1;
+HSD_MObjInfo ftMObj = { ftMaterial_800BF260 };
+
+static HSD_TevDesc ftMaterial_803C69D0 = {
+    NULL,
+    TEVCONF_MODE,
+    0,
+    HSD_TE_UNDEF,
+    HSD_TE_UNDEF,
+    HSD_TE_UNDEF,
+    { {
+        0, 0, 15, 15, 15, 0, 0, true, 0, 0, 7, 7, 7, 0, 0, false,
+        0, 0, 0, 0, 0, 0, 0,
+    } },
+};
+
+static HSD_TECnst ftMaterial_803C6A44 = {
+    HSD_TE_CNST, NULL, NULL, HSD_TE_RGB, HSD_TE_U8, 0xFF, 0xFF, 0, 0,
+};
 
 #pragma force_active on
 
 void ftMaterial_800BF260(void)
 {
-    hsdInitClassInfo(&ftMObj.parent, &hsdMObj.parent, (char*) &ftMObj + 0xDC,
-                     (char*) &ftCo_804D3C00, 0x50, 0x20);
+    hsdInitClassInfo(&ftMObj.parent, &hsdMObj.parent, "sysdolphin_base_library",
+                     "ft_mobj", sizeof(HSD_MObjInfo), sizeof(HSD_MObj));
     ftMObj.setup = ftMaterial_800BF2B8;
 }
 
@@ -46,9 +57,9 @@ void ftMaterial_800BF2B8(HSD_MObj* mobj, u32 rendermode)
     HSD_TObj* tobj;
     HSD_TExp texp;
     HSD_PEDesc pe;
-    u32 mobj_rendermode;
     HSD_TObj** cur_tobj;
     HSD_TExp* texp1;
+    u32 mobj_rendermode;
     HSD_PEDesc* pe_p;
     u32 unused;
 
@@ -153,8 +164,7 @@ HSD_TExp* ftMaterial_800BF534(Fighter* fp, HSD_MObj* mobj, HSD_TExp* texp,
             chk = lbGetFreeColorRegister(0, mobj, NULL);
             reg = chk;
             if (reg == -1) {
-                OSReport(base + 0xF4);
-                __assert(base + 0x118, 240, (char*) &ftCo_804D3C08);
+                HSD_ASSERTREPORT(240, 0, "can't find free color register!\n");
             }
             texp->cnst.reg = (u8) reg;
             texp->cnst.val = &overlay->x50_light_color;
@@ -219,10 +229,9 @@ void ftMaterial_800BF6BC(Fighter* fp, HSD_MObj* mobj, HSD_TExp* texp)
             if (overlay->x7C_color_enable) {
                 u32 temp_alpha;
                 s32 inv_alpha;
-                GXColor* color_hex = &overlay->x2C_hex;
                 GXColor* fp_color = &fp->x610_color_rgba[0];
-                u8 temp_r8;
-                s32 temp_r8_2;
+                GXColor* color_hex = &overlay->x2C_hex;
+                s32 temp_r8;
                 s32 temp_r7;
                 s32 temp_r4;
 
@@ -233,16 +242,14 @@ void ftMaterial_800BF6BC(Fighter* fp, HSD_MObj* mobj, HSD_TExp* texp)
                 } else {
                     inv_alpha = 0xFF - temp_alpha;
                     temp_r8 = fp_color->r;
-                    temp_r8_2 =
-                        temp_r8 +
-                        ((color_hex->a * (color_hex->r - temp_r8)) / 255);
-                    temp_r7 = temp_r8_2 * 0xFF;
+                    temp_r8 += (color_hex->a * (color_hex->r - temp_r8)) / 255;
+                    temp_r7 = temp_r8 * 0xFF;
                     temp_r4 = temp_r7 / inv_alpha;
                     sp168.r = (u8) temp_r4;
                     if (sp168.r != 0) {
                         sp168.a = temp_r7 / sp168.r;
                     } else {
-                        sp168.a = ((inv_alpha - temp_r8_2) * 0xFF) / 255;
+                        sp168.a = ((inv_alpha - temp_r8) * 0xFF) / 255;
                     }
                     {
                         u8 temp_r8_3 = fp_color->g;
@@ -276,8 +283,7 @@ void ftMaterial_800BF6BC(Fighter* fp, HSD_MObj* mobj, HSD_TExp* texp)
             sp_cnst1 = *(HSD_TECnst*) (base + 0xC4);
             reg1 = lbGetFreeColorRegister(0, mobj, texp);
             if (reg1 == -1) {
-                OSReport(base + 0xF4);
-                __assert(base + 0x118, 352, (char*) &ftCo_804D3C08);
+                HSD_ASSERTREPORT(352, 0, "can't find free color register!\n");
             }
             sp_cnst1.reg = (u8) reg1;
             sp_cnst1.val = &sp168;
@@ -295,8 +301,8 @@ void ftMaterial_800BF6BC(Fighter* fp, HSD_MObj* mobj, HSD_TExp* texp)
             }
             reg2 = lbGetFreeColorRegister(var_r3, mobj, (HSD_TExp*) &sp_cnst1);
             if (reg2 == -1) {
-                OSReport(base + 0x128);
-                __assert(base + 0x118, 366, (char*) &ftCo_804D3C08);
+                HSD_ASSERTREPORT(366, 0,
+                                 "can't find free color ratio register!\n");
             }
             if ((u8) fp->x61D != 0xFF) {
                 sp_cnst2 = *(HSD_TECnst*) (base + 0xC4);
@@ -457,30 +463,4 @@ void ftMaterial_800BFB4C(Fighter_GObj* gobj, GXColor* diffuse)
             }
         }
     }
-}
-
-void ftMaterial_800BFD04(Fighter_GObj* gobj)
-{
-    Fighter* fp = GET_FIGHTER(gobj);
-    Fighter_ChangeMotionState(gobj, ftCo_MS_Sleep, Ft_MF_None, 0, 1, 0, NULL);
-    fp->invisible = true;
-    fp->x221E_b1 = true;
-    fp->x221E_b2 = true;
-    fp->x2219_b1 = true;
-    fp->x890_cameraBox->x8 = true;
-    fp->x221F_b3 = true;
-    fp->x221F_b1 = true;
-}
-
-void ftMaterial_800BFD9C(Fighter_GObj* gobj)
-{
-    Fighter* fp = GET_FIGHTER(gobj);
-    ftMaterial_800BFD04(gobj);
-    if (fp->x2222_b5) {
-        HSD_GObj* pl_gobj = Player_GetEntityAtIndex(fp->player_id, 1);
-        if (pl_gobj != NULL) {
-            ftCo_800D4F24(pl_gobj, 1);
-        }
-    }
-    gm_80167320(fp->player_id, fp->x221F_b4);
 }

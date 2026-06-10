@@ -168,11 +168,9 @@ void ft_800895E0(Fighter* fp, int arg1)
     union Struct2070 val;
     union Struct2070 sp18;
     union Struct2070 sp14;
-    Item_GObj* temp;
     union Struct2070 spC;
 
-    spC.x2070_int = arg1;
-    val = spC;
+    val = *(union Struct2070*) &arg1;
     if (val.x2073 == 0 || val.x2073 != fp->x2070.x2073) {
         fp->x2074.x2088 = plAttack_80037B08();
     }
@@ -181,8 +179,7 @@ void ft_800895E0(Fighter* fp, int arg1)
         val = sp18;
     }
     if (val.x2073 == 0x62) {
-        temp = fp->item_gobj;
-        if (temp != NULL && it_8026B6C8(temp) != 0) {
+        if (fp->item_gobj != NULL && it_8026B6C8(fp->item_gobj) != 0) {
             sp14.x2070_int = 0x44003D;
             val = sp14;
         }
@@ -215,7 +212,7 @@ void ft_80089768(Vec2* ptr)
     UnkStruct89768* s = (UnkStruct89768*) ptr;
     s->x0 = 0;
     s->x4 = 0;
-    s->x8 = 1.0f;
+    s->x8 = 0.0f;
     s->xC = 6;
     s->x10_b7 = 0;
     s->x11_b4 = 0;

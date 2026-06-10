@@ -61,7 +61,7 @@
 #include "ftCommon/ftCo_SpecialS.h"
 #include "ftCrazyHand/ftCh_Init.h"
 #include "ftCrazyHand/ftCh_Wait1_0.h"
-#include "ftKirby/ftKb_Init.h"
+#include "ftKirby/ftkirby.h"
 #include "ftMasterHand/ftMh_Wait1_0.h"
 #include "ftPeach/types.h"
 #include "gm/gm_unsplit.h"
@@ -82,7 +82,7 @@
 #include "pl/player.h"
 #include "pl/plbonuslib.h"
 #include "pl/pltrick.h"
-#include "vi/vi1202.h"
+#include "sfx/crowdsfx.h"
 
 #include <common_structs.h>
 #include <dolphin/gx.h>
@@ -925,7 +925,7 @@ Fighter_GObj* Fighter_Create(struct plAllocInfo* input)
     } else if (fp->kind == FTKIND_CREZYH) {
         ftCh_Init_80155FCC(gobj);
     } else if (input->has_transformation) {
-        ftMaterial_800BFD04(gobj);
+        ftCo_800BFD04(gobj);
     } else if (Player_GetFlagsBit3(fp->player_id) != 0) {
         ftCo_800C61B0(gobj);
     } else {

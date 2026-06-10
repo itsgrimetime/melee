@@ -224,11 +224,13 @@ Item_GObj* it_802E72E0(Item_GObj* parent, HSD_JObj* bone, s32 type, f32 scale,
                     z = -z;
                 }
             } else {
+                f32 z_abs;
                 z = ip->pos.z;
+                z_abs = z;
                 if (z < 0.0f) {
-                    z = -z;
+                    z_abs = -z;
                 }
-                z = -z;
+                z = -z_abs;
             }
             ip->xDD4_itemVar.arwinglaser.xE08 = z;
             it_802E7A4C(new_gobj);
@@ -251,7 +253,9 @@ void it_802E7654(Item_GObj* owner, HSD_JObj* bone, Vec3* target, s32 type,
 
     lb_8000B1CC(bone, NULL, &sp28);
     spawn.kind = It_Kind_Arwing_Laser;
-    spawn.prev_pos = sp28;
+    *(u32*) &spawn.prev_pos.x = *(u32*) &sp28.x;
+    *(u32*) &spawn.prev_pos.y = *(u32*) &sp28.y;
+    *(u32*) &spawn.prev_pos.z = *(u32*) &sp28.z;
     *(u32*) &spawn.prev_pos.y = *(u32*) &sp28.y;
     spawn.facing_dir = 0.0f;
     spawn.x3C_damage = 0;

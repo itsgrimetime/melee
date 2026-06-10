@@ -738,20 +738,20 @@ melee/ft/ft_0BF0.c:
 	.sdata2     start:0x804D8C18 end:0x804D8C20
 
 melee/ft/ftmaterial.c:
-	.text       start:0x800BF260 end:0x800BFE6C
+	.text       start:0x800BF260 end:0x800BFD04
 	.data       start:0x803C6980 end:0x803C6AD0
 	.sdata      start:0x804D3C00 end:0x804D3C10
-	.sdata2     start:0x804D8C20 end:0x804D8C28
 
 melee/ft/ftcolanim.c:
-	.text       start:0x800BFE6C end:0x800C0658
+	.text       start:0x800BFD04 end:0x800C0658
 	.data       start:0x803C6AD0 end:0x803C6B18
 	.sdata      start:0x804D3C10 end:0x804D3C18
+	.sdata2     start:0x804D8C20 end:0x804D8C28
 
 melee/ft/ftdevice.c:
 	.text       start:0x800C0658 end:0x800C0874
 	.data       start:0x803C6B18 end:0x803C6BA0
-	.bss        start:0x80459A68 end:0x8045A6C0
+	.bss        start:0x80459A68 end:0x80459A98
 	.sdata      start:0x804D3C18 end:0x804D3C20
 	.sbss       start:0x804D6570 end:0x804D6580
 
@@ -1242,36 +1242,102 @@ melee/ft/chara/ftLink/ftLk_SpecialN.c:
 	.rodata     start:0x803B7520 end:0x803B7544
 	.sdata2     start:0x804D9340 end:0x804D9350
 
-melee/ft/chara/ftKirby/ftKb_Init.c:
-	.text       start:0x800EE528 end:0x800F1FDC
-	.rodata     start:0x803B7548 end:0x803B7588
-	.data       start:0x803C8368 end:0x803CB838
-	.sdata      start:0x804D3D98 end:0x804D3E10
+melee/ft/chara/ftKirby/ftkirby.c:
+	.text       start:0x800EE528 end:0x800F1F68
+	.rodata     start:0x803B7548 end:0x803B7570
+	.data       start:0x803C8368 end:0x803CB6D8
 	.sdata2     start:0x804D9350 end:0x804D9364
 
-melee/ft/chara/ftKirby/ftKb_SpecialN.c:
-	.text       start:0x800F1FDC end:0x800FA064
-	.sdata2     start:0x804D9364 end:0x804D93E4
+melee/ft/chara/ftKirby/ftkirbyattackdash.c:
+	.text       start:0x800F1F68 end:0x800F21E8
+	.sdata2     start:0x804D9368 end:0x804D9370
 
-melee/ft/chara/ftKirby/ftKb_SpecialNPk.c:
-	.text       start:0x800FA064 end:0x800FDC70
-	.sdata2     start:0x804D93E4 end:0x804D944C
+melee/ft/chara/ftKirby/ftkirbyspecialhi.c:
+	.text       start:0x800F21E8 end:0x800F331C
+	.sdata2     start:0x804D9370 end:0x804D9388
+
+melee/ft/chara/ftKirby/ftkirbyspecialn.c:
+	.text       start:0x800F331C end:0x800F9FD4
+	.sdata2     start:0x804D9388 end:0x804D93E4
+
+melee/ft/chara/ftKirby/ftkirbyspecialpikachu.c:
+	.text       start:0x800F9FD4 end:0x800FA588
+	.sdata2     start:0x804D93E8 end:0x804D93F0
+
+melee/ft/chara/ftKirby/ftkirbyspecialkoopa.c:
+	.text       start:0x800FA588 end:0x800FB394
+	.sdata2     start:0x804D93F0 end:0x804D9408
+
+melee/ft/chara/ftKirby/ftkirbyspeciallink.c:
+	.text       start:0x800FB394 end:0x800FCC14
+	.sdata2     start:0x804D9408 end:0x804D9414
+
+melee/ft/chara/ftKirby/ftkirbyspecialsamus.c:
+	.text       start:0x800FCC14 end:0x800FDC00
+	.sdata2     start:0x804D9418 end:0x804D944C
 
 melee/ft/chara/ftKirby/ftkirbyspecialfox.c:
-	.text       start:0x800FDC70 end:0x800FEDD0
-	.sdata2     start:0x804D944C end:0x804D9474
+	.text       start:0x800FDC00 end:0x800FED38
+	.data       start:0x803CB6D8 end:0x803CB70C
+	.sdata      start:0x804D3DC8 end:0x804D3DD0
+	.sdata2     start:0x804D9450 end:0x804D9478
 
-melee/ft/chara/ftKirby/ftKb_SpecialNNs.c:
-	.text       start:0x800FEDD0 end:0x80105BA8
-	.sdata2     start:0x804D9474 end:0x804D94EC
+melee/ft/chara/ftKirby/ftkirbyspecialness.c:
+	.text       start:0x800FED38 end:0x800FF8EC
+	.sdata2     start:0x804D9478 end:0x804D9484
 
-melee/ft/chara/ftKirby/ftKb_SpecialNZd.c:
-	.text       start:0x80105BA8 end:0x80109290
-	.sdata2     start:0x804D94EC end:0x804D9554
+melee/ft/chara/ftKirby/ftkirbyspecialdonkey.c:
+	.text       start:0x800FF8EC end:0x80100E0C
+	.sdata2     start:0x804D9488 end:0x804D9498
 
-melee/ft/chara/ftKirby/ftKb_SpecialNYs.c:
-	.text       start:0x80109290 end:0x8010D740
-	.sdata2     start:0x804D9554 end:0x804D95B0
+melee/ft/chara/ftKirby/ftkirbyspecialpurin.c:
+	.text       start:0x80100E0C end:0x80105A34
+	.data       start:0x803CB710 end:0x803CB770
+	.sdata      start:0x804D3DD0 end:0x804D3DE8
+	.sdata2     start:0x804D9498 end:0x804D94F0
+
+melee/ft/chara/ftKirby/ftkirbyspecialzelda.c:
+	.text       start:0x80105A34 end:0x80105FEC
+	.sdata2     start:0x804D94F0 end:0x804D94F8
+
+melee/ft/chara/ftKirby/ftkirbyspecialseak.c:
+	.text       start:0x80105FEC end:0x80106F44
+	.data       start:0x803CB770 end:0x803CB828
+	.sdata2     start:0x804D94F8 end:0x804D9508
+
+melee/ft/chara/ftKirby/ftkirbyspecialmewtwo.c:
+	.text       start:0x80106F44 end:0x80108CE8
+	.rodata     start:0x803B7570 end:0x803B7588
+	.sdata2     start:0x804D9508 end:0x804D9548
+
+melee/ft/chara/ftKirby/ftkirbyspecialiceclimber.c:
+	.text       start:0x80108CE8 end:0x80109260
+	.sdata2     start:0x804D9548 end:0x804D9554
+
+melee/ft/chara/ftKirby/ftkirbyspecialyoshi.c:
+	.text       start:0x80109260 end:0x8010A930
+	.sdata2     start:0x804D9558 end:0x804D9560
+
+melee/ft/chara/ftKirby/ftkirbycaptureyoshi.c:
+	.text       start:0x8010A930 end:0x8010AA64
+	.sdata2     start:0x804D9560 end:0x804D9568
+
+melee/ft/chara/ftKirby/ftkirbyyoshiegg.c:
+	.text       start:0x8010AA64 end:0x8010B1F4
+	.sdata      start:0x804D3DE8 end:0x804D3E00
+	.sdata2     start:0x804D9568 end:0x804D9570
+
+melee/ft/chara/ftKirby/ftkirbyspecialmars.c:
+	.text       start:0x8010B1F4 end:0x8010C288
+	.sdata2     start:0x804D9570 end:0x804D9580
+
+melee/ft/chara/ftKirby/ftkirbyspecialpeach.c:
+	.text       start:0x8010C288 end:0x8010CE5C
+	.sdata2     start:0x804D9580 end:0x804D9590
+
+melee/ft/chara/ftKirby/ftkirbyspecialgamewatch.c:
+	.text       start:0x8010CE5C end:0x8010D740
+	.sdata2     start:0x804D9590 end:0x804D95B0
 
 melee/ft/chara/ftDonkey/ftDk_Init.c:
 	.text       start:0x8010D740 end:0x8010DC80
@@ -2200,7 +2266,7 @@ melee/gm/gmregtyfall.c:
 melee/gm/gm_1A4C.c:
 	.text       start:0x801A7A44 end:0x801A9DD0
 	.data       start:0x803DB430 end:0x803DBF78
-	.bss        start:0x80480A00 end:0x80480D58
+	.bss        start:0x80480A00 end:0x80480B38
 	.sdata      start:0x804D4290 end:0x804D42E8
 	.sbss       start:0x804D67B0 end:0x804D67D0
 	.sdata2     start:0x804DAA28 end:0x804DAAA8
@@ -2209,6 +2275,7 @@ melee/gm/gmopening.c:
 	.text       start:0x801A9DD0 end:0x801AA644
 	.rodata     start:0x803B7D68 end:0x803B7D80
 	.data       start:0x803DBF78 end:0x803DBFD8
+	.bss        start:0x80480B38 end:0x80480D58
 	.sbss       start:0x804D67D0 end:0x804D67F8
 	.sdata2     start:0x804DAAA8 end:0x804DAAD0
 
@@ -3726,7 +3793,7 @@ melee/it/items/itmewtwodisable.c:
 
 melee/it/items/itmewtwoshadowball.c:
 	.text       start:0x802C4D10 end:0x802C61F4
-	.data       start:0x803F7760 end:0x803F7898
+	.data       start:0x803F7880 end:0x803F7898
 	.sdata      start:0x804D5570 end:0x804D557D
 	.sdata2     start:0x804DD258 end:0x804DD290
 
@@ -4200,18 +4267,21 @@ melee/if/ifhazard.c:
 
 melee/if/if_2FC93.c:
 	.text       start:0x802FD910 end:0x802FE3F8
-	.rodata     start:0x803B8780 end:0x803B8810
+	.rodata     start:0x803B8780 end:0x803B8790
 	.data       start:0x803F99C8 end:0x803F9A00
-	.bss        start:0x804A1F10 end:0x804A1F58
+	.bss        start:0x804A1F10 end:0x804A1F48
 	.sdata      start:0x804D5820 end:0x804D5830
 	.sbss       start:0x804D6D90 end:0x804D6D98
-	.sdata2     start:0x804DDBA8 end:0x804DDCC8
+	.sdata2     start:0x804DDBA8 end:0x804DDBD0
 
 melee/if/ifprize.c:
 	.text       start:0x802FE3F8 end:0x802FED14
+	.rodata     start:0x803B8790 end:0x803B8810
 	.data       start:0x803F9A00 end:0x803F9E08
+	.bss        start:0x804A1F48 end:0x804A1F58
 	.sdata      start:0x804D5830 end:0x804D5838
 	.sbss       start:0x804D6D98 end:0x804D6DA0
+	.sdata2     start:0x804DDBD0 end:0x804DDCC8
 
 melee/if/ifcoget.c:
 	.text       start:0x802FED14 end:0x802FF7DC
@@ -4336,15 +4406,24 @@ melee/vi/vi1201v2.c:
 	.sdata2     start:0x804DE118 end:0x804DE138
 
 melee/vi/vi1202.c:
-	.text       start:0x8032110C end:0x80322620
+	.text       start:0x8032110C end:0x80321900
 	.data       start:0x804003A0 end:0x80400430
-	.bss        start:0x804A2F08 end:0x804A2F38
 	.sdata      start:0x804D5B30 end:0x804D5B40
-	.sbss       start:0x804D7040 end:0x804D7054
-	.sdata2     start:0x804DE138 end:0x804DE160
+	.sbss       start:0x804D7040 end:0x804D7050
+	.sdata2     start:0x804DE138 end:0x804DE148
 
 MSL/ansi_files.c:
 	.data       start:0x80400430 end:0x80400508
+
+melee/sfx/sfx_unk.c:
+	.text       start:0x80321900 end:0x803219AC
+	.sdata2     start:0x804DE148 end:0x804DE14C
+
+melee/sfx/crowdsfx.c:
+	.text       start:0x803219AC end:0x80322620
+	.bss        start:0x804A2F08 end:0x804A2F38
+	.sbss       start:0x804D7050 end:0x804D7054
+	.sdata2     start:0x804DE150 end:0x804DE160
 
 Runtime/__va_arg.c:
 	.text       start:0x80322620 end:0x80322714

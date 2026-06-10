@@ -36,6 +36,23 @@ static THPCoeff* __THPMCUBuffer[6];
 static THPFileInfo* __THPInfo;
 static BOOL __THPInitFlag = FALSE;
 
+typedef struct THPRestartFields {
+    u8 pad[0x8FC];
+    u16 nMCU;
+    u16 currMCU;
+    u8 RST;
+} THPRestartFields;
+
+typedef struct THPMCURowFields {
+    u8 pad[0x8CC];
+    u16 MCUsPerRow;
+} THPMCURowFields;
+
+typedef struct THPFileInfoMCUBufferView {
+    u8 pad[0x10];
+    THPCoeff* mcuBuffer[6];
+} THPFileInfoMCUBufferView;
+
 #define THPROUNDUP(a, b) ((((s32) (a)) + ((s32) (b) - 1L)) / ((s32) (b)))
 
 void __THPPrepBitStream(THPFileInfo* info)
@@ -745,7 +762,7 @@ static u8 __THPReadHuffmanTableSpecification(THPFileInfo* info)
     u8 tab_index;
     u16 length, num_Vij;
     u8* huffmanBits;
-    int result;
+    u8 result;
 
     //__THPHuffmanSizeTab = __THPWorkArea;
     //__THPHuffmanCodeTab = (u16*)((u32)__THPWorkArea + 256 + 1);
@@ -767,7 +784,7 @@ static u8 __THPReadHuffmanTableSpecification(THPFileInfo* info)
 
         info->huffmanTabs[tab_index].bits = huffmanBits;
         info->huffmanTabs[tab_index].Vij = info->file;
-        info->huffmanTabs[tab_index].pad2[1] = num_Vij;
+        *(u16*) &info->huffmanTabs[tab_index].pad2[1] = num_Vij;
         info->file += num_Vij;
         result =
             __THPHuffGenerateSizeTable(info, tab_index, (int) huffmanBits);
@@ -886,11 +903,12 @@ static int __THPHuffGenerateDecoderTables(THPFileInfo* info, u8 tabIndex)
 
 static u8 __THPRestartDefinition(THPFileInfo* info)
 {
-    info->RST = TRUE;
+    THPRestartFields* restart = (THPRestartFields*) info;
+    restart->RST = TRUE;
     info->file += 2;
-    info->nMCU = (u16) ((info->file)[0] << 8 | (info->file)[1]);
+    restart->nMCU = (u16) ((info->file)[0] << 8 | (info->file)[1]);
     info->file += 2;
-    info->currMCU = info->nMCU;
+    restart->currMCU = restart->nMCU;
     return 0;
 }
 
@@ -1805,6 +1823,21 @@ _FailedCheckNoBits1:
     return (h->Vij[(s32) (code + h->valPtr[cnt])]);
 }
 
+typedef struct THPFileInfoDCTCompYView {
+    u8 pad[0x83E];
+    THPCoeff predDC;
+} THPFileInfoDCTCompYView;
+
+typedef struct THPFileInfoDCTCompUView {
+    u8 pad[0x86A];
+    THPCoeff predDC;
+} THPFileInfoDCTCompUView;
+
+typedef struct THPFileInfoDCTCompVView {
+    u8 pad[0x896];
+    THPCoeff predDC;
+} THPFileInfoDCTCompVView;
+
 static void __THPDecompressiMCURow640x480(void)
 {
     u8 cl_num;
@@ -1812,57 +1845,67 @@ static void __THPDecompressiMCURow640x480(void)
     THPComponent* comp;
 
     THPFileInfo* info = __THPInfo;
-    THPCoeff** r28 = __THPMCUBuffer;
 
     LCQueueWait(3);
 
-    {
-        for (cl_num = 0; cl_num < __THPInfo->MCUsPerRow; cl_num++) {
-            THPFileInfo* um = __THPInfo;
-            __THPHuffDecodeDCTCompY(um, r28[10]);
-            __THPHuffDecodeDCTCompY(info, r28[5]);
-            __THPHuffDecodeDCTCompY(info, r28[6]);
-            __THPHuffDecodeDCTCompY(info, r28[7]);
-            __THPHuffDecodeDCTCompU(info, r28[8]);
-            __THPHuffDecodeDCTCompV(info, r28[9]);
+    for (cl_num = 0; cl_num < ((THPMCURowFields*) info)->MCUsPerRow;
+         cl_num++) {
+        __THPHuffDecodeDCTCompY(
+            info, ((THPFileInfoMCUBufferView*) info)->mcuBuffer[0]);
+        __THPHuffDecodeDCTCompY(
+            info, ((THPFileInfoMCUBufferView*) info)->mcuBuffer[1]);
+        __THPHuffDecodeDCTCompY(
+            info, ((THPFileInfoMCUBufferView*) info)->mcuBuffer[2]);
+        __THPHuffDecodeDCTCompY(
+            info, ((THPFileInfoMCUBufferView*) info)->mcuBuffer[3]);
+        __THPHuffDecodeDCTCompU(
+            info, ((THPFileInfoMCUBufferView*) info)->mcuBuffer[4]);
+        __THPHuffDecodeDCTCompV(
+            info, ((THPFileInfoMCUBufferView*) info)->mcuBuffer[5]);
 
-            comp = &__THPInfo->components[0];
-            Gbase = __THPLCWork672[0];
-            Gwid = 640;
-            Gq = __THPInfo->quantTabs[comp->quantizationTableSelector];
-            x_pos = (u32) (cl_num * 16);
-            __THPInverseDCTNoYPos(__THPMCUBuffer[0], x_pos);
-            __THPInverseDCTNoYPos(r28[5], x_pos + 8);
-            __THPInverseDCTY8(r28[6], x_pos);
-            __THPInverseDCTY8(r28[3], x_pos + 8);
+        comp = &info->components[0];
+        Gbase = __THPLCWork672[0];
+        Gwid = 640;
+        Gq = info->quantTabs[comp->quantizationTableSelector];
+        x_pos = (u32) (cl_num * 16);
+        __THPInverseDCTNoYPos(
+            ((THPFileInfoMCUBufferView*) info)->mcuBuffer[0], x_pos);
+        __THPInverseDCTNoYPos(
+            ((THPFileInfoMCUBufferView*) info)->mcuBuffer[1], x_pos + 8);
+        __THPInverseDCTY8(
+            ((THPFileInfoMCUBufferView*) info)->mcuBuffer[2], x_pos);
+        __THPInverseDCTY8(
+            ((THPFileInfoMCUBufferView*) info)->mcuBuffer[3], x_pos + 8);
 
-            comp = &__THPInfo->components[1];
-            Gbase = __THPLCWork672[1];
-            Gwid = 320;
-            Gq = __THPInfo->quantTabs[comp->quantizationTableSelector];
-            x_pos /= 2;
-            __THPInverseDCTNoYPos(__THPMCUBuffer[4], x_pos);
+        comp = &info->components[1];
+        Gbase = __THPLCWork672[1];
+        Gwid = 320;
+        Gq = info->quantTabs[comp->quantizationTableSelector];
+        x_pos /= 2;
+        __THPInverseDCTNoYPos(
+            ((THPFileInfoMCUBufferView*) info)->mcuBuffer[4], x_pos);
 
-            comp = &__THPInfo->components[2];
-            Gbase = __THPLCWork672[2];
-            Gq = __THPInfo->quantTabs[comp->quantizationTableSelector];
-            __THPInverseDCTNoYPos(__THPMCUBuffer[5], x_pos);
+        comp = &info->components[2];
+        Gbase = __THPLCWork672[2];
+        Gq = info->quantTabs[comp->quantizationTableSelector];
+        __THPInverseDCTNoYPos(
+            ((THPFileInfoMCUBufferView*) info)->mcuBuffer[5], x_pos);
 
-            if (__THPInfo->RST != 0) {
-                __THPInfo->currMCU--;
-                if (__THPInfo->currMCU == 0) {
-                    __THPInfo->currMCU = __THPInfo->nMCU;
+        if (((THPRestartFields*) info)->RST != 0) {
+            ((THPRestartFields*) info)->currMCU--;
+            if (((THPRestartFields*) info)->currMCU == 0) {
+                ((THPRestartFields*) info)->currMCU =
+                    ((THPRestartFields*) info)->nMCU;
 
-                    __THPInfo->cnt = 1 + ((__THPInfo->cnt + 6) & 0xFFFFFFF8);
+                info->cnt = 1 + ((info->cnt + 6) & 0xFFFFFFF8);
 
-                    if (__THPInfo->cnt > 32) {
-                        __THPInfo->cnt = 33;
-                    }
-
-                    __THPInfo->components[0].predDC = 0;
-                    __THPInfo->components[1].predDC = 0;
-                    __THPInfo->components[2].predDC = 0;
+                if (info->cnt > 32) {
+                    info->cnt = 33;
                 }
+
+                ((THPFileInfoDCTCompYView*) info)->predDC = 0;
+                ((THPFileInfoDCTCompUView*) info)->predDC = 0;
+                ((THPFileInfoDCTCompVView*) info)->predDC = 0;
             }
         }
     }
@@ -1883,66 +1926,81 @@ static void __THPDecompressiMCURowNxN(void)
     THPComponent* comp;
     THPFileInfo* info = __THPInfo;
 
-    x = __THPInfo->xPixelSize;
+    x = info->xPixelSize;
 
     LCQueueWait(3);
 
-    for (cl_num = 0; cl_num < __THPInfo->MCUsPerRow; cl_num++) {
-        __THPHuffDecodeDCTCompY(info, __THPMCUBuffer[0]);
-        __THPHuffDecodeDCTCompY(info, __THPMCUBuffer[1]);
-        __THPHuffDecodeDCTCompY(info, __THPMCUBuffer[2]);
-        __THPHuffDecodeDCTCompY(info, __THPMCUBuffer[3]);
-        __THPHuffDecodeDCTCompU(info, __THPMCUBuffer[4]);
-        __THPHuffDecodeDCTCompV(info, __THPMCUBuffer[5]);
+    for (cl_num = 0; cl_num < ((THPMCURowFields*) info)->MCUsPerRow;
+         cl_num++) {
+        __THPHuffDecodeDCTCompY(
+            info, ((THPFileInfoMCUBufferView*) info)->mcuBuffer[0]);
+        __THPHuffDecodeDCTCompY(
+            info, ((THPFileInfoMCUBufferView*) info)->mcuBuffer[1]);
+        __THPHuffDecodeDCTCompY(
+            info, ((THPFileInfoMCUBufferView*) info)->mcuBuffer[2]);
+        __THPHuffDecodeDCTCompY(
+            info, ((THPFileInfoMCUBufferView*) info)->mcuBuffer[3]);
+        __THPHuffDecodeDCTCompU(
+            info, ((THPFileInfoMCUBufferView*) info)->mcuBuffer[4]);
+        __THPHuffDecodeDCTCompV(
+            info, ((THPFileInfoMCUBufferView*) info)->mcuBuffer[5]);
 
-        comp = &__THPInfo->components[0];
+        comp = &info->components[0];
         Gbase = __THPLCWork672[0];
         Gwid = x;
-        Gq = __THPInfo->quantTabs[comp->quantizationTableSelector];
+        Gq = info->quantTabs[comp->quantizationTableSelector];
         x_pos = (u32) (cl_num * 16);
-        __THPInverseDCTNoYPos(__THPMCUBuffer[0], x_pos);
-        __THPInverseDCTNoYPos(__THPMCUBuffer[1], x_pos + 8);
-        __THPInverseDCTY8(__THPMCUBuffer[2], x_pos);
-        __THPInverseDCTY8(__THPMCUBuffer[3], x_pos + 8);
+        __THPInverseDCTNoYPos(
+            ((THPFileInfoMCUBufferView*) info)->mcuBuffer[0], x_pos);
+        __THPInverseDCTNoYPos(
+            ((THPFileInfoMCUBufferView*) info)->mcuBuffer[1], x_pos + 8);
+        __THPInverseDCTY8(
+            ((THPFileInfoMCUBufferView*) info)->mcuBuffer[2], x_pos);
+        __THPInverseDCTY8(
+            ((THPFileInfoMCUBufferView*) info)->mcuBuffer[3], x_pos + 8);
 
-        comp = &__THPInfo->components[1];
+        comp = &info->components[1];
         Gbase = __THPLCWork672[1];
         Gwid = x / 2;
-        Gq = __THPInfo->quantTabs[comp->quantizationTableSelector];
+        Gq = info->quantTabs[comp->quantizationTableSelector];
         x_pos /= 2;
-        __THPInverseDCTNoYPos(__THPMCUBuffer[4], x_pos);
+        __THPInverseDCTNoYPos(
+            ((THPFileInfoMCUBufferView*) info)->mcuBuffer[4], x_pos);
 
-        comp = &__THPInfo->components[2];
+        comp = &info->components[2];
         Gbase = __THPLCWork672[2];
-        Gq = __THPInfo->quantTabs[comp->quantizationTableSelector];
-        __THPInverseDCTNoYPos(__THPMCUBuffer[5], x_pos);
+        Gq = info->quantTabs[comp->quantizationTableSelector];
+        __THPInverseDCTNoYPos(
+            ((THPFileInfoMCUBufferView*) info)->mcuBuffer[5], x_pos);
 
-        if (__THPInfo->RST != 0) {
-            __THPInfo->currMCU--;
-            if (__THPInfo->currMCU == 0) {
-                __THPInfo->currMCU = __THPInfo->nMCU;
-                __THPInfo->cnt = 1 + ((__THPInfo->cnt + 6) & 0xFFFFFFF8);
+        if (((THPRestartFields*) info)->RST != 0) {
+            ((THPRestartFields*) info)->currMCU--;
+            if (((THPRestartFields*) info)->currMCU == 0) {
+                ((THPRestartFields*) info)->currMCU =
+                    ((THPRestartFields*) info)->nMCU;
+                info->cnt = 1 + ((info->cnt + 6) & 0xFFFFFFF8);
 
-                if (__THPInfo->cnt > 32) {
-                    __THPInfo->cnt = 33;
+                if (info->cnt > 32) {
+                    info->cnt = 33;
                 }
 
-                __THPInfo->components[0].predDC = 0;
-                __THPInfo->components[1].predDC = 0;
-                __THPInfo->components[2].predDC = 0;
+                ((THPFileInfoDCTCompYView*) info)->predDC = 0;
+                ((THPFileInfoDCTCompUView*) info)->predDC = 0;
+                ((THPFileInfoDCTCompVView*) info)->predDC = 0;
             }
         }
     }
 
     {
+        THPDecodeInfo* decode = (THPDecodeInfo*) info;
         u8** work = __THPLCWork672;
-        LCStoreData(info->dLC[0], work[0], ((4 * sizeof(u8) * 64) * (x / 16)));
-        LCStoreData(info->dLC[1], work[1], ((sizeof(u8) * 64) * (x / 16)));
-        LCStoreData(info->dLC[2], work[2], ((sizeof(u8) * 64) * (x / 16)));
+        LCStoreData(decode->x8F0, work[0], ((4 * sizeof(u8) * 64) * (x / 16)));
+        LCStoreData(decode->x8F4, work[1], ((sizeof(u8) * 64) * (x / 16)));
+        LCStoreData(decode->x8F8, work[2], ((sizeof(u8) * 64) * (x / 16)));
+        decode->x8F0 = (u8*) decode->x8F0 + ((4 * sizeof(u8) * 64) * (x / 16));
+        decode->x8F4 = (u8*) decode->x8F4 + ((sizeof(u8) * 64) * (x / 16));
+        decode->x8F8 = (u8*) decode->x8F8 + ((sizeof(u8) * 64) * (x / 16));
     }
-    info->dLC[0] += ((4 * sizeof(u8) * 64) * (x / 16));
-    info->dLC[1] += ((sizeof(u8) * 64) * (x / 16));
-    info->dLC[2] += ((sizeof(u8) * 64) * (x / 16));
 }
 
 static void __THPHuffDecodeDCTCompY(register THPFileInfo* info,
@@ -2013,8 +2071,8 @@ static void __THPHuffDecodeDCTCompY(register THPFileInfo* info,
         };
 
         __dcbz((void*) block, 96);
-        dc = (s16) (info->components[0].predDC + diff);
-        block[0] = info->components[0].predDC = dc;
+        dc = (s16) (((THPFileInfoDCTCompYView*) info)->predDC + diff);
+        block[0] = ((THPFileInfoDCTCompYView*) info)->predDC = dc;
     }
 
     {
@@ -2396,8 +2454,8 @@ static void __THPHuffDecodeDCTCompU(register THPFileInfo* info,
     }
 
     __dcbz((void*) block, 96);
-    dc = (s16) (info->components[1].predDC + cnt);
-    block[0] = info->components[1].predDC = dc;
+    dc = (s16) (((THPFileInfoDCTCompUView*) info)->predDC + cnt);
+    block[0] = ((THPFileInfoDCTCompUView*) info)->predDC = dc;
 
     for (k = 1; k < 64; k++) {
         ssss = __THPHuffDecodeTab(info, Uachuff);
@@ -2523,8 +2581,8 @@ static void __THPHuffDecodeDCTCompV(register THPFileInfo* info,
 
     __dcbz((void*) block, 96);
 
-    dc = (s16) (info->components[2].predDC + diff);
-    block[0] = info->components[2].predDC = dc;
+    dc = (s16) (((THPFileInfoDCTCompVView*) info)->predDC + diff);
+    block[0] = ((THPFileInfoDCTCompVView*) info)->predDC = dc;
 
     for (k = 1; k < 64; k++) {
         ssss = __THPHuffDecodeTab(info, Vachuff);

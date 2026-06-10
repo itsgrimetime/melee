@@ -55,15 +55,18 @@
 /* 4A1FD8 */ static DevText devtext_pool[32];
 
 /// .sbss
-/* 4D6E18 */ static DevText* devtext_drawlist;
-/* 4D6E1C */ static HSD_GObj* devtext_gobj;
+/* 4D6E18 */ static DevText* un_804D6E18;
+#define devtext_drawlist un_804D6E18
+/* 4D6E1C */ static HSD_GObj* un_804D6E1C;
+#define devtext_gobj un_804D6E1C
 /* 4D6E20 */ static HSD_CObj* devtext_cobj;
 /* 4D6E24 */ static int devtext_setup_classifier;
 /* 4D6E28 */ static int devtext_setup_p_link;
 /* 4D6E2C */ static int devtext_setup_priority;
 /* 4D6E30 */ static int devtext_setup_gx_link;
 /* 4D6E34 */ static int devtext_setup_render_priority;
-/* 4D6E38 */ static DevText* devtext_poolhead;
+/* 4D6E38 */ static DevText* un_804D6E38;
+#define devtext_poolhead un_804D6E38
 
 int DevText_StrLen(char* str)
 {
@@ -134,17 +137,17 @@ void DevText_InitPool(void)
 void DevText_Remove(DevText** ptext)
 {
     DevText* text = *ptext;
-    struct DevText* new_var; // Permuter slop
-    DevText* new_var3;       // Permuter slop
-    new_var = text->next;
-    if (new_var) {
-        new_var->prev = text->prev;
+    DevText* next;
+    DevText* cur;
+    next = text->next;
+    if (next) {
+        next->prev = text->prev;
     }
-    new_var3 = *ptext;
+    cur = *ptext;
     if ((*ptext)->prev) {
         (*ptext)->prev->next = (*ptext)->next;
     } else {
-        if (new_var3->next != 0) {
+        if (cur->next != 0) {
             *ptext = (*ptext)->next;
         } else {
             *ptext = NULL;
@@ -196,27 +199,35 @@ void DevText_SetupCObj(void)
 
 void DevText_Draw(DevText* text)
 {
-    PAD_STACK(24);
+    PAD_STACK(8);
     hsd_80391A04(text->scale_x, text->scale_y, text->line_width);
     if ((text->flags & DEVTEXT_FLAG_HIDEBACKGROUND) == 0) {
+        GXColor color = text->bg_color;
         DrawRectangle(text->x - 8, text->y - 8, text->scale_x * text->w + 8,
-                      text->scale_y * text->h + 8, &text->bg_color);
-        DrawRectangle(text->x - 4, text->y - 4, text->scale_x * text->w + 4,
-                      text->scale_y * text->h + 4, &text->bg_color);
+                      text->scale_y * text->h + 8, &color);
+        {
+            GXColor color = text->bg_color;
+            DrawRectangle(text->x - 4, text->y - 4,
+                          text->scale_x * text->w + 4,
+                          text->scale_y * text->h + 4, &color);
+        }
     }
     if ((text->flags & DEVTEXT_FLAG_HIDETEXT) == 0) {
-        int row = 0;
+        GXColor color;
+        GXColor* color_ptr = &color;
         int y = text->y;
+        int row = 0;
         while (row < text->h) {
-            int col = 0;
             int x = text->x;
+            int col = 0;
             while (col < text->w) {
                 int index = (col + text->w * row) * 2;
-                int chr = text->buf[index];
-                if (chr) {
-                    GXColor* color =
-                        &text->text_colors[text->buf[index + 1] >> 6];
-                    DrawASCII(chr, x, y, color);
+                u8* buf = (u8*) &text->buf[index];
+                u8 chr = buf[0];
+                u8 color_idx = (buf[1] & 0xC0) >> 6;
+                if ((s8) chr) {
+                    color = text->text_colors[color_idx];
+                    DrawASCII((s8) chr, x, y, color_ptr);
                 }
                 x += text->scale_x;
                 col++;
@@ -225,17 +236,15 @@ void DevText_Draw(DevText* text)
             row++;
         }
     }
-    if ((text->flags & DEVTEXT_FLAG_SHOWCURSOR) == 1) {
+    if (text->flags & DEVTEXT_FLAG_SHOWCURSOR) {
         text->unk++;
-        if (text->unk < 16) {
-            if (8 < text->unk) {
-                GXColor color = { 0xFF, 0xFF, 0xFF, 0xC0 };
-                DrawRectangle(text->x + text->scale_x * text->cursor_x,
-                              text->y + text->scale_y * text->cursor_y,
-                              text->scale_x, text->scale_y, &color);
-            }
-        } else {
+        if (text->unk > 16) {
             text->unk = 0;
+        } else if (8 < text->unk) {
+            GXColor color = { 0xFF, 0xFF, 0xFF, 0xC0 };
+            DrawRectangle(text->x + text->scale_x * text->cursor_x,
+                          text->y + text->scale_y * text->cursor_y - 4,
+                          text->scale_x, text->scale_y, &color);
         }
     }
 }
