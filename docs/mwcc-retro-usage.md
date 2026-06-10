@@ -199,7 +199,26 @@ writes hit the emulated inferior only — the exe on disk is never modified. See
 read, register, write+readback, continue). This generalizes "intervene at
 stage k, replay forward" beyond the DLL's force-phys/coalesce.
 
+## Back-end on 1.2.5n via retrowin32 (#542): why it's the DLL's job
+
+Porting cadmic's GC/1.1 backend address table to 1.2.5n was attempted and is
+**not reliably achievable by byte-correlation alone**, so 1.2.5n backend stays on
+the DLL pcdump path. The evidence (recorded in `tables/gc_125n.json` under
+`backend_partial`): drift is **non-uniform** across the binary — the codegen
+region drifts `+0x10` (codegen_start 0x4351B0→0x4351C0, verified prologue) but
+the regalloc region drifts `-0x710` (regalloc-end 0x4CEB04→0x4CE3F4, verified
+just inside colorgraph). Worse, the correlator produces **false matches** for
+some functions (cmangler_getlinkname 0x4C2C70 collides with the DLL-known
+pcode_traverse 0x4C2560). Since `cad.run_compiler` needs the *complete, correct*
+set (incl. cmangler + the `.bss` data globals: interference graph,
+used_virtual_registers, pcbasicblocks, frame lists), a partial/false port would
+be worse than the DLL pcdump — which #543 proved **byte-identical to retail** for
+front-end IRO. The confidently-ported addresses are recorded (not wired in) for a
+future full port via a region-drift map or instruction-operand extraction.
+
+**Use the DLL pcdump for 1.2.5n backend** (`melee-agent debug dump local`), and
+`explain-virtual --ig` for coloring-node provenance.
+
 ## What it does NOT do (yet)
 
-- Back-end / regalloc / stack on **1.2.5n** via retrowin32 (#542 — use DLL pcdump
-  today, or `explain-virtual --ig` for coloring-node provenance).
+- Full back-end / regalloc / stack on **1.2.5n** via retrowin32 (#542, above).
