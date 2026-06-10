@@ -179,9 +179,27 @@ front-end trace.
 - **Speed:** expect a few seconds per single-function dump (whole-TU compile under
   emulation + gdb). Fine for diagnosis; don't script thousands of these.
 
+## Intervention hooks: `--gdb-py` (mutate state, replay forward)
+
+For experiments beyond dumping — forcing a specific compiler state at a stage
+and watching the downstream effect — `dump` accepts an intervention hook:
+
+```bash
+melee-agent debug retro dump <tu> -f <fn> \
+    --gdb-py tools/mwcc_retro/hooks/example_intervene.py
+```
+
+The hook is a `.py` defining `intervene(ctx)`; the runtime hands it the
+connected, descriptor-injected gdb session. `ctx` (a RetroContext) exposes the
+write-capable substrate: `ctx.addr(key)` (named VA from the 1.2.5n table),
+`ctx.read/write`, `ctx.u32/set_u32`, `ctx.reg(name)`, `ctx.brk(va)`,
+`ctx.cont()`, and `ctx.call(fn_va, *int_args)` (staged-pointer calls). All
+writes hit the emulated inferior only — the exe on disk is never modified. See
+`tools/mwcc_retro/hooks/example_intervene.py` for a worked example (break,
+read, register, write+readback, continue). This generalizes "intervene at
+stage k, replay forward" beyond the DLL's force-phys/coalesce.
+
 ## What it does NOT do (yet)
 
-- Back-end / regalloc / stack on **1.2.5n** via retrowin32 (#542 — use DLL pcdump today).
-- Per-phase dumps in the fast DLL pcdump path (#543).
-- A creation-**order** temp ledger for ig_idx investigation (#544).
-- State-mutation / "intervene at stage k" CLI beyond the dump (#545).
+- Back-end / regalloc / stack on **1.2.5n** via retrowin32 (#542 — use DLL pcdump
+  today, or `explain-virtual --ig` for coloring-node provenance).

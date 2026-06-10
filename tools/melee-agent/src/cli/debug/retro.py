@@ -41,13 +41,14 @@ def _ninja_cmd_for_unit(src_rel: str) -> str:
 
 
 def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
-                 out_dir: Path, table: Path) -> DumpOutcome:
+                 out_dir: Path, table: Path, gdb_py: str = "") -> DumpOutcome:
     """Invoke the gdb-side launcher, then post-process the IRO trace.
 
     Runs `mwcc_retro_debugger.py main()` (host launcher), which drives
     retrowin32 + gdb to write `iro-trace.txt`. On success, splits the trace into
     per-phase files and builds `iro-summary.txt` (the node/temp ledger). Returns
-    a DumpOutcome whose exit code follows the contract in the spec.
+    a DumpOutcome whose exit code follows the contract in the spec. When `gdb_py`
+    is set, the gdb session is handed to that intervention hook instead.
     """
     import subprocess
 
@@ -70,14 +71,23 @@ def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
         "--out", str(out_dir),
         "--phases", phases,
         "--compiler", compiler,
-        fn,
     ]
+    if gdb_py:
+        cmd += ["--gdb-py", str(Path(gdb_py).resolve())]
+    cmd.append(fn)
     # Run from the repo root so the emulated mwcceppc resolves the relative
     # source path (the ninja command uses repo-relative paths, like wibo does).
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600,
                           cwd=str(_REPO))
     log = (out_dir / "launch.log")
     log.write_text(proc.stdout + "\n--- stderr ---\n" + proc.stderr)
+
+    if gdb_py:
+        # The hook owns the session; trace/backend post-processing doesn't apply.
+        ran = "[retro] running intervention hook" in proc.stdout
+        if ran and proc.returncode == 0:
+            return DumpOutcome(exit_code=0, produced=["hook"], missing=[])
+        return DumpOutcome(exit_code=2, produced=[], missing=["hook"])
 
     produced: list[str] = []
     missing: list[str] = []
@@ -140,10 +150,17 @@ def dump_cmd(
     phases: str = typer.Option("all", "--phases", help="all|frontend|backend"),
     compiler: str = typer.Option("1.2.5n", "--compiler", help="1.2.5n|1.1"),
     out: Path = typer.Option(None, "-O", "--output"),
+    gdb_py: Path = typer.Option(
+        None, "--gdb-py",
+        help="Intervention hook (a .py with intervene(ctx)) handed the connected "
+             "gdb session to mutate compiler state and replay forward."),
 ):
     """Dump retail compiler internals for FN in SRC."""
     if phases not in ("all", "frontend", "backend"):
         typer.secho("invalid --phases", fg="red", err=True)
+        raise typer.Exit(2)
+    if gdb_py is not None and not gdb_py.is_file():
+        typer.secho(f"--gdb-py hook not found: {gdb_py}", fg="red", err=True)
         raise typer.Exit(2)
     _ensure_setup()
     unit = Path(src).with_suffix("").as_posix().replace("/", "_")
@@ -151,7 +168,8 @@ def dump_cmd(
     out_dir.mkdir(parents=True, exist_ok=True)
     table = TABLES_DIR / ("gc_125n.json" if compiler == "1.2.5n" else "gc_11.json")
     outcome = _launch_dump(src=src, fn=fn, phases=phases, compiler=compiler,
-                           out_dir=out_dir, table=table)
+                           out_dir=out_dir, table=table,
+                           gdb_py=str(gdb_py) if gdb_py else "")
     _write_provenance(out_dir, src, fn, compiler, table, outcome)
     if outcome.missing:
         typer.secho(f"missing phase streams: {outcome.missing}", fg="yellow", err=True)
