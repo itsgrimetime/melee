@@ -1,7 +1,7 @@
 # Liveness hooks: live-set dump + force-interfere (mwcc-debug DLL)
 
-**Date:** 2026-06-10 · **Status:** Reviewed (real-binary RE probe) — APPROVE-WITH-
-CHANGES incorporated; ready to plan/build. · **Forcing case:** mnDiagram_InputProc
+**Date:** 2026-06-10 · **Status:** BUILT + validated (see Outcome below). ·
+**Forcing case:** mnDiagram_InputProc
 (94.53%; count needs ~8 more interference edges / simplify slot 7-8 → r24/r25; six
 campaign rounds established that every failure mode is "a live range was not where
 we believed it was").
@@ -91,6 +91,31 @@ edges. This is also simpler and safer than range manipulation.)
   those 8 are live across count's window); NO ⇒ the mechanism exceeds degree
   and the function banks as the coloring-surrogate benchmark. Standard caveat:
   forced dumps are hypothesis tests, never source-level proof.
+
+## Outcome (built 2026-06-10)
+
+- **Hook-2 force-interfere — SHIPPED + validated, the high-value half.**
+  `MWCC_DEBUG_FORCE_INTERFERE` injects matrix bits at 0x583088 between 0x530E00
+  and 0x530C00 (no heap growth). Round-trip confirmed (inject 33=34 → appears in
+  ig33 COLORGRAPH neighbors, scoped) AND cross-validated against the tiebreak
+  surrogate (surrogate predicted ig434 r24→r26 under +edge(434,32); real
+  allocator produced r26). This is the coloring-causality engine: surrogate
+  proposes edges → predicts → force-interfere confirms against retail MWCC.
+- **Hook-1 LIVERANGES — SHIPPED as a block-span diagnostic (scope corrected).**
+  Dumps per-block live-in/out from LiveInfo @0x587E74 (fn-labeled). It answers
+  "which blocks is V live across" (e.g. "count spans B4-B5; the callee-saves
+  span B2-B9 → extend count to overlap") — directly useful for C placement. It
+  is NOT an edge oracle: block-boundary co-liveness explains only ~47% of edges
+  because interference forms from WITHIN-block transient liveness. The spec's
+  `overlap⟺edge` G-LR gate is therefore retired (validate_glr is a documented
+  diagnostic, not a pass/fail). RE-confirmed read (correct offset/stride;
+  empty-entry / populated-later blocks as expected).
+- **REMAINING increment: edge-faithful per-instruction liveness.** Instrument
+  the backward scan *inside* buildinterferencematrix (0x531290 region) to record
+  the live-set at each instruction position — the only thing that reconstructs
+  edges exactly. Larger/invasive (the review's "much larger" path). Not needed
+  for the current workflow: force-interfere (causality) + block-span (placement)
+  + the surrogate (prediction) already close the loop at block resolution.
 
 ## Future extensions (explicitly out of scope here)
 
