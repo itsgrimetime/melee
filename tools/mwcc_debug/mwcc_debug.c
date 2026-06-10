@@ -1102,6 +1102,127 @@ static int g_coalesce_overrides_parsed = 0;
 static char g_coalesce_scope_fn[FUNCNAME_BUF_LEN] = {0};
 static int g_coalesce_scope_fn_set = 0;
 
+// FORCE_INTERFERE (#549) — inject extra interference edges directly into the
+// triangular interference bitmatrix at INTERFERENCE_MATRIX (0x583088) AFTER the
+// real coalescer has populated it and BEFORE buildadjacencyvectors (0x530C00)
+// materializes exact-sized IGNodes — so the native scan sizes arrays correctly
+// (no heap growth; growing materialized IGNodes is a non-starter, see :1499).
+// Causality test for coloring tiebreaks: "make virtual A interfere with B".
+// Bit address is triangular: (max*max)/2 + min, matching makeinterfere().
+#define INTERFERENCE_MATRIX (*(uint32 **)0x583088)
+#define MAX_FORCE_INTERFERE 64
+static struct {
+    int a;
+    int b;
+} g_force_interfere[MAX_FORCE_INTERFERE];
+static int g_n_force_interfere = 0;
+static int g_force_interfere_parsed = 0;
+static char g_force_interfere_scope_fn[FUNCNAME_BUF_LEN] = {0};
+static int g_force_interfere_scope_fn_set = 0;
+
+static void parse_force_interfere_from_env(void)
+{
+    char buf[512];
+    uint32 len;
+    int i, cur_val, parsing_b, saved_a;
+
+    g_force_interfere_parsed = 1;
+    g_n_force_interfere = 0;
+
+    len = GetEnvironmentVariableA(
+        "MWCC_DEBUG_FORCE_INTERFERE_FUNCTION",
+        g_force_interfere_scope_fn, sizeof(g_force_interfere_scope_fn));
+    g_force_interfere_scope_fn_set =
+        (len > 0 && len < sizeof(g_force_interfere_scope_fn)) ? 1 : 0;
+    if (!g_force_interfere_scope_fn_set) {
+        g_force_interfere_scope_fn[0] = '\0';
+    }
+
+    len = GetEnvironmentVariableA("MWCC_DEBUG_FORCE_INTERFERE", buf, sizeof(buf));
+    if (len == 0 || len >= sizeof(buf)) return;
+
+    cur_val = 0;
+    parsing_b = 0;
+    saved_a = -1;
+    for (i = 0; i <= (int)len; i++) {
+        char c = (i == (int)len) ? '\0' : buf[i];
+        if (c >= '0' && c <= '9') {
+            cur_val = cur_val * 10 + (c - '0');
+        } else if (c == '=') {
+            saved_a = cur_val;
+            cur_val = 0;
+            parsing_b = 1;
+        } else if ((c == ',' || c == '\0') && parsing_b &&
+                   g_n_force_interfere < MAX_FORCE_INTERFERE) {
+            g_force_interfere[g_n_force_interfere].a = saved_a;
+            g_force_interfere[g_n_force_interfere].b = cur_val;
+            g_n_force_interfere++;
+            cur_val = 0;
+            parsing_b = 0;
+            saved_a = -1;
+        }
+    }
+}
+
+// Set the triangular interference bit for the unordered pair (a, b).
+static void matrix_force_edge(uint32 *matrix, int a, int b)
+{
+    int lo = a < b ? a : b;
+    int hi = a < b ? b : a;
+    unsigned int idx = (unsigned int)((hi * hi) / 2) + (unsigned int)lo;
+    matrix[idx >> 5] |= (1u << (idx & 31));
+}
+
+// LIVERANGES dump (#549 hook-1). MWCC has no per-virtual live intervals;
+// liveness is per-block bitvectors in the LiveInfo array at 0x587E74 (16-byte
+// entries: use@0,def@4,in@8,out@0xc, each a UInt32* bitvector indexed by
+// virtual). We dump live-OUT (the set buildinterferencematrix seeds its backward
+// scan from — i.e. what actually drives edges) per block; the host inverts to
+// per-virtual block membership ("v73 live-out of {B4}; the 8 callee-saves live
+// across {B2..B9}" → why they don't interfere → what C placement would fix it).
+#define LIVEINFO_ARRAY (*(uint8 **)0x587E74)
+
+static void dump_live_sets(unsigned int rclass, unsigned int n_virtuals)
+{
+    PCodeBlock *block;
+    uint8 *liveinfo = LIVEINFO_ARRAY;
+    int words = (int)((n_virtuals + 31) >> 5);
+
+    if (!(PCFILE && DEBUG_GUARD)) return;
+    if (liveinfo == 0 || n_virtuals == 0) return;
+
+    // Include the function name + class: block indices reset per function, so
+    // the host must scope to one section before inverting to per-virtual.
+    debug_printf("[LIVERANGES] fn=%s class=%d n_virtuals=%d\n",
+                 g_current_function_set ? g_current_function : "<unset>",
+                 rclass, n_virtuals);
+    for (block = (PCodeBlock *)PCBASICBLOCKS; block; block = block->nextBlock) {
+        int idx = block->blockIndex;
+        uint32 *in = *(uint32 **)(liveinfo + (unsigned int)idx * 16 + 0x8);
+        uint32 *out = *(uint32 **)(liveinfo + (unsigned int)idx * 16 + 0xc);
+        int v, listed;
+        if (in != 0) {
+            debug_printf("B%d in:", idx);
+            for (v = 32, listed = 0; v < (int)n_virtuals; v++) {
+                if ((v >> 5) < words && (in[v >> 5] & (1u << (v & 31)))) {
+                    debug_printf(" %d", v);
+                    if (++listed >= 256) { debug_printf(" ...(capped)"); break; }
+                }
+            }
+            debug_printf("\n");
+        }
+        if (out == 0) continue;
+        debug_printf("B%d out:", idx);
+        for (v = 32, listed = 0; v < (int)n_virtuals; v++) {
+            if ((v >> 5) < words && (out[v >> 5] & (1u << (v & 31)))) {
+                debug_printf(" %d", v);
+                if (++listed >= 256) { debug_printf(" ...(capped)"); break; }
+            }
+        }
+        debug_printf("\n");
+    }
+}
+
 static void parse_coalesce_overrides_from_env(void)
 {
     char buf[512];
@@ -1967,6 +2088,63 @@ static void __cdecl hook_real_coalesce(unsigned int rclass, unsigned int n_virtu
                 forced_count++;
             }
             coalesce_normalize_alias_roots_guarded(alias, (int)n_virtuals);
+        }
+    }
+
+    // LIVERANGES (#549 hook-1): dump per-block live-out sets when requested.
+    {
+        char lr_buf[8];
+        if (GetEnvironmentVariableA("MWCC_DEBUG_DUMP_LIVERANGES", lr_buf,
+                                    sizeof(lr_buf)) > 0) {
+            dump_live_sets(rclass, n_virtuals);
+        }
+    }
+
+    // FORCE_INTERFERE (#549): inject extra edges into the matrix now — after the
+    // real coalescer populated/merged it, before buildadjacencyvectors reads it.
+    if (!g_force_interfere_parsed) {
+        parse_force_interfere_from_env();
+    }
+    if (g_n_force_interfere > 0) {
+        uint32 *matrix = INTERFERENCE_MATRIX;
+        int fi_scope_skip = 0;
+        if (g_force_interfere_scope_fn_set) {
+            fi_scope_skip = 1;
+            if (g_current_function_set) {
+                int j;
+                fi_scope_skip = 0;
+                for (j = 0; j < FUNCNAME_BUF_LEN; j++) {
+                    if (g_current_function[j] != g_force_interfere_scope_fn[j]) {
+                        fi_scope_skip = 1;
+                        break;
+                    }
+                    if (g_current_function[j] == '\0') break;
+                }
+            }
+        }
+        if (!fi_scope_skip && matrix != 0) {
+            int injected = 0;
+            for (i = 0; i < g_n_force_interfere; i++) {
+                int a = g_force_interfere[i].a;
+                int b = g_force_interfere[i].b;
+                if (a < 0 || b < 0 || a == b) continue;
+                if (a >= (int)n_virtuals || b >= (int)n_virtuals) continue;
+                matrix_force_edge(matrix, a, b);
+                injected++;
+                if (PCFILE && DEBUG_GUARD) {
+                    debug_printf("[FORCE_INTERFERE] +edge(%d,%d)\n", a, b);
+                }
+            }
+            if (PCFILE && DEBUG_GUARD) {
+                debug_printf("[FORCE_INTERFERE] injected=%d (class=%d fn=%s)\n",
+                             injected, rclass,
+                             g_current_function_set ? g_current_function
+                                                    : "<unset>");
+            }
+        } else if (fi_scope_skip && PCFILE && DEBUG_GUARD) {
+            debug_printf("[FORCE_INTERFERE] scope skip (fn=%s, scope=%s)\n",
+                         g_current_function_set ? g_current_function : "<unset>",
+                         g_force_interfere_scope_fn);
         }
     }
 

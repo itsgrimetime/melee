@@ -229,3 +229,63 @@ def load_gpr_ig(pcdump_text: str, fn_name: str) -> IG | None:
         return None
     sec = gpr_section(events)
     return build_ig(sec) if sec else None
+
+
+# ---- live-set dump (#549 hook-1) ----
+
+def parse_live_ranges(text: str, fn_name: str) -> dict[int, set[int]]:
+    """Parse the [LIVERANGES] block-out dump for a function -> {virtual: set of
+    block indices it is live-OUT of}. The DLL emits, per (function, class):
+      [LIVERANGES] class=0 n_virtuals=..
+      B<idx> out: v v v ...
+    Sections appear in compile order; we take the GPR (class=0) section that
+    follows the function's COLORGRAPH 'Starting function' marker if present, else
+    the first. (Caller scopes by passing the already-isolated function text.)"""
+    import re
+    out: dict[int, set[int]] = {}
+    in_section = False
+    for line in text.splitlines():
+        m = re.match(r"^\[LIVERANGES\] fn=(\S+) class=(\d+)", line)
+        if m:
+            # block indices reset per function -> scope to the requested fn's
+            # GPR section only (the header now carries fn=, so unions across
+            # functions can't conflate B-indices).
+            in_section = (m.group(1) == fn_name and m.group(2) == "0")
+            continue
+        if not in_section:
+            continue
+        b = re.match(r"^B(\d+) out:(.*)$", line)
+        if b:
+            for tok in b.group(2).split():
+                if tok.isdigit():
+                    out.setdefault(int(tok), set()).add(int(b.group(1)))
+        elif line.startswith("[") or line.startswith("Starting function"):
+            in_section = False
+    return out
+
+
+def validate_glr(ig: IG, live_out: dict[int, set[int]]) -> tuple[int, int, list]:
+    """Coarse block-coliveness DIAGNOSTIC (NOT a pass/fail gate). For
+    virtual-virtual non-coalesced complete pairs, counts how often an edge maps
+    to a shared live-out block. Empirically ~47% on InputProc — and that is
+    CORRECT, not a bug: interference is built by a backward per-instruction walk
+    inside a block, so most edges form from WITHIN-block transient co-liveness
+    that block-boundary live-out/in cannot see. Block-resolution liveness is a
+    SPAN diagnostic ("which blocks is V live across"), not an edge oracle; the
+    edge-faithful reconstruction needs the per-instruction live-set during the
+    backward scan (the remaining #549 increment). Returns (shared, total,
+    sample-without-shared-block[:10])."""
+    sat = total = 0
+    viol = []
+    for idx, node in ig.nodes.items():
+        if idx < 32 or node.incomplete:
+            continue
+        for nb in node.neighbors:
+            if nb < 32 or nb <= idx or nb not in ig.nodes or ig.nodes[nb].incomplete:
+                continue
+            total += 1
+            if live_out.get(idx, set()) & live_out.get(nb, set()):
+                sat += 1
+            elif len(viol) < 10:
+                viol.append((idx, nb))
+    return sat, total, viol
