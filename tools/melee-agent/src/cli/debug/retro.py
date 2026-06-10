@@ -69,6 +69,7 @@ def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
         "--table", str(table),
         "--out", str(out_dir),
         "--phases", phases,
+        "--compiler", compiler,
         fn,
     ]
     # Run from the repo root so the emulated mwcceppc resolves the relative
@@ -96,9 +97,19 @@ def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
         else:
             missing.append("frontend")
 
+    if phases in ("backend", "all"):
+        # cadmic writes backend/regalloc/variables files straight into out_dir.
+        backend_files = (list(out_dir.glob("backend-*.txt"))
+                         + list(out_dir.glob("regalloc-*.txt")))
+        if backend_files:
+            produced.append("backend")
+        elif phases == "backend":
+            missing.append("backend")
+
     if proc.returncode != 0 and not produced:
         return DumpOutcome(exit_code=2, produced=produced, missing=missing)
-    if "function not found" in proc.stdout.lower():
+    if "function not found" in proc.stdout.lower() or \
+       "not found" in proc.stderr.lower() and not produced:
         return DumpOutcome(exit_code=3, produced=produced, missing=missing)
     if missing:
         return DumpOutcome(exit_code=4, produced=produced, missing=missing)

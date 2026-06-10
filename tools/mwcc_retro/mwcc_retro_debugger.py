@@ -124,31 +124,44 @@ def run_in_gdb():
     out_dir = os.environ["RETRO_OUT"]
     fn = os.environ["RETRO_FN"]
     port = os.environ.get("RETRO_PORT", "9001")
+    compiler = os.environ.get("RETRO_COMPILER", "1.2.5n")
 
     gdb.execute("set python print-stack full")
+    cad.FUNCTION_NAME = fn
+    cad.OUTPUT_DIR = out_dir
+
+    # GC/1.1 backend uses cadmic's native run_compiler, which does its OWN
+    # `target remote` + init + find + dump + quit. We must NOT pre-connect here
+    # (a second `target remote` makes the stub drop the first connection); hand
+    # the whole session to cadmic.
+    # NOTE: robust cadmic-loop integration + the 1.2.5n backend address-table
+    # port + the full verify harness are #541 follow-ons; backend is
+    # EXPERIMENTAL and the DLL pcdump path remains the backend reference on
+    # 1.2.5n.
+    if phases == "backend" and compiler == "1.1":
+        try:
+            cad.run_compiler()  # self-connects; quits at codegen_end
+        except Exception as exc:  # noqa: BLE001 - report, don't crash
+            if "Remote connection closed" not in str(exc) and \
+               "not being run" not in str(exc):
+                print(f"[retro] backend run note: {exc}")
+        return
+
+    # Frontend (and 1.2.5n) path: we own the connection and version descriptor.
     gdb.execute("set architecture i386")
     gdb.execute("set osabi none")
     gdb.execute(f"target remote localhost:{port}")
+    if compiler == "1.1":
+        cad.init_mwcc_version()
+        print(f"[retro] cadmic GC/1.1 native; fn={fn}")
+    else:
+        cad.MWCC_VERSION = _descriptor_125n(cad, table)
+        print(f"[retro] descriptor injected (spoof GC/1.1, 1.2.5n addrs); fn={fn}")
 
-    cad.MWCC_VERSION = _descriptor_125n(cad, table)
-    cad.FUNCTION_NAME = fn
-    cad.OUTPUT_DIR = out_dir
-    print(f"[retro] descriptor injected (spoof GC/1.1, 1.2.5n addrs); fn={fn}")
-
-    # Frontend and backend each run the compiler to completion, so they are
-    # separate emulator invocations. `all` currently delivers the live-validated
-    # frontend IRO tracing; backend-via-retrowin32 needs the P3 address-table
-    # port (the DLL pcdump path already covers backend today).
-    if phases == "backend":
-        if cad.MWCC_VERSION.codegen_start_addr:
-            cad.load_node_names()
-            cad.load_opcode_info()
-            _reset_cadmic_state(cad)
-            cad.run_compiler()  # cadmic's own loop; quits at codegen_end
-        else:
-            print("[retro] backend address table not populated for this "
-                  "compiler (P3); use the DLL pcdump path for backend.")
-            gdb.execute("continue")
+    if phases == "backend":  # 1.2.5n backend — needs the P3 address-table port
+        print("[retro] 1.2.5n backend address table not populated (P3 "
+              "follow-on); use the DLL pcdump path for backend on 1.2.5n.")
+        _continue_to_exit(gdb)
     else:  # "frontend" or "all"
         _enable_frontend_tracing(gdb, cad, table, out_dir, fn)
 
@@ -294,6 +307,7 @@ def main():
     ap.add_argument("--table", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--phases", default="all")
+    ap.add_argument("--compiler", default="1.2.5n")
     ap.add_argument("fn")
     a = ap.parse_args()
 
@@ -305,7 +319,8 @@ def main():
     # --gdb-stub; the gdb port is hardcoded to 9001 (no --gdb-port flag).
     emu = [a.emulator, "--gdb-stub", *shlex.split(a.args)]
     env = dict(os.environ, RETRO_TABLE=a.table, RETRO_OUT=a.out,
-               RETRO_FN=a.fn, RETRO_PHASES=a.phases, RETRO_PORT=str(GDB_PORT))
+               RETRO_FN=a.fn, RETRO_PHASES=a.phases, RETRO_PORT=str(GDB_PORT),
+               RETRO_COMPILER=a.compiler)
     # gdb runs a .py passed to -x as embedded Python with __name__ == "__main__"
     # (and the `gdb` module importable), so the __main__/IN_GDB branch below
     # fires run_in_gdb(). This is cadmic's mechanism; runpy.run_path misbehaves
