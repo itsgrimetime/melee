@@ -1,0 +1,79 @@
+{
+  "compiler": "1.2.5n",
+  "entries": {
+    "colorgraph": {
+      "va": 5038800,
+      "provenance": "dll-known",
+      "confidence": "unique"
+    },
+    "simplifygraph": {
+      "va": 5039104,
+      "provenance": "dll-known",
+      "confidence": "unique"
+    },
+    "ig_builder": {
+      "va": 5442560,
+      "provenance": "dll-known",
+      "confidence": "unique"
+    },
+    "coalescer": {
+      "va": 5443072,
+      "provenance": "dll-known",
+      "confidence": "unique"
+    },
+    "formatoperands": {
+      "va": 5000176,
+      "provenance": "dll-known",
+      "confidence": "unique"
+    },
+    "pcode_traverse": {
+      "va": 4990304,
+      "provenance": "dll-known",
+      "confidence": "unique"
+    },
+    "pclistblocks_stub": {
+      "va": 5000144,
+      "provenance": "dll-known",
+      "confidence": "unique"
+    },
+    "debug_printf": {
+      "va": 4511104,
+      "provenance": "dll-known",
+      "confidence": "unique"
+    },
+    "debuglisting_flag": {
+      "va": 5784102,
+      "provenance": "dll-known",
+      "confidence": "unique"
+    },
+    "pcfile": {
+      "va": 5768720,
+      "provenance": "dll-known",
+      "confidence": "unique"
+    },
+    "debug_guard": {
+      "va": 5800632,
+      "provenance": "dll-known",
+      "confidence": "unique"
+    },
+    "fopen": {
+      "va": 4245136,
+      "provenance": "dll-known",
+      "confidence": "unique"
+    },
+    "iro_starting_function_push": {
+      "va": 4377990,
+      "src_va": 4377974,
+      "provenance": "string-anchor",
+      "confidence": "unique",
+      "needle": "Starting function %s"
+    },
+    "iro_dumpafterphase_push": {
+      "va": 4511835,
+      "src_va": 4511819,
+      "provenance": "string-anchor",
+      "confidence": "unique",
+      "needle": "Dumping function %s after %s "
+    }
+  }
+}

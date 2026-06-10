@@ -45,3 +45,108 @@ def string_anchor(src_exe, dst_exe, needle: bytes) -> Anchor:
 
 def overlaps_ninja(va: int, ranges: list[tuple[int, int]]) -> bool:
     return any(lo <= va < hi for lo, hi in ranges)
+
+
+import json
+import struct
+
+# DLL-known 1.2.5n VAs (independently RE'd in tools/mwcc_debug/mwcc_debug.c).
+DLL_KNOWN_125N: dict[str, int] = {
+    "colorgraph": 0x4CE2D0,
+    "simplifygraph": 0x4CE400,
+    "ig_builder": 0x530C00,
+    "coalescer": 0x530E00,
+    "formatoperands": 0x4C4BF0,
+    "pcode_traverse": 0x4C2560,
+    "pclistblocks_stub": 0x4C4BD0,
+    "debug_printf": 0x44D580,
+    "debuglisting_flag": 0x584226,
+    "pcfile": 0x580610,
+    "debug_guard": 0x5882B8,
+    "fopen": 0x40C690,
+}
+
+NINJA_RANGES_125N: list[tuple[int, int]] = [
+    (0x4ABD9A, 0x4ABDB4),
+    (0x506510, 0x50653E),
+]
+
+
+@dataclass
+class Correlation:
+    src_va: int
+    dst_va: int
+    confidence: str  # "unique" | "unique-margin" | "ambiguous" | "missing"
+    runner_up_score: float = 0.0
+
+
+def _wildcard_window(img: pe.Image, va: int, window: int) -> bytes:
+    """Mask bytes that look like absolute VAs into 0x00 so operand
+    relocations don't defeat matching. Conservative: mask any 4-byte
+    little-endian value that maps to a valid VA in this image."""
+    raw = bytearray(img.read(va, window))
+    for i in range(0, window - 3):
+        val = struct.unpack_from("<I", raw, i)[0]
+        if img.va_to_offset(val) is not None or 0x400000 <= val < 0x600000:
+            raw[i : i + 4] = b"\x00\x00\x00\x00"
+    return bytes(raw)
+
+
+def byte_correlate(src_exe, dst_exe, src_va: int, window: int = 24) -> Correlation:
+    a = pe.load(src_exe)
+    b = pe.load(dst_exe)
+    needle = _wildcard_window(a, src_va, window)
+    best = (-1, -1.0, 0.0)
+    text = next(s for s in b.sections if s.name == ".text")
+    blob = b.data[text.raw_offset : text.raw_offset + text.raw_size]
+    nz = [(i, c) for i, c in enumerate(needle) if c != 0]
+    scores: list[tuple[float, int]] = []
+    prior = src_va + 0x10
+    centers = [prior + d for d in range(-0x400, 0x400)]
+    for dst_va in centers:
+        off = dst_va - text.va
+        if off < 0 or off + window > len(blob):
+            continue
+        score = sum(1 for i, c in nz if blob[off + i] == c) / max(len(nz), 1)
+        scores.append((score, dst_va))
+    if not scores:
+        return Correlation(src_va, 0, "missing")
+    scores.sort(reverse=True)
+    top_score, top_va = scores[0]
+    runner = scores[1][0] if len(scores) > 1 else 0.0
+    if top_score < 0.6:
+        return Correlation(src_va, 0, "missing", runner)
+    conf = "unique" if (top_score - runner) > 0.15 else "unique-margin"
+    if top_score - runner < 0.02:
+        conf = "ambiguous"
+    return Correlation(src_va, top_va, conf, runner)
+
+
+def build_table(src_exe, dst_exe) -> dict:
+    """Generate the GC/1.2.5n port table. DLL-known VAs are seeded with
+    provenance 'dll-known'; string anchors carry 'string-anchor'; correlations
+    'byte-correlate'. Asserts no Ninji-range overlap."""
+    entries: dict[str, dict] = {}
+    for name, va in DLL_KNOWN_125N.items():
+        entries[name] = {"va": va, "provenance": "dll-known", "confidence": "unique"}
+    anchors = {
+        "iro_starting_function_push": b"Starting function %s",
+        "iro_dumpafterphase_push": b"Dumping function %s after %s ",
+    }
+    for name, needle in anchors.items():
+        a = string_anchor(src_exe, dst_exe, needle)
+        entries[name] = {
+            "va": a.dst_site,
+            "src_va": a.src_site,
+            "provenance": "string-anchor",
+            "confidence": a.confidence,
+            "needle": needle.decode("latin-1"),
+        }
+    for name, e in entries.items():
+        if e["va"] and overlaps_ninja(e["va"], NINJA_RANGES_125N):
+            raise AssertionError(f"table entry {name} overlaps Ninji patch range")
+    return {"compiler": "1.2.5n", "entries": entries}
+
+
+def write_table(table: dict, path) -> None:
+    Path(path).write_text(json.dumps(table, indent=2) + "\n")
