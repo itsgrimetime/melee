@@ -180,3 +180,21 @@ def test_force_interfere_round_trip():
     inj = tb.load_gpr_ig(inj_p.read_text(), "mnVibration_80248644")
     assert b not in base.nodes[a].neighbors
     assert b in inj.nodes[a].neighbors  # edge injected into the real matrix
+
+
+def test_parse_live_ranges_scopes_by_function():
+    # Block indices reset per function, so the parser must scope by fn= and
+    # class=0; an unrelated function's blocks must not leak in.
+    text = (
+        "[LIVERANGES] fn=other class=0 n_virtuals=40\n"
+        "B0 in: 99\nB0 out: 99\n"
+        "[LIVERANGES] fn=target class=0 n_virtuals=40\n"
+        "B4 in: 32 73\nB4 out: 73\nB5 out: 32 73\n"
+        "[LIVERANGES] fn=target class=1 n_virtuals=10\n"   # FPR class, ignored
+        "B4 out: 88\n"
+    )
+    lo = tb.parse_live_ranges(text, "target")
+    assert lo[73] == {4, 5}        # live-out of B4 and B5
+    assert lo[32] == {5}           # live-out of B5 only
+    assert 99 not in lo            # other function's virtual excluded
+    assert 88 not in lo            # FPR class excluded

@@ -1173,6 +1173,56 @@ static void matrix_force_edge(uint32 *matrix, int a, int b)
     matrix[idx >> 5] |= (1u << (idx & 31));
 }
 
+// LIVERANGES dump (#549 hook-1). MWCC has no per-virtual live intervals;
+// liveness is per-block bitvectors in the LiveInfo array at 0x587E74 (16-byte
+// entries: use@0,def@4,in@8,out@0xc, each a UInt32* bitvector indexed by
+// virtual). We dump live-OUT (the set buildinterferencematrix seeds its backward
+// scan from — i.e. what actually drives edges) per block; the host inverts to
+// per-virtual block membership ("v73 live-out of {B4}; the 8 callee-saves live
+// across {B2..B9}" → why they don't interfere → what C placement would fix it).
+#define LIVEINFO_ARRAY (*(uint8 **)0x587E74)
+
+static void dump_live_sets(unsigned int rclass, unsigned int n_virtuals)
+{
+    PCodeBlock *block;
+    uint8 *liveinfo = LIVEINFO_ARRAY;
+    int words = (int)((n_virtuals + 31) >> 5);
+
+    if (!(PCFILE && DEBUG_GUARD)) return;
+    if (liveinfo == 0 || n_virtuals == 0) return;
+
+    // Include the function name + class: block indices reset per function, so
+    // the host must scope to one section before inverting to per-virtual.
+    debug_printf("[LIVERANGES] fn=%s class=%d n_virtuals=%d\n",
+                 g_current_function_set ? g_current_function : "<unset>",
+                 rclass, n_virtuals);
+    for (block = (PCodeBlock *)PCBASICBLOCKS; block; block = block->nextBlock) {
+        int idx = block->blockIndex;
+        uint32 *in = *(uint32 **)(liveinfo + (unsigned int)idx * 16 + 0x8);
+        uint32 *out = *(uint32 **)(liveinfo + (unsigned int)idx * 16 + 0xc);
+        int v, listed;
+        if (in != 0) {
+            debug_printf("B%d in:", idx);
+            for (v = 32, listed = 0; v < (int)n_virtuals; v++) {
+                if ((v >> 5) < words && (in[v >> 5] & (1u << (v & 31)))) {
+                    debug_printf(" %d", v);
+                    if (++listed >= 256) { debug_printf(" ...(capped)"); break; }
+                }
+            }
+            debug_printf("\n");
+        }
+        if (out == 0) continue;
+        debug_printf("B%d out:", idx);
+        for (v = 32, listed = 0; v < (int)n_virtuals; v++) {
+            if ((v >> 5) < words && (out[v >> 5] & (1u << (v & 31)))) {
+                debug_printf(" %d", v);
+                if (++listed >= 256) { debug_printf(" ...(capped)"); break; }
+            }
+        }
+        debug_printf("\n");
+    }
+}
+
 static void parse_coalesce_overrides_from_env(void)
 {
     char buf[512];
@@ -2038,6 +2088,15 @@ static void __cdecl hook_real_coalesce(unsigned int rclass, unsigned int n_virtu
                 forced_count++;
             }
             coalesce_normalize_alias_roots_guarded(alias, (int)n_virtuals);
+        }
+    }
+
+    // LIVERANGES (#549 hook-1): dump per-block live-out sets when requested.
+    {
+        char lr_buf[8];
+        if (GetEnvironmentVariableA("MWCC_DEBUG_DUMP_LIVERANGES", lr_buf,
+                                    sizeof(lr_buf)) > 0) {
+            dump_live_sets(rclass, n_virtuals);
         }
     }
 
