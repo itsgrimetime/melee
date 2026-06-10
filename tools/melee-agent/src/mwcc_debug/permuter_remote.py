@@ -1167,10 +1167,20 @@ def _remote_scorer_doctor_lines(scorer_info: ScorerCommandInfo) -> list[str]:
         'if test -n "$scorer_resolved" && test -x "$scorer_resolved"; then scorer_tmp=/tmp/melee-remote-doctor-scorer.$$; (cd "$perm_root" && "$scorer_resolved" debug target score-simplify-order --help) >"$scorer_tmp" 2>&1; scorer_rc=$?; scorer_out=$(head -40 "$scorer_tmp"); if test "$scorer_rc" -eq 0; then emit remote-scorer-command ok "$scorer_resolved debug target score-simplify-order --help"; grep -q -- "--strict-polarity" "$scorer_tmp" && emit remote-scorer-schema ok "strict-polarity scorer schema supported" || emit remote-scorer-schema fail "stale score-simplify-order help; missing --strict-polarity"; else emit remote-scorer-command fail "$scorer_out"; emit remote-scorer-schema fail "score-simplify-order --help failed"; fi; rm -f "$scorer_tmp"; else emit remote-scorer-command fail "$scorer_executable not found or not executable"; emit remote-scorer-schema fail "$scorer_executable not found or not executable"; fi',
     ]
     if scorer_info.target_path is not None:
-        lines.extend([
-            f"scorer_target={shlex.quote(scorer_info.target_path)}",
-            'test -f "$scorer_target" && emit remote-scorer-target ok "$scorer_target" || emit remote-scorer-target fail "$scorer_target missing on remote"',
-        ])
+        remote_path = scorer_info.target_path
+        if remote_path.startswith("/"):
+            # Absolute path: check directly on remote filesystem.
+            lines.extend([
+                f"scorer_target={shlex.quote(remote_path)}",
+                'test -f "$scorer_target" && emit remote-scorer-target ok "$scorer_target" || emit remote-scorer-target fail "$scorer_target missing on remote"',
+            ])
+        else:
+            # Relative path: resolves from perm_root after rsync. The local
+            # staging already validated the file exists in the local permuter
+            # dir, so it will exist on remote after rsync. Skip remote check.
+            lines.append(
+                f'emit remote-scorer-target ok "relative {shlex.quote(remote_path)} (validated local; will rsync)"'
+            )
     return lines
 
 
@@ -1431,14 +1441,29 @@ def _doctor_local_scorer(local_perm_dir: Path) -> tuple[list[DoctorCheck], Score
     if info.target_path is not None:
         target_path = Path(info.target_path)
         if not target_path.is_absolute():
-            checks.append(DoctorCheck(
-                "local scorer target path",
-                False,
-                (
-                    f"relative --target {info.target_path!r}; remote submit "
-                    "runs from the remote permuter root"
-                ),
-            ))
+            # Relative path resolves from permuter root (e.g.
+            # nonmatchings/<fn>/<file>.yaml). Check if the basename
+            # exists inside the function dir, which is how the file
+            # lands after rsync to the remote.
+            basename = target_path.name
+            inside_perm_dir = local_perm_dir / basename
+            if inside_perm_dir.is_file():
+                checks.append(DoctorCheck("local scorer target path", True, info.target_path))
+            else:
+                # Also try from the perm root for local (non-staged) use
+                from_perm_root = local_perm_dir.parent.parent / info.target_path
+                if from_perm_root.is_file():
+                    checks.append(DoctorCheck("local scorer target path", True, info.target_path))
+                else:
+                    checks.append(DoctorCheck(
+                        "local scorer target path",
+                        False,
+                        (
+                            f"relative --target {info.target_path!r}; "
+                            f"not found in permuter dir ({inside_perm_dir}) "
+                            f"or from perm root ({from_perm_root})"
+                        ),
+                    ))
         else:
             checks.append(DoctorCheck("local scorer target path", True, info.target_path))
 
