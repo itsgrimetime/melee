@@ -71,7 +71,9 @@ docs/mwcc-retro.md                          (committed; workflow doc)
 Output layout (gitignored): `build/mwcc_retro/<unit>/<function>/`
 - `frontend-NN-ast-<name>.txt` (upstream AST dumps)
 - `iro-trace.txt` (raw in-band IRO per-phase dump stream)
-- `iro-NN-<phase>.txt` (split per-phase IR dumps)
+- `iro-NN-<phase>.txt` (split per-phase IR dumps; slug rule: lowercase, runs of
+  non-alphanumerics → `-`, trimmed to 60 chars; NN = 2-digit order of appearance
+  within the function's trace — retail phase names contain spaces/colons/parens)
 - `iro-summary.txt` (pass sequence keyed (function, pass-iteration N, phase) + per-phase
   diffs: IROLinear indices/temps appearing/disappearing = temp-creation ledger v1)
 - `backend-NN-<pass>.txt`, `regalloc-<cls>-pass-N-{all,assigned}.txt`, `variables.txt` (upstream)
@@ -97,17 +99,40 @@ flag test (`jz`) inside `IRO_DumpAfterPhase` (string-anchored at the unique
 (unicorn translation-cache safety). Fallback within the same strategy: bp at
 `IRO_DumpAfterPhase` entry + stack write `[esp+8]=1`. Function scoping: bp at
 `IRO_Optimizer` entry, read `func->name` (offset +0xA chain), set `IRO_Log`
-equivalent only for the target function; resolve whether `IRO_Log` is a distinct
-global or `copts.debuglisting` itself by reading the cmp operands near the
-"Starting function" push (0x42cd86 in 1.2.5n). Rejected: re-implementing an IROLinear
+equivalent only for the target function. To resolve whether `IRO_Log` is a distinct
+global or `copts.debuglisting` itself: follow the `call` immediately after the
+"Starting function" push (0x42cd86 in 1.2.5n) into `IRO_Dump`, and read the abs32
+operand of its first `cmp byte` — that global is the gate. (At the push site itself
+expect the `DoScalarize/DoLinearize/EarlyReturn` init movs and the
+`mov eax,[eax+0xA]` name chain, not the gate test.) Rejected: re-implementing an IROLinear
 pretty-printer from v7-era headers (zero 1.2.5 layout evidence). If the in-compiler
 dump path somehow fails, the sanctioned fallback is lifting IROLinear offsets from
 retail's own `DumpLinearNode` disassembly (string-anchored), not v7 headers.
 
-**D3 — Single dump command.** `melee-agent debug retro dump <src> -f FN
-[--phases frontend|backend|all] [--compiler 1.2.5n|1.1] [-O DIR]`. No separate
-`trace` command. Partial success gets distinct exit codes; raw files always kept
-alongside summaries.
+**D3 — Single dump command, precise contracts.** No separate `trace` command.
+
+`debug retro dump <src> -f FN [--phases all|frontend|backend] [--compiler 1.2.5n|1.1] [-O DIR] [--gdb-py HOOK.py]`
+- Defaults: `--phases all`, `--compiler 1.2.5n`, output `build/mwcc_retro/<unit>/<function>/`.
+- Exit codes: `0` = all requested phase streams produced; `2` = compiler-under-emulation
+  failed; `3` = target function not found in TU; `4` = partial (≥1 requested phase
+  stream missing/truncated — raw files kept, missing phases listed on stderr); `5` =
+  safety invariant fired (read-before-write byte assert or in-loop bp invariant).
+- Raw files always kept alongside summaries.
+
+`debug retro setup [--force]`
+- Idempotent; re-verifies pinned SHAs and rebuild-needed state; exit nonzero names
+  the failing step. Clone URLs and pins: `https://github.com/encounter/retrowin32`
+  branch `gdb-stub` checked out at `11dbea5a`; `https://github.com/cadmic/mwcc-debugger`
+  checked out at `bad9cea`. After checkout, assert `git rev-parse HEAD` equals the
+  pin — do NOT float to branch tip. Build command:
+  `cargo build -p retrowin32 -F x86-unicorn --profile lto`.
+- STOP CONDITION: pinned SHA unfetchable, or cargo build fails after one clean
+  retry → halt, file issue with full output.
+
+`debug retro verify [--unit SRC] [-f FN]`
+- Defaults to the mnVibration control TU/function. Prints one PASS/FAIL line per D5
+  check; exit `0` iff all *authoritative* checks pass (advisory failures printed,
+  non-fatal).
 
 **D4 — DLL fast path in scope (P5, gated).** Once the flag-test VA is known, add an
 env-gated (`MWCC_DEBUG_IRO_PHASES=1`) patch to mwcc_debug.c so per-phase IRO dumps
@@ -121,12 +146,25 @@ premise of #541).
   opcodeinfo_size and operand kinds valid; codegen_start → function name resolves.
 - Read-before-write byte assertions before every .text/.data patch (e.g. expect
   `c6 05 26 42 58 00 00` at 0x42C8DB) — `write_addrs` panics on bad addresses.
-- `debug retro verify`: control-TU cross-checks vs existing pcdump DLL output —
-  AFTER-REGALLOC virtual→phys map equality, block-header `LOOPWEIGHT=` equality
-  (settles the PCodeBlock 0x20–0x2C conflict), regalloc node counts, and final-code
-  dump vs the real .o.
+- `debug retro verify`: control-TU cross-checks vs existing pcdump DLL output.
+  Each check is classed **authoritative** or **advisory**:
+  - Authoritative: AFTER-REGALLOC virtual→phys map equality; regalloc node counts;
+    final-code dump consistency vs the real .o.
+  - Advisory (initially): block-header `LOOPWEIGHT=` equality. The DLL side is
+    itself suspect (committed fixture shows `LOOPWEIGHT=-1602224128` garbage). On
+    mismatch, tie-break ground truth by (i) disassembling retail's own block-header
+    dump path in the pristine exe (the DLL stubbed `pclistblocks`@0x4C4BD0 — read
+    which offset retail's printf loads), and/or (ii) semantic plausibility (loop
+    weights follow the 1/4/16/64 LoopUsage ladder; entry block = 1; garbage loses).
+    Record winner+loser per side in provenance.json; if the DLL is wrong, file a
+    DLL bug and mark the DLL non-authoritative for that field.
+  - Phase gates ("verify green") and the verify exit code reflect authoritative
+    checks only.
 - Port-table generation seeds/cross-checks against the DLL's known 1.2.5n VAs
-  (colorgraph 0x4CE2D0 etc.).
+  (colorgraph 0x4CE2D0 etc.). Element COUNTS (`nodenames_size`=75,
+  `opcodeinfo_size`=468) are not anchor-portable: carry over GC/1.1 counts only
+  after a bounds probe (read entries until a non-pointer/out-of-section value or
+  derived table extent); in-loop invariants guard the residual risk.
 
 **D6 — Wrapper owns process/port lifecycle.** Port allocation (or lockfile
 serialization if the stub port is fixed), emulator kill on gdb failure, timeout
@@ -141,29 +179,47 @@ graceful degradation.
 ## 5. Phases (reordered per review: front-end decoupled from backend port)
 
 **P0 — Substrate spike + fidelity gates.** Build retrowin32 (gdb-stub, x86-unicorn,
-lto). Run cadmic AS-IS on GC/1.1 against a melee TU (mangled names from `nm` on the
-.o / linkname). Probe from homebrew arm64 gdb 17.1: remote attach, memory write,
-**`call` injection** (the genuinely untested piece — dummy-frame on no-symbol i386
-remote). Fidelity gate: run mwcc 1.2.5n under plain retrowin32 on a real melee TU
-command line (via `_ninja_cflags_for_unit`, no wibo/sjiswrap) and **byte-compare the
-.o against the wibo-produced .o** (unicorn x87 semantics risk). Performance budget:
-record TU-compile + single-function dump wall-clock; document. STOP CONDITIONS: .o
-not byte-identical → halt, file findings (per issue stop condition, expanded);
-gdb `call` injection unusable → switch function-matching to `obj.name` (+0xA) and
-the fopen step to a staged-stack manual call sequence, both documented fallbacks.
+lto). Run cadmic AS-IS on GC/1.1 against the mnVibration control TU (mangled names
+from `nm` on the .o / linkname); if GC/1.1 rejects melee's 1.2.5n-flavored unit,
+fall back to a minimal fixture .c with the same flag family — the substrate probes
+don't depend on which source compiles. Probe from homebrew arm64 gdb 17.1: remote
+attach, memory write, **`call` injection** (the genuinely untested piece —
+dummy-frame on no-symbol i386 remote). Fidelity gate: run mwcc 1.2.5n under plain
+retrowin32 on a real melee TU command line (via `_ninja_cflags_for_unit`, no
+wibo/sjiswrap) and **byte-compare the .o against the wibo-produced .o** (unicorn x87
+semantics risk). Performance budget: record TU-compile + single-function dump
+wall-clock; document. STOP CONDITIONS: .o not byte-identical → halt, file findings
+(per issue stop condition, expanded); gdb `call` injection unusable → switch
+function-matching to `obj.name` (+0xA) and the fopen step to a staged-stack manual
+call sequence, both documented fallbacks.
 
 **P1 — GC/1.1 integration end-to-end.** Vendoring setup command, our wrapper script
 (lifecycle, invariants, monkeypatches, state reset), `debug retro setup|dump` on
-GC/1.1 proxy mode, output layout + provenance, CLI tests.
+GC/1.1 proxy mode, output layout + provenance, CLI tests. ACCEPT: dump on the GC/1.1
+control TU produces frontend-*, backend-*, regalloc-*, variables.txt, and
+provenance.json with zero invariant violations; unit + CLI tests green. (The
+issue's "GC/1.1 AST dumps vs mwcc-inspect ENodes" cross-check is subsumed by D5
+parse-validity invariants here plus P2's IRO_Dump line-equality check; a manual
+mwcc-inspect comparison remains optional since it needs the remote Windows host.)
 
 **P2 — Front-end IRO tracing on 1.2.5n directly** (the headline; needs no backend
 table). Anchor IRO_Optimizer/IRO_DumpAfterPhase/flag-test/IRO_Log-or-debuglisting in
 1.2.5n via unique strings (+ known +0x10 drift as prior, verified per-site). Dump
 recipe per D2. Per-function scoping. Split `iro-trace.txt` into per-phase files;
 build `iro-summary.txt` (pass-iteration-aware) + temp-ledger v1 from per-phase diffs.
-Validate against decomp pass sequence + existing pcdump IRO_Dump lines on a control
-function. Also wire the same tracing for GC/1.1 (addresses from cadmic's table +
-same anchors) so proxy mode has parity.
+Also wire the same tracing for GC/1.1 via the same string anchors (cadmic's
+MwccVersion has no IRO entries) so proxy mode has parity.
+ACCEPT (all binary): (a) `iro-trace.txt` for the control function contains ≥1
+`Dumping function <fn> after <phase>` block and every emitted phase name appears in
+the retail binary's own pass-name string set (NOT the v7 decomp — retail may
+legitimately differ from the decomp's sequence); (b) the IRO_Dump preamble lines
+(`Starting function` / `Dumps for pass=N` / `IRO_FindLoops...`) are line-identical
+to the same function's section in the existing DLL pcdump; (c) zero per-phase
+blocks for non-target functions.
+STOP: if the flag-test site or the IRO_Log global resolves to 0 or ≥2 candidates
+after string-anchor + drift-prior + call-target disassembly, halt P2, record the
+candidate set in provenance.json, file an issue; do NOT guess-patch
+(read-before-write asserts are a backstop, not a license).
 
 **P3 — Backend table port 1.2.5n.** `port_table.py` per D5/D7 constraints
 (monotonicity, uniqueness-margin, patch-range overlap assertion, DLL-VA
@@ -174,13 +230,20 @@ address that resists porting with its anchor evidence; per-address manual-ghidra
 fallback notes.
 
 **P4 — variables.txt + regalloc on 1.2.5n.** Frame globals (.bss-region; −0x1000
-prior does not apply to .bss — treat as fresh finds via operand extraction), stack
-maps validated against DLL stack output on matched functions.
+prior does not apply to .bss — treat as fresh finds via operand extraction). Stack
+maps validated against the **symbolic stack-home operands** (`name+0xNN(r1)`) in the
+DLL final-code listing for the same objects (the DLL emits no dedicated stack-map
+table; cf. `_pcdump_has_symbolic_stack_homes`): variables.txt r1+offset ranges must
+agree for every object that appears in both.
 
 **P5 — DLL fast path + docs/skill/memory.** D4 patch (env-gated) + cross-validation
-gate. `docs/mwcc-retro.md`, `.claude/skills/mwcc-retro/SKILL.md`, capabilities
-regen, memory updates, issue #541 resolution (or explicit follow-on issues for any
-declared-out residue).
+gate: line-equality of per-phase dump streams (after normalizing the function-name
+header) between the DLL path and retrowin32-retail on ≥2 control functions. On
+divergence: leave `MWCC_DEBUG_IRO_PHASES` default-off, file a fidelity issue, and
+proceed with P5 docs/closure — the retail path remains the reference (divergence is
+the premise of #541, not a blocker for it). Then `docs/mwcc-retro.md`,
+`.claude/skills/mwcc-retro/SKILL.md`, capabilities regen, memory updates, issue
+#541 resolution (or explicit follow-on issues for any declared-out residue).
 
 ## 6. #541 deliverable coverage
 
@@ -217,8 +280,10 @@ declared-out residue).
   mocked subprocess.
 - **Live (marker `slow`, env-gated like existing live tests):** P0 fidelity gates,
   end-to-end GC/1.1 + 1.2.5n dumps on a small control TU, verify harness.
-- Fixtures: reuse tests/fixtures/role_identity/mnVibration_matched_pcdump.txt as the
-  DLL-side oracle; add a small committed iro-trace fixture once P2 produces one.
+- Fixtures: reuse
+  `tools/melee-agent/tests/fixtures/role_identity/mnVibration_matched_pcdump.txt`
+  as the DLL-side oracle; add a small committed iro-trace fixture once P2 produces
+  one.
 
 ## 9. Non-goals
 
