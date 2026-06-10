@@ -1516,8 +1516,8 @@ HSD_GObj* mnName_8023A59C(u8 arg0)
     return gobj;
 }
 
-static inline struct mn_80231634_t* mnName_8023A9B4_GetUserData(
-    MnName_GObj* gobj2)
+static inline struct mn_80231634_t*
+mnName_8023A9B4_GetUserData(MnName_GObj* gobj2)
 {
     return (struct mn_80231634_t*) gobj2->gobj.user_data_remove_func;
 }
@@ -1549,8 +1549,7 @@ void mnName_8023A9B4(u8 arg0)
     mnName_8023A9B4_ResetDisplayOrder();
     gobj2 = (0, mnName_8023A9B4_GetGObj());
     if ((u8) mn_804A04F0.x10 == 1) {
-        struct mn_80231634_t* p =
-            mnName_8023A9B4_GetUserData(gobj2);
+        struct mn_80231634_t* p = mnName_8023A9B4_GetUserData(gobj2);
         if (p == NULL) {
             jobj = NULL;
         } else {

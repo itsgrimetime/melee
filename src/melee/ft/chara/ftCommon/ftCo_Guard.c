@@ -255,8 +255,8 @@ void ftCo_800921DC(HSD_GObj* gobj)
     fp->mv.co.guard.x4 = 0;
     fp->mv.co.guard.x2C = 0;
     {
-        float lightshield_amount = (fp->input.x650 - p_ftCommonData->x10) /
-                                   (1 - p_ftCommonData->x10);
+        float lightshield_amount =
+            (fp->input.x650 - p_ftCommonData->x10) / (1 - p_ftCommonData->x10);
         if (lightshield_amount < 0) {
             lightshield_amount = fp->mv.co.guard.x2C;
         }

@@ -448,13 +448,11 @@ void fn_8018B090(HSD_GObj* arg0)
             p = bb;
             for (i = 0; i < 4; i++, p += 0x2C) {
                 if (p[0x30] != 0) {
-                    HSD_JObj* jobj =
-                        (*(HSD_GObj**) (p + 0x2C))->hsd_obj;
+                    HSD_JObj* jobj = (*(HSD_GObj**) (p + 0x2C))->hsd_obj;
                     if (bb[2] != 0) {
-                        HSD_JObjSetTranslateY(
-                            jobj,
-                            -((f32) *(s32*) (p + 0x48) -
-                              (0.3f * (f32) lbl_804D6630)));
+                        HSD_JObjSetTranslateY(jobj,
+                                              -((f32) * (s32*) (p + 0x48) -
+                                                (0.3f * (f32) lbl_804D6630)));
                     } else {
                         s8 t0 = bb[4];
                         if (t0 != 1) {
@@ -462,27 +460,25 @@ void fn_8018B090(HSD_GObj* arg0)
                                 if (i <= 1) {
                                     HSD_JObjSetTranslateY(
                                         jobj, -((0.3f * (f32) lbl_804D6630) +
-                                                (f32) *(s32*) (p + 0x48)));
+                                                (f32) * (s32*) (p + 0x48)));
                                 } else {
                                     HSD_JObjSetTranslateY(
-                                        jobj,
-                                        -((f32) *(s32*) (p + 0x48) -
-                                          (0.3f * (f32) lbl_804D6630)));
+                                        jobj, -((f32) * (s32*) (p + 0x48) -
+                                                (0.3f * (f32) lbl_804D6630)));
                                 }
                             } else {
                                 HSD_JObjSetTranslateY(
                                     jobj, -((0.3f * (f32) lbl_804D6630) +
-                                            (f32) *(s32*) (p + 0x48)));
+                                            (f32) * (s32*) (p + 0x48)));
                             }
                         } else if (i == 0) {
                             HSD_JObjSetTranslateY(
                                 jobj, -((0.3f * (f32) lbl_804D6630) +
-                                        (f32) *(s32*) (p + 0x48)));
+                                        (f32) * (s32*) (p + 0x48)));
                         } else {
                             HSD_JObjSetTranslateY(
-                                jobj,
-                                -((f32) *(s32*) (p + 0x48) -
-                                  (0.3f * (f32) lbl_804D6630)));
+                                jobj, -((f32) * (s32*) (p + 0x48) -
+                                        (0.3f * (f32) lbl_804D6630)));
                         }
                     }
                 }
@@ -592,43 +588,38 @@ void fn_8018B090(HSD_GObj* arg0)
                     HSD_JObj* jobj = (*(HSD_GObj**) (p + 0x2C))->hsd_obj;
                     if (bb[2] != 0) {
                         HSD_JObjSetTranslateY(
-                            jobj,
-                            -((f32) *(s32*) (p + 0x40) -
-                              (0.1f * (f32) sp[lbl_804D6630 % 10])));
+                            jobj, -((f32) * (s32*) (p + 0x40) -
+                                    (0.1f * (f32) sp[lbl_804D6630 % 10])));
                     } else {
                         s8 t0 = bb[4];
                         if (t0 != 1) {
                             if (t0 >= 1 && t0 < 4) {
                                 if (i <= 1) {
                                     HSD_JObjSetTranslateY(
-                                        jobj,
-                                        -((0.1f *
-                                           (f32) sp[lbl_804D6630 % 10]) +
-                                          (f32) *(s32*) (p + 0x40)));
+                                        jobj, -((0.1f *
+                                                 (f32) sp[lbl_804D6630 % 10]) +
+                                                (f32) * (s32*) (p + 0x40)));
                                 } else {
                                     HSD_JObjSetTranslateY(
                                         jobj,
-                                        -((f32) *(s32*) (p + 0x40) -
+                                        -((f32) * (s32*) (p + 0x40) -
                                           (0.1f *
                                            (f32) sp[lbl_804D6630 % 10])));
                                 }
                             } else {
                                 HSD_JObjSetTranslateY(
                                     jobj,
-                                    -((0.1f *
-                                       (f32) sp[lbl_804D6630 % 10]) +
-                                      (f32) *(s32*) (p + 0x40)));
+                                    -((0.1f * (f32) sp[lbl_804D6630 % 10]) +
+                                      (f32) * (s32*) (p + 0x40)));
                             }
                         } else if (i == 0) {
                             HSD_JObjSetTranslateY(
-                                jobj,
-                                -((0.1f * (f32) sp[lbl_804D6630 % 10]) +
-                                  (f32) *(s32*) (p + 0x40)));
+                                jobj, -((0.1f * (f32) sp[lbl_804D6630 % 10]) +
+                                        (f32) * (s32*) (p + 0x40)));
                         } else {
                             HSD_JObjSetTranslateY(
-                                jobj,
-                                -((f32) *(s32*) (p + 0x40) -
-                                  (0.1f * (f32) sp[lbl_804D6630 % 10])));
+                                jobj, -((f32) * (s32*) (p + 0x40) -
+                                        (0.1f * (f32) sp[lbl_804D6630 % 10])));
                         }
                     }
                 }
@@ -871,18 +862,12 @@ void fn_8018B090(HSD_GObj* arg0)
             sb[1] = 0;
             ((u8*) &lbl_80473AB8[sb[5]] + sb[6] * 0x2C)[0x30] = 1;
             pick = sb + r * 0x2C;
-            ((u8*) &lbl_80473AB8[sb[5]] + sb[6] * 0x2C)[0x50] =
-                pick[0x50];
-            ((u8*) &lbl_80473AB8[sb[5]] + sb[6] * 0x2C)[0x51] =
-                pick[0x51];
-            ((u8*) &lbl_80473AB8[sb[5]] + sb[6] * 0x2C)[0x52] =
-                pick[0x52];
-            ((u8*) &lbl_80473AB8[sb[5]] + sb[6] * 0x2C)[0x4D] =
-                pick[0x4D];
-            ((u8*) &lbl_80473AB8[sb[5]] + sb[6] * 0x2C)[0x4E] =
-                pick[0x4E];
-            ((u8*) &lbl_80473AB8[sb[5]] + sb[6] * 0x2C)[0x4F] =
-                pick[0x4F];
+            ((u8*) &lbl_80473AB8[sb[5]] + sb[6] * 0x2C)[0x50] = pick[0x50];
+            ((u8*) &lbl_80473AB8[sb[5]] + sb[6] * 0x2C)[0x51] = pick[0x51];
+            ((u8*) &lbl_80473AB8[sb[5]] + sb[6] * 0x2C)[0x52] = pick[0x52];
+            ((u8*) &lbl_80473AB8[sb[5]] + sb[6] * 0x2C)[0x4D] = pick[0x4D];
+            ((u8*) &lbl_80473AB8[sb[5]] + sb[6] * 0x2C)[0x4E] = pick[0x4E];
+            ((u8*) &lbl_80473AB8[sb[5]] + sb[6] * 0x2C)[0x4F] = pick[0x4F];
             pick[0x30] = 0;
             pick[0x4E] = 3;
             tm->cur_option = 0x27;
@@ -1348,27 +1333,23 @@ void fn_8018E46C(HSD_GObj* gobj, int unused)
     switch (data->x3) {
     case 0:
         new_var = data->x18;
-        fn_8018C8D4(data, data->xC - (s32) (0.5f * data->x1C),
-                    -data->x10, data->x14, -new_var, r30, data->xC,
-                    0.5f);
+        fn_8018C8D4(data, data->xC - (s32) (0.5f * data->x1C), -data->x10,
+                    data->x14, -new_var, r30, data->xC, 0.5f);
         break;
     case 1:
         new_var = data->x18;
-        fn_8018D50C(data, data->xC - (s32) (0.5f * data->x1C),
-                    -data->x10, data->x14, -new_var, r30, data->xC,
-                    0.5f);
+        fn_8018D50C(data, data->xC - (s32) (0.5f * data->x1C), -data->x10,
+                    data->x14, -new_var, r30, data->xC, 0.5f);
         break;
     case 2:
         new_var = data->x18;
-        fn_8018DC18(data, data->xC - (s32) (0.5f * data->x1C),
-                    -data->x10, data->x14, -new_var, r30, data->xC,
-                    0.5f);
+        fn_8018DC18(data, data->xC - (s32) (0.5f * data->x1C), -data->x10,
+                    data->x14, -new_var, r30, data->xC, 0.5f);
         break;
     case 3:
         new_var = data->x18;
-        fn_8018DF68(data, data->xC - (s32) (0.5f * data->x1C),
-                    -data->x10, data->x14, -new_var, r30, data->xC,
-                    0.5f);
+        fn_8018DF68(data, data->xC - (s32) (0.5f * data->x1C), -data->x10,
+                    data->x14, -new_var, r30, data->xC, 0.5f);
         break;
     }
 }

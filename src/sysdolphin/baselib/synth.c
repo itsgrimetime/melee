@@ -1243,7 +1243,8 @@ void HSD_Synth_8038ADD0(void)
                         (i * lbl_804C4540[HSD_Synth_804D7770].x0 + 2));
                 AXSetVoiceAdpcmLoop(
                     node->voice[i],
-                    (AXPBADPCMLOOP*) ((u32*) &lbl_804C4540[HSD_Synth_804D7770] +
+                    (AXPBADPCMLOOP*) ((u32*) &lbl_804C4540
+                                          [HSD_Synth_804D7770] +
                                       (i * 2 + 3)));
             }
         }

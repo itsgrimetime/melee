@@ -517,17 +517,17 @@ void grInishie1_801FB0AC(HSD_GObj* gobj, u32 index)
                 index = HSD_Randi(0x13);                                      \
                 attempts++;                                                   \
             } while ((index == last_index ||                                  \
-                      gp->gv.inishie1.blocks[index].status != 0) &&                     \
+                      gp->gv.inishie1.blocks[index].status != 0) &&           \
                      attempts < 0x14);                                        \
                                                                               \
             if (attempts == 0x14) {                                           \
-                __assert("grinishie1.c", line, "%s:%d: oioi..\n");          \
+                __assert("grinishie1.c", line, "%s:%d: oioi..\n");            \
             }                                                                 \
                                                                               \
             last_index = index;                                               \
-            gp->gv.inishie1.blocks[index].status = status_val;                          \
+            gp->gv.inishie1.blocks[index].status = status_val;                \
             grInishie1_801FBAA0(gobj, index);                                 \
-            gp->gv.inishie1.blocks[index].x20 = 0;                                      \
+            gp->gv.inishie1.blocks[index].x20 = 0;                            \
         }                                                                     \
     }
 
@@ -541,10 +541,11 @@ void grInishie1_801FB3F0(HSD_GObj* gobj)
         gp->gv.inishie1.xD8--;
     }
 
-    if (gp->gv.inishie1.xD8 == 0 && ((gp->gv.inishie1.xC6 == 1 && gp->gv.inishie1.xC8 > 0 &&
-                            gp->gv.inishie1.xC8 < grI1_804D69F8->unk14) ||
-                           (gp->gv.inishie1.xC8 == 1 && gp->gv.inishie1.xC6 > 0 &&
-                            gp->gv.inishie1.xC6 < grI1_804D69F8->unk14)))
+    if (gp->gv.inishie1.xD8 == 0 &&
+        ((gp->gv.inishie1.xC6 == 1 && gp->gv.inishie1.xC8 > 0 &&
+          gp->gv.inishie1.xC8 < grI1_804D69F8->unk14) ||
+         (gp->gv.inishie1.xC8 == 1 && gp->gv.inishie1.xC6 > 0 &&
+          gp->gv.inishie1.xC6 < grI1_804D69F8->unk14)))
     {
         gp->gv.inishie1.xC8 = 0;
         gp->gv.inishie1.xC6 = 0;
@@ -558,9 +559,9 @@ void grInishie1_801FB3F0(HSD_GObj* gobj)
         }
     } else {
         HATENA_APPEAR_CHECKLOOP(gp->gv.inishie1.xC6, gp->gv.inishie1.xCA, 1,
-                                 0x2D0U);
+                                0x2D0U);
         HATENA_APPEAR_CHECKLOOP(gp->gv.inishie1.xC8, gp->gv.inishie1.xCC, 2,
-                                 0x2EBU);
+                                0x2EBU);
     }
 
     for (i = 0; i < 0x13; ++i) {

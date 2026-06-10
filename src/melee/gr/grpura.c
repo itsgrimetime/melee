@@ -357,12 +357,12 @@ void grPura_802125F0(HSD_GObj* arg0)
             gp->gv.pura2.xC8 = Ground_801C3FA4(arg0, gp->gv.pura2.xC4);
 
             jobj = gobj->hsd_obj;
-            HSD_JObjSetTranslateX(
-                jobj, HSD_JObjGetTranslationX(gp->gv.pura2.xC8));
-            HSD_JObjSetTranslateY(
-                jobj, HSD_JObjGetTranslationY(gp->gv.pura2.xC8));
-            HSD_JObjSetTranslateZ(
-                jobj, HSD_JObjGetTranslationZ(gp->gv.pura2.xC8));
+            HSD_JObjSetTranslateX(jobj,
+                                  HSD_JObjGetTranslationX(gp->gv.pura2.xC8));
+            HSD_JObjSetTranslateY(jobj,
+                                  HSD_JObjGetTranslationY(gp->gv.pura2.xC8));
+            HSD_JObjSetTranslateZ(jobj,
+                                  HSD_JObjGetTranslationZ(gp->gv.pura2.xC8));
 
             if (HSD_JObjGetFlags(gp->gv.pura2.xC8) & 0x10) {
                 HSD_JObjSetFlagsAll(jobj, 0x10);

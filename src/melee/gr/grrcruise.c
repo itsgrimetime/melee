@@ -80,7 +80,7 @@ struct StageData grRc_803E4ECC = {
     ARRAY_SIZE(grRc_803E4DA8),
 };
 
-#define grRc_803E5014 \
+#define grRc_803E5014                                                         \
     (*(struct grRCruise_VanishDesc*) ((u8*) grRc_803E4DA8 + 0x26C))
 extern Vec3 grRc_803B8288;
 extern s16 grRc_803E4FF0[];

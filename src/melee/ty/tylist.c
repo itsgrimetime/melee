@@ -720,8 +720,7 @@ void un_80313774(void)
     state->x270 = &state->entries[0];
     state->x274 = &state->entries[state->entryCount - 1];
 
-    state->gobj =
-        (HSD_GObj*) un_80313508(NULL, strs + 0xAC, 0.0f, 0.0f, 0.0f);
+    state->gobj = (HSD_GObj*) un_80313508(NULL, strs + 0xAC, 0.0f, 0.0f, 0.0f);
     root_jobj = (HSD_JObj*) state->gobj;
     HSD_ASSERTMSG(0x3E1, root_jobj != NULL, "jobj");
 
@@ -759,13 +758,13 @@ void un_80313774(void)
     state->jobj = un_80313508(state->gobj, strs + 0x10C, 0.0f,
                               state->entries[0].x30, 0.0f);
     if (un_GetTrophyTotal() <= 0xA) {
-        state->x288 = un_80313508(state->gobj, strs + 0x12C, 0.0f,
-                                  state->entries[state_tail[0xC] + 1].x30,
-                                  0.0f);
+        state->x288 =
+            un_80313508(state->gobj, strs + 0x12C, 0.0f,
+                        state->entries[state_tail[0xC] + 1].x30, 0.0f);
     } else {
-        state->x288 = un_80313508(state->gobj, strs + 0x12C, 0.0f,
-                                  state->entries[state_tail[0xC] + 1].x30,
-                                  0.0f);
+        state->x288 =
+            un_80313508(state->gobj, strs + 0x12C, 0.0f,
+                        state->entries[state_tail[0xC] + 1].x30, 0.0f);
     }
 
     for (i = 0; i < state_tail[0xC]; i++) {
@@ -955,8 +954,9 @@ void fn_80313BD8(HSD_GObj* gobj)
             {
                 un_80313358(state, 9, 4, 0);
             } else {
-                un_80313358(state, (s8) (un_GetTrophyTotal() - state->x274->idx),
-                            4, 0);
+                un_80313358(state,
+                            (s8) (un_GetTrophyTotal() - state->x274->idx), 4,
+                            0);
             }
             state->pad_29D = state->x29E;
             return;

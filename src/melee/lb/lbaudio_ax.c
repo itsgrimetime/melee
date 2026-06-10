@@ -1296,15 +1296,13 @@ bool fn_800253D8(HSD_GObj* gobj)
 
         if (ud->pan_left != target) {
             if (current <= target) {
-                f_result =
-                    (f32) current +
-                    ((f32) current_frame * ((f32) target - (f32) current)) /
-                        (f32) end_frame;
+                f_result = (f32) current + ((f32) current_frame *
+                                            ((f32) target - (f32) current)) /
+                                               (f32) end_frame;
             } else {
-                f_result =
-                    (f32) target +
-                    ((f32) current_frame * ((f32) current - (f32) target)) /
-                        (f32) end_frame;
+                f_result = (f32) target + ((f32) current_frame *
+                                           ((f32) current - (f32) target)) /
+                                              (f32) end_frame;
             }
             if (f_result < 0.0f) {
                 f_result = 0.0f;
@@ -1341,14 +1339,12 @@ bool fn_800253D8(HSD_GObj* gobj)
             if (current2 <= target2) {
                 f_result2 =
                     (f32) current2 +
-                    ((f32) current_frame2 *
-                     ((f32) target2 - (f32) current2)) /
+                    ((f32) current_frame2 * ((f32) target2 - (f32) current2)) /
                         (f32) end_frame2;
             } else {
                 f_result2 =
                     (f32) target2 +
-                    ((f32) current_frame2 *
-                     ((f32) current2 - (f32) target2)) /
+                    ((f32) current_frame2 * ((f32) current2 - (f32) target2)) /
                         (f32) end_frame2;
             }
             if (f_result2 < 0.0f) {
@@ -1402,15 +1398,13 @@ bool fn_800256BC(HSD_GObj* gobj)
 
         if (ud->pan_left != target) {
             if (current <= target) {
-                f_result =
-                    (f32) current +
-                    ((f32) current_frame * ((f32) target - (f32) current)) /
-                        (f32) end_frame;
+                f_result = (f32) current + ((f32) current_frame *
+                                            ((f32) target - (f32) current)) /
+                                               (f32) end_frame;
             } else {
-                f_result =
-                    (f32) target +
-                    ((f32) current_frame * ((f32) current - (f32) target)) /
-                        (f32) end_frame;
+                f_result = (f32) target + ((f32) current_frame *
+                                           ((f32) current - (f32) target)) /
+                                              (f32) end_frame;
             }
             if (f_result < 0.0f) {
                 f_result = 0.0f;
@@ -1447,14 +1441,12 @@ bool fn_800256BC(HSD_GObj* gobj)
             if (current2 <= target2) {
                 f_result2 =
                     (f32) current2 +
-                    ((f32) current_frame2 *
-                     ((f32) target2 - (f32) current2)) /
+                    ((f32) current_frame2 * ((f32) target2 - (f32) current2)) /
                         (f32) end_frame2;
             } else {
                 f_result2 =
                     (f32) target2 +
-                    ((f32) current_frame2 *
-                     ((f32) current2 - (f32) target2)) /
+                    ((f32) current_frame2 * ((f32) current2 - (f32) target2)) /
                         (f32) end_frame2;
             }
             if (f_result2 < 0.0f) {

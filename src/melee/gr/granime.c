@@ -339,16 +339,18 @@ void grAnime_801C6C0C(HSD_JObj* jobj, HSD_AnimJoint* animjoint,
     }
 }
 
-static inline void grAnime_801C6C0C_inner(
-    HSD_JObj* jobj, HSD_AnimJoint* animjoint,
-    HSD_MatAnimJoint* matanimjoint, HSD_ShapeAnimJoint* shapeanimjoint)
+static inline void grAnime_801C6C0C_inner(HSD_JObj* jobj,
+                                          HSD_AnimJoint* animjoint,
+                                          HSD_MatAnimJoint* matanimjoint,
+                                          HSD_ShapeAnimJoint* shapeanimjoint)
 {
     grAnime_801C6C0C(jobj, animjoint, matanimjoint, shapeanimjoint);
 }
 
-static inline void grAnime_801C6C0C_noinline(
-    HSD_JObj* jobj, HSD_AnimJoint* animjoint,
-    HSD_MatAnimJoint* matanimjoint, HSD_ShapeAnimJoint* shapeanimjoint)
+static inline void
+grAnime_801C6C0C_noinline(HSD_JObj* jobj, HSD_AnimJoint* animjoint,
+                          HSD_MatAnimJoint* matanimjoint,
+                          HSD_ShapeAnimJoint* shapeanimjoint)
 {
     grAnime_801C6C0C_inner(jobj, animjoint, matanimjoint, shapeanimjoint);
 }
@@ -986,8 +988,7 @@ void grAnime_801C7C1C(HSD_JObj* jobj, s32 map_id, s32 arg2, s32 arg3, s32 arg4,
         flag = 0;
     }
     if (flag != 0) {
-        grAnime_801C752C(jobj, arg5, var_r29, HSD_AObjSetFlags, 3,
-                         0x20000000);
+        grAnime_801C752C(jobj, arg5, var_r29, HSD_AObjSetFlags, 3, 0x20000000);
     }
 }
 

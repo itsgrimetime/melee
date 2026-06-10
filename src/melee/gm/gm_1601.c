@@ -935,7 +935,8 @@ s32 fn_80161154(MatchEnd* arg0)
         for (i = 0; i < 4; i++) {
             player = &arg0->player_standings[i];
             if (player->slot_type != 3 &&
-                arg0->team_standings[player->team].is_big_loser == var_r3) {
+                arg0->team_standings[player->team].is_big_loser == var_r3)
+            {
                 spC[i] = 1;
                 cnt = 1;
                 idx = i;
@@ -2204,7 +2205,8 @@ bool gm_80164330(s32 arg0)
     if (total_stages_on == 0) {
         OSReport("RandomStageSwitch All-Off!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
     }
-    return ((1 << (u16) arg0) & gmMainLib_8015CC58()->stage_mask) ? true : false;
+    return ((1 << (u16) arg0) & gmMainLib_8015CC58()->stage_mask) ? true
+                                                                  : false;
 }
 
 bool gm_80164430(u16 arg0)
@@ -2877,7 +2879,8 @@ s32 fn_80165AC0(MatchEnd* arg0)
             for (j = 0; j < 6; j++) {
                 if (arg0->player_standings[j].slot_type != 3 && i != j &&
                     arg0->player_standings[i].score <
-                        arg0->player_standings[j].score) {
+                        arg0->player_standings[j].score)
+                {
                     arg0->player_standings[i].is_big_loser += 1;
                 }
             }

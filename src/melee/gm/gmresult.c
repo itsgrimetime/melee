@@ -1449,8 +1449,7 @@ void fn_80175DC8(HSD_GObj* gobj)
         }
         lb_8000B1CC(lbl_8046DBE8.x28, &sp78, &sp6C);
         HSD_SisLib_803A6368(
-            HSD_SisLib_803A5ACC(0, 0, sp6C.x, -sp6C.y, sp6C.z, 12.0F,
-                                300.0F),
+            HSD_SisLib_803A5ACC(0, 0, sp6C.x, -sp6C.y, sp6C.z, 12.0F, 300.0F),
             2);
         break;
     case 1:
@@ -1460,8 +1459,7 @@ void fn_80175DC8(HSD_GObj* gobj)
         }
         lb_8000B1CC(lbl_8046DBE8.x28, &sp60, &sp54);
         HSD_SisLib_803A6368(
-            HSD_SisLib_803A5ACC(0, 0, sp54.x, -sp54.y, sp54.z, 12.0F,
-                                300.0F),
+            HSD_SisLib_803A5ACC(0, 0, sp54.x, -sp54.y, sp54.z, 12.0F, 300.0F),
             3);
         break;
     case 2:
@@ -1471,8 +1469,7 @@ void fn_80175DC8(HSD_GObj* gobj)
         }
         lb_8000B1CC(lbl_8046DBE8.x28, &sp48, &sp3C);
         HSD_SisLib_803A6368(
-            HSD_SisLib_803A5ACC(0, 0, sp3C.x, -sp3C.y, sp3C.z, 12.0F,
-                                300.0F),
+            HSD_SisLib_803A5ACC(0, 0, sp3C.x, -sp3C.y, sp3C.z, 12.0F, 300.0F),
             4);
         break;
     case 3:
@@ -1482,8 +1479,7 @@ void fn_80175DC8(HSD_GObj* gobj)
         }
         lb_8000B1CC(lbl_8046DBE8.x28, &sp30, &sp24);
         HSD_SisLib_803A6368(
-            HSD_SisLib_803A5ACC(0, 0, sp24.x, -sp24.y, sp24.z, 12.0F,
-                                300.0F),
+            HSD_SisLib_803A5ACC(0, 0, sp24.x, -sp24.y, sp24.z, 12.0F, 300.0F),
             5);
         break;
     }

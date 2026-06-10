@@ -570,8 +570,7 @@ void fn_802B805C(Item_GObj* gobj)
     samus_grapple_state_sync(fp);
 
     link = ip->xDD4_itemVar.samusgrapple.x0;
-    if (!samus_grapple_fighter_compare(fp->motion_id) &&
-        !(link->next->x2C_b0))
+    if (!samus_grapple_fighter_compare(fp->motion_id) && !(link->next->x2C_b0))
     {
         it_802B7B84(gobj);
         return;

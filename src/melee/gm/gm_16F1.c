@@ -531,8 +531,8 @@ int fn_801701C0(void* arg0, int arg1, int arg2)
         for (k = 0; k < 6; k++) {
             if (x58[k].x0 != 3) {
                 u16 xA = x58[k].xA;
-                scores[k] = (x58[k].x20 - (x58[k].x24 - xA)) +
-                            ((s8) rules->xC * xA);
+                scores[k] =
+                    (x58[k].x20 - (x58[k].x24 - xA)) + ((s8) rules->xC * xA);
             }
         }
 
@@ -544,7 +544,8 @@ int fn_801701C0(void* arg0, int arg1, int arg2)
                     int j;
 
                     for (j = 0; j < 6; j++) {
-                        if (x58[j].x0 != 3 && idx != j && my_score < scores[j]) {
+                        if (x58[j].x0 != 3 && idx != j && my_score < scores[j])
+                        {
                             rankings[idx]++;
                         }
                     }
@@ -844,8 +845,7 @@ int fn_801701C0(void* arg0, int arg1, int arg2)
                     p++;
                 }
             }
-            if ((u32) base[0] == (u32) x58[arg1].xA &&
-                base[0] >= base[1] * 2)
+            if ((u32) base[0] == (u32) x58[arg1].xA && base[0] >= base[1] * 2)
             {
                 return 1;
             }

@@ -636,7 +636,8 @@ void grGreens_80213C10(Ground_GObj* gobj)
                 {
                     Ground* cur_gp = GET_GROUND(gobj);
                     cur_gp->gv.greens2.x0 = (cur_gp->gv.greens2.x0 + 1) % 10;
-                    cur_gp->gv.greens2.x4 = grGr_803E7734[cur_gp->gv.greens2.x0];
+                    cur_gp->gv.greens2.x4 =
+                        grGr_803E7734[cur_gp->gv.greens2.x0];
                     cur_gp->gv.greens2.x10 = 1;
                 }
                 return;
@@ -661,7 +662,8 @@ void grGreens_80213C10(Ground_GObj* gobj)
                 {
                     Ground* cur_gp = GET_GROUND(gobj);
                     cur_gp->gv.greens2.x0 = (cur_gp->gv.greens2.x0 + 1) % 10;
-                    cur_gp->gv.greens2.x4 = grGr_803E7734[cur_gp->gv.greens2.x0];
+                    cur_gp->gv.greens2.x4 =
+                        grGr_803E7734[cur_gp->gv.greens2.x0];
                     cur_gp->gv.greens2.x10 = 1;
                 }
             } else {
@@ -901,8 +903,8 @@ void grGreens_80214FA8(Ground_GObj* gobj)
             switch (grGr_8049F9E0[row * 6 + col]) {
             case 1:
             case 2:
-                grGreens_80215358(gobj, col, row,
-                                   grGr_8049F9E0[row * 6 + col], 3);
+                grGreens_80215358(gobj, col, row, grGr_8049F9E0[row * 6 + col],
+                                  3);
                 break;
             }
         }
@@ -1295,10 +1297,10 @@ void grGreens_802166C4(Ground_GObj* gobj)
             }
         }
 
-        left_has_nonzero = weights[0] != 0 || weights[1] != 0 ||
-                           weights[2] != 0;
-        right_has_nonzero = weights[3] != 0 || weights[4] != 0 ||
-                            weights[5] != 0;
+        left_has_nonzero =
+            weights[0] != 0 || weights[1] != 0 || weights[2] != 0;
+        right_has_nonzero =
+            weights[3] != 0 || weights[4] != 0 || weights[5] != 0;
 
         if (left_has_nonzero) {
             int total;
@@ -1385,7 +1387,8 @@ void grGreens_802166C4(Ground_GObj* gobj)
                 }
                 spawn_row -= 1;
             }
-            type_roll = grGr_params->x20 != 0 ? HSD_Randi(grGr_params->x20) : 0;
+            type_roll =
+                grGr_params->x20 != 0 ? HSD_Randi(grGr_params->x20) : 0;
             type = type_roll != 0 ? 1 : 2;
             grGreens_80215358(gobj, choice, spawn_row, type, 1);
         }

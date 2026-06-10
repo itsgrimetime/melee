@@ -4259,11 +4259,12 @@ s32 mnCharSel_802640A0(void)
         if ((u8) mt >= 0xFU && (u8) mt <= 0x16U) {
             gobj = GObj_Create(4, 5, 0x80);
             mnCharSel_804D6CC8 = HSD_JObjLoadJoint(ANIM[7].joint);
-            HSD_GObjObject_80390A70(gobj, HSD_GObj_804D7849, mnCharSel_804D6CC8);
+            HSD_GObjObject_80390A70(gobj, HSD_GObj_804D7849,
+                                    mnCharSel_804D6CC8);
             GObj_SetupGXLink(gobj, HSD_GObj_JObjCallback, 1, 0x80);
             HSD_GObj_SetupProc(gobj, fn_8025FB2C, 4);
-            HSD_JObjAddAnimAll(mnCharSel_804D6CC8, ANIM[7].anim, ANIM[7].matanim,
-                               ANIM[7].shapeanim);
+            HSD_JObjAddAnimAll(mnCharSel_804D6CC8, ANIM[7].anim,
+                               ANIM[7].matanim, ANIM[7].shapeanim);
             HSD_JObjReqAnimAll(mnCharSel_804D6CC8, 0.0f);
             HSD_ForeachAnim(mnCharSel_804D6CC8, JOBJ_TYPE, ALL_TYPE_MASK,
                             HSD_AObjStopAnim, AOBJ_ARG_AOV, 0, 0);

@@ -2408,7 +2408,8 @@ after_loop:
 
             cam->transform.target_fov = globals->x6C;
             cam->transform.fov +=
-                (cam->transform.target_fov - cam->transform.fov) * globals->x70;
+                (cam->transform.target_fov - cam->transform.fov) *
+                globals->x70;
         }
     }
     return;
@@ -2456,7 +2457,8 @@ check_done:
     Camera_8002958C(&bounds2, transform_copy);
     cam->transform_copy.target_fov = globals->x40;
     cam->transform_copy.fov +=
-        (cam->transform_copy.target_fov - cam->transform_copy.fov) * globals->x44;
+        (cam->transform_copy.target_fov - cam->transform_copy.fov) *
+        globals->x44;
     Camera_80029BC4(&bounds2, transform_copy);
 
     if (Camera_80030AF8()) {

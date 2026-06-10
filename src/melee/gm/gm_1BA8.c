@@ -289,8 +289,8 @@ void gm_801BAD70(GameScene* arg0)
     void* sd;
     PAD_STACK(0x20);
 
-    lbArchive_LoadSymbols("GmEvent.dat", &gm_804D6900, "sqEventInitDataLevelTbl",
-                          0);
+    lbArchive_LoadSymbols("GmEvent.dat", &gm_804D6900,
+                          "sqEventInitDataLevelTbl", 0);
     levels = gm_804D6900;
     gm_80167A64(&md->rules);
     lvlpp = &levels[level];
@@ -425,8 +425,7 @@ loop_40:
                     r3b[var_r22 + 0x63] = c;
                 }
             }
-            if ((s8) r3b[0x60] == 0x13 &&
-                (s8) r3b[var_r22 + 0x60] == 0x12) {
+            if ((s8) r3b[0x60] == 0x13 && (s8) r3b[var_r22 + 0x60] == 0x12) {
                 u8 c = r3b[var_r22 + 0x63];
                 if (c == r3b[0x63]) {
                     if (c <= 2) {
@@ -2081,22 +2080,22 @@ void gm_801BDE94(HSD_GObj* arg0)
             mask = lbAudioAx_80026E84(
                 (enum CharacterKind) (s8) (u8) *tbl[level]->x14);
             mask |= lbAudioAx_80026E84(
-                (enum CharacterKind) ((struct gm_evx10*) tbl[level]->x10)
+                (enum CharacterKind)((struct gm_evx10*) tbl[level]->x10)
                     ->unk10->unk0);
             mask |= lbAudioAx_80026E84(
-                (enum CharacterKind) ((struct gm_evx10*) tbl[level]->x10)
+                (enum CharacterKind)((struct gm_evx10*) tbl[level]->x10)
                     ->unk18->unk0);
             mask |= lbAudioAx_80026E84(
-                (enum CharacterKind) ((struct gm_evx10*) tbl[level]->x10)
+                (enum CharacterKind)((struct gm_evx10*) tbl[level]->x10)
                     ->unk1C->unk0);
         } else {
             mask = lbAudioAx_80026E84(
                 (enum CharacterKind) (s8) (u8) *tbl[level]->x14);
             mask |= lbAudioAx_80026E84(
-                (enum CharacterKind) ((struct gm_evx10*) tbl[level]->x10)
+                (enum CharacterKind)((struct gm_evx10*) tbl[level]->x10)
                     ->unk14->unk0);
             mask |= lbAudioAx_80026E84(
-                (enum CharacterKind) ((struct gm_evx10*) tbl[level]->x10)
+                (enum CharacterKind)((struct gm_evx10*) tbl[level]->x10)
                     ->unk20->unk0);
         }
         lbAudioAx_80026F2C(0x14);
@@ -2116,20 +2115,23 @@ void gm_801BDE94(HSD_GObj* arg0)
         case 0:
             if (Player_GetStocks(1) <= 0) {
                 ev->x18 = 1;
-                gm_801BAB40(&sp50, (int) ((struct gm_evx10*) tbl[level]->x10)->unk18);
+                gm_801BAB40(&sp50,
+                            (int) ((struct gm_evx10*) tbl[level]->x10)->unk18);
                 gm_8016EDDC(2, &sp50);
             }
             goto block_41;
         case 1:
             if (Player_GetStocks(2) <= 0) {
                 ev->x18 = 2;
-                gm_801BAB40(&sp50, (int) ((struct gm_evx10*) tbl[level]->x10)->unk1C);
+                gm_801BAB40(&sp50,
+                            (int) ((struct gm_evx10*) tbl[level]->x10)->unk1C);
                 gm_8016EDDC(3, &sp50);
             }
             goto block_41;
         case 2:
             if (Player_GetStocks(3) <= 0) {
-                struct gm_evspawn* sp = ((struct gm_evx10*) tbl[level]->x10)->unk1C;
+                struct gm_evspawn* sp =
+                    ((struct gm_evx10*) tbl[level]->x10)->unk1C;
                 s8 ckind = sp->unk0;
                 u8 color = sp->unk3;
                 if ((s8) ev->x0 == ckind && (u8) ev->x1 == color) {
@@ -2161,7 +2163,8 @@ void gm_801BDE94(HSD_GObj* arg0)
         case 0:
             if (Player_GetStocks(1) <= 0) {
                 ev->x18 = 1;
-                gm_801BAB40(&sp50, (int) ((struct gm_evx10*) tbl[level]->x10)->unk20);
+                gm_801BAB40(&sp50,
+                            (int) ((struct gm_evx10*) tbl[level]->x10)->unk20);
                 gm_8016EDDC(2, &sp50);
             }
         block_41:
@@ -2202,7 +2205,8 @@ void gm_801BDE94(HSD_GObj* arg0)
             return;
         case 1:
             if (Player_GetStocks(2) <= 0) {
-                struct gm_evspawn* sp = ((struct gm_evx10*) tbl[level]->x10)->unk20;
+                struct gm_evspawn* sp =
+                    ((struct gm_evx10*) tbl[level]->x10)->unk20;
                 s8 ckind = sp->unk0;
                 u8 color = sp->unk3;
                 if ((s8) ev->x0 == ckind && (u8) ev->x1 == color) {

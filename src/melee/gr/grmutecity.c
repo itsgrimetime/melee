@@ -28,8 +28,8 @@
 #include "MSL/trigf.h"
 #include "sysdolphin/baselib/spline.h"
 
-#include <baselib/gobj.h>
 #include <baselib/debug.h>
+#include <baselib/gobj.h>
 #include <baselib/gobjgxlink.h>
 #include <baselib/gobjproc.h>
 #include <baselib/lobj.h>
@@ -1471,12 +1471,9 @@ void grMuteCity_801F1A34(HSD_GObj* arg0, Ground_GObj* arg1)
         PSVECCrossProduct(&spB4, &sp90, &spA8);
         lbVector_Normalize(&spA8);
 
-        car_pos.x =
-            (3.0 * sp90.x) + (((spC0.x - spCC.x) * car->xC) + spCC.x);
-        car_pos.y =
-            (3.0 * sp90.y) + (((spC0.y - spCC.y) * car->xC) + spCC.y);
-        car_pos.z =
-            (3.0 * sp90.z) + (((spC0.z - spCC.z) * car->xC) + spCC.z);
+        car_pos.x = (3.0 * sp90.x) + (((spC0.x - spCC.x) * car->xC) + spCC.x);
+        car_pos.y = (3.0 * sp90.y) + (((spC0.y - spCC.y) * car->xC) + spCC.y);
+        car_pos.z = (3.0 * sp90.z) + (((spC0.z - spCC.z) * car->xC) + spCC.z);
         car->x14 = car_pos.x;
         car->x18 = car_pos.y;
         car->x1C = car_pos.z;
@@ -1630,7 +1627,8 @@ void grMuteCity_801F1A34(HSD_GObj* arg0, Ground_GObj* arg1)
             }
         } else {
             if (car_pos.z > spE8.z || car_pos.z > 5000.0f ||
-                car_pos.z < -1500.0f) {
+                car_pos.z < -1500.0f)
+            {
                 if ((u32) car->x28 != 0) {
                     grLib_801C98A0(jobj);
                     car->x28 = 0;

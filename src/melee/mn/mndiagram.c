@@ -1031,7 +1031,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
           goto nc_outer;
         }
 
-        col_result = sorted[i + 0x1C];
+        col_result = *(sorted + i + 0x1C);
       }
       else
       {
@@ -1064,7 +1064,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
           goto nr_outer;
         }
 
-        row_result = sorted[i + 0x1C];
+        row_result = *(sorted + i + 0x1C);
       }
       else
       {
@@ -1080,7 +1080,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
     fc_outer:
     if (col == 0)
     {
-      col_result = sorted[i];
+      col_result = *(sorted + i);
     }
     else
     {
@@ -1325,7 +1325,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
             steps--;
             if (steps <= 0)
             {
-              col_result = sorted[i + 0x1C];
+              col_result = *(sorted + i + 0x1C);
             }
             else
             {
@@ -1436,7 +1436,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
             steps--;
             if (steps <= 0)
             {
-              row_result = sorted[i + 0x1C];
+              row_result = *(sorted + i + 0x1C);
             }
             else
             {

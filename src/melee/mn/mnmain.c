@@ -1018,7 +1018,7 @@ void mn_8022A440(HSD_GObj* gp, HSD_JObj* root, MainMenuSelection selection)
     HSD_JObjAnim(r29);
     f = mn_8022F298(sp24[0]);
     HSD_JObjReqAnimAll(sp24[0], (f - mn_803EB360[1].start_frame) +
-                                     mn_803EB360[0].start_frame);
+                                    mn_803EB360[0].start_frame);
     HSD_JObjAnimAll(sp24[0]);
     mn_8022F298(sp24[2]);
     HSD_JObjReqAnimAll(sp24[2], mn_803EB378[0].start_frame);
