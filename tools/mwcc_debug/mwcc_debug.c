@@ -1401,7 +1401,11 @@ static int __cdecl hook_colorgraph(int rclass, IGNode *head)
             if (node->arraySize > 0)
             {
                 int n_intfr = node->arraySize;
-                if (n_intfr > 64) n_intfr = 64; // cap output to keep readable
+                // Cap raised 64 -> 512: the tiebreak surrogate (debug inspect
+                // tiebreak) needs the COMPLETE interferer set to predict
+                // dispense; truncation corrupted its G1 on high-degree
+                // functions (mnDiagram_8024227C: 12 truncated nodes -> 55%).
+                if (n_intfr > 512) n_intfr = 512;
                 debug_printf("      interferers:");
                 for (j = 0; j < n_intfr; j++)
                 {
