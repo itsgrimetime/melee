@@ -981,16 +981,21 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
 {
   HSD_GObjProc *proc;
   u8 row_result;
-  int i;
+  s32 i;
+  u8 *ptr2;
+  short new_var;
   u8 *sorted = mnDiagram_804A0750.sorted_fighters;
-  Diagram *data = (Diagram *) HSD_GObjGetUserData(mnDiagram_804D6C10);
+  Diagram *data = mnDiagram_804D6C10->user_data;
   u32 input = Menu_GetAllInputs();
-  int count;
-  int col;
-  int row;
+  s32 count;
+  s32 steps;
+  u8 *ptr;
+  s32 col;
+  s32 row;
   u8 col_result;
-  int cur;
-  int found;
+  s32 cur;
+  s32 found;
+  PAD_STACK(72);
   if (input & 0x10)
   {
     lbAudioAx_80024030(1);
@@ -999,13 +1004,151 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
     proc->flags_3 = HSD_GObj_804D783C;
     if (data->is_name_mode != 0)
     {
-      col_result = mnDiagram_GetVisibleNameFrom(sorted, (u8) data->name_cursor_pos, (u8) mn_804A04F0.hovered_selection);
-      row_result = mnDiagram_GetVisibleNameFrom(sorted, data->name_cursor_pos >> 8, mn_804A04F0.hovered_selection >> 8);
+      i = (u8) data->name_cursor_pos;
+      col = mn_804A04F0.hovered_selection;
+      ptr = sorted + i;
+      ptr = ptr + 0x1C;
+      goto nc_test;
+      nc_outer:
+      ptr2 = ptr;
+
+      nc_inner:
+      i++;
+
+      ptr2++;
+      ptr++;
+      if (i >= 0x78)
+      {
+        col_result = 0x78;
+      }
+      else
+        if (GetNameText(*ptr2) != 0L)
+      {
+        col--;
+        nc_test:
+        if (col > 0)
+        {
+          goto nc_outer;
+        }
+
+        col_result = sorted[i + 0x1C];
+      }
+      else
+      {
+        goto nc_inner;
+      }
+      row = mn_804A04F0.hovered_selection >> 8;
+      i = data->name_cursor_pos >> 8;
+      ptr = sorted + i;
+      ptr = ptr + 0x1C;
+      goto nr_test;
+      nr_outer:
+      ptr2 = ptr;
+
+      nr_inner:
+      i++;
+
+      ptr2++;
+      ptr++;
+      if (i >= 0x78)
+      {
+        row_result = 0x78;
+      }
+      else
+        if (GetNameText(*ptr2) != 0L)
+      {
+        row--;
+        nr_test:
+        if (row > 0)
+        {
+          goto nr_outer;
+        }
+
+        row_result = sorted[i + 0x1C];
+      }
+      else
+      {
+        goto nr_inner;
+      }
       mnDiagram_80241310(col_result, row_result, 1);
       return;
     }
-    col_result = mnDiagram_GetVisibleFighterFrom(sorted, (u8) data->fighter_cursor_pos, (u8) mn_804A04F0.hovered_selection);
-    row_result = mnDiagram_GetVisibleFighterFrom(sorted, data->fighter_cursor_pos >> 8, mn_804A04F0.hovered_selection >> 8);
+    i = (u8) data->fighter_cursor_pos;
+    col = (u8) mn_804A04F0.hovered_selection;
+    ptr = sorted + i;
+    goto fc_test;
+    fc_outer:
+    if (col == 0)
+    {
+      col_result = sorted[i];
+    }
+    else
+    {
+      ptr2 = ptr;
+      fc_inner:
+      i++;
+
+      ptr2++;
+      ptr++;
+      if (i >= 0x19)
+      {
+        col_result = 0x19;
+      }
+      else
+        if (mn_IsFighterUnlocked(*ptr2) != 0)
+      {
+        col--;
+        fc_test:
+        if (col >= 0)
+        {
+          goto fc_outer;
+        }
+
+      }
+      else
+      {
+        goto fc_inner;
+      }
+    }
+
+    row = mn_804A04F0.hovered_selection >> 8;
+    i = data->fighter_cursor_pos >> 8;
+    ptr = sorted + i;
+    goto fr_test;
+    fr_outer:
+    if (row == 0)
+    {
+      row_result = sorted[i];
+    }
+    else
+    {
+      ptr2 = ptr;
+      fr_inner:
+      i++;
+
+      ptr2++;
+      ptr++;
+      if (i >= 0x19)
+      {
+        row_result = 0x19;
+      }
+      else
+        if (mn_IsFighterUnlocked(*ptr2) != 0)
+      {
+        row--;
+        fr_test:
+        if (row >= 0)
+        {
+          goto fr_outer;
+        }
+
+      }
+      else
+      {
+        goto fr_inner;
+      }
+    }
+
     mnDiagram_80241310(col_result, row_result, 0);
     return;
   }
@@ -1013,9 +1156,13 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
   {
     lbAudioAx_80024030(0);
     {
-      Diagram *d;
+      Diagram *d = mnDiagram_804D6C10->user_data;
       mn_804A04F0.entering_menu = 0;
-      mnDiagram_SaveCursorToGameRules((Diagram *) HSD_GObjGetUserData(mnDiagram_804D6C10));
+      gmMainLib_8015CC34()->xE = (u8) (d->fighter_cursor_pos >> 8);
+      gmMainLib_8015CC34()->xF = (u8) d->fighter_cursor_pos;
+      gmMainLib_8015CC34()->unk_x10 = (u8) (d->name_cursor_pos >> 8);
+      gmMainLib_8015CC34()->x11 = (u8) d->name_cursor_pos;
+      gmMainLib_8015CC34()->xD = d->is_name_mode;
       mn_80229894(0x1C, 0, 3);
     }
     return;
@@ -1024,8 +1171,12 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
   {
     lbAudioAx_80024030(1);
     {
-      Diagram *d = (Diagram *) HSD_GObjGetUserData(mnDiagram_804D6C10);
-      mnDiagram_SaveCursorToGameRules(d);
+      Diagram *d = mnDiagram_804D6C10->user_data;
+      gmMainLib_8015CC34()->xE = (u8) (d->fighter_cursor_pos >> 8);
+      gmMainLib_8015CC34()->xF = (u8) d->fighter_cursor_pos;
+      gmMainLib_8015CC34()->unk_x10 = (u8) (d->name_cursor_pos >> 8);
+      gmMainLib_8015CC34()->x11 = (u8) d->name_cursor_pos;
+      gmMainLib_8015CC34()->xD = d->is_name_mode;
       HSD_GObjPLink_80390228(gobj);
       if (input & 0x40)
       {
@@ -1096,8 +1247,24 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       if (count > 0xA)
       {
         cur = (u8) data->name_cursor_pos;
-        found = mnDiagram_GetPrevNameIndex(cur);
-        if (cur != found)
+        found = cur;
+        up_n:
+        found--;
+
+        if (found < 0)
+        {
+          found = (u8) cur;
+        }
+        else
+          if (GetNameText(found) != 0L)
+        {
+          ;
+        }
+        else
+        {
+          goto up_n;
+        }
+        if (((u8) cur) != found)
         {
           lbAudioAx_80024030(2);
           data->name_cursor_pos = (data->name_cursor_pos & 0xFF00) | found;
@@ -1118,10 +1285,57 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       if (count > 0xA)
       {
         cur = (u8) data->name_cursor_pos;
-        found = mnDiagram_GetNextNameIndex(cur);
+        found = cur;
+        dn_n_find:
+        found++;
+
+        if (found >= 0x78)
+        {
+          found = cur;
+        }
+        else
+          if (GetNameText(found) != 0L)
+        {
+          ;
+        }
+        else
+        {
+          goto dn_n_find;
+        }
         if (cur != found)
         {
-          col_result = mnDiagram_GetVisibleNameFrom(sorted, cur, 0xA);
+          steps = 0xA;
+          i = cur;
+          ptr = (sorted + cur) + 0x1C;
+          dn_n_outer:
+          ptr2 = ptr;
+
+          dn_n_inner:
+          i++;
+
+          ptr2++;
+          ptr++;
+          if (i >= 0x78)
+          {
+            col_result = 0x78;
+          }
+          else
+            if (GetNameText(*ptr2) != 0L)
+          {
+            steps--;
+            if (steps <= 0)
+            {
+              col_result = sorted[i + 0x1C];
+            }
+            else
+            {
+              goto dn_n_outer;
+            }
+          }
+          else
+          {
+            goto dn_n_inner;
+          }
           if (col_result != 0x78)
           {
             lbAudioAx_80024030(2);
@@ -1144,7 +1358,23 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       if (count > 7)
       {
         cur = data->name_cursor_pos >> 8;
-        found = mnDiagram_GetPrevNameIndex(cur);
+        found = cur;
+        lf_n:
+        found--;
+
+        if (found < 0)
+        {
+          found = (u8) cur;
+        }
+        else
+          if (GetNameText((u8) found) != 0L)
+        {
+          found = (u8) found;
+        }
+        else
+        {
+          goto lf_n;
+        }
         if (cur != found)
         {
           lbAudioAx_80024030(2);
@@ -1166,10 +1396,57 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       if (count > 7)
       {
         cur = data->name_cursor_pos >> 8;
-        found = mnDiagram_GetNextNameIndex(cur);
+        found = cur;
+        rt_n_find:
+        found++;
+
+        if (found >= 0x78)
+        {
+          found = (u8) cur;
+        }
+        else
+          if (GetNameText((u8) found) != 0L)
+        {
+          found = (u8) found;
+        }
+        else
+        {
+          goto rt_n_find;
+        }
         if (cur != found)
         {
-          row_result = mnDiagram_GetVisibleNameFrom(sorted, cur, 7);
+          steps = 7;
+          i = cur;
+          ptr = (sorted + cur) + 0x1C;
+          rt_n_outer:
+          ptr2 = ptr;
+
+          rt_n_inner:
+          i++;
+
+          ptr2++;
+          ptr++;
+          if (i >= 0x78)
+          {
+            row_result = 0x78;
+          }
+          else
+            if (GetNameText(*ptr2) != 0L)
+          {
+            steps--;
+            if (steps <= 0)
+            {
+              row_result = sorted[i + 0x1C];
+            }
+            else
+            {
+              goto rt_n_outer;
+            }
+          }
+          else
+          {
+            goto rt_n_inner;
+          }
           if (row_result != 0x78)
           {
             lbAudioAx_80024030(2);
@@ -1182,10 +1459,11 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
   }
   else
   {
-    count = 0;
-    for (i = 0; i < 0x19; i++)
+    new_var = 0;
+    count = new_var;
+    for (i = new_var; i < 0x19; i++)
     {
-      if (mn_IsFighterUnlocked(i) != 0)
+      if (mn_IsFighterUnlocked(i) != new_var)
       {
         count++;
       }
@@ -1194,7 +1472,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
     if (input & 1)
     {
       col = (u8) mn_804A04F0.hovered_selection;
-      if ((col > 0) && (count > (col - 1)))
+      if ((col > new_var) && (count > (col - 1)))
       {
         lbAudioAx_80024030(2);
         mn_804A04F0.hovered_selection = (mn_804A04F0.hovered_selection & 0xFF00) | ((col - 1) & 0xFF);
@@ -1203,8 +1481,26 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       if (count > 0xA)
       {
         cur = (u8) data->fighter_cursor_pos;
-        found = mnDiagram_GetPrevFighterIndex(cur);
-        if (cur != found)
+        found = cur;
+        ptr = sorted + cur;
+        up_f:
+        found--;
+
+        ptr--;
+        if (found < new_var)
+        {
+          found = (u8) cur;
+        }
+        else
+          if (mn_IsFighterUnlocked(*ptr) != new_var)
+        {
+          ;
+        }
+        else
+        {
+          goto up_f;
+        }
+        if (((u8) cur) != found)
         {
           lbAudioAx_80024030(2);
           data->fighter_cursor_pos = (data->fighter_cursor_pos & 0xFF00) | found;
@@ -1225,8 +1521,59 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       if (count > 0xA)
       {
         cur = (u8) data->fighter_cursor_pos;
-        found = mnDiagram_GetNextFighterIndex(cur);
-        col_result = mnDiagram_GetVisibleFighterFrom(sorted, cur, 0xA);
+        ptr = sorted + cur;
+        found = cur;
+        ptr2 = ptr;
+        dn_f_find:
+        found++;
+
+        ptr2++;
+        if (found >= 0x19)
+        {
+          found = cur;
+        }
+        else
+          if (mn_IsFighterUnlocked(*ptr2) != new_var)
+        {
+          ;
+        }
+        else
+        {
+          goto dn_f_find;
+        }
+        steps = 0xA;
+        dn_f_outer:
+        if (steps == new_var)
+        {
+          col_result = sorted[cur];
+        }
+        else
+        {
+          ptr2 = ptr;
+          dn_f_inner:
+          cur++;
+
+          ptr2++;
+          ptr++;
+          if (cur >= 0x19)
+          {
+            col_result = 0x19;
+          }
+          else
+            if (mn_IsFighterUnlocked(*ptr2) != new_var)
+          {
+            steps--;
+            if (steps >= new_var)
+            {
+              goto dn_f_outer;
+            }
+          }
+          else
+          {
+            goto dn_f_inner;
+          }
+        }
+
         if (col_result != 0x19)
         {
           lbAudioAx_80024030(2);
@@ -1239,7 +1586,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       if (input & 4)
     {
       row = mn_804A04F0.hovered_selection >> 8;
-      if ((row > 0) && (count > (row - 1)))
+      if ((row > new_var) && (count > (row - 1)))
       {
         lbAudioAx_80024030(2);
         mn_804A04F0.hovered_selection = ((u8) mn_804A04F0.hovered_selection) | ((row - 1) << 8);
@@ -1248,7 +1595,25 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       if (count > 7)
       {
         cur = data->fighter_cursor_pos >> 8;
-        found = mnDiagram_GetPrevFighterIndex(cur);
+        found = cur;
+        ptr = sorted + cur;
+        lf_f:
+        found--;
+
+        ptr--;
+        if (found < new_var)
+        {
+          found = (u8) cur;
+        }
+        else
+          if (mn_IsFighterUnlocked(*ptr) != new_var)
+        {
+          found = (u8) found;
+        }
+        else
+        {
+          goto lf_f;
+        }
         if (cur != found)
         {
           lbAudioAx_80024030(2);
@@ -1270,8 +1635,59 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       if (count > 7)
       {
         cur = data->fighter_cursor_pos >> 8;
-        found = mnDiagram_GetNextFighterIndex(cur);
-        row_result = mnDiagram_GetVisibleFighterFrom(sorted, cur, 7);
+        ptr = sorted + cur;
+        found = cur;
+        ptr2 = ptr;
+        rt_f_find:
+        found++;
+
+        ptr2++;
+        if (found >= 0x19)
+        {
+          found = (u8) cur;
+        }
+        else
+          if (mn_IsFighterUnlocked(*ptr2) != new_var)
+        {
+          found = (u8) found;
+        }
+        else
+        {
+          goto rt_f_find;
+        }
+        steps = 7;
+        rt_f_outer:
+        if (steps == new_var)
+        {
+          row_result = sorted[cur];
+        }
+        else
+        {
+          ptr2 = ptr;
+          rt_f_inner:
+          cur++;
+
+          ptr2++;
+          ptr++;
+          if (cur >= 0x19)
+          {
+            row_result = 0x19;
+          }
+          else
+            if (mn_IsFighterUnlocked(*ptr2) != new_var)
+          {
+            steps--;
+            if (steps >= new_var)
+            {
+              goto rt_f_outer;
+            }
+          }
+          else
+          {
+            goto rt_f_inner;
+          }
+        }
+
         if (row_result != 0x19)
         {
           lbAudioAx_80024030(2);
