@@ -20633,6 +20633,102 @@ def _select_order_safe_label(value: str) -> str:
     return cleaned[:80] or "candidate"
 
 
+@inspect_app.command(name="tiebreak")
+def inspect_tiebreak(
+    function: Annotated[str, typer.Option("--function", "-f")],
+    pcdump: Annotated[Optional[Path], typer.Option("--pcdump")] = None,
+    ig_targets: Annotated[str, typer.Option(
+        "--ig", help="COLORGRAPH ig_idx values to report, e.g. 88,90.")] = "",
+    what_if: Annotated[str, typer.Option(
+        "--what-if", help="Perturbation: 'add-interferer T:N', 'remove-edge "
+        "A:B', or 'move T:before:M'. Predicts T's register under it.")] = "",
+    validate_only: Annotated[bool, typer.Option("--validate-only")] = False,
+    json_out: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Register-coloring tiebreak surrogate: predict assignments from the
+    interference graph (G1, validated 100% on non-truncated functions) and run
+    what-ifs (add/remove an interference edge, or move a node in select order)
+    to find a source-actionable lever for a coloring tiebreak. Abstains
+    (exit 3) when the function's G1 isn't perfect (e.g. interferer-list
+    truncation corrupts the dispense), so what-ifs are never trusted blindly."""
+    from ...mwcc_debug import tiebreak as tb
+
+    pcdump_path = _resolve_pcdump_path(pcdump, function, DEFAULT_MELEE_ROOT)
+    ig = tb.load_gpr_ig(pcdump_path.read_text(), function)
+    if ig is None:
+        typer.secho(f"{function}: no GPR COLORGRAPH section in pcdump",
+                    fg="red", err=True)
+        raise typer.Exit(2)
+    g1 = tb.validate_g1(ig, function)
+    trunc = sum(1 for n in ig.nodes.values() if n.incomplete)
+
+    if json_out:
+        import json as _json
+        out = {"function": function, "g1_rate": g1.rate, "g1_total": g1.total,
+               "truncated_nodes": trunc, "mismatches": g1.mismatches}
+        if not validate_only and what_if:
+            wf = _parse_and_run_tiebreak_whatif(tb, ig, what_if)
+            out["what_if"] = wf.__dict__ if wf else None
+        print(_json.dumps(out, indent=2))
+        return
+
+    typer.echo(f"tiebreak {function}: G1 {g1.correct}/{g1.total} "
+               f"({g1.rate*100:.1f}%), {trunc} truncated node(s)")
+    if validate_only:
+        for ig_i, pred, obs in g1.mismatches[:20]:
+            typer.echo(f"  mismatch ig{ig_i}: pred r{pred} obs r{obs}")
+        raise typer.Exit(0 if g1.rate == 1.0 else 3)
+
+    # report requested nodes' baseline prediction vs observed
+    base = tb.predict_assignments(ig)
+    for tok in (t.strip() for t in ig_targets.split(",") if t.strip()):
+        n = int(tok.lstrip("rR"))
+        node = ig.nodes.get(n)
+        if node is None:
+            typer.echo(f"  ig{n}: not in graph")
+            continue
+        typer.echo(f"  ig{n}: observed r{node.observed_reg} predicted "
+                   f"r{base.get(n)} degree={node.array_size}"
+                   f"{' [TRUNCATED]' if node.incomplete else ''}")
+
+    if what_if:
+        if g1.rate != 1.0:
+            typer.secho(f"ABSTAIN: G1 is {g1.rate*100:.0f}% for {function} "
+                        f"(truncation/spill) — what-if not trustworthy here.",
+                        fg="yellow", err=True)
+            raise typer.Exit(3)
+        wf = _parse_and_run_tiebreak_whatif(tb, ig, what_if)
+        if wf is None:
+            typer.secho(f"could not parse --what-if {what_if!r}", fg="red", err=True)
+            raise typer.Exit(2)
+        verb = "FLIPS" if wf.flips else "no change"
+        typer.echo(f"  what-if [{wf.description}] on ig{wf.target_ig}: "
+                   f"predicted r{wf.predicted_reg} -> r{wf.perturbed_reg} ({verb})")
+        raise typer.Exit(0)
+
+
+def _parse_and_run_tiebreak_whatif(tb, ig, spec_str):
+    """Parse a --what-if DSL token and run it. Returns a WhatIf or None."""
+    parts = spec_str.strip().split()
+    if not parts:
+        return None
+    kind = parts[0]
+    arg = parts[1] if len(parts) > 1 else ""
+    try:
+        if kind == "add-interferer":
+            t, n = (int(x.lstrip("rR")) for x in arg.split(":"))
+            return tb.what_if(ig, t, add_interferers={n})
+        if kind == "remove-edge":
+            a, b = (int(x.lstrip("rR")) for x in arg.split(":"))
+            return tb.what_if(ig, a, remove_edges={frozenset((a, b))})
+        if kind == "move":
+            t, _before, m = arg.split(":")
+            return tb.what_if(ig, int(t), move_before=int(m))
+    except (ValueError, KeyError):
+        return None
+    return None
+
+
 @inspect_app.command(name="explain-virtual")
 def inspect_explain_virtual(
     function: Annotated[
