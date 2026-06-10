@@ -74,6 +74,30 @@
       "provenance": "string-anchor",
       "confidence": "unique",
       "needle": "Dumping function %s after %s "
+    },
+    "iro_dumpafterphase_entry": {
+      "va": 4511792,
+      "provenance": "live-validated",
+      "confidence": "unique"
+    },
+    "iro_dumpafterphase_je": {
+      "va": 4511797,
+      "patch_from": "7441",
+      "patch_to": "9090",
+      "provenance": "live-validated",
+      "confidence": "unique"
+    },
+    "iro_function_name_ptr": {
+      "va": 5797304,
+      "provenance": "live-validated",
+      "confidence": "unique"
+    },
+    "copt_debug_byte": {
+      "va": 4376801,
+      "patch_from": "00",
+      "patch_to": "01",
+      "provenance": "live-validated",
+      "confidence": "unique"
     }
   }
 }

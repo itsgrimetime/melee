@@ -42,9 +42,67 @@ def _ninja_cmd_for_unit(src_rel: str) -> str:
 
 def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
                  out_dir: Path, table: Path) -> DumpOutcome:
-    """Invoke the gdb-side launcher; map its result to an exit code.
-    (Full wiring lands in the live phase; this is the single seam tests mock.)"""
-    raise NotImplementedError  # implemented in the live phase (P1)
+    """Invoke the gdb-side launcher, then post-process the IRO trace.
+
+    Runs `mwcc_retro_debugger.py main()` (host launcher), which drives
+    retrowin32 + gdb to write `iro-trace.txt`. On success, splits the trace into
+    per-phase files and builds `iro-summary.txt` (the node/temp ledger). Returns
+    a DumpOutcome whose exit code follows the contract in the spec.
+    """
+    import subprocess
+
+    from tools.mwcc_retro import setup as _setup, trace_summary
+
+    res = _setup.ensure(force=False)
+    mwcc_dir = _REPO / "build" / "compilers" / "GC" / compiler
+    mwcc_args = _ninja_cmd_for_unit(src)
+    # strip the leading compiler path; the launcher prepends the emulator.
+    mwcc_args = mwcc_args.split(" ", 1)[1] if " " in mwcc_args else mwcc_args
+    mwcc_exe = str(mwcc_dir / "mwcceppc.exe")
+    launcher = res.cadmic_script.parent.parent.parent / "mwcc_retro_debugger.py"
+    if not launcher.exists():
+        launcher = _REPO / "tools" / "mwcc_retro" / "mwcc_retro_debugger.py"
+    cmd = [
+        "python3", str(launcher),
+        "-e", str(res.retrowin32_bin),
+        "-a", f"{mwcc_exe} {mwcc_args}",
+        "--table", str(table),
+        "--out", str(out_dir),
+        "--phases", phases,
+        fn,
+    ]
+    # Run from the repo root so the emulated mwcceppc resolves the relative
+    # source path (the ninja command uses repo-relative paths, like wibo does).
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600,
+                          cwd=str(_REPO))
+    log = (out_dir / "launch.log")
+    log.write_text(proc.stdout + "\n--- stderr ---\n" + proc.stderr)
+
+    produced: list[str] = []
+    missing: list[str] = []
+    trace = out_dir / "iro-trace.txt"
+    if phases in ("frontend", "all"):
+        if trace.exists() and trace.stat().st_size > 0:
+            text = trace.read_text(errors="replace")
+            # filter to the target function's blocks if present
+            if f"Starting function {fn}" not in text and \
+               f"after " not in text:
+                missing.append("frontend")
+            else:
+                trace_summary.split_phase_files(text, out_dir)
+                (out_dir / "iro-summary.txt").write_text(
+                    trace_summary.build_summary(text))
+                produced.append("frontend")
+        else:
+            missing.append("frontend")
+
+    if proc.returncode != 0 and not produced:
+        return DumpOutcome(exit_code=2, produced=produced, missing=missing)
+    if "function not found" in proc.stdout.lower():
+        return DumpOutcome(exit_code=3, produced=produced, missing=missing)
+    if missing:
+        return DumpOutcome(exit_code=4, produced=produced, missing=missing)
+    return DumpOutcome(exit_code=0, produced=produced, missing=missing)
 
 
 @retro_app.command("setup")

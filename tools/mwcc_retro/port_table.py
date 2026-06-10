@@ -65,6 +65,20 @@ DLL_KNOWN_125N: dict[str, int] = {
     "fopen": 0x40C690,
 }
 
+# Live-validated 1.2.5n VAs (confirmed by disassembly + a live retrowin32 run
+# producing 54 per-phase IRO dumps — see P0_FINDINGS.md / iro front-end tracing).
+LIVE_VALIDATED_125N: dict[str, dict] = {
+    # IRO_DumpAfterPhase(char *str, Boolean flag): entry, and the flag-test
+    # guard `je` (bytes 74 41) at entry+5 whose NOP-out forces per-phase dumps.
+    "iro_dumpafterphase_entry": {"va": 0x44D830},
+    "iro_dumpafterphase_je": {"va": 0x44D835, "patch_from": "7441",
+                              "patch_to": "9090"},
+    # FunctionName global (current function ObjObject*) — read for per-fn scoping.
+    "iro_function_name_ptr": {"va": 0x5875B8},
+    # copt debug-listing option-default byte (DLL flips this to 1 at load).
+    "copt_debug_byte": {"va": 0x42C8E1, "patch_from": "00", "patch_to": "01"},
+}
+
 NINJA_RANGES_125N: list[tuple[int, int]] = [
     (0x4ABD9A, 0x4ABDB4),
     (0x506510, 0x50653E),
@@ -145,6 +159,9 @@ def build_table(src_exe, dst_exe) -> dict:
             "confidence": a.confidence,
             "needle": needle.decode("latin-1"),
         }
+    for name, spec in LIVE_VALIDATED_125N.items():
+        entries[name] = {**spec, "provenance": "live-validated",
+                         "confidence": "unique"}
     for name, e in entries.items():
         if e["va"] and overlaps_ninja(e["va"], NINJA_RANGES_125N):
             raise AssertionError(f"table entry {name} overlaps Ninji patch range")

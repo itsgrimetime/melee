@@ -6,6 +6,19 @@ sys.path.insert(0, str(REPO))
 from tools.mwcc_retro import trace_summary as ts  # noqa: E402
 
 FIXTURE = Path(__file__).parent / "fixtures/retro/iro_trace_sample.txt"
+REAL_FIXTURE = Path(__file__).parent / "fixtures/retro/iro_trace_real_sample.txt"
+
+
+def test_parses_real_retail_trace():
+    # Real output captured from retrowin32-driven retail GC/1.2.5n (mnVibration).
+    text = REAL_FIXTURE.read_text(errors="replace")
+    phases = ts.parse_phases(text)
+    assert len(phases) >= 3
+    assert phases[0].phase == "IRO_BuildflowGraph"
+    # every parsed phase has a non-empty body of flowgraph/IR lines
+    assert all(p.body for p in phases)
+    summary = ts.build_summary(text)
+    assert "IRO pass sequence" in summary
 
 
 def test_slug_rule():
