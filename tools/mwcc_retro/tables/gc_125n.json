@@ -99,5 +99,29 @@
       "provenance": "live-validated",
       "confidence": "unique"
     }
+  },
+  "backend_partial": {
+    "codegen_start": {
+      "va": 4411840,
+      "provenance": "byte-correlate",
+      "confidence": "unique",
+      "src_va_gc11": 4411824,
+      "drift": 16
+    },
+    "codegen_end": {
+      "va": 4414905,
+      "provenance": "byte-correlate",
+      "confidence": "unique",
+      "src_va_gc11": 4414889,
+      "drift": 16
+    },
+    "regalloc_bp_end_colorgraph": {
+      "va": 5039092,
+      "provenance": "byte-correlate",
+      "confidence": "unique",
+      "src_va_gc11": 5040900,
+      "drift": -1808,
+      "note": "after DLL colorgraph entry 0x4CE2D0"
+    }
   }
 }

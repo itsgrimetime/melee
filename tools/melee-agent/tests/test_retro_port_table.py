@@ -77,3 +77,16 @@ def test_build_table_raises_on_unresolved_anchor(monkeypatch):
     import pytest
     with pytest.raises(AssertionError):
         pt.build_table(EXE_11, EXE_125N)
+
+
+def test_backend_partial_recorded_but_not_active():
+    # #542: confidently byte-correlated backend .text addrs are recorded under
+    # `backend_partial`, but kept OUT of active `entries` so an incomplete
+    # backend set never half-runs.
+    table = pt.build_table(EXE_11, EXE_125N)
+    bp = table.get("backend_partial", {})
+    assert "codegen_start" in bp and bp["codegen_start"]["va"] == 0x4351C0
+    assert "regalloc_bp_end_colorgraph" in bp
+    # must NOT leak into active entries (which feed the descriptor)
+    assert "codegen_start" not in table["entries"]
+    assert "regalloc_bp_end_colorgraph" not in table["entries"]

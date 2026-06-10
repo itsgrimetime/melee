@@ -84,6 +84,32 @@ NINJA_RANGES_125N: list[tuple[int, int]] = [
     (0x506510, 0x50653E),
 ]
 
+# Backend port progress (#542): byte-correlated GC/1.1 -> 1.2.5n .text addresses
+# that landed CONFIDENTLY (unique, plausibility-checked). Kept SEPARATE from the
+# active descriptor entries on purpose — the full backend run (cad.run_compiler)
+# needs the complete set incl. cmangler + the .bss data globals (interference
+# graph, used_virtual_registers, pcbasicblocks, frame lists), and those do NOT
+# port reliably by byte-correlation: drift is non-uniform across the binary
+# (codegen region +0x10, regalloc region -0x710) and the correlator produces
+# FALSE matches for some functions (cmangler_getlinkname 0x4C2C70 collides with
+# the DLL-known pcode_traverse 0x4C2560). Until the data globals are anchored
+# (region-drift map or instruction-operand extraction with disambiguation),
+# 1.2.5n backend stays on the faithful DLL pcdump path (proven byte-identical to
+# retail for front-end IRO in #543). These are recorded so the partial work is
+# not lost, but are NOT wired into _descriptor_125n.
+BACKEND_PARTIAL_125N: dict[str, dict] = {
+    "codegen_start": {"va": 0x4351C0, "provenance": "byte-correlate",
+                      "confidence": "unique", "src_va_gc11": 0x4351B0,
+                      "drift": 0x10},
+    "codegen_end": {"va": 0x435DB9, "provenance": "byte-correlate",
+                    "confidence": "unique", "src_va_gc11": 0x435DA9,
+                    "drift": 0x10},
+    "regalloc_bp_end_colorgraph": {"va": 0x4CE3F4, "provenance": "byte-correlate",
+                                   "confidence": "unique", "src_va_gc11": 0x4CEB04,
+                                   "drift": -0x710,
+                                   "note": "after DLL colorgraph entry 0x4CE2D0"},
+}
+
 
 @dataclass
 class Correlation:
@@ -165,7 +191,10 @@ def build_table(src_exe, dst_exe) -> dict:
     for name, e in entries.items():
         if e["va"] and overlaps_ninja(e["va"], NINJA_RANGES_125N):
             raise AssertionError(f"table entry {name} overlaps Ninji patch range")
-    return {"compiler": "1.2.5n", "entries": entries}
+    # backend_partial is recorded porting progress (#542), deliberately NOT in
+    # active `entries` so an incomplete backend set never half-runs.
+    return {"compiler": "1.2.5n", "entries": entries,
+            "backend_partial": dict(BACKEND_PARTIAL_125N)}
 
 
 def write_table(table: dict, path) -> None:

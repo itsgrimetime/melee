@@ -98,6 +98,14 @@ IRO pass sequence (node ledger v1):
 Use it as an index: find the pass where node count or membership changes sharply,
 then open the matching `iro-NN-<phase>.txt` to see the actual IR.
 
+`iro-summary.txt` also ends with a **named-leaf creation-order timeline** (#544):
+every front-end temp (`temp_rN`), var (`var_rN`), source local, and data symbol
+in the order it **first appears** across the trace, with the introducing phase,
+plus a one-line **synthesized-temp creation sequence** (e.g. `temp_r4 -> var_r4`).
+This is the front-end materialization order — the signal upstream of back-end
+vreg/`ig_idx` ordering. Node indices renumber every phase so they're not stable
+across phases; the temp/var *names* are, which is why the timeline keys on them.
+
 ## Interpreting the backend output (GC/1.1)
 
 `regalloc-gpr-pass-1-assigned.txt` is the most useful for matching:
@@ -171,9 +179,46 @@ front-end trace.
 - **Speed:** expect a few seconds per single-function dump (whole-TU compile under
   emulation + gdb). Fine for diagnosis; don't script thousands of these.
 
+## Intervention hooks: `--gdb-py` (mutate state, replay forward)
+
+For experiments beyond dumping — forcing a specific compiler state at a stage
+and watching the downstream effect — `dump` accepts an intervention hook:
+
+```bash
+melee-agent debug retro dump <tu> -f <fn> \
+    --gdb-py tools/mwcc_retro/hooks/example_intervene.py
+```
+
+The hook is a `.py` defining `intervene(ctx)`; the runtime hands it the
+connected, descriptor-injected gdb session. `ctx` (a RetroContext) exposes the
+write-capable substrate: `ctx.addr(key)` (named VA from the 1.2.5n table),
+`ctx.read/write`, `ctx.u32/set_u32`, `ctx.reg(name)`, `ctx.brk(va)`,
+`ctx.cont()`, and `ctx.call(fn_va, *int_args)` (staged-pointer calls). All
+writes hit the emulated inferior only — the exe on disk is never modified. See
+`tools/mwcc_retro/hooks/example_intervene.py` for a worked example (break,
+read, register, write+readback, continue). This generalizes "intervene at
+stage k, replay forward" beyond the DLL's force-phys/coalesce.
+
+## Back-end on 1.2.5n via retrowin32 (#542): why it's the DLL's job
+
+Porting cadmic's GC/1.1 backend address table to 1.2.5n was attempted and is
+**not reliably achievable by byte-correlation alone**, so 1.2.5n backend stays on
+the DLL pcdump path. The evidence (recorded in `tables/gc_125n.json` under
+`backend_partial`): drift is **non-uniform** across the binary — the codegen
+region drifts `+0x10` (codegen_start 0x4351B0→0x4351C0, verified prologue) but
+the regalloc region drifts `-0x710` (regalloc-end 0x4CEB04→0x4CE3F4, verified
+just inside colorgraph). Worse, the correlator produces **false matches** for
+some functions (cmangler_getlinkname 0x4C2C70 collides with the DLL-known
+pcode_traverse 0x4C2560). Since `cad.run_compiler` needs the *complete, correct*
+set (incl. cmangler + the `.bss` data globals: interference graph,
+used_virtual_registers, pcbasicblocks, frame lists), a partial/false port would
+be worse than the DLL pcdump — which #543 proved **byte-identical to retail** for
+front-end IRO. The confidently-ported addresses are recorded (not wired in) for a
+future full port via a region-drift map or instruction-operand extraction.
+
+**Use the DLL pcdump for 1.2.5n backend** (`melee-agent debug dump local`), and
+`explain-virtual --ig` for coloring-node provenance.
+
 ## What it does NOT do (yet)
 
-- Back-end / regalloc / stack on **1.2.5n** via retrowin32 (#542 — use DLL pcdump today).
-- Per-phase dumps in the fast DLL pcdump path (#543).
-- A creation-**order** temp ledger for ig_idx investigation (#544).
-- State-mutation / "intervene at stage k" CLI beyond the dump (#545).
+- Full back-end / regalloc / stack on **1.2.5n** via retrowin32 (#542, above).
