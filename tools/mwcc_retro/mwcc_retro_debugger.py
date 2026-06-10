@@ -158,6 +158,15 @@ def run_in_gdb():
         cad.MWCC_VERSION = _descriptor_125n(cad, table)
         print(f"[retro] descriptor injected (spoof GC/1.1, 1.2.5n addrs); fn={fn}")
 
+    # Intervention escape hatch (#545): if a user hook is supplied, hand it the
+    # connected, descriptor-injected session and let it drive (mutate state at a
+    # breakpoint, replay forward, observe). This is the generalized "intervene at
+    # stage k" beyond the DLL's force-phys/coalesce.
+    hook_path = os.environ.get("RETRO_GDB_PY", "").strip()
+    if hook_path:
+        _run_gdb_hook(gdb, cad, table, out_dir, fn, hook_path)
+        return
+
     if phases == "backend":  # 1.2.5n backend — needs the P3 address-table port
         print("[retro] 1.2.5n backend address table not populated (P3 "
               "follow-on); use the DLL pcdump path for backend on 1.2.5n.")
@@ -176,6 +185,79 @@ def _continue_to_exit(gdb):
         if "Remote connection closed" not in str(e) and \
            "not being run" not in str(e):
             raise
+
+
+class RetroContext:
+    """The intervention API handed to a `--gdb-py` hook (#545).
+
+    Wraps the connected, descriptor-injected gdb session with read/write/
+    breakpoint/continue/register helpers so a hook can mutate compiler state at
+    a stage and replay forward. `table` is the resolved 1.2.5n address table;
+    `addr(key)` looks up a named VA from it. All writes hit the emulated
+    inferior only (the exe on disk is never modified)."""
+
+    def __init__(self, gdb, cad, table, out_dir, fn):
+        import struct as _struct
+        self.gdb = gdb
+        self.cad = cad
+        self.table = table
+        self.out_dir = out_dir
+        self.fn = fn
+        self._struct = _struct
+        self._inf = gdb.selected_inferior()
+
+    def addr(self, key):
+        e = self.table.get("entries", {}).get(key)
+        return e.get("va") if e else None
+
+    def read(self, va, n):
+        return bytes(self._inf.read_memory(va, n))
+
+    def write(self, va, data):
+        self._inf.write_memory(va, bytes(data))
+
+    def u32(self, va):
+        return self._struct.unpack("<I", self.read(va, 4))[0]
+
+    def set_u32(self, va, val):
+        self.write(va, self._struct.pack("<I", val & 0xFFFFFFFF))
+
+    def reg(self, name):
+        return int(self.gdb.parse_and_eval(f"${name}"))
+
+    def brk(self, va):
+        self.gdb.execute(f"break *{va:#x}")
+
+    def cont(self):
+        _continue_to_exit(self.gdb)
+
+    def call(self, fn_va, *int_args):
+        """Call a function in the inferior with integer/pointer args already in
+        inferior memory (gdb cannot marshal string literals without an inferior
+        malloc; stage strings via write() and pass their VAs)."""
+        sig = ",".join("int" for _ in int_args)
+        args = ",".join(f"{a:#x}" if isinstance(a, int) else str(a)
+                        for a in int_args)
+        return int(self.gdb.parse_and_eval(
+            f"((int(*)({sig})){fn_va:#x})({args})"))
+
+
+def _run_gdb_hook(gdb, cad, table, out_dir, fn, hook_path):
+    """Load a user hook file and call its `intervene(ctx)` with a RetroContext.
+    The hook owns the session from here (it may set breakpoints, mutate memory,
+    and continue)."""
+    import importlib.util
+    ctx = RetroContext(gdb, cad, table, out_dir, fn)
+    spec = importlib.util.spec_from_file_location("retro_hook", hook_path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["retro_hook"] = mod
+    spec.loader.exec_module(mod)
+    if not hasattr(mod, "intervene"):
+        print(f"[retro] hook {hook_path} has no intervene(ctx); skipping")
+        ctx.cont()
+        return
+    print(f"[retro] running intervention hook {hook_path}")
+    mod.intervene(ctx)
 
 
 # Scratch .data VAs for staging the fopen path/mode strings (unused tail of
@@ -285,6 +367,8 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--phases", default="all")
     ap.add_argument("--compiler", default="1.2.5n")
+    ap.add_argument("--gdb-py", dest="gdb_py", default="",
+                    help="Path to an intervention hook with intervene(ctx).")
     ap.add_argument("fn")
     a = ap.parse_args()
 
@@ -297,7 +381,7 @@ def main():
     emu = [a.emulator, "--gdb-stub", *shlex.split(a.args)]
     env = dict(os.environ, RETRO_TABLE=a.table, RETRO_OUT=a.out,
                RETRO_FN=a.fn, RETRO_PHASES=a.phases, RETRO_PORT=str(GDB_PORT),
-               RETRO_COMPILER=a.compiler)
+               RETRO_COMPILER=a.compiler, RETRO_GDB_PY=a.gdb_py or "")
     # gdb runs a .py passed to -x as embedded Python with __name__ == "__main__"
     # (and the `gdb` module importable), so the __main__/IN_GDB branch below
     # fires run_in_gdb(). This is cadmic's mechanism; runpy.run_path misbehaves

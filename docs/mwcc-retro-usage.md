@@ -159,6 +159,37 @@ is useful for "why do these two interfere?".) This is the right tool for the
 coloring-tiebreak class that dominates the near-100% stuck pool — *not* mwcc-retro's
 front-end trace.
 
+### Don't guess — check the counterfactual: `debug inspect tiebreak`
+
+Before pouring C edits (or thousands of permuter iterations) into a coloring
+tiebreak, *verify computationally* that the change you have in mind actually
+flips the register. `tiebreak` reimplements MWCC's SELECT phase from the
+COLORGRAPH interference graph — validated at **G1 = 100%** (predict each node's
+register given the observed select order) on every non-truncated function and on
+the InputProc forcing case — and runs what-ifs:
+
+```bash
+# Is the surrogate trustworthy for this function? (100% or it abstains)
+melee-agent debug inspect tiebreak -f mnDiagram_InputProc --pcdump /tmp/d.txt --validate-only
+# Report two nodes (observed vs predicted reg, degree):
+melee-agent debug inspect tiebreak -f mnDiagram_InputProc --pcdump /tmp/d.txt --ig 88,90
+# WHAT-IF: would equalizing the interference flip ig90? (add the count edge)
+melee-agent debug inspect tiebreak -f mnDiagram_InputProc --pcdump /tmp/d.txt --what-if "add-interferer 90:72"
+# or drop the asymmetric edge on ig88:
+melee-agent debug inspect tiebreak -f mnDiagram_InputProc --pcdump /tmp/d.txt --what-if "remove-edge 88:72"
+# or test a select-order move:
+melee-agent debug inspect tiebreak -f FN --pcdump /tmp/d.txt --what-if "move 90:before:88"
+```
+
+It prints `predicted rX -> rY (FLIPS|no change)`. A FLIP means the edit is worth
+making in C; "no change" means the mechanism is subtler and the planned edit
+would waste effort. The engine **abstains (exit 3)** when the function's G1 isn't
+100% (interferer lists are capped at 64 entries; heavy truncation corrupts the
+dispense), so it never hands you an untrustworthy answer. Derive `--what-if`
+targets from the **exact source variant you're matching** (re-dump it; ig_idx
+identities and current assignments differ across variants).
+
+
 ## Operational notes / gotchas
 
 - **Per-function scoping is real:** the dump contains only the target fn's phases

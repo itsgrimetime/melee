@@ -21,6 +21,36 @@ def test_parses_real_retail_trace():
     assert "IRO pass sequence" in summary
 
 
+def test_creation_order_named_temps():
+    # The named-operand creation-order timeline (#544): which front-end temps/
+    # vars/locals appear, in first-appearance order, and which phase introduced
+    # each. Integer-constant operands must be excluded.
+    text = REAL_FIXTURE.read_text(errors="replace")
+    created = ts.creation_order(text)
+    names = [c.name for c in created]
+    # real mnVibration operands: data/count (locals), temp_r4/var_r4 (synth), global
+    assert "temp_r4" in names
+    assert "data" in names
+    # no pure-integer-constant operands leaked in
+    assert not any(n.lstrip("-").isdigit() for n in names)
+    # each carries the phase it was first seen in, in appearance order
+    first = created[0]
+    assert first.first_phase  # non-empty
+    assert first.order == 0
+    # synthesized temps are flagged distinctly from source locals
+    temp = next(c for c in created if c.name == "temp_r4")
+    assert temp.kind == "temp"
+    data = next(c for c in created if c.name == "data")
+    assert data.kind in ("local", "symbol")
+
+
+def test_creation_order_in_summary():
+    text = REAL_FIXTURE.read_text(errors="replace")
+    summary = ts.build_summary(text)
+    assert "creation order" in summary.lower()
+    assert "temp_r4" in summary
+
+
 def test_slug_rule():
     assert ts.slug("IRO_CommonSubs") == "iro-commonsubs"
     assert ts.slug("IRO_RemoveLabels()") == "iro-removelabels"

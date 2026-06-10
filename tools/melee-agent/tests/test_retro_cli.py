@@ -61,3 +61,30 @@ def test_retro_verify_fails_on_authoritative(monkeypatch):
     r = runner.invoke(app, ["debug", "retro", "verify"])
     assert r.exit_code == 1
     assert "FAIL" in r.output
+
+
+def test_retro_dump_gdb_py_threaded(monkeypatch, tmp_path):
+    import src.cli.debug.retro as retro
+    seen = {}
+    hook = tmp_path / "hook.py"
+    hook.write_text("def intervene(ctx):\n    pass\n")
+
+    def fake_launch(**kw):
+        seen.update(kw)
+        return retro.DumpOutcome(exit_code=0, produced=["hook"], missing=[])
+    monkeypatch.setattr(retro, "_launch_dump", fake_launch)
+    monkeypatch.setattr(retro, "_ensure_setup", lambda: None)
+    r = runner.invoke(app, ["debug", "retro", "dump",
+                            "src/melee/mn/mnvibration.c", "-f", "mnVibration_80248644",
+                            "--gdb-py", str(hook)])
+    assert r.exit_code == 0
+    assert seen["gdb_py"].endswith("hook.py")
+
+
+def test_retro_dump_gdb_py_missing_hook_exit_2(monkeypatch):
+    import src.cli.debug.retro as retro
+    monkeypatch.setattr(retro, "_ensure_setup", lambda: None)
+    r = runner.invoke(app, ["debug", "retro", "dump",
+                            "src/melee/mn/mnvibration.c", "-f", "x",
+                            "--gdb-py", "/no/such/hook.py"])
+    assert r.exit_code == 2
