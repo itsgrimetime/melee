@@ -2092,10 +2092,27 @@ int __stdcall DllMain(void *hModule, uint32 reason, void *reserved)
     if (reason == DLL_PROCESS_ATTACH)
     {
         uint32 old;
+        char iro_buf[8];
         // patch copt for debug @ 0x42C8E1
         VirtualProtect((void *)0x42C8E1, 1, PAGE_EXECUTE_READWRITE, &old);
         *(uint8 *)0x42C8E1 = 0x01;
         VirtualProtect((void *)0x42C8E1, 1, old, &old);
+
+        // Optional fast-path for front-end IRO per-phase dumps (#543): when
+        // MWCC_DEBUG_IRO_PHASES is set, NOP the IRO_DumpAfterPhase flag-test
+        // `je` @0x44D835 (74 41 -> 90 90) so every front-end pass dumps its
+        // flowgraph into the same pcdump. Read-before-write guarded against a
+        // mismatched binary (same recipe proven via retrowin32 in mwcc-retro).
+        if (GetEnvironmentVariableA("MWCC_DEBUG_IRO_PHASES", iro_buf,
+                                    sizeof(iro_buf)) > 0
+            && *(uint8 *)0x44D835 == 0x74 && *(uint8 *)0x44D836 == 0x41)
+        {
+            uint32 oldj;
+            VirtualProtect((void *)0x44D835, 2, PAGE_EXECUTE_READWRITE, &oldj);
+            *(uint8 *)0x44D835 = 0x90;
+            *(uint8 *)0x44D836 = 0x90;
+            VirtualProtect((void *)0x44D835, 2, oldj, &oldj);
+        }
 
         DEBUG_GUARD = 1;
         parse_overrides_from_env();
