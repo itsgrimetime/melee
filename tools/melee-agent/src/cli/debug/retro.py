@@ -81,19 +81,23 @@ def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
 
     produced: list[str] = []
     missing: list[str] = []
-    target_absent = "[retro] TARGET-NOT-SEEN" in proc.stdout
+    target_absent = False  # set by the host-side trace filter below
     safety_aborted = "[retro] ABORT" in proc.stdout
     trace = out_dir / "iro-trace.txt"
     if phases in ("frontend", "all"):
         if trace.exists() and trace.stat().st_size > 0:
-            text = trace.read_text(errors="replace")
-            if f"Dumping function {fn} after" in text:
+            # Dumps are enabled globally (all functions); isolate the target's
+            # section host-side (robust per-function scoping, #546).
+            full = trace.read_text(errors="replace")
+            text = trace_summary.filter_to_function(full, fn)
+            if text and f"Dumping function {fn} after" in text:
+                trace.write_text(text)  # iro-trace.txt = target only
                 trace_summary.split_phase_files(text, out_dir)
                 (out_dir / "iro-summary.txt").write_text(
                     trace_summary.build_summary(text))
                 produced.append("frontend")
             else:
-                # trace exists but has no blocks for the target fn -> not found
+                # trace produced but no section for the target fn -> not found
                 target_absent = True
                 missing.append("frontend")
         else:

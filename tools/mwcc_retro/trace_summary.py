@@ -23,9 +23,33 @@ _PASS_RE = re.compile(r"^Dumps for pass=(?P<n>\d+)\s*$")
 _NODE_RE = re.compile(r"^\s*(?P<idx>\d+):\s")
 
 
+_START_RE = re.compile(r"^Starting function (?P<fn>\S+)")
+
+
 def slug(phase: str) -> str:
     s = re.sub(r"[^A-Za-z0-9]+", "-", phase).strip("-").lower()
     return s[:60]
+
+
+def filter_to_function(text: str, fn: str) -> str:
+    """Return only the target function's section of a (possibly multi-function)
+    trace: from its `Starting function <fn>` line to the next `Starting
+    function` (or EOF). With global dump-enable the compiler emits every
+    function; this isolates the requested one robustly (no reliance on the
+    fragile FunctionName-at-entry read). Returns "" if the function is absent."""
+    lines = text.splitlines(keepends=True)
+    out: list[str] = []
+    capturing = False
+    for line in lines:
+        m = _START_RE.match(line)
+        if m:
+            if capturing:
+                break  # next function begins
+            if m.group("fn") == fn:
+                capturing = True
+        if capturing:
+            out.append(line)
+    return "".join(out)
 
 
 @dataclass
