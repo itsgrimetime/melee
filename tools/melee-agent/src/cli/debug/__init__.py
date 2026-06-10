@@ -20659,6 +20659,17 @@ def inspect_explain_virtual(
             ),
         ),
     ] = "",
+    ig: Annotated[
+        str,
+        typer.Option(
+            "--ig",
+            help=(
+                "Comma-separated COLORGRAPH ig_idx values to explain, e.g. "
+                "88,90. ig_idx N maps to virtual rN; this is sugar for "
+                "--virtuals so you can query straight from a COLORGRAPH dump."
+            ),
+        ),
+    ] = "",
     all_virtuals: Annotated[
         bool,
         typer.Option(
@@ -20696,7 +20707,7 @@ def inspect_explain_virtual(
     ] = False,
 ) -> None:
     """Explain virtual-register source/interference attribution."""
-    from ..mwcc_debug.virtual_attribution import (
+    from ...mwcc_debug.virtual_attribution import (
         explain_virtuals,
         list_pcode_virtuals,
         render_virtual_attribution_text,
@@ -20729,10 +20740,21 @@ def inspect_explain_virtual(
     pcdump_text = pcdump_path.read_text()
     virtual_list = _parse_virtual_csv(virtuals)
     pair_list = _parse_virtual_pair_csv(pairs)
+    if ig.strip():
+        # ig_idx N maps to virtual rN (the allocator node and the pre-coloring
+        # virtual share the same number); accept bare or r-prefixed values.
+        for tok in ig.split(","):
+            tok = tok.strip().lstrip("rR")
+            if tok:
+                if not tok.isdigit():
+                    raise typer.BadParameter(f"invalid --ig value: {tok!r}")
+                vreg = int(tok)  # virtual_list holds ints; ig_idx N == virtual rN
+                if vreg not in virtual_list:
+                    virtual_list.append(vreg)
     if all_virtuals:
         virtual_list = list(list_pcode_virtuals(pcdump_text, function))
     if not virtual_list and not pair_list:
-        typer.echo("--virtuals, --pairs, or --all is required.", err=True)
+        typer.echo("--virtuals, --pairs, --ig, or --all is required.", err=True)
         raise typer.Exit(2)
 
     report = explain_virtuals(
