@@ -184,17 +184,23 @@ class WhatIf:
 
 def what_if(ig: IG, target_ig: int, *, add_interferers: set[int] = frozenset(),
             remove_edges: set[frozenset[int]] = frozenset(),
-            move_before: int | None = None) -> WhatIf:
+            move_before: int | None = None,
+            move_after: int | None = None) -> WhatIf:
     """Predict target_ig's register under a perturbation:
       - add_interferers: ig_idx values to add as neighbors of target_ig
       - remove_edges: {frozenset(a,b)} edges to drop
-      - move_before: reorder target_ig to just before this ig_idx in select order
+      - move_before / move_after: reorder target_ig to just before/after this
+        ig_idx in select order (before and after differ by one slot — they can
+        produce different registers; pick deliberately)
     """
     base = predict_assignments(ig)
     order = list(ig.select_order)
     if move_before is not None and target_ig in order and move_before in order:
         order.remove(target_ig)
         order.insert(order.index(move_before), target_ig)
+    elif move_after is not None and target_ig in order and move_after in order:
+        order.remove(target_ig)
+        order.insert(order.index(move_after) + 1, target_ig)
     extra = {target_ig: set(add_interferers)} if add_interferers else {}
     pert = predict_assignments(ig, order=order, extra_neighbors=extra,
                                removed_edges=set(remove_edges))
@@ -206,6 +212,8 @@ def what_if(ig: IG, target_ig: int, *, add_interferers: set[int] = frozenset(),
             "/".join(map(str, sorted(e))) for e in remove_edges))
     if move_before is not None:
         desc_parts.append(f"move before ig{move_before}")
+    if move_after is not None:
+        desc_parts.append(f"move after ig{move_after}")
     return WhatIf(
         target_ig=target_ig,
         observed_reg=ig.nodes[target_ig].observed_reg if target_ig in ig.nodes else SPILL,
