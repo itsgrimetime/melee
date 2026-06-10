@@ -37,3 +37,27 @@ def test_retro_dump_default_phases_all(monkeypatch, tmp_path):
     assert r.exit_code == 0
     assert seen["phases"] == "all"
     assert seen["compiler"] == "1.2.5n"
+
+
+def test_retro_verify_passes(monkeypatch):
+    import src.cli.debug.retro as retro
+    import tools.mwcc_retro.verify as rv
+
+    def fake_run(unit="x", fn=None):
+        return [rv.Result(".o byte-parity", "parity", True, True, "ok")]
+    monkeypatch.setattr(rv, "run", fake_run)
+    r = runner.invoke(app, ["debug", "retro", "verify"])
+    assert r.exit_code == 0
+    assert "PASS" in r.output
+
+
+def test_retro_verify_fails_on_authoritative(monkeypatch):
+    import src.cli.debug.retro as retro
+    import tools.mwcc_retro.verify as rv
+
+    def fake_run(unit="x", fn=None):
+        return [rv.Result(".o byte-parity", "parity", True, False, "mismatch")]
+    monkeypatch.setattr(rv, "run", fake_run)
+    r = runner.invoke(app, ["debug", "retro", "verify"])
+    assert r.exit_code == 1
+    assert "FAIL" in r.output
