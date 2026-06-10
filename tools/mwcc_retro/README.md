@@ -11,8 +11,11 @@ dumps and IR node snapshots after each optimizer phase (CSE, loop unrolling,
 constant propagation, dead-code elimination, and others). Neither existing tool
 provides this: `mwcc-debug` (the pcdump/DLL path) covers only back-end PCode;
 `mwcc-inspect` gives one front-end IR snapshot on demand. In addition to the
-front-end trace, `mwcc-retro` produces retail-faithful back-end PCode passes,
-register-allocator priority/cost/adjacency dumps, and stack-allocation maps.
+front-end trace, on the **GC/1.1** compiler (`--compiler 1.1`) `mwcc-retro`
+produces retail-faithful back-end PCode passes, register-allocator
+priority/cost/adjacency dumps, and stack-allocation maps. Backend introspection
+on GC/1.2.5n is a follow-on (#542); for backend on 1.2.5n use the `mwcc-debug`
+DLL pcdump path.
 
 ## Commands
 
@@ -42,14 +45,14 @@ Compiles `<src.c>` under the emulated retail compiler and writes dumps for
 the requested phase group. Examples:
 
 ```bash
-# Full trace for one function (front-end IRO + backend PCode + regalloc + stack)
+# Front-end IRO trace for one function (1.2.5n; backend on 1.2.5n is follow-on #542)
 melee-agent debug retro dump src/melee/mn/mndraw.c -f mnDraw_8024A3B0
 
 # Front-end only (fast; skips backend regalloc)
 melee-agent debug retro dump src/melee/gm/gm_1BA8.c -f gm_801BCC9C --phases frontend
 
-# Backend only (retail-faithful alternative to the DLL pcdump)
-melee-agent debug retro dump src/melee/lb/lbarq.c -f lbArq_80014ABC --phases backend
+# Backend (GC/1.1 only today)
+melee-agent debug retro dump src/melee/lb/lbarq.c -f lbArq_80014ABC --phases backend --compiler 1.1
 
 # Use the GC/1.1 compiler descriptor instead
 melee-agent debug retro dump src/melee/ft/ftco.c -f ftCo_8009C744 --compiler 1.1
@@ -62,16 +65,18 @@ the triggered rule).
 
 Output goes to `build/mwcc_retro/<unit>/<fn>/`:
 
-| File | Contents |
-|------|----------|
-| `ast-dump.txt` | Parsed AST before optimization passes |
-| `iro-trace.txt` | All IRO optimizer passes concatenated |
-| `iro-NN-<phase>.txt` | One file per optimizer pass (split from trace) |
-| `iro-summary.txt` | Pass-iteration-aware node/temp ledger |
-| `pcode-*.txt` | Back-end PCode per pass |
-| `regalloc.txt` | Register-allocator priority, cost, and adjacency dumps |
-| `variables.txt` | Stack allocation map (variable home assignments) |
-| `provenance.json` | Compiler identity, pinned SHAs, fidelity-gate result |
+| File | Contents | When produced |
+|------|----------|---------------|
+| `iro-trace.txt` | All IRO optimizer passes concatenated | Frontend (both compilers) |
+| `iro-NN-<phase>.txt` | One file per optimizer pass (split from trace) | Frontend (both compilers) |
+| `iro-summary.txt` | Pass-iteration-aware node ledger | Frontend (both compilers) |
+| `frontend-NN-ast-<pass>.txt` | AST per front-end pass | GC/1.1 backend (`--compiler 1.1`) |
+| `backend-NN-<pass>.txt` | Back-end PCode per pass | GC/1.1 backend (`--compiler 1.1`) |
+| `regalloc-<cls>-pass-N-all.txt` | Register-allocator priority/cost/adjacency | GC/1.1 backend (`--compiler 1.1`) |
+| `regalloc-<cls>-pass-N-assigned.txt` | Final register assignments | GC/1.1 backend (`--compiler 1.1`) |
+| `variables.txt` | Stack allocation map (variable home assignments) | GC/1.1 backend (`--compiler 1.1`) |
+| `launch.log` | Emulator stdout/stderr for this run | Both |
+| `provenance.json` | Compiler identity, pinned SHAs, fidelity-gate result | Both |
 
 ### Verify
 
@@ -79,12 +84,14 @@ Output goes to `build/mwcc_retro/<unit>/<fn>/`:
 melee-agent debug retro verify
 ```
 
-Cross-checks an existing retro dump against the DLL pcdump on the same
-control translation unit. Authoritative checks: virtual-to-physical register
-map, regalloc node counts, and final-code identity against the real `.o`.
-Advisory check: LOOPWEIGHT values (informational; divergence is flagged but
-does not fail the command). Use `verify` when you suspect the emulated path
-has drifted from retail, or after a vendor SHA update.
+Cross-checks the emulated retail compile against the normal wibo build by
+**byte-comparing the produced `.o`** for a control TU. If they are
+byte-identical, the emulator is a faithful oracle and its dumps can be trusted.
+(The vreg-map / regalloc-count / LOOPWEIGHT cross-checks from the design depend
+on the GC/1.2.5n backend port and are a #542 follow-on.)
+
+Use `verify` when you suspect the emulated path has drifted from retail, or
+after a vendor SHA update.
 
 ## Vendor, Pinning, and Licensing
 

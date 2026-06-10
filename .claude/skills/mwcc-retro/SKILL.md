@@ -22,14 +22,14 @@ mismatch is a debug-DLL artifact rather than genuine retail behavior.
 # One-time: clone and build retrowin32 + cadmic/mwcc-debugger at pinned SHAs; run P0 gate
 melee-agent debug retro setup
 
-# Full trace for a function (front-end IRO + backend + regalloc + stack)
+# Front-end IRO trace (1.2.5n). Backend/regalloc/stack: --compiler 1.1, or mwcc-debug for 1.2.5n backend.
 melee-agent debug retro dump src/melee/mn/mndraw.c -f mnDraw_8024A3B0
 
 # Front-end only (faster; skip backend when you only need the IRO trace)
 melee-agent debug retro dump src/melee/gm/gm_1BA8.c -f gm_801BCC9C --phases frontend
 
-# Backend only (retail-faithful alternative to the DLL pcdump path)
-melee-agent debug retro dump src/melee/lb/lbarq.c -f lbArq_80014ABC --phases backend
+# Backend (GC/1.1 only today)
+melee-agent debug retro dump src/melee/lb/lbarq.c -f lbArq_80014ABC --phases backend --compiler 1.1
 
 # After a vendor SHA update, confirm retail fidelity
 melee-agent debug retro verify
@@ -37,7 +37,7 @@ melee-agent debug retro verify
 
 Output goes to `build/mwcc_retro/<unit>/<fn>/`. Key files: `iro-trace.txt`
 (all IRO passes concatenated), `iro-NN-<phase>.txt` (one file per pass, diff
-adjacent pairs to see what each phase changed), `iro-summary.txt` (node/temp
+adjacent pairs to see what each phase changed), `iro-summary.txt` (node
 ledger: which IROLinear indices appeared or disappeared between passes).
 
 ## When to use this
