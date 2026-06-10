@@ -4,7 +4,7 @@
     that name-spoofs "GC/1.1" so upstream's GC/1.1 struct readers apply
   - monkeypatches the ELABEL loader bug
   - adds front-end IRO per-pass tracing (enable retail's own dump machinery)
-  - resets module-level caches per function; owns emulator/port lifecycle
+  - owns emulator/port lifecycle (single function per process invocation)
 
 Host launcher mode (no gdb) mirrors cadmic's start_gdb but points -x at THIS
 file and injects our config via the `-ex py ...` line.
@@ -178,15 +178,6 @@ def _continue_to_exit(gdb):
             raise
 
 
-def _reset_cadmic_state(cad):
-    cad.TYPE_CACHE.clear()
-    cad.NODE_NAMES.clear()
-    cad.MWCC_OPCODE_INFO.clear()
-    cad.POTENTIAL_SPILLS.clear()
-    cad.REGALLOC_OBJECTS.clear()
-    cad.REGALLOC_PASS.clear()
-
-
 # Scratch .data VAs for staging the fopen path/mode strings (unused tail of
 # .data past the DEBUGLISTING/PCFILE globals; fopen copies the bytes immediately
 # so transient reuse is safe). Confirmed writable in the live P0 probe.
@@ -282,6 +273,9 @@ def _enable_frontend_tracing(gdb, cad, table, out_dir, fn):
         wr(dbg_flag, b"\x01")
         wr(dbg_guard, b"\x01\x00\x00\x00")
         wr(copt["va"], bytes.fromhex(copt["patch_to"]))
+        # All writes land in the emulated inferior only (retrowin32 maps the exe
+        # read-only); the process is torn down at exit, so the je-patch needs no
+        # revert and the real mwcceppc.exe on disk is never modified.
         wr(je_va, je_to)
         state["ready"] = True
         print(f"[retro] frontend tracing enabled; trace -> {out_path}")
@@ -291,11 +285,17 @@ def _enable_frontend_tracing(gdb, cad, table, out_dir, fn):
             if not state["ready"] and not state["aborted"]:
                 one_time_setup()
             if state["ready"]:
-                set_pcfile(current_fn_name() == fn)
+                match = current_fn_name() == fn
+                if match:
+                    state["target_seen"] = True
+                set_pcfile(match)
             return False  # never halt; just toggle scoping
 
     _Scope(f"*{sf_push:#x}")
     _continue_to_exit(gdb)
+    # Honest exit-3 signal: the target function never compiled in this TU.
+    if state["ready"] and not state.get("target_seen"):
+        print(f"[retro] TARGET-NOT-SEEN: {fn}")
 
 
 # ---- host launcher (no gdb) ----

@@ -81,19 +81,21 @@ def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
 
     produced: list[str] = []
     missing: list[str] = []
+    target_absent = "[retro] TARGET-NOT-SEEN" in proc.stdout
+    safety_aborted = "[retro] ABORT" in proc.stdout
     trace = out_dir / "iro-trace.txt"
     if phases in ("frontend", "all"):
         if trace.exists() and trace.stat().st_size > 0:
             text = trace.read_text(errors="replace")
-            # filter to the target function's blocks if present
-            if f"Starting function {fn}" not in text and \
-               f"after " not in text:
-                missing.append("frontend")
-            else:
+            if f"Dumping function {fn} after" in text:
                 trace_summary.split_phase_files(text, out_dir)
                 (out_dir / "iro-summary.txt").write_text(
                     trace_summary.build_summary(text))
                 produced.append("frontend")
+            else:
+                # trace exists but has no blocks for the target fn -> not found
+                target_absent = True
+                missing.append("frontend")
         else:
             missing.append("frontend")
 
@@ -106,10 +108,12 @@ def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
         elif phases == "backend":
             missing.append("backend")
 
-    if proc.returncode != 0 and not produced:
+    if safety_aborted and not produced:
+        # a read-before-write byte assert or fopen-NULL fired gdb-side
+        return DumpOutcome(exit_code=5, produced=produced, missing=missing)
+    if proc.returncode != 0 and not produced and not target_absent:
         return DumpOutcome(exit_code=2, produced=produced, missing=missing)
-    if "function not found" in proc.stdout.lower() or \
-       "not found" in proc.stderr.lower() and not produced:
+    if target_absent and not produced:
         return DumpOutcome(exit_code=3, produced=produced, missing=missing)
     if missing:
         return DumpOutcome(exit_code=4, produced=produced, missing=missing)
