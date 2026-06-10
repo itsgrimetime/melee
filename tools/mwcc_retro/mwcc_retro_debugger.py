@@ -4,7 +4,7 @@
     that name-spoofs "GC/1.1" so upstream's GC/1.1 struct readers apply
   - monkeypatches the ELABEL loader bug
   - adds front-end IRO per-pass tracing (enable retail's own dump machinery)
-  - resets module-level caches per function; owns emulator/port lifecycle
+  - owns emulator/port lifecycle (single function per process invocation)
 
 Host launcher mode (no gdb) mirrors cadmic's start_gdb but points -x at THIS
 file and injects our config via the `-ex py ...` line.
@@ -38,7 +38,11 @@ def _load_cadmic():
         "cadmic_mwcc", CADMIC_DIR / "mwcc_debugger.py"
     )
     mod = importlib.util.module_from_spec(spec)
-    # Defer spec.loader.exec_module until inside gdb (module imports `gdb`).
+    # Register in sys.modules BEFORE exec_module: Python 3.14's @dataclass looks
+    # up sys.modules[cls.__module__].__dict__ during class creation, so an
+    # unregistered module makes cadmic's dataclasses raise AttributeError.
+    sys.modules["cadmic_mwcc"] = mod
+    # exec_module is deferred to the caller (inside gdb; the module imports gdb).
     return spec, mod
 
 
@@ -120,52 +124,178 @@ def run_in_gdb():
     out_dir = os.environ["RETRO_OUT"]
     fn = os.environ["RETRO_FN"]
     port = os.environ.get("RETRO_PORT", "9001")
+    compiler = os.environ.get("RETRO_COMPILER", "1.2.5n")
 
     gdb.execute("set python print-stack full")
+    cad.FUNCTION_NAME = fn
+    cad.OUTPUT_DIR = out_dir
+
+    # GC/1.1 backend uses cadmic's native run_compiler, which does its OWN
+    # `target remote` + init + find + dump + quit. We must NOT pre-connect here
+    # (a second `target remote` makes the stub drop the first connection); hand
+    # the whole session to cadmic.
+    # NOTE: robust cadmic-loop integration + the 1.2.5n backend address-table
+    # port + the full verify harness are #541 follow-ons; backend is
+    # EXPERIMENTAL and the DLL pcdump path remains the backend reference on
+    # 1.2.5n.
+    if phases == "backend" and compiler == "1.1":
+        try:
+            cad.run_compiler()  # self-connects; quits at codegen_end
+        except Exception as exc:  # noqa: BLE001 - report, don't crash
+            if "Remote connection closed" not in str(exc) and \
+               "not being run" not in str(exc):
+                print(f"[retro] backend run note: {exc}")
+        return
+
+    # Frontend (and 1.2.5n) path: we own the connection and version descriptor.
     gdb.execute("set architecture i386")
     gdb.execute("set osabi none")
     gdb.execute(f"target remote localhost:{port}")
+    if compiler == "1.1":
+        cad.init_mwcc_version()
+        print(f"[retro] cadmic GC/1.1 native; fn={fn}")
+    else:
+        cad.MWCC_VERSION = _descriptor_125n(cad, table)
+        print(f"[retro] descriptor injected (spoof GC/1.1, 1.2.5n addrs); fn={fn}")
 
-    cad.MWCC_VERSION = _descriptor_125n(cad, table)
-    cad.FUNCTION_NAME = fn
-    cad.OUTPUT_DIR = out_dir
-    print(f"[retro] descriptor injected (spoof GC/1.1, 1.2.5n addrs); fn={fn}")
-
-    if phases in ("all", "frontend"):
+    if phases == "backend":  # 1.2.5n backend — needs the P3 address-table port
+        print("[retro] 1.2.5n backend address table not populated (P3 "
+              "follow-on); use the DLL pcdump path for backend on 1.2.5n.")
+        _continue_to_exit(gdb)
+    else:  # "frontend" or "all"
         _enable_frontend_tracing(gdb, cad, table, out_dir, fn)
 
-    if phases in ("all", "backend") and cad.MWCC_VERSION.codegen_start_addr:
-        cad.load_node_names()
-        cad.load_opcode_info()
-        _reset_cadmic_state(cad)
-        cad.run_compiler()  # cadmic's own loop; quits at codegen_end
-    else:
+
+def _continue_to_exit(gdb):
+    """Continue until the inferior exits. When the emulated compiler finishes,
+    retrowin32 closes the gdb-stub socket; gdb raises "Remote connection closed".
+    That is the normal end-of-run signal, not an error — swallow it."""
+    try:
         gdb.execute("continue")
+    except gdb.error as e:
+        if "Remote connection closed" not in str(e) and \
+           "not being run" not in str(e):
+            raise
 
 
-def _reset_cadmic_state(cad):
-    cad.TYPE_CACHE.clear()
-    cad.NODE_NAMES.clear()
-    cad.MWCC_OPCODE_INFO.clear()
-    cad.POTENTIAL_SPILLS.clear()
-    cad.REGALLOC_OBJECTS.clear()
-    cad.REGALLOC_PASS.clear()
+# Scratch .data VAs for staging the fopen path/mode strings (unused tail of
+# .data past the DEBUGLISTING/PCFILE globals; fopen copies the bytes immediately
+# so transient reuse is safe). Confirmed writable in the live P0 probe.
+_SCRATCH_PATH = 0x584400
+_SCRATCH_MODE = 0x584460
+# The gdb side opens a SHORT temp path (must fit the scratch gap above and not
+# collide with the mode string); the host launcher copies it to out_dir.
+_TRACE_TMP = "/tmp/mwcc_retro_iro.txt"
 
 
 def _enable_frontend_tracing(gdb, cad, table, out_dir, fn):
-    """Enable retail's own front-end IRO dump machinery for `fn`.
+    """Enable retail's own front-end IRO per-phase dump machinery, scoped to `fn`.
 
-    The concrete recipe (DEBUGLISTING/PCFILE/DEBUG_GUARD writes + staged fopen +
-    flag-test patch, all read-before-write asserted) is completed in the live P2
-    phase once the flag-test VA is resolved against the running emulator. Until
-    those addresses are in the table this is a guarded no-op so `--phases
-    backend` works standalone.
+    Live-validated recipe (see P0_FINDINGS.md): at the first IRO "Starting
+    function" push (CRT initialised, deep in compilation) — stage a filename and
+    call the compiler's fopen with pre-staged pointers (gdb cannot marshal string
+    literals into a no-symbol inferior), store the FILE* into PCFILE, set
+    DEBUGLISTING/DEBUG_GUARD/copt-debug, and NOP the IRO_DumpAfterPhase flag-test
+    `je` so every phase dumps its flowgraph. Per-function scoping: a breakpoint
+    handler at the same push toggles PCFILE on only while the target function
+    compiles, so non-target functions emit nothing.
     """
+    import struct as _struct
+
     e = table["entries"]
-    if "iro_dumpafterphase_push" not in e or not e["iro_dumpafterphase_push"]["va"]:
-        print("[retro] frontend tracing addresses not yet in table; skipping")
+    req = ["iro_dumpafterphase_je", "debuglisting_flag", "debug_guard",
+           "pcfile", "fopen", "copt_debug_byte", "iro_starting_function_push",
+           "iro_function_name_ptr"]
+    missing = [k for k in req if k not in e or not e[k].get("va")]
+    if missing:
+        print(f"[retro] frontend tracing addresses missing {missing}; skipping")
+        gdb.execute("continue")
         return
-    print("[retro] frontend tracing enabled")
+
+    je = e["iro_dumpafterphase_je"]
+    je_va = je["va"]
+    je_from = bytes.fromhex(je["patch_from"])
+    je_to = bytes.fromhex(je["patch_to"])
+    dbg_flag = e["debuglisting_flag"]["va"]
+    dbg_guard = e["debug_guard"]["va"]
+    pcfile = e["pcfile"]["va"]
+    fopen_va = e["fopen"]["va"]
+    copt = e["copt_debug_byte"]
+    sf_push = e["iro_starting_function_push"]["va"]
+    fname_ptr = e["iro_function_name_ptr"]["va"]
+
+    inf = gdb.selected_inferior()
+    rd = lambda a, n: bytes(inf.read_memory(a, n))
+    wr = lambda a, b: inf.write_memory(a, b)
+    # Open a SHORT temp path inside the inferior (long out_dir paths overflow the
+    # scratch gap and collide with the staged mode string); host copies it out.
+    out_path = _TRACE_TMP
+
+    def current_fn_name():
+        fnobj = _struct.unpack("<I", rd(fname_ptr, 4))[0]
+        if not fnobj:
+            return None
+        namep = _struct.unpack("<I", rd(fnobj + 0xA, 4))[0]  # ObjObject->name
+        if not namep:
+            return None
+        out = bytearray()
+        a = namep + 0xA  # HashNameNode->name string
+        for _ in range(256):
+            c = rd(a, 1)
+            if c == b"\x00":
+                break
+            out += c
+            a += 1
+        return out.decode("latin-1")
+
+    state = {"filep": 0, "ready": False, "aborted": False}
+
+    def set_pcfile(on):
+        wr(pcfile, _struct.pack("<I", state["filep"] if on else 0))
+
+    def one_time_setup():
+        cur = rd(je_va, len(je_from))
+        if cur != je_from:
+            print(f"[retro] ABORT: je guard {je_va:#x}={cur.hex()} != "
+                  f"{je_from.hex()}; not patching")
+            state["aborted"] = True
+            return
+        wr(_SCRATCH_PATH, out_path.encode("latin-1") + b"\x00")
+        wr(_SCRATCH_MODE, b"w\x00")
+        filep = int(gdb.parse_and_eval(
+            f"((int(*)(int,int)){fopen_va:#x})({_SCRATCH_PATH:#x},"
+            f"{_SCRATCH_MODE:#x})"))
+        if not filep:
+            print("[retro] ABORT: fopen returned NULL")
+            state["aborted"] = True
+            return
+        state["filep"] = filep
+        wr(dbg_flag, b"\x01")
+        wr(dbg_guard, b"\x01\x00\x00\x00")
+        wr(copt["va"], bytes.fromhex(copt["patch_to"]))
+        # All writes land in the emulated inferior only (retrowin32 maps the exe
+        # read-only); the process is torn down at exit, so the je-patch needs no
+        # revert and the real mwcceppc.exe on disk is never modified.
+        wr(je_va, je_to)
+        state["ready"] = True
+        print(f"[retro] frontend tracing enabled; trace -> {out_path}")
+
+    class _Scope(gdb.Breakpoint):
+        def stop(self):
+            if not state["ready"] and not state["aborted"]:
+                one_time_setup()
+            if state["ready"]:
+                match = current_fn_name() == fn
+                if match:
+                    state["target_seen"] = True
+                set_pcfile(match)
+            return False  # never halt; just toggle scoping
+
+    _Scope(f"*{sf_push:#x}")
+    _continue_to_exit(gdb)
+    # Honest exit-3 signal: the target function never compiled in this TU.
+    if state["ready"] and not state.get("target_seen"):
+        print(f"[retro] TARGET-NOT-SEEN: {fn}")
 
 
 # ---- host launcher (no gdb) ----
@@ -177,19 +307,25 @@ def main():
     ap.add_argument("--table", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--phases", default="all")
+    ap.add_argument("--compiler", default="1.2.5n")
     ap.add_argument("fn")
     a = ap.parse_args()
 
     os.makedirs(a.out, exist_ok=True)
+    if os.path.exists(_TRACE_TMP):
+        os.remove(_TRACE_TMP)  # stale from a prior run
 
     # retrowin32 takes the mwcc command as a positional greedy cmdline after
     # --gdb-stub; the gdb port is hardcoded to 9001 (no --gdb-port flag).
     emu = [a.emulator, "--gdb-stub", *shlex.split(a.args)]
     env = dict(os.environ, RETRO_TABLE=a.table, RETRO_OUT=a.out,
-               RETRO_FN=a.fn, RETRO_PHASES=a.phases, RETRO_PORT=str(GDB_PORT))
-    gdb_cmd = [a.gdb, "-batch", "-nx", "-ex",
-               "py import runpy; runpy.run_path(r'%s', run_name='__gdb__')" % __file__,
-               ]
+               RETRO_FN=a.fn, RETRO_PHASES=a.phases, RETRO_PORT=str(GDB_PORT),
+               RETRO_COMPILER=a.compiler)
+    # gdb runs a .py passed to -x as embedded Python with __name__ == "__main__"
+    # (and the `gdb` module importable), so the __main__/IN_GDB branch below
+    # fires run_in_gdb(). This is cadmic's mechanism; runpy.run_path misbehaves
+    # inside gdb's interpreter.
+    gdb_cmd = [a.gdb, "-batch", "-nx", "-x", __file__]
     # Hold the lock across the whole emu+gdb session: the fixed port 9001 means
     # only one retro session can run at a time.
     with _port_lock():
@@ -208,12 +344,16 @@ def main():
                     emu_proc.wait(timeout=10)
                 except subprocess.TimeoutExpired:
                     emu_proc.kill()
+    # Copy the short-path trace the gdb side wrote into the requested out_dir.
+    if os.path.exists(_TRACE_TMP):
+        import shutil
+        shutil.copy(_TRACE_TMP, os.path.join(a.out, "iro-trace.txt"))
 
 
 if __name__ == "__main__":
+    # Inside gdb (`-x this.py`): the gdb module is importable -> run the dumper.
+    # As a plain CLI: drive the emulator + gdb.
     if IN_GDB:
         run_in_gdb()
     else:
         main()
-elif __name__ == "__gdb__":
-    run_in_gdb()

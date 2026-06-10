@@ -30,7 +30,7 @@ front-end visibility or retail-vs-DLL confirmation.
 # One-time setup: clone+build retrowin32 and cadmic/mwcc-debugger, run P0 gate
 melee-agent debug retro setup
 
-# Full trace (front-end IRO + backend PCode + regalloc + stack)
+# Front-end IRO trace (1.2.5n). Backend/regalloc/stack: --compiler 1.1, or mwcc-debug for 1.2.5n backend.
 melee-agent debug retro dump src/melee/mn/mndraw.c -f mnDraw_8024A3B0
 
 # Front-end only (fast; skip backend when you only need the IRO trace)
@@ -63,24 +63,26 @@ index in the compiler's internal IR list.
 
 ### Reading iro-summary.txt
 
-`iro-summary.txt` is a pass-iteration-aware node/temp ledger. It answers:
+`iro-summary.txt` is a pass-iteration-aware node ledger. It answers:
 "which IROLinear node indices appeared or disappeared between two passes?"
 
 Structure of each entry:
 
 ```
-Pass 04 cse  ->  Pass 05 copy_prop
-  ADDED   nodes: [42, 43]     # new IROLinear indices introduced this transition
-  REMOVED nodes: [17, 31]     # indices present in pass 04 but gone by pass 05
-  ADDED   temps: [t8]         # new temp names introduced
-  REMOVED temps: [t3, t5]     # temps that were CSE'd, propagated away, or DCE'd
+IRO pass sequence (temp/node ledger v1):
+
+[00] after IRO_BuildflowGraph (pre-loop) — 36 nodes
+[01] after IRO_RemoveUnreachable (pre-loop) — 35 nodes
+     removed: [35] (vs IRO_BuildflowGraph)
+[12] after After IRO_LoopUnroller (pass=0) — 173 nodes
+     added: [37, 38, 39, ...]
 ```
 
-The `REMOVED nodes` list is the primary signal for CSE and DCE. If a node you
+The `removed` list is the primary signal for CSE and DCE. If a node you
 expected the compiler to keep was removed here, the matching pass is where the
-deviation from your expected output began. The `ADDED temps` list traces where
-new synthetic temporaries were introduced by optimizer actions (loop unrolling,
-strength reduction), which can influence register pressure downstream.
+deviation from your expected output began. The `added` list traces where new
+nodes were introduced by optimizer actions (loop unrolling, strength
+reduction), which can influence register pressure downstream.
 
 If the summary shows no changes across all passes, the function's IR was
 stable through the entire front-end optimizer and the mismatch is purely
@@ -88,23 +90,21 @@ back-end — switch to `mwcc-debug` for register-coloring investigation.
 
 ## Verify semantics
 
-`melee-agent debug retro verify` cross-checks a retro dump against the DLL
-pcdump on the same control translation unit.
+`melee-agent debug retro verify` cross-checks the emulated retail compile
+against the normal wibo build by **byte-comparing the produced `.o`** for a
+control TU. If they are byte-identical, the emulator is a faithful oracle and
+its dumps can be trusted.
 
-**Authoritative checks** (failures mean the dump cannot be trusted):
+**Authoritative check** (failure means the dump cannot be trusted):
 
-- Virtual-to-physical register map matches between retro and DLL pcdump.
-- Regalloc node counts match.
-- Final code in the retro dump is byte-identical to the `.o` produced by the
-  normal wibo/MWCC build.
+- The `.o` produced by the emulated retail path is byte-identical to the `.o`
+  produced by the normal wibo/MWCC build for the control TU.
 
-**Advisory check** (flagged but does not fail):
+**Planned (follow-on #542):**
 
-- LOOPWEIGHT values: divergence is noted in the verify report. LOOPWEIGHT
-  affects loop-optimization heuristics in the front-end and can differ between
-  retail and debug builds in edge cases. A LOOPWEIGHT divergence does not
-  invalidate the regalloc or final-code checks, but it is worth noting when
-  the mismatch you are investigating involves loop structure.
+- Virtual-to-physical register map cross-check (depends on GC/1.2.5n backend port).
+- Regalloc node count cross-check (depends on GC/1.2.5n backend port).
+- LOOPWEIGHT value cross-check (depends on GC/1.2.5n backend port).
 
 Run `verify` whenever you update a vendor SHA or when a dump seems to
 contradict what `mwcc-debug` shows for the same function.
@@ -113,16 +113,18 @@ contradict what `mwcc-debug` shows for the same function.
 
 All output goes to `build/mwcc_retro/<unit>/<fn>/`:
 
-| File | Contents |
-|------|----------|
-| `ast-dump.txt` | Parsed AST before optimization |
-| `iro-trace.txt` | All IRO passes concatenated |
-| `iro-NN-<phase>.txt` | One file per optimizer pass |
-| `iro-summary.txt` | Node/temp ledger (added/removed per transition) |
-| `pcode-*.txt` | Back-end PCode per pass |
-| `regalloc.txt` | Allocator priority, cost, and adjacency |
-| `variables.txt` | Stack map (variable home assignments) |
-| `provenance.json` | Compiler identity, vendor SHAs, fidelity-gate result |
+| File | Contents | When produced |
+|------|----------|---------------|
+| `iro-trace.txt` | All IRO passes concatenated | Frontend (both compilers) |
+| `iro-NN-<phase>.txt` | One file per optimizer pass | Frontend (both compilers) |
+| `iro-summary.txt` | Node ledger (added/removed per transition) | Frontend (both compilers) |
+| `frontend-NN-ast-<pass>.txt` | AST per front-end pass | GC/1.1 backend (`--compiler 1.1`) |
+| `backend-NN-<pass>.txt` | Back-end PCode per pass | GC/1.1 backend (`--compiler 1.1`) |
+| `regalloc-<cls>-pass-N-all.txt` | Allocator priority, cost, and adjacency | GC/1.1 backend (`--compiler 1.1`) |
+| `regalloc-<cls>-pass-N-assigned.txt` | Final register assignments | GC/1.1 backend (`--compiler 1.1`) |
+| `variables.txt` | Stack map (variable home assignments) | GC/1.1 backend (`--compiler 1.1`) |
+| `launch.log` | Emulator stdout/stderr for this run | Both |
+| `provenance.json` | Compiler identity, vendor SHAs, fidelity-gate result | Both |
 
 ## Name-spoof note
 

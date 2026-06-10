@@ -65,7 +65,10 @@
 - `melee-agent debug permute local-orphans` — Detect orphaned local wibo/MWCC compile processes.
 - `melee-agent debug permute remote doctor` — Check whether a remote target is ready to run decomp-permuter.
 - `melee-agent debug permute remote fetch` — Fetch remote permuter outputs into the local permuter directory.
-- `melee-agent debug permute remote list` — List local remote permuter job metadata.
+- `melee-agent debug permute remote list` — List local remote permuter job metadata with live active/dead status.
+- `melee-agent debug permute remote prune` — Delete stale remote-runs directories on remote coders.
+- `melee-agent debug permute remote ps` — Dashboard of active remote permuter sessions across all coders.
+- `melee-agent debug permute remote reap` — Stop remote permuter jobs that are byte-matched or plateaued.
 - `melee-agent debug permute remote status` — Show remote permuter job activity and stale cleanup guidance.
 - `melee-agent debug permute remote stop` — Stop a remote permuter tmux session.
 - `melee-agent debug permute remote submit` — Submit a local decomp-permuter function directory to a remote target.
@@ -76,6 +79,9 @@
 - `melee-agent debug permute setup-simplify-order-scorer` — Wire decomp-permuter to save candidates that improve simplify-order.
 - `melee-agent debug permute triage` — Tier 7e: batch-triage decomp-permuter output candidates.
 - `melee-agent debug permute verify` — Tier 7a: apply a permuter candidate to the real source and verify.
+- `melee-agent debug retro dump` — Dump retail compiler internals for FN in SRC.
+- `melee-agent debug retro setup` — Clone + build retrowin32 and cadmic at pinned SHAs (idempotent).
+- `melee-agent debug retro verify` — Cross-check a retro dump against the existing DLL pcdump (control TU).
 - `melee-agent debug search combine` — Recombine complementary directed-search candidate source hunks.
 - `melee-agent debug search directed` — Run the directed (pcdump-guided) search layer for FUNCTION in UNIT.
 - `melee-agent debug search minimize` — Delta-reduce candidate subhunks while preserving proof assignments.
@@ -230,6 +236,7 @@
 - `/mismatch-db` — Knowledge base for common assembly mismatches. Use to interpret diffs when matching functions.
 - `/mwcc-debug` — Dump MWCC's internal codegen passes (BEFORE/AFTER REGISTER COLORING, instruction scheduling, etc.) for a Melee TU. Runs locally on macOS (via wibo+Zig-built DLL) by default, or on a remote Windows host as a fallback. Use when stuck on register-allocation cascades or other last-mile matching issues; complement to mwcc-inspect (which shows front-end IR / ENodes / ObjObjects).
 - `/mwcc-inspect` — Inspect MWCC's internal IR (ENodes, ObjObjects, Statements) for a Melee TU by running RootCubed/mwcc-inspector on a remote Windows host. Use when stuck on register-allocation cascades or other last-mile matching issues that mismatch-db, opseq, ghidra, and discord-knowledge haven't explained — this is the next tool to reach for, not the first.
+- `/mwcc-retro` — Dump retail MWCC GC/1.2.5n front-end IRO per-pass traces + backend PCode, register-allocator internals, and stack maps via retrowin32+gdb. Use when you need front-end optimizer pass visibility (CSE, loop unrolling, propagation, DCE) or a retail-vs-debug-DLL fidelity check. Not first-resort — reach for mismatch-db, opseq, ghidra, discord-knowledge, and mwcc-debug first.
 - `/opseq` — Find functions by opcode sequence patterns. Use when stuck on a function and want to find similar already-decompiled code for reference.
 - `/ppc-ref` — Look up PowerPC instruction set documentation. Use when you need to understand what a specific instruction does, its operands, or behavior.
 - `/prepare-pr` — Use this skill when the user wants to prepare decomp work for an upstream PR.

@@ -1679,6 +1679,9 @@ permute_app.add_typer(remote_app, name="remote")
 from src.search.cli import search_app as _search_app  # noqa: E402
 debug_app.add_typer(_search_app, name="search")
 
+from src.cli.debug.retro import retro_app as _retro_app  # noqa: E402
+debug_app.add_typer(_retro_app, name="retro")
+
 
 def _resolve_src_relative(c_file: str) -> str:
     """Resolve a .c file path to one relative to the melee repo root.
