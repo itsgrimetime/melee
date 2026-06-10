@@ -133,8 +133,31 @@ Front-end visibility is most powerful **comparatively**:
 
 If the front-end IR is **identical** between your source and a target-equivalent but
 the asm still differs, the residual is **back-end** (register coloring / scheduling) —
-stop using this tool and switch to `mwcc-debug` / coalesce-search. That's a real,
-useful conclusion, not a failure.
+stop using this tool and switch to the back-end provenance workflow below. That's a
+real, useful conclusion, not a failure.
+
+### Back-end / register-coloring residuals: `explain-virtual`
+
+When the mismatch is a coloring tiebreak — two temps assigned swapped registers
+(e.g. ig_idx 88 got r27 but should be r25) — the front-end IRO trace will be
+identical and won't help. Use the pcdump's allocator provenance instead:
+
+```bash
+# Get a pcdump (back-end) for the function:
+melee-agent debug dump local src/melee/mn/mndiagram.c --output /tmp/d.txt
+# Read the COLORGRAPH DECISIONS section for the offending ig_idx values, then:
+melee-agent debug inspect explain-virtual -f mnDiagram_InputProc --ig 88,90 --pcdump /tmp/d.txt
+```
+
+`--ig N,M` answers "what *is* ig_idx N?" — it maps each ig_idx to its virtual
+register (ig_idx N == virtual rN), then reports the **assigned physical register,
+the defining instruction** (e.g. `subfic r88,r36,25` = a `25 - i` bound check),
+the **source line/expression** it attributes to, and the **interferers**. That tells
+you which C expression each coloring node corresponds to, so you know where to nudge.
+(`--virtuals rN` / `--all` / `--pairs rA/rB` are the other entry points; `--pairs`
+is useful for "why do these two interfere?".) This is the right tool for the
+coloring-tiebreak class that dominates the near-100% stuck pool — *not* mwcc-retro's
+front-end trace.
 
 ## Operational notes / gotchas
 
