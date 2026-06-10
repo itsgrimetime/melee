@@ -62,3 +62,18 @@ def test_build_table_no_ninja_overlap():
     table = pt.build_table(EXE_11, EXE_125N)
     for name, e in table["entries"].items():
         assert not pt.overlaps_ninja(e["va"], NINJA_RANGES), name
+
+
+def test_build_table_raises_on_unresolved_anchor(monkeypatch):
+    # An anchor that fails to resolve must raise, not ship a va:0 entry.
+    real = pt.string_anchor
+
+    def fake(src, dst, needle):
+        if needle == b"Starting function %s":
+            return pt.Anchor(needle, 0, 0, 0, 0, "missing")
+        return real(src, dst, needle)
+
+    monkeypatch.setattr(pt, "string_anchor", fake)
+    import pytest
+    with pytest.raises(AssertionError):
+        pt.build_table(EXE_11, EXE_125N)

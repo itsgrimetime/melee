@@ -13,6 +13,8 @@ DLL's independently-known 1.2.5n VAs.
 """
 from __future__ import annotations
 
+import json
+import struct
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -46,9 +48,6 @@ def string_anchor(src_exe, dst_exe, needle: bytes) -> Anchor:
 def overlaps_ninja(va: int, ranges: list[tuple[int, int]]) -> bool:
     return any(lo <= va < hi for lo, hi in ranges)
 
-
-import json
-import struct
 
 # DLL-known 1.2.5n VAs (independently RE'd in tools/mwcc_debug/mwcc_debug.c).
 DLL_KNOWN_125N: dict[str, int] = {
@@ -96,7 +95,6 @@ def byte_correlate(src_exe, dst_exe, src_va: int, window: int = 24) -> Correlati
     a = pe.load(src_exe)
     b = pe.load(dst_exe)
     needle = _wildcard_window(a, src_va, window)
-    best = (-1, -1.0, 0.0)
     text = next(s for s in b.sections if s.name == ".text")
     blob = b.data[text.raw_offset : text.raw_offset + text.raw_size]
     nz = [(i, c) for i, c in enumerate(needle) if c != 0]
@@ -135,6 +133,11 @@ def build_table(src_exe, dst_exe) -> dict:
     }
     for name, needle in anchors.items():
         a = string_anchor(src_exe, dst_exe, needle)
+        if a.confidence != "unique" or a.dst_site == 0:
+            raise AssertionError(
+                f"anchor {name!r} did not resolve uniquely "
+                f"(confidence={a.confidence}, dst_site={a.dst_site:#x})"
+            )
         entries[name] = {
             "va": a.dst_site,
             "src_va": a.src_site,
