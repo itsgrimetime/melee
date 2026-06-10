@@ -152,3 +152,31 @@ def test_cli_move_after_accepted():
                                  "--what-if", f"move {a}:after:{b}"])
     assert r.exit_code == 0
     assert "what-if" in r.output
+
+
+@pytest.mark.slow
+def test_force_interfere_round_trip():
+    """LIVE: inject an interference edge via the DLL force-interfere hook and
+    confirm it appears in the target node's COLORGRAPH neighbors. Gated on
+    RETRO_LIVE=1 + the deployed DLL."""
+    import os
+    import subprocess
+    if os.environ.get("RETRO_LIVE") != "1":
+        pytest.skip("set RETRO_LIVE=1 for the live force-interfere round trip")
+    dll = REPO / "build/compilers/GC/1.2.5n/MWDBG326.dll"
+    if not dll.exists():
+        pytest.skip("deployed debug DLL missing")
+    base_p, inj_p = Path("/tmp/fi_t_base.txt"), Path("/tmp/fi_t_inj.txt")
+    cmd = ["melee-agent", "debug", "dump", "local", "src/melee/mn/mnvibration.c",
+           "--no-cache-sync", "--output"]
+    subprocess.run(cmd + [str(base_p)], cwd=REPO, capture_output=True, timeout=300)
+    base = tb.load_gpr_ig(base_p.read_text(), "mnVibration_80248644")
+    nodes = sorted(base.nodes)
+    a, b = next((x, y) for x in nodes for y in nodes
+                if x < y and x >= 33 and y >= 33 and y not in base.nodes[x].neighbors)
+    env = dict(os.environ, MWCC_DEBUG_FORCE_INTERFERE=f"{a}={b}",
+               MWCC_DEBUG_FORCE_INTERFERE_FUNCTION="mnVibration_80248644")
+    subprocess.run(cmd + [str(inj_p)], cwd=REPO, env=env, capture_output=True, timeout=300)
+    inj = tb.load_gpr_ig(inj_p.read_text(), "mnVibration_80248644")
+    assert b not in base.nodes[a].neighbors
+    assert b in inj.nodes[a].neighbors  # edge injected into the real matrix
