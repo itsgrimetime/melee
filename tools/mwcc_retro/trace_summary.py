@@ -26,6 +26,9 @@ _NODE_RE = re.compile(r"^\s*(?P<idx>\d+):\s")
 _START_RE = re.compile(r"^Starting function (?P<fn>\S+)")
 
 
+_START_RE = re.compile(r"^Starting function (?P<fn>\S+)")
+
+
 def slug(phase: str) -> str:
     s = re.sub(r"[^A-Za-z0-9]+", "-", phase).strip("-").lower()
     return s[:60]
