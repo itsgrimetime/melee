@@ -1120,7 +1120,7 @@ def _descriptor_125n(cad, table: dict):
         opcodeinfo_size=468,
         pcbasicblocks_addr=e.get("pcbasicblocks", {}).get("va", 0),
         pcode_breakpoints={},    # populated by table in P3
-        regalloc_breakpoint_addr=e.get("colorgraph", {}).get("va", 0),
+        regalloc_breakpoint_addr=e.get("regalloc_bp", {}).get("va", 0),
         interferencegraph_addr=e.get("interferencegraph", {}).get("va", 0),
         used_virtual_registers_gpr_addr=e.get("used_vreg_gpr", {}).get("va", 0),
         used_virtual_registers_fpr_addr=e.get("used_vreg_fpr", {}).get("va", 0),
@@ -1131,6 +1131,13 @@ def _descriptor_125n(cad, table: dict):
         frame_base_size_addr=e.get("frame_base_size", {}).get("va"),
         frame_call_args_size_addr=e.get("frame_call_args_size", {}).get("va"),
     )
+    # NOTE: regalloc_breakpoint_addr is the END of colorgraph() (cadmic GC/1.1
+    # = 0x4CEB04, ~0x834 past entry), NOT the DLL-known `colorgraph` ENTRY VA
+    # 0x4CE2D0. print_regalloc reads coloring_class/[esp+8] assuming that
+    # end-of-function PC. The `regalloc_bp` table key (ported in Task 13 with
+    # the esp+4/8 micro-context cross-check) holds the end VA; the `colorgraph`
+    # entry stays a separate cross-check-only entry. Above we read
+    # e.get("regalloc_bp") — NOT e.get("colorgraph") — for that field.
 
 
 def _patch_elabel(cad):
@@ -1554,7 +1561,12 @@ Time a full TU compile under retrowin32 and a single-function dump. Record wall-
 
 - [ ] **Step 5: Write the live test (gates as skippable tests)**
 
-Create `tools/melee-agent/tests/test_retro_live.py` with `@pytest.mark.slow`, env-gated (`RETRO_LIVE=1`): one test per gate (setup builds; .o byte-parity; gdb attach/write/call). Skip when `RETRO_LIVE` unset or retrowin32 binary missing.
+Create `tools/melee-agent/tests/test_retro_live.py` with `@pytest.mark.slow`,
+env-gated by a NEW var `RETRO_LIVE=1` (distinct from the repo's `LIVE_9ACC_TESTS`
+because these gates need the retrowin32 emulator, not wibo — state this in a module
+docstring): one test per gate (setup builds; .o byte-parity; gdb attach/write/call).
+Skip when `RETRO_LIVE` unset OR the retrowin32 binary is missing (presence check,
+like the existing live-test guards).
 
 - [ ] **Step 6: Commit**
 
@@ -1581,9 +1593,15 @@ Run `debug retro dump <control TU> -f <fn> --compiler 1.1`. Verify it produces f
 
 Using `port_table` + the live binary: confirm the `IRO_DumpAfterPhase` flag-test site and the IRO_Log/debuglisting gate global (follow the `call` after the "Starting function" push into IRO_Dump; read its first `cmp byte` abs32 operand). Add resolved VAs to `tables/gc_125n.json` (provenance "string-anchor"/"disasm"). STOP CONDITION: 0 or ≥2 candidates after anchor+drift+disasm → record candidates in provenance.json, file an issue, stop P2 (P1 + host tooling still shipped).
 
-- [ ] **Step 4: Complete `_enable_frontend_tracing`**
+- [ ] **Step 4: Complete `_enable_frontend_tracing` (REPLACE the stub)**
 
-Implement the concrete recipe in `mwcc_retro_debugger.py` per spec D2: read-before-write byte asserts; set DEBUGLISTING/DEBUG_GUARD; staged fopen → PCFILE; patch the flag-test jz; scope to the target fn. Run on the control TU.
+**Replace** the print-only stub body in `mwcc_retro_debugger.py` (do not append — no
+dead TODO/print may ship) with the concrete recipe per spec D2: read-before-write
+byte asserts (expect `c6 05 26 42 58 00 00` at 0x42C8DB before any patch); set
+DEBUGLISTING(0x584226)=1 and DEBUG_GUARD(0x5882B8)=1; staged fopen(0x40C690) →
+store FILE* into PCFILE(0x580610); patch the flag-test jz (resolved Step 3); scope
+to the target fn via the IRO_Log/debuglisting gate. Run on the control TU. After this
+step, grep the file to confirm no `(P2 recipe)` / `TODO` placeholder string remains.
 
 - [ ] **Step 5: P2 ACCEPT checks**
 
@@ -1601,9 +1619,30 @@ git add -A && git commit -m "feat(retro): live GC/1.1 dump + 1.2.5n front-end IR
 
 > Gated on Task 12. Produces the full backend/regalloc 1.2.5n table + `debug retro verify`.
 
-- [ ] **Step 1: Port backend/regalloc/frame addresses**
+- [ ] **Step 1: Port backend/regalloc/frame addresses (incrementally)**
 
-Extend `port_table.build_table` to populate the ~45 PCode-pass breakpoints + regalloc/interferencegraph/frame-list globals via string-anchor where possible and byte-correlate otherwise, enforcing monotonic ordering + uniqueness-margin + DLL-VA cross-checks + micro-context contracts (regalloc bp reads args at esp+4/8 at end of colorgraph). Regenerate `tables/gc_125n.json`. Extend the port-table tests.
+Extend `port_table.build_table` to populate the backend globals + breakpoints,
+committing in batches validated by the verify harness (Task 13 Step 2) so a bad
+address is caught per-batch, not all at once:
+  1. **Globals first**: `interferencegraph`, `used_vreg_gpr/fpr`, `pcbasicblocks`,
+     `nodenames`, `opcodeinfo`, `cmangler_getlinkname`, `codegen_start/end`, and the
+     **`regalloc_bp` = END-of-colorgraph** site. The last is NOT the DLL `colorgraph`
+     entry 0x4CE2D0 — derive it from cadmic's GC/1.1 0x4CEB04 via byte-correlate
+     (uniform-drift prior won't hold over 0x834 of body, so widen the search and
+     **assert the esp+4/8 micro-context**: at the ported VA the next reads must yield
+     `coloring_class ∈ {0,1}` and a non-zero assigned-nodes list head). Keep DLL
+     `colorgraph` 0x4CE2D0 as a separate `colorgraph_entry` cross-check entry.
+  2. **Shared passes** (after-scheduling, before/after-regalloc, prologue-epilogue,
+     peephole) — validate via verify.
+  3. **-O2, then -O3, then -O4 copt banks** — these are adjacent near-clones, so
+     enforce monotonic match ordering + uniqueness-margin and validate each bank.
+  4. **Element-count bounds probe (spec D5)**: do NOT trust the GC/1.1 literals
+     (`nodenames_size=75`, `opcodeinfo_size=468`). Probe each table's true extent on
+     1.2.5n (read entries until a non-pointer / out-of-`.data` value) and write the
+     probed counts into the table; update `_descriptor_125n` to read them from the
+     table instead of the literals. In-loop invariants (opcode index < size) remain
+     the backstop.
+Regenerate `tables/gc_125n.json`. Extend the port-table tests per batch.
 
 - [ ] **Step 2: Implement `tools/mwcc_retro/verify.py`**
 
