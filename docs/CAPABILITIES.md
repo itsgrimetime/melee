@@ -43,6 +43,7 @@
 - `melee-agent debug inspect simulate` — Simulate MWCC's coloring algorithm on a function and diff against actuals.
 - `melee-agent debug inspect stack-homes` — Explain final-only FPR stack-home targets and source-shape leads.
 - `melee-agent debug inspect stuck` — One-shot diagnostic for a stuck function.
+- `melee-agent debug inspect tiebreak` — Register-coloring tiebreak surrogate: predict assignments from the interference graph (G1, validated 100% on non-truncated functions) and run what-ifs (add/remove an interference edge, or move a...
 - `melee-agent debug inspect trace-copy` — Trace where a pcode copy appears and why it disappears.
 - `melee-agent debug inspect var-to-virtual` — Bridge: given a source variable name, predict its MWCC virtual.
 - `melee-agent debug inspect virtual-to-ig` — Map a visible pcode virtual register to allocator graph identity.
