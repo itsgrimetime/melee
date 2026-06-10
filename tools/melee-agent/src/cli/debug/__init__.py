@@ -15404,6 +15404,27 @@ def _check_path(label: str, path: Path, *, executable: bool = False) -> _DumpSet
     return _DumpSetupCheck(label, True, str(path))
 
 
+def _check_dll_is_pe(label: str, path: Path) -> _DumpSetupCheck:
+    """Sanity-check a deployed DLL is a real PE binary, not a corrupted stub.
+
+    Freshness checks are mtime-only, so an 8-byte garbage file (e.g. from an
+    interrupted copy or a corrupt-DLL experiment) PASSES doctor while making
+    every dump SIGABRT. Verified failure mode 2026-06-10."""
+    if not path.exists():
+        return _DumpSetupCheck(label, False, f"missing: {path}")
+    try:
+        size = path.stat().st_size
+        magic = path.open("rb").read(2)
+    except OSError as exc:
+        return _DumpSetupCheck(label, False, f"unreadable: {path} ({exc})")
+    if size < 4096 or magic != b"MZ":
+        return _DumpSetupCheck(
+            label, False,
+            f"not a PE DLL ({size} bytes, magic={magic!r}): {path} — "
+            f"redeploy via `debug dump setup --rebuild-dll`")
+    return _DumpSetupCheck(label, True, f"{path} ({size} bytes, MZ)")
+
+
 def _path_newer_than(left: Path, right: Path) -> bool:
     return left.stat().st_mtime_ns > right.stat().st_mtime_ns
 
@@ -15472,6 +15493,7 @@ def _local_dump_setup_checks() -> list[_DumpSetupCheck]:
         _check_path("patched compiler", compiler_dir / "mwcceppc_debug.exe"),
         _check_path("mwcc_debug DLL source", tools_dir / "MWDBG326.dll"),
         _check_path("deployed DLL", compiler_dir / "MWDBG326.dll"),
+        _check_dll_is_pe("deployed DLL integrity", compiler_dir / "MWDBG326.dll"),
         _check_path("mwcc_debug C source", tools_dir / "mwcc_debug.c"),
         _check_mwcc_debug_dll_freshness(tools_dir, compiler_dir),
         _check_path("wibo build script", tools_dir / "build_wibo.sh"),
@@ -20641,7 +20663,8 @@ def inspect_tiebreak(
         "--ig", help="COLORGRAPH ig_idx values to report, e.g. 88,90.")] = "",
     what_if: Annotated[str, typer.Option(
         "--what-if", help="Perturbation: 'add-interferer T:N', 'remove-edge "
-        "A:B', or 'move T:before:M'. Predicts T's register under it.")] = "",
+        "A:B', 'move T:before:M', or 'move T:after:M' (before/after differ by "
+        "one select slot). Predicts T's register under it.")] = "",
     validate_only: Annotated[bool, typer.Option("--validate-only")] = False,
     json_out: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
@@ -20722,8 +20745,15 @@ def _parse_and_run_tiebreak_whatif(tb, ig, spec_str):
             a, b = (int(x.lstrip("rR")) for x in arg.split(":"))
             return tb.what_if(ig, a, remove_edges={frozenset((a, b))})
         if kind == "move":
-            t, _before, m = arg.split(":")
-            return tb.what_if(ig, int(t), move_before=int(m))
+            # "move T:before:M" / "move T:after:M". The middle token is
+            # semantic — before and after differ by one select slot and can
+            # yield different registers; reject anything else loudly.
+            t, where, m = arg.split(":")
+            if where == "before":
+                return tb.what_if(ig, int(t), move_before=int(m))
+            if where == "after":
+                return tb.what_if(ig, int(t), move_after=int(m))
+            return None
     except (ValueError, KeyError):
         return None
     return None

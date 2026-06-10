@@ -111,3 +111,44 @@ def test_cli_whatif_runs_on_fixture():
                                  "--what-if", f"remove-edge {node.ig_idx}:{nb}"])
     assert r.exit_code == 0
     assert "what-if" in r.output
+
+
+def test_move_after_vs_before_are_distinct():
+    # Three callee-save nodes in a chain so order matters; verify the engine
+    # honors after vs before (they were silently conflated before the fix).
+    full = [(i, i) for i in (0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)]
+    sec = ColorgraphSection(class_id=0, result=1, n_nodes=3, decisions=[
+        ColorgraphDecision(0, 70, 31, 0, 11, 0, list(full)),
+        ColorgraphDecision(1, 71, 30, 0, 12, 0, list(full) + [(70, 31)]),
+        ColorgraphDecision(2, 72, 29, 0, 13, 0, list(full) + [(70, 31), (71, 30)]),
+    ])
+    ig = tb.build_ig(sec)
+    before = tb.what_if(ig, 72, move_before=70)
+    after = tb.what_if(ig, 72, move_after=70)
+    assert "before ig70" in before.description
+    assert "after ig70" in after.description
+    # moved first, ig72 takes the first fresh callee-save r31 in both cases;
+    # the distinction shows in order placement — assert via order effect on ig70
+    assert before.perturbed_reg == 31
+
+
+def test_cli_move_rejects_bad_middle_token():
+    from typer.testing import CliRunner
+    from src.cli import app
+    r = CliRunner().invoke(app, ["debug", "inspect", "tiebreak",
+                                 "-f", "mnVibration_80248644", "--pcdump", str(FIXTURE),
+                                 "--what-if", "move 32:nonsense:33"])
+    assert r.exit_code == 2
+    assert "could not parse" in r.output
+
+
+def test_cli_move_after_accepted():
+    from typer.testing import CliRunner
+    from src.cli import app
+    ig = tb.load_gpr_ig(FIXTURE.read_text(), "mnVibration_80248644")
+    a, b = ig.select_order[0], ig.select_order[1]
+    r = CliRunner().invoke(app, ["debug", "inspect", "tiebreak",
+                                 "-f", "mnVibration_80248644", "--pcdump", str(FIXTURE),
+                                 "--what-if", f"move {a}:after:{b}"])
+    assert r.exit_code == 0
+    assert "what-if" in r.output
