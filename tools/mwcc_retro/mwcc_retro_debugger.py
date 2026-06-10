@@ -12,11 +12,12 @@ file and injects our config via the `-ex py ...` line.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import shlex
-import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 try:
@@ -88,18 +89,23 @@ def _patch_elabel(cad):
     cad.MwccENode.load = staticmethod(safe_load)
 
 
-def _free_port(preferred: int) -> int:
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+# retrowin32's gdb-stub port is hardcoded to 9001 (cli/src/debugger.rs:881);
+# there is no --gdb-port flag. Serialize concurrent sessions on a lockfile so
+# parallel agents don't collide on the single port.
+GDB_PORT = 9001
+
+
+@contextlib.contextmanager
+def _port_lock():
+    import fcntl
+    lock_path = Path(os.environ.get("TMPDIR", "/tmp")) / "mwcc_retro_9001.lock"
+    f = open(lock_path, "w")
     try:
-        s.bind(("127.0.0.1", preferred))
-        s.close()
-        return preferred
-    except OSError:
-        s2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s2.bind(("127.0.0.1", 0))
-        port = s2.getsockname()[1]
-        s2.close()
-        return port
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(f, fcntl.LOCK_UN)
+        f.close()
 
 
 # ---- gdb-side entry (runs inside gdb) ----
@@ -175,26 +181,33 @@ def main():
     a = ap.parse_args()
 
     os.makedirs(a.out, exist_ok=True)
-    port = _free_port(int(os.environ.get("RETRO_PORT", "9001")))
 
-    emu = [a.emulator, "--gdb-stub", f"--gdb-port={port}", *shlex.split(a.args)]
-    # NOTE: confirm retrowin32's actual port flag in P0; if it only supports a
-    # fixed 9001, drop --gdb-port and serialize via a lockfile instead.
+    # retrowin32 takes the mwcc command as a positional greedy cmdline after
+    # --gdb-stub; the gdb port is hardcoded to 9001 (no --gdb-port flag).
+    emu = [a.emulator, "--gdb-stub", *shlex.split(a.args)]
     env = dict(os.environ, RETRO_TABLE=a.table, RETRO_OUT=a.out,
-               RETRO_FN=a.fn, RETRO_PHASES=a.phases, RETRO_PORT=str(port))
+               RETRO_FN=a.fn, RETRO_PHASES=a.phases, RETRO_PORT=str(GDB_PORT))
     gdb_cmd = [a.gdb, "-batch", "-nx", "-ex",
                "py import runpy; runpy.run_path(r'%s', run_name='__gdb__')" % __file__,
                ]
-    emu_proc = subprocess.Popen(emu)
-    try:
-        subprocess.run(gdb_cmd, check=True, env=env)
-    finally:
-        if emu_proc.poll() is None:
-            emu_proc.terminate()
-            try:
-                emu_proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                emu_proc.kill()
+    # Hold the lock across the whole emu+gdb session: the fixed port 9001 means
+    # only one retro session can run at a time.
+    with _port_lock():
+        emu_proc = subprocess.Popen(emu)
+        try:
+            # Give retrowin32 a beat to start listening. Do NOT pre-connect to
+            # poll readiness: wait_for_gdb_connection accepts exactly one socket,
+            # so a probe connection steals gdb's slot. A short sleep is enough;
+            # gdb is the only connector.
+            time.sleep(1.5)
+            subprocess.run(gdb_cmd, check=True, env=env)
+        finally:
+            if emu_proc.poll() is None:
+                emu_proc.terminate()
+                try:
+                    emu_proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    emu_proc.kill()
 
 
 if __name__ == "__main__":

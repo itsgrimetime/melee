@@ -51,8 +51,27 @@ def _clone_pinned(repo: str, branch: str | None, pin: str, dest: Path) -> None:
         raise SetupError(f"{repo}: HEAD {head} != pin {pin} (pin unfetchable?)")
 
 
+def _cargo_target_dir(repo_dir: Path) -> Path:
+    """Resolve cargo's real target directory for repo_dir.
+
+    Cannot assume `repo_dir/target`: the melee repo's .cargo/config.toml sets
+    `[build] target-dir = "build/cargo"`, which redirects every cargo build
+    under the tree. Ask cargo directly; fall back to repo_dir/target.
+    """
+    import json
+    try:
+        out = _run(["cargo", "metadata", "--no-deps", "--format-version", "1"],
+                   cwd=repo_dir)
+        td = json.loads(out).get("target_directory")
+        if td:
+            return Path(td)
+    except (SetupError, json.JSONDecodeError, KeyError):
+        pass
+    return repo_dir / "target"
+
+
 def _retrowin32_binary(repo_dir: Path) -> Path:
-    return repo_dir / "target" / "lto" / "retrowin32"
+    return _cargo_target_dir(repo_dir) / "lto" / "retrowin32"
 
 
 def ensure(force: bool = False) -> SetupResult:
