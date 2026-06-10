@@ -21,6 +21,10 @@ from dataclasses import dataclass, field
 _PHASE_RE = re.compile(r"^Dumping function .+? after (?P<phase>.+?)\s*$")
 _PASS_RE = re.compile(r"^Dumps for pass=(?P<n>\d+)\s*$")
 _NODE_RE = re.compile(r"^\s*(?P<idx>\d+):\s")
+# An IROLinear `Operand <name>` line names a leaf: a source local, a synthesized
+# front-end temp (temp_rN / var_rN), or a data symbol. Integer-constant operands
+# (e.g. `Operand 44`) are excluded by requiring a leading letter/underscore.
+_OPERAND_RE = re.compile(r"\bOperand (?P<name>[A-Za-z_][A-Za-z0-9_]*)")
 
 
 def slug(phase: str) -> str:
@@ -63,6 +67,49 @@ def parse_phases(text: str) -> list[Phase]:
     return phases
 
 
+@dataclass
+class CreatedName:
+    name: str
+    kind: str              # "temp" | "var" | "local" | "symbol"
+    order: int             # first-appearance order across the whole trace
+    first_phase: str       # phase whose dump first names it
+    first_pass_iter: int | None
+
+
+def _classify_name(name: str) -> str:
+    if name.startswith("temp_"):
+        return "temp"
+    if name.startswith("var_"):
+        return "var"
+    # Heuristic: an address-suffixed identifier (Foo_804D6C28) is a data/global
+    # symbol; a bare lowercase/underscore identifier is a source local.
+    if re.search(r"_[0-9A-Fa-f]{6,}$", name):
+        return "symbol"
+    return "local"
+
+
+def creation_order(text: str) -> list[CreatedName]:
+    """Timeline of named IR leaves (front-end temps/vars + source locals/symbols)
+    in the order they FIRST appear across the trace, each annotated with the
+    phase that introduced it.
+
+    Why named operands and not node indices: flowgraph node indices are
+    renumbered in every per-phase dump, so they are not stable across phases;
+    the `temp_rN`/`var_rN` names ARE stable and are the front-end's synthesized
+    temporaries — the creation-order signal upstream of back-end vreg/ig_idx
+    ordering (see docs reverse-compiler-feasibility)."""
+    seen: dict[str, CreatedName] = {}
+    for p in parse_phases(text):
+        for line in p.body.splitlines():
+            for m in _OPERAND_RE.finditer(line):
+                name = m.group("name")
+                if name not in seen:
+                    seen[name] = CreatedName(
+                        name=name, kind=_classify_name(name), order=len(seen),
+                        first_phase=p.phase, first_pass_iter=p.pass_iter)
+    return list(seen.values())
+
+
 def split_phase_files(text: str, out_dir) -> list[str]:
     from pathlib import Path
 
@@ -78,7 +125,7 @@ def split_phase_files(text: str, out_dir) -> list[str]:
 
 def build_summary(text: str) -> str:
     phases = parse_phases(text)
-    out: list[str] = ["IRO pass sequence (temp/node ledger v1):", ""]
+    out: list[str] = ["IRO pass sequence (node ledger v1):", ""]
     prev: set[int] | None = None
     prev_name = None
     for n, p in enumerate(phases):
@@ -93,4 +140,16 @@ def build_summary(text: str) -> str:
                 out.append(f"     removed: {removed} (vs {prev_name})")
         prev = p.node_indices
         prev_name = p.phase
+
+    created = creation_order(text)
+    out += ["", "Named-leaf creation order (temps/vars/locals/symbols):", ""]
+    for c in created:
+        tag = f"pass={c.first_pass_iter}" if c.first_pass_iter is not None else "pre-loop"
+        out.append(f"  #{c.order:02d} {c.name:24} [{c.kind}] first seen after "
+                   f"{c.first_phase} ({tag})")
+    # Synthesized temps in their creation order = the front-end materialization
+    # sequence upstream of back-end vreg/ig_idx ordering.
+    synth = [c.name for c in created if c.kind in ("temp", "var")]
+    if synth:
+        out += ["", f"Synthesized-temp creation sequence: {' -> '.join(synth)}"]
     return "\n".join(out) + "\n"
