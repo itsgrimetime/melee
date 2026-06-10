@@ -304,7 +304,6 @@ def _enable_frontend_tracing(gdb, cad, table, out_dir, fn):
     fopen_va = e["fopen"]["va"]
     copt = e["copt_debug_byte"]
     sf_push = e["iro_starting_function_push"]["va"]
-    fname_ptr = e["iro_function_name_ptr"]["va"]
 
     inf = gdb.selected_inferior()
     rd = lambda a, n: bytes(inf.read_memory(a, n))
@@ -313,29 +312,14 @@ def _enable_frontend_tracing(gdb, cad, table, out_dir, fn):
     # scratch gap and collide with the staged mode string); host copies it out.
     out_path = _TRACE_TMP
 
-    def current_fn_name():
-        fnobj = _struct.unpack("<I", rd(fname_ptr, 4))[0]
-        if not fnobj:
-            return None
-        namep = _struct.unpack("<I", rd(fnobj + 0xA, 4))[0]  # ObjObject->name
-        if not namep:
-            return None
-        out = bytearray()
-        a = namep + 0xA  # HashNameNode->name string
-        for _ in range(256):
-            c = rd(a, 1)
-            if c == b"\x00":
-                break
-            out += c
-            a += 1
-        return out.decode("latin-1")
-
-    state = {"filep": 0, "ready": False, "aborted": False}
-
-    def set_pcfile(on):
-        wr(pcfile, _struct.pack("<I", state["filep"] if on else 0))
+    state = {"ready": False, "aborted": False}
 
     def one_time_setup():
+        # Enable the compiler's own IRO dump machinery GLOBALLY (all functions),
+        # once, at the first IRO breakpoint (CRT is up). Per-function isolation
+        # is done host-side by filtering the trace to the target function — far
+        # more robust than reading the FunctionName global at IRO-entry, which is
+        # stale for some functions (#546).
         cur = rd(je_va, len(je_from))
         if cur != je_from:
             print(f"[retro] ABORT: je guard {je_va:#x}={cur.hex()} != "
@@ -351,33 +335,26 @@ def _enable_frontend_tracing(gdb, cad, table, out_dir, fn):
             print("[retro] ABORT: fopen returned NULL")
             state["aborted"] = True
             return
-        state["filep"] = filep
         wr(dbg_flag, b"\x01")
         wr(dbg_guard, b"\x01\x00\x00\x00")
         wr(copt["va"], bytes.fromhex(copt["patch_to"]))
+        wr(pcfile, _struct.pack("<I", filep))  # on for every function
         # All writes land in the emulated inferior only (retrowin32 maps the exe
         # read-only); the process is torn down at exit, so the je-patch needs no
         # revert and the real mwcceppc.exe on disk is never modified.
         wr(je_va, je_to)
         state["ready"] = True
-        print(f"[retro] frontend tracing enabled; trace -> {out_path}")
+        print(f"[retro] frontend tracing enabled (global); trace -> {out_path}")
 
     class _Scope(gdb.Breakpoint):
         def stop(self):
             if not state["ready"] and not state["aborted"]:
                 one_time_setup()
-            if state["ready"]:
-                match = current_fn_name() == fn
-                if match:
-                    state["target_seen"] = True
-                set_pcfile(match)
-            return False  # never halt; just toggle scoping
+            return False  # never halt; one-time enable only
 
     _Scope(f"*{sf_push:#x}")
     _continue_to_exit(gdb)
-    # Honest exit-3 signal: the target function never compiled in this TU.
-    if state["ready"] and not state.get("target_seen"):
-        print(f"[retro] TARGET-NOT-SEEN: {fn}")
+    # exit-3 (target not found) is decided host-side by filtering the trace.
 
 
 # ---- host launcher (no gdb) ----

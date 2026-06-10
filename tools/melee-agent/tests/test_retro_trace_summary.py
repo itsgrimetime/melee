@@ -80,3 +80,19 @@ def test_summary_temp_ledger(tmp_path):
     summary = ts.build_summary(text)
     assert "after IRO_CommonSubs" in summary
     assert "removed" in summary.lower()
+
+
+def test_filter_to_function_isolates_target():
+    text = (
+        "Starting function alpha\n"
+        "Dumping function alpha after IRO_BuildflowGraph \nFlowgraph node 0  First=0, Last=0\n"
+        "Starting function beta\n"
+        "Dumping function beta after IRO_BuildflowGraph \nFlowgraph node 0  First=0, Last=0\n"
+        "Starting function gamma\n"
+        "Dumping function gamma after IRO_BuildflowGraph \nFlowgraph node 0  First=0, Last=0\n"
+    )
+    beta = ts.filter_to_function(text, "beta")
+    assert "Starting function beta" in beta
+    assert "Dumping function beta after" in beta
+    assert "alpha" not in beta and "gamma" not in beta
+    assert ts.filter_to_function(text, "missing") == ""
