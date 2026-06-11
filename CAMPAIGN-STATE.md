@@ -1586,3 +1586,124 @@ CLOSED: walker/found pair transposition without M1 is NOT achievable via dead an
    Both dn_f and rt_f have {r27,r24,r25,r29,r30} color sets on current graph — possibly both match
    target (or possibly rt_f merged/walker are swapped vs dn_f). Cannot assess without fingerprint.
 3. After M1 resolves: re-run walker/found pair (it's mechanistically free once base=r29 live).
+
+## Iteration-41 (driver 5): M1 SOLVED FROM C — u64 store mints the supplier temps; 96.87 → 97.37
+Baseline verified 96.87006 at 0b73e8ea6. Committed b7044e54e (97.36688). NEW GATES:
+neutral-or-better vs 97.37. Old-line report trigger 97.74 NOT yet crossed.
+
+### THE COMPLETED ALLOCATOR MODEL (definitive statement, supersedes iteration-40's +2 arithmetic)
+SIMPLIFY runs repeated ascending-ig sweeps; a node pushes when its CURRENT degree < k=29 at its
+scan; pops reverse pushes. The recorded degree column = degree at push. Within the finishing
+sweeps, earlier-pushed cohort mates decrement later members' scan degrees (dynamic). The MAIN-sweep
+pushes do NOT explain cohort degree differences across graphs — the cohort's listed degrees carry
+edges from entry-region webs REGARDLESS of those webs' own sweep fate:
+- BASELINE suppliers identified (dump_baseline): ig184 (r0, deg 2, nIntfr 12) + ig181 (r4, deg 2,
+  nIntfr 10) — tiny VOLATILE-colored webs popping mid-pack (iters 256-259), both interfering with
+  sorted(177) + the whole cohort. They are the u64 conversion temps of the Menu_GetAllInputs inline
+  (`buttons = (u64)(u32 call result)` — the pair-half value webs). The hi-zero half coalesced into
+  the old zero web (ig180→98 alias).
+- Baseline vs field-shape: EVERY cohort member's listed degree = exactly +2 in baseline (uniform).
+  Suppliers do NOT need cohort survival, do NOT need ig > sorted — they need to be class-0 webs
+  live in the ENTRY WINDOW (where the whole cohort is simultaneously live).
+- Deferral: sorted defers when its sweep-2 scan degree (= listed) reaches 27-with-suppliers
+  (empirically: listed 27 ⟹ deferred past input/base; listed 25 ⟹ eligible).
+
+### TASK 1 — the creation-point probe: BOTH DIRECTIONS DEAD (prediction held)
+- Prediction (written pre-build): creation-order swap cannot change sorted's accounting (suppliers
+  stay 2; sorted scans first regardless). Only relabeling possible.
+- data/input statement swap: predicted-regression WITHOUT build (data's lwz pair sits pre-call in
+  BOTH builds at +020/+024; loads cannot hoist across calls ⟹ moving the call above data's decl
+  breaks the head). Not built.
+- bp-pointer pre-call spelling (`s32 *bp = (s32*)&mn_804A04F0.buttons;` + stores via bp): NOT
+  propagated (unlike the fc/fr hovered-pointer case — entry pointer decls SURVIVE IRO) — the base
+  materialization moved pre-call → head schedule broken → 83.06 ✗ REVERTED.
+- VERDICT: creation order and schedule position are mutually locked for the entry trio from BOTH
+  sides (Option B proved sorted's side iteration-38; bp proves base's side). The +030/+034 emission
+  order is M1-COUPLED and auto-resolved under V2 (see below) — never was an independent lever.
+
+### TASK 2 — THE M1 LEVER FOUND AND COMMITTED (the session headline)
+Ladder (all retail-metered):
+- D1 `if (((u64)input) & 0x10)`: deferral FIRES in dump (front 54,176,180,178; sorted deg 27;
+  n_class_regs 467→475) but the u64 test lowers as a real pair test (li hi-zero + li r3,16 ...)
+  AND the hi-zero web joins the front (pop 4, steals r27, shifts B-pair/megaweb/gobj down one).
+  Retail 95.13 ✗ reverted.
+- V1 `count2 = (s32)((mn_804A04F0.buttons = input) >> 32)`: the assignment-expression-pair >>32
+  does NOT fold — __shr2u libcall inline at +040..+058 (+5 instrs) — door 2's death mode applies
+  to pair-temps too. BUT the M1 head went byte-identical (sorted r30 ✓ base r29 ✓ input r28 ✓)
+  and 96.55 total — M1's gains absorbed nearly the whole libcall. ✗ reverted.
+- V2 `mn_804A04F0.buttons = input;  count2 = 0;` — COMMITTED b7044e54e, 96.87 → 97.37:
+  - The plain u64 field store zero-extends u32→u64, minting the SAME pair temps the old inline had
+    (the baseline ig184/181 profile — volatile-class, zero extra instructions).
+  - Sorted defers naturally: front = 54(data,r31), 175(sorted,r30), 180(base,r29), 177(input,r28)
+    — target colors, byte-identical head through +044, +030/+034 emission order auto-resolved.
+  - Front tail CLEAN (B-pair r27/r26/r26/r26, megaweb r25, gobj r24 — no D1-style pollution).
+  - FREE FIX: the ternary/entering_menu zero-cluster sites now read the live r23 zero-temp web
+    (the hi-zero absorbed i + serves the cluster, old-baseline-style) — the +25c li, +39c b, +3a0
+    li inserts are GONE. Line delta 6 → 3.
+  - V2b (count2=0 first): byte-identical. V3 (u64 store + def-form [0] re-store): 97.23 ✗ reverted.
+- NEW FORCE-ORACLE IDS (V2 graph): data=54, sorted=175, base=180, input=177.
+- Orchestrator sub-answers: (a) the cluster zeros were per-site fresh r0 li's pre-V2 (no web to
+  extend); V2 dissolved the question — they now ride the zero-temp web. (b) web-multiplicity
+  splits in nav regions cannot supply entry-window edges (wrong region — supplier profile).
+  (c) no existing web's last-use can move INTO the entry window. Both closed by the profile.
+
+### THE NEW WALL MAP (census 207 → 158 after V2)
+Top families: r27→r23 ×32 (steps-walk walkers), r23→r25 ×19 (zero-cluster reads),
+r23→r24 ×13 (0xC00-fighter/up_n window incl. count-loop), r25→r26 ×12, r23→r27 ×8 (anchors),
+r24→r25 ×7, r27→r28 ×6, r28→r25 ×5 (steps-walk p's), r28→r24 ×5, r29→r24 ×4.
+THE SINGLE DOMINANT WALL = THE COUNT2/ZERO FUSION, which now gates almost everything:
+- Ours: hi-zero TEMP web = r23 (+03c..+870, absorbed i, serves ternary/entering_menu) + count2
+  HOME = r25 (own li at +048). Target: ONE r25 web (count2's home IS the hi-zero).
+- The r23-occupancy blocks the walkers' target color ⟹ the 32-site walker family + the 4-cycles
+  + the 19-site cluster ≈ ~70 sites are ALL fusion-coupled.
+- The walker/found pair transposition (iteration-39/40 wall) was CONSUMED by this wall: the
+  found-anchor re-test on the V2 graph (the never-tested M1+anchor composition) = 97.32 ✗
+  reverted — anchoring cannot free r23 from the zero web.
+- Doors measured dead ON THIS GRAPH: V1 (>>32 pair-temp = __shr2u), V3 (def-form re-store of hi),
+  plus the historical set (read-back lwz, comma shield, halves stores, count2-read spellings
+  const-prop). The merge itself is class-refused (temp-only same-value zero coalescing) with
+  overlapping ranges (+048 li vs +03c..+870 temp). No C door found; per policy: not found with
+  spellings tried, mechanism = class-refusal + range-overlap + const-prop triangle.
+
+### TASK 3 — rt_f re-read on the V2 graph (fingerprints unnecessary — interferer-set read)
+- rt_f family (via ig38's list): ig87=r23[ROOT], ig79=r24, ig75=r25, ig74=r27, ig67=r28.
+  dn_f family (via ig40's list): ig86=r23[ROOT], ig78=r24, ig65=r25, ig72=r27, ig56=r28.
+- The up_f/lf_f FIND arms are now FULLY TARGET-COLORED (windows byte-equal mod the lf-wrap instr:
+  cur=r23, found=r24, p=r25, sorted=r30).
+- The rt_f STEPS ring (asm windows +9b8..+a18 T / +9c4..+a24 C) = clean 4-CYCLE:
+  ours (merged=r25, walker=r27, p=r28, anchor=r23) vs target (merged=r28, walker=r23, p=r25,
+  anchor=r27). Pivot = walker wants r23 (zero-web-occupied) ⟹ FUSION-COUPLED, not independently
+  fixable. The iteration-36/37 rt_f mechanism (band/empty-slot window) is OBSOLETE on this graph.
+
+### TASK 4 — Δ census: 6 → 3 via V2; remaining structurals
+Closed by V2: +25c li, +39c b, +3a0 li (ternary/entering_menu cluster — target shape exact).
+Remaining Δ3 multiset: {+048 li r25 (count2's own init — THE fusion debt), lhzu pair (+168
+addi+lhz vs lhzu — banked wall), fc-head +17c/+180 copies (lhzu-coupled)} and ours-MISSING
+T+848 mr r24,r25 (i=count2 init — ours' i absorbed into the zero web, one FEWER instr).
+Positional (non-Δ): +448-vs-+498 arg-copy (volatile-pick, no lever in 3 sessions), +68c-vs-+698
+addi (lf_n region one-slot).
+- lf-wraps (+6dc/+abc clrlwi-vs-mr, 2 replace-sites): THIRD-graph re-roll of the helper-wide
+  `return (u8) cur;` = 97.34 ✗ reverted. Mechanism sharpened: target truncates ONLY the srawi-
+  derived (lf) wraps; up's clrlwi-derived cur does NOT fold the redundant helper-cast across the
+  inline boundary (no IRO cast-CSE through inline copies). A per-arm differentiator from C remains
+  unfound (helper split = source duplication, untested).
+
+### State after iteration-41: match 97.37, Δ3, census 158. Tree clean at b7044e54e.
+### Wall inventory:
+1. COUNT2/ZERO FUSION (the dominant wall, ~70 coupled sites + Δ1): count2's home-init must BE the
+   u64 hi-zero; all known C doors measured dead (V1/V3 this graph + historical). The walker family,
+   steps 4-cycles, zero-cluster, pair transposition, and T+848 mr all hang off it.
+2. lhzu/fr (+168 + fc-head copies, Δ2-equivalent): unchanged, banked.
+3. lf-wraps (2 sites): 3 graphs, 3 negative rolls of the cast variant; needs a new mechanism class.
+4. Volatile-pick positionals (+448/+498, +68c/+698): characterized, no lever.
+### Driver-6 entry points:
+1. The fusion wall is THE prize (~+2pp if it cracks → ≈99+). Untested directions: (i) helper-split
+   the lf/up Prev callers so lf's wrap truncation comes from a DEDICATED inline (also closes the
+   lf-wraps) — does NOT touch the fusion but is the only non-fusion family left; (ii) for the
+   fusion itself: hunt a spelling where count2's def reads the STORED buttons-hi through a path
+   IRO folds to a register (e.g. struct-copy forms, union typing of the buttons pair) — untested;
+   (iii) micro: move count2's decl-init `= 0` to the nav-fighter block head (kills +048 li,
+   plants one at +84c-ish where target has mr — net Δ0 but merges 2 diff regions into 1 replace).
+2. Verify count2's compares stayed r25-target after any fusion attempt (they are currently ✓).
+3. The +84c window: ours has NO i-init instr (absorbed); target mr r24,r25. Any count2-def change
+   re-rolls this site — meter it together with (iii).
