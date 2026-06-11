@@ -936,6 +936,36 @@ loop:
     return (u8) found;
 }
 
+static inline s32 mnDiagram_FindPrevNameWrap(s32 cur)
+{
+    s32 found = cur;
+loop:
+    found--;
+    if (found < 0) {
+        return (u8) cur;
+    }
+    if (GetNameText(found & 0xFF) == NULL) {
+        goto loop;
+    }
+    return (u8) found;
+}
+
+static inline s32 mnDiagram_FindPrevFighterWrap(u8* sorted, s32 cur)
+{
+    u8* p = sorted + cur;
+    s32 found = cur;
+loop:
+    found--;
+    p--;
+    if (found < 0) {
+        return (u8) cur;
+    }
+    if (mn_IsFighterUnlocked(*p) == 0) {
+        goto loop;
+    }
+    return (u8) found;
+}
+
 static inline u8 mnDiagram_FindNextName(s32 cur)
 {
     s32 found = cur;
@@ -1323,7 +1353,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       if (count > 7)
       {
           cur = data->name_cursor_pos >> 8;
-          found = (u8) mnDiagram_FindPrevName(cur);
+          found = (u8) mnDiagram_FindPrevNameWrap(cur);
           if (cur != found) {
               lbAudioAx_80024030(2);
               data->name_cursor_pos =
@@ -1472,7 +1502,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
         }
         if (count2 > 7) {
             cur = data->fighter_cursor_pos >> 8;
-            found = (u8) mnDiagram_FindPrevFighter(sorted, cur);
+            found = (u8) mnDiagram_FindPrevFighterWrap(sorted, cur);
             if (cur != found) {
                 lbAudioAx_80024030(2);
                 data->fighter_cursor_pos =
