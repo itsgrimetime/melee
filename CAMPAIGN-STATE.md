@@ -648,3 +648,36 @@ collapses (0.17-0.18) on these big block moves; use the skeleton aligner for tru
 ### Open (unchanged): lf-wrap pair (+6dc/+abc), +448/+48c, +68c, nr one-add shift.
 ### Iteration-28 entry: re-apply the nc/nr recipe (97.16 floor), then hunt the fc
 cascade (+178/+17c) and the nr add-shift to clear the gate; the lhzu site-flip last.
+
+## Iteration-28: recipe re-applied + cascade DIAGNOSED — banked (blocker named, no commit)
+All gates respected; recipe nets 97.16 < 97.75 in every configuration. 4 probes used.
+
+### Cascade diagnosis (the headline)
+Region-bucketed rename sites, committed-baseline vs recipe (skeleton aligner):
+  nc/nr 37 -> 16 (-21 ✓ the recipe WORKS in its region), fc/fr 48 = 48,
+  0x20/0xC0 15 = 15, nav-name 41 -> 60 (+19 ✗), nav-fighter 67 -> 90 (+23 ✗).
+  Total 208 -> 229.
+**BLOCKER: the nc/nr inline expansion changes the IRO @-temp COUNT upstream of the
+nav arms; every downstream @-temp renumbers, re-rolling the nav-pool coloring that
+the campaign tuned across iterations 1-19. The fix and the damage are coupled through
+the temp numbering.** ⟹ The recipe can only land together with a nav re-tune on the
+post-recipe numbering (iteration-29 program: apply recipe, re-run the nav-arm lever
+hunt — decl-order, force-iter oracle, rename census — ON THAT GRAPH).
+
+### Probes measured this round (all reverted)
+1. Recipe re-applied exactly: 97.16 reproduced (frame -128 ✓, +90/+a0/+a4 closed ✓).
+2. Explicit `u16* hov = &mn_804A04F0.hovered_selection` in fc/fr (lhzu hunt): IRO
+   propagates the pointer away — BYTE-IDENTICAL output. The lhzu needs the allocator
+   to place &hovered IN r29 (base dies at the load, the update feeds fr's read);
+   pointer-form C is normalized before the backend ever chooses. Same wall class as
+   count2-fusion doors. The fc-head +178/+17c copies and the lhzu remain
+   allocation-coupled (the r29-kill timing): NOT C-visible this round.
+3. Inline-local decl reorder (idx/remaining swap in GetVisibleNameFrom): ZERO effect —
+   inline locals are IRO-renamed; their decl order does not survive to numbering.
+4. fc-head accounting (exact): ours +3 lines = {+178 addi, +17c mr (truncation-to-home
+   copies; absent in the all-soup baseline = pressure artifact), +168 addi+lhz vs
+   lhzu (-1)}. Target's lhzu updates r29 INTO &hovered and fr's `row2 = hovered>>8`
+   reads 0(r29) — the original shared the pointer across fc/fr in the base register.
+
+### New front (recipe graph): 57,179,184,181,100(megaweb),41,39,38,37,32 — same
+shape, megaweb=ig100, same picks; order family unchanged (the +31 stays banked).
