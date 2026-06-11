@@ -1108,8 +1108,9 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
     proc->flags_3 = HSD_GObj_804D783C;
     if (data->is_name_mode != 0) {
         col = mn_804A04F0.hovered_selection;
+        cur = col;
         col_result = mnDiagram_GetVisibleNameFrom(
-            sorted, (u8) data->name_cursor_pos, (u8) col);
+            sorted, (u8) data->name_cursor_pos, (u8) cur);
         row = mn_804A04F0.hovered_selection >> 8;
         row_result = mnDiagram_GetVisibleNameFrom(
             sorted, data->name_cursor_pos >> 8, row);
