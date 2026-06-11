@@ -795,3 +795,105 @@ Iteration-32: (1) the dn_n blocked-set read -> the real nav-r23 blocker; (2) the
 base-web split family (nav lis/addi re-materializations — possibly a source-shape
 lever: the nav arms' mn_804A04F0 accesses vs the entry base); (3) &hovered/lhzu;
 (4) lf-wraps/nr-shift on evidence only.
+
+## Iteration-32: blocked-set reads + mn-base reconciliation (no source commits)
+Baseline verified: commit 179cedfc7, match 97.28%, opcode 98.4, delta 3. Clean tree.
+
+### TASK 1 — nav-r23 blocked-set table (the headline)
+Fingerprinted the 4 nav walk cur-webs (r14 probes; all confirmed by site asm):
+- ig73 = dn_n cur-web (srawi +794..+814, 8 sites), gets r26 at iter 353
+- ig71 = rt_n cur-web (clrlwi +5cc..+64c, 8 sites), gets r26 at iter 355
+- ig77 = dn_f cur-web (srawi +b78..+bd4, 7 sites), gets r27 at iter 349
+- ig75 = rt_f cur-web (clrlwi +994..+9f0, 7 sites), gets r27 at iter 351
+
+Blocked-set at each cur-web pop (from COLORGRAPH interferer lists):
+| web  | iter | pick | r23 blocked by | r24 blocked by   | r25 blocked by |
+|------|------|------|----------------|------------------|----------------|
+| ig73 | 353  | r26  | ig85 (r23)     | ig116,ig158 (r24)| ig80 (r25)     |
+| ig71 | 355  | r26  | ig84 (r23)     | ig124,ig162 (r24)| ig79 (r25)     |
+| ig77 | 349  | r27  | ig87 (r23)     | ig82,ig147 (r24) | ig70,ig146(r25)|
+| ig75 | 351  | r27  | ig86 (r23)     | ig81,ig153 (r24) | ig68,ig152(r25)|
+
+(r26 blocked by ig38=B-col for dn_f; r27 blocked by same-arm cur-web for each ptr-web)
+
+THE BLOCKERS IDENTIFIED (fingerprinted):
+- ig87 = dn_f ptr-web (add/addi +b7c..+bdc, pops iter 339, picks r23) [ROOT]
+- ig86 = rt_f ptr-web (add/addi +998..+9f8, pops iter 340, picks r23) [ROOT]
+- ig85 = rt_n ptr-web (add/addi +7d0..+7ec, pops iter 341, picks r23)
+- ig84 = dn_n ptr-web (add/addi +608..+624, pops iter 342, picks r23)
+
+These are the FindNext/FindPrev helper's `p` pointer inlined into the nav arms.
+They pop BEFORE the cur-webs (higher ig_idx = @-temp promoted by IRO) and pick
+r23 because r24 is blocked by ig81/82/83/83 (step-ptr second-phase webs, r24),
+r25/r26/r27 are blocked by other live webs at that moment.
+
+Cross-arm interference: dn_n ptr (ig84) has r26 blocked by rt_n cur (ig71) and
+vice-versa — cross-arm simultaneous live ranges from IRO @-temp layout.
+
+THE CHAIN CONFIRMED: ptr-webs block cur-webs from r23. For cur-webs to pick r23,
+ptr-webs must pick something other than r23. For ptr-webs to avoid r23:
+Option A: r24 must be free → step-ptr webs (ig81/82/83) must not hold r24 at
+          that moment (shorter step-ptr extents, or different coloring)
+Option B: r26 must be free → B-col (ig38) at r27 (target value) → ptr-web picks
+          r26 → cur-web picks r23.
+
+OPTION B is the cascade root: B-col (ig38) → r27 is the single upstream lever
+that propagates through all 30 cur-web sites. FORCE PROOF: forcing ig38:27
+fires the nav-r23 cascade (nav region r23 sites jump from ~8 to 33 in debug DLL).
+However, this is the SAME closed front-order family (B-col requires count2
+r25 pop position 9th; count2-home and zero-fusion are mutually exclusive from C
+as established in iterations 24-25).
+
+OPTION A: untested. The step-ptr webs (ig81/82/83 = the p++/p-- continuing after
+  find-helper return, 3-4 sites each in the steps-walk sub-phase) pick r24. If
+  their extents were shorter (ending before ptr-web pop), r24 would be free for
+  ptr-web → ptr picks r24 → cur picks r23. The C-lever: does the steps sub-phase
+  need to reuse the find-phase `p` pointer, or could a fresh variable for the
+  steps walk break the ig81/82/83 interference with ig84/85/86/87? This is the
+  NEW UNTESTED LEVER for iteration-33.
+
+dn_n cur-web r14 cross-check: force ig73:14 confirms exactly 8 sites at
++794/+798/+7a8/+7c8/+7d0/+7e0/+7e4/+814 — site attribution verified.
+
+### TASK 2 — mn-base single-web family RECONCILED (dead end)
+Target r29 web: 16 sites, +034..+740 (ends at +740, CONFIRMED from target asm).
+Ours r29 web (ig184): 16 sites, +034..+750 (ends at +750, same-structure).
+BOTH builds re-materialize the mn_804A04F0 base via lis r3 for nav arm accesses
+(+874/+93c/+a58/+b1c in target; +880/+944/+a64/+b28 in ours — positional shift
+from the 3-line delta). There is NO web-identity divergence for the mn-base.
+
+ITERATION-31 CLAIM RETRACTED: "target keeps ONE r29 base web to +b6c, 15-16
+sites" was a reconstructor artifact / incorrect reading. Target's r29 ends at
++740 same as ours. The lhzu story is consistent: lhzu at +168 advances r29 into
+the &hovered region in target (r29 = &mn_804A04F0 + 2 after +168), but target
+also re-materializes for nav arms. This is the known dead end from iteration-22
+(lhzu path widens delta 1→2, WORSE). The mn-base single-web family is CLOSED.
+
+Note: ours clobbers r29 with the lf_n ptr walk at +180 (mr r29,r0), while
+target keeps r29 as the shifted base (+1c8 reads 0(r29) = hovered via lhzu).
+This is a DIFFERENT variable occupying r29, not the mn-base web extending.
+
+### TASK 3 — micro-sites (lf-wraps, nr add-shift)
+No builds performed per TASK 3 rule (no new evidence). Status unchanged:
+- lf-wraps (+6dc/+abc): 2 hunks, iteration-26 open, no differentiator found
+- nr add-shift (+f0): 1 hunk, characterized iteration-27, no C lever found
+- +448/+494 &hovered CSE temp (r4/r5): volatile-pick artifact, no lever
+
+### TASK 4 — CAMPAIGN-STATE census/blockers update (this section)
+Standing items unchanged:
+- FRESH-LI DEBT: +48 li r25,0 (count2 init) + missing megaweb fusion (5 sites).
+  Substrate-rule re-test deferred to next committed graph change.
+- INFRASTRUCTURE GAP: extended-vector order solve needs tiebreak module rebuild.
+- Issue #550: force-iter-first silent drop for long vectors (OPEN).
+
+### State: 97.28, opcode 98.4, delta 3, hunks 18 (13 register-only), 171 rename sites.
+### NEW UNTESTED LEVER (iteration-33 candidate):
+Step-ptr decoupling: in FindNext/FindPrevFighter, the steps sub-phase (p++
+continuing walk after the find loop) currently extends the find-phase `p` pointer
+live range (creating ig81/82/83 which hold r24, blocking ig84/85/86/87 ptr-webs
+from r24, forcing ptr-webs to r23, blocking cur-webs from r23). If the steps walk
+uses a FRESH pointer variable instead of reusing `p`, ig81/82/83 would be separate
+from ig84/85/86/87, potentially freeing r24 at ptr-web pop time → Option A fires.
+REQUIRES: evidence that target's steps-walk pointer is a separate variable (check
+target asm for r24 in the steps-walk region vs the find-walk region).
+### Source file: /Users/mike/code/melee/.claude/worktrees/mndiagram-802427B4-investigation/src/melee/mn/mndiagram.c
