@@ -549,3 +549,48 @@ per-arm home writes. Restoring the inline-call dataflow:
   at the tail per iteration-17, so ONLY attempt with per-arm asm evidence first;
   (d) re-run the order-channel surrogate on the NEW graph (the inline rewrite changed
   web composition everywhere — the iteration-14/19 exhaustion verdicts are stale again).
+
+## Iteration-26: re-baseline on the new graph + prev-merge casts (97.08 -> 97.75)
+
+### TASK 1 — new-graph census
+- Structural hunks: the 12 survived the recount exactly, then build-1 closed 4 net
+  (now 8): {+a0 A-col mr-vs-clrlwi, +168 lhzu (closed), +448/+48c addi/mr pair (up_n
+  region), +68c addi pair (lf_n), +6dc/+6e0 + +abc/+ac0 lf_n/lf_f wrap mr-vs-clrlwi}.
+- Megaweb: ig118 -> **ig106** post-inline (fewer @-temps before it), SAME 15-site
+  composition (r14-verified: zero pair, +254, ternary, count++, 8 compares), same
+  front {58,175,180,177,106,41,39,38,37,32}, same picks (106->r27, want r25).
+- Register residual 208 operand sites; top families unchanged (r24->r25 x18,
+  r25->r26 x17, r27->r25 x16, r28->r24 x13 ...).
+
+### TASK 2 — order-solve verdict on the new graph
+force-iter-first "58,175,180,177,38,37,41,39,106,32": unforced-debug 73.50 ->
+forced 77.45 = **+31 net lines, identical to the old graph**. The front order is
+worth the same; the other ~177 lines are NOT front-order-reachable (main-phase pool
++ extents). The C-lever for the front order remains the CLOSED count2-home family.
+Full-permutation surrogate not re-run (scripts not rebuilt; front result sufficed).
+
+### TASK 3 — prev-merge casts + ptr split (committed a2bf29b41, 97.08 -> 97.75)
+- Iteration-25's s32-return failure was a MISSING CALLER CAST: the correct target
+  dataflow is helper returns s32 {wrap: `return cur;` RAW -> mr; hit: `return (u8)
+  found;` -> clrlwi} + caller merge `found = (u8) FindPrev...(...)` -> clrlwi.
+  Closed +514/+8d8. The lf arms (srawi-cur) flip the other way (target truncates
+  their wrap; `return (u8) cur` re-truncates the up arms and nets WORSE 97.72) —
+  2 one-instr wrap hunks accepted.
+- dn_n/rt_n steps-walk `ptr = sorted + cur; ptr = ptr + 0x1C;` two-statement split
+  (nc-arm precedent) fixed the 3 addi association/slot shifts.
+- +a0 A-col: re-read-field lever tried (`ptr = sorted + ((u8) data->name_cursor_pos)`)
+  -> 97.57 WORSE, reverted. Site stays open: ours clrlwi r0 + mr-to-home vs target
+  clrlwi-into-home; the home-vs-temp truncation landing again.
+
+### State / gates for iteration-27
+- Match **97.75**, opcode 99.0, line delta 1 (896 vs 895), hunks 23 (8 true).
+- Gate: opcode >= 99.0 / delta <= 1 / hunks <= 23 / match >= 97.75.
+- Iteration-27 candidates: (a) THE 0x10-ARM INLINING — nc/nr/fc/fr m2c soups are
+  the existing mnDiagram_GetVisible*From inline bodies expanded (nc = 
+  GetVisibleNameCursorFrom(sorted, i, col)-shaped; loop rotation differs: inline
+  while(remaining>0) top-test vs m2c nc_test goto; the +a0/+448/+48c/+168-lhzu
+  hunks ALL live in this arm — the inline may close them the way the find-walks
+  did, INCLUDING possibly the lhzu via the inline's own pointer dataflow);
+  (b) lf-wrap 2 hunks (need a spelling that truncates lf wraps without re-truncating
+  up wraps — none found in 2 tries); (c) the register residual behind the closed
+  order family.
