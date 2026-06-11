@@ -594,3 +594,57 @@ Full-permutation surrogate not re-run (scripts not rebuilt; front result suffice
   (b) lf-wrap 2 hunks (need a spelling that truncates lf wraps without re-truncating
   up wraps — none found in 2 tries); (c) the register residual behind the closed
   order family.
+
+## Iteration-27: 0x10-arm inline restoration — nc/nr recipe PROVEN, fc/fr REFUTED, net sub-gate (reverted)
+Match unchanged 97.75 (all 5 builds < gate; best 97.16). The structural findings are
+large; iteration-28 should re-apply the nc/nr recipe and attack the fc cascade.
+
+### PROVEN: the nc/nr arms ARE mnDiagram_GetVisibleNameFrom calls (exact recipe)
+Variant selection by TAIL FORM: GetVisibleNameFrom tail = `p = sorted; p += idx;
+return p[0x1C];` = the soup's `sorted[i + 0x1C]` index re-derivation ✓ (CursorFrom's
+`return *p` pointer tail is the WRONG variant here). The recipe that reaches
+frame-match + closes +90/+a0/+a4:
+```c
+      col = mn_804A04F0.hovered_selection;                  // RAW local (not (u8))
+      col_result = mnDiagram_GetVisibleNameFrom(
+          sorted, (u8) data->name_cursor_pos, (u8) col);    // casts ON THE ARGS
+      row = mn_804A04F0.hovered_selection >> 8;
+      row_result = mnDiagram_GetVisibleNameFrom(
+          sorted, data->name_cursor_pos >> 8, row);
+```
+with PAD_STACK(64) (fc/fr still soup). Mechanics learned:
+- (u8) on the RANK arg = the target's +a0 clrlwi (m2c dropped this cast; the soup's
+  raw `col` was wrong) — closes +a0.
+- Pre-made `i` local forces an extra copy into the inline's idx (+a4 mr) — pass the
+  EXPRESSION; the truncation lands directly in the walk register (closes +a4).
+- `(u8) col` glued onto the LOCAL's load enables an unwanted lhzu fusion at +90 (see
+  below); RAW local + cast-at-arg restores target's load-then-truncate (closes +90).
+- PAD_STACK is configuration-dependent: 72 (all-soup baseline) / 64 (nc+nr inlined) /
+  56 (nc+nr+fc+fr inlined) — each form hits stwu -128 = target frame exactly.
+- Residual in this form: nr arg-load order one-add scheduling shift (+f0 block,
+  hovered-vs-name order; row-local DOES order it but one add interleaves), fc-arm
+  cascade (+178/+17c extra addi+mr — the fc soup re-shapes when nc/nr inline), pool
+  renames -> fuzzy 97.16 < gate.
+
+### THE LHZU IS REACHABLE (dead-end verdict dissolved, as predicted)
+With `(u8) col` glued to the local load, OURS emitted `lhzu` at +90 (nc arm) — the
+update-form fusion fires when the mn base r29 is dead on the path and the truncation
+chains. Target's lhzu is at +168 (fc arm) instead. The fusion is compiler-reachable
+from plain field reads; getting it at the RIGHT site = make the fc arm's first
+hovered read the fusing one (the fc arm is reached when r29's base has no later use
+on that path). Iteration-28: after re-applying nc/nr, check whether the fc soup's
+hovered read (`col = (u8) hovered` at the fc head) emits lhzu once the nc arm no
+longer competes (in cur27e it stayed addi+lhz with 2 extra instrs — the cascade
+suggests the fc arm's shape is sensitive to the nc/nr registers).
+
+### REFUTED: fc/fr are NOT GetVisibleFighterFrom calls
+Both local-form and expression-form builds produce a 7-instruction-SHORTER shape
+(888 vs 895; while-top-test rotation) than target's fc/fr windows, which have the
+SOUP's per-iteration zero-check (`+17c cmpwi / +180 bne / +184 lbzx` rank-0 path
+visible per iteration). The original fc/fr = the soup shape (or an unknown variant
+whose rotation matches it) — KEEP THE SOUP. checkdiff's opcode_similarity metric
+collapses (0.17-0.18) on these big block moves; use the skeleton aligner for truth.
+
+### Open (unchanged): lf-wrap pair (+6dc/+abc), +448/+48c, +68c, nr one-add shift.
+### Iteration-28 entry: re-apply the nc/nr recipe (97.16 floor), then hunt the fc
+cascade (+178/+17c) and the nr add-shift to clear the gate; the lhzu site-flip last.
