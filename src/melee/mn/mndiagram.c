@@ -1043,6 +1043,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
   u8 row_result;
   s32 i;
   u8 *ptr2;
+  u8 *ptr3;
   short new_var;
   u8 *sorted = mnDiagram_804A0750.sorted_fighters;
   Diagram *data = mnDiagram_804D6C10->user_data;
@@ -1211,6 +1212,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       return;
     }
     count = 0;
+    ptr3 = sorted;
     for (i = 0; i < 0x19; i++)
     {
       if (mn_IsFighterUnlocked(i) != 0)
@@ -1429,15 +1431,15 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
           if (row2 == new_var) {
               col_result4 = sorted[i];
           } else {
-              ptr2 = ptr;
+              ptr3 = ptr;
           dn_f_inner:
               i++;
 
-              ptr2++;
+              ptr3++;
               ptr++;
               if (i >= 0x19) {
                   col_result4 = 0x19;
-              } else if (mn_IsFighterUnlocked(*ptr2) != new_var) {
+              } else if (mn_IsFighterUnlocked(*ptr3) != new_var) {
                   row2--;
                   if (row2 >= new_var) {
                       goto dn_f_outer;
@@ -1497,15 +1499,15 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
             if (row2 == new_var) {
                 row_result4 = sorted[i];
             } else {
-                ptr2 = ptr;
+                ptr3 = ptr;
             rt_f_inner:
                 i++;
 
-                ptr2++;
+                ptr3++;
                 ptr++;
                 if (i >= 0x19) {
                     row_result4 = 0x19;
-                } else if (mn_IsFighterUnlocked(*ptr2) != new_var) {
+                } else if (mn_IsFighterUnlocked(*ptr3) != new_var) {
                     row2--;
                     if (row2 >= new_var) {
                         goto rt_f_outer;
