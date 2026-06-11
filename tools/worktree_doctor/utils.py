@@ -430,6 +430,8 @@ def collect_melee_agent_entrypoint_warnings(
                 )
             ]
         return [CheckResult("ok", f"melee-agent imports repo-local src.cli: {actual}")]
+    if entrypoint_uses_worktree_launcher(executable):
+        return [CheckResult("ok", f"melee-agent imports installed src.cli: {actual}")]
     return [
         CheckResult(
             "warn",
