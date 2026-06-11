@@ -1260,9 +1260,9 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
           found = (u8) cur;
         }
         else
-          if (GetNameText(found) != 0L)
+          if (GetNameText((u8) found) != 0L)
         {
-          ;
+          found = (u8) found;
         }
         else
         {
@@ -1298,9 +1298,9 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
           found = cur;
         }
         else
-          if (GetNameText(found) != 0L)
+          if (GetNameText((u8) found) != 0L)
         {
-          ;
+          found = (u8) found;
         }
         else
         {
@@ -1498,7 +1498,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
         else
           if (mn_IsFighterUnlocked(*ptr) != new_var)
         {
-          ;
+          found = (u8) found;
         }
         else
         {
@@ -1539,7 +1539,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
         else
           if (mn_IsFighterUnlocked(*ptr2) != new_var)
         {
-          ;
+          found = (u8) found;
         }
         else
         {
