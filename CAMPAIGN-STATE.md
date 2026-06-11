@@ -681,3 +681,38 @@ hunt — decl-order, force-iter oracle, rename census — ON THAT GRAPH).
 
 ### New front (recipe graph): 57,179,184,181,100(megaweb),41,39,38,37,32 — same
 shape, megaweb=ig100, same picks; order family unchanged (the +31 stays banked).
+
+## Iteration-29: RECIPE COMMITTED (orchestrator override) — new baseline 97.16
+### TASK 0 — committed bcc84d573
+Override rationale (recorded per orchestrator): the target compiled the original
+source which HAD the nc/nr inlines; the post-recipe graph is the correct substrate
+and the old baseline's nav coloring was luck on the wrong graph. Meter at commit:
+97.16, opcode 98.5, line delta 3 (898 vs 895), frame -128 EXACT, 11 true hunks
+(nc-head +90/+a0/+a4 closed). NEW GATES: neutral-or-better vs 97.16.
+
+### TASK 1 — the map on the correct graph
+(a) Nav web census (reconstructor, both sides): 46 reg-mismatched callee-save pairs,
+    29 in the nav region. THE PATTERN: top-8 nav webs (the find/steps walk cur/found
+    values in up_n/dn_n/lf_n/rt_n/up_f/dn_f/lf_f/rt_f, 4-8 sites each) are ALL
+    ours-rXX -> **target r23**. Same-extent renames (offset skew aside).
+(b) THE CHAIN: target B-col (col_result2) = r27 lives across the fc walk -> blocks
+    r27 at fc-i's pop -> fc-i goes FRESH r23 -> all nav walk webs reuse r23
+    (ascending). Ours: B-col=r26 leaves r27 free -> fc-i=r27 -> nav pool shifts up.
+    The nav-r23 family CHAINS to the front-order family (B-col r27-vs-r26).
+    BUT the forced front order alone does NOT fire the full chain: probe
+    force-iter-first "57,179,184,181,38,37,41,39,100,32" = 71.59 -> 75.67 (+32,
+    same as old graph); in the forced object fc-i took r25 and col r23 (the
+    main-phase pops have their own order needs). Full chain needs the main-phase
+    order too -> full-order surrogate on this graph = iteration-30 item.
+    The front C-lever remains the CLOSED count2-home wall.
+(c) +448/+494 (0xC00-fighter UpdateScrollArrowVisibility arg): target's &hovered CSE
+    temp picked r5 (freeing r4 for an EARLY arg copy at +448); ours picked r4 (arg
+    copy sinks to the call at +494). Volatile-pick artifact; no C lever found.
+    lf-wraps (+6dc/+abc) and nr one-add shift (+f0) unchanged, no differentiator.
+
+### Iteration-30 program
+1. Full-order surrogate (hill-climb incl. main phase) on the recipe graph — the
+   nav-r23 chain says the prize is ~50 sites if an order exists; check force-iter
+   with an EXTENDED vector (front + the fc/fr/nav @-temp pops).
+2. The fc-head +178/+17c copies + lhzu (allocation-coupled, r29-kill timing).
+3. lf-wraps, nr add-shift, +448 r4/r5 — all characterized, no lever yet.
