@@ -1707,3 +1707,12 @@ addi (lf_n region one-slot).
 2. Verify count2's compares stayed r25-target after any fusion attempt (they are currently ✓).
 3. The +84c window: ours has NO i-init instr (absorbed); target mr r24,r25. Any count2-def change
    re-rolls this site — meter it together with (iii).
+
+### Iteration-41 addendum: lf-wraps CLOSED via helper split — 97.37 → 97.49 (b12009fd0)
+The per-arm differentiator was found immediately after the state write: dedicated
+FindPrevNameWrap / FindPrevFighterWrap inlines (wrap arm `return (u8) cur;`) for the lf callers
+only. Inlines expand per call site, so the split changes nothing at the up sites. Both
++6dc/+abc clrlwi-vs-mr sites closed; Δ3 held; census family list otherwise unchanged.
+FINAL STATE: match 97.49, Δ3, tree clean at b12009fd0. Gates for driver-6: ≥ 97.49.
+Wall inventory item 3 (lf-wraps) is RESOLVED; items 1 (fusion ~70 sites), 2 (lhzu/fr),
+4 (volatile-pick positionals) stand as written.
