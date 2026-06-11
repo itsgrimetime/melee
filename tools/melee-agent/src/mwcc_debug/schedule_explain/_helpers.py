@@ -13,4 +13,5 @@ from ..asm_windows import (
 )
 from ..parser import Function, Instruction, Pass, parse_pcdump
 
+__all__ = [name for name in globals() if not name.startswith("__")]
 

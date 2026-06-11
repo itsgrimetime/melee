@@ -9,6 +9,9 @@ import pytest
 
 from src.mwcc_debug.fix_perm_compile import (
     FixResult,
+    _inject_null_define,
+    _needs_null_define,
+    fix_base_c,
     fix_compile_sh,
     fix_perm_dir,
 )
@@ -181,3 +184,115 @@ def test_fixed_script_keeps_compile_command(tmp_path: Path) -> None:
         "-DBUILD_VERSION=0", "-DVERSION_GALE01",
     ]:
         assert flag in new_text, f"flag {flag!r} missing from rewritten script"
+
+
+# ── NULL define tests ────────────────────────────────────────────────────────
+
+BASE_C_WITH_NULL_NO_DEFINE = textwrap.dedent('''\
+    #include "melee.h"
+    #pragma _permuter latedefine end
+    void fn_test(void) {
+        if (ptr == NULL) return;
+    }
+''')
+
+
+BASE_C_WITH_NULL_AND_DEFINE = textwrap.dedent('''\
+    #include "melee.h"
+    #pragma _permuter define NULL 0
+    #pragma _permuter latedefine end
+    void fn_test(void) {
+        if (ptr == NULL) return;
+    }
+''')
+
+
+BASE_C_WITHOUT_NULL = textwrap.dedent('''\
+    #include "melee.h"
+    #pragma _permuter latedefine end
+    void fn_test(void) {
+        return;
+    }
+''')
+
+
+BASE_C_WITH_NULL_NO_LATEDEFINE = textwrap.dedent('''\
+    #include "melee.h"
+    void fn_test(void) {
+        if (ptr == NULL) return;
+    }
+''')
+
+
+def test_needs_null_define_detects_missing() -> None:
+    lines = BASE_C_WITH_NULL_NO_DEFINE.splitlines()
+    assert _needs_null_define(lines) is True
+
+
+def test_needs_null_define_rejects_already_defined() -> None:
+    lines = BASE_C_WITH_NULL_AND_DEFINE.splitlines()
+    assert _needs_null_define(lines) is False
+
+
+def test_needs_null_define_rejects_no_null_usage() -> None:
+    lines = BASE_C_WITHOUT_NULL.splitlines()
+    assert _needs_null_define(lines) is False
+
+
+def test_inject_null_define_after_latedefine() -> None:
+    lines = BASE_C_WITH_NULL_NO_DEFINE.splitlines()
+    out, changed = _inject_null_define(lines)
+    assert changed is True
+    out_text = "\n".join(out)
+    assert "#pragma _permuter define NULL 0" in out_text
+    # Should appear inside the latedefine block, before its end marker.
+    late_idx = out.index("#pragma _permuter latedefine end")
+    null_idx = out.index("#pragma _permuter define NULL 0")
+    assert null_idx == late_idx - 1
+
+
+def test_inject_null_define_no_latedefine() -> None:
+    lines = BASE_C_WITH_NULL_NO_LATEDEFINE.splitlines()
+    out, changed = _inject_null_define(lines)
+    assert changed is True
+    out_text = "\n".join(out)
+    assert "#pragma _permuter define NULL 0" in out_text
+
+
+def test_inject_null_define_idempotent() -> None:
+    lines = BASE_C_WITH_NULL_AND_DEFINE.splitlines()
+    out, changed = _inject_null_define(lines)
+    assert changed is False
+
+
+def test_fix_base_c_injects_null_define(tmp_path: Path) -> None:
+    base_c = tmp_path / "base.c"
+    base_c.write_text(BASE_C_WITH_NULL_NO_DEFINE)
+    result = fix_base_c(base_c)
+    assert result.action == "fixed"
+    assert "injected #pragma _permuter define NULL 0" in result.reason
+    assert "#pragma _permuter define NULL 0" in base_c.read_text()
+
+
+def test_fix_base_c_null_define_idempotent(tmp_path: Path) -> None:
+    base_c = tmp_path / "base.c"
+    base_c.write_text(BASE_C_WITH_NULL_AND_DEFINE)
+    first = fix_base_c(base_c)
+    assert first.action == "already-fixed"
+
+
+def test_fix_base_c_both_fixes_applied(tmp_path: Path) -> None:
+    """When both Vec alias and NULL define need fixing, both are applied."""
+    base_c = tmp_path / "base.c"
+    both = (
+        "typedef struct _PermuterTemp1 Vec;\n"
+        "typedef struct _PermuterTemp1 Vec3;\n"
+        + BASE_C_WITH_NULL_NO_DEFINE
+    )
+    base_c.write_text(both)
+    result = fix_base_c(base_c)
+    assert result.action == "fixed"
+    out = base_c.read_text()
+    assert "Vec;" in out
+    assert "#pragma _permuter define NULL 0" in out
+    assert "Vec/Vec3" in result.reason and "NULL" in result.reason

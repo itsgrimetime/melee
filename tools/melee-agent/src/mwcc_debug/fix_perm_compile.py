@@ -112,11 +112,60 @@ def _patch_vec_temp_aliases(lines: list[str]) -> tuple[list[str], bool]:
     return out, changed
 
 
+_NULL_REFERENCE_RE = re.compile(r"\bNULL\b")
+_NULL_DEFINE_RE = re.compile(r"^\s*#\s*define\s+NULL\s", re.MULTILINE)
+_NULL_PERMUTER_DEFINE_RE = re.compile(r"^\s*#pragma\s+_permuter\s+define\s+NULL\s+0\s*$", re.MULTILINE)
+_LATEDEFINE_END_RE = re.compile(r"^\s*#pragma\s+_permuter\s+latedefine\s+end\s*$")
+_NULL_DEFINE_LINE = "#pragma _permuter define NULL 0"
+
+
+def _needs_null_define(lines: list[str]) -> bool:
+    """Return True if base.c uses NULL but has no definition for it."""
+    text = "\n".join(lines)
+    if not _NULL_REFERENCE_RE.search(text):
+        return False
+    return not (
+        _NULL_DEFINE_RE.search(text)
+        or _NULL_PERMUTER_DEFINE_RE.search(text)
+    )
+
+
+def _inject_null_define(lines: list[str]) -> tuple[list[str], bool]:
+    """Insert the permuter NULL define before latedefine end, or near top."""
+    if not _needs_null_define(lines):
+        return lines, False
+
+    # Insert before the first `#pragma _permuter latedefine end` line so the
+    # definition is carried in the permuter latedefine block.
+    out: list[str] = []
+    inserted = False
+    for line in lines:
+        if not inserted and _LATEDEFINE_END_RE.match(line):
+            out.append(_NULL_DEFINE_LINE)
+            inserted = True
+        out.append(line)
+
+    if not inserted:
+        # No latedefine pragma found — insert after the last #include-like /
+        # #pragma line, or at line 0 if none exist.
+        insert_at = 0
+        for idx, line in enumerate(lines):
+            if line.startswith("#"):
+                insert_at = idx + 1
+        out = list(lines)
+        out.insert(insert_at, _NULL_DEFINE_LINE)
+
+    return out, True
+
+
 def fix_base_c(base_c_path: Path) -> FixResult:
     """Repair common import.py-pruned source issues in `base.c`.
 
-    Currently fixes Vec/Vec3 aliases that point at incomplete `_PermuterTempN`
-    tags. Returns `skipped` when `base.c` is absent and `already-fixed` when no
+    Currently fixes:
+    - Vec/Vec3 aliases that point at incomplete `_PermuterTempN` tags
+    - Missing permuter NULL definition when the source references NULL
+
+    Returns `skipped` when `base.c` is absent and `already-fixed` when no
     source rewrite is needed.
     """
     if not base_c_path.exists():
@@ -127,19 +176,26 @@ def fix_base_c(base_c_path: Path) -> FixResult:
         )
 
     lines = _read_lines(base_c_path)
-    new_lines, changed = _patch_vec_temp_aliases(lines)
+    vec_lines, vec_changed = _patch_vec_temp_aliases(lines)
+    null_lines, null_changed = _inject_null_define(vec_lines)
+    changed = vec_changed or null_changed
     if not changed:
         return FixResult(
             path=base_c_path,
             action="already-fixed",
-            reason="no incomplete Vec/Vec3 permuter temp aliases found",
+            reason="no incomplete Vec/Vec3 permuter temp aliases or missing NULL define found",
         )
 
-    base_c_path.write_text("\n".join(new_lines) + "\n")
+    base_c_path.write_text("\n".join(null_lines) + "\n")
+    reasons: list[str] = []
+    if vec_changed:
+        reasons.append("defined incomplete Vec/Vec3 _PermuterTemp aliases")
+    if null_changed:
+        reasons.append("injected #pragma _permuter define NULL 0")
     return FixResult(
         path=base_c_path,
         action="fixed",
-        reason="defined incomplete Vec/Vec3 _PermuterTemp aliases",
+        reason="; ".join(reasons),
     )
 
 
@@ -300,14 +356,14 @@ def fix_perm_dir(
             reason="; ".join(r.reason for r in fixed),
         )
 
-    if compile_result.action == "already-fixed" and base_result.action in {
-        "already-fixed",
-        "skipped",
-    }:
+    all_already = all(
+        r.action in {"already-fixed", "skipped", "not-applicable"} for r in results
+    )
+    if all_already:
         return FixResult(
             path=perm_dir,
             action="already-fixed",
-            reason="compile.sh already fixed; base.c needs no source repair",
+            reason="all checked items already fixed or not applicable",
         )
 
     return compile_result

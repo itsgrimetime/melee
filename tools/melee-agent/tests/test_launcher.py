@@ -12,7 +12,7 @@ def test_console_script_points_at_worktree_resolving_launcher() -> None:
     assert 'melee-agent = "src.launcher:main"' in pyproject.read_text(encoding="utf-8")
 
 
-def test_launcher_imports_cli_from_invoking_git_worktree(tmp_path: Path) -> None:
+def test_launcher_uses_installed_package_by_default_from_git_worktree(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     local_package_root = repo / "tools" / "melee-agent"
     local_cli = local_package_root / "src" / "cli.py"
@@ -29,10 +29,10 @@ def test_launcher_imports_cli_from_invoking_git_worktree(tmp_path: Path) -> None
     installed_src = Path(__file__).resolve().parents[1]
     env = os.environ.copy()
     env["PYTHONPATH"] = str(installed_src)
+    env["MELEE_AGENT_PRINT_SRC_CLI"] = "1"
     proc = subprocess.run(
         [
             sys.executable,
-            "-S",
             "-c",
             "from src.launcher import main; raise SystemExit(main())",
         ],
@@ -44,11 +44,12 @@ def test_launcher_imports_cli_from_invoking_git_worktree(tmp_path: Path) -> None
     )
 
     assert proc.returncode == 0, proc.stderr
-    assert f"LOCAL_CLI:{local_cli.resolve()}" in proc.stdout
-    assert "using repo-local package" in proc.stderr
+    expected = installed_src / "src" / "cli" / "__init__.py"
+    assert proc.stdout.strip() == str(expected.resolve())
+    assert "using repo-local package" not in proc.stderr
 
 
-def test_launcher_print_import_path_uses_invoking_git_worktree(tmp_path: Path) -> None:
+def test_launcher_can_opt_into_repo_local_package(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     local_package_root = repo / "tools" / "melee-agent"
     local_cli = local_package_root / "src" / "cli.py"
@@ -61,10 +62,10 @@ def test_launcher_print_import_path_uses_invoking_git_worktree(tmp_path: Path) -
     env = os.environ.copy()
     env["PYTHONPATH"] = str(installed_src)
     env["MELEE_AGENT_PRINT_SRC_CLI"] = "1"
+    env["MELEE_AGENT_USE_REPO_LOCAL"] = "1"
     proc = subprocess.run(
         [
             sys.executable,
-            "-S",
             "-c",
             "from src.launcher import main; raise SystemExit(main())",
         ],
@@ -77,3 +78,4 @@ def test_launcher_print_import_path_uses_invoking_git_worktree(tmp_path: Path) -
 
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == str(local_cli.resolve())
+    assert "using repo-local package" in proc.stderr

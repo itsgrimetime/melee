@@ -224,7 +224,7 @@ def _bindings_by_virtual(source_text: str, function: str, pre_pass: Pass | None)
     if not source_text or pre_pass is None:
         return {}
     try:
-        from .symbol_bridge import list_bindings
+        from ..symbol_bridge import list_bindings
         bindings = list_bindings(source_text, function, pre_pass)
     except Exception:
         return {}

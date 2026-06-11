@@ -10850,7 +10850,7 @@ def _attempt_evidence_for_keywords(
     function: str,
     keywords: list[str],
 ) -> dict:
-    from .tracking import summarize_attempts
+    from ..tracking import summarize_attempts
 
     summary = summarize_attempts(function)
     attempts = summary.get("attempts", [])

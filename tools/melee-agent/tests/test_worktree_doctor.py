@@ -146,6 +146,34 @@ def test_collect_melee_agent_entrypoint_warnings_flags_old_same_worktree_entrypo
     assert "pip install -e" in (results[0].fix or "")
 
 
+def test_collect_melee_agent_entrypoint_warnings_accepts_installed_launcher_package(tmp_path: Path) -> None:
+    doctor_mod = load_worktree_doctor()
+    fake_agent = tmp_path / "melee-agent"
+    fake_agent.write_text(
+        "#!/usr/bin/env python\n"
+        "from src.launcher import main\n",
+        encoding="utf-8",
+    )
+    installed_cli = (
+        tmp_path
+        / "installed"
+        / "tools"
+        / "melee-agent"
+        / "src"
+        / "cli"
+        / "__init__.py"
+    ).resolve()
+
+    results = doctor_mod.collect_melee_agent_entrypoint_warnings(
+        tmp_path / "matcher-worktree",
+        fake_agent,
+        module_path=installed_cli,
+    )
+
+    assert results[0].level == "ok"
+    assert "installed src.cli" in results[0].message
+
+
 def test_fix_removes_local_exclude_that_hides_tracked_melee_agent(tmp_path: Path) -> None:
     doctor_mod = load_worktree_doctor()
     subprocess.run(["git", "init", "-b", "master"], cwd=tmp_path, check=True, capture_output=True)

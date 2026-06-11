@@ -96,6 +96,11 @@ def test_representative_grouped_command_help_works() -> None:
         assert result.exit_code == 0, (command, result.stdout)
 
 
+def test_debug_cli_lazy_imports_reference_mwcc_debug_package() -> None:
+    source = Path(debug_cli.__file__).resolve().read_text(encoding="utf-8")
+    assert "from ..mwcc_debug" not in source
+
+
 def test_indexed_struct_search_help_works() -> None:
     result = runner.invoke(
         debug_cli.debug_app,
