@@ -2120,3 +2120,88 @@ Stopped all 3 jobs. Re-bootstrapped on 2b8fc4127 source. Resubmitted:
    post-front) or unsafe (entry/0x10-arm region). Only safe-zone lifts should be built.
 4. After any commit: stop/re-bootstrap/resubmit the permuter channels (stale-base doctrine).
 5. REPORT TRIGGER: next at 98.5 (98 crossed this iteration).
+
+## Iteration-46 (driver 7): operand-flip family CLOSED by evidence; harvest lands the 0xC00-fighter
+band-lift — 98.18 → 98.45
+Baseline verified: ab1ca7e12, 98.18, Δ2, hunks 8, opcode 99.0. One source commit: 5bf6600e5 (98.45).
+
+### TASK 1 — OPERAND-FLIP GENERALIZATION: family closed at ONE site (evidence, zero builds)
+Extraction: all 85 compare+branch pairs from both sides (cmpwi/cmpw/cmplwi/clrlwi./srawi./rlwinm.
++ branch), pairwise aligned, register-wildcarded. **85/85 FORMS MATCH.** The 1575 commit closed
+the only form-divergent site. THE MECHANISM, precise: `row3 > 0` (literal-RHS gt) emitted
+`srawi + cmpwi + ble` (no record-form fold); `0 < row3` (const-LHS lt) folds to `srawi. + ble`
+(record form, one fewer instruction). The sibling arms never diverged because: fighter arms
+compare `> new_var` (const-propped 0) which folds naturally; the (u8)-truncation arms fold via
+`clrlwi.`; the `< 9`/`< 6` arms emit cmpwi+bge both sides. CLASS WRITEUP: the operand-flip lever
+applies ONLY where ours emits compare-against-0 as a separate cmpwi after a foldable defining op
+(shift/truncation) while target shows the record form — grep signature: `srawi rX` or `clrlwi rX`
+immediately followed by `cmpwi rX,0` in ours, record-form in target. No remaining sites in this
+function. The +0.25pp of iteration-45 was STRUCTURAL (instruction elimination + form alignment),
+not register cascade — the register census was flat at 101 before/after.
+
+### TASK 1b — dn_n/rt_n found↔row2 cycle: fingerprinted, 3 builds, all neutral-reverted
+Fingerprint map (r14-r17 probes, 6 dumps): **ig124 = dn_n found-merge** ({+5f8 clrlwi, +5fc cmpw,
++66c or}, pop 303, ours r24, tgt r27); **ig69 = dn_n row2** (li 10/addic., pop 355, ours r27,
+tgt r24); ig70 = rt_n row2 (+7d0); ig72 = rt_f row2 (+bb4); ig71 = dn_f row2 (inferred);
+ig129 = up_n found (+510); ig145 = rt_f found (+b80); ig140 = fc/fr &hovered (+16c);
+ig74 = dn_n anchor (r26 ✓ matches); ig79 = dn_f anchor; ig82 = 0xC00 count-loop walker;
+ig73 = fr walker-ptr; ig68 = rt_f steps-ptr; ig76 = fr-soup ptr.
+THE TRANSPOSITION MECHANISM: found-merge pops 52 iters BEFORE row2 (303 vs 355) → takes r24
+(ascending reuse; r23 blocked by the zero web +03c..+870) → row2 finds r24 taken → r27. Target
+pops row2-equivalent first (r24) → found takes r27. Builds, all byte-neutral, reverted:
+1. `row2 = cur;` same-path anchor (lf_n, before found's first use): erased (dead-store elim).
+2. `row2 = count;` path-disjoint anchor (0xC00-name branch, ptr3-precedent form): ALSO inert —
+   the dead-anchor band tool does NOT work for row2 on this graph; row2's per-arm steps webs
+   are TEMP-BANDED (igs 69-72), not home-banded — their numbers don't follow row2's first-use.
+3. `found2 = FindNextName(cur); found = found2;` intermediate (coder2-1605 shape): copy-propagated,
+   byte-identical.
+NUMBERING CONTRADICTION RECORDED: found(first-use 1285) promoted before row2(1310) should give
+found LOWER igs (pop later) — observed ig124 > ig69 (pops first). The first-use→band model does
+NOT predict these temp igs. Not found with spellings tried; mechanism = temp-band pop-order
+transposition, numbering not source-predictable. Banked as permuter-territory (~12 sites dn_n+rt_n).
+
+### TASK 2 — HARVEST: dead channels fixed, then the 1365 win (98.18 → 98.45)
+- ALL THREE iteration-45 channels were DEAD since submission (~24h, zero candidates): the
+  re-bootstrap had dropped `#pragma _permuter define NULL 0` → "Unable to compile base.c".
+  **Issue #558 filed** (second occurrence of this death mode). PERMANENT WORKAROUND IN THE
+  DOCTRINE: after EVERY bootstrap, re-add the NULL pragma to base.c line 2 and verify
+  `./permuter.py <dir> --best-only -j1` prints a base score before submitting.
+- Channels fixed + resubmitted (~45 min run): coder2 best 1350, coder3 best 1365, coder1 1465.
+- **COMMITTED 5bf6600e5: coder3 output-1365-1** — `new_var2 = count` band-lift in the
+  0xC00-FIGHTER clamp block (all uses substituted; decl between row2/row3). 98.18 → 98.45,
+  opcode 99.1, Δ2 held, hunks 9 (alignment split), count2/front guards intact ✓. SIDE WIN: the
+  +448 arg-copy (volatile-pick, "no lever in 3 sessions") closed structurally — ours now hoists
+  the UpdateScrollArrowVisibility arg to target's early-addi shape. NOTE: iteration-45's failed
+  `new_var3 = count` was the 0xC00-NAME block; the winner is the FIGHTER block — different webs.
+- Triage rejections this pass: coder3-1365-2 (relocates fc_inner: label into the 0xC0 arm —
+  SEMANTIC BREAK), coder3-1475 + coder2-1585-class (inline_fn no-op wrappers), coder2-1475
+  (`(double) 0` loop-init junk), coder1-1465 (unreachable-code anchor, dominated).
+- Metered-neutral on the new base: coder2-1350's `new_var3 = sorted` rt_n lift (copy-propagated,
+  byte-identical standalone); 1350's remaining delta vs 1365 (~15 pts) = its partial-substitution
+  count form + combined assignment — UNTESTED as a trio, low value, left for channels to re-find.
+- STALE-BASE DOCTRINE EXECUTED: all stopped; re-bootstrapped from 5bf6600e5 (+NULL pragma,
+  base verified 1365); resubmitted coder2 `mnDiagram_InputProc-coder2-20260611-043921`,
+  coder3 `...-coder3-20260611-043931`, coder1 `...-coder1-20260611-043941`; coder3 verified
+  iterating on base 1365.
+
+### Census after 5bf6600e5 (102 CS-sites — flat; the wins are STRUCTURAL)
+Structural pairs: T-only 13→8, C-only 15→10 (the +440-+494 0xC00 clamp cluster closed).
+Remaining structural: nr-head order (+0f0-0fc, known open), lhzu cluster (+164-174, walled),
+fusion Δ members (+048 li / T+848 mr, walled).
+Families: r24→r23 ×18, r25→r23 ×11, r25→r28 ×9, r23→r25 ×8, r25→r24 ×7, r28→r27 ×6,
+r26→r23 ×6, r27→r24 ×6, r24→r27 ×6 ...
+Regions: fc/fr 25, 0xC00 16, dn_f 10, nc 7, B-arm 7, 0xC0 6, dn_n 6, rt_n 6, lf_n 4,
+cntloop 4, rt_f 4, up_n 3, head 2, nr 2.
+WALLS (updated): (1) fusion/zero ~11+cascades (B-arm/0xC0 d-ptr r25/r26→r23 = ascending-reuse
+of ours' early r23 zero dispense — confirmed pop-order cascade, not independently fixable) + Δ1;
+(2) lhzu/fr Δ1 + fc/fr 25; (3) temp-band pop-order cycles (dn_n/rt_n/dn_f/nc/up_n/lf_n/rt_f
+~40) — the ig124-class, permuter-territory; (4) nr-head order 2.
+
+### Driver-8 entry points
+1. HARVEST (primary lever source — 2 wins in 2 live harvests): fetch the 0438xx jobs at session
+   start. Gate ≥98.45. After commit: doctrine + **NULL-pragma re-add + local compile verify**.
+2. The temp-band cycles are the permuter's domain — do NOT build anchors/intermediates for them
+   (3 neutral builds this iteration; mechanisms recorded above).
+3. The fingerprint map above is current for graph 5bf6600e5 (shifts with any commit).
+4. 1350's partial-substitution count form: optional cheap meter if channels stall.
+5. REPORT TRIGGER: 98.5 (98.45 now — one small win away).
