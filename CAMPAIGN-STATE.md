@@ -1051,3 +1051,64 @@ stores, u64-shift, i=count2 (re-proven 3 graphs). REMAINING CONSEQUENCE
 5. Maximal-reachable estimate: ~62 of 90 sites + possibly the 2-cycle families
    ⟹ ceiling ≈ 99%+ if all non-walled families crack; realistic next-session
    target = the two 2-cycles + soup ≈ 97.9-98.2.
+
+## Iteration-35: three levers executed — 97.55 → 97.68; census 90 → 74
+Baseline verified at 8ee83c19c. 3 builds (2 committed, 1 byte-identical re-test).
+
+### Lever meter table
+| lever | edit | result | verdict |
+|---|---|---|---|
+| 1. steps→row2 | merge nav steps into row2 (band 1128, the ptr2..found window; dump-verified found(351-359)-before-steps(364-366) pop order first) | fighter found_merged r25→r28 ✓TARGET (retail; debug predicted differently — known ±divergence), fighter steps r28→r25 (1 step closer, want r24), name 2-cycle DID NOT flip. 97.55→97.58, census 90→86 | COMMITTED |
+| 2. FindPrevFighter p-decl-first | align Prev's decl order with Next's (found/find-p colors swap with helper decl order; iter-34's Next-flip regression = flipping AWAY from the working order) | up_f/lf_f found/find-p 2-cycle FULLY RESOLVED — both find-only fighter arm windows EMPTY in census. 97.58→97.68, census 86→74 | COMMITTED |
+| 3. fc/fr soup | analysis only | decomposes into two wall shadows (below); no independent lever exists | NO BUILD |
+
+### Name found/steps 2-cycle: BANKED (new wall characterization)
+ig114/ig122 = the dn_n/rt_n found-merge webs (+7c4/+5fc clrlwi + cmpw + rlwimi
++ addic-feed) are STATEMENT-TEMP-banded — they pop ~iter 305, BEFORE the r23
+dispense (330) and before every variable band, where r24 is the only takeable
+callee-save (r23 undispensed, r25-r31 front-held). Target's equivalent webs =
+r27 ⟹ they pop in the FOUND variable band (after steps/walker/anchor). No
+variable can outrank a statement temp, so the fix requires the found-merge web
+to become variable-banded — a helper-return identity question; the s32-return
++ caller-cast refactors measured WORSE (iterations 25-26). ~10 sites.
+
+### Soup family: two wall shadows (~17 sites)
+- fr-side (~11: +18c/+1cc/+1d0/+1d8/+1e0/+1e8/+1f0/+200/+210/+230/+234):
+  LHZU-coupled. Target reads hovered via 0(r29) (the lhzu-advanced base);
+  ours burns a r24 &hovered temp whose occupancy displaces fr-i to r28 and
+  cascades the whole fr ring. Walled with +168 lhzu (the Δ3 member).
+- nc-side (~7-9: +094 hovered-temp r28-vs-r27, +0a4-+0ec idx family,
+  +0f4/+0fc/+104 lhz+srawi ring): first divergence is the +094 temp pick,
+  which chains to B-col r26-vs-r27 = the original CLOSED front-order family.
+
+### TASK 2 — wall re-test on the post-lever graph: HOLDS
+Fresh li still emitted (+048 li r25,0; Δ3 unchanged). New-on-this-graph
+spelling roll `s32 count2 = count` (count = the zero-rider's variable now):
+BYTE-IDENTICAL (const-prop) — reverted, recorded. The decl-init door stays
+closed; the wall's target form (count2 home-init IS the buttons-hi zero)
+remains unreachable from C on graph #4.
+
+### TASK 3 — micro-sites: +0f4 (nr lhz r0-vs-r3) and +0bc feed the nc-side
+srawi ring → B-col shadow; no independent evidence, no builds.
+
+### State after iteration-35: match 97.68, opcode 98.4, delta 3, hunks 16,
+74 register-mismatched aligned sites. Commits: 30859c945 (row2 merge), 14451eeec (prev flip).
+### Walled families (the maximal-reachable accounting):
+1. Fusion-debt (~28: zero pair +03c/+044, B-arm +25x-28x cascade, ternary
+   +398/+39c, 0xC00 walker shifts, count-loop walker +858-870) + 2-line Δ.
+2. LHZU/fr-soup (~11) + 1-line Δ (+168).
+3. B-col front-order shadow: nc-side soup (~8) incl +094/+0f4 micro-sites.
+4. Name found/steps statement-temp cycle (~10).
+Σ walled ≈ 57 of 74 ⟹ non-walled residue ≈ 17 sites (fighter steps↔ptr2
+r25↔r24 2-cycle in dn_f/rt_f ~6, scattered B-arm/0xC00 leftovers ~11).
+Maximal reachable without cracking a wall ≈ 97.9-98.0.
+### Iteration-36 entry points
+1. Fighter steps↔ptr2 2-cycle (dn_f/rt_f, ~6 sites): steps(row2-band) pops
+   AFTER ptr2(1101-band) — target wants steps=r24 BEFORE ptr2=r25. Needs a
+   steps home between ptr(1092) and ptr2(1101) — no existing variable there;
+   OR move ptr2's nav webs to a later band (split nav-ptr2 from soup-ptr2 —
+   but the soup share is what feeds the name walkers... check whether a
+   fighter-only ptr3 alias for the nav ptr2 role lands in the right window).
+2. The walls stand unless a new mechanism class appears (rider-move was the
+   last one). Re-test set on next graph change: decl-init door, lhzu site,
+   B-col order.
