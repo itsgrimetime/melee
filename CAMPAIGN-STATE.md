@@ -897,3 +897,85 @@ from ig84/85/86/87, potentially freeing r24 at ptr-web pop time → Option A fir
 REQUIRES: evidence that target's steps-walk pointer is a separate variable (check
 target asm for r24 in the steps-walk region vs the find-walk region).
 ### Source file: /Users/mike/code/melee/.claude/worktrees/mndiagram-802427B4-investigation/src/melee/mn/mndiagram.c
+
+## Iteration-33: cur→i merge lands the name arms — 97.28 → 97.30; p2-split REFUTED
+Baseline verified at ef6051d9b (97.28/98.4/Δ3/18). 3 gated builds, 3 commits.
+
+### TASK 1 — target-side verdict: ONE WEB (Option A's p2-split refuted)
+Decoded TARGET dn_f (+b68..+bf8) and rt_f (+984..+a14) instruction-by-instruction:
+- ONE ptr derivation per arm (`add r27,r30,r23` at +b70/+98c), find-walk p =
+  COPY (`addi r25,r27,0` +b78/+994), steps ptr2 = COPY (`mr r25,r27` +bc0/+9dc),
+  anchor++ in the steps loop (+bd0/+9ec). Ours has the IDENTICAL shape
+  (one add, two copies, anchor++). There is nothing to decouple — the original
+  shares the pointer exactly as ours does. Do NOT build a p2 split.
+- The whole fighter-arm difference is a color permutation: target cur=r23/
+  anchor=r27/found=r24/find-p=r25/ptr2=r25(reuse)/steps=r24(reuse)/merged=r28;
+  ours cur=r27/anchor=r23/found=r24/find-p=r25/ptr2=r24/steps=r28/merged=r25.
+
+### THE NUMBERING MODEL CORRECTED (supersedes iteration-23/30 directions)
+Empirical, fingerprint-verified on both pre/post-merge graphs:
+- Webs number in VARIABLE bands ordered by FIRST-USE: EARLIER first-use →
+  HIGHER ig band → pops EARLIER (descending-ig pops).
+- Within a variable: DESCENDING REGION order (latest region = highest ig in
+  the band = pops first). [Iteration-32's within-variable reading was wrong.]
+- Old graph bands: i-standalone 88/89 > ptr 83-87 > ptr2 78-82 > cur 71-77
+  (first-uses 1090 < 1092 < 1101 < 1253 ✓ rule holds).
+
+### TASK 2 — the executed lever: merge nav `cur` into the shared walk index `i`
+Target evidence: ALL TEN walker webs in target sit on r23 (+16c/+1d4 soup,
++504/+5bc/+6cc/+784 name navs, +8c0/+988/+aa4/+b6c fighter navs) ⟹ the
+original used ONE index variable for every walk. m2c split it (i for soup/
+count/0xC00/name-steps, cur for nav arms; `i = cur` copies in dn_n/rt_n).
+- BUILD 1 (cur→i everywhere, delete i=i copies, drop s32 cur decl): COMMITTED
+  0076b1dba, 97.28→97.30. Retail: dn_n/rt_n cur-webs r26→r23 ✓✓ TARGET COLOR
+  (16 sites), up_n +514 truncation pair fixed, name anchors moved r23→r25
+  (target r26 — still off), name p2 r25→r26 (REGRESSION, was coincidentally
+  right). Aligned census: 120→115 register-mismatched sites (-5 net).
+  Fighter arms unmoved in retail.
+- BUILD 2 (steps2/3/4 → steps): BYTE-IDENTICAL, committed 6436f7ea5 (simpler
+  source; iteration-12's split is codegen-neutral both ways on this graph).
+- BUILD 3 (fighter count loop `i = count2`): BYTE-IDENTICAL, committed
+  cf2762034 — the substrate re-test of the propagation door (TASK 3 item):
+  IRO const-prop wall holds on the merged-i graph. Target's megaweb +84c
+  `mr r24,r25` shows the original spelling; kept since codegen unchanged.
+
+### THE MECHANISM, now exact (new-graph fingerprints: igs 90/88/87/85/84/82/80/79)
+New i-band (descending region): dn_f-i=90(r27), lf_f-i=89(r26), rt_f-i=88(r27),
+up_f-i=87(r26), count-i+ZERO=86(r23 FRESH dispense), dn_n-i=85(r23✓),
+lf_n-i=84(r23), rt_n-i=83(r23), up_n-i=82(r23), fc-soup-i=81(r23),
+fr-soup-i=80(r23); anchors below: dn_f=79(r23 steal), rt_f=78(r23 steal),
+name anchors=77/76(r25), then ptr2s.
+- THE DISPENSE POINT IS REGION-LOCKED: the zero web rides the fighter-count-
+  loop i web (region +848), which sits BETWEEN the name arms (+4c0-814) and
+  fighter arms (+8c0-c10) in the band. Name i-webs pop after it → r23 ✓.
+  Fighter i-webs pop before it → r26/r27; their anchors pop after → steal r23.
+- IN TARGET the zero is FUSED into the front megaweb (no mid-band dispense)
+  and the fighter walkers still get r23 ⟹ the FIGHTER-ARM RESIDUAL IS
+  FUSION-COUPLED — same closed count2-fusion wall (fresh-li debt). Splitting
+  the count loop out (i2-home) re-tested iteration-31: gate-fail (+1 line) and
+  would also strip the name arms' r23 source. No independent fighter lever
+  found through the numbering channel.
+
+### Iteration-32 corrections (recorded)
+- The blocked-set table printed FINAL colors, not at-pop state (a blocker
+  only blocks if it popped earlier). Conclusion (same-arm pointer steals r23)
+  survived; per-register "blocked-by" attributions partially wrong.
+- ig84/ig85 labels were arm-swapped (84=rt_n region +608, 85=dn_n region +7d0).
+- ig84-87 were not "the find-helper's p": name helpers have no pointer — the
+  name-arm members were the caller's steps anchors.
+- The TRUE pick mechanism for the r23 avalanche: ascending-reuse hands r23 to
+  EVERY pop after the zero web's fresh-r23 dispense unless blocked same-arm.
+
+### State after iteration-33: match 97.30, opcode 98.4, delta 3, hunks 18,
+115 register-mismatched aligned sites. Commits: 0076b1dba, 6436f7ea5, cf2762034.
+### Iteration-34 entry points
+1. Name-arm anchor/p2 swap (anchors r25 vs target r26; p2 r26 vs target r25):
+   a within-band order question (anchor pops before p2; target implies the
+   reverse or different blocking). Cheap: read at-pop blocked sets for igs
+   77/76 (name anchors) and the name-p2 igs on the new dump; check whether a
+   found/result-web color change upstream reorders the leftovers.
+2. Fighter arms: fusion-coupled (closed wall) — only reopen with a new
+   fusion mechanism. The +0.02-equivalent prize there is ~30 sites.
+3. Micro-sites unchanged (lf-wraps +6dc/+abc, nr add-shift +f0, +448 r4/r5).
+4. Standing: #550 (no long vectors used this round; ≤4-entry forces verified
+   via r14-r17 site appearance), tiebreak-module rebuild gap.
