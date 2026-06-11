@@ -908,8 +908,8 @@ loop:
 
 static inline u8 mnDiagram_FindNextFighter(u8* sorted, s32 cur)
 {
-    s32 found = cur;
     u8* p = sorted + cur;
+    s32 found = cur;
 loop:
     found++;
     p++;
