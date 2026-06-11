@@ -1948,3 +1948,89 @@ Tree clean. No source commits.
 4. The nc 2-cycle (5 sites) + nr volatile swap: temp-class; only the permuter channel reaches
    them — included in the running jobs' mutation space.
 5. PAD_STACK(64) natural-reservation question: still open, lower priority.
+
+## Iteration-44 (driver 6): ORACLE REFUTES the fusion coupling map; permuter harvest LANDS the walker family — 97.49 → 97.93
+Baseline verified 97.49 at a9669fb93. One source commit: e1adac8aa (97.93). OLD-LINE 97.74
+REPORT TRIGGER CROSSED this iteration.
+
+### TASK 1 — the fusion oracle (the decisive instrument move)
+- force-coalesce r178=r35 (hi-zero virtual into count2-home; virtuals read from the final IR
+  snapshot, entry block B4: li r178,0/stw r178,8(r180) = zero temp → ig98; li r35,0 = count2
+  home → ig35): **hook safety gate REFUSED** — "virtuals interfere directly per colorgraph
+  data; coalesce is invalid" + no copy/identity edge. The gate independently CONFIRMS the
+  iteration-36 range-overlap mechanism from the allocator's own data. (Tooling gap noted: no
+  unsafe-override flag exists; the gate is correct to refuse — a forced interfering merge
+  could hang the allocator.)
+- Occupancy composition instead: **force-phys IG98:14** (zero web off-pool entirely; ig98
+  fingerprint-verified = {+03c li, +044 stw, +260 stb, +398/+39c ternary, +858-870 i}; force
+  application verified via r25→r14×5 + r24→r14×4 relabels in the scored diff).
+- SCORING (same-compiler: dtk-objdump on kept debug objects, skeleton-aligned vs target;
+  /tmp/oracle44.py): unforced 135 CS-mismatch sites → forced 135. **DELTA = 0 real sites.**
+  Per family: walker r23→r27 ×32 UNMOVED; fighter rings ×8 UNMOVED; name anchors ×12 UNMOVED;
+  B-arm ×6 UNMOVED; zero-cluster 19→14 (−5 = pure r14 relabels); 0xC00 11→7 (−4 = i-absorption
+  relabels).
+- **VERDICT: the iteration-41/43 "~70-115 fusion-coupled" map is REFUTED. The fusion wall's
+  true footprint = the ~11-site zero-cluster + Δ1 (+048 li) + the i-absorption structurals
+  ≈ +0.2pp, NOT +1.8pp.** The walkers do not want for r23's availability.
+- THE REAL GATE NAMED (blocked-set read at the dn_n walker ig68's pop, iter 356): r23 held by
+  **ig84 = the dn_n steps-walk pointer** (FindNextName p; +614 mr/+620 ++/+634 lbz, pop 340),
+  r26 by **ig76 = the steps counter** (li 10/addic., pop 348), r25 by ig81, r24 by statement
+  temps ig122/ig158 → walker takes r27. The ~120-site residual mass = WITHIN-ARM POP ORDER
+  ({walker, p, steps, anchor, found} permutation per arm) — the iteration-33-39 lever class.
+
+### TASK 2 — harvest: coder2 found the within-arm order lever (same mechanism, same session)
+- Channels at harvest: coder2 28k iters, coder3 31k, coder1-entryrand 22k, local 11k.
+- coder2 produced 60+ candidates; best **output-1635-1 (score 1635 vs base 1975)**:
+  `cur = col;` before the nc GetVisibleNameFrom call (arg passed as (u8)cur). Mechanism = a
+  LIVE band-lift: cur's first-use moves from ~line 1252 into the 0x10 arm → cur's band rises
+  → nav walkers pop before their arm-mates → the ig84/ig76 steal chain breaks. Semantics
+  verified (cur re-initialized in every nav arm before any read; col's value passes through).
+- RETAIL METER: **97.49 → 97.93, Δ 3→2 (one fc-head copy closed), hunks 18→8, census 145→101.
+  The 32-site walker family landed in full**; dn_n 23→6, rt_n 23→6, rt_f 19→10, dn_f 13→4.
+  Cost: fc/fr-soup 14→25 (fr-ring re-roll, lhzu-coupled region). COMMITTED e1adac8aa.
+- Sibling triage (verify-semantics rules): 1680 = same lever, head placement, worse — skip;
+  1695 = `if (cur && cur) {}` no-op hack — REJECT; 1760 = DELETES the hovered clamp blocks —
+  semantic break, REJECT; 1720/1810 = dominated micro-variants — skip. coder3/coder1/local:
+  nothing below base.
+- STALE-BASE DOCTRINE EXECUTED: all 4 channels stopped; re-bootstrapped from the committed
+  source (base = 1635-equivalent, verified `cur = col;` present + NULL pragma); resubmitted:
+  coder2 `mnDiagram_InputProc-coder2-20260611-034539`, coder3 `...-coder3-20260611-034549`,
+  coder1 `mnDiagram_InputProc_entryrand-coder1-20260611-034558` (entryrand rebuilt on new
+  base). Local NOT restarted (remotes dominate; restart recipe: cd decomp-permuter &&
+  nohup ./permuter.py nonmatchings/mnDiagram_InputProc -j6 --better-only > /tmp/log &).
+
+### Substrate re-tests on the new graph (committed change)
+- Fusion doors: +048 li r25 persists; zero-cluster = 11 true sites (the dn_n +604/+610/+624
+  members were walker-cascade mislabels, now gone). Wall stands at its re-priced size.
+- lhzu: +168 addi+lhz persists; fr-ring re-rolled around it (the +11 fc/fr cost) — wall holds.
+- nc 2-cycle: now r28→r27 ×6 (+098..+0e8) — standing, temp-class.
+
+### New census (101 CS-sites, /tmp/census43.py): r24→r23 ×17 (0xC00-head + fr mixed),
+r25→r23 ×11 (zero cluster), r25→r28 ×9 (fr-ring), r23→r25 ×8 (fr + lf_n), r25→r24 ×7,
+r28→r27 ×6 (nc 2-cycle), r26→r23 ×6 (B-arm), r27→r24 ×6, r24→r27 ×6, r24→r28 ×5 ...
+Regions: fc/fr 25, B-arm 15, 0xC00-head 13, rt_f 10, nc/nr 9, dn_n 6, rt_n 6, lf_n 4,
+countloop+up_f 4, dn_f 4, up_n 3, head 2.
+
+### WALL INVENTORY (re-priced by the oracle)
+1. Fusion/zero-cluster: ~11 sites + Δ1. Search-target spec unchanged (iteration-42 corrected
+   section); permuter value re-priced DOWN to ~+0.2pp.
+2. lhzu/fr: Δ1 + fr-ring (~15-20 sites post-re-roll). Walled as before.
+3. Within-arm pop order (THE REAL MASS, was mislabeled fusion): ~50-60 remaining sites
+   (B-arm, 0xC00-head, rt_f, nc/nr, scattered arms). The 1635 lever class (live band-lifts /
+   value-pass-through copies) WORKS here — found by random search, mechanism understood.
+4. nc 2-cycle (6) + volatile-pick positionals: temp-class, permuter-only channel.
+
+### DRIVER-7 POSTURE (the wait-state protocol)
+- CADENCE: fetch+triage all three remote jobs once per session start and roughly every 2-3
+  hours of wall time (`remote fetch <job>` ×3 → diff.diff triage best-first → verify-semantics
+  → retail meter → commit gate ≥97.93). After ANY commit: stop all jobs, re-bootstrap, resubmit
+  (stale-base doctrine — this iteration's procedure above is the template).
+- SEARCH-EXHAUSTED THRESHOLD (per memory's dead-vs-finite guidance): whole-function random
+  channels plateau at >150k iterations with zero sub-base candidates; entryrand at >50k.
+  On plateau: stop+reap, record counts, bank the negative.
+- WHILE WAITING (deduction work that composes): (a) the 1635 lever class generalizes — try
+  hand-built value-pass-through copies for OTHER arm variables (found/steps/p) at earlier
+  call sites, gated builds, best-first by census bucket size (B-arm 15, 0xC00-head 13);
+  (b) one blocked-set read each for the B-arm d-pointer (r26→r23 ×6) and 0xC00-head webs to
+  name their gates before building; (c) do NOT re-derive the fusion/lhzu walls.
+- Report triggers: next at 98 (old-line 97.74 crossed this iteration).
