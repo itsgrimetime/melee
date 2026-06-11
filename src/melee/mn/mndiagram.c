@@ -1069,7 +1069,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
   u8 row_result2;
   s32 cur;
   s32 found;
-  PAD_STACK(72);
+  PAD_STACK(64);
   if (input & 0x10)
   {
     lbAudioAx_80024030(1);
@@ -1078,72 +1078,12 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
     proc->flags_3 = HSD_GObj_804D783C;
     if (data->is_name_mode != 0)
     {
-      i = (u8) data->name_cursor_pos;
       col = mn_804A04F0.hovered_selection;
-      ptr = sorted + i;
-      ptr = ptr + 0x1C;
-      goto nc_test;
-      nc_outer:
-      ptr2 = ptr;
-
-      nc_inner:
-      i++;
-
-      ptr2++;
-      ptr++;
-      if (i >= 0x78)
-      {
-        col_result = 0x78;
-      }
-      else
-        if (GetNameText(*ptr2) != 0L)
-      {
-        col--;
-        nc_test:
-        if (col > 0)
-        {
-          goto nc_outer;
-        }
-
-        col_result = sorted[i + 0x1C];
-      }
-      else
-      {
-        goto nc_inner;
-      }
+      col_result = mnDiagram_GetVisibleNameFrom(
+          sorted, (u8) data->name_cursor_pos, (u8) col);
       row = mn_804A04F0.hovered_selection >> 8;
-      i = data->name_cursor_pos >> 8;
-      ptr = sorted + i;
-      ptr = ptr + 0x1C;
-      goto nr_test;
-      nr_outer:
-      ptr2 = ptr;
-
-      nr_inner:
-      i++;
-
-      ptr2++;
-      ptr++;
-      if (i >= 0x78)
-      {
-        row_result = 0x78;
-      }
-      else
-        if (GetNameText(*ptr2) != 0L)
-      {
-        row--;
-        nr_test:
-        if (row > 0)
-        {
-          goto nr_outer;
-        }
-
-        row_result = sorted[i + 0x1C];
-      }
-      else
-      {
-        goto nr_inner;
-      }
+      row_result = mnDiagram_GetVisibleNameFrom(
+          sorted, data->name_cursor_pos >> 8, row);
       mnDiagram_80241310(col_result, row_result, 1);
       return;
     }
