@@ -1263,7 +1263,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
         } else {
             goto up_n;
         }
-        if (((u8) cur) != found)
+        if (cur != (u8) found)
         {
           lbAudioAx_80024030(2);
           data->name_cursor_pos = (data->name_cursor_pos & 0xFF00) | found;
@@ -1296,7 +1296,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
         } else {
             goto dn_n_find;
         }
-        if (cur != found)
+        if (cur != (u8) found)
         {
           steps = 0xA;
           i = cur;
@@ -1369,11 +1369,12 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
         {
           goto lf_n;
         }
-        if (cur != (u8) found)
-        {
-          lbAudioAx_80024030(2);
-          data->name_cursor_pos = ((u8) data->name_cursor_pos) | (found << 8);
-          mnDiagram_80241730(mnDiagram_804D6C10, (u8) data->name_cursor_pos, data->name_cursor_pos >> 8);
+        if (cur != (u8) found) {
+            lbAudioAx_80024030(2);
+            data->name_cursor_pos =
+                ((u8) data->name_cursor_pos) | (found << 8);
+            mnDiagram_80241730(mnDiagram_804D6C10, (u8) data->name_cursor_pos,
+                               data->name_cursor_pos >> 8);
         }
       }
     }
@@ -1407,7 +1408,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
         {
           goto rt_n_find;
         }
-        if (cur != found)
+        if (cur != (u8) found)
         {
           steps2 = 7;
           i = cur;
@@ -1608,11 +1609,13 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
         {
           goto lf_f;
         }
-        if (cur != (u8) found)
-        {
-          lbAudioAx_80024030(2);
-          data->fighter_cursor_pos = ((u8) data->fighter_cursor_pos) | (found << 8);
-          mnDiagram_80241730(mnDiagram_804D6C10, (u8) data->fighter_cursor_pos, data->fighter_cursor_pos >> 8);
+        if (cur != (u8) found) {
+            lbAudioAx_80024030(2);
+            data->fighter_cursor_pos =
+                ((u8) data->fighter_cursor_pos) | (found << 8);
+            mnDiagram_80241730(mnDiagram_804D6C10,
+                               (u8) data->fighter_cursor_pos,
+                               data->fighter_cursor_pos >> 8);
         }
       }
     }
