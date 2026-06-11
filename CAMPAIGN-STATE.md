@@ -979,3 +979,75 @@ name anchors=77/76(r25), then ptr2s.
 3. Micro-sites unchanged (lf-wraps +6dc/+abc, nr add-shift +f0, +448 r4/r5).
 4. Standing: #550 (no long vectors used this round; ≤4-entry forces verified
    via r14-r17 site appearance), tiebreak-module rebuild gap.
+
+## Iteration-34: role swap + rider door — 97.30 → 97.55; fighter arms UNWALLED
+Baseline verified at aeef7cf22. 4 builds: 2 committed, 2 reverted-with-mechanism.
+
+### TASK 1 — name-arm anchor/p2 swap: SOLVED (97.30 → 97.43, census 115→103)
+Blocked-set reads (at-pop accounting): ig77 (dn_n anchor, pop 349) took r25
+with {r23=ig85(same-arm i), r24=ig114, r30, r31} blocked; ig72 (dn_n p2, pop
+354) took r26 with r25 additionally blocked BY THE ANCHOR. Target has the
+reverse (anchor r26, p2 r25) ⟹ target's walker pops first ⟹ walker belongs to
+the EARLIER-first-use variable. Edit: swap ptr/ptr2 roles in dn_n/rt_n steps
+walks (walker=ptr, anchor=ptr2; pure rename). COMMITTED 60d5ad582-family
+(see log). dn_n/rt_n anchor+walker+load now ALL on target registers.
+
+### TASK 2 — fusion wall re-exam: RIDER DOOR FOUND AND COMMITTED (97.43→97.55)
+(a) TARGET megaweb = count2's HOME band web (front pop, r25): the original's
+count2 home-init IS the +3c zero value (the u64-hi-half materialization of the
+buttons assignment), so home+zeros = one front web; the count-loop inits read
+it (mr r24,r25 = i = count2 SURVIVING — not const-propped because the value
+chain runs through the buttons store, not a literal).
+(b) NEW DOOR CLASS under the corrected model — move the RIDER (the zero-
+coalesce root = lowest-numbered member = the fighter count-loop walker web):
+- D-NEW-1: walk the fighter count loop with `count` (first-use 1050, band
+  ABOVE i's; count is dead on the fighter path — semantically free). The
+  dispense root moves into count's band, popping BEFORE the entire i-band:
+  fighter i-webs then take r23 and their anchors stop stealing. COMMITTED:
+  dn_f/rt_f cur=r23 ✓, anchor=r27 ✓, found=r24 ✓, find-p=r25 ✓, result=r26 ✓
+  all TARGET. Census 103→90, hunks 18→16. THE FIGHTER ARMS ARE NOT WALLED —
+  iteration-33's "fusion-coupled" banking is superseded (the wall's dispense-
+  position CONSEQUENCE was movable without the fusion itself).
+- D-NEW-2 (steps→col merge, the 1091-band slot): REGRESSED 97.55→97.18,
+  REVERTED. Mechanism: col's band sits between i (1090) and ptr (1092) —
+  steps webs popping there steal from the anchors/i-webs. The steps family
+  needs the 1101-1253 band window instead (see entry points).
+
+### THE FUSION WALL, restated under the corrected model (bounded, not closed)
+Ours' count2=0 decl-init emits its own li (+48, the 2-line Δ); the literal
+zeros coalesce temp-class-only into the fused zero web (extent +3c..+870,
+interferes with everything → fresh r23 at its pop). Target's zero rides
+count2's home to a front r25 pop. Every connecting spelling is IRO-normalized
+(const-prop), class-refused (home-init same-value), or code-changing
+(u64>>32 = library call). Doors dead: 4 init spellings, comma shield, halves
+stores, u64-shift, i=count2 (re-proven 3 graphs). REMAINING CONSEQUENCE
+(bounded by the census): ~28 sites, all r23-vs-r25 — {+03c,+044} zero pair,
+{+260,+268,+26c,+280...} B-arm d-pointer cascade, {+398,+39c} ternary,
+0xC00-fighter walker shifts (+420-444 ours r23/r24 vs tgt r24/r25) — plus the
+2-line Δ. The fighter nav arms are NO LONGER part of this family.
+
+### TASK 3 — micro-sites
+- +b80/+b84 found/find-p init ORDER swap (current-graph evidence): flipping
+  FindNextFighter decl order (found before p) regressed 97.55→97.49,
+  REVERTED — positional fix cascades into the arm coloring on this graph.
+- lf-wraps: GONE from the census (closed by iterations 33-34 cascades).
+- nr add-shift +0f4 (lhz r0 vs r3) and soup +0bc family: still open, no new
+  differentiator.
+
+### State after iteration-34: match 97.55, opcode 98.4, delta 3, hunks 16,
+90 register-mismatched aligned sites. Region census: soup 17, B-arm 13,
+0xC00-fighter 10, rt_f 10, dn_f 10, dn_n 8, up_f 6, lf_f 6, rt_n 5, head 3,
+0xC00-name 2.
+### Iteration-35 entry points (named levers)
+1. steps → row2 merge (first-use 1128 = the ptr2(1101)..found(1253) band
+   window the steps family needs): predicted to fix the dn_n/rt_n found/steps
+   2-cycle (r24↔r27, ~13 sites) and feed the dn_f/rt_f 3-cycle. UNTESTED.
+2. up_f/lf_f found/find-p 2-cycle (r24↔r25, 12 sites): helper-local ordering
+   inside FindPrevFighter inline — mechanism unknown (inline locals IRO-
+   renamed; decl order does not survive — iteration-28).
+3. fc/fr soup family (17 sites): walker/rank/result coloring — unexamined on
+   the new graph.
+4. Fusion-debt family (~28 sites + 2 lines): walled (above).
+5. Maximal-reachable estimate: ~62 of 90 sites + possibly the 2-cycle families
+   ⟹ ceiling ≈ 99%+ if all non-walled families crack; realistic next-session
+   target = the two 2-cycles + soup ≈ 97.9-98.2.
