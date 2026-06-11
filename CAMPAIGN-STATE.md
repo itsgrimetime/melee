@@ -2295,3 +2295,138 @@ base 1365 (jobs 20260611-0439xx), ALIVE at 7.3h wall time. Two fetches executed 
    permuter's ONLY remaining lever. Do NOT build manual interventions for them.
 3. Fingerprint map current for 5bf6600e5 (unchanged this iteration).
 4. REPORT TRIGGER: 98.5% (unchanged; 98.45 now).
+
+## Iteration-48 (driver 8): targeted macro enumeration built + harvest lands the zero-arg web
+lift — 98.45 → 98.62 (REPORT TRIGGER 98.5 CROSSED)
+Baseline verified: 5bf6600e5, 98.45, Δ2, hunks 9, opcode 99.1. One source commit:
+bcdd2265c (98.62). Docs commit for iter-47: 2ee6c889b.
+
+### TASK 3 — PLATEAU DECISION (executed first; freed the host for TASK 1)
+coder1 entryrand: best 1250 @iter11588, latest @iter36218+ = ~24.6k iterations stale,
+approaching the 50k threshold with nothing since ~12k. RETIRED (stopped) in favor of the
+targeted macro job. coder2/coder3 were healthy (descending) at retirement time.
+
+### TASK 1 — TARGETED MACRO JOB on the found↔row2 temp-band cycle region
+First-ever finite enumeration (entry-window style) on this region. Axes derived from the
+iteration-46 mechanism map (ig124 found-merge pop 303 vs ig69 row2 pop 355; ig70/71/72
+sibling row2s; ig129/145 founds), NOT blind:
+- dn_n (7 options): baseline; row2-hoist-before-found; row2-between-found-and-if;
+  row2-after-ptr2; row2-interleaved-in-ptr2-derivation; fused `ptr2 = sorted + cur + 0x1C`;
+  arg re-read `FindNextName((u8) data->name_cursor_pos)`.
+- rt_n (7): same shapes with row2=7 / `>> 8` arg re-read.
+- up_n (3): baseline; arg-inline at call; found-before-cur order swap.
+- dn_f (7): all 6 orders of the independent head {ptr=sorted+cur; found=FindNextFighter;
+  row2=N} + arg re-read variant.
+- rt_f (7): same.
+Space = 7×7×3×7×7 = 7,203. All variants semantically valid by construction (helpers
+read-only; row2 dead outside regions; head statements independent). PERM facts established
+(read from src/perm/parse.py + perm.py): comma-split tracks ONLY parens → options may span
+`if (...) {` with unbalanced braces; `(,)` escapes commas; seed-0 = first option of every
+PERM_GENERAL + identity LINESWAP order → make first options baseline text and the printed
+base score IS the doctrine verification. PERM_LINESWAP is blind to dependencies — used
+explicit PERM_GENERAL options instead so no invalid orders enter the space.
+Job dir: decomp-permuter/nonmatchings/mnDiagram_InputProc_macro/ (sibling dir, own
+target.o/compile.sh/settings.toml; settings func_name stays mnDiagram_InputProc).
+
+RESULT ON 5bf6600e5 GRAPH (job ...macro-coder1-20260611-052018, COMPLETED all 7,203):
+**best = 1365 @iter1 (the baseline itself); zero candidates below base.** The found↔row2
+pop-order cycle is INVARIANT under all 7,203 arrangement/arg-shape/derivation spellings of
+its five regions. Wall confirmation far stronger than iteration-46's 3 hand builds. Many
+variants byte-identical to base (score exactly 1365) — the cycle igs are insensitive to
+these axes. The cycle stays banked as permuter-random-territory; do NOT re-run this exact
+space on an unchanged graph.
+RE-RUN ON NEW GRAPH (bcdd2265c, base 1235): resubmitted as ...macro-coder1-20260611-053017
+(substrate relativity + stale-base doctrine). Result pending at session close — DRIVER-9
+MUST CHECK (finite job: it will look stopped when complete; fetch + read best).
+
+### TASK 2 — HARVEST: the zero-arg web lift (coder2 output-1235-1) — COMMITTED bcdd2265c
+Pre-commit triage of 6 new old-base candidates: c2-1270-2/c3-1270-2 (family-5 new_var3 +
+unsafe row region), c2-1270-3 (families 2+3 multi-hack), c3-1265-1 (family-4 row-split +
+comma/dead-code hacks), c3-1270-1 (variable-alias + `- -1` hack) — all tallied REJECT.
+**c2-1235-1 = genuinely new shape** (zero-materialization, touches the fusion/zero wall —
+not a pre-classified family): in the 0x10 arm,
+  `i = 0; proc = HSD_GObj_SetupProc(gobj, ..., i);`  (was `..., 0`)
+i is reassigned before any read on every path (verified by mental execution). METERED:
+98.62 / opcode 99.4 / Δ1 / hunks 6 — ALL FOUR GATES IMPROVED (Δ 2→1, hunks 9→6).
+M1 INTACT: count2 r25 (+048), entry trio r30/r29/r28, frame -128. COMMITTED bcdd2265c.
+MECHANISM (new lever class — ZERO-ARG WEB LIFT): MWCC copy-propagates i=0 back into
+`li r5,0` at the call (no separate web materializes at the site!) but i's band-lift into
+the 0x10-arm head renumbers the fc/fr temp igs downstream: the nc anchor transposition
+partially resolved and the old T+848 mr Δ-member CLOSED (Δ2→1; remaining Δ1 = the fusion
++048 extra li). NOTE vs the safe-zone rule: this is an ENTRY-REGION lift that did NOT
+displace count2 — the rule's empirical basis (row/cur lifts breaking M1) does not cover
+zero-value lifts that copy-prop away at the use site. Refine the rule: entry-region lifts
+whose value is copy-propagated into an immediate (no live range across the front sweep)
+can be SAFE; lifts that hold a live value across the front remain UNSAFE.
+
+### TASK 2b — post-commit harvest on the new base (channels found below-base fast)
+Fresh channels (coder2-052732, coder3-052741, 16t stock each) found 18 below-1235
+candidates within ~25 min. Tally: 16 pre-classified family rejects (inline_fn ×4,
+type-change ×4, `cur += (...)` ×5, row-split ×2, broken `(hovered*)` cast, entry-decl
+new_var3, alias-block `{ptr3=ptr;...}`), 2 known byte-identical (`cur = cur >> 8` split).
+**c3-1140-1 (best, -95) = genuinely new**: `row = (u8)(hovered_selection >> 8)` in the
+0x10 arm (NOT the iter-47 (u16) test — different width, different graph). METERED:
+98.70 / opcode 99.6 / **Δ2 ↑ / hunks 8 ↑ — GATE FAIL** (match+opcode up, structure
+regressed; the extra instruction returned). REVERTED. Consistent with the unsafe-zone
+trade pattern: 0x10-arm row perturbations buy site wins with front structure. The (u8)
+cast variant is now METERED-CLOSED on this graph; do not re-meter.
+
+### Stale-base doctrine executed (after bcdd2265c)
+Stopped coder2/coder3 (+ macro had completed). Re-bootstrapped base.c from new source —
+**#558 THIRD OCCURRENCE: bootstrap dropped the NULL pragma again**; re-added to line 2,
+local verify: base compiles, **new base score = 1235** (exactly the committed candidate's
+score — commit landed its codegen byte-for-byte). Resubmitted:
+- coder2 random: mnDiagram_InputProc-coder2-20260611-052732 (16t stock)
+- coder3 random: mnDiagram_InputProc-coder3-20260611-052741 (16t stock)
+- macro re-run: mnDiagram_InputProc_macro-coder1-20260611-053017 (16t, finite 7,203,
+  seed-0 verified 1235 locally before submit)
+All three verified ACTIVE with correct base scores.
+
+### Wall inventory after bcdd2265c (match 98.62, Δ1, hunks 6, opcode 99.4)
+1. Fusion/zero: Δ1 = the +048 extra `li r25,0` (count2 home; target fuses with the
+   u64-hi-zero `li` at +03c). count2 r25 ✓. Wall STANDS (unchanged through the commit).
+2. lhzu/fr: +168 lhzu-vs-lhz class persists. Wall STANDS.
+3. found↔row2 temp-band cycle: **7,203-variant enumeration NULL on old graph** — strongest
+   wall evidence in the campaign. Re-run on new graph pending (driver-9 reads it).
+4. nc anchor transposition (r27↔r28) + nr-head load-order swap (+0f4): partially shifted
+   by the commit; remaining sites are the standing register-only residual (~21 paired
+   register-only lines per checkdiff).
+5. T+848 mr Δ-member: CLOSED by bcdd2265c.
+
+### Driver-9 entry points
+1. READ THE MACRO RE-RUN RESULT FIRST (...macro-coder1-20260611-053017; finite — looks
+   stopped when complete; `remote fetch` then read best/candidates). If a below-1235
+   candidate exists: triage per rules (M1 guard at meter). If null again: the cycle wall
+   is confirmed graph-independent for these axes; retire the macro dir until the NEXT
+   graph change, then one cheap re-run.
+2. HARVEST coder2-052732/coder3-052741 at cadence. Gate ≥98.62 (Δ1, hunks 6, opcode 99.4
+   — the gate tightened with the commit). Six families + (u8)-row-cast are pre-classified;
+   tally, don't re-derive.
+3. NEW LEVER CLASS to generalize (zero-arg web lift): any harvest candidate inserting
+   `var = <imm>; call(..., var)` with var dead-before-read is this class, not a hack.
+   Within InputProc the 0x10-arm site was the only literal-0 call arg; likely exhausted
+   in-function, but keep the class in triage.
+4. coder1 hosts the macro job; when it completes, either re-seed a random job there
+   (weight_overrides/randomize_funcs tuning per memory) or leave idle until next commit.
+5. Channel-health check (#558) MANDATORY at session start; bootstrap ALWAYS drops the
+   NULL pragma (3/3 occurrences) — re-add + local verify before every submit.
+6. REPORT TRIGGER: next at 99.0 (98.5 crossed this iteration at 98.62).
+
+### Iteration-48 close-out (results that landed after the section above was drafted)
+- MACRO RE-RUN ON NEW GRAPH: COMPLETE, all 7,203 — **best = 1235 @iter6 (base-identical),
+  zero candidates**. The found↔row2 cycle is invariant under these axes on BOTH graphs
+  (5bf6600e5 and bcdd2265c). Wall = graph-independent for arrangement/arg-shape/derivation
+  spellings; 14,406 total variants, two graphs, zero wins. Macro dir RETIRED (keep
+  nonmatchings/mnDiagram_InputProc_macro/ for one cheap re-run after the NEXT graph change
+  — regenerate its base.c from the new base first via the PERM script pattern in this
+  section's git history).
+- CODER1 RE-SEEDED (TASK 3 alternative executed): pattern-tuned random channel
+  `mnDiagram_InputProc_tuned-coder1-20260611-053754`, weights perm_cast_simple=30 /
+  perm_expand_expr=15 / perm_randomize_internal_type=10 (pattern widen-u8-to-u32 via
+  spill suggestion; detection used a stale pre-commit pcdump — weights are a search bias,
+  not a correctness input). Separate dir nonmatchings/mnDiagram_InputProc_tuned/ so the
+  main dir stays STOCK — `permute config` writes into the shared settings.toml and a
+  doctrine re-bootstrap would silently keep it (existing-settings-kept behavior); stock
+  settings.toml restored in the main dir. Tuned base verified 1235 locally pre-submit.
+- FINAL POSTURE: coder1 = tuned random (1235), coder2 = stock random (1235),
+  coder3 = stock random (1235). All NULL-pragma-verified.
