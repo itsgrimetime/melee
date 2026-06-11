@@ -25,3 +25,7 @@ _ASM_OFFSET_BYTES_RE = re.compile(
     r"^\s*[+-]?[0-9A-Fa-f]+:\s+(?:(?:[0-9A-Fa-f]{2})\s+)*"
 )
 
+# This module is intentionally consumed by frame_reservations.__init__ via a
+# package-split `import *`. Include underscored implementation helpers because
+# the public package module delegates to them directly.
+__all__ = [name for name in globals() if not name.startswith("__")]

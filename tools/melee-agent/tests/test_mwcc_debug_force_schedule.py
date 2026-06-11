@@ -301,3 +301,134 @@ int main(void)
 
     run_proc = subprocess.run([str(exe)], capture_output=True, text=True)
     assert run_proc.returncode == 0, run_proc.stderr
+
+
+def test_mwcc_debug_long_force_override_parsers_are_not_silent(
+    tmp_path: Path,
+) -> None:
+    cc = shutil.which("cc")
+    if cc is None:
+        pytest.skip("no C compiler available")
+
+    harness = tmp_path / "force_override_harness.c"
+    exe = tmp_path / "force_override_harness"
+    source = f"""
+#define MWCC_DEBUG_TEST 1
+#include "{(REPO_ROOT / "tools/mwcc_debug/mwcc_debug.c").as_posix()}"
+
+static void test_formatoperands(void *pc, char *buf, int showBlocks)
+{{
+    (void)pc;
+    (void)showBlocks;
+    buf[0] = '\\0';
+}}
+
+static void append_char(char *buf, int *pos, char c)
+{{
+    buf[*pos] = c;
+    *pos = *pos + 1;
+    buf[*pos] = '\\0';
+}}
+
+static void append_uint(char *buf, int *pos, int value)
+{{
+    char digits[16];
+    int n = 0;
+    if (value == 0) {{
+        append_char(buf, pos, '0');
+        return;
+    }}
+    while (value > 0) {{
+        digits[n++] = (char)('0' + (value % 10));
+        value /= 10;
+    }}
+    while (n > 0)
+        append_char(buf, pos, digits[--n]);
+}}
+
+static int build_iter_csv(char *buf, int count)
+{{
+    int i;
+    int pos = 0;
+    buf[0] = '\\0';
+    for (i = 0; i < count; i++) {{
+        if (i > 0) append_char(buf, &pos, ',');
+        append_uint(buf, &pos, i);
+    }}
+    return pos;
+}}
+
+static int build_force_interfere_csv(char *buf, int count)
+{{
+    int i;
+    int pos = 0;
+    buf[0] = '\\0';
+    for (i = 0; i < count; i++) {{
+        if (i > 0) append_char(buf, &pos, ',');
+        append_uint(buf, &pos, i);
+        append_char(buf, &pos, '=');
+        append_uint(buf, &pos, i + 1);
+    }}
+    return pos;
+}}
+
+int main(void)
+{{
+    char buf[12000];
+    int len;
+
+    if (MWCC_DEBUG_ENV_BUF_LEN < 4096)
+        return 1;
+    if (MAX_ITER_FIRST < 365)
+        return 2;
+    if (MAX_FORCE_INTERFERE < 67)
+        return 3;
+
+    len = build_iter_csv(buf, 365);
+    if (parse_iter_first_values_from_string(buf, len) != 365)
+        return 10;
+    if (g_n_iter_first != 365)
+        return 11;
+    if (g_iter_first[0] != 0 || g_iter_first[364] != 364)
+        return 12;
+    if (g_iter_first_parse_overflow != 0)
+        return 13;
+
+    len = build_force_interfere_csv(buf, 67);
+    if (parse_force_interfere_pairs_from_string(buf, len) != 67)
+        return 20;
+    if (g_n_force_interfere != 67)
+        return 21;
+    if (g_force_interfere[0].a != 0 || g_force_interfere[0].b != 1)
+        return 22;
+    if (g_force_interfere[66].a != 66 || g_force_interfere[66].b != 67)
+        return 23;
+    if (g_force_interfere_parse_overflow != 0)
+        return 24;
+
+    len = build_iter_csv(buf, MAX_ITER_FIRST + 1);
+    if (parse_iter_first_values_from_string(buf, len) != MAX_ITER_FIRST)
+        return 30;
+    if (g_iter_first_parse_overflow == 0)
+        return 31;
+
+    len = build_force_interfere_csv(buf, MAX_FORCE_INTERFERE + 1);
+    if (parse_force_interfere_pairs_from_string(buf, len) != MAX_FORCE_INTERFERE)
+        return 40;
+    if (g_force_interfere_parse_overflow == 0)
+        return 41;
+
+    return 0;
+}}
+"""
+    harness.write_text(source)
+
+    compile_proc = subprocess.run(
+        [cc, "-std=c99", "-Werror", str(harness), "-o", str(exe)],
+        capture_output=True,
+        text=True,
+    )
+    assert compile_proc.returncode == 0, compile_proc.stderr
+
+    run_proc = subprocess.run([str(exe)], capture_output=True, text=True)
+    assert run_proc.returncode == 0, run_proc.stderr

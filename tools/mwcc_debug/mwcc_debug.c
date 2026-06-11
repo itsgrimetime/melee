@@ -19,6 +19,7 @@ typedef int int32;
 
 #define NULL ((void *)0)
 #define DLL_PROCESS_ATTACH 1
+#define MWCC_DEBUG_ENV_BUF_LEN 8192
 
 #ifdef MWCC_DEBUG_TEST
 #define __declspec(x)
@@ -939,11 +940,14 @@ static void parse_overrides_from_env(void)
 //   - But the resulting allocation may not be one that any natural C
 //     source would produce, so a force-iter-first match doesn't tell you
 //     a corresponding C source exists.
-#define MAX_ITER_FIRST 32
+#define MAX_ITER_FIRST 1024
 
 static int g_iter_first[MAX_ITER_FIRST];
 static int g_n_iter_first = 0;
 static int g_iter_first_parsed = 0;
+static int g_iter_first_parse_overflow = 0;
+static int g_iter_first_iter_parse_overflow = 0;
+static int g_iter_first_env_truncated = 0;
 static char g_iter_first_scope_fn[FUNCNAME_BUF_LEN] = {0};
 static int g_iter_first_scope_fn_set = 0;
 static int g_iter_first_scope_class = -1;
@@ -957,9 +961,98 @@ typedef struct IterFirstIterSpec {
 static IterFirstIterSpec g_iter_first_iters[MAX_ITER_FIRST];
 static int g_n_iter_first_iters = 0;
 
+static int parse_iter_first_values_from_string(const char *buf, int len)
+{
+    int i;
+    int cur_val;
+    int has_val;
+
+    g_n_iter_first = 0;
+    g_iter_first_parse_overflow = 0;
+
+    cur_val = 0;
+    has_val = 0;
+    for (i = 0; i <= len; i++) {
+        char c = (i == len) ? '\0' : buf[i];
+        if (c >= '0' && c <= '9') {
+            cur_val = cur_val * 10 + (c - '0');
+            has_val = 1;
+        } else if ((c == ',' || c == '\0') && has_val) {
+            if (g_n_iter_first < MAX_ITER_FIRST) {
+                g_iter_first[g_n_iter_first] = cur_val;
+                g_n_iter_first++;
+            } else {
+                g_iter_first_parse_overflow = 1;
+            }
+            cur_val = 0;
+            has_val = 0;
+        } else if (c == ',' || c == '\0') {
+            cur_val = 0;
+            has_val = 0;
+        }
+        // else: ignore whitespace and stray chars
+    }
+    return g_n_iter_first;
+}
+
+static int parse_iter_first_iters_from_string(const char *buf, int len)
+{
+    int i;
+    int cur_class;
+    int cur_iter;
+    int parsing_iter;
+    int has_class;
+    int has_iter;
+
+    g_n_iter_first_iters = 0;
+    g_iter_first_iter_parse_overflow = 0;
+
+    cur_class = 0;
+    cur_iter = 0;
+    parsing_iter = 0;
+    has_class = 0;
+    has_iter = 0;
+    for (i = 0; i <= len; i++) {
+        char c = (i == len) ? '\0' : buf[i];
+        if (c >= '0' && c <= '9') {
+            if (parsing_iter) {
+                cur_iter = cur_iter * 10 + (c - '0');
+                has_iter = 1;
+            } else {
+                cur_class = cur_class * 10 + (c - '0');
+                has_class = 1;
+            }
+        } else if (c == ':' && has_class && !parsing_iter) {
+            parsing_iter = 1;
+        } else if ((c == ',' || c == '\0')
+                   && parsing_iter && has_class && has_iter) {
+            if (g_n_iter_first_iters < MAX_ITER_FIRST) {
+                g_iter_first_iters[g_n_iter_first_iters].rclass = cur_class;
+                g_iter_first_iters[g_n_iter_first_iters].iter_idx = cur_iter;
+                g_n_iter_first_iters++;
+            } else {
+                g_iter_first_iter_parse_overflow = 1;
+            }
+            cur_class = 0;
+            cur_iter = 0;
+            parsing_iter = 0;
+            has_class = 0;
+            has_iter = 0;
+        } else if (c == ',' || c == '\0') {
+            cur_class = 0;
+            cur_iter = 0;
+            parsing_iter = 0;
+            has_class = 0;
+            has_iter = 0;
+        }
+        // else: ignore whitespace and stray chars
+    }
+    return g_n_iter_first_iters;
+}
+
 static void parse_iter_first_from_env(void)
 {
-    char buf[512];
+    char buf[MWCC_DEBUG_ENV_BUF_LEN];
     uint32 len;
     int i;
     int cur_val;
@@ -968,6 +1061,9 @@ static void parse_iter_first_from_env(void)
     g_iter_first_parsed = 1;
     g_n_iter_first = 0;
     g_n_iter_first_iters = 0;
+    g_iter_first_parse_overflow = 0;
+    g_iter_first_iter_parse_overflow = 0;
+    g_iter_first_env_truncated = 0;
     g_iter_first_scope_fn_set = 0;
     g_iter_first_scope_class = -1;
     g_iter_first_scope_class_set = 0;
@@ -1003,63 +1099,18 @@ static void parse_iter_first_from_env(void)
     len = GetEnvironmentVariableA(
         "MWCC_DEBUG_FORCE_ITER_FIRST_ITER", buf, sizeof(buf));
     if (len > 0 && len < sizeof(buf)) {
-        int cur_class = 0;
-        int cur_iter = 0;
-        int parsing_iter = 0;
-        int has_class = 0;
-        int has_iter = 0;
-        for (i = 0; i <= (int)len; i++) {
-            char c = (i == (int)len) ? '\0' : buf[i];
-            if (c >= '0' && c <= '9') {
-                if (parsing_iter) {
-                    cur_iter = cur_iter * 10 + (c - '0');
-                    has_iter = 1;
-                } else {
-                    cur_class = cur_class * 10 + (c - '0');
-                    has_class = 1;
-                }
-            } else if (c == ':' && has_class && !parsing_iter) {
-                parsing_iter = 1;
-            } else if ((c == ',' || c == '\0')
-                       && parsing_iter && has_class && has_iter
-                       && g_n_iter_first_iters < MAX_ITER_FIRST) {
-                g_iter_first_iters[g_n_iter_first_iters].rclass = cur_class;
-                g_iter_first_iters[g_n_iter_first_iters].iter_idx = cur_iter;
-                g_n_iter_first_iters++;
-                cur_class = 0;
-                cur_iter = 0;
-                parsing_iter = 0;
-                has_class = 0;
-                has_iter = 0;
-            } else if (c == ',' || c == '\0') {
-                cur_class = 0;
-                cur_iter = 0;
-                parsing_iter = 0;
-                has_class = 0;
-                has_iter = 0;
-            }
-            // else: ignore whitespace and stray chars
-        }
+        parse_iter_first_iters_from_string(buf, (int)len);
+    } else if (len >= sizeof(buf)) {
+        g_iter_first_env_truncated = 1;
     }
 
     len = GetEnvironmentVariableA("MWCC_DEBUG_FORCE_ITER_FIRST", buf, sizeof(buf));
-    if (len == 0 || len >= sizeof(buf)) return;
-
-    cur_val = 0;
-    has_val = 0;
-    for (i = 0; i <= (int)len; i++) {
-        char c = (i == (int)len) ? '\0' : buf[i];
-        if (c >= '0' && c <= '9') {
-            cur_val = cur_val * 10 + (c - '0');
-            has_val = 1;
-        } else if ((c == ',' || c == '\0') && has_val && g_n_iter_first < MAX_ITER_FIRST) {
-            g_iter_first[g_n_iter_first] = cur_val;
-            g_n_iter_first++;
-            cur_val = 0;
-            has_val = 0;
-        }
-        // else: ignore whitespace and stray chars
+    if (len == 0) return;
+    if (len >= sizeof(buf)) {
+        g_iter_first_env_truncated = 1;
+        return;
     }
+    parse_iter_first_values_from_string(buf, (int)len);
 }
 
 // ---------------------------------------------------------------------------
@@ -1110,24 +1161,83 @@ static int g_coalesce_scope_fn_set = 0;
 // Causality test for coloring tiebreaks: "make virtual A interfere with B".
 // Bit address is triangular: (max*max)/2 + min, matching makeinterfere().
 #define INTERFERENCE_MATRIX (*(uint32 **)0x583088)
-#define MAX_FORCE_INTERFERE 64
+#define MAX_FORCE_INTERFERE 1024
 static struct {
     int a;
     int b;
 } g_force_interfere[MAX_FORCE_INTERFERE];
 static int g_n_force_interfere = 0;
 static int g_force_interfere_parsed = 0;
+static int g_force_interfere_parse_overflow = 0;
+static int g_force_interfere_env_truncated = 0;
 static char g_force_interfere_scope_fn[FUNCNAME_BUF_LEN] = {0};
 static int g_force_interfere_scope_fn_set = 0;
 
+static int parse_force_interfere_pairs_from_string(const char *buf, int len)
+{
+    int i;
+    int cur_val;
+    int parsing_b;
+    int saved_a;
+    int has_a;
+    int has_b;
+
+    g_n_force_interfere = 0;
+    g_force_interfere_parse_overflow = 0;
+
+    cur_val = 0;
+    parsing_b = 0;
+    saved_a = -1;
+    has_a = 0;
+    has_b = 0;
+    for (i = 0; i <= len; i++) {
+        char c = (i == len) ? '\0' : buf[i];
+        if (c >= '0' && c <= '9') {
+            cur_val = cur_val * 10 + (c - '0');
+            if (parsing_b) {
+                has_b = 1;
+            } else {
+                has_a = 1;
+            }
+        } else if (c == '=' && has_a && !parsing_b) {
+            saved_a = cur_val;
+            cur_val = 0;
+            parsing_b = 1;
+            has_b = 0;
+        } else if ((c == ',' || c == '\0') && parsing_b && has_b) {
+            if (g_n_force_interfere < MAX_FORCE_INTERFERE) {
+                g_force_interfere[g_n_force_interfere].a = saved_a;
+                g_force_interfere[g_n_force_interfere].b = cur_val;
+                g_n_force_interfere++;
+            } else {
+                g_force_interfere_parse_overflow = 1;
+            }
+            cur_val = 0;
+            parsing_b = 0;
+            saved_a = -1;
+            has_a = 0;
+            has_b = 0;
+        } else if (c == ',' || c == '\0') {
+            cur_val = 0;
+            parsing_b = 0;
+            saved_a = -1;
+            has_a = 0;
+            has_b = 0;
+        }
+        // else: ignore whitespace and stray chars
+    }
+    return g_n_force_interfere;
+}
+
 static void parse_force_interfere_from_env(void)
 {
-    char buf[512];
+    char buf[MWCC_DEBUG_ENV_BUF_LEN];
     uint32 len;
-    int i, cur_val, parsing_b, saved_a;
 
     g_force_interfere_parsed = 1;
     g_n_force_interfere = 0;
+    g_force_interfere_parse_overflow = 0;
+    g_force_interfere_env_truncated = 0;
 
     len = GetEnvironmentVariableA(
         "MWCC_DEBUG_FORCE_INTERFERE_FUNCTION",
@@ -1139,29 +1249,12 @@ static void parse_force_interfere_from_env(void)
     }
 
     len = GetEnvironmentVariableA("MWCC_DEBUG_FORCE_INTERFERE", buf, sizeof(buf));
-    if (len == 0 || len >= sizeof(buf)) return;
-
-    cur_val = 0;
-    parsing_b = 0;
-    saved_a = -1;
-    for (i = 0; i <= (int)len; i++) {
-        char c = (i == (int)len) ? '\0' : buf[i];
-        if (c >= '0' && c <= '9') {
-            cur_val = cur_val * 10 + (c - '0');
-        } else if (c == '=') {
-            saved_a = cur_val;
-            cur_val = 0;
-            parsing_b = 1;
-        } else if ((c == ',' || c == '\0') && parsing_b &&
-                   g_n_force_interfere < MAX_FORCE_INTERFERE) {
-            g_force_interfere[g_n_force_interfere].a = saved_a;
-            g_force_interfere[g_n_force_interfere].b = cur_val;
-            g_n_force_interfere++;
-            cur_val = 0;
-            parsing_b = 0;
-            saved_a = -1;
-        }
+    if (len == 0) return;
+    if (len >= sizeof(buf)) {
+        g_force_interfere_env_truncated = 1;
+        return;
     }
+    parse_force_interfere_pairs_from_string(buf, (int)len);
 }
 
 // Set the triangular interference bit for the unordered pair (a, b).
@@ -1712,6 +1805,9 @@ static void *__cdecl hook_simplifygraph(int rclass, int n_colors, int n_class_re
     {
         int iter_fn_scope_skip = 0;
         int iter_class_scope_skip = 0;
+        int iter_parse_error = g_iter_first_env_truncated
+            || g_iter_first_parse_overflow
+            || g_iter_first_iter_parse_overflow;
         IGNode **ig_local = INTERFERENCEGRAPH;
         int ig_n_local = N_IGNODES;
         if (ig_n_local > 1024) ig_n_local = 1024;
@@ -1749,7 +1845,17 @@ static void *__cdecl hook_simplifygraph(int rclass, int n_colors, int n_class_re
             }
         }
 
-        if (!iter_fn_scope_skip && g_n_iter_first_iters > 0 && head != 0)
+        if (iter_parse_error && PCFILE && DEBUG_GUARD
+            && (g_n_iter_first > 0 || g_n_iter_first_iters > 0
+                || g_iter_first_env_truncated)) {
+            debug_printf("\n[FORCE_ITER_FIRST] ERROR: override list exceeded "
+                         "parser capacity (cap=%d, env_buf=%d); no partial "
+                         "iter-first overrides applied\n",
+                         MAX_ITER_FIRST, MWCC_DEBUG_ENV_BUF_LEN);
+        }
+
+        if (!iter_parse_error && !iter_fn_scope_skip
+            && g_n_iter_first_iters > 0 && head != 0)
         {
             int k;
             for (k = g_n_iter_first_iters - 1; k >= 0; k--)
@@ -1796,7 +1902,7 @@ static void *__cdecl hook_simplifygraph(int rclass, int n_colors, int n_class_re
             }
         }
 
-        if (!iter_fn_scope_skip && !iter_class_scope_skip
+        if (!iter_parse_error && !iter_fn_scope_skip && !iter_class_scope_skip
             && g_n_iter_first > 0 && head != 0)
         {
             // For each requested virtual (in reverse so the FIRST listed ends
@@ -2105,9 +2211,12 @@ static void __cdecl hook_real_coalesce(unsigned int rclass, unsigned int n_virtu
     if (!g_force_interfere_parsed) {
         parse_force_interfere_from_env();
     }
-    if (g_n_force_interfere > 0) {
+    if (g_n_force_interfere > 0 || g_force_interfere_env_truncated
+        || g_force_interfere_parse_overflow) {
         uint32 *matrix = INTERFERENCE_MATRIX;
         int fi_scope_skip = 0;
+        int fi_parse_error = g_force_interfere_env_truncated
+            || g_force_interfere_parse_overflow;
         if (g_force_interfere_scope_fn_set) {
             fi_scope_skip = 1;
             if (g_current_function_set) {
@@ -2122,7 +2231,12 @@ static void __cdecl hook_real_coalesce(unsigned int rclass, unsigned int n_virtu
                 }
             }
         }
-        if (!fi_scope_skip && matrix != 0) {
+        if (fi_parse_error && PCFILE && DEBUG_GUARD) {
+            debug_printf("[FORCE_INTERFERE] ERROR: override list exceeded "
+                         "parser capacity (cap=%d, env_buf=%d); no partial "
+                         "interference edges applied\n",
+                         MAX_FORCE_INTERFERE, MWCC_DEBUG_ENV_BUF_LEN);
+        } else if (!fi_scope_skip && matrix != 0) {
             int injected = 0;
             for (i = 0; i < g_n_force_interfere; i++) {
                 int a = g_force_interfere[i].a;

@@ -114,31 +114,36 @@ def _patch_vec_temp_aliases(lines: list[str]) -> tuple[list[str], bool]:
 
 _NULL_REFERENCE_RE = re.compile(r"\bNULL\b")
 _NULL_DEFINE_RE = re.compile(r"^\s*#\s*define\s+NULL\s", re.MULTILINE)
+_NULL_PERMUTER_DEFINE_RE = re.compile(r"^\s*#pragma\s+_permuter\s+define\s+NULL\s+0\s*$", re.MULTILINE)
 _LATEDEFINE_END_RE = re.compile(r"^\s*#pragma\s+_permuter\s+latedefine\s+end\s*$")
-_NULL_DEFINE_LINE = "#define NULL ((void *)0)"
+_NULL_DEFINE_LINE = "#pragma _permuter define NULL 0"
 
 
 def _needs_null_define(lines: list[str]) -> bool:
-    """Return True if base.c uses NULL but has no #define for it."""
+    """Return True if base.c uses NULL but has no definition for it."""
     text = "\n".join(lines)
     if not _NULL_REFERENCE_RE.search(text):
         return False
-    return not _NULL_DEFINE_RE.search(text)
+    return not (
+        _NULL_DEFINE_RE.search(text)
+        or _NULL_PERMUTER_DEFINE_RE.search(text)
+    )
 
 
 def _inject_null_define(lines: list[str]) -> tuple[list[str], bool]:
-    """Insert `#define NULL ((void *)0)` after the latedefine pragma, or at top."""
+    """Insert the permuter NULL define before latedefine end, or near top."""
     if not _needs_null_define(lines):
         return lines, False
 
-    # Insert after the last `#pragma _permuter latedefine end` line, or at top.
+    # Insert before the first `#pragma _permuter latedefine end` line so the
+    # definition is carried in the permuter latedefine block.
     out: list[str] = []
     inserted = False
     for line in lines:
-        out.append(line)
         if not inserted and _LATEDEFINE_END_RE.match(line):
             out.append(_NULL_DEFINE_LINE)
             inserted = True
+        out.append(line)
 
     if not inserted:
         # No latedefine pragma found — insert after the last #include-like /
@@ -158,7 +163,7 @@ def fix_base_c(base_c_path: Path) -> FixResult:
 
     Currently fixes:
     - Vec/Vec3 aliases that point at incomplete `_PermuterTempN` tags
-    - Missing ``#define NULL ((void *)0)`` when the source references NULL
+    - Missing permuter NULL definition when the source references NULL
 
     Returns `skipped` when `base.c` is absent and `already-fixed` when no
     source rewrite is needed.
@@ -186,7 +191,7 @@ def fix_base_c(base_c_path: Path) -> FixResult:
     if vec_changed:
         reasons.append("defined incomplete Vec/Vec3 _PermuterTemp aliases")
     if null_changed:
-        reasons.append("injected #define NULL ((void *)0)")
+        reasons.append("injected #pragma _permuter define NULL 0")
     return FixResult(
         path=base_c_path,
         action="fixed",

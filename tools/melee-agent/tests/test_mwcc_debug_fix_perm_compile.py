@@ -199,8 +199,8 @@ BASE_C_WITH_NULL_NO_DEFINE = textwrap.dedent('''\
 
 BASE_C_WITH_NULL_AND_DEFINE = textwrap.dedent('''\
     #include "melee.h"
+    #pragma _permuter define NULL 0
     #pragma _permuter latedefine end
-    #define NULL ((void *)0)
     void fn_test(void) {
         if (ptr == NULL) return;
     }
@@ -244,11 +244,11 @@ def test_inject_null_define_after_latedefine() -> None:
     out, changed = _inject_null_define(lines)
     assert changed is True
     out_text = "\n".join(out)
-    assert "#define NULL ((void *)0)" in out_text
-    # Should appear after the latedefine pragma
+    assert "#pragma _permuter define NULL 0" in out_text
+    # Should appear inside the latedefine block, before its end marker.
     late_idx = out.index("#pragma _permuter latedefine end")
-    null_idx = out.index("#define NULL ((void *)0)")
-    assert null_idx == late_idx + 1
+    null_idx = out.index("#pragma _permuter define NULL 0")
+    assert null_idx == late_idx - 1
 
 
 def test_inject_null_define_no_latedefine() -> None:
@@ -256,7 +256,7 @@ def test_inject_null_define_no_latedefine() -> None:
     out, changed = _inject_null_define(lines)
     assert changed is True
     out_text = "\n".join(out)
-    assert "#define NULL ((void *)0)" in out_text
+    assert "#pragma _permuter define NULL 0" in out_text
 
 
 def test_inject_null_define_idempotent() -> None:
@@ -270,8 +270,8 @@ def test_fix_base_c_injects_null_define(tmp_path: Path) -> None:
     base_c.write_text(BASE_C_WITH_NULL_NO_DEFINE)
     result = fix_base_c(base_c)
     assert result.action == "fixed"
-    assert "injected #define NULL" in result.reason
-    assert "#define NULL ((void *)0)" in base_c.read_text()
+    assert "injected #pragma _permuter define NULL 0" in result.reason
+    assert "#pragma _permuter define NULL 0" in base_c.read_text()
 
 
 def test_fix_base_c_null_define_idempotent(tmp_path: Path) -> None:
@@ -294,5 +294,5 @@ def test_fix_base_c_both_fixes_applied(tmp_path: Path) -> None:
     assert result.action == "fixed"
     out = base_c.read_text()
     assert "Vec;" in out
-    assert "#define NULL ((void *)0)" in out
+    assert "#pragma _permuter define NULL 0" in out
     assert "Vec/Vec3" in result.reason and "NULL" in result.reason

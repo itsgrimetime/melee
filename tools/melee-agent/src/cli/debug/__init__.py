@@ -2750,8 +2750,8 @@ def first_divergence_cmd(
     if json_out:
         raise typer.BadParameter("--json is currently only supported with --frame")
 
-    from ..mwcc_debug import first_divergence as fd
-    from ..mwcc_debug.colorgraph_parser import parse_hook_events, find_function
+    from ...mwcc_debug import first_divergence as fd
+    from ...mwcc_debug.colorgraph_parser import parse_hook_events, find_function
 
     dump_path = _resolve_pcdump_path(dump, function)
     text = dump_path.read_text()
@@ -3297,7 +3297,7 @@ def target_dtk_objdump(
     ] = True,
 ) -> None:
     """Emit GNU objdump-shaped PPC disassembly using the project dtk binary."""
-    from ..mwcc_debug.dtk_objdump import DtkObjdumpError, disassemble_object
+    from ...mwcc_debug.dtk_objdump import DtkObjdumpError, disassemble_object
 
     try:
         sys.stdout.write(disassemble_object(
@@ -5796,7 +5796,7 @@ def derive_target(
                 f"--force-phys-safe needs COLORGRAPH DECISIONS, but no hook "
                 f"events were found for {function!r} in {pcdump}"
             )
-        from ..mwcc_debug import first_divergence as fd
+        from ...mwcc_debug import first_divergence as fd
         virtuals = fd.decision_coloring(events, class_id)
         spilled = sorted({
             e.ig_idx for s in events.simplify_sections if s.class_id == class_id
@@ -5871,8 +5871,8 @@ def reanchor_target(
     if class_id != 0:
         typer.echo("reanchor supports only class 0 (GPR) at this time.", err=True)
         raise typer.Exit(2)
-    from ..mwcc_debug import role_descriptor as rd_mod
-    from ..mwcc_debug import role_reanchor as rr
+    from ...mwcc_debug import role_descriptor as rd_mod
+    from ...mwcc_debug import role_reanchor as rr
     target = rd_mod.TargetSpec.load_json(target_json)
     fn = function or target.function
     pcdump = _resolve_pcdump_path(pcdump, fn)
@@ -6189,8 +6189,8 @@ def _bootstrap_permuter_dir(
     force: bool,
 ) -> dict:
     """Bootstrap a decomp-permuter function dir and return action metadata."""
-    from ..mwcc_debug.fix_perm_compile import fix_perm_dir
-    from ..mwcc_debug.permuter_config import build_spec, write_settings_toml
+    from ...mwcc_debug.fix_perm_compile import fix_perm_dir
+    from ...mwcc_debug.permuter_config import build_spec, write_settings_toml
 
     melee_root = _resolve_bootstrap_melee_root(
         function,
@@ -6396,7 +6396,7 @@ def _read_bootstrap_target_asm(fn_dir: Path, melee_root: Path) -> str:
     if not target_o.exists():
         return ""
     try:
-        from ..mwcc_debug.dtk_objdump import disassemble_object
+        from ...mwcc_debug.dtk_objdump import disassemble_object
 
         return disassemble_object(
             target_o,
@@ -7510,7 +7510,7 @@ def _force_coalesce_preflight_report(
     pcdump_text: str,
     source_text: str,
 ):
-    from ..mwcc_debug.suggest_coalesce import run
+    from ...mwcc_debug.suggest_coalesce import run
 
     return run(
         function=function,
@@ -7924,7 +7924,7 @@ def _merge3_function(
     Returns (merged_text, conflicts) where conflicts is a list of
     (approx_line_number, description) pairs. Empty conflicts = clean merge.
     """
-    from ..mwcc_debug.source_patch import merge3_function
+    from ...mwcc_debug.source_patch import merge3_function
     return merge3_function(base_fn, candidate_fn, current_fn)
 
 
@@ -8358,7 +8358,7 @@ def verify_perm(
         )
 
     # Locate which side the function is missing in for a clearer message.
-    from ..mwcc_debug.source_patch import find_function as _find_fn
+    from ...mwcc_debug.source_patch import find_function as _find_fn
     cand_span = _find_fn(candidate_text, function)
     target_span = _find_fn(target_text, function)
     if cand_span is None and target_span is None:
@@ -8406,7 +8406,7 @@ def verify_perm(
     if keep:
         base_c_path = candidate.parent.parent / "base.c"
         if base_c_path.exists():
-            from ..mwcc_debug.source_patch import (
+            from ...mwcc_debug.source_patch import (
                 extract_function as _extract_fn,
                 replace_function as _replace_fn,
             )
@@ -9716,7 +9716,7 @@ def suggest_casts(
                 err=True,
             )
         else:
-            from ..mwcc_debug.source_patch import find_function as _find_fn
+            from ...mwcc_debug.source_patch import find_function as _find_fn
             span = _find_fn(text, function)
             if span:
                 fn_text = text[span.sig_start : span.full_end]
@@ -10601,7 +10601,7 @@ def stuck(
     _built_o = melee_root / "build" / "GALE01" / "src" / f"{unit}.o"
     if _built_o.exists():
         try:
-            from ..mwcc_debug.o_rewriter import find_anonymous_assert_strings
+            from ...mwcc_debug.o_rewriter import find_anonymous_assert_strings
             hsd_assert_strings = find_anonymous_assert_strings(_built_o)
         except Exception:
             pass
@@ -10850,7 +10850,7 @@ def _attempt_evidence_for_keywords(
     function: str,
     keywords: list[str],
 ) -> dict:
-    from .tracking import summarize_attempts
+    from ..tracking import summarize_attempts
 
     summary = summarize_attempts(function)
     attempts = summary.get("attempts", [])
@@ -11425,7 +11425,7 @@ def _diagnose_spilled_virtual_hints(
 
     attribution_by_virtual = {}
     try:
-        from ..mwcc_debug.virtual_attribution import explain_virtuals
+        from ...mwcc_debug.virtual_attribution import explain_virtuals
         report = explain_virtuals(
             pcdump_text,
             function,
@@ -12726,7 +12726,7 @@ def ceiling(
     _ceiling_built_o = melee_root / "build" / "GALE01" / "src" / f"{unit}.o"
     if _ceiling_built_o.exists():
         try:
-            from ..mwcc_debug.o_rewriter import find_anonymous_assert_strings
+            from ...mwcc_debug.o_rewriter import find_anonymous_assert_strings
             ceiling_hsd_assert_strings = find_anonymous_assert_strings(
                 _ceiling_built_o)
         except Exception:
@@ -14099,7 +14099,7 @@ def name_magic(
 
     Use `--list` to see what's available without renaming.
     """
-    from ..mwcc_debug.o_rewriter import (
+    from ...mwcc_debug.o_rewriter import (
         find_all_anonymous_sdata2_symbols,
         globalize_symbols,
         parse_mapping,
@@ -14485,7 +14485,7 @@ def setup_simplify_order_scorer(
     the integer printed by score-simplify-order — lower is better,
     0 = perfect prefix hit with no precolor disturbance.
     """
-    from ..mwcc_debug.permuter_config import (
+    from ...mwcc_debug.permuter_config import (
         ScorerConfig,
         SettingsTomlSpec,
         build_spec,
@@ -14994,12 +14994,12 @@ def gen_permuter_config(
     `debug mutate decl-orders` first — it's deterministic and
     ~100x faster than letting permuter rediscover decl-order rounds.
     """
-    from ..mwcc_debug.patterns import (
+    from ...mwcc_debug.patterns import (
         PATTERNS,
         get_pattern,
         patterns_for_category,
     )
-    from ..mwcc_debug.permuter_config import (
+    from ...mwcc_debug.permuter_config import (
         PatternSkippedError,
         build_spec,
         parse_existing_overrides,
@@ -15171,7 +15171,7 @@ def gen_permuter_config(
     # Side-effect: fix the compile.sh for macOS+wine if it has the
     # known import.py path-handling bug. Quiet if not applicable;
     # one-liner note if a fix was applied.
-    from ..mwcc_debug.fix_perm_compile import fix_perm_dir
+    from ...mwcc_debug.fix_perm_compile import fix_perm_dir
     compile_fix = fix_perm_dir(out.parent)
 
     if json_out:
@@ -15255,7 +15255,7 @@ def fix_perm_compile(
     `~/code/decomp-permuter/nonmatchings/fn_xyz`) or the compile.sh
     directly.
     """
-    from ..mwcc_debug.fix_perm_compile import (
+    from ...mwcc_debug.fix_perm_compile import (
         fix_compile_sh,
         fix_perm_dir,
     )
@@ -16917,7 +16917,7 @@ def pcdump_local(
                                         file=sys.stderr,
                                     )
                                 else:
-                                    from ..mwcc_debug.force_frame import (
+                                    from ...mwcc_debug.force_frame import (
                                         ForceFramePatchError,
                                         apply_force_frame_patch_plan,
                                         derive_force_frame_patch_plan,
@@ -17244,7 +17244,7 @@ def score_source(
     Wires:
         c_file → mwcceppc_debug.exe → pcdump.txt → parse → score_function
     """
-    from ..mwcc_debug import (
+    from ...mwcc_debug import (
         find_function,
         parse_hook_events,
         parse_pcdump,
@@ -17460,13 +17460,13 @@ def score_force_phys(
     """
     import json as _json
 
-    from ..mwcc_debug.simplify_order_scoring import (
+    from ...mwcc_debug.simplify_order_scoring import (
         LEX_BIG,
         STRUCTURAL_REJECTION_SCORE,
         extract_signature,
         find_coalesced_targets,
     )
-    from ..mwcc_debug.simplify_search import (
+    from ...mwcc_debug.simplify_search import (
         precolor_distance,
         score_force_phys_assignment,
     )
@@ -17702,7 +17702,7 @@ def score_simplify_order(
 
     import json as _json
 
-    from ..mwcc_debug.simplify_order_scoring import (
+    from ...mwcc_debug.simplify_order_scoring import (
         Polarity,
         SimplifyOrderSpecError,
         classify_polarity,
@@ -18096,7 +18096,7 @@ def permute(
             pcd_path.rename(cache_p)
             print(f"[ok] pcdump → {cache_p}")
 
-        from ..mwcc_debug import derive_target_from_function
+        from ...mwcc_debug import derive_target_from_function
         text = cache_p.read_text()
         fns = parse_pcdump(text)
         fn = next((f for f in fns if f.name == function), None)
@@ -18201,12 +18201,12 @@ def var_to_virtual(
     unsupported (e.g., variable lives in a macro the tokenizer can't
     see). Pass `--basis` to see the underlying evidence.
     """
-    from ..mwcc_debug.symbol_bridge import (
+    from ...mwcc_debug.symbol_bridge import (
         find_virtual_for_var,
         find_all_virtuals_for_var,
         list_bindings_with_basis,
     )
-    from ..mwcc_debug.scope_path import format_for_display, is_nested_within
+    from ...mwcc_debug.scope_path import format_for_display, is_nested_within
 
     melee_root = DEFAULT_MELEE_ROOT
     pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
@@ -18377,7 +18377,7 @@ def suggest_control_flow_shape(
     ] = False,
 ) -> None:
     """Suggest source-level control-flow shape transforms from ASM diff JSON."""
-    from ..mwcc_debug.suggest_control_flow_shape import (
+    from ...mwcc_debug.suggest_control_flow_shape import (
         annotate_source_materialization,
         analyze_control_flow_shape,
         render_json,
@@ -18556,7 +18556,7 @@ def suggest_coalesce_source(
     Discover mode example:
         debug suggest coalesce -f fn_802461BC --discover --top 5
     """
-    from ..mwcc_debug.suggest_coalesce import render_json, render_text, run
+    from ...mwcc_debug.suggest_coalesce import render_json, render_text, run
 
     # Validation: exactly one of --pair / --discover (XOR check)
     if (pair is None) == (not discover):
@@ -18623,7 +18623,7 @@ def _emit_suggest_schedule_source(
     source_file: Path | None,
     json_out: bool,
 ) -> None:
-    from ..mwcc_debug.suggest_schedule import (
+    from ...mwcc_debug.suggest_schedule import (
         render_json,
         render_text,
         run,
@@ -18900,7 +18900,7 @@ def suggest_inlines_cmd(
     if target is not None and not verify:
         typer.echo("--target is only used with --verify", err=True)
 
-    from ..mwcc_debug.suggest_inlines import render_json, render_text, run
+    from ...mwcc_debug.suggest_inlines import render_json, render_text, run
 
     melee_root = DEFAULT_MELEE_ROOT
     unit = _find_unit_for_function(function, melee_root)
@@ -18924,12 +18924,12 @@ def suggest_inlines_cmd(
         verify=False,
     )
     if verify:
-        from ..mwcc_debug.candidate_verify import (
+        from ...mwcc_debug.candidate_verify import (
             CheckdiffResult,
             parse_checkdiff_json,
             verify_real_tree_patches,
         )
-        from ..mwcc_debug.source_shape import (
+        from ...mwcc_debug.source_shape import (
             CandidateCopyTrace,
             CandidateCopyTraceSet,
             rank_scores,
@@ -19013,7 +19013,7 @@ def suggest_inlines_cmd(
             candidate,
             candidate_pcdump: str,
         ) -> tuple[int, ...]:
-            from ..mwcc_debug.symbol_bridge import (
+            from ...mwcc_debug.symbol_bridge import (
                 find_all_virtuals_for_var,
                 list_bindings_with_basis,
             )
@@ -19108,7 +19108,7 @@ def suggest_inlines_cmd(
                         total_count=1,
                     )
             else:
-                from ..mwcc_debug.copy_trace import list_new_copy_lifetimes
+                from ...mwcc_debug.copy_trace import list_new_copy_lifetimes
 
                 def _copy_trace_runner(_candidate) -> CandidateCopyTraceSet:
                     candidate_pcdump = _run_trace_pcdump(source_rel)
@@ -19293,7 +19293,7 @@ def virtual_to_ig(
     ] = False,
 ) -> None:
     """Map a visible pcode virtual register to allocator graph identity."""
-    from ..mwcc_debug.copy_trace import find_virtual_to_ig
+    from ...mwcc_debug.copy_trace import find_virtual_to_ig
 
     virtual_int = _parse_virtual_reg_token(virtual)
     effective_class = _effective_reg_class(reg_class, virtual)
@@ -19424,7 +19424,7 @@ def trace_copy(
     ] = False,
 ) -> None:
     """Trace where a pcode copy appears and why it disappears."""
-    from ..mwcc_debug.copy_trace import list_copy_lifetimes, trace_copy_lifetime
+    from ...mwcc_debug.copy_trace import list_copy_lifetimes, trace_copy_lifetime
 
     melee_root = DEFAULT_MELEE_ROOT
     pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
@@ -19925,7 +19925,7 @@ def _name_magic_decode_anonymous_symbol(symbol: Any) -> dict[str, Any]:
             pass
     elif symbol.size == 8:
         try:
-            from ..mwcc_debug.o_rewriter import MAGIC_S32, MAGIC_U32
+            from ...mwcc_debug.o_rewriter import MAGIC_S32, MAGIC_U32
 
             if symbol.value == MAGIC_S32:
                 payload["bias"] = "s32"
@@ -19952,7 +19952,7 @@ def _name_magic_object_evidence(
     if not target_obj.exists():
         return None, "target-object-missing"
 
-    from ..mwcc_debug.o_rewriter import (
+    from ...mwcc_debug.o_rewriter import (
         find_all_anonymous_sdata2_symbols,
         suggest_name_magic_map,
     )
@@ -20061,7 +20061,7 @@ def inspect_stack_homes(
     ] = False,
 ) -> None:
     """Explain final-only FPR stack-home targets and source-shape leads."""
-    from ..mwcc_debug.stack_home_explorer import (
+    from ...mwcc_debug.stack_home_explorer import (
         attach_variant_rankings,
         explore_stack_homes,
         generate_local_array_sqrt_variants,
@@ -20950,7 +20950,7 @@ def inspect_explain_schedule(
     ] = False,
 ) -> None:
     """Explain observed scheduler windows for known force-schedule targets."""
-    from ..mwcc_debug.schedule_explain import (
+    from ...mwcc_debug.schedule_explain import (
         explain_schedule,
         render_json,
         render_text,
@@ -21068,7 +21068,7 @@ def debug_diff_schedule(
     ] = False,
 ) -> None:
     """Diff real vs forced scheduler-window decisions."""
-    from ..mwcc_debug.schedule_explain import (
+    from ...mwcc_debug.schedule_explain import (
         diff_schedule,
         render_diff_json,
         render_diff_text,
@@ -21166,7 +21166,7 @@ def virtual_to_var(
     nodes, etc.), falls back to showing the first defining IR op
     so you can correlate to the C source manually.
     """
-    from ..mwcc_debug.symbol_bridge import (
+    from ...mwcc_debug.symbol_bridge import (
         find_first_def,
         find_var_for_virtual,
     )
@@ -21220,7 +21220,7 @@ def virtual_to_var(
     except ValueError:
         source_label = str(source_path)
     if reg_class == "fpr":
-        from ..mwcc_debug.virtual_attribution import explain_virtuals
+        from ...mwcc_debug.virtual_attribution import explain_virtuals
         report = explain_virtuals(
             text,
             function,
@@ -21346,7 +21346,7 @@ def virtual_to_var(
         return
 
     if json_out:
-        from ..mwcc_debug.scope_path import format_for_display
+        from ...mwcc_debug.scope_path import format_for_display
         payload: dict = {
             "var_name": binding.var_name,
             "virtual": binding.virtual,
@@ -21358,7 +21358,7 @@ def virtual_to_var(
         }
         print(json.dumps(payload, indent=2))
     else:
-        from ..mwcc_debug.scope_path import format_for_display
+        from ...mwcc_debug.scope_path import format_for_display
         scope_str = format_for_display(binding.scope_path) if binding.scope_path else ""
         scope_suffix = f"  scope: {scope_str}" if scope_str else ""
         print(f"r{virtual}: {binding.var_name} ({binding.kind})")
@@ -21377,7 +21377,7 @@ def _virtual_to_var_call_return_source(
     source_file: str,
 ):
     try:
-        from ..mwcc_debug.virtual_attribution import explain_virtuals
+        from ...mwcc_debug.virtual_attribution import explain_virtuals
         report = explain_virtuals(
             pcdump_text,
             function,
@@ -21558,7 +21558,7 @@ def intervene_coalesce_cmd(
     `debug dump local|remote --force-coalesce ... --force-coalesce-fn FN`,
     so the compiler/DLL, not this wrapper, changes allocator state.
     """
-    from ..mwcc_debug.allocator_intervention import (
+    from ...mwcc_debug.allocator_intervention import (
         CoalesceInterventionSpec,
         analyze_coalesce_intervention,
         parse_coalesce_pair,
@@ -21759,7 +21759,7 @@ def mutate_type_change_cmd(
     ] = False,
 ) -> None:
     """Change a local variable's declared type."""
-    from ..mwcc_debug.mutators import MutationUnsupported, mutate_type_change
+    from ...mwcc_debug.mutators import MutationUnsupported, mutate_type_change
 
     melee_root = DEFAULT_MELEE_ROOT
     if source_file is not None:
@@ -21843,7 +21843,7 @@ def mutate_insert_alias_cmd(
 ) -> None:
     """Insert a fresh local copy of a variable before the N-th
     reading statement and rewrite that statement to use the alias."""
-    from ..mwcc_debug.mutators import (
+    from ...mwcc_debug.mutators import (
         MutationUnsupported, mutate_insert_alias_before_use,
     )
 
@@ -21909,7 +21909,7 @@ def _control_flow_compile_source_variant(
     melee_root: Path,
     timeout: int,
 ):
-    from ..mwcc_debug.diff_capture import compile_source_variant
+    from ...mwcc_debug.diff_capture import compile_source_variant
 
     return compile_source_variant(
         diff_input,
@@ -21958,7 +21958,7 @@ def _indexed_struct_compile_source_variant(
     melee_root: Path,
     timeout: int,
 ):
-    from ..mwcc_debug.diff_capture import compile_source_variant
+    from ...mwcc_debug.diff_capture import compile_source_variant
 
     return compile_source_variant(
         diff_input,
@@ -22514,13 +22514,13 @@ def debug_coalesce_search_cmd(
     ] = False,
 ) -> None:
     """Search source-shape probes by target coalescing/interference objective."""
-    from ..mwcc_debug.coalesce_search import (
+    from ...mwcc_debug.coalesce_search import (
         rank_coalesce_candidates,
         render_coalesce_variant,
         score_coalesce_delta,
     )
-    from ..mwcc_debug.diff_capture import DiffInput, compile_source_variant
-    from ..mwcc_debug.pressure_explorer import (
+    from ...mwcc_debug.diff_capture import DiffInput, compile_source_variant
+    from ...mwcc_debug.pressure_explorer import (
         compare_pressure_signatures,
         generate_lifetime_layout_probes,
         pressure_signature_from_pcdump,
@@ -22873,17 +22873,17 @@ def debug_select_order_search_cmd(
     ] = False,
 ) -> None:
     """Search source-shape probes by target COLORGRAPH select-order objective."""
-    from ..mwcc_debug.diff_capture import (
+    from ...mwcc_debug.diff_capture import (
         CompileFailure,
         DiffInput,
         compile_source_variant,
     )
-    from ..mwcc_debug.pressure_explorer import (
+    from ...mwcc_debug.pressure_explorer import (
         compare_pressure_signatures,
         generate_lifetime_layout_probes,
         pressure_signature_from_pcdump,
     )
-    from ..mwcc_debug.select_order_search import (
+    from ...mwcc_debug.select_order_search import (
         rank_select_order_candidates,
         render_select_order_variant,
         score_select_order_candidate,
@@ -23471,8 +23471,8 @@ def mutate_lifetime_layout_cmd(
     ] = False,
 ) -> None:
     """Explore lifetime/layout source probes and attribute pressure deltas."""
-    from ..mwcc_debug.diff_capture import DiffInput, compile_source_variant
-    from ..mwcc_debug.pressure_explorer import (
+    from ...mwcc_debug.diff_capture import DiffInput, compile_source_variant
+    from ...mwcc_debug.pressure_explorer import (
         compare_pressure_signatures,
         generate_lifetime_layout_probes,
         generate_source_lifetime_probes,
@@ -23973,11 +23973,11 @@ def mutate_control_flow_shape_search_cmd(
     ] = False,
 ) -> None:
     """Compile and score conservative control-flow shape source probes."""
-    from ..mwcc_debug.control_flow_shape import (
+    from ...mwcc_debug.control_flow_shape import (
         DEFAULT_CONTROL_FLOW_OPERATORS,
         scan_control_flow_shape_probes,
     )
-    from ..mwcc_debug.diff_capture import DiffInput
+    from ...mwcc_debug.diff_capture import DiffInput
 
     melee_root = DEFAULT_MELEE_ROOT
     resolved_source: Path | None = None
@@ -24295,8 +24295,8 @@ def mutate_indexed_struct_search_cmd(
     ] = False,
 ) -> None:
     """Compile and score indexed struct pointer dematerialization probes."""
-    from ..mwcc_debug.diff_capture import CompileFailure, DiffInput
-    from ..mwcc_debug.pressure_explorer import (
+    from ...mwcc_debug.diff_capture import CompileFailure, DiffInput
+    from ...mwcc_debug.pressure_explorer import (
         scan_indexed_struct_pointer_probes,
     )
 
@@ -24665,7 +24665,7 @@ def _rank_name_magic_source_variants(
 def _name_magic_section_anchor_offsets_from_payload(
     payload: Mapping[str, Any],
 ) -> list[str]:
-    from ..mwcc_debug.name_magic_source import parse_name_magic_relocation_evidence
+    from ...mwcc_debug.name_magic_source import parse_name_magic_relocation_evidence
 
     parsed = parse_name_magic_relocation_evidence(dict(payload))
     return sorted(
@@ -24804,7 +24804,7 @@ def mutate_name_magic_source_declarations_cmd(
     Common switches: --score-match-percent, --no-score-match-percent,
     --compile-probes.
     """
-    from ..mwcc_debug.name_magic_source import (
+    from ...mwcc_debug.name_magic_source import (
         NameMagicBlocker,
         generate_name_magic_source_probes,
         parse_name_magic_relocation_evidence,
@@ -25323,8 +25323,8 @@ def mutate_frame_transform_search_cmd(
     ] = False,
 ) -> None:
     """Compile and score directed source transforms for frame-size divergence."""
-    from ..mwcc_debug.diff_capture import DiffInput, compile_source_variant
-    from ..mwcc_debug.pressure_explorer import (
+    from ...mwcc_debug.diff_capture import DiffInput, compile_source_variant
+    from ...mwcc_debug.pressure_explorer import (
         generate_frame_directed_probes,
         generate_lifetime_layout_probes,
         scan_frame_local_dematerialization_probes,
@@ -25844,7 +25844,7 @@ def _render_combined_score_ranking(
 
     Renders nothing when there are no compiled candidates to rank.
     """
-    from ..mwcc_debug.simplify_search import combined_value
+    from ...mwcc_debug.simplify_search import combined_value
 
     rows = _unified_candidates(result)
     if not rows:
@@ -26160,7 +26160,7 @@ def _render_triage_ranking(
     # cross-references stay consistent. If a candidate isn't in the
     # simplify-order results (cross-source dedup, compile failure inside
     # search, etc.), report "n/a".
-    from ..mwcc_debug.simplify_search import combined_value
+    from ...mwcc_debug.simplify_search import combined_value
 
     so_rank: dict[str, int] = {}
     so_rows = _unified_candidates(result)
@@ -26525,19 +26525,19 @@ def mutate_simplify_order_cmd(
       melee-agent debug mutate simplify-order \\
           --fn grVenom_80204284 --want-first '42,32'
     """
-    from ..mwcc_debug.diff_capture import CompileFailure
-    from ..mwcc_debug.simplify_search import (
+    from ...mwcc_debug.diff_capture import CompileFailure
+    from ...mwcc_debug.simplify_search import (
         FunctionContext,
         baseline_signature,
         search,
     )
-    from ..mwcc_debug.simplify_variants import (
+    from ...mwcc_debug.simplify_variants import (
         decl_orders_source,
         holder_lifetime_source,
         insert_alias_source,
         type_change_source,
     )
-    from ..mwcc_debug.simplify_variants_permuter import (
+    from ...mwcc_debug.simplify_variants_permuter import (
         permuter_source,
         resolve_permuter_function_dir,
     )
@@ -26654,7 +26654,7 @@ def mutate_simplify_order_cmd(
     )
 
     # Compile the baseline once to get its BaselineSignature.
-    from ..mwcc_debug.diff_capture import DiffInput, compile_source_variant
+    from ...mwcc_debug.diff_capture import DiffInput, compile_source_variant
 
     diff_input = DiffInput(
         label="baseline",
@@ -27047,8 +27047,8 @@ def tier3_search(
          the real source tree via the same debug permute verify machinery (with
          the inline_fn placeholder check still firing).
     """
-    from ..mwcc_debug.symbol_bridge import list_bindings
-    from ..mwcc_debug.tier3_search import (
+    from ...mwcc_debug.symbol_bridge import list_bindings
+    from ...mwcc_debug.tier3_search import (
         find_best_candidate,
         materialize_seed,
         plan_seeds,
@@ -27058,7 +27058,7 @@ def tier3_search(
         save_compile_failure,
         smoke_compile,
     )
-    from ..mwcc_debug.pressure_explorer import (
+    from ...mwcc_debug.pressure_explorer import (
         generate_frame_directed_probes,
         generate_lifetime_layout_probes,
     )
@@ -27589,7 +27589,7 @@ def verify_with_name_magic(
     #    or surface what anonymous symbols exist so the agent can
     #    construct a map.
     if name_map:
-        from ..mwcc_debug.o_rewriter import (
+        from ...mwcc_debug.o_rewriter import (
             parse_mapping,
             rename_magic_symbols,
         )
@@ -27619,7 +27619,7 @@ def verify_with_name_magic(
                 "(use `debug util name-magic <o_file> --list` to inspect)"
             )
     elif apply_auto:
-        from ..mwcc_debug.o_rewriter import apply_name_magic_auto
+        from ...mwcc_debug.o_rewriter import apply_name_magic_auto
 
         target_o = melee_root / "build" / "GALE01" / "obj" / f"{unit}.o"
         if not target_o.exists():
@@ -27680,7 +27680,7 @@ def verify_with_name_magic(
         # the target .o (build/GALE01/obj/<unit>.o) to suggest concrete
         # named symbols instead of placeholders.
         try:
-            from ..mwcc_debug.o_rewriter import suggest_name_magic_map
+            from ...mwcc_debug.o_rewriter import suggest_name_magic_map
             target_o = melee_root / "build" / "GALE01" / "obj" / f"{unit}.o"
             syms, suggested = suggest_name_magic_map(obj_path, target_o)
         except Exception as e:

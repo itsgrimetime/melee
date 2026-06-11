@@ -15,4 +15,5 @@ _ASM_STACK_SLOT_RE = re.compile(r"(?P<offset>-?(?:0x[0-9A-Fa-f]+|\d+))\(r1\)")
 _ASM_BRANCH_CALL_RE = re.compile(r"\bbl\s+(?P<call>[A-Za-z_]\w*)")
 _ASM_RELOC_CALL_RE = re.compile(r"\bR_PPC_REL24\s+(?P<call>[A-Za-z_]\w*)")
 
+__all__ = [name for name in globals() if not name.startswith("__")]
 
