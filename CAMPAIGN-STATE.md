@@ -1274,3 +1274,110 @@ census 67. Tree clean at the iteration-36 stack.
   the live door), lhzu/fr ~11+Δ1, B-col shadow ~6, name statement-temp ~10.
 - Non-walled opens: rt_f ring 5 (numbering anomaly), init-pair 4 (flip
   regresses), scatter ~3.
+
+## Iteration-38 (driver 4): FIELD-SHAPE FIRES — fusion door OPEN; landing = substrate
+migration (no commit; tree restored to baseline 5a42093cd, re-verified 97.74/Δ3)
+
+### TASK 1 — THE FIELD-SHAPE BUILD: the fusion MECHANISM WORKS (door-5 refuted)
+Build (mirrors mnDiagram2_HandleInput:294 exactly; PAD_STACK(64) kept; both the
+decl-init form `u32 input = mn_80229624(4);` and separate-assign form measured —
+codegen-identical 96.70/96.69):
+    u32 input = mn_80229624(4);            // bypasses Menu_GetAllInputs inline
+    ... s32 count2;                        // decl uninitialized
+    ((s32 *) &mn_804A04F0.buttons)[1] = input;
+    ((s32 *) &mn_804A04F0.buttons)[0] = (count2 = 0);
+METER:
+- ONE li ✓✓: exactly one `li r25,0` at +03c (target-identical position AND
+  register, naturally — no force). The +048 fresh-li is GONE. Δ2 fusion debt PAID.
+- MEGAWEB FORMS (r14-verified, ig35 = count2's HOME web, 11 sites): {+03c li,
+  +044 buttons-hi stw, +874 count2++, all 8 count compares +8a8/+8cc/+970/+994/
+  +a8c/+ab0/+b54/+b78}. count2's home-init IS the buttons-hi zero = the exact
+  target form the wall demanded. The {ternary, entering_menu} cluster did NOT
+  join on this graph (smaller than target's 16-site web).
+- FRONT POP r25 ✓: ig35 pops front iter8 → r25 naturally (count2-home keeps its
+  D-NEW-1-era band; order+fusion NO LONGER mutually exclusive — the iteration-24
+  "mutually exclusive through every door" verdict is SUPERSEDED by this door).
+- DEATH MODE (the gate-fail): match 96.70 < 97.74. NOT door-5 const-prop (the
+  def-form `(count2 = 0)` store survives IRO; the sibling-idiom prediction was
+  CORRECT). Two new mechanisms:
+  M1 ENTRY-BAND PERMUTATION: bypassing the inline makes `input` an explicit
+  home web; the three entry webs renumber by CREATION ORDER (statement position):
+  ig176=sorted < ig178=input < ig180=base → same-sweep descending pop → base=r30,
+  input=r29, sorted=r28 = cyclic permutation of target's sorted=r30, base=r29,
+  input=r28. Baseline graph achieves target order via SORTED'S SWEEP DEFERRAL
+  (deg 27 vs field-shape 25 — the inline's u64 temps were ~2 deferral-margin
+  edges; sorted skips the ascending sweep, pops right after data).
+  M2 DOWNSTREAM RENUMBER RE-ROLL (iteration-28 blocker class): the inline bypass
+  shifts every downstream @-temp; the nav/pool coloring tuned in iterations 33-36
+  re-rolls. STRUCTURAL fallout, not just renames — Δ multiset vs target:
+  {li +3, mr +3, clrlwi −2, b +1} + the standing lhzu member = Δ6 (901 vs 895).
+  fc-head +178 addi/+17c mr pressure copies are back.
+
+### THE FORCE PROOF (diagnostic; debug DLL; force verified applied per #550)
+--force-iter-first "53,176,180,178" --force-iter-first-fn mnDiagram_InputProc:
+front pops 53→r31, 176(sorted)→r30 ✓, 180(base)→r29 ✓, 178(input)→r28 ✓.
+Same-offset operand census (forced-debug vs target): 62 → 50 reg-mismatch
+operands; the THREE entry families ((r30,r28)×4, (r29,r30)×4, (r28,r29)×5)
+vanish exactly; downstream families ((r28,r27)×6, (r24,r3)×8...) UNTOUCHED —
+M1 and M2 are independent. Head residue after force: only the +030/+034
+EMISSION-ORDER swap (both registers correct; ours emits base-addi before
+input-addi, target the reverse — scheduler order, untested lever).
+
+### THE C-LEVER HUNT for M1 (sorted-first-pop): blocked both ways, spellings tried
+- Option B (sorted decl bare + `sorted = mnDiagram_804A0750.sorted_fighters;`
+  AFTER the stores): creation-order control PROVEN IN VIVO — base→r29 ✓ and
+  input→r28 ✓ snapped (two of three) — but sorted's lis/addi EMITS AFTER THE
+  CALL (MWCC does not move defs across calls; target needs +004/+018 pre-call)
+  → prologue shifts → 96.14. REVERTED. The coupling: created-last (color) and
+  defined-pre-call (schedule) are mutually exclusive for sorted through plain
+  statement order — C89 blocks decls after statements; nested-block and
+  comma-expr forms all put the def textually post-call.
+- Deferral route (+2 edges on sorted, body-neutral): no spelling found. DCE'd
+  defs add NO edges (but DO consume ig slots, see below). u64-pair pressure
+  reintroduction = the baseline (loses fusion) or __shr2u libcall (door 2).
+- NOT claiming source-impossibility: untested directions = the +030/+034
+  emission-order lever, store-order swap (zero-store textually first; scheduler
+  may normalize), data/sorted decl swap (shifts creation indices), and any
+  spelling that re-adds ~2 final-sweep interference edges to sorted.
+
+### THE WALL RESTATED (supersedes "fusion family ~28+Δ2 walled")
+The fusion door is OPEN: the field-shape build produces target's count2-home
+megaweb fusion + front r25 pop + Δ2 paid, from natural sibling-precedent C.
+The cost is the substrate: −1.04pp (96.70) from M1 (~13+ same-offset sites +
+head) and M2 (the 33-36 nav tuning invalidated + Δ+5 structural). LANDING IT =
+the iteration-29 pattern: commit-below-gate (orchestrator decision required;
+gates forbid it for a driver) then re-tune the nav levers on the new graph
+(rider-move/anchors/decl-order were all graph-relative). Expected path:
+96.70 → ~97.2 (front lever or accepted-as-is) → re-climb past 97.74 with the
+fusion family + Δ2 as permanent gains. The 33-36 lever recipes are recorded
+and re-executable; the re-tune is multi-iteration work.
+
+### TASK 3 pivot — rt_f numbering anomaly READ (mechanism found, no build)
+Baseline dump, ig54-68 pop window: igs 58-63 AND 65 are DEG-0 EMPTY WEBS
+(DCE'd defs still consume ig indices = empty placeholder slots, pop to r0).
+The window is REGION-MAJOR: dn_f cluster {68,67=ptr3-walker,66=merged} >
+[empties] > rt_f cluster {64=merged, 57,56,55=walker family}. ptr3's two webs
+(67 vs 55) are split by the empty slots + rt_f's own cluster — this is the
+iteration-37 "non-contiguous anomaly" mechanism. rt_f merged (ig64, pop 362)
+still pops BEFORE its walker (ig55, pop 371) → r25 ✗. A lever must lift the
+rt_f walker web above ig64 — note the slot-consumers (which dead defs create
+58-63?) are unidentified; candidates: the ptr3 dead anchor itself, i=count2,
+count's dead decl-init. Iteration-37's ptr4 split regressed because it
+re-rolled this whole window.
+
+### Substrate sweep: NOT RUN (contingent on a committed graph change; none).
+### Standing observation (verify before relying): a build with PAD_STACK(64)
+removed from InputProc scored 97.74 with the same source-fingerprint as
+baseline — PAD_STACK(64) may be codegen-neutral on the current graph.
+### State: tree CLEAN at 5a42093cd, match 97.74, opcode 98.4, Δ3, census 67.
+### Driver-5 entry points (priority order)
+1. ORCHESTRATOR DECISION: land the field-shape substrate (commit 96.70 +
+   re-tune campaign) — the only known path to the fusion family's ~28 sites
+   + Δ2. The build recipe, force proof, and M1/M2 decomposition are above.
+2. If landing: first probe the M1 levers (emission-order +030/+034, store-order
+   swap, deferral-edge spellings), then re-run the iteration-33-36 lever set
+   on the new graph (cur→i merge bands, rider-move, ptr3 anchor, prev-flip).
+3. If not landing: rt_f window lever (lift walker above ig64; identify the
+   empty-slot creators first — one r14 fingerprint per candidate dead def).
+4. Micro-opens unchanged: init-pair 4 (two graphs, flip regresses), nr +0f4 /
+   soup +0bc (B-col shadow members).
