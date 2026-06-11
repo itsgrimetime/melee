@@ -106,6 +106,25 @@ class TestScratchTokenPaths:
         assert "decomp" in str(DECOMP_SCRATCH_TOKENS_FILE).lower() or ".config" in str(DECOMP_SCRATCH_TOKENS_FILE)
 
 
+class TestScratchContextPath:
+    """Tests for scratch context path resolution after the scratch package split."""
+
+    def test_context_file_resolves_without_env_override(self, monkeypatch):
+        from pathlib import Path
+
+        import src.cli.scratch as scratch
+
+        monkeypatch.setattr(
+            scratch,
+            "get_context_file",
+            lambda source_file=None: Path("build/GALE01/src/melee/mn/mndiagram.ctx"),
+        )
+
+        assert scratch._get_context_file("melee/mn/mndiagram.c") == Path(
+            "build/GALE01/src/melee/mn/mndiagram.ctx"
+        )
+
+
 class TestScratchCreateValidation:
     """Tests for scratch creation parameter validation.
 
