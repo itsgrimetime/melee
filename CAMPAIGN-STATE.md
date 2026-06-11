@@ -2430,3 +2430,116 @@ All three verified ACTIVE with correct base scores.
   settings.toml restored in the main dir. Tuned base verified 1235 locally pre-submit.
 - FINAL POSTURE: coder1 = tuned random (1235), coder2 = stock random (1235),
   coder3 = stock random (1235). All NULL-pragma-verified.
+
+## Iteration-49 (driver 8): immediate-lift class generalized — head-window live, tail-window
+DCE'd; 98.62 → 98.63
+Baseline verified: bcdd2265c/ebe72fec6, 98.62, Δ1, hunks 6, opcode 99.4. One source commit:
+4e514c1f1 (98.63).
+
+### TASK 1 — COPY-PROPAGATED IMMEDIATE LIFT: generalization table (3 builds, gated)
+| Build | Site | Lift | Result | Verdict |
+|-------|------|------|--------|---------|
+| A | 0x10-arm head, audio(1) | `cur = 1; lbAudioAx_80024030(cur);` | 98.63/99.4/Δ1/6 — match +0.01, rest held, M1 ✓ (count2 r25, li r3,1 copy-propped at +050) | **COMMITTED 4e514c1f1** |
+| B | dn_n result block, audio(2) | `row3 = 2; lbAudioAx_80024030(row3);` | byte-neutral (98.63 =) | INERT — reverted |
+| C | dn_f result block, audio(2) | `row5 = 2; lbAudioAx_80024030(row5);` | byte-neutral (98.63 =) | INERT — reverted |
+
+CLASS LAW (4 data points): **head-window lifts survive** (i=0 SetupProc committed iter-48;
+cur=1 audio +0.01 iter-49) — the lifted band lands before the IRO promotion scan of the
+0x10-arm bodies and renumbers downstream temps. **Nav-arm-tail lifts are dead-store
+eliminated** (row3 dn_n, row5 dn_f — both byte-neutral): in arm-tail positions the
+assignment is copy-propped at the call and the store fully DCE'd before it can mint a band.
+Same finding shape as iteration-46's erased same-path anchors. ⟹ The class's usable window
+is the ENTRY/HEAD region only (pre-front statements with downstream temp regions); the
+0x10-arm head is now occupied by TWO lifts (i, cur). Remaining head-window literal sites:
+none (audio(1) and SetupProc-0 were the only literals in the window). CLASS EXHAUSTED
+in-function unless a new head literal appears from future restructuring.
+
+### TASK 2 — HARVEST (tuned channel first results + stock finals)
+Tuned coder1 (cast/expand/type weights): 16 candidates. The weights bias produced exactly
+the predicted family mix — 4 spellings of the SAME 0x10-arm row-site fix, all 1140-1160:
+use-site `(u8) row` cast (1140-1), `row = 8; row = hovered >> row` shift-split (1140-2),
+`new_var = row` short-alias (1140-3), row-split (1160-1). All score-equal to the
+metered-closed (u8) assignment cast (iter-48 gate-fail Δ2/hunks8) — the permuter scorer
+rewards the site fix; retail meter shows the structure trade. NOT re-metered (same-site
+same-codegen family). Remaining 12: family rejects (entry-decl new_var3 ×4, type-change
+×2, cur+=() ×2, ptr alias-block, no-op &&-chain, multi-hacks). NOTE for census: two
+candidates MOVED/REMOVED PAD_STACK(64) and scored 1210-1225 (below base!) — the permuter
+considers the pad's stack-home shift profitable; retail gates would need the frame intact.
+Do NOT chase (diagnostic pad is long-standing baseline; natural-frame-reservation guidance
+stands).
+Stock coder2 final: 1140-1 (multi-hack alias+no-op), 1165-1/2 (type+alias families) — all
+tallied rejects. Stock coder3: best unchanged (the metered (u8) cast).
+
+### TASK 3 — substrate sweep on the 4e514c1f1 graph
+- Fusion/zero: +03c li r23 (zero-temp) / +048 extra li r25 (count2 home) — Δ1 unchanged.
+  count2 r25 ✓. WALL STANDS.
+- nc anchor transposition: +094 addi r28-vs-r27 — STANDS (the +0.01 was elsewhere).
+- lhzu/fr: STANDS.
+- Macro enumeration RE-RUN on this graph: job mnDiagram_InputProc_macro-coder1-20260611-055405
+  (7,203, seed-0 verified 1220 locally). Result pending at write time — see close-out below.
+
+### Stale-base doctrine executed (after 4e514c1f1)
+- **#558 FOURTH occurrence**: bootstrap dropped the NULL pragma again (4/4 — fully
+  deterministic). Re-added; new base verified compiling, **base score = 1220**.
+  Note: the tuned channel's first hit was EXACTLY 1220 — it had independently found the
+  cur=1 lift form (or codegen-equivalent) before the deduction landed it. Channel + class
+  converged on the same change.
+- base.c propagated to _tuned dir; _macro dir rebuilt via the PERM script (asserts passed
+  — the new head edit didn't drift the five nav-arm site texts).
+- Submitted: macro→coder1 (...-055405), stock→coder2 (...-055415), stock→coder3 (...-055424).
+- Tuned coder1 resubmission queued AFTER the macro completes (finite, ~25 min).
+
+### Iteration-49 continued — second commit: the intermediate-copy class (harvest)
+**COMMITTED 7a17d3dc5: coder3-055424 output-1190-1** — dn_f found via row5 intermediate-copy:
+  `row5 = mnDiagram_FindNextFighter(sorted, cur); found = row5;`
+98.63 → **98.67**, opcode 99.4 / Δ1 / hunks 6 all held, M1 ✓. Decoded from full-FILE token
+diff (main-body diff missed it: 1095/1125 siblings carried a `volatile unsigned short/char`
+HELPER-param hack — REJECT family; 1190-1 was the copy alone. TRIAGE NOTE: always run the
+full-file diff — helper/preamble changes hide from main-body-only diffs; the permuter's
+`static inline`→`inline static` + dropped-pragma hunks are normalization artifacts, ignore).
+CLASS MECHANICS (now 3 variants distinguished):
+- fresh-temp copy (`found2 = call; found = found2;`): copy-propagated, byte-identical (iter-46).
+- dead-STORE lift (`row3 = 2; audio(row3)` tail positions): DCE'd, byte-identical (iter-49 B/C).
+- existing-var copy whose value is CONSUMED (`row5 = call; found = row5;`): PERSISTS and
+  renumbers (this win). The variable must have its own web elsewhere (row5/up_f).
+GENERALIZATION (3 sibling builds, all byte-neutral → reverted; class is SITE-SPECIFIC):
+- rt_f via row6: inert. rt_f via row5: inert. dn_n via row3: inert.
+- 1/4 sites live. The dn_f graph position (after the committed head lifts) is what made it
+  fire; the sibling sites' bands were already in their stable arrangement.
+ALSO METERED THIS PASS: coder2-055415 1125-2 `(short)` cast on the 0x10-arm row site —
+98.76 (best match% ever seen) but Δ2/hunks8, M1 INTACT (unlike iter-45's row lifts).
+GATE FAIL → reverted. ROW-SITE FAMILY VERDICT (6 spellings metered/scored): every spelling
+buys +0.08-0.13pp at +1 instruction/+2 hunks; the missing spelling must fix the site
+registers with NO added instruction. Pre-classified; only meter a row-site candidate if
+its diff shows NO net instruction insertion.
+
+### Macro enumeration: third graph (98.63/4e514c1f1) re-run — NULL again
+Job ...macro-coder1-20260611-055405: all 7,203, best = 1220 @iter28 (base-identical), zero
+candidates. THREE consecutive graph-independent nulls (21,609 variants total). The
+found↔row2 cycle does not move under arrangement/arg-shape/derivation spellings, period.
+
+### Stale-base doctrine after 7a17d3dc5
+- **#558 FIFTH occurrence** (5/5 deterministic; noted on the issue with suggested fix).
+- New base verified: **1190** (row5 copy present in base.c).
+- Submitted: stock coder2 ...-060955, stock coder3 ...-061005, macro 4th run ...-061014
+  (dn_f PERM options REBASED around the committed copy unit {row5=call; found=row5} —
+  the graph change is INSIDE the macro's own dn_f region this time, making run 4 the most
+  interesting re-test yet; seed-0 verified 1190). Tuned coder1 auto-resubmits when macro4
+  completes (background chain).
+
+### Driver-10 entry points
+1. Read macro4 result (...061014; finite). Then verify the tuned auto-resubmission landed
+   (job id in this session's background output). If macro4 null: FOUR graphs — stop
+   re-running the arrangement space entirely; only rebuild it if a commit restructures one
+   of the five enumerated regions' control flow (not just bands).
+2. HARVEST coder2-060955 / coder3-061005 / tuned-(new) at cadence. Gate ≥98.67
+   (Δ1, hunks 6, opcode 99.4). Pre-classified: six families + row-site 6-spelling family
+   (meter only no-net-instruction diffs) + volatile-helper-param hacks (full-file diff!).
+3. Immediate-lift class: head-window EXHAUSTED (both literals lifted); intermediate-copy
+   class: site-specific, dn_f committed, siblings inert. New class instances only via
+   harvest.
+4. Walls: fusion Δ1 (+048), lhzu, nc transposition (+094), nr-head order — all standing on
+   the 98.67 graph. Census drop: 868 differing lines (was inflated by +4-shift artifact),
+   match 98.67 / Δ1 / hunks 6 / opcode 99.4.
+5. #558: expect the pragma drop EVERY bootstrap (5/5); the doctrine handles it.
+6. REPORT TRIGGER: 99.0.
