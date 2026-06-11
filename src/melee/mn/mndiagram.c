@@ -1130,38 +1130,28 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
     ptr = sorted + i;
     goto fr_test;
     fr_outer:
-    if (row2 == 0)
-    {
-      row_result2 = sorted[i];
-    }
-    else
-    {
-      ptr2 = ptr;
-      fr_inner:
-      i++;
+        if (row2 == 0) {
+            row_result2 = sorted[i];
+        } else {
+            ptr2 = ptr;
+        fr_inner:
+            i++;
 
-      ptr2++;
-      ptr++;
-      if (i >= 0x19)
-      {
-        row_result2 = 0x19;
-      }
-      else
-        if (mn_IsFighterUnlocked(*ptr2) != 0)
-      {
-        row2--;
-        fr_test:
-        if (row2 >= 0)
-        {
-          goto fr_outer;
+            ptr2++;
+            ptr++;
+            if (i >= 0x19) {
+                row_result2 = 0x19;
+            } else if (mn_IsFighterUnlocked(*ptr2) != 0) {
+                row2--;
+            fr_test:
+                if (row2 >= 0) {
+                    goto fr_outer;
+                }
+
+            } else {
+                goto fr_inner;
+            }
         }
-
-      }
-      else
-      {
-        goto fr_inner;
-      }
-    }
 
     mnDiagram_80241310(col_result2, row_result2, 0);
     return;
@@ -1362,13 +1352,13 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
     else
       if (input & 4)
     {
-      row3 = mn_804A04F0.hovered_selection >> 8;
-      if ((row3 > 0) && (count > (row3 - 1)))
-      {
-        lbAudioAx_80024030(2);
-        mn_804A04F0.hovered_selection = ((u8) mn_804A04F0.hovered_selection) | ((row3 - 1) << 8);
-        return;
-      }
+        row3 = mn_804A04F0.hovered_selection >> 8;
+        if ((row3 > 0) && (count > (row3 - 1))) {
+            lbAudioAx_80024030(2);
+            mn_804A04F0.hovered_selection =
+                ((u8) mn_804A04F0.hovered_selection) | ((row3 - 1) << 8);
+            return;
+        }
       if (count > 7)
       {
         cur = data->name_cursor_pos >> 8;
@@ -1400,13 +1390,13 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
     else
       if (input & 8)
     {
-      row4 = mn_804A04F0.hovered_selection >> 8;
-      if ((row4 < 6) && (count > (row4 + 1)))
-      {
-        lbAudioAx_80024030(2);
-        mn_804A04F0.hovered_selection = ((u8) mn_804A04F0.hovered_selection) | ((row4 + 1) << 8);
-        return;
-      }
+        row4 = mn_804A04F0.hovered_selection >> 8;
+        if ((row4 < 6) && (count > (row4 + 1))) {
+            lbAudioAx_80024030(2);
+            mn_804A04F0.hovered_selection =
+                ((u8) mn_804A04F0.hovered_selection) | ((row4 + 1) << 8);
+            return;
+        }
       if (count > 7)
       {
         cur = data->name_cursor_pos >> 8;
@@ -1599,13 +1589,13 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
     else
       if (input & 4)
     {
-      row5 = mn_804A04F0.hovered_selection >> 8;
-      if ((row5 > new_var) && (count > (row5 - 1)))
-      {
-        lbAudioAx_80024030(2);
-        mn_804A04F0.hovered_selection = ((u8) mn_804A04F0.hovered_selection) | ((row5 - 1) << 8);
-        return;
-      }
+        row5 = mn_804A04F0.hovered_selection >> 8;
+        if ((row5 > new_var) && (count > (row5 - 1))) {
+            lbAudioAx_80024030(2);
+            mn_804A04F0.hovered_selection =
+                ((u8) mn_804A04F0.hovered_selection) | ((row5 - 1) << 8);
+            return;
+        }
       if (count > 7)
       {
         cur = data->fighter_cursor_pos >> 8;
@@ -1639,13 +1629,13 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
     else
       if (input & 8)
     {
-      row6 = mn_804A04F0.hovered_selection >> 8;
-      if ((row6 < 6) && (count > (row6 + 1)))
-      {
-        lbAudioAx_80024030(2);
-        mn_804A04F0.hovered_selection = ((u8) mn_804A04F0.hovered_selection) | ((row6 + 1) << 8);
-        return;
-      }
+        row6 = mn_804A04F0.hovered_selection >> 8;
+        if ((row6 < 6) && (count > (row6 + 1))) {
+            lbAudioAx_80024030(2);
+            mn_804A04F0.hovered_selection =
+                ((u8) mn_804A04F0.hovered_selection) | ((row6 + 1) << 8);
+            return;
+        }
       if (count > 7)
       {
         cur = data->fighter_cursor_pos >> 8;
