@@ -88,6 +88,7 @@ def test_search_relevance_regression():
     assert "extract files" in [c.name for c in cap.run_search("per-file progress", REPO)]
     assert any(c.name in {"ghidra", "commit check-callers"} for c in cap.run_search("find callers", REPO))
     assert any(c.name in {"mwcc-debug", "mwcc-inspect"} for c in cap.run_search("register allocation", REPO))
+    assert "mismatch add" in [c.name for c in cap.run_search("inline pattern recording", REPO)]
 
 
 def test_search_cli_no_match_wording():
@@ -132,6 +133,25 @@ def test_find_unregistered_apps_flags_exactly_the_known_three():
     # claim_app / complete_app / workflow_app exist under src/cli but are never
     # add_typer'd anywhere — nested debug sub-apps must NOT be false-positived.
     assert flagged_vars == {"claim_app", "complete_app", "workflow_app"}
+
+
+def test_find_unregistered_apps_resolves_imported_typer_alias(tmp_path):
+    cli_dir = tmp_path / "tools" / "melee-agent" / "src" / "cli"
+    nested_dir = cli_dir / "nested"
+    nested_dir.mkdir(parents=True)
+    (nested_dir / "leaf.py").write_text(
+        "import typer\nleaf_app = typer.Typer()\n",
+    )
+    (cli_dir / "__init__.py").write_text(
+        "import typer\n"
+        "root_app = typer.Typer()\n"
+        "from src.cli.nested.leaf import leaf_app as _leaf_app\n"
+        "root_app.add_typer(_leaf_app, name='leaf')\n",
+    )
+
+    flagged_vars = {f.split(" ", 1)[0] for f in cap.find_unregistered_apps(tmp_path)}
+
+    assert flagged_vars == {"root_app"}
 
 
 def test_generate_writes_both_artifacts(tmp_path, monkeypatch):

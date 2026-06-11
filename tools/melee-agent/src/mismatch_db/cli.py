@@ -3,8 +3,9 @@ CLI for the mismatch pattern database (Typer version).
 """
 
 import json
+from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 from rich import print as rprint
@@ -19,9 +20,17 @@ from .backfill import (
     generate_analysis_prompt,
 )
 from .migrate_markdown import migrate_markdown_file, parse_markdown, section_to_pattern
-from .models import Pattern, PatternDB
+from .models import (
+    Example,
+    Fix,
+    Pattern,
+    PatternDB,
+    Provenance,
+    ProvenanceEntry,
+    Signal,
+)
 from .sample_entries import SAMPLE_PATTERNS, load_samples
-from .schema import DEFAULT_DB_PATH, init_db
+from .schema import CATEGORIES, DEFAULT_DB_PATH, SIGNAL_TYPES, init_db
 
 console = Console()
 
@@ -42,6 +51,65 @@ mismatch_app.add_typer(review_app, name="review")
 def get_db_path(db: Path | None) -> Path:
     """Get database path, using default if not specified."""
     return db if db else DEFAULT_DB_PATH
+
+
+def _exit_with_error(message: str) -> None:
+    rprint(f"[red]{message}[/red]")
+    raise typer.Exit(1)
+
+
+def _json_object(raw: str, option: str) -> dict[str, Any]:
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        _exit_with_error(f"Invalid JSON for {option}: {exc.msg}")
+    if not isinstance(data, dict):
+        _exit_with_error(f"{option} must be a JSON object")
+    return data
+
+
+def _parse_signal_json(raw: str) -> Signal:
+    data = _json_object(raw, "--signal-json")
+    signal_type = data.get("type")
+    if not isinstance(signal_type, str) or not signal_type:
+        _exit_with_error("--signal-json requires string field: type")
+    if signal_type not in SIGNAL_TYPES:
+        _exit_with_error(f"Unsupported signal type for --signal-json: {signal_type}")
+
+    required = SIGNAL_TYPES[signal_type]["fields"]
+    missing = [field for field in required if field not in data]
+    if missing:
+        _exit_with_error(
+            f"--signal-json for {signal_type} missing field(s): "
+            + ", ".join(missing)
+        )
+    return Signal.from_dict(dict(data))
+
+
+def _parse_example_json(raw: str) -> Example:
+    data = _json_object(raw, "--example-json")
+    allowed = {"function", "context", "diff", "before", "after", "scratch"}
+    extra = sorted(set(data) - allowed)
+    if extra:
+        _exit_with_error(
+            "Unsupported field(s) for --example-json: " + ", ".join(extra)
+        )
+    function = data.get("function")
+    if not isinstance(function, str) or not function:
+        _exit_with_error("--example-json requires string field: function")
+    return Example.from_dict(data)
+
+
+def _unique_ordered(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        normalized = item.strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+    return result
 
 
 @mismatch_app.command()
@@ -180,6 +248,125 @@ def search(
         rprint(f"    {p.description[:100]}...")
         rprint()
     rprint("[dim]Run `melee-agent mismatch get <id>` (alias: `show`) for a pattern's full details.[/dim]")
+
+
+@mismatch_app.command("add")
+def add_pattern(
+    pattern_id: Annotated[str, typer.Argument(help="New pattern ID slug")],
+    name: Annotated[str, typer.Option("--name", help="Pattern display name")],
+    description: Annotated[
+        str,
+        typer.Option("--description", help="What the mismatch pattern looks like"),
+    ],
+    root_cause: Annotated[
+        str,
+        typer.Option("--root-cause", help="Why this mismatch happens"),
+    ],
+    db: Annotated[Path | None, typer.Option(help="Database path")] = None,
+    categories: Annotated[
+        Optional[list[str]],
+        typer.Option("-c", "--category", help="Pattern category; repeatable"),
+    ] = None,
+    opcodes: Annotated[
+        Optional[list[str]],
+        typer.Option("-o", "--opcode", help="Relevant opcode; repeatable"),
+    ] = None,
+    signal_json: Annotated[
+        Optional[list[str]],
+        typer.Option("--signal-json", help="Signal JSON object; repeatable"),
+    ] = None,
+    example_json: Annotated[
+        Optional[list[str]],
+        typer.Option("--example-json", help="Example JSON object; repeatable"),
+    ] = None,
+    fixes: Annotated[
+        Optional[list[str]],
+        typer.Option("--fix", help="Fix description; repeatable"),
+    ] = None,
+    related: Annotated[
+        Optional[list[str]],
+        typer.Option("--related", help="Related pattern ID; repeatable"),
+    ] = None,
+    notes: Annotated[str | None, typer.Option("--notes", help="Notes/caveats")] = None,
+    function: Annotated[
+        str | None,
+        typer.Option("--function", "-f", help="Function where this was discovered"),
+    ] = None,
+    scratch: Annotated[
+        str | None,
+        typer.Option("--scratch", help="decomp.me scratch slug for this example"),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Validate and preview without inserting"),
+    ] = False,
+    as_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
+):
+    """Record a mismatch pattern inline from a matching session."""
+    db_path = get_db_path(db)
+    pattern_db = PatternDB(init_db(db_path))
+    if pattern_db.get(pattern_id):
+        _exit_with_error(f"Pattern already exists: {pattern_id}")
+    if scratch and not function:
+        _exit_with_error("--scratch requires --function")
+
+    category_values = _unique_ordered(categories or [])
+    for category in category_values:
+        if category not in CATEGORIES:
+            _exit_with_error(f"Unsupported category: {category}")
+    opcode_values = [opcode.lower() for opcode in _unique_ordered(opcodes or [])]
+    signals = [_parse_signal_json(raw) for raw in signal_json or []]
+    examples = [_parse_example_json(raw) for raw in example_json or []]
+    fix_values = [
+        Fix(description=fix.strip()) for fix in fixes or [] if fix.strip()
+    ]
+    related_values = _unique_ordered(related or [])
+
+    provenance = Provenance()
+    if function:
+        discovered = ProvenanceEntry(
+            function=function,
+            date=datetime.now().isoformat()[:10],
+            scratch=scratch,
+        )
+        provenance.discovered_from.append(discovered)
+        if not any(
+            example.function == function and example.scratch == scratch
+            for example in examples
+        ):
+            examples.append(Example(function=function, scratch=scratch))
+
+    pattern = Pattern(
+        id=pattern_id,
+        name=name,
+        description=description,
+        root_cause=root_cause,
+        notes=notes,
+        signals=signals,
+        examples=examples,
+        fixes=fix_values,
+        provenance=provenance,
+        related_patterns=related_values,
+        opcodes=opcode_values,
+        categories=category_values,
+    )
+
+    if dry_run:
+        if as_json:
+            rprint(json.dumps(pattern.to_dict(), indent=2))
+        else:
+            rprint(f"Dry run - pattern not inserted: {pattern.id}")
+            rprint(f"  Name: {pattern.name}")
+            rprint(f"  Categories: {pattern.categories}")
+            rprint(f"  Signals: {len(pattern.signals)}")
+        return
+
+    pattern_db.insert(pattern)
+    if as_json:
+        rprint(json.dumps(pattern.to_dict(), indent=2))
+    else:
+        rprint(f"Added pattern: {pattern.id}")
+        rprint(f"[dim]Run `melee-agent mismatch get {pattern.id}` to review it.[/dim]")
 
 
 @mismatch_app.command()

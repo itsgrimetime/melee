@@ -17,7 +17,7 @@ Before building any tool/script/command, run `melee-agent capabilities search <t
 - hook: install, uninstall, validate
 - issue: campaign-report, claim, list, note, release, report, resolve, show
 - layout: audit
-- mismatch: backfill, get, init, list, m2c, migrate, opcode, record-success, review, search, show, stats
+- mismatch: add, backfill, get, init, list, m2c, migrate, opcode, record-success, review, search, show, stats
 - opseq: (direct)
 - patterns: anti-pattern, anti-patterns, api, check, inlines, similar, wrapper, wrappers
 - pr: check, describe, feedback, link, link-batch, list, status, unlink

@@ -60,6 +60,7 @@
 - `melee-agent debug mutate simplify-order` — Search for source variants that produce a desired simplify order.
 - `melee-agent debug mutate type-change` — Change a local variable's declared type.
 - `melee-agent debug permute bootstrap` — Bootstrap a decomp-permuter function dir from the current repo source.
+- `melee-agent debug permute candidate-audit` — Audit permuter candidates and print a compact status summary.
 - `melee-agent debug permute config` — Generate a decomp-permuter settings.toml tuned for the detected pattern.
 - `melee-agent debug permute doctor` — Validate local decomp-permuter paths before run/config/verify.
 - `melee-agent debug permute fix-compile` — Fix decomp-permuter's `compile.sh` for macOS+wine compatibility.
@@ -138,6 +139,7 @@
 - `melee-agent issue resolve` — Mark a reported tooling issue as resolved.
 - `melee-agent issue show` — Show one reported tooling issue.
 - `melee-agent layout audit` — Report data-layout discrepancies for a TU's .c file.
+- `melee-agent mismatch add` — Record a mismatch pattern inline from a matching session.
 - `melee-agent mismatch backfill claim-task` — Claim a pending task for analysis.
 - `melee-agent mismatch backfill complete-task` — Complete a task with analysis results from a JSON file.
 - `melee-agent mismatch backfill create-job` — Create a new backfill job.

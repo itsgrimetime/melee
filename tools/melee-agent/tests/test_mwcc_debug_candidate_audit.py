@@ -4,7 +4,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from typer.testing import CliRunner
+
+from src.cli import app
 from src.mwcc_debug import candidate_audit
+
+runner = CliRunner()
 
 
 def test_candidate_audit_flags_placeholder_helpers() -> None:
@@ -227,6 +232,33 @@ def test_candidate_audit_tree_marks_fetched_outputs(tmp_path: Path) -> None:
     assert (tmp_path / "candidate_audit.json").exists()
     assert (good.parent / "melee-agent-candidate-status.json").exists()
     assert (bad.parent / "melee-agent-candidate-status.json").exists()
+
+
+def test_candidate_audit_cli_prints_tree_summary(tmp_path: Path) -> None:
+    good = tmp_path / "output-1-1" / "source.c"
+    bad = tmp_path / "output-2-1" / "source.c"
+    good.parent.mkdir()
+    bad.parent.mkdir()
+    good.write_text("void f(void) { abs = abs; }\n")
+    bad.write_text("void f(void) { helper_fn(); }\n")
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "candidate-audit",
+            str(tmp_path),
+            "--function",
+            "f",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "Candidates: 2" in result.stdout
+    assert "unsafe-candidate: 1" in result.stdout
+    assert "corrupt-candidate: 1" in result.stdout
+    assert "candidate_audit.json" in result.stdout
 
 
 def test_candidate_audit_tree_uses_base_for_prototype_mutations(

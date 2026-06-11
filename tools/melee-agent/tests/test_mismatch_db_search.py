@@ -48,6 +48,178 @@ def test_mismatch_show_alias_displays_pattern_details(tmp_path):
     assert "ID: stack-layout" in result.stdout
 
 
+def test_mismatch_add_records_inline_pattern(tmp_path):
+    db_path = tmp_path / "patterns.db"
+
+    result = runner.invoke(
+        app,
+        [
+            "mismatch",
+            "add",
+            "double-masking-no-prototype",
+            "--name",
+            "Double masking from missing inline prototype",
+            "--description",
+            "An inline helper call is followed by redundant masking.",
+            "--root-cause",
+            "MWCC sees an imprecise return width because the callee prototype is missing.",
+            "--category",
+            "inline",
+            "--category",
+            "type",
+            "--opcode",
+            "clrlwi",
+            "--opcode",
+            "rlwinm",
+            "--signal-json",
+            (
+                '{"type":"instruction_sequence",'
+                '"sequence":["clrlwi","rlwinm"],'
+                '"description":"redundant mask after helper call"}'
+            ),
+            "--fix",
+            "Add the exact callee prototype before extracting the inline body.",
+            "--function",
+            "mnDiagram2_HandleInput",
+            "--scratch",
+            "a97f93631",
+            "--db",
+            str(db_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "Added pattern: double-masking-no-prototype" in result.stdout
+    assert "mismatch get double-masking-no-prototype" in result.stdout
+
+    pattern = PatternDB(init_db(db_path)).get("double-masking-no-prototype")
+    assert pattern is not None
+    assert pattern.categories == ["inline", "type"]
+    assert pattern.opcodes == ["clrlwi", "rlwinm"]
+    assert pattern.signals[0].type == "instruction_sequence"
+    assert pattern.signals[0].data["sequence"] == ["clrlwi", "rlwinm"]
+    assert pattern.fixes[0].description.startswith("Add the exact callee prototype")
+    assert pattern.examples[0].function == "mnDiagram2_HandleInput"
+    assert pattern.examples[0].scratch == "a97f93631"
+    assert pattern.provenance.discovered_from[0].function == "mnDiagram2_HandleInput"
+    assert pattern.provenance.discovered_from[0].date is not None
+
+
+def test_mismatch_add_rejects_duplicate_pattern_id(tmp_path):
+    db_path = tmp_path / "patterns.db"
+    db = PatternDB(init_db(db_path))
+    db.insert(
+        Pattern(
+            id="stack-layout",
+            name="Stack layout mismatch",
+            description="Original description.",
+            root_cause="Original root cause.",
+        )
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "mismatch",
+            "add",
+            "stack-layout",
+            "--name",
+            "Replacement",
+            "--description",
+            "Should not overwrite.",
+            "--root-cause",
+            "Should not overwrite.",
+            "--db",
+            str(db_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Pattern already exists: stack-layout" in result.stdout
+    assert PatternDB(init_db(db_path)).get("stack-layout").name == "Stack layout mismatch"
+
+
+def test_mismatch_add_rejects_malformed_signal_json(tmp_path):
+    db_path = tmp_path / "patterns.db"
+
+    result = runner.invoke(
+        app,
+        [
+            "mismatch",
+            "add",
+            "bad-json",
+            "--name",
+            "Bad JSON",
+            "--description",
+            "Invalid signal JSON.",
+            "--root-cause",
+            "Invalid signal JSON.",
+            "--signal-json",
+            '{"type":"instruction_sequence"',
+            "--db",
+            str(db_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Invalid JSON for --signal-json" in result.stdout
+    assert PatternDB(init_db(db_path)).get("bad-json") is None
+
+
+def test_mismatch_add_rejects_unknown_signal_type(tmp_path):
+    db_path = tmp_path / "patterns.db"
+
+    result = runner.invoke(
+        app,
+        [
+            "mismatch",
+            "add",
+            "bad-signal",
+            "--name",
+            "Bad signal",
+            "--description",
+            "Invalid signal input.",
+            "--root-cause",
+            "Invalid signal input.",
+            "--signal-json",
+            '{"type":"not-a-signal"}',
+            "--db",
+            str(db_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Unsupported signal type for --signal-json: not-a-signal" in result.stdout
+    assert PatternDB(init_db(db_path)).get("bad-signal") is None
+
+
+def test_mismatch_add_rejects_invalid_category(tmp_path):
+    db_path = tmp_path / "patterns.db"
+
+    result = runner.invoke(
+        app,
+        [
+            "mismatch",
+            "add",
+            "bad-category",
+            "--name",
+            "Bad category",
+            "--description",
+            "Invalid category input.",
+            "--root-cause",
+            "Invalid category input.",
+            "--category",
+            "compiler-magic",
+            "--db",
+            str(db_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Unsupported category: compiler-magic" in result.stdout
+    assert PatternDB(init_db(db_path)).get("bad-category") is None
+
+
 def test_search_prints_retrieval_hint(tmp_path):
     """`mismatch search` should tell agents how to fetch a pattern's details.
 

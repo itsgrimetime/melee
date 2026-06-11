@@ -8315,6 +8315,49 @@ def _sort_permuter_candidate_paths(
     )
 
 
+@permute_app.command(name="candidate-audit")
+def candidate_audit_summary(
+    root: Annotated[
+        Path,
+        typer.Argument(
+            help="Directory containing permuter output-*/source.c candidates.",
+        ),
+    ],
+    function: Annotated[
+        Optional[str],
+        typer.Option("--function", "-f", help="Function name for status sidecars"),
+    ] = None,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Emit the full candidate_audit.json payload."),
+    ] = False,
+) -> None:
+    """Audit permuter candidates and print a compact status summary."""
+    if not root.is_dir():
+        typer.echo(f"not a directory: {root}", err=True)
+        raise typer.Exit(2)
+
+    summary = candidate_audit.audit_candidate_tree(root, function=function)
+    if as_json:
+        print(json.dumps(summary, indent=2, sort_keys=True))
+        return
+
+    print(f"Candidate audit: {root}")
+    if function:
+        print(f"Function: {function}")
+    print(f"Candidates: {summary['total']}")
+
+    print("By status:")
+    for status, count in summary["by_status"].items():
+        print(f"  {status}: {count}")
+
+    print("By semantic risk:")
+    for bucket, count in summary["by_semantic_risk_bucket"].items():
+        print(f"  {bucket}: {count}")
+
+    print(f"Wrote: {root / 'candidate_audit.json'}")
+
+
 def _canonical_c_for_format_merge(text: str) -> str:
     """Return C text with comments/formatting removed, preserving literals."""
     out: list[str] = []
