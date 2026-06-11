@@ -987,7 +987,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
   u8 *sorted = mnDiagram_804A0750.sorted_fighters;
   Diagram *data = mnDiagram_804D6C10->user_data;
   u32 input = Menu_GetAllInputs();
-  s32 count;
+  s32 count = 0;
   s32 steps;
   u8 *ptr;
   s32 col;
