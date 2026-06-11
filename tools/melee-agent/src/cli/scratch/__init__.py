@@ -256,7 +256,7 @@ def scratch_create(
         if api_url:
             console.print("[dim]--api-url ignored with --production[/dim]")
         if update:
-            from .scratch_production import run_production_update
+            from ..scratch_production import run_production_update
 
             run_production_update(
                 function_name,
@@ -266,7 +266,7 @@ def scratch_create(
                 dry_run=dry_run,
             )
         else:
-            from .scratch_production import run_production_create
+            from ..scratch_production import run_production_create
 
             run_production_create(function_name, melee_root, force=force, dry_run=dry_run)
         return

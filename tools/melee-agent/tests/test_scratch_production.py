@@ -101,6 +101,57 @@ def test_production_flag_present_in_help():
     assert "--force" in result.output
 
 
+def test_production_create_cli_dispatches_to_top_level_module(monkeypatch):
+    from typer.testing import CliRunner
+
+    import src.cli.scratch_production as sp
+    from src.cli.scratch import scratch_app
+
+    calls = []
+    monkeypatch.setattr(
+        sp,
+        "run_production_create",
+        lambda function_name, melee_root, *, force=False, dry_run=False: calls.append(
+            (function_name, melee_root, force, dry_run)
+        ),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(scratch_app, ["create", "fn_1", "--production", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert len(calls) == 1
+    assert calls[0][0] == "fn_1"
+    assert calls[0][2:] == (False, True)
+
+
+def test_production_update_cli_dispatches_to_top_level_module(monkeypatch):
+    from typer.testing import CliRunner
+
+    import src.cli.scratch_production as sp
+    from src.cli.scratch import scratch_app
+
+    calls = []
+    monkeypatch.setattr(
+        sp,
+        "run_production_update",
+        lambda function_name, melee_root, *, refresh_context=True, compile_after=True, dry_run=False: calls.append(
+            (function_name, melee_root, refresh_context, compile_after, dry_run)
+        ),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        scratch_app,
+        ["create", "fn_1", "--production", "--update", "--no-context", "--no-compile", "--dry-run"],
+    )
+
+    assert result.exit_code == 0
+    assert len(calls) == 1
+    assert calls[0][0] == "fn_1"
+    assert calls[0][2:] == (False, False, True)
+
+
 def test_owner_is_account_none():
     from src.cli.scratch_production import _owner_is_account
     assert _owner_is_account(None) is False
