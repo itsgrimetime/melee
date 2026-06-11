@@ -1067,7 +1067,6 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
   u8 col_result4;
   u8 row_result3;
   u8 row_result4;
-  s32 cur;
   s32 found;
   s32 count2 = 0;
   PAD_STACK(64);
@@ -1250,9 +1249,9 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       }
       if (count > 0xA)
       {
-        cur = (u8) data->name_cursor_pos;
-        found = (u8) mnDiagram_FindPrevName(cur);
-        if (cur != found) {
+        i = (u8) data->name_cursor_pos;
+        found = (u8) mnDiagram_FindPrevName(i);
+        if (i != found) {
             lbAudioAx_80024030(2);
             data->name_cursor_pos = (data->name_cursor_pos & 0xFF00) | found;
             mnDiagram_80241730(mnDiagram_804D6C10, (u8) data->name_cursor_pos,
@@ -1272,12 +1271,11 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       }
       if (count > 0xA)
       {
-        cur = (u8) data->name_cursor_pos;
-        found = mnDiagram_FindNextName(cur);
-        if (cur != found) {
+        i = (u8) data->name_cursor_pos;
+        found = mnDiagram_FindNextName(i);
+        if (i != found) {
             steps = 0xA;
-            i = cur;
-            ptr = sorted + cur;
+            ptr = sorted + i;
             ptr = ptr + 0x1C;
         dn_n_outer:
             ptr2 = ptr;
@@ -1322,9 +1320,9 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
         }
       if (count > 7)
       {
-        cur = data->name_cursor_pos >> 8;
-        found = (u8) mnDiagram_FindPrevName(cur);
-        if (cur != found) {
+        i = data->name_cursor_pos >> 8;
+        found = (u8) mnDiagram_FindPrevName(i);
+        if (i != found) {
             lbAudioAx_80024030(2);
             data->name_cursor_pos =
                 ((u8) data->name_cursor_pos) | (found << 8);
@@ -1345,12 +1343,11 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
         }
       if (count > 7)
       {
-        cur = data->name_cursor_pos >> 8;
-        found = mnDiagram_FindNextName(cur);
-        if (cur != found) {
+        i = data->name_cursor_pos >> 8;
+        found = mnDiagram_FindNextName(i);
+        if (i != found) {
             steps2 = 7;
-            i = cur;
-            ptr = sorted + cur;
+            ptr = sorted + i;
             ptr = ptr + 0x1C;
         rt_n_outer:
             ptr2 = ptr;
@@ -1403,9 +1400,9 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
           return;
       }
       if (count2 > 0xA) {
-          cur = (u8) data->fighter_cursor_pos;
-          found = (u8) mnDiagram_FindPrevFighter(sorted, cur);
-          if (cur != found) {
+          i = (u8) data->fighter_cursor_pos;
+          found = (u8) mnDiagram_FindPrevFighter(sorted, i);
+          if (i != found) {
               lbAudioAx_80024030(2);
               data->fighter_cursor_pos =
                   (data->fighter_cursor_pos & 0xFF00) | found;
@@ -1426,21 +1423,21 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
           return;
       }
       if (count2 > 0xA) {
-          cur = (u8) data->fighter_cursor_pos;
-          ptr = sorted + cur;
-          found = mnDiagram_FindNextFighter(sorted, cur);
+          i = (u8) data->fighter_cursor_pos;
+          ptr = sorted + i;
+          found = mnDiagram_FindNextFighter(sorted, i);
           steps3 = 0xA;
       dn_f_outer:
           if (steps3 == new_var) {
-              col_result4 = sorted[cur];
+              col_result4 = sorted[i];
           } else {
               ptr2 = ptr;
           dn_f_inner:
-          cur++;
+          i++;
 
           ptr2++;
           ptr++;
-          if (cur >= 0x19)
+          if (i >= 0x19)
           {
             col_result4 = 0x19;
           }
@@ -1478,9 +1475,9 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
             return;
         }
         if (count2 > 7) {
-            cur = data->fighter_cursor_pos >> 8;
-            found = (u8) mnDiagram_FindPrevFighter(sorted, cur);
-            if (cur != found) {
+            i = data->fighter_cursor_pos >> 8;
+            found = (u8) mnDiagram_FindPrevFighter(sorted, i);
+            if (i != found) {
                 lbAudioAx_80024030(2);
                 data->fighter_cursor_pos =
                     ((u8) data->fighter_cursor_pos) | (found << 8);
@@ -1501,24 +1498,24 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
             return;
         }
         if (count2 > 7) {
-            cur = data->fighter_cursor_pos >> 8;
-            ptr = sorted + cur;
-            found = mnDiagram_FindNextFighter(sorted, cur);
+            i = data->fighter_cursor_pos >> 8;
+            ptr = sorted + i;
+            found = mnDiagram_FindNextFighter(sorted, i);
             steps4 = 7;
         rt_f_outer:
         if (steps4 == new_var)
         {
-          row_result4 = sorted[cur];
+          row_result4 = sorted[i];
         }
         else
         {
           ptr2 = ptr;
           rt_f_inner:
-          cur++;
+          i++;
 
           ptr2++;
           ptr++;
-          if (cur >= 0x19)
+          if (i >= 0x19)
           {
             row_result4 = 0x19;
           }
