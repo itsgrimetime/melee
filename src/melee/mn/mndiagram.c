@@ -1047,7 +1047,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
   short new_var;
   u8 *sorted = mnDiagram_804A0750.sorted_fighters;
   Diagram *data = mnDiagram_804D6C10->user_data;
-  u32 input = Menu_GetAllInputs();
+  u32 input = mn_80229624(4);
   s32 count = 0;
   u8 *ptr;
   s32 col;
@@ -1065,8 +1065,10 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
   u8 row_result3;
   u8 row_result4;
   s32 found;
-  s32 count2 = 0;
+  s32 count2;
   PAD_STACK(64);
+  ((s32 *) &mn_804A04F0.buttons)[1] = input;
+  ((s32 *) &mn_804A04F0.buttons)[0] = (count2 = 0);
   if (input & 0x10)
   {
     lbAudioAx_80024030(1);
