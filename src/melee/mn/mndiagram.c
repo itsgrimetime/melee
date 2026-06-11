@@ -1103,7 +1103,8 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
   count2 = 0;
   if (input & 0x10)
   {
-    lbAudioAx_80024030(1);
+    cur = 1;
+    lbAudioAx_80024030(cur);
     HSD_GObjProc_8038FE24(HSD_GObj_804D7838);
     i = 0;
     proc = HSD_GObj_SetupProc(gobj, (void (*)(HSD_GObj *)) mnDiagram_PopupInputProc, i);
