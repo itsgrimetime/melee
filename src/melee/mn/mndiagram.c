@@ -1067,8 +1067,8 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
   s32 found;
   s32 count2;
   PAD_STACK(64);
-  ((s32 *) &mn_804A04F0.buttons)[1] = input;
-  ((s32 *) &mn_804A04F0.buttons)[0] = (count2 = 0);
+  ((s32*) &mn_804A04F0.buttons)[1] = input;
+  ((s32*) &mn_804A04F0.buttons)[0] = (count2 = 0);
   if (input & 0x10)
   {
     lbAudioAx_80024030(1);
@@ -1157,7 +1157,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
   if (input & 0x20)
   {
     lbAudioAx_80024030(0);
-    mn_804A04F0.entering_menu = 0;
+    mn_804A04F0.entering_menu = count2;
     {
       Diagram *d = mnDiagram_804D6C10->user_data;
       gmMainLib_8015CC34()->xE = (u8) (d->fighter_cursor_pos >> 8);
@@ -1197,7 +1197,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       return;
     }
     lbAudioAx_80024030(1);
-    data->is_name_mode = (data->is_name_mode == 0) ? (1) : (0);
+    data->is_name_mode = (data->is_name_mode == 0) ? (1) : (count2);
     if (data->is_name_mode != 0)
     {
       count = GetNameCount();
