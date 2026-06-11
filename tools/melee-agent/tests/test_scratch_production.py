@@ -4,8 +4,8 @@ import pytest
 
 from src.cli.scratch_production import (
     PRODUCTION_COMPILER_FLAGS,
-    build_production_create_data,
     _seed_source_from_repo,
+    build_production_create_data,
 )
 
 
@@ -185,8 +185,8 @@ def _fake_console_collector(monkeypatch):
     return printed
 
 
-import respx  # noqa: E402
 import httpx  # noqa: E402
+import respx  # noqa: E402
 
 
 @respx.mock
@@ -235,3 +235,343 @@ async def test_create_claim_record_silent_on_account_owner(monkeypatch):
     blob = "\n".join(printed)
     assert "Created scratch" in blob
     assert "NOT owned" not in blob
+
+
+# ---------------------------------------------------------------------------
+# Production scratch UPDATE (`scratch create <func> --production --update`)
+# ---------------------------------------------------------------------------
+
+import json  # noqa: E402
+from contextlib import contextmanager  # noqa: E402
+from pathlib import Path  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+
+def _fake_db_with_slug(slug):
+    """A get_db() stand-in whose functions row yields ``production_scratch_slug``."""
+    row = None if slug is _MISSING else {"production_scratch_slug": slug}
+
+    class _Cur:
+        def fetchone(self):
+            return row
+
+    class _Conn:
+        def execute(self, *a, **k):
+            return _Cur()
+
+    class _DB:
+        @contextmanager
+        def connection(self):
+            yield _Conn()
+
+    return _DB()
+
+
+_MISSING = object()  # sentinel: the functions row does not exist at all
+
+
+def test_existing_production_slug_returns_slug(monkeypatch):
+    import src.cli.scratch_production as sp
+
+    monkeypatch.setattr("src.db.get_db", lambda: _fake_db_with_slug("LlxRu"))
+    assert sp._existing_production_slug("mnDiagram_InputProc") == "LlxRu"
+
+
+def test_existing_production_slug_none_when_no_row(monkeypatch):
+    import src.cli.scratch_production as sp
+
+    monkeypatch.setattr("src.db.get_db", lambda: _fake_db_with_slug(_MISSING))
+    assert sp._existing_production_slug("mnDiagram_InputProc") is None
+
+
+def test_existing_production_slug_none_when_slug_null(monkeypatch):
+    import src.cli.scratch_production as sp
+
+    monkeypatch.setattr("src.db.get_db", lambda: _fake_db_with_slug(None))
+    assert sp._existing_production_slug("mnDiagram_InputProc") is None
+
+
+# --- sync orchestrator guards --------------------------------------------------
+
+
+def test_run_production_update_exits_without_cf_clearance(tmp_path, monkeypatch):
+    import typer
+
+    import src.cli.scratch_production as sp
+
+    monkeypatch.setattr(sp, "load_production_cookies", lambda: {})
+    with pytest.raises(typer.Exit):
+        sp.run_production_update("fn_1", tmp_path)
+
+
+def test_run_production_update_exits_when_no_existing_scratch(tmp_path, monkeypatch):
+    import typer
+
+    import src.cli.scratch_production as sp
+
+    printed = _fake_console_collector(monkeypatch)
+    monkeypatch.setattr(sp, "load_production_cookies", lambda: {"cf_clearance": "x"})
+
+    async def _noop_preflight(_cookies):
+        return None
+
+    monkeypatch.setattr(sp, "_preflight_auth", _noop_preflight)
+    monkeypatch.setattr(sp, "_existing_production_slug", lambda fn: None)
+
+    # If the update flow were reached it would need the network; assert it is not.
+    async def _must_not_run(**kwargs):
+        raise AssertionError("update flow must not run when no scratch exists")
+
+    monkeypatch.setattr(sp, "_update_production_scratch", _must_not_run)
+
+    with pytest.raises(typer.Exit):
+        sp.run_production_update("fn_1", tmp_path)
+
+    blob = "\n".join(printed)
+    assert "No production scratch" in blob
+    assert "--update" in blob
+
+
+# --- async update flow (network mocked) ---------------------------------------
+
+
+def _stub_update_build(monkeypatch, *, source="void fn_1(void) {}", context="struct X {};"):
+    """Stub the repo-extraction helpers so the async update flow can run offline."""
+    import src.cli.scratch_production as sp
+
+    async def _fake_extract(_root, name):
+        return SimpleNamespace(name=name, file_path="melee/mn/mnfoo.c", asm="blr")
+
+    monkeypatch.setattr("src.extractor.extract_function", _fake_extract)
+    monkeypatch.setattr(sp, "_seed_source_from_repo", lambda *a, **k: source)
+
+    ctx_calls = {"n": 0}
+
+    def _fake_ctx(*a, **k):
+        ctx_calls["n"] += 1
+        return context
+
+    monkeypatch.setattr("src.cli.scratch._build_stripped_context", _fake_ctx)
+    return ctx_calls
+
+
+@respx.mock
+async def test_update_blocks_on_anonymous_owner(monkeypatch):
+    import typer
+
+    import src.cli.scratch_production as sp
+
+    printed = _fake_console_collector(monkeypatch)
+    # If the build is reached, fail loudly: ownership must be checked first.
+    monkeypatch.setattr(
+        "src.extractor.extract_function",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not build before ownership check")),
+    )
+
+    respx.get("https://decomp.me/api/scratch/LlxRu").mock(
+        return_value=httpx.Response(200, json={"slug": "LlxRu", "owner": {"id": 1, "is_anonymous": True}})
+    )
+    patch_route = respx.patch("https://decomp.me/api/scratch/LlxRu").mock(
+        return_value=httpx.Response(200, json={"slug": "LlxRu"})
+    )
+
+    with pytest.raises(typer.Exit):
+        await sp._update_production_scratch(
+            slug="LlxRu", function_name="fn_1", melee_root=Path("."), cookies={"cf_clearance": "x", "sessionid": "y"}
+        )
+
+    assert not patch_route.called
+    blob = "\n".join(printed)
+    assert "fix-ownership" in blob
+
+
+@respx.mock
+async def test_update_errors_on_stale_404_slug(monkeypatch):
+    import typer
+
+    import src.cli.scratch_production as sp
+
+    printed = _fake_console_collector(monkeypatch)
+    respx.get("https://decomp.me/api/scratch/GONE9").mock(
+        return_value=httpx.Response(404, json={"detail": "Not found"})
+    )
+
+    with pytest.raises(typer.Exit):
+        await sp._update_production_scratch(
+            slug="GONE9", function_name="fn_1", melee_root=Path("."), cookies={"cf_clearance": "x"}
+        )
+
+    blob = "\n".join(printed)
+    assert "no longer exists" in blob.lower()
+
+
+@respx.mock
+async def test_update_happy_path_patches_then_compiles(monkeypatch):
+    import src.cli.scratch_production as sp
+
+    printed = _fake_console_collector(monkeypatch)
+    _stub_update_build(monkeypatch)
+
+    respx.get("https://decomp.me/api/scratch/LlxRu").mock(
+        return_value=httpx.Response(
+            200, json={"slug": "LlxRu", "owner": {"id": 2, "is_anonymous": False, "username": "real"}}
+        )
+    )
+    patch_route = respx.patch("https://decomp.me/api/scratch/LlxRu").mock(
+        return_value=httpx.Response(200, json={"slug": "LlxRu", "owner": {"id": 2, "is_anonymous": False}})
+    )
+    compile_route = respx.get("https://decomp.me/api/scratch/LlxRu/compile").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "success": True,
+                "compiler_output": "",
+                "diff_output": {"arch_str": "ppc", "current_score": 0, "max_score": 1234},
+            },
+        )
+    )
+
+    await sp._update_production_scratch(
+        slug="LlxRu", function_name="fn_1", melee_root=Path("."), cookies={"cf_clearance": "x", "sessionid": "y"}
+    )
+
+    assert patch_route.called
+    assert compile_route.called
+    body = json.loads(patch_route.calls[0].request.content)
+    assert body["source_code"] == "void fn_1(void) {}"
+    assert body["context"] == "struct X {};"
+    assert "target_asm" not in body  # immutable on an existing scratch
+    blob = "\n".join(printed)
+    assert "100.0%" in blob
+
+
+@respx.mock
+async def test_update_no_context_sends_source_only(monkeypatch):
+    import src.cli.scratch_production as sp
+
+    _fake_console_collector(monkeypatch)
+    ctx_calls = _stub_update_build(monkeypatch)
+
+    respx.get("https://decomp.me/api/scratch/LlxRu").mock(
+        return_value=httpx.Response(200, json={"slug": "LlxRu", "owner": {"id": 2, "is_anonymous": False}})
+    )
+    patch_route = respx.patch("https://decomp.me/api/scratch/LlxRu").mock(
+        return_value=httpx.Response(200, json={"slug": "LlxRu"})
+    )
+    compile_route = respx.get("https://decomp.me/api/scratch/LlxRu/compile").mock(
+        return_value=httpx.Response(
+            200,
+            json={"success": True, "compiler_output": "", "diff_output": {"arch_str": "ppc", "current_score": 0, "max_score": 10}},
+        )
+    )
+
+    await sp._update_production_scratch(
+        slug="LlxRu",
+        function_name="fn_1",
+        melee_root=Path("."),
+        cookies={"cf_clearance": "x"},
+        refresh_context=False,
+    )
+
+    assert patch_route.called
+    assert compile_route.called
+    body = json.loads(patch_route.calls[0].request.content)
+    assert body["source_code"] == "void fn_1(void) {}"
+    assert "context" not in body
+    assert ctx_calls["n"] == 0  # context was never built
+
+
+@respx.mock
+async def test_update_no_compile_skips_compile(monkeypatch):
+    import src.cli.scratch_production as sp
+
+    _fake_console_collector(monkeypatch)
+    _stub_update_build(monkeypatch)
+
+    respx.get("https://decomp.me/api/scratch/LlxRu").mock(
+        return_value=httpx.Response(200, json={"slug": "LlxRu", "owner": {"id": 2, "is_anonymous": False}})
+    )
+    patch_route = respx.patch("https://decomp.me/api/scratch/LlxRu").mock(
+        return_value=httpx.Response(200, json={"slug": "LlxRu"})
+    )
+    compile_route = respx.get("https://decomp.me/api/scratch/LlxRu/compile").mock(
+        return_value=httpx.Response(200, json={"success": True, "compiler_output": ""})
+    )
+
+    await sp._update_production_scratch(
+        slug="LlxRu",
+        function_name="fn_1",
+        melee_root=Path("."),
+        cookies={"cf_clearance": "x"},
+        compile_after=False,
+    )
+
+    assert patch_route.called
+    assert not compile_route.called
+
+
+@respx.mock
+async def test_update_dry_run_does_not_patch(monkeypatch):
+    import src.cli.scratch_production as sp
+
+    printed = _fake_console_collector(monkeypatch)
+    _stub_update_build(monkeypatch)
+
+    respx.get("https://decomp.me/api/scratch/LlxRu").mock(
+        return_value=httpx.Response(200, json={"slug": "LlxRu", "owner": {"id": 2, "is_anonymous": False}})
+    )
+    patch_route = respx.patch("https://decomp.me/api/scratch/LlxRu").mock(
+        return_value=httpx.Response(200, json={"slug": "LlxRu"})
+    )
+
+    await sp._update_production_scratch(
+        slug="LlxRu",
+        function_name="fn_1",
+        melee_root=Path("."),
+        cookies={"cf_clearance": "x"},
+        dry_run=True,
+    )
+
+    assert not patch_route.called
+    blob = "\n".join(printed)
+    assert "DRY RUN" in blob
+    assert "LlxRu" in blob
+
+
+# --- CLI flag wiring + guard rails --------------------------------------------
+
+
+def test_update_flags_present_in_help():
+    from typer.testing import CliRunner
+
+    from src.cli.scratch import scratch_app
+
+    runner = CliRunner()
+    result = runner.invoke(scratch_app, ["create", "--help"])
+    assert result.exit_code == 0
+    assert "--update" in result.output
+    assert "--no-context" in result.output
+    assert "--no-compile" in result.output
+
+
+def test_update_requires_production(monkeypatch):
+    from typer.testing import CliRunner
+
+    from src.cli.scratch import scratch_app
+
+    # --update without --production must error before touching production or the repo.
+    runner = CliRunner()
+    result = runner.invoke(scratch_app, ["create", "fn_1", "--update"])
+    assert result.exit_code == 1
+    assert "production" in result.output.lower()
+
+
+def test_update_conflicts_with_force():
+    from typer.testing import CliRunner
+
+    from src.cli.scratch import scratch_app
+
+    runner = CliRunner()
+    result = runner.invoke(scratch_app, ["create", "fn_1", "--production", "--update", "--force"])
+    assert result.exit_code == 1
+    assert "force" in result.output.lower()
