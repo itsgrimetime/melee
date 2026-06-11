@@ -1716,3 +1716,138 @@ only. Inlines expand per call site, so the split changes nothing at the up sites
 FINAL STATE: match 97.49, Δ3, tree clean at b12009fd0. Gates for driver-6: ≥ 97.49.
 Wall inventory item 3 (lf-wraps) is RESOLVED; items 1 (fusion ~70 sites), 2 (lhzu/fr),
 4 (volatile-pick positionals) stand as written.
+
+## Iteration-42 (driver 6): combined-form hunt — seesaw diagnosed as MUTUALLY EXCLUSIVE; no commit
+Baseline verified: 97.49% at b12009fd0 (b7044e54e V2 u64-store + b12009fd0 lf-wraps). Δ3, census 158. Tree clean throughout. No gate-passing edits found. 4 builds measured (all reverted).
+
+### TASK 1 — EVIDENCE PASS (the complete seesaw diagnosis)
+
+#### Sibling (mnDiagram2_HandleInput) full store idiom
+Lines 293-295 of mndiagram2.c:
+  `((s32*) &mn_804A04F0.buttons)[1] = result;`   // lo-word of u64 (offset +0c)
+  `((s32*) &mn_804A04F0.buttons)[0] = (var_r28 = 0);`  // hi-word (offset +08) via var_r28
+Sibling target asm at +030/+034/+03c: stw r31,12 / li r28,0 / stw r28,8 — ZERO conversion temps.
+The sibling has NO M1 requirement (uses r30 for data/user_data, not sorted); its half-store works
+because it doesn't need the deferral suppliers.
+
+#### Target window +038..+04c (decoded)
+```
++038: stw r28,12(r29)   # [1] = input (same as half-store and V2)
++03c: li  r25,0          # ONE li — count2 (r25 home web, front pop)
++044: stw r25,8(r29)    # [0] = count2 (hi-word)
++048: beq ...            # test from +040 rlwinm. r0,r3,0,27,27
+```
+Target has 3 instructions for the store pair (no extra li). count2=r25 IS the zero stored to
+buttons-hi. sorted=r30 (M1 achieved). The target had BOTH simultaneously.
+
+#### IR the target must have had
+The count2-home-init IS the u64-hi-zero (the zero-extension of u32 input's hi-half). The
+original's count2 def traced through the buttons store path, making it opaque to const-prop
+(hence `mr r24,r25` at +848 for i=count2 survives). The u64 store created two class-0
+pair-half virtuals (ig181/ig184 analogs) live in the entry window, giving sorted +2 scan-time
+edges to defer (scan-time deg 27+2=29=k). Simultaneously, the pair-half zero virtual and
+count2's home were THE SAME IR node — possible only if count2's assignment was the u64
+zero-extension result itself (not a separate literal 0).
+
+#### THE DEFERRAL MECHANISM (from dump analysis; definitive)
+V2 baseline SIMPLIFY: sorted=ig175, push-time deg=27, n_class_regs=469.
+Half-store form: sorted=ig176, push-time deg=25, n_class_regs=469 (same total webs).
+V2 has ig181 (deg=2) and ig184 (deg=0) in the entry window; half-store has ig181 (deg=0),
+ig184 (deg=0). The +2 deg difference = ig181's 2 edges. ig181 is the u64 zero-extension
+pair-half virtual (fingerprinted: the rlwinm. r0,r3 scratch at +040 is one of its uses).
+Without these 2 extra edges, sorted's scan-time deg = 27 < 29 → NOT deferred → sorted
+pushes before base in the ascending sweep → pop order (base=r30, input=r29, sorted=r28).
+
+#### COLORGRAPH comparison (measured from dumps)
+V2 front:       data(ig54)→r31, sorted(ig175)→r30, base(ig180)→r29, input(ig177)→r28
+Half-store:     data(ig54)→r31, base(ig180)→r30, input(ig178)→r29, sorted(ig176)→r28
+Entry trio is a cyclic rotation in the half-store form. count2(ig35)→r25 in BOTH forms.
+
+#### SEESAW MECHANISM (final statement, supersedes iteration-41 wall description)
+The u64 store (`mn_804A04F0.buttons = input;`):
+  → Creates 2 pair-half virtuals (ig181/ig184 class) live in entry window
+  → Gives sorted +2 scan-time edges (deg 25+2=27 in baseline → with pair temps: 27+2=29=k)
+  → sorted DEFERS → sorted pops before base/input → sorted=r30 (M1 ✓)
+  BUT: the u64-lo zero virtual (pair-half) is a TEMP-class web → same-value coalescing refuses
+  to merge it with count2-HOME (range-overlap + class-refusal) → TWO lis (+03c temp, +048 home).
+
+The half-store form (`((s32*)&buttons)[1]=input; ((s32*)&buttons)[0]=(count2=0);`):
+  → NO pair-half virtuals → sorted NOT deferred → sorted=r28 (M1 broken ✗)
+  BUT: count2's home IS the zero stored to buttons-hi → ONE li r25,0 (fusion ✓)
+  count2=r25 ✓, megaweb forms ✓ → 97.01 (-0.48pp from M1 loss)
+
+### TASK 2 — LADDER: 4 builds measured (none gate-passing)
+| form | edit | +038..+04c | sorted | count2 fused? | score | gate |
+|------|------|-----------|--------|--------------|-------|------|
+| V3: u64 + half-store [0] overwrite | `buttons=input; ((s32*)&buttons)[0]=(count2=0);` | TWO lis + TWO lo stores (4 instrs; MWCC emits both, no DCE) + rlwinm reads r28 not r3 | r30 ✓ (M1 fires; conversion temps still present) | NO (+048 li r25 still separate; count2 not fused) | 97.35 | FAIL |
+| Half-store: [1]=input, [0]=(count2=0) | sibling idiom verbatim | ONE li r25,0, ONE lo store | r28 ✗ (M1 broken; no conversion temps) | YES (count2=r25, megaweb) | 97.01 | FAIL |
+| Reversed half-store: [0] first, [1] second | store hi-zero FIRST | worse allocation | r30 ✗ | — | 96.86 | FAIL |
+| V3 re-test (post lf-wrap) | same as V3 but on current b12009fd0 | same as V3 above | r30 ✓ | NO | 97.35 | FAIL |
+
+#### V3 mechanism (why it fails): MWCC does NOT dead-store-eliminate the half-store's stw when
+the u64 store already wrote 0 to the same location. Both stores are emitted → +1 extra stw + the
+known fresh li → Δ3→Δ5-equivalent; rlwinm mask test shifts from r3 to r28 (scheduling change
+from the extra store). Not a viable path.
+
+#### Half-store mechanism (why 97.01 < 97.49): sorted=r28 instead of r30. The entry trio is a
+cyclic rotation (base=r30, input=r29, sorted=r28). This costs ~31+ sites vs V2 (entry cascade).
+
+### THE COMBINED FORM IS NOT REACHABLE FROM C (definitive)
+All mechanism classes have been tried or analytically ruled out:
+- V3 (u64 + half-store overwrite): emits both stores; no DCE; MWCCs does not prove them dead.
+- Half-store alone: no conversion temps → no deferral → M1 broken.
+- Reversed half-store: worse.
+- Union typing of buttons pair: would add stack lwz/stw instructions.
+- Read-back from stored location: adds lwz.
+- Dead-cast approach (`(u64)input` in dead block): IRO DCEs dead code entirely (no temps).
+- Arithmetic that creates pair temps (`u64 dummy = (u64)input + 0`): IRO DCEs unused result.
+- u64-shift for count2 (V1 path): __shr2u library call (+5 instrs, measured iteration-41).
+
+The mutual exclusivity is fundamental: the conversion temps exist BECAUSE of the pair-virtual
+mechanism in the u64 zero-extension; making count2 be THAT SAME zero-virtual requires
+count2 to be assigned from the u64 zero-extension result, which either goes through __shr2u
+(library call) or requires MWCC to invent a non-standard optimization path that is
+not accessible from any C spelling.
+
+WALL UPGRADED: the fusion family (~70 sites + Δ1) and M1 are PERMANENTLY MUTUALLY EXCLUSIVE
+through any known C door. The target's combined form required compiler internals (a specific
+u64 pair-virtual assignment that MWCC did in the original but cannot be spelled from the
+available C source forms). Record as CLOSED WALL with all mechanism classes enumerated.
+
+### TASK 3 — substrate re-tests (no new graph change; walls hold from iter-41)
+- lhzu/fr: +168 still addi+lhz vs lhzu; V2's base=r29 correct, but the lhzu requires r29 to
+  advance INTO &hovered (r29 = mn_804A04F0 + 2) for the fr arm. In V2, r29 IS the base and
+  the lhzu COULD form — but the +168 window's exact condition (r29 dead on the path after +168,
+  enabling update-form) remains architecture-visible; the structural Δ1 lhzu member is banked.
+- B-col/nc-soup: the half-store form measured and found entry trio rotated → confirms the B-col
+  shadow family IS still walled with M1 (the nc-side soup ~6 sites chain to sorted=r28 in the
+  half-store form; they didn't improve).
+- Fusion re-test: all new spellings confirm the wall; no new mechanism found.
+
+### WALL INVENTORY (final, iteration-42)
+1. COUNT2/ZERO FUSION ↔ M1 ENTRY DEFERRAL: PERMANENTLY MUTUALLY EXCLUSIVE (all doors closed,
+   all mechanism classes enumerated). Affects ~70 coupled sites + Δ1. No C lever exists.
+2. lhzu/fr (+168 + fc-head copies, Δ2-equivalent): unchanged, banked. No C lever found.
+3. Volatile-pick positionals (+448/+498, +68c/+698): characterized, no lever.
+4. (lf-wraps: RESOLVED in iteration-41 addendum.)
+
+### State: match 97.49, Δ3, census 158. Tree clean at b12009fd0. NO change from baseline.
+
+### Driver-7 entry points (priority)
+The two dominant walls (fusion ↔ M1 exclusivity + lhzu) together account for ~81 of 158 census
+sites plus Δ2. The non-walled residual ≈ 77 sites (volatile-pick + scattered unknowns). A deep
+census re-read on the current graph is the most useful next step:
+1. **RE-CENSUS the 158**: which of the 77 non-walled sites are truly free? Use the reconstructor +
+   skeleton aligner on the current graph to produce a fresh web-level extent table. The iter-33..36
+   nav/walker lever set (cur→i, rider-move, anchors, prev-flip) is all committed and on this graph;
+   the residual families from that era may have shifted. A census pass may reveal NEW lever families.
+2. **The +84c window** (T: mr r24,r25 = i=count2; ours: no instruction = i absorbed into zero-temp):
+   This site is part of the fusion debt. With the fusion wall closed, this site is permanently wrong.
+   Do NOT invest build budget here.
+3. **Micro-sites unchanged**: +448/+498 (volatile pick), +68c/+698 (lf_n one-slot). No lever found
+   in 3 sessions; only build if new evidence appears.
+4. **Permuter**: a focused remote-permuter run on the current baseline may crack structural-shape
+   residuals in the non-walled 77 that manual analysis has missed. The search substrate infrastructure
+   (tools/melee-agent/src/search/) is available. Worth commissioning a targeted run.
+5. **Header cleanup**: PAD_STACK(64) is still present (not shippable). The natural frame reservation
+   question remains open. Lower priority until match improves further.
