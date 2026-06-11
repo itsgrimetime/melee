@@ -1263,11 +1263,11 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
         } else {
             goto up_n;
         }
-        if (cur != (u8) found)
-        {
-          lbAudioAx_80024030(2);
-          data->name_cursor_pos = (data->name_cursor_pos & 0xFF00) | found;
-          mnDiagram_80241730(mnDiagram_804D6C10, (u8) data->name_cursor_pos, data->name_cursor_pos >> 8);
+        if (cur != (u8) found) {
+            lbAudioAx_80024030(2);
+            data->name_cursor_pos = (data->name_cursor_pos & 0xFF00) | found;
+            mnDiagram_80241730(mnDiagram_804D6C10, (u8) data->name_cursor_pos,
+                               data->name_cursor_pos >> 8);
         }
       }
     }
@@ -1296,46 +1296,38 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
         } else {
             goto dn_n_find;
         }
-        if (cur != (u8) found)
-        {
-          steps = 0xA;
-          i = cur;
-          ptr = (sorted + cur) + 0x1C;
-          dn_n_outer:
-          ptr2 = ptr;
+        if (cur != (u8) found) {
+            steps = 0xA;
+            i = cur;
+            ptr = (sorted + cur) + 0x1C;
+        dn_n_outer:
+            ptr2 = ptr;
 
-          dn_n_inner:
-          i++;
+        dn_n_inner:
+            i++;
 
-          ptr2++;
-          ptr++;
-          if (i >= 0x78)
-          {
-            col_result3 = 0x78;
-          }
-          else
-            if (GetNameText(*ptr2) != 0L)
-          {
-            steps--;
-            if (steps <= 0)
-            {
-              col_result3 = sorted[i + 0x1C];
+            ptr2++;
+            ptr++;
+            if (i >= 0x78) {
+                col_result3 = 0x78;
+            } else if (GetNameText(*ptr2) != 0L) {
+                steps--;
+                if (steps <= 0) {
+                    col_result3 = sorted[i + 0x1C];
+                } else {
+                    goto dn_n_outer;
+                }
+            } else {
+                goto dn_n_inner;
             }
-            else
-            {
-              goto dn_n_outer;
+            if (col_result3 != 0x78) {
+                lbAudioAx_80024030(2);
+                data->name_cursor_pos =
+                    (data->name_cursor_pos & 0xFF00) | found;
+                mnDiagram_80241730(mnDiagram_804D6C10,
+                                   (u8) data->name_cursor_pos,
+                                   data->name_cursor_pos >> 8);
             }
-          }
-          else
-          {
-            goto dn_n_inner;
-          }
-          if (col_result3 != 0x78)
-          {
-            lbAudioAx_80024030(2);
-            data->name_cursor_pos = (data->name_cursor_pos & 0xFF00) | found;
-            mnDiagram_80241730(mnDiagram_804D6C10, (u8) data->name_cursor_pos, data->name_cursor_pos >> 8);
-          }
         }
       }
     }
@@ -1408,46 +1400,38 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
         {
           goto rt_n_find;
         }
-        if (cur != (u8) found)
-        {
-          steps2 = 7;
-          i = cur;
-          ptr = (sorted + cur) + 0x1C;
-          rt_n_outer:
-          ptr2 = ptr;
+        if (cur != (u8) found) {
+            steps2 = 7;
+            i = cur;
+            ptr = (sorted + cur) + 0x1C;
+        rt_n_outer:
+            ptr2 = ptr;
 
-          rt_n_inner:
-          i++;
+        rt_n_inner:
+            i++;
 
-          ptr2++;
-          ptr++;
-          if (i >= 0x78)
-          {
-            row_result3 = 0x78;
-          }
-          else
-            if (GetNameText(*ptr2) != 0L)
-          {
-            steps2--;
-            if (steps2 <= 0)
-            {
-              row_result3 = sorted[i + 0x1C];
+            ptr2++;
+            ptr++;
+            if (i >= 0x78) {
+                row_result3 = 0x78;
+            } else if (GetNameText(*ptr2) != 0L) {
+                steps2--;
+                if (steps2 <= 0) {
+                    row_result3 = sorted[i + 0x1C];
+                } else {
+                    goto rt_n_outer;
+                }
+            } else {
+                goto rt_n_inner;
             }
-            else
-            {
-              goto rt_n_outer;
+            if (row_result3 != 0x78) {
+                lbAudioAx_80024030(2);
+                data->name_cursor_pos =
+                    ((u8) data->name_cursor_pos) | (found << 8);
+                mnDiagram_80241730(mnDiagram_804D6C10,
+                                   (u8) data->name_cursor_pos,
+                                   data->name_cursor_pos >> 8);
             }
-          }
-          else
-          {
-            goto rt_n_inner;
-          }
-          if (row_result3 != 0x78)
-          {
-            lbAudioAx_80024030(2);
-            data->name_cursor_pos = ((u8) data->name_cursor_pos) | (found << 8);
-            mnDiagram_80241730(mnDiagram_804D6C10, (u8) data->name_cursor_pos, data->name_cursor_pos >> 8);
-          }
         }
       }
     }
