@@ -1083,6 +1083,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
   s32 col;
   s32 row;
   s32 row2;
+  s32 new_var2;
   s32 row3;
   s32 row4;
   s32 row5;
@@ -1255,15 +1256,16 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       }
     }
 
-    if (((s32) ((u8) mn_804A04F0.hovered_selection)) >= count)
+    new_var2 = count;
+    if (((s32) ((u8) mn_804A04F0.hovered_selection)) >= new_var2)
     {
-      mn_804A04F0.hovered_selection = (mn_804A04F0.hovered_selection & 0xFF00) | ((u8) (count - 1));
+      mn_804A04F0.hovered_selection = (mn_804A04F0.hovered_selection & 0xFF00) | ((u8) (new_var2 - 1));
     }
-    if ((mn_804A04F0.hovered_selection >> 8) >= count)
+    if ((mn_804A04F0.hovered_selection >> 8) >= new_var2)
     {
-      mn_804A04F0.hovered_selection = ((u8) mn_804A04F0.hovered_selection) | ((count - 1) << 8);
+      mn_804A04F0.hovered_selection = ((u8) mn_804A04F0.hovered_selection) | ((new_var2 - 1) << 8);
     }
-    mnDiagram_UpdateScrollArrowVisibility(mnDiagram_804D6C10, count);
+    mnDiagram_UpdateScrollArrowVisibility(mnDiagram_804D6C10, new_var2);
     mnDiagram_80241730(mnDiagram_804D6C10, (u8) data->fighter_cursor_pos, data->fighter_cursor_pos >> 8);
     return;
   }
