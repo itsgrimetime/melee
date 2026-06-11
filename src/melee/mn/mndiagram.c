@@ -1076,16 +1076,15 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
     HSD_GObjProc_8038FE24(HSD_GObj_804D7838);
     proc = HSD_GObj_SetupProc(gobj, (void (*)(HSD_GObj *)) mnDiagram_PopupInputProc, 0);
     proc->flags_3 = HSD_GObj_804D783C;
-    if (data->is_name_mode != 0)
-    {
-      col = mn_804A04F0.hovered_selection;
-      col_result = mnDiagram_GetVisibleNameFrom(
-          sorted, (u8) data->name_cursor_pos, (u8) col);
-      row = mn_804A04F0.hovered_selection >> 8;
-      row_result = mnDiagram_GetVisibleNameFrom(
-          sorted, data->name_cursor_pos >> 8, row);
-      mnDiagram_80241310(col_result, row_result, 1);
-      return;
+    if (data->is_name_mode != 0) {
+        col = mn_804A04F0.hovered_selection;
+        col_result = mnDiagram_GetVisibleNameFrom(
+            sorted, (u8) data->name_cursor_pos, (u8) col);
+        row = mn_804A04F0.hovered_selection >> 8;
+        row_result = mnDiagram_GetVisibleNameFrom(
+            sorted, data->name_cursor_pos >> 8, row);
+        mnDiagram_80241310(col_result, row_result, 1);
+        return;
     }
     i = (u8) data->fighter_cursor_pos;
     col = (u8) mn_804A04F0.hovered_selection;
