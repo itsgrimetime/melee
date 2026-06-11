@@ -1273,19 +1273,19 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
           found = mnDiagram_FindNextName(i);
           if (i != found) {
               steps = 0xA;
-              ptr = sorted + i;
-              ptr = ptr + 0x1C;
+              ptr2 = sorted + i;
+              ptr2 = ptr2 + 0x1C;
           dn_n_outer:
-              ptr2 = ptr;
+              ptr = ptr2;
 
           dn_n_inner:
               i++;
 
-              ptr2++;
               ptr++;
+              ptr2++;
               if (i >= 0x78) {
                   col_result3 = 0x78;
-              } else if (GetNameText(*ptr2) != 0L) {
+              } else if (GetNameText(*ptr) != 0L) {
                   steps--;
                   if (steps <= 0) {
                       col_result3 = sorted[i + 0x1C];
@@ -1346,19 +1346,19 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
           found = mnDiagram_FindNextName(i);
           if (i != found) {
               steps = 7;
-              ptr = sorted + i;
-              ptr = ptr + 0x1C;
+              ptr2 = sorted + i;
+              ptr2 = ptr2 + 0x1C;
           rt_n_outer:
-              ptr2 = ptr;
+              ptr = ptr2;
 
           rt_n_inner:
               i++;
 
-              ptr2++;
               ptr++;
+              ptr2++;
               if (i >= 0x78) {
                   row_result3 = 0x78;
-              } else if (GetNameText(*ptr2) != 0L) {
+              } else if (GetNameText(*ptr) != 0L) {
                   steps--;
                   if (steps <= 0) {
                       row_result3 = sorted[i + 0x1C];
