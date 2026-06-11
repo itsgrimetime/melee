@@ -890,6 +890,38 @@ static inline u8 mnDiagram_GetVisibleFighterFrom(u8* sorted, int start,
     return sorted[idx];
 }
 
+static inline u8 mnDiagram_FindPrevFighter(u8* sorted, s32 cur)
+{
+    s32 found = cur;
+    u8* p = sorted + cur;
+loop:
+    found--;
+    p--;
+    if (found < 0) {
+        return cur;
+    }
+    if (mn_IsFighterUnlocked(*p) == 0) {
+        goto loop;
+    }
+    return found;
+}
+
+static inline u8 mnDiagram_FindNextFighter(u8* sorted, s32 cur)
+{
+    s32 found = cur;
+    u8* p = sorted + cur;
+loop:
+    found++;
+    p++;
+    if (found >= 0x19) {
+        return cur;
+    }
+    if (mn_IsFighterUnlocked(*p) == 0) {
+        goto loop;
+    }
+    return found;
+}
+
 static inline u8 mnDiagram_FindPrevName(s32 cur)
 {
     s32 found = cur;
@@ -1434,26 +1466,8 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       if (count > 0xA)
       {
         cur = (u8) data->fighter_cursor_pos;
-        found = cur;
-        ptr = sorted + cur;
-        up_f:
-        found--;
-
-        ptr--;
-        if (found < new_var)
-        {
-          found = (u8) cur;
-        }
-        else
-          if (mn_IsFighterUnlocked(*ptr) != new_var)
-        {
-            found = (u8) found;
-        }
-        else
-        {
-          goto up_f;
-        }
-        if (((u8) cur) != found)
+        found = mnDiagram_FindPrevFighter(sorted, cur);
+        if (cur != found)
         {
           lbAudioAx_80024030(2);
           data->fighter_cursor_pos = (data->fighter_cursor_pos & 0xFF00) | found;
@@ -1475,25 +1489,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       {
         cur = (u8) data->fighter_cursor_pos;
         ptr = sorted + cur;
-        found = cur;
-        ptr2 = ptr;
-        dn_f_find:
-        found++;
-
-        ptr2++;
-        if (found >= 0x19)
-        {
-          found = cur;
-        }
-        else
-          if (mn_IsFighterUnlocked(*ptr2) != new_var)
-        {
-            found = (u8) found;
-        }
-        else
-        {
-          goto dn_f_find;
-        }
+        found = mnDiagram_FindNextFighter(sorted, cur);
         steps3 = 0xA;
         dn_f_outer:
         if (steps3 == new_var)
@@ -1548,26 +1544,8 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       if (count > 7)
       {
         cur = data->fighter_cursor_pos >> 8;
-        found = cur;
-        ptr = sorted + cur;
-        lf_f:
-        found--;
-
-        ptr--;
-        if (found < new_var)
-        {
-          found = (u8) cur;
-        }
-        else
-          if (mn_IsFighterUnlocked(*ptr) != new_var)
-        {
-          found = (u8) found;
-        }
-        else
-        {
-          goto lf_f;
-        }
-        if (cur != (u8) found) {
+        found = mnDiagram_FindPrevFighter(sorted, cur);
+        if (cur != found) {
             lbAudioAx_80024030(2);
             data->fighter_cursor_pos =
                 ((u8) data->fighter_cursor_pos) | (found << 8);
@@ -1591,25 +1569,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       {
         cur = data->fighter_cursor_pos >> 8;
         ptr = sorted + cur;
-        found = cur;
-        ptr2 = ptr;
-        rt_f_find:
-        found++;
-
-        ptr2++;
-        if (found >= 0x19)
-        {
-          found = (u8) cur;
-        }
-        else
-          if (mn_IsFighterUnlocked(*ptr2) != new_var)
-        {
-          found = (u8) found;
-        }
-        else
-        {
-          goto rt_f_find;
-        }
+        found = mnDiagram_FindNextFighter(sorted, cur);
         steps4 = 7;
         rt_f_outer:
         if (steps4 == new_var)
