@@ -971,6 +971,32 @@ def _mnemonics(lines: list[str]) -> list[str]:
     return result
 
 
+_BRANCH_TARGET_TAIL_RE = re.compile(
+    r"(\.L_?[0-9A-Fa-f]+|[+-]?0x[0-9A-Fa-f]+|\b\d+)\s*$"
+)
+# Call-like branches keep their symbolic targets (a wrong callee is a real
+# diff); local branch targets are positional and shift with any insertion.
+_CALL_MNEMONICS = {"bl", "bctrl", "blr", "blrl", "bctr"}
+
+
+def _edit_bodies(lines: list[str]) -> list[str]:
+    """Instruction bodies for full-penalty line edit distance: address
+    prefixes stripped, registers/operands kept verbatim, local branch
+    targets normalized to <tgt>."""
+    bodies = []
+    for line in lines:
+        if line.startswith("<") or _is_relocation_line(line):
+            continue
+        body = _asm_body(line)
+        if not body:
+            continue
+        mnem = body.split(None, 1)[0]
+        if mnem.startswith("b") and mnem not in _CALL_MNEMONICS:
+            body = _BRANCH_TARGET_TAIL_RE.sub("<tgt>", body)
+        bodies.append(body)
+    return bodies
+
+
 def _call_targets(lines: list[str]) -> list[str]:
     targets = []
     for line in lines:
@@ -2366,10 +2392,32 @@ def compute_structural_metrics(ref_lines: list[str], our_lines: list[str]) -> di
     sm = difflib.SequenceMatcher(None, ref_lines, our_lines)
     hunk_count = sum(1 for tag, *_ in sm.get_opcodes() if tag != "equal")
 
+    # Full-penalty line edit distance (decomp.me-family metric). Unlike
+    # fuzzy_match_percent (per-instruction partial credit: a register rename
+    # costs a fraction of a line), every differing instruction counts as a
+    # whole edit here — registers and operands at full weight. This tracks
+    # the decomp.me/asm-differ score family: a function can sit at 98% fuzzy
+    # while ~20% of instructions still carry a wrong register, which this
+    # number surfaces. Branch targets are normalized (an inserted instruction
+    # shifts every later target and would otherwise inflate the distance).
+    ref_bodies = _edit_bodies(ref_lines)
+    our_bodies = _edit_bodies(our_lines)
+    esm = difflib.SequenceMatcher(None, ref_bodies, our_bodies)
+    line_edit_distance = sum(
+        max(i2 - i1, j2 - j1)
+        for tag, i1, i2, j1, j2 in esm.get_opcodes()
+        if tag != "equal"
+    )
+    line_similarity = 1.0 - (
+        line_edit_distance / max(len(ref_bodies), len(our_bodies), 1)
+    )
+
     return {
         "opcode_similarity": opcode_similarity,
         "line_delta": line_delta,
         "hunk_count": hunk_count,
+        "line_edit_distance": line_edit_distance,
+        "line_similarity": line_similarity,
     }
 
 
@@ -2437,6 +2485,15 @@ def render_metrics_block(
     op_pct = metrics["opcode_similarity"] * 100
     op_d = _fmt_delta(op_pct, ((prev or {}).get("opcode_similarity") or 0) * 100 if prev else None, lower_is_better=False)
     lines.append(f"Opcode similarity: {op_pct:.1f}%{op_d}")
+    if "line_edit_distance" in metrics:
+        led = metrics["line_edit_distance"]
+        led_d = _fmt_delta(led, (prev or {}).get("line_edit_distance"),
+                           lower_is_better=True, precision=0)
+        ls_pct = metrics["line_similarity"] * 100
+        lines.append(
+            f"Line edit (full-penalty, decomp.me-family): "
+            f"{led} instrs / sim {ls_pct:.1f}%{led_d}"
+        )
     ld_d = _fmt_delta(metrics["line_delta"], (prev or {}).get("line_delta"), lower_is_better=True, precision=0)
     lines.append(f"Line delta: {metrics['line_delta']}{ld_d}")
     hk_d = _fmt_delta(metrics["hunk_count"], (prev or {}).get("hunk_count"), lower_is_better=True, precision=0)
