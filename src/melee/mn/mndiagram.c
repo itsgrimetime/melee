@@ -1463,7 +1463,8 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       if (count2 > 0xA) {
           cur = (u8) data->fighter_cursor_pos;
           ptr = sorted + cur;
-          found = mnDiagram_FindNextFighter(sorted, cur);
+          row5 = mnDiagram_FindNextFighter(sorted, cur);
+          found = row5;
           row2 = 0xA;
       dn_f_outer:
           if (row2 == new_var) {
