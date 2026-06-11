@@ -605,6 +605,107 @@ must be cited or retracted):
 - Best tested form NOT committed: x48+new_var non-swap (98.76%) — 6th callee-save problem.
 - Next highest priority: find a form reaching iter93-97 window with 5 callee-saves.
 
+## Iteration 5: x48 decomposition + faithfulness verdict (driver 5, 2026-06-11)
+
+THE ONE QUESTION: is the 98.76 form's "good half" separable and target-faithful?
+ANSWER: **NO — the decomposition premise is false.** x48 is NOT a separable
+"good half"; x48 ITSELF is the 6th-callee-save mechanism. And the no-li store
+it produces is achieved by the WRONG web — the target reaches the same shape
+from an entry coloring baseline ALREADY HAS.
+
+### Three-way meter (3 builds, all reverted, baseline restored clean)
+
+| Form | fuzzy | Δ | hunks | line-edit | stmw | entering_menu stb | entry web |
+|------|-------|---|-------|-----------|------|-------------------|-----------|
+| baseline | 97.46 | 3 | 5 | 240 | r27 (5 CSR) | `li r0,0; stb r0,17(r29)` (REMAT) | result=r31, mn_addr=r29, var_r28=r28, gobj=r27 — **matches target except addi-order R3** |
+| x48-alone | 98.46 | 3 | 9 | 227 | **r26 (6 CSR)** | `stb r29,17(r28)` (no-li lands, regs shifted −1) | shifted −1: mn_addr=r28, result=r31, var_r28=r29-store, +redundant `li r27,0` x48 web |
+| x48+new_var* | 98.20 | 0 | 46 | 138 | **r26 (6 CSR)** | `stb r30,17(r29)` (more displaced) | spanning new_var dissolves S1 reload (Δ0!) but cascades entry web → 46 hunks |
+
+(*my new_var re-derivation = `new_var = data = ...->user_data` at entry +
+`data = new_var` at L378; HAZARD-FREE unlike permuter's 0x20-arm form. Gives
+98.20 not 98.76 — driver-4's 98.76 used a different new_var spelling. The
+qualitative verdict is spelling-independent: still 6 CSR, still spanning-web
+cascade.)
+
+### Decomposition verdict: x48-alone is NOT the separable good half
+
+COLORGRAPH dumps (fresh DLL, /tmp/pc_baseline.txt, /tmp/pc_x48alone.txt;
+HandleInput section both n_nodes=194):
+
+- **baseline** callee-save tail: iter135 ig34(var_r28)→r28, iter137 ig32(gobj)→**r27** = 5 CSR, no r26.
+- **x48-alone** callee-save tail: iter93 ig103(x48 web)→r29, iter94 ig102(mn_addr)→r28,
+  iter137 ig34(var_r28)→**r27**, iter139 ig32(gobj)→**r26** = **6 CSR**.
+
+x48 creates ig103, which pops iter93→r29 (HIGHER ig_idx pops first among equal
+degree=11, verified), displacing mn_addr to iter94→r28, which cascades the
+whole tail down one register so gobj lands on r26 = the 6th callee-save. **The
+6th callee-save is an INTRINSIC consequence of x48, not of new_var.** The
+prompt's "x48-alone good half / +new_var 6th-CSR bad half" split does not exist
+in codegen — x48 alone already emits `stmw r26`.
+
+### Faithfulness verdict per component (vs the target's web structure)
+
+1. **Does the target have an ig103-analog (the B4→B7 x48 web)?** NO. Target
+   entry region is exactly 5 webs (result r31, mn_addr r29, var_r28 r28, gobj
+   r27). There is no extra zero-web taking r29 ahead of mn_addr. x48-alone's
+   `li r27,0` (the x48 web, separate from var_r28's `li r29,0`) is a FOREIGN
+   instruction the target does not emit. x48 = right behavior (no-li store) by
+   the WRONG web (a redundant zero-web that displaces the CSR chain).
+
+2. **Does the target get the 6th callee-save without a spanning web (new_var =
+   right color by wrong web)?** The target has NEITHER a 6th callee-save NOR a
+   spanning web. Target = 5 CSR. new_var's spanning web dissolves the S1 reload
+   (Δ0, genuinely faithful for S1!) but the SAME spanning web displaces the
+   matched entry trio (46 hunks) — confirming the iteration-3b class rejection.
+   The "right web" for the 6th-CSR question is: there is no right web, because
+   the target needs no 6th CSR.
+
+3. **THE KEY FINDING — S2 is NOT a coloring problem.** Baseline's entry coloring
+   ALREADY MATCHES the target byte-for-byte through +03c (`addi r31,r3` /
+   `addi r29,r4` modulo the R3 order swap; `stw r31,12(r29)`; `li r28,0`;
+   `stw r28,8(r29)`). var_r28 is ALREADY in callee-save r28, ALREADY live across
+   the lbAudioAx call. The target emits `stb r28,17(r29)` reusing that r28;
+   baseline emits `li r0,0; stb r0` REMATERIALIZING the constant at the same
+   site. **This is a pure CP/peephole decision DOWNSTREAM of an already-correct
+   coloring — not a register-allocation or web-structure difference.** x48's
+   no-li is therefore NOT reproducing the target's mechanism: it gives the
+   peephole a redundant callee-save zero-web to eliminate, which only works by
+   pulling in the 6th CSR. The target reaches no-li by simply not
+   rematerializing from the coloring baseline already has.
+
+### Commit decision: NONE
+
+Neither component passes BOTH gates (neutral-or-better AND web-faithful):
+- x48-alone: numbers better (98.46) but web-UNFAITHFUL (foreign ig103 web + 6th
+  CSR the target lacks). REJECTED on faithfulness.
+- x48+new_var: numbers mixed (98.20, Δ0 good but 46 hunks), web-UNFAITHFUL
+  (spanning web displaces matched entry — known class rejection). REJECTED.
+- Baseline retained. Match stays **97.46%**.
+
+### What this implies for driver 6
+
+- **STOP treating S2 as a register/dispenser problem.** The "find a C shape that
+  dispenses r28 in the iter93-97 window" search target (driver-3/4 doctrine #2)
+  is MISDIRECTED for S2: baseline already colors var_r28→r28 with the target's
+  exact entry layout. S2 is a CP-remat-vs-reuse decision at one store site.
+- **The faithful S2 lever (if it exists) must suppress MWCC's constant
+  rematerialization of var_r28=0 at the entering_menu store**, WITHOUT adding a
+  web (no x48, no spanning var). Driver-4 closed all `var_r28 = <const-expr>`
+  spellings (all fold to const 0 → same CP). UNTRIED classes for driver 6: (a)
+  make var_r28's value non-constant on the B4→B7 path so CP cannot fire (e.g.
+  the entering_menu value sourced from a runtime expression that equals 0 but
+  isn't compile-time-provable — but note buttons[0] also reads it, and a
+  non-zero-provable value may break buttons[0]'s `stw`); (b) the sibling
+  campaign's PER-BRANCH HOME-LOCALS control surface — give the 0x20-arm a home
+  local for the entering_menu value distinct from var_r28, pinned by a
+  plain-store/region-temp form (sibling 80243434 §final mechanism: home locals
+  invert pop/emission order where statement order can't). This is the one
+  genuinely new instrument not yet pointed at S2.
+- R3 (addi +028/+02c order swap) remains the other entry residual; baseline's
+  coloring is correct, only emission order differs (schedule-oracle: outside the
+  force-schedule family — iteration-3b).
+- Permuter corpus exhausted (228K, 0 safe); do not re-run.
+
 ## DOC-FEEDBACK (methodology observations, iteration 2)
 
 1. **Precise-alignment-first should be doctrine.** Iteration-1 spent a
