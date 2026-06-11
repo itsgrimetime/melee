@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -1712,6 +1714,74 @@ def test_submit_job_builds_rsync_ssh_tmux_and_metadata(tmp_path: Path) -> None:
     ) in remote_script
     assert "metadata.json" in remote_script
     assert "permuter.log" in remote_script
+
+
+def test_remote_submit_script_fails_when_tmux_session_exits_immediately(
+    tmp_path: Path,
+) -> None:
+    remote_perm_root = tmp_path / "remote-perm"
+    remote_melee_root = tmp_path / "remote-melee"
+    remote_perm_root.mkdir()
+    remote_melee_root.mkdir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_tmux = fake_bin / "tmux"
+    fake_tmux.write_text(
+        """#!/bin/sh
+if [ "$1" = "new-session" ]; then
+    exit 0
+fi
+if [ "$1" = "has-session" ]; then
+    exit 1
+fi
+exit 0
+""",
+        encoding="utf-8",
+    )
+    fake_tmux.chmod(0o755)
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root=str(remote_melee_root),
+        remote_perm_root=str(remote_perm_root),
+        threads=64,
+        session_prefix="melee-perm",
+    )
+    job = pr.RemoteJob(
+        job_id="fn_80000000-coder64-20260525-143012",
+        function="fn_80000000",
+        target="coder64",
+        ssh="coder.coder64",
+        remote_perm_dir=str(
+            remote_perm_root
+            / "remote-runs"
+            / "fn_80000000-coder64-20260525-143012"
+            / "nonmatchings"
+            / "fn_80000000"
+        ),
+        remote_run_dir=str(
+            remote_perm_root
+            / "remote-runs"
+            / "fn_80000000-coder64-20260525-143012"
+        ),
+        local_perm_dir="/tmp/local/fn_80000000",
+        tmux_session="melee-perm-fn_80000000-coder64-20260525-143012",
+        threads=64,
+        mode="stock",
+        created_at="2026-05-25T14:30:12",
+    )
+
+    proc = subprocess.run(
+        ["sh", "-lc", pr._remote_submit_script(job, target)],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"},
+    )
+
+    assert proc.returncode != 0
+    assert "tmux session exited immediately" in proc.stderr
+    assert "permuter.log missing or empty" in proc.stderr
 
 
 def test_submit_job_repairs_missing_remote_toml_before_start(

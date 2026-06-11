@@ -1122,6 +1122,17 @@ def _remote_submit_script(job: RemoteJob, target: RemoteTarget) -> str:
                 f'\\"$remote_py\\" ./permuter.py {shlex.quote(perm_rel)} '
                 f'-j {job.threads} > \\"$remote_run_dir/permuter.log\\" 2>&1"'
             ),
+            "sleep 1",
+            'if ! tmux has-session -t "$tmux_session" 2>/dev/null; then',
+            '  echo "tmux session exited immediately: $tmux_session" >&2',
+            '  if test -s "$remote_run_dir/permuter.log"; then',
+            '    echo "last permuter.log lines:" >&2',
+            '    tail -n 80 "$remote_run_dir/permuter.log" >&2 || true',
+            "  else",
+            '    echo "permuter.log missing or empty: $remote_run_dir/permuter.log" >&2',
+            "  fi",
+            "  exit 1",
+            "fi",
         ]
     )
 
