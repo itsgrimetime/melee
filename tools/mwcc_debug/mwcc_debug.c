@@ -1052,7 +1052,7 @@ static int parse_iter_first_iters_from_string(const char *buf, int len)
 
 static void parse_iter_first_from_env(void)
 {
-    char buf[MWCC_DEBUG_ENV_BUF_LEN];
+    static char buf[MWCC_DEBUG_ENV_BUF_LEN];
     uint32 len;
     int i;
     int cur_val;
@@ -1231,7 +1231,7 @@ static int parse_force_interfere_pairs_from_string(const char *buf, int len)
 
 static void parse_force_interfere_from_env(void)
 {
-    char buf[MWCC_DEBUG_ENV_BUF_LEN];
+    static char buf[MWCC_DEBUG_ENV_BUF_LEN];
     uint32 len;
 
     g_force_interfere_parsed = 1;
