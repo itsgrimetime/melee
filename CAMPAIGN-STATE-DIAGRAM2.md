@@ -91,22 +91,28 @@ Structural:
   lvalue spelling for the test to force 2 loads.**
 - S4: CLOSED by 213a63310.
 
-Register-only (6 paired mismatches per `force-phys-from-diff`):
-- **ig44 → r31** (current r29): 0xC00-arm inline data-root. Force causes
-  cascades; not a simple tiebreak.
-- **ig128 → r4** (current r0): scratch node, 0xC00-arm area.
-- **ig65, ig81, ig85 → r0** (current r6): 3 of 9 inline entity_idx arg
-  nodes. First-divergence: these wrongly coalesce to root r6.
-- **ig192** (already r0): no-op.
-- **R3**: +028/+02c addi ORDER swap — scheduling residual; force-schedule
-  oracle class=missing; 2 paired instructions (same opcodes, reversed
-  emission order). Separate from the 6 force-phys-from-diff entries.
+Register-only (CORRECTED in iteration-3b by precise difflib alignment,
+label-normalized — the authoritative census):
+- **R0 (driver-1's description CONFIRMED)**: all 9 expansions, target
+  uniform (d=r29, data=r28); ours (r31|r30, r29) rotating. ~80 paired rows.
+- **R1 CONFIRMED**: 4× clrlwi + stb mask sites, target r28 vs ours r29.
+- **R2 CONFIRMED**: 0x20-arm x48, target r30 vs ours r29 (ours clobbers
+  the dying base r29; target re-uses staging r30).
+- **R3**: +028/+02c addi ORDER swap (entry; target interleaves the
+  result-home copy between lis/addi-LO; ours keeps lis/addi adjacent).
+- S3's visible half: target lbz r0 (test) + lbz r4 (arg, +1c0,
+  target-only row); ours single CSEd lbz r4.
 
-NOTE: Driver-2's R0/R1/R2 description was imprecise. The 6 paired mismatches
-are volatile-register and coalesce-related, NOT the 9-expansion callee-save
-rotation. The target ALSO has inline d=r31/r30 and data=r29 (confirmed via
-`debug target derive`). The "r28,r29 stable" description was wrong — the
-target uses the same register pattern as ours for the inline nodes.
+RETRACTION (iteration-3b): iteration-3's "6 paired mismatches
+(ig44→r31, ig128→r4, ig65/81/85→r0, ig192)" were ARTIFACTS of
+checkdiff's offset-based pairing after the +3 instruction drift —
+`force-phys-from-diff` inherits that pairing. The un-coalesce probe
+(force-coalesce 65=65,81=81,85=85, #550-verified applied) produced a
+byte-identical final diff, confirming the first-divergence "prevent the
+coalesce of 65/81/85 into r6" lead was also pairing-derived noise. My
+"driver-1 was imprecise" note was itself the error; `derive` is
+self-referential AND from-diff is drift-sensitive — only difflib
+alignment on label-normalized streams is authoritative here.
 
 ## Key COLORGRAPH facts (fresh DLL, 2026-06-11)
 
@@ -122,17 +128,28 @@ target uses the same register pattern as ours for the inline nodes.
 - In the target, x48 SHARES r30 with data (path-dead inside the 0xC00
   tail) — MWCC interference is path-aware enough for this; reproducing
   the sharing is untested as a lever.
-- **Iteration-3 addition**: `debug target derive` produces a SELF-REFERENTIAL
-  target (maps current source → current coloring). The target .o HAS
-  different register assignments for ig44, ig65, ig81, ig85, ig128, ig192
-  (per `force-phys-from-diff`). The derive output showing ig44:29 is WRONG
-  for comparison purposes — always use `force-phys-from-diff` for the real
-  target register requirements.
-- **Coalesce divergence**: 9 inline r6-arg nodes (ig65,69,73,77,81,85,89,93,97)
-  all coalesce to root r6 in our graph. Target keeps ig65, ig81, ig85 as
-  separate (r0-class scratch). First-divergence: coalesce "65, 81, 85 →
-  root 6" is the first allocator decision differing from target.
-  Shortening the live ranges of these 3 nodes is the lever — untested.
+- **Iteration-3 addition (revised 3b)**: `debug target derive` is
+  SELF-REFERENTIAL (maps current source → current coloring; `inspect
+  guide` against it reports 127/127 matched on a nonmatching function).
+  `force-phys-from-diff` reads checkdiff's offset pairing and emits
+  ARTIFACTS once instruction counts drift (its ig44/65/81/85/128 entries
+  here were noise — un-coalesce probe was a byte-identical no-op).
+  Neither tool names the target's coloring on this function; use difflib
+  alignment + the full-vector force oracle.
+- **Iteration-3b ORACLE (the family proof)**: forcing the full family
+  (masks 44-47:r28; data temps 63,67,71,75,79,83,87,91,95:r28; d-roots
+  49-56,60:r29; x48 36:r30 — 23 entries, #550-verified applied) collapses
+  the ENTIRE register residual to 5 rows: addi swap ×2 (R3), S2's
+  stb r0 ×1, S3's lbz/cmplwi r4-vs-r0 ×2 — plus the S1 (+2) / S2 (+1)
+  inserts and S3's one target-only load. The register family is ONE
+  coherent coloring, all reachable simultaneously with zero cascades.
+- **The dispenser arithmetic (measured)**: fresh callee-save dispenses in
+  ours: r31@iter0 (result), r30@iter1 (bottom-data ig57), r29@iter93
+  (entry temp ig101), r28@iter135 (ig34 — too late). Expansion temps pop
+  iters 97-128 with pool {r29,r30,r31} → reuse-ascending hands data
+  temps r29, d-roots rotate r31/r30, masks r29. The target requires r28
+  in the pool between iter 93 and iter 97. One dispense event = the
+  whole R0+R1(+likely R2) family.
 
 ## Walls Banked (updated)
 
@@ -176,6 +193,11 @@ target uses the same register pattern as ours for the inline nodes.
 ### Task 1 — The {r28,r29}-stable vs {r29,r30,r31}-rotating analysis
 
 **COLORGRAPH census complete (194 nodes).**
+
+[RETRACTED IN 3b — kept for the record. This section's "correction" of
+driver-1 was itself wrong: derive is self-referential and
+force-phys-from-diff inherits checkdiff's drift-broken pairing. Driver-1's
+R0/R1/R2 stand, confirmed by difflib alignment. See iteration-3b.]
 
 The "campaign state R0 description" (9 expansions: ours r31|r30,r29 vs
 target r29,r28) was imprecise. The `debug target derive` shows the target
@@ -231,28 +253,36 @@ No safe core extractable. Confirmed with full-file diff on all candidates.
 - Natural C lever: a web that HOLDS a path from an EARLIER sda21-load
   (before position 151) and reuses it at position 151 would move r57's
   virtual earlier, potentially drawing r28.
-- Barrier: all such path-spanning webs require the value to be DEFINED on
-  the non-returning arms' paths — which means a variable set inside
-  returning arms. This is an unreachable-web problem: no natural C path
-  creates a web that spans from inside a returning arm to the bottom fall-
-  through without a DATA HAZARD. Permuter exhausts this space; all safe
-  candidates = no-op.
+- Spellings tried so far: (a) delete the line-377 re-read (97.1%, web
+  fusion regression); (b) the permuter's cache-in-returning-arm aliases —
+  all read uninitialized on non-0x20 paths (rejected on full-file diff).
+  Mechanism: the spellings tried either fuse the bottom web into r39
+  (changing the early-function coloring) or require a def inside a
+  returning arm. NOT FOUND with these spellings; other mechanism classes
+  (e.g., a def placed in the shared entry region with the right extent,
+  per-region splits of the bottom web, or shapes nobody has conceived yet)
+  remain open. The original compiled to this allocation from C; the form
+  exists.
 
-**VERDICT: Dispenser fact identified but unreachable from natural C.
-This function's remaining residuals are all allocator tiebreaks and one
-scheduler ordering. NO FAST TRANSFORM exists (diagnose confirmed).**
+**Iteration-3 partial verdict (superseded — see iteration-3b oracle round):
+dispenser fact named; lever not found with spellings tried. Tool
+diagnose reports NO FAST TRANSFORM (a tool-coverage statement, not a
+source-impossibility statement).**
 
 Match remains at **97.5%** (no change this iteration).
 
 ### Task 2 — Small residuals
 
-**S2 (CP/remat, +1):** `li r0,0; stb r0` vs `stb r28`. Confirmed as the
-entering_menu CP wall from iter-2. All spellings tried previously. Banked
-as ceiling. The force-phys-from-diff shows ig44→r31 is related to the
-0xC00-arm data web, not directly to S2. The CP site is separate.
+**S2 (CP/remat, +1):** `li r0,0; stb r0` vs `stb r28`. Same family as the
+iter-2 entering_menu CP wall. Lever not found with the cast/split/comma
+spellings tried (iter-1 + iter-2). The force-phys-from-diff shows ig44→r31
+is related to the 0xC00-arm data web, not directly to S2. The CP site is
+separate. Stays in pool; untried classes: frame-shape changes (PAD_STACK
+real form), substrate changes from any future commit.
 
 **S1 (+2 reload):** Not dissolved. The r57 web (bottom-body data re-read)
-still exists; no safe lever found. S1 remains as the price of the rotation.
+still exists; lever not found with the spellings tried (delete-reload,
+returning-arm cache aliases). S1 remains as the price of the rotation.
 
 ### Task 3 — Permuter cadence
 
@@ -261,6 +291,9 @@ best 535 (66 points below baseline, a significant improvement indicating
 this search space has real signal). ALL candidates unsafe. Status: plateau.
 coder2: verified STILL not producing jobs (3× empty output, issue #567).
 #558 NULL auto-injection: not exercised (base.c has no NULL token).
+[3b update: 92K iters, still descending, fetched best remains the 535
+spanning-web family — mechanism-checked and class-rejected (displaces
+result off r31); remaining harvest value = any NON-spanning-web pattern.]
 
 ### Task 4 — Prototype-visibility mismatch-db
 
@@ -279,46 +312,149 @@ is missing. Doc-feedback #7 filed below.
    current flow requires either a markdown file (migrate) or git history
    (backfill). A direct add path would enable agents to file patterns
    inline as they find them.
-8. **force-phys-from-diff gives CONTRADICTORY output vs derive.**
-   `derive` maps virtuals to what the CURRENT source produces (self-
-   referential: shows ig44→29 because that's what our code emits), while
-   `force-phys-from-diff` reads paired asm diffs (ig44→31). The two
-   commands produce OPPOSITE answers for the same node. Confusing for
-   agents — a clearer docs distinction (or renaming `derive` to
-   `derive-current`) would prevent misdiagnosis.
-9. **Permuter ALL-UNSAFE corpus = safe wall signal.** When 100% of 400+
-   permuter candidates are `semantic-risk-high` with the same structural
-   pattern (new_var across returning arms), the permuter has effectively
-   characterized the wall. This is useful information that the triage
-   system should surface — e.g., "all safe candidates tried for this
-   source shape class; this wall is certified." Currently agents must infer
-   this from the audit JSON counts.
+8. **(revised 3b) BOTH target-spec tools fail differently on drifted
+   functions.** `derive` is self-referential (current source → current
+   coloring; `guide` against it reports all-matched on a nonmatching fn).
+   `force-phys-from-diff` inherits checkdiff's offset pairing, which is
+   broken after any instruction-count delta — its vectors here were pure
+   artifacts (un-coalesce probe = byte-identical no-op). On a function
+   with line delta ≠ 0, the only authoritative register census is a
+   difflib alignment of label-normalized streams. Tool ask: a
+   from-diff mode that aligns via difflib instead of offsets.
+9. **(revised 3b) Permuter ALL-UNSAFE corpus = location intelligence, not
+   a wall certificate.** When 400+ candidates share one structural pattern
+   (new_var across returning arms), COLORGRAPH-diff ONE candidate vs the
+   permuter base to NAME the mechanism (here: spanning web grabs an early
+   fresh dispense and shifts the pool — which also proved the class
+   cannot reach the target because it displaces result off r31). The
+   audit counts alone under-read the corpus; the mechanism check is the
+   harvest step. (Original #9's "wall is certified" framing violated the
+   never-claim rule — corpora characterize mechanism classes, not
+   source-impossibility.)
+10. **Single-node force-phys cannot test dispenser-pool hypotheses.**
+   Forced assignments do not register in the allocator's reuse pool, so
+   a forced early r28 does not cascade to later reuse-ascending picks
+   (0:95:28 probe: one site flips, the other 8 don't). Pool-shift
+   hypotheses need full-vector forces (pin every family member) or a
+   source change. Worth a note in the force-phys help text.
+11. **force-coalesce cannot express alias-as-root (polarity flips).**
+   Pre-coloring aliases (e.g. 152/160/182/190) have no colorgraph nodes;
+   the preflight refuses 'mask=alias' pairs. The InputProc iter-52
+   polarity lesson is therefore untestable with this instrument —
+   polarity experiments are source-side only (identity spelling).
+12. **Re-derive any from-diff force vector via difflib before spending
+   builds on it.** This round burned an un-coalesce probe + a first-
+   divergence lead on pairing artifacts that a 30-line alignment would
+   have rejected immediately. Extends #1 from eyeballs to tools: the
+   pairing pathology poisons downstream tooling, not just manual counts.
 
-## Doctrine for driver 4
+## Iteration 3b: Oracle Round (driver 3, 2026-06-11)
+
+### Schedule oracle on R3 (+028/+02c addi swap)
+- `explain-schedule addi:0x28>0x2c` AND the reversed rule: status=missing
+  (no same-base load window). Forced run `--force-schedule addi:0x2c>0x28`:
+  #550 check shows ZERO `[FORCE_SCHEDULE]` application lines for
+  HandleInput (only sibling scope-skips) — the addi pair never enters the
+  force hook's window matcher. `diff-schedule`/`suggest schedule` require
+  an applied force; nothing to diff. **Oracle verdict: R3 is outside the
+  entire force-schedule instrument family (load windows only); no C
+  reshape named.** IR fact for the source search: post-coloring IR order
+  is `lis; addi-LO; mr r31,r3`; the target's emitted order interleaves
+  (`lis; mr; addi-LO`) — an eager-vs-lazy result-home-copy placement
+  question (InputProc M1 entry-deferral territory). Lever not found;
+  spelling classes untried: supplier-temp forms for result, buttons-store
+  shape variants (natural u64 store risks the two-zero-node wall).
+
+### Coalesce-attack on the "wrongful coalesce" (ig65/81/85)
+- Un-coalesce force (`--force-coalesce 65=65,81=81,85=85`, applied,
+  #550-verified): final code BYTE-IDENTICAL to baseline. The
+  first-divergence lead was checkdiff-pairing noise (see RETRACTION).
+- Polarity flip (`44=152,45=160,46=182,47=190` — mask absorbed INTO
+  temp-band partner, the InputProc iter-52 direction): preflight REFUSES —
+  r152/160/182/190 are pre-coloring aliases with no colorgraph nodes;
+  force-coalesce cannot express alias-as-root. Polarity remains conceived
+  but UNPROBEABLE with current instruments; C-side analogue = give the
+  mask its identity FROM the temp side (a97f93631's 3-way identity A/B
+  moved the mask r31↔r29 but never reached r28 — r28-reaching identity
+  spelling not found yet).
+
+### Full-vector force-phys oracle — THE FAMILY PROOF
+23-entry vector (masks+data-temps:r28, d-roots:r29, x48:r30) collapses
+the register residual to exactly 5 rows + the 3 known structural inserts.
+No cascades, no spills. The family is one coloring, simultaneously
+reachable. See "Key COLORGRAPH facts" for the dispenser arithmetic.
+
+### Cascade probes (both negative, both informative)
+- `--force-iter-first 34` (pop entry var_r28 web first): it
+  FRESH-DISPENSES r31 (first pop always picks fresh-top) → entry trio
+  rotates → 96 divergent rows. The dispense must land 4th (after
+  r31/r30/r29), not 1st.
+- `--force-phys 0:95:28` (first-popping data temp only): flips that one
+  expansion, NO cascade to the other 8 (99 rows). Forced assignments do
+  NOT register in the dispenser's reuse pool — single-node forces cannot
+  test pool-shift hypotheses (tool limitation, doc-feedback #10).
+
+### Safe-core mining on the 535 corpus (mechanism check done)
+COLORGRAPH diff of output-535-1 vs permuter base (both compiled with TU
+flags via --unit-source):
+- Candidate's merged new_var web = r36: lives 20..410, 119 interferers,
+  degree ≥ k → deferred in SIMPLIFY → **pops iter 1, takes r30**; entry
+  data takes r31 (iter 0); **result (r98) is displaced to r28** —
+  the candidate BREAKS the matched entry trio (target result=r31).
+  Its 535 score = expansion-region gains minus entry damage.
+- Mechanism class named: "function-spanning web grabs an early fresh
+  dispense and shifts the pool". ANY spanning web (~100 interferers)
+  pops in the first slots and displaces result off r31 — so the SAFE
+  equivalent (entry-defined d0 + bottom use, no hazard) inherits the
+  same entry damage. **The target has NO spanning web; its r28-early
+  mechanism is something else.** Safe-core verdict: the corpus's
+  mechanism is real but not the target's; no commit extracted. Remaining
+  conceived candidates for the target's mechanism: (a) UNSPLIT entry
+  var_r28 web surviving the lbAudioAx call (ties S2 to the dispenser —
+  if the no-remat form exists, the web crosses calls and may dispense
+  r28 early; S2 stops being cosmetic and becomes the family's key); (b)
+  mask-web polarity (see above). Neither found in C yet.
+
+### S3 two-load spellings (2 builds, both rejected)
+- `var_r6 = data->is_name_mode; if (var_r6 != 0)`: NO-OP — front-end
+  propagation folds the temp back into one load (census identical).
+  Same propagation family as the entering_menu CP wall.
+- `if ((0, data->is_name_mode) != 0)` comma: 97.4%, hunks 6 — REVERTED.
+- Mechanism: IRO global load-merge across the if/else; not found with
+  temp-identity and comma spellings; untried: arg-side respelling that
+  keeps the test natural.
+
+### PAD_STACK(40) real form (1 build)
+`u8 pad[40];` bare and unused survives -O4 with a frame home —
+metrics BYTE-IDENTICAL to PAD_STACK(40) (97.5/delta-3/hunks-5).
+So "natural C that reserves 40 bytes" exists trivially; but PAD_STACK
+has 2081 uses in committed src/melee and IS the repo-blessed form —
+reverted, finding recorded. The 40-byte gap's SEMANTIC origin (which
+real object the original declared) remains unidentified; it does not
+gate the register family (full-vector oracle matched everything else
+with PAD_STACK in place).
+
+## Doctrine for driver 4 (never-claim compliant)
 
 1. Gate everything vs 97.5 (commits a97f93631/92775a644/9c52d3ce1/213a63310).
-2. **WALL CENSUS (certified after iteration-3 analysis):**
-   - S1 (+2 reload): bottom-body data re-read (r57 web). No safe lever.
-     Permuter exhausted this class. Do NOT re-run unless source structure
-     changes (e.g., removing the 0xC00-arm early-return, which would change
-     the whole CFG).
-   - S2 (+1 CP): entering_menu remat. Ceiling. All cast/split/comma spellings
-     tried. Do NOT re-run.
-   - S3 (-1 CSE): ours has 1 fewer load than target. Structural difference
-     in is_name_mode test load. Untested lever: use a different lvalue
-     spelling for the CSE source to force 2 separate loads.
-   - R3 (+028/+02c addi swap): scheduler ordering. Force-schedule class:
-     non-load window = oracle says "missing". Untested: try reordering the
-     rlwinm computation relative to the lis/addi pair.
-3. The ONE remaining testable lever: **S3's two-load shape.** If the
-   UpdateHeader arg load is made to use a different lvalue than the test
-   load (forcing 2 separate lbz instead of CSE), that addresses -1 of the
-   delta 3, reducing to delta 2. Still net-positive is uncertain.
-4. **PAD_STACK(40) real form still untested** as a lever. A real 40-byte
-   stack reservation MAY shift spill/remat costs, potentially hitting S2.
-5. Let coder3 run; harvest at low cadence. The all-unsafe corpus signal
-   is stable; stop the job if 50K+ iters without a `semantic-risk-low`
-   candidate.
+2. **THE ONE SEARCH TARGET: a C shape that dispenses r28 between the
+   r29 dispense (iter 93) and the first expansion-temp pop (iter 97).**
+   The full-vector oracle guarantees the payoff: the entire register
+   family closes at once (expect ~99+). Ruled out this round:
+   spanning-web class (displaces result), pop-ig34-first (fresh-dispenses
+   r31). Open: no-remat var_r28 entry web (S2 = the suspected key, not
+   cosmetic), mask polarity via identity spelling, any shape adding a
+   4th early callee-save-needing temp in the entry/0xC00 region.
+3. S1/S2/S3/R3 wall entries: see iteration-3/3b mechanism notes — all
+   "not found with spellings tried", all stay in pool. S2 outranks the
+   others now (dispenser connection).
+4. Probe hygiene addendum: single-node force-phys cannot test
+   pool/dispenser hypotheses (#10); force-coalesce cannot make an alias
+   a root (#11); re-derive any from-diff vector via difflib alignment
+   before believing it (#12).
+5. Let coder3 run; harvest at low cadence. Stop the job if 50K+ iters
+   without a `semantic-risk-low` candidate; the all-unsafe corpus is
+   location intelligence (it found the spanning-web mechanism class).
 
 ## DOC-FEEDBACK (methodology observations, iteration 2)
 
