@@ -890,7 +890,7 @@ static inline u8 mnDiagram_GetVisibleFighterFrom(u8* sorted, int start,
     return sorted[idx];
 }
 
-static inline u8 mnDiagram_FindPrevFighter(u8* sorted, s32 cur)
+static inline s32 mnDiagram_FindPrevFighter(u8* sorted, s32 cur)
 {
     s32 found = cur;
     u8* p = sorted + cur;
@@ -903,7 +903,7 @@ loop:
     if (mn_IsFighterUnlocked(*p) == 0) {
         goto loop;
     }
-    return found;
+    return (u8) found;
 }
 
 static inline u8 mnDiagram_FindNextFighter(u8* sorted, s32 cur)
@@ -922,7 +922,7 @@ loop:
     return found;
 }
 
-static inline u8 mnDiagram_FindPrevName(s32 cur)
+static inline s32 mnDiagram_FindPrevName(s32 cur)
 {
     s32 found = cur;
 loop:
@@ -933,7 +933,7 @@ loop:
     if (GetNameText(found & 0xFF) == NULL) {
         goto loop;
     }
-    return found;
+    return (u8) found;
 }
 
 static inline u8 mnDiagram_FindNextName(s32 cur)
@@ -1311,7 +1311,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       if (count > 0xA)
       {
         cur = (u8) data->name_cursor_pos;
-        found = mnDiagram_FindPrevName(cur);
+        found = (u8) mnDiagram_FindPrevName(cur);
         if (cur != found) {
             lbAudioAx_80024030(2);
             data->name_cursor_pos = (data->name_cursor_pos & 0xFF00) | found;
@@ -1337,7 +1337,8 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
         if (cur != found) {
             steps = 0xA;
             i = cur;
-            ptr = (sorted + cur) + 0x1C;
+            ptr = sorted + cur;
+            ptr = ptr + 0x1C;
         dn_n_outer:
             ptr2 = ptr;
 
@@ -1382,7 +1383,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       if (count > 7)
       {
         cur = data->name_cursor_pos >> 8;
-        found = mnDiagram_FindPrevName(cur);
+        found = (u8) mnDiagram_FindPrevName(cur);
         if (cur != found) {
             lbAudioAx_80024030(2);
             data->name_cursor_pos =
@@ -1409,7 +1410,8 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
         if (cur != found) {
             steps2 = 7;
             i = cur;
-            ptr = (sorted + cur) + 0x1C;
+            ptr = sorted + cur;
+            ptr = ptr + 0x1C;
         rt_n_outer:
             ptr2 = ptr;
 
@@ -1466,7 +1468,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       if (count > 0xA)
       {
         cur = (u8) data->fighter_cursor_pos;
-        found = mnDiagram_FindPrevFighter(sorted, cur);
+        found = (u8) mnDiagram_FindPrevFighter(sorted, cur);
         if (cur != found)
         {
           lbAudioAx_80024030(2);
@@ -1544,7 +1546,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       if (count > 7)
       {
         cur = data->fighter_cursor_pos >> 8;
-        found = mnDiagram_FindPrevFighter(sorted, cur);
+        found = (u8) mnDiagram_FindPrevFighter(sorted, cur);
         if (cur != found) {
             lbAudioAx_80024030(2);
             data->fighter_cursor_pos =
