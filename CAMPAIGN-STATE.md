@@ -497,3 +497,55 @@ pointer math — it is the MERGE SHAPE of `found`:
    — dump first, then build.
 3. A-col +94 extra-mr (`mr r23,r0`): ours materializes the nc-walk base into a
    callee-save at +94 where target computes in r0 until +a0. Untested.
+
+## Iteration-25: FIND-WALK INLINE FAMILY — 95.36 -> 97.08 (the campaign's biggest jump)
+
+### TASK 1+2 — partner contest verdict: NOT a contest; family closed (6 doors total)
+- Door 5 (explicit halves stores `*(u32*)&buttons = count2` + lo half): IRO
+  constant-propagates count2 (provably 0) into the store; backend materializes its own
+  r23 zero — identical to baseline. The C-visible read is erased before the backend.
+- Door 6 (comma shield `= (0, count2)`): DOES survive propagation (stw r27 reads
+  count2's reg!) but forces a STACK HOME for count2 (+stw r27,88(r1)) — 93.5. Dead.
+- VERDICT: i won the door-1 absorption by CLASS-legality, not order: same-value zero
+  merging is temp-class-only AND every C spelling that would connect count2-home to the
+  zero is normalized away (constant-prop, sinking, hoisting, library-call shifts).
+  count2-home order (r25, pop 9th) and zero fusion are mutually exclusive from source.
+  FAMILY CLOSED — do not reopen without a fundamentally new mechanism.
+
+### TASK 3 — THE WIN: find-walk inline helpers (m2c-reversal, 3 commits)
+The nav arms' find loops are inlined helpers in the original; m2c expanded them into
+per-arm home writes. Restoring the inline-call dataflow:
+1. `2389c26b2` (95.36->96.60): mnDiagram_FindPrevName / mnDiagram_FindNextName
+   (u8 return; `GetNameText(found & 0xFF)` arg — the file's existing call idiom at
+   lines 266/285/436; `(u8) found` arg CSEs the arg truncation with the return
+   truncation, which the target keeps separate — the & 0xFF spelling alone was worth
+   +0.48). up_n/lf_n = FindPrev, dn_n/rt_n = FindNext. Casts at the post-find compare
+   DROPPED (`if (cur != found)`) — the truncation lives in the helper returns now.
+   Opcode similarity 88.1 -> 97.4.
+2. `cb74cb7b1` (96.60->97.02): pointer-walk fighter variants FindPrevFighter /
+   FindNextFighter(sorted, cur) with `mn_IsFighterUnlocked(*p) == 0` loops
+   (new_var comparisons replaced by literal 0 — new_var is propagated anyway).
+   up_f/lf_f/dn_f/rt_f. dn_f/rt_f keep `ptr = sorted + cur;` for their steps walks.
+   Hunks 44 -> 21, opcode 98.3.
+3. `31e4b2d0c` (97.02->97.08): FindNextFighter decl order (p before found) places the
+   found=cur init at the target slot in dn_f/rt_f.
+- Probed and REJECTED variants: Prev helpers returning s32 with `(u8)` only on the
+  found arm (96.58, Delta3 — broke callers); `u8 cur` param (96.94). The +514/+8d8
+  wrap-arm mr-vs-clrlwi (2 instr) stays open.
+
+### State after iteration-25 (gates for iteration-26)
+- Match 97.08, opcode similarity ~98.3, line delta 1 (ours 896 vs 895), hunks ~21.
+- Gate: opcode >= 98.0 / line delta <= 1 / hunks <= 21 / match >= 97.08.
+- Structural residual (~12 hunks): +a0 mr-vs-clrlwi (A-col nc-arm), +168 lhzu (known,
+  do not retry), +448/+48c addi/mr pair (up_n region), +514/+8d8 prev-wrap
+  mr-vs-clrlwi (helper-shape, 2 sites), 3 one-slot addi shifts of `found = cur` in
+  the NAME next/prev arms (+5fc/+68c/+7c4 — FindNextName has no decl pair to swap;
+  untested: an equivalent reorder inside the name helpers).
+- Register residual ~218 operand sites: megaweb r27->r25 x16 + pool cascades
+  (r24<->r25/r26/r27 families) — the closed order/fusion problem plus downstream.
+- Iteration-26 candidates: (a) the 3 name-arm addi slots; (b) +a0 A-col shape;
+  (c) steps-walk inlining (GetVisibleNameCursorFrom-form) — the dn_n/rt_n second
+  loops are the existing inlines' bodies expanded; target uses index-form re-derivation
+  at the tail per iteration-17, so ONLY attempt with per-arm asm evidence first;
+  (d) re-run the order-channel surrogate on the NEW graph (the inline rewrite changed
+  web composition everywhere — the iteration-14/19 exhaustion verdicts are stale again).
