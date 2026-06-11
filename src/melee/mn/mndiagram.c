@@ -890,6 +890,34 @@ static inline u8 mnDiagram_GetVisibleFighterFrom(u8* sorted, int start,
     return sorted[idx];
 }
 
+static inline u8 mnDiagram_FindPrevName(s32 cur)
+{
+    s32 found = cur;
+loop:
+    found--;
+    if (found < 0) {
+        return cur;
+    }
+    if (GetNameText(found & 0xFF) == NULL) {
+        goto loop;
+    }
+    return found;
+}
+
+static inline u8 mnDiagram_FindNextName(s32 cur)
+{
+    s32 found = cur;
+loop:
+    found++;
+    if (found >= 0x78) {
+        return cur;
+    }
+    if (GetNameText(found & 0xFF) == NULL) {
+        goto loop;
+    }
+    return found;
+}
+
 static inline u8 mnDiagram_GetVisibleNameCursorFrom(u8* sorted, int start,
                                                     int rank)
 {
@@ -1251,19 +1279,8 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       if (count > 0xA)
       {
         cur = (u8) data->name_cursor_pos;
-        found = cur;
-        up_n:
-        found--;
-
-        if (found < 0)
-        {
-          found = (u8) cur;
-        } else if (GetNameText((u8) found) != 0L) {
-            found = (u8) found;
-        } else {
-            goto up_n;
-        }
-        if (cur != (u8) found) {
+        found = mnDiagram_FindPrevName(cur);
+        if (cur != found) {
             lbAudioAx_80024030(2);
             data->name_cursor_pos = (data->name_cursor_pos & 0xFF00) | found;
             mnDiagram_80241730(mnDiagram_804D6C10, (u8) data->name_cursor_pos,
@@ -1284,19 +1301,8 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       if (count > 0xA)
       {
         cur = (u8) data->name_cursor_pos;
-        found = cur;
-        dn_n_find:
-        found++;
-
-        if (found >= 0x78)
-        {
-          found = cur;
-        } else if (GetNameText((u8) found) != 0L) {
-            found = (u8) found;
-        } else {
-            goto dn_n_find;
-        }
-        if (cur != (u8) found) {
+        found = mnDiagram_FindNextName(cur);
+        if (cur != found) {
             steps = 0xA;
             i = cur;
             ptr = (sorted + cur) + 0x1C;
@@ -1344,24 +1350,8 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       if (count > 7)
       {
         cur = data->name_cursor_pos >> 8;
-        found = cur;
-        lf_n:
-        found--;
-
-        if (found < 0)
-        {
-          found = (u8) cur;
-        }
-        else
-          if (GetNameText((u8) found) != 0L)
-        {
-          found = (u8) found;
-        }
-        else
-        {
-          goto lf_n;
-        }
-        if (cur != (u8) found) {
+        found = mnDiagram_FindPrevName(cur);
+        if (cur != found) {
             lbAudioAx_80024030(2);
             data->name_cursor_pos =
                 ((u8) data->name_cursor_pos) | (found << 8);
@@ -1383,24 +1373,8 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       if (count > 7)
       {
         cur = data->name_cursor_pos >> 8;
-        found = cur;
-        rt_n_find:
-        found++;
-
-        if (found >= 0x78)
-        {
-          found = (u8) cur;
-        }
-        else
-          if (GetNameText((u8) found) != 0L)
-        {
-          found = (u8) found;
-        }
-        else
-        {
-          goto rt_n_find;
-        }
-        if (cur != (u8) found) {
+        found = mnDiagram_FindNextName(cur);
+        if (cur != found) {
             steps2 = 7;
             i = cur;
             ptr = (sorted + cur) + 0x1C;
