@@ -2543,3 +2543,170 @@ found↔row2 cycle does not move under arrangement/arg-shape/derivation spelling
    match 98.67 / Δ1 / hunks 6 / opcode 99.4.
 5. #558: expect the pragma drop EVERY bootstrap (5/5); the doctrine handles it.
 6. REPORT TRIGGER: 99.0.
+
+## Iteration-50 (driver 9): macro-4 null confirmed; full harvest pass; ENDGAME ASSESSMENT
+Baseline verified: source `7a17d3dc5`, docs `38dda871c`, match 98.67, Δ1, hunks 6, opcode 99.4.
+Clean tree. Background chain: macro-4 completed (stopped, 7,203 iters, best = 1190 = base-identical,
+zero sub-base candidates). Tuned auto-resubmit did NOT fire (no new coder1 job visible after
+macro stop). coder2-060955 / coder3-061005 active, descending.
+
+### TASK 1 — BACKGROUND-CHAIN COLLECTION
+
+#### Macro run 4 (mnDiagram_InputProc_macro-coder1-20260611-061014): NULL (4TH CONSECUTIVE)
+Completed all 7,203 variants on the bcdd2265c→7a17d3dc5 graph (the dn_f intermediate-copy
+commit was INSIDE the macro's dn_f enumeration region). Best = 1190 @iter4 = base-identical.
+Zero sub-base candidates.
+WALL CONFIRMATION (definitive): the found↔row2 temp-band cycle is invariant under ALL of:
+  - arrangement/arg-shape/derivation spellings for all five nav regions (dn_n, rt_n, up_n,
+    dn_f, rt_f)
+  - four consecutive graph changes (28,812 total variants across graphs 5bf6600e5, bcdd2265c,
+    4e514c1f1, 7a17d3dc5)
+  - the committed structural change (dn_f copy) was INSIDE the macro's own region → the
+    strongest possible null: graph changes within the enumerated space do not help.
+DOCTRINE: do NOT re-run this macro until a commit changes the CONTROL FLOW of one of the
+five regions (not just bands/substitution spellings). The arrangement space is exhausted.
+
+#### Harvest triage — coder2-060955 / coder3-061005 (combined pass)
+coder2: best 1090 @iter2577; coder3: best 1090 @iter2009. All 30+ candidates triaged.
+Full results per reject family:
+
+| Score | Channel | Change | Family | Verdict |
+|-------|---------|--------|--------|---------|
+| 1090 | c2 | row-split + volatile long pad + audio(col_result3*0) | F4+hack | REJECT |
+| 1090 | c3 | row-split + entry new_var3 + indirect hov assign | F4+F5 | REJECT |
+| 1115 | c2 | row-split + audio(col_result3*0) | F4+hack | REJECT |
+| 1115-2 | c3 | entry-decl mass + row-split | F4+F5 | REJECT |
+| 1120 | c2 | row-split + `short row` type change | F4+F3 | REJECT |
+| 1155 | c3 | inline_fn(user_data) wrappers | F2 | REJECT |
+| 1160 | c3 | dead if-chain + row-split | F4+dead | REJECT |
+| 1165 | c3 | `!= (hov*0)` no-op multiply | hack | REJECT |
+| 1170-1 | c2 | entry new_var3 + (input&0x10)!=0 + `(0,input&8)` comma | F5+comma | REJECT |
+| 1170-2 | c2 | entry new_var3 + gmMain indirect | F5 | REJECT |
+| 1170-3 | c2 | dead triple-&&-check | hack | REJECT |
+| 1170 | c3 | ptr2/ptr3 decl reorder | F5 | REJECT |
+| 1180-1 | c2 | nav cur-split + dead if(data&&data) | hack | REJECT |
+| 1180-2 | c2 | dead if(data&&data) + row6-split | hack+F4 | REJECT |
+| 1180 | c3 | is_name_mode form + dead if(cur) + cur-split | hack | REJECT |
+| 1185 | c2 | new_var=0 arg + dead if(!cur&&!cur) | hack | REJECT |
+| 1190-1 | c3 | entry new_var + row6 split | F5+F4 | REJECT |
+| 1190-2 | c3 | int new_var2 type change + row4 split | F3+F5 | REJECT |
+| 1190-3 | c3 | dead triple-&&-check on row2 | hack | REJECT |
+| 1190-4 | c3 | inline_fn + new_var3 + col_result4=7 intermediate | F2+F5 | REJECT |
+| 1190-1/2 | c2 | row-split family variants | F4 | REJECT |
+
+**RESULT: ZERO gate-passers. All 30+ candidates rejected per pre-classified families.**
+Six families validated again: F2=inline_fn wrapper, F3=type change, F4=row-split-unsafe-zone,
+F5=entry-band additions, hack=arithmetic/dead-code/comma hacks. No genuinely new class
+appeared in this pass.
+NOTE: the found↔row2 INTERMEDIATE-COPY family (iter-49's intermediate-copy class, dn_f
+won via existing-var-copy) did NOT appear in this harvest — the sibling sites (rt_f, dn_n
+via row3) were already proven inert by generalization builds in iter-49. The class is
+site-specific and exhausted at the current graph position.
+
+Tuned auto-resubmit: NOT triggered (no new coder1 job). The macro's completion did not
+fire the background chain. Tuned channel needs manual re-seed after any future commit.
+
+### TASK 2 — ENDGAME PORTFOLIO ASSESSMENT
+
+See the ENDGAME section written into CAMPAIGN-STATE below.
+
+### TASK 3 — DEDUCTION ASSIST
+
+No harvest winner this iteration → no generalization builds. Class-exhaustion confirmed
+for both immediate-lift (head-window) and intermediate-copy (site-specific, siblings inert).
+Zero builds spent.
+
+---
+
+## ENDGAME ASSESSMENT — mnDiagram_InputProc (as of iteration-50, 2026-06-11)
+### Status: 98.67%, Δ1, hunks 6, opcode 99.4%
+
+#### (a) Sites remaining by family — wall status and evidence grade
+
+| Family | Sites (CS-only census) | Wall status | Evidence grade |
+|--------|----------------------|-------------|----------------|
+| Fusion/zero-cluster | ~11 CS + Δ1 (li) | WALLED: class-refusal + range-overlap + const-prop triangle; 8+ spelling classes measured dead on 4+ graphs | DEFINITIVE (closed-mechanism) |
+| lhzu/fr-ring | ~15-20 CS + Δ1 (structural) | WALLED: structural — any lhzu spelling adds net instruction, widens Δ1→Δ2 | DEFINITIVE (Δ arithmetic) |
+| found↔row2 temp-band cycle | ~12 CS (dn_n+rt_n+dn_f/rt_f) | WALLED: 28,812 variants / 4 graphs / 0 wins; within-arm pop order insensitive to all arrangement/arg/derivation spellings | DEFINITIVE (exhaustive enumeration) |
+| nc anchor transposition (+094) | ~6 CS | WALLED: temp-class web (no variable identity), dead-anchor tool cannot reach; permuter-random only | STRONG (tool-limit) |
+| nr-head load-order (+0f4) | ~2 CS | WALLED: volatile-pick positional; 3 sessions no lever | STRONG (characterized) |
+| Row-site family (+093-0a4 region) | ~6 CS | CONDITIONALLY WALLED: every spelling (6 metered) adds Δ1; only a no-net-instruction form would pass gate | STRONG (6 spellings measured) |
+| Scattered B-arm/0xC0-arm/fc-fr remainder | ~40-50 CS | PREDOMINANTLY WALLED: most are cascades of the fusion/lhzu/nc families; ~5-10 genuinely unknown | MODERATE (some unread) |
+| PAD_STACK(64) natural reservation | Δ? | OPEN — structural question; 64-byte frame gap not yet explained by natural C | OPEN |
+
+**Total walled sites: ~95-100 of ~101 CS-only census sites.**
+**Genuinely free (unknown mechanism, not pre-walled): 5-10 sites.**
+
+#### (b) Realistic harvest-reachable estimate
+
+Non-walled (not behind definitive/strong wall evidence):
+- ~5-10 scattered sites in B-arm/0xC0/fc-fr whose blocked-set reads have NOT been done
+  on the current graph (these are the 40-50 "scattered" sites minus the cascade fraction)
+- The permuter-random channel can reach these only through the random mutation path; no
+  manual lever has been found for any of them in sessions 47-50
+
+**Harvest-reachable estimate: +0.05 to +0.15pp** if the random channels find a new class
+instance (similar to iter-44's cur=col band-lift, iter-45's operand-flip, iter-46's
+0xC00 band-lift, iter-48's zero-arg lift, iter-49's intermediate copy — each +0.01-0.48pp).
+The wins are getting smaller because fewer free sites remain.
+
+**Ceiling without cracking a wall: ~98.7-98.8pp** (the ~5-10 free sites represent at most
+~0.15pp).
+
+#### (c) What the 99.0 trigger requires
+
+99.0% needs approximately +0.33pp from 98.67% baseline.
+At the function's ~895 instruction count: +0.33pp = ~3 additional matched instructions.
+
+**Required families that must move:**
+Either (A) crack the fusion/zero-cluster wall (~11 CS + Δ1 = ~+0.2pp), which requires a
+C spelling that produces both the u64-conversion-temp pair-half virtuals (for M1 deferral)
+AND count2's home-init == the hi-zero node (for fusion) simultaneously — 8 spelling classes
+measured dead; OR (B) crack the lhzu/fr wall (~15-20 CS + Δ1 = ~+0.3-0.4pp), which
+requires a spelling that produces lhzu at +168 without adding a net instruction — no C
+form found through pointer-walk, field-type, or IRO analysis.
+
+**For 99.0: at least ONE wall must crack.** The random permuter has ~100k+ total iterations
+against the fusion/zero cluster region without hitting the search target. The probability
+of a random hit is low but non-zero.
+
+#### (d) Wall re-prices and what would re-roll them
+
+| Wall | Re-price on graph change | Substrate re-test trigger |
+|------|--------------------------|--------------------------|
+| Fusion/zero | Would re-price ONLY if a new mechanism class is found (not a spelling variant); all 8 spelling classes have measured death modes | After ANY structural commit that changes the entry window or IRO temp structure |
+| lhzu/fr | Would re-price if a commit reduces Δ1 to Δ0 (eliminating the current extra-li debt); with Δ0, a lhzu spelling might be absorb-able | Δ1→Δ0 transition (requires cracking the fusion wall first) |
+| found↔row2 | 28,812-variant exhaustive enumeration; only re-runs after a CONTROL-FLOW change to one of the five nav regions, NOT a band/substitution change | After a commit that changes conditional structure of dn_n/rt_n/up_n/dn_f/rt_f arms |
+| nc transposition | Re-price if a commit changes the 0x10-arm's temp-region structure (re-numbers the @-temps before the nc walk) | After any 0x10-arm structural change |
+| Row-site | The 6-spelling constraint (no net instruction) is architectural; a future commit that reduces overall Δ to -1 (ours shorter) would flip the sign and make the row-site spelling free | Δ1→Δ0→Δ(-1) transition |
+
+**Summary statement for the orchestrator:**
+The function is at 98.67% with two definitive walls accounting for ~31 CS sites + 2 structural
+lines (~+0.5pp if both crack), plus a fully-enumerated temp-cycle wall (~12 CS, +0.2pp), and
+~5-10 genuinely free sites reachable only by random search (~0.1pp).
+**The realistic ceiling without a new mechanism class is ~98.7-98.8pp.**
+**99.0 requires cracking the fusion wall or the lhzu wall — both have exhausted their
+currently-conceived mechanism classes.** The harvest engine should continue running (yield
+~+0.01-0.04pp per win at current cadence) but the probability of crossing 99.0 via random
+search alone is low. The rational decision point for banking the result is when:
+  (1) the random channels have run 150k+ iterations without a win (approaching the
+      search-exhausted threshold), OR
+  (2) a new mechanism class is proposed (e.g., retro IRO comparison of the pair-half
+      virtual creation vs a matched sibling, or a union-type strategy for the fusion).
+
+### TASK 4 — Campaign state updated with harvest log and endgame section (this iteration).
+
+### Driver-10 entry points (REVISED)
+1. **Macro-4 is NULL (4 graphs, 28,812 variants)**: retire the macro dir entirely until
+   a commit changes one of the five nav regions' CONTROL FLOW. Macro re-runs on band/
+   substitution changes are provably wasted.
+2. **Tuned coder1 NOT auto-resubmitted**: manually re-seed the tuned channel after any
+   future commit (the background chain did not fire). Template: bootstrap from committed
+   source → add NULL pragma → local verify → submit with perm_cast_simple=30 weights.
+3. **Harvest coder2-060955 / coder3-061005** at cadence. Gate ≥98.67 (Δ1, hunks 6,
+   opcode 99.4). Pre-classified families: F1=row-split-0x10-arm, F2=inline_fn,
+   F3=type-change, F4=row-split-unsafe, F5=entry-band, F6=arithmetic/dead/comma hacks.
+   Meter ONLY candidates with no pre-classified family token AND no net instruction change.
+4. **Portfolio decision**: as documented in the ENDGAME section — 99.0 requires a wall
+   crack; the harvest engine is valid but expected yield is +0.01-0.04pp per win.
+   Run until 150k+ iterations without win, then bank and report.
