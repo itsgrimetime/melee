@@ -716,3 +716,37 @@ and the old baseline's nav coloring was luck on the wrong graph. Meter at commit
    with an EXTENDED vector (front + the fc/fr/nav @-temp pops).
 2. The fc-head +178/+17c copies + lhzu (allocation-coupled, r29-kill timing).
 3. lf-wraps, nr add-shift, +448 r4/r5 — all characterized, no lever yet.
+
+## Iteration-30: count2-home CRACKED on the correct graph — 97.16 -> 97.28 committed
+### TASK 3 (executed first; the decisive result)
+Door-1 re-test (count2 = 0 decl-init last + B-pair decls up + nav-fighter count2)
+on the post-recipe graph: **match 97.28, rename sites 229 -> 171 (-58), +2 structural
+lines (the known fusion cost: fresh `li r25,0` at +48 — the wall MECHANISM held,
+the COST-BENEFIT inverted on the correct substrate).** Committed 06ba6b9 ("count2
+home demotion + B-pair decl order"). Spot reads confirm the chain fired: count2
+compares r25 ✓, fc-i = r23 ✓ (the nav-r23 cascade root), fc result lbzx r27.
+LESSON RECORDED: walls proven on one graph are cost-benefit verdicts, not
+mechanism-impossibility verdicts — re-test after substrate changes.
+
+### TASK 1 — solve status (honest gap)
+Full extended-vector surrogate NOT built this round (the ~30 main-phase pool igs
+need per-web fingerprinting or the iteration-7 tiebreak module rebuilt; budget).
+Substitute evidence: the chain analysis + door-1's -58 empirically bound the order
+channel's value on this graph. Remaining after door-1: 171 rename sites + 13
+structural hunks. The forced-front probe (+32 same-compiler) and #550 caution stand.
+
+### TASK 2 — the knob map (for iteration-31)
+@-temp numbering knobs (main-phase pop order = descending @-index):
+1. Variable FIRST-USE order (promotion processes variables in first-use order) —
+   moving a first use moves ALL that variable's webs' numbers.
+2. Web multiplicity (single-web home vs promoted @-temps) — the count2 lever class.
+3. Upstream temp-count changes (inlining/un-inlining shifts every downstream number
+   — the recipe demonstrated this).
+4. Home decl order (locals reverse-decl) — front + finishing-sweep positions.
+Executed this round: knob 2+4 (door-1). Candidates next: the fc-arm group already
+has the natural i-last ordering; the &hovered temp eating r24 (lhzu root) is the
+remaining fc-head divergence — knob for it unknown (volatile/peephole-coupled).
+
+### State: baseline 97.28, opcode 98.4, delta 3, hunks 13, 171 rename sites.
+Next: re-census the 171 (families changed after door-1), lf-wraps, nr add-shift,
+fc-head lhzu/copies, full-order surrogate if infrastructure gets rebuilt.
