@@ -1068,8 +1068,8 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
   s32 cur;
   s32 count2;
   PAD_STACK(64);
-  ((s32*) &mn_804A04F0.buttons)[1] = input;
-  ((s32*) &mn_804A04F0.buttons)[0] = (count2 = 0);
+  mn_804A04F0.buttons = input;
+  count2 = 0;
   if (input & 0x10)
   {
     lbAudioAx_80024030(1);
