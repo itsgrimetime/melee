@@ -3,7 +3,28 @@
 ## Target Function
 `mnDiagram_80243434(u8 arg0)` — mn/mndiagram.c
 
-## Status: ACTIVE — 99.70%, 14 diffs
+## Status: CLOSED — MATCHED 100.00 (instruction-identical), iteration 4 Build B
+
+**Final mechanism:** the residual r26↔r28 swap family was a register-allocator
+POP-ORDER artifact: with the plain `mnDiagram_80241730(...)` call, the inline's
+GET_DIAGRAM web is an expansion temp numbered ABOVE the col/row arg homes, so it
+pops first (descending-ig) and takes r26 (reuse-ascending); the target draw needs
+per-trio pop order col→row→GET (col=r26, row=r27, GET=r28 — the P2 oracle,
+byte-identical under forced iter-order). The C lever: manually expand 80241730's
+4-statement body at both cursor sites with per-branch named locals
+(col_idx/row_idx/d, col_idx2/row_idx2/d2) declared FIRST in per-trio order
+col → row → d — every web becomes a reverse-decl-numbered HOME
+(col=47>row=46>d=45 > col2=44>row2=43>d2=42), the natural pops become
+col,row,GET per trio (iters 69-74: r26,r27,r28 ×2), and the function is
+byte-identical. 80241730 itself untouched. Region temps could NOT express the
+branch-2 ordering: the front-end canonicalizes the &0xFF / >>8 pair's emission
+regardless of statement order (col2<row2 in baseline 44<45 AND swapped-source
+46<47 — Build A's miss), so per-branch homes were required.
+
+Verified: checkdiff match=true 100.00; full ninja build OK; protected matches
+intact (mnDiagram_802437E8=100.00, mnDiagram_InputProc=98.67); TU fuzzy 98.06.
+
+## (historical) Status: ACTIVE — 99.70%, 14 diffs
 
 ## Baseline
 - Match%: 99.70% (fuzzy) / 100 (opcode) / Δ0 / 16 line-edits
