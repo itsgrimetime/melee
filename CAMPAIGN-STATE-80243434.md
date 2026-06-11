@@ -147,3 +147,44 @@ audited against the clean worktree. Findings:
 
 DRIVER-2 STEP 0 (mandatory): re-derive the mechanism (dump on clean baseline;
 re-identify ig indices fresh) and re-run the force-proof before any lever build.
+
+## DRIVER-2 ITERATION (2026-06-11) — STEP 0 RE-DERIVED + BUILD A REFUTED
+
+### STEP 0 verification table (all on CLEAN baseline, fresh dump /tmp/d2_baseline_dump.txt)
+
+| Item | Result |
+|------|--------|
+| Baseline reproduce | 99.70 fuzzy / opcode 100 / Δ0 / line-edit 16 / hunks 14 ✓ (attempt #139) |
+| GET_DIAGRAM web (name inline)   | ig_idx **50** (`lwz r50,44(r42)`), colors r26, want r28 |
+| GET_DIAGRAM web (fighter inline)| ig_idx **49** (`lwz r49,44(r42)`), colors r26, want r28 |
+| col_idx web (name inline)       | ig_idx **33** (`rlwinm r33,r47,0,24,31`), colors r25, want r26 |
+| col_idx web (fighter inline)    | ig_idx **44** (`rlwinm r44,r46,0,24,31`), colors r28, want r26 |
+| data2 = GET_DIAGRAM(gobj) @2909 | ig_idx **38** (load) / root **52**, both color r26 |
+| user_data                       | ig_idx **39**, colors r28 (same both sides) |
+| **Blocked-set verdict @ ig-50 pop (iter 66)** | r26 is **FREE** (blocked CSRs there = r25/r27/r30 only). data2 (ig 38) does NOT interfere with ig 50 — interferers 37/39/42, no 50. **CONFIRMED: data2 dies before the inline; r26 free → ascending dispense hands r26 to GET_DIAGRAM.** |
+| **Force-proof** (fresh ids: force 50,49→r28 + 33,44→r26, scoped to fn) | **byte-identical MATCH**; #550 verify-application CONFIRMED (forced COLORGRAPH shows 50→r28, 49→r28, 33→r26, 44→r26; other TU fns "scope skip"). The state file's claimed 0.00 force-proof and ig ids (50/49/33/44) are now VERIFIED on clean baseline. |
+
+So the state file's UNVERIFIED ig ids and force-proof are now all VERIFIED correct.
+
+### STEP 1 Build A — REFUTED (the reported candidate lever does NOT work)
+
+Build A: `data2->is_name_mode` (post-call check, line 2926) instead of `user_data->is_name_mode`.
+- Result: **99.68 (WORSE)**, known fingerprint attempt #168 (5th time). REVERTED.
+- Mechanism (dump /tmp/d2_buildA_dump.txt): colors **IDENTICAL to baseline** (50→r26, 49→r26, 33→r25, 44→r28). The lever did NOT extend data2's live range.
+- WHY: `data2->is_name_mode` compiled to `lbz r109,68(r38)` — it reuses ig_idx=38 (data2) but that read sits at the BRANCH TEST, still BEFORE both inline blocks. data2 (ig 38) still dies before the inline re-loads `44(r42)` (ig 50/49). Interferers unchanged (38: 37/39/42; 50: 33/42/43/47 — disjoint). Confirms data2-field-read at the branch cannot extend the range into the inline.
+
+### CORRECTED MECHANISM — this is an ASCENDING-POOL TIE-BREAK, not an interference gap
+
+Decisive new finding (verified both sides of the diff):
+- In the **TARGET**, data2 (r26) is ALSO dead before the inline (no r26 use from +2cc on). The inline FRESHLY loads `lwz r28,44(r30)` (GET_DIAGRAM=r28) and uses `clrlwi r26,r0,24` (col_idx=r26, reusing the r26 that data2 just vacated). **The target keeps the fresh inline GET_DIAGRAM load — it does NOT reuse data2's pointer.**
+- Therefore the "reuse data2 by manual-inline" idea (driver-2 entry / permuter 835) is a DEAD END: it would ELIMINATE the required fresh `lwz …44(r30)` and color GET_DIAGRAM r26, the opposite of target. Build B (manual-inline reusing data2) was NOT built for this reason — it provably breaks the target structure.
+- At iter 66 (ig-50 pop) BOTH r26 and r28 are FREE (no interference difference between the two builds). The target dispenses **r28**; MWCC's natural ascending pool dispenses **r26**. This is a pure free-register tie-break, NOT an interference/liveness problem.
+- No interferer of ig 50 is a pre-iter-66 r26-colored node, so no source-level liveness change can block r26 at that pop without also destroying the fresh load.
+- Selection-order force `--force-select-order 33,44,50,49` (col_idx before GET_DIAGRAM) was tested as a mechanism probe: 47 differing lines (WORSE) — it grabs r31/r30 (first-dispensed CSRs), does not reproduce the r28/r26 split. So reordering selection is NOT the lever either.
+
+VERDICT: **CONFIRMED IG-ORDER / ascending-pool tie-break wall**, now with a freshly-verified mechanism (was UNVERIFIED before). The residual is the dispense order among two equally-free callee-saves {r26,r28} at the ig-50 pop. Force-proof reaches it by direct color override (proving target is valid), but no tested source/structure/selection-order change redirects the natural dispense without breaking the target's fresh-load structure.
+
+## DRIVER-3 Entries (Pending — unworked ideas, mechanism-aware)
+- Tier-6 `--force-iter-first` (simplification-list reorder, NOT selection-order) scoped to fn: try reordering so the high-degree nodes (55/42/41/39/32 at iters 0-4) consume CSRs in a different order, leaving r28 ahead of r26 for the ig-50 pop. This is the only remaining allocator-internal axis not yet probed with fresh ids; if a force-iter-first config reaches byte-match, THEN search for a source decl/structure change that reproduces that simplify order. (Selection-order already refuted above; iter-first acts on the simplify stack, different mechanism.)
+- Investigate whether a source change to the COUNT-branch region (lines 2910-2924, the data2->jobjs[] uses) can shift which CSR data2's root (ig 52) lands on, or shift the high-degree nodes' dispense, indirectly changing the {r26,r28} availability order at iter 66. data2 currently = r26; if data2 could be pushed to a different CSR, r26 might be consumed by a pre-iter-66 web that DOES interfere with ig 50.
+- If force-iter-first also fails to reach byte-match with any scoped config: bank as a DEFINITIVE ascending-pool tie-break wall (force-proof reachable only by direct color override; no allocator-order or source lever redirects it). Do NOT re-run Build A (data2-> post-call check) or the manual-inline-reuse-data2 form — both refuted with mechanism above.
