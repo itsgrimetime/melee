@@ -1065,6 +1065,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
   u8 row_result3;
   u8 row_result4;
   s32 found;
+  s32 cur;
   s32 count2;
   PAD_STACK(64);
   ((s32*) &mn_804A04F0.buttons)[1] = input;
@@ -1249,9 +1250,9 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       }
       if (count > 0xA)
       {
-          i = (u8) data->name_cursor_pos;
-          found = (u8) mnDiagram_FindPrevName(i);
-          if (i != found) {
+          cur = (u8) data->name_cursor_pos;
+          found = (u8) mnDiagram_FindPrevName(cur);
+          if (cur != found) {
               lbAudioAx_80024030(2);
               data->name_cursor_pos = (data->name_cursor_pos & 0xFF00) | found;
               mnDiagram_80241730(mnDiagram_804D6C10,
@@ -1272,26 +1273,26 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       }
       if (count > 0xA)
       {
-          i = (u8) data->name_cursor_pos;
-          found = mnDiagram_FindNextName(i);
-          if (i != found) {
+          cur = (u8) data->name_cursor_pos;
+          found = mnDiagram_FindNextName(cur);
+          if (cur != found) {
               row2 = 0xA;
-              ptr2 = sorted + i;
+              ptr2 = sorted + cur;
               ptr2 = ptr2 + 0x1C;
           dn_n_outer:
               ptr = ptr2;
 
           dn_n_inner:
-              i++;
+              cur++;
 
               ptr++;
               ptr2++;
-              if (i >= 0x78) {
+              if (cur >= 0x78) {
                   col_result3 = 0x78;
               } else if (GetNameText(*ptr) != 0L) {
                   row2--;
                   if (row2 <= 0) {
-                      col_result3 = sorted[i + 0x1C];
+                      col_result3 = sorted[cur + 0x1C];
                   } else {
                       goto dn_n_outer;
                   }
@@ -1321,9 +1322,9 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
         }
       if (count > 7)
       {
-          i = data->name_cursor_pos >> 8;
-          found = (u8) mnDiagram_FindPrevName(i);
-          if (i != found) {
+          cur = data->name_cursor_pos >> 8;
+          found = (u8) mnDiagram_FindPrevName(cur);
+          if (cur != found) {
               lbAudioAx_80024030(2);
               data->name_cursor_pos =
                   ((u8) data->name_cursor_pos) | (found << 8);
@@ -1345,26 +1346,26 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
         }
       if (count > 7)
       {
-          i = data->name_cursor_pos >> 8;
-          found = mnDiagram_FindNextName(i);
-          if (i != found) {
+          cur = data->name_cursor_pos >> 8;
+          found = mnDiagram_FindNextName(cur);
+          if (cur != found) {
               row2 = 7;
-              ptr2 = sorted + i;
+              ptr2 = sorted + cur;
               ptr2 = ptr2 + 0x1C;
           rt_n_outer:
               ptr = ptr2;
 
           rt_n_inner:
-              i++;
+              cur++;
 
               ptr++;
               ptr2++;
-              if (i >= 0x78) {
+              if (cur >= 0x78) {
                   row_result3 = 0x78;
               } else if (GetNameText(*ptr) != 0L) {
                   row2--;
                   if (row2 <= 0) {
-                      row_result3 = sorted[i + 0x1C];
+                      row_result3 = sorted[cur + 0x1C];
                   } else {
                       goto rt_n_outer;
                   }
@@ -1402,9 +1403,9 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
           return;
       }
       if (count2 > 0xA) {
-          i = (u8) data->fighter_cursor_pos;
-          found = (u8) mnDiagram_FindPrevFighter(sorted, i);
-          if (i != found) {
+          cur = (u8) data->fighter_cursor_pos;
+          found = (u8) mnDiagram_FindPrevFighter(sorted, cur);
+          if (cur != found) {
               lbAudioAx_80024030(2);
               data->fighter_cursor_pos =
                   (data->fighter_cursor_pos & 0xFF00) | found;
@@ -1425,21 +1426,21 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
           return;
       }
       if (count2 > 0xA) {
-          i = (u8) data->fighter_cursor_pos;
-          ptr = sorted + i;
-          found = mnDiagram_FindNextFighter(sorted, i);
+          cur = (u8) data->fighter_cursor_pos;
+          ptr = sorted + cur;
+          found = mnDiagram_FindNextFighter(sorted, cur);
           row2 = 0xA;
       dn_f_outer:
           if (row2 == new_var) {
-              col_result4 = sorted[i];
+              col_result4 = sorted[cur];
           } else {
               ptr3 = ptr;
           dn_f_inner:
-              i++;
+              cur++;
 
               ptr3++;
               ptr++;
-              if (i >= 0x19) {
+              if (cur >= 0x19) {
                   col_result4 = 0x19;
               } else if (mn_IsFighterUnlocked(*ptr3) != new_var) {
                   row2--;
@@ -1470,9 +1471,9 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
             return;
         }
         if (count2 > 7) {
-            i = data->fighter_cursor_pos >> 8;
-            found = (u8) mnDiagram_FindPrevFighter(sorted, i);
-            if (i != found) {
+            cur = data->fighter_cursor_pos >> 8;
+            found = (u8) mnDiagram_FindPrevFighter(sorted, cur);
+            if (cur != found) {
                 lbAudioAx_80024030(2);
                 data->fighter_cursor_pos =
                     ((u8) data->fighter_cursor_pos) | (found << 8);
@@ -1493,21 +1494,21 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
             return;
         }
         if (count2 > 7) {
-            i = data->fighter_cursor_pos >> 8;
-            ptr = sorted + i;
-            found = mnDiagram_FindNextFighter(sorted, i);
+            cur = data->fighter_cursor_pos >> 8;
+            ptr = sorted + cur;
+            found = mnDiagram_FindNextFighter(sorted, cur);
             row2 = 7;
         rt_f_outer:
             if (row2 == new_var) {
-                row_result4 = sorted[i];
+                row_result4 = sorted[cur];
             } else {
                 ptr3 = ptr;
             rt_f_inner:
-                i++;
+                cur++;
 
                 ptr3++;
                 ptr++;
-                if (i >= 0x19) {
+                if (cur >= 0x19) {
                     row_result4 = 0x19;
                 } else if (mn_IsFighterUnlocked(*ptr3) != new_var) {
                     row2--;
