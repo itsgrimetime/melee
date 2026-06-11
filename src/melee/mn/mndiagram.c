@@ -1387,7 +1387,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
           if (mn_IsFighterUnlocked(i) != new_var) {
               count2++;
           }
-    }
+      }
 
     if (input & 1)
     {
