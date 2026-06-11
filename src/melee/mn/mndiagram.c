@@ -892,8 +892,8 @@ static inline u8 mnDiagram_GetVisibleFighterFrom(u8* sorted, int start,
 
 static inline s32 mnDiagram_FindPrevFighter(u8* sorted, s32 cur)
 {
-    s32 found = cur;
     u8* p = sorted + cur;
+    s32 found = cur;
 loop:
     found--;
     p--;
