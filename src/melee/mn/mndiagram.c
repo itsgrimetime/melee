@@ -1258,15 +1258,10 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
         if (found < 0)
         {
           found = (u8) cur;
-        }
-        else
-          if (GetNameText((u8) found) != 0L)
-        {
-          found = (u8) found;
-        }
-        else
-        {
-          goto up_n;
+        } else if (GetNameText((u8) found) != 0L) {
+            found = (u8) found;
+        } else {
+            goto up_n;
         }
         if (((u8) cur) != found)
         {
@@ -1296,15 +1291,10 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
         if (found >= 0x78)
         {
           found = cur;
-        }
-        else
-          if (GetNameText((u8) found) != 0L)
-        {
-          found = (u8) found;
-        }
-        else
-        {
-          goto dn_n_find;
+        } else if (GetNameText((u8) found) != 0L) {
+            found = (u8) found;
+        } else {
+            goto dn_n_find;
         }
         if (cur != found)
         {
@@ -1379,7 +1369,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
         {
           goto lf_n;
         }
-        if (cur != found)
+        if (cur != (u8) found)
         {
           lbAudioAx_80024030(2);
           data->name_cursor_pos = ((u8) data->name_cursor_pos) | (found << 8);
@@ -1498,7 +1488,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
         else
           if (mn_IsFighterUnlocked(*ptr) != new_var)
         {
-          found = (u8) found;
+            found = (u8) found;
         }
         else
         {
@@ -1539,7 +1529,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
         else
           if (mn_IsFighterUnlocked(*ptr2) != new_var)
         {
-          found = (u8) found;
+            found = (u8) found;
         }
         else
         {
@@ -1618,7 +1608,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
         {
           goto lf_f;
         }
-        if (cur != found)
+        if (cur != (u8) found)
         {
           lbAudioAx_80024030(2);
           data->fighter_cursor_pos = ((u8) data->fighter_cursor_pos) | (found << 8);
