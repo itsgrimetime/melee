@@ -10,8 +10,8 @@ Match `mnDiagram2_HandleInput` in `src/melee/mn/mndiagram2.c` to 100%.
 | Starting baseline | 89.34% (from extract) |
 | Verified worktree baseline | 91.59% (pre-campaign) |
 | Iteration-1 end | 95.91% |
-| **Iteration-2 end (committed)** | **97.1%** |
-| Commits | d229127e4, 384761931, 54f8e1157, 8de2c73ea, a97f93631, 92775a644 |
+| **Iteration-2 end (committed)** | **97.5%** |
+| Commits | d229127e4, 384761931, 54f8e1157, 8de2c73ea, a97f93631, 92775a644, 213a63310 |
 
 ## Iteration-2 Headline: the +8 paradox resolved (IG verdict)
 
@@ -58,12 +58,20 @@ instrument class for this function.
    du-chain based; the bottom-body defs form separate webs regardless.
    The identity still moves the dispenser (r31 vs r29).
 
+### 213a63310 — d2 gobj alias restores the r28 CSE (97.1 → 97.5%)
+`data2 = (d2 = mnDiagram2_804D6C18)->user_data;` + `mnDiagram2_UpdateHeader(d2,
+x48, var_r5)` reproduces the target's lwz r28,sda21 / addi r3,r28 CSE at the
+second UpdateHeader (S4 closed). The FUSED assignment is required — the
+two-statement form stages through r3 + `mr r28,r3` (+1). Derived from the safe
+core of remote candidate output-800-1 (raw candidate read the alias
+uninitialized on non-0xC0 paths — rejected on full-file diff).
+
 ### 92775a644 — data re-assignment replaces data3
 `data = mnDiagram2_804D6C18->user_data;` re-assigned into the SAME
 variable splits the web identically to a separate `data3` (97.1% both
 ways) — kept the natural single-variable form.
 
-## Current Residuals at 97.1% (line delta 4)
+## Current Residuals at 97.5% (line delta 3)
 
 Structural:
 - S1 (+2): the bottom-body reload. Target = single web, no reload, yet
@@ -77,15 +85,22 @@ Structural:
 - S3 (-1): ours CSEs the is_name_mode test load into the UpdateHeader1
   arg (1 load); target emits 2 loads (r0 test, r4 arg). Block-local CSE
   difference downstream of register state.
-- S4 (0): +224 `lwz` vs `addi r3,r28` — r28 CSE of the global lost.
+- S4: CLOSED by 213a63310.
 
-Register-only:
-- R1: 4× clrlwi r29-vs-r28 (dispenser tiebreak; r28 PROVEN legal — the
-  webs do not interfere with any r28 holder; force-phys 44-47:r28
-  reproduces the target shape exactly, cascades elsewhere)
-- R2: x48 r29-vs-r30 in 0x20 arm
+Register-only (post-d2 alignment, 107 paired diffs, ONE systematic
+pattern):
+- R0: ALL 9 RefreshStatRows expansions: ours (d,data)=(r31|r30, r29) vs
+  target uniform (r29, r28). Target's dispenser is stable across pops;
+  ours alternates. new_var alias in the inline still REQUIRED on the
+  new base (removing it: 93.7%).
+- R1: 4× clrlwi r29-vs-r28 (same family; r28 proven legal via
+  force-phys 44-47:r28 — exact target shape, cascades elsewhere)
+- R2: x48 r29-vs-r30 in 0x20 arm (fusion keeps it; unfused = 96.9%)
 - R3: +028/+02c addi order swap (scheduler; outside the oracle's
   same-base-load window class)
+The whole register family reduces to: arm-local temps should draw
+{r28,r29} stably; ours draw {r29,r30,r31} with rotation. One dispenser
+fact away from ~99%.
 
 ## Key COLORGRAPH facts (fresh DLL, 2026-06-11)
 
@@ -124,9 +139,11 @@ Register-only:
 ## Permuter
 
 - coder1: mnDiagram_InputProc listening post — DO NOT TOUCH.
-- coder3: `mnDiagram2_HandleInput-coder3-20260611-123744` at the 97.1
-  base (fresh bootstrap, randomize_funcs includes RefreshStatRows).
-- coder2: submission in flight at same base.
+- coder3: re-bootstrapped + resubmitted at the 97.5 base (d2 form);
+  prior 97.1-base job stopped after yielding the d2 mechanism
+  (output-800-1, best 800 from 1320 at ~30K iters).
+- coder2: submissions repeatedly produced empty output files (3×);
+  verify with `remote ps` before relying on it.
 - Old 95.91-base jobs stopped. Old high-score candidates (4530 etc.) are
   STALE — scored against the pre-mask base; do not apply.
 - #558 NULL auto-injection: NOT exercised (this base.c has no NULL
