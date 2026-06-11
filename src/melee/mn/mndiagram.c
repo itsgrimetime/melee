@@ -1345,7 +1345,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       if (input & 4)
     {
         row3 = mn_804A04F0.hovered_selection >> 8;
-        if ((row3 > 0) && (count > (row3 - 1))) {
+        if ((0 < row3) && (count > (row3 - 1))) {
             lbAudioAx_80024030(2);
             mn_804A04F0.hovered_selection =
                 ((u8) mn_804A04F0.hovered_selection) | ((row3 - 1) << 8);
