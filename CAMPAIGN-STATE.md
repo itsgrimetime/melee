@@ -2034,3 +2034,89 @@ countloop+up_f 4, dn_f 4, up_n 3, head 2.
   (b) one blocked-set read each for the B-arm d-pointer (r26→r23 ×6) and 0xC00-head webs to
   name their gates before building; (c) do NOT re-derive the fusion/lhzu walls.
 - Report triggers: next at 98 (old-line 97.74 crossed this iteration).
+
+## Iteration-45 (driver 7): comparison-form flip — 97.93 → 98.18; REPORT TRIGGER CROSSED
+Baseline verified: 97b22051b, 97.93%, Δ2, hunks 8, census 101. One source commit: 2b8fc4127 (98.18%).
+
+### BASELINE CORRECTION
+Earlier campaign notes said Δ3; the TRUE BASELINE was Δ2 all along. The confusion came
+from comparing "Line delta" values without re-verifying on the stashed tree. Confirmed
+by `git stash` rebuild: Δ2/hunks 8/97.93.
+
+### TASK 2 — HARVEST: comparison-form flip discovered, metered, committed
+Channels at session start: coder2 had candidates down to score 1445; coder3 down to 1445;
+coder1-entryrand had 3 below base. All 3 channels re-bootstrapped and stopped per
+stale-base doctrine executed at end of iteration-44.
+
+TRIAGE PASS (ordered by score):
+- coder3 1445-1: THREE semantic changes: `col=(cur=hovered)` combined assignment +
+  `new_var3=count` (0xC00 arm) + `new_var2=col+1` (B-arm). Combined retail: **97.55** (-0.38pp) ✗ REVERTED.
+- coder3 1445-2: REJECT — `inline_fn()` no-op wrapper hack.
+- coder2 1560-1: `row = hovered; row = row >> 8;` (row band-lift in 0x10-arm). Retail **98.04%** but:
+  count2 color shifted r25→r23 (M1 front arrangement broken), frame -120 vs -128 (wrong),
+  hunks jumped 8→16. NOT a clean gate-passer — structural integrity failed. REVERTED.
+  Mechanism: row's band-lift added an early-used temp displacing count2's sweep-1 position.
+  RULE DERIVED: band-lifts in the 0x10-arm / entry region are UNSAFE (they compete with
+  count2's sweep-1 front pick). Only band-lifts AFTER the nav loop entry (main phase) are safe.
+- coder2 1575-1: `if ((0 < row3) && ...)` operand-flip in up-arm clamp. Retail **98.18%**,
+  Δ2 held, hunks 8 held, frame -128 ✓, opcode sim 99.0% (+0.3pp). COMMITTED 2b8fc4127.
+  Mechanism: comparison operand-order changes MWCC's cmpwi emission form in the rt_n arm
+  (branch shape changes); downstream @-temp renumbering fixes register sites in rt_n/dn_n.
+  count2 stays r25 ✓ (the flip is in the main nav body, post-front).
+- coder2 1585: REJECT — inline_fn() wrapper hack.
+- coder2 1615 (ptr2/i decl swap): retail 97.95% but count2 shifted r23, block shape divergence
+  at +0ac (extra b instruction), many misaligned instructions. REVERTED. Mechanism: decl-order
+  changes @-temp indices in the 0x10-arm region (same unsafe zone as the row split).
+- coder3/coder1 remaining: nothing below 1575 (dominated by the operand flip's siblings).
+- Rejected (no-op/hack): 1445-2 (inline_fn), 1585 (inline_fn), 1630 (col=1 assignment to call arg).
+
+### TASK 1 — band-lift generalization: tested, mechanisms recorded
+(a) 0xC00-head bucket: `new_var3 = count` (s32, declared between ptr3 and new_var) + usage
+  in clamping block. Retail **97.88%** (-0.05pp). REVERTED.
+  Mechanism: new_var3's first-use is in the main nav body (safe zone), count2 stays r25 ✓.
+  But the new variable's band competes with the at-pop blocked sets in the 0xC00 arm,
+  shifting the clamp-block webs in a direction that costs slightly more than it gains.
+  The 0xC00-head bucket (~13 sites) is NOT free — its blocked sets are coupled to the
+  zero-web/count2 front arrangement (the B-arm d-ptr + 0xC00 scatter are all in the r23→r25
+  family, consistent with the fusion-coupled wall). BANKED as walled.
+(b) B-arm bucket: no direct band-lift attempt (blocked-set reads show B-arm d-ptr at r26→r23
+  = fusion-coupled; other B-arm sites need dump reads). The 1575 operand-flip was discovered
+  to address the rt_n arm (misidentified as "B-arm" bucket in driver-7's program — the 
+  "B-arm 15" census bucket is: B-arm d-ptr ~6 fusion-coupled + ~9 other sites from the
+  name-up arm's row3 comparison chain).
+
+### Substrate re-tests on the 2b8fc4127 graph
+- Fusion wall: TWO lis still (+03c li r23 = zero-temp, +048 li r25 = count2). count2=r25 ✓.
+  Wall holds at ~11 sites + Δ1. Zero-temp is now at r23 (was r27 in some earlier iterations?
+  — the count2/zero positions have shifted with each graph change).
+- lhzu wall: +168 lhzu-vs-addi+lhz persists. Wall holds.
+- nc 2-cycle: 6 sites (r28→r27 per the iteration-44 census family). Temp-class, permuter-only.
+
+### New permuter channels (stale-base doctrine executed)
+Stopped all 3 jobs. Re-bootstrapped on 2b8fc4127 source. Resubmitted:
+- coder2: mnDiagram_InputProc-coder2-20260611-040227 (16t, stock)
+- coder3: mnDiagram_InputProc-coder3-20260611-040238 (16t, stock)
+- coder1: mnDiagram_InputProc-coder1-20260611-040256 (8t, stock)
+
+### State: match 98.18, Δ2, hunks 8, opcode 99.0. Tree clean at 2b8fc4127.
+### Wall inventory (revised):
+1. Fusion/zero-cluster: ~11 sites + Δ1. count2 at r25 ✓; zero-temp at r23. Wall stands.
+2. lhzu/fr: Δ1 + fr-ring. Wall stands.
+3. Within-arm pop order: ~50-60 remaining sites (B-arm ~9 non-fusion, 0xC00-head ~13 all
+   walled, rt_f ~10, nc/nr ~9, scattered). The operand-flip class (1575/1635 family) works
+   here. Permuter is the primary search vehicle.
+4. nc 2-cycle (6) + volatile-pick positionals: temp-class/volatile-pick, permuter-only.
+5. SAFE-ZONE RULE (new): band-lifts in the 0x10-arm/entry region are UNSAFE (displace
+   count2's sweep-1 front position); only band-lifts in the main nav body (post-front) are safe.
+
+### Driver-8 entry points
+1. PERMUTER HARVEST: fetch coder2/coder3/coder1 (new jobs started 2026-06-11 ~04:02 UTC).
+   Triage rules unchanged. Gate ≥98.18.
+2. OPERAND-FLIP FAMILY (the 1575 lever class): systematically check other comparison sites in
+   the census buckets (B-arm ~9, rt_f ~10, nc/nr ~9) for `(x > 0)` or `(x > N)` forms that
+   could be rewritten `(0 < x)` / `(N < x)`. Each is a cheap 1-character change. Build on
+   evidence only (check the census site offsets vs source lines).
+3. NEW RULE: before any band-lift, classify the first-use position as safe (main nav body,
+   post-front) or unsafe (entry/0x10-arm region). Only safe-zone lifts should be built.
+4. After any commit: stop/re-bootstrap/resubmit the permuter channels (stale-base doctrine).
+5. REPORT TRIGGER: next at 98.5 (98 crossed this iteration).
