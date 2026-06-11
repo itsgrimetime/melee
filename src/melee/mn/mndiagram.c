@@ -993,12 +993,12 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
   s32 col;
   s32 row;
   u8 col_result;
-  u8 col_result2;
   u8 col_result3;
   u8 col_result4;
-  u8 row_result2;
   u8 row_result3;
   u8 row_result4;
+  u8 col_result2;
+  u8 row_result2;
   s32 cur;
   s32 found;
   PAD_STACK(72);
