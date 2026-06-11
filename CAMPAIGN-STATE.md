@@ -1483,3 +1483,106 @@ indicates.
 3. rt_f window re-read on current graph, then the lift lever.
 4. fc/fr soup (46 sites): unexamined on this graph beyond the persisting
    +178/+17c copies; the lhzu sub-wall is inside it.
+
+## Iteration-40 (driver 5): M1 + walker/found pair attempts — walls confirmed; rt_f + fc/fr characterized
+Baseline verified: ee5d2793d, 96.87%, opcode 98.2, Δ6, census 207. Tree clean throughout.
+Gates: neutral-or-better vs 96.87%. No gate-passing edits found. 5 builds attempted, all
+reverted. 2 builds were neutral-confirmed byte-identical (not counted in mismatch count).
+
+### TASK 1 (M1 corrected eligibility rule — RESOLVED)
+MWCC SIMPLIFY uses ascending ig-idx order within each sweep. Eligibility = scan-time class-0
+degree < k=29. For sorted (lowest ig of the front webs = first scanned in ascending sweep):
+scan-time degree = push-time degree (no neighbors pushed before it).
+- BASELINE graph (dump_baseline): sorted ig177 push-time=27; input(ig179)/base(ig182) have
+  ig > sorted → when sorted is scanned, they are not yet pushed → scan-time = 27+2 = 29 = k
+  → deferred (not strictly less than k). ✓ Explains deferral.
+- CURRENT graph (dump40): sorted ig176 push-time=25; same input+base edges = scan-time 25+2=27 < 29
+  → NOT deferred (field-shape removed 2 class-0 edges from sorted by eliminating the u64 temp webs).
+Gap = +2 class-0 edges needed on sorted (with ig > sorted's ig) to restore deferral.
+
+### TASK 2 (M1 C-lever) — NO LEVER FOUND; store-order RULED OUT
+Store-order swap tested (zero-first order: `[0]=(count2=0)` before `[1]=input`): 96.721% < 96.87%.
+REVERTED. Mechanism: swap hurts register allocation elsewhere.
+All statement-order directions exhausted per campaign. The deferral gap (+2 edges needed) has no
+C-reachable source: DCE'd defs add no class-0 edges; introducing new live GPR webs with first-use
+between sorted's and input/base's positions while interfering with sorted = no natural candidate.
+UNTESTED: emission-order of the +030/+034 addi pair (base-addi before input-addi, target reverses).
+
+### TASK 3 (walker/found pair transposition) — 3 anchor builds, all FAILED GATE
+Three dead-anchor positions tested for `found` (to push found's first-use earlier than cur's):
+1. 0x10-arm is_name_mode block (line ~1086): `found = col_result;` before return → 96.793% ✗ REVERTED
+   Mechanism: too early — introduces cross-arm interference that cascades negatively.
+2. 0xC00 arm GetNameCount()==0 early-return (line ~1195): `found = count2;` before lbAudioAx call
+   → 96.844% ✗ REVERTED. Mechanism: anchor moves found's band but pair relative order resisted.
+3. 0xC00 arm GetNameCount()==0 early-return (same location), this is build 3 in TASK 3 budget.
+   Wait — above #2 is the 0xC00 GetNameCount==0 anchor. All 3 positions tried. Each sub-gate.
+
+PAIR TRANSPOSITION WALL: cur first-use 1252 < found first-use 1253 → cur band higher → cur pops
+first (iter ~345-360 in dump) → cur takes r29, found takes r23. Target wants found-first (found r24,
+cur r23). Three anchor positions between 1086 and 1252 all failed to flip the pair while holding gate.
+The B-col free-win (from iter-39) means the FORCE CHAIN STILL HOLDS: M1 → (r24,r23) pair.
+Pair transposition is gated on M1.
+
+### TASK 4 (rt_f ring + fc/fr soup evidence)
+**rt_f ring (dump-only read):**
+Current graph rt_f arm webs (identified via ig38's interference set): {ig87(r27), ig79(r24),
+ig75(r25), ig74(r29), ig67(r30)}. Pop order: ig87→338, ig79→346, ig75→350, ig74→351, ig67→358.
+dn_f arm webs (via ig40's interference): {ig86(r27), ig78(r24), ig65(r25), ig72(r29), ig56(r30)}.
+BOTH arms have the same register set {r27,r24,r25,r29,r30} on the current graph.
+The old-graph "dn_f fully target" verdict was measured at 97.74% pre-field-shape. After the substrate
+migration, the old lever commits (steps→row2, ptr3+anchor, FindPrevFighter flip) are in source but
+their effect on COLORS is unmeasured on this graph. Cannot assess rt_f ring mismatch vs target
+without a force-phys fingerprint of the rt_f merged (row_result4) and walker (ptr3-rt_f region) webs.
+RECOMMENDATION: r14-fingerprint ig67 and ig74 (the two unclassified rt_f webs) before any ptr-style build.
+
+**fc/fr soup (evidence summary):**
+Two wall shadows characterize the ~46-site soup family (unchanged from iter-35):
+- fr-side (~11 sites: +18c/+1cc..+234): LHZU-coupled. Target reads hovered via 0(r29) (lhzu-advanced
+  base); ours burns r24 &hovered temp → fr-i displaced → ring cascades. Wall = lhzu Δ (structural,
+  delta already Δ6, no room to absorb another structural divergence in lhzu direction).
+- nc-side (~7-9 sites: +094, +0a4..+0ec, +0f4/+0fc/+104): first divergence at +094 hovered-temp
+  pick chains to B-col (M1 front-order family). Walled with M1.
+The fc-head +178/+17c addi/mr copies persist on this graph (verified in iter-38 force probe).
+These are pressure artifacts from the nc/nr inline + fc soup shape mismatch; they disappear only
+if the fc arm's r29 timing aligns (the lhzu path). The fc/fr soup wall is not independent of M1 + lhzu.
+
+### State after iteration-40
+Match: 96.87%, opcode 98.2, Δ6, census 207. Tree clean at ee5d2793d. No source changes committed.
+
+### Wall inventory (updated for current graph):
+1. M1 entry-band deferral: sorted needs +2 scan-time edges (push-time 25+2=27 < k=29). Store-order
+   swap ruled out. Untested: +030/+034 emission-order swap, data/sorted decl swap.
+2. Walker/found pair transposition (~19 sites): gated on M1 (force-chain proven). Three anchor
+   positions tested and failed gate. CLOSED until M1 resolves.
+3. lhzu/fr soup (~11+Δ1): structural. Cannot absorb lhzu without widening delta.
+4. nc-side soup (~7-9 sites): B-col/M1 shadow.
+5. Fusion mega-debt (~28 sites + Δ2): the field-shape commit paid Δ2; the 11-site megaweb forms ✓;
+   the remaining 5 sites ({ternary, entering_menu} cluster) are const-prop-walled.
+6. rt_f ring (~5 sites): unread on current graph. Old iter-36 verdict (statement-temp merged)
+   may no longer apply (ptr3 source structure changed through iter-36 commit). Re-read before building.
+
+### Pair-transposition mechanism (at-pop level, from dump40 analysis)
+cur (nav walker) and found both have first-use near lines 1252/1253 → cur band slightly higher
+→ cur pops before found. At cur's pop: r29 is DEAD (input web ig178 used r29 in the entry band and
+is now free as a dispensed callee-save reuse) → cur takes r29. At found's pop: r29 blocked by cur
+→ found takes r23. Result: (cur=r29, found=r23) = ours.
+Target (cur=r23, found=r24): base=ig180 takes r29 AND IS LIVE in the name arms (hovered reads via
+r29) → at cur's pop r29 is BLOCKED → cur goes to fresh r23 dispense → found takes r24.
+CONCLUSION: pair transposition is MECHANISTICALLY GATED ON M1. No anchor position can fix it
+without first making base=r29 live in the name arms. The three anchor failures are explained:
+- any found-anchor earlier than cur's first-use makes found take the r29 dead register FIRST
+  → cur takes r23 → pair swaps to (found=r29, cur=r23) — wrong but different wrong.
+- the 0xC00-name anchor result (iter-39): cur moved r29→r24 not r23 (found stayed r23)
+  = the anchor put found in an EVEN EARLIER band, making the reuse schedule different.
+CLOSED: walker/found pair transposition without M1 is NOT achievable via dead anchors.
+
+### Driver-6 entry points (priority)
+1. M1 C-lever: untested direction = +030/+034 addi emission-order swap (base-addi before input-addi
+   in ours; target emits the reverse — noted in iter-38's force proof head residue). May be sensitive
+   to the declaration ORDER of `u32 input` vs `Diagram *data = ...` (creation-order-controlled).
+   Cheap probe: swap `u32 input = mn_80229624(4);` and `Diagram *data = ...` in the source
+   (both are at-decl inits; their order controls which gets created first in the entry band).
+2. rt_f ring re-read: force-phys ig67:14 and ig74:15 to fingerprint those webs, then assess lever.
+   Both dn_f and rt_f have {r27,r24,r25,r29,r30} color sets on current graph — possibly both match
+   target (or possibly rt_f merged/walker are swapped vs dn_f). Cannot assess without fingerprint.
+3. After M1 resolves: re-run walker/found pair (it's mechanistically free once base=r29 live).
