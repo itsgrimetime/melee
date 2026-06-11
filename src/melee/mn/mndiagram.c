@@ -1061,14 +1061,15 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
   s32 row5;
   s32 row6;
   u8 col_result;
+  u8 col_result2;
+  u8 row_result2;
   u8 col_result3;
   u8 col_result4;
   u8 row_result3;
   u8 row_result4;
-  u8 col_result2;
-  u8 row_result2;
   s32 cur;
   s32 found;
+  s32 count2 = 0;
   PAD_STACK(64);
   if (input & 0x10)
   {
@@ -1386,25 +1387,24 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
   else
   {
     new_var = 0;
-    count = new_var;
     for (i = new_var; i < 0x19; i++)
     {
       if (mn_IsFighterUnlocked(i) != new_var)
       {
-        count++;
+        count2++;
       }
     }
 
     if (input & 1)
     {
       col = (u8) mn_804A04F0.hovered_selection;
-      if ((col > new_var) && (count > (col - 1)))
+      if ((col > new_var) && (count2 > (col - 1)))
       {
         lbAudioAx_80024030(2);
         mn_804A04F0.hovered_selection = (mn_804A04F0.hovered_selection & 0xFF00) | ((col - 1) & 0xFF);
         return;
       }
-      if (count > 0xA)
+      if (count2 > 0xA)
       {
         cur = (u8) data->fighter_cursor_pos;
         found = (u8) mnDiagram_FindPrevFighter(sorted, cur);
@@ -1420,13 +1420,13 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       if (input & 2)
     {
       col = (u8) mn_804A04F0.hovered_selection;
-      if ((col < 9) && (count > (col + 1)))
+      if ((col < 9) && (count2 > (col + 1)))
       {
         lbAudioAx_80024030(2);
         mn_804A04F0.hovered_selection = (mn_804A04F0.hovered_selection & 0xFF00) | ((col + 1) & 0xFF);
         return;
       }
-      if (count > 0xA)
+      if (count2 > 0xA)
       {
         cur = (u8) data->fighter_cursor_pos;
         ptr = sorted + cur;
@@ -1476,13 +1476,13 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       if (input & 4)
     {
         row5 = mn_804A04F0.hovered_selection >> 8;
-        if ((row5 > new_var) && (count > (row5 - 1))) {
+        if ((row5 > new_var) && (count2 > (row5 - 1))) {
             lbAudioAx_80024030(2);
             mn_804A04F0.hovered_selection =
                 ((u8) mn_804A04F0.hovered_selection) | ((row5 - 1) << 8);
             return;
         }
-      if (count > 7)
+      if (count2 > 7)
       {
         cur = data->fighter_cursor_pos >> 8;
         found = (u8) mnDiagram_FindPrevFighter(sorted, cur);
@@ -1500,13 +1500,13 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
       if (input & 8)
     {
         row6 = mn_804A04F0.hovered_selection >> 8;
-        if ((row6 < 6) && (count > (row6 + 1))) {
+        if ((row6 < 6) && (count2 > (row6 + 1))) {
             lbAudioAx_80024030(2);
             mn_804A04F0.hovered_selection =
                 ((u8) mn_804A04F0.hovered_selection) | ((row6 + 1) << 8);
             return;
         }
-      if (count > 7)
+      if (count2 > 7)
       {
         cur = data->fighter_cursor_pos >> 8;
         ptr = sorted + cur;
