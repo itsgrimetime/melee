@@ -750,3 +750,48 @@ remaining fc-head divergence — knob for it unknown (volatile/peephole-coupled)
 ### State: baseline 97.28, opcode 98.4, delta 3, hunks 13, 171 rename sites.
 Next: re-census the 171 (families changed after door-1), lf-wraps, nr add-shift,
 fc-head lhzu/copies, full-order surrogate if infrastructure gets rebuilt.
+
+## Iteration-31: census re-prioritized to the zero-web/r23 chain; unfuse lever refuted
+Baseline 97.28 held (no source commits; one clang-format pass committed 8e...-family).
+
+### STANDING RULE (orchestrator): substrate relativity — after each committed graph
+change, previously-proven walls get one cheap re-test before being believed.
+
+### TASK 1 census (post-count2 graph, web-level): 42 mismatched pairs
+- count2's web = r25 CORRECT at its 10 sites; the megaweb residue = the UNFUSED
+  pieces: ours' zero web {+3c li, +44 stw, +25x, +390 ternary} + absorbed i = 8-site
+  r23 web 0x3c-0x870 (vs target: zero in the r25 megaweb, i its own r24 3-site web).
+- THE FRESH-LI DEBT IS REALLY r23 OCCUPANCY: the four big nav walk webs (dn_n/rt_n
+  8+8, dn_f/rt_f 7+7 = 30 sites) all want r23 (target) and ours has them on
+  r26/r27. Also visible: ours SPLITS the mn-base web (entry r29 web ends ~+750;
+  nav arms re-materialize via lis/addi at +880 — target keeps ONE r29 base web
+  to +b6c, 15-16 sites). The base split is ANOTHER family (~5+ sites).
+- &hovered temp root (iteration-30) folded into this: same fc-head region, still open.
+
+### TASK 2 levers measured (2 builds, both non-viable)
+1. `i = count2` (substrate re-test of the propagation door): byte-identical AGAIN —
+   IRO constant-prop wall holds on this graph too. Re-proven, recorded.
+2. Dedicated home `s32 i2` for the count loop (home-class = same-value-merge exempt):
+   the unfuse FIRED (i2 got its own fresh `li r23,0` at +858; the zero web shrank)
+   but i2's home took r23 anyway and the nav walk webs did NOT move (97.07, +1 line,
+   reverted). ⟹ The nav-r23 displacement is NOT explained by zero-web occupancy
+   alone — my reconstructor-level interference model mispredicts the real blocker.
+   NEXT INSTRUMENT (iteration-32): r14-fingerprint the dn_n cur-web ig and read its
+   ACTUAL blocked-set from the COLORGRAPH interferer list at its pop (the dump has
+   it), instead of reconstructor inference.
+
+### FRESH-LI DEBT (explicit, per orchestrator): target lacks ours' +48 li r25
+(count2 init) and ours lacks the megaweb fusion of {zero, ternary, entering_menu}
+into count2 — 2-line + 5-site standing debt. The fusion/zero-partner contest gets a
+re-test after EVERY future committed graph change (substrate rule).
+
+### INFRASTRUCTURE GAP (standing): the extended-vector order solve needs the
+iteration-7 tiebreak module rebuilt (host-side surrogate over the full pop order)
+or ~30 per-web fingerprints. Until then, order-channel ceiling estimates come from
+forced-front probes (+32 same-compiler) and chain analyses only.
+
+### State: 97.28, opcode 98.4, delta 3, hunks 13ish, ~171 rename sites.
+Iteration-32: (1) the dn_n blocked-set read -> the real nav-r23 blocker; (2) the
+base-web split family (nav lis/addi re-materializations — possibly a source-shape
+lever: the nav arms' mn_804A04F0 accesses vs the entry base); (3) &hovered/lhzu;
+(4) lf-wraps/nr-shift on evidence only.
