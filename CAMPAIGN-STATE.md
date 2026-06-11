@@ -1,6 +1,6 @@
 # mnDiagram_InputProc register-allocation campaign — state brief
 
-## Current state (2026-06-10, iteration 22)
+## Current state (2026-06-10, iteration 23)
 - Worktree: `.claude/worktrees/mndiagram-802427B4-investigation`, branch `claude/mndiagram-802427B4-investigation`
 - **Match: 95.4%** (95.36 precise). Commit stack (do not rebase away):
   1. `a152f6c58` init count at decl (94.53→94.6)
@@ -33,8 +33,9 @@
 ## The numbering map (measured; the campaign's deepest result)
 1. params r32+; **locals = REVERSE declaration order** (~r33-56) — decl position is a working renumbering knob (got the +0.1 nav-web fix).
 2. statement temps ~r57-110 (emission order).
-3. **IRO-pass temps r111+**: the IRO-exit promotion pass (between EvaluateConditionals and RebuildCondExpressions; see /tmp/retro8/iro-57 vs iro-58) rewrites **loop-carried variables** to per-loop @-temps (@1010=count → r114). Spelling-immune (for/while/++/accumulator probes T1-T3 all inert).
-- ⟹ ig(B-col)>ig(count) is unreachable in the CURRENT IRO temp structure: pass temps always outrank homes; loop @-temps number in flowgraph order (earlier loops lower).
+3. **IRO-pass temps r111+**: the IRO-exit promotion pass (between EvaluateConditionals and RebuildCondExpressions; fresh ledger /tmp/retro23) rewrites **multi-web loop-carried variables** to per-web @-temps (**@1008=nav-fighter count=ig118** — iteration-23 corrected the old @1010 claim). Spelling-immune (for/while/++/accumulator probes T1-T3 all inert).
+- Numbering (iteration-23 corrected): variables in FIRST-USE order; webs within a variable in REVERSE node order (latest region = lowest @). Loop OUTPUTS (col_result*/row_result*) are never promoted.
+- ⟹ ig(B-col)>ig(count) is unreachable by NUMBERING (temps outrank homes) — but the POP ORDER is reachable via the spill-candidate push channel (see iteration-23 order oracle: +31 lines).
 
 ## Open question (iteration-10 entry point)
 Target emitted the identical body from DIFFERENT IRO internals (different temp counts/numbering upstream). Prime suspect: the m2c goto-soup dual-pointer walks (nc/nr/fc/fr loops, lines ~1013-1158: i/ptr/ptr2 triple-walk = 3 promoted vars per loop). An index-only original spelling would change the @-temp sequence before count's @1010, shifting select order. The required-order constraint (B-pair first) is relative to OUR interference graph — a reshaped graph changes the requirement too. Oracle stands: force-iter-first slot-6 → count r25 (real allocator).
@@ -309,3 +310,107 @@ REMAINING STRUCTURAL DELTA SUMMARY:
 
 ### Body gate for iteration-23+
 opcode similarity ≥ 88.1 (current), line delta ≤ 1, hunks ≤ 42, match ≥ 95.4%.
+
+## Iteration-23: composition CLOSED, order channel REOPENED, promotion gate decoded
+Match unchanged 95.4 (95.36). No source commits (all probes/experiments reverted); the
+iteration's product = three model corrections + a validated order oracle + the extent table.
+
+### CORRECTION 1: iteration-21's two-web split was a FORCE-INTERACTION ARTIFACT
+- Clean fingerprint force-phys 118:14 (r14 = unused low reg, no conflicts): ig118 =
+  **ALL 16 sites** = {+3c/+44 zero pair, +254 entering_menu stb (JOINED via the iter-22
+  hoist), +38c/+390 ternary, +84c mr (i=count init), +860 count++, all 8 count compares
+  +894/+8b8/+95c/+980/+a74/+a98/+b3c/+b60}. Composition == target megaweb EXACTLY.
+- Re-probe 118:25 reproduces the artifact: forcing to a naturally-contested register
+  (r25 held by webs 121/123/127/129) BLOCKS part of the coalesce; the {zero,input&4/8}
+  piece fell off the root. Iteration-21 saw the complement of my split (source state
+  differed pre-stb-hoist). RULE: fingerprint with r14-r17 ONLY; never with pool registers.
+- Unforced asm confirms: all 16 sites uniformly r27 in ours, r25 in target. The ENTIRE
+  residual at these sites = ig118's color (pop position), not composition.
+
+### CORRECTION 2: @-temp map redecoded (fresh /tmp/retro23 on current source)
+- The promotion pass (between iro-57 EvaluateConditionals and iro-58 dump) is a
+  WEB-SPLITTER for multi-web LOOP-CARRIED home variables: count (32 refs, 4 disjoint
+  regions) splits into home (0xC00-name path, 6 refs) + **@1008 = nav-fighter count =
+  ig118** (10 refs: init+incr+8 compares) + @1009 = nav-name count (9) + @1010 =
+  0xC00-fighter count (7). The campaign's "@1010=count" was the WRONG region.
+- Numbering: variables in FIRST-USE order (count first-used at decl-init line 990 =
+  first promoted = lowest @s); webs WITHIN a variable in REVERSE node order (latest
+  region gets lowest @). Iteration-9's "flowgraph order, earlier loops lower" is wrong.
+- @1000-@1007 predate the promotion (CSE temps); promotion temps start at @1008.
+  ig111+8 = 118 ✓ checks.
+- GATE ANSWER (the TASK-2 question): the promotion fires on loop-CARRIED variables
+  (count++, i++, col--, found--) with multiple webs. Loop OUTPUTS (col_result*/row_result*)
+  are NEVER promoted — merging col_result2+col_result4 / row_result2+row_result4 was
+  built+measured: B-pair sites UNCHANGED (still home webs), rt_f regressed to r25,
+  95.29. REVERTED. B-pair-as-@-temps is unreachable.
+
+### EXPERIMENT: count2 single-web home demotion (built, measured 95.04, REVERTED)
+- Edit: dedicated `s32 count2` (declared last) for the nav-fighter arm + col_result2/
+  row_result2 decls moved up. Result: **B-pair snapped to TARGET colors r27/r26 ✓✓**
+  (pop-order mechanism works in vivo) BUT the megaweb fusion BROKE: home-count2 init
+  emits fresh `li r27,0` at +84c instead of inheriting the live +3c zero; the
+  {zero,entering_menu,ternary} piece split off to r24; compare second-operands cascaded.
+- ⟹ the zero-CSE fusion lives ONLY in the @-temp path: the promotion-created value chain
+  feeds the backend coalescer (virtuals 157/164 -> root 118). Home variables don't fuse.
+  Target needs BOTH fusion AND late pop ⟹ target's count web = @-temp like ours; the
+  difference is PURELY pop position within the high-pressure SELECT group.
+
+### THE ORDER ORACLE (headline): forced SELECT order reproduces pi on the fused graph
+- `--force-iter-first "58,161,166,163,38,37,41,39,118,32"` (current ig ids:
+  58=data, 161/166/163=CSE identities, 38=B-col=col_result2, 37=B-row=row_result2,
+  41=col_result4 dn_f, 39=row_result4 rt_f, 118=count megaweb, 32=gobj/proc):
+  B-col r27 ✓, B-row r26 ✓, megaweb r25 ✓ incl. `mr r24,r25` init shape and ternary,
+  results r26 ✓. Scored vs target with same-compiler baseline (dtk disasm + skeleton
+  align): **unforced-debug 70.19% -> forced 74.14% (+31 net lines)**.
+- Iteration-14's "order channel exhausted" verdict was measured on the PRE-FUSION graph
+  (before iter-22's stb hoist changed composition). It does NOT hold on the current graph.
+- Current pop order: 58,161,166,163,118,41,39,38,37,32 (SIMPLIFY trace, class 0,
+  n_nodes=396). 118 pops 5th because it is pushed as a SPILL-CANDIDATE (flags 0xa +
+  SPILLED in SIMPLIFY) — spill-candidate pushes pop first; among the group, descending
+  ig orders the rest. Locals (33-56) can never outrank temp 118 by NUMBER.
+- Pick model validated on all 6 pool decisions (reuse dispensed callee-saves ascending
+  from lowest, else fresh descending): with order 38,37,41,39,118 the picks land
+  r27,r26,r26,r26,r25 = exactly pi.
+
+### Iteration-24 entry points (the C-question, sharpened)
+The required order needs 118 pushed EARLIER (not spill-chosen) or 38/37 pushed LATER
+(spill-chosen / degree >= k=29). Untested levers:
+1. SPILL-COST of ig118: the heuristic chose it for the optimistic push. Its cost is a
+   function of def/use count + loop depth. C-knobs that change its use count without
+   changing the body: the ternary spelling (its 0-arm/1-arm constants are web members),
+   the `i = count`-vs-`i = new_var` init spelling, the compare operand forms. Measure
+   with dump (SIMPLIFY flags row for 118) per spelling.
+2. Degree of B-pair (currently 18 vs k=29): +11 edges needed to make them spill-front.
+   Liveness extension = body-gate risk; probably dead, but a dump-only probe is cheap.
+3. The OTHER 0xa/SPILLED rows in SIMPLIFY (iters 13,22,32,41,58 of the listing,
+   arraySize=2) — identify them; if any is a movable web, the spill-choice sequence
+   might be reorderable from C.
+4. Reminder: force-iter-first is DIAGNOSTIC-ONLY (debug DLL). Any lever must reproduce
+   through the retail ninja build.
+
+### TASK-3 extent table (web-level, reconstructor both sides, current baseline)
+Method: tools/target_web_reconstructor.py build() on target_asm AND current_asm
+(105 callee-save webs each side), paired greedily by extent overlap + size.
+- 101 pairs; **48 register-mismatched; 40/48 = SAME-EXTENT (pure color cascade)** —
+  these flip when the front order is fixed; do NOT chase individually.
+- TRUE extent-deltas (7 + 3 unpaired), ALL in the nav walk arms — one family:
+  1. dn_n walk web: ours r26 5-site 0x5d4-0x664 vs tgt r27 3-site 0x5ec-0x660 — ours
+     materializes the walk value ~6 instr earlier w/ 2 extra sites. Same in rt_n:
+     ours 5s 0x79c-0x82c vs tgt 3s 0x7b4-0x828. C-hypothesis: ours' pre-loop
+     `i=cur; ptr=sorted+cur+0x1C` materialization vs original deriving later/inside.
+  2. dn_f/rt_f same pattern smaller: ours r27 3s 0x9ac-0xa30 vs tgt r28 2s 0x9c4-0xa30;
+     ours 3s 0xb8c-0xc10 vs tgt 2s 0xba8-0xc14 (iteration-16 H2 family).
+  3. A-col nc-arm: ours r27 3s 0x94-0xe0 vs tgt r24 3s 0xa0-0xe0 — ours web starts at
+     +94 (the extra `mr r23,r0` at +a0; target computes in r0 and moves once).
+  Unpaired ours-only r25 webs (no target counterpart): 0x50c-0x520 (up_n), 0x6d4-0x6e8
+  (lf_n), 0x20c-0x234 — ours-only materializations, same walk-arm family.
+- Site histogram (236 mismatched operand-sites): r27->r24 x21, r27->r25 x16, r25->r24
+  x16, r24->r23 x15, r28->r24 x13, r24->r27 x12, r25->r27 x12 — dominated by the
+  cascade families above.
+
+### Probe hygiene rules added this iteration
+- Fingerprint webs ONLY with r14-r17 forces (unused regs); pool-register forces
+  (118:25) perturb coalescing and produce false split readings.
+- Cross-compiler match% comparisons are invalid: score forced debug-DLL objects against
+  target using the SAME-compiler unforced object as baseline (dtk disasm + skeleton align;
+  ninja-retail baseline reads ~5pp higher than debug baseline on this fn).
