@@ -1105,7 +1105,8 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
   {
     lbAudioAx_80024030(1);
     HSD_GObjProc_8038FE24(HSD_GObj_804D7838);
-    proc = HSD_GObj_SetupProc(gobj, (void (*)(HSD_GObj *)) mnDiagram_PopupInputProc, 0);
+    i = 0;
+    proc = HSD_GObj_SetupProc(gobj, (void (*)(HSD_GObj *)) mnDiagram_PopupInputProc, i);
     proc->flags_3 = HSD_GObj_804D783C;
     if (data->is_name_mode != 0) {
         col = mn_804A04F0.hovered_selection;
