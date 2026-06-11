@@ -1,8 +1,9 @@
 """Tests for source input resolution used by debug inspect diff."""
 from __future__ import annotations
 
-import subprocess
 import signal
+import subprocess
+import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -73,7 +74,7 @@ def test_compile_source_variant_invokes_pcdump_local(monkeypatch: pytest.MonkeyP
 
     assert text == "Starting function fn_test\n"
     cmd = captured["cmd"]
-    assert cmd[:6] == ["python", "-m", "src.cli", "debug", "dump", "local"]
+    assert cmd[:6] == [sys.executable, "-m", "src.cli", "debug", "dump", "local"]
     assert "--no-cache-sync" in cmd
     assert "--function" in cmd
 
@@ -156,14 +157,14 @@ def test_compile_source_variant_uses_process_group_timeout_runner(
 
     assert text == "Starting function fn_test\n"
     assert captured["cmd"][:6] == [
-        "python",
+        sys.executable,
         "-m",
         "src.cli",
         "debug",
         "dump",
         "local",
     ]
-    assert captured["cwd"] == tmp_path / "tools" / "melee-agent"
+    assert captured["cwd"] == tmp_path
     assert captured["timeout"] == 7
 
 

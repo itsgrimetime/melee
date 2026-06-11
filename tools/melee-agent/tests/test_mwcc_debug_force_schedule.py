@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -15,6 +16,22 @@ from src.cli import app
 
 runner = CliRunner()
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_mwcc_debug_env_parse_buffers_are_static_for_zig_i386_build() -> None:
+    text = (REPO_ROOT / "tools" / "mwcc_debug" / "mwcc_debug.c").read_text(
+        encoding="utf-8",
+    )
+    for function in ("parse_iter_first_from_env", "parse_force_interfere_from_env"):
+        match = re.search(
+            rf"static void {function}\(void\)\n\{{(?P<body>.*?)\n\}}",
+            text,
+            flags=re.DOTALL,
+        )
+        assert match is not None
+        body = match.group("body")
+        assert "static char buf[MWCC_DEBUG_ENV_BUF_LEN];" in body
+        assert "\n    char buf[MWCC_DEBUG_ENV_BUF_LEN];" not in body
 
 
 def test_dump_local_help_exposes_force_schedule() -> None:

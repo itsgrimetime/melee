@@ -20,6 +20,10 @@ from src.search.structure import (
 )
 
 
+def test_structure_package_exports_inline_boundary_call_result_return_table() -> None:
+    assert structure_mod._INLINE_BOUNDARY_CALL_RESULT_RETURNS["GetNameText"] == "char*"
+
+
 def test_rank_structure_variants_prefers_exact_then_match_then_delta() -> None:
     variants = [
         StructureVariant(

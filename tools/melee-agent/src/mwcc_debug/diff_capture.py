@@ -126,7 +126,7 @@ def compile_source_variant(
             unit_source_path = unit_source_path.resolve()
         with source_context as compile_path:
             cmd = [
-                "python",
+                sys.executable,
                 "-m",
                 "src.cli",
                 "debug",
@@ -144,7 +144,7 @@ def compile_source_variant(
             try:
                 proc = _run_with_process_group_timeout(
                     cmd,
-                    cwd=melee_root / "tools" / "melee-agent",
+                    cwd=melee_root,
                     timeout=timeout,
                     env=_env_with_child_hang_timeout(timeout),
                 )
