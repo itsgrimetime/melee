@@ -456,6 +456,155 @@ with PAD_STACK in place).
    without a `semantic-risk-low` candidate; the all-unsafe corpus is
    location intelligence (it found the spanning-web mechanism class).
 
+## Iteration 4: x48+CP mechanism analysis + SIMPLIFY window map (driver 4, 2026-06-11)
+
+### Verified SIMPLIFY window map (derived from fresh dumps this driver)
+
+From x48+new_var pcdump (`pcdump_x48_newvar_fresh.txt`), n_nodes=194, iters 90-105:
+```
+iter93: ig103 (x48 rlwinm)  degree=11, nIntfr=18  → r29 (callee-save 3rd)
+iter94: ig102 (mn_addr)     degree=11, nIntfr=18  → r28 (callee-save 4th)
+iter95: ig101               degree=2              → r4  (volatile)
+iter96: ig99                degree=2              → r4  (volatile)
+iter97: ig97                degree=0              → r0  (volatile)
+iter98: ig96                degree=13             → r28 (expansion temp, pool-reuse)
+```
+
+From baseline pcdump (`pcdump_baseline_v2.txt`), same window:
+```
+iter93: ig101 (mn_addr)     degree=11, nIntfr=18  → r29 (callee-save 3rd)
+iter94: ig100               degree=2              → r4  (volatile)
+iter95: ig98                degree=2              → r4  (volatile)
+iter96: ig96                degree=0              → r0  (volatile)
+iter97: ig95                degree=13             → r29 (expansion temp, pool-reuse)
+```
+
+**SIMPLIFY ordering rule (verified empirically):** Among equal-degree nodes, HIGHER ig_idx
+pops FIRST in SIMPLIFY. Evidence: ig103 (103) pops before ig102 (102) before ig101 (101),
+all degree=11. And ig34 (34) is lowest, pops latest at iter135/138.
+
+**The dispense-window arithmetic (verified):** For ig34 (var_r28, ig_idx=34) to pop
+in iters 93-97, it would need ig_idx ~102 (just above ig101=101 in descending-idx order,
+but below ig103=103 which already takes r29). Function-scope locals get low ig_idx (~32-40)
+at IR initialization — they CANNOT be repositioned via source spelling without eliminating
+the local variable entirely.
+
+### x48+new_var form: COLORGRAPH anatomy (verified this driver)
+
+- ig103 (x48 rlwinm) → r29 at iter93: This web exists because `x48=(u8)var_r28;
+  buttons[0]=x48` creates a rlwinm→stw chain. The rlwinm's output web (ig103) lives
+  across the lbAudioAx call (MODEL GAP: last visible pcode use is B4, but COLORGRAPH
+  shows live=B4,B7 — cause unattributed with available instruments).
+- ig102 (mn_addr) → r28 at iter94: Displaced from r29 by ig103 taking iter93.
+- ig34 (var_r28) → r27 at iter138, ig32 (gobj) → r26 at iter140: 6th callee-save created.
+  This is the BLOCKING PROPERTY of the x48+new_var form: adds a 6th callee-save.
+
+### x48 peephole mechanism (VERIFIED)
+
+B4 post-coloring: `li r29,0` (x48=var_r28=0 assigned to r29, callee-save).
+B7 CP-substitution: MWCC inserts `li r_temp,0` (pcode #58 from propagation #34).
+After register coloring: r_temp → r29 (because CP's new web has same constraint as ig103).
+Peephole: `li r29,0` in B7 is REDUNDANT (r29 already=0, callee-save, preserved across call).
+Peephole ELIMINATES the redundant li. Result: `stb r29,17(r28)` in B7 (no li prefix).
+
+This is confirmed by the COLORGRAPH output for x48+new_var: B7 shows `stb r29,17(r28)` with
+NO preceding `li`, while baseline B7 shows `li r0,0; stb r0,17(r29)`.
+
+### S2 CP wall: all spellings tried this driver
+
+Goal: prevent MWCC's CP of var_r28=0 at the entering_menu store, without creating a 6th
+callee-save.
+
+All forms tried vs 97.46% baseline (all reverted):
+
+| Form | Match% | Mechanism |
+|------|--------|-----------|
+| `lbAudioAx_80024030(var_r28)` | 97.46% | MWCC sees arg=constant 0 → same CP |
+| `var_r28 = result & 0` | 97.46% | MWCC evaluates result&0=0 at compile time |
+| `var_r28 = result & ~result` | 97.46% | MWCC evaluates ~result&result=0 at compile time |
+| `x48=(u8)var_r28; buttons[0]=x48` (x48 u8) | 96.71% | 2nd rlwinm for buttons[0] stw |
+| `x48` declared as `int` | 97.03% | Wrong callee-save ordering |
+| x48+new_var non-swap (full form) | 98.76% | 6th callee-save (gobj→r26) |
+
+**Fundamental barrier:** On the B4→B7 path, var_r28=0 is provably constant. MWCC's CP
+pass "Found propagatable assignment at: 34" / "Found propagation at 52 from 34" fires
+regardless of what precedes it on that path. No single-path spelling tried disrupts CP.
+
+**Why x48+new_var is 98.76% and not 100%:** The 6th callee-save (gobj→r26 instead of r27)
+produces `stmw r26,56(r1)` vs target `stmw r27,60(r1)`, and the entire register family
+shifts by one (var_r28→r27 vs target r28, gobj→r26 vs target r27). This accounts for all
+remaining hunks.
+
+### Quirk-claim audit (coordinator requirement, driver 4)
+
+Claims made in earlier driver text that required audit per the coordinator correction
+(binding doctrine: "Bug in MWCC" is a category error; unsubstantiated "known quirks"
+must be cited or retracted):
+
+1. **"MODEL GAP: ig103 live range extends B4→B7"** — RETAINED AS OBSERVATION FORM.
+   Observed: ig103 (x48 rlwinm web, last visible pcode use in B4) reports live=B4,B7
+   in COLORGRAPH. No instruction in B7 reads ig103 after CP substitution. Cause: unattributed
+   with available instruments. This is an honest observation; no citation needed for an
+   observation. Filed as unattributed behavior, not "bug".
+
+2. **No other "bug in MWCC" or "known quirk" claims were authored this driver.** Prior
+   driver docs inherited iteration-3 notes which used observation form throughout.
+
+### Permuter status (coder3-20260611-125553, as of driver-4 harvest)
+
+- Total outputs: 3172 candidates after ~228K+ iterations.
+- Best score: 485 (x48+new_var non-swap form with `(u8) data->scroll_offset` in RefreshStatRows).
+- All 3172 candidates: 2940 unsafe, 230 corrupt, 0 safe.
+- Audit ABORT reason for 485: "unsigned cast in comparison" — FALSE POSITIVE. The
+  `(u8) data->scroll_offset` cast already exists in base.c:287. The audit tool
+  mis-categorizes argument casts as comparison casts.
+- Score 525: `void *new_var` in 0x20 arm, then reuse new_var in 0xC00 arm (UNSAFE: cross-arm
+  pointer aliasing with wrong lifetime).
+- Conclusion: 228K iterations found the x48+new_var class (485=known form) and nothing
+  structurally new. The job has exhausted its useful search budget for safe candidates.
+
+### What is established (driver 4)
+
+1. x48+new_var is 98.76%, confirmed both by prior session and this driver's permuter corpus.
+2. The SIMPLIFY window map is VERIFIED: ig103 pops iter93→r29, ig102 pops iter94→r28,
+   expansion temps start iter98 using pool {r27,r28,r29,r30,r31}.
+3. The x48 mechanism is verified: peephole elimination of redundant `li r29,0` in B7.
+4. ig34 (var_r28, ig_idx=34) CANNOT reach the iter93-97 window via source spelling:
+   function-scope locals get low ig_idx (~34) fixed at IR initialization. All CP-prevention
+   spellings tried evaluate to the same constant 0 at compile time.
+
+### What is open (driver 4, not tried or not found)
+
+- **Mechanism class not yet tried:** A C form where the ENTERING_MENU store uses a different
+  web (not var_r28/ig34) that NATURALLY has ig_idx in the 101-103 range and degree=11. This
+  would require the entering_menu value to come from an EXPRESSION TEMP created during B4
+  IR construction AFTER the mn_addr lis/addi. Candidate: refactor var_r28 as a non-local
+  temp (`((s32*)&mn_804A04F0.buttons)[0] = entering_menu_val = 0; ... entering_menu = entering_menu_val`)
+  where `entering_menu_val` is an inner scope temp. But MWCC likely creates this during
+  function entry anyway.
+- **Mask-web polarity (S4):** ig44-47 (GetXIndex masks) could potentially be assigned r28
+  via identity-spelling forms not yet tried (existing tries: new_val/var_r28/int-new_val
+  moved r31↔r29 but not r28). One more identity spelling remains in the gap.
+- **S3 arg-side respelling** (UpdateHeader is_name_mode test): natural arg-side form that
+  forces 2 loads without comma operator. Not yet tried.
+
+### What NOT to retry (driver 4, closed)
+
+- Any form of `var_r28 = <expr>` where expr evaluates to 0 at compile time: all hit the
+  same CP. MWCC's CP fires on provably-constant assignments; no constant-expr spelling prevents it.
+- x48 with non-u8 types: `int x48` tried, creates callee-save ordering regression.
+- The spanning-web class: ANY variable with a live range covering both entry and bottom body
+  displaces result off r31 (mechanism verified in iteration-3b). Do not retry.
+- Permuter job coder3-20260611-125553: fully harvested, all 3172 outputs audited.
+
+### Baseline state for driver 5
+
+- Source: HEAD of `claude/mndiagram-802427B4-investigation` branch, clean working tree.
+- Match: 97.46% (checkdiff delta=3, hunks=5).
+- Commits in this worktree: a97f93631, 92775a644, 9c52d3ce1, 213a63310, 5c5708b56.
+- Best tested form NOT committed: x48+new_var non-swap (98.76%) — 6th callee-save problem.
+- Next highest priority: find a form reaching iter93-97 window with 5 callee-saves.
+
 ## DOC-FEEDBACK (methodology observations, iteration 2)
 
 1. **Precise-alignment-first should be doctrine.** Iteration-1 spent a
