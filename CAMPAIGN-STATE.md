@@ -1112,3 +1112,76 @@ Maximal reachable without cracking a wall ≈ 97.9-98.0.
 2. The walls stand unless a new mechanism class appears (rider-move was the
    last one). Re-test set on next graph change: decl-init door, lhzu site,
    B-col order.
+
+## Iteration-36: copy-coalesce door closed with mechanism; dead-anchor tool found — 97.68 → 97.74
+Baseline verified at 39b9acf72. 3 builds: 1 reverted (byte-identical), 2 committed as one logical change.
+
+### TASK 1 — THE COPY-COALESCE DOOR: CLOSED (the wall's last untested class)
+Evidence first: target +848 `mr r24,r25` = the count-loop walker init copy ours
+lacks (a Δ3 member). The multi-def hypothesis (ternary makes count2's web a
+{0,1} phi → no const-prop → copy survives) is CORRECT about target's web — the
+ternary windows show BOTH builds already share the ternary 0-arm with the live
+zero (multi-def web exists in both; +388-tgt/+398-ours li 1 only, 0-arm falls
+through). The difference is purely WHICH web owns the cluster: temp r23 (ours)
+vs count2-home r25 (target).
+- Build (ternary routed through count2 + store from it): BYTE-IDENTICAL — the
+  IRO DCEs the dead count2 write (the path-disjointness that makes it safe
+  makes it removable). count2's web never becomes multi-def.
+- The live-use variant (`if (count2 != 0)` after the store) would delete the
+  field re-load BOTH builds emit (+390-tgt/+3a0-ours lbz) — body change ✗.
+- ROOT MECHANISM (final): ours emits TWO overlapping zero materializations
+  (+3c temp li, +48 count2-home li) whose linear ranges overlap → same-value
+  coalesce refused → split forever. Target emitted ONE li because the
+  original's count2 init IS the buttons-hi IR node — only spellable via u64
+  arithmetic ((s32)(input64>>32)) which this compiler lowers through __shr2u
+  (door 2's measured death). WALL CLOSED: every mechanism class now has a
+  measured dead door (const-prop, DCE, class-refusal, range-overlap, library
+  call). The fusion family (~28 sites + 2-line Δ) is the wall's full extent.
+
+### TASK 2 — the free sites: fighter steps ring CRACKED (97.68 → 97.74)
+- Build A (ptr3 = dn_f/rt_f inner walker, own variable): cycle ROTATED —
+  steps r25→r24 ✓TARGET, but merged r28→r25 ✗ regressed, walker r28 ✗.
+  97.70, census 72.
+- Build B (+ DEAD BAND ANCHOR `ptr3 = sorted;` in the 0xC00-fighter branch):
+  THE NEW MECHANISM — a dead init anchors a variable's band position
+  (precedent: count's dead decl-init at 1050 anchored count's band, proven by
+  D-NEW-1). The anchor is DCE'd (Δ3 held) but places ptr3's band in the
+  row2(1128)..found(1253) window → walker pops before found_merged.
+  dn_f ring FULLY TARGET: merged=r28 ✓, steps=r24 ✓, walker=r25 ✓, anchor=r27 ✓.
+  97.74, census 67. COMMITTED (one commit, ptr3+anchor).
+- rt_f ring did NOT flip (merged=r25/walker=r28 still swapped, ~5 sites):
+  per-arm divergence — dn_f's merged popped variable-band-late, rt_f's
+  popped before its walker; the merged webs' band classification differs per
+  arm (statement-temp vs variable boundary). OPEN — needs a dump read of the
+  rt_f merged web's ig and pop slot.
+
+### DEAD-ANCHOR BAND PLACEMENT (new general tool — record for reuse)
+`var = <any-live-value>;` on a path-disjoint, provably-dead branch is DCE'd
+(zero instructions) but anchors the variable's FIRST-USE position for the
+promotion's band ordering. This makes band placement a free knob anywhere
+EARLIER than the variable's first real use. Combined with the band model
+(earlier first-use = higher band = pops earlier; within-band latest region
+pops first) this gives nearly arbitrary pop-order control for variable webs.
+LIMIT: statement-temp webs (e.g. the name found-merge ig114/122) have no
+variable identity — anchors cannot reach them.
+
+### TASK 3 — substrate re-tests on the new graph: both walls HOLD
+- lhzu/fr root: +168 addi+lhz unchanged (Δ3 member), fr ring intact in census.
+- Name statement-temp cycle: dn_n/rt_n buckets unchanged (5+5 incl the
+  count-loop fusion sites). No new door; recorded.
+
+### State after iteration-36: match 97.74, opcode 98.4, delta 3, hunks 16,
+census 67. Region: soup+nc 17, B-arm 13, 0xC00-fighter 10, dn_n+countloop 8,
+rt_f 7, rt_n 5, head 3, 0xC00-name 2, dn_f 2.
+### Walled (final accounting): fusion ~28+Δ2, lhzu/fr ~11+Δ1, B-col shadow ~6,
+name statement-temp cycle ~10 ⟹ Σ ≈ 55. Non-walled: rt_f ring 5, init-pair
+order swaps 4 (+99c/+9a0, +b80/+b84 — positional, the decl-flip regressed),
+scattered ~3.
+### Iteration-37 entry points
+1. rt_f merged/walker swap: dump-read the rt_f merged web (ig + pop slot) —
+   if it's variable-band, a second dead anchor or member shift may flip it
+   like dn_f's. ~5 sites.
+2. The init-pair order (+99c/+b80, 4 sites): FindNextFighter emission order —
+   the iter-34 flip regressed at 97.55; RE-TEST at 97.74 (substrate rule —
+   the graph has changed 4 times since).
+3. Walls stand. Maximal non-wall ceiling ≈ 97.9.
