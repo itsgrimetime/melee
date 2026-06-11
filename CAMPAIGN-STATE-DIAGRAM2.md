@@ -668,8 +668,10 @@ in codegen — x48 alone already emits `stmw r26`.
    baseline emits `li r0,0; stb r0` REMATERIALIZING the constant at the same
    site. **This is a pure CP/peephole decision DOWNSTREAM of an already-correct
    coloring — not a register-allocation or web-structure difference.** x48's
-   no-li is therefore NOT reproducing the target's mechanism: it gives the
-   peephole a redundant callee-save zero-web to eliminate, which only works by
+   no-li is therefore NOT reproducing the target's mechanism: ~~it gives the
+   peephole a redundant callee-save zero-web to eliminate~~ [RETRACTED iter-6:
+   no B7 li ever exists in the x48 IR — the store reads x48's web directly;
+   see iteration-6 "x48 mechanism CORRECTED"], which only works by
    pulling in the 6th CSR. The target reaches no-li by simply not
    rematerializing from the coloring baseline already has.
 
@@ -705,6 +707,126 @@ Neither component passes BOTH gates (neutral-or-better AND web-faithful):
   coloring is correct, only emission order differs (schedule-oracle: outside the
   force-schedule family — iteration-3b).
 - Permuter corpus exhausted (228K, 0 safe); do not re-run.
+
+## Iteration 6: S2+S1 dissolution oracles (driver 6, 2026-06-11)
+
+THE ONE QUESTION: can S2 (CP remat) and S1 (reload) be dissolved faithfully?
+ANSWER: **NO with all instruments and spellings probed this round — and both
+walls now have COMPLETE mechanism statements.** 1 forced run + 1 source build
+used; both home-locals builds were PRE-REFUTED by their oracles (the
+oracle-first structure prevented 2 wasted builds). Match stays **97.46%**.
+
+### ORACLE (a) — S2, the CP temp force-probe (1 forced run)
+
+Baseline IR facts (from /tmp/pc_baseline.txt, HandleInput n_nodes=194):
+- The B7 store reads a CP-materialized fresh temp: pre-coloring pcode B7 =
+  `li r103,0; stb r103,17(r101)`. ig103-baseline = deg 0, nIntfr 1
+  (sole interferer ig101=mn_addr), pops iter91 → r0.
+- ig34 (var_r28) does NOT interfere with ig103 ⟹ forcing ig103→r28 is legal.
+
+Forced run `--force-phys 0:103:28` (applied, verified `[FORCE_PHYS] class=0
+ig_idx=103: r0 -> r28` in dump):
+- Result: `+04c li r28,0; +050 stb r28,17(r29)` — the stb row becomes the
+  TARGET's exact bytes, but **the li survives**. Diff row count 818 = control
+  818. **Score delta: ZERO.**
+- VERDICT: the post-coloring peephole does NO cross-web redundant-zero
+  elimination, even at identical registers with a dominating same-register
+  `li r28,0` in B4. S2 is not reachable by ANY coloring instrument; the li
+  must be prevented in the FRONT-END.
+
+### x48 mechanism CORRECTED (refutes driver-4 iter-4 + my iter-5 echo)
+
+x48-alone pre-coloring IR, B7: `stb r103,17(r102)` — **NO li in B7 ever
+exists**. The store reads x48's web (v103, def `li r103,0` in B4) directly.
+Driver-4's "peephole eliminates the redundant li in B7" account is REFUTED —
+there was never a B7 li to kill; the iter-4 "MODEL GAP: ig103 live B4,B7
+without a B7 use" is NO GAP — the B7 store IS the use. (My iteration-5
+sentence "gives the peephole a redundant callee-save zero-web to eliminate"
+inherits the same error — retracted.)
+
+The actual front-end rule (CP exclusion rule, dump-verified both forms —
+identical `propagation at 52/58 from 34` events):
+**CP severs a provably-constant local's use and NEVER rebinds the severed
+web; the materializer reuses a DIFFERENT live same-constant VARIABLE web if
+one exists (x48 form), else emits a fresh block-local temp (baseline).**
+
+### BUILD (a) — literal store (1 build, REVERTED)
+
+`mn_804A04F0.entering_menu = 0;` (literal, no severing → materializer free to
+bind var_r28's tree?): **REFUTED — byte-identical to baseline** (97.5, Δ3,
+hunks 5, same `li r0,0; stb r0`). The literal-constant store path emits a
+fresh block-local temp unconditionally; it does no availability search. The
+x48-style reuse fires ONLY via the CP machinery binding another VARIABLE's
+tree.
+
+### S2 wall — complete mechanism statement (4 facts)
+
+1. CP severs the provably-constant local use; never rebinds the severed web.
+2. Literal stores take the fresh-temp path unconditionally (build a).
+3. The fresh temp's li is unremovable downstream — no cross-web
+   redundant-zero peephole, even color-matched (oracle a).
+4. A second zero-holding variable web crossing the call costs the 6th
+   callee-save (x48, iter-5).
+⟹ The target's no-li form requires the store to read an ALREADY-NEEDED live
+web — var_r28's own (r28) — which is exactly the web CP excludes. Closed
+spellings: all const-expr RHS (driver-4), literal store (this driver),
+coloring/peephole instruments (this driver). Open routes are all
+damage-trading: CP non-firing via non-provable value (risks buttons[0] stw)
+or aliasing exposure (`&var_r28` — forces memory home, wrecks +034 li r28;
+NOTE the unexplained PAD_STACK(40) is consistent with SOME address-exposed
+local in the original, but no natural form found). S2 home-local build
+PRE-REFUTED: any new zero local is another fresh/foreign web (li survives or
+6th CSR).
+
+### ORACLE (b) — S1, the dissolution property (dump read, x48+new_var)
+
+From /tmp/pc_x48newvar.txt (recreated form, dump-only, reverted):
+- The dissolution: new_var's entry/bottom copies COALESCE into the entry data
+  web → single merged web **ig40 (deg 27, nIntfr 93)** → the 2-instruction
+  re-derivation disappears entirely (Δ0). Property named:
+  **reload-as-coalesced-copy.**
+- The cost, precisely: merged ig40 becomes the SOLE front-band node (pops
+  iter0 → r31) and **result (ig100) drops OUT of the front band** to the
+  descending-ig band (pops iter93 → r28) — the entry-trio displacement.
+- **Band-membership arithmetic (new, measured):** result's nIntfr across
+  forms: baseline 33 (IN band, pops iter0), x48-alone 34 (IN band),
+  x48+new_var 32 (OUT of band). The merge costs result exactly 2 interferers
+  (bottom-data pair fuses to 1: −1; the reload's short-lived sda21 temp dies:
+  −1); x48 adds +1. The front-band threshold for result sits between 32 and
+  33 nIntfr (or its degree-during-simplify equivalent).
+- Faithfulness implication: the target (result=r31 first, spanning data=r30
+  second) needs result IN the band under the merge. Target arithmetic by our
+  model: 33−2=31 < 33 ⟹ either band membership is not a fixed-nIntfr
+  threshold (it is degree-at-simplify-time, which we cannot read from the
+  pop-time dump), or the target's graph holds ≥2 long-lived interferers we
+  do not model (40-byte frame object territory). Driver-7's quantitative
+  attack: compute INITIAL degrees from LIVERANGES (not pop-time degrees) for
+  result in baseline vs merged; if the in/out gap is 1-2 edges, enumerate
+  which natural web could add them.
+- S1 home-local build PRE-REFUTED: a bottom-region `d3 = data` copy local
+  coalesces into the entry web = exactly this merged class (or driver-3's
+  single-web rotation 96.7, same family). Not built.
+
+### Cross-campaign mechanism statement (InputProc transfer pricing)
+
+InputProc's +048 fresh-li last line is the same family as S2. Priced
+transfer: the fresh-li class is NOT removable by coloring, forced colors, or
+peephole (oracle a). The ONLY no-li form is a store/use that reads a live
+same-value VARIABLE web that exists anyway. Triage rule for InputProc: if a
+live same-value callee-save exists at +048 AND the stored value is NOT a
+CP-severed constant local read, the rebind class applies (find the spelling
+that reads that variable); if the value is a CP-severed constant local (as
+here), it is the same 4-fact wall — do not spend coloring probes on it.
+
+### Iteration-6 ledger
+
+- Forced runs: 1 of ≤2 (ig103→r28). Builds: 1 of ≤3 (literal `= 0`).
+- Commits: doc-only (this section). Source unchanged; baseline 97.46
+  (Δ3, hunks 5) verified before and after; protected fns intact.
+- For driver 7: S2 = closed-spelling wall with complete mechanism (open
+  routes are damage-trading only); S1 = band-membership arithmetic question
+  (LIVERANGES initial-degree read is the named next instrument); R3/S3
+  unchanged.
 
 ## DOC-FEEDBACK (methodology observations, iteration 2)
 
