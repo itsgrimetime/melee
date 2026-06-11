@@ -2881,3 +2881,74 @@ lowers to a bare li).
    row-site 6-spelling) stand as priced in the ENDGAME section.
 3. If both channels retire null: bank at 98.67 per the ENDGAME decision frame (ceiling
    98.7-98.8 without a wall crack; 99.0 requires fusion-(a) or lhzu).
+
+## Iteration-53 (driver 10): WRAP — plateau executed, methodology doc, clean branch
+
+### TASK 1 — PLATEAU PROTOCOL EXECUTED (2026-06-11)
+
+**Channel final states (fresh fetch + full triage):**
+- coder2-060955: **106k iters** (stopped), best 1090 @2577 (~104k stale), 60 candidates
+  triaged — ALL pre-classified families (F5=volatile-pad, F4=row-split, F3=type-change,
+  F2=inline_fn, hack=dead/comma). Zero genuinely-new candidates since iter-52.
+- coder3-061005: **124k iters** (stopped), best 1055 @18478 (~106k stale), 53 candidates
+  triaged — ALL pre-classified families. Zero new.
+- tuned-061622: stopped (older duplicate of tuned-065847, 87k iters, best 1190 stale).
+- **tuned-065847: ALIVE** (listening post, 20k iters, best 1190, cast/expand/type weights,
+  coder1). Check cadence: once per session or after any future commit.
+
+**Harvest summary:** zero gate-passers (≥98.67) across all channels at wrap. Six
+pre-classified families + row-site 6-spelling are the exhausted search space.
+
+**Reap outcome:** coder2-060955, coder3-061005, tuned-061622 stopped and retired.
+Macro dir (mnDiagram_InputProc_macro/) retired (28,812 variants / 4 graphs / 0 wins;
+do not re-run until a commit changes control flow of one of the 5 nav regions).
+
+### TASK 2 — METHODOLOGY DOC WRITTEN
+Path: `docs/mndiagram-inputproc-campaign.md` (fork-local; ~200 lines)
+Contents: final state, original structure recovered (find-walk inlines, buttons field
+shape, cast restoration), allocator model (bands/pop-order/pick/coalesce rules),
+lever-class catalogue (7 classes), wall statements (4 definitive walls + 2 strong),
+process doctrine (gates, substrate relativity, probe hygiene, permuter discipline,
+oracle-before-search, macro enumeration), iteration ledger.
+
+### TASK 3 — CLEAN BRANCH (LOCAL ONLY, NOT PUSHED)
+Branch: **`pr/mn-inputproc-98pct`** at `/Users/mike/code/melee-pr`
+Commit: `32c905b47` "mn: improve mnDiagram_InputProc to 98.67%"
+Created from: `upstream/master` (fetched fresh; upstream had moved to `0b15e7134`)
+Files changed: `src/melee/mn/mndiagram.c` + `src/melee/mn/mndiagram.static.h` (6 new
+extern f32 declarations needed by rendering functions added during the campaign)
+
+**Verification in PR worktree:**
+- `ninja`: BUILD PASS (full build, all checks green — fixed 2 float literals missing F
+  suffix at lines 2754/2758 before commit)
+- `checkdiff mnDiagram_InputProc --summary`: **98.67%** (Δ1, hunks 6, opcode 99.4%)
+- Regression check vs upstream's mnDiagram_InputProc (93.74%): +4.93pp
+- No regressions in sibling functions: GetLeastPlayedFighter=100%, 8023FA6C=100%,
+  8023FC28=97.82%, 80241310=100%, CursorProc=95.36% — all match or exceed upstream.
+
+**Note on upstream context:** upstream PR #2640 (merged before wrap) already improved
+InputProc to 93.74%. Our branch supersedes that for InputProc specifically; the static.h
+additions are new and required by our source shape.
+
+### TASK 4 — CAMPAIGN STATUS (BANKED)
+Match: **98.67%**, Δ1, hunks 6, opcode 99.4%.
+Source commit: `7a17d3dc5` (campaign worktree), `32c905b47` (PR branch).
+Branch: `pr/mn-inputproc-98pct` at `/Users/mike/code/melee-pr` (NOT pushed).
+
+**Listening-post cadence:** harvest tuned-065847 (coder1) at low cadence — once per
+session or after any future commit. Bootstrap reminder: the NULL pragma ALWAYS drops
+(5/5 occurrences deterministic) — add `#pragma _permuter define NULL 0` at line 2.
+
+**Reopen conditions** (what would justify re-running the engine):
+1. **Fusion wall (a)-mechanism**: a new C construct that is front-end-opaque, register-
+   class, and lowers to a bare `li` (e.g., evidence that MWCC register-allocates some
+   aggregate shape; or a front-end form that blocks const-prop without memory). The
+   triple requirement (a)(b)(c) is fully specced in iter-52.
+2. **lhzu Δ0 path**: a future commit that eliminates the current extra-li debt (Δ1→Δ0),
+   which would make the lhzu trade-off absorb-able (currently widening to Δ2 = worse).
+3. **Upstream graph change**: if a future upstream commit restructures the INPUT or
+   NAVIGATION ARM control flow in mndiagram.c, re-test all four walls (substrate rule)
+   and re-run the macro enumeration once.
+4. **found↔row2 control-flow change**: any commit that changes the conditional structure
+   of dn_n/rt_n/up_n/dn_f/rt_f would justify one macro re-run (arrangement/arg-shape
+   space). Do NOT re-run for band/substitution changes only.
