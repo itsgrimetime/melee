@@ -1,6 +1,12 @@
 from __future__ import annotations
 
 from ._helpers import *  # noqa: F403
+from ._helpers import (
+    _context_env,
+    _ts_strip_function_bodies,
+    _ts_strip_target_function,
+)
+
 
 def _get_context_file(source_file: str | None = None, melee_root: Path | None = None) -> Path:
     """Get context file path.

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from ._helpers import *  # noqa: F403
+from ._helpers import _context_env
+
 
 def _get_context_file(source_file: str | None = None) -> Path:
     """Get context file path.
