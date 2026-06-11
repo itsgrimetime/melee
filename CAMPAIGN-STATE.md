@@ -1792,27 +1792,32 @@ from the extra store). Not a viable path.
 #### Half-store mechanism (why 97.01 < 97.49): sorted=r28 instead of r30. The entry trio is a
 cyclic rotation (base=r30, input=r29, sorted=r28). This costs ~31+ sites vs V2 (entry cascade).
 
-### THE COMBINED FORM IS NOT REACHABLE FROM C (definitive)
-All mechanism classes have been tried or analytically ruled out:
-- V3 (u64 + half-store overwrite): emits both stores; no DCE; MWCCs does not prove them dead.
-- Half-store alone: no conversion temps → no deferral → M1 broken.
-- Reversed half-store: worse.
-- Union typing of buttons pair: would add stack lwz/stw instructions.
-- Read-back from stored location: adds lwz.
-- Dead-cast approach (`(u64)input` in dead block): IRO DCEs dead code entirely (no temps).
-- Arithmetic that creates pair temps (`u64 dummy = (u64)input + 0`): IRO DCEs unused result.
-- u64-shift for count2 (V1 path): __shr2u library call (+5 instrs, measured iteration-41).
+### THE COMBINED FORM: NOT FOUND in the 8 spelling classes tried (each with a measured mechanism)
+[CORRECTED FRAMING per standing rule — the original source IS the existence proof that a C form
+produces both sides; the reconstruction below is the SEARCH TARGET, not an impossibility claim.]
+Spelling classes tried, with measured death mechanisms:
+- V3 (u64 + half-store overwrite): emits both stores; MWCC's dead-store elimination does not
+  fire across the alias (97.35).
+- Half-store alone (sibling idiom): no pair-half virtuals → sorted scan-time deg 27 < k → no
+  deferral → entry trio rotated (97.01).
+- Reversed half-store ([0] first): worse allocation (96.86).
+- Union typing of buttons pair: predicted stack lwz/stw additions (not built; analytic).
+- Read-back from stored location: adds lwz (not built; analytic).
+- Dead-cast (`(u64)input` in dead block): IRO DCEs dead code entirely, no temps (prior iters).
+- Dead arithmetic (`u64 dummy = (u64)input + 0`): IRO DCEs unused result (prior iters).
+- u64-shift for count2 (V1 path): __shr2u library call +5 instrs (measured iteration-41).
 
-The mutual exclusivity is fundamental: the conversion temps exist BECAUSE of the pair-virtual
-mechanism in the u64 zero-extension; making count2 be THAT SAME zero-virtual requires
-count2 to be assigned from the u64 zero-extension result, which either goes through __shr2u
-(library call) or requires MWCC to invent a non-standard optimization path that is
-not accessible from any C spelling.
-
-WALL UPGRADED: the fusion family (~70 sites + Δ1) and M1 are PERMANENTLY MUTUALLY EXCLUSIVE
-through any known C door. The target's combined form required compiler internals (a specific
-u64 pair-virtual assignment that MWCC did in the original but cannot be spelled from the
-available C source forms). Record as CLOSED WALL with all mechanism classes enumerated.
+THE SEARCH TARGET (what any winning spelling must produce, from the IR reconstruction):
+1. Two class-0 pair-half virtuals (ig181/ig184 profile) live in the entry window with
+   ig > sorted's ig — sorted's scan-time degree 27+2 = 29 = k → deferral → entry trio
+   sorted=r30/base=r29/input=r28.
+2. count2's home-init = THE SAME IR node as the u64-hi-zero — ONE li r25,0 at +03c,
+   stw r25,8(r29), no +048 li; count2's value opaque to const-prop (T+848 mr r24,r25
+   = i=count2 SURVIVES).
+3. Three-instruction store window (stw input / li 0 / stw 0), rlwinm mask test reads r3.
+The deduction channel found no spelling that mints the pair virtuals while making count2's
+def be the hi-zero node; the search must continue through channels that do not require
+conceiving the form first (permuter = iteration-43).
 
 ### TASK 3 — substrate re-tests (no new graph change; walls hold from iter-41)
 - lhzu/fr: +168 still addi+lhz vs lhzu; V2's base=r29 correct, but the lhzu requires r29 to
@@ -1824,11 +1829,13 @@ available C source forms). Record as CLOSED WALL with all mechanism classes enum
   half-store form; they didn't improve).
 - Fusion re-test: all new spellings confirm the wall; no new mechanism found.
 
-### WALL INVENTORY (final, iteration-42)
-1. COUNT2/ZERO FUSION ↔ M1 ENTRY DEFERRAL: PERMANENTLY MUTUALLY EXCLUSIVE (all doors closed,
-   all mechanism classes enumerated). Affects ~70 coupled sites + Δ1. No C lever exists.
-2. lhzu/fr (+168 + fc-head copies, Δ2-equivalent): unchanged, banked. No C lever found.
-3. Volatile-pick positionals (+448/+498, +68c/+698): characterized, no lever.
+### WALL INVENTORY (iteration-42, framing corrected)
+1. COUNT2/ZERO FUSION ↔ M1 ENTRY DEFERRAL: not found in 8 spelling classes tried (mechanisms
+   measured above). The SEARCH TARGET spec stands; ~70 coupled sites + Δ1. Next channel:
+   breadth-first spelling search (permuter), not further deduction.
+2. lhzu/fr (+168 + fc-head copies, Δ2-equivalent): unchanged, banked. No C lever found
+   with spellings tried.
+3. Volatile-pick positionals (+448/+498, +68c/+698): characterized, no lever found.
 4. (lf-wraps: RESOLVED in iteration-41 addendum.)
 
 ### State: match 97.49, Δ3, census 158. Tree clean at b12009fd0. NO change from baseline.
@@ -1842,8 +1849,8 @@ census re-read on the current graph is the most useful next step:
    nav/walker lever set (cur→i, rider-move, anchors, prev-flip) is all committed and on this graph;
    the residual families from that era may have shifted. A census pass may reveal NEW lever families.
 2. **The +84c window** (T: mr r24,r25 = i=count2; ours: no instruction = i absorbed into zero-temp):
-   This site is part of the fusion debt. With the fusion wall closed, this site is permanently wrong.
-   Do NOT invest build budget here.
+   This site is part of the fusion debt. It moves only when the fusion search target is hit.
+   Do NOT invest deduction build budget here.
 3. **Micro-sites unchanged**: +448/+498 (volatile pick), +68c/+698 (lf_n one-slot). No lever found
    in 3 sessions; only build if new evidence appears.
 4. **Permuter**: a focused remote-permuter run on the current baseline may crack structural-shape
@@ -1851,3 +1858,93 @@ census re-read on the current graph is the most useful next step:
    (tools/melee-agent/src/search/) is available. Worth commissioning a targeted run.
 5. **Header cleanup**: PAD_STACK(64) is still present (not shippable). The natural frame reservation
    question remains open. Lower priority until match improves further.
+
+## Iteration-43 (driver 6): framing corrected; census split; PERMUTER DEPLOYED (4 channels live)
+Baseline verified 97.49 at aa797be33 (tree clean; no source commits this iteration; zero gated
+builds spent — no free family justified one).
+
+### TASK 0 — wall framing corrected (orchestrator rule enforcement)
+Iteration-42's "NOT reachable from C / PERMANENTLY MUTUALLY EXCLUSIVE" violated the standing
+rule — the original source IS the existence proof that a C form produces both seesaw sides.
+Rewritten in place (see corrected iteration-42 sections): "not found in the 8 spelling classes
+tried, each with a measured mechanism," and the IR reconstruction now stands as THE SEARCH
+TARGET (pair-half virtuals live in entry window + count2 home-init == the hi-zero node + ONE li).
+
+### TASK 1 — fresh census (skeleton aligner, /tmp/census43.py): 145 CS-only operand sites
+Method: checkdiff --format json → skeleton align (mnemonic + CS-regs wildcarded) → per-position
+CS↔CS reg pairs → families + region buckets.
+Families (tgt→ours): r23→r27 ×32 (walkers) | r25→r23 ×19 (zero cluster) | r24→r23 ×13 (0xC00
+window+countloop) | r26→r25 ×12 (name anchors) | r27→r23 ×8 (fighter rings) | r25→r24 ×7 |
+r26→r23 ×6 (B-arm d-ptr) | r27→r24 ×6 (name found-merge) | r24→r26 ×6 | r28→r24 ×5 |
+r25→r28 ×5 | r24→r28 ×5 | r28→r27 ×4 | r24→r29 ×4 (fr &hovered) | r23→r25 ×4 (lf_n) |
+r28→r25 ×3 | r23→r24 ×2 | r24→r25 ×2 | r27→r28 ×1 | r29→r24 ×1.
+Regions: dn_n 23, rt_n 23, rt_f 19, B-arm 15, fc/fr 14, 0xC00-head 13, dn_f 13, nc/nr 8,
+lf_n 6, up_n 5, countloop+up_f 4, head 2.
+
+**CENSUS CORRECTION (supersedes iteration-42's "~77 free")**: the fusion-coupled footprint is
+~115 of 145 — the name-arm cascades (dn_n+rt_n 46) are walker-family + same-arm mates, all
+chained to the r23/r25 occupancy. lhzu/fr ≈ 13. TRUE free set ≈ 10-15:
+- nc 2-cycle (5 sites): fingerprinted ig168 = nc walk-idx (pop 264, ours r27, tgt r28) vs
+  ig140 = &hovered CSE temp (pop 289, ours r28, tgt r27). BOTH temp-class, no C-variable
+  identity: walker = inline-expansion @-temp (decl order does not survive IRO renaming,
+  iter-28); &hovered = address CSE (pointer-form propagated, iter-28). Dead-anchor cannot
+  reach temp-class webs (tool LIMIT). No lever found with spellings tried; permuter's random
+  temp-insertion is the reachable channel for this class.
+- nr volatile r0/r3 swap + srawi pair (+0f8/+0fc): volatile-pick, characterized, no lever
+  (3 sessions).
+- head 2 = aligner skew at the +090 emission-order boundary, not renames.
+VERDICT: no free family justified a gated build; deduction yield this round = the census
+correction itself. The fusion search target gates ~115 sites ≈ +1.8pp if hit.
+
+### TASK 2 — PERMUTER DEPLOYED (the breadth-first channel; first deployment in 43 iterations)
+Setup repairs (all reported/resolved in issue queue):
+- Re-bootstrap from CURRENT worktree source (old base.c was Jun-9 pre-V2 — stale-base trap):
+  `melee-agent debug permute bootstrap -f mnDiagram_InputProc --melee-root <this worktree>
+  --force`. base.c now has V2 u64-store + lf-wrap helpers; randomize_funcs includes all 7
+  helper inlines (avoids #424 bl-vs-inline trap).
+- `#pragma _permuter define NULL 0` added to base.c (known reduced-context death).
+- dtk-objdump import bug in INSTALLED package fixed (#555 RESOLVED: ..mwcc_debug → ...mwcc_debug
+  at lines 3300/6399 of main-checkout tools/melee-agent/src/cli/debug/__init__.py).
+- Filed: #554 (permute run --target auto-derive: NameError _FRAME_RE — mwcc-blend path broken;
+  stock permuter.py works), #556 (remote ps AttributeError), #557 (remote list AttributeError;
+  tail/submit/targets work).
+- Base score = 1975 (= the 97.49 source, byte-diff scorer).
+
+ENTRY-WINDOW MACRO ENUMERATION (finite, complete): 13 PERM_GENERAL forms over the
+buttons/count2 statements — V2, half-store, V3, reversed, + 8 NEW identity-arithmetic forms
+tying count2's def INSIDE the u64 expression ((u64)input + (count2=0), |, ^, -, <<32-or,
+operand orders). RESULT: {1975×7 = byte-identical fold-backs, 2075, 2640, 3400, 3895, 4055×2}
+— IRO const-prop erases every identity-arithmetic count2 connection (the fold-back mechanism,
+now measured across the whole family); no form beat base. The conceived-form space is exhausted;
+the random channel is what remains.
+
+LIVE JOBS (running past this session; ~50 threads total):
+- coder2 `mnDiagram_InputProc-coder2-20260611-032140`: whole-function random, 16t.
+- coder3 `mnDiagram_InputProc-coder3-20260611-032157`: whole-function random, 16t.
+- coder1 `mnDiagram_InputProc_entryrand-coder1-20260611-032713`: PERM_RANDOMIZE focused on the
+  entry window (dir nonmatchings/mnDiagram_InputProc_entryrand) — 0 compile errors (scoped
+  mutations), highest-density channel for the seesaw.
+- local PID 51907, log /tmp/permuter_local_43.log, 6t whole-function (nohup; reap when checking).
+No candidate below 1975 as of session end (coder2/3 ~5k iters, coder1 ~250, local ~2k).
+
+### TASK 3 — micro-sites: no new evidence; no builds (+448/+498, +68c/+698 unchanged).
+
+### State: match 97.49, Δ3, census 145 CS-sites (method change from 158: CS↔CS pairs only).
+Tree clean. No source commits.
+
+### Driver-7 entry points (priority)
+1. PERMUTER HARVEST (first action): `melee-agent debug permute remote fetch <job>` for all 3
+   jobs + check local log/outputs. Triage rules (memory-enforced): scorer optimizes match% NOT
+   behavior — mentally execute every candidate; reject volatile hacks/no-op masks/semantic
+   breaks; a score-0 may be stale-base rediscovery (base = aa797be33-era source = current
+   committed, so score-0 here IS news unless tree moved). Any plausible candidate gets the
+   full meter: ONE li? conversion temps (sorted deferral → entry trio r30/r29/r28)? count2
+   compares r25? walker family? Δ? match%? Gate ≥97.49.
+2. If a seesaw candidate appears: land it, then re-run the iteration-33-36 lever set on the
+   new graph (substrate relativity — all nav tuning re-rolls).
+3. If jobs plateau (>100k iters no win): stop+reap remotes (`remote stop`, `remote reap`),
+   record the negative with iteration counts, and bank the search-target spec for a future
+   mechanism (e.g. retro IRO comparison of the pair-half virtual creation on a matched sibling).
+4. The nc 2-cycle (5 sites) + nr volatile swap: temp-class; only the permuter channel reaches
+   them — included in the running jobs' mutation space.
+5. PAD_STACK(64) natural-reservation question: still open, lower priority.
