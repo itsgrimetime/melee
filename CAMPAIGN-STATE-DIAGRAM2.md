@@ -828,6 +828,100 @@ here), it is the same 4-fact wall — do not spend coloring probes on it.
   (LIVERANGES initial-degree read is the named next instrument); R3/S3
   unchanged.
 
+## Iteration 7: band-faithful merge — threshold pinned, supplier census failed (driver 7, 2026-06-11)
+
+THE ONE QUESTION: can the S1 merge be made band-faithful (Δ0 merge + result
+kept in the front band)? ANSWER: **NOT via the entry window — the threshold
+model is now PINNED EXACTLY and the only census-compatible supplier class
+fails, measured.** Stopped at the prompt gate. Match stays **97.46%**.
+
+### HEADLINE 1 — the front-band cut is a FIXED COUNT: T=33 (model pinned)
+
+Method: parsed both existing COLORGRAPH dumps' full adjacency (continuation
+lines included; parsed counts == nIntfr column exactly for all key nodes) and
+simulated candidate rules against the OBSERVED pop orders:
+
+| Rule | baseline (138 popped) | x48+new_var (139 popped) |
+|------|----------------------|--------------------------|
+| incremental scan-time deg < k=29 | 6/138 FAIL | 139/139 |
+| batch (sweep-start) deg < k=29 | 138/138 | 45/139 FAIL |
+| **fixed cut nIntfr ≥ T=33 → front** | **138/138** | **139/139** |
+
+Sensitivity: baseline allows T∈[28..33]; merged requires T∈[33..39];
+**intersection = exactly 33**. Verdict: NOT a relative ranking, NOT dynamic
+scan-time eligibility — a fixed full-count cut at nIntfr ≥ 33 (the count
+INCLUDES the 11 phys volatiles; ANY overlapping web counts, even deg-1
+temps — the bottom reload's sda21 base temp was a counted result-edge).
+Pop order = descending ig within each side; front pops first. This sharpens
+iteration-6's "between 32 and 33" to an exact constant and explains every
+observation this campaign: driver-3's single-web rotation (merged web ≥33,
+result 31 → out), x48+new_var's 46 hunks (result 32 → out), x48's failure to
+help (+1 only). CAVEAT: T=33 = k=29 + 4, offset unexplained; pinned on two
+graphs of THIS function — re-pin per function before reuse (the methodology
+doc's k=29 scan phrasing for InputProc may describe its graphs equivalently;
+not contradicted here). Simulator: ~60-line python over the COLORGRAPH
+adjacency (parse rows + wrapped interferer lines; cut at T; reverse-pop).
+
+### The requirement, exact
+
+Result-neighbor diff (baseline ig99 = 22 virtuals vs merged ig100 = 21):
+the merge kills exactly 2 result-edges — the data-pair fusion (39+57→40) and
+the bottom reload's sda21 base temp — and x48 adds 1 (ig103). S1-only merge:
+result = 31. **Band-faithful merge needs +2 result-edges**, byte-invisible,
+present in the target's census.
+
+### HEADLINE 2 — supplier survey + target-census check: FAILED, stop
+
+Entry-window survey (M1 playbook):
+- **u64 buttons store** (the field IS u64 @0x8; InputProc's committed winner
+  `mn_804A04F0.buttons = input;` is the same idiom on the same global):
+  the ONLY candidate class. Call-arg temps = copy-propagated to immediates,
+  no live range (safe-zone law) = no edge. Dead anchors = no live range =
+  no edge (skipped per doctrine). No other u16/u64 entry-window construct
+  exists without new instructions.
+- Target census: the target entry window is byte-identical to ours (modulo
+  the R3 addi order) ⟹ NO visible extra webs. The u64-conversion class is
+  the unique byte-invisible candidate.
+- **Census check MEASURED — FAILED.** The fused spelling
+  `mn_804A04F0.buttons = ((u64)(u32)(var_r28 = 0) << 32) | (u32)result;`
+  (the only spelling preserving our target's single fused `li r28,0`):
+  MWCC 1.2.5n emits a runtime **`__shl2i` CALL** for the 64-bit shift — it
+  does not fold even a provably-zero shift operand (probe dump: li r3,0;
+  li r4,0; li r5,32; bl __shl2i; or; stw — entry window demolished, 879 diff
+  rows vs 818 control). Generalizes the methodology doc's "u64>>32 fails as
+  __shr2u": ALL u64 shifts are runtime calls on this compiler. The shiftless
+  plain form (`buttons = (u32)result;` + separate `var_r28 = 0;`) is
+  InputProc's spelling but predicts TWO zero-li's (conversion-zero temp +
+  var_r28; home-class virtuals are excluded from copy-coalescing, and
+  iteration-6's literal law gives the hi-half a fresh temp) vs OUR target's
+  single li r28 ⟹ census-incompatible with THIS target.
+- **⟹ The +2 margin cannot come from the entry window's natural
+  constructs. Stopped per the gate; the ≤2 build budget unused** (no
+  target-supported candidate emerged; building known-byte-breaking forms is
+  waste).
+
+### What this prices for driver 8 (the "elsewhere")
+
+1. **The full-count cut widens the supplier space beyond the entry window**:
+   ANY byte-invisible web overlapping result's (whole-function) live range
+   counts +1 — the survey was entry-scoped per the M1 playbook; the
+   0xC0/0xC00/bottom windows were NOT surveyed. Named candidate class:
+   WEB-SPLITS of existing variables into two result-overlapping regions at
+   zero instruction cost (du-chain splits via identity spelling — x46/x47
+   arm chains, var_r5's two assignment pairs, d2). Two such splits = +2.
+2. The 2 missing edges EXIST in the original's graph (target result ≥33 by
+   the pinned model, assuming the target front is {result, data} per its
+   r31/r30 layout) — they are webs our reconstruction fuses or avoids:
+   the discovery target is which two.
+3. Do NOT revisit: u64 spellings on this function (shift=__shl2i call,
+   plain=2-li), entry-window call-arg/dead-anchor suppliers (no live range).
+
+### Iteration-7 ledger
+
+- Dump/forced runs: 1 of ≤2 (merge+fused-u64 probe). Builds: 0 of ≤2.
+- Commits: doc-only. Source untouched (probe reverted same-session);
+  baseline 97.46 (Δ3, hunks 5) re-verified; protected fns 100/100/98.67.
+
 ## DOC-FEEDBACK (methodology observations, iteration 2)
 
 1. **Precise-alignment-first should be doctrine.** Iteration-1 spent a
