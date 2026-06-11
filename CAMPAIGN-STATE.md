@@ -2710,3 +2710,96 @@ search alone is low. The rational decision point for banking the result is when:
 4. **Portfolio decision**: as documented in the ENDGAME section — 99.0 requires a wall
    crack; the harvest engine is valid but expected yield is +0.01-0.04pp per win.
    Run until 150k+ iterations without win, then bank and report.
+
+## Iteration-51 (driver 9): RETRO-IRO SIBLING ARCHAEOLOGY — the fusion wall's IR requirement
+fully specced; union + read-back doors measured dead with mechanisms; channels maintained
+Baseline verified 98.67 (Δ1, hunks 6, opcode 99.4) at 7a17d3dc5/1eaebf42b. Tree clean at
+session start and close. 2 gated builds, both reverted with mechanism. No source commits.
+
+### TASK 1 — THE SIBLING IR COMPARISON (headline)
+
+#### Sibling selection
+mnDiagram2_HandleInput DISQUALIFIED (89.34%, not matched). Buttons-store panel census
+(match state of every mn fn that writes mn_804A04F0.buttons):
+| fn | file | store form | matched? |
+|----|------|-----------|----------|
+| **mnCount_HandleUserInput** | mncount.c:587 | `long long x; x = buttons = mn_80229624(4);` | **YES (100%)** |
+| fn_80251FE4 | mninfo.c:248 | `buttons(u32 local) = buttons = call` | no |
+| fn_8024D864 | mnevent.c:433 | V2-like (separate local + store) | no |
+| fn_8022F538 | mnmainrule.c:121 | half-store idiom | no |
+| mnNameNew_MainInput | mnnamenew.c:712 | half-store idiom | no |
+| fn_8024F318 | mndatadel.c:494 | separate local + store | no |
+| mnDiagram2_HandleInput | mndiagram2.c:294 | half-store + var_r28 | no (89.34) |
+mnCount_HandleUserInput = the ONLY matched buttons-store function in the module.
+
+#### mnCount matched-asm decode (ground truth, 100% fn)
++04c bl mn_80229624 / **+050 li r31,0 (ONE li — the u64 hi-zero, CALLEE-SAVE)** /
++064 stw r3,12(r29) (lo stored FROM THE CALL RESULT — never copied) / +070 stw r31,8(r29).
+Mask tests = full 64-BIT pair tests (`li mask; and lo; and r5,r31,r31; xor; xor; or.`) —
+the hi-zero web is even REUSED as the hi-mask constant. The inline_update_entries loop:
+`addi r31,r31,1 / cmpwi r31,0xa` — **THE HI-ZERO WEB IS THE LOOP COUNTER** (32-bit ops).
+The exact InputProc-target pattern (r25 = hi-zero + counter), proven in a matched sibling.
+DIFFERENCE from InputProc target: InputProc's mask tests are 32-bit rlwinm. on r3 — the
+original InputProc tested a u32, NOT the u64 (mnCount's 5-instr pair-test shape is absent).
+
+#### Retro IRO traces (fresh, current source): /tmp/retro51count + /tmp/retro51input
+| construct | mnCount (matched) | InputProc (ours, 98.67) |
+|-----------|-------------------|------------------------|
+| u64 holder | **named local `x`** (home-class), survives to backend as EINDIRECT operand | **@887 front-end temp** (temp-class) — IRO normalizes V2 into the combined form: `@887 = (buttons = ETYPCON(call)); input = (u32)@887` |
+| hi-zero | minted by BACKEND lowering `EASS x = ETYPCON(...)` → x.hi home half (r31) | minted by backend lowering @887 → temp-class zero (r23 web) |
+| counter init | inline's `i` = @678 temp, literal `EASS *@678 = 0` at arm position | count2 = @986 temp, literal 0 init — **front end SANK `count2 = 0` from entry to the fighter-arm head** (after const-propping the B-arm reads); backend HOISTS the li back to +048 |
+| fusion | @678's zero-init same-value-coalesces INTO x.hi (temp→home, single candidate) → ONE li | walker @950's zero-init absorbs into @887.hi FIRST, extending it through the count loop → @986 (count2) then INTERFERES → refused → fresh +048 li r25 |
+| masks | EAND(EINDIRECT x, C) kept u64 → backend pair-lowers (and/xor/xor/or.) WITHOUT folding hi&0 | EAND(ETYPCON @887, C) 32-bit → rlwinm ✓ target shape |
+
+#### THE TRANSFERABLE REQUIREMENT (sharpest wall spec to date)
+TARGET evidence (T+848 `mr r24,r25` = `i = count2` SURVIVED) ⟹ the original count2's def
+was OPAQUE to const-prop yet LOWERED to `li r25,0` fused with the buttons-hi store.
+count2's def must be SIMULTANEOUSLY:
+  (a) opaque to front-end/IRO const-prop (walker init emits mr; cluster reads use the web)
+  (b) register-class (no stack home)
+  (c) a zero MATERIALIZATION fused with the buttons-hi store (li, not a load)
+Pairwise build coverage (this iteration + history):
+  union local = (a)+(c), dies on (b)  |  read-back = (a)+(b), dies on (c)
+  plain u64 local (mnCount form) = (b)+(c) for x.hi, but count2 cannot BE x.hi without
+  aggregate typing  |  all literal-init forms = (b)+(c), die on (a)
+The triple requires count2 ≡ the u64's hi register-pair half — only aggregate typing
+expresses this in C, and aggregates take stack homes (measured below). Per standing rule:
+not source-impossible (the original compiled from C); not found across every conceived
+spelling class, now with the full requirement triangle measured.
+
+### TASK 2 — UNION + READ-BACK BUILDS (2 gated builds, both reverted)
+| build | edit | prediction | result | mechanism |
+|-------|------|-----------|--------|-----------|
+| A: union local | `union { u64 whole; struct { s32 hi; u32 lo; } w; } x; x.whole = buttons = input;` + count2→x.w.hi ×12 | success OR stack-home death | **82.0, Δ16 — STACK HOME** (`+048 stw r28,84(r1) / +04c stw r3,80(r1)`, every counter read reloads) | MWCC gives aggregate locals memory homes regardless of address-taking; iteration-42's analytic prediction now BUILD-CONFIRMED. Note: the fusion DID fire through memory (ONE li at +03c, no +048 li) — (a)+(c) achieved, (b) lost |
+| B: read-back | `count2 = ((s32*)&mn_804A04F0.buttons)[0];` after the u64 store | forwarded (win) / +1 lwz (revert) / folded (null) | **97.9, Δ5 — +048 lwz r25,8(r29)** (real load; store-to-load forwarding does NOT fire across the u64/word pun) | iteration-42's analytic +lwz prediction confirmed; BUT the opacity PROVED its downstream value: count2 went STRAIGHT TO r25, walker `mr r24,r25` RESTORED at +858 (the target's missing Δ member), match held 97.9 despite +4 structural lines — opacity alone snaps the downstream coloring toward target |
+REVERTED both; baseline 98.67 re-verified.
+
+### TASK 3 — CHANNEL MAINTENANCE
+- coder2-060955: 64k iters, best 1090 (rejected F4+hacks). coder3-061005: 72k iters,
+  best 1055 (NEW since iter-50 fetch). Both ACTIVE/descending.
+- Harvest pass (19 new candidates triaged): c3-1055 = entry-band hovered-pointer alias +
+  no-op double-mask (F5+hack) REJECT; 1090/1095 family = row-splits/type-changes/
+  intermediates bundled with hacks (F3/F4/F5) REJECT ×4; 1115/1185 = F4/F5/F2 REJECT ×5;
+  all 1190s = base-score noise (no-op hacks, semantic breaks (steps-walk rewritten to
+  GetNameText loop), `0x1C * 0` arithmetic) REJECT ×9. **Zero gate-passers.**
+- TUNED RE-SEED EXECUTED (the iteration-49 background chain never fired):
+  job mnDiagram_InputProc_tuned-coder1-20260611-065847 (16t, cast/expand/type weights),
+  base verified 1190 locally pre-submit (compiles, NULL pragma present).
+- Combined random-channel iterations on the 1190 base: ~136k of the 150k threshold.
+
+### Driver-10 entry points
+1. HARVEST all three channels (coder1-tuned-065847, coder2-060955, coder3-061005) at
+   cadence. Gate ≥98.67. The 150k search-exhausted threshold hits ~mid-next-session for
+   coder2/3 — on plateau: stop, reap, record counts, bank per ENDGAME.
+2. The fusion wall now has the (a)(b)(c) triple-requirement spec with every pairwise
+   combination measured. Do NOT rebuild: union (stack), read-back (lwz), u64-x-unread
+   (DCE), literal inits (const-prop), >>32 (__shr2u), halves (M1 loss). A NEW door must
+   claim a mechanism for the TRIPLE (e.g. evidence MWCC register-allocates some aggregate
+   shape, or a front-end form that blocks const-prop on a scalar without memory).
+3. mnCount_HandleUserInput banked as the module's fusion existence-proof sibling; its
+   construct (named u64 holder) transfers (a)-opacity only when the holder is READ — any
+   future restructuring that gives InputProc a legitimate u64 READ should re-test.
+4. ENDGAME accounting (iteration-50) stands unchanged: realistic ceiling 98.7-98.8
+   without a wall crack; 99.0 = fusion or lhzu. This iteration RAISED the evidence grade
+   of the fusion wall (DEFINITIVE+, full requirement triangle) and added the sibling
+   ground truth.
