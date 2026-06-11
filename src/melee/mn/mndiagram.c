@@ -1383,8 +1383,8 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
   else
   {
       new_var = 0;
-      for (i = count2; i < 0x19; i++) {
-          if (mn_IsFighterUnlocked(i) != new_var) {
+      for (count = count2; count < 0x19; count++) {
+          if (mn_IsFighterUnlocked(count) != new_var) {
               count2++;
           }
       }
