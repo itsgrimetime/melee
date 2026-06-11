@@ -2205,3 +2205,93 @@ of ours' early r23 zero dispense — confirmed pop-order cascade, not independen
 3. The fingerprint map above is current for graph 5bf6600e5 (shifts with any commit).
 4. 1350's partial-substitution count form: optional cheap meter if channels stall.
 5. REPORT TRIGGER: 98.5 (98.45 now — one small win away).
+
+## Iteration-47 (driver 8): full harvest pass — zero gate-passers; all channels ACTIVE
+Baseline verified: 5bf6600e5, 98.45%, Δ2, hunks 9, opcode 99.1%. Channels coder1/2/3 on
+base 1365 (jobs 20260611-0439xx), ALIVE at 7.3h wall time. Two fetches executed this iteration.
+
+### Channel status (post-fetch 2):
+- coder2: best 1155 @iter8649, latest 5555 @iter38940 — ACTIVE, descending
+- coder3: best 1290 @iter864, latest 2165 @iter44242 — ACTIVE, descending
+- coder1: best 1250 @iter11588, latest 1560 @iter32056 — ACTIVE, descending
+
+### HARVEST TRIAGE TABLE (all candidates below base 1365, both fetches):
+
+| Candidate | Score | Change | Zone | Verdict | Reason |
+|-----------|-------|--------|------|---------|--------|
+| coder2-1155-1 | 1155 | `fc_inner:` label relocated into gmMainLib calls region | UNSAFE | REJECT | Goto retargeting — semantic break |
+| coder2-1225-1 | 1225 | `u16 *new_var3 = &hovered_selection` pointer alias | UNSAFE | REJECT | Entry-band addition + first-use in 0x10 arm |
+| coder2-1265-1 | 1265 | row-split (0x10 arm) + `(col-(0,1))` comma hack | UNSAFE | REJECT | 0x10 arm unsafe zone + no-op comma |
+| coder3-1290-1 | 1290 | row-split only: `row=hovered; row=row>>8` (0x10 arm) | UNSAFE | REJECT | Already tested iter-45 (1560): broke M1, count2 r25→r23 |
+| coder1-1250-1 | 1250 | Drop `s32 i` from decl list | UNSAFE | REJECT | Entry-band change |
+| coder1-1250-2 | 1250 | Add `Diagram *new_var3` between row4/row5 | UNSAFE | REJECT | Entry-band addition |
+| coder1-1265-1 | 1265 | Same as coder1-1250-2 | UNSAFE | REJECT | Entry-band addition |
+| coder*-1295-x | 1295 | `s32 i` → `char`/`short`/`unsigned char i` | UNSAFE | REJECT | Entry-band type change on i |
+| coder1-1295-1 / coder3-1295-2 | 1295 | `inline_fn` replacing row expr | UNSAFE | REJECT | No-op wrapper hack |
+| coder2-1335-1 / coder3-1335-1 | 1335 | `inline_fn(->user_data)` wrapper | SAFE | REJECT | No-op wrapper hack |
+| coder2-1340-1 | 1340 | `(hovered_selection*)` type cast + partial sub | SAFE | REJECT | Broken cast semantics |
+| coder2-1340-2 | 1340 | `cur += (...)` arithmetic + ptr2 changes | SAFE | REJECT | Arithmetic manipulation hack |
+| coder2-1345-1 / coder3-1345-1 | 1345 | ptr2/ptr3 decl reorder | UNSAFE | REJECT | Entry-band reorder |
+| coder2-1345-5 / coder3-1345-4 | 1345 | `col_result3 +=` or `row_result3 +=` extra assign | SAFE | REJECT | Spurious extra assignment hack |
+| coder2-1355-3 / coder1-1355-1 | 1355 | `cur=data->name_cursor_pos; cur=cur>>8` split | SAFE | BYTE-IDENTICAL | Already tested iter-47/prior: metered 98.46% |
+| coder2-1360-x | 1360 | `cur += (...)` arithmetic manipulation family | SAFE | REJECT | Arithmetic manipulation hack |
+| coder2-1365-1 | 1365 | `s32 count` → `int count` | UNSAFE | REJECT | Entry-band; already tested prior session |
+| coder3-1310-1 | 1310 | `short i` + multiple `inline_fn` replacements | UNSAFE | REJECT | Entry-band + mass inline wrapper |
+| coder1-1325-1 | 1325 | `inline_fn` + new `u8 *new_var3` + dead goto hack | SAFE | REJECT | Wrapper + dead-goto semantic hack |
+| coder1-1330-1 | 1330 | Multiple: ptr2/row2 decl reorders + `cur += (...)` | UNSAFE | REJECT | Entry-band reorders + arithmetic hack |
+| coder1-1335-1 | 1335 | Dead `do {} while(0)` + extra if | SAFE | REJECT | Dead-code insertion hack |
+| coder1-1335-2 | 1335 | Extra if blocks + `row6 = hovered_selection` add | SAFE | REJECT | Dead-branch injection |
+| coder3-1330-1 | 1330 | `inline_fn(->user_data)` wrappers + `new_var3 = sorted+cur` | SAFE | REJECT | Wrapper + indirect sorted access |
+| coder3-1345-2 | 1345 | ptr2 decl position change | UNSAFE | REJECT | Entry-band reorder |
+| coder3-1345-3 | 1345 | `u16 new_var3` cast pointer to hovered | SAFE | REJECT | Type-pun pointer hack |
+| coder3-1350-1 / coder1-1350-1 | 1350 | `cur += (...)` arithmetic | SAFE | REJECT | Arithmetic hack family |
+| coder3-1355-1 | 1355 | `cur += (...)` + `found |= found` | SAFE | REJECT | Arithmetic + no-op OR |
+| coder2-1350-2/3 | 1350 | `u16 new_var3` + unsafe 0x10 row split or similar | UNSAFE | REJECT | Entry-band + unsafe zone |
+
+**RESULT: Zero gate-passers in iteration-47. All 30+ candidates rejected.**
+
+### Reject family analysis (new rejection patterns catalogued):
+
+1. **`cur += (...)` arithmetic family** (~8 candidates): Permuter constructs `cur += (expr)`
+   followed by removal of the original `cur -= col` or similar subtraction. The combined effect
+   is semantically equivalent (net +/- arithmetic preserved) but uses a temporary accumulate
+   pattern. All were at token ~187 in the function body. Rejected as arithmetic manipulation.
+
+2. **`inline_fn()` wrapper / `->user_data` wrapper** (~5 candidates): Wrapping `data =
+   mnDiagram_804D6C10->user_data` or field accesses in `inline_fn()`. No-op wrapper hack class.
+
+3. **`s32 i` type-change family** (~8 candidates): `char`/`short`/`unsigned char`/`int` for
+   the `i` loop variable — all change the entry band. All rejected per M1 guard.
+
+4. **0x10-arm row-split** (re-confirmed): `row = mn_804A04F0.hovered_selection >> 8` →
+   `row = hovered; row = row >> 8` in the `is_name_mode != 0` block. This was already
+   tested in iteration-45 (score 1560-1) and caused count2 to shift r25→r23 (M1 broken).
+   The coder3-1290-1 / coder2-1265-1 candidates are the same change. DO NOT RETEST.
+
+5. **Entry-band decl additions/reorders** (~8 candidates): Various ptr2/ptr3 swaps, new
+   `Diagram *new_var3`, `u16 *new_var3` etc. All touch the entry band. All rejected.
+
+6. **goto label relocation** (coder2-1155-1, the "best" score): Repositions `fc_inner:`
+   label to a different region of the function — complete semantic break. The very low
+   permuter score (1155 vs 1365 base) reflects structural divergence, not proximity to
+   the target — a larger byte-diff can be "better" in the permuter's scoring if the two
+   sides align differently on the random scoring positions.
+
+### Safe-zone census update (confirmed closed levers):
+- Operand-flip class: ONE site (1575 commit), ALL others identical. Closed.
+- Dead-anchor band-lift: 0xC00-FIGHTER (1365 commit). The 0xC00-NAME form is banked as walled.
+  Safe-zone (post-front/main-nav) band-lifts: ONLY if they don't compete with the front sweep.
+- `cur` two-statement split: BYTE-IDENTICAL. Confirmed dead in safe zone.
+
+### Channels remain ACTIVE — no stale-base doctrine (no commit this iteration).
+
+### Driver-9 entry points
+1. HARVEST (primary): keep fetching coder1/2/3 (base 1365, jobs 20260611-0439xx). Gate ≥98.45.
+   Session-start checklist: `remote status` all 3 jobs → if any stopped/plateaued, re-bootstrap
+   from committed source + NULL pragma + verify compile + resubmit. Channel-health check is
+   MANDATORY at session start (#558 class: channels die silently from missing NULL pragma or
+   stale base).
+2. The temp-band pop-order cycles (~40 sites in fc/fr + nc/dn_n/rt_n families) are the
+   permuter's ONLY remaining lever. Do NOT build manual interventions for them.
+3. Fingerprint map current for 5bf6600e5 (unchanged this iteration).
+4. REPORT TRIGGER: 98.5% (unchanged; 98.45 now).
