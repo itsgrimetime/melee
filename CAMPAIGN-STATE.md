@@ -2803,3 +2803,81 @@ REVERTED both; baseline 98.67 re-verified.
    without a wall crack; 99.0 = fusion or lhzu. This iteration RAISED the evidence grade
    of the fusion wall (DEFINITIVE+, full requirement triangle) and added the sibling
    ground truth.
+
+## Iteration-52 (driver 9): ABSORPTION-ORDER DOOR — honest kill via full backend decode
+(zero builds; the dump evidence replaced all three allotted builds)
+Baseline verified 98.67 (Δ1, hunks 6, opcode 99.4) at 7a17d3dc5/a7ecacaa1. Tree clean
+throughout. No source commits. Instruments: /tmp/dump51 (backend IR + COALESCE + colorgraph,
+current graph), /tmp/retro51input re-reads.
+
+### ITERATION-51 CORRECTIONS (recorded; supersede the iter-51 table rows)
+1. @986/@950 were the 0xC00-FIGHTER loop's count/i (the FIRST IsFighterUnlocked loop in
+   node order — both loops share the shape; iter-51 traced the wrong one). The nav-fighter
+   pair = @984 (count2's region web) / @947 (nav walker).
+2. count2 at the BACKEND = HOME virtual r35 (home band, front pop iter 8, r25 = the +048
+   li) — NOT temp-class. The front end sinks `count2 = 0` to the nav-arm head (@690), the
+   backend hoists the li back to entry B4 — the round-trip is why +048 sits at entry.
+3. "walker zero absorbs into @887.hi first; count2 then interferes" — WRONG DIRECTION and
+   wrong mechanism. Ground truth below.
+
+### THE DECODED MECHANISM (the campaign's deepest backend result; all dump-measured)
+Backend entry B4: `li r183,0` (conversion hi, glued to the buttons store unit) THEN
+`li r35,0` (count2 home, hoisted). TWO zero nodes.
+THE CANONICAL-ZERO CHANNEL: the backend serves every later literal-zero need by REUSING
+r183 (the first/store-unit zero), creating COPY EDGES:
+  - walker init `mr r102,r183` (the IRO had literal 0 — `count = count2` const-propped)
+  - ternary 0-arm `mr r146,r183` (source spells `: (count2)` — const-propped)
+  - entering_menu `stb r183,17(r185)` DIRECT use (source spells `= count2` — const-propped)
+COALESCE (the [COALESCE] map, n_virtuals=473): copy-coalescing follows the COPY EDGES —
+`183 -> 102`, `146 -> 102`. **Root ig102 = THE NAV WALKER (0x0a ROOT, pop 324, r23,
+11 sites)** — the campaign's "zero web" was the WALKER'S web absorbing the conversion
+zero, not the reverse. count2 (ig35) appears NOWHERE in the coalesce map: no copy edge
+(const-prop erased every source-spelled count2 read), and its hoisted li's range overlaps
+r183's anyway (same-value path also blocked).
+TARGET: all four clients read r25 = count2's web (+250 stb r25, ternary fall-through,
++848 mr r24,r25) ⟹ the original had ONE zero node — count2's def WAS the store's hi half.
+
+### THE WALL IN ONE SENTENCE
+Ours mints TWO zero IR nodes (the store-unit conversion hi + count2's init) where the
+original had ONE; every downstream client binds to the first; and no C spelling merges two
+literal-zero nodes — const-prop normalizes every connecting read (the source ALREADY
+spells walker/ternary/entering_menu as count2 reads — ec4b3d62a — and they all fold),
+class/range rules block backend merging, and every one-node spelling fails (b) register-
+class (union → stack) or (c) materialization-form (read-back → lwz).
+
+### Knob verdicts (the three allotted builds, each replaced by a measurement)
+| knob | verdict | evidence |
+|------|---------|----------|
+| (i) walker init as copy-from-count2 | already the source spelling; const-prop folds it | iro-61 @947 init = literal 0; backend re-derives the copy from r183 not r35 |
+| (ii) anti-sink placement of count2=0 | irrelevant — backend hoists the li to B4 from ANY IRO position | @690 (IRO) vs B4 (backend) in the same compile; V2b statement-swap byte-identical (iter-41) |
+| (iii) @-number/band reorder | no scan race exists — coalesce follows copy edges, not @-order | coalesce map: only 183/146 → 102; count2 absent entirely |
+| (bonus) count2-as-temp-class | predicted-dead WITHOUT build: count2 would join root 102 → its 10 currently-CORRECT r25 sites regress to r23 | ig102=r23 (temp band); target needs r25 front |
+
+### The door's disposition
+HONEST KILL — the absorption-order framing dissolves into the (a)(b)(c) triple: (a)-opacity
+is the single true gate (it would restore ALL FOUR client bindings at once: the copies
+would read r35 → coalesce into count2's home root → front pop r25 → megaweb + mr + cluster).
+The fusion wall's evidence grade: DEFINITIVE++ (instruction-level mechanism, full client
+census, coalesce-map ground truth). The wall story is complete; no further fusion doors
+without a genuinely new (a)-mechanism (something front-end-opaque, register-class, that
+lowers to a bare li).
+
+### TASK 2 — channel state (cadence + threshold watch)
+- coder2-060955: 100.7k iters, best 1090 @2577 (98k stale, rejected). ACTIVE/descending.
+- coder3-061005: 113.3k iters, best 1055 @18478 (95k stale, rejected). ACTIVE/descending.
+- tuned-065847: 12.9k iters, best 1115 @739; new candidates all row-site family (F4 ×2,
+  F3 ×1) — tallied rejects.
+- **150k crossing projected mid-next-session for both stock channels**; bests are 95k+
+  stale with every sub-base candidate family-rejected. Per ENDGAME: on crossing, stop +
+  reap + record + bank unless a non-family candidate appears first.
+
+### Driver-10 entry points
+1. CHANNELS: harvest at cadence; both stock channels cross 150k this session — execute
+   the plateau protocol (stop, reap, record counts, retire) unless a genuinely-new-shape
+   candidate lands. The tuned channel may run longer (12.9k).
+2. THE FUSION WALL IS CLOSED-COMPLETE: (a)(b)(c) triple + canonical-zero/copy-edge
+   mechanism + client census. Do not re-open without a new (a)-mechanism class. The
+   remaining walls (lhzu/fr ~15-20, found↔row2 ~12 enumerated, nc transposition ~6,
+   row-site 6-spelling) stand as priced in the ENDGAME section.
+3. If both channels retire null: bank at 98.67 per the ENDGAME decision frame (ceiling
+   98.7-98.8 without a wall crack; 99.0 requires fusion-(a) or lhzu).
