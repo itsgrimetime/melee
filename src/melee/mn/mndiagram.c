@@ -1383,7 +1383,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
   else
   {
       new_var = 0;
-      for (i = new_var; i < 0x19; i++) {
+      for (i = count2; i < 0x19; i++) {
           if (mn_IsFighterUnlocked(i) != new_var) {
               count2++;
           }
@@ -1446,7 +1446,7 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
               } else {
                   goto dn_f_inner;
               }
-        }
+          }
 
         if (col_result4 != 0x19)
         {
@@ -1495,29 +1495,26 @@ void mnDiagram_InputProc(HSD_GObj *gobj)
             found = mnDiagram_FindNextFighter(sorted, i);
             steps = 7;
         rt_f_outer:
-        if (steps == new_var)
-        {
-            row_result4 = sorted[i];
-        }
-        else
-        {
-          ptr2 = ptr;
-          rt_f_inner:
-              i++;
+            if (steps == new_var) {
+                row_result4 = sorted[i];
+            } else {
+                ptr2 = ptr;
+            rt_f_inner:
+                i++;
 
-              ptr2++;
-              ptr++;
-              if (i >= 0x19) {
-                  row_result4 = 0x19;
-              } else if (mn_IsFighterUnlocked(*ptr2) != new_var) {
-                  steps--;
-                  if (steps >= new_var) {
-                      goto rt_f_outer;
-                  }
-              } else {
-                  goto rt_f_inner;
-              }
-        }
+                ptr2++;
+                ptr++;
+                if (i >= 0x19) {
+                    row_result4 = 0x19;
+                } else if (mn_IsFighterUnlocked(*ptr2) != new_var) {
+                    steps--;
+                    if (steps >= new_var) {
+                        goto rt_f_outer;
+                    }
+                } else {
+                    goto rt_f_inner;
+                }
+            }
 
         if (row_result4 != 0x19)
         {
