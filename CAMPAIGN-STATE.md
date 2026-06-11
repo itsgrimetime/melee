@@ -1381,3 +1381,105 @@ baseline — PAD_STACK(64) may be codegen-neutral on the current graph.
    empty-slot creators first — one r14 fingerprint per candidate dead def).
 4. Micro-opens unchanged: init-pair 4 (two graphs, flip regresses), nr +0f4 /
    soup +0bc (B-col shadow members).
+
+## Iteration-39 (driver 4, orchestrator-directed): SUBSTRATE COMMITTED — new line 96.70 → 96.87
+ORCHESTRATOR DECISION (recorded): commit the field-shape below the old gate,
+iteration-29 pattern. NEW GATES: neutral-or-better vs the committed line
+(96.87 after this iteration). Old-gate report trigger 97.74 stands.
+
+### Commit stack this iteration (tree clean at ee5d2793d)
+1. 5c3ee06c3 field-shape buttons stores (96.70; full rationale in message)
+2. ec4b3d62a count2-web read spellings B-arm + ternary (byte-identical;
+   original's web membership per target +250 stb r25 / +38c fall-through)
+3. ee5d2793d dedicated `cur` walker for nav arms (96.70→96.87)
+
+### TASK 0 meter at commit: ONE li r25,0 at +03c ✓, megaweb 11 sites ✓
+(r14-verified), Δ6, opcode 98.2, hunks 18, census 234 (skeleton aligner,
+/tmp/census.py method inline in this repo's iteration-33 notes).
+
+### FREE WIN CONFIRMED AT COMMIT: B-col/B-row LANDED (the iteration-13-era
+closed front-order wall): target +184 lbzx r27 ↔ ours r27 ✓, +1a4 li r27,25 ✓,
++1e8 lbzx r26 ✓, +208 li r26,25 ✓. The B-col shadow family came free with the
+fusion. (Residual operands on those lines = M1 sorted/base + walker families.)
+
+### TASK 2 WIN: the cur un-merge (ee5d2793d) — substrate relativity pays again
+Iteration-33's cur→i merge REVERSED on this graph: walker band (i, first-use
+1086) popped before its arm-mates (pops 336-345 vs mates 346-375) with almost
+nothing colored (fc-walker ig81 at-pop blocked set = {r24 by ig96, r31 data}
+ONLY) → ascending-reuse r25. Dedicated cur (first-use in nav arms) pops late:
+census 234→207, nav-name 74→53, match 96.70→96.87. Walkers now r29 (one
+register from target r23).
+
+### THE WALKER→M1 CHAIN (measured, force probe on this graph, applied=4 ✓)
+force-iter-first "54,176,180,178" (new-graph front ids; data=54 now):
+entry snaps (sorted r30/base r29/input r28) AND the walker/found pair rotates
+r29→r24/r23. Mechanism: ours' input(r29) is DEAD inside arm bodies (no later
+mask test on the taken path) → r29 free for walkers; target's r29=base is
+LIVE in the name arms (hovered reads via r29) → blocked → target walkers
+reach fresh r23. M1's fix moves walkers to (r24,r23) — ONE transposition
+from target (walker r23, found r24). M1 is therefore worth ~50 entry sites
+PLUS most of the walker families (~30+) = the dominant remaining lever.
+
+### The walker/found pair (the last transposition; ~19 sites, (r23,r24)+(r24,r23))
+Target pops found BEFORE walker (found r24 colored, walker fresh r23). Ours
+pops walker first (cur first-use 1252 < found 1253 → cur band higher).
+DEAD-ANCHOR ATTEMPT (found = count; in the path-disjoint 0xC00-name block):
+moved the walker r29→r24 but did NOT flip the pair (found stayed r23) and
+nav-fighter worsened 32→36 → net 96.84 < 96.87 REVERTED. The anchor moves
+bands but the pair's relative order resisted — mechanism of the resistance
+unread (the anchor may have moved found's band ABOVE other mates, reshaping
+several arms at once). Candidates for driver 5: per-pair anchor positions
+(between 1086 and 1252 instead of ~1205), or fix M1 first and re-measure
+(the force showed the pair lands (r24,r23) under M1 — possibly found-anchor
++ M1 composes to (r23,r24)... note force+anchor composition was NOT tested).
+
+### TASK 1 (M1 spellings) — no new C-lever found on this graph; oracle re-proven
+Banked analysis stands: creation order is call-position-forced (sorted's def
+must precede the call for the +018 schedule; created-last is schedule-dead);
+the deferral margin's historical source WAS the zero-temp web that the fusion
+absorbs by design (the wall ate its own ladder). Untried-but-weak: store-order
+swap (body risk, no mechanism), data/sorted decl swap (no relative effect).
+The force vector "<data>,176,180,178" remains the goal-oracle (verify ids per
+graph: data=54, sorted=176, input=178, base=180 on the current one).
+
+### TASK 3: megaweb completion CONST-PROP-WALLED on the read side
+entering_menu=count2 and ternary-0-arm=count2 both IRO-const-prop to literal
+zeros (byte-identical) — count2's single-def literal web is IRO-visible-as-0;
+the def-form protects only the def site. Target's 16-site membership needs
+count2's def to be non-literal (the u64-hi extraction the original had =
+__shr2u libcall from C, door 2). The 11-site fused web is the C-reachable
+form. Spellings kept in source (ec4b3d62a) — they fire if a future graph
+breaks the propagation.
+
+### TASK 4 sweep results (committed graph)
+- B-col order family: LANDED free (above).
+- lhzu/fr root: HOLDS — +168 addi+lhz persists (Δ multiset lhzu −1), fc-head
+  +178/+17c copies persist under force too.
+- Name statement-temp cycle: superseded on this graph by the walker/found
+  pair form (~19 sites, above).
+- init-pair (+99c/+b80): flip REGRESSES third graph in a row (96.87→96.79,
+  reverted). Stop re-testing without new evidence; spelling is settled.
+- rt_f ring: not re-read on this graph (the old-graph empty-slot window read
+  stands as the mechanism guide; slots have shifted — re-read before any
+  ptr4-style build).
+
+### State: match 96.87, opcode 98.2, Δ6, census 207. Tree clean ee5d2793d.
+### Trajectory note (orchestrator): expect multi-iteration recovery like
+29→36 (97.16→97.74 took 7 iterations). Prize map from here: M1 ~50 sites +
+walker chain ~30 (force-proven reachable TOGETHER) + pair transposition ~19
++ fc/fr soup 46 (partly lhzu-walled) + scatter. M1 alone ≈ 97.5-97.8
+territory; M1+pair+walkers ≈ 98.5+ if the chain composes as the force probe
+indicates.
+### Driver-5 entry points (priority)
+1. M1 C-lever: the entry-band deferral. New angle wanted; everything
+   statement-order is exhausted. Consider: what besides degree defers a node
+   past its ascending-sweep slot (the dump's sweep mechanics around pops
+   10-30 = the last main-phase pushes; the deferral threshold question from
+   iteration-38/39 readings is UNRESOLVED — baseline deferred at listed
+   deg 27, field-shape catches at 25, k=29 explains neither).
+2. The walker/found pair: anchor-position sweep (the 0xC00-name anchor
+   half-worked); or read WHY the pair resisted (one dump: found's web igs +
+   pop slots under the anchor).
+3. rt_f window re-read on current graph, then the lift lever.
+4. fc/fr soup (46 sites): unexamined on this graph beyond the persisting
+   +178/+17c copies; the lhzu sub-wall is inside it.
