@@ -1185,3 +1185,92 @@ scattered ~3.
    the iter-34 flip regressed at 97.55; RE-TEST at 97.74 (substrate rule —
    the graph has changed 4 times since).
 3. Walls stand. Maximal non-wall ceiling ≈ 97.9.
+
+## Iteration-37: field-shape theory ALIVE (iteration-38 headline); rt_f + init-pair refuted
+Baseline 97.74 at 90aae6e50. 2 builds, both reverted with mechanism. No source commits.
+
+### THE DEAD-ANCHOR TOOL (named tool — prominent record, as standing equipment)
+**Dead-anchor band placement**: `var = <any-live-value>;` on a path-disjoint,
+provably-dead branch is DCE'd (zero instructions emitted, Δ unchanged) but
+anchors the variable's FIRST-USE position for the promotion's band ordering.
+Band model: earlier first-use = higher band = pops earlier; within-band,
+later region pops first (with exceptions — see rt_f anomaly below). Proven
+uses: count's dead decl-init (D-NEW-1, iteration-34), ptr3's 0xC00-branch
+anchor (iteration-36, dn_f ring full target match).
+LIMITS: (1) statement-temp webs (no variable identity) are unreachable —
+e.g. the name found-merge webs ig114/122; (2) within-variable web ordering
+is not always contiguous (rt_f walker landed ig55 while dn_f's landed ig67
+from the same ptr3 variable — mechanism of the split UNKNOWN); (3) bands are
+no guarantee of the PICK — the at-pop blocked set still decides.
+
+### TASK 1 — BUTTONS FIELD-SHAPE EVIDENCE (theory ALIVE; no builds per orders)
+(a) Declaration: `/* 0x0008 */ u64 buttons;` in src/melee/mn/mnmain.h
+(MenuFlow). InputProc's +38/+44 store pair comes from the SHARED inline
+`Menu_GetAllInputs()` (src/melee/mn/inlines.h:38:
+`return mn_804A04F0.buttons = mn_80229624(4);`).
+(b) NO matched function constrains the layout: every writer emits the
+{stw lo, stw hi} pair and every reader (`buttons & mask`) reads only the lo
+word — u64-vs-2×u32 is codegen-indistinguishable across all 8 TUs touching
+the field (mnruleplus 87.98, mnitemsw 98.43, mnname 94.98, mnnamenew 93.05,
+mndiagram2 91.13, mnmainrule, mnsoundtest, mnmain). Theory ALIVE.
+(c) THE IN-TREE IDIOM (three sibling TUs already bypass the inline):
+mnmainrule.c:121, mnnamenew.c:712, and the SISTER FUNCTION
+mnDiagram2_HandleInput (mndiagram2.c:294, TU 91.13/fn 89.34 — unverified
+but convergent):
+    result = mn_80229624(4);
+    ((s32*) &mn_804A04F0.buttons)[1] = result;
+    ((s32*) &mn_804A04F0.buttons)[0] = (var_r28 = 0);
+    ... mn_804A04F0.entering_menu = var_r28;   // zero-local reused!
+PREDICTED InputProc spelling (iteration-38 build 1 — NO header change):
+    u32 input = mn_80229624(4);
+    ((u32*) &mn_804A04F0.buttons)[1] = input;
+    ((u32*) &mn_804A04F0.buttons)[0] = (count2 = 0);
+(+ `s32 count2;` decl uninitialized). Predicted codegen: ONE li (count2's
+init IS the +3c li r25), stw count2,8(r29) — the +48 li disappears (Δ3→Δ2),
+the range-overlap refusal dissolves (one li = no second range), count2's
+home web absorbs {+3c, +44} and via the ternary 0-arm same-value reuse the
+{+390 ternary, +25x entering_menu} cluster ⟹ THE MEGAWEB FORMS ⟹ fusion
+family (~28 sites) + possibly the front re-order (B-col shadow ~6, IF the
+fused web's degree shift reorders the finishing sweep). RISK: IRO may still
+const-prop the store operand and split (door-5's death mode) — the
+assignment-expression def-form and the sibling convergence are the evidence
+it may not. BLAST RADIUS: one statement in InputProc; bypasses the shared
+inline exactly as the three siblings do; zero header edits.
+
+### TASK 2 — rt_f ring: ptr4 split REGRESSED (97.70), reverted
+At-pop mechanism (dump): dn_f merged (ig66, pop 360) is blocked from r25 by
+its walker (ig67, pop 359) → r28 ✓. rt_f merged (ig64, pop 362) is NOT —
+its walker is ig55 popping 371 (AFTER) → r25 free → merged r25 ✗. The ptr3
+variable's two webs landed NON-CONTIGUOUS igs (67 vs 55) — anomaly vs the
+band model; mechanism unknown. ptr4+anchor for rt_f: 97.74→97.70 ✗ reverted.
+rt_f ring (~5 sites) stays open pending the numbering anomaly's mechanism.
+
+### TASK 3 — init-pair order re-test: REGRESSES AGAIN (97.74→97.68), reverted.
+FindNextFighter found-first costs more elsewhere than the 4 positional sites
+(+99c/+9a0, +b80/+b84) it would fix. Second graph re-test, same result.
+
+### State after iteration-37: match 97.74, opcode 98.4, delta 3, hunks 16,
+census 67. Tree clean at the iteration-36 stack.
+### FOR DRIVER 4 (rotation brief)
+- Worktree: this one; branch claude/mndiagram-802427B4-investigation.
+- Baseline: 97.74 / opcode 98.4 / Δ3 / hunks 16 / census 67 (skeleton-aligned
+  register-mismatch count; script inline in iteration-33+ sections).
+- Gates: neutral-or-better vs ALL of the above. Commit gate-passers
+  individually. Diagnostic forces (r14-r17 only). #550: verify force lists
+  applied via fingerprint sites appearing.
+- ITERATION-38 PROGRAM: (1) the field-shape build above (the wall's best
+  remaining shot; if the megaweb forms, re-run the front-order probe and the
+  whole-census — expect up to ~97.9-98.3); (2) if it fires, substrate-rule
+  re-tests: lhzu site, name statement-temp cycle, rt_f ring, init-pair order
+  — all four walls/opens get one cheap roll on the new graph; (3) if it
+  dies, read WHY from the dump (the store-operand IR shape) and bank the
+  wall closed-for-good with all six+1 mechanism classes enumerated.
+- Tools: dumps via `melee-agent debug dump local src/melee/mn/mndiagram.c
+  --output X --no-cache-sync`; InputProc = 26th class-0 COLORGRAPH
+  (n_nodes=396); fingerprints `--force-phys "IG:14,IG2:15" --force-phys-fn
+  mnDiagram_InputProc --diff`; census script in iteration-33; at-pop blocked
+  set = interferers with EARLIER pop iter only.
+- Walls (full statements in iterations 34-36): fusion ~28+Δ2 (field-shape =
+  the live door), lhzu/fr ~11+Δ1, B-col shadow ~6, name statement-temp ~10.
+- Non-walled opens: rt_f ring 5 (numbering anomaly), init-pair 4 (flip
+  regresses), scatter ~3.
