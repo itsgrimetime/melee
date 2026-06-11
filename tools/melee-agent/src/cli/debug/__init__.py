@@ -6304,12 +6304,18 @@ def _bootstrap_permuter_dir(
     if base_path.exists():
         target_asm_text = _read_bootstrap_target_asm(fn_dir, melee_root)
         source_for_inline = requested_source.read_text(encoding="utf-8")
+        dependency_text = _bootstrap_dependency_context(
+            source_for_inline,
+            source_path=requested_source,
+            melee_root=melee_root,
+        )
         patched_base, injected_inline_callees = (
             _inject_bootstrap_same_tu_inlined_callees(
                 base_path.read_text(encoding="utf-8"),
                 source_for_inline,
                 function,
                 target_asm_text,
+                dependency_text=dependency_text,
             )
         )
         if injected_inline_callees:
@@ -6376,6 +6382,11 @@ _BOOTSTRAP_TARGET_REL24_RE = re.compile(r"\bR_PPC_REL24\s+([A-Za-z_]\w*)")
 _BOOTSTRAP_TARGET_BL_RE = re.compile(r"\bbl\s+([A-Za-z_]\w*)")
 _BOOTSTRAP_TARGET_B_RE = re.compile(r"\bb\s+([A-Za-z_]\w*)")
 _BOOTSTRAP_INLINE_RE = re.compile(r"^(?:static\s+)?inline\b")
+_BOOTSTRAP_IDENTIFIER_RE = re.compile(r"\b[A-Za-z_]\w*\b")
+_BOOTSTRAP_QUOTED_INCLUDE_RE = re.compile(
+    r"^[ \t]*#[ \t]*include[ \t]+\"([^\"]+)\"",
+    re.MULTILINE,
+)
 _BOOTSTRAP_CALL_KEYWORDS = {
     "case",
     "for",
@@ -6384,6 +6395,29 @@ _BOOTSTRAP_CALL_KEYWORDS = {
     "sizeof",
     "switch",
     "while",
+}
+_BOOTSTRAP_IDENTIFIER_KEYWORDS = {
+    *_BOOTSTRAP_CALL_KEYWORDS,
+    "char",
+    "const",
+    "double",
+    "enum",
+    "extern",
+    "float",
+    "inline",
+    "int",
+    "long",
+    "register",
+    "return",
+    "short",
+    "signed",
+    "static",
+    "struct",
+    "typedef",
+    "union",
+    "unsigned",
+    "void",
+    "volatile",
 }
 
 
@@ -6407,6 +6441,61 @@ def _read_bootstrap_target_asm(fn_dir: Path, melee_root: Path) -> str:
         return ""
 
 
+def _bootstrap_resolve_quoted_include(
+    include: str,
+    *,
+    including_path: Path,
+    melee_root: Path,
+) -> Path | None:
+    candidates = [
+        including_path.parent / include,
+        melee_root / "src" / "melee" / include,
+        melee_root / "src" / include,
+        melee_root / "include" / include,
+        melee_root / include,
+    ]
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
+def _bootstrap_dependency_context(
+    source_text: str,
+    *,
+    source_path: Path,
+    melee_root: Path,
+) -> str:
+    """Return quoted include text that injected bootstrap callees may need."""
+    seen: set[Path] = set()
+    parts: list[str] = []
+
+    def visit(text: str, including_path: Path, depth: int) -> None:
+        if depth >= 3:
+            return
+        for match in _BOOTSTRAP_QUOTED_INCLUDE_RE.finditer(text):
+            resolved = _bootstrap_resolve_quoted_include(
+                match.group(1),
+                including_path=including_path,
+                melee_root=melee_root,
+            )
+            if resolved is None:
+                continue
+            resolved = resolved.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            try:
+                include_text = resolved.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            parts.append(include_text)
+            visit(include_text, resolved, depth + 1)
+
+    visit(source_text, source_path, 0)
+    return "\n\n".join(parts)
+
+
 def _bootstrap_source_calls(function_text: str) -> list[str]:
     calls: list[str] = []
     seen: set[str] = set()
@@ -6417,6 +6506,134 @@ def _bootstrap_source_calls(function_text: str) -> list[str]:
         seen.add(name)
         calls.append(name)
     return calls
+
+
+def _bootstrap_identifier_names(text: str) -> set[str]:
+    return {
+        match.group(0)
+        for match in _BOOTSTRAP_IDENTIFIER_RE.finditer(text)
+        if match.group(0) not in _BOOTSTRAP_IDENTIFIER_KEYWORDS
+    }
+
+
+def _bootstrap_macro_blocks(text: str) -> list[tuple[str, str]]:
+    blocks: list[tuple[str, str]] = []
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        match = re.match(r"^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)", line)
+        if match is None:
+            i += 1
+            continue
+        block = [line.rstrip()]
+        while block[-1].endswith("\\") and i + 1 < len(lines):
+            i += 1
+            block.append(lines[i].rstrip())
+        blocks.append((match.group(1), "\n".join(block)))
+        i += 1
+    return blocks
+
+
+def _bootstrap_base_has_macro(text: str, name: str) -> bool:
+    return (
+        re.search(
+            rf"^[ \t]*#[ \t]*define[ \t]+{re.escape(name)}(?:\b|\()",
+            text,
+            re.MULTILINE,
+        )
+        is not None
+    )
+
+
+def _bootstrap_base_has_object_declaration(text: str, name: str) -> bool:
+    return (
+        re.search(
+            rf"^[ \t]*(?:extern[ \t]+)?[^#\n;]*\b{re.escape(name)}\b[^;\n]*;",
+            text,
+            re.MULTILINE,
+        )
+        is not None
+    )
+
+
+def _bootstrap_base_has_function_declaration(text: str, name: str) -> bool:
+    if find_source_function(text, name) is not None:
+        return True
+    return (
+        re.search(
+            rf"^[ \t]*(?:static[ \t]+)?(?:inline[ \t]+)?"
+            rf"[^#;\n{{}}]*\b{re.escape(name)}[ \t]*\([^;{{}}]*\)[ \t]*;",
+            text,
+            re.MULTILINE,
+        )
+        is not None
+    )
+
+
+def _bootstrap_source_function_prototype(source_text: str, span: Any) -> str | None:
+    signature = source_text[span.sig_start : span.body_open].strip()
+    if not signature:
+        return None
+    return signature.rstrip() + ";"
+
+
+def _bootstrap_injected_callee_dependencies(
+    *,
+    base_text: str,
+    source_text: str,
+    dependency_text: str,
+    source_spans: Mapping[str, Any],
+    insert_names: set[str],
+    injected_texts: list[str],
+    function: str,
+) -> list[str]:
+    needed_names: set[str] = set()
+    for text in injected_texts:
+        needed_names.update(_bootstrap_identifier_names(text))
+    if not needed_names:
+        return []
+
+    dependency_context = "\n\n".join(
+        part for part in (source_text, dependency_text) if part
+    )
+    deps: list[str] = []
+
+    for name, block in _bootstrap_macro_blocks(dependency_context):
+        if name not in needed_names:
+            continue
+        if _bootstrap_base_has_macro(base_text, name):
+            continue
+        if any(_bootstrap_base_has_macro(dep, name) for dep in deps):
+            continue
+        deps.append(block)
+
+    for raw_line in dependency_context.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("extern ") or not line.endswith(";"):
+            continue
+        for name in sorted(needed_names):
+            if re.search(rf"\b{re.escape(name)}\b", line) is None:
+                continue
+            if _bootstrap_base_has_object_declaration(base_text, name):
+                continue
+            if any(_bootstrap_base_has_object_declaration(dep, name) for dep in deps):
+                continue
+            deps.append(line)
+            break
+
+    for name, span in sorted(source_spans.items(), key=lambda item: item[1].sig_start):
+        if name == function or name in insert_names or name not in needed_names:
+            continue
+        if _bootstrap_base_has_function_declaration(base_text, name):
+            continue
+        if any(_bootstrap_base_has_function_declaration(dep, name) for dep in deps):
+            continue
+        prototype = _bootstrap_source_function_prototype(source_text, span)
+        if prototype is not None:
+            deps.append(prototype)
+
+    return deps
 
 
 def _bootstrap_target_calls(target_asm_text: str) -> set[str]:
@@ -6452,6 +6669,8 @@ def _inject_bootstrap_same_tu_inlined_callees(
     source_text: str,
     function: str,
     target_asm_text: str,
+    *,
+    dependency_text: str = "",
 ) -> tuple[str, list[str]]:
     """Inject same-TU callee definitions when target asm has no call edge."""
     if not target_asm_text.strip():
@@ -6531,7 +6750,17 @@ def _inject_bootstrap_same_tu_inlined_callees(
     if not injected_texts:
         return patched_base, injected
 
-    insertion = "\n\n".join(injected_texts).rstrip() + "\n\n"
+    dependencies = _bootstrap_injected_callee_dependencies(
+        base_text=patched_base,
+        source_text=source_text,
+        dependency_text=dependency_text,
+        source_spans=source_spans,
+        insert_names=insert_names,
+        injected_texts=injected_texts,
+        function=function,
+    )
+    insertion_parts = [*dependencies, *injected_texts]
+    insertion = "\n\n".join(insertion_parts).rstrip() + "\n\n"
     patched = (
         patched_base[: base_function.sig_start]
         + insertion

@@ -5214,6 +5214,84 @@ def test_permuter_bootstrap_injects_transitive_callee_when_direct_is_inline() ->
     )
 
 
+def test_permuter_bootstrap_injects_callee_dependencies_missing_from_base() -> None:
+    source_text = textwrap.dedent(
+        """\
+        typedef struct HSD_GObj HSD_GObj;
+        typedef struct Diagram Diagram;
+
+        void HSD_GObj_SetupProc(HSD_GObj* gobj, void (*proc)(HSD_GObj*), int prio);
+        void* HSD_GObjGetUserData(HSD_GObj* gobj);
+        void mnDiagram_CursorProc(HSD_GObj* gobj)
+        {
+        }
+
+        void mnDiagram_80241730(HSD_GObj* arg0, int arg1, int arg2)
+        {
+            Diagram* data = GET_DIAGRAM(arg0);
+            (void) data;
+        }
+
+        void mnDiagram_802433AC(void)
+        {
+            void** joint_data = mnDiagram_804A0814;
+            HSD_GObj_SetupProc(0, mnDiagram_CursorProc, 0);
+            (void) joint_data;
+        }
+
+        void fn_80000000(HSD_GObj* gobj)
+        {
+            mnDiagram_80241730(gobj, 1, 2);
+            mnDiagram_802433AC();
+        }
+        """
+    )
+    dependency_text = textwrap.dedent(
+        """\
+        #define GET_DIAGRAM(gobj) ((Diagram*) HSD_GObjGetUserData(gobj))
+        extern void* mnDiagram_804A0814[4];
+        """
+    )
+    base_text = textwrap.dedent(
+        """\
+        typedef struct HSD_GObj HSD_GObj;
+        typedef struct Diagram Diagram;
+        void HSD_GObj_SetupProc(HSD_GObj* gobj, void (*proc)(HSD_GObj*), int prio);
+        void* HSD_GObjGetUserData(HSD_GObj* gobj);
+        void mnDiagram_80241730(HSD_GObj* arg0, int arg1, int arg2);
+        void mnDiagram_802433AC(void);
+
+        void fn_80000000(HSD_GObj* gobj)
+        {
+            mnDiagram_80241730(gobj, 1, 2);
+            mnDiagram_802433AC();
+        }
+        """
+    )
+
+    patched, injected = debug_cli._inject_bootstrap_same_tu_inlined_callees(
+        base_text,
+        source_text,
+        "fn_80000000",
+        "<fn_80000000>:\n+000: 38 60 00 01 \tli      r3,1\n",
+        dependency_text=dependency_text,
+    )
+
+    assert injected == ["mnDiagram_80241730", "mnDiagram_802433AC"]
+    assert "#define GET_DIAGRAM(gobj)" in patched
+    assert "extern void* mnDiagram_804A0814[4];" in patched
+    assert "void mnDiagram_CursorProc(HSD_GObj* gobj);" in patched
+    assert patched.index("#define GET_DIAGRAM(gobj)") < patched.index(
+        "inline void mnDiagram_80241730"
+    )
+    assert patched.index("extern void* mnDiagram_804A0814[4];") < patched.index(
+        "inline void mnDiagram_802433AC"
+    )
+    assert patched.index("void mnDiagram_CursorProc(HSD_GObj* gobj);") < patched.index(
+        "inline void mnDiagram_802433AC"
+    )
+
+
 def test_debug_permute_bootstrap_injects_same_tu_inlined_callee_body(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
