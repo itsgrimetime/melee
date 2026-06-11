@@ -414,3 +414,86 @@ Method: tools/target_web_reconstructor.py build() on target_asm AND current_asm
 - Cross-compiler match% comparisons are invalid: score forced debug-DLL objects against
   target using the SAME-compiler unforced object as baseline (dtk disasm + skeleton align;
   ninja-retail baseline reads ~5pp higher than debug baseline on this fn).
+
+## Iteration-24: front-order rule derived; count2-home family root-caused (5 builds, all reverted)
+Match unchanged 95.4 (95.36); tree clean at baseline. No gate-passing edit found this round.
+
+### TASK 1 — the 0xa cohort + THE FRONT ORDER RULE (headline)
+- 17 0xa rows in InputProc's SIMPLIFY. Every resolvable one (118, 470, 458, 446, 434,
+  390, 376, 360, 348, 335, 310, 286, 273, 266, 255, 248) is a COALESCE ROOT (verified
+  against the [COALESCE] map). **0x8 flag = coalesce root, NOT spill; the dump tool's
+  "SPILLED" label is a mislabel. There are NO true spill pushes in this function.**
+  The non-118 cohort members are degree-0/2 trivia popping at natural positions —
+  the 0xa flag plays NO role in ordering.
+- FRONT ORDER RULE (reverse-push reconstruction, validated against the trace):
+  finishing-phase SIMPLIFY pushes run in repeated ASCENDING-INDEX sweeps over
+  still-eligible nodes (eligibility: current degree < k=29); pops reverse. Front pops
+  = [sweep-3: 58] [sweep-2: 161] [sweep-1 reversed: 166, 163, 118, 41, 39, 38, 37, 32].
+- THE SENTENCE: ig118 pops 5th rather than 9th because sweep-1 pops in descending
+  node index and 118 (an IRO @-temp, index >= 111) outranks every home local; to pop
+  9th (between 37 and 32) its index must be 33-36, i.e. count's web must be a
+  LAST-DECLARED HOME LOCAL — no @-temp can ever pop there, and degree/0xa/spill-cost
+  play no role. This REFUTES iteration-23's "spill-candidate push" framing AND
+  refutes the extent-fix->degree->order coupling premise (B-pair degree 18 vs k=29;
+  extent edits of +-2 sites cannot bridge 11 edges).
+
+### TASK 3 executed first (rule-directed): the count2-home family — MEASURED DEAD END
+Goal: count2 = last-declared home local (order) + zero-web fusion (composition). Order
+half SUCCEEDS in every variant; fusion half FAILS in every variant. 5 builds:
+1. count2 decl-init `= 0` + B-pair decl move: 95.03. Front became 59,161,166,163,
+   43,42,40,38,35(count2),32 — count2 POPPED 9th AND TOOK r25 at all 10 carry/compare
+   sites (incl. all 8 compares + incr). ORDER FULLY SOLVED. But fusion broke: fresh
+   `li r25,0` at +48; zero-temp (r23) kept {+3c li, +44 stw, +254 stb, +38c/+390
+   ternary} AND ABSORBED i (loop +850-868, no mr) — i's absorption extends the
+   zero web into the loop, blocking count2-color reuse and cascading i/col operands.
+2. `count2 = (s32)(input64 >> 32)` via `u64 input64 = Menu_GetAllInputs()`: emits a
+   `__shr2u` LIBRARY CALL (+4 lines, 93.53). MWCC does not fold u64>>32 here. DEAD.
+3. `for (i = count2; ...)` (to force target's `mr r24,r25` i-init + break i-absorption):
+   IRO copy-propagation rewrites it to `i = 0` (count2 provably 0) — IDENTICAL output.
+   This is the precise mechanism behind iteration-9's "spelling-immune" verdict.
+4. Init-order flip (input init moved to first statement; count2 decl-init executes
+   first): scheduler hoists `li r25,0` to +1c (BEFORE the call); the inline's
+   zero-extension at +40 STILL materializes its own zero with r25=0 live ⟹ the
+   backend does NOT scan live registers for zero reuse.
+5. (= state of 4 measured fully): 269 mismatched operand-sites vs baseline 236 —
+   NET -33. Reverted.
+- ROOT CAUSE (the precise gate): the baseline megaweb fusion is SAME-VALUE COALESCING
+  of TEMP-CLASS virtuals (157/164 -> 118) requiring NON-INTERFERENCE. The @-temp's
+  arm-init is (a) temp-class and (b) path-disjoint from the zero-temp -> merges. A
+  home-count2 init is excluded: entry placement creates a +40..+4c simultaneous-live
+  window with the zero-temp (interference), arm placement emits a fresh li that
+  same-value coalescing refuses (home-class init virtual), and every copy-spelling
+  is IRO-propagated/sunk away. No C spelling found after 4 distinct shapes; the
+  home-order/temp-fusion requirements are MUTUALLY EXCLUSIVE through every door we
+  have. Iteration-25+ should treat "count2-home + fusion" as closed unless a new
+  mechanism (not init-spelling) appears.
+
+### TASK 2 — nav-walk extent delta CHARACTERIZED (no build; the budget went to TASK 3)
+dn_n ground truth (+5c8..+664 both sides): the extent delta is NOT the pre-loop
+pointer math — it is the MERGE SHAPE of `found`:
+- TARGET: both find-arms write a truncation TEMP (`clrlwi r0,r23` not-found /
+  `clrlwi r0,r24` found), home materializes ONCE at the merge (`clrlwi r27,r0` at
+  +5ec = web start), compare uses the truncated home directly (`cmpw r23,r27` — no
+  cast at compare), store reuses it (`or r0,r0,r27`).
+- OURS: arms write the home register directly (`mr r26,r23` / `clrlwi r26,r24` at
+  +5d4/+5dc = web starts 6 instr earlier), truncation happens AT the compare
+  (`clrlwi r0,r26; cmpw r23,r0`).
+- C hypothesis for iteration-25: arms assign an UNCAST/u8-temp value, home assigned
+  once after the merge (inline-helper return-value shape — the file's
+  mnDiagram_GetVisible*From inlines have exactly this dataflow; m2c expanded them
+  into home-writes per arm). Same family in rt_n (+7b4) and smaller in dn_f/rt_f
+  (+9c4/+ba8). NOTE: per TASK 1's rule this fixes ~4-10 extent sites only; it canNOT
+  move ig118's pop.
+
+### Iteration-25 entry points
+1. dn_n/rt_n temp-merge spelling (above) — extent-family fix, gated, per-arm evidence.
+2. The order+fusion contradiction: the only untested door is making the TERNARY or
+   entering_menu stores READ count2 (`= count2` instead of `= 0` — semantically equal
+   with count2 init'd 0 at entry; m2c would print `= 0`) to extend count2's web into
+   the B/0xC00 arms WITHOUT touching the zero-temp: count2 then interferes with
+   B-pair (forces r25-style pick) AND the +254/+38c/+390 sites read count2's web
+   (4-5 of the 5 zero-web sites fixed); the +3c/+44 pair stays unfused (1 li extra
+   vs target). Risk: count2's longer range may join sweep-2/3 (pops before locals)
+   — dump first, then build.
+3. A-col +94 extra-mr (`mr r23,r0`): ours materializes the nc-walk base into a
+   callee-save at +94 where target computes in r0 until +a0. Untested.
