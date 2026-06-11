@@ -1,0 +1,311 @@
+# mnDiagram_InputProc register-allocation campaign — state brief
+
+## Current state (2026-06-10, iteration 22)
+- Worktree: `.claude/worktrees/mndiagram-802427B4-investigation`, branch `claude/mndiagram-802427B4-investigation`
+- **Match: 95.4%** (95.36 precise). Commit stack (do not rebase away):
+  1. `a152f6c58` init count at decl (94.53→94.6)
+  2. `b3a4ecedd` split col/row_result into per-region locals (body-identical, target-like webs; A-row now r0 = target)
+  3. `1e3a4a595` reorder split decls (94.6→94.7; nav webs snapped to r26/r26)
+  4. `ac4884952` split steps into per-region locals (body-identical)
+  5. `d1004e97a` split row into per-region locals (body-identical)
+  6. `a280837d4` clang-format pass (whitespace only)
+  7. `9802e44e6` restore (u8) found casts in up_n/dn_n/up_f/dn_f find loops
+  8. `26271d5d1` restore (u8) compare casts in lf_f/rt_f (94.7→95.0)
+  9. `ec552699b` restore (u8) found compare casts in up_n/dn_n/rt_n (95.0→95.2)
+  10. `ed09c6e1f` clang-format pass (whitespace only)
+  11. `999489a09` Merge branch master into worktree
+  12. `0372241ee` hoist entering_menu=0 before d=user_data in B-button arm (95.2→95.4)
+- Structural mnemonic diff: **1 delta** — `+168 lhzu` (target load-with-update, ours `lhz + addi`).
+  All other diffs are register-renaming only.
+
+## π (target registers per web; force-phys-fingerprint verified)
+- count-web (ig114, the 0xC00 fighter-loop counter + buttons-hi zero CSE; sites +3c/+44): **r25** (ours r27)
+- B-col / B-row (0x10 fighter arm, sites +188/+1ec clusters; igs 38/37): **r27 / r26** (ours r26/r25)
+- nav webs (+9bc/+b98 clusters; igs 41/39): r26/r26 ✓ matched
+- A-col (pool, +c4): r24 (ours r27, open); A-row (+124): r0 ✓ matched
+- proc(32)=r24 ✓; identities 50/157/162/159 = r31-r28 ✓
+
+## The allocator model (all measured, this worktree's dumps)
+- SELECT order = descending ig_idx within sweeps (3 exceptions/365 = degree-phase front 44,153,158 + sweep boundary).
+- Pick: volatiles low-first; reuse dispensed callee-saves ascending; fresh r31-down. Surrogate `tiebreak` validates G1 100%; what-if + order-solve scripts in iteration history.
+- 12/720 tail orders reproduce π; ALL require ig(B-col) > ig(B-row) > ig(count-web).
+
+## The numbering map (measured; the campaign's deepest result)
+1. params r32+; **locals = REVERSE declaration order** (~r33-56) — decl position is a working renumbering knob (got the +0.1 nav-web fix).
+2. statement temps ~r57-110 (emission order).
+3. **IRO-pass temps r111+**: the IRO-exit promotion pass (between EvaluateConditionals and RebuildCondExpressions; see /tmp/retro8/iro-57 vs iro-58) rewrites **loop-carried variables** to per-loop @-temps (@1010=count → r114). Spelling-immune (for/while/++/accumulator probes T1-T3 all inert).
+- ⟹ ig(B-col)>ig(count) is unreachable in the CURRENT IRO temp structure: pass temps always outrank homes; loop @-temps number in flowgraph order (earlier loops lower).
+
+## Open question (iteration-10 entry point)
+Target emitted the identical body from DIFFERENT IRO internals (different temp counts/numbering upstream). Prime suspect: the m2c goto-soup dual-pointer walks (nc/nr/fc/fr loops, lines ~1013-1158: i/ptr/ptr2 triple-walk = 3 promoted vars per loop). An index-only original spelling would change the @-temp sequence before count's @1010, shifting select order. The required-order constraint (B-pair first) is relative to OUR interference graph — a reshaped graph changes the requirement too. Oracle stands: force-iter-first slot-6 → count r25 (real allocator).
+
+## Tool recipes
+- Meter: dump `melee-agent debug dump local src/melee/mn/mndiagram.c --output X --no-cache-sync`; find InputProc's SIMPLIFY/COLORGRAPH (class=0, biggest n_nodes); count-web = the 0xa row in the top-10.
+- Web fingerprint: `--force-phys "IG:14,IG2:15" --force-phys-fn mnDiagram_InputProc --diff` → ours-side lines with r14/r15 = exact web sites.
+- π extraction: checkdiff `--format json` → target_asm/current_asm → difflib align (skeleton: mnemonic + CS-regs wildcarded) → per-position reg pairs.
+- Order solve: tiebreak module `predict_assignments(ig, order=...)` over tail permutations (iteration-7 script).
+- Retro IRO ledger: `melee-agent debug retro dump src/melee/mn/mndiagram.c -f mnDiagram_InputProc -O /tmp/retro8` (62 phase dumps + iro-summary.txt node ledger).
+- Body gate: checkdiff opcode similarity must stay ≥ 88.1 / line delta ≤ 1 / hunks ≤ 42 / match ≥ 95.4%.
+
+## Don'ts (proven dead ends)
+- force-interfere on count (edges exist), add-interferer what-ifs, decl-init renumbering of count (DCE'd), surviving-init (no sink, body breaks), input-decl reorder (body breaks), B-pair dead decl-inits (body breaks, no renumber), loop spelling probes T1-T3 (IRO-normalized).
+
+## Iteration-10 addenda (real-allocator oracle + reshape verdicts)
+- REAL-ALLOCATOR π-ORDER TEST: force-iter-first "50,157,162,159,38,37,114,41,39,32" executes the
+  12/720 winning order EXACTLY (clique lands 38=r27, 37=r26, 114=r25, 41=r26, 39=r26, 32=r24) but
+  fixes ONLY count's 2 sites (+3c/+44), breaks 0: 708→706 mismatch lines. ⟹ B-pair π readings
+  (r27/r26) were skew artifacts — their sites mismatch under BOTH colorings; clique order is NOT
+  the remaining gap. The ~706-line residual is pool/web-structure (upstream IRO).
+- WALK-VAR SPLIT (i/ptr/ptr2 per region, nr/fc/fr): FAILS body gate (opcode 80.6, Δ5, hunks 35)
+  — unlike col_result, the shared walk locals are body-faithful. Do NOT retry.
+- Next entry point: the pool residual's per-site target regs need a clean re-extraction
+  (difflib path, avoiding the skew regions) before any further restructuring; and the spill-front
+  membership idea (B-pair degrees vs k=29; front members are degree 47/33/14/13) remains untested.
+
+## Iteration-11: the global map (no source edits)
+- Skew-aware alignment: 767/777 instrs aligned, ~28 skew-noise, **172 confident reg-mismatch sites**
+  (the "706 lines" was diff inflation). Artifacts: /tmp/map11.pkl, /tmp/webmap11.pkl.
+- HISTOGRAM (attributed 139 operand-sites; 65 sites unattributed=pcode-align gaps, 6 self-check fails):
+  CONSISTENT-RENAME 45 webs/129 sites (93%) | SPLIT 2 webs/10 sites (ig94, ig95: r23-vs-r26).
+- Top webs: ig114(count) r27→r25 ×7; ig91 r25→r27 ×6; ig34 r23→r25 ×6; ig33 r23→r26 ×6;
+  ig107 r24→r23 ×5; ig105 r24→r28 ×5. All pool scratch temps in the nav/walk regions.
+- Greedy global-order reachability (π = 45 consistent + preserve rest): 318/370 placed,
+  **19 π-webs stuck** — not a proof of unreachability (greedy incomplete) but the stuck direction
+  is uniform: ours-LOWER-than-target (r23→r25/26/28, r24→r25/28, r25→r27...). Signature: target's
+  allocator had MORE webs holding low pool regs at those select moments ⟹ web COUNT/composition
+  differs upstream ⟹ more m2c-merged variables need per-region splitting.
+- WORKLIST (gated per-var, col_result-style; walk i/ptr/ptr2 already FAILED the gate):
+  split candidates shared across 8+ nav regions: steps, cur, found, col, row, new_var.
+  Each split: body gate must PASS; watch pool web count + the stuck-19 list shrink.
+
+## Iteration-12: split worklist executed
+- steps: PASS (4 regions) committed 94.7=. cur: FAIL gate (opcode 80.0, Δ5). found: FAIL (Δ7;
+  region-8 tail at 1710 gotcha fixed but still Δ7). col: FAIL (opcode 80.7). row: PASS (6 regions)
+  committed 94.7=. new_var: unsplittable (single def at 1466 feeds all reads).
+- NEITHER inflection fired: count still r27/slot4 (front stayed 4 members); no cascade fixes.
+- Verdict: the splittable m2c-merges are exhausted (col_result/row_result/steps/row = committed;
+  cur/found/col/i/ptr/ptr2 are body-relevant merges = the ORIGINAL shared them). Pool-pressure
+  hypothesis NOT yet confirmed by yield — the committed splits were match-neutral. The stuck-19
+  under-pressure signature must come from something else: remaining candidates = the unattributed
+  65 sites' webs, the A-col pool web (r27 vs target r24), and the front-membership/degree question.
+
+## Iteration-13: front-membership experiment (force-interfere #549, revived)
+- Front rule: not pure degree (peel sim reproduces the SET not the ORDER; G2 remains open).
+- Candidates: ours recomputes &mn_804A04F0.hovered_selection SIX times (pre-color temps
+  r129-r151, pool r24/r25); target colors ALL instances r27. Walk-base adds = the r26 family.
+- Exp-1 (129 + 32 high-ig edges): ig129 JOINED the front region (slot 4, fresh r27) — induction WORKS.
+- Exp-2 (+129=114 edge, +ig91): count denied r27 -> r26 (one register toward r25); ig91 (low ig)
+  popped after count (numbering); score 708->705 (-3 sites only).
+- Exp-3 (129+132 both, 67 edges): config silently didn't apply (suspect edge-count cap) — baseline.
+- VERDICT: front-join + count-denial mechanisms PROVEN, but score stays ~flat: the target's
+  r27-sites are six SHORT pool webs that all happen to pick r27 (not one long web) — the uniform
+  ours-lower pool direction is most plausibly DOWNSTREAM of count popping later in target
+  (dispensed-evolution channel: count@r25 blocks r25 for ~50 interferers -> pool reuses r26/r27/r28).
+  Iteration-6's force-phys 114:25 didn't replicate it because force-phys keeps count's SLOT;
+  the pool needs count's POP to come after two pool dispenses. Next vehicle: force count's POP
+  later (force-iter-first with two pool igs >114 ahead of it, e.g. 129,132 prefix) and SCORE —
+  if the pool follows, the entire residual is one select-position; then find count's natural
+  later-pop in C (its 0xa/coalesce-root status exempts it from pure numbering — the rep/ROOT
+  flag question from iteration 11 is the remaining unknown).
+
+## Iteration-14: surrogate full-pi order search — ORDER CHANNEL EXHAUSTED
+- pi rebuilt on current cast (/tmp/pi14.pkl): 45 webs/129 sites.
+- count-slide alone: best +4 slots = 5/45 webs (17 sites), 3 regressions. Dispensed-evolution-via-
+  count-alone REFUTED.
+- Hill-climb (18 moved igs): max 26/45 webs (68/129 sites) WITH 13 regressions — no select order
+  of OUR graph reproduces pi. Unreached 19 webs (/tmp/best14.pkl): NO uniform direction (10 want-
+  higher, 9 want-lower), includes volatile-class wants (ig141 r4->r5 arg-reg, ig152 r0->r28) ⟹
+  the TARGET'S INTERFERENCE GRAPH / WEB EXTENTS DIFFER. Composition, not order.
+- Confirming build: INCONCLUSIVE — 365-element force-iter-first vector silently not applied
+  (same silent-cap class as iter-13 exp-3) → issue #550 filed (apply-or-die + echo count).
+- VERDICT: residual = composition divergence distributed over ~19+ pool webs (walk/nav temps,
+  arg-setup temps). The original's webs have different EXTENTS (longer/shorter lives, different
+  CSE) that no reordering of ours matches. Next vehicle must change the GRAPH: per-web extent
+  diagnosis on the top unreached webs (ig34 r23->r25 x6, ig105 r24->r28 x5, ig107 r24->r23 x5,
+  ig82/83/84/99...) — what value each is, where its live range starts/ends vs what pi implies.
+
+## Iteration-15: TARGET WEB RECONSTRUCTOR + extent-delta table
+- Tool: tools/target_web_reconstructor.py (CFG from target asm + reaching-defs + union-find webs).
+  Usage: python3 tools/target_web_reconstructor.py <checkdiff.json>. Gates: 4 identity webs OK;
+  target callee-save webs = 105 vs ours ~95 (target MORE populated, as pool-pressure predicted).
+- HEADLINE: target count-web = ONE FUSED r25 web, 15 sites, +3c..+b60 (zero + name-arm + fighter-
+  nav) where ours is split (IRO @-temp ig114 + home-anchored name web). Candidate body-identical
+  edit: move `count = 0;` (line 1220) ABOVE the is_name_mode branch (dead on name path -> same
+  emitted code, but the IR web fuses through the phi) — NOT yet tested.
+- Extent-delta of the 19: 8 = same-extent pure renames (downstream cascade of the true deltas);
+  true composition deltas concentrate in fighter-nav +98c..+bf0: ig97/ig53/ig52/ig131/ig66 = ours
+  single-site scratch webs where target has 3-4-site webs spanning 0x30-0x60 more (starts earlier,
+  ends later, FUSED) — original kept cursor/found-family values LIVE LONGER (cached vs re-derived).
+  Medium: ig106/ig99/ig54/ig123/ig117/ig98 small end-shifts, same direction.
+- RANKED HYPOTHESES: (1) count = 0 hoist (15 tgt sites + unlocks the r25 chain + likely flips the
+  8 renames downstream); (2) fighter-nav caching: one local holding the re-derived cursor value per
+  arm (ig97/53/52 cluster ~17 sites); (3) same pattern, name-nav (ig99/106 ~8 sites).
+
+## Iteration-16: H1/H2 verdicts
+- Reconstructor committed (tools/target_web_reconstructor.py).
+- H1 (count=0 hoist above is_name_mode branch): BOTH placements FAIL body gate (opcode 79.3,
+  delta 7-8/hunks) — MWCC does not cleanly DCE the hoisted dead zero; the count-web fusion the
+  target shows cannot be produced by a dead hoisted store. The fusion mechanism remains unknown
+  (target: ONE r25 web +3c..+b60; candidates left: different is_name_mode branch shape, or the
+  fusion is an artifact of reconstructor unioning through phi paths — VERIFY with a finer-grain
+  read before further edits).
+- H2 recon: the ig97/53/52 fighter-nav delta region (+98c..+a0c) is a SKEW block — same instruction
+  multiset, different ORDER; source lead-ins are m2c-inconsistent (up_f/lf_f found-first vs
+  dn_f/rt_f ptr-first at lines 1487/1527/1601/1641) BUT the skew sits in dn_f (already ptr-first)
+  ⟹ the order difference is allocation-driven scheduling, not statement order. The cached-local
+  H2 design needs the per-arm value identity read (which value target holds across +98c..+9ec in
+  r27 = ptr=sorted+cur held across the walk loop; ours rematerializes via mr r27,r23+adds).
+  NEXT: H2 edit = keep ptr live across the dn_f walk (use ptr instead of re-deriving from cur in
+  the post-loop sites); gate strictly. H3 untested.
+
+## Iteration-17: fusion OVERSTATED + skew census = the (u8)-cast worklist
+- STEP A: count mega-fusion (+3c..+b60) = reconstructor ARTIFACT — chain links li r25,1
+  (is_name_mode store +388) into count compares (+8b4) with no GetNameCount def in web =
+  CFG leak (false fallthrough). True target count-read web ≈ +848..+b60; zero web separate.
+  Reconstructor needs CFG fix before further fusion claims (blr/return + branch-target audit).
+- STEP B: dn_f `col_result4 = *ptr` FAILED (lbz vs target lbzx, opcode 72.3) — target's
+  post-loop read IS sorted[cur]; reverted.
+- STEP C CENSUS (the real find): skew blocks are DIFF-MULTISET, dominated by ~9 clrlwi (u8
+  truncations) PRESENT IN TARGET, MISSING IN OURS (+5e8 x2, +6f4 x2, +7b0 x2, +8f0, +9c0 x2,
+  +ad8, +ba8) balanced by ours-extra addi/mr (+48c,+518,+5f4,+684,+6e4,+79c,+7b4) and one
+  lhzu-vs-addi+lhz at +168 (update-form load = pointer-walk spelling). Line delta 8 = target
+  has ~8 MORE instructions = mostly these casts. m2c DROPPED (u8) casts the original had
+  (some arms kept `found = (u8) found;` — the pattern exists in source at some sites already).
+- ITERATION-18 WORKLIST: per missing-clrlwi site, identify the variable/arm (nav-loop found/cur
+  truncations) and add the (u8) cast; convergence gate = clrlwi appears at the aligned offset +
+  hunks/line-delta shrink + match% up. Then the +168 lhzu spelling (lhzu = `*++p`-family form).
+
+## Iteration-18: CAST RESTORATION — 94.7 -> 95.0, opcode 81.0 -> 88.2, delta 8 -> 3
+- Group 1 (committed): GetNameText((u8) found) + hit-branch `found = (u8) found;` in up_n/dn_n
+  + hit-branch casts in up_f/dn_f (delta 8->5, opcode 81.8).
+- Group 2 (committed): compare-site `cur != (u8) found` in lf_f/rt_f mirroring lf_n's surviving
+  spelling (delta 5->3, opcode 88.2 (+6.4!), match 95.0). First match% movement since 94.53->94.7.
+- REMAINING structural deltas (census on /tmp/cur18.json): ~8 clrlwi at +52c/+5e8x2/+6f4/+7b0x2/
+  +9c0/+ba8 PAIRED with ours-extra addi (+524/+5e0/+5f8/+688/+6e8/+7a4/+7bc) = the up_n/dn_n WALK
+  regions: ours derives via addi (ptr-arithmetic) where target truncates via clrlwi — a value-flow
+  difference in the walk-adjacent derivations, not a simple dropped cast. Plus +168 lhzu (update-
+  form load, untried) and +250/+25c stb position swap.
+- Reconstructor CFG-fix still on worklist (false-fallthrough leak, iteration-17).
+
+## Iteration-19: structural closure to delta=1 + re-census
+- up_n/dn_n/rt_n compare casts `cur != (u8) found` (mirroring lf_n) committed: 95.0->95.2,
+  line delta 3->1, opcode 88.1. The only remaining structural delta = +168 lhzu (target
+  load-with-update of the mn_804A04F0 base; needs an advancing-pointer spelling; no natural
+  candidate found — OPEN) and the +250/+25c stb position swap (untouched).
+- RE-CENSUS: 176 confident register-mismatch sites (was 172 — restored instructions add register-
+  wrong-but-structure-right sites; fuzzy match rewards the alignment: 95.2). Top renames:
+  r27->r24 x21, r25->r24 x16, r27->r25 x15, r24->r23 x15, r28->r24 x13.
+- NEW-CAST ORDER SEARCH: natural 0/45; hill-climb max 28/45 webs (73/130 sites) with 17
+  regressions, 24 moved igs — order channel STILL insufficient post-closure. The register
+  residual remains extent/composition-driven (plus the open lhzu + stb items).
+- Iteration-20 decision input: remaining-extents diagnosis on the new top rename webs; the
+  lhzu spelling hunt; reconstructor CFG fix for trustworthy target extents.
+
+## Iteration-20: RECONSTRUCTOR VALIDATED — iteration-17 "artifact" verdict REVERSED
+- Instrumented union events for the +3c..+b60 r25 web: the links are LEGITIMATE phi-webs:
+  (a) +38c `stb r25,68(r31)` = the `is_name_mode = (==0) ? 1 : 0` ternary — its 0-arm REUSES
+  the +3c zero (defs {+388 li 1, +3c li 0} feed one use = real multi-def web);
+  (b) {+3c, +85c} = loop init+backedge phi (the +84x-+b60 nav count/steps chain inits from the
+  SAME +3c zero — no separate li in target).
+  Hand-trace with within-block kills over the same CFG confirms no false path; CFG is sound.
+  ⟹ TARGET REALLY HAS the mega-fused r25 zero-web (buttons-hi + ternary-0 + nav-count chain).
+  Ours has the same FUSION FAMILY (ig114 = the 0xa coalesce-ROOT absorbing zeros) but colored
+  r27 (slot 4) — the fusion is real in BOTH compiles; the difference is COLOR/POP-POSITION of
+  the SAME-SHAPED web after all, PLUS whatever extent differences remain in the nav chain.
+- No reconstructor code change needed: acceptance criteria reinterpreted (the +388 link SHOULD
+  appear). The iteration-15 finding stands: ONE r25 web +3c..+b60, 15 sites.
+- IMPLICATION for the endgame: ours-ig114 vs target-r25-megaweb extents must be compared
+  precisely next (does OUR 0xa web cover the +84x-+b60 chain sites the target's does? If ours
+  covers fewer — the nav count reads live in OTHER our-webs — that's the true extent delta;
+  if same, it's purely the slot-4-vs-later pop again, now with the +85c init-sharing as the
+  C-shape clue: target's nav-loop counters INIT FROM the shared zero rather than fresh li's).
+- Iteration-19 leftovers still open: +168 lhzu, +250 stb, extent table regen (STEP B not
+  completed this round — context), top-rename extent classification pending.
+
+## Iteration-21: site-coverage diff + the 6-site force proof
+- STEP A table: all 15 target-megaweb sites align to ours' r27 instructions; attribution SAID
+  ig118 everywhere — but the FORCE-PHYS PROBE (118:25) corrects it: fixed exactly 6 sites
+  (+3c/+44 zero pair, +a74/+a98/+b3c/+b60 = input&4/&8 count reads), broke 0, unforced diff
+  632 -> 626 rows. The +388 ternary and +848..+97c (input&1/&2 reads) did NOT flip ⟹
+  OURS SPLITS THE TARGET MEGAWEB IN TWO: ig118 = {zero, input&4/8 chain}; a second r27-colored
+  web owns {ternary, input&1/2 chain}. (The earlier two-web suspicion — name-arm vs fighter —
+  was wrong in detail; the split is between the input&1/2 and input&4/8 read clusters.)
+- ANSWER to STEP A: PARTIAL coverage — the binary question's answer is NO for the input&1/2
+  chain, YES for input&4/8.
+- The remaining C-question, precisely: what makes target's input&1/2 count-read cluster (and
+  the is_name_mode ternary constant) chain into the SAME web as the zero/input&4-8 cluster,
+  where ours separates them. Target evidence: +85c addi r25,r25,1 inside input&1/2 = a +1 temp
+  (likely the `col4 + 1` of `count > (col4 + 1)`) sharing the web — i.e. target's bound-arithmetic
+  temps chain THROUGH the count value where ours gives them fresh webs.
+- ig118->r25 via slot move stays worth exactly +6 sites until the second cluster fuses.
+- Probe was diagnostic (forced) — no commit. Open: +168 lhzu, +250 stb, top-rename extent
+  classification, force-list cap #550.
+
+## Iteration-22: stb/lhzu/cluster-2 investigation (95.2→95.4)
+
+### Baseline verification
+Confirmed: 13 commits on the stack (12 campaign commits + 1 master merge at #11), match
+95.2% at session start. Line delta = 1 (the +168 lhzu). Only CAMPAIGN-STATE.md untracked.
+Checkdiff confirmed: sole structural mnemonic difference is `lhzu` (target-only).
+
+### TASK 3: stb/lwz position swap in B-button arm — COMMITTED (+0.2%)
+Target emits `stb r0,17(r29)` (entering_menu=0) BEFORE `lwz rX,0(gobj)` (Diagram* load).
+Ours had the store AFTER the load (inside the Diagram* block). Fix: moved
+`mn_804A04F0.entering_menu = 0;` outside the `{Diagram *d = ...}` inner block to just before it
+(C89 requires declarations first in a block; the outer placement preserves legality).
+Result: 95.2→95.4%, hunks 43→42. Committed `0372241ee`.
+
+### TASK 1: +168 lhzu — NOT VIABLE (do NOT retry)
+The `lhzu` at +168 is `lhzu r3,2(r29)` — load hovered_selection with pre-increment of r29 from
+&mn_804A04F0 to &mn_804A04F0.hovered_selection. In target r29 STAYS as the struct-base pointer
+and advances by 2 once; in ours r29 is repurposed as the `ptr` (sorted+i walk) variable.
+Any pointer-walk C spelling (e.g. `u16 *mf_sel = (u16*)&mn_804A04F0; ... *++mf_sel`) would:
+- Reduce our instruction count 784→783 (the addi+lhz become lhzu, eliminating 1 instruction);
+- Target has 785 instructions; this WIDENS the delta from 1→2 (WORSE);
+- Additionally, C89/goto scope complications in the fc/fr arm (fc_test, fc_outer labels) block
+  a clean declaration for the pointer variable.
+Root cause: `addi r24,r29,2` exists because in our code r29 is clobbered by the ptr walk (ours
+needs to compute `mn_804A04F0 + 2` from scratch). There is NO C source edit that produces lhzu
+while also keeping instruction count ≥ 785. DEAD END — do not retry.
+
+### TASK 2: cluster-2 fusion hunt — 3 attempts, all neutral (do NOT retry same approach)
+Target has ONE r25 mega-web (15 sites) covering both cluster-1 {zero pair +3c/+44, input&4/8
+count reads +a74/+a98/+b3c/+b60} and cluster-2 {ternary +388/+38c, input&1/2 reads
++848/+85c/+890/+8b4/+958/+97c}. Ours separates these as two r27-colored webs (force-phys
+118:25 fixed cluster-1 in the diagnostic probe but left cluster-2 unfixed).
+
+Three neutral attempts:
+1. Ternary using count as operand: `data->is_name_mode = count ? 0 : 1` (reorder 0/1 arms to
+   use the zero-web variable) — neutral, reverted.
+2. Fighter count loop using count for ternary's zero: various spellings to share the zero value
+   — neutral, reverted.
+3. Direct zeros in for-loop to chain count's web — neutral, reverted.
+
+Root cause: the fusion is an IRO-level optimization. Target's IRO reuses the `buttons.hi = 0`
+zero (from the `u64` assignment in `Menu_GetAllInputs()` zero-extending a `u32` result) as the
+shared zero for BOTH the count-web AND the ternary+input&1/2 cluster, creating one mega-web.
+Our separate IRO @-temps (IRO-exit promotion pass creates distinct @1010-family temps for each
+loop-carried zero) prevent this fusion. No C source re-spelling changes the @-temp structure.
+The mechanism that forces them to share is UPSTREAM of the C-level declaration positions.
+
+REMAINING STRUCTURAL DELTA SUMMARY:
+- `+168 lhzu`: DEAD END (would worsen delta, see above)
+- All other diffs: register allocation only (cluster-1 worth +6 sites via slot fix, cluster-2
+  worth ~9 sites but requires interference-graph composition change not achievable from C)
+- Order channel: exhausted (iter-14 hill-climb: max 28/45 webs with 17 regressions)
+
+### Open items for iteration-23+
+1. The second ig (cluster-2 web = {ternary, input&1/2 reads}) — what is its ig number? A
+   force-phys probe with ig118:25 PLUS the cluster-2 web: (cluster2_ig):25 would confirm the
+   slot-position delta (if it's merely color position, not extent — the merge is solid per
+   iter-20 reconstructor reverification). If cluster-2's web is extent-fused in target vs split
+   in ours for a DIFFERENT reason than the zero CSE, that's a new angle.
+2. Reconstructor CFG fix (false-fallthrough audit) — iteration-17 item, still open.
+3. Top-rename extent classification on the remaining 19 stuck webs (iter-14 residual): the true
+   extent-delta webs in the fighter-nav +98c..+bf0 region (ig97/53/52/131/66) — cursors and
+   found-family values held live longer in target than ours. Cached-local spellings in dn_f arm
+   (iter-16 H2 finding: target keeps ptr live across dn_f walk, ours rematerializes from cur)
+   still untested with the proper guarded C-spelling.
+
+### Body gate for iteration-23+
+opcode similarity ≥ 88.1 (current), line delta ≤ 1, hunks ≤ 42, match ≥ 95.4%.
