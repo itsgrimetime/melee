@@ -4106,3 +4106,16 @@ toggled edge changes whether the node's preferred register is blocked.
   the narrative constants are not).
 - **T15 negative controls:** shuffled/unreachable targets must be confirmed to toggle a CONTENDED
   register under the dispense rule, not merely differ in a precolor value.
+
+**From the codex closure re-review (verdict on rev 2; Blocker-2 residual — BINDING for T11/T12):**
+T11's win-recovery confirmation as written (checking the alias-attributed node is PRESENT in the
+frozen post-win IG, plan lines ~2886-2905) is INSUFFICIENT for spec §3 (spec lines 393-412). The
+required confirmation per fixture is the full predicted-vs-actual check:
+1. load the frozen POST-win IG artifact;
+2. run `predict_assignments` (G1) over it;
+3. assert the surrogate's predicted assignment vector matches the actual target assignments for
+   EVERY contested register ("present + matches target"), not merely node presence.
+The calibration doc's proposal-confirmation-rate metric counts ONLY fixtures passing this full
+check, and T12 MUST NOT write `GATE: PASS` unless both win-recovery fixtures pass it. (A
+`gate.re_extract_and_classify`-style helper call satisfies this; implement it in T11 even though
+gate.py's live path is T8's deliverable — the frozen-artifact variant needs no mwcc invocation.)
