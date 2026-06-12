@@ -17,7 +17,7 @@ Complete all 9 functions in `src/melee/mn/mndiagram3.c` to 100%.
 | fn_80246F0C | 0x20 | **100%** | matched (PROTECTED) |
 | mnDiagram3_80246F2C | 0xDC | **100%** | matched (PROTECTED) |
 | **mnDiagram3_80247008** | 0x144 (324B) | **100%** | MATCHED (iteration 3, data linking f66cc758a) |
-| **mnDiagram3_8024714C** | 0x378 (888B) | **86.64%** | OPEN — main target. See Map 2. |
+| **mnDiagram3_8024714C** | 0x378 (888B) | **90.23%** | OPEN — coloring-dominated (iter-4: decl-order axis exhausted). See Map 2 + Iteration 4. |
 | mnDiagram3_80245BA4 | 0x618 (1560B) | 90.56% | OPEN — not yet mapped (driver task) |
 | fn_802461BC | 0xB84 (2948B) | 98.42% | OPEN — big-body register endgame, do LAST |
 
@@ -179,6 +179,32 @@ Exemplars (fully-linked TUs, `metadata.complete` in report.json, .data fuzzy 100
 
 ---
 
-## Driver-2 Entries
+## Iteration 4 (driver 2) — 8024714C relabel endgame: decl-order toolkit exhausted
 
-(Reserved — driver 2 to append 80245BA4 map and any fn_802461BC notes here.)
+**Result: 89.7 → 90.23** | opcode 92.3 (unchanged) | line-edit 73 → 55 | register-only diff lines 46 → 27 | hunks 36 → 28 | Δ0 | frame byte-exact 152. Commit stack (both gate-passed individually, 11/11 protected checks; .data/.sdata hold 100):
+- `2e9c415e8` popup-block (l465) decl swap `popup` ↔ `popup_jobj` (declare `popup_jobj` first): 89.72→90.10 (+0.38). Fixed the region-1 `popup_jobj` relabel (was the 17-vote r26→r31 spread; now byte-matches r26). Found by `debug mutate decl-orders --scope ...l465c4 --strategy all`.
+- `c4b2b04d4` function-top `int i` promoted to position 0: 90.10→90.23 (+0.14). Composes with the popup swap; cut region-1 callee-save family lines. (`demote data` reaches the same 90.23 — same canonical order.)
+
+### THE ONE QUESTION — ANSWERED (oracle: exhaustive decl-order across ALL scopes)
+
+**The relabel endgame does NOT fully land via the band/decl-order toolkit, and the f30/f31 swap does NOT fix the fneg/bl transposition for free.** Decisive evidence — `debug mutate decl-orders --strategy all` run on EVERY decl scope, both substrates:
+- function-top (8 locals): only `promote i`/`demote data` = +0.14%. **`swap row_spacing <-> neg_spacing` = WORSE (-0.05%) on both substrates** — the float relabel is NOT decl-reachable and the one move touching float decl order REGRESSES.
+- popup-block l465 (2 locals): `swap` = +0.38% (committed).
+- loop-block l495 (4 locals, `d/scroll/stat_idx/base`): fully INERT.
+- l517 (`fi/text`): dependency-blocked (text depends on fi). l524 (`val/type_idx/limit`, 3 locals): INERT.
+
+**fneg/bl transposition mechanism (CONFIRMED by inspection, +254 window):** target `fsubs f30,f0,f30` (row_spacing → CALLEE-SAVE f30, survives the lb_8000B1CC call) then `bl` then `fneg f29,f30` POST-call. Ours `fsubs f0,f0,f31` (row_spacing region-2 value → VOLATILE f0, dead after the immediately-following fneg) so `fneg f29,f0` must precede the call. The transposition is DIRECTLY coupled to row_spacing's region-2 value coloring to f30 vs f0. The f30↔f31 swap WOULD close it — but it is unreachable by decl order (regresses), so the "free fix" hypothesis is **REFUTED for the decl-order/per-region-local toolkit.** The comma form `-(0,row_spacing)` (iter-2 banked) reproduces the EXACT target window but costs +2 instructions — the target shape exists, the zero-cost spelling does not within this toolkit.
+
+### Residual @ 90.23 (27 register-only lines + the float cluster)
+
+All structural levers (Δ1, comparison-form, load-interleave, frame, popup-decl, counter-band) are now LANDED. Remaining residual is coloring-dominated:
+1. **Region-1 GPR family (+038..+1f4):** gobj↔r29/r27, archive↔r27/r29, data/row1 coloring. The popup_jobj spread is FIXED; what remains is the gobj/archive/data/row0/row1 callee-save permutation. Not decl-reachable (all scopes enumerated). Permuter-territory or deeper IG intervention.
+2. **f30/f31 swap (+0e0/+104/+17c/+194/+1cc/+1e4/+228) + fneg/bl (+254..+260) + float-setup scheduling (+288..+2c4):** the float-coloring wall. row_spacing wants callee-save f30 throughout; ours inverts f30/f31 at the first GetTranslationY pair. NOT decl-reachable; comma-form = +2 cost. THE remaining high-line-count cluster.
+3. **Region-2 GPR (+204/+208/+2e8/+2c4/+318):** scroll/row0/stat_idx coloring + the `d`-copy walker (target `mr r30,r31` keeps a row_labels walking-ptr in r30; ours in r28 — both walk, pure coloring).
+4. **sp48@80 vs 72 (+258 + the +288/+294/+2a0/+2ac stack reads):** 8B frame-layout transposition inside the byte-exact 152 frame; iteration-2 banked as "pure byte accounting, graph-inert" + entangled with the float-setup scheduling in that cluster (necessary-not-sufficient there). NOT attempted (low EV, build budget).
+
+**Verdict:** 8024714C is now a COLORING-DOMINATED endgame (27 register lines, no structural lever left in the decl-order axis). The next driver should NOT re-run decl-order (exhaustive, both substrates). Real levers left: (a) tuned remote permuter on the region-1/region-2 GPR families + the f30/f31 float wall; (b) deeper `debug inspect tiebreak`/`intervene` IG what-ifs to find a non-decl source nudge for row_spacing→f30. Both are higher-cost than this iteration's budget allowed.
+
+## Driver-2 Entries (80245BA4 / fn_802461BC)
+
+(80245BA4 mapping is the next driver task — not started this iteration; the iteration was spent answering the 8024714C relabel question per the prompt.)
