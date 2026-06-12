@@ -18,7 +18,7 @@ Complete all 9 functions in `src/melee/mn/mndiagram3.c` to 100%.
 | mnDiagram3_80246F2C | 0xDC | **100%** | matched (PROTECTED) |
 | **mnDiagram3_80247008** | 0x144 (324B) | **100%** | MATCHED (iteration 3, data linking f66cc758a) |
 | **mnDiagram3_8024714C** | 0x378 (888B) | **90.23%** | OPEN — coloring-dominated (iter-4: decl-order axis exhausted). See Map 2 + Iteration 4. |
-| mnDiagram3_80245BA4 | 0x618 (1560B) | 90.56% | OPEN — not yet mapped (driver task) |
+| mnDiagram3_80245BA4 | 0x618 (1560B) | 90.53% | OPEN — MAPPED (iteration 5). See Map 3: Δ1 fully attributed, constant bug + 5 transferring 714C levers. |
 | fn_802461BC | 0xB84 (2948B) | 98.42% | OPEN — big-body register endgame, do LAST |
 
 Driver 1 mapped 80247008 + 8024714C (this iteration). NO builds beyond baseline diffs (3 checkdiff runs total: 1 build + reused diffs).
@@ -205,6 +205,61 @@ All structural levers (Δ1, comparison-form, load-interleave, frame, popup-decl,
 
 **Verdict:** 8024714C is now a COLORING-DOMINATED endgame (27 register lines, no structural lever left in the decl-order axis). The next driver should NOT re-run decl-order (exhaustive, both substrates). Real levers left: (a) tuned remote permuter on the region-1/region-2 GPR families + the f30/f31 float wall; (b) deeper `debug inspect tiebreak`/`intervene` IG what-ifs to find a non-decl source nudge for row_spacing→f30. Both are higher-cost than this iteration's budget allowed.
 
-## Driver-2 Entries (80245BA4 / fn_802461BC)
+---
 
-(80245BA4 mapping is the next driver task — not started this iteration; the iteration was spent answering the 8024714C relabel question per the prompt.)
+## MAP 3 — mnDiagram3_80245BA4 (90.53%) — iteration 5 (driver 2), MAP ONLY (no builds)
+
+**Baseline anchors:** match 90.53 | opcode 88.9 | line-edit 414 / sim -5.9 (cascade artifact, see below) | line Δ **1** (expected 463, current 464 — **ours 1 LONG**) | hunks 14. Classification `inline-boundary-toolchain-artifact` is a **FALSE FLAG**: the "reference calls <self+0xNNN> but current omits" heuristic misreads the bl-display under a 1-instr shift cascade — every call reloc pairs 1:1 in identical order on both sides (verified through the whole diff). The 122 "data/symbol reloc" lines are cascade-inflated offset shifts, NOT a section-anchor ceiling — **no BSS/anchor ceiling to subtract** (all reloc symbols pair exactly; .data linking from f66cc758a holds here).
+
+Source: `src/melee/mn/mndiagram3.c:42-270`. 23 function-top locals + PAD_STACK(8). The 5-row stat-page builder: wrap-compare → row-spacing getters → 5-iteration loop {name-mode title/names | fighter-mode icons} → value-format chain (Time/Distance/Percentage/IconOnly/default) → icon_id tail.
+
+### Δ1 — FULLY ATTRIBUTED (five contributors, net +1)
+
+| Site | Ours | Target | Δ |
+|------|------|--------|---|
+| +0dc | `stw r0,140(r1)` — **spills max_percentage (9999999) to stack** | keeps it in r14 | +1 |
+| +498 | `lwz r0,140(r1)` — reloads the spill before `cmplw` | `cmplw r3,r14` direct | +1 |
+| +0e4/+0e8 | `addi r14,r19,36` + `addi r20,r19,48` — **hoists &PosTable.xC/.x18 into 2 callee-saves** (in-loop `addi r4,r14,0` copies ×3 match target's ×3 in-loop `addi r4,r24,36/48`) | derives per-call from kept base r24 | +2 |
+| (absent) | folds +108 into `lhz r23,108(r15)` | `addi r20,r20,108` hoisted | −1 |
+| +528 | `lhz` direct to callee-save r23, copies coalesced | `lhz r3` + `addis r0,r3,0` + `addi r17,r3,0` (the `int r17 = icon_id` copy persists) | −2 |
+
+Root: ours hoists the two loop-invariant PosTable pointers → 2 extra callee-saves live → 9999999 spills. **One mechanism (materialization-placement) drives +4 of the 5 contributors and most of the r14-r27 relabel cascade.**
+
+### Per-site map (reloc-stripped; S# = structural, downstream noise excluded)
+
+| Site | Offsets | Expected | Current | Mechanism / 714C-catalogue verdict |
+|------|---------|----------|---------|------------------------------------|
+| **S1** | +044..+068 | `li r0,24/21; clrlwi r0,r0,24; add r3,r3,r4; cmpw r3,r0; subf r0,r0,r3` | `li r4,..; add r0,r0,r3; clrlwi r3,r4,24; cmpw r0,r3; subf r0,r3,r0` | **(u8) wrap-compare — 714C lever C FIRES.** Target truncates limit FIRST (self-trunc tell `clrlwi r0,r0`). Source line 76 has `u8 limit` w/o self-trunc; 714C's matched spelling = `int limit` + `limit = (u8) limit;`. Verbatim transfer. |
+| **S2** | +06c..+094 | `lwz r14(jobjs[6]); assert; lwz r15(jobjs[7]); lfs f27,60(r14); assert` — interleaved | both `lwz` hoisted adjacent (+06c/+074) | **jobj re-read — 714C lever B FIRES.** Source line 96 caches `row1 = data->jobjs[7]`; re-read `data->jobjs[7]` inside the GetTranslationY arg (714C: row1 re-read, row0 stays cached). Count-neutral, 1-slot rotation. |
+| **S3** | +0b4..+0fc | one base r24 kept; consts r14=9999999, r15=5999999, r21=99999999 + high-parts r18/r19/r22 kept for re-materialize-at-use; `add r20,r24,r0; addi r20,r20,108` | hoists &PosTable.xC/.x18 (r14/r20); spills 9999999; base r19 dies (overwritten by 99999999); no +108 addi | **Materialization-placement cluster (Δ1 root).** Candidate spellings: (a) inline `(Vec3*)(base+0x24)/(base+0x30)` at the 3 lb_8000B1CC call sites (dispform-L1 inline-base-cast), (b) comma-LICM-defeat `(0, ...)` (PROVEN in this module: 802427B4 a527c0227), (c) per-iteration local. |
+| **S4** | +18c..+198 | `addi r4,r3,0` (GetNameText result → arg) | `mr r4,r3` | **copy-init mr signature FIRES** (law-list item). `char* name_str = GetNameText(entity)` (line 137) — needs the addi-form copy spelling (intermediate-copy with persisting web). 1-2 lines. |
+| **S5** | +2ec vs +2f4 | rank==25 `beq +3f4` = **falls INTO the value-format chain** (whose IsIconOnly arm at +4bc `bne +5e0` then exits to loop tail) | rank==25 `beq +5e4` = jumps STRAIGHT to loop tail (`goto next`, line 172) | **Control-flow/branch-join divergence — NOT in 714C catalogue.** Behavior-equivalent (chain's IsIconOnly arm catches icon-only stats after 4 pure predicate calls) but codegen differs. Source fix: restructure lines 168-191 so rank==25 falls through to the chain (e.g. icon path guarded by `IsIconOnly && (GetAggRank(sp48), sp48[0] != 0x19)`, chain as the else). |
+| **S6** | +0b4/+428 vs +0d0/+420 | `lis 92; addi -29313` = **5999999** (0x5B8D7F) | `lis 93; addi -29313` = **6065535** (0x5C8D7F) | **SOURCE CONSTANT BUG, byte-verified.** Line 109 `max_time = 0x5C8D7F;` must be `0x5B8D7F` (5999999 = 99min 59s 999ms). Semantic correctness fix + 2 sites. The other caps verify: 0x98967F=9999999 ✓, 0x5F5E0FF=99999999 ✓. |
+| **S8** | +51c..+528 | `lhz r3,0(r20); addis r0,r3,0; cmplwi r0,65535; addi r17,r3,0` | `lhz r23,108(r15); cmplwi r23,65535` | **Intermediate-copy persistence**: source lines 235-236 (`u16 icon_id; int r17 = icon_id`) exist but coalesce in ours. Needs the persisting spelling; r17-analog used later at the 6368 call (+5d8 ✓ both). Δ−2 contributor. |
+| **S9** | +0bc/+0d4/+144-158/+554-578 etc. | f30=row_spacing, f31=neg_spacing, f29=f64-magic, f27=divider (f28=icon_x ✓ matches) | f31=row_spacing, f30=neg_spacing, f27=magic, f29=divider | **Float family {f30↔f31}+{f27↔f29} — the 714C float wall EXTENDED.** 714C verdict: not decl-reachable. Free statement-order lever first: reorder lines 106-110 (max_*/divider/neg_spacing assignment order) to mirror target materialization (fsubs, lfd magic, lfs divider, fneg). Else bank as coloring. |
+| **S11** | frame | **240**, locals perfectly packed 40..128 (16+16+16+20+12+8, ZERO pad → no hidden stack object; the 80243434 stack-object idiom does NOT apply) | **264** (Δ24): locals 60..152, 4B gap at 140 = the spill slot, + PAD_STACK(8) + 12B | **Frame/E family.** Expected to largely self-resolve after S3 (spill slot dies); then drop PAD_STACK(8) and re-measure. Do LAST. |
+| S10 | spread | — | — | GPR relabel cascade r14-r27 (~50 lines), downstream of S3/S5/S8. Matched already: r28=value_text, r29=data, r30=i, r31=stat_type. Don't chase. |
+| S12 | +554..+578 | fneg AFTER stw/lfs window ordering near 5ACC | fneg f2 earlier | 714C +288-window analog; downstream of S9 + frame. |
+
+Catalogue items checked and **already correct** (no action): prototype-visibility double-mask (rlwinm. pairs +370-384 shape-match), inline-return (u8) caller-casts (`clrlwi r27,r3,24` after GetRankedName/Fighter ✓ both), lbz operand order in the wrap block, the two-6B98 + converge-at-icon_id control shape.
+
+### Ranked levers for iteration 6 (the FIX session)
+
+1. **S6 constant**: `0x5C8D7F → 0x5B8D7F` (line 109). Mechanically certain, semantic fix, zero risk. Do first, commit alone.
+2. **S3 un-hoist PosTable ptrs** (spelling ladder: inline-base-cast → comma-LICM → per-iter local): frees 2 callee-saves → un-spills 9999999 → fixes Δ1 + 4 sites + releases the relabel cascade. Highest yield.
+3. **S5 rank==25 restructure** (fall into chain): 1-instr site but unlocks the +2d4..+3f4 alignment.
+4. **S1 limit spelling** (714C lever C verbatim: `int limit` + self-trunc).
+5. **S2 row1 re-read** (714C lever B verbatim).
+6. **S8/S4 copy spellings** (intermediate-copy persistence; after the big ones).
+7. **S9 statement-order of lines 104-110**, then re-measure floats; **S11 frame last** (drop PAD_STACK(8) after S3).
+8. After structure: one `decl-orders --strategy all` pass (23 locals ≈ 69 candidates) — per 714C iteration-4 precedent, run it on the POST-structural substrate only.
+
+### Doc feedback (for docs/mndiagram-inputproc-campaign.md)
+
+- **False-flag classification under Δ-shift cascades**: `inline-boundary-toolchain-artifact` + "reference calls <self+0xNNN> but current omits that call" fired on a pure 1-instr shift cascade with identical call sets. Suggested doctrine line: *"verify the call-reloc SETS pair 1:1 before believing an inline-boundary classification; under line-Δ≠0 the self+offset bl display inflates both the reloc count and the omitted-call heuristic."*
+- **Constant-divergence check belongs in the opening map**: a `lis` high-part off by 1 (92 vs 93, same addi low) is a 2-line diff that is actually a SOURCE CONSTANT BUG (0x5C8D7F vs 0x5B8D7F). Cheap to byte-verify during mapping; high-value (correctness, not just match).
+- The Δ-attribution-by-contributors table format (5 rows summing to +1) made the register-pressure root (hoisted pointers → spill) provable without a build; recommend it as the standard Δ≠0 procedure.
+
+## Driver-3 Entries (fn_802461BC)
+
+(Reserved — fn_802461BC at 98.42 is LAST per TU ordering. 8024714C register endgame queues on permuter channels. 80245BA4 fix session = iteration 6, levers ranked above.)
