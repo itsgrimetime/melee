@@ -8180,7 +8180,7 @@ def test_debug_diff_schedule_reports_first_divergence(
 
 
 _TEST_DLL_FEATURE_MANIFEST = (
-    "MWCC_DEBUG_FEATURES:v4;"
+    "MWCC_DEBUG_FEATURES:v5;"
     "pcdump-path;"
     "function-scope-force-phys;"
     "force-phys-iter;"
@@ -8188,7 +8188,8 @@ _TEST_DLL_FEATURE_MANIFEST = (
     "force-iter-first-overflow-error;"
     "force-remat;"
     "force-interfere;"
-    "force-schedule"
+    "force-schedule;"
+    "force-no-cse"
 )
 
 

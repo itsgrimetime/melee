@@ -21,7 +21,7 @@ typedef int int32;
 #define DLL_PROCESS_ATTACH 1
 #define MWCC_DEBUG_ENV_BUF_LEN 8192
 #define MWCC_DEBUG_FEATURE_MANIFEST \
-    "MWCC_DEBUG_FEATURES:v4;" \
+    "MWCC_DEBUG_FEATURES:v5;" \
     "pcdump-path;" \
     "function-scope-force-phys;" \
     "force-phys-iter;" \
@@ -29,7 +29,8 @@ typedef int int32;
     "force-iter-first-overflow-error;" \
     "force-remat;" \
     "force-interfere;" \
-    "force-schedule"
+    "force-schedule;" \
+    "force-no-cse"
 
 #ifdef MWCC_DEBUG_TEST
 #define __declspec(x)
@@ -74,6 +75,15 @@ void *memcpy(void *dst, const void *src, unsigned long n)
 // compiler functions and their virtual addresses for v1.2.5n
 static int(__cdecl *debug_printf)(const char *fmt, ...) = (void *)0x44D580;
 static void *(__cdecl *mw_fopen)(const char *name, const char *m) = (void *)0x40C690;
+static int(__cdecl *mw_iro_nodes_match)(void *a, void *b) = (void *)0x44D0F0;
+static void(__cdecl *mw_iro_walk)(void *node, void *callback) = (void *)0x44C960;
+static void(__cdecl *mw_iro_finalize_node)(void *node) = (void *)0x44EF10;
+static void(__cdecl *mw_iro_bitset_copy)(void *dst, void *src) = (void *)0x462AC0;
+static void(__cdecl *mw_iro_periodic_yield)(void) = (void *)0x44BB40;
+static void(__cdecl *mw_iro_assert_line)(const char *file, int line) = (void *)0x445780;
+static void(__cdecl *mw_iro_prepare_common_sub)(void *node) = (void *)0x44E180;
+static void(__cdecl *mw_iro_replace_common_sub)(void *dst, void *replacement, void *original) = (void *)0x44E6D0;
+static void(__cdecl *mw_iro_cleanup_common_sub)(void *node) = (void *)0x44C9F0;
 #ifndef MWCC_DEBUG_TEST
 static void(__cdecl *mw_formatoperands)(void *pc, char *buf, int showBlocks) = (void *)0x4C4BF0;
 #else
@@ -101,6 +111,16 @@ static int g_current_function_set = 0;
 #define PCFILE (*(void **)0x580610)
 #define DEBUGLISTING (*(char *)0x584226)
 #define DEBUG_GUARD (*(int *)0x5882B8)
+#define IRO_BLOCK_LIST (*(void **)0x587E48)
+#define IRO_COMMON_SUB_LIST (*(void **)0x587C94)
+#define IRO_CURRENT_BITSET (*(uint32 **)0x588294)
+#define IRO_BITSET_SCRATCH (*(void **)0x5882C4)
+#define IRO_FUNCTION_CONTEXT (*(void **)0x5875B8)
+
+#define PTR_AT(p, off) (*(void **)((char *)(p) + (off)))
+#define U32_AT(p, off) (*(uint32 *)((char *)(p) + (off)))
+#define U16_AT(p, off) (*(uint16 *)((char *)(p) + (off)))
+#define U8_AT(p, off) (*(uint8 *)((char *)(p) + (off)))
 
 static int mwcc_debug_output_active(void)
 {
@@ -359,6 +379,204 @@ static void parse_force_schedule_from_env(void)
         }
     }
     parse_force_schedule_rules_from_string(buf, (int)len);
+}
+
+// FORCE_NO_CSE — veto selected IRO CommonSubs replacements by the node IDs
+// logged by MWCC's own "Replacing common sub at X with Y" trace.
+//
+// MWCC_DEBUG_FORCE_NO_CSE="at[=with][,at[=with]]*"
+//   Example: "439=431"  skip only "Replacing common sub at 439 with 431"
+//   Example: "439"      skip any replacement whose destination node is 439
+//
+// Applied in the front-end CommonSubs pass before the native replacement block
+// removes the redundant IRO node. This is diagnostic-only: it proves whether a
+// particular CSE/VN kill reaches a backend shape, not that source can naturally
+// produce that shape.
+#define MAX_FORCE_NO_CSE_RULES 1024
+
+typedef struct ForceNoCseRule
+{
+    int at_node;
+    int with_node;
+    int has_with_node;
+} ForceNoCseRule;
+
+static ForceNoCseRule g_force_no_cse_rules[MAX_FORCE_NO_CSE_RULES];
+static int g_n_force_no_cse_rules = 0;
+static int g_force_no_cse_rules_parsed = 0;
+static int g_force_no_cse_parse_overflow = 0;
+static int g_force_no_cse_parse_invalid = 0;
+static int g_force_no_cse_env_truncated = 0;
+static char g_force_no_cse_scope_fn[FUNCNAME_BUF_LEN] = {0};
+static int g_force_no_cse_scope_fn_set = 0;
+static int g_force_no_cse_scope_fn_truncated = 0;
+
+static int parse_force_no_cse_node_token(
+    const char *buf, int start, int end, int *out)
+{
+    while (start < end && buf[start] == ' ') start++;
+    while (end > start && buf[end - 1] == ' ') end--;
+    if (end - start >= 4
+        && buf[start] == 'i' && buf[start + 1] == 'r'
+        && buf[start + 2] == 'o' && buf[start + 3] == ':')
+    {
+        start += 4;
+    }
+    if (!parse_int_token(buf, start, end, out)) return 0;
+    return *out >= 0;
+}
+
+static int parse_force_no_cse_rules_from_string(const char *buf, int len)
+{
+    int i = 0;
+
+    g_n_force_no_cse_rules = 0;
+    g_force_no_cse_parse_overflow = 0;
+    g_force_no_cse_parse_invalid = 0;
+
+    while (i < len && buf[i] != '\0')
+    {
+        int entry_start;
+        int entry_end;
+        int eq_pos = -1;
+        int at_node;
+        int with_node;
+        int has_with;
+        ForceNoCseRule *rule;
+
+        while (i < len && (buf[i] == ',' || buf[i] == ' ')) i++;
+        if (i >= len || buf[i] == '\0') break;
+
+        entry_start = i;
+        while (i < len && buf[i] != ',' && buf[i] != '\0')
+        {
+            if (buf[i] == '=')
+            {
+                if (eq_pos >= 0)
+                {
+                    g_force_no_cse_parse_invalid = 1;
+                    g_n_force_no_cse_rules = 0;
+                    return -1;
+                }
+                eq_pos = i;
+            }
+            i++;
+        }
+        entry_end = i;
+
+        has_with = eq_pos >= 0;
+        if (has_with)
+        {
+            if (!parse_force_no_cse_node_token(
+                    buf, entry_start, eq_pos, &at_node)
+                || !parse_force_no_cse_node_token(
+                    buf, eq_pos + 1, entry_end, &with_node))
+            {
+                g_force_no_cse_parse_invalid = 1;
+                g_n_force_no_cse_rules = 0;
+                return -1;
+            }
+        }
+        else
+        {
+            if (!parse_force_no_cse_node_token(
+                    buf, entry_start, entry_end, &at_node))
+            {
+                g_force_no_cse_parse_invalid = 1;
+                g_n_force_no_cse_rules = 0;
+                return -1;
+            }
+            with_node = -1;
+        }
+
+        if (g_n_force_no_cse_rules >= MAX_FORCE_NO_CSE_RULES)
+        {
+            g_force_no_cse_parse_overflow = 1;
+            g_n_force_no_cse_rules = 0;
+            return -1;
+        }
+
+        rule = &g_force_no_cse_rules[g_n_force_no_cse_rules];
+        rule->at_node = at_node;
+        rule->with_node = with_node;
+        rule->has_with_node = has_with;
+        g_n_force_no_cse_rules++;
+
+        if (i < len && buf[i] == ',') i++;
+    }
+
+    return g_n_force_no_cse_rules;
+}
+
+static void parse_force_no_cse_from_env(void)
+{
+    static char buf[MWCC_DEBUG_ENV_BUF_LEN];
+    uint32 len;
+
+    g_force_no_cse_rules_parsed = 1;
+    g_n_force_no_cse_rules = 0;
+    g_force_no_cse_parse_overflow = 0;
+    g_force_no_cse_parse_invalid = 0;
+    g_force_no_cse_env_truncated = 0;
+    g_force_no_cse_scope_fn_set = 0;
+    g_force_no_cse_scope_fn_truncated = 0;
+
+    len = GetEnvironmentVariableA(
+        "MWCC_DEBUG_FORCE_NO_CSE_FUNCTION",
+        g_force_no_cse_scope_fn, sizeof(g_force_no_cse_scope_fn));
+    if (len >= sizeof(g_force_no_cse_scope_fn))
+    {
+        g_force_no_cse_scope_fn_truncated = 1;
+        g_force_no_cse_scope_fn_set = 0;
+    }
+    else
+    {
+        g_force_no_cse_scope_fn_set = (len > 0) ? 1 : 0;
+    }
+    if (!g_force_no_cse_scope_fn_set)
+        g_force_no_cse_scope_fn[0] = '\0';
+
+    len = GetEnvironmentVariableA(
+        "MWCC_DEBUG_FORCE_NO_CSE", buf, sizeof(buf));
+    if (len == 0) return;
+    if (len >= sizeof(buf))
+    {
+        g_force_no_cse_env_truncated = 1;
+        return;
+    }
+    parse_force_no_cse_rules_from_string(buf, (int)len);
+}
+
+static int force_no_cse_rule_matches(int at_node, int with_node)
+{
+    int i;
+    for (i = 0; i < g_n_force_no_cse_rules; i++)
+    {
+        ForceNoCseRule *rule = &g_force_no_cse_rules[i];
+        if (rule->at_node != at_node) continue;
+        if (rule->has_with_node && rule->with_node != with_node) continue;
+        return 1;
+    }
+    return 0;
+}
+
+static const char *force_no_cse_current_function_name(void)
+{
+    void *ctx = IRO_FUNCTION_CONTEXT;
+    void *name_obj;
+    if (!ctx) return NULL;
+    name_obj = PTR_AT(ctx, 0x0a);
+    if (!name_obj) return NULL;
+    return (const char *)((char *)name_obj + 0x0a);
+}
+
+static int force_no_cse_scope_matches(void)
+{
+    const char *fn;
+    if (!g_force_no_cse_scope_fn_set) return 1;
+    fn = force_no_cse_current_function_name();
+    if (!fn) return 0;
+    return str_eq(fn, g_force_no_cse_scope_fn);
 }
 
 static int parse_load_from_formatted_operands(PCode *pc, ForceScheduleLoad *out)
@@ -1709,6 +1927,11 @@ static int coalesce_normalize_alias_roots_guarded(
 // trampoline. trampoline buffer must hold prologue (7) + jump (5) = 12 bytes.
 static unsigned char colorgraph_trampoline[24];
 
+// IRO CommonSubs @ 0x44DF00: prologue is 13 bytes
+//   push ebx + push esi + mov ebx,[0x587e48] + push edi + push ebp +
+//   sub esp, 8.
+static unsigned char common_subs_trampoline[24];
+
 // apply-coloring/remat rewrite at 0x4CE1A0: prologue is 8 bytes
 // (push ebx, push esi, mov esi,[0x587c74]); resume on push edi.
 static unsigned char apply_coloring_trampoline[24];
@@ -2057,6 +2280,199 @@ static int __cdecl hook_build_ig(void *proc, int rclass, int unknown)
                      rclass, N_IGNODES);
     }
     return result;
+}
+
+static void forced_common_subs_impl(void)
+{
+    void *block;
+    int progress_counter = 0;
+
+    for (block = IRO_BLOCK_LIST; block; block = PTR_AT(block, 0x32))
+    {
+        void *node;
+        IRO_CURRENT_BITSET = (uint32 *)PTR_AT(block, 0x16);
+
+        for (node = PTR_AT(block, 0x0e); node; node = PTR_AT(node, 0x2a))
+        {
+            void *node_ref = PTR_AT(node, 0x12);
+
+            if (node_ref && U8_AT(node_ref, 0x18) == 0)
+            {
+                void *candidate;
+                for (candidate = IRO_COMMON_SUB_LIST; candidate;
+                     candidate = PTR_AT(candidate, 0x26))
+                {
+                    void *candidate_node = PTR_AT(candidate, 0x02);
+                    if (candidate_node != node && PTR_AT(candidate, 0x12) == 0)
+                    {
+                        uint16 candidate_id = U16_AT(candidate, 0x00);
+                        uint32 word = ((uint32)candidate_id) >> 5;
+                        uint32 *bits = IRO_CURRENT_BITSET;
+                        if (word < bits[0]
+                            && ((1 << (candidate_id & 0x1f))
+                                & bits[word + 1])
+                            && mw_iro_nodes_match(node, candidate_node))
+                        {
+                            mw_iro_walk(node, (void *)0x44E360);
+                            U32_AT(node, 0x02) |= 8;
+                            PTR_AT(PTR_AT(node, 0x12), 0x12) = candidate;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            node_ref = PTR_AT(node, 0x12);
+            if (node_ref)
+            {
+                uint16 node_ref_id = U16_AT(node_ref, 0x00);
+                uint32 word = ((uint32)node_ref_id) >> 5;
+                uint32 *bits = IRO_CURRENT_BITSET;
+                if (word < bits[0])
+                {
+                    bits[word + 1] |= 1 << (node_ref_id & 0x1f);
+                }
+                else
+                {
+                    mw_iro_assert_line((const char *)0x552B8C, 47);
+                }
+            }
+
+            mw_iro_finalize_node(node);
+            mw_iro_bitset_copy(IRO_BITSET_SCRATCH, IRO_CURRENT_BITSET);
+
+            if (node == PTR_AT(block, 0x12)) break;
+            if (progress_counter < 0xfb)
+                progress_counter++;
+            else
+            {
+                mw_iro_periodic_yield();
+                progress_counter = 0;
+            }
+        }
+    }
+
+    block = IRO_BLOCK_LIST;
+    if (!block)
+    {
+        mw_iro_periodic_yield();
+        return;
+    }
+
+    while (1)
+    {
+        void *node;
+        if (!block)
+        {
+            mw_iro_periodic_yield();
+            return;
+        }
+
+        for (node = PTR_AT(block, 0x0e); node; node = PTR_AT(node, 0x2a))
+        {
+            void *node_ref = PTR_AT(node, 0x12);
+            if (node_ref && (U32_AT(node, 0x02) & 8))
+            {
+                void *sub_holder = PTR_AT(node_ref, 0x12);
+                if (sub_holder)
+                {
+                    if (PTR_AT(sub_holder, 0x06) == 0)
+                        mw_iro_prepare_common_sub(sub_holder);
+
+                    if (PTR_AT(sub_holder, 0x06) != 0)
+                    {
+                        void *with_node = PTR_AT(sub_holder, 0x02);
+                        int at_id = (int)U16_AT(node, 0x08);
+                        int with_id = (int)U16_AT(with_node, 0x08);
+
+                        if (force_no_cse_rule_matches(at_id, with_id))
+                        {
+                            const char *fn =
+                                force_no_cse_current_function_name();
+                            if (mwcc_debug_output_active())
+                            {
+                                debug_printf(
+                                    "[FORCE_NO_CSE] skip replacement at %d "
+                                    "with %d (fn=%s)\n",
+                                    at_id, with_id, fn ? fn : "<unknown>");
+                            }
+                        }
+                        else
+                        {
+                            void *cur;
+                            void *prev = NULL;
+                            void *hash_node = PTR_AT(node, 0x12);
+                            debug_printf(
+                                "Replacing common sub at %d with %d\n",
+                                at_id, with_id);
+                            mw_iro_replace_common_sub(
+                                node, PTR_AT(sub_holder, 0x06), node);
+
+                            cur = IRO_COMMON_SUB_LIST;
+                            while (cur != hash_node)
+                            {
+                                prev = cur;
+                                cur = PTR_AT(cur, 0x26);
+                                if (!cur)
+                                {
+                                    mw_iro_assert_line(
+                                        (const char *)0x552BBC, 470);
+                                }
+                            }
+
+                            PTR_AT(PTR_AT(hash_node, 0x02), 0x12) = NULL;
+                            if (!prev)
+                                IRO_COMMON_SUB_LIST = PTR_AT(hash_node, 0x26);
+                            else
+                                PTR_AT(prev, 0x26) = PTR_AT(hash_node, 0x26);
+                            mw_iro_cleanup_common_sub(node);
+                        }
+                    }
+                }
+            }
+
+            if (node == PTR_AT(block, 0x12)) break;
+            if (progress_counter < 0xfb)
+                progress_counter++;
+            else
+            {
+                mw_iro_periodic_yield();
+                progress_counter = 0;
+            }
+        }
+        block = PTR_AT(block, 0x32);
+    }
+}
+
+static void __cdecl hook_common_subs(void)
+{
+    typedef void(__cdecl * fn_t)(void);
+
+    if (!g_force_no_cse_rules_parsed)
+        parse_force_no_cse_from_env();
+
+    if (g_force_no_cse_env_truncated
+        || g_force_no_cse_scope_fn_truncated
+        || g_force_no_cse_parse_overflow
+        || g_force_no_cse_parse_invalid)
+    {
+        if (mwcc_debug_output_active())
+        {
+            debug_printf(
+                "[FORCE_NO_CSE] ERROR: invalid override list or scope; "
+                "running native CommonSubs without partial CSE vetoes\n");
+        }
+        ((fn_t)common_subs_trampoline)();
+        return;
+    }
+
+    if (g_n_force_no_cse_rules == 0 || !force_no_cse_scope_matches())
+    {
+        ((fn_t)common_subs_trampoline)();
+        return;
+    }
+
+    forced_common_subs_impl();
 }
 
 // propagateconstants hook (Tier 3.5) — fires once per (function, optimization
@@ -2652,6 +3068,12 @@ static void install_hooks(void)
     hook_fn((void *)0x52B530, hook_propagateconstants,
             propagateconstants_trampoline, 14);
 
+    // IRO CommonSubs @ 0x44DF00 (Tier 8 hook) — runs before PCode/backend
+    // lowering. This is the only point where selected CSE/VN replacements can
+    // be vetoed before MWCC deletes the redundant IRO expression.
+    hook_fn((void *)0x44DF00, hook_common_subs,
+            common_subs_trampoline, 13);
+
     // simplifygraph @ 0x4CE400 (Tier 2.5 hook) — runs between IG construction
     // and colorgraph for each (function, register class) pair. Captures the
     // simplification order and per-node {flags, degree} delta. Earlier attempt
@@ -2759,6 +3181,7 @@ int __stdcall DllMain(void *hModule, uint32 reason, void *reserved)
         parse_iter_first_from_env();
         parse_force_schedule_from_env();
         parse_force_remat_from_env();
+        parse_force_no_cse_from_env();
         install_hooks();
     }
     return 1;

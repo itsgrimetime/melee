@@ -2237,6 +2237,25 @@ def pcdump(
                  "Other functions compile naturally. EXPERIMENTAL.",
         ),
     ] = None,
+    force_no_cse: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-no-cse",
+            help="Tier 8: veto selected IRO CommonSubs replacements. Format "
+                 "'node[=with][,node[=with]]*'; 'iro:' prefixes and 0x hex "
+                 "are accepted and normalized. E.g. 'iro:439=431' skips "
+                 "only the replacement logged as 'Replacing common sub at "
+                 "439 with 431'. DIAGNOSTIC-ONLY.",
+        ),
+    ] = None,
+    force_no_cse_fn: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-no-cse-fn",
+            help="Scope --force-no-cse to a single function name in the TU. "
+                 "Recommended because IRO node IDs are per function/pass.",
+        ),
+    ] = None,
 ):
     """Dump MWCC's internal IR + codegen for a TU and emit pcdump.txt to stdout.
 
@@ -2432,6 +2451,17 @@ def pcdump(
                 force_schedule_fn,
             )
         )
+    if force_no_cse:
+        force_no_cse = _validate_force_no_cse(force_no_cse)
+        cmd_parts.append(_cmd_set_env("MWCC_DEBUG_FORCE_NO_CSE", force_no_cse))
+    if force_no_cse_fn:
+        force_no_cse_fn = _validate_force_no_cse_fn(force_no_cse_fn)
+        cmd_parts.append(
+            _cmd_set_env(
+                "MWCC_DEBUG_FORCE_NO_CSE_FUNCTION",
+                force_no_cse_fn,
+            )
+        )
     cmd_parts.append(
         f"powershell -NoProfile -ExecutionPolicy Bypass "
         f"-File {remote_script} {src_rel}"
@@ -2443,6 +2473,7 @@ def pcdump(
         force_coalesce, force_coalesce_fn,
         force_remat, force_remat_fn,
         force_schedule, force_schedule_fn,
+        force_no_cse, force_no_cse_fn,
     ])
 
     # SSH on Windows defaults to cmd as the user's login shell typically.
@@ -2597,6 +2628,76 @@ def _validate_force_remat(raw: str, *, option: str = "--force-remat") -> str:
     if not re.fullmatch(r"\d+:\d+=(?:copy|literal)(?:,\d+:\d+=(?:copy|literal))*", raw):
         raise typer.BadParameter(
             f"{option} expects 'class:ig=copy|literal[,class:ig=copy|literal]*'"
+        )
+    return raw
+
+
+def _parse_force_no_cse_node(raw: str, *, option: str) -> int:
+    token = raw
+    if token.startswith("iro:"):
+        token = token[4:]
+    if not token or token[0] in "+-":
+        raise typer.BadParameter(
+            f"{option} entry {raw!r} is invalid. Expected a non-negative "
+            "IRO node number, optionally prefixed with 'iro:'"
+        )
+    try:
+        value = int(token, 0)
+    except ValueError as exc:
+        raise typer.BadParameter(
+            f"{option} entry {raw!r} is invalid. Expected a decimal or 0x "
+            "hex IRO node number"
+        ) from exc
+    if value < 0:
+        raise typer.BadParameter(f"{option} entry {raw!r} must be non-negative")
+    return value
+
+
+def _validate_force_no_cse(raw: str, *, option: str = "--force-no-cse") -> str:
+    """Normalize force-no-CSE node specs for the DLL."""
+    if not raw:
+        raise typer.BadParameter(
+            f"{option} requires at least one node or node=with entry"
+        )
+    if any(c in raw for c in '"\'; \t\r\n&|<>^'):
+        raise typer.BadParameter(
+            f"{option} must not contain quotes, semicolons, whitespace, "
+            "or shell metacharacters"
+        )
+    out: list[str] = []
+    for entry in raw.split(","):
+        if not entry:
+            raise typer.BadParameter(f"{option} contains an empty entry")
+        if entry.count("=") > 1:
+            raise typer.BadParameter(
+                f"{option} entry {entry!r} is invalid. Expected node or "
+                "node=with"
+            )
+        if "=" in entry:
+            at_raw, with_raw = entry.split("=", 1)
+            at_node = _parse_force_no_cse_node(at_raw, option=option)
+            with_node = _parse_force_no_cse_node(with_raw, option=option)
+            out.append(f"{at_node}={with_node}")
+        else:
+            at_node = _parse_force_no_cse_node(entry, option=option)
+            out.append(str(at_node))
+    return ",".join(out)
+
+
+def _validate_force_no_cse_fn(
+    raw: str,
+    *,
+    option: str = "--force-no-cse-fn",
+) -> str:
+    if any(c in raw for c in '"\'; \t&|<>'):
+        raise typer.BadParameter(
+            f"{option} must not contain quotes, semicolons, whitespace, "
+            "or shell metacharacters"
+        )
+    if len(raw.encode("utf-8")) >= 256:
+        raise typer.BadParameter(
+            f"{option} must fit in mwcc_debug's 255-byte function-name "
+            "scope buffer"
         )
     return raw
 
@@ -16232,6 +16333,7 @@ _MWCC_DEBUG_REQUIRED_DLL_FEATURES = (
     "force-remat",
     "force-interfere",
     "force-schedule",
+    "force-no-cse",
 )
 
 
@@ -17298,6 +17400,24 @@ def pcdump_local(
                  "schedule.",
         ),
     ] = None,
+    force_no_cse: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-no-cse",
+            help="Tier 8: veto selected front-end IRO CommonSubs replacements. "
+                 "Format 'node[=with][,node[=with]]*'; 'iro:' prefixes and "
+                 "0x hex are accepted and normalized. By default applies "
+                 "globally — scope with --force-no-cse-fn. DIAGNOSTIC-ONLY.",
+        ),
+    ] = None,
+    force_no_cse_fn: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-no-cse-fn",
+            help="Scope --force-no-cse to a single function name. Other "
+                 "functions in the same TU compile with their natural CSE.",
+        ),
+    ] = None,
     wibo: Annotated[
         Optional[Path],
         typer.Option(
@@ -17400,8 +17520,8 @@ def pcdump_local(
     first to patch the compiler and deploy the DLL.
 
     Env-var hooks (--force-phys, --force-iter-first, --force-coalesce,
-    --force-remat, --force-schedule, and their function-scope variants)
-    pass through to the DLL.
+    --force-remat, --force-schedule, --force-no-cse, and their
+    function-scope variants) pass through to the DLL.
 
     Use --keep-obj PATH to preserve the compiled .o for downstream
     inspection (objdiff/checkdiff/etc.). Use --diff to run an integrated
@@ -17578,6 +17698,11 @@ def pcdump_local(
         env["MWCC_DEBUG_FORCE_SCHEDULE"] = _validate_force_schedule(force_schedule)
     if force_schedule_fn:
         env["MWCC_DEBUG_FORCE_SCHEDULE_FUNCTION"] = force_schedule_fn
+    if force_no_cse:
+        env["MWCC_DEBUG_FORCE_NO_CSE"] = _validate_force_no_cse(force_no_cse)
+    if force_no_cse_fn:
+        force_no_cse_fn = _validate_force_no_cse_fn(force_no_cse_fn)
+        env["MWCC_DEBUG_FORCE_NO_CSE_FUNCTION"] = force_no_cse_fn
 
     # Safety guard: --force-coalesce without --force-coalesce-fn on a
     # multi-function TU is a known wibo-hanger. Virtual indices are
@@ -17637,6 +17762,24 @@ def pcdump_local(
                     f"records.\n"
                     f"Re-run with `--force-remat-fn <function_name>` to scope. "
                     f"Pass `--force-remat-fn ''` to opt out (NOT RECOMMENDED).",
+                    err=True,
+                )
+                raise typer.Exit(2)
+    if force_no_cse and force_no_cse_fn is None:
+        src_path = melee_root / src_rel
+        if src_path.exists():
+            n_fns = _count_function_defs(src_path.read_text())
+            if n_fns >= 2:
+                typer.echo(
+                    f"refusing --force-no-cse without --force-no-cse-fn on a "
+                    f"multi-function TU ({src_rel} has ~{n_fns} function "
+                    f"definitions).\n"
+                    f"IRO node IDs are per-function/pass; an override aimed "
+                    f"at one function can skip an unrelated CSE replacement "
+                    f"in another function.\n"
+                    f"Re-run with `--force-no-cse-fn <function_name>` to "
+                    f"scope. Pass `--force-no-cse-fn ''` to opt out "
+                    f"(NOT RECOMMENDED).",
                     err=True,
                 )
                 raise typer.Exit(2)
@@ -17898,6 +18041,7 @@ def pcdump_local(
                         force_coalesce_fn,
                         force_remat_fn,
                         force_schedule_fn,
+                        force_no_cse_fn,
                     ])
                     fn_to_diff = (
                         function
@@ -17907,6 +18051,7 @@ def pcdump_local(
                         or force_coalesce_fn
                         or force_remat_fn
                         or force_schedule_fn
+                        or force_no_cse_fn
                         or None
                     )
                     if fn_to_diff is None and src_path.exists():
@@ -17946,6 +18091,7 @@ def pcdump_local(
                                 or force_coalesce_fn
                                 or force_remat_fn
                                 or force_schedule_fn
+                                or force_no_cse_fn
                                 or force_frame_from_diff
                             )
                         )
@@ -18067,6 +18213,7 @@ def pcdump_local(
         force_coalesce, force_coalesce_fn,
         force_remat, force_remat_fn,
         force_schedule, force_schedule_fn,
+        force_no_cse, force_no_cse_fn,
         force_frame_from_diff,
     ])
     if any_forced:
