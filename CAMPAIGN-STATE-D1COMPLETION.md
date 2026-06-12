@@ -266,3 +266,52 @@ Protected verified after each commit: 802437E8/80243434 match=true; InputProc 98
 3. The 2 transpositions + li-vs-copy trio: cascade-watch (may fall with the cascade).
 4. 95-99 cluster follow-on per iteration-1 ranking (80241E78 first — its signature-type-mismatch class is exactly what the iteration-2 cast model addresses; the laws transfer directly).
 
+---
+
+## ITERATION 3 (2026-06-11, driver 2) — 80241E78: CLASSIFICATION IS A FALSE FLAG; GAP = PURE data↔row CALLEE-SAVE PERMUTATION (95.14, NO CHANGE)
+
+### THE ONE QUESTION — ANSWERED: **NO.** The iteration-2 cast model does NOT close 80241E78.
+The "signature-type-mismatch + call-shape" classification is a **difflib alignment artifact**, not a real type/cast/call-shape gap. There are **no mask sites and no call-shape divergences to address**. Proven below.
+
+### DECISIVE EVIDENCE — the C is already structurally perfect (NORMALIZED DIFF = IDENTICAL)
+Disassembled OUR object (`build/GALE01/obj/melee/mn/mndiagram.o` via `build/tools/dtk elf disasm`) and the TARGET (`build/GALE01/asm/melee/mn/mndiagram.s`, dtk disasm of orig DOL, lines 3833–4115). Normalized BOTH streams (strip addr/byte prefix; `rNN→rR`, `fNN→fF`; strip `@sda21/@ha/@l`; immediates→IMM; labels→LBL; `<sym>`→SYM) and `diff`'d:
+- **257 lines each, ZERO diff.** Same opcodes, same operand structure, same call sequence, same instruction count, same scheduling — modulo register numbers + reloc targets + immediates.
+⟹ The entire 95.14→100 gap is a **pure register-coloring cascade**. The 37 hunks / 44 "register-only" / 11 "data/symbol" / 1 "stack" / "call shape differs" lines are ALL the difflib slipping by the swap offset (exactly the iter-1 framing phenomenon, now PROVEN by object-level normalization, not inferred).
+
+### THE ROOT: data↔row swap r25↔r26 (col=r27 and arg3=r23 are pinned-correct in BOTH)
+- TARGET: `lwz r25,44(r3)`=**data**→r25; `addi r26,r5,0`=**row(arg2)**→r26; `clrlwi r30,r26,24` = `(u8)row` from r26.
+- OURS:   `lwz r26,44(r3)`=data→r26; `addi r25,r5,0`=row→r25; `clrlwi r30,r25,24` from r25.
+- **Only data and row swap r25↔r26.** Everything downstream (`stfs f0,56(rN)`, `mr r3,rN`, `lwz r0,20(rN)`, `lwz r3,52(rN)`, the fmadds f28-vs-f27, the stfs f26/f27/f28 trio) re-rolls off this one swap + its FP-coloring shadow.
+
+### MECHANISM (GPR COLORGRAPH, debug dump confirms the swap is REAL not a debug artifact)
+`build/mwcc_debug_cache/melee/mn/mndiagram.txt` (COLORGRAPH DECISIONS class=0, n_nodes=100): the debug compiler **reproduces OUR swap** (`lwz r26,44(r3)` / `mr r25,r5` in AFTER REGISTER COLORING) — so this is a genuine source-driven coloring outcome the debug compiler shares (NOT the "debug colors correctly, retail diverges" invisible class of [[reread_field_materializes_arg_register]]'s sibling). Nodes pop DESCENDING-ig and fresh-dispense r31→r30→…: `col`=ig63→r27, `data`=ig58→r26, `row`=ig47→r25. **data(58) ALWAYS pops before row(47)** ⟹ data takes the higher reg r26. TARGET needs row→r26, i.e. **row's ig must exceed data's (58)**. row's ig sits at 47 — BELOW the find-walk temps (ig 48–57 = the `data->jobjs[N]` loads + GetTranslation calls, lines 2340–2353) — because **row is first-used (line 2357, `(f32)row`) only AFTER those loads, and row's value cannot be produced before `data` in this dataflow** (every float input derives from `data->jobjs[...]`). The swap is pinned by dataflow order, not by any movable spelling.
+
+### Build ledger (4 builds, 0 commits, all reverted; 8024227C floor 94.32 untouched throughout)
+| Build | Edit | 80241E78 | 8024227C | Mechanism check / verdict |
+|-------|------|----------|----------|---------------------------|
+| 1 | `Diagram* data;` moved to FIRST-declared local | 95.14 | 94.32 | **INERT.** Pointer-local decl order does NOT touch the param-derived data/row node ig. (Refutes "reverse-decl flips this pair.") |
+| 2 | `1.0f`→`0.4f` at lines 2358 + 2371 | 95.14 | 94.32 | **INERT — and a key finding:** the object loads `mnDiagram_804DBFA0` (=0.4f, 0x3ECCCCCD) at the `row_offset_adj`/`col>=7` sites REGARDLESS of the source literal; our `1.0f` pools to `mnDiagram_804DBFB4` (0x3F800000) which 80241E78 NEVER references. ⟹ the literal at 2358/2371 is **folded/dead w.r.t. these instructions** (the matching 0.4 comes from the shared-constant fold, not this expression). NOT a lever; the apparent `@1519`/named-symbol "data-symbol" diff in checkdiff was a slip artifact (object already uses the named 804DBFA0, byte-equal to target). |
+| 3 | move `mn_GetDigitCount(arg3)` AFTER the col/row offset computes | **89.19** | 94.32 | **REGRESSION −5.95.** The call MUST stay before the offsets — `digit_count`/r27 reuses col's reg at that exact point; reordering breaks the reuse. Confirms current call placement is correct (and that the call is NOT mis-scheduled — refutes any "call-shape" reading). |
+| 4 | drop `u8 col`/`u8 row` locals; use `arg1`/`arg2` directly at all 6 sites | 95.14 | 94.32 | **INERT.** MWCC treats the local-copy and direct-param forms identically (the copies were pure aliases); arg2's node identity unchanged. Param-vs-local homing is NOT the lever. |
+
+Protected sweep after restore-to-committed: 802437E8=100, 80243434=100, InputProc=98.67, 80242C0C=96.95, mnDiagram2_HandleInput=97.46, 8024227C=94.32, 80241E78=95.14. Build RC=0. Tree clean, HEAD=259dca914.
+
+### LAWS (confirmed / extended)
+1. **Classification-vs-reality law (NEW, sharp):** checkdiff's `signature-type-mismatch` + "call shape differs" banner can be a **pure difflib artifact** of an upstream callee-save swap; the offset slip re-renders equal instructions as "call-shape"/"data-symbol"/"register-only" diffs. **Object-level normalized diff (dtk disasm both sides; strip reg#/reloc/imm/label) is the authoritative structural verdict** — run it BEFORE trusting the classification on any swap-cascade function. Here it returned 0 diff over 257 lines. (Generalizes the iter-1 "24% opcode = shift artifact" framing to a reproducible procedure.)
+2. **ig-pinned-by-dataflow law (extends InputProc band model):** a callee-save swap between a loaded pointer (`data`, high ig) and a param copy (`row`, low ig) is **structurally unmovable** when the param cannot be first-used before the pointer's loads (all the param's consumers derive from the pointer). Decl-order (B1), literal-value (B2), and param-vs-local (B4) are all INERT against it; call-reorder (B3) regresses. Matches the [[mwcc_ignode_ordering_ceiling]] / clean-callee-save-PERMUTATION-byte-identical class. NOT a missing C lever — characterized as dataflow-pinned ig ordering; the function stays in the pool (permuter-territory only, and permuter is FENCED this branch).
+3. **Folded-literal caution (NEW):** a float literal can be DCE'd/shared-folded such that editing it changes NO bytes (the matching constant arrives via the TU-wide constant pool). Verify a literal is load-bearing (object reloc points at ITS pool slot) before treating it as a lever. (80241E78's `1.0f`/`0.4f` proven inert.)
+
+### RE-ROLLED RESIDUAL CENSUS (80241E78 @ 95.14, committed source)
+- **Sole family: data↔row callee-save swap r25↔r26** (+034 lwz, +02c addi, every downstream rN use) + its **FP-coloring shadow** (fmadds f31,f0,f28-vs-f27 at +1e8/+274; stfs f26/f27/f28 trio at +2f4/+368/+16c…). One root, ~44 register-only paired lines.
+- NO structural / call-shape / scheduling / instruction-count residual (normalized diff = 0).
+- NO data-symbol residual (object uses named 804DBFA0/804DBF98/804DBF78 byte-equal to target; the "11 data/symbol" lines are slip artifacts).
+- Lever NOT FOUND despite: pointer-decl-first, literal-value, call-position, param-direct (4 builds) + GPR/FPR colorgraph mechanism analysis. row's ig is dataflow-pinned below data's.
+
+### TEACHING FOR THE CLUSTER {80240D94 97.35, CursorProc 98.57, 802417D0 97.73, 8023FC28 97.82}
+80241E78 did NOT reach 100, but its dissection yields a transferable triage gate for the rest of the cluster (all carry inline/coloring-flavored classification banners):
+- **Run the object-level normalized diff FIRST on each** (the iter-3 procedure). If it returns ~0, the banner is a swap-cascade artifact and the function is a coloring ceiling (park or permuter-only), NOT a structural/cast target — do NOT spend the iter-2 cast/mask budget on it.
+- 8023FC28 (opcode 100, 2 reloc lines) and 802417D0 (56 register-only, "indexed-struct-ptr-materialization") are the strongest candidates to ALSO be pure-coloring artifacts — normalized-diff them before any source edit.
+- Of the cluster, **80240D94 (opcode 75%, Δ2, 1404B)** is the one whose classification is LEAST likely to be a swap artifact (75% opcode + Δ2 ≠ a pure register swap, which preserves opcode count) — its normalized diff should show REAL structural delta. **Recommended next target = 80240D94** (genuine inline-boundary structural gap), with the normalized-diff gate applied first to confirm.
+
+### PENDING-REVIEW: none added (no source retained; all 4 builds reverted).
+
