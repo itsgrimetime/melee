@@ -1010,7 +1010,7 @@ loop:
 }
 
 static inline int mnDiagram_GetVisibleNameCursorFrom(u8* sorted, int start,
-                                                    int rank)
+                                                     int rank)
 {
     u8* p;
     u8* p2;
