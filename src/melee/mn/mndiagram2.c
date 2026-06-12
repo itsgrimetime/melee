@@ -1289,7 +1289,6 @@ void mnDiagram2_GetAggregatedFighterRank(u8* out, u8 type, u8 idx)
     mnDiagram2_SortEntry temp;
     mnDiagram2_SortEntry* base;
     mnDiagram2_SortEntry* curr;
-    int type_val;
     int count;
     int res;
     mnDiagram2_SortEntry* ptr;
@@ -1313,11 +1312,10 @@ void mnDiagram2_GetAggregatedFighterRank(u8* out, u8 type, u8 idx)
     } while (i < 25);
 
     count = GetNameCount();
-    type_val = type;
     arr = entries;
 
     for (i = 0; i < count; i++) {
-        switch (type_val) {
+        switch ((s32) type) {
         case 0x15:
             res = mnDiagram_GetRankedFighterForName(
                 0, i, (void*) mnDiagram_GetNamePlayTimeByFighter);
