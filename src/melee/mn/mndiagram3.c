@@ -480,7 +480,7 @@ void mnDiagram3_8024714C(void* arg0)
 
     {
         Diagram3* d;
-        u8 scroll;
+        int scroll;
         u8 stat_idx;
         u16* base;
 
@@ -498,7 +498,7 @@ void mnDiagram3_8024714C(void* arg0)
         neg_spacing = -row_spacing;
         base = mnDiagram3_803EEC4C.indices;
         row_spacing = mnDiagram3_804DBFF8;
-        stat_idx = scroll;
+        stat_idx = (u8) scroll;
         i = 0;
 
         do {
@@ -511,17 +511,18 @@ void mnDiagram3_8024714C(void* arg0)
             {
                 u8 type_idx = (u8) i;
                 int val;
-                u8 limit;
+                int limit;
 
                 if (d->is_name_mode != 0) {
                     limit = 0x18;
                 } else {
                     limit = 0x15;
                 }
+                limit = (u8) limit;
 
                 val = stat_idx + type_idx;
-                if (val >= (u8) limit) {
-                    val = val - (u8) limit;
+                if (val >= limit) {
+                    val = val - limit;
                 } else {
                     val = (u8) val;
                 }
