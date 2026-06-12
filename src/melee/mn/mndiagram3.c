@@ -428,7 +428,6 @@ void mnDiagram3_8024714C(void* arg0)
     Diagram3* data;
     HSD_GObj* gobj;
     HSD_JObj* row0;
-    HSD_JObj* row1;
     mnDiagram_ArchiveData* archive;
     f32 row_spacing;
     f32 neg_spacing;
@@ -462,9 +461,8 @@ void mnDiagram3_8024714C(void* arg0)
 
         data = gobj->user_data;
         row0 = data->jobjs[8];
-        row1 = data->jobjs[9];
-        row_spacing =
-            HSD_JObjGetTranslationY(row1) - HSD_JObjGetTranslationY(row0);
+        row_spacing = HSD_JObjGetTranslationY(data->jobjs[9]) -
+                      HSD_JObjGetTranslationY(row0);
 
         row0 = data->jobjs[8];
         HSD_JObjSetTranslateX_Fake(popup_jobj, HSD_JObjGetTranslationX(row0));
@@ -489,9 +487,8 @@ void mnDiagram3_8024714C(void* arg0)
         row0 = d->jobjs[8];
         scroll = d->scroll_offset;
 
-        row1 = d->jobjs[9];
-        row_spacing =
-            HSD_JObjGetTranslationY(row1) - HSD_JObjGetTranslationY(row0);
+        row_spacing = HSD_JObjGetTranslationY(d->jobjs[9]) -
+                      HSD_JObjGetTranslationY(row0);
 
         lb_8000B1CC(d->jobjs[8], &mnDiagram3_803EEC28.x0, &sp48);
 
