@@ -67,6 +67,7 @@ def test_order_target_json_emits_full_artifact(tmp_path, monkeypatch):
     result = runner.invoke(debugcli.debug_app, [
         "target", "order-target", "-f", "mnDiagram_OnFrame",
         "-u", "melee/mn/mndiagram", "--json",
+        "--out", str(tmp_path / "OnFrame.yaml"),
     ])
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)

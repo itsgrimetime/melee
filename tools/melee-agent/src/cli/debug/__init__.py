@@ -1619,6 +1619,14 @@ def _collect_order_target_inputs(
             timeout=max(checkdiff_timeout, 600),  # the build dominates
             cwd=melee_root, env=child_env,
         )
+        # rc 0=match, 1=mismatch (both emit JSON); anything else, or an empty
+        # stdout (e.g. "ninja failed:" goes to stderr with rc=1), is a hard
+        # failure — surface it cleanly instead of a raw JSONDecodeError.
+        if proc.returncode not in (0, 1) or not (proc.stdout or "").strip():
+            raise RuntimeError(
+                f"checkdiff failed (rc={proc.returncode}): "
+                f"{(proc.stderr or proc.stdout or '')[-500:]}"
+            )
         checkdiff_payload = json.loads(proc.stdout)
         classification = checkdiff_payload.get("classification") or {}
         checkdiff_primary = (
