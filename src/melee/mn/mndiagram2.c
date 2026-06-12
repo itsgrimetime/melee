@@ -712,8 +712,8 @@ void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
                                                       entity_idx) < 0x19)
                     {
                         HSD_JObj* jobj = mnDiagram_80242B38(
-                            (u8) mnDiagram2_GetStatValue(
-                                is_name_mode, stat_type, entity_idx),
+                            mnDiagram2_GetStatValue(is_name_mode, stat_type,
+                                                    entity_idx),
                             0);
                         HSD_JObjSetTranslateX(jobj, -2.0f);
                         HSD_JObjSetTranslateY(jobj, (f30 * (f32) row_idx) +
