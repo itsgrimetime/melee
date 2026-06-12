@@ -679,3 +679,114 @@ register/CSE-class), GetRankedFighter 94.58, GetAggregatedFighterRank 94.11, Cre
 GetRankedName 97.87, UpdateHeader 94.18, HandleInput 97.46 (WALLED/parked),
 mnDiagram3_HandleInput 98.42 (sibling-branch territory). Protected-set sweep (full report.json):
 all 55 mndiagram* 100s hold; every partial byte-unchanged. Zero collateral.
+
+---
+
+# ITERATION 7 (driver 3, 2026-06-11): R3 (the is_name_mode clrlwi) — 1/7 LANDED, 6/7 walled by a consistency triangle; R2 contingent refuted (const-prop)
+
+## THE ONE QUESTION: does R3 land? ANSWER: PARTIALLY — the return-cast mask landed (+0.27,
+committed); the 6 param-handoff masks are pinned by a THREE-FUNCTION BYTE-CONSISTENCY TRIANGLE
+that no single-TU consistent typing can satisfy (every candidate breaks a protected 100).
+
+## The MWCC conversion-node rule (the iteration's foundational evidence, read pre-build)
+From PopulateStatRows' single call site (4 arg styles at once) + GetStatValue's body:
+- u8 value → u8 param: PLAIN (no mask) — `addi r4, r27`
+- int value → u8 param: MASK — `clrlwi r5/r6/r7`
+- u8 value → int param: MASK — CreateStatRow's 6 sites
+- lbz-loaded value: PROVEN CLEAN — conversions elided (HandleInput's 9 inlined
+  PopulateStatRows sites pass `data->is_name_mode` mask-free)
+- u8-returning callee → int context: MASK (caller-side; `clrlwi r3,r3,24` after
+  GetLeastPlayedFighter; callers do NOT trust callee returns)
+The mask is attached to the CONVERSION NODE; provability (lbz) elides it, but a u8 PARAM is
+untrusted. Tests of u8 params fuse mask+test (`clrlwi. r0, rX, 24`).
+
+## Build ledger (4/5 used)
+
+| # | Lever | Edit | Result | Verdict |
+|---|---|---|---|---|
+| 1 | R3 lever-(1): cached u8 local | `u8 mode = is_name_mode;` + 7 call sites pass `mode` | **BYTE-IDENTICAL** to baseline (81.54, same 10-clrlwi census, same boundary) | REFUTED, strongest form. u8→u8 alias is IR-transparent; the conversion mask is unreachable by u8-typed respelling. |
+| 2 | R3 lever-(2): int-chain flip | CreateStatRow + PopulateStatRows params u8→int (h+c), `(u8)`-cast test spellings | CreateStatRow 81.54→**83.58**, 6 masks DIED — but **PopulateStatRows 100→99.88** (frame 0x28→0x30: int-param HOME +8) + Create 93.75→93.04 | REVERTED (fence: zero collateral). The +2.04 is unreachable at this cost. |
+| 3 | R3-b: return-cast drop | drop `(u8)` at the 80242B38 site (its proto = `(int, int)`; value guarded < 0x19) | 81.54→**81.81 COMMIT 35391757f**; census 10→9 (exactly the return-mask); sweep CLEAN (all gates exact, Create restored to 93.746475 precisely) | LANDED. |
+| 4 | R2 contingent: copy-channel | `var_r3 = 1; text2->default_alignment = var_r3;` + empty middle arm | **81.60 REGRESS**; the two-li signature PERSISTS (`li r0,1` store + `li r3,1` web) — const-prop re-split | REVERTED. R2 banked as front-end-const-prop class. |
+
+## Laws minted (iteration 7)
+
+1. **u8-local alias transparency (b1, byte-identity):** a u8 local initialized from a u8 param
+   compiles to NOTHING; masks at u8→int conversion sites are conversion-node artifacts, not
+   home-provability artifacts. No u8-typed respelling can reach them.
+2. **int-param frame-home law (b2):** flipping a u8 param to int mints an 8-byte-aligned frame
+   home (+8 on stwu) even for a never-spilled register-resident param; the u8 home fit existing
+   padding. Sibling of iter-2's u64-local frame law. A protected-100 caller FRAME is therefore a
+   param-type ORACLE: PopulateStatRows' 0x28 frame pins its is_name_mode param as u8 in the original.
+3. **The is_name_mode consistency triangle (the R3 wall, fully characterized):**
+   (a) PopulateStatRows@100 pins {its param u8 (frame law), its arg2 mask-free (bytes)} ⟹
+   CreateStatRow's param was u8 in the original;
+   (b) CreateStatRow@target passes that u8 to GetStatValue mask-free ⟹ the call saw a u8-typed
+   first param;
+   (c) GetStatValue@100 pins its first param int-typed WITHIN the TU: its default tail
+   (`return is_name_mode;` = ZERO instructions, bgt straight to epilogue) and its
+   HitPercentage/PlayPercentage arms (`return mnDiagram_GetHitPercentage(is_name_mode, idxVal);`
+   — raw bl, mask-free forwards ⟹ int→int) would all GAIN masks under a u8 param.
+   Every consistent single-TU typing violates one leg. The original's mask-free mechanism is
+   UNATTRIBUTED. Two candidate resolutions, both out of this iteration's scope:
+   - **cross-TU u8-chain**: GetStatValue param-1 u8 + co-flip mnDiagram_GetHitPercentage /
+     mnDiagram_GetPlayPercentage param-1 (mndiagram.c TU + their other callers) — UNTESTED;
+     a 1-build empirical closure exists (flip GetStatValue alone, gate GetStatValue==100.0:
+     predicted FAIL at tail+2 arms, but converts the inference to instrument fact);
+   - original header/def prototype mismatch (decl u8, def int) — unshippable and untestable
+     under -requireprotos.
+   NOT "unmatchable": the masks are byte-reachable (b2 proved it at 83.58); the BLOCKER is the
+   zero-collateral fence, not the codegen.
+4. **Front-end const-prop defeats copy-channels for LITERAL webs (b4, 2nd R2 datum):**
+   `var = 1; field = var;` is re-split by const-prop (store gets its own `li r0,1`; the web
+   gets `li r3,1`). Copy-channels bind opaque values (call results — cardstate precedent), not
+   literals. Target's shared-1 (`li r3,1` feeding both stb and ladder preset) requires the
+   constant to survive as ONE node — an opacity device (volatile/call) would be needed, out of
+   bounds here. R2 = BANKED (front-end-const-prop + coloring tiebreak class). Do not retry
+   assignment-topology spellings.
+
+## Anomaly note (for tooling, possibly issue-worthy)
+During b2's sweep, mnDiagram2_Create read 93.04225 (from 93.746475) while its pre/post
+instruction extract diffed EMPTY (extraction verified non-empty; bl census 2/2 — Create does
+NOT inline CreateStatRow, my in-flight hypothesis was wrong). Restored to exactly 93.746475
+on revert. Unexplained — possibly report-pipeline sensitivity to sibling-function size changes
+within the unit. PopulateStatRows' frame regression was instruction-verified and alone decisive.
+
+## CreateStatRow residual @ 81.81 (rung-3 entry for next driver)
+- 9 clrlwi vs target 4+... precisely: ours-only = the 6 is_name_mode conversion masks
+  (TRIANGLE-walled, see law 3); target-only = a SECOND `clrlwi rX, r25, 24` (stat_type).
+- **RUNG-3 (NEW, structural, high conviction): the stat_type two-region truncation.** TARGET
+  truncates `(u8) stat_type` TWICE — region 1 (`clrlwi r23,r25,24`: table index + ladder-1,
+  short-lived) and region 2 (`clrlwi r22,r25,24` right before `cmpwi 0x18`: ladders 2-5).
+  OURS mints ONE `int r23 = (u8) stat_type` (src line ~659) spanning the whole function in a
+  long-lived callee-save (r31). Splitting the local into two region-scoped derivations
+  (re-derive `(u8) stat_type` in the text3 block) mirrors the target's web structure, frees a
+  long-lived callee-save mid-function, and may move the save boundary toward target's stmw r21.
+  This is the same family as iter-3's "per-branch duplication" + the campaign's web-split lever.
+- RUNG-4 (1-build empirical closure, optional): the GetStatValue-u8 flip test (law 3 bullet 1).
+- The +5-line delta (426 vs 421) and the r26/r27 row_idx/entity_idx prologue swap: re-read
+  after rung-3 (web-structure first).
+- UpdateHeader:217 carries the same `(u8)`-cast-before-80242B38 artifact — transferable to ITS
+  round (not touched; out of scope).
+
+## PENDING-REVIEW (iteration 7)
+- 35391757f drops a semantically-no-op `(u8)` cast (value guarded < 0x19 by the preceding
+  branch) — natural C, no guideline risk.
+- Carried: CreateStatRow PAD_STACK(16) diagnostic (must become natural frame reservation
+  pre-PR); GetAggregatedFighterRank res-uninitialized + comma spelling.
+
+## Commit stack (cumulative)
+- cc052016f GetRankedFighter 79.94 -> 94.58 (iter 2)
+- e2d172d4d GetAggregatedFighterRank 81.91 -> 85.19 (iter 2)
+- 05a5aaf91 GetAggregatedFighterRank 85.19 -> 93.56 (iter 3)
+- 2a01de812 GetAggregatedFighterRank 93.56 -> 94.14 (iter 4)
+- 1d924db54 GetAggregatedFighterRank save-boundary flip, 94.14 -> 94.11 (iter 5)
+- 47b40968d CreateStatRow 80.11 -> 81.54 (iter 6 — cached-base reuse R1)
+- 35391757f **CreateStatRow 81.54 -> 81.81 (iter 7, this driver — R3-b return-cast drop)**
+
+## TU state after iteration 7
+Open set: **CreateStatRow 81.81** (rung-3 = stat_type two-region split; 6 is_name_mode masks
+triangle-walled per law 3; R2 ladders banked as const-prop class), GetRankedFighter 94.58,
+GetAggregatedFighterRank 94.11, Create 93.75, GetRankedName 97.87, UpdateHeader 94.18,
+HandleInput 97.46 (WALLED/parked), mnDiagram3_HandleInput 98.42. Protected-set sweep:
+all 55 mndiagram* 100s hold; every partial exact. Zero collateral.
