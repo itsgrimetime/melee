@@ -487,3 +487,52 @@ AUTO-REJECTS: none encountered — no volatile/no-op-mask/var-alias/side-effect-
 - **KEEP RUNNING: 8024714C @ coder3** — productive (8 better-score events, +5.45 banked, best 2685 still well above a byte-match 0; more headroom likely). Re-harvest next round.
 - **KEEP RUNNING (watch): 80245BA4 @ coder3** — yielded a real lever but only +0.41; best 2075 vs base 2375. Worth one more harvest cycle since it shares the coder3 threads with 8024714C anyway.
 - **STOP / re-tune candidate: HandleInput @ coder1** — 0 wins in ~78k iters on the tuned profile. The 98.42 residual (relabel + entry-rider) is not falling to this `[weight_overrides]`. Either re-tune (different randomize_funcs / inline-callee injection of `HandleInput`'s same-TU callees) or stop coder1 and reallocate the channel to the mndiagram.c endgame pool. Recommend reallocate unless a fresh tuning hypothesis exists.
+
+---
+
+## PERMUTER TRIAGE 2 — bounded harvest round, coder3 only, 2026-06-12 (UTC)
+
+Re-harvested the two coder3 jobs after another ~30k iters each (80245BA4 ~110k, 8024714C ~122k). coder1 = STATUS ONLY (its base is stale by design). **NEW-CANDIDATE GATE: a candidate is only new if its `output-<score>` dir is BELOW the previously-applied candidate's score** (2075 for 80245BA4 @ 94.48, 2685 for 8024714C @ 95.68) AND clean AND re-expressed/verified against the CURRENT committed source. **NULL HARVEST: 0 commits.** 1 build used (the 8024714C 2600 candidate, gate-failed). Both coder3 jobs STOPPED — channel freed.
+
+### Per-job status table (liveness via `remote tail`, #574 workaround; ground truth = fetched `output-<score>` dirs)
+
+| Job | Host | Iters (snapshot) | Base | Lowest fetched output dir | New < applied threshold? | Verdict |
+|-----|------|------------------|------|---------------------------|--------------------------|---------|
+| `mnDiagram3_80245BA4-coder3-20260611-210600` | coder3 | ~110,300 | 2375 | **2065** (`output-2065-1`) | yes (2065 < 2075) BUT **corrupt** | **NULL** — REJECT (placeholder leak + behavior-narrowing). Best LEGIT stays 2075 (94.48). |
+| `mnDiagram3_8024714C-coder3-20260611-210616` | coder3 | ~122,470 | 3155 | **2600** (`output-2600-1`) | yes (2600 < 2685), clean | **NULL** — REJECT after build (introduces f28 callee-save spill + 4 instrs absent from target; +0.41 match% but structure regression). |
+| `mnDiagram_8024227C-coder1-20260611-225238` | coder1 | ~119,374 | 2195 | (not fetched — STATUS ONLY) | n/a | **STALE BASE (94.32)** — function now 94.80+ on another branch w/ active windows round. Re-bootstrap pending that round. Not stopped/fetched/applied. |
+
+No `output-0-*` (no byte-match / no stale-base rediscovery) in either coder3 job.
+
+### Candidates reviewed → verdicts
+
+**80245BA4 (coder3), lowest = 2065 (`output-2065-1`): AUTO-REJECT (corrupt).** `candidate_audit.json` flags it `corrupt-candidate` / `repo-invalid` with **5 `inline_fn` placeholder leaks** (decomp-permuter left unresolved helper placeholders — the #424 class). `diff.diff` confirms: it minted `inline int inline_fn(s32,int){return arg0==arg1;}` and rewrote `i==0` / `entity==0x78` / `(u32)icon_id==0xFFFF` as `inline_fn(...)` calls — the 2065 score is meaningless (the helper won't exist in the real TU). Its ONE real sub-change (`u32 stat_val` → `unsigned char stat_val` feeding `mnDiagram_IsDistanceOverflow`) is a **behavior-changing type narrowing → AUTO-REJECT** (semantic-break rule). All other clean dirs are ≥2075 (the already-applied cast-drop lever). **NULL.**
+
+**8024714C (coder3), lowest = 2600 (`output-2600-1`): clean (`plausible-C-shape`, no source_risks), BUILT, gate-FAILED.** The 2600 diff is against the STALE base (pre-`b38208c2e`), so it bundles TWO levers; lever #2 (`f32 new_var = mnDiagram3_804DBFFC;` SisLib temp) is ALREADY in the committed source (the triage-1 CSE-split). **Net-new lever vs CURRENT source = lever #1 only:** a `Diagram3* new_var2; new_var2 = data;` alias, reading `new_var2->jobjs[9]` (instead of `data->jobjs[9]`) in the first `HSD_JObjGetTranslationY` of the popup-block `row_spacing`. Triage: pure pointer-copy alias, behavior-identical, re-read/materialization family → PASSES the semantic-break gate. Ported it (function-top `new_var2` decl after `row0`, matching candidate placement) + built.
+- **Result: 95.68 → 96.09 (+0.41 match%)** — BUT the #576 truth-gate side-by-side shows the lever **grows the frame -152 → -160 and adds a `stfd f28,128(r1)` callee-save spill (+ matching epilogue lfd) = the +4 line-delta (expected 293, current 297).** The target has NO f28 save; the committed 95.68 source has the byte-exact 152 frame (no f28). The body is otherwise an opcode-identical shift cascade + the known {r27↔r29}+{f30↔f31} coloring swap. So the +0.41 is the aligner crediting textual opcode-similarity (96.2%) while under-penalizing a NEW callee-save spill the target lacks — the textbook "score-improving candidate that gate-fails on +instr/structure regression." Committing it would lock in the spill and make the endgame strictly harder. **REJECT + revert.** (The lever scored 2600 on the stale base because that base lacked the SisLib float temp; on the current base the two float-temp materializations together push FPR pressure over the edge into the f28 spill — it does NOT transfer.)
+
+AUTO-REJECTS encountered: 80245BA4-2065 (placeholder leak + behavior narrowing). Build-gate REJECT: 8024714C-2600 (callee-save-spill structure regression).
+
+### Build/verify (1 build; reverted)
+
+`python configure.py && ninja` (exit 0) on the 8024714C-2600 lever. Protected sweep (checkdiff + report.json) WHILE the lever was applied:
+- Six 100s HOLD: fn_80246E04, fn_80246E64, fn_80246F0C, mnDiagram3_80246D40, mnDiagram3_80246F2C, mnDiagram3_80247008 = 100.00.
+- mndiagram3.c **.data = 100.0, .sdata = 100.0** (held), .sdata2 = 71.875 (out-of-scope).
+- mnDiagram3_HandleInput = 98.42 (unchanged), mnDiagram3_80245BA4 = 94.48 (unchanged).
+- mnDiagram3_8024714C = 96.09 under the lever — but REJECTED for the f28-spill regression (see above); reverted to committed 95.68. Working tree clean.
+
+### Commits
+- **NONE.** Null harvest — both coder3 sub-threshold candidates are unshippable wall-class hacks (corrupt placeholder / behavior-narrowing / callee-save-spill regression). The clean transferable levers were already banked in TRIAGE 1 (8024714C 95.68, 80245BA4 94.48).
+
+### coder1 stale note (per orchestrator instruction)
+
+`mnDiagram_8024227C-coder1-20260611-225238` @ ~119,374 iters, lowest visible score 2195 = its 2195 base (no improvement in window). Its base (mnDiagram_8024227C @ 94.32) is **stale by design** — the function is now at 94.80+ via source commits on another branch, and a windows-host permuter round is still active there. **Re-bootstrap pending the windows round.** This round did NOT stop, fetch, or apply anything from it. (Consistent with TRIAGE 1's HandleInput@coder1 NULL: this tuned profile is not cracking the mndiagram.c-sibling residuals either.)
+
+### KEEP/STOP decisions (coder3)
+
+- **STOP: `mnDiagram3_80245BA4-coder3-...` (DONE — channel freed).** Converged for *transferable* wins: the only sub-2075 output (2065) is a corrupt placeholder leak; everything clean is ≥2075 (already applied at 94.48). The 80245BA4 residual is the oracle-confirmed S9 4-node class-1 float-coloring ceiling (Iteration 8 PARK) — the permuter only finds unshippable score-hacks here.
+- **STOP: `mnDiagram3_8024714C-coder3-...` (DONE — channel freed).** Although it still produced a nominally-lower score (2600 < 2685), that candidate gate-fails (f28-spill regression); after ~122k iters its sole transferable lever (2685 → 95.68) is already banked. Diminishing returns vs the waiting queue.
+- **CHANNEL FREE for the next allocation.** The mndiagram2 queue (Create 98.43 never-permuted, UpdateHeader 95.15 transposition-class) is next in line per the mndiagram2 declaration — NOT submitted here; the orchestrator allocates.
+
+### Epistemic note
+Both coder3 jobs are now exhibiting the wall-class permuter signature (score-improving but unshippable: placeholder leaks, behavior narrowing, callee-save spills) on top of oracle-confirmed coloring/front-end ceilings. This is NOT a refutation of the PARK maps — it is the expected permuter behavior on register/spill/frame walls (only the clean source-shape levers — already harvested in TRIAGE 1 — transfer). 8024714C 95.68 / 80245BA4 94.48 stand as the round-2 high-water marks.
