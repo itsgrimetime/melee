@@ -2680,19 +2680,21 @@ void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
     int fighter_id;
     Diagram* data = GET_DIAGRAM(arg0);
     mnDiagram_Assets* assets = (mnDiagram_Assets*) &mnDiagram_804A0750;
-    void** joint_data = assets->FaceB;
+    void** joint_data;
     HSD_JObj* jobj;
     HSD_JObj* sp_jobj;
+    HSD_JObj* sp_jobj2;
     int i;
     int k;
-    s32 idx;
-    s32 remaining;
+    int idx;
+    int remaining;
     u8* p;
     f32 x_spacing;
     f32 y_spacing;
     PAD_STACK(32);
 
     // Column headers (fighter icons)
+    joint_data = assets->FaceB;
     for (i = 0; i < 7; i++) {
         count = 0;
         for (k = 0; k < 0x19; k++) {
@@ -2701,9 +2703,9 @@ void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
             }
         }
         if (count > i) {
-            idx = arg2;
             remaining = i;
-            p = &assets->sorted_fighters[arg2];
+            idx = arg2;
+            p = &assets->sorted_fighters[idx];
             while (remaining >= 0) {
                 if (remaining == 0) {
                     fighter_id = assets->sorted_fighters[idx];
@@ -2740,6 +2742,7 @@ void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
     }
 
     // Row headers (fighter icons)
+    joint_data = assets->FaceB;
     for (i = 0; i < 0xA; i++) {
         count = 0;
         for (k = 0; k < 0x19; k++) {
@@ -2748,9 +2751,9 @@ void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
             }
         }
         if (count > i) {
-            idx = arg1;
             remaining = i;
-            p = &assets->sorted_fighters[arg1];
+            idx = arg1;
+            p = &assets->sorted_fighters[idx];
             while (remaining >= 0) {
                 if (remaining == 0) {
                     fighter_id = assets->sorted_fighters[idx];
@@ -2776,9 +2779,9 @@ void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
                                joint_data[3]);
             HSD_JObjReqAnimAll(jobj, 0.0f);
             HSD_JObjAnimAll(jobj);
-            lb_80011E24(jobj, &sp_jobj, 2, -1);
-            HSD_JObjReqAnimAll(sp_jobj, (f32) (fighter_id & 0xFF));
-            HSD_JObjAnimAll(sp_jobj);
+            lb_80011E24(jobj, &sp_jobj2, 2, -1);
+            HSD_JObjReqAnimAll(sp_jobj2, (f32) (fighter_id & 0xFF));
+            HSD_JObjAnimAll(sp_jobj2);
             y_spacing = HSD_JObjGetTranslationY(data->jobjs[10]) -
                         HSD_JObjGetTranslationY(data->jobjs[9]);
             HSD_JObjSetTranslateY(jobj, y_spacing * i);
