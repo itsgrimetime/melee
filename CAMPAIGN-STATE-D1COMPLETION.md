@@ -940,3 +940,30 @@ Three temp-arg draw sites (+0f0 SumNameFalls header, +1cc SumFighterFalls header
 **SIBLING TRANSFER TEST — gp-alias on mnDiagram2_HandleInput (97.46): REVERTED.** Their HandleInput branch (`f686147a4`) claimed `gobj alias restores r28 CSE (+0.4)`. On OUR base it REGRESSED: 97.46 -> 97.30 (-0.16, inline-boundary-toolchain-artifact). Mechanism: HandleInput has only ONE body use of `gobj` (the `HSD_GObjPLink_80390228` call in the `result & 0xC0` branch), vs CursorProc's four uses across calls — so the alias adds a copy without enabling the cross-call copy-survival/CSE that paid off in CursorProc. The lever is use-count-gated: it helps when the param is consumed at multiple call sites, hurts at a single site. Reverted; HandleInput re-verified 97.46, 0 regressions.
 
 **PROTECTED SWEEP (vs this round's saved baseline /tmp/cursorproc_baseline_report.json):** 0 regressions. Only change: CursorProc 99.52 -> 100.00. mnDiagram2_HandleInput 97.46 (transfer reverted), mnDiagram_8024227C 94.80 (untouched, at ITS active-driver baseline). HEAD after this round = `6a9b5b70e` (one source commit, CursorProc).
+
+---
+
+## PERMUTER ROUND 2 (endgame, post-windows) — coder1 re-bootstrapped at 95.39 (2026-06-12, permuter re-bootstrap agent)
+
+Mechanical re-bootstrap only (no matching, no triage). HEAD `ea5da317c`, tree clean. mnDiagram_8024227C = **95.39** in build/GALE01/report.json (freshly built).
+
+### STOPPED JOB EPITAPH — `mnDiagram_8024227C-coder1-20260611-225238`
+- **Base 2195** (against the 94.32 source — STALE after 3 commits since: `e53f560bb` alias-drop, `bffd32597` twin-inline, `2743a3aff` clamp-twin → 94.32 → 95.39).
+- **Ran ~121,028 iterations** (final frozen iter = 121028 after `remote stop`, verified dead by two identical `remote tail` snapshots per #574).
+- **NEVER beat its base.** Best output score = **2195 = base** (six `output-2195-*` dirs, all stale-base re-discoveries — the score-0/stale-base false-positive pattern; no sub-2195 output ever produced). Its candidates were against dead source and are discarded.
+
+### NEW JOB — `mnDiagram_8024227C-coder1-20260612-013111`
+| Field | Value |
+|-------|-------|
+| Host / threads | coder1 / 16 |
+| Base (committed source) | **95.39** |
+| **Base score (#558 verified)** | **1560** (local `permuter.py --seed 0`; plausible low-thousands for a 95.39 fn, NOT 10k+ → inline injection confirmed #424-safe; remote recomputed the SAME 1560). Note: LOWER than the stale job's 2195 (closer base). |
+| randomize_funcs | self + the 7 bootstrap-injected same-TU inline callees: `mnDiagram_SumNameFalls`, `mnDiagram_GetVisibleNameCursorFrom`, `mnDiagram_CountUnlockedFightersInline`, `mnDiagram_SumFighterFalls`, `mnDiagram_GetVisibleFighterCursorFrom`, `mnDiagram_GetNameTotalKOs`, `mnDiagram_SumFighterKOsClamped` |
+| Weights (vs stale template) | reorder-heavy 802427B4 template + **bumped `perm_temp_for_expr` 25.0** (coalesce-boundary / alias-introduction axis, CursorProc node-set precedent) for the r3/r6 value-home-vs-arg coalesce wall. perm_dummy_comma_expr=35, perm_reorder_decls=25, perm_split_assignment=22, perm_reorder_stmts=18, perm_pad_var_decl=15. |
+
+### #424 / #575 BOOTSTRAP NOTES (verified clean — NO hand-fixes needed for this fn)
+- **#424 (inline-callee injection):** the target asm for 8024227C (asm 4118-4517) `bl`s ONLY `GetNameCount/GetNameText/GetPersistentFighterData/GetPersistentNameData/mn_IsFighterUnlocked/mnDiagram_80241E78`. There is **NO `bl` to ANY of the 7 family helpers** → all 7 are INLINED in the retail object. The fresh base.c carries all 7 as `static inline`/`inline` **bodies** (lines 315/327/342/358/371/383/414), not forward-decl-only → they stay inlined (base score 1560 = low, the #424-safe signature; contrast 8024714C/AC7DC = 20625 when a callee was bl-emitted). The stale template's `randomize_funcs` was wrong post-clamp-commit (listed the now-unused `mnDiagram_SumFighterKOs`, missing `SumFighterKOsClamped` + `CountUnlockedFightersInline`); the bootstrap rewrote it correctly.
+- **#575 (bootstrap corruption):** the two known 8024714C injection bugs (`inline #undef __FILE__` fusion; `JOBJ_MTX_INDEP_SRT` undefined) did NOT occur here — this fn's twins reference no `#undef __FILE__` neighbor and no exotic macro constants (only GetNameText/mn_IsFighterUnlocked/GetPersistent*). base.c compiled on iter 1 (0 errors). No hand-fix applied.
+
+### STALE-BASE FLAG — CLEARED
+The 3-commits-stale coder1 base is RESOLVED. coder1 now hunts the 95.39 residual (per the windows-round census: the +284/+288 GetNameTotalKOs-preheader scheduling transposition, the r3/r6 arg-copy COALESCING order at +0f0/+1cc/+478, and the ~180-line register-only coloring cascade). The endgame lever is the value-home-vs-arg coalesce, NOT register tiebreaks (RECOMMENDATION #3) — reflected in the `perm_temp_for_expr` bump.

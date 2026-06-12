@@ -1626,3 +1626,21 @@ WORK (the endgame list, nothing else):
    + comma notes; mode rename at /understand time).
 3. **PR consolidation** across the three mndiagram TUs (14/21 + six 94-98% improvements in
    this TU alone since campaign start).
+
+---
+
+## PERMUTER ROUND 1 (mndiagram2) — Create + UpdateHeader bootstrapped to coder3 (2026-06-12, permuter re-bootstrap agent)
+
+Mechanical bootstrap only (no matching, no triage). The iter-13 (e) listening-post queue is now LIVE on coder3 — triage-2 had just stopped both prior coder3 jobs (converged null after 110k-122k iters), freeing the channel; both jobs share coder3's 16 threads (the triage-1 precedent). Bootstrapped from this worktree's committed source (HEAD `ea5da317c`, tree clean). Triage rules / residual attribution: see "UpdateHeader residual @ 95.15" + iter-11 Create §(e) above. **Re-bootstrap if any source commit lands on these fns (stale-base doctrine #558).**
+
+### NEW JOBS
+| Function | base % | Job ID | Base score (#558) | Weights | Residual the job hunts |
+|----------|--------|--------|-------------------|---------|------------------------|
+| **mnDiagram2_UpdateHeader** | 95.15 | `mnDiagram2_UpdateHeader-coder3-20260612-013339` | **335** (local `permuter.py --seed 0`; small near-match) | decl/reorder-BUMPED: perm_reorder_decls=35, perm_reorder_stmts=30, perm_dummy_comma_expr=25, perm_split_assignment=18, perm_temp_for_expr=15 | the r30↔r31 name/is_name **dispense transposition** (Class C schedule/encoding) + banked Class B float-temp f0/f1 pick. Class A (return-width see-saw) SIBLING-FENCED — not targeted. Decl-band territory. |
+| **mnDiagram2_Create** | 98.43 | `mnDiagram2_Create-coder3-20260612-013355` | **1190** (local; plausible low-thousands) | balanced + alias/temp nudge: perm_reorder_decls=30, perm_dummy_comma_expr=25, perm_temp_for_expr=20, perm_split_assignment=20, perm_reorder_stmts=18 | one **arg0-rooted callee-save permutation** off the arg0 prologue spill. NOTE: the assert-string .data anchor (5 lines, `HSD_ASSERTREPORT("Can't get user_data.\n")`) is UNREACHABLE by the permuter → **expect a floor near 98.43, not 100**, unless a separate data round lands. |
+
+Both jobs verified ALIVE (iterations advancing; remote base scores match the local #558 figures exactly — 335 and 1190). Create is already emitting `output-1190-*` same-score-different-asm candidates (exploring the decl/coalesce space).
+
+### #424 / #575 BOOTSTRAP NOTES (both clean — NO injection, NO hand-fixes)
+- **#424 N/A for both.** Target asm `bl`s every same-TU callee directly: UpdateHeader (asm 141-250) → `mnDiagram_GetNameByIndex/GetFighterByIndex/mnDiagram_80242B38/HSD_*/gm_*/lb_8000B1CC`; Create (asm 1747-1905) → `GObj_Create/HSD_*/mnDiagram2_CreateStatRow/mnDiagram2_InitUserData/mnDiagram2_UpdateHeader/mnDiagram_GetNameByIndex/GetFighterByIndex`. **NEITHER has any inlined same-TU callee** → bootstrap reported `injected_inline_callees: []` for both, `randomize_funcs` = the single function each. No #424 risk.
+- **#575 N/A for both.** No `inline #undef __FILE__` fusion and no undefined macro constants in either base.c (hazard scan clean). Both compiled on iter 1 (0 errors). No hand-fix applied.
