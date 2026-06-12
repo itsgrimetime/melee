@@ -1321,7 +1321,6 @@ void mnDiagram2_GetAggregatedFighterRank(u8* out, u8 type, u8 idx)
     } while (i < 25);
 
     count = GetNameCount();
-    arr = ((s32) type, entries);
 
     for (i = 0; i < count; i++) {
         switch ((s32) type) {
@@ -1343,7 +1342,7 @@ void mnDiagram2_GetAggregatedFighterRank(u8* out, u8 type, u8 idx)
             k = 0;
             for (j = 25; j > 0; j--) {
                 if (res == ptr->name) {
-                    arr[k].value += 1;
+                    ((s32) type, entries)[k].value += 1;
                     break;
                 }
                 ptr++;
