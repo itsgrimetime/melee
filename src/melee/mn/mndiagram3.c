@@ -552,12 +552,12 @@ void mnDiagram3_8024714C(void* arg0)
 
     {
         HSD_GObjProc* proc;
-        proc = HSD_GObj_SetupProc(GObj_Create(0, 1, 0x80), fn_802461BC, 0);
+        proc = HSD_GObj_SetupProc(GObj_Create(0, 1, 0x80), mnDiagram3_HandleInput, 0);
         proc->flags_3 = HSD_GObj_804D783C;
     }
 }
 
-void fn_802461BC(HSD_GObj* gobj)
+void mnDiagram3_HandleInput(HSD_GObj* gobj)
 {
     char* base = (char*) &mnDiagram3_803EEC10;
     Diagram3* data = mnDiagram3_804D6C20->user_data;
