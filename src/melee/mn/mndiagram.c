@@ -2509,9 +2509,9 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
                         var_r23 = mnDiagram_GetVisibleFighterCursorFrom(
                             sorted, arg1_r, var_r30);
                         if (var_r22_3 == 7) {
-                            var_r16_6 = mnDiagram_SumFighterKOsClamped(var_r23);
-                            mnDiagram_80241E78(arg0, (u8) var_r22_3,
-                                               (u8) var_r30, var_r16_6);
+                            mnDiagram_80241E78(
+                                arg0, (u8) var_r22_3, (u8) var_r30,
+                                mnDiagram_SumFighterKOsClamped(var_r23));
                         } else {
                             var_r24 = mnDiagram_GetVisibleFighterCursorFrom(
                                 sorted, arg2_r, var_r22_3);
