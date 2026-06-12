@@ -1040,6 +1040,130 @@ The original compiled from C, so the object exists; not yet identified.
   revisit: register-web splits on this function (exhausted), entry-window u64
   suppliers (dead, iter-7), x48/spanning-web (displaces result, iter-3b/5).
 
+## Iteration 9: the 40-byte local is interference-INERT — frame-object premise refuted, fold-away temp class found (driver 9, 2026-06-11)
+
+THE ONE QUESTION: what FORM of real 40-byte local — live across result's
+entry→bottom span — makes the S1 merge band-faithful while keeping the body
+byte-identical? ANSWER: **NONE — the premise is refuted empirically. MWCC's
+IG contains register webs ONLY; frame objects contribute no node and no
+edge (no-pad probe: IG byte-identical). The 40-byte object explains the
+FRAME BYTES only.** Iteration-8's unification (PAD interference =
+load-bearing) is CORRECTED: its census of existing webs stands, but the
+missing +2 class is NEW fold-away addressing temps (exemplar ig61, in-graph),
+not the frame object. 1 dump run, 0 builds. Match stays **97.46%**.
+
+### HEADLINE 1 — stack/liveness evidence
+
+**(a) Allocate-only, measured.** The target's COMPLETE r1-reference
+inventory (full-diff grep): `stw r0,4(r1)` / `stwu r1,-80(r1)` /
+`stmw r27,60(r1)` / `lmw r27,60(r1)` / `lwz r0,84(r1)` / `addi r1,r1,80` —
+six prologue/epilogue rows. NOTHING touches 8..59(r1). The original's
+40-byte object is never loaded, stored, or addressed in emitted code; no
+instruction names its type. PAD_STACK is literally `UNUSED unsigned char
+_[(bytes)]` (placeholder.h:76) — the same class of object.
+
+**(b) MWCC frame-object interference model: THERE ISN'T ONE.**
+- Node accounting (existing dumps): class-0 = 196 virtuals → 170 coalesce
+  roots − 32 phys = exactly the 138 decision rows. Every IG node IS a
+  register virtual. Aggregates have no virtual → no node. (Declared-unused
+  SCALARS do get nodes — ig38/ig48, degree 0, nIntfr 0 — edge-free.)
+- **EMPIRICAL (the probe, 1 dump run):** PAD_STACK(40) deleted →
+  `n_virtuals=196 distinct_roots=170 n_nodes=194` and the ENTIRE class-0
+  HandleInput COLORGRAPH section (all 138 rows + every interferer list) is
+  BYTE-IDENTICAL to baseline, at the same dump line numbers. Only the frame
+  changes: 80→40, `stmw r27,60(r1)`→`stmw r27,20(r1)`. Layout: 80 = 8
+  header + [40 pad + 12 shared locals-area] + 20 regs; no-pad 40 = 8 + 12 +
+  20. The pad contributes NOTHING to allocation. Probe reverted; tree clean.
+- **The implicit experiment was already run N times**: every merge
+  measurement this campaign (iter-3 single-web 96.7 Δ1; iter-5/6
+  x48+new_var dumps) had PAD_STACK(40) IN THE SOURCE — the 40-byte frame
+  object was present and result still fell out of the front band. With
+  iter-5's "bare `u8 pad[40]` ≡ PAD_STACK byte-identical", transitivity
+  pre-measures "real array + S1 merge" = out-of-band.
+
+### HEADLINE 2 — per-form verdicts (0 builds; all pre-refuted by (b))
+
+| Form (40 bytes) | IG contribution | Verdict |
+|------|------|------|
+| real array / struct, allocate-only | aggregate → no virtual → NO node (probe-proven) | cannot supply edges; merge stays band-unfaithful |
+| address-taken local | memory home + real ld/st at uses (iter-6 `&var_r28` precedent wrecks +034) | byte-break |
+| volatile temp | unelidable ld/st | byte-break |
+| scalar decomposition (10×int) | unused scalars = edge-FREE nodes (ig38/48 in-graph) | no edges; u64 variants = DO-NOT (iter-7) |
+
+PAD_STACK(40) disposition: STAYS (repo-blessed). The semantic identity of
+the original's 40-byte object remains unidentified, but it is now PROVEN
+not to gate the band or the register family — any allocate-only 40-byte
+aggregate reproduces the bytes. The bytes question and the band question
+are fully DECOUPLED.
+
+### Band-model repair (sim corrected; iteration-7 table amended)
+
+Corrected simulator (compiler semantics: coalesced-away virtuals count as
+permanent neighbors — they appear in the compiler's own nIntfr counts, e.g.
+ig39's list holds 35=r5/59=r4 alongside phys 5/4): **BOTH rules now
+reproduce BOTH graphs EXACTLY** — fixed-cut T=33: 138/138 + 139/139, AND
+incremental scan-time (ascending sweeps, immediate removal, k=29, deferred
+nodes = the front, sweep-2+ pushes ascending): 138/138 + 139/139.
+Iteration-7's "incremental 6/138 FAIL" was a simulator artifact (dropped
+coalesced neighbors). The models are extensionally equivalent on these two
+graphs; the incremental one is mechanistic:
+
+- **Baseline result is deferred at at-scan degree = 29 = k EXACTLY — zero
+  margin.** Removed-before-its-scan neighbors: {32 gobj, 34 var_r28, 42
+  data2-0xC0, 61 buttons-base}. Sweep-1 deferred set = {39, 57, 99} = the
+  observed front trio, popping 99→r31, 57→r30, 39→r30.
+- S1 merge removes 2 result-edges → at-scan 27; x48 adds 1 → 28; both < k
+  → result drops to the main band (measured iter93→r28).
+
+### THE FOUND CLASS — instruction-free result-edges exist, in-graph (ig61)
+
+ig61 (buttons-base temp, minted by the cast-pointer-arithmetic spelling
+`((s32*)&mn_804A04F0.buttons)[1] = result`): post-coloring listing B4 has
+`addi r3,r29,8; stw r31,4(r3); ...; stw r28,0(r3)` — but the FINAL bytes
+are `stw r31,12(r29)` / `stw r28,8(r29)` with NO addi. The addi is folded
+into the addressing post-coloring. **ig61 is an IG node with an edge to
+result (it is one of the 33) that emits ZERO instructions.** The
+fold-away-addressing-temp class supplies result-edges at zero byte cost.
+This is the class iteration-8's census missed: it surveyed SPLITS of
+existing webs (correctly exhausted) but not MINTING new fold-away temps.
+
+**Counterfactual (simulated on the measured merged graph):** grafting
+synthetic high-ig result-edges: +0 → front=[40,...] (result out); **+1 (on
+the x48 graph) / +2 (S1-only arithmetic) → pop order [result, merged, ...]
+→ result=r31 first, merged-data=r30 second = THE TARGET LAYOUT**, under
+both band rules. The requirement is exact: **+2 fold-away temps with HIGH
+ig (minted after result's def — 0xC0-arm head or bottom body, where result
+is live), under the S1 merge.** Low-ig fold-aways (another ig61-class entry
+temp) satisfy only the fixed-T rule — they are removed before result's
+scan under the incremental rule; high-ig satisfies both.
+
+### Driver-10 doctrine
+
+1. THE SEARCH TARGET: respell 2 existing single-use field stores in
+   result-live regions (bottom-body `sth` scroll_offset sites, `stb`
+   selected_*_idx sites, 0xC0-arm stb sites) in the &field-cast-arithmetic
+   shape that minted ig61 (`((T*)&base->field)[0] = v` family), combined
+   WITH the S1 merge spelling. Mechanism check per build: new node appears
+   with a result-edge, its instruction folds away (bytes identical), result
+   at-scan ≥ 29 / nIntfr ≥ 33, front order {result, merged}, reload gone
+   (Δ3→1), entry trio intact, 5 callee-saves, protected fns intact.
+2. Whether MWCC mints-then-folds vs folds-at-IR-build for a given spelling
+   is the per-site empirical question — ig61 proves the mint-then-fold path
+   exists for the `((T*)&global.field)[i]` shape. Probe with ONE dump
+   before building.
+3. Do NOT: 40-byte-local forms for banding (closed this iteration),
+   register-web splits (iter-8), u64 suppliers (iter-7), x48/spanning-web
+   (iter-3b/5), address-taken/volatile (byte-break).
+
+### Iteration-9 ledger
+
+- Dump/stack runs: 1 of ≤2 (no-pad probe; IG byte-identical; reverted).
+  Builds: 0 of ≤3 — every named form pre-refuted by the probe + the
+  iter-5 byte-identity + the iter-3 merge measurement (transitivity);
+  building them would re-measure known numbers.
+- Commits: doc-only (this section). Source untouched; baseline 97.46
+  (Δ3, hunks 5) verified before and after; protected fns 100/100/98.67.
+
 ## DOC-FEEDBACK (methodology observations, iteration 2)
 
 1. **Precise-alignment-first should be doctrine.** Iteration-1 spent a
