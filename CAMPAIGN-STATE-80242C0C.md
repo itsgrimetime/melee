@@ -485,3 +485,76 @@ despite the disasm read — inline-param band/cascade territory. **The frame gro
 3. ~40 register-only lines (cascade; re-rolls if 1-2 ever land).
 4. Reloc/BSS section-anchor ceiling — do not chase.
 sp_jobj slots, PAD_STACK: DONE (natural form shipped).
+
+---
+
+## ITERATION 6 (2026-06-11, driver 2) — COALESCE QUESTION ANSWERED, FUNCTION PARKED (96.95)
+
+### THE COALESCE MECHANISM (dump-first, 1 run of `debug dump local`, 0 builds)
+Block for this fn in the pcdump: lines 136852-145499 (identified by call profile
+IsFU=48/SetMtxDirtySub=24/lb=24/AddChild=24 = 4:2:2:2 x 12 stage prints).
+
+**The premise of the question was inverted by the dump: there is NOTHING our compile
+coalesces.** In OUR pre-coloring pcode the col tail is:
+```
+mr r3,r41 ; bl HSD_JObjSetMtxDirtySub   <- arg = jobj's virtual r41 DIRECTLY
+lwz r3,36(r44) ; mr r4,r41 ; bl HSD_JObjAddChild
+```
+ONE virtual (r41) covers every jobj use (stfs 56(r41), flag lwz 20(r41), asserts, all
+call args). No inline-param temp survives IRO into the allocator. The function's entire
+[COALESCE] map is `75 -> 3 [r3]` and `88 -> 3 [r3]` — just the two LoadJoint
+return-temps (`mr r88,r3; mr r48,r88` shape) folding into r3. Faithfulness verified:
+post-coloring col jobj = r29 == retail ninja disasm (row shows the known one-reg DLL
+divergence r28-vs-r27; structural conclusions unaffected — front-end IRO cross-validated
+faithful per #543).
+
+So: TARGET's `addi r26,r21,0` (+13c) is an EXTRA same-value IR range reaching its
+allocator — {SetMtxDirtySub arg + AddChild arg} on r26, memory-ops on r21 — costing the
+13th callee-save (the whole frame group). MWCC's allocator does not split non-promoted
+webs (region machinery exists only for promoted loop-carried variables per the InputProc
+band model; jobj is not loop-carried) ⟹ the copy existed in the original's IR, i.e. the
+original SOURCE produced a copy node that survived IRO in the col block.
+
+### COL/ROW ASYMMETRY + THE RECURRING CLASS
+Target row = one web (r26) for everything (like ours). Target col = the split. This is
+the SECOND col-only same-value copy in this function: (1) the k-init copy at +040
+(iter-3: `k=count` spelling INERT — IRO folds), (2) this jobj copy at +13c (iter-5:
+`jobj2 = jobj` + AddChild(jobj2) INERT — IRO folds, byte-identical). **Named residual
+class: "original col-block same-value copies that survive IRO; every direct caller-side
+copy spelling folds in ours."** No mismatch-db or discord-knowledge precedent found.
+
+### VERDICT: (b) NOT caller-reachable with the catalogue — PARKED
+- Caller copy spellings fold (proven build, iter-5 B).
+- The SetMtxDirtySub arg is bound inside the SDK inline chain (SetTranslateX ->
+  SetMtxDirty -> SetMtxDirtySub); no caller construct can bind it to a different
+  variable than SetTranslateX's argument, and passing a second variable to SetTranslateX
+  moves the memory-ops too (contradicts target: stores/flags on r21).
+- Band/pressure/dead-anchor levers operate on EXISTING virtuals; ours has no second
+  virtual to steer — the allocator cannot mint one.
+- THE ONE HEAVY OPTION (NOT built, review-risky — flagged for the user): manually expand
+  the HSD SDK inline at the col site, writing the body with memory-ops on `jobj` and the
+  SetMtxDirtySub/AddChild args on a second local. This is caller-LOCAL control of the
+  param web (the 80243434-style control surface) but hand-expanding an SDK inline in
+  melee source needs an upstream-review ruling first.
+
+### PARK CENSUS (final: 96.95, opcode 99.4, delta 1, 21 hunks)
+- Campaign total: **94.98 -> 96.95** (+1.97pp) incl. one behavior fix (FaceB joints) and
+  a SHIPPABLE NATURAL FRAME (PAD_STACK(32) GONE, slots byte-equal 76/68).
+- Commits: 78266c20a ((f32)(x&0xFF) idiom) / 23fd94dec (FaceB) / 80f374d45 (per-loop
+  locals+walk order) / 09384b217 (LICM-defeat per-loop sorted base) / 04070ec05
+  (natural stack objects).
+- Residual: (1) frame group 4 lines (stwu -168/stfd x2/stmw r19) + +13c copy + its
+  cascade — ALL one fact: the col-only IR copy (mechanism above); (2) ~40 register-only
+  cascade lines (re-roll if (1) ever lands); (3) BSS section-anchor reloc ceiling (do
+  not chase); (4) col k-init li-vs-copy (same class as (1)).
+- Laws banked this campaign: MWCC conversion-selection (iter-2), LICM-defeat killed-set
+  (iter-4), frame/slot separability + decl-order packing (iter-5), allocator-cannot-mint-
+  copies / col-only-copy class (iter-6).
+- REOPEN CONDITIONS: (i) any campaign discovers a fold-blocking construct for same-value
+  copies (reopens BOTH col sites here); (ii) an upstream ruling permitting manual SDK-
+  inline expansion at the col site; (iii) upstream edits to this fn or jobj.h inline
+  modeling; (iv) a coalesce/region-split class door from the tooling side (e.g. evidence
+  MWCC CAN split non-promoted webs would invert the iter-6 inference).
+- Per never-claim: the original col-block source provably exists; its copy-producing
+  spelling was NOT FOUND despite dump-precise characterization, 2 direct spellings, and
+  knowledge-base search. The function stays in the pool under the reopen conditions.
