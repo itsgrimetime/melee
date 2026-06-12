@@ -8617,6 +8617,8 @@ def test_debug_dump_local_probe_uses_same_tu_build_settings(
     probe.write_text("void ftCo_8009E7B4(void) {}\n")
     output = tmp_path / "probe.pcdump.txt"
     args_file = tmp_path / "wibo-args.txt"
+    cli_cwd = tmp_path / "tools" / "melee-agent"
+    cli_cwd.mkdir(parents=True)
 
     (tmp_path / "build.ninja").write_text(textwrap.dedent("""\
         build build/GALE01/src/melee/ft/ftdynamics.o: mwcc src/melee/ft/ftdynamics.c
@@ -8658,6 +8660,7 @@ def test_debug_dump_local_probe_uses_same_tu_build_settings(
     monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", tmp_path)
     monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
     monkeypatch.setenv("MELEE_TEST_WIBO_ARGS", str(args_file))
+    monkeypatch.chdir(cli_cwd)
 
     result = runner.invoke(
         app,
@@ -8667,7 +8670,7 @@ def test_debug_dump_local_probe_uses_same_tu_build_settings(
             "local",
             str(probe),
             "--unit-source",
-            str(source),
+            "src/melee/ft/ftdynamics.c",
             "--function",
             "ftCo_8009E7B4",
             "--output",
@@ -8683,6 +8686,45 @@ def test_debug_dump_local_probe_uses_same_tu_build_settings(
     assert "build/mwcc_debug_cache/probes/e7b4/probe.c" in args_text
     assert "src/melee/ft/ftdynamics.c" not in args_text
     assert "same-TU probe" in result.stderr
+
+
+def test_debug_dump_local_missing_unit_source_reports_resolution_context(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    probe = tmp_path / "build" / "mwcc_debug_cache" / "probes" / "e7b4" / "probe.c"
+    probe.parent.mkdir(parents=True)
+    probe.write_text("void ftCo_8009E7B4(void) {}\n")
+    cli_cwd = tmp_path / "tools" / "melee-agent"
+    cli_cwd.mkdir(parents=True)
+    unit_arg = "src/melee/ft/ftdynamics.c"
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", tmp_path)
+    monkeypatch.chdir(cli_cwd)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "dump",
+            "local",
+            str(probe),
+            "--unit-source",
+            unit_arg,
+            "--function",
+            "ftCo_8009E7B4",
+        ],
+    )
+
+    out = strip_ansi(result.stderr + result.stdout)
+    assert result.exit_code == 2
+    assert "unit source not found" in out
+    assert unit_arg in out
+    assert "cwd=" in out
+    assert "repo=" in out
+    assert "tried:" in out
+    assert "tools/melee-agent" in out
+    assert "src/melee/ft/ftdynamics.c" in out
 
 
 def test_force_coalesce_preflight_rejects_known_unsafe_pair(

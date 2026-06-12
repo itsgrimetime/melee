@@ -1978,7 +1978,7 @@ from src.cli.debug.retro import retro_app as _retro_app  # noqa: E402
 debug_app.add_typer(_retro_app, name="retro")
 
 
-def _resolve_src_relative(c_file: str) -> str:
+def _resolve_src_relative(c_file: str, *, label: str = "source file") -> str:
     """Resolve a .c file path to one relative to the melee repo root.
 
     Accepts:
@@ -1988,19 +1988,52 @@ def _resolve_src_relative(c_file: str) -> str:
 
     Returns the path with forward slashes (POSIX style — easier for remote PS).
     """
-    p = Path(c_file).resolve()
     repo = DEFAULT_MELEE_ROOT.resolve()
-    try:
-        rel = p.relative_to(repo)
-    except ValueError:
+    raw_path = Path(c_file).expanduser()
+    if raw_path.is_absolute():
+        candidates = [raw_path.resolve()]
+    else:
+        candidates = [
+            (Path.cwd() / raw_path).resolve(),
+            (repo / raw_path).resolve(),
+        ]
+
+    seen: set[Path] = set()
+    first_existing_non_repo: Path | None = None
+    first_existing_wrong_suffix: Path | None = None
+    for p in candidates:
+        if p in seen:
+            continue
+        seen.add(p)
+        if not p.exists():
+            continue
+        try:
+            rel = p.relative_to(repo)
+        except ValueError:
+            if first_existing_non_repo is None:
+                first_existing_non_repo = p
+            continue
+        if p.suffix != ".c":
+            if first_existing_wrong_suffix is None:
+                first_existing_wrong_suffix = p
+            continue
+        return str(rel).replace("\\", "/")
+
+    tried = ", ".join(str(path) for path in seen)
+    cwd = Path.cwd().resolve()
+    if first_existing_non_repo is not None:
         raise typer.BadParameter(
-            f"{c_file} is not inside the melee repo ({repo})"
+            f"{label} is outside the melee repo: {first_existing_non_repo}; "
+            f"cwd={cwd}; repo={repo}; tried: {tried}"
         )
-    if not p.exists():
-        raise typer.BadParameter(f"file not found: {p}")
-    if p.suffix != ".c":
-        raise typer.BadParameter(f"expected .c file, got: {p.name}")
-    return str(rel).replace("\\", "/")
+    if first_existing_wrong_suffix is not None:
+        raise typer.BadParameter(
+            f"{label} must be a .c file, got: {first_existing_wrong_suffix}; "
+            f"cwd={cwd}; repo={repo}; tried: {tried}"
+        )
+    raise typer.BadParameter(
+        f"{label} not found for {c_file!r}; cwd={cwd}; repo={repo}; tried: {tried}"
+    )
 
 
 def _resolve_existing_cli_file(
@@ -17561,7 +17594,7 @@ def pcdump_local(
     melee_root = DEFAULT_MELEE_ROOT
     src_rel = _resolve_src_relative(c_file)
     unit_src_rel = (
-        _resolve_src_relative(unit_source)
+        _resolve_src_relative(unit_source, label="unit source")
         if unit_source is not None
         else src_rel
     )
