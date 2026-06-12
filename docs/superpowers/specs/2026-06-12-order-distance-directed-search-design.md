@@ -1,16 +1,22 @@
 # Order-Distance Directed Search — Design Spec
 
 **Date:** 2026-06-12
+**Revision:** 2 (codex review round 1 — four blocking findings incorporated; ENDGAME ORACLE
+ROUND 1 evidence folded; see §10 changelog)
 **Status:** DRAFT for planning (audit-first inventory complete; pre-plan)
 **Author:** spec phase (mndiagram TU-completion campaign)
 **Builds on (frozen parents):**
 - `docs/superpowers/specs/2026-06-01-directed-search-layer-design.md` (the directed layer — IMPLEMENTED as `tools/melee-agent/src/search/directed/`)
 - `docs/superpowers/specs/2026-06-01-fast-directed-search-substrate-design.md` (the substrate — IMPLEMENTED as `tools/melee-agent/src/search/`)
-- `docs/superpowers/specs/2026-05-28-role-descriptor-identity-layer-design.md` (the cross-variant identity layer — IMPLEMENTED as `role_descriptor.py`/`role_matcher.py`/`role_reanchor.py`)
+- `docs/superpowers/specs/2026-05-28-role-descriptor-identity-layer-design.md` (the cross-variant identity layer — IMPLEMENTED as `tools/melee-agent/src/mwcc_debug/role_descriptor.py` / `role_matcher.py` / `role_reanchor.py`; NOTE the role layer lives in `mwcc_debug/`, not `search/directed/`)
 - `docs/superpowers/specs/2026-06-10-tiebreak-counterfactual-design.md` (the select surrogate — IMPLEMENTED as `inspect tiebreak`)
 
-**Companion runtime artifact:** `tools/melee-agent/src/search/directed/PHASE1_RESULT.md`
-(the honest `NOT PASSED` Phase-1 gate result that this spec must reckon with).
+**Companion runtime artifacts:**
+- `tools/melee-agent/src/search/directed/PHASE1_RESULT.md` (the honest `NOT PASSED` Phase-1
+  gate result that this spec must reckon with)
+- `CAMPAIGN-STATE-D1COMPLETION.md` § "ENDGAME ORACLE ROUND 1" (commit `3eb0cd677`, 2026-06-12)
+  — the oracle round that reclassified `8024227C` and supplies this spec's class-partition
+  worked example plus two operational caveats (the 64-entry force cap; DLL/CLI feature skew).
 
 ---
 
@@ -23,17 +29,20 @@ the per-candidate reanchored scorer, the remote-permuter producer, and the campa
 ran end-to-end on one function (`grIceMt_801F9ACC`) and produced an honest **NOT PASSED**
 verdict.
 
-This spec is therefore **NOT a build of a new tool**. It is (a) a small, surgical set of
-wirings that re-aim the existing directed layer at the **order-distance objective the
-brief wants** (currently demoted to diagnostic), (b) the **per-pool-function target-vector
-derivation** that the layer needs and does not yet have for the mndiagram pool, and (c) a
-**decisive validation experiment** that tests whether the order-distance premise survives
-the same scrutiny that demoted it the first time. If the validation's metric-descent check
-(§6c) fails, **the premise is refuted and we stop** — directed-by-phys-match (already
-shipped) remains the recommended path and the pool routes to the existing permuter arm.
+This spec is therefore **NOT a build of a new tool**. It is (a) a small set of wirings that
+re-aim the existing directed layer at the **order-distance objective** (currently demoted to
+diagnostic), including a first-class **polarity** change (gate + scheduler are hardcoded
+higher-is-better), (b) the **per-pool-function target-vector derivation** — which is also the
+**class partition**: a function whose forced-ORDER build does not byte-eliminate its class
+residual is *classified out* (not order-class) at derivation time, exactly what the 2026-06-12
+oracle round proved for `8024227C`, and (c) a **frozen-fixture kill-switch experiment** that
+tests whether the metric retrodicts a known win before any pool campaign. If the kill switch
+(§6c) fails, **the premise is refuted and we stop** — directed-by-phys-match (already shipped)
+remains the recommended path and the pool routes to the permuter arm.
 
-Expected implementation size: **~6-9 tasks across 2 plans** (one wiring plan, one
-validation/campaign plan). Detail in §9.
+Expected implementation size: **12 tasks + 1 conditional, across 3 plans, ordered
+cheapest-path-to-kill-switch** (Plan A objective core → Plan B kill switch [STOP gate] →
+Plan C loop wiring + pool census). Detail in §9.
 
 ---
 
@@ -53,172 +62,202 @@ that changes the front-end emission order**, and finding the spelling that produ
 right order is currently manual (the InputProc campaign spent 52 iterations / 10 drivers /
 a 28,812-variant enumeration / 23k blind permuter iterations on exactly this).
 
-The campaigns can **prove each target reachable**:
-- `match-iter-first --force-vector` (a.k.a. force-iter-first) reproduces the bytes by
-  forcing the target select order — proving the order is the lever and the target is real.
-- `force-phys-from-diff` + `score-force-phys` prove the target *assignment* is reachable.
+The diagnostic stack can **prove or refute order-reachability per function**:
+- `match-iter-first` recommends `--force-iter-first` arguments (TRUE select-ORDER forcing)
+  from the expected `.s`, and verifies application; a forced-ORDER build that byte-matches
+  proves the order is the lever.
+- `force-phys-from-diff` derives the target ASSIGNMENT (`{ig: phys}`) from a register-only
+  checkdiff and verifies it with `--force-phys` probes; this proves the *assignment* is
+  expressible on the current node set — and its **conflict entries** (one virtual wanting two
+  target physregs) prove when it is NOT (the node set itself differs).
+- **The proofs can fail** — and that is a classification, not an error. ENDGAME ORACLE ROUND 1
+  (2026-06-12) showed `8024227C`'s residual is NOT order-class: forcing the target's 40 phys
+  entries (union + all singletons + all prefixes) AND forcing the target simplify order BOTH
+  fail to byte-match; the root is an **arg-home COALESCING divergence** (one virtual `ig56`
+  in ours = three distinct lives in the target). See §4.4.
 
-What is missing is **directed search of C-space for the spelling that produces that order**,
-with a metric that measures *distance to the proven target order* and descends as edits get
+What is missing is **directed search of C-space** for the spelling that produces a *proven*
+target order, with a metric that measures distance to that order and descends as edits get
 closer. Today that search is a lottery (random permuter spellings) or hand-driven.
 
 ### 1.2 The pool (current match %, residual shape)
 
-| Function | TU | Match % | Residual (from campaign notes) |
+| Function | TU | Match % | Residual / class status |
 |---|---|---:|---|
 | `mnDiagram_OnFrame` | mndiagram.c | 99.72 | one `r28`↔`r29` pair |
-| `mnDiagram_802427B4` | mndiagram.c | 98.84 | reg-only (comma-expr crack history) |
+| `mnDiagram_802427B4` | mndiagram.c | 98.84 | reg-only (comma-expr crack history → the §6c kill-switch function) |
 | `mnDiagram_802417D0` | mndiagram.c | 98.03 | reg-only |
 | `mnDiagram_CursorProc` | mndiagram.c | 99.52 | reg-only |
-| `mnDiagram_80241E78` | mndiagram.c | 98.94 | `r25`↔`r26` + an FP shadow |
+| `mnDiagram_80241E78` | mndiagram.c | 98.94 | `r25`↔`r26` + an FP shadow (FPR part v2, §8) |
 | `mnDiagram_8023FC28` | mndiagram.c | 97.82 | reg-only |
-| `mnDiagram_8024227C` | mndiagram.c | 94.32 | ~175 reg-only lines (LARGE) |
-| `mnDiagram3_HandleInput` | mndiagram3.c | 98.42 | 127 GPR + 17 FPR relabels |
+| `mnDiagram_8024227C` | mndiagram.c | 94.32 | **ORACLE 2026-06-12: NOT order-class.** Arg-home coalescing root `ig56` (~45-node renumber cascade); force-phys 40-entry union/singletons/prefixes all `no_match`; forced order re-rolls wrong; tiebreak G1 126/126. Routed `not_order_class` — the §4.4 worked example. NOT in this spec's search pool. |
+| `mnDiagram3_HandleInput` | mndiagram3.c | 98.42 | 127 GPR relabels (Family-A rotation cascade, oracle-confirmed relabel residual) + 17 FPR relabels (FPR v2, §8) — **the large validation case** (GPR sub-objective) |
 | `mnDiagram2 UpdateHeader` | mndiagram2.c | 95.15 | one transposition |
 | `mnDiagram2 AggRank` | mndiagram2.c | 94.11 | two transpositions |
 
 (`AggRank` = `mnDiagram2_GetAggregatedFighterRank`; `UpdateHeader` is the header-update
-function in mndiagram2.c — resolve exact symbol at derivation time, §3.) The pool spans
-the full difficulty range: single-pair swaps (`OnFrame`, `UpdateHeader`), small multi-role
-(`AggRank`, `80241E78`), and one large many-role ceiling (`8024227C`, `HandleInput`). FPR
-relabels appear in `HandleInput` and `80241E78`; the role layer is GPR-only today (§3.4, §8).
+function in mndiagram2.c — resolve exact symbol at derivation time, §4.2.) The pool spans
+single-pair swaps (`OnFrame`, `UpdateHeader`), small multi-role (`AggRank`, `80241E78`), and
+one large many-role case (`HandleInput`). Every pool member must pass **derivation** (§4.2)
+before entering the search; derivation is expected to reclassify some of them out, as it
+did `8024227C`.
 
 ---
 
 ## 2. Existing-pieces inventory (audit-first) + gap analysis
 
 This is the load-bearing section: the design must be the **minimal wiring between existing
-pieces**, not a rebuild. Every row below was verified against source (file:symbol) or
-`--help` on 2026-06-12 in this worktree.
+pieces**, not a rebuild. Every row below was verified against source (file:line) or `--help`
+on 2026-06-12 in this worktree.
 
 ### 2.1 What EXISTS (verified)
 
 **Order-vector extractor — EXISTS.**
 `search/directed/order_metric.py::colorgraph_ranks(pcdump_text, function, class_id) -> {ig_idx: rank}`
 reads the last `COLORGRAPH DECISIONS` section and returns 1-based color positions
-(`rank = iter_idx + 1`). This *is* "build candidate → DECISIONS dump → vector." The DECISIONS
-dump itself is produced by `debug dump local <tu> --function <fn>` (local macOS wibo+DLL;
-`debug dump doctor` PASSES in this worktree). Parser: `colorgraph_parser.ColorgraphDecision`
-= `{iter_idx, ig_idx, assigned_reg, degree, n_interferers, flags, interferers}`.
+(`rank = iter_idx + 1`). This *is* "build → DECISIONS dump → vector." The DECISIONS dump is
+produced by `debug dump local <tu> --function <fn>` (local macOS wibo+DLL; `debug dump doctor`
+PASSES in this worktree). Parser: `colorgraph_parser.ColorgraphDecision` =
+`{iter_idx, ig_idx, assigned_reg, degree, n_interferers, flags, interferers}`.
 
-**Role-anchored identity layer — EXISTS and is wired into the scorer.**
-- `role_descriptor.py::build_descriptors(Compile, class_id) -> {ig_idx: RoleDescriptor}`.
+**Role-anchored identity layer — EXISTS (in `tools/melee-agent/src/mwcc_debug/`) and is
+wired into the directed scorer.**
+- `mwcc_debug/role_descriptor.py::build_descriptors(Compile, class_id) -> {ig_idx: RoleDescriptor}`.
   Identity-core = `first_def_sig` (opcode + reg-normalized operands), `use_site_multiset`,
   `is_param`, `var_name`/`var_confidence`. Allocator-state (`assigned_reg`, `live_range`,
-  `use_count`, `spilled`) is explicitly **excluded from identity** (it is what edits change).
-- `role_matcher.py::match_roles(ref, cand) -> {ig: RoleMatch}` — exact min-cost-max-flow
-  assignment, statuses `MATCHED/AMBIGUOUS/GONE/SPLIT/MERGED/NON_COMPARABLE`.
-- `role_reanchor.py::reanchor(TargetSpec, Compile) -> ReanchorResult` — forward+inverse
-  round-trip-confirmed `{new_ig: orig_ig}` mapping; non-1:1 / unstable roles routed to
-  diagnostics and **excluded** from the force-phys map.
-- `role_descriptor.py::build_target_spec(...) -> TargetSpec` persists the target with
-  `role_order_rank` per role and a `RoleDescriptor` per role; `TargetSpec.save_json/load_json`.
+  `use_count`, `spilled`) is explicitly **excluded from identity**. **GPR-only**: it raises
+  `NotImplementedError` for `class_id != 0` (role_descriptor.py:77) — FPR is v2 (§8).
+- `mwcc_debug/role_matcher.py::match_roles(ref, cand)` — exact min-cost-max-flow assignment,
+  statuses `MATCHED/AMBIGUOUS/GONE/SPLIT/MERGED/NON_COMPARABLE`.
+- `mwcc_debug/role_reanchor.py::reanchor(...) -> ReanchorResult` — forward+inverse
+  round-trip-confirmed `{new_ig: orig_ig}`; non-1:1 / unstable roles excluded, diagnosed.
+- `role_descriptor.py::build_target_spec(...) -> TargetSpec` persists roles with
+  `role_order_rank` and a `RoleDescriptor` each. **CAUTION:** its `target_coverage` field
+  (role_descriptor.py:160) is the *rank-present* fraction over decisions — **rank-present ≠
+  reanchored**; routing must never key on it (§3.3).
 
 **Distance metrics — TWO EXIST.**
 - `search/directed/metric.py::order_distance(cand_iter_by_ig, objective_iter_by_ig) -> int`
-  — **Kendall pairwise inversions** over shared role-matched igs (binary {0,1} for a 2-role
-  swap; 0 = the flip achieved). `displacement(...)` — a smooth signed-gap pre-flip signal in
-  [0,1]. **Both are role-keyed** (the dicts are keyed by *original* ig via the reanchor map).
-- `search/directed/order_metric.py::order_distance(ranks, target) -> int` — **sum of
-  absolute position deltas** (the Phase-0 standalone form), plus `_MISSING_PENALTY`.
+  (metric.py:115) — **Kendall pairwise inversions over the SHARED role-matched igs**. Binary
+  {0,1} for a 2-role swap; 0 = the flip achieved. **Hollowing hazard, code-proven:** it
+  silently drops unmapped roles — `tests/search/directed/test_metric.py:32`
+  (`test_order_distance_ignores_unmapped`) pins `order_distance({37: 3}, {37: 3, 34: 103}) == 0`:
+  a candidate that LOSES a target role scores a perfect 0. §3.3's validity rules exist
+  because of this. `displacement(...)` — smooth signed-gap pre-flip signal in [0,1],
+  documented non-monotone.
+- `search/directed/order_metric.py::order_distance(ranks, target) -> int` — sum of absolute
+  position deltas (the Phase-0 standalone form) + `_MISSING_PENALTY`.
 
-**Per-candidate reanchored scorer — EXISTS.**
+**Per-candidate reanchored scorer — EXISTS, but 9ACC-shaped.**
 `order_metric.py::score_candidate_reanchored(cand_pcdump, ref_descs, ...)` reanchors via
-`reanchor_descs` and reads ranks/assignments at the **reanchored** ig numbers — i.e. the
-identity-safe, cross-variant order/phys scorer the brief's §3 constraint demands. (It is
-currently hardcoded with `NINEACC_*` constants but accepts `order_target`/`phys_target`
-overrides.)
+`reanchor_descs` and reads ranks/assignments at the reanchored ig numbers — the identity-safe
+cross-variant scorer this design needs. Its result dataclass `CandidateScore`
+(order_metric.py:204) is hardcoded to the pilot's two roles (`rank33`/`rank40` fields) and
+must be **generalized to an arbitrary role set** (task T5).
 
 **Search loop wiring — EXISTS.**
-`search/directed/run.py::run_directed(function, unit, melee_root, store_dir, proof_force_phys,
-class_id, source_file, max_iters)` assembles `DirectedObjective` + `PcdumpLocalBackend` +
-`DirectedScorePipeline` + `DirectedSource` (typed-mutator `VariantSource`) + `DefaultScheduler`
-(directed mode) + the Phase-1 gate. The typed mutators (`search/directed/mutators.py`,
-resolved by `search/directed/anchors.py`) are exactly the brief's move set:
-`reorder_local_decls`, `split_decl_init`, `change_counter_width`, `widen/narrow_local_lifetime`,
-`reuse_loop_counter_scope`, plus branch-shape ops (`flatten/unflatten/add/remove` scope).
+`search/directed/run.py::run_directed(...)` assembles `DirectedObjective` +
+`PcdumpLocalBackend` + `DirectedScorePipeline` + `DirectedSource` (typed-mutator
+`VariantSource`) + `DefaultScheduler` (directed mode) + the Phase-1 gate. Typed mutators
+(`mutators.py`, dispatch table at mutators.py:279; resolved by `anchors.py`):
+`reorder_local_decls`, `split_decl_init`, `change_counter_width`,
+`widen/narrow_local_lifetime`, `reuse_loop_counter_scope`, branch-shape ops. **No comma-expr
+or dead-anchor mutator exists** (conditional task T13).
 
-**Mutate operators (standalone) — EXIST.**
-`debug mutate decl-orders` (Tier-7b enumerate decl orderings), the statement hoist-sink
-substrate (`search/statement_move.py`: `extract_movable_units`/`legal_destinations`/
-`select_positions` with line-ownership + volatile-barrier safety), `debug mutate
-simplify-order`/`select-order-search`/`coalesce-search`, `debug mutate lifetime-layout`.
+**Polarity reality (verified — this is real work, not a toggle):**
+- `contracts.py:9` `DirectedObjective` has **no `objective_mode` field**.
+- `scorer.py::score_directed` hardcodes the phys-match buckets as the gate signal
+  (scorer.py:197-207) and demotes the iter metric to `iter_*` diagnostics; the validity floor
+  is `coverage_floor=0.5` (scorer.py:95, checked at scorer.py:190).
+- `gate.py:92-101` requires `displacement_delta > 0` and
+  `displacement > control_displacement` — **higher-is-better**.
+- `scheduler.py:254-263` threads the selected best's `displacement` onto the next parent
+  (via `object.__setattr__` on the frozen `DirectedSearchState`) with higher-is-better
+  semantics baked into selection and delta computation.
 
-**Order/phys scorers + target derivation — EXIST.**
-- `debug target score-simplify-order` (lex prefix/suffix + precolor distance, permuter
-  `.command`), `score-force-phys` (lex force-phys assignment hits), `score-dump` (Tier-4
-  coloring-decision distance). Wiring: `debug permute setup-simplify-order-scorer`.
-- `debug target force-phys-from-diff -f <fn> [--verify]` — derives `{ig: phys}` targets from
-  a **register-only checkdiff** and emits both a target-spec JSON and a class-scoped force
-  vector for `match-iter-first --force-vector` verification. **This is the per-function
-  target-derivation primitive.**
-- `debug target match-iter-first -f <fn> --force-vector <...>` — composes force overrides,
-  verifies the union with integrated checkdiff, probes singleton/prefix steps. **This is the
-  force-iter-first order-forcing verifier.**
+**Order/phys scorers + target derivation — EXIST (with the critical phys-vs-order caveat).**
+- `debug target score-simplify-order` / `score-force-phys` / `score-dump` permuter scorers;
+  wiring template `debug permute setup-simplify-order-scorer`.
+- `debug target force-phys-from-diff -f <fn> [--verify]` — derives `{ig: phys}` from a
+  register-only checkdiff. **Its force vector is PHYS constraints**: entries are emitted as
+  `class{N}:ig{M}:phys=...` (cli/debug/__init__.py:793, joined at :871) and are mapped to
+  `--force-phys` (cli/debug/__init__.py:1396). **Forcing phys does NOT pin simplify order** —
+  a phys-forced build's DECISIONS order is the baseline's own order. Its `conflicts` output
+  (same virtual → ≥2 target physregs) is a first-class node-set-divergence signal (§4.2
+  step 2, §4.4).
+- `debug target match-iter-first -f <fn>` — recommends `--force-iter-first` (TRUE ORDER
+  forcing) from the expected `.s`; `--force-vector` composes overrides and verifies the union
+  with integrated checkdiff + singleton/prefix probes; verify-application (#550) confirms
+  forced nodes actually moved.
 
-**Remote fan-out — EXISTS.**
-`search/adapters.py` wraps `permuter_remote.{submit,fetch,status,stop}_job` as an
-`ArtifactProducer`; `search/scheduler.py` ingests its outputs. decomp-permuter is an
-**ArtifactProducer (source harvest)**, never a `VariantSource` (per the substrate spec).
+**Remote fan-out — EXISTS.** `search/adapters.py` wraps
+`permuter_remote.{submit,fetch,status,stop}_job` as an `ArtifactProducer`;
+`search/scheduler.py` ingests its outputs.
 
-**Campaign CLI — EXISTS.**
-`debug search directed -f <fn> -u <unit> [--seed <file>] [--directed-force-phys <vec>]
-[--directed-from-diff [--verify]] [--max-iters N] [--store <dir>]`. Live path
-(`run.py::_run_live`) accepts operator `proof_force_phys` or derives it from diff; the
-`grIceMt` fixture is used **only** when `function == "grIceMt_801F9ACC"`.
+**Campaign CLI — EXISTS (live copy identified).**
+`debug search directed` is defined at `search/cli/__init__.py:2582`
+(`@search_app.command("directed")`), surfaced through the package CLI
+`cli/debug/__init__.py`. **Landing risk:** both have legacy ~1MB siblings
+(`search/cli.py`, `cli/debug.py`) that still contain near-identical code; new code MUST land
+in the package `__init__.py` copies, and the sibling duplication is filed as a tooling issue.
+
+**Per-candidate compile path — EXISTS, and it is SERIALIZED.**
+`search/directed/pcdump_backend.py` compiles each candidate by **writing the candidate
+source INTO the real TU file** under `_acquire_repo_build_lock` (pcdump_backend.py:123-165:
+save original → `tu_c.write_text(candidate)` → `debug dump local --keep-obj --no-cache-sync`
+→ restore original). One repo-wide lock ⟹ one candidate compile at a time per checkout. This
+defines the cost model (§7).
 
 ### 2.2 The GAP (what is actually missing or mis-aimed)
 
-The brief hypothesized four gaps (extractor / metric / loop / CLI). **All four exist.** The
-real, much smaller gaps are:
+The round-1 brief hypothesized four gaps (extractor / metric / loop / CLI). **All four exist.**
+The real gaps:
 
-**GAP-A — The objective is phys-match, not order-distance.** The shipped gate signal
-(`scorer.py::score_directed`, `DirectedMeta.displacement`/`order_distance`) is
-`phys_match_fraction`/`phys_mismatch_count` — *did the role land on its desired physical
-register*. The brief wants **order-distance to the proven target select-order vector** as the
-primary objective. The Kendall/`displacement` order metric still computes, but is **demoted
-to diagnostic-only** (`DirectedMeta.iter_order_distance`/`iter_displacement`). The demotion
-was **deliberate and evidence-backed** (PHASE1_RESULT.md): the order metric, as it was wired,
-was *hollow* — its objective vector came from the **baseline's own coloring**, so
-`displacement = 1.0` merely meant "the edit changed nothing," and a no-op scored a perfect
-order-distance. Re-promoting order-distance is only legitimate if the objective vector is the
-**force-iter-first-PROVEN target vector of a DIFFERENT (correct) coloring**, not the
-baseline's. See GAP-B and §3/§4/§6.
+**GAP-A — The objective is phys-match, not order-distance, and the polarity is baked in.**
+The shipped gate signal is `phys_match_fraction`/`phys_mismatch_count`; the Kendall/
+`displacement` order metric is computed but demoted to diagnostics. The demotion was
+**deliberate and evidence-backed** (PHASE1_RESULT.md): the order metric, as wired, was
+*hollow* — its objective vector came from the **baseline's own coloring**, so a no-op scored
+perfectly. Re-promoting order-distance is only legitimate with a **proven target vector from a
+forced-ORDER build** (GAP-B). Re-aiming is not a one-flag change: `objective_mode` does not
+exist (contracts.py:9), the scorer hardcodes phys (scorer.py:197), and **gate + scheduler
+assume higher-is-better** (gate.py:92, scheduler.py:254) — the lower-is-better polarity is a
+first-class task (T8/T9).
 
-**GAP-B — No proven target *order* vector per pool function.** `build_directed_objective`
-derives `objective_iter_by_original_ig` from the **baseline** decisions (the hollow source).
-There is no step that derives the **target** order vector (the select order that
-`match-iter-first --force-vector` proves reproduces the bytes) and persists it per function.
-The phys target *is* derivable (`force-phys-from-diff`), but the **order** target is not
-materialized. This is the single genuine new datum the objective needs.
+**GAP-B — No proven target *order* vector per pool function, and rev 1's derivation was
+wrong.** `build_directed_objective` derives `objective_iter_by_original_ig` from the
+**baseline** decisions (the hollow source). Rev 1 of this spec proposed reading the order from
+the build forced by `force-phys-from-diff`'s vector — but that vector is **phys constraints**
+(§2.1), and a phys-forced build keeps the baseline's select order: the readback would have
+been the baseline's own order, **re-importing the exact hollowness this spec exists to fix**.
+The corrected pipeline (§4.2) reads the order from a **TRUE forced-ORDER build**
+(`--force-iter-first`), with verify-application and a derive-twice determinism check.
 
-**GAP-C — The mndiagram pool is not wired.** No per-function target artifacts exist on disk
-(`find ... *target*` empty; no `build/directed-store`). Each pool function needs: a
-register-only checkdiff → `force-phys-from-diff` → `match-iter-first` round-trip → a persisted
-`OrderTarget` artifact (§4.3). This is data production, not code.
+**GAP-C — The mndiagram pool is not wired, and derivation doubles as the class partition.**
+No per-function target artifacts exist on disk. Deriving them is data production — and per the
+oracle round, derivation *outcomes* are classifications (§4.4): `8024227C` failed both forcing
+probes and routed out with a named cause.
 
-**GAP-D — The typed-mutator vocabulary under-covers the mndiagram levers.** The anchor set
-(`anchors.py`) covers decl-order/split/lifetime/branch-shape. The mndiagram campaigns proved
-levers the anchors do NOT emit: **band-lift / dead-anchor placement**, **comma-expr LICM
-perturbation** (the proven `802427B4` crack), **accessor-macro inline (GET_X)**, and
-**operand-flip comparison form**. The directed loop's deterministic arm will under-propose on
-this pool until these are added — OR the **permuter fallback arm** (already an
-ArtifactProducer) covers the long tail. The minimal design uses the permuter arm for coverage
-and adds **only the comma-expr and band-lift mutators** if validation shows the deterministic
-arm starves (§5.3, §9).
+**GAP-D — Metric-hollowing via coverage loss is code-proven and must be closed at the
+objective.** Kendall ignores unmapped roles (metric.py:115; test_metric.py:32). The current
+scorer floor (0.5 at scorer.py:190) would accept a candidate that lost half the target roles.
+§3.3 hardens this: **1.0 reanchor coverage over the (pruned) target-role set + ≥2 anchored
+roles, or the candidate is invalid**.
 
-**GAP-E — Order-distance is binary for the small-residual pool.** The parent design already
-records this: for a 2-role swap, Kendall order-distance is `1 → 0` at the flip with no
-intermediate gradient. `OnFrame`/`UpdateHeader` (one pair) and `AggRank` (two) are exactly
-this. The smooth `displacement` sub-metric is the only continuous signal, and it is **not
-guaranteed monotone toward the flip** (its own docstring says so). This is a property of the
-problem, not a missing piece — but it bounds what "directed" can buy on the small end and
-forces the validation to test descent honestly (§6c, §7).
+**GAP-E — Order-distance is binary for the small-residual pool.** For a 2-role swap, Kendall
+is `1 → 0` at the flip with no gradient (`OnFrame`/`UpdateHeader`; `AggRank` has two
+transpositions). `displacement` is the only continuous hint and is non-monotone. This bounds
+what "directed" buys on the small end; the gradient claim is tested on `HandleInput` (§6).
 
-**Verdict:** this is a **wiring + data + validation** effort, not a tool build. The new code is
-a re-aimed objective (order-distance primary, with the proven-target guard), an order-target
-derivation/persistence step, a pool registry, and (conditionally) two extra mutators. The
-new *work* is mostly target derivation and the decisive experiment.
+**GAP-F — The mutator vocabulary under-covers the proven mndiagram levers.** No comma-expr
+LICM mutator, no dead-anchor band-lift (mutators.py:279). The permuter fallback arm covers the
+long tail; the two named mutators are **conditional** (T13) on the deterministic arm starving
+in §6d. The kill switch does NOT depend on this gap — it scores two FIXED candidates (§6c).
+
+**Verdict:** wiring + data + validation. New code = objective re-aim with polarity (scorer,
+gate, scheduler, contracts), the order-target derivation/classification pipeline, the
+`OrderTarget` artifact, a generalized candidate scorer, the permuter order-scorer pair, kill-
+switch fixtures + harness, and (conditionally) two mutators.
 
 ---
 
@@ -226,66 +265,73 @@ new *work* is mostly target derivation and the decisive experiment.
 
 ### 3.1 Why ig_idx is not comparable across variants
 
-`ig_idx` numbering is **variant-specific**. Proven in the InputProc campaign: a clean-form
-variant and a goto-form variant number their IG nodes differently; "ig88" in one is not
-"ig88" in the other. The tiebreak spec re-confirmed it (the original `ig88 r27→r25` target
-was from a *different* variant than the clean dump where the same role is a different ig and
-`r27` is unreachable). **Any distance metric that compares two variants by raw ig index is
-measuring noise.** This is the same finding that killed first-divergence v1 (~89% ig drift
-over a real solve path) and motivated the role layer.
+`ig_idx` numbering is **variant-specific**. Proven in the InputProc campaign (clean vs
+goto-form variants number differently) and re-confirmed by the tiebreak spec (a target derived
+on one variant was unreachable on another). Any metric comparing variants by raw ig index
+measures noise — the finding that killed first-divergence v1 (~89% ig drift) and motivated the
+role layer.
 
 ### 3.2 The anchor: match nodes by ROLE, then compare positions
 
-The metric MUST match nodes by **role descriptor** (def-site signature + use-pattern
-multiset + param flag + strong var-name), never by ig index, then compare the *positions of
-role-matched nodes*. This is exactly what `score_candidate_reanchored` already does:
+The metric matches nodes by **role descriptor** (def-site signature + use-pattern multiset +
+param flag + strong var-name), never by ig index, then compares positions of role-matched
+nodes — exactly what `score_candidate_reanchored` does:
 
-1. Build `ref_descs = build_descriptors(baseline_compile, class_id)` **once** (the identity
-   reference; the baseline is the current committed source).
+1. Build `ref_descs = build_descriptors(baseline_compile, class_id)` ONCE (identity
+   reference = the current committed source).
 2. Per candidate: `cand_descs = build_descriptors(cand_compile, class_id)`.
-3. `reanchor_descs(ref_descs, cand_descs, desired_phys, class_id) -> ReanchorResult`, giving
-   `matched = {new_ig: orig_ig}` (forward+inverse round-trip confirmed).
-4. The candidate's order vector is read at the **reanchored** ig numbers:
+3. `reanchor_descs(ref_descs, cand_descs, desired_phys, class_id)` →
+   `matched = {new_ig: orig_ig}` (round-trip confirmed).
+4. Candidate order vector at reanchored igs:
    `cand_iter_by_orig_ig = {orig: rank(new) for new, orig in matched.items()}`.
-5. Distance is computed between `cand_iter_by_orig_ig` and the **target** vector, which is
-   also keyed by *original* ig (the identity reference's numbering).
+5. Distance vs the **proven target vector** (§4.2), which is keyed in the *baseline's*
+   ig space. The objective never drifts with candidate renumbering.
 
-The target vector is fixed in the **identity reference's** ig space; every candidate is
-projected into that space by reanchoring. The objective never drifts with the candidate's
-renumbering.
+One addition this revision makes explicit: the **forced-ORDER build used at derivation is the
+same source as the baseline**, so its IG construction (and ig numbering) is identical —
+forcing alters only simplify/select. Derivation asserts ig-set identity between baseline and
+forced build (cheap; a mismatch means the forcing perturbed construction and the target is
+suspect). Role descriptors are built on the baseline; identity-core features are
+allocator-independent (they come from PCode def/use sites), so they are valid anchors for any
+forced or candidate build.
 
-### 3.3 Ambiguous roles (compiler temps) — the honest abstain
+### 3.3 Coverage rules — closing the proven hollowing hole (codex blocker 2)
 
-The mndiagram campaigns are explicit that several residuals are **statement-temp webs with no
-variable identity** (`found↔row2` cycle, `nc anchor transposition` +094, `nr-head load-order`)
-— "Dead-anchor tool cannot reach statement-temp webs. Permuter-random territory only."
-Compiler temps have weak role descriptors (no `var_name`; `first_def_sig` of identical field
-loads collides; `use_site_multiset` may tie among siblings). The matcher's response is
-already correct and load-bearing:
+Kendall silently ignores unmapped roles (test_metric.py:32): a candidate that makes a target
+role `GONE`/`SPLIT`/`AMBIGUOUS` scores distance over the surviving pairs — potentially a
+perfect 0 with the objective destroyed. The scorer's generic `coverage_floor=0.5`
+(scorer.py:95/:190) is far too weak for an order objective. Rules, in order:
 
-- A temp that ties an identical sibling returns `AMBIGUOUS`/`SPLIT`/`NON_COMPARABLE` (not a
-  confident-wrong match), and `reanchor` **excludes** it from the matched map.
-- The scorer's `coverage_floor` (default 0.5 in `DirectedScorePipeline`) **invalidates** any
-  candidate where fewer than half the target roles reanchor. A candidate whose target role is
-  an unanchorable temp is `invalid` (reason `low_coverage`), never scored as progress.
+- **Derivation-time target-role pruning (makes the validity rule implementable):** the
+  target-role set persisted in `OrderTarget` includes ONLY roles that **confidently
+  self-reanchor on the baseline** (round-trip MATCHED, not AMBIGUOUS). Roles that fail —
+  anonymous statement temps with colliding signatures — are recorded in
+  `unscored_roles: [{ig, reason}]` as *unscored residual* (honest: the metric cannot see
+  them). If fewer than 2 roles survive pruning → `routing: unanchorable`.
+- **Candidate VALIDITY (the objective rule):** a candidate is scoreable iff **every** pruned
+  target role round-trip-reanchors (coverage **== 1.0 over the target-role set**) AND the
+  anchored target-role count is **≥ 2** (Kendall needs pairs). Otherwise the candidate is
+  `invalid` (reason `target_role_lost`), never ranked, never accepted. This closes the
+  test_metric.py:32 hole at the objective: losing a target role can never look like progress.
+- **Diagnostic floor (~0.8, telemetry only):** reanchor coverage over the *broader* anchored
+  universe (all baseline-confident roles, not just targets) below ~0.8 is logged as identity
+  drift — a warning that the edit is reshaping the function wholesale — but does not by
+  itself invalidate (the validity rule above is the gate).
+- **Routing keys on REANCHOR coverage, never `TargetSpec.target_coverage`:**
+  role_descriptor.py:160's `target_coverage` is the fraction of roles with a
+  `role_order_rank` (rank-present over decisions). Rank-present ≠ reanchorable — a role can
+  sit in the colorgraph yet be identity-ambiguous. `UNANCHORABLE` classification uses
+  baseline round-trip reanchor coverage exclusively.
 
-**Design rule (new, explicit):** a target whose roles are *predominantly* anonymous temps
-(coverage below floor on the baseline itself) is **classified `UNANCHORABLE` at derivation
-time** (§4.3) and routed **directly to the permuter arm** — it never enters the
-order-distance loop, because the loop cannot measure its progress. This is the directed
-analogue of the campaign's "permuter-random territory only" verdict, made mechanical. The
-per-function preflight (§4.3, reusing `objective.py::preflight_objective`) reports the
-baseline reanchor coverage so this routing is a number, not a guess.
+### 3.4 FPR roles — explicitly v2
 
-### 3.4 FPR roles
-
-`build_descriptors` raises `NotImplementedError` for `class_id != 0` (GPR-only: the IR-fact
-maps are GPR-keyed). `HandleInput` (17 FPR relabels) and `80241E78` (an FP shadow) therefore
-have FPR roles that the role layer **cannot anchor today**. Per §8 (out of scope), this spec
-targets the **GPR** sub-objective of those functions only; the FPR residual is left to the
-permuter arm or a future class-aware descriptor build (carry-forward #2 in
-`role_descriptor.py`). A function whose residual is *entirely* FPR is `UNANCHORABLE` for this
-spec.
+`build_descriptors` refuses `class_id != 0` (role_descriptor.py:77: the IR-fact maps are
+GPR-keyed; non-GPR lookups would be silently polluted). `HandleInput` (17 FPR relabels) and
+`80241E78` (FP shadow) therefore get **GPR sub-objectives only**; their FPR residual is out of
+scope for v1 (permuter arm or a future class-aware descriptor build — carry-forward #2 in
+`role_descriptor.py`). Consequence for validation: a mixed-class function at GPR
+order-distance 0 is **not expected to byte-match** — its success criterion is class-scoped
+(§4.2 step 4, §6d).
 
 ---
 
@@ -293,89 +339,126 @@ spec.
 
 ### 4.1 Primary metric (chosen): role-matched Kendall-tau distance
 
-**Primary = `metric.py::order_distance`** — the count of pairwise order inversions between the
-candidate's role-matched select order and the **proven target** select order, over the shared
-reanchored roles. Rationale:
+**Primary = `metric.py::order_distance`** — pairwise order inversions between the candidate's
+role-matched select order and the proven target order, over the pruned target-role set
+(validity per §3.3). Rationale:
 
-- It is **already implemented**, **already role-keyed**, and **already unit-tested**.
-- `distance == 0` **iff** every role-pair is in the target relative order — and because the
-  target order is the **force-iter-first-proven** order (§4.2), `distance == 0` is the order
-  that reproduces the target bytes (modulo dispense-rule fidelity, which `inspect tiebreak`
-  G1 validates at 100%). It is not a proxy that can be satisfied by a wrong coloring the way a
-  baseline-derived vector could.
-- Kendall-tau is invariant to absolute position jitter (a role moving from rank 40→42 because
-  an unrelated temp appeared changes no *pairwise* relation), so it is robust to the position
-  churn that absolute-delta metrics conflate with progress. This is precisely the failure mode
-  `order_metric.py`'s sum-of-deltas form is prone to.
+- Already implemented, role-keyed, unit-tested.
+- `distance == 0` under the 1.0-coverage validity rule means every target role survived AND
+  every pair is in the target relative order — and because the target order is the
+  **forced-ORDER-proven** order (§4.2), distance 0 is the order that reproduces the target's
+  class residual elimination. Not a proxy satisfiable by a wrong coloring.
+- Kendall is invariant to absolute-position jitter (an unrelated temp shifting ranks changes
+  no pairwise relation), unlike `order_metric.py`'s sum-of-deltas form.
 
-**Diagnostic metric (chosen): smooth signed-gap `displacement`** — `metric.py::displacement`,
-the mean closeness of each role-pair's signed iter-gap to the target's, in [0,1]. It is the
-**pre-flip gradient** for the binary cases (§GAP-E): when Kendall is stuck at 1 (no flip yet),
-`displacement` distinguishes "the two roles are 30 positions apart in the wrong order" (far)
-from "they are adjacent and about to cross" (near). It is reported every iteration and used as
-the scheduler's *tiebreak scalar* among equal-Kendall candidates, but is **never** the
-accept/win signal (its non-monotonicity makes it unsafe as the objective; the parent design
-and PHASE1_RESULT both warn on this).
+**Diagnostic metric (chosen): smooth signed-gap `displacement`** (`metric.py::displacement`) —
+the pre-flip gradient for binary cases; scheduler tiebreak among equal-Kendall candidates;
+**never** the accept/win signal (non-monotone by its own docstring; the parent design and
+PHASE1_RESULT both warn on this).
 
-Why one primary + one diagnostic (not a single blended scalar): the parent design burned
-cycles on α-weighted blends (the `simplify_search.combined_value` story); the lesson, captured
-in `simplify_order_scoring.py`'s module docstring, is **no tunable α at the objective layer**.
-Kendall is the discrete truth; `displacement` is the gradient hint; they are kept separate.
+No blended α-scalar (the parent design's documented calibration trap; see
+`simplify_order_scoring.py`'s module docstring).
 
-### 4.2 The target vector derivation (closes GAP-B)
+### 4.2 Target derivation = the class partition (closes GAP-B; codex blocker 1)
 
-Per pool function, ONCE, at campaign setup (this is the "each pool fn gets its target vector
-derived once" step):
+Per pool function, ONCE, at campaign setup. **Every failure mode is a named classification,
+not an error** (the oracle round's design lesson). Pipeline:
 
-1. Establish a **register-only checkdiff** of the committed source vs the expected object
-   (`tools/checkdiff.py <fn> --format json`). Precondition: the diff must be register-only
-   (the function is a FULLNORM-0 ceiling); a structural diff means the function is not in this
-   pool.
-2. `debug target force-phys-from-diff -f <fn> --verify` → `{ig: phys}` **phys target** in the
-   baseline's ig space + a class-scoped force vector. `--verify` runs the bounded union /
-   singleton / prefix force-vector checks.
-3. `debug target match-iter-first -f <fn> --force-vector <derived>` → confirm the forced
-   **select order** reproduces the target bytes (checkdiff clean under the force). The order
-   that the force vector encodes — read back from the **forced** pcdump's `COLORGRAPH
-   DECISIONS` via `colorgraph_ranks` — is the **proven target order vector**
-   `target_iter_by_orig_ig: {orig_ig: rank}`.
-   - If `match-iter-first` cannot reproduce the bytes with any ≤K force vector, the target is
-     **not order-reachable** by a local select-order move (or the phys target is wrong); the
-     function is classified `ORDER-UNREACHABLE` and routed to the permuter arm. This is the
-     `inspect tiebreak` exit-4 outcome, made part of derivation.
-4. Persist an **`OrderTarget`** artifact (§4.3) carrying both the phys target and the proven
-   order target, the baseline source hash + pcdump sha256 (provenance), and the baseline
-   reanchor coverage (the `UNANCHORABLE` gate, §3.3).
-
-This makes the objective vector a **property of the correct coloring**, not the baseline's —
-the single fix that distinguishes this design from the hollow Phase-1 order metric.
+1. **Precondition — register-only checkdiff.** `tools/checkdiff.py <fn> --format json` must
+   show a register-only diff (FULLNORM-0). A structural diff ⟹ not in this pool.
+2. **Phys target + conflict classifier.** `debug target force-phys-from-diff -f <fn> --verify`
+   → `{orig_ig: phys}` + the `conflicts` list. Its force vector is **phys-constraint
+   evidence only** (assignment reachability), NEVER the order source (§2.1).
+   - **Early classifier:** any conflict entry — the SAME virtual mapped to ≥2 target
+     physregs at different sites — is the *target-splits-lives-ours-coalesces* signature
+     (`8024227C`'s `ig56` → {r29, r28, r27}). Route `not_order_class` immediately, evidence
+     attached, **before any forced compile is spent**.
+3. **TRUE forced-ORDER compile.** `debug target match-iter-first -f <fn>` recommends the
+   `--force-iter-first` ig list from the expected `.s`; run
+   `debug dump local <tu> --force-iter-first <list> --diff` (diagnostic-only; no cache sync).
+   - **The 64-entry force cap (oracle TOOLING NOTE):** the DLL's override parser caps at 64
+     entries and **silently applies NOTHING** beyond it. Derivation therefore seeks a
+     **minimal forcing set** (match-iter-first's per-register first-instruction anchors +
+     prefix probing, both existing) that eliminates the class residual. If no ≤64-entry set
+     does ⟹ `routing: force_cap_blocked` (named; the candidate fix is a DLL cap raise — a
+     tooling task, out of this spec). Relevant to `HandleInput`'s 127 relabels: its cascade is
+     expected to have few roots (cf. `8024227C`: ~45 nodes, ONE root), but this is verified,
+     not assumed.
+   - **VERIFY APPLICATION (#550-style, mandatory):** in the forced build's DECISIONS
+     readback, assert each forced ig sits at its forced position. A force that silently
+     failed to apply must never produce a target (the oracle round caught exactly this
+     failure shape with a stale DLL — §7).
+4. **CLASS-PARTITION GATE.** The forced-ORDER build must **byte-eliminate the targeted
+   class's residual**: for a pure-GPR function, integrated checkdiff clean; for a mixed-class
+   function (`HandleInput`), all GPR relabels gone with the remaining diff exclusively
+   other-class (reported separately). If not ⟹ `routing: not_order_class` with evidence
+   (the order is a symptom, not the cause — coalescing/VN/liveness divergence upstream;
+   §4.4). **A derivation failure is a classification.**
+5. **Readback.** From the FORCED build's `COLORGRAPH DECISIONS` via `colorgraph_ranks` →
+   `order_target: {orig_ig: rank}`. Assert forced-build ig-set ≡ baseline ig-set (§3.2).
+6. **Target-role pruning** per §3.3 → the persisted target-role set + `unscored_roles`.
+   Fewer than 2 surviving roles ⟹ `routing: unanchorable`.
+7. **DETERMINISM (derive twice).** Repeat steps 3+5 (a second forced compile + readback) and
+   assert: identical order vectors, identical ig sets, identical DECISIONS-section hashes.
+   mwcc given identical input is expected deterministic; a mismatch ⟹
+   `routing: unstable_target` — do not enter the loop, file a tooling issue (nondeterministic
+   forced builds would be a DLL/hook fault to investigate, never papered over by averaging).
+8. **Persist** the `OrderTarget` artifact (§4.3) with routing + evidence.
 
 ### 4.3 `OrderTarget` artifact (new, small)
 
-A per-function YAML/JSON, stored at
-`docs/superpowers/order-targets/<function>.yaml` (committed; small; human-auditable),
-schema:
+Per-function YAML at `docs/superpowers/order-targets/<function>.yaml` (committed,
+human-auditable):
 
 ```yaml
 function: mnDiagram_OnFrame
 unit: melee/mn/mndiagram
 class_id: 0
-# Derived from force-phys-from-diff (baseline ig space):
-phys_target: {28: 29, 29: 28}          # {orig_ig: desired_phys}
-# Proven by match-iter-first --force-vector (read back from forced DECISIONS):
-order_target: {28: 5, 29: 7}           # {orig_ig: target rank} (the PROVEN vector)
-force_vector: "0:28:r29,0:29:r28"      # the verified force vector (provenance)
-# Identity provenance (the reference the metric anchors to):
+# Step 2 — assignment evidence (NOT the order source):
+phys_target: {28: 29, 29: 28}            # {orig_ig: desired_phys}
+phys_conflicts: []                        # non-empty => not_order_class (step 2)
+# Step 3 — the TRUE order forcing (provenance):
+force_iter_first: [46, 28, 29]            # the minimal verified forcing list (<= 64)
+# Step 5 — the PROVEN vector, read from the FORCED build's DECISIONS:
+order_target: {28: 5, 29: 7}              # {orig_ig: rank in the forced build}
+# Step 6 — identity:
+target_roles: [28, 29]                    # pruned, baseline-self-reanchor-confident
+unscored_roles: []                        # [{ig, reason}] — honest unscored residual
+# Step 7 — determinism evidence:
+forced_decisions_sha256: ["…", "…"]      # two independent forced readbacks, must match
 baseline_source_sha256: "…"
 baseline_pcdump_sha256: "…"
-# Routing gate (computed by preflight on the baseline):
-baseline_reanchor_coverage: 1.0        # fraction of target roles that anchor
-routing: directed                      # directed | unanchorable | order_unreachable
+# Routing (the class partition):
+routing: directed   # directed | not_order_class | unanchorable | force_cap_blocked | unstable_target
+class_evidence: ""  # e.g. "phys conflict ig56 -> {r29,r28,r27}: arg-home coalescing"
 ```
 
-The CLI builds this with one command (§5.2). `TargetSpec` (the role-anchored object the scorer
-consumes) is derived from `OrderTarget` at run time via `build_target_spec` — `OrderTarget` is
-the *persisted, reviewable* input; `TargetSpec` is the in-memory runtime object.
+`TargetSpec` (the role-anchored runtime object) is derived from `OrderTarget` +
+`build_target_spec` at run time; `OrderTarget` is the persisted, reviewable input.
+
+### 4.4 Derivation IS the class partition — the `8024227C` worked example
+
+ENDGAME ORACLE ROUND 1 (commit `3eb0cd677`) executed this pipeline's probes manually on
+`8024227C` and is the canonical demonstration that **forcing-probe failures are
+classifications**:
+
+- Step 2 fired: `force-phys-from-diff --verify` derived 40 entries; union + all 40
+  singletons + all 39 prefixes = `no_match`, AND the conflict signal appeared — `ig56`
+  (the three `addi rN,argN,0` arg-home copies, ONE coalesced virtual in ours) wanted
+  r29/r28/r27 at different sites: the target keeps three distinct lives.
+- Step 3/4 fired: forcing the non-conflicting order subset verified as APPLIED (the
+  prologue nodes moved) but re-rolled into a new-but-still-wrong config — the order is a
+  **symptom**; the node SET differs.
+- Corroboration: tiebreak G1 126/126 (coloring internally consistent ⟹ divergence upstream);
+  force-remat #579 inert (the li-vs-copy trio is a liveness/VN sibling of the same root).
+- Outcome: `routing: not_order_class`,
+  `class_evidence: "arg-home coalescing root ig56; ~45-node renumber cascade"`. The function
+  leaves this spec's pool and routes to the **named other-class queue** (coalescing-boundary
+  permuter / structural arg-home-liveness reopen — per the oracle's recommendation), NOT to
+  blind retries of register-endgame rungs.
+
+This conversion — derivation failure → named class + named next tool — is a design feature of
+the pipeline, not a salvage of an error path.
 
 ---
 
@@ -383,271 +466,342 @@ the *persisted, reviewable* input; `TargetSpec` is the in-memory runtime object.
 
 ### 5.1 Seed, moves, accept (reuse `run_directed`)
 
-- **Seed** = the current committed TU source (`--seed <tu>.c`, default = the TU). The
-  identity reference `ref_descs` is built from the seed's baseline compile, ONCE.
-- **Moves (deterministic arm)** = the existing typed mutators (`anchors.py` → `mutators.py`),
-  proposed by `DirectedSource` from the first-divergence diagnosis each iteration. Move set
-  for this pool: `reorder_local_decls`, `split_decl_init`, `widen/narrow_local_lifetime`,
-  `reuse_loop_counter_scope`, branch-scope shape ops, `change_counter_width` (the `int` vs
-  `s32` loop-counter lever from CLAUDE.md). **Conditionally added** (§GAP-D, §9): a
-  `comma_expr_licm` mutator (insert `(0, X)` to perturb LICM hoist — the proven `802427B4`
-  crack) and a `dead_anchor_band_lift` mutator (insert a DCE'd `var = <live>;` on a
-  path-disjoint dead branch to move a variable's first-use band — the InputProc band-lift law).
+- **Seed** = the current committed TU source (`--seed`, default the TU). Identity reference
+  built from the seed's baseline compile, ONCE.
+- **Moves (deterministic arm)** = the existing typed mutators (§2.1). Conditional additions
+  (T13, only if §6d shows starvation): `comma_expr_licm` (the proven `802427B4` lever) and
+  `dead_anchor_band_lift` (the InputProc band-lift law).
 - **Moves (fallback / wide arm)** = decomp-permuter via the existing `ArtifactProducer`
-  adapter, **scored by the same order-distance objective** (the permuter's `.command` is wired
-  to the order scorer the way `setup-simplify-order-scorer` wires `score-simplify-order`; see
-  §5.3). This arm covers the temp-web long tail the deterministic arm cannot anchor, and runs
-  as remote fan-out (§5.4).
-- **Accept** = a candidate becomes the new current-best iff:
-  - **(primary) Kendall order-distance strictly decreases** vs the parent, OR ties the parent
-    with strictly higher `displacement` (the tiebreak), AND
-  - **match% non-regression gate**: `checkdiff <fn> --summary` match% ≥ parent's (the
-    `DirectedScorePipeline` already carries `byte_score`/`checkdiff_gate`; this gate is the
-    `requesting-code-review`/`verification-before-completion` analogue for candidates — never
-    accept a structural regression for an order gain), AND
-  - **protected-sweep gate**: the candidate's reanchor coverage ≥ floor and no *non-target*
-    role that was anchored in the parent went `GONE`/`SPLIT` (a guard that the edit did not
-    collateral-damage an unrelated web — the campaign's "body gate"). Implemented as a
-    coverage-delta check in the scorer's validity gates.
-- **Win** = Kendall order-distance `== 0` **and** `checkdiff` clean (byte match). Order-distance
-  0 without a byte match means the order matched but a *different* (unmodeled) residual remains
-  — reported as `ORDER_MATCHED_BYTES_DIFFER`, a lead, not a win (mirrors the parent's
-  `TARGET_SATISFIED` ≠ convergence rule).
+  adapter, scored by the same order-distance objective (`score-order`, §5.3), run as remote
+  fan-out (§5.4). Covers the temp-web long tail the deterministic arm cannot anchor.
+- **Accept** (candidate becomes current-best) iff ALL of:
+  - **validity** per §3.3 (1.0 target-role reanchor coverage, ≥2 roles) — else never ranked;
+  - **(primary)** Kendall order-distance strictly decreases vs the parent, OR ties with
+    strictly higher `displacement` (tiebreak only);
+  - **match% non-regression**: `checkdiff <fn> --summary` ≥ parent (never trade structure for
+    order);
+  - **protected-sweep gate**: no non-target baseline-confident role went `GONE`/`SPLIT`
+    (the ~0.8 diagnostic floor of §3.3 escalates to a hard reject when the loss is a
+    previously-anchored role — collateral-damage guard, the campaign's "body gate").
+- **Win** = order-distance 0 AND checkdiff clean **for the targeted class** (mixed-class
+  functions: GPR relabels eliminated; FPR residual remains and is reported).
+  Order-distance 0 without class-residual elimination ⟹ `ORDER_MATCHED_BYTES_DIFFER` —
+  a lead and a flag that the OrderTarget under-modeled the residual; re-derive.
 
-### 5.2 CLI surface (extend `debug search directed`; add one derivation command)
-
-Two CLI shapes, both extensions of existing groups:
+### 5.2 CLI surface
 
 **(new) `debug target order-target -f <fn> -u <unit> [--verify] [--out <path>]`**
-Derives and persists the `OrderTarget` artifact (§4.2/§4.3): runs the register-only checkdiff
-→ `force-phys-from-diff` → `match-iter-first --force-vector` → reads back the proven order
-vector → computes baseline reanchor coverage → writes `docs/superpowers/order-targets/<fn>.yaml`
-with a `routing` verdict. Exit 0 = `directed`; exit 3 = `unanchorable` (coverage < floor);
-exit 4 = `order_unreachable` (no ≤K force vector reproduces bytes). This is a thin orchestration
-over four existing commands.
+Runs §4.2 end-to-end and persists the artifact. Exit codes mirror routing: 0 `directed`;
+3 `unanchorable`; 4 `not_order_class`; 5 `force_cap_blocked`; 6 `unstable_target`.
+Lands in the **package** CLI (`cli/debug/__init__.py` — the live copy; §2.1 landing risk).
 
-**(extend) `debug search directed`** gains:
-- `--order-target <path>` — load an `OrderTarget` artifact; sets the **objective mode to
-  order-distance** (the new primary). When present, the objective's
-  `objective_iter_by_original_ig` is set from `OrderTarget.order_target` (the PROVEN vector),
-  not the baseline (closes GAP-A/B). `proof_force_phys` is set from `OrderTarget.phys_target`.
-- `--objective {order,phys}` — explicit selector (default `phys` for backward compatibility
-  with the shipped 9ACC behavior; `--order-target` implies `order`). The two modes differ
-  only in which `DirectedMeta` field the gate/accept reads (`order_distance` Kendall vs
-  `displacement` phys-match); both are already computed every iteration, so this is a
-  one-branch change in `scorer.py::score_directed` + `gate.py`.
-- `--permuter-arm {off,local,remote:<host>}` — enable the fallback/wide arm (§5.3/§5.4).
+**(extend) `debug search directed`** (live def at `search/cli/__init__.py:2582`) gains:
+- `--order-target <path>` — load an `OrderTarget`; refuses to run unless
+  `routing: directed`; sets objective mode `order` (the proven vector becomes
+  `objective_iter_by_original_ig`; `phys_target` populates `proof_force_phys` for
+  diagnostics).
+- `--objective {order,phys}` — explicit; default `phys` (backward compatible);
+  `--order-target` implies `order`.
+- `--permuter-arm {off,local,remote:<host>}`.
 
-### 5.3 Wiring the order-distance objective into the scorer + permuter
+### 5.3 Wiring the objective (with the polarity work made first-class)
 
-- **Scorer (`scorer.py::score_directed`)**: today it hardcodes the phys-match buckets as the
-  gate signal and demotes the iter metric. Add an `objective_mode` on `DirectedObjective`
-  (`"order" | "phys"`). When `"order"`: the gate signal `order_distance` :=
-  `metric.order_distance(cand_iter_by_orig_ig, obj.objective_iter_by_original_ig)` (Kendall vs
-  the PROVEN vector) and `displacement` := `metric.displacement(...)`; phys-match moves to a
-  *diagnostic* field. When `"phys"`: unchanged. **No metric code changes** — only which
-  already-computed value the gate reads. (~30 lines.)
-- **Gate (`gate.py::evaluate_phase1_gate`)**: it currently treats higher `displacement` as
-  better (`displacement > control_displacement`, `displacement_delta > 0`). For order mode the
-  win is **lower** `order_distance`; add an objective-aware comparator (`better(a, b)`), or
-  invert order-distance into a `1/(1+d)` "closeness" so the existing `>` logic holds
-  unchanged. Prefer the explicit comparator (no magic transform). (~25 lines.)
-- **Permuter arm scorer**: add `debug target score-order` (sibling of `score-simplify-order`)
-  that, given a candidate `.o`+pcdump sidecar and an `OrderTarget`, reanchors and emits the
-  integer Kendall order-distance (lex-free: it is already a small non-negative int, monotone).
-  Wire it via a `debug permute setup-order-scorer` (sibling of `setup-simplify-order-scorer`)
-  so the permuter saves order-improving candidates. This reuses the entire
-  `setup-simplify-order-scorer` machinery (compile.sh pcdump sidecar, settings.toml scorer
-  section); only the score function differs. (~1 small module + 1 CLI command, both modeled
-  line-for-line on the simplify-order pair.)
+- **Contracts** (`contracts.py`): add `objective_mode: str` (+ the OrderTarget-sourced
+  fields) to `DirectedObjective` (it has none today — contracts.py:9).
+- **Scorer** (`scorer.py::score_directed`): branch on `objective_mode`. `"order"`: gate
+  signal = Kendall vs the proven vector + the §3.3 validity rules (replacing the generic
+  0.5 floor for target roles); phys-match becomes diagnostic. `"phys"`: unchanged. The
+  scoring core is the **generalized** reanchored scorer (T5) so the kill-switch harness and
+  the live loop exercise the same path.
+- **Gate** (`gate.py`): objective-aware comparator — the winner test at gate.py:92
+  (`displacement_delta > 0`, `displacement > control`) becomes `better(candidate, control)`
+  with lower-is-better semantics in order mode. Explicit comparator, no sign-flip transforms.
+- **Scheduler** (`scheduler.py:254-263`): best-selection and the parent-state threading
+  assume higher-is-better and thread `displacement` specifically (via `object.__setattr__`
+  on the frozen state). Order mode must thread the order-distance scalar with inverted
+  comparison — and this is the right moment to replace the frozen-dataclass mutation with a
+  proper field. **This is a first-class task (T9), not a footnote** — codex verified the
+  higher-is-better assumption is structural in both files.
+- **Permuter arm scorer**: `debug target score-order` (sibling of `score-simplify-order`):
+  candidate `.o` + pcdump sidecar + `OrderTarget` → reanchor → integer Kendall distance
+  (with §3.3 validity → sentinel penalty on coverage loss, mirroring `PENALTY_INF`
+  conventions). Wire via `debug permute setup-order-scorer` (modeled on
+  `setup-simplify-order-scorer`'s three-file pattern).
 
 ### 5.4 Remote fan-out
 
-The wide permuter arm runs through the existing `permuter_remote` adapter
-(`submit/fetch/status/stop` on coder1/2/3) as an `ArtifactProducer`, with its `.command`
-pointed at `score-order` (§5.3). Candidates flow back into the same `ArtifactStore`, are
-reanchored + scored by the identical order-distance objective, and compete with the
-deterministic arm's candidates in the scheduler's best-selection. This is the substrate's
-designed division: deterministic typed mutators as the `VariantSource`, permuter as the
-async producer. No new transport code.
+The wide permuter arm runs through the existing `permuter_remote` adapter as an
+`ArtifactProducer` with its `.command` pointed at `score-order`. Candidates flow into the
+same `ArtifactStore`, reanchored + scored identically, competing in the same selection. No
+new transport code. (This is also the only parallelism — see the cost model, §7.)
 
 ---
 
 ## 6. VALIDATION PLAN (the decisive experiment, cheap-first)
 
-The premise under test: **directed order-distance search descends to the proven target order,
-and the metric would have found known historical wins.** The Phase-1 pilot's hollowness is the
-reason this must be tested before any pool campaign. Three functions, cheap → expensive.
+Premise under test: **directed order-distance search descends toward a forced-ORDER-proven
+target, and the metric retrodicts known wins.** The Phase-1 hollowness is why this must pass
+before any pool campaign.
 
-**Picks:** `mnDiagram_OnFrame` (one pair — binary, the cheapest live target),
-`mnDiagram2 UpdateHeader` (one transposition — second binary check, different TU), and
-`mnDiagram_8024227C` (the large ~175-line many-role ceiling — the only case with a real
-*gradient* and the only one that can show smooth descent). The brief's pick set exactly.
+**Picks (revised per oracle):** `mnDiagram_OnFrame` (one pair — binary, cheapest live
+target), `mnDiagram2 UpdateHeader` (one transposition, different TU), and
+**`mnDiagram3_HandleInput`** (the large case: 127 GPR relabels = a rich pairwise gradient;
+GPR sub-objective per §3.4). **`8024227C` is REMOVED** — the oracle proved it not-order-class
+(§4.4); it now serves as the derivation pipeline's negative worked example instead.
+`802427B4` is the kill-switch function (6c).
 
-### 6a. Target vector round-trips (cheapest; pure derivation, no search)
+### 6a. Target derivation round-trips + determinism (cheapest; no search)
 
-For each of the three: run `debug target order-target` (§5.2). **PASS iff** the derived
-`force_vector` makes `match-iter-first` reproduce the bytes (checkdiff clean under force) AND
-reading the forced DECISIONS back through `colorgraph_ranks` yields a self-consistent
-`order_target` (the forced order, re-extracted, equals the order we forced). This proves the
-target vector is real and the extractor reads it correctly. **If a pick's target does not
-round-trip, it is `order_unreachable` — drop it from the live experiment** (and note that the
-campaign's "reachable" claim for it was a phys-only proof, not an order proof).
+For each of the three: run `debug target order-target`. PASS iff routing = `directed` with:
+the forced-ORDER build byte-eliminates the class residual (step 4), verify-application
+confirms every forced node moved (step 3), and the derive-twice readbacks are identical
+(step 7). `HandleInput` additionally answers the 64-cap question (is there a ≤64 minimal
+forcing set?) — `force_cap_blocked` is a possible honest outcome that removes it from 6d and
+becomes a DLL-cap tooling request. Any pick that routes `not_order_class` here follows
+`8024227C` out of the pool — that is the partition working, not the experiment failing.
 
-### 6b. Extractor stability (cheap; two compiles, no search)
+### 6b. Extractor + identity stability (cheap; two compiles, no search)
 
-Compile the **unchanged** seed twice (or compile, copy, recompile) and run `colorgraph_ranks`
-+ `build_descriptors` + `reanchor_descs(ref, ref)` on both. **PASS iff** (i) identical source →
-identical order vector (determinism), and (ii) self-reanchor is the identity on all
-non-ambiguous roles (`matched[ig] == ig` for every confidently-matched role; ambiguous temps
-may abstain — that is allowed and reported). This pins that the metric's zero point is stable
-and the identity layer is not introducing drift on a no-op. (This is the check that, had it
-been run on the Phase-1 baseline-derived vector, would have *exposed* the hollowness:
-self-reanchor of a no-op scores order-distance 0 against a baseline-derived target trivially —
-so 6b must be run against the **proven** target from 6a, where a no-op scores the *baseline's*
-non-zero distance, not 0.)
+Compile the unchanged seed twice; run `colorgraph_ranks` + `build_descriptors` +
+self-reanchor on both. PASS iff identical order vectors (determinism at the extractor level)
+and self-reanchor is the identity on every pruned target role (round-trip MATCHED; ambiguous
+temps may abstain — they were pruned at derivation). Note the no-op scores the **baseline's
+distance to the proven target** (non-zero by construction) — under the rev-1 baseline-derived
+vector it would have scored 0; this check is the anti-hollowness tripwire made permanent.
 
-### 6c. The metric would have found a KNOWN historical win (decisive; the kill switch)
+### 6c. THE KILL SWITCH — frozen-fixture retrodiction of a known win (decisive)
 
-Reconstruct two banked wins on their pre-win base and confirm the order-distance metric
-**descends** at the winning edit:
+**Design (adopting the codex prescription):** the kill switch scores **two FIXED candidate
+sources** through the same scoring core the loop uses. It does not depend on the mutator
+vocabulary at all (no comma-expr mutator exists — mutators.py:279 — and none is needed here).
 
-1. **`802427B4` comma-expr crack** (banked 95.68→97.96; confirm the exact base commit at
-   reconstruction time): the proven win is inserting a `(0, X)` comma expression that perturbs
-   LICM so MWCC stops hoisting a loop-invariant base.
-   Procedure: derive `OrderTarget` for `802427B4` on its pre-win base; score the pre-win base
-   (control) and the comma-expr variant; **PASS iff** the comma-expr variant's Kendall
-   order-distance is **strictly lower** than the control (ideally 0), i.e. the metric ranks the
-   known win above the base.
-2. **A cardstate decl-chain peel** (the `hsd_3AA7.c` `fn_803ACD58` decl-reorder chain that
-   each peeled one callee-save) as a second, *gradient* witness: score the base and each
-   successive peel; **PASS iff** order-distance is monotone non-increasing across the chain
-   (the metric sees the partial progress the campaign saw). This is cross-TU (not mndiagram)
-   on purpose — if the metric only works on the pool it was tuned for, it is overfit.
+**Fixtures (frozen under `tools/melee-agent/tests/fixtures/order_distance/mnDiagram_802427B4/`):**
+- `pre_win.c` — the TU source at commit `a527c0227~1` (the pre-crack base, 95.68%).
+- `win.c` — the TU source at commit `a527c0227` (the comma-expr crack:
+  `pos.y = (0, mnDiagram_804DBFAC) - HSD_JObjGetTranslationY(j);` + the split base-pointer
+  assignment; 97.96%; stmw r20/12-saves → r21/11-saves). **Verified present in the object
+  store** (`git cat-file -t a527c0227` = commit) — fixture creation is extraction +
+  re-verification + freezing, not archaeology.
+- `negative_control.c` — `pre_win.c` plus ONE edit verified at freeze time to NOT improve
+  match% (an adjacent decl-pair swap in the same function, re-scored at freeze; the campaign
+  history records ~12 failed reshapes on this function — any reconstructible one is
+  acceptable). Frozen alongside.
+- `pre_win.pcdump.txt`, `win.pcdump.txt`, `negative_control.pcdump.txt`, and
+  `order_target.yaml` — the OrderTarget derived **on the pre-win base** via §4.2, subject to
+  T6's eligibility verification (see the derivation contingency below).
 
-**This is the kill switch.** If the comma-expr win does NOT descend the metric (e.g. because
-its lever changes the coloring without changing the *role-matched pairwise order* we targeted,
-or because the role layer cannot anchor the affected web), then **order-distance is the wrong
-objective for this class and the spec's premise is refuted** — say so in the result doc and
-STOP. The recommendation in that case: keep the shipped phys-match objective (which does not
-depend on an order gradient) and route the pool to the permuter arm. Do not proceed to a pool
-campaign on a metric that cannot retrodict a known win.
+**Derivation contingency (flagged, evidence-based):** the win commit's own message records a
+callee-save-count change (stmw r20/12-saves → r21/11-saves; our hoisted base eliminated in
+favor of the target's in-loop recompute). That raises a real possibility that the pre-win
+base is NOT FULLNORM-0 (the hoist is an instruction-placement difference, not a pure
+relabel), in which case §4.2 step 1 or step 4 will refuse it and no `routing: directed`
+OrderTarget exists on that base. T6 therefore verifies eligibility FIRST. If the pre-win
+base routes out, that is recorded as a finding (the celebrated `802427B4` win was a
+node-set-class win, partially outside this metric's class), the **cardstate decl-chain
+witness is promoted to the gating retrodiction** (decl reorders are pure order moves on a
+stable node set — squarely in-class), and the orchestrator is informed that the kill-switch
+function assignment needs revisiting. The kill switch still runs; it does not silently pass.
 
-### 6d. Live descent (only if 6a-c pass)
+**Assertions (all must hold):**
+- **(a) Same anchor set:** both `pre_win` and `win` candidates round-trip-anchor the EXACT
+  SAME target-role set (set equality over the pruned target roles). Note the win changes the
+  callee-save count (a hoisted-base live range disappears) — the target-role set must
+  therefore be chosen at derivation from roles that persist across the win (the mismatched
+  destination-register roles, not the eliminated temp). If the winning edit's mechanism
+  removes the very roles that were mismatched, (a) fails — and that is the kill switch
+  firing with a precise cause: *this win class is invisible to role-stable order distance.*
+- **(b) Strict descent:** `order_distance(win) < order_distance(pre_win)`, both valid per
+  §3.3.
+- **(c) A named pair flips:** at least one specific target-role pair, recorded by name in the
+  fixture's `order_target.yaml`, is inverted in `pre_win` and correct in `win`. The pair must
+  be chosen among **persistent** roles (the relabeled callee-save-band roles that exist in
+  both candidates — NOT the hoisted-base node the win eliminates, which assertion (a) already
+  excludes from the target set). This pins that the descent is the *intended* relation, not
+  an accident of unrelated pairs.
+- **(d) Negative control does not descend:**
+  `order_distance(negative_control) >= order_distance(pre_win)`. If a verified-non-improving
+  edit lowers the metric, the metric admits false positives at exactly the granularity the
+  search will exploit — the kill switch fires.
 
-Run `debug search directed --order-target ... --objective order` on `OnFrame` and
-`8024227C` with a small `--max-iters` (e.g. 12) + permuter arm off (deterministic only, for
-attribution). Report the outcome distribution (matched / order-matched-bytes-differ /
-no-smooth-gradient / unattributed). A `no_smooth_gradient` on `OnFrame` (binary, no gradient)
-is an *expected, honest* non-pass that routes to the permuter arm — it is not a failure of the
-metric (§7). The headline question 6d answers is whether `8024227C` (the gradient case) shows
-the deterministic arm *descending* before the permuter arm is even needed.
+**Secondary witness (cheap, cross-TU, non-gating but reported):** the cardstate
+`fn_803ACD58` decl-chain peels (each peeled one callee-save) scored as a monotone sequence —
+order-distance should be non-increasing along the chain. Cross-TU on purpose: a metric that
+only works on the pool it was designed against is overfit.
+
+**If 6c fails (any assertion): the premise is refuted — STOP.** Write the refutation into
+the result doc, keep the shipped phys-match objective, route the pool to the permuter arm.
+Do not proceed to a pool campaign on a metric that cannot retrodict a known win.
+
+### 6d. Live descent (only if 6a-6c pass)
+
+`debug search directed --order-target … --objective order` on `OnFrame` and `HandleInput`,
+deterministic arm only (attribution), small budget (`--max-iters 12`). Expected honest
+outcomes: `OnFrame` (binary, no gradient) may legitimately return `no_smooth_gradient` →
+routes to the permuter arm — not a metric failure. The headline question is whether
+`HandleInput` (the gradient case, 127 relabels → thousands of pairs) shows the deterministic
+arm **descending** — and its success criterion is class-scoped (GPR relabel reduction;
+byte-match is not expected while the FPR residual stands, §3.4).
 
 ---
 
 ## 7. Risks / unknowns (honest)
 
-- **Landscape may be discontinuous (the band rules).** The InputProc "band ordering" is the
-  dominant lever and it is *quantized*: locals number in reverse-decl order, temps in
-  first-use order, promoted temps at r111+ by first-use. A one-line edit can jump a role across
-  a whole band, flipping many pairwise relations at once. So Kendall order-distance may move in
-  large discrete steps, not a smooth slope — `displacement` is the only continuous hint and it
-  is non-monotone. **Mitigation:** the binary cases (`OnFrame`/`UpdateHeader`) are accepted to
-  be gradient-free (route to permuter on `no_smooth_gradient`); the gradient claim is tested
-  only on `8024227C` (6c/6d). **Refutation evidence:** if even `8024227C` shows no monotone
-  descent on any reconstructed multi-step solve, the smooth-search premise is dead for this
-  class and only the discrete win/no-win and the permuter arm remain.
-- **DECISIONS-dump cost per candidate.** Every candidate needs a full `mwcc_debug` compile +
-  pcdump parse (the order vector is not available cheaper). On this machine local dump is the
-  PASS path; budget ~a few seconds/candidate (the `decl-orders` help cites ~6s/variant; the
-  directed loop is comparable). The deterministic arm is small (tens of candidates); the
-  permuter arm is the expensive one and is **why it runs remote** (§5.4). **Mitigation:** the
-  scheduler dedups on `(CompileSpec, source_hash)`; the `ArtifactStore` caches; remote fan-out
-  amortizes. Budget the deterministic arm at `max-iters × batch` compiles and cap the permuter
-  arm by wall-clock, not iterations.
-- **Role-matching on anonymous temps (the core fragility).** The most valuable residuals
-  (`found↔row2`, the +094 anchor) are statement-temp webs with no `var_name`. The role layer
-  *correctly abstains* on these (`AMBIGUOUS`/`NON_COMPARABLE`), which means the directed loop
-  *cannot measure progress* on them and routes them to the permuter arm (§3.3). This is honest,
-  but it means **directed order-distance buys nothing on the hardest residuals** — its value is
-  on the variable-anchored ones (`OnFrame` r28/r29 if those are named locals, the decl-order
-  pool). The validation's coverage report (6b, and `order-target` routing) quantifies how much
-  of the pool is even anchorable; if most of it routes `UNANCHORABLE`, the directed arm's reach
-  is small and the permuter arm is doing the real work.
-- **The "blind register-source-search was census'd low-yield" prior.** MEMORY records that
-  register crackability was 0/8 via blind remote permuter and that data-symbol harvest was
-  0/25 — the near-100 buckets are "ceiling-dominated." **Why DIRECTED differs:** the censused
-  search was *blind* (random permuter against objdiff, no target order, no gradient). This
-  design searches against a **force-iter-first-PROVEN target order** with a role-anchored
-  distance that *descends* — the permuter's `.command` is the order scorer, not objdiff, so the
-  cloud compute is spent climbing toward a proven-reachable order instead of a random walk.
-  **What would refute the premise:** if 6c shows the metric cannot even retrodict the
-  comma-expr win, then "directed" is not actually directing (the metric is not aligned with the
-  real lever), and this collapses back to the censused blind search. 6c is the test that
-  distinguishes "directed search of a proven target" from "blind search with extra steps."
-- **`OrderTarget` derivation may itself fail (exit 3/4) on much of the pool.** If `force-phys-
-  from-diff` + `match-iter-first` cannot reproduce a function's bytes with a ≤K force vector
-  (order not the sole lever, or phys target ambiguous), that function never enters the loop.
-  This is a *correct* outcome (it bounds the addressable pool) but it may shrink the pool
-  sharply — the derivation pass (§6a across all 10) is itself an informative census, run it
-  before committing to a campaign.
-- **Two CLI copies.** `tools/melee-agent/src/cli/debug.py` and
-  `tools/melee-agent/src/cli/debug/__init__.py` both exist (~1MB each). The package form
-  (`debug/__init__.py`) is the live one (it was the file modified at session start). New CLI
-  must land in the live module; verify which is imported before editing (a papercut worth an
-  issue if both are still wired).
+- **Landscape may be discontinuous (the band rules).** The InputProc band model says locals
+  number in reverse-decl order, temps in first-use order, promoted temps at r111+ — a
+  one-line edit can jump a role across a band, flipping many pairwise relations at once.
+  Kendall may move in large steps; `displacement` is the only continuous hint and is
+  non-monotone. Mitigation: binary cases route to the permuter on `no_smooth_gradient`; the
+  gradient claim is tested only on `HandleInput`. Refutation evidence: if even `HandleInput`
+  shows no descent under 6d, the smooth-search premise is dead for this class and only the
+  discrete win/no-win + permuter arm remain.
+- **Per-candidate cost is a SERIALIZED full-TU compile.** `PcdumpLocalBackend` writes the
+  candidate INTO the real TU and compiles under `_acquire_repo_build_lock`
+  (pcdump_backend.py:123-165) — one candidate at a time per checkout, each a full
+  `dump local` of an ~88KB TU (mndiagram.c) plus pcdump parse. Budget: the deterministic arm
+  is tens of serialized compiles per run (minutes, acceptable); **wide search is only viable
+  on the remote permuter arm** (or N separate worktrees, each with its own lock — not
+  designed here). The scheduler's `(CompileSpec, source_hash)` dedup and the ArtifactStore
+  cache are already in place.
+- **The 64-entry force cap silently no-ops (oracle TOOLING NOTE).** Any force-* list > 64
+  applies NOTHING (`override list exceeded parser capacity (cap=64)`). Derivation must keep
+  forcing sets ≤ 64 and ALWAYS verify reached-nodes in the forced dump — never trust a
+  silent flag. `force_cap_blocked` is the named routing when no ≤64 set suffices.
+- **DLL/CLI feature skew can fake "inert" (oracle TOOLING NOTE).** The editable CLI resolves
+  to the MAIN checkout while a worktree's deployed DLL may predate a hook — the flag is
+  forwarded and silently ignored, and `dump doctor` PASSES (it checks DLL↔worktree-source
+  consistency, not feature presence). The oracle round lost a probe to exactly this (#579).
+  Derivation's verify-application step (§4.2.3) is the structural defense; a doctor-level
+  feature-presence check is a worthwhile tooling follow-up.
+- **Role-matching on anonymous temps (the core fragility).** The hardest residuals
+  (`found↔row2`, the +094 anchor) are statement-temp webs with no variable identity; the
+  role layer correctly abstains, derivation prunes them to `unscored_roles`, and the loop
+  cannot measure them. Directed order-distance buys nothing there — the permuter arm does
+  that work. The derivation census (6a across the pool) quantifies the anchorable fraction;
+  if most of the pool prunes away or routes out, the directed arm's reach is small and the
+  honest conclusion is "the partition was the deliverable."
+- **The "blind register-source-search was census'd low-yield" prior.** The near-100 census
+  (0/8 via blind remote permuter) is the strongest argument against this whole direction.
+  Why DIRECTED differs: the censused search was blind (objdiff scoring, no target order, no
+  gradient); this design scores against a **forced-ORDER-proven** target with a role-anchored
+  distance. What would refute the premise: 6c failing — then "directed" is not directing and
+  this collapses to the censused blind search. That is exactly what the kill switch tests
+  before pool spend.
+- **Derivation may classify most of the pool out.** `8024227C` already routed
+  `not_order_class`; others may follow (or hit `force_cap_blocked`/`unanchorable`). That
+  shrinks the campaign but is correct — the partition converts "stuck at N%" into a named
+  class + named next tool per function, which has standalone value.
+- **Two CLI copies (landing risk).** `search/cli.py` + `cli/debug.py` are ~1MB legacy
+  siblings of the live package `__init__.py` copies. New code lands in the package copies
+  only; the duplication is filed in the issue queue so it gets deleted or de-duplicated
+  before it eats a landing.
 
 ---
 
 ## 8. Out of scope
 
-- **FPR-specific extensions beyond what #573 gives.** The role descriptor is GPR-only
-  (`build_descriptors` refuses `class_id != 0`). FPR residuals (`HandleInput`'s 17 FPR
-  relabels, `80241E78`'s FP shadow) are addressed only via their GPR sub-objective or the
-  permuter arm. A class-aware descriptor build (carry-forward #2) is a separate effort.
-- **Reverse-compiler global inversion.** This is stage-wise: search C-space against a proven
-  target order. No attempt to invert PCode→C or IG-construction (creation-order → ig_idx is the
-  reverse-compiler's later layer, per the tiebreak non-goals).
-- **Any retail-binary instrumentation.** The objective reads the local `mwcc_debug` DLL's
-  `COLORGRAPH DECISIONS`; no retrowin32/gdb retail tracing (that is `mwcc-retro`'s domain and is
-  not needed — `inspect tiebreak` G1 already validated the local dispense at 100%).
-- **New distance-metric research.** We use the two metrics that exist (Kendall primary,
-  `displacement` diagnostic). No first-divergence-depth or per-band-displacement metric is
-  built — they are named in the brief as candidates but Kendall is chosen (§4.1) and adding a
-  third unblended metric would re-introduce the α-calibration trap the parent design rejected.
-- **Generalizing the typed-mutator vocabulary beyond the conditional two (§GAP-D).** Only
-  `comma_expr_licm` and `dead_anchor_band_lift` are in scope, and only if validation shows the
-  deterministic arm starves. Broader mutator coverage (accessor-macro inline, operand-flip) is
-  deferred to the permuter arm.
+- **FPR (v2).** `build_descriptors` is GPR-only by guard (role_descriptor.py:77). FPR
+  residuals (`HandleInput`'s 17, `80241E78`'s shadow) are not targeted; mixed-class success
+  criteria are class-scoped (§3.4). A class-aware descriptor build is the named v2 item.
+- **Reverse-compiler global inversion.** Stage-wise search against a proven target order
+  only; no PCode→C or IG-construction inversion.
+- **Retail-binary instrumentation.** The objective reads the local debug-DLL DECISIONS;
+  `inspect tiebreak` G1 already validates the dispense at 100% (126/126 on `8024227C`).
+- **New distance-metric research.** Kendall primary + `displacement` diagnostic, both
+  existing. No first-divergence-depth or per-band-displacement metric; no blended scalar.
+- **Raising the 64-entry DLL force cap.** Named as the fix for `force_cap_blocked` routing
+  but is a DLL/tooling task outside this spec.
+- **Splitting coalesced lives / the `8024227C` arg-home reopen.** That is the
+  `not_order_class` queue's territory (coalescing-boundary permuter / structural reopen per
+  the oracle's recommendation) — explicitly NOT this tool.
+- **Generalizing the mutator vocabulary beyond T13's two**, and any automated source-edit
+  generation beyond the existing typed mutators.
 
 ---
 
-## 9. Reused vs new + implementation size estimate
+## 9. Reused vs new + implementation size estimate (revised honestly)
 
-**Reused (no change):** `colorgraph_parser`, `order_metric.colorgraph_ranks`, `metric.order_distance`/`displacement`, `role_descriptor`/`role_matcher`/`role_reanchor`, `convergence.analyze_iteration_full`, `DirectedSource`/`anchors`/`mutators`, `PcdumpLocalBackend`, `DefaultScheduler` (directed mode), `ArtifactStore`, the permuter `ArtifactProducer` adapter, `force-phys-from-diff`, `match-iter-first`, `setup-simplify-order-scorer` (as the template), `checkdiff`.
+**Reused (no change):** `colorgraph_parser`, `colorgraph_ranks`, `metric.order_distance`/
+`displacement`, the `mwcc_debug` role layer (`role_descriptor`/`role_matcher`/
+`role_reanchor`), `convergence.analyze_iteration_full`, `DirectedSource`/`anchors`/
+`mutators`, `PcdumpLocalBackend`, `ArtifactStore`, the permuter `ArtifactProducer` adapter,
+`force-phys-from-diff`, `match-iter-first`, `setup-simplify-order-scorer` (template),
+`checkdiff`, `inspect tiebreak`.
 
-**New / changed (the whole build):**
+**The build — 12 tasks + 1 conditional, 3 plans, cheapest-path-to-kill-switch:**
 
+**Plan A — objective core (the minimum the kill switch needs):**
 | # | Task | Where | Size |
 |---|---|---|---|
-| 1 | `objective_mode` field + order-branch in `score_directed` (gate reads Kendall vs proven vector) | `scorer.py`, `contracts.py` | S (~30 LOC + tests) |
-| 2 | objective-aware comparator in the gate | `gate.py` | S (~25 LOC + tests) |
-| 3 | `OrderTarget` artifact schema + load/save + `build_target_spec` adapter | new `search/directed/order_target.py` | S-M |
-| 4 | `debug target order-target` CLI (orchestrates checkdiff→force-phys-from-diff→match-iter-first→readback→persist+route) | live `cli/debug` module | M |
-| 5 | `debug search directed` flags: `--order-target`, `--objective`, `--permuter-arm`; build objective from `OrderTarget` | `run.py`, live `cli/debug` module | M |
-| 6 | `score-order` permuter scorer + `setup-order-scorer` (modeled on the simplify-order pair) | new `search/directed/order_scoring.py` + `cli/debug` | M |
-| 7 | Validation experiment 6a-6d (derive 3 targets, round-trip, stability, **6c kill switch**, live descent) + result doc | new `…/ORDER_DISTANCE_RESULT.md` | M (mostly runtime, not code) |
-| 8 | (conditional, only if 6d starves) `comma_expr_licm` + `dead_anchor_band_lift` mutators + anchors | `mutators.py`, `anchors.py` | M |
+| T1 | `objective_mode` + OrderTarget-sourced fields on `DirectedObjective` | `contracts.py` | S |
+| T2 | `OrderTarget` artifact module (schema, load/save, routing enum, validation) | new `search/directed/order_target.py` | M |
+| T3 | Derivation pipeline `debug target order-target` (§4.2: conflict classifier, forced-ORDER compile w/ ≤64 minimal-set search, verify-application, class gate, readback, pruning, derive-twice, persist+route) | live `cli/debug/__init__.py` + a `mwcc_debug` helper module | **L** (the largest task — orchestrates 4 tools + classification) |
+| T4 | Scorer order-mode branch + §3.3 hardened validity (1.0 target coverage, ≥2 roles, `target_role_lost`) | `scorer.py` | M |
+| T5 | Generalize `CandidateScore`/`score_candidate_reanchored` to arbitrary role sets (drop `rank33`/`rank40` — order_metric.py:204); this becomes the shared scoring core for T4 + the 6c harness | `order_metric.py` | S-M |
 
-**Estimate: 6 code tasks (1-6) + 1 validation task (7) + 1 conditional (8) ≈ 2 plans.**
-Plan A = tasks 1-6 (the wiring + derivation + scorers), gated on the existing 135-test suite
-staying green plus new unit tests per task. Plan B = task 7 (the decisive experiment), which is
-**a gate, not a build**: if 6c fails, Plan B's deliverable is the refutation doc and task 8
-never happens. This is small because the substrate, the identity layer, the metrics, the loop,
-and the CLI already exist — the genuinely new work is **re-pointing the objective at a proven
-target vector and proving (or refuting) that the metric descends**.
+**Plan B — the kill switch (STOP gate; runs before any loop wiring):**
+| # | Task | Where | Size |
+|---|---|---|---|
+| T6 | Fixture creation: extract `a527c0227~1`/`a527c0227` pair; **verify the pre-win base is derivation-eligible** (register-only + `routing: directed` — see §6c contingency; if not, promote the cardstate witness to gating and report); derive OrderTarget on the pre-win base; choose + verify the negative control; freeze sources+pcdumps+target | `tests/fixtures/order_distance/…` | M (extraction + re-verification; commit verified present) |
+| T7 | Kill-switch harness + assertions (a)-(d) + the cardstate secondary witness + result doc | new test/harness module | M |
 
-**Codex review gate (per MEMORY doctrine):** this SPEC and the resulting PLAN each get an
-independent `codex:codex-rescue` review before execution (the spec-and-plan review gate that
-caught safety blockers on prior efforts), with particular attention to whether 6c is a genuine
-kill switch or a test the metric can pass trivially.
+**Plan C — loop wiring + pool census (only after B passes):**
+| # | Task | Where | Size |
+|---|---|---|---|
+| T8 | POLARITY: objective-aware gate comparator (lower-is-better order mode) | `gate.py` | S-M |
+| T9 | POLARITY: scheduler best-selection + parent-state scalar threading (incl. replacing the `object.__setattr__` frozen-state hack at scheduler.py:254-263) | `scheduler.py`, `contracts.py` | M |
+| T10 | `debug search directed` flags (`--order-target`/`--objective`/`--permuter-arm`) + objective build from OrderTarget + routing refusal | `search/cli/__init__.py`, `run.py` | M |
+| T11 | `score-order` permuter scorer + `setup-order-scorer` (modeled on the simplify-order pair, §3.3 sentinel on coverage loss) | new module + `cli/debug/__init__.py` | M |
+| T12 | Pool derivation census (run `order-target` across the remaining 9; classification table) + validation runs 6a/6b/6d + result doc | runtime + docs | M |
+| T13 | *(conditional on 6d starvation)* `comma_expr_licm` + `dead_anchor_band_lift` mutators + anchors | `mutators.py`, `anchors.py` | M |
+
+**Why this is bigger than rev 1's estimate (6-9 → 12+1):** codex verified each rev-1 task was
+underestimated — no `objective_mode` exists, the scorer/gate/scheduler polarity is structural
+(two files, plus a frozen-dataclass mutation to unwind), `CandidateScore` is pilot-shaped,
+the derivation pipeline gained the conflict classifier + minimal-set search + verify-
+application + determinism steps, and the kill-switch fixtures are a real task. The ordering
+spends the least before the §6c STOP gate: A (core) → B (kill switch) → C (everything else).
+
+**Codex review gate (per doctrine):** this revised SPEC and each PLAN get an independent
+`codex:codex-rescue` review before execution, with explicit attention to (i) whether 6c can
+be passed trivially and (ii) whether the §4.2 minimal-forcing-set search is well-defined on
+`HandleInput`.
+
+---
+
+## 10. Revision 2 changelog (codex blockers + oracle evidence)
+
+1. **Derivation rewritten (codex B1):** rev 1 read the order from the build forced by
+   `force-phys-from-diff`'s vector — but that vector is PHYS constraints
+   (cli/debug/__init__.py:793/:871/:1396), and phys forcing leaves the select order at
+   baseline ⟹ rev 1 would have re-imported the hollow objective. §4.2 now: phys map (+
+   conflict classifier) → TRUE forced-ORDER compile (`--force-iter-first`, ≤64 minimal set)
+   → verify-application → class-partition gate → readback from the FORCED build →
+   prune → derive-twice determinism → persist.
+2. **Coverage hardening (codex B2):** §3.3 — Kendall's ignores-unmapped behavior
+   (metric.py:115, test_metric.py:32) closed at the objective: 1.0 reanchor coverage over the
+   pruned target-role set + ≥2 roles or `invalid`; ~0.8 as diagnostic only; routing keys on
+   REANCHOR coverage, never `TargetSpec.target_coverage` (rank-present ≠ reanchored,
+   role_descriptor.py:160). Amendment: derivation-time target-role pruning makes 1.0
+   implementable on many-role targets.
+3. **Estimate redone (codex B3):** 6-9 tasks/2 plans → **12 + 1 conditional / 3 plans**, with
+   the gate+scheduler POLARITY work first-class (gate.py:92, scheduler.py:254), the
+   `CandidateScore` generalization explicit, and the live-CLI landing risk (package
+   `__init__.py` copies; legacy 1MB siblings) named + filed.
+4. **Kill switch tightened (codex B4, adopted verbatim):** §6c — frozen fixtures (pre-win /
+   win / negative-control sources + pcdumps + OrderTarget), assertions (a) same anchored
+   target-role set, (b) strict descent, (c) a named pair flips in the intended direction,
+   (d) negative control does not descend; mutator-independent by construction. Correction to
+   the finding's framing: the fixture pair is NOT lost — commit `a527c0227` exists in the
+   object store (verified), so T6 is extraction+freezing, not archaeology. One flagged
+   addition: the win commit's save-count change means the pre-win base may not be
+   derivation-eligible — §6c carries an explicit contingency (cardstate witness promoted to
+   gating + orchestrator informed) instead of a silent assumption.
+5. **Oracle evidence folded:** `8024227C` reclassified `not_order_class` (arg-home coalescing
+   root ig56) and removed from validation — replaced by `mnDiagram3_HandleInput` as the large
+   gradient case (GPR sub-objective). New §4.4: derivation IS the class partition, with
+   `8024227C` as the worked example. Two operational caveats absorbed: the 64-entry force cap
+   (silent no-op ⟹ minimal-set search + `force_cap_blocked` routing) and DLL/CLI feature skew
+   (verify-application mandatory).
+6. **Advisories:** role-layer paths corrected to `tools/melee-agent/src/mwcc_debug/`; FPR
+   declared v2 with the code guard cited (role_descriptor.py:77); the serialized
+   build-lock cost model added (pcdump_backend.py:123-165).
