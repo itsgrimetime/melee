@@ -1114,3 +1114,19 @@ Full detail (per-job table, levers, sweep, freed capacity, #593) recorded in **C
 - **ALL THREE STOPPED — CONVERGED** (each best found ~11:44–11:52, nothing better in the ~3 h / 162k–400k iters since). Re-bootstrap onto new source for any future run (#558) — orchestrator's call.
 - **FREED:** coder1 fully free (16 threads); coder3 wave-2 pair stopped (16 threads). coder3's 14 lingering `InputProc`/`802437E8`/`OnFrame` sessions are DEAD tmux windows (pane=`fish`, iters frozen) consuming zero threads (#591 dead-record class), left untouched.
 - **#593 filed:** `remote ps` crashes (`remote_ps` missing from `permuter_remote`) — breaks #591's recommended workaround; used SSH `tmux ls` + pane-cmd + log-iter-sampling instead.
+
+---
+
+## PERMUTER ROUND (wave 3) — fleet rotation re-submit (2026-06-12, fleet-rotation agent wave 3)
+
+Full detail (per-job table, the OnFrame force-phys decision, #424/#575 notes, #595) in **CAMPAIGN-STATE-D2COMPLETION.md → PERMUTER ROUND (wave 3)** (canonical). Summary:
+
+- **4 jobs submitted** (HEAD `70baf3673`, tree clean, NO source edits, 4 builds = the four #558 base-verifies, `DECOMP_AGENT_ID=fleet-wave3`, all bootstraps pinned to this worktree):
+  - **OnFrame** → coder1 `mnDiagram_OnFrame-coder1-20260612-080530`, base **45**, **standard match-objective FALLBACK** + move-axis weights (reorder_stmts=35/reorder_decls=30/temp_for_expr=22…).
+  - **AggRank** (re-bootstrap @95.72) → coder1 `…-081320`, base **600**, wave-2 reorder-heavy+temp/alias weights.
+  - **GetRankedName** (re-bootstrap @98.62) → coder3 `…-081335`, base **370**, wave-2 temp+type-width+reorder weights.
+  - **80241E78** (98.94) → coder3 `…-081349`, base **555**, reorder-heavy+temp/alias (4-win class).
+- **ALL FOUR ALIVE** (`remote tail`; list+ps broken #591/#593): OnFrame 15841it/base45, AggRank 488it/base600, GetRankedName 649it/base370, 80241E78 179it/base555 — all descending/exploring.
+- **ONFRAME FORCE-PHYS = audited, fell back.** `debug target score-force-phys` EXISTS and wired+validated LOCALLY (base.o scores 1000000 = 0/1 hits, correctly polarized for the proven `49:28` r28 flip), but is **NOT remotely supported** → **#595 filed**: stale remote `melee-agent` (both hosts) lacks `score-force-phys`; doctor PATH false-negative (fish vs bash login); setup writes absolute `/Users/` paths not remote-ready (hand-fixed to relative). Standard objdiff reaches 0=byte-match on OnFrame locally + move-axis weights = the oracle's axis, so the fallback targets the right lever. Re-submit with the custom scorer once #595 lands.
+- **#424 verified for 80241E78:** the brief's precaution (GetVisibleNameCursorFrom/GetDigitCount-era inlines) did NOT apply — 80241E78 `bl`s only `__assert`+`mn_GetDigitCount`, no inline body to inject; base 555 (low) = injection-clean. **#575 applied for OnFrame** (UNUSED-PAD_STACK dup-define removed; re-applied after the standard re-bootstrap).
+- **8024227C @96.09 PARKED** this wave (marginal; scheduler-tiebreak wall).
