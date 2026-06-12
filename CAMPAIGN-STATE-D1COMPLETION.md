@@ -909,6 +909,61 @@ Three temp-arg draw sites (+0f0 SumNameFalls header, +1cc SumFighterFalls header
 2. **The gate does NOT pass and CANNOT yet** — the r3/r6 ORDER + the −24 frame keep it content/coalescing-gated, not pure-coloring. The register endgame is NOT yet enterable as a clean coloring cascade. The blocker is the same coalescing-structure root Rounds 1-2 characterized (force-* cannot split a coalesced value-into-r6 life).
 3. **Next lever is the COALESCING boundary, not registers:** the only remaining axis is a coalescer-pressure source experiment that makes MWCC keep the clamped draw values in their homes (defeat the value↔r6 coalesce) — a deep-dive/permuter task targeting the coalescing boundary (per iter-8 allocation order, 8024227C is rank-1 for permuter ROI, but the permuter must target the value-home-vs-arg coalesce, NOT register tiebreaks). Re-bootstrap coder1 at 95.39 first.
 4. PAD_STACK(24) natural-frame pass remains the standing TU pending-review item (gate `delta=-24` confirms 24B).
+
+---
+
+## ★ COALESCING-BOUNDARY ROUND ★ (2026-06-12, coalescing-boundary driver) — THE VETO ORACLE **REFUTES** THE NAMED COALESCE ROOT: breaking the value→r6 merges leaves the value in its home BUT DOES NOT FLIP THE ORDER. The r3/r6 arg-copy order is a **post-coalescing SCHEDULER tiebreak**, NOT a coalescing decision. 0 commits (no source-honest lever; C search NOT entered — oracle gate failed). 96.03 unchanged.
+
+### THE ONE QUESTION — ANSWERED: **NO.** The value-virtual→r6 merges at the diverging sites are real and veto-targetable, but vetoing them does NOT reproduce the target's gobj-first (joins-in-home) shape, and the cascade does NOT collapse. The named root is REFUTED; the divergence is reclassified one layer down (scheduler ordering of two independent register copies).
+
+### RE-MAP @ 96.03 (f256959e4, truth gate `match=false match_percent=96.03 classification=stack-layout diagnostic_pad_stack=24`)
+- **Opcode similarity = 100.0%.** No opcode transpositions remain. **W1 (+284/+288) is GONE** — the triage-3 `var_r0_2`→u64 win absorbed it; +284/+288 is now register-only (target `addi r18,r17,0; clrlwi r16,r19,24`; ours `addi r16,r17,0; clrlwi r15,r19,24` — both copy-then-mask, register-only). The windows-round census of W1 as a live opcode transposition is SUPERSEDED at 96.03.
+- **The three r3/r6 ORDER windows survive, all confirmed diverging** (target gobj(r3)-first; ours value(r6)-first):
+  | Site | Helper | Clamp? | Target | Ours |
+  |------|--------|--------|--------|------|
+  | +0f0/+0f4 | SumNameFalls header (line 2451) | YES | `addi r3,r28,0` then `addi r6,r19,0` | `addi r6,r17,0` then `addi r3,r28,0` |
+  | +1cc/+1d0 | SumFighterFalls header (line 2460) | NO | `addi r3,r28,0` then `addi r6,r19,0` | `addi r6,r17,0` then `addi r3,r28,0` |
+  | +478/+47c | SumFighterKOsClamped grid (line 2512) | YES | `addi r3,r28,0` then `addi r6,r16,0` | `addi r6,r16,0` then `addi r3,r28,0` |
+- **MATCHED sites** (both r6-first): +2bc (GetNameTotalKOs, unclamped accumulator) and the two `lhzx r6` direct-memory sites (+338/+4f8, GetPersistent*Data indexed path). The clamped-vs-unclamped discriminator from the windows round HOLDS at object level.
+
+### THE VETO ORACLE (the prescribed instrument — APPLIED, READBACK-VERIFIED, REFUTING)
+Baseline pcdump `[COALESCE]` map for `mnDiagram_8024227C` (the alias-array readback at the function's COALESCED ALIASES block): **7 natural merges, ALL virt→PHYS call-arg materializations, NONE arg-home folds** (consistent with Round-2 erratum):
+```
+42 -> 6 [r6]   (SumFighterFalls value,    mr from r91 accumulator, NO clamp before)
+43 -> 6 [r6]   (GetNameTotalKOs value,    mr from r84 accumulator, NO clamp — the MATCHED site)
+48 -> 6 [r6]   (SumFighterKOsClamped val, mr from r100, CLAMP before: cmp r100,0x423F + addi r100,...,16959)
+49 -> 6 [r6]   (clamped value,            mr from r68,  CLAMP before)
+143 -> 6 [r6]  (lhzx direct-memory value, MATCHED)
+162 -> 6 [r6]  (lhzx direct-memory value, MATCHED)
+115 -> 3 [r3]  (one r3 materialization)
+```
+The four `mr`-fed value→r6 merges {42,43,48,49} ARE the prompt's veto-targetable call-arg materializations (in the alias array; NOT the param-receive folds Round-2's erratum covered).
+
+**Veto run:** `debug dump local mndiagram.c --force-coalesce "42=42,43=43,48=48,49=49" --force-coalesce-fn mnDiagram_8024227C`.
+| Gate | Result |
+|------|--------|
+| Applied? | **YES.** Forced log: `[FORCE_COALESCE] alias[42..49]: 6 -> N`, `forced=4`, `distinct_roots 156→160`. Alias readback after veto = `{115→3, 143→6, 162→6}` — the four targeted merges GONE. |
+| Value joins-in-home? | **YES but it ALWAYS did.** Baseline clamped site already materializes the clamp into the value home (`addi r17,r27,16959`), value→r6 is a separate copy; veto keeps it in r17 (`addi r17,r31,16959`). Both builds, both modes: value lives in its home, copied to r6 separately. The veto did NOT change where the value lives. |
+| Order flips to gobj-first (target shape)? | **NO.** Every `mr`-fed site is STILL R6-FIRST in the veto build (`mr r6,r17; mr r3,r19` — value before gobj), identical ordering to baseline. Verified across all 4 sites via the AFTER-REGISTER-COLORING dump. |
+| Cascade collapse toward byte-match? | **NO.** AFTER-COLORING opcode-line count identical (1661 = 1661); integrated `--diff` was if anything noisier (the un-coalesce forces a callee-save renumber). |
+
+### MECHANISM (why the veto is inert here — and what the real root is)
+Pre-coloring pcode is IDENTICAL at the diverging (r48, clamped) and matched (r43, unclamped) sites: `mr rVAL,rACC; mr r3,r32(gobj); rlwinm r4; rlwinm r5; mr r6,rVAL`. The value is staged through a virtual `rVAL`, and `mr r6,rVAL` sits LAST (after gobj). The `48→6` coalesce rewrites `mr r48,r100` → `mr r6,r100` and elides the trailing `mr r6,r48` — so the value lands in r6 EARLY (value-first). **Un-coalescing gives rVAL its own register (r17) but the post-coalescing SCHEDULER still hoists the value→r6 copy above the gobj→r3 copy** — so the order is unchanged. The order is therefore decided by the scheduler ordering two independent `addi rX,rY,0` register copies, NOT by the coalescer's union-find. **Target-vs-ours mechanism, object-level:** in the TARGET the clamped value materializes into its home on both `if` arms, the merge keeps it live, and the value→r6 copy is emitted LATE (after gobj). Ours emits the same home-materialization but the scheduler picks value→r6 first. Both materialize the clamp into the home identically — only the 2-instruction copy order differs.
+
+**This REFUTES the windows-round / Rounds-1-2 headline that the r3/r6 order is "the value↔r6 COALESCE wall" / "ours COALESCES the value's life-end into r6."** The coalesce is INCIDENTAL: with it broken (readback-verified), the order persists. The wall is one layer down — a scheduler tiebreak on two independent copies. (Why the matched site matches: target is ALSO r6-first there — unclamped accumulator already in its home — so ours agrees. Only the clamp-bearing sites' scheduler order diverges.)
+
+### C SEARCH — NOT ENTERED (oracle gate failed, per protocol)
+The protocol gates the C search on oracle confirmation that the merges are THE root. The oracle REFUTED. A C search targeting the coalesce is contraindicated. The remaining mechanism (scheduler ordering of two `addi rX,rY,0` copies) is NOT expressible by the available hooks: `--force-coalesce` is inert (shown); `--force-schedule` pins same-base LOAD order, not register-register copy order (the two copies are not loads); `--force-phys`/`--force-iter-first` operate on the existing node set / simplification order, not 2-copy emission order (windows round: union+singletons+prefixes all no_match). No source-honest lever was found for a 2-copy scheduler tiebreak across this round + Rounds 1-2 (clamp-inside content — closed content not order; second-use/graft — requires a use the target lacks, honesty-negative; force-phys derivation; clamped-vs-unclamped analysis). The speculative source-shape space (temp-for-expr / decl reorder at the arg position) is exactly what coder1's running permuter job covers (weights `perm_temp_for_expr=25` + reorder-heavy template); a one-off manual build duplicates the permuter and was NOT spent (fence: no permuter ops; budget preserved for an oracle-confirmed search that did not arise).
+
+### VERDICT — A ONE-DECISION WALL WITH A NAMED DECISION (reclassified)
+8024227C @ 96.03 is bounded by: (1) the three clamped-site r3/r6 arg-copy ORDER windows — **a post-coalescing SCHEDULER tiebreak on two independent register copies** (NOT coalescing — veto-refuted; NOT register-coloring — gate-refuted; NO source-honest lever found); (2) the ~178-line register-only coloring cascade (whole-function callee-save renumber); (3) the −24 frame (PAD_STACK(24) diagnostic). The named "coalescing-boundary" experiment is RESOLVED: the boundary is real but the merges are NOT the lever — the lever (if one exists in C) is whatever makes MWCC's scheduler emit gobj→r3 before value→r6 at a clamp-merge call site, which no force-* hook can express and no source spelling has reproduced. Honest disposition: this is a scheduler tiebreak ceiling for the manual-source axis; remaining hope is the permuter's source-shape fuzz (coder1, value-home/arg-order weights) or a future schedule-order tooling hook that can pin register-copy emission order.
+
+### STALE-BASE FLAG (PROMINENT)
+**ZERO source commits this round — coder3's permuter job `mnDiagram_8024227C-coder3-20260612-044424` (base 1345 @96.03) is NOT stale by this round** (no commit landed; the diagnostic veto runs left the tree clean, cache un-contaminated — forced runs skip cache sync). The job remains valid on the 96.03 base. (Prior windows/Round-2 stale flags are obsolete — those commits are upstream of 96.03 and already baked into base 1345.)
+
+### TOOLING NOTE
+The veto oracle worked exactly as designed (apply + readback-verify + refute) — this is a clean NEGATIVE result, the tool's intended use. No tooling gap. (Minor: `--force-schedule`'s same-base-load scope cannot express register-copy emission order; a future "pin two adjacent reg-reg copy emission order" hook would be the instrument to TEST whether forcing gobj-first reaches byte-match — but that is a feature request, not a bug, and would only confirm/deny, not ship.)
+
 ## CURSORPROC PORT (2026-06-12, verification + peel-harvest round)
 
 **Provenance:** ported from branch `codex/mn-diagram-cursorproc-99pct`, commit `b415208c3` (another agent's claimed-100 form). VERIFIED on our base: `match=true match_percent=100.00 classification=instruction-identical` (checkdiff), FULLNORM 0. The verified body is now COMMITTED here (`6a9b5b70e match(mnDiagram_CursorProc): ... 99.52 -> 100`). Our prior 99.52 form was the lhzu/FULLNORM-0 pure-coloring residual; theirs closes it.
