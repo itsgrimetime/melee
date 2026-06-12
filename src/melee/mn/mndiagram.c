@@ -2680,7 +2680,7 @@ void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
     int fighter_id;
     Diagram* data = GET_DIAGRAM(arg0);
     mnDiagram_Assets* assets = (mnDiagram_Assets*) &mnDiagram_804A0750;
-    void** joint_data = assets->ConB3;
+    void** joint_data = assets->FaceB;
     HSD_JObj* jobj;
     HSD_JObj* sp_jobj;
     int i;
