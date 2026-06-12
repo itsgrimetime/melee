@@ -471,3 +471,111 @@ Protected sweep after EACH commit: 0 regressions. 802437E8/80243434=100, InputPr
 - 802417D0 `i = (u8) data->name_cursor_pos` reusing `s32 i` for the Left-arrow test — clean (the
   Up-arrow already homes its test in `i`); no review risk.
 
+---
+
+## ITERATION 6 (2026-06-11, driver 3) — 80240D94 RECONSTRUCTION ROUND: HYPOTHESIS REFUTED BY OBJECT EVIDENCE; ROOT B MECHANISM POSITIVELY CONFIRMED (VN kill) BUT ZERO-EMISSION KILL NOT FOUND; 97.35 UNCHANGED
+
+### THE ONE QUESTION — ANSWERED: **NO.** The PAD_STACK(24)-elimination reconstruction does not land.
+The iteration-5 hypothesis (missing ~24B of genuine locals and/or a per-block pos helper resolving
+ROOT A + ROOT B together) is REFUTED by object-level evidence on every prong. Budget: 2 of 6 builds
+(1 probe + 1 restore), 0 source commits, floor 97.3504 restored byte-exact.
+
+### FRAME GROUND-TRUTH (object-level; supersedes the frame-tool model — see tool caveat below)
+Both objects (OURS `build/GALE01/src/.../mndiagram.o` with PAD_STACK(24) in place, TARGET asm):
+- frame 0x78, `stmw r21,0x4c(r1)` (saves 0x4c-0x78), **buf @ r1+0x30** (all four format sites:
+  `addi rX,r1,0x30` + stbx digit stores + `addi r4,r1,0x30` into HSD_SisLib_803A6B98),
+  **pos @ r1+0x38-0x44** (ALL SIX lb_8000B1CC sites pass `addi r5,r1,0x38`; all lfs read
+  0x38/0x3c/0x40), rounding gap 0x44-0x4c. mnDiagram_FormatPopupNumber is INLINED in BOTH
+  (identical stbx digit-loop bodies). FRAME DELTA = 0; layouts byte-identical.
+- **The 24B at 0x18-0x30 is NEVER REFERENCED in the retail object.** It is dead frame space.
+- Decl-position arithmetic (MWCC homes locals top-down in decl order; ours: pos→0x38, buf→0x30,
+  pad-last→0x18) PINS the original's 24B object to "declared after buf" — placing a 24B object
+  between pos and buf, or resizing buf, relocates &buf/&pos away from 0x30/0x38 (refuted layouts).
+- Param-area is NOT the supplier (ours computes 16B = max 4 arg words from the identical call
+  list; the varargs callee does not blanket-reserve — cross-check: sibling 802427B4 calls the same
+  803A6B98 yet shows 0x68 sub-local space with NO pad, so reservation is per-function locals/temps,
+  not callee-driven).
+- Frame-tool caveat (ISSUE #578): `debug inspect frame-reservations` modeled 0x8-0x38 as "unused"
+  and claimed "r1-access coverage ok" while the object references buf@0x30 — it tracked only the
+  FPR symbolic homes (pos words). Do not trust its unused-ranges on functions with address-taken
+  char arrays; disasm the object.
+
+### PER-BLOCK-HELPER HYPOTHESIS — REFUTED (evidence, no builds needed)
+1. All six pos-blocks already byte-match the target (mod registers); the y,z,x load order +
+   fneg shape is identical. Nothing structural to recover at those sites.
+2. The paragraphs ORDER-VARY: first two set `default_alignment` AFTER the pos stores, the last
+   four BEFORE. A single shared helper cannot produce both orders.
+3. A helper with its own `Vec3 pos` either materializes per-site homes (refuted: one shared
+   slot 0x38 in retail) or folds transparently (iter-4 Build 2 proved inline params and bodies
+   are VN/copy-prop transparent).
+4. lb_8000B1CC(HSD_JObj*, Vec3*, Vec3*) — all pointer params; no by-value copy temps.
+
+### ROOT B — MECHANISM POSITIVELY CONFIRMED (Build 1 probe), ZERO-EMISSION SPELLING NOT FOUND
+Catalog (validated normalizer, anchored-hunk procedure): the ENTIRE structural divergence is 7
+lines, 2 roots. ROOT B = ours ONE cached `clrlwi r22,r28,24` + `addi r3,r22,0` + `mr r3,r22` vs
+target per-site `clrlwi r3,r29,24` x2. Cross-check that sharpened the model: ours ALREADY emits
+per-site `clrlwi r3,r31,24` for the (u8)arg1 masks — those sit in EXCLUSIVE branches (CSE cannot
+bridge path-disjoint arms); the arg2 masks sit on ONE sequential path, so IRO CSE merges them.
+Retail's same sequential path did NOT merge ⟹ arg2's VN was killed between the paragraphs in the
+original IR.
+
+**Build 1 (probe): `if (arg1 == arg2) { arg2 = arg1; }`** inserted between the two name paragraphs
+(a universal no-op: assigns arg2:=arg1 exactly when already equal; runtime-dead inside the
+`arg1 != arg2`-guarded block). RESULT: **the VN split FIRED** — the entire ROOT-B hunk family
+vanished (per-site masks in target form; arg2 re-homed to r29 = the TARGET home). But the kill
+emits `cmpw r31,r29; bne; mr r29,r31` (+3 — MWCC cannot prove the branch dead) AND the new block
+boundary broke the shared `li r23,0x1` alignment-value web (target shares ONE li across both
+paragraphs; ours rematerialized `li r0,0x1`). 97.35→97.26. REVERTED (Build 2 = restore, sweep
+green, 0 deltas, all 13 tracked fns byte-exact).
+
+**Constraint set for the original splitter (tight, from the probe):** it must (a) kill arg2's VN
+between the paragraphs, (b) emit ZERO instructions, (c) introduce NO block boundary (the li-1 CSE
+and straight-line fallthrough survive in retail). Control-flow kills violate (b)+(c) — proven.
+Straight-line zero-emission kills are the class iter-4 exhausted: self-assign (DCE'd before VN),
+reassign-through-local / inline-param (copy-prop transparent), `arg2 = (u8) arg2` (iter-4 Build-1
+fold family — AND-idempotence unifies the web), comma (re-homes, +8), memory round-trip (adds
+loads), `& 0xFF`/`(u8)(s32)` (same VN). Zero-emission VN kill **not found despite** the ledger's
+7 spellings + this round's control-flow probe + analysis refutations (condition duplication
+re-tests; select/phi emits the same cmpw+mr; signed `% 256` emits the modulo dance; nested-mask
+casts fold at parse). Function stays in the pool; residual characterized, not closed.
+
+### ROOT A — DID NOT CASCADE (probe evidence)
+With ROOT B force-split (and callee-save r22 freed), ours STILL emitted `addi r0,r7,@l` (pre-stwu)
++ `mr r27,r0` vs target's direct post-stmw `addi r28,r7,@l`. The iter-4 cascade prediction ("A
+re-rolls if B lands") did NOT hold under the dirty split — suggestive-not-decisive (the probe's
++4 instrs perturb pressure). A remains scheduling/pressure-conditioned (sibling PopupAnimProc:
+identical spelling, direct form) with no direct C lever identified.
+
+### PARTITION UPDATE
+- **80240D94: STRUCTURAL Δ+2 → CHARACTERIZED WALL (VN-CSE class).** B = sequential-path AND-CSE
+  needing a zero-emission VN kill (not found in reachable C); A = prologue scheduling/coloring of
+  the tbl addi (no direct lever; did not cascade under the forced split). FULLNORM 7 stands. B is
+  NOT permuter-promising (the needed transform is an IR killing-def, not a register choice); A's
+  addi/mr MIGHT be permuter-reachable (register-class).
+- TU STRUCTURAL frontier after this round: 80241E78's fsubs-across-call window (~20 FULLNORM
+  lines, iter-4 errata) is the LAST known structural window. Everything else is ARTIFACT/coloring
+  (8023FC28 named-reloc spelling = source lever for reloc lines only).
+
+### PENDING-REVIEW (iter-6) — PAD_STACK(24) entry SHARPENED, NOT RETIRED
+- **80240D94 PAD_STACK(24) STAYS.** Evidence: the 24B is never-referenced dead frame space in the
+  RETAIL object, pinned by decl-order arithmetic to a dead 24B object declared after buf (a dead
+  local aggregate — e.g. a removed debug buffer — whose identity the bytes cannot disambiguate).
+  Replacing the pad with an invented dead local (`char unused[24]`, two dead Vec3) would be
+  honesty-NEGATIVE vs the documented diagnostic macro. For any PR: keep PAD_STACK(24) with a
+  comment citing the dead-frame evidence (upstream precedent: mndiagram2 CreateStatRow ships
+  `int pad[4]` + PAD_STACK(16) for the same class). The doctrine "PAD_STACK = missing
+  inlines/locals" is REFUTED for this function specifically: the missing thing is provably dead,
+  not live structure.
+- Probe spelling `if (arg1 == arg2) arg2 = arg1;` is NOT retained (reverted) — recorded as the
+  mechanism-confirmation tool for future drivers; do NOT commit it (+4 instrs, block-split).
+
+### NEXT (iteration-7 recommendation)
+1. **80241E78 bundled round** (LAST structural window): 0.4f semantic fix (match-neutral, proven
+   iter-3 B2) + `extern const f32 mnDiagram_804DBFA0` named-float attempt + the fsubs-across-call
+   window (ours defers y_offset fsubs past the mn_GetDigitCount call into volatile f1; target
+   computes into callee-save f26 BEFORE the call — try statement order / consumer-shape around
+   the call). Highest remaining structural yield.
+2. THEN 8023FC28 LAW-2 named-reloc spelling (cheap, reloc-lines-only).
+3. THEN declare the TU structural frontier exhausted → endgame/permuter phase (permuter currently
+   FENCED this branch; A-root addi/mr is the one register-class site worth a permuter look).
+
