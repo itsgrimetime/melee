@@ -8767,6 +8767,126 @@ def test_debug_dump_local_missing_unit_source_reports_resolution_context(
     assert "src/melee/ft/ftdynamics.c" in out
 
 
+def _write_force_coalesce_delta_wibo(
+    path: Path,
+    *,
+    forced: bytes,
+    natural: bytes,
+) -> None:
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "pcdump = Path.cwd() / os.environ['MWCC_DEBUG_PCDUMP_PATH']\n"
+        "pcdump.write_text('Starting function fn_80000000\\n')\n"
+        "obj = Path(sys.argv[sys.argv.index('-o') + 1])\n"
+        f"forced = {forced!r}\n"
+        f"natural = {natural!r}\n"
+        "obj.write_bytes(forced if os.environ.get('MWCC_DEBUG_FORCE_COALESCE') else natural)\n"
+    )
+    path.chmod(0o755)
+
+
+def test_dump_local_force_coalesce_keep_obj_rejects_identical_object(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text("void fn_80000000(void)\n{\n}\n")
+    compiler_dir = melee_root / "build" / "compilers" / "GC" / "1.2.5n"
+    compiler_dir.mkdir(parents=True)
+    (compiler_dir / "mwcceppc_debug.exe").write_text("")
+    wibo = tmp_path / "wibo"
+    _write_force_coalesce_delta_wibo(wibo, forced=b"same-object", natural=b"same-object")
+    keep_obj = tmp_path / "forced.o"
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+    monkeypatch.setattr(debug_cli, "_find_compiler_dir", lambda: compiler_dir)
+    monkeypatch.setattr(debug_cli, "_ninja_cflags_for_unit", lambda src_rel: ("", "mwcc"))
+    monkeypatch.setattr(debug_cli, "_cache_settle_seconds", lambda env=None: 0.0)
+    monkeypatch.setattr(debug_cli, "_reject_unsafe_force_coalesce", lambda **kwargs: None)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "dump",
+            "local",
+            str(src_path),
+            "--function",
+            "fn_80000000",
+            "--force-coalesce",
+            "32=32",
+            "--force-coalesce-fn",
+            "fn_80000000",
+            "--keep-obj",
+            str(keep_obj),
+            "--output",
+            str(tmp_path / "pcdump.out"),
+            "--no-cache-sync",
+        ],
+    )
+
+    assert result.exit_code == 5
+    assert keep_obj.read_bytes() == b"same-object"
+    assert "force-coalesce object delta check failed" in result.stderr
+    assert "byte-identical" in result.stderr
+
+
+def test_dump_local_force_coalesce_keep_obj_accepts_changed_object(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text("void fn_80000000(void)\n{\n}\n")
+    compiler_dir = melee_root / "build" / "compilers" / "GC" / "1.2.5n"
+    compiler_dir.mkdir(parents=True)
+    (compiler_dir / "mwcceppc_debug.exe").write_text("")
+    wibo = tmp_path / "wibo"
+    _write_force_coalesce_delta_wibo(wibo, forced=b"forced-object", natural=b"natural-object")
+    keep_obj = tmp_path / "forced.o"
+    output = tmp_path / "pcdump.out"
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+    monkeypatch.setattr(debug_cli, "_find_compiler_dir", lambda: compiler_dir)
+    monkeypatch.setattr(debug_cli, "_ninja_cflags_for_unit", lambda src_rel: ("", "mwcc"))
+    monkeypatch.setattr(debug_cli, "_cache_settle_seconds", lambda env=None: 0.0)
+    monkeypatch.setattr(debug_cli, "_reject_unsafe_force_coalesce", lambda **kwargs: None)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "dump",
+            "local",
+            str(src_path),
+            "--function",
+            "fn_80000000",
+            "--force-coalesce",
+            "32=32",
+            "--force-coalesce-fn",
+            "fn_80000000",
+            "--keep-obj",
+            str(keep_obj),
+            "--output",
+            str(output),
+            "--no-cache-sync",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert keep_obj.read_bytes() == b"forced-object"
+    assert output.exists()
+    assert "force-coalesce object delta verified" in result.stderr
+
+
 def test_force_coalesce_preflight_rejects_known_unsafe_pair(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

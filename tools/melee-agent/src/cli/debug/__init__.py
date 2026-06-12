@@ -16684,6 +16684,115 @@ def _print_local_dump_setup_checks(checks: list[_DumpSetupCheck]) -> None:
         print(f"{status}\t{check.label}\t{check.detail}")
 
 
+def _force_object_delta_baseline_env(
+    env: Mapping[str, str],
+    pcdump_name: str,
+) -> dict[str, str]:
+    baseline_env = dict(env)
+    baseline_env.pop("MWCC_DEBUG_FORCE_COALESCE", None)
+    baseline_env.pop("MWCC_DEBUG_FORCE_COALESCE_FUNCTION", None)
+    baseline_env["MWCC_DEBUG_PCDUMP_PATH"] = pcdump_name
+    return baseline_env
+
+
+def _verify_force_coalesce_object_delta(
+    *,
+    args: list[str],
+    env: Mapping[str, str],
+    obj_target: Path,
+    melee_root: Path,
+    scratch_root: Path,
+    timeout: float,
+) -> None:
+    baseline_obj = mwcc_debug_scratch_path(
+        "pcdump_local_force_delta",
+        suffix=".natural.o",
+        root=scratch_root,
+    )
+    baseline_pcdump_name = (
+        f"pcdump_force_delta_{os.getpid()}_{int(time.time() * 1000)}.txt"
+    )
+    baseline_pcdump = melee_root / baseline_pcdump_name
+    baseline_args = [*args]
+    try:
+        output_flag_index = len(baseline_args) - 1 - baseline_args[::-1].index("-o")
+    except ValueError:
+        typer.echo(
+            "[debug dump local] force-coalesce object delta check could not "
+            "locate the compiler -o argument.",
+            err=True,
+        )
+        raise typer.Exit(5)
+    if output_flag_index + 1 >= len(baseline_args):
+        typer.echo(
+            "[debug dump local] force-coalesce object delta check found a "
+            "compiler -o argument without an object path.",
+            err=True,
+        )
+        raise typer.Exit(5)
+    baseline_args[output_flag_index + 1] = str(baseline_obj)
+    baseline_env = _force_object_delta_baseline_env(env, baseline_pcdump_name)
+
+    try:
+        proc = subprocess.run(
+            baseline_args,
+            cwd=melee_root,
+            env=baseline_env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        typer.echo(
+            "[debug dump local] force-coalesce object delta check timed out "
+            f"after {timeout:g}s while compiling the coalesce-off baseline object.",
+            err=True,
+        )
+        raise typer.Exit(5) from exc
+    finally:
+        try:
+            baseline_pcdump.unlink()
+        except OSError:
+            pass
+
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        typer.echo(
+            "[debug dump local] force-coalesce object delta check could not "
+            f"compile the coalesce-off baseline object (exit {proc.returncode})"
+            + (f": {detail}" if detail else ""),
+            err=True,
+        )
+        raise typer.Exit(5)
+    if not baseline_obj.exists():
+        typer.echo(
+            "[debug dump local] force-coalesce object delta check could not "
+            f"find coalesce-off baseline object at {baseline_obj}.",
+            err=True,
+        )
+        raise typer.Exit(5)
+
+    forced_bytes = obj_target.read_bytes()
+    baseline_bytes = baseline_obj.read_bytes()
+    forced_hash = hashlib.sha256(forced_bytes).hexdigest()[:16]
+    baseline_hash = hashlib.sha256(baseline_bytes).hexdigest()[:16]
+    if forced_bytes == baseline_bytes:
+        typer.echo(
+            "[debug dump local] force-coalesce object delta check failed: "
+            "forced .o is byte-identical to the coalesce-off baseline "
+            f"(sha256={forced_hash}). Hook engagement did not change emitted "
+            "code for this source/pair.",
+            err=True,
+        )
+        raise typer.Exit(5)
+    typer.echo(
+        "[debug dump local] force-coalesce object delta verified: forced .o "
+        f"differs from coalesce-off baseline (forced sha256={forced_hash}, "
+        f"baseline sha256={baseline_hash}).",
+        err=True,
+    )
+
+
 @dump_app.command(name="setup")
 def setup_local(
     rebuild_dll: Annotated[
@@ -17442,7 +17551,9 @@ def pcdump_local(
                  "scope with --force-coalesce-fn. EXPERIMENTAL — forcing "
                  "two interfering virtuals to coalesce produces "
                  "incorrect code. DIAGNOSTIC-ONLY: uses the patched debug "
-                 "compiler and does not affect production ninja builds.",
+                 "compiler and does not affect production ninja builds. "
+                 "When combined with --keep-obj, also compiles a coalesce-off "
+                 "baseline and fails if the forced object is byte-identical.",
         ),
     ] = None,
     force_coalesce_fn: Annotated[
@@ -18101,6 +18212,20 @@ def pcdump_local(
             f"[debug dump local] --keep-obj requested but no object was produced "
             f"(compile likely failed mid-way). Check pcdump for clues.",
             err=True,
+        )
+    if (
+        force_coalesce
+        and keep_obj is not None
+        and obj_target.exists()
+        and function_missing_exit_code is None
+    ):
+        _verify_force_coalesce_object_delta(
+            args=args,
+            env=env,
+            obj_target=obj_target,
+            melee_root=melee_root,
+            scratch_root=scratch_root,
+            timeout=WATCHDOG_TIMEOUT_S,
         )
 
     # Run objdiff if --diff was requested. The integrated check
