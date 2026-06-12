@@ -807,3 +807,53 @@ The banked queue (decl-orders → match-iter-first → force-phys) presupposed t
 1. **PARK the 8024227C register-endgame queue.** All three banked rungs (decl-orders, match-iter-first, force-phys) plus the #579 force-remat probe are REFUTED by the oracle. The residual is a coalescing-structure (arg-home liveness) divergence, not a coloring/order/remat phenomenon — no register-endgame lever can express it.
 2. **The remaining lever is STRUCTURAL, not register-endgame:** an arg-home-liveness reopen that makes MWCC keep the three `addi rN,argN,0` arg copies as distinct lives (defeat the coalesce). This is a deep-dive/permuter task with uncertain yield (iter-2 already reached opcode-delta-0 via the cast model). Hand to the order-distance / coalescing-search tooling when it ships, or to a permuter-authorized round (per the iter-8 allocation order, 8024227C is rank-1 for permuter ROI — but the permuter must target the COALESCING boundary, not register tiebreaks; the running coder1 job is doing exactly this on the current base).
 3. **STALE-BASE: NOT triggered** — no source improvement committed; the running coder1 permuter job's base (current committed source) is UNCHANGED. No re-bootstrap needed.
+
+---
+
+## ★ ORACLE ROUND 2 (coalesce) ★ (2026-06-12, oracle-endgame driver) — VETO PREMISE REFUTED BY THE ALIAS READBACK + ROUND-1 ERRATUM; THE REAL ROOT (param-alias statement copy) FOUND AND FIXED IN C; TRIO RESOLVED. **94.32 → 94.80** (2 commits)
+
+### THE ONE QUESTION — ANSWERED IN TWO HALVES:
+- **Does the #548 coalesce-VETO reproduce the target's three-distinct-arg-home structure? NO — and the premise itself was wrong.** The alias-array readback (the prescribed verify instrument) shows our build has only **10 coalesce merges, NONE involving the arg-home webs** (9 virt→phys call-arg materializations: 32/118/143→r3, 41/42/48/54/148/167→r6; 1 v-v merge 135→69). The three arg homes were ALWAYS three distinct webs in both builds. **ROUND-1 ERRATUM:** the "ig56 = 3-into-1 arg-home coalesce" headline is RETRACTED — it was a match-iter-first `[ambiguous]` alignment artifact + positional misalignment caused by a real but different structural skew (below). The round-1 force-phys union failure is partly explained by this misderivation (it forced our arg1-web to target's GOBJ register, etc.).
+- **Does a C spelling defeat the (real) divergence? YES — two of the three windows fell to C.** Build 1 (gobj alias drop) closed the prologue-order window; Build 3 (count-loop inline helper) closed the li-vs-copy trio. 94.32 → **94.80**, opcode similarity 90.6 → **98.8**.
+
+### THE REAL ROOT (recon, pcode-level)
+Pre-coloring entry block: `mr r32,r3; lis; lis; mr r33,r4; mr r34,r5; mr r56,r32; ...`
+- arg1/arg2 (`s32 arg1_r = arg1` etc.) collapse onto their param virtuals r33/r34 → their ABI **entry copies** survive (live-across-calls webs cannot merge into volatile r4/r5).
+- gobj (`void* gobj = arg0;`) kept a TWO-virtual chain: param r32 + alias-local r56 (statement copy `mr r56,r32`). r32 dies at the alias copy → naturally coalesces into PHYS r3 (the `32 -> 3` merge) → the surviving gobj copy is the STATEMENT copy, emitted AFTER the entry copies. Result: ours emitted the three arg-home copies in **r4,r5,r3** order vs target's homogeneous entry order **r3,r4,r5** — the skew that poisoned every positional alignment downstream. (Why copy-prop collapsed arg1_r/arg2_r but not gobj: unattributed; the fix is empirical.)
+
+### THE COALESCE ORACLE (diagnostic, gates per #550)
+| Gate | Result |
+|------|--------|
+| Prescribed veto (`V=V`) on arg-home-folding merges | **NOTHING TO VETO** — no such merges exist (readback above). |
+| Constructive merge `32=56` (un-split the gobj chain) via CLI | CLI safety gate REFUSED ("missing colorgraph node r32 — simplify-only or pcode-only"). |
+| Same via env bypass (`MWCC_DEBUG_FORCE_COALESCE` exported around a plain dump; cache re-cleaned after) | **(a) APPLIED:** `[FORCE_COALESCE] alias[32]: 3 -> 56`, `forced=1`, readback `32 -> 56 [r24]`. **(b)(c) INERT:** function code BYTE-IDENTICAL to baseline (dtk disasm diff = 0 over 400 lines). |
+| Mechanism | The natural union REWRITES pcode operands before the override applies — `mr r32,r3` was already folded; by override time no r32 operand exists, so the redirected alias entry dangles. **Tool-capability statement: the coalesce hook cannot resurrect/un-fold a naturally-folded param-receive copy.** The CLI gate's refusal is CORRECT for this class (not a false negative). |
+
+### C-SEARCH LADDER (4 builds: 2 commits, 2 hard-reverts)
+| Build | Edit | Result | Verdict |
+|-------|------|--------|---------|
+| **1** | DELETE `void* gobj = arg0;`, use `arg0` at all 7 sites | 94.32 → 94.37; **prologue copies flip to target order r3,r4,r5** (+014..+034 now positionally aligned, dest-reg-only); force-phys derivation now role-clean (ig32→r28, ig33→r27, ig34→r29, ig121→r26, ig120→r25, ig44→r30) | **COMMITTED e53f560bb** |
+| 2 | three count loops respelled `count=0; for (i=0; i<0x19; i++)` (for-header init) | trio UNCHANGED (still 2×li); 94.37 byte-equal | **REVERTED — for-idiom is NOT the discriminator** |
+| **3** | `static inline mnDiagram_CountUnlockedFightersInline()` (body = the dont_inline real fn, spelled like GetNameTotalKOs) called at the 3 count sites; 3 dead idx decls dropped | 94.37 → **94.80**; **TRIO RESOLVED**: +108/+10c/+110, +35c/+360, +39c/+3a0 all now `li; addi-copy; mr` = register-only; opcode 90.6 → **98.8**; CountUnlockedFighters real fn stays 100 | **COMMITTED bffd32597** |
+| 4 | delete `s32 cap = 0xF423F;` + literal `999999` caller clamp | 94.79 (−0.01); forwarding INTENSIFIED (`addi r6,r16,0; cmpw r6,r30` — even the compare moved into r6); prologue cap pair survived (VN-unified w/ SumFighterFalls literal) | **REVERTED — literal clamp worsens the forward** |
+
+Protected sweep after every build + final restore: 0 regressions (both 100s, walls, cluster, CountUnlockedFighters=100). Tree clean at bffd32597.
+
+### LAWS (new/extended)
+1. **Param-alias-local law (build 1):** an m2c `T* alias = arg;` whose param virtual dies at the alias copy splits the arg home into a STATEMENT copy (emitted after the other params' entry copies) and lets the param virtual coalesce into its ABI reg — skewing the prologue copy ORDER. Deleting the alias homes the arg on its param virtual: entry copy, param-order emission. Check any m2c fn whose prologue copy order differs from param order.
+2. **Zero-pair trio law (builds 2+3, extends iter-4 inline-node evidence):** adjacent raw `a=0; b=0;` statements emit two `li`; the SAME pair inside an INLINE EXPANSION emits `li + addi-copy` (init nodes survive expansion). The for-header respelling does NOT produce the copy. Recovery: wrap the loop in a TU-local static inline (the dont_inline real-fn + inline-twin split mirrors an inline-budget original: auto-inline at early sites, real calls later — consistent with target having 3 expansions + 2 real calls of the same body).
+3. **Clamp-forwarding (build 4 + window comparison):** a caller-side `if (v > cap) v = cap;` on a call result forwards the clamp value into the call-arg register (join-in-r6) where the target joins-in-home; the literal spelling makes it WORSE; clamp-inside-inline-helper (+0ec SumFighterFalls) produces join-in-home. Lever for the caller-clamp window NOT FOUND despite 2 spellings (cap-local if-form = current best; the shared SumFighterKOs cannot take the clamp — its other user 8023FA6C's target has 0 clamp constants).
+
+### RE-ROLLED RESIDUAL CENSUS (@ 94.80, bffd32597)
+1. **+284/+288 one-slot transposition** (GetNameTotalKOs expansion: param-mask vs init-copy order) — 2 lines, inline-boundary scheduling.
+2. **Clamp/arg-order windows:** +46c..+47c (caller-clamp joins-in-r6 + r6-copy hoisted above ble; target joins-in-home + r3-before-r6) ≈4 lines; +0f0/+0f4 (r6/r3 arg-copy order after the SumFighterFalls join) = 2 lines.
+3. **~178-line register-only coloring cascade** — now on a role-clean substrate (derivation conflicts down to alignment-noise in the count-temp region). Force-phys union/prefixes still no_match, but this gate CANNOT pass while windows 1-2 exist (they are instruction-content/order diffs, not register diffs).
+4. PAD_STACK(24) diagnostic — unchanged (pending natural-frame item stands).
+
+### STALE-BASE FLAG (PROMINENT)
+**TWO source commits this round (e53f560bb, bffd32597) — coder1's running permuter job base (94.32) is STALE. Re-bootstrap required at next triage.**
+
+### RECOMMENDATION
+1. ONE more bounded source round on the two remaining structural windows: (a) the +284/+288 transposition and (b) the clamp/arg-order family — both inline-boundary/forwarding class; candidate probes: arg-expression shapes at the 80241E78 call sites (the r3-vs-r6 copy order may key off the gobj re-read form), and a second-use anchor on var_r16_6 (iter-7 recipe) for the join-in-home.
+2. THEN the register endgame on the clean substrate: the role-correct force-phys vector is now derivable; hand the cascade to the directed select-order search / permuter (re-bootstrapped at 94.80).
+3. Tooling note: the force-coalesce CLI gate message could state the mechanism ("cannot resurrect naturally-folded copies — operands already rewritten") instead of "unsafe"; the env bypass contaminates the baseline cache (no forced-run flag) — re-dump after use.
