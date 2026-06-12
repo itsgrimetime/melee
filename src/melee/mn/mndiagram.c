@@ -2689,6 +2689,7 @@ void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
     int idx;
     int remaining;
     u8* p;
+    u8* sorted;
     f32 x_spacing;
     f32 y_spacing;
     PAD_STACK(32);
@@ -2696,6 +2697,7 @@ void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
     // Column headers (fighter icons)
     joint_data = assets->FaceB;
     for (i = 0; i < 7; i++) {
+        sorted = mnDiagram_804A0750.sorted_fighters;
         count = 0;
         for (k = 0; k < 0x19; k++) {
             if (mn_IsFighterUnlocked(k) != 0) {
@@ -2705,10 +2707,10 @@ void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
         if (count > i) {
             remaining = i;
             idx = arg2;
-            p = &assets->sorted_fighters[idx];
+            p = sorted + idx;
             while (remaining >= 0) {
                 if (remaining == 0) {
-                    fighter_id = assets->sorted_fighters[idx];
+                    fighter_id = sorted[idx];
                     goto col_found;
                 }
                 p2 = p;
@@ -2744,6 +2746,7 @@ void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
     // Row headers (fighter icons)
     joint_data = assets->FaceB;
     for (i = 0; i < 0xA; i++) {
+        sorted = mnDiagram_804A0750.sorted_fighters;
         count = 0;
         for (k = 0; k < 0x19; k++) {
             if (mn_IsFighterUnlocked(k) != 0) {
@@ -2753,10 +2756,10 @@ void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
         if (count > i) {
             remaining = i;
             idx = arg1;
-            p = &assets->sorted_fighters[idx];
+            p = sorted + idx;
             while (remaining >= 0) {
                 if (remaining == 0) {
-                    fighter_id = assets->sorted_fighters[idx];
+                    fighter_id = sorted[idx];
                     goto row_found;
                 }
                 p2 = p;
