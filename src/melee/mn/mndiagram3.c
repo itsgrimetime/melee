@@ -489,10 +489,10 @@ void mnDiagram3_8024714C(void* arg0)
 
         row_spacing = HSD_JObjGetTranslationY(d->jobjs[9]) -
                       HSD_JObjGetTranslationY(row0);
+        neg_spacing = -row_spacing;
 
         lb_8000B1CC(d->jobjs[8], &mnDiagram3_803EEC28.x0, &sp48);
 
-        neg_spacing = -row_spacing;
         base = mnDiagram3_803EEC4C.indices;
         row_spacing = mnDiagram3_804DBFF8;
         stat_idx = (u8) scroll;
