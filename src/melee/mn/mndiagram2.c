@@ -1261,7 +1261,7 @@ u8 mnDiagram2_GetRankedName(u8 stat_type, u8 rank)
         maxIdx = i;
         inner = &entries[j];
         while (j < count) {
-            if (inner->value > entries[maxIdx].value) {
+            if (entries[maxIdx].value < inner->value) {
                 maxIdx = j;
             }
             inner++;
