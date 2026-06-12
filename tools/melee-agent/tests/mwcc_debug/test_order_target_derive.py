@@ -65,6 +65,17 @@ def test_backend_ceiling_primary_is_admitted():
     assert t.routing == Routing.DIRECTED.value
 
 
+def test_normalized_structural_match_admitted():
+    # normalized-structural-match = the #576 "zero structural diff demotion"
+    # (FULLNORM-0): the masked diff is structurally ZERO, i.e. a pure register
+    # residual — the pool's strongest admission signal. Must proceed past the
+    # Step-1 precondition (T6 ruling; round-1 mis-rejected fn_803ACD58).
+    t = derive_order_target(
+        _inputs(checkdiff_primary="normalized-structural-match")
+    )
+    assert t.routing == Routing.DIRECTED.value
+
+
 def test_phys_conflict_routes_not_order_class_early():
     t = derive_order_target(_inputs(
         phys_conflicts=[{"ig_idx": 56, "existing_phys": 29, "conflicting_phys": 28}]))

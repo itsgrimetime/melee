@@ -40,7 +40,19 @@ from src.search.directed.order_target import FORCE_CAP, OrderTarget, Routing
 # register-only / FULLNORM-0 admission set). backend-ceiling's coloring-rotation
 # subclass is exactly this pool's signature; the step-4 class gate is the
 # outcome-verified arbiter for anything mis-admitted.
-REGISTER_ONLY_PRIMARIES = {"operand-register-or-offset", "backend-ceiling"}
+#
+# normalized-structural-match (#576 truth-gate vocabulary: the "zero structural
+# diff demotion" — the normalized structural diff is ZERO after masking
+# registers/immediates/labels/relocations) is the FULLNORM-0 pure-coloring
+# signature itself, the pool's STRONGEST admission signal. The original
+# two-primary set predated the #576 vocabulary and mis-rejected it (T6 round-1
+# finding: fn_803ACD58 base at 98.94% with a structurally-zero masked diff —
+# a pure register residual — was routed out at Step 1).
+REGISTER_ONLY_PRIMARIES = {
+    "operand-register-or-offset",
+    "backend-ceiling",
+    "normalized-structural-match",
+}
 
 
 @dataclass
