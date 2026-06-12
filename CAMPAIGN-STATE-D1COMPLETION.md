@@ -393,3 +393,81 @@ re-roll if ROOT B / the frame lands. No direct lever identified.
 - **Committed 80241E78 semantic divergence (1.0f vs retail 0.4f)** at src lines 2358/2371 — fenced this
   round; fix is match%-neutral + behavior-correcting; apply in its queued round (see ERRATA).
 
+---
+
+## ITERATION 5 (2026-06-11, driver 3) — BOTH STRUCTURAL Δ TARGETS LANDED: 802417D0 + CursorProc to FULLNORM 0 (2 commits, 2 builds)
+
+### THE ONE QUESTION — ANSWERED: **YES.** The 802417D0 test-home retype lands.
+The iter-4 partition's verdict held exactly: the entire structural divergence was ONE site
+(FULLNORM 2), ours `clrlwi. r0,r0,24` (re-mask-as-test) vs target `cmpwi r0,0x0`. The LAW-4
+TEST variant closed it on the first build.
+
+### Build ledger (2 builds, 2 commits, 0 reverts; floor 94.32 untouched throughout)
+| Build | Fn | Edit | Site form | FULLNORM | % old->new | Δ | Verdict |
+|-------|-----|------|-----------|----------|------------|---|---------|
+| **1** | 802417D0 | Left-arrow merge test value routed through existing `s32 i` (was `u8 result`): `i = (u8) data->name_cursor_pos` / `i = (u8) data->fighter_cursor_pos`; `if (i != 0)` | `clrlwi. r0,r0,24` **-> `cmpwi r0,0x0`** | **2 -> 0** | 97.73 -> **98.0303** | 198/198 (unchanged) | **COMMITTED e8c3b0a5e** |
+| **2** | CursorProc | `hovered_selection` (u16 @ off 2) read via pre-incremented `u16* hov=(u16*)&mn_804A04F0`: `col = *++hov >> 8`; `row = (u8)*hov` (was direct `mn_804A04F0.hovered_selection` x2) | `addi rN,base,2`+`lhz 2(base)` **-> `lhzu r0,0x2(r30)`** | **3 -> 0** | 98.57 -> **99.5158** | 222 **-> 221** = target (Δ+1 -> **Δ0**) | **COMMITTED d858e94ae** |
+
+Protected sweep after EACH commit: 0 regressions. 802437E8/80243434=100, InputProc 98.6726,
+80242C0C 96.9513, HandleInput 97.4605, OnFrame 99.7188, 8023FC28 97.8241, 8024227C 94.3234,
+80241E78 95.1362, 80240D94 97.3504, 802427B4 98.8444. Build RC=0 both times. Tree clean, HEAD=d858e94ae.
+
+### LAWS (confirmed / extended)
+1. **LAW-4 TEST variant CONFIRMED + recipe sharpened (802417D0):** when two branch arms each
+   emit `(u8)`-cast values (per-arm `clrlwi`) that merge into a `u8`-typed local tested `!= 0`,
+   MWCC re-truncates at the merge (`clrlwi.` re-mask-as-test). Routing the merged value through
+   an **int/s32 home** (each arm still emits its per-branch `(u8)` clrlwi cast) makes the merge
+   value byte-provable so the compare is a plain `cmpwi r0,0`. The in-function Up-arrow
+   (`i = ...>>8; if (i != 0)`) already demonstrated the int-home -> `cmpwi` form; reusing its
+   `s32 i` for the Left arrow was the developer-natural fix (no new local). **Recipe: find the
+   `if ((u8-local) != 0)` test whose value is assigned in both arms of an if/else; retype the
+   merge home to int (or reuse an existing s32), keep the per-arm `(u8)` cast.**
+2. **lhzu walking-pointer recipe CLOSES Δ here (CursorProc; confirms iter-4 partition + InputProc §4):**
+   target reads a u16 field twice via a single base pointer that it pre-increments one element
+   (`lhzu rD,2(rA)` = load-half-with-update: EA=rA+2 AND rA:=rA+2), re-reading at offset 0 after.
+   Ours emitted the 2-instruction `addi &field`+`lhz disp(base)` form (the addi materialized
+   `&field` into a dead reg = the Δ+1 extra instr). Expressing the access as a pre-incremented
+   `u16*` (`hov=(u16*)&base; *++hov; ...; *hov`) makes MWCC select the update form. UNLIKE
+   InputProc §4 (where the same fusion WIDENED Δ because the walking reg was clobbered downstream,
+   blocking the count), HERE the walked pointer (r30) is free after the two reads, so adopting
+   lhzu SHORTENS ours to the target count exactly (222 -> 221). **The §4 wall arithmetic is
+   site-specific: adopt lhzu when the walking reg is dead after the field reads; refuse it when a
+   downstream walk clobbers the reg (count would drop below target).** Semantics preserved:
+   `(u16*)&mn_804A04F0` has [0]=cur_menu|prev_menu, [1]=hovered_selection; `++hov` -> &hovered_selection.
+3. **The corrected LAW-1 gate procedure is sound + the `__assert`-reloc normalizer caveat (NEW):**
+   the iter-4 errata gate (disasm OURS `build/GALE01/src/melee/mn/mndiagram.o` via `dtk elf disasm`
+   vs TARGET `build/GALE01/asm/melee/mn/mndiagram.s`) returned FULLNORM 2 for 802417D0 and Δ+1 for
+   CursorProc EXACTLY as the iter-4 partition predicted — the partition table is trustworthy. CAVEAT
+   discovered: a naive normalizer that maps `0x...`->IMM but leaves quoted `__assert` string relocs
+   (`li rN,"@1234"`) un-canonicalized INFLATES CursorProc's count to 151 (every assert-string line
+   reads as a diff because ours renders the reloc as `"@IMM"` while target renders the named SDA
+   symbol). Canonicalize ALL symbol/quoted-reloc operands to one token (regex `"[^"]*"`->SYM +
+   named-addr `\w+_[0-9A-Fa-f]{6,}`->SYM) BEFORE diffing; then CursorProc FULLNORM = 0 (validated:
+   same normalizer gives 802417D0=0 Δ0, 80240D94=Δ2 nonzero — discriminates correctly).
+
+### PARTITION UPDATES (iter-4 GATE TABLE -> post-iter-5)
+- **802417D0: STRUCTURAL 1-site -> RESOLVED-STRUCTURAL (FULLNORM 0).** Now 98.0303; the predicted
+  96-site coloring cascade did NOT meaningfully re-roll on the flip (+0.30 only) — residual is a
+  clean pure-coloring cascade (the test-form was the only structural divergence). Coloring-ceiling
+  / permuter-territory from here (permuter FENCED this branch).
+- **CursorProc: STRUCTURAL Δ+1 -> RESOLVED-STRUCTURAL (FULLNORM 0, Δ0).** Now 99.5158; residual is
+  pure coloring (~0.48% to 100). The 3 STRUCTURAL targets of the partition are now 2/3 resolved
+  (802417D0 + CursorProc); 80240D94 remains (Δ+2 mask-CSE wall + ROOT A, its dedicated PAD_STACK-
+  reconstruction round still pending).
+- ARTIFACT bucket {8023FC28, OnFrame, 802427B4} unchanged (PARKED, not this round).
+
+### RESIDUAL RE-ROLLS (post-d858e94ae)
+- **802417D0 @ 98.03:** sole family = the post-flip register-coloring cascade (callee-save renumber,
+  FULLNORM 0 so no structural/scheduling/count residual). Permuter-only; FENCED.
+- **CursorProc @ 99.52:** sole family = coloring cascade (FULLNORM 0, Δ0). The 2 commits removed
+  the only structural divergences each function had. Both are now coloring ceilings.
+
+### PENDING-REVIEW (iter-5)
+- **CursorProc `u16* hov = (u16*)&mn_804A04F0; *++hov; *hov`** (d858e94ae) — the pre-increment walk
+  is the idiom retail used (proven by `lhzu`), but a reviewer may find `*++hov` less readable than
+  the field accessor. It is semantically identical and load-bearing for the match (the direct
+  `mn_804A04F0.hovered_selection` form costs Δ+1 / the addi+lhz pair). Keep; comment if questioned.
+  No new PAD_STACK, no semantic divergence (behavior byte-identical to the field reads).
+- 802417D0 `i = (u8) data->name_cursor_pos` reusing `s32 i` for the Left-arrow test — clean (the
+  Up-arrow already homes its test in `i`); no review risk.
+
