@@ -10,9 +10,14 @@ spacing translate, AddChild).
 Called by: mnDiagram_80243434 (matched 100), mnDiagram_InputProc (98.67),
 mnDiagram_802427B4 (95.68 — sibling worktree, active driver).
 
-## Status: ITERATION 2 COMPLETE — 94.98 -> 96.29, 2 commits. MECH-A landed (delta 0),
-MECH-B1 landed (FaceB ruling executed). MECH-B2 still standing + 2 new micro-shapes
-mapped. Build budget 4/4 consumed (A refuted, 1b refuted, A'' committed, B1 committed).
+## Status: ITERATION 3 COMPLETE — 96.29 -> 96.34 (commit 80f374d45). Per-loop-locals
+form PARTIALLY landed: B2b joint_data-per-loop BYTE-EQUAL at the row site; sp_jobj
+slots SEPARATED (84/80, placement residual vs 76/68); walk-init order matched.
+THE HOIST IS THE WALL: four spellings refuted this iteration (idx-derivation,
+(0,..) comma-expr, int loop-var types, k=count). Budget 4/4. See ITERATION 3 section.
+
+(Iteration 2: 94.98 -> 96.29, commits 78266c20a + 23fd94dec — MECH-A & 0xFF idiom,
+MECH-B1 FaceB per ruling.)
 
 Branch: claude/mndiagram-80242C0C-campaign (worktree mndiagram-80243434-campaign).
 Protected (hard stop): mnDiagram_802437E8 (100), mnDiagram_80243434 (100),
@@ -264,37 +269,67 @@ bytes cover) is the natural-frame path once B2 lands.
 
 ---
 
-## ITERATION-3 ENTRIES (pending — next driver/orchestrator approval)
-- STEP 0 (mandatory): reproduce 96.29 on commit 23fd94dec (2 commits on
-  claude/mndiagram-80242C0C-campaign), re-confirm the 6-block residual map.
-- **B2a (primary): defeat the sorted_fighters-base LICM hoist in BOTH loops.** Ranked
-  spellings: (1) statement reorder inside the if-block (move `p = &assets->
-  sorted_fighters[argN];` after the while-entry test or derive from idx:
-  `p = &assets->sorted_fighters[idx];` AFTER `idx = argN;` — target computes
-  add rX,r31,argN IN-BLOCK, so a derivation MWCC can't prove loop-invariant
-  pre-loop); (2) comma-expr `(0, ...)` LICM defeat (precedent: 802427B4 +2.28pp,
-  memory comma_expr_defeats_licm_hoist) — style cost, use only if reorder fails.
-  NOTE: the hoist is per-loop (col r24/arg2, row r23/arg1) — fix both.
-- **B2b (coupled): FaceB base re-derivation per loop.** Target computes
-  `addi rX,r31,180` at the top of EACH loop; ours keeps one across both. If B2a's
-  unhoist re-rolls the web, re-meter first; if still standing, try a per-loop
-  `void** joint_data` local (or re-assign `joint_data = assets->FaceB;` at the row
-  loop top) — pairs with the per-loop sp_jobj evidence below.
-- **PER-LOOP LOCALS theory (unifying):** target has per-loop sp_jobj stack slots
-  (76/68), per-loop FaceB base derivation, and a col-loop jobj copy. A single source
-  shape explains all three: the original duplicated the draw locals per loop
-  (sp_jobj/sp_jobj2, jobj/jobj2, joint_data re-derived). Try as ONE build:
-  second `HSD_JObj* sp_jobj2` + use in row loop; joint_data re-read; meter, then peel.
-- NEW-1 (`k = count` col init): try `for (k = count; k < 0x19; k++)` with
-  `count = 0` immediately before (only the COL loop differs; row already matches).
-  Likely a cascade follower — re-meter after B2a before building.
-- NEW-2 (jobj copy +13c): do NOT build directly; re-meter after B2a/per-loop-locals.
-  If standing, the campaign-doc "intermediate-copy persistence law" lever applies
-  (`jobj2 = HSD_JObjLoadJoint(...); ... use jobj2` with prior web).
-- PAD_STACK(32): once per-loop sp_jobj lands, re-derive the natural frame need and
-  replace PAD_STACK per doctrine (do not ship it).
-- Dump budget: 0 used across iterations 1-2 (disasm sufficed). If B2a misses
-  mechanism expectations, ONE mwcc-debug dump on the post-B2a tree to read the
-  hoist's IR placement (LICM pass) before trying the comma-expr.
+## ITERATION 3 (2026-06-11, driver 1) — PER-LOOP-LOCALS FORM, PARTIAL LAND
+
+### Build ledger (4/4)
+
+| Build | Edit | Fuzzy | Mechanism verdict |
+|-------|------|-------|-------------------|
+| 1 | `remaining=i; idx=argN; p=&sorted[idx];` both loops | **96.42** | Order matched (kept). **idx-derivation did NOT kill the hoist** (MWCC copy-props idx=argN -> invariant again). |
+| 2 | bundle: joint_data=FaceB per loop + `k=count` + sp_jobj2 row | 96.34 | **B2b LANDED — row +224 `addi r29,r31,180` BYTE-EQUAL** (per-loop defs not CSE'd; col register-only). **k=count INERT** (copy-props: count is literal-0; emission identical to k=0; reverted). **sp_jobj slots SEPARATED 80/80 -> 84/80** (target 76/68; placement residual). |
+| 3 | `(0, &sorted[idx])` comma + k revert | 96.27 | **comma-expr REFUTED** — identical 6 blocks; MWCC optimizes through `(0, addr)`. (The 802427B4 precedent wrapped a DATA READ, not an address computation.) |
+| 4 | `int idx/remaining` + interleaved UNUSED pads (8/4) + PAD 20 | 96.27 | **int types INERT** (hoist + all meters unchanged; kept for helper-style consistency). **pad interleave REFUTED** — slots moved only 4 (84/76) AND frame grew -168 -> -176 (decl-arrays align differently than the do-scope pad); reverted. |
+
+Final committed state (80f374d45): build-1 order + build-2 joint_data/sp_jobj2 + int
+decls; comma and pad interleave removed. 96.34 / opcode 98.3 / delta ours+1 / hunks 12 /
+line-edit 168/37.3. Protected: 100/100/98.67/97.46 verified; match-regressions gate OK.
+
+### THE HOIST WALL (B2a) — 4 refuted spellings, mechanism characterized
+Target computes `add rX,r31,argN` (`&sorted_fighters[argN]`) INSIDE if(count>i), per
+iteration, in both loops; ours LICM-hoists it to each loop preheader (+02c col, +228 row
+— note ours re-derives PER LOOP too, so it is preheader-LICM not function-wide CSE).
+Refuted: (1) idx-derivation `&sorted[idx]` — copy-prop restores invariance; (2)
+`(0, &sorted[idx])` comma — optimized through; (3) `int` vs `s32` idx/remaining — inert;
+(4) k=count — different site, copy-props. NOT refuted candidates for iteration 4:
+- GetVisibleFighterFrom inline call — REJECTED on shape evidence (helper's `while(>0)`
+  + post-loop fetch cannot produce the target's `>=0`/`==0`-inside walk, which our soup
+  already byte-matches). Do NOT rebuild.
+- ONE mwcc-debug dump on the current tree to read WHERE the address node gets hoisted
+  (IRO LICM pass) and what gates it — then spell against the gate. (Dump budget unused.)
+- A spelling where the base genuinely involves per-iteration state, e.g. deriving p
+  from the count-loop's terminal k? (k==0x19 post-loop — no.) Or reading sorted via a
+  pointer local reassigned per iteration INSIDE the if-block:
+  `u8* sorted = assets->sorted_fighters; p = sorted + idx;` (sorted as an in-block
+  reassigned local — MWCC may keep the add on the sorted web). Untested.
+- Per never-claim doctrine: the in-block form provably exists in retail compiled from
+  C; lever NOT FOUND despite 4 spellings — MODEL GAP, cause unattributed.
+
+### Remaining residual (post-80f374d45): 6 opcode blocks + accounting
+1-2. col hoist (insert +02c, replace +074/+078) — THE WALL above.
+3. k-init li-vs-copy (+040/+044, col only) — RE-DIAGNOSED as the ZERO-COALESCE channel
+   (our row loop emits the copy from identical `k=0` source; target col copies, ours
+   mints two zero li's). InputProc fusion/zero-cluster family; NOT spelling-addressable
+   (k=count refuted; 8 spelling classes failed in InputProc). Cascade-watch only.
+4. col jobj copy (delete E+13c `addi r26,r21,0`) — allocator region-split copy;
+   cascade-watch; if it survives the hoist fix, try intermediate-copy lever
+   (`jobj2 = HSD_JObjLoadJoint(...)` col only).
+5-6. row hoist (insert +228, replace +268/+26c) — THE WALL.
+Plus: sp_jobj slot placement (ours 84/80, target 76/68 — needs +8 bytes of address-taken
+objects ABOVE sp_jobj and +4 between, WITHOUT growing the -168 frame; the do-scope
+PAD_STACK packs differently than decl arrays — iteration-4 must find the natural-object
+arrangement; sibling 80243434 ships `u8 stack_obj[8]` as precedent), ~66 register-only
+lines (cascade), 25 reloc-ceiling lines (do not chase).
+
+## ITERATION-4 ENTRIES (pending)
+- STEP 0: reproduce 96.34 on 80f374d45; re-confirm 6 blocks.
+- PRIMARY: the hoist — take the mwcc-debug dump FIRST (read the LICM/IRO placement of
+  the add node and its gate), then spell against the mechanism. Untested spelling in
+  queue: in-block `u8* sorted` local (see wall notes).
+- SECONDARY: slot accounting — find an arrangement reaching 76/68 inside -168
+  (try: single PAD_STACK(8) BEFORE sp_jobj decl is illegal (statement); try
+  `u8 stack_obj[8];` as first local + sp_jobj + `u8 stack_obj2[4];` + sp_jobj2 and
+  REMOVE PAD_STACK entirely — total address-taken 8+4+4+4=20; frame may then need
+  +12 more from elsewhere; METER the frame line first).
+- Cascade-watch: blocks 3/4 (zero-coalesce k-init, jobj copy) after any structural land.
 - Tool issue #569 (struct verify ModuleNotFoundError in worktree) — retry after
   resolver fixes if struct questions recur.
