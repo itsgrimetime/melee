@@ -449,3 +449,96 @@ Protected-set sweep (full ninja report.json): all 55 mndiagram/2/3 100s hold; al
 unchanged (mndiagram3_8024714C 90.23, mndiagram3_80245BA4 94.07, fn_802461BC 98.42,
 GetRankedFighter 94.58, GetRankedName 97.87, HandleInput 97.46, CreateStatRow 80.11,
 Create 93.75, UpdateHeader 94.18, InputProc 98.67, 802427B4 98.84). Zero collateral.
+
+---
+
+# ITERATION 5 (driver 2, 2026-06-11): the preheader-schedule round — BOUNDARY FLIPPED (comma-at-arr)
+
+## THE ONE QUESTION: does forcing the type-cast before the funcTable hoist flip the r31 contention (stmw r21→r22)?
+
+ANSWER: **YES — via idea-space (2), the comma-expression at loop entry.**
+`arr = ((s32) type, entries);` flips the save-restore boundary to the target's exact
+`stmw r22,440(r1)` and the frame to 480 (both byte-exact). Committed 1d924db54.
+
+## Mechanism check (the decisive refinement of iteration-4's model)
+
+Iteration-4 framed the wall as preheader SCHEDULE order. The metered builds show the schedule
+is DOWNSTREAM of the real mechanism: **linear-IR interference**. In the old form, the cast
+(type's kill) was emitted AFTER `arr`'s def in the pre-coloring linear IR, so type and arr
+INTERFERE — reuse impossible regardless of coloring order. The comma on arr's own assignment
+places the cast reference immediately BEFORE arr's def (CSE merges it with the switch's
+hoisted cast), the interference edge vanishes, and the extra callee-save peels.
+Observed topology after the flip: ours coalesces the cast IN-PLACE on type
+(`clrlwi r30,r30,24`, one merged web); expected keeps two webs (type r31 dies at cast →
+result into r28 reusing dead ptr; arr reuses type's freed r31). Same save COUNT (10),
+different reuse graph — the % residual lives there.
+
+## Build ledger (4/4 used)
+
+| # | Edit (on the 2a01de812 inline-cast substrate) | % | Boundary | clrlwi pos | Verdict |
+|---|---|---|---|---|---|
+| 1 | guard comma: `for (i = 0; (s32) type, i < count; i++)` | 94.14 | r21 | +064 (unmoved) | INERT — IRO normalizes/DCEs the discarded guard cast entirely. Reverted. |
+| 2 | **loop-entry comma: `arr = ((s32) type, entries);`** | **94.11** | **r22 ✓ FLIP** | +060, in-place r30,r30 | **KEPT/committed.** Frame 488→480 exact; stack-slot diffs 4→0; reg-only 50→43; hunks 30→24. −0.03% = register noise (structure-over-match). |
+| 3 | comma on count: `count = ((s32) type, GetNameCount());` | 94.25 | r22 ✓ | **+050 — BEFORE the bl** | GATE-FAIL despite best %: clrlwi emitted above GetNameCount, shifting the whole call region one slot; classification → signature-type-mismatch ("call shape differs"). Structure broken. Reverted. |
+| 4 | build-2 + `base` decl moved LAST | 93.94 | r22 ✓ | — | Wrong direction: base r26→r25 (away from target r27). The "last-declared pops earlier" inference does NOT hold for this promoted web. Reverted. |
+
+Idea-space (3) (switch-arm order) NOT spent: builds exhausted on (1)/(2)/(2-variant)/(decl);
+arm order remains untried — low conviction (MWCC normalizes switch compare trees by value),
+but it is the one authorized spelling still open.
+
+## Laws minted (iteration 5)
+
+1. **Comma-at-def linear-order law (the flip):** to let web B reuse web A's register, A's
+   kill must precede B's def in linear IR; a comma carrying A's killing expression INSIDE
+   B's defining assignment (`B = (kill_A_expr, B_value)`) achieves it without a named local.
+   CSE merges the comma cast with the loop-hoisted switch cast — one clrlwi, repositioned.
+   (Same family as the 802427B4 `(0,X)` LICM comma; cite docs/mndiagram-inputproc-campaign.md.)
+2. **Guard-comma inertness:** a discarded invariant cast in a for GUARD is erased by IRO
+   before it can anchor anything (byte-identical output). The comma must be on a statement
+   with a live result.
+3. **Comma-before-call overshoot:** carrying the cast on the call-result assignment emits the
+   clrlwi BEFORE the bl (its source position), transposing the call region = structural fail.
+   The comma site must sit between the call and the def whose interference you're killing.
+4. **Schedule-is-downstream:** iteration-4's "preheader-schedule wall" framing refined — the
+   emission position follows from the interference/coloring outcome, not vice versa. The C
+   lever controls LINEAR ORDER of kill-vs-def, not the scheduler.
+
+## GetAggregatedFighterRank residual @ 94.11 (next entry)
+
+- Boundary/frame: EXACT (stwu -480, stmw r22,440).
+- 43 register-only lines + 2 reloc lines = TWO adjacent callee-save transpositions in the
+  fresh-dispense order (guidance names them): r26↔r27 (base/zero — cascades through the
+  whole populate + sort loops, the high-line-count pair) and r30↔r31 (type/funcTable).
+- Topology delta vs expected: ours cast-in-place-on-type (merged web) + arr→r28(ptr's slot);
+  expected cast→r28(ptr's slot) + arr→r31(type's slot). For the exact assignment the merged
+  type+cast web must SPLIT (two webs) while keeping the comma's linear order — a named local
+  splits it but is contraindicated (iter-4 law 1); an untried spelling class would need to
+  break the in-place coalesce without minting a home (e.g. self-assignment nudges
+  `type = type`-family — UNTRIED, next iteration's first probe).
+- Build-4 datum for the decl chain: moving base's decl LAST pushed base r26→r25 (wrong way);
+  the direction model for promoted webs on this substrate is earlier-decl→earlier-pop —
+  UNVERIFIED (one datum); the cardstate peel-chain (one decl at a time, keep-or-revert) on
+  zero/curr/ptr/arr decls is the remaining decl idea-space.
+
+## PENDING-REVIEW (updated)
+
+- **NEW: the comma expression `arr = ((s32) type, entries);`** — unusual spelling retained
+  for codegen (the save-boundary flip). Precedent: committed `(0,X)` comma in
+  mnDiagram_802427B4 (a527c0227). A reviewer may ask for a comment or a different spelling;
+  any rewrite must preserve the kill-before-def linear order or the boundary regresses.
+- Carried: `res` uninitialized on the never-taken default path (iter-3; matches original).
+
+## Commit stack (cumulative)
+- cc052016f GetRankedFighter 79.94 -> 94.58 (iter 2)
+- e2d172d4d GetAggregatedFighterRank 81.91 -> 85.19 (iter 2)
+- 05a5aaf91 GetAggregatedFighterRank 85.19 -> 93.56 (iter 3)
+- 2a01de812 GetAggregatedFighterRank 93.56 -> 94.14 (iter 4)
+- 1d924db54 GetAggregatedFighterRank save-boundary flip, 94.14 -> 94.11 structural keep (iter 5)
+
+## TU state after iteration 5
+Open set: CreateStatRow 80.11 (untouched — the carried READ-ONLY opening survey did NOT
+trigger this iteration: 4/4 builds spent; survey remains the iteration-6 contingent),
+GetRankedFighter 94.58, **GetAggregatedFighterRank 94.11 (boundary+frame exact)**,
+Create 93.75, GetRankedName 97.87, UpdateHeader 94.18, HandleInput 97.46 (WALLED/parked).
+Protected-set sweep (full ninja report.json): all 55 mndiagram/2/3 100s hold; all other
+partials byte-unchanged. Zero collateral.
