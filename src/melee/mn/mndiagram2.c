@@ -1095,8 +1095,8 @@ void mnDiagram2_Create(int arg0)
             offset = scroll;
         }
         mnDiagram2_CreateStatRow(gobj, is_name, offset, j, entity_val);
-        j++;
         scroll++;
+        j++;
     } while (j < 10);
 
     is_name = user_data->is_name_mode;
@@ -1109,7 +1109,7 @@ void mnDiagram2_Create(int arg0)
         HSD_JObjSetFlagsAll(user_data2->name_mode_header, 0x10);
     }
 
-    if (is_name) {
+    if ((u8) is_name) {
         entity_idx = user_data2->selected_name_idx;
     } else {
         entity_idx = user_data2->selected_fighter_idx;
