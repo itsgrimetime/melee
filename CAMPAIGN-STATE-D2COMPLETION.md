@@ -951,3 +951,113 @@ every partial byte-exact (verified all 72 mndiagram* == /tmp/baseline_census.jso
 3. The is_name_mode param-type axis (path a) is CLOSED — do NOT re-flip GetStatValue's param;
    it is a dual-constraint see-saw (law 1). Any further is_name_mode work must attack PROVABILITY
    (law 2), not type.
+
+---
+
+# ITERATION 9 (driver 4, 2026-06-11): the two priced rungs — rung-3 REFUTED (3-spelling trichotomy), rung-4 LANDED (+1.43, the provability law confirmed)
+
+## THE ONE QUESTION: do the two remaining priced rungs close CreateStatRow's conversion/web residual?
+- **Rung-3 (stat_type two-region split): NO — refuted at the source-spelling level** across the
+  full spelling space; the target's two webs are an allocator-emergent live-range outcome, not a
+  source structure (law 3 below).
+- **Rung-4 (is_name_mode provability probe): YES — landed exactly as the iteration-8 law-2
+  hypothesis predicted.** 81.81 → **83.24064**, committed 914e7ae31, zero collateral.
+
+## Build ledger (4 metered + 1 revert-hygiene)
+
+| # | Rung | Edit | % | Mechanism check | Verdict |
+|---|---|---|---|---|---|
+| 1 | 3 | two sibling-scoped `int r23 = (u8) stat_type;` locals (region boundary after the r21 block, exactly at target's e1c/cmpwi-0x18 seam) | 81.79 (−0.02) | census STILL 9 (no new clrlwi); `cmpwi r31,24` still reads the MERGED web; stwu −136→**−144** + stmw ofs 80→88 (the 2nd local minted a DEAD frame home) | REFUTED+reverted. Front-end CSE re-unifies a re-derivation of an available expression (sibling of iter-7 law b1). |
+| 2 | 3 | NO local — `stat_type` used directly at all 12 ladder compares (the natural-developer spelling; let MWCC region it) | **79.24 REGRESS** | census 9→**13**: per-compare `clrlwi r0,r26,24` ×4 fresh volatile masks, dying immediately; NO callee-save webs; prologue band churned | REFUTED+reverted. Direct u8-param ordered-compares mask per compare-group into r0; MWCC does NOT self-region them into webs. |
+| 3 | 4 | `int mode = is_name_mode;` decl + all 7 GetStatValue sites pass `mode` | **83.24064 COMMIT 914e7ae31** | census 9→**4** (== target count); the 6 masks → ONE `clrlwi r27,r4,24` (mode's prologue def); all 7 call sites `addi r3,r27,0` = plain copies, shape-matching target's 7× `addi r3,r24,0`; frame/boundary UNCHANGED (−136, stmw r22) — mode's web replaced the raw-param web 1-for-1 | **LANDED.** |
+| 4 | 4 | mode decl moved FIRST (band probe toward target's r24) | 83.24064 — **byte-identical** | identical prologue (stat r24/row r26/entity r25/mode r27) | INERT; reverted to committed (mode-last). Decl position does not move an init-from-param web. |
+
+## Laws minted (iteration 9)
+
+1. **Re-derivation transparency (rung-3 spelling space CLOSED):** the three spellings of a
+   u8-truncation web bracket the space — ONE named int local = 1 merged callee-save web
+   (baseline 81.81); TWO scoped locals = CSE re-unifies (the 2nd init is deleted as redundant)
+   + a DEAD 8B frame home appears (81.79); ZERO locals (direct param compares) = per-site
+   fused volatile masks, no webs at all (79.24). A region-scoped re-truncation of an
+   available expression is IR-transparent — generalizes iter-7 law b1 from values to webs.
+2. **Target's two-region truncation = allocator-emergent, not source:** target derives BOTH
+   clrlwi from raw r25 on the UNCONDITIONAL path (d4c dominates e1c), so source scoping cannot
+   produce the split either (a dominated re-derivation is exactly what build-1 proved CSE
+   eats). The split is MWCC's own live-range/pressure decision — target runs 11 callee-saves
+   (stmw r21) vs our 10 (r22), and the extra pressure plausibly comes from the banked R2
+   shared-1 flag webs. MODEL GAP, cause unattributed (no IRO trace pulled). PREDICTION: if R2
+   ever lands, re-measure — region-2 may appear for free.
+3. **int-local provability law (THE WIN, the see-saw's caller-side resolution):** for a u8
+   param consumed by N int-param call sites, `int local = u8param;` converts ONCE at the def
+   (one clrlwi, prologue) and makes every call site a PLAIN COPY (int→int, provably clean).
+   The 6 conversion-node masks are not individually reachable (iter-7 b1) and the param-type
+   axis is a see-saw (iter-8) — but the conversion NODE can be hoisted and shared via an
+   int-typed local. Cost vs the unreachable ideal: +1 instruction (the def clrlwi; target
+   keeps the raw param clean for free) — 83.24 vs the co-flip's demonstrated 83.65.
+4. **Init-from-param web is decl-position-inert (build 4):** its def site (and color) is
+   pinned by the prologue param-read, not the locals band. Don't spend builds rotating it.
+
+## CreateStatRow residual @ 83.24 (NEARLY FULLY ATTRIBUTED — the endgame map)
+
+clrlwi census 4 vs 4 (composition: ours = mode-def + 1 stat_type + 2 row_idx; target = 2
+stat_type + 2 row_idx). Every remaining divergence now hangs off attributed walls:
+
+1. **R2 const-prop/shared-1 flag webs (BANKED, iter-6/7):** target's ladders preset the flag
+   in r3 CSE'd with the `default_alignment = 1/2` store constants + bge polarity; ours mints
+   per-ladder `li r0` + blt. Copy-channel and preset spellings refuted (iter-6 #2, iter-7 b4).
+   UNTRIED candidate (flag for a FUTURE driver, requires explicit authorization since it is in
+   the banned assignment-topology class): the store-VALUE spelling
+   `var_r3 = (text2->default_alignment = 1);` — binds the flag to the store's value node,
+   which const-prop may not re-split (store nodes are opaque, unlike the refuted copy-channel).
+2. **stat_type region-2 web (law 2):** allocator-emergent; possibly downstream of R2's
+   pressure. No source lever found despite the full spelling-space search (law 1).
+3. **Prologue band permutation (coloring-order):** ours {stat r24, entity r25, row r26,
+   mode r27} vs target {is_name r24, stat r25, row r26, entity r27} — row_idx r26 now MATCHES
+   (baseline had row r27). The rest is one rotation; plausibly re-rolls if 1/2 ever land.
+4. **The mode-def clrlwi (+1 instr):** intrinsic to the caller-side resolution; only the
+   closed see-saw's int-param side removes it. PRICED, accept.
+5. **Frame slots (float temps 0x3c.. vs 0x20..) + PAD_STACK(16):** downstream of 1-3;
+   PAD_STACK must become natural frame reservation pre-PR regardless.
+
+**Endgame:** CreateStatRow has reached its attributed structural frontier at 83.24. The two
+remaining levers are (a) the R2 store-value spelling (banned-class, needs authorization) and
+(b) nothing else source-reachable — everything further is register-cascade hunting on walls
+1-3. Recommend BANKING the function here and rotating; reopen only with the R2 exception or
+an IRO-trace round that attributes the live-range splitter's trigger.
+
+## PENDING-REVIEW (iteration 9)
+- 914e7ae31 adds `int mode = is_name_mode;` — natural C, no guideline risk (named local,
+  no PAD_STACK/volatile/data-symbol change). The name `mode` is bland; rename at /understand
+  time if desired (keep the int type and the single-init shape — they are load-bearing).
+- Carried: CreateStatRow PAD_STACK(16) diagnostic (must become natural frame pre-PR);
+  GetAggregatedFighterRank res-uninitialized + comma spelling.
+
+## Commit stack (cumulative)
+- cc052016f GetRankedFighter 79.94 -> 94.58 (iter 2)
+- e2d172d4d GetAggregatedFighterRank 81.91 -> 85.19 (iter 2)
+- 05a5aaf91 GetAggregatedFighterRank 85.19 -> 93.56 (iter 3)
+- 2a01de812 GetAggregatedFighterRank 93.56 -> 94.14 (iter 4)
+- 1d924db54 GetAggregatedFighterRank save-boundary flip, 94.14 -> 94.11 (iter 5)
+- 47b40968d CreateStatRow 80.11 -> 81.54 (iter 6 — cached-base reuse R1)
+- 35391757f CreateStatRow 81.54 -> 81.81 (iter 7 — R3-b return-cast drop)
+- 914e7ae31 **CreateStatRow 81.81 -> 83.24 (iter 9, this driver — is_name_mode provability probe)**
+
+## TU state after iteration 9
+Open set: **CreateStatRow 83.24 (BANKED-recommended — attributed frontier, see endgame)**,
+GetRankedFighter 94.58, GetAggregatedFighterRank 94.11 (reserved self-assignment probe),
+Create 93.746475, GetRankedName 97.87, UpdateHeader 94.18, HandleInput 97.46 (WALLED/parked),
+mnDiagram3_HandleInput 98.42, mnDiagram3_80245BA4 94.07. Protected sweep: all 52 mndiagram*
+100s hold; every other partial byte-exact vs baseline. Zero collateral.
+
+## Iteration-10 recommendation
+1. **UpdateHeader 94.18 FIRST** — it carries the PRICED 1-build transfer from iter-7
+   (35391757f): the `(u8) name` cast at `mnDiagram_80242B38((u8) name, 0)` (line ~217), the
+   exact artifact whose drop paid +0.27 on CreateStatRow ('name' is int but provably u8-clean
+   from the ByIndex_s macros; the cast mints a mask the target may lack — VERIFY against
+   target bytes first, same method). Then its iter-1 banked levers.
+2. **Create 93.75 second** (iter-1 banked levers; also the iter-7 anomaly note — its
+   pre/post extract diffed empty while % moved; treat its meter with care).
+3. **AggRank reserved self-assignment probe third** (iter-5's named next probe: split the
+   merged cast-in-place type web without minting a home).
+4. CreateStatRow: BANK at 83.24. Do not re-enter without (a) R2 store-value authorization or
+   (b) an IRO-trace round. The is_name_mode and stat_type axes are both closed with laws.
