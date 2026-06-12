@@ -613,4 +613,69 @@ Re-read after R1.
 3. **R2: flag-register/comparison-form** in the four if-ladders (r0→r3 / blt→bge spelling).
 4. **R4: frame/callee-save** — falls out of R1+R3 (structure-first); revisit last.
 
-## TOP-RUNG EXECUTION (R1) — see build ledger below.
+## Build ledger (2/5 used — early report, top rung landed + 1 rung-2 datum)
+
+| # | Lever | Edit | % | Mechanism check | Verdict |
+|---|---|---|---|---|---|
+| 1 | R1 cached-base | 3× `(Vec3*) &mnDiagram2_803EEAD0[N]` → `(Vec3*)(base + N)` | 80.11 → **81.54** | base materializations 3→1; instr 432→427 (+11→+6); stmw r23→r22 (9→10 saves) | **LANDED, committed 47b40968d.** Structure-first root collapsed. |
+| 2 | R2 flag-reg probe | first ladder → `var_r3=1;` preset + empty `>=0xE` arm | **80.71 REGRESS** | flag DID flip to r3 + `bge` (line14) + 427→425, BUT `default_alignment=1` `li r0,1` and var_r3 `li r3,1` did NOT CSE — two `1`-consts minted → net worse | REVERTED (git checkout). DATUM: preset-1 alone insufficient; R2 needs the `1`-web to coalesce, a coloring/CSE tiebreak. |
+
+## TOP-RUNG VERDICT
+R1 (cached-base reuse) LANDED clean: **80.11 → 81.54**, committed 47b40968d, protected sweep
+zero-collateral (all 55 mndiagram* 100s + every partial byte-identical). The single highest-
+conviction structural lever paid as predicted; base now materialized once, frame tightened one
+callee-save toward target.
+
+## CreateStatRow residual @ 81.54 (rung-2 entry for next driver)
+Remaining vs target (build/GALE01/src vs obj, reloc+label normalized): +6 instrs, ~300
+normalized-diff lines, ALL in two interlocked register/CSE residuals (NOT structure, NOT data):
+
+- **R2 (flag-register + comparison-form) — the LARGEST contributor (4 if-ladders).** TARGET
+  presets the flag in **r3** (CSE'd from the immediately-preceding `text2->default_alignment = 1`
+  / `text3->default_alignment = 2` store constant) and uses `bge`-override-to-0 (default-below);
+  OURS mints the flag in **r0** with `blt` + inline `li`. Probe #2 proved preset-1 alone flips
+  polarity but does NOT force the `1`-constant to coalesce with var_r3's web (two `li`s minted).
+  Next idea-space (UNTRIED): make var_r3 and the `default_alignment` value LITERALLY the same
+  object/expression (e.g. compute the alignment store from var_r3, or a shared `int one = 1`
+  feeding both), so the `1`-web spans both — a coalesce nudge, cardstate-decl-peel territory.
+  Conviction MEDIUM; this is a coloring/CSE tiebreak (cf. this file's GetAggregatedFighterRank
+  iter-4/5 — register-coloring residuals here take multi-build hunts, not one clean lever).
+
+- **R3 (redundant clrlwi at GetStatValue args) — intertwined with R2.** TARGET passes
+  `addi r3, r24, 0` (r24 = `is_name_mode`, trusted u8-clean); OURS re-truncates `clrlwi r3,r24,24`
+  at each of the ~5 `mnDiagram2_GetStatValue(is_name_mode, ...)` calls (+ a `clrlwi r3,r3,24` on
+  a return). Source passes the `u8 is_name_mode` param directly to GetStatValue's `int` first arg.
+  Hypothesis: the original cached `(u8) is_name_mode` ONCE into a local (so r24 is the already-
+  clrlwi'd value and the call sites are plain copies), OR GetStatValue's prototype first-arg type
+  differs from what we declare. Re-read GetStatValue's exact matched signature + how the matched
+  callers (PopulateStatRows) pass is_name_mode. Conviction MEDIUM.
+
+- R4 (frame/callee-save: stmw r22 vs target r21, float-temp slots 0x3c/0x40/0x44 vs 0x20/0x24/0x28):
+  pure downstream of R2+R3 register pressure; PAD_STACK(16) diagnostic still present (must become
+  natural frame reservation before PR). Re-read AFTER R2/R3, do not chase directly.
+
+**RECOMMENDED RUNG-2: R3 first (kill the GetStatValue clrlwi via a cached `(u8) is_name_mode`
+local or prototype-arg fix — cleaner, more isolated than R2), then R2 (flag-web coalesce nudge).**
+Both are register/CSE-class; expect a multi-build hunt per this file's coloring-wall precedent.
+
+## PENDING-REVIEW (iteration 6)
+- R1 commit is natural C only (offset arithmetic off an already-declared cached base). NO new
+  guideline risk. PAD_STACK(16) in CreateStatRow is UNCHANGED/diagnostic — still must be replaced
+  with natural frame reservation before any PR (carried; not introduced this iteration).
+- Carried from prior iters: GetAggregatedFighterRank `res` uninitialized-on-default + comma
+  spelling; unaffected this iteration.
+
+## Commit stack (cumulative)
+- cc052016f GetRankedFighter 79.94 -> 94.58 (iter 2)
+- e2d172d4d GetAggregatedFighterRank 81.91 -> 85.19 (iter 2)
+- 05a5aaf91 GetAggregatedFighterRank 85.19 -> 93.56 (iter 3)
+- 2a01de812 GetAggregatedFighterRank 93.56 -> 94.14 (iter 4)
+- 1d924db54 GetAggregatedFighterRank save-boundary flip, 94.14 -> 94.11 (iter 5)
+- 47b40968d **CreateStatRow 80.11 -> 81.54 (iter 6, this driver — cached-base reuse R1)**
+
+## TU state after iteration 6
+Open set: **CreateStatRow 81.54** (R1 landed; rung-2 = R3 clrlwi then R2 flag-web, both
+register/CSE-class), GetRankedFighter 94.58, GetAggregatedFighterRank 94.11, Create 93.75,
+GetRankedName 97.87, UpdateHeader 94.18, HandleInput 97.46 (WALLED/parked),
+mnDiagram3_HandleInput 98.42 (sibling-branch territory). Protected-set sweep (full report.json):
+all 55 mndiagram* 100s hold; every partial byte-unchanged. Zero collateral.
