@@ -4119,3 +4119,8 @@ The calibration doc's proposal-confirmation-rate metric counts ONLY fixtures pas
 check, and T12 MUST NOT write `GATE: PASS` unless both win-recovery fixtures pass it. (A
 `gate.re_extract_and_classify`-style helper call satisfies this; implement it in T11 even though
 gate.py's live path is T8's deliverable — the frozen-artifact variant needs no mwcc invocation.)
+
+**From the T4 review (f22be1226 — BINDING watch-item for the T14 review):** blocker-3 closure is
+complete at the derivation layer; end-to-end closure depends on T14's live factory DERIVING the
+passed-in values (use_set/routed sets, window residual, first-def) from the real report/IG/force-phys
+artifacts rather than convenient literals. The T14 review must re-verify this specifically.
