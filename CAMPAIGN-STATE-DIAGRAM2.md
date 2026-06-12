@@ -1164,6 +1164,79 @@ scan under the incremental rule; high-ig satisfies both.
 - Commits: doc-only (this section). Source untouched; baseline 97.46
   (Δ3, hunks 5) verified before and after; protected fns 100/100/98.67.
 
+## Iteration 10: the mint class is closed by call geometry; fused-init demotion fails on call returns (driver 10, 2026-06-11)
+
+THE ONE QUESTION: do two minted fold-away addressing temps + the S1 merge
+land result=r31/data=r30 and Δ3→1? ANSWER: **NO BUILD — all three probes
+failed their gates, and the failures map the class boundary exactly.** The
+fold-away mint requires a MULTI-USE computed base (CSE) inside a call-free
+span — and no such window exists anywhere on result's live range outside
+B4 (already minted, ig61). 3 probes, 0 builds. Match stays **97.46%**.
+
+### HEADLINE 1 — per-spelling probe table
+
+| Probe | Spelling | Sites | Property failed |
+|-------|----------|-------|-----------------|
+| 1 | `((u8*)&base->field)[k]` (ig61-shape, plain) | x46 (`&data2->scroll_offset[+2]`→70), x47 (`&data2->selected_fighter_idx[+1]`→71), bottom-spine is_name_mode (`&data->scroll_offset[+4]`→72) | **(a) NO NODE** — class-0 IG byte-identical to baseline (n_nodes=194, result nIntfr=33, same interferer lists). IR-build folds the const offset into d-form addressing. |
+| 2 | `((u8*)(0, &base->field))[k]` (comma defeater) | same 3 | **(a) NO NODE** — IG byte-identical again. The comma does not block the address fold (it perturbs propagation/LICM elsewhere, not addressing). |
+| 3 | S1 merge + `buttons[1] = (result = mn_80229624(4))` store-fused init + decl reorder (data2, result, data) | entry | **demotion failed** — IR still stages `mr r97,r3`: result remains TEMP-class (ig97), eligible at scan → main band → r29. Merged web (ig37, nIntfr 92) pops iter0 → r31 = the known rotation. |
+
+### The class boundary (the finding)
+
+1. **Mint mechanism, corrected:** ig61 exists because its computed base
+   (`(s32*)&mn_804A04F0.buttons` = mn+8) has TWO uses (the [1]/[0] stores,
+   CSE across statements) inside a call-free span. Single-use computed
+   bases fold into the access's d-form displacement AT IR BUILD, regardless
+   of spelling (plain cast-index, comma-wrapped). The cast shape was never
+   the trigger; the multi-use CSE was.
+2. **Call-geometry closure:** result's live range outside B4 offers NO
+   call-free multi-access window — the 0xC0 arm interleaves a call between
+   every access (lbz/bl/stb/bl/...; a base shared across them would cross
+   calls → callee-save → stmw break), and the bottom spine has exactly one
+   access (the is_name_mode lbz) before each path immediately calls
+   (GetNameCount / CountUnlockedFighters). So the mint route to +2 is
+   closed for THIS function's geometry under ANY band model (even
+   fixed-T's low-ig-tolerant count needs a mint somewhere; B4 is already
+   minted).
+3. **Store-fused init does not demote call returns.** The InputProc
+   count2-home mechanism (`buttons[0] = (count2 = 0)`) is CONSTANT-init
+   specific (the home-init becomes the store-unit zero node). A call-return
+   init keeps the `mr temp,r3` staging and the temp-class web no matter the
+   fusion. (Byte shape unchanged — the fusion is byte-neutral and inert.)
+
+### Empirical bonuses (probe 3 = the third graph)
+
+- **S1-only merged graph measured for the first time** (previously
+  inferred): result = ig97, nIntfr **31** (= 33−2 exactly as predicted),
+  at-scan 27, pops iter92 → r29; merged data web nIntfr **92**, pops
+  iter0 → r31. Fully consistent with the band model (no contradiction,
+  no discrimination).
+- **The decl-reorder knob verifiably threads home-band igs**: data declared
+  3rd-from-front landed the merged web at ig37 — the home-band position is
+  controllable by declaration order (useful for any future threading need).
+
+### What remains open for S1 (never-claim discipline)
+
+The original reached result=r31 + merged data + no reload from C; its
+mechanism is still unidentified. Closed this round: fold-away mints (call
+geometry), store-fusion demotion (call-return staging). The remaining named
+direction is STRUCTURAL, not spelling-local: the original's source
+factoring (statement shapes in the 0xC0 arm / bottom body / entry) may mint
+a different temp population with ≥2 result-overlapping high-ig webs — a
+reconstruction search, not a spelling search. Alternative honest close-out:
+97.46 (Δ3, hunks 5) stands as the shippable form with a complete,
+mechanism-attributed residual census (S1 reload = band arithmetic, S2 remat
+= CP exclusion rule, S3 = IRO load-merge, R3 = emission order).
+
+### Iteration-10 ledger
+
+- Probes: 3 of ≤3 (plain mint ×3 sites; comma mint ×3 sites; merge+fusion+
+  decl-reorder). Builds: 0 of ≤2 — the composition died at the probe gate;
+  building it would re-measure the known rotation (96.7-class).
+- Commits: doc-only (this section). Source reverted to baseline after each
+  probe; baseline 97.46 (Δ3, hunks 5) verified before and after; protected
+  fns 100/100/98.67.
+
 ## DOC-FEEDBACK (methodology observations, iteration 2)
 
 1. **Precise-alignment-first should be doctrine.** Iteration-1 spent a
