@@ -1364,7 +1364,7 @@ extern CamDesc lbl_803B7CA8;
 /// entries, creates camera GObj with CObjDesc loaded from lbl_803B7CA8 rodata.
 #pragma push
 #pragma auto_inline off
-void fn_8018E618(int arg0, int arg1, f32 farg0)
+void fn_8018E618(int arg0, f32 farg0, int arg1)
 {
     CamDesc cam;
     HSD_GObj* gobj;
@@ -2548,7 +2548,7 @@ void gm_80190EA4(void)
     if (gm_804771C4.match_type == 0) {
         TmData* tmdata = gm_8018F634();
         fn_8018EC7C();
-        fn_8018E618(tmdata->entrants, 1, 4.5f);
+        fn_8018E618(tmdata->entrants, 4.5f, 1);
         fn_80190480(130.0f);
         fn_80190520(-278.0f, 255.0f, 0.0f);
     }
@@ -4000,7 +4000,7 @@ post:
             }
             tm = gm_8018F634();
             fn_8018EC7C();
-            fn_8018E618(tm->entrants, 1, lbl_804DA6D8);
+            fn_8018E618(tm->entrants, lbl_804DA6D8, 1);
             fn_80190480(lbl_804DA6DC);
             fn_80190520(lbl_804DA6E0, lbl_804DA6E4, lbl_804DA6E8);
         }
@@ -4110,7 +4110,7 @@ void fn_80193FCC(s32* arg0, u32 arg1, u32 arg2)
             }
             tm = gm_8018F634();
             fn_8018EC7C();
-            fn_8018E618(tm->entrants, 1, lbl_804DA6D8);
+            fn_8018E618(tm->entrants, lbl_804DA6D8, 1);
             fn_80190480(lbl_804DA6DC);
             fn_80190520(lbl_804DA6E0, lbl_804DA6E4, lbl_804DA6E8);
         }
@@ -4190,7 +4190,7 @@ void fn_80193FCC(s32* arg0, u32 arg1, u32 arg2)
             }
             tm = gm_8018F634();
             fn_8018EC7C();
-            fn_8018E618(tm->entrants, 1, lbl_804DA6D8);
+            fn_8018E618(tm->entrants, lbl_804DA6D8, 1);
             fn_80190480(lbl_804DA6DC);
             fn_80190520(lbl_804DA6E0, lbl_804DA6E4, lbl_804DA6E8);
         }
@@ -4731,7 +4731,7 @@ void fn_80194F30(s32* state_ptr, u32 buttons, u32 trigger)
             if (gm_804771C4.match_type == 0) {
                 TmData* tmdata = gm_8018F634();
                 fn_8018EC7C();
-                fn_8018E618(tmdata->entrants, 1, 4.5f);
+                fn_8018E618(tmdata->entrants, 4.5f, 1);
                 fn_80190480(130.0f);
                 fn_80190520(-278.0f, 255.0f, 0.0f);
             }
@@ -6227,11 +6227,12 @@ void fn_801981A0(HSD_GObj* gobj)
     TmData* data;
     s32 pnum;
     HSD_JObj* jobj;
-    u8* state_ptr;
+    struct Lbl804799D8_t* state;
     f32 x_pos;
     s32 in_range;
     u8 counter;
 
+    state = &lbl_804799D8;
     data = gm_8018F634();
     pnum = fn_8018F62C(gobj);
     jobj = gobj->hsd_obj;
@@ -6251,13 +6252,13 @@ void fn_801981A0(HSD_GObj* gobj)
     HSD_JObjClearFlagsAll(jobj, JOBJ_HIDDEN);
 
     if (HSD_PadMasterStatus[(u8) pnum].err != 0 &&
-        lbl_804799D8.x2A[pnum].state != 4)
+        state->x2A[pnum].state != 4)
     {
         HSD_JObjSetFlagsAll(jobj, JOBJ_HIDDEN);
         return;
     }
 
-    if (*(&lbl_804799D8.x44[pnum]) == 6) {
+    if (state->x44[pnum] == 6) {
         HSD_JObjSetFlagsAll(jobj, JOBJ_HIDDEN);
     }
 
@@ -6273,16 +6274,16 @@ void fn_801981A0(HSD_GObj* gobj)
 
     fn_8018FDC4(jobj, x_pos, lbl_804DA818, lbl_804DA824);
 
-    counter = lbl_804799D8.x21[pnum];
+    counter = state->x21[pnum];
     counter = (counter + 1) % 11;
-    lbl_804799D8.x21[pnum] = counter;
+    state->x21[pnum] = counter;
 
-    if (*(&lbl_804799D8.x44[pnum]) == 7) {
-        fn_8019044C(jobj, (f32) lbl_804799D8.x21[pnum]);
+    if (state->x44[pnum] == 7) {
+        fn_8019044C(jobj, (f32) state->x21[pnum]);
         return;
     }
 
-    fn_8019044C(jobj, (f32) (lbl_804799D8.x21[pnum] + 0x14));
+    fn_8019044C(jobj, (f32) (state->x21[pnum] + 0x14));
 }
 
 /// Updates the visibility and position of a player's controller indicator.
@@ -7810,7 +7811,7 @@ void fn_8019B458(s32* arg0)
         }
 
         fn_80198BA0();
-        fn_8018E618(tm->entrants, (s32) tm->x2C, 4.5f);
+        fn_8018E618(tm->entrants, 4.5f, tm->x2C);
         fn_8018E85C(lbl_804D6670->models[4], tm->x2C);
         fn_8018FA24();
 
@@ -7930,7 +7931,7 @@ void fn_8019B860(TmData* tm)
     fn_80199AF0();
     fn_80198BA0();
     fn_8018F888();
-    fn_8018E618(tm->entrants, tm->x2C, lbl_804DA810);
+    fn_8018E618(tm->entrants, 4.5f, tm->x2C);
     fn_8018E85C(lbl_804D6670->models[4], tm->x2C);
     tm->cur_option = 0x20;
 }
