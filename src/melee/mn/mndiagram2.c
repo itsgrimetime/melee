@@ -628,6 +628,7 @@ void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
     HSD_Text* text;
     f32 f31;
     f32 f30;
+    int mode = is_name_mode;
     PAD_STACK(16);
 
     data = gobj->user_data;
@@ -685,7 +686,7 @@ void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
 
                         if (var_r3 != 0) {
                             u32 stat_val = mnDiagram2_GetStatValue(
-                                is_name_mode, stat_type, entity_idx);
+                                mode, stat_type, entity_idx);
                             if (mnDiagram_IsDistanceOverflow(stat_val)) {
                                 HSD_SisLib_803A6368(text2, 0x7F);
                             } else {
@@ -708,11 +709,11 @@ void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
                     }
 
                     if (var_r0 != 0 &&
-                        (u32) mnDiagram2_GetStatValue(is_name_mode, stat_type,
+                        (u32) mnDiagram2_GetStatValue(mode, stat_type,
                                                       entity_idx) < 0x19)
                     {
                         HSD_JObj* jobj = mnDiagram_80242B38(
-                            mnDiagram2_GetStatValue(is_name_mode, stat_type,
+                            mnDiagram2_GetStatValue(mode, stat_type,
                                                     entity_idx),
                             0);
                         HSD_JObjSetTranslateX(jobj, -2.0f);
@@ -740,7 +741,7 @@ void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
 
                     if (r23 == 0xB) {
                         int val = mnDiagram2_GetStatValue(
-                            is_name_mode, stat_type, entity_idx);
+                            mode, stat_type, entity_idx);
                         if ((u32) val > 0x927BF) {
                             val = 0x927BF;
                         }
@@ -757,7 +758,7 @@ void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
 
                         if (var_r0_3 != 0) {
                             u32 val = mnDiagram2_GetStatValue(
-                                is_name_mode, stat_type, entity_idx);
+                                mode, stat_type, entity_idx);
                             val = mnDiagram_ConvertDistanceForDisplay(val);
                             if (val > 0x98967F) {
                                 val = 0x98967F;
@@ -779,7 +780,7 @@ void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
 
                             if (var_r0_4 != 0) {
                                 int val = mnDiagram2_GetStatValue(
-                                    is_name_mode, stat_type, entity_idx);
+                                    mode, stat_type, entity_idx);
                                 if ((u32) val > 0xF423F) {
                                     val = 0xF423F;
                                 }
@@ -801,7 +802,7 @@ void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
                                     str[2] = mnDiagram2_804D4FD0[2];
                                 } else {
                                     int val = mnDiagram2_GetStatValue(
-                                        is_name_mode, stat_type, entity_idx);
+                                        mode, stat_type, entity_idx);
                                     if ((u32) val > 0x98967F) {
                                         val = 0x98967F;
                                     }
