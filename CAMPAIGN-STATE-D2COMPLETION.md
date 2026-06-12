@@ -1201,3 +1201,168 @@ functions EXACT; all 52 mndiagram* 100s hold. Zero collateral.
    (replace the 3 diagnostic PAD_STACKs with natural frame reservation; resolve the carried PENDING-REVIEW
    items) — the matched + improved set is substantial (14/21 at 100, the rest at attributed ceilings).
 3. AggRank VN-kill axis is CLOSED (law 1). Do not re-probe with self-assignment/re-derivation/comma devices.
+
+---
+
+# ITERATION 11 (driver 5, 2026-06-11): Create's dedicated round — +4.68 LANDED (93.75 → 98.43), then the TU DECLARATION
+
+## HOUSEKEEPING: sibling merges f35adf9f3 (mndiagram.c completion) + 3dee0334c (mndiagram3 permuter
+wins + DOORA-CORPUS-REPORT.md) verified at STEP-0; all 12 spot-checked baselines exact incl.
+80241E78 98.94 and 8024714C 95.68.
+
+## THE ONE QUESTION: does Create hold a Create-LOCAL structural lever? ANSWER: **YES — THREE of them**
+(the meter-anomaly caveat is moot: the object-level normalized diff found a REAL, large, local
+divergence, not an alignment artifact).
+
+## The decisive evidence read (object-level diff FIRST, per the #576 lesson)
+Target 0x238 (142 instrs) vs ours-at-entry 0x234 (141) — a real −1. The partition REFUTED the
+"Create = Class-A-dominated" assumption from the design doc framing:
+- Target masks the GetNameByIndex/GetFighterByIndex results at the STORE (`clrlwi r29,r3,24`) and
+  at the u8-param call (`clrlwi r7`) — which `u8-return → int local` produces with the CURRENT
+  prototypes. Create's helper sites are NOT fenced; they are a local-typing residual. (UpdateHeader
+  is the inverse: target wants `mr` = int→int = prototype-gated = fenced. The design doc's "proto
+  flip improves Create" is true but UNNECESSARY for Create — `int entity_val` reaches the same bytes.)
+- Target's scroll loop: mask ONCE at init, direct `cmpw`, `mr r0` else-copy (the missing instr),
+  free increment — i.e. original `scroll` is **int**, ours was u8 (per-iteration `(s32)` re-mask).
+
+## Build ledger (4/4 used; 2 commits)
+
+| # | Edit | % | Mechanism check | Verdict |
+|---|---|---|---|---|
+| 1 | `scroll` u8→int + `entity_val` u8→int + drop `(s32)` loop cast | 93.75 → **97.34** | loop head restructured (direct cmpw + subf + b + `mr r0` else-copy); both store masks + call mask appeared; call-block arg order aligned | LANDED (superseded by #2's form) |
+| 2 | scroll init `(u8) field` → `field & 0xFF` | 97.34 → **97.09**, size 0x23c → **0x238 EXACT** | the trunc+widen pair (`clrlwi r0,r0,24; mr r28,r0`) fused to the target's single `clrlwi rDest,r0`; −0.25% = cascade re-roll on a strictly better structure (structure-over-match) | **KEPT, committed 86f1ecd6a (93.75 → 97.09)** |
+| 3 | 2nd tail test `if (is_name)` → `if ((u8) is_name)` | 97.09 → **98.43** | target's fused `clrlwi. r0,rX,24` mask-test materialized exactly | LANDED |
+| 4 | `j++; scroll++` → `scroll++; j++` | 98.43 (=, size =) | loop tail now emits target's j++/cmpwi/scroll++ order; positional alignment restored (old order = byte-coincidence match + 2-line insert/delete hunks) | **KEPT, committed 3ed95cf44 (97.09 → 98.43) with #3** |
+
+## Laws minted (iteration 11)
+1. **Local-width beats prototype-width when the target MASKS (the Create complement to the
+   UpdateHeader fence):** for a narrow-return helper consumed by a function, if the target shows
+   clrlwi at the store, the local's type is the lever (`int local = u8_helper()`), NOT the helper's
+   return type. The fence only binds when the target shows `mr` (no conversion node anywhere = both
+   sides must be int). Partition target-store-form FIRST; it decides fenced-vs-local in one read.
+2. **Cast-chain vs int-AND at init (the fold law):** `int x = (u8) u16field` emits trunc-in-place +
+   separate `mr` into the home (2 instrs); `int x = u16field & 0xFF` emits ONE `clrlwi rHome,rSrc`
+   folded into the def. The (u8) cast mints a u8-typed intermediate node; the AND stays int-typed.
+3. **Test-position casts are NOT cleanliness-elided:** `if ((u8) lbz_clean_u32)` materializes the
+   fused `clrlwi.` mask-test even though the same conversion at an ARG position is elided
+   (iter-7's lbz rule). The elision is arg-conversion-specific; explicit casts in tests survive.
+4. **Adjacent independent increments emit in REVERSE source order here** (`scroll++; j++` source →
+   j++/cmpwi/scroll++ object); a 2-statement swap is a free scheduling lever for loop-tail alignment.
+
+## Create residual @ 98.43 (fully attributed)
+1. **The assert-string .data anchor (5 lines — the ONLY structural residual):** target addresses the
+   HSD_ASSERT literals as `mnDiagram2_803EEAD0+264/288/304` (one HA/LO base = the TU's .data section
+   start = 803EEAD0, string pool at +264); ours anchors at `...data.0+112/96/136` (803EEAD0 is not
+   defined in our TU's .data, and our pool order is non-monotonic = dedupe order). RECIPE (future
+   round, NOT built): define mnDiagram2_803EEAD0 (+ the ~252B of original .data between it and the
+   pool) in-TU so the literals land at +264/+288/+304 and the base reloc binds to 803EEAD0. This is
+   the upstream_no_premature_data_fixes tension class — but it IS .text-byte-required (baked addi
+   immediates), the legit-exception precedent (cardstate volatile). Multi-symbol data migration;
+   needs its own round + verification that mndiagram/mndiagram3 references to 803EEAD0 stay exact.
+2. **One coherent callee-save permutation (~37 register-only lines):** rooted at the arg0 prologue
+   spill (+018: target r26, ours r25); downstream reuse graphs differ pervasively (target reuses
+   gobj's dead r25 for is_name; ours reuses the string-base r29). Classic dispense-order cascade —
+   the campaign's known fragile class (decl-order nudges: iter-4 inert/regressive, iter-9 inert).
+   Not chased (budget spent on structure; correctly so).
+
+---
+
+# mndiagram2.c — COMPLETE-AT-FRONTIER (the endgame handoff)
+
+TU: src/melee/mn/mndiagram2.c. 14/21 functions at 100%. Every remaining partial is at an
+ATTRIBUTED frontier (each residual mapped to a named wall class with laws). Campaign totals
+(iterations 1-11, drivers 1-5): GetRankedFighter 79.94→94.58, GetAggregatedFighterRank
+81.91→94.11, CreateStatRow 80.11→83.24, Create 93.75→98.43, UpdateHeader 94.18 (mapped+banked),
+HandleInput 97.46 (walled, protected).
+
+## (a) Per-function dispositions
+
+| Function | % | Disposition |
+|---|---|---|
+| mnDiagram2_CreateStatRow | 83.24 | BANKED at attributed frontier (iter-9): R2 const-prop/shared-1 flag webs (banked, iter-6/7) + stat_type region-2 (allocator-emergent, law iter-9.2) + prologue band rotation + the priced mode-def clrlwi (+1, accepted) + frame-slot tail. The 6 is_name_mode masks were KILLED by the int-local provability law (iter-9.3). |
+| mnDiagram2_GetAggregatedFighterRank | 94.11 | BANKED: boundary+frame EXACT (iter-5 comma flip); residual = two adjacent callee-save transpositions (r26↔r27 base/zero, r30↔r31 type/funcTable) = the allocator-emergent two-web reuse split; VN-kill probe REFUTED (iter-10, DCE-transparent). |
+| mnDiagram2_GetRankedFighter | 94.58 | BANKED (iter-2/3): the trio idiom landed; residual = +1 line (the second &entries temp copy-fold) + 1 unmapped −1 + 3 inner-compare register lines + the +8 frame hole@16 (mechanism unknown) + the j-guard +1 (spelling class CLOSED by the guard-defeats-unroller law iter-3.1). |
+| mnDiagram2_GetRankedName | 97.87 | BANKED: matched-class exemplar; carries the SAME j-guard +1 (`subf.`+`mr`) as GetRankedFighter — one shared residual class, closed spelling space. |
+| mnDiagram2_UpdateHeader | 94.18 | BANKED (iter-10): Class A (3 sites) = the return-width see-saw, SIBLING-FENCED (design doc); Class B (5 sites) = float-temp f0/f1 pick tiebreak (1 spelling refuted: frame-home); Class C (1 site) = schedule/encoding transposition. The 80242B38 site is byte-identical (do not touch the (u8) cast). |
+| mnDiagram2_Create | **98.43** | BANKED (iter-11, this round): residual = the assert-string .data anchor (5 lines, recipe documented above) + one arg0-rooted callee-save permutation. The TU's highest partial. |
+| mnDiagram2_HandleInput | 97.46 | WALLED/parked, PROTECTED (pre-campaign): S1/S2/S3/R3 walls; S2 has a third surviving-copy site catalogued in the Door-A corpus (DOORA-CORPUS-REPORT.md, merged 3dee0334c). Do not touch outside a dedicated Door-A round. |
+| All other 14 | 100 | PROTECTED. GetStatValue's prototype FROZEN (the see-saw, iter-8.1). |
+
+## (b) TU-wide fenced/banned ledger
+1. **The return-width see-saw (THE fence):** mnDiagram_GetNameByIndex/GetFighterByIndex u8→int
+   return flip fixes UpdateHeader Class A (and would have fixed Create's sites — now moot, landed
+   locally) but regresses the ranked-helper siblings. Pointer: docs/superpowers/specs/
+   2026-06-07-signature-local-return-width-design.md (+ `debug suggest signatures` reproduces it).
+2. **GetStatValue param-1 see-saw (iter-8.1):** dual-constraint (default tail wants int, handoff
+   wants u8); param FROZEN int; the caller-side int-local resolution is COMMITTED (914e7ae31).
+3. **CreateStatRow R2 store-value spelling** `var_r3 = (field = 1);` — banned-class
+   (assignment-topology), FLAGGED AWAITING AUTHORIZATION (iter-9.1). Untried; the one remaining
+   CreateStatRow idea. If it ever lands, RE-MEASURE stat_type region-2 (predicted free, iter-9.2).
+4. **Allocator-emergent web splits — no source lever exists (proven):** AggRank cast/arr reuse
+   (iter-10 VN-kill refuted), CreateStatRow stat_type region-2 (iter-9 trichotomy), the zero-emission
+   device family (self-assign/re-derivation/comma) is CLOSED for register-resident merged webs.
+5. **Guard-defeats-unroller (iter-3.1):** no explicit if-guard spellings around the copy loops.
+6. PAD_STACK / named .sdata2 floats / prototype flips: standing fences, unchanged.
+
+## (c) FUTURE-ROUND CANDIDATE (needs its own authorization): the return-width co-flip WITH re-match
+GetRankedName (97.87) and GetRankedFighter (94.58) — the see-saw's "regressed siblings" — are
+PARTIALS, not 100s. The fence as applied to date protects their CURRENT bytes; it does not prove
+the flip's far side is worse GLOBALLY. A dedicated multi-function round could: flip the two helper
+returns u8→int, then RE-DERIVE the ranked pair's sort/population spellings under the new width
+using this campaign's laws (the trio idiom, the conversion-node rules, iter-11.1's store-form
+partition). UpdateHeader Class A (3 sites) + possibly the ranked pair's own mask sites are the prize.
+Risks: mndiagram.c callers of the same helpers (cross-TU blast radius — audit first), and the
+iter-8 precedent that co-flips break at unforeseen pins (the default-tail class). Strictly a
+NEW-AUTHORIZATION round with sibling re-match budget (≥6 builds), not a quick probe.
+
+## (d) PENDING-REVIEW ledger (pre-PR work items)
+1. PAD_STACK diagnostics to become natural frame reservation: CreateStatRow PAD_STACK(16),
+   UpdateHeader PAD_STACK(8), HandleInput PAD_STACK(40). (GetRankedFighter's was already removed.)
+2. AggRank: `res` intentionally uninitialized on the never-taken default path (matches original;
+   initializing breaks the join shape — iter-3.3). Reviewer decision needed.
+3. The comma kill-placement spellings: `arr = ((s32) type, entries);` in AggRank (iter-5, the
+   boundary flip — any rewrite must preserve kill-before-def linear order). Precedent: 802427B4's
+   committed `(0,X)`.
+4. CreateStatRow `int mode = is_name_mode;` — bland name, rename at /understand time; the int type
+   + single-init shape are load-bearing (iter-9.3).
+5. Create iter-11 forms are natural C (int locals, `& 0xFF`, a (u8) test cast, statement order) —
+   no guideline risk.
+6. The assert-string .data anchor recipe (above) — if attempted, it is a data-layout change
+   requiring the upstream_no_premature_data_fixes exception argument (.text-byte-required).
+7. (Sibling TUs, merged work — their own ledgers: mndiagram.c 0.4f behavior fix, mndiagram3 items.)
+
+## (e) Permuter-channel candidates from this TU (ranked; the channel is allocated elsewhere — queue these when it frees)
+1. **mnDiagram2_Create (98.43)** — NEW, never permuted: one coherent callee-save permutation off
+   the arg0 spill; decl-band weights (reorder-heavy, cardstate recipe) are exactly the permuter's
+   strength; 5 of its ~42 residual lines are the data block (unreachable by permuter — expect a
+   floor, not 100, unless the data round lands first).
+2. **GetRankedFighter (94.58) + GetRankedName (97.87) as a PAIR** — the shared j-guard `subf.`+`mr`
+   +1 and the &entries copy-fold; manual spelling space closed (iter-3), which is precisely the
+   permuter-random territory; a win on either transfers (same idiom).
+3. **AggRank (94.11)** — the two adjacent transpositions; LOW yield expectation (ig-order ceilings
+   resist random search per near100_buckets census), but cheap to listen on.
+4. CreateStatRow (83.24) — do NOT permute yet: the R2/const-prop wall dominates; random search
+   cannot mint the shared-1 web (front-end class). Only after R2 authorization or an IRO round.
+
+## Commit stack (cumulative, this branch)
+- cc052016f GetRankedFighter 79.94 -> 94.58 (iter 2)
+- e2d172d4d GetAggregatedFighterRank 81.91 -> 85.19 (iter 2)
+- 05a5aaf91 GetAggregatedFighterRank 85.19 -> 93.56 (iter 3)
+- 2a01de812 GetAggregatedFighterRank 93.56 -> 94.14 (iter 4)
+- 1d924db54 GetAggregatedFighterRank 94.14 -> 94.11 boundary flip (iter 5)
+- 47b40968d CreateStatRow 80.11 -> 81.54 (iter 6)
+- 35391757f CreateStatRow 81.54 -> 81.81 (iter 7)
+- 914e7ae31 CreateStatRow 81.81 -> 83.24 (iter 9)
+- e988fd380 iter-10 docs (UpdateHeader banked + probe verdicts)
+- f35adf9f3 + 3dee0334c sibling merges (mndiagram.c completion; mndiagram3 permuter wins)
+- 86f1ecd6a **Create 93.75 -> 97.09 (iter 11: int retyping + AND-mask fold)**
+- 3ed95cf44 **Create 97.09 -> 98.43 (iter 11: fused tail test + loop-tail alignment)**
+
+## TU state after iteration 11 — FINAL (campaign closed)
+14/21 at 100. Partials: **Create 98.43**, GetRankedName 97.87, HandleInput 97.46 (walled),
+GetRankedFighter 94.58, UpdateHeader 94.18, AggRank 94.11, CreateStatRow 83.24 — ALL at attributed
+frontiers. Protected sweep: all 52 mndiagram* 100s hold; every sibling-TU floor exact
+(80241E78 98.94, 8024714C 95.68, 80245BA4 94.48, InputProc 98.67, 802427B4 98.84). Zero collateral.
+NEXT PHASE (no driver-6 matching round warranted): (1) the PENDING-REVIEW pre-PR pass + PR
+consolidation across the three mndiagram TUs; (2) queue the (e) permuter listening posts;
+(3) the (c) co-flip round if/when authorized. Reopen matching only on those triggers.
