@@ -2409,6 +2409,7 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
     u8* var_r15_3;
     u8* var_r16_5;
     u8* var_r16_7;
+    u8* sorted;
     PAD_STACK(32);
 
     var_r30 = 0;
@@ -2416,11 +2417,12 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
         if (var_r30 == 0xA) {
             var_r22 = 0;
             do {
+                sorted = mnDiagram_804A0750.sorted_fighters;
                 if (is_name != 0) {
                     var_r3 = GetNameCount();
                     if (var_r3 > var_r22) {
                         var_r0 = mnDiagram_GetVisibleNameCursorFrom(
-                            assets->sorted_fighters, arg2_r, var_r22);
+                            sorted, arg2_r, var_r22);
                         var_r19_2 = mnDiagram_SumNameFalls(var_r0);
                         mnDiagram_80241E78(gobj, (u8) var_r22, (u8) var_r30,
                                            var_r19_2);
@@ -2437,7 +2439,7 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
                     } while (var_r19_3 < 0x19);
                     if (var_r18_3 > var_r22) {
                         var_r21 = mnDiagram_GetVisibleFighterCursorFrom(
-                            assets->sorted_fighters, arg2_r, var_r22);
+                            sorted, arg2_r, var_r22);
                         var_r19_5 = mnDiagram_SumFighterFalls(var_r21);
                         mnDiagram_80241E78(gobj, (u8) var_r22, (u8) var_r30,
                                            var_r19_5);
@@ -2450,18 +2452,19 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
             if (var_r3 > var_r30) {
                 var_r22_2 = 0;
                 do {
+                    sorted = mnDiagram_804A0750.sorted_fighters;
                     if ((var_r22_2 == 7) ||
                         (var_r3 = GetNameCount(), (var_r3 > var_r22_2)))
                     {
                         var_r0_2 = mnDiagram_GetVisibleNameCursorFrom(
-                            assets->sorted_fighters, arg1_r, var_r30);
+                            sorted, arg1_r, var_r30);
                         if (var_r22_2 == 7) {
                             var_r17_4 = mnDiagram_GetNameTotalKOs(var_r0_2);
                             mnDiagram_80241E78(gobj, (u8) var_r22_2,
                                                (u8) var_r30, var_r17_4);
                         } else {
                             var_r17_6 = mnDiagram_GetVisibleNameCursorFrom(
-                                assets->sorted_fighters, arg2_r, var_r22_2);
+                                sorted, arg2_r, var_r22_2);
                             mnDiagram_80241E78(
                                 gobj, (u8) var_r22_2, (u8) var_r30,
                                 GetPersistentNameData((u8) var_r0_2)
@@ -2484,6 +2487,7 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
             if (var_r17_7 > var_r30) {
                 var_r22_3 = 0;
                 do {
+                    sorted = mnDiagram_804A0750.sorted_fighters;
                     if (var_r22_3 != 7) {
                         var_r17_8 = 0;
                         var_r18_10 = 0;
@@ -2501,11 +2505,11 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
                     block_83:
                         var_r18_11 = var_r30;
                         var_r17_9 = arg1_r;
-                        var_r16_5 = &assets->sorted_fighters[arg1_r];
+                        var_r16_5 = &sorted[arg1_r];
                     loop_91:
                         if (var_r18_11 >= 0) {
                             if (var_r18_11 == 0) {
-                                var_r23 = assets->sorted_fighters[var_r17_9];
+                                var_r23 = sorted[var_r17_9];
                             } else {
                                 var_r15_2 = var_r16_5;
                             loop_87:
@@ -2544,11 +2548,11 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
                         } else {
                             var_r18_12 = var_r22_3;
                             var_r17_11 = arg2_r;
-                            var_r16_7 = &assets->sorted_fighters[arg2_r];
+                            var_r16_7 = &sorted[arg2_r];
                         loop_108:
                             if (var_r18_12 >= 0) {
                                 if (var_r18_12 == 0) {
-                                    var_r24 = assets->sorted_fighters[var_r17_11];
+                                    var_r24 = sorted[var_r17_11];
                                 } else {
                                     var_r15_3 = var_r16_7;
                                 loop_104:
