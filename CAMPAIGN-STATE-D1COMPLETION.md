@@ -967,3 +967,22 @@ Mechanical re-bootstrap only (no matching, no triage). HEAD `ea5da317c`, tree cl
 
 ### STALE-BASE FLAG — CLEARED
 The 3-commits-stale coder1 base is RESOLVED. coder1 now hunts the 95.39 residual (per the windows-round census: the +284/+288 GetNameTotalKOs-preheader scheduling transposition, the r3/r6 arg-copy COALESCING order at +0f0/+1cc/+478, and the ~180-line register-only coloring cascade). The endgame lever is the value-home-vs-arg coalesce, NOT register tiebreaks (RECOMMENDATION #3) — reflected in the `perm_temp_for_expr` bump.
+
+---
+
+## PERMUTER TRIAGE 3 — 8024227C harvest + STOP (2026-06-12, permuter triage round 3 agent)
+
+Branch `claude/mndiagram-802427B4-investigation` (HEAD was `b8eced96f`, the order-class census). 4 builds used (1 baseline + 3 levers; the Create build re-verified 8024227C unchanged). Authoritative baseline sweep saved at `/tmp/mndiagram_baseline_triage3.json` (72 mnDiagram fns; 53 at 100% incl. mnDiagram_CursorProc). All protected functions held across all three commits (pre-commit "Match regressions" gate passed each time).
+
+### JOB — `mnDiagram_8024227C-coder1-20260612-013111`
+| Field | Value |
+|-------|-------|
+| Iters at triage | ~143,580 → final frozen **152,608** (stopped) |
+| Base score | 1560 (#558-verified) |
+| **Best score** | **1345** (3 copies output-1345-1/2/3), Δ-215 vs base |
+| Candidate triage | 1345-1 = `var_r0_2` type `s32`→`unsigned long long` (KEPT — see below); 1345-2 = recompute `is_name != 0` loop-invariant per `do`-iteration (REJECT, non-idiomatic register-juggle hack); 1345-3 = five no-op `& 0xFFFFFFFFFFFFFFFF` masks on the assignment (REJECT, no-op masks). All 3 score 1345 by different register nudges; the rest of every diff is pure brace-style whitespace reflow (normalize before diffing — raw `diff` is useless on coder1's reformatted base). |
+| **COMMIT** | **`f256959e4` — 95.39 → 96.03 (Δ+0.64).** `var_r0_2` widened to `unsigned long long`. The temp only ever holds a `(u8)`-masked cursor (0..255), always re-cast `(u8)` or passed by value at its two uses (`mnDiagram_GetNameTotalKOs`, `GetPersistentNameData((u8) var_r0_2)`), so the wider declaration is **value-identical** (no upper-bit garbage is ever read) — it only changes coloring on the indexed-struct-pointer-materialization path (census class for 8024227C). The committed body is already m2c-placeholder-named (`var_rNN`), so this is not *more* unshippable than the existing partial; revisit the type when the fn is cleaned/PR'd. Truth gate: residual reclassified census `indexed-struct-pointer-materialization` → `stack-layout` (PAD_STACK 24) — the materialization residual is gone, stack-layout is the next wall. |
+| KEEP/STOP | **STOP.** Recent-8000-iter floor = **1520** (best 1345 NOT re-found; 316× at base 1560) → converged. Plus the committed lever makes the base STALE (#558). Re-bootstrap against 96.03 source is an orchestrator call. **Freed: coder1 (16 threads).** |
+
+### CROSS-REF
+mndiagram2 jobs (UpdateHeader, Create) triaged in the same round — see **CAMPAIGN-STATE-D2COMPLETION.md → PERMUTER TRIAGE 3**. Rotation ranking is recorded there (single canonical copy).

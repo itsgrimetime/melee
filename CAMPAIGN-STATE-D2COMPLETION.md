@@ -1644,3 +1644,38 @@ Both jobs verified ALIVE (iterations advancing; remote base scores match the loc
 ### #424 / #575 BOOTSTRAP NOTES (both clean — NO injection, NO hand-fixes)
 - **#424 N/A for both.** Target asm `bl`s every same-TU callee directly: UpdateHeader (asm 141-250) → `mnDiagram_GetNameByIndex/GetFighterByIndex/mnDiagram_80242B38/HSD_*/gm_*/lb_8000B1CC`; Create (asm 1747-1905) → `GObj_Create/HSD_*/mnDiagram2_CreateStatRow/mnDiagram2_InitUserData/mnDiagram2_UpdateHeader/mnDiagram_GetNameByIndex/GetFighterByIndex`. **NEITHER has any inlined same-TU callee** → bootstrap reported `injected_inline_callees: []` for both, `randomize_funcs` = the single function each. No #424 risk.
 - **#575 N/A for both.** No `inline #undef __FILE__` fusion and no undefined macro constants in either base.c (hazard scan clean). Both compiled on iter 1 (0 errors). No hand-fix applied.
+
+---
+
+## PERMUTER TRIAGE 3 — mndiagram2 harvest (UpdateHeader + Create) + STOP-all (2026-06-12, permuter triage round 3 agent)
+
+Branch `claude/mndiagram-802427B4-investigation` (HEAD was `b8eced96f`). 4 builds across the round (shared with the 8024227C job — see CAMPAIGN-STATE-D1COMPLETION.md → PERMUTER TRIAGE 3). Authoritative baseline sweep `/tmp/mndiagram_baseline_triage3.json` (53 mnDiagram 100%s incl. mnDiagram_CursorProc; every partial at/above its floor). All protected functions held across all commits; each commit cleared the pre-commit "Match regressions" gate. The order-class census (`docs/superpowers/order-targets/census-2026-06-12/`) classifies these residuals — used to ground triage + rotation: UpdateHeader=`instruction-sequence`, Create excluded (≈.data-anchor floor), GetRankedName=`indexed-struct-pointer-materialization`, AggRank=`instruction-sequence`, 80241E78=`stack-layout`, 802417D0=`register-allocation`, 8023FC28=`data-symbol-or-relocation`.
+
+### JOB — `mnDiagram2_UpdateHeader-coder3-20260612-013339`
+| Field | Value |
+|-------|-------|
+| Iters | ~100,580 → final frozen **107,145** (stopped) |
+| Base / best | base 335 → **best 160** (output-160-1), Δ-175 |
+| Lever | **CSE-hoist** (validated node-introduction / instruction-sequence channel): cache `GetNameText(name)` into a local computed right after the `lb_8000B1CC` pos block (before the font/color/pos stores), use it at the name-mode `HSD_SisLib_803A6B98` call. The cached call is now UNCONDITIONAL, but `GetNameText` is a pure, bounds-guarded accessor (`IsNameValid` + `GetPersistentNameData(slot)->namedata`, NO side effects, verified in mnname.c:91) whose result is discarded in the fighter-mode path → **behaviorally inert**. candidate-audit `plausible-C-shape`, `risks:[]`. |
+| **COMMIT** | **`4ca2ec9ce` — 95.15 → 95.46 (Δ+0.31).** Local named `name_str` (rename of permuter `new_var`; codegen-inert, re-verified in the Create build). Residual stays `signature-type-mismatch` (the 6 relocation-paired lines + pre-existing PAD_STACK 8). |
+
+### JOB — `mnDiagram2_Create-coder3-20260612-013355`
+| Field | Value |
+|-------|-------|
+| Iters | ~81,380 → final frozen **86,472** (stopped) |
+| Base / best | base 1190 → **best 1085** (REJECTED) → next-clean **1115** |
+| **AUTO-REJECT** | output-1085-1 (the all-time best) hoists `HSD_JObjReqAnimAll(jobj, …)` to **before `jobj = HSD_JObjLoadJoint(...)`** → **use-before-def of `jobj`** (reads an uninitialized stack slot). Higher score from reading garbage = the classic permuter trap; candidate-audit did NOT catch it (`plausible-C-shape`, no dataflow). Also rejected: output-1110 (`inline_fn` HSD_MemAlloc-wrapper = #424 placeholder-leak), output-1120 (`&archive->x4` address-of/deref alias, weaker score). |
+| Lever (1115) | **alias + decl reorder**: `Diagram2 *new_var = user_data;` (never reassigned → value-identical) read in the FIRST `is_name` block; `user_data` decl moved below `int j`. Pure coloring nudge. Safe. |
+| **COMMIT** | **`0b5e9ca2e` — 98.43 → 98.54 (Δ+0.11).** Residual reclassified `data-symbol-or-relocation` = the **unreachable `HSD_ASSERTREPORT("Can't get user_data.\n")` .data anchor floor** (predicted ≈98.43, confirmed). The +0.11 is the coloring nudge; the anchor caps further .text-only progress. |
+
+### KEEP/STOP — ALL THREE STOPPED (round freed coder1 ×16 + coder3 ×16)
+All three jobs **converged**: in the most recent 8000 iters, none re-found its all-time best (recent floors 1520 / 195 / 1125 all ABOVE the bests 1345 / 160 / 1085; base-score hits dominate — 316× / 214× / 393×). Compounding: the committed levers now make all three bases **STALE (#558)** — they were running against pre-improvement source; their best discoveries are banked. STOP is correct on both axes. Re-bootstrapping any of them against the improved source is an **orchestrator decision**, not auto-resubmit.
+
+### ROTATION RANKING (rank only — orchestrator allocates the freed channels)
+Grounded in THIS round's candidate-stream evidence (which residual CLASSES the permuter cracked cleanly vs emitted only hacks/floors) crossed with the census classification:
+
+1. **mnDiagram2_GetAggregatedFighterRank (AggRank) 94.11** — census `instruction-sequence`, the SAME class UpdateHeader's clean CSE-hoist cracked this round (+0.31). Lowest % in the set (most headroom) + the "two adjacent transpositions" characterization (D2COMPLETION:1342) is exactly a statement/CSE-order shape the permuter explores. **Most permuter-amenable.** (Caveat: prior note flagged LOW yield as ig-order ceilings; the instruction-sequence class evidence this round argues for a re-look.)
+2. **mnDiagram2_GetRankedName 97.87** — census `indexed-struct-pointer-materialization`, the SAME class 8024227C's u64-temp lever cracked this round (+0.64). The `subf.`+`mr` j-guard +1 (D2COMPLETION:1285) is a small, closed residual; an indexed-pointer/temp-width nudge may move it. Pair-aware: shares its class with GetRankedFighter (94.58). **2nd.**
+3. **mnDiagram_80241E78 98.94** — census `stack-layout`. 8024227C's residual SHIFTED INTO stack-layout after its lever, i.e. stack-layout is reachable-adjacent but PAD_STACK-territory; permuter can sometimes dissolve a frame gap via temp lifetimes, but lower-confidence. **3rd.**
+4. **mnDiagram_802417D0 98.03** — census `register-allocation`. This round the register-allocation/coloring class yielded only marginal alias nudges (Create +0.11) and unshippable hacks (8024227C's rejected no-op-mask / loop-recompute). **Low amenability.**
+5. **mnDiagram_8023FC28 97.82** — census `data-symbol-or-relocation`. Same class as Create's post-lever floor — the permuter cannot reach .data/relocation anchors. **Lowest amenability** (likely a data-round target, not a permuter target).
