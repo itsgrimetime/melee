@@ -7587,7 +7587,23 @@ def remote_list(
         _remote_error(exc)
 
     if not jobs:
-        print("No remote permuter jobs found.")
+        live_entries: list[permuter_remote.RemotePsEntry] = []
+        if not dead:
+            try:
+                live_entries = permuter_remote.remote_ps(
+                    _remote_load_targets(),
+                    timeout=timeout,
+                )
+            except permuter_remote.RemoteConfigError:
+                live_entries = []
+        if live_entries:
+            print("No local remote permuter job metadata found, but live tmux sessions exist.")
+            print("LIVE REMOTE SESSIONS WITHOUT LOCAL METADATA")
+            _print_remote_ps_entries(live_entries)
+            print()
+            print("Use `melee-agent debug permute remote ps` for the live occupancy view.")
+        else:
+            print("No remote permuter jobs found.")
         return
 
     # Probe which are active
@@ -7959,7 +7975,10 @@ def remote_ps(
         print("No active remote permuter sessions found.")
         return
 
-    # Header
+    _print_remote_ps_entries(entries)
+
+
+def _print_remote_ps_entries(entries: list[permuter_remote.RemotePsEntry]) -> None:
     print(f"{'TARGET':<10} {'FUNCTION':<35} {'JOB_ID':<45} {'BEST':>8} {'ITERS':>8} {'AGE':>8} {'VERDICT':<12} FLAGS")
     print("-" * 140)
     for e in entries:

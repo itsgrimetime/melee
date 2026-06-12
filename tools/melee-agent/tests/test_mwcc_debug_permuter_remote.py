@@ -2433,6 +2433,71 @@ def test_remote_list_cli_active_dead_mutually_exclusive(
     assert "mutually exclusive" in result.stderr
 
 
+def test_remote_list_cli_shows_live_sessions_when_metadata_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = pr.RemoteTarget(
+        name="coder1",
+        ssh="coder1.example",
+        remote_melee_root="/remote/melee",
+        remote_perm_root="/remote/decomp-permuter",
+        threads=16,
+        session_prefix="melee-perm",
+    )
+    entry = pr.RemotePsEntry(
+        target="coder1",
+        session_name="melee-perm-fn_80000000-coder1-20260611-065847",
+        job_id="fn_80000000-coder1-20260611-065847",
+        function="fn_80000000",
+        best_score="123",
+        iterations="456",
+        age="2h03m",
+        verdict="descending",
+    )
+
+    monkeypatch.setattr(pr, "list_jobs", lambda jobs_dir=None: [])
+    monkeypatch.setattr(pr, "load_targets", lambda config_path: {"coder1": target})
+    monkeypatch.setattr(pr, "remote_ps", lambda targets, timeout=10.0: [entry])
+
+    result = CliRunner().invoke(app, ["debug", "permute", "remote", "list"])
+
+    assert result.exit_code == 0
+    assert "No local remote permuter job metadata found" in result.stdout
+    assert "LIVE REMOTE SESSIONS WITHOUT LOCAL METADATA" in result.stdout
+    assert entry.job_id in result.stdout
+    assert "descending" in result.stdout
+
+
+def test_remote_ps_cli_outputs_live_dashboard(monkeypatch: pytest.MonkeyPatch) -> None:
+    target = pr.RemoteTarget(
+        name="coder1",
+        ssh="coder1.example",
+        remote_melee_root="/remote/melee",
+        remote_perm_root="/remote/decomp-permuter",
+        threads=16,
+        session_prefix="melee-perm",
+    )
+    entry = pr.RemotePsEntry(
+        target="coder1",
+        session_name="melee-perm-fn_80000000-coder1-20260611-065847",
+        job_id="fn_80000000-coder1-20260611-065847",
+        function="fn_80000000",
+        best_score="123",
+        iterations="456",
+        age="2h03m",
+        verdict="descending",
+    )
+
+    monkeypatch.setattr(pr, "load_targets", lambda config_path: {"coder1": target})
+    monkeypatch.setattr(pr, "remote_ps", lambda targets, timeout=15.0: [entry])
+
+    result = CliRunner().invoke(app, ["debug", "permute", "remote", "ps"])
+
+    assert result.exit_code == 0
+    assert entry.job_id in result.stdout
+    assert "descending" in result.stdout
+
+
 # ── remote fetch --all ───────────────────────────────────────────────────────
 
 
