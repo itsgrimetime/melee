@@ -16,7 +16,7 @@ Complete all 9 functions in `src/melee/mn/mndiagram3.c` to 100%.
 | fn_80246E64 | 0xA8 | **100%** | matched (PROTECTED) |
 | fn_80246F0C | 0x20 | **100%** | matched (PROTECTED) |
 | mnDiagram3_80246F2C | 0xDC | **100%** | matched (PROTECTED) |
-| **mnDiagram3_80247008** | 0x144 (324B) | **97.22%** | OPEN — single root cause (data string-pool). See Map 1. |
+| **mnDiagram3_80247008** | 0x144 (324B) | **100%** | MATCHED (iteration 3, data linking f66cc758a) |
 | **mnDiagram3_8024714C** | 0x378 (888B) | **86.64%** | OPEN — main target. See Map 2. |
 | mnDiagram3_80245BA4 | 0x618 (1560B) | 90.56% | OPEN — not yet mapped (driver task) |
 | fn_802461BC | 0xB84 (2948B) | 98.42% | OPEN — big-body register endgame, do LAST |
@@ -135,6 +135,47 @@ After this dual map, recommended order for the remaining four:
 1. fneg/bl transposition: mechanism KNOWN (prop must skip the subtract while the scheduler sinks only the fneg); the comma spelling reproduces it but costs +2 instrs elsewhere — find the zero-cost spelling (may interact with the decl-order lever: with f30/f31 swapped, RA may flip row1.y to volatile f0 and force the target emission naturally).
 2. sp48@80 vs 72: try splitting the pad around sp48 (8B local declared before sp48 + PAD_STACK(8) after) or decl-order moves; pure byte accounting, graph-inert.
 3. Callee-save relabel: decl-order permutation (sp48/data/gobj/row0/archive/row_spacing/neg_spacing/i) — the InputProc band model applies (locals number in REVERSE decl order).
+
+---
+
+## Iteration 3 (driver 1) — 80247008 data linking, EXEMPLAR-FIRST (user ruling)
+
+### THE EXEMPLAR PATTERN (review contract — extracted BEFORE applying)
+
+Exemplars (fully-linked TUs, `metadata.complete` in report.json, .data fuzzy 100): **ftparts** (named .data objects THEN assert strings — mndiagram3's exact shape), **mngallery** (same mn module, same `"Can't get user_data.\n"` ASSERTREPORT string, all-string .data), **eflib** (named object BETWEEN string pools — proves emission-order rule).
+
+1. **Named .data objects** = plain (non-static, non-const) initialized file-scope definitions in the .c, in ADDRESS ORDER, placed so source position matches retail emission order (ftparts.c:30-32; eflib.c:1042 carries the in-tree comment "// must be placed here for data ordering reasons..."). Objects preceding all strings go at top-of-file after includes.
+2. **Assert/OSReport strings** = BARE literals at the macro call sites. NEVER struct-wrapped, NEVER named externs, NEVER base+offset math. The compiler emits them into .data after the named definitions; MWCC addresses both off the section anchor naturally.
+3. **symbols.txt**: named objects `scope:global` with TRUE sizes (no string-swallowing); each string = the compiler's local id: `@NNN = .data:0xADDR; // type:object size:0xS scope:local data:string` (ftparts @225/@230/@404; @ numbers are per-TU local symbol ids from the actual build — read them from the compiled object).
+4. **Header**: externs stay in the TU header (mndiagram3.static.h), like ftparts' globals.
+5. **Struct shapes model only the real object.** EXEMPLAR-WINS conflict resolution: the prior session's StatTable tail char arrays (x50/x68/x78, string-swallowing) are NON-canonical — drop them; `mnDiagram3_803EEC4C` true size = 0x60 (48 u16 indices; reference bytes end at +0x60, strings start there).
+
+### Reference data (byte-verified from build/GALE01/obj/melee/mn/mndiagram3.o .data dump)
+- `mnDiagram3_803EEC10` AnimLoopSettings `{ 10.0F, 19.0F, -0.1F }` (41200000 41980000 BDCCCCCD)
+- `mnDiagram3_803EEC1C` AnimLoopSettings `{ 0.0F, 199.0F, 0.0F }` (00000000 43470000 00000000)
+- `mnDiagram3_803EEC28` PosTable `{ {3.3F,.5F,0}, {-2.0F,.57F,0}, {8.0F,.57F,0} }` (40533333/3F000000/0, C0000000/3F11EB85/0, 41000000/3F11EB85/0 — all 10 encodings python-struct-verified)
+- `mnDiagram3_803EEC4C` u16[48]: 62..79, 7A 7A 7A 7C 7C 7C 7C 7C, 7A 7A 7A FFFF 7C 7B 7E 7E, 7E 7E 7D 7D 7D 7B 7B 7B
+- Strings (4-aligned tail): 0x803EECAC "Can't get user_data.\n" (0x16), 0x803EECC4 "mndiagram3.c" (0xD), 0x803EECD4 "user_data" (0xA)
+- BEFORE state: .data fuzzy 38.76 (208B), matched_data 16/272, function 97.22
+
+### Iteration-3 RESULT (data linking APPLIED)
+
+- **mnDiagram3_80247008: 97.22 → 100.00** (instruction-identical; checkdiff + report.json agree)
+- **TU .data section: 38.76 → 100.0** (byte-identical 208B; our object now byte-matches the retail dump including string placement at 0x9C/0xB4/0xC4)
+- matched_data 16 → 224 of 272 (residual = .sdata2 40B @ 71.875 + .sbss, out of scope)
+- All protected functions HOLD (5×100, 8024714C 89.7, 80245BA4 90.53, fn_802461BC 98.42); build exit 0
+- Commit: `f66cc758a` (src + static.h + symbols.txt, upstream-visible wording)
+- @330/@331/@332 local ids did NOT shift when the definitions were added (predicted risk, did not materialize)
+- Housekeeping: `#define __FILE__ "jobj.h"` block (now lines ~411/439) is PRE-EXISTING (campaign tip has it) and LOAD-BEARING (produces the matching .sdata "jobj.h"/"jobj" assert strings); no builtin-macro warning in the build log. Left as is.
+
+## THE DATA-LINKING RECIPE (generalizable; first instance = f66cc758a)
+
+1. **SURVEY**: `report.json` → units with `metadata.complete` (fully linked); filter to ones using the same macro family (HSD_ASSERT/ASSERTREPORT/OSReport) and a `.data` section. Read 2-3: how objects are defined, where strings sit, symbols.txt entry style. (Exemplars here: ftparts = named-objects-then-strings; mngallery = all-strings; eflib = emission-order comment.)
+2. **PATTERN** (write it down first — review contract): plain initialized globals in the .c at the position matching retail emission order; bare string literals at macro sites; symbols.txt true sizes + `@NNN scope:local data:string` entries; externs stay in the TU header; structs model only the real object.
+3. **APPLY**: byte-derive initializers from the reference object dump (`build/GALE01/obj/.../<tu>.o`, python-struct-verify every float); define; fix struct shapes; build; objdump our `.o` to confirm byte-identity + read the ACTUAL local @ ids; THEN write symbols.txt; configure+ninja (symbols.txt feeds the expected-side split).
+4. **SECTION-GATE**: report.json before/after — the unit's `.data` fuzzy + matched_data must improve; every sibling function must hold; protected set hard-stop.
+
+**Transfer targets**: mndiagram2.c is in the IDENTICAL extern state (mnDiagram2_803EEAD0/_803EEB60 UND, reference defines them, @-strings after — same shape); its strings: 0x60-blob + "Can't get user_data.\n" family. Apply the same recipe when that TU's campaign opens.
 
 ---
 
