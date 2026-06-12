@@ -1130,3 +1130,64 @@ Full detail (per-job table, the OnFrame force-phys decision, #424/#575 notes, #5
 - **ONFRAME FORCE-PHYS = audited, fell back.** `debug target score-force-phys` EXISTS and wired+validated LOCALLY (base.o scores 1000000 = 0/1 hits, correctly polarized for the proven `49:28` r28 flip), but is **NOT remotely supported** → **#595 filed**: stale remote `melee-agent` (both hosts) lacks `score-force-phys`; doctor PATH false-negative (fish vs bash login); setup writes absolute `/Users/` paths not remote-ready (hand-fixed to relative). Standard objdiff reaches 0=byte-match on OnFrame locally + move-axis weights = the oracle's axis, so the fallback targets the right lever. Re-submit with the custom scorer once #595 lands.
 - **#424 verified for 80241E78:** the brief's precaution (GetVisibleNameCursorFrom/GetDigitCount-era inlines) did NOT apply — 80241E78 `bl`s only `__assert`+`mn_GetDigitCount`, no inline body to inject; base 555 (low) = injection-clean. **#575 applied for OnFrame** (UNUSED-PAD_STACK dup-define removed; re-applied after the standard re-bootstrap).
 - **8024227C @96.09 PARKED** this wave (marginal; scheduler-tiebreak wall).
+
+---
+
+## ONFRAME PORT — mnDiagram_OnFrame 99.72 → 100 (2026-06-12, OnFrame byte-match port agent)
+
+**LANDED: `mnDiagram_OnFrame` 99.71875 → 100.0, instruction-identical. Commit `2c1d78f13`.**
+
+### Provenance
+The local decomp-permuter verify-run on `mnDiagram_OnFrame` produced **four score-0
+(byte-match) candidates** in `decomp-permuter/nonmatchings/mnDiagram_OnFrame/output-0-{1,2,3,4}/`.
+Each candidate carries TWO mutations: one in `mnDiagram_OnFrame` (cosmetic NOISE — a
+constant-fold no-op such as `row_idx = 8; row_idx = indices >> row_idx`, `jobjs[(((2 & 0xFFFF)…))]`,
+a redundant `jobj` alias, or a `(short)(… == 0x1E)` cast) and one in the inlined
+`mnDiagram_UpdateScrollArrowVisibility` (`perm_temp_for_expr` — a **`new_var` alias of
+`data` = the inlined helper's own `user_data` materialization**). All four route 1–3 of
+the helper's `((HSD_JObj**)data)[i]` reads through the alias instead. The *helper-side
+alias is the load-bearing lever*; the OnFrame-side mutations are independent no-ops.
+
+This is exactly RE-OPEN CONDITION #1 from the prior "WHY THE MISS" deep-dive: the residual
+node ig49 is **the inlined `UpdateScrollArrowVisibility`'s own re-read of `gobj->user_data`**,
+which an OnFrame-LOCAL alias can never reach (the prior round's OnFrame-side alias CSE'd
+away at OnFrame's low tail pressure). Placed *inside the helper body*, the second
+materialization survives and shifts the inline-merge interference-graph coloring to retail.
+The 5th win in the file's permuter-alias channel.
+
+### The peel / candidate selection
+Picked **output-0-1** as the minimal clean lever: plain `void* new_var; … new_var = data;`
+(same type as `data`, no cast), placed naturally after the existing `data` decl + PAD_STACK,
+routing `[8]` (count<=7 if), `[8]` (count<=7 else), `[5]` (count<=10 if) through `new_var`;
+all other reads stay `data`. Chosen over the single-read output-0-3/4 because (a) its OnFrame
+companion mutation is a transparent constant-fold no-op (highest confidence the helper alias
+alone is the lever) and (b) multiple reads give the alias more weight / robustness. The
+OnFrame-side noise was NOT ported (not the lever, reviewer-ugly).
+
+### ATTEMPT 1 LANDED — shared body, no twin needed
+`mnDiagram_UpdateScrollArrowVisibility` is a 100%-matched STANDALONE that OnFrame inlines;
+the alias was added to the **shared body** (risking the standalone's bytes). It held:
+- `mnDiagram_OnFrame`: 99.71875 → **100.0** (checkdiff `match=true instruction-identical`)
+- `mnDiagram_UpdateScrollArrowVisibility`: 100.0 → **100.0** (checkdiff `match=true instruction-identical`) — **standalone did NOT regress.**
+
+The ATTEMPT-2 twin (`…VisibilityInline` carrying the alias, called only from OnFrame's site)
+was therefore unnecessary. The `void* new_var = …` alias style is also established precedent
+in this exact file (committed permuter wins at lines ~1144/1153/1168), so this is consistent
+with existing matched code — no PENDING-REVIEW entry required.
+
+### Protected sweep — CLEAN
+report.json baseline (HEAD `4d6726568`) vs post-change build: **zero regressions**, all **53**
+prior 100%-matched mndiagram functions preserved, only `mnDiagram_OnFrame` improved. Named
+floors all held exactly: AggRank 95.72, GetRankedName 98.62, 8024227C 96.09, InputProc 98.89,
+80241E78 98.94, 802427B4 98.84, mndiagram3 set unchanged. Change is confined to `mndiagram.c`
+(single TU → no other object can be affected). Pre-commit "Match regressions" gate also passed.
+
+### MOOT-JOB FLAG
+The **wave-3 OnFrame remote permuter job (coder1 `mnDiagram_OnFrame-coder1-20260612-080530`)
+is now MOOT** — the local verify-run already found the byte-match and it is committed.
+**RECOMMEND: stop that OnFrame job at the next triage.** The AggRank job sharing coder1
+(`…-081320`) is independent and CONTINUES.
+
+### FENCES HONORED
+OnFrame + the shared helper only. No permuter ops. No PAD_STACK added. One bounded iteration
+(Attempt 1 succeeded; Attempt 2 not needed). Full protected sweep gated the single commit.
