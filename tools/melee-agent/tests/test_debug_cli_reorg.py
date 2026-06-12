@@ -3234,6 +3234,78 @@ def test_frame_reservations_cli_text_reports_allocation_trace(tmp_path: Path) ->
     )
 
 
+def test_frame_reservations_missing_function_lists_small_dump_symbols(
+    tmp_path: Path,
+) -> None:
+    pcdump = tmp_path / "pcdump.txt"
+    pcdump.write_text(textwrap.dedent("""\
+        Starting function mnDiagram3_80245BA4
+        Starting function mnDiagram3_80246D40
+        Starting function fn_80246E04
+        Starting function fn_80246E64
+        Starting function fn_80246F0C
+        Starting function mnDiagram3_80246F2C
+        Starting function mnDiagram3_80247008
+        Starting function mnDiagram3_8024714C
+        Starting function fn_802461BC
+    """))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "frame-reservations",
+            "-f",
+            "mnDiagram3_HandleInput",
+            str(pcdump),
+            "--no-expected",
+        ],
+    )
+
+    assert result.exit_code == 3
+    assert "function 'mnDiagram3_HandleInput' not found in pcdump" in result.stderr
+    assert "Functions in this dump:" in result.stderr
+    assert "fn_802461BC" in result.stderr
+    assert "semantic alias" in result.stderr
+
+
+def test_suggest_frame_missing_function_lists_small_dump_symbols(
+    tmp_path: Path,
+) -> None:
+    pcdump = tmp_path / "pcdump.txt"
+    pcdump.write_text(textwrap.dedent("""\
+        Starting function mnDiagram3_80245BA4
+        Starting function mnDiagram3_80246D40
+        Starting function fn_80246E04
+        Starting function fn_80246E64
+        Starting function fn_80246F0C
+        Starting function mnDiagram3_80246F2C
+        Starting function mnDiagram3_80247008
+        Starting function mnDiagram3_8024714C
+        Starting function fn_802461BC
+    """))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "suggest",
+            "frame",
+            "-f",
+            "mnDiagram3_HandleInput",
+            str(pcdump),
+            "--no-expected",
+        ],
+    )
+
+    assert result.exit_code == 3
+    assert "function 'mnDiagram3_HandleInput' not found in pcdump" in result.stderr
+    assert "Functions in this dump:" in result.stderr
+    assert "fn_802461BC" in result.stderr
+    assert "semantic alias" in result.stderr
+
+
 def test_frame_reservations_cli_reports_stack_home_assignments(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

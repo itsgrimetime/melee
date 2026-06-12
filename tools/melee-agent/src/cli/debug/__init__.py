@@ -4707,6 +4707,8 @@ def frame_reservations(
             current_asm_text=current_text,
         )
     except ValueError as exc:
+        if "not found in pcdump" in str(exc):
+            _abort_frame_function_not_in_dump(function, pcdump_text)
         typer.echo(str(exc), err=True)
         raise typer.Exit(2) from exc
 
@@ -6033,6 +6035,8 @@ def suggest_frame_cmd(
             current_asm_text=current_text,
         )
     except ValueError as exc:
+        if "not found in pcdump" in str(exc):
+            _abort_frame_function_not_in_dump(function, pcdump_text)
         typer.echo(str(exc), err=True)
         raise typer.Exit(2) from exc
     unit = _find_unit_for_function(function, melee_root)
@@ -8512,11 +8516,29 @@ def _abort_function_not_in_dump(function: str, available_names: list[str]) -> No
     raise typer.Exit(3)
 
 
+def _abort_frame_function_not_in_dump(function: str, pcdump_text: str) -> NoReturn:
+    available_names = [fn.name for fn in parse_pcdump(pcdump_text)]
+    _emit_function_not_in_dump(
+        function,
+        available_names,
+        include_available_sample=True,
+        hint=(
+            "Hint: this pcdump does not contain the requested function name. "
+            "If it came from campaign notes or a semantic alias, retry with "
+            "the canonical symbol listed above; otherwise regenerate coverage "
+            "with `debug dump remote <c_file>` or `debug dump local <c_file>` "
+            "after source/cache changes."
+        ),
+    )
+    raise typer.Exit(3)
+
+
 def _emit_function_not_in_dump(
     function: str,
     available_names: list[str],
     *,
     hint: Optional[str] = None,
+    include_available_sample: bool = False,
 ) -> None:
     typer.echo(f"function '{function}' not found in pcdump.", err=True)
     suggestions = _suggest_similar_functions(function, available_names)
@@ -8525,16 +8547,25 @@ def _emit_function_not_in_dump(
         typer.echo("Did you mean one of these?", err=True)
         for s in suggestions:
             typer.echo(f"  - {s}", err=True)
-    else:
-        # No close matches — show a sample
+    if include_available_sample or not suggestions:
         typer.echo("", err=True)
-        sample = available_names[:8]
+        sample_limit = 12
+        sample = available_names[:sample_limit]
         if sample:
-            typer.echo(f"Sample of {len(available_names)} functions in this dump:", err=True)
+            if len(available_names) <= sample_limit:
+                typer.echo("Functions in this dump:", err=True)
+            else:
+                typer.echo(
+                    f"Sample of {len(available_names)} functions in this dump:",
+                    err=True,
+                )
             for s in sample:
                 typer.echo(f"  - {s}", err=True)
-            if len(available_names) > 8:
-                typer.echo(f"  ... +{len(available_names) - 8} more", err=True)
+            if len(available_names) > sample_limit:
+                typer.echo(
+                    f"  ... +{len(available_names) - sample_limit} more",
+                    err=True,
+                )
     typer.echo("", err=True)
     if hint is None:
         hint = (
