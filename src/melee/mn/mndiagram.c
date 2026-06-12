@@ -2430,7 +2430,7 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
     s32 var_r3;
     s32 var_r17_4;
     s32 var_r19_5;
-    s32 var_r0_2;
+    unsigned long long var_r0_2;
     s32 var_r17_6;
     s32 var_r23;
     u8 var_r24;
