@@ -542,3 +542,75 @@ GetRankedFighter 94.58, **GetAggregatedFighterRank 94.11 (boundary+frame exact)*
 Create 93.75, GetRankedName 97.87, UpdateHeader 94.18, HandleInput 97.46 (WALLED/parked).
 Protected-set sweep (full ninja report.json): all 55 mndiagram/2/3 100s hold; all other
 partials byte-unchanged. Zero collateral.
+
+---
+
+# ITERATION 6 (driver 3, 2026-06-11): CreateStatRow OPENING MAP + top-rung (base-reuse)
+
+## THE ONE QUESTION
+What is mnDiagram2_CreateStatRow's (80.11) divergence structure, and does the top rung land?
+
+## OPENING MAP — classification CORRECTED (the iter-1 read was checkdiff-display-distorted)
+
+**Ground-truth method (important for next drivers):** the default `checkdiff` side-by-side
+ALIGNMENT SLIPS on this +11-instr function — it showed phantom `blt`/`@595`/121-reloc-lines
+and a fictitious inline-boundary ("expected makes 34 calls ours omits"). ALL FALSE. Every
+`bl` is present in both. The `@595/@598/@599` are checkdiff's name-magic renames of
+**anonymous .sdata2 float-pool** entries, NOT missing string links. The real map comes from
+disassembling **both** objdiff objects and diffing with only VA/offset/byte + `.L`-label
+normalization:
+- TARGET (expected)  = `build/GALE01/obj/melee/mn/mndiagram2.o`  (DTK-extracted from DOL) — 421 instrs
+- OURS    (base)     = `build/GALE01/src/melee/mn/mndiagram2.o`  (built from src/) — 432 instrs (+11)
+- objdiff.json confirms target_path=obj/, base_path=src/. (checkdiff's "current" column = OURS.)
+
+**True classification: cached-base re-materialization + flag-register/cast cascade.** NOT
+inline-boundary, NOT data-linking. Zero genuine string/data-symbol link diffs — all symbol
+refs (`mnDiagram2_803EEAD0`, `_804D4FC0`/`FC8` asserts, `_804DBFD0..E8` floats, `_804D4FBC`,
+all `bl` targets) are byte-identical-once-linked. The float-pool `@5xx/@6xx` are anonymous
+.sdata2 residuals that resolve AT match-time (per the mndiagram3 .sdata2-float law — do NOT
+force named float symbols).
+
+## The divergence, in dependency order (root first)
+
+**ROOT (R1) — `base` (`mnDiagram2_803EEAD0`) is materialized 3× in OURS, 1× in TARGET.**
+- TARGET: ONE `lis r3,@ha; addi r31,r3,@l` (line 14) → keeps base in **r31** the whole fn;
+  computes all three `lb_8000B1CC` 2nd-args as `addi r4, r31, 0xC` / `addi r4, r31, 0x18`
+  (offsets from the cached base). The `table` deref also uses it.
+- OURS: materializes base into r30 (line14), then RE-materializes `lis/addi` at the 1st and
+  3rd `lb_8000B1CC` sites (lines 35-36, 276-277), plus an extra `addi r23,r4,0xC; addi r4,r23,0`.
+- CAUSE IN SOURCE: `base = (char*)&mnDiagram2_803EEAD0;` IS cached (src 634), but the three
+  calls pass `(Vec3*) &mnDiagram2_803EEAD0[0xC]` / `[0x18]` (src 644, 667, 733) — indexing the
+  GLOBAL directly, defeating the cache. Fix = `(Vec3*)(base + 0xC)` / `(base + 0x18)`.
+- This is the EARLIEST divergence; it forces the whole r29/r30/r31-vs-r30/r31 + callee-save
+  renumber. Structure-first: collapsing it should cascade-fix much downstream. Lever class =
+  inline-base-cast / cached-base-reuse (MEMORY dispform_inline_base_cast + accessor_macro lever).
+
+**R2 — flag-register in the var_r3/var_r0 if-ladders: OURS `li r0,0/1` + `blt`, TARGET
+`li r3,0/1` + `bge`.** TARGET computes each 0/1 flag in **r3** with `bge` (test-and-branch-to-set,
+default-below), then the immediately-following `stb`/store reuses r3. OURS uses **r0** + `blt`
+(inverted, test-and-fall-through, inline `li`). The four ladders (`>=0x12/>=0xE`, `>=0x18/>=0x15`
+×2, `>=0xC/==3/>=0xE`) all diverge this way. Candidate: the flag must land in a GPR that the
+sink reuses — likely an `int`-vs-`u8` / explicit-temp spelling, OR the ladder result feeds a
+call/store that wants r3. LOWER conviction than R1; re-read after R1 (may re-roll).
+
+**R3 — redundant `clrlwi` at the `mnDiagram2_GetStatValue(is_name_mode, ...)` arg sites.**
+OURS emits `clrlwi r3,r24,24` (re-truncate `(u8)is_name_mode`) before several GetStatValue
+calls (diff lines 105a113, 133, 142a157, plus the `clrlwi r3,r3,24` on a return); TARGET passes
+`addi r3,r24,0` — the arg is already the clrlwi'd `is_name_mode` cached in r24. Source passes
+`is_name_mode` (a `u8` param) directly; MWCC re-truncates. Candidate: the cached `(u8)` form /
+matching GetStatValue's exact prototype arg type so no re-clrlwi. MEDIUM conviction.
+
+**R4 — float-temp stack offsets (0x20/0x24/0x28 vs 0x3c/0x40/0x44) + `stmw r21`(T) vs
+`r23`(O) + frame 0x4c vs 0x54.** TARGET saves r21-r31 (11 saves) yet is SHORTER; OURS saves
+r23-r31 (9) but +11 instrs from re-materialization. Frame/slot offsets are DOWNSTREAM of R1+R4
+register pressure. PAD_STACK(16) present (diagnostic, do NOT ship — replace w/ natural frame).
+Re-read after R1.
+
+## RANKED LEVER LADDER (iteration-6)
+1. **R1: cached-base reuse** — rewrite the 3 `lb_8000B1CC` 2nd-args `&mnDiagram2_803EEAD0[N]`
+   → `(Vec3*)(base + N)`. EARLIEST divergence, highest conviction, structure-first. ← TOP RUNG.
+2. **R3: kill redundant clrlwi** at GetStatValue calls (cache `(u8)is_name_mode` or fix arg type).
+3. **R2: flag-register/comparison-form** in the four if-ladders (r0→r3 / blt→bge spelling).
+4. **R4: frame/callee-save** — falls out of R1+R3 (structure-first); revisit last.
+
+## TOP-RUNG EXECUTION (R1) — see build ledger below.
