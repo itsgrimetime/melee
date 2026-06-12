@@ -6550,7 +6550,11 @@ def _bootstrap_permuter_dir(
 ) -> dict:
     """Bootstrap a decomp-permuter function dir and return action metadata."""
     from ...mwcc_debug.fix_perm_compile import fix_perm_dir
-    from ...mwcc_debug.permuter_config import build_spec, write_settings_toml
+    from ...mwcc_debug.permuter_config import (
+        build_spec,
+        repair_bootstrap_settings_toml,
+        write_settings_toml,
+    )
 
     melee_root = _resolve_bootstrap_melee_root(
         function,
@@ -6660,6 +6664,7 @@ def _bootstrap_permuter_dir(
 
     injected_inline_callees: list[str] = []
     invalidated_base_object = False
+    sanitized_assert_macros = False
     base_path = fn_dir / "base.c"
     if base_path.exists():
         target_asm_text = _read_bootstrap_target_asm(fn_dir, melee_root)
@@ -6678,7 +6683,10 @@ def _bootstrap_permuter_dir(
                 dependency_text=dependency_text,
             )
         )
-        if injected_inline_callees:
+        patched_base, sanitized_assert_macros = (
+            _sanitize_bootstrap_assert_macros(patched_base)
+        )
+        if injected_inline_callees or sanitized_assert_macros:
             base_path.write_text(patched_base, encoding="utf-8")
             stale_base_o = fn_dir / "base.o"
             if stale_base_o.exists():
@@ -6706,8 +6714,19 @@ def _bootstrap_permuter_dir(
         randomize_funcs = recommended_randomize_funcs
         if randomize_funcs is not None:
             randomize_funcs_status = "written"
-    elif recommended_randomize_funcs is not None:
-        randomize_funcs_status = "existing-settings-kept"
+    elif settings_path.exists():
+        repair = repair_bootstrap_settings_toml(
+            settings_path.read_text(encoding="utf-8"),
+            function,
+        )
+        randomize_funcs = repair.randomize_funcs
+        if repair.changed:
+            settings_path.write_text(repair.text, encoding="utf-8")
+            settings_action = "repaired"
+        if randomize_funcs is not None:
+            randomize_funcs_status = "existing"
+        elif recommended_randomize_funcs is not None:
+            randomize_funcs_status = "existing-settings-kept"
 
     return {
         "function": function,
@@ -6726,6 +6745,7 @@ def _bootstrap_permuter_dir(
             "reason": fix_result.reason,
         },
         "injected_inline_callees": injected_inline_callees,
+        "sanitized_assert_macros": sanitized_assert_macros,
         "invalidated_base_object": invalidated_base_object,
         "randomize_funcs": randomize_funcs,
         "recommended_randomize_funcs": recommended_randomize_funcs,
@@ -7039,6 +7059,50 @@ def _bootstrap_inline_definition(function_text: str) -> str:
     if body.startswith("static "):
         return preamble + leading + "static inline " + body[len("static "):]
     return preamble + leading + "inline " + body
+
+
+_BOOTSTRAP_PERMUTER_ASSERT_DEFINE_RE = re.compile(
+    r"^[ \t]*#[ \t]*pragma[ \t]+_permuter[ \t]+define[ \t]+HSD_ASSERT(?:\b|\()",
+    re.MULTILINE,
+)
+_BOOTSTRAP_RAW_ASSERT_DIRECTIVE_RE = re.compile(
+    r"^[ \t]*#[ \t]*(?:define|undef)[ \t]+(?:HSD_ASSERT(?:\b|\()|__FILE__\b)"
+)
+
+
+def _sanitize_bootstrap_assert_macros(base_text: str) -> tuple[str, bool]:
+    """Remove raw assert macro directives that conflict with _permuter define.
+
+    decomp-permuter can carry ``#pragma _permuter define HSD_ASSERT`` safely,
+    but a copied C preprocessor ``#define HSD_ASSERT(... #cond)`` later in the
+    base causes PERM expansion to leave a bare stringizing ``#`` token. Only
+    strip the raw directives when the permuter pragma is already present.
+    """
+    if _BOOTSTRAP_PERMUTER_ASSERT_DEFINE_RE.search(base_text) is None:
+        return base_text, False
+
+    lines = base_text.splitlines(keepends=True)
+    kept: list[str] = []
+    changed = False
+    idx = 0
+    while idx < len(lines):
+        line = lines[idx]
+        if _BOOTSTRAP_RAW_ASSERT_DIRECTIVE_RE.match(line):
+            changed = True
+            while (
+                line.rstrip("\r\n").rstrip().endswith("\\")
+                and idx + 1 < len(lines)
+            ):
+                idx += 1
+                line = lines[idx]
+            idx += 1
+            continue
+        kept.append(line)
+        idx += 1
+
+    if not changed:
+        return base_text, False
+    return "".join(kept), True
 
 
 def _inject_bootstrap_same_tu_inlined_callees(

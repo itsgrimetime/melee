@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import textwrap
+import tomllib
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -5311,6 +5312,53 @@ def test_permuter_bootstrap_inline_definition_preserves_preprocessor_preamble() 
     )
 
 
+def test_permuter_bootstrap_sanitizes_raw_assert_macros_when_permuter_define_exists() -> None:
+    base_text = textwrap.dedent(
+        """\
+        #pragma _permuter define HSD_ASSERT(line,cond) ((cond)?((void)0):__assert("<stdin>",line,#cond))
+        void __assert(char*, unsigned int, char*);
+        #define __FILE__ "jobj.h"
+        #define HSD_ASSERT(line,cond) \\
+            ((cond)?((void)0):__assert(__FILE__,line,#cond))
+        #undef __FILE__
+        #define __FILE__ "<stdin>"
+
+        void fn_80000000(void* jobj)
+        {
+            HSD_ASSERT(932, jobj);
+        }
+        """
+    )
+
+    sanitized, changed = debug_cli._sanitize_bootstrap_assert_macros(base_text)
+
+    assert changed is True
+    assert "#pragma _permuter define HSD_ASSERT" in sanitized
+    assert "#define HSD_ASSERT" not in sanitized
+    assert "#define __FILE__" not in sanitized
+    assert "#undef __FILE__" not in sanitized
+    assert "HSD_ASSERT(932, jobj);" in sanitized
+
+
+def test_permuter_bootstrap_keeps_raw_assert_macro_without_permuter_define() -> None:
+    base_text = textwrap.dedent(
+        """\
+        #define HSD_ASSERT(line,cond) \\
+            ((cond)?((void)0):__assert(__FILE__,line,#cond))
+
+        void fn_80000000(void* jobj)
+        {
+            HSD_ASSERT(932, jobj);
+        }
+        """
+    )
+
+    sanitized, changed = debug_cli._sanitize_bootstrap_assert_macros(base_text)
+
+    assert changed is False
+    assert sanitized == base_text
+
+
 def test_permuter_bootstrap_dependency_context_reads_angle_local_includes(
     tmp_path: Path,
 ) -> None:
@@ -5460,7 +5508,19 @@ def test_debug_permute_bootstrap_reports_kept_settings_randomize_funcs_scope(
     (perm_root / "import.py").write_text("")
     destination = perm_root / "nonmatchings" / "fn_80000000"
     destination.mkdir(parents=True)
-    (destination / "settings.toml").write_text("custom = true\n", encoding="utf-8")
+    (destination / "settings.toml").write_text(
+        textwrap.dedent(
+            """\
+            custom = true
+            compiler_command = "/opt/devkitpro/devkitPPC/bin/mwcceppc.exe"
+            assembler_command = "/opt/devkitpro/devkitPPC/bin/powerpc-eabi-as -mgekko"
+
+            [weight_overrides]
+            perm_reorder_decls = 77.0
+            """
+        ),
+        encoding="utf-8",
+    )
 
     def fake_run(argv, *, cwd=None, capture_output=False, text=False, check=False, **kwargs):
         argv = [str(part) for part in argv]
@@ -5520,7 +5580,15 @@ def test_debug_permute_bootstrap_reports_kept_settings_randomize_funcs_scope(
         "helper_inline",
     ]
     assert payload["randomize_funcs_status"] == "existing-settings-kept"
-    assert (destination / "settings.toml").read_text(encoding="utf-8") == "custom = true\n"
+    assert payload["settings"]["action"] == "repaired"
+    settings_text = (destination / "settings.toml").read_text(encoding="utf-8")
+    settings = tomllib.loads(settings_text)
+    assert settings["custom"] is True
+    assert settings["func_name"] == "fn_80000000"
+    assert settings["objdump_command"] == "melee-agent debug target dtk-objdump"
+    assert "compiler_command" not in settings
+    assert "assembler_command" not in settings
+    assert settings["weight_overrides"]["perm_reorder_decls"] == 77.0
 
 
 def test_debug_permute_bootstrap_force_rewrites_randomize_funcs_scope(
@@ -5675,7 +5743,10 @@ def test_debug_permute_bootstrap_promotes_fresh_worktree_import(
     assert (destination / "base.c").read_text() == "fresh_token from import\n"
     assert (destination / "compile.sh").exists()
     assert (destination / "target.o").read_bytes() == b"target"
-    assert (destination / "settings.toml").read_text() == "custom = true\n"
+    settings = tomllib.loads((destination / "settings.toml").read_text())
+    assert settings["custom"] is True
+    assert settings["func_name"] == "fn_80000000"
+    assert settings["objdump_command"] == "melee-agent debug target dtk-objdump"
     assert (output_dir / "source.c").read_text() == "candidate output\n"
     assert not (melee_root / "nonmatchings" / "fn_80000000-2").exists()
 
