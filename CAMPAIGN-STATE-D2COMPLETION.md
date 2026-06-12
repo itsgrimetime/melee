@@ -1479,3 +1479,150 @@ re-match (GetRankedName/GetRankedFighter) is the prize and the risk, per (c) FUT
 GetRankedFighter 94.58, UpdateHeader 94.18, AggRank 94.11, **CreateStatRow 83.24 (R2 now FULLY
 CLOSED — 4-spelling proof)**. Protected sweep (full report.json): all 55 mndiagram* 100s hold;
 every partial byte-exact vs baseline. Zero collateral.
+
+---
+
+# ITERATION 13 (driver 6, 2026-06-11): the return-width co-flip TRADE — FLIP REFUTED (a new
+# u8-return PIN, byte-attributed) + the discovered SUPERIOR mechanism LANDED (UpdateHeader
+# 94.18 → 95.15, Class A closed at all four sites, ZERO collateral)
+
+## THE ONE QUESTION: does the return-width co-flip (GetNameByIndex/GetFighterByIndex u8→int)
+## yield a NET module win once the regressed pair is re-matched? ANSWER: **NO — and the trade
+## is anti-original.** The target's GetRankedName nested-arg site (`addi r5,r3,0`, a
+## conversion-free u8→u8 handoff of the helper result into GetStatValue's u8 param) BYTE-PINS
+## the original returns as u8: under int returns that site MUST mask (empirical, build 1 —
+## `clrlwi r5,r3,24` with NO cast in source; untrusted returns mask at narrow params). The
+## flip's prize (UpdateHeader Class A) was instead reached WITHOUT the flip via a u8 `name`
+## local + a per-TU u8-param view of GetNameText (mnvibration.c:37 shipped precedent).
+
+## STEP-0 verified: clean tree, HEAD b2c2a5771; baselines exact (UpdateHeader 94.175255,
+## Create 98.42958, GetRankedFighter 94.57792, GetRankedName 97.87313, CreateStatRow 83.24064,
+## AggRank 94.10959, HandleInput 97.460526, GetStatValue 100; 55 mndiagram* 100s).
+
+## THE CALLER MAP (deliverable; every reference to the two helpers, whole-repo verified)
+Definitions: mndiagram.c:141/149 (`lbz r3; blr` bodies — PROTECTED 100s). Declarations:
+mndiagram.h:8-9. ZERO callers in mndiagram.c or mndiagram3.c. ALL call sites in mndiagram2.c:
+
+| Site (line) | Function (baseline %) | Spelling | Target bytes at site | Under int-return flip (build-1 EMPIRICAL) |
+|---|---|---|---|---|
+| 201/203 | UpdateHeader (94.18) | `name = (int) helper()` via `_s`, int name | `mr r31,r3` ×2 (Class A) | **mr ✓ landed** |
+| 217 | UpdateHeader | `80242B38((u8) name, 0)` | `clrlwi r3,r31,24` | ✓ held |
+| 249 | UpdateHeader | `GetNameText(name)` | `mr r3,r31` | ✓ held |
+| 253 | UpdateHeader | `gm_8016400C(name)` (u8 param) | `mr r3,r31` (MASKLESS) | **✗ STILL MASKED** — the brief's expected elision REFUTED: an untrusted int return into a u8 param masks, period |
+| 838/840 | **PopulateStatRows (100, HARD GATE)** | `var_r28 = (u8) helper()`, int local | `clrlwi r28,r3,24` (1-instr fold) | **✗ SPLIT** `clrlwi r0,r3; mr r28,r0` ×2 → **100→95.12 GATE FAIL** (iter-11 law-2 split, now proven for call results) |
+| 1080/1082 | Create (98.43) | `entity_val = helper()`, int local | `clrlwi r27,r3,24` (fold) | ✗ became `mr` → 97.65 (−0.78); repairable via `& 0xFF` (predicted, unbuilt) |
+| 1161 | GetRankedFighter (94.58) | `name = (u8) helper(i)`, int name | `clrlwi r3,r3,24; addi r26,r3,0` | ✗ 5-instr r0-detour (`clrlwi r0,r3; mr r3,r0; stb r3; clrlwi r26,r0`) → 93.47 (−1.10) |
+| 1242 | GetRankedName (97.87) | `ptr->name = helper(i)` (u8 field) | `stb r3,0(r26)` | ✓ invisible (stb truncates) |
+| **1244** | GetRankedName | nested arg: `GetStatValue(1, st, helper(i))` (u8 param) | **`addi r5,r3,0` — PLAIN copy** | **✗ `clrlwi r5,r3,24` — THE u8-RETURN PIN.** No call-site spelling can produce a conversion-free addi from an int return (any cast also emits clrlwi; GetStatValue's u8 entity_idx is itself pinned by PopulateStatRows' int→u8 masks and is FROZEN) |
+| 1308 | AggRank (94.11) | `ptr->name = helper(i)` (u8 field) | `stb r3,0(r28)` | ✓ invisible |
+| 32-34 | `_s`/`_BBC` macros | `(int)` wrappers | — | no-op under flip; `_BBC` unused |
+| 41-47 | GetEntityByIndex inline | UNUSED (no callers) | no codegen | invisible |
+
+Helpers' own bodies under the flip: **byte-identical 100s** (lbz zero-extends; the lbz-clean
+law covers the return promotion). gm_8016400C param u8→s32 (the suggest-signatures candidate
+that would fix site 253 under the flip): blast radius = mnmain.c + mncount.c (many callers) —
+NOT taken, recorded only.
+
+## Build ledger (4/7 used)
+
+| # | Edit | Affected-set result | Verdict |
+|---|---|---|---|
+| 1 | THE FLIP alone (mndiagram.h:8-9 + mndiagram.c:141/149 u8→int) | helpers 100/100 ✓; UH 94.18→**97.01** (+2.84; stores+GetNameText ✓, gm site ✗ still masked); **PSR 100→95.12 GATE FAIL**; Create →97.65; GRN →97.43 (the pin site); GRF →93.47; AggRank/HandleInput/GetStatValue/CreateStatRow/all-else EXACT; 54 100s | **FLIP DEAD AS-IS** (hard gate); legs identified per the map; HARD-REVERTED in build 2 |
+| 2 | revert flip + ROUTE B: drop mnname.h include, add TU-local `char* GetNameText(u8 slot); int GetNameCount(void);` (mnvibration.c mirror), UpdateHeader `int name`→`u8 name`, `_s` macro calls→raw calls | **UH 94.18→95.15464**; ALL FOUR Class-A sites land in shape (mr stores ×2, maskless GetNameText AND gm_8016400C, clrlwi at 217 held); line parity 119/119; **ALL ELSE EXACT, 55 100s** (incl. GetNameText/GetNameCount own bodies 100) | **LANDED, committed 93ddcd337** |
+| 3 | route-B + `u8 name` decl moved first (r30↔r31 pair probe) | 95.15464 **byte-identical** | INERT (extends iter-9 law 4 to call-init webs); reverted |
+| 4 | revert decl probe (final = build-2 form) + full sweep | == build 2 exactly; final sweep verified | FINAL STATE |
+
+## DECISION RULE (explicit, per clause)
+
+**The flip: REVERTED.**
+- (a) protected 100s hold exactly: **FAIL at build 1** (PopulateStatRows 100→95.12). A `& 0xFF`
+  repair is law-predicted but unverified — moot given (c).
+- (b) net fuzzy: best-repaired case ≈ +2.84 −0.45 −(0..1.10) — possibly positive, moot given (c).
+- (c) no unaccepted drops: **FAIL** — GetRankedName's −0.45 is PERMANENT under the flip (the
+  site-1244 pin is byte-unreachable), and accepting it would knowingly ship a return type the
+  target bytes PROVE wrong (the pin evidences original u8 returns). Anti-original = not acceptable.
+
+**Route B (the discovered mechanism): COMMITTED (93ddcd337).**
+- (a) every protected 100 holds EXACTLY: PASS (55/55; PSR, GetStatValue, GetNameText,
+  GetNameCount, both helpers all 100; every sibling partial byte-exact).
+- (b) affected-set net fuzzy: PASS (+0.98, sole mover UpdateHeader 94.18→95.15).
+- (c) no individual drops: PASS (zero).
+
+## Laws minted (iteration 13)
+
+1. **The u8-return PIN (the see-saw's return-width analogue, byte-attributed):** a target-side
+   conversion-FREE copy of a call result into a NARROWER context (`addi r5,r3,0` into a u8
+   param) pins the callee's return type at the narrow width — an int return cannot reach it
+   (callers mask untrusted returns at narrow params; build-1 empirical). The inverse does NOT
+   pin: a raw `mr` store pins NOTHING by itself (u8→u8 local copy also emits mr — route B).
+   Sibling of iter-8.1 (GetStatValue default-tail pin).
+2. **Per-TU narrow-view device closes consumer see-saws (Class A is NOT prototype-gated):**
+   iter-10 law 2 ("the mr store only happens if the helper returns int") is REFINED — the mr
+   store happens whenever NO conversion node exists, which a u8 LOCAL achieves under u8
+   returns. What made the u8 local look dead was its int-param consumers (GetNameText); the
+   TU-local u8-param view (mnvibration.c:37 ships this exact decl; iter-8 law 3's #ifdef
+   family) removes those nodes too. Result: all four UpdateHeader sites maskless/masked
+   exactly as target, helpers untouched, zero sibling exposure.
+3. **iter-11 law 2 extends to call results:** `int local = (u8) int_call()` splits
+   (clrlwi r0,r3 + mr home,r0); under a u8-returning callee the same source folds (the cast
+   is a no-op and the widening folds into the home). The split cost the flip 2 instrs in
+   PopulateStatRows and the 5-instr r0-detour in GetRankedFighter.
+4. **gm_8016400C mask non-elision:** an int call result passed to a u8 param masks even when
+   the value is provably <0x19-guarded upstream — provability does not cross the call-result
+   boundary (refines iter-8 law 2's scope: provable-clean tracks PARAMS threaded clean, not
+   returns).
+
+## UpdateHeader residual @ 95.15 (attributed; BANKED)
+- ONE adjacent callee-save transposition r30↔r31 (`name` vs `is_name_mode`): the dispense
+  tiebreak FLIPPED vs the int-name baseline (baseline had name=r31 matching target; the u8
+  retype changed the def node from clrlwi to a coalescable mr and the pair swapped). MODEL
+  GAP, cause unattributed (no IRO trace pulled). Decl-order probe INERT (build 3). ~10 lines.
+- Class B float f0/f1 pick (5 lines) + Class C addi/crset transposition (2 lines): carried
+  from iter-10, untouched, banked.
+- PAD_STACK(8) diagnostic carried (pre-PR natural-frame item).
+
+## PENDING-REVIEW (iteration 13)
+- **NEW (committed 93ddcd337): the TU-local `char* GetNameText(u8 slot);` declaration in
+  mndiagram2.c** (with the mnname.h include dropped and `int GetNameCount(void);` carried
+  alongside, byte-identical to mnname.h's decl). This is the per-TU view-skew device —
+  PRECEDENTS: mnvibration.c:37 ships this exact u8-param GetNameText decl; mndiagram.h:13-17
+  ships the #ifdef MNDIAGRAM_SOURCE per-TU view of GetPlayPercentage. Codegen-required (the
+  maskless `mr r3,r31` at GetNameText/gm sites). The upstream-conventions review of PR #2660
+  flagged only DATA-presentation patterns, not declaration/expression idioms — but a reviewer
+  may prefer the #ifdef-in-mnname.h spelling over the local decl; any rewrite must keep the
+  u8-param view visible to this TU only. Pre-commit run flagged a declarations-in-.c warning
+  (commit allowed) — same item.
+- The now-unused `mnDiagram_GetNameByIndex_s`/`GetFighterByIndex_s`/`_BBC` macros (UpdateHeader
+  was their only user): zero codegen, left in place; conventions-pass cleanup item.
+- Carried: UpdateHeader PAD_STACK(8), CreateStatRow PAD_STACK(16), HandleInput PAD_STACK(40)
+  → natural frame pre-PR; AggRank res-uninitialized + comma spelling; CreateStatRow
+  `int mode` shape load-bearing.
+
+## Ledger updates
+- The iter-11 (c) FUTURE-ROUND candidate (return-width co-flip WITH sibling re-match) is
+  **CLOSED — executed and refuted this iteration** (the pin makes the far side anti-original;
+  no re-match budget can recover site 1244). Strike it from future-round lists.
+- iter-10's UpdateHeader disposition superseded: Class A is CLOSED (landed via route B);
+  residual reclassified to the transposition + Class B/C register/schedule walls.
+- The helpers' u8 returns are now BYTE-EVIDENCED original (the pin), not just fence-protected.
+
+## Commit stack (cumulative, this branch)
+- (iterations 2-12 unchanged — see prior stacks)
+- 93ddcd337 **UpdateHeader 94.18 -> 95.15 (iter 13: u8 name + per-TU GetNameText u8 view; Class A closed)**
+
+## TU state after iteration 13 — ENDGAME HANDOFF (matching CLOSED)
+14/21 at 100. Partials, ALL at attributed frontiers: Create 98.43, GetRankedName 97.87,
+HandleInput 97.46 (walled), **UpdateHeader 95.15** (transposition + Class B/C),
+GetRankedFighter 94.58, AggRank 94.11, CreateStatRow 83.24. Protected sweep: 55 mndiagram*
+100s; every sibling floor exact. Zero collateral. NO further matching rounds warranted:
+every named lever class is now landed, refuted-with-laws, or allocator-emergent. REMAINING
+WORK (the endgame list, nothing else):
+1. **Permuter listening posts** (iter-11 (e) queue, updated): Create 98.43 (#1), the ranked
+   pair (#2), UpdateHeader 95.15 (NEW — the r30↔r31 pair + float pick are exactly the
+   transposition class, cheap to listen on), AggRank 94.11 (#3). CreateStatRow still
+   do-not-permute (front-end wall).
+2. **Conventions sync / pre-PR pass**: the PENDING-REVIEW ledger above (3 PAD_STACKs →
+   natural frames; the GetNameText view-decl spelling decision; unused _s macros; res-uninit
+   + comma notes; mode rename at /understand time).
+3. **PR consolidation** across the three mndiagram TUs (14/21 + six 94-98% improvements in
+   this TU alone since campaign start).
