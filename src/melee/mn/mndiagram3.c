@@ -115,7 +115,7 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
                     if (!mnDiagram2_IsIconOnlyStat(stat_type)) {
                         if (i == 0) {
                             lb_8000B1CC(data->jobjs[6],
-                                        &mnDiagram3_803EEC28.xC, &sp6C);
+                                        (Vec3*) (base + 0x24), &sp6C);
                             title_text = HSD_SisLib_803A6754(0, 1);
                             data->title_text = title_text;
                             title_text->font_size.x = divider;
@@ -149,7 +149,7 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
                 }
 
                 if (i == 0) {
-                    lb_8000B1CC(data->jobjs[6], &mnDiagram3_803EEC28.x18, &sp6C);
+                    lb_8000B1CC(data->jobjs[6], (Vec3*) (base + 0x30), &sp6C);
                     value_text = HSD_SisLib_803A6754(0, 1);
                     data->value_text = value_text;
                     value_text->font_size.x = divider;
@@ -238,7 +238,7 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
                         goto next;
                     }
 
-                    lb_8000B1CC(data->jobjs[6], &mnDiagram3_803EEC28.x18, &sp6C);
+                    lb_8000B1CC(data->jobjs[6], (Vec3*) (base + 0x30), &sp6C);
                     {
                         HSD_Text* icon_text;
                         f32 negated_y = -sp6C.y;
