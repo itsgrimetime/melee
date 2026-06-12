@@ -18,8 +18,8 @@ Complete all 9 functions in `src/melee/mn/mndiagram3.c` to 100%.
 | mnDiagram3_80246F2C | 0xDC | **100%** | matched (PROTECTED) |
 | **mnDiagram3_80247008** | 0x144 (324B) | **100%** | MATCHED (iteration 3, data linking f66cc758a) |
 | **mnDiagram3_8024714C** | 0x378 (888B) | **90.23%** | OPEN — coloring-dominated (iter-4: decl-order axis exhausted). See Map 2 + Iteration 4. |
-| mnDiagram3_80245BA4 | 0x618 (1560B) | **94.07%** | OPEN — iteration 7 (93.74→94.07, Δ2); assoc-order+conversion-node+frame-pad LANDED; S9 float wall = confirmed coloring ceiling (statement+decl axes exhausted). See Map 3 + Iteration 7 residual. |
-| fn_802461BC | 0xB84 (2948B) | 98.42% | OPEN — big-body register endgame, do LAST |
+| mnDiagram3_80245BA4 | 0x618 (1560B) | **94.07%** | **PARKED** (iteration 8 oracle): S9 float wall = UNREACHABLE-BY-CATALOGUE (4-node class-1 pop-order, force-phys-verified attribution); +108/S8 = front-end address-mode fold, NOT-A-COLORING-QUESTION. Reopen conditions in Iteration 8. |
+| fn_802461BC | 0xB84 (2948B) | 98.42% | OPEN — MAPPED (iteration 8 Unit 2): Δ0/opcode 99.9; frame-spacing (28B Vec3 interleave, PAD_STACK(72)) + entry zero-rider = the two structural levers; GPR rotation downstream. Proposed name mnDiagram3_HandleInput. |
 
 Driver 1 mapped 80247008 + 8024714C (this iteration). NO builds beyond baseline diffs (3 checkdiff runs total: 1 build + reused diffs).
 
@@ -315,6 +315,57 @@ Catalogue items checked and **already correct** (no action): prototype-visibilit
 
 **Verdict:** 80245BA4 is now a COLORING-DOMINATED endgame at 94.07 — the structural levers (assoc-order, conversion-node, frame-pad) are LANDED; the dominant residual (S9 float wall) is a confirmed coloring ceiling exhausted on BOTH the statement-order and decl-order axes by two drivers. Next real lever is permuter (campaign DO-NOT) or IG-intervene — both above this iteration's budget. The table-+108/S8 entanglement is a register-life wall; the comma-defeat spelling is the one untried structural candidate (with the 714C +2-cost caveat).
 
+---
+
+## Iteration 8 (driver 3) — Unit 1: tiebreak oracle on the 80245BA4 walls → PARK @ 94.07; Unit 2: fn_802461BC opening map
+
+**No builds (both walls UNREACHABLE). 2 dump runs (baseline pcdump + class-scoped force-phys). Docs-only commit.**
+
+### Unit 1a — S9 float wall ({f30↔f31}+{f27↔f29}): VERDICT = UNREACHABLE-BY-CATALOGUE (oracle-grade)
+
+Instrument notes: `debug inspect tiebreak` validates G1 **90/90 (100%), 0 truncated** on this function — but is **GPR-only** (hard-codes `load_gpr_ig`; `--ig f48`/`1:48` crash with raw ValueError) → **issue #573**. Workaround: read the class-1 COLORGRAPH DECISIONS section + hand-simulate the validated pick rules + class-scoped force-phys. FPR node identities (from codegen + class-1 graph): ig48=row_spacing→f31, ig46=neg_spacing→f30, ig44=divider→f29, ig43=icon_x→f28, ig77=magic→f27, ig49=row0_y→f27-reuse. Hand-simulation reproduces ours EXACTLY. Key edge facts: ig44↔ig49 have NO edge (divider/row0_y may share f27 — consistent with target); the five long-lived webs otherwise mutually interfere.
+
+Target assignment requires pop order **46,48,77,43,44** (ours: 48,46,44,43,(79,78),77). The oracle chain:
+1. **No add-edge can deny ig48→f31 while it pops first** — at pop-1 no callee-save is dispensed and none is precolored (only volatiles f0-f13 precolored). ⇒ the {f30↔f31} flip STRICTLY requires a pop-order change.
+2. Pop order among the four same-final-sweep locals (43,44,46,48) = **pure descending ig-index**; ig numbering is PROVEN invariant to both source-order axes (statement reorder byte-inert; decl-orders exhaustive flat — iteration 7). The numbering is IR-construction-order, pinned by the (already-target-matching) use structure.
+3. The full target order needs **4-sweep eligibility re-phasing [44],[43,77],[48],[46]** — reachable only by degree/range surgery on structure-pinned webs (all four live across the whole loop; uses already match target) or by minting new interferer nodes (renumbers the graph = re-roll, the 714C fragility class). Remove-edge variants break divider/icon_x placement (checked: removing edges accelerates eligibility → pops LATER, wrong direction for 48; and re-routes 44 to f30).
+4. **Attribution probe (dump run 2):** `debug dump local --force-phys "1:46:31,1:48:30,1:77:29,1:44:27"` (function-scoped, diagnostic-only) → COLORGRAPH takes the exact target assignment (48→f30, 46→f31, 44→f27, 43→f28, 77→f29) and the emission **snaps byte-exact at every conversion/mul/div site** (`fsubs f0,f0,f29` ec00e828, `fmuls f0,f31,f0` ec1f0032 / `fmuls f0,f30,f0` ec1e0032, `fdivs f2,f0,f27` ec40d824, `fsubs f30,f0,f27`, `fneg f31,f30`, row0_y f27-reuse). Residual under forced colors = ONLY the lfd/lfs +0c4/+0cc materialization transposition (IRO first-occurrence order; the magic has no source statement — iteration-7 finding, coloring-independent). ⇒ the S9 family is fully and solely the 4-node class-1 coloring + that 1 transposition. Nothing else hides under it.
+
+### Unit 1b — the +108/S8 register-life wall: VERDICT = NOT-A-COLORING-QUESTION (unreachable on this axis)
+
+The **BEFORE GLOBAL OPTIMIZATION pcode already contains `lhz r36,108(r54)`** — the +108 is folded into the displacement at PCODE GENERATION (front-end address-mode selection); **no `addi …,108` exists at any backend stage** (grepped all passes). The allocator never sees an instruction to color; no order/edge perturbation can materialize one. The "register-life condition" framing sharpens to: front-end only. Levers: the spelling axis (3 forms enumerated iteration 7 — all fold) and comma-opacity at the deref (`*(u16*)(0, table)`-class, the 714C +2-cost family, untried). S8's full form stays gated behind it.
+
+### PARK census — mnDiagram3_80245BA4 @ 94.07 (Δ2)
+
+| Residual | Attribution | Status |
+|---|---|---|
+| S9 float family (~14 sites) | 4-node class-1 pop-order tiebreak + lfd/lfs IRO transposition | UNREACHABLE-BY-CATALOGUE (oracle chain above) |
+| +108 commit + S8 copies | front-end address-mode fold (pre-RA, in first pcode) | NOT-A-COLORING-QUESTION; comma-opacity = only untried spelling (+2-cost class) |
+| 2 lbz dests (+034/+03c) | volatile-pick tiebreak | operand/decl-inert (iter 7) |
+| frame 248 vs 240 | downstream of the two walls | re-derive only if a wall cracks |
+| S4 +18c mr-vs-addi | copy-init shape | untried, register-only, low EV |
+
+**Reopen conditions:** (a) a tuned-permuter channel frees up (campaign DO-NOT lifts), (b) any campaign names a sweep-phasing/IG knob that re-phases eligibility without minting nodes, (c) #573 ships FPR what-ifs and finds an unforeseen lever, (d) upstream edits this TU. Until then 80245BA4 is **PARKED at 94.07**.
+
+### Unit 2 — fn_802461BC OPENING MAP (98.42, 0xB84/2948B) — NO builds
+
+**Anchors:** opcode similarity **99.9%** | line **Δ0** | hunks 86 | 169 differing lines | classification instruction-sequence | `diagnostic_pad_stack=72`. A pure relabel endgame: 149 register-only + 14 stack-slot + 6 reloc (reloc lines = register-bearing reloc lines inside the families; call sets pair 1:1).
+
+**Identity/behavior (naming evidence for /understand):** the Diagram3 per-frame input proc — registered `HSD_GObj_SetupProc(GObj_Create(0, 1, 0x80), fn_802461BC, 0)` from 8024714C (the screen-create, mndiagram3.c:555). Polls `Menu_GetAllInputs()`: 0x20=B-exit (audio 0, is_name_mode→gmMainLib xD, ClearDetailView, free 10 row_labels, `mn_80229894(0x1C,0,3)`); 0xC0=exit to `mnDiagram2_Init()` (0x40) or `mnDiagram_802437E8(0,0)`; 0xC00=name/fighter-mode toggle + row-label rebuild; 0x1/0x2=selection-popup move (`saved_selection`±1 + popup JObj XYZ translate) or scroll (`scroll_offset`±1 + rebuild), then `mnDiagram3_80245BA4` redraw. Siblings: mnDiagram_InputProc / mnDiagram2_HandleInput ⇒ proposed name **mnDiagram3_HandleInput**.
+
+**Family aggregation (163 parsed diff pairs):**
+- **Family A — GPR callee-save rotation (~135 lines, dominant):** region-dependent relabel across {r26..r31}: r31→r26 ×22, r26→r27 ×19, r26→r28 ×15, r27→r28 ×14, r29→r26 ×12, r26→r31 ×12, r26→r30 ×12, r30→r26 ×8, r28→r29 ×8 (+minor). NOT one global permutation — a coloring cascade, same register SET both sides. Do not chase directly.
+- **Entry-shape pair +08c/+090 (the ONLY opcode-order diff in the function):** exp `slwi r0,r29,2; addi r26,r29,0` vs cur `li r28,0; slwi r0,r28,2`. Target's first free-loop receives i's zero LIVE in r29 (the `entering_menu = 0` zero web) and COPIES it (`addi r26,r29,0`); ours mints a fresh `li 0`. **The InputProc canonical-zero-channel/rider mechanism** (methodology §2 Coalesce; init-at-decl and the buttons-idiom `field = (i = 0)` are the catalogue levers — the InputProc ledger's first entry was exactly this, +0.1).
+- **Family B — volatile swaps:** r0↔r4 ×21, r5→r4 ×6, r3↔r4 ×8. Downstream of A/entry.
+- **Family C — FPR relabel:** f29→f30 ×10, f30→f31 ×4 — the per-arm `spacing` webs. The campaign's float-coloring class; on a Δ0/99.9% substrate it may re-roll with D — re-measure before banking.
+- **Family D — frame/stack (14 lines, 3 clusters = THE structural lever):** ours' three Vec3 buffers at r1+252/240/228 (**12B apart**, adjacent function-top decls) vs target 220/192/164 (**28B apart**). The m2c names **spDC/spC0/spA4 encode the retail spacing** (0xDC−0xC0 = 0xC0−0xA4 = 0x1C = 28). Each rebuild arm carries ~16B of block locals (`base_idx`(4)+`base_idx_u8`+`i_u8`+`spacing`(4)+`t`(4)) = the 16B between consecutive Vec3s. Three DISTINCT target offsets ⇒ three separately-allocated objects (not scope-unioned — NOT an inline boundary; the three-buffer m2c shape is structurally right, Δ0 confirms). PAD_STACK(72) currently fakes the total.
+
+**Ranked levers (fix session):**
+1. **D — frame re-derive:** drop PAD_STACK(72) + reconstruct the 28B spacing (interleave function-top decls Vec3↔arm-locals, or per-arm placements; run `debug inspect frame-reservations` FIRST to read the target gap map). Largest family; the 14 stack lines + part of A hang off it. (5BA4 lesson: the natural frame may sit a few bytes high until the rest settles — meter, don't force.)
+2. **Entry zero-rider at +08c:** make the first free-loop's `i = 0` copy from the entering_menu zero web (init-at-decl / `mn_804A04F0.entering_menu = (i = 0)` buttons-idiom). 2-instr fix; likely re-rolls A's entry region.
+3. **Re-measure A/B/C** after 1+2; close with ONE exhaustive `debug mutate decl-orders --strategy all` on the settled substrate (**tool runs clean here — no M2C_FIELD in this function; #572 does not block**).
+4. **C floats** if they survive 1–3: FPR class — use the #573 workaround (class-1 COLORGRAPH read + hand-sim + class-scoped force-phys) BEFORE any hand attempt.
+
 ## Driver-3 Entries (fn_802461BC)
 
-(Reserved — fn_802461BC at 98.42 is LAST per TU ordering. 8024714C register endgame queues on permuter channels.)
+(fn_802461BC opening map = Iteration 8 Unit 2 above. Fix session next.)
